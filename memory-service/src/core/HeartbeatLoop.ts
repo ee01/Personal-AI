@@ -135,6 +135,10 @@ export interface DreamDigestPushResult {
   generated: boolean;
   delivered: boolean;
   botSent: boolean;
+  notificationCreated?: boolean;
+  dreamCount?: number;
+  latestDreamPath?: string;
+  botError?: string;
   pushTarget?: RuntimePushTarget;
   reason?: string;
 }
@@ -411,13 +415,24 @@ export class HeartbeatLoop {
         generated: true,
         delivered: false,
         botSent: false,
+        notificationCreated: false,
+        dreamCount:
+          typeof candidate.payload?.dreamCount === 'number'
+            ? candidate.payload.dreamCount
+            : undefined,
+        latestDreamPath:
+          typeof candidate.payload?.latestDreamPath === 'string'
+            ? candidate.payload.latestDreamPath
+            : undefined,
         pushTarget,
       };
     }
 
     const delivered = this.deliverNotifications([candidate]);
+    const notificationCreated = Boolean(delivered[0]);
 
     let botSent = false;
+    let botError: string | undefined;
     if (candidate.payload?.digestBody && delivered[0]) {
       console.log('[DreamDigest] push-now: sending to Bot...');
       const botResult =
@@ -434,17 +449,31 @@ export class HeartbeatLoop {
         console.log('[DreamDigest] push-now: botSent=true');
       } else if (botResult.error) {
         console.warn(`[DreamDigest] push-now: ${botResult.error}`);
+        botError = botResult.error;
       }
     } else {
       console.warn(
         '[DreamDigest] push-now: digestBody empty, skipping Bot send',
       );
+      botError = delivered[0]
+        ? 'digest_body_empty'
+        : 'notification_not_created';
     }
 
     return {
       generated: true,
-      delivered: true,
+      delivered: notificationCreated,
       botSent,
+      notificationCreated,
+      dreamCount:
+        typeof candidate.payload?.dreamCount === 'number'
+          ? candidate.payload.dreamCount
+          : undefined,
+      latestDreamPath:
+        typeof candidate.payload?.latestDreamPath === 'string'
+          ? candidate.payload.latestDreamPath
+          : undefined,
+      botError,
       pushTarget,
     };
   }

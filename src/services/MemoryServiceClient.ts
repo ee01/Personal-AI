@@ -43,7 +43,8 @@ export interface IngestPayload {
     | 'doubao_chat'
     | 'codex_cli'
     | 'claude_code_cli'
-    | 'cursor_agent_cli';
+    | 'cursor_agent_cli'
+    | 'mcp_client';
   scope?: 'work' | 'personal';
   source?: string;
   sender?: string;
@@ -81,6 +82,14 @@ export interface IngestDecision {
   indexed?: boolean;
   duplicateOf?: string;
   dedupeReason?: 'post_id' | 'content_source_sender';
+  trustClass?: 'trusted' | 'internal' | 'untrusted';
+  sanitization?: 'clean' | 'flagged';
+  injectionFlags?: string[];
+  mergeOp?: {
+    op: 'UPDATE' | 'MERGE' | 'NOOP';
+    neighborIds: number[];
+    reason: string;
+  };
 }
 
 export interface IngestResult {
@@ -97,6 +106,11 @@ export interface BatchIngestDecisionSummary {
   reasons: Record<IngestDecision['reason'] | 'unknown', number>;
   extractionStatus: Record<
     NonNullable<IngestDecision['extractionStatus']> | 'unknown',
+    number
+  >;
+  trustClass: Record<NonNullable<IngestDecision['trustClass']> | 'unknown', number>;
+  sanitization: Record<
+    NonNullable<IngestDecision['sanitization']> | 'unknown',
     number
   >;
   indexing: {
@@ -683,9 +697,31 @@ export interface ContextCue {
   };
 }
 
+export interface LensPresentation {
+  status: 'ready' | 'partial' | 'blocked';
+  informationValue: 'high' | 'medium' | 'low';
+  title: string;
+  extractedInfo?: string;
+  suggestedAction?: string;
+  novelty:
+    | 'new_to_current_surface'
+    | 'already_visible'
+    | 'anchor_only'
+    | 'unknown';
+  sourceBoundary: 'reviewable_memory' | 'derived_summary' | 'raw_source';
+  suppressReason?: string;
+  presentationId?: string;
+}
+
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'reflection_thread';
   score: number;
   scope?: 'work' | 'personal';
   title?: string;
@@ -715,6 +751,7 @@ export interface ContextRecallMatch {
   sourceContext?: string;
   timestamp?: number;
   cue?: ContextCue;
+  lensPresentation?: LensPresentation;
 }
 
 export interface ContextRecallSceneSummary {
@@ -1010,7 +1047,12 @@ export interface ComposerAssistEvidence {
 
 export interface ComposerAssistResponse {
   available: boolean;
-  suggestionType: 'none' | 'context_pack' | 'reply_context' | 'issue_context';
+  suggestionType:
+    | 'none'
+    | 'context_pack'
+    | 'prompt_patch'
+    | 'reply_context'
+    | 'issue_context';
   title?: string;
   summary?: string;
   insertText?: string;
@@ -1165,6 +1207,28 @@ export interface StorylineDraftSegment {
   evidenceIds: string[];
 }
 
+export type StorylineDraftGenerationMode =
+  | 'llm_grounded'
+  | 'fallback_cue_cards';
+
+export type StorylineDraftFallbackReason =
+  | 'model_output_underused_or_invalid_evidence'
+  | 'llm_generation_failed';
+
+export interface StorylineDraftGenerationReceipt {
+  generationMode: StorylineDraftGenerationMode;
+  sourceKind: StorylineSourceKind;
+  sourceId: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  audience: string;
+  sourceEvidenceRefCount: number;
+  citedEvidenceRefCount: number;
+  returnedEvidenceDetailCount: number;
+  missingEvidenceDetailCount: number;
+  fallbackReason?: StorylineDraftFallbackReason;
+  boundary: 'draft_only_manual_copy_no_external_write';
+}
+
 export interface StorylineDraftResponse {
   id: string;
   sourceKind: StorylineSourceKind;
@@ -1176,6 +1240,7 @@ export interface StorylineDraftResponse {
   evidence?: ComposerAssistEvidence[];
   gaps: string[];
   riskNotes: string[];
+  generationReceipt: StorylineDraftGenerationReceipt;
   artifactText: string;
 }
 
@@ -1379,6 +1444,24 @@ export interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  contextMatch?: {
+    state: 'locked' | 'ambiguous' | 'none';
+    selectedTopic?: {
+      id?: string;
+      label: string;
+      score?: number;
+      reasons?: string[];
+      sourceIds?: string[];
+    };
+    candidates?: Array<{
+      id?: string;
+      label: string;
+      score?: number;
+      reasons?: string[];
+      sourceIds?: string[];
+    }>;
+    userFacingSummary?: string;
+  };
   channelDiagnostics?: RecallChannelDiagnostic[];
   /** Weave provenance (P0-5): present only when the answer stitches ≥2 sources or ≥7 days. */
   weave?: WeaveStats;
@@ -1778,6 +1861,17 @@ export interface RelationshipMeetingBrief {
     nextActions: string[];
     successCriteria: string[];
   };
+  focus: {
+    title: string;
+    summary: string;
+    items: Array<{
+      label: string;
+      body: string;
+      tone: 'action' | 'verify' | 'risk' | 'info';
+      attendee?: string;
+      boundary?: string;
+    }>;
+  };
   sourceReceipt: {
     title: string;
     rows: Array<{
@@ -1951,6 +2045,28 @@ export interface NotificationCenterEnvelope {
   payload?: Record<string, unknown>;
   deliveryContext?: NotificationCenterDeliveryContext;
   channelReceipts?: NotificationCenterChannelReceipt[];
+  evidenceReceipt?: NotificationCenterEvidenceReceipt;
+  snoozeReceipt?: NotificationCenterSnoozeReceipt;
+}
+
+export interface NotificationCenterEvidenceReceipt {
+  evidenceCount: number;
+  label: string;
+  detail: string;
+  boundary: string;
+  sampleRefs: string[];
+}
+
+export interface NotificationCenterSnoozeReceipt {
+  label: string;
+  detail: string;
+  boundary: string;
+  sourceNotificationId?: string;
+  rootNotificationId?: string;
+  snoozedAt?: number;
+  scheduledAt?: number;
+  delaySeconds?: number;
+  count: number;
 }
 
 export interface NotificationCenterChannelReceipt {
@@ -1981,6 +2097,7 @@ export interface NotificationCenterDeliveryContext {
   hasSuccessfulDelivery: boolean;
   lastAttemptAt?: number;
   lastDeliveredAt?: number;
+  lastError?: string;
   cooldownSeconds?: number;
 }
 
@@ -1994,6 +2111,11 @@ export interface NotificationCenterFeedResponse {
     limit: number;
     returned: number;
     hasMore: boolean;
+    emptyReceipt?: {
+      label: string;
+      detail: string;
+      boundary: string;
+    };
   };
 }
 
@@ -2143,7 +2265,7 @@ export interface ReflectionResearchAttempt {
   runId?: string;
   query: string;
   purpose: string;
-  status: 'hit' | 'empty' | 'failed';
+  status: 'hit' | 'empty' | 'failed' | 'skipped';
   resultCount: number;
   sourceTypes: string[];
   requestedSourceTypes: string[];
@@ -2694,6 +2816,27 @@ export interface PersonalSkillSuggestionUseResponse
   sync?: SkillSyncPlatformRunResult;
 }
 
+export type SkillGateState =
+  | 'candidate'
+  | 'active'
+  | 'degraded'
+  | 'retired'
+  | 'user_pinned';
+
+export interface SkillHealth {
+  skillId: string;
+  gateState: SkillGateState;
+  successCount: number;
+  failureCount: number;
+  consecutiveFailures: number;
+  health: number;
+  pinned: boolean;
+}
+
+export interface SkillHealthResponse {
+  health: SkillHealth | null;
+}
+
 export interface ReflectionThreadDetailResponse {
   thread: ReflectionThread;
   runs: ReflectionRun[];
@@ -2819,6 +2962,7 @@ export interface StatsResponse {
   user?: {
     id: string;
     isolation: 'per_user_sqlite';
+    identitySource?: 'header' | 'default_fallback';
     storageKey: string;
     fallbackToDefault: boolean;
   };
@@ -2937,6 +3081,10 @@ export interface MemoryCoveragePriorityFocus {
   actionSeverity?: MemoryCoverageRepairAction['severity'];
   reason: string;
   source: string;
+  selectionBasis?: string;
+  comparedPlatformCount?: number;
+  ignoredInfoActionCount?: number;
+  boundary?: string;
 }
 
 export interface MemoryCoverageTimelineEvent {
@@ -2948,9 +3096,37 @@ export interface MemoryCoverageTimelineEvent {
   source: string;
 }
 
+export interface MemoryCoverageMapReceipt {
+  generatedAt: number;
+  staleAfterDays: number;
+  source: string;
+  summary: MemoryCoverageMapReceiptSummary;
+  boundary: string;
+  note: string;
+}
+
+export interface MemoryCoverageMapReceiptSummary {
+  platformCount: number;
+  activeDerivedPlatformCount: number;
+  healthyPlatformCount: number;
+  warningPlatformCount: number;
+  repairActionCount: number;
+  coverageGapCount: number;
+  infoPlanningActionCount: number;
+  pressureItemCount: number;
+  totalMessages: number;
+  totalChunks: number;
+  totalEntities: number;
+  timelineEventCount: number;
+  latestAt?: number | null;
+  windowLabel: string;
+  emptyState: string;
+}
+
 export interface MemoryCoverageMapResponse {
   generatedAt: number;
   staleAfterDays: number;
+  receipt?: MemoryCoverageMapReceipt;
   summary: MemoryCoverageSummary;
   platforms: MemoryCoveragePlatform[];
   repairActions: MemoryCoverageRepairAction[];
@@ -3016,6 +3192,29 @@ export interface SourceMemoryCapturePolicyReceipt {
   nextStep: string;
 }
 
+export interface SourceMemoryCaptureWriteReceipt {
+  state: 'saved_with_recall_signal' | 'saved_without_recall_signal' | 'dismissed_no_recall';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+}
+
+export interface SourceMemoryCaptureActionReceipt {
+  state:
+    | 'saved'
+    | 'resaved'
+    | 'duplicate_no_change'
+    | 'duplicate_note_updated'
+    | 'note_updated'
+    | 'dismissed';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+  occurredAt: number;
+}
+
 export interface SourceMemoryCreateRequest
   extends SourceMemoryCandidateRequest {
   captureMode?: SourceMemoryCaptureMode;
@@ -3067,6 +3266,8 @@ export interface SourceMemoryCapsule {
   contentPreview: string;
   messageId?: string;
   metadata?: Record<string, unknown>;
+  writeReceipt?: SourceMemoryCaptureWriteReceipt;
+  actionReceipt?: SourceMemoryCaptureActionReceipt;
   createdAt: number;
   updatedAt: number;
   savedAt?: number;
@@ -3208,6 +3409,25 @@ export interface DayPilotTodayResponse {
   stale: boolean;
 }
 
+export interface DayPilotCatchUpItem {
+  messageId: string;
+  source: string;
+  title: string;
+  preview: string;
+  timestamp: number;
+  importance: number;
+  salience: number;
+  waiting: boolean;
+}
+
+export interface DayPilotCatchUpBrief {
+  sinceTs: number;
+  nowTs: number;
+  total: number;
+  highPriority: DayPilotCatchUpItem[];
+  waiting: DayPilotCatchUpItem[];
+}
+
 export interface DayPilotContextPackResponse {
   missionId: string;
   generatedAt: number;
@@ -3317,6 +3537,23 @@ export interface MemoryBackupDownloadResponse {
   blob: Blob;
   fileName: string;
   contentType: string;
+  manifest?: MemoryBackupDownloadManifestSummary;
+}
+
+export interface MemoryBackupDownloadManifestSummary {
+  userId: string;
+  exportedAt: string;
+  formatVersion: number;
+  includeCount: number;
+  layers: {
+    A: number;
+    B: number;
+    C: {
+      generated: number;
+      failed: number;
+      skipped: number;
+    };
+  };
 }
 
 export interface MemoryBackupImportResponse {
@@ -3622,6 +3859,78 @@ function parseContentDispositionFilename(
 
   const match = contentDisposition.match(/filename="?([^";]+)"?/i);
   return match?.[1] ?? null;
+}
+
+function parseNumericHeader(headers: Headers, name: string): number | null {
+  const rawValue = headers.get(name);
+  if (!rawValue) return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
+
+function parseBackupManifestHeaders(
+  headers: Headers,
+): MemoryBackupDownloadManifestSummary | undefined {
+  const userId = headers.get('x-personal-ai-backup-user-id');
+  const exportedAt = headers.get('x-personal-ai-backup-exported-at');
+  const formatVersion = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-format-version',
+  );
+  const includeCount = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-include-count',
+  );
+  const layerA = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-layer-a-count',
+  );
+  const layerB = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-layer-b-count',
+  );
+  const layerCGenerated = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-layer-c-generated-count',
+  );
+  const layerCFailed = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-layer-c-failed-count',
+  );
+  const layerCSkipped = parseNumericHeader(
+    headers,
+    'x-personal-ai-backup-layer-c-skipped-count',
+  );
+
+  if (
+    !userId ||
+    !exportedAt ||
+    formatVersion === null ||
+    includeCount === null ||
+    layerA === null ||
+    layerB === null ||
+    layerCGenerated === null ||
+    layerCFailed === null ||
+    layerCSkipped === null
+  ) {
+    return undefined;
+  }
+
+  return {
+    userId,
+    exportedAt,
+    formatVersion,
+    includeCount,
+    layers: {
+      A: layerA,
+      B: layerB,
+      C: {
+        generated: layerCGenerated,
+        failed: layerCFailed,
+        skipped: layerCSkipped,
+      },
+    },
+  };
 }
 
 function getUploadFileName(file: Blob | File, fallback: string): string {
@@ -3975,6 +4284,7 @@ export class MemoryServiceClient {
         blob,
         fileName,
         contentType: response.headers.get('content-type') || 'application/zip',
+        manifest: parseBackupManifestHeaders(response.headers),
       };
     } catch (err: any) {
       clearTimeout(timeoutId);
@@ -4774,6 +5084,11 @@ export class MemoryServiceClient {
     newNotificationId: string;
     scheduledAt: number;
     delaySeconds: number;
+    actionReceipt?: {
+      title: string;
+      detail: string;
+      boundary: string;
+    };
   }> {
     return this.request(
       'POST',
@@ -5810,6 +6125,23 @@ export class MemoryServiceClient {
     );
   }
 
+  async getTodayPilotCatchUp(params?: {
+    sinceTs?: number;
+    awayMinutes?: number;
+  }): Promise<DayPilotCatchUpBrief> {
+    const query = new URLSearchParams();
+    if (typeof params?.sinceTs === 'number') {
+      query.set('sinceTs', String(params.sinceTs));
+    } else if (typeof params?.awayMinutes === 'number') {
+      query.set('awayMinutes', String(params.awayMinutes));
+    }
+    const qs = query.toString();
+    return this.request<DayPilotCatchUpBrief>(
+      'GET',
+      `/today-pilot/catch-up${qs ? `?${qs}` : ''}`,
+    );
+  }
+
   async refreshDayPilot(payload?: {
     date?: string;
     timezone?: string;
@@ -5994,6 +6326,13 @@ export class MemoryServiceClient {
       'POST',
       `/skills/suggestions/${encodeURIComponent(id)}/unsnooze`,
       {},
+    );
+  }
+
+  async getSkillHealth(id: string): Promise<SkillHealthResponse> {
+    return this.request<SkillHealthResponse>(
+      'GET',
+      `/skills/${encodeURIComponent(id)}/health`,
     );
   }
 

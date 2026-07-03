@@ -486,6 +486,10 @@ describe('Relationships API', () => {
     expect(brief.sourceReceipt.title).toBe('简报来源回执');
     expect(brief.sourceReceipt.rows.some((row: { value: string }) => row.value === '日历事件')).toBe(true);
     expect(brief.sourceReceipt.boundary).toContain('不含敏感上下文');
+    expect(brief.focus.title).toBe('会前焦点');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('先确认未闭环');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('会后沉淀');
+    expect(brief.focus.items.map((item: { boundary?: string }) => item.boundary || '').join(' ')).toContain('不会发送');
 
     const draftRes = await app.inject({
       method: 'POST',
@@ -636,6 +640,8 @@ describe('Relationships API', () => {
     expect(brief.attendees[1].matchedBy).toBe('none');
     expect(brief.attendees[1].coverageState).toBe('missing');
     expect(brief.matrix[1].matchStatus).toBe('未匹配');
+    expect(brief.focus.summary).toContain('补齐');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('补齐覆盖');
   });
 
   it('marks weak meeting brief attendee matches as identity checks instead of ready', async () => {
@@ -678,6 +684,9 @@ describe('Relationships API', () => {
     expect(brief.attendees[0].suggestedQuestions[0]).toContain('先确认');
     expect(brief.matrix[0].openLoop).toContain('暂不展开');
     expect(brief.matrix[0].evidenceCount).toBe(0);
+    expect(brief.focus.summary).toContain('弱匹配身份');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('先核对身份');
+    expect(brief.focus.items[0].boundary).toContain('身份确认前');
   });
 
   it('makes large meeting attendee truncation explicit', async () => {
@@ -708,6 +717,8 @@ describe('Relationships API', () => {
     expect(brief.coverage.coverageNote).toContain('已分析前 16/18 位参会人');
     expect(brief.readiness.status).toBe('attention');
     expect(brief.readiness.nextActions.join(' ')).toContain('分批生成');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('补齐覆盖');
+    expect(brief.focus.items.map((item: { body: string }) => item.body).join(' ')).toContain('未展开');
   });
 
   it('returns explicit readiness guidance when no attendees are provided', async () => {
@@ -727,6 +738,8 @@ describe('Relationships API', () => {
     expect(brief.readiness.summary).toContain('缺少参会人');
     expect(brief.readiness.nextActions[0]).toContain('补充日历参会人');
     expect(brief.readiness.successCriteria.join(' ')).toContain('核心参会人');
+    expect(brief.focus.summary).toContain('缺少参会人');
+    expect(brief.focus.items.map((item: { label: string }) => item.label)).toContain('先补参会人');
   });
 
   it('returns timeline and open loop evidence', async () => {

@@ -1,9 +1,54 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { Config } from '../config.js';
 import { LLMClient } from '../llm/LLMClient.js';
 
 describe('LLMClient', () => {
   const fetchMock = vi.fn();
+
+  function makeConfig(overrides: Partial<Config> = {}): Config {
+    return {
+      port: 3210,
+      host: '0.0.0.0',
+      dataDir: '/tmp',
+      logLevel: 'info',
+      sqliteJournalMode: 'WAL',
+      sqliteSynchronous: 'NORMAL',
+      llmProvider: 'openai',
+      openaiApiKey: 'test-key',
+      openaiApiBaseUrl: '',
+      openaiModel: 'gpt-4o-mini',
+      groqApiKey: '',
+      difyApiKey: '',
+      difyApiUrl: '',
+      difyAppMode: 'chat',
+      ollamaBaseUrl: 'http://localhost:11434',
+      ollamaModel: 'llama3',
+      llmRequestTimeoutMs: 30000,
+      embeddingProvider: 'local',
+      embeddingModel: 'Xenova/all-MiniLM-L6-v2',
+      embeddingDimension: 384,
+      apiKey: '',
+      botApiBaseUrl: '',
+      botToken: '',
+      botId: '',
+      botType: '',
+      botTeamId: '',
+      botTargetEmail: '',
+      contextMatchThreshold: 0.5,
+      heartbeatIntervalMs: 900000,
+      dailyCron: '0 23 * * *',
+      weeklyCron: '0 3 * * 0',
+      quietHoursStart: 22,
+      quietHoursEnd: 8,
+      todayPilotPrepCron: '30 6 * * *',
+      todayPilotTimezone: 'Asia/Shanghai',
+      todayPilotMeetingPrepMax: 5,
+      todayPilotMeetingPrepEnabled: true,
+      composeAssistEnabled: true,
+      ...overrides,
+    };
+  }
 
   beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock);
@@ -21,36 +66,13 @@ describe('LLMClient', () => {
       json: async () => ({ answer: '{"answer":"ok"}' }),
     });
 
-    const client = new LLMClient({
-      port: 3210,
-      host: '0.0.0.0',
-      dataDir: '/tmp',
-      logLevel: 'info',
+    const client = new LLMClient(makeConfig({
       llmProvider: 'dify',
       openaiApiKey: '',
-      openaiModel: 'gpt-4o-mini',
-      groqApiKey: '',
       difyApiKey: 'test-key',
       difyApiUrl: 'https://example.dify.ai',
       difyAppMode: 'chat',
-      ollamaBaseUrl: 'http://localhost:11434',
-      ollamaModel: 'llama3',
-      llmRequestTimeoutMs: 30000,
-      embeddingProvider: 'local',
-      embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-      embeddingDimension: 384,
-      apiKey: '',
-      heartbeatIntervalMs: 900000,
-      dailyCron: '0 23 * * *',
-      weeklyCron: '0 3 * * 0',
-      quietHoursStart: 22,
-      quietHoursEnd: 8,
-      todayPilotPrepCron: '30 6 * * *',
-      todayPilotTimezone: 'Asia/Shanghai',
-      todayPilotMeetingPrepMax: 5,
-      todayPilotMeetingPrepEnabled: true,
-      composeAssistEnabled: true,
-    });
+    }));
 
     await client.generate('What changed?', {
       systemPrompt: 'Return JSON only.',
@@ -78,36 +100,11 @@ describe('LLMClient', () => {
       });
     });
 
-    const client = new LLMClient({
-      port: 3210,
-      host: '0.0.0.0',
-      dataDir: '/tmp',
-      logLevel: 'info',
+    const client = new LLMClient(makeConfig({
       llmProvider: 'openai',
       openaiApiKey: 'test-key',
       openaiModel: 'gpt-4o-mini',
-      groqApiKey: '',
-      difyApiKey: '',
-      difyApiUrl: '',
-      difyAppMode: 'chat',
-      ollamaBaseUrl: 'http://localhost:11434',
-      ollamaModel: 'llama3',
-      llmRequestTimeoutMs: 30000,
-      embeddingProvider: 'local',
-      embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-      embeddingDimension: 384,
-      apiKey: '',
-      heartbeatIntervalMs: 900000,
-      dailyCron: '0 23 * * *',
-      weeklyCron: '0 3 * * 0',
-      quietHoursStart: 22,
-      quietHoursEnd: 8,
-      todayPilotPrepCron: '30 6 * * *',
-      todayPilotTimezone: 'Asia/Shanghai',
-      todayPilotMeetingPrepMax: 5,
-      todayPilotMeetingPrepEnabled: true,
-      composeAssistEnabled: true,
-    });
+    }));
 
     const promise = client.generate('slow response', {
       timeoutMs: 1000,
@@ -120,5 +117,43 @@ describe('LLMClient', () => {
 
     await expectation;
     expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
+  });
+
+  it('uses an OpenAI-compatible base URL when configured', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiApiBaseUrl: 'https://oneapi.example.com',
+    }));
+
+    await client.generate('health check');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://oneapi.example.com/v1/chat/completions',
+    );
+  });
+
+  it('accepts a full OpenAI-compatible chat completions URL', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiApiBaseUrl: 'https://oneapi.example.com/v1/chat/completions',
+    }));
+
+    await client.generate('health check');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://oneapi.example.com/v1/chat/completions',
+    );
   });
 });

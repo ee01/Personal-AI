@@ -33,7 +33,7 @@ const MESSAGES = {
     'desktop.system.speechRecognition': '打开语音识别设置',
     'desktop.system.shortcut': '重新检查快捷键权限',
     'desktop.quickAsk.placeholder': '问我任何你此刻需要的事...',
-    'desktop.quickAsk.pending': '正在整理答案...',
+    'desktop.quickAsk.pending': '正在检索相关记忆...',
     'desktop.quickAsk.scope': '范围',
     'desktop.quickAsk.scopeAria': '选择记忆范围',
     'desktop.quickAsk.toolbarAria': 'Quick Ask 范围选择',
@@ -55,6 +55,24 @@ const MESSAGES = {
     'desktop.quickAsk.voiceRecovery.microphone': '打开麦克风设置',
     'desktop.quickAsk.voiceRecovery.speech': '打开语音识别设置',
     'desktop.quickAsk.voiceRecovery.settings': '打开设置',
+    'desktop.quickAsk.voiceReceipt.idle':
+      '本机语音识别 · 识别结果先进入草稿，不会自动发送',
+    'desktop.quickAsk.voiceReceipt.listening':
+      '本机语音识别 · {locale} · 识别结果先进入草稿，不会自动发送',
+    'desktop.quickAsk.voiceReceipt.listeningWithDraft':
+      '正在听写 · {locale} · 已保留草稿，点中间按钮停止后可复核',
+    'desktop.quickAsk.voiceReceipt.ready':
+      '语音草稿 · {scope}范围 · 点箭头才会发送，点叉号回到文本框编辑',
+    'desktop.quickAsk.voiceReceipt.stoppedWithDraft':
+      '已停止监听 · 语音草稿保留在本机 · {scope}范围；点箭头才会发送转写文本，点叉号回到文本框编辑',
+    'desktop.quickAsk.voiceReceipt.readyEmpty':
+      '未听到可发送内容 · 可以继续说话或点叉号回到文本输入',
+    'desktop.quickAsk.voiceReceipt.stoppedEmpty':
+      '已停止监听 · 未听到可发送内容；没有发送、保存音频或发起 Ask，可继续说话或点叉号回到文本输入',
+    'desktop.quickAsk.voiceReceipt.error':
+      '语音未发送 · 当前草稿已保留，修复权限后可继续或点叉号编辑',
+    'desktop.quickAsk.voiceSubmitReceipt':
+      '语音草稿已确认发送 · {scope}范围 · 只提交转写文本，不发送或保存原始音频；是否写记忆仍按文本意图和现有回执判断',
     'desktop.memoryList.titleTag': '记忆列表 · Personal AI',
     'desktop.memoryList.eyebrow': '记忆探索 · 已入库',
     'desktop.memoryList.title': '记忆列表',
@@ -119,7 +137,7 @@ const MESSAGES = {
     'desktop.system.speechRecognition': 'Open Speech Recognition Settings',
     'desktop.system.shortcut': 'Recheck Shortcut Permission',
     'desktop.quickAsk.placeholder': 'Ask anything you need right now...',
-    'desktop.quickAsk.pending': 'Composing answer...',
+    'desktop.quickAsk.pending': 'Retrieving relevant memories...',
     'desktop.quickAsk.scope': 'Scope',
     'desktop.quickAsk.scopeAria': 'Select memory scope',
     'desktop.quickAsk.toolbarAria': 'Quick Ask scope selector',
@@ -146,6 +164,24 @@ const MESSAGES = {
     'desktop.quickAsk.voiceRecovery.speech':
       'Open Speech Recognition Settings',
     'desktop.quickAsk.voiceRecovery.settings': 'Open settings',
+    'desktop.quickAsk.voiceReceipt.idle':
+      'Native speech recognition · transcript becomes a draft first and is not sent automatically',
+    'desktop.quickAsk.voiceReceipt.listening':
+      'Native speech recognition · {locale} · transcript becomes a draft first and is not sent automatically',
+    'desktop.quickAsk.voiceReceipt.listeningWithDraft':
+      'Listening · {locale} · draft is preserved; stop before reviewing',
+    'desktop.quickAsk.voiceReceipt.ready':
+      'Voice draft · {scope} scope · arrow sends, X returns it to text input',
+    'desktop.quickAsk.voiceReceipt.stoppedWithDraft':
+      'Listening stopped · voice draft stays local · {scope} scope; arrow sends transcript text, X returns it to text input',
+    'desktop.quickAsk.voiceReceipt.readyEmpty':
+      'No sendable voice content yet · keep speaking or return to text input',
+    'desktop.quickAsk.voiceReceipt.stoppedEmpty':
+      'Listening stopped · no sendable content heard; nothing was sent, no audio was stored, and Ask was not started',
+    'desktop.quickAsk.voiceReceipt.error':
+      'Voice was not sent · current draft is preserved; fix permission or return to text input',
+    'desktop.quickAsk.voiceSubmitReceipt':
+      'Voice draft sent · {scope} scope · only the transcript text was submitted; raw audio is not sent or stored, and memory writes still depend on text intent and existing receipts',
     'desktop.memoryList.titleTag': 'Memory List · Personal AI',
     'desktop.memoryList.eyebrow': 'Memory Explore · Stored',
     'desktop.memoryList.title': 'Memory List',

@@ -1,0 +1,12 @@
+# Findings
+- Read AGENT.md and capability planning memory. Planning-only boundary confirmed.
+- `docs/progressing/to-verify.md` is empty.
+- Current Reminders probing: EventKit sees Personal AI list, AppleScript app API does not; retrying EventKit item fetch.
+- Adjacent concepts to avoid include Evidence Cohesion Gate, Keystone Memory Briefs, Memory Change Simulator, Prompt Context Compiler, Source Memory Distiller, Memory Outcome Loop, Active Recall Coach, Context Passport, Conversation Loom, Trust/Freshness/Reality checks, Egress Firewall, Secret Vault.
+- Reminder branch: EventKit found `Personal AI`; fetched items were all completed, so no new incomplete feature idea was selected or marked done. Reminders app AppleScript did not expose the same list, so EventKit is the reliable probe this run.
+- Remote HTTP `10.32.56.212:3210` health/stats/confirm/actions/reflection requests timed out; falling back to read-only SSH/SQLite.
+- Live SQLite counts: messages_raw 11158, chunks 10022, metadata 14849, entities 14186, relationships 54683, confirm pending 29, queued/pending actions 291, active reflections 885, source capsules 566, context frames 146, personal skills 10.
+- Source capsules: 445 saved webpages, 115 saved Jira comments, 4 visual memories, 1 selection. Conversation frames mostly glip 108, jira 30, meeting 8.
+- Pain pattern: saved Jira comments include many old/new field snippets; duplicate ticket titles have contradictory changes such as MTR-148115 Story Points 0->14 and 14->0, MTR-147866 DEV Estimate 0.2->0.1 and 0.1->0.2.
+- Pain pattern: source summaries include UI noise like `Press Enter` and `Collapse comment`; 68 saved capsules matched simple UI-noise markers, 31 matched simple change-like markers.
+- Existing related primitives: Source Memory Distiller takeaways/triggers/events exist; Evidence Watch contracts/runs exist; Outcome events table exists but empty; recall patches only 3.

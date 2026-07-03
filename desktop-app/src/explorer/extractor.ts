@@ -135,13 +135,6 @@ export class ExplorerExtractor {
         if (!isNoMeaningfulSegmentsError(error)) {
           throw error;
         }
-        this.rawStore.replaceConversationArtifacts({
-          source: options.source,
-          conversationId: messages[0]!.conversationId,
-          scope: options.defaultScope,
-          extractedAt,
-          artifacts: [],
-        });
         skippedConversationCount += 1;
       }
 
@@ -165,7 +158,7 @@ export class ExplorerExtractor {
     response: ExtractFromChatResponse,
     extractedAt: string,
   ): number {
-    return this.rawStore.replaceConversationArtifacts({
+    return this.rawStore.appendConversationArtifacts({
       source,
       conversationId,
       scope,

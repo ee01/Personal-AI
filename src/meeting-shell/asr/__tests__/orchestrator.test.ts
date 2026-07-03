@@ -1,19 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASROrchestrator } from '../orchestrator';
+import { ASROrchestrator } from '../orchestrator.js';
 import type {
   ASRProvider,
   ASRTranscriptEvent,
   ASREventMap,
   MeetingPilotASRTier,
-} from '../types';
-import { createASREventEmitter } from '../types';
-import type { MeetingPilotTierStatus } from '../../protocol';
+} from '../types.js';
+import { createASREventEmitter } from '../types.js';
+import type { MeetingPilotTierStatus } from '../../protocol.js';
 
 function makeFakeProvider(
   tier: MeetingPilotASRTier,
   available = true,
   stopDelayMs = 0,
+  statusDetail?: string,
 ): ASRProvider & {
   emitter: ReturnType<typeof createASREventEmitter>;
   startCalled: number;
@@ -39,7 +40,12 @@ function makeFakeProvider(
     },
     async start() {
       startCalled++;
-      emitter.emit('status', { tier, state: 'running', ts: Date.now() });
+      emitter.emit('status', {
+        tier,
+        state: 'running',
+        ts: Date.now(),
+        detail: statusDetail,
+      });
     },
     async stop() {
       stopCalled++;
@@ -84,6 +90,31 @@ test('orchestrator: picks first available tier', async () => {
   assert.equal(lastStatus.badge, 'On-Device');
 });
 
+test('orchestrator: web speech exposes first transcript watchdog detail', async () => {
+  const p1 = makeFakeProvider('web_speech', true);
+
+  const tierStatuses: MeetingPilotTierStatus[] = [];
+  const orch = new ASROrchestrator({
+    providers: [p1],
+    mode: 'auto',
+    onTierStatus: (s) => tierStatuses.push(s),
+    onTranscript: () => {},
+    onCaptureLog: () => {},
+  });
+
+  await orch.start(makeDummyTrack());
+
+  const watchdogStatus = tierStatuses.find((status) =>
+    /waiting for first transcript/i.test(status.lastStatusDetail || ''),
+  );
+  assert.ok(
+    watchdogStatus,
+    'web speech should surface first-transcript watchdog status',
+  );
+  assert.equal(watchdogStatus?.badge, 'On-Device');
+  assert.match(watchdogStatus?.lastStatusDetail || '', /fallback watchdog 12s/);
+});
+
 test('orchestrator: skips unavailable tiers and picks next', async () => {
   const p1 = makeFakeProvider('web_speech', false);
   const p2 = makeFakeProvider('desktop_whisper', false);
@@ -105,6 +136,14 @@ test('orchestrator: skips unavailable tiers and picks next', async () => {
   assert.equal(p3.startCalled, 1);
   const lastStatus = tierStatuses[tierStatuses.length - 1];
   assert.equal(lastStatus.badge, 'Cloud');
+  assert.deepEqual(
+    lastStatus.probeTrail?.map((item) => [item.tier, item.state]),
+    [
+      ['web_speech', 'unavailable'],
+      ['desktop_whisper', 'unavailable'],
+      ['cloud', 'selected'],
+    ],
+  );
 });
 
 test('orchestrator: all unavailable → No ASR', async () => {
@@ -128,7 +167,12 @@ test('orchestrator: all unavailable → No ASR', async () => {
 
 test('orchestrator: fatal error triggers fallback to next tier', async () => {
   const p1 = makeFakeProvider('web_speech', true, 10);
-  const p2 = makeFakeProvider('cloud', true);
+  const p2 = makeFakeProvider(
+    'cloud',
+    true,
+    0,
+    'Cloud ASR · POST /v1/chat/completions + input_audio · OpenAI Chat Completions + input_audio · model qwen3-asr-flash · language auto · segment 5s',
+  );
 
   const tierStatuses: MeetingPilotTierStatus[] = [];
   const orch = new ASROrchestrator({
@@ -158,6 +202,17 @@ test('orchestrator: fatal error triggers fallback to next tier', async () => {
   assert.equal(lastStatus.badge, 'Cloud');
   assert.match(lastStatus.lastTransitionReason || '', /fallback/);
   assert.match(lastStatus.lastTransitionReason || '', /test error/);
+  assert.match(lastStatus.lastStatusDetail || '', /chat\/completions/);
+  assert.match(lastStatus.lastStatusDetail || '', /qwen3-asr-flash/);
+  assert.deepEqual(
+    lastStatus.probeTrail?.map((item) => [item.tier, item.state]),
+    [
+      ['web_speech', 'selected'],
+      ['web_speech', 'running'],
+      ['web_speech', 'fatal_error'],
+      ['cloud', 'selected'],
+    ],
+  );
 });
 
 test('orchestrator: no-overlap — p2.start called after p1.stop resolves', async () => {
@@ -223,6 +278,13 @@ test('orchestrator: local-only mode never uses cloud', async () => {
   assert.equal(p3.startCalled, 0);
   const lastStatus = tierStatuses[tierStatuses.length - 1];
   assert.equal(lastStatus.badge, 'No ASR');
+  assert.deepEqual(
+    lastStatus.probeTrail?.map((item) => [item.tier, item.state]),
+    [
+      ['web_speech', 'unavailable'],
+      ['desktop_whisper', 'unavailable'],
+    ],
+  );
 });
 
 test('orchestrator: cloud-only mode skips local tiers', async () => {

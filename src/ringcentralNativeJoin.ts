@@ -14,18 +14,44 @@ const RINGCENTRAL_VIDEO_NATIVE_SCHEME = 'rcvdt';
 const RINGCENTRAL_VIDEO_BROWSER_PROTOCOLS = new Set(['https:', 'http:']);
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID =
   'pai-ringcentral-native-join-fallback';
+const RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID =
+  'pai-ringcentral-native-join-dismissed-recovery';
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_LINK_ATTR =
   'data-pai-ringcentral-native-join-fallback-link';
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_URL_ATTR =
   'data-pai-ringcentral-native-join-browser-url';
 const RINGCENTRAL_NATIVE_JOIN_COPY_LINK_ATTR =
   'data-pai-ringcentral-native-join-copy-link';
+const RINGCENTRAL_NATIVE_JOIN_COPY_MEETING_ID_ATTR =
+  'data-pai-ringcentral-native-join-copy-meeting-id';
+const RINGCENTRAL_NATIVE_JOIN_COPY_PASSCODE_ATTR =
+  'data-pai-ringcentral-native-join-copy-passcode';
+const RINGCENTRAL_NATIVE_JOIN_MEETING_ID_VALUE_ATTR =
+  'data-pai-ringcentral-native-join-meeting-id-value';
+const RINGCENTRAL_NATIVE_JOIN_MEETING_ID_NOTE_ATTR =
+  'data-pai-ringcentral-native-join-meeting-id-note';
+const RINGCENTRAL_NATIVE_JOIN_PASSCODE_VALUE_ATTR =
+  'data-pai-ringcentral-native-join-passcode-value';
+const RINGCENTRAL_NATIVE_JOIN_PASSCODE_NOTE_ATTR =
+  'data-pai-ringcentral-native-join-passcode-note';
 const RINGCENTRAL_NATIVE_JOIN_VISIBLE_LINK_ATTR =
   'data-pai-ringcentral-native-join-visible-link';
+const RINGCENTRAL_NATIVE_JOIN_LINK_PRIVACY_ATTR =
+  'data-pai-ringcentral-native-join-link-privacy';
+const RINGCENTRAL_NATIVE_JOIN_REVEAL_LINK_ATTR =
+  'data-pai-ringcentral-native-join-reveal-link';
+const RINGCENTRAL_NATIVE_JOIN_RESTORE_RECOVERY_ATTR =
+  'data-pai-ringcentral-native-join-restore-recovery';
 const RINGCENTRAL_NATIVE_JOIN_PREFER_BROWSER_ATTR =
   'data-pai-ringcentral-native-join-prefer-browser';
 const RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR =
   'data-pai-ringcentral-native-join-close';
+const RINGCENTRAL_NATIVE_JOIN_TITLE_ATTR =
+  'data-pai-ringcentral-native-join-title';
+const RINGCENTRAL_NATIVE_JOIN_BODY_ATTR =
+  'data-pai-ringcentral-native-join-body';
+const RINGCENTRAL_NATIVE_JOIN_HANDOFF_RECEIPT_ATTR =
+  'data-pai-ringcentral-native-join-handoff-receipt';
 const RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_ID =
   'pai-ringcentral-native-join-launch-link';
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS = 5000;
@@ -36,6 +62,35 @@ const RINGCENTRAL_VIDEO_JOIN_URL_PATTERN =
   /(?:https?:\/\/)?v\.ringcentral\.com\/(?:join|launcher|conf\/on)\/[^\s"'<>]+/gi;
 const RINGCENTRAL_VIDEO_MEETING_ID_PATTERN =
   /^(?=.{3,128}$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+const RINGCENTRAL_JOIN_REDIRECT_PARAM_NAMES = new Set([
+  'q',
+  'u',
+  'url',
+  'uri',
+  'link',
+  'target',
+  'to',
+  'dest',
+  'destination',
+  'redirect',
+  'redirecturl',
+  'redirecturi',
+  'meetingurl',
+  'meetinguri',
+  'joinurl',
+]);
+const RINGCENTRAL_JOIN_PASSCODE_PARAM_NAMES = new Set([
+  'passcode',
+  'password',
+  'pwd',
+  'pw',
+  'meetingpasscode',
+  'meetingpassword',
+]);
+const RINGCENTRAL_JOIN_REDIRECT_QUERY_PARAM_PATTERN =
+  /(?:^|[?&#])([A-Za-z][A-Za-z0-9_-]{0,30})=([^&\s"'<>]+)/g;
+
+let currentRingCentralNativeJoinFallbackCleanup: (() => void) | null = null;
 
 export interface RingCentralVideoJoinTarget {
   originalUrl: string;
@@ -62,6 +117,10 @@ export interface RingCentralNativeJoinSetEnabledResponseMessage {
   error?: string;
 }
 
+interface RingCentralNativeJoinFallbackOptions {
+  restoredAfterDismiss?: boolean;
+}
+
 export function parseRingCentralVideoJoinTarget(
   rawUrl: string,
   baseUrl: string = getDefaultRingCentralVideoBaseUrl(),
@@ -69,15 +128,20 @@ export function parseRingCentralVideoJoinTarget(
   try {
     const parsed = new URL(rawUrl, baseUrl);
     if (parsed.protocol === `${RINGCENTRAL_VIDEO_NATIVE_SCHEME}:`) {
+      const pathSegments = parsed.pathname.replace(/^\/+/, '').split('/');
       const rawMeetingId =
-        parsed.hostname === 'join'
-          ? parsed.pathname.replace(/^\/+/, '').split('/')[0]
+        parsed.hostname === 'join' && pathSegments.length === 1
+          ? pathSegments[0]
           : '';
       const meetingId = normalizeRingCentralVideoMeetingId(rawMeetingId);
       if (!meetingId) return null;
       return {
         originalUrl: parsed.toString(),
-        nativeUrl: parsed.toString(),
+        nativeUrl: buildRingCentralVideoNativeJoinUrl(
+          meetingId,
+          parsed.search,
+          parsed.hash,
+        ),
         browserUrl: buildRingCentralVideoBrowserJoinUrl(
           meetingId,
           parsed.search,
@@ -110,11 +174,11 @@ export function parseRingCentralVideoJoinTarget(
     );
     return {
       originalUrl: parsed.toString(),
-      nativeUrl:
-        `${RINGCENTRAL_VIDEO_NATIVE_SCHEME}://join/${encodeURIComponent(
-          meetingId,
-        )}` +
-        `${parsed.search}${parsed.hash}`,
+      nativeUrl: buildRingCentralVideoNativeJoinUrl(
+        meetingId,
+        parsed.search,
+        parsed.hash,
+      ),
       browserUrl,
       meetingId,
     };
@@ -124,13 +188,28 @@ export function parseRingCentralVideoJoinTarget(
 }
 
 export function extractRingCentralVideoJoinUrl(value: unknown): string | null {
-  const text = String(value || '')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\\\//g, '/')
-    .replace(/\\u002f/gi, '/');
+  const text = decodeEscapedRingCentralJoinText(value);
   if (!text) return null;
+
+  const redirectParamUrl = extractRingCentralJoinUrlFromRedirectParams(
+    text,
+    0,
+    new Set<string>(),
+  );
+  if (redirectParamUrl) {
+    return redirectParamUrl;
+  }
+
+  return extractRingCentralVideoJoinUrlFromText(text, 0, new Set<string>());
+}
+
+function extractRingCentralVideoJoinUrlFromText(
+  text: string,
+  depth: number,
+  seenTexts: Set<string>,
+): string | null {
+  if (!text || seenTexts.has(text)) return null;
+  seenTexts.add(text);
 
   RINGCENTRAL_VIDEO_JOIN_URL_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -144,7 +223,98 @@ export function extractRingCentralVideoJoinUrl(value: unknown): string | null {
     }
   }
 
+  const redirectParamUrl = extractRingCentralJoinUrlFromRedirectParams(
+    text,
+    depth,
+    seenTexts,
+  );
+  if (redirectParamUrl) {
+    return redirectParamUrl;
+  }
+
+  if (depth < 2) {
+    const percentDecodedText = decodePercentEncodedRingCentralJoinText(text);
+    if (percentDecodedText !== text) {
+      return extractRingCentralVideoJoinUrlFromText(
+        percentDecodedText,
+        depth + 1,
+        seenTexts,
+      );
+    }
+  }
+
   return null;
+}
+
+function decodeEscapedRingCentralJoinText(value: unknown): string {
+  const raw = String(value || '');
+  if (!raw) return '';
+
+  return raw
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function decodePercentEncodedRingCentralJoinText(text: string): string {
+  return text.replace(/(?:%[0-9a-fA-F]{2})+/g, (encoded) => {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  });
+}
+
+function extractRingCentralJoinUrlFromRedirectParams(
+  text: string,
+  depth: number,
+  seenTexts: Set<string>,
+): string | null {
+  if (depth >= 2) return null;
+
+  RINGCENTRAL_JOIN_REDIRECT_QUERY_PARAM_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while (
+    (match = RINGCENTRAL_JOIN_REDIRECT_QUERY_PARAM_PATTERN.exec(text)) !== null
+  ) {
+    const name = match[1];
+    const value = decodeRedirectParamValue(match[2]);
+    if (!isRingCentralJoinRedirectParam(name, value)) {
+      continue;
+    }
+    const nestedUrl = extractRingCentralVideoJoinUrlFromText(
+      decodeEscapedRingCentralJoinText(value),
+      depth + 1,
+      seenTexts,
+    );
+    if (nestedUrl) {
+      return nestedUrl;
+    }
+  }
+
+  return null;
+}
+
+function decodeRedirectParamValue(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, '%20'));
+  } catch {
+    return value;
+  }
+}
+
+function isRingCentralJoinRedirectParam(name: string, value: string): boolean {
+  if (!value || !/ringcentral/i.test(value)) {
+    return false;
+  }
+
+  const normalizedName = name.toLowerCase().replace(/[-_]/g, '');
+  return RINGCENTRAL_JOIN_REDIRECT_PARAM_NAMES.has(normalizedName);
 }
 
 function normalizeRingCentralVideoJoinUrlProtocol(url: string): string {
@@ -184,6 +354,10 @@ export function shouldPreserveDefaultNativeJoinClick(event: MouseEvent): boolean
           [
             `[${RINGCENTRAL_NATIVE_JOIN_FALLBACK_LINK_ATTR}]`,
             `[${RINGCENTRAL_NATIVE_JOIN_COPY_LINK_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_COPY_MEETING_ID_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_COPY_PASSCODE_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_REVEAL_LINK_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_RESTORE_RECOVERY_ATTR}]`,
             `[${RINGCENTRAL_NATIVE_JOIN_PREFER_BROWSER_ATTR}]`,
             `[${RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR}]`,
           ].join(', '),
@@ -288,17 +462,32 @@ function getDefaultRingCentralVideoBaseUrl(): string {
 
 function showRingCentralNativeJoinFallback(
   target: RingCentralVideoJoinTarget,
+  options: RingCentralNativeJoinFallbackOptions = {},
 ): void {
   if (typeof document === 'undefined') {
     return;
   }
 
-  const previous = document.getElementById(RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID);
-  previous?.remove();
+  const previousFallbackCleanup = currentRingCentralNativeJoinFallbackCleanup;
+  currentRingCentralNativeJoinFallbackCleanup = null;
+  previousFallbackCleanup?.();
+  document.getElementById(RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID)?.remove();
+  document
+    .getElementById(RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID)
+    ?.remove();
+
   const browserUrl = getRingCentralBrowserFallbackUrl(target);
+  const browserDisplayUrl = buildRingCentralBrowserDisplayUrl(target);
+  const browserUrlHasHiddenDetails = browserDisplayUrl !== browserUrl;
+  const meetingPasscode = extractRingCentralMeetingPasscode(browserUrl);
   let autoDismissTimer: number | null = null;
   let handoffConcernTimer: number | null = null;
   let statusMode: 'handoff' | 'manual' = 'handoff';
+  let browserUrlRevealed = false;
+  let revealHiddenBrowserUrlDetails: ((statusText: string) => void) | null =
+    null;
+  let retryAppButton: HTMLButtonElement | null = null;
+  let actions: HTMLDivElement | null = null;
 
   const host = document.createElement('div');
   host.id = RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID;
@@ -312,6 +501,9 @@ function showRingCentralNativeJoinFallback(
     'z-index:2147483647',
     'box-sizing:border-box',
     'width:min(360px,calc(100vw - 36px))',
+    'max-height:min(680px,calc(100vh - 36px))',
+    'overflow:auto',
+    'overscroll-behavior:contain',
     'padding:14px 42px 14px 14px',
     'border:1px solid rgba(15,23,42,0.14)',
     'border-radius:8px',
@@ -348,20 +540,53 @@ function showRingCentralNativeJoinFallback(
 
   const title = document.createElement('div');
   title.textContent = 'Opening RingCentral app...';
+  title.setAttribute(RINGCENTRAL_NATIVE_JOIN_TITLE_ATTR, 'true');
   title.style.cssText = 'font-weight:700;margin-bottom:4px';
   host.appendChild(title);
 
   const body = document.createElement('div');
   body.textContent =
-    'If the app prompt was cancelled or nothing opened, continue in the browser.';
+    'If Chrome asks, choose Open RingCentral. If you cancel or nothing opens, continue in the browser.';
+  body.setAttribute(RINGCENTRAL_NATIVE_JOIN_BODY_ATTR, 'true');
   body.style.cssText = 'color:#475569;margin-bottom:10px';
   host.appendChild(body);
 
   const status = document.createElement('div');
-  status.textContent = `Meeting ${target.meetingId}`;
+  status.textContent = `Meeting ${target.meetingId} - waiting for the app prompt.`;
   status.setAttribute('data-pai-ringcentral-native-join-status', 'true');
   status.style.cssText = 'color:#64748b;margin-bottom:10px;font-size:12px';
   host.appendChild(status);
+
+  const handoffReceipt = document.createElement('div');
+  handoffReceipt.setAttribute(
+    RINGCENTRAL_NATIVE_JOIN_HANDOFF_RECEIPT_ATTR,
+    'true',
+  );
+  handoffReceipt.style.cssText = [
+    'margin-bottom:10px',
+    'padding:8px 9px',
+    'border:1px solid #dbeafe',
+    'border-left:3px solid #2563eb',
+    'border-radius:6px',
+    'background:#eff6ff',
+    'color:#1e3a8a',
+    'font-size:12px',
+    'line-height:1.35',
+  ].join(';');
+  const handoffReceiptLabel = document.createElement('div');
+  handoffReceiptLabel.textContent = 'Handoff receipt';
+  handoffReceiptLabel.style.cssText =
+    'margin-bottom:3px;color:#1d4ed8;font-weight:700';
+  const handoffReceiptBody = document.createElement('div');
+  const setHandoffReceipt = (text: string): void => {
+    handoffReceiptBody.textContent = text;
+  };
+  setHandoffReceipt(
+    'App attempt started from this click and uses the validated full meeting link, including passcode/details if present. Personal AI cannot verify whether the RingCentral app opened or whether you joined, so browser recovery stays available. The displayed link hides passcode/details only in this panel; recovery actions keep the full meeting link. Default join preference has not changed.',
+  );
+  handoffReceipt.appendChild(handoffReceiptLabel);
+  handoffReceipt.appendChild(handoffReceiptBody);
+  host.appendChild(handoffReceipt);
 
   const browserUrlBlock = document.createElement('div');
   browserUrlBlock.style.cssText = [
@@ -380,10 +605,261 @@ function showRingCentralNativeJoinFallback(
     'margin-bottom:3px;color:#64748b;font-weight:600';
   browserUrlBlock.appendChild(browserUrlLabel);
   const browserUrlText = document.createElement('span');
-  browserUrlText.textContent = browserUrl;
+  browserUrlText.textContent = browserDisplayUrl;
   browserUrlText.setAttribute(RINGCENTRAL_NATIVE_JOIN_VISIBLE_LINK_ATTR, 'true');
   browserUrlBlock.appendChild(browserUrlText);
+  if (browserUrlHasHiddenDetails) {
+    const browserUrlPrivacyNote = document.createElement('div');
+    browserUrlPrivacyNote.setAttribute(
+      RINGCENTRAL_NATIVE_JOIN_LINK_PRIVACY_ATTR,
+      'true',
+    );
+    browserUrlPrivacyNote.style.cssText =
+      'margin-top:6px;color:#64748b;font-size:11px;line-height:1.35';
+    const revealFullLinkButton = document.createElement('button');
+    revealFullLinkButton.type = 'button';
+    revealFullLinkButton.setAttribute(
+      RINGCENTRAL_NATIVE_JOIN_REVEAL_LINK_ATTR,
+      'true',
+    );
+    revealFullLinkButton.style.cssText = [
+      'margin-top:6px',
+      'border:0',
+      'padding:0',
+      'background:transparent',
+      'color:#0f172a',
+      'font:inherit',
+      'font-size:12px',
+      'font-weight:700',
+      'text-decoration:underline',
+      'cursor:pointer',
+    ].join(';');
+
+    const updateVisibleBrowserLink = (): void => {
+      browserUrlText.textContent = browserUrlRevealed
+        ? browserUrl
+        : browserDisplayUrl;
+      browserUrlPrivacyNote.textContent = browserUrlRevealed
+        ? 'Full link is visible now. Hide it before sharing your screen.'
+        : 'Passcode and extra URL details are hidden here; Join in browser and Copy link still use the full meeting link.';
+      revealFullLinkButton.textContent = browserUrlRevealed
+        ? 'Hide full link'
+        : 'Show full link';
+      revealFullLinkButton.setAttribute(
+        'aria-label',
+        browserUrlRevealed
+          ? 'Hide the full RingCentral browser link'
+          : 'Show the full RingCentral browser link including hidden URL details',
+      );
+    };
+    revealHiddenBrowserUrlDetails = (statusText: string): void => {
+      browserUrlRevealed = true;
+      updateVisibleBrowserLink();
+      setFallbackStatus(statusText);
+    };
+
+    revealFullLinkButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      browserUrlRevealed = !browserUrlRevealed;
+      updateVisibleBrowserLink();
+      setFallbackStatus(
+        browserUrlRevealed
+          ? 'Full browser link is visible. Hide it before sharing your screen.'
+          : 'Full browser link hidden. Join in browser and Copy link still preserve it.',
+      );
+    });
+
+    updateVisibleBrowserLink();
+    browserUrlBlock.appendChild(browserUrlPrivacyNote);
+    browserUrlBlock.appendChild(revealFullLinkButton);
+  }
   host.appendChild(browserUrlBlock);
+
+  const meetingIdBlock = document.createElement('div');
+  meetingIdBlock.style.cssText = [
+    'margin-bottom:10px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:space-between',
+    'gap:8px',
+    'padding:7px 8px',
+    'border:1px solid #e2e8f0',
+    'border-radius:6px',
+    'background:#ffffff',
+    'color:#475569',
+    'font-size:12px',
+  ].join(';');
+  const meetingIdText = document.createElement('div');
+  meetingIdText.style.cssText =
+    'min-width:0;display:flex;flex-direction:column;gap:2px';
+  const meetingIdLabel = document.createElement('span');
+  meetingIdLabel.textContent = 'Meeting ID';
+  meetingIdLabel.style.cssText = 'color:#64748b;font-weight:600';
+  const meetingIdValue = document.createElement('span');
+  meetingIdValue.textContent = target.meetingId;
+  meetingIdValue.setAttribute(
+    RINGCENTRAL_NATIVE_JOIN_MEETING_ID_VALUE_ATTR,
+    'true',
+  );
+  meetingIdValue.style.cssText =
+    'color:#0f172a;font-weight:700;word-break:break-all';
+  const meetingIdNote = document.createElement('span');
+  meetingIdNote.textContent = browserUrlHasHiddenDetails
+    ? 'ID only for manual app entry; passcode/details stay in Join in browser, Copy link, or Show full link.'
+    : 'ID only for manual app entry; copying it does not join or change defaults.';
+  meetingIdNote.setAttribute(
+    RINGCENTRAL_NATIVE_JOIN_MEETING_ID_NOTE_ATTR,
+    'true',
+  );
+  meetingIdNote.style.cssText =
+    'color:#64748b;font-size:11px;line-height:1.3;max-width:220px';
+  meetingIdText.appendChild(meetingIdLabel);
+  meetingIdText.appendChild(meetingIdValue);
+  meetingIdText.appendChild(meetingIdNote);
+  meetingIdBlock.appendChild(meetingIdText);
+
+  const copyMeetingIdButton = document.createElement('button');
+  copyMeetingIdButton.type = 'button';
+  copyMeetingIdButton.textContent = 'Copy ID';
+  copyMeetingIdButton.setAttribute(
+    RINGCENTRAL_NATIVE_JOIN_COPY_MEETING_ID_ATTR,
+    'true',
+  );
+  copyMeetingIdButton.setAttribute(
+    'aria-label',
+    'Copy RingCentral meeting ID for manual app join',
+  );
+  copyMeetingIdButton.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    copyMeetingIdButton.disabled = true;
+    setFallbackStatus('Copying meeting ID...');
+    try {
+      await copyTextToClipboard(target.meetingId);
+      setFallbackStatus(
+        'Meeting ID copied. This does not join the meeting, copy passcode/details, or change the default join path.',
+      );
+    } catch (error) {
+      console.warn(
+        '[Personal AI] Failed to copy RingCentral meeting ID:',
+        error,
+      );
+      setFallbackStatus(
+        'Could not copy the meeting ID. Select the Meeting ID shown above for manual app join.',
+      );
+    } finally {
+      copyMeetingIdButton.disabled = false;
+    }
+  });
+  copyMeetingIdButton.style.cssText = [
+    'flex:0 0 auto',
+    'min-height:28px',
+    'padding:0 9px',
+    'border:1px solid #cbd5e1',
+    'border-radius:6px',
+    'background:#f8fafc',
+    'color:#334155',
+    'font:inherit',
+    'font-weight:700',
+    'cursor:pointer',
+  ].join(';');
+  meetingIdBlock.appendChild(copyMeetingIdButton);
+  host.appendChild(meetingIdBlock);
+
+  if (meetingPasscode) {
+    const passcodeBlock = document.createElement('div');
+    passcodeBlock.style.cssText = [
+      'margin-bottom:10px',
+      'display:flex',
+      'align-items:center',
+      'justify-content:space-between',
+      'gap:8px',
+      'padding:7px 8px',
+      'border:1px solid #fde68a',
+      'border-radius:6px',
+      'background:#fffbeb',
+      'color:#78350f',
+      'font-size:12px',
+    ].join(';');
+    const passcodeText = document.createElement('div');
+    passcodeText.style.cssText =
+      'min-width:0;display:flex;flex-direction:column;gap:2px';
+    const passcodeLabel = document.createElement('span');
+    passcodeLabel.textContent = 'Meeting passcode';
+    passcodeLabel.style.cssText = 'color:#92400e;font-weight:600';
+    const passcodeValue = document.createElement('span');
+    passcodeValue.textContent = 'Hidden until copied';
+    passcodeValue.setAttribute(
+      RINGCENTRAL_NATIVE_JOIN_PASSCODE_VALUE_ATTR,
+      'true',
+    );
+    passcodeValue.style.cssText = 'color:#0f172a;font-weight:700';
+    const passcodeNote = document.createElement('span');
+    passcodeNote.textContent =
+      'For manual app entry only; value stays hidden in this panel.';
+    passcodeNote.setAttribute(
+      RINGCENTRAL_NATIVE_JOIN_PASSCODE_NOTE_ATTR,
+      'true',
+    );
+    passcodeNote.style.cssText =
+      'color:#92400e;font-size:11px;line-height:1.3;max-width:220px';
+    passcodeText.appendChild(passcodeLabel);
+    passcodeText.appendChild(passcodeValue);
+    passcodeText.appendChild(passcodeNote);
+    passcodeBlock.appendChild(passcodeText);
+
+    const copyPasscodeButton = document.createElement('button');
+    copyPasscodeButton.type = 'button';
+    copyPasscodeButton.textContent = 'Copy passcode';
+    copyPasscodeButton.setAttribute(
+      RINGCENTRAL_NATIVE_JOIN_COPY_PASSCODE_ATTR,
+      'true',
+    );
+    copyPasscodeButton.setAttribute(
+      'aria-label',
+      'Copy RingCentral meeting passcode for manual app join',
+    );
+    copyPasscodeButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      copyPasscodeButton.disabled = true;
+      setFallbackStatus('Copying meeting passcode...');
+      try {
+        await copyTextToClipboard(meetingPasscode);
+        setFallbackStatus(
+          'Meeting passcode copied for manual app entry. This does not join the meeting, retry the app, copy the full link, or change the default join path.',
+        );
+      } catch (error) {
+        console.warn(
+          '[Personal AI] Failed to copy RingCentral meeting passcode:',
+          error,
+        );
+        setFallbackStatus(
+          'Could not copy the meeting passcode. Use Show full link only if you need to inspect the full invitation details.',
+        );
+      } finally {
+        copyPasscodeButton.disabled = false;
+      }
+    });
+    copyPasscodeButton.style.cssText = [
+      'flex:0 0 auto',
+      'min-height:28px',
+      'padding:0 9px',
+      'border:1px solid #f59e0b',
+      'border-radius:6px',
+      'background:#ffffff',
+      'color:#78350f',
+      'font:inherit',
+      'font-weight:700',
+      'cursor:pointer',
+    ].join(';');
+    passcodeBlock.appendChild(copyPasscodeButton);
+    host.appendChild(passcodeBlock);
+  }
 
   const clearHandoffConcern = (): void => {
     if (
@@ -421,7 +897,24 @@ function showRingCentralNativeJoinFallback(
     clearAutoDismiss();
     clearHandoffConcern();
     removeRingCentralNativeLaunchLink();
+    if (currentRingCentralNativeJoinFallbackCleanup === removeHost) {
+      currentRingCentralNativeJoinFallbackCleanup = null;
+    }
     host.remove();
+  };
+  currentRingCentralNativeJoinFallbackCleanup = removeHost;
+
+  const setHandoffRecoveryState = (): void => {
+    title.textContent = 'RingCentral app did not take over';
+    body.textContent =
+      'Use the browser fallback if the app prompt was cancelled or nothing opened.';
+    setHandoffReceipt(
+      'No app takeover was detected in this tab. This does not prove the app failed or that you joined elsewhere. Continue in browser or copy the full meeting link. Default join preference stays unchanged unless you change it below.',
+    );
+    setFallbackStatus(
+      'Still on this page? Use Join in browser or Copy link to continue.',
+    );
+    ensureRetryAppButton();
   };
 
   closeButton.addEventListener('click', (event) => {
@@ -429,6 +922,7 @@ function showRingCentralNativeJoinFallback(
     event.stopPropagation();
     event.stopImmediatePropagation();
     removeHost();
+    showRingCentralNativeJoinDismissedRecovery(target);
   });
 
   const scheduleHandoffConcern = (): void => {
@@ -441,8 +935,7 @@ function showRingCentralNativeJoinFallback(
       if (statusMode !== 'handoff') {
         return;
       }
-      status.textContent =
-        'Still on this page? RingCentral app may not have opened. Use Join in browser or Copy link.';
+      setHandoffRecoveryState();
     }, RINGCENTRAL_NATIVE_JOIN_FALLBACK_ESCALATE_MS);
   };
 
@@ -457,16 +950,84 @@ function showRingCentralNativeJoinFallback(
         return;
       }
       if (isRingCentralNativeJoinFallbackPageStillActive()) {
-        setFallbackStatus(
-          'Still on this page? RingCentral app may not have opened. Use Join in browser or Copy link.',
-        );
+        setHandoffRecoveryState();
         return;
       }
       removeHost();
     }, RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS);
   };
 
-  const actions = document.createElement('div');
+  const setHandoffRetryState = (): void => {
+    clearAutoDismiss();
+    clearHandoffConcern();
+    statusMode = 'handoff';
+    title.textContent = 'Trying RingCentral app again...';
+    body.textContent =
+      'Chrome may show the external app prompt again. Browser recovery stays here.';
+    setHandoffReceipt(
+      'App retry started from this recovery panel and reuses the validated full meeting link. Personal AI still cannot verify whether the RingCentral app opened or whether you joined, so browser recovery and Copy link stay available. Default join preference has not changed.',
+    );
+    status.textContent =
+      'Trying the RingCentral app again. Keep this browser recovery open until the app takes over.';
+    scheduleAutoDismiss();
+    scheduleHandoffConcern();
+  };
+
+  const ensureRetryAppButton = (): void => {
+    if (retryAppButton || !actions) {
+      return;
+    }
+
+    retryAppButton = document.createElement('button');
+    retryAppButton.type = 'button';
+    retryAppButton.textContent = 'Try app again';
+    retryAppButton.setAttribute(
+      'aria-label',
+      'Try opening this RingCentral meeting in the app again',
+    );
+    retryAppButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setHandoffRetryState();
+      try {
+        launchRingCentralNativeProtocol(target.nativeUrl);
+      } catch (error) {
+        console.warn('[Personal AI] Native RingCentral retry failed:', error);
+        setHandoffRecoveryState();
+        setFallbackStatus(
+          'App retry could not start. Use Join in browser or Copy link.',
+        );
+      }
+    });
+    retryAppButton.style.cssText = [
+      'min-height:30px',
+      'padding:0 10px',
+      'border:1px solid #93c5fd',
+      'border-radius:6px',
+      'background:#eff6ff',
+      'color:#1d4ed8',
+      'font:inherit',
+      'font-weight:700',
+      'cursor:pointer',
+    ].join(';');
+    actions.appendChild(retryAppButton);
+  };
+
+  const setRestoredRecoveryState = (): void => {
+    title.textContent = 'RingCentral recovery restored';
+    body.textContent =
+      'No new app attempt started. Use the recovery controls below or retry the app explicitly.';
+    setHandoffReceipt(
+      'Recovery panel restored after being hidden. Personal AI did not retry the app, join in browser, copy a link, or change the default join path. Use Try app again for a new app handoff, or Join in browser / Copy link to continue with the browser recovery path.',
+    );
+    setFallbackStatus(
+      'Recovery restored. No join was confirmed; default join preference is unchanged.',
+    );
+    ensureRetryAppButton();
+  };
+
+  actions = document.createElement('div');
   actions.style.cssText =
     'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap';
 
@@ -530,15 +1091,23 @@ function showRingCentralNativeJoinFallback(
     setFallbackStatus('Copying browser meeting link...');
     try {
       await copyTextToClipboard(browserUrl);
-      setFallbackStatus('Browser meeting link copied.');
+      setFallbackStatus(
+        'Full browser meeting link copied, including hidden passcode/details if present. This does not join the meeting, retry the app, or change the default join path.',
+      );
     } catch (error) {
       console.warn(
         '[Personal AI] Failed to copy RingCentral browser join link:',
         error,
       );
-      setFallbackStatus(
-        'Could not copy the link automatically. Use Join in browser or select the browser link.',
-      );
+      if (browserUrlHasHiddenDetails && revealHiddenBrowserUrlDetails) {
+        revealHiddenBrowserUrlDetails(
+          'Copy failed. Full browser link is visible for manual copy; hide it before sharing your screen.',
+        );
+      } else {
+        setFallbackStatus(
+          'Could not copy the link automatically. Use Join in browser or select the browser link.',
+        );
+      }
     } finally {
       copyButton.disabled = false;
     }
@@ -617,6 +1186,11 @@ function showRingCentralNativeJoinFallback(
       await setRingCentralNativeJoinEnabled(nextNativeJoinPreferred);
       nativeJoinPreferred = nextNativeJoinPreferred;
       updateDefaultPreferenceControl();
+      setHandoffReceipt(
+        nextNativeJoinPreferred
+          ? 'Default saved for future joins: Personal AI will try the RingCentral app first. This meeting still has the browser recovery link available.'
+          : 'Default saved for future joins: Personal AI will leave RingCentral meetings in the browser. This meeting still has the browser recovery link available.',
+      );
       setFallbackStatus(
         nextNativeJoinPreferred
           ? 'Saved. Future RingCentral joins will try the app first.'
@@ -627,8 +1201,11 @@ function showRingCentralNativeJoinFallback(
         '[Personal AI] Failed to set RingCentral join default:',
         error,
       );
+      setHandoffReceipt(
+        'Default join preference was not saved. This click did not change future RingCentral joins, did not join this meeting, did not retry the app, did not open the browser meeting, and did not copy any meeting material. Current browser recovery controls remain available.',
+      );
       setFallbackStatus(
-        'Could not save the default. Open Options > Meeting Pilot to change Native Client join.',
+        'Could not save the default; current join preference is unchanged. Open Options > Meeting Pilot to change Native Client join.',
       );
     } finally {
       defaultPreferenceButton.disabled = false;
@@ -638,8 +1215,140 @@ function showRingCentralNativeJoinFallback(
   host.appendChild(defaultBrowserHint);
 
   document.body?.appendChild(host);
-  scheduleAutoDismiss();
-  scheduleHandoffConcern();
+  if (options.restoredAfterDismiss) {
+    setRestoredRecoveryState();
+  } else {
+    scheduleAutoDismiss();
+    scheduleHandoffConcern();
+  }
+}
+
+function showRingCentralNativeJoinDismissedRecovery(
+  target: RingCentralVideoJoinTarget,
+): void {
+  if (typeof document === 'undefined' || !document.body) {
+    return;
+  }
+
+  document
+    .getElementById(RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID)
+    ?.remove();
+
+  const strip = document.createElement('div');
+  strip.id = RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID;
+  strip.setAttribute('role', 'status');
+  strip.setAttribute('aria-live', 'polite');
+  strip.setAttribute(
+    'aria-label',
+    'RingCentral app handoff hidden recovery',
+  );
+  strip.style.cssText = [
+    'position:fixed',
+    'right:18px',
+    'bottom:18px',
+    'z-index:2147483647',
+    'box-sizing:border-box',
+    'width:min(320px,calc(100vw - 36px))',
+    'padding:10px 38px 10px 12px',
+    'border:1px solid rgba(15,23,42,0.14)',
+    'border-left:3px solid #f59e0b',
+    'border-radius:8px',
+    'background:#fffbeb',
+    'box-shadow:0 14px 34px rgba(15,23,42,0.16)',
+    'color:#78350f',
+    'font:12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+  ].join(';');
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = 'x';
+  close.setAttribute('aria-label', 'Close hidden RingCentral recovery');
+  close.setAttribute(RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR, 'true');
+  close.style.cssText = [
+    'position:absolute',
+    'top:7px',
+    'right:7px',
+    'width:24px',
+    'height:24px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'padding:0',
+    'border:0',
+    'border-radius:6px',
+    'background:transparent',
+    'color:#92400e',
+    'font:15px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'font-weight:700',
+    'cursor:pointer',
+  ].join(';');
+  strip.appendChild(close);
+
+  const title = document.createElement('div');
+  title.textContent = 'RingCentral handoff hidden';
+  title.style.cssText = 'font-weight:700;margin-bottom:3px';
+  strip.appendChild(title);
+
+  const body = document.createElement('div');
+  body.textContent =
+    'No join was confirmed and the default path is unchanged. Restore recovery if the app prompt was cancelled.';
+  body.style.cssText = 'margin-bottom:7px';
+  strip.appendChild(body);
+
+  const restore = document.createElement('button');
+  restore.type = 'button';
+  restore.textContent = 'Restore recovery';
+  restore.setAttribute(RINGCENTRAL_NATIVE_JOIN_RESTORE_RECOVERY_ATTR, 'true');
+  restore.setAttribute(
+    'aria-label',
+    'Restore RingCentral browser recovery controls',
+  );
+  restore.style.cssText = [
+    'min-height:28px',
+    'padding:0 9px',
+    'border:1px solid #f59e0b',
+    'border-radius:6px',
+    'background:#ffffff',
+    'color:#78350f',
+    'font:inherit',
+    'font-weight:700',
+    'cursor:pointer',
+  ].join(';');
+  strip.appendChild(restore);
+
+  let dismissTimer: number | null = null;
+  const removeStrip = (): void => {
+    if (
+      dismissTimer != null &&
+      typeof window !== 'undefined' &&
+      typeof window.clearTimeout === 'function'
+    ) {
+      window.clearTimeout(dismissTimer);
+    }
+    dismissTimer = null;
+    strip.remove();
+  };
+
+  close.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    removeStrip();
+  });
+
+  restore.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    removeStrip();
+    showRingCentralNativeJoinFallback(target, { restoredAfterDismiss: true });
+  });
+
+  document.body.appendChild(strip);
+
+  if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+    dismissTimer = window.setTimeout(removeStrip, 12000);
+  }
 }
 
 function openBrowserFallbackWindow(browserUrl: string): Window | null {
@@ -712,10 +1421,61 @@ function buildRingCentralVideoBrowserJoinUrl(
   )}${search}${hash}`;
 }
 
+function buildRingCentralVideoNativeJoinUrl(
+  meetingId: string,
+  search = '',
+  hash = '',
+): string {
+  return `${RINGCENTRAL_VIDEO_NATIVE_SCHEME}://join/${encodeURIComponent(
+    meetingId,
+  )}${search}${hash}`;
+}
+
+function buildRingCentralBrowserDisplayUrl(
+  target: RingCentralVideoJoinTarget,
+): string {
+  return buildRingCentralVideoBrowserJoinUrl(target.meetingId);
+}
+
 function getRingCentralBrowserFallbackUrl(
   target: RingCentralVideoJoinTarget,
 ): string {
   return target.browserUrl || target.originalUrl;
+}
+
+function extractRingCentralMeetingPasscode(browserUrl: string): string {
+  try {
+    const parsed = new URL(browserUrl, `https://${RINGCENTRAL_VIDEO_HOST}/`);
+    let passcode = '';
+    parsed.searchParams.forEach((value, name) => {
+      if (passcode) {
+        return;
+      }
+      const normalizedName = name.toLowerCase().replace(/[-_]/g, '');
+      const normalizedValue = value.trim();
+      if (
+        RINGCENTRAL_JOIN_PASSCODE_PARAM_NAMES.has(normalizedName) &&
+        normalizedValue &&
+        normalizedValue.length <= 128 &&
+        !hasRingCentralPasscodeControlCharacters(normalizedValue)
+      ) {
+        passcode = normalizedValue;
+      }
+    });
+    return passcode;
+  } catch {
+    return '';
+  }
+}
+
+function hasRingCentralPasscodeControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {

@@ -1,6 +1,9 @@
 services:
   memory-service:
-    build: ./memory-service
+    build:
+      context: ./memory-service
+      extra_hosts:
+        - "registry.npmjs.org:104.16.29.34"
     container_name: memory-service
     ports:
       - "3210:3210"

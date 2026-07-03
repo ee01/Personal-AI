@@ -226,6 +226,7 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
       pendingExtractCount: 0,
       conversationCount: 1,
       artifactCount: 1,
+      revokedArtifactCount: 0,
     });
 
     const storedMessages = rawStore
@@ -304,6 +305,9 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
         source: 'chatgpt',
         conversationId: 'conv-1',
         extractedAt: artifacts[0]!.extractedAt,
+        scope: 'work',
+        revokedAt: undefined,
+        revokedScope: undefined,
         kind: 'fact',
         text: 'User asked a follow-up question',
         sourceQuote: 'follow-up question',

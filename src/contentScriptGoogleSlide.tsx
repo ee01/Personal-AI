@@ -6,6 +6,8 @@ declare global {
     analysisPopupMessageCleanup?: () => void;
     slidesAnalyzerToolbarObserver?: MutationObserver;
     slidesAnalyzerToolbarCheckTimer?: number;
+    slidesAnalyzerRunState?: SlidesAnalyzerRunState;
+    slidesAnalyzerRequestTimeout?: number;
   }
 }
 
@@ -41,6 +43,21 @@ import {
 
 const ANALYSIS_BUTTON_ID = 'analyze-projects-button';
 const GOOGLE_SLIDES_TOOLBAR_SELECTOR = '.goog-toolbar-horizontal';
+const SLIDES_ANALYZER_REQUEST_TIMEOUT_MS = 15000;
+
+type SlidesAnalyzerRunState = 'idle' | 'requesting' | 'analyzing';
+
+const SLIDES_ANALYZER_BUTTON_LABELS: Record<SlidesAnalyzerRunState, string> = {
+  idle: '📊 分析项目',
+  requesting: '⏳ 获取授权...',
+  analyzing: '⏳ 正在分析...'
+};
+
+const SLIDES_ANALYZER_BUTTON_TITLES: Record<SlidesAnalyzerRunState, string> = {
+  idle: '分析当前 Google Slides 项目信息',
+  requesting: '正在获取授权并启动分析，请稍候',
+  analyzing: '正在分析当前 Google Slides 项目信息，请稍候'
+};
 
 function hasSuggestedWritebackField(suggestion: ProjectUpdateSuggestion): boolean {
   return Boolean(
@@ -49,6 +66,56 @@ function hasSuggestedWritebackField(suggestion: ProjectUpdateSuggestion): boolea
     suggestion.suggestedTrack ||
     suggestion.suggestedComments
   );
+}
+
+function getSlidesAnalyzerRunState(): SlidesAnalyzerRunState {
+  return window.slidesAnalyzerRunState || 'idle';
+}
+
+function clearSlidesAnalyzerRequestTimeout() {
+  if (window.slidesAnalyzerRequestTimeout === undefined) {
+    return;
+  }
+
+  window.clearTimeout(window.slidesAnalyzerRequestTimeout);
+  window.slidesAnalyzerRequestTimeout = undefined;
+}
+
+function updateAnalysisButtonState(targetButton?: HTMLElement | null) {
+  const button = targetButton || document.getElementById(ANALYSIS_BUTTON_ID);
+  if (!button) {
+    return;
+  }
+
+  const state = getSlidesAnalyzerRunState();
+  const isBusy = state !== 'idle';
+  const title = SLIDES_ANALYZER_BUTTON_TITLES[state];
+
+  button.textContent = SLIDES_ANALYZER_BUTTON_LABELS[state];
+  button.setAttribute('aria-label', title);
+  button.setAttribute('title', title);
+  button.setAttribute('aria-disabled', isBusy ? 'true' : 'false');
+  if (isBusy) {
+    button.setAttribute('aria-busy', 'true');
+  } else {
+    button.removeAttribute('aria-busy');
+  }
+  button.style.cursor = isBusy ? 'wait' : 'pointer';
+  button.style.opacity = isBusy ? '0.68' : '1';
+}
+
+function setSlidesAnalyzerRunState(state: SlidesAnalyzerRunState) {
+  window.slidesAnalyzerRunState = state;
+
+  if (state !== 'requesting') {
+    clearSlidesAnalyzerRequestTimeout();
+  }
+
+  updateAnalysisButtonState();
+}
+
+function isSlidesAnalyzerBusy(): boolean {
+  return getSlidesAnalyzerRunState() !== 'idle';
 }
 
 // 分析结果接口
@@ -84,9 +151,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (type === 'ANALYZE_SLIDES_PROJECTS') {
     if (!token) {
       console.error('未提供认证token');
+      setSlidesAnalyzerRunState('idle');
       sendResponse({ success: false, error: '未提供认证token' });
       return true;
     }
+
+    if (getSlidesAnalyzerRunState() === 'analyzing') {
+      const errorMessage = '已有 Slides 分析正在进行，请等待当前结果页打开后再重试';
+      showToast(errorMessage, 'warning');
+      sendResponse({ success: false, error: errorMessage });
+      return true;
+    }
+
+    setSlidesAnalyzerRunState('analyzing');
     
     analyzeSlideProjects(token).then(() => {
       sendResponse({ success: true });
@@ -97,6 +174,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (type === 'SLIDES_ANALYSIS_AUTH_FAILED') {
     const errorMessage = message.error || '获取 Google 认证失败，请重新授权后再试';
     console.error('Slides分析认证失败:', errorMessage);
+    if (getSlidesAnalyzerRunState() === 'analyzing') {
+      console.warn('忽略分析进行中的重复授权失败消息:', errorMessage);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    setSlidesAnalyzerRunState('idle');
     showToast(errorMessage, 'error');
     sendResponse({ success: true });
   } else {
@@ -185,18 +269,30 @@ function addAnalysisButton(): boolean {
   button.className = 'goog-toolbar-button';
   button.setAttribute('role', 'button');
   button.setAttribute('tabindex', '0');
-  button.setAttribute('aria-disabled', 'false');
-  button.setAttribute('aria-label', '分析当前 Google Slides 项目信息');
-  button.setAttribute('title', '分析当前 Google Slides 项目信息');
   button.style.display = 'inline-flex';
   button.style.alignItems = 'center';
   button.style.padding = '0 8px';
-  button.style.cursor = 'pointer';
   button.style.color = '#444';
   button.style.fontWeight = 'bold';
-  button.innerHTML = '📊 分析项目';
+  updateAnalysisButtonState(button);
 
   const requestAnalysis = () => {
+    if (isSlidesAnalyzerBusy()) {
+      showToast('Slides 分析正在进行，请等待当前结果页打开后再重试', 'warning');
+      return;
+    }
+
+    setSlidesAnalyzerRunState('requesting');
+    window.slidesAnalyzerRequestTimeout = window.setTimeout(() => {
+      window.slidesAnalyzerRequestTimeout = undefined;
+      if (getSlidesAnalyzerRunState() !== 'requesting') {
+        return;
+      }
+
+      setSlidesAnalyzerRunState('idle');
+      showToast('分析启动超时，请确认扩展仍在运行后重试', 'warning');
+    }, SLIDES_ANALYZER_REQUEST_TIMEOUT_MS);
+
     // 通知background脚本或popup我们需要token
     chrome.runtime.sendMessage({ type: 'REQUEST_SLIDES_ANALYSIS' });
   };
@@ -251,6 +347,8 @@ async function analyzeSlideProjects(token: string) {
     console.error('分析项目信息时出错:', error);
     showToast(`分析失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
     throw error;
+  } finally {
+    setSlidesAnalyzerRunState('idle');
   }
 }
 
@@ -483,7 +581,8 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
           console.error('收到无效的更新请求', event.data);
           postToAnalysisPopup({
             type: 'UPDATE_ERROR',
-            errorMessage: '收到无效的更新请求，请重新打开分析窗口后再试'
+            errorMessage: '收到无效的更新请求，请重新打开分析窗口后再试',
+            errors: ['收到无效的更新请求，请重新打开分析窗口后再试'],
           });
           return;
         }
@@ -542,7 +641,8 @@ async function applyProjectUpdates(presentationId: string, token: string, select
       
       postToAnalysisPopup({
         type: 'UPDATE_ERROR',
-        errorMessage
+        errorMessage,
+        errors: result.errors && result.errors.length > 0 ? result.errors : [errorMessage],
       });
     }
   } catch (error) {
@@ -552,7 +652,8 @@ async function applyProjectUpdates(presentationId: string, token: string, select
     
     postToAnalysisPopup({
       type: 'UPDATE_ERROR',
-      errorMessage
+      errorMessage,
+      errors: [errorMessage],
     });
   }
 }

@@ -43,6 +43,39 @@
       <span>{{ queueGuidance.body }}</span>
     </div>
 
+    <div
+      v-if="!loading && attentionBreakdownReceipt"
+      class="queue-attention-receipt"
+      :class="attentionBreakdownReceipt.tone"
+      aria-label="动作队列处理构成"
+    >
+      <div class="attention-receipt-head">
+        <div>
+          <span class="panel-kicker">处理构成</span>
+          <strong>{{ attentionBreakdownReceipt.title }}</strong>
+        </div>
+        <span class="attention-total">{{ attentionBreakdownReceipt.totalLabel }}</span>
+      </div>
+      <p>{{ attentionBreakdownReceipt.body }}</p>
+      <div class="attention-breakdown-rows">
+        <div
+          v-for="row in attentionBreakdownReceipt.rows"
+          :key="row.key"
+          class="attention-breakdown-row"
+        >
+          <span>{{ row.label }}</span>
+          <strong>{{ row.value }}</strong>
+          <small>{{ row.description }}</small>
+        </div>
+      </div>
+      <div class="attention-boundary-facts">
+        <span
+          v-for="fact in attentionBreakdownReceipt.facts"
+          :key="fact"
+        >{{ fact }}</span>
+      </div>
+    </div>
+
     <div v-if="!loading && loadError" class="error-box queue-load-error">
       {{ loadError }}
     </div>
@@ -116,6 +149,42 @@
           >查看线程</router-link>
         </div>
 
+        <div
+          v-if="actionExecutionScopeReceipt(action)"
+          class="action-scope-panel"
+          :class="actionExecutionScopeReceipt(action)?.tone"
+        >
+          <div>
+            <span class="panel-kicker">执行范围</span>
+            <strong>{{ actionExecutionScopeReceipt(action)?.title }}</strong>
+          </div>
+          <p>{{ actionExecutionScopeReceipt(action)?.body }}</p>
+          <div class="action-scope-facts">
+            <span
+              v-for="fact in actionExecutionScopeReceipt(action)?.facts || []"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="isOpenClawDelegationAction(action)"
+          class="delegation-preflight-panel"
+          :class="openClawPreflightTone(action)"
+        >
+          <div class="delegation-preflight-head">
+            <span class="panel-kicker">委派预检</span>
+            <strong>{{ openClawPreflightTitle(action) }}</strong>
+          </div>
+          <p>{{ openClawPreflightDetail(action) }}</p>
+          <div class="delegation-preflight-facts">
+            <span
+              v-for="fact in openClawPreflightFacts(action)"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+        </div>
+
         <div v-if="showApprovalCheckpoint(action)" class="approval-panel">
           <div>
             <span class="panel-kicker">人工确认</span>
@@ -123,14 +192,65 @@
           </div>
           <p>{{ approvalCheckpointBody(action) }}</p>
           <div class="approval-facts">
-            <span>{{ riskReviewLabel(action) }}</span>
-            <span>{{ executionReviewLabel(action) }}</span>
-            <span v-if="action.approvedAt">批准时间 {{ formatActionTime(action.approvedAt) }}</span>
+            <span
+              v-for="fact in approvalCheckpointFacts(action)"
+              :key="fact"
+            >{{ fact }}</span>
           </div>
         </div>
 
         <div v-if="actionResultSummary(action)" class="result-box">
           {{ actionResultSummary(action) }}
+        </div>
+
+        <div
+          v-if="openClawVerificationReceipt(action)"
+          class="delegation-verification-panel"
+          :class="openClawVerificationReceipt(action)?.tone"
+        >
+          <div>
+            <span class="panel-kicker">证据校验回执</span>
+            <strong>{{ openClawVerificationReceipt(action)?.title }}</strong>
+          </div>
+          <p>{{ openClawVerificationReceipt(action)?.body }}</p>
+          <div class="delegation-verification-facts">
+            <span
+              v-for="fact in openClawVerificationReceipt(action)?.facts || []"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="openClawRecoveryReceipt(action)"
+          class="delegation-recovery-panel"
+          :class="openClawRecoveryReceipt(action)?.tone"
+        >
+          <div>
+            <span class="panel-kicker">恢复路径回执</span>
+            <strong>{{ openClawRecoveryReceipt(action)?.title }}</strong>
+          </div>
+          <p>{{ openClawRecoveryReceipt(action)?.body }}</p>
+          <div class="delegation-recovery-facts">
+            <span
+              v-for="fact in openClawRecoveryReceipt(action)?.facts || []"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+          <div
+            v-if="openClawRecoveryReceipt(action)?.actions.length"
+            class="delegation-recovery-actions"
+          >
+            <router-link
+              v-for="followUp in openClawRecoveryReceipt(action)?.actions || []"
+              :key="followUp.id"
+              :to="followUpActionRoute(followUp.id)"
+              class="recovery-action-link"
+            >
+              <span>{{ followUpActionLabel(followUp) }}</span>
+              <small>{{ followUpActionDetail(followUp) }}</small>
+            </router-link>
+          </div>
         </div>
 
         <div
@@ -193,6 +313,42 @@
           <span>{{ runningStatusLabel(action) }}</span>
         </div>
 
+        <div
+          v-if="actionPendingOperationReceipt(action)"
+          class="action-operation-receipt pending"
+          :class="actionPendingOperationReceipt(action)?.tone"
+        >
+          <div>
+            <span class="panel-kicker">操作提交中</span>
+            <strong>{{ actionPendingOperationReceipt(action)?.title }}</strong>
+          </div>
+          <p>{{ actionPendingOperationReceipt(action)?.body }}</p>
+          <div class="action-operation-facts">
+            <span
+              v-for="fact in actionPendingOperationReceipt(action)?.facts || []"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="actionOperationReceipt(action.id)"
+          class="action-operation-receipt"
+          :class="actionOperationReceipt(action.id)?.tone"
+        >
+          <div>
+            <span class="panel-kicker">操作回执</span>
+            <strong>{{ actionOperationReceipt(action.id)?.title }}</strong>
+          </div>
+          <p>{{ actionOperationReceipt(action.id)?.body }}</p>
+          <div class="action-operation-facts">
+            <span
+              v-for="fact in actionOperationReceipt(action.id)?.facts || []"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+        </div>
+
         <div v-if="actionOperationError(action.id)" class="error-box">
           {{ actionOperationError(action.id) }}
         </div>
@@ -214,14 +370,14 @@
             class="tiny-btn"
             :class="{ loading: isActionOperation(action.id, 'retry') }"
             :disabled="isActionBusy(action.id)"
-            @click="retryAction(action.id)"
+            @click="retryAction(action)"
           >{{ actionButtonLabel(action.id, 'retry', '重试入队') }}</button>
           <button
             v-if="action.queueStatus === 'queued'"
             class="tiny-btn danger"
             :class="{ loading: isActionOperation(action.id, 'cancel') }"
             :disabled="isActionBusy(action.id)"
-            @click="cancelAction(action.id)"
+            @click="cancelAction(action)"
           >{{ actionButtonLabel(action.id, 'cancel', '取消') }}</button>
         </div>
       </div>
@@ -261,17 +417,67 @@ interface QueueGuidance {
   body: string;
   tone: QueueGuidanceTone;
 }
+interface AttentionBreakdownRow {
+  key: string;
+  label: string;
+  value: string;
+  description: string;
+}
+interface AttentionBreakdownReceipt {
+  title: string;
+  totalLabel: string;
+  body: string;
+  tone: QueueGuidanceTone;
+  rows: AttentionBreakdownRow[];
+  facts: string[];
+}
 interface DelegationArtifactView {
   kind: string;
   title?: string;
   content?: string;
   metadata?: Record<string, unknown>;
 }
+interface OpenClawVerificationReceipt {
+  tone: Extract<QueueGuidanceTone, 'warning' | 'danger'>;
+  title: string;
+  body: string;
+  facts: string[];
+}
+interface OpenClawFollowUpActionView {
+  id: string;
+  actionType?: string;
+  title?: string;
+  queueStatus?: string;
+  sourceKind?: string;
+  sourceRefId?: string;
+}
+interface OpenClawRecoveryReceipt {
+  tone: Extract<QueueGuidanceTone, 'info' | 'warning' | 'danger'>;
+  title: string;
+  body: string;
+  facts: string[];
+  actions: OpenClawFollowUpActionView[];
+}
+interface ActionOperationReceipt {
+  tone: Extract<QueueGuidanceTone, 'success' | 'info' | 'warning'>;
+  title: string;
+  body: string;
+  facts: string[];
+}
+interface ActionExecutionScopeReceipt {
+  tone: QueueGuidanceTone;
+  title: string;
+  body: string;
+  facts: string[];
+}
 const actionOperations = ref<Record<string, ActionOperation>>({});
 const actionOperationErrors = ref<Record<string, string>>({});
+const actionOperationReceipts = ref<Record<string, ActionOperationReceipt>>({});
 const transcriptVisible = ref<Record<string, boolean>>({});
 const transcriptLoading = ref<Record<string, boolean>>({});
 const transcriptContent = ref<Record<string, string>>({});
+const lastSuccessfulLoadAt = ref<number | null>(null);
+const lastSuccessfulQueryKey = ref('');
 let queuePollTimer: number | undefined;
 const routeActionIdFilter = computed(() =>
   typeof route.query.actionId === 'string' ? route.query.actionId : '',
@@ -318,8 +524,25 @@ const approvalActionCount = computed(() =>
 const highRiskActionCount = computed(() =>
   actions.value.filter((action) => action.queueStatus === 'queued' && action.riskLevel === 'high').length,
 );
+const highRiskReadyActionCount = computed(() =>
+  actions.value.filter(
+    (action) =>
+      action.queueStatus === 'queued' &&
+      action.riskLevel === 'high' &&
+      !(action.requiresApproval && !action.approvedAt) &&
+      !isScheduledDue(action),
+  ).length,
+);
 const attentionActionCount = computed(() =>
   actions.value.filter((action) => isAttentionAction(action)).length,
+);
+const isShowingStaleSnapshot = computed(() =>
+  Boolean(
+    loadError.value &&
+      actions.value.length > 0 &&
+      lastSuccessfulLoadAt.value &&
+      lastSuccessfulQueryKey.value === currentActionQueryKey(),
+  ),
 );
 const visibleCountLabel = computed(() => {
   if (totalActions.value > 0 && totalActions.value !== actions.value.length) {
@@ -332,10 +555,16 @@ const queueSummaryCards = computed<QueueSummaryCard[]>(() => [
     key: 'visible',
     label: '当前结果',
     value: visibleCountLabel.value,
-    description: hasRouteFilters.value || hasUiFilters.value
+    description: isShowingStaleSnapshot.value
+      ? `上次成功读取：${formatActionTime(lastSuccessfulLoadAt.value || undefined)}`
+      : hasRouteFilters.value || hasUiFilters.value
       ? '已按当前来源、状态或模式筛选'
       : '队列中可查看的动作记录',
-    tone: actions.value.length > 0 ? 'info' : 'success',
+    tone: isShowingStaleSnapshot.value
+      ? 'warning'
+      : actions.value.length > 0
+      ? 'info'
+      : 'success',
   },
   {
     key: 'attention',
@@ -362,6 +591,15 @@ const queueSummaryCards = computed<QueueSummaryCard[]>(() => [
   },
 ]);
 const queueGuidance = computed<QueueGuidance | null>(() => {
+  if (isShowingStaleSnapshot.value) {
+    return {
+      title: '当前显示上次成功快照',
+      body: `最近一次刷新失败，当前服务状态未确认；下面保留 ${formatActionTime(
+        lastSuccessfulLoadAt.value || undefined,
+      )} 成功读取的动作，不会把读取失败误当成队列清空或执行完成。`,
+      tone: 'warning',
+    };
+  }
   if (actions.value.length === 0) {
     return {
       title: hasRouteFilters.value || hasUiFilters.value ? '当前筛选没有动作' : '动作队列暂时清空',
@@ -412,6 +650,55 @@ const queueGuidance = computed<QueueGuidance | null>(() => {
     tone: 'success',
   };
 });
+const attentionBreakdownReceipt = computed<AttentionBreakdownReceipt | null>(() => {
+  if (actions.value.length === 0 || attentionActionCount.value === 0) return null;
+
+  const rows = [
+    {
+      key: 'failed',
+      label: '失败/死信',
+      value: failedActionCount.value,
+      description: '先看 lastError、结果回执和外部副作用',
+    },
+    {
+      key: 'due',
+      label: '已到期自动动作',
+      value: dueActionCount.value,
+      description: '等待调度扫描，或在卡片上手动执行',
+    },
+    {
+      key: 'approval',
+      label: '待人工确认',
+      value: approvalActionCount.value,
+      description: '点击确认前先核对范围和证据',
+    },
+    {
+      key: 'high-risk',
+      label: '高风险已可执行',
+      value: highRiskReadyActionCount.value,
+      description: '无待审批拦截，但仍需人工看清影响',
+    },
+  ].filter((row) => row.value > 0);
+
+  return {
+    tone: isShowingStaleSnapshot.value ? 'warning' : failedActionCount.value > 0 ? 'danger' : 'warning',
+    title: isShowingStaleSnapshot.value ? '上次成功快照的处理构成' : '当前需要处理的动作已拆分',
+    totalLabel: `${attentionActionCount.value} 条`,
+    body: isShowingStaleSnapshot.value
+      ? '最近一次刷新失败，下面只是上次成功读取时的阻塞构成；不能据此确认当前动作已经完成、失败已恢复或队列已清空。'
+      : '这里把需要处理的动作拆成互斥类别，帮助先处理失败、到期、审批和高风险项；本区域只是只读统计，不会执行、批准、重试或取消任何动作。',
+    rows: rows.map((row) => ({
+      ...row,
+      value: String(row.value),
+    })),
+    facts: [
+      '口径：当前可见筛选结果',
+      isShowingStaleSnapshot.value ? '快照：上次成功读取' : '快照：本次读取',
+      '边界：只读统计',
+      '无副作用：不执行 / 不批准 / 不重试 / 不取消',
+    ],
+  };
+});
 const emptyStateTitle = computed(() =>
   loadError.value ? '动作队列暂时无法读取' : '没有动作记录',
 );
@@ -449,6 +736,7 @@ watch(
 
 async function loadActions(options: { silent?: boolean } = {}) {
   const shouldShowLoading = options.silent !== true;
+  const queryKey = currentActionQueryKey();
   if (shouldShowLoading) {
     loading.value = true;
   }
@@ -484,11 +772,17 @@ async function loadActions(options: { silent?: boolean } = {}) {
       ? filteredItems.length
       : response.total ?? filteredItems.length;
     loadError.value = '';
+    lastSuccessfulLoadAt.value = Date.now();
+    lastSuccessfulQueryKey.value = queryKey;
     await hydrateOutreachSessions(filteredItems);
   } catch (error) {
     console.error('Failed to load actions:', error);
-    loadError.value = `读取动作队列失败：${formatActionError(error)}`;
-    if (shouldShowLoading) {
+    const canKeepSnapshot =
+      actions.value.length > 0 && lastSuccessfulQueryKey.value === queryKey;
+    loadError.value = canKeepSnapshot
+      ? `刷新动作队列失败，已保留上次快照：${formatActionError(error)}`
+      : `读取动作队列失败：${formatActionError(error)}`;
+    if (shouldShowLoading && !canKeepSnapshot) {
       actions.value = [];
       outreachByActionId.value = {};
       totalActions.value = 0;
@@ -498,6 +792,17 @@ async function loadActions(options: { silent?: boolean } = {}) {
       loading.value = false;
     }
   }
+}
+
+function currentActionQueryKey(): string {
+  return JSON.stringify({
+    queueStatus: queueStatus.value,
+    executionMode: executionMode.value || '',
+    actionId: routeActionIdFilter.value || '',
+    sourceKind: sourceKindFilter.value || '',
+    sourceRefId: sourceRefIdFilter.value || '',
+    sourceTitle: sourceTitleFilter.value || '',
+  });
 }
 
 function resetFilters() {
@@ -557,40 +862,55 @@ async function hydrateOutreachSessions(items: RuntimeAction[]) {
 async function executeAction(action: RuntimeAction) {
   const { id } = action;
   setActionOperation(id, 'execute');
-  markActionRunning(id);
   try {
-    const result = await client.executeAction(id, approvalExecutePayload(action));
+    const approvalPayload = approvalExecutePayload(action);
+    const result = await client.executeAction(id, approvalPayload);
     if (result.error) {
       throw new Error(result.error);
     }
+    applyExecuteAcceptedState(action, result, approvalPayload?.approve === true);
+    setActionOperationReceipt(
+      id,
+      buildExecuteOperationReceipt(action, result, approvalPayload?.approve === true),
+    );
     await loadActions({ silent: true });
   } catch (error) {
-    setActionOperationError(id, `执行请求失败：${formatActionError(error)}`);
+    setActionOperationError(id, buildActionOperationError(action, 'execute', error));
     await loadActions({ silent: true });
   } finally {
     clearActionOperation(id);
   }
 }
 
-async function retryAction(id: string) {
+async function retryAction(action: RuntimeAction) {
+  const { id } = action;
   setActionOperation(id, 'retry');
   try {
-    await client.retryAction(id);
+    const response = await client.retryAction(id);
+    setActionOperationReceipt(
+      id,
+      buildRetryOperationReceipt(action, response.action ?? action),
+    );
     await loadActions({ silent: true });
   } catch (error) {
-    setActionOperationError(id, `重试入队失败：${formatActionError(error)}`);
+    setActionOperationError(id, buildActionOperationError(action, 'retry', error));
   } finally {
     clearActionOperation(id);
   }
 }
 
-async function cancelAction(id: string) {
+async function cancelAction(action: RuntimeAction) {
+  const { id } = action;
   setActionOperation(id, 'cancel');
   try {
-    await client.cancelAction(id, 'Cancelled from action queue UI');
+    const response = await client.cancelAction(id, 'Cancelled from action queue UI');
+    setActionOperationReceipt(
+      id,
+      buildCancelOperationReceipt(action, response.action ?? action),
+    );
     await loadActions({ silent: true });
   } catch (error) {
-    setActionOperationError(id, `取消失败：${formatActionError(error)}`);
+    setActionOperationError(id, buildActionOperationError(action, 'cancel', error));
   } finally {
     clearActionOperation(id);
   }
@@ -602,6 +922,7 @@ function setActionOperation(id: string, operation: ActionOperation) {
     [id]: operation,
   };
   actionOperationErrors.value = omitActionEntry(actionOperationErrors.value, id);
+  actionOperationReceipts.value = omitActionEntry(actionOperationReceipts.value, id);
 }
 
 function clearActionOperation(id: string) {
@@ -619,6 +940,72 @@ function actionOperationError(id: string): string {
   return actionOperationErrors.value[id] || '';
 }
 
+function actionOperationReceipt(id: string): ActionOperationReceipt | null {
+  return actionOperationReceipts.value[id] ?? null;
+}
+
+function actionPendingOperationReceipt(action: RuntimeAction): ActionOperationReceipt | null {
+  const operation = actionOperations.value[action.id];
+  if (!operation) return null;
+
+  const isOpenClaw = isOpenClawDelegationAction(action);
+  const mode = isOpenClaw ? openClawDelegationMode(action) : 'read';
+  const tone: ActionOperationReceipt['tone'] =
+    isOpenClaw && (mode === 'write' || action.requiresApproval || action.riskLevel === 'high')
+      ? 'warning'
+      : 'info';
+  const facts = [
+    '状态：等待服务确认',
+    `队列快照：${action.queueStatus}`,
+    action.requiresApproval && !action.approvedAt ? '批准：尚未确认写入' : '',
+    isOpenClaw ? `模式：${mode === 'write' ? '写操作' : '只读查询'}` : `类型：${actionScopeTypeLabel(action)}`,
+    isOpenClaw ? `范围：${openClawTargetSystem(action) || '由 OpenClaw 判断'}` : '',
+  ].filter(Boolean);
+
+  if (operation === 'execute') {
+    return {
+      tone,
+      title: action.requiresApproval && !action.approvedAt
+        ? '确认与执行请求正在提交'
+        : '执行请求正在提交',
+      body: isOpenClaw
+        ? '正在等待 Memory Service 确认接收这次批准或执行请求；当前卡片仍是上次读取的队列快照，不代表 OpenClaw 已开始、外部系统已完成或批准已经写入。'
+        : '正在等待 Memory Service 确认接收这次执行请求；当前卡片仍是上次读取的队列快照，不代表通知、主动询问、决策请求或本地真值写入已经完成。',
+      facts,
+    };
+  }
+
+  if (operation === 'retry') {
+    return {
+      tone,
+      title: isOpenClaw ? 'OpenClaw 重试请求正在提交' : '重试入队请求正在提交',
+      body: isOpenClaw
+        ? '正在等待 Memory Service 确认把这条 OpenClaw 动作重新入队；此时还没有清除旧错误，也不能证明外部副作用已经发生、撤销或重新执行。'
+        : '正在等待 Memory Service 确认把这条动作重新入队；此时还没有清除旧错误，也不代表后续通知、询问或本地写入已经重新执行。',
+      facts: [...facts, '重试：尚未确认入队'],
+    };
+  }
+
+  return {
+    tone,
+    title: isOpenClaw ? 'OpenClaw 取消请求正在提交' : '取消请求正在提交',
+    body: isOpenClaw
+      ? '正在等待 Memory Service 确认取消队列动作；取消只作用于未完成的队列项，不会撤销可能已经发生的 Jira、Drive、部署等外部副作用。'
+      : '正在等待 Memory Service 确认取消队列动作；取消不会删除来源记忆、反思证据或已经产生的历史结果。',
+    facts: [...facts, '取消：尚未确认写入'],
+  };
+}
+
+function setActionOperationReceipt(
+  id: string,
+  receipt: ActionOperationReceipt,
+) {
+  actionOperationReceipts.value = {
+    ...actionOperationReceipts.value,
+    [id]: receipt,
+  };
+}
+
 function isActionOperation(id: string, operation: ActionOperation): boolean {
   return actionOperations.value[id] === operation;
 }
@@ -634,10 +1021,113 @@ function actionButtonLabel(id: string, operation: ActionOperation, fallback: str
   return '取消中...';
 }
 
+function buildActionOperationError(
+  action: RuntimeAction,
+  operation: ActionOperation,
+  error: unknown,
+): string {
+  const message = formatActionError(error);
+  if (!isOpenClawDelegationAction(action)) {
+    if (operation === 'execute') return `执行请求失败：${message}`;
+    if (operation === 'retry') return `重试入队失败：${message}`;
+    return `取消失败：${message}`;
+  }
+
+  const modeLabel = openClawDelegationMode(action) === 'write' ? '写操作' : '只读查询';
+  if (operation === 'execute') {
+    return `OpenClaw ${modeLabel}执行请求失败：${message}。Memory Service 没有确认接收这次执行请求；本页不会把它标成 running，也不证明外部系统已经开始或完成。若这是“确认并执行”，批准是否写入仍以刷新后的队列状态为准。`;
+  }
+  if (operation === 'retry') {
+    return `OpenClaw ${modeLabel}重试入队失败：${message}。这次请求没有确认重新入队，也不会证明外部副作用已经发生或撤销。`;
+  }
+  return `OpenClaw ${modeLabel}取消失败：${message}。这次请求没有确认取消队列动作，也不会撤销可能已经发生的外部副作用。`;
+}
+
 function approvalExecutePayload(action: RuntimeAction): { approve: boolean } | undefined {
   if (!action.requiresApproval || action.approvedAt) return undefined;
   return {
     approve: true,
+  };
+}
+
+function buildExecuteOperationReceipt(
+  action: RuntimeAction,
+  result: {
+    queueStatus?: string;
+    result?: Record<string, any>;
+  },
+  submittedApproval: boolean,
+): ActionOperationReceipt {
+  const isOpenClaw = isOpenClawDelegationAction(action);
+  const mode = isOpenClaw ? openClawDelegationMode(action) : 'read';
+  const tone: ActionOperationReceipt['tone'] =
+    isOpenClaw && (mode === 'write' || submittedApproval || action.riskLevel === 'high')
+      ? 'warning'
+      : 'info';
+  const title = isOpenClaw
+    ? submittedApproval
+      ? '已确认并提交 OpenClaw 执行'
+      : 'OpenClaw 执行请求已提交'
+    : '执行请求已提交';
+  const body = isOpenClaw
+    ? mode === 'write'
+      ? 'Memory Service 已把这条写操作交给 OpenClaw；这里还不确认 Jira、Drive、部署等外部系统已经完成，最终以 artifact、transcript 和后续队列状态为准。'
+      : 'Memory Service 已把只读查询交给 OpenClaw；这只表示队列开始执行，不代表外部事实已确认，最终以 artifact / transcript 回流为准。'
+    : '执行请求已发送到 Memory Service；是否完成仍以队列状态和后续结果回执为准。';
+  return {
+    tone,
+    title,
+    body,
+    facts: [
+      `服务端状态：${result.queueStatus || 'unknown'}`,
+      submittedApproval ? '批准：已随请求提交' : '',
+      isOpenClaw ? `模式：${mode === 'write' ? '写操作' : '只读查询'}` : '',
+      isOpenClaw ? `范围：${openClawTargetSystem(action) || '由 OpenClaw 判断'}` : '',
+      isOpenClaw ? '结论：等待 artifact / transcript' : '',
+    ].filter(Boolean),
+  };
+}
+
+function buildRetryOperationReceipt(
+  originalAction: RuntimeAction,
+  updatedAction: RuntimeAction,
+): ActionOperationReceipt {
+  const isOpenClaw = isOpenClawDelegationAction(originalAction);
+  const mode = isOpenClaw ? openClawDelegationMode(originalAction) : 'read';
+  return {
+    tone: isOpenClaw && mode === 'write' ? 'warning' : 'info',
+    title: isOpenClaw ? 'OpenClaw 重试已入队' : '重试已入队',
+    body: isOpenClaw
+      ? mode === 'write'
+        ? '这次只把写操作重新放回队列；再次执行前仍要确认外部系统没有已经发生不可重复的副作用。'
+        : '这次只把只读查询重新放回队列；重试成功不等于外部事实已确认，仍以 artifact / transcript 回流为准。'
+      : '这次只把动作重新放回队列；后续是否完成仍以队列状态和结果回执为准。',
+    facts: [
+      `队列状态：${updatedAction.queueStatus || 'queued'}`,
+      `重试次数：${updatedAction.retryCount ?? originalAction.retryCount}`,
+      isOpenClaw ? `模式：${mode === 'write' ? '写操作' : '只读查询'}` : '',
+      isOpenClaw ? '结论：未写入外部事实' : '',
+    ].filter(Boolean),
+  };
+}
+
+function buildCancelOperationReceipt(
+  originalAction: RuntimeAction,
+  updatedAction: RuntimeAction,
+): ActionOperationReceipt {
+  const isOpenClaw = isOpenClawDelegationAction(originalAction);
+  const mode = isOpenClaw ? openClawDelegationMode(originalAction) : 'read';
+  return {
+    tone: isOpenClaw && mode === 'write' ? 'warning' : 'success',
+    title: isOpenClaw ? 'OpenClaw 动作已取消' : '动作已取消',
+    body: isOpenClaw
+      ? '取消只作用于队列里的未完成动作；它不会撤销已经发生的 Jira、Drive、部署等外部改动，也不会删除反思证据或历史结果。'
+      : '取消只作用于队列里的未完成动作；它不会删除来源记忆、反思证据或已经产生的历史结果。',
+    facts: [
+      `队列状态：${updatedAction.queueStatus || 'cancelled'}`,
+      isOpenClaw ? '外部副作用：未撤销' : '',
+      '证据：保留',
+    ].filter(Boolean),
   };
 }
 
@@ -654,22 +1144,55 @@ function executeButtonLabel(action: RuntimeAction): string {
   return '执行';
 }
 
-function markActionRunning(id: string) {
+function applyExecuteAcceptedState(
+  acceptedAction: RuntimeAction,
+  result: {
+    queueStatus?: string;
+    result?: Record<string, any>;
+  },
+  submittedApproval: boolean,
+) {
+  const acceptedStatus = normalizeQueueStatus(result.queueStatus);
   const currentTime = Date.now();
   actions.value = actions.value.map((action) =>
-    action.id === id
+    action.id === acceptedAction.id
       ? {
           ...action,
-          queueStatus: 'running',
-          startedAt: action.startedAt || currentTime,
+          queueStatus: acceptedStatus || action.queueStatus,
+          approvedAt:
+            submittedApproval && !action.approvedAt ? currentTime : action.approvedAt,
+          startedAt:
+            acceptedStatus === 'running' ? action.startedAt || currentTime : action.startedAt,
+          finishedAt:
+            acceptedStatus === 'succeeded' ||
+            acceptedStatus === 'failed' ||
+            acceptedStatus === 'dead_letter' ||
+            acceptedStatus === 'cancelled'
+              ? action.finishedAt || currentTime
+              : action.finishedAt,
           lastError: undefined,
+          result: result.result ?? action.result,
         }
       : action,
   );
 }
 
+function normalizeQueueStatus(value?: string): RuntimeAction['queueStatus'] | '' {
+  if (
+    value === 'queued' ||
+    value === 'running' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled' ||
+    value === 'dead_letter'
+  ) {
+    return value;
+  }
+  return '';
+}
+
 function isActionRunning(action: RuntimeAction): boolean {
-  return action.queueStatus === 'running' || isActionOperation(action.id, 'execute');
+  return action.queueStatus === 'running';
 }
 
 function runningStatusLabel(action: RuntimeAction): string {
@@ -698,15 +1221,48 @@ function showApprovalCheckpoint(action: RuntimeAction): boolean {
 
 function approvalCheckpointTitle(action: RuntimeAction): string {
   if (action.approvedAt) return '已经记录人工批准';
+  if (isOpenClawDelegationAction(action)) {
+    return openClawDelegationMode(action) === 'write'
+      ? '确认前核对外部写操作'
+      : '确认前核对外部查询';
+  }
   if (action.riskLevel === 'high') return '执行前需要确认高风险动作';
   return '执行前需要人工确认';
 }
 
 function approvalCheckpointBody(action: RuntimeAction): string {
   if (action.approvedAt) {
+    if (isOpenClawDelegationAction(action)) {
+      return '这条 OpenClaw 动作已经记录人工批准；批准只说明允许继续执行，外部系统是否完成仍要看 artifact、transcript 和队列状态。';
+    }
     return '这条动作已经记录批准时间；后续重试仍会保留批准痕迹，便于审计为什么允许继续执行。';
   }
+  if (isOpenClawDelegationAction(action)) {
+    const mode = openClawDelegationMode(action);
+    if (mode === 'write') {
+      return '点击“确认并执行”会先写入批准时间，再把写操作交给 OpenClaw；这不是 Jira、Drive、部署等外部系统已经完成的证明。';
+    }
+    return '点击“确认并执行”会先写入批准时间，再把只读查询交给 OpenClaw；这不是外部事实已经确认的证明。';
+  }
   return '点击“确认并执行”会先写入批准时间，再触发执行；如果只是想放弃这条动作，请使用取消。';
+}
+
+function approvalCheckpointFacts(action: RuntimeAction): string[] {
+  if (isOpenClawDelegationAction(action)) {
+    return [
+      riskReviewLabel(action),
+      executionReviewLabel(action),
+      `OpenClaw：${openClawDelegationMode(action) === 'write' ? '写操作' : '只读查询'}`,
+      `目标：${openClawTargetSystem(action) || '由 OpenClaw 判断'}`,
+      '结果证明：artifact / transcript / 队列状态',
+      action.approvedAt ? `批准时间 ${formatActionTime(action.approvedAt)}` : '批准：点击后才写入',
+    ];
+  }
+  return [
+    riskReviewLabel(action),
+    executionReviewLabel(action),
+    action.approvedAt ? `批准时间 ${formatActionTime(action.approvedAt)}` : '',
+  ].filter(Boolean);
 }
 
 function riskReviewLabel(action: RuntimeAction): string {
@@ -720,6 +1276,97 @@ function executionReviewLabel(action: RuntimeAction): string {
   return action.executionMode === 'auto'
     ? '模式：自动调度'
     : '模式：手动执行';
+}
+
+function actionExecutionScopeReceipt(action: RuntimeAction): ActionExecutionScopeReceipt | null {
+  if (isOpenClawDelegationAction(action)) return null;
+  if (action.queueStatus === 'succeeded' || action.queueStatus === 'cancelled') return null;
+
+  const isFailed = action.queueStatus === 'failed' || action.queueStatus === 'dead_letter';
+  const isRunning = action.queueStatus === 'running';
+  const isLocalWrite = isLocalTruthWriteAction(action);
+  const tone: QueueGuidanceTone = isFailed
+    ? 'danger'
+    : isLocalWrite || (action.requiresApproval && !action.approvedAt) || action.riskLevel === 'high'
+    ? 'warning'
+    : isRunning
+    ? 'info'
+    : 'info';
+
+  return {
+    tone,
+    title: actionExecutionScopeTitle(action),
+    body: actionExecutionScopeBody(action),
+    facts: actionExecutionScopeFacts(action),
+  };
+}
+
+function actionExecutionScopeTitle(action: RuntimeAction): string {
+  if (action.queueStatus === 'running') return '执行中，等待结果回执';
+  if (action.queueStatus === 'failed' || action.queueStatus === 'dead_letter') {
+    return '重试前确认执行范围';
+  }
+  if (action.requiresApproval && !action.approvedAt) return '确认前先看执行范围';
+  if (isScheduledDue(action)) return '到期自动动作范围';
+  return '执行前范围';
+}
+
+function actionExecutionScopeBody(action: RuntimeAction): string {
+  if (action.queueStatus === 'running') {
+    return 'Memory Service 已经接手这条动作；页面刷新只读取状态，不代表通知送达、外部回复、决策完成或本地真值写入已经确认。';
+  }
+  if (action.queueStatus === 'failed' || action.queueStatus === 'dead_letter') {
+    return '重试只会把动作重新放回队列；它不会抹掉本次错误、不会确认之前的外部副作用，也不会自动撤销已经产生的结果。';
+  }
+
+  switch (action.actionType) {
+    case 'notify_user':
+      return '执行会把这条通知交给 Memory Service 的通知通道；本页不直接确认 Chrome、Doubao 或 Glip 已送达，最终以 Notification Center / provider 回执为准。';
+    case 'ask_external_user':
+      return '执行会交给 Outreach 引擎创建或推进询问；它不会绕过审批，也不会在本页确认 RingCentral 消息已发送或外部人员已回复。';
+    case 'create_confirm_request':
+      return '执行会在决策中心创建或更新确认请求；它不会替用户选择答案，也不会执行这个决定后面的外部动作。';
+    case 'update_truth_property':
+      return '执行会尝试写入本地 Memory Service 真值或画像属性；它不会外发、不会跨平台同步，也不会删除原始证据。';
+    default:
+      return '执行会提交到 Memory Service action runtime；本页只发起队列操作，完成、外部副作用和写入结果都以后续状态或结果回执为准。';
+  }
+}
+
+function actionExecutionScopeFacts(action: RuntimeAction): string[] {
+  return [
+    `类型：${actionScopeTypeLabel(action)}`,
+    executionReviewLabel(action),
+    `队列：${action.queueStatus}`,
+    action.requiresApproval && !action.approvedAt ? '审批：先确认再执行' : '',
+    action.queueStatus === 'failed' || action.queueStatus === 'dead_letter'
+      ? '重试：只重新入队'
+      : '',
+    action.queueStatus === 'queued' ? '完成：等待结果回执' : '',
+    action.queueStatus === 'running' ? '完成：尚未确认' : '',
+    action.sourceKind ? `来源：${action.sourceKind}` : '',
+  ].filter(Boolean);
+}
+
+function actionScopeTypeLabel(action: RuntimeAction): string {
+  switch (action.actionType) {
+    case 'notify_user':
+      return '通知提醒';
+    case 'ask_external_user':
+      return '主动询问';
+    case 'create_confirm_request':
+      return '决策中心确认请求';
+    case 'update_truth_property':
+      return '本地真值/画像更新';
+    case 'query_external_tool':
+      return '外部工具查询';
+    default:
+      return action.actionType || '运行时动作';
+  }
+}
+
+function isLocalTruthWriteAction(action: RuntimeAction): boolean {
+  return action.actionType === 'update_truth_property';
 }
 
 function formatActionError(error: unknown): string {
@@ -776,6 +1423,240 @@ function outreachSessionStatusLabel(status: string): string {
   if (status === 'cancelled') return '已取消';
   if (status === 'failed') return '失败';
   return status || '未知状态';
+}
+
+function openClawDelegationMode(action: RuntimeAction): 'read' | 'write' {
+  return action.params?.mode === 'write' ? 'write' : 'read';
+}
+
+function openClawTargetSystem(action: RuntimeAction): string {
+  const target = action.params?.targetSystem;
+  return typeof target === 'string' && target.trim().length > 0
+    ? target.trim()
+    : '';
+}
+
+function compactReceiptText(value: string, maxLength = 96): string {
+  const compacted = value.replace(/\s+/g, ' ').trim();
+  if (compacted.length <= maxLength) return compacted;
+  return `${compacted.slice(0, maxLength - 1)}…`;
+}
+
+function openClawTaskPreview(action: RuntimeAction): string {
+  const task = action.params?.task;
+  if (typeof task === 'string' && task.trim().length > 0) {
+    return compactReceiptText(task);
+  }
+  return compactReceiptText(action.description || action.title || '未提供任务说明');
+}
+
+function openClawPreflightTone(action: RuntimeAction): QueueGuidanceTone {
+  const mode = openClawDelegationMode(action);
+  if (action.queueStatus === 'succeeded') return 'success';
+  if (action.queueStatus === 'dead_letter') return mode === 'write' ? 'danger' : 'warning';
+  if (action.queueStatus === 'failed') return mode === 'write' ? 'danger' : 'warning';
+  if (isStaleRunningAction(action)) return 'warning';
+  if (mode === 'write' || (action.requiresApproval && !action.approvedAt) || action.riskLevel === 'high') {
+    return 'warning';
+  }
+  return 'info';
+}
+
+function openClawPreflightTitle(action: RuntimeAction): string {
+  const mode = openClawDelegationMode(action);
+  if (action.queueStatus === 'succeeded') return '结果已回流，按 artifact / transcript 审计';
+  if (action.queueStatus === 'failed' || action.queueStatus === 'dead_letter') {
+    return mode === 'write'
+      ? '重试前先确认外部副作用'
+      : '失败后先看错误和 transcript';
+  }
+  if (isActionRunning(action)) return '正在等待 OpenClaw 最终结果';
+  if (mode === 'write') {
+    return action.requiresApproval && !action.approvedAt
+      ? '写操作会先停在人工确认'
+      : '外部写操作将由 OpenClaw 接管';
+  }
+  return '只读查询会委派给 OpenClaw';
+}
+
+function openClawPreflightDetail(action: RuntimeAction): string {
+  const mode = openClawDelegationMode(action);
+  if (action.queueStatus === 'succeeded') {
+    return '这条动作已经返回最终结果；优先核对下方 artifact、payload 和 transcript，再让反思线程继续消费结果。';
+  }
+  if (action.queueStatus === 'failed' || action.queueStatus === 'dead_letter') {
+    return mode === 'write'
+      ? '这条写操作没有拿到可信完成回执；重试前先确认 Jira、Drive、部署等外部系统是否已经发生副作用。'
+      : '这条查询没有成功完成；先查看 lastError、结果摘要或 transcript，再决定重试还是回到线程改写任务。';
+  }
+  if (isActionRunning(action)) {
+    return '执行中会自动刷新；超过 OpenClaw 超时加 60 秒仍未回流时会转入 dead_letter，避免重复触发外部操作。';
+  }
+  return `将把「${openClawTaskPreview(action)}」发送给 OpenClaw；Memory Service 只消费最终 JSON 结果，中间步骤不写入反思证据链。`;
+}
+
+function openClawApprovalFact(action: RuntimeAction): string {
+  if (action.requiresApproval && !action.approvedAt) return '审批：待人工确认';
+  if (action.requiresApproval && action.approvedAt) return `审批：已确认 ${formatActionTime(action.approvedAt)}`;
+  if (openClawDelegationMode(action) === 'write') return '审批：未要求审批，确认规则配置';
+  return '审批：无需审批';
+}
+
+function openClawRecoveryFact(action: RuntimeAction): string {
+  if (action.queueStatus === 'succeeded') return '恢复：结果已回流';
+  if (action.queueStatus === 'running') return '恢复：自动刷新 / stale 转 dead_letter';
+  if (action.queueStatus === 'failed' || action.queueStatus === 'dead_letter') {
+    return openClawDelegationMode(action) === 'write'
+      ? '恢复：先查外部结果再重试'
+      : '恢复：查看错误后可重试入队';
+  }
+  return action.executionMode === 'auto'
+    ? '恢复：失败会派生通知或确认请求'
+    : '恢复：手动执行后保留结果回执';
+}
+
+function openClawFollowUpFact(action: RuntimeAction): string {
+  const followUps = openClawFollowUpActions(action);
+  if (followUps.length === 0) return '';
+  return `后续：已派生 ${followUps.length} 个恢复入口`;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function rawOpenClawFollowUpIds(action: RuntimeAction): string[] {
+  const ids = action.result?.followUpActionIds;
+  return Array.isArray(ids)
+    ? ids
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim())
+    : [];
+}
+
+function coerceOpenClawFollowUpAction(value: unknown): OpenClawFollowUpActionView | null {
+  if (!isObjectRecord(value) || typeof value.id !== 'string' || !value.id.trim()) return null;
+  return {
+    id: value.id.trim(),
+    actionType:
+      typeof value.actionType === 'string' && value.actionType.trim()
+        ? value.actionType.trim()
+        : undefined,
+    title:
+      typeof value.title === 'string' && value.title.trim()
+        ? value.title.trim()
+        : undefined,
+    queueStatus:
+      typeof value.queueStatus === 'string' && value.queueStatus.trim()
+        ? value.queueStatus.trim()
+        : undefined,
+    sourceKind:
+      typeof value.sourceKind === 'string' && value.sourceKind.trim()
+        ? value.sourceKind.trim()
+        : undefined,
+    sourceRefId:
+      typeof value.sourceRefId === 'string' && value.sourceRefId.trim()
+        ? value.sourceRefId.trim()
+        : undefined,
+  };
+}
+
+function openClawFollowUpActions(action: RuntimeAction): OpenClawFollowUpActionView[] {
+  if (!isOpenClawDelegationAction(action) || !action.result) return [];
+  const rawSummaries = Array.isArray(action.result.followUpActions)
+    ? action.result.followUpActions
+    : [];
+  const summaries = rawSummaries
+    .map(coerceOpenClawFollowUpAction)
+    .filter((item): item is OpenClawFollowUpActionView => Boolean(item));
+  const byId = new Map<string, OpenClawFollowUpActionView>();
+  for (const summary of summaries) {
+    byId.set(summary.id, summary);
+  }
+  for (const id of rawOpenClawFollowUpIds(action)) {
+    if (!byId.has(id)) {
+      byId.set(id, { id });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function openClawRecoveryReceipt(action: RuntimeAction): OpenClawRecoveryReceipt | null {
+  const followUps = openClawFollowUpActions(action);
+  if (followUps.length === 0) return null;
+
+  const mode = openClawDelegationMode(action);
+  const status = openClawResultStatus(action);
+  const hasSummaries = followUps.some((item) => Boolean(item.actionType || item.title || item.queueStatus));
+  const tone: OpenClawRecoveryReceipt['tone'] =
+    mode === 'write' || action.queueStatus === 'dead_letter'
+      ? 'danger'
+      : 'warning';
+  const title =
+    status === 'capability_missing'
+      ? '已派生 OpenClaw 配置恢复入口'
+      : status === 'auth_error'
+      ? '已派生 OpenClaw 授权恢复入口'
+      : status === 'need_human_decision'
+      ? '已派生人工判断入口'
+      : '已派生委派恢复入口';
+
+  return {
+    tone,
+    title,
+    body:
+      '这些入口只说明通知、决策或规则改进动作已经创建；它们不会自动重试原 OpenClaw 动作、确认外部事实、发送外部消息或撤销外部副作用。',
+    facts: [
+      `恢复入口：${followUps.length}`,
+      `原动作：${action.queueStatus}`,
+      `模式：${mode === 'write' ? '写操作' : '只读查询'}`,
+      status ? `委派状态：${delegationOutcomeLabel(action)}` : '',
+      hasSummaries ? '明细：可跳转到派生动作' : '明细：旧结果仅保留 action id',
+    ].filter(Boolean),
+    actions: followUps,
+  };
+}
+
+function followUpActionTypeLabel(type?: string): string {
+  if (type === 'notify_user') return '通知恢复动作';
+  if (type === 'create_confirm_request') return '决策中心确认动作';
+  if (type === 'delegate_openclaw') return 'OpenClaw 委派动作';
+  if (type === 'ask_external_user') return '主动询问动作';
+  if (type === 'update_truth_property') return '真值写入动作';
+  if (type === 'message_rule_improvement') return '规则改进动作';
+  return type || '恢复动作';
+}
+
+function followUpActionLabel(action: OpenClawFollowUpActionView): string {
+  const typeLabel = followUpActionTypeLabel(action.actionType);
+  if (action.title) {
+    return `${typeLabel}：${compactReceiptText(action.title, 72)}`;
+  }
+  return `${typeLabel}：${action.id}`;
+}
+
+function followUpActionDetail(action: OpenClawFollowUpActionView): string {
+  const parts = [
+    action.queueStatus ? `队列 ${action.queueStatus}` : '队列状态未随结果返回',
+    action.sourceKind ? `来源 ${action.sourceKind}` : '',
+    action.sourceRefId ? `关联 ${action.sourceRefId}` : '',
+    `id ${compactReceiptText(action.id, 48)}`,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function followUpActionRoute(id: string): string {
+  return `/actions?actionId=${encodeURIComponent(id)}`;
+}
+
+function openClawPreflightFacts(action: RuntimeAction): string[] {
+  return [
+    `范围：${openClawTargetSystem(action) || '由 OpenClaw 根据任务判断'}`,
+    `模式：${openClawDelegationMode(action) === 'write' ? '写操作' : '只读查询'}`,
+    openClawApprovalFact(action),
+    openClawRecoveryFact(action),
+    openClawFollowUpFact(action),
+  ].filter(Boolean);
 }
 
 function delegationTargetLabel(action: RuntimeAction) {
@@ -914,6 +1795,59 @@ function isOpenClawDelegationAction(action: RuntimeAction): boolean {
   return action.actionType === 'delegate_openclaw';
 }
 
+function actionResultPayload(action: RuntimeAction): Record<string, unknown> {
+  const payload = action.result?.payload;
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+function openClawResultStatus(action: RuntimeAction): string {
+  return typeof action.result?.status === 'string' ? action.result.status : '';
+}
+
+function openClawVerificationReceipt(
+  action: RuntimeAction,
+): OpenClawVerificationReceipt | null {
+  if (!isOpenClawDelegationAction(action) || !action.result) return null;
+
+  const payload = actionResultPayload(action);
+  if (payload.artifactValidation === 'missing_verifiable_artifact') {
+    return {
+      tone: 'danger',
+      title: 'OpenClaw 返回缺少可验证 artifact',
+      body:
+        '这次委派返回了最终文本或字段，但缺少来源系统、对象、验证方式和字段/操作等证据锚点；Memory Service 不会把它写回 action_result。',
+      facts: [
+        `状态：${delegationOutcomeLabel(action)}`,
+        '写回：已阻断',
+        '恢复：改写任务或补齐 artifact 后重试',
+      ],
+    };
+  }
+
+  if (payload.fallback === 'plain_text_summary_without_verifiable_artifact') {
+    const rawSummary =
+      typeof payload.rawSummary === 'string' && payload.rawSummary.trim()
+        ? `摘要：${compactReceiptText(payload.rawSummary, 72)}`
+        : '';
+    return {
+      tone: 'warning',
+      title: '只返回文本，未形成可验证外部证据',
+      body:
+        'OpenClaw 返回了纯文本摘要；页面保留 transcript 和原始摘要供人工核对，但不会把这段文本当作已验证外部事实沉淀。',
+      facts: [
+        `状态：${openClawResultStatus(action) || 'error'}`,
+        '写回：未写入 action_result',
+        '恢复：要求 OpenClaw 返回 JSON artifact',
+        rawSummary,
+      ].filter(Boolean),
+    };
+  }
+
+  return null;
+}
+
 function hasDelegationResult(action: RuntimeAction): boolean {
   return Boolean(action.result && (action.result.status || action.result.artifacts || action.result.payload));
 }
@@ -950,10 +1884,13 @@ function delegationArtifacts(action: RuntimeAction): DelegationArtifactView[] {
 }
 
 function delegationArtifactCountLabel(action: RuntimeAction): string {
-  const raw = action.result?.artifacts;
-  const total = Array.isArray(raw) ? raw.length : 0;
+  const artifacts = allDelegationArtifacts(action);
+  const total = artifacts.length;
   if (total === 0) return '无 artifact';
-  return `可验证 artifact ${total} 条`;
+  const verified = artifacts.filter((artifact) => isVerifiableDelegationArtifact(action, artifact)).length;
+  if (verified === total) return `可验证 artifact ${total} 条`;
+  if (verified === 0) return `未验证 artifact ${total} 条`;
+  return `可验证 artifact ${verified}/${total} 条`;
 }
 
 function delegationArtifactKey(artifact: DelegationArtifactView): string {
@@ -962,6 +1899,12 @@ function delegationArtifactKey(artifact: DelegationArtifactView): string {
 
 function artifactTitle(artifact: DelegationArtifactView): string {
   return artifact.title || artifact.kind || '外部证据';
+}
+
+function allDelegationArtifacts(action: RuntimeAction): DelegationArtifactView[] {
+  const raw = action.result?.artifacts;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(coerceDelegationArtifact).filter((item): item is DelegationArtifactView => Boolean(item));
 }
 
 function metadataString(metadata: Record<string, unknown> | undefined, keys: string[]): string {
@@ -991,13 +1934,15 @@ function metadataStringList(metadata: Record<string, unknown> | undefined, keys:
   return [];
 }
 
-function artifactSourceLabel(artifact: DelegationArtifactView): string {
-  const source = metadataString(artifact.metadata, ['sourceSystem', 'targetSystem', 'system']);
-  return source ? `来源 ${source}` : '';
+function artifactSourceValue(action: RuntimeAction, artifact: DelegationArtifactView): string {
+  return (
+    metadataString(artifact.metadata, ['sourceSystem', 'targetSystem', 'system']) ||
+    openClawTargetSystem(action)
+  );
 }
 
-function artifactEntityLabel(artifact: DelegationArtifactView): string {
-  const entity = metadataString(artifact.metadata, [
+function artifactEntityValue(artifact: DelegationArtifactView): string {
+  return metadataString(artifact.metadata, [
     'entityId',
     'entityKey',
     'recordId',
@@ -1006,13 +1951,46 @@ function artifactEntityLabel(artifact: DelegationArtifactView): string {
     'ticketKey',
     'issueKey',
   ]);
+}
+
+function artifactVerificationValue(artifact: DelegationArtifactView): string {
+  return artifact.metadata?.verified === true
+    ? 'verified'
+    : metadataString(artifact.metadata, ['verification', 'verificationMethod']);
+}
+
+function artifactFieldOrOperationValue(artifact: DelegationArtifactView): string {
+  const fields = metadataStringList(artifact.metadata, ['observedFields', 'changedFields']);
+  if (fields.length > 0) return fields.join(', ');
+  return (
+    metadataString(artifact.metadata, ['operation', 'operationType', 'action']) ||
+    metadataString(artifact.metadata, ['observedAt', 'verifiedAt', 'updatedAt'])
+  );
+}
+
+function isVerifiableDelegationArtifact(action: RuntimeAction, artifact: DelegationArtifactView): boolean {
+  const hasBody = Boolean(artifact.content || artifact.title);
+  return Boolean(
+    hasBody &&
+      artifactSourceValue(action, artifact) &&
+      artifactEntityValue(artifact) &&
+      artifactVerificationValue(artifact) &&
+      artifactFieldOrOperationValue(artifact),
+  );
+}
+
+function artifactSourceLabel(artifact: DelegationArtifactView): string {
+  const source = metadataString(artifact.metadata, ['sourceSystem', 'targetSystem', 'system']);
+  return source ? `来源 ${source}` : '';
+}
+
+function artifactEntityLabel(artifact: DelegationArtifactView): string {
+  const entity = artifactEntityValue(artifact);
   return entity ? `对象 ${entity}` : '';
 }
 
 function artifactVerificationLabel(artifact: DelegationArtifactView): string {
-  const verification = artifact.metadata?.verified === true
-    ? 'verified'
-    : metadataString(artifact.metadata, ['verification', 'verificationMethod']);
+  const verification = artifactVerificationValue(artifact);
   return verification ? `验证 ${verification}` : '';
 }
 
@@ -1192,6 +2170,114 @@ function transcriptFilename(transcriptPath: string): string | null {
 
 .queue-guidance.danger {
   border-color: rgba(248, 113, 113, 0.32);
+  color: #fecaca;
+}
+
+.queue-attention-receipt {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+  line-height: 1.5;
+}
+
+.queue-attention-receipt.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.attention-receipt-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+
+.attention-receipt-head strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.attention-total {
+  flex: 0 0 auto;
+  padding: 0.18rem 0.58rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  color: #fef3c7;
+  font-size: 0.76rem;
+}
+
+.queue-attention-receipt.danger .attention-total {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fecaca;
+}
+
+.queue-attention-receipt p {
+  margin: 0.5rem 0 0;
+}
+
+.attention-breakdown-rows {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.attention-breakdown-row {
+  min-width: 0;
+  padding: 0.68rem 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.42);
+  border: 1px solid rgba(245, 158, 11, 0.16);
+}
+
+.queue-attention-receipt.danger .attention-breakdown-row {
+  border-color: rgba(248, 113, 113, 0.16);
+}
+
+.attention-breakdown-row span,
+.attention-breakdown-row small {
+  display: block;
+  color: #fef3c7;
+  font-size: 0.73rem;
+  line-height: 1.35;
+}
+
+.queue-attention-receipt.danger .attention-breakdown-row span,
+.queue-attention-receipt.danger .attention-breakdown-row small {
+  color: #fecaca;
+}
+
+.attention-breakdown-row strong {
+  display: block;
+  margin: 0.2rem 0;
+  color: #f8fafc;
+  font-size: 1.25rem;
+  line-height: 1.1;
+}
+
+.attention-boundary-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.attention-boundary-facts span {
+  padding: 0.18rem 0.52rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fef3c7;
+  font-size: 0.73rem;
+}
+
+.queue-attention-receipt.danger .attention-boundary-facts span {
+  background: rgba(248, 113, 113, 0.11);
   color: #fecaca;
 }
 
@@ -1414,6 +2500,214 @@ function transcriptFilename(transcriptPath: string): string | null {
   line-height: 1.55;
 }
 
+.delegation-verification-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  line-height: 1.55;
+}
+
+.delegation-verification-panel.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+}
+
+.delegation-verification-panel.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.delegation-verification-panel strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.delegation-verification-panel p {
+  margin: 0.45rem 0 0;
+}
+
+.delegation-verification-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.delegation-verification-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+}
+
+.delegation-verification-panel.warning .delegation-verification-facts span {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+}
+
+.delegation-verification-panel.danger .delegation-verification-facts span {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.delegation-recovery-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.24);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dbeafe;
+  line-height: 1.55;
+}
+
+.delegation-recovery-panel.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+}
+
+.delegation-recovery-panel.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.delegation-recovery-panel strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.delegation-recovery-panel p {
+  margin: 0.45rem 0 0;
+}
+
+.delegation-recovery-facts,
+.delegation-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.delegation-recovery-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+}
+
+.delegation-recovery-panel.warning .delegation-recovery-facts span {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+}
+
+.delegation-recovery-panel.danger .delegation-recovery-facts span {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.recovery-action-link {
+  min-width: min(100%, 18rem);
+  flex: 1 1 18rem;
+  padding: 0.6rem 0.72rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: #dbeafe;
+  text-decoration: none;
+}
+
+.recovery-action-link:hover {
+  border-color: rgba(125, 211, 252, 0.36);
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.recovery-action-link span,
+.recovery-action-link small {
+  display: block;
+}
+
+.recovery-action-link span {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.recovery-action-link small {
+  margin-top: 0.2rem;
+  color: #cbd5e1;
+  line-height: 1.35;
+}
+
+.delegation-preflight-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.24);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dbeafe;
+}
+
+.delegation-preflight-panel.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+}
+
+.delegation-preflight-panel.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.delegation-preflight-panel.success {
+  background: rgba(20, 83, 45, 0.14);
+  border-color: rgba(74, 222, 128, 0.22);
+  color: #dcfce7;
+}
+
+.delegation-preflight-head strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.delegation-preflight-panel p {
+  margin: 0.45rem 0 0;
+  color: inherit;
+  line-height: 1.55;
+}
+
+.delegation-preflight-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.delegation-preflight-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+}
+
+.delegation-preflight-panel.warning .delegation-preflight-facts span {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+}
+
+.delegation-preflight-panel.danger .delegation-preflight-facts span {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.delegation-preflight-panel.success .delegation-preflight-facts span {
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
 .approval-panel {
   margin-top: 0.85rem;
   padding: 0.85rem 0.95rem;
@@ -1447,6 +2741,73 @@ function transcriptFilename(transcriptPath: string): string | null {
   background: rgba(245, 158, 11, 0.14);
   color: #fef3c7;
   font-size: 0.74rem;
+}
+
+.action-scope-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.24);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dbeafe;
+  line-height: 1.55;
+}
+
+.action-scope-panel.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+}
+
+.action-scope-panel.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.action-scope-panel.success {
+  background: rgba(20, 83, 45, 0.14);
+  border-color: rgba(74, 222, 128, 0.22);
+  color: #dcfce7;
+}
+
+.action-scope-panel strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.action-scope-panel p {
+  margin: 0.45rem 0 0;
+}
+
+.action-scope-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.action-scope-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+}
+
+.action-scope-panel.warning .action-scope-facts span {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+}
+
+.action-scope-panel.danger .action-scope-facts span {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.action-scope-panel.success .action-scope-facts span {
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
 }
 
 .delegation-result-panel {
@@ -1581,6 +2942,62 @@ function transcriptFilename(transcriptPath: string): string | null {
   flex: 0 0 auto;
 }
 
+.action-operation-receipt {
+  margin-top: 0.8rem;
+  padding: 0.82rem 0.92rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.24);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dbeafe;
+  line-height: 1.55;
+}
+
+.action-operation-receipt.success {
+  background: rgba(20, 83, 45, 0.14);
+  border-color: rgba(74, 222, 128, 0.22);
+  color: #dcfce7;
+}
+
+.action-operation-receipt.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+.action-operation-receipt strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.action-operation-receipt p {
+  margin: 0.45rem 0 0;
+}
+
+.action-operation-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.action-operation-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+}
+
+.action-operation-receipt.success .action-operation-facts span {
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
+.action-operation-receipt.warning .action-operation-facts span {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+}
+
 .button-row {
   margin-top: 0.9rem;
 }
@@ -1637,6 +3054,10 @@ function transcriptFilename(transcriptPath: string): string | null {
     flex-direction: column;
   }
 
+  .attention-breakdown-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .filters {
     flex-wrap: wrap;
   }
@@ -1648,8 +3069,13 @@ function transcriptFilename(transcriptPath: string): string | null {
 }
 
 @media (max-width: 560px) {
-  .queue-overview {
+  .queue-overview,
+  .attention-breakdown-rows {
     grid-template-columns: 1fr;
+  }
+
+  .attention-receipt-head {
+    flex-direction: column;
   }
 }
 </style>

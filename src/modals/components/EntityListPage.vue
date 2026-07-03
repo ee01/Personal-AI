@@ -36,7 +36,7 @@
       <span>
         已将「{{ topicMuteUndo.topicName }}」静音：{{
           formatMutedReason(topicMuteUndo.reason)
-        }}{{ formatMutedUntil(topicMuteUndo.until) }}
+        }}{{ formatMutedUntil(topicMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
       <button type="button" @click="handleUndoTopicMute">取消静音</button>
     </div>
@@ -116,6 +116,64 @@
       <div class="results-count">
         <span v-if="searchQuery">搜索结果：</span>
         显示 {{ filteredEntities.length }} / {{ entities.length }} 项
+      </div>
+
+      <div
+        v-if="topicUnreadQueueReceipt"
+        class="topic-unread-queue-receipt"
+        role="status"
+      >
+        <span class="topic-unread-queue-label">
+          {{ topicUnreadQueueReceipt.label }}
+        </span>
+        <span>{{ topicUnreadQueueReceipt.detail }}</span>
+      </div>
+
+      <div
+        v-if="topicLoadFailureReceipt"
+        class="topic-load-failure-receipt"
+        role="status"
+      >
+        <span class="topic-load-failure-label">
+          {{ topicLoadFailureReceiptLabel }}
+        </span>
+        <span>{{ topicLoadFailureReceiptDetail }}</span>
+        <button
+          type="button"
+          class="topic-load-retry-btn"
+          @click="handleRetryEntityLoad"
+        >
+          重新加载主题
+        </button>
+      </div>
+
+      <div
+        v-if="topicSearchScopeReceipt"
+        class="topic-search-scope-receipt"
+        role="status"
+      >
+        <span class="topic-search-scope-label">
+          {{ topicSearchScopeReceipt.label }}
+        </span>
+        <span>{{ topicSearchScopeReceipt.detail }}</span>
+      </div>
+
+      <div
+        v-if="sourceOpenReceipt"
+        class="source-open-receipt topic-list-source-open-receipt"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="source-open-receipt-header">
+          <strong>{{ sourceOpenReceipt.title }}</strong>
+          <span class="source-open-host">{{ sourceOpenReceipt.host }}</span>
+        </div>
+        <p>{{ sourceOpenReceipt.summary }}</p>
+        <ul>
+          <li v-for="detail in sourceOpenReceipt.details" :key="detail">
+            {{ detail }}
+          </li>
+        </ul>
       </div>
     </div>
 
@@ -226,6 +284,8 @@
           :class="{
             unread: getTopicUnreadTotalCount(entity) > 0,
             muted: isTopicMuted(entity.id),
+            'menu-open':
+              activeDeferTopicId === entity.id || activeMuteTopicId === entity.id,
           }"
           :data-topic-id="entity.id"
           style="position: relative"
@@ -253,10 +313,19 @@
 
           <div class="card-content" style="font-size: 0.875rem; color: #94a3b8">
             <span
-              class="topic-priority-pill"
+              :class="[
+                'topic-priority-pill',
+                { backlog: isTopicStaleBacklog(entity) },
+              ]"
               :title="getTopicPriorityTooltip(entity)"
             >
               {{ getTopicPriorityLabel(entity) }}
+            </span>
+            <span
+              v-if="getTopicPriorityReasonSummary(entity)"
+              class="topic-priority-reasons"
+            >
+              {{ getTopicPriorityReasonSummary(entity) }}
             </span>
             {{
               entity.importance >= 0.8
@@ -268,6 +337,28 @@
           </div>
 
           <div
+            v-if="getTopicParticipantSummary(entity)"
+            class="topic-participant-row"
+            :title="getTopicParticipantSummary(entity)"
+            :aria-label="getTopicParticipantSummary(entity)"
+          >
+            <span class="topic-participant-label">参与</span>
+            <span
+              v-for="participant in getTopicParticipantChips(entity)"
+              :key="participant"
+              class="topic-participant-chip"
+            >
+              {{ participant }}
+            </span>
+            <span
+              v-if="getTopicParticipantOverflowCount(entity) > 0"
+              class="topic-participant-more"
+            >
+              +{{ getTopicParticipantOverflowCount(entity) }}
+            </span>
+          </div>
+
+          <div
             v-if="getTopicDeferredState(entity.id)"
             class="topic-deferred-note"
           >
@@ -276,9 +367,14 @@
           </div>
 
           <div v-if="getTopicMutedState(entity.id)" class="topic-muted-note">
-            🔕 已静音：{{
-              formatMutedReason(getTopicMutedState(entity.id)?.reason)
-            }}{{ formatMutedUntil(getTopicMutedState(entity.id)?.until) }}
+            <span>
+              🔕 已静音：{{
+                formatMutedReason(getTopicMutedState(entity.id)?.reason)
+              }}{{ formatMutedUntil(getTopicMutedState(entity.id)?.until) }}
+            </span>
+            <small class="topic-muted-note-detail">
+              未读保留在本机静音视图；未同步、未标记已读，点「取消静音」回到未读流。
+            </small>
           </div>
 
           <!-- 未读讨论预览 -->
@@ -425,6 +521,17 @@
                   class="topic-defer-options"
                   role="menu"
                 >
+                  <div
+                    class="topic-defer-boundary-receipt"
+                    role="note"
+                    aria-label="稍后处理边界"
+                  >
+                    <strong>稍后处理边界</strong>
+                    <span>
+                      只写入本机浏览器状态；主题会暂时离开未读队列，但不会标记已读，不会同步
+                      Memory Service 或改写原始聊天平台。到期或恢复后才回到未读流。
+                    </span>
+                  </div>
                   <button
                     v-for="option in topicDeferOptions"
                     :key="option.key"
@@ -477,6 +584,17 @@
                   class="topic-defer-options topic-mute-options"
                   role="menu"
                 >
+                  <div
+                    class="topic-mute-boundary-receipt"
+                    role="note"
+                    aria-label="静音边界"
+                  >
+                    <strong>静音边界</strong>
+                    <span>
+                      只调整本机未读流和降噪过滤；未读仍保留，不写回 Memory
+                      Service，也不会改写原始聊天平台。可在静音视图或本提示取消静音。
+                    </span>
+                  </div>
                   <div class="topic-mute-reasons" role="none">
                     <div class="topic-menu-label">静音原因</div>
                     <div
@@ -805,9 +923,77 @@
         class="empty-state"
       >
         <span>{{ getEntityIcon(entityType) }}</span>
-        <p v-if="entities.length === 0">
+        <div
+          v-if="entityType === 'Topic' && topicLoadFailureReceipt"
+          class="topic-empty-recovery topic-load-failure-empty"
+        >
+          <p>
+            主题列表加载失败，未确认未读状态。
+          </p>
+          <p>
+            {{ topicLoadFailureReceipt.message }} 未展示示例主题，也不会把空列表当成已读完成。
+          </p>
+          <div class="topic-empty-recovery-actions">
+            <button
+              class="view-toggle-btn"
+              type="button"
+              @click="handleRetryEntityLoad"
+            >
+              重新加载主题
+            </button>
+          </div>
+        </div>
+        <p v-else-if="entities.length === 0">
           暂无{{ getEntityTypeName(entityType) }}数据
         </p>
+        <p v-else-if="entityType === 'Topic' && searchQuery.trim()">
+          当前{{ getTopicViewModeLabel() }}没有匹配项；本页只过滤已加载的
+          {{ entities.length }} 个主题，稍后/静音主题仍按当前视图隐藏。
+          <br /><br />
+          <button
+            v-if="topicViewMode !== 'all'"
+            class="view-toggle-btn"
+            @click="topicViewMode = 'all'"
+            style="margin-top: 1rem"
+          >
+            在全部主题里查找
+          </button>
+        </p>
+        <div
+          v-else-if="
+            entityType === 'Topic' &&
+            topicViewMode === 'unread' &&
+            topicHiddenUnreadCount > 0
+          "
+          class="topic-empty-recovery"
+        >
+          <p>
+            当前没有可处理的未读主题；还有
+            {{ topicHiddenUnreadCount }} 个未读主题被本机稍后/静音状态隐藏。
+          </p>
+          <p>
+            稍后/静音不等于已读，不会同步到后端，也不会改写原始聊天平台。
+          </p>
+          <div class="topic-empty-recovery-actions">
+            <button
+              v-if="topicDeferredUnreadCount > 0"
+              class="view-toggle-btn"
+              @click="topicViewMode = 'later'"
+            >
+              查看稍后 {{ topicDeferredUnreadCount }}
+            </button>
+            <button
+              v-if="topicMutedUnreadCount > 0"
+              class="view-toggle-btn"
+              @click="topicViewMode = 'muted'"
+            >
+              查看静音 {{ topicMutedUnreadCount }}
+            </button>
+            <button class="view-toggle-btn" @click="topicViewMode = 'all'">
+              查看所有主题
+            </button>
+          </div>
+        </div>
         <p v-else-if="entityType === 'Topic' && topicViewMode === 'unread'">
           ✅ 太棒了！所有主题都已阅读完毕
           <br /><br />
@@ -845,7 +1031,11 @@ import {
   type TopicMuteReasonKey,
 } from '../memory-store';
 import { getSafeExternalUrl } from '../topic-link-safety';
-import { topicMatchesListQuery } from '../topic-list-search';
+import {
+  getTopicParticipantLabels,
+  getTopicParticipantTotalCount,
+  topicMatchesListQuery,
+} from '../topic-list-search';
 import { getTopicTriagePriority, sortTopicsForTriage } from '../topic-triage';
 import {
   getTopicUnreadPreviewCount,
@@ -875,7 +1065,49 @@ const topicViewMode = ref('unread'); // 'unread' | 'all' | 'later' | 'muted'
 const topicSortMode = ref('triage'); // 'triage' | 'time' | 'importance' | 'unread-count'
 const topicLaterCount = computed(() => store.getDeferredTopics().length);
 const topicMutedCount = computed(() => store.getMutedTopics().length);
+const topicUnreadTopics = computed(() => {
+  if (entityType.value !== 'Topic') return [];
+  return entities.value.filter((entity: any) => getTopicUnreadTotalCount(entity) > 0);
+});
+const topicDeferredUnreadCount = computed(
+  () =>
+    topicUnreadTopics.value.filter((entity: any) =>
+      store.isTopicDeferred(entity.id),
+    ).length,
+);
+const topicMutedUnreadCount = computed(
+  () =>
+    topicUnreadTopics.value.filter((entity: any) =>
+      store.isTopicMuted(entity.id),
+    ).length,
+);
+const topicActiveUnreadCount = computed(
+  () =>
+    topicUnreadTopics.value.filter(
+      (entity: any) =>
+        !store.isTopicDeferred(entity.id) && !store.isTopicMuted(entity.id),
+    ).length,
+);
+const topicHiddenUnreadCount = computed(
+  () => topicDeferredUnreadCount.value + topicMutedUnreadCount.value,
+);
 const topicReadUndo = computed(() => store.topicReadUndo);
+const topicLoadFailureReceipt = computed(() =>
+  entityType.value === 'Topic' ? store.entityLoadFailureReceipt : null,
+);
+const topicLoadFailureReceiptLabel = computed(() =>
+  topicLoadFailureReceipt.value?.previousDataRetained
+    ? '刷新失败 · 上次快照'
+    : '加载失败 · 未确认',
+);
+const topicLoadFailureReceiptDetail = computed(() => {
+  const receipt = topicLoadFailureReceipt.value;
+  if (!receipt) return '';
+  if (receipt.previousDataRetained) {
+    return `当前显示 ${receipt.retainedCount} 个上次成功加载的主题；最新 Memory Service 状态未确认。${receipt.message}`;
+  }
+  return `${receipt.message} 当前未展示示例主题，未读状态未确认。`;
+});
 const topicDeferredUndo = ref<{
   topicId: string;
   topicName: string;
@@ -897,6 +1129,13 @@ let topicMuteUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
 let topicDeferredUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
 let topicDeferredReleaseTimer: ReturnType<typeof window.setTimeout> | null =
   null;
+const sourceOpenReceipt = ref<{
+  title: string;
+  host: string;
+  summary: string;
+  details: string[];
+} | null>(null);
+let sourceOpenReceiptTimer: ReturnType<typeof window.setTimeout> | null = null;
 const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
   const date = new Date(timestamp);
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -926,6 +1165,87 @@ const isAnalysisPanelExpanded = ref(true);
 const renderedAnswer = computed(() => {
   const ans = searchContext.value.askResult?.answer;
   return ans ? markdownToHtml(ans) : '';
+});
+
+const getTopicViewModeLabel = () => {
+  switch (topicViewMode.value) {
+    case 'all':
+      return '全部主题视图';
+    case 'later':
+      return '稍后视图';
+    case 'muted':
+      return '静音视图';
+    case 'unread':
+    default:
+      return '仅未读视图';
+  }
+};
+
+const getTopicHiddenUnreadText = () => {
+  const hiddenPieces: string[] = [];
+  if (topicDeferredUnreadCount.value > 0) {
+    hiddenPieces.push(`稍后隐藏 ${topicDeferredUnreadCount.value}`);
+  }
+  if (topicMutedUnreadCount.value > 0) {
+    hiddenPieces.push(`静音隐藏 ${topicMutedUnreadCount.value}`);
+  }
+
+  return hiddenPieces.length > 0
+    ? `另有${hiddenPieces.join('、')}个未读主题。`
+    : '没有未读主题被稍后/静音隐藏。';
+};
+
+const topicUnreadQueueReceipt = computed(() => {
+  if (entityType.value !== 'Topic') return null;
+  if (isLoading.value || entities.value.length === 0) return null;
+
+  const stateBoundary =
+    '稍后/静音只改变本机未读流，不标记已读，不同步后端或原始聊天平台。';
+
+  switch (topicViewMode.value) {
+    case 'later':
+      return {
+        label: '未读队列口径',
+        detail: `稍后视图显示 ${topicLaterCount.value} 个本机稍后主题，其中 ${topicDeferredUnreadCount.value} 个仍有未读；到期或恢复后才回到未读流。${stateBoundary}`,
+      };
+    case 'muted':
+      return {
+        label: '未读队列口径',
+        detail: `静音视图显示 ${topicMutedCount.value} 个本机静音主题，其中 ${topicMutedUnreadCount.value} 个仍有未读；恢复后才回到未读流。${stateBoundary}`,
+      };
+    case 'all':
+      return {
+        label: '未读队列口径',
+        detail: `全部主题显示已加载的 ${entities.value.length} 个主题，其中 ${topicUnreadTopics.value.length} 个仍有未读；${getTopicHiddenUnreadText()}${stateBoundary}`,
+      };
+    case 'unread':
+    default:
+      return {
+        label: '未读队列口径',
+        detail: `仅未读显示 ${topicActiveUnreadCount.value} 个可处理未读主题；${getTopicHiddenUnreadText()}${stateBoundary}`,
+      };
+  }
+});
+
+const topicSearchScopeReceipt = computed(() => {
+  if (entityType.value !== 'Topic') return null;
+  if (!searchQuery.value.trim()) return null;
+
+  const hiddenPieces: string[] = [];
+  if (topicViewMode.value === 'unread') {
+    if (topicLaterCount.value > 0) hiddenPieces.push(`稍后 ${topicLaterCount.value}`);
+    if (topicMutedCount.value > 0) hiddenPieces.push(`静音 ${topicMutedCount.value}`);
+  }
+
+  const hiddenText =
+    hiddenPieces.length > 0
+      ? `；当前视图会继续隐藏${hiddenPieces.join('、')}个主题`
+      : '';
+
+  return {
+    label: '本页过滤',
+    detail: `只查当前已加载的 ${entities.value.length} 个主题和「${getTopicViewModeLabel()}」${hiddenText}；跨全部记忆请点击搜索按钮走后端搜索。`,
+  };
 });
 
 const handleAskAnalyze = async () => {
@@ -1132,11 +1452,45 @@ const getResourcePreviewTitle = (resource: any) => {
 const handleResourcePreviewClick = (topic: any, resource: any) => {
   const safeUrl = getSafeExternalUrl(resource?.url);
   if (safeUrl) {
+    showSourceOpenReceipt(safeUrl, '资源来源');
     window.open(safeUrl, '_blank', 'noopener,noreferrer');
     return;
   }
 
   handleEntityClick(topic);
+};
+
+const getSourceOpenHost = (safeUrl: string) => {
+  try {
+    return new URL(safeUrl).hostname || '安全 http/https 来源';
+  } catch (error) {
+    return '安全 http/https 来源';
+  }
+};
+
+const clearSourceOpenReceiptTimer = () => {
+  if (sourceOpenReceiptTimer !== null) {
+    window.clearTimeout(sourceOpenReceiptTimer);
+    sourceOpenReceiptTimer = null;
+  }
+};
+
+const showSourceOpenReceipt = (safeUrl: string, sourceKind: string) => {
+  clearSourceOpenReceiptTimer();
+  const host = getSourceOpenHost(safeUrl);
+  sourceOpenReceipt.value = {
+    title: '来源打开回执',
+    host,
+    summary: `已请求浏览器打开${sourceKind}：${host}。`,
+    details: [
+      '只打开外部标签页，不会重新读取原始消息、网页或资源。',
+      '不会同步 Memory Service、标记已读、确认结论或写回原始平台。',
+    ],
+  };
+  sourceOpenReceiptTimer = window.setTimeout(() => {
+    sourceOpenReceipt.value = null;
+    sourceOpenReceiptTimer = null;
+  }, 9000);
 };
 
 const getTopicPriorityLabel = (topic: any) => {
@@ -1146,6 +1500,33 @@ const getTopicPriorityLabel = (topic: any) => {
 const getTopicPriorityTooltip = (topic: any) => {
   const priority = getTopicTriagePriority(topic);
   return priority.reasons.join('、');
+};
+
+const getTopicPriorityReasonSummary = (topic: any) => {
+  const priority = getTopicTriagePriority(topic);
+  const summary = priority.reasons
+    .filter((reason) => reason !== '按未读、热度和时间综合排序')
+    .slice(0, 2)
+    .join(' · ');
+  return summary;
+};
+
+const getTopicParticipantChips = (topic: any) => {
+  return getTopicParticipantLabels(topic, 3);
+};
+
+const getTopicParticipantOverflowCount = (topic: any) => {
+  return Math.max(0, getTopicParticipantTotalCount(topic) - 3);
+};
+
+const getTopicParticipantSummary = (topic: any) => {
+  const labels = getTopicParticipantLabels(topic, Number.POSITIVE_INFINITY);
+  if (labels.length === 0) return '';
+  return `参与者/来源人：${labels.join('、')}`;
+};
+
+const isTopicStaleBacklog = (topic: any) => {
+  return getTopicTriagePriority(topic).isStaleBacklog;
 };
 
 const getTopicDisplayTime = (topic: any) => {
@@ -1417,6 +1798,11 @@ const handleUndoTopicRead = async () => {
   await store.undoLastTopicRead();
 };
 
+const handleRetryEntityLoad = () => {
+  if (!entityType.value) return;
+  void store.loadEntitiesByType(entityType.value);
+};
+
 const clearTopicDeferredUndo = () => {
   topicDeferredUndo.value = null;
   if (topicDeferredUndoTimer !== null) {
@@ -1499,6 +1885,7 @@ onBeforeUnmount(() => {
   clearTopicDeferredUndo();
   clearTopicMuteUndo();
   clearTopicDeferredReleaseTimer();
+  clearSourceOpenReceiptTimer();
 });
 
 watch(
@@ -1561,6 +1948,134 @@ watch(
   font-size: 1rem;
 }
 
+.topic-search-scope-receipt,
+.topic-unread-queue-receipt,
+.topic-load-failure-receipt {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.topic-load-failure-receipt {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(69, 26, 3, 0.34);
+  color: #fde68a;
+}
+
+.topic-search-scope-label,
+.topic-unread-queue-label,
+.topic-load-failure-label {
+  flex: 0 0 auto;
+  padding: 0.14rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.topic-load-failure-label {
+  background: rgba(180, 83, 9, 0.24);
+  color: #fde68a;
+}
+
+.source-open-receipt {
+  flex-basis: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(37, 99, 235, 0.12);
+  color: #bfdbfe;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.source-open-receipt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.3rem;
+}
+
+.source-open-host {
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: min(18rem, 54vw);
+  padding: 0.12rem 0.42rem;
+  border: 1px solid rgba(147, 197, 253, 0.28);
+  border-radius: 999px;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.52);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.source-open-receipt p {
+  margin: 0;
+}
+
+.source-open-receipt ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1.05rem;
+}
+
+.source-open-receipt li + li {
+  margin-top: 0.2rem;
+}
+
+.topic-load-retry-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 0.45rem;
+  background: rgba(120, 53, 15, 0.42);
+  color: #fef3c7;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.topic-load-retry-btn:hover,
+.topic-load-retry-btn:focus-visible {
+  border-color: rgba(251, 191, 36, 0.58);
+  background: rgba(146, 64, 14, 0.5);
+}
+
+.topic-empty-recovery {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: #cbd5e1;
+}
+
+.topic-empty-recovery p {
+  margin: 0;
+  max-width: 42rem;
+  line-height: 1.55;
+}
+
+.topic-empty-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
 .topic-priority-pill {
   display: inline-flex;
   align-items: center;
@@ -1575,6 +2090,61 @@ watch(
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+}
+
+.topic-priority-pill.backlog {
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(71, 85, 105, 0.28);
+  color: #cbd5e1;
+}
+
+.topic-priority-reasons {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  margin-right: 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.topic-participant-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.topic-participant-label {
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.topic-participant-chip,
+.topic-participant-more {
+  display: inline-flex;
+  align-items: center;
+  max-width: 12rem;
+  min-height: 1.35rem;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid rgba(20, 184, 166, 0.26);
+  border-radius: 0.45rem;
+  background: rgba(20, 184, 166, 0.1);
+  color: #99f6e4;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topic-participant-more {
+  border-color: rgba(148, 163, 184, 0.26);
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
 }
 
 /* AI 分析结果面板 */
@@ -1839,6 +2409,10 @@ watch(
   background: rgba(100, 116, 139, 0.06);
 }
 
+.topic-card.menu-open {
+  z-index: 40;
+}
+
 .topic-deferred-note,
 .topic-muted-note {
   margin-top: 0.75rem;
@@ -1858,6 +2432,14 @@ watch(
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: rgba(100, 116, 139, 0.1);
   color: #cbd5e1;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.topic-muted-note-detail {
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.35;
 }
 
 .resource-openable {
@@ -2013,6 +2595,26 @@ watch(
   color: #94a3b8;
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+.topic-defer-boundary-receipt,
+.topic-mute-boundary-receipt {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.1rem 0 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.66);
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.topic-defer-boundary-receipt strong,
+.topic-mute-boundary-receipt strong {
+  color: #e2e8f0;
+  font-size: 0.76rem;
 }
 
 .topic-mute-reasons {

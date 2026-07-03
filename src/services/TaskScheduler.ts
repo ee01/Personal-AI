@@ -20,10 +20,17 @@ import { digestQueueService } from './DigestQueueService';
 import type {
   DigestProcessResult,
   DigestQueueStatusSummary,
+  DigestQueueTaskSnapshot,
+  DigestQueueScheduleBreakdownItem,
 } from '../types/digestQueue';
 import { getMemoryServiceClient } from './MemoryServiceClient';
 import { concernedItemsSyncService } from './ConcernedItemsSyncService';
 import { TASK_DEFINITIONS } from './taskSchedulerDefinitions';
+import {
+  summarizeMessageAnalysisDeliveryReceipt,
+  type MessageAnalysisDeliveryReceipt,
+} from '../messageAnalysisDelivery';
+import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig';
 export {
   getTaskEnabled,
   onTaskEnabledChanged,
@@ -63,7 +70,52 @@ export interface ScheduledTaskStatus extends ScheduledTask {
     | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
+  statusReceipt: ScheduledTaskStatusReceipt;
   currentQueueSummary?: string;
+  currentQueueStatus?: DigestQueueStatusSummary;
+  currentQueueStatusError?: string;
+}
+
+export interface ScheduledTaskStatusReceipt {
+  state:
+    | 'executing'
+    | 'schedule_attention'
+    | 'recent_skip'
+    | 'failed'
+    | 'healthy'
+    | 'disabled'
+    | 'idle';
+  tone:
+    | 'executing'
+    | 'warning'
+    | 'failed'
+    | 'skipped'
+    | 'running'
+    | 'disabled';
+  label: string;
+  detail: string;
+  nextAction: string;
+}
+
+export interface TaskSchedulerStatusRefreshReceipt {
+  checkedAt: number;
+  checkedTaskCount: number;
+  enabledTaskCount: number;
+  scheduleAttentionCount: number;
+  autoRepairAttempted: boolean;
+  createdAlarms: number;
+  updatedAlarms: number;
+  clearedAlarms: number;
+  orphanedAlarmsCleared: number;
+  disabledAlarmsCleared: number;
+  failedRepairs: number;
+  queueStatusUnavailableCount: number;
+  refreshOnly: true;
+}
+
+export interface TaskSchedulerStatusFreshResult {
+  tasks: Array<ScheduledTaskStatus>;
+  refreshReceipt: TaskSchedulerStatusRefreshReceipt;
 }
 
 export interface TaskExecutionResult {
@@ -71,6 +123,13 @@ export interface TaskExecutionResult {
   skipped?: boolean;
   error?: string;
   summary?: string;
+}
+
+interface MessageAnalysisRunResponse {
+  success?: boolean;
+  message?: string;
+  error?: string;
+  deliveryReceipt?: MessageAnalysisDeliveryReceipt;
 }
 
 export type TaskExecutionTrigger = 'scheduled' | 'manual' | 'startup';
@@ -91,10 +150,24 @@ interface TaskStatusOptions {
   persist?: boolean;
 }
 
+interface AlarmRefreshSummary {
+  autoRepairAttempted: boolean;
+  createdAlarms: number;
+  updatedAlarms: number;
+  clearedAlarms: number;
+  orphanedAlarmsCleared: number;
+  disabledAlarmsCleared: number;
+  failedRepairs: number;
+}
+
 const TASK_RUN_HISTORY_LIMIT = 5;
 const MIN_CHROME_ALARM_INTERVAL_MINUTES = 0.5;
 const MIN_ALARM_OVERDUE_GRACE_MS = 5 * 60 * 1000;
 const MAX_ALARM_OVERDUE_GRACE_MS = 30 * 60 * 1000;
+const DIGEST_QUEUE_STATUS_BOUNDARY =
+  `本地延迟摘要：到达释放窗口后由后台任务推送，通常 ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} 分钟内检查；查看/刷新不立即发送、不写入 Memory Service、不确认通知`;
+const DIGEST_QUEUE_STATUS_UNAVAILABLE_BOUNDARY =
+  '本地摘要队列状态未确认：本次刷新未能读取队列明细；刷新没有立即发送摘要、不写入 Memory Service、不确认通知，可稍后重试或检查本地摘要配置';
 
 function getTaskErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -125,27 +198,41 @@ export function summarizeDigestQueueProcessResults(
     (sum, result) => sum + (result.itemsPending || 0),
     0,
   );
+  const totalDue = results.reduce(
+    (sum, result) => sum + (result.itemsDue || 0),
+    0,
+  );
   const successCount = results.length - failedResults.length;
   const nextReleaseAt = getEarliestDigestReleaseAt(results);
+  const dueReceipt = formatDigestQueueDueReleaseReceipt(totalDue);
 
   if (failedResults.length > 0) {
     const failureSummary = failedResults
       .map((result) => `${result.taskId}: ${result.error || '处理失败'}`)
       .join('; ');
+    const retainedDetails = formatDigestQueueResultDetails(
+      failedResults,
+      '保留明细',
+    );
     return {
       success: false,
       error: `摘要推送失败 ${failedResults.length}/${results.length}：${failureSummary}`,
       summary: `${successCount} 个摘要任务成功，${
         failedResults.length
-      } 个失败，队列已保留${totalPending > 0 ? ` ${totalPending} 条` : ''}`,
+      } 个失败，队列已保留${totalPending > 0 ? ` ${totalPending} 条` : ''}${
+        retainedDetails ? `；${retainedDetails}` : ''
+      }${dueReceipt ? `；${dueReceipt}` : ''}`,
     };
   }
 
   if (totalPending > 0) {
+    const waitingDetails = formatDigestQueueResultDetails(results, '等待明细');
     return {
       success: true,
       summary: `${successCount} 个摘要任务完成，等待 ${totalPending} 条${
         nextReleaseAt ? `，最早 ${formatDigestReleaseTime(nextReleaseAt)}` : ''
+      }${waitingDetails ? `；${waitingDetails}` : ''}${
+        dueReceipt ? `；${dueReceipt}` : ''
       }`,
     };
   }
@@ -171,7 +258,39 @@ export function summarizeDigestQueueStatusSummary(
   const nextRelease = summary.nextReleaseAt
     ? `，最早 ${formatDigestReleaseTime(summary.nextReleaseAt)}`
     : '';
-  return `本地摘要队列 ${summary.totalItems} 条，${dueText}${nextRelease}`;
+  const taskBreakdown = summary.tasks
+    .map(formatDigestQueueTaskSummary)
+    .filter(Boolean)
+    .join('；');
+  const dueReceipt = formatDigestQueueDueReleaseReceipt(summary.dueItems);
+  return `本地摘要队列 ${summary.totalItems} 条，${dueText}${nextRelease}${
+    taskBreakdown ? `；${taskBreakdown}` : ''
+  }${dueReceipt ? `；${dueReceipt}` : ''}；${DIGEST_QUEUE_STATUS_BOUNDARY}`;
+}
+
+export function summarizeDigestQueueStatusUnavailable(error: unknown): string {
+  const message = getTaskErrorMessage(error);
+  return `${DIGEST_QUEUE_STATUS_UNAVAILABLE_BOUNDARY}；失败原因：${message}`;
+}
+
+function formatDigestQueueResultDetails(
+  results: DigestProcessResult[],
+  label: string,
+): string {
+  const summaries = results
+    .map((result) => result.queueSnapshot)
+    .filter(
+      (snapshot): snapshot is DigestQueueTaskSnapshot =>
+        Boolean(snapshot && snapshot.totalItems > 0),
+    )
+    .map(formatDigestQueueTaskSummary);
+
+  return summaries.length > 0 ? `${label}：${summaries.join('；')}` : '';
+}
+
+function formatDigestQueueDueReleaseReceipt(dueItems: number): string {
+  if (dueItems <= 0) return '';
+  return `释放窗口回执：${dueItems} 条已具备发送资格，等待 digest_queue_process 后台任务推送；查看或刷新状态不会立即发送摘要`;
 }
 
 function getEarliestDigestReleaseAt(
@@ -198,6 +317,61 @@ function formatDigestReleaseTime(isoString: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatDigestQueueTaskSummary(
+  task: DigestQueueTaskSnapshot,
+): string {
+  const taskName = task.taskName || task.taskId;
+  const sourceText = formatDigestSourceBreakdown(task);
+  const scheduleText = formatDigestScheduleBreakdown(task.scheduleBreakdown);
+  const parts = [sourceText, scheduleText].filter(Boolean);
+
+  return `${taskName} ${task.totalItems} 条${
+    task.dueItems > 0 ? `（${task.dueItems} 条已到期）` : ''
+  }${parts.length > 0 ? `（${parts.join('；')}）` : ''}`;
+}
+
+function formatDigestSourceBreakdown(
+  task: DigestQueueTaskSnapshot,
+): string {
+  const entries = task.sourceBreakdown || [];
+  if (entries.length === 0) return '';
+
+  const sourceText = entries
+    .map((entry) => `${entry.label} ${entry.count} 条`)
+    .join('、');
+  return task.sourceOverflowCount && task.sourceOverflowCount > 0
+    ? `${sourceText}、另 ${task.sourceOverflowCount} 个关注项`
+    : sourceText;
+}
+
+function formatDigestScheduleBreakdown(
+  entries: DigestQueueScheduleBreakdownItem[] | undefined,
+): string {
+  if (!entries || entries.length === 0) return '';
+
+  const scheduleText = entries
+    .map((entry) => formatDigestScheduleEntry(entry))
+    .join('、');
+  return scheduleText;
+}
+
+function formatDigestScheduleEntry(
+  entry: DigestQueueScheduleBreakdownItem,
+): string {
+  const hour = `${entry.preferredHour}:00`;
+  const countText = entry.count > 1 ? ` ${entry.count} 条` : '';
+
+  if (entry.frequency === 'weekly') {
+    const weekday =
+      ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][
+        entry.preferredDayOfWeek ?? 1
+      ] || '周一';
+    return `每周${weekday} ${hour}${countText}`;
+  }
+
+  return `每日 ${hour}${countText}`;
 }
 
 function isAlarmPersistenceFlagUnsupported(error: unknown): boolean {
@@ -251,6 +425,227 @@ function resolveMessageAnalysisInterval(config: {
     parseValidIntervalMinutes(config.SCHEDULED_INTERVAL) ??
     30
   );
+}
+
+function formatTaskReceiptTime(value?: number): string {
+  if (!value) return '未知时间';
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function appendTaskReceiptDetail(detail: string, summary?: string): string {
+  const normalizedDetail = detail.trim();
+  const normalizedSummary = summary?.trim();
+  if (!normalizedSummary) return normalizedDetail;
+  if (!normalizedDetail) return normalizedSummary;
+  if (
+    normalizedDetail.includes(normalizedSummary) ||
+    normalizedSummary.includes(normalizedDetail)
+  ) {
+    return normalizedDetail;
+  }
+  return `${normalizedDetail} · ${normalizedSummary}`;
+}
+
+export function summarizeMessageAnalysisTaskRun(
+  messagesCount: number,
+  response: unknown,
+): TaskExecutionResult {
+  const result = response as MessageAnalysisRunResponse | undefined;
+  const receipt = result?.deliveryReceipt;
+  if (receipt) {
+    return summarizeMessageAnalysisDeliveryReceipt(receipt);
+  }
+
+  if (result && result.success === false) {
+    const error = result.error || result.message || '消息分析失败';
+    return {
+      success: false,
+      error,
+      summary: `分析了 ${messagesCount} 条消息，未返回分发回执`,
+    };
+  }
+
+  return {
+    success: true,
+    summary: `分析了 ${messagesCount} 条消息，未返回分发回执`,
+  };
+}
+
+function getTaskReceiptFailureStreak(task: ScheduledTask): number {
+  if (task.lastSuccess !== false) {
+    return 0;
+  }
+
+  const history = Array.isArray(task.runHistory) ? task.runHistory : [];
+  if (history.length === 0) {
+    return 1;
+  }
+
+  let streak = 0;
+  for (const run of history) {
+    if (run.skipped) {
+      break;
+    }
+    if (run.success === false) {
+      streak += 1;
+      continue;
+    }
+    break;
+  }
+
+  return Math.max(streak, 1);
+}
+
+function hasRecentTaskSkip(task: ScheduledTask): boolean {
+  return Boolean(
+    task.lastSkippedAt &&
+      (!task.lastCompletedAt || task.lastSkippedAt >= task.lastCompletedAt),
+  );
+}
+
+function buildTaskStatusReceipt(
+  task: ScheduledTask,
+  scheduleHealth: ScheduledTaskStatus['scheduleHealth'],
+  scheduleWarning: string | undefined,
+  isExecuting: boolean,
+): ScheduledTaskStatusReceipt {
+  if (isExecuting) {
+    return {
+      state: 'executing',
+      tone: 'executing',
+      label: '正在执行',
+      detail: `开始 ${formatTaskReceiptTime(task.lastRun)}`,
+      nextAction: '等待完成后再触发新操作',
+    };
+  }
+
+  if (scheduleHealth !== 'disabled' && scheduleHealth !== 'scheduled') {
+    const label =
+      scheduleHealth === 'overdue'
+        ? '排程逾期'
+        : scheduleHealth === 'repair_failed'
+        ? '修复失败'
+        : scheduleHealth === 'period_mismatch'
+        ? '间隔不一致'
+        : '未排程';
+    const nextAction =
+      scheduleHealth === 'overdue'
+        ? '先立即执行一次，再重排下一次'
+        : scheduleHealth === 'repair_failed'
+        ? '旧排程会尽量保留，稍后重试重排'
+        : '重排 Chrome alarm';
+    return {
+      state: 'schedule_attention',
+      tone: 'warning',
+      label,
+      detail: scheduleWarning || 'Chrome alarm 需要刷新',
+      nextAction,
+    };
+  }
+
+  if (hasRecentTaskSkip(task)) {
+    return {
+      state: 'recent_skip',
+      tone: 'skipped',
+      label: '最近跳过',
+      detail: task.lastSkipReason || '任务条件未满足',
+      nextAction: '等待当前执行完成或条件恢复后再重试',
+    };
+  }
+
+  if (task.lastSuccess === false) {
+    const failureStreak = getTaskReceiptFailureStreak(task);
+    return {
+      state: 'failed',
+      tone: 'failed',
+      label: failureStreak > 1 ? `连续失败 ${failureStreak} 次` : '上次失败',
+      detail: appendTaskReceiptDetail(
+        task.lastError || '查看后台日志',
+        task.lastResultSummary,
+      ),
+      nextAction:
+        failureStreak >= 3
+          ? '先暂停排程并检查服务配置，再手动重试'
+          : '重试一次；重复失败先检查服务状态',
+    };
+  }
+
+  if (!task.enabled) {
+    return {
+      state: 'disabled',
+      tone: 'disabled',
+      label: '停用',
+      detail: '不会自动创建 Chrome alarm',
+      nextAction: '需要时可手动执行一次，不会重新启用排程',
+    };
+  }
+
+  if (!task.lastCompletedAt) {
+    return {
+      state: 'idle',
+      tone: 'running',
+      label: '等待首次执行',
+      detail: task.nextRun
+        ? `下次 ${formatTaskReceiptTime(task.nextRun)}`
+        : '等待 Chrome 排程',
+      nextAction: '保持排程，必要时手动执行一次',
+    };
+  }
+
+  return {
+    state: 'healthy',
+    tone: 'running',
+    label: '最近成功',
+    detail: task.lastResultSummary || `完成 ${formatTaskReceiptTime(task.lastCompletedAt)}`,
+    nextAction: '保持排程，异常时再处理',
+  };
+}
+
+function createAlarmRefreshSummary(
+  autoRepairAttempted: boolean,
+): AlarmRefreshSummary {
+  return {
+    autoRepairAttempted,
+    createdAlarms: 0,
+    updatedAlarms: 0,
+    clearedAlarms: 0,
+    orphanedAlarmsCleared: 0,
+    disabledAlarmsCleared: 0,
+    failedRepairs: 0,
+  };
+}
+
+function buildTaskStatusRefreshReceipt(
+  tasks: Array<ScheduledTaskStatus>,
+  refreshSummary: AlarmRefreshSummary,
+): TaskSchedulerStatusRefreshReceipt {
+  return {
+    checkedAt: Date.now(),
+    checkedTaskCount: tasks.length,
+    enabledTaskCount: tasks.filter((task) => task.enabled).length,
+    scheduleAttentionCount: tasks.filter(
+      (task) =>
+        task.enabled &&
+        task.scheduleHealth !== 'scheduled' &&
+        task.scheduleHealth !== 'disabled',
+    ).length,
+    autoRepairAttempted: refreshSummary.autoRepairAttempted,
+    createdAlarms: refreshSummary.createdAlarms,
+    updatedAlarms: refreshSummary.updatedAlarms,
+    clearedAlarms: refreshSummary.clearedAlarms,
+    orphanedAlarmsCleared: refreshSummary.orphanedAlarmsCleared,
+    disabledAlarmsCleared: refreshSummary.disabledAlarmsCleared,
+    failedRepairs: refreshSummary.failedRepairs,
+    queueStatusUnavailableCount: tasks.filter((task) =>
+      Boolean(task.currentQueueStatusError),
+    ).length,
+    refreshOnly: true,
+  };
 }
 
 export class TaskScheduler {
@@ -577,10 +972,13 @@ export class TaskScheduler {
    */
   private async ensureAlarmsCreated({
     throwOnError = false,
-  }: { throwOnError?: boolean } = {}): Promise<void> {
+  }: { throwOnError?: boolean } = {}): Promise<AlarmRefreshSummary> {
     console.log('🔍 检查并确保所有任务的定时器已创建...');
+    const summary = createAlarmRefreshSummary(true);
 
-    await this.clearOrphanedTaskAlarms();
+    const orphanedAlarmsCleared = await this.clearOrphanedTaskAlarms();
+    summary.orphanedAlarmsCleared = orphanedAlarmsCleared;
+    summary.clearedAlarms += orphanedAlarmsCleared;
 
     for (const [taskId, task] of Array.from(this.tasks.entries())) {
       const alarmName = `scheduled_task_${taskId}`;
@@ -591,6 +989,8 @@ export class TaskScheduler {
         if (existingAlarm) {
           console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
           await this.clearAlarm(alarmName);
+          summary.disabledAlarmsCleared += 1;
+          summary.clearedAlarms += 1;
         }
         task.nextRun = undefined;
         this.scheduleRepairErrors.delete(taskId);
@@ -604,12 +1004,14 @@ export class TaskScheduler {
         if (!existingAlarm) {
           // alarm 不存在，创建新的
           await this.createTaskAlarm(task);
+          summary.createdAlarms += 1;
         } else if (existingAlarm.periodInMinutes !== task.intervalMinutes) {
           // alarm 存在但配置不一致，直接同名替换。不要先 clear，避免创建失败时丢掉旧排程。
           console.log(
             `🔄 更新定时器配置: ${task.name} (${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`,
           );
           await this.createTaskAlarm(task);
+          summary.updatedAlarms += 1;
         } else {
           // alarm 存在且配置正确
           task.nextRun = existingAlarm.scheduledTime;
@@ -619,6 +1021,7 @@ export class TaskScheduler {
       } catch (error) {
         const errorMessage = getTaskErrorMessage(error);
         this.scheduleRepairErrors.set(taskId, errorMessage);
+        summary.failedRepairs += 1;
         await this.refreshTaskNextRun(task);
         console.error(`❌ 修复任务 ${task.name} 的定时器失败:`, error);
         if (throwOnError) {
@@ -628,11 +1031,13 @@ export class TaskScheduler {
     }
 
     console.log('✅ 定时器检查完成');
+    return summary;
   }
 
-  private async clearOrphanedTaskAlarms(): Promise<void> {
+  private async clearOrphanedTaskAlarms(): Promise<number> {
     const knownTaskIds = new Set(this.tasks.keys());
     const existingAlarms = await this.getExistingAlarms();
+    let clearedCount = 0;
 
     for (const alarm of existingAlarms) {
       const taskId = alarm.name.replace('scheduled_task_', '');
@@ -642,7 +1047,10 @@ export class TaskScheduler {
 
       console.warn(`🧹 清理未知任务的残留定时器: ${alarm.name}`);
       await this.clearAlarm(alarm.name);
+      clearedCount += 1;
     }
+
+    return clearedCount;
   }
 
   /**
@@ -1046,7 +1454,15 @@ export class TaskScheduler {
 
       // 分析消息。这里延迟加载 messageDealing，避免轻量调度器导入路径拉入完整消息分析模块。
       const { analyzeMessages } = await import('../messageDealing');
-      await analyzeMessages(response.data, userinfo.fullName, true);
+      const analysisResult = await analyzeMessages(
+        response.data,
+        userinfo.fullName,
+        true,
+      );
+      const taskResult = summarizeMessageAnalysisTaskRun(
+        messagesCount,
+        analysisResult,
+      );
 
       const duration = Date.now() - startTime;
       console.log('📝 消息分析任务执行完成');
@@ -1055,8 +1471,13 @@ export class TaskScheduler {
       Logger.analysis('message_analysis', {
         messagesCount,
         duration,
-        result: `分析了 ${messagesCount} 条消息`,
+        result: taskResult.summary || `分析了 ${messagesCount} 条消息`,
+        error: taskResult.success ? undefined : taskResult.error,
       });
+      if (!taskResult.success) {
+        console.warn(`⚠️ 消息分析任务存在部分失败: ${taskResult.error}`);
+      }
+      return taskResult;
     } catch (error: any) {
       console.error('❌ 消息分析任务失败:', error);
 
@@ -1321,12 +1742,20 @@ export class TaskScheduler {
   public async getTaskStatusFresh(
     options: TaskStatusOptions = {},
   ): Promise<Array<ScheduledTaskStatus>> {
+    const result = await this.getTaskStatusFreshResult(options);
+    return result.tasks;
+  }
+
+  public async getTaskStatusFreshResult(
+    options: TaskStatusOptions = {},
+  ): Promise<TaskSchedulerStatusFreshResult> {
     if (!this.isInitialized) {
       await this.startAllTasks();
     }
 
+    let refreshSummary = createAlarmRefreshSummary(false);
     if (options.repairAlarms !== false) {
-      await this.ensureAlarmsCreated();
+      refreshSummary = await this.ensureAlarmsCreated();
     }
 
     const alarms = await this.getExistingAlarms();
@@ -1347,7 +1776,10 @@ export class TaskScheduler {
     if (options.persist !== false) {
       await this.saveTaskStates();
     }
-    return status;
+    return {
+      tasks: status,
+      refreshReceipt: buildTaskStatusRefreshReceipt(status, refreshSummary),
+    };
   }
 
   private async enrichDigestQueueStatus(
@@ -1362,10 +1794,13 @@ export class TaskScheduler {
 
     try {
       const summary = await digestQueueService.getQueueStatusSummary();
-      digestTask.currentQueueSummary =
-        summarizeDigestQueueStatusSummary(summary);
+      digestTask.currentQueueStatus = summary;
+      digestTask.currentQueueSummary = summarizeDigestQueueStatusSummary(summary);
     } catch (error) {
       console.warn('⚠️ 获取汇总推送队列状态失败:', error);
+      digestTask.currentQueueStatusError = getTaskErrorMessage(error);
+      digestTask.currentQueueSummary =
+        summarizeDigestQueueStatusUnavailable(error);
     }
   }
 
@@ -1403,12 +1838,21 @@ export class TaskScheduler {
         }
       }
 
+      const isExecuting = this.runningTasks.has(task.id);
+      const statusReceipt = buildTaskStatusReceipt(
+        task,
+        scheduleHealth,
+        scheduleWarning,
+        isExecuting,
+      );
+
       return {
         ...task,
         status: this.isInitialized && task.enabled ? 'running' : 'stopped',
-        isExecuting: this.runningTasks.has(task.id),
+        isExecuting,
         scheduleHealth,
         scheduleWarning,
+        statusReceipt,
       };
     });
   }

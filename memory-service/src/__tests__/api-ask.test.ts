@@ -476,6 +476,63 @@ describe('Ask API', () => {
     expect(generateMock).toHaveBeenCalledTimes(2);
   });
 
+  it('does not turn unrelated recalled items into fallback evidence', async () => {
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-unrelated-afternoon-meeting',
+            type: 'message',
+            content: '稍等一下，我下午会议有点多，迟些我加下。',
+            score: 0.91,
+            source: 'glip',
+            sourceUrl: 'https://memory.example.com/messages/ask-unrelated-afternoon-meeting',
+            sourceTitle: 'Afternoon meeting note',
+            timestamp: Math.floor(Date.now() / 1000) - 3600,
+          },
+        ],
+        totalFound: 1,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock
+      .mockResolvedValueOnce({
+        resolutionState: 'partial',
+        directFindings: [],
+        resolvedConclusion: '',
+        remainingQuestions: ['本地没有巴黎航班事实。'],
+        candidateArtifacts: [],
+        recommendedAction: 'none',
+        confidence: 0.2,
+        legacyClassification: 'answer',
+        summary: 'No grounded flight evidence.',
+      })
+      .mockRejectedValueOnce(
+        new Error('[LLMClient] Request timed out after 5000ms'),
+      );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '我下周飞往巴黎的航班是几点起飞？登机口是多少？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.answer).toContain('本地记忆没有检索到足够证据');
+    expect(body.evidence).toEqual([]);
+    expect(body.blocks).toBeUndefined();
+    expect(body.resolutionState).toBe('insufficient');
+    expect(body.missingInfo).toContain(
+      '已检索到候选记忆，但与本问题的关键锚点没有足够交集，未作为回答证据。',
+    );
+    recallSpy.mockRestore();
+  });
+
   it('uses active lifecycle recall in /ask by default', async () => {
     db.prepare(`DELETE FROM messages_raw WHERE source_type = 'glip'`).run();
     const recallSpy = vi

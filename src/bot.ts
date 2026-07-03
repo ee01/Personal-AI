@@ -1,5 +1,6 @@
 import { BotPushScenario, getBotPushTarget, getEnvConfig } from "./utils";
 import { buildScheduledMessagesReviewUrl } from "./scheduled-messages/scheduledMessagesFilters";
+import { formatMatchedRuleForDisplay } from "./utils/matchedRuleDisplay";
 
 interface MessageData {
     matched_rule: string;
@@ -113,7 +114,7 @@ __后续回复__：
     }
 
     const formattedMessage = `\`${messageData.summary}\`
-${originalMessageSection}__关注项__：${messageData.matched_rule}
+${originalMessageSection}__关注项__：${formatMatchedRuleForDisplay(messageData.matched_rule)}
 __在群__：<a class='at_mention_compose' rel='{"id":${messageData.team_id}}'>@${messageData.team_name}</a>
 __发送者__：${messageData.sender}
 __时间__：${messageData.datetime}

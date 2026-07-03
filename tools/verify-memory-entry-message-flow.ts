@@ -4,6 +4,8 @@ import { analyzeMessagesInBackground } from '../src/messageDealing.ts';
 import { getEnvConfig } from '../src/utils.ts';
 import { getTaskEnabled } from '../src/services/taskSchedulerDefinitions.ts';
 import { loadRuntimeWatchRules } from '../src/watchRules.ts';
+import { MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY } from '../src/messageAnalysisRuleDiagnostics.ts';
+import { MESSAGE_ANALYSIS_DELIVERY_RECEIPT_KEY } from '../src/messageAnalysisDelivery.ts';
 
 type StorageMap = Record<string, any>;
 
@@ -55,6 +57,7 @@ const storage: StorageMap = {
 
 const ingests: any[] = [];
 const botMessages: any[] = [];
+let failNextIngest = false;
 const outreachBaselineAt = Math.floor(
   Date.parse('2026-04-14T23:00:00.000Z') / 1000,
 );
@@ -208,6 +211,94 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('expired rule regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Expired Room',
+                  team_id: 'expired-room',
+                  sender: 'Taylor',
+                  message_content:
+                    'expired rule regression should not run stale storage',
+                  summary: 'LLM tried to reuse an expired manual rule',
+                  datetime: '2026-04-15T01:30:00.000Z',
+                  post_id: 'post-expired-rule-1',
+                  matched_rule:
+                    '[RULE_REF:manual:expired-alert] Expired rule regression',
+                  matched_rule_refs: ['manual:expired-alert'],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('delivery receipt failure regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Delivery Room',
+                  team_id: 'delivery-room',
+                  sender: 'Riley',
+                  message_content:
+                    'delivery receipt failure regression should still notify',
+                  summary: '记忆写入失败但通知仍要尝试',
+                  datetime: '2026-04-15T03:00:00.000Z',
+                  post_id: 'post-delivery-failure-1',
+                  matched_rule:
+                    '[RULE_REF:manual:delivery-alert] Delivery alert',
+                  matched_rule_refs: ['manual:delivery-alert'],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('auto reply skip regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Support Handoff',
+                  team_id: 'support-handoff',
+                  sender: 'Nina',
+                  message_content:
+                    'auto reply skip regression should expose queue skip',
+                  summary:
+                    '自动答复规则命中但定时消息尚未初始化，应该显示未入队回执',
+                  datetime: '2026-04-15T03:30:00.000Z',
+                  post_id: 'post-auto-reply-skip-1',
+                  matched_rule:
+                    '[RULE_REF:manual:auto-reply-skip] Auto reply skip regression',
+                  matched_rule_refs: ['manual:auto-reply-skip'],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       return new Response(
         JSON.stringify({
           response: JSON.stringify({
@@ -286,6 +377,13 @@ function installFetchMock() {
     if (url.startsWith('http://mock-memory/api/v1/ingest')) {
       const body = init?.body ? JSON.parse(String(init.body)) : null;
       ingests.push(body);
+      if (failNextIngest) {
+        failNextIngest = false;
+        return new Response(JSON.stringify({ error: 'mock ingest failure' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return new Response(
         JSON.stringify({ id: 'ingest-1', status: 'created' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -362,6 +460,57 @@ async function main() {
 
   storage.concernedItems = [
     {
+      id: 'expired-alert',
+      text: 'Expired rule regression',
+      expiredAt: Date.now() - 60_000,
+      notifyMethod: 'bot',
+      filterGroup: 'Expired Room',
+    },
+  ];
+  storage[MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY] = [];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const expiredRuntimeRules = await loadRuntimeWatchRules(storage.concernedItems);
+  assert.equal(
+    expiredRuntimeRules.some((rule) => rule.ruleRef === 'manual:expired-alert'),
+    false,
+    'expired manual rules should not enter runtime watch rules',
+  );
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Expired Room',
+        groupId: 'expired-room',
+        standalone: [
+          {
+            creator: 'Taylor',
+            time: '2026-04-15T01:30:00.000Z',
+            id: 'post-expired-rule-1',
+            text: 'expired rule regression should not run stale storage',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(
+    ingests.length,
+    0,
+    'expired manual rule refs must not ingest memory',
+  );
+  assert.equal(
+    botMessages.length,
+    0,
+    'expired manual rule refs must not notify',
+  );
+
+  storage.concernedItems = [
+    {
       id: 'release-only',
       text: 'Release blockers',
       expiredAt: 0,
@@ -402,6 +551,16 @@ async function main() {
     0,
     'out-of-scope hallucinated rule refs must not notify',
   );
+  const diagnostics = storage[MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY] || [];
+  assert.equal(
+    diagnostics.length,
+    1,
+    'out-of-scope hallucinated rule refs should leave a local rule diagnostic',
+  );
+  assert.equal(diagnostics[0].ruleRef, 'manual:release-only');
+  assert.match(diagnostics[0].reason, /群组不在范围/);
+  assert.match(diagnostics[0].reason, /Release Chat/);
+  assert.match(diagnostics[0].reason, /Daily Standup/);
 
   storage.concernedItems = [
     {
@@ -462,6 +621,124 @@ async function main() {
   assert.equal(
     digestItems[0]?.id,
     'concerned_digest-only_post-multi-delivery-1',
+  );
+
+  storage.concernedItems = [
+    {
+      id: 'auto-reply-skip',
+      text: 'Auto reply skip regression',
+      expiredAt: 0,
+      filterGroup: 'Support Handoff',
+      autoReply: true,
+      autoReplyConfig: {
+        enabled: true,
+        replyContent: 'I will take a look and follow up.',
+        useAIGenerate: false,
+        reviewMode: 'delayed',
+        delayHours: 1,
+      },
+    },
+  ];
+  delete storage.scheduledMessagesConfig;
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const autoReplySkipRun = (await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Support Handoff',
+        groupId: 'support-handoff',
+        standalone: [
+          {
+            creator: 'Nina',
+            time: '2026-04-15T03:30:00.000Z',
+            id: 'post-auto-reply-skip-1',
+            text: 'auto reply skip regression should expose queue skip',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  )) as any;
+
+  assert.equal(ingests.length, 1, 'auto-reply skip should not block ingest');
+  assert.equal(
+    autoReplySkipRun.deliveryReceipt?.counters?.autoReplyHandled,
+    0,
+  );
+  assert.equal(
+    autoReplySkipRun.deliveryReceipt?.counters?.autoReplySkipped,
+    1,
+    'matched auto-reply rules that cannot queue should be visible',
+  );
+  assert.match(
+    autoReplySkipRun.deliveryReceipt?.notes?.join('；') || '',
+    /定时消息尚未初始化/,
+  );
+  assert.equal(
+    storage[MESSAGE_ANALYSIS_DELIVERY_RECEIPT_KEY]?.counters?.autoReplySkipped,
+    1,
+    'stored delivery receipt should keep auto-reply skipped count',
+  );
+
+  storage.concernedItems = [
+    {
+      id: 'delivery-alert',
+      text: 'Delivery alert',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      filterGroup: 'Delivery Room',
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+  failNextIngest = true;
+
+  const failedDeliveryRun = (await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Delivery Room',
+        groupId: 'delivery-room',
+        standalone: [
+          {
+            creator: 'Riley',
+            time: '2026-04-15T03:00:00.000Z',
+            id: 'post-delivery-failure-1',
+            text: 'delivery receipt failure regression should still notify',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  )) as any;
+
+  assert.equal(ingests.length, 1, 'failed ingest should still be attempted');
+  assert.equal(
+    botMessages.length,
+    1,
+    'notification should still be attempted after a memory write failure',
+  );
+  assert.equal(
+    failedDeliveryRun.deliveryReceipt?.status,
+    'partial',
+    'analyzeMessagesInBackground should return a finalized partial delivery receipt',
+  );
+  assert.equal(
+    failedDeliveryRun.deliveryReceipt?.counters?.memoryWriteFailures,
+    1,
+  );
+  assert.equal(
+    failedDeliveryRun.deliveryReceipt?.counters?.immediateNotificationAttempts,
+    1,
+  );
+  assert.equal(
+    storage[MESSAGE_ANALYSIS_DELIVERY_RECEIPT_KEY]?.status,
+    'partial',
+    'stored delivery receipt should match the returned partial result',
   );
 
   console.log('verify-memory-entry-message-flow: ok');

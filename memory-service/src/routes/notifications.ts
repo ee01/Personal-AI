@@ -9,11 +9,18 @@
 import type { FastifyInstance } from 'fastify';
 
 import { NotificationRepository } from '../repositories/NotificationRepository.js';
+import { formatDateTime } from '../utils/time.js';
 
 interface NotificationActionBody {
   action: 'acknowledge' | 'dismiss' | 'snooze';
   detail?: string;
   delaySeconds?: number;
+}
+
+interface NotificationActionReceipt {
+  title: string;
+  detail: string;
+  boundary: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,6 +64,37 @@ function normalizeNotificationSnoozeDelaySeconds(raw?: number): number {
     MIN_NOTIFICATION_SNOOZE_SECONDS,
     Math.min(Math.floor(raw), MAX_NOTIFICATION_SNOOZE_SECONDS),
   );
+}
+
+function formatNotificationSnoozeDelay(delaySeconds: number): string {
+  const rounded = Math.max(1, Math.floor(delaySeconds));
+  if (rounded % 86_400 === 0) {
+    return `${Math.floor(rounded / 86_400)}天`;
+  }
+  if (rounded % 3_600 === 0) {
+    return `${Math.floor(rounded / 3_600)}小时`;
+  }
+  if (rounded % 60 === 0) {
+    return `${Math.floor(rounded / 60)}分钟`;
+  }
+  return `${rounded}秒`;
+}
+
+function buildSnoozeActionReceipt(params: {
+  delaySeconds: number;
+  scheduledAt: number;
+  newNotificationId: string;
+}): NotificationActionReceipt {
+  return {
+    title: '稍后提醒已安排',
+    detail: `将在 ${formatDateTime(
+      params.scheduledAt,
+    )} 再提醒；当前通知已标记为 snoozed，并创建未来提醒 ${params.newNotificationId}（延后 ${formatNotificationSnoozeDelay(
+      params.delaySeconds,
+    )}）。`,
+    boundary:
+      '只创建未来 notification_records 提醒并关闭当前提醒；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +188,11 @@ export async function notificationRoutes(
             newNotificationId: result.newNotificationId,
             scheduledAt: result.scheduledAt,
             delaySeconds,
+            actionReceipt: buildSnoozeActionReceipt({
+              delaySeconds,
+              scheduledAt: result.scheduledAt,
+              newNotificationId: result.newNotificationId,
+            }),
           });
         }
       }

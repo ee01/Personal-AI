@@ -25,17 +25,33 @@ import {
   DigestProcessResult,
   DigestQueueStatusSummary,
   DigestQueueTaskSnapshot,
+  DigestQueueSourceBreakdownItem,
+  DigestQueueScheduleBreakdownItem,
 } from '../types/digestQueue';
 import {
   normalizeConcernedItemsDigestDayOfWeek,
   normalizeConcernedItemsDigestHour,
 } from '../utils';
+import { formatMatchedRuleForDisplay } from '../utils/matchedRuleDisplay';
 import { notificationService, NotificationData } from './NotificationService';
 import { Logger } from '../utils/logger';
+import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig';
 
 const STORAGE_KEY = 'digestQueues';
+const DIGEST_QUEUE_BREAKDOWN_LIMIT = 3;
+
+export { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig';
 
 export const DEFAULT_WEEKLY_DIGEST_DAY_OF_WEEK = 1; // 周一
+const CONCERNED_ITEM_WEEKDAY_LABELS = [
+  '周日',
+  '周一',
+  '周二',
+  '周三',
+  '周四',
+  '周五',
+  '周六',
+] as const;
 
 export class DigestQueueService {
   private static instance: DigestQueueService | null = null;
@@ -504,12 +520,16 @@ export class DigestQueueService {
   private buildProcessQueueState(
     taskId: string,
     items: DigestQueueItem[],
-  ): Pick<DigestProcessResult, 'itemsPending' | 'itemsDue' | 'nextReleaseAt'> {
+  ): Pick<
+    DigestProcessResult,
+    'itemsPending' | 'itemsDue' | 'nextReleaseAt' | 'queueSnapshot'
+  > {
     const snapshot = this.buildQueueSnapshot(taskId, items);
     return {
       itemsPending: snapshot.totalItems,
       itemsDue: snapshot.dueItems,
       nextReleaseAt: snapshot.nextReleaseAt,
+      queueSnapshot: snapshot.totalItems > 0 ? snapshot : undefined,
     };
   }
 
@@ -518,6 +538,8 @@ export class DigestQueueService {
     items: DigestQueueItem[],
     now = new Date(),
   ): DigestQueueTaskSnapshot {
+    const taskName = this.tasks.get(taskId)?.name;
+
     if (taskId === CONCERNED_ITEMS_DIGEST_TASK_ID) {
       let dueItems = 0;
       let nextReleaseAt: string | undefined;
@@ -540,16 +562,87 @@ export class DigestQueueService {
 
       return {
         taskId,
+        taskName,
         totalItems: items.length,
         dueItems,
         nextReleaseAt,
+        ...this.buildConcernedItemsQueueBreakdown(items),
       };
     }
 
     return {
       taskId,
+      taskName,
       totalItems: items.length,
       dueItems: items.length,
+    };
+  }
+
+  private buildConcernedItemsQueueBreakdown(
+    items: DigestQueueItem[],
+  ): Pick<
+    DigestQueueTaskSnapshot,
+    | 'sourceBreakdown'
+    | 'sourceOverflowCount'
+    | 'scheduleBreakdown'
+    | 'scheduleOverflowCount'
+  > {
+    const sourceCounts = new Map<string, number>();
+    const scheduleCounts = new Map<
+      string,
+      DigestQueueScheduleBreakdownItem
+    >();
+
+    for (const item of items) {
+      const sourceLabel = normalizeDigestQueueLabel(
+        item.data?.matchedRule || item.sourceId || '未命名关注项',
+      );
+      sourceCounts.set(sourceLabel, (sourceCounts.get(sourceLabel) || 0) + 1);
+
+      const digestConfig = normalizeDigestConfig(
+        item.data?.digestConfig as Partial<DigestConfig> | undefined,
+        8,
+      );
+      const scheduleKey = [
+        digestConfig.frequency,
+        digestConfig.preferredHour ?? 8,
+        digestConfig.preferredDayOfWeek ?? DEFAULT_WEEKLY_DIGEST_DAY_OF_WEEK,
+      ].join(':');
+      const current = scheduleCounts.get(scheduleKey);
+      if (current) {
+        current.count += 1;
+      } else {
+        scheduleCounts.set(scheduleKey, {
+          frequency: digestConfig.frequency,
+          preferredHour: digestConfig.preferredHour ?? 8,
+          preferredDayOfWeek:
+            digestConfig.frequency === 'weekly'
+              ? digestConfig.preferredDayOfWeek
+              : undefined,
+          count: 1,
+        });
+      }
+    }
+
+    const sourceEntries = Array.from(sourceCounts.entries())
+      .map<DigestQueueSourceBreakdownItem>(([label, count]) => ({
+        label,
+        count,
+      }))
+      .sort(compareDigestBreakdownItems)
+      .slice(0, DIGEST_QUEUE_BREAKDOWN_LIMIT);
+    const scheduleEntries = Array.from(scheduleCounts.values())
+      .sort(compareDigestScheduleBreakdownItems)
+      .slice(0, DIGEST_QUEUE_BREAKDOWN_LIMIT);
+
+    return {
+      sourceBreakdown: sourceEntries,
+      sourceOverflowCount: Math.max(0, sourceCounts.size - sourceEntries.length),
+      scheduleBreakdown: scheduleEntries,
+      scheduleOverflowCount: Math.max(
+        0,
+        scheduleCounts.size - scheduleEntries.length,
+      ),
     };
   }
 
@@ -720,6 +813,82 @@ function normalizeDigestConfig(
   };
 }
 
+function normalizeDigestQueueLabel(value: unknown): string {
+  const normalized = formatMatchedRuleForDisplay(value, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '未命名关注项';
+  return normalized.length > 28
+    ? `${normalized.slice(0, 27)}…`
+    : normalized;
+}
+
+function compareDigestBreakdownItems(
+  a: DigestQueueSourceBreakdownItem,
+  b: DigestQueueSourceBreakdownItem,
+): number {
+  if (b.count !== a.count) return b.count - a.count;
+  return a.label.localeCompare(b.label, 'zh-CN');
+}
+
+function compareDigestScheduleBreakdownItems(
+  a: DigestQueueScheduleBreakdownItem,
+  b: DigestQueueScheduleBreakdownItem,
+): number {
+  if (b.count !== a.count) return b.count - a.count;
+  if (a.frequency !== b.frequency) {
+    return a.frequency.localeCompare(b.frequency);
+  }
+  if (a.preferredHour !== b.preferredHour) {
+    return a.preferredHour - b.preferredHour;
+  }
+  return (a.preferredDayOfWeek ?? -1) - (b.preferredDayOfWeek ?? -1);
+}
+
+function formatConcernedItemDigestSchedule(
+  item: DigestQueueItem,
+  fallbackHour: number,
+): string {
+  const digestConfig = normalizeDigestConfig(
+    item.data?.digestConfig as Partial<DigestConfig> | undefined,
+    fallbackHour,
+  );
+  const hour = digestConfig.preferredHour ?? fallbackHour;
+
+  if (digestConfig.frequency === 'weekly') {
+    return `每周${
+      CONCERNED_ITEM_WEEKDAY_LABELS[digestConfig.preferredDayOfWeek ?? 1] ||
+      '周一'
+    } ${hour}:00`;
+  }
+
+  return `每日 ${hour}:00`;
+}
+
+function buildConcernedItemsDigestReceipt(
+  items: DigestQueueItem[],
+  fallbackHour: number,
+): string {
+  const scheduleLabels = Array.from(
+    new Set(
+      items.map((item) =>
+        formatConcernedItemDigestSchedule(item, fallbackHour),
+      ),
+    ),
+  ).sort();
+  const scheduleText =
+    scheduleLabels.length > 0
+      ? scheduleLabels.join('、')
+      : `每日 ${fallbackHour}:00`;
+
+  return [
+    `**摘要回执**: 本次释放 ${items.length} 条已到时间的本地摘要`,
+    `**释放节奏**: ${scheduleText}`,
+    '**处理边界**: 未到期条目继续留在本地队列；Bot 推送失败时不会清除本次条目，可等下次后台任务重试。',
+    '**调整入口**: 在关注规则里修改摘要时间、频率或关闭摘要。',
+  ].join('\n');
+}
+
 /**
  * ConcernedItems 每日消息摘要处理器
  * 收集启用了 digestConfig 的关注项匹配到的消息，每日汇总推送
@@ -777,7 +946,10 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
     const sections: string[] = [];
 
     for (const messages of Object.values(grouped)) {
-      const ruleLabel = messages[0]?.matchedRule || 'unknown';
+      const ruleLabel = formatMatchedRuleForDisplay(
+        messages[0]?.matchedRule,
+        'unknown',
+      );
       let section = `**关注项**: ${ruleLabel}\n`;
       section += `**匹配消息 ${messages.length} 条**:\n`;
 
@@ -806,8 +978,9 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
       day: 'numeric',
       weekday: 'long',
     });
+    const receipt = buildConcernedItemsDigestReceipt(items, this.fallbackHour);
 
-    return `📊 **定时消息摘要** (${dateStr})\n共 ${
+    return `📊 **定时消息摘要** (${dateStr})\n${receipt}\n共 ${
       items.length
     } 条匹配消息\n\n${sections.join('\n\n---\n\n')}`;
   }
@@ -836,7 +1009,10 @@ export function registerConcernedItemsDigestTaskWithHour(
   digestQueueService.register({
     id: CONCERNED_ITEMS_DIGEST_TASK_ID,
     name: 'ConcernedItems 定时消息摘要',
-    frequency: { type: 'hourly' },
+    frequency: {
+      type: 'custom',
+      intervalMinutes: DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES,
+    },
     processor: new ConcernedItemsDigestProcessor(normalizedHour),
     enabled: true,
   });
@@ -850,7 +1026,10 @@ export function updateConcernedItemsDigestTaskSchedule(
     CONCERNED_ITEMS_DIGEST_TASK_ID,
     {
       name: 'ConcernedItems 定时消息摘要',
-      frequency: { type: 'hourly' },
+      frequency: {
+        type: 'custom',
+        intervalMinutes: DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES,
+      },
       processor: new ConcernedItemsDigestProcessor(normalizedHour),
       enabled: true,
     },

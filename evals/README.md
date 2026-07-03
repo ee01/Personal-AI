@@ -45,6 +45,10 @@ deterministic heuristic judge to avoid judge-model variance.
 - Baseline: `evals/.baseline/memory-abilities.json`; the runner exits non-zero on
   any ability regressing more than 0.05. Re-run after any recall- or write-path
   change (PPR, behavior affinity, merge/evolution) and before shipping.
+- Grounded cases require returned evidence and reject ambiguous-topic
+  clarifications; the runner strips question/candidate echoes before keyword
+  scoring and writes `contextMatchState` plus `evidencePreview` to
+  `responses.jsonl` for failure review.
 
 Run artifacts are ignored by git because they can contain private memory and RingCentral context. Reports are normalized into a reader-facing model, then written as HTML:
 

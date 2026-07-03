@@ -33,6 +33,16 @@ Orbit timeline changed after design review. The account owner is waiting for a c
 
 ## Discovered Relationships
 - **Project Orbit** --[blocked_by]--> **Finance Approval**: repeated planning notes mention unresolved budget approval.
+
+## Grounding Receipt
+- Recalled memories: 2
+- Recall result types: message 1, entity 1
+- Recall hit channels: fts, graph
+- Recall checked channels: vector, fts, graph, time
+
+## Grounding Snippets
+- message:orbit-risk-1 — Design review created a dependency on finance approval.
+- entity:finance-approval — Finance Approval is an unresolved launch dependency.
 `;
 
 function jsonResponse(body, status = 200) {
@@ -88,6 +98,7 @@ try {
       await route.fulfill(
         jsonResponse({
           files: [
+            'newer-focus-2026-05-21.md',
             'project-orbit-2026-05-20.md',
             'missing-dream-2026-05-19.md',
           ],
@@ -101,6 +112,17 @@ try {
         jsonResponse({
           filename: 'project-orbit-2026-05-20.md',
           content: dreamMarkdown,
+        }),
+      );
+      return;
+    }
+
+    if (pathname.endsWith('/user-files/dreams/newer-focus-2026-05-21.md')) {
+      await route.fulfill(
+        jsonResponse({
+          filename: 'newer-focus-2026-05-21.md',
+          content:
+            '# Dream: Newer Focus\n\n## Narrative\nA newer dream should not steal a notification deep link.\n\n## Insights\n- Keep deep links anchored.\n',
         }),
       );
       return;
@@ -122,26 +144,84 @@ try {
   assert.ok(extensionId, 'extension id should be available');
 
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/memory-exploring.html#/dreams`, {
-    waitUntil: 'domcontentloaded',
-  });
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/dreams?file=project-orbit-2026-05-20.md`,
+    {
+      waitUntil: 'domcontentloaded',
+    },
+  );
 
   await page.getByText('梦境重放').first().waitFor({ timeout: 10000 });
   await page
     .getByText('长期记忆回放生成的联想入口')
     .waitFor({ timeout: 10000 });
-  await page.getByText('梦境主题').waitFor({ timeout: 10000 });
+  await page.getByText('本页范围').waitFor({ timeout: 10000 });
+  await page
+    .getByText('最近可读取的 2 个梦境文件')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('证据状态：1 个可带证据复核，1 个缺证据，1 个读取失败。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('深链状态：已额外载入通知文件 project-orbit-2026-05-20.md。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('读取窗口：最近 10 个 dreams/*.md；通知深链文件会额外尝试读取。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('生成节奏：Dream Replay 每周离线生成；梦境报表只代表当前 digest 周期。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('这里只读展示低置信线索，不会写用户画像、创建 Rehearsal、确认关系')
+    .waitFor({ timeout: 10000 });
+  await page.getByText('梦境主题', { exact: true }).waitFor({ timeout: 10000 });
   await page.getByText('洞察线索').waitFor({ timeout: 10000 });
   await page.getByText('待复核风险').waitFor({ timeout: 10000 });
   await page.getByText('新关系', { exact: true }).waitFor({ timeout: 10000 });
+  await page.getByText('优先复核', { exact: true }).waitFor({ timeout: 10000 });
+  await page.getByText('可带证据复核', { exact: true }).waitFor({ timeout: 10000 });
+  await page.getByText('缺证据', { exact: true }).waitFor({ timeout: 10000 });
   await page
     .getByText('1 个梦境文件暂时无法读取')
     .waitFor({ timeout: 10000 });
+  await page
+    .getByText('missing-dream-2026-05-19.md')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('1 个梦境缺少可核对证据或没有召回结果')
+    .waitFor({ timeout: 10000 });
 
   const projectCard = page.locator('.dream-card', { hasText: 'Project Orbit' });
+  assert.match(
+    await page.locator('.dream-card').first().innerText(),
+    /Project Orbit/,
+    'notification deep-link target should be the first visible dream card',
+  );
+  await projectCard
+    .getByText('通知命中', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await projectCard.getByText('通知命中回执').waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('这条是通知指向的梦境')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText(
+      '来源：通知深链请求 dreams/project-orbit-2026-05-20.md，页面已展开并置顶这条梦境。',
+    )
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('证据：原始证据 2 条；可带证据进入反思筛选。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('下一步：复核这个主题只会打开 Reflection 筛选，不会确认风险或新关系。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('本回执只说明打开来源和复核范围，不写用户画像、不创建 Rehearsal')
+    .waitFor({ timeout: 10000 });
   await projectCard.getByText('洞察 2').waitFor({ timeout: 10000 });
-  await projectCard.getByText('风险 1').waitFor({ timeout: 10000 });
-  await projectCard.getByText('新关系 1').waitFor({ timeout: 10000 });
+  await projectCard.getByText('风险 1', { exact: true }).waitFor({ timeout: 10000 });
+  await projectCard.getByText('新关系 1', { exact: true }).waitFor({ timeout: 10000 });
+  await projectCard.getByText('高优先复核').waitFor({ timeout: 10000 });
   await projectCard
     .getByText('来源 dreams/project-orbit-2026-05-20.md')
     .waitFor({ timeout: 10000 });
@@ -149,19 +229,88 @@ try {
     .getByText('低置信联想，需复核后使用')
     .waitFor({ timeout: 10000 });
   await projectCard
-    .getByText('Budget risk has no owner.')
+    .getByText('生成 2026-05-20')
+    .waitFor({ timeout: 10000 });
+  await projectCard.getByText('时间回执').waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('按生成时间阅读')
     .waitFor({ timeout: 10000 });
   await projectCard
-    .getByText('低置信度新关系')
+    .getByText('生成日期：2026-05-20；文件名日期：2026-05-20。')
     .waitFor({ timeout: 10000 });
-
-  await projectCard.getByRole('button', { name: /Project Orbit/ }).click();
+  await projectCard
+    .getByText('这条梦境代表该生成周期的低置信回放，不代表当前状态已重新核对。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('本回执只说明时间依据；不会重跑 Dream Replay')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('原始证据 2 条')
+    .first()
+    .waitFor({ timeout: 10000 });
+  await projectCard.getByText('复核就绪').waitFor({ timeout: 10000 });
+  await projectCard.getByText('处理回执').waitFor({ timeout: 10000 });
+  await projectCard.getByText('先核证风险').waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('不会自动通知、派发任务、写外部系统或确认事实')
+    .waitFor({ timeout: 10000 });
+  await projectCard.getByText('复核交接回执').waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('只打开复核筛选')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('目标：Reflection 以“Project Orbit”筛选，来源标记为 dream。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('来源：dreams/project-orbit-2026-05-20.md；风险 1 条，新关系 1 条。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('证据：原始证据 2 条；可带证据复核。')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('跳转只携带筛选条件，不确认 dream 结论，不新增记忆或画像')
+    .waitFor({ timeout: 10000 });
   await projectCard
     .getByText('这是生成式回放产出的低置信度联想')
     .waitFor({ timeout: 10000 });
+  await projectCard.getByText('证据回执').waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('命中通道 fts / graph')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('Design review created a dependency on finance approval.')
+    .first()
+    .waitFor({ timeout: 10000 });
   await projectCard
     .getByText('Orbit timeline changed after design review.')
+    .first()
     .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('Budget risk has no owner.')
+    .waitFor({ timeout: 10000 });
+  const newerCard = page.locator('.dream-card', { hasText: 'Newer Focus' });
+  await newerCard
+    .getByText('缺证据回执')
+    .waitFor({ timeout: 10000 });
+  await newerCard.getByText('文件日期 2026-05-21').waitFor({ timeout: 10000 });
+  await newerCard
+    .getByText('按文件名日期阅读')
+    .waitFor({ timeout: 10000 });
+  await newerCard
+    .getByText('生成日期：未记录；文件名日期：2026-05-21。')
+    .waitFor({ timeout: 10000 });
+  await newerCard
+    .getByText('Markdown 未记录 Generated 行，只能把文件名日期当作归档线索。')
+    .waitFor({ timeout: 10000 });
+  await newerCard
+    .getByText('先补证据')
+    .waitFor({ timeout: 10000 });
+  await newerCard
+    .getByText('不会写用户画像、创建 Rehearsal、确认新关系')
+    .waitFor({ timeout: 10000 });
+  await newerCard
+    .locator('.dream-content')
+    .waitFor({ state: 'hidden', timeout: 10000 });
 
   const reviewLink = page.getByRole('link', { name: '去自我反思复核' });
   assert.ok(

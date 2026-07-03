@@ -19,8 +19,124 @@
       </div>
       
       <div v-show="isAiAnswerExpanded" class="ai-answer-content">
+        <div
+          v-if="askAnswerStatusRail"
+          :class="[
+            'ask-status-rail',
+            `ask-status-rail-${askAnswerStatusRail.tone}`,
+          ]"
+          role="note"
+          aria-label="Ask 本轮状态"
+        >
+          <div class="ask-status-rail-main">
+            <span class="ask-status-rail-label">
+              {{ askAnswerStatusRail.label }}
+            </span>
+            <span class="ask-status-rail-detail">
+              {{ askAnswerStatusRail.detail }}
+            </span>
+          </div>
+          <div
+            v-if="askAnswerStatusRail.metrics.length"
+            class="ask-status-rail-metrics"
+          >
+            <span
+              v-for="metric in askAnswerStatusRail.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="askContinuationReceipt"
+          class="ask-continuation-receipt"
+          role="note"
+          aria-label="Ask 承接候选回执"
+        >
+          <div class="ask-continuation-receipt-main">
+            <span class="ask-continuation-receipt-label">
+              {{ askContinuationReceipt.label }}
+            </span>
+            <span class="ask-continuation-receipt-detail">
+              {{ askContinuationReceipt.detail }}
+            </span>
+          </div>
+          <div class="ask-continuation-receipt-metrics">
+            <span
+              v-for="metric in askContinuationReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
         <!-- 主要回答（支持 Markdown 渲染） -->
         <div class="answer-main" v-html="renderedAnswer"></div>
+
+        <div
+          v-if="askClarification"
+          class="ask-clarification"
+          role="group"
+          aria-label="Ask 话题确认"
+        >
+          <div class="ask-clarification-main">
+            <span class="ask-clarification-label">Ask 话题待确认</span>
+            <span class="ask-clarification-detail">
+              {{ askClarification.summary }}
+            </span>
+          </div>
+          <div
+            class="ask-clarification-preflight"
+            role="note"
+            aria-label="Ask 候选选择回执"
+          >
+            <div class="ask-clarification-preflight-main">
+              <span class="ask-clarification-preflight-label">
+                {{ askClarification.choiceReceipt.label }}
+              </span>
+              <span class="ask-clarification-preflight-detail">
+                {{ askClarification.choiceReceipt.detail }}
+              </span>
+            </div>
+            <div class="ask-clarification-preflight-metrics">
+              <span
+                v-for="metric in askClarification.choiceReceipt.metrics"
+                :key="metric"
+              >
+                {{ metric }}
+              </span>
+            </div>
+          </div>
+          <div class="ask-clarification-actions">
+            <button
+              v-for="candidate in askClarification.candidates"
+              :key="candidate.index"
+              type="button"
+              class="ask-clarification-button"
+              :disabled="isConfirmingAskCandidate || isLoading"
+              @click="confirmAskCandidate(candidate)"
+            >
+              <span class="ask-clarification-index">
+                {{ candidate.index }}
+              </span>
+              <span class="ask-clarification-topic">
+                {{ candidate.label }}
+              </span>
+              <span
+                v-if="candidate.reason"
+                class="ask-clarification-reason"
+              >
+                {{ candidate.reason }}
+              </span>
+            </button>
+          </div>
+          <p class="ask-clarification-boundary">
+            选择后返回的答案仍按本轮证据、查证回执和活答案门控展示。
+          </p>
+        </div>
 
         <!-- 缝合证据徽章 (P0-5)：仅当本答案跨 ≥2 来源或 ≥7 天时出现 -->
         <div
@@ -251,7 +367,7 @@
               <button
                 v-if="getLinkSafetyState(ref).exploreRoute"
                 class="decision-link-btn"
-                @click.stop="openExploreLink(ref.exploreLink)"
+                @click.stop="openExploreLink(ref)"
               >
                 在记忆中查看
               </button>
@@ -298,7 +414,7 @@
     <div v-else-if="entities.length > 0" class="search-results">
       <div class="results-summary">
         <div class="results-overview">
-          <span class="results-count">找到 {{ entities.length }} 个相关结果</span>
+          <span class="results-count">{{ resultsCountLabel }}</span>
           <span v-if="scopeBreakdownLabel" class="results-scope-breakdown">
             命中范围: {{ scopeBreakdownLabel }}
           </span>
@@ -325,6 +441,104 @@
             搜索全部记忆
           </button>
           <div
+            v-if="sourceCoverageReceipt"
+            :class="[
+              'source-coverage-receipt',
+              `source-coverage-receipt-${sourceCoverageReceipt.tone}`,
+            ]"
+            role="note"
+            aria-label="来源覆盖回执"
+          >
+            <div class="source-coverage-receipt-main">
+              <strong>{{ sourceCoverageReceipt.title }}</strong>
+              <span>{{ sourceCoverageReceipt.detail }}</span>
+            </div>
+            <div class="source-coverage-receipt-metrics">
+              <span
+                v-for="metric in sourceCoverageReceipt.metrics"
+                :key="metric"
+              >
+                {{ metric }}
+              </span>
+            </div>
+          </div>
+          <div
+            v-if="typeFilterReceipt"
+            :class="[
+              'type-filter-receipt',
+              `type-filter-receipt-${typeFilterReceipt.tone}`,
+            ]"
+            role="note"
+            aria-label="类型筛选回执"
+          >
+            <div class="type-filter-receipt-main">
+              <strong>{{ typeFilterReceipt.title }}</strong>
+              <span>{{ typeFilterReceipt.detail }}</span>
+            </div>
+            <div class="type-filter-receipt-metrics">
+              <span
+                v-for="metric in typeFilterReceipt.metrics"
+                :key="metric"
+              >
+                {{ metric }}
+              </span>
+              <button
+                type="button"
+                class="type-filter-reset"
+                @click="resetTypeFilter"
+              >
+                显示全部类型
+              </button>
+            </div>
+          </div>
+          <div
+            v-if="recallChannelReceipt"
+            :class="[
+              'recall-channel-receipt',
+              `recall-channel-receipt-${recallChannelReceipt.tone}`,
+            ]"
+            aria-label="召回通道回执"
+          >
+            <strong>{{ recallChannelReceipt.title }}</strong>
+            <span>{{ recallChannelReceipt.summary }}</span>
+            <div
+              v-if="recallChannelReceipt.diagnostics.length"
+              class="recall-channel-reasons"
+              aria-label="召回通道原因"
+            >
+              <span
+                v-for="diagnostic in recallChannelReceipt.diagnostics"
+                :key="diagnostic"
+              >
+                {{ diagnostic }}
+              </span>
+            </div>
+            <span>{{ recallChannelReceipt.detail }}</span>
+          </div>
+          <div
+            v-if="evidenceChannelOverlapReceipt"
+            :class="[
+              'evidence-channel-overlap-receipt',
+              `evidence-channel-overlap-receipt-${evidenceChannelOverlapReceipt.tone}`,
+            ]"
+            role="note"
+            aria-label="证据通道交叉回执"
+          >
+            <div class="evidence-channel-overlap-main">
+              <strong>{{ evidenceChannelOverlapReceipt.title }}</strong>
+              <span>{{ evidenceChannelOverlapReceipt.summary }}</span>
+              <span>{{ evidenceChannelOverlapReceipt.detail }}</span>
+            </div>
+            <div class="evidence-channel-overlap-metrics">
+              <span
+                v-for="metric in evidenceChannelOverlapReceipt.metrics"
+                :key="metric"
+              >
+                {{ metric }}
+              </span>
+            </div>
+          </div>
+          <div
             v-if="recallChannelDiagnostics.length"
             class="channel-diagnostics"
             aria-label="召回通道状态"
@@ -343,17 +557,43 @@
           </div>
         </div>
         <div class="results-filters">
-          <button 
-            v-for="type in availableTypes" 
+          <button
+            v-for="type in availableTypes"
             :key="type.key"
+            type="button"
             :class="['type-filter', { active: selectedTypeFilter === type.key }]"
+            :aria-pressed="selectedTypeFilter === type.key"
+            :aria-label="getTypeFilterButtonLabel(type)"
+            :title="getTypeFilterButtonLabel(type)"
             @click="selectedTypeFilter = type.key"
           >
-            {{ type.icon }} {{ type.name }} ({{ type.count }})
+            <span class="type-filter-main">
+              {{ type.icon }} {{ type.name }} ({{ type.count }})
+            </span>
+            <small>{{ getTypeFilterButtonHint(type) }}</small>
           </button>
         </div>
       </div>
       
+      <section
+        v-if="navigationReceipt"
+        :class="[
+          'search-navigation-receipt',
+          `search-navigation-receipt-${navigationReceipt.tone}`,
+        ]"
+        aria-live="polite"
+        aria-label="搜索结果打开回执"
+      >
+        <div class="navigation-receipt-title">
+          {{ navigationReceipt.title }}
+        </div>
+        <ul>
+          <li v-for="item in navigationReceipt.items" :key="item">
+            {{ item }}
+          </li>
+        </ul>
+      </section>
+
       <div class="search-results-grid">
         <div 
           v-for="entity in filteredResults" 
@@ -392,6 +632,27 @@
               >
                 {{ meta }}
               </span>
+            </div>
+            <div
+              :class="[
+                'memory-link-safety-status',
+                `memory-link-safety-status-${getLinkSafetyStatus(entity).tone}`,
+              ]"
+              aria-label="链接安全状态"
+            >
+              <strong>{{ getLinkSafetyStatus(entity).label }}</strong>
+              <span>{{ getLinkSafetyStatus(entity).detail }}</span>
+              <div
+                v-if="getLinkSafetyStatus(entity).metrics.length"
+                class="memory-link-safety-metrics"
+              >
+                <em
+                  v-for="metric in getLinkSafetyStatus(entity).metrics"
+                  :key="metric"
+                >
+                  {{ metric }}
+                </em>
+              </div>
             </div>
             <div
               v-if="getResultChannels(entity).length"
@@ -464,6 +725,30 @@
               </span>
             </div>
             <div
+              v-else-if="getFeedbackPreflightReceipt(entity)"
+              class="feedback-receipt feedback-receipt-preview"
+              role="note"
+            >
+              <strong>{{ getFeedbackPreflightReceipt(entity)?.label }}</strong>
+              <span>{{ getFeedbackPreflightReceipt(entity)?.detail }}</span>
+              <span
+                v-if="getFeedbackPreflightReceipt(entity)?.context"
+                class="feedback-receipt-context"
+              >
+                {{ getFeedbackPreflightReceipt(entity)?.context }}
+              </span>
+              <span
+                v-for="effect in getFeedbackPreflightReceipt(entity)?.effects || []"
+                :key="effect"
+                class="feedback-receipt-effect"
+              >
+                {{ effect }}
+              </span>
+              <span v-if="getFeedbackPreflightReceipt(entity)?.nextStep">
+                {{ getFeedbackPreflightReceipt(entity)?.nextStep }}
+              </span>
+            </div>
+            <div
               v-else-if="getFeedbackReceipt(entity)"
               :class="[
                 'feedback-receipt',
@@ -489,6 +774,14 @@
               <span v-if="getFeedbackReceipt(entity)?.nextStep">
                 {{ getFeedbackReceipt(entity)?.nextStep }}
               </span>
+              <button
+                v-if="shouldShowFeedbackRefreshAction(entity)"
+                type="button"
+                class="feedback-refresh-btn"
+                @click.stop="rerunSearchAfterFeedback"
+              >
+                用同一条件重新取证
+              </button>
             </div>
             <button
               type="button"
@@ -531,7 +824,7 @@
             <button
               v-if="getLinkSafetyState(entity).exploreRoute"
               class="action-btn primary"
-              @click.stop="openExploreLink(entity.exploreLink)"
+              @click.stop="openExploreLink(entity)"
             >
               在记忆中查看
             </button>
@@ -540,15 +833,23 @@
               class="action-btn secondary"
               :title="getSourceButtonTitle(entity)"
               :aria-label="getSourceButtonTitle(entity)"
-              @click.stop="openSourceUrl(entity.sourceUrl)"
+              @click.stop="openSourceUrl(entity)"
             >
               打开来源
             </button>
             <button
               v-if="shouldShowDetailsFallback(entity)"
               class="action-btn primary"
+              @click.stop="openDetailsFallback(entity)"
             >
               查看详情
+            </button>
+            <button
+              v-if="shouldShowLinkRecoveryDiagnostic(entity)"
+              class="action-btn secondary"
+              @click.stop="copyLinkRecoveryDiagnostic(entity)"
+            >
+              复制安全诊断
             </button>
             <span
               v-for="label in getLinkSafetyState(entity).blockedLabels"
@@ -603,6 +904,77 @@
       <p class="search-tips">
         当前范围是 {{ currentScopeLabel }}，可以切换范围或换一个更具体的关键词
       </p>
+      <div
+        v-if="emptySearchReceipt"
+        :class="[
+          'empty-search-receipt',
+          `empty-search-receipt-${emptySearchReceipt.tone}`,
+        ]"
+        role="note"
+        aria-label="真实空结果回执"
+      >
+        <div class="empty-search-receipt-main">
+          <strong>{{ emptySearchReceipt.title }}</strong>
+          <span>{{ emptySearchReceipt.detail }}</span>
+        </div>
+        <div class="empty-search-receipt-metrics">
+          <span
+            v-for="metric in emptySearchReceipt.metrics"
+            :key="metric"
+          >
+            {{ metric }}
+          </span>
+        </div>
+        <ul class="empty-search-recovery">
+          <li
+            v-for="action in emptySearchReceipt.recoveryActions"
+            :key="action"
+          >
+            {{ action }}
+          </li>
+        </ul>
+      </div>
+      <div
+        v-if="emptyRecallChannelReceipt"
+        :class="[
+          'recall-channel-receipt',
+          `recall-channel-receipt-${emptyRecallChannelReceipt.tone}`,
+        ]"
+        aria-label="空结果召回通道回执"
+      >
+        <strong>{{ emptyRecallChannelReceipt.title }}</strong>
+        <span>{{ emptyRecallChannelReceipt.summary }}</span>
+        <div
+          v-if="emptyRecallChannelReceipt.diagnostics.length"
+          class="recall-channel-reasons"
+          aria-label="空结果召回通道原因"
+        >
+          <span
+            v-for="diagnostic in emptyRecallChannelReceipt.diagnostics"
+            :key="diagnostic"
+          >
+            {{ diagnostic }}
+          </span>
+        </div>
+        <span>{{ emptyRecallChannelReceipt.detail }}</span>
+      </div>
+      <div
+        v-if="emptyRecallChannelDiagnostics.length"
+        class="channel-diagnostics"
+        aria-label="空结果召回通道状态"
+      >
+        <span
+          v-for="diagnostic in emptyRecallChannelDiagnostics"
+          :key="diagnostic.channel"
+          :class="[
+            'channel-diagnostic',
+            `channel-diagnostic-${diagnostic.tone}`,
+          ]"
+          :title="diagnostic.title"
+        >
+          {{ diagnostic.label }}
+        </span>
+      </div>
       <button
         v-if="canBroadenSearchScope"
         class="empty-action-btn"
@@ -622,6 +994,7 @@ import {
   chromeAPI,
   useMemoryStore,
   ENTITY_TYPE_CONFIG,
+  type AskContinuationReceipt,
 } from '../memory-store';
 import type {
   MemoryFeedbackAction,
@@ -630,19 +1003,32 @@ import type {
 } from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
+  buildMemoryLinkRecoveryCopiedReceipt,
+  buildMemoryLinkRecoveryCopyFailureReceipt,
+  buildMemoryLinkRecoveryDiagnostic,
+  buildMemoryOpenReceipt,
+  formatMemoryLinkSafetyStatus,
   formatScopeBreakdownLabel,
   formatScopeBoundaryNotice,
   formatScopeExposureNotice,
+  formatEmptySearchReceipt,
+  formatEvidenceChannelOverlapReceipt,
   formatRecallChannelDiagnostics,
+  formatRecallChannelReceipt,
   getRecallChannelLabel,
   getResultChannels,
   getResultMeta,
   getSearchResultKey,
   getMemoryLinkSafetyState,
   getScopeLabel,
+  formatSourceCoverageReceipt,
+  formatTypeFilterChipAriaLabel,
+  formatTypeFilterChipHint,
+  formatTypeFilterReceipt,
   renderHighlightedSearchText,
   sanitizeMemoryExploreRoute,
   shouldResetTypeFilter,
+  type MemoryOpenReceipt,
 } from '../searchResultPresentation';
 import { markdownToHtml } from '../utils/markdown';
 
@@ -657,6 +1043,8 @@ const searchContext = computed(() => store.searchContext);
 const selectedTypeFilter = ref('all');
 const isAiAnswerExpanded = ref(true);
 const feedbackError = ref('');
+const isConfirmingAskCandidate = ref(false);
+const navigationReceipt = ref<MemoryOpenReceipt | null>(null);
 
 type SearchFeedbackChoice = Extract<
   MemoryFeedbackAction,
@@ -709,6 +1097,37 @@ interface AskFollowUpReceiptView {
   label: string;
   detail: string;
   tone: AskFollowUpReceiptTone;
+  metrics: string[];
+}
+
+type AskAnswerStatusRailTone = 'info' | 'success' | 'warning' | 'muted';
+
+interface AskAnswerStatusRailView {
+  label: string;
+  detail: string;
+  tone: AskAnswerStatusRailTone;
+  metrics: string[];
+}
+
+interface AskClarificationCandidateView {
+  index: number;
+  label: string;
+  reason?: string;
+}
+
+interface AskClarificationView {
+  summary: string;
+  candidates: AskClarificationCandidateView[];
+  choiceReceipt: {
+    label: string;
+    detail: string;
+    metrics: string[];
+  };
+}
+
+interface AskContinuationReceiptView {
+  label: string;
+  detail: string;
   metrics: string[];
 }
 
@@ -766,6 +1185,24 @@ const answerMemoryAuthority = computed(() =>
 
 const askFollowUpReceipt = computed(() =>
   formatAskFollowUpReceipt(searchContext.value.askResult),
+);
+
+const askAnswerStatusRail = computed(() =>
+  formatAskAnswerStatusRail(
+    searchContext.value.askResult,
+    answerMemoryAuthority.value,
+    askFollowUpReceipt.value,
+  ),
+);
+
+const askClarification = computed(() =>
+  formatAskClarification(searchContext.value.askResult),
+);
+
+const askContinuationReceipt = computed(() =>
+  formatAskContinuationReceipt(
+    searchContext.value.askResult?.continuationReceipt,
+  ),
 );
 
 const decisionEvidenceChainBlock = computed(() =>
@@ -999,6 +1436,192 @@ function formatAskFollowUpReceipt(result: any): AskFollowUpReceiptView | null {
   };
 }
 
+function readFiniteCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function getAskResultArrayLength(result: any, key: string): number {
+  const value = result?.[key];
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function formatAskAnswerStatusRail(
+  result: any,
+  authority: AnswerMemoryAuthorityView | null,
+  followUpReceipt: AskFollowUpReceiptView | null,
+): AskAnswerStatusRailView | null {
+  if (!result || typeof result !== 'object') return null;
+
+  const resolutionState = result.resolutionState;
+  const resolutionLabel = formatAskResolutionState(resolutionState);
+  const receipt = result.answerMemory?.receipt;
+  const currentEvidenceCount =
+    readFiniteCount(receipt?.currentEvidenceCount) ??
+    getAskResultArrayLength(result, 'evidence');
+  const priorEvidenceCount = readFiniteCount(receipt?.priorEvidenceCount);
+  const followUpActionCount =
+    readFiniteCount(receipt?.followUpActionCount) ??
+    getAskResultArrayLength(result, 'followUpActions');
+  const externalEvidenceCount = getAskResultArrayLength(
+    result,
+    'externalEvidence',
+  );
+  const missingInfoCount =
+    readFiniteCount(receipt?.missingInfoCount) ??
+    getAskResultArrayLength(result, 'missingInfo');
+  const ambiguous = result.contextMatch?.state === 'ambiguous';
+  const answerMemoryState =
+    typeof result.answerMemory?.state === 'string'
+      ? result.answerMemory.state
+      : '';
+  const answerMemorySkipReason =
+    typeof result.answerMemory?.skipReason === 'string'
+      ? result.answerMemory.skipReason
+      : '';
+  const unverifiedPrior =
+    answerMemoryState === 'skipped' &&
+    answerMemorySkipReason === 'no_evidence' &&
+    (priorEvidenceCount ?? 0) > 0;
+  const incomplete =
+    resolutionState === 'partial' ||
+    resolutionState === 'insufficient' ||
+    resolutionState === 'deferred';
+  const authorityDecision =
+    typeof result.answerMemory?.authority?.decision === 'string'
+      ? result.answerMemory.authority.decision
+      : '';
+  const warningAuthority =
+    authorityDecision === 'supporting_only' ||
+    authorityDecision === 'wait_for_authority_source';
+
+  const metrics = [
+    resolutionLabel ? `状态 ${resolutionLabel}` : '',
+    currentEvidenceCount > 0 || unverifiedPrior
+      ? `本轮证据 ${currentEvidenceCount}`
+      : '',
+    priorEvidenceCount != null ? `旧 prior ${priorEvidenceCount}` : '',
+    unverifiedPrior ? '旧答案未复核' : '',
+    followUpActionCount > 0 ? `查证动作 ${followUpActionCount}` : '',
+    externalEvidenceCount > 0 ? `外部证据 ${externalEvidenceCount}` : '',
+    missingInfoCount > 0 ? `缺口 ${missingInfoCount}` : '',
+    authority?.label || '',
+  ].filter(Boolean);
+
+  if (ambiguous) {
+    return {
+      label: 'Ask 本轮状态',
+      detail:
+        '先确认话题；点击候选只会继续 Ask，不确认事实、不写活答案，也不创建外部查证动作。',
+      tone: 'warning',
+      metrics,
+    };
+  }
+
+  if (unverifiedPrior) {
+    return {
+      label: 'Ask 本轮状态',
+      detail:
+        '命中过往活答案，但本轮没有当前证据；旧答案只作召回提示，不确认当前事实、不写新版本，也不代表你发消息或执行外部动作。',
+      tone: 'warning',
+      metrics,
+    };
+  }
+
+  if (incomplete || followUpReceipt || warningAuthority) {
+    return {
+      label: 'Ask 本轮状态',
+      detail:
+        '回答先按本轮证据和查证状态展示；不会自动确认结论、代表你发消息、执行外部写入，或把缺口写成长期事实。',
+      tone: 'warning',
+      metrics,
+    };
+  }
+
+  return {
+    label: 'Ask 本轮状态',
+    detail:
+      '回答基于本轮召回证据；旧活答案只作召回提示，不会因为本次展示自动发送、外部写入或跳过权威证据门控。',
+    tone:
+      resolutionState === 'complete' && authority?.tone === 'success'
+        ? 'success'
+        : 'info',
+    metrics,
+  };
+}
+
+function compactAskClarificationText(value: unknown, maxLength = 92): string {
+  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatAskClarification(result: any): AskClarificationView | null {
+  const contextMatch = result?.contextMatch;
+  if (contextMatch?.state !== 'ambiguous') return null;
+  const candidates = Array.isArray(contextMatch.candidates)
+    ? contextMatch.candidates
+        .map((candidate: any, index: number) => {
+          const label = compactAskClarificationText(candidate?.label, 72);
+          if (!label) return null;
+          const reasons = Array.isArray(candidate?.reasons)
+            ? candidate.reasons
+                .map((reason: unknown) =>
+                  compactAskClarificationText(reason, 38),
+                )
+                .filter(Boolean)
+            : [];
+          return {
+            index: index + 1,
+            label,
+            reason: reasons.slice(0, 2).join('、') || undefined,
+          };
+        })
+        .filter(Boolean)
+    : [];
+  if (candidates.length === 0) return null;
+  return {
+    summary:
+      compactAskClarificationText(contextMatch.userFacingSummary, 120) ||
+      '这个短问句可能指向多个近期话题，需要先确认锚点。',
+    candidates,
+    choiceReceipt: {
+      label: '候选选择回执',
+      detail:
+        '选择候选只是把本轮短问句绑定到对应话题后继续 Ask；不会确认事实、不写活答案 observation/thread，也不会创建外部查证动作。',
+      metrics: [
+        `候选 ${candidates.length}`,
+        '等待用户确认',
+        '无外部动作',
+      ],
+    },
+  };
+}
+
+function formatAskContinuationReceipt(
+  receipt: AskContinuationReceipt | undefined,
+): AskContinuationReceiptView | null {
+  if (!receipt || receipt.source !== 'candidate_clarification') return null;
+  const originalQuery = compactAskClarificationText(receipt.originalQuery, 84);
+  const selectedLabel = compactAskClarificationText(
+    receipt.selectedCandidateLabel,
+    72,
+  );
+  if (!originalQuery || !selectedLabel) return null;
+
+  return {
+    label: '承接候选回执',
+    detail: `这轮 Ask 承接上一轮短问句“${originalQuery}”，先按你选择的“${selectedLabel}”继续检索；候选选择只是补锚点，不会确认事实、写活答案或创建外部查证动作。`,
+    metrics: [
+      `候选 ${receipt.selectedCandidateIndex}`,
+      receipt.contextAttached ? '已带上轮上下文' : '未带上轮上下文',
+      '仍按本轮证据回答',
+    ],
+  };
+}
+
 const normalizeScope = (scope: unknown) => {
   const value = Array.isArray(scope) ? scope[0] : scope;
   if (value === 'both' || value === 'all') return 'all';
@@ -1033,6 +1656,24 @@ const searchFailureDetail = computed(() => {
   return `Memory Service ${sourceLabel} 没有返回真实结果：${receipt.message}`;
 });
 
+const emptySearchResult = computed(() => searchContext.value.emptyResult);
+
+const emptySearchReceipt = computed(() => {
+  const receipt = emptySearchResult.value;
+  if (!receipt) return null;
+  return formatEmptySearchReceipt({
+    mode: receipt.mode,
+    query: receipt.query,
+    scope: receipt.scope,
+    source: receipt.source,
+    entityTypeLabel: receipt.entityType
+      ? getEntityTypeName(receipt.entityType)
+      : '',
+    resultCount: entities.value.length,
+    channelDiagnostics: receipt.channelDiagnostics,
+  });
+});
+
 const scopeBreakdownLabel = computed(() =>
   formatScopeBreakdownLabel(entities.value),
 );
@@ -1049,6 +1690,18 @@ const recallChannelDiagnostics = computed(() =>
   formatRecallChannelDiagnostics(
     searchContext.value.askResult?.channelDiagnostics,
   ),
+);
+
+const recallChannelReceipt = computed(() =>
+  formatRecallChannelReceipt(searchContext.value.askResult?.channelDiagnostics),
+);
+
+const emptyRecallChannelDiagnostics = computed(() =>
+  formatRecallChannelDiagnostics(emptySearchResult.value?.channelDiagnostics),
+);
+
+const emptyRecallChannelReceipt = computed(() =>
+  formatRecallChannelReceipt(emptySearchResult.value?.channelDiagnostics),
 );
 
 // 缝合证据徽章 (P0-5)：后端只在跨 ≥2 来源或 ≥7 天时返回 weave；前端只负责渲染。
@@ -1122,6 +1775,26 @@ const availableTypes = computed(() => {
   return Array.from(typeMap.values()).filter(type => type.count > 0);
 });
 
+function getTypeFilterButtonHint(type: any): string {
+  return formatTypeFilterChipHint({
+    key: type?.key,
+    name: type?.name,
+    count: type?.count,
+    totalCount: entities.value.length,
+    selectedTypeFilter: selectedTypeFilter.value,
+  });
+}
+
+function getTypeFilterButtonLabel(type: any): string {
+  return formatTypeFilterChipAriaLabel({
+    key: type?.key,
+    name: type?.name,
+    count: type?.count,
+    totalCount: entities.value.length,
+    selectedTypeFilter: selectedTypeFilter.value,
+  });
+}
+
 watch(
   availableTypes,
   (types) => {
@@ -1145,6 +1818,47 @@ const filteredResults = computed(() => {
   }
   return entities.value.filter(entity => entity.type === selectedTypeFilter.value);
 });
+
+const evidenceChannelOverlapReceipt = computed(() =>
+  formatEvidenceChannelOverlapReceipt({
+    visibleResults: filteredResults.value,
+  }),
+);
+
+const selectedTypeFilterLabel = computed(() =>
+  selectedTypeFilter.value === 'all'
+    ? '全部'
+    : getEntityTypeName(selectedTypeFilter.value),
+);
+
+const resultsCountLabel = computed(() => {
+  if (selectedTypeFilter.value === 'all') {
+    return `找到 ${entities.value.length} 个相关结果`;
+  }
+  return `显示 ${filteredResults.value.length}/${entities.value.length} 个相关结果`;
+});
+
+const typeFilterReceipt = computed(() =>
+  formatTypeFilterReceipt({
+    selectedTypeFilter: selectedTypeFilter.value,
+    selectedTypeLabel: selectedTypeFilterLabel.value,
+    visibleCount: filteredResults.value.length,
+    totalCount: entities.value.length,
+  }),
+);
+
+const sourceCoverageReceipt = computed(() =>
+  formatSourceCoverageReceipt({
+    visibleResults: filteredResults.value,
+    totalResults: entities.value,
+    selectedTypeFilter: selectedTypeFilter.value,
+    selectedTypeLabel: selectedTypeFilterLabel.value,
+  }),
+);
+
+const resetTypeFilter = () => {
+  selectedTypeFilter.value = 'all';
+};
 
 function getFeedbackKey(entity: any): string {
   return getSearchResultKey(entity);
@@ -1513,16 +2227,15 @@ function normalizeFeedbackResponseEffect(
 
 function getFeedbackEffectLines(entity: any): string[] {
   const effect = feedbackEffectByResultKey.value[getFeedbackKey(entity)];
-  if (!effect) return [];
-
   const lines: string[] = [];
-  if (effect.relevancePatchStatus === 'patched') {
+
+  if (effect?.relevancePatchStatus === 'patched') {
     const actionLabel =
       effect.relevancePatchAction === 'demote_for_scene'
         ? '降权'
         : '隐藏或降权';
     lines.push(`服务端已创建相近场景修正：同类场景会${actionLabel}这条结果。`);
-  } else if (effect.relevancePatchStatus === 'cleared') {
+  } else if (effect?.relevancePatchStatus === 'cleared') {
     const count = effect.clearedPatchCount;
     lines.push(
       count && count > 0
@@ -1531,25 +2244,28 @@ function getFeedbackEffectLines(entity: any): string[] {
     );
   }
 
-  if (effect.appliedDelta != null && effect.appliedDelta !== 0) {
+  if (effect?.appliedDelta != null && effect.appliedDelta !== 0) {
     lines.push(
       `排序信号已${formatFeedbackDelta(effect.appliedDelta)}，只影响后续召回排序。`,
     );
   } else if (
-    effect.action === 'negative' &&
+    effect?.action === 'negative' &&
     effect.relevancePatchStatus === 'patched'
   ) {
     lines.push('没有做全局显著性降权，避免一次负反馈变成全局排除。');
   }
 
   if (
-    effect.action === 'clear' &&
+    effect?.action === 'clear' &&
     effect.appliedDelta === 0 &&
     effect.relevancePatchStatus !== 'cleared'
   ) {
     lines.push('没有额外排序回滚；当前结果已回到普通召回信号。');
   }
 
+  lines.push(
+    '当前页不会即时重排；重新取证会用同一 query 和范围重新请求 Memory Service。',
+  );
   return lines;
 }
 
@@ -1602,6 +2318,33 @@ function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
   };
 }
 
+function getFeedbackPreflightReceipt(
+  entity: any,
+): SearchFeedbackReceipt | undefined {
+  const state = feedbackByResultKey.value[getFeedbackKey(entity)];
+  if (state || getFeedbackFailureReceipt(entity)) return undefined;
+
+  const targetType = getFeedbackTargetType(entity);
+  if (!targetType) return undefined;
+
+  const scopePart = currentScopeLabel.value;
+  const targetPart = getFeedbackTargetTypeLabel(targetType);
+  const surfacePart = getFeedbackSurfaceLabel();
+
+  return {
+    tone: 'cleared',
+    label: '反馈范围',
+    detail: `${surfacePart} / ${scopePart} / ${targetPart}；点击会写入 Memory Service 召回质量信号，不会删除记忆或立即重排当前页。`,
+    context: getFeedbackQueryContextLine(entity),
+    effects: [
+      '有用：提高这条证据在相近召回里的优先级。',
+      '不相关：可能创建相近场景修正；只降低同类场景排序，不做全局排除。',
+    ],
+    nextStep:
+      '反馈不会外发、同步来源系统或确认答案；写错后可用“撤销”移除这次修正。',
+  };
+}
+
 function getFeedbackActionLabel(action: MemoryFeedbackAction): string {
   if (action === 'positive') return '有用反馈';
   if (action === 'negative') return '不相关反馈';
@@ -1651,6 +2394,32 @@ function isFeedbackActive(
 function canClearFeedback(entity: any): boolean {
   const state = feedbackByResultKey.value[getFeedbackKey(entity)];
   return state === 'positive' || state === 'negative';
+}
+
+function shouldShowFeedbackRefreshAction(entity: any): boolean {
+  const state = feedbackByResultKey.value[getFeedbackKey(entity)];
+  return state === 'positive' || state === 'negative' || state === 'cleared';
+}
+
+function rerunSearchAfterFeedback() {
+  const query = (searchContext.value.query || searchQuery.value).trim();
+  if (!query) return;
+
+  const scope = currentScopeValue.value as RecallScope;
+  if (searchContext.value.mode === 'entity') {
+    store.performEntityVectorSearch(
+      query,
+      searchContext.value.entityType,
+      scope,
+    );
+  } else {
+    store.performAskSearch(query, scope);
+  }
+
+  router.replace({
+    path: '/search',
+    query: { ...route.query, q: query, scope },
+  });
 }
 
 async function submitResultFeedback(
@@ -1736,17 +2505,58 @@ const getLinkSafetyState = (target: any) =>
     sourceUrl: target?.sourceUrl,
   });
 
+const getLinkSafetyStatus = (target: any) =>
+  formatMemoryLinkSafetyStatus(getLinkSafetyState(target));
+
 const getSourceButtonTitle = (target: any) => {
   const host = getLinkSafetyState(target).sourceHost;
   return host ? `打开来源：${host}` : '打开来源';
 };
 
+const getSearchResultOpenTitle = (entity: any): string => {
+  const candidates = [
+    entity?.name,
+    entity?.displayTitle,
+    entity?.sourceTitle,
+    entity?.description,
+    entity?.id,
+  ];
+  const title = candidates.find(
+    (candidate) => typeof candidate === 'string' && candidate.trim(),
+  );
+  return typeof title === 'string' ? title : '当前结果';
+};
+
+const getDetailsFallbackRoute = (entity: any): string | null => {
+  const id = String(entity?.id || '').trim();
+  switch (entity?.type) {
+    case 'Topic':
+      return id ? `/topic/${id}` : null;
+    case 'Person':
+      return id ? `/person/${id}` : null;
+    case 'Project':
+      return id ? `/project/${id}` : null;
+    default:
+      return ENTITY_TYPE_CONFIG[entity?.type] ? `/entity/${entity.type}` : null;
+  }
+};
+
 const shouldShowDetailsFallback = (entity: any) => {
+  const linkState = getLinkSafetyState(entity);
+  return (
+    Boolean(getDetailsFallbackRoute(entity)) &&
+    !linkState.exploreRoute &&
+    !linkState.sourceUrl &&
+    linkState.blockedLabels.length === 0
+  );
+};
+
+const shouldShowLinkRecoveryDiagnostic = (entity: any) => {
   const linkState = getLinkSafetyState(entity);
   return (
     !linkState.exploreRoute &&
     !linkState.sourceUrl &&
-    linkState.blockedLabels.length === 0
+    !shouldShowDetailsFallback(entity)
   );
 };
 
@@ -1763,17 +2573,92 @@ const getDecisionStanceLabel = (stance: string) => {
   }
 };
 
-const openExploreLink = (exploreLink?: string) => {
-  const safeExploreRoute = sanitizeMemoryExploreRoute(exploreLink);
+const showOpenReceipt = (
+  entity: any,
+  input: Parameters<typeof buildMemoryOpenReceipt>[0],
+) => {
+  navigationReceipt.value = buildMemoryOpenReceipt({
+    resultTitle: getSearchResultOpenTitle(entity),
+    ...input,
+  });
+};
+
+async function writeSearchClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error('clipboard_unavailable');
+  }
+}
+
+async function copyLinkRecoveryDiagnostic(entity: any) {
+  const linkState = getLinkSafetyState(entity);
+  const title = getSearchResultOpenTitle(entity);
+  const diagnostic = buildMemoryLinkRecoveryDiagnostic({
+    result: entity,
+    blockedLabels: linkState.blockedLabels,
+    queryLabel: searchQuery.value || searchContext.value.query || '当前搜索',
+    scopeLabel: currentScopeLabel.value,
+    modeLabel: searchFailureModeLabel.value || getFeedbackSurfaceLabel(),
+    typeFilterLabel: selectedTypeFilterLabel.value,
+  });
+
+  try {
+    await writeSearchClipboardText(diagnostic);
+    navigationReceipt.value = buildMemoryLinkRecoveryCopiedReceipt({
+      resultTitle: title,
+    });
+  } catch (_error) {
+    navigationReceipt.value = buildMemoryLinkRecoveryCopyFailureReceipt({
+      resultTitle: title,
+    });
+  }
+}
+
+const openExploreLink = (entity: any) => {
+  const safeExploreRoute = sanitizeMemoryExploreRoute(entity?.exploreLink);
   if (!safeExploreRoute) return false;
   router.push(safeExploreRoute.slice(1));
+  showOpenReceipt(entity, {
+    action: 'memory_route',
+    exploreRoute: safeExploreRoute,
+  });
   return true;
 };
 
-const openSourceUrl = (sourceUrl?: string) => {
-  const safeSourceUrl = getMemoryLinkSafetyState({ sourceUrl }).sourceUrl;
+const openSourceUrl = (entity: any) => {
+  const linkState = getLinkSafetyState(entity);
+  const safeSourceUrl = linkState.sourceUrl;
   if (!safeSourceUrl) return false;
   window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
+  showOpenReceipt(entity, {
+    action: 'source_url',
+    sourceHost: linkState.sourceHost,
+  });
+  return true;
+};
+
+const openDetailsFallback = (entity: any) => {
+  const routePath = getDetailsFallbackRoute(entity);
+  if (!routePath) return false;
+  router.push(routePath);
+  showOpenReceipt(entity, {
+    action: 'memory_route',
+    exploreRoute: routePath,
+  });
   return true;
 };
 
@@ -1816,24 +2701,53 @@ const retryFailedSearch = () => {
   });
 };
 
-const handleResultClick = (entity: any) => {
-  if (openExploreLink(entity.exploreLink)) return;
-  if (openSourceUrl(entity.sourceUrl)) return;
-
-  switch (entity.type) {
-    case 'Topic':
-      router.push(`/topic/${entity.id}`);
-      break;
-    case 'Person':
-      router.push(`/person/${entity.id}`);
-      break;
-    case 'Project':
-      router.push(`/project/${entity.id}`);
-      break;
-    default:
-      router.push(`/entity/${entity.type}`);
-      break;
+const confirmAskCandidate = async (
+  candidate: AskClarificationCandidateView,
+) => {
+  const currentAsk = searchContext.value.askResult;
+  const originalQuery =
+    (searchContext.value.query || searchQuery.value || '').trim();
+  const previousAnswer =
+    typeof currentAsk?.answer === 'string' ? currentAsk.answer.trim() : '';
+  if (!originalQuery || !previousAnswer || isConfirmingAskCandidate.value) {
+    return;
   }
+
+  const followupContext = [
+    `User: ${originalQuery}`,
+    `Assistant: ${previousAnswer}`,
+  ].join('\n');
+  const displayQuery = `${originalQuery} · 选择话题：${candidate.label}`;
+  isConfirmingAskCandidate.value = true;
+  try {
+    await store.performAskSearch(
+      String(candidate.index),
+      currentScopeValue.value,
+      followupContext,
+      displayQuery,
+      {
+        source: 'candidate_clarification',
+        originalQuery,
+        selectedCandidateIndex: candidate.index,
+        selectedCandidateLabel: candidate.label,
+        contextAttached: Boolean(followupContext),
+      },
+    );
+  } finally {
+    isConfirmingAskCandidate.value = false;
+  }
+};
+
+const handleResultClick = (entity: any) => {
+  const linkState = getLinkSafetyState(entity);
+  if (openExploreLink(entity)) return;
+  if (openSourceUrl(entity)) return;
+  if (openDetailsFallback(entity)) return;
+
+  showOpenReceipt(entity, {
+    action: linkState.blockedLabels.length > 0 ? 'blocked' : 'unavailable',
+    blockedLabels: linkState.blockedLabels,
+  });
 };
 </script>
 
@@ -1942,6 +2856,272 @@ const handleResultClick = (entity: any) => {
 
 .answer-main a:hover {
   text-decoration: underline;
+}
+
+.ask-status-rail {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+  padding: 0.95rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.ask-status-rail-info {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: rgba(30, 64, 175, 0.12);
+}
+
+.ask-status-rail-success {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(21, 128, 61, 0.12);
+}
+
+.ask-status-rail-warning {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(180, 83, 9, 0.12);
+}
+
+.ask-status-rail-muted {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(51, 65, 85, 0.28);
+}
+
+.ask-status-rail-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.ask-status-rail-label {
+  color: #f8fafc;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.ask-status-rail-detail {
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.ask-status-rail-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: 0.35rem;
+  max-width: 330px;
+}
+
+.ask-status-rail-metrics span {
+  white-space: nowrap;
+  color: #fde68a;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  padding: 0.24rem 0.45rem;
+  border-radius: 0.375rem;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.ask-continuation-receipt {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  margin: -0.35rem 0 1.25rem;
+  padding: 0.82rem 0.95rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(14, 116, 144, 0.1);
+}
+
+.ask-continuation-receipt-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.ask-continuation-receipt-label {
+  color: #dbeafe;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.ask-continuation-receipt-detail {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ask-continuation-receipt-metrics {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: 0.35rem;
+  max-width: 300px;
+}
+
+.ask-continuation-receipt-metrics span {
+  white-space: nowrap;
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 0.18rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(30, 64, 175, 0.24);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+}
+
+.ask-clarification {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin: 0 0 1.25rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 0.5rem;
+  background: rgba(217, 119, 6, 0.08);
+}
+
+.ask-clarification-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ask-clarification-label {
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.ask-clarification-detail {
+  color: #fde68a;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.ask-clarification-preflight {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid rgba(251, 191, 36, 0.26);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.ask-clarification-preflight-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ask-clarification-preflight-label {
+  color: #fef3c7;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.ask-clarification-preflight-detail {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.48;
+}
+
+.ask-clarification-preflight-metrics {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: 0.35rem;
+}
+
+.ask-clarification-preflight-metrics span {
+  white-space: nowrap;
+  color: #fef3c7;
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 0.18rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
+.ask-clarification-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.55rem;
+}
+
+.ask-clarification-button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.55rem;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(251, 191, 36, 0.36);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.46);
+  color: #f8fafc;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.ask-clarification-button:hover:not(:disabled) {
+  border-color: rgba(251, 191, 36, 0.7);
+  background: rgba(120, 53, 15, 0.24);
+}
+
+.ask-clarification-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.ask-clarification-index {
+  width: 1.55rem;
+  height: 1.55rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.18);
+  color: #fef3c7;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.ask-clarification-topic {
+  min-width: 0;
+  color: #f8fafc;
+  font-size: 0.86rem;
+  font-weight: 620;
+  overflow-wrap: anywhere;
+}
+
+.ask-clarification-reason {
+  grid-column: 2;
+  color: #fcd34d;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.ask-clarification-boundary {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
 
 .answer-memory-receipt {
@@ -2397,6 +3577,226 @@ const handleResultClick = (entity: any) => {
   outline: none;
 }
 
+.source-coverage-receipt {
+  display: grid;
+  gap: 0.45rem;
+  max-width: min(100%, 48rem);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(30, 64, 175, 0.16);
+  color: #dbeafe;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.source-coverage-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(120, 53, 15, 0.2);
+  color: #fed7aa;
+}
+
+.source-coverage-receipt-main {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.source-coverage-receipt-main strong {
+  color: inherit;
+}
+
+.source-coverage-receipt-metrics {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.source-coverage-receipt-metrics span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.34);
+  color: inherit;
+  font-size: 0.74rem;
+}
+
+.type-filter-receipt {
+  display: grid;
+  gap: 0.45rem;
+  max-width: min(100%, 48rem);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(20, 83, 45, 0.16);
+  color: #d1fae5;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.type-filter-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(120, 53, 15, 0.2);
+  color: #fed7aa;
+}
+
+.type-filter-receipt-main {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.type-filter-receipt-main strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+}
+
+.type-filter-receipt-metrics {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.type-filter-receipt-metrics span {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.4rem;
+  background: rgba(15, 23, 42, 0.34);
+  color: #cbd5e1;
+  font-size: 0.76rem;
+}
+
+.type-filter-reset {
+  min-height: 1.75rem;
+  padding: 0.26rem 0.55rem;
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  border-radius: 0.42rem;
+  background: rgba(20, 184, 166, 0.14);
+  color: #99f6e4;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.type-filter-reset:hover,
+.type-filter-reset:focus-visible {
+  border-color: rgba(94, 234, 212, 0.56);
+  background: rgba(20, 184, 166, 0.22);
+  outline: none;
+}
+
+.recall-channel-receipt {
+  display: grid;
+  gap: 0.25rem;
+  max-width: min(100%, 46rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.48);
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.recall-channel-receipt strong {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+}
+
+.recall-channel-reasons {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.recall-channel-reasons span {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 0.38rem;
+  background: rgba(120, 53, 15, 0.2);
+  color: #fde68a;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.recall-channel-receipt-ok {
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(22, 163, 74, 0.12);
+}
+
+.recall-channel-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(146, 64, 14, 0.18);
+}
+
+.recall-channel-receipt-danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.evidence-channel-overlap-receipt {
+  display: grid;
+  gap: 0.45rem;
+  max-width: min(100%, 46rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  border-radius: 0.5rem;
+  background: rgba(8, 47, 73, 0.2);
+  color: #bae6fd;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.evidence-channel-overlap-main {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.evidence-channel-overlap-main strong {
+  color: #e0f2fe;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+}
+
+.evidence-channel-overlap-metrics {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.evidence-channel-overlap-metrics span {
+  display: inline-flex;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 999px;
+  background: rgba(12, 74, 110, 0.26);
+  color: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.evidence-channel-overlap-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+}
+
+.evidence-channel-overlap-receipt-warning
+  .evidence-channel-overlap-main
+  strong {
+  color: #fef3c7;
+}
+
+.evidence-channel-overlap-receipt-warning
+  .evidence-channel-overlap-metrics
+  span {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: rgba(120, 53, 15, 0.22);
+}
+
 .channel-diagnostics {
   display: flex;
   gap: 0.4rem;
@@ -2468,7 +3868,11 @@ const handleResultClick = (entity: any) => {
 }
 
 .type-filter {
-  padding: 0.5rem 1rem;
+  display: inline-grid;
+  gap: 0.15rem;
+  justify-items: start;
+  min-width: 8.75rem;
+  padding: 0.55rem 0.85rem;
   background: rgba(59, 130, 246, 0.1);
   border: 1px solid rgba(59, 130, 246, 0.3);
   border-radius: 0.5rem;
@@ -2476,7 +3880,9 @@ const handleResultClick = (entity: any) => {
   cursor: pointer;
   transition: all 0.3s ease;
   font-size: 0.875rem;
+  line-height: 1.2;
   white-space: nowrap;
+  text-align: left;
 }
 
 .type-filter:hover {
@@ -2489,10 +3895,57 @@ const handleResultClick = (entity: any) => {
   color: #93c5fd;
 }
 
+.type-filter-main {
+  font-weight: 700;
+}
+
+.type-filter small {
+  color: #bfdbfe;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
 .search-results-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
   gap: 1rem;
+}
+
+.search-navigation-receipt {
+  margin: 0 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.66);
+  color: #dbeafe;
+}
+
+.search-navigation-receipt-info {
+  border-color: rgba(59, 130, 246, 0.32);
+  background: rgba(30, 64, 175, 0.16);
+}
+
+.search-navigation-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(120, 53, 15, 0.18);
+  color: #fed7aa;
+}
+
+.navigation-receipt-title {
+  margin-bottom: 0.4rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.search-navigation-receipt ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.search-navigation-receipt li {
+  margin: 0.18rem 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .search-result-card {
@@ -2604,6 +4057,60 @@ const handleResultClick = (entity: any) => {
   content: '·';
   margin-right: 0.5rem;
   color: #475569;
+}
+
+.memory-link-safety-status {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.65rem 0 0.75rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.44);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.memory-link-safety-status strong {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+}
+
+.memory-link-safety-status span {
+  overflow-wrap: anywhere;
+}
+
+.memory-link-safety-status-ready {
+  border-color: rgba(45, 212, 191, 0.3);
+  background: rgba(20, 83, 45, 0.16);
+  color: #ccfbf1;
+}
+
+.memory-link-safety-status-warning {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(120, 53, 15, 0.18);
+  color: #fde68a;
+}
+
+.memory-link-safety-status-muted {
+  color: #94a3b8;
+}
+
+.memory-link-safety-metrics {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.memory-link-safety-metrics em {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.32);
+  color: inherit;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .match-reasons {
@@ -2741,9 +4248,33 @@ const handleResultClick = (entity: any) => {
   background: rgba(51, 65, 85, 0.16);
 }
 
+.feedback-receipt-preview {
+  border-color: rgba(125, 211, 252, 0.24);
+  background: rgba(8, 47, 73, 0.18);
+}
+
 .feedback-receipt-error {
   border-color: rgba(248, 113, 113, 0.34);
   background: rgba(127, 29, 29, 0.18);
+}
+
+.feedback-refresh-btn {
+  align-self: flex-start;
+  min-height: 1.9rem;
+  padding: 0.34rem 0.65rem;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 0.45rem;
+  background: rgba(8, 47, 73, 0.32);
+  color: #bae6fd;
+  cursor: pointer;
+  font-size: 0.77rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.feedback-refresh-btn:hover {
+  border-color: rgba(125, 211, 252, 0.5);
+  color: #e0f2fe;
 }
 
 .feedback-btn {
@@ -2909,7 +4440,7 @@ const handleResultClick = (entity: any) => {
   flex-wrap: wrap;
 }
 
-.empty-search-state span {
+.empty-search-state > span {
   font-size: 4rem;
   margin-bottom: 1rem;
   opacity: 0.5;
@@ -2922,6 +4453,68 @@ const handleResultClick = (entity: any) => {
 .search-tips {
   font-size: 0.875rem;
   color: #64748b;
+}
+
+.empty-search-receipt {
+  display: grid;
+  gap: 0.55rem;
+  width: min(100%, 48rem);
+  margin-top: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.48);
+  color: #cbd5e1;
+  text-align: left;
+}
+
+.empty-search-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(146, 64, 14, 0.18);
+}
+
+.empty-search-receipt-main {
+  display: grid;
+  gap: 0.28rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.empty-search-receipt-main strong {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+}
+
+.empty-search-receipt-metrics {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.empty-search-receipt-metrics span {
+  padding: 0.22rem 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.38rem;
+  background: rgba(15, 23, 42, 0.36);
+  color: #dbeafe;
+  font-size: 0.76rem;
+}
+
+.empty-search-recovery {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1rem;
+  color: #bfdbfe;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.empty-search-state > .recall-channel-receipt,
+.empty-search-state > .channel-diagnostics {
+  width: min(100%, 48rem);
+  margin-top: 0.75rem;
+  text-align: left;
 }
 
 .empty-action-btn {
@@ -2953,6 +4546,32 @@ const handleResultClick = (entity: any) => {
 }
 
 @media (max-width: 768px) {
+  .ask-status-rail {
+    flex-direction: column;
+  }
+
+  .ask-status-rail-metrics {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .ask-continuation-receipt {
+    flex-direction: column;
+  }
+
+  .ask-continuation-receipt-metrics {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .ask-clarification-preflight {
+    flex-direction: column;
+  }
+
+  .ask-clarification-preflight-metrics {
+    justify-content: flex-start;
+  }
+
   .answer-memory-receipt {
     flex-direction: column;
   }

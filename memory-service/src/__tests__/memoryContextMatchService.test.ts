@@ -189,6 +189,41 @@ describe('MemoryContextMatchService', () => {
     );
   });
 
+  it('does not ask for topic clarification when the query already names the subject', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const [index, project] of ['AI Tools for Engineering - Workgroup', 'AI Tooling SWAT'].entries()) {
+      insertFrame.run(
+        `cursor-explicit:${index}`,
+        'glip',
+        'glip',
+        project,
+        `${project} has recurring Cursor cost and license policy discussions.`,
+        JSON.stringify([project]),
+        JSON.stringify(['Cursor', 'Cursor cost', 'license policy']),
+        JSON.stringify([]),
+        JSON.stringify([]),
+        0.76,
+        currentTime - 120,
+        currentTime - 120,
+      );
+    }
+
+    const match = service.match({
+      query: 'Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？',
+      scope: 'work',
+    });
+
+    expect(match.state).not.toBe('ambiguous');
+  });
+
   it('penalizes low-signal web captures when choosing an implicit topic', () => {
     insertMessage({
       id: 'docs-noise',

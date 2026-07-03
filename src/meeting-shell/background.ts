@@ -126,6 +126,9 @@ const WHISPER_NATIVE_HOST = 'com.personal_ai.whisper_host';
 let whisperBridgeToken: string | undefined;
 let whisperNativeHostBackoffUntil = 0;
 const WHISPER_NATIVE_HOST_BACKOFF_MS = 60_000;
+const DIGEST_POLL_INTERVAL_MS = 5000;
+const DIGEST_POLL_RETRY_INTERVAL_MS = 8000;
+const DIGEST_POLL_MAX_AGE_MS = 30 * 60 * 1000;
 const MEETING_TITLE_MAX_LENGTH = 40;
 const GENERIC_MEETING_TITLE_PATTERNS = [
   /^$/,
@@ -744,7 +747,75 @@ function clearDigestPoll(tabId: number): void {
   }
 }
 
-function scheduleDigestPoll(tabId: number, delayMs = 5000): void {
+function parseDigestLookupTimestamp(lookupId?: string): number | undefined {
+  const match = String(lookupId || '').match(/-(\d{12,})$/);
+  if (!match) return undefined;
+  const timestamp = Number(match[1]);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return timestamp;
+}
+
+function getDigestPollStartedAt(
+  session: MeetingPilotSessionSnapshot,
+): number | undefined {
+  return (
+    parseDigestLookupTimestamp(session.digest.lookupId) ||
+    session.capture.stoppedAt ||
+    session.capture.startedAt
+  );
+}
+
+function getDigestPollBlockReason(
+  session: MeetingPilotSessionSnapshot,
+  now = Date.now(),
+): 'inactive' | 'missing_capture' | 'expired' | undefined {
+  if (session.digest.status !== 'processing' || !session.digest.lookupId) {
+    return 'inactive';
+  }
+  if (!session.capture.startedAt) {
+    return 'missing_capture';
+  }
+  const pollStartedAt = getDigestPollStartedAt(session);
+  if (!pollStartedAt) {
+    return 'missing_capture';
+  }
+  if (now - pollStartedAt > DIGEST_POLL_MAX_AGE_MS) {
+    return 'expired';
+  }
+  return undefined;
+}
+
+async function stopDigestPollingAsBlocked(
+  tabId: number,
+  session: MeetingPilotSessionSnapshot,
+  reason: 'missing_capture' | 'expired',
+): Promise<void> {
+  clearDigestPoll(tabId);
+  const failed = await registry.updateDigest(tabId, {
+    status: 'failed',
+    errorCode:
+      reason === 'expired'
+        ? 'minutes_api_poll_window_expired'
+        : 'minutes_api_poll_without_capture',
+    message:
+      reason === 'expired'
+        ? 'Minutes API polling stopped after 30 minutes without a completed PDF. The structured meeting archive is still available.'
+        : 'Minutes API polling was skipped because this digest was not tied to an active Meeting Pilot capture.',
+    updatedAt: Date.now(),
+  });
+  if (failed) {
+    await updateBrowserAction(failed);
+    await broadcastSessionSnapshot(failed);
+  } else {
+    await updateBrowserAction(session);
+    await broadcastSessionSnapshot(session);
+  }
+}
+
+function scheduleDigestPoll(
+  tabId: number,
+  delayMs = DIGEST_POLL_INTERVAL_MS,
+): void {
   clearDigestPoll(tabId);
   const timer = setTimeout(() => {
     digestPollTimers.delete(tabId);
@@ -755,12 +826,17 @@ function scheduleDigestPoll(tabId: number, delayMs = 5000): void {
 
 async function pollDigestStatus(tabId: number): Promise<void> {
   const session = registry.getSessionByTabId(tabId);
-  if (
-    !session ||
-    session.digest.status !== 'processing' ||
-    !session.digest.lookupId
-  ) {
+  if (!session) {
     clearDigestPoll(tabId);
+    return;
+  }
+  const blockReason = getDigestPollBlockReason(session);
+  if (blockReason === 'inactive') {
+    clearDigestPoll(tabId);
+    return;
+  }
+  if (blockReason) {
+    await stopDigestPollingAsBlocked(tabId, session, blockReason);
     return;
   }
 
@@ -872,14 +948,23 @@ async function pollDigestStatus(tabId: number): Promise<void> {
     if (updated) {
       await broadcastSessionSnapshot(updated);
     }
-    scheduleDigestPoll(tabId, 8000);
+    const nextSession = updated || session;
+    const nextBlockReason = getDigestPollBlockReason(nextSession);
+    if (nextBlockReason && nextBlockReason !== 'inactive') {
+      await stopDigestPollingAsBlocked(tabId, nextSession, nextBlockReason);
+      return;
+    }
+    scheduleDigestPoll(tabId, DIGEST_POLL_RETRY_INTERVAL_MS);
   }
 }
 
 async function resumeDigestPolling(): Promise<void> {
   for (const session of registry.listSessions()) {
-    if (session.digest.status === 'processing' && session.digest.lookupId) {
+    const blockReason = getDigestPollBlockReason(session);
+    if (!blockReason) {
       scheduleDigestPoll(session.tabId, 1000);
+    } else if (blockReason !== 'inactive') {
+      await stopDigestPollingAsBlocked(session.tabId, session, blockReason);
     }
   }
 }
@@ -1495,6 +1580,7 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS',
   'MEETING_PILOT_CAPTURE_STATUS',
   'MEETING_PILOT_DIGEST_STATUS',
+  'MEETING_PILOT_TIER_STATUS_UPDATE',
   'MEETING_PILOT_RENAME_PARTICIPANT',
   'MEETING_PILOT_MERGE_PARTICIPANTS',
   'MEETING_PILOT_FOCUS_PARTICIPANT',
@@ -3177,6 +3263,11 @@ async function handleDigestStatusUpdate(
   if (updated) {
     let sessionForBroadcast: MeetingPilotSessionSnapshot | undefined = updated;
     if (digest.status === 'processing' && updated.digest.lookupId) {
+      const blockReason = getDigestPollBlockReason(updated);
+      if (blockReason && blockReason !== 'inactive') {
+        await stopDigestPollingAsBlocked(tabId, updated, blockReason);
+        return;
+      }
       scheduleDigestPoll(tabId, 1500);
     }
     if (digest.status === 'failed') {
@@ -3632,7 +3723,14 @@ async function handleMeetingPilotMessage(
           ? { preferSurface: request.preferSurface }
           : undefined,
       );
-      sendResponse({ success: true, surface });
+      sendResponse({
+        success: surface !== 'unavailable',
+        surface,
+        error:
+          surface === 'unavailable'
+            ? 'meeting_pilot_panel_surface_unavailable'
+            : undefined,
+      });
       return;
     }
     case 'MEETING_PILOT_CLOSE_SIDE_PANEL': {

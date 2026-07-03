@@ -589,6 +589,7 @@ export interface IngestSalienceComponents {
   surprise: number;
   redundancy: number;
   userInterestBoost?: number;
+  entityAffinityBoost?: number;
 }
 
 export interface IngestDecision {
@@ -675,7 +676,7 @@ export interface RecallQuery {
   query: string;
   scope?: RecallScope;
   topK?: number; // default 10
-  channels?: ('vector' | 'fts' | 'graph' | 'time')[]; // default all
+  channels?: ('vector' | 'fts' | 'graph' | 'time')[];
   timeRange?: { start?: number; end?: number };
   entityTypes?: EntityType[];
   projectFilter?: string;
@@ -718,6 +719,12 @@ export interface RecallChannelDiagnostic {
 export interface RecallOptions {
   /** Whether returned items should reinforce access_count/salience. Default true. */
   reinforceAccess?: boolean;
+  /**
+   * Whether a recall request may trigger lazy embedding model loading.
+   * Passive/background surfaces should keep this false so a cold start cannot
+   * block ordinary service reads.
+   */
+  allowEmbeddingColdStart?: boolean;
 }
 
 export interface RecallScopeCounts {
@@ -1270,9 +1277,39 @@ export interface ContextCue {
   };
 }
 
+export type LensPresentationStatus = 'ready' | 'partial' | 'blocked';
+export type LensPresentationInformationValue = 'high' | 'medium' | 'low';
+export type LensPresentationNovelty =
+  | 'new_to_current_surface'
+  | 'already_visible'
+  | 'anchor_only'
+  | 'unknown';
+export type LensPresentationSourceBoundary =
+  | 'reviewable_memory'
+  | 'derived_summary'
+  | 'raw_source';
+
+export interface LensPresentation {
+  status: LensPresentationStatus;
+  informationValue: LensPresentationInformationValue;
+  title: string;
+  extractedInfo?: string;
+  suggestedAction?: string;
+  novelty: LensPresentationNovelty;
+  sourceBoundary: LensPresentationSourceBoundary;
+  suppressReason?: string;
+  presentationId?: string;
+}
+
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'reflection_thread';
   score: number;
   scope?: MemoryScope;
   title?: string;
@@ -1309,6 +1346,7 @@ export interface ContextRecallMatch {
   sourceClusterKey?: string;
   timestamp?: number;
   cue?: ContextCue;
+  lensPresentation?: LensPresentation;
 }
 
 export interface ContextRecallScopeCounts {
@@ -1342,6 +1380,12 @@ export interface ContextRecallDebug {
     boostedCount?: number;
     needsMoreEvidenceCount: number;
     factCount: number;
+  };
+  lensPresentation?: {
+    readyCount: number;
+    partialCount: number;
+    blockedCount: number;
+    hiddenByPresentationCount: number;
   };
   autopilot?: ContextRecallAutopilotDecision;
   contextExpansion?: {
@@ -1477,7 +1521,13 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'reflection_thread';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -1499,7 +1549,12 @@ export interface ComposerAssistEvidence {
 
 export interface ComposerAssistResponse {
   available: boolean;
-  suggestionType: 'none' | 'context_pack' | 'reply_context' | 'issue_context';
+  suggestionType:
+    | 'none'
+    | 'context_pack'
+    | 'prompt_patch'
+    | 'reply_context'
+    | 'issue_context';
   title?: string;
   summary?: string;
   insertText?: string;
@@ -1558,6 +1613,28 @@ export interface StorylineDraftSegment {
   evidenceIds: string[];
 }
 
+export type StorylineDraftGenerationMode =
+  | 'llm_grounded'
+  | 'fallback_cue_cards';
+
+export type StorylineDraftFallbackReason =
+  | 'model_output_underused_or_invalid_evidence'
+  | 'llm_generation_failed';
+
+export interface StorylineDraftGenerationReceipt {
+  generationMode: StorylineDraftGenerationMode;
+  sourceKind: StorylineSourceKind;
+  sourceId: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  audience: string;
+  sourceEvidenceRefCount: number;
+  citedEvidenceRefCount: number;
+  returnedEvidenceDetailCount: number;
+  missingEvidenceDetailCount: number;
+  fallbackReason?: StorylineDraftFallbackReason;
+  boundary: 'draft_only_manual_copy_no_external_write';
+}
+
 export interface StorylineDraftResponse {
   id: string;
   sourceKind: StorylineSourceKind;
@@ -1569,6 +1646,7 @@ export interface StorylineDraftResponse {
   evidence?: ComposerAssistEvidence[];
   gaps: string[];
   riskNotes: string[];
+  generationReceipt: StorylineDraftGenerationReceipt;
   artifactText: string;
 }
 

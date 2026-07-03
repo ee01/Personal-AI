@@ -12,6 +12,23 @@ vi.mock('../llm/LLMClient.js', () => ({
 
 import { ReflectionResearcher } from '../core/ReflectionResearcher.js';
 
+const expectedDefaultLocalSources = [
+  'glip',
+  'jira',
+  'web',
+  'manual',
+  'system',
+  'source_memory',
+  'user_core',
+  'markdown',
+  'reflection',
+  'reflection_thread',
+  'rehearsal',
+  'daily_log',
+  'project_summary',
+  'entity_profile',
+];
+
 describe('ReflectionResearcher', () => {
   beforeEach(() => {
     llmMocks.generateJSON.mockReset();
@@ -26,7 +43,7 @@ describe('ReflectionResearcher', () => {
     });
   });
 
-  it('defaults local research sourceTypes to non-meeting sources', async () => {
+  it('defaults local research sourceTypes to local Personal AI evidence sources', async () => {
     const researcher = new ReflectionResearcher(undefined);
     const queries = await researcher.plan(
       {
@@ -53,13 +70,10 @@ describe('ReflectionResearcher', () => {
     );
 
     expect(queries).toHaveLength(1);
-    expect(queries[0].sourceTypes).toEqual([
-      'glip',
-      'jira',
-      'web',
-      'manual',
-      'system',
-    ]);
+    expect(queries[0].sourceTypes).toEqual(expectedDefaultLocalSources);
+    expect(queries[0].sourceTypes).not.toContain('meeting');
+    expect(queries[0].sourceTypes).not.toContain('calendar');
+    expect(queries[0].sourceTypes).not.toContain('ai_chat');
   });
 
   it('sanitizes sourceTypes returned by the research planner', async () => {
@@ -161,13 +175,7 @@ describe('ReflectionResearcher', () => {
     );
 
     expect(queries).toHaveLength(1);
-    expect(queries[0].sourceTypes).toEqual([
-      'glip',
-      'jira',
-      'web',
-      'manual',
-      'system',
-    ]);
+    expect(queries[0].sourceTypes).toEqual(expectedDefaultLocalSources);
     expect(queries[0].requestedSourceTypes).toEqual([
       'salesforce',
       'notion_private',
@@ -210,7 +218,7 @@ describe('ReflectionResearcher', () => {
     expect(queries).toHaveLength(1);
     expect(queries[0]).toMatchObject({
       topK: 5,
-      sourceTypes: ['glip', 'jira', 'web', 'manual', 'system'],
+      sourceTypes: expectedDefaultLocalSources,
     });
     expect(queries[0].query).toContain('项目反思: Orbit');
     expect(queries[0].query).toContain('Orbit owner 是否已经稳定？');

@@ -310,6 +310,34 @@ describe('Coverage API', () => {
     expect(body.summary.totalMessages).toBe(6);
     expect(body.summary.totalChunks).toBe(1);
     expect(body.summary.pressureItems).toBe(4);
+    expect(body.receipt).toMatchObject({
+      generatedAt: body.generatedAt,
+      staleAfterDays: 7,
+      summary: {
+        platformCount: body.platforms.length,
+        activeDerivedPlatformCount: body.summary.activePlatforms,
+        healthyPlatformCount: body.summary.healthyPlatforms,
+        warningPlatformCount: body.summary.warningPlatforms,
+        coverageGapCount: body.summary.coverageGaps,
+        pressureItemCount: body.summary.pressureItems,
+        totalMessages: body.summary.totalMessages,
+        totalChunks: body.summary.totalChunks,
+        totalEntities: body.summary.totalEntities,
+        windowLabel: 'Coverage Map 聚合快照 + 近 7 天新鲜度窗口',
+      },
+    });
+    expect(body.receipt.source).toContain('messages_raw');
+    expect(body.receipt.source).toContain('provider_sync_jobs');
+    expect(body.receipt.summary.repairActionCount).toBe(body.repairActions.length);
+    expect(body.receipt.summary.infoPlanningActionCount).toBe(
+      body.repairActions.filter((item: any) => item.severity === 'info').length,
+    );
+    expect(body.receipt.summary.timelineEventCount).toBe(body.timeline.length);
+    expect(body.receipt.summary.latestAt).toBe(body.timeline[0].at);
+    expect(body.receipt.summary.emptyState).toContain('本轮可读信号');
+    expect(body.receipt.boundary).toContain('只读覆盖聚合快照');
+    expect(body.receipt.boundary).toContain('不会写入记忆');
+    expect(body.receipt.note).toContain('不是外部连接器同步结果');
 
     const ringCentral = body.platforms.find((item: any) => item.id === 'ringcentral');
     expect(ringCentral).toBeTruthy();
@@ -344,6 +372,14 @@ describe('Coverage API', () => {
       source: "provider_sync_jobs.provider='doubao'",
     });
     expect(body.priorityFocus.reason).toContain('先检查最近一次同步或读取错误');
+    expect(body.priorityFocus.selectionBasis).toContain(
+      'critical / warning 修复项',
+    );
+    expect(body.priorityFocus.selectionBasis).toContain('info 规划项');
+    expect(body.priorityFocus.comparedPlatformCount).toBeGreaterThan(0);
+    expect(body.priorityFocus.ignoredInfoActionCount).toBeGreaterThan(0);
+    expect(body.priorityFocus.boundary).toContain('只读诊断路线');
+    expect(body.priorityFocus.boundary).toContain('不会重跑同步');
 
     const codex = body.platforms.find((item: any) => item.id === 'codex');
     expect(codex.state).toBe('blocked');
@@ -408,15 +444,89 @@ describe('Coverage API', () => {
     expect(jobsRes.statusCode).toBe(200);
     expect(skillsRes.statusCode).toBe(200);
 
-    expect(messagesRes.json().items.find((item: any) => item.sourceType === 'glip').count).toBe(2);
-    expect(pressureRes.json().totalPressureItems).toBe(4);
-    expect(jobsRes.json().items[0]).toMatchObject({
+    const messagesBody = messagesRes.json();
+    const pressureBody = pressureRes.json();
+    const jobsBody = jobsRes.json();
+    const skillsBody = skillsRes.json();
+
+    expect(messagesBody).toMatchObject({
+      staleAfterDays: 7,
+      receipt: {
+        slice: 'messages-by-source',
+        staleAfterDays: 7,
+        source: "messages_raw GROUP BY source_type",
+        summary: {
+          itemCount: 4,
+          totalCount: 6,
+          recentCount: 5,
+          windowLabel: '全量 source_type 聚合 + 近 7 天新鲜度',
+        },
+      },
+    });
+    expect(messagesBody.receipt.generatedAt).toBe(messagesBody.generatedAt);
+    expect(messagesBody.receipt.summary.latestAt).toBeGreaterThan(0);
+    expect(messagesBody.receipt.summary.emptyState).toContain('source_type 聚合');
+    expect(messagesBody.receipt.boundary).toContain('只读覆盖诊断切片');
+    expect(messagesBody.receipt.boundary).toContain('不会写入记忆');
+    expect(messagesBody.receipt.note).toContain('不读取消息正文');
+    expect(messagesBody.items.find((item: any) => item.sourceType === 'glip').count).toBe(2);
+
+    expect(pressureBody).toMatchObject({
+      totalPressureItems: 4,
+      staleAfterDays: 7,
+      receipt: {
+        slice: 'pressure',
+        source:
+          'notification_records + proposed_actions + confirm_requests + reflection_threads',
+        summary: {
+          itemCount: 5,
+          totalCount: 4,
+          windowLabel: '当前未完成压力队列快照',
+        },
+      },
+    });
+    expect(pressureBody.receipt.summary.emptyState).toContain('待处理压力');
+    expect(pressureBody.receipt.note).toContain('不发送通知');
+    expect(pressureBody.receipt.note).toContain('不执行动作');
+
+    expect(jobsBody).toMatchObject({
+      receipt: {
+        slice: 'provider-jobs-recent',
+        source: 'provider_sync_jobs from the last 30 days',
+        summary: {
+          itemCount: 1,
+          totalCount: 1,
+          failureCount: 1,
+          windowLabel: '最近 30 天 provider_sync_jobs 聚合',
+        },
+      },
+    });
+    expect(jobsBody.receipt.summary.latestAt).toBeGreaterThan(0);
+    expect(jobsBody.receipt.summary.emptyState).toContain('provider/scenario');
+    expect(jobsBody.receipt.note).toContain('不重跑 provider sync');
+    expect(jobsBody.items[0]).toMatchObject({
       provider: 'doubao',
       scenario: 'stable_memory',
       failed: 1,
       latestStatus: 'failed',
     });
-    expect(skillsRes.json().items.find((item: any) => item.platform === 'openclaw')).toMatchObject({
+
+    expect(skillsBody).toMatchObject({
+      receipt: {
+        slice: 'skills-sync',
+        source: 'skill_platform_sync_settings + skill_platform_bindings',
+        summary: {
+          itemCount: 3,
+          enabledCount: 2,
+          failureCount: 1,
+          windowLabel: '当前技能同步设置 + 最近探测状态',
+        },
+      },
+    });
+    expect(skillsBody.receipt.summary.latestAt).toBeGreaterThan(0);
+    expect(skillsBody.receipt.summary.emptyState).toContain('技能平台设置');
+    expect(skillsBody.receipt.note).toContain('不写入 active skill truth');
+    expect(skillsBody.items.find((item: any) => item.platform === 'openclaw')).toMatchObject({
       enabled: true,
       capability: 'api',
     });

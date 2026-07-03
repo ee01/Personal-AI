@@ -60,6 +60,18 @@ async function waitForRequestCount(server, expectedCount, timeoutMs = 5000) {
   );
 }
 
+async function waitForAmbientTrace(server, predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const match = server.ambientCalibrationRequests.find(predicate);
+    if (match) {
+      return match;
+    }
+    await delay(50);
+  }
+  throw new Error('Timed out waiting for matching ambient calibration trace');
+}
+
 async function waitForCapturedSourceMemoryCount(server, expectedCount, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -184,6 +196,7 @@ async function startHarnessServer() {
   const contextRecallRequests = [];
   const feedbackRequests = [];
   const rehearsalFeedbackRequests = [];
+  const ambientCalibrationRequests = [];
   const sourceMemoryCandidateRequests = [];
   const sourceMemoryCreateRequests = [];
 
@@ -230,6 +243,44 @@ async function startHarnessServer() {
           );
           return;
         }
+        if (
+          body.contextType === 'selected_text' &&
+          typeof body.url === 'string' &&
+          body.url.includes('/selected-background-only')
+        ) {
+          const backgroundOnlyMatch = {
+            id: 'web-memory-background-only',
+            type: 'message',
+            score: 0.94,
+            displayPriority: 'p1',
+            title: 'Falcon launch readiness background',
+            uiSummary: 'Background paragraph mentions Falcon owner handoff but not the selected phrase.',
+            snippet: 'Previously saved notes mention Falcon owner handoff and launch readiness.',
+            sourceLabel: 'Web memory',
+            sourceUrl: 'https://source.example.com/falcon-background',
+            sourceTitle: 'Falcon launch notes',
+            exploreLink: '#/timeline?focus=web-memory-background-only',
+            links: [],
+            whyMatched: '附近段落命中 Falcon owner handoff',
+            whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['owner handoff'],
+            },
+            reasonType: 'keyword_overlap',
+            evidenceRole: 'supporting',
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [backgroundOnlyMatch],
+              topMatch: backgroundOnlyMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
         if (typeof body.url === 'string' && body.url.includes('/rehearsal-lens')) {
           const rehearsalMatch = {
             id: 'rehearsal-memory-1',
@@ -237,8 +288,8 @@ async function startHarnessServer() {
             score: 0.87,
             displayPriority: 'p1',
             title: 'Next Falcon customer review',
-            uiSummary: 'Before the Falcon customer review, ask Priya to confirm the escalation owner.',
-            snippet: 'Ask Priya to confirm the escalation owner before the customer review.',
+            uiSummary: 'Falcon customer review reminder summary: confirm the owner before Friday.',
+            snippet: 'Short fallback snippet should not hide the full rehearsal script.',
             sourceLabel: 'rehearsal',
             sourceTitle: 'Rehearsal',
             exploreLink: '#/rehearsals?rehearsalId=rehearsal-memory-1',
@@ -258,6 +309,9 @@ async function startHarnessServer() {
                 activationId: 'activation-memory-lens-1',
                 scenarioType: 'customer_review',
                 status: 'active',
+                summary: 'Falcon customer review reminder summary: confirm the owner before Friday.',
+                content:
+                  'Before the Falcon customer review, ask Priya to confirm the escalation owner and bring the handoff checklist.',
               },
               matchedCues: {
                 people: ['Priya Shah'],
@@ -273,6 +327,32 @@ async function startHarnessServer() {
               matches: [rehearsalMatch],
               topMatch: rehearsalMatch,
               queryTimeMs: 3,
+              autopilot: {
+                mode: 'chip',
+                summary: '低打扰提示：3 条可能相关，7 条静默。',
+                candidateCount: 10,
+                shownCount: 3,
+                strongCount: 0,
+                possibleCount: 3,
+                quietedCount: 7,
+                hiddenCount: 1,
+                lowInformationCount: 0,
+                sourceExcludedCount: 0,
+                duplicateMergedCount: 2,
+                quietReasons: [
+                  {
+                    reason: 'missing_issue_anchor',
+                    label: '资料记忆缺少当前 Jira 票号锚点',
+                    count: 4,
+                  },
+                ],
+                sceneAnchors: {
+                  people: ['Priya Shah'],
+                  projects: ['Falcon'],
+                  topics: ['customer review'],
+                },
+                gates: ['attention_budget', 'scene_anchor_gate'],
+              },
             }),
           );
           return;
@@ -337,10 +417,14 @@ async function startHarnessServer() {
             sourceLabel: 'source_memory',
             sourceUrl: 'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
             sourceTitle: 'Falcon source-only evidence',
-            exploreLink: '#/timeline?focus=web-memory-source-url-only',
+            exploreLink: '#/source-memory/web-memory-source-url-only',
             links: [],
             whyMatched: '来源 URL 命中 Falcon handoff',
-            whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+            whyRelevant: [
+              '已保存资料：整页资料 / 主动保存',
+              '项目：Falcon',
+              '主题：owner handoff',
+            ],
             matchedAnchors: {
               projects: ['Falcon'],
               topics: ['owner handoff'],
@@ -361,6 +445,96 @@ async function startHarnessServer() {
             JSON.stringify({
               matches: [sourceUrlOnlyMatch],
               topMatch: sourceUrlOnlyMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/source-url-sensitive')) {
+          const sourceUrlSensitiveMatch = {
+            id: 'source-memory:web-memory-source-url-sensitive',
+            type: 'source_memory',
+            score: 0.9,
+            displayPriority: 'p1',
+            title: 'Falcon sensitive source handoff note',
+            uiSummary: 'The saved source exists but its raw URL carries a sensitive query token.',
+            snippet: 'Sensitive source URL fixtures should keep the capsule detail checkable without exposing the token.',
+            sourceLabel: 'source_memory',
+            sourceUrl: 'https://source-only.example.com/falcon/handoff?ticket=PAI-123&token=secret-token',
+            sourceTitle: 'Falcon sensitive source evidence',
+            exploreLink: '#/source-memory/web-memory-source-url-sensitive',
+            links: [],
+            whyMatched: '来源 URL 命中 Falcon sensitive handoff',
+            whyRelevant: [
+              '已保存资料：整页资料 / 主动保存',
+              '项目：Falcon',
+              '主题：owner handoff',
+            ],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['owner handoff'],
+            },
+            reasonType: 'source_match',
+            evidenceRole: 'artifact',
+            metadata: {
+              sourceMemoryCapsuleId: 'web-memory-source-url-sensitive',
+              sourceKind: 'webpage',
+              captureMode: 'manual',
+            },
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [sourceUrlSensitiveMatch],
+              topMatch: sourceUrlSensitiveMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (
+          typeof body.url === 'string' &&
+          (body.url.includes('/source-status-current') || body.url.includes('/source-status-stale'))
+        ) {
+          const staleCase = body.url.includes('/source-status-stale');
+          const sourceStatusMatch = {
+            id: staleCase ? 'web-memory-source-status-stale' : 'web-memory-source-status-current',
+            type: 'message',
+            score: 0.9,
+            scope: 'personal',
+            displayPriority: 'p1',
+            title: staleCase ? 'Falcon source status stale note' : 'Falcon current source status note',
+            uiSummary: staleCase
+              ? 'This memory has an external source, but the note is old enough to require re-checking.'
+              : 'This memory points back to the current page source.',
+            snippet: 'Source status receipts explain how the card can be checked before action.',
+            sourceLabel: 'web',
+            sourceUrl: staleCase
+              ? 'https://source.example.com/falcon/stale-source'
+              : body.url,
+            sourceTitle: staleCase ? 'Falcon stale external source' : 'Falcon current page source',
+            exploreLink: staleCase
+              ? '#/timeline?focus=web-memory-source-status-stale'
+              : '#/timeline?focus=web-memory-source-status-current',
+            links: [],
+            whyMatched: '来源状态命中 Falcon',
+            whyRelevant: ['项目：Falcon', '主题：source status'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['source status'],
+            },
+            reasonType: 'source_match',
+            evidenceRole: 'supporting',
+            timestamp: staleCase
+              ? Math.floor((Date.now() - 120 * 24 * 60 * 60 * 1000) / 1000)
+              : Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [sourceStatusMatch],
+              topMatch: sourceStatusMatch,
               queryTimeMs: 3,
             }),
           );
@@ -488,11 +662,51 @@ async function startHarnessServer() {
           );
           return;
         }
+        if (
+          selectedTextCase &&
+          Array.isArray(body.secondaryTexts) &&
+          body.secondaryTexts.some((item) => /Orion renewal/i.test(String(item || '')))
+        ) {
+          const orionMatch = {
+            id: 'web-memory-orion-selection',
+            type: 'message',
+            score: 0.94,
+            displayPriority: 'p1',
+            title: 'Selected text Orion owner handoff',
+            uiSummary: 'Selected text recall found the Orion renewal owner handoff checklist.',
+            snippet: 'Previously saved notes mention the Orion renewal checklist and owner handoff.',
+            sourceLabel: 'Web memory',
+            sourceUrl: 'https://source.example.com/orion',
+            sourceTitle: 'Orion renewal notes',
+            exploreLink: '#/timeline?focus=web-memory-orion-selection',
+            links: [{ label: 'Open source', url: 'https://source.example.com/orion' }],
+            whyMatched: '选中文本命中 owner handoff checklist',
+            whyRelevant: ['项目：Orion', '主题：owner handoff checklist'],
+            matchedAnchors: {
+              projects: ['Orion'],
+              topics: ['owner handoff checklist'],
+            },
+            reasonType: 'keyword_overlap',
+            evidenceRole: 'supporting',
+            metadata: { fixture: 'webpage-memory-detection' },
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [orionMatch],
+              topMatch: orionMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
         const primaryMatch = {
           id: 'web-memory-1',
-          type: 'message',
-          score: 0.92,
-          displayPriority: 'p1',
+            type: 'message',
+            score: 0.92,
+            displayPriority: 'p1',
+          scope: 'work',
           title: unsafeRouteCase
             ? 'Falcon "unsafe" launch <review>'
             : selectedTextCase
@@ -559,6 +773,31 @@ async function startHarnessServer() {
             matches: [hiddenMatch, secondaryMatch, primaryMatch],
             topMatch: hiddenMatch,
             queryTimeMs: 4,
+            autopilot: {
+              mode: 'card',
+              summary: '展示强相关卡片：2 条强相关，3 条弱关联静默。',
+              candidateCount: 5,
+              shownCount: 2,
+              strongCount: 2,
+              possibleCount: 0,
+              quietedCount: 3,
+              hiddenCount: 1,
+              lowInformationCount: 1,
+              sourceExcludedCount: 1,
+              duplicateMergedCount: 0,
+              quietReasons: [
+                {
+                  reason: 'weak_semantic_only',
+                  label: '弱语义相似',
+                  count: 1,
+                },
+              ],
+              sceneAnchors: {
+                projects: ['Falcon'],
+                topics: ['owner handoff'],
+              },
+              gates: ['attention_budget', 'scene_anchor_gate', 'explainability_required'],
+            },
           }),
         );
         return;
@@ -600,12 +839,29 @@ async function startHarnessServer() {
           );
           return;
         }
+        if (body.targetId === 'web-memory-1' && body.action === 'positive') {
+          await delay(260);
+        }
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
             status: 'ok',
             targetType: body.targetType,
             appliedDelta: body.action === 'negative' ? -0.15 : 0.1,
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/v1/ambient-calibration/traces') {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        ambientCalibrationRequests.push(body);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            stored: true,
+            traceId: `ambient-trace-${ambientCalibrationRequests.length}`,
           }),
         );
         return;
@@ -623,13 +879,18 @@ async function startHarnessServer() {
         const eligible =
           text.length >= 28 &&
           !/api[_\s-]?key|secret|password|token/i.test(text);
+        const isSelectionCandidate = req.url.endsWith('/selection');
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
             eligible,
             score: eligible ? 0.64 : 0,
             suggestedAction: eligible ? 'suggest' : 'ignore',
-            reasons: eligible ? ['用户选中了文本', '文本片段足够完整'] : ['文本信息量不足'],
+            reasons: eligible
+              ? isSelectionCandidate
+                ? ['用户选中了文本', '文本片段足够完整']
+                : ['阅读深度较高', '文本片段足够完整']
+              : ['文本信息量不足'],
             captureMode: 'suggested',
           }),
         );
@@ -639,8 +900,20 @@ async function startHarnessServer() {
       if (req.method === 'POST' && req.url === '/api/v1/source-memory/capsules') {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
+        if (String(body.note || '').includes('触发失败')) {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: 'Memory Service 暂时不可用',
+            }),
+          );
+          return;
+        }
         sourceMemoryCreateRequests.push(body);
-        const id = `source-memory-capsule-${sourceMemoryCreateRequests.length}`;
+        const duplicateSourceMemory = String(body.sourceUrl || '').includes('duplicate-page-capture');
+        const id = duplicateSourceMemory
+          ? 'source-memory-capsule-existing'
+          : `source-memory-capsule-${sourceMemoryCreateRequests.length}`;
         const sourceKind = body.sourceKind || (body.selectedText ? 'selection' : 'webpage');
         const preview = String(body.selectedText || body.text || '').slice(0, 240);
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -660,10 +933,26 @@ async function startHarnessServer() {
               summary: body.note || preview,
               contentPreview: preview,
               messageId: `source-memory-message-${sourceMemoryCreateRequests.length}`,
+              writeReceipt: {
+                state: 'saved_with_recall_signal',
+                label: '资料记忆已写入',
+                detail:
+                  sourceKind === 'visual_memory'
+                    ? '已创建或更新 source-memory capsule，并写入关联视觉证据检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。'
+                    : '已创建或更新 source-memory capsule，并写入关联网页检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。',
+                evidence: [
+                  `资料类型：${sourceKind === 'selection' ? '选区资料' : sourceKind === 'visual_memory' ? '视觉证据' : '整页资料'}`,
+                  `保存方式：${body.captureMode === 'auto' ? '自动保存' : '主动保存'}`,
+                  '范围：工作记忆',
+                  '检索信号：已启用',
+                ],
+                nextStep:
+                  '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+              },
               createdAt: Date.now(),
               updatedAt: Date.now(),
               savedAt: Date.now(),
-              duplicate: false,
+              duplicate: duplicateSourceMemory,
               anchors: [
                 {
                   id: `${id}-anchor`,
@@ -714,6 +1003,51 @@ async function startHarnessServer() {
         return;
       }
 
+      if (req.method === 'GET' && req.url?.startsWith('/page-capture-review')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head>
+              <title>Falcon page capture review packet</title>
+              <style>
+                body { margin: 0; font: 16px/1.6 system-ui, sans-serif; }
+                main { max-width: 760px; margin: 0 auto; padding: 48px 24px 900px; }
+                p { margin: 0 0 20px; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Falcon page capture review packet</h1>
+                <p>
+                  Falcon webpage capture review notes preserve the source owner,
+                  migration checklist, customer communication plan, release
+                  confidence signals, dependency status, and follow-up readiness
+                  material for later planning workflows.
+                </p>
+                <p>
+                  The page includes enough narrative evidence to be useful as a
+                  source memory capsule. It should not require a native browser
+                  prompt because the user needs to see the source title, content
+                  preview, capture reasons, and optional note before saving.
+                </p>
+                <p>
+                  A lightweight inline review keeps the user inside the page,
+                  supports cancel without writing data, and still gives a direct
+                  receipt after the confirmed save has created a capsule with a
+                  linked web memory signal.
+                </p>
+                <p>
+                  Additional Falcon context mentions Priya Shah, QBR readiness,
+                  owner handoff, migration checkpoints, launch risk, release
+                  review, customer-facing summary, and evidence anchors for a
+                  later AI planning workflow.
+                </p>
+              </main>
+            </body>
+          </html>`);
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/raw-title-summary')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
@@ -738,6 +1072,43 @@ async function startHarnessServer() {
               <section>
                 Falcon source URL provenance should stay visible even when the
                 recall payload only carries sourceUrl and does not repeat it in links.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/source-url-sensitive')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon sensitive source URL provenance</title></head>
+            <body>
+              <section>
+                Falcon sensitive source URL provenance should keep the saved
+                capsule checkable without rendering credentialed or token-bearing
+                source links in the Memory Lens card.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (
+        req.method === 'GET' &&
+        (req.url?.startsWith('/source-status-current') ||
+          req.url?.startsWith('/source-status-stale'))
+      ) {
+        const staleCase = req.url.startsWith('/source-status-stale');
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>${staleCase ? 'Falcon stale source status' : 'Falcon current source status'}</title></head>
+            <body>
+              <section>
+                Falcon source status receipts should tell users whether the card
+                points back to the current page, an external source, or a stale
+                memory that needs re-checking before action.
               </section>
             </body>
           </html>`);
@@ -805,6 +1176,23 @@ async function startHarnessServer() {
         return;
       }
 
+      if (req.method === 'GET' && req.url?.startsWith('/selected-background-only')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Selected text background-only recall</title></head>
+            <body>
+              <section id="selected-background-only-section">
+                Falcon owner handoff and launch readiness are nearby context.
+                The selected customer communication follow-up wording is useful
+                enough to save, but should not open Selection Memory Search when
+                only the surrounding paragraph matched the old memory.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/selected-codex-noise')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
@@ -814,6 +1202,27 @@ async function startHarnessServer() {
               <section id="selected-codex-noise-section">
                 听说codex续约好了，以后每人每个月300万，是这样吗？
               </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/selected-same-text-context')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Repeated owner handoff selections</title></head>
+            <body>
+              <main>
+                <section id="falcon-repeat">
+                  Falcon launch notes mention the owner handoff checklist,
+                  migration checkpoints, customer communication, and release confidence.
+                </section>
+                <section id="orion-repeat">
+                  Orion renewal notes mention the owner handoff checklist,
+                  procurement risk, finance approval, and support follow-up.
+                </section>
+              </main>
             </body>
           </html>`);
         return;
@@ -976,6 +1385,7 @@ async function startHarnessServer() {
     contextRecallRequests,
     feedbackRequests,
     rehearsalFeedbackRequests,
+    ambientCalibrationRequests,
     sourceMemoryCandidateRequests,
     sourceMemoryCreateRequests,
     close: () => new Promise((resolve) => server.close(resolve)),
@@ -1111,9 +1521,62 @@ async function verifyRehearsalLensPresentation(server, context) {
   const cardText = await page.locator('.pai-context-card').innerText();
   assert.match(cardText, /为什么此刻相关/);
   assert.match(cardText, /预演内容/);
+  assert.match(cardText, /预演回执/);
+  assert.match(cardText, /触发线索/);
+  assert.match(cardText, /人物：Priya Shah/);
+  assert.match(cardText, /项目：Falcon/);
+  assert.match(cardText, /提示资格/);
+  assert.match(cardText, /Active · 强相关/);
+  assert.match(cardText, /复核入口/);
+  assert.match(cardText, /可打开 Rehearsal 管理页复核脚本、来源和激活历史/);
+  assert.match(cardText, /反馈影响/);
+  assert.match(cardText, /有用\/不相关只调整这条预演后续命中/);
   assert.match(cardText, /我能做什么/);
+  assert.match(cardText, /3 条可能相关，7 条静默/);
+  assert.doesNotMatch(
+    cardText,
+    /展示判断/,
+    'Rehearsal Autopilot 明细不应占用卡片首屏正文',
+  );
+  assert.match(
+    cardText,
+    /只读预演，不生成\/插入\/发送\/执行/,
+    'Rehearsal 操作边界应在预演回执中直接可见',
+  );
   assert.match(cardText, /线索/);
   assert.match(cardText, /Before the Falcon customer review/);
+  assert.match(cardText, /bring the handoff checklist/);
+  assert.match(cardText, /摘要/);
+  assert.match(cardText, /confirm the owner before Friday/);
+  const rehearsalBoundaryButton = page.locator('.pai-context-action-boundary-button');
+  await rehearsalBoundaryButton.click();
+  await page.waitForSelector('.pai-context-action-boundary-detail', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.equal(
+    await rehearsalBoundaryButton.getAttribute('aria-expanded'),
+    'true',
+    '点击左下角摘要后应展开 Autopilot 明细',
+  );
+  const rehearsalBoundaryDetailText = await page
+    .locator('.pai-context-action-boundary-detail')
+    .innerText();
+  assert.match(rehearsalBoundaryDetailText, /展示判断/);
+  assert.match(rehearsalBoundaryDetailText, /低打扰提示：3 条可能相关，7 条静默。/);
+  assert.match(rehearsalBoundaryDetailText, /资料记忆缺少当前 Jira 票号锚点/);
+  assert.match(rehearsalBoundaryDetailText, /操作边界/);
+  assert.match(rehearsalBoundaryDetailText, /只读预演，不生成\/插入\/发送\/执行/);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.pai-context-action-boundary-button');
+    return button?.getAttribute('aria-expanded') === 'false';
+  });
+  assert.doesNotMatch(
+    cardText,
+    /Short fallback snippet should not hide/,
+    'Rehearsal 卡片应优先展示 metadata.rehearsal.content，而不是 fallback snippet',
+  );
   assert.doesNotMatch(
     cardText,
     /它说了什么/,
@@ -1123,6 +1586,11 @@ async function verifyRehearsalLensPresentation(server, context) {
     await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
     '标记这条预演提醒有用',
     'Rehearsal 正向反馈应有专门的可访问名称',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-negative').getAttribute('aria-label'),
+    '标记这条预演提醒不相关',
+    'Rehearsal 负向反馈应有专门的可访问名称',
   );
 
   const exploreHref = await page.locator('.pai-context-open-memory').getAttribute('href');
@@ -1156,6 +1624,48 @@ async function verifyRehearsalLensPresentation(server, context) {
     startFeedbackCount,
     'Rehearsal 反馈不应误写普通 recall_quality /feedback',
   );
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await page.locator('.pai-context-recall-negative').click();
+  await page.waitForSelector('.pai-context-feedback-sheet', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const negativeDrawerText = await page.locator('.pai-context-feedback-sheet').innerText();
+  assert.match(negativeDrawerText, /这条预演提醒不适合当前场景/);
+  assert.match(negativeDrawerText, /误触发的预演提醒/);
+  assert.doesNotMatch(
+    negativeDrawerText,
+    /这条记忆不是这个意思/,
+    'Rehearsal 负反馈 drawer 不应使用普通记忆标题',
+  );
+  await page
+    .locator('.pai-context-feedback-reason[data-feedback-reason="generic_topic_overlap"]')
+    .click();
+  const negativeFeedbackDeadline = Date.now() + 5000;
+  while (
+    server.rehearsalFeedbackRequests.length < startRehearsalFeedbackCount + 2 &&
+    Date.now() < negativeFeedbackDeadline
+  ) {
+    await delay(50);
+  }
+  assert.equal(
+    server.rehearsalFeedbackRequests.length,
+    startRehearsalFeedbackCount + 2,
+    'Rehearsal 负向反馈也应调用 /rehearsals/:id/feedback',
+  );
+  const rehearsalNegativeFeedback = server.rehearsalFeedbackRequests.at(-1);
+  assert.equal(rehearsalNegativeFeedback.outcome, 'irrelevant');
+  assert.equal(rehearsalNegativeFeedback.activationId, 'activation-memory-lens-1');
+  const rehearsalNegativeFeedbackDetail = parseFeedbackDetail(rehearsalNegativeFeedback.note);
+  assert.equal(rehearsalNegativeFeedbackDetail.feedback_reason, 'generic_topic_overlap');
+  assert.equal(rehearsalNegativeFeedbackDetail.target_type, 'rehearsal');
 
   if (diagnostics.some((entry) => entry.includes('pageerror'))) {
     for (const entry of diagnostics) {
@@ -1222,6 +1732,33 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   );
 
   const bubble = page.locator('.pai-context-bubble');
+  const bubbleTitle = await bubble.getAttribute('title');
+  const bubbleAriaLabel = await bubble.getAttribute('aria-label');
+  assert.match(
+    bubbleTitle || '',
+    /Memory Lens。强相关。因为项目：Falcon/,
+    'Rest icon tooltip should disclose the first match reason before hover',
+  );
+  assert.match(
+    bubbleTitle || '',
+    /Falcon launch readiness/,
+    'Rest icon tooltip should name the top memory before hover',
+  );
+  assert.match(
+    bubbleTitle || '',
+    /只读提示，不写入\/插入\/发送/,
+    'Rest icon tooltip should state the no-write/no-insert/no-send boundary',
+  );
+  assert.doesNotMatch(
+    bubbleTitle || '',
+    /\b\d{1,3}%\b/,
+    'Rest icon tooltip should not expose a confidence percentage',
+  );
+  assert.match(
+    bubbleAriaLabel || '',
+    /打开相关记忆提示：Memory Lens。强相关。因为项目：Falcon/,
+    'Rest icon accessible name should explain why the bubble appeared',
+  );
   await bubble.hover();
   await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
     timeout: 5000,
@@ -1232,7 +1769,10 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.match(peekText, /因为/);
   assert.match(peekText, /Falcon launch readiness/);
   assert.match(peekText, /Falcon launch readiness is linked to the owner handoff checklist\./);
+  assert.match(peekText, /工作记忆/);
   assert.match(peekText, /关键词匹配/);
+  assert.match(peekText, /只读提示/);
+  assert.match(peekText, /不写入\/插入\/发送/);
   assert.doesNotMatch(peekText, /\b\d{1,3}%\b/);
   assert.doesNotMatch(peekText, /这条有用/);
   await page.mouse.move(4, 4);
@@ -1285,11 +1825,36 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   const cardText = await page.locator('.pai-context-card').innerText();
   assert.match(cardText, /Memory Lens/);
+  assert.match(cardText, /2 条强相关，3 条静默/);
+  assert.doesNotMatch(
+    cardText,
+    /展示判断/,
+    'Autopilot 明细不应占用卡片首屏正文',
+  );
   assert.match(cardText, /为什么相关/);
-  assert.match(cardText, /它说了什么/);
-  assert.match(cardText, /我应该做什么/);
+  assert.match(cardText, /可提取信息/);
+  assert.match(cardText, /建议动作/);
   assert.match(cardText, /Falcon launch readiness is linked to the owner handoff checklist\./);
   assert.match(cardText, /证据/);
+  const actionBoundaryButton = page.locator('.pai-context-action-boundary-button');
+  await actionBoundaryButton.hover();
+  await page.waitForSelector('.pai-context-action-boundary-detail', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const actionBoundaryDetailText = await page
+    .locator('.pai-context-action-boundary-detail')
+    .innerText();
+  assert.match(actionBoundaryDetailText, /展示判断/);
+  assert.match(actionBoundaryDetailText, /展示强相关卡片：2 条强相关，3 条弱关联静默。/);
+  assert.match(actionBoundaryDetailText, /过滤/);
+  assert.match(actionBoundaryDetailText, /静默 3 条弱候选/);
+  assert.match(actionBoundaryDetailText, /弱语义相似/);
+  assert.match(actionBoundaryDetailText, /场景锚点/);
+  assert.match(actionBoundaryDetailText, /项目 Falcon/);
+  assert.match(actionBoundaryDetailText, /主题 owner handoff/);
+  assert.match(actionBoundaryDetailText, /不强化访问计数/);
+  await page.mouse.move(10, 10);
   assert.match(cardText, /Previously saved notes mention the Falcon launch checklist and owner handoff\./);
   assert.doesNotMatch(cardText, /Hidden memory should not be displayed/);
   assert.doesNotMatch(cardText, /Secondary memory should lose to p1 priority/);
@@ -1375,6 +1940,12 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   await openContextMoreMenu(page);
   const menuText = await page.locator('.pai-context-more-menu:not([hidden])').innerText();
+  assert.match(menuText, /站点控制回执/);
+  assert.match(menuText, /当前站点/);
+  assert.match(menuText, /控制范围/);
+  assert.match(menuText, /只影响右下角 Lens、页面召回、整页\/视觉入库候选/);
+  assert.match(menuText, /主动划词(?:检索)?仍可用/);
+  assert.match(menuText, /不删除、不同步、不外发已有记忆/);
   assert.match(menuText, /开启白名单并允许此站点/);
   assert.match(menuText, /此网站今天不提示/);
   assert.match(menuText, /此页面永久不提示/);
@@ -1387,6 +1958,14 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.match(
     await page.locator('.pai-context-toast').innerText(),
     /已开启白名单并允许此网站/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /白名单只控制被动网页处理/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /主动划词仍可用/,
   );
   const storedAllowShortcut = await serviceWorker.evaluate(
     async ({ allowStorageKey, allowlistModeKey }) =>
@@ -1417,6 +1996,10 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     await page.locator('.pai-context-toast').innerText(),
     /已恢复白名单设置/,
   );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /仅恢复被动网页提示规则/,
+  );
   const restoredAllowShortcut = await serviceWorker.evaluate(
     async ({ allowStorageKey, allowlistModeKey }) =>
       chrome.storage.local.get([allowStorageKey, allowlistModeKey]),
@@ -1445,10 +2028,39 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   }
 
   await page.locator('.pai-context-recall-positive').click();
+  await page.waitForFunction(
+    () =>
+      /正在记录有用反馈/.test(
+        document.querySelector('.pai-context-toast')?.textContent || '',
+      ),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /正在记录有用反馈；确认前不会当作已学习/,
+    '正向反馈确认前应在卡片内显示 pending 回执',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
+    '正在记录有用反馈',
+    '正向反馈写入中应更新按钮可访问名称',
+  );
   await waitForRequestCount(
     { contextRecallRequests: server.feedbackRequests },
     startFeedbackCount + 1,
     5000,
+  );
+  await page.waitForFunction(
+    () =>
+      /已记录为有用，后续会优先保留类似提示/.test(
+        document.querySelector('.pai-context-toast')?.textContent || '',
+      ),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /有用反馈已确认写入；后续类似提示会优先保留/,
+    '正向反馈成功后应在卡片内显示服务确认回执',
   );
   assert.deepEqual(
     {
@@ -1511,6 +2123,8 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   });
   const toastText = await page.locator('.pai-context-toast').innerText();
   assert.match(toastText, /已暂停此网站记忆提示 24 小时/);
+  assert.match(toastText, /只暂停右下角 Lens、页面召回和被动入库候选/);
+  assert.match(toastText, /主动划词仍可用/);
   await page.waitForFunction(
     () => !document.querySelector('.pai-context-bubble'),
     { timeout: 5000 },
@@ -1591,7 +2205,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   });
   assert.match(
     await unmutedPage.locator('.pai-context-card').innerText(),
-    /我应该做什么/,
+    /建议动作/,
   );
   await openContextMoreMenu(unmutedPage);
   assert.match(
@@ -1606,6 +2220,14 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.match(
     await unmutedPage.locator('.pai-context-toast').innerText(),
     /已永久关闭此网站记忆提示/,
+  );
+  assert.match(
+    await unmutedPage.locator('.pai-context-toast').innerText(),
+    /只关闭被动网页处理/,
+  );
+  assert.match(
+    await unmutedPage.locator('.pai-context-toast').innerText(),
+    /不删除已有记忆/,
   );
   await unmutedPage.waitForFunction(
     () => !document.querySelector('.pai-context-bubble'),
@@ -1670,6 +2292,104 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   await page.close();
 }
 
+async function verifyContextBubbleDrag(server, context) {
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 900, height: 720 });
+  const diagnostics = attachPageDiagnostics(page, 'bubble-drag');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/normal?bubble-drag=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '拖拽用例应先显示普通被动 Memory Lens',
+  );
+
+  const bubble = page.locator('.pai-context-bubble');
+  const initialBox = await bubble.boundingBox();
+  assert.ok(initialBox, '拖拽前 bubble 应有布局盒');
+
+  await page.mouse.move(
+    initialBox.x + initialBox.width / 2,
+    initialBox.y + initialBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(172, 188, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+
+  assert.equal(
+    await page.locator('.pai-context-card:visible').count(),
+    0,
+    '拖拽结束不应误触发点击展开卡片',
+  );
+
+  const draggedBox = await bubble.boundingBox();
+  assert.ok(draggedBox, '拖拽后 bubble 应仍有布局盒');
+  assert.ok(
+    draggedBox.x < initialBox.x - 300,
+    `bubble 应移动到远离默认右下角的位置，拖拽前 x=${initialBox.x}，拖拽后 x=${draggedBox.x}`,
+  );
+  assert.ok(
+    draggedBox.y < initialBox.y - 250,
+    `bubble 应移动到远离默认右下角的位置，拖拽前 y=${initialBox.y}，拖拽后 y=${draggedBox.y}`,
+  );
+
+  await page.mouse.move(4, 4);
+  await page.waitForTimeout(80);
+  await bubble.dispatchEvent('pointerenter');
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const peekBox = await page.locator('.pai-context-peek').boundingBox();
+  assert.ok(peekBox, '拖拽后 Hover Peek 应有布局盒');
+  assert.ok(
+    peekBox.x < initialBox.x - 250,
+    `Hover Peek 应跟随拖拽后的 bubble 锚点，而不是停在默认右下角，peek x=${peekBox.x}`,
+  );
+
+  await bubble.click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const cardBox = await page.locator('.pai-context-card').boundingBox();
+  assert.ok(cardBox, '拖拽后 Expanded Card 应有布局盒');
+  assert.ok(cardBox.x >= 0, '拖拽后 Expanded Card 不应超出左边界');
+  assert.ok(
+    cardBox.x + cardBox.width <= 900,
+    '拖拽后 Expanded Card 不应超出右边界',
+  );
+  assert.ok(
+    cardBox.x < initialBox.x - 250,
+    `Expanded Card 应跟随拖拽后的 bubble 锚点，而不是停在默认右下角，card x=${cardBox.x}`,
+  );
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  const resetBox = await page.locator('.pai-context-bubble').boundingBox();
+  assert.ok(resetBox, '刷新后 bubble 应重新显示');
+  assert.ok(
+    resetBox.x > 900 - 100,
+    `刷新后不应记住拖拽位置，应回到默认右下角，刷新后 x=${resetBox.x}`,
+  );
+  assert.ok(
+    resetBox.y > 720 - 100,
+    `刷新后不应记住拖拽位置，应回到默认右下角，刷新后 y=${resetBox.y}`,
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('Memory Lens 拖拽页面出现脚本异常');
+  }
+  await page.close();
+}
+
 async function verifyPossibleHoverPeek(server, context) {
   const page = await context.newPage();
   const diagnostics = attachPageDiagnostics(page, 'possible-related');
@@ -1706,6 +2426,8 @@ async function verifyPossibleHoverPeek(server, context) {
   assert.match(peekText, /可能相关/);
   assert.match(peekText, /项目：Falcon/);
   assert.match(peekText, /Falcon migration follow-up/);
+  assert.match(peekText, /只读提示/);
+  assert.match(peekText, /不写入\/插入\/发送/);
   assert.doesNotMatch(peekText, /\b\d{1,3}%\b/);
 
   await bubble.click();
@@ -1882,6 +2604,40 @@ async function verifySourceUrlOnlyProvenance(server, context) {
     state: 'visible',
     timeout: 5000,
   });
+  const cardText = await page.locator('.pai-context-card').textContent();
+  assert.match(
+    cardText || '',
+    /已保存资料：整页资料 \/ 主动保存/,
+    'source memory card should explain that this is a saved source artifact',
+  );
+  assert.match(
+    cardText || '',
+    /主动保存/,
+    'source memory compact metadata should expose capture mode',
+  );
+  assert.match(
+    cardText || '',
+    /整页资料/,
+    'source memory compact metadata should expose source kind',
+  );
+  assert.match(
+    cardText || '',
+    /已保存资料来源可复核/,
+    'source memory card should state that the saved source link is checkable',
+  );
+  assert.match(
+    cardText || '',
+    /资料详情可复核/,
+    'source memory card should state that the capsule detail is checkable',
+  );
+
+  const exploreHref = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('href');
+  assert.ok(
+    exploreHref?.includes('memory-exploring.html#/source-memory/web-memory-source-url-only'),
+    `source memory explore link should open capsule detail: ${exploreHref}`,
+  );
 
   const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
     anchors.map((anchor) => ({
@@ -1901,6 +2657,84 @@ async function verifySourceUrlOnlyProvenance(server, context) {
     visibleLinks.filter((link) => link.href.includes('source-only.example.com')).length,
     1,
     'sourceUrl-only 来源链接不应重复渲染',
+  );
+
+  const sourceRoutePattern = 'https://source-only.example.com/**';
+  await context.route(sourceRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: '<!doctype html><title>Falcon source-only evidence</title><main>Falcon source-only evidence</main>',
+    });
+  });
+  try {
+    const sourcePopupPromise = context.waitForEvent('page');
+    await page
+      .locator('.pai-context-source-link', {
+        hasText: 'Falcon source-only evidence',
+      })
+      .click();
+    const sourcePopup = await sourcePopupPromise;
+    await sourcePopup.waitForURL(
+      'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
+      { timeout: 5000 },
+    );
+    assert.equal(
+      sourcePopup.url(),
+      'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
+      '点击原始来源应打开安全净化后的来源 URL',
+    );
+    await sourcePopup.close();
+  } finally {
+    await context.unroute(sourceRoutePattern);
+  }
+  await page.waitForSelector('.pai-context-source-open-receipt', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const sourceOpenReceipt = await page
+    .locator('.pai-context-source-open-receipt')
+    .innerText();
+  assert.match(sourceOpenReceipt, /来源打开回执/);
+  assert.match(sourceOpenReceipt, /Falcon source-only evidence/);
+  assert.match(sourceOpenReceipt, /打开原始来源/);
+  assert.match(sourceOpenReceipt, /已保存资料来源可复核/);
+  assert.match(sourceOpenReceipt, /不写入记忆/);
+  assert.match(sourceOpenReceipt, /不确认事实/);
+  const sourceOpenTrace = await waitForAmbientTrace(
+    server,
+    (trace) =>
+      trace.action === 'opened_source' &&
+      trace.evidenceRefs?.some((ref) => ref.id === 'web-memory-source-url-only'),
+  );
+  assert.equal(sourceOpenTrace.metadata?.contextSurface, 'web_passive_bubble');
+
+  const detailPopupPromise = context.waitForEvent('page');
+  await page.locator('.pai-context-open-memory').click();
+  const detailPopup = await detailPopupPromise;
+  assert.match(
+    detailPopup.url(),
+    /memory-exploring\.html#\/source-memory\/web-memory-source-url-only/,
+    '点击记忆详情应打开资料详情路由',
+  );
+  await detailPopup.close();
+  await page.waitForFunction(() => {
+    const receipt = document.querySelector('.pai-context-source-open-receipt');
+    return /资料详情/.test(receipt?.textContent || '');
+  });
+  const detailOpenReceipt = await page
+    .locator('.pai-context-source-open-receipt')
+    .innerText();
+  assert.match(detailOpenReceipt, /资料详情/);
+  assert.match(detailOpenReceipt, /资料详情可复核/);
+  assert.match(detailOpenReceipt, /不插入输入框/);
+  await waitForAmbientTrace(
+    server,
+    (trace) =>
+      trace.action === 'opened_source' &&
+      trace.evidenceRefs?.some((ref) => ref.id === 'web-memory-source-url-only') &&
+      server.ambientCalibrationRequests.indexOf(trace) >
+        server.ambientCalibrationRequests.indexOf(sourceOpenTrace),
   );
 
   await page.locator('.pai-context-recall-positive').click();
@@ -1934,6 +2768,211 @@ async function verifySourceUrlOnlyProvenance(server, context) {
     throw new Error('sourceUrl-only 来源展示页面出现脚本异常');
   }
   await page.close();
+}
+
+async function verifySourceMemorySensitiveSourceHidden(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'source-url-sensitive');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/source-url-sensitive`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `source URL sensitive bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'sensitive source URL 页面应触发一次被动召回',
+  );
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const cardText = await page.locator('.pai-context-card').textContent();
+  assert.match(
+    cardText || '',
+    /原始来源已隐藏/,
+    'source memory card should disclose hidden sensitive source URLs',
+  );
+  assert.match(
+    cardText || '',
+    /资料详情可复核/,
+    'source memory card should keep the capsule detail receipt when the raw source URL is hidden',
+  );
+  assert.doesNotMatch(
+    cardText || '',
+    /已保存资料来源可复核/,
+    'source memory card should not claim the raw saved source is checkable when it was hidden',
+  );
+
+  const exploreHref = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('href');
+  assert.ok(
+    exploreHref?.includes('memory-exploring.html#/source-memory/web-memory-source-url-sensitive'),
+    `sensitive source memory explore link should still open capsule detail: ${exploreHref}`,
+  );
+
+  const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
+    anchors.map((anchor) => ({
+      text: anchor.textContent || '',
+      href: anchor.href,
+    })),
+  );
+  assert.equal(
+    visibleLinks.some(
+      (link) =>
+        link.href.includes('token=') ||
+        link.text.includes('Falcon sensitive source evidence'),
+    ),
+    false,
+    `sensitive sourceUrl should not render as a visible card link: ${JSON.stringify(visibleLinks)}`,
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('敏感来源 URL 隐藏页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifySourceStatusReceipts(server, context) {
+  const currentPage = await context.newPage();
+  const currentDiagnostics = attachPageDiagnostics(currentPage, 'source-status-current');
+  const startCurrentCount = server.contextRecallRequests.length;
+  await currentPage.goto(
+    `${server.origin}/source-status-current?utm_source=newsletter&b=2&a=1&fbclid=tracker#receipt-anchor`,
+    {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    },
+  );
+  try {
+    await currentPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `current source status bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCurrentCount}`,
+    );
+    for (const entry of currentDiagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+  await currentPage.locator('.pai-context-bubble').hover();
+  await currentPage.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const currentPeekText = await currentPage.locator('.pai-context-peek').innerText();
+  assert.match(
+    currentPeekText,
+    /个人记忆/,
+    'Hover Peek should expose personal-scope evidence before opening the card',
+  );
+  await currentPage.locator('.pai-context-bubble').click();
+  await currentPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const currentCardText = await currentPage.locator('.pai-context-card').innerText();
+  assert.match(
+    currentCardText,
+    /当前页面来源可复核/,
+    'source status should call out when the card source is the current page',
+  );
+  assert.match(
+    currentCardText,
+    /个人记忆已进入本次提示/,
+    'source status should call out personal-scope passive recall evidence',
+  );
+  assert.match(
+    currentCardText,
+    /个人记忆/,
+    'compact metadata should show the recalled memory scope',
+  );
+  assert.match(
+    currentCardText,
+    /记忆详情可复核/,
+    'source status should keep the memory detail route explicit',
+  );
+  if (currentDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of currentDiagnostics) {
+      log(entry);
+    }
+    throw new Error('当前页来源状态回执页面出现脚本异常');
+  }
+  await currentPage.close();
+
+  const stalePage = await context.newPage();
+  const staleDiagnostics = attachPageDiagnostics(stalePage, 'source-status-stale');
+  const startStaleCount = server.contextRecallRequests.length;
+  await stalePage.goto(`${server.origin}/source-status-stale`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  try {
+    await stalePage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `stale source status bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startStaleCount}`,
+    );
+    for (const entry of staleDiagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+  await stalePage.locator('.pai-context-bubble').hover();
+  await stalePage.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const stalePeekText = await stalePage.locator('.pai-context-peek').innerText();
+  assert.match(
+    stalePeekText,
+    /个人记忆/,
+    'Hover Peek should keep scope visible for stale personal memories',
+  );
+  assert.match(
+    stalePeekText,
+    /120天前记录，行动前复核/,
+    'Hover Peek should warn about stale evidence before opening the card',
+  );
+  await stalePage.locator('.pai-context-bubble').click();
+  await stalePage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const staleCardText = await stalePage.locator('.pai-context-card').innerText();
+  assert.match(
+    staleCardText,
+    /外部来源可复核/,
+    'source status should call out external source provenance',
+  );
+  assert.match(
+    staleCardText,
+    /120天前记录，行动前复核/,
+    'stale source status should warn users to re-check before acting',
+  );
+  if (staleDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of staleDiagnostics) {
+      log(entry);
+    }
+    throw new Error('陈旧来源状态回执页面出现脚本异常');
+  }
+  await stalePage.close();
 }
 
 async function verifyAllowlistMode(server, context, serviceWorker, extensionId) {
@@ -1977,6 +3016,21 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
   await optionsPage.waitForSelector('text=允许站点白名单', {
     timeout: 5000,
   });
+  const emptyAllowlistStatus = await optionsPage
+    .locator('.context-site-control-status')
+    .innerText();
+  assert.match(emptyAllowlistStatus, /站点控制状态/);
+  assert.match(emptyAllowlistStatus, /白名单模式：只允许 0 个站点及其子域名被动提示/);
+  assert.match(
+    emptyAllowlistStatus,
+    /白名单已开启但没有允许站点：普通网页被动提示全部保持静默/,
+  );
+  assert.match(
+    emptyAllowlistStatus,
+    /右下角 Lens、页面召回、整页\/视觉入库候选/,
+  );
+  assert.match(emptyAllowlistStatus, /主动划词检索仍可用/);
+  assert.match(emptyAllowlistStatus, /不删除、不同步、不外发已有记忆，也不反写当前网站/);
   await optionsPage.getByLabel('添加允许站点').fill('127.0.0.1');
   await optionsPage.getByRole('button', { name: '允许', exact: true }).click();
   await optionsPage.waitForSelector('text=已允许 127.0.0.1 显示网页记忆提示', {
@@ -1985,6 +3039,11 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
   await optionsPage.waitForSelector('text=允许站点 · 添加于', {
     timeout: 5000,
   });
+  const allowedStatus = await optionsPage
+    .locator('.context-site-control-status')
+    .innerText();
+  assert.match(allowedStatus, /白名单模式：只允许 1 个站点及其子域名被动提示/);
+  assert.match(allowedStatus, /1 个允许站点外会保持静默/);
 
   const storedAllowedSites = await serviceWorker.evaluate(
     async (storageKey) => chrome.storage.local.get(storageKey),
@@ -2207,6 +3266,15 @@ async function verifyLiveSiteControlStorageSync(server, context, serviceWorker) 
       !document.querySelector('.pai-context-card'),
     { timeout: 5000 },
   );
+  const blockedToast = page.locator('.pai-context-toast', {
+    hasText: '站点控制已生效',
+  });
+  await blockedToast.waitFor({ timeout: 5000 });
+  const blockedToastText = (await blockedToast.textContent()) || '';
+  assert.match(blockedToastText, /站点已永久屏蔽：127\.0\.0\.1/);
+  assert.match(blockedToastText, /已清除右下角 Lens、页面召回和被动入库候选/);
+  assert.match(blockedToastText, /主动划词仍可用/);
+  assert.match(blockedToastText, /不会删除、同步或外发已有记忆/);
 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForTimeout(900);
@@ -2222,6 +3290,14 @@ async function verifyLiveSiteControlStorageSync(server, context, serviceWorker) 
     },
     { blockStorageKey: siteBlockStorageKey },
   );
+  const restoredToast = page.locator('.pai-context-toast', {
+    hasText: '站点控制已恢复',
+  });
+  await restoredToast.waitFor({ timeout: 5000 });
+  const restoredToastText = (await restoredToast.textContent()) || '';
+  assert.match(restoredToastText, /重新评估右下角 Lens、页面召回和被动入库候选/);
+  assert.match(restoredToastText, /主动划词仍受敏感页保护/);
+  assert.match(restoredToastText, /不会写入、删除或外发记忆/);
   await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
 
   await serviceWorker.evaluate(
@@ -2317,6 +3393,18 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
     await page.locator('.pai-context-toast').innerText(),
     /已永久关闭此页面路径记忆提示/,
   );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /只关闭此路径下的被动 Lens、页面召回和整页\/视觉入库候选/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /主动划词仍可用/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /不会删除、同步或外发已有记忆/,
+  );
   const blockedPrefix = `${server.origin}/normal/path-block`;
   const storedPageBlocks = await serviceWorker.evaluate(
     async (storageKey) => chrome.storage.local.get(storageKey),
@@ -2337,6 +3425,14 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
   assert.match(
     await page.locator('.pai-context-toast').innerText(),
     /已恢复此页面路径记忆提示/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /主动划词仍受敏感页保护/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /不会写入、删除或外发记忆/,
   );
   await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
   const restoredPageBlocks = await serviceWorker.evaluate(
@@ -2363,6 +3459,10 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
   assert.match(
     await page.locator('.pai-context-toast').innerText(),
     /已永久关闭此页面路径记忆提示/,
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /主动划词仍可用/,
   );
   await page.close();
 
@@ -2411,6 +3511,9 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
   await optionsPage
     .getByRole('button', { name: `恢复页面路径 ${blockedPrefix}` })
     .click();
+  await optionsPage.waitForSelector('text=不会写入、删除或外发记忆', {
+    timeout: 5000,
+  });
   await optionsPage.waitForSelector('text=当前没有被永久屏蔽的页面路径', {
     timeout: 5000,
   });
@@ -2584,19 +3687,58 @@ async function verifyFeedbackFailureDisclosure(server, context) {
     state: 'visible',
     timeout: 5000,
   });
-  await chooseNegativeFeedbackReason(page, 'generic_topic_overlap');
+  await page.locator('.pai-context-recall-positive').click();
   await waitForRequestCount(
     { contextRecallRequests: server.feedbackRequests },
     startFeedbackCount + 1,
     5000,
   );
+  assert.deepEqual(
+    {
+      targetId: server.feedbackRequests[startFeedbackCount].targetId,
+      action: server.feedbackRequests[startFeedbackCount].action,
+    },
+    {
+      targetId: 'web-memory-feedback-failure',
+      action: 'positive',
+    },
+    '失败夹具的正向反馈应先尝试写入真实 feedback endpoint',
+  );
+  await page.waitForFunction(
+    () =>
+      /反馈记录失败/.test(
+        document.querySelector('.pai-context-toast')?.textContent || '',
+      ),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /反馈写入失败：.*本次没有学习成功/,
+    '正向反馈失败后应在卡片内显示未学习成功回执',
+  );
   assert.equal(
-    server.feedbackRequests[startFeedbackCount].targetId,
+    await page.locator('.pai-context-recall-positive').isDisabled(),
+    false,
+    '正向反馈失败后应解锁有用按钮，允许用户重试',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-negative').isDisabled(),
+    false,
+    '正向反馈失败后不应锁住不相关反馈',
+  );
+  await chooseNegativeFeedbackReason(page, 'generic_topic_overlap');
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 2,
+    5000,
+  );
+  assert.equal(
+    server.feedbackRequests[startFeedbackCount + 1].targetId,
     'web-memory-feedback-failure',
     '失败夹具应先尝试写入真实 feedback endpoint',
   );
   const feedbackFailureDetail = parseFeedbackDetail(
-    server.feedbackRequests[startFeedbackCount].detail,
+    server.feedbackRequests[startFeedbackCount + 1].detail,
   );
   assert.equal(feedbackFailureDetail.interaction, 'memory_relevance_trainer');
   assert.equal(feedbackFailureDetail.feedback_reason, 'generic_topic_overlap');
@@ -2772,6 +3914,83 @@ async function verifySelectedTextTrigger(server, context) {
   await page.waitForSelector('.pai-context-selection-trigger', {
     timeout: 5000,
   });
+  assert.equal(
+    await page.locator('.pai-context-selection-trigger .pai-context-selection-recall').count(),
+    1,
+    '强相关划词命中时选区 toolbar 应显示查关联记忆按钮',
+  );
+  assert.equal(
+    await page.locator('.pai-context-selection-trigger .pai-memory-capture-selection-dock').count(),
+    0,
+    '记住入口不再塞进划词 toolbar，应与查关联记忆 icon 分离',
+  );
+  await page.waitForSelector('.pai-memory-capture-selection-dock', {
+    timeout: 5000,
+  });
+  assert.equal(
+    await page.locator('.pai-memory-capture-selection-dock').count(),
+    1,
+    '强相关划词命中且选区可记住时应在页面最右侧半露出独立的 记住 +',
+  );
+  assert.equal(
+    await page.locator('.pai-memory-capture-selection-dock').getAttribute('aria-label'),
+    '记住这段选中资料，尚未写入；点击后先复核',
+    '划词记住入口应在可访问名称里说明点击前尚未写入',
+  );
+  assert.match(
+    await page.locator('.pai-memory-capture-selection-dock').getAttribute('title'),
+    /这段选中资料尚未写入；点击后先复核，不会因点击直接保存、外发或同步/,
+    '划词记住入口 title 应说明点击只打开复核，不会直接保存',
+  );
+  await page.locator('.pai-memory-capture-selection-dock').hover();
+  await page.waitForFunction(
+    () => /未写入 · 先复核/.test(document.querySelector('.pai-memory-capture-selection-dock')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await page.locator('.pai-memory-capture-selection-dock').innerText(),
+    /未写入 · 先复核/,
+    '划词记住入口 hover 展开后应前置未写入和先复核状态',
+  );
+  assert.match(
+    await page.locator('.pai-context-selection-trigger').getAttribute('aria-label'),
+    /查找关联记忆/,
+    '选区 toolbar 现在只负责查找关联记忆',
+  );
+  assert.match(
+    await page.locator('.pai-context-selection-recall').getAttribute('aria-label'),
+    /查找已有记忆，不保存、不插入、不发送、不调用外部 AI/,
+    '划词查记忆 icon 应在无 hover 时也有明确的可访问边界',
+  );
+  await page.locator('.pai-context-selection-recall').hover();
+  await page.waitForSelector('.pai-context-selection-tooltip', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const selectionTooltipText = await page.locator('.pai-context-selection-tooltip').innerText();
+  assert.match(
+    selectionTooltipText,
+    /查已有记忆/,
+    '划词查记忆 hover tooltip 应命名当前动作',
+  );
+  assert.match(
+    selectionTooltipText,
+    /不保存、不插入、不发送、不调用外部 AI/,
+    '划词查记忆 hover tooltip 应说明它不是保存、插入、发送或外部 AI 调用',
+  );
+  const captureDockGeom = await page
+    .locator('.pai-memory-capture-selection-dock')
+    .evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        centerX: rect.x + rect.width / 2,
+        viewportWidth: window.innerWidth,
+      };
+    });
+  assert.ok(
+    Math.abs(captureDockGeom.centerX - captureDockGeom.viewportWidth) <= 4,
+    '记住 + 应吸附在视口最右侧边缘半露出，而不是跟随选区展示',
+  );
   await waitForRequestCount(server, startCount + 2, 5000);
   assert.equal(
     server.contextRecallRequests.length,
@@ -2816,7 +4035,9 @@ async function verifySelectedTextTrigger(server, context) {
     document.dispatchEvent(new Event('selectionchange'));
   });
   await page.waitForFunction(
-    () => !document.querySelector('.pai-context-selection-trigger'),
+    () =>
+      !document.querySelector('.pai-context-selection-trigger') &&
+      !document.querySelector('.pai-memory-capture-selection-dock'),
     { timeout: 1000 },
   );
   await waitForRequestCount(server, startCount + 3, 5000);
@@ -2825,6 +4046,11 @@ async function verifySelectedTextTrigger(server, context) {
     await page.locator('.pai-context-selection-trigger').count(),
     0,
     '选中新文本时应立即清掉上一条划词 icon，并重新请求后只在新选区强命中时显示',
+  );
+  assert.equal(
+    await page.locator('.pai-memory-capture-selection-dock').count(),
+    0,
+    '选中新文本时应同时清掉上一条记住 +',
   );
 
   await page.evaluate(() => {
@@ -2881,6 +4107,18 @@ async function verifySelectedTextTrigger(server, context) {
     '划词检索卡片不应继续使用页面级 Memory Lens 文案',
   );
   assert.match(selectionCardText, /选中的内容/);
+  assert.match(selectionCardText, /查询/);
+  assert.match(selectionCardText, /只用选中文字作为主检索文本/);
+  assert.match(selectionCardText, /背景/);
+  assert.match(selectionCardText, /页面标题\/附近段落只作辅助上下文/);
+  assert.match(selectionCardText, /命中门槛/);
+  assert.match(selectionCardText, /只有选中文字本身有具体锚点才显示入口/);
+  assert.match(selectionCardText, /背景命中不会单独弹出/);
+  assert.match(selectionCardText, /边界/);
+  assert.match(selectionCardText, /主动划词，不受被动站点静默或屏蔽控制影响/);
+  assert.match(selectionCardText, /安全/);
+  assert.match(selectionCardText, /敏感页\/密钥类选区仍拦截/);
+  assert.match(selectionCardText, /不自动入库、插入或发给外部 AI/);
   assert.match(selectionCardText, /找到的相关记忆/);
   assert.match(selectionCardText, /为什么匹配/);
   assert.match(selectionCardText, /匹配到/);
@@ -2964,9 +4202,14 @@ async function verifySelectedTextTrigger(server, context) {
     'selected_text 没有高相关记忆时不应显示查记忆按钮',
   );
   assert.equal(
+    await emptyPage.locator('.pai-context-selection-trigger').count(),
+    0,
+    'selected_text 没有高相关记忆时不应显示查记忆 toolbar',
+  );
+  assert.equal(
     await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
     1,
-    'selected_text 没有高相关记忆但有保存候选时应显示只保存的 + 入口',
+    'selected_text 没有高相关记忆但有保存候选时应在右侧半露出独立的 记住 +',
   );
   const createStartCount = server.sourceMemoryCreateRequests.length;
   await emptyPage.locator('.pai-memory-capture-selection-dock').click();
@@ -2977,6 +4220,27 @@ async function verifySelectedTextTrigger(server, context) {
     await emptyPage.locator('.pai-memory-capture-note-preview').innerText(),
     /Unmatched launch phrase/,
     '入库确认面板应显示选中文本预览',
+  );
+  const selectionReviewText = await emptyPage.locator('.pai-memory-capture-note-panel').innerText();
+  assert.match(
+    selectionReviewText,
+    /保存范围：选区资料/,
+    '选区入库复核面板应说明保存对象是选区资料',
+  );
+  assert.match(
+    selectionReviewText,
+    /工作记忆/,
+    '选区入库复核面板应说明当前写入的记忆范围',
+  );
+  assert.match(
+    selectionReviewText,
+    /来源 127\.0\.0\.1:\d+/,
+    '选区入库复核面板应显示当前来源 host',
+  );
+  assert.match(
+    selectionReviewText,
+    /资料记忆和网页检索信号/,
+    '选区入库复核面板应说明会写入资料记忆和网页检索信号',
   );
   await emptyPage.getByRole('button', { name: '取消' }).click();
   await emptyPage.waitForSelector('.pai-memory-capture-note-panel', {
@@ -2996,22 +4260,58 @@ async function verifySelectedTextTrigger(server, context) {
   assert.equal(
     await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
     1,
-    '取消保存后应保留 + 入口，方便用户再次确认',
+    '取消保存后应保留右侧 记住 + 入口，方便用户再次确认',
   );
 
   await emptyPage.locator('.pai-memory-capture-selection-dock').click();
+  await emptyPage.locator('.pai-memory-capture-note-input').fill('触发失败');
+  await emptyPage.locator('.pai-memory-capture-note-save').click();
+  await emptyPage.waitForFunction(
+    () => /选区资料未写入/.test(document.querySelector('.pai-memory-capture-note-error')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  const selectionFailureText = await emptyPage.locator('.pai-memory-capture-note-error').innerText();
+  assert.match(
+    selectionFailureText,
+    /选区资料未写入/,
+    '选区保存失败应说明选区资料没有写入',
+  );
+  assert.match(
+    selectionFailureText,
+    /没有创建资料记忆或网页检索信号/,
+    '选区保存失败应说明没有创建 capsule 或 web 检索信号',
+  );
+  assert.match(
+    selectionFailureText,
+    /入口仍保留，可重试/,
+    '选区保存失败应给出可恢复路径',
+  );
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '选区保存失败时不应记录成功创建的 source memory capsule',
+  );
+  assert.equal(
+    await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
+    1,
+    '选区保存失败后应保留右侧 记住 + 入口',
+  );
   await emptyPage.locator('.pai-memory-capture-note-input').fill('用于后续整理');
-  await emptyPage.getByRole('button', { name: '保存' }).click();
+  await emptyPage.locator('.pai-memory-capture-note-save').click();
   await waitForCapturedSourceMemoryCount(server, createStartCount + 1, 5000);
   const savedSourceMemory = server.sourceMemoryCreateRequests.at(-1);
   assert.equal(savedSourceMemory.sourceKind, 'selection');
   assert.equal(savedSourceMemory.note, '用于后续整理');
   assert.match(savedSourceMemory.selectedText, /Unmatched launch phrase/);
   assert.equal(savedSourceMemory.interactions?.manualClick, true);
+  await emptyPage.waitForSelector('.pai-memory-capture-selection-dock', {
+    state: 'detached',
+    timeout: 5000,
+  });
   assert.equal(
-    await emptyPage.locator('.pai-context-selection-trigger').count(),
+    await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
     0,
-    '确认保存后应清掉划词 + 入口',
+    '确认保存后应清掉右侧 记住 +',
   );
   await emptyPage.waitForFunction(
     () => /已保存为资料记忆/.test(document.querySelector('.pai-context-toast')?.textContent || ''),
@@ -3021,6 +4321,11 @@ async function verifySelectedTextTrigger(server, context) {
     await emptyPage.locator('.pai-context-toast').innerText(),
     /已保存为资料记忆/,
     '确认保存后应给出保存成功回执',
+  );
+  assert.match(
+    await emptyPage.locator('.pai-context-toast').innerText(),
+    /资料记忆已写入[\s\S]*不会自动外发/,
+    '确认保存后应展示后端写入回执和非外发边界',
   );
   const viewSavedSourceMemory = emptyPage.getByRole('button', {
     name: '查看资料记忆详情',
@@ -3046,6 +4351,75 @@ async function verifySelectedTextTrigger(server, context) {
     throw new Error('无命中划词页面出现脚本异常');
   }
   await emptyPage.close();
+
+  const backgroundOnlyPage = await context.newPage();
+  const backgroundOnlyDiagnostics = attachPageDiagnostics(backgroundOnlyPage, 'selected-text-background-only');
+  const backgroundOnlyStartCount = server.contextRecallRequests.length;
+  await backgroundOnlyPage.goto(`${server.origin}/selected-background-only`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await backgroundOnlyPage.waitForTimeout(2600);
+  const backgroundOnlyAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    backgroundOnlyAfterInitialCount <= backgroundOnlyStartCount + 1,
+    '背景命中划词页面最多允许普通被动召回尝试',
+  );
+  await backgroundOnlyPage.evaluate(() => {
+    const section = document.querySelector('#selected-background-only-section');
+    if (!section?.firstChild) throw new Error('missing selected background-only section');
+    const text = section.firstChild.textContent || '';
+    const phrase = 'customer communication follow-up wording';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf(phrase));
+    range.setEnd(section.firstChild, text.indexOf(phrase) + phrase.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await waitForRequestCount(server, backgroundOnlyAfterInitialCount + 1, 5000);
+  assert.equal(
+    server.contextRecallRequests.at(-1)?.contextType,
+    'selected_text',
+    '背景命中划词也应先完成 selected_text 匹配',
+  );
+  assert.match(
+    String(server.contextRecallRequests.at(-1)?.primaryText || ''),
+    /customer communication follow-up wording/,
+    '背景命中用例仍应只把选中文字作为 primaryText',
+  );
+  assert.ok(
+    server.contextRecallRequests.at(-1)?.secondaryTexts?.some((item) =>
+      /Falcon owner handoff/.test(String(item || '')),
+    ),
+    '背景命中用例应把附近 Falcon 段落作为 background context',
+  );
+  await backgroundOnlyPage.waitForSelector('.pai-memory-capture-selection-dock', {
+    timeout: 5000,
+  });
+  assert.equal(
+    await backgroundOnlyPage.locator('.pai-context-selection-trigger').count(),
+    0,
+    '只有 secondaryTexts 背景命中的 p1 结果不应显示划词查记忆入口',
+  );
+  assert.equal(
+    await backgroundOnlyPage.locator('.pai-context-selection-recall').count(),
+    0,
+    '背景命中不能退化成可点击的 Selection Memory Search 按钮',
+  );
+  assert.equal(
+    await backgroundOnlyPage.locator('.pai-memory-capture-selection-dock').count(),
+    1,
+    '背景命中但选区可保存时仍应保留右侧独立 记住 + 入口',
+  );
+  if (backgroundOnlyDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of backgroundOnlyDiagnostics) {
+      log(entry);
+    }
+    throw new Error('背景命中划词页面出现脚本异常');
+  }
+  await backgroundOnlyPage.close();
 
   const codexNoisePage = await context.newPage();
   const codexNoiseDiagnostics = attachPageDiagnostics(codexNoisePage, 'selected-text-codex-noise');
@@ -3094,6 +4468,377 @@ async function verifySelectedTextTrigger(server, context) {
     throw new Error('Codex 噪声划词页面出现脚本异常');
   }
   await codexNoisePage.close();
+
+  const repeatedPage = await context.newPage();
+  const repeatedDiagnostics = attachPageDiagnostics(repeatedPage, 'selected-text-repeated-context');
+  const repeatedStartCount = server.contextRecallRequests.length;
+  await repeatedPage.goto(`${server.origin}/selected-same-text-context`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await repeatedPage.waitForTimeout(2600);
+  const repeatedAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    repeatedAfterInitialCount <= repeatedStartCount + 1,
+    '同词不同段落页面最多允许一次普通被动召回尝试',
+  );
+
+  await repeatedPage.evaluate(() => {
+    const section = document.querySelector('#falcon-repeat');
+    if (!section?.firstChild) throw new Error('missing first repeated section');
+    const text = section.firstChild.textContent || '';
+    const phrase = 'owner handoff checklist';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf(phrase));
+    range.setEnd(section.firstChild, text.indexOf(phrase) + phrase.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await repeatedPage.waitForSelector('.pai-context-selection-trigger', {
+    timeout: 5000,
+  });
+  await waitForRequestCount(server, repeatedAfterInitialCount + 1, 5000);
+  const firstRepeatedSelectionRequest = server.contextRecallRequests.at(-1);
+  assert.equal(firstRepeatedSelectionRequest?.contextType, 'selected_text');
+  assert.match(
+    String(firstRepeatedSelectionRequest?.primaryText || ''),
+    /owner handoff checklist/,
+    '第一次重复短语选择应以选中文字作为 primaryText',
+  );
+  assert.ok(
+    firstRepeatedSelectionRequest?.secondaryTexts?.some((item) =>
+      /Falcon launch notes/.test(String(item || '')),
+    ),
+    '第一次重复短语选择应把 Falcon 段落作为 background context',
+  );
+
+  await repeatedPage.evaluate(() => {
+    const section = document.querySelector('#orion-repeat');
+    if (!section?.firstChild) throw new Error('missing second repeated section');
+    const text = section.firstChild.textContent || '';
+    const phrase = 'owner handoff checklist';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf(phrase));
+    range.setEnd(section.firstChild, text.indexOf(phrase) + phrase.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await waitForRequestCount(server, repeatedAfterInitialCount + 2, 5000);
+  const secondRepeatedSelectionRequest = server.contextRecallRequests.at(-1);
+  assert.equal(secondRepeatedSelectionRequest?.contextType, 'selected_text');
+  assert.match(
+    String(secondRepeatedSelectionRequest?.primaryText || ''),
+    /owner handoff checklist/,
+    '第二次重复短语选择仍应只把选中文字作为 primaryText',
+  );
+  assert.ok(
+    secondRepeatedSelectionRequest?.secondaryTexts?.some((item) =>
+      /Orion renewal notes/.test(String(item || '')),
+    ),
+    '同页相同选中文字切到不同段落时应重新召回并携带新的 background context',
+  );
+  await repeatedPage.waitForSelector('.pai-context-selection-trigger', {
+    timeout: 5000,
+  });
+  await repeatedPage.locator('.pai-context-selection-recall').click();
+  await repeatedPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await repeatedPage.locator('.pai-context-card').innerText(),
+    /Selected text Orion owner handoff/,
+    '同页相同选中文字切换到第二个段落时不应复用第一段的划词结果',
+  );
+  if (repeatedDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of repeatedDiagnostics) {
+      log(entry);
+    }
+    throw new Error('同词不同段落划词页面出现脚本异常');
+  }
+  await repeatedPage.close();
+}
+
+async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
+  await serviceWorker.evaluate(
+    async ({ blockStorageKey }) => {
+      await chrome.storage.local.set({ [blockStorageKey]: {} });
+    },
+    { blockStorageKey: siteBlockStorageKey },
+  );
+
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'page-capture-review');
+  const createStartCount = server.sourceMemoryCreateRequests.length;
+  await page.goto(`${server.origin}/page-capture-review`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  await page.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+  });
+  await page.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+  const pageCaptureChip = page.locator('.pai-memory-capture-page-chip');
+  assert.equal(
+    await pageCaptureChip.getAttribute('aria-label'),
+    '建议记住当前页面资料，尚未写入，点击后先复核',
+    '整页入库建议入口应在读屏文案里说明尚未写入且会先复核',
+  );
+  assert.match(
+    await pageCaptureChip.getAttribute('title'),
+    /当前页面资料尚未写入[\s\S]*不会因点击直接保存、外发或同步/,
+    '整页入库建议入口 hover title 应说明点击前没有写入和外发',
+  );
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '整页入库建议入口出现时不应立即保存 source memory capsule',
+  );
+  await pageCaptureChip.hover();
+  await page.waitForFunction(
+    () => {
+      const receipt = document.querySelector('.pai-memory-capture-page-chip-receipt');
+      if (!receipt || receipt.textContent?.trim() !== '未写入 · 先复核') return false;
+      const style = window.getComputedStyle(receipt);
+      return style.opacity !== '0' && Number.parseFloat(style.width) > 0;
+    },
+    { timeout: 5000 },
+  );
+
+  await pageCaptureChip.click();
+  await page.waitForSelector('.pai-page-memory-capture-review-panel', {
+    timeout: 5000,
+  });
+  const reviewText = await page.locator('.pai-page-memory-capture-review-panel').innerText();
+  assert.match(reviewText, /保存当前页面资料/);
+  assert.match(reviewText, /Falcon page capture review packet/);
+  assert.match(
+    reviewText,
+    /保存范围：当前页面资料/,
+    '整页入库复核面板应说明保存对象是当前页面资料',
+  );
+  assert.match(
+    reviewText,
+    /工作记忆/,
+    '整页入库复核面板应说明当前写入的记忆范围',
+  );
+  assert.match(
+    reviewText,
+    /来源 127\.0\.0\.1:\d+/,
+    '整页入库复核面板应显示当前来源 host',
+  );
+  assert.match(
+    reviewText,
+    /资料记忆和网页检索信号/,
+    '整页入库复核面板应说明会写入资料记忆和网页检索信号',
+  );
+  assert.match(
+    await page.locator('.pai-memory-capture-note-preview').innerText(),
+    /Falcon webpage capture review notes/,
+    '整页入库复核面板应展示当前页面内容预览',
+  );
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '打开整页入库复核面板不应立即保存 source memory capsule',
+  );
+
+  await page.getByRole('button', { name: '取消' }).click();
+  await page.waitForSelector('.pai-page-memory-capture-review-panel', {
+    state: 'detached',
+    timeout: 5000,
+  });
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '取消整页入库复核面板时不应保存 source memory capsule',
+  );
+  assert.equal(
+    await page.locator('.pai-memory-capture-page-chip').count(),
+    1,
+    '取消整页保存后应保留页面 + 入口',
+  );
+
+  const candidateCountAfterChip = server.sourceMemoryCandidateRequests.length;
+  await serviceWorker.evaluate(
+    async ({ blockStorageKey }) => {
+      await chrome.storage.local.set({
+        [blockStorageKey]: { '127.0.0.1': Date.now() },
+      });
+    },
+    { blockStorageKey: siteBlockStorageKey },
+  );
+  await page.waitForFunction(
+    () =>
+      !document.querySelector('.pai-memory-capture-page-chip') &&
+      !document.querySelector('.pai-page-memory-capture-review-panel') &&
+      !document.querySelector('.pai-visual-memory-preview-panel'),
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('copy'));
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  await page.waitForTimeout(1600);
+  assert.equal(
+    server.sourceMemoryCandidateRequests.length,
+    candidateCountAfterChip,
+    '已屏蔽站点收到 storage 更新后不应继续评估被动整页入库',
+  );
+
+  await serviceWorker.evaluate(
+    async ({ blockStorageKey }) => {
+      await chrome.storage.local.set({ [blockStorageKey]: {} });
+    },
+    { blockStorageKey: siteBlockStorageKey },
+  );
+  await page.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+
+  await page.locator('.pai-memory-capture-page-chip').click();
+  await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-input').fill(
+    '触发失败',
+  );
+  await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-save').click();
+  await page.waitForFunction(
+    () => /页面资料未写入/.test(document.querySelector('.pai-page-memory-capture-review-panel .pai-memory-capture-note-error')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  const pageFailureText = await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-error').innerText();
+  assert.match(
+    pageFailureText,
+    /页面资料未写入/,
+    '整页保存失败应说明页面资料没有写入',
+  );
+  assert.match(
+    pageFailureText,
+    /没有创建资料记忆或网页检索信号/,
+    '整页保存失败应说明没有创建 capsule 或 web 检索信号',
+  );
+  assert.match(
+    pageFailureText,
+    /入口仍保留，可重试/,
+    '整页保存失败应给出可恢复路径',
+  );
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '整页保存失败时不应记录成功创建的 source memory capsule',
+  );
+  await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-input').fill(
+    '用于 Falcon QBR 资料包',
+  );
+  await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-save').click();
+  await waitForCapturedSourceMemoryCount(server, createStartCount + 1, 5000);
+
+  const savedSourceMemory = server.sourceMemoryCreateRequests.at(-1);
+  assert.equal(savedSourceMemory.sourceKind, 'webpage');
+  assert.equal(savedSourceMemory.captureMode, 'manual');
+  assert.equal(savedSourceMemory.captureReason, '用户点击右侧半露出 + 记住当前页面');
+  assert.equal(savedSourceMemory.note, '用于 Falcon QBR 资料包');
+  assert.equal(savedSourceMemory.interactions?.manualClick, true);
+  assert.match(savedSourceMemory.text, /Falcon webpage capture review notes/);
+  await page.waitForSelector('.pai-page-memory-capture-review-panel', {
+    state: 'detached',
+    timeout: 5000,
+  });
+  assert.equal(
+    await page.locator('.pai-memory-capture-page-chip').count(),
+    0,
+    '确认保存后应清掉页面 + 入口',
+  );
+  await page.waitForFunction(
+    () => /已保存当前页面资料/.test(document.querySelector('.pai-context-toast')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /资料记忆已写入[\s\S]*网页检索信号[\s\S]*不会自动外发/,
+    '整页保存成功后应展示后端写入回执和网页检索信号边界',
+  );
+  const viewSavedSourceMemory = page.getByRole('button', {
+    name: '查看资料记忆详情',
+  });
+  await viewSavedSourceMemory.waitFor({ timeout: 5000 });
+  const [detailPage] = await Promise.all([
+    context.waitForEvent('page', { timeout: 5000 }),
+    viewSavedSourceMemory.click(),
+  ]);
+  await detailPage.waitForURL(/memory-exploring\.html#\/source-memory\/source-memory-capsule-\d+/, {
+    timeout: 5000,
+  });
+  await detailPage.close();
+
+  const duplicatePage = await context.newPage();
+  const duplicateDiagnostics = attachPageDiagnostics(duplicatePage, 'page-capture-duplicate-no-note');
+  const duplicateStartCount = server.sourceMemoryCreateRequests.length;
+  await duplicatePage.goto(`${server.origin}/page-capture-review?duplicate-page-capture=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await duplicatePage.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+  });
+  await duplicatePage.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+  await duplicatePage.locator('.pai-memory-capture-page-chip').click();
+  await duplicatePage.waitForSelector('.pai-page-memory-capture-review-panel', {
+    timeout: 5000,
+  });
+  await duplicatePage.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-save').click();
+  await waitForCapturedSourceMemoryCount(server, duplicateStartCount + 1, 5000);
+  await duplicatePage.waitForFunction(
+    () => /当前页面已在记忆中/.test(document.querySelector('.pai-context-toast')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  const duplicateToastText = await duplicatePage.locator('.pai-context-toast').innerText();
+  assert.match(
+    duplicateToastText,
+    /本次没有新建第二条资料/,
+    '重复整页保存无备注时应说明没有新建第二条资料',
+  );
+  assert.match(
+    duplicateToastText,
+    /没有更新备注或正文/,
+    '重复整页保存无备注时应说明没有更新已有内容',
+  );
+  assert.match(
+    duplicateToastText,
+    /已有资料和关联网页检索信号保持启用/,
+    '重复整页保存无备注时应说明只是保留已有检索信号',
+  );
+  assert.doesNotMatch(
+    duplicateToastText,
+    /已创建或更新 source-memory capsule/,
+    '重复整页保存无备注时不应沿用新建或更新式写入回执',
+  );
+  await duplicatePage.close();
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('整页入库复核页面出现脚本异常');
+  }
+  if (duplicateDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of duplicateDiagnostics) {
+      log(entry);
+    }
+    throw new Error('重复整页入库复核页面出现脚本异常');
+  }
+  await page.close();
 }
 
 async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
@@ -3125,6 +4870,11 @@ async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
     await cardPage.locator('.pai-context-selection-trigger').count(),
     0,
     '选中 Memory Lens 自己卡片里的文字不应再显示划词入口',
+  );
+  assert.equal(
+    await cardPage.locator('.pai-memory-capture-selection-dock').count(),
+    0,
+    '选中 Memory Lens 自己卡片里的文字不应显示记住 +',
   );
   assert.equal(
     server.contextRecallRequests.length,
@@ -3167,6 +4917,11 @@ async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
     await credentialPage.locator('.pai-context-selection-trigger').count(),
     0,
     '明显像 API key 的选区不应显示划词入口',
+  );
+  assert.equal(
+    await credentialPage.locator('.pai-memory-capture-selection-dock').count(),
+    0,
+    '明显像 API key 的选区不应显示记住 +',
   );
   assert.equal(
     server.contextRecallRequests.length,
@@ -3226,6 +4981,11 @@ async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
     await sensitivePage.locator('.pai-context-selection-trigger').count(),
     0,
     'selected_text 响应回来前页面变成敏感表单时不应显示划词 icon',
+  );
+  assert.equal(
+    await sensitivePage.locator('.pai-memory-capture-selection-dock').count(),
+    0,
+    'selected_text 响应回来前页面变成敏感表单时不应显示记住 +',
   );
   assert.equal(
     await sensitivePage.locator('.pai-context-card:visible').count(),
@@ -3410,6 +5170,12 @@ async function verifyUnsafeExploreRoute(server, context) {
     state: 'visible',
     timeout: 5000,
   });
+  const cardText = await page.locator('.pai-context-card').innerText();
+  assert.match(
+    cardText,
+    /记忆入口已隐藏/,
+    '不安全的 exploreLink 被过滤时应在卡片里显示来源回执',
+  );
   const hrefs = await page.$$eval('.pai-context-card a', (anchors) =>
     anchors.map((anchor) => anchor.href),
   );
@@ -3608,6 +5374,7 @@ try {
   await verifyRehearsalLensPresentation(server, context);
   await verifyJiraIssueContext(server, context);
   await verifySelectedTextTrigger(server, context);
+  await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
   await verifySelectedTextPrivacyAndUiBoundaries(server, context);
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
@@ -3623,9 +5390,12 @@ try {
   );
   await verifyLiveSiteControlStorageSync(server, context, launch.serviceWorker);
   await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyContextBubbleDrag(server, context);
   await verifyPossibleHoverPeek(server, context);
   await verifyMetadataSummaryPresentation(server, context);
   await verifySourceUrlOnlyProvenance(server, context);
+  await verifySourceMemorySensitiveSourceHidden(server, context);
+  await verifySourceStatusReceipts(server, context);
   await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');

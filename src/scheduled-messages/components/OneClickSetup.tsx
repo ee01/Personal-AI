@@ -29,6 +29,8 @@ interface OneClickSetupProps {
   onComplete: (result: InitializationResult) => void;
 }
 
+type SetupRequestPhase = 'initial' | 'authorization';
+
 function formatSheetIdForDisplay(sheetId: string): string {
   if (sheetId.length <= 20) {
     return sheetId;
@@ -48,6 +50,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const [tempResult, setTempResult] = useState<InitializationResult | null>(null);
   const [needsAppScriptAPI, setNeedsAppScriptAPI] = useState(false);
   const [appScriptAPIUrl, setAppScriptAPIUrl] = useState('');
+  const [setupRequestPhase, setSetupRequestPhase] = useState<SetupRequestPhase | null>(null);
   const [manualBindDecision, setManualBindDecision] = useState<ManualBindDecision | null>(null);
   const [showAllManualBindDiffs, setShowAllManualBindDiffs] = useState(false);
   const manualBindFeedback = getManualBindSheetInputFeedback(manualSheetUrl);
@@ -55,6 +58,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const handleOneClickSetup = async () => {
     setIsInitializing(true);
     setError('');
+    setSetupRequestPhase('initial');
     
     try {
       // 获取 Google OAuth token（强制刷新以应用新权限）
@@ -79,6 +83,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         setAuthUrl(result.authUrl || '');
         setCurrentStep('');
         setIsInitializing(false);
+        setSetupRequestPhase(null);
       } else if (result.success) {
         setCurrentStep('初始化成功！');
         onComplete(result);
@@ -88,6 +93,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         setAppScriptAPIUrl(result.appScriptAPIUrl || 'https://script.google.com/home/usersettings');
         setCurrentStep('');
         setIsInitializing(false);
+        setSetupRequestPhase(null);
       } else {
         throw new Error(result.error || '初始化失败');
       }
@@ -96,6 +102,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       console.error('初始化失败:', err);
       setError(err.message || '初始化失败，请重试');
       setIsInitializing(false);
+      setSetupRequestPhase(null);
     }
   };
   
@@ -107,6 +114,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     
     setIsInitializing(true);
     setError('');
+    setSetupRequestPhase('authorization');
     
     try {
       setCurrentStep('正在完成初始化（第6-8步：创建触发器、添加示例数据、保存配置）...');
@@ -149,6 +157,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       }
       
       setIsInitializing(false);
+      setSetupRequestPhase(null);
     }
   };
   
@@ -161,6 +170,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     
     setIsInitializing(true);
     setError('');
+    setSetupRequestPhase(null);
     setManualBindDecision(null);
     setCurrentStep('正在验证 Sheet 地址...');
     
@@ -321,6 +331,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
     setIsInitializing(true);
     setError('');
+    setSetupRequestPhase(null);
     setCurrentStep('正在保留本机配置并同步到 Sheet...');
 
     try {
@@ -353,6 +364,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
     setIsInitializing(true);
     setError('');
+    setSetupRequestPhase(null);
     setCurrentStep(
       manualBindDecision.writeMode === 'sync'
         ? '正在写回 Config 并恢复本机...'
@@ -512,6 +524,35 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       </>
     );
   };
+
+  const renderSetupRequestReceipt = (phase: SetupRequestPhase) => {
+    const isAuthorizationPhase = phase === 'authorization';
+    const title = isAuthorizationPhase
+      ? '授权完成请求已提交'
+      : '初始化请求已提交';
+    const details = isAuthorizationPhase
+      ? [
+          '正在沿用前一步创建的维护表、Apps Script 项目、Web App 和 deployment，不会重新开一套维护表。',
+          '本阶段会设置分钟触发器、写入测试消息并保存 Config；测试消息只是排程样例，不会在点击后立即发送正式消息。',
+          '如果授权或触发器创建失败，页面会停在可恢复状态；不会删除维护表、不会改 Logs，也不会开放 anyone-with-link 编辑权限。',
+        ]
+      : [
+          '正在获取 Google 授权并创建维护表、Apps Script 项目和 Web App；本阶段还不会设置触发器、写测试消息或发送消息。',
+          '共享只尝试组织内编辑；如果域内共享失败，会保持仅创建者可编辑，不会静默降级成 anyone-with-link 可编辑。',
+          '如果需要开启 Apps Script API 或完成授权，页面会停在下一步；不会继续静默写 Config 或执行队列。',
+        ];
+
+    return (
+      <div style={styles.setupRequestReceipt} role="status" aria-live="polite">
+        <div style={styles.setupRequestReceiptTitle}>{title}</div>
+        {details.map((detail) => (
+          <div key={detail} style={styles.setupRequestReceiptDetail}>
+            {detail}
+          </div>
+        ))}
+      </div>
+    );
+  };
   
   return (
     <div style={styles.container}>
@@ -652,6 +693,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
               <div style={styles.spinner}></div>
               <p style={styles.loadingText}>{currentStep}</p>
               <p style={styles.loadingHint}>这可能需要 10-15 秒，请稍候...</p>
+              {setupRequestPhase && renderSetupRequestReceipt(setupRequestPhase)}
             </div>
           )}
           </>
@@ -843,6 +885,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             <div style={styles.spinner}></div>
             <p style={styles.loadingText}>{currentStep}</p>
             <p style={styles.loadingHint}>这可能需要 10-15 秒，请稍候...</p>
+            {setupRequestPhase && renderSetupRequestReceipt(setupRequestPhase)}
           </div>
         )}
       </div>
@@ -900,6 +943,27 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: '1px solid #b3d7ff',
     borderRadius: '6px',
     lineHeight: 1.5,
+  },
+  setupRequestReceipt: {
+    marginTop: '16px',
+    padding: '12px 14px',
+    backgroundColor: '#f8fafc',
+    border: '1px solid #cbd5e1',
+    borderRadius: '6px',
+    textAlign: 'left',
+    color: '#334155',
+  },
+  setupRequestReceiptTitle: {
+    fontSize: '13px',
+    fontWeight: 700,
+    marginBottom: '6px',
+    color: '#0f172a',
+  },
+  setupRequestReceiptDetail: {
+    fontSize: '12px',
+    lineHeight: 1.5,
+    marginTop: '4px',
+    overflowWrap: 'anywhere',
   },
   primaryButton: {
     width: '100%',

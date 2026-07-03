@@ -20,6 +20,10 @@ export interface UpdateCheckResult {
   error?: string;
 }
 
+export interface UpdateCheckOptions {
+  syncKnownVersionToConfig?: boolean;
+}
+
 export interface UpdateResult {
   success: boolean;
   message: string;
@@ -324,7 +328,8 @@ export class AppScriptUpdater {
   /**
    * 检查是否需要更新
    */
-  async checkForUpdates(): Promise<UpdateCheckResult> {
+  async checkForUpdates(options: UpdateCheckOptions = {}): Promise<UpdateCheckResult> {
+    const { syncKnownVersionToConfig = true } = options;
     let latestVersion = 'unknown';
 
     try {
@@ -363,7 +368,7 @@ export class AppScriptUpdater {
           })
         : undefined;
 
-      if (!needsUpdate) {
+      if (!needsUpdate && syncKnownVersionToConfig) {
         await this.syncKnownDeployedVersionToConfigIfStale(
           deployedVersionInfo,
           latestVersionInfo,

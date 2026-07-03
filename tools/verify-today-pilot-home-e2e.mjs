@@ -131,7 +131,22 @@ function rehearsalCard(id = 'card-hidden-rehearsal') {
       staleEvidenceCount: 0,
       sensitiveEvidenceCount: 0,
     },
-    contextPack: { preview: 'Mission: rehearse concise answer' },
+    contextPack: {
+      preview: 'Mission: rehearse concise answer',
+      attention: {
+        delivery: 'board',
+        reason: 'Visible in Day Pilot without a push interruption.',
+      },
+      rehearsalCueReceipt: {
+        label: '今日预演提示',
+        cueLabel: '人物 Sophia · 项目 AI Tools · 会议 CoP AI 工具分享',
+        cueDetail: '命中人物1、项目1、会议1 组线索',
+        statusLabel: 'Active 预演，今天适合提前复习',
+        script: '遇到质疑时先复述对方问题，再给出边界。',
+        boundary: '只作为今日准备提醒，不会自动发言、发消息或执行外部动作。',
+        tone: 'info',
+      },
+    },
     createdAt: now,
     updatedAt: now,
   };
@@ -168,7 +183,13 @@ function decisionCard() {
       staleEvidenceCount: 0,
       sensitiveEvidenceCount: 0,
     },
-    contextPack: { preview: 'Mission: approve OpenClaw retry' },
+    contextPack: {
+      preview: 'Mission: approve OpenClaw retry',
+      attention: {
+        delivery: 'interrupt',
+        reason: 'High-priority now card can consume one interruption slot.',
+      },
+    },
     createdAt: now,
     updatedAt: now,
   };
@@ -206,7 +227,13 @@ function contextPackCard() {
       staleEvidenceCount: 0,
       sensitiveEvidenceCount: 1,
     },
-    contextPack: { preview: 'Mission: document webpage-mcp link checks' },
+    contextPack: {
+      preview: 'Mission: document webpage-mcp link checks',
+      attention: {
+        delivery: 'board',
+        reason: 'Visible in Day Pilot without a push interruption.',
+      },
+    },
     createdAt: now,
     updatedAt: now,
   };
@@ -215,6 +242,55 @@ function contextPackCard() {
 const hiddenRehearsal = rehearsalCard();
 const visibleDecision = decisionCard();
 const copyableContextCard = contextPackCard();
+let currentCatchUpBrief = {
+  sinceTs: now - 90 * 60,
+  nowTs: now,
+  total: 3,
+  highPriority: [
+    {
+      messageId: 'catch-up-high-1',
+      source: 'ringcentral',
+      title: '客户导出需求变更',
+      preview: '客户改了导出需求，需要今天确认 owner 和回归窗口。',
+      timestamp: now - 2400,
+      importance: 0.91,
+      salience: 0.52,
+      waiting: false,
+    },
+    {
+      messageId: 'catch-up-waiting-1',
+      source: 'ringcentral',
+      title: 'Harpreet 等你确认 MTR-148115',
+      preview: '@你 MTR-148115 的 estimate 能今天回我吗？',
+      timestamp: now - 1200,
+      importance: 0.82,
+      salience: 0.48,
+      waiting: true,
+    },
+  ],
+  waiting: [
+    {
+      messageId: 'catch-up-waiting-1',
+      source: 'ringcentral',
+      title: 'Harpreet 等你确认 MTR-148115',
+      preview: '@你 MTR-148115 的 estimate 能今天回我吗？',
+      timestamp: now - 1200,
+      importance: 0.82,
+      salience: 0.48,
+      waiting: true,
+    },
+    {
+      messageId: 'catch-up-waiting-2',
+      source: 'ringcentral',
+      title: 'Maya 等你确认回归窗口',
+      preview: '@你 regression window 今天能不能先给一个范围？',
+      timestamp: now - 900,
+      importance: 0.72,
+      salience: 0.41,
+      waiting: true,
+    },
+  ],
+};
 let currentBrief = baseBrief({
   attentionBudget: {
     maxInterruptions: 3,
@@ -240,6 +316,16 @@ let currentBrief = baseBrief({
 let failTodayPilotRequest = true;
 let failStatsRequest = true;
 const ambientTraceRequests = [];
+let delayFeedbackCardId = null;
+let releaseDelayedFeedback = null;
+
+async function waitForDelayedFeedbackHook() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (releaseDelayedFeedback) return releaseDelayedFeedback;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('Delayed Today Pilot feedback request was not observed');
+}
 
 function collectPageErrors(page) {
   const errors = [];
@@ -271,6 +357,38 @@ try {
         await route.fulfill(jsonResponse({ error: 'fixture unavailable' }, 503));
         return;
       }
+      await route.fulfill(jsonResponse({ brief: currentBrief }));
+      return;
+    }
+    if (pathname.endsWith('/today-pilot/catch-up')) {
+      await route.fulfill(jsonResponse(currentCatchUpBrief));
+      return;
+    }
+    const feedbackMatch = pathname.match(
+      /\/today-pilot\/cards\/([^/]+)\/feedback$/,
+    );
+    if (feedbackMatch) {
+      const cardId = decodeURIComponent(feedbackMatch[1]);
+      if (delayFeedbackCardId === cardId) {
+        await new Promise((resolve) => {
+          releaseDelayedFeedback = resolve;
+        });
+        releaseDelayedFeedback = null;
+        delayFeedbackCardId = null;
+      }
+      currentBrief = {
+        ...currentBrief,
+        attentionBudget: {
+          ...currentBrief.attentionBudget,
+          plannedInterruptions: currentBrief.attentionBudget.plannedInterruptions.filter(
+            (item) => item.cardId !== cardId,
+          ),
+          boardOnlyCardIds: currentBrief.attentionBudget.boardOnlyCardIds.filter(
+            (item) => item !== cardId,
+          ),
+        },
+        cards: currentBrief.cards.filter((card) => card.id !== cardId),
+      };
       await route.fulfill(jsonResponse({ brief: currentBrief }));
       return;
     }
@@ -306,6 +424,8 @@ try {
           },
           sourceSummary: {
             evidenceCount: copyableContextCard.evidenceRefs.length,
+            renderedEvidenceCount: copyableContextCard.evidenceRefs.length,
+            omittedEvidenceCount: 0,
             sourceKinds: { message: 1 },
             redactionApplied: true,
             truncated: false,
@@ -460,10 +580,10 @@ try {
       quietWindows: [],
     },
     sourceStats: {
-      messages: { scanned: 1, totalRecent: 1 },
+      messages: { scanned: 1, totalRecent: 3, selected: 0 },
       calendar: { scanned: 0, upcoming: 0 },
       notifications: { scanned: 0, pending: 0 },
-      actions: { scanned: 1, queued: 1 },
+      actions: { scanned: 1, queued: 1, selected: 1 },
       reflections: { scanned: 0, active: 0 },
       rehearsals: { scanned: 1, active: 1 },
       skills: { scanned: 0, suggestions: 0 },
@@ -484,6 +604,14 @@ try {
     hasText: '确认 OpenClaw 是否继续重试部署查询',
   });
   await decisionMission.locator('.mission-head').click();
+  await decisionMission
+    .locator('.card-ranking-receipt', { hasText: '计划打断' })
+    .waitFor({ timeout: 15000 });
+  await decisionMission
+    .locator('.card-ranking-receipt', {
+      hasText: '不会自动批准、发送、执行或改写外部系统',
+    })
+    .waitFor({ timeout: 15000 });
   await decisionMission
     .getByText('OpenClaw 外部执行')
     .waitFor({ timeout: 15000 });
@@ -519,17 +647,205 @@ try {
       timeout: 600,
     }),
   );
-  await page.locator('.ranking-chip', { hasText: '2/2' }).waitFor({
+  await page.locator('.ranking-chip', { hasText: '2/4' }).waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('.ranking-chip', { hasText: '1 条候选未入选首页' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.ranking-chip', {
+      hasText: '2 条前置降噪信号 · 消息 2',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('.ranking-chip', { hasText: '1/3' }).waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('.catch-up-receipt', {
+      hasText: '3 条新信号，高优 2 条，等你回 2 条',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-receipt', {
+      hasText: '其中 1 条等你回已在高优变化展示',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-receipt', {
+      hasText: '不会标已读、代回复、改排序或写回来源系统',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-item', { hasText: '客户导出需求变更' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-item', { hasText: 'Harpreet 等你确认 MTR-148115' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-column-note', {
+      hasText: '1 条等你回已在高优变化展示',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.catch-up-item.waiting', { hasText: 'Maya 等你确认回归窗口' })
+    .waitFor({ timeout: 15000 });
+  assert.equal(
+    await page
+      .locator('.catch-up-item.waiting', {
+        hasText: 'Harpreet 等你确认 MTR-148115',
+      })
+      .count(),
+    0,
+    'overlapping catch-up item should not be duplicated in the waiting column',
+  );
   await assert.rejects(
     page.locator('.ranking-chip', { hasText: '2/3' }).waitFor({
       timeout: 600,
     }),
   );
+  delayFeedbackCardId = visibleDecision.id;
+  await decisionMission
+    .getByRole('button', { name: '从首页移除' })
+    .click();
+  await page
+    .locator('.mission-feedback-receipt', {
+      hasText: '正在提交反馈：移出首页',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.mission-feedback-receipt', {
+      hasText: '尚未写入 Today Pilot 展示/排序反馈',
+    })
+    .waitFor({ timeout: 15000 });
+  await decisionMission.waitFor({ timeout: 15000 });
+  await decisionMission
+    .locator('.mission-pending-note', {
+      hasText: '等待 Memory Service 确认',
+    })
+    .waitFor({ timeout: 15000 });
+  assert.equal(
+    await decisionMission.getByRole('button', { name: '从首页移除' }).isDisabled(),
+    true,
+    'feedback button should stay disabled while Memory Service has not confirmed',
+  );
+  const releaseFeedback = await waitForDelayedFeedbackHook();
+  releaseFeedback();
+  await page
+    .locator('.mission-feedback-receipt', { hasText: 'Mission 反馈回执' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.mission-feedback-receipt', {
+      hasText: '只记录 Today Pilot 的完成反馈',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.mission-feedback-receipt', {
+      hasText: '不会把来源任务、动作队列、决策、消息或外部系统标记为已完成',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.getByText('今天有 0 件事值得关注').waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.ranking-chip', { hasText: '0 条证据进入首页 mission' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.ranking-chip', {
+      hasText: '2 条候选未入选首页',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.ranking-chip', {
+      hasText: '2 条前置降噪信号 · 消息 2',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.ranking-note', {
+      hasText: '当前是反馈后的可见快照',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.ranking-note', {
+      hasText: '不代表来源任务完成、消息已读、排程变更或外部系统已同步',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  assert.equal(await page.locator('.budget-count').innerText(), '0 / 3');
+
+  await worker.evaluate(async () => {
+    const { envConfig = {} } = await chrome.storage.local.get('envConfig');
+    await chrome.storage.local.set({
+      envConfig: {
+        ...envConfig,
+        SCENE_REHEARSAL_DISPLAY_ENABLED: true,
+      },
+    });
+  });
+  currentBrief = baseBrief({
+    id: 'brief-visible-rehearsal-receipt',
+    attentionBudget: {
+      maxInterruptions: 3,
+      usedInterruptions: 0,
+      plannedInterruptions: [],
+      boardOnlyCardIds: [hiddenRehearsal.id],
+      quietWindows: [],
+    },
+    sourceStats: {
+      messages: { scanned: 0, totalRecent: 0 },
+      calendar: { scanned: 0, upcoming: 0 },
+      notifications: { scanned: 0, pending: 0 },
+      actions: { scanned: 0, queued: 0 },
+      reflections: { scanned: 0, active: 0 },
+      rehearsals: { scanned: 1, active: 1 },
+      skills: { scanned: 0, suggestions: 0 },
+      relationships: { scanned: 0, highFrequencyPeople: 0 },
+    },
+    cards: [hiddenRehearsal],
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const rehearsalMission = page.locator('.mission-card', {
+    hasText: '会前使用少讲结论的预演脚本',
+  });
+  await rehearsalMission.waitFor({ timeout: 15000 });
+  await rehearsalMission.locator('.mission-head').click();
+  await rehearsalMission
+    .locator('.sub-title', { hasText: '预演回执' })
+    .waitFor({ timeout: 15000 });
+  await rehearsalMission
+    .locator('.rehearsal-receipt', { hasText: '人物 Sophia' })
+    .waitFor({ timeout: 15000 });
+  await rehearsalMission
+    .locator('.rehearsal-receipt', {
+      hasText: '遇到质疑时先复述对方问题',
+    })
+    .waitFor({ timeout: 15000 });
+  await rehearsalMission
+    .locator('.rehearsal-receipt', {
+      hasText: '不会自动发言、发消息或执行外部动作',
+    })
+    .waitFor({ timeout: 15000 });
+  await rehearsalMission
+    .locator('.card-ranking-receipt', { hasText: '首页展示' })
+    .waitFor({ timeout: 15000 });
+  await rehearsalMission
+    .locator('.card-ranking-receipt', {
+      hasText: '完成、稍后、静默或外部处理都需要用户明确点击',
+    })
+    .waitFor({ timeout: 15000 });
 
   currentBrief = baseBrief({
     id: 'brief-copyable-context-pack',
@@ -541,7 +857,7 @@ try {
       quietWindows: [],
     },
     sourceStats: {
-      messages: { scanned: 1, totalRecent: 1 },
+      messages: { scanned: 1, totalRecent: 3 },
       calendar: { scanned: 0, upcoming: 0 },
       notifications: { scanned: 0, pending: 0 },
       actions: { scanned: 0, queued: 0 },
@@ -569,10 +885,27 @@ try {
   await copyableMission.waitFor({ timeout: 15000 });
   await copyableMission.locator('.mission-head').click();
   await copyableMission
+    .locator('.card-ranking-receipt', { hasText: '首页展示' })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
+    .locator('.card-ranking-receipt', { hasText: '中隐私风险' })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
+    .locator('.context-preflight-receipt', {
+      hasText:
+        '当前目标 Codex；生成只读取这张 mission 的 1 条证据，默认脱敏',
+    })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
+    .locator('.context-preflight-receipt', {
+      hasText: '不会发送给外部 AI、批准/执行或写回来源系统',
+    })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
     .getByRole('button', { name: '复制上下文包', exact: true })
     .click();
   await page
-    .getByText('已复制 Codex 上下文包（1 条证据，已脱敏）。')
+    .getByText('已复制 Codex 上下文包（复制正文 1/1 条证据，已脱敏）。')
     .waitFor({ timeout: 15000 });
   await page.waitForFunction(
     () =>
@@ -611,7 +944,7 @@ try {
       quietWindows: [],
     },
     sourceStats: {
-      messages: { scanned: 1, totalRecent: 1 },
+      messages: { scanned: 1, totalRecent: 3 },
       calendar: { scanned: 0, upcoming: 0 },
       notifications: { scanned: 0, pending: 0 },
       actions: { scanned: 1, queued: 1 },
@@ -632,6 +965,37 @@ try {
     hasText: '确认 OpenClaw 是否继续重试部署查询',
   });
   await popupDecisionCard.waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '筛选口径：显示 1/1 张 mission · 扫描 4 条信号',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText:
+        '候选 2 · 入选证据 1 · 候选未入选 1 · 前置降噪 2 (消息 2) · 提醒预算 1/3',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '这里只是 Top 3 快照，不会自动执行',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '快照基准：读取已有 brief',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '可用 brief',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '不会重新扫描来源、写反馈、发送消息或执行动作',
+    })
+    .waitFor({ timeout: 15000 });
   await popupDecisionCard
     .getByRole('button', { name: /去处理|Review/ })
     .waitFor({ timeout: 15000 });
@@ -640,6 +1004,71 @@ try {
       .getByRole('button', { name: /^复制$|^Copy$/ })
       .waitFor({ timeout: 600 }),
   );
+
+  failTodayPilotRequest = true;
+  await popupPage.locator('.today-pilot-refresh').click();
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '刷新失败 · 仍显示上次 Top 3 快照',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '尚未确认当前 Memory Service 最新状态',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-message.error', {
+      hasText: '刷新失败，仍显示上次 Top 3 快照',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupDecisionCard.waitFor({ timeout: 15000 });
+
+  delayFeedbackCardId = visibleDecision.id;
+  await popupDecisionCard.getByRole('button', { name: /^完成$|^Done$/ }).click();
+  await popupPage
+    .locator('.today-pilot-message', {
+      hasText: '正在提交反馈：完成',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-message', {
+      hasText: '尚未写入 Today Pilot 展示/排序反馈',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupDecisionCard.waitFor({ timeout: 15000 });
+  assert.equal(
+    await popupDecisionCard
+      .getByRole('button', { name: /^处理中$|^Working$/ })
+      .isDisabled(),
+    true,
+    'popup active feedback button should stay disabled while feedback is pending',
+  );
+  assert.equal(
+    await popupDecisionCard
+      .getByRole('button', { name: /^稍后$|^Later$/ })
+      .isDisabled(),
+    true,
+    'popup sibling feedback button should stay disabled while feedback is pending',
+  );
+  const releasePopupFeedback = await waitForDelayedFeedbackHook();
+  releasePopupFeedback();
+  await popupPage
+    .locator('.today-pilot-message', {
+      hasText: '已写入 Today Pilot 展示反馈：完成',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-message', {
+      hasText: '不代表来源任务完成、消息已读、排程变更或外部系统已同步',
+    })
+    .waitFor({ timeout: 15000 });
+  await popupPage
+    .locator('.today-pilot-empty', {
+      hasText: '暂时没有需要处理的事项',
+    })
+    .waitFor({ timeout: 15000 });
+
   assertNoPopupPageErrors();
   await popupPage.close();
 

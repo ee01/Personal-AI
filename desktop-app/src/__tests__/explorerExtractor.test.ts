@@ -5,12 +5,14 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { ExplorerExtractor } from '../explorer/extractor.js';
-import { RawMessageStore } from '../explorer/index.js';
+import { CursorStore, RawMessageStore } from '../explorer/index.js';
 import { LocalAgentSessionSource } from '../explorer/sources/LocalAgentSessionSource.js';
-import { BridgeMemoryServiceHttpError } from '../memoryServiceClient.js';
+import {
+  BridgeMemoryServiceHttpError,
+  type ExtractFromChatResponse,
+} from '../memoryServiceClient.js';
 import { loadConfig } from '../config.js';
 import { BridgeSettingsStore } from '../settings.js';
-import { CursorStore } from '../explorer/index.js';
 
 async function createTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -155,5 +157,124 @@ test('LocalAgentSessionSource imports JSONL sessions and extracts as agent sessi
     assert.doesNotMatch(extractCalls[0].segments[1].text, /const noisy/);
   } finally {
     rawStore.close();
+  }
+});
+
+test('ExplorerExtractor appends incremental artifacts instead of replacing conversation audit', async () => {
+  const tempDir = await createTempDir('explorer-extractor-incremental-');
+  const store = new RawMessageStore(path.join(tempDir, 'raw-messages.sqlite'));
+  const responses: ExtractFromChatResponse[] = [
+    {
+      artifacts: [
+        {
+          kind: 'fact',
+          text: 'first batch artifact',
+          source_quote: 'first message',
+          conversation_ref: 'conv-1',
+        },
+      ],
+      ingestResults: [],
+      scopeUsed: 'work',
+    },
+    {
+      artifacts: [
+        {
+          kind: 'plan',
+          text: 'second batch artifact',
+          source_quote: 'second message',
+          conversation_ref: 'conv-1',
+        },
+      ],
+      ingestResults: [],
+      scopeUsed: 'work',
+    },
+  ];
+  const extractor = new ExplorerExtractor(
+    {
+      extractFromChat: async () => responses.shift()!,
+    },
+    store,
+  );
+
+  try {
+    store.insertMany([
+      {
+        source: 'chatgpt',
+        conversationId: 'conv-1',
+        messageId: 'msg-1',
+        ts: '2026-04-17T10:00:00.000Z',
+        role: 'user',
+        contentHash: 'hash-1',
+        content: 'first message',
+      },
+    ]);
+
+    assert.deepEqual(
+      await extractor.extractPendingMessages({
+        source: 'chatgpt',
+        defaultScope: 'work',
+        autoClassify: true,
+      }),
+      {
+        conversationCount: 1,
+        messageCount: 1,
+        artifactCount: 1,
+        skippedConversationCount: 0,
+      },
+    );
+
+    store.insertMany([
+      {
+        source: 'chatgpt',
+        conversationId: 'conv-1',
+        messageId: 'msg-2',
+        ts: '2026-04-17T10:05:00.000Z',
+        role: 'assistant',
+        contentHash: 'hash-2',
+        content: 'second message',
+      },
+    ]);
+
+    assert.deepEqual(
+      await extractor.extractPendingMessages({
+        source: 'chatgpt',
+        defaultScope: 'work',
+        autoClassify: true,
+      }),
+      {
+        conversationCount: 1,
+        messageCount: 1,
+        artifactCount: 1,
+        skippedConversationCount: 0,
+      },
+    );
+
+    assert.deepEqual(
+      store
+        .listConversationArtifacts({ source: 'chatgpt', conversationId: 'conv-1' })
+        .map((artifact) => ({
+          kind: artifact.kind,
+          text: artifact.text,
+          scope: artifact.scope,
+          revokedAt: artifact.revokedAt,
+        })),
+      [
+        {
+          kind: 'plan',
+          text: 'second batch artifact',
+          scope: 'work',
+          revokedAt: undefined,
+        },
+        {
+          kind: 'fact',
+          text: 'first batch artifact',
+          scope: 'work',
+          revokedAt: undefined,
+        },
+      ],
+    );
+    assert.equal(store.getStats('chatgpt').artifactCount, 2);
+  } finally {
+    store.close();
   }
 });

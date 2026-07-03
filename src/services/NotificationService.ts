@@ -14,6 +14,7 @@ import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
 import { sendPlainBotMessage } from '../bot';
 import { buildScheduledMessagesReviewUrl } from '../scheduled-messages/scheduledMessagesFilters';
+import { formatMatchedRuleForDisplay } from '../utils/matchedRuleDisplay';
 
 // ==================== 类型定义 ====================
 
@@ -150,7 +151,7 @@ __后续回复__：
   const linkSection = messageLink ? `🔗 [点击查看原消息](${messageLink})` : '';
 
   return `\`${data.summary}\`
-${originalMessageSection}__关注项__：${data.matchedRule || '消息匹配'}
+${originalMessageSection}__关注项__：${formatMatchedRuleForDisplay(data.matchedRule)}
 ${groupSection}__发送者__：${data.sender}
 __时间__：${data.datetime}
 ${messageLabel}：${data.messageContent}

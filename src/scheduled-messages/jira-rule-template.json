@@ -1,10 +1,11 @@
 {
   "_metadata": {
-    "version": "1.4.5",
-    "lastUpdated": "2026-05-19",
+    "version": "1.4.6",
+    "lastUpdated": "2026-06-08",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
-      "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com."
+      "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
+      "The initial getBotMessageCurrentTime call uses autoMarkOnFetch=api so AI Report and custom API endpoint messages write Last_Exec and Logs as soon as Jira claims them; one-time or finished periodic messages still become Done through the normal schedule rules, while Bot and RingCentral sender paths mark after send callbacks."
     ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -55,7 +56,7 @@
       "schemaVersion": 2,
       "type": "jira.issue.outgoing.webhook",
       "value": {
-        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime",
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api",
         "headers": [],
         "sendIssue": false,
         "contentType": "empty",
@@ -681,24 +682,6 @@
               "conditions": [],
               "optimisedIds": [],
               "newComponent": false
-            },
-            {
-              "component": "ACTION",
-              "schemaVersion": 2,
-              "type": "jira.issue.outgoing.webhook",
-              "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}&sentPayload={{webhookResponse.body.answer.urlEncode}}",
-                "headers": [],
-                "sendIssue": false,
-                "contentType": "empty",
-                "method": "GET",
-                "responseEnabled": false,
-                "usedSecretsKeys": []
-              },
-              "children": [],
-              "conditions": [],
-              "optimisedIds": [],
-              "newComponent": false
             }
           ],
           "conditions": [
@@ -797,24 +780,6 @@
                 "customBody": "{{webhookResponse.body.aiBody}}",
                 "method": "POST",
                 "responseEnabled": true,
-                "usedSecretsKeys": []
-              },
-              "children": [],
-              "conditions": [],
-              "optimisedIds": [],
-              "newComponent": false
-            },
-            {
-              "component": "ACTION",
-              "schemaVersion": 2,
-              "type": "jira.issue.outgoing.webhook",
-              "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}&sentPayload={{webhookResponse.body.answer.urlEncode}}",
-                "headers": [],
-                "sendIssue": false,
-                "contentType": "empty",
-                "method": "GET",
-                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],

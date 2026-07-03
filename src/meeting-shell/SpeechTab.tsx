@@ -57,6 +57,336 @@ const ASR_BADGE_LABEL: Record<
   'No ASR': 'No ASR',
 };
 
+const ASR_RECEIPT_TIER_LABEL: Record<
+  MeetingPilotASRTier | 'whisper',
+  string
+> = {
+  ringcentral_transcript: 'RC 转写',
+  web_speech: '本机 Web Speech',
+  desktop_whisper: '本地 ASR / Whisper',
+  cloud: '云端 ASR',
+  whisper: 'Whisper',
+};
+
+const ASR_RECEIPT_BADGE_LABEL: Record<
+  NonNullable<MeetingPilotSessionSnapshot['tier']>['badge'],
+  string
+> = {
+  Probing: '检测中',
+  'RC Transcript': 'RC 转写',
+  'On-Device': '本机 Web Speech',
+  'Local ASR': '本地 ASR / Whisper',
+  'Local Whisper': '本地 ASR / Whisper',
+  Cloud: '云端 ASR',
+  'No ASR': '无转写',
+};
+
+const ASR_MODE_LABEL: Record<
+  NonNullable<MeetingPilotSessionSnapshot['tier']>['mode'],
+  string
+> = {
+  auto: '自动 · 本地优先',
+  'local-only': '仅本地',
+  'cloud-only': '仅云端',
+};
+
+const ASR_MODE_DETAIL: Record<
+  NonNullable<MeetingPilotSessionSnapshot['tier']>['mode'],
+  string
+> = {
+  auto: '先尝试会议页转写和本地 ASR，失败后才回退云端。',
+  'local-only': '只用本机或会议页已有转写，不调用云端 ASR。',
+  'cloud-only': '只用配置的云端 ASR，音频片段会发送到转写 API。',
+};
+
+const LIVE_TRANSCRIPT_STALE_MS = 120_000;
+
+interface ASRChainReceiptRow {
+  label: string;
+  value: string;
+  tone?: 'info' | 'success' | 'warning' | 'danger';
+}
+
+interface LocalASRReceiptDetail {
+  statusLabel: string;
+  currentLayerLabel: string;
+  nextStep: string;
+  tone: ASRChainReceiptRow['tone'];
+}
+
+interface WebSpeechReceiptDetail {
+  statusLabel: string;
+  currentLayerLabel: string;
+  freshnessText: string;
+  nextStep: string;
+}
+
+interface CloudASRReceiptDetail {
+  statusLabel: string;
+  currentLayerLabel: string;
+  endpointLabel: string;
+  modelLabel: string;
+  languageLabel: string;
+  uploadBoundary: string;
+  nextStep: string;
+}
+
+interface LocalASRProbeIssue {
+  summary: string;
+  nextStep: string;
+  tone: ASRChainReceiptRow['tone'];
+}
+
+function humanizeLocalASRReason(value: string | undefined): string {
+  return String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\+/g, ' / ')
+    .trim();
+}
+
+function getLocalASRProbeIssue(
+  reason: string | undefined,
+): LocalASRProbeIssue | null {
+  const value = String(reason || '').trim();
+  if (!value) return null;
+
+  const downloadingMatch =
+    /^asr_model_downloading(?:\s+(\d{1,3})%)?(?:\s+(.+))?$/i.exec(value);
+  if (downloadingMatch) {
+    const progress = downloadingMatch[1] ? `${downloadingMatch[1]}%` : '';
+    const target = humanizeLocalASRReason(downloadingMatch[2]);
+    return {
+      summary:
+        `本机 ASR 模型下载中${progress ? `（${progress}）` : ''}` +
+        `${target ? ` · ${target}` : ''}；完成前 Local ASR 不会产出 final transcript。`,
+      nextStep:
+        '保持 Personal AI Desktop App 开启并等待模型下载完成；如果当前会议急用，请切换到 Auto / Cloud 模式，或到 Options → Desktop ASR 查看下载状态。',
+      tone: 'warning',
+    };
+  }
+
+  const modelFailedMatch = /^asr_model_install_failed\s+(.+)$/i.exec(value);
+  if (modelFailedMatch) {
+    return {
+      summary: `本机 ASR 模型安装失败：${truncateUiText(
+        humanizeLocalASRReason(modelFailedMatch[1]),
+        90,
+      )}。`,
+      nextStep:
+        '打开 Options → Desktop ASR 查看失败原因并重试模型安装；如果需要继续会议转写，请切换到 Auto / Cloud 模式。',
+      tone: 'danger',
+    };
+  }
+
+  const whisperInstallingMatch =
+    /^whisper_binary_installing(?:\s+(\d{1,3})%)?/i.exec(value);
+  if (whisperInstallingMatch) {
+    const progress = whisperInstallingMatch[1]
+      ? `（${whisperInstallingMatch[1]}%）`
+      : '';
+    return {
+      summary: `Whisper fallback binary 正在安装${progress}；安装完成前 final-only 兜底还不可用。`,
+      nextStep:
+        '保持 Personal AI Desktop App 开启；安装完成后重新开始 Capture，或临时切到 Auto / Cloud 模式。',
+      tone: 'warning',
+    };
+  }
+
+  const whisperFailedMatch =
+    /^whisper_binary_install_failed\s+(.+)$/i.exec(value);
+  if (whisperFailedMatch) {
+    return {
+      summary: `Whisper fallback binary 安装失败：${truncateUiText(
+        humanizeLocalASRReason(whisperFailedMatch[1]),
+        90,
+      )}。`,
+      nextStep:
+        '打开 Options → Desktop ASR 重新安装 Whisper fallback；在修复前不要把 Local ASR final-only 当成可用。',
+      tone: 'danger',
+    };
+  }
+
+  if (/^whisper_binary_missing$/i.test(value)) {
+    return {
+      summary:
+        'Whisper fallback 模型已找到，但本地 binary 还不可用；final-only 兜底暂时不能产出转写。',
+      nextStep:
+        '保持 Desktop App 开启等待 Whisper binary 安装完成，或到 Options → Desktop ASR 手动检查安装状态。',
+      tone: 'warning',
+    };
+  }
+
+  const finalModelMatch = /^final_model_not_ready(?:\s+(.+))?$/i.exec(value);
+  if (finalModelMatch) {
+    const reasonDetail = humanizeLocalASRReason(finalModelMatch[1]);
+    return {
+      summary:
+        '本地 final engine 未就绪；FunASR 或 Whisper fallback 至少一个 ready 后才会产出 final transcript。' +
+        `${reasonDetail ? ` 原因：${truncateUiText(reasonDetail, 80)}。` : ''}`,
+      nextStep:
+        '打开 Options → Desktop ASR，等待 FunASR 或 Whisper fallback ready；没有 final engine 时不要把空 transcript 当成无人发言。',
+      tone: 'warning',
+    };
+  }
+
+  const liveReadyFinalModelMatch =
+    /^live_ready_final_not_ready(?:\s+(.+))?$/i.exec(value);
+  if (liveReadyFinalModelMatch) {
+    const reasonDetail = humanizeLocalASRReason(liveReadyFinalModelMatch[1]);
+    return {
+      summary:
+        '本地实时引擎已就绪，但 Local ASR session 仍需要 FunASR 或 Whisper fallback 作为 final transcript 兜底；当前本地层还不会启动。' +
+        `${reasonDetail ? ` 原因：${truncateUiText(reasonDetail, 80)}。` : ''}`,
+      nextStep:
+        '保持 Desktop App 开启并等待 FunASR 或 Whisper fallback ready；local-only 不会调用云端，急用时可切到 Auto / Cloud。',
+      tone: 'warning',
+    };
+  }
+
+  if (/^desktop_app_not_running|desktop_asr_bridge_unavailable/i.test(value)) {
+    return {
+      summary: 'Personal AI Desktop App 未连接；Local ASR 没有本机音频接收端。',
+      nextStep:
+        '启动 Personal AI Desktop App 并保持 localhost/native bridge 可用；如果急用，请切换到 Auto / Cloud 模式。',
+      tone: 'danger',
+    };
+  }
+
+  if (/^platform_unsupported/i.test(value)) {
+    return {
+      summary: '当前平台不支持 Local ASR；local-only 模式会停在 No ASR。',
+      nextStep:
+        '在 macOS 上使用 Desktop Local ASR，或把当前会议转写模式切到 Auto / Cloud。',
+      tone: 'warning',
+    };
+  }
+
+  return null;
+}
+
+function localLiveEngineLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'apple') return 'Apple Speech 实时预览';
+  if (normalized === 'sherpa') return 'sherpa 实时预览';
+  if (normalized === 'no live') return '无实时预览';
+  return value.trim() || '未知实时预览';
+}
+
+function localFinalEngineLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'funasr') return 'FunASR final';
+  if (normalized === 'whisper') return 'Whisper final';
+  if (normalized === 'no final') return '无 final engine';
+  return value.trim() || '未知 final engine';
+}
+
+function getWebSpeechReceiptDetail(
+  detail: string | undefined,
+): WebSpeechReceiptDetail | null {
+  const value = String(detail || '').trim();
+  if (!/Chrome On-Device waiting for first transcript/i.test(value)) {
+    return null;
+  }
+  const secondsMatch = /fallback watchdog\s+(\d+)s/i.exec(value);
+  const timeoutLabel = secondsMatch ? `${secondsMatch[1]}s` : '短时间';
+  return {
+    statusLabel: 'Chrome On-Device · 等待首条转写',
+    currentLayerLabel: `本机 Web Speech · 等待首条转写（${timeoutLabel} 无文本将 fallback）`,
+    freshnessText:
+      `Chrome Web Speech 已启动但还没有收到首条转写；${timeoutLabel} 内仍无文本会按当前模式切到下一层。` +
+      '不要把空 transcript 当成会议无人发言，可能只是浏览器还没有消费扩展/offscreen 音频轨。',
+    nextStep:
+      `等待首条转写；${timeoutLabel} 内仍无文本会按当前模式 fallback。` +
+      '如果反复发生，请检查会议音频、浏览器 SpeechRecognition 支持，或改用 Desktop App / Cloud ASR。',
+  };
+}
+
+function getLocalASRReceiptDetail(
+  reason: string | undefined,
+): LocalASRReceiptDetail | null {
+  const value = String(reason || '').trim();
+  const chainMatch = /^Local ASR\s*·\s*([^→]+)\s*→\s*(.+)$/i.exec(value);
+  if (chainMatch) {
+    const liveLabel = localLiveEngineLabel(chainMatch[1]);
+    const finalLabel = localFinalEngineLabel(chainMatch[2]);
+    const finalOnly = /无实时预览/.test(liveLabel);
+    return {
+      statusLabel: `本地 ASR · ${liveLabel} → ${finalLabel}`,
+      currentLayerLabel: `本地 ASR · ${liveLabel} → ${finalLabel}`,
+      nextStep: finalOnly
+        ? '当前只有 final transcript；实时预览可能延迟到静音或停止后出现，音频仍只发往本机 Desktop App。'
+        : '本机实时预览和 final transcript 可用；异常时会记录原因并按模式 fallback。',
+      tone: finalOnly ? 'warning' : 'success',
+    };
+  }
+
+  const warningMatch = /^Local ASR stream warning \((\d+)\/(\d+)\):\s*(.+)$/i.exec(
+    value,
+  );
+  if (warningMatch) {
+    return {
+      statusLabel: `本地 ASR 流暂不稳定（${warningMatch[1]}/${warningMatch[2]}）`,
+      currentLayerLabel: `本地 ASR · 流暂不稳定（${warningMatch[1]}/${warningMatch[2]}）`,
+      nextStep: `本地 chunk stream 正在重试，实时 partial preview 可能短暂停住；已收到的 final / 历史 transcript 会保留，当前音频仍只发给本机 Desktop App，继续失败才会按当前模式切到下一层。原因：${truncateUiText(
+        warningMatch[3],
+        90,
+      )}`,
+      tone: 'warning',
+    };
+  }
+
+  return null;
+}
+
+function cloudEndpointShortLabel(endpointLabel: string): string {
+  if (/chat\/completions|input_audio/i.test(endpointLabel)) {
+    return 'Chat Completions + input_audio';
+  }
+  if (/audio\/transcriptions/i.test(endpointLabel)) {
+    return 'Audio Transcriptions';
+  }
+  return endpointLabel;
+}
+
+function getCloudASRReceiptDetail(
+  detail: string | undefined,
+): CloudASRReceiptDetail | null {
+  const value = String(detail || '').trim();
+  const match =
+    /^Cloud ASR\s*·\s*(.+?)\s*·\s*(OpenAI .+?)\s*·\s*model\s+(.+?)\s*·\s*language\s+(.+?)(?:\s*·\s*segment\s+(.+))?$/i.exec(
+      value,
+    ) ||
+    /^Cloud ASR\s*·\s*(.+?)\s*·\s*model\s+(.+?)\s*·\s*language\s+(.+?)(?:\s*·\s*segment\s+(.+))?$/i.exec(
+      value,
+    );
+  if (!match) return null;
+
+  const hasStyleLabel = match.length >= 6 && /^OpenAI /i.test(match[2] || '');
+  const endpointLabel = match[1].trim();
+  const styleLabel = hasStyleLabel ? match[2].trim() : cloudEndpointShortLabel(endpointLabel);
+  const modelLabel = (hasStyleLabel ? match[3] : match[2]).trim();
+  const languageLabel = (hasStyleLabel ? match[4] : match[3]).trim();
+  const segmentLabel = (hasStyleLabel ? match[5] : match[4])?.trim() || '5s';
+  const shortEndpoint = cloudEndpointShortLabel(endpointLabel);
+  const isChatAudio = /chat\/completions|input_audio/i.test(
+    `${endpointLabel} ${styleLabel}`,
+  );
+
+  return {
+    statusLabel: `Cloud ASR · ${shortEndpoint}`,
+    currentLayerLabel: `云端 ASR · ${shortEndpoint}`,
+    endpointLabel: `${endpointLabel} · ${styleLabel}`,
+    modelLabel,
+    languageLabel,
+    uploadBoundary: isChatAudio
+      ? `每段约 ${segmentLabel} 音频会转成 WAV 后以内联 input_audio 发送；单片超过 7.5MB 会拒绝。`
+      : `每段约 ${segmentLabel} 音频会转成 WAV 后作为 multipart file 上传到 /v1/audio/transcriptions。`,
+    nextStep: isChatAudio
+      ? '失败时先检查 API Style 与模型是否匹配；DashScope Qwen-ASR 通常需要 chat + input_audio 路径。'
+      : '失败时先检查模型是否支持 /v1/audio/transcriptions；不兼容时切换到 chat + input_audio。'
+  };
+}
+
 function formatTime(ts: number): string {
   const d = new Date(ts);
   return `${String(d.getHours()).padStart(2, '0')}:${String(
@@ -102,6 +432,24 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     lastSuccess?.source && lastSuccess.source !== 'test'
       ? ASR_SOURCE_LABEL[lastSuccess.source]
       : undefined;
+  const localASRDetail =
+    activeLabel === 'Local ASR'
+      ? getLocalASRReceiptDetail(
+          session.tier?.lastStatusDetail || session.tier?.lastTransitionReason,
+        )
+      : null;
+  const webSpeechDetail =
+    activeLabel === 'Chrome On-Device'
+      ? getWebSpeechReceiptDetail(
+          session.tier?.lastStatusDetail || session.tier?.lastTransitionReason,
+        )
+      : null;
+  const cloudASRDetail =
+    activeLabel === 'Cloud'
+      ? getCloudASRReceiptDetail(
+          session.tier?.lastStatusDetail || session.tier?.lastTransitionReason,
+        )
+      : null;
   const dependencyReady =
     session.readiness?.dependencies?.transcription?.status === 'ready';
   const configured =
@@ -116,6 +464,9 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     tierBadge === 'No ASR';
   const tierIsStillTrying = Boolean(activeTier) || tierBadge === 'Probing';
   const tierHasFailed = tierBadge === 'No ASR';
+  const localASRIssue = tierHasFailed
+    ? getLatestLocalASRProbeIssue(session)
+    : null;
   const readinessError =
     successCount === 0 &&
     !tierIsStillTrying &&
@@ -124,13 +475,19 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
       : undefined;
   const lastError =
     session.capture?.lastError ||
-    (tierHasFailed ? session.tier?.lastTransitionReason : undefined) ||
+    (tierHasFailed
+      ? localASRIssue?.summary || session.tier?.lastTransitionReason
+      : undefined) ||
     readinessError;
   return {
     configured,
     label:
-      (activeLabel === 'Local ASR' && session.tier?.lastTransitionReason?.startsWith('Local ASR')
-        ? session.tier.lastTransitionReason
+      (activeLabel === 'Local ASR' && localASRDetail
+        ? localASRDetail.statusLabel
+        : activeLabel === 'Chrome On-Device' && webSpeechDetail
+          ? webSpeechDetail.statusLabel
+        : activeLabel === 'Cloud' && cloudASRDetail
+          ? cloudASRDetail.statusLabel
         : activeLabel) ||
       lastSourceLabel ||
       badgeLabel ||
@@ -139,6 +496,578 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     lastSuccessTs: lastSuccess?.ts,
     lastError,
   };
+}
+
+function getLatestASRTranscriptSource(
+  session: MeetingPilotSessionSnapshot,
+): Exclude<NonNullable<MeetingPilotTranscriptChunk['source']>, 'test'> | undefined {
+  const lastSuccess = [...session.transcript]
+    .reverse()
+    .find((chunk) => chunk.source && chunk.source !== 'test');
+  return lastSuccess?.source && lastSuccess.source !== 'test'
+    ? lastSuccess.source
+    : undefined;
+}
+
+function getASRUploadBoundary(
+  session: MeetingPilotSessionSnapshot,
+): { value: string; tone: ASRChainReceiptRow['tone'] } {
+  const activeTier = session.tier?.activeTier || null;
+  const badge = session.tier?.badge;
+  const mode = session.tier?.mode || 'auto';
+  const latestSource = getLatestASRTranscriptSource(session);
+  const effectiveTier = activeTier || latestSource || null;
+  const cloudASRDetail = getCloudASRReceiptDetail(
+    session.tier?.lastStatusDetail || session.tier?.lastTransitionReason,
+  );
+  if (effectiveTier === 'ringcentral_transcript' || badge === 'RC Transcript') {
+    return {
+      value: '读取会议页已有转写，不额外上传音频。',
+      tone: 'success',
+    };
+  }
+  if (effectiveTier === 'web_speech' || badge === 'On-Device') {
+    return {
+      value: 'Chrome 本机识别；仍需保留降级原因以便恢复。',
+      tone: 'success',
+    };
+  }
+  if (
+    effectiveTier === 'desktop_whisper' ||
+    latestSource === 'whisper' ||
+    badge === 'Local ASR' ||
+    badge === 'Local Whisper'
+  ) {
+    return {
+      value: '音频片段只发给本机 Desktop App；当前不上传云端。',
+      tone: 'success',
+    };
+  }
+  if (effectiveTier === 'cloud' || badge === 'Cloud' || mode === 'cloud-only') {
+    return {
+      value:
+        cloudASRDetail?.uploadBoundary ||
+        '音频片段会发送到配置的云端 ASR 服务。',
+      tone: 'warning',
+    };
+  }
+  if (badge === 'No ASR') {
+    return {
+      value: '当前没有可用转写层级，不会继续发送音频转写。',
+      tone: 'danger',
+    };
+  }
+  if (mode === 'local-only') {
+    return {
+      value: '仅允许本地/会议页转写；云端 fallback 被禁用。',
+      tone: 'success',
+    };
+  }
+  return {
+    value: '仍在探测；只有切到云端层级时才会调用云端 ASR。',
+    tone: 'info',
+  };
+}
+
+function summarizeASRTransitionReason(reason: string): string {
+  const trimmed = truncateUiText(reason, 120);
+  if (/fallback/i.test(reason)) {
+    return `已按当前模式切换下一层；原始原因：${trimmed}`;
+  }
+  if (/start failed|failed/i.test(reason)) {
+    return `上一层启动失败；原始原因：${trimmed}`;
+  }
+  if (/unavailable|not ready/i.test(reason)) {
+    return `上一层不可用；原始原因：${trimmed}`;
+  }
+  return trimmed;
+}
+
+function formatASRProbeTrailItem(
+  item: NonNullable<
+    NonNullable<MeetingPilotSessionSnapshot['tier']>['probeTrail']
+  >[number],
+): string {
+  const tierLabel = ASR_RECEIPT_TIER_LABEL[item.tier];
+  const localIssue =
+    item.tier === 'desktop_whisper'
+      ? getLocalASRProbeIssue(item.reason)
+      : null;
+  const reason = localIssue
+    ? `：${localIssue.summary}`
+    : item.reason
+      ? `：${truncateUiText(item.reason, 54)}`
+      : '';
+  switch (item.state) {
+    case 'unavailable':
+      return `${tierLabel} 不可用${reason}`;
+    case 'selected':
+      return `${tierLabel} 已选中`;
+    case 'running':
+      return `${tierLabel} 已运行`;
+    case 'start_failed':
+      return `${tierLabel} 启动失败${reason}`;
+    case 'fatal_error':
+      return `${tierLabel} 致命错误${reason}`;
+    case 'watchdog_timeout':
+      return `${tierLabel} 首条转写超时${reason}`;
+    default:
+      return tierLabel;
+  }
+}
+
+function getLatestLocalASRProbeIssue(
+  session: MeetingPilotSessionSnapshot,
+): LocalASRProbeIssue | null {
+  const trail = session.tier?.probeTrail || [];
+  for (const item of [...trail].reverse()) {
+    if (
+      item.tier !== 'desktop_whisper' ||
+      !['unavailable', 'start_failed', 'fatal_error'].includes(item.state)
+    ) {
+      continue;
+    }
+    const issue = getLocalASRProbeIssue(item.reason);
+    if (issue) return issue;
+  }
+
+  const reason = session.tier?.lastTransitionReason;
+  if (
+    reason &&
+    /desktop_whisper|Local ASR|desktop_app|desktop_asr|asr_model|final_model|live_ready_final|whisper_binary/i.test(
+      reason,
+    )
+  ) {
+    return getLocalASRProbeIssue(reason);
+  }
+  return null;
+}
+
+function getASRProbeTrailRow(
+  session: MeetingPilotSessionSnapshot,
+): ASRChainReceiptRow | null {
+  const trail = session.tier?.probeTrail?.filter(Boolean) || [];
+  if (!trail.length) return null;
+  const visibleTrail = trail.slice(-5);
+  const hasCloudSelection = visibleTrail.some(
+    (item) =>
+      item.tier === 'cloud' &&
+      (item.state === 'selected' || item.state === 'running'),
+  );
+  const hasFailure = visibleTrail.some((item) =>
+    ['unavailable', 'start_failed', 'fatal_error', 'watchdog_timeout'].includes(
+      item.state,
+    ),
+  );
+  return {
+    label: '探测路径',
+    value: visibleTrail.map(formatASRProbeTrailItem).join(' → '),
+    tone:
+      session.tier?.badge === 'No ASR'
+        ? 'danger'
+        : hasCloudSelection || hasFailure
+          ? 'warning'
+          : 'info',
+  };
+}
+
+function getLocalASRIssueRow(
+  session: MeetingPilotSessionSnapshot,
+): ASRChainReceiptRow | null {
+  const activeTier = session.tier?.activeTier || null;
+  const badge = session.tier?.badge;
+  if (
+    activeTier === 'desktop_whisper' ||
+    badge === 'Local ASR' ||
+    badge === 'Local Whisper'
+  ) {
+    return null;
+  }
+  const issue = getLatestLocalASRProbeIssue(session);
+  if (!issue) return null;
+  return {
+    label: '本地准备',
+    value: issue.summary,
+    tone: issue.tone,
+  };
+}
+
+function getASRNextStep(session: MeetingPilotSessionSnapshot): string {
+  const badge = session.tier?.badge;
+  const mode = session.tier?.mode || 'auto';
+  const transitionReason = session.tier?.lastTransitionReason;
+  const statusDetail = session.tier?.lastStatusDetail || transitionReason;
+  const localASRIssue = getLatestLocalASRProbeIssue(session);
+  const localASRDetail =
+    badge === 'Local ASR' || badge === 'Local Whisper'
+      ? getLocalASRReceiptDetail(statusDetail)
+      : null;
+  const webSpeechDetail =
+    badge === 'On-Device'
+      ? getWebSpeechReceiptDetail(statusDetail)
+      : null;
+  const cloudASRDetail =
+    badge === 'Cloud' ? getCloudASRReceiptDetail(statusDetail) : null;
+  if (localASRDetail) {
+    return localASRDetail.nextStep;
+  }
+  if (webSpeechDetail) {
+    return webSpeechDetail.nextStep;
+  }
+  if (cloudASRDetail) {
+    const localFallbackPrefix =
+      localASRIssue &&
+      transitionReason &&
+      /Local ASR|desktop_whisper|desktop_app|desktop_asr|asr_model|final_model|live_ready_final|whisper_binary/i.test(
+        transitionReason,
+      )
+        ? `本地层未用：${localASRIssue.summary.replace(/[。；\s]+$/g, '')}；`
+        : '';
+    const prefix =
+      localFallbackPrefix ||
+      (transitionReason &&
+      /fallback|failed|unavailable|not ready|不可用/i.test(transitionReason)
+        ? `${summarizeASRTransitionReason(transitionReason)}；`
+        : '');
+    return `${prefix}${cloudASRDetail.nextStep}`;
+  }
+  if (badge === 'No ASR') {
+    if (localASRIssue) {
+      return localASRIssue.nextStep;
+    }
+    if (mode === 'local-only') {
+      return '启动 Desktop App 或切换到自动/云端模式。';
+    }
+    if (mode === 'cloud-only') {
+      return '检查 Meeting Provider Base URL、API Key 和转写模型。';
+    }
+    return '安装/启动 Desktop App，或配置云端 ASR API Key。';
+  }
+  if (transitionReason && /fallback|failed|unavailable|not ready|不可用/i.test(transitionReason)) {
+    return summarizeASRTransitionReason(transitionReason);
+  }
+  if (badge === 'Probing') {
+    return '等待首条转写；若长时间没有文本，会继续按模式尝试下一层。';
+  }
+  return '保持当前层级；异常时会记录原因并按模式 fallback。';
+}
+
+function getASRFreshnessRow(
+  session: MeetingPilotSessionSnapshot,
+  status: ReturnType<typeof asrStatus>,
+  now: number,
+): ASRChainReceiptRow | null {
+  const tier = session.tier;
+  const badge = tier?.badge;
+  const activeTier = tier?.activeTier || null;
+  const activeTierLabel =
+    activeTier
+      ? ASR_RECEIPT_TIER_LABEL[activeTier]
+      : badge
+        ? ASR_RECEIPT_BADGE_LABEL[badge]
+        : '当前层';
+  const tierIsActive =
+    Boolean(activeTier) ||
+    badge === 'RC Transcript' ||
+    badge === 'On-Device' ||
+    badge === 'Local ASR' ||
+    badge === 'Local Whisper' ||
+    badge === 'Cloud';
+
+  if (!status.lastSuccessTs) {
+    const webSpeechDetail =
+      (activeTier === 'web_speech' || badge === 'On-Device') &&
+      getWebSpeechReceiptDetail(
+        tier?.lastStatusDetail || tier?.lastTransitionReason,
+      );
+    if (webSpeechDetail) {
+      return {
+        label: '新鲜度',
+        value: webSpeechDetail.freshnessText,
+        tone: 'warning',
+      };
+    }
+    if (tierIsActive || badge === 'Probing') {
+      return {
+        label: '新鲜度',
+        value:
+          '还没有首条转写；首条到达前不要把空 transcript 当成会议无人发言。',
+        tone: badge === 'No ASR' ? 'danger' : 'info',
+      };
+    }
+    return null;
+  }
+
+  const ageMs = Math.max(0, now - status.lastSuccessTs);
+  const ageLabel = timeSinceLabel(status.lastSuccessTs, now);
+  if (tierIsActive && ageMs >= LIVE_TRANSCRIPT_STALE_MS) {
+    return {
+      label: '新鲜度',
+      value:
+        `${activeTierLabel} 仍标记为运行，但上次转写是 ${ageLabel}；` +
+        '旧转写不代表当前仍在收到音频。请检查会议是否静音、语言设置、Desktop App 或云端网络。',
+      tone: 'warning',
+    };
+  }
+
+  return {
+    label: '新鲜度',
+    value: `最近 ${ageLabel} 收到转写；当前结果仍可作为 live context 使用。`,
+    tone: 'success',
+  };
+}
+
+function getASRRealtimeStateRow(
+  session: MeetingPilotSessionSnapshot,
+  status: ReturnType<typeof asrStatus>,
+  now: number,
+): ASRChainReceiptRow {
+  const tier = session.tier;
+  const badge = tier?.badge;
+  const activeTier = tier?.activeTier || null;
+  const statusDetail = tier?.lastStatusDetail || tier?.lastTransitionReason;
+  const localASRDetail =
+    activeTier === 'desktop_whisper' ||
+    badge === 'Local ASR' ||
+    badge === 'Local Whisper'
+      ? getLocalASRReceiptDetail(statusDetail)
+      : null;
+  const webSpeechDetail =
+    activeTier === 'web_speech' || badge === 'On-Device'
+      ? getWebSpeechReceiptDetail(statusDetail)
+      : null;
+  const latestSource = getLatestASRTranscriptSource(session);
+
+  if (badge === 'No ASR') {
+    return {
+      label: '实时状态',
+      value: '当前没有可用 live preview 或 final transcript 层级；按恢复动作修复后再判断会议是否有发言。',
+      tone: 'danger',
+    };
+  }
+
+  if (webSpeechDetail && !status.successCount) {
+    return {
+      label: '实时状态',
+      value:
+        '正在等浏览器给出第一条 live transcript；空白不是会议无人发言，也不是已保存 transcript。',
+      tone: 'warning',
+    };
+  }
+
+  if (localASRDetail?.currentLayerLabel.includes('无实时预览')) {
+    return {
+      label: '实时状态',
+      value:
+        '当前没有 live partial preview；final transcript 可能在静音、句末或停止后出现，不代表本地 ASR 已坏。',
+      tone: 'warning',
+    };
+  }
+
+  if (/流暂不稳定/.test(localASRDetail?.currentLayerLabel || '')) {
+    return {
+      label: '实时状态',
+      value:
+        '本地 live partial preview 正在重试；已有 final / 历史 transcript 保留，连续失败后才会切层。',
+      tone: 'warning',
+    };
+  }
+
+  if (activeTier === 'desktop_whisper' || badge === 'Local ASR') {
+    return {
+      label: '实时状态',
+      value: '本机 live preview 与 final transcript 链路可用；final 仍可能比 partial 稍晚出现。',
+      tone: 'success',
+    };
+  }
+
+  if (activeTier === 'ringcentral_transcript' || badge === 'RC Transcript') {
+    return {
+      label: '实时状态',
+      value: '正在读取会议页已有 transcript；是否保存或下载仍由会议平台控制。',
+      tone: 'success',
+    };
+  }
+
+  if (activeTier === 'cloud' || badge === 'Cloud') {
+    return {
+      label: '实时状态',
+      value:
+        latestSource === 'cloud' && status.lastSuccessTs
+          ? `云端分片最近 ${timeSinceLabel(status.lastSuccessTs, now)} 返回；超过新鲜度阈值会标记为旧转写。`
+          : '云端分片转写已启动；等待第一段上传片段返回前不要把空白当成无人发言。',
+      tone: latestSource === 'cloud' ? 'success' : 'warning',
+    };
+  }
+
+  if (activeTier === 'web_speech' || badge === 'On-Device') {
+    return {
+      label: '实时状态',
+      value:
+        latestSource === 'web_speech' && status.lastSuccessTs
+          ? `浏览器最近 ${timeSinceLabel(status.lastSuccessTs, now)} 给出 live transcript。`
+          : '浏览器 Web Speech 已启动；等待首条转写或后续 fallback。',
+      tone: latestSource === 'web_speech' ? 'success' : 'warning',
+    };
+  }
+
+  return {
+    label: '实时状态',
+    value: '正在探测可用转写层级；未切到云端前不会上传 ASR 音频。',
+    tone: 'info',
+  };
+}
+
+function getASRStatusSummaryLine(
+  session: MeetingPilotSessionSnapshot,
+  status: ReturnType<typeof asrStatus>,
+  now: number,
+): string {
+  if (status.successCount > 0) {
+    return (
+      `已转写 ${status.successCount} 条` +
+      (status.lastSuccessTs ? ` · 最近 ${timeSinceLabel(status.lastSuccessTs, now)}` : '')
+    );
+  }
+
+  const tier = session.tier;
+  const statusDetail = tier?.lastStatusDetail || tier?.lastTransitionReason;
+  const localASRDetail =
+    tier?.activeTier === 'desktop_whisper' ||
+    tier?.badge === 'Local ASR' ||
+    tier?.badge === 'Local Whisper'
+      ? getLocalASRReceiptDetail(statusDetail)
+      : null;
+  if (localASRDetail?.currentLayerLabel.includes('无实时预览')) {
+    return '等待 final transcript · 当前无 live preview';
+  }
+  if (
+    (tier?.activeTier === 'web_speech' || tier?.badge === 'On-Device') &&
+    getWebSpeechReceiptDetail(statusDetail)
+  ) {
+    return '等待首条转写 · 空 transcript 不代表无人发言';
+  }
+  if (tier?.badge === 'No ASR') {
+    return '没有可用转写层级';
+  }
+  return '等待首条转写';
+}
+
+function buildASRChainReceipt(
+  session: MeetingPilotSessionSnapshot,
+  status: ReturnType<typeof asrStatus>,
+  now: number,
+): ASRChainReceiptRow[] {
+  const tier = session.tier;
+  const mode = tier?.mode || 'auto';
+  const activeTier = tier?.activeTier || null;
+  const latestSource = getLatestASRTranscriptSource(session);
+  const statusDetail = tier?.lastStatusDetail || tier?.lastTransitionReason;
+  const localASRDetail =
+    activeTier === 'desktop_whisper' ||
+    tier?.badge === 'Local ASR' ||
+    tier?.badge === 'Local Whisper'
+      ? getLocalASRReceiptDetail(statusDetail)
+      : null;
+  const webSpeechDetail =
+    activeTier === 'web_speech' || tier?.badge === 'On-Device'
+      ? getWebSpeechReceiptDetail(statusDetail)
+      : null;
+  const cloudASRDetail =
+    activeTier === 'cloud' || tier?.badge === 'Cloud'
+      ? getCloudASRReceiptDetail(statusDetail)
+      : null;
+  const currentLayer = activeTier
+    ? activeTier === 'desktop_whisper' && localASRDetail
+      ? localASRDetail.currentLayerLabel
+      : activeTier === 'web_speech' && webSpeechDetail
+        ? webSpeechDetail.currentLayerLabel
+      : activeTier === 'cloud' && cloudASRDetail
+        ? cloudASRDetail.currentLayerLabel
+      : ASR_RECEIPT_TIER_LABEL[activeTier]
+    : latestSource && (!tier?.badge || tier.badge === 'Probing')
+      ? `${ASR_RECEIPT_TIER_LABEL[latestSource]}（最近结果）`
+    : tier?.badge
+      ? ASR_RECEIPT_BADGE_LABEL[tier.badge]
+      : status.configured
+        ? status.label
+        : '未配置';
+  const uploadBoundary = getASRUploadBoundary(session);
+  const freshnessRow = getASRFreshnessRow(session, status, now);
+  const realtimeStateRow = getASRRealtimeStateRow(session, status, now);
+  const probeTrailRow = getASRProbeTrailRow(session);
+  const localASRIssueRow = getLocalASRIssueRow(session);
+
+  const rows: ASRChainReceiptRow[] = [
+    {
+      label: '模式',
+      value: `${ASR_MODE_LABEL[mode]}：${ASR_MODE_DETAIL[mode]}`,
+      tone: mode === 'cloud-only' ? 'warning' : 'info',
+    },
+    {
+      label: '当前层',
+      value:
+        tier?.lastTransitionAt && tier.badge !== 'Probing'
+          ? `${currentLayer} · ${timeSinceLabel(tier.lastTransitionAt, now)}切换`
+          : currentLayer,
+      tone:
+        tier?.badge === 'No ASR'
+          ? 'danger'
+          : localASRDetail?.tone
+            ? localASRDetail.tone
+          : activeTier || tier?.badge === 'RC Transcript'
+            ? 'success'
+            : 'info',
+    },
+    ...(probeTrailRow ? [probeTrailRow] : []),
+    ...(localASRIssueRow ? [localASRIssueRow] : []),
+    {
+      label: '上传边界',
+      value: uploadBoundary.value,
+      tone: uploadBoundary.tone,
+    },
+    realtimeStateRow,
+    {
+      label: latestSource ? '最近结果' : '转写结果',
+      value: latestSource
+        ? `${ASR_RECEIPT_TIER_LABEL[latestSource]} · ${status.successCount} 条 · 最近 ${
+            status.lastSuccessTs
+              ? timeSinceLabel(status.lastSuccessTs, now)
+              : '刚刚'
+          }`
+        : status.successCount > 0
+          ? `已转写 ${status.successCount} 条`
+          : '还没有收到首条转写。',
+      tone: status.successCount > 0 ? 'success' : 'info',
+    },
+    ...(freshnessRow ? [freshnessRow] : []),
+    {
+      label: tier?.badge === 'No ASR' ? '恢复动作' : '切层说明',
+      value: getASRNextStep(session),
+      tone:
+        tier?.badge === 'No ASR'
+          ? 'danger'
+          : localASRDetail?.tone || 'info',
+    },
+  ];
+
+  if (cloudASRDetail) {
+    rows.splice(3, 0, {
+      label: '云端接口',
+      value: `${cloudASRDetail.endpointLabel} · 模型 ${cloudASRDetail.modelLabel} · 语言 ${cloudASRDetail.languageLabel}`,
+      tone: 'warning',
+    });
+  }
+
+  if (status.lastError) {
+    rows.push({
+      label: '最近错误',
+      value: truncateUiText(status.lastError, 140),
+      tone: 'danger',
+    });
+  }
+
+  return rows;
 }
 
 function truncateUiText(value: string, maxLength: number): string {
@@ -554,6 +1483,8 @@ export function SpeechTab(props: SpeechTabProps) {
   }, [session.transcript]);
 
   const status = asrStatus(session);
+  const asrReceiptRows = buildASRChainReceipt(session, status, now);
+  const statusSummaryLine = getASRStatusSummaryLine(session, status, now);
 
   const sendRename = async (participantId: string, newName: string) => {
     if (!newName) {
@@ -600,17 +1531,23 @@ export function SpeechTab(props: SpeechTabProps) {
           <strong>ASR:</strong>{' '}
           {status.configured ? status.label : '未配置'}
         </div>
-        <div>
-          {status.successCount > 0
-            ? `已转写 ${status.successCount} 条` +
-              (status.lastSuccessTs
-                ? ` · 最近 ${timeSinceLabel(status.lastSuccessTs, now)}`
-                : '')
-            : '等待首条转写'}
-        </div>
+        <div>{statusSummaryLine}</div>
         {status.lastError ? (
           <div className="speech-error">最近错误: {status.lastError}</div>
         ) : null}
+        <div className="speech-asr-receipt" aria-label="ASR 链路回执">
+          <div className="speech-asr-receipt-title">ASR 链路回执</div>
+          {asrReceiptRows.map((row) => (
+            <div
+              key={row.label}
+              className="speech-asr-receipt-row"
+              data-tone={row.tone || 'info'}
+            >
+              <span>{row.label}</span>
+              <strong>{row.value}</strong>
+            </div>
+          ))}
+        </div>
       </div>
 
       {turns.length ? (

@@ -1,3 +1,5 @@
+import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig';
+
 export interface TaskSchedulerDefinition {
   id: string;
   name: string;
@@ -69,7 +71,7 @@ export const TASK_DEFINITIONS: TaskSchedulerDefinition[] = [
     id: 'digest_queue_process',
     name: '汇总推送队列处理',
     category: 'data_sync',
-    intervalMinutes: 60, // 每小时检查一次
+    intervalMinutes: DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES,
     description: '检查并处理到期的汇总推送任务（关注后续合并通知、每日摘要等）',
     enabled: true
   }
@@ -79,6 +81,40 @@ export function getTaskDefaultEnabled(taskId: string): boolean {
   return TASK_DEFINITIONS.find((task) => task.id === taskId)?.enabled ?? false;
 }
 
+type TaskSchedulerStorageState = {
+  enabled?: boolean;
+};
+
+function hasTaskSchedulerStorageState(
+  taskSchedulerStates: unknown,
+  taskId: string,
+): boolean {
+  return Boolean(
+    taskSchedulerStates &&
+      typeof taskSchedulerStates === 'object' &&
+      Object.prototype.hasOwnProperty.call(taskSchedulerStates, taskId),
+  );
+}
+
+export function resolveTaskEnabledFromSchedulerStates(
+  taskId: string,
+  taskSchedulerStates: unknown,
+): boolean {
+  const defaultEnabled = getTaskDefaultEnabled(taskId);
+  if (!taskSchedulerStates || typeof taskSchedulerStates !== 'object') {
+    return defaultEnabled;
+  }
+
+  const savedState = (
+    taskSchedulerStates as Record<string, TaskSchedulerStorageState | undefined>
+  )[taskId];
+  if (!savedState || typeof savedState !== 'object') {
+    return defaultEnabled;
+  }
+
+  return savedState.enabled ?? defaultEnabled;
+}
+
 /**
  * 辅助函数: 获取指定任务的启用状态
  * 用于替代旧的 scheduleActive 存储
@@ -86,12 +122,7 @@ export function getTaskDefaultEnabled(taskId: string): boolean {
 export async function getTaskEnabled(taskId: string): Promise<boolean> {
   try {
     const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
-    const defaultEnabled = getTaskDefaultEnabled(taskId);
-    if (taskSchedulerStates && taskSchedulerStates[taskId]) {
-      return taskSchedulerStates[taskId].enabled ?? defaultEnabled;
-    }
-    // 如果没有保存的状态,返回默认值(根据任务定义)
-    return defaultEnabled;
+    return resolveTaskEnabledFromSchedulerStates(taskId, taskSchedulerStates);
   } catch (error) {
     console.error(`获取任务 ${taskId} 状态失败:`, error);
     return false;
@@ -108,8 +139,13 @@ export function onTaskEnabledChanged(
   const listener = (changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => {
     if (namespace === 'local' && changes.taskSchedulerStates) {
       const newStates = changes.taskSchedulerStates.newValue;
-      if (newStates && newStates[taskId]) {
-        callback(newStates[taskId].enabled ?? getTaskDefaultEnabled(taskId));
+      const oldStates = changes.taskSchedulerStates.oldValue;
+      if (
+        hasTaskSchedulerStorageState(newStates, taskId) ||
+        hasTaskSchedulerStorageState(oldStates, taskId) ||
+        !newStates
+      ) {
+        callback(resolveTaskEnabledFromSchedulerStates(taskId, newStates));
       }
     }
   };

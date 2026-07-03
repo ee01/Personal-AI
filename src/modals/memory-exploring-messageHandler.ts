@@ -53,10 +53,16 @@ function hasOpenableMeetingPdf(value?: string): boolean {
   }
 }
 
+function hasBlockedMeetingPdf(value?: string): boolean {
+  if (!value?.trim()) return false;
+  return !hasOpenableMeetingPdf(value);
+}
+
 function getMeetingArchiveStatus(
   meeting: MeetingRecord,
 ): Exclude<MeetingArchiveStatusFilter, 'all'> {
   const hasPdf = hasOpenableMeetingPdf(meeting.pdfUrl);
+  if (hasBlockedMeetingPdf(meeting.pdfUrl)) return 'attention';
   if (meeting.digestStatus === 'failed') return 'attention';
   if (meeting.digestStatus === 'completed' && !hasPdf) return 'attention';
   if (hasPdf || meeting.digestStatus === 'completed') return 'ready';
@@ -84,12 +90,12 @@ function filterMeetingFixtureItems(
     const haystack = [
       meeting.meetingId,
       meeting.title,
-    meeting.summary,
-    meeting.digestErrorCode,
-    (meeting as any).archiveSearchText,
-    (meeting as any).latestObservationText,
-    ...(meeting.participants || []),
-  ]
+      meeting.summary,
+      meeting.digestErrorCode,
+      (meeting as any).archiveSearchText,
+      (meeting as any).latestObservationText,
+      ...(meeting.participants || []),
+    ]
       .filter((item): item is string => typeof item === 'string' && item !== '')
       .join('\n')
       .toLocaleLowerCase();
@@ -307,6 +313,9 @@ const messageHandlers: Record<string, MessageHandler> = {
         success: true,
         data: entitiesWithDetails,
         total: recallResult.totalFound,
+        totalFound: recallResult.totalFound,
+        queryTimeMs: recallResult.queryTimeMs,
+        channelDiagnostics: recallResult.channelDiagnostics || [],
         source: 'memory-service',
       };
     } catch (error: any) {

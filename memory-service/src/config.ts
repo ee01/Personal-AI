@@ -17,6 +17,7 @@ export interface Config {
   // LLM
   llmProvider: string;
   openaiApiKey: string;
+  openaiApiBaseUrl: string;
   openaiModel: string;
   groqApiKey: string;
   difyApiKey: string;
@@ -46,6 +47,7 @@ export interface Config {
   contextMatchThreshold: number;
 
   // Scheduler
+  proactiveSchedulerEnabled: boolean;
   heartbeatIntervalMs: number;
   dailyCron: string;
   weeklyCron: string;
@@ -212,6 +214,7 @@ export function getConfig(): Readonly<Config> {
     // LLM
     llmProvider: process.env.LLM_PROVIDER || 'openai',
     openaiApiKey: process.env.OPENAI_API_KEY || '',
+    openaiApiBaseUrl: process.env.OPENAI_API_BASE_URL || '',
     openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     groqApiKey: process.env.GROQ_API_KEY || '',
     difyApiKey: process.env.DIFY_API_KEY || '',
@@ -245,6 +248,9 @@ export function getConfig(): Readonly<Config> {
     ),
 
     // Scheduler
+    proactiveSchedulerEnabled:
+      process.env.PROACTIVE_SCHEDULER_ENABLED === 'true' ||
+      process.env.PROACTIVE_BACKGROUND_ENABLED === 'true',
     heartbeatIntervalMs: parseInt(
       process.env.HEARTBEAT_INTERVAL_MS || '900000',
       10,

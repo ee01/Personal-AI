@@ -30,11 +30,21 @@
                 formatMutedReason(currentTopicMutedState.reason)
               }}{{ formatMutedUntil(currentTopicMutedState.until) }}
             </span>
+            <span
+              v-if="currentTopicDeferredState"
+              class="meta-item deferred-meta"
+            >
+              ⏰ 已稍后到
+              {{ formatDeferredUntil(currentTopicDeferredState.until) }}（本机）
+            </span>
             <span class="meta-item"
               >⏰ 最后更新：{{ getTopicLastUpdatedLabel(topicData) }}</span
             >
           </div>
-          <div v-if="topicUnreadCount > 0" class="topic-detail-actions">
+          <div
+            v-if="showTopicDetailTriageActions"
+            class="topic-detail-actions"
+          >
             <button
               v-if="currentTopicMutedState"
               type="button"
@@ -43,7 +53,19 @@
             >
               ↩ 取消静音
             </button>
-            <div v-else class="topic-detail-defer-menu" @click.stop>
+            <button
+              v-else-if="currentTopicDeferredState"
+              type="button"
+              class="topic-detail-action-btn topic-detail-defer-restore"
+              @click.stop="handleRestoreDeferFromDetail"
+            >
+              ↩ 恢复未读
+            </button>
+            <div
+              v-else-if="topicDetailCanStartTriage"
+              class="topic-detail-defer-menu"
+              @click.stop
+            >
               <button
                 type="button"
                 class="topic-detail-action-btn"
@@ -57,6 +79,17 @@
                 class="topic-detail-defer-options"
                 role="menu"
               >
+                <div
+                  class="topic-detail-boundary-receipt topic-detail-defer-boundary"
+                  role="note"
+                  aria-label="稍后处理边界"
+                >
+                  <strong>稍后处理边界</strong>
+                  <span>
+                    只写入本机浏览器状态；主题会暂时离开未读队列，但不会标记已读，也不会同步
+                    Memory Service 或原始聊天平台。到期或恢复未读后回到未读流。
+                  </span>
+                </div>
                 <button
                   v-for="option in detailDeferOptions"
                   :key="option.key"
@@ -71,7 +104,7 @@
               </div>
             </div>
             <div
-              v-if="!currentTopicMutedState"
+              v-if="topicDetailCanStartTriage"
               class="topic-detail-defer-menu topic-detail-mute-menu"
               @click.stop
             >
@@ -88,6 +121,17 @@
                 class="topic-detail-defer-options topic-detail-mute-options"
                 role="menu"
               >
+                <div
+                  class="topic-detail-boundary-receipt topic-detail-mute-boundary"
+                  role="note"
+                  aria-label="静音边界"
+                >
+                  <strong>静音边界</strong>
+                  <span>
+                    只调整本机注意力过滤；未读仍保留在主题里，不删除消息，不写回
+                    Memory Service 或原始聊天平台。可在静音视图或本页取消静音。
+                  </span>
+                </div>
                 <div class="topic-detail-mute-reasons" role="none">
                   <div class="topic-detail-menu-label">静音原因</div>
                   <div class="topic-detail-mute-reason-grid" role="group">
@@ -125,6 +169,13 @@
                 </button>
               </div>
             </div>
+            <span
+              v-if="currentTopicMutedState && topicUnreadCount === 0"
+              class="topic-detail-action-note"
+            >
+              当前没有未读；本机静音仍会隐藏未来未读。取消静音只删除本机过滤，不同步
+              Memory Service 或原始聊天平台。
+            </span>
           </div>
         </div>
       </div>
@@ -155,7 +206,7 @@
       <span>
         已将「{{ detailMuteUndo.topicName }}」静音：{{
           formatMutedReason(detailMuteUndo.reason)
-        }}{{ formatMutedUntil(detailMuteUndo.until) }}
+        }}{{ formatMutedUntil(detailMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
       <button type="button" @click="handleUndoDetailMute">取消静音</button>
     </div>
@@ -188,6 +239,24 @@
         >
           {{ tab.label }}
         </button>
+      </div>
+
+      <div
+        v-if="sourceOpenReceipt"
+        class="source-open-receipt"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="source-open-receipt-header">
+          <strong>{{ sourceOpenReceipt.title }}</strong>
+          <span class="source-open-host">{{ sourceOpenReceipt.host }}</span>
+        </div>
+        <p>{{ sourceOpenReceipt.summary }}</p>
+        <ul>
+          <li v-for="detail in sourceOpenReceipt.details" :key="detail">
+            {{ detail }}
+          </li>
+        </ul>
       </div>
 
       <!-- 相关项目标签页 -->
@@ -238,15 +307,44 @@
               <div style="margin-bottom: 0.5rem">
                 <span class="card-badge">{{ resource.type }}</span>
               </div>
-              <p v-if="getSafeExternalUrl(resource.url)">
+              <p v-if="getResourceSourceLink(resource)">
                 <a
-                  :href="getSafeExternalUrl(resource.url)"
-                  class="item-link"
+                  :href="getResourceSourceLink(resource)?.url"
+                  class="item-link topic-source-link"
                   target="_blank"
                   rel="noopener noreferrer"
-                  @click.stop
-                  >查看资源</a
+                  :title="getResourceSourceLink(resource)?.title"
+                  :aria-label="getResourceSourceLink(resource)?.title"
+                  @click.stop="
+                    handleSourceOpen(
+                      getResourceSourceLink(resource),
+                      '资源来源',
+                    )
+                  "
                 >
+                  <span>{{ getResourceSourceLink(resource)?.label }}</span>
+                  <span
+                    v-if="getResourceSourceLink(resource)?.host"
+                    class="topic-source-host"
+                    >{{ getResourceSourceLink(resource)?.host }}</span
+                  >
+                </a>
+                <span
+                  v-if="hasFilteredResourceSourceCandidates(resource)"
+                  class="topic-source-filtered"
+                  :title="getResourceFilteredSourceTitle(resource)"
+                  :aria-label="getResourceFilteredSourceTitle(resource)"
+                >
+                  {{ getResourceFilteredSourceLabel(resource) }}
+                </span>
+              </p>
+              <p
+                v-else-if="hasHiddenResourceSourceCandidates(resource)"
+                class="item-muted topic-source-hidden"
+                :title="getResourceHiddenSourceTitle(resource)"
+                :aria-label="getResourceHiddenSourceTitle(resource)"
+              >
+                {{ getResourceHiddenSourceLabel(resource) }}
               </p>
               <p v-else class="item-muted">暂无可打开链接</p>
             </div>
@@ -343,10 +441,103 @@
           :class="['message-focus-notice', messageFocusNotice.type]"
           role="status"
         >
-          {{ messageFocusNotice.text }}
+          <div class="message-focus-notice-header">
+            <strong>{{ messageFocusNotice.title }}</strong>
+            <span
+              v-if="messageFocusNotice.targetLabel"
+              class="message-focus-target-chip"
+            >
+              {{ messageFocusNotice.targetLabel }}
+            </span>
+          </div>
+          <p>{{ messageFocusNotice.summary }}</p>
+          <ul>
+            <li v-for="detail in messageFocusNotice.details" :key="detail">
+              {{ detail }}
+            </li>
+          </ul>
+          <div
+            v-if="messageFocusNotice.actions?.length"
+            class="message-focus-actions"
+          >
+            <button
+              v-for="action in messageFocusNotice.actions"
+              :key="action.kind"
+              type="button"
+              :class="[
+                'message-focus-action',
+                { undo: action.kind === 'undoMessageReadSync' },
+              ]"
+              @click="handleMessageFocusNoticeAction(action.kind)"
+            >
+              {{ action.label }}
+            </button>
+          </div>
+        </div>
+        <div
+          class="topic-read-batch-receipt"
+          role="note"
+          aria-label="阅读批次回执"
+        >
+          <div class="topic-read-batch-header">
+            <strong>阅读批次回执</strong>
+            <span class="topic-read-batch-mode">
+              {{ conversationReadBatchReceipt.modeLabel }}
+            </span>
+          </div>
+          <p>{{ conversationReadBatchReceipt.summary }}</p>
+          <div
+            class="topic-read-batch-metrics"
+            aria-label="阅读批次构成"
+          >
+            <span
+              v-for="metric in conversationReadBatchReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+          <ul>
+            <li
+              v-for="detail in conversationReadBatchReceipt.details"
+              :key="detail"
+            >
+              {{ detail }}
+            </li>
+          </ul>
         </div>
         <div v-if="filteredConversations.length === 0" class="empty-state">
-          {{ conversationEmptyText }}
+          <div>{{ conversationEmptyText }}</div>
+          <div
+            v-if="conversationEmptyRecoveryReceipt"
+            class="conversation-empty-recovery"
+            role="note"
+            aria-label="空批次恢复回执"
+          >
+            <div class="conversation-empty-recovery-head">
+              <strong>{{ conversationEmptyRecoveryReceipt.title }}</strong>
+              <span>{{ conversationReadBatchReceipt.modeLabel }}</span>
+            </div>
+            <p>{{ conversationEmptyRecoveryReceipt.summary }}</p>
+            <ul>
+              <li
+                v-for="detail in conversationEmptyRecoveryReceipt.details"
+                :key="detail"
+              >
+                {{ detail }}
+              </li>
+            </ul>
+            <div class="conversation-empty-recovery-actions">
+              <button
+                v-for="action in conversationEmptyRecoveryReceipt.actions"
+                :key="action.kind"
+                type="button"
+                @click="handleConversationRecoveryAction(action.kind)"
+              >
+                {{ action.label }}
+              </button>
+            </div>
+          </div>
         </div>
         <div v-else class="conversations-list">
           <div
@@ -388,18 +579,39 @@
                 </div>
               </div>
               <div class="conversation-side-actions">
-                <a
-                  v-if="getConversationSourceUrl(conv)"
-                  class="conversation-source-link"
-                  :href="getConversationSourceUrl(conv)"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  :title="getConversationSourceTitle(conv)"
-                  :aria-label="getConversationSourceTitle(conv)"
-                  @click.stop
-                >
-                  {{ getConversationSourceLabel(conv) }}
-                </a>
+                <template v-if="getConversationSourceUrl(conv)">
+                  <a
+                    class="conversation-source-link"
+                    :href="getConversationSourceUrl(conv)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    :title="getConversationSourceTitle(conv)"
+                    :aria-label="getConversationSourceTitle(conv)"
+                    @click.stop="
+                      handleSourceOpen(
+                        getConversationSourceLink(conv),
+                        '消息来源',
+                      )
+                    "
+                  >
+                    <span class="conversation-source-label">{{
+                      getConversationSourceLabel(conv)
+                    }}</span>
+                    <span
+                      v-if="getConversationSourceHost(conv)"
+                      class="conversation-source-host"
+                      >{{ getConversationSourceHost(conv) }}</span
+                    >
+                  </a>
+                  <span
+                    v-if="hasFilteredConversationSourceCandidates(conv)"
+                    class="conversation-source-filtered"
+                    :title="getConversationFilteredSourceTitle(conv)"
+                    :aria-label="getConversationFilteredSourceTitle(conv)"
+                  >
+                    {{ getConversationFilteredSourceLabel(conv) }}
+                  </span>
+                </template>
                 <span
                   v-else-if="hasHiddenConversationSourceCandidates(conv)"
                   class="conversation-source-hidden"
@@ -522,7 +734,16 @@
                 <div class="webpage-title">
                   {{ webpage.title || '未知标题' }}
                 </div>
-                <div class="webpage-url">{{ webpage.url || '#' }}</div>
+                <div
+                  :class="[
+                    'webpage-url',
+                    { hidden: hasHiddenWebpageSourceCandidates(webpage) },
+                  ]"
+                  :title="getWebpageSourceDisplayTitle(webpage)"
+                  :aria-label="getWebpageSourceDisplayTitle(webpage)"
+                >
+                  {{ getWebpageSourceDisplayText(webpage) }}
+                </div>
                 <div class="webpage-meta">
                   <span>访问时间：{{ webpage.visitTime || '未知时间' }}</span>
                   <span v-if="webpage.relevanceScore"
@@ -532,15 +753,43 @@
                   >
                 </div>
                 <a
-                  v-if="getSafeExternalUrl(webpage.url)"
-                  class="webpage-open-link"
-                  :href="getSafeExternalUrl(webpage.url)"
+                  v-if="getWebpageSourceLink(webpage)"
+                  class="webpage-open-link topic-source-link"
+                  :href="getWebpageSourceLink(webpage)?.url"
                   target="_blank"
                   rel="noopener noreferrer"
-                  @click.stop
+                  :title="getWebpageSourceLink(webpage)?.title"
+                  :aria-label="getWebpageSourceLink(webpage)?.title"
+                  @click.stop="
+                    handleSourceOpen(
+                      getWebpageSourceLink(webpage),
+                      '网页来源',
+                    )
+                  "
                 >
-                  打开来源
+                  <span>{{ getWebpageSourceLink(webpage)?.label }}</span>
+                  <span
+                    v-if="getWebpageSourceLink(webpage)?.host"
+                    class="topic-source-host"
+                    >{{ getWebpageSourceLink(webpage)?.host }}</span
+                  >
                 </a>
+                <span
+                  v-if="hasFilteredWebpageSourceCandidates(webpage)"
+                  class="topic-source-filtered webpage-source-filtered"
+                  :title="getWebpageFilteredSourceTitle(webpage)"
+                  :aria-label="getWebpageFilteredSourceTitle(webpage)"
+                >
+                  {{ getWebpageFilteredSourceLabel(webpage) }}
+                </span>
+                <span
+                  v-else-if="hasHiddenWebpageSourceCandidates(webpage)"
+                  class="topic-source-hidden webpage-source-hidden"
+                  :title="getWebpageHiddenSourceTitle(webpage)"
+                  :aria-label="getWebpageHiddenSourceTitle(webpage)"
+                >
+                  {{ getWebpageHiddenSourceLabel(webpage) }}
+                </span>
               </div>
             </div>
             <div class="webpage-content">
@@ -576,24 +825,31 @@ import {
   findTopicConversationByMessageId,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
-  getTopicConversationPrimaryId,
+  getTopicConversationRenderIdentity,
   getTopicConversationReadSyncId,
   getTopicDetailRecentData,
   getTopicDetailUnreadCount,
+  getTopicMessageIdentityCandidates,
+  getTopicMessageIdentityValues,
   isTopicMessageExplicitlyUnread,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
+  topicMessageMatchesIdentity,
   topicConversationHasContextMatch,
   topicConversationMatchesQuery,
   type TopicConversationReadFilter,
 } from '../topic-detail-data';
 import { renderHighlightedText } from '../topic-detail-rendering';
 import {
-  type ExternalUrlSafetyReason,
+  type ExternalLinkCandidate,
+  type SafeExternalLinkPresentation,
+  type ExternalUrlSafetyResult,
+  getBlockedExternalUrlResults,
   getExternalUrlSafety,
+  getFirstSafeExternalLinkPresentation,
   getFirstSafeExternalUrl,
-  getSafeExternalUrl,
-  hasBlockedExternalUrlCandidate,
+  getHiddenExternalUrlLabel,
+  getHiddenExternalUrlTitle,
 } from '../topic-link-safety';
 import { formatTopicRelativeTime } from '../topic-time';
 
@@ -613,9 +869,28 @@ const currentTopicMutedState = computed(() => {
     reason?: TopicMuteReasonKey;
   } | null;
 });
+const currentTopicDeferredState = computed(() => {
+  if (!topicId.value) return null;
+  return store.getTopicDeferredState(topicId.value) as {
+    until: number;
+    createdAt?: number;
+  } | null;
+});
 const activeTab = ref('conversations');
 const topicUnreadCount = computed(() =>
   getTopicDetailUnreadCount(topicData.value),
+);
+const showTopicDetailTriageActions = computed(
+  () =>
+    topicUnreadCount.value > 0 ||
+    Boolean(currentTopicMutedState.value) ||
+    Boolean(currentTopicDeferredState.value),
+);
+const topicDetailCanStartTriage = computed(
+  () =>
+    topicUnreadCount.value > 0 &&
+    !currentTopicMutedState.value &&
+    !currentTopicDeferredState.value,
 );
 const topicRecentData = computed(() =>
   getTopicDetailRecentData(topicData.value),
@@ -647,10 +922,51 @@ const expandedConversations = ref<Set<string>>(new Set());
 const stickyUnreadConversationIds = ref<Set<string>>(new Set());
 const highlightedConversationId = ref<string | null>(null);
 const highlightedMessageId = ref<string | null>(null);
-const messageFocusNotice = ref<{
+type MessageFocusNotice = {
   type: 'info' | 'warning';
-  text: string;
-} | null>(null);
+  title: string;
+  targetLabel?: string;
+  summary: string;
+  details: string[];
+  actions?: MessageFocusAction[];
+};
+type MessageFocusActionKind =
+  | 'showAllConversations'
+  | 'dismissFocusNotice'
+  | 'undoMessageReadSync';
+type MessageFocusAction = {
+  kind: MessageFocusActionKind;
+  label: string;
+};
+const messageFocusNotice = ref<MessageFocusNotice | null>(null);
+type SourceOpenReceipt = {
+  title: string;
+  host: string;
+  summary: string;
+  details: string[];
+};
+type ConversationReadBatchReceipt = {
+  modeLabel: string;
+  summary: string;
+  metrics: string[];
+  details: string[];
+};
+type ConversationEmptyRecoveryAction =
+  | 'clearSearch'
+  | 'resetGroup'
+  | 'showUnread'
+  | 'showAll';
+type ConversationEmptyRecoveryReceipt = {
+  title: string;
+  summary: string;
+  details: string[];
+  actions: Array<{
+    kind: ConversationEmptyRecoveryAction;
+    label: string;
+  }>;
+};
+const sourceOpenReceipt = ref<SourceOpenReceipt | null>(null);
+let sourceOpenReceiptTimer: ReturnType<typeof window.setTimeout> | null = null;
 const detailDeferMenuOpen = ref(false);
 const detailDeferOptions = ref(getTopicDeferPresetOptions());
 const detailDeferredUndo = ref<{
@@ -689,8 +1005,39 @@ const conversationEmptyText = computed(() => {
   return '没有匹配的聊天记录';
 });
 
+const conversationReadFilterLabel = computed(() => {
+  if (convReadFilter.value === 'unread') return '仅未读视图';
+  if (convReadFilter.value === 'read') return '已读视图';
+  return '全部状态视图';
+});
+
+const conversationGroupFilterLabel = computed(() => {
+  switch (convFilter.value) {
+    case 'team':
+      return '团队群';
+    case 'project':
+      return '项目群';
+    case 'tech':
+      return '技术讨论';
+    default:
+      return '全部群组';
+  }
+});
+
+const conversationFilterScopeLabel = computed(() => {
+  const query = convSearchQuery.value.trim();
+  const filters = [
+    conversationReadFilterLabel.value,
+    conversationGroupFilterLabel.value,
+  ];
+  if (query) {
+    filters.push(`本页搜索「${query}」`);
+  }
+  return filters.join(' / ');
+});
+
 const getConversationRenderId = (conversation: any, index = 0): string => {
-  return getTopicConversationPrimaryId(conversation) || `conversation-${index}`;
+  return getTopicConversationRenderIdentity(conversation, index);
 };
 
 const getConversationFocusRenderId = (conversation: any): string => {
@@ -767,6 +1114,118 @@ const filteredConversations = computed(() => {
 
   return filtered;
 });
+
+const getConversationReadStateNodes = (conversation: any): any[] => {
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages.filter(Boolean)
+    : [];
+  return [conversation, ...contextMessages].filter(Boolean);
+};
+
+const hasConversationUnknownReadState = (conversation: any): boolean => {
+  const readStateNodes = getConversationReadStateNodes(conversation);
+  if (readStateNodes.length === 0) return false;
+  return readStateNodes.some(
+    (message) => message?.isRead !== true && message?.isRead !== false,
+  );
+};
+
+const conversationReadBatchReceipt = computed<ConversationReadBatchReceipt>(
+  () => {
+    const visibleCount = filteredConversations.value.length;
+    const totalCount = conversationTotalCount.value;
+    const unreadConversationCount = conversationUnreadCount.value;
+    const topicUnreadSignalCount = topicUnreadCount.value;
+    const stickyCount = stickyUnreadConversationIds.value.size;
+    const unknownReadStateCount = topicConversations.value.filter(
+      hasConversationUnknownReadState,
+    ).length;
+    const activeLocalState = currentTopicMutedState.value
+      ? '当前主题已被本机静音，仍可在本页阅读和恢复；未读没有因此被标记已读。'
+      : currentTopicDeferredState.value
+        ? '当前主题已被本机稍后处理，仍可在本页阅读和恢复；未读没有因此被标记已读。'
+        : '当前主题没有本机稍后或静音过滤状态。';
+    const stickyDetail =
+      stickyCount > 0
+        ? `有 ${stickyCount} 条刚展开的未读讨论被临时留在当前批次，避免已读同步后立刻消失。`
+        : '展开未读上下文后，会短暂保留当前讨论以便继续阅读。';
+    const unknownReadStateDetail =
+      unknownReadStateCount > 0
+        ? `有 ${unknownReadStateCount} 条聊天包含未知读状态；缺少明确读状态的历史聊天不会被自动算作未读。`
+        : '只有带明确未读标记、未读预览或主题未读计数的内容会进入未读压力。';
+    const metrics = [
+      `已加载 ${totalCount}`,
+      `当前显示 ${visibleCount}`,
+      `明确未读聊天 ${unreadConversationCount}`,
+      `主题未读信号 ${topicUnreadSignalCount}`,
+    ];
+    if (stickyCount > 0) metrics.push(`暂留 ${stickyCount}`);
+    if (unknownReadStateCount > 0) {
+      metrics.push(`未知读状态 ${unknownReadStateCount}`);
+    }
+    metrics.push('排序：未读优先');
+
+    return {
+      modeLabel: conversationReadFilterLabel.value,
+      summary: `当前批次显示 ${visibleCount}/${totalCount} 条聊天；其中 ${unreadConversationCount} 条聊天、${topicUnreadSignalCount} 个主题未读信号仍需处理。`,
+      metrics,
+      details: [
+        `筛选口径：${conversationFilterScopeLabel.value}；本页搜索和群组筛选只影响当前已加载详情。`,
+        '排序依据：先把明确未读聊天排在前面，同一状态保留详情返回顺序；本页不会补拉历史消息或重排后端主题。',
+        '展开上下文才会把对应消息走当前实体缓存路径标记已读；不会改写原始聊天平台。',
+        '全部已阅只更新当前主题的已知未读信号，并保留短时间撤销；不会发送、删除或同步外部系统。',
+        stickyDetail,
+        unknownReadStateDetail,
+        activeLocalState,
+      ],
+    };
+  },
+);
+
+const conversationEmptyRecoveryReceipt =
+  computed<ConversationEmptyRecoveryReceipt | null>(() => {
+    if (
+      filteredConversations.value.length > 0 ||
+      conversationTotalCount.value === 0
+    ) {
+      return null;
+    }
+
+    const query = convSearchQuery.value.trim();
+    const actions: ConversationEmptyRecoveryReceipt['actions'] = [];
+    const details: string[] = [];
+
+    if (query) {
+      details.push(`本页搜索「${query}」没有命中当前已加载聊天。`);
+      actions.push({ kind: 'clearSearch', label: '清空本页搜索' });
+    }
+
+    if (convFilter.value !== 'all') {
+      details.push(
+        `群组筛选为「${conversationGroupFilterLabel.value}」，可能隐藏其他讨论。`,
+      );
+      actions.push({ kind: 'resetGroup', label: '显示全部群组' });
+    }
+
+    if (topicUnreadCount.value > 0) {
+      actions.push({ kind: 'showUnread', label: '恢复未读批次' });
+    }
+
+    actions.push({ kind: 'showAll', label: '查看全部聊天' });
+
+    return {
+      title: '空批次恢复回执',
+      summary:
+        topicUnreadCount.value > 0
+          ? `当前本页筛选隐藏了 ${conversationTotalCount.value} 条已加载聊天；主题仍有 ${topicUnreadCount.value} 个未读信号没有因此被标记已读。`
+          : `当前本页筛选隐藏了 ${conversationTotalCount.value} 条已加载聊天；没有发现明确未读信号。`,
+      details: [
+        ...details,
+        '这些操作只恢复本页阅读视图，不刷新后端、不同步 Memory Service、不改写原始聊天平台。',
+      ],
+      actions,
+    };
+  });
 
 const filteredWebpages = computed(() => {
   let filtered = topicWebpages.value;
@@ -845,6 +1304,22 @@ const handleMarkAllAsRead = async () => {
     await store.markTopicAsRead(topicId.value);
     clearStickyUnreadConversations();
   }
+};
+
+const handleConversationRecoveryAction = (
+  action: ConversationEmptyRecoveryAction,
+) => {
+  if (action === 'clearSearch') {
+    convSearchQuery.value = '';
+    return;
+  }
+  if (action === 'resetGroup') {
+    convFilter.value = 'all';
+    return;
+  }
+  convSearchQuery.value = '';
+  convFilter.value = 'all';
+  convReadFilter.value = action === 'showUnread' ? 'unread' : 'all';
 };
 
 const handleUndoTopicRead = async () => {
@@ -970,6 +1445,14 @@ const handleUndoDetailDefer = () => {
   clearDetailDeferredUndo();
 };
 
+const handleRestoreDeferFromDetail = () => {
+  if (!topicId.value) return;
+  store.restoreDeferredTopic(topicId.value);
+  if (detailDeferredUndo.value?.topicId === topicId.value) {
+    clearDetailDeferredUndo();
+  }
+};
+
 const handleMuteTopicFromDetail = async (
   until?: number | null,
   reason: TopicMuteReasonKey = detailSelectedMuteReason.value,
@@ -1039,47 +1522,210 @@ const normalizeQueryValue = (value: unknown): string => {
   return String(value || '').trim();
 };
 
-const getTopicMessageIds = (message: any): string[] => {
-  return [
-    message?.id,
-    message?.messageId,
-    message?.message_id,
-    message?.conversationId,
-    message?.conversation_id,
-    message?.sourceMessageId,
-    message?.source_message_id,
-    message?.externalMessageId,
-    message?.external_message_id,
-  ]
-    .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value).trim())
-    .filter(Boolean);
-};
-
 const doesTopicMessageMatchId = (message: any, messageId: string): boolean => {
-  const normalizedMessageId = String(messageId || '').trim();
-  if (!normalizedMessageId) return false;
-  return getTopicMessageIds(message).includes(normalizedMessageId);
+  return topicMessageMatchesIdentity(message, messageId);
 };
 
 const getTopicMessageIdentityAttr = (message: any): string =>
-  getTopicMessageIds(message).map(encodeURIComponent).join(' ');
+  getTopicMessageIdentityValues(message).map(encodeURIComponent).join(' ');
 
 const doesTopicMessageIdentityAttrMatch = (
   identityAttr: string | undefined,
   messageId: string,
 ): boolean => {
-  const encodedMessageId = encodeURIComponent(String(messageId || '').trim());
-  if (!encodedMessageId) return false;
-  return String(identityAttr || '')
-    .split(/\s+/)
-    .includes(encodedMessageId);
+  const encodedMessageIds =
+    getTopicMessageIdentityCandidates(messageId).map(encodeURIComponent);
+  if (encodedMessageIds.length === 0) return false;
+  const identityAttrSet = new Set(String(identityAttr || '').split(/\s+/));
+  return encodedMessageIds.some((encodedMessageId) =>
+    identityAttrSet.has(encodedMessageId),
+  );
 };
 
 const isTargetedContextMessage = (message: any): boolean => {
   const messageId = highlightedMessageId.value;
   if (!messageId) return false;
   return doesTopicMessageMatchId(message, messageId);
+};
+
+const MESSAGE_FOCUS_ID_PARAM_KEYS = [
+  'messageId',
+  'message_id',
+  'conversationId',
+  'conversation_id',
+  'sourceMessageId',
+  'source_message_id',
+  'externalMessageId',
+  'external_message_id',
+  'id',
+  'msg',
+  'ts',
+  'thread_ts',
+] as const;
+
+const truncateMessageFocusIdentity = (value: string): string => {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+};
+
+const formatMessageFocusIdentity = (value: unknown): string => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '未知';
+
+  try {
+    const url = new URL(normalized);
+    const safeHost = url.host || url.hostname || 'unknown-host';
+    const matchedParam = MESSAGE_FOCUS_ID_PARAM_KEYS.map((key) => ({
+      key,
+      value: url.searchParams.get(key),
+    })).find((entry) => entry.value);
+    if (matchedParam?.value) {
+      return truncateMessageFocusIdentity(
+        `${safeHost}?${matchedParam.key}=${matchedParam.value}`,
+      );
+    }
+    const pathTail =
+      url.pathname
+        .split('/')
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+        .pop() || '';
+    return truncateMessageFocusIdentity(
+      pathTail ? `${safeHost}/.../${pathTail}` : safeHost,
+    );
+  } catch (_error) {
+    return truncateMessageFocusIdentity(normalized);
+  }
+};
+
+const getFocusedTargetMessage = (conversation: any, messageId: string): any => {
+  if (doesTopicMessageMatchId(conversation, messageId)) {
+    return conversation;
+  }
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+  return (
+    contextMessages.find((contextMessage: any) =>
+      doesTopicMessageMatchId(contextMessage, messageId),
+    ) || conversation
+  );
+};
+
+const getMessageFocusMatchBasisDetail = (
+  messageId: string,
+  targetMessage: any,
+): string => {
+  const requestCandidates = getTopicMessageIdentityCandidates(messageId);
+  const targetCandidates = getTopicMessageIdentityValues(targetMessage);
+  const requestSet = new Set(requestCandidates);
+  const matchedTargetIdentity = targetCandidates.find((candidate) =>
+    requestSet.has(candidate),
+  );
+
+  if (!matchedTargetIdentity) {
+    return `定位请求：${formatMessageFocusIdentity(
+      messageId,
+    )}；命中当前目标，但没有可展示的稳定身份交集。`;
+  }
+
+  const normalizedRequest = String(messageId || '').trim();
+  const usedAlias =
+    matchedTargetIdentity !== normalizedRequest ||
+    requestCandidates.length > 1 ||
+    targetCandidates.length > 1;
+  const aliasSuffix = usedAlias ? '（含 URL 参数、编码值或 Slack 别名归一化）' : '';
+  return `定位请求：${formatMessageFocusIdentity(
+    messageId,
+  )}；命中依据：${formatMessageFocusIdentity(matchedTargetIdentity)}${aliasSuffix}。`;
+};
+
+const buildMessageFocusSuccessNotice = (
+  targetLabel: string,
+  didSyncReadState: boolean,
+  messageId: string,
+  targetMessage: any,
+): MessageFocusNotice => ({
+  type: 'info',
+  title: '消息定位回执',
+  targetLabel,
+  summary: didSyncReadState
+    ? `已定位到链接里的${targetLabel}，并同步为已读。`
+    : `已定位到链接里的${targetLabel}；当前没有明确未读状态需要同步。`,
+  details: [
+    getMessageFocusMatchBasisDetail(messageId, targetMessage),
+    '已临时切到聊天记录，并清空搜索、状态和群组筛选。',
+    '定位会匹配 messageId、来源 permalink、URL 参数/路径别名和 Slack timestamp 口径。',
+    '已展开父讨论并高亮链接目标；高亮约 6 秒后自动淡出，定位回执会保留到收起或打开新的深链。',
+    didSyncReadState
+      ? '已读同步走当前实体缓存路径，不代表原始聊天平台已被改写。'
+      : '未改写已读计数，也不会影响原始聊天平台状态。',
+  ],
+  actions: didSyncReadState
+    ? [
+        {
+          kind: 'undoMessageReadSync',
+          label: '撤销这次已读',
+        },
+        {
+          kind: 'dismissFocusNotice',
+          label: '收起定位回执',
+        },
+      ]
+    : [
+        {
+          kind: 'dismissFocusNotice',
+          label: '收起定位回执',
+        },
+      ],
+});
+
+const buildMessageFocusMissingNotice = (): MessageFocusNotice => ({
+  type: 'warning',
+  title: '消息定位未完成',
+  summary: '当前主题详情没有返回链接里的消息，已显示全部聊天记录。',
+  details: [
+    '可能是后端详情只返回了最近片段，或这个 messageId 来自未加载的历史消息。',
+    '没有标记任何消息已读，也没有改写未读计数。',
+    '需要跨全部记忆查找时，请使用后端搜索或回到原始来源链接。',
+  ],
+  actions: [
+    {
+      kind: 'showAllConversations',
+      label: '查看全部聊天记录',
+    },
+  ],
+});
+
+const handleShowAllConversationsFromFocusReceipt = () => {
+  activeTab.value = 'conversations';
+  convFilter.value = 'all';
+  convReadFilter.value = 'all';
+  convSearchQuery.value = '';
+};
+
+const clearMessageFocusHighlight = () => {
+  highlightedConversationId.value = null;
+  highlightedMessageId.value = null;
+};
+
+const handleMessageFocusNoticeAction = async (
+  actionKind: MessageFocusActionKind,
+) => {
+  if (actionKind === 'showAllConversations') {
+    handleShowAllConversationsFromFocusReceipt();
+    return;
+  }
+  if (actionKind === 'undoMessageReadSync') {
+    await store.undoLastConversationRead();
+    clearMessageFocusHighlight();
+    messageFocusNotice.value = null;
+    return;
+  }
+  if (actionKind === 'dismissFocusNotice') {
+    clearMessageFocusHighlight();
+    messageFocusNotice.value = null;
+  }
 };
 
 const focusConversationFromQuery = async (messageIdValue: unknown) => {
@@ -1104,10 +1750,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     convSearchQuery.value = '';
     highlightedConversationId.value = null;
     highlightedMessageId.value = null;
-    messageFocusNotice.value = {
-      type: 'warning',
-      text: '没有在当前主题详情中找到链接里的消息，已显示全部聊天记录。',
-    };
+    messageFocusNotice.value = buildMessageFocusMissingNotice();
     return;
   }
 
@@ -1115,6 +1758,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     targetConversation,
     messageId,
   );
+  const targetMessage = getFocusedTargetMessage(targetConversation, messageId);
   activeTab.value = 'conversations';
   convFilter.value = 'all';
   convReadFilter.value = 'all';
@@ -1128,12 +1772,12 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     messageId,
   );
   const targetLabel = isConversationTarget ? '聊天记录' : '上下文消息';
-  messageFocusNotice.value = {
-    type: 'info',
-    text: didSyncReadState
-      ? `已定位到链接里的${targetLabel}，并同步为已读。`
-      : `已定位到链接里的${targetLabel}；当前没有明确未读状态需要同步。`,
-  };
+  messageFocusNotice.value = buildMessageFocusSuccessNotice(
+    targetLabel,
+    didSyncReadState,
+    messageId,
+    targetMessage,
+  );
   await nextTick();
 
   const targetElement = Array.from(
@@ -1158,9 +1802,6 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     }
     if (highlightedMessageId.value === messageId) {
       highlightedMessageId.value = null;
-    }
-    if (messageFocusNotice.value?.type === 'info') {
-      messageFocusNotice.value = null;
     }
   }, 6000);
 };
@@ -1216,26 +1857,16 @@ const getConversationSourceCandidates = (
   ];
 };
 
-const getConversationSourceLink = (conversation: any) => {
-  for (const candidate of getConversationSourceCandidates(conversation)) {
-    const safety = getExternalUrlSafety(candidate.url);
-    if (!safety.safeUrl) continue;
-
-    const originLabel = candidate.origin === 'context' ? '上下文来源' : '来源';
-    const sourceLabel =
-      candidate.origin === 'context' ? '上下文来源' : '原始来源';
-
-    return {
-      url: safety.safeUrl,
-      label: originLabel,
-      title: safety.hostname
-        ? `打开${sourceLabel}：${safety.hostname}`
-        : `打开${sourceLabel}`,
-    };
-  }
-
-  return null;
-};
+const getConversationSourceLink = (conversation: any) =>
+  getFirstSafeExternalLinkPresentation(
+    getConversationSourceCandidates(conversation).map((candidate) => ({
+      url: candidate.url,
+      label: candidate.origin === 'context' ? '上下文来源' : '来源',
+      titleLabel: candidate.origin === 'context' ? '上下文来源' : '原始来源',
+    })),
+    '来源',
+    '原始来源',
+  );
 
 const getConversationSourceLabel = (conversation: any): string =>
   getConversationSourceLink(conversation)?.label || '来源';
@@ -1243,65 +1874,189 @@ const getConversationSourceLabel = (conversation: any): string =>
 const getConversationSourceTitle = (conversation: any): string =>
   getConversationSourceLink(conversation)?.title || '没有可信来源链接';
 
-const hasHiddenConversationSourceCandidates = (conversation: any): boolean => {
-  return hasBlockedExternalUrlCandidate(
+const getConversationSourceHost = (conversation: any): string =>
+  getConversationSourceLink(conversation)?.host || '';
+
+const clearSourceOpenReceiptTimer = () => {
+  if (sourceOpenReceiptTimer) {
+    window.clearTimeout(sourceOpenReceiptTimer);
+    sourceOpenReceiptTimer = null;
+  }
+};
+
+const handleSourceOpen = (
+  link: SafeExternalLinkPresentation | null,
+  sourceKind: string,
+) => {
+  if (!link) return;
+
+  clearSourceOpenReceiptTimer();
+  const host = link.host || '安全 http/https 来源';
+  sourceOpenReceipt.value = {
+    title: '来源打开回执',
+    host,
+    summary: `已请求浏览器打开${sourceKind}：${host}。`,
+    details: [
+      '只打开外部标签页，不会重新读取原始消息、网页或资源。',
+      '不会同步 Memory Service、标记已读、确认结论或写回原始平台。',
+    ],
+  };
+  sourceOpenReceiptTimer = window.setTimeout(() => {
+    sourceOpenReceipt.value = null;
+    sourceOpenReceiptTimer = null;
+  }, 9000);
+};
+
+const hasHiddenConversationSourceCandidates = (conversation: any): boolean =>
+  getBlockedConversationSourceResults(conversation).length > 0;
+
+const getBlockedConversationSourceResults = (
+  conversation: any,
+): ExternalUrlSafetyResult[] =>
+  getBlockedExternalUrlResults(
     ...getConversationSourceCandidates(conversation).map(
       (candidate) => candidate.url,
     ),
   );
-};
-
-const getExternalUrlBlockedReasonLabel = (
-  reason: ExternalUrlSafetyReason,
-): string => {
-  switch (reason) {
-    case 'credentialed_url':
-      return '包含账号信息';
-    case 'invalid':
-      return '格式无效';
-    case 'unsupported_protocol':
-      return '非 http/https';
-    default:
-      return '不符合安全规则';
-  }
-};
-
-const getBlockedConversationSourceResults = (conversation: any) =>
-  getConversationSourceCandidates(conversation)
-    .map((candidate) => getExternalUrlSafety(candidate.url))
-    .filter((safety) => safety.blocked);
 
 const getConversationHiddenSourceLabel = (conversation: any): string => {
   const blockedResults = getBlockedConversationSourceResults(conversation);
-  if (!blockedResults.length) return '来源已隐藏';
-
-  const reasonLabels = Array.from(
-    new Set(
-      blockedResults.map((safety) =>
-        getExternalUrlBlockedReasonLabel(safety.reason),
-      ),
-    ),
-  );
-  if (blockedResults.length === 1 && reasonLabels.length === 1) {
-    return `来源已隐藏 · ${reasonLabels[0]}`;
-  }
-
-  return `来源已隐藏 · ${blockedResults.length} 个不可信链接`;
+  return getHiddenExternalUrlLabel(blockedResults, '来源已隐藏');
 };
 
 const getConversationHiddenSourceTitle = (conversation: any): string => {
   const blockedResults = getBlockedConversationSourceResults(conversation);
-  const reasonSummary = Array.from(
-    new Set(
-      blockedResults.map((safety) =>
-        getExternalUrlBlockedReasonLabel(safety.reason),
-      ),
-    ),
-  ).join('、');
+  return getHiddenExternalUrlTitle(blockedResults, '来源链接');
+};
 
-  return blockedResults.length > 1
-    ? `已隐藏 ${blockedResults.length} 个不可信来源链接：${reasonSummary}`
-    : `来源链接已隐藏：${reasonSummary || '不符合安全规则'}`;
+const hasFilteredConversationSourceCandidates = (
+  conversation: any,
+): boolean =>
+  Boolean(getConversationSourceLink(conversation)) &&
+  getBlockedConversationSourceResults(conversation).length > 0;
+
+const getConversationFilteredSourceLabel = (conversation: any): string =>
+  getHiddenExternalUrlLabel(
+    getBlockedConversationSourceResults(conversation),
+    '候选已过滤',
+  );
+
+const getConversationFilteredSourceTitle = (conversation: any): string =>
+  getHiddenExternalUrlTitle(
+    getBlockedConversationSourceResults(conversation),
+    '来源候选',
+  );
+
+const getSingleSourceCandidates = (
+  url: unknown,
+  label: string,
+  titleLabel: string,
+): ExternalLinkCandidate[] => [
+  {
+    url,
+    label,
+    titleLabel,
+  },
+];
+
+const getResourceSourceLink = (resource: any) =>
+  getFirstSafeExternalLinkPresentation(
+    getSingleSourceCandidates(resource?.url, '查看资源', '资源'),
+    '查看资源',
+    '资源',
+  );
+
+const getBlockedResourceSourceResults = (
+  resource: any,
+): ExternalUrlSafetyResult[] => getBlockedExternalUrlResults(resource?.url);
+
+const hasHiddenResourceSourceCandidates = (resource: any): boolean =>
+  getBlockedResourceSourceResults(resource).length > 0;
+
+const getResourceHiddenSourceLabel = (resource: any): string =>
+  getHiddenExternalUrlLabel(
+    getBlockedResourceSourceResults(resource),
+    '来源已隐藏',
+  );
+
+const getResourceHiddenSourceTitle = (resource: any): string =>
+  getHiddenExternalUrlTitle(
+    getBlockedResourceSourceResults(resource),
+    '资源链接',
+  );
+
+const hasFilteredResourceSourceCandidates = (resource: any): boolean =>
+  Boolean(getResourceSourceLink(resource)) &&
+  getBlockedResourceSourceResults(resource).length > 0;
+
+const getResourceFilteredSourceLabel = (resource: any): string =>
+  getHiddenExternalUrlLabel(
+    getBlockedResourceSourceResults(resource),
+    '候选已过滤',
+  );
+
+const getResourceFilteredSourceTitle = (resource: any): string =>
+  getHiddenExternalUrlTitle(
+    getBlockedResourceSourceResults(resource),
+    '资源候选',
+  );
+
+const getWebpageSourceLink = (webpage: any) =>
+  getFirstSafeExternalLinkPresentation(
+    getSingleSourceCandidates(webpage?.url, '打开来源', '网页来源'),
+    '打开来源',
+    '网页来源',
+  );
+
+const getBlockedWebpageSourceResults = (
+  webpage: any,
+): ExternalUrlSafetyResult[] => getBlockedExternalUrlResults(webpage?.url);
+
+const hasHiddenWebpageSourceCandidates = (webpage: any): boolean =>
+  getBlockedWebpageSourceResults(webpage).length > 0;
+
+const getWebpageHiddenSourceLabel = (webpage: any): string =>
+  getHiddenExternalUrlLabel(
+    getBlockedWebpageSourceResults(webpage),
+    '来源已隐藏',
+  );
+
+const getWebpageHiddenSourceTitle = (webpage: any): string =>
+  getHiddenExternalUrlTitle(
+    getBlockedWebpageSourceResults(webpage),
+    '网页来源链接',
+  );
+
+const hasFilteredWebpageSourceCandidates = (webpage: any): boolean =>
+  Boolean(getWebpageSourceLink(webpage)) &&
+  getBlockedWebpageSourceResults(webpage).length > 0;
+
+const getWebpageFilteredSourceLabel = (webpage: any): string =>
+  getHiddenExternalUrlLabel(
+    getBlockedWebpageSourceResults(webpage),
+    '候选已过滤',
+  );
+
+const getWebpageFilteredSourceTitle = (webpage: any): string =>
+  getHiddenExternalUrlTitle(
+    getBlockedWebpageSourceResults(webpage),
+    '网页来源候选',
+  );
+
+const getWebpageSourceDisplayText = (webpage: any): string => {
+  const safety = getExternalUrlSafety(webpage?.url);
+  if (safety.safeUrl) return safety.safeUrl;
+  if (safety.blocked) return getWebpageHiddenSourceLabel(webpage);
+  return '暂无来源链接';
+};
+
+const getWebpageSourceDisplayTitle = (webpage: any): string => {
+  const safety = getExternalUrlSafety(webpage?.url);
+  if (safety.safeUrl) {
+    return safety.hostname ? `网页来源：${safety.hostname}` : '网页来源';
+  }
+  if (safety.blocked) return getWebpageHiddenSourceTitle(webpage);
+  return '暂无可信来源链接';
 };
 
 const getWebpageIcon = (type: string) => {
@@ -1344,6 +2099,11 @@ watch(
   async (newId) => {
     if (newId) {
       clearStickyUnreadConversations();
+      if (!normalizeQueryValue(route.query.messageId)) {
+        convReadFilter.value = normalizeReadFilterValue(
+          route.query.readFilter,
+        );
+      }
       await store.loadTopicDetail(newId);
       await focusConversationFromQuery(route.query.messageId);
     }
@@ -1375,6 +2135,7 @@ watch(convReadFilter, (readFilter) => {
 onBeforeUnmount(() => {
   clearDetailDeferredUndo();
   clearDetailMuteUndo();
+  clearSourceOpenReceiptTimer();
 });
 </script>
 
@@ -1442,6 +2203,14 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
+.topic-detail-action-note {
+  flex-basis: 100%;
+  max-width: 38rem;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .topic-detail-action-btn {
   display: inline-flex;
   align-items: center;
@@ -1459,7 +2228,8 @@ onBeforeUnmount(() => {
 }
 
 .topic-detail-action-btn.mute,
-.topic-detail-mute-restore {
+.topic-detail-mute-restore,
+.topic-detail-defer-restore {
   border-color: rgba(148, 163, 184, 0.32);
   background: rgba(51, 65, 85, 0.36);
   color: #cbd5e1;
@@ -1485,6 +2255,77 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
   background: rgba(15, 23, 42, 0.96);
   box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.22);
+}
+
+.topic-detail-boundary-receipt {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.66);
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.topic-detail-boundary-receipt strong {
+  color: #bfdbfe;
+  font-size: 0.76rem;
+}
+
+.source-open-receipt {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(37, 99, 235, 0.12);
+  color: #bfdbfe;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.source-open-receipt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.source-open-host {
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: min(18rem, 54vw);
+  padding: 0.12rem 0.42rem;
+  border: 1px solid rgba(147, 197, 253, 0.28);
+  border-radius: 999px;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.52);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.source-open-receipt p {
+  margin: 0;
+}
+
+.source-open-receipt ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.05rem;
+}
+
+.source-open-receipt li + li {
+  margin-top: 0.2rem;
+}
+
+.topic-detail-mute-boundary {
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.topic-detail-mute-boundary strong {
+  color: #e2e8f0;
 }
 
 .topic-detail-defer-option {
@@ -1622,16 +2463,38 @@ onBeforeUnmount(() => {
 }
 
 .conversation-source-link {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  max-width: min(18rem, 48vw);
   color: #93c5fd;
   font-size: 0.75rem;
   font-weight: 700;
   text-decoration: none;
+  text-align: right;
 }
 
 .conversation-source-link:hover,
 .conversation-source-link:focus-visible {
   color: #bfdbfe;
   text-decoration: underline;
+}
+
+.conversation-source-label,
+.conversation-source-host {
+  overflow-wrap: anywhere;
+}
+
+.conversation-source-host {
+  padding: 0.08rem 0.3rem;
+  border: 1px solid rgba(147, 197, 253, 0.22);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.52);
+  font-size: 0.68rem;
+  line-height: 1.1;
 }
 
 .conversation-source-hidden {
@@ -1647,6 +2510,74 @@ onBeforeUnmount(() => {
   max-width: min(14rem, 42vw);
   text-align: right;
   white-space: normal;
+}
+
+.conversation-source-filtered,
+.topic-source-filtered {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: min(14rem, 42vw);
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 999px;
+  color: #fcd34d;
+  background: rgba(120, 53, 15, 0.24);
+  cursor: help;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.topic-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.topic-source-host {
+  padding: 0.08rem 0.3rem;
+  border: 1px solid rgba(147, 197, 253, 0.22);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.52);
+  font-size: 0.68rem;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.topic-source-hidden {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.44);
+  cursor: help;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.webpage-url.hidden {
+  color: #94a3b8;
+}
+
+.webpage-source-hidden {
+  margin-top: 0.35rem;
+}
+
+.webpage-source-filtered {
+  margin-top: 0.35rem;
 }
 
 .item-link,
@@ -1712,6 +2643,11 @@ onBeforeUnmount(() => {
 
 .muted-meta {
   color: #cbd5e1;
+  font-weight: 600;
+}
+
+.deferred-meta {
+  color: #fbbf24;
   font-weight: 600;
 }
 
@@ -1799,6 +2735,77 @@ onBeforeUnmount(() => {
   line-height: 1.45;
 }
 
+.message-focus-notice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.message-focus-notice p {
+  margin: 0;
+}
+
+.message-focus-notice ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.05rem;
+}
+
+.message-focus-notice li + li {
+  margin-top: 0.2rem;
+}
+
+.message-focus-target-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 197, 253, 0.28);
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.52);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.message-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.message-focus-action {
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  border-radius: 0.45rem;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.message-focus-actions .message-focus-action {
+  margin-top: 0;
+}
+
+.message-focus-action.undo {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(37, 99, 235, 0.16);
+  color: #bfdbfe;
+}
+
+.message-focus-action:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.message-focus-action.undo:hover {
+  background: rgba(37, 99, 235, 0.26);
+}
+
 .message-focus-notice.info {
   color: #bfdbfe;
   border: 1px solid rgba(96, 165, 250, 0.28);
@@ -1811,6 +2818,73 @@ onBeforeUnmount(() => {
   background: rgba(245, 158, 11, 0.1);
 }
 
+.topic-read-batch-receipt {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(13, 148, 136, 0.1);
+  color: #ccfbf1;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.topic-read-batch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.topic-read-batch-mode {
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: min(14rem, 50vw);
+  padding: 0.12rem 0.42rem;
+  border: 1px solid rgba(94, 234, 212, 0.28);
+  border-radius: 999px;
+  color: #f0fdfa;
+  background: rgba(15, 23, 42, 0.42);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.topic-read-batch-receipt p {
+  margin: 0;
+}
+
+.topic-read-batch-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.topic-read-batch-metrics span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  padding: 0.16rem 0.48rem;
+  border: 1px solid rgba(94, 234, 212, 0.24);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.3);
+  color: #ecfeff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.topic-read-batch-receipt ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.05rem;
+}
+
+.topic-read-batch-receipt li + li {
+  margin-top: 0.2rem;
+}
+
 .empty-state {
   padding: 1.5rem;
   color: #94a3b8;
@@ -1818,5 +2892,79 @@ onBeforeUnmount(() => {
   border: 1px dashed rgba(148, 163, 184, 0.25);
   border-radius: 0.5rem;
   background: rgba(15, 23, 42, 0.24);
+}
+
+.conversation-empty-recovery {
+  max-width: 42rem;
+  margin: 1rem auto 0;
+  padding: 0.85rem 1rem;
+  color: #dbeafe;
+  text-align: left;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(30, 64, 175, 0.16);
+}
+
+.conversation-empty-recovery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.conversation-empty-recovery-head span {
+  flex: 0 0 auto;
+  padding: 0.12rem 0.42rem;
+  border: 1px solid rgba(147, 197, 253, 0.28);
+  border-radius: 999px;
+  color: #eff6ff;
+  background: rgba(15, 23, 42, 0.4);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.conversation-empty-recovery p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.conversation-empty-recovery ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.05rem;
+  line-height: 1.45;
+}
+
+.conversation-empty-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.conversation-empty-recovery-actions button {
+  padding: 0.38rem 0.62rem;
+  border: 1px solid rgba(147, 197, 253, 0.34);
+  border-radius: 0.45rem;
+  color: #eff6ff;
+  background: rgba(37, 99, 235, 0.18);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.conversation-empty-recovery-actions button:hover,
+.conversation-empty-recovery-actions button:focus-visible {
+  background: rgba(37, 99, 235, 0.3);
+}
+
+@media (max-width: 640px) {
+  .conversation-empty-recovery-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .conversation-empty-recovery-actions button {
+    flex: 1 1 11rem;
+  }
 }
 </style>

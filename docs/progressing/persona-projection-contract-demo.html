@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Persona Projection Contract Demo</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #1d2430;
+        --muted: #667085;
+        --line: #d9dee7;
+        --blue: #2764d8;
+        --green: #167f5f;
+        --amber: #a45f00;
+        --red: #b42318;
+        --violet: #7056c2;
+        --shadow: 0 18px 50px rgba(25, 35, 55, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .topbar {
+        height: 58px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(12px);
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .mark {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: #1d2430;
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.2;
+      }
+
+      .brand p {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .mode-tabs {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f0f3f8;
+      }
+
+      .mode-tabs button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 8px 12px;
+        border-radius: 6px;
+        white-space: nowrap;
+      }
+
+      .mode-tabs button.active {
+        background: #fff;
+        color: var(--ink);
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 390px;
+        gap: 18px;
+        padding: 18px;
+      }
+
+      .surface,
+      .contract-panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(25, 35, 55, 0.06);
+        min-width: 0;
+      }
+
+      .surface {
+        overflow: hidden;
+      }
+
+      .surface-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      .surface-title {
+        min-width: 0;
+      }
+
+      .surface-title h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .surface-title p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid #bfd2ff;
+        color: #174ea6;
+        background: #eff5ff;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .content {
+        padding: 18px;
+      }
+
+      .jira-shell {
+        display: grid;
+        gap: 14px;
+      }
+
+      .issue-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: #fff;
+      }
+
+      .issue-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .tag {
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 12px;
+        background: #f2f4f7;
+        color: #344054;
+      }
+
+      .tag.green {
+        background: #e8f6f0;
+        color: var(--green);
+      }
+
+      .tag.amber {
+        background: #fff4df;
+        color: var(--amber);
+      }
+
+      .tag.red {
+        background: #fff0ee;
+        color: var(--red);
+      }
+
+      .editor-wrap {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        min-height: 240px;
+      }
+
+      .editor-toolbar {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 150px;
+        border: 0;
+        resize: none;
+        padding: 14px;
+        outline: none;
+        color: var(--ink);
+      }
+
+      .assist-pop {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        width: min(420px, calc(100% - 28px));
+        background: #101828;
+        color: #fff;
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .assist-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        background: #182230;
+      }
+
+      .assist-head strong {
+        font-size: 14px;
+      }
+
+      .assist-body {
+        padding: 14px;
+      }
+
+      .receipt-line {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-bottom: 12px;
+        color: #d9e5ff;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .draft {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: 12px;
+        line-height: 1.55;
+        color: #f8fafc;
+      }
+
+      .assist-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .primary,
+      .secondary,
+      .ghost {
+        min-height: 34px;
+        border-radius: 7px;
+        border: 1px solid transparent;
+        padding: 7px 11px;
+      }
+
+      .primary {
+        background: var(--blue);
+        color: #fff;
+      }
+
+      .secondary {
+        background: #fff;
+        color: var(--ink);
+        border-color: var(--line);
+      }
+
+      .ghost {
+        background: transparent;
+        color: #cfe0ff;
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+
+      .contract-panel {
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        overflow: hidden;
+        position: sticky;
+        top: 76px;
+        max-height: calc(100vh - 94px);
+      }
+
+      .contract-head {
+        padding: 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .contract-head h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .contract-head p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .contract-mode {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      .mode-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 13px;
+      }
+
+      .mode-line span:first-child {
+        color: var(--muted);
+      }
+
+      .mode-line strong {
+        text-align: right;
+      }
+
+      .contract-scroll {
+        overflow: auto;
+        padding: 16px;
+      }
+
+      .section {
+        margin-bottom: 18px;
+      }
+
+      .section h3 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        color: #344054;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .slot {
+        display: grid;
+        grid-template-columns: 10px 1fr;
+        gap: 10px;
+        padding: 10px 0;
+        border-top: 1px solid #eef1f5;
+      }
+
+      .slot:first-of-type {
+        border-top: 0;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        margin-top: 5px;
+        background: var(--green);
+      }
+
+      .dot.amber {
+        background: var(--amber);
+      }
+
+      .dot.red {
+        background: var(--red);
+      }
+
+      .dot.blue {
+        background: var(--blue);
+      }
+
+      .slot-title {
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .slot-text {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .webai-shell,
+      .sync-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 16px;
+      }
+
+      .chat-box,
+      .sync-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        overflow: hidden;
+      }
+
+      .chat-stream {
+        min-height: 360px;
+        padding: 16px;
+        background: #fbfcfe;
+      }
+
+      .bubble {
+        max-width: 76%;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        line-height: 1.5;
+        font-size: 14px;
+      }
+
+      .bubble.user {
+        margin-left: auto;
+        background: #e9f1ff;
+        color: #173b76;
+      }
+
+      .bubble.ai {
+        background: #fff;
+        border: 1px solid var(--line);
+      }
+
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 12px;
+      }
+
+      .context-pack {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: #fff;
+      }
+
+      .context-pack h3,
+      .sync-card h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      .pack-list {
+        margin: 12px 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 8px;
+      }
+
+      .pack-list li {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        border-bottom: 1px solid #eef1f5;
+        padding-bottom: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .pack-list strong {
+        color: var(--ink);
+        font-weight: 650;
+      }
+
+      .sync-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .sync-card {
+        padding: 14px;
+      }
+
+      .sync-card.active {
+        border-color: #8ab4ff;
+        box-shadow: 0 0 0 3px #e9f1ff;
+      }
+
+      .sync-card p {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+        min-height: 56px;
+      }
+
+      .result-box {
+        margin-top: 16px;
+        border: 1px solid #c8d7ff;
+        border-radius: 8px;
+        background: #f4f7ff;
+        padding: 14px;
+      }
+
+      .result-box strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .toast {
+        min-height: 38px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #ecfdf3;
+        border: 1px solid #abefc6;
+        color: #05603a;
+        font-size: 13px;
+        margin-top: 12px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 980px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .contract-panel {
+          position: static;
+          max-height: none;
+        }
+
+        .webai-shell,
+        .sync-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .sync-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .topbar {
+          height: auto;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 12px;
+          flex-direction: column;
+        }
+
+        .mode-tabs {
+          width: 100%;
+          overflow-x: auto;
+        }
+
+        .workspace {
+          padding: 12px;
+        }
+
+        .surface-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .assist-pop {
+          position: static;
+          width: auto;
+          margin: 12px;
+        }
+
+        .editor-wrap {
+          min-height: auto;
+        }
+
+        .assist-actions {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark">PA</div>
+          <div>
+            <h1>身份投影合约</h1>
+            <p>每次代表用户说话前，先确认可以带出什么、必须排除什么。</p>
+          </div>
+        </div>
+        <nav class="mode-tabs" aria-label="场景切换">
+          <button class="active" data-view="jira">Jira 草稿</button>
+          <button data-view="webai">外部 AI</button>
+          <button data-view="sync">豆包同步</button>
+        </nav>
+      </header>
+
+      <main class="workspace">
+        <section class="surface">
+          <div class="surface-header">
+            <div class="surface-title">
+              <h2 id="surfaceTitle">MTR-148115 · Jira Comment</h2>
+              <p id="surfaceSub">团队可见写入：Personal AI 只能生成草稿，发送前必须由用户确认。</p>
+            </div>
+            <span class="status-chip" id="surfaceChip">draft_preview_required</span>
+          </div>
+
+          <div class="content">
+            <div id="view-jira" class="jira-shell">
+              <div class="issue-card">
+                <strong>MTR-148115: Migrate AI Notes Update Flow</strong>
+                <div class="issue-meta">
+                  <span class="tag">DEV Estimate: 3.01</span>
+                  <span class="tag green">来源：Glip + Jira comment</span>
+                  <span class="tag amber">2 条 pending profile 已排除</span>
+                </div>
+              </div>
+              <div class="editor-wrap">
+                <div class="editor-toolbar">
+                  <span>Comment</span>
+                  <span>Personal AI 已生成身份投影</span>
+                </div>
+                <textarea id="jiraText" placeholder="Add a comment..."></textarea>
+                <div class="assist-pop">
+                  <div class="assist-head">
+                    <strong>Personal AI 草稿</strong>
+                    <button class="ghost" data-action="details">边界</button>
+                  </div>
+                  <div class="assist-body">
+                    <div class="receipt-line">● 可用 3 条工作记忆；已排除 2 条未确认/敏感项；仅生成草稿，发送前由你确认。</div>
+                    <div class="draft">我先按人天口径处理 MTR-148115 的 original estimate，3h 可以作为补充说明；如果需要我也可以把字段更新记录整理出来。</div>
+                    <div class="assist-actions">
+                      <button class="primary" data-action="insert">插入草稿</button>
+                      <button class="secondary" data-action="reject">不采用</button>
+                    </div>
+                    <div id="jiraToast" class="toast hidden">已插入草稿。本次只写入输入框，没有自动发送。</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="view-webai" class="webai-shell hidden">
+              <div class="chat-box">
+                <div class="chat-stream">
+                  <div class="bubble user">帮我分析 MTR-148115 的 estimate 口径，并给出可以给团队看的说明。</div>
+                  <div class="bubble ai">我需要当前任务背景、约束和可引用来源。不要包含内部密码或未确认画像。</div>
+                </div>
+                <div class="composer">
+                  <input style="width:100%; border:1px solid var(--line); border-radius:8px; min-height:40px; padding:9px 11px;" value="Use this context pack..." />
+                </div>
+              </div>
+              <aside class="context-pack">
+                <h3>可复制 Context Pack</h3>
+                <p class="slot-text">给外部 AI 的包只使用任务目标、来源摘要和约束；不使用第一人称承诺。</p>
+                <ul class="pack-list">
+                  <li><strong>带出</strong><span>任务目标、Jira key、3 条来源摘要</span></li>
+                  <li><strong>脱敏</strong><span>会议链接、内部群链接</span></li>
+                  <li><strong>排除</strong><span>未确认画像、长期 persona</span></li>
+                </ul>
+                <button class="primary" data-action="copy">复制给外部 AI</button>
+                <div id="webToast" class="toast hidden">已复制 context pack：不含个人画像、未确认事实和 secret。</div>
+              </aside>
+            </div>
+
+            <div id="view-sync" class="sync-shell hidden">
+              <div>
+                <div class="sync-grid">
+                  <div class="sync-card active">
+                    <h3>stable_memory</h3>
+                    <p>只同步长期 persona / voice mode 到长期记忆线程。</p>
+                    <span class="tag green">允许 2 项</span>
+                  </div>
+                  <div class="sync-card">
+                    <h3>mobile_context</h3>
+                    <p>只同步近期重点、Ask 有证据答案、待办摘要。</p>
+                    <span class="tag amber">排除 persona</span>
+                  </div>
+                  <div class="sync-card">
+                    <h3>reminder_sync</h3>
+                    <p>只同步提醒和待办，不混入长期画像。</p>
+                    <span class="tag red">1 条链接脱敏</span>
+                  </div>
+                </div>
+                <div class="result-box">
+                  <strong>同步前 receipt</strong>
+                  本次目标为豆包长期记忆线程；将同步 2 条稳定身份记忆。近期重点、提醒、会议密码不会进入该线程。
+                </div>
+                <button class="primary" data-action="sync" style="margin-top:14px;">执行本次同步</button>
+                <div id="syncToast" class="toast hidden">同步已记录：目标线程、范围、排除项和脱敏项都已写入流水。</div>
+              </div>
+              <aside class="context-pack">
+                <h3>线程边界</h3>
+                <ul class="pack-list">
+                  <li><strong>长期线程</strong><span>persona / voice</span></li>
+                  <li><strong>手机线程</strong><span>近期重点 / 待办</span></li>
+                  <li><strong>提醒</strong><span>不写入长期人格</span></li>
+                </ul>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <aside class="contract-panel" aria-live="polite">
+          <div class="contract-head">
+            <h2>Projection Contract</h2>
+            <p id="contractSummary">当前场景允许 Personal AI 写第一人称草稿，但必须由用户预览后插入或发送。</p>
+          </div>
+          <div class="contract-mode">
+            <div class="mode-line"><span>代表模式</span><strong id="modeValue">draft_preview_required</strong></div>
+            <div class="mode-line"><span>声音</span><strong id="voiceValue">write_as_user_after_preview</strong></div>
+            <div class="mode-line"><span>审批</span><strong id="approvalValue">团队可见写入前确认</strong></div>
+          </div>
+          <div class="contract-scroll">
+            <div class="section">
+              <h3>允许投影</h3>
+              <div id="allowedSlots"></div>
+            </div>
+            <div class="section">
+              <h3>排除 / 降级</h3>
+              <div id="blockedSlots"></div>
+            </div>
+            <div class="section">
+              <h3>本次回执</h3>
+              <div class="slot">
+                <span class="dot blue"></span>
+                <div>
+                  <div class="slot-title" id="receiptTitle">草稿不会自动发送</div>
+                  <div class="slot-text" id="receiptText">点击插入只写入当前输入框；Jira 提交仍由你完成。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script>
+      const contracts = {
+        jira: {
+          title: "MTR-148115 · Jira Comment",
+          sub: "团队可见写入：Personal AI 只能生成草稿，发送前必须由用户确认。",
+          chip: "draft_preview_required",
+          summary: "当前场景允许 Personal AI 写第一人称草稿，但必须由用户预览后插入或发送。",
+          mode: "draft_preview_required",
+          voice: "write_as_user_after_preview",
+          approval: "团队可见写入前确认",
+          allowed: [
+            ["已确认角色", "Scrum Master · work scope · 可用于 Jira 协作语境", "green"],
+            ["场景 cue", "estimate 口径来自 Glip + Jira 强证据，只用于当前 issue", "green"],
+            ["写作风格", "结构化 status update，可影响语气，不影响事实", "green"]
+          ],
+          blocked: [
+            ["未确认 owner_knowledge", "release_process 仍 pending_confirm，不能写成用户承诺", "amber"],
+            ["临时秘密", "会议链接和 password 只保留 redacted projection", "red"]
+          ],
+          receiptTitle: "草稿不会自动发送",
+          receiptText: "点击插入只写入当前输入框；Jira 提交仍由你完成。"
+        },
+        webai: {
+          title: "ChatGPT / Claude 输入框 · Context Pack",
+          sub: "外部 AI 只拿到任务上下文，不拿长期 persona 和未确认画像。",
+          chip: "context_pack_copyable",
+          summary: "当前只允许 speak_about_user：给外部 AI 的是任务包，不是用户第一人称承诺。",
+          mode: "context_pack_copyable",
+          voice: "speak_about_user",
+          approval: "复制前展示范围",
+          allowed: [
+            ["任务目标", "MTR-148115 estimate 分析目标和输出格式", "green"],
+            ["来源摘要", "3 条资料摘要，隐藏内部 source URL", "green"],
+            ["约束", "不要改写为用户承诺，不写公开事实", "green"]
+          ],
+          blocked: [
+            ["个人画像", "长期 persona、偏好和人际关系不带出给外部 AI", "amber"],
+            ["未确认事实", "decision blocker 和 pending profile 不进入 context pack", "amber"],
+            ["secret", "会议密码、token、signed URL 已脱敏", "red"]
+          ],
+          receiptTitle: "复制包已最小化",
+          receiptText: "外部 AI 只看到任务、证据摘要和约束；不知道你的长期画像。"
+        },
+        sync: {
+          title: "Doubao Bridge · Persona Sync",
+          sub: "同一条记忆按目标线程分流，避免长期 persona 和手机待办混在一起。",
+          chip: "provider_sync_allowed",
+          summary: "当前同步目标是长期记忆线程；近期重点、提醒和 secret 不会混入该线程。",
+          mode: "provider_sync_allowed",
+          voice: "sync_as_personal_ai",
+          approval: "已绑定 provider 线程",
+          allowed: [
+            ["长期 persona", "只同步稳定身份和 voice mode 到 memory_sync_thread", "green"],
+            ["来源回执", "记录 item count、source count、目标线程", "green"]
+          ],
+          blocked: [
+            ["近期重点", "mobile_context_thread 专用，不进入长期 persona", "amber"],
+            ["提醒", "reminder_sync 专用，不写入长期人格", "amber"],
+            ["敏感链接", "含 password 的 meeting URL 保持 redacted", "red"]
+          ],
+          receiptTitle: "同步流水保留边界",
+          receiptText: "成功、跳过、失败、目标线程和排除原因会分开记录。"
+        }
+      };
+
+      const tabButtons = document.querySelectorAll(".mode-tabs button");
+      const views = {
+        jira: document.getElementById("view-jira"),
+        webai: document.getElementById("view-webai"),
+        sync: document.getElementById("view-sync")
+      };
+
+      function slotTemplate(slot) {
+        const [title, text, tone] = slot;
+        return `
+          <div class="slot">
+            <span class="dot ${tone}"></span>
+            <div>
+              <div class="slot-title">${title}</div>
+              <div class="slot-text">${text}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderContract(key) {
+        const c = contracts[key];
+        document.getElementById("surfaceTitle").textContent = c.title;
+        document.getElementById("surfaceSub").textContent = c.sub;
+        document.getElementById("surfaceChip").textContent = c.chip;
+        document.getElementById("contractSummary").textContent = c.summary;
+        document.getElementById("modeValue").textContent = c.mode;
+        document.getElementById("voiceValue").textContent = c.voice;
+        document.getElementById("approvalValue").textContent = c.approval;
+        document.getElementById("allowedSlots").innerHTML = c.allowed.map(slotTemplate).join("");
+        document.getElementById("blockedSlots").innerHTML = c.blocked.map(slotTemplate).join("");
+        document.getElementById("receiptTitle").textContent = c.receiptTitle;
+        document.getElementById("receiptText").textContent = c.receiptText;
+      }
+
+      function showView(key) {
+        Object.entries(views).forEach(([viewKey, node]) => {
+          node.classList.toggle("hidden", viewKey !== key);
+        });
+        tabButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.view === key);
+        });
+        renderContract(key);
+      }
+
+      tabButtons.forEach((button) => {
+        button.addEventListener("click", () => showView(button.dataset.view));
+      });
+
+      document.querySelectorAll("[data-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const action = button.dataset.action;
+          if (action === "insert") {
+            document.getElementById("jiraText").value =
+              "我先按人天口径处理 MTR-148115 的 original estimate，3h 可以作为补充说明；如果需要我也可以把字段更新记录整理出来。";
+            document.getElementById("jiraToast").classList.remove("hidden");
+          }
+          if (action === "reject") {
+            document.getElementById("jiraToast").textContent = "已隐藏本次草稿；同场景会更谨慎使用 estimate cue。";
+            document.getElementById("jiraToast").classList.remove("hidden");
+          }
+          if (action === "copy") {
+            document.getElementById("webToast").classList.remove("hidden");
+          }
+          if (action === "sync") {
+            document.getElementById("syncToast").classList.remove("hidden");
+          }
+          if (action === "details") {
+            document.querySelector(".contract-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      });
+
+      renderContract("jira");
+    </script>
+  </body>
+</html>

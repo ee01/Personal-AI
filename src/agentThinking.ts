@@ -38,6 +38,9 @@ import {
   resolveMatchedWatchRules,
   type WatchRule,
 } from './watchRules';
+import {
+  recordRejectedManualRuleDiagnostics,
+} from './messageAnalysisRuleDiagnostics';
 // uuid 已移除，如需要请重新导入
 
 /**
@@ -359,12 +362,12 @@ export class IntelligentAgent {
     return '';
   }
 
-  private applyMessageRuleScopeGuard(
+  private async applyMessageRuleScopeGuard(
     result: MessageAnalysisResult,
     message: any,
     initialAnalysis: any,
     context?: AnalysisContext,
-  ): void {
+  ): Promise<void> {
     const watchRules = (context?.concernedRules || []) as WatchRule[];
     if (watchRules.length === 0) {
       return;
@@ -386,19 +389,20 @@ export class IntelligentAgent {
       return;
     }
 
+    const messageContext = {
+      sender: message?.sender || message?.creator,
+      creator: message?.creator || message?.sender,
+      groupId: result.groupId || message?.groupId || context?.groupInfo?.id,
+      groupName:
+        result.groupName || message?.groupName || context?.groupInfo?.name,
+      datetime: getAnalysisMessageDatetime(message),
+    };
     const resolvedMatch = resolveMatchedWatchRules({
       watchRules,
       matchedRule,
       matchedRuleRefs,
       matchedRuleIds: matchedRuleRefs.length > 0 ? [] : matchedRuleIds,
-      messageContext: {
-        sender: message?.sender || message?.creator,
-        creator: message?.creator || message?.sender,
-        groupId: result.groupId || message?.groupId || context?.groupInfo?.id,
-        groupName:
-          result.groupName || message?.groupName || context?.groupInfo?.name,
-        datetime: getAnalysisMessageDatetime(message),
-      },
+      messageContext,
     });
 
     if (resolvedMatch.watchRules.length > 0) {
@@ -414,6 +418,15 @@ export class IntelligentAgent {
       );
       return;
     }
+
+    await recordRejectedManualRuleDiagnostics({
+      runtimeWatchRules: watchRules,
+      matchedRuleRefs: resolvedMatch.matchedRuleRefs,
+      matchedRule,
+      messageContext,
+      postId: result.postId || message?.post_id || message?.id,
+      messageDatetime: messageContext.datetime,
+    });
 
     result.matchedRule = '';
     result.matchedRuleRefs = [];
@@ -1516,7 +1529,12 @@ export class IntelligentAgent {
           context,
           usedTools,
         );
-        this.applyMessageRuleScopeGuard(result, message, analysis, context);
+        await this.applyMessageRuleScopeGuard(
+          result,
+          message,
+          analysis,
+          context,
+        );
 
         // 添加到最终结果列表
         finalResults.push(result);
@@ -2603,7 +2621,7 @@ ${context}
             actionKey,
           );
 
-          if (!validation.ok) {
+          if (validation.ok === false) {
             this.appendToolResult(toolResults, toolCall.id, {
               blocked: true,
               approvalRequired: validation.reason === 'approval_required',
@@ -2763,16 +2781,15 @@ ${this.getToolSafetyPromptGuidance()}
         if (toolResult.result?.entities) {
           // 合并提取的实体
           const entities = toolResult.result.entities;
+          const extractedEntities: Record<string, (string | Date)[]> =
+            result.extractedEntities;
           Object.keys(entities).forEach((key) => {
             if (entities[key] && Array.isArray(entities[key])) {
-              if (!result.extractedEntities[key]) {
-                result.extractedEntities[key] = [];
+              if (!extractedEntities[key]) {
+                extractedEntities[key] = [];
               }
-              result.extractedEntities[key] = [
-                ...new Set([
-                  ...result.extractedEntities[key],
-                  ...entities[key],
-                ]),
+              extractedEntities[key] = [
+                ...new Set([...extractedEntities[key], ...entities[key]]),
               ];
             }
           });
@@ -2781,7 +2798,7 @@ ${this.getToolSafetyPromptGuidance()}
 
       case 'historySearch':
         if (toolResult.result?.memories) {
-          result.relatedMemories = toolResult.result.memories.map((memory) => ({
+          result.relatedMemories = toolResult.result.memories.map((memory: any) => ({
             memoryId: memory.id,
             summary: memory.summary || memory.content?.substring(0, 100) || '',
             relevanceScore: memory.score || 0.5,
@@ -2802,7 +2819,7 @@ ${this.getToolSafetyPromptGuidance()}
       case 'jiraQuery':
         if (toolResult.result?.projects) {
           result.relatedProjects = toolResult.result.projects.map(
-            (project) => ({
+            (project: any) => ({
               projectId: project.id,
               projectName: project.name,
               relevanceScore: 0.8,
@@ -2823,7 +2840,7 @@ ${this.getToolSafetyPromptGuidance()}
     state: any,
   ): Promise<any> {
     const validation = this.validateToolCall(toolId, params, state);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       throw new Error(validation.message);
     }
 
@@ -3029,7 +3046,7 @@ ${this.getToolSafetyPromptGuidance()}
           state,
           actionKey,
         );
-        if (!validation.ok) {
+        if (validation.ok === false) {
           console.warn(`阻断无效工具调用: ${toolId}`, t.params);
           return {
             toolId,

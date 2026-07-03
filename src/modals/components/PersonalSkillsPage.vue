@@ -25,6 +25,47 @@
     </header>
 
     <section
+      v-if="showSuggestionDecisionOverview"
+      class="suggestion-decision-overview"
+      aria-live="polite"
+    >
+      <div class="decision-overview-head">
+        <span>建议决策总览</span>
+        <strong>{{ suggestionDecisionOverviewTitle }}</strong>
+      </div>
+      <div class="decision-overview-grid">
+        <div
+          v-for="row in suggestionDecisionOverviewRows"
+          :key="`suggestion-overview:${row.label}`"
+          :class="['decision-overview-row', row.tone || '']"
+        >
+          <span class="label">{{ row.label }}</span>
+          <span>{{ row.text }}</span>
+        </div>
+      </div>
+    </section>
+    <section
+      v-else-if="showSuggestionEmptyReceipt"
+      class="suggestion-empty-receipt"
+      aria-live="polite"
+    >
+      <div class="empty-receipt-head">
+        <span>建议队列空回执</span>
+        <strong>当前没有待审 suggestion</strong>
+      </div>
+      <div class="empty-receipt-grid">
+        <div
+          v-for="row in suggestionEmptyReceiptRows"
+          :key="`suggestion-empty:${row.label}`"
+          :class="['empty-receipt-row', row.tone || '']"
+        >
+          <span class="label">{{ row.label }}</span>
+          <span>{{ row.text }}</span>
+        </div>
+      </div>
+    </section>
+
+    <section
       v-if="suggestions.length > 0"
       class="inbox-bar"
       :class="{ collapsed: !inboxExpanded }"
@@ -48,6 +89,36 @@
             {{ inboxSourceMeta.description }}
           </span>
         </div>
+        <div v-if="suggestionPriorityInsight" class="inbox-priority">
+          <div class="priority-main">
+            <div class="priority-kicker">
+              <span>{{ suggestionPriorityInsight.label }}</span>
+              <em>{{ suggestionPriorityInsight.score }} 分</em>
+            </div>
+            <strong>{{ suggestionPriorityInsight.suggestion.title }}</strong>
+            <p>{{ suggestionPriorityInsight.reason }}</p>
+            <div class="priority-facts">
+              <span
+                v-for="reason in suggestionPriorityInsight.reasons"
+                :key="`priority:${suggestionPriorityInsight.suggestion.id}:${reason}`"
+              >
+                {{ reason }}
+              </span>
+            </div>
+          </div>
+          <button
+            class="btn primary"
+            type="button"
+            :disabled="
+              suggestionWriteLocked(suggestionPriorityInsight.suggestion.id)
+            "
+            @click.stop="
+              handleSuggestionPrimary(suggestionPriorityInsight.suggestion.id)
+            "
+          >
+            {{ suggestionPriorityInsight.actionLabel }}
+          </button>
+        </div>
         <div class="suggestion-groups">
           <section
             v-for="group in suggestionGroups"
@@ -64,7 +135,10 @@
                 v-for="suggestion in group.items"
                 :key="suggestion.id"
                 class="suggestion-card"
-                :class="{ active: selectedId === suggestion.id }"
+                :class="{
+                  active: selectedId === suggestion.id,
+                  pending: isPendingSuggestionAction(suggestion.id),
+                }"
                 role="button"
                 tabindex="0"
                 @click="selectSkill(suggestion.id)"
@@ -129,6 +203,7 @@
                   <button
                     class="btn primary"
                     type="button"
+                    :disabled="suggestionWriteLocked(suggestion.id)"
                     @click.stop="handleSuggestionPrimary(suggestion.id)"
                   >
                     {{ suggestionPrimaryLabel(suggestion) }}
@@ -136,6 +211,7 @@
                   <button
                     class="btn danger"
                     type="button"
+                    :disabled="suggestionWriteLocked(suggestion.id)"
                     @click.stop="dismissSuggestion(suggestion.id)"
                   >
                     ✕ 丢弃
@@ -143,6 +219,7 @@
                   <button
                     class="btn secondary"
                     type="button"
+                    :disabled="suggestionWriteLocked(suggestion.id)"
                     @click.stop="snoozeSuggestion(suggestion.id)"
                   >
                     稍后审
@@ -169,7 +246,10 @@
           v-for="suggestion in snoozedSuggestions"
           :key="suggestion.id"
           class="snoozed-suggestion-card"
-          :class="{ active: selectedId === suggestion.id }"
+          :class="{
+            active: selectedId === suggestion.id,
+            pending: isPendingSuggestionAction(suggestion.id),
+          }"
           role="button"
           tabindex="0"
           @click="selectSkill(suggestion.id)"
@@ -191,6 +271,7 @@
             <button
               class="btn primary"
               type="button"
+              :disabled="suggestionWriteLocked(suggestion.id)"
               @click.stop="unsnoozeSuggestion(suggestion.id)"
             >
               现在审
@@ -198,6 +279,7 @@
             <button
               class="btn danger"
               type="button"
+              :disabled="suggestionWriteLocked(suggestion.id)"
               @click.stop="dismissSuggestion(suggestion.id)"
             >
               丢弃
@@ -209,6 +291,32 @@
 
     <div v-if="errorMessage" class="status-box error">{{ errorMessage }}</div>
     <div v-if="actionMessage" class="status-box info">{{ actionMessage }}</div>
+    <div
+      v-if="currentSkillActionReceipt"
+      :class="[
+        'skill-action-receipt',
+        'sync-result-receipt',
+        'status-box',
+        currentSkillActionReceipt.tone,
+      ]"
+      aria-live="polite"
+    >
+      <div class="sync-result-head">
+        <span>{{ currentSkillActionReceipt.heading || '入库回执' }}</span>
+        <strong>{{ currentSkillActionReceipt.title }}</strong>
+      </div>
+      <p>{{ currentSkillActionReceipt.summary }}</p>
+      <div class="sync-result-grid">
+        <div
+          v-for="row in currentSkillActionReceipt.rows"
+          :key="`skill-action:${row.label}`"
+          :class="['sync-result-row', row.tone || '']"
+        >
+          <span class="label">{{ row.label }}</span>
+          <span>{{ row.text }}</span>
+        </div>
+      </div>
+    </div>
     <div v-if="loading" class="status-box">加载个人技能中...</div>
 
     <div class="foundry-grid">
@@ -301,6 +409,15 @@
             <div class="workspace-title">
               <div class="eyebrow workspace-eyebrow">
                 {{ workspaceStatusLabel(selectedSkill) }}
+                <span
+                  v-if="selectedSkillHealthReceipt"
+                  :class="[
+                    'health-gate-chip',
+                    selectedSkillHealthReceipt.tone,
+                  ]"
+                >
+                  {{ selectedSkillHealthReceipt.chip }}
+                </span>
               </div>
               <h2>{{ selectedSkill.title }}</h2>
               <p>{{ selectedSkill.summary }}</p>
@@ -312,6 +429,7 @@
                   isSnoozedSuggestion(selectedSkill)
                 "
                 class="btn secondary secondary-btn"
+                :disabled="suggestionWriteLocked(selectedSkill.id)"
                 @click="unsnoozeSuggestion(selectedSkill.id)"
               >
                 现在审
@@ -333,6 +451,7 @@
                   !isSnoozedSuggestion(selectedSkill)
                 "
                 class="btn primary primary-btn"
+                :disabled="suggestionWriteLocked(selectedSkill.id)"
                 @click="handleSuggestionPrimary(selectedSkill.id)"
               >
                 {{ suggestionPrimaryLabel(selectedSkill) }}
@@ -340,12 +459,38 @@
               <button
                 v-if="selectedSkill.status === 'suggestion'"
                 class="btn danger secondary-btn"
+                :disabled="suggestionWriteLocked(selectedSkill.id)"
                 @click="dismissSuggestion(selectedSkill.id)"
               >
                 ✕ 丢弃
               </button>
             </div>
           </header>
+
+          <section
+            v-if="selectedSkillHealthReceipt"
+            :class="[
+              'skill-health-receipt',
+              selectedSkillHealthReceipt.tone,
+            ]"
+            aria-live="polite"
+          >
+            <div class="skill-health-head">
+              <span>质量门控</span>
+              <strong>{{ selectedSkillHealthReceipt.title }}</strong>
+            </div>
+            <p>{{ selectedSkillHealthReceipt.summary }}</p>
+            <div class="skill-health-grid">
+              <div
+                v-for="row in selectedSkillHealthReceipt.rows"
+                :key="`skill-health:${selectedSkill.id}:${row.label}`"
+                class="skill-health-row"
+              >
+                <span class="label">{{ row.label }}</span>
+                <span>{{ row.text }}</span>
+              </div>
+            </div>
+          </section>
 
           <nav class="workspace-tabs" aria-label="技能详情">
             <button
@@ -387,6 +532,7 @@
               <button
                 class="btn primary mini"
                 type="button"
+                :disabled="suggestionWriteLocked(selectedSkill.id)"
                 @click="unsnoozeSuggestion(selectedSkill.id)"
               >
                 现在审
@@ -446,12 +592,37 @@
                 v-else-if="!isSnoozedSuggestion(selectedSkill)"
                 class="btn primary mini"
                 type="button"
+                :disabled="suggestionWriteLocked(selectedSkill.id)"
                 @click="
                   useSuggestion(selectedSkill.id, { reviewConfirmed: true })
                 "
               >
                 {{ suggestionPrimaryLabel(selectedSkill) }}
               </button>
+            </div>
+          </section>
+
+          <section
+            v-if="
+              selectedSkill.status === 'suggestion' &&
+              !isSnoozedSuggestion(selectedSkill)
+            "
+            class="decision-receipt"
+            aria-live="polite"
+          >
+            <div class="decision-receipt-head">
+              <span>确认后会发生什么</span>
+              <strong>{{ suggestionDecisionReceiptTitle(selectedSkill) }}</strong>
+            </div>
+            <div class="decision-receipt-grid">
+              <div
+                v-for="row in suggestionDecisionReceiptRows(selectedSkill)"
+                :key="`${selectedSkill.id}:decision:${row.label}`"
+                class="decision-receipt-row"
+              >
+                <span class="label">{{ row.label }}</span>
+                <span>{{ row.text }}</span>
+              </div>
             </div>
           </section>
 
@@ -698,18 +869,58 @@
                       </button>
                     </div>
                   </div>
-                  <p v-if="selectedSkill.shareError" class="share-error">
-                    {{ selectedSkill.shareError }}
-                  </p>
-                  <p>
-                    短链只用于识别 slug/version；直接打开或给 agent
-                    安装时会使用带 token 的可访问 URL，拉取 SKILL.md
-                    和资源。已绑定状态由后台同步程序异步更新。
-                  </p>
-                  <span class="install-banner-scope">
-                    自动同步开关在平台维度，不是单条技能；开启后同步所有 active
-                    技能。
-                  </span>
+                    <p v-if="selectedSkill.shareError" class="share-error">
+                      {{ selectedSkill.shareError }}
+                    </p>
+                    <p>
+                      短链只用于识别 slug/version；直接打开或给 agent
+                      安装时会使用带 token 的可访问 URL，拉取 SKILL.md
+                      和资源。已绑定状态由后台同步程序异步更新。
+                    </p>
+                    <div class="share-receipt" aria-live="polite">
+                      <div class="share-receipt-head">
+                        <span>分享回执</span>
+                        <strong>{{ skillShareReceiptTitle(selectedSkill) }}</strong>
+                      </div>
+                      <div class="share-receipt-grid">
+                        <div
+                          v-for="row in skillShareReceiptRows(selectedSkill)"
+                          :key="`share:${selectedSkill.id}:${row.label}`"
+                          class="share-receipt-row"
+                        >
+                          <span class="label">{{ row.label }}</span>
+                          <span>{{ row.text }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      v-if="currentShareCopyReceipt"
+                      :class="[
+                        'share-copy-receipt',
+                        currentShareCopyReceipt.tone,
+                      ]"
+                      aria-live="polite"
+                    >
+                      <div class="share-copy-head">
+                        <span>复制回执</span>
+                        <strong>{{ currentShareCopyReceipt.title }}</strong>
+                      </div>
+                      <p>{{ currentShareCopyReceipt.summary }}</p>
+                      <div class="share-copy-grid">
+                        <div
+                          v-for="row in currentShareCopyReceipt.rows"
+                          :key="`share-copy:${row.label}`"
+                          class="share-copy-row"
+                        >
+                          <span class="label">{{ row.label }}</span>
+                          <span>{{ row.text }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <span class="install-banner-scope">
+                      自动同步开关在平台维度，不是单条技能；开启后同步所有 active
+                      技能。
+                    </span>
                 </div>
               </div>
 
@@ -865,8 +1076,49 @@
             <button class="secondary-btn" @click="closeSyncDialog">关闭</button>
           </div>
         </header>
-        <div v-if="syncResultMessage" class="status-box">
+        <div
+          v-if="syncResultReceipt"
+          :class="[
+            'sync-result-receipt',
+            'status-box',
+            syncResultReceipt.tone,
+          ]"
+          aria-live="polite"
+        >
+          <div class="sync-result-head">
+            <span>{{ syncResultReceipt.heading || '同步回执' }}</span>
+            <strong>{{ syncResultReceipt.title }}</strong>
+          </div>
+          <p>{{ syncResultReceipt.summary }}</p>
+          <div class="sync-result-grid">
+            <div
+              v-for="row in syncResultReceipt.rows"
+              :key="`sync-result:${row.label}`"
+              :class="['sync-result-row', row.tone || '']"
+            >
+              <span class="label">{{ row.label }}</span>
+              <span>{{ row.text }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="syncResultMessage" class="status-box">
           {{ syncResultMessage }}
+        </div>
+        <div class="sync-scope-overview" aria-live="polite">
+          <div class="sync-result-head sync-scope-overview-head">
+            <span>本次范围总览</span>
+            <strong>{{ syncScopeOverviewTitle }}</strong>
+          </div>
+          <div class="sync-result-grid">
+            <div
+              v-for="row in syncScopeOverviewRows"
+              :key="`sync-overview:${row.label}`"
+              :class="['sync-result-row', row.tone || '']"
+            >
+              <span class="label">{{ row.label }}</span>
+              <span>{{ row.text }}</span>
+            </div>
+          </div>
         </div>
         <div class="conflict-note">
           sha256 相同视为已对齐；远端 mtime
@@ -903,8 +1155,14 @@
               <button
                 v-if="setting.platform === 'openclaw'"
                 class="icon-btn sync-now-btn"
-                :disabled="syncRunning || !setting.enabled"
-                :title="syncRunning ? 'OpenClaw 同步中' : '立即同步 OpenClaw'"
+                :disabled="
+                  syncRunning || isAnySyncTogglePending() || !setting.enabled
+                "
+                :title="
+                  syncRunning || isAnySyncTogglePending()
+                    ? '同步设置保存中'
+                    : '立即同步 OpenClaw'
+                "
                 aria-label="立即同步 OpenClaw"
                 @click="runOpenClawSync"
               >
@@ -914,10 +1172,13 @@
                 v-else-if="localDesktopPlatforms.includes(setting.platform)"
                 class="icon-btn sync-now-btn"
                 :disabled="
-                  syncRunning || !setting.enabled || !desktopAppInstalled
+                  syncRunning ||
+                  isAnySyncTogglePending() ||
+                  !setting.enabled ||
+                  !desktopAppInstalled
                 "
                 :title="
-                  syncRunning
+                  syncRunning || isAnySyncTogglePending()
                     ? '同步中'
                     : `立即同步 ${platformLabel(setting.platform)}`
                 "
@@ -929,8 +1190,8 @@
               <label class="switch">
                 <input
                   type="checkbox"
-                  :checked="setting.enabled"
-                  :disabled="syncDisabled(setting)"
+                  :checked="syncToggleChecked(setting)"
+                  :disabled="syncWriteDisabled(setting)"
                   @change="toggleSync(setting, $event)"
                 />
                 <span>{{ syncControlLabel(setting) }}</span>
@@ -949,6 +1210,7 @@ import {
   getMemoryServiceClient,
   type PersonalSkillDetail,
   type PersonalSkillListItem,
+  type SkillHealth,
   type SkillPlatformBinding,
   type SkillSyncSetting,
 } from '../../services/MemoryServiceClient';
@@ -957,21 +1219,98 @@ import { DesktopAppClient } from '../../services/DesktopAppClient';
 type SkillFilter = 'active' | 'all' | 'dismissed';
 type SkillTab = 'workflow' | 'evidence' | 'versions' | 'bindings';
 type UseSuggestionOptions = { reviewConfirmed?: boolean };
+type SuggestionActionKind = 'use' | 'dismiss' | 'snooze' | 'unsnooze';
+type DecisionReceiptRow = { label: string; text: string };
+type ShareReceiptRow = { label: string; text: string };
+type ShareCopyKind = 'url' | 'install';
+type ShareCopySnapshot = {
+  kind: ShareCopyKind;
+  platform?: string;
+  skillId: string;
+  skillTitle: string;
+  displayUrl: string;
+  shareUrl: string;
+  version: string;
+  sha: string;
+  tokenTail: string;
+  copiedAt: number;
+};
+type ShareCopyReceipt = {
+  title: string;
+  summary: string;
+  tone: 'success' | 'warn';
+  rows: ShareReceiptRow[];
+  snapshot?: ShareCopySnapshot;
+};
+type SyncResultReceiptTone = 'success' | 'warn' | 'failed' | 'info';
+type SyncResultReceiptRow = {
+  label: string;
+  text: string;
+  tone?: SyncResultReceiptTone;
+};
+type SyncResultReceipt = {
+  heading?: string;
+  title: string;
+  summary: string;
+  tone: SyncResultReceiptTone;
+  rows: SyncResultReceiptRow[];
+};
+type SkillHealthReceipt = {
+  chip: string;
+  title: string;
+  summary: string;
+  tone: 'success' | 'warn' | 'info';
+  rows: Array<{ label: string; text: string }>;
+};
+type SyncTogglePending = {
+  platform: string;
+  enabled: boolean;
+};
 type ReviewableSkill = Pick<
   PersonalSkillListItem,
   'id' | 'slug' | 'reviewRequired' | 'reviewReasons' | 'bindings'
 >;
+type SyncReceiptPlatformResult = {
+  platform: string;
+  status?: string;
+  totalRemote?: number | null;
+  candidates?: number;
+  processed?: number;
+  imported?: number;
+  updated?: number;
+  pulled?: number;
+  pushed?: number;
+  externalChanges?: number;
+  skipped?: number;
+  hasMore?: boolean;
+  root?: string;
+  scanned?: number;
+  errors?: Array<{ slug?: string; error: string }>;
+  note?: string;
+};
+type PendingSuggestionAction = {
+  id: string;
+  action: SuggestionActionKind;
+  title: string;
+};
 
 const client = getMemoryServiceClient();
 const desktopClient = new DesktopAppClient();
 const loading = ref(false);
 const errorMessage = ref('');
 const actionMessage = ref('');
+const skillActionReceipt = ref<SyncResultReceipt | null>(null);
+const pendingSuggestionAction = ref<PendingSuggestionAction | null>(null);
+const currentSkillActionReceipt = computed(() => {
+  const pending = pendingSuggestionAction.value;
+  return pending ? buildSuggestionPendingReceipt(pending) : skillActionReceipt.value;
+});
 const skills = ref<PersonalSkillListItem[]>([]);
 const activeSkillTotal = ref(0);
 const suggestions = ref<PersonalSkillListItem[]>([]);
 const snoozedSuggestions = ref<PersonalSkillListItem[]>([]);
 const selectedSkill = ref<PersonalSkillDetail | null>(null);
+const selectedSkillHealth = ref<SkillHealth | null>(null);
 const selectedId = ref('');
 const activeTab = ref<SkillTab>('workflow');
 const reviewedSuggestionIds = ref<Set<string>>(new Set());
@@ -980,9 +1319,12 @@ const searchQuery = ref('');
 const inboxExpanded = ref(true);
 const syncDialogOpen = ref(false);
 const syncRunning = ref(false);
+const syncTogglePending = ref<SyncTogglePending | null>(null);
 const syncResultMessage = ref('');
+const syncResultReceipt = ref<SyncResultReceipt | null>(null);
 const syncSettings = ref<SkillSyncSetting[]>([]);
 const desktopAppInstalled = ref(false);
+const shareCopyReceipt = ref<ShareCopyReceipt | null>(null);
 const DESKTOP_APP_RELEASE_URL =
   'https://github.com/ee01/personal-ai/releases/latest';
 const localDesktopPlatforms = ['codex', 'claude_code', 'cursor'];
@@ -1067,6 +1409,12 @@ const inboxSourceMeta = computed(() => {
       ])
       .filter(Boolean),
   );
+  const normalizedSources = Array.from(sourceSet).map((source) =>
+    String(source).toLowerCase(),
+  );
+  const isLocalOnlyInbox =
+    normalizedSources.length > 0 &&
+    normalizedSources.every((source) => localDesktopPlatforms.includes(source));
   if (sourceSet.size === 1 && sourceSet.has('openclaw')) {
     return {
       label: 'OpenClaw 导入建议',
@@ -1088,6 +1436,20 @@ const inboxSourceMeta = computed(() => {
       description: '这些建议来自真实操作 episode；可以直接使用、丢弃或稍后审。',
     };
   }
+  if (isLocalOnlyInbox) {
+    const platformNames = normalizedSources
+      .map((source) => platformLabel(source))
+      .join(' / ');
+    return {
+      label: '本地 agent 导入建议',
+      icon: '💻',
+      hintIcon: '🗂',
+      title: `${platformNames || '本地 agent'} skill 目录扫描`,
+      meta: '由 Desktop App 从本机 agent skill 目录扫描导入',
+      description:
+        '这些建议来自 Codex / Claude Code / Cursor 的本机 skill 目录；使用后才会进入 Personal AI 真源技能库，确认前需要先看目录来源、资源文件和脚本风险。',
+    };
+  }
   return {
     label: '技能建议',
     icon: '📥',
@@ -1099,6 +1461,155 @@ const inboxSourceMeta = computed(() => {
   };
 });
 
+const rankedSuggestions = computed(() => {
+  return [...suggestions.value].sort((left, right) => {
+    const priorityDelta =
+      suggestionPriorityScore(right) - suggestionPriorityScore(left);
+    if (priorityDelta !== 0) return priorityDelta;
+    const updatedDelta = (right.updatedAt || 0) - (left.updatedAt || 0);
+    if (updatedDelta !== 0) return updatedDelta;
+    return left.title.localeCompare(right.title);
+  });
+});
+
+const suggestionPriorityInsight = computed(() => {
+  const suggestion = rankedSuggestions.value[0];
+  if (!suggestion) return null;
+  const reasons = suggestionPriorityReasons(suggestion);
+  return {
+    suggestion,
+    score: suggestionPriorityScore(suggestion),
+    label: suggestionPriorityLabel(suggestion),
+    reason: reasons[0] || '这条建议最影响当前技能库判断。',
+    reasons: reasons.slice(0, 3),
+    actionLabel: suggestionPrimaryLabel(suggestion),
+  };
+});
+
+const showSuggestionDecisionOverview = computed(() => {
+  return suggestions.value.length > 0 || snoozedSuggestions.value.length > 0;
+});
+
+const showSuggestionEmptyReceipt = computed(() => {
+  return (
+    !loading.value &&
+    !errorMessage.value &&
+    suggestions.value.length === 0 &&
+    snoozedSuggestions.value.length === 0
+  );
+});
+
+const selectedSkillHealthReceipt = computed<SkillHealthReceipt | null>(() => {
+  const skill = selectedSkill.value;
+  const health = selectedSkillHealth.value;
+  if (!skill || !health) return null;
+  return buildSkillHealthReceipt(skill, health);
+});
+
+const suggestionDecisionOverviewTitle = computed(() => {
+  const readyCount = suggestions.value.length;
+  const snoozedCount = snoozedSuggestions.value.length;
+  const reviewCount = suggestions.value.filter((skill) =>
+    requiresReview(skill),
+  ).length;
+  return [
+    `${readyCount} 条可审`,
+    `${snoozedCount} 条稍后`,
+    reviewCount ? `${reviewCount} 条需审核` : '无强审核',
+  ].join(' · ');
+});
+
+const suggestionDecisionOverviewRows = computed<SyncResultReceiptRow[]>(() => {
+  const readyCount = suggestions.value.length;
+  const snoozedCount = snoozedSuggestions.value.length;
+  const reviewCount = suggestions.value.filter((skill) =>
+    requiresReview(skill),
+  ).length;
+  const quickCount = Math.max(0, readyCount - reviewCount);
+  const externalChangeCount = suggestions.value.filter((skill) =>
+    isExternalChangeSuggestion(skill),
+  ).length;
+  const localImportCount = suggestions.value.filter((skill) =>
+    localSkillSourceBinding(skill),
+  ).length;
+  const scriptOrDependencyCount = suggestions.value.filter((skill) =>
+    suggestionHasReviewReason(skill, /可执行脚本|安装|下载|MCP|外部依赖/),
+  ).length;
+  const priority = suggestionPriorityInsight.value;
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '当前 Inbox',
+      text: readyCount
+        ? [
+            `${readyCount} 条可审`,
+            `${quickCount} 条可直接处理`,
+            `${reviewCount} 条需要先看证据或风险`,
+            externalChangeCount
+              ? `${externalChangeCount} 条会覆盖 active 真源`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('；')
+        : '当前没有可审 suggestion；可以从稍后建议恢复，或等待新的导入/萃取。',
+      tone: reviewCount || externalChangeCount ? 'warn' : 'info',
+    },
+    {
+      label: '稍后队列',
+      text: snoozedCount
+        ? `${snoozedCount} 条仍是 suggestion；只能现在审或丢弃，恢复到 Inbox 前不能确认使用或覆盖。`
+        : '没有暂缓 suggestion；稍后审只会移出当前 Inbox，不会入库、覆盖或同步。',
+      tone: snoozedCount ? 'info' : 'success',
+    },
+    {
+      label: '风险线索',
+      text: [
+        localImportCount ? `${localImportCount} 条来自本机 agent 目录` : '',
+        scriptOrDependencyCount
+          ? `${scriptOrDependencyCount} 条涉及脚本、安装、下载或 MCP 依赖`
+          : '',
+        priority
+          ? `${priority.label}：${priority.suggestion.title}。${priority.reason}`
+          : '没有需要优先处理的风险线索',
+      ]
+        .filter(Boolean)
+        .join('；'),
+      tone: localImportCount || scriptOrDependencyCount ? 'warn' : 'info',
+    },
+    {
+      label: '操作边界',
+      text: '查看、搜索、展开详情和切换过滤只读；只有使用/确认覆盖、丢弃、稍后审、现在审会写入 suggestion 状态。',
+      tone: 'info',
+    },
+  ];
+  return rows;
+});
+
+const suggestionEmptyReceiptRows = computed<SyncResultReceiptRow[]>(() => {
+  const activeCount = activeSkillCount.value;
+  return [
+    {
+      label: '当前 Inbox',
+      text: `ready suggestion 与稍后 suggestion 都为空；${activeCount} 条 active 真源技能仍可查看、复制或按平台同步。`,
+      tone: 'success',
+    },
+    {
+      label: '读取口径',
+      text: '这是 ready / snoozed 两个 suggestion 列表成功返回后的空结果；不是加载失败、过滤隐藏、质量门控降级或同步开关关闭。',
+      tone: 'info',
+    },
+    {
+      label: '后续来源',
+      text: '新的 Flight Recorder、OpenClaw 或 Desktop App 本机扫描结果仍会先进入 suggestion 审核队列。',
+      tone: 'info',
+    },
+    {
+      label: '操作边界',
+      text: '空队列回执只读；不会创建 suggestion、提升 active、触发 OpenClaw / Desktop App 同步、写外部平台或执行 skill。',
+      tone: 'info',
+    },
+  ];
+});
+
 const suggestionGroups = computed(() => {
   const groups = new Map<
     string,
@@ -1108,7 +1619,7 @@ const suggestionGroups = computed(() => {
     if (!groups.has(key)) groups.set(key, { key, icon, title, items: [] });
     return groups.get(key)!;
   };
-  for (const suggestion of suggestions.value) {
+  for (const suggestion of rankedSuggestions.value) {
     if (
       suggestion.suggestedFrom === 'openclaw' ||
       suggestion.sources?.includes('openclaw')
@@ -1144,6 +1655,35 @@ const actualSkillUrl = computed(() => {
   return client.buildPublicSkillUrl(selectedSkill.value.share.urlPath);
 });
 
+const currentShareCopyReceipt = computed<ShareCopyReceipt | null>(() => {
+  const receipt = shareCopyReceipt.value;
+  if (!receipt) return null;
+  const snapshot = receipt.snapshot;
+  if (!snapshot) return receipt;
+  const skill = selectedSkill.value;
+  if (!skill || skill.id !== snapshot.skillId) return null;
+  const currentSnapshot = buildShareCopySnapshot(
+    snapshot.kind,
+    snapshot.platform,
+    skill,
+  );
+  if (!currentSnapshot) {
+    return staleShareCopyReceipt(
+      receipt,
+      snapshot,
+      '当前详情没有可访问 token URL',
+    );
+  }
+  if (
+    currentSnapshot.shareUrl === snapshot.shareUrl &&
+    currentSnapshot.version === snapshot.version &&
+    currentSnapshot.sha === snapshot.sha
+  ) {
+    return receipt;
+  }
+  return staleShareCopyReceipt(receipt, snapshot, currentSnapshot);
+});
+
 const bindingCards = computed<SkillPlatformBinding[]>(() => {
   if (!selectedSkill.value) return [];
   const existing = new Map(
@@ -1171,6 +1711,89 @@ const showDesktopAppBindingNotice = computed(() => {
       isLocalDesktopPlatform(binding.platform),
     )
   );
+});
+
+const syncScopeOverviewTitle = computed(() => {
+  const enabledTargets = syncSettings.value.filter(
+    (setting) =>
+      setting.enabled &&
+      ['api', 'fs_via_desktop_app'].includes(setting.capability),
+  ).length;
+  const failedTargets = syncSettings.value.filter((setting) =>
+    truncateSyncError(setting.lastError),
+  ).length;
+  return [
+    `${activeSkillCount.value} 条 active`,
+    `${enabledTargets} 个可同步平台`,
+    failedTargets ? `${failedTargets} 个有失败` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+});
+
+const syncScopeOverviewRows = computed<SyncResultReceiptRow[]>(() => {
+  const apiEnabled = syncSettings.value.filter(
+    (setting) => setting.enabled && setting.capability === 'api',
+  );
+  const desktopEnabled = syncSettings.value.filter(
+    (setting) =>
+      setting.enabled && setting.capability === 'fs_via_desktop_app',
+  );
+  const manualOnly = syncSettings.value.filter(
+    (setting) => setting.capability === 'manual_only',
+  );
+  const failedTargets = syncSettings.value.filter((setting) =>
+    truncateSyncError(setting.lastError),
+  );
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '自动写入',
+      text: apiEnabled.length
+        ? `${platformLabels(
+            apiEnabled,
+          )} 已开启；每次同步作用域是所有 active 技能（${
+            activeSkillCount.value
+          } 条），不是单条技能。`
+        : `没有远端 API 平台开启；OpenClaw 不会自动推送 ${activeSkillCount.value} 条 active 技能。`,
+      tone: apiEnabled.length ? 'success' : 'info',
+    },
+    {
+      label: '本机目录',
+      text: desktopEnabled.length
+        ? desktopAppInstalled.value
+          ? `${platformLabels(
+              desktopEnabled,
+            )} 已开启；由 Desktop App 扫描和写回本机 skill 目录。`
+          : `${platformLabels(
+              desktopEnabled,
+            )} 已开启但 Desktop App 未运行；页面不会直接读写本机目录。`
+        : 'Codex CLI / Claude Code / Cursor 未开启或等待 Desktop App；当前页面不会直接写本机目录。',
+      tone: desktopEnabled.length
+        ? desktopAppInstalled.value
+          ? 'success'
+          : 'warn'
+        : 'info',
+    },
+    {
+      label: '仅手动',
+      text: manualOnly.length
+        ? `${platformLabels(
+            manualOnly,
+          )} 不参与自动同步，只能复制带 token 的安装指引。`
+        : '没有 manual-only 平台参与本次配置。',
+      tone: 'info',
+    },
+    {
+      label: '失败/审核',
+      text: failedTargets.length
+        ? `${failedTargets.length} 个平台有最近失败：${failedSyncPreview(
+            failedTargets,
+          )}。同步回拉的外部变更仍只进 Inbox，不会覆盖 active 真源。`
+        : '没有最近失败记录；同步回拉的外部变更仍只进 Inbox 审核，不会自动覆盖 active 真源。',
+      tone: failedTargets.length ? 'warn' : 'success',
+    },
+  ];
+  return rows;
 });
 
 async function loadData(preferredId?: string) {
@@ -1221,6 +1844,8 @@ async function loadData(preferredId?: string) {
     else {
       selectedId.value = '';
       selectedSkill.value = null;
+      selectedSkillHealth.value = null;
+      shareCopyReceipt.value = null;
     }
   } catch (error: any) {
     errorMessage.value = error?.message || '加载个人技能失败';
@@ -1230,11 +1855,22 @@ async function loadData(preferredId?: string) {
 }
 
 async function selectSkill(id: string) {
+  const switchingSkill = selectedId.value !== id;
   selectedId.value = id;
-  activeTab.value = 'workflow';
+  selectedSkillHealth.value = null;
+  if (switchingSkill) {
+    activeTab.value = 'workflow';
+    shareCopyReceipt.value = null;
+  }
   try {
     selectedSkill.value = (await client.getPersonalSkill(id)).skill;
+    try {
+      selectedSkillHealth.value = (await client.getSkillHealth(id)).health;
+    } catch {
+      selectedSkillHealth.value = null;
+    }
     if (
+      switchingSkill &&
       selectedSkill.value?.status === 'suggestion' &&
       isSnoozedSuggestion(selectedSkill.value)
     ) {
@@ -1346,7 +1982,7 @@ function reviewReasonCountLabel(
 function reviewReasonPreview(
   skill: Pick<PersonalSkillListItem, 'reviewReasons'>,
 ) {
-  return reviewReasons(skill).slice(0, 2);
+  return reviewReasons(skill).slice(0, 3);
 }
 
 function suggestionReviewFacts(skill: PersonalSkillListItem) {
@@ -1359,6 +1995,101 @@ function suggestionReviewFacts(skill: PersonalSkillListItem) {
     `风险 ${skill.risk}`,
   ];
   return facts.filter(Boolean);
+}
+
+function suggestionReviewReasonText(skill: PersonalSkillListItem) {
+  return reviewReasons(skill).join(' ');
+}
+
+function suggestionHasReviewReason(
+  skill: PersonalSkillListItem,
+  pattern: RegExp,
+) {
+  return pattern.test(suggestionReviewReasonText(skill));
+}
+
+function suggestionIsExternalAgentSource(skill: PersonalSkillListItem) {
+  const sources = [skill.suggestedFrom, ...(skill.sources || [])]
+    .filter(Boolean)
+    .map((source) => String(source).toLowerCase());
+  return sources.some((source) =>
+    ['openclaw', 'codex', 'claude_code', 'cursor'].includes(source),
+  );
+}
+
+function suggestionPriorityScore(skill: PersonalSkillListItem) {
+  let score = 0;
+  if (isExternalChangeSuggestion(skill)) score += 72;
+  if (skill.risk === 'high') score += 30;
+  else if (skill.risk === 'medium') score += 10;
+  if (requiresReview(skill)) score += 24;
+  score += Math.min(20, reviewReasons(skill).length * 5);
+  if (suggestionIsExternalAgentSource(skill)) score += 10;
+  if (localSkillSourceBinding(skill)) score += 8;
+  if (suggestionHasReviewReason(skill, /可执行脚本|命令|权限/)) score += 18;
+  if (suggestionHasReviewReason(skill, /安装|下载|MCP|外部依赖/)) score += 14;
+  if (suggestionHasReviewReason(skill, /越界|重复资源/)) score += 12;
+  if (suggestionHasReviewReason(skill, /未发现.*验证线索/)) score += 12;
+  if (suggestionHasReviewReason(skill, /证据链|完整确认|推断/)) score += 10;
+  if (suggestionHasReviewReason(skill, /工具调用/)) score += 8;
+  return score;
+}
+
+function suggestionPriorityLabel(skill: PersonalSkillListItem) {
+  if (isExternalChangeSuggestion(skill)) return '优先审覆盖';
+  if (skill.risk === 'high') return '高风险先审';
+  if (suggestionHasReviewReason(skill, /可执行脚本|命令|权限/)) {
+    return '先看脚本';
+  }
+  if (suggestionHasReviewReason(skill, /安装|下载|MCP|外部依赖/)) {
+    return '先看依赖';
+  }
+  if (suggestionHasReviewReason(skill, /未发现.*验证线索/)) {
+    return '先看验证';
+  }
+  if (localSkillSourceBinding(skill)) return '先确认来源';
+  if (requiresReview(skill)) return '先审证据';
+  return '可快速处理';
+}
+
+function suggestionPriorityReasons(skill: PersonalSkillListItem) {
+  const reasons: string[] = [];
+  if (isExternalChangeSuggestion(skill)) {
+    reasons.push(
+      `${externalChangePlatformLabel(skill)} 变更会覆盖 ${externalChangeOriginalSlug(
+        skill,
+      )}`,
+    );
+  }
+  if (skill.risk === 'high') {
+    reasons.push('高风险技能会改变 agent 行为');
+  }
+  if (suggestionHasReviewReason(skill, /可执行脚本|命令|权限/)) {
+    reasons.push('包含可执行脚本或权限敏感步骤');
+  }
+  if (suggestionHasReviewReason(skill, /安装|下载|MCP|外部依赖/)) {
+    reasons.push('包含安装、下载或 MCP 连接指令');
+  }
+  if (suggestionHasReviewReason(skill, /越界|重复资源/)) {
+    reasons.push('本机包有被忽略的越界或重复资源路径');
+  }
+  if (suggestionHasReviewReason(skill, /未发现.*验证线索/)) {
+    reasons.push('本机包缺少测试、eval、fixture 或 verify 线索');
+  }
+  if (localSkillSourceBinding(skill)) {
+    const summary = localSkillSourceSummary(localSkillSourceBinding(skill)!);
+    if (summary) reasons.push(`来自本机目录 ${summary}`);
+  }
+  if (suggestionHasReviewReason(skill, /证据链|完整确认|推断/)) {
+    reasons.push('证据链还不是完整确认状态');
+  }
+  if (requiresReview(skill) && reasons.length === 0) {
+    reasons.push('需要先看来源、证据和风险');
+  }
+  if (reasons.length === 0) {
+    reasons.push('无需强审核，可以快速入库或丢弃');
+  }
+  return Array.from(new Set(reasons));
 }
 
 function reviewAuditFacts(skill: PersonalSkillDetail) {
@@ -1379,6 +2110,462 @@ function reviewAuditFacts(skill: PersonalSkillDetail) {
   return facts.filter(Boolean);
 }
 
+function openClawSyncEnabled() {
+  return Boolean(
+    syncSettings.value.find(
+      (setting) =>
+        setting.platform === 'openclaw' &&
+        setting.enabled &&
+        setting.capability === 'api',
+    ),
+  );
+}
+
+function enabledDesktopSyncPlatformLabels() {
+  return syncSettings.value
+    .filter(
+      (setting) =>
+        setting.enabled &&
+        setting.capability === 'fs_via_desktop_app',
+    )
+    .map((setting) => platformLabel(setting.platform));
+}
+
+function suggestionDecisionReceiptTitle(skill: PersonalSkillDetail) {
+  return isExternalChangeSuggestion(skill)
+    ? '确认覆盖才会改写 active 真源'
+    : '确认使用才会进入 active 真源';
+}
+
+function suggestionDecisionReceiptRows(
+  skill: PersonalSkillDetail,
+): DecisionReceiptRow[] {
+  const rows: DecisionReceiptRow[] = [];
+  rows.push({
+    label: '动作',
+    text: isExternalChangeSuggestion(skill)
+      ? `${externalChangePlatformLabel(
+          skill,
+        )} 变更会覆盖 ${externalChangeOriginalSlug(
+          skill,
+        )}；未确认前只保留为 suggestion。`
+      : '确认后这条 suggestion 才会提升为 active 技能；未确认前不会分发到其他平台。',
+  });
+
+  if (requiresReview(skill)) {
+    rows.push({
+      label: '审核',
+      text: canConfirmSuggestion(skill)
+        ? '证据页已打开；点击确认会立即执行入库或覆盖。'
+        : '需要先查看证据、版本和风险；当前按钮只会进入审核页。',
+    });
+  } else {
+    rows.push({
+      label: '审核',
+      text: '这条建议不需要强审核；仍可先查看证据和版本再使用。',
+    });
+  }
+
+  const localBinding = localSkillSourceBinding(skill);
+  const localSummary = localBinding ? localSkillSourceSummary(localBinding) : '';
+  const localPackage = localBinding ? localSkillPackageSummary(localBinding) : '';
+  const localValidation = localBinding
+    ? localSkillValidationSummary(localBinding)
+    : '';
+  if (localSummary || localPackage || localValidation) {
+    rows.push({
+      label: '来源',
+      text: [
+        localSummary ? `本机目录 ${localSummary}` : '',
+        localPackage,
+        localValidation,
+      ]
+        .filter(Boolean)
+        .join('；'),
+    });
+  }
+  if (localBinding) {
+    rows.push({
+      label: '本机导入边界',
+      text: localSkillImportBoundaryText(localBinding),
+    });
+  }
+
+  const desktopPlatforms = enabledDesktopSyncPlatformLabels();
+  const syncParts = [
+    openClawSyncEnabled()
+      ? '确认后会立即尝试把这条 active skill 同步到 OpenClaw remote。'
+      : '本次确认不会触发 OpenClaw 即时同步。',
+    desktopPlatforms.length > 0
+      ? `${desktopPlatforms.join(
+          '、',
+        )} 已开启时等待 Desktop App 同步，不由这次点击直接写本机目录。`
+      : '',
+    'manual-only 平台仍只提供复制安装指引。',
+  ].filter(Boolean);
+  rows.push({
+    label: '同步',
+    text: syncParts.join(' '),
+  });
+
+  rows.push({
+    label: '恢复',
+    text: isExternalChangeSuggestion(skill)
+      ? '不想覆盖时可丢弃或稍后审；确认覆盖后后续修正走新的 skill 版本记录。'
+      : '不想入库时可丢弃或稍后审；确认入库后后续修正走 active skill 的版本记录。',
+  });
+
+  return rows;
+}
+
+function activeSkillVersionText(skill: PersonalSkillDetail) {
+  const version = skill.currentVersion || skill.activeVersion?.version || 'no version';
+  const sha = skill.currentSha256 || skill.activeVersion?.sha256 || '';
+  const fileCount = skill.activeVersion?.files?.length || 0;
+  return `${version} · sha256 ${sha ? sha.slice(0, 16) : '未返回'} · ${fileCount} 个资源文件`;
+}
+
+function skillHealthGateLabel(health: SkillHealth) {
+  if (health.gateState === 'candidate') return '候选质量门控';
+  if (health.gateState === 'active') return '质量门控 active';
+  if (health.gateState === 'degraded') return '质量门控降级';
+  if (health.gateState === 'retired') return '质量门控退役';
+  return '用户钉住';
+}
+
+function skillHealthTone(health: SkillHealth): SkillHealthReceipt['tone'] {
+  if (health.gateState === 'degraded' || health.gateState === 'retired') {
+    return 'warn';
+  }
+  if (health.gateState === 'active' || health.gateState === 'user_pinned') {
+    return 'success';
+  }
+  return 'info';
+}
+
+function skillHealthRecommendation(health: SkillHealth) {
+  if (health.gateState === 'candidate') {
+    return '仍在积累执行证据；可以手动查看或使用，但不要把它当成已验证稳定技能。';
+  }
+  if (health.gateState === 'active') {
+    return '执行证据已达标，可继续作为可推荐的 active 技能使用。';
+  }
+  if (health.gateState === 'degraded') {
+    return '已从自动推荐和注入面停用；仍可手动查看、复制安装或后续修订。';
+  }
+  if (health.gateState === 'retired') {
+    return '已进入退役状态；不再自动推荐，后续应生成修订版本或手动复活。';
+  }
+  return '用户已钉住，豁免自动降级；后续执行证据仍会继续记录。';
+}
+
+function buildSkillHealthReceipt(
+  skill: PersonalSkillDetail,
+  health: SkillHealth,
+): SkillHealthReceipt {
+  const score = Number.isFinite(health.health)
+    ? health.health.toFixed(2)
+    : '未返回';
+  const chip = skillHealthGateLabel(health);
+  return {
+    chip,
+    title: `${chip} · ${skill.title}`,
+    summary:
+      '这条回执来自 Skill Quality Gate 执行账本，帮助判断技能是否适合继续推荐。',
+    tone: skillHealthTone(health),
+    rows: [
+      {
+        label: '状态',
+        text: `gate_state=${health.gateState}；健康分 ${score}；成功 ${health.successCount} / 失败 ${health.failureCount}；连续失败 ${health.consecutiveFailures}。`,
+      },
+      {
+        label: '推荐',
+        text: skillHealthRecommendation(health),
+      },
+      {
+        label: '计分',
+        text: 'unknown outcome 不计入健康分母；小样本使用保守 Wilson 下界，避免过早晋升。',
+      },
+      {
+        label: '边界',
+        text: '这是只读健康回执；不会执行 skill、改变 active/suggestion/dismissed 状态、触发同步或写外部平台。',
+      },
+    ],
+  };
+}
+
+function promotedShareReceiptText(skill: PersonalSkillDetail) {
+  if (skill.share) {
+    return `已生成带 token 的只读 Skill URL；短链 ${skill.share.displayUrl} 只作识别，复制安装会使用 token URL。`;
+  }
+  if (skill.shareError) {
+    return `分享已阻断：${truncateSyncError(skill.shareError)}。`;
+  }
+  return '未返回可访问 URL；绑定页会继续显示分享状态。';
+}
+
+function suggestionActionVerb(
+  action: SuggestionActionKind,
+  skill?: PersonalSkillListItem | PersonalSkillDetail | null,
+) {
+  if (action === 'use') {
+    return isExternalChangeSuggestion(skill) ? '确认覆盖' : '确认使用';
+  }
+  if (action === 'dismiss') return '丢弃';
+  if (action === 'snooze') return '稍后审';
+  return '现在审';
+}
+
+function buildSuggestionPendingReceipt(
+  pending: PendingSuggestionAction,
+): SyncResultReceipt {
+  const action = suggestionActionVerb(pending.action);
+  return {
+    heading: '决策处理中',
+    title: `正在${action} ${pending.title}`,
+    summary: '请求已提交到 Memory Service，返回前写入类按钮保持锁定。',
+    tone: 'info',
+    rows: [
+      {
+        label: '状态',
+        text: '等待服务端返回；本页不会重复发送使用、丢弃、稍后审或现在审请求。',
+      },
+      {
+        label: '结果',
+        text: '完成前不把这条 suggestion 当成 active、dismissed、snoozed 或已恢复。',
+      },
+      {
+        label: '边界',
+        text: '处理中回执只表示请求在途，不代表已经入库、覆盖、同步、执行 skill 或写入外部平台。',
+      },
+    ],
+  };
+}
+
+function buildSuggestionActionFailureReceipt(
+  before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  action: SuggestionActionKind,
+  errorText: string,
+): SyncResultReceipt {
+  const title = before?.title || '这条技能建议';
+  const actionLabel = suggestionActionVerb(action, before);
+  return {
+    heading: `${actionLabel}失败回执`,
+    title: `${actionLabel}未完成：${title}`,
+    summary: 'Memory Service 没有确认这次 suggestion 决策，页面保持可重试。',
+    tone: 'failed',
+    rows: [
+      {
+        label: '状态',
+        text: '未确认写入；请按当前列表状态重新判断是否重试。',
+      },
+      {
+        label: '原因',
+        text: truncateSyncError(errorText) || '请求失败，未返回详细原因。',
+        tone: 'failed',
+      },
+      {
+        label: '边界',
+        text: '失败不会提升 active 真源、不会丢弃或暂缓 suggestion、不会触发同步，也不会执行 skill。',
+      },
+    ],
+  };
+}
+
+function suggestionUseSyncReceiptText(sync?: SyncReceiptPlatformResult) {
+  if (sync) {
+    const writes = syncCountList([
+      ['推送', sync.pushed],
+      ['回拉', sync.pulled],
+      ['更新绑定', sync.updated],
+      ['待审核变更', sync.externalChanges],
+    ]);
+    const skipped = numericSyncField(sync.skipped);
+    const errorSummary = syncErrorSummary(sync);
+    return [
+      `OpenClaw 即时同步${syncStatusLabel(sync.status)}`,
+      writes || '没有需要写入远端的 skill package',
+      skipped > 0 ? `跳过 ${skipped} 条` : '',
+      sync.note || '',
+      errorSummary,
+    ]
+      .filter(Boolean)
+      .join('；');
+  }
+
+  const desktopPlatforms = enabledDesktopSyncPlatformLabels();
+  return [
+    '没有触发 OpenClaw 即时同步',
+    desktopPlatforms.length > 0
+      ? `${desktopPlatforms.join('、')} 等待 Desktop App 下一次同步，不由这次点击直接写本机目录`
+      : '',
+    'manual-only 平台不会自动写入',
+  ]
+    .filter(Boolean)
+    .join('；');
+}
+
+function buildSuggestionUseReceipt(
+  before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  after: PersonalSkillDetail,
+  sync?: SyncReceiptPlatformResult,
+): SyncResultReceipt {
+  const externalChange = isExternalChangeSuggestion(before);
+  const target = externalChange ? externalChangeOriginalSlug(before) : after.slug;
+  const syncTone = sync ? syncResultTone(sync) : 'info';
+  const topTone: SyncResultReceiptTone =
+    syncTone === 'failed' || after.shareError ? 'warn' : 'success';
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '动作',
+      text: externalChange
+        ? `${externalChangePlatformLabel(
+            before,
+          )} 的外部变更已写入 ${target} 的 active 真源；原 suggestion 已结束。`
+        : 'Suggestion 已提升为 active 真源；不再留在 Inbox，也不会作为待决策建议重复出现。',
+      tone: 'success',
+    },
+    {
+      label: '真源版本',
+      text: activeSkillVersionText(after),
+      tone: 'success',
+    },
+    {
+      label: '分享',
+      text: promotedShareReceiptText(after),
+      tone: after.shareError ? 'warn' : 'success',
+    },
+  ];
+  const localBinding = localSkillSourceBinding(before) || localSkillSourceBinding(after);
+  if (localBinding) {
+    rows.push({
+      label: '本机导入',
+      text: localSkillImportBoundaryText(localBinding),
+      tone: 'info',
+    });
+  }
+  rows.push(
+    {
+      label: '同步',
+      text: suggestionUseSyncReceiptText(sync),
+      tone: syncTone,
+    },
+    {
+      label: '边界',
+      text: '这次点击只改变 Personal AI 技能库和已声明的同步路径；不会执行 skill、不会分析历史消息，也不会自动写入 manual-only 平台。',
+    },
+  );
+  return {
+    heading: '入库回执',
+    title: externalChange ? `已确认覆盖 ${target}` : `已入库 ${after.title}`,
+    summary: externalChange
+      ? '外部变更已从待审 suggestion 变成 active 真源版本。'
+      : '技能建议已从 Inbox 提升为 active 真源技能。',
+    tone: topTone,
+    rows,
+  };
+}
+
+function buildSuggestionSnoozeReceipt(
+  before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  after: PersonalSkillDetail,
+): SyncResultReceipt {
+  const title = before?.title || after.title;
+  const reviewText = requiresReview(before || after)
+    ? '审核原因和证据状态已保留；恢复到 Inbox 后仍需按原 gate 查看证据或确认。'
+    : '这条建议不需要强审核；恢复后仍只是待决策 suggestion。';
+  return {
+    heading: '稍后审回执',
+    title: `已暂缓 ${title}`,
+    summary: '这条技能建议已移出当前 Inbox，但还没有被使用或丢弃。',
+    tone: 'info',
+    rows: [
+      {
+        label: '状态',
+        text: `仍是 suggestion；${formatSnoozedUntil(
+          after.snoozedUntil,
+        )} 前不参与当前待决策 Inbox。`,
+      },
+      {
+        label: '审核',
+        text: reviewText,
+      },
+      {
+        label: '恢复',
+        text: '可从“稍后建议”点“现在审”立即清除暂缓并回到 Inbox；也可以直接丢弃。',
+      },
+      {
+        label: '边界',
+        text: '稍后审没有提升 active 真源、没有覆盖现有技能、没有触发 OpenClaw 或 Desktop App 同步，也不会执行 skill 或写入 manual-only 平台。',
+      },
+    ],
+  };
+}
+
+function buildSuggestionUnsnoozeReceipt(
+  before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  after: PersonalSkillDetail,
+): SyncResultReceipt {
+  const title = before?.title || after.title;
+  const nextStep = requiresReview(after)
+    ? '下一步仍需查看证据/风险，确认后才会入库或覆盖。'
+    : '下一步可以继续查看详情、使用或丢弃。';
+  return {
+    heading: '恢复审阅回执',
+    title: `已恢复 ${title}`,
+    summary: '暂缓标记已清除，建议重新回到可审 Inbox。',
+    tone: 'info',
+    rows: [
+      {
+        label: '状态',
+        text: '仍是 suggestion；snoozed_until 已清除，不再停留在稍后建议队列。',
+      },
+      {
+        label: '下一步',
+        text: nextStep,
+      },
+      {
+        label: '边界',
+        text: '现在审只恢复审阅入口，不会提升 active 真源、不会覆盖技能、不会触发同步，也不会执行 skill。',
+      },
+    ],
+  };
+}
+
+function buildSuggestionDismissReceipt(
+  before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  after: PersonalSkillDetail,
+): SyncResultReceipt {
+  const title = before?.title || after.title;
+  const clusterText = after.dismissReason
+    ? `丢弃原因 ${after.dismissReason} 已记录；同来源重复建议会按冷却去重处理。`
+    : '同来源重复建议会按冷却去重处理。';
+  return {
+    heading: '丢弃回执',
+    title: `已丢弃 ${title}`,
+    summary: '这条技能建议已结束，不再作为待决策或稍后建议出现。',
+    tone: 'warn',
+    rows: [
+      {
+        label: '状态',
+        text: '状态已变为 dismissed；已从 Inbox 和稍后建议队列移除。',
+      },
+      {
+        label: '冷却',
+        text: clusterText,
+      },
+      {
+        label: '恢复',
+        text: '如需复查，可切到“已丢弃”过滤器查看记录；后续修正应重新生成或导入新的 suggestion。',
+      },
+      {
+        label: '边界',
+        text: '丢弃没有删除 active 技能、没有改写外部平台或本机目录、没有触发同步，也不会执行 skill。',
+      },
+    ],
+  };
+}
+
 function setActiveTab(tab: SkillTab) {
   activeTab.value = tab;
   if (
@@ -1395,7 +2582,41 @@ async function prepareSuggestionReview(id: string) {
   setActiveTab('evidence');
 }
 
+function isPendingSuggestionAction(id: string) {
+  return pendingSuggestionAction.value?.id === id;
+}
+
+function suggestionWriteLocked(id?: string) {
+  const pending = pendingSuggestionAction.value;
+  if (!pending) return false;
+  return id ? Boolean(pending.id) : true;
+}
+
+function beginSuggestionAction(
+  id: string,
+  action: SuggestionActionKind,
+  candidate: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+) {
+  if (pendingSuggestionAction.value) return false;
+  pendingSuggestionAction.value = {
+    id,
+    action,
+    title: candidate?.title || id,
+  };
+  skillActionReceipt.value = null;
+  actionMessage.value = '';
+  errorMessage.value = '';
+  return true;
+}
+
+function finishSuggestionAction(id: string) {
+  if (pendingSuggestionAction.value?.id === id) {
+    pendingSuggestionAction.value = null;
+  }
+}
+
 async function handleSuggestionPrimary(id: string) {
+  if (pendingSuggestionAction.value) return;
   const candidate = visibleSkillById(id);
   if (isSnoozedSuggestion(candidate)) {
     await unsnoozeSuggestion(id);
@@ -1420,55 +2641,114 @@ async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
     await prepareSuggestionReview(id);
     return;
   }
+  if (!beginSuggestionAction(id, 'use', candidate)) return;
 
   try {
     const response = await client.useSkillSuggestion(id, {
       reviewConfirmed: Boolean(options.reviewConfirmed),
     });
+    errorMessage.value = '';
+    actionMessage.value = '';
+    skillActionReceipt.value = buildSuggestionUseReceipt(
+      candidate,
+      response.skill,
+      response.sync,
+    );
+    filter.value = 'active';
     await loadData(response.skill.id);
   } catch (error: any) {
+    const message = error?.message || '使用技能建议失败';
     if (/Review required/i.test(error?.message || '')) {
       await prepareSuggestionReview(id);
       errorMessage.value = '使用前需要先确认审核项。';
+      skillActionReceipt.value = buildSuggestionActionFailureReceipt(
+        candidate,
+        'use',
+        '使用前需要先确认审核项。',
+      );
       return;
     }
-    errorMessage.value = error?.message || '使用技能建议失败';
+    errorMessage.value = message;
+    skillActionReceipt.value = buildSuggestionActionFailureReceipt(
+      candidate,
+      'use',
+      message,
+    );
+  } finally {
+    finishSuggestionAction(id);
   }
 }
 
 async function dismissSuggestion(id: string) {
+  const candidate = visibleSkillById(id);
+  if (!beginSuggestionAction(id, 'dismiss', candidate)) return;
   try {
     const response = await client.dismissSkillSuggestion(id);
-    actionMessage.value = '已丢弃技能建议；同来源重复建议会按冷却规则处理。';
+    skillActionReceipt.value = buildSuggestionDismissReceipt(
+      candidate,
+      response.skill,
+    );
+    actionMessage.value = '';
     await loadData(response.skill.id);
   } catch (error: any) {
-    errorMessage.value = error?.message || '丢弃技能建议失败';
+    const message = error?.message || '丢弃技能建议失败';
+    errorMessage.value = message;
+    skillActionReceipt.value = buildSuggestionActionFailureReceipt(
+      candidate,
+      'dismiss',
+      message,
+    );
+  } finally {
+    finishSuggestionAction(id);
   }
 }
 
 async function snoozeSuggestion(id: string) {
   const candidate = visibleSkillById(id);
+  if (!beginSuggestionAction(id, 'snooze', candidate)) return;
   try {
     const response = await client.snoozeSkillSuggestion(id);
-    actionMessage.value = `已将「${
-      candidate?.title || response.skill.title
-    }」放入稍后建议，${formatSnoozedUntil(
-      response.skill.snoozedUntil,
-    )}回到 Inbox。`;
+    skillActionReceipt.value = buildSuggestionSnoozeReceipt(
+      candidate,
+      response.skill,
+    );
+    actionMessage.value = '';
     selectedId.value = '';
     await loadData();
   } catch (error: any) {
-    errorMessage.value = error?.message || '稍后审技能建议失败';
+    const message = error?.message || '稍后审技能建议失败';
+    errorMessage.value = message;
+    skillActionReceipt.value = buildSuggestionActionFailureReceipt(
+      candidate,
+      'snooze',
+      message,
+    );
+  } finally {
+    finishSuggestionAction(id);
   }
 }
 
 async function unsnoozeSuggestion(id: string) {
+  const candidate = visibleSkillById(id);
+  if (!beginSuggestionAction(id, 'unsnooze', candidate)) return;
   try {
     const response = await client.unsnoozeSkillSuggestion(id);
-    actionMessage.value = `已恢复「${response.skill.title}」，可以继续审核。`;
+    skillActionReceipt.value = buildSuggestionUnsnoozeReceipt(
+      candidate,
+      response.skill,
+    );
+    actionMessage.value = '';
     await loadData(response.skill.id);
   } catch (error: any) {
-    errorMessage.value = error?.message || '恢复技能建议失败';
+    const message = error?.message || '恢复技能建议失败';
+    errorMessage.value = message;
+    skillActionReceipt.value = buildSuggestionActionFailureReceipt(
+      candidate,
+      'unsnooze',
+      message,
+    );
+  } finally {
+    finishSuggestionAction(id);
   }
 }
 
@@ -1593,6 +2873,14 @@ function bindingMetadataString(binding: SkillPlatformBinding, key: string) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+function bindingMetadataStringArray(binding: SkillPlatformBinding, key: string) {
+  const value = binding.metadata?.[key];
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+}
+
 function bindingMetadataNumber(binding: SkillPlatformBinding, key: string) {
   const value = binding.metadata?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -1612,6 +2900,18 @@ function compactLocalPath(value: string) {
   const homeCompact = value.replace(/^\/Users\/[^/]+/, '~');
   if (homeCompact.length <= 58) return homeCompact;
   return `${homeCompact.slice(0, 26)}...${homeCompact.slice(-26)}`;
+}
+
+function compactPackagePath(value: string) {
+  if (value.length <= 44) return value;
+  return `${value.slice(0, 20)}...${value.slice(-20)}`;
+}
+
+function formatPackagePathPreview(paths: string[]) {
+  if (paths.length === 0) return '';
+  const visible = paths.slice(0, 3).map(compactPackagePath);
+  const overflow = paths.length - visible.length;
+  return `${visible.join('、')}${overflow > 0 ? ` 等 ${paths.length} 个` : ''}`;
 }
 
 function formatByteSize(bytes: number) {
@@ -1638,12 +2938,59 @@ function localSkillPackageSummary(binding: SkillPlatformBinding) {
     binding,
     'rejectedFileCount',
   );
+  const rejectedFilePreview = formatPackagePathPreview(
+    bindingMetadataStringArray(binding, 'rejectedFilePaths'),
+  );
   const parts = [
     fileCount > 0 ? `${fileCount} 个资源文件` : '',
     totalByteSize > 0 ? formatByteSize(totalByteSize) : '',
-    rejectedFileCount > 0 ? `已忽略 ${rejectedFileCount} 个越界文件` : '',
+    rejectedFileCount > 0
+      ? `已忽略 ${rejectedFileCount} 个越界文件${
+          rejectedFilePreview ? `：${rejectedFilePreview}` : ''
+        }`
+      : '',
   ].filter(Boolean);
   return parts.join(' · ');
+}
+
+function localSkillValidationSummary(binding: SkillPlatformBinding) {
+  if (!isLocalDesktopPlatform(binding.platform)) return '';
+  const fileCount = bindingMetadataNumber(binding, 'fileCount');
+  const validationFileCount = bindingMetadataNumber(
+    binding,
+    'validationFileCount',
+  );
+  const validationFilePreview = formatPackagePathPreview(
+    bindingMetadataStringArray(binding, 'validationFilePaths'),
+  );
+  if (validationFileCount > 0) {
+    return `验证线索 ${validationFileCount} 个${
+      validationFilePreview ? `：${validationFilePreview}` : ''
+    }`;
+  }
+  return fileCount > 0 ? '未发现测试/eval/fixture/verify 线索' : '';
+}
+
+function localSkillImportBoundaryText(binding: SkillPlatformBinding) {
+  const source = localSkillSourceSummary(binding);
+  const packageSummary = localSkillPackageSummary(binding);
+  const validation = localSkillValidationSummary(binding);
+  const validationBoundary = validation.includes('未发现')
+    ? `${validation}，确认后仍不会被当成已验证。`
+    : validation
+      ? `${validation} 只是包内线索，确认时不会运行验证。`
+      : '确认时不会运行测试或验证。';
+  return [
+    '确认只把本次扫描到的 skill package 快照写入 Personal AI active 真源。',
+    packageSummary ? `扫描包：${packageSummary}。` : '',
+    source
+      ? `不会修改、删除、修复或反写原本机目录 ${source}。`
+      : '不会修改、删除、修复或反写原本机 skill 目录。',
+    '不会运行包内脚本、安装依赖、连接 MCP，或执行该 skill。',
+    validationBoundary,
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function localSkillSourceFacts(
@@ -1656,6 +3003,7 @@ function localSkillSourceFacts(
       ? `目录 ${localSkillSourceSummary(binding)}`
       : '',
     localSkillPackageSummary(binding),
+    localSkillValidationSummary(binding),
   ].filter(Boolean);
 }
 
@@ -1774,14 +3122,257 @@ function installCommand(platform: string) {
   }
 }
 
+function tokenTailFromUrl(url: string) {
+  try {
+    const token = new URL(url, 'https://personal-ai.local').searchParams.get(
+      'token',
+    );
+    return token ? token.slice(-10) : 'no-token';
+  } catch {
+    const token = url.match(/[?&]token=([^&#]+)/)?.[1];
+    return token ? decodeURIComponent(token).slice(-10) : 'unknown';
+  }
+}
+
+function buildShareCopySnapshot(
+  kind: ShareCopyKind,
+  platform?: string,
+  skill = selectedSkill.value,
+): ShareCopySnapshot | null {
+  if (!skill?.share) return null;
+  const shareUrl = client.buildPublicSkillUrl(skill.share.urlPath);
+  return {
+    kind,
+    platform,
+    skillId: skill.id,
+    skillTitle: skill.title,
+    displayUrl: client.buildPublicSkillUrl(skill.share.displayUrl),
+    shareUrl,
+    version: skill.activeVersion?.version || skill.currentVersion || 'unknown',
+    sha: shortSha(skill.activeVersion?.sha256 || skill.currentSha256),
+    tokenTail: tokenTailFromUrl(shareUrl),
+    copiedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+function shareCopyTargetLabel(snapshot: ShareCopySnapshot) {
+  if (snapshot.kind === 'url') return '可访问 URL';
+  return `${platformLabel(snapshot.platform || '')} 安装指令`;
+}
+
+function shareCopySnapshotText(snapshot: ShareCopySnapshot) {
+  return `${snapshot.version} · sha256 ${snapshot.sha} · token ...${snapshot.tokenTail}`;
+}
+
+function staleShareCopyReceipt(
+  receipt: ShareCopyReceipt,
+  snapshot: ShareCopySnapshot,
+  current: ShareCopySnapshot | string,
+): ShareCopyReceipt {
+  const currentText =
+    typeof current === 'string' ? current : shareCopySnapshotText(current);
+  return {
+    ...receipt,
+    tone: 'warn',
+    title: '旧复制回执 · 当前详情已刷新',
+    summary: `剪贴板仍是上次复制的${shareCopyTargetLabel(
+      snapshot,
+    )}；当前详情已经生成不同的 live token 或版本指纹。`,
+    rows: [
+      {
+        label: '旧剪贴板',
+        text: `复制时 ${snapshot.skillTitle} · ${shareCopySnapshotText(
+          snapshot,
+        )}；展示短链 ${snapshot.displayUrl} 没有复制。`,
+      },
+      {
+        label: '当前详情',
+        text: currentText,
+      },
+      {
+        label: '恢复',
+        text: `重新点击复制可访问 URL 或安装指令后再粘贴；旧 token 仍有效直到后台 revoke。`,
+      },
+      {
+        label: '未执行',
+        text: '旧复制回执只说明本机剪贴板曾被写入，不代表已打开链接、安装 skill、同步平台或执行脚本。',
+      },
+    ],
+  };
+}
+
+function shareCopySuccessReceipt(kind: ShareCopyKind, platform?: string) {
+  const platformText = platform ? platformLabel(platform) : '';
+  const snapshot = buildShareCopySnapshot(kind, platform) || undefined;
+  const rows: ShareReceiptRow[] = [
+    ...(snapshot
+      ? [
+          {
+            label: '复制对象',
+            text: `${snapshot.skillTitle} · ${shareCopySnapshotText(
+              snapshot,
+            )}；短链 ${snapshot.displayUrl} 没有复制。`,
+          },
+        ]
+      : []),
+    {
+      label: '剪贴板',
+      text:
+        kind === 'url'
+          ? '已写入完整 token URL；展示短链没有复制，也不能单独用于安装。'
+          : `已写入 ${platformText} 安装指令；指令内包含完整 token URL，不是展示短链。`,
+    },
+    {
+      label: '访问范围',
+      text: '持有 token 的 agent 只能只读拉取 HTML 预览、SKILL.md、package.json 和 files/* 资源。',
+    },
+    {
+      label: '未执行',
+      text: '这次复制只写本机剪贴板，不会打开链接、安装 skill、触发平台同步、写入外部平台或执行脚本。',
+    },
+    ...(snapshot
+      ? [
+          {
+            label: '新鲜度',
+            text: '如果详情刷新生成新 live token 或 active version 变化，本回执会标成旧复制回执；旧 token 仍有效直到后台 revoke。',
+          },
+        ]
+      : []),
+  ];
+  shareCopyReceipt.value = {
+    tone: 'success',
+    title:
+      kind === 'url'
+        ? '已复制带 token 的可访问 URL'
+        : `已复制 ${platformText} 安装指令`,
+    summary:
+      kind === 'url'
+        ? '剪贴板现在是可访问凭证；继续粘贴前请确认目标 agent 可以读取该 skill。'
+        : '剪贴板现在是面向目标平台的手动安装文案；复制本身没有完成安装。',
+    rows,
+    snapshot,
+  };
+}
+
+function shareCopyFailureReceipt(kind: ShareCopyKind, platform?: string) {
+  const platformText = platform ? platformLabel(platform) : '';
+  shareCopyReceipt.value = {
+    tone: 'warn',
+    title:
+      kind === 'url'
+        ? '可访问 URL 未复制'
+        : `${platformText} 安装指令未复制`,
+    summary: '浏览器没有确认剪贴板写入；当前 skill 分享状态没有改变。',
+    rows: [
+      {
+        label: '未写入',
+        text: '没有写入剪贴板，也没有打开链接、安装 skill、触发平台同步或执行脚本。',
+      },
+      {
+        label: '恢复',
+        text: '可重新点击复制按钮，或在浏览器允许剪贴板权限后再试。',
+      },
+    ],
+  };
+}
+
 async function copyInstallCommand(platform: string) {
   if (!selectedSkill.value?.share) return;
-  await navigator.clipboard.writeText(installCommand(platform));
+  try {
+    await navigator.clipboard.writeText(installCommand(platform));
+    shareCopySuccessReceipt('install', platform);
+  } catch (error) {
+    shareCopyFailureReceipt('install', platform);
+  }
 }
 
 async function copySkillUrl() {
   if (!actualSkillUrl.value) return;
-  await navigator.clipboard.writeText(actualSkillUrl.value);
+  try {
+    await navigator.clipboard.writeText(actualSkillUrl.value);
+    shareCopySuccessReceipt('url');
+  } catch (error) {
+    shareCopyFailureReceipt('url');
+  }
+}
+
+function shortSha(value?: string) {
+  return value ? value.slice(0, 12) : 'unknown';
+}
+
+function activeVersionShareSummary(skill: PersonalSkillDetail) {
+  const version = skill.activeVersion;
+  if (!version) return '暂无 active version';
+  const fileCount = version.files?.length || 0;
+  return `${version.version} · sha256 ${shortSha(version.sha256)} · ${fileCount} 个资源文件`;
+}
+
+function skillShareReceiptTitle(skill: PersonalSkillDetail) {
+  if (skill.shareError) return '已阻止生成可访问 URL';
+  if (skill.share) return '带 token 的只读安装入口';
+  if (skill.status !== 'active') return '确认入库后才会生成分享 URL';
+  return '未生成可访问 URL';
+}
+
+function skillShareReceiptRows(skill: PersonalSkillDetail): ShareReceiptRow[] {
+  if (skill.shareError) {
+    return [
+      {
+        label: '安全扫描',
+        text: `${skill.shareError}；不会生成 tokenized URL。`,
+      },
+      {
+        label: '短链边界',
+        text: '展示短链不带 token，不能直接打开，也不能交给 agent 安装。',
+      },
+      {
+        label: '处理建议',
+        text: '移除疑似 secret 或敏感资源后，重新打开详情即可重新尝试生成分享 URL。',
+      },
+    ];
+  }
+
+  if (!skill.share) {
+    return [
+      {
+        label: '当前状态',
+        text:
+          skill.status === 'active'
+            ? '当前 active 技能还没有可复制 token URL。'
+            : 'Suggestion 或 dismissed 记录不会暴露 public token；确认进入 active 后才会生成。',
+      },
+      {
+        label: '访问边界',
+        text: '没有 token 时，短链只用于识别 slug/version，不授予外部读取权限。',
+      },
+    ];
+  }
+
+  const fileCount = skill.activeVersion?.files?.length || 0;
+  const fileText =
+    fileCount > 0 ? ` 和 ${fileCount} 个 files/* 资源` : '';
+  return [
+    {
+      label: '访问授权',
+      text: `持有 token 的 agent 可只读拉取 HTML 预览、SKILL.md、package.json${fileText}。`,
+    },
+    {
+      label: '复制提醒',
+      text: '复制可访问 URL 或安装指令会包含 token；短链不带 token，仅用于识别 slug/version。',
+    },
+    {
+      label: '版本指纹',
+      text: activeVersionShareSummary(skill),
+    },
+    {
+      label: '安全边界',
+      text: 'Public Skill URL 不提供写入、覆盖、执行或平台同步权限；分享前已做疑似 secret 扫描。',
+    },
+    {
+      label: '撤销边界',
+      text: '详情页会生成新的 live token；旧 token 继续有效直到后台 revoke，当前页还没有单条撤销按钮。',
+    },
+  ];
 }
 
 function openSkillPreview() {
@@ -1791,6 +3382,22 @@ function openSkillPreview() {
 
 function settingFor(platform: string) {
   return syncSettings.value.find((setting) => setting.platform === platform);
+}
+
+function platformLabels(settings: SkillSyncSetting[]) {
+  return settings.map((setting) => platformLabel(setting.platform)).join('、');
+}
+
+function failedSyncPreview(settings: SkillSyncSetting[]) {
+  return settings
+    .slice(0, 2)
+    .map(
+      (setting) =>
+        `${platformLabel(setting.platform)}: ${truncateSyncError(
+          setting.lastError,
+        )}`,
+    )
+    .join('；');
 }
 
 function syncTag(platform: string) {
@@ -1817,6 +3424,25 @@ function syncDisabled(setting: SkillSyncSetting) {
   );
 }
 
+function isAnySyncTogglePending() {
+  return syncTogglePending.value !== null;
+}
+
+function isSyncTogglePending(platform: string) {
+  return syncTogglePending.value?.platform === platform;
+}
+
+function syncToggleChecked(setting: SkillSyncSetting) {
+  const pending = syncTogglePending.value;
+  return pending?.platform === setting.platform
+    ? pending.enabled
+    : setting.enabled;
+}
+
+function syncWriteDisabled(setting: SkillSyncSetting) {
+  return syncDisabled(setting) || syncRunning.value || isAnySyncTogglePending();
+}
+
 function syncDescription(setting: SkillSyncSetting) {
   if (setting.capability === 'internal')
     return 'Personal AI 是技能真源，始终 active。';
@@ -1841,6 +3467,9 @@ function syncScope(setting: SkillSyncSetting) {
 function syncControlLabel(setting: SkillSyncSetting) {
   if (setting.capability === 'internal') return '始终开启';
   if (setting.capability === 'manual_only') return '仅手动';
+  if (isSyncTogglePending(setting.platform)) {
+    return syncTogglePending.value?.enabled ? '保存开启中' : '保存关闭中';
+  }
   if (
     setting.capability === 'fs_via_desktop_app' &&
     !desktopAppInstalled.value
@@ -1912,26 +3541,427 @@ function closeSyncDialog() {
   syncDialogOpen.value = false;
 }
 
+function numericSyncField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function syncStatusLabel(status?: string) {
+  return (
+    {
+      succeeded: '成功',
+      skipped: '已跳过',
+      failed: '失败',
+      partial_failed: '部分失败',
+    }[status || ''] || status ||
+    '未知'
+  );
+}
+
+function syncResultTone(
+  result: SyncReceiptPlatformResult,
+): SyncResultReceiptTone {
+  const errorCount = result.errors?.length || 0;
+  if (result.status === 'failed' || errorCount > 0) return 'failed';
+  if (
+    result.status === 'skipped' ||
+    numericSyncField(result.externalChanges) > 0 ||
+    numericSyncField(result.skipped) > 0 ||
+    result.hasMore ||
+    result.note
+  ) {
+    return 'warn';
+  }
+  return 'success';
+}
+
+function syncCountList(parts: Array<[string, unknown]>) {
+  return parts
+    .map(([label, value]) => [label, numericSyncField(value)] as const)
+    .filter(([, value]) => value > 0)
+    .map(([label, value]) => `${label} ${value} 条`)
+    .join('；');
+}
+
+function syncErrorSummary(result: SyncReceiptPlatformResult) {
+  const errors = result.errors || [];
+  if (errors.length === 0) return '';
+  const preview = errors
+    .slice(0, 2)
+    .map((error) =>
+      [error.slug, truncateSyncError(error.error)].filter(Boolean).join(': '),
+    )
+    .join('；');
+  return errors.length > 2 ? `${preview}；另 ${errors.length - 2} 条` : preview;
+}
+
+function buildSyncResultReceipt(
+  result: SyncReceiptPlatformResult,
+  source: 'openclaw' | 'desktop',
+): SyncResultReceipt {
+  const platform = platformLabel(result.platform);
+  const tone = syncResultTone(result);
+  const processed = numericSyncField(result.processed);
+  const scanned = numericSyncField(result.scanned);
+  const totalRemote = numericSyncField(result.totalRemote);
+  const candidates = numericSyncField(result.candidates);
+  const scopeFacts = [
+    scanned > 0 ? `扫描 ${scanned} 条` : '',
+    totalRemote > 0 ? `远端 ${totalRemote} 条` : '',
+    candidates > 0 ? `候选 ${candidates} 条` : '',
+    processed > 0 ? `处理 ${processed} 条` : '',
+    result.root ? `目录 ${compactLocalPath(result.root)}` : '',
+  ].filter(Boolean);
+  const personalAiChanges = syncCountList([
+    ['新增 suggestion', result.imported],
+    ['更新绑定', result.updated],
+    ['待审核变更', result.externalChanges],
+  ]);
+  const platformWrites = syncCountList([
+    ['回拉', result.pulled],
+    ['推送', result.pushed],
+  ]);
+  const externalChanges = numericSyncField(result.externalChanges);
+  const skipped = numericSyncField(result.skipped);
+  const errorSummary = syncErrorSummary(result);
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '结果',
+      text: [
+        syncStatusLabel(result.status),
+        scopeFacts.length ? scopeFacts.join('；') : '本次没有可处理项目',
+      ].join('；'),
+      tone,
+    },
+    {
+      label: 'Personal AI',
+      text:
+        personalAiChanges ||
+        '没有新增 suggestion、active 覆盖或绑定写入。',
+    },
+    {
+      label: source === 'desktop' ? '本机目录' : '远端平台',
+      text:
+        platformWrites ||
+        (result.status === 'skipped'
+          ? '本次未写入目标平台。'
+          : '本次没有需要写入目标平台的 skill package。'),
+    },
+    {
+      label: '待处理',
+      text: externalChanges
+        ? `顶部 Inbox 有 ${externalChanges} 条外部变更待审核；未确认前不会覆盖 active 真源。`
+        : result.hasMore
+        ? '远端仍有更多技能，可继续同步下一批。'
+        : '没有新的外部变更等待审核。',
+      tone: externalChanges || result.hasMore ? 'warn' : 'success',
+    },
+  ];
+
+  if (skipped > 0 || result.note || errorSummary) {
+    rows.push({
+      label: errorSummary ? '失败/跳过' : '跳过',
+      text: [
+        skipped > 0 ? `跳过 ${skipped} 条` : '',
+        result.note || '',
+        errorSummary,
+      ]
+        .filter(Boolean)
+        .join('；'),
+      tone: errorSummary ? 'failed' : 'warn',
+    });
+  }
+
+  rows.push({
+    label: '边界',
+    text: `${platform} 本次同步只影响这个平台与 Personal AI 技能库；manual-only 平台不会被自动写入，skill 不会被执行，外部变更仍要用户在 Inbox 确认。`,
+  });
+
+  return {
+    title: `${platform} ${syncStatusLabel(result.status)}`,
+    summary: [
+      platform,
+      source === 'desktop' ? 'Desktop App 本机同步' : '远端 API 同步',
+      externalChanges ? `${externalChanges} 条待审` : '无待审变更',
+      errorSummary ? '有失败项' : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    tone,
+    rows,
+  };
+}
+
+function buildSyncErrorReceipt(
+  platform: string,
+  message: string,
+  source: 'openclaw' | 'desktop',
+): SyncResultReceipt {
+  return buildSyncResultReceipt(
+    {
+      platform,
+      status: 'failed',
+      processed: 0,
+      imported: 0,
+      updated: 0,
+      pulled: 0,
+      pushed: 0,
+      externalChanges: 0,
+      skipped: 0,
+      errors: [{ error: message }],
+    },
+    source,
+  );
+}
+
+function buildSyncPendingReceipt(
+  platformId: string,
+  source: 'openclaw' | 'desktop',
+): SyncResultReceipt {
+  const platform = platformLabel(platformId);
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '请求对象',
+      text:
+        source === 'desktop'
+          ? `${platform} 正在通过本机 Desktop App 发起同步；Chrome 页面不会直接读写 skill 目录。`
+          : `${platform} 正在通过 Memory Service 请求远端 API 同步；返回前不能确认远端状态。`,
+      tone: 'info',
+    },
+    {
+      label: '本次范围',
+      text:
+        source === 'desktop'
+          ? `Desktop App 会扫描/处理 ${platform} 的本机 skill 目录，并对照 ${activeSkillCount.value} 条 active 真源技能。`
+          : `OpenClaw 同步会按当前配置处理最多 10 条候选/active package，并对照 ${activeSkillCount.value} 条 active 真源技能。`,
+      tone: 'info',
+    },
+    {
+      label: '等待确认',
+      text: '请求返回前还没有确认新增 suggestion、更新 binding、推送、回拉、安装或外部写入。',
+      tone: 'warn',
+    },
+    {
+      label: '边界',
+      text: '同步处理中不会执行 skill、不会写 manual-only 平台，也不会自动覆盖 active 真源；外部变更仍只进入 Inbox 审核。',
+      tone: 'info',
+    },
+  ];
+  return {
+    heading: '同步处理中',
+    title: `${platform} 同步请求已发出`,
+    summary:
+      source === 'desktop'
+        ? `${platform} · Desktop App 本机同步 · 等待本机扫描/写回结果`
+        : `${platform} · 远端 API 同步 · 等待 Memory Service 返回结果`,
+    tone: 'info',
+    rows,
+  };
+}
+
+function syncToggleEffectText(
+  setting: SkillSyncSetting,
+  enabled: boolean,
+): string {
+  if (setting.capability === 'api') {
+    return enabled
+      ? `后续平台级同步会把 ${activeSkillCount.value} 条 active 技能纳入 ${platformLabel(
+          setting.platform,
+        )} 推送/回拉范围。`
+      : `后续自动同步不会再推送 ${activeSkillCount.value} 条 active 技能到 ${platformLabel(
+          setting.platform,
+        )}。`;
+  }
+  if (setting.capability === 'fs_via_desktop_app') {
+    return enabled
+      ? `后续 Desktop App 同步会扫描/写回 ${platformLabel(
+          setting.platform,
+        )} 本机 skill 目录；当前页面仍不会直接读写文件。`
+      : `后续 Desktop App 同步不会再写回 ${platformLabel(
+          setting.platform,
+        )} 本机 skill 目录。`;
+  }
+  return enabled
+    ? '配置已保存；这个平台仍按自身能力边界运行。'
+    : '配置已保存；这个平台不会参与自动同步。';
+}
+
+function syncToggleNoMutationText(
+  setting: SkillSyncSetting,
+  enabled: boolean,
+): string {
+  if (setting.capability === 'fs_via_desktop_app') {
+    return enabled
+      ? '保存开关不会立刻扫描、写入或安装本机 skill；需要点击立即同步或等待 Desktop App 下一轮同步。'
+      : '关闭开关不会删除、修复或回滚本机 skill 目录里已有文件。';
+  }
+  if (setting.capability === 'api') {
+    return enabled
+      ? '保存开关不会立刻调用远端 API；需要点击立即同步或等待后台同步任务。'
+      : '关闭开关不会删除远端已安装 skill，也不会撤销已经生成的 Public Skill URL。';
+  }
+  return '保存开关不会执行 skill、不会写 manual-only 平台，也不会改变 active 真源内容。';
+}
+
+function buildSyncTogglePendingReceipt(
+  setting: SkillSyncSetting,
+  enabled: boolean,
+): SyncResultReceipt {
+  const platform = platformLabel(setting.platform);
+  return {
+    heading: '开关保存中',
+    title: `${platform} ${enabled ? '开启' : '关闭'}请求已发出`,
+    summary: `等待 Memory Service 确认 ${platform} 平台级同步开关；当前还没有执行同步。`,
+    tone: 'info',
+    rows: [
+      {
+        label: '请求对象',
+        text: `正在保存 ${platform} enabled=${String(
+          enabled,
+        )}；这是平台级设置，不是单条 skill 设置。`,
+        tone: 'info',
+      },
+      {
+        label: '等待确认',
+        text: '返回前不能确认开关已保存；页面会暂时锁定其它同步开关和立即同步按钮。',
+        tone: 'warn',
+      },
+      {
+        label: '后续范围',
+        text: syncToggleEffectText(setting, enabled),
+        tone: enabled ? 'success' : 'warn',
+      },
+      {
+        label: '本次未做',
+        text: syncToggleNoMutationText(setting, enabled),
+        tone: 'info',
+      },
+      {
+        label: '边界',
+        text: '保存处理中不会执行 skill、不会写 manual-only 平台、不会读写本机目录或远端平台，也不会覆盖 active 真源。',
+        tone: 'info',
+      },
+    ],
+  };
+}
+
+function buildSyncToggleReceipt(
+  setting: SkillSyncSetting,
+  enabled: boolean,
+  persistedSetting?: SkillSyncSetting,
+): SyncResultReceipt {
+  const platform = platformLabel(setting.platform);
+  const finalSetting = persistedSetting || { ...setting, enabled };
+  return {
+    heading: '开关回执',
+    title: `${platform} ${enabled ? '已开启' : '已关闭'}`,
+    summary: `${platform} 平台级同步开关已保存；本次没有立即执行同步。`,
+    tone: enabled ? 'success' : 'warn',
+    rows: [
+      {
+        label: '保存配置',
+        text: `Memory Service 已确认 ${platform} 的 enabled=${String(
+          finalSetting.enabled,
+        )}；这是平台级设置，不是单条 skill 设置。`,
+        tone: 'success',
+      },
+      {
+        label: '后续范围',
+        text: syncToggleEffectText(finalSetting, enabled),
+        tone: enabled ? 'success' : 'warn',
+      },
+      {
+        label: '本次未做',
+        text: syncToggleNoMutationText(finalSetting, enabled),
+        tone: 'info',
+      },
+      {
+        label: '排除范围',
+        text: 'manual-only 平台不会因为这个开关被自动写入；外部回拉变更仍只进入 Inbox 审核，不会覆盖 active 真源。',
+        tone: 'info',
+      },
+    ],
+  };
+}
+
+function buildSyncToggleErrorReceipt(
+  setting: SkillSyncSetting,
+  attemptedEnabled: boolean,
+  message: string,
+): SyncResultReceipt {
+  const platform = platformLabel(setting.platform);
+  return {
+    heading: '开关回执',
+    title: `${platform} 保存失败`,
+    summary: `${platform} 平台级同步开关没有保存；页面已回到原开关状态。`,
+    tone: 'failed',
+    rows: [
+      {
+        label: '未保存',
+        text: `Memory Service 未确认 enabled=${String(
+          attemptedEnabled,
+        )}；当前仍按原配置 enabled=${String(setting.enabled)} 显示。`,
+        tone: 'failed',
+      },
+      {
+        label: '失败原因',
+        text: truncateSyncError(message) || '未知错误',
+        tone: 'failed',
+      },
+      {
+        label: '本次未做',
+        text: '没有触发同步、没有写远端平台、没有读写本机目录、没有执行 skill，也没有写入 manual-only 平台。',
+        tone: 'info',
+      },
+    ],
+  };
+}
+
 async function toggleSync(setting: SkillSyncSetting, event: Event) {
   const input = event.target as HTMLInputElement;
+  if (syncWriteDisabled(setting)) {
+    input.checked = syncToggleChecked(setting);
+    return;
+  }
+  const nextEnabled = input.checked;
+  syncTogglePending.value = {
+    platform: setting.platform,
+    enabled: nextEnabled,
+  };
+  syncResultMessage.value = '';
+  errorMessage.value = '';
+  syncResultReceipt.value = buildSyncTogglePendingReceipt(setting, nextEnabled);
   try {
     const result = await client.updateSkillSyncSetting(
       setting.platform,
-      input.checked,
+      nextEnabled,
     );
     const index = syncSettings.value.findIndex(
       (item) => item.platform === setting.platform,
     );
     if (index >= 0) syncSettings.value[index] = result.setting;
+    syncResultReceipt.value = buildSyncToggleReceipt(
+      setting,
+      nextEnabled,
+      result.setting,
+    );
   } catch (error: any) {
-    errorMessage.value = error?.message || '更新同步设置失败';
+    const message = error?.message || '更新同步设置失败';
+    errorMessage.value = message;
+    syncResultReceipt.value = buildSyncToggleErrorReceipt(
+      setting,
+      nextEnabled,
+      message,
+    );
     input.checked = setting.enabled;
+  } finally {
+    syncTogglePending.value = null;
   }
 }
 
 async function runOpenClawSync() {
   syncRunning.value = true;
   syncResultMessage.value = '';
+  syncResultReceipt.value = buildSyncPendingReceipt('openclaw', 'openclaw');
   try {
     const result = await client.runSkillSync({
       platform: 'openclaw',
@@ -1941,31 +3971,35 @@ async function runOpenClawSync() {
       (item) => item.platform === 'openclaw',
     );
     if (!openclaw) {
-      syncResultMessage.value = 'OpenClaw 未参与本次同步。';
+      syncResultReceipt.value = buildSyncResultReceipt(
+        {
+          platform: 'openclaw',
+          status: 'skipped',
+          processed: 0,
+          imported: 0,
+          updated: 0,
+          pulled: 0,
+          pushed: 0,
+          externalChanges: 0,
+          skipped: 0,
+          errors: [],
+          note: 'OpenClaw 未参与本次同步。',
+        },
+        'openclaw',
+      );
     } else if (openclaw.status === 'failed') {
-      syncResultMessage.value =
-        openclaw.errors[0]?.error || 'OpenClaw 同步失败。';
+      syncResultReceipt.value = buildSyncResultReceipt(openclaw, 'openclaw');
       await loadData(selectedId.value);
     } else {
-      syncResultMessage.value = [
-        `已处理 ${openclaw.processed} 条`,
-        `新增建议 ${openclaw.imported} 条`,
-        `待审核变更 ${openclaw.externalChanges} 条`,
-        `更新绑定 ${openclaw.updated} 条`,
-        `推送 ${openclaw.pushed} 条`,
-        openclaw.errors.length ? `失败 ${openclaw.errors.length} 条` : '',
-        openclaw.externalChanges
-          ? '请到顶部 Inbox 审核外部变更。'
-          : openclaw.hasMore
-          ? '还有更多远端技能，可继续同步。'
-          : '已无待导入远端技能。',
-      ]
-        .filter(Boolean)
-        .join(' · ');
+      syncResultReceipt.value = buildSyncResultReceipt(openclaw, 'openclaw');
       await loadData(selectedId.value);
     }
   } catch (error: any) {
-    syncResultMessage.value = error?.message || 'OpenClaw 同步失败';
+    syncResultReceipt.value = buildSyncErrorReceipt(
+      'openclaw',
+      error?.message || 'OpenClaw 同步失败',
+      'openclaw',
+    );
   } finally {
     syncRunning.value = false;
   }
@@ -1974,6 +4008,7 @@ async function runOpenClawSync() {
 async function runDesktopSkillSync(platform: string) {
   syncRunning.value = true;
   syncResultMessage.value = '';
+  syncResultReceipt.value = buildSyncPendingReceipt(platform, 'desktop');
   try {
     await desktopClient.loadSettings();
     const result = await desktopClient.syncSkills(platform);
@@ -1981,25 +4016,32 @@ async function runDesktopSkillSync(platform: string) {
       (platformResult) => platformResult.platform === platform,
     );
     if (!item) {
-      syncResultMessage.value = `${platformLabel(platform)} 未参与本次同步。`;
+      syncResultReceipt.value = buildSyncResultReceipt(
+        {
+          platform,
+          status: 'skipped',
+          processed: 0,
+          imported: 0,
+          updated: 0,
+          pulled: 0,
+          pushed: 0,
+          externalChanges: 0,
+          skipped: 0,
+          errors: [],
+          note: `${platformLabel(platform)} 未参与本次同步。`,
+        },
+        'desktop',
+      );
     } else {
-      syncResultMessage.value = [
-        `${platformLabel(platform)} ${item.status}`,
-        `扫描 ${item.scanned} 条`,
-        `导入 ${item.imported} 条`,
-        `待审核变更 ${item.externalChanges || 0} 条`,
-        `回拉 ${item.pulled} 条`,
-        `推送 ${item.pushed} 条`,
-        item.errors.length ? `失败 ${item.errors.length} 条` : '',
-        item.externalChanges ? '请到顶部 Inbox 审核本机目录变更。' : '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
+      syncResultReceipt.value = buildSyncResultReceipt(item, 'desktop');
       await loadData(selectedId.value);
     }
   } catch (error: any) {
-    syncResultMessage.value =
-      error?.message || `${platformLabel(platform)} 同步失败`;
+    syncResultReceipt.value = buildSyncErrorReceipt(
+      platform,
+      error?.message || `${platformLabel(platform)} 同步失败`,
+      'desktop',
+    );
   } finally {
     syncRunning.value = false;
   }
@@ -2093,6 +4135,40 @@ input {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.workspace-title .workspace-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.health-gate-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.3rem;
+  padding: 0.14rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.1);
+  color: #bfdbfe;
+  font-size: 0.66rem;
+  line-height: 1.2;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.health-gate-chip.success {
+  border-color: rgba(34, 197, 94, 0.26);
+  background: rgba(34, 197, 94, 0.09);
+  color: #bbf7d0;
+}
+
+.health-gate-chip.warn {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
 }
 
 .page-subtitle {
@@ -2323,6 +4399,198 @@ button:disabled {
   font-weight: 700;
 }
 
+.inbox-priority {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 0.6rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.priority-main {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.priority-kicker {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #bfdbfe;
+}
+
+.priority-kicker em {
+  font-style: normal;
+  color: var(--muted-2);
+  font-weight: 650;
+}
+
+.priority-main strong {
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.priority-main p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.priority-facts {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.priority-facts span {
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.08);
+  color: #dbeafe;
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.inbox-priority .btn {
+  min-width: 6rem;
+  justify-content: center;
+}
+
+.suggestion-decision-overview {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.decision-overview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.decision-overview-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.decision-overview-head strong {
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.decision-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.decision-overview-row {
+  min-height: 5.1rem;
+  display: grid;
+  align-content: start;
+  gap: 0.32rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.decision-overview-row.success {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.decision-overview-row.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.decision-overview-row .label {
+  color: var(--ink-2);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.suggestion-empty-receipt {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.empty-receipt-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.empty-receipt-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.empty-receipt-head strong {
+  font-size: 0.92rem;
+  color: #bbf7d0;
+}
+
+.empty-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.empty-receipt-row {
+  min-height: 5.1rem;
+  display: grid;
+  align-content: start;
+  gap: 0.32rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.empty-receipt-row.success {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.empty-receipt-row .label {
+  color: var(--ink-2);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
 .suggestion-list {
   display: flex;
   gap: 0.6rem;
@@ -2376,6 +4644,11 @@ button:disabled {
 .suggestion-card.active {
   border-color: rgba(96, 165, 250, 0.45);
   transform: translateY(-1px);
+}
+
+.suggestion-card.pending {
+  border-color: rgba(56, 189, 248, 0.52);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.12);
 }
 
 .suggestion-card .top {
@@ -2497,6 +4770,7 @@ button:disabled {
 }
 
 .review-preview-pills span {
+  min-width: 0;
   padding: 0.12rem 0.4rem;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2504,6 +4778,7 @@ button:disabled {
   color: var(--ink-2);
   font-size: 0.64rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .suggestion-card .actions {
@@ -2576,6 +4851,11 @@ button:disabled {
 .snoozed-suggestion-card.active {
   border-color: rgba(96, 165, 250, 0.42);
   transform: translateY(-1px);
+}
+
+.snoozed-suggestion-card.pending {
+  border-color: rgba(56, 189, 248, 0.52);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.12);
 }
 
 .snoozed-card-main {
@@ -3128,6 +5408,7 @@ button:disabled {
 .review-audit-summary span {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   min-height: 1.35rem;
   padding: 0.12rem 0.48rem;
   border: 1px solid rgba(245, 158, 11, 0.24);
@@ -3136,6 +5417,7 @@ button:disabled {
   color: #fcd34d;
   font-size: 0.68rem;
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .review-audit-summary.ready span {
@@ -3163,6 +5445,136 @@ button:disabled {
   flex-wrap: wrap;
   gap: 0.4rem;
   justify-content: flex-end;
+}
+
+.decision-receipt {
+  margin: 0.85rem 1.2rem 0;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.skill-health-receipt {
+  margin: 0.85rem 1.2rem 0;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.skill-health-receipt.success {
+  border-color: rgba(34, 197, 94, 0.26);
+  background: rgba(22, 101, 52, 0.12);
+}
+
+.skill-health-receipt.warn {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(120, 53, 15, 0.18);
+}
+
+.skill-health-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.skill-health-head span {
+  font-size: 0.7rem;
+  font-weight: 750;
+  color: #fbbf24;
+}
+
+.skill-health-head strong {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.skill-health-receipt p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.skill-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.45rem;
+}
+
+.skill-health-row {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: rgba(2, 6, 23, 0.26);
+}
+
+.skill-health-row .label {
+  color: var(--muted-2);
+  font-size: 0.65rem;
+  font-weight: 750;
+}
+
+.skill-health-row span:last-child {
+  color: var(--ink-2);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.decision-receipt-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.decision-receipt-head span {
+  font-size: 0.7rem;
+  font-weight: 750;
+  color: #93c5fd;
+}
+
+.decision-receipt-head strong {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.decision-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.45rem;
+}
+
+.decision-receipt-row {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: rgba(2, 6, 23, 0.26);
+}
+
+.decision-receipt-row .label {
+  font-size: 0.65rem;
+  color: var(--muted-2);
+  font-weight: 750;
+}
+
+.decision-receipt-row span:last-child {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
 }
 
 .snoozed-review-gate {
@@ -3365,7 +5777,133 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.share-receipt {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.share-receipt-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-receipt-head span {
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.share-receipt-head strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.share-receipt-grid {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.share-receipt-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.34fr) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+}
+
+.share-receipt-row .label {
+  color: var(--muted-2);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.share-receipt-row span:last-child {
+  color: var(--ink-2);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.share-copy-receipt {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 0.55rem;
+  background: rgba(6, 78, 59, 0.24);
+}
+
+.share-copy-receipt.warn {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(120, 53, 15, 0.22);
+}
+
+.share-copy-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-copy-head span {
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.share-copy-head strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.share-copy-receipt p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.share-copy-grid {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.share-copy-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.34fr) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+}
+
+.share-copy-row .label {
+  color: var(--muted-2);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.share-copy-row span:last-child {
+  color: var(--ink-2);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 780px) {
+  .inbox-priority {
+    grid-template-columns: 1fr;
+  }
+
+  .inbox-priority .btn {
+    justify-self: start;
+  }
+
   .install-url-head {
     grid-template-columns: 1fr;
   }
@@ -3381,6 +5919,16 @@ button:disabled {
   .review-gate-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+  }
+
+  .share-receipt-row {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  .share-copy-row {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
   }
 }
 
@@ -3606,9 +6154,97 @@ button:disabled {
 }
 
 .sync-dialog > .status-box,
+.sync-scope-overview,
 .conflict-note,
 .sync-rows {
   margin: 0.9rem 1.2rem 0;
+}
+
+.sync-scope-overview {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.6rem;
+  background: rgba(30, 64, 175, 0.1);
+}
+
+.sync-scope-overview-head strong {
+  color: #bfdbfe;
+}
+
+.sync-result-receipt {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.sync-result-receipt.success {
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.sync-result-receipt.warn {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.sync-result-receipt.failed {
+  border-color: rgba(248, 113, 113, 0.36);
+  background: rgba(127, 29, 29, 0.18);
+}
+
+.sync-result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.sync-result-head span {
+  font-size: 0.68rem;
+  color: var(--muted-2);
+}
+
+.sync-result-head strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.sync-result-receipt p {
+  margin: 0;
+  max-width: none;
+}
+
+.sync-result-grid {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.sync-result-row {
+  display: grid;
+  grid-template-columns: 5.2rem minmax(0, 1fr);
+  gap: 0.55rem;
+  color: var(--ink-2);
+  font-size: 0.73rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sync-result-row .label {
+  color: var(--muted-2);
+  font-weight: 700;
+}
+
+.sync-result-row.success {
+  color: #bbf7d0;
+}
+
+.sync-result-row.warn {
+  color: #fed7aa;
+}
+
+.sync-result-row.failed {
+  color: #fecaca;
 }
 
 .sync-rows {
@@ -3801,6 +6437,11 @@ button:disabled {
   .sync-row {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .decision-overview-grid,
+  .empty-receipt-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

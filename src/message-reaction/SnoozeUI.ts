@@ -22,6 +22,7 @@ import {
 } from './SnoozeManager';
 import { MESSAGE_REACTION_SHOW_DELAY_MS } from './messageReactionTiming';
 import { getSnoozeCreateFailureMessage } from './snoozeCreateResult';
+import { buildAutoReplyConfigLaunchReceipt } from './autoReplyPresentation';
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -953,7 +954,7 @@ function processMessageElement(messageElement: HTMLElement) {
         
         hideAllSnoozeUI();
         hideToolbar();
-        showSuccessToast('正在打开自动答复配置...');
+        showSuccessToast(buildAutoReplyConfigLaunchReceipt());
       } catch (error) {
         console.error('打开自动答复配置失败:', error);
         showErrorToast('打开配置失败，请稍后重试');

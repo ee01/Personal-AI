@@ -209,6 +209,27 @@ function valuesMatchScope(expected: string | undefined, actualValues: unknown[])
   });
 }
 
+function formatScopeDiagnosticList(value: string | undefined): string {
+  const values = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/[\n,，、;；]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (values.length === 0) return '不限';
+  return values.join(' 或 ');
+}
+
+function formatActualScopeValues(values: unknown[]): string {
+  const normalized = uniqStrings(
+    values.map((value) => {
+      const text = String(value || '').trim();
+      return text || undefined;
+    }),
+  );
+  return normalized.length > 0 ? normalized.join(' / ') : '未提供上下文';
+}
+
 function getContextGroupValues(context?: WatchRuleMessageContext): unknown[] {
   return [context?.groupId, context?.teamId, context?.groupName, context?.teamName];
 }
@@ -322,6 +343,55 @@ export function isWatchRuleEligibleForMessage(
   return true;
 }
 
+export function getWatchRuleEligibilityIssues(
+  rule: WatchRule,
+  context?: WatchRuleMessageContext,
+): string[] {
+  if (!context) return [];
+
+  const issues: string[] = [];
+
+  if (rule.source === 'manual') {
+    const senderValues = getContextSenderValues(context);
+    if (
+      rule.filterSender &&
+      hasScopeValues(senderValues) &&
+      !valuesMatchScope(rule.filterSender, senderValues)
+    ) {
+      issues.push(
+        `发送人不在范围：期望 ${formatScopeDiagnosticList(
+          rule.filterSender,
+        )}，实际 ${formatActualScopeValues(senderValues)}`,
+      );
+    }
+
+    const groupValues = getContextGroupValues(context);
+    if (
+      rule.filterGroup &&
+      hasScopeValues(groupValues) &&
+      !valuesMatchScope(rule.filterGroup, groupValues)
+    ) {
+      issues.push(
+        `群组不在范围：期望 ${formatScopeDiagnosticList(
+          rule.filterGroup,
+        )}，实际 ${formatActualScopeValues(groupValues)}`,
+      );
+    }
+
+    return issues;
+  }
+
+  if (!isOutreachRuleInsideObservationWindow(rule, context)) {
+    issues.push('消息早于系统观察起点');
+  }
+
+  if (!isWatchRuleEligibleForMessage(rule, context) && issues.length === 0) {
+    issues.push('目标群组不在系统观察范围');
+  }
+
+  return issues;
+}
+
 export function filterWatchRulesForMessageContext(
   watchRules: WatchRule[],
   context?: WatchRuleMessageContext,
@@ -362,16 +432,22 @@ function buildOutreachWatchRuleText(params: {
 export function buildManualWatchRules(
   items: TopicItemWithAutoReply[],
 ): ManualWatchRule[] {
-  return items.filter(isManualConcernedItem).map((item) => ({
-    ruleRef: `manual:${item.id}`,
-    source: 'manual',
-    kind: item.followThread && item.followConfig ? 'follow_thread' : 'manual',
-    text: item.text || '',
-    filterSender: item.filterSender,
-    filterGroup: item.filterGroup,
-    manualItemId: item.id,
-    manualItem: item,
-  }));
+  return items
+    .filter(isManualConcernedItem)
+    .filter((item) => {
+      const expiredAt = normalizeEpochToMillis(item.expiredAt);
+      return expiredAt === null || expiredAt <= 0 || expiredAt > Date.now();
+    })
+    .map((item) => ({
+      ruleRef: `manual:${item.id}`,
+      source: 'manual',
+      kind: item.followThread && item.followConfig ? 'follow_thread' : 'manual',
+      text: item.text || '',
+      filterSender: item.filterSender,
+      filterGroup: item.filterGroup,
+      manualItemId: item.id,
+      manualItem: item,
+    }));
 }
 
 export function isOutreachAnswerResolutionSession(
@@ -613,20 +689,24 @@ export function resolveMatchedWatchRules(params: {
   const resolvedIds = Array.from(
     new Set([...(matchedRuleIds || []), ...idsFromText]),
   );
-  const refsFromIds = resolvedIds
-    .map((id) => manualRules[id]?.ruleRef)
-    .filter((value): value is `manual:${string}` => typeof value === 'string');
-  const finalRefs = uniqStrings([...resolvedRefs, ...refsFromIds]);
 
-  const matchedRules = finalRefs
-    .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
-    .filter((rule): rule is WatchRule => Boolean(rule))
-    .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
+  if (resolvedRefs.length > 0) {
+    const matchedRules = resolvedRefs
+      .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
+      .filter((rule): rule is WatchRule => Boolean(rule))
+      .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
 
-  if (matchedRules.length > 0) {
+    if (matchedRules.length > 0) {
+      return {
+        watchRules: matchedRules,
+        matchedRuleRefs: matchedRules.map((rule) => rule.ruleRef),
+        matchedRuleIds: resolvedIds,
+      };
+    }
+
     return {
-      watchRules: matchedRules,
-      matchedRuleRefs: matchedRules.map((rule) => rule.ruleRef),
+      watchRules: [],
+      matchedRuleRefs: resolvedRefs,
       matchedRuleIds: resolvedIds,
     };
   }
@@ -643,9 +723,25 @@ export function resolveMatchedWatchRules(params: {
     };
   }
 
+  const refsFromIds = resolvedIds
+    .map((id) => manualRules[id]?.ruleRef)
+    .filter((value): value is `manual:${string}` => typeof value === 'string');
+  const matchedRules = refsFromIds
+    .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
+    .filter((rule): rule is WatchRule => Boolean(rule))
+    .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
+
+  if (matchedRules.length > 0) {
+    return {
+      watchRules: matchedRules,
+      matchedRuleRefs: matchedRules.map((rule) => rule.ruleRef),
+      matchedRuleIds: resolvedIds,
+    };
+  }
+
   return {
     watchRules: [],
-    matchedRuleRefs: finalRefs,
+    matchedRuleRefs: refsFromIds,
     matchedRuleIds: resolvedIds,
   };
 }

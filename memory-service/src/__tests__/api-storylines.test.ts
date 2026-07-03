@@ -141,7 +141,7 @@ describe('Storyline draft API', () => {
           title: '最后收敛行动',
           intent: '把讨论落到 owner 和时间点。',
           narrative: '会议应确认 retry/ack owner、验证方式和下一次检查时间。',
-          evidenceIds: ['msg-ai-notes-prep'],
+          evidenceIds: ['E1'],
         },
       ],
       gaps: ['确认当前 retry patch 是否已经上线。'],
@@ -260,6 +260,18 @@ describe('Storyline draft API', () => {
     expect(body.artifactText).toContain('Evidence refs:');
     expect(body.artifactText).toContain('## Evidence key');
     expect(body.artifactText).toContain('calendar:event-ai-notes:');
+    expect(body.generationReceipt).toMatchObject({
+      generationMode: 'llm_grounded',
+      sourceKind: 'today_meeting_prep',
+      sourceId: prepId,
+      targetArtifact: 'speaker_notes',
+      audience: 'AI Notes 项目组',
+      sourceEvidenceRefCount: 2,
+      citedEvidenceRefCount: 2,
+      returnedEvidenceDetailCount: 2,
+      missingEvidenceDetailCount: 0,
+      boundary: 'draft_only_manual_copy_no_external_write',
+    });
     expect(
       body.artifactText
         .split('\n')
@@ -339,6 +351,11 @@ describe('Storyline draft API', () => {
     expect(body.riskNotes).toContain(
       '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。',
     );
+    expect(body.generationReceipt).toMatchObject({
+      generationMode: 'fallback_cue_cards',
+      fallbackReason: 'model_output_underused_or_invalid_evidence',
+      boundary: 'draft_only_manual_copy_no_external_write',
+    });
   });
 
   it('falls back when model segments underuse available evidence refs', async () => {
@@ -396,6 +413,13 @@ describe('Storyline draft API', () => {
     expect(body.riskNotes).toContain(
       '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。',
     );
+    expect(body.generationReceipt).toMatchObject({
+      generationMode: 'fallback_cue_cards',
+      fallbackReason: 'model_output_underused_or_invalid_evidence',
+      sourceEvidenceRefCount: 2,
+      returnedEvidenceDetailCount: 2,
+      missingEvidenceDetailCount: 0,
+    });
   });
 
   it('blocks draft generation when the source prep has no usable evidence refs', async () => {
@@ -453,7 +477,7 @@ describe('Storyline draft API', () => {
     expect(mockGenerateJSON).not.toHaveBeenCalled();
   });
 
-  it('returns a clear error when draft generation fails', async () => {
+  it('falls back to cue cards when draft LLM generation fails', async () => {
     const prepId = await createMeetingPrep();
     mockGenerateJSON.mockRejectedValueOnce(new Error('llm unavailable'));
 
@@ -466,8 +490,18 @@ describe('Storyline draft API', () => {
       },
     });
 
-    expect(res.statusCode).toBe(502);
-    expect(res.json().error).toBe('storyline_draft_generation_failed');
-    expect(res.json().detail).toContain('llm unavailable');
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.segments).toHaveLength(3);
+    expect(body.artifactText).toContain('Evidence refs:');
+    expect(body.artifactText).not.toContain('llm unavailable');
+    expect(body.riskNotes).toContain(
+      '模型生成失败，已用会前准备证据生成 fallback 草稿；请按 Evidence key 复核后再外发。',
+    );
+    expect(body.generationReceipt).toMatchObject({
+      generationMode: 'fallback_cue_cards',
+      fallbackReason: 'llm_generation_failed',
+      boundary: 'draft_only_manual_copy_no_external_write',
+    });
   });
 });

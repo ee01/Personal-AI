@@ -281,6 +281,25 @@ function getRecallEmbeddingTimeoutMs(): number {
     : DEFAULT_RECALL_EMBEDDING_TIMEOUT_MS;
 }
 
+function parseOptionalBooleanEnv(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function getRecallEmbeddingColdStartAllowed(
+  requestedValue: boolean | undefined,
+): boolean {
+  const envValue = parseOptionalBooleanEnv(
+    'RECALL_EMBEDDING_COLD_START_ENABLED',
+  );
+  if (envValue !== null) return envValue;
+  return requestedValue ?? false;
+}
+
 function withRecallTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -542,17 +561,29 @@ export class RecallEngine {
     let queryEmbedding: number[] | null = null;
     if (activeChannels.includes('vector')) {
       try {
-        const embeddingTimeoutMs = getRecallEmbeddingTimeoutMs();
-        const client = await withRecallTimeout(
-          EmbeddingClient.getInstance(),
-          embeddingTimeoutMs,
-          'EmbeddingClient.getInstance',
+        const allowEmbeddingColdStart = getRecallEmbeddingColdStartAllowed(
+          options.allowEmbeddingColdStart,
         );
-        queryEmbedding = await withRecallTimeout(
-          client.embed(query.query),
-          embeddingTimeoutMs,
-          'EmbeddingClient.embed',
-        );
+        if (!EmbeddingClient.isLoaded() && !allowEmbeddingColdStart) {
+          skippedDiagnostics.push({
+            channel: 'vector',
+            status: 'skipped',
+            candidateCount: 0,
+            reason: 'embedding_unavailable',
+          });
+        } else {
+          const embeddingTimeoutMs = getRecallEmbeddingTimeoutMs();
+          const client = await withRecallTimeout(
+            EmbeddingClient.getInstance(),
+            embeddingTimeoutMs,
+            'EmbeddingClient.getInstance',
+          );
+          queryEmbedding = await withRecallTimeout(
+            client.embed(query.query),
+            embeddingTimeoutMs,
+            'EmbeddingClient.embed',
+          );
+        }
       } catch (err) {
         console.warn(
           '[RecallEngine] Embedding generation failed, skipping vector channel:',

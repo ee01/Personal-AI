@@ -26,6 +26,7 @@ import type {
   RecallAnalysis,
   RecallBlock,
   RecallBlockType,
+  RecallChannelName,
   RecallEvidenceCard,
   RecallItem,
   RecallMediaItem,
@@ -43,6 +44,7 @@ import {
 } from '../utils/recallScopeReceipt.js';
 
 const ACTIVE_OVER_FETCH_FACTOR = 1.5;
+const EVIDENCE_ONLY_DEFAULT_CHANNELS: RecallChannelName[] = ['fts'];
 
 const ANALYSIS_SYSTEM_PROMPT = `You are a research assistant analyzing memory snippets.
 
@@ -97,6 +99,9 @@ export class ActiveRecallService {
     const baseTopK = query.topK ?? 10;
     const baseQuery: RecallQuery = {
       ...query,
+      channels:
+        query.channels ??
+        (wantsBlocks ? undefined : EVIDENCE_ONLY_DEFAULT_CHANNELS),
       topK: wantsBlocks
         ? Math.ceil(baseTopK * ACTIVE_OVER_FETCH_FACTOR)
         : baseTopK,

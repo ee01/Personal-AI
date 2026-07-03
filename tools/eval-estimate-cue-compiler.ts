@@ -32,12 +32,25 @@ interface EvalMemory {
   metadata?: Record<string, unknown>;
 }
 
+interface EvalSourceMemory {
+  id: string;
+  sourceKind?: string;
+  sourceUrl?: string;
+  sourceTitle: string;
+  summary?: string;
+  contentPreview?: string;
+  anchorPreview?: string;
+  captureMode?: string;
+  metadata?: Record<string, unknown>;
+}
+
 interface EstimateCueCase {
   id: string;
   title: string;
   kind: string;
   sampleContext?: {
     memories?: EvalMemory[];
+    sourceMemories?: EvalSourceMemory[];
     sourceProvenance?: Array<Record<string, unknown>>;
   };
   request?: ContextRecallRequest;
@@ -48,6 +61,19 @@ interface EstimateCueCase {
     recallActionType?: ContextCue['actionType'];
     composerActionType?: ContextCue['actionType'];
     mustContain?: string[];
+  };
+  expectedLensPresentation?: {
+    expectHidden?: boolean;
+    status?: 'ready' | 'partial' | 'blocked';
+    informationValue?: 'high' | 'medium' | 'low';
+    novelty?:
+      | 'new_to_current_surface'
+      | 'already_visible'
+      | 'anchor_only'
+      | 'unknown';
+    mustContain?: string[];
+    mustNotUseSourceTitle?: boolean;
+    expectedDisplayPriority?: 'p1' | 'p2' | 'hidden';
   };
   expectedScene?: {
     recallInteractionSceneType?: string;
@@ -85,6 +111,9 @@ try {
   resetDb();
   for (const memory of caseItem.sampleContext?.memories ?? []) {
     insertMemory(memory);
+  }
+  for (const sourceMemory of caseItem.sampleContext?.sourceMemories ?? []) {
+    insertSourceMemory(sourceMemory);
   }
 
   const recallService = new ContextRecallService(db);
@@ -190,6 +219,12 @@ function resetDb(): void {
   db.prepare('DELETE FROM memory_feedback_events').run();
   db.prepare('DELETE FROM memory_outcome_events').run();
   db.prepare('DELETE FROM memory_outcome_policy_patches').run();
+  db.prepare('DELETE FROM source_memory_events').run();
+  db.prepare('DELETE FROM source_memory_links').run();
+  db.prepare('DELETE FROM source_memory_triggers').run();
+  db.prepare('DELETE FROM source_memory_takeaways').run();
+  db.prepare('DELETE FROM source_memory_anchors').run();
+  db.prepare('DELETE FROM source_memory_capsules').run();
   db.prepare('DELETE FROM skill_platform_bindings').run();
   db.prepare('DELETE FROM skill_versions').run();
   db.prepare('DELETE FROM personal_skills').run();
@@ -253,6 +288,42 @@ function insertMemory(memory: EvalMemory): void {
   );
 }
 
+function insertSourceMemory(memory: EvalSourceMemory): void {
+  const timestamp = currentTime - 60;
+  db.prepare(
+    `INSERT INTO source_memory_capsules
+      (id, source_kind, source_url, source_title, source_host, source_fingerprint,
+       capture_mode, capture_reason, status, scope, privacy_level, summary,
+       content_preview, message_id, metadata_json, created_at, updated_at, saved_at,
+       dismissed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'saved', 'work', 'work', ?, ?, NULL, ?, ?, ?, ?, NULL)`,
+  ).run(
+    memory.id,
+    memory.sourceKind ?? 'webpage',
+    memory.sourceUrl ?? `https://example.test/source-memory/${memory.id}`,
+    memory.sourceTitle,
+    'example.test',
+    `eval:${memory.id}`,
+    memory.captureMode ?? 'manual',
+    'eval fixture',
+    memory.summary ?? null,
+    memory.contentPreview ?? null,
+    JSON.stringify(memory.metadata ?? {}),
+    timestamp,
+    timestamp,
+    timestamp,
+  );
+
+  if (memory.anchorPreview) {
+    db.prepare(
+      `INSERT INTO source_memory_anchors
+        (id, capsule_id, anchor_kind, locator, quote_or_preview, sensitivity,
+         confidence, created_at)
+       VALUES (?, ?, 'selection', NULL, ?, 'normal', 0.8, ?)`,
+    ).run(`${memory.id}:anchor:1`, memory.id, memory.anchorPreview, timestamp);
+  }
+}
+
 function judgeCase(input: {
   caseItem: EstimateCueCase;
   recall: Awaited<ReturnType<ContextRecallService['recall']>> | null;
@@ -272,6 +343,7 @@ function judgeCase(input: {
   const failures: string[] = [];
   const warnings: string[] = [];
   checkExpectedScene(input, failures);
+  checkExpectedLensPresentation(input, failures);
 
   if (expected.expectNoCue) {
     if (recallCue?.compileStatus === 'compiled') {
@@ -400,6 +472,76 @@ function judgeCase(input: {
   }
 
   return { failures, warnings };
+}
+
+function checkExpectedLensPresentation(
+  input: {
+    caseItem: EstimateCueCase;
+    recall: Awaited<ReturnType<ContextRecallService['recall']>> | null;
+  },
+  failures: string[],
+): void {
+  const expected = input.caseItem.expectedLensPresentation;
+  if (!expected) return;
+
+  if (expected.expectHidden) {
+    if ((input.recall?.matches?.length ?? 0) > 0) {
+      failures.push('expected no displayed Lens match after presentation filtering.');
+    }
+    return;
+  }
+
+  const match = input.recall?.topMatch;
+  const presentation = match?.lensPresentation;
+  if (!match || !presentation) {
+    failures.push('expected top Memory Lens match to include lensPresentation.');
+    return;
+  }
+  if (expected.status && presentation.status !== expected.status) {
+    failures.push(
+      `expected lensPresentation.status=${expected.status}, got ${presentation.status}.`,
+    );
+  }
+  if (
+    expected.informationValue &&
+    presentation.informationValue !== expected.informationValue
+  ) {
+    failures.push(
+      `expected lensPresentation.informationValue=${expected.informationValue}, got ${presentation.informationValue}.`,
+    );
+  }
+  if (expected.novelty && presentation.novelty !== expected.novelty) {
+    failures.push(
+      `expected lensPresentation.novelty=${expected.novelty}, got ${presentation.novelty}.`,
+    );
+  }
+  if (
+    expected.expectedDisplayPriority &&
+    match.displayPriority !== expected.expectedDisplayPriority
+  ) {
+    failures.push(
+      `expected displayPriority=${expected.expectedDisplayPriority}, got ${match.displayPriority ?? 'none'}.`,
+    );
+  }
+
+  const presentationText = [
+    presentation.title,
+    presentation.extractedInfo,
+    presentation.suggestedAction,
+  ].join('\n');
+  for (const required of expected.mustContain ?? []) {
+    if (!presentationText.includes(required)) {
+      failures.push(`expected lensPresentation to include ${required}.`);
+    }
+  }
+  if (
+    expected.mustNotUseSourceTitle &&
+    presentation.extractedInfo &&
+    match.sourceTitle &&
+    presentation.extractedInfo.trim() === match.sourceTitle.trim()
+  ) {
+    failures.push('lensPresentation.extractedInfo incorrectly reused sourceTitle.');
+  }
 }
 
 function checkExpectedScene(
@@ -988,6 +1130,8 @@ function summarizeMatch(match: ContextRecallMatch | null | undefined) {
     title: match.title,
     score: match.score,
     displayPriority: match.displayPriority,
+    sourceTitle: match.sourceTitle,
+    lensPresentation: match.lensPresentation,
     cue: summarizeCue(match.cue),
   };
 }

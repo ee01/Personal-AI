@@ -36,6 +36,12 @@ interface ExplorerRunState {
   lastRunSummary?: ExplorerRunSummary;
 }
 
+type ExplorerRevokeAuditState =
+  | 'remote_and_local'
+  | 'remote_only'
+  | 'local_only'
+  | 'empty';
+
 interface ExplorerManagerOptions {
   settingsStore: Pick<BridgeSettingsStore, 'getSettings'>;
   memoryClient: Pick<BridgeMemoryServiceClient, 'deleteMemoriesBySourceScope'>;
@@ -142,6 +148,7 @@ export class ExplorerManager {
     extractedMessageCount: number;
     artifactCount: number;
     skippedConversationCount: number;
+    transport?: ExplorerTransportStatus;
   }> {
     const state = this.runState[source];
     if (state.running) {
@@ -169,6 +176,7 @@ export class ExplorerManager {
         finishedAt,
         implemented,
         ...runSummary,
+        transport: adapter?.getTransportStatus?.(),
       };
     } catch (error) {
       const finishedAtMs = Date.now();
@@ -338,6 +346,9 @@ export class ExplorerManager {
     deletedChunks: number;
     localArtifactsRevoked: number;
     localLegacyArtifactsRevoked: number;
+    localActiveArtifactsBefore: number;
+    localActiveArtifactsAfter: number;
+    revokeAuditState: ExplorerRevokeAuditState;
   }> {
     const previewBefore = this.options.rawStore.getRevokePreview(source, scope);
     const result = await this.options.memoryClient.deleteMemoriesBySourceScope(
@@ -348,12 +359,21 @@ export class ExplorerManager {
       source,
       scope,
     );
+    const previewAfter = this.options.rawStore.getRevokePreview(source, scope);
+    const remoteDeletedCount =
+      Number(result.deletedMessages ?? 0) + Number(result.deletedChunks ?? 0);
     return {
       ...result,
       source,
       localArtifactsRevoked,
       localLegacyArtifactsRevoked: Math.min(
         previewBefore.legacyUnscopedArtifactCount,
+        localArtifactsRevoked,
+      ),
+      localActiveArtifactsBefore: previewBefore.activeArtifactCount,
+      localActiveArtifactsAfter: previewAfter.activeArtifactCount,
+      revokeAuditState: getRevokeAuditState(
+        remoteDeletedCount,
         localArtifactsRevoked,
       ),
     };
@@ -430,6 +450,18 @@ function normalizeExplorerDefaultScope(
 ): 'work' | 'personal' {
   if (scope === 'work' || scope === 'personal') return scope;
   return source === 'doubao' ? 'personal' : 'work';
+}
+
+function getRevokeAuditState(
+  remoteDeletedCount: number,
+  localArtifactsRevoked: number,
+): ExplorerRevokeAuditState {
+  const remoteChanged = remoteDeletedCount > 0;
+  const localChanged = localArtifactsRevoked > 0;
+  if (remoteChanged && localChanged) return 'remote_and_local';
+  if (remoteChanged) return 'remote_only';
+  if (localChanged) return 'local_only';
+  return 'empty';
 }
 
 function getExplorerSourceSettings(

@@ -18,6 +18,10 @@ const userDataDir = await fs.mkdtemp(
 );
 const nowSeconds = Math.floor(Date.now() / 1000);
 let failSessionList = true;
+let retryRequestCount = 0;
+let approvalShouldFail = true;
+let approveRequestCount = 0;
+let targetSearchCount = 0;
 
 function jsonResponse(body, status = 200) {
   return {
@@ -91,6 +95,101 @@ const messageReactionSession = {
   evidence: [],
 };
 
+const pendingApprovalSession = {
+  id: 'outreach-approval-needed',
+  originKind: 'reflection_action',
+  targetType: 'group',
+  targetRef: 'release-approvers',
+  targetResolutionStatus: 'resolved',
+  targetResolvedType: 'chat',
+  targetResolvedId: 'chat-release-approvers',
+  targetResolvedLabel: 'Release Approvers',
+  targetResolvedChatId: 'chat-release-approvers',
+  renderedQuestion: '请确认 M2 发布是否可以进入灰度？',
+  renderedContext: '需要目标群确认发布门槛，避免未审批外发。',
+  status: 'pending_approval',
+  requiresApproval: true,
+  followupCount: 0,
+  maxFollowup: 2,
+  nextCheckAt: nowSeconds + 1800,
+  createdAt: nowSeconds - 172800,
+  updatedAt: nowSeconds - 172500,
+  events: [],
+  actions: [],
+  evidence: [
+    {
+      sourceKind: 'message',
+      sourceId: 'msg-release-approver-answer',
+      title: 'Release Approvers 最近消息',
+      content: 'Release Approvers 已回复：M2 灰度可以继续，但需要先确认回滚 owner。',
+      metadata: {
+        answerResolutionPhase: 'before_dispatch',
+        hitSource: 'target_channel_history',
+      },
+    },
+  ],
+};
+
+const futureTemplate = {
+  template: {
+    id: 'template-release-check',
+    sourceKind: 'scheduled_messages',
+    title: 'Release owner follow-up',
+    questionTemplate: '明天提醒 Release Team 确认 owner',
+    contextTemplate: '确保发布前 owner 已确认，不重复打扰非相关群组。',
+    targetType: 'group',
+    targetRef: 'release-team',
+    scheduleSpec: {
+      nextDispatchAt: nowSeconds + 7200,
+      scheduleDate: '2026-06-14',
+      scheduleTime: '09:00',
+      repeatEvery: 1,
+      repeatUnit: 'Day',
+    },
+    enabled: true,
+    approvalPolicy: 'auto_when_resolved',
+    maxFollowup: 1,
+    followupIntervalSeconds: 3600,
+    syncState: 'synced',
+    lastSessionId: 'outreach-release-owner',
+    createdAt: nowSeconds - 3600,
+    updatedAt: nowSeconds - 300,
+  },
+  latestSession: {
+    ...outreachSession,
+    id: 'outreach-release-owner-previous',
+    status: 'resolved',
+    outcome: {
+      summary: '上次已确认 release owner。',
+    },
+  },
+};
+
+const retriableSession = {
+  id: 'outreach-retry-failed',
+  originKind: 'manual_action',
+  targetType: 'group',
+  targetRef: 'ops-team',
+  targetResolutionStatus: 'resolved',
+  targetResolvedType: 'chat',
+  targetResolvedId: 'chat-ops-team',
+  targetResolvedLabel: 'Ops Team',
+  targetResolvedChatId: 'chat-ops-team',
+  renderedQuestion: 'RingCentral 发送失败，需要重试',
+  renderedContext: '确认外部消息恢复后重新发起主动询问。',
+  status: 'failed',
+  requiresApproval: false,
+  followupCount: 1,
+  maxFollowup: 1,
+  sentChatId: 'chat-ops-team',
+  sentPostId: 'post-failed-outreach',
+  errorCode: 'ringcentral_send_failed',
+  errorMessage: 'RingCentral 503',
+  createdAt: nowSeconds - 900,
+  updatedAt: nowSeconds - 300,
+  evidence: [],
+};
+
 function apiFallback(url) {
   const pathname = new URL(url).pathname;
   if (pathname.endsWith('/stats')) {
@@ -154,7 +253,9 @@ try {
       pathname.endsWith('/outreach/templates/runtime-status') &&
       request.method() === 'GET'
     ) {
-      await route.fulfill(jsonResponse(emptyList(100)));
+      await route.fulfill(
+        jsonResponse({ items: [futureTemplate], total: 1, limit: 100, offset: 0 }),
+      );
       return;
     }
 
@@ -165,17 +266,105 @@ try {
         );
         return;
       }
-      const originKind = new URL(url).searchParams.get('originKind');
+      const searchParams = new URL(url).searchParams;
+      const originKind = searchParams.get('originKind');
+      const status = searchParams.get('status');
       const items =
-        originKind === 'message_reaction'
+        status === 'pending_approval'
+          ? [pendingApprovalSession]
+          : originKind === 'message_reaction'
           ? [messageReactionSession]
-          : [outreachSession, messageReactionSession];
+          : originKind === 'reflection'
+            ? []
+            : [outreachSession, messageReactionSession, retriableSession];
       await route.fulfill(
         jsonResponse({
           items,
           total: items.length,
           limit: 50,
           offset: 0,
+        }),
+      );
+      return;
+    }
+
+    if (
+      pathname.endsWith('/outreach/sessions/outreach-retry-failed/retry') &&
+      request.method() === 'POST'
+    ) {
+      retryRequestCount += 1;
+      retriableSession.status = 'scheduled';
+      retriableSession.followupCount = 0;
+      retriableSession.nextCheckAt = nowSeconds + 60;
+      retriableSession.errorCode = undefined;
+      retriableSession.errorMessage = undefined;
+      retriableSession.updatedAt = nowSeconds;
+      await route.fulfill(jsonResponse({ session: retriableSession }));
+      return;
+    }
+
+    if (
+      pathname.endsWith('/outreach/sessions/outreach-approval-needed/approve') &&
+      request.method() === 'POST'
+    ) {
+      approveRequestCount += 1;
+      if (approvalShouldFail) {
+        await route.fulfill(
+          jsonResponse({ error: 'RingCentral approval gateway down' }, 503),
+        );
+        return;
+      }
+      pendingApprovalSession.status = 'scheduled';
+      pendingApprovalSession.requiresApproval = false;
+      pendingApprovalSession.nextCheckAt = nowSeconds + 1800;
+      pendingApprovalSession.updatedAt = nowSeconds;
+      pendingApprovalSession.events = [
+        {
+          id: 'event-approved',
+          sessionId: pendingApprovalSession.id,
+          eventType: 'approved',
+          payload: {},
+          createdAt: nowSeconds,
+        },
+      ];
+      await route.fulfill(jsonResponse({ session: pendingApprovalSession }));
+      return;
+    }
+
+    if (
+      pathname.endsWith('/outreach/sessions/outreach-approval-needed') &&
+      request.method() === 'GET'
+    ) {
+      await route.fulfill(jsonResponse(pendingApprovalSession));
+      return;
+    }
+
+    if (
+      pathname.endsWith('/outreach/targets/search') &&
+      request.method() === 'GET'
+    ) {
+      targetSearchCount += 1;
+      await route.fulfill(
+        jsonResponse({
+          items: [
+            {
+              kind: 'chat',
+              entityId: 'chat-release-approvers',
+              label: 'Release Approvers',
+              subtitle: 'team chat',
+              chatId: 'chat-release-approvers',
+              score: 96,
+            },
+          ],
+          total: 1,
+          directoryStatus: [
+            {
+              scope: 'teams',
+              status: 'ready',
+              recordCount: 12,
+              stale: false,
+            },
+          ],
         }),
       );
       return;
@@ -212,25 +401,101 @@ try {
 
   const alert = page.getByRole('alert');
   await alert.waitFor({ timeout: 10000 });
-  await page.getByText('会话列表：Outreach DB unavailable').waitFor({
-    timeout: 10000,
-  });
+  await alert
+    .getByText('会话列表：Outreach DB unavailable', { exact: true })
+    .waitFor({
+      timeout: 10000,
+    });
   assert.equal(await page.getByText('暂无主动询问会话。').count(), 0);
 
   failSessionList = false;
   await page.getByRole('button', { name: '重试加载' }).click();
-  await page.getByText('Release owner 已确认了吗？').waitFor({
+  await page
+    .locator('.session-card', { hasText: outreachSession.renderedQuestion })
+    .waitFor({ timeout: 10000 });
+  await page.getByText('本页优先级').waitFor({ timeout: 10000 });
+  await page
+    .getByText('先处理 1 个失败、无回复或已升级终态')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      '刷新和筛选只读取 Memory Service 状态，不会批准、发送、追问、重试或写回 RingCentral',
+    )
+    .waitFor({ timeout: 10000 });
+  const focusLane = page.getByLabel('主动询问本轮处理对象');
+  await focusLane.getByText('本轮处理对象 · 终态恢复').waitFor({
     timeout: 10000,
   });
+  await focusLane.getByText(retriableSession.renderedQuestion).waitFor({
+    timeout: 10000,
+  });
+  await focusLane
+    .getByText('本卡只定位会话；不会调用重试、重新发送、写入 RingCentral 或修改 Memory Service')
+    .waitFor({ timeout: 10000 });
+  await focusLane
+    .getByRole('link', { name: '打开重试详情' })
+    .waitFor({ timeout: 10000 });
+  const templateCard = page.locator('.template-card', {
+    hasText: futureTemplate.template.questionTemplate,
+  });
+  await templateCard.getByText('计划推进回执').waitFor({ timeout: 10000 });
+  await templateCard
+    .getByText('这只是待触发计划，还不是已经发出的消息')
+    .waitFor({ timeout: 10000 });
+  await templateCard
+    .getByText('可查看上次执行（已拿到结果）或回到定时消息计划调整目标、问题和时间')
+    .waitFor({ timeout: 10000 });
+  const waitingCard = page.locator('.session-card', {
+    hasText: outreachSession.renderedQuestion,
+  });
+  await waitingCard.getByText('会话推进回执').waitFor({ timeout: 10000 });
+  await waitingCard
+    .getByText('不会在等待窗口内重复打扰同一目标')
+    .waitFor({ timeout: 10000 });
+  const retryCard = page.locator('.session-card', {
+    hasText: retriableSession.renderedQuestion,
+  });
+  await retryCard.getByText('旧失败原因：RingCentral 503').waitFor({
+    timeout: 10000,
+  });
+  await retryCard.getByRole('button', { name: '重试' }).click();
+  await page
+    .locator('.session-card', { hasText: retriableSession.renderedQuestion })
+    .locator('.badge', { hasText: '已排程' })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.session-card', { hasText: retriableSession.renderedQuestion })
+    .getByText('刷新列表不会立即发送')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('当前重点是等待 2 个已发出会话的回复')
+    .waitFor({ timeout: 10000 });
+  await focusLane.getByText('本轮处理对象 · 等待回复').waitFor({
+    timeout: 10000,
+  });
+  await focusLane.getByText(outreachSession.renderedQuestion).waitFor({
+    timeout: 10000,
+  });
+  await focusLane
+    .getByText('查看不会追问、结束会话或发送新消息；引擎只按等待窗口继续检查')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    retryRequestCount,
+    1,
+    'Terminal outreach cards should call the retry endpoint from the list page',
+  );
   assert.equal(await page.getByRole('alert').count(), 0);
 
   failSessionList = true;
-  await page.getByRole('button', { name: '刷新' }).click();
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
   await page.getByRole('alert').waitFor({ timeout: 10000 });
   await page.getByText('当前继续展示上次成功加载的数据').waitFor({
     timeout: 10000,
   });
-  await page.getByText('Release owner 已确认了吗？').waitFor({
+  await page.getByText('先重试加载：当前继续展示上次成功数据').waitFor({
+    timeout: 10000,
+  });
+  await waitingCard.getByText(outreachSession.renderedQuestion).waitFor({
     timeout: 10000,
   });
 
@@ -239,9 +504,24 @@ try {
     `chrome-extension://${extensionId}/memory-exploring.html#/outreach?originKind=message_reaction`,
     { waitUntil: 'domcontentloaded' },
   );
-  await page.getByText('确认最终发布日期和是否需要额外资源。').waitFor({
+  const messageReactionCard = page.locator('.session-card', {
+    hasText: messageReactionSession.renderedQuestion,
+  });
+  await messageReactionCard
+    .getByText('确认最终发布日期和是否需要额外资源。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('当前重点是等待 1 个已发出会话的回复')
+    .waitFor({ timeout: 10000 });
+  await focusLane.getByText('先核对原消息线程').waitFor({
     timeout: 10000,
   });
+  await focusLane
+    .getByText(messageReactionSession.renderedQuestion)
+    .waitFor({ timeout: 10000 });
+  await focusLane
+    .getByText('必要时从详情或原消息链接核对上下文，避免重复追问已经答过的问题')
+    .waitFor({ timeout: 10000 });
   assert.equal(
     await page.locator('.filter-select').nth(1).inputValue(),
     'message_reaction',
@@ -254,6 +534,9 @@ try {
   await page
     .getByText('这条跟进来自原始消息；系统会先检查当前会话是否已有满足目标的回复')
     .waitFor({ timeout: 10000 });
+  await messageReactionCard
+    .getByText('先检查原消息线程是否已有满足目标的回复')
+    .waitFor({ timeout: 10000 });
   const originalMessageLink = page.getByRole('link', { name: '打开原消息' });
   await originalMessageLink.waitFor({ timeout: 10000 });
   assert.equal(
@@ -262,9 +545,98 @@ try {
     'Message reaction cards should link back to the original message',
   );
 
-  await page.getByRole('link', { name: '查看详情' }).click();
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/outreach?originKind=reflection`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  const filteredEmptyReceipt = page.getByLabel('主动询问筛选空结果回执');
+  await filteredEmptyReceipt
+    .getByText('筛选空结果回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await filteredEmptyReceipt
+    .getByText('当前筛选没有匹配的主动询问会话或待触发计划。')
+    .waitFor({ timeout: 10000 });
+  await filteredEmptyReceipt
+    .getByText('当前筛选：全部状态 / 来源 自我反思。')
+    .waitFor({ timeout: 10000 });
+  await filteredEmptyReceipt
+    .getByText('未筛选快照里还有 3 条会话和 1 个待触发计划被当前筛选隐藏。')
+    .waitFor({ timeout: 10000 });
+  await filteredEmptyReceipt
+    .getByText('清除筛选或刷新只会重新读取 Memory Service')
+    .waitFor({ timeout: 10000 });
+  assert.equal(await page.getByText('暂无主动询问会话。').count(), 0);
+  await filteredEmptyReceipt.getByRole('button', { name: '清除筛选' }).click();
+  await page
+    .locator('.session-card', { hasText: outreachSession.renderedQuestion })
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    new URL(page.url()).hash,
+    '#/outreach',
+    'Clearing filters should return to the unfiltered outreach list',
+  );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/outreach?status=pending_approval`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  const approvalListCard = page.locator('.session-card', {
+    hasText: pendingApprovalSession.renderedQuestion,
+  });
+  await approvalListCard.waitFor({ timeout: 10000 });
+  const approvalListReview = approvalListCard.getByLabel(
+    '主动询问列表发送前复核',
+  );
+  await approvalListReview
+    .getByText('列表发送前复核', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await approvalListReview
+    .getByText(/已有证据\/回复线索：Release Approvers 已回复：M2 灰度可以继续，但需要先确认回滚 owner。/)
+    .waitFor({ timeout: 10000 });
+  await approvalListReview
+    .getByText('先进详情页核对发送前复核')
+    .waitFor({ timeout: 10000 });
+  await approvalListReview
+    .getByText('列表不会在已有线索时直接批准发送')
+    .waitFor({ timeout: 10000 });
+  const guardedApproveButton = approvalListCard.getByRole('button', {
+    name: '先到详情复核',
+  });
+  await guardedApproveButton.waitFor({ timeout: 10000 });
+  assert.equal(
+    await guardedApproveButton.isDisabled(),
+    true,
+    'Pending approval rows with pre-dispatch evidence should require detail review before approving',
+  );
+  await approvalListCard
+    .getByRole('link', { name: '进入详情复核' })
+    .waitFor({ timeout: 10000 });
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/outreach?originKind=message_reaction`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await messageReactionCard.waitFor({ timeout: 10000 });
+  await messageReactionCard.getByRole('link', { name: '查看详情' }).click();
+  await page.locator('.outreach-detail-page').waitFor({ timeout: 10000 });
   await page.getByText('状态 等待回复').waitFor({ timeout: 10000 });
-  await page.getByText('消息跟进').waitFor({ timeout: 10000 });
+  await page
+    .locator('.hero-metrics')
+    .getByText('消息跟进')
+    .waitFor({ timeout: 10000 });
+  const detailOperationReceipt = page.getByLabel('主动询问本次操作范围');
+  await detailOperationReceipt
+    .getByText('本次操作范围', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await detailOperationReceipt
+    .getByText('这条跟进先检查原消息线程和目标会话回复；刷新详情不会发送新追问。')
+    .waitFor({ timeout: 10000 });
+  await detailOperationReceipt
+    .getByText(/引擎才会判断是否追问、延期或结束；追问上限仍是 0\/1。/)
+    .waitFor({ timeout: 10000 });
+  await detailOperationReceipt
+    .getByText('取消只停止后续检查和追问，不删除已发 RingCentral 消息、来源证据或已记录事件。')
+    .waitFor({ timeout: 10000 });
   await page
     .getByText('这条跟进来自原始消息。系统正在检查当前会话是否已有满足完成标准的回复')
     .waitFor({ timeout: 10000 });
@@ -272,6 +644,123 @@ try {
     await page.getByRole('link', { name: '打开原消息' }).getAttribute('href'),
     messageReactionSession.outcome.messageUrl,
     'Message reaction detail should link back to the original message',
+  );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/outreach/${pendingApprovalSession.id}`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page
+    .getByText(pendingApprovalSession.renderedQuestion)
+    .waitFor({ timeout: 10000 });
+  const preDispatchReview = page.getByLabel('主动询问发送前复核');
+  await preDispatchReview
+    .getByText('发送前复核', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await preDispatchReview
+    .getByText('目标已确认：群组「Release Approvers」。')
+    .waitFor({ timeout: 10000 });
+  await preDispatchReview
+    .getByText(/批准后计划在 .* 发送。/)
+    .waitFor({ timeout: 10000 });
+  await preDispatchReview
+    .getByText(/这条会话最后更新于 .*前；批准前建议核对问题是否仍然需要外发。/)
+    .waitFor({ timeout: 10000 });
+  await preDispatchReview
+    .getByText(/本页已有证据线索：Release Approvers 已回复：M2 灰度可以继续，但需要先确认回滚 owner。/)
+    .waitFor({ timeout: 10000 });
+  await preDispatchReview
+    .getByText('复核回执只读取当前详情页快照，不会自动刷新 RingCentral、发送消息、确认答案或写用户画像。')
+    .waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: '编辑目标与时间' }).click();
+  const draftReceipt = page.getByLabel('主动询问未保存草稿回执');
+  await draftReceipt
+    .getByText('未保存草稿回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await draftReceipt
+    .getByText('暂无未保存字段；你可以继续修改、保存调整或取消编辑。')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    targetSearchCount,
+    0,
+    'Entering edit mode for an already-resolved target should not re-search and dirty the draft',
+  );
+  await page.locator('textarea').first().fill('请确认 M2 发布能否今天进入灰度？');
+  await draftReceipt.getByText('未保存字段：问题。').waitFor({
+    timeout: 10000,
+  });
+  await draftReceipt
+    .getByText('保存调整后才会更新 Memory Service 会话草稿；批准、发送和追问仍按当前状态另行推进。')
+    .waitFor({ timeout: 10000 });
+  await draftReceipt
+    .getByText('取消编辑、返回列表或离开页面会丢弃这些本页草稿，不会把草稿写入队列。')
+    .waitFor({ timeout: 10000 });
+  let backDialogMessage = '';
+  page.once('dialog', async (dialog) => {
+    backDialogMessage = dialog.message();
+    await dialog.dismiss();
+  });
+  await page.getByRole('button', { name: /返回主动询问列表/ }).click();
+  assert.match(backDialogMessage, /编辑草稿尚未保存/);
+  await page.locator('.outreach-detail-page').waitFor({ timeout: 10000 });
+  await draftReceipt.getByText('未保存字段：问题。').waitFor({
+    timeout: 10000,
+  });
+  await page.getByRole('button', { name: '取消编辑' }).click();
+  const discardReceipt = page.getByLabel('主动询问操作回执');
+  await discardReceipt
+    .getByText('操作回执：未保存草稿已丢弃')
+    .waitFor({ timeout: 10000 });
+  await discardReceipt
+    .getByText('已恢复为 Memory Service 上次确认的会话内容。')
+    .waitFor({ timeout: 10000 });
+  await discardReceipt
+    .getByText('没有保存目标、问题、完成标准或计划时间，也没有批准、发送、追问或写回 RingCentral。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(pendingApprovalSession.renderedQuestion)
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await draftReceipt.count(),
+    0,
+    'Draft receipt should disappear after cancelling edit mode',
+  );
+  await page.getByRole('button', { name: '批准发送' }).click();
+  const operationReceipt = page.getByLabel('主动询问操作回执');
+  await operationReceipt
+    .getByText('操作失败回执：批准发送未确认')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('RingCentral approval gateway down')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('页面不会把这次点击当成已批准、已发送、已重试、已取消或已保存。')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    approveRequestCount,
+    1,
+    'First pending approval detail attempt should call approve endpoint once',
+  );
+
+  approvalShouldFail = false;
+  await page.getByRole('button', { name: '批准发送' }).click();
+  await operationReceipt
+    .getByText('操作回执：批准请求已由 Memory Service 处理')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('当前会话状态：已排程；目标：群组「Release Approvers」。')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('这表示审批状态已刷新；是否已经发出仍以 dispatched 事件、sentPostId 和等待回复状态为准。')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('这次回执不代表对方已回复、不写用户画像、不确认决策，也不向其它外部系统同步。')
+    .waitFor({ timeout: 10000 });
+  await page.getByText('状态 已排程').waitFor({ timeout: 10000 });
+  assert.equal(
+    approveRequestCount,
+    2,
+    'Successful pending approval detail attempt should call approve endpoint again',
   );
 
   assert.deepEqual(

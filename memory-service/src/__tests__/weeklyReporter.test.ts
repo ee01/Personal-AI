@@ -141,6 +141,33 @@ describe('WeeklyReporter push targets', () => {
     expect(payload.reportSummary).toContain('Project launch is on track');
     expect(payload.reportExcerpt).toContain('Review rollout notes');
   });
+
+  it('returns Bot delivery failure reason while preserving the weekly notice', async () => {
+    vi.spyOn(
+      NotificationCenterService.prototype,
+      'deliverNoticeToGlip',
+    ).mockResolvedValue({ sent: false, error: 'bot_not_configured' });
+
+    const reporter = new WeeklyReporter(db, userDataManager, 'esone.qiu');
+    const result = await reporter.generateWeeklyReport({
+      ignoreEnabled: true,
+      ignoreMinMessages: true,
+      manual: true,
+      pushTarget: 'me',
+    });
+
+    expect(result).toMatchObject({
+      generated: true,
+      notificationCreated: true,
+      botSent: false,
+      botError: 'bot_not_configured',
+      pushTarget: 'me',
+    });
+    const row = db
+      .prepare("SELECT COUNT(*) AS cnt FROM notification_records WHERE type = 'weekly_report'")
+      .get() as { cnt: number };
+    expect(row.cnt).toBe(1);
+  });
 });
 
 describe('weekly and dream digest push-now routes', () => {
@@ -188,11 +215,12 @@ describe('weekly and dream digest push-now routes', () => {
         weeklyReportMinMessages: 1,
       }),
     );
+    const today = new Date().toISOString().slice(0, 10);
     context.userDataManager.writeFile(
-      'dreams/current-launch-2026-05-25.md',
+      `dreams/current-launch-${today}.md`,
       `# Dream: Route Current Launch
 
-_Generated: 2026-05-25_
+_Generated: ${today}_
 
 ## Narrative
 Route Current Launch narrative.
@@ -266,6 +294,9 @@ Route Current Launch narrative.
       generated: true,
       delivered: true,
       botSent: true,
+      notificationCreated: true,
+      dreamCount: 1,
+      latestDreamPath: expect.stringMatching(/^dreams\/current-launch-/),
       pushTarget: 'group',
     });
     expect(glipSpy).toHaveBeenCalledWith(

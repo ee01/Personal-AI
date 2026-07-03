@@ -68,6 +68,9 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '未知': 'Unknown',
   '条': 'items',
   '找到': 'Found',
+  '作用': 'Effect',
+  '不影响': 'Does not affect',
+  '继续处理': 'Continue in',
 
   // Top-level product terms
   '今天': 'Today Pilot',
@@ -101,6 +104,24 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '跟进追问': 'Followup',
   '联动': 'Openclaw',
   '联动操作': 'Openclaw',
+  '消息交互设置': 'Message action settings',
+  '消息交互功能设置': 'Message action settings',
+  '自动答复 / 跟进追问': 'Reply / Followup',
+  '本地显示开关': 'Local display switches',
+  '只改变此浏览器消息旁工具栏按钮显示':
+    'Only changes which buttons appear beside messages in this browser',
+  '不会取消已创建提醒、关注、追问、自动答复规则或联动操作':
+    'Does not cancel existing reminders, watches, followups, reply rules, or Openclaw actions',
+  '已排队或已保存的任务仍从各自管理页处理':
+    'Queued or saved items still stay in their own management pages',
+  '关闭后，对应按钮将不再显示':
+    'Turning a switch off hides that entry from this local toolbar.',
+  '设置保存失败，请稍后重试':
+    'Unable to save settings. Please try again later.',
+  '已隐藏消息工具栏 · 仅关闭本地入口，不会取消已创建提醒、关注、追问或联动规则':
+    'Message toolbar hidden. This only closes local entries; it does not cancel existing reminders, watches, followups, or Openclaw rules.',
+  '设置已保存 · 仅更新本地工具栏入口，已创建事项不受影响':
+    'Settings saved. Only local toolbar entries changed; existing items are not affected.',
   '稍后处理快捷选项': 'Remind quick options',
   '返回稍后处理快捷选项': 'Back to Remind quick options',
   '← 返回': '← Back',
@@ -111,12 +132,54 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '将在以下时间提醒您：': 'Reminder time:',
   '请选择未来时间': 'Choose a future time',
   '创建中...': 'Creating...',
+  '打开中...': 'Opening...',
   '无法识别提醒时间': 'Unable to recognize reminder time',
+  '提醒路径': 'Reminder path',
+  '去向': 'Queue',
+  '写入 Scheduled Messages 的 Snooze 队列':
+    'Creates or updates the Scheduled Messages Remind queue',
+  '回到消息': 'Writeback',
+  '到点由 Bot 推送，并在原消息显示稍后标注':
+    'Bot sends it when due, and the original message shows a Remind marker',
+  '恢复': 'Recovery',
+  '选错可撤销，或从管理稍后处理改期':
+    'Undo a wrong pick, or reschedule from Manage Remind',
+  '当前': 'Current',
+  '本次点击': 'This pick',
+  '已在本地标注为': 'Already marked locally as',
+  '会改期这条同源 Snooze，不新增第二条':
+    'Reschedules this same-source Remind item instead of adding another one',
+  '选错可从成功 Toast 或管理稍后处理确认':
+    'Use the success toast or Manage Remind to confirm a wrong pick',
+  '缓存口径': 'Cache basis',
+  '来自本地 marker 快照；以 Scheduled Messages 管理页和后台同步为准':
+    'Based on the local marker snapshot; Scheduled Messages and background sync remain authoritative',
+  '时间口径': 'Timing',
+  '预计时间会在悬停、聚焦和点击前刷新':
+    'Preview refreshes on hover, focus, and click',
   '已更新提醒': 'Reminder updated',
   '已设置提醒': 'Reminder set',
+  '可撤销；管理会定位到这条提醒':
+    'Undo is available; Manage opens this reminder',
+  '管理会打开 Snooze 列表确认': 'Manage opens the Remind list',
+  '同一条消息的旧提醒已改期；管理会定位到原提醒':
+    'The existing reminder for this message was rescheduled; Manage opens it',
+  '原消息标注会随后台同步刷新，当前页面可能短暂仍显示旧快照':
+    'Original message marker refreshes with background sync; this page may briefly show the old local snapshot',
   '已撤销提醒': 'Reminder cancelled',
+  '只删除这条未完成 Snooze；不会删除原消息、其他定时消息或改写记忆':
+    'Only deletes this unfinished Remind item; it does not delete the original message, other scheduled messages, or rewrite memory',
+  '未撤销提醒': 'Reminder not cancelled',
+  '提醒可能仍在 Snooze 队列；请从管理入口定位确认或删除':
+    'The reminder may still be in the Remind queue; use Manage to locate, confirm, or delete it',
   '撤销提醒失败，请稍后重试':
     'Unable to cancel the reminder. Please try again later.',
+  '提醒处理中': 'Reminder in progress',
+  '同一条消息已有请求': 'same-message request already exists',
+  '已有同源 Snooze 请求处理中；这次点击没有创建第二条提醒、没有改期、没有写记忆或发送 Bot 消息':
+    'A same-source Remind request is already in progress; this click did not create a second reminder, reschedule it, write memory, or send a bot message',
+  '首个请求完成后会显示结果；若页面一直无变化，可从管理入口确认 Snooze 队列':
+    'The first request will show the result; if the page stays unchanged, use Manage to confirm the Remind queue',
 
   // Options: section labels and detailed settings
   '消息分析推送': 'Message Analysis Delivery',
@@ -495,6 +558,8 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '正在读取表格数据...': 'Reading sheet data...',
   '表格为空或只有表头': 'The sheet is empty or only has headers',
   '未找到 Jira Key 列': 'Jira Key column was not found',
+  '未找到 {columnName} 列，或到 config 表中配置':
+    'Could not find the {columnName} column, or configure it in the config sheet.',
   '未找到有效的 Jira tickets': 'No valid Jira tickets were found',
   '更新失败:': 'Update failed:',
   '正在检查配置表...': 'Checking config sheet...',
@@ -510,6 +575,9 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '全选/取消全选': 'Select / Deselect All',
   '选择': 'Select',
   '将要操作的列：': 'Columns to change:',
+  'JIRA key 用于匹配行，不能取消':
+    'JIRA key is used to match rows and cannot be unchecked',
+  'Jira filter 未返回该字段': 'Jira filter did not return this field',
   '更新现有数据：': 'Update existing rows:',
   '新增数据：': 'Append rows:',
   '移除数据：': 'Remove rows:',
@@ -559,6 +627,39 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   // Jira and Glip injected UI
   '设计': 'Design',
   '缺少设计稿链接': 'Missing design link',
+  '未找到交付设计入口': 'No handoff design entry found',
+  '仅过滤非交付链接': 'Only filtered non-handoff links',
+  '只读扫描': 'Read-only scan',
+  '过滤范围': 'Filter scope',
+  '非交付设计工具链接已过滤': 'Non-handoff design-tool links filtered',
+  '0 handoff entries': '0 handoff entries',
+  '只发现文档、社区、营销、个人页或设置页等设计工具链接；未展示为开发交付入口。':
+    'Only documentation, community, marketing, profile, or settings design-tool URLs were found; they are not shown as development handoff entries.',
+  '只读扫描，不创建或编辑 Jira 设计链接、issue link 或关联关系。':
+    'Read-only scan. Personal AI does not create or edit Jira design links, issue links, or relationships.',
+  '过滤范围：只展示可开发交付入口；文档、社区、营销、个人页或设置页不会显示成设计入口，也不会创建或编辑 Jira。':
+    'Filter scope: only development handoff entries are shown. Documentation, community, marketing, profile, or settings pages are not shown as design entries, and Personal AI does not create or edit Jira.',
+  '恢复范围': 'Recovery scope',
+  '这批 UX ticket key 来自非标准页面证据，只是候选关系。':
+    'These UX ticket keys came from non-standard page evidence and are candidate relationships only.',
+  '只读候选': 'Read-only candidates',
+  '恢复范围：这些 UX ticket key 来自 URL query、data-issue-key、ARIA label 或纯文本等非标准页面证据；Personal AI 只保留匹配设计项目配置的 key，并且只展示只读候选，不创建或编辑 Jira issue links、设计字段或关联关系，也不证明这是正式 Jira 关联。':
+    'Recovery scope: these UX ticket keys came from non-standard page evidence such as URL query, data-issue-key, ARIA label, or raw text. Personal AI only keeps keys that match the configured design project and shows read-only candidates; it does not create or edit Jira issue links, design fields, or relationships, and it does not prove this is a canonical Jira relationship.',
+  '只读恢复': 'Read-only recovered',
+  'Personal AI 只展示这个恢复出来的候选 UX ticket；不会创建或编辑 Jira issue links、设计字段或关联关系。':
+    'Personal AI only shows this recovered UX ticket candidate. It does not create or edit Jira issue links, design fields, or relationships.',
+  '更新时间缺失': 'Updated date missing',
+  'Jira/Figma 报告设计已更新，但这个来源没有提供可用更新时间。':
+    'Jira/Figma reported this design as updated, but this source did not provide a usable updated time.',
+  '状态时间': 'Status time',
+  '状态日期': 'Status date',
+  '对象时间': 'Object time',
+  '对象日期': 'Object date',
+  '链接时间': 'Remote link time',
+  '链接日期': 'Remote link date',
+  '元数据时间': 'Metadata time',
+  '元数据日期': 'Metadata date',
+  '最新来源': 'Latest source',
   '修复版本': 'Fix Version',
   'Personal AI provided': 'Personal AI provided',
   '复制带链接 ID': 'Copy linked ID',

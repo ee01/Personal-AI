@@ -1,5 +1,6 @@
 export const JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH = 255;
+export const JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER = 'PERSONAL_AI_REENTER_SECRET';
 const JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX = '(Imported by Personal AI) ';
 const JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING = 'Personal AI import review';
 
@@ -60,6 +61,9 @@ export interface ImportRuleContext {
   ownerId?: string;
   allowOtherRuleTrigger?: boolean;
   existingRuleNames?: string[];
+  nameCheck?: JiraAutomationImportNameCheck;
+  createStageAcknowledgement?: JiraAutomationImportCreateStageAcknowledgement;
+  sourceCloud?: boolean;
   now?: number;
 }
 
@@ -122,6 +126,25 @@ export interface JiraAutomationImportEnablementStep {
   label: string;
   detail: string;
   severity: JiraAutomationImportReviewSeverity;
+}
+
+export interface JiraAutomationImportSecretReentrySlot {
+  path: string;
+  label: string;
+  reason: string;
+}
+
+export type JiraAutomationImportNameCheckStatus = 'confirmed' | 'unconfirmed';
+
+export interface JiraAutomationImportNameCheck {
+  status: JiraAutomationImportNameCheckStatus;
+  checkedRuleCount?: number;
+  failureReason?: string;
+}
+
+export interface JiraAutomationImportCreateStageAcknowledgement {
+  required?: boolean;
+  completed?: boolean;
 }
 
 export interface JiraAutomationImportReviewPacketContext extends ImportRuleContext {
@@ -210,7 +233,7 @@ function redactSensitiveUrl(rawUrl: string): string {
     }
 
     parsedUrl.searchParams.forEach((value, key) => {
-      if (isLikelySensitiveKey(key) || isMaskedSensitiveValue(value)) {
+      if (isLikelySensitiveUrlQueryKey(key) || isMaskedSensitiveValue(value)) {
         parsedUrl.searchParams.set(key, 'REDACTED');
       }
     });
@@ -227,7 +250,7 @@ function redactSensitiveUrl(rawUrl: string): string {
     return parsedUrl.toString();
   } catch {
     return rawUrl.replace(
-      /([?&][^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token)[^=&#]*=)[^&#]*/gi,
+      /([?&][^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*=)[^&#]*/gi,
       '$1REDACTED',
     );
   }
@@ -241,7 +264,7 @@ function addSensitiveUrlReferences(rawUrl: string, values: Set<string>): void {
     }
 
     parsedUrl.searchParams.forEach((value, key) => {
-      if (isLikelySensitiveKey(key) || isMaskedSensitiveValue(value)) {
+      if (isLikelySensitiveUrlQueryKey(key) || isMaskedSensitiveValue(value)) {
         addSensitiveReference(values, `URL query ${key}`, isMaskedSensitiveValue(value));
       }
     });
@@ -254,7 +277,7 @@ function addSensitiveUrlReferences(rawUrl: string, values: Set<string>): void {
       addSensitiveReference(values, 'URL fragment', false);
     }
   } catch {
-    const matches = rawUrl.match(/[?&]([^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token)[^=&#]*)=/gi) || [];
+    const matches = rawUrl.match(/[?&]([^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*)=/gi) || [];
     matches.forEach((match) => {
       const key = match.replace(/^[?&]/, '').replace(/=$/, '');
       addSensitiveReference(values, `URL query ${key}`, false);
@@ -266,12 +289,68 @@ function redactSensitiveUrlsInText(text: string): string {
   return text.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => redactSensitiveUrl(url));
 }
 
+function redactHighEntropyTokenLikeText(text: string, replacement = 'REDACTED'): string {
+  return text.replace(/\b[A-Za-z0-9_-]{10,}\b/g, (token, offset, fullText) => {
+    const nextChar = fullText[offset + token.length] || '';
+    const previousChar = offset > 0 ? fullText[offset - 1] : '';
+    if ((nextChar === '=' || nextChar === ':') && (!previousChar || /[?&#\s"'([{,]/.test(previousChar))) {
+      return token;
+    }
+
+    if (/[-_\d]/.test(token) && /(secret|token|password|api[-_]?key)/i.test(token)) {
+      return replacement;
+    }
+
+    const hasLetter = /[A-Za-z]/.test(token);
+    const hasDigit = /\d/.test(token);
+    const hasMixedCase = /[A-Z]/.test(token) && /[a-z]/.test(token);
+    if (token.length >= 24 && hasLetter && (hasDigit || hasMixedCase)) {
+      return replacement;
+    }
+
+    return token;
+  });
+}
+
+function redactInlineSecretText(text: string, replacement = 'REDACTED'): string {
+  return redactHighEntropyTokenLikeText(
+    redactSensitiveUrlsInText(text)
+      .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, (_match, scheme) => `${scheme} ${replacement}`)
+      .replace(
+        /((?:"|')?(?:authorizationHeader|apiToken|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|client[-_ ]?secret|private[-_ ]?key|keyOrValue|rawValue|secretValue|password|passwd|secret|token)(?:"|')?\s*[:=]\s*(?:"|')?)([^"',\s}\]<&#]+)/gi,
+        (match, prefix, secretValue) => (secretValue === 'REDACTED' ? match : `${prefix}${replacement}`),
+      ),
+    replacement,
+  );
+}
+
+export function redactJiraAutomationImportErrorText(value: unknown): string {
+  const rawText = value instanceof Error
+    ? value.message
+    : typeof value === 'string'
+      ? value
+      : String(value ?? '');
+
+  const redacted = redactInlineSecretText(rawText)
+    .replace(/(?<![:/@])\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, 'REDACTED_EMAIL');
+
+  return redacted.length <= 2000 ? redacted : `${redacted.slice(0, 1997)}...`;
+}
+
+export function sanitizeJiraAutomationImportDisplayText(value: string): string {
+  return redactInlineSecretText(value);
+}
+
+function sanitizeJiraAutomationImportName(value: string): string {
+  return sanitizeJiraAutomationImportDisplayText(value).replace(/\s+/g, ' ').trim() || 'Imported Jira Automation rule';
+}
+
 function normalizeRuleNameForComparison(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
 function buildImportedRuleNameWithSuffix(sourceName: string, suffix: string): string {
-  const normalizedName = sourceName.trim();
+  const normalizedName = sanitizeJiraAutomationImportName(sourceName);
   const maxSourceNameLength = Math.max(
     0,
     JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH
@@ -283,6 +362,47 @@ function buildImportedRuleNameWithSuffix(sourceName: string, suffix: string): st
     : `${normalizedName.slice(0, Math.max(0, maxSourceNameLength - 3))}...`;
 
   return `${JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX}${truncatedSourceName}${suffix}`;
+}
+
+function normalizeNameCheck(context: ImportRuleContext): JiraAutomationImportNameCheck | undefined {
+  if (context.nameCheck) {
+    return context.nameCheck;
+  }
+
+  if (Array.isArray(context.existingRuleNames)) {
+    return {
+      status: 'confirmed',
+      checkedRuleCount: context.existingRuleNames.length,
+    };
+  }
+
+  return undefined;
+}
+
+export function buildJiraAutomationImportNameCheckReceipt(
+  exportedRule: ExportedRule,
+  context: ImportRuleContext,
+  importedRuleName = buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames),
+): string {
+  const nameCheck = normalizeNameCheck(context);
+  const defaultImportedRuleName = buildJiraAutomationImportedRuleName(exportedRule.name);
+  const importedNameWasNumbered = importedRuleName !== defaultImportedRuleName;
+
+  if (nameCheck?.status === 'confirmed') {
+    const checkedRuleCount = nameCheck.checkedRuleCount ?? context.existingRuleNames?.length ?? 0;
+    return importedNameWasNumbered
+      ? `Name collision check: confirmed against ${checkedRuleCount} target rule(s); the default imported name already existed, so Personal AI selected "${importedRuleName}".`
+      : `Name collision check: confirmed against ${checkedRuleCount} target rule(s); no existing imported copy name matched at preview time.`;
+  }
+
+  if (nameCheck?.status === 'unconfirmed') {
+    const failureReason = nameCheck.failureReason
+      ? ` Reason: ${redactJiraAutomationImportErrorText(nameCheck.failureReason)}.`
+      : '';
+    return `Name collision check: not confirmed.${failureReason} Personal AI could not read the target rule list, so "${importedRuleName}" is a best-effort disabled-copy name; check Jira for an existing or newly created disabled copy before retrying or enabling.`;
+  }
+
+  return `Name collision check: not recorded for this handoff; confirm "${importedRuleName}" in Jira before enabling.`;
 }
 
 function formatChecklistSeveritySummary(items: JiraAutomationImportReviewChecklistItem[]): string {
@@ -297,6 +417,42 @@ function formatChecklistSeveritySummary(items: JiraAutomationImportReviewCheckli
   });
 
   return parts.join('; ') || 'standard Jira Automation compatibility and permission checks';
+}
+
+function formatHighRiskGateSummary(items: JiraAutomationImportReviewChecklistItem[]): string {
+  const highRiskItems = items.filter((item) => item.severity === 'high');
+  if (highRiskItems.length === 0) {
+    return 'not required for disabled-copy creation; no high-risk checks were detected';
+  }
+
+  const visibleLabels = highRiskItems.slice(0, 4).map((item) => item.label);
+  const hiddenCount = Math.max(0, highRiskItems.length - visibleLabels.length);
+  const labelsText = [
+    visibleLabels.join(', '),
+    hiddenCount > 0 ? `${hiddenCount} more` : '',
+  ].filter(Boolean).join(', ');
+
+  return `no checkbox required before disabled-copy creation; Jira-side review remains open before enablement: ${highRiskItems.length} high-risk item(s): ${labelsText}`;
+}
+
+function formatCreateStageAcknowledgementSummary(
+  items: JiraAutomationImportReviewChecklistItem[],
+  context: ImportRuleContext,
+): string {
+  const highRiskItems = items.filter((item) => item.severity === 'high');
+  if (highRiskItems.length === 0) {
+    return 'not required; no high-risk create-stage gate was needed before disabled-copy creation';
+  }
+
+  if (context.createStageAcknowledgement?.completed === true) {
+    return 'checked in Personal AI preview only to create this disabled copy; Jira-side Activation plan review remains open before enablement';
+  }
+
+  if (context.createStageAcknowledgement?.required === true) {
+    return 'required for this disabled-copy creation but not recorded as completed in this handoff; Jira-side Activation plan review remains open before enablement';
+  }
+
+  return 'not required before disabled-copy creation; Personal AI preview showed high-risk review items, and disabled-copy creation is not enablement approval';
 }
 
 function formatDetectedReferenceSummary(summary: JiraAutomationRuleSummary): string {
@@ -317,6 +473,46 @@ function formatDetectedReferenceSummary(summary: JiraAutomationRuleSummary): str
   ].filter(Boolean);
 
   return parts.join(', ') || 'no environment-bound references or custom components detected';
+}
+
+export function formatJiraAutomationImportSourceFormat(sourceCloud?: boolean): string {
+  if (sourceCloud === true) {
+    return 'Jira Cloud export (cloud=true)';
+  }
+
+  if (sourceCloud === false) {
+    return 'Jira Server/Data Center export (cloud=false)';
+  }
+
+  return 'Unknown Jira Automation export format';
+}
+
+function getSourceFormatCompatibilityParts(summary: JiraAutomationRuleSummary): string[] {
+  return [
+    summary.webRequestCount > 0 ? `${summary.webRequestCount} web request(s)` : '',
+    summary.externalIntegrationCount > 0 ? `${summary.externalIntegrationCount} external action(s)` : '',
+    summary.customComponentCount > 0 ? `${summary.customComponentCount} custom/app component type(s)` : '',
+    summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} secret reference(s)` : '',
+    summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential reference(s)` : '',
+    summary.sensitiveReferenceCount > 0 ? `${summary.sensitiveReferenceCount} sensitive or hidden value reference(s)` : '',
+  ].filter(Boolean);
+}
+
+function getSourceFormatCompatibilitySeverity(
+  summary: JiraAutomationRuleSummary,
+): JiraAutomationImportReviewSeverity {
+  return getSourceFormatCompatibilityParts(summary).length > 0 ? 'high' : 'medium';
+}
+
+function buildSourceFormatCompatibilityDetail(
+  summary: JiraAutomationRuleSummary,
+): string {
+  const parts = getSourceFormatCompatibilityParts(summary);
+  const sensitivePieces = parts.length > 0
+    ? `${parts.join(', ')} may use edition-specific JSON. `
+    : '';
+
+  return `${sensitivePieces}The source file is marked cloud=false; confirm source/target Jira Automation edition and version before enabling, and rebuild incompatible Send web request headers, app components, or credentials in the target rule if Jira drops or rejects them.`;
 }
 
 function createReviewFinding(
@@ -388,9 +584,10 @@ function formatEnablementPlanSummary(steps: JiraAutomationImportEnablementStep[]
     return 'keep imported copy disabled until Jira review is complete';
   }
 
-  const maxDetailLength = steps.length >= 5 ? 120 : 170;
+  const maxStepCount = steps.length >= 6 ? 6 : 5;
+  const maxDetailLength = steps.length >= 6 ? 95 : steps.length >= 5 ? 120 : 170;
   const value = steps
-    .slice(0, 5)
+    .slice(0, maxStepCount)
     .map((step) => {
       const detail = step.detail.length <= maxDetailLength
         ? step.detail
@@ -421,11 +618,45 @@ function formatHiddenSecretReferenceSummary(hiddenSecretReferences: string[]): s
   ].filter(Boolean).join(', ');
 }
 
+function formatSecretReentrySlot(slot: JiraAutomationImportSecretReentrySlot): string {
+  return `${slot.path}${slot.label ? ` (${slot.label})` : ''}: ${slot.reason}`;
+}
+
+export function formatJiraAutomationImportSecretReentrySummary(
+  slots: JiraAutomationImportSecretReentrySlot[],
+  maxSlots = 4,
+): string {
+  if (slots.length === 0) {
+    return 'No secret-bearing fields were replaced or redacted in the disabled copy.';
+  }
+
+  const visibleSlots = slots.slice(0, maxSlots).map((slot) => (
+    `${slot.path}${slot.label ? ` (${slot.label})` : ''}`
+  ));
+  const hiddenCount = Math.max(0, slots.length - visibleSlots.length);
+  return `${slots.length} slot(s): ${visibleSlots.join(' | ')}${hiddenCount > 0 ? `, ${hiddenCount} more` : ''}`;
+}
+
+export function buildJiraAutomationImportCredentialRestoreGateSummary(
+  slots: JiraAutomationImportSecretReentrySlot[],
+): string {
+  if (slots.length === 0) {
+    return 'Credential restore gate: no redacted credential slot was detected in this import, but external connections still need ordinary Jira review before enabling.';
+  }
+
+  return [
+    `Credential restore gate: open before enablement; ${formatJiraAutomationImportSecretReentrySummary(slots, 3)}.`,
+    'The disabled copy only contains PERSONAL_AI_REENTER_SECRET or REDACTED placeholders, so re-enter or intentionally leave these fields blank in Jira before enabling.',
+  ].join(' ');
+}
+
 export function buildJiraAutomationImportEnablementPlan(
   exportedRule: ExportedRule,
+  sourceCloud?: boolean,
 ): JiraAutomationImportEnablementStep[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
   const steps: JiraAutomationImportEnablementStep[] = [
     {
       id: 'keep-disabled',
@@ -434,6 +665,15 @@ export function buildJiraAutomationImportEnablementPlan(
       severity: 'low',
     },
   ];
+
+  if (sourceCloud === false) {
+    steps.push({
+      id: 'confirm-source-format',
+      label: 'Confirm source-format compatibility',
+      detail: buildSourceFormatCompatibilityDetail(summary),
+      severity: getSourceFormatCompatibilitySeverity(summary),
+    });
+  }
 
   if (
     summary.sourceProjectReferenceCount > 0 ||
@@ -476,8 +716,10 @@ export function buildJiraAutomationImportEnablementPlan(
         ? `${summary.emailReferenceCount + summary.accountReferenceCount} account/recipient reference(s)`
         : '',
     ].filter(Boolean);
-    const hiddenSecretDetail = hiddenSecretReferences.length > 0
-      ? `Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. `
+    const hiddenSecretDetail = secretReentrySlots.length > 0
+      ? `Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. `
+      : hiddenSecretReferences.length > 0
+        ? `Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. `
       : '';
     steps.push({
       id: 'reconnect-external-effects',
@@ -526,10 +768,11 @@ export function buildJiraAutomationImportReviewPacket(
   exportedRule: ExportedRule,
   context: JiraAutomationImportReviewPacketContext,
 ): string {
-  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule);
+  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule, context.sourceCloud);
   const findings = buildJiraAutomationImportReviewFindings(exportedRule);
-  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule);
-  const warnings = buildJiraAutomationImportWarnings(exportedRule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule, context.sourceCloud);
+  const warnings = buildJiraAutomationImportWarnings(exportedRule, context.sourceCloud);
   const importedRuleName = context.importedRuleName ||
     buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames);
   const targetProject = context.projectKey
@@ -543,11 +786,15 @@ export function buildJiraAutomationImportReviewPacket(
   return [
     '# Jira Automation import review',
     '',
-    `- Source rule: ${exportedRule.name}`,
+    `- Source rule: ${sanitizeJiraAutomationImportDisplayText(exportedRule.name)}`,
     `- Imported name: ${importedRuleName}`,
+    `- ${buildJiraAutomationImportNameCheckReceipt(exportedRule, context, importedRuleName)}`,
     `- Target project: ${targetProject}`,
+    `- Source format: ${formatJiraAutomationImportSourceFormat(context.sourceCloud)}`,
     '- Imported state: DISABLED',
     `- Rule chaining: ${ruleChaining}`,
+    `- High-risk gate: ${formatHighRiskGateSummary(checklist)}`,
+    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
     `- Checklist summary: ${formatChecklistSeveritySummary(checklist)}`,
     '',
     '## Review before enabling',
@@ -559,6 +806,11 @@ export function buildJiraAutomationImportReviewPacket(
     ...(findings.length > 0
       ? findings.map(formatReviewPacketFinding)
       : ['- None detected.']),
+    '',
+    '## Secret re-entry map',
+    ...(secretReentrySlots.length > 0
+      ? secretReentrySlots.map((slot) => `- ${formatSecretReentrySlot(slot)}`)
+      : ['- No secret-bearing fields were replaced or redacted in the disabled copy.']),
     '',
     '## Activation plan',
     ...enablementPlan.map(formatReviewPacketEnablementStep),
@@ -587,8 +839,9 @@ export function buildJiraAutomationImportReviewNote(
   context: ImportRuleContext,
 ): string {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
-  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule);
-  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule);
+  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule, context.sourceCloud);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule, context.sourceCloud);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
   const targetProject = context.projectKey
     ? `${context.projectKey} (${context.projectId})`
     : context.projectId;
@@ -600,9 +853,15 @@ export function buildJiraAutomationImportReviewNote(
   return [
     JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING,
     `- Imported as a disabled copy into ${targetProject}.`,
+    `- ${buildJiraAutomationImportNameCheckReceipt(exportedRule, context)}`,
+    `- Source format: ${formatJiraAutomationImportSourceFormat(context.sourceCloud)}.`,
     `- Enablement checklist: ${formatChecklistSeveritySummary(checklist)}.`,
+    `- High-risk gate: ${formatHighRiskGateSummary(checklist)}.`,
+    `- Create-stage acknowledgement: ${formatCreateStageAcknowledgementSummary(checklist, context)}.`,
+    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
     `- Detected bindings: ${formatDetectedReferenceSummary(summary)}.`,
     `- Top detected bindings: ${formatReviewFindingsForNote(buildJiraAutomationImportReviewFindings(exportedRule))}.`,
+    `- Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}.`,
     `- Activation plan: ${formatEnablementPlanSummary(enablementPlan)}.`,
     `- Rule chaining: ${ruleChaining}.`,
   ].join('\n');
@@ -610,27 +869,28 @@ export function buildJiraAutomationImportReviewNote(
 
 function buildJiraAutomationImportDescription(
   exportedRule: ExportedRule,
-  _context: ImportRuleContext,
+  context: ImportRuleContext,
 ): string {
   const sourceDescription = typeof exportedRule.description === 'string'
-    ? stripExistingImportReviewNote(exportedRule.description)
+    ? sanitizeJiraAutomationImportDisplayText(stripExistingImportReviewNote(exportedRule.description)).trim()
     : '';
-  if (sourceDescription) {
-    return sourceDescription;
-  }
+  const reviewNote = buildJiraAutomationImportReviewNote(exportedRule, context);
+  const baseDescription = sourceDescription || (() => {
+    const summary = summarizeJiraAutomationImportRule(exportedRule);
+    const triggerType = typeof exportedRule.trigger?.type === 'string' && exportedRule.trigger.type.trim()
+      ? exportedRule.trigger.type.trim()
+      : 'unknown trigger';
+    const normalizedTrigger = triggerType.replace(/^jira\./, '').replace(/\./g, ' ');
+    const conditionLabel = summary.conditionCount === 1 ? 'condition' : 'conditions';
+    const actionLabel = summary.actionCount === 1 ? 'action' : 'actions';
+    const triggerLabel = summary.scheduledTrigger
+      ? 'a scheduled trigger'
+      : `trigger type "${normalizedTrigger}"`;
 
-  const summary = summarizeJiraAutomationImportRule(exportedRule);
-  const triggerType = typeof exportedRule.trigger?.type === 'string' && exportedRule.trigger.type.trim()
-    ? exportedRule.trigger.type.trim()
-    : 'unknown trigger';
-  const normalizedTrigger = triggerType.replace(/^jira\./, '').replace(/\./g, ' ');
-  const conditionLabel = summary.conditionCount === 1 ? 'condition' : 'conditions';
-  const actionLabel = summary.actionCount === 1 ? 'action' : 'actions';
-  const triggerLabel = summary.scheduledTrigger
-    ? 'a scheduled trigger'
-    : `trigger type "${normalizedTrigger}"`;
+    return `Rule purpose: ${exportedRule.name}. It runs with ${triggerLabel}, ${summary.conditionCount} ${conditionLabel}, and ${summary.actionCount} ${actionLabel}.`;
+  })();
 
-  return `Rule purpose: ${exportedRule.name}. It runs with ${triggerLabel}, ${summary.conditionCount} ${conditionLabel}, and ${summary.actionCount} ${actionLabel}.`;
+  return [baseDescription, reviewNote].filter(Boolean).join('\n\n');
 }
 
 function addReviewSignal(values: Set<string>, value: string): void {
@@ -642,7 +902,7 @@ function addReviewSignal(values: Set<string>, value: string): void {
 
 function addKeyedReviewSignal(values: Set<string>, key: string, value: string | number): void {
   const normalizedKey = key.replace(/\s+/g, ' ').trim();
-  const normalizedValue = String(value).replace(/\s+/g, ' ').trim();
+  const normalizedValue = sanitizeJiraAutomationImportDisplayText(String(value)).replace(/\s+/g, ' ').trim();
   if (!normalizedValue) {
     return;
   }
@@ -770,6 +1030,22 @@ function hasAdjacentTokens(tokens: string[], first: string, second: string): boo
 }
 
 function isLikelySensitiveKey(key: string): boolean {
+  const compactKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  if (
+    compactKey === 'sig' ||
+    compactKey === 'signature' ||
+    compactKey === 'awsaccesskeyid' ||
+    compactKey === 'xamzcredential' ||
+    compactKey === 'xamzsecuritytoken' ||
+    compactKey === 'xamzsignature' ||
+    compactKey === 'googleaccessid' ||
+    compactKey === 'xgoogcredential' ||
+    compactKey === 'xgoogsignature' ||
+    compactKey === 'sharedaccesssignature'
+  ) {
+    return true;
+  }
+
   const tokens = keyTokens(key);
   if (tokens.some((token) => (
     token === 'authorization' ||
@@ -788,6 +1064,22 @@ function isLikelySensitiveKey(key: string): boolean {
     hasAdjacentTokens(tokens, 'refresh', 'token') ||
     hasAdjacentTokens(tokens, 'client', 'secret') ||
     hasAdjacentTokens(tokens, 'private', 'key');
+}
+
+function isLikelySensitiveUrlQueryKey(key: string): boolean {
+  const compactKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  if (
+    compactKey === 'code' ||
+    compactKey === 'functionkey' ||
+    compactKey === 'subscriptionkey' ||
+    compactKey === 'ocpapimsubscriptionkey' ||
+    compactKey === 'sastoken' ||
+    compactKey === 'sharedaccesskey'
+  ) {
+    return true;
+  }
+
+  return isLikelySensitiveKey(key);
 }
 
 function isGenericSensitiveLabelKey(key: string): boolean {
@@ -937,9 +1229,10 @@ function collectReviewSignals(
 
   if (typeof value === 'string') {
     const trimmedValue = value.trim();
+    const safeValue = sanitizeJiraAutomationImportDisplayText(value);
     const valueWithoutUrls = value.replace(/https?:\/\/[^\s"'<>]+/gi, ' ');
     if (isLikelyJqlReference(key, value)) {
-      addReviewSignal(jqlReferences, redactSensitiveUrlsInText(value));
+      addReviewSignal(jqlReferences, safeValue);
     }
 
     collectCustomFieldReferencesFromText(value, customFieldReferences);
@@ -971,7 +1264,7 @@ function collectReviewSignals(
     }
 
     if (sourceProjectTokens.length > 0 && textContainsSourceProjectToken(value, sourceProjectTokens)) {
-      addReviewSignal(sourceProjectReferences, redactSensitiveUrlsInText(value));
+      addReviewSignal(sourceProjectReferences, safeValue);
     }
     return;
   }
@@ -1370,6 +1663,300 @@ export function buildJiraAutomationImportReviewFindings(
   ].filter((finding): finding is JiraAutomationImportReviewFinding => Boolean(finding));
 }
 
+function normalizeSecretPayloadKey(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function shouldScrubHiddenSecretPrimitive(key: string): boolean {
+  const normalizedKey = normalizeSecretPayloadKey(key);
+  return normalizedKey === 'keyorvalue' ||
+    normalizedKey === 'value' ||
+    normalizedKey === 'rawvalue' ||
+    normalizedKey === 'secretvalue' ||
+    isLikelySensitiveKey(key);
+}
+
+function isLikelySensitiveImportKey(key: string): boolean {
+  const normalizedKey = normalizeSecretPayloadKey(key);
+  if (
+    normalizedKey === 'rawvalue' ||
+    normalizedKey === 'secretvalue' ||
+    normalizedKey === 'authorizationheader'
+  ) {
+    return true;
+  }
+
+  const tokens = keyTokens(key);
+  if (tokens.some((token) => (
+    token === 'authorization' ||
+    token === 'bearer' ||
+    token === 'password' ||
+    token === 'passwd' ||
+    token === 'token'
+  ))) {
+    return true;
+  }
+
+  const hasSecretReferenceKey = hasAdjacentTokens(tokens, 'secret', 'key') ||
+    hasAdjacentTokens(tokens, 'secrets', 'keys') ||
+    hasAdjacentTokens(tokens, 'used', 'secrets');
+  if (tokens.includes('secret') && !hasSecretReferenceKey) {
+    return true;
+  }
+
+  return hasAdjacentTokens(tokens, 'api', 'key') ||
+    hasAdjacentTokens(tokens, 'access', 'token') ||
+    hasAdjacentTokens(tokens, 'refresh', 'token') ||
+    hasAdjacentTokens(tokens, 'client', 'secret') ||
+    hasAdjacentTokens(tokens, 'private', 'key');
+}
+
+function hasSensitiveValueContext(value: Record<string, any>): boolean {
+  return [
+    value.headerName,
+    value.name,
+    value.key,
+    value.fieldName,
+  ].some((candidate) => (
+    typeof candidate === 'string' &&
+    (isLikelySensitiveKey(candidate) || isLikelySensitiveImportKey(candidate))
+  ));
+}
+
+function shouldScrubSensitivePrimitiveForImport(
+  key: string,
+  value: string | number,
+  parentRecord: Record<string, any>,
+): boolean {
+  const normalizedKey = normalizeSecretPayloadKey(key);
+  if (typeof value === 'string' && isMaskedSensitiveValue(value)) {
+    return true;
+  }
+
+  if (isLikelySensitiveImportKey(key)) {
+    return true;
+  }
+
+  return (
+    (normalizedKey === 'value' || normalizedKey === 'keyorvalue') &&
+    hasSensitiveValueContext(parentRecord)
+  );
+}
+
+function sanitizeHiddenSecretPrimitiveForImport(key: string, value: string | number): string | number {
+  if (shouldScrubHiddenSecretPrimitive(key)) {
+    return JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER;
+  }
+
+  return sanitizeSecretDisplayLabel(value) || JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER;
+}
+
+function sanitizeSensitivePrimitiveForImport(
+  key: string,
+  value: string | number,
+  parentRecord: Record<string, any>,
+): string | number {
+  if (shouldScrubSensitivePrimitiveForImport(key, value, parentRecord)) {
+    return JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER;
+  }
+
+  if (typeof value === 'string') {
+    return redactInlineSecretText(value, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER);
+  }
+
+  return value;
+}
+
+function buildSecretReentryPath(parentPath: string, key: string): string {
+  if (!parentPath) {
+    return key;
+  }
+
+  return key.startsWith('[')
+    ? `${parentPath}${key}`
+    : `${parentPath}.${key}`;
+}
+
+function addSecretReentrySlot(
+  slots: Map<string, JiraAutomationImportSecretReentrySlot>,
+  path: string,
+  label: string,
+  reason: string,
+): void {
+  const normalizedPath = path.replace(/\.\[/g, '[');
+  const safeLabel = normalizeReviewSignal(sanitizeJiraAutomationImportDisplayText(label));
+  const slot: JiraAutomationImportSecretReentrySlot = {
+    path: normalizedPath,
+    label: safeLabel,
+    reason,
+  };
+  const key = `${slot.path}\n${slot.label}\n${slot.reason}`;
+  if (!slots.has(key)) {
+    slots.set(key, slot);
+  }
+}
+
+function getSecretReentryPrimitiveLabel(
+  key: string,
+  parentRecord: Record<string, any>,
+): string {
+  const candidates = [
+    parentRecord.headerName,
+    parentRecord.name,
+    parentRecord.key,
+    key,
+  ];
+  return candidates.map(sanitizeSecretDisplayLabel).find(Boolean) || key;
+}
+
+function getInlineRedactionReason(key: string, value: string): string {
+  if (/https?:\/\//i.test(value) && redactSensitiveUrlsInText(value) !== value) {
+    return 'URL credential, sensitive query, fragment, or token-like path was redacted; verify the endpoint and rebuild credentials in Jira if needed.';
+  }
+
+  if (redactInlineSecretText(value, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER) !== value) {
+    return 'Inline secret-like text was replaced with PERSONAL_AI_REENTER_SECRET; verify whether this field should be rebuilt or left redacted.';
+  }
+
+  if (isLikelySensitiveImportKey(key) || isLikelySensitiveKey(key)) {
+    return 'Credential field was replaced with PERSONAL_AI_REENTER_SECRET; re-enter the target value in Jira before enabling.';
+  }
+
+  return '';
+}
+
+function collectSecretReentrySlotsFromValue(
+  value: unknown,
+  key: string,
+  path: string,
+  slots: Map<string, JiraAutomationImportSecretReentrySlot>,
+  parentRecord: Record<string, any> = {},
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      collectSecretReentrySlotsFromValue(
+        item,
+        key,
+        buildSecretReentryPath(path, `[${index}]`),
+        slots,
+        parentRecord,
+      );
+    });
+    return;
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const rawValue = String(value);
+    if (shouldScrubSensitivePrimitiveForImport(key, value, parentRecord)) {
+      addSecretReentrySlot(
+        slots,
+        path,
+        getSecretReentryPrimitiveLabel(key, parentRecord),
+        'Credential field was replaced with PERSONAL_AI_REENTER_SECRET; re-enter the target value in Jira before enabling.',
+      );
+      return;
+    }
+
+    const reason = typeof value === 'string'
+      ? getInlineRedactionReason(key, rawValue)
+      : '';
+    if (reason) {
+      addSecretReentrySlot(slots, path, getSecretReentryPrimitiveLabel(key, parentRecord), reason);
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  if (value.secret === true) {
+    const parentContextLabel = getRecordSecretContext(parentRecord, undefined, undefined);
+    const recordContextLabel = getRecordSecretContext(value, key, parentContextLabel);
+    addSecretReentrySlot(
+      slots,
+      path,
+      chooseSecretReferenceLabel(value, recordContextLabel),
+      'Hidden Jira secret container was replaced with PERSONAL_AI_REENTER_SECRET; re-enter this field in Jira before enabling.',
+    );
+    return;
+  }
+
+  Object.entries(value).forEach(([nestedKey, nestedValue]) => {
+    collectSecretReentrySlotsFromValue(
+      nestedValue,
+      nestedKey,
+      buildSecretReentryPath(path, nestedKey),
+      slots,
+      value,
+    );
+  });
+}
+
+export function collectJiraAutomationImportSecretReentrySlots(
+  exportedRule: ExportedRule,
+): JiraAutomationImportSecretReentrySlot[] {
+  const slots = new Map<string, JiraAutomationImportSecretReentrySlot>();
+
+  collectSecretReentrySlotsFromValue(exportedRule.name, 'name', 'name', slots);
+  if (typeof exportedRule.description === 'string') {
+    collectSecretReentrySlotsFromValue(exportedRule.description, 'description', 'description', slots);
+  }
+  collectSecretReentrySlotsFromValue(exportedRule.trigger, 'trigger', 'trigger', slots);
+  collectSecretReentrySlotsFromValue(exportedRule.components, 'components', 'components', slots);
+  collectSecretReentrySlotsFromValue(exportedRule.labels || [], 'labels', 'labels', slots);
+
+  return Array.from(slots.values());
+}
+
+function sanitizeAutomationImportNestedValue(value: unknown, insideHiddenSecret = false): any {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeAutomationImportNestedValue(item, insideHiddenSecret));
+  }
+
+  if (!isRecord(value)) {
+    if (insideHiddenSecret && (typeof value === 'string' || typeof value === 'number')) {
+      return JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER;
+    }
+
+    return value;
+  }
+
+  const hiddenSecretContainer = insideHiddenSecret || value.secret === true;
+  const clone: Record<string, any> = {};
+
+  Object.entries(value).forEach(([key, nestedValue]) => {
+    if (key === 'secret' && value.secret === true) {
+      clone[key] = true;
+      return;
+    }
+
+    if (hiddenSecretContainer && (typeof nestedValue === 'string' || typeof nestedValue === 'number')) {
+      clone[key] = sanitizeHiddenSecretPrimitiveForImport(key, nestedValue);
+      return;
+    }
+
+    if (!hiddenSecretContainer && (typeof nestedValue === 'string' || typeof nestedValue === 'number')) {
+      clone[key] = sanitizeSensitivePrimitiveForImport(key, nestedValue, value);
+      return;
+    }
+
+    clone[key] = sanitizeAutomationImportNestedValue(nestedValue, hiddenSecretContainer);
+  });
+
+  return clone;
+}
+
+function sanitizeAutomationImportLabels(labels: any[]): any[] {
+  return labels.map((label) => {
+    if (typeof label === 'string') {
+      return redactInlineSecretText(label, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER);
+    }
+
+    return sanitizeAutomationImportNestedValue(label);
+  });
+}
+
 function remapAutomationNodeIds(
   node: unknown,
   nextId: () => string,
@@ -1379,15 +1966,19 @@ function remapAutomationNodeIds(
     return node;
   }
 
-  const clone: Record<string, any> = {
-    ...node,
-    id,
-  };
+  const clone: Record<string, any> = { id };
 
-  ['children', 'conditions'].forEach((key) => {
-    if (Array.isArray(node[key])) {
-      clone[key] = node[key].map((child) => remapAutomationNodeIds(child, nextId, nextId()));
+  Object.entries(node).forEach(([key, nestedValue]) => {
+    if (key === 'id') {
+      return;
     }
+
+    if ((key === 'children' || key === 'conditions') && Array.isArray(nestedValue)) {
+      clone[key] = nestedValue.map((child) => remapAutomationNodeIds(child, nextId, nextId()));
+      return;
+    }
+
+    clone[key] = sanitizeAutomationImportNestedValue(nestedValue);
   });
 
   return clone;
@@ -1437,7 +2028,7 @@ export function buildJiraAutomationImportRule(
     updated: now,
     components: convertedComponents,
     trigger: convertedTrigger,
-    labels: exportedRule.labels || [],
+    labels: sanitizeAutomationImportLabels(exportedRule.labels || []),
     description: buildJiraAutomationImportDescription(exportedRule, context),
     projects,
   };
@@ -1445,15 +2036,21 @@ export function buildJiraAutomationImportRule(
 
 export function buildJiraAutomationImportWarnings(
   exportedRule: ExportedRule,
+  sourceCloud?: boolean,
 ): string[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
   const warnings = [
     'Imported rules are created disabled. Review and enable them in Jira after import.',
     'Project scope is remapped to the current Jira project.',
     'Use exports from the same Jira Automation version when possible; incompatible JSON may fail to create or run correctly.',
     'Rule actor and author are replaced with the current Jira user when Personal AI can resolve it. Verify permissions before enabling.',
   ];
+
+  if (sourceCloud === false) {
+    warnings.push(`Source export is marked cloud=false. Confirm the target Jira Automation edition/version before enabling; Send web request headers, app-provided components, credentials, or webhooks may need manual rebuild in the target rule.`);
+  }
 
   if (typeof exportedRule.state === 'string' && exportedRule.state.toUpperCase() === 'ENABLED') {
     warnings.push('The source rule was enabled, but the imported copy will stay disabled.');
@@ -1485,6 +2082,10 @@ export function buildJiraAutomationImportWarnings(
 
   if (hiddenSecretReferences.length > 0) {
     warnings.push(`Includes ${hiddenSecretReferences.length} hidden secret field(s): ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. Jira export/import will not restore hidden values, so re-enter them in the target rule before enabling.`);
+  }
+
+  if (secretReentrySlots.length > 0) {
+    warnings.push(`Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. Placeholder or REDACTED values are not working credentials; rebuild only the required target fields in Jira before enabling.`);
   }
 
   if (summary.sourceProjectReferenceCount > 0) {
@@ -1545,9 +2146,11 @@ export function buildJiraAutomationImportWarnings(
 
 export function buildJiraAutomationImportReviewChecklist(
   exportedRule: ExportedRule,
+  sourceCloud?: boolean,
 ): JiraAutomationImportReviewChecklistItem[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
   const items: JiraAutomationImportReviewChecklistItem[] = [
     {
       id: 'target-project',
@@ -1556,6 +2159,15 @@ export function buildJiraAutomationImportReviewChecklist(
       severity: summary.sourceProjectReferenceCount > 0 || summary.jqlReferenceCount > 0 ? 'high' : 'medium',
     },
   ];
+
+  if (sourceCloud === false) {
+    items.push({
+      id: 'source-format',
+      label: 'Source format compatibility',
+      detail: buildSourceFormatCompatibilityDetail(summary),
+      severity: getSourceFormatCompatibilitySeverity(summary),
+    });
+  }
 
   if (summary.jqlReferenceCount > 0) {
     items.push({
@@ -1595,8 +2207,10 @@ export function buildJiraAutomationImportReviewChecklist(
       summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential reference(s)` : '',
       summary.sensitiveReferenceCount > 0 ? `${summary.sensitiveReferenceCount} sensitive/hidden value reference(s)` : '',
     ].filter(Boolean);
-    const hiddenSecretDetail = hiddenSecretReferences.length > 0
-      ? ` Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}.`
+    const hiddenSecretDetail = secretReentrySlots.length > 0
+      ? ` Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}.`
+      : hiddenSecretReferences.length > 0
+        ? ` Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}.`
       : '';
 
     items.push({

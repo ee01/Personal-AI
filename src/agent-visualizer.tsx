@@ -2,7 +2,15 @@ import * as React from 'react';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ThoughtStep } from './agentThinking';
 import {
+  type AgentDiagnosticCopiedSnapshot,
   buildAgentRunDiagnosticPacket,
+  buildAgentRunSnapshot,
+  buildAgentDiagnosticCopyScope,
+  buildAgentDiagnosticCopyPreflight,
+  buildAgentDiagnosticCopiedSnapshot,
+  buildAgentDiagnosticCopyFreshnessReceipt,
+  buildAgentDiagnosticCopySuccessReceipt,
+  buildAgentTraceReviewLane,
   buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
@@ -38,6 +46,7 @@ type ApprovalCopyStatus = {
 type RunPacketCopyStatus = {
   state: 'copied' | 'failed';
   message: string;
+  copiedSnapshot: AgentDiagnosticCopiedSnapshot;
   manualText?: string;
 } | null;
 
@@ -61,12 +70,54 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
           }),
     [thoughtProcess, isProcessing],
   );
+  const runSnapshot = useMemo(
+    () => (runDiagnosticPacket ? buildAgentRunSnapshot(runDiagnosticPacket) : null),
+    [runDiagnosticPacket],
+  );
+  const diagnosticCopyScope = useMemo(
+    () =>
+      runDiagnosticPacket
+        ? buildAgentDiagnosticCopyScope(runDiagnosticPacket)
+        : null,
+    [runDiagnosticPacket],
+  );
+  const diagnosticCopyPreflight = useMemo(
+    () =>
+      runDiagnosticPacket
+        ? buildAgentDiagnosticCopyPreflight(runDiagnosticPacket)
+        : null,
+    [runDiagnosticPacket],
+  );
+  const traceReviewLane = useMemo(
+    () =>
+      runDiagnosticPacket
+        ? buildAgentTraceReviewLane(runDiagnosticPacket)
+        : null,
+    [runDiagnosticPacket],
+  );
+  const traceNavigationReceipt =
+    runDiagnosticPacket?.navigationReceipt || null;
+  const traceSpanComposition =
+    runDiagnosticPacket?.traceSpanComposition || null;
   const runReviewLabel: Record<typeof runReviewSeverity, string> = {
     ok: '正常',
     info: '提示',
     warning: '需复核',
     critical: '需处理',
   };
+  const runPacketCopyIsStale = Boolean(
+    runPacketCopyStatus &&
+    runDiagnosticPacket &&
+    runPacketCopyStatus.copiedSnapshot.traceId !==
+      runDiagnosticPacket.traceIdentity.traceId,
+  );
+  const runPacketCopyFreshnessReceipt =
+    runPacketCopyStatus && runPacketCopyStatus.copiedSnapshot
+      ? buildAgentDiagnosticCopyFreshnessReceipt(
+          runPacketCopyStatus.copiedSnapshot,
+          runDiagnosticPacket,
+        )
+      : null;
 
   useEffect(() => {
     setExpandedSteps(prevExpanded =>
@@ -200,7 +251,12 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
   };
 
   const handleCopyApprovalKey = (approvalKey: string) =>
-    handleCopyApprovalText(approvalKey, approvalKey, 'key', '已复制批准 key');
+    handleCopyApprovalText(
+      approvalKey,
+      approvalKey,
+      'key',
+      '已复制批准 key：只复制同工具、同参数重跑所需的 key；工具动作还没有执行。',
+    );
 
   const handleCopyApprovalReviewPayload = (
     approvalKey: string,
@@ -210,7 +266,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       approvalKey,
       reviewPayload,
       'payload',
-      '已复制审核包',
+      '已复制审核包：包含工具、参数、审批边界和重跑配置；不会执行通知、写入或外部动作。',
     );
 
   const handleCopyApprovalRetryConfig = (
@@ -221,13 +277,14 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       approvalKey,
       retryConfigPatch,
       'retry',
-      '已复制重跑配置',
+      '已复制重跑配置：只包含 approvedToolActionKeys；调用方仍需用同一工具和参数重新运行。',
     );
 
   const handleCopyRunDiagnosticPacket = async () => {
     if (!runDiagnosticPacket) return;
 
     const diagnosticPacketText = JSON.stringify(runDiagnosticPacket, null, 2);
+    const copiedSnapshot = buildAgentDiagnosticCopiedSnapshot(runDiagnosticPacket);
     try {
       const copied = await copyTextToClipboard(diagnosticPacketText);
       if (!copied) {
@@ -235,15 +292,14 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       }
       setRunPacketCopyStatus({
         state: 'copied',
-        message: '已复制诊断包',
+        message: buildAgentDiagnosticCopySuccessReceipt(runDiagnosticPacket),
+        copiedSnapshot,
       });
-      window.setTimeout(() => {
-        setRunPacketCopyStatus(null);
-      }, 1800);
     } catch (error) {
       setRunPacketCopyStatus({
         state: 'failed',
         message: '复制失败，请手动选择诊断包',
+        copiedSnapshot,
         manualText: diagnosticPacketText,
       });
       console.warn('复制 Agent 运行诊断包失败:', error);
@@ -305,14 +361,146 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                 <h4>运行检查</h4>
                 <p>
                   先处理失败、阻断和预算耗尽，再阅读完整时间线。
-                  {runDiagnosticPacket && (
-                    <span className="agent-run-trace-span-count">
-                      Trace spans {runDiagnosticPacket.traceSpans.length}
-                    </span>
-                  )}
                 </p>
+                {traceReviewLane && (
+                  <div
+                    className="agent-trace-review-lane"
+                    aria-label="Trace 复核路线"
+                  >
+                    <div className="agent-trace-review-lane-header">
+                      <span>{traceReviewLane.title}</span>
+                      <p>{traceReviewLane.detail}</p>
+                    </div>
+                    <div className="agent-trace-review-lane-items">
+                      {traceReviewLane.items.map((item) => (
+                        <article
+                          key={item.key}
+                          className={`agent-trace-review-lane-item ${item.tone}`}
+                        >
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                          <p>{item.detail}</p>
+                          {item.stepIndexes && item.stepIndexes.length > 0 && (
+                            <div
+                              className="agent-trace-review-lane-steps"
+                              aria-label={`${item.label}相关步骤`}
+                            >
+                              {item.stepIndexes.map((stepIndex) => (
+                                <button
+                                  key={stepIndex}
+                                  type="button"
+                                  onClick={() => jumpToStep(stepIndex)}
+                                  aria-label={`从${item.label}跳到步骤 ${stepIndex + 1}`}
+                                >
+                                  步骤 #{stepIndex + 1}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {traceNavigationReceipt && (
+                  <div
+                    className="agent-trace-navigation-receipt"
+                    aria-label="当前 trace 导航"
+                  >
+                    <span>{traceNavigationReceipt.title}</span>
+                    <p>{traceNavigationReceipt.currentTrace}</p>
+                    <p>{traceNavigationReceipt.primaryRoute}</p>
+                    <p>{traceNavigationReceipt.stepScope}</p>
+                    {traceNavigationReceipt.stepNumbers.length > 0 && (
+                      <div
+                        className="agent-trace-navigation-steps"
+                        aria-label="当前 trace 优先步骤"
+                      >
+                        {traceNavigationReceipt.stepNumbers.map((stepNumber) => (
+                          <button
+                            key={stepNumber}
+                            type="button"
+                            onClick={() => jumpToStep(stepNumber - 1)}
+                            aria-label={`从当前 trace 导航跳到步骤 ${stepNumber}`}
+                          >
+                            步骤 #{stepNumber}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <small>{traceNavigationReceipt.noEffectBoundary}</small>
+                  </div>
+                )}
+                {runSnapshot && (
+                  <div
+                    className="agent-run-summary"
+                    aria-label="Agent 运行摘要"
+                  >
+                    <span className="agent-run-summary-detail">
+                      {runSnapshot.detail}
+                    </span>
+                    <span className="agent-run-summary-action">
+                      优先处理：{runSnapshot.primaryAction}
+                    </span>
+                    <div className="agent-run-summary-chips">
+                      {runSnapshot.chips.map((chip) => (
+                        <span
+                          key={`${chip.label}-${chip.value}`}
+                          className={`agent-run-summary-chip ${chip.tone}`}
+                        >
+                          <span>{chip.label}</span>
+                          <strong>{chip.value}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {traceSpanComposition && (
+                  <div
+                    className="agent-trace-span-composition"
+                    aria-label="Trace span 构成"
+                  >
+                    <div className="agent-trace-span-composition-header">
+                      <span>{traceSpanComposition.title}</span>
+                      <p>{traceSpanComposition.detail}</p>
+                    </div>
+                    <div className="agent-trace-span-composition-items">
+                      {traceSpanComposition.items.map((item) => (
+                        <article
+                          key={item.key}
+                          className={`agent-trace-span-composition-item ${item.tone}`}
+                        >
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                          <p>{item.detail}</p>
+                        </article>
+                      ))}
+                    </div>
+                    <small>{traceSpanComposition.boundary}</small>
+                  </div>
+                )}
               </div>
               <div className="agent-run-review-actions">
+                {diagnosticCopyPreflight && (
+                  <div
+                    className="agent-run-diagnostic-preflight"
+                    aria-label="诊断包复制预检"
+                  >
+                    <span>{diagnosticCopyPreflight.title}</span>
+                    <p>{diagnosticCopyPreflight.detail}</p>
+                    <ul>
+                      {diagnosticCopyPreflight.items.map((item) => (
+                        <li
+                          key={item.label}
+                          className={`agent-run-diagnostic-preflight-item ${item.tone}`}
+                        >
+                          <strong>{item.label}</strong>
+                          <span>{item.value}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <button
                   type="button"
                   className="agent-run-diagnostic-copy"
@@ -320,7 +508,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                   disabled={thoughtProcess.length === 0}
                 >
                   {runPacketCopyStatus?.state === 'copied'
-                    ? '已复制'
+                    ? runPacketCopyIsStale
+                      ? '重新复制'
+                      : '已复制'
                     : '复制诊断包'}
                 </button>
                 <span className={`agent-run-review-status ${runReviewSeverity}`}>
@@ -331,11 +521,23 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
             {runPacketCopyStatus && (
               <>
                 <div
-                  className={`agent-run-diagnostic-copy-status ${runPacketCopyStatus.state}`}
+                  className={`agent-run-diagnostic-copy-status ${
+                    runPacketCopyStatus.state
+                  } ${runPacketCopyIsStale ? 'stale' : 'current'}`}
                   role="status"
                 >
                   {runPacketCopyStatus.message}
                 </div>
+                {runPacketCopyFreshnessReceipt && (
+                  <div
+                    className={`agent-run-diagnostic-copy-freshness ${
+                      runPacketCopyIsStale ? 'stale' : 'current'
+                    }`}
+                    role="note"
+                  >
+                    {runPacketCopyFreshnessReceipt}
+                  </div>
+                )}
                 {runPacketCopyStatus.state === 'failed' &&
                   runPacketCopyStatus.manualText && (
                     <textarea
@@ -347,6 +549,23 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     />
                   )}
               </>
+            )}
+            {diagnosticCopyScope && (
+              <div
+                className="agent-run-diagnostic-scope"
+                aria-label="诊断包范围"
+              >
+                <span>{diagnosticCopyScope.title}</span>
+                <p>{diagnosticCopyScope.detail}</p>
+                <ul>
+                  <li>{diagnosticCopyScope.identityBoundary}</li>
+                  <li>{diagnosticCopyScope.freshnessBoundary}</li>
+                  <li>{diagnosticCopyScope.privacyBoundary}</li>
+                  <li>{diagnosticCopyScope.exportBoundary}</li>
+                  <li>{diagnosticCopyScope.schemaBoundary}</li>
+                  <li>{diagnosticCopyScope.approvalBoundary}</li>
+                </ul>
+              </div>
             )}
             <div className="agent-run-review-list">
               {runReviewItems.map((item, index) => (
@@ -414,6 +633,31 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     <div className="agent-approval-message">
                       {approval.message}
                     </div>
+                    <div
+                      className="agent-approval-preflight"
+                      role="note"
+                      aria-label="审批前确认"
+                    >
+                      <span>{approval.preflightReceipt.title}</span>
+                      <ul>
+                        <li>
+                          <strong>待处理</strong>
+                          <p>{approval.preflightReceipt.pendingAction}</p>
+                        </li>
+                        <li>
+                          <strong>未执行</strong>
+                          <p>{approval.preflightReceipt.noEffectBoundary}</p>
+                        </li>
+                        <li>
+                          <strong>复制边界</strong>
+                          <p>{approval.preflightReceipt.copyBoundary}</p>
+                        </li>
+                        <li>
+                          <strong>下一步</strong>
+                          <p>{approval.preflightReceipt.nextStep}</p>
+                        </li>
+                      </ul>
+                    </div>
                     <div className="agent-approval-review-hint">
                       <span>复核重点</span>
                       <p>{approval.reviewHint}</p>
@@ -424,6 +668,25 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                         <p>{approval.safetyNote}</p>
                       </div>
                     )}
+                    <div
+                      className="agent-approval-decision-guide"
+                      aria-label="审批决策导览"
+                    >
+                      <span>审批决策导览</span>
+                      <div className="agent-approval-decision-guide-list">
+                        {approval.decisionGuide.map((item) => (
+                          <article
+                            key={item.type}
+                            className={`agent-approval-decision-guide-item ${item.type}`}
+                          >
+                            <strong>{item.label}</strong>
+                            <p>{item.currentState}</p>
+                            <p>{item.nextStep}</p>
+                            <small>{item.boundary}</small>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
                     <div className="agent-approval-decision-options">
                       <span>处理方式</span>
                       <ul>
@@ -437,6 +700,31 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     </div>
                     <div className="agent-approval-resume-note" role="note">
                       {approval.resumeInstruction}
+                    </div>
+                    <div className="agent-approval-boundary" role="note">
+                      <span>恢复边界</span>
+                      <ul>
+                        <li>
+                          <strong>{approval.reviewBoundary.label}</strong>
+                          <p>{approval.reviewBoundary.description}</p>
+                        </li>
+                        <li>
+                          <strong>生成时间</strong>
+                          <p>{approval.reviewBoundary.generatedAt}</p>
+                        </li>
+                        <li>
+                          <strong>适用范围</strong>
+                          <p>{approval.reviewBoundary.scope}</p>
+                        </li>
+                        <li>
+                          <strong>失效条件</strong>
+                          <p>{approval.reviewBoundary.expiresWhen}</p>
+                        </li>
+                        <li>
+                          <strong>Key 绑定</strong>
+                          <p>{approval.reviewBoundary.approvalKeyBinding}</p>
+                        </li>
+                      </ul>
                     </div>
                     <div className="agent-approval-params">
                       <span>参数</span>
@@ -504,6 +792,30 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     <div className="agent-approval-retry-config">
                       <span>重跑配置</span>
                       <code>{approval.retryConfigPatch}</code>
+                    </div>
+                    <div
+                      className="agent-approval-retry-receipt"
+                      aria-label="重跑配置回执"
+                    >
+                      <span>{approval.retryReceipt.title}</span>
+                      <ul>
+                        <li>
+                          <strong>审批对象</strong>
+                          <p>{approval.retryReceipt.configScope}</p>
+                        </li>
+                        <li>
+                          <strong>复制内容</strong>
+                          <p>{approval.retryReceipt.copiedFields}</p>
+                        </li>
+                        <li>
+                          <strong>未复制</strong>
+                          <p>{approval.retryReceipt.notCopied}</p>
+                        </li>
+                        <li>
+                          <strong>恢复边界</strong>
+                          <p>{approval.retryReceipt.recoveryBoundary}</p>
+                        </li>
+                      </ul>
                     </div>
                     {approvalCopyStatus?.key === approval.approvalKey && (
                       <>
@@ -753,6 +1065,13 @@ const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({
   thoughtProcess = [],
 }) => {
   const pendingApprovalActions = buildPendingApprovalActions(thoughtProcess);
+  const jumpToPendingApprovalStep = (stepIndex: number) => {
+    window.dispatchEvent(
+      new CustomEvent(AGENT_TRACE_JUMP_EVENT, {
+        detail: { stepIndex },
+      }),
+    );
+  };
   const pendingNotifyActions = pendingApprovalActions.filter((approval) =>
     approval.effect === 'notify' ||
     /notify|notification/i.test(approval.toolId),
@@ -785,19 +1104,43 @@ const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({
         
         <div className="result-body">
           {pendingApprovalActions.length > 0 && (
-            <div className="result-pending-approval" role="status">
+            <div
+              className="result-pending-approval"
+              role="region"
+              aria-label="待确认动作摘要"
+            >
               <h4>待确认动作未执行</h4>
               <p>
                 还有 {pendingApprovalActions.length} 个工具动作等待人工确认；最终结果没有把这些动作当作已完成。
               </p>
+              <div
+                className="result-pending-approval-handoff"
+                role="note"
+                aria-label="结果区审批定位边界"
+              >
+                <strong>审批定位</strong>
+                <p>
+                  点击定位只展开本轮 trace 的对应步骤，不会批准、复制、重跑、发送通知、写入、删除或执行外部动作；实际审批仍在待确认动作队列中复制审核包或重跑配置后重新运行。
+                </p>
+              </div>
               <ul>
                 {pendingApprovalActions.map((approval, index) => (
                   <li key={`${approval.toolId}-${approval.approvalKey || index}`}>
-                    <strong>{approval.toolId}</strong>
-                    <span>
-                      {formatApprovalEffect(approval.effect)} /{' '}
-                      {formatApprovalRisk(approval.riskLevel)}
-                    </span>
+                    <div className="result-pending-approval-main">
+                      <strong>{approval.toolId}</strong>
+                      <span>
+                        {formatApprovalEffect(approval.effect)} /{' '}
+                        {formatApprovalRisk(approval.riskLevel)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="result-pending-approval-step"
+                      onClick={() => jumpToPendingApprovalStep(approval.stepIndex)}
+                      aria-label={`定位 ${approval.toolId} 的步骤 ${approval.stepIndex + 1}`}
+                    >
+                      定位步骤 #{approval.stepIndex + 1}
+                    </button>
                   </li>
                 ))}
               </ul>

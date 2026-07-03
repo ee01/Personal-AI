@@ -192,6 +192,37 @@ suites:
         - npm --prefix memory-service test -- --run src/__tests__/answerMemoryService.test.ts src/__tests__/api-ask.test.ts
         - npm run eval:run -- --suite answer-memory-tracker --no-repair
 
+  - id: evidence-watch-contracts
+    title: Evidence Watch Contracts Eval
+    description: 评估可变化事实是否会进入可复用的证据守望契约，重复外部查证是否被合并并留下清晰收据。
+    enabled: true
+    workflow: evals/workflows/evidence-watch-contracts/experience.md
+    cases: evals/cases/evidence-watch-contracts/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/EvidenceWatchContractService.ts
+        - memory-service/src/core/EvidenceResolutionPlanner.ts
+        - memory-service/src/core/ReflectionThreadService.ts
+        - memory-service/src/core/ReflectionWorker.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/routes/evidenceWatchContracts.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-evidence-watch-contracts.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/evidenceWatchContractService.test.ts src/__tests__/api-evidence-watch-contracts.test.ts
+        - npm run eval:run -- --suite evidence-watch-contracts --no-repair
+
   - id: memory-lifecycle
     title: Memory Lifecycle Experience Eval
     description: 评估无感记忆遗忘层是否正确衰减、归档和降权旧记忆，并确保默认 Ask、Context Recall、Compose Assist 不再关联 archive_only 或 forgotten 记忆。

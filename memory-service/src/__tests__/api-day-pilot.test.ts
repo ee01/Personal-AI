@@ -1139,12 +1139,27 @@ describe('Day Pilot API', () => {
       method: 'GET',
       url: `/api/v1/day-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=false`,
     });
-    const nextIds = new Set(
-      next.json().brief.cards.map((card: any) => card.id),
-    );
+    const nextBrief = next.json().brief;
+    const nextIds = new Set(nextBrief.cards.map((card: any) => card.id));
     expect(nextIds.has(doneCard.id)).toBe(false);
     expect(nextIds.has(laterCard.id)).toBe(false);
     expect(nextIds.has(muteCard.id)).toBe(false);
+    const visibleSelectedSourceRefs = new Set<string>();
+    for (const card of nextBrief.cards) {
+      for (const ref of card.evidenceRefs) {
+        visibleSelectedSourceRefs.add(`${ref.sourceKind}:${ref.sourceId}`);
+      }
+    }
+    const selectedSourceStatsTotal =
+      (nextBrief.sourceStats.messages.selected || 0) +
+      (nextBrief.sourceStats.calendar.selected || 0) +
+      (nextBrief.sourceStats.notifications.selected || 0) +
+      (nextBrief.sourceStats.actions.selected || 0) +
+      (nextBrief.sourceStats.reflections.selected || 0) +
+      (nextBrief.sourceStats.rehearsals.selected || 0) +
+      (nextBrief.sourceStats.skills.selected || 0) +
+      (nextBrief.sourceStats.relationships.selected || 0);
+    expect(selectedSourceStatsTotal).toBe(visibleSelectedSourceRefs.size);
   });
 
   it('hides cached action cards after the source action is completed', async () => {

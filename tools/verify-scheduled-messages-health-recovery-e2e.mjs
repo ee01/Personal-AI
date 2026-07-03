@@ -40,6 +40,7 @@ let messageRows = Array.from({ length: 5 }, (_, index) => [
   '2026-05-04 09:30',
 ]);
 let appliedUpdate = null;
+let failNextUpdate = false;
 
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
@@ -154,6 +155,16 @@ async function installRoutes(page) {
     }
 
     if (request.method() === 'PUT' && url.includes('/values/Messages!')) {
+      if (failNextUpdate) {
+        failNextUpdate = false;
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: 'Sheets write unavailable' } }),
+        });
+        return;
+      }
+
       const payload = JSON.parse(request.postData() || '{}');
       const row = payload.values?.[0];
       assert.ok(row, 'update payload should include one row');
@@ -231,12 +242,48 @@ try {
   await page.locator('text=有定时消息需要改期').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=优先处理: Missed Bot 1 -> 2026-05-04 10:02').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=诊断: 补偿超窗 5 条').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=可一键恢复: 5/5 条').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=需手动检查: 0 条').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=边界: 只写 Schedule_Date / Schedule_Time，不会立即发送或改 Logs').waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator(
+      'text=操作边界：一键改期只写回 Messages 的 Schedule_Date / Schedule_Time，不会立即发送、不会改 Logs',
+    )
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('text=Missed Bot 1: 2026-05-04 09:30').waitFor({
     timeout: 15000,
   });
+  await page
+    .locator(
+      'text=诊断线索: 补偿超窗 · Jira Automation 执行器队列 · 预期 2026-05-04 09:30',
+    )
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('text=建议改到 2026-05-04 10:02').waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('text=写入后领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
   assert.equal(
     await page
       .getByRole('button', {
@@ -259,25 +306,176 @@ try {
       timeout: 15000,
     });
 
-  const dialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
   await page
     .getByRole('button', {
       name: '将Missed Bot 1改到2026-05-04 10:02',
     })
     .click();
-  const dialog = await dialogPromise;
-  assert.match(dialog.message(), /已将「Missed Bot 1」改到 2026-05-04 10:02/);
-  await dialog.accept();
 
+  await page.waitForURL(/messageId=missed-1/, { timeout: 15000 });
+  const explicitReceipt = page.locator('[role="status"]', {
+    hasText: '已应用改期建议',
+  }).filter({ hasText: 'Missed Bot 1' });
+  await explicitReceipt.getByText('来源: 健康告警').waitFor({
+    timeout: 15000,
+  });
   assert.deepEqual(appliedUpdate, {
     id: 'missed-1',
     date: '2026-05-04',
     time: '10:02',
   });
-  await page.waitForURL(/messageId=missed-1/, { timeout: 15000 });
+  await explicitReceipt.getByText('写入: Messages 行 missed-1').waitFor({
+    timeout: 15000,
+  });
+  await explicitReceipt.getByText('边界: 写入未来本地明确时间').waitFor({
+    timeout: 15000,
+  });
+  await explicitReceipt
+    .getByText('写入后: 领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
 
   assertNoPageErrors();
   await page.close();
+
+  messageRows = [
+    [
+      'live-compensation',
+      'Live Compensation',
+      'content',
+      '2026-05-04',
+      '09:30',
+      'Bot',
+      'group',
+      'Active',
+      '0',
+      '待执行',
+      '',
+      '2026-05-04 09:30',
+    ],
+  ];
+
+  const compensationPage = await context.newPage();
+  const assertNoCompensationPageErrors = collectPageErrors(compensationPage);
+  await installFixedClock(
+    compensationPage,
+    new Date(2026, 4, 4, 9, 45, 30, 0).getTime(),
+  );
+  await installRoutes(compensationPage);
+
+  await compensationPage.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) =>
+        callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) =>
+        callback();
+    }
+  });
+
+  await compensationPage.goto(
+    `chrome-extension://${extensionId}/scheduled-messages.html`,
+    {
+      waitUntil: 'load',
+      timeout: 15000,
+    },
+  );
+
+  await compensationPage.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await compensationPage.locator('text=Live Compensation').waitFor({
+    timeout: 15000,
+  });
+  await compensationPage
+    .locator('small[title*="领取资格，不代表已发送"]', {
+      hasText: '补偿窗口回执: 已迟到 15 分钟，补偿窗口剩余 15 分钟',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  assert.equal(
+    await compensationPage.locator('text=有定时消息需要改期').count(),
+    0,
+    'live compensation window should not be reported as a missed-health issue',
+  );
+
+  assertNoCompensationPageErrors();
+  await compensationPage.close();
+
+  messageRows = [
+    [
+      'missed-fail',
+      'Missed Fail',
+      'content',
+      '2026-05-04',
+      '09:30',
+      'Bot',
+      'group',
+      'Active',
+      '0',
+      '待执行',
+      '',
+      '2026-05-04 09:30',
+    ],
+  ];
+  appliedUpdate = null;
+  failNextUpdate = true;
+
+  const failurePage = await context.newPage();
+  const failureDialogs = [];
+  failurePage.on('dialog', async (dialog) => {
+    failureDialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+  const assertNoFailurePageErrors = collectPageErrors(failurePage);
+  await installFixedClock(failurePage);
+  await installRoutes(failurePage);
+
+  await failurePage.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) =>
+        callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) =>
+        callback();
+    }
+  });
+
+  await failurePage.goto(
+    `chrome-extension://${extensionId}/scheduled-messages.html`,
+    {
+      waitUntil: 'load',
+      timeout: 15000,
+    },
+  );
+
+  await failurePage.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await failurePage
+    .getByRole('button', {
+      name: '将Missed Fail改到2026-05-04 10:02',
+    })
+    .click();
+
+  const failureReceipt = failurePage.locator('[role="status"]', {
+    hasText: '改期建议未应用',
+  }).filter({ hasText: 'Missed Fail' });
+  await failureReceipt.getByText('来源: 健康告警').waitFor({
+    timeout: 15000,
+  });
+  await failureReceipt
+    .getByText('边界: 未写入 Messages，未改动 Schedule_Date / Schedule_Time')
+    .waitFor({ timeout: 15000 });
+  await failureReceipt.getByText('原因: 更新行失败 (503)').waitFor({
+    timeout: 15000,
+  });
+  assert.equal(appliedUpdate, null);
+  assert.deepEqual(
+    failureDialogs,
+    [],
+    `Health recovery failure should not fall back to alert dialogs: ${failureDialogs.join('; ')}`,
+  );
+  assertNoFailurePageErrors();
+  await failurePage.close();
 
   messageRows = [
     [
@@ -342,32 +540,54 @@ try {
   await latePage.locator('text=Stale Queue 1: 2026-05-03 08:00').waitFor({
     timeout: 15000,
   });
+  await latePage
+    .locator(
+      'text=诊断线索: 默认队列日期过期 · Jira Automation 执行器队列 · 预期 2026-05-03 08:00',
+    )
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
   await latePage.locator('text=建议改到 2026-05-04 08:00 后').waitFor({
     timeout: 15000,
   });
   await latePage.locator('text=建议改到 2026-05-05 08:00 后').waitFor({
     timeout: 15000,
   });
+  await latePage
+    .locator('text=写入后领取口径：08:00 后队列 · 表格顺序每分钟一条 · 发送后回调写回')
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
 
-  const lateDialogPromise = latePage.waitForEvent('dialog', { timeout: 15000 });
   await latePage
     .getByRole('button', {
       name: '将Stale Queue 2改到2026-05-05 08:00 后',
     })
     .click();
-  const lateDialog = await lateDialogPromise;
-  assert.match(
-    lateDialog.message(),
-    /已将「Stale Queue 2」改到 2026-05-05 08:00 后/,
-  );
-  await lateDialog.accept();
 
+  await latePage.waitForURL(/messageId=stale-no-time-2/, { timeout: 15000 });
+  const noTimeReceipt = latePage.locator('[role="status"]', {
+    hasText: '已应用改期建议',
+  }).filter({ hasText: 'Stale Queue 2' });
+  await noTimeReceipt.getByText('来源: 健康告警').waitFor({
+    timeout: 15000,
+  });
   assert.deepEqual(appliedUpdate, {
     id: 'stale-no-time-2',
     date: '2026-05-05',
     time: '',
   });
-  await latePage.waitForURL(/messageId=stale-no-time-2/, { timeout: 15000 });
+  await noTimeReceipt
+    .getByText('边界: 清空 Schedule_Time，保留 08:00 后队列语义')
+    .waitFor({ timeout: 15000 });
+  await noTimeReceipt
+    .getByText('写入后: 领取口径：08:00 后队列 · 表格顺序每分钟一条 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
+  await noTimeReceipt
+    .getByText('原因: 今天默认队列已没有可执行分钟，改到下一个可用执行器默认队列日。')
+    .waitFor({ timeout: 15000 });
 
   assertNoLatePageErrors();
   await latePage.close();

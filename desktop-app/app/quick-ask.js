@@ -57,6 +57,16 @@ const STATUS_SOURCE_LABELS = {
   queued_action: 'Action Queue',
 };
 
+const STATUS_COMPOSITION_LABELS = {
+  setup_blocker: '配置阻断',
+  runtime_issue: '状态读取异常',
+  sync_issue: '同步异常',
+  confirm_request: '待确认',
+  running_action: '执行中动作',
+  waiting_reply: '外部询问',
+  queued_action: '排队动作',
+};
+
 const STATUS_PRIORITY_RECEIPTS = {
   setup_blocker: '优先处理：缺配置会阻断同步、查询或写回。',
   runtime_issue: '先确认状态：读取失败时不能把旧状态当最新。',
@@ -122,6 +132,7 @@ const state = {
   streamFlushTimer: null,
   voiceDraft: '',
   voicePhase: 'idle',
+  voiceStopReason: 'none',
   voiceLocale: 'zh-CN',
   askScope: 'work',
   autoScrollPinned: true,
@@ -255,6 +266,35 @@ function formatRuntimeSnapshotMeta(runtime) {
   return `快照：${formatSnapshotRelative(runtime?.fetchedAt)} · ${countLabel}`;
 }
 
+function formatRuntimeStatusComposition(runtime) {
+  const items = Array.isArray(runtime?.items) ? runtime.items : [];
+  if (!items.length) return '';
+
+  const orderedKinds = [];
+  const countsByKind = new Map();
+  for (const item of items) {
+    const kind = item?.kind || 'unknown';
+    if (!countsByKind.has(kind)) {
+      orderedKinds.push(kind);
+    }
+    const rawCount = Number(item?.count);
+    const count =
+      Number.isFinite(rawCount) && rawCount > 0 ? Math.floor(rawCount) : 1;
+    countsByKind.set(kind, (countsByKind.get(kind) || 0) + count);
+  }
+
+  const parts = orderedKinds.map((kind) => {
+    const label = STATUS_COMPOSITION_LABELS[kind] || '运行态';
+    return `${countsByKind.get(kind)} 个${label}`;
+  });
+  const prefix =
+    orderedKinds.length > 1 ? `状态构成（${orderedKinds.length} 类）` : '状态构成';
+  return [
+    `${prefix}：${parts.join('、')}。`,
+    '只说明当前快照里有哪些待处理状态；不会批准、重试、发送、取消、归档或写入。',
+  ].join('');
+}
+
 function getRuntimeSnapshotAgeMs(runtime) {
   const time = Date.parse(runtime?.fetchedAt || '');
   if (!Number.isFinite(time)) return null;
@@ -319,6 +359,55 @@ function getStatusPriorityReceipt(item) {
     STATUS_PRIORITY_RECEIPTS[item?.kind] ||
     '运行态提示：这条状态需要你决定下一步。'
   );
+}
+
+function getStatusActionDescriptor(item) {
+  const actionHint = normalizeInlineText(item?.actionHint || '');
+  switch (item?.kind) {
+    case 'setup_blocker':
+      return {
+        label: actionHint || '打开设置处理',
+        boundary: '只打开 Desktop App 设置；不会自动同步、发送或写入。',
+        prompt: '打开设置页查看缺失配置；这一步不会自动同步、发送或写入。',
+      };
+    case 'confirm_request':
+      return {
+        label: actionHint || '继续追问待确认项',
+        boundary: '只填入追问草稿；不会批准、拒绝或写入。',
+        prompt: '只把待确认项带入追问草稿；不会批准、拒绝或写入。',
+      };
+    case 'sync_issue':
+      return {
+        label: actionHint || '继续排查同步',
+        boundary: '只填入排查草稿；不会重发或改写同步流水。',
+        prompt: '只把同步异常带入排查草稿；不会重发或改写同步流水。',
+      };
+    case 'runtime_issue':
+      return {
+        label: actionHint || '继续排查状态',
+        boundary: '只填入排查草稿；不会重试服务或改配置。',
+        prompt: '只把状态读取异常带入排查草稿；不会重试服务或改配置。',
+      };
+    case 'running_action':
+    case 'queued_action':
+      return {
+        label: actionHint || '继续追问动作',
+        boundary: '只填入追问草稿；不会执行、重试、取消或归档动作。',
+        prompt: '只把动作状态带入追问草稿；不会执行、重试、取消或归档动作。',
+      };
+    case 'waiting_reply':
+      return {
+        label: actionHint || '继续追问外部询问',
+        boundary: '只填入追问草稿；不会发送 outreach 或批准待发内容。',
+        prompt: '只把外部询问状态带入追问草稿；不会发送 outreach 或批准待发内容。',
+      };
+    default:
+      return {
+        label: actionHint || '继续追问',
+        boundary: '只填入追问草稿；不会直接执行状态动作。',
+        prompt: '只把这条状态带入追问草稿；不会直接执行状态动作。',
+      };
+  }
 }
 
 function getStatusRefreshFailure(message) {
@@ -479,6 +568,33 @@ function getAskScopeLabel(scope = state.askScope) {
   return t('common.work');
 }
 
+function getScopeChangeReceipt(scope, status = 'saved', detail = '') {
+  const label = getAskScopeLabel(scope);
+  const suffix =
+    '不会改已入库记忆、不会触发同步发送，也不会改变已经显示的答案。';
+
+  if (status === 'local-only') {
+    return `范围已切到${label}，但默认值未保存；只影响当前 Quick Ask 窗口后续提问。${suffix}`;
+  }
+
+  if (status === 'mismatch') {
+    return `范围已切到${label}，但服务确认的默认范围是${detail || label}；后续会按服务返回的默认范围发起 Ask。${suffix}`;
+  }
+
+  if (status === 'failed') {
+    return `范围已切到${label}，但默认值保存失败${detail ? `：${detail}` : ''}；只影响当前 Quick Ask 窗口后续提问。${suffix}`;
+  }
+
+  return `范围已保存：后续 Quick Ask / Ask 默认用${label}范围。${suffix}`;
+}
+
+function buildVoiceSubmitReceipt() {
+  return t('desktop.quickAsk.voiceSubmitReceipt', {
+    scope: getAskScopeLabel(),
+    locale: resolveVoiceLocale(),
+  });
+}
+
 function isExpandedState() {
   return (
     state.uiState === 'pending' ||
@@ -572,28 +688,44 @@ async function loadAskScopePreference() {
 }
 
 async function persistAskScope(scope) {
-  state.askScope = normalizeAskScope(scope);
+  const requestedScope = normalizeAskScope(scope);
+  state.askScope = requestedScope;
   renderScopeSelector();
   try {
     const settings = await bridgeApi.getSettings();
     const explorerSettings = settings?.effective?.explorer;
-    if (!explorerSettings) return;
+    if (!explorerSettings) {
+      showNotice(getScopeChangeReceipt(requestedScope, 'local-only'), 5600);
+      return;
+    }
     const saved = await bridgeApi.updateSettings({
       explorer: {
         ...explorerSettings,
-        askDefaultScope: state.askScope,
+        askDefaultScope: requestedScope,
       },
     });
     state.askScope = normalizeAskScope(
       saved?.effective?.explorer?.askDefaultScope,
     );
     renderScopeSelector();
+    if (state.askScope === requestedScope) {
+      showNotice(getScopeChangeReceipt(state.askScope, 'saved'), 5600);
+    } else {
+      showNotice(
+        getScopeChangeReceipt(
+          requestedScope,
+          'mismatch',
+          getAskScopeLabel(state.askScope),
+        ),
+        6400,
+      );
+    }
   } catch (error) {
     showNotice(
       error instanceof Error
-        ? `范围已切换，但默认值保存失败：${error.message}`
-        : '范围已切换，但默认值保存失败。',
-      4200,
+        ? getScopeChangeReceipt(requestedScope, 'failed', error.message)
+        : getScopeChangeReceipt(requestedScope, 'failed'),
+      6400,
     );
   }
 }
@@ -1269,19 +1401,90 @@ function canInjectToMobileContext(message) {
   );
 }
 
+function shortenMobileContextThreadId(value) {
+  const text = normalizeInlineText(value);
+  if (!text) return '';
+  return text.length > 18 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
+}
+
+function formatMobileContextTransportMode(mode) {
+  if (mode === 'webpage_mcp') return '日常 Chrome';
+  if (mode === 'playwright') return '内置 Chromium';
+  return '';
+}
+
+function formatMobileContextTransport(result) {
+  const modeLabel = formatMobileContextTransportMode(result?.transportMode);
+  if (modeLabel) return modeLabel;
+  if (result?.transportUsed === 'dom') return 'DOM';
+  return normalizeInlineText(result?.transportUsed || '');
+}
+
+function formatMobileContextDeliveryAudit(result) {
+  const details = [];
+  const threadId = shortenMobileContextThreadId(result?.threadId);
+  if (threadId) {
+    details.push(`线程：${threadId}`);
+  }
+
+  const verification = [];
+  if (result?.verified === true) verification.push('已验证');
+  if (result?.verified === false) verification.push('未验证');
+  if (result?.messageVisible === true) verification.push('消息可见');
+  if (result?.messageVisible === false) verification.push('未看到正文');
+  if (result?.challengeDetected === true) verification.push('命中验证');
+  const transport = formatMobileContextTransport(result);
+  if (transport) verification.push(`传输：${transport}`);
+  if (verification.length > 0) {
+    details.push(verification.join(' · '));
+  }
+
+  const fallbackReason = normalizeInlineText(result?.transportFallbackReason || '');
+  if (fallbackReason) {
+    details.push(`回退原因：${clipText(fallbackReason, 96)}`);
+  }
+
+  if (details.length === 0) return '';
+  return `本次审计：${details.join(' · ')}。`;
+}
+
+function formatMobileContextActionReceipt(
+  message,
+  state = 'idle',
+  errorMessage = '',
+  result = null,
+) {
+  const evidenceCount = Array.isArray(message?.evidence)
+    ? message.evidence.length
+    : 0;
+  const evidenceCopy =
+    evidenceCount > 0 ? `${evidenceCount} 条证据摘要` : '证据摘要';
+  const scopeCopy = `query_answer_card（本轮答案 + ${evidenceCopy}）-> mobile_context_thread`;
+  const boundaryCopy =
+    '只写已绑定手机对话，不写长期记忆、不确认答案、不改绑定、不标记待办完成';
+
+  if (state === 'pending') {
+    return `发送中：${scopeCopy}；${boundaryCopy}。`;
+  }
+
+  if (state === 'succeeded') {
+    return `已发送：${scopeCopy}；${boundaryCopy}。${formatMobileContextDeliveryAudit(result)}`;
+  }
+
+  if (state === 'failed') {
+    const failure = String(errorMessage || '发送到豆包失败').trim();
+    return `${failure} 本次未写入 mobile_context_thread；${boundaryCopy}。`;
+  }
+
+  return `发送范围：${scopeCopy}；点击后${boundaryCopy}。`;
+}
+
 function renderMobileContextAction(message) {
   if (!canInjectToMobileContext(message)) return '';
 
   const sync = message.mobileContextSync;
   const status = sync?.status;
-  const label =
-    status === 'pending'
-      ? '正在发送到豆包...'
-      : status === 'succeeded'
-        ? '已发送到豆包手机对话'
-        : status === 'failed'
-          ? sync.message || '发送到豆包失败'
-          : '';
+  const label = sync?.message || formatMobileContextActionReceipt(message, status);
   const tone =
     status === 'succeeded' ? 'success' : status === 'failed' ? 'error' : '';
 
@@ -1295,11 +1498,7 @@ function renderMobileContextAction(message) {
       >
         发到豆包手机对话
       </button>
-      ${
-        label
-          ? `<span class="message-action-status ${escapeHtml(tone)}">${escapeHtml(label)}</span>`
-          : '<span class="message-action-status">带证据发送，不写长期记忆</span>'
-      }
+      <span class="message-action-status ${escapeHtml(tone)}">${escapeHtml(label)}</span>
     </div>
   `;
 }
@@ -1427,7 +1626,16 @@ function renderAssistantMessage(message) {
 }
 
 function renderUserMessage(message) {
-  return `<div class="message-card user-card"><p>${escapeHtml(message.text)}</p></div>`;
+  return `
+    <div class="message-card user-card">
+      <p>${escapeHtml(message.text)}</p>
+      ${
+        message.inputReceipt
+          ? `<div class="user-message-receipt">${escapeHtml(message.inputReceipt)}</div>`
+          : ''
+      }
+    </div>
+  `;
 }
 
 function renderStatusItem(item, runtime, refreshFailure = null) {
@@ -1436,6 +1644,7 @@ function renderStatusItem(item, runtime, refreshFailure = null) {
     : [];
   const freshness = formatStatusItemFreshness(runtime, refreshFailure);
   const priorityReceipt = getStatusPriorityReceipt(item);
+  const action = getStatusActionDescriptor(item);
   return `
     <button
       class="status-item"
@@ -1447,6 +1656,7 @@ function renderStatusItem(item, runtime, refreshFailure = null) {
       data-status-action="${escapeHtml(item.actionHint || '')}"
       data-status-freshness="${escapeHtml(freshness.prompt)}"
       data-status-priority="${escapeHtml(priorityReceipt)}"
+      data-status-action-boundary="${escapeHtml(action.prompt)}"
     >
       <span class="status-item-main">
         <span class="status-item-title">${escapeHtml(item.title)}</span>
@@ -1459,6 +1669,10 @@ function renderStatusItem(item, runtime, refreshFailure = null) {
                 .join('')}</span>`
             : ''
         }
+        <span class="status-item-action-row">
+          <span class="status-item-action-label">${escapeHtml(action.label)}</span>
+          <span class="status-item-action-boundary">${escapeHtml(action.boundary)}</span>
+        </span>
       </span>
       <span class="status-item-meta">
         <span class="status-item-source">${escapeHtml(getStatusSourceLabel(item.kind))}</span>
@@ -1479,6 +1693,7 @@ function renderStatusMessage(message) {
   const items = Array.isArray(runtime.items) ? runtime.items : [];
   const refreshLabel = message.statusRefreshing ? '读取中...' : '重新读取';
   const refreshFailure = getStatusRefreshFailure(message);
+  const composition = formatRuntimeStatusComposition(runtime);
   const noticeClass = refreshFailure
     ? 'status-refresh-note status-refresh-warning'
     : 'status-refresh-note';
@@ -1501,6 +1716,11 @@ function renderStatusMessage(message) {
           </button>
         </div>
         <div class="status-card-meta">${escapeHtml(formatRuntimeSnapshotMeta(runtime))}</div>
+        ${
+          composition
+            ? `<div class="status-card-composition">${escapeHtml(composition)}</div>`
+            : ''
+        }
         ${
           message.statusRefreshNotice
             ? `<div class="${noticeClass}">${escapeHtml(message.statusRefreshNotice)}</div>`
@@ -1599,6 +1819,7 @@ function buildStatusFollowUpPrompt(
   actionHint,
   freshness,
   priorityReceipt,
+  actionBoundary,
 ) {
   const fallback = STATUS_HINTS[kind] || '帮我解释这条状态，并给出下一步。';
   const cleanTitle = String(title || '').trim();
@@ -1607,6 +1828,7 @@ function buildStatusFollowUpPrompt(
   const cleanActionHint = String(actionHint || '').trim();
   const cleanFreshness = String(freshness || '').trim();
   const cleanPriorityReceipt = String(priorityReceipt || '').trim();
+  const cleanActionBoundary = String(actionBoundary || '').trim();
   if (!cleanTitle && !cleanSummary) return fallback;
 
   const subject = cleanTitle || '这条状态';
@@ -1617,7 +1839,10 @@ function buildStatusFollowUpPrompt(
   const priorityContext = cleanPriorityReceipt
     ? ` 显示原因：${cleanPriorityReceipt}。`
     : '';
-  return `关于「${subject}」${detail}。${detailContext}${actionContext}${freshnessContext}${priorityContext}${fallback}`;
+  const actionBoundaryContext = cleanActionBoundary
+    ? ` 处理入口：${cleanActionBoundary}。`
+    : '';
+  return `关于「${subject}」${detail}。${detailContext}${actionContext}${freshnessContext}${priorityContext}${actionBoundaryContext}${fallback}`;
 }
 
 function buildMobileContextEvidence(evidence) {
@@ -1674,7 +1899,7 @@ async function sendAssistantMessageToMobileContext(messageId) {
   updateMessage(messageId, {
     mobileContextSync: {
       status: 'pending',
-      message: '正在发送到豆包...',
+      message: formatMobileContextActionReceipt(message, 'pending'),
     },
   });
 
@@ -1689,7 +1914,11 @@ async function sendAssistantMessageToMobileContext(messageId) {
       updateMessage(messageId, {
         mobileContextSync: {
           status: 'failed',
-          message: formatMobileContextSyncError(result.error),
+          message: formatMobileContextActionReceipt(
+            message,
+            'failed',
+            formatMobileContextSyncError(result.error),
+          ),
         },
       });
       return;
@@ -1698,14 +1927,23 @@ async function sendAssistantMessageToMobileContext(messageId) {
     updateMessage(messageId, {
       mobileContextSync: {
         status: 'succeeded',
-        message: '已发送到豆包手机对话',
+        message: formatMobileContextActionReceipt(
+          message,
+          'succeeded',
+          '',
+          result,
+        ),
       },
     });
   } catch (error) {
     updateMessage(messageId, {
       mobileContextSync: {
         status: 'failed',
-        message: formatMobileContextSyncError(error),
+        message: formatMobileContextActionReceipt(
+          message,
+          'failed',
+          formatMobileContextSyncError(error),
+        ),
       },
     });
   }
@@ -1937,6 +2175,7 @@ class VoiceController {
     elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
     showNotice(this.lastErrorMessage);
     state.voicePhase = 'ready';
+    state.voiceStopReason = 'error';
     setUiState('voice-ready');
     renderVoiceSheet();
   }
@@ -1952,6 +2191,7 @@ class VoiceController {
     this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
     state.voicePhase = 'listening';
+    state.voiceStopReason = 'none';
     setUiState('voice-listening');
     renderVoiceSheet();
 
@@ -1972,6 +2212,7 @@ class VoiceController {
     this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
     state.voicePhase = 'listening';
+    state.voiceStopReason = 'none';
     setUiState('voice-listening');
     renderVoiceSheet();
     try {
@@ -2020,6 +2261,7 @@ class VoiceController {
     setDraft(draft);
     state.voiceDraft = draft;
     state.voicePhase = 'idle';
+    state.voiceStopReason = 'none';
     expireCurrentSessionIfNeeded();
     setUiState(
       hasCurrentSessionMessages() ? resolveExpandedState() : 'idle-compact',
@@ -2037,6 +2279,7 @@ class VoiceController {
     this.lastErrorMessage = '';
     this.lastErrorAction = null;
     state.voicePhase = 'idle';
+    state.voiceStopReason = 'none';
     renderVoiceSheet();
     await submitQuery(transcript, { fromVoice: true });
   }
@@ -2049,6 +2292,7 @@ class VoiceController {
       this.lastErrorMessage = '';
       this.lastErrorAction = null;
       state.voicePhase = 'listening';
+      state.voiceStopReason = 'none';
       setUiState('voice-listening');
       renderVoiceSheet();
       return;
@@ -2069,6 +2313,7 @@ class VoiceController {
       this.lastErrorAction = null;
       state.voiceDraft = this.composeDraft();
       state.voicePhase = payload.isFinal ? 'ready' : 'listening';
+      state.voiceStopReason = payload.isFinal ? 'final' : 'none';
       if (isVoiceState()) {
         setUiState(payload.isFinal ? 'voice-ready' : 'voice-listening');
       }
@@ -2086,6 +2331,7 @@ class VoiceController {
       this.lastErrorAction = null;
       state.voiceDraft = this.composeDraft(this.recognizedTranscript);
       state.voicePhase = 'ready';
+      state.voiceStopReason = 'stopped';
       if (isVoiceState()) {
         setUiState('voice-ready');
       }
@@ -2101,6 +2347,7 @@ class VoiceController {
       elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
       showNotice(this.lastErrorMessage);
       state.voicePhase = 'ready';
+      state.voiceStopReason = 'error';
       if (isVoiceState()) {
         setUiState('voice-ready');
       }
@@ -2122,6 +2369,7 @@ class VoiceController {
     this.listening = false;
     state.voiceDraft = '';
     state.voicePhase = 'idle';
+    state.voiceStopReason = 'none';
     this.lastErrorMessage = '';
     this.lastErrorAction = null;
     elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
@@ -2145,11 +2393,21 @@ function getVoiceReceiptText() {
   }
 
   if (state.voicePhase === 'ready') {
-    return state.voiceDraft.trim()
-      ? t('desktop.quickAsk.voiceReceipt.ready', {
+    if (state.voiceDraft.trim()) {
+      return t(
+        state.voiceStopReason === 'stopped'
+          ? 'desktop.quickAsk.voiceReceipt.stoppedWithDraft'
+          : 'desktop.quickAsk.voiceReceipt.ready',
+        {
           scope: getAskScopeLabel(),
-        })
-      : t('desktop.quickAsk.voiceReceipt.readyEmpty');
+        },
+      );
+    }
+    return t(
+      state.voiceStopReason === 'stopped'
+        ? 'desktop.quickAsk.voiceReceipt.stoppedEmpty'
+        : 'desktop.quickAsk.voiceReceipt.readyEmpty',
+    );
   }
 
   return t('desktop.quickAsk.voiceReceipt.idle');
@@ -2198,6 +2456,7 @@ function resetSession() {
   voiceController.reset();
   state.voiceDraft = '';
   state.voicePhase = 'idle';
+  state.voiceStopReason = 'none';
   state.autoScrollPinned = true;
   setDraft('');
   setUiState('idle-compact');
@@ -2256,6 +2515,7 @@ async function submitQuery(rawInput, options = {}) {
   if (!input || state.requestActive) return;
   const displayText =
     normalizeInlineText(options.displayText || '') || input;
+  const inputReceipt = options.fromVoice ? buildVoiceSubmitReceipt() : '';
 
   expireCurrentSessionIfNeeded();
   const rememberRequested = hasExplicitRememberIntent(input);
@@ -2281,6 +2541,7 @@ async function submitQuery(rawInput, options = {}) {
       id: createId('user'),
       role: 'user',
       text: input,
+      inputReceipt,
     });
     pushMessage({
       id: createId('assistant'),
@@ -2305,6 +2566,7 @@ async function submitQuery(rawInput, options = {}) {
     id: createId('user'),
     role: 'user',
     text: displayText,
+    inputReceipt,
   });
 
   const assistantId = createId('assistant');
@@ -2620,6 +2882,7 @@ elements.conversationPanel.addEventListener('click', async (event) => {
         statusItem.dataset.statusAction,
         statusItem.dataset.statusFreshness,
         statusItem.dataset.statusPriority,
+        statusItem.dataset.statusActionBoundary,
       ),
     );
     focusComposer();

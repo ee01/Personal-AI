@@ -320,7 +320,7 @@ export interface ToastAction {
 
 function showToast(
   message: string,
-  variant: 'success' | 'error',
+  variant: 'success' | 'error' | 'info',
   action?: ToastAction | ToastAction[],
 ) {
   const toast = document.createElement('div');
@@ -328,7 +328,8 @@ function showToast(
 
   const icon = document.createElement('span');
   icon.className = 'snooze-toast-icon';
-  icon.textContent = variant === 'success' ? '✓' : '✕';
+  icon.textContent =
+    variant === 'success' ? '✓' : variant === 'error' ? '✕' : 'i';
   toast.appendChild(icon);
 
   const messageElement = document.createElement('span');
@@ -391,6 +392,35 @@ export function showSuccessToast(
 /**
  * 显示错误提示
  */
-export function showErrorToast(message: string) {
-  showToast(message, 'error');
+export function showErrorToast(
+  message: string,
+  action?: ToastAction,
+): void;
+export function showErrorToast(
+  message: string,
+  action?: ToastAction[],
+): void;
+export function showErrorToast(
+  message: string,
+  action?: ToastAction | ToastAction[],
+): void {
+  showToast(message, 'error', action);
+}
+
+/**
+ * 显示中性状态提示
+ */
+export function showInfoToast(
+  message: string,
+  action?: ToastAction,
+): void;
+export function showInfoToast(
+  message: string,
+  action?: ToastAction[],
+): void;
+export function showInfoToast(
+  message: string,
+  action?: ToastAction | ToastAction[],
+): void {
+  showToast(message, 'info', action);
 }

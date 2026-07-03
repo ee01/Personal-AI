@@ -1,6 +1,6 @@
 # 用户画像系统
 
-更新日期: 2026-06-17
+更新日期: 2026-06-30
 
 ## 功能概述
 
@@ -87,19 +87,19 @@
 
 - 画像总览: 展示当前项目、人员、主题关注点。
 - 首屏校准概览: 展示待确认推断、确认率、证据覆盖和最近信号，引导用户先处理最影响推荐质量的条目。
-- 重要性校准: 用户可以通过星级评分调整条目的 `confidence` 和 `salienceScore`，并自动确认该条目；首屏星级入口会先说明是否会同时确认、证据是否保留，以及仍然只有 `active + confirmed` 才进入个性化。星级回执会按前后权重写成“提高 / 降低 / 调整影响”，避免把 4 星这类中间值误读成降权。
-- 影响力快速校准: 条目列表和待确认队列提供“设为重点 / 降低影响”路径，用低摩擦反馈调节 profile item 对个性化上下文的影响；按钮旁会先显示校准影响回执，说明会更新 `confidence/salience`、是否同时确认条目、证据是否保留，以及只有 `active + confirmed` 才进入个性化。“设为重点”和星级校准会确认条目；“降低影响”只降权，不会把未确认推断自动推进个性化上下文。如果权重写入成功但确认步骤失败，页面会保留“确认未完成”回执，并提示用户可点确认重试，避免把部分成功误读成已经进入个性化。
-- 校准操作回执: 用户确认、设为重点、降低影响、排除、恢复或手动新增画像后，页面会保留一条“画像校准回执”，说明该条现在是否进入个性化上下文、证据数量/缺证状态，以及后续可恢复或继续复核的路径。
+- 重要性校准: 用户可以通过星级评分调整条目的 `confidence` 和 `salienceScore`，并自动确认该条目；首屏星级入口会先说明当前影响力、是否会同时确认、证据是否保留、只影响后续画像选择，以及仍然只有 `active + confirmed` 才进入个性化。星级回执会按前后权重写成“提高 / 降低 / 调整影响”，避免把 4 星这类中间值误读成降权。
+- 影响力快速校准: 条目列表和待确认队列提供“设为重点 / 降低影响”路径，用低摩擦反馈调节 profile item 对个性化上下文的影响；按钮旁会先显示校准影响回执，说明当前影响力、目标影响力、会更新 `confidence/salience`、是否同时确认条目、证据是否保留、只影响后续画像选择，以及只有 `active + confirmed` 才进入个性化。“设为重点”和星级校准会确认条目；“降低影响”只降权，不会把未确认推断自动推进个性化上下文。点击后页面会立刻显示进行中回执，点明正在校准哪条画像、目标影响力、是否会尝试确认，以及请求完成前还不能证明已写入或进入个性化；待确认条目在服务返回前仍显示为待确认 / 确认前不使用，不能提前翻成可个性化。如果权重写入失败，会用“校准未完成”回执替换进行中状态。如果权重写入成功但确认步骤失败，页面会保留“确认未完成”回执，并提示用户可点确认重试，避免把部分成功误读成已经进入个性化。
+- 校准操作回执: 用户确认、设为重点、降低影响、排除、恢复或手动新增画像时，页面会先显示等待服务确认的“画像校准回执”；完成后回执说明该条现在是否进入个性化上下文、证据数量/缺证状态，以及后续可恢复或继续复核的路径。失败时不会把点击误写成已确认、已排除、已恢复或已新增。
 - 条目确认: 对推断条目执行确认，减少系统反复猜测；页面会显示处理中状态，避免重复提交。
 - 条目排除: 将不准确或不希望继续影响推荐的条目标记为 retracted；页面会保留最近一次排除的撤销入口，确认条目恢复为 `active`，未确认条目恢复为 `pending_confirm`。
 - 已排除条目审计: 画像条目列表可以按需加载 `status = retracted` 的已排除画像，显示来源、证据和更新时间，并允许恢复；已排除条目不会进入个性化上下文，刷新页面后仍可找回。
-- 显式画像录入: 用户可以从常见画像键中选择，也可以填写自定义稳定 key，避免把项目、事实或约束误写到固定回复风格字段。
+- 显式画像录入: 用户可以从常见画像键中选择，也可以填写自定义稳定 key，避免把项目、事实或约束误写到固定回复风格字段。提交前页面会显示“录入范围”回执，说明本次会写入 active + confirmed 手动画像，成为 USER_CORE、召回、Compose Assist 和 provider context 的场景个性化候选；它不会外发、恢复旧画像或跨平台同步。
 - 待确认推断队列: 页面把未确认条目按校准优先级完整展示，并支持按待确认、证据覆盖筛选后就地确认或排除。
-- 画像条目检索: 条目列表支持按名称、键、来源、状态和证据内容搜索，按校准优先级、最近更新、置信度和证据数排序，并按状态筛出需校准、高影响、可用于个性化或缺证据的条目。
+- 画像条目检索: 条目列表支持按名称、键、来源、状态和证据内容搜索，按校准优先级、最近更新、置信度和证据数排序，并按状态筛出需校准、高影响、可用于个性化或缺证据的条目。页面初始只加载大列表切片时，会显示“检索范围”回执，说明当前搜索/筛选只匹配已加载条目；未命中不能证明全库不存在该画像，需先“加载全部”再做完整判断。该回执只说明列表显示范围，不会确认、排除或写入画像，也不限制导出重新分页拉取全部状态。
 - 校准优先级: 前端会标记“优先复核 / 高影响 / 需校准 / 低风险”，并说明待确认、缺证据或多次命中等原因，帮助用户先处理最可能影响个性化质量的条目。
 - 个性化边界提示: 条目列表会标出“可用于个性化”或“确认前不使用”，避免用户误以为未确认推断已经进入上下文。
-- 可解释检查: 条目列表展示来源、证据数量和更新时间，推断内容带有类别和置信度；有证据的条目可以展开查看来源、URL 或片段摘要，不安全来源链接不会变成可点击跳转。
-- 数据导出与大列表: 展示页默认限制拉取量以保持响应速度，列表会明确显示已加载条目数/总条目数，并允许用户主动加载全部后再搜索或筛选；导出按钮前会说明当前搜索、筛选或页面加载切片不会限制导出。导出路径会以 `status=all` 继续分页，确保 active、pending、retracted、archived、superseded 等画像状态都写入 JSON，并在 `exportInfo.pagination` 中记录导出条目数、总条目数、状态范围和是否截断，便于迁移、备份和审计。导出 JSON 还会写入 `profileAudit`，总结已确认、待确认、可用于个性化、确认前保留、已排除/归档审计项、缺证据以及状态/类型/来源分布；`/health` 或 `/stats` 这类诊断接口临时失败时不阻断导出，而是在 `exportInfo.warnings` 和 optional section 可用性里说明缺失。下载文件自带 `exportInfo.manifest`，记录导出 scope、分页、诊断 warning、迁移/恢复边界，以及 profile items、USER_CORE 和审计摘要的 SHA-256 指纹；页面回执显示短指纹，方便用户把下载文件和当次导出对上。下载完成后页面保留“画像导出回执”，说明文件名、完整性、可个性化/确认前保留/非活跃审计数量、诊断 warning，以及本地 JSON 不会自动恢复、删除、同步或发送画像。下一次导出开始或失败时会清空上一轮导出回执，避免失败状态和旧成功文件混在一起。
+- 可解释检查: 条目列表展示来源、证据数量和更新时间，推断内容带有类别和置信度；有证据的条目可以展开查看来源、URL 或片段摘要。展开证据前后都会明确这是只读审计，不会确认画像、写入 `USER_CORE`、刷新来源、同步外部平台或发送内容；不安全来源链接不会变成可点击跳转，只保留隐藏原因。
+- 数据导出与大列表: 展示页默认限制拉取量以保持响应速度，列表会明确显示已加载条目数/总条目数，并允许用户主动加载全部后再搜索或筛选；导出按钮前会显示“导出前检查”，说明当前搜索、筛选或页面加载切片不会限制导出、文件是 JSON + manifest 指纹、本次只下载本地副本、不恢复/删除/同步/发送画像，诊断失败也只写入 warning。点击导出后页面会先显示“正在准备画像导出”回执，说明正在重新分页请求 `status=all`、下载尚未开始、manifest ID 尚未生成，且没有恢复/删除/同步/发送副作用。导出路径会以 `status=all` 继续分页，确保 active、pending、retracted、archived、superseded 等画像状态都写入 JSON，并在 `exportInfo.pagination` 中记录导出条目数、总条目数、状态范围和是否截断，便于迁移、备份和审计。导出 JSON 还会写入 `profileAudit`，总结已确认、待确认、可用于个性化、确认前保留、已排除/归档审计项、缺证据以及状态/类型/来源分布；`/health` 或 `/stats` 这类诊断接口临时失败时不阻断导出，而是在 `exportInfo.warnings` 和 optional section 可用性里说明缺失。下载文件自带 `exportInfo.manifest`，记录导出 scope、分页、诊断 warning、迁移/恢复边界，以及 profile items、USER_CORE 和审计摘要的 SHA-256 指纹；页面回执显示短指纹和 `manifestId`，方便用户把下载文件和当次导出对上。下载完成后页面保留“画像导出回执”，说明文件名、完整性、可个性化/确认前保留/非活跃审计数量、诊断 warning，以及本地 JSON 不会自动恢复、删除、同步或发送画像；如果诊断接口缺失，回执会明确画像条目只是写入本地导出 JSON，不代表 Memory Service 被改写。下一次导出开始或失败时会清空上一轮导出回执，避免失败状态和旧成功文件混在一起。
 - 高级设置: 目前保存权重衰变配置；后端实际衰变策略仍由 memory-service 统一管理。
 
 ## 设计原则
@@ -118,13 +118,14 @@
 
 ## 业内参照
 
-- [ChatGPT Memory FAQ](https://help.openai.com/en/articles/8590148-memory-in-chatgpt-remembering-what-you-chat-about)、[Claude memory import/export](https://support.claude.com/en/articles/12123587-import-and-export-your-memory-from-claude) 和 [Gemini Saved info](https://support.google.com/gemini/answer/15637730?hl=en-IN&ref_topic=13194540) 都强调用户能查看、编辑、删除或关闭记忆；Personal AI 的画像页应优先暴露确认、排除、证据和导出路径。
+- [ChatGPT Memory FAQ](https://help.openai.com/en/articles/8590148-memory-in-chatgpt-remembering-what-you-chat-about)、[ChatGPT 数据导出](https://help.openai.com/en/articles/7260999-how-do-i-export-my-chatgpt-history-and-data)、[Claude 数据导出](https://support.anthropic.com/en/articles/9450526-how-can-i-export-my-claude-ai-data)、[Claude 记忆导入/导出](https://support.anthropic.com/en/articles/11817273-using-claude-s-chat-search-and-memory-to-build-on-previous-context)、[Google Takeout](https://support.google.com/accounts/answer/3024190?hl=en) 和 [Gemini Saved info](https://support.google.com/gemini/answer/15637730?hl=en-IN&ref_topic=13194540) 都强调用户能查看、编辑、删除、导出或迁移自己的数据；Personal AI 的画像页应优先暴露确认、排除、证据和导出路径。
 - Claude 和 Gemini 都引入了项目/企业边界或数据源边界；Personal AI 的 `pending_confirm` 条目不应在确认前进入核心画像投影。
 - ChatGPT 的记忆管理正在强化搜索、排序、优先/降权和历史恢复；Personal AI 应继续把校准队列作为首屏任务，并让完整条目列表可检索、可排序、可增量浏览，而不是只展示少量高分推断。
 - ChatGPT Memory Sources 和 Claude 的 “View and edit your memory” 都把来源检查、修正/删除和恢复/导出放在用户可见路径里；Personal AI 现在把 retracted 画像也纳入页面内审计与恢复，而不是只依赖操作后的瞬时 toast。
 - Claude 已支持记忆导入/导出和项目级记忆边界；Personal AI 的导出必须避免被后端单页上限截断，也不能把已排除或归档画像从审计包里静默丢掉，后续可补充导入和按项目/场景分区。
 - [Claude Managed Agents memory](https://claude.com/blog/claude-managed-agents-memory) 的文件式记忆、权限和审计日志说明，生产级记忆系统需要可导出、可回滚、可追溯；Personal AI 的画像导出因此应包含分页完整性元数据，而不是只生成当前页面看到的列表。
-- OpenAI 数据导出和 Claude memory 导入/导出都把本地文件、复制迁移和账户/服务边界分开处理；Personal AI 的导出 manifest 因此只证明“这次导出了什么”，不默认授权导入、恢复或外部同步。
+- OpenAI 数据导出、Claude memory 导入/导出和 Google Takeout 都把下载副本、迁移/导入、删除和账户边界分开处理；Personal AI 的导出 manifest 因此只证明“这次导出了什么”，不默认授权导入、恢复、删除或外部同步。
+- GDPR Article 20 与数据可迁移研究都强调结构化、常用、机器可读格式；AI memory portability 讨论进一步提醒记忆迁移需要 provenance、完整性和权限边界，所以导出前检查单应先把格式、指纹和副作用边界讲清楚。
 - 数据可迁移和审计型记忆产品不应让辅助诊断阻塞用户拿回自己的画像数据；Personal AI 当前把画像条目导出作为核心路径，把系统健康和实体统计降级为可缺失的诊断段，并在导出文件和页面提示中保留 warning。
 - 近期用户画像与记忆选择研究显示，画像进入上下文不能只靠相似度；应结合证据强度、用户确认、响应收益和场景边界选择要注入的 profile items。
 - 2026 年的 [Response-Aware User Memory Selection](https://www.microsoft.com/en-us/research/publication/response-aware-user-memory-selection-for-llm-personalization/) 研究进一步说明，记忆候选应按对响应质量的实际效用筛选，而不是把所有相似画像都塞进 prompt；Personal AI 当前先以“确认前不使用”作为安全边界，后续可继续加入响应收益评分。
@@ -143,3 +144,5 @@ npm start
 ```
 
 `npm start` 使用开发环境编译，首次成功输出后即可停止 watch 进程。
+
+`tools/verify-user-profile-export-e2e.mjs` 覆盖画像导出、显式录入、快速影响力校准、进行中回执、失败回执、部分确认失败、排除和恢复路径。

@@ -746,6 +746,31 @@ describe('ActionExecutor', () => {
       (failedAction?.result?.followUpActionIds as unknown[] | undefined)
         ?.length,
     ).toBeGreaterThanOrEqual(2);
+    expect(Array.isArray(failedAction?.result?.followUpActions)).toBe(true);
+    const followUpSummaries = failedAction?.result?.followUpActions as
+      | Array<{
+          id: string;
+          actionType: string;
+          title: string;
+          queueStatus: string;
+        }>
+      | undefined;
+    expect(
+      followUpSummaries?.some(
+        (item) =>
+          item.actionType === 'create_confirm_request' &&
+          item.title.includes('需要处理 OpenClaw 配置后重试') &&
+          item.queueStatus === 'succeeded',
+      ),
+    ).toBe(true);
+    expect(
+      followUpSummaries?.some(
+        (item) =>
+          item.actionType === 'notify_user' &&
+          item.title.includes('外部委派缺少能力') &&
+          item.queueStatus === 'succeeded',
+      ),
+    ).toBe(true);
   });
 
   it('creates a message rule improvement confirm request when linked action delegation fails', async () => {

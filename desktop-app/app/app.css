@@ -395,6 +395,11 @@ body {
   background: rgba(255, 255, 255, 0.58);
 }
 
+.source-revoke-danger {
+  border-color: rgba(158, 47, 36, 0.24);
+  background: var(--bad-soft);
+}
+
 .source-revoke-panel div {
   min-width: 0;
 }
@@ -421,8 +426,18 @@ body {
   line-height: 1.5;
 }
 
+.source-revoke-status {
+  margin-top: 8px;
+  max-width: 720px;
+}
+
 .source-revoke-panel button {
   flex: 0 0 auto;
+}
+
+button.source-revoke-button {
+  min-width: 180px;
+  white-space: normal;
 }
 
 .source-preview-panel {
@@ -663,6 +678,40 @@ body {
 .thread-detail-meta {
   display: grid;
   gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.thread-action-receipt {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(31, 35, 39, 0.08);
+}
+
+.thread-action-receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.thread-action-receipt-head strong {
+  font-size: 12px;
+}
+
+.thread-action-receipt-head span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.thread-action-receipt-body {
+  display: grid;
+  gap: 3px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
@@ -1032,6 +1081,15 @@ button.danger {
 
 .source-toggle.is-disabled .source-toggle-copy span {
   color: var(--muted);
+}
+
+.source-pipeline-receipt {
+  margin: 12px 0 18px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(31, 35, 39, 0.035);
+  border: 1px solid rgba(31, 35, 39, 0.08);
+  line-height: 1.6;
 }
 
 /* webpage-mcp toggle & guide card */

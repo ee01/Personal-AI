@@ -240,6 +240,7 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
       pendingExtractCount: 0,
       conversationCount: 1,
       artifactCount: 1,
+      revokedArtifactCount: 0,
     });
 
     const previewMessages = rawStore
@@ -316,6 +317,9 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
         source: 'doubao',
         conversationId: 'conv-recent',
         extractedAt: undefined,
+        scope: 'personal',
+        revokedAt: undefined,
+        revokedScope: undefined,
         kind: 'plan',
         text: 'Follow up on the second question',
         sourceQuote: 'second question',

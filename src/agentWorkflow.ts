@@ -12,6 +12,7 @@ import {
 } from './watchRules';
 import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
 import { getImmediateNotificationItem } from './messageAnalysisDelivery';
+import { recordRejectedManualRuleDiagnostics } from './messageAnalysisRuleDiagnostics';
 
 const AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -841,14 +842,16 @@ const availableTools: Record<string, AgentTool> = {
         isManualConcernedItem,
       );
       const envConfig = await getEnvConfig();
+      const allRuntimeWatchRules = await loadRuntimeWatchRules(items);
+      const messageContext = {
+        sender: params.sender,
+        groupId: params.team_id,
+        groupName: params.team_name,
+        datetime: params.datetime,
+      };
       const runtimeWatchRules = filterWatchRulesForMessageContext(
-        await loadRuntimeWatchRules(items),
-        {
-          sender: params.sender,
-          groupId: params.team_id,
-          groupName: params.team_name,
-          datetime: params.datetime,
-        },
+        allRuntimeWatchRules,
+        messageContext,
       );
 
       if (runtimeWatchRules.length === 0) {
@@ -899,7 +902,7 @@ ${xmlMessage}
       }
 
       const resolvedMatch = resolveMatchedWatchRules({
-        watchRules: runtimeWatchRules,
+        watchRules: allRuntimeWatchRules,
         matchedRule: firstMatch.matched_rule,
         matchedRuleRefs: Array.isArray(firstMatch.matched_rule_refs)
           ? firstMatch.matched_rule_refs
@@ -907,12 +910,7 @@ ${xmlMessage}
         matchedRuleIds: Array.isArray(firstMatch.matched_rule_ids)
           ? firstMatch.matched_rule_ids
           : [],
-        messageContext: {
-          sender: params.sender,
-          groupId: params.team_id,
-          groupName: params.team_name,
-          datetime: params.datetime,
-        },
+        messageContext,
       });
       const matchedManualItems = getManualItemsFromMatchedRules(
         resolvedMatch.watchRules,
@@ -921,6 +919,16 @@ ${xmlMessage}
         manualItems: matchedManualItems,
       });
       const hasResolvedMatch = resolvedMatch.watchRules.length > 0;
+      if (!hasResolvedMatch) {
+        await recordRejectedManualRuleDiagnostics({
+          runtimeWatchRules: allRuntimeWatchRules,
+          matchedRuleRefs: resolvedMatch.matchedRuleRefs,
+          matchedRule: firstMatch.matched_rule,
+          messageContext,
+          postId: params.post_id,
+          messageDatetime: params.datetime,
+        });
+      }
 
       return {
         shouldNotify: Boolean(immediateNotificationItem?.notifyMethod),

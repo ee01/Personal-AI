@@ -56,9 +56,16 @@ export function TierBadge({ tier }: TierBadgeProps): React.ReactElement | null {
   }, [badge, tier?.lastTransitionReason]);
 
   const tooltipText = tier
-    ? `转写模式：${MODE_LABELS[tier.mode]}${
-        tier.lastTransitionReason ? `；${tier.lastTransitionReason}` : ''
-      }`
+    ? [
+        `转写模式：${MODE_LABELS[tier.mode]}`,
+        tier.lastTransitionReason,
+        tier.lastStatusDetail &&
+        tier.lastStatusDetail !== tier.lastTransitionReason
+          ? tier.lastStatusDetail
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join('；')
     : '正在检测转写链路';
 
   return (

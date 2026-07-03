@@ -263,6 +263,14 @@ try {
     'Receipt should confirm trigger metadata from Config',
   );
   assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('初始化不会立即发送正式消息')),
+    'Receipt should explain the no-immediate-send setup boundary',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('anyone-with-link')),
+    'Receipt should explain that setup does not fall back to anyone-with-link sharing',
+  );
+  assert.ok(
     receiptNotice.details.some((detail) => detail.includes('仅创建者可编辑')),
     'Receipt should carry setup warnings into the initialized page notice',
   );

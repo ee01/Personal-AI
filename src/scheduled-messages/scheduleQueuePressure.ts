@@ -34,6 +34,7 @@ export interface ScheduleQueueSuggestion {
   timeStr: string;
   label: string;
   inspectedMinutes: number;
+  reason: string;
   clearsScheduleTime?: boolean;
 }
 
@@ -492,6 +493,39 @@ function formatNoTimeQueueSuggestionLabel(
   return `${dateStr} ${queueLabel}`;
 }
 
+function formatQueueSuggestionReason(pressure: ScheduleQueuePressure): string {
+  const leadingLabel = pressure.delayMinutes > 0
+    ? `前面 ${pressure.delayMinutes} 条会先执行`
+    : '当前为优先执行项';
+
+  if (!pressure.hasExplicitTime && pressure.exceedsExecutionWindow) {
+    return [
+      `08:00 后队列第 ${pressure.position}/${pressure.slotSize} 个`,
+      leadingLabel,
+      typeof pressure.remainingSameDaySlots === 'number'
+        ? `当天剩余约 ${pressure.remainingSameDaySlots} 条`
+        : '',
+      pressure.reservedExplicitMinutes
+        ? `已避开 ${pressure.reservedExplicitMinutes} 个明确时间分钟`
+        : '',
+      '可能排到执行日期结束后',
+      '建议保留空时间移到有容量的默认队列日',
+    ].filter(Boolean).join('，');
+  }
+
+  return [
+    `同执行时间第 ${pressure.position}/${pressure.slotSize} 个`,
+    leadingLabel,
+    pressure.exceedsCompensationWindow
+      ? '可能超过 30 分钟补偿窗口'
+      : '建议避开同一分钟排队',
+    pressure.exceedsCompensationWindow && pressure.elapsedCompensationMinutes > 0
+      ? `补偿窗口仅剩 ${pressure.remainingCompensationMinutes} 分钟`
+      : '',
+    '建议改到第一个未被执行器队列占用的分钟',
+  ].filter(Boolean).join('，');
+}
+
 function canNoTimeQueueMessageFitOnExecutionDate(
   existingMessages: ScheduledMessage[],
   targetMessage: ScheduledMessage,
@@ -528,6 +562,7 @@ function getNoTimeOverflowQueueSuggestion(
   targetSlotTime: Date,
   now: Date,
   searchMinutes: number,
+  targetPressure: ScheduleQueuePressure,
 ): ScheduleQueueSuggestion | null {
   const searchStart = getNoTimeOverflowSearchStart(targetSlotTime, targetMessage, now);
   const maxSearchDays = Math.max(0, Math.ceil(searchMinutes / (24 * 60)));
@@ -555,6 +590,7 @@ function getNoTimeOverflowQueueSuggestion(
       timeStr: '',
       label: formatNoTimeQueueSuggestionLabel(dateStr, targetMessage),
       inspectedMinutes: dayOffset + 1,
+      reason: formatQueueSuggestionReason(targetPressure),
       clearsScheduleTime: true,
     };
   }
@@ -770,6 +806,7 @@ export function getScheduleQueueSuggestion(
       targetSlotTime,
       now,
       searchMinutes,
+      targetPressure,
     );
   }
 
@@ -814,6 +851,7 @@ export function getScheduleQueueSuggestion(
       timeStr,
       label: `${dateStr} ${timeStr}`,
       inspectedMinutes: offset + 1,
+      reason: formatQueueSuggestionReason(targetPressure),
     };
   }
 
@@ -840,11 +878,18 @@ export function formatScheduleQueuePressure(pressure: ScheduleQueuePressure): st
 }
 
 export function formatScheduleQueueSuggestion(suggestion: ScheduleQueueSuggestion): string {
+  const reasonLabel = suggestion.reason ? `原因：${suggestion.reason}` : '';
   if (suggestion.clearsScheduleTime) {
-    return `建议改到 ${suggestion.label}，保留未填写执行时间的队列语义。`;
+    return [
+      `建议改到 ${suggestion.label}，保留未填写执行时间的队列语义。`,
+      reasonLabel,
+    ].filter(Boolean).join(' ');
   }
 
-  return `建议改到 ${suggestion.label}，避开当前拥挤时间槽。`;
+  return [
+    `建议改到 ${suggestion.label}，避开当前拥挤时间槽。`,
+    reasonLabel,
+  ].filter(Boolean).join(' ');
 }
 
 export function formatScheduleQueueBlockReason(pressure: ScheduleQueuePressure): string {
@@ -908,6 +953,9 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
   const suggestionLabel = slot.suggestion
     ? `建议改到 ${slot.suggestion.label}`
     : '';
+  const suggestionReasonLabel = slot.suggestion?.reason
+    ? `建议原因：${slot.suggestion.reason}`
+    : '';
 
   return [
     `${slotLabel}: ${slot.slotSize} 条`,
@@ -917,8 +965,42 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
     actionLabel,
     blockingLabel,
     suggestionLabel,
+    suggestionReasonLabel,
     sampleLabel,
   ].filter(Boolean).join('，');
+}
+
+export function formatScheduleQueueSlotDecisionBasis(slot: ScheduleQueueSlotSummary): string {
+  const queueTypeLabel = slot.hasExplicitTime ? '明确时间同槽' : '08:00 后队列';
+  const shownBlockingCount = Math.min(slot.blockingTopics.length, slot.blockingCount);
+  const hiddenBlockingCount = Math.max(0, slot.blockingCount - shownBlockingCount);
+  const blockingLabel = slot.blockingCount > 0
+    ? [
+      `前面 ${slot.blockingCount} 条会先执行`,
+      shownBlockingCount > 0
+        ? `已展示 ${shownBlockingCount} 条前序样例`
+        : '',
+      hiddenBlockingCount > 0
+        ? `另 ${hiddenBlockingCount} 条未展开`
+        : '',
+    ].filter(Boolean).join('，')
+    : '没有前序阻塞';
+  const suggestionLabel = slot.suggestion
+    ? [
+      `建议写入 ${slot.suggestion.label}`,
+      slot.suggestion.clearsScheduleTime
+        ? '保留空时间队列语义'
+        : '',
+    ].filter(Boolean).join('，')
+    : '当前没有可直接写入的建议';
+
+  return [
+    `建议依据：${queueTypeLabel}`,
+    `目标第 ${slot.actionPosition}/${slot.slotSize} 个`,
+    blockingLabel,
+    suggestionLabel,
+    '不会自动处理前序或发送消息',
+  ].filter(Boolean).join('；');
 }
 
 export function formatScheduleQueueSummary(summary: ScheduleQueueSummary): string {
@@ -933,4 +1015,17 @@ export function formatScheduleQueueSummary(summary: ScheduleQueueSummary): strin
     `最大预计延后 ${summary.maxDelayMinutes} 分钟`,
     riskLabel,
   ].join('；');
+}
+
+export function formatScheduleQueueCompactSummary(summary: ScheduleQueueSummary): string {
+  const base = [
+    `${summary.queuedMessageCount} 条消息正在排队`,
+    `${summary.congestedSlotCount} 个时间槽有拥挤`,
+    `最大同槽 ${summary.largestSlotSize} 条`,
+    `最大预计延后 ${summary.maxDelayMinutes} 分钟`,
+  ].join('，');
+
+  return summary.riskSlotCount > 0
+    ? `${base}；${summary.riskSlotCount} 个需要调整，展开后可查看建议依据和改期入口`
+    : `${base}；暂无执行窗口风险，展开后可查看建议时间和前序样例`;
 }

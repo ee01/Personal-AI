@@ -1,9 +1,11 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useMemo } from 'react';
+import { buildMeetingPilotAlertReceipt } from './alertPresentation';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
   MeetingPilotActionItem,
+  MeetingPilotAlert,
   MeetingPilotSessionSnapshot,
   createMeetingPilotSessionSnapshot,
 } from './protocol';
@@ -105,6 +107,26 @@ const liveStyle = `
   .alert:hover { transform: translateX(2px); }
   .alert h4 { margin: 0 0 8px; font-size: 13px; }
   .alert p, .meta-item p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+  .alert-receipt {
+    display: grid;
+    gap: 7px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+  }
+  .alert-receipt-row {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: rgba(221, 232, 245, 0.72);
+  }
+  .alert-receipt-row strong {
+    color: #bfdbfe;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
   .meta-item { border-radius: 18px; padding: 14px 15px; background: var(--surface-2); border: 1px solid var(--line); transition: all 0.2s; }
   .meta-item:hover { border-color: rgba(96,165,250,0.22); transform: translateX(2px); }
   .meta-item strong { display: block; margin-bottom: 8px; font-size: 13px; }
@@ -183,6 +205,30 @@ function shouldUseMeetingPilotDemo() {
 
 function isActiveActionItem(item: MeetingPilotActionItem): boolean {
   return item.reviewState !== 'dismissed';
+}
+
+function LiveMapAlertReceipt({ alert }: { alert: MeetingPilotAlert }) {
+  const receipt = buildMeetingPilotAlertReceipt(alert);
+  return (
+    <div className="alert-receipt" aria-label="Live Map 会中提醒边界回执">
+      <div className="alert-receipt-row">
+        <strong>为什么</strong>
+        <span>{receipt.reason}</span>
+      </div>
+      <div className="alert-receipt-row">
+        <strong>下一步</strong>
+        <span>{receipt.nextStep}</span>
+      </div>
+      <div className="alert-receipt-row">
+        <strong>边界</strong>
+        <span>{receipt.boundary}</span>
+      </div>
+      <div className="alert-receipt-row">
+        <strong>信号</strong>
+        <span>{receipt.signal}</span>
+      </div>
+    </div>
+  );
 }
 
 function MeetingLiveMap() {
@@ -380,6 +426,7 @@ function MeetingLiveMap() {
                     {alert.level} · {alert.title}
                   </h4>
                   <p>{alert.body}</p>
+                  <LiveMapAlertReceipt alert={alert} />
                 </div>
               ))
             ) : (

@@ -2489,6 +2489,7 @@ function injectFollowThreadStyles() {
       display: inline-flex;
       align-items: center;
       gap: 4px;
+      border: 0;
       font-size: 12px;
       z-index: 10;
       cursor: help;
@@ -2497,14 +2498,21 @@ function injectFollowThreadStyles() {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
       font-weight: 500;
+      font-family: inherit;
       box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
       transition: transform 0.2s ease, box-shadow 0.2s ease;
       white-space: nowrap;
     }
 
-    .follow-thread-eye-icon:hover {
+    .follow-thread-eye-icon:hover,
+    .follow-thread-eye-icon:focus-visible {
       transform: scale(1.05);
       box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+    }
+
+    .follow-thread-eye-icon:focus-visible {
+      outline: 2px solid #4338ca;
+      outline-offset: 2px;
     }
 
     .follow-thread-eye-icon .eye-emoji {
@@ -2589,18 +2597,21 @@ function injectFollowThreadStyles() {
     }
 
     .follow-thread-eye-icon:hover + .follow-thread-tooltip,
+    .follow-thread-eye-icon:focus + .follow-thread-tooltip,
     .follow-thread-tooltip:hover {
       opacity: 1;
       pointer-events: auto;
     }
 
     .follow-thread-tooltip.position-below:hover,
-    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-below {
+    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-below,
+    .follow-thread-eye-icon:focus + .follow-thread-tooltip.position-below {
       transform: translateY(0);
     }
 
     .follow-thread-tooltip.position-above:hover,
-    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-above {
+    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-above,
+    .follow-thread-eye-icon:focus + .follow-thread-tooltip.position-above {
       transform: translateY(0);
     }
 
@@ -2707,12 +2718,17 @@ function injectFollowThreadStyles() {
       position: absolute;
       top: 8px;
       right: 80px; /* 默认值，会被 JS 动态覆盖 */
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 0;
       background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%);
       color: white;
       padding: 3px 8px;
       border-radius: 12px;
       font-size: 10px;
       font-weight: 600;
+      font-family: inherit;
       cursor: help;
       z-index: 10;
       box-shadow: 0 2px 4px rgba(156, 39, 176, 0.3);
@@ -2720,9 +2736,15 @@ function injectFollowThreadStyles() {
       white-space: nowrap;
     }
 
-    .follow-thread-related-badge:hover {
+    .follow-thread-related-badge:hover,
+    .follow-thread-related-badge:focus-visible {
       transform: scale(1.05);
       box-shadow: 0 4px 8px rgba(156, 39, 176, 0.4);
+    }
+
+    .follow-thread-related-badge:focus-visible {
+      outline: 2px solid #7b1fa2;
+      outline-offset: 2px;
     }
 
     /* 关联类型 Tooltip - 增强版 */
@@ -2796,18 +2818,21 @@ function injectFollowThreadStyles() {
     }
 
     .follow-thread-related-badge:hover + .follow-thread-related-tooltip,
+    .follow-thread-related-badge:focus + .follow-thread-related-tooltip,
     .follow-thread-related-tooltip:hover {
       opacity: 1;
       pointer-events: auto;
     }
 
     .follow-thread-related-tooltip.position-below:hover,
-    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-below {
+    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-below,
+    .follow-thread-related-badge:focus + .follow-thread-related-tooltip.position-below {
       transform: translateY(0);
     }
 
     .follow-thread-related-tooltip.position-above:hover,
-    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-above {
+    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-above,
+    .follow-thread-related-badge:focus + .follow-thread-related-tooltip.position-above {
       transform: translateY(0);
     }
 
@@ -3053,6 +3078,19 @@ function injectFollowThreadStyles() {
       color: #4b5563;
       line-height: 1.4;
       margin-top: 4px;
+    }
+
+    .glip-ai-marker-tooltip-receipt {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e7eb;
+      color: #6b7280;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .glip-ai-marker-tooltip-meta + .glip-ai-marker-tooltip-meta {
+      margin-top: 2px;
     }
 
     .pai-glip-pending-scheduled-list {
@@ -3358,24 +3396,233 @@ interface PendingScheduledIdentity {
   avatarUrl?: string;
 }
 
+const GLIP_AI_MARKER_CACHE_STALE_MS = 30 * 60 * 1000;
+const GLIP_AI_MARKER_CACHE_SECONDS_THRESHOLD = 10_000_000_000;
+
 let pendingScheduledVisualsAttached = false;
 let pendingScheduledRenderRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingScheduledRenderInFlight = false;
 let pendingScheduledScrollSyncFrame: number | null = null;
 
+function getGlipAiMarkerDisplayLabel(marker: GlipMessageMarkerRecord): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  if (!english) return marker.label;
+
+  switch (marker.type) {
+    case 'outreach_initial_ask':
+      return 'Following up';
+    case 'snooze_pending': {
+      const compactTime = marker.label.replace(/^稍后\s*/, '').trim();
+      return compactTime ? `Remind ${compactTime}` : 'Remind';
+    }
+    case 'outreach_followup':
+      return 'AI follow-up';
+    case 'scheduled_asme':
+      return 'AI sent';
+    case 'scheduled_bot':
+      return 'Bot sent';
+    case 'scheduled_ai_report':
+      return 'AI report';
+    case 'follow_thread_original':
+      return 'Watching thread';
+    case 'follow_thread_related':
+      return 'Related';
+    default:
+      return marker.label;
+  }
+}
+
+function getGlipAiMarkerTooltipText(marker: GlipMessageMarkerRecord): string {
+  const tooltip = marker.tooltip || '';
+  if (getContentScriptUiLanguage() !== 'en-US') return tooltip;
+  return tooltip.replace(/^提醒时间：/, 'Reminder time: ');
+}
+
 function getGlipAiMarkerLine(marker: GlipMessageMarkerRecord): string {
-  const tooltip = marker.tooltip ? `：${truncateText(marker.tooltip, 90)}` : '';
-  return `${marker.label}${tooltip}`;
+  const separator = getContentScriptUiLanguage() === 'en-US' ? ': ' : '：';
+  const tooltip = getGlipAiMarkerTooltipText(marker)
+    ? `${separator}${truncateText(getGlipAiMarkerTooltipText(marker), 90)}`
+    : '';
+  return `${getGlipAiMarkerDisplayLabel(marker)}${tooltip}`;
+}
+
+function getGlipAiMarkerStatusBoundary(marker: GlipMessageMarkerRecord): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  switch (marker.type) {
+    case 'outreach_initial_ask':
+      return english
+        ? 'Following up means Personal AI is waiting for the original thread or next Outreach check; it does not mean a new follow-up was sent.'
+        : '跟进中表示正在等待原消息线程或下一次检查，不代表已经发送新追问。';
+    case 'snooze_pending':
+      return english
+        ? 'Remind means this item is still in the Snooze queue; the Bot will not remind before the due time, and completion, rescheduling, or deletion still belongs to Scheduled Messages.'
+        : '稍后表示仍在 Snooze 队列，未到点前不会由 Bot 提醒，完成、改期或删除以 Scheduled Messages 为准。';
+    case 'outreach_followup':
+      return english
+        ? 'AI follow-up means an Outreach follow-up send event was recorded; whether the goal is satisfied still belongs to the Outreach session.'
+        : 'AI追问表示已记录一次 Outreach 追问发送事件，是否满足目标仍看对应 Outreach 会话。';
+    case 'scheduled_asme':
+      return english
+        ? 'AI sent comes from a successful execution log and means this message was delivered through AsMe, not queued for later.'
+        : 'AI代发来自成功执行日志，表示该消息已按 AsMe 路径投递，不是待发送队列。';
+    case 'scheduled_bot':
+      return english
+        ? 'Bot sent comes from a successful execution log and means this message was delivered by Bot, not queued for later.'
+        : 'AI推送来自成功执行日志，表示该消息已由 Bot 投递，不是待发送队列。';
+    case 'scheduled_ai_report':
+      return english
+        ? 'AI report comes from a successful execution log and means an AI or JiraAutomation result was delivered to this message.'
+        : 'AI报告来自成功执行日志，表示 AI 或 JiraAutomation 结果已投递到这条消息。';
+    case 'follow_thread_original':
+    case 'follow_thread_related':
+      return english
+        ? 'Thread watch markers come from local watch settings and do not automatically send messages or confirm tasks.'
+        : '关注后续标注来自本地关注配置，不会自动发送消息或确认事项。';
+    default:
+      return english
+        ? 'This is only a local marker status explanation, not a live remote status check.'
+        : '这只是本地 marker 状态说明，不代表实时远端状态检查。';
+  }
+}
+
+function getGlipAiMarkerStatusBoundarySummary(
+  markers: GlipMessageMarkerRecord[],
+): string {
+  return Array.from(
+    new Set(markers.map((marker) => getGlipAiMarkerStatusBoundary(marker))),
+  ).join('；');
+}
+
+function getGlipAiMarkerNextStep(marker: GlipMessageMarkerRecord): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  switch (marker.type) {
+    case 'outreach_initial_ask':
+      return english
+        ? 'Open the Outreach session to review whether the original thread satisfies the goal, or wait for the next check.'
+        : '到主动询问会话确认原线程是否已满足目标，或等待下一次检查。';
+    case 'snooze_pending':
+      return english
+        ? 'Use Scheduled Messages Remind to complete, reschedule, or delete this reminder.'
+        : '到 Scheduled Messages 的 Snooze 列表完成、改期或删除这条提醒。';
+    case 'outreach_followup':
+      return english
+        ? 'Review the Outreach session to confirm whether the goal is now satisfied and whether follow-ups continue.'
+        : '到对应 Outreach 会话核对目标是否已满足，以及后续是否还会继续。';
+    case 'scheduled_asme':
+    case 'scheduled_bot':
+    case 'scheduled_ai_report':
+      return english
+        ? 'Check Scheduled Messages logs for the delivery record or failures; this is not a pending send.'
+        : '到 Scheduled Messages 执行日志核对投递记录或失败原因；这不是待发送项。';
+    case 'follow_thread_original':
+    case 'follow_thread_related':
+      return english
+        ? 'Use Follow Threads to review or stop the local watch rule.'
+        : '到关注后续管理页复核或停止本地关注规则。';
+    default:
+      return english
+        ? 'Review the owning queue or source before treating this marker as current state.'
+        : '先回到对应队列或来源复核，再把这条标注当作当前状态。';
+  }
+}
+
+function getGlipAiMarkerNextStepSummary(
+  markers: GlipMessageMarkerRecord[],
+): string {
+  return Array.from(
+    new Set(markers.map((marker) => getGlipAiMarkerNextStep(marker))),
+  ).join('；');
+}
+
+function getGlipAiMarkerSourceLabel(source: GlipMessageMarkerRecord['source']): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  switch (source) {
+    case 'local':
+      return english ? 'Local watch rule' : '本地关注配置';
+    case 'memory_service':
+      return english ? 'Memory Service follow-up' : 'Memory Service 跟进';
+    case 'sheet':
+      return english ? 'Sheet schedule/log' : 'Sheet 排期/执行日志';
+    default:
+      return english ? 'Unknown source' : '未知来源';
+  }
+}
+
+function normalizeGlipAiMarkerCacheUpdatedAt(updatedAt?: number): number | undefined {
+  const timestamp = Number(updatedAt);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return undefined;
+  }
+  const timestampMs =
+    timestamp < GLIP_AI_MARKER_CACHE_SECONDS_THRESHOLD
+      ? timestamp * 1000
+      : timestamp;
+  const date = new Date(timestampMs);
+  return Number.isNaN(date.getTime()) ? undefined : timestampMs;
+}
+
+function formatGlipAiMarkerCacheUpdatedAt(updatedAt?: number): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const timestampMs = normalizeGlipAiMarkerCacheUpdatedAt(updatedAt);
+  if (!timestampMs) {
+    return english ? 'not refreshed yet' : '尚未刷新';
+  }
+  const date = new Date(timestampMs);
+  return new Intl.DateTimeFormat(getContentScriptUiLanguage(), {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function getGlipAiMarkerCacheBoundaryNotice(updatedAt?: number): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const timestampMs = normalizeGlipAiMarkerCacheUpdatedAt(updatedAt);
+  if (!timestampMs) {
+    return english
+      ? 'Status boundary: local marker snapshot; remote status has not refreshed yet. Refresh the conversation or wait for background sync.'
+      : '状态边界：本地标注快照，尚未刷新远端状态；可刷新会话或等待后台同步。';
+  }
+
+  if (Date.now() - timestampMs > GLIP_AI_MARKER_CACHE_STALE_MS) {
+    return english
+      ? 'Status boundary: local marker snapshot may be stale; refresh the conversation or wait for background sync before relying on it.'
+      : '状态边界：本地标注快照可能过旧；刷新会话或等待后台同步后再确认。';
+  }
+
+  return english
+    ? 'Status boundary: local marker snapshot, not a live remote status check.'
+    : '状态边界：本地标注快照，不代表实时远端查询。';
+}
+
+function getGlipAiMarkerSourceSummary(markers: GlipMessageMarkerRecord[]): string {
+  const labels = Array.from(
+    new Set(markers.map((marker) => getGlipAiMarkerSourceLabel(marker.source))),
+  );
+  return labels.join(' / ');
 }
 
 function getGlipAiMarkerAriaLabel(
   markers: GlipMessageMarkerRecord[],
+  cacheUpdatedAt?: number,
 ): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
   const markerLines = markers.map(getGlipAiMarkerLine);
-  if (markerLines.length <= 1) {
-    return `AI 标注：${markerLines[0] || ''}`;
-  }
-  return `AI 标注，共 ${markerLines.length} 项：${markerLines.join('；')}`;
+  const markerSummary =
+    markerLines.length <= 1
+      ? `${english ? 'AI marker' : 'AI 标注'}${english ? ': ' : '：'}${markerLines[0] || ''}`
+      : english
+        ? `AI marker, ${markerLines.length} items: ${markerLines.join('; ')}`
+        : `AI 标注，共 ${markerLines.length} 项：${markerLines.join('；')}`;
+  const sourceSummary = getGlipAiMarkerSourceSummary(markers);
+  const cacheSummary = formatGlipAiMarkerCacheUpdatedAt(cacheUpdatedAt);
+  const cacheBoundaryNotice = getGlipAiMarkerCacheBoundaryNotice(cacheUpdatedAt);
+  const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
+  const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+  return english
+    ? `${markerSummary}; Status meaning: ${statusBoundarySummary}; Next step: ${nextStepSummary}; Marker source: ${sourceSummary}; Cache refreshed: ${cacheSummary}; ${cacheBoundaryNotice}`
+    : `${markerSummary}；状态口径：${statusBoundarySummary}；下一步：${nextStepSummary}；标注来源：${sourceSummary}；缓存刷新：${cacheSummary}；${cacheBoundaryNotice}`;
 }
 
 function getCurrentGlipChatId(): string {
@@ -4040,11 +4287,17 @@ async function decorateFollowThreadMessages() {
       const rightOffset = calculateTimeElementWidth(card);
 
       // 创建 👁 图标元素（包含过期时间文字）
-      const eyeIcon = document.createElement('div');
+      const eyeIcon = document.createElement('button');
+      eyeIcon.type = 'button';
       eyeIcon.className = 'follow-thread-eye-icon';
       eyeIcon.style.right = `${rightOffset}px`;
+      const followAriaLabel = `${ui('正在关注后续')}：${truncateText(
+        primaryMarker.tooltip || '',
+        90,
+      ) || timeText}`;
+      eyeIcon.setAttribute('aria-label', followAriaLabel);
+      eyeIcon.title = followAriaLabel;
       eyeIcon.innerHTML = `<span class="eye-emoji">👁</span> ${timeText}`;
-      eyeIcon.title = ui('正在关注后续');
       card.appendChild(eyeIcon);
 
       // 创建丰富的浮出层
@@ -4081,11 +4334,18 @@ async function decorateFollowThreadMessages() {
       const rightOffset = calculateTimeElementWidth(card);
 
       // 添加关联徽章
-      const badge = document.createElement('div');
+      const badge = document.createElement('button');
+      badge.type = 'button';
       badge.className = 'follow-thread-related-badge';
       badge.style.right = `${rightOffset}px`;
       const relationType = String(primaryMarker.metadata?.relationType || '');
       badge.textContent = `${getRelationTypeIcon(relationType)} ${ui('关联')}`;
+      const relatedAriaLabel = `${ui('关注后续的关联消息')}：${truncateText(
+        primaryMarker.tooltip || '',
+        90,
+      ) || ui('关联')}`;
+      badge.setAttribute('aria-label', relatedAriaLabel);
+      badge.title = relatedAriaLabel;
       card.appendChild(badge);
 
       // 添加详细 Tooltip
@@ -4117,11 +4377,15 @@ async function decorateFollowThreadMessages() {
     badge.type = 'button';
     badge.className = `glip-ai-marker-badge ${primaryMarker.type.replace(/_/g, '-')}`;
     badge.style.right = `${rightOffset}px`;
-    badge.setAttribute('aria-label', getGlipAiMarkerAriaLabel(markers));
-    badge.title = getGlipAiMarkerAriaLabel(markers);
+    const markerAriaLabel = getGlipAiMarkerAriaLabel(
+      markers,
+      markerCache?.updatedAt,
+    );
+    badge.setAttribute('aria-label', markerAriaLabel);
+    badge.title = markerAriaLabel;
     const badgeLabel = document.createElement('span');
     badgeLabel.className = 'glip-ai-marker-label';
-    badgeLabel.textContent = primaryMarker.label;
+    badgeLabel.textContent = getGlipAiMarkerDisplayLabel(primaryMarker);
     badge.appendChild(badgeLabel);
     if (markers.length > 1) {
       const count = document.createElement('span');
@@ -4134,14 +4398,37 @@ async function decorateFollowThreadMessages() {
 
     const tooltip = document.createElement('div');
     tooltip.className = 'glip-ai-marker-tooltip';
+    const sourceSummary = getGlipAiMarkerSourceSummary(markers);
+    const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
+    const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+    const cacheUpdatedAt = formatGlipAiMarkerCacheUpdatedAt(
+      markerCache?.updatedAt,
+    );
+    const cacheBoundaryNotice = getGlipAiMarkerCacheBoundaryNotice(
+      markerCache?.updatedAt,
+    );
+    const english = getContentScriptUiLanguage() === 'en-US';
+    const tooltipTitle = getGlipAiMarkerDisplayLabel(primaryMarker);
+    const statusLabel = english ? 'Status meaning' : '状态口径';
+    const nextStepLabel = english ? 'Next step' : '下一步';
+    const sourceLabel = english ? 'Marker source' : '标注来源';
+    const cacheLabel = english ? 'Cache refreshed' : '缓存刷新';
+    const tooltipSeparator = english ? ': ' : '：';
     tooltip.innerHTML = `
-      <div class="glip-ai-marker-tooltip-title">${escapeHtml(primaryMarker.label)}</div>
+      <div class="glip-ai-marker-tooltip-title">${escapeHtml(tooltipTitle)}</div>
       ${markers
         .map(
           (marker) =>
-            `<div class="glip-ai-marker-tooltip-line">${escapeHtml(marker.label)}${marker.tooltip ? `：${escapeHtml(truncateText(marker.tooltip, 90))}` : ''}</div>`,
+            `<div class="glip-ai-marker-tooltip-line">${escapeHtml(getGlipAiMarkerDisplayLabel(marker))}${getGlipAiMarkerTooltipText(marker) ? `${tooltipSeparator}${escapeHtml(truncateText(getGlipAiMarkerTooltipText(marker), 90))}` : ''}</div>`,
         )
         .join('')}
+      <div class="glip-ai-marker-tooltip-receipt">
+        <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-status-boundary">${escapeHtml(statusLabel)}${tooltipSeparator}${escapeHtml(statusBoundarySummary)}</div>
+        <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-next-step">${escapeHtml(nextStepLabel)}${tooltipSeparator}${escapeHtml(nextStepSummary)}</div>
+        <div class="glip-ai-marker-tooltip-meta">${escapeHtml(sourceLabel)}${tooltipSeparator}${escapeHtml(sourceSummary)}</div>
+        <div class="glip-ai-marker-tooltip-meta">${escapeHtml(cacheLabel)}${tooltipSeparator}${escapeHtml(cacheUpdatedAt)}</div>
+        <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-boundary">${escapeHtml(cacheBoundaryNotice)}</div>
+      </div>
     `;
     card.appendChild(tooltip);
     positionTooltip(tooltip, badge);

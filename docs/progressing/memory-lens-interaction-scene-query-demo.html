@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory Lens InteractionScene 查询可视化</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212f;
+      --muted: #647084;
+      --line: #d9e0ea;
+      --paper: #f6f8fb;
+      --panel: #ffffff;
+      --jira: #0c66e4;
+      --rc: #007a5a;
+      --warn: #b54708;
+      --good: #15803d;
+      --dark: #202937;
+      --code: #101828;
+      --chip: #edf2f7;
+      --accent: #8b5cf6;
+      --shadow: 0 18px 45px rgba(24, 33, 47, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(12, 102, 228, 0.08), transparent 28%),
+        linear-gradient(210deg, rgba(0, 122, 90, 0.08), transparent 30%),
+        var(--paper);
+    }
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .decision {
+      min-width: 286px;
+      border: 1px solid rgba(21, 128, 61, 0.28);
+      background: #f0fbf5;
+      padding: 14px 16px;
+      border-radius: 8px;
+      color: #14532d;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 22px 0;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      box-shadow: 0 1px 0 rgba(24, 33, 47, 0.04);
+    }
+
+    .tab[aria-selected="true"] {
+      border-color: var(--dark);
+      background: var(--dark);
+      color: #fff;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 0.96fr 1.12fr 0.92fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-height: 640px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .eyebrow {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .panel-body {
+      padding: 18px;
+    }
+
+    .browser {
+      border: 1px solid #cfd7e3;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 456px;
+    }
+
+    .browser-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #dbe3ee;
+      background: #eef2f7;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 99px;
+      background: #94a3b8;
+    }
+
+    .address {
+      flex: 1;
+      min-width: 0;
+      padding: 6px 9px;
+      border: 1px solid #d2dae6;
+      border-radius: 6px;
+      background: #fff;
+      color: #475569;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .page {
+      padding: 18px;
+      min-height: 405px;
+    }
+
+    .jira-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .issue-key {
+      color: var(--jira);
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .status {
+      padding: 5px 9px;
+      border-radius: 6px;
+      background: #eaf2ff;
+      color: #0747a6;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .field {
+      border: 1px solid #dbe3ee;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfdff;
+      min-height: 74px;
+    }
+
+    .field.hot {
+      border-color: rgba(181, 71, 8, 0.45);
+      background: #fff7ed;
+      box-shadow: inset 0 0 0 1px rgba(181, 71, 8, 0.12);
+    }
+
+    .field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .field strong {
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .comment-box {
+      margin-top: 16px;
+      border: 1px solid #ccd6e3;
+      border-radius: 8px;
+      background: #fff;
+      min-height: 104px;
+      padding: 12px;
+      color: #94a3b8;
+      position: relative;
+    }
+
+    .comment-box.active {
+      border-color: var(--jira);
+      box-shadow: 0 0 0 3px rgba(12, 102, 228, 0.14);
+      color: #334155;
+    }
+
+    .compose-icon {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--dark);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      box-shadow: 0 8px 20px rgba(24, 33, 47, 0.25);
+    }
+
+    .chat {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 4px 0;
+    }
+
+    .message {
+      max-width: 88%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .message.me {
+      margin-left: auto;
+      background: #e8f7f1;
+      border: 1px solid rgba(0, 122, 90, 0.2);
+    }
+
+    .sender {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .lens-card {
+      margin-top: 18px;
+      border: 1px solid rgba(139, 92, 246, 0.32);
+      background: #faf7ff;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .lens-card.silent {
+      border-color: rgba(100, 116, 139, 0.25);
+      background: #f8fafc;
+      color: #64748b;
+    }
+
+    .lens-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: #6d28d9;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .lens-text {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      min-height: 90px;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .code-wrap {
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      background: var(--code);
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      color: #e5e7eb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 475px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: var(--chip);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .result-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .result {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 13px;
+    }
+
+    .result.good {
+      border-color: rgba(21, 128, 61, 0.35);
+      background: #f0fbf5;
+    }
+
+    .result.warn {
+      border-color: rgba(181, 71, 8, 0.35);
+      background: #fff7ed;
+    }
+
+    .result h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .result p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 12px;
+    }
+
+    .matrix th,
+    .matrix td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .matrix th {
+      background: #f8fafc;
+      color: #475569;
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1180px) {
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        min-height: 0;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        padding: 16px;
+      }
+
+      header {
+        flex-direction: column;
+      }
+
+      .decision {
+        min-width: 0;
+        width: 100%;
+      }
+
+      .field-grid,
+      .steps {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>Memory Lens 查询如何带上 InteractionScene</h1>
+        <p class="subtitle">
+          前端不调用 LLM 生成“用户现在在做什么”。前端只采集可审计的交互事实：URL、页面字段、可见消息、active element、输入框状态、选中文本和附近文本。Memory Service 再把这些事实归一化为 SceneFrame，并用策略矩阵决定 Lens 是否展示、静默，或交给 Compose Assist。
+        </p>
+      </div>
+      <div class="decision">
+        <strong>设计选择</strong><br />
+        InteractionScene 是结构化 telemetry，不是前端 LLM 总结。这样可复现、可测试、可解释，也避免把页面内容先发给一个额外模型。
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="场景切换">
+      <button class="tab" type="button" data-scenario="jiraRead" aria-selected="true">Jira 阅读字段</button>
+      <button class="tab" type="button" data-scenario="rcDiscuss" aria-selected="false">RingCentral 讨论估算</button>
+      <button class="tab" type="button" data-scenario="jiraComment" aria-selected="false">Jira 写评论</button>
+    </nav>
+
+    <section class="flow">
+      <article class="panel">
+        <div class="panel-head">
+          <span class="eyebrow">1. 当前页面和操作</span>
+          <h2 id="sceneTitle">Jira issue 页面正在阅读字段</h2>
+        </div>
+        <div class="panel-body">
+          <div class="browser">
+            <div class="browser-bar">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <div class="address" id="address">https://jira.example.com/browse/MTR-148115</div>
+            </div>
+            <div class="page" id="pageMock"></div>
+          </div>
+          <p class="footer-note" id="frontEndNote">
+            前端采集到的是事实：issue key、页面可见字段、当前没有 active composer。
+          </p>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <span class="eyebrow">2. Lens 查询 payload</span>
+          <h2>InteractionScene 随 /context-recall 一起提交</h2>
+        </div>
+        <div class="panel-body">
+          <div class="steps">
+            <div class="step">
+              <strong>DOM/URL</strong>
+              <span>页面标题、host、issue key、conversation id。</span>
+            </div>
+            <div class="step">
+              <strong>可见事实</strong>
+              <span>Jira 字段、可见消息、状态 badge。</span>
+            </div>
+            <div class="step">
+              <strong>交互状态</strong>
+              <span>active element、是否 focus 输入框、draft。</span>
+            </div>
+            <div class="step">
+              <strong>后端判断</strong>
+              <span>Memory Service 推导 SceneFrame 和 cue policy。</span>
+            </div>
+          </div>
+          <div class="code-wrap">
+            <div class="code-head">
+              <span>POST /context-recall</span>
+              <span class="badge" id="payloadBadge">scene: jira_issue_reading</span>
+            </div>
+            <pre id="payload"></pre>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <span class="eyebrow">3. Memory Service 决策</span>
+          <h2 id="decisionTitle">静默：页面已显示字段值</h2>
+        </div>
+        <div class="panel-body">
+          <div class="result-list">
+            <div class="result" id="sceneFrameBox">
+              <h3>SceneFrame</h3>
+              <p id="sceneFrameText"></p>
+            </div>
+            <div class="result" id="policyBox">
+              <h3>策略结果</h3>
+              <p id="policyText"></p>
+            </div>
+            <div class="result" id="userBox">
+              <h3>用户看到什么</h3>
+              <p id="userText"></p>
+            </div>
+          </div>
+
+          <table class="matrix" aria-label="同一条记忆在不同场景的行为">
+            <thead>
+              <tr>
+                <th>同一条记忆</th>
+                <th>当前场景</th>
+                <th>应该行为</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>MTR-148115 DEV Estimate New = 0.4，口径人天，未锁定</td>
+                <td>Jira 阅读字段</td>
+                <td>字段值 echo 静默；只允许展示页面没有的口径/风险</td>
+              </tr>
+              <tr>
+                <td>MTR-148115 DEV Estimate New = 0.4，口径人天，未锁定</td>
+                <td>RingCentral 讨论估算</td>
+                <td>Lens 展示只读 cue，帮助用户现场回复</td>
+              </tr>
+              <tr>
+                <td>MTR-148115 DEV Estimate New = 0.4，口径人天，未锁定</td>
+                <td>Jira comment 输入框</td>
+                <td>交给 Compose Assist，生成 draft hint</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const scenarios = {
+      jiraRead: {
+        title: 'Jira issue 页面正在阅读字段',
+        address: 'https://jira.example.com/browse/MTR-148115',
+        badge: 'scene: jira_issue_reading',
+        note: '前端采集到的是事实：issue key、页面可见字段、当前没有 active composer。',
+        decisionTitle: '静默：页面已显示字段值',
+        page: `
+          <div class="jira-title">
+            <div>
+              <div class="issue-key">MTR-148115</div>
+              <h2>Support estimate update for Q3 planning</h2>
+            </div>
+            <span class="status">In Progress</span>
+          </div>
+          <div class="field-grid">
+            <div class="field hot">
+              <label>DEV Estimate New</label>
+              <strong>0.4</strong>
+            </div>
+            <div class="field">
+              <label>Original Estimate</label>
+              <strong>0.5</strong>
+            </div>
+            <div class="field">
+              <label>Assignee</label>
+              <strong style="font-size:16px">Esone Qiu</strong>
+            </div>
+            <div class="field">
+              <label>Status</label>
+              <strong style="font-size:16px">Ready for review</strong>
+            </div>
+          </div>
+          <div class="comment-box">Add comment...</div>
+          <div class="lens-card silent">
+            <div class="lens-top"><span>Memory Lens</span><span>silent</span></div>
+            <p class="lens-text">不复述页面已经显示的 DEV Estimate New = 0.4。</p>
+          </div>
+        `,
+        payload: {
+          surface: 'web_passive',
+          contextType: 'jira_issue',
+          title: 'MTR-148115 - Support estimate update for Q3 planning',
+          url: 'https://jira.example.com/browse/MTR-148115',
+          primaryText: 'MTR-148115 Support estimate update for Q3 planning DEV Estimate New 0.4',
+          sourceContext: {
+            contextType: 'jira_issue',
+            sourceType: 'jira',
+            host: 'jira.example.com',
+            issueKey: 'MTR-148115'
+          },
+          interactionScene: {
+            sceneType: 'jira_issue_reading',
+            surface: 'memory_lens',
+            userMode: 'read',
+            issueKey: 'MTR-148115',
+            activeElement: {
+              kind: 'none',
+              hasFocus: false
+            },
+            visibleFacts: [
+              {
+                kind: 'jira_field',
+                name: 'DEV Estimate New',
+                value: '0.4',
+                source: 'current_page',
+                issueKey: 'MTR-148115',
+                confidence: 0.94
+              }
+            ]
+          },
+          sourceTypes: ['message', 'jira', 'source_memory', 'rehearsal'],
+          debug: true
+        },
+        sceneFrame: 'sceneType=jira_issue_reading，userMode=read，fieldHints=estimate，visibleFacts 命中 DEV Estimate New: 0.4。',
+        policy: '召回到的 estimate 记忆与页面 visibleFact 同字段同值，触发 visible_fact_echo gate。只复述字段值的 cue 被 suppress；若记忆还有页面未显示的口径/风险，可另行展示。',
+        user: '用户看 Jira 字段时不会被 Lens 念一遍 0.4。页面没有的新信息才可能出现。'
+      },
+      rcDiscuss: {
+        title: 'RingCentral 群聊正在讨论估算',
+        address: 'https://app.ringcentral.com/messages/teams/eng-planning',
+        badge: 'scene: ringcentral_estimate_discussion',
+        note: '前端采集到的是事实：群聊可见消息提到 MTR-148115、estimate、0.4，但页面没有 Jira 字段表格。',
+        decisionTitle: '展示 Lens：聊天现场需要记忆补位',
+        page: `
+          <h2 style="margin:0 0 14px"># eng-planning</h2>
+          <div class="chat">
+            <div class="message">
+              <span class="sender">David</span>
+              MTR-148115 这个 DEV estimate 现在按多少沟通？
+            </div>
+            <div class="message">
+              <span class="sender">Barry</span>
+              我记得之前有个 0.4，但不确定是不是最终锁定。
+            </div>
+            <div class="message me">
+              <span class="sender">Me</span>
+              我看下之前的口径...
+            </div>
+          </div>
+          <div class="lens-card">
+            <div class="lens-top"><span>Memory Lens</span><span>强相关</span></div>
+            <p class="lens-text">MTR-148115 当前 DEV Estimate New 是 0.4；上次讨论的口径是人天，且尚未最终锁定。</p>
+          </div>
+        `,
+        payload: {
+          surface: 'web_passive',
+          contextType: 'message_thread',
+          title: 'RingCentral #eng-planning',
+          url: 'https://app.ringcentral.com/messages/teams/eng-planning',
+          primaryText: 'David: MTR-148115 这个 DEV estimate 现在按多少沟通？ Barry: 我记得之前有个 0.4，但不确定是不是最终锁定。',
+          sourceContext: {
+            contextType: 'message_thread',
+            sourceType: 'glip',
+            host: 'app.ringcentral.com',
+            groupId: 'eng-planning',
+            participants: ['David', 'Barry', 'Esone']
+          },
+          interactionScene: {
+            sceneType: 'ringcentral_estimate_discussion',
+            surface: 'memory_lens',
+            userMode: 'read',
+            groupId: 'eng-planning',
+            activeElement: {
+              kind: 'none',
+              hasFocus: false
+            },
+            nearbyMessages: [
+              {
+                sender: 'David',
+                text: 'MTR-148115 这个 DEV estimate 现在按多少沟通？'
+              },
+              {
+                sender: 'Barry',
+                text: '我记得之前有个 0.4，但不确定是不是最终锁定。'
+              }
+            ],
+            sourceAnchorHints: ['MTR-148115', 'estimate', '0.4', '未锁定']
+          },
+          entityHints: [
+            { kind: 'jira_issue', value: 'MTR-148115' },
+            { kind: 'topic', value: 'estimate' }
+          ],
+          sourceTypes: ['message', 'jira', 'source_memory', 'rehearsal'],
+          debug: true
+        },
+        sceneFrame: 'sceneType=ringcentral_estimate_discussion，issueKey=MTR-148115，topics=estimate，source=group:eng-planning。',
+        policy: '当前场景没有页面原生 Jira 字段，estimate 记忆不是 echo。Cue Compiler 可以生成 remember cue，并附 sourceRefs 和 whyNow。',
+        user: '用户在群聊现场看到只读提示，不需要切回 Jira 或翻历史消息。'
+      },
+      jiraComment: {
+        title: 'Jira issue 页面正在写 comment',
+        address: 'https://jira.example.com/browse/MTR-148115',
+        badge: 'scene: jira_comment_composing',
+        note: '前端采集到的是事实：active element 是 comment composer，用户正在准备写评论。',
+        decisionTitle: '交给 Compose Assist：Lens 不抢入口',
+        page: `
+          <div class="jira-title">
+            <div>
+              <div class="issue-key">MTR-148115</div>
+              <h2>Support estimate update for Q3 planning</h2>
+            </div>
+            <span class="status">In Progress</span>
+          </div>
+          <div class="field-grid">
+            <div class="field hot">
+              <label>DEV Estimate New</label>
+              <strong>0.4</strong>
+            </div>
+            <div class="field">
+              <label>Original Estimate</label>
+              <strong>0.5</strong>
+            </div>
+          </div>
+          <div class="comment-box active">
+            准备说明这张票的 estimate...
+            <div class="compose-icon">AI</div>
+          </div>
+          <div class="lens-card silent">
+            <div class="lens-top"><span>Memory Lens</span><span>hidden</span></div>
+            <p class="lens-text">输入框场景由 Compose Assist 接管，Lens 右下角入口隐藏。</p>
+          </div>
+        `,
+        payload: {
+          surface: 'composer_guard',
+          contextType: 'jira_issue',
+          title: 'MTR-148115 - Support estimate update for Q3 planning',
+          url: 'https://jira.example.com/browse/MTR-148115',
+          primaryText: '准备说明这张票的 estimate...',
+          sourceContext: {
+            contextType: 'jira_issue',
+            sourceType: 'jira',
+            host: 'jira.example.com',
+            issueKey: 'MTR-148115'
+          },
+          interactionScene: {
+            sceneType: 'jira_comment_composing',
+            surface: 'compose_assist',
+            userMode: 'comment',
+            issueKey: 'MTR-148115',
+            activeElement: {
+              kind: 'contenteditable',
+              role: 'textbox',
+              mode: 'comment',
+              label: 'Add comment',
+              nearbyText: '准备说明这张票的 estimate...',
+              containerRole: 'jira-comment-composer',
+              hasFocus: true
+            },
+            draftText: '准备说明这张票的 estimate...',
+            visibleFacts: [
+              {
+                kind: 'jira_field',
+                name: 'DEV Estimate New',
+                value: '0.4',
+                source: 'current_page',
+                issueKey: 'MTR-148115',
+                confidence: 0.94
+              }
+            ]
+          },
+          sourceTypes: ['message', 'jira', 'source_memory', 'rehearsal'],
+          debug: true
+        },
+        sceneFrame: 'sceneType=jira_comment_composing，surface=compose_assist，userMode=comment，activeElement=contenteditable textbox。',
+        policy: '输入框场景由 Compose Assist 接管。Cue Compiler 生成 draft_hint，而不是 Memory Lens 只读卡片；Lens passive icon 应隐藏。',
+        user: '用户点击输入框旁的 Compose icon 后，得到可插入、可修改的 Jira comment 草稿提示。'
+      }
+    };
+
+    const pageMock = document.getElementById('pageMock');
+    const sceneTitle = document.getElementById('sceneTitle');
+    const address = document.getElementById('address');
+    const frontEndNote = document.getElementById('frontEndNote');
+    const payload = document.getElementById('payload');
+    const payloadBadge = document.getElementById('payloadBadge');
+    const decisionTitle = document.getElementById('decisionTitle');
+    const sceneFrameText = document.getElementById('sceneFrameText');
+    const policyText = document.getElementById('policyText');
+    const userText = document.getElementById('userText');
+    const policyBox = document.getElementById('policyBox');
+    const userBox = document.getElementById('userBox');
+
+    function renderScenario(key) {
+      const scenario = scenarios[key];
+      sceneTitle.textContent = scenario.title;
+      address.textContent = scenario.address;
+      frontEndNote.textContent = scenario.note;
+      pageMock.innerHTML = scenario.page;
+      payload.textContent = JSON.stringify(scenario.payload, null, 2);
+      payloadBadge.textContent = scenario.badge;
+      decisionTitle.textContent = scenario.decisionTitle;
+      sceneFrameText.textContent = scenario.sceneFrame;
+      policyText.textContent = scenario.policy;
+      userText.textContent = scenario.user;
+
+      policyBox.className = key === 'jiraRead' ? 'result warn' : 'result good';
+      userBox.className = key === 'jiraComment' ? 'result good' : 'result';
+
+      document.querySelectorAll('.tab').forEach((button) => {
+        button.setAttribute('aria-selected', String(button.dataset.scenario === key));
+      });
+    }
+
+    document.querySelectorAll('.tab').forEach((button) => {
+      button.addEventListener('click', () => renderScenario(button.dataset.scenario));
+    });
+
+    renderScenario('jiraRead');
+  </script>
+</body>
+</html>

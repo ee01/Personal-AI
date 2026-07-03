@@ -82,6 +82,8 @@ export class CueCompilerService {
             ? ('hidden' as const)
             : match.displayPriority === 'hidden'
             ? match.displayPriority
+            : isStaleRehearsalMatch(match)
+            ? (match.displayPriority ?? ('p2' as const))
             : ('p1' as const),
         metadata: {
           ...(match.metadata ?? {}),
@@ -109,6 +111,13 @@ export class CueCompilerService {
       needsMoreEvidenceCount,
     };
   }
+}
+
+function isStaleRehearsalMatch(match: ContextRecallMatch): boolean {
+  return (
+    match.type === 'rehearsal' &&
+    String(match.metadata?.rehearsal?.status || '') === 'stale'
+  );
 }
 
 function compileCueForMatch(

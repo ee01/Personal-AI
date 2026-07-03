@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scheduled Messages · 初始化最后一步：激活发送通道（交互 Demo）</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #5d6978;
+      --line: #d9e0e7;
+      --panel: #ffffff;
+      --page: #f0f2f5;
+      --primary: #0066cc;
+      --primary-soft: #e7f3ff;
+      --primary-border: #b3d7ff;
+      --warn-bg: #fff3cd;
+      --warn-border: #ffc107;
+      --warn-ink: #856404;
+      --ok: #28a745;
+      --ok-bg: #e9f7ec;
+      --gray-bg: #f5f6f8;
+      --danger: #b42318;
+      --radius: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+
+    .demo-bar {
+      max-width: 720px; margin: 24px auto 16px; padding: 14px 18px;
+      background: #fdf6ec; border: 1px solid #f0d9b5; border-radius: 10px;
+      font-size: 13px; color: #7a5b1f; line-height: 1.7;
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+    }
+    .demo-bar b { color: #5c4310; }
+    .demo-bar button {
+      flex-shrink: 0; padding: 6px 14px; font-size: 13px; cursor: pointer;
+      background: #fff; border: 1px solid #e0c894; border-radius: 6px; color: #7a5b1f;
+    }
+
+    .dialog {
+      max-width: 720px; margin: 0 auto 48px; background: var(--panel);
+      border-radius: var(--radius); box-shadow: 0 12px 40px rgba(31, 41, 51, 0.14);
+      overflow: hidden;
+    }
+    .dialog-header {
+      padding: 20px 24px 16px; border-bottom: 1px solid var(--line);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .dialog-header h1 { margin: 0; font-size: 18px; }
+    .step-badge {
+      font-size: 12px; color: var(--primary); background: var(--primary-soft);
+      border: 1px solid var(--primary-border); border-radius: 999px; padding: 4px 12px;
+    }
+    .dialog-body { padding: 20px 24px 24px; }
+
+    .base-strip {
+      display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;
+    }
+    .base-chip {
+      font-size: 12px; color: #1c7a36; background: var(--ok-bg);
+      border: 1px solid #bfe5c8; border-radius: 6px; padding: 4px 10px;
+    }
+    .intro { font-size: 14px; color: var(--muted); line-height: 1.7; margin: 0 0 18px; }
+    .intro b { color: var(--ink); }
+
+    .option-card {
+      border: 1.5px solid var(--line); border-radius: 10px; margin-bottom: 14px;
+      transition: border-color .2s, box-shadow .2s; overflow: hidden;
+    }
+    .option-card.checked { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.08); }
+    .option-head {
+      display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer;
+      user-select: none; background: #fff;
+    }
+    .option-card.checked .option-head { background: #f5faff; }
+    .option-head input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; }
+    .option-title { font-size: 15px; font-weight: 600; flex: 1; }
+    .option-title small { display: block; font-weight: 400; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+    .option-badge { font-size: 12px; border-radius: 6px; padding: 3px 10px; white-space: nowrap; }
+    .badge-main { color: var(--primary); background: var(--primary-soft); border: 1px solid var(--primary-border); }
+    .badge-plus { color: #6f42c1; background: #f3edfb; border: 1px solid #ddc9f5; }
+
+    .option-panel { display: none; padding: 4px 16px 18px; border-top: 1px dashed var(--line); background: #fcfdfe; }
+    .option-card.checked .option-panel { display: block; }
+
+    .panel-note {
+      font-size: 13px; color: var(--muted); line-height: 1.8; margin: 12px 0;
+      padding: 10px 14px; background: var(--gray-bg); border-radius: 8px;
+    }
+    .panel-note ul, .panel-note ol { margin: 4px 0 0; padding-left: 20px; }
+    .panel-note li { margin: 2px 0; }
+    .panel-note a { color: var(--primary); }
+
+    .field-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .field { flex: 1; min-width: 200px; }
+    .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+    .field label .req { color: var(--danger); }
+    .field input {
+      width: 100%; padding: 9px 12px; font-size: 14px; border: 1px solid var(--line);
+      border-radius: 8px; outline: none; transition: border-color .15s;
+    }
+    .field input:focus { border-color: var(--primary); }
+    .field input.invalid { border-color: var(--danger); background: #fff7f6; }
+    .field .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .field-error { font-size: 12.5px; color: var(--danger); margin: -6px 0 10px; display: none; }
+
+    .unlock-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .unlock-chip {
+      font-size: 12px; padding: 4px 10px; border-radius: 999px;
+      background: var(--primary-soft); color: var(--primary); border: 1px solid var(--primary-border);
+    }
+    .unlock-chip.plus { background: #f3edfb; color: #6f42c1; border-color: #ddc9f5; }
+
+    .ghost-btn {
+      padding: 8px 14px; font-size: 13px; cursor: pointer; background: #fff;
+      border: 1px solid var(--primary-border); color: var(--primary); border-radius: 8px;
+    }
+    .ghost-btn:hover { background: var(--primary-soft); }
+    .precheck-result { font-size: 13px; margin-left: 10px; display: none; }
+    .precheck-result.ok { color: var(--ok); display: inline; }
+
+    .dep-warning {
+      font-size: 13px; line-height: 1.7; border-radius: 8px; padding: 10px 14px; margin-top: 12px;
+    }
+    .dep-warning.amber { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-ink); }
+    .dep-warning.blue { background: var(--primary-soft); border: 1px solid var(--primary-border); color: #0b4f8f; }
+    .sec-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.6; }
+
+    .dialog-footer { padding: 16px 24px 22px; border-top: 1px solid var(--line); background: #fbfcfd; }
+    .summary-line {
+      display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; line-height: 1.6;
+      margin-bottom: 14px; border-radius: 8px; padding: 10px 14px;
+    }
+    .summary-line.mode-ok { background: var(--ok-bg); color: #1c7a36; border: 1px solid #bfe5c8; }
+    .summary-line.mode-warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-border); }
+    .summary-line.mode-skip { background: var(--gray-bg); color: var(--muted); border: 1px solid var(--line); }
+
+    .main-btn {
+      width: 100%; padding: 13px; font-size: 15px; font-weight: 600; cursor: pointer;
+      border: none; border-radius: 10px; transition: filter .15s;
+    }
+    .main-btn:hover { filter: brightness(0.96); }
+    .main-btn.style-primary { background: var(--primary); color: #fff; }
+    .main-btn.style-warn { background: var(--warn-border); color: #4a3a00; }
+    .main-btn.style-skip { background: #fff; color: var(--muted); border: 1.5px solid var(--line); }
+    .footer-hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 10px; }
+
+    /* 进度 & 结果视图 */
+    .flow-steps { list-style: none; margin: 8px 0 20px; padding: 0; }
+    .flow-steps li {
+      display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+      font-size: 14px; color: var(--muted); opacity: 0.35; transition: opacity .3s;
+    }
+    .flow-steps li.active, .flow-steps li.done { opacity: 1; }
+    .flow-steps li.done { color: var(--ink); }
+    .step-icon {
+      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
+      background: var(--gray-bg); border: 1px solid var(--line); color: var(--muted);
+    }
+    .flow-steps li.active .step-icon { border-color: var(--primary); color: var(--primary); }
+    .flow-steps li.done .step-icon { background: var(--ok-bg); border-color: #bfe5c8; color: var(--ok); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 13px; height: 13px; border: 2px solid var(--primary-border);
+      border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite;
+    }
+
+    .result-banner { border-radius: 10px; padding: 16px 18px; margin-bottom: 18px; line-height: 1.7; }
+    .result-banner.ok { background: var(--ok-bg); border: 1px solid #bfe5c8; }
+    .result-banner.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); }
+    .result-banner.gray { background: var(--gray-bg); border: 1px solid var(--line); }
+    .result-banner h2 { margin: 0 0 4px; font-size: 16px; }
+    .result-banner p { margin: 0; font-size: 13.5px; color: var(--muted); }
+
+    .probe-bubble {
+      display: flex; gap: 10px; margin: 16px 0; align-items: flex-start;
+    }
+    .probe-avatar {
+      width: 36px; height: 36px; border-radius: 8px; background: var(--primary-soft);
+      display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;
+      border: 1px solid var(--primary-border);
+    }
+    .probe-msg {
+      background: #fff; border: 1px solid var(--line); border-radius: 4px 12px 12px 12px;
+      padding: 12px 14px; font-size: 13.5px; line-height: 1.8; max-width: 480px;
+    }
+    .probe-msg .sender { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .probe-msg .meta { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+    .type-grid { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 18px; }
+    .type-chip {
+      font-size: 12.5px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+      background: var(--gray-bg); color: var(--muted);
+    }
+    .type-chip.on { background: var(--ok-bg); border-color: #bfe5c8; color: #1c7a36; }
+
+    .result-actions { display: flex; gap: 10px; margin-top: 6px; }
+    .result-actions .main-btn { flex: 1; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <div>
+    <b>交互 Demo · 初始化向导最后一步「激活发送通道」（v2：AsMe 为 AppScript 直发独立通道）</b><br/>
+    勾选 / 取消勾选两个能力项，观察板块展开、底部摘要与主按钮的联动；点击主按钮可以预览四种分支的完成流程。
+    AsMe 不再依赖 Jira 规则——由用户自己的 AppScript 直调 RingCentral API（基于 app-script-glip_sender.gs）。
+    对应 plan：<a href="./scheduled-messages-channel-activation-plan.md">scheduled-messages-channel-activation-plan.md</a>
+  </div>
+  <button onclick="resetDemo()">↺ 重置演示</button>
+</div>
+
+<div class="dialog" id="dialog">
+
+  <!-- ===== 视图 1：配置表单 ===== -->
+  <div id="view-form">
+    <div class="dialog-header">
+      <h1>🚀 激活发送通道</h1>
+      <span class="step-badge">初始化 · 步骤 3/3</span>
+    </div>
+    <div class="dialog-body">
+      <div class="base-strip">
+        <span class="base-chip">✓ Google Sheet 已创建</span>
+        <span class="base-chip">✓ AppScript 已部署并授权</span>
+        <span class="base-chip">✓ 分钟 / 每日触发器已创建</span>
+      </div>
+      <p class="intro">
+        基座已就绪，但定时消息还需要一条<b>发送通道</b>才能真正送达。请勾选你具备的条件（都可以稍后再配）：
+      </p>
+
+      <!-- 选项 1：Jira admin -->
+      <div class="option-card checked" id="card-jira">
+        <label class="option-head">
+          <input type="checkbox" id="cb-jira" checked onchange="onToggle()" />
+          <span class="option-title">
+            我在某个 Jira 项目有 Admin 权限
+            <small>将在该项目下创建 2 条 Automation 规则，作为消息执行引擎</small>
+          </span>
+          <span class="option-badge badge-main">主通道 · 解锁 4 类消息</span>
+        </label>
+        <div class="option-panel">
+          <div class="panel-note">
+            系统将创建：<b>Executor Rule</b>（每分钟领取并发送一条 Bot / AI 消息，结果回写维护表）和
+            <b>Timeline Sync Rule</b>（每天 05:00 刷新项目里程碑缓存）。仅需一次配置，规则归属在你的 Jira 项目下，随时可在 Jira Automation 中查看。
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Jira URL <span class="req">*</span></label>
+              <input id="f-jira-url" type="text" value="https://jira.ringcentral.com" />
+            </div>
+            <div class="field">
+              <label>Project Key <span class="req">*</span></label>
+              <input id="f-project-key" type="text" placeholder="例如：MTR" oninput="clearInvalid(this)" />
+              <div class="hint">需要你在该项目拥有 Automation 管理权限</div>
+            </div>
+          </div>
+          <div class="field-error" id="err-project">请输入 Project Key（将先预检你的 Automation 权限再创建规则）</div>
+          <button class="ghost-btn" type="button" onclick="precheck()">🔍 预检权限</button>
+          <span class="precheck-result" id="precheck-ok">✓ 权限预检通过（演示）</span>
+          <div class="unlock-chips">
+            <span class="unlock-chip">🤖 Bot 消息</span>
+            <span class="unlock-chip">📊 AI Report</span>
+            <span class="unlock-chip">⏰ 个人提醒</span>
+            <span class="unlock-chip">🔧 托管 API 行</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 选项 2：RingCentral token -->
+      <div class="option-card" id="card-rc">
+        <label class="option-head">
+          <input type="checkbox" id="cb-rc" onchange="onToggle()" />
+          <span class="option-title">
+            我有 RingCentral 个人 API Token
+            <small>「AsMe · 以我的身份」：由你的 AppScript 直接调用 RingCentral API 发送，无需 Jira</small>
+          </span>
+          <span class="option-badge badge-plus">独立通道 · 解锁 AsMe</span>
+        </label>
+        <div class="option-panel">
+          <div class="panel-note">
+            还没有 Token？按下面步骤获取（约 5 分钟）：
+            <ol>
+              <li>打开 <a href="https://developers.ringcentral.com/console" target="_blank" rel="noopener">RingCentral Developer Portal ↗</a>，用公司账号登录</li>
+              <li>Console → Apps → <b>Create App</b>：选择 REST API App，鉴权方式选 <b>JWT auth flow</b>，勾选 <b>Team Messaging</b> 和 <b>Read Accounts</b> 权限（发送消息 + 解析收件人）</li>
+              <li>在 App 详情页复制 <b>Client ID</b> 和 <b>Client Secret</b></li>
+              <li>Console → Credentials → JWT：为该 App 生成一条 <b>Personal JWT</b>（Production 环境）</li>
+            </ol>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Client ID <span class="req">*</span></label>
+              <input id="f-rc-id" type="text" placeholder="App 的 Client ID" oninput="clearInvalid(this)" />
+            </div>
+            <div class="field">
+              <label>Client Secret <span class="req">*</span></label>
+              <input id="f-rc-secret" type="password" placeholder="App 的 Client Secret" oninput="clearInvalid(this)" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Personal JWT <span class="req">*</span></label>
+              <input id="f-rc-jwt" type="password" placeholder="为该 App 生成的个人 JWT 凭据" oninput="clearInvalid(this)" />
+            </div>
+          </div>
+          <div class="field-error" id="err-rc">开启 AsMe 需要填写完整的 Client ID、Client Secret 和 JWT</div>
+          <div class="dep-warning" id="rc-dep"></div>
+          <div class="sec-note">
+            ⚠️ 凭据写入维护表 Config 子表，仅由你自己的 AppScript 读取使用（不再经由 Jira / Dify 传递）；若维护表已域共享，请知悉可见范围（凭据存储加固见 plan P2）。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dialog-footer">
+      <div class="summary-line" id="summary"></div>
+      <button class="main-btn" id="main-btn" onclick="submitFlow()"></button>
+      <div class="footer-hint">跳过后系统仍可创建「草稿（Paused）」消息；之后随时可在消息列表的「通道状态」卡中完成激活。</div>
+    </div>
+  </div>
+
+  <!-- ===== 视图 2：执行进度 ===== -->
+  <div id="view-progress" class="hidden">
+    <div class="dialog-header">
+      <h1>⏳ 正在激活通道…</h1>
+      <span class="step-badge">初始化 · 步骤 3/3</span>
+    </div>
+    <div class="dialog-body">
+      <ul class="flow-steps" id="flow-steps"></ul>
+    </div>
+  </div>
+
+  <!-- ===== 视图 3：结果 ===== -->
+  <div id="view-result" class="hidden">
+    <div class="dialog-header">
+      <h1 id="result-title"></h1>
+      <span class="step-badge">初始化完成</span>
+    </div>
+    <div class="dialog-body" id="result-body"></div>
+  </div>
+</div>
+
+<script>
+  var TYPES = [
+    { key: 'bot', label: '🤖 Bot 消息', by: 'jira' },
+    { key: 'ai', label: '📊 AI Report', by: 'jira' },
+    { key: 'remind', label: '⏰ 个人提醒', by: 'jira' },
+    { key: 'managed', label: '🔧 托管 API 行', by: 'jira' },
+    { key: 'asme', label: '👤 AsMe 以我身份', by: 'rc' },
+    { key: 'outreach', label: '💬 Outreach 主动询问', by: 'backend' }
+  ];
+
+  function state() {
+    return {
+      jira: document.getElementById('cb-jira').checked,
+      rc: document.getElementById('cb-rc').checked
+    };
+  }
+
+  function unlockedCount(s) {
+    var n = 0;
+    if (s.jira) n += 4;
+    if (s.rc) n += 1;
+    return n;
+  }
+
+  function onToggle() {
+    var s = state();
+    document.getElementById('card-jira').classList.toggle('checked', s.jira);
+    document.getElementById('card-rc').classList.toggle('checked', s.rc);
+
+    var dep = document.getElementById('rc-dep');
+    if (s.rc) {
+      dep.className = 'dep-warning blue';
+      dep.innerHTML = 'ℹ️ <b>AsMe 直发链路</b>：分钟触发器读取消息 → JWT 换取访问令牌（缓存约 1 小时）→ 解析收件人 → 调用 RingCentral API 以你的身份发送 → 结果回写 Logs。整条链路在你自己的 AppScript 内完成，与 Jira 主通道相互独立。';
+    } else {
+      dep.className = 'dep-warning';
+      dep.innerHTML = '';
+    }
+
+    var summary = document.getElementById('summary');
+    var btn = document.getElementById('main-btn');
+    if (s.jira && s.rc) {
+      summary.className = 'summary-line mode-ok';
+      summary.innerHTML = '<span>✅</span><span>将解锁 <b>5 / 6</b> 类消息。激活后你会收到 <b>两条自检私信</b>：Bot 一条（验证 Jira 执行链路）+ 以你身份的 AsMe 一条（验证直发链路），约 1 分钟内送达。</span>';
+      btn.className = 'main-btn style-primary';
+      btn.textContent = '🚀 激活双通道并完成初始化';
+    } else if (s.jira) {
+      summary.className = 'summary-line mode-ok';
+      summary.innerHTML = '<span>✅</span><span>将解锁 <b>4 / 6</b> 类消息。激活成功后会自动给你发送一条 <b>Bot 私信自检消息</b>，约 1 分钟内送达；AsMe 可之后在创建消息时再补配 Token。</span>';
+      btn.className = 'main-btn style-primary';
+      btn.textContent = '🚀 激活主通道并完成初始化';
+    } else if (s.rc) {
+      summary.className = 'summary-line mode-ok';
+      summary.innerHTML = '<span>✅</span><span>将解锁 <b>1 / 6</b> 类消息（AsMe）。先同步测试 Token 是否有效，然后发送一条 <b>以你身份的自检消息</b>，约 1 分钟内送达。Bot / AI / 提醒等仍需 Jira 主通道。</span>';
+      btn.className = 'main-btn style-primary';
+      btn.textContent = '🚀 激活 AsMe 通道并完成初始化';
+    } else {
+      summary.className = 'summary-line mode-skip';
+      summary.innerHTML = '<span>⏭️</span><span>暂不激活通道：完成后 <b>所有消息类型都不可发送</b>，但你可以先创建草稿、熟悉界面，稍后在「通道状态」卡中随时激活。</span>';
+      btn.className = 'main-btn style-skip';
+      btn.textContent = '跳过配置，仅完成基座初始化';
+    }
+  }
+
+  function clearInvalid(el) { el.classList.remove('invalid'); }
+
+  function precheck() {
+    var key = document.getElementById('f-project-key');
+    if (!key.value.trim()) {
+      key.classList.add('invalid');
+      document.getElementById('err-project').style.display = 'block';
+      return;
+    }
+    document.getElementById('err-project').style.display = 'none';
+    document.getElementById('precheck-ok').classList.add('ok');
+  }
+
+  function validate(s) {
+    var ok = true;
+    if (s.jira) {
+      var key = document.getElementById('f-project-key');
+      if (!key.value.trim()) {
+        key.classList.add('invalid');
+        document.getElementById('err-project').style.display = 'block';
+        ok = false;
+      } else {
+        document.getElementById('err-project').style.display = 'none';
+      }
+    }
+    if (s.rc) {
+      var missing = false;
+      ['f-rc-id', 'f-rc-secret', 'f-rc-jwt'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el.value.trim()) { el.classList.add('invalid'); missing = true; }
+      });
+      document.getElementById('err-rc').style.display = missing ? 'block' : 'none';
+      if (missing) ok = false;
+    }
+    return ok;
+  }
+
+  function buildSteps(s) {
+    var steps = [];
+    if (s.jira) {
+      steps.push('预检 Jira 权限（' + (document.getElementById('f-project-key').value.trim().toUpperCase() || 'PROJECT') + '）');
+      steps.push('创建 Executor Rule（每分钟执行）');
+      steps.push('创建 Timeline Sync Rule（每天 05:00）');
+    }
+    if (s.rc) {
+      steps.push('保存 RingCentral Sender 配置');
+      steps.push('测试 Token（JWT 换取访问令牌）');
+    }
+    if (s.jira) steps.push('写入 Bot 自检私信（下一分钟执行）');
+    if (s.rc) steps.push('写入 AsMe 自检消息（下一分钟执行）');
+    steps.push('同步 Config 并刷新通道状态');
+    return steps;
+  }
+
+  function submitFlow() {
+    var s = state();
+    if (!validate(s)) return;
+
+    if (!s.jira && !s.rc) { showResult(s); return; }
+
+    document.getElementById('view-form').classList.add('hidden');
+    var view = document.getElementById('view-progress');
+    view.classList.remove('hidden');
+
+    var steps = buildSteps(s);
+    var ul = document.getElementById('flow-steps');
+    ul.innerHTML = steps.map(function (t, i) {
+      return '<li id="fs-' + i + '"><span class="step-icon">' + (i + 1) + '</span><span>' + t + '</span></li>';
+    }).join('');
+
+    var i = 0;
+    function tick() {
+      if (i > 0) {
+        var prev = document.getElementById('fs-' + (i - 1));
+        prev.className = 'done';
+        prev.querySelector('.step-icon').textContent = '✓';
+      }
+      if (i >= steps.length) { setTimeout(function () { showResult(s); }, 400); return; }
+      var li = document.getElementById('fs-' + i);
+      li.className = 'active';
+      li.querySelector('.step-icon').innerHTML = '<span class="spinner"></span>';
+      i++;
+      setTimeout(tick, 700);
+    }
+    tick();
+  }
+
+  function typeGrid(s) {
+    return '<div class="type-grid">' + TYPES.map(function (t) {
+      var on = (t.by === 'jira' && s.jira) || (t.by === 'both' && s.jira && s.rc);
+      return '<span class="type-chip' + (on ? ' on' : '') + '">' + t.label + (on ? ' ✓' : ' 🔒') + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function showResult(s) {
+    document.getElementById('view-form').classList.add('hidden');
+    document.getElementById('view-progress').classList.add('hidden');
+    document.getElementById('view-result').classList.remove('hidden');
+
+    var title = document.getElementById('result-title');
+    var body = document.getElementById('result-body');
+    var n = unlockedCount(s);
+
+    if (s.jira || s.rc) {
+      title.textContent = s.jira && s.rc ? '🎉 双通道已激活' : (s.jira ? '🎉 主通道已激活' : '🎉 AsMe 通道已激活');
+      var probeCount = (s.jira ? 1 : 0) + (s.rc ? 1 : 0);
+      var bubbles = '';
+      if (s.jira) {
+        bubbles +=
+          '<div class="probe-bubble"><div class="probe-avatar">🤖</div><div class="probe-msg">' +
+          '<div class="sender">Personal AI Bot</div>' +
+          '👋 你的 Bot 主通道已激活！这是一条自检消息，证明「Jira 规则触发 → 消息领取 → Bot 发送 → 结果回写」全链路正常。' +
+          '<div class="meta">收到此消息且 Logs 出现 Success 记录后，通道状态卡将亮起绿灯 ✓</div></div></div>';
+      }
+      if (s.rc) {
+        bubbles +=
+          '<div class="probe-bubble"><div class="probe-avatar">👤</div><div class="probe-msg">' +
+          '<div class="sender">你自己（AsMe 通道）</div>' +
+          '✅ AsMe 自检：这条消息由你的 AppScript 直接调用 RingCentral API、以你的身份发出。收到即代表「触发器 → 取数 → 直发 → 回写」链路正常。' +
+          '<div class="meta">送达后 Logs 将写入 Sent_Post_ID，通道状态卡亮起绿灯 ✓</div></div></div>';
+      }
+      body.innerHTML =
+        '<div class="result-banner ok"><h2>已解锁 ' + n + ' / 6 类消息</h2>' +
+        '<p>' + (s.jira ? 'Executor Rule 与 Timeline Sync Rule 已创建' : '') +
+        (s.jira && s.rc ? '，' : '') +
+        (s.rc ? 'RingCentral Sender 已启用（Token 测试通过）' : '') +
+        '。' + probeCount + ' 条自检消息已排队，约 1 分钟内送达：</p></div>' +
+        bubbles +
+        typeGrid(s) +
+        '<div class="result-actions"><button class="main-btn style-primary">➕ 创建第一条定时消息</button>' +
+        '<button class="main-btn style-skip" onclick="resetDemo()">查看通道状态卡</button></div>';
+    } else {
+      title.textContent = '✅ 基座就绪 · 通道未激活';
+      body.innerHTML =
+        '<div class="result-banner gray"><h2>已解锁 0 / 6 类消息</h2>' +
+        '<p>Sheet、AppScript 和触发器已就绪。当前没有可用的发送通道——你可以先创建草稿（Paused）消息，激活通道后一键启用；消息列表将常驻「通道状态」卡提醒你完成激活。</p></div>' +
+        typeGrid(s) +
+        '<div class="result-actions"><button class="main-btn style-primary" onclick="resetDemo()">🔧 激活发送通道</button>' +
+        '<button class="main-btn style-skip">➕ 先创建一条草稿</button></div>';
+    }
+  }
+
+  function resetDemo() {
+    document.getElementById('view-progress').classList.add('hidden');
+    document.getElementById('view-result').classList.add('hidden');
+    document.getElementById('view-form').classList.remove('hidden');
+    document.getElementById('cb-jira').checked = true;
+    document.getElementById('cb-rc').checked = false;
+    document.getElementById('precheck-ok').classList.remove('ok');
+    document.getElementById('err-project').style.display = 'none';
+    document.getElementById('err-rc').style.display = 'none';
+    ['f-project-key', 'f-rc-id', 'f-rc-secret', 'f-rc-jwt'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.value = '';
+      el.classList.remove('invalid');
+    });
+    document.getElementById('f-jira-url').value = 'https://jira.ringcentral.com';
+    onToggle();
+  }
+
+  onToggle();
+</script>
+</body>
+</html>

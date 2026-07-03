@@ -1,6 +1,6 @@
 # 类人脑项目分析系统
 
-*最后更新: 2026-05-28*
+*最后更新: 2026-07-02*
 
 ## 当前定位
 
@@ -9,7 +9,7 @@
 当前最完整的用户入口是：
 
 - `memory-exploring.html`：查看实体、主题、项目相关记忆。
-- `project-dashboard.html`：查看项目鱼骨时间线、里程碑、任务、Jira 链接、健康摘要和决策依据。
+- `project-dashboard.html`：查看项目鱼骨时间线、里程碑、任务、Jira 链接、健康摘要、决策依据和本地查找。
 - Web Intelligence / Context Recall：在网页或会话场景里提示相关记忆。
 - Memory Service：提供实体、召回、关注项目、通知、反思等后端能力。
 
@@ -55,14 +55,20 @@
 - 状态草稿预览会列出可追溯证据，包括本地任务状态 / ETA、关联 Jira、平台状态和下个里程碑，避免把规则化摘要误当成不可审阅的自动结论。
 - 状态草稿复制并标记复核后，会即时刷新复核证据和下次复核提示，避免用户继续看到旧的“未复核/复核过期”判断。
 - 证据覆盖不完整的项目会进入“需关注”视图；证据严重不足时给出警示，证据部分缺失时作为轻量关注项处理。
+- 项目列表支持本地查找项目、任务、Jira、平台来源和里程碑；查找结果会显示命中数量和本地边界，只过滤当前浏览器快照，不读取、同步或写回外部系统。
+- 鱼骨时间线的任务排序是只读视图投影：按 ETA / ID 计算布局和拖拽锚点，但不会在渲染期间改写本地任务数组或报告导入 / 导出的任务顺序。
 
 ### 决策层
 
 - 当前以用户可见的健康摘要和通知中心为主。
 - 自动风险预测仍是后续方向；现阶段只做规则化提示，不自动替用户改项目计划。
-- 项目仪表盘中的数据源检查入口会展开 Memory Service、Jira、GitHub、Confluence 的可读状态、故障/未接入原因、使用边界和下一步，避免把本地工作台数据误认为外部系统权威快照，也避免把 Memory Service 暂时不可用误看成未配置。
+- 项目仪表盘中的数据源检查入口会先显示“本次检查口径”回执，再展开 Memory Service、Jira、GitHub、Confluence 的可读状态、故障/未接入原因、使用边界和下一步，避免把本地工作台数据误认为外部系统权威快照，也避免把 Memory Service 暂时不可用误看成未配置。
+- “同步/检查数据源”的顶部状态会区分普通成功和 warning：只要 Memory Service 本轮读取受限，或本地证据仍待规划 / 缺 ETA / 缺来源，首屏状态条就会直接显示检查口径和本地证据 headline，避免用户只看到“已同步/已检查”的绿色成功语气。
 - 数据源检查入口会读取 Memory Service active watched projects；本地缺少的关注项目会被创建成“待规划”工作台，已有项目只做匹配，不反写 Memory Service。新导入项目不会自动标成已复核，仍需要用户检查草稿和证据后确认。
 - 数据源检查结果会同时显示本地诊断：本地项目数、活动任务数、ETA 覆盖、Jira / 平台来源覆盖、已有 Jira key 和缺来源任务样例。即使 Memory Service 暂不可用，也能告诉用户当前本地证据是否足够支撑项目状态判断。
+- 未接入来源的本地诊断会按来源拆分：Jira 看本地 Jira key / 缺来源任务，GitHub 看仓库、PR、issue 或 release 映射种子，Confluence 看项目描述、里程碑和待规划项目是否足以作为后续页面/状态报告映射线索，避免用户把同一条 ETA 或平台来源提示误读成所有外部系统都已检查过。
+- 数据源检查结果顶部会先给出“本地证据回执”：项目数、活动任务数、ETA 覆盖、来源覆盖、待规划项目，以及优先补齐的项目 / ETA / 来源任务，避免用户只看到 Memory Service 可读取就误以为项目状态已经可信。
+- 本地证据回执里的优先补齐项可直接操作：待规划项目会打开新增任务入口，缺 ETA / 缺来源任务会打开任务详情并聚焦对应输入区；跳转后的弹窗顶部会显示“本地修复入口”回执，说明这只是在当前浏览器工作台补任务、ETA 或来源，不会创建 Jira/GitHub/Confluence 任务，也不会反写 Memory Service。当同步带来多个待规划项目时，回执会显示有上限的行动队列，而不是只给第一个项目入口，减少用户从检查结果手动找项目的成本。
 
 ## 本轮调研结论
 
@@ -81,13 +87,29 @@
 - 本轮补齐 watched-project 导入后的复核语义：关注项目只提供线索和入口，新建本地工作台不能伪装成已人工复核，避免用户把空项目误读成已确认状态。
 - 本轮真实体验补齐了扩展端成功同步路径：`project-dashboard.html` 点击“同步/检查数据源”后，MV3 service worker 会直接使用 Memory Service client 读取 watched projects，不再因为动态加载运行时访问 `document` 而把可读取状态误报成“暂不可用”；成功结果会同时列出新增和已匹配项目，并让新增项目保持未复核。
 - 本轮补齐数据源检查的本地覆盖诊断：GitHub / Linear 的项目更新把状态、目标日期和历史更新放在同一个可审阅入口，Linear Project Graph 也只有在收集到足够 issue 数据后才生成预测；软件工程数据质量研究同样强调缺失、不可访问或不一致数据会削弱决策。因此当前检查面板把“真实外部同步未接入”和“本地 Jira / 平台来源覆盖不足”拆开显示，避免用户把连接状态误当成数据质量状态。
+- 本轮继续把本地覆盖诊断前置成检查回执：参考 Jira dashboard、GitHub project updates、Linear Project Graph、Asana Smart Status 和 dashboard data-quality 研究，项目状态面板不应只报告连接是否成功，还要先说明可审阅证据够不够，以及下一步该补哪类项目证据。
+- 本轮补齐 watched-project 空项目回执：如果 Memory Service 同步新增了还没有任务的项目，即使其他活动任务的 ETA / 来源覆盖已满，数据源检查也会显示“待规划项目”并保持需补证据，避免把新入口伪装成已具备项目状态证据。
+- 本轮把 watched-project 检查回执改成可行动入口：从顶部回执可一键进入新增任务、ETA 或来源补齐位置，让“待规划项目 / 缺证据”不再只是静态提示。
+- 本轮补齐多项目待规划回执：如果 Memory Service 一次同步新增多个 watched projects，顶部回执会给出有上限的多个“规划项目”按钮，再给出首要 ETA / 来源补齐入口；点击后弹窗会继续显示“本地修复入口”回执，确认这些按钮仍只修改当前浏览器本地工作台，不会写回 Memory Service、Jira、GitHub 或 Confluence。
+- 本轮补齐本地查找：参考 Atlassian Dashboard Insights、Linear update filters、Rocketlane 对 dashboard 决策信号层的定义，以及 dashboard 数据质量研究，项目面板需要能快速定位 Jira、owner、任务和里程碑，同时明确这只是当前浏览器快照过滤，不是外部系统搜索或同步。
+- 本轮补齐数据源检查口径回执：参考 GitHub Projects insights/status updates、Linear project updates、Atlassian status-report practices、PMI digital dashboard 和软件 portfolio dashboard 研究，检查结果第一行会列出本次已读取、暂不可用和未接入跳过的来源，避免用户把“本地证据回执”误读成 Jira/GitHub/Confluence 已经同步。
+- 本轮补齐数据源检查的顶部 warning 语气：参考 GitHub Projects insights 对 source data 的限定、Linear Project Graph 对“足够 issue 数据”才生成预测的要求，以及 provenance dashboard 研究对数据来源和变更元数据的强调，本地证据不完整或 Memory Service 暂不可用时不再用普通 success 状态收尾。
+- 本轮补齐未接入来源的专属诊断：GitHub / Linear / Atlassian 的项目更新和 dashboard 都把项目状态绑定到具体来源数据，provenance / data-quality dashboard 研究也要求把来源、缺失和口径放在结论附近。因此 GitHub 与 Confluence 卡片不再复用通用平台来源诊断，而是分别说明缺少仓库映射、PR/issue/release 线索、空间/页面映射、状态报告和里程碑/描述种子。
 
 ## 当前边界
 
 - 项目仪表盘数据仍是扩展本地维护的工作台数据，不是 Jira/GitHub/Confluence 的权威快照。
 - “数据源检查”当前只从 Memory Service 单向补齐 active watched projects，不读取真实 Jira/GitHub/Confluence；真实多源同步需要进一步接入外部 API。
+- “本次检查口径”只说明当前检查动作读了哪些来源、跳过了哪些来源，不证明外部项目事实已同步或本地证据已经足够。
+- GitHub / Confluence 卡片里的专属诊断只解释当前本地工作台有没有后续接入所需的映射种子；它不会读取仓库、PR、commit、release、issue、页面、决策记录或状态报告。
+- 顶部 warning 只改变用户可见的状态语气和摘要，不改变数据源读取、watched projects 单向补齐、本地保存或外部写回行为。
 - 本地诊断只统计当前浏览器工作台里的 ETA、Jira 和平台来源证据；它能提示缺口，但不能证明外部系统已经同步或最新。
+- 本地证据回执只说明当前浏览器工作台的可审阅程度，不代表 Memory Service 或外部系统事实已经被核验。
+- 本地查找只匹配当前浏览器工作台已有字段；未同步进来的 Jira/GitHub/Confluence 数据不会出现在查找结果里。
+- 只要本地仍有待规划项目，数据源检查不会把总体回执标成“证据可用”；用户需要先补活动任务、ETA 和来源后再复核状态草稿。
+- 回执里的修复入口只修改本地工作台，不会自动把任务、ETA 或来源反写到 Memory Service、Jira、GitHub 或 Confluence；点击入口后任务详情或新增任务弹窗会再次显示本地修复边界。为避免首屏过载，按钮队列会有数量上限，完整缺口仍以汇总文本和项目卡片为准。
 - 健康摘要、活动级风险分和决策依据是可解释规则，不是 ML 风险模型。
+- 时间线排序、关键链候选和图表驱动项都只改变当前页面展示顺序；只有显式保存任务、拖拽锚点或导入报告才会写入本地工作台。
 - 平台状态目前仍是本地手动维护的来源证据；它能减少“缺来源”误报，但不能替代未来真实 Jira/GitHub/Confluence 同步。
 - Memory Service 关注项目目前只做单向补齐本地工作台，不会自动删除本地项目，也不会把本地任务/里程碑反写到 Memory Service。
 

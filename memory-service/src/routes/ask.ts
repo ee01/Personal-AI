@@ -49,6 +49,10 @@ import {
   type EvidenceResolutionPolicy,
   type EvidenceResolutionState,
 } from '../core/EvidenceResolutionPlanner.js';
+import {
+  EvidenceWatchContractService,
+  type EvidenceWatchUiReceipt,
+} from '../core/EvidenceWatchContractService.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
 import {
@@ -138,6 +142,8 @@ interface AskResponse {
     lastError?: string;
   }>;
   externalEvidence?: CandidateArtifact[];
+  /** Evidence watch receipt when the answer concerns a fact that may drift. */
+  evidenceWatch?: EvidenceWatchUiReceipt;
 }
 
 interface ResolvedAskCandidateSelection {
@@ -165,6 +171,7 @@ interface PreparedAskContext {
     externalEvidence: CandidateArtifact[];
     finalResolutionState: EvidenceResolutionState;
     missingInfo: string[];
+    evidenceWatch?: EvidenceWatchUiReceipt;
   };
 }
 
@@ -891,6 +898,115 @@ function hasReadySignal(value: string): boolean {
   );
 }
 
+const FALLBACK_GENERIC_QUERY_TOKENS = new Set([
+  'ai',
+  'be',
+  'fe',
+  'ui',
+  'pm',
+  '我',
+  '我的',
+  '我们',
+  '这个',
+  '那个',
+  '什么',
+  '哪些',
+  '哪个',
+  '怎么',
+  '如何',
+  '多少',
+  '几点',
+  '下周',
+  '目前',
+  '当前',
+  '现在',
+  '大概',
+  '时候',
+  '得出',
+  '项目',
+  '负责',
+  '问题',
+  '评价',
+  '不同',
+  '对话',
+  '来源',
+  '综合',
+  '简要',
+  '回答',
+  '中文',
+  '关于',
+  '其中',
+  '还有',
+  '事情',
+  '需要',
+  '跟进',
+  '情况',
+  '状态',
+  '进展',
+  '结论',
+]);
+
+function fallbackComparable(value: string | undefined | null): string {
+  return cleanDisplayText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u3400-\u9fff._:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isWeakFallbackCjkGram(token: string): boolean {
+  return (
+    /^[\u3400-\u9fff]{2}$/u.test(token) &&
+    (/^[我你他她它这那的了是在有和与及或但又还很请帮把给]/u.test(token) ||
+      /[的了是在有和与及或但又还很吗呢吧啊]$/u.test(token))
+  );
+}
+
+function fallbackQuestionAnchors(query: string): string[] {
+  const anchors = new Set<string>();
+  const matches = query.match(/[a-z0-9][a-z0-9._:-]{1,}|[\u3400-\u9fff]{2,}/giu) ?? [];
+  for (const match of matches) {
+    const normalized = match.toLowerCase();
+    if (!FALLBACK_GENERIC_QUERY_TOKENS.has(normalized) && normalized.length >= 2) {
+      anchors.add(normalized);
+    }
+    if (/^[\u3400-\u9fff]{3,}$/u.test(match)) {
+      for (let index = 0; index <= match.length - 2; index += 1) {
+        const gram = match.slice(index, index + 2).toLowerCase();
+        if (!FALLBACK_GENERIC_QUERY_TOKENS.has(gram) && !isWeakFallbackCjkGram(gram)) {
+          anchors.add(gram);
+        }
+      }
+    }
+  }
+  return Array.from(anchors).filter((token) => token.length >= 2);
+}
+
+function fallbackEvidenceText(item: RecallItem): string {
+  return fallbackComparable(
+    [
+      item.content,
+      item.previewText,
+      item.displayText,
+      item.sourceTitle,
+      item.displayTitle,
+      item.metadata?.sourceTitle,
+      item.metadata?.groupName,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function selectFallbackEvidenceItems(query: string, items: RecallItem[]): RecallItem[] {
+  const anchors = fallbackQuestionAnchors(query);
+  if (anchors.length === 0) return items;
+  return items.filter((item) => {
+    const text = fallbackEvidenceText(item);
+    return anchors.some((anchor) => text.includes(anchor));
+  });
+}
+
 function buildDeterministicAskSynthesis(
   query: string,
   topItems: RecallItem[],
@@ -995,7 +1111,8 @@ function buildAskGenerationFallbackResponse(params: {
     includeEvidence,
     queryTimeMs,
   } = params;
-  const topItems = recalledItems.slice(0, 5);
+  const fallbackItems = selectFallbackEvidenceItems(query, recalledItems);
+  const topItems = fallbackItems.slice(0, 5);
   const synthesis = buildDeterministicAskSynthesis(query, topItems);
   const structuredAnswer: StructuredAskAnswer = {
     confidence: synthesis.confidence,
@@ -1008,7 +1125,7 @@ function buildAskGenerationFallbackResponse(params: {
     answer: synthesis.answer,
     queryTimeMs,
     structuredAnswer,
-    blocks: recallBlocks,
+    blocks: topItems.length > 0 ? recallBlocks : undefined,
     analysis: {
       summary: synthesis.summary,
       keyFindings: synthesis.keyFindings,
@@ -1025,18 +1142,24 @@ function buildAskGenerationFallbackResponse(params: {
       topItems.length > 0 ? actionOutcome.finalResolutionState : 'insufficient',
     missingInfo: [
       ...actionOutcome.missingInfo,
+      ...(recalledItems.length > 0 && topItems.length === 0
+        ? ['已检索到候选记忆，但与本问题的关键锚点没有足够交集，未作为回答证据。']
+        : []),
       'LLM 综合生成超时，当前回答为确定性证据摘要。',
     ],
   };
 
   if (includeEvidence) {
-    response.evidence = recalledItems;
+    response.evidence = topItems.length > 0 ? fallbackItems : [];
   }
   if (actionOutcome.followUpActions.length > 0) {
     response.followUpActions = actionOutcome.followUpActions;
   }
   if (actionOutcome.externalEvidence.length > 0) {
     response.externalEvidence = actionOutcome.externalEvidence;
+  }
+  if (actionOutcome.evidenceWatch) {
+    response.evidenceWatch = actionOutcome.evidenceWatch;
   }
   // Weave provenance (P0-5): surface a badge only when stitching is significant.
   const weave = buildWeaveStats(recalledItems);
@@ -1892,13 +2015,24 @@ async function executeAskResolutionAction(
   externalEvidence: CandidateArtifact[];
   finalResolutionState: EvidenceResolutionState;
   missingInfo: string[];
+  evidenceWatch?: EvidenceWatchUiReceipt;
 }> {
   if (plan.recommendedAction === 'none') {
+    const watchResult = new EvidenceWatchContractService(db).createOrReuseFromPlan({
+      plan,
+      question: query,
+      title: `Ask 守望: ${query.slice(0, 80)}`,
+      summary: plan.summary,
+      createdFrom: { kind: 'ask', refId: requestId },
+      answerMemoryCanonicalKey: answerMemoryPrior?.canonicalKey,
+      cadence: 'on_ask',
+    });
     return {
       followUpActions: [],
       externalEvidence: [],
       finalResolutionState: plan.resolutionState,
       missingInfo: [...plan.remainingQuestions],
+      evidenceWatch: watchResult?.uiReceipt,
     };
   }
 
@@ -1919,6 +2053,7 @@ async function executeAskResolutionAction(
   const repo = new ActionRepository(db);
   const executor = new ActionExecutor(db, userDataManager ?? undefined, userId);
   const answerMemoryService = new AnswerMemoryService(db);
+  const evidenceWatchService = new EvidenceWatchContractService(db);
   const answerThreadId = answerMemoryPrior?.threadId;
   const answerVerificationKey =
     answerMemoryService.verificationIdempotencyKey(answerMemoryPrior);
@@ -1945,6 +2080,19 @@ async function executeAskResolutionAction(
       Math.floor(policy.syncExecutionBudgetMs),
     );
   }
+  const evidenceWatchPreparation = evidenceWatchService.prepareActionForPlan({
+    plan,
+    question: query,
+    title: `Ask 守望: ${query.slice(0, 80)}`,
+    summary: plan.summary,
+    createdFrom: { kind: 'ask', refId: requestId },
+    answerMemoryCanonicalKey: answerMemoryPrior?.canonicalKey,
+    actionType: plan.recommendedAction,
+    cadence: 'on_ask',
+  });
+  if (evidenceWatchPreparation) {
+    Object.assign(baseParams, evidenceWatchPreparation.paramsPatch);
+  }
   const delegatePolicy =
     plan.recommendedAction === 'delegate_openclaw'
       ? resolveDelegateOpenClawPolicy({
@@ -1953,6 +2101,11 @@ async function executeAskResolutionAction(
           defaultRequiresApproval: baseParams.mode === 'write',
         })
       : null;
+  const actionIdempotencyKey =
+    evidenceWatchPreparation?.idempotencyKey ?? answerVerificationKey;
+  const existingAction = actionIdempotencyKey
+    ? repo.findReusableByIdempotencyKey(actionIdempotencyKey)
+    : null;
   const action = repo.create({
     actionType: plan.recommendedAction,
     title:
@@ -1971,6 +2124,7 @@ async function executeAskResolutionAction(
         askRequestId: requestId,
         answerThreadId,
         answerMemoryCanonicalKey: answerMemoryPrior?.canonicalKey,
+        evidenceWatchContractId: evidenceWatchPreparation?.contract.id,
         suppressRecoveryNotifications: true,
       },
     },
@@ -1982,8 +2136,53 @@ async function executeAskResolutionAction(
     sourceKind: 'ask_request',
     sourceRefId: requestId,
     threadId: answerThreadId,
-    idempotencyKey: answerVerificationKey,
+    idempotencyKey: actionIdempotencyKey,
   });
+  const reusedExistingAction =
+    Boolean(existingAction) && existingAction?.id === action.id;
+  let evidenceWatch = evidenceWatchPreparation?.uiReceipt;
+  if (evidenceWatchPreparation) {
+    const duplicateRun = evidenceWatchService.recordActionResult({
+      contractId: evidenceWatchPreparation.contract.id,
+      action,
+      wasDuplicate: reusedExistingAction,
+      summary: `Ask 已复用现有 ${action.actionType} 动作，未重复创建外部查证。`,
+    });
+    const updatedContract = evidenceWatchService.getById(
+      evidenceWatchPreparation.contract.id,
+    );
+    if (updatedContract) {
+      evidenceWatch = evidenceWatchService.toUiReceipt(updatedContract, {
+        created: evidenceWatchPreparation.created,
+        runId: duplicateRun?.id ?? evidenceWatch?.runId,
+        detail: reusedExistingAction
+          ? '已命中证据守望契约，并复用队列中的外部查证；本轮没有创建重复动作。'
+          : evidenceWatch?.detail,
+      });
+    }
+  }
+
+  if (reusedExistingAction) {
+    return {
+      followUpActions: [
+        {
+          id: action.id,
+          actionType: action.actionType,
+          title: action.title,
+          queueStatus: action.queueStatus,
+          executionMode: action.executionMode,
+          sourceKind: action.sourceKind,
+          sourceRefId: action.sourceRefId,
+          result: action.result,
+          lastError: action.lastError,
+        },
+      ],
+      externalEvidence: [],
+      finalResolutionState: plan.resolutionState,
+      missingInfo: [...plan.remainingQuestions],
+      evidenceWatch,
+    };
+  }
 
   const shouldExecuteSync =
     action.executionMode === 'auto' &&
@@ -2008,6 +2207,7 @@ async function executeAskResolutionAction(
       externalEvidence: [],
       finalResolutionState: plan.resolutionState,
       missingInfo: [...plan.remainingQuestions],
+      evidenceWatch,
     };
   }
 
@@ -2035,6 +2235,26 @@ async function executeAskResolutionAction(
     lastError: item.lastError,
   }));
   const externalEvidence = normalizeArtifactArray(result.result?.artifacts);
+  const confirmRequestId =
+    typeof result.result?.confirmRequestId === 'string'
+      ? result.result.confirmRequestId
+      : undefined;
+  if (confirmRequestId && evidenceWatchPreparation) {
+    const updatedContract = evidenceWatchService.linkConfirmRequest(
+      evidenceWatchPreparation.contract.id,
+      confirmRequestId,
+    );
+    if (updatedContract) {
+      evidenceWatch = evidenceWatchService.toUiReceipt(updatedContract, {
+        created: evidenceWatchPreparation.created,
+        runId: evidenceWatch?.runId,
+        detail:
+          updatedContract.state === 'quiet_no_change'
+            ? '已创建/复用证据守望项；后续查证会合并到同一契约。'
+            : evidenceWatch?.detail,
+      });
+    }
+  }
   const finalResolutionState: EvidenceResolutionState =
     externalEvidence.length > 0
       ? plan.directFindings.length > 0
@@ -2049,6 +2269,7 @@ async function executeAskResolutionAction(
     externalEvidence,
     finalResolutionState,
     missingInfo,
+    evidenceWatch,
   };
 }
 
@@ -2653,6 +2874,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           if (actionOutcome.externalEvidence.length > 0) {
             response.externalEvidence = actionOutcome.externalEvidence;
           }
+          if (actionOutcome.evidenceWatch) {
+            response.evidenceWatch = actionOutcome.evidenceWatch;
+          }
           const weave = buildWeaveStats(recalledItems);
           if (weave.crossSource) response.weave = weave;
 
@@ -2989,6 +3213,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         }
         if (actionOutcome.externalEvidence.length > 0) {
           result.externalEvidence = actionOutcome.externalEvidence;
+        }
+        if (actionOutcome.evidenceWatch) {
+          result.evidenceWatch = actionOutcome.evidenceWatch;
         }
 
         writeSseEvent(

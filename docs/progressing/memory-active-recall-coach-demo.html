@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memory Active Recall Coach Demo - Shelved</title>
+  <style>
+    :root {
+      --bg: #f6f7f3;
+      --surface: #ffffff;
+      --surface-2: #eef5f3;
+      --ink: #18211f;
+      --muted: #65706c;
+      --line: #d7dfda;
+      --teal: #0f766e;
+      --blue: #2563eb;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --green-soft: #dff3ed;
+      --blue-soft: #e7efff;
+      --amber-soft: #fff0d8;
+      --red-soft: #fde8e8;
+      --shadow: 0 16px 42px rgba(24, 33, 31, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #14211e;
+      color: #edf7f3;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+    }
+
+    .brand img {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+
+    .brand-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .brand-title strong {
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .brand-title span {
+      color: #a8bbb5;
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      width: 100%;
+      min-height: 38px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #cddbd6;
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: #20332f;
+      color: #ffffff;
+    }
+
+    .nav .badge {
+      background: #31524b;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 11px;
+      color: #d8f4ed;
+    }
+
+    .side-note {
+      margin-top: auto;
+      color: #a8bbb5;
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 12px;
+      border: 1px solid #2f4742;
+      border-radius: 8px;
+      background: #182a26;
+    }
+
+    main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      min-height: 68px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.88);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .topbar p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .status-pill {
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--teal);
+      flex: 0 0 auto;
+    }
+
+    .content {
+      padding: 22px 24px 30px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 7px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      background: var(--teal);
+      color: #ffffff;
+      border-color: var(--teal);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      background: #fbfcfa;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.3;
+    }
+
+    .panel-header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .panel-body {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .mission {
+      display: grid;
+      gap: 12px;
+    }
+
+    .mission-line {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+    }
+
+    .mission-line .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mission-line strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .thread {
+      display: grid;
+      gap: 12px;
+    }
+
+    .message {
+      border-left: 4px solid var(--line);
+      padding: 10px 12px;
+      background: #fbfcfa;
+      border-radius: 6px;
+    }
+
+    .message strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .message p {
+      margin: 0;
+      color: #35413e;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .practice-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    .coach-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .coach-title {
+      display: grid;
+      gap: 4px;
+    }
+
+    .coach-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .coach-title strong {
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    .meter {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: conic-gradient(var(--teal) 0 68%, #dfe7e3 68% 100%);
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .meter::after {
+      content: "";
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: #ffffff;
+      position: absolute;
+    }
+
+    .meter span {
+      position: relative;
+      z-index: 1;
+      font-weight: 700;
+      color: var(--teal);
+    }
+
+    .question {
+      background: var(--surface-2);
+      border: 1px solid #c4ddd6;
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .question .kicker {
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .question p {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+
+    .answer-box {
+      min-height: 108px;
+      width: 100%;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .hint-answer {
+      display: none;
+      gap: 10px;
+      border: 1px solid #d6c298;
+      background: var(--amber-soft);
+      border-radius: 8px;
+      padding: 12px;
+      color: #54350b;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .hint-answer.visible {
+      display: grid;
+    }
+
+    .sources {
+      display: grid;
+      gap: 8px;
+    }
+
+    .source-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .source-item b {
+      color: var(--blue);
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #ffffff;
+      color: var(--ink);
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: var(--teal);
+      border-color: var(--teal);
+      color: #ffffff;
+    }
+
+    .btn.blue {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #ffffff;
+    }
+
+    .btn.warn {
+      border-color: #d9b46b;
+      background: var(--amber-soft);
+      color: #6b4108;
+    }
+
+    .receipt {
+      border: 1px solid #b8ded4;
+      background: var(--green-soft);
+      color: #0c4e49;
+      border-radius: 8px;
+      padding: 11px 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      background: #fbfcfa;
+    }
+
+    .mini-card strong {
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .mini-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: var(--blue-soft);
+      color: #1e3f89;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .tag.green {
+      background: var(--green-soft);
+      color: #0c4e49;
+    }
+
+    .tag.amber {
+      background: var(--amber-soft);
+      color: #724507;
+    }
+
+    .tag.red {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        min-height: auto;
+      }
+
+      .nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .side-note {
+        display: none;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 16px;
+      }
+
+      .content {
+        padding: 16px;
+      }
+
+      .nav {
+        grid-template-columns: 1fr;
+      }
+
+      .mission-line {
+        grid-template-columns: 1fr;
+      }
+
+      .coach-head {
+        align-items: flex-start;
+      }
+
+      .meter {
+        width: 68px;
+        height: 68px;
+      }
+
+      .meter::after {
+        width: 50px;
+        height: 50px;
+      }
+
+      .question p {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../../static/icons/icon128.png" alt="Personal AI">
+        <div class="brand-title">
+          <strong>Personal AI</strong>
+          <span>记忆主动回忆教练（搁置）</span>
+        </div>
+      </div>
+      <div class="nav" aria-label="Demo navigation">
+        <button class="active" type="button"><span>⌂</span><span>今天</span><span class="badge">3</span></button>
+        <button type="button"><span>□</span><span>Memory Lens</span><span class="badge">1</span></button>
+        <button type="button"><span>◇</span><span>资料记忆</span><span></span></button>
+        <button type="button"><span>◎</span><span>掌握状态</span><span></span></button>
+      </div>
+      <div class="side-note">
+        Demo 仅作为搁置视觉参考。当前建议先让会前准备显示最重要内容，由用户自己决定是否要记住。
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <h1>90 秒回忆（搁置视觉参考）</h1>
+          <p>当前建议先强化会前准备：显示最重要需要记住的内容，由用户决定是否加入记忆练习。</p>
+        </div>
+        <div class="status-row">
+          <span class="status-pill"><span class="dot"></span> mastery only</span>
+          <span class="status-pill">今日上限 3 张</span>
+          <span class="status-pill">答案默认折叠</span>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="tabs">
+          <button class="tab active" data-view="today" type="button">Today Pilot 场景</button>
+          <button class="tab" data-view="ringcentral" type="button">RingCentral 场景</button>
+          <button class="tab" data-view="source" type="button">资料卡生成</button>
+          <button class="tab" data-view="mastery" type="button">掌握记录</button>
+        </div>
+
+        <div class="view" id="view-today">
+          <div class="grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Today Pilot：Q3 planning 准备</h2>
+                  <p>Personal AI 已经知道今天的重点，但先让用户自己回忆最关键的口径。</p>
+                </div>
+                <span class="tag green">scene match 0.82</span>
+              </div>
+              <div class="panel-body">
+                <div class="mission">
+                  <div class="mission-line">
+                    <div class="label">今天重点</div>
+                    <strong>Q3 planning：Mobile / Jupiter epics estimate 缺口确认</strong>
+                  </div>
+                  <div class="mission-line">
+                    <div class="label">相关记忆</div>
+                    <strong>DEV Estimate、AI Notes timeline、release process、mThor / Jupiter / Mobile epics</strong>
+                  </div>
+                  <div class="mission-line">
+                    <div class="label">低打扰策略</div>
+                    <strong>只展示 3 张卡；掌握后自动退场；不会生成新的待办。</strong>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>主动回忆卡 1 / 3</h2>
+                  <p>estimate 口径卡，来源可复核。</p>
+                </div>
+              </div>
+              <div class="panel-body practice-card">
+                <div class="coach-head">
+                  <div class="coach-title">
+                    <span>预计 40 秒</span>
+                    <strong>先想一遍，再看答案</strong>
+                  </div>
+                  <div class="meter" aria-label="掌握度 68%">
+                    <span>68%</span>
+                  </div>
+                </div>
+
+                <div class="question">
+                  <div class="kicker">Q: Q3 planning 前应记住的 estimate 口径</div>
+                  <p>Mobile / Jupiter epics 缺 DEV estimate 时，谁提醒过？通常要求你补齐什么？</p>
+                </div>
+
+                <textarea class="answer-box" aria-label="用户回忆输入" placeholder="可选：写一句自己的回忆，也可以直接在脑子里回答。"></textarea>
+
+                <div class="hint-answer" id="today-answer">
+                  <strong>参考答案</strong>
+                  <span>Polina Bespalova 在 ada.han+esone.qiu+fred.gu+polina.bespalova 群里提醒 Mobile / Jupiter epics 的 DEV estimate 缺失，通常是在 dashboard / new policy / RCV 项目进展上下文里要求相关 owner 补齐估算和状态。</span>
+                  <div class="sources">
+                    <div class="source-item"><b>证据 1</b> RingCentral group summary: Mobile Epics 分配、Jupiter 和 Mobile Epics DEV estimate 缺失。</div>
+                    <div class="source-item"><b>证据 2</b> Topic summary: DEV Estimate, project management, related projects RCV / Jupiter / Mobile。</div>
+                  </div>
+                </div>
+
+                <div class="actions">
+                  <button class="btn primary" data-reveal="today-answer" type="button">显示答案</button>
+                  <button class="btn blue" data-receipt="remembered" type="button">记住了</button>
+                  <button class="btn warn" data-receipt="uncertain" type="button">不确定</button>
+                  <button class="btn" data-receipt="snooze" type="button">稍后再问</button>
+                </div>
+
+                <div class="receipt" id="receipt">回执：尚未记录。本卡不会改写事实、不会创建任务、不会发送消息。</div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view hidden" id="view-ringcentral">
+          <div class="grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>RingCentral：Internal AI Infra Support</h2>
+                  <p>模拟用户正在浏览 MCP / OneAPI / Skills 群组。</p>
+                </div>
+                <span class="tag amber">Memory Lens chip</span>
+              </div>
+              <div class="panel-body thread">
+                <div class="message">
+                  <strong>AI Service</strong>
+                  <p>如果 mcp-jira 当前无法直接返回更多字段，可以考虑改服务端、用 JQL 反查，或者直接调用 Jira REST API。需要先明确字段和维护人。</p>
+                </div>
+                <div class="message">
+                  <strong>John Lin</strong>
+                  <p>OneAPI / OpenRouter 渠道和 token 额度策略近期有更新，项目 key 需要明确费用归属。</p>
+                </div>
+                <div class="message">
+                  <strong>Personal AI</strong>
+                  <p>检测到这条线程和你最近的 AI 工具使用经验相关。右侧可以复习 1 题，答案不会直接写入聊天框。</p>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>复习 1 题</h2>
+                  <p>工具能力限制卡。</p>
+                </div>
+              </div>
+              <div class="panel-body practice-card">
+                <div class="question">
+                  <div class="kicker">Q: MCP 工具经验</div>
+                  <p>mcp-jira 当前拿不到更多字段时，AI Service 给过哪三种可行路径？</p>
+                </div>
+                <div class="tag-row">
+                  <span class="tag">hint: 服务端</span>
+                  <span class="tag">hint: JQL</span>
+                  <span class="tag">hint: REST API</span>
+                </div>
+                <div class="hint-answer" id="rc-answer">
+                  <strong>参考答案</strong>
+                  <span>三种路径是：改 mcp-jira 服务端能力；用 JQL 反查需要的字段；绕过 MCP 直接调用 Jira REST API。正式推进前要明确需要哪些字段和维护人。</span>
+                  <div class="source-item"><b>边界</b> 不展示 internal token、key 或完整内部 URL；这里只保留技术路径摘要。</div>
+                </div>
+                <div class="actions">
+                  <button class="btn primary" data-reveal="rc-answer" type="button">显示答案</button>
+                  <button class="btn blue" data-receipt="remembered" type="button">记住了</button>
+                  <button class="btn warn" data-receipt="uncertain" type="button">不确定</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view hidden" id="view-source">
+          <div class="grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Source Memory Detail：从资料生成回忆卡</h2>
+                  <p>用户显式点击后才从资料 takeaways 生成卡片。</p>
+                </div>
+                <span class="tag green">manual create</span>
+              </div>
+              <div class="panel-body">
+                <div class="mini-card">
+                  <strong>资料：AI Notes timeline and release readiness</strong>
+                  <p>来源包含 RingCentral leadership update、mThor planning、AI infra prompt rollout 讨论。</p>
+                  <div class="tag-row">
+                    <span class="tag">takeaways 5</span>
+                    <span class="tag amber">rolling facts 2</span>
+                    <span class="tag red">stale-risk 1 blocked</span>
+                  </div>
+                </div>
+                <div class="mini-card">
+                  <strong>可生成的卡片</strong>
+                  <p>1. AI Notes GA 为何在 26Q1 不可行？</p>
+                  <p>2. 哪些团队被提到是进度关键？</p>
+                  <p>3. 哪类 release date 不应直接当作 rollout 完成？</p>
+                </div>
+                <div class="actions">
+                  <button class="btn primary" data-receipt="created" type="button">生成 3 张回忆卡</button>
+                  <button class="btn" data-receipt="preview" type="button">只预览，不创建</button>
+                </div>
+                <div class="receipt">回执：尚未创建。预览不会生成卡片，也不会改变来源记忆。</div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>生成边界</h2>
+                  <p>只有稳定、可来源化、非敏感内容才进入卡片。</p>
+                </div>
+              </div>
+              <div class="panel-body stack">
+                <div class="mini-card">
+                  <strong>不会生成</strong>
+                  <p>等待 Evidence Watch / confirm request 的事实。</p>
+                </div>
+                <div class="mini-card">
+                  <strong>不会写入</strong>
+                  <p>用户画像、外部系统、Jira comment、RingCentral message。</p>
+                </div>
+                <div class="mini-card">
+                  <strong>只记录</strong>
+                  <p>mastery event：remembered / uncertain / snooze / suppress similar。</p>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view hidden" id="view-mastery">
+          <div class="grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>掌握状态</h2>
+                  <p>不是能力评价，只用于减少重复打扰和安排下次出现。</p>
+                </div>
+              </div>
+              <div class="panel-body stack">
+                <div class="mini-card">
+                  <strong>DEV Estimate / Q3 planning</strong>
+                  <p>掌握度 3 / 5；下次只在 estimate meeting 或 Jira planning 页面出现。</p>
+                  <div class="tag-row"><span class="tag green">remembered 2</span><span class="tag amber">uncertain 1</span></div>
+                </div>
+                <div class="mini-card">
+                  <strong>MCP / Jira field retrieval</strong>
+                  <p>掌握度 2 / 5；下一次在 Internal AI Infra 或 MCP 相关页面出现。</p>
+                  <div class="tag-row"><span class="tag amber">hint needed</span><span class="tag">scene-only</span></div>
+                </div>
+                <div class="mini-card">
+                  <strong>OpenAI financing amount</strong>
+                  <p>暂停：该事实仍在 Evidence Watch / confirm request 风险区，不适合做 stable 学习卡。</p>
+                  <div class="tag-row"><span class="tag red">stale-risk blocked</span></div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>用户控制</h2>
+                  <p>所有入口都可以关闭或降低频率。</p>
+                </div>
+              </div>
+              <div class="panel-body stack">
+                <button class="btn" data-receipt="limit" type="button">今天最多 1 张</button>
+                <button class="btn" data-receipt="suppress" type="button">30 天不问 AI 工具类</button>
+                <button class="btn" data-receipt="export" type="button">复制卡片证据摘要</button>
+                <div class="receipt">设置回执也只影响展示频率；不会删除原始记忆。</div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const views = Array.from(document.querySelectorAll('.view'));
+    const receipt = document.getElementById('receipt');
+
+    const receiptCopy = {
+      remembered: '回执：已记录 remembered。只更新 mastery 状态；未写事实、未发消息、未建任务。',
+      uncertain: '回执：已记录 uncertain。下次相关场景会降低难度或先给 hint；不会写入用户画像。',
+      snooze: '回执：本场景 24 小时内不再提示这张卡。',
+      created: '回执：已创建 3 张回忆卡。只会在相关场景或到期时出现。',
+      preview: '回执：仅预览，未创建卡片。',
+      limit: '回执：今天的主动回忆上限已降为 1 张。',
+      suppress: '回执：AI 工具类卡片 30 天内不主动出现。',
+      export: '回执：已复制证据摘要，不包含敏感链接和原文。'
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.view;
+        tabs.forEach((item) => item.classList.toggle('active', item === tab));
+        views.forEach((view) => view.classList.toggle('hidden', view.id !== `view-${target}`));
+      });
+    });
+
+    document.querySelectorAll('[data-reveal]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.reveal);
+        if (target) {
+          target.classList.add('visible');
+        }
+        if (receipt) {
+          receipt.textContent = '回执：答案已显示。这里只记录 answer_revealed，不代表用户已掌握。';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-receipt]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const key = button.dataset.receipt;
+        const text = receiptCopy[key] || '回执：已记录。';
+        const visibleReceipt = document.querySelector('.view:not(.hidden) .receipt') || receipt;
+        if (visibleReceipt) {
+          visibleReceipt.textContent = text;
+        }
+      });
+    });
+  </script>
+</body>
+</html>

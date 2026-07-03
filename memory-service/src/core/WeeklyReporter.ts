@@ -26,6 +26,7 @@ export interface WeeklyReportResult {
   reflectionCount: number;
   notificationCreated?: boolean;
   botSent?: boolean;
+  botError?: string;
   pushTarget?: RuntimePushTarget;
   reason?: string;
 }
@@ -204,6 +205,7 @@ Keep it concise (under 500 words). Write in the same language as the source cont
 
     let notificationCreated = false;
     let botSent = false;
+    let botError: string | undefined;
     if (pushTarget !== 'none') {
       // 6. Insert notification
       const notificationId = randomUUID();
@@ -242,6 +244,7 @@ Keep it concise (under 500 words). Write in the same language as the source cont
       if (!botResult.sent && botResult.error) {
         console.warn(`[WeeklyReporter] Weekly report bot delivery skipped: ${botResult.error}`);
       }
+      botError = !botResult.sent && botResult.error ? botResult.error : undefined;
     }
 
     console.log(`[WeeklyReporter] Report generated: ${reportPath}`);
@@ -252,6 +255,7 @@ Keep it concise (under 500 words). Write in the same language as the source cont
       reflectionCount: reflections.length,
       notificationCreated,
       botSent,
+      botError,
       pushTarget,
     };
   }

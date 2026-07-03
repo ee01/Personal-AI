@@ -15,6 +15,7 @@ import type {
   ContextAssistMeetingEvent,
   ContextAssistRequest,
   ContextAssistResponse,
+  ContextRecallMatch,
   ContextRecallRequest,
   RecallSourceType,
   StorylineOpportunity,
@@ -235,20 +236,7 @@ function hasDeepPrepSignal(event: ContextAssistMeetingEvent): boolean {
   );
 }
 
-function toEvidence(match: {
-  id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
-  title?: string;
-  snippet: string;
-  sourceLabel?: string;
-  sourceUrl?: string;
-  sourceTitle?: string;
-  exploreLink?: string;
-  links?: Array<{ label: string; url: string }>;
-  whyMatched?: string;
-  timestamp?: number;
-  score?: number;
-}): ComposerAssistEvidence {
+function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
   return {
     id: match.id,
     type: match.type,

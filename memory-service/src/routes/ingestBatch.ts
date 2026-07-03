@@ -107,6 +107,7 @@ const ingestDecisionSchema = {
         surprise: { type: 'number' as const },
         redundancy: { type: 'number' as const },
         userInterestBoost: { type: 'number' as const },
+        entityAffinityBoost: { type: 'number' as const },
       },
     },
     extractionStatus: {
@@ -131,6 +132,20 @@ const ingestDecisionSchema = {
     injectionFlags: {
       type: 'array' as const,
       items: { type: 'string' as const },
+    },
+    mergeOp: {
+      type: 'object' as const,
+      properties: {
+        op: {
+          type: 'string' as const,
+          enum: ['UPDATE', 'MERGE', 'NOOP'],
+        },
+        neighborIds: {
+          type: 'array' as const,
+          items: { type: 'number' as const },
+        },
+        reason: { type: 'string' as const },
+      },
     },
   },
 };

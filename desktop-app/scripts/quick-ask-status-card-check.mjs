@@ -77,6 +77,147 @@ async function main() {
       runtimeSequence: [runtimeSummary, refreshedRuntimeSummary],
     });
 
+    await page.locator('#scope-personal-button').click();
+    await page.waitForFunction(
+      () => window.__lastSettingsPatch?.explorer?.askDefaultScope === 'personal',
+    );
+    await assertTextIncludes(page.locator('#shortcut-banner'), '范围已保存');
+    await assertTextIncludes(
+      page.locator('#shortcut-banner'),
+      '后续 Quick Ask / Ask 默认用个人范围',
+    );
+    await assertTextIncludes(
+      page.locator('#shortcut-banner'),
+      '不会改已入库记忆',
+    );
+    await assertTextIncludes(
+      page.locator('#shortcut-banner'),
+      '不会触发同步发送',
+    );
+
+    const localOnlyScopePage = await setupQuickAskPage(
+      browser,
+      url,
+      runtimeSummary,
+      {
+        settingsWithoutExplorer: true,
+      },
+    );
+    await localOnlyScopePage.locator('#scope-both-button').click();
+    await assertTextIncludes(
+      localOnlyScopePage.locator('#shortcut-banner'),
+      '范围已切到两者',
+    );
+    await assertTextIncludes(
+      localOnlyScopePage.locator('#shortcut-banner'),
+      '默认值未保存',
+    );
+    await assertTextIncludes(
+      localOnlyScopePage.locator('#shortcut-banner'),
+      '只影响当前 Quick Ask 窗口后续提问',
+    );
+    assert.equal(
+      await localOnlyScopePage.evaluate(() => window.__lastSettingsPatch),
+      null,
+    );
+
+    const failedScopePage = await setupQuickAskPage(browser, url, runtimeSummary, {
+      settingsUpdateErrorMessage: 'disk is read-only',
+    });
+    await failedScopePage.locator('#scope-personal-button').click();
+    await failedScopePage.waitForFunction(
+      () => window.__lastSettingsPatch?.explorer?.askDefaultScope === 'personal',
+    );
+    await assertTextIncludes(
+      failedScopePage.locator('#shortcut-banner'),
+      '默认值保存失败：disk is read-only',
+    );
+    await assertTextIncludes(
+      failedScopePage.locator('#shortcut-banner'),
+      '只影响当前 Quick Ask 窗口后续提问',
+    );
+
+    const mixedRuntimeSummary = {
+      ...runtimeSummary,
+      pendingConfirmCount: 1,
+      queuedActionCount: 3,
+      pendingApprovalCount: 0,
+      topStatus: {
+        kind: 'sync_issue',
+        label: '豆包同步异常',
+        count: 1,
+        priority: 3,
+      },
+      items: [
+        {
+          kind: 'sync_issue',
+          title: '豆包同步异常',
+          summary: '最近一次 mobile_context_thread 投递失败。',
+          detailLines: ['失败链路：mobile_context_thread'],
+          count: 1,
+          badgeLabel: '需恢复',
+          actionHint: '继续排查同步',
+          priority: 3,
+        },
+        {
+          kind: 'confirm_request',
+          title: '待你确认',
+          summary: '是否记录新的回复偏好？',
+          detailLines: ['来自用户画像确认请求'],
+          count: 1,
+          badgeLabel: '1 条',
+          actionHint: '继续追问这条状态',
+          priority: 4,
+        },
+        {
+          kind: 'queued_action',
+          title: '动作排队中',
+          summary: 'OpenClaw 委派动作等待执行。',
+          detailLines: ['队列中：3'],
+          count: 3,
+          badgeLabel: '排队 3',
+          actionHint: '继续追问动作',
+          priority: 7,
+        },
+      ],
+      fetchedAt: '2026-05-21T00:01:00.000Z',
+    };
+    const clearedRuntimeSummary = {
+      ...mixedRuntimeSummary,
+      pendingConfirmCount: 0,
+      queuedActionCount: 0,
+      topStatus: undefined,
+      items: [],
+      fetchedAt: '2026-05-21T00:02:00.000Z',
+    };
+    const mixedStatusPage = await setupQuickAskPage(
+      browser,
+      url,
+      mixedRuntimeSummary,
+      {
+        now: Date.parse('2026-05-21T00:02:00.000Z'),
+        runtimeSequence: [mixedRuntimeSummary, clearedRuntimeSummary],
+      },
+    );
+    await mixedStatusPage.locator('#status-pill').click();
+    await assertTextIncludes(
+      mixedStatusPage.locator('.status-card-composition').first(),
+      '状态构成（3 类）：1 个同步异常、1 个待确认、3 个排队动作',
+    );
+    await assertTextIncludes(
+      mixedStatusPage.locator('.status-card-composition').first(),
+      '不会批准、重试、发送、取消、归档或写入',
+    );
+    await mixedStatusPage.locator('.status-card-refresh').first().click();
+    await assertText(
+      mixedStatusPage.locator('.status-empty').first(),
+      '刚刚重新读取过，目前没有需要关注的运行态。',
+    );
+    assert.equal(
+      await mixedStatusPage.locator('.status-card-composition').count(),
+      0,
+    );
+
     const statusPill = page.locator('#status-pill');
     await statusPill.waitFor({ state: 'visible' });
     await assertText(statusPill, '外部询问待批准发送');
@@ -85,22 +226,48 @@ async function main() {
     const statusItem = page.locator('.status-item').first();
     await statusItem.waitFor({ state: 'visible' });
     await assertText(page.locator('.status-card-meta').first(), '快照：2 分钟前 · 1 项状态');
+    await assertTextIncludes(
+      page.locator('.status-card-composition').first(),
+      '状态构成：2 个外部询问',
+    );
     await assertText(page.locator('.status-item-source').first(), 'Outreach 运行态');
+    await assertText(page.locator('.status-item-freshness').first(), '2 分钟前读取');
     await assertText(page.locator('.status-item-title').first(), '外部询问待批准发送');
     await assertText(page.locator('.status-item-summary').first(), '是否向 Chris 追问发布窗口？');
+    await assertText(
+      page.locator('.status-item-priority').first(),
+      '外部询问：先区分待你批准发送，还是等待对方回复。',
+    );
     await assertText(page.locator('.status-item-details').first(), '待你确认发送：2');
     await assertText(page.locator('.status-item-hint').first(), '查看待发内容');
+    await assertText(
+      page.locator('.status-item-action-label').first(),
+      '查看待发内容',
+    );
+    await assertTextIncludes(
+      page.locator('.status-item-action-boundary').first(),
+      '不会发送 outreach',
+    );
 
     await page.locator('.status-card-refresh').first().click();
     await assertText(page.locator('.status-refresh-note').first(), '已重新读取状态快照。');
     await assertText(page.locator('.status-card-meta').first(), '快照：刚刚刷新 · 1 项状态');
     await assertText(page.locator('.status-item-source').first(), 'Memory Service 确认请求');
+    await assertText(page.locator('.status-item-freshness').first(), '刚刚读取');
     await assertText(page.locator('.status-item-title').first(), '待你确认');
     await assertText(page.locator('.status-item-summary').first(), '是否记录新的回复偏好？');
 
     await statusPill.click();
     await assertText(page.locator('.status-item-title').first(), '待你确认');
     assert.equal(await page.locator('.role-status').count(), 1);
+    await assertText(
+      page.locator('.status-item-action-label').first(),
+      '继续追问这条状态',
+    );
+    await assertTextIncludes(
+      page.locator('.status-item-action-boundary').first(),
+      '不会批准',
+    );
 
     await statusItem.click();
     const draft = await page.locator('#composer').inputValue();
@@ -108,7 +275,58 @@ async function main() {
     assert.match(draft, /是否记录新的回复偏好/);
     assert.match(draft, /来自用户画像确认请求/);
     assert.match(draft, /继续追问这条状态/);
+    assert.match(draft, /这条状态来自刚刚读取的快照/);
+    assert.match(draft, /显示原因：需要你确认：不会自动写入或发送。/);
+    assert.match(draft, /处理入口：只把待确认项带入追问草稿/);
+    assert.match(draft, /不会批准、拒绝或写入/);
     assert.match(draft, /帮我总结这些待确认项/);
+    assert.equal(await page.evaluate(() => window.__openedSettings), 0);
+
+    const failedRefreshPage = await setupQuickAskPage(browser, url, runtimeSummary, {
+      now: Date.parse('2026-05-21T00:02:00.000Z'),
+      runtimeSequence: [runtimeSummary],
+      runtimeSummaryErrorAtCalls: [1],
+      runtimeSummaryErrorMessage: 'connect ECONNREFUSED 127.0.0.1:3210',
+    });
+    await failedRefreshPage.locator('#status-pill').click();
+    await failedRefreshPage.locator('.status-card-refresh').first().click();
+    await assertTextIncludes(
+      failedRefreshPage.locator('.status-refresh-note').first(),
+      '重新读取失败，当前状态未确认',
+    );
+    await assertTextIncludes(
+      failedRefreshPage.locator('.status-refresh-note').first(),
+      '上次成功快照',
+    );
+    await assertText(
+      failedRefreshPage.locator('.status-item-freshness').first(),
+      '刷新失败 · 上次快照',
+    );
+    await failedRefreshPage.locator('.status-item').first().click();
+    const failedRefreshDraft = await failedRefreshPage
+      .locator('#composer')
+      .inputValue();
+    assert.match(failedRefreshDraft, /刚刚失败：重新读取失败/);
+    assert.match(failedRefreshDraft, /当前状态未确认/);
+    assert.match(failedRefreshDraft, /上次成功快照/);
+    assert.match(failedRefreshDraft, /ECONNREFUSED/);
+
+    const staleRuntimePage = await setupQuickAskPage(browser, url, runtimeSummary, {
+      now: Date.parse('2026-05-21T00:31:00.000Z'),
+    });
+    await staleRuntimePage.locator('#status-pill').click();
+    await assertText(
+      staleRuntimePage.locator('.status-card-meta').first(),
+      '快照：31 分钟前 · 1 项状态',
+    );
+    await assertText(
+      staleRuntimePage.locator('.status-item-freshness').first(),
+      '旧快照 · 先重新读取',
+    );
+    await staleRuntimePage.locator('.status-item').first().click();
+    const staleDraft = await staleRuntimePage.locator('#composer').inputValue();
+    assert.match(staleDraft, /31 分钟前的旧快照/);
+    assert.match(staleDraft, /先点重新读取确认它是否仍然存在/);
 
     const runtimeIssuePage = await setupQuickAskPage(browser, url, {
       ...runtimeSummary,
@@ -147,6 +365,18 @@ async function main() {
       runtimeIssuePage.locator('.status-item-hint').first(),
       '测试 Memory Service',
     );
+    await assertText(
+      runtimeIssuePage.locator('.status-item-action-label').first(),
+      '测试 Memory Service',
+    );
+    await assertTextIncludes(
+      runtimeIssuePage.locator('.status-item-action-boundary').first(),
+      '不会重试服务',
+    );
+    await assertText(
+      runtimeIssuePage.locator('.status-item-priority').first(),
+      '先确认状态：读取失败时不能把旧状态当最新。',
+    );
 
     await runtimeStatusItem.click();
     const runtimeDraft = await runtimeIssuePage.locator('#composer').inputValue();
@@ -154,6 +384,42 @@ async function main() {
     assert.match(runtimeDraft, /ECONNREFUSED/);
     assert.match(runtimeDraft, /不是同步已完成/);
     assert.match(runtimeDraft, /测试 Memory Service/);
+    assert.match(runtimeDraft, /处理入口：只把状态读取异常带入排查草稿/);
+    assert.match(runtimeDraft, /不会重试服务或改配置/);
+    assert.equal(await runtimeIssuePage.evaluate(() => window.__openedSettings), 0);
+
+    const setupBlockerPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: {
+        kind: 'setup_blocker',
+        label: 'Desktop App 未完成设置',
+        count: 1,
+        priority: 1,
+      },
+      items: [
+        {
+          kind: 'setup_blocker',
+          title: 'Desktop App 未完成设置',
+          summary: '缺少 Memory Service User ID。',
+          detailLines: ['写操作需要 X-User-Id。'],
+          count: 1,
+          badgeLabel: '需设置',
+          actionHint: '打开设置补齐',
+          priority: 1,
+        },
+      ],
+    });
+    await setupBlockerPage.locator('#status-pill').click();
+    await assertText(
+      setupBlockerPage.locator('.status-item-action-label').first(),
+      '打开设置补齐',
+    );
+    await assertTextIncludes(
+      setupBlockerPage.locator('.status-item-action-boundary').first(),
+      '不会自动同步',
+    );
+    await setupBlockerPage.locator('.status-item').first().click();
+    await setupBlockerPage.waitForFunction(() => window.__openedSettings === 1);
 
     const repeatedRuntimePage = await setupQuickAskPage(
       browser,
@@ -202,6 +468,117 @@ async function main() {
       'role-assistant',
     ]);
 
+    const delayedContextPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    }, {
+      deferActiveBrowserContext: true,
+      activeBrowserContext: {
+        available: true,
+        title: 'RingCentral',
+        url: 'https://app.ringcentral.com/messages/153798238214',
+        visibleText: 'MTR-141852: AI Custom VBG 那个 BE ready 了吗？',
+      },
+      askStreamEvents: [
+        {
+          type: 'result',
+          answer: '延迟上下文答案',
+          evidence: [],
+          runtime: { items: [] },
+        },
+      ],
+    });
+    await delayedContextPage.locator('#composer').fill('那个 BE ready 了吗？');
+    await delayedContextPage.keyboard.press('Enter');
+    await delayedContextPage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+          'pending' &&
+        document.body.textContent?.includes('正在检索相关记忆') &&
+        window.__activeBrowserContextPending === true &&
+        !window.__lastAskPayload,
+    );
+    await assertText(
+      delayedContextPage.locator('.pending-status-copy').first(),
+      '正在检索相关记忆...',
+    );
+    await assertText(
+      delayedContextPage.locator('#pending-hint'),
+      '正在检索相关记忆...',
+    );
+    await delayedContextPage.evaluate(() => {
+      window.__resolveActiveBrowserContext?.();
+    });
+    await delayedContextPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '那个 BE ready 了吗？',
+    );
+    await delayedContextPage.waitForFunction(() =>
+      document.body.textContent?.includes('延迟上下文答案'),
+    );
+
+    const ambiguousAskPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    }, {
+      askStreamEvents: [
+        {
+          type: 'result',
+          answer: [
+            '这个问题可能指向多个近期话题：AI Generated VBG、AI Notes。',
+            '',
+            '候选话题：',
+            '1. AI Generated VBG (匹配角色词、近期高频)',
+            '2. AI Notes (匹配角色词、近期高频)',
+            '',
+            '你可以直接回复候选序号，或补上项目 / 群组 / issue key；确认后我再继续查证状态和证据。',
+          ].join('\n'),
+          contextMatch: {
+            state: 'ambiguous',
+            candidates: [
+              {
+                label: 'AI Generated VBG',
+                reasons: ['匹配角色词', '近期高频'],
+              },
+              {
+                label: 'AI Notes',
+                reasons: ['匹配角色词', '近期高频'],
+              },
+            ],
+          },
+          runtime: { items: [] },
+        },
+      ],
+    });
+    await ambiguousAskPage.locator('#composer').fill('那个 BE ready 了吗？');
+    await ambiguousAskPage.keyboard.press('Enter');
+    await ambiguousAskPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '那个 BE ready 了吗？',
+    );
+    await ambiguousAskPage
+      .locator('.ask-candidate-choice')
+      .nth(1)
+      .waitFor({ state: 'visible' });
+    await assertText(
+      ambiguousAskPage.locator('.ask-candidate-choice').nth(1).locator('strong'),
+      'AI Notes',
+    );
+    await ambiguousAskPage.locator('.ask-candidate-choice').nth(1).click();
+    await ambiguousAskPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '2',
+    );
+    await assertText(
+      ambiguousAskPage.locator('.role-user').last().locator('p'),
+      '选择话题：AI Notes',
+    );
+    const candidateFollowupContext = await ambiguousAskPage.evaluate(
+      () => window.__lastAskPayload?.context || '',
+    );
+    assert.match(candidateFollowupContext, /User: 那个 BE ready 了吗？/);
+    assert.match(candidateFollowupContext, /Assistant: 这个问题可能指向多个近期话题/);
+    assert.match(candidateFollowupContext, /候选话题：/);
+
     const sessionStart = Date.parse('2026-05-25T09:00:00.000Z');
     const sessionPage = await setupQuickAskPage(browser, url, {
       ...runtimeSummary,
@@ -209,6 +586,15 @@ async function main() {
       items: [],
     }, {
       now: sessionStart,
+      injectResult: {
+        accepted: true,
+        threadId: 'mobile-context-thread-abcdef123456',
+        transportMode: 'playwright',
+        transportFallbackReason: 'No existing doubao.com tab found in Chrome',
+        verified: true,
+        messageVisible: true,
+        challengeDetected: false,
+      },
       askStreamEvents: [
         {
           type: 'result',
@@ -246,9 +632,13 @@ async function main() {
     );
     await mobileSyncButton.waitFor({ state: 'visible' });
     await assertText(mobileSyncButton, '发到豆包手机对话');
-    await assertText(
+    await assertTextIncludes(
       sessionPage.locator('.message-action-status').first(),
-      '带证据发送，不写长期记忆',
+      'query_answer_card（本轮答案 + 1 条证据摘要）-> mobile_context_thread',
+    );
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').first(),
+      '不写长期记忆、不确认答案、不改绑定、不标记待办完成',
     );
 
     await mobileSyncButton.click();
@@ -263,9 +653,25 @@ async function main() {
     assert.equal(injectPayload.evidence[0].source, 'manual');
     assert.match(injectPayload.evidence[0].title, /Esone/);
     assert.match(injectPayload.evidence[0].snippet, /真实记忆证据/);
-    await assertText(
+    await assertTextIncludes(
       sessionPage.locator('.message-action-status').first(),
-      '已发送到豆包手机对话',
+      '已发送：query_answer_card（本轮答案 + 1 条证据摘要）-> mobile_context_thread',
+    );
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').first(),
+      '只写已绑定手机对话',
+    );
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').first(),
+      '本次审计：线程：mobile-c...123456',
+    );
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').first(),
+      '已验证 · 消息可见 · 传输：内置 Chromium',
+    );
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').first(),
+      '回退原因：No existing doubao.com tab found in Chrome',
     );
 
     await sessionPage.evaluate(() => {
@@ -453,6 +859,38 @@ async function main() {
         document.querySelector('#quick-ask-shell')?.dataset.state ===
         'voice-listening',
     );
+    await assertTextIncludes(
+      voicePage.locator('#voice-receipt'),
+      '本机语音识别',
+    );
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '不会自动发送');
+    await voicePage.locator('#voice-orb').click();
+    await voicePage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'stopped',
+        text: '',
+      });
+    });
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-ready',
+    );
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '已停止监听');
+    await assertTextIncludes(
+      voicePage.locator('#voice-receipt'),
+      '未听到可发送内容',
+    );
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '没有发送');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '保存音频');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '发起 Ask');
+    assert.equal(await voicePage.locator('#voice-send').isDisabled(), true);
+    await voicePage.locator('#voice-orb').click();
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-listening',
+    );
     await voicePage.evaluate(() => {
       window.__quickAskHandlers.voice?.({
         type: 'error',
@@ -466,6 +904,8 @@ async function main() {
       '请先在系统设置中允许语音识别权限。',
     );
     await assertText(voicePage.locator('#voice-recovery'), '打开语音识别设置');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '语音未发送');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '草稿已保留');
     await voicePage.locator('#voice-recovery').click();
     await voicePage.waitForFunction(() => window.__openedSpeechSettings === 1);
 
@@ -482,6 +922,74 @@ async function main() {
       voicePage.locator('#voice-transcript'),
       'Speech helper is not running',
     );
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '语音未发送');
+
+    await voicePage.evaluate(() => {
+      window.__voiceStartError = '';
+    });
+    await voicePage.locator('#voice-orb').click();
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-listening',
+    );
+    await voicePage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'transcript',
+        text: '请总结今天的重点',
+        isFinal: false,
+      });
+    });
+    await assertText(voicePage.locator('#voice-transcript'), '请总结今天的重点');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '正在听写');
+    await voicePage.locator('#voice-orb').click();
+    await voicePage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'stopped',
+        text: '请总结今天的重点',
+      });
+    });
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-ready',
+    );
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '语音草稿');
+    await assertTextIncludes(voicePage.locator('#voice-receipt'), '已停止监听');
+    await assertTextIncludes(
+      voicePage.locator('#voice-receipt'),
+      '点箭头才会发送转写文本',
+    );
+    await voicePage.locator('#voice-cancel').click();
+    assert.equal(await voicePage.locator('#composer').inputValue(), '请总结今天的重点');
+
+    await voicePage.locator('#composer').fill('');
+    await voicePage.locator('#voice-button').click();
+    await voicePage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'transcript',
+        text: '帮我查一下今天的重点',
+        isFinal: true,
+      });
+    });
+    await voicePage.locator('#voice-send').click();
+    await voicePage.waitForFunction(
+      () => window.__lastAskPayload?.query === '帮我查一下今天的重点',
+    );
+    const voiceAskPayload = await voicePage.evaluate(() => window.__lastAskPayload);
+    assert.equal(voiceAskPayload.scope, 'work');
+    await assertText(
+      voicePage.locator('.role-user').last().locator('p'),
+      '帮我查一下今天的重点',
+    );
+    const voiceSubmitReceipt = voicePage
+      .locator('.role-user')
+      .last()
+      .locator('.user-message-receipt');
+    await assertTextIncludes(voiceSubmitReceipt, '语音草稿已确认发送');
+    await assertTextIncludes(voiceSubmitReceipt, '工作范围');
+    await assertTextIncludes(voiceSubmitReceipt, '只提交转写文本');
+    await assertTextIncludes(voiceSubmitReceipt, '不发送或保存原始音频');
   } finally {
     await browser.close();
     await new Promise((resolveClose) => server.close(resolveClose));
@@ -502,8 +1010,11 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
     window.__voiceStartError = testOptions.voiceStartError || '';
     window.__lastAskPayload = null;
     window.__lastInjectPayload = null;
+    window.__lastSettingsPatch = null;
     window.__runtimeSummaryCalls = 0;
     window.__quickAskHandlers = {};
+    window.__activeBrowserContextPending = false;
+    window.__resolveActiveBrowserContext = null;
     const askStreamEvents = Array.isArray(testOptions.askStreamEvents)
       ? testOptions.askStreamEvents
       : [];
@@ -511,20 +1022,32 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
       ? testOptions.runtimeSequence
       : null;
     window.bridgeApi = {
-      getSettings: async () => ({
-        effective: {
-          explorer: {
-            askDefaultScope: 'work',
+      getSettings: async () =>
+        testOptions.settingsWithoutExplorer
+          ? {
+              effective: {},
+            }
+          : {
+              effective: {
+                explorer: {
+                  askDefaultScope: 'work',
+                },
+                uiLanguage: 'zh-CN',
+              },
+            },
+      updateSettings: async (payload) => {
+        window.__lastSettingsPatch = payload;
+        if (testOptions.settingsUpdateErrorMessage) {
+          throw new Error(testOptions.settingsUpdateErrorMessage);
+        }
+        return {
+          effective: {
+            explorer: {
+              askDefaultScope: payload?.explorer?.askDefaultScope || 'work',
+            },
           },
-        },
-      }),
-      updateSettings: async (payload) => ({
-        effective: {
-          explorer: {
-            askDefaultScope: payload?.explorer?.askDefaultScope || 'work',
-          },
-        },
-      }),
+        };
+      },
     };
     window.explorerApi = {
       getStatus: async () => ({ askDefaultScope: 'work' }),
@@ -547,20 +1070,41 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
           await onEvent(event);
         }
       },
-      getActiveBrowserContext: async () =>
-        testOptions.activeBrowserContext || { available: false },
+      getActiveBrowserContext: async () => {
+        if (testOptions.deferActiveBrowserContext) {
+          window.__activeBrowserContextPending = true;
+          await new Promise((resolve) => {
+            window.__resolveActiveBrowserContext = () => {
+              window.__activeBrowserContextPending = false;
+              window.__resolveActiveBrowserContext = null;
+              resolve();
+            };
+          });
+        }
+        return testOptions.activeBrowserContext || { available: false };
+      },
       injectQuery: async (payload) => {
         window.__lastInjectPayload = payload;
         return testOptions.injectResult || { accepted: true };
       },
       remember: async () => ({ items: [] }),
       getRuntimeSummary: async () => {
+        const callIndex = window.__runtimeSummaryCalls;
+        window.__runtimeSummaryCalls += 1;
+        if (
+          Array.isArray(testOptions.runtimeSummaryErrorAtCalls) &&
+          testOptions.runtimeSummaryErrorAtCalls.includes(callIndex)
+        ) {
+          throw new Error(
+            testOptions.runtimeSummaryErrorMessage ||
+              'Runtime summary unavailable',
+          );
+        }
         if (!runtimeSequence?.length) return runtime;
         const index = Math.min(
-          window.__runtimeSummaryCalls,
+          callIndex,
           runtimeSequence.length - 1,
         );
-        window.__runtimeSummaryCalls += 1;
         return runtimeSequence[index];
       },
       setLayout: async () => ({ ok: true }),
@@ -655,6 +1199,14 @@ function contentTypeFor(filePath) {
 async function assertText(locator, expected) {
   const text = (await locator.textContent())?.replace(/\s+/g, ' ').trim();
   assert.equal(text, expected);
+}
+
+async function assertTextIncludes(locator, expected) {
+  const text = (await locator.textContent())?.replace(/\s+/g, ' ').trim() || '';
+  assert.ok(
+    text.includes(expected),
+    `${JSON.stringify(text)} should include ${JSON.stringify(expected)}`,
+  );
 }
 
 async function currentSessionRowRoles(page) {

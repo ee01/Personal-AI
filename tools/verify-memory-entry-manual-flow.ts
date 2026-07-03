@@ -227,6 +227,11 @@ async function main() {
     'manual notify bot flow should still work',
   );
   assert.match(JSON.stringify(botMessages[0]), /blocker/i);
+  assert.match(
+    botMessages[0]?.message || '',
+    /__关注项__：Only notify me when blocker is mentioned/,
+  );
+  assert.doesNotMatch(botMessages[0]?.message || '', /RULE_REF|RULE_ID|规则\d/);
 
   storage.concernedItems = [
     {

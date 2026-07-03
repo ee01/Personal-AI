@@ -1,7 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CloudASRProvider } from '../cloudASRProvider';
+import {
+  buildCloudASRStatusDetail,
+  CloudASRProvider,
+} from '../cloudASRProvider.js';
+
+test('buildCloudASRStatusDetail names endpoint style, model, language, and segment window', () => {
+  assert.equal(
+    buildCloudASRStatusDetail({
+      MEETING_TRANSCRIBE_API_STYLE: 'openai_chat_completions',
+      MEETING_TRANSCRIBE_MODEL: 'qwen3-asr-flash',
+      MEETING_TRANSCRIBE_LANGUAGE: 'zh-CN',
+    }),
+    'Cloud ASR · POST /v1/chat/completions + input_audio · OpenAI Chat Completions + input_audio · model qwen3-asr-flash · language zh-CN · segment 5s',
+  );
+
+  assert.equal(
+    buildCloudASRStatusDetail({
+      MEETING_TRANSCRIBE_API_STYLE: 'openai_audio_transcriptions',
+      MEETING_TRANSCRIBE_MODEL: 'whisper-1',
+      MEETING_TRANSCRIBE_LANGUAGE: 'auto',
+    }),
+    'Cloud ASR · POST /v1/audio/transcriptions · OpenAI Audio Transcriptions · model whisper-1 · language auto · segment 5s',
+  );
+});
 
 test('CloudASRProvider.stop emits stopped status when idle', async () => {
   const provider = new CloudASRProvider();

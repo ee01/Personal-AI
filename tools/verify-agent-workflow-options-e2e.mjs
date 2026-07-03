@@ -24,6 +24,9 @@ function jsonResponse(body) {
 
 function buildOllamaResponse(prompt) {
   if (prompt.includes('<message_group')) {
+    const lowConfidenceReview = prompt.includes(
+      'not sure whether it requires action yet',
+    );
     return {
       data: [
         {
@@ -32,8 +35,10 @@ function buildOllamaResponse(prompt) {
           matched_rule: '[RULE_REF:manual:manual-1]',
           matched_rule_refs: ['manual:manual-1'],
           matched_rule_ids: [],
-          summary: 'manual blocker watch rule matched',
-          confidence: 0.88,
+          summary: lowConfidenceReview
+            ? 'manual blocker watch rule matched with low confidence'
+            : 'manual blocker watch rule matched',
+          confidence: lowConfidenceReview ? 0.42 : 0.88,
         },
       ],
     };
@@ -126,11 +131,30 @@ async function installNetworkMocks(context) {
 
     if (url.endsWith('/api/generate')) {
       const body = JSON.parse(request.postData() || '{}');
+      const prompt = String(body.prompt || '');
+      if (
+        prompt.includes('force relevance failure') &&
+        prompt.includes('分析以下消息的重要性')
+      ) {
+        await route.fulfill(
+          {
+            status: 500,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              error: 'forced relevance tool failure',
+            }),
+          },
+        );
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 150));
       await route.fulfill(
         jsonResponse({
           response: JSON.stringify(
-            buildOllamaResponse(String(body.prompt || '')),
+            buildOllamaResponse(prompt),
           ),
         }),
       );
@@ -186,6 +210,19 @@ try {
   await installNetworkMocks(context);
 
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        async writeText(text) {
+          window.__agentWorkflowClipboardText = String(text || '');
+        },
+        async readText() {
+          return window.__agentWorkflowClipboardText || '';
+        },
+      },
+    });
+  });
   const assertNoPageErrors = collectPageErrors(page);
   await page.goto(`chrome-extension://${extensionId}/options.html`, {
     waitUntil: 'load',
@@ -234,7 +271,116 @@ try {
   await page.locator('h3', { hasText: '关注项测试' }).waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('.agent-workflow-source-receipt', { hasText: '内置样例范围' })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '运行前范围',
+    })
+    .waitFor({ timeout: 5000 });
+  const runScopeReceiptText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '运行前范围',
+    })
+    .innerText();
+  assert.match(runScopeReceiptText, /当前表单可直接测试/);
+  assert.match(runScopeReceiptText, /本地门禁未建立/);
+  assert.match(runScopeReceiptText, /还没有保存样例基线/);
+  assert.match(runScopeReceiptText, /运行测试只重跑当前表单/);
+  assert.match(runScopeReceiptText, /运行样例、回放测试、运行保存样例/);
+  assert.match(runScopeReceiptText, /批量回归逐条重跑本地保存样例/);
+  assert.match(runScopeReceiptText, /作为发布前证据/);
+  assert.match(runScopeReceiptText, /不会写入 Memory Service/);
+  assert.match(runScopeReceiptText, /不会发送通知/);
+  assert.match(runScopeReceiptText, /不会执行规则自动化/);
+  assert.match(runScopeReceiptText, /不会.*覆盖基线/);
+  assert.match(runScopeReceiptText, /门禁未建立/);
+  assert.match(runScopeReceiptText, /本地测试无外发/);
+  const initialSourceReceiptText = (
+    await page.locator('.agent-workflow-source-receipt').allInnerTexts()
+  ).join('\n');
+  assert.match(initialSourceReceiptText, /运行前范围/);
+  assert.match(initialSourceReceiptText, /内置样例范围/);
+  assert.match(initialSourceReceiptText, /预期观察：通知\/存储/);
+  assert.match(initialSourceReceiptText, /不会写入 Memory Service/);
+  assert.match(initialSourceReceiptText, /最近消息范围/);
+  assert.match(initialSourceReceiptText, /尚未选中可回放消息/);
+  assert.match(initialSourceReceiptText, /保存样例范围/);
+  assert.match(initialSourceReceiptText, /保存当前用例后/);
+  assert.match(initialSourceReceiptText, /回归样本构成/);
+  assert.match(initialSourceReceiptText, /还没有保存样例/);
+  assert.match(initialSourceReceiptText, /不读取 Memory Service/);
+  assert.match(initialSourceReceiptText, /批量回归范围/);
+  assert.match(initialSourceReceiptText, /暂无保存样例/);
+  assert.match(initialSourceReceiptText, /不会读取 Memory Service/);
 
+  await page.locator('#workflowScenario').selectOption('low-confidence-review');
+  await page
+    .locator('.agent-workflow-scenario-actions button', {
+      hasText: '运行样例',
+    })
+    .click();
+  await page
+    .locator('.agent-test-review-banner', {
+      hasText: '通知复核候选',
+    })
+    .waitFor({ timeout: 15000 });
+  const lowConfidenceReviewText = await page
+    .locator('.agent-test-review-banner')
+    .innerText();
+  assert.match(lowConfidenceReviewText, /低置信度关注项命中待复核：42% < 70%/);
+  assert.match(lowConfidenceReviewText, /规则：manual:manual-1/);
+  assert.match(lowConfidenceReviewText, /置信度 42%/);
+  assert.match(lowConfidenceReviewText, /真实复核入口尚未创建/);
+  assert.match(lowConfidenceReviewText, /不会创建真实复核队列项/);
+  assert.match(lowConfidenceReviewText, /不会写入 Memory Service/);
+  assert.match(lowConfidenceReviewText, /不会发送通知/);
+  assert.match(lowConfidenceReviewText, /不会执行规则自动化/);
+  const lowConfidenceNextActionText = await page
+    .locator('.agent-workflow-next-actions')
+    .innerText();
+  assert.match(lowConfidenceNextActionText, /确认本地复核候选/);
+  assert.match(lowConfidenceNextActionText, /不会创建真实复核队列项/);
+  const lowConfidenceOrchestrationText = await page
+    .locator('.agent-workflow-orchestration')
+    .innerText();
+  assert.match(lowConfidenceOrchestrationText, /通知待复核（本地候选）/);
+  assert.match(lowConfidenceOrchestrationText, /本地复核候选/);
+
+  await page
+    .locator('#workflowTestContent')
+    .fill(
+      'API split has a blocker; force relevance failure so diagnostics point to the failed tool.',
+    );
+  await page
+    .locator('.agent-workflow-test-header button', { hasText: '运行测试' })
+    .click();
+  await page
+    .locator('.agent-workflow-orchestration.blocked', {
+      hasText: '编排未达门禁',
+    })
+    .waitFor({ timeout: 15000 });
+  const toolFailureOrchestrationText = await page
+    .locator('.agent-workflow-orchestration.blocked')
+    .innerText();
+  assert.match(toolFailureOrchestrationText, /失败 Agent 重要性判断Agent/);
+  assert.match(
+    toolFailureOrchestrationText,
+    /工具错误 重要性判断Agent \/ 重要性判断工具/,
+  );
+  const toolFailureReadinessText = await page
+    .locator('.agent-workflow-readiness')
+    .innerText();
+  assert.match(toolFailureReadinessText, /执行 Trace/);
+  assert.match(toolFailureReadinessText, /重要性判断Agent/);
+
+  await page.locator('#workflowScenario').selectOption('manual-watch-hit');
+  await page
+    .locator('.agent-workflow-scenario-actions button', {
+      hasText: '填入样例',
+    })
+    .click();
   await page.waitForFunction(
     () =>
       document
@@ -312,11 +458,35 @@ try {
   assert.match(decisionPathText, /7 个 Agent \/ 9 个工具/);
   assert.match(decisionPathText, /跳过工具 1/);
   assert.match(decisionPathText, /占位工具 1/);
+  await page
+    .locator('.agent-workflow-orchestration.review', {
+      hasText: '编排需复核',
+    })
+    .waitFor({ timeout: 15000 });
+  const orchestrationReceiptText = await page
+    .locator('.agent-workflow-orchestration')
+    .innerText();
+  assert.match(orchestrationReceiptText, /Agent 6\/7/);
+  assert.match(orchestrationReceiptText, /工具 9\/9/);
+  assert.match(orchestrationReceiptText, /跳过工具 1/);
+  assert.match(orchestrationReceiptText, /占位工具 1/);
+  assert.match(orchestrationReceiptText, /通知会在真实入口发送/);
+  assert.match(orchestrationReceiptText, /不会写入 Memory Service/);
+  assert.match(orchestrationReceiptText, /本地测试/);
   await page.locator('.agent-workflow-verdict').waitFor({ timeout: 15000 });
   const verdictText = await page.locator('.agent-workflow-verdict').innerText();
   assert.match(verdictText, /需要复核后再执行/);
   assert.match(verdictText, /执行 Trace/);
   assert.match(verdictText, /补齐被跳过工具/);
+  await page
+    .locator('.agent-workflow-structure', { hasText: '结构覆盖回执' })
+    .waitFor({ timeout: 15000 });
+  const structuralCoverageText = await page
+    .locator('.agent-workflow-structure')
+    .innerText();
+  assert.match(structuralCoverageText, /结构覆盖 Agent 6\/7、工具 9\/9/);
+  assert.match(structuralCoverageText, /跳过工具 1/);
+  assert.match(structuralCoverageText, /占位工具 1/);
   await page
     .locator('.agent-workflow-readiness', { hasText: '运行就绪检查' })
     .waitFor({ timeout: 15000 });
@@ -354,6 +524,49 @@ try {
   assert.match(storageReviewText, /占位工具 1/);
 
   await page
+    .locator('.agent-workflow-evidence-packet.review', {
+      hasText: '单次运行证据包',
+    })
+    .waitFor({ timeout: 5000 });
+  const evidencePacketText = await page
+    .locator('.agent-workflow-evidence-packet.review')
+    .innerText();
+  assert.match(evidencePacketText, /当前结果/);
+  assert.match(evidencePacketText, /单次调试证据/);
+  assert.match(evidencePacketText, /未绑定保存样例基线/);
+  assert.match(evidencePacketText, /结构覆盖 Agent 6\/7、工具 9\/9/);
+  assert.match(evidencePacketText, /复制证据包/);
+  assert.match(evidencePacketText, /不会写入 Memory Service/);
+  assert.match(evidencePacketText, /不会发送通知/);
+  assert.match(evidencePacketText, /不会执行规则自动化/);
+  assert.match(evidencePacketText, /不会包含原始消息正文或工具参数/);
+  await page
+    .locator('.agent-workflow-evidence-packet.review button', {
+      hasText: '复制证据包',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-evidence-copy-receipt', {
+      hasText: '当前结果',
+    })
+    .waitFor({ timeout: 5000 });
+  const copiedEvidencePacket = await page.evaluate(() =>
+    navigator.clipboard.readText(),
+  );
+  assert.match(copiedEvidencePacket, /Agent Workflow 单次运行证据包/);
+  assert.match(copiedEvidencePacket, /快照状态: 当前结果/);
+  assert.match(copiedEvidencePacket, /证据资格: 单次调试证据/);
+  assert.match(copiedEvidencePacket, /结构覆盖 Agent 6\/7、工具 9\/9/);
+  assert.match(copiedEvidencePacket, /匹配规则: manual:manual-1/);
+  assert.match(copiedEvidencePacket, /下一步:/);
+  assert.match(copiedEvidencePacket, /补齐被跳过工具/);
+  assert.match(copiedEvidencePacket, /不会写入 Memory Service/);
+  assert.doesNotMatch(
+    copiedEvidencePacket,
+    /API split has a blocker in the auth adapter\. Please keep this on the radar today\./,
+  );
+
+  await page
     .locator('.agent-workflow-saved-actions button', {
       hasText: '保存当前用例',
     })
@@ -364,6 +577,62 @@ try {
     })
     .waitFor({ timeout: 5000 });
   await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '保存样例基线范围',
+    })
+    .waitFor({ timeout: 5000 });
+  const savedSourceReceiptText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '保存样例基线范围',
+    })
+    .innerText();
+  assert.match(savedSourceReceiptText, /已有结果基线/);
+  assert.match(savedSourceReceiptText, /当前结果属于这条保存样例/);
+  assert.match(savedSourceReceiptText, /不会投递真实通知或执行规则自动化/);
+  await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '回归样本构成',
+    })
+    .waitFor({ timeout: 5000 });
+  const regressionCoverageReceiptText = await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '回归样本构成',
+    })
+    .innerText();
+  assert.match(regressionCoverageReceiptText, /保存样例 1 个/);
+  assert.match(regressionCoverageReceiptText, /有基线 1/);
+  assert.match(regressionCoverageReceiptText, /通知 1 \/ 复核 0 \/ 存储-only 0/);
+  assert.match(regressionCoverageReceiptText, /补充 低置信复核、存储-only 样例/);
+  assert.match(regressionCoverageReceiptText, /chrome\.storage\.local 保存样例的结构覆盖/);
+  assert.match(regressionCoverageReceiptText, /不代表所有线上关注项/);
+  const runScopeReceiptAfterSaveText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '运行前范围',
+    })
+    .innerText();
+  assert.match(runScopeReceiptAfterSaveText, /本地门禁可用/);
+  assert.match(runScopeReceiptAfterSaveText, /保存基线和 Agent 配置可作为回归证据/);
+  assert.match(runScopeReceiptAfterSaveText, /门禁可用/);
+  await page
+    .locator('.agent-workflow-evidence-packet.ready', {
+      hasText: '可作本地回归证据',
+    })
+    .waitFor({ timeout: 5000 });
+  const readyEvidencePacketText = await page
+    .locator('.agent-workflow-evidence-packet.ready')
+    .innerText();
+  assert.match(readyEvidencePacketText, /当前结果/);
+  assert.match(readyEvidencePacketText, /匹配保存样例、已有基线且 Agent 配置一致/);
+  const readyRegressionScopeText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '批量回归范围',
+    })
+    .innerText();
+  assert.match(readyRegressionScopeText, /可批量回归 1 个本地保存样例/);
+  assert.match(readyRegressionScopeText, /不会覆盖基线/);
+  assert.match(readyRegressionScopeText, /不会发送通知/);
+  assert.match(readyRegressionScopeText, /不会执行规则自动化/);
+  await page
     .locator('.agent-workflow-baseline', { hasText: '保存基线对比' })
     .waitFor({ timeout: 5000 });
   const baselineText = await page
@@ -372,7 +641,11 @@ try {
   assert.match(baselineText, /存储/);
   assert.match(baselineText, /通知/);
   assert.match(baselineText, /Trace/);
+  assert.match(baselineText, /配置/);
+  assert.match(baselineText, /Agent 7\/7 \/ 工具 9/);
   assert.match(baselineText, /一致/);
+  assert.match(baselineText, /基线诊断：结论 需要复核后再执行/);
+  assert.match(baselineText, /复核 执行 Trace、记忆写入、外部信息/);
   const savedScenarioState = await page.evaluate(async () => {
     const result = await chrome.storage.local.get(
       'agentWorkflowSavedScenarios',
@@ -383,9 +656,35 @@ try {
   assert.equal(savedScenarioState[0].expectedResult.shouldStore, true);
   assert.equal(savedScenarioState[0].expectedResult.shouldNotify, true);
   assert.equal(savedScenarioState[0].expectedResult.traceStatus, 'partial');
+  assert.equal(
+    savedScenarioState[0].expectedResult.agentConfigSnapshot.enabledAgentCount,
+    7,
+  );
+  assert.equal(
+    savedScenarioState[0].expectedResult.agentConfigSnapshot.enabledToolCount,
+    9,
+  );
   assert.deepEqual(savedScenarioState[0].expectedResult.matchedRuleRefs, [
     'manual:manual-1',
   ]);
+  assert.match(
+    savedScenarioState[0].expectedResult.diagnosticSnapshot.summary,
+    /结论 需要复核后再执行/,
+  );
+  assert.equal(
+    savedScenarioState[0].expectedResult.diagnosticSnapshot.verdict.status,
+    'review',
+  );
+  assert.equal(
+    savedScenarioState[0].expectedResult.diagnosticSnapshot.structuralCoverage
+      .status,
+    'partial',
+  );
+  assert.match(
+    savedScenarioState[0].expectedResult.diagnosticSnapshot.structuralCoverage
+      .summary,
+    /Agent 6\/7、工具 9\/9/,
+  );
 
   await page.evaluate(async () => {
     const result = await chrome.storage.local.get(
@@ -428,6 +727,7 @@ try {
   assert.match(changedBaselineText, /基线 complete \/ 当前 partial/);
   assert.match(changedBaselineText, /置信度/);
   assert.match(changedBaselineText, /基线 20% \/ 当前 88%/);
+  assert.match(changedBaselineText, /基线诊断：结论 需要复核后再执行/);
   await page
     .locator('.agent-workflow-baseline-header button', {
       hasText: '接受当前结果为基线',
@@ -438,6 +738,24 @@ try {
       hasText: '已接受当前结果为新基线',
     })
     .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-baseline-writeback', {
+      hasText: '单条基线写回回执',
+    })
+    .waitFor({ timeout: 5000 });
+  const singleWritebackReceiptText = await page
+    .locator('.agent-workflow-baseline-writeback', {
+      hasText: '单条基线写回回执',
+    })
+    .innerText();
+  assert.match(singleWritebackReceiptText, /已更新 1 个保存样例/);
+  assert.match(singleWritebackReceiptText, /覆盖原基线/);
+  assert.match(singleWritebackReceiptText, /chrome\.storage\.local/);
+  assert.match(singleWritebackReceiptText, /不会写入 Memory Service/);
+  assert.match(singleWritebackReceiptText, /发送通知/);
+  assert.match(singleWritebackReceiptText, /执行规则自动化/);
+  assert.match(singleWritebackReceiptText, /导出报告/);
+  assert.match(singleWritebackReceiptText, /原始消息正文/);
   await page
     .locator('.agent-workflow-baseline.same', {
       hasText: '保存基线对比',
@@ -460,6 +778,10 @@ try {
     refreshedSavedScenarioState[0].expectedResult.traceStatus,
     'partial',
   );
+  assert.match(
+    refreshedSavedScenarioState[0].expectedResult.diagnosticSnapshot.summary,
+    /下一步 补齐被跳过工具/,
+  );
 
   await page
     .locator('.agent-workflow-saved-actions button', {
@@ -479,10 +801,22 @@ try {
   const regressionText = await page
     .locator('.agent-workflow-regression')
     .innerText();
+  const completedRegressionScopeText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '批量回归范围',
+    })
+    .innerText();
+  assert.match(completedRegressionScopeText, /已完成本地批量回归/);
+  assert.match(completedRegressionScopeText, /通过 1 \/ 变化 0 \/ 无基线 0 \/ 失败 0/);
+  assert.match(completedRegressionScopeText, /导出报告需要用户单独点击/);
+  assert.match(completedRegressionScopeText, /不会标记原消息已读/);
   assert.match(regressionText, /总数 1/);
   assert.match(regressionText, /通过 1/);
   assert.match(regressionText, /基线一致/);
   assert.match(regressionText, /存储、通知、复核、Trace、规则和置信度都未漂移/);
+  assert.match(regressionText, /结论 需要复核后再执行/);
+  assert.match(regressionText, /复核 执行 Trace、记忆写入、外部信息/);
+  assert.match(regressionText, /下一步 补齐被跳过工具/);
 
   await page.evaluate(async (scenario) => {
     const changedScenario = {
@@ -529,7 +863,22 @@ try {
   const regressionWithAcceptText = await page
     .locator('.agent-workflow-regression')
     .innerText();
+  const changedRegressionScopeText = await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '批量回归范围',
+    })
+    .innerText();
+  assert.match(changedRegressionScopeText, /已完成本地批量回归/);
+  assert.match(changedRegressionScopeText, /通过 0 \/ 变化 1 \/ 无基线 1 \/ 失败 0/);
+  assert.match(changedRegressionScopeText, /接受为基线也需要单独点击/);
+  assert.match(changedRegressionScopeText, /失败项不会被覆盖/);
+  assert.match(changedRegressionScopeText, /不会复制原始消息正文/);
   assert.match(regressionWithAcceptText, /接受 2 个结果为基线/);
+  assert.match(regressionWithAcceptText, /变化或无基线样例/);
+  assert.match(regressionWithAcceptText, /失败项不会被覆盖/);
+  assert.match(regressionWithAcceptText, /不会写入 Memory Service/);
+  assert.match(regressionWithAcceptText, /执行规则自动化/);
+  assert.match(regressionWithAcceptText, /原始消息正文/);
   assert.match(regressionWithAcceptText, /变化 1/);
   assert.match(regressionWithAcceptText, /无基线 1/);
   const [regressionDownload] = await Promise.all([
@@ -571,6 +920,50 @@ try {
       .length,
     1,
   );
+  assert.ok(regressionReport.results.every((item) => item.diagnostics));
+  assert.equal(
+    regressionReport.results[0].diagnostics.verdict.status,
+    'review',
+  );
+  assert.equal(
+    regressionReport.results[0].diagnostics.verdict.actionLabel,
+    '补齐被跳过工具',
+  );
+  assert.equal(
+    regressionReport.results[0].diagnostics.structuralCoverage.status,
+    'partial',
+  );
+  assert.match(
+    regressionReport.results[0].diagnostics.structuralCoverage.summary,
+    /Agent 6\/7、工具 9\/9/,
+  );
+  assert.ok(
+    regressionReport.results[0].diagnostics.readiness.some(
+      (item) => item.id === 'external-info' && item.status === 'review',
+    ),
+  );
+  assert.ok(
+    regressionReport.results[0].diagnostics.recommendedActions.some(
+      (item) => item.id === 'connect-external-query-adapter',
+    ),
+  );
+  assert.equal(
+    regressionReport.results[0].actual.diagnosticSnapshot.verdict.status,
+    'review',
+  );
+  assert.equal(
+    regressionReport.results[0].actual.agentConfigSnapshot.enabledToolCount,
+    9,
+  );
+  assert.equal(regressionReport.results[0].agentConfigChanged, false);
+  assert.equal(
+    regressionReport.results[0].baselineAgentConfig.enabledAgentCount,
+    7,
+  );
+  assert.equal(
+    regressionReport.results[0].actualAgentConfig.enabledAgentCount,
+    7,
+  );
   await page
     .locator('.agent-workflow-saved-status', {
       hasText: /已导出批量回归报告：agent-workflow-regression-.*\.json/,
@@ -586,6 +979,22 @@ try {
       hasText: '已接受 2 个批量回归结果为新基线',
     })
     .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-baseline-writeback', {
+      hasText: '批量基线写回回执',
+    })
+    .waitFor({ timeout: 5000 });
+  const writebackReceiptText = await page
+    .locator('.agent-workflow-baseline-writeback')
+    .innerText();
+  assert.match(writebackReceiptText, /已更新 2 个保存样例/);
+  assert.match(writebackReceiptText, /变化 1 \/ 无基线 1/);
+  assert.match(writebackReceiptText, /失败 0 个未覆盖/);
+  assert.match(writebackReceiptText, /样例总数 2/);
+  assert.match(writebackReceiptText, /只改写 chrome\.storage\.local/);
+  assert.match(writebackReceiptText, /不会写入 Memory Service/);
+  assert.match(writebackReceiptText, /发送通知/);
+  assert.match(writebackReceiptText, /执行规则自动化/);
   await page
     .locator('.agent-workflow-regression.same', {
       hasText: '保存样例批量回归',
@@ -612,6 +1021,16 @@ try {
   assert.equal(acceptedScenarioState[0].expectedResult.confidence, 0.88);
   assert.equal(acceptedScenarioState[1].expectedResult.shouldNotify, true);
   assert.equal(acceptedScenarioState[1].expectedResult.traceStatus, 'partial');
+  assert.ok(
+    acceptedScenarioState.every(
+      (scenario) => scenario.expectedResult.diagnosticSnapshot?.summary,
+    ),
+  );
+  assert.ok(
+    acceptedScenarioState.every(
+      (scenario) => scenario.expectedResult.agentConfigSnapshot?.key,
+    ),
+  );
 
   await page.locator('#agentId').fill('auditSnapshotAgent');
   await page.locator('#agentName').fill('Audit Snapshot Agent');
@@ -624,6 +1043,26 @@ try {
   await page
     .locator('.agent-test-stale-banner', { hasText: 'Agent 配置已修改' })
     .waitFor({ timeout: 5000 });
+  await page
+    .locator('[aria-label="保存样例基线范围"].agent-workflow-source-receipt.review', {
+      hasText: '上一次结果已过期',
+    })
+    .waitFor({ timeout: 5000 });
+  const staleSavedReceiptText = await page
+    .locator('[aria-label="保存样例基线范围"].agent-workflow-source-receipt.review', {
+      hasText: '上一次结果已过期',
+    })
+    .innerText();
+  assert.match(staleSavedReceiptText, /结果已过期/);
+  assert.match(staleSavedReceiptText, /配置已变更/);
+  assert.match(staleSavedReceiptText, /重新运行保存样例/);
+  const staleRunScopeReceiptText = await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '运行前范围',
+    })
+    .innerText();
+  assert.match(staleRunScopeReceiptText, /本地门禁需重跑/);
+  assert.match(staleRunScopeReceiptText, /门禁需重跑/);
   await page
     .locator('.agent-workflow-test-header button', {
       hasText: '重新运行测试',
@@ -640,6 +1079,56 @@ try {
     .locator('.agent-test-stale-banner')
     .innerText();
   assert.match(staleBannerText, /当前输入和 Agent 配置已修改/);
+  await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '当前输入不是所选保存样例',
+    })
+    .waitFor({ timeout: 5000 });
+  const changedInputSavedReceiptText = await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '当前输入不是所选保存样例',
+    })
+    .innerText();
+  assert.match(changedInputSavedReceiptText, /输入已变更/);
+  assert.match(changedInputSavedReceiptText, /另存为新样例/);
+  const changedInputRunScopeReceiptText = await page
+    .locator('.agent-workflow-source-receipt.review', {
+      hasText: '运行前范围',
+    })
+    .innerText();
+  assert.match(changedInputRunScopeReceiptText, /本地门禁需重跑/);
+  assert.match(changedInputRunScopeReceiptText, /门禁需重跑/);
+  await page
+    .locator('.agent-workflow-evidence-packet.stale', {
+      hasText: '单次运行证据包（旧快照）',
+    })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-evidence-packet.stale button', {
+      hasText: '复制证据包',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-evidence-copy-receipt', {
+      hasText: '旧快照',
+    })
+    .waitFor({ timeout: 5000 });
+  const staleEvidencePacket = await page.evaluate(() =>
+    navigator.clipboard.readText(),
+  );
+  assert.match(staleEvidencePacket, /快照状态: 旧快照/);
+  assert.match(staleEvidencePacket, /证据资格: 证据需重跑/);
+  assert.match(staleEvidencePacket, /当前输入和 Agent 配置已修改/);
+  assert.match(staleEvidencePacket, /来源: Options 关注项测试 · 保存样例/);
+  assert.match(staleEvidencePacket, /不会写入 Memory Service/);
+  assert.doesNotMatch(
+    staleEvidencePacket,
+    /API split has a blocker in the auth adapter\. Please keep this on the radar today\./,
+  );
+  assert.doesNotMatch(
+    staleEvidencePacket,
+    /Added stale-result check\./,
+  );
   await page
     .locator('.agent-workflow-test-header button', {
       hasText: '重新运行测试',

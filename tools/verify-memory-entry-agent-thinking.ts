@@ -6,8 +6,16 @@ import {
   IntelligentAgent,
   registerTool,
 } from '../src/agentThinking.ts';
+import { MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY } from '../src/messageAnalysisRuleDiagnostics.ts';
 import {
   buildAgentRunDiagnosticPacket,
+  buildAgentRunSnapshot,
+  buildAgentDiagnosticCopyScope,
+  buildAgentDiagnosticCopyPreflight,
+  buildAgentDiagnosticCopiedSnapshot,
+  buildAgentDiagnosticCopyFreshnessReceipt,
+  buildAgentDiagnosticCopySuccessReceipt,
+  buildAgentTraceReviewLane,
   buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
@@ -54,6 +62,11 @@ function installChromeMock() {
       }
       if (callback) callback(result);
       return result;
+    },
+    async set(values: Record<string, any>, callback?: () => void) {
+      Object.assign(storage, values);
+      callback?.();
+      return undefined;
     },
   };
 
@@ -469,6 +482,7 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('复制 key'));
   assert.ok(agentVisualizerSource.includes('复制审核包'));
   assert.ok(agentVisualizerSource.includes('复制重跑配置'));
+  assert.ok(agentVisualizerSource.includes('重跑配置回执'));
   assert.ok(agentVisualizerSource.includes('待确认动作未执行'));
   assert.ok(agentVisualizerSource.includes('pending-notify'));
   assert.ok(agentVisualizerSource.includes('node-detail'));
@@ -476,13 +490,27 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('node-step-index'));
   assert.ok(agentVisualizerSource.includes('跳到时间线步骤'));
   assert.ok(agentVisualizerSource.includes('复制诊断包'));
-  assert.ok(agentVisualizerSource.includes('agent-run-trace-span-count'));
+  assert.ok(agentVisualizerSource.includes('诊断包复制预检'));
+  assert.ok(agentVisualizerSource.includes('诊断包范围'));
+  assert.ok(agentVisualizerSource.includes('buildAgentDiagnosticCopyPreflight'));
+  assert.ok(agentVisualizerSource.includes('agent-run-diagnostic-scope'));
+  assert.ok(agentVisualizerSource.includes('agent-run-diagnostic-preflight'));
+  assert.ok(agentVisualizerSource.includes('buildAgentDiagnosticCopyScope'));
+  assert.ok(agentVisualizerSource.includes('buildAgentRunSnapshot'));
+  assert.ok(agentVisualizerSource.includes('buildAgentTraceReviewLane'));
+  assert.ok(agentVisualizerSource.includes('agent-trace-review-lane'));
+  assert.ok(agentVisualizerSource.includes('agent-trace-navigation-receipt'));
+  assert.ok(agentVisualizerSource.includes('当前 trace 导航'));
+  assert.ok(agentVisualizerSource.includes('agent-run-summary-chip'));
+  assert.ok(agentVisualizerSource.includes('identityBoundary'));
+  assert.ok(agentVisualizerSource.includes('freshnessBoundary'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择审核包'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择重跑配置'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择诊断包'));
   assert.ok(agentVisualizerSource.includes('agent-run-diagnostic-manual-copy'));
   assert.ok(agentVisualizerSource.includes('agent-approval-manual-copy'));
+  assert.ok(agentVisualizerSource.includes('agent-approval-decision-guide'));
   assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
     'src/agentVisualizerPresentation.ts',
@@ -499,16 +527,36 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('需要人工确认'));
   assert.ok(agentVisualizerPresentationSource.includes('buildPendingApprovalActions'));
   assert.ok(agentVisualizerPresentationSource.includes('buildApprovalReviewHint'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildApprovalDecisionGuide'));
   assert.ok(agentVisualizerPresentationSource.includes('retryConfigPatch'));
+  assert.ok(agentVisualizerPresentationSource.includes('retryReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('detail?: string'));
   assert.ok(agentVisualizerPresentationSource.includes('stepIndex?: number'));
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunDiagnosticPacket'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunSnapshot'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentTraceReviewLane'));
+  assert.ok(agentVisualizerPresentationSource.includes('Trace 复核路线'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentTraceNavigationReceipt'));
+  assert.ok(agentVisualizerPresentationSource.includes('当前 trace 导航'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentDiagnosticCopyScope'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentDiagnosticCopyPreflight'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentDiagnosticCopySuccessReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('agent_thinking_run_diagnostics'));
   assert.ok(agentVisualizerPresentationSource.includes('traceSpans'));
+  assert.ok(agentVisualizerPresentationSource.includes('traceIdentity'));
+  assert.ok(agentVisualizerPresentationSource.includes('fnv1a32-local'));
+  assert.ok(agentVisualizerPresentationSource.includes('本地 trace id'));
+  assert.ok(agentVisualizerPresentationSource.includes('snapshotBoundary'));
+  assert.ok(agentVisualizerPresentationSource.includes('navigationReceipt'));
+  assert.ok(agentVisualizerPresentationSource.includes('current_page_trace_snapshot'));
   assert.ok(agentVisualizerPresentationSource.includes('gen_ai.operation.name'));
+  assert.ok(agentVisualizerPresentationSource.includes('不是 OpenTelemetry / LangSmith / Langfuse 标准导出'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
-  assert.ok(agentVisualizerCss.includes('.agent-run-trace-span-count'));
+  assert.ok(agentVisualizerCss.includes('.agent-trace-navigation-receipt'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-summary-chip'));
+  assert.ok(agentVisualizerCss.includes('.agent-trace-review-lane'));
+  assert.ok(agentVisualizerCss.includes('.agent-trace-review-lane-item'));
   assert.ok(agentVisualizerCss.includes('.flow-node.jumpable'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-detail'));
@@ -523,12 +571,17 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.agent-approval-queue'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-review-hint'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-policy-note'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-decision-guide'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-decision-guide-item.approve'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-actions'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-retry-config'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-retry-receipt'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-copy-status'));
   assert.ok(agentVisualizerCss.includes('.result-pending-approval'));
   assert.ok(agentVisualizerCss.includes('.decision-badge.pending-notify'));
   assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-copy'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-preflight'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-scope'));
   assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-manual-copy'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-manual-copy'));
   const optionsCss = readFileSync('static/options.css', 'utf8');
@@ -682,6 +735,38 @@ async function main() {
     pendingApprovalActions[0].decisionOptions.map((option) => option.type),
     ['approve', 'reject', 'edit'],
   );
+  assert.deepEqual(pendingApprovalActions[0].decisionGuide, [
+    {
+      type: 'approve',
+      label: '批准后重跑',
+      currentState:
+        'approvalWriteTest / 写入 / 高风险 仍停在步骤 1，写入还没有发生。',
+      nextStep:
+        '确认参数无误后复制重跑配置，并让调用方用同一工具和同一参数重新运行。',
+      boundary:
+        '复制配置本身不会执行动作；上下文、参数或工具策略变化后要重新生成批准 key。',
+    },
+    {
+      type: 'reject',
+      label: '拒绝本次动作',
+      currentState:
+        'approvalWriteTest / 写入 / 高风险 可以直接拒绝；当前批准 key 不应继续使用。',
+      nextStep:
+        '把拒绝原因反馈给 Agent，或重新运行一个不触发该工具动作的分析路径。',
+      boundary:
+        '拒绝不会自动恢复本轮 run，也不会发送通知、写入、删除或执行外部动作。',
+    },
+    {
+      type: 'edit',
+      label: '修改参数后再审',
+      currentState:
+        'approvalWriteTest / 写入 / 高风险 的参数、范围、接收方或内容一旦变化，旧 key 就不能代表新动作。',
+      nextStep:
+        '先修改工具参数或重新生成建议，再用新的待确认动作和批准 key 复核。',
+      boundary:
+        '不要把旧 key 套到新参数；新参数必须重新经过执行前校验和人工确认。',
+    },
+  ]);
   assert.match(
     pendingApprovalActions[0].decisionOptions[0].description,
     /approvalKey/,
@@ -694,6 +779,37 @@ async function main() {
     pendingApprovalActions[0].resumeInstruction,
     /拒绝或修改参数时不要复用旧 key/,
   );
+  assert.deepEqual(pendingApprovalActions[0].reviewBoundary, {
+    mode: 'single_run_retry',
+    generatedAt: new Date(timestamp + 500).toISOString(),
+    label: '临时重跑凭据',
+    description:
+      '这是本轮 trace 生成的轻量审批包，不会持久暂停或自动恢复 Agent run。',
+    scope: '只适用于同一 tool id 和完全相同参数的下一次重跑。',
+    expiresWhen: '工具定义、参数、提示词、上下文或用户意图变化后应重新生成。',
+    approvalKeyBinding:
+      '批准 key 与 tool id + 参数精确绑定；拒绝或修改参数时不要复用旧 key。',
+  });
+  assert.deepEqual(pendingApprovalActions[0].retryReceipt, {
+    title: '重跑配置回执',
+    configScope: 'approvalWriteTest / 写入 / 高风险。',
+    copiedFields:
+      '重跑配置只复制 approvedToolActionKeys；调用方仍需重新运行同一工具和同一参数。',
+    notCopied:
+      '不复制工具参数、原始工具结果、通知正文或外部执行凭据。',
+    recoveryBoundary:
+      '拒绝、修改参数、上下文变化或工具策略变化时，应重新生成批准 key，不复用当前配置。',
+  });
+  assert.deepEqual(pendingApprovalActions[0].preflightReceipt, {
+    title: '审批前确认',
+    pendingAction: 'approvalWriteTest / 写入 / 高风险，停在步骤 1，等待人工确认。',
+    noEffectBoundary:
+      '写入还没有发生。 本轮只是生成临时批准 key、审核包和重跑配置。',
+    copyBoundary:
+      '复制 key、审核包或重跑配置只复制文本，不会批准、恢复 run、发送通知、写入、删除或执行外部动作。',
+    nextStep:
+      '批准时复制重跑配置并用同一工具和同一参数重新运行；拒绝或修改参数时不要复用旧 key。',
+  });
   assert.match(
     pendingApprovalActions[0].reviewPayload,
     /"type": "agent_tool_approval_review"/,
@@ -726,14 +842,40 @@ async function main() {
     approvedToolActionKeys: [approvalKey],
   });
   assert.deepEqual(
+    pendingApprovalReviewPayload.retryReceipt,
+    pendingApprovalActions[0].retryReceipt,
+  );
+  assert.deepEqual(
+    pendingApprovalReviewPayload.preflightReceipt,
+    pendingApprovalActions[0].preflightReceipt,
+  );
+  assert.deepEqual(
     pendingApprovalReviewPayload.decisionOptions.map(
       (option: { type: string }) => option.type,
     ),
     ['approve', 'reject', 'edit'],
   );
+  assert.deepEqual(
+    pendingApprovalReviewPayload.decisionGuide.map(
+      (item: { type: string; label: string }) => [item.type, item.label],
+    ),
+    [
+      ['approve', '批准后重跑'],
+      ['reject', '拒绝本次动作'],
+      ['edit', '修改参数后再审'],
+    ],
+  );
+  assert.match(
+    pendingApprovalReviewPayload.decisionGuide[0].boundary,
+    /不会执行动作/,
+  );
   assert.match(
     pendingApprovalReviewPayload.resumeInstruction,
     /批准后复制重跑配置重新运行/,
+  );
+  assert.deepEqual(
+    pendingApprovalReviewPayload.reviewBoundary,
+    pendingApprovalActions[0].reviewBoundary,
   );
   assert.equal(formatApprovalEffect(pendingApprovalActions[0].effect), '写入');
   assert.equal(formatApprovalRisk(pendingApprovalActions[0].riskLevel), '高风险');
@@ -1067,6 +1209,19 @@ async function main() {
     { generatedAt: '2026-05-31T00:00:00.000Z' },
   );
   assert.equal(diagnosticPacket.type, 'agent_thinking_run_diagnostics');
+  assert.deepEqual(diagnosticPacket.traceIdentity, {
+    traceId: 'pai-agent-trace-7105dab9',
+    checksum: '7105dab9',
+    checksumAlgorithm: 'fnv1a32-local',
+    source: 'sanitized_diagnostic_snapshot',
+    matchBoundary:
+      'Use this local trace id and checksum only to match the copied diagnostics JSON with this Options page snapshot.',
+    notFor: [
+      'standard OpenTelemetry, LangSmith, or Langfuse trace correlation',
+      'persistent run checkpoint or resume',
+      'tool approval, rejection, or execution proof',
+    ],
+  });
   assert.equal(diagnosticPacket.status, 'max_actions_reached');
   assert.equal(diagnosticPacket.severity, 'warning');
   assert.equal(diagnosticPacket.summary.stepCount, 4);
@@ -1087,12 +1242,14 @@ async function main() {
     toolId: item.toolId,
     approvalKeyAvailable: item.approvalKeyAvailable,
     retryConfigAvailable: item.retryConfigAvailable,
+    reviewBoundary: item.reviewBoundary,
   })), [
     {
       stepNumber: 1,
       toolId: 'approvalWriteTest',
       approvalKeyAvailable: true,
       retryConfigAvailable: true,
+      reviewBoundary: pendingApprovalActions[0].reviewBoundary,
     },
   ]);
   assert.equal(diagnosticPacket.traceSpans[0].operationName, 'agent.run');
@@ -1128,12 +1285,266 @@ async function main() {
       .map((span) => [span.stepNumber, span.status.code]),
     [[4, 'max_actions_reached']],
   );
+  assert.deepEqual(diagnosticPacket.schemaBoundary, {
+    schemaName: 'personal_ai_agent_thinking_diagnostics',
+    schemaVersion: 1,
+    spanLineage: [
+      'OpenTelemetry GenAI-inspired agent.run / execute_tool span naming',
+      'LangSmith / Langfuse-inspired step, tool, and decision grouping',
+      'Personal AI privacy-preserving run review metadata',
+    ],
+    exporterStatus: 'local_only_not_standard_export',
+    supportedUses: [
+      'local debugging',
+      'eval fixtures',
+      'support handoff without raw tool payloads',
+    ],
+    unsupportedUses: [
+      'direct OpenTelemetry ingestion',
+      'direct LangSmith or Langfuse import',
+      'tool approval, rejection, or run resume',
+    ],
+    approvalContextBoundary:
+      'This diagnostics packet only says approvals exist. Use the per-action approval review packet or retry config for approval context.',
+  });
+  assert.deepEqual(diagnosticPacket.snapshotBoundary, {
+    generatedAt: '2026-05-31T00:00:00.000Z',
+    status: 'max_actions_reached',
+    statusLabel: '预算耗尽',
+    source: 'current_page_trace_snapshot',
+    copySemantics:
+      'This diagnostics packet is a point-in-time snapshot of the trace currently rendered on the Options page.',
+    notLive:
+      'It will not subscribe to later tool results, approval decisions, retries, or reruns.',
+    refreshBoundary:
+      'Refresh the page, rerun the Agent, or copy a new packet after the trace changes.',
+  });
+  assert.deepEqual(diagnosticPacket.navigationReceipt, {
+    title: '当前 trace 导航',
+    currentTrace:
+      '当前 trace pai-agent-trace-7105dab9（预算耗尽，生成于 2026-05-31T00:00:00.000Z）。',
+    primaryRoute:
+      '先处理 待确认 1 / 阻断 1 / 缺证 1，再阅读完整时间线或复制诊断包。',
+    stepScope:
+      '本页共 4 步 / 8 个 span；首屏可直接跳到步骤 #1、#2、#3、#4。',
+    noEffectBoundary:
+      '点击步骤定位只展开当前页面时间线，不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作。',
+    stepNumbers: [1, 2, 3, 4],
+  });
+  assert.deepEqual(diagnosticPacket.traceSpanComposition, {
+    title: 'Trace span 构成',
+    detail:
+      '这份本地 trace 由 8 个 span 组成；先看工具执行和问题 span，再决定是否复制诊断包。',
+    items: [
+      {
+        key: 'run',
+        label: 'Root run',
+        value: '1',
+        detail: '运行级状态、终止动作和工具计数入口。',
+        tone: 'neutral',
+      },
+      {
+        key: 'steps',
+        label: 'Agent steps',
+        value: '3',
+        detail: '非终止步骤，用于定位分析、工具前后状态和证据口径。',
+        tone: 'neutral',
+      },
+      {
+        key: 'tools',
+        label: 'Tool calls',
+        value: '3',
+        detail:
+          '工具执行 span；保留工具名、状态和证据/审批状态，不含原始参数或结果。',
+        tone: 'info',
+      },
+      {
+        key: 'decision',
+        label: 'Terminal',
+        value: '1',
+        detail: 'finish、stopped 或 max_actions_reached 终止决策 span。',
+        tone: 'neutral',
+      },
+      {
+        key: 'issues',
+        label: '问题 span',
+        value: '6',
+        detail:
+          '只统计失败、待确认、阻断和缺证 span；不把 root、跳过或普通 OK span 当成待处理问题。',
+        tone: 'warning',
+      },
+    ],
+    boundary:
+      '这是 Personal AI 本地 span 构成，不是标准 OpenTelemetry / LangSmith / Langfuse 拓扑；查看或复制它不会批准、恢复、重跑、发送通知、写入、删除或执行外部动作。',
+  });
   const serializedDiagnosticPacket = JSON.stringify(diagnosticPacket);
   assert.ok(!serializedDiagnosticPacket.includes('approval-tail-token-visible-in-ui'));
   assert.ok(!serializedDiagnosticPacket.includes('approvalWriteTest:{'));
   assert.ok(!serializedDiagnosticPacket.includes(JSON.stringify(approvalParams)));
   assert.match(diagnosticPacket.privacyNote, /omits raw tool results/);
   assert.match(diagnosticPacket.privacyNote, /traceSpans/);
+  assert.match(diagnosticPacket.privacyNote, /traceSpanComposition/);
+  assert.match(diagnosticPacket.privacyNote, /traceIdentity/);
+  assert.match(diagnosticPacket.privacyNote, /schemaBoundary/);
+  const diagnosticCopyScope = buildAgentDiagnosticCopyScope(diagnosticPacket);
+  assert.deepEqual(diagnosticCopyScope, {
+    title: '诊断包范围',
+    detail: '包含 8 个结构化 trace span、4 条运行检查和 1 个待确认动作摘要，用于排障或 eval。',
+    identityBoundary:
+      '本地 trace id pai-agent-trace-7105dab9，校验 7105dab9；只用于匹配这份复制 JSON 和当前页面快照。',
+    freshnessBoundary:
+      '生成于 2026-05-31T00:00:00.000Z，状态 预算耗尽；复制的是当前页面快照，不会随审批、重跑或后续工具结果自动更新。',
+    privacyBoundary: '不会复制原始工具结果、工具参数或批准 key。',
+    exportBoundary:
+      '这是 Personal AI 本地诊断包，不是 OpenTelemetry / LangSmith / Langfuse 标准导出。',
+    schemaBoundary:
+      'personal_ai_agent_thinking_diagnostics v1；span 命名参考 OTel GenAI，分组参考 LangSmith / Langfuse，但不能直接导入这些平台。',
+    approvalBoundary:
+      '本地 trace id 不能用于标准追踪关联、恢复 run 或审批动作；需要审批上下文时，仍使用单个待确认动作的审核包或重跑配置。',
+  });
+  const diagnosticCopyPreflight = buildAgentDiagnosticCopyPreflight(diagnosticPacket);
+  assert.equal(diagnosticCopyPreflight.title, '诊断包复制预检');
+  assert.equal(
+    diagnosticCopyPreflight.detail,
+    '准备复制当前页面 trace 7105dab9 的本地诊断 JSON；复制只产生文本，不会批准、恢复或执行工具。',
+  );
+  assert.deepEqual(
+    diagnosticCopyPreflight.items.map((item) => [item.label, item.value, item.tone]),
+    [
+      [
+        '复制对象',
+        '8 个 trace span / 预算耗尽 / 1 个待确认动作摘要',
+        'warning',
+      ],
+      [
+        '可用于',
+        '本地排障、eval fixture、支持交接；不含原始工具结果、工具参数或批准 key。',
+        'neutral',
+      ],
+      [
+        '不会发生',
+        '不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作。',
+        'warning',
+      ],
+      [
+        '新鲜度',
+        '生成于 2026-05-31T00:00:00.000Z，状态 预算耗尽。',
+        'neutral',
+      ],
+      [
+        '导出边界',
+        '这是 Personal AI 本地 schema，不能直接导入 OpenTelemetry / LangSmith / Langfuse。',
+        'neutral',
+      ],
+    ],
+  );
+  assert.equal(
+    buildAgentDiagnosticCopySuccessReceipt(diagnosticPacket),
+    '已复制诊断包：8 个 trace span，状态 预算耗尽，本地 trace 7105dab9。 这是当前页面快照；未复制原始工具结果、工具参数或批准 key。 本地 trace id 只用于匹配这份 JSON；审批或恢复仍使用单个待确认动作的审核包或重跑配置。',
+  );
+  const copiedSnapshot = buildAgentDiagnosticCopiedSnapshot(diagnosticPacket);
+  assert.deepEqual(copiedSnapshot, {
+    traceId: 'pai-agent-trace-7105dab9',
+    checksum: '7105dab9',
+    generatedAt: '2026-05-31T00:00:00.000Z',
+    statusLabel: '预算耗尽',
+    traceSpanCount: 8,
+  });
+  assert.equal(
+    buildAgentDiagnosticCopyFreshnessReceipt(copiedSnapshot, diagnosticPacket),
+    '当前诊断包回执：上次复制内容仍匹配当前页面 pai-agent-trace-7105dab9（预算耗尽，8 个 span）。 它仍只是本地快照，不会批准、恢复、重跑、发送通知、写入、删除或执行外部动作。',
+  );
+  const newerDiagnosticPacket = buildAgentRunDiagnosticPacket(
+    [
+      approvalStep,
+      blockedStep,
+      emptyEvidenceStep,
+      {
+        timestamp: timestamp + 5300,
+        thought: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        publicSummary: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        action: 'max_actions_reached',
+      },
+    ],
+    { generatedAt: '2026-05-31T00:00:05.000Z' },
+  );
+  const staleCopyReceipt = buildAgentDiagnosticCopyFreshnessReceipt(
+    copiedSnapshot,
+    newerDiagnosticPacket,
+  );
+  assert.match(staleCopyReceipt, /旧诊断包回执/);
+  assert.match(staleCopyReceipt, /上次复制内容仍是 pai-agent-trace-7105dab9/);
+  assert.match(staleCopyReceipt, /当前页面已经变为 pai-agent-trace-[0-9a-f]{8}/);
+  assert.match(staleCopyReceipt, /请重新复制后再用于排障或 eval/);
+  assert.match(staleCopyReceipt, /旧包不会随新步骤、审批、重跑或后续工具结果更新/);
+  assert.equal(
+    buildAgentDiagnosticCopyFreshnessReceipt(copiedSnapshot, null),
+    '旧诊断包回执：上次复制内容仍是 pai-agent-trace-7105dab9（预算耗尽，8 个 span，生成于 2026-05-31T00:00:00.000Z）。 当前页面没有可匹配的 trace；重新运行并复制新诊断包后再用于排障或 eval。',
+  );
+  const traceReviewLane = buildAgentTraceReviewLane(diagnosticPacket);
+  assert.equal(traceReviewLane.title, 'Trace 复核路线');
+  assert.match(traceReviewLane.detail, /复制诊断包不等于批准、恢复或外部写入/);
+  assert.deepEqual(
+    traceReviewLane.items.map((item) => [
+      item.key,
+      item.label,
+      item.value,
+      item.tone,
+    ]),
+    [
+      ['status', '运行状态', '预算耗尽', 'warning'],
+      ['approval', '审批上下文', '1 个待确认', 'warning'],
+      ['tool_issues', '工具证据', '阻断 1 / 缺证 1', 'warning'],
+      ['diagnostics', '诊断包', '8 spans', 'neutral'],
+    ],
+  );
+  assert.match(
+    traceReviewLane.items.find((item) => item.key === 'approval')?.detail || '',
+    /诊断包不含批准 key/,
+  );
+  assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'status')?.stepIndexes,
+    [3],
+  );
+  assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'approval')?.stepIndexes,
+    [0],
+  );
+  assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'tool_issues')?.stepIndexes,
+    [1, 2],
+  );
+  assert.equal(
+    traceReviewLane.items.find((item) => item.key === 'diagnostics')?.stepIndexes,
+    undefined,
+  );
+  assert.match(
+    traceReviewLane.items.find((item) => item.key === 'diagnostics')?.detail || '',
+    /不复制原始工具结果、工具参数或批准 key/,
+  );
+  const diagnosticSnapshot = buildAgentRunSnapshot(diagnosticPacket);
+  assert.equal(diagnosticSnapshot.statusLabel, '预算耗尽');
+  assert.equal(
+    diagnosticSnapshot.detail,
+    '终止于步骤 #4（预算耗尽）。 涉及 3 个工具。',
+  );
+  assert.equal(
+    diagnosticSnapshot.primaryAction,
+    '先让用户确认具体工具和参数，再带对应批准 key 重新运行。',
+  );
+  assert.deepEqual(
+    diagnosticSnapshot.chips.map((chip) => [chip.label, chip.value, chip.tone]),
+    [
+      ['状态', '预算耗尽', 'warning'],
+      ['步骤', '4', 'neutral'],
+      ['Trace spans', '8', 'neutral'],
+      ['本地 trace', '7105dab9', 'neutral'],
+      ['待确认动作', '1', 'warning'],
+      ['阻断', '1', 'warning'],
+      ['缺证', '1', 'warning'],
+      ['工具', '3', 'neutral'],
+    ],
+  );
   const flowStepsWithDetails = buildAgentFlowSteps(
     [
       {
@@ -1404,6 +1815,12 @@ async function main() {
       (step) => step.action === 'invalid_rule_scope',
     ),
   );
+  const ruleDiagnostics = storage[MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY] || [];
+  assert.equal(ruleDiagnostics.length, 1);
+  assert.equal(ruleDiagnostics[0].ruleRef, 'manual:release-only');
+  assert.match(ruleDiagnostics[0].reason, /群组不在范围/);
+  assert.match(ruleDiagnostics[0].reason, /Release Chat/);
+  assert.match(ruleDiagnostics[0].reason, /Daily Standup/);
 
   console.log('verify-memory-entry-agent-thinking: ok');
 }

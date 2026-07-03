@@ -17,12 +17,13 @@
 - Strong `p1` matches include `whyRelevant` anchors.
 - Off-domain or weak semantic-only matches are not returned as visible Lens candidates.
 - Empty RingCentral Video shell contexts return `mode=silent` with a concrete quiet reason.
-- Same meeting/group/source duplicates are merged and counted in `duplicateMergedCount`.
+- Same meeting/group/source duplicates are merged and counted in `duplicateMergedCount`; the visible representative can be any member of the merged cluster.
 - The report can explain whether the system chose `silent`, `chip`, `card`, or `context_pack`.
+- Hidden candidates count as quieted/suppressed for `mustSuppressIds`; the eval should fail only when a forbidden candidate remains visible to Memory Lens.
 
 ## Report Requirements
 
-- Show the scene request, source provenance, and memories being evaluated.
+- Show the scene request, source provenance, source provenance audit, and memories being evaluated.
 - Show visible matches and top match.
 - Show Autopilot decision fields: mode, summary, quiet reasons, quieted/hidden/low-information/source-excluded/duplicate counts, gates, and scene anchors.
 - Show user-facing verdict, score breakdown, and improvement suggestions.

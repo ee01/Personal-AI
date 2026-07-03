@@ -15,25 +15,37 @@ import {
   filterTopicConversationsByReadState,
   findTopicConversationByMessageId,
   getTopicConversationPrimaryId,
+  getTopicConversationRenderIdentity,
   getTopicConversationReadSyncId,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
   getTopicDetailRecentData,
   getTopicDetailUnreadCount,
+  getTopicMessageIdentityCandidates,
+  getTopicMessageIdentityValues,
   isTopicMessageExplicitlyUnread,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
+  topicMessageMatchesIdentity,
   topicConversationHasContextMatch,
   topicConversationMatchesQuery,
 } from '../src/modals/topic-detail-data.ts';
 import { renderHighlightedText } from '../src/modals/topic-detail-rendering.ts';
 import {
+  getBlockedExternalUrlResults,
   getExternalUrlSafety,
+  getFirstSafeExternalLinkPresentation,
   getFirstSafeExternalUrl,
+  getHiddenExternalUrlLabel,
+  getHiddenExternalUrlTitle,
   getSafeExternalUrl,
   hasBlockedExternalUrlCandidate,
 } from '../src/modals/topic-link-safety.ts';
-import { topicMatchesListQuery } from '../src/modals/topic-list-search.ts';
+import {
+  getTopicParticipantLabels,
+  getTopicParticipantTotalCount,
+  topicMatchesListQuery,
+} from '../src/modals/topic-list-search.ts';
 import {
   getTopicTriagePriority,
   sortTopicsForTriage,
@@ -782,6 +794,8 @@ function verifyTopicDeepLinkSupportsLegacyContextIdentity() {
           contextMessages: [
             {
               message_id: 'legacy-context-id',
+              sourceUrl:
+                'https://chat.example.com/messages/context?message_id=legacy-context-id',
               isRead: false,
               content: 'Legacy context message',
             },
@@ -808,6 +822,74 @@ function verifyTopicDeepLinkSupportsLegacyContextIdentity() {
     getTopicConversationReadSyncId(conversation),
     'legacy-context-id',
     'read sync should fall back to the targeted context message id',
+  );
+  assert.equal(
+    getTopicConversationRenderIdentity(conversation, 0),
+    'legacy-context-id',
+    'render identity should use the context message id before falling back to a list index',
+  );
+  assert.equal(
+    getTopicConversationRenderIdentity(conversation, 5),
+    'legacy-context-id',
+    'render identity should not drift when sorting changes the rendered index',
+  );
+  assert.equal(
+    findTopicConversationByMessageId(
+      topic,
+      encodeURIComponent('legacy-context-id'),
+    ),
+    conversation,
+    'messageId lookup should accept encoded query values',
+  );
+  assert.equal(
+    findTopicConversationByMessageId(
+      topic,
+      'https://chat.example.com/messages/context?message_id=legacy-context-id',
+    ),
+    conversation,
+    'messageId lookup should accept source permalink values with message id params',
+  );
+  assert.deepEqual(getTopicMessageIdentityCandidates('ctx%2Fencoded'), [
+    'ctx%2Fencoded',
+    'ctx/encoded',
+  ]);
+  assert.equal(
+    topicMessageMatchesIdentity(
+      { sourceUrl: 'https://chat.example.com/messages/ctx%2Fencoded' },
+      'ctx/encoded',
+    ),
+    true,
+    'message identity should match decoded URL path tails when they look like ids',
+  );
+  assert.deepEqual(
+    getTopicMessageIdentityCandidates('1358546515.000008').slice(0, 2),
+    ['1358546515.000008', 'p1358546515000008'],
+    'Slack timestamps should create permalink path aliases',
+  );
+  assert.ok(
+    getTopicMessageIdentityCandidates(
+      'https://ghostbusters.slack.com/archives/C1H9RESGA/p135854651500008',
+    ).includes('1358546515.000008'),
+    'Slack permalink path ids should create timestamp aliases',
+  );
+  assert.equal(
+    topicMessageMatchesIdentity(
+      {
+        sourceUrl:
+          'https://ghostbusters.slack.com/archives/C1H9RESGA/p135854651500008',
+      },
+      '1358546515.000008',
+    ),
+    true,
+    'messageId lookup should match Slack timestamp ids against Slack permalink paths',
+  );
+  assert.deepEqual(
+    getTopicMessageIdentityValues({
+      message_id: 'legacy-context-id',
+      sourceUrl:
+        'https://chat.example.com/messages/context?message_id=legacy-context-id',
+    }).slice(0, 2),
+    ['legacy-context-id', 'https://chat.example.com/messages/context?message_id=legacy-context-id'],
   );
   assert.equal(
     getUnreadDiscussionMessageId(topic.unreadDiscussions[0]),
@@ -839,6 +921,8 @@ async function verifyConversationReadSyncsLegacyContextIdentity() {
           contextMessages: [
             {
               message_id: 'legacy-context-id',
+              sourceUrl:
+                'https://chat.example.com/messages/context?message_id=legacy-context-id',
               isRead: false,
               content: 'Legacy context message',
             },
@@ -852,7 +936,7 @@ async function verifyConversationReadSyncsLegacyContextIdentity() {
 
   const didSync = await store.markConversationAsRead(
     'topic-legacy-context',
-    'legacy-context-id',
+    'https://chat.example.com/messages/context?message_id=legacy-context-id',
   );
 
   assert.equal(didSync, true);
@@ -934,6 +1018,7 @@ function verifyTopicListSearchCoversUnreadContextAndReferences() {
           contextMessages: [
             {
               id: 'ctx-escalation',
+              sender: 'Ben',
               content: 'Escalation owner is missing before ship room.',
             },
           ],
@@ -948,16 +1033,38 @@ function verifyTopicListSearchCoversUnreadContextAndReferences() {
       projects: [{ name: 'Project Atlas' }],
       jiraTickets: [{ key: 'OPS-42', title: 'Stabilize handoff' }],
       webpages: [{ title: 'Incident playbook' }],
+      people: [
+        {
+          id: 'person-mira',
+          name: 'Mira Chen',
+          role: 'incident reviewer',
+        },
+      ],
+      cooccurringEntities: [
+        {
+          type: 'Person',
+          name: 'Casey Ops',
+        },
+      ],
     },
   };
 
   assert.equal(topicMatchesListQuery(topic, 'pager blocker'), true);
   assert.equal(topicMatchesListQuery(topic, 'escalation owner'), true);
+  assert.equal(topicMatchesListQuery(topic, 'Mira Chen'), true);
+  assert.equal(topicMatchesListQuery(topic, 'Casey Ops'), true);
+  assert.equal(topicMatchesListQuery(topic, 'Ada Ben'), true);
   assert.equal(topicMatchesListQuery(topic, 'release-checklist'), true);
   assert.equal(topicMatchesListQuery(topic, 'OPS-42'), true);
   assert.equal(topicMatchesListQuery(topic, 'incident playbook'), true);
   assert.equal(topicMatchesListQuery(topic, 'missing ship'), true);
   assert.equal(topicMatchesListQuery(topic, 'finance blocker'), false);
+  assert.deepEqual(getTopicParticipantLabels(topic, 3), [
+    'Mira Chen',
+    'Casey Ops',
+    'Ada',
+  ]);
+  assert.equal(getTopicParticipantTotalCount(topic), 4);
 }
 
 function verifyTopicConversationReadTriageIncludesContextMessages() {
@@ -1141,17 +1248,36 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
     'utf8',
   );
 
-  assert.match(source, /getSafeExternalUrl/);
   assert.match(source, /getFirstSafeExternalUrl/);
+  assert.match(source, /getFirstSafeExternalLinkPresentation/);
   assert.match(source, /getExternalUrlSafety/);
   assert.match(source, /getConversationSourceLabel/);
+  assert.match(source, /getConversationSourceHost/);
   assert.match(source, /getConversationHiddenSourceLabel/);
+  assert.match(source, /hasFilteredConversationSourceCandidates/);
+  assert.match(source, /getConversationFilteredSourceLabel/);
+  assert.match(source, /getResourceSourceLink/);
+  assert.match(source, /hasFilteredResourceSourceCandidates/);
+  assert.match(source, /getWebpageSourceDisplayText/);
+  assert.match(source, /getWebpageHiddenSourceLabel/);
+  assert.match(source, /hasFilteredWebpageSourceCandidates/);
   assert.match(source, /上下文来源/);
+  assert.match(source, /conversation-source-host/);
   assert.match(source, /conversation-source-hidden/);
+  assert.match(source, /conversation-source-filtered/);
+  assert.match(source, /topic-source-host/);
+  assert.match(source, /topic-source-hidden/);
+  assert.match(source, /topic-source-filtered/);
   assert.match(source, /来源已隐藏/);
-  assert.match(source, /class="webpage-open-link"/);
+  assert.match(source, /候选已过滤/);
+  assert.match(source, /webpage-open-link/);
   assert.match(source, /target="_blank"/);
   assert.match(source, /rel="noopener noreferrer"/);
+  assert.match(source, /source-open-receipt/);
+  assert.match(source, /handleSourceOpen/);
+  assert.match(source, /来源打开回执/);
+  assert.match(source, /不会重新读取原始消息、网页或资源/);
+  assert.match(source, /不会同步 Memory Service/);
 }
 
 function verifyTopicListResourcePreviewUsesSafeLinks() {
@@ -1232,7 +1358,51 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
     ),
     'https://example.com/source',
   );
+  assert.deepEqual(
+    getFirstSafeExternalLinkPresentation(
+      [
+        { url: '#', label: '查看资源', titleLabel: '资源' },
+        { url: 'file:///tmp/secret', label: '查看资源', titleLabel: '资源' },
+        {
+          url: 'https://docs.example.com/runbook',
+          label: '查看资源',
+          titleLabel: '资源',
+        },
+      ],
+      '查看资源',
+      '资源',
+    ),
+    {
+      url: 'https://docs.example.com/runbook',
+      label: '查看资源',
+      host: 'docs.example.com',
+      title: '打开资源：docs.example.com',
+    },
+  );
+  const blockedSourceResults = getBlockedExternalUrlResults(
+    'javascript:alert(1)',
+    'https://trusted.example.com:secret@evil.example/path',
+  );
+  assert.equal(blockedSourceResults.length, 2);
+  assert.equal(
+    getHiddenExternalUrlLabel(blockedSourceResults, '来源已隐藏'),
+    '来源已隐藏 · 2 个不可信：非 http/https/包含账号信息',
+  );
+  assert.equal(
+    getHiddenExternalUrlLabel(blockedSourceResults, '候选已过滤'),
+    '候选已过滤 · 2 个不可信：非 http/https/包含账号信息',
+  );
+  assert.match(
+    getHiddenExternalUrlTitle(blockedSourceResults, '网页来源链接'),
+    /包含账号信息/,
+  );
   assert.match(source, /handleResourcePreviewClick/);
+  assert.match(source, /sourceOpenReceipt/);
+  assert.match(source, /topic-list-source-open-receipt/);
+  assert.match(source, /showSourceOpenReceipt/);
+  assert.match(source, /来源打开回执/);
+  assert.match(source, /不会重新读取原始消息、网页或资源/);
+  assert.match(source, /不会同步 Memory Service、标记已读/);
   assert.match(source, /handleUnreadDiscussionClick/);
   assert.match(source, /navigateToTopicDiscussion/);
   assert.match(source, /getTopicUnreadPreviewMeta/);
@@ -1303,15 +1473,32 @@ function verifyTopicTriagePrioritySort() {
 
   assert.deepEqual(
     sortTopicsForTriage(topics, now).map((topic) => topic.id),
-    ['urgent', 'bulk-unread', 'recent-low', 'stale-low'],
+    ['urgent', 'recent-low', 'bulk-unread', 'stale-low'],
   );
   assert.equal(getTopicTriagePriority(topics[3], now).label, '优先处理');
-  assert.equal(getTopicTriagePriority(topics[2], now).label, '多条未读');
+  assert.equal(getTopicTriagePriority(topics[2], now).label, '积压待整理');
   assert.equal(getTopicTriagePriority(topics[1], now).label, '近期更新');
   assert.match(
     getTopicTriagePriority(topics[3], now).reasons.join('、'),
     /未读较多/,
   );
+  assert.equal(getTopicTriagePriority(topics[2], now).isStaleBacklog, true);
+  assert.match(
+    getTopicTriagePriority(topics[2], now).reasons.join('、'),
+    /积压超过7天/,
+  );
+
+  const staleImportantTopic = {
+    id: 'stale-important',
+    readStatus: { unreadCount: 8, lastUpdateTime: now - 20 * 86400000 },
+    importance: 0.85,
+    statistic: { conversations: 8 },
+  };
+  assert.equal(
+    getTopicTriagePriority(staleImportantTopic, now).isStaleBacklog,
+    false,
+  );
+  assert.equal(getTopicTriagePriority(staleImportantTopic, now).label, '优先处理');
 
   const driftedTopic = {
     id: 'preview-drift',
@@ -1418,6 +1605,80 @@ function verifyTopicUnreadSignalsSurviveReadStatusDrift() {
   );
 }
 
+async function verifyTopicListLoadFailureDoesNotGenerateMockData() {
+  const store = createStore();
+  const originalSendMessage = (chromeAPI as any).sendMessage;
+
+  try {
+    (chromeAPI as any).sendMessage = async (message: any) => {
+      cacheMessages.push(message);
+      if (message.type === 'GET_ENTITIES_BY_TYPE') {
+        return {
+          success: false,
+          error: 'topic list service unavailable',
+          data: [],
+        };
+      }
+      return { success: true };
+    };
+
+    await store.loadEntitiesByType('Topic');
+
+    assert.deepEqual(
+      store.entities,
+      [],
+      'initial Topic load failure should not render generated mock topics',
+    );
+    assert.equal(
+      store.entityLoadFailureReceipt?.previousDataRetained,
+      false,
+    );
+    assert.match(
+      store.entityLoadFailureReceipt?.message || '',
+      /topic list service unavailable/,
+    );
+
+    (chromeAPI as any).sendMessage = async (message: any) => {
+      cacheMessages.push(message);
+      if (message.type === 'GET_ENTITIES_BY_TYPE') {
+        return { success: true, data: [createTopic('topic-live')] };
+      }
+      return { success: true };
+    };
+
+    await store.loadEntitiesByType('Topic');
+
+    assert.equal(store.entities.length, 1);
+    assert.equal((store.entities[0] as any).id, 'topic-live');
+    assert.equal(store.entityLoadFailureReceipt, null);
+
+    (chromeAPI as any).sendMessage = async (message: any) => {
+      cacheMessages.push(message);
+      if (message.type === 'GET_ENTITIES_BY_TYPE') {
+        throw new Error('refresh timeout');
+      }
+      return { success: true };
+    };
+
+    await store.loadEntitiesByType('Topic');
+
+    assert.equal(
+      store.entities.length,
+      1,
+      'refresh failure should retain the last same-type Topic snapshot',
+    );
+    assert.equal((store.entities[0] as any).id, 'topic-live');
+    assert.equal(store.entityLoadFailureReceipt?.previousDataRetained, true);
+    assert.equal(store.entityLoadFailureReceipt?.retainedCount, 1);
+    assert.match(
+      store.entityLoadFailureReceipt?.message || '',
+      /refresh timeout/,
+    );
+  } finally {
+    (chromeAPI as any).sendMessage = originalSendMessage;
+  }
+}
+
 function verifyTopicMuteUiIsReachable() {
   const overviewSource = readFileSync(
     new URL('../src/modals/components/OverviewPage.vue', import.meta.url),
@@ -1437,9 +1698,24 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(overviewSource, /未读主题入口/);
   assert.match(overviewSource, /\/entity\/Topic/);
   assert.match(listSource, /topicViewMode === 'muted'/);
+  assert.match(listSource, /topicLoadFailureReceipt/);
+  assert.match(listSource, /加载失败 · 未确认/);
+  assert.match(listSource, /刷新失败 · 上次快照/);
+  assert.match(listSource, /未展示示例主题/);
+  assert.match(storeSource, /entityLoadFailureReceipt/);
+  assert.match(storeSource, /previousDataRetained/);
+  assert.match(listSource, /topicUnreadQueueReceipt/);
+  assert.match(listSource, /topicHiddenUnreadCount/);
+  assert.match(listSource, /未读队列口径/);
+  assert.match(listSource, /当前没有可处理的未读主题/);
+  assert.match(listSource, /稍后\/静音不等于已读/);
   assert.match(listSource, /handleMuteTopic/);
   assert.match(listSource, /topicDeferredUndo/);
   assert.match(listSource, /topic-defer-undo-toast/);
+  assert.match(listSource, /topic-defer-boundary-receipt/);
+  assert.match(listSource, /稍后处理边界/);
+  assert.match(listSource, /主题会暂时离开未读队列/);
+  assert.match(listSource, /不会标记已读/);
   assert.match(listSource, /handleUndoTopicDefer/);
   assert.match(listSource, /scheduleTopicDeferredReleaseRefresh/);
   assert.match(listSource, /store\.refreshDeferredTopics\(\)/);
@@ -1453,6 +1729,13 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(listSource, /topic-mute-reasons/);
   assert.match(listSource, /selectedMuteReason/);
   assert.match(listSource, /getTopicMuteReasonLabel/);
+  assert.match(listSource, /topic-mute-boundary-receipt/);
+  assert.match(listSource, /静音边界/);
+  assert.match(listSource, /只调整本机未读流和降噪过滤/);
+  assert.match(listSource, /未同步或标记已读/);
+  assert.match(listSource, /topic-muted-note-detail/);
+  assert.match(listSource, /未读保留在本机静音视图/);
+  assert.match(listSource, /点「取消静音」回到未读流/);
   assert.match(storeSource, /低相关度/);
 }
 
@@ -1468,26 +1751,82 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
 
   assert.match(source, /conversationUnreadCount/);
   assert.match(source, /convReadFilter/);
+  assert.match(source, /conversationReadBatchReceipt/);
+  assert.match(source, /topic-read-batch-receipt/);
+  assert.match(source, /topic-read-batch-metrics/);
+  assert.match(
+    source,
+    /convReadFilter\.value = normalizeReadFilterValue\(\s*route\.query\.readFilter,\s*\)/,
+  );
+  assert.match(source, /阅读批次回执/);
+  assert.match(source, /阅读批次构成/);
+  assert.match(source, /筛选口径/);
+  assert.match(source, /排序依据/);
+  assert.match(source, /排序：未读优先/);
+  assert.match(source, /当前显示/);
+  assert.match(source, /hasConversationUnknownReadState/);
+  assert.match(source, /缺少明确读状态的历史聊天不会被自动算作未读/);
+  assert.match(source, /展开上下文才会把对应消息/);
+  assert.match(source, /全部已阅只更新当前主题的已知未读信号/);
+  assert.match(source, /不会改写原始聊天平台/);
+  assert.match(source, /当前已加载详情/);
   assert.match(source, /getTopicDeferPresetOptions/);
   assert.match(source, /detailDeferMenuOpen/);
   assert.match(source, /handleDeferTopicFromDetail/);
+  assert.match(source, /currentTopicDeferredState/);
+  assert.match(source, /topic-detail-defer-restore/);
+  assert.match(source, /handleRestoreDeferFromDetail/);
+  assert.match(source, /deferred-meta/);
+  assert.match(source, /topic-detail-defer-boundary/);
+  assert.match(source, /稍后处理边界/);
+  assert.match(source, /不会标记已读/);
   assert.match(source, /topic-detail-defer-options/);
   assert.match(source, /topic-defer-undo-toast/);
   assert.match(source, /getTopicMutePresetOptions/);
   assert.match(source, /detailMuteMenuOpen/);
   assert.match(source, /detailSelectedMuteReason/);
   assert.match(source, /handleMuteTopicFromDetail/);
+  assert.match(source, /showTopicDetailTriageActions/);
+  assert.match(source, /topicDetailCanStartTriage/);
+  assert.match(source, /topic-detail-action-note/);
+  assert.match(source, /本机静音仍会隐藏未来未读/);
   assert.match(source, /topic-detail-mute-options/);
+  assert.match(source, /topic-detail-mute-boundary/);
+  assert.match(source, /静音边界/);
+  assert.match(source, /只调整本机注意力过滤/);
   assert.match(source, /topic-mute-undo-toast/);
   assert.match(source, /handleUndoDetailMute/);
   assert.match(source, /currentTopicMutedState/);
   assert.match(source, /getTopicDetailUnreadCount/);
   assert.match(source, /getConversationRenderId/);
-  assert.match(source, /getTopicConversationPrimaryId/);
+  assert.match(source, /getTopicConversationRenderIdentity/);
   assert.match(source, /highlightedMessageId/);
   assert.match(source, /targeted-message-badge/);
   assert.match(source, /链接定位/);
+  assert.match(source, /消息定位回执/);
+  assert.match(source, /消息定位未完成/);
+  assert.match(source, /message-focus-target-chip/);
+  assert.match(source, /message-focus-actions/);
+  assert.match(source, /message-focus-action/);
+  assert.match(source, /撤销这次已读/);
+  assert.match(source, /undoMessageReadSync/);
+  assert.match(source, /定位请求/);
+  assert.match(source, /命中依据/);
+  assert.match(source, /定位回执会保留/);
+  assert.match(source, /收起定位回执/);
+  assert.match(source, /dismissFocusNotice/);
+  assert.match(source, /store\.undoLastConversationRead\(\)/);
+  assert.match(source, /clearMessageFocusHighlight/);
+  assert.match(source, /getMessageFocusMatchBasisDetail/);
+  assert.match(source, /handleShowAllConversationsFromFocusReceipt/);
+  assert.match(source, /handleMessageFocusNoticeAction/);
+  assert.match(source, /已读同步走当前实体缓存路径/);
+  assert.match(source, /Slack timestamp 口径/);
+  assert.match(source, /没有标记任何消息已读/);
   assert.match(source, /data-topic-message-ids/);
+  assert.match(source, /getTopicMessageIdentityCandidates/);
+  assert.match(source, /getTopicMessageIdentityValues/);
+  assert.match(source, /topicMessageMatchesIdentity/);
   assert.match(
     source,
     /store\.markConversationAsRead\(topicId\.value, messageId\)/,
@@ -1503,10 +1842,15 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(listSource, /优先处理排序/);
   assert.match(listSource, /sortTopicsForTriage/);
   assert.match(listSource, /topic-priority-pill/);
+  assert.match(listSource, /topic-priority-reasons/);
+  assert.match(listSource, /isTopicStaleBacklog/);
   assert.match(listSource, /getTopicDisplayTime/);
   assert.match(listSource, /navigateToTopicUnread/);
   assert.match(listSource, /readFilter: 'unread'/);
   assert.match(listSource, /getTopicUnreadTotalCount\(entity\)/);
+  assert.match(listSource, /getTopicParticipantLabels/);
+  assert.match(listSource, /topic-participant-row/);
+  assert.match(listSource, /参与者\/来源人/);
 }
 
 async function main() {
@@ -1546,6 +1890,7 @@ async function main() {
   verifyTopicTriagePrioritySort();
   verifyTopicUnreadPreviewHelpers();
   verifyTopicUnreadSignalsSurviveReadStatusDrift();
+  await verifyTopicListLoadFailureDoesNotGenerateMockData();
   verifyTopicMuteUiIsReachable();
   verifyTopicDetailUnreadTriageUiIsReachable();
 

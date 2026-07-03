@@ -39,6 +39,28 @@ export interface NotificationEnvelope {
   payload?: Record<string, unknown>;
   deliveryContext?: NotificationDeliveryContext;
   channelReceipts?: NotificationChannelReceipt[];
+  evidenceReceipt?: NotificationEvidenceReceipt;
+  snoozeReceipt?: NotificationSnoozeReceipt;
+}
+
+export interface NotificationEvidenceReceipt {
+  evidenceCount: number;
+  label: string;
+  detail: string;
+  boundary: string;
+  sampleRefs: string[];
+}
+
+export interface NotificationSnoozeReceipt {
+  label: string;
+  detail: string;
+  boundary: string;
+  sourceNotificationId?: string;
+  rootNotificationId?: string;
+  snoozedAt?: number;
+  scheduledAt?: number;
+  delaySeconds?: number;
+  count: number;
 }
 
 export interface NotificationChannelReceipt {
@@ -69,6 +91,7 @@ export interface NotificationDeliveryContext {
   hasSuccessfulDelivery: boolean;
   lastAttemptAt?: number;
   lastDeliveredAt?: number;
+  lastError?: string;
   cooldownSeconds?: number;
 }
 
@@ -81,7 +104,14 @@ export interface NotificationFeedResult {
     limit: number;
     returned: number;
     hasMore: boolean;
+    emptyReceipt?: NotificationFeedEmptyReceipt;
   };
+}
+
+export interface NotificationFeedEmptyReceipt {
+  label: string;
+  detail: string;
+  boundary: string;
 }
 
 interface ProposedActionRow {
@@ -94,6 +124,7 @@ interface ProposedActionRow {
   expires_at: number | null;
   created_at: number;
   params_json: string | null;
+  evidence_refs_json: string | null;
 }
 
 interface NotificationFeedRow {
@@ -102,6 +133,8 @@ interface NotificationFeedRow {
   title: string;
   body: string | null;
   payload_json: string | null;
+  evidence_refs_json: string | null;
+  weave_json: string | null;
   sent_at: number | null;
   created_at: number;
 }
@@ -140,6 +173,140 @@ function firstPayloadString(
     if (detail) return detail;
   }
   return undefined;
+}
+
+function compactEvidenceRef(raw: unknown): string | undefined {
+  let value = '';
+  if (typeof raw === 'string') {
+    value = raw;
+  } else if (raw && typeof raw === 'object') {
+    const record = raw as Record<string, unknown>;
+    const source = record.source || record.sourceType || record.type;
+    const id = record.id || record.ref || record.sourceRef || record.entityId;
+    if (typeof source === 'string' && typeof id === 'string') {
+      value = `${source}:${id}`;
+    } else if (typeof id === 'string') {
+      value = id;
+    } else if (typeof source === 'string') {
+      value = source;
+    }
+  }
+
+  const compacted = value.replace(/\s+/g, ' ').trim();
+  if (!compacted) return undefined;
+  if (compacted.length <= 72) return compacted;
+  return `${compacted.slice(0, 71).trim()}…`;
+}
+
+function parseEvidenceRefs(raw: string | null): string[] {
+  const parsed = safeJsonParse<unknown>(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map(compactEvidenceRef)
+    .filter((value): value is string => Boolean(value));
+}
+
+function buildNotificationEvidenceReceipt(
+  rawEvidenceRefs: string | null,
+): NotificationEvidenceReceipt | undefined {
+  const evidenceRefs = parseEvidenceRefs(rawEvidenceRefs);
+  if (evidenceRefs.length === 0) return undefined;
+
+  const sampleRefs = evidenceRefs.slice(0, 3);
+  const omittedCount = evidenceRefs.length - sampleRefs.length;
+  const sampleText = sampleRefs.join('、');
+  const suffix = omittedCount > 0 ? `，另有 ${omittedCount} 条` : '';
+  return {
+    evidenceCount: evidenceRefs.length,
+    label: `依据 ${evidenceRefs.length} 条记忆`,
+    detail: sampleText ? `本次通知依据：${sampleText}${suffix}` : '',
+    boundary:
+      '只说明生成这条通知时引用过的记忆证据；不会确认、忽略、重发通知，或改变任何渠道投递状态。',
+    sampleRefs,
+  };
+}
+
+function readStringPayloadField(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readPositivePayloadNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function formatNotificationSnoozeDelay(delaySeconds: number): string {
+  const rounded = Math.max(1, Math.floor(delaySeconds));
+  if (rounded % 86_400 === 0) {
+    return `${Math.floor(rounded / 86_400)}天`;
+  }
+  if (rounded % 3_600 === 0) {
+    return `${Math.floor(rounded / 3_600)}小时`;
+  }
+  if (rounded % 60 === 0) {
+    return `${Math.floor(rounded / 60)}分钟`;
+  }
+  return `${rounded}秒`;
+}
+
+function buildNotificationSnoozeReceipt(
+  payload: Record<string, unknown> | undefined,
+): NotificationSnoozeReceipt | undefined {
+  const snooze = payload?.snooze;
+  if (!snooze || typeof snooze !== 'object') return undefined;
+
+  const snoozeRecord = snooze as Record<string, unknown>;
+  const sourceNotificationId = readStringPayloadField(
+    snoozeRecord,
+    'sourceNotificationId',
+  );
+  const rootNotificationId = readStringPayloadField(
+    snoozeRecord,
+    'rootNotificationId',
+  );
+  const snoozedAt = readPositivePayloadNumber(snoozeRecord, 'snoozedAt');
+  const scheduledAt = readPositivePayloadNumber(snoozeRecord, 'scheduledAt');
+  const delaySeconds = readPositivePayloadNumber(
+    snoozeRecord,
+    'delaySeconds',
+  );
+  const count = Math.max(
+    1,
+    Math.floor(readPositivePayloadNumber(snoozeRecord, 'count') ?? 1),
+  );
+  const detailParts = [
+    sourceNotificationId ? `来源通知 ${sourceNotificationId}` : undefined,
+    rootNotificationId && rootNotificationId !== sourceNotificationId
+      ? `根通知 ${rootNotificationId}`
+      : undefined,
+    scheduledAt ? `原定回提醒 ${formatDateTime(scheduledAt)}` : undefined,
+    delaySeconds
+      ? `上次延后 ${formatNotificationSnoozeDelay(delaySeconds)}`
+      : undefined,
+    snoozedAt ? `上次操作 ${formatDateTime(snoozedAt)}` : undefined,
+  ].filter(Boolean);
+
+  return {
+    label: count > 1 ? `第${count}次稍后提醒` : '稍后提醒',
+    detail: detailParts.join('；'),
+    boundary:
+      '这是稍后提醒到点的上下文；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+    sourceNotificationId,
+    rootNotificationId,
+    snoozedAt,
+    scheduledAt,
+    delaySeconds,
+    count,
+  };
 }
 
 function noticePayloadDetail(item: NotificationEnvelope): string | undefined {
@@ -190,9 +357,10 @@ function formatNoticeDigestItem(item: NotificationEnvelope): string {
   const when = item.sentAt ? ` @ ${formatDateTime(item.sentAt)}` : '';
   const body = item.body ? ` - ${item.body}` : '';
   const retryHint = formatDeliveryContextHint(item.deliveryContext);
+  const evidenceHint = formatEvidenceReceiptHint(item.evidenceReceipt);
   const detail = noticePayloadDetail(item);
-  if (!detail) return `- ${item.title}${when}${body}${retryHint}`;
-  return `- ${item.title}${when}${body}${retryHint}\n${indentMarkdownBlock(detail)}`;
+  if (!detail) return `- ${item.title}${when}${body}${retryHint}${evidenceHint}`;
+  return `- ${item.title}${when}${body}${retryHint}${evidenceHint}\n${indentMarkdownBlock(detail)}`;
 }
 
 function formatDeliveryContextHint(
@@ -209,6 +377,21 @@ function formatDeliveryContextHint(
     return ' [已提醒过，仍待处理]';
   }
   return '';
+}
+
+function formatEvidenceReceiptHint(
+  evidenceReceipt: NotificationEvidenceReceipt | undefined,
+): string {
+  if (!evidenceReceipt) return '';
+  return ` [${evidenceReceipt.label}；只读依据]`;
+}
+
+function formatSnoozeReceiptHint(
+  snoozeReceipt: NotificationSnoozeReceipt | undefined,
+): string {
+  if (!snoozeReceipt) return '';
+  const detail = snoozeReceipt.detail ? `：${snoozeReceipt.detail}` : '';
+  return ` [${snoozeReceipt.label}${detail}；仍未处理]`;
 }
 
 function formatChannelLabel(channel: DeliveryChannel): string {
@@ -390,11 +573,73 @@ function buildDigestTruncationReceipt(omittedCount: number): string {
   return `> 已截断：还有 ${omittedCount} 条未放入本次摘要；未显示条目不会写入本次渠道送达回执。`;
 }
 
+function formatFeedLimitLaneLabel(lanes: DeliveryLane[]): string {
+  const uniqueLanes = Array.from(new Set(lanes));
+  if (uniqueLanes.includes('todo') && uniqueLanes.includes('notice')) {
+    return '待办/通知';
+  }
+  if (uniqueLanes.includes('todo')) return '待办';
+  if (uniqueLanes.includes('notice')) return '通知';
+  return '条目';
+}
+
+function formatFeedLimitModeLabel(
+  deliveryMode: NotificationFeedDeliveryMode,
+): string {
+  switch (deliveryMode) {
+    case 'daily_digest':
+      return '每日摘要';
+    case 'incremental':
+      return '新条目同步';
+    case 'retry_after_cooldown':
+    default:
+      return '滚动同步';
+  }
+}
+
+function buildFeedHasMoreDigestReceipt(
+  feedResult: NotificationFeedResult,
+): string | undefined {
+  if (!feedResult.meta.hasMore) return undefined;
+  return `> Feed 还有更多：本次${formatFeedLimitModeLabel(
+    feedResult.meta.deliveryMode,
+  )}只纳入前 ${feedResult.meta.limit} 条${formatFeedLimitLaneLabel(
+    feedResult.meta.lanes,
+  )}；未展示条目仍留在 Notification Center feed，不会写入本次渠道送达回执。`;
+}
+
+function buildFeedEmptyReceipt(input: {
+  channel: DeliveryChannel;
+  lanes: DeliveryLane[];
+  deliveryMode: NotificationFeedDeliveryMode;
+}): NotificationFeedEmptyReceipt {
+  return {
+    label: 'Feed 空结果回执',
+    detail: `${formatChannelLabel(input.channel)} ${formatFeedLimitModeLabel(
+      input.deliveryMode,
+    )}已成功读取；当前没有符合本次${formatFeedLimitLaneLabel(
+      input.lanes,
+    )}范围的可投递条目。`,
+    boundary:
+      '这是成功但为空的快照；不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+  };
+}
+
+function buildFeedEmptyDigestLine(
+  feedResult: NotificationFeedResult,
+  fallbackLabel: string,
+): string {
+  const receipt =
+    feedResult.meta.emptyReceipt ?? buildFeedEmptyReceipt(feedResult.meta);
+  return `- ${fallbackLabel}。${receipt.detail}；${receipt.boundary}`;
+}
+
 function renderBoundedDigestMarkdown(input: {
   headerLines: string[];
   itemBlocks: Array<{ sourceRef: string; bodyMd: string }>;
   emptyLine: string;
   tokenBudget: number;
+  footerLines?: string[];
 }): {
   bodyMd: string;
   sourceRefs: string[];
@@ -403,7 +648,11 @@ function renderBoundedDigestMarkdown(input: {
 } {
   if (input.itemBlocks.length === 0) {
     return {
-      bodyMd: [...input.headerLines, input.emptyLine].join('\n'),
+      bodyMd: [
+        ...input.headerLines,
+        input.emptyLine,
+        ...(input.footerLines?.length ? ['', ...input.footerLines] : []),
+      ].join('\n'),
       sourceRefs: [],
       itemCount: 0,
       omittedItemCount: 0,
@@ -425,6 +674,9 @@ function renderBoundedDigestMarkdown(input: {
     ];
     if (omittedCount > 0) {
       bodyLines.push('', buildDigestTruncationReceipt(omittedCount));
+    }
+    if (input.footerLines?.length) {
+      bodyLines.push('', ...input.footerLines);
     }
     return bodyLines.join('\n');
   };
@@ -452,6 +704,7 @@ function renderBoundedDigestMarkdown(input: {
       '- 本次摘要预算不足，未放入完整条目。',
       '',
       buildDigestTruncationReceipt(input.itemBlocks.length),
+      ...(input.footerLines?.length ? ['', ...input.footerLines] : []),
     ].join('\n'),
     sourceRefs: [],
     itemCount: 0,
@@ -539,6 +792,11 @@ export class NotificationCenterService {
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
     const deliveryMode = input.deliveryMode ?? 'retry_after_cooldown';
     if (lanes.length === 0) {
+      const emptyReceipt = buildFeedEmptyReceipt({
+        channel: input.channel,
+        lanes,
+        deliveryMode,
+      });
       return {
         items: [],
         meta: {
@@ -548,6 +806,7 @@ export class NotificationCenterService {
           limit,
           returned: 0,
           hasMore: false,
+          emptyReceipt,
         },
       };
     }
@@ -643,7 +902,8 @@ export class NotificationCenterService {
 
     const notificationRows = this.db
       .prepare(
-        `SELECT n.id, n.type, n.title, n.body, n.payload_json, n.sent_at, n.created_at
+        `SELECT n.id, n.type, n.title, n.body, n.payload_json,
+                n.evidence_refs_json, n.weave_json, n.sent_at, n.created_at
            FROM notification_records n
           WHERE n.clicked_at IS NULL
             AND n.dismissed_at IS NULL
@@ -666,6 +926,7 @@ export class NotificationCenterService {
         type: row.type,
       });
       const sourceRef = `notification:${row.id}`;
+      const payload = safeJsonParse<Record<string, unknown>>(row.payload_json);
       return {
         sourceRef,
         sourceType: 'notification',
@@ -677,7 +938,7 @@ export class NotificationCenterService {
         createdAt: row.created_at,
         sentAt: row.sent_at ?? undefined,
         type: row.type ?? undefined,
-        payload: safeJsonParse<Record<string, unknown>>(row.payload_json),
+        payload,
         deliveryContext: this.buildDeliveryContext({
           sourceRef,
           channel: input.channel,
@@ -686,6 +947,8 @@ export class NotificationCenterService {
           includeDeliveredTodos,
         }),
         channelReceipts: this.buildChannelReceipts(sourceRef, routing.lane),
+        evidenceReceipt: buildNotificationEvidenceReceipt(row.evidence_refs_json),
+        snoozeReceipt: buildNotificationSnoozeReceipt(payload),
       };
     });
 
@@ -714,7 +977,8 @@ export class NotificationCenterService {
       ? (
           this.db
             .prepare(
-              `SELECT id, type, action_type, title, description, state, expires_at, created_at, params_json
+              `SELECT id, type, action_type, title, description, state, expires_at,
+                      created_at, params_json, evidence_refs_json
                FROM proposed_actions a
               WHERE state = 'pending'
                 AND queue_status IN ('queued', 'running')
@@ -753,6 +1017,9 @@ export class NotificationCenterService {
               includeDeliveredTodos,
             }),
             channelReceipts: this.buildChannelReceipts(sourceRef, 'todo'),
+            evidenceReceipt: buildNotificationEvidenceReceipt(
+              action.evidence_refs_json,
+            ),
           };
         })
       : [];
@@ -777,6 +1044,15 @@ export class NotificationCenterService {
       },
     );
     const items = combined.slice(0, limit);
+    const hasMore = combined.length > limit;
+    const emptyReceipt =
+      items.length === 0
+        ? buildFeedEmptyReceipt({
+            channel: input.channel,
+            lanes,
+            deliveryMode,
+          })
+        : undefined;
     return {
       items,
       meta: {
@@ -785,7 +1061,8 @@ export class NotificationCenterService {
         deliveryMode,
         limit,
         returned: items.length,
-        hasMore: combined.length > limit,
+        hasMore,
+        emptyReceipt,
       },
     };
   }
@@ -852,6 +1129,7 @@ export class NotificationCenterService {
       hasSuccessfulDelivery: record.hasSuccessfulDelivery,
       lastAttemptAt: record.updatedAt,
       lastDeliveredAt,
+      lastError: record.lastError,
       cooldownSeconds:
         input.lane === 'todo'
           ? TODO_DELIVERY_RETRY_COOLDOWN_SECONDS
@@ -940,14 +1218,17 @@ export class NotificationCenterService {
     dedupeSuffix: string;
     itemCount: number;
     omittedItemCount: number;
+    feedHasMore: boolean;
+    feedLimit: number;
   } {
     const deliveryMode = options.deliveryMode ?? 'retry_after_cooldown';
-    const items = this.listFeed({
+    const feedResult = this.listFeedResult({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
       lanes: ['todo'],
       limit: options.limit ?? (deliveryMode === 'daily_digest' ? 50 : 8),
       deliveryMode,
     });
+    const items = feedResult.items;
 
     const itemBlocks = items.map((item) => {
       const due =
@@ -959,7 +1240,7 @@ export class NotificationCenterService {
         sourceRef: item.sourceRef,
         bodyMd: `- ${item.title}${due}${body}${formatDeliveryContextHint(
           item.deliveryContext,
-        )}${formatChannelReceiptsHint(
+        )}${formatSnoozeReceiptHint(item.snoozeReceipt)}${formatEvidenceReceiptHint(item.evidenceReceipt)}${formatChannelReceiptsHint(
           item.channelReceipts,
           item.deliveryContext?.channel,
         )}`,
@@ -982,8 +1263,11 @@ export class NotificationCenterService {
             : '## 待处理事项',
       ],
       itemBlocks,
-      emptyLine: '- 暂无待处理事项。',
+      emptyLine: buildFeedEmptyDigestLine(feedResult, '暂无待处理事项'),
       tokenBudget,
+      footerLines: [buildFeedHasMoreDigestReceipt(feedResult)].filter(
+        (line): line is string => Boolean(line),
+      ),
     });
 
     return {
@@ -992,6 +1276,8 @@ export class NotificationCenterService {
       dedupeSuffix: rendered.sourceRefs.join('|'),
       itemCount: rendered.itemCount,
       omittedItemCount: rendered.omittedItemCount,
+      feedHasMore: feedResult.meta.hasMore,
+      feedLimit: feedResult.meta.limit,
     };
   }
 
@@ -1004,16 +1290,21 @@ export class NotificationCenterService {
     dedupeSuffix: string;
     itemCount: number;
     omittedItemCount: number;
+    feedHasMore: boolean;
+    feedLimit: number;
   } {
-    const items = this.listFeed({
+    const feedResult = this.listFeedResult({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
       lanes: ['notice'],
       limit: 8,
     });
+    const items = feedResult.items;
 
     const itemBlocks = items.map((item) => ({
       sourceRef: item.sourceRef,
-      bodyMd: `${formatNoticeDigestItem(item)}${formatChannelReceiptsHint(
+      bodyMd: `${formatNoticeDigestItem(item)}${formatSnoozeReceiptHint(
+        item.snoozeReceipt,
+      )}${formatChannelReceiptsHint(
         item.channelReceipts,
         item.deliveryContext?.channel,
       )}`,
@@ -1027,8 +1318,11 @@ export class NotificationCenterService {
         '## 更新',
       ],
       itemBlocks,
-      emptyLine: '- 暂无新通知。',
+      emptyLine: buildFeedEmptyDigestLine(feedResult, '暂无新通知'),
       tokenBudget,
+      footerLines: [buildFeedHasMoreDigestReceipt(feedResult)].filter(
+        (line): line is string => Boolean(line),
+      ),
     });
 
     return {
@@ -1037,6 +1331,8 @@ export class NotificationCenterService {
       dedupeSuffix: rendered.sourceRefs.join('|'),
       itemCount: rendered.itemCount,
       omittedItemCount: rendered.omittedItemCount,
+      feedHasMore: feedResult.meta.hasMore,
+      feedLimit: feedResult.meta.limit,
     };
   }
 }

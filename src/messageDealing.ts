@@ -21,6 +21,7 @@ import {
   handleAutoReplyRules,
   TopicItemWithAutoReply,
   formatAutoReplyTime,
+  type AutoReplyHandlingResult,
 } from './message-reaction';
 import {
   updateRelatedMessages,
@@ -35,9 +36,13 @@ import {
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 import {
+  createMessageAnalysisDeliveryReceipt,
   getDigestDeliveryItems,
   getImmediateNotificationItem,
+  persistMessageAnalysisDeliveryReceipt,
   shouldQueueRuleDigest,
+  type MessageAnalysisDeliveryReceipt,
+  type MessageAnalysisDeliveryRunMode,
 } from './messageAnalysisDelivery';
 import {
   extractRuleIdsFromMatchedRule,
@@ -49,6 +54,9 @@ import {
   resolveMatchedWatchRules,
   type WatchRule,
 } from './watchRules';
+import {
+  recordRejectedManualRuleDiagnostics,
+} from './messageAnalysisRuleDiagnostics';
 
 type PushTargetConfigKey =
   | 'MESSAGE_ANALYSIS_PUSH_TARGET'
@@ -63,6 +71,14 @@ type PushGroupConfigKey =
   | 'DREAM_INSIGHT_PUSH_GROUP_ID'
   | 'WEEKLY_REPORT_PUSH_GROUP_ID'
   | 'DECISION_CENTER_PUSH_GROUP_ID';
+
+interface QueueMatchedRuleAutomationResult {
+  attempted: number;
+  actionsCreated: number;
+  skipped: number;
+  failures: number;
+  paused: number;
+}
 
 const ANALYSIS_EXCLUDED_PUSH_GROUP_CONFIGS: Array<{
   label: string;
@@ -125,6 +141,54 @@ function getExcludedPushGroupIds(envConfig: EnvConfigType): string[] {
   }
 
   return Array.from(excludedGroupIds);
+}
+
+function getMessageAnalysisRunMode(
+  envConfig: EnvConfigType,
+): MessageAnalysisDeliveryRunMode {
+  if (envConfig.ANALYSIS_TYPE === 'agentThinking') return 'agentThinking';
+  if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') return 'agentWorkflow';
+  return 'filter';
+}
+
+function createDeliveryReceiptForRun(params: {
+  envConfig: EnvConfigType;
+  isScheduledTask: boolean;
+  groupCount?: number;
+}) {
+  return createMessageAnalysisDeliveryReceipt({
+    runMode: getMessageAnalysisRunMode(params.envConfig),
+    source: params.isScheduledTask ? 'scheduled' : 'manual',
+    groupsAnalyzed: params.groupCount || 0,
+  });
+}
+
+function applyAutomationQueueResult(
+  receipt: MessageAnalysisDeliveryReceipt,
+  result: QueueMatchedRuleAutomationResult,
+) {
+  receipt.counters.automationPlanRequests += result.attempted;
+  receipt.counters.automationActionsCreated += result.actionsCreated;
+  receipt.counters.automationPlanSkipped += result.skipped;
+  receipt.counters.automationPlanFailures += result.failures;
+  receipt.counters.automationPlanPaused += result.paused;
+}
+
+function applyAutoReplyDeliveryResult(
+  receipt: MessageAnalysisDeliveryReceipt,
+  result: AutoReplyHandlingResult,
+) {
+  if (result.handled) {
+    receipt.counters.autoReplyHandled += 1;
+    return;
+  }
+
+  if (result.skipped) {
+    receipt.counters.autoReplySkipped += 1;
+    if (result.skipNote) {
+      receipt.notes.push(result.skipNote);
+    }
+  }
 }
 
 type MessageRuleAutomationMessage =
@@ -548,11 +612,19 @@ async function queueMatchedRuleAutomations(params: {
   confidence?: number;
   pausedReason?: string;
   message: MessageRuleAutomationMessage;
-}) {
+}): Promise<QueueMatchedRuleAutomationResult> {
   const automationItems = params.manualItems.filter((item) =>
     Boolean(item.automationPrompt?.trim()),
   );
-  if (automationItems.length === 0) return;
+  if (automationItems.length === 0) {
+    return {
+      attempted: 0,
+      actionsCreated: 0,
+      skipped: 0,
+      failures: 0,
+      paused: 0,
+    };
+  }
 
   if (params.pausedReason) {
     console.log(
@@ -562,13 +634,19 @@ async function queueMatchedRuleAutomations(params: {
         matchedRule: params.matchedRule,
       },
     );
-    return;
+    return {
+      attempted: automationItems.length,
+      actionsCreated: 0,
+      skipped: 0,
+      failures: 0,
+      paused: automationItems.length,
+    };
   }
 
-  try {
-    const client = getMemoryServiceClient();
-    await Promise.all(
-      automationItems.map(async (item) => {
+  const client = getMemoryServiceClient();
+  const results = await Promise.all(
+    automationItems.map(async (item) => {
+      try {
         const response = await client.planMessageRuleAutomation({
           ruleRef: `manual:${item.id}`,
           ruleText: item.text,
@@ -585,17 +663,48 @@ async function queueMatchedRuleAutomations(params: {
           console.log(
             `⏭️ 跳过自动化规则 ${item.id}: ${response.skippedReason}`,
           );
-          return;
+          return {
+            actionsCreated: 0,
+            skipped: 1,
+            failures: 0,
+          };
         }
         console.log(
           `⚡ 已为规则 ${item.id} 创建 ${response.actions.length} 个 RuntimeAction`,
           response.detectedWindow,
         );
-      }),
-    );
-  } catch (error) {
-    console.warn('⚠️ 规则自动化规划失败:', error);
-  }
+        return {
+          actionsCreated: response.actions.length,
+          skipped: 0,
+          failures: 0,
+        };
+      } catch (error) {
+        console.warn('⚠️ 规则自动化规划失败:', error);
+        return {
+          actionsCreated: 0,
+          skipped: 0,
+          failures: 1,
+        };
+      }
+    }),
+  );
+
+  return results.reduce(
+    (summary, result) => ({
+      attempted: summary.attempted + 1,
+      actionsCreated: summary.actionsCreated + result.actionsCreated,
+      skipped: summary.skipped + result.skipped,
+      failures: summary.failures + result.failures,
+      paused: summary.paused,
+    }),
+    {
+      attempted: 0,
+      actionsCreated: 0,
+      skipped: 0,
+      failures: 0,
+      paused: 0,
+    },
+  );
 }
 
 async function queueMatchedRuleDigest(params: {
@@ -639,10 +748,10 @@ async function queueMatchedRuleDigests(params: {
   summary?: string;
   datetime?: string;
   postId?: string;
-}): Promise<boolean> {
+}): Promise<number> {
   const digestItems = getDigestDeliveryItems(params.items);
   if (digestItems.length === 0) {
-    return false;
+    return 0;
   }
 
   await Promise.all(
@@ -653,7 +762,7 @@ async function queueMatchedRuleDigests(params: {
       }),
     ),
   );
-  return true;
+  return digestItems.length;
 }
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
@@ -934,6 +1043,12 @@ export async function analyzeMessagesInBackground(
       const noisyCount = resultsArray.filter(
         (r) => !r.shouldStore && !r.shouldNotify && !r.isImportant,
       ).length;
+      const deliveryReceipt = createDeliveryReceiptForRun({
+        envConfig,
+        isScheduledTask,
+        groupCount: data.length,
+      });
+      deliveryReceipt.counters.analyzedMessages = resultsArray.length;
 
       console.log(
         `所有群组消息处理完成: 共 ${resultsArray.length} 条消息, ${importantCount} 条重要, ${storedCount} 条已存储, ${notifiedCount} 条已通知, ${noisyCount} 条被降噪过滤。结果细节：`,
@@ -967,15 +1082,7 @@ export async function analyzeMessagesInBackground(
           '';
 
         // 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
-        let autoReplyResult: {
-          handled: boolean;
-          replyInfo?: {
-            content: string;
-            scheduleTime: Date;
-            status: string;
-            messageId?: string;
-          };
-        } = { handled: false };
+        let autoReplyResult: AutoReplyHandlingResult = { handled: false };
         if (result.matchedRule) {
           // 从 matchedRule 中提取规则 ID（如果可用）
           const matchedRuleIds = mergeMatchedRuleIds(
@@ -1046,8 +1153,10 @@ export async function analyzeMessagesInBackground(
                 relationType:
                   result.followThreadInfo.relationType || 'semantic_related',
               });
+              deliveryReceipt.counters.followThreadUpdates += 1;
             }
           } catch (followThreadError) {
+            deliveryReceipt.counters.followThreadFailures += 1;
             console.error('❌ 关注后续数据处理失败:', followThreadError);
           }
         }
@@ -1081,7 +1190,7 @@ export async function analyzeMessagesInBackground(
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
-        await queueMatchedRuleDigests({
+        const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
           matchedRule: result.matchedRule,
           sender: originalMessage.sender || '',
@@ -1092,6 +1201,8 @@ export async function analyzeMessagesInBackground(
           datetime: originalMessage.datetime || '',
           postId,
         });
+        deliveryReceipt.counters.digestQueueEntries += digestQueueEntries;
+        applyAutoReplyDeliveryResult(deliveryReceipt, autoReplyResult);
 
         // 如果需要通知且有配置通知方式，则发送通知
         if ((result.shouldNotify || followThreadItem) && notifyMethod) {
@@ -1141,8 +1252,9 @@ export async function analyzeMessagesInBackground(
           };
 
           // 使用 NotificationService 发送通知
-          await notificationService
-            .sendNotification(
+          deliveryReceipt.counters.immediateNotificationAttempts += 1;
+          try {
+            await notificationService.sendNotification(
               notificationData,
               { notifyMethod },
               // LLM 审核配置（只对 bot 通知生效）
@@ -1151,12 +1263,16 @@ export async function analyzeMessagesInBackground(
                 userName: userinfo.fullName,
                 concernedItems: concernedItems,
               },
-            )
-            .catch(console.error);
+            );
+          } catch (notificationError) {
+            deliveryReceipt.counters.immediateNotificationFailures += 1;
+            console.error(notificationError);
+          }
         }
 
         // 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
         if (result.shouldStore) {
+          deliveryReceipt.counters.memoryWriteRequests += 1;
           try {
             // 构建消息元数据
             const messageMetadata = {
@@ -1208,10 +1324,17 @@ export async function analyzeMessagesInBackground(
                 entitiesExtracted: ingestResult.entitiesExtracted,
                 matchedProjects: ingestResult.matchedProjects,
               });
+              if (ingestResult.status === 'duplicate') {
+                deliveryReceipt.counters.memoryDuplicateSkips += 1;
+              } else {
+                deliveryReceipt.counters.memoryWritesAccepted += 1;
+              }
             } catch (unifiedError) {
+              deliveryReceipt.counters.memoryWriteFailures += 1;
               console.error('🚨 统一存储系统失败', unifiedError);
             }
           } catch (error) {
+            deliveryReceipt.counters.memoryWriteFailures += 1;
             console.error('存储消息失败:', error);
           }
         }
@@ -1222,40 +1345,48 @@ export async function analyzeMessagesInBackground(
             originalMessage.groupId,
             postId,
           );
-          await queueMatchedRuleAutomations({
-            manualItems: matchedManualItems,
-            matchedRule: result.matchedRule,
-            summary: result.summary || '',
-            confidence:
-              typeof (result as { confidence?: number }).confidence === 'number'
-                ? (result as { confidence?: number }).confidence
-                : undefined,
-            message: {
-              postId,
-              sender: originalMessage.sender || '',
-              groupId: originalMessage.groupId || '',
-              groupName: originalMessage.groupName || '',
-              content: originalMessage.messageContent || '',
-              sourceUrl: messageUrl,
-              messageUrl,
-              attachments: extractAutomationAttachments(
-                sourcePost,
-                originalMessage,
-              ),
-              timestamp:
-                new Date(originalMessage.datetime).getTime() || Date.now(),
-              timezone: getLocalTimeZone(),
-              event: extractEventPayload(sourcePost),
-            },
-          });
+          applyAutomationQueueResult(
+            deliveryReceipt,
+            await queueMatchedRuleAutomations({
+              manualItems: matchedManualItems,
+              matchedRule: result.matchedRule,
+              summary: result.summary || '',
+              confidence:
+                typeof (result as { confidence?: number }).confidence ===
+                'number'
+                  ? (result as { confidence?: number }).confidence
+                  : undefined,
+              message: {
+                postId,
+                sender: originalMessage.sender || '',
+                groupId: originalMessage.groupId || '',
+                groupName: originalMessage.groupName || '',
+                content: originalMessage.messageContent || '',
+                sourceUrl: messageUrl,
+                messageUrl,
+                attachments: extractAutomationAttachments(
+                  sourcePost,
+                  originalMessage,
+                ),
+                timestamp:
+                  new Date(originalMessage.datetime).getTime() || Date.now(),
+                timezone: getLocalTimeZone(),
+                event: extractEventPayload(sourcePost),
+              },
+            }),
+          );
         }
       }
+
+      const finalizedDeliveryReceipt =
+        await persistMessageAnalysisDeliveryReceipt(deliveryReceipt);
 
       // 返回处理结果
       return {
         success: true,
         message: `agentThinking处理完成: ${resultsArray.length} 条消息, ${storedCount} 条已存储, ${notifiedCount} 条已通知`,
         data: resultsArray,
+        deliveryReceipt: finalizedDeliveryReceipt,
         stats: {
           total: resultsArray.length,
           important: importantCount,
@@ -1276,6 +1407,11 @@ export async function analyzeMessagesInBackground(
   } else if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') {
     // 使用智能 Agent 系统处理
     console.log('Using Intelligent Agent Workflow to process messages');
+    const deliveryReceipt = createDeliveryReceiptForRun({
+      envConfig,
+      isScheduledTask,
+      groupCount: data.length,
+    });
 
     // 获取用户信息
     const { userinfo } = await chrome.storage.local.get('userinfo');
@@ -1318,7 +1454,12 @@ export async function analyzeMessagesInBackground(
 
         // 使用Agent系统处理单条消息
         const processResult = await processNewMessage(messageData);
+        deliveryReceipt.counters.analyzedMessages += 1;
         console.log(`Agent处理消息结果:`, processResult);
+        if (processResult.shouldStore) {
+          deliveryReceipt.counters.memoryWriteRequests += 1;
+          deliveryReceipt.counters.memoryWritesAccepted += 1;
+        }
 
         const matchedRuleIds = mergeMatchedRuleIds(
           processResult.matchedRuleIds,
@@ -1343,7 +1484,7 @@ export async function analyzeMessagesInBackground(
         const matchedConcernedItem = getImmediateNotificationItem({
           manualItems: matchedManualItems,
         });
-        await queueMatchedRuleDigests({
+        const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
           matchedRule: processResult.matchedRule,
           sender: processResult.messageContext?.sender || '',
@@ -1354,6 +1495,7 @@ export async function analyzeMessagesInBackground(
           datetime: processResult.messageContext?.datetime || '',
           postId: post.id || '',
         });
+        deliveryReceipt.counters.digestQueueEntries += digestQueueEntries;
 
         // 如果需要发送通知
         if (processResult.shouldNotify) {
@@ -1378,8 +1520,9 @@ export async function analyzeMessagesInBackground(
               pushScenario: 'message_analysis',
             };
 
-            await notificationService
-              .sendNotification(
+            deliveryReceipt.counters.immediateNotificationAttempts += 1;
+            try {
+              await notificationService.sendNotification(
                 notificationData,
                 { notifyMethod },
                 {
@@ -1387,8 +1530,11 @@ export async function analyzeMessagesInBackground(
                   userName: userinfo.fullName,
                   concernedItems: concernedItems,
                 },
-            )
-              .catch(console.error);
+              );
+            } catch (notificationError) {
+              deliveryReceipt.counters.immediateNotificationFailures += 1;
+              console.error(notificationError);
+            }
           }
         }
 
@@ -1402,43 +1548,51 @@ export async function analyzeMessagesInBackground(
             automationGroupId,
             post.id,
           );
-          await queueMatchedRuleAutomations({
-            manualItems: matchedManualItems,
-            matchedRule: processResult.matchedRule,
-            summary: processResult.summary || '',
-            confidence:
-              typeof processResult.confidence === 'number'
-                ? processResult.confidence
+          applyAutomationQueueResult(
+            deliveryReceipt,
+            await queueMatchedRuleAutomations({
+              manualItems: matchedManualItems,
+              matchedRule: processResult.matchedRule,
+              summary: processResult.summary || '',
+              confidence:
+                typeof processResult.confidence === 'number'
+                  ? processResult.confidence
+                  : undefined,
+              pausedReason: processResult.notificationReview?.required
+                ? processResult.notificationReview.message ||
+                  'Agent Workflow notification review is required'
                 : undefined,
-            pausedReason: processResult.notificationReview?.required
-              ? processResult.notificationReview.message ||
-                'Agent Workflow notification review is required'
-              : undefined,
-            message: {
-              postId: post.id || '',
-              sender: processResult.messageContext?.sender || '',
-              groupId: automationGroupId,
-              groupName: automationGroupName,
-              content: processResult.messageContext?.messageContent || '',
-              sourceUrl: messageUrl,
-              messageUrl,
-              attachments: extractAutomationAttachments(sourcePost, post),
-              timestamp:
-                new Date(processResult.messageContext?.datetime || '').getTime() ||
-                Date.now(),
-              timezone: getLocalTimeZone(),
-              event: extractEventPayload(sourcePost),
-            },
-          });
+              message: {
+                postId: post.id || '',
+                sender: processResult.messageContext?.sender || '',
+                groupId: automationGroupId,
+                groupName: automationGroupName,
+                content: processResult.messageContext?.messageContent || '',
+                sourceUrl: messageUrl,
+                messageUrl,
+                attachments: extractAutomationAttachments(sourcePost, post),
+                timestamp:
+                  new Date(
+                    processResult.messageContext?.datetime || '',
+                  ).getTime() || Date.now(),
+                timezone: getLocalTimeZone(),
+                event: extractEventPayload(sourcePost),
+              },
+            }),
+          );
         }
       }
     }
+
+    const finalizedDeliveryReceipt =
+      await persistMessageAnalysisDeliveryReceipt(deliveryReceipt);
 
     // agentWorkflow 处理完成
     return {
       success: true,
       message: `agentWorkflow处理完成: 共处理 ${data.length} 个群组`,
       data: [] as any[],
+      deliveryReceipt: finalizedDeliveryReceipt,
       stats: {
         total: data.length,
         processed: data.length,
@@ -1466,6 +1620,11 @@ async function processMessageFilterByConcernedItems(
   sourcePostIndex: Map<string, any>,
 ) {
   const envConfig = await getEnvConfig();
+  const deliveryReceipt = createDeliveryReceiptForRun({
+    envConfig,
+    isScheduledTask,
+    groupCount: data.length,
+  });
 
   // 以下是原有的LLM处理逻辑，当未启用智能Agent时使用
   if (envConfig.ANALYZE_BY_GROUP) {
@@ -1521,6 +1680,7 @@ ${message}
         system_prompt,
         messageData: item,
         sourcePostIndex,
+        deliveryReceipt,
       });
       chrome.storage.local.set({
         ollamaAnalysisProgress: {
@@ -1536,9 +1696,12 @@ ${message}
         ),
       );
     }
+    const finalizedDeliveryReceipt =
+      await persistMessageAnalysisDeliveryReceipt(deliveryReceipt);
     return {
       success: true,
       message: '消息过滤完成: 共处理 ' + data.length + ' 个群组',
+      deliveryReceipt: finalizedDeliveryReceipt,
     };
   } else {
     // 合并发送 LLM - 使用 Thread 结构化格式
@@ -1574,6 +1737,7 @@ ${messages}
       user_prompt,
       system_prompt,
       sourcePostIndex,
+      deliveryReceipt,
     });
     console.log('MessageDealing response:', dealResponse);
     chrome.storage.local.set({
@@ -1583,13 +1747,26 @@ ${messages}
         lastAnalyzedTime: new Date().toISOString(),
       },
     });
-    return dealResponse;
+    const finalizedDeliveryReceipt =
+      await persistMessageAnalysisDeliveryReceipt(deliveryReceipt);
+    return {
+      ...dealResponse,
+      deliveryReceipt: finalizedDeliveryReceipt,
+    };
   }
 }
 // 整合处理请求以及推送 bot 消息
 async function reviewMessageByLLMAndSendToBot(body: any) {
   const envConfig = await getEnvConfig();
   try {
+    const deliveryReceipt: MessageAnalysisDeliveryReceipt =
+      body.deliveryReceipt ||
+      createDeliveryReceiptForRun({
+        envConfig,
+        isScheduledTask: Boolean(body.isScheduledTask),
+        groupCount: body.messageData ? 1 : 0,
+      });
+    const shouldPersistReceipt = !body.deliveryReceipt;
     const { concernedItems } = await chrome.storage.local.get('concernedItems');
     const manualConcernedItems = (concernedItems || []).filter(
       isManualConcernedItem,
@@ -1606,9 +1783,14 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
     if (!body.prompt)
       body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
     const dealResponse = await callLLMJsonAPI(body);
-    console.log('MessageDealing response:', dealResponse, body);
+    console.log('MessageDealing response:', dealResponse, {
+      hasMessageData: Boolean(body.messageData),
+      promptLength: String(body.prompt || '').length,
+      deliveryReceiptAttached: Boolean(body.deliveryReceipt),
+    });
 
     if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
+      deliveryReceipt.counters.analyzedMessages += dealResponse.data.length;
       for (const json of dealResponse.data) {
         // 排除 SM AI 的私人消息和自己发送的消息
         if (
@@ -1661,6 +1843,15 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           resolvedMatchedRules.watchRules.length === 0 &&
           !followThreadItem
         ) {
+          deliveryReceipt.counters.scopeRejected += 1;
+          await recordRejectedManualRuleDiagnostics({
+            runtimeWatchRules,
+            matchedRuleRefs: resolvedMatchedRules.matchedRuleRefs,
+            matchedRule: matched_rule,
+            messageContext: messageRuleContext,
+            postId: json.post_id,
+            messageDatetime: json.datetime,
+          });
           console.warn(
             '跳过未通过最终规则范围校验的消息分析结果:',
             {
@@ -1720,6 +1911,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         };
 
         let ingestResult: { id?: string; status: string } | null = null;
+        deliveryReceipt.counters.memoryWriteRequests += 1;
         try {
           const client = getMemoryServiceClient();
           ingestResult = await client.ingest({
@@ -1732,11 +1924,13 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             metadata: { ...messageMetadata },
           });
           if (ingestResult.status === 'duplicate') {
+            deliveryReceipt.counters.memoryDuplicateSkips += 1;
             console.log(`⏭️ 跳过重复消息 [post_id=${json.post_id}]`, {
               decision: (ingestResult as any).decision,
             });
             continue;
           }
+          deliveryReceipt.counters.memoryWritesAccepted += 1;
           console.log(
             `✅ 消息完整存储完成 [统一接口]: ${ingestResult.id?.slice(0, 8)}`,
             {
@@ -1747,6 +1941,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             },
           );
         } catch (memoryError) {
+          deliveryReceipt.counters.memoryWriteFailures += 1;
           console.error('🚨 统一存储系统失败', memoryError);
           // 存储失败仍继续执行推送等，避免漏通知
         }
@@ -1754,15 +1949,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         // 处理顺序：1.自动答复 1.5.关注后续（只更新数据） 2.统一通知（存储已在上面完成）
 
         // 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
-        let autoReplyResult: {
-          handled: boolean;
-          replyInfo?: {
-            content: string;
-            scheduleTime: Date;
-            status: string;
-            messageId?: string;
-          };
-        } = { handled: false };
+        let autoReplyResult: AutoReplyHandlingResult = { handled: false };
         if (
           matched_rule ||
           (json.matched_rule_refs && json.matched_rule_refs.length > 0) ||
@@ -1786,6 +1973,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             manualConcernedItems,
           );
         }
+        applyAutoReplyDeliveryResult(deliveryReceipt, autoReplyResult);
 
         // 1.5️⃣ 处理关注后续（只更新数据，不推送通知）
         if (
@@ -1824,8 +2012,10 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
                 relationType:
                   json.follow_thread_info.relation_type || 'semantic_related',
               });
+              deliveryReceipt.counters.followThreadUpdates += 1;
             }
           } catch (followThreadError) {
+            deliveryReceipt.counters.followThreadFailures += 1;
             console.error('❌ 关注后续数据处理失败:', followThreadError);
           }
         }
@@ -1840,17 +2030,20 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
-        await queueMatchedRuleDigests({
+        const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
           matchedRule: matched_rule,
           sender: json.sender,
-          teamName: body.messageData ? body.messageData.groupName : json.team_name,
+          teamName: body.messageData
+            ? body.messageData.groupName
+            : json.team_name,
           teamId: body.messageData ? body.messageData.groupId : json.team_id,
           messageContent: json.message_content,
           summary: json.summary || '',
           datetime: json.datetime,
           postId: json.post_id,
         });
+        deliveryReceipt.counters.digestQueueEntries += digestQueueEntries;
 
         // 如果有配置通知方式，则发送通知
         if (notifyMethod) {
@@ -1902,8 +2095,9 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           };
 
           // 使用 NotificationService 发送通知
-          await notificationService
-            .sendNotification(
+          deliveryReceipt.counters.immediateNotificationAttempts += 1;
+          try {
+            await notificationService.sendNotification(
               notificationData,
               { notifyMethod },
               // LLM 审核配置（只对 bot 通知生效）
@@ -1912,8 +2106,11 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
                 userName: userinfo.fullName,
                 concernedItems: concernedItems,
               },
-            )
-            .catch(console.error);
+            );
+          } catch (notificationError) {
+            deliveryReceipt.counters.immediateNotificationFailures += 1;
+            console.error(notificationError);
+          }
         }
 
         if (matchedManualItems.length > 0) {
@@ -1928,32 +2125,45 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             automationGroupId,
             json.post_id,
           );
-          await queueMatchedRuleAutomations({
-            manualItems: matchedManualItems,
-            matchedRule: matched_rule,
-            summary: json.summary || '',
-            confidence:
-              typeof json.confidence === 'number' ? json.confidence : undefined,
-            message: {
-              postId: json.post_id,
-              sender: json.sender,
-              groupId: automationGroupId,
-              groupName: automationGroupName,
-              content: json.message_content,
-              sourceUrl: messageUrl,
-              messageUrl,
-              attachments: extractAutomationAttachments(
-                sourcePost,
-                json,
-                body.messageData,
-              ),
-              timestamp: new Date(json.datetime).getTime() || Date.now(),
-              timezone: getLocalTimeZone(),
-              event: extractEventPayload(sourcePost),
-            },
-          });
+          applyAutomationQueueResult(
+            deliveryReceipt,
+            await queueMatchedRuleAutomations({
+              manualItems: matchedManualItems,
+              matchedRule: matched_rule,
+              summary: json.summary || '',
+              confidence:
+                typeof json.confidence === 'number'
+                  ? json.confidence
+                  : undefined,
+              message: {
+                postId: json.post_id,
+                sender: json.sender,
+                groupId: automationGroupId,
+                groupName: automationGroupName,
+                content: json.message_content,
+                sourceUrl: messageUrl,
+                messageUrl,
+                attachments: extractAutomationAttachments(
+                  sourcePost,
+                  json,
+                  body.messageData,
+                ),
+                timestamp: new Date(json.datetime).getTime() || Date.now(),
+                timezone: getLocalTimeZone(),
+                event: extractEventPayload(sourcePost),
+              },
+            }),
+          );
         }
       }
+    }
+    if (shouldPersistReceipt) {
+      const finalizedDeliveryReceipt =
+        await persistMessageAnalysisDeliveryReceipt(deliveryReceipt);
+      return {
+        ...dealResponse,
+        deliveryReceipt: finalizedDeliveryReceipt,
+      };
     }
     return dealResponse;
   } catch (error) {

@@ -741,8 +741,8 @@ test('ConfigSyncService skips missing Bot Automation rule fields instead of writ
   const rows = body.values as [string, string][];
   const configMap = new Map(rows.filter(([key]) => key));
 
-  assert.equal(configMap.get('bot_executor_rule_id'), 'executor-only');
   assert.equal(configMap.get('bot_automation_executor_rule_id'), 'executor-only');
+  assert.equal(configMap.has('bot_executor_rule_id'), false);
   assert.equal(configMap.has('bot_executor_rule_name'), false);
   assert.equal(configMap.has('bot_automation_executor_webhook_url'), false);
   assert.equal(rows.some((row) => row.some((value) => value === null || value === undefined)), false);

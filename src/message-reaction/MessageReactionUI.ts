@@ -37,6 +37,7 @@ import {
   createSnoozeReminder,
   showSuccessToast,
   showErrorToast,
+  showInfoToast,
 } from './SnoozeManager';
 import type { ToastAction } from './SnoozeManager';
 import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime.js';
@@ -59,20 +60,46 @@ import {
 import {
   SNOOZE_CUSTOM_OPTION_LABEL,
   SNOOZE_MANAGE_OPTION_LABEL,
+  buildSnoozeQuickMenuReceipt,
+  buildSnoozeQuickMenuOptionView,
   buildSnoozeQuickMenuOptions,
   escapeSnoozeMenuText,
+  formatSnoozeQuickMenuExistingSnoozeLabel,
 } from './snoozeQuickMenuPresentation';
+import { shouldRenderSnoozeQuickMenuRequest } from './snoozeMenuRequest.js';
 import {
+  buildSnoozeSuccessToastMessage,
+  buildSnoozePendingToastMessage,
+  buildSnoozeUndoFailureToastMessage,
+  buildSnoozeUndoSuccessToastMessage,
   buildSnoozeManagerOpenRequestData,
   buildSnoozeManagerPagePath,
   getSnoozeSuccessToastActions,
 } from './snoozeToastActions';
+import { buildAutoReplyConfigLaunchReceipt } from './autoReplyPresentation';
+import { buildFollowThreadConfigLaunchReceipt } from './followThreadPresentation';
+import {
+  buildFollowupAskRunSummary,
+  buildFollowupAskSubmittingMessage,
+  buildFollowupAskToastMessage,
+} from './followupAskPresentation';
+import { buildLinkedActionConfigLaunchReceipt } from './linkedActionEntry';
 
 const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
+const GLIP_MESSAGE_MARKERS_STORAGE_KEY = 'glipMessageMarkers';
 const FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS = 24;
 const FOLLOWUP_ASK_MAX_INTERVAL_HOURS = 720;
 const FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP = 1;
 const FOLLOWUP_ASK_MAX_FOLLOWUP = 10;
+
+interface SnoozeQuickMenuMarkerRecord {
+  type?: string;
+  label?: string;
+}
+
+interface SnoozeQuickMenuMarkerCache {
+  markersByChatId?: Record<string, Record<string, SnoozeQuickMenuMarkerRecord[]>>;
+}
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -145,6 +172,58 @@ function formatSnoozeDisplayTime(date: Date, now = new Date()): string {
 
 function getLocalizedSeparator(): string {
   return getContentScriptUiLanguage() === 'en-US' ? ': ' : '：';
+}
+
+function getSnoozeMarkerLookupTarget(
+  messageInfo: Pick<MessageInfo, 'groupId' | 'id' | 'messageLink'>,
+): { chatId: string; postId: string } | null {
+  const messageLink = messageInfo.messageLink?.trim();
+  if (messageLink) {
+    try {
+      const url = new URL(messageLink);
+      if (url.hostname === 'app.ringcentral.com') {
+        const pathParts = url.pathname.split('/').filter(Boolean);
+        if (pathParts[0] === 'messages' && pathParts[1] && pathParts[2]) {
+          return { chatId: pathParts[1], postId: pathParts[2] };
+        }
+      }
+    } catch {
+      // Fall back to DOM ids below.
+    }
+  }
+
+  const chatId = messageInfo.groupId?.trim();
+  const postId = messageInfo.id?.trim();
+  if (!chatId || !postId || postId.startsWith('temp_')) {
+    return null;
+  }
+  return { chatId, postId };
+}
+
+async function getExistingSnoozeMarkerForQuickMenu(
+  messageInfo: MessageInfo,
+): Promise<{ label: string } | null> {
+  const target = getSnoozeMarkerLookupTarget(messageInfo);
+  if (!target) return null;
+
+  try {
+    const result = await chrome.storage.local.get(
+      GLIP_MESSAGE_MARKERS_STORAGE_KEY,
+    );
+    const cache = result[
+      GLIP_MESSAGE_MARKERS_STORAGE_KEY
+    ] as SnoozeQuickMenuMarkerCache | undefined;
+    const marker = cache?.markersByChatId?.[target.chatId]?.[
+      target.postId
+    ]?.find(
+      (item) => item?.type === 'snooze_pending' && item.label?.trim(),
+    );
+    const label = marker?.label?.trim();
+    return label ? { label } : null;
+  } catch (error) {
+    console.warn('💬 MessageReaction: 读取 Snooze marker 快照失败', error);
+    return null;
+  }
 }
 
 /**
@@ -272,12 +351,6 @@ function injectStyles() {
       pointer-events: auto;
     }
 
-    .pai-message-reaction-focus-anchor:focus-visible {
-      outline: 2px solid rgba(33, 150, 243, 0.5);
-      outline-offset: 2px;
-      border-radius: 8px;
-    }
-    
     /* ===== 消息交互按钮通用样式 ===== */
     .message-reaction-action-btn {
       appearance: none;
@@ -469,7 +542,8 @@ function injectStyles() {
     .snooze-menu {
       position: fixed;
       z-index: 999999;
-      min-width: 150px;
+      width: 246px;
+      max-width: calc(100vw - 24px);
       background: #ffffff;
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 
@@ -480,6 +554,45 @@ function injectStyles() {
       overflow: visible;
       animation: snooze-menu-in 0.12s ease-out;
       padding: 4px 0;
+    }
+
+    .snooze-menu-receipt {
+      margin: 2px 6px 4px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      color: #334155;
+      white-space: normal;
+    }
+
+    .snooze-menu-receipt-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 4px;
+    }
+
+    .snooze-menu-receipt-line {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 8px;
+      font-size: 10.5px;
+      line-height: 1.35;
+    }
+
+    .snooze-menu-receipt-line + .snooze-menu-receipt-line {
+      margin-top: 3px;
+    }
+
+    .snooze-menu-receipt-label {
+      color: #64748b;
+      white-space: nowrap;
+    }
+
+    .snooze-menu-receipt-value {
+      color: #334155;
+      overflow-wrap: anywhere;
     }
     
     /* 透明的连接区域，防止鼠标移动时菜单消失 */
@@ -555,6 +668,12 @@ function injectStyles() {
       opacity: 1;
       background: #fff5f5;
       color: #ee5a5a;
+    }
+
+    .snooze-menu[aria-busy="true"] .snooze-manage-option[data-processing="true"] {
+      opacity: 1;
+      background: #f8f8f8;
+      color: #444;
     }
     
     .snooze-quick-option-icon {
@@ -794,6 +913,11 @@ function injectStyles() {
       background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%);
       color: white;
     }
+
+    .snooze-toast-info {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      color: white;
+    }
     
     .snooze-toast-icon {
       font-size: 14px;
@@ -887,6 +1011,43 @@ function injectStyles() {
     .reaction-settings-body {
       padding: 12px 14px;
     }
+
+    .reaction-settings-scope {
+      margin: 10px 12px 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+
+    .reaction-settings-scope-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 5px;
+    }
+
+    .reaction-settings-scope-row {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 7px;
+      font-size: 10.5px;
+      line-height: 1.35;
+    }
+
+    .reaction-settings-scope-row + .reaction-settings-scope-row {
+      margin-top: 4px;
+    }
+
+    .reaction-settings-scope-label {
+      color: #64748b;
+    }
+
+    .reaction-settings-scope-value {
+      color: #334155;
+      overflow-wrap: anywhere;
+    }
     
     .reaction-settings-option {
       display: flex;
@@ -924,6 +1085,7 @@ function injectStyles() {
       font-size: 11px;
       color: #888;
       padding: 0 14px 10px;
+      line-height: 1.4;
     }
 
     .followup-ask-overlay {
@@ -1052,6 +1214,34 @@ function injectStyles() {
       color: #0f4c81;
       font-size: 12px;
       line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .followup-ask-boundary {
+      padding: 10px 12px;
+      border-radius: 7px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #7c2d12;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .followup-ask-boundary-title {
+      font-weight: 700;
+      margin-bottom: 5px;
+      color: #9a3412;
+    }
+
+    .followup-ask-boundary-list {
+      margin: 0;
+      padding-left: 16px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .followup-ask-boundary-list li {
+      margin: 0;
       overflow-wrap: anywhere;
     }
 
@@ -1373,32 +1563,26 @@ function parseMessageTimestampSeconds(messageInfo: MessageInfo): number | undefi
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
 }
 
-function formatFollowupCheckTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
-
 function buildFollowupRunSummary(
   messageInfo: MessageInfo,
   intervalHours: number,
+  maxFollowup: number,
 ): string {
-  const createdAt = parseMessageTimestampSeconds(messageInfo);
-  if (!createdAt) {
-    return '创建后会先检查当前会话是否已有满足目标的回复；没有命中时才继续追问。';
-  }
+  return buildFollowupAskRunSummary({
+    messageCreatedAt: parseMessageTimestampSeconds(messageInfo),
+    intervalHours,
+    maxFollowup,
+  });
+}
 
-  const dueAt = createdAt + intervalHours * 3600;
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (dueAt <= nowSeconds) {
-    return `原消息已超过 ${intervalHours} 小时，创建后会立即检查是否已有满足目标的回复；没有命中时才继续追问。`;
-  }
-
-  return `预计 ${formatFollowupCheckTime(dueAt)} 后检查回复；如果已有回复满足目标，会自动结束而不追问。`;
+function buildFollowupBoundaryReceipt(targetLabel: string): string[] {
+  const target = targetLabel.trim() || '当前会话';
+  return [
+    `范围：只锚定 ${target}和这条原消息，不会改成私聊或跨会话追问。`,
+    '执行：先检查原消息线程是否已有满足完成标准的回复；未命中才按间隔追问。',
+    '追问次数：最多追问次数设为 0 时，只检查完成标准，不自动发送 AI 追问。',
+    '边界：不会立刻发送新消息，不写 Google Sheet，也不创建可复用 Outreach template；同一原消息已有跟进时会复用旧 session。',
+  ];
 }
 
 function parseBoundedInteger(
@@ -1445,10 +1629,26 @@ async function undoSnoozeReminder(messageId: string, remindAt: Date) {
       },
       ui('撤销提醒失败，请稍后重试'),
     );
-    showSuccessToast(ui('已撤销提醒'));
+    showSuccessToast(
+      buildSnoozeUndoSuccessToastMessage({
+        timeLabel: formatSnoozeDisplayTime(remindAt),
+        translate: ui,
+        separator: getLocalizedSeparator(),
+      }),
+    );
   } catch (error) {
     console.error('撤销 Snooze 提醒失败:', error);
-    showErrorToast(getErrorMessage(error, ui('撤销提醒失败，请稍后重试')));
+    showErrorToast(
+      buildSnoozeUndoFailureToastMessage({
+        errorMessage: getErrorMessage(error, ui('撤销提醒失败，请稍后重试')),
+        translate: ui,
+        separator: getLocalizedSeparator(),
+      }),
+      {
+        label: ui('管理'),
+        onClick: () => openScheduledMessagesManager(messageId),
+      },
+    );
   }
 }
 
@@ -1457,7 +1657,6 @@ function showSnoozeCreatedToast(
   updated = false,
   messageId?: string,
 ) {
-  const prefix = updated ? '已更新提醒' : '已设置提醒';
   const actions = getSnoozeSuccessToastActions(updated, messageId).map(
     (action) => {
       if (action.kind === 'undo' && messageId) {
@@ -1474,10 +1673,27 @@ function showSnoozeCreatedToast(
     },
   );
   showSuccessToast(
-    `${ui(prefix)}${getLocalizedSeparator()}${formatSnoozeDisplayTime(
-      remindAt,
-    )}`,
+    buildSnoozeSuccessToastMessage({
+      updated,
+      messageId,
+      timeLabel: formatSnoozeDisplayTime(remindAt),
+      translate: ui,
+      separator: getLocalizedSeparator(),
+    }),
     actions,
+  );
+}
+
+function showSnoozePendingToast() {
+  showInfoToast(
+    buildSnoozePendingToastMessage({
+      translate: ui,
+      separator: getLocalizedSeparator(),
+    }),
+    {
+      label: ui('管理'),
+      onClick: () => openScheduledMessagesManager(),
+    },
   );
 }
 
@@ -1485,25 +1701,6 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
   return error instanceof Error && error.message
     ? error.message
     : fallbackMessage;
-}
-
-function normalizeFollowupGoalForDisplay(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (!normalized) return undefined;
-  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
-}
-
-function buildFollowupAskToastMessage(response: any): string {
-  if (response?.created === false) {
-    const existingGoal = normalizeFollowupGoalForDisplay(
-      response?.session?.renderedContext,
-    );
-    return existingGoal
-      ? `这条消息已有跟进，未覆盖原目标：${existingGoal}`
-      : '这条消息已有跟进，未覆盖原目标';
-  }
-  return '已开始跟进';
 }
 
 function setToolbarButtonPending(button: HTMLElement, pending: boolean) {
@@ -1549,27 +1746,6 @@ function setToolbarVisible(toolbar: HTMLElement, visible: boolean) {
   );
 }
 
-function isNaturallyFocusableElement(element: HTMLElement): boolean {
-  const tagName = element.tagName.toLowerCase();
-  if (
-    ['button', 'input', 'select', 'textarea', 'summary'].includes(tagName)
-  ) {
-    return true;
-  }
-  if (tagName === 'a' && element.hasAttribute('href')) {
-    return true;
-  }
-  return element.hasAttribute('tabindex');
-}
-
-function ensureMessageReactionFocusAnchor(element: HTMLElement) {
-  if (!isNaturallyFocusableElement(element)) {
-    element.tabIndex = 0;
-  }
-  element.dataset.paiMessageReactionFocusAnchor = 'true';
-  element.classList.add('pai-message-reaction-focus-anchor');
-}
-
 async function runToolbarButtonAction(
   button: HTMLElement,
   action: () => Promise<void>,
@@ -1607,6 +1783,9 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
     overlay.className = 'followup-ask-overlay';
     const defaultTarget = inferFollowupTarget(messageInfo);
     const escapedTarget = escapeDialogText(defaultTarget);
+    const boundaryReceiptItems = buildFollowupBoundaryReceipt(defaultTarget)
+      .map((item) => `<li>${escapeDialogText(item)}</li>`)
+      .join('');
     overlay.innerHTML = `
       <form class="followup-ask-dialog" novalidate>
         <div class="followup-ask-header">
@@ -1627,8 +1806,13 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
             buildFollowupRunSummary(
               messageInfo,
               FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS,
+              FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP,
             ),
           )}</div>
+          <section class="followup-ask-boundary" aria-label="创建边界">
+            <div class="followup-ask-boundary-title">创建边界</div>
+            <ul class="followup-ask-boundary-list">${boundaryReceiptItems}</ul>
+          </section>
           <div class="followup-ask-row">
             <label class="followup-ask-label followup-ask-label-primary" for="followup-ask-objective">
               追问的信息目标 / 完成标准
@@ -1662,7 +1846,7 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
         </div>
         <div class="followup-ask-footer">
           <button type="button" class="followup-ask-cancel">取消</button>
-          <button type="submit" class="followup-ask-submit">开始追问</button>
+          <button type="submit" class="followup-ask-submit">创建跟进</button>
         </div>
       </form>
     `;
@@ -1734,29 +1918,51 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
       errorEl.hidden = false;
     };
 
-    const setSubmitting = (submitting: boolean) => {
-      overlay.dataset.submitting = submitting ? 'true' : 'false';
-      submitBtn.disabled = submitting;
-      cancelBtn.disabled = submitting;
-      closeBtn.disabled = submitting;
-      submitBtn.textContent = submitting ? '创建中...' : '开始追问';
-    };
-
-    const refreshRunSummary = () => {
-      if (!runSummaryEl) return;
-      const intervalHours = parseBoundedInteger(
+    const getCurrentIntervalHours = () =>
+      parseBoundedInteger(
         intervalInput?.value ?? null,
         FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS,
         1,
         FOLLOWUP_ASK_MAX_INTERVAL_HOURS,
       );
+    const getCurrentMaxFollowup = () =>
+      parseBoundedInteger(
+        maxFollowupInput?.value ?? null,
+        FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP,
+        0,
+        FOLLOWUP_ASK_MAX_FOLLOWUP,
+      );
+
+    const setSubmitting = (submitting: boolean) => {
+      overlay.dataset.submitting = submitting ? 'true' : 'false';
+      submitBtn.disabled = submitting;
+      cancelBtn.disabled = submitting;
+      closeBtn.disabled = submitting;
+      submitBtn.textContent = submitting ? '创建中...' : '创建跟进';
+      if (runSummaryEl) {
+        runSummaryEl.textContent = submitting
+          ? buildFollowupAskSubmittingMessage({
+              maxFollowup: getCurrentMaxFollowup(),
+            })
+          : buildFollowupRunSummary(
+              messageInfo,
+              getCurrentIntervalHours(),
+              getCurrentMaxFollowup(),
+            );
+      }
+    };
+
+    const refreshRunSummary = () => {
+      if (!runSummaryEl) return;
       runSummaryEl.textContent = buildFollowupRunSummary(
         messageInfo,
-        intervalHours,
+        getCurrentIntervalHours(),
+        getCurrentMaxFollowup(),
       );
     };
 
     intervalInput?.addEventListener('input', refreshRunSummary);
+    maxFollowupInput?.addEventListener('input', refreshRunSummary);
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -1821,7 +2027,7 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
             ? response.session.id
             : undefined;
         showSuccessToast(
-          buildFollowupAskToastMessage(response),
+          buildFollowupAskToastMessage(response, { maxFollowup }),
           getFollowupAskToastActions(sessionId),
         );
         resolve();
@@ -1876,10 +2082,10 @@ function resetSnoozeMenuAnchorState() {
  */
 function hideSnoozeMenu() {
   resetSnoozeMenuAnchorState();
-  if (currentSnoozeMenu) {
-    currentSnoozeMenu.remove();
-    currentSnoozeMenu = null;
-  }
+  document
+    .querySelectorAll<HTMLElement>('.snooze-menu')
+    .forEach((menu) => menu.remove());
+  currentSnoozeMenu = null;
   isHoveringSnoozeMenu = false;
   isFocusWithinSnoozeMenu = false;
 }
@@ -2142,23 +2348,33 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     e.stopPropagation();
   });
 
-  picker.querySelector('.snooze-picker-back')!.addEventListener('click', () => {
-    hideSnoozePicker();
-    // 返回时重新显示菜单
-    if (currentMessageElement) {
-      const toolbar = currentMessageElement.querySelector(
-        '.message-reaction-toolbar',
-      );
-      const snoozeButton = toolbar?.querySelector('.snooze-icon-btn');
-      const anchor = snoozeButton || toolbar;
-      if (anchor) {
-        showSnoozeQuickMenu(messageInfo, anchor as HTMLElement);
-        currentSnoozeMenu
-          ?.querySelector<HTMLElement>('button.snooze-quick-option')
-          ?.focus();
+  picker
+    .querySelector('.snooze-picker-back')!
+    .addEventListener('click', async () => {
+      hideSnoozePicker();
+      // 返回时重新显示菜单
+      if (currentMessageElement) {
+        const toolbar = currentMessageElement.querySelector(
+          '.message-reaction-toolbar',
+        );
+        const snoozeButton = toolbar?.querySelector('.snooze-icon-btn');
+        const anchor = snoozeButton || toolbar;
+        if (anchor) {
+          activeSnoozeMenuAnchor = anchor as HTMLElement;
+          const requestSeq = ++snoozeMenuRequestSeq;
+          const shown = await showSnoozeQuickMenu(
+            messageInfo,
+            anchor as HTMLElement,
+            { requestSeq, allowWithoutHover: true },
+          );
+          if (shown) {
+            currentSnoozeMenu
+              ?.querySelector<HTMLElement>('button.snooze-quick-option')
+              ?.focus();
+          }
+        }
       }
-    }
-  });
+    });
 
   picker.querySelector('.snooze-btn-cancel')!.addEventListener('click', () => {
     hideAllSnoozeUI();
@@ -2194,7 +2410,9 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
       confirmBtn.disabled = false;
       confirmBtn.textContent = ui('确认');
       const failureMessage = getSnoozeCreateFailureMessage(result);
-      if (failureMessage) {
+      if (result.reason === 'request_pending') {
+        showSnoozePendingToast();
+      } else if (failureMessage) {
         showErrorToast(failureMessage);
       }
     }
@@ -2226,6 +2444,45 @@ function hideSettingsPopup() {
   }
 }
 
+function renderReactionSettingsScopeReceipt(): string {
+  const rows = [
+    {
+      label: ui('作用'),
+      value: ui('只改变此浏览器消息旁工具栏按钮显示'),
+    },
+    {
+      label: ui('不影响'),
+      value: ui('不会取消已创建提醒、关注、追问、自动答复规则或联动操作'),
+    },
+    {
+      label: ui('继续处理'),
+      value: ui('已排队或已保存的任务仍从各自管理页处理'),
+    },
+  ];
+
+  const rowsHtml = rows
+    .map(
+      (row) => `
+        <div class="reaction-settings-scope-row">
+          <span class="reaction-settings-scope-label">${escapeSnoozeMenuText(row.label)}</span>
+          <span class="reaction-settings-scope-value">${escapeSnoozeMenuText(row.value)}</span>
+        </div>
+      `,
+    )
+    .join('');
+
+  return `
+    <section class="reaction-settings-scope" role="note" aria-label="${escapeSnoozeMenuText(
+      ui('本地显示开关'),
+    )}">
+      <div class="reaction-settings-scope-title">${escapeSnoozeMenuText(
+        ui('本地显示开关'),
+      )}</div>
+      ${rowsHtml}
+    </section>
+  `;
+}
+
 /**
  * 显示设置弹出框
  */
@@ -2237,38 +2494,55 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
 
   const popup = document.createElement('div');
   popup.className = 'reaction-settings-popup';
+  popup.setAttribute('role', 'dialog');
+  popup.setAttribute('aria-label', ui('消息交互功能设置'));
 
   popup.innerHTML = `
-    <div class="reaction-settings-header">消息交互功能设置</div>
+    <div class="reaction-settings-header">${escapeSnoozeMenuText(
+      ui('消息交互功能设置'),
+    )}</div>
+    ${renderReactionSettingsScopeReceipt()}
     <div class="reaction-settings-body">
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="snooze" ${
           config.enableSnooze ? 'checked' : ''
         }>
-        <span class="reaction-settings-label">稍后处理</span>
+        <span class="reaction-settings-label">${escapeSnoozeMenuText(
+          ui('稍后处理'),
+        )}</span>
       </label>
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="followThread" ${
           config.enableFollowThread ? 'checked' : ''
         }>
-        <span class="reaction-settings-label">关注后续</span>
+        <span class="reaction-settings-label">${escapeSnoozeMenuText(
+          ui('关注后续'),
+        )}</span>
       </label>
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="autoReply" ${
           config.enableAutoReply ? 'checked' : ''
         }>
-        <span class="reaction-settings-label">自动答复 / 跟进追问</span>
+        <span class="reaction-settings-label">${escapeSnoozeMenuText(
+          ui('自动答复 / 跟进追问'),
+        )}</span>
       </label>
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="linkedAction" ${
           config.enableLinkedAction ? 'checked' : ''
         }>
-        <span class="reaction-settings-label">联动操作</span>
+        <span class="reaction-settings-label">${escapeSnoozeMenuText(
+          ui('联动操作'),
+        )}</span>
       </label>
     </div>
-    <div class="reaction-settings-hint">关闭后，对应按钮将不再显示</div>
+    <div class="reaction-settings-hint">${escapeSnoozeMenuText(
+      ui('关闭后，对应按钮将不再显示'),
+    )}</div>
     <div class="reaction-settings-footer">
-      <button class="snooze-btn snooze-btn-confirm" style="flex: none; padding: 6px 12px; font-size: 12px;">保存</button>
+      <button class="snooze-btn snooze-btn-confirm" style="flex: none; padding: 6px 12px; font-size: 12px;">${escapeSnoozeMenuText(
+        ui('保存'),
+      )}</button>
     </div>
   `;
 
@@ -2299,7 +2573,7 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
   ) as HTMLButtonElement;
   saveButton.addEventListener('click', async () => {
     saveButton.disabled = true;
-    saveButton.textContent = '保存中...';
+    saveButton.textContent = ui('保存中...');
 
     const snoozeCheckbox = popup.querySelector(
       '[data-feature="snooze"]',
@@ -2324,8 +2598,8 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     const saved = await saveReactionConfig(newConfig);
     if (!saved) {
       saveButton.disabled = false;
-      saveButton.textContent = '保存';
-      showErrorToast('设置保存失败，请稍后重试');
+      saveButton.textContent = ui('保存');
+      showErrorToast(ui('设置保存失败，请稍后重试'));
       return;
     }
 
@@ -2339,9 +2613,15 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
       !newConfig.enableAutoReply &&
       !newConfig.enableLinkedAction
     ) {
-      showSuccessToast('已关闭所有消息交互功能');
+      showSuccessToast(
+        ui(
+          '已隐藏消息工具栏 · 仅关闭本地入口，不会取消已创建提醒、关注、追问或联动规则',
+        ),
+      );
     } else {
-      showSuccessToast('设置已保存');
+      showSuccessToast(
+        ui('设置已保存 · 仅更新本地工具栏入口，已创建事项不受影响'),
+      );
     }
   });
 
@@ -2370,20 +2650,34 @@ function shouldShowSnoozeQuickMenu(
   requestSeq: number,
   allowWithoutHover = false,
 ): boolean {
-  return (
-    requestSeq === snoozeMenuRequestSeq &&
-    activeSnoozeMenuAnchor === anchorElement &&
-    document.contains(anchorElement) &&
-    (allowWithoutHover || anchorElement.matches(':hover')) &&
-    !isSnoozePickerOpen
-  );
+  return shouldRenderSnoozeQuickMenuRequest({
+    requestSeq,
+    currentSeq: snoozeMenuRequestSeq,
+    activeAnchorMatches: activeSnoozeMenuAnchor === anchorElement,
+    anchorInDocument: document.contains(anchorElement),
+    anchorHovered: anchorElement.matches(':hover'),
+    allowWithoutHover,
+    pickerOpen: isSnoozePickerOpen,
+  });
+}
+
+interface ShowSnoozeQuickMenuOptions {
+  requestSeq?: number;
+  allowWithoutHover?: boolean;
 }
 
 async function showSnoozeQuickMenu(
   messageInfo: MessageInfo,
   anchorElement: HTMLElement,
-) {
+  options: ShowSnoozeQuickMenuOptions = {},
+): Promise<boolean> {
+  const requestSeq = options.requestSeq ?? snoozeMenuRequestSeq;
+  const allowWithoutHover = options.allowWithoutHover === true;
+
   hideSnoozeMenu();
+  if (!shouldShowSnoozeQuickMenu(anchorElement, requestSeq, allowWithoutHover)) {
+    return false;
+  }
 
   const menu = document.createElement('div');
   menu.className = 'snooze-menu';
@@ -2391,7 +2685,6 @@ async function showSnoozeQuickMenu(
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', ui('稍后处理快捷选项'));
   menu.setAttribute('aria-busy', 'false');
-  anchorElement.setAttribute('aria-expanded', 'true');
 
   const language = getContentScriptUiLanguage();
   const quickOptions = getQuickOptions(() => new Date(), language);
@@ -2400,11 +2693,50 @@ async function showSnoozeQuickMenu(
     (date) => formatSnoozeDisplayTime(date),
     language,
   );
+  const existingSnooze = await getExistingSnoozeMarkerForQuickMenu(messageInfo);
+  if (!shouldShowSnoozeQuickMenu(anchorElement, requestSeq, allowWithoutHover)) {
+    return false;
+  }
+  const existingSnoozeForReceipt = existingSnooze
+    ? {
+        label: formatSnoozeQuickMenuExistingSnoozeLabel(
+          existingSnooze.label,
+          language,
+        ),
+      }
+    : null;
+
+  const quickMenuReceipt = buildSnoozeQuickMenuReceipt(
+    ui,
+    getLocalizedSeparator(),
+    { existingSnooze: existingSnoozeForReceipt },
+  );
   const customOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_CUSTOM_OPTION_LABEL));
   const manageOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_MANAGE_OPTION_LABEL));
 
   // 精简的菜单，不包含消息预览
   menu.innerHTML = `
+    <div class="snooze-menu-receipt" role="note" aria-label="${escapeSnoozeMenuText(
+      quickMenuReceipt.ariaLabel,
+    )}">
+      <div class="snooze-menu-receipt-title">${escapeSnoozeMenuText(
+        quickMenuReceipt.title,
+      )}</div>
+      ${quickMenuReceipt.lines
+        .map(
+          (line) => `
+        <div class="snooze-menu-receipt-line">
+          <span class="snooze-menu-receipt-label">${escapeSnoozeMenuText(
+            line.label,
+          )}</span>
+          <span class="snooze-menu-receipt-value">${escapeSnoozeMenuText(
+            line.value,
+          )}</span>
+        </div>
+      `,
+        )
+        .join('')}
+    </div>
     ${quickOptionViews
       .map((opt) => {
         return `
@@ -2433,10 +2765,16 @@ async function showSnoozeQuickMenu(
     </button>
     <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${manageOptionLabel}">
       <span class="snooze-quick-option-icon" aria-hidden="true">↗</span>
-      <span>${manageOptionLabel}</span>
+      <span class="snooze-manage-option-label">${manageOptionLabel}</span>
     </button>
   `;
 
+  hideSnoozeMenu();
+  if (!shouldShowSnoozeQuickMenu(anchorElement, requestSeq, allowWithoutHover)) {
+    return false;
+  }
+
+  anchorElement.setAttribute('aria-expanded', 'true');
   document.body.appendChild(menu);
   currentSnoozeMenu = menu;
 
@@ -2454,6 +2792,15 @@ async function showSnoozeQuickMenu(
   menu.style.top = `${menuPosition.top}px`;
   menu.classList.toggle('position-above', menuPosition.placement === 'above');
   menu.classList.toggle('position-below', menuPosition.placement === 'below');
+  const availableMenuHeight =
+    menuPosition.placement === 'above'
+      ? anchorRect.top - menuPosition.top - 4
+      : window.innerHeight - menuPosition.top - 10;
+  if (availableMenuHeight > 0 && menuRect.height > availableMenuHeight) {
+    menu.style.maxHeight = `${Math.floor(availableMenuHeight)}px`;
+    menu.style.overflowY = 'auto';
+    menu.style.overflowX = 'hidden';
+  }
 
   const setMenuBusy = (busy: boolean, activeOption?: HTMLElement) => {
     menu.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -2466,8 +2813,44 @@ async function showSnoozeQuickMenu(
       });
   };
 
+  const refreshQuickOptionPreviews = (
+    activeIndex?: number,
+  ): Date | null => {
+    if (menu.getAttribute('aria-busy') === 'true') return null;
+    let activeRemindAt: Date | null = null;
+    quickOptions.forEach((quickOption, index) => {
+      const remindAt = quickOption.getTime();
+      if (index === activeIndex) {
+        activeRemindAt = remindAt;
+      }
+      const view = buildSnoozeQuickMenuOptionView(
+        quickOption,
+        index,
+        (date) => formatSnoozeDisplayTime(date),
+        language,
+        remindAt,
+      );
+      const button = menu.querySelector<HTMLButtonElement>(
+        `.snooze-quick-option[data-option-index="${index}"]`,
+      );
+      const timeLabel = button?.querySelector<HTMLElement>(
+        '.snooze-quick-option-time',
+      );
+      if (!button || !timeLabel) return;
+      button.setAttribute('aria-label', view.ariaLabel);
+      timeLabel.textContent = view.timeLabel;
+    });
+    return activeRemindAt;
+  };
+
   // 绑定快速选项点击
   menu.querySelectorAll('.snooze-quick-option').forEach((opt) => {
+    opt.addEventListener('mouseenter', () => {
+      refreshQuickOptionPreviews();
+    });
+    opt.addEventListener('focus', () => {
+      refreshQuickOptionPreviews();
+    });
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (menu.getAttribute('aria-busy') === 'true') {
@@ -2481,7 +2864,8 @@ async function showSnoozeQuickMenu(
         showErrorToast(ui('无法识别提醒时间'));
         return;
       }
-      const remindAt = quickOption.getTime();
+      const remindAt =
+        refreshQuickOptionPreviews(optionIndex) ?? quickOption.getTime();
 
       const labelElement = optionButton.querySelector(
         '.snooze-quick-option-time',
@@ -2513,7 +2897,9 @@ async function showSnoozeQuickMenu(
         setMenuBusy(false);
         optionButton.focus();
         const failureMessage = getSnoozeCreateFailureMessage(result);
-        if (failureMessage) {
+        if (result.reason === 'request_pending') {
+          showSnoozePendingToast();
+        } else if (failureMessage) {
           showErrorToast(failureMessage);
         }
       }
@@ -2528,14 +2914,39 @@ async function showSnoozeQuickMenu(
       showSnoozePicker(messageInfo, anchorRect);
     });
 
-  menu
-    .querySelector('.snooze-manage-option')!
-    .addEventListener('click', async (e) => {
-      e.stopPropagation();
+  const manageOptionButton = menu.querySelector<HTMLButtonElement>(
+    '.snooze-manage-option',
+  )!;
+  manageOptionButton.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (menu.getAttribute('aria-busy') === 'true') {
+      return;
+    }
+
+    const labelElement = manageOptionButton.querySelector<HTMLElement>(
+      '.snooze-manage-option-label',
+    );
+    const previousLabel = labelElement?.textContent || manageOptionLabel;
+    if (labelElement) {
+      labelElement.textContent = ui('打开中...');
+    }
+    setMenuBusy(true, manageOptionButton);
+
+    try {
       await openScheduledMessagesManager();
       hideAllSnoozeUI();
       hideToolbar();
-    });
+    } catch (error) {
+      if (labelElement) {
+        labelElement.textContent = previousLabel;
+      }
+      setMenuBusy(false);
+      manageOptionButton.focus();
+      showErrorToast(
+        getErrorMessage(error, ui('打开定时消息管理失败，请稍后重试')),
+      );
+    }
+  });
 
   // 鼠标事件
   menu.addEventListener('mouseenter', () => {
@@ -2599,6 +3010,8 @@ async function showSnoozeQuickMenu(
       menuItems[nextIndex]?.focus();
     }
   });
+
+  return true;
 }
 
 /**
@@ -2642,7 +3055,6 @@ function processMessageElement(messageElement: HTMLElement) {
   if (computedStyle.position === 'static') {
     targetElement.style.position = 'relative';
   }
-  ensureMessageReactionFocusAnchor(targetElement);
 
   // 创建工具栏容器（按钮内容会在显示时动态更新）
   const iconUrl = chrome.runtime.getURL('icons/icon16.png');
@@ -2811,27 +3223,19 @@ function processMessageElement(messageElement: HTMLElement) {
   let showTriggerTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSettingsBtnTimeout: ReturnType<typeof setTimeout> | null = null;
   let toolbarRevealSeq = 0;
-  let suppressNextFocusReveal = false;
   let messageInfo: MessageInfo | null = null;
 
   // 监听消息卡片的悬浮事件
   const conversationCard =
     targetElement.closest('.conversation-card') || targetElement;
 
-  const revealToolbar = async (
-    mode: 'hover' | 'focus',
-    seq: number,
-  ): Promise<void> => {
+  const revealToolbar = async (seq: number): Promise<void> => {
     currentMessageElement = targetElement;
     cancelSnoozeHide();
 
     await updateToolbarContent();
 
     if (seq !== toolbarRevealSeq) {
-      return;
-    }
-
-    if (mode === 'focus' && !conversationCard.matches(':focus-within')) {
       return;
     }
 
@@ -2856,22 +3260,6 @@ function processMessageElement(messageElement: HTMLElement) {
     );
   };
 
-  const hideLocalToolbarIfInactive = () => {
-    if (isSnoozePickerOpen) return;
-    if (
-      conversationCard.matches(':focus-within') ||
-      toolbar.matches(':focus-within') ||
-      toolbar.matches(':hover') ||
-      isHoveringSnoozeMenu ||
-      isFocusWithinSnoozeMenu
-    ) {
-      return;
-    }
-    setSettingsButtonVisible(toolbar, false);
-    setToolbarVisible(toolbar, false);
-    hideSnoozeMenu();
-  };
-
   conversationCard.addEventListener('mouseenter', async () => {
     const revealSeq = ++toolbarRevealSeq;
 
@@ -2883,7 +3271,7 @@ function processMessageElement(messageElement: HTMLElement) {
       clearTimeout(showTriggerTimeout);
     }
     showTriggerTimeout = setTimeout(() => {
-      void revealToolbar('hover', revealSeq);
+      void revealToolbar(revealSeq);
     }, MESSAGE_REACTION_SHOW_DELAY_MS);
   });
 
@@ -2914,40 +3302,6 @@ function processMessageElement(messageElement: HTMLElement) {
     }
   });
 
-  conversationCard.addEventListener('focusin', (e: FocusEvent) => {
-    if (suppressNextFocusReveal) {
-      suppressNextFocusReveal = false;
-      return;
-    }
-
-    const target = e.target as HTMLElement | null;
-    if (target?.closest('.message-reaction-toolbar')) {
-      return;
-    }
-
-    const revealSeq = ++toolbarRevealSeq;
-    if (showTriggerTimeout) {
-      clearTimeout(showTriggerTimeout);
-      showTriggerTimeout = null;
-    }
-    void revealToolbar('focus', revealSeq);
-  });
-
-  conversationCard.addEventListener('focusout', (e: FocusEvent) => {
-    const relatedTarget = e.relatedTarget as HTMLElement | null;
-    if (
-      relatedTarget?.closest('.message-reaction-toolbar') ||
-      relatedTarget?.closest('.snooze-menu') ||
-      relatedTarget?.closest('.snooze-picker') ||
-      relatedTarget?.closest('.reaction-settings-popup') ||
-      (relatedTarget && conversationCard.contains(relatedTarget))
-    ) {
-      return;
-    }
-
-    setTimeout(hideLocalToolbarIfInactive, 120);
-  });
-
   conversationCard.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Escape' || !toolbar.classList.contains('visible')) {
       return;
@@ -2969,8 +3323,7 @@ function processMessageElement(messageElement: HTMLElement) {
     setSettingsButtonVisible(toolbar, false);
     setToolbarVisible(toolbar, false);
     if (target?.closest('.message-reaction-toolbar')) {
-      suppressNextFocusReveal = true;
-      targetElement.focus({ preventScroll: true });
+      target.blur();
     }
   });
 
@@ -3092,8 +3445,11 @@ function bindToolbarEvents(
         messageInfo &&
         shouldShowSnoozeQuickMenu(textBtn, requestSeq, focusFirstOption)
       ) {
-        showSnoozeQuickMenu(messageInfo, textBtn);
-        if (focusFirstOption) {
+        const shown = await showSnoozeQuickMenu(messageInfo, textBtn, {
+          requestSeq,
+          allowWithoutHover: focusFirstOption,
+        });
+        if (shown && focusFirstOption) {
           currentSnoozeMenu
             ?.querySelector<HTMLElement>('button.snooze-quick-option')
             ?.focus();
@@ -3192,7 +3548,7 @@ function bindToolbarEvents(
 
           hideAllSnoozeUI();
           hideToolbar();
-          showSuccessToast('正在打开自动答复配置...');
+          showSuccessToast(buildAutoReplyConfigLaunchReceipt());
         } catch (error) {
           console.error('打开自动答复配置失败:', error);
           showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
@@ -3249,7 +3605,7 @@ function bindToolbarEvents(
 
           hideAllSnoozeUI();
           hideToolbar();
-          showSuccessToast('正在打开关注后续配置...');
+          showSuccessToast(buildFollowThreadConfigLaunchReceipt());
         } catch (error) {
           console.error('打开关注后续配置失败:', error);
           showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
@@ -3341,7 +3697,7 @@ function bindToolbarEvents(
 
           hideAllSnoozeUI();
           hideToolbar();
-          showSuccessToast('正在打开联动操作配置...');
+          showSuccessToast(buildLinkedActionConfigLaunchReceipt());
         } catch (error) {
           console.error('打开联动操作配置失败:', error);
           showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));

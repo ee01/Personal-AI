@@ -1,16 +1,17 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev --no-audit --no-fund && test -x node_modules/.bin/tsc
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 RUN mkdir -p dist/storage/migrations && cp -R src/storage/migrations/. dist/storage/migrations/
+RUN npm prune --omit=dev --no-audit --no-fund
 
 FROM node:20-slim
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --production
+COPY --from=builder /app/node_modules/ ./node_modules/
 COPY --from=builder /app/dist/ ./dist/
 EXPOSE 3210
 CMD ["node", "dist/server.js"]

@@ -97,6 +97,70 @@ describe('Memory Capture source memory API', () => {
     expect(body.policyReceipt.nextStep).toMatch(/不会保存/);
   });
 
+  it('blocks credential-bearing source URLs before capture', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/candidates/selection',
+      payload: {
+        sourceUrl: 'https://example.com/research/source?token=secret-token-123',
+        sourceTitle: 'Tokenized research source',
+        selectedText:
+          'The useful part of this research source describes how browser clipping should retain provenance while keeping later refinding and source review possible.',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.eligible).toBe(false);
+    expect(body.suggestedAction).toBe('blocked');
+    expect(body.blockedReason).toMatch(/Sensitive source URL carries credentials/);
+    expect(body.policyReceipt).toMatchObject({
+      state: 'blocked',
+      label: '已阻断入库',
+    });
+    expect(body.policyReceipt.detail).toMatch(/credentials or signed-access/);
+    expect(body.policyReceipt.nextStep).toMatch(/不会保存/);
+  });
+
+  it('rejects capsule saves when the source URL carries signed-access parameters', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'webpage',
+        sourceUrl:
+          'https://files.example.com/private/report.pdf?X-Amz-Signature=abc1234567890',
+        sourceTitle: 'Signed private report',
+        text:
+          'This report contains useful rollout evidence, but the source URL itself carries a signed-access credential and must not be stored as a source-memory URL.',
+        captureMode: 'manual',
+        captureReason: '用户点击页面旁的 + 记住',
+        interactions: {
+          manualClick: true,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/Sensitive source URL carries credentials/);
+    expect(
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM source_memory_capsules`,
+          )
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS count FROM messages_raw WHERE source_type = 'web'`)
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+  });
+
   it('returns a low-signal policy receipt when no capture chip should appear', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -177,8 +241,57 @@ describe('Memory Capture source memory API', () => {
     expect(body.capsule.sourceKind).toBe('selection');
     expect(body.capsule.captureMode).toBe('manual');
     expect(body.capsule.summary).toBe('用于 AI CoP 分享准备');
+    expect(body.capsule.writeReceipt).toMatchObject({
+      state: 'saved_with_recall_signal',
+      label: '资料记忆已写入',
+      nextStep: '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+    });
+    expect(body.capsule.actionReceipt).toMatchObject({
+      state: 'saved',
+      label: '最近操作：资料已保存',
+      occurredAt: expect.any(Number),
+    });
+    expect(body.capsule.actionReceipt.detail).toMatch(/创建了 source-memory capsule/);
+    expect(body.capsule.writeReceipt.detail).toMatch(/网页检索信号/);
+    expect(body.capsule.writeReceipt.evidence).toEqual(
+      expect.arrayContaining([
+        '资料类型：选区资料',
+        '保存方式：主动保存',
+        '范围：工作记忆',
+        '检索信号：已启用',
+      ]),
+    );
     expect(body.capsule.anchors).toHaveLength(1);
     expect(body.capsule.takeaways.length).toBeGreaterThan(0);
+    expect(
+      body.capsule.takeaways.every(
+        (takeaway: { status: string }) => takeaway.status === 'ready',
+      ),
+    ).toBe(true);
+    expect(body.capsule.metadata.distillation).toMatchObject({
+      status: 'ready',
+      schemaVersion: 1,
+      oneLineCue:
+        '已保存资料 · NotebookLM source-grounded workflow：用于 AI CoP 分享准备',
+    });
+    expect(body.capsule.metadata.distillation.policyReceipt).toMatchObject({
+      state: 'ready',
+      label: '资料蒸馏已就绪',
+    });
+    expect(body.capsule.metadata.distillation.policyReceipt.detail).toMatch(
+      /不自动写用户画像、创建任务或外部写入/,
+    );
+    expect(body.capsule.triggers[0].matcher).toMatchObject({
+      sourceMemoryDistillation: {
+        status: 'ready',
+        schemaVersion: 1,
+        showAs: 'quiet_source_cue',
+      },
+      sceneAnchors: {
+        sourceKind: 'selection',
+        sourceHost: 'example.com',
+      },
+    });
 
     const webCount = db
       .prepare(
@@ -199,6 +312,33 @@ describe('Memory Capture source memory API', () => {
     expect(JSON.parse(metadata.metadata_json).sourceMemoryCapsuleId).toBe(
       body.capsule.id,
     );
+
+    const distillationEvents = db
+      .prepare(
+        `SELECT event_type FROM source_memory_events
+         WHERE capsule_id = ? AND event_type LIKE 'distillation_%'
+         ORDER BY created_at ASC`,
+      )
+      .all(body.capsule.id) as Array<{ event_type: string }>;
+    expect(distillationEvents.map((event) => event.event_type)).toEqual(
+      expect.arrayContaining(['distillation_started', 'distillation_ready']),
+    );
+    const link = db
+      .prepare(
+        `SELECT target_type, target_id, relation
+         FROM source_memory_links
+         WHERE capsule_id = ?`,
+      )
+      .get(body.capsule.id) as {
+      target_type: string;
+      target_id: string;
+      relation: string;
+    };
+    expect(link).toMatchObject({
+      target_type: 'source_host',
+      target_id: 'example.com',
+      relation: 'distilled_anchor',
+    });
   });
 
   it('tags a captured web page as untrusted and flags hidden injection (P0-2)', async () => {
@@ -350,6 +490,11 @@ describe('Memory Capture source memory API', () => {
     expect(JSON.parse(messageAfter.metadata_json).userNote).toBe(
       '后续写 QBR 时优先引用这张留存趋势图',
     );
+    expect(noteRes.json().capsule.metadata.distillation).toMatchObject({
+      status: 'ready',
+      oneLineCue:
+        '已保存资料 · Quarterly retention chart：后续写 QBR 时优先引用这张留存趋势图',
+    });
 
     const chunk = db
       .prepare(
@@ -421,6 +566,75 @@ describe('Memory Capture source memory API', () => {
     expect(capsule.metadata.visualMemory.svg.markup).toContain('SVG OK');
   });
 
+  it('returns latest user-visible action receipts for duplicate and note updates', async () => {
+    const payload = {
+      sourceKind: 'selection',
+      sourceUrl: 'https://example.com/action-receipt',
+      sourceTitle: 'Action receipt source memory',
+      selectedText:
+        'Memory Capture action receipts should preserve whether the last visible operation created a capsule, found a duplicate, refreshed a note, or only kept the existing source evidence.',
+      captureMode: 'manual',
+      captureReason: '用户点击选区旁的 + 记住',
+      interactions: {
+        selectedText: true,
+        manualClick: true,
+      },
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    const capsuleId = first.json().capsule.id;
+    expect(first.json().capsule.actionReceipt).toMatchObject({
+      state: 'saved',
+      label: '最近操作：资料已保存',
+    });
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload,
+    });
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json().capsule.id).toBe(capsuleId);
+    expect(duplicate.json().capsule.duplicate).toBe(true);
+    expect(duplicate.json().capsule.actionReceipt).toMatchObject({
+      state: 'duplicate_no_change',
+      label: '最近操作：已有资料保持可用',
+    });
+    expect(duplicate.json().capsule.actionReceipt.detail).toMatch(
+      /没有新建第二条 capsule/,
+    );
+    expect(duplicate.json().capsule.actionReceipt.nextStep).toMatch(/补备注/);
+
+    const note = await app.inject({
+      method: 'POST',
+      url: `/api/v1/source-memory/capsules/${capsuleId}/note`,
+      payload: {
+        note: '后续整理 Memory Capture API 说明时引用这段',
+      },
+    });
+    expect(note.statusCode).toBe(200);
+    expect(note.json().capsule.actionReceipt).toMatchObject({
+      state: 'note_updated',
+      label: '最近操作：备注已更新',
+    });
+    expect(note.json().capsule.actionReceipt.detail).toMatch(/更新了资料备注/);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/source-memory/capsules/${capsuleId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().capsule.actionReceipt).toMatchObject({
+      state: 'note_updated',
+      label: '最近操作：备注已更新',
+    });
+  });
+
   it('stores automatic page capture with lower weight and supports undo dismiss', async () => {
     const saveRes = await app.inject({
       method: 'POST',
@@ -464,6 +678,23 @@ describe('Memory Capture source memory API', () => {
     expect(dismissRes.statusCode).toBe(200);
     expect(dismissRes.json().capsule.status).toBe('dismissed');
     expect(dismissRes.json().capsule.messageId).toBeUndefined();
+    expect(dismissRes.json().capsule.writeReceipt).toMatchObject({
+      state: 'dismissed_no_recall',
+      label: '资料召回已关闭',
+    });
+    expect(dismissRes.json().capsule.actionReceipt).toMatchObject({
+      state: 'dismissed',
+      label: '最近操作：资料已撤销',
+    });
+    expect(dismissRes.json().capsule.actionReceipt.detail).toMatch(
+      /关闭了这条资料的关联检索信号/,
+    );
+    expect(dismissRes.json().capsule.writeReceipt.detail).toMatch(
+      /不再进入 Ask、Memory Lens 或时间轴召回/,
+    );
+    expect(dismissRes.json().capsule.writeReceipt.evidence).toContain(
+      '检索信号：已关闭',
+    );
     expect(
       (
         db
@@ -488,6 +719,111 @@ describe('Memory Capture source memory API', () => {
     expect(detailRes.statusCode).toBe(200);
     expect(detailRes.json().capsule.status).toBe('dismissed');
     expect(detailRes.json().capsule.messageId).toBeUndefined();
+    expect(detailRes.json().capsule.writeReceipt.state).toBe('dismissed_no_recall');
+  });
+
+  it('treats repeated dismiss requests as a no-op after recall is already closed', async () => {
+    const saveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'selection',
+        sourceUrl: 'https://example.com/retry-dismiss',
+        sourceTitle: 'Retry-safe source memory dismiss',
+        selectedText:
+          'Dismissing a source memory capsule should be safe to retry without creating a second user-visible dismiss event or pretending another recall signal changed.',
+        captureMode: 'manual',
+        captureReason: '用户点击选区旁的 + 记住',
+        interactions: {
+          selectedText: true,
+          manualClick: true,
+        },
+      },
+    });
+    expect(saveRes.statusCode).toBe(200);
+    const capsuleId = saveRes.json().capsule.id;
+
+    const firstDismiss = await app.inject({
+      method: 'POST',
+      url: `/api/v1/source-memory/capsules/${capsuleId}/dismiss`,
+      payload: {
+        reason: '用户撤销资料记忆',
+      },
+    });
+    expect(firstDismiss.statusCode).toBe(200);
+    expect(firstDismiss.json().capsule.status).toBe('dismissed');
+    const firstUpdatedAt = firstDismiss.json().capsule.updatedAt;
+    const firstActionOccurredAt = firstDismiss.json().capsule.actionReceipt.occurredAt;
+
+    const dismissedEventCount = () =>
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM source_memory_events
+             WHERE capsule_id = ? AND event_type = 'dismissed'`,
+          )
+          .get(capsuleId) as { count: number }
+      ).count;
+    expect(dismissedEventCount()).toBe(1);
+
+    const secondDismiss = await app.inject({
+      method: 'POST',
+      url: `/api/v1/source-memory/capsules/${capsuleId}/dismiss`,
+      payload: {
+        reason: '用户重复点击撤销或请求重试',
+      },
+    });
+
+    expect(secondDismiss.statusCode).toBe(200);
+    expect(secondDismiss.json().capsule.status).toBe('dismissed');
+    expect(secondDismiss.json().capsule.messageId).toBeUndefined();
+    expect(secondDismiss.json().capsule.writeReceipt.state).toBe('dismissed_no_recall');
+    expect(secondDismiss.json().capsule.updatedAt).toBe(firstUpdatedAt);
+    expect(secondDismiss.json().capsule.actionReceipt).toMatchObject({
+      state: 'dismissed',
+      label: '最近操作：资料已撤销',
+      occurredAt: firstActionOccurredAt,
+    });
+    expect(dismissedEventCount()).toBe(1);
+  });
+
+  it('reports saved capsules separately when their linked web signal is missing', async () => {
+    const saveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'webpage',
+        sourceUrl: 'https://example.com/missing-signal',
+        sourceTitle: 'Missing signal source memory',
+        text: 'A saved source memory capsule should clearly report when its linked web search and recall signal has been removed or is no longer available.',
+        captureMode: 'manual',
+        interactions: {
+          manualClick: true,
+        },
+      },
+    });
+    expect(saveRes.statusCode).toBe(200);
+    const capsule = saveRes.json().capsule;
+    expect(capsule.writeReceipt.state).toBe('saved_with_recall_signal');
+
+    db.prepare(`DELETE FROM chunks WHERE related_entity_id = ?`).run(capsule.messageId);
+    db.prepare(`DELETE FROM messages_raw WHERE id = ?`).run(capsule.messageId);
+
+    const detailRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/source-memory/capsules/${capsule.id}`,
+    });
+    expect(detailRes.statusCode).toBe(200);
+    expect(detailRes.json().capsule.status).toBe('saved');
+    expect(detailRes.json().capsule.messageId).toBeUndefined();
+    expect(detailRes.json().capsule.writeReceipt).toMatchObject({
+      state: 'saved_without_recall_signal',
+      label: '资料已保存，召回信号缺失',
+    });
+    expect(detailRes.json().capsule.writeReceipt.evidence).toContain(
+      '检索信号：已关闭',
+    );
   });
 
   it('refreshes capsule detail and web signal when a dismissed capture is saved again', async () => {
@@ -607,9 +943,17 @@ describe('Memory Capture source memory API', () => {
     expect(match).toBeTruthy();
     expect(match.sourceLabel).toBe('source_memory');
     expect(match.exploreLink).toBe(`#/source-memory/${capsuleId}`);
+    expect(match.snippet).toMatch(/^已保存资料 · Context source memory/);
     expect(match.whyRelevant).toContain('已保存资料：整页资料 / 主动保存');
+    expect(
+      match.whyRelevant.some((item: string) => item.startsWith('蒸馏提示：')),
+    ).toBe(true);
     expect(match.metadata?.sourceKindLabel).toBe('整页资料');
     expect(match.metadata?.captureModeLabel).toBe('主动保存');
+    expect(match.metadata?.sourceMemoryDistillationStatus).toBe('ready');
+    expect(match.metadata?.sourceMemoryCue).toMatch(
+      /^已保存资料 · Context source memory/,
+    );
   });
 
   it('suppresses source memory context recall after negative recall feedback', async () => {

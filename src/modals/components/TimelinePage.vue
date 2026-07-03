@@ -69,11 +69,109 @@
       {{ focusNotice }}
     </div>
 
+    <section
+      v-if="timelineRefreshFailureReceipt"
+      class="timeline-refresh-failure-receipt"
+      aria-live="polite"
+      aria-label="时间轴刷新失败回执"
+    >
+      <div class="receipt-title">
+        {{ timelineRefreshFailureReceipt.title }}
+      </div>
+      <ul>
+        <li v-for="item in timelineRefreshFailureReceipt.items" :key="item">
+          {{ item }}
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="timelineRefreshingSnapshotReceipt"
+      class="timeline-refreshing-snapshot-receipt"
+      aria-live="polite"
+      aria-label="时间轴刷新中快照回执"
+    >
+      <div class="receipt-title">
+        {{ timelineRefreshingSnapshotReceipt.title }}
+      </div>
+      <ul>
+        <li
+          v-for="item in timelineRefreshingSnapshotReceipt.items"
+          :key="item"
+        >
+          {{ item }}
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="navigationReceipt"
+      :class="[
+        'timeline-navigation-receipt',
+        `timeline-navigation-receipt-${navigationReceipt.tone}`,
+      ]"
+      aria-live="polite"
+      aria-label="时间轴打开回执"
+    >
+      <div class="receipt-title">{{ navigationReceipt.title }}</div>
+      <ul>
+        <li v-for="item in navigationReceipt.items" :key="item">
+          {{ item }}
+        </li>
+      </ul>
+    </section>
+
+    <section class="timeline-boundary-receipt" aria-label="时间轴回执">
+      <div class="receipt-title">{{ timelineBoundaryReceipt.title }}</div>
+      <ul>
+        <li
+          v-for="item in timelineBoundaryReceipt.items"
+          :key="item"
+        >
+          {{ item }}
+        </li>
+      </ul>
+    </section>
+
+    <section
+      v-if="timelineSourceCoverageItems.length > 1"
+      class="timeline-source-overview"
+      aria-label="时间轴来源覆盖"
+    >
+      <div class="source-overview-header">
+        <div>
+          <div class="receipt-title">来源覆盖</div>
+          <p>{{ timelineSourceCoverageSummary }}</p>
+        </div>
+        <span>{{ timelineEvents.length }} 条已加载</span>
+      </div>
+      <div class="source-overview-chips">
+        <button
+          v-for="source in timelineSourceCoverageItems"
+          :key="source.key"
+          type="button"
+          :class="[
+            'source-overview-chip',
+            {
+              active: source.isActive,
+              hidden: source.isHiddenByCurrentFilter,
+            },
+          ]"
+          :aria-pressed="source.isActive"
+          @click="selectSourceFilter(source.key)"
+        >
+          <span>{{ source.label }}</span>
+          <strong>{{ source.count }}</strong>
+          <em v-if="source.isHiddenByCurrentFilter">已隐藏</em>
+        </button>
+      </div>
+    </section>
+
     <div v-if="errorMessage" class="timeline-error">
       {{ errorMessage }}
     </div>
 
-    <div v-if="isLoading" class="loading-container">
+    <div v-if="shouldShowBlockingLoading" class="loading-container">
       <div class="loading-spinner"></div>
       <span>加载时间轴数据...</span>
     </div>
@@ -95,7 +193,15 @@
         <article
           v-for="event in group.events"
           :key="event.resultKey"
-          :class="['timeline-item', { focused: isFocusedEvent(event) }]"
+          :class="[
+            'timeline-item',
+            {
+              focused: isFocusedEvent(event),
+              'timeline-item-openable': hasSafeNavigationTarget(event),
+              'timeline-item-blocked': isBlockedNavigationTarget(event),
+              'timeline-item-readonly': isReadonlyNavigationTarget(event),
+            },
+          ]"
           @click="handleEventClick(event)"
         >
           <div class="timeline-dot">{{ getTimelineIcon(event.type) }}</div>
@@ -130,14 +236,52 @@
                   {{ getRecallChannelLabel(channel) }}
                 </span>
               </div>
+              <div
+                :class="[
+                  'memory-link-safety-status',
+                  `memory-link-safety-status-${getLinkSafetyStatus(event).tone}`,
+                ]"
+                aria-label="链接安全状态"
+              >
+                <strong>{{ getLinkSafetyStatus(event).label }}</strong>
+                <span>{{ getLinkSafetyStatus(event).detail }}</span>
+                <div
+                  v-if="getLinkSafetyStatus(event).metrics.length"
+                  class="memory-link-safety-metrics"
+                >
+                  <em
+                    v-for="metric in getLinkSafetyStatus(event).metrics"
+                    :key="metric"
+                  >
+                    {{ metric }}
+                  </em>
+                </div>
+              </div>
+              <div
+                :class="[
+                  'timeline-click-affordance',
+                  `timeline-click-affordance-${getTimelineClickAffordance(event).tone}`,
+                ]"
+                aria-label="时间轴卡片点击行为"
+              >
+                <strong>{{ getTimelineClickAffordance(event).label }}</strong>
+                <span>{{ getTimelineClickAffordance(event).detail }}</span>
+              </div>
               <div class="event-actions">
-                <span v-if="getFeedbackLabel(event)" class="feedback-status">
+                <span
+                  v-if="getFeedbackLabel(event)"
+                  :class="[
+                    'feedback-status',
+                    `feedback-status-${getFeedbackStatusTone(event)}`,
+                  ]"
+                >
                   {{ getFeedbackLabel(event) }}
                 </span>
                 <button
                   type="button"
                   :class="[
                     'feedback-btn',
+                    'feedback-btn-positive',
                     { active: isFeedbackActive(event, 'positive') },
                   ]"
                   :aria-pressed="isFeedbackActive(event, 'positive')"
@@ -150,6 +294,7 @@
                   type="button"
                   :class="[
                     'feedback-btn',
+                    'feedback-btn-negative',
                     { active: isFeedbackActive(event, 'negative') },
                   ]"
                   :aria-pressed="isFeedbackActive(event, 'negative')"
@@ -170,7 +315,7 @@
                 <button
                   v-if="getLinkSafetyState(event).exploreRoute"
                   type="button"
-                  @click.stop="openExploreLink(event.exploreLink)"
+                  @click.stop="openExploreLink(event)"
                 >
                   在记忆中查看
                 </button>
@@ -179,9 +324,16 @@
                   type="button"
                   :title="getSourceButtonTitle(event)"
                   :aria-label="getSourceButtonTitle(event)"
-                  @click.stop="openSourceUrl(event.sourceUrl)"
+                  @click.stop="openSourceUrl(event)"
                 >
                   打开来源
+                </button>
+                <button
+                  v-if="shouldShowLinkRecoveryDiagnostic(event)"
+                  type="button"
+                  @click.stop="copyLinkRecoveryDiagnostic(event)"
+                >
+                  复制安全诊断
                 </button>
                 <span
                   v-for="label in getLinkSafetyState(event).blockedLabels"
@@ -201,6 +353,14 @@
       <span>📭</span>
       <p>{{ timelineEmptyTitle }}</p>
       <p class="empty-hint">{{ timelineEmptyHint }}</p>
+      <section class="timeline-empty-receipt" aria-label="时间轴空结果回执">
+        <div class="receipt-title">{{ timelineEmptyReceipt.title }}</div>
+        <ul>
+          <li v-for="item in timelineEmptyReceipt.items" :key="item">
+            {{ item }}
+          </li>
+        </ul>
+      </section>
       <div class="empty-actions">
         <button
           v-if="selectedSourceFilterKey !== ALL_TIMELINE_SOURCE_FILTER_KEY"
@@ -250,10 +410,20 @@ import {
   groupTimelineEventsByDay,
   parseTimelineFocus,
   ALL_TIMELINE_SOURCE_FILTER_KEY,
+  buildTimelineLinkRecoveryCopiedReceipt,
+  buildTimelineLinkRecoveryCopyFailureReceipt,
+  buildTimelineLinkRecoveryDiagnostic,
+  buildTimelineBoundaryReceipt,
+  buildTimelineEmptyReceipt,
+  buildTimelineNavigationReceipt,
+  buildTimelineRefreshFailureReceipt,
+  buildTimelineRefreshingSnapshotReceipt,
   buildTimelineSourceFilterOptions,
   filterTimelineEventsBySource,
+  getTimelineSourceFilterKey,
 } from '../timelinePresentation';
 import {
+  formatMemoryLinkSafetyStatus,
   getRecallChannelLabel,
   getScopeLabel,
   getMemoryLinkSafetyState,
@@ -270,6 +440,13 @@ type TimelineFeedbackChoice = Extract<
   'positive' | 'negative'
 >;
 type TimelineFeedbackState = TimelineFeedbackChoice | 'pending' | 'cleared';
+type TimelineClickAffordanceTone = 'ready' | 'warning' | 'muted';
+
+interface TimelineClickAffordance {
+  tone: TimelineClickAffordanceTone;
+  label: string;
+  detail: string;
+}
 
 interface TimelineRangeOption {
   key: TimelineRangeKey;
@@ -289,7 +466,21 @@ const selectedRangeKey = ref<TimelineRangeKey>(getInitialRangeKey());
 const selectedSourceFilterKey = ref(ALL_TIMELINE_SOURCE_FILTER_KEY);
 const errorMessage = ref('');
 const focusNotice = ref('');
+const refreshFailureMessage = ref('');
+const navigationReceipt = ref<ReturnType<
+  typeof buildTimelineNavigationReceipt
+> | null>(null);
+const loadedTimelineRequestKey = ref('');
 const isLoading = computed(() => store.isLoading);
+const isRefreshingSameSnapshot = computed(
+  () =>
+    isLoading.value &&
+    timelineEvents.value.length > 0 &&
+    loadedTimelineRequestKey.value === getTimelineRequestKey(),
+);
+const shouldShowBlockingLoading = computed(
+  () => isLoading.value && !isRefreshingSameSnapshot.value,
+);
 
 const rangeOptions: TimelineRangeOption[] = [
   {
@@ -356,6 +547,21 @@ const selectedSourceFilterLabel = computed(() => {
     )?.label || '当前来源'
   );
 });
+const timelineSourceCoverageItems = computed(() =>
+  timelineSourceOptions.value.map((option) => ({
+    ...option,
+    isActive: selectedSourceFilterKey.value === option.key,
+    isHiddenByCurrentFilter:
+      selectedSourceFilterKey.value !== ALL_TIMELINE_SOURCE_FILTER_KEY &&
+      selectedSourceFilterKey.value !== option.key,
+  })),
+);
+const timelineSourceCoverageSummary = computed(() => {
+  if (selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY) {
+    return '当前展示全部来源；点击来源只会收窄这批已加载结果，不会扩大检索范围。';
+  }
+  return `当前只显示 ${selectedSourceFilterLabel.value}；其余来源被临时隐藏，点击 chip 可在本批结果内切换。`;
+});
 const timelineContextLabel = computed(
   () =>
     `${getScopeLabel(selectedScope.value)} · ${
@@ -374,6 +580,52 @@ const timelineEmptyHint = computed(() =>
     ? '可以查看全部来源，或切换时间范围继续查找。'
     : selectedRangeOption.value.emptyHint,
 );
+const focusedTimelineEvent = computed(() =>
+  timelineEvents.value.find(isFocusedEvent),
+);
+const timelineBoundaryReceipt = computed(() =>
+  buildTimelineBoundaryReceipt({
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterKey: selectedSourceFilterKey.value,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+    totalEventCount: timelineEvents.value.length,
+    visibleEventCount: filteredTimelineEvents.value.length,
+    hasFocusedEvent: Boolean(focusedTimelineEvent.value),
+    isLoading: isLoading.value,
+  }),
+);
+const timelineEmptyReceipt = computed(() =>
+  buildTimelineEmptyReceipt({
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterKey: selectedSourceFilterKey.value,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+    totalEventCount: timelineEvents.value.length,
+    visibleEventCount: filteredTimelineEvents.value.length,
+  }),
+);
+const timelineRefreshFailureReceipt = computed(() => {
+  if (!refreshFailureMessage.value) return null;
+  return buildTimelineRefreshFailureReceipt({
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+    totalEventCount: timelineEvents.value.length,
+    visibleEventCount: filteredTimelineEvents.value.length,
+    errorMessage: refreshFailureMessage.value,
+  });
+});
+const timelineRefreshingSnapshotReceipt = computed(() => {
+  if (!isRefreshingSameSnapshot.value) return null;
+  return buildTimelineRefreshingSnapshotReceipt({
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+    totalEventCount: timelineEvents.value.length,
+    visibleEventCount: filteredTimelineEvents.value.length,
+  });
+});
 
 function firstQueryValue(value: unknown): string {
   if (Array.isArray(value)) return String(value[0] || '');
@@ -404,6 +656,13 @@ function getRouteFocusType(): TimelineFocusType | undefined {
   return getRouteFocus().type;
 }
 
+function getTimelineRequestKey(
+  scope = selectedScope.value,
+  rangeKey = selectedRangeKey.value,
+): string {
+  return `${scope}:${rangeKey}`;
+}
+
 function isFocusedEvent(event: MemoryTimelineEvent): boolean {
   const focusId = getRouteFocusId();
   if (!focusId) return false;
@@ -431,12 +690,28 @@ async function scrollFocusedEventIntoView() {
   focused?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
+function revealFocusedEventIfSourceFiltered(event: MemoryTimelineEvent): boolean {
+  if (selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY) {
+    return false;
+  }
+  if (getTimelineSourceFilterKey(event) === selectedSourceFilterKey.value) {
+    return false;
+  }
+  selectedSourceFilterKey.value = ALL_TIMELINE_SOURCE_FILTER_KEY;
+  return true;
+}
+
 async function applyFocusedTimelineEvent() {
   focusNotice.value = '';
   const focusId = getRouteFocusId();
   if (!focusId) return;
 
-  if (timelineEvents.value.some(isFocusedEvent)) {
+  const existingFocusedEvent = timelineEvents.value.find(isFocusedEvent);
+  if (existingFocusedEvent) {
+    if (revealFocusedEventIfSourceFiltered(existingFocusedEvent)) {
+      focusNotice.value =
+        '已显示定位记忆，并清除来源筛选；原筛选不包含这条记忆。';
+    }
     await scrollFocusedEventIntoView();
     return;
   }
@@ -467,8 +742,11 @@ async function applyFocusedTimelineEvent() {
   ];
   timelineEvents.value = nextEvents;
   hydrateFeedbackStateFromEvents(nextEvents);
+  const clearedSourceFilter = revealFocusedEventIfSourceFiltered(focusedEvent);
   reconcileSourceFilter();
-  focusNotice.value = '已置顶定位记忆；它可能不属于当前时间范围。';
+  focusNotice.value = clearedSourceFilter
+    ? '已置顶定位记忆，并清除来源筛选；它可能不属于当前时间范围或当前来源。'
+    : '已置顶定位记忆；它可能不属于当前时间范围。';
   await scrollFocusedEventIntoView();
 }
 
@@ -476,7 +754,9 @@ const loadTimeline = async () => {
   store.isLoading = true;
   errorMessage.value = '';
   focusNotice.value = '';
+  refreshFailureMessage.value = '';
   const rangeOption = selectedRangeOption.value;
+  const requestKey = getTimelineRequestKey();
   try {
     const response = (await chromeAPI.sendMessage({
       type: 'GET_RECENT_TIMELINE',
@@ -491,14 +771,25 @@ const loadTimeline = async () => {
     }
 
     timelineEvents.value = Array.isArray(response.data) ? response.data : [];
+    loadedTimelineRequestKey.value = requestKey;
     hydrateFeedbackStateFromEvents(timelineEvents.value);
     await applyFocusedTimelineEvent();
     reconcileSourceFilter();
   } catch (error: any) {
-    timelineEvents.value = [];
-    selectedSourceFilterKey.value = ALL_TIMELINE_SOURCE_FILTER_KEY;
-    errorMessage.value =
+    const message =
       error?.message || '时间轴暂时无法连接 Memory Service，请稍后刷新。';
+    const canKeepSameSnapshot =
+      loadedTimelineRequestKey.value === requestKey &&
+      timelineEvents.value.length > 0;
+
+    if (canKeepSameSnapshot) {
+      refreshFailureMessage.value = message;
+    } else {
+      timelineEvents.value = [];
+      loadedTimelineRequestKey.value = '';
+      selectedSourceFilterKey.value = ALL_TIMELINE_SOURCE_FILTER_KEY;
+      errorMessage.value = message;
+    }
   } finally {
     store.isLoading = false;
   }
@@ -518,6 +809,7 @@ const syncRouteSelection = () => {
 const selectRange = (rangeKey: TimelineRangeKey) => {
   if (selectedRangeKey.value === rangeKey) return;
   selectedRangeKey.value = rangeKey;
+  navigationReceipt.value = null;
   syncRouteSelection();
   void loadTimeline();
 };
@@ -525,8 +817,14 @@ const selectRange = (rangeKey: TimelineRangeKey) => {
 const selectScope = (scope: RecallScope) => {
   if (selectedScope.value === scope) return;
   selectedScope.value = scope;
+  navigationReceipt.value = null;
   syncRouteSelection();
   void loadTimeline();
+};
+
+const selectSourceFilter = (sourceKey: string) => {
+  selectedSourceFilterKey.value = sourceKey || ALL_TIMELINE_SOURCE_FILTER_KEY;
+  navigationReceipt.value = null;
 };
 
 const getLinkSafetyState = (event: MemoryTimelineEvent) =>
@@ -535,28 +833,160 @@ const getLinkSafetyState = (event: MemoryTimelineEvent) =>
     sourceUrl: event.sourceUrl,
   });
 
+const getLinkSafetyStatus = (event: MemoryTimelineEvent) =>
+  formatMemoryLinkSafetyStatus(getLinkSafetyState(event));
+
 const getSourceButtonTitle = (event: MemoryTimelineEvent) => {
   const host = getLinkSafetyState(event).sourceHost;
   return host ? `打开来源：${host}` : '打开来源';
 };
 
-const openExploreLink = (exploreLink?: string) => {
-  const safeExploreRoute = sanitizeMemoryExploreRoute(exploreLink);
+const hasSafeNavigationTarget = (event: MemoryTimelineEvent): boolean => {
+  const safetyState = getLinkSafetyState(event);
+  return Boolean(safetyState.exploreRoute || safetyState.sourceUrl);
+};
+
+const isBlockedNavigationTarget = (event: MemoryTimelineEvent): boolean => {
+  const safetyState = getLinkSafetyState(event);
+  return (
+    !safetyState.exploreRoute &&
+    !safetyState.sourceUrl &&
+    safetyState.blockedLabels.length > 0
+  );
+};
+
+const isReadonlyNavigationTarget = (event: MemoryTimelineEvent): boolean => {
+  const safetyState = getLinkSafetyState(event);
+  return (
+    !safetyState.exploreRoute &&
+    !safetyState.sourceUrl &&
+    safetyState.blockedLabels.length === 0
+  );
+};
+
+const getTimelineClickAffordance = (
+  event: MemoryTimelineEvent,
+): TimelineClickAffordance => {
+  const safetyState = getLinkSafetyState(event);
+  if (safetyState.exploreRoute) {
+    return {
+      tone: 'ready',
+      label: '卡片点击：在记忆中查看',
+      detail:
+        '只切换 Memory Exploring 内部视图；打开外部来源需点“打开来源”，不会改写记忆或反馈。',
+    };
+  }
+  if (safetyState.sourceUrl) {
+    return {
+      tone: 'ready',
+      label: '卡片点击：打开安全来源',
+      detail: `将在新标签打开 ${
+        safetyState.sourceHost || 'http/https 来源'
+      }；不代表重新同步、读取或确认来源内容。`,
+    };
+  }
+  if (safetyState.blockedLabels.length > 0) {
+    return {
+      tone: 'warning',
+      label: '卡片点击：查看拦截原因',
+      detail: `${safetyState.blockedLabels.length} 项目标被隐藏，不会打开外部网页；可复制安全诊断继续找原文。`,
+    };
+  }
+  return {
+    tone: 'muted',
+    label: '只读卡片',
+    detail:
+      '没有安全内链或 http/https 来源；可先阅读内容，或切换时间范围、来源筛选重新定位。',
+  };
+};
+
+const setBlockedNavigationReceipt = (event: MemoryTimelineEvent) => {
+  const safetyState = getLinkSafetyState(event);
+  navigationReceipt.value = buildTimelineNavigationReceipt({
+    action: safetyState.blockedLabels.length ? 'blocked' : 'unavailable',
+    eventTitle: event.title,
+    blockedLabels: safetyState.blockedLabels,
+  });
+};
+
+const shouldShowLinkRecoveryDiagnostic = (event: MemoryTimelineEvent) => {
+  const safetyState = getLinkSafetyState(event);
+  return !safetyState.exploreRoute && !safetyState.sourceUrl;
+};
+
+async function writeTimelineClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error('clipboard_unavailable');
+  }
+}
+
+async function copyLinkRecoveryDiagnostic(event: MemoryTimelineEvent) {
+  const safetyState = getLinkSafetyState(event);
+  const diagnostic = buildTimelineLinkRecoveryDiagnostic({
+    event,
+    blockedLabels: safetyState.blockedLabels,
+    scopeLabel: getScopeLabel(selectedScope.value),
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+  });
+
+  try {
+    await writeTimelineClipboardText(diagnostic);
+    navigationReceipt.value = buildTimelineLinkRecoveryCopiedReceipt({
+      eventTitle: event.title,
+    });
+  } catch (_error) {
+    navigationReceipt.value = buildTimelineLinkRecoveryCopyFailureReceipt({
+      eventTitle: event.title,
+    });
+  }
+}
+
+const openExploreLink = (event: MemoryTimelineEvent) => {
+  const safeExploreRoute = sanitizeMemoryExploreRoute(event.exploreLink);
   if (!safeExploreRoute) return false;
+  navigationReceipt.value = buildTimelineNavigationReceipt({
+    action: 'memory_route',
+    eventTitle: event.title,
+    exploreRoute: safeExploreRoute,
+  });
   router.push(safeExploreRoute.slice(1));
   return true;
 };
 
-const openSourceUrl = (sourceUrl?: string) => {
-  const safeSourceUrl = getMemoryLinkSafetyState({ sourceUrl }).sourceUrl;
+const openSourceUrl = (event: MemoryTimelineEvent) => {
+  const safetyState = getLinkSafetyState(event);
+  const safeSourceUrl = safetyState.sourceUrl;
   if (!safeSourceUrl) return false;
+  navigationReceipt.value = buildTimelineNavigationReceipt({
+    action: 'source_url',
+    eventTitle: event.title,
+    sourceHost: safetyState.sourceHost,
+  });
   window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
   return true;
 };
 
 const handleEventClick = (event: MemoryTimelineEvent) => {
-  if (openExploreLink(event.exploreLink)) return;
-  openSourceUrl(event.sourceUrl);
+  const safetyState = getLinkSafetyState(event);
+  if (safetyState.exploreRoute && openExploreLink(event)) return;
+  if (safetyState.sourceUrl && openSourceUrl(event)) return;
+  setBlockedNavigationReceipt(event);
 };
 
 function setFeedbackState(
@@ -603,6 +1033,19 @@ function getFeedbackLabel(event: MemoryTimelineEvent): string {
   if (state === 'negative') return '已记录为不相关';
   if (state === 'cleared') return '已撤销反馈';
   return '';
+}
+
+function getFeedbackStatusTone(event: MemoryTimelineEvent): string {
+  const state = feedbackByResultKey.value[event.resultKey];
+  if (
+    state === 'pending' ||
+    state === 'positive' ||
+    state === 'negative' ||
+    state === 'cleared'
+  ) {
+    return state;
+  }
+  return 'cleared';
 }
 
 function isFeedbackPending(event: MemoryTimelineEvent): boolean {
@@ -886,6 +1329,188 @@ onMounted(() => {
   font-size: 0.86rem;
 }
 
+.timeline-navigation-receipt,
+.timeline-refresh-failure-receipt,
+.timeline-refreshing-snapshot-receipt {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(8, 47, 73, 0.22);
+}
+
+.timeline-refresh-failure-receipt {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(120, 53, 15, 0.18);
+}
+
+.timeline-refreshing-snapshot-receipt {
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(8, 47, 73, 0.3);
+}
+
+.timeline-navigation-receipt-warning {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(120, 53, 15, 0.18);
+}
+
+.timeline-navigation-receipt ul,
+.timeline-refresh-failure-receipt ul,
+.timeline-refreshing-snapshot-receipt ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #b8c7da;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.timeline-navigation-receipt li,
+.timeline-refresh-failure-receipt li,
+.timeline-refreshing-snapshot-receipt li {
+  overflow-wrap: anywhere;
+}
+
+.timeline-boundary-receipt {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.receipt-title {
+  color: #dbeafe;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.timeline-boundary-receipt ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #a7b5c9;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.timeline-boundary-receipt li {
+  overflow-wrap: anywhere;
+}
+
+.timeline-empty-receipt {
+  display: grid;
+  gap: 0.55rem;
+  width: min(100%, 560px);
+  margin-top: 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 0.5rem;
+  background: rgba(20, 83, 45, 0.14);
+  text-align: left;
+}
+
+.timeline-empty-receipt ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #a7f3d0;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.timeline-empty-receipt li {
+  overflow-wrap: anywhere;
+}
+
+.timeline-source-overview {
+  display: grid;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 0.5rem;
+  background: rgba(20, 83, 45, 0.16);
+}
+
+.source-overview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.source-overview-header p {
+  margin: 0.22rem 0 0;
+  color: #a7f3d0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.source-overview-header span {
+  flex: 0 0 auto;
+  color: #99f6e4;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.source-overview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.source-overview-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: 0.4rem;
+  padding: 0.38rem 0.58rem;
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(15, 118, 110, 0.16);
+  color: #ccfbf1;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.source-overview-chip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-overview-chip strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+}
+
+.source-overview-chip em {
+  color: #fde68a;
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.source-overview-chip.active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(8, 47, 73, 0.42);
+  color: #e0f2fe;
+}
+
+.source-overview-chip.hidden {
+  border-color: rgba(251, 191, 36, 0.24);
+  background: rgba(120, 53, 15, 0.14);
+  color: #fef3c7;
+}
+
 .timeline-container {
   display: flex;
   flex-direction: column;
@@ -925,6 +1550,10 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 2rem 1fr;
   gap: 0.9rem;
+  cursor: default;
+}
+
+.timeline-item-openable {
   cursor: pointer;
 }
 
@@ -932,6 +1561,14 @@ onMounted(() => {
   border-color: rgba(56, 189, 248, 0.58);
   background: rgba(8, 47, 73, 0.52);
   box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.16);
+}
+
+.timeline-item-blocked .timeline-card {
+  border-color: rgba(251, 191, 36, 0.24);
+}
+
+.timeline-item-readonly .timeline-card {
+  border-color: rgba(148, 163, 184, 0.16);
 }
 
 .timeline-dot {
@@ -1027,10 +1664,16 @@ onMounted(() => {
   opacity: 0.7;
 }
 
-.feedback-btn.active {
-  border-color: rgba(56, 189, 248, 0.5);
-  background: rgba(14, 165, 233, 0.22);
-  color: #e0f2fe;
+.feedback-btn-positive.active {
+  border-color: rgba(34, 197, 94, 0.46);
+  background: rgba(22, 163, 74, 0.18);
+  color: #bbf7d0;
+}
+
+.feedback-btn-negative.active {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(127, 29, 29, 0.2);
+  color: #fecaca;
 }
 
 .clear-feedback-btn {
@@ -1041,9 +1684,117 @@ onMounted(() => {
 
 .feedback-status {
   align-self: center;
-  color: #bae6fd;
+  color: #cbd5e1;
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+.feedback-status-pending {
+  color: #fde68a;
+}
+
+.feedback-status-positive {
+  color: #bbf7d0;
+}
+
+.feedback-status-negative {
+  color: #fecaca;
+}
+
+.feedback-status-cleared {
+  color: #cbd5e1;
+}
+
+.memory-link-safety-status {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.65rem 0 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.44);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.memory-link-safety-status strong {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+}
+
+.memory-link-safety-status span {
+  overflow-wrap: anywhere;
+}
+
+.memory-link-safety-status-ready {
+  border-color: rgba(45, 212, 191, 0.3);
+  background: rgba(20, 83, 45, 0.16);
+  color: #ccfbf1;
+}
+
+.memory-link-safety-status-warning {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(120, 53, 15, 0.18);
+  color: #fde68a;
+}
+
+.memory-link-safety-status-muted {
+  color: #94a3b8;
+}
+
+.memory-link-safety-metrics {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.memory-link-safety-metrics em {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.32);
+  color: inherit;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.timeline-click-affordance {
+  display: grid;
+  gap: 0.28rem;
+  margin-top: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.32);
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  line-height: 1.38;
+}
+
+.timeline-click-affordance strong {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+}
+
+.timeline-click-affordance span {
+  overflow-wrap: anywhere;
+}
+
+.timeline-click-affordance-ready {
+  border-color: rgba(45, 212, 191, 0.24);
+  background: rgba(20, 83, 45, 0.12);
+  color: #ccfbf1;
+}
+
+.timeline-click-affordance-warning {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: rgba(120, 53, 15, 0.14);
+  color: #fde68a;
+}
+
+.timeline-click-affordance-muted {
+  color: #94a3b8;
 }
 
 .link-safety-note {
@@ -1121,6 +1872,20 @@ onMounted(() => {
 
   .range-tabs {
     min-width: 0;
+  }
+
+  .source-overview-header {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .source-overview-header span {
+    flex: 0 1 auto;
+  }
+
+  .source-overview-chip {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .timeline-item {

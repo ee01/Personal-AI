@@ -101,12 +101,33 @@ function installChromeStub(page) {
           window.chrome.runtime.lastError = null;
           if (message?.type === 'AMBIENT_CALIBRATION_TRACE') {
             window.__paiAmbientCalibrationTraces.push(message.trace);
+            if (window.__paiAmbientCalibrationMode === 'fail') {
+              return respond(callback, {
+                success: false,
+                error: 'privacy_gate_rejected',
+              });
+            }
             return respond(callback, {
               success: true,
               result: {
                 status: 'ok',
                 traceId: `trace-${window.__paiAmbientCalibrationTraces.length}`,
                 stored: true,
+                calibrationReceipt: {
+                  stored: true,
+                  duplicate: false,
+                  privacyClass: 'sensitive_redacted',
+                  rawTextStored: false,
+                  evidenceRefCount: message.trace?.evidenceRefs?.length || 0,
+                  cueRefCount: 0,
+                  styleSignalCount: 0,
+                  redactedDiffKeys: Object.keys(
+                    message.trace?.redactedDiff || {},
+                  ),
+                  writingStyleProcessed: false,
+                  outcomeCueEventCount: 0,
+                  boundary: 'hashes_lengths_tags_and_evidence_refs_only',
+                },
               },
             });
           }
@@ -177,8 +198,11 @@ function installChromeStub(page) {
   });
 }
 
-async function loadFixture(page) {
+async function loadFixture(page, initialText = '') {
   await page.goto(fixtureUrl);
+  if (initialText) {
+    await page.locator('#prompt-textarea').fill(initialText);
+  }
   await page.addScriptTag({ path: contentScriptPath });
   await page.locator('#prompt-textarea').click();
   await page.waitForFunction(
@@ -190,6 +214,22 @@ async function loadFixture(page) {
     state: 'visible',
     timeout: 6000,
   });
+}
+
+async function fireComposerGuardFocusHandler(page, type) {
+  await page.evaluate((eventType) => {
+    const root = document.querySelector('#pai-composer-guard-root');
+    if (!root) throw new Error('missing compose guard root');
+    const event = new FocusEvent(eventType, {
+      bubbles: true,
+      cancelable: true,
+    });
+    if (eventType === 'focusin') {
+      root.onfocusin?.(event);
+      return;
+    }
+    root.onfocusout?.(event);
+  }, type);
 }
 
 async function main() {
@@ -211,6 +251,48 @@ async function main() {
       }),
     );
     await installChromeStub(page);
+
+    await loadFixture(page, '只插入不发送，验证撤销窗口后的校准回执');
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.locator('[data-action="confirm-insert"]').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+    await page
+      .locator('[data-action="confirm-insert"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page
+      .locator('.pai-composer-guard-feedback-toast', {
+        hasText: '草稿保留已确认',
+      })
+      .waitFor({ state: 'visible', timeout: 13000 });
+    await page
+      .locator('.pai-composer-guard-feedback-detail', {
+        hasText: '已记录 inserted 校准信号',
+      })
+      .waitFor({ state: 'visible', timeout: 3000 });
+    const insertCommitReceiptText = await page
+      .locator('.pai-composer-guard-feedback-toast')
+      .innerText();
+    assert.match(insertCommitReceiptText, /当前草稿未发送\/提交/);
+    assert.match(insertCommitReceiptText, /只保存脱敏摘要/);
+
+    const insertedTrace = await page.evaluate(() =>
+      window.__paiAmbientCalibrationTraces.find(
+        (trace) => trace.action === 'inserted',
+      ),
+    );
+    assert.equal(insertedTrace.surface, 'compose_assist');
+    assert.equal(insertedTrace.redactedDiff.interaction, 'insert_undo_expired');
+    assert.equal(insertedTrace.redactedDiff.rawTextStored, false);
+    assert.equal(insertedTrace.evidenceRefs[0].role, 'used');
+    assert.equal(
+      JSON.stringify(insertedTrace).includes('production 还需要确认'),
+      false,
+      'inserted trace must not contain the raw inserted composer text',
+    );
 
     await loadFixture(page);
     await page
@@ -254,7 +336,86 @@ async function main() {
     );
 
     await loadFixture(page);
-    await page.locator('.pai-composer-guard-icon-button').hover();
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await page
+      .locator('#pai-composer-guard-root')
+      .dispatchEvent('pointerover', { bubbles: true, cancelable: true });
+    await page
+      .locator('#pai-composer-guard-root')
+      .dispatchEvent('pointerout', { bubbles: true, cancelable: true });
+    await page.locator('#prompt-textarea').fill(
+      '我只是扫过 Personal AI icon，直接自己回复当前 thread。',
+    );
+    await page.locator('#send-button').click();
+    await page.waitForTimeout(1200);
+    const skimHoverTraces = await page.evaluate(
+      () => window.__paiAmbientCalibrationTraces,
+    );
+    assert.equal(
+      skimHoverTraces.some((trace) => trace.action === 'sent_without_insert'),
+      false,
+      'brief icon skim should not count as passive no-insert calibration',
+    );
+
+    await loadFixture(page);
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await fireComposerGuardFocusHandler(page, 'focusin');
+    await fireComposerGuardFocusHandler(page, 'focusout');
+    await page.locator('#prompt-textarea').fill(
+      '我只是 Tab 到 Personal AI icon 又马上回到输入框，直接自己回复。',
+    );
+    await page.locator('#send-button').click();
+    await page.waitForTimeout(700);
+    const skimKeyboardFocusTraces = await page.evaluate(
+      () => window.__paiAmbientCalibrationTraces,
+    );
+    assert.equal(
+      skimKeyboardFocusTraces.some(
+        (trace) => trace.action === 'sent_without_insert',
+      ),
+      false,
+      'brief keyboard focus should not count as passive no-insert calibration',
+    );
+
+    await loadFixture(page);
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await fireComposerGuardFocusHandler(page, 'focusin');
+    await page.waitForTimeout(700);
+    await page.locator('#prompt-textarea').fill(
+      '我键盘聚焦看过建议后，改成自己的一句简短回复。',
+    );
+    await page.locator('#send-button').click();
+    await page.waitForFunction(
+      () =>
+        window.__paiAmbientCalibrationTraces?.some(
+          (trace) => trace.action === 'sent_without_insert',
+        ),
+      null,
+      { timeout: 3000 },
+    );
+    const keyboardFocusTrace = await page.evaluate(() =>
+      window.__paiAmbientCalibrationTraces.find(
+        (trace) => trace.action === 'sent_without_insert',
+      ),
+    );
+    assert.equal(keyboardFocusTrace.surface, 'compose_assist');
+    assert.equal(keyboardFocusTrace.redactedDiff.interaction, 'hover_no_insert');
+    assert.equal(keyboardFocusTrace.evidenceRefs[0].role, 'ignored');
+
+    await loadFixture(page);
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await page
+      .locator('#pai-composer-guard-root')
+      .dispatchEvent('pointerover', { bubbles: true, cancelable: true });
+    await page.waitForTimeout(1200);
     await page.locator('#prompt-textarea').fill(
       '我先回复当前 thread 的 review owner，确认今天只看 BE readiness 和 blockers。',
     );
@@ -281,7 +442,9 @@ async function main() {
     await page.evaluate(() => {
       window.__paiAmbientCalibrationTraces = [];
     });
-    await page.locator('.pai-composer-guard-icon-button').hover();
+    await page
+      .locator('#pai-composer-guard-root')
+      .dispatchEvent('pointerover', { bubbles: true, cancelable: true });
     await page
       .locator('[data-action="reject"]')
       .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
@@ -293,6 +456,11 @@ async function main() {
       null,
       { timeout: 3000 },
     );
+    await page
+      .locator('.pai-composer-guard-feedback-detail', {
+        hasText: '校准已写入，只保存脱敏校准信号',
+      })
+      .waitFor({ state: 'visible', timeout: 3000 });
     await page.locator('#prompt-textarea').fill(
       '我先自己回：当前只确认 production blocker，不引用这条建议。',
     );
@@ -310,6 +478,30 @@ async function main() {
       rejectionTraces.some((trace) => trace.action === 'sent_without_insert'),
       false,
       'explicit thumb-down should not be double-counted as passive hover no-insert feedback',
+    );
+
+    await loadFixture(page, '换一个 prompt 来验证校准失败回执');
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationMode = 'fail';
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await page
+      .locator('#pai-composer-guard-root')
+      .dispatchEvent('pointerover', { bubbles: true, cancelable: true });
+    await page
+      .locator('[data-action="reject"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page
+      .locator('.pai-composer-guard-feedback-detail', {
+        hasText: '校准未写入：privacy_gate_rejected',
+      })
+      .waitFor({ state: 'visible', timeout: 3000 });
+    const failedTraceAttempts = await page.evaluate(
+      () => window.__paiAmbientCalibrationTraces,
+    );
+    assert.ok(
+      failedTraceAttempts.some((trace) => trace.action === 'wrong'),
+      'failed backend receipt should still preserve the attempted wrong trace in the browser harness',
     );
 
     console.log('Compose Assist ambient calibration E2E passed.');

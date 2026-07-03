@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 
 import type { ScheduledMessage } from '../types.js';
 import {
+  formatScheduleQueueSlotDecisionBasis,
   formatScheduleQueueSlotSummary,
   formatScheduleQueueSummary,
   formatScheduleQueueBlockReason,
+  formatScheduleQueueCompactSummary,
   formatScheduleQueuePressure,
   formatScheduleQueueSuggestion,
   getScheduleQueuePressure,
@@ -176,13 +178,14 @@ test('flags no-time executor queues that cannot finish before the execution date
     timeStr: '',
     label: '2026-05-05 08:00 后队列',
     inspectedMinutes: 1,
+    reason: '08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
     clearsScheduleTime: true,
   });
   assert.equal(summary?.topSlots[0].blockingCount, 9);
   assert.deepEqual(summary?.topSlots[0].blockingTopics, ['late-1', 'late-2', 'late-3']);
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 08:00 后队列: 10 条，最大预计延后 9 分钟，可能排到执行日期结束后，当天剩余可执行约 9 条，建议处理：late-10（第 10/10 个），前面 9 条待执行：late-1、late-2、late-3，建议改到 2026-05-05 08:00 后队列，示例：late-1、late-2、late-3',
+    '2026-05-04 08:00 后队列: 10 条，最大预计延后 9 分钟，可能排到执行日期结束后，当天剩余可执行约 9 条，建议处理：late-10（第 10/10 个），前面 9 条待执行：late-1、late-2、late-3，建议改到 2026-05-05 08:00 后队列，建议原因：08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日，示例：late-1、late-2、late-3',
   );
 });
 
@@ -212,7 +215,7 @@ test('subtracts explicit executor reservations from no-time same-day capacity', 
   assert.equal(summary?.topSlots[0].reservedExplicitMinutes, 1);
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 08:00 后队列: 9 条，最大预计延后 8 分钟，可能排到执行日期结束后，当天剩余可执行约 8 条，已扣除 1 个明确时间分钟，建议处理：late-9（第 9/9 个），前面 8 条待执行：late-1、late-2、late-3，建议改到 2026-05-05 08:00 后队列，示例：late-1、late-2、late-3',
+    '2026-05-04 08:00 后队列: 9 条，最大预计延后 8 分钟，可能排到执行日期结束后，当天剩余可执行约 8 条，已扣除 1 个明确时间分钟，建议处理：late-9（第 9/9 个），前面 8 条待执行：late-1、late-2、late-3，建议改到 2026-05-05 08:00 后队列，建议原因：08:00 后队列第 9/9 个，前面 8 条会先执行，当天剩余约 8 条，已避开 1 个明确时间分钟，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日，示例：late-1、late-2、late-3',
   );
 });
 
@@ -427,14 +430,23 @@ test('summarizes congested executor queue slots and sorts risk first', () => {
     timeStr: '10:02',
     label: '2026-05-04 10:02',
     inspectedMinutes: 12,
+    reason: '同执行时间第 12/12 个，前面 11 条会先执行，可能超过 30 分钟补偿窗口，补偿窗口仅剩 10 分钟，建议改到第一个未被执行器队列占用的分钟',
   });
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议处理：Risk 12（第 12/12 个），前面 11 条待执行：Risk 1、Risk 2、Risk 3，建议改到 2026-05-04 10:02，示例：Risk 1、Risk 2、Risk 3',
+    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议处理：Risk 12（第 12/12 个），前面 11 条待执行：Risk 1、Risk 2、Risk 3，建议改到 2026-05-04 10:02，建议原因：同执行时间第 12/12 个，前面 11 条会先执行，可能超过 30 分钟补偿窗口，补偿窗口仅剩 10 分钟，建议改到第一个未被执行器队列占用的分钟，示例：Risk 1、Risk 2、Risk 3',
+  );
+  assert.equal(
+    formatScheduleQueueSlotDecisionBasis(summary!.topSlots[0]),
+    '建议依据：明确时间同槽；目标第 12/12 个；前面 11 条会先执行，已展示 3 条前序样例，另 8 条未展开；建议写入 2026-05-04 10:02；不会自动处理前序或发送消息',
   );
   assert.equal(
     formatScheduleQueueSummary(summary!),
     '2 个时间槽同时排队；14 条执行器消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽存在执行窗口风险',
+  );
+  assert.equal(
+    formatScheduleQueueCompactSummary(summary!),
+    '14 条消息正在排队，2 个时间槽有拥挤，最大同槽 12 条，最大预计延后 11 分钟；1 个需要调整，展开后可查看建议依据和改期入口',
   );
 });
 
@@ -478,12 +490,21 @@ test('suggests a clear explicit minute for safe but congested slots', () => {
     timeStr: '10:31',
     label: '2026-05-04 10:31',
     inspectedMinutes: 2,
+    reason: '同执行时间第 2/2 个，前面 1 条会先执行，建议避开同一分钟排队，建议改到第一个未被执行器队列占用的分钟',
   });
   assert.equal(summary?.topSlots[0].blockingCount, 1);
   assert.deepEqual(summary?.topSlots[0].blockingTopics, ['Safe one']);
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 10:30: 2 条，最大预计延后 1 分钟，建议处理：Safe two（第 2/2 个），前面 1 条待执行：Safe one，建议改到 2026-05-04 10:31，示例：Safe one、Safe two',
+    '2026-05-04 10:30: 2 条，最大预计延后 1 分钟，建议处理：Safe two（第 2/2 个），前面 1 条待执行：Safe one，建议改到 2026-05-04 10:31，建议原因：同执行时间第 2/2 个，前面 1 条会先执行，建议避开同一分钟排队，建议改到第一个未被执行器队列占用的分钟，示例：Safe one、Safe two',
+  );
+  assert.equal(
+    formatScheduleQueueCompactSummary(summary!),
+    '2 条消息正在排队，1 个时间槽有拥挤，最大同槽 2 条，最大预计延后 1 分钟；暂无执行窗口风险，展开后可查看建议时间和前序样例',
+  );
+  assert.equal(
+    formatScheduleQueueSlotDecisionBasis(summary!.topSlots[0]),
+    '建议依据：明确时间同槽；目标第 2/2 个；前面 1 条会先执行，已展示 1 条前序样例；建议写入 2026-05-04 10:31；不会自动处理前序或发送消息',
   );
 });
 
@@ -508,6 +529,7 @@ test('suggests an explicit time for no-time queues that cannot finish on the exe
       timeStr: '',
       label: '2026-05-05 08:00 后队列',
       inspectedMinutes: 1,
+      reason: '08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
       clearsScheduleTime: true,
     },
   );
@@ -530,6 +552,7 @@ test('preserves no-time queue semantics when explicit default-time rows already 
       timeStr: '',
       label: '2026-05-05 08:00 后队列',
       inspectedMinutes: 1,
+      reason: '08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
       clearsScheduleTime: true,
     },
   );
@@ -552,6 +575,7 @@ test('skips a future no-time queue date that would still exceed the execution da
       timeStr: '',
       label: '2026-05-06 08:00 后队列',
       inspectedMinutes: 2,
+      reason: '08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
       clearsScheduleTime: true,
     },
   );
@@ -578,6 +602,7 @@ test('skips a future no-time queue date fully reserved by explicit executor mess
       timeStr: '',
       label: '2026-05-06 08:00 后队列',
       inspectedMinutes: 2,
+      reason: '08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
       clearsScheduleTime: true,
     },
   );
@@ -639,10 +664,11 @@ test('suggests the first unreserved minute after a crowded explicit slot', () =>
     timeStr: '10:01',
     label: '2026-05-04 10:01',
     inspectedMinutes: 32,
+    reason: '同执行时间第 32/32 个，前面 31 条会先执行，可能超过 30 分钟补偿窗口，建议改到第一个未被执行器队列占用的分钟',
   });
   assert.equal(
     formatScheduleQueueSuggestion(suggestion!),
-    '建议改到 2026-05-04 10:01，避开当前拥挤时间槽。',
+    '建议改到 2026-05-04 10:01，避开当前拥挤时间槽。 原因：同执行时间第 32/32 个，前面 31 条会先执行，可能超过 30 分钟补偿窗口，建议改到第一个未被执行器队列占用的分钟',
   );
 });
 
@@ -657,6 +683,6 @@ test('formats no-time queue suggestions as queue-preserving recovery', () => {
 
   assert.equal(
     formatScheduleQueueSuggestion(suggestion!),
-    '建议改到 2026-05-05 08:00 后队列，保留未填写执行时间的队列语义。',
+    '建议改到 2026-05-05 08:00 后队列，保留未填写执行时间的队列语义。 原因：08:00 后队列第 10/10 个，前面 9 条会先执行，当天剩余约 9 条，可能排到执行日期结束后，建议保留空时间移到有容量的默认队列日',
   );
 });

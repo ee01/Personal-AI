@@ -37,6 +37,23 @@ export interface ScheduleHealthRecoverySuggestion {
   reason: string;
 }
 
+export interface ScheduleHealthTriageSummary {
+  priorityLabel: string;
+  diagnosticLabel: string;
+  recoverableLabel: string;
+  manualReviewLabel: string;
+  boundaryLabel: string;
+}
+
+export interface ScheduleCompensationWindowReceipt {
+  headline: string;
+  summary: string;
+  detail: string;
+  boundary: string;
+  elapsedMinutes: number;
+  remainingMinutes: number;
+}
+
 type ScheduleHealthMessage = Pick<
   ScheduledMessage,
   | 'ID'
@@ -441,6 +458,96 @@ export function getScheduleHealthIssues(
     .filter((issue): issue is ScheduleHealthIssue => Boolean(issue));
 }
 
+export function getScheduleCompensationWindowReceipt(
+  message: ScheduleHealthMessage,
+  now = new Date(),
+): ScheduleCompensationWindowReceipt | null {
+  if (message.Status !== 'Active') {
+    return null;
+  }
+
+  if (message.Automation_Link && !message.Schedule_Date) {
+    return null;
+  }
+
+  if (isTimelineTriggeredMessage(message)) {
+    return null;
+  }
+
+  if (!message.Schedule_Date || !hasExplicitScheduleTime(message)) {
+    return null;
+  }
+
+  if (!isExecutorDrivenSchedule({
+    Push_Method: message.Push_Method,
+    AI_Endpoint: message.AI_Endpoint,
+  })) {
+    return null;
+  }
+
+  if (!normalizeLocalScheduleTime(message.Schedule_Time)) {
+    return null;
+  }
+
+  const nextExecution = calculateScheduledMessageNextExecution(message, now);
+  if (!nextExecution) {
+    return null;
+  }
+
+  const executionDate = nextExecution.slice(0, 10);
+  if (isTerminalExecutionForDate(message, executionDate)) {
+    return null;
+  }
+
+  const scheduledAt = parseScheduleDateTime(nextExecution);
+  if (!scheduledAt) {
+    return null;
+  }
+
+  const scheduledMinute = new Date(scheduledAt);
+  scheduledMinute.setSeconds(0, 0);
+  const currentMinute = new Date(now);
+  currentMinute.setSeconds(0, 0);
+  const elapsedMinutes = Math.floor(
+    (currentMinute.getTime() - scheduledMinute.getTime()) / 60000,
+  );
+
+  if (
+    elapsedMinutes <= APPS_SCRIPT_GRACE_WINDOW_MINUTES ||
+    elapsedMinutes > EXECUTOR_COMPENSATION_WINDOW_MINUTES
+  ) {
+    return null;
+  }
+
+  const remainingMinutes = Math.max(
+    0,
+    EXECUTOR_COMPENSATION_WINDOW_MINUTES - elapsedMinutes,
+  );
+
+  return {
+    headline: '补偿窗口回执',
+    summary: `已迟到 ${elapsedMinutes} 分钟，补偿窗口剩余 ${remainingMinutes} 分钟`,
+    detail:
+      '下一轮 Jira Automation 执行器仍会按过去 2-30 分钟补偿窗口查找这条明确时间消息；不会提前发送。',
+    boundary:
+      '这是领取资格，不代表已发送；最终发送或失败仍以 Last_Exec / Logs、发送回调和 Jira/API 运行记录为准。',
+    elapsedMinutes,
+    remainingMinutes,
+  };
+}
+
+export function formatScheduleCompensationWindowReceipt(
+  receipt: ScheduleCompensationWindowReceipt,
+): string {
+  return `${receipt.headline}: ${receipt.summary}`;
+}
+
+export function formatScheduleCompensationWindowReceiptDetail(
+  receipt: ScheduleCompensationWindowReceipt,
+): string {
+  return `${formatScheduleCompensationWindowReceipt(receipt)}；${receipt.detail}；${receipt.boundary}`;
+}
+
 export function getScheduleHealthRecoverySuggestion(
   message: ScheduleHealthMessage,
   now = new Date(),
@@ -574,4 +681,73 @@ export function formatScheduleHealthSummary(
   }
 
   return parts.join('；');
+}
+
+function getScheduleHealthIssueDiagnosticName(
+  issue: ScheduleHealthIssue,
+): string {
+  if (issue.code === 'invalid_time') {
+    return '时间异常';
+  }
+
+  if (!issue.isExecutorDriven) {
+    return '默认发送已过';
+  }
+
+  return issue.summary === '未设时间的执行日期已过'
+    ? '默认队列日期过期'
+    : '补偿超窗';
+}
+
+export function formatScheduleHealthDiagnosticSummary(
+  issues: ScheduleHealthIssue[],
+): string {
+  const counts = new Map<string, number>();
+
+  for (const issue of issues) {
+    const name = getScheduleHealthIssueDiagnosticName(issue);
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+
+  const parts = Array.from(counts.entries()).map(
+    ([name, count]) => `${name} ${count} 条`,
+  );
+
+  return `诊断: ${parts.join(' / ')}`;
+}
+
+export function formatScheduleHealthIssueDiagnostic(
+  issue: ScheduleHealthIssue,
+): string {
+  const route = issue.isExecutorDriven
+    ? 'Jira Automation 执行器队列'
+    : 'Apps Script / AsMe';
+  const next = issue.nextExecution || '无有效执行时间';
+  return `诊断线索: ${getScheduleHealthIssueDiagnosticName(issue)} · ${route} · 预期 ${next}`;
+}
+
+export function buildScheduleHealthTriageSummary(
+  issues: ScheduleHealthIssue[],
+  suggestions: Map<string, ScheduleHealthRecoverySuggestion>,
+): ScheduleHealthTriageSummary | null {
+  if (issues.length === 0) {
+    return null;
+  }
+
+  const recoverableIssues = issues.filter((issue) =>
+    suggestions.has(issue.messageId),
+  );
+  const priorityIssue = recoverableIssues[0] || issues[0];
+  const prioritySuggestion = suggestions.get(priorityIssue.messageId);
+  const manualCount = Math.max(0, issues.length - recoverableIssues.length);
+
+  return {
+    priorityLabel: prioritySuggestion
+      ? `优先处理: ${priorityIssue.topic} -> ${prioritySuggestion.label}`
+      : `优先处理: ${priorityIssue.topic} -> ${priorityIssue.action}`,
+    diagnosticLabel: formatScheduleHealthDiagnosticSummary(issues),
+    recoverableLabel: `可一键恢复: ${recoverableIssues.length}/${issues.length} 条`,
+    manualReviewLabel: `需手动检查: ${manualCount} 条`,
+    boundaryLabel: '边界: 只写 Schedule_Date / Schedule_Time，不会立即发送或改 Logs',
+  };
 }

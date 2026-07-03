@@ -6,6 +6,7 @@ import {
   buildBackendNotificationContextMessage,
   buildBackendNotificationId,
   buildBackendNotificationMessage,
+  buildBackendNotificationSnoozeActionHint,
   DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS,
   getBackendNotificationClosedDeliveryStatus,
   getBackendNotificationMetaStorageKey,
@@ -41,6 +42,27 @@ test('routes backend notification clicks to the right memory surface', () => {
       reportPath: '../weekly-2026-05-27.md',
     }),
     '/reports',
+  );
+  assert.equal(
+    getBackendTargetHash('dream_digest', 'notification', 'notif-dream', {
+      latestDreamPath: 'dreams/project-orbit-2026-05-20.md',
+    }),
+    '/dreams?file=project-orbit-2026-05-20.md',
+  );
+  assert.equal(
+    getBackendTargetHash('dream_digest', 'notification', 'notif-dream', {
+      dreamPaths: [
+        'dreams/current-launch-2026-05-25.md',
+        'dreams/sunday-risk-2026-05-24.md',
+      ],
+    }),
+    '/dreams?file=current-launch-2026-05-25.md',
+  );
+  assert.equal(
+    getBackendTargetHash('dream_digest', 'notification', 'notif-dream', {
+      latestDreamPath: '../project-orbit-2026-05-20.md',
+    }),
+    '/dreams',
   );
   assert.equal(getBackendTargetHash('dream_digest', 'notification'), '/dreams');
   assert.equal(
@@ -125,10 +147,100 @@ test('builds concise context labels with todo due time', () => {
     }),
     '待处理 · 高优先级 · 仍待处理',
   );
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'notice',
+      'high',
+      undefined,
+      { channel: 'chrome', reason: 'new', lastStatus: undefined },
+      undefined,
+      undefined,
+      {
+        evidenceCount: 3,
+        label: '依据 3 条记忆',
+      },
+    ),
+    '通知 · 高优先级 · 依据 3 条记忆',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'notice',
+      'high',
+      undefined,
+      { channel: 'chrome', reason: 'new', lastStatus: undefined },
+      undefined,
+      [
+        {
+          channel: 'chrome',
+          state: 'not_attempted',
+          label: '未尝试',
+          hasSuccessfulDelivery: false,
+        },
+        {
+          channel: 'doubao',
+          state: 'delivered',
+          label: '已送达',
+          hasSuccessfulDelivery: true,
+        },
+        {
+          channel: 'glip',
+          state: 'failed',
+          label: '发送失败',
+          status: 'failed',
+          hasSuccessfulDelivery: false,
+          lastError: 'bot_not_configured',
+        },
+      ],
+    ),
+    '通知 · 高优先级 · 其他渠道 豆包已送达，Glip发送失败（bot_not_configured，未送达）',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'notice',
+      'high',
+      undefined,
+      { channel: 'chrome', reason: 'new', lastStatus: undefined },
+      undefined,
+      [
+        {
+          channel: 'chrome',
+          state: 'not_attempted',
+          label: '未尝试',
+          hasSuccessfulDelivery: false,
+        },
+        {
+          channel: 'doubao',
+          state: 'clicked',
+          label: '已查看，最近失败',
+          status: 'failed',
+          effectiveStatus: 'clicked',
+          hasSuccessfulDelivery: true,
+          lastError: 'provider_retry_failed',
+        },
+      ],
+    ),
+    '通知 · 高优先级 · 其他渠道 豆包已查看，最近失败（provider_retry_failed，已查看不回滚）',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'notice',
+      'high',
+      undefined,
+      {
+        channel: 'chrome',
+        reason: 'previous_delivery_failed',
+        lastStatus: 'failed',
+        effectiveStatus: 'delivered',
+        hasSuccessfulDelivery: true,
+        lastError: 'chrome_api_unavailable',
+      },
+    ),
+    '通知 · 高优先级 · 上次发送失败（chrome_api_unavailable，曾已送达）',
+  );
 });
 
 test('labels snoozed backend notification reminders', () => {
-  assert.equal(
+  assert.match(
     buildBackendNotificationContextMessage(
       'todo',
       'high',
@@ -145,9 +257,9 @@ test('labels snoozed backend notification reminders', () => {
         },
       },
     ),
-    '待处理 · 高优先级 · 稍后提醒',
+    /^待处理 · 高优先级 · 稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时$/,
   );
-  assert.equal(
+  assert.match(
     buildBackendNotificationContextMessage(
       'todo',
       'high',
@@ -167,7 +279,34 @@ test('labels snoozed backend notification reminders', () => {
         },
       },
     ),
-    '待处理 · 高优先级 · 第2次稍后提醒 · 再次提醒',
+    /^待处理 · 高优先级 · 第2次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 再次提醒$/,
+  );
+  assert.match(
+    buildBackendNotificationContextMessage(
+      'todo',
+      'high',
+      undefined,
+      {
+        reason: 'retry_after_cooldown',
+        lastStatus: 'delivered',
+      },
+      undefined,
+      undefined,
+      undefined,
+      {
+        label: '第3次稍后提醒',
+        detail: '来源通知 notif-3',
+        boundary:
+          '这是稍后提醒到点的上下文；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+        sourceNotificationId: 'notif-3',
+        rootNotificationId: 'notif-1',
+        snoozedAt: 1_778_410_000,
+        scheduledAt: 1_778_413_600,
+        delaySeconds: 3_600,
+        count: 3,
+      },
+    ),
+    /^待处理 · 高优先级 · 第3次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 再次提醒$/,
   );
 });
 
@@ -195,6 +334,48 @@ test('keeps todo snooze reminders before their due time', () => {
   assert.equal(
     getBackendNotificationSnoozeSeconds({ lane: 'todo', dueAt: now - 60 }, now),
     15 * 60,
+  );
+});
+
+test('previews backend notification snooze timing before the button is clicked', () => {
+  const now = 1_778_400_000;
+  const dueSoon = now + 60 * 60;
+
+  assert.match(
+    buildBackendNotificationSnoozeActionHint(
+      { lane: 'todo', sourceType: 'notification', dueAt: dueSoon },
+      now,
+    ) || '',
+    /^稍后按钮：\d+\/\d+ \d\d:\d\d 再提醒（延后45分钟）；不确认、不发送、不执行，也不修改原始证据。$/,
+  );
+  assert.match(
+    buildBackendNotificationContextMessage(
+      'todo',
+      'high',
+      dueSoon,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'notification',
+      now,
+    ),
+    /^待处理 · 高优先级 · 截止 \d+\/\d+ \d\d:\d\d · 稍后按钮：\d+\/\d+ \d\d:\d\d 再提醒（延后45分钟）；不确认、不发送、不执行，也不修改原始证据。$/,
+  );
+  assert.match(
+    buildBackendNotificationSnoozeActionHint(
+      { lane: 'todo', sourceType: 'notification', dueAt: now - 60 },
+      now,
+    ) || '',
+    /延后15分钟/,
+  );
+  assert.equal(
+    buildBackendNotificationSnoozeActionHint(
+      { lane: 'todo', sourceType: 'proposed_action', dueAt: dueSoon },
+      now,
+    ),
+    undefined,
   );
 });
 
@@ -370,12 +551,15 @@ test('uses dream digest payload details for notification previews', () => {
     body: '2 dream(s) generated this period',
     type: 'dream_digest',
     payload: {
+      dreamDigestScopeReceipt:
+        '覆盖周期：2026-05-18 至 2026-05-25\n本次纳入：2 个梦境文件',
       digestBody:
         '**Rooms rollout alignment**\nFollow up on the RingCentral rollout decision.',
     },
   });
 
-  assert.match(message, /Rooms rollout alignment/);
+  assert.match(message, /覆盖周期/);
+  assert.match(message, /本次纳入：2 个梦境文件/);
   assert.match(message, /2 dream\(s\) generated/);
 });
 

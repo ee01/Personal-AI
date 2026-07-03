@@ -1,0 +1,96 @@
+# Evidence Watch Contracts
+
+_最后更新: 2026-06-29_
+
+Evidence Watch Contracts / 证据守望契约用于处理“这条事实可能会变、需要持续复核、旧答案不能冒充当前事实”的场景。它不是新的用户待办页，而是 Ask、Reflection、Action Queue 和 confirm request 之间的后台契约层。
+
+## 大白话运行逻辑
+
+当 `EvidenceResolutionPlanner` 判断本地证据不足，并且缺口属于 `future_monitoring`、`owner_eta_gap`、`artifact_gap` 或 `disposition=watch` 时，Memory Service 会先创建或复用一条 `evidence_watch_contracts`：
+
+1. 用 `answerMemoryCanonicalKey`、`sourceAnchor + gapType` 或问题文本 hash 生成 `subjectKey`。
+2. 记录要观察的问题、权威来源、verifier、cadence、stop conditions 和影响面。
+3. 给后续 `delegate_openclaw` / `create_confirm_request` 生成 contract 级 idempotency key。
+4. 如果同一个事实缺口再次触发查证，复用已有 action，并写入 `skipped_duplicate` run receipt；这只证明去重成功，不代表来源已经复核无变化。
+5. 来源阻塞、发现变化、无变化或需要用户决策时，写入 `evidence_watch_runs`，Ask response 返回可选 `evidenceWatch` receipt。
+
+用户看到的重点是：这条事实是否已复核、权威来源是否可读、旧结论是否只能按历史引用，以及系统有没有避免重复外部查证。
+
+## 关键实现逻辑
+
+Evidence Watch 的核心不是“排一个后台任务”，而是给会变化的事实建立一条可复用、可追溯、不会冒充当前事实的契约。
+
+1. Contract 身份先绑定事实语义，再绑定触发场景。`subjectKey` 优先使用 `answerMemoryCanonicalKey`，其次使用显式 `sourceAnchor + gapType`，Reflection 场景可以稳定退回 `thread:<id>`；Ask 如果没有真实来源锚点，不把一次性 `ask:<requestId>` 当作事实身份，而是退回问题文本 hash，避免同一个事实缺口在每次追问时变成新 contract。
+2. `dedupeKey` 由 `subjectKey`、verifier kind、action type、gap type 和 cadence 组成。它描述“同一个事实缺口需要同一种复核”，因此同一 Jira estimate、owner ETA 或 artifact 状态反复被问到时，会复用已有守望契约和已有 action。
+3. `prepareActionForPlan` / `prepareActionForProposal` 会先创建或复用 contract，再把 action idempotency key 设为 `evidence_watch:<contractId>:<actionType>:verify`。Ask、Reflection 和 confirm request 都通过 `evidenceWatchContractId`、`sourceAnchor`、`gapType`、`reasonCode`、`routing=watch` 连接到同一条链路。
+4. Action Queue 创建前会查找可复用 idempotency key。命中时只写 `skipped_duplicate` run receipt 和 action link，不同步执行重复外部查证；这条 receipt 的含义是“已复用队列中的查证动作”，不是“权威来源已确认无变化”。
+5. Contract 状态只由真实复核类 run 推进：`checked_no_change` 进入 `quiet_no_change`，`checked_changed` 进入 `authority_changed`，`blocked` 进入 `source_blocked`，`needs_user_decision` 进入 `due`。`created`、`skipped_duplicate`、`skipped_budget` 这类生命周期/抑制收据会保留原状态，并且不更新 `lastCheckedAt`。
+
+这条规则保证用户在 Ask、Reflection、Action Queue 或 Confirm Requests 里看到的不是“系统好像做过什么”，而是清楚区分：已建立守望、已去重、已实际复核、来源阻塞、发现变化、需要用户决策。
+
+## 业内与研究参考
+
+- [ChatGPT Scheduled Tasks](https://help.openai.com/en/articles/10291617-tasks-in-chatgpt) 的 monitoring task 会周期性检查变化、记住前次运行，并在满足停止条件时停止；这说明“监控任务已建立”和“本次发现变化/无变化”必须分开呈现。
+- [Google Alerts](https://support.google.com/websearch/answer/4815696) 的产品心智是“新证据出现才提醒”，适合作为低打扰守望的参考，但它不证明旧页面内容已经被重新核验。
+- [FreshLLMs / FreshQA](https://aclanthology.org/2024.findings-acl.813/) 讨论了快速变化知识和 false premise 对 LLM factuality 的影响，因此 Evidence Watch 要把旧结论明确标成历史引用。
+- [Doyle 的 Truth Maintenance System](https://dspace.mit.edu/handle/1721.1/5733) 强调记录 belief 的理由链；本功能对应地保留 contract、authority source、run receipt 和 action link，而不是只留下一个最新答案。
+
+设计结论：`created`、`skipped_duplicate`、`skipped_budget` 是生命周期/去重收据，不会把 contract 标成“静默无变化”；只有真实 `checked_no_change` 复核才会进入 `quiet_no_change`。
+
+## 数据与 API
+
+核心表：
+
+- `evidence_watch_contracts`: contract 本体、subject key、verifier、state、来源、创建来源。
+- `evidence_watch_runs`: 每次复核或抑制重复动作的收据。
+- `evidence_watch_links`: contract 与 action、confirm request 等对象的关联。
+
+API：
+
+- `GET /api/v1/evidence-watch-contracts?state=all`
+- `GET /api/v1/evidence-watch-contracts/:id`
+- `GET /api/v1/evidence-watch-contracts/:id/runs`
+- `POST /api/v1/evidence-watch-contracts/:id/runs`
+
+Ask response 可选字段：
+
+```ts
+evidenceWatch?: {
+  contractId: string;
+  state: 'active' | 'quiet_no_change' | 'due' | 'authority_changed' | 'source_blocked' | 'paused' | 'archived';
+  label: string;
+  detail: string;
+  subjectKey: string;
+  lastCheckedAt?: number;
+  nextCheckAt?: number;
+  confirmRequestId?: string;
+  duplicateSuppressedCount: number;
+  runId?: string;
+  created?: boolean;
+}
+```
+
+## 接入点
+
+- Ask: `executeAskResolutionAction` 会在 watch plan 进入 action queue 前准备 contract 和 idempotency；命中已有 action 时不再同步执行重复查证。
+- Reflection: `ReflectionWorker` 把 watch resolution metadata 写进 proposal params；`ReflectionThreadService` 进队列前复用 contract 级 idempotency。
+- Confirm Requests: `routing=watch` 的手动 pending 查证会挂到同一 contract。
+- ActionExecutor: 创建 watch confirm request 后，如果 action params 有 `evidenceWatchContractId`，会反向链接 contract。
+
+## 收据边界
+
+- `created`: 只说明守望契约已建立，后续相同事实缺口会复用；不代表权威来源已复核。
+- `skipped_duplicate`: 只说明已有外部查证动作被复用；不更新 `lastCheckedAt`，也不把状态改成 `quiet_no_change`。
+- `checked_no_change` / `checked_changed` / `blocked`: 才代表本轮实际触达或尝试触达权威来源，并更新最近复核状态。
+
+## 验证
+
+功能依赖长期行为、去重和收据清晰度，因此有独立 deterministic eval：
+
+```bash
+npm --prefix memory-service test -- --run src/__tests__/evidenceWatchContractService.test.ts src/__tests__/api-evidence-watch-contracts.test.ts
+npm run eval:validate
+npm run eval:run -- --suite evidence-watch-contracts --no-repair
+```
+
+eval 样本覆盖 Jira estimate 可变化事实、AI tool 状态来源阻塞和重复外部查证合并。

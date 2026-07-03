@@ -27,7 +27,7 @@ test('calculates executor-driven one-time execution with the 08:00 default', () 
   assert.equal(getDefaultScheduleTimeLabel({ Push_Method: 'Bot' }), '08:00 后');
   assert.equal(
     getEmptyScheduleTimeHint({ Push_Method: 'Bot' }),
-    '留空则 08:00 后进入队列，每分钟执行一条。',
+    '留空则按 08:00 后排队。',
   );
   assert.equal(
     calculateScheduledMessageNextExecution(
@@ -46,7 +46,7 @@ test('describes AsMe empty schedule time with the 09:00 default', () => {
   assert.equal(getDefaultScheduleTimeLabel({ Push_Method: 'AsMe' }), '09:00');
   assert.equal(
     getEmptyScheduleTimeHint({ Push_Method: 'AsMe' }),
-    '留空则 09:00 左右推送。',
+    '留空则按 09:00 推送。',
   );
 });
 
@@ -69,7 +69,7 @@ test('only managed JiraAutomation API messages use the 08:00 executor queue defa
   assert.equal(getDefaultScheduleTimeLabel({ Push_Method: 'JiraAutomation' }), '09:00');
   assert.equal(
     getEmptyScheduleTimeHint({ Push_Method: 'JiraAutomation' }),
-    '留空则 09:00 左右推送。',
+    '留空则按 09:00 推送。',
   );
   assert.equal(
     calculateScheduledMessageNextExecution(

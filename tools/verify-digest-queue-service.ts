@@ -59,6 +59,7 @@ function clone<T>(value: T): T {
 
 const {
   CONCERNED_ITEMS_DIGEST_TASK_ID,
+  DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES,
   digestQueueService,
   enqueueConcernedItemDigest,
   getConcernedItemDigestReleaseAt,
@@ -256,6 +257,8 @@ async function verifyNotificationFailureKeepsItems() {
     const result = await digestQueueService.processTask(taskId);
     assert.equal(result.success, false);
     assert.match(result.error || '', /network down/);
+    assert.equal(result.queueSnapshot?.totalItems, 1);
+    assert.equal(result.queueSnapshot?.taskId, taskId);
 
     const remaining = await digestQueueService.peekQueue(taskId);
     assert.deepEqual(
@@ -294,13 +297,31 @@ function verifyTaskSchedulerSurfacesDigestFailures() {
       taskId: 'concerned_items_daily',
       success: false,
       itemsProcessed: 0,
+      itemsPending: 1,
       error: 'network down',
+      queueSnapshot: {
+        taskId: 'concerned_items_daily',
+        taskName: 'ConcernedItems 定时消息摘要',
+        totalItems: 1,
+        dueItems: 1,
+        sourceBreakdown: [{ label: 'Release risks', count: 1 }],
+        scheduleBreakdown: [
+          {
+            frequency: 'daily',
+            preferredHour: 8,
+            count: 1,
+          },
+        ],
+      },
     },
   ]);
   assert.equal(failedResult.success, false);
   assert.match(failedResult.error || '', /摘要推送失败 1\/1/);
   assert.match(failedResult.error || '', /network down/);
-  assert.equal(failedResult.summary, '0 个摘要任务成功，1 个失败，队列已保留');
+  assert.equal(
+    failedResult.summary,
+    '0 个摘要任务成功，1 个失败，队列已保留 1 条；保留明细：ConcernedItems 定时消息摘要 1 条（1 条已到期）（Release risks 1 条；每日 8:00）',
+  );
 
   const pendingResult = summarizeDigestQueueProcessResults([
     {
@@ -310,11 +331,29 @@ function verifyTaskSchedulerSurfacesDigestFailures() {
       itemsPending: 2,
       itemsDue: 0,
       nextReleaseAt: new Date(2026, 0, 2, 8, 0).toISOString(),
+      queueSnapshot: {
+        taskId: 'concerned_items_daily',
+        taskName: 'ConcernedItems 定时消息摘要',
+        totalItems: 2,
+        dueItems: 0,
+        nextReleaseAt: new Date(2026, 0, 2, 8, 0).toISOString(),
+        sourceBreakdown: [{ label: 'Release risks', count: 2 }],
+        scheduleBreakdown: [
+          {
+            frequency: 'daily',
+            preferredHour: 8,
+            count: 2,
+          },
+        ],
+      },
     },
   ]);
   assert.equal(pendingResult.success, true);
   assert.match(pendingResult.summary || '', /等待 2 条/);
   assert.match(pendingResult.summary || '', /最早/);
+  assert.match(pendingResult.summary || '', /等待明细/);
+  assert.match(pendingResult.summary || '', /Release risks 2 条/);
+  assert.match(pendingResult.summary || '', /每日 8:00 2 条/);
 }
 
 function verifyDigestBotMessageHasNoBrokenSourceLink() {
@@ -325,10 +364,13 @@ function verifyDigestBotMessageHasNoBrokenSourceLink() {
     messageContent: '📊 **定时消息摘要**\n共 2 条匹配消息',
     summary: '[ConcernedItems 定时消息摘要] 2 条汇总',
     datetime: '2026/05/24 08:00:00',
-    matchedRule: 'ConcernedItems 定时消息摘要',
+    matchedRule:
+      '规则5: [RULE_REF:manual:ppjoemwkn] [RULE_ID:4] AI相关讨论话题',
     mention: false,
   });
 
+  assert.match(message, /__关注项__：AI相关讨论话题/);
+  assert.doesNotMatch(message, /RULE_REF|RULE_ID|规则5/);
   assert.match(message, /__内容__：📊 \*\*定时消息摘要\*\*/);
   assert.doesNotMatch(message, /__在群__：/);
   assert.doesNotMatch(message, /app\.ringcentral\.com\/messages\/?[\)\s]/);
@@ -420,14 +462,17 @@ async function verifyProcessAllRunsRegisteredMapTasks() {
   assert.equal(result?.itemsProcessed, 1);
 }
 
-function verifyConcernedTaskRunsHourlyForPerRuleSchedules() {
+function verifyConcernedTaskUsesBoundedReleaseWindow() {
   registerConcernedItemsDigestTaskWithHour(18);
   const task = digestQueueService
     .getRegisteredTasks()
     .find((item) => item.id === CONCERNED_ITEMS_DIGEST_TASK_ID);
 
   assert.ok(task, 'concerned-items digest task should be registered');
-  assert.deepEqual(task?.frequency, { type: 'hourly' });
+  assert.deepEqual(task?.frequency, {
+    type: 'custom',
+    intervalMinutes: DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES,
+  });
 }
 
 async function verifyConcernedDigestUsesRuleIdForGrouping() {
@@ -460,10 +505,12 @@ async function verifyConcernedDigestUsesRuleIdForGrouping() {
     CONCERNED_ITEMS_DIGEST_TASK_ID,
   );
   queued[queued.length - 2].data.ruleId = 'rule-a';
-  queued[queued.length - 2].data.matchedRule = 'Release risks';
+  queued[queued.length - 2].data.matchedRule =
+    '[RULE_REF:manual:rule-a] [RULE_ID:4] Release risks';
   queued[queued.length - 2].sourceId = 'rule-a';
   queued[queued.length - 1].data.ruleId = 'rule-b';
-  queued[queued.length - 1].data.matchedRule = 'Release risks';
+  queued[queued.length - 1].data.matchedRule =
+    '规则5: [RULE_REF:manual:rule-b] [RULE_ID:4] Release risks';
   queued[queued.length - 1].sourceId = 'rule-b';
   storageState.digestQueues[CONCERNED_ITEMS_DIGEST_TASK_ID].items = queued;
 
@@ -473,6 +520,14 @@ async function verifyConcernedDigestUsesRuleIdForGrouping() {
   assert.equal(result.success, true);
 
   const message = sentMessages.at(-1) || '';
+  assert.match(
+    message,
+    /\*\*摘要回执\*\*: 本次释放 2 条已到时间的本地摘要/,
+  );
+  assert.match(message, /\*\*释放节奏\*\*: 每日 8:00/);
+  assert.match(message, /未到期条目继续留在本地队列/);
+  assert.match(message, /Bot 推送失败时不会清除本次条目/);
+  assert.doesNotMatch(message, /RULE_REF|RULE_ID|规则5/);
   const sectionCount =
     message.match(/\*\*关注项\*\*: Release risks/g)?.length || 0;
   assert.equal(
@@ -541,11 +596,24 @@ async function verifyPendingDigestQueueStatusIsExplainable() {
   assert.equal(statusSummary.totalItems, 2);
   assert.equal(statusSummary.dueItems, 0);
   assert.ok(statusSummary.nextReleaseAt, 'next release time should be exposed');
+  assert.equal(statusSummary.tasks[0]?.taskName, 'ConcernedItems 定时消息摘要');
+  assert.deepEqual(statusSummary.tasks[0]?.sourceBreakdown, [
+    { label: 'Release risks', count: 2 },
+  ]);
+  assert.equal(statusSummary.tasks[0]?.scheduleBreakdown?.[0]?.count, 2);
 
   const currentSummary = summarizeDigestQueueStatusSummary(statusSummary) || '';
   assert.match(currentSummary, /本地摘要队列 2 条/);
   assert.match(currentSummary, /暂无到期/);
   assert.match(currentSummary, /最早/);
+  assert.match(currentSummary, /ConcernedItems 定时消息摘要 2 条/);
+  assert.match(currentSummary, /Release risks 2 条/);
+  assert.match(currentSummary, /每日 .* 2 条/);
+  assert.match(currentSummary, /本地延迟摘要/);
+  assert.match(currentSummary, /通常 15 分钟内检查/);
+  assert.match(currentSummary, /查看\/刷新不立即发送/);
+  assert.match(currentSummary, /不写入 Memory Service/);
+  assert.match(currentSummary, /不确认通知/);
 
   const result = await digestQueueService.processTask(
     CONCERNED_ITEMS_DIGEST_TASK_ID,
@@ -558,6 +626,75 @@ async function verifyPendingDigestQueueStatusIsExplainable() {
     result.nextReleaseAt,
     'process result should keep next release time',
   );
+  assert.equal(result.queueSnapshot?.totalItems, 2);
+  assert.deepEqual(result.queueSnapshot?.sourceBreakdown, [
+    { label: 'Release risks', count: 2 },
+  ]);
+  const processSummary = summarizeDigestQueueProcessResults([result]);
+  assert.match(processSummary.summary || '', /等待明细/);
+  assert.match(processSummary.summary || '', /Release risks 2 条/);
+  assert.match(processSummary.summary || '', /每日 .* 2 条/);
+}
+
+async function verifyDueAndFutureDigestQueueStatusIsExplainable() {
+  storageState.digestQueues = {};
+  storageState.digestTaskStates = {};
+
+  registerConcernedItemsDigestTaskWithHour(8);
+
+  const now = new Date(2026, 0, 1, 9, 0);
+  await digestQueueService.enqueueBatch(CONCERNED_ITEMS_DIGEST_TASK_ID, [
+    makeDigestItem('due-digest', new Date(2026, 0, 1, 7, 0), {
+      enabled: true,
+      frequency: 'daily',
+      preferredHour: 8,
+    }),
+    makeDigestItem('future-digest', new Date(2026, 0, 1, 9, 1), {
+      enabled: true,
+      frequency: 'daily',
+      preferredHour: 10,
+    }),
+  ]);
+
+  const statusSummary = await digestQueueService.getQueueStatusSummary(now);
+  assert.equal(statusSummary.totalItems, 2);
+  assert.equal(statusSummary.dueItems, 1);
+  assert.ok(
+    statusSummary.nextReleaseAt,
+    'future digest item should keep the next release timestamp visible',
+  );
+  assert.equal(
+    new Date(statusSummary.nextReleaseAt || '').getHours(),
+    10,
+    'next release should point to the future item, not the due item',
+  );
+
+  const currentSummary = summarizeDigestQueueStatusSummary(statusSummary) || '';
+  assert.match(currentSummary, /本地摘要队列 2 条/);
+  assert.match(currentSummary, /1 条已到期/);
+  assert.match(currentSummary, /最早/);
+  assert.match(currentSummary, /Release risks 2 条/);
+  assert.match(currentSummary, /每日 8:00/);
+  assert.match(currentSummary, /每日 10:00/);
+  assert.match(currentSummary, /释放窗口回执/);
+  assert.match(currentSummary, /1 条已具备发送资格/);
+  assert.match(currentSummary, /等待 digest_queue_process 后台任务推送/);
+  assert.match(currentSummary, /查看或刷新状态不会立即发送摘要/);
+
+  const processSummary = summarizeDigestQueueProcessResults([
+    {
+      taskId: CONCERNED_ITEMS_DIGEST_TASK_ID,
+      success: true,
+      itemsProcessed: 0,
+      itemsPending: 2,
+      itemsDue: 1,
+      nextReleaseAt: statusSummary.nextReleaseAt,
+      queueSnapshot: statusSummary.tasks[0],
+    },
+  ]);
+  assert.match(processSummary.summary || '', /等待 2 条/);
+  assert.match(processSummary.summary || '', /释放窗口回执/);
+  assert.match(processSummary.summary || '', /1 条已具备发送资格/);
 }
 
 async function main() {
@@ -569,9 +706,10 @@ async function main() {
   verifyDigestBotMessageHasNoBrokenSourceLink();
   await verifyProcessTaskRemovesOnlyCollectedItems();
   await verifyProcessAllRunsRegisteredMapTasks();
-  verifyConcernedTaskRunsHourlyForPerRuleSchedules();
+  verifyConcernedTaskUsesBoundedReleaseWindow();
   await verifyConcernedDigestUsesRuleIdForGrouping();
   await verifyConcernedDigestEnqueueIsIdempotentPerRulePost();
+  await verifyDueAndFutureDigestQueueStatusIsExplainable();
   await verifyPendingDigestQueueStatusIsExplainable();
 
   console.log('verify-digest-queue-service: ok');

@@ -5,6 +5,7 @@ import {
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
   buildProjectDashboardDecisionBrief,
+  buildProjectDashboardSearchSummary,
   buildProjectDashboardViewFilterCounts,
   buildProjectDashboardViewReason,
   buildProjectDataQualitySummary,
@@ -15,19 +16,23 @@ import {
   buildProjectHealthSummary,
   buildProjectReviewQueueSummary,
   buildProjectReviewSummary,
+  buildProjectSyncActionStatus,
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
   buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
   buildProjectVisualizationSummary,
   compareProjectsByDashboardPriority,
+  filterProjectsByDashboardSearch,
   filterProjectsByDashboardView,
   parseProjectDashboardLaunchContext,
   projectMatchesDashboardLaunchContext,
+  sortProjectTimelineTasks,
   type ProjectDashboardViewFilter,
   type ProjectDashboardLaunchContext,
   type ProjectEvidenceGapType,
   type ProjectEvidenceRepairTarget,
+  type ProjectSyncLocalEvidenceRepairAction,
   type ProjectSyncReadiness,
   type ProjectStatusEvidenceItem,
 } from '../../utils/dashboardIntegration';
@@ -53,6 +58,7 @@ interface FishboneTask {
   eta?: string;   // YYYY-MM-DD
   desc?: string;
   anchorPosition?: number;
+  dependencies?: string[];
   platforms?: Partial<Record<PlatformKey, PlatformState>>;
   jira?: Array<{ key: string; title: string }>
 }
@@ -65,6 +71,8 @@ interface FishboneProject {
   platformConfig?: PlatformKey[]; // 默认 sdk/ios/android/qa，可选 dev
   lastStatusReviewAt?: string;
 }
+
+type ActionStatusTone = 'success' | 'warning' | 'error';
 
 type AddTaskState = {
   projectId: string;
@@ -102,9 +110,48 @@ type ImportReviewState = {
   projectNames: string[];
 };
 
+type ProjectReportTaskLike = ProjectReportFile['projects'][number]['project']['tasks'][number];
+
+type ProjectExportReceipt = {
+  fileName: string;
+  headline: string;
+  exportedAt: string;
+  metrics: string[];
+  evidenceGaps: string[];
+  projectNames: string[];
+  hiddenProjectCount: number;
+  boundary: string;
+};
+
+type ProjectSnapshotReceipt = {
+  state: 'fresh' | 'stale' | 'failed';
+  lastAttemptAt: Date;
+  lastSuccessAt?: Date;
+  projectCount?: number;
+  failedCount: number;
+  error?: string;
+};
+
+type JiraSourceDraft = {
+  key: string;
+  title: string;
+  error: string | null;
+};
+
+type LocalRepairReceipt = {
+  scope: 'add-task' | 'task-detail';
+  projectId?: string;
+  taskId?: string;
+  badge: string;
+  headline: string;
+  detail: string;
+  boundary: string;
+};
+
 const ALL_PLATFORM_KEYS: PlatformKey[] = ['sdk', 'ios', 'android', 'qa', 'dev'];
 const DEFAULT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
 const PLATFORM_STATUS_OPTIONS = ['pending', 'todo', 'progress', 'testing', 'blocked', 'done', 'rollout'];
+const JIRA_KEY_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
 
 const isPlatformKey = (value: string): value is PlatformKey => ALL_PLATFORM_KEYS.includes(value as PlatformKey);
 
@@ -119,6 +166,8 @@ const normalizeStatusToken = (status: string | undefined) =>
   String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
 
 const buildStatusClassToken = (status: string | undefined) => normalizeStatusToken(status) || 'unknown';
+
+const normalizeJiraSourceKey = (value: string) => value.trim().toUpperCase();
 
 const getEvidenceGapFocusTarget = (gapType: ProjectEvidenceGapType): ProjectEvidenceRepairTarget =>
   gapType === 'missing-source' ? 'source' : 'eta';
@@ -135,9 +184,66 @@ const isCompletedTask = (task: FishboneTask) => {
   return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
 };
 
+const isCompletedReportTask = (task: ProjectReportTaskLike) => {
+  const token = normalizeStatusToken(task.status);
+  return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
+};
+
 const hasValidDateOnly = (date: string | undefined) => {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
   return !Number.isNaN(new Date(`${date}T00:00:00`).getTime());
+};
+
+const hasReportTaskSource = (task: ProjectReportTaskLike) => {
+  const hasJira = Array.isArray(task.jira)
+    && task.jira.some(item => String(item?.key || '').trim() || String(item?.title || '').trim());
+  if (hasJira) return true;
+
+  return Object.values(task.platforms || {}).some(platform => {
+    const status = String(platform?.status || '').trim();
+    const assignee = String(platform?.assignee || '').trim();
+    const jira = String(platform?.jira || '').trim();
+
+    return Boolean((status && status !== 'unknown') || assignee || jira);
+  });
+};
+
+const buildProjectExportReceipt = (fileName: string, report: ProjectReportFile): ProjectExportReceipt => {
+  const reportProjects = Array.isArray(report.projects) ? report.projects : [];
+  const tasks = reportProjects.flatMap(entry => entry.project.tasks || []);
+  const activeTasks = tasks.filter(task => !isCompletedReportTask(task));
+  const missingEtaTasks = activeTasks.filter(task => !hasValidDateOnly(task.eta));
+  const missingSourceTasks = activeTasks.filter(task => !hasReportTaskSource(task));
+  const jiraIssueCount = reportProjects.reduce((total, entry) => total + (entry.summary?.jiraIssueCount || 0), 0);
+  const projectNames = reportProjects
+    .map(entry => entry.project.name || entry.project.id)
+    .filter(Boolean)
+    .slice(0, 3);
+  const hiddenProjectCount = Math.max(0, reportProjects.length - projectNames.length);
+  const scopeLabel = report.metadata?.scope === 'single_project' ? '单项目报告' : '全部项目报告';
+  const evidenceGaps = missingEtaTasks.length || missingSourceTasks.length
+    ? [
+        `缺 ETA ${missingEtaTasks.length}`,
+        `缺来源 ${missingSourceTasks.length}`,
+      ]
+    : ['活动任务证据完整'];
+
+  return {
+    fileName,
+    headline: `${scopeLabel}已导出：${report.summary.totalProjects} 项目 / ${report.summary.totalTasks} 任务`,
+    exportedAt: report.metadata?.exportedAt || new Date().toISOString(),
+    metrics: [
+      `项目 ${report.summary.totalProjects}`,
+      `任务 ${report.summary.totalTasks}`,
+      `里程碑 ${report.summary.totalMilestones}`,
+      `活动任务 ${activeTasks.length}`,
+      `Jira 来源 ${jiraIssueCount}`,
+    ],
+    evidenceGaps,
+    projectNames,
+    hiddenProjectCount,
+    boundary: '只下载当前浏览器本地工作台 JSON；不会同步、删除、恢复或写回 Memory Service、Jira、GitHub、Confluence。',
+  };
 };
 
 const parseDateOnly = (date: string | undefined): Date | null => {
@@ -223,7 +329,8 @@ const ProjectDashboard: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [env, setEnv] = useState<EnvConfigType | null>(null);
-  const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [actionStatus, setActionStatus] = useState<{ type: ActionStatusTone; text: string } | null>(null);
+  const [snapshotReceipt, setSnapshotReceipt] = useState<ProjectSnapshotReceipt | null>(null);
   const [statusDraftPreview, setStatusDraftPreview] = useState<{
     project: FishboneProject;
     draft: string;
@@ -235,10 +342,18 @@ const ProjectDashboard: React.FC = () => {
   const [syncReadiness, setSyncReadiness] = useState<ProjectSyncReadiness | null>(null);
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState<ProjectDashboardViewFilter>('all');
+  const [projectSearchQuery, setProjectSearchQuery] = useState('');
   const [focusExpanded, setFocusExpanded] = useState(false);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
   const [evidenceGapExpanded, setEvidenceGapExpanded] = useState(false);
   const [importReview, setImportReview] = useState<ImportReviewState | null>(null);
+  const [exportReceipt, setExportReceipt] = useState<ProjectExportReceipt | null>(null);
+  const [jiraSourceDraft, setJiraSourceDraft] = useState<JiraSourceDraft>({
+    key: '',
+    title: '',
+    error: null,
+  });
+  const [localRepairReceipt, setLocalRepairReceipt] = useState<LocalRepairReceipt | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
@@ -292,6 +407,10 @@ const ProjectDashboard: React.FC = () => {
     if (project && task) return { project, task };
     return null;
   }, [projects, detailTaskRef]);
+
+  useEffect(() => {
+    setJiraSourceDraft({ key: '', title: '', error: null });
+  }, [selectedTask?.project.id, selectedTask?.task.id]);
 
   const dashboardNow = useMemo(() => lastRefresh, [lastRefresh]);
 
@@ -450,10 +569,23 @@ const ProjectDashboard: React.FC = () => {
     [projects, dashboardNow, launchContext],
   );
 
-  const visibleProjects = useMemo(
-    () => filterProjectsByDashboardView(prioritizedProjects, projectFilter, dashboardNow),
-    [prioritizedProjects, projectFilter, dashboardNow],
+  const projectSearchSummary = useMemo(
+    () => buildProjectDashboardSearchSummary(prioritizedProjects, projectSearchQuery),
+    [prioritizedProjects, projectSearchQuery],
   );
+
+  const searchFilteredProjects = useMemo(
+    () => filterProjectsByDashboardSearch(prioritizedProjects, projectSearchQuery),
+    [prioritizedProjects, projectSearchQuery],
+  );
+
+  const visibleProjects = useMemo(
+    () => filterProjectsByDashboardView(searchFilteredProjects, projectFilter, dashboardNow),
+    [searchFilteredProjects, projectFilter, dashboardNow],
+  );
+  const hiddenSearchResultCount = projectSearchSummary
+    ? Math.max(0, projectSearchSummary.matchedProjects - visibleProjects.length)
+    : 0;
 
   const runDecisionBriefAction = () => {
     const action = decisionBrief.primaryAction;
@@ -484,9 +616,42 @@ const ProjectDashboard: React.FC = () => {
     getEnvConfig().then(setEnv).catch(() => setEnv(null));
   }, []);
 
-  const showActionStatus = (type: 'success' | 'error', text: string) => {
+  const showActionStatus = (type: ActionStatusTone, text: string) => {
     setActionStatus({ type, text });
   };
+
+  const snapshotReceiptCopy = useMemo(() => {
+    if (!snapshotReceipt) return null;
+
+    const lastSuccessTime = snapshotReceipt.lastSuccessAt?.toLocaleTimeString();
+    const attemptTime = snapshotReceipt.lastAttemptAt.toLocaleTimeString();
+    const projectCount = snapshotReceipt.projectCount ?? projects.length;
+
+    if (snapshotReceipt.state === 'fresh') {
+      return {
+        pill: '本地快照',
+        headline: `已读取 ${projectCount} 个项目 · ${attemptTime}`,
+        detail: '刷新只重读当前浏览器本地工作台；外部来源状态仍以“同步/检查数据源”为准。',
+        boundary: '不会同步、清空、覆盖或写回 Memory Service、Jira、GitHub、Confluence。',
+      };
+    }
+
+    if (lastSuccessTime) {
+      return {
+        pill: snapshotReceipt.state === 'stale' ? '快照可能过期' : '刷新失败',
+        headline: `刷新失败，仍显示 ${lastSuccessTime} 的本地快照`,
+        detail: `${snapshotReceipt.error || '本次没有读到新的本地项目数据'}；失败 ${snapshotReceipt.failedCount} 次。`,
+        boundary: '已保留现有页面数据；不会清空、覆盖或同步外部系统。',
+      };
+    }
+
+    return {
+      pill: '快照未载入',
+      headline: `刷新失败 · ${attemptTime}`,
+      detail: snapshotReceipt.error || '本次没有读到本地项目数据。',
+      boundary: '没有写入、删除、恢复或同步 Memory Service、Jira、GitHub、Confluence。',
+    };
+  }, [projects.length, snapshotReceipt]);
 
   const downloadTextFile = (fileName: string, mimeType: string, content: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -534,14 +699,33 @@ const ProjectDashboard: React.FC = () => {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'GET_PROJECT_DATA' });
       if (res?.success) {
-        setProjects(res.projects || []);
-        setLastRefresh(new Date());
-      } else if (!options?.silent) {
+        const loadedProjects = Array.isArray(res.projects) ? res.projects : [];
+        const refreshedAt = new Date();
+        setProjects(loadedProjects);
+        setLastRefresh(refreshedAt);
+        setSnapshotReceipt({
+          state: 'fresh',
+          lastAttemptAt: refreshedAt,
+          lastSuccessAt: refreshedAt,
+          projectCount: loadedProjects.length,
+          failedCount: 0,
+        });
+      } else {
         throw new Error(res?.error || '刷新项目数据失败');
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : '刷新项目数据失败';
+      const failedAt = new Date();
+      setSnapshotReceipt(prev => ({
+        state: prev?.lastSuccessAt ? 'stale' : 'failed',
+        lastAttemptAt: failedAt,
+        lastSuccessAt: prev?.lastSuccessAt,
+        projectCount: prev?.projectCount,
+        failedCount: (prev?.failedCount || 0) + 1,
+        error: message,
+      }));
       if (!options?.silent) {
-        showActionStatus('error', error instanceof Error ? error.message : '刷新项目数据失败');
+        showActionStatus('error', message);
       }
     } finally {
       if (showLoadingState) {
@@ -569,13 +753,73 @@ const ProjectDashboard: React.FC = () => {
     projectId: string,
     taskId: string,
     evidenceFocus?: ProjectEvidenceRepairTarget,
+    repairReceipt?: LocalRepairReceipt,
   ) => {
     setDetailTaskRef({ projectId, taskId });
     setPendingEvidenceFocus(evidenceFocus || null);
+    setLocalRepairReceipt(repairReceipt || null);
   };
   const closeDetail = () => {
     setDetailTaskRef(null);
     setPendingEvidenceFocus(null);
+    setLocalRepairReceipt(prev => prev?.scope === 'task-detail' ? null : prev);
+  };
+
+  const closeAddTaskModal = () => {
+    setShowAddTask(null);
+    setLocalRepairReceipt(prev => prev?.scope === 'add-task' ? null : prev);
+  };
+
+  const scrollProjectCardIntoView = (projectId?: string) => {
+    if (!projectId) return;
+
+    window.setTimeout(() => {
+      document
+        .getElementById(`project-card-${projectId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
+  const runLocalEvidenceRepairAction = (action: ProjectSyncLocalEvidenceRepairAction) => {
+    if (action.type === 'plan-project' && action.projectId) {
+      setProjectFilter('all');
+      setNewTaskTitle('');
+      setNewTaskType('task');
+      setNewTaskEta('');
+      setLocalRepairReceipt({
+        scope: 'add-task',
+        projectId: action.projectId,
+        badge: '本地修复入口',
+        headline: `已打开 ${action.projectName || '该项目'} 的首个任务填写入口`,
+        detail: '来自数据源检查的待规划项目；这里只是在当前浏览器工作台补活动任务、ETA 和来源。',
+        boundary: '不会创建 Jira/GitHub/Confluence 任务，也不会反写 Memory Service；保存任务前仍只是本页草稿。',
+      });
+      setShowAddTask({
+        projectId: action.projectId,
+        position: 50,
+      });
+      scrollProjectCardIntoView(action.projectId);
+      showActionStatus('success', `${action.projectName || '该项目'} 已打开本地首个任务填写入口；未写回外部系统`);
+      return;
+    }
+
+    if (action.projectId && action.taskId) {
+      const focusLabel = action.evidenceFocus === 'source' ? '来源' : 'ETA';
+      const repairReceipt: LocalRepairReceipt = {
+        scope: 'task-detail',
+        projectId: action.projectId,
+        taskId: action.taskId,
+        badge: '本地修复入口',
+        headline: `已打开 ${action.taskTitle || '该任务'} 的${focusLabel}补齐位置`,
+        detail: action.evidenceFocus === 'source'
+          ? '这里可以补本地 Jira key、平台状态、负责人或平台 Jira，用来支撑 Project Dashboard 的规则化状态判断。'
+          : '这里可以补可复核 ETA，用来支撑 Project Dashboard 的规则化状态判断。',
+        boundary: '不会读取或写回 Jira/GitHub/Confluence/Memory Service；需要保存任务后才更新当前浏览器工作台。',
+      };
+      setProjectFilter('all');
+      openDetail(action.projectId, action.taskId, action.evidenceFocus, repairReceipt);
+      showActionStatus('success', `已打开本地${focusLabel}补齐位置；未写回外部系统`);
+    }
   };
 
   useEffect(() => {
@@ -603,24 +847,49 @@ const ProjectDashboard: React.FC = () => {
       if (!response?.success) {
         throw new Error(response?.error || '保存任务失败');
       }
+      return true;
     } catch (error) {
       showActionStatus('error', error instanceof Error ? error.message : '保存任务失败');
       loadProjects();
+      return false;
     }
   };
 
-  const addJira = async (projectId: string, task: FishboneTask) => {
-    const key = prompt('请输入 JIRA Key (例如: PROJ-123):')?.trim();
-    if (!key) return;
-    const title = prompt('请输入 JIRA 标题（可选）:')?.trim() || key;
+  const addJiraSource = async (projectId: string, task: FishboneTask) => {
+    const key = normalizeJiraSourceKey(jiraSourceDraft.key);
+    const title = jiraSourceDraft.title.trim() || key;
+
+    if (!key) {
+      setJiraSourceDraft(prev => ({ ...prev, error: '请输入 Jira key' }));
+      return;
+    }
+
+    if (!JIRA_KEY_PATTERN.test(key)) {
+      setJiraSourceDraft(prev => ({ ...prev, key, error: '请输入类似 MTR-148115 的 Jira key' }));
+      return;
+    }
+
+    const alreadyLinked = (task.jira || []).some(item => normalizeJiraSourceKey(item.key) === key);
+    if (alreadyLinked) {
+      setJiraSourceDraft(prev => ({ ...prev, key, error: `${key} 已经关联到当前任务` }));
+      return;
+    }
+
     const newList = [...(task.jira || []), { key, title }];
-    await updateTask(projectId, task.type, task.id, { jira: newList });
+    const saved = await updateTask(projectId, task.type, task.id, { jira: newList });
+    if (!saved) return;
+    setJiraSourceDraft({ key: '', title: '', error: null });
+    showActionStatus('success', `已把 ${key} 作为本地 Jira 来源记录到 ${task.title}`);
   };
 
   const removeJira = async (projectId: string, task: FishboneTask, index: number) => {
     const list = [...(task.jira || [])];
+    const [removed] = list.slice(index, index + 1);
     list.splice(index, 1);
-    await updateTask(projectId, task.type, task.id, { jira: list });
+    const saved = await updateTask(projectId, task.type, task.id, { jira: list });
+    if (saved && removed?.key) {
+      showActionStatus('success', `已移除本地 Jira 来源 ${removed.key}`);
+    }
   };
 
   const handleSuggest = async () => {
@@ -729,11 +998,8 @@ const ProjectDashboard: React.FC = () => {
         setSyncPanelOpen(true);
       }
 
-      const memorySource = result?.sources?.find(source => source.source === 'memory');
-      showActionStatus(
-        memorySource?.status === 'not_configured' ? 'error' : 'success',
-        result?.summary || '数据源已同步/检查',
-      );
+      const syncActionStatus = buildProjectSyncActionStatus(result);
+      showActionStatus(syncActionStatus.type, syncActionStatus.text);
       await loadProjects({ silent: true });
     } catch (error) {
       console.error('同步数据失败:', error);
@@ -746,6 +1012,7 @@ const ProjectDashboard: React.FC = () => {
   // 导出报告
   const handleExportReport = async (projectId = 'all') => {
     setIsExporting(true);
+    setExportReceipt(null);
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'QUICK_ACTION',
@@ -758,7 +1025,7 @@ const ProjectDashboard: React.FC = () => {
       }
 
       const result = response.result;
-      if (!result?.success || !result?.serializedData || !result?.fileName) {
+      if (!result?.success || !result?.serializedData || !result?.fileName || !result?.data) {
         throw new Error(result?.error || '导出结果不完整');
       }
 
@@ -767,6 +1034,7 @@ const ProjectDashboard: React.FC = () => {
         result.mimeType || 'application/json;charset=utf-8',
         result.serializedData,
       );
+      setExportReceipt(buildProjectExportReceipt(result.fileName, result.data as ProjectReportFile));
       showActionStatus('success', projectId === 'all' ? '全部项目报告已导出' : `项目 ${projectId} 报告已导出`);
     } catch (error) {
       console.error('导出报告失败:', error);
@@ -993,6 +1261,7 @@ const ProjectDashboard: React.FC = () => {
         throw new Error(res?.error || '创建任务失败');
       }
       setShowAddTask(null);
+      setLocalRepairReceipt(prev => prev?.scope === 'add-task' ? null : prev);
       setNewTaskTitle('');
       setNewTaskType('task');
       setNewTaskEta('');
@@ -1052,7 +1321,7 @@ const ProjectDashboard: React.FC = () => {
     if (!project) return;
     
     // 计算新的任务顺序位置
-    const allTasks = project.tasks.sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+    const allTasks = sortProjectTimelineTasks(project.tasks);
     const newIndex = Math.round((newPosition / 100) * (allTasks.length - 1));
     
     console.log(`任务 "${task.title}" 拖拽到新位置: ${newPosition.toFixed(1)}%, 新索引: ${newIndex}`);
@@ -1222,7 +1491,7 @@ const ProjectDashboard: React.FC = () => {
       return clampPercent(task.anchorPosition, 2, 98);
     }
     
-    const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+    const tasks = sortProjectTimelineTasks(project.tasks);
     const index = tasks.findIndex(t => t.id === taskId);
     
     return computeLeftPercent(index, tasks.length);
@@ -1333,7 +1602,7 @@ const ProjectDashboard: React.FC = () => {
                 newPositions[positionKey] = clampPercent(task.anchorPosition, 2, 98);
               } else {
                 // 使用默认的均匀分布锚点位置
-                const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+                const tasks = sortProjectTimelineTasks(project.tasks);
                 const taskIndex = tasks.findIndex(t => t.id === task.id);
                 newPositions[positionKey] = computeLeftPercent(taskIndex, tasks.length);
               }
@@ -1359,7 +1628,7 @@ const ProjectDashboard: React.FC = () => {
     if (!project) return 'top';
     
     // 按照ETA排序，如果没有ETA则按ID排序
-    const sortedTasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+    const sortedTasks = sortProjectTimelineTasks(project.tasks);
     const taskIndex = sortedTasks.findIndex(t => t.id === taskId);
     
     // 奇数索引在上方，偶数索引在下方（或者反过来）
@@ -1427,6 +1696,22 @@ const ProjectDashboard: React.FC = () => {
         </div>
       </div>
 
+      {snapshotReceiptCopy && (
+        <div
+          className={`snapshot-receipt ${snapshotReceipt?.state || 'fresh'}`}
+          role="status"
+          aria-live="polite"
+          aria-label="项目快照回执"
+        >
+          <span>{snapshotReceiptCopy.pill}</span>
+          <div>
+            <strong>{snapshotReceiptCopy.headline}</strong>
+            <em>{snapshotReceiptCopy.detail}</em>
+          </div>
+          <small>{snapshotReceiptCopy.boundary}</small>
+        </div>
+      )}
+
       <div className="data-source-banner" role="status" aria-live="polite">
         <div className="data-source-copy">
           <span className="data-source-pill">本地工作台</span>
@@ -1439,6 +1724,40 @@ const ProjectDashboard: React.FC = () => {
           {isSyncing ? '同步中...' : '同步/检查数据源'}
         </button>
       </div>
+
+      {exportReceipt && (
+        <div className="export-receipt" role="status" aria-live="polite" aria-label="导出报告回执">
+          <div className="export-receipt-copy">
+            <span>导出报告回执</span>
+            <div>
+              <strong>{exportReceipt.headline}</strong>
+              <em>
+                {exportReceipt.fileName} · {new Date(exportReceipt.exportedAt).toLocaleTimeString()}
+              </em>
+            </div>
+          </div>
+          <div className="export-receipt-metrics" aria-label="导出统计">
+            {exportReceipt.metrics.map(metric => (
+              <span key={metric}>{metric}</span>
+            ))}
+          </div>
+          <div className="export-receipt-gaps" aria-label="导出证据缺口">
+            {exportReceipt.evidenceGaps.map(gap => (
+              <span key={gap}>{gap}</span>
+            ))}
+          </div>
+          <div className="export-receipt-projects" aria-label="导出项目范围">
+            <span>范围</span>
+            {exportReceipt.projectNames.map(projectName => (
+              <strong key={projectName}>{projectName}</strong>
+            ))}
+            {exportReceipt.hiddenProjectCount > 0 && (
+              <strong>另 {exportReceipt.hiddenProjectCount} 个项目</strong>
+            )}
+          </div>
+          <p>{exportReceipt.boundary}</p>
+        </div>
+      )}
 
       {launchContext.hasContext && (
         <div className={`launch-context-panel ${launchContextProject ? 'found' : 'missing'}`} role="status" aria-live="polite">
@@ -1478,6 +1797,58 @@ const ProjectDashboard: React.FC = () => {
             <button className="data-source-close" type="button" onClick={() => setSyncPanelOpen(false)}>
               收起
             </button>
+          </div>
+          <div className={`data-source-scope ${syncReadiness.sourceScope.state}`} role="status" aria-label="本次数据源检查口径">
+            <div className="data-source-scope-copy">
+              <span>{syncReadiness.sourceScope.badge}</span>
+              <div>
+                <strong>{syncReadiness.sourceScope.headline}</strong>
+                <p>{syncReadiness.sourceScope.detail}</p>
+              </div>
+            </div>
+            <div className="data-source-scope-metrics" aria-label="数据源读取统计">
+              {syncReadiness.sourceScope.metrics.map(metric => (
+                <span key={metric}>{metric}</span>
+              ))}
+            </div>
+            <small>{syncReadiness.sourceScope.boundary}</small>
+          </div>
+          <div className={`data-source-evidence ${syncReadiness.localEvidence.state}`}>
+            <div className="data-source-evidence-copy">
+              <span>{syncReadiness.localEvidence.badge}</span>
+              <div>
+                <strong>{syncReadiness.localEvidence.headline}</strong>
+                <p>{syncReadiness.localEvidence.detail}</p>
+              </div>
+            </div>
+            <div className="data-source-evidence-metrics" aria-label="本地证据指标">
+              {syncReadiness.localEvidence.metrics.map(metric => (
+                <span key={metric}>{metric}</span>
+              ))}
+            </div>
+            {!!syncReadiness.localEvidence.repairTargets?.length && (
+              <div className="data-source-evidence-repairs" aria-label="优先补齐证据">
+                {syncReadiness.localEvidence.repairTargets.map(target => (
+                  <span key={target}>{target}</span>
+                ))}
+              </div>
+            )}
+            {!!syncReadiness.localEvidence.repairActions?.length && (
+              <div className="data-source-evidence-actions" aria-label="证据修复入口">
+                {syncReadiness.localEvidence.repairActions.map(action => (
+                  <button
+                    key={`${action.type}-${action.projectId || 'project'}-${action.taskId || action.projectName || action.label}`}
+                    type="button"
+                    className={`data-source-evidence-action ${action.type}`}
+                    title={action.detail}
+                    onClick={() => runLocalEvidenceRepairAction(action)}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="data-source-evidence-next">{syncReadiness.localEvidence.nextStep}</div>
           </div>
           <div className="data-source-grid">
             {syncReadiness.sources.map(source => (
@@ -1748,6 +2119,52 @@ const ProjectDashboard: React.FC = () => {
               <strong>{projectFilterCounts[filter]}</strong>
             </button>
           ))}
+          <label className="project-local-search">
+            <span>本地查找</span>
+            <input
+              type="search"
+              value={projectSearchQuery}
+              onChange={event => setProjectSearchQuery(event.target.value)}
+              placeholder="项目、任务、Jira、负责人，可多词"
+              aria-label="在当前本地项目快照中查找"
+            />
+            {projectSearchQuery.trim() && (
+              <button
+                type="button"
+                className="project-local-search-clear"
+                onClick={() => setProjectSearchQuery('')}
+                aria-label="清除项目查找"
+              >
+                清除
+              </button>
+            )}
+          </label>
+          {projectSearchSummary && (
+            <div className="project-search-receipt" role="status" aria-live="polite">
+              <strong>{projectSearchSummary.matchedProjects}/{projectSearchSummary.totalProjects} 命中</strong>
+              <span>
+                当前视图显示 {visibleProjects.length} 个；查找 “{projectSearchSummary.query}”
+              </span>
+              {projectSearchSummary.matchHints.length > 0 && (
+                <div className="project-search-hints" aria-label="本地查找命中线索">
+                  {projectSearchSummary.matchHints.map((hint) => (
+                    <span key={hint}>{hint}</span>
+                  ))}
+                </div>
+              )}
+              {projectSearchSummary.queryTerms.length > 1 && (
+                <small className="project-search-mode">
+                  已按 {projectSearchSummary.queryTerms.length} 个关键词同时收窄同一项目；这是本地快照过滤，不会扩大到外部系统。
+                </small>
+              )}
+              {hiddenSearchResultCount > 0 && (
+                <small>
+                  当前“{PROJECT_DASHBOARD_VIEW_FILTER_LABELS[projectFilter]}”视图隐藏 {hiddenSearchResultCount} 个本地命中；切到“全部”可查看所有查找结果。
+                </small>
+              )}
+              <em>{projectSearchSummary.boundary}</em>
+            </div>
+          )}
         </div>
       )}
 
@@ -1764,17 +2181,29 @@ const ProjectDashboard: React.FC = () => {
           )}
           {projects.length > 0 && visibleProjects.length === 0 && (
             <div className="empty-projects filter-empty">
-              <h2>当前视图没有项目</h2>
-              <p>切换到全部项目，或在项目里补充任务 ETA 和阻塞状态后再筛选。</p>
-              <button className="control-button primary" onClick={() => setProjectFilter('all')}>
-                查看全部项目
-              </button>
+              <h2>{projectSearchQuery.trim() ? '当前查找没有项目' : '当前视图没有项目'}</h2>
+              <p>
+                {projectSearchQuery.trim()
+                  ? projectSearchSummary?.matchedProjects
+                    ? `本地快照有 ${projectSearchSummary.matchedProjects} 个命中，但当前“${PROJECT_DASHBOARD_VIEW_FILTER_LABELS[projectFilter]}”视图没有显示；切到全部视图或清除查找后继续。`
+                    : '当前浏览器本地项目快照没有命中；不会临时读取 Jira/GitHub/Confluence 或 Memory Service，可清除查找后补充本地项目、任务、Jira key、负责人或里程碑。'
+                  : '切换到全部项目，或在项目里补充任务 ETA 和阻塞状态后再筛选。'}
+              </p>
+              <div className="empty-actions">
+                {projectSearchQuery.trim() && (
+                  <button className="control-button secondary" onClick={() => setProjectSearchQuery('')}>
+                    清除查找
+                  </button>
+                )}
+                <button className="control-button primary" onClick={() => setProjectFilter('all')}>
+                  查看全部项目
+                </button>
+              </div>
             </div>
           )}
           {visibleProjects.map(project => {
             const milestones = project.milestones || [];
-            const tasks = [...(project.tasks || [])]
-              .sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+            const tasks = sortProjectTimelineTasks(project.tasks);
             const health = buildProjectHealthSummary(project, dashboardNow);
             const freshness = buildProjectFreshnessSummary(project, dashboardNow);
             const review = buildProjectReviewSummary(project, dashboardNow);
@@ -1785,6 +2214,7 @@ const ProjectDashboard: React.FC = () => {
             const chartSummary = buildProjectVisualizationSummary(project, { now: dashboardNow });
             return (
               <div
+                id={`project-card-${project.id}`}
                 className={`project-card ${projectMatchesDashboardLaunchContext(project, launchContext) ? 'launch-highlight' : ''}`}
                 key={project.id}
               >
@@ -1906,6 +2336,16 @@ const ProjectDashboard: React.FC = () => {
                     <span>图表概览</span>
                     <strong>{chartSummary.headline}</strong>
                     <em>{chartSummary.nextStep}</em>
+                  </div>
+                  <div
+                    className={`chart-scope-receipt ${chartSummary.receipt.state}`}
+                    role="status"
+                    aria-label={`${project.name} 图表依据`}
+                  >
+                    <span>{chartSummary.receipt.label}</span>
+                    <strong>{chartSummary.receipt.headline}</strong>
+                    <em>{chartSummary.receipt.detail}</em>
+                    <small>{chartSummary.receipt.boundary}</small>
                   </div>
                   <div className="chart-insight-grid">
                     {chartSummary.panels.map(panel => (
@@ -2325,8 +2765,20 @@ const ProjectDashboard: React.FC = () => {
             <div className="zoom-header">
               <h2 className="zoom-title">{selectedTask.task.title}</h2>
               <button className="close-btn" onClick={closeDetail}>×</button>
-                  </div>
+            </div>
             <div className="zoom-body">
+              {localRepairReceipt?.scope === 'task-detail'
+                && localRepairReceipt.projectId === selectedTask.project.id
+                && localRepairReceipt.taskId === selectedTask.task.id && (
+                <div className="local-repair-receipt" role="status" aria-label="本地证据修复回执">
+                  <span>{localRepairReceipt.badge}</span>
+                  <div>
+                    <strong>{localRepairReceipt.headline}</strong>
+                    <p>{localRepairReceipt.detail}</p>
+                    <small>{localRepairReceipt.boundary}</small>
+                  </div>
+                </div>
+              )}
               {selectedTaskEvidenceState && (
                 <div className={`detail-section evidence-repair-section ${selectedTaskEvidenceState.hasEta && selectedTaskEvidenceState.sourceSummary.hasSource ? 'complete' : 'missing'}`}>
                   <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--warning)' }}>E</span>证据修复</h3>
@@ -2530,7 +2982,62 @@ const ProjectDashboard: React.FC = () => {
                     )}
 
               <div className="detail-section">
-                <h3 className="section-title" data-evidence-field="jira-source"><span className="section-icon" style={{ background: 'var(--success)' }}>🎯</span>关联 JIRA <button className="add-jira-btn" onClick={() => addJira(selectedTask.project.id, selectedTask.task)}>➕</button></h3>
+                <h3 className="section-title" data-evidence-field="jira-source"><span className="section-icon" style={{ background: 'var(--success)' }}>🎯</span>关联 JIRA</h3>
+                <div className="jira-source-panel">
+                  <div className="jira-source-boundary">
+                    <strong>本地 Jira 来源</strong>
+                    <span>这里只给当前任务补一条可复核来源；不会读取或写回 Jira。</span>
+                  </div>
+                  <div className="jira-source-form">
+                    <label>
+                      <span>Jira Key</span>
+                      <input
+                        className="edit-input"
+                        aria-label="Jira Key"
+                        data-evidence-control="jira-key"
+                        placeholder="MTR-148115"
+                        value={jiraSourceDraft.key}
+                        onChange={e => setJiraSourceDraft(prev => ({
+                          ...prev,
+                          key: e.target.value,
+                          error: null,
+                        }))}
+                        onBlur={() => setJiraSourceDraft(prev => ({
+                          ...prev,
+                          key: normalizeJiraSourceKey(prev.key),
+                        }))}
+                      />
+                    </label>
+                    <label>
+                      <span>标题</span>
+                      <input
+                        className="edit-input"
+                        aria-label="Jira 标题"
+                        data-evidence-control="jira-title"
+                        placeholder="选填；不填时使用 Jira Key"
+                        value={jiraSourceDraft.title}
+                        onChange={e => setJiraSourceDraft(prev => ({
+                          ...prev,
+                          title: e.target.value,
+                          error: null,
+                        }))}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="add-jira-btn"
+                      disabled={!jiraSourceDraft.key.trim()}
+                      onClick={() => addJiraSource(selectedTask.project.id, selectedTask.task)}
+                    >
+                      添加来源
+                    </button>
+                  </div>
+                  {jiraSourceDraft.error && (
+                    <div className="jira-source-error" role="alert">
+                      {jiraSourceDraft.error}
+                    </div>
+                  )}
+                </div>
                 <div className="jira-list">
                   {(selectedTask.task.jira || []).map((j, idx) => (
                     <div className="jira-item-editable" key={j.key + idx}>
@@ -2553,13 +3060,24 @@ const ProjectDashboard: React.FC = () => {
 
       {/* 添加任务弹窗 */}
       {showAddTask && (
-        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) setShowAddTask(null); }}>
+        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) closeAddTaskModal(); }}>
           <div className="zoom-content" style={{ width: 500 }}>
             <div className="zoom-header">
               <h2 className="zoom-title">添加新任务</h2>
-              <button className="close-btn" onClick={() => setShowAddTask(null)}>×</button>
+              <button className="close-btn" onClick={closeAddTaskModal}>×</button>
             </div>
             <div className="zoom-body">
+              {localRepairReceipt?.scope === 'add-task'
+                && localRepairReceipt.projectId === showAddTask.projectId && (
+                <div className="local-repair-receipt" role="status" aria-label="本地证据修复回执">
+                  <span>{localRepairReceipt.badge}</span>
+                  <div>
+                    <strong>{localRepairReceipt.headline}</strong>
+                    <p>{localRepairReceipt.detail}</p>
+                    <small>{localRepairReceipt.boundary}</small>
+                  </div>
+                </div>
+              )}
               <div className="detail-section">
                 <div className="info-grid">
                   <div className="info-item">
@@ -2663,12 +3181,23 @@ const ProjectDashboard: React.FC = () => {
         .last-refresh { font-size: 12px; color: var(--text-muted); }
         .dashboard-status { margin-top: 10px; font-size: 13px; font-weight: 600; }
         .dashboard-status.success { color: #1f7a43; }
+        .dashboard-status.warning { color: #b7791f; }
         .dashboard-status.error { color: #c0392b; }
         .notification-area { position: fixed; top: 16px; right: 16px; z-index: 1000; max-width: 400px; pointer-events: none; }
         .refresh-btn { padding: 8px 16px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
         .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; background: var(--primary-light); color: var(--primary); border: none; cursor: pointer; }
         .badge.review-badge { background: #ecfdf5; color: #047857; }
         .badge:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .snapshot-receipt { margin: 0 20px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(220px, .9fr); gap: 10px 14px; align-items: center; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--success); border-radius: 8px; padding: 12px 16px; box-shadow: var(--shadow); }
+        .snapshot-receipt.stale { border-left-color: var(--warning); background: #fffbeb; }
+        .snapshot-receipt.failed { border-left-color: var(--danger); background: #fff7f7; }
+        .snapshot-receipt > span { border-radius: 999px; padding: 4px 9px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 12px; font-weight: 800; white-space: nowrap; }
+        .snapshot-receipt.stale > span { background: #fef3c7; border-color: #fde68a; color: #92400e; }
+        .snapshot-receipt.failed > span { background: #fee2e2; border-color: #fecaca; color: #b91c1c; }
+        .snapshot-receipt strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; overflow-wrap: anywhere; }
+        .snapshot-receipt em { display: block; color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .snapshot-receipt small { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 
         .data-source-banner { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--info); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
         .data-source-copy { min-width: 0; display: flex; align-items: center; gap: 12px; color: var(--text); }
@@ -2684,6 +3213,33 @@ const ProjectDashboard: React.FC = () => {
         .data-source-panel-header span { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
         .data-source-close { flex: 0 0 auto; border: 1px solid var(--border); background: var(--bg); color: var(--text-muted); border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 700; }
         .data-source-close:hover { border-color: var(--primary); color: var(--primary); }
+        .data-source-scope { margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: #f8fafc; display: grid; gap: 9px; }
+        .data-source-scope.ready { border-left-color: var(--success); background: #f0fdf4; }
+        .data-source-scope.attention { border-left-color: var(--warning); background: #fffbeb; }
+        .data-source-scope.empty { border-left-color: var(--text-muted); background: #f8fafc; }
+        .data-source-scope-copy { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+        .data-source-scope-copy > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .data-source-scope-copy strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+        .data-source-scope-copy p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .data-source-scope-metrics { display: flex; flex-wrap: wrap; gap: 6px; }
+        .data-source-scope-metrics span { border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+        .data-source-scope small { color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .data-source-evidence { margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: #f8fafc; display: grid; gap: 9px; }
+        .data-source-evidence.ready { border-left-color: var(--success); background: #f0fdf4; }
+        .data-source-evidence.attention { border-left-color: var(--warning); background: #fffbeb; }
+        .data-source-evidence.empty { border-left-color: var(--text-muted); background: #f8fafc; }
+        .data-source-evidence-copy { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+        .data-source-evidence-copy > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .data-source-evidence-copy strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+        .data-source-evidence-copy p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .data-source-evidence-metrics, .data-source-evidence-repairs, .data-source-evidence-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+        .data-source-evidence-metrics span, .data-source-evidence-repairs span { border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+        .data-source-evidence-repairs span { color: #92400e; border-color: #fde68a; }
+        .data-source-evidence-action { border: 1px solid #bfdbfe; border-radius: 6px; background: var(--card); color: #1d4ed8; padding: 5px 9px; font-size: 11px; font-weight: 800; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+        .data-source-evidence-action:hover { background: var(--primary-light); }
+        .data-source-evidence-action.plan-project { border-color: #fde68a; color: #92400e; }
+        .data-source-evidence-action.fix-source { border-color: #99f6e4; color: #0f766e; }
+        .data-source-evidence-next { color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
         .data-source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
         .data-source-card { border: 1px solid var(--border); border-left: 4px solid var(--text-muted); border-radius: 8px; background: var(--bg); padding: 12px; min-width: 0; }
         .data-source-card.ready { border-left-color: var(--success); }
@@ -2701,6 +3257,16 @@ const ProjectDashboard: React.FC = () => {
         .data-source-boundaries { margin: 0 0 8px; padding: 8px 10px 8px 24px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
         .data-source-boundaries li + li { margin-top: 3px; }
         .data-source-next { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .export-receipt { margin: 0 20px 16px; display: grid; grid-template-columns: minmax(240px, 1.2fr) minmax(180px, .8fr); gap: 10px 14px; align-items: start; background: #f8fafc; border: 1px solid var(--border); border-left: 5px solid var(--success); border-radius: 8px; padding: 13px 16px; box-shadow: var(--shadow); }
+        .export-receipt-copy { min-width: 0; display: flex; gap: 10px; align-items: flex-start; }
+        .export-receipt-copy > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .export-receipt-copy strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 3px; overflow-wrap: anywhere; }
+        .export-receipt-copy em { display: block; color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .export-receipt-metrics, .export-receipt-gaps, .export-receipt-projects { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+        .export-receipt-metrics span, .export-receipt-gaps span, .export-receipt-projects span, .export-receipt-projects strong { border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+        .export-receipt-gaps span { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+        .export-receipt-projects span { color: var(--text-muted); }
+        .export-receipt p { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
         .launch-context-panel { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--primary); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
         .launch-context-panel.missing { border-left-color: var(--warning); }
         .launch-context-copy { min-width: 0; display: flex; align-items: center; gap: 12px; color: var(--text); }
@@ -2807,6 +3373,21 @@ const ProjectDashboard: React.FC = () => {
         .project-filter-button:hover { border-color: var(--primary); color: var(--primary); }
         .project-filter-button.active { border-color: var(--primary); background: var(--primary-light); color: #1d4ed8; }
         .project-filter-button.active strong { color: #1d4ed8; }
+        .project-local-search { margin-left: auto; min-width: min(100%, 320px); flex: 1 1 320px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--card); padding: 6px 8px; }
+        .project-local-search span { color: var(--text-muted); font-size: 12px; font-weight: 800; white-space: nowrap; }
+        .project-local-search input { min-width: 0; width: 100%; border: none; outline: none; background: transparent; color: var(--text); font-size: 13px; }
+        .project-local-search input::placeholder { color: #94a3b8; }
+        .project-local-search:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
+        .project-local-search-clear { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text-muted); padding: 4px 8px; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .project-local-search-clear:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+        .project-search-receipt { flex: 1 0 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 9px; align-items: center; border: 1px dashed var(--border); border-radius: 8px; background: #f8fafc; padding: 8px 10px; }
+        .project-search-receipt strong { color: var(--text); font-size: 12px; white-space: nowrap; }
+        .project-search-receipt span { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+        .project-search-receipt small { grid-column: 2; color: #92400e; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+        .project-search-receipt small.project-search-mode { color: var(--text-muted); }
+        .project-search-receipt em { grid-column: 2; color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .project-search-hints { grid-column: 2; display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+        .project-search-hints span { border: 1px solid var(--border); border-radius: 999px; background: var(--card); padding: 2px 7px; color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
 
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
@@ -2817,6 +3398,7 @@ const ProjectDashboard: React.FC = () => {
         .empty-projects h2 { margin: 0; color: var(--text); font-size: 20px; }
         .empty-projects p { margin: 0; color: var(--text-muted); }
         .empty-projects.filter-empty { box-shadow: none; border-style: dashed; }
+        .empty-actions { display: flex; gap: 8px; flex-wrap: wrap; }
         .project-health { border: 1px solid var(--border); border-left-width: 5px; border-radius: 8px; padding: 12px 14px; margin-bottom: 18px; background: #f8fafc; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
         .project-health.empty { border-left-color: var(--text-muted); }
         .project-health.on-track { border-left-color: var(--success); }
@@ -2891,6 +3473,14 @@ const ProjectDashboard: React.FC = () => {
         .chart-insight-header span { grid-row: span 2; align-self: start; border-radius: 999px; padding: 3px 9px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 800; white-space: nowrap; }
         .chart-insight-header strong { color: var(--text); font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
         .chart-insight-header em { color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .chart-scope-receipt { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: start; margin: -3px 0 12px; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,.75); }
+        .chart-scope-receipt span { grid-row: span 3; align-self: start; border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; font-weight: 800; white-space: nowrap; }
+        .chart-scope-receipt strong { min-width: 0; color: var(--text); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+        .chart-scope-receipt em,
+        .chart-scope-receipt small { min-width: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; font-style: normal; overflow-wrap: anywhere; }
+        .chart-scope-receipt.attention { border-color: #fecaca; background: #fff7f7; }
+        .chart-scope-receipt.partial { border-color: #fde68a; background: #fffbeb; }
+        .chart-scope-receipt.empty { border-color: #cbd5e1; background: #f8fafc; }
         .chart-insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
         .chart-insight-card { min-width: 0; display: flex; flex-direction: column; gap: 9px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--card); padding: 12px; }
         .chart-insight-card.ready { border-left-color: var(--success); }
@@ -3123,13 +3713,23 @@ const ProjectDashboard: React.FC = () => {
         .platform-source-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 12px; }
         .platform-source-fields .edit-input { width: 100%; min-width: 0; box-sizing: border-box; border-color: var(--border); }
         .platform-source-fields .edit-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14); }
+        .jira-source-panel { display: grid; gap: 10px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-left: 4px solid var(--success); border-radius: 8px; background: #f0fdf4; }
+        .jira-source-boundary { display: grid; gap: 3px; }
+        .jira-source-boundary strong { color: var(--text); font-size: 13px; }
+        .jira-source-boundary span { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+        .jira-source-form { display: grid; grid-template-columns: minmax(150px, .75fr) minmax(200px, 1fr) auto; gap: 10px; align-items: end; }
+        .jira-source-form label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .jira-source-form label span { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+        .jira-source-form .edit-input { width: 100%; min-width: 0; box-sizing: border-box; border-color: var(--border); }
+        .jira-source-error { border-radius: 6px; border: 1px solid #fecaca; background: #fff7f7; color: #b91c1c; padding: 7px 9px; font-size: 12px; font-weight: 700; }
         .jira-list { display: flex; flex-direction: column; gap: 8px; }
         .jira-item { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); transition: all .2s ease; }
         .jira-item:hover { border-color: var(--primary); background: var(--primary-light); }
         .jira-item-editable { display: flex; align-items: center; gap: 8px; }
         .jira-icon { width: 24px; height: 24px; background: var(--primary); border-radius: 4px; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold; }
         .delete-jira-btn, .add-jira-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: var(--text-muted); }
-        .add-jira-btn { margin-left: auto; background: var(--success); color: white; border-color: var(--success); }
+        .add-jira-btn { margin-left: auto; background: var(--success); color: white; border-color: var(--success); white-space: nowrap; }
+        .add-jira-btn:disabled { opacity: .55; cursor: not-allowed; }
         .delete-jira-btn:hover { background: var(--danger); color: white; border-color: var(--danger); }
         
         /* 新增样式 */
@@ -3140,6 +3740,11 @@ const ProjectDashboard: React.FC = () => {
         .task-bone:hover .drag-indicator { opacity: 1; }
         .evidence-repair-section { border-left: 4px solid var(--warning); background: #fffbeb; }
         .evidence-repair-section.complete { border-left-color: var(--success); background: #ecfdf5; }
+        .local-repair-receipt { margin-bottom: 12px; padding: 10px 12px; border: 1px solid #bfdbfe; border-left: 4px solid #2563eb; border-radius: 8px; background: #eff6ff; display: flex; gap: 10px; align-items: flex-start; }
+        .local-repair-receipt > span { flex: 0 0 auto; border: 1px solid #bfdbfe; border-radius: 999px; background: var(--card); color: #1d4ed8; font-size: 11px; font-weight: 800; padding: 3px 8px; white-space: nowrap; }
+        .local-repair-receipt strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; overflow-wrap: anywhere; }
+        .local-repair-receipt p { margin: 0 0 4px; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+        .local-repair-receipt small { color: var(--text); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
         .evidence-repair-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
         .evidence-repair-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--card); }
         .evidence-repair-card.missing { border-left-color: var(--warning); }
@@ -3230,9 +3835,12 @@ const ProjectDashboard: React.FC = () => {
           .dashboard-controls { flex-wrap: wrap; justify-content: center; }
           .dashboard-title { font-size: 1.5em; }
           .data-source-banner { margin: 0 10px 10px; flex-direction: column; align-items: flex-start; }
+          .snapshot-receipt { margin: 0 10px 10px; grid-template-columns: 1fr; align-items: flex-start; }
           .data-source-copy { align-items: flex-start; }
           .data-source-panel { margin: 0 10px 10px; }
           .data-source-panel-header { flex-direction: column; }
+          .export-receipt { margin: 0 10px 10px; grid-template-columns: 1fr; }
+          .export-receipt-copy { align-items: flex-start; }
           .launch-context-panel { margin: 0 10px 10px; flex-direction: column; align-items: flex-start; }
           .launch-context-copy { align-items: flex-start; }
           .dashboard-overview { margin: 0 10px 10px; }
@@ -3240,6 +3848,12 @@ const ProjectDashboard: React.FC = () => {
           .overview-side { align-items: flex-start; min-width: 0; width: 100%; }
           .overview-metrics { justify-content: flex-start; }
           .project-filter-bar { margin: 0 10px 10px; }
+          .project-local-search { margin-left: 0; flex-basis: 100%; grid-template-columns: 1fr; }
+          .project-local-search-clear { justify-self: start; }
+          .project-search-receipt { grid-template-columns: 1fr; }
+          .project-search-receipt small,
+          .project-search-receipt em,
+          .project-search-hints { grid-column: auto; }
           .decision-brief { grid-template-columns: 1fr; }
           .decision-brief-main { grid-template-columns: 1fr; }
           .decision-brief-main span { grid-row: auto; justify-self: start; }
@@ -3260,6 +3874,8 @@ const ProjectDashboard: React.FC = () => {
           .status-draft-layout { grid-template-columns: 1fr; }
           .status-draft-textarea { min-height: 280px; }
           .status-draft-actions { justify-content: flex-start; }
+          .jira-source-form { grid-template-columns: 1fr; }
+          .jira-source-form .add-jira-btn { justify-self: flex-start; margin-left: 0; }
         }
       `}</style>
     </div>

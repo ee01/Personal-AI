@@ -211,6 +211,9 @@ async function startMemoryServiceFixture() {
     ) {
       const body = await readJsonBody(request);
       requests.push(body);
+      await delay(300);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const followupReadyAt = nowSeconds + 86_400;
       const duplicate = requests.filter(
         (item) => item.chatId === body.chatId && item.postId === body.postId,
       ).length > 1;
@@ -226,9 +229,24 @@ async function startMemoryServiceFixture() {
             renderedContext: duplicate
               ? '确认最终发布日期和是否需要额外资源'
               : body.informationGoal,
+            nextCheckAt: nowSeconds,
+            waitUntil: followupReadyAt,
           },
           created: !duplicate,
           reason: duplicate ? 'existing_message_reaction_session' : undefined,
+        }),
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/api/v1/ingest') {
+      await readJsonBody(request);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          memoryId: 'follow-thread-original-memory',
+          status: 'created',
+          decision: 'created',
         }),
       );
       return;
@@ -411,7 +429,26 @@ async function main() {
         .textContent()) || '',
       /仍可先保存联动操作描述/,
     );
+    linkedActionPage.on('dialog', async (dialog) => {
+      await dialog.dismiss();
+    });
+    await linkedActionPage
+      .locator('.add-topic-form .form-buttons button')
+      .first()
+      .click();
+    const linkedActionSaveToast =
+      (await linkedActionPage
+        .locator('.rule-operation-toast.success')
+        .textContent()) || '';
+    assert.match(linkedActionSaveToast, /已保存联动操作草稿/);
+    assert.match(linkedActionSaveToast, /没有回扫历史消息/);
+    assert.match(linkedActionSaveToast, /没有创建 RuntimeAction/);
+    assert.match(linkedActionSaveToast, /没有调用 OpenClaw/);
+    assert.match(linkedActionSaveToast, /待激活/);
     await linkedActionPage.close();
+    await serviceWorker.evaluate(async () => {
+      await chrome.storage.local.set({ concernedItems: [] });
+    });
 
     await serviceWorker.evaluate(async () => {
       const result = await chrome.storage.local.get(['envConfig']);
@@ -460,7 +497,7 @@ async function main() {
       await chrome.storage.local.set({
         glipMessageMarkers: {
           version: 1,
-          updatedAt: Date.now(),
+          updatedAt: Math.floor(Date.now() / 1000),
           markersByChatId: {
             '12345': {
               'msg-1': [
@@ -505,29 +542,58 @@ async function main() {
         .querySelector('.glip-ai-marker-count')
         ?.textContent?.trim(),
     }));
-    assert.deepEqual(markerBadgeState, {
-      tagName: 'BUTTON',
-      text: '跟进中+1',
-      ariaLabel:
-        'AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5/18 09:00：提醒时间：2026-05-18 09:00',
-      title:
-        'AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5/18 09:00：提醒时间：2026-05-18 09:00',
-      tabIndex: 0,
-      countText: '+1',
-    });
+    assert.equal(markerBadgeState.tagName, 'BUTTON');
+    assert.equal(markerBadgeState.text, '跟进中+1');
+    assert.equal(markerBadgeState.tabIndex, 0);
+    assert.equal(markerBadgeState.countText, '+1');
+    assert.match(
+      markerBadgeState.ariaLabel || '',
+      /AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5\/18 09:00：提醒时间：2026-05-18 09:00/,
+    );
+    assert.match(
+      markerBadgeState.ariaLabel || '',
+      /标注来源：Memory Service 跟进 \/ Sheet 排期\/执行日志/,
+    );
+    assert.match(
+      markerBadgeState.ariaLabel || '',
+      /状态口径：跟进中表示正在等待原消息线程或下一次检查，不代表已经发送新追问。；稍后表示仍在 Snooze 队列/,
+    );
+    assert.match(
+      markerBadgeState.ariaLabel || '',
+      /下一步：到主动询问会话确认原线程是否已满足目标，或等待下一次检查。；到 Scheduled Messages 的 Snooze 列表完成、改期或删除这条提醒。/,
+    );
+    assert.match(markerBadgeState.ariaLabel || '', /缓存刷新：/);
+    assert.doesNotMatch(markerBadgeState.ariaLabel || '', /1970|可能过旧|尚未刷新/);
+    assert.equal(markerBadgeState.title, markerBadgeState.ariaLabel);
     await markerBadge.focus();
+    const markerMessageHandle = await message.elementHandle();
+    assert.ok(markerMessageHandle, 'Expected a message element for marker tooltip');
     await page.waitForFunction(
-      () => {
-        const tooltip = document.querySelector('.glip-ai-marker-tooltip');
+      (messageElement) => {
+        const tooltip = messageElement.querySelector('.glip-ai-marker-tooltip');
         return tooltip && Number(getComputedStyle(tooltip).opacity) > 0.9;
       },
-      null,
+      markerMessageHandle,
       { timeout: 3_000 },
     );
     const markerTooltipText = await message
       .locator('.glip-ai-marker-tooltip')
       .textContent();
     assert.match(markerTooltipText || '', /跟进中/);
+    assert.match(
+      markerTooltipText || '',
+      /标注来源：Memory Service 跟进 \/ Sheet 排期\/执行日志/,
+    );
+    assert.match(
+      markerTooltipText || '',
+      /状态口径：跟进中表示正在等待原消息线程或下一次检查，不代表已经发送新追问。；稍后表示仍在 Snooze 队列/,
+    );
+    assert.match(
+      markerTooltipText || '',
+      /下一步：到主动询问会话确认原线程是否已满足目标，或等待下一次检查。；到 Scheduled Messages 的 Snooze 列表完成、改期或删除这条提醒。/,
+    );
+    assert.match(markerTooltipText || '', /缓存刷新：/);
+    assert.doesNotMatch(markerTooltipText || '', /1970|可能过旧|尚未刷新/);
     assert.match(markerTooltipText || '', /稍后 5\/18 09:00/);
 
     await serviceWorker.evaluate(async () => {
@@ -844,6 +910,14 @@ async function main() {
     });
     await toolbar.locator('.follow-thread-btn').click();
     const followThreadConfigPage = await followThreadConfigPagePromise;
+    await page.waitForFunction(
+      () =>
+        document.body.textContent?.includes('已打开关注后续配置') &&
+        document.body.textContent?.includes('当前消息尚未开始关注') &&
+        document.body.textContent?.includes('保存规则后才会监听同会话后续讨论'),
+      null,
+      { timeout: 5_000 },
+    );
     await followThreadConfigPage.waitForLoadState('domcontentloaded');
     await followThreadConfigPage.waitForSelector('.add-topic-form', {
       timeout: 10_000,
@@ -874,14 +948,111 @@ async function main() {
     assert.equal(
       (
         (await followThreadConfigPage
-          .locator('.follow-thread-config .datetime')
+          .locator('.original-message-collapse .datetime')
           .first()
           .textContent()) || ''
       ).trim(),
       expectedOriginalDateText,
       'Watch prefill should show the original message time, not the config click time',
     );
+    const followThreadBoundaryText =
+      (await followThreadConfigPage
+        .locator('.follow-thread-boundary-receipt')
+        .textContent()) || '';
+    assert.match(followThreadBoundaryText, /关注后续创建边界/);
+    assert.match(
+      followThreadBoundaryText,
+      /默认监听「Release Team」内所有人的后续讨论/,
+    );
+    assert.match(followThreadBoundaryText, /不只看原发送人/);
+    assert.match(followThreadBoundaryText, /监听期限：30 天后自动过期/);
+    assert.match(
+      followThreadBoundaryText,
+      /reply\/thread\/@提及\/引用\/关键词/,
+    );
+    assert.match(followThreadBoundaryText, /语义匹配/);
+    assert.match(followThreadBoundaryText, /只有点击保存后/);
+    assert.match(followThreadBoundaryText, /不会启用 Watch/);
+    assert.match(followThreadBoundaryText, /通知口径：Bot，即时提醒/);
+    assert.match(followThreadBoundaryText, /不会回扫历史消息/);
+    assert.match(followThreadBoundaryText, /不会立刻发送通知/);
+    assert.match(followThreadBoundaryText, /不会立即写入长期记忆/);
+    assert.match(
+      followThreadBoundaryText,
+      /不会创建自动答复或联动操作/,
+    );
+    followThreadConfigPage.on('dialog', async (dialog) => {
+      await dialog.dismiss();
+    });
+    await followThreadConfigPage
+      .locator('.add-topic-form .form-buttons button')
+      .first()
+      .click();
+    const followThreadSaveToast =
+      (await followThreadConfigPage
+        .locator('.rule-operation-toast.success')
+        .textContent()) || '';
+    assert.match(followThreadSaveToast, /已保存关注后续/);
+    assert.match(followThreadSaveToast, /原消息索引已写入/);
+    assert.match(followThreadSaveToast, /语义匹配都可用/);
+    assert.match(followThreadSaveToast, /通知口径：Bot，即时提醒/);
+    assert.match(followThreadSaveToast, /监听期限：30 天后自动过期/);
+    assert.match(followThreadSaveToast, /没有回扫历史消息/);
+    assert.match(followThreadSaveToast, /没有立刻发送通知/);
     await followThreadConfigPage.close();
+    await serviceWorker.evaluate(async () => {
+      await chrome.storage.local.set({ concernedItems: [] });
+    });
+
+    await page.mouse.move(5, 5);
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    const linkedActionConfigPagePromise = context.waitForEvent('page', {
+      timeout: 10_000,
+    });
+    await toolbar.locator('.linked-action-btn').click();
+    const linkedActionConfigPage = await linkedActionConfigPagePromise;
+    await page.waitForFunction(
+      () =>
+        document.body.textContent?.includes('已打开联动操作配置') &&
+        document.body.textContent?.includes('当前只是草稿入口') &&
+        document.body.textContent?.includes('尚未创建 RuntimeAction') &&
+        document.body.textContent?.includes('未调用 OpenClaw') &&
+        document.body.textContent?.includes('不会回扫历史消息') &&
+        document.body.textContent?.includes('后续新消息命中后') &&
+        document.body.textContent?.includes('动作队列'),
+      null,
+      { timeout: 5_000 },
+    );
+    await linkedActionConfigPage.waitForLoadState('domcontentloaded');
+    await linkedActionConfigPage.waitForSelector('.add-topic-form', {
+      timeout: 10_000,
+    });
+    assert.match(
+      await linkedActionConfigPage
+        .locator('.add-topic-form .text-input')
+        .inputValue(),
+      /Please follow up with the release owner/,
+    );
+    const linkedActionTriggerText =
+      (await linkedActionConfigPage
+        .locator('.linked-action-trigger-panel')
+        .textContent()) || '';
+    assert.match(
+      linkedActionTriggerText,
+      /Please follow up with the release owner/,
+    );
+    assert.match(linkedActionTriggerText, /Alicia Chen/);
+    assert.match(linkedActionTriggerText, /Release Team/);
+    assert.match(
+      (await linkedActionConfigPage
+        .locator('.automation-offline-note')
+        .first()
+        .textContent()) || '',
+      /连接前不会执行外部写操作/,
+    );
+    await linkedActionConfigPage.close();
+
     await page.mouse.move(5, 5);
     await message.hover();
     await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
@@ -1168,10 +1339,14 @@ async function main() {
       )}`,
     );
 
-    await message.focus();
-    const keyboardToolbar = message.locator('.message-reaction-toolbar.visible');
-    await keyboardToolbar.waitFor({ state: 'visible', timeout: 2_000 });
-    const keyboardRevealState = await message.evaluate((messageElement) => {
+    await message.click();
+    await delay(500);
+    assert.equal(
+      await message.locator('.message-reaction-toolbar.visible').count(),
+      0,
+      'Clicking the message should not reveal the toolbar before the 4s hover delay',
+    );
+    const clickRevealState = await message.evaluate((messageElement) => {
       const toolbarElement = messageElement.querySelector(
         '.message-reaction-toolbar',
       );
@@ -1182,45 +1357,30 @@ async function main() {
         tabIndex: messageElement.tabIndex,
         activeIsMessage: document.activeElement === messageElement,
         ariaHidden: toolbarElement?.getAttribute('aria-hidden'),
-        actionTabIndexes: Array.from(
-          toolbarElement?.querySelectorAll('.message-reaction-action-btn') || [],
-        ).map((button) => button.tabIndex),
-        settingsTabIndex:
-          toolbarElement?.querySelector('.reaction-settings-btn')?.tabIndex,
+        visible: toolbarElement?.classList.contains('visible') || false,
       };
     });
     assert.deepEqual(
-      keyboardRevealState,
+      clickRevealState,
       {
-        focusAnchor: 'true',
-        tabIndex: 0,
-        activeIsMessage: true,
-        ariaHidden: 'false',
-        actionTabIndexes: [0, 0, 0, 0],
-        settingsTabIndex: -1,
+        focusAnchor: null,
+        tabIndex: -1,
+        activeIsMessage: false,
+        ariaHidden: 'true',
+        visible: false,
       },
-      `Focused message should expose the toolbar without mouse hover: ${JSON.stringify(
-        keyboardRevealState,
+      `Message click should not create a focus reveal path: ${JSON.stringify(
+        clickRevealState,
       )}`,
     );
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      if (
-        await page.evaluate(() =>
-          document.activeElement?.classList.contains('message-reaction-action-btn'),
-        )
-      ) {
-        break;
-      }
-      await page.keyboard.press('Tab');
-    }
+    await message.evaluate((messageElement) => messageElement.focus());
+    await delay(500);
     assert.equal(
-      await page.evaluate(() =>
-        document.activeElement?.classList.contains('message-reaction-action-btn'),
-      ),
-      true,
-      'Keyboard users should be able to tab from the focused message into toolbar actions',
+      await message.locator('.message-reaction-toolbar.visible').count(),
+      0,
+      'Focusing the message should not reveal the toolbar without the hover delay',
     );
-    await page.keyboard.press('Escape');
+    await page.mouse.move(5, 5);
     await page.waitForFunction(
       () => {
         const messageElement = document.querySelector(
@@ -1230,7 +1390,6 @@ async function main() {
           '.message-reaction-toolbar',
         );
         return (
-          document.activeElement === messageElement &&
           toolbarElement?.getAttribute('aria-hidden') === 'true' &&
           !toolbarElement?.classList.contains('visible')
         );
@@ -1267,6 +1426,30 @@ async function main() {
       (await page.locator('.followup-ask-run-summary').textContent()) || '',
       /立即检查/,
     );
+    assert.match(
+      (await page.locator('.followup-ask-run-summary').textContent()) || '',
+      /最多自动追问 1 次/,
+    );
+    assert.equal(
+      (await page.locator('.followup-ask-submit').textContent())?.trim(),
+      '创建跟进',
+    );
+    const followupBoundaryReceipt = page.locator('.followup-ask-boundary');
+    await followupBoundaryReceipt.waitFor({ state: 'visible', timeout: 3_000 });
+    const followupBoundaryText =
+      (await followupBoundaryReceipt.textContent()) || '';
+    assert.match(followupBoundaryText, /创建边界/);
+    assert.match(
+      followupBoundaryText,
+      /只锚定 Release Team（提及 Jordan Lee）和这条原消息/,
+    );
+    assert.match(followupBoundaryText, /先检查原消息线程/);
+    assert.match(followupBoundaryText, /最多追问次数设为 0/);
+    assert.match(followupBoundaryText, /不自动发送 AI 追问/);
+    assert.match(followupBoundaryText, /不会立刻发送新消息/);
+    assert.match(followupBoundaryText, /不写 Google Sheet/);
+    assert.match(followupBoundaryText, /不创建可复用 Outreach template/);
+    assert.match(followupBoundaryText, /复用旧 session/);
     await page.locator('.followup-ask-submit').click();
     await page.waitForSelector('.followup-ask-textarea.input-error', {
       timeout: 3_000,
@@ -1285,7 +1468,34 @@ async function main() {
       .click();
     await page.locator('#followup-ask-interval').fill('9999');
     await page.locator('#followup-ask-max').fill('99');
+    const clampedFollowupSummary =
+      (await page.locator('.followup-ask-run-summary').textContent()) || '';
+    assert.match(clampedFollowupSummary, /原消息已超过 720 小时/);
+    assert.match(clampedFollowupSummary, /最多自动追问 10 次/);
+    await page.locator('#followup-ask-max').fill('0');
+    const zeroFollowupSummary =
+      (await page.locator('.followup-ask-run-summary').textContent()) || '';
+    assert.match(zeroFollowupSummary, /最多追问次数为 0/);
+    assert.match(zeroFollowupSummary, /不自动发送 AI 追问/);
+    assert.doesNotMatch(zeroFollowupSummary, /后追问/);
     await page.locator('.followup-ask-submit').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.followup-ask-run-summary')?.textContent?.includes(
+          '正在创建或复用跟进会话',
+        ) &&
+        document.querySelector('.followup-ask-run-summary')?.textContent?.includes(
+          '不会发送追问',
+        ) &&
+        document.querySelector('.followup-ask-run-summary')?.textContent?.includes(
+          '刷新本地跟进标注',
+        ) &&
+        document.querySelector('.followup-ask-run-summary')?.textContent?.includes(
+          '不会自动发送 AI 追问',
+        ),
+      null,
+      { timeout: 3_000 },
+    );
     await page.waitForSelector('.followup-ask-overlay', {
       state: 'detached',
       timeout: 5_000,
@@ -1304,7 +1514,7 @@ async function main() {
       capturedFollowup.followupIntervalSeconds,
       720 * 60 * 60,
     );
-    assert.equal(capturedFollowup.maxFollowup, 10);
+    assert.equal(capturedFollowup.maxFollowup, 0);
     assert.equal(
       capturedFollowup.context,
       '确认最终发布日期和是否需要额外资源',
@@ -1318,6 +1528,22 @@ async function main() {
       hasText: '查看追问',
     });
     await reviewAction.waitFor({ state: 'visible', timeout: 3_000 });
+    await page.waitForFunction(
+      () =>
+        document.body.textContent?.includes('已创建跟进会话') &&
+        document.body.textContent?.includes('未立刻发送追问') &&
+        document.body.textContent?.includes('最早') &&
+        document.body.textContent?.includes('再次检查') &&
+        document.body.textContent?.includes('不会自动发送 AI 追问'),
+      null,
+      { timeout: 5_000 },
+    );
+    const followupSuccessToastText =
+      (await page.locator('.snooze-toast-success').last().textContent()) || '';
+    assert.match(followupSuccessToastText, /已创建跟进会话/);
+    assert.match(followupSuccessToastText, /再次检查/);
+    assert.match(followupSuccessToastText, /不会自动发送 AI 追问/);
+    assert.doesNotMatch(followupSuccessToastText, /后追问/);
     const reviewPagePromise = context.waitForEvent('page', {
       timeout: 10_000,
     });
@@ -1411,6 +1637,14 @@ async function main() {
 
     await toolbar.locator('.reaction-settings-btn.visible').click();
     await page.waitForSelector('.reaction-settings-popup', { timeout: 3_000 });
+    assert.equal(
+      (
+        (await page
+          .locator('.reaction-settings-popup .reaction-settings-header')
+          .textContent()) || ''
+      ).trim(),
+      '消息交互功能设置',
+    );
     const settingsLabels = await page.$$eval(
       '.reaction-settings-popup .reaction-settings-label',
       (labels) => labels.map((label) => label.textContent?.trim()),
@@ -1421,6 +1655,20 @@ async function main() {
       '自动答复 / 跟进追问',
       '联动操作',
     ]);
+    const settingsScopeText =
+      (await page.locator('.reaction-settings-scope').textContent()) || '';
+    assert.match(settingsScopeText, /本地显示开关/);
+    assert.match(settingsScopeText, /只改变此浏览器消息旁工具栏按钮显示/);
+    assert.match(settingsScopeText, /不会取消已创建提醒、关注、追问、自动答复规则或联动操作/);
+    assert.match(settingsScopeText, /已排队或已保存的任务仍从各自管理页处理/);
+    assert.equal(
+      (
+        (await page
+          .locator('.reaction-settings-popup .reaction-settings-hint')
+          .textContent()) || ''
+      ).trim(),
+      '关闭后，对应按钮将不再显示',
+    );
     await delay(150);
     await page.mouse.click(5, 5);
     await page.waitForSelector('.reaction-settings-popup', {
@@ -1441,6 +1689,16 @@ async function main() {
       true,
       'Clicking Snooze should open the quick menu instead of creating a default reminder',
     );
+    const snoozeReceiptText =
+      (await page.locator('.snooze-menu-receipt').textContent()) || '';
+    assert.match(snoozeReceiptText, /提醒路径/);
+    assert.match(
+      snoozeReceiptText,
+      /已在本地标注为 稍后 5\/18 09:00/,
+    );
+    assert.match(snoozeReceiptText, /会改期这条同源 Snooze，不新增第二条/);
+    assert.match(snoozeReceiptText, /成功 Toast 或管理稍后处理确认/);
+    assert.match(snoozeReceiptText, /来自本地 marker 快照/);
     await page.mouse.click(5, 5);
     await page.waitForSelector('.snooze-menu', {
       state: 'detached',
@@ -1827,11 +2085,113 @@ async function main() {
       )}`,
     );
 
+    await englishToolbar.hover();
+    await englishPage.waitForFunction(
+      () =>
+        document.querySelector('.reaction-settings-btn.visible')?.tagName ===
+        'BUTTON',
+      null,
+      { timeout: 7_000 },
+    );
+    await englishToolbar.locator('.reaction-settings-btn.visible').click();
+    await englishPage.waitForSelector('.reaction-settings-popup', {
+      timeout: 3_000,
+    });
+    assert.equal(
+      (
+        (await englishPage
+          .locator('.reaction-settings-popup .reaction-settings-header')
+          .textContent()) || ''
+      ).trim(),
+      'Message action settings',
+    );
+    const englishSettingsLabels = await englishPage.$$eval(
+      '.reaction-settings-popup .reaction-settings-label',
+      (labels) => labels.map((label) => label.textContent?.trim()),
+    );
+    assert.deepEqual(englishSettingsLabels, [
+      'Remind',
+      'Watch',
+      'Reply / Followup',
+      'Openclaw',
+    ]);
+    const englishSettingsScopeText =
+      (await englishPage.locator('.reaction-settings-scope').textContent()) ||
+      '';
+    assert.match(englishSettingsScopeText, /Local display switches/);
+    assert.match(
+      englishSettingsScopeText,
+      /Only changes which buttons appear beside messages in this browser/,
+    );
+    assert.match(
+      englishSettingsScopeText,
+      /Does not cancel existing reminders, watches, followups, reply rules, or Openclaw actions/,
+    );
+    assert.match(
+      englishSettingsScopeText,
+      /Queued or saved items still stay in their own management pages/,
+    );
+    assert.equal(
+      (
+        (await englishPage
+          .locator('.reaction-settings-popup .reaction-settings-hint')
+          .textContent()) || ''
+      ).trim(),
+      'Turning a switch off hides that entry from this local toolbar.',
+    );
+    await delay(150);
+    await englishPage.mouse.click(5, 5);
+    await englishPage.waitForSelector('.reaction-settings-popup', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await englishPage.mouse.move(5, 5);
+    await englishMessage.hover();
+    await englishToolbar.waitFor({ state: 'visible', timeout: 8_000 });
+
     await englishToolbar.locator('.snooze-icon-btn').click();
     await englishPage.waitForSelector('.snooze-menu', { timeout: 3_000 });
     assert.equal(
       await englishPage.locator('.snooze-menu').getAttribute('aria-label'),
       'Remind quick options',
+    );
+    const englishSnoozeReceiptText =
+      (await englishPage.locator('.snooze-menu-receipt').textContent()) || '';
+    assert.match(englishSnoozeReceiptText, /Reminder path/);
+    assert.match(
+      englishSnoozeReceiptText,
+      /Already marked locally as Remind 5\/18 09:00/,
+    );
+    assert.match(
+      englishSnoozeReceiptText,
+      /Reschedules this same-source Remind item instead of adding another one/,
+    );
+    assert.match(englishSnoozeReceiptText, /success toast or Manage Remind/);
+    assert.match(englishSnoozeReceiptText, /local marker snapshot/);
+    const englishSnoozeReceiptRows = await englishPage.$$eval(
+      '.snooze-menu-receipt-line',
+      (rows) =>
+        rows.map((row) => {
+          const label = row.querySelector('.snooze-menu-receipt-label');
+          const value = row.querySelector('.snooze-menu-receipt-value');
+          const labelRect = label?.getBoundingClientRect();
+          const valueRect = value?.getBoundingClientRect();
+          return {
+            label: label?.textContent?.trim() || '',
+            value: value?.textContent?.trim() || '',
+            labelRight: labelRect?.right || 0,
+            valueLeft: valueRect?.left || 0,
+          };
+        }),
+    );
+    assert.equal(
+      englishSnoozeReceiptRows.every(
+        (row) => row.label && row.value && row.labelRight <= row.valueLeft - 2,
+      ),
+      true,
+      `English Snooze receipt labels should not overlap values: ${JSON.stringify(
+        englishSnoozeReceiptRows,
+      )}`,
     );
     const englishQuickLabels = await englishPage.$$eval(
       '.snooze-quick-option-label',
@@ -1925,6 +2285,67 @@ async function main() {
       'Choose a future time',
     );
     await englishPage.locator('.snooze-btn-cancel').click();
+
+    await englishPage.mouse.move(5, 5);
+    await englishMessage.hover();
+    await englishToolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    await englishToolbar.locator('.snooze-icon-btn').click();
+    await englishPage.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    const scheduledPagesBeforeManage = context.pages().filter((page) =>
+      page.url().includes('scheduled-messages.html?category=Snooze'),
+    );
+    const scheduledManagerPagePromise = context.waitForEvent('page');
+    const manageBusyState = await englishPage
+      .locator('.snooze-manage-option')
+      .evaluate((button) => {
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error('Manage Remind entry is not a button');
+        }
+        button.click();
+        const menu = document.querySelector('.snooze-menu');
+        const disabledItems = Array.from(
+          document.querySelectorAll('.snooze-menu button[role="menuitem"]'),
+        ).filter(
+          (item) => item instanceof HTMLButtonElement && item.disabled,
+        ).length;
+        const label = button
+          .querySelector('.snooze-manage-option-label')
+          ?.textContent?.trim();
+        button.click();
+        return {
+          busy: menu?.getAttribute('aria-busy') || '',
+          disabledItems,
+          label,
+        };
+      });
+    assert.equal(manageBusyState.busy, 'true');
+    assert.equal(manageBusyState.label, 'Opening...');
+    assert.ok(
+      manageBusyState.disabledItems >= 3,
+      `Manage Remind should disable the quick menu while opening: ${JSON.stringify(
+        manageBusyState,
+      )}`,
+    );
+    const scheduledManagerPage = await scheduledManagerPagePromise;
+    await scheduledManagerPage
+      .waitForURL(/scheduled-messages\.html\?category=Snooze/, {
+        timeout: 3_000,
+      })
+      .catch(() => undefined);
+    await delay(250);
+    const scheduledPagesAfterManage = context.pages().filter((page) =>
+      page.url().includes('scheduled-messages.html?category=Snooze'),
+    );
+    assert.equal(
+      scheduledPagesAfterManage.length,
+      scheduledPagesBeforeManage.length + 1,
+      'Manage Remind should open exactly one Scheduled Messages Snooze tab',
+    );
+    assert.match(
+      scheduledManagerPage.url(),
+      /scheduled-messages\.html\?category=Snooze/,
+    );
+    await scheduledManagerPage.close();
 
     await englishPage.mouse.move(5, 5);
     const englishOwnMessage = englishPage.locator(

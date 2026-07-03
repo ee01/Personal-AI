@@ -23,10 +23,15 @@ Six abilities, LongMemEval-style five plus prospective:
 
 ## Scoring
 
-Each case carries a `judge` block. The haystack is the answer text plus all
-returned evidence content, lowercased.
+Each case carries a `judge` block. For grounded cases, the haystack is the
+answer text after stripping exact question/candidate echoes plus returned
+evidence content, source titles, and timestamp dates, lowercased.
 
 - **grounded** (`type: "grounded"`):
+  - `contextMatch.state = "ambiguous"` fails immediately. A candidate-topic
+    clarification is not a grounded answer.
+  - At least one evidence item must be returned. Answer-only matches are not
+    enough for a memory ability case.
   - `mustMention` is an array of OR-groups. A group passes if any alternative is
     a substring of the haystack. `score = groupsHit / groupsTotal`.
   - `mustNotMention` literals must be absent (any hit fails the case).
@@ -50,6 +55,11 @@ set. To stop that from spuriously failing the gate, the runner takes
   an intermittent fabrication).
 
 A persistent drop (failing every attempt) still regresses the gate.
+
+For audit, `responses.jsonl` records the answer, `contextMatchState`,
+`evidenceCount`, and the first five `evidencePreview` entries. When a grounded
+case fails, inspect whether the answer was actually grounded by returned
+evidence rather than by the user's question or the clarification candidates.
 
 ## Baseline & regression
 

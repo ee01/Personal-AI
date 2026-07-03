@@ -58,6 +58,7 @@ const elements = {
   mobileThreadButton: document.getElementById('mobile-thread-button'),
   runBriefingButton: document.getElementById('run-briefing-button'),
   runReminderButton: document.getElementById('run-reminder-button'),
+  mobileThreadDetail: document.getElementById('mobile-thread-detail'),
   mobileThreadMessage: document.getElementById('mobile-thread-message'),
   syncAuditStatus: document.getElementById('sync-audit-status'),
   syncAuditList: document.getElementById('sync-audit-list'),
@@ -86,6 +87,9 @@ const elements = {
   ),
   doubaoSourceLastRun: document.getElementById('doubao-source-last-run'),
   doubaoSourceRunState: document.getElementById('doubao-source-run-state'),
+  doubaoSourcePipelineReceipt: document.getElementById(
+    'doubao-source-pipeline-receipt',
+  ),
   doubaoSourceEnabled: document.getElementById('doubao-source-enabled'),
   doubaoSourceLookbackDays: document.getElementById(
     'doubao-source-lookback-days',
@@ -118,6 +122,9 @@ const elements = {
   doubaoSourceRevokeScope: document.getElementById(
     'doubao-source-revoke-scope',
   ),
+  doubaoSourceRevokeStatus: document.getElementById(
+    'doubao-source-revoke-status',
+  ),
   doubaoSourceRevokeButton: document.getElementById(
     'doubao-source-revoke-button',
   ),
@@ -136,6 +143,9 @@ const elements = {
   ),
   chatgptSourceLastRun: document.getElementById('chatgpt-source-last-run'),
   chatgptSourceRunState: document.getElementById('chatgpt-source-run-state'),
+  chatgptSourcePipelineReceipt: document.getElementById(
+    'chatgpt-source-pipeline-receipt',
+  ),
   chatgptSourceEnabled: document.getElementById('chatgpt-source-enabled'),
   chatgptSourceLookbackDays: document.getElementById(
     'chatgpt-source-lookback-days',
@@ -172,6 +182,9 @@ const elements = {
   chatgptSourceMessage: document.getElementById('chatgpt-source-message'),
   chatgptSourceRevokeScope: document.getElementById(
     'chatgpt-source-revoke-scope',
+  ),
+  chatgptSourceRevokeStatus: document.getElementById(
+    'chatgpt-source-revoke-status',
   ),
   chatgptSourceRevokeButton: document.getElementById(
     'chatgpt-source-revoke-button',
@@ -558,16 +571,76 @@ function setStatusPill(element, text, tone = 'pending') {
   element.className = `step-status step-status-${tone}`;
 }
 
-function setManualRunResultMessage(element, result, { succeeded, skipped }) {
-  if (result?.status === 'skipped') {
-    setMessage(
-      element,
-      formatManualRunSkippedMessage(result.errorMessage, skipped),
-      'warn',
-    );
-    return;
+function setManualRunResultMessage(
+  element,
+  result,
+  { kind, succeeded, skipped },
+) {
+  const isSkipped = result?.status === 'skipped';
+  const text = isSkipped
+    ? formatManualRunSkippedMessage(result.errorMessage, skipped)
+    : succeeded;
+  const receipt = formatManualRunResultReceipt(kind, isSkipped);
+  const audit = formatManualRunInlineAudit(result);
+  const needsAttention =
+    result?.verified === false ||
+    result?.messageVisible === false ||
+    result?.challengeDetected === true ||
+    Boolean(result?.telemetryError);
+  setMessage(
+    element,
+    [text, receipt, audit].filter(Boolean).join(' '),
+    isSkipped || needsAttention ? 'warn' : 'success',
+  );
+}
+
+function setManualRunPendingMessage(element, kind) {
+  setMessage(element, formatManualRunPendingReceipt(kind), 'warn');
+}
+
+function formatManualRunPendingReceipt(kind) {
+  const common =
+    '后台确认前还没有标记本次送达；成功、跳过、安全验证和状态回写异常会在本区更新';
+
+  if (kind === 'stable_memory') {
+    return `推送待确认：正在保存待生效广播方式并渲染 persona_core / voice_mode package；后台确认前还没有写入长期记忆线程，也没有进入手机上下文通道；${common}。`;
   }
-  setMessage(element, succeeded, 'success');
+
+  if (kind === 'mobile_briefing') {
+    return `推送待确认：正在保存待生效广播方式并渲染 active_focus_digest；后台确认前还没有写入 mobile_context_thread，也不会混入长期 persona / voice 线程；${common}。`;
+  }
+
+  if (kind === 'reminder_sync') {
+    return `推送待确认：正在保存待生效广播方式，并按手动完整摘要模式渲染待办 / 通知；后台确认前还没有写入 mobile_context_thread，没有把待办标记完成，也不会发送空占位文本；${common}。`;
+  }
+
+  return `推送待确认：正在准备本次手动同步；${common}。`;
+}
+
+function formatManualRunInlineAudit(result) {
+  const details = formatAttemptDetails(result);
+  if (details.length === 0) return '';
+  return `本次审计：${details.join(' · ')}。`;
+}
+
+function formatManualRunResultReceipt(kind, skipped) {
+  const prefix = skipped ? '跳过回执' : '推送回执';
+  const common =
+    '若广播方式有待生效变更，执行前会先保存；真实送达、跳过原因和页面可见性仍以后面的最近同步流水为准';
+
+  if (kind === 'stable_memory') {
+    return `${prefix}：本次链路只渲染 persona_core / voice_mode 并写入长期记忆线程的豆包随手记；不会进入手机上下文通道；${common}。`;
+  }
+
+  if (kind === 'mobile_briefing') {
+    return `${prefix}：本次链路只渲染 active_focus_digest，并写入已绑定 mobile_context_thread 的豆包随手记；不会混入长期 persona / voice 线程；${common}。`;
+  }
+
+  if (kind === 'reminder_sync') {
+    return `${prefix}：本次按手动完整摘要模式渲染待办 / 通知，只写入已绑定 mobile_context_thread；不会把待办标记完成，也不会在没有内容时发送占位文本；${common}。`;
+  }
+
+  return `${prefix}：${common}。`;
 }
 
 function formatManualRunSkippedMessage(message, fallback) {
@@ -698,10 +771,276 @@ function formatExplorerRunSummary(summary, { compact = false } = {}) {
   return parts.join('，');
 }
 
-function formatExplorerRunCompletionMessage(source, result) {
+function formatExplorerRunCompletionMessage(
+  source,
+  result,
+  { savedPendingSettings = false } = {},
+) {
   const summary = formatExplorerRunSummary(result);
   const subject = source === 'doubao' ? '豆包对话' : 'ChatGPT 输入';
-  return `${subject}抓取完成：${summary}。`;
+  return `${subject}抓取完成：${summary}。${formatExplorerManualRunReceipt(
+    source,
+    {
+      result,
+      savedPendingSettings,
+    },
+  )}`;
+}
+
+function formatExplorerLookbackWindow(lookbackDays) {
+  return lookbackDays > 0 ? `最近 ${lookbackDays} 天` : '不限制历史天数';
+}
+
+function formatExplorerRunTransportReceipt(source, result, settings) {
+  const preferredTransport =
+    settings.transport === 'webpage_mcp'
+      ? `日常浏览器 ${sourceHostName(source)} 标签页`
+      : '桌面端 Chromium profile';
+  const transport = result?.transport;
+  const actualMode = formatTransportMode(transport?.mode);
+  const preferenceCopy = `传输偏好为 ${preferredTransport}`;
+
+  if (transport?.fallbackReason) {
+    return `${preferenceCopy}；${formatTransportFallbackCopy({
+      prefix: '本轮实际传输',
+      reason: transport.fallbackReason,
+      cooldownUntil: transport.fallbackCooldownUntil,
+      immediateRetryHint: '点击“登录来源”会立即重新尝试',
+    })}`;
+  }
+
+  if (actualMode) {
+    return `${preferenceCopy}；本轮实际传输：${actualMode}`;
+  }
+
+  return preferenceCopy;
+}
+
+function formatExplorerManualRunReceipt(
+  source,
+  { result, savedPendingSettings = false } = {},
+) {
+  const settings = latestSettingsPayload?.effective?.explorer?.[source] || {};
+  const sourceLabel = sourceDisplayName(source);
+  const lookbackDays = nonNegativeInteger(
+    settings.lookbackDays,
+    source === 'doubao' ? 7 : 0,
+  );
+  const intervalMinutes = positiveInteger(settings.intervalMinutes, 60);
+  const scope = normalizeInputScope(
+    settings.defaultScope,
+    source === 'doubao' ? 'personal' : 'work',
+  );
+  const transport = formatExplorerRunTransportReceipt(source, result, settings);
+  const settingsState = savedPendingSettings
+    ? '已先保存待生效设置'
+    : '使用已保存设置';
+  const maxConversations = nonNegativeInteger(settings.maxConversations, 0);
+  const sourceLimit =
+    source === 'chatgpt'
+      ? maxConversations > 0
+        ? `，最多 ${formatMessageCount(maxConversations)} 个对话`
+        : '，不限制对话数'
+      : '';
+
+  return ` 抓取回执：${settingsState}；本轮按 ${formatAskScope(
+    scope,
+  )} 范围读取${formatExplorerLookbackWindow(
+    lookbackDays,
+  )}${sourceLimit}，${transport}，自动轮询间隔 ${formatMessageCount(
+    intervalMinutes,
+  )} 分钟。${sourceLabel} 只被读取到本机 raw cache，再提炼为 Memory Service artifact；本操作不会删除远端聊天，也不会向 ${sourceLabel} 写回内容。`;
+}
+
+function formatExplorerRunRequestReceipt(
+  source,
+  { willSavePendingSettings = false, pendingSettingsSaved = false } = {},
+) {
+  const draft = getSourceDraftSettings(source);
+  const sourceLabel = sourceDisplayName(source);
+  const lookbackDays = nonNegativeInteger(
+    draft.lookbackDays,
+    source === 'doubao' ? 7 : 0,
+  );
+  const intervalMinutes = positiveInteger(draft.intervalMinutes, 60);
+  const scope = normalizeInputScope(
+    draft.defaultScope,
+    source === 'doubao' ? 'personal' : 'work',
+  );
+  const maxConversations = nonNegativeInteger(draft.maxConversations, 0);
+  const sourceLimit =
+    source === 'chatgpt'
+      ? maxConversations > 0
+        ? `，最多 ${formatMessageCount(maxConversations)} 个对话`
+        : '，不限制对话数'
+      : '';
+  const settingsState = pendingSettingsSaved
+    ? '已先保存待生效设置，正在按当前表单执行'
+    : willSavePendingSettings
+      ? '将先保存待生效设置，再按当前表单执行'
+      : '使用已保存设置执行';
+
+  return `抓取请求回执：${settingsState}；准备按 ${formatAskScope(
+    scope,
+  )} 范围读取${formatExplorerLookbackWindow(
+    lookbackDays,
+  )}${sourceLimit}，传输偏好为 ${sourceTransportPreferenceLabel(
+    source,
+    draft.transport,
+  )}，自动轮询间隔 ${formatMessageCount(
+    intervalMinutes,
+  )} 分钟。当前只是提交请求，尚未确认新的 Memory Service artifact、尚未刷新本机 cache / cursor，也不会删除远端聊天或向 ${sourceLabel} 写回内容；完成后会用实际传输、fallback 和提炼数量替换本回执。`;
+}
+
+function setExplorerRunRequestMessage(source, options = {}) {
+  const ui = getSourceUi(source);
+  setMessage(
+    ui.messageElement,
+    formatExplorerRunRequestReceipt(source, options),
+    'warn',
+  );
+}
+
+function sourceTransportPreferenceLabel(source, transport) {
+  return transport === 'webpage_mcp'
+    ? `日常浏览器 ${sourceHostName(source)} 标签页`
+    : '桌面端 Chromium profile';
+}
+
+function getSourceDraftSettings(source) {
+  if (source === 'doubao') {
+    return {
+      enabled: Boolean(elements.doubaoSourceEnabled?.checked),
+      lookbackDays: nonNegativeInteger(
+        elements.doubaoSourceLookbackDays?.value,
+        7,
+      ),
+      intervalMinutes: positiveInteger(
+        elements.doubaoSourceIntervalMinutes?.value,
+        60,
+      ),
+      defaultScope: normalizeInputScope(
+        elements.doubaoSourceScope?.value,
+        'personal',
+      ),
+      transport: elements.doubaoSourceUseDailyBrowser?.checked
+        ? 'webpage_mcp'
+        : 'playwright',
+    };
+  }
+
+  return {
+    enabled: Boolean(elements.chatgptSourceEnabled?.checked),
+    lookbackDays: nonNegativeInteger(
+      elements.chatgptSourceLookbackDays?.value,
+      0,
+    ),
+    intervalMinutes: positiveInteger(
+      elements.chatgptSourceIntervalMinutes?.value,
+      60,
+    ),
+    maxConversations: nonNegativeInteger(
+      elements.chatgptSourceMaxConversations?.value,
+      0,
+    ),
+    defaultScope: normalizeInputScope(
+      elements.chatgptSourceScope?.value,
+      'work',
+    ),
+    transport: elements.chatgptUseDailyBrowser?.checked
+      ? 'webpage_mcp'
+      : 'playwright',
+  };
+}
+
+function normalizeSavedSourceSettings(source, settings = {}) {
+  return {
+    enabled: Boolean(settings.enabled),
+    lookbackDays: nonNegativeInteger(
+      settings.lookbackDays,
+      source === 'doubao' ? 7 : 0,
+    ),
+    intervalMinutes: positiveInteger(settings.intervalMinutes, 60),
+    maxConversations: nonNegativeInteger(settings.maxConversations, 0),
+    defaultScope: normalizeInputScope(
+      settings.defaultScope,
+      source === 'doubao' ? 'personal' : 'work',
+    ),
+    transport:
+      settings.transport === 'webpage_mcp' ? 'webpage_mcp' : 'playwright',
+  };
+}
+
+function summarizeSourceSettings(source, settings) {
+  const parts = [
+    settings.enabled ? '自动读取开启' : '自动读取关闭',
+    formatAskScope(settings.defaultScope),
+    formatExplorerLookbackWindow(settings.lookbackDays),
+    sourceTransportPreferenceLabel(source, settings.transport),
+    `每 ${formatMessageCount(settings.intervalMinutes)} 分钟`,
+  ];
+  if (source === 'chatgpt') {
+    parts.splice(
+      3,
+      0,
+      settings.maxConversations > 0
+        ? `最多 ${formatMessageCount(settings.maxConversations)} 个对话`
+        : '不限制对话数',
+    );
+  }
+  return parts.join(' · ');
+}
+
+function describeSourceSettingChanges(source, saved, draft) {
+  const changes = [];
+  if (saved.enabled !== draft.enabled) {
+    changes.push('自动读取');
+  }
+  if (saved.defaultScope !== draft.defaultScope) {
+    changes.push('默认范围');
+  }
+  if (saved.lookbackDays !== draft.lookbackDays) {
+    changes.push('回看天数');
+  }
+  if (
+    source === 'chatgpt' &&
+    saved.maxConversations !== draft.maxConversations
+  ) {
+    changes.push('对话上限');
+  }
+  if (saved.transport !== draft.transport) {
+    changes.push('传输方式');
+  }
+  if (saved.intervalMinutes !== draft.intervalMinutes) {
+    changes.push('抓取间隔');
+  }
+  return changes;
+}
+
+function buildPendingSourceSettingsReceipt(source, sourceStatus) {
+  const sourceLabel = sourceDisplayName(source);
+  const saved = normalizeSavedSourceSettings(
+    source,
+    latestSettingsPayload?.effective?.explorer?.[source] ||
+      sourceStatus?.settings,
+  );
+  const draft = getSourceDraftSettings(source);
+  const changes = describeSourceSettingChanges(source, saved, draft);
+  const changedText =
+    changes.length > 0
+      ? `已改：${changes.join('、')}`
+      : '当前表单与已保存设置一致';
+
+  return {
+    tone: 'warn',
+    text: `待保存输入范围：${changedText}。已保存后台仍用「${summarizeSourceSettings(
+      source,
+      saved,
+    )}」，当前表单为「${summarizeSourceSettings(
+      source,
+      draft,
+    )}」。保存前，后台自动读取、撤回已入库记忆和缓存统计仍按已保存设置；点击“保存来源设置”“登录来源”或“立即抓取”会先保存，再继续。不会删除远端聊天，也不会向 ${sourceLabel} 写回内容。`,
+  };
 }
 
 function getSourceUi(source) {
@@ -772,6 +1111,150 @@ function formatRevokePreview(preview, fallbackScope) {
   if (legacy > 0) parts.push(`含旧审计 ${formatMessageCount(legacy)}`);
   if (revoked > 0) parts.push(`已撤回 ${formatMessageCount(revoked)}`);
   return parts.join(' · ');
+}
+
+function formatRevokeAuditNotice(result) {
+  const state = result?.revokeAuditState;
+  if (state === 'remote_only') {
+    return '注意：Memory Service 有删除结果，但本地没有匹配 artifact；请打开预览或日志核对本地审计是否来自旧版本。预览里的已撤回行只是审计，不代表仍是活跃记忆。';
+  }
+  if (state === 'local_only') {
+    return '注意：Memory Service 没有返回可删除记忆，但本地审计已撤回；通常表示此前已删除，或来源/范围与本地 artifact 不完全一致。预览仍会保留这些审计行，但不会继续显示成活跃记忆。';
+  }
+  if (state === 'empty') {
+    return '没有找到可撤回的 Memory Service 记忆或本地 artifact；请检查来源和默认范围。如果预览里只有已撤回审计，说明它们已不是活跃记忆。';
+  }
+  return 'Memory Service 删除和本地审计标记都已执行；预览仍保留已撤回审计，主记忆列表不再把它们当活跃记忆。';
+}
+
+function getRevokeResultTone(result) {
+  return result?.revokeAuditState === 'remote_and_local' ? 'success' : 'warn';
+}
+
+function formatRevokeRequestMessage(
+  sourceLabel,
+  scope,
+  localArtifacts,
+  legacyArtifacts,
+) {
+  const localText =
+    localArtifacts > 0
+      ? `本地当前约 ${formatMessageCount(localArtifacts)} 条 artifact 等待标记`
+      : '本地当前没有可撤回 artifact，仍会清理可能存在的旧远端记忆';
+  const legacyText =
+    legacyArtifacts > 0
+      ? `；其中 ${formatMessageCount(legacyArtifacts)} 条旧版无 scope 审计会在确认后按本次范围补标记`
+      : '';
+
+  return `撤回请求回执：已提交 ${sourceLabel} / ${formatAskScope(
+    scope,
+  )} 撤回请求，正在等待 Memory Service 删除和本地 Explorer 审计标记返回。当前还不能证明消息、chunk 或 artifact 已撤回；预览、缓存、cursor 和 ${sourceLabel} 原始对话也尚未刷新或删除。${localText}${legacyText}；另一个范围不会受影响。`;
+}
+
+function buildRevokeBoundaryReceipt(source, sourceStatus, memoryConnected) {
+  const sourceLabel = sourceDisplayName(source);
+  const fallbackScope = source === 'doubao' ? 'personal' : 'work';
+  const savedScope = normalizeInputScope(
+    sourceStatus?.settings?.defaultScope,
+    fallbackScope,
+  );
+  const savedScopeLabel = formatAskScope(savedScope);
+  const otherScopeLabel = formatAskScope(
+    savedScope === 'personal' ? 'work' : 'personal',
+  );
+
+  if (!memoryConnected) {
+    return {
+      tone: 'warn',
+      text: `撤回暂不可用：请先连接 Memory Service。当前不会删除 ${sourceLabel} 原始对话，也不会按旧状态改动本地 artifact 审计。`,
+    };
+  }
+
+  if (!sourceStatus) {
+    return {
+      tone: 'error',
+      text:
+        '撤回暂不可用：Explorer 状态未响应，页面不会沿用上一轮来源或范围执行删除；请先刷新状态或查看日志。',
+    };
+  }
+
+  if (sourceStatus.running) {
+    return {
+      tone: 'warn',
+      text: `撤回暂不可用：${sourceLabel} 正在读取。等本轮缓存、提炼和 artifact 统计刷新后再撤回，避免按旧统计操作。`,
+    };
+  }
+
+  const preview = sourceStatus.revokePreview;
+  const active = Number(preview?.activeArtifactCount ?? 0);
+  const legacy = Number(preview?.legacyUnscopedArtifactCount ?? 0);
+  const revoked = Number(preview?.revokedArtifactCount ?? 0);
+  const localText =
+    active > 0
+      ? `本地可撤回 artifact ${formatMessageCount(active)} 条`
+      : '本地当前没有可撤回 artifact';
+  const legacyText =
+    legacy > 0
+      ? `，含旧版无 scope 审计 ${formatMessageCount(legacy)} 条会按当前范围补标记`
+      : '';
+  const revokedText =
+    revoked > 0
+      ? `，另有 ${formatMessageCount(revoked)} 条已撤回审计`
+      : '';
+  const remoteText =
+    active > 0
+      ? '点击后会同时请求 Memory Service 删除对应来源/范围的记忆。'
+      : '点击后仍会请求 Memory Service 清理可能存在的旧远端记忆；如果没有匹配项会显示空结果。';
+
+  return {
+    tone: 'muted',
+    text: `撤回范围回执：按已保存默认范围「${savedScopeLabel}」执行；只影响 Memory Service 中 ${sourceLabel} / ${savedScopeLabel} 和本地审计，${otherScopeLabel}范围与 ${sourceLabel} 原始对话不会被删除。${localText}${legacyText}${revokedText}。${remoteText}`,
+  };
+}
+
+function renderRevokeBoundaryStatus(element, source, sourceStatus, memoryConnected) {
+  if (!element) return;
+  const receipt = buildRevokeBoundaryReceipt(
+    source,
+    sourceStatus,
+    memoryConnected,
+  );
+  element.hidden = false;
+  element.textContent = receipt.text;
+  element.className = `source-revoke-status inline-message ${
+    receipt.tone === 'error'
+      ? 'status-error'
+      : receipt.tone === 'success'
+      ? 'status-ready'
+      : receipt.tone === 'warn'
+      ? 'status-blocked'
+      : ''
+  }`;
+}
+
+function formatRevokeResultMessage(sourceLabel, scope, result) {
+  const deletedMessages = Number(result?.deletedMessages ?? 0);
+  const deletedChunks = Number(result?.deletedChunks ?? 0);
+  const localArtifactsRevoked = Number(result?.localArtifactsRevoked ?? 0);
+  const localLegacyArtifactsRevoked = Number(
+    result?.localLegacyArtifactsRevoked ?? 0,
+  );
+  const localActiveArtifactsBefore = Number(
+    result?.localActiveArtifactsBefore ?? localArtifactsRevoked,
+  );
+  const localActiveArtifactsAfter = Number(
+    result?.localActiveArtifactsAfter ??
+      Math.max(0, localActiveArtifactsBefore - localArtifactsRevoked),
+  );
+  const legacyResult =
+    localLegacyArtifactsRevoked > 0
+      ? `，其中旧审计 ${localLegacyArtifactsRevoked} 条`
+      : '';
+  return `已撤回 ${sourceLabel} / ${formatAskScope(
+    scope,
+  )}：Memory Service 删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块；本地 artifact ${localActiveArtifactsBefore} -> ${localActiveArtifactsAfter}，本轮标记 ${localArtifactsRevoked} 条${legacyResult}。${formatRevokeAuditNotice(
+    result,
+  )}`;
 }
 
 function createPreviewListItem(title, body, meta) {
@@ -1028,6 +1511,136 @@ function explorerIssueTone(sourceStatus) {
   return 'warn';
 }
 
+function buildSourcePipelineReceipt(source, sourceStatus) {
+  const sourceLabel = sourceDisplayName(source);
+  if (!sourceStatus) {
+    return {
+      tone: 'error',
+      text:
+        '输入链路：暂不可判定。Explorer 状态不可用，页面不会沿用上一轮传输或缓存判断；请刷新或查看日志。',
+    };
+  }
+
+  const messageCount = Number(sourceStatus.cache?.messageCount ?? 0);
+  const conversationCount = Number(sourceStatus.cache?.conversationCount ?? 0);
+  const pendingCount = Number(sourceStatus.cache?.pendingExtractCount ?? 0);
+  const artifactCount = Number(sourceStatus.cache?.artifactCount ?? 0);
+  const revokedCount = Number(sourceStatus.cache?.revokedArtifactCount ?? 0);
+  const defaultScope = normalizeInputScope(
+    sourceStatus.settings?.defaultScope,
+    source === 'doubao' ? 'personal' : 'work',
+  );
+  const scopeText = `默认范围：${formatAskScope(defaultScope)}`;
+  const cacheSummary = `${formatMessageCount(messageCount)} 条缓存 / ${formatMessageCount(
+    conversationCount,
+  )} 个对话`;
+
+  if (sourceStatus.running) {
+    return {
+      tone: 'warn',
+      text: `输入链路：正在读取。${scopeText}。正在从 ${sourceLabel} 获取新消息，本地缓存、待提炼数和 artifact 完成后会刷新。`,
+    };
+  }
+
+  if (!sourceStatus.enabled) {
+    return {
+      tone: 'muted',
+      text: `输入链路：自动读取关闭。${scopeText}。现有 ${cacheSummary} 仍可预览、重置或按范围撤回，不会继续后台抓取。`,
+    };
+  }
+
+  if (sourceStatus.authStatus === 'unsupported') {
+    return {
+      tone: 'error',
+      text: `输入链路：暂不可用。${scopeText}。${sourceLabel} 读取链路尚未接通；本地缓存只显示既有审计，不代表新的远端读取。`,
+    };
+  }
+
+  if (sourceStatus.lastRunOutcome === 'stub') {
+    return {
+      tone: 'error',
+      text: `输入链路：抓取未接通。${scopeText}。${sourceLabel} 来源还不能真正读取远端对话；不会写入 Memory Service。`,
+    };
+  }
+
+  if (sourceStatus.lastRunOutcome === 'error') {
+    const cacheText =
+      messageCount > 0 || artifactCount > 0
+        ? `${scopeText}。当前仍显示上次成功留下的 ${cacheSummary}、${formatMessageCount(
+            artifactCount,
+          )} 条活跃 artifact；失败结果不会写成新记忆。`
+        : `${scopeText}。当前没有可用本地缓存或 artifact；修复登录/连接后再抓取。`;
+    return {
+      tone: 'error',
+      text: `输入链路：最近读取失败。${cacheText}`,
+    };
+  }
+
+  if (
+    sourceStatus.authStatus !== 'connected' &&
+    !sourceUsesDailyBrowser(source, sourceStatus)
+  ) {
+    return {
+      tone: 'warn',
+      text: `输入链路：等待登录。${scopeText}。不会读取远端 ${sourceLabel} 对话；现有 ${cacheSummary}，仍只是本机缓存。`,
+    };
+  }
+
+  if (
+    sourceStatus.authStatus !== 'connected' &&
+    sourceUsesDailyBrowser(source, sourceStatus)
+  ) {
+    return {
+      tone: 'warn',
+      text: `输入链路：等待日常浏览器登录态。只会读取明确打开的 ${sourceHostName(
+        source,
+      )} 标签页；${scopeText}；现有 ${cacheSummary}，仍只是本机缓存。`,
+    };
+  }
+
+  if (messageCount <= 0) {
+    return {
+      tone: 'warn',
+      text: `输入链路：没有本地缓存。${scopeText}。请先立即抓取；没有 raw cache 时不会凭空提炼或写入 Memory Service。`,
+    };
+  }
+
+  if (pendingCount > 0) {
+    return {
+      tone: 'warn',
+      text: `输入链路：缓存待提炼。${scopeText}。本机已有 ${cacheSummary}，其中 ${formatMessageCount(
+        pendingCount,
+      )} 条还未提炼；下一轮会继续生成可审计 artifact。`,
+    };
+  }
+
+  if (artifactCount > 0) {
+    const revokedText =
+      revokedCount > 0 ? `，另有 ${formatMessageCount(revokedCount)} 条已撤回审计` : '';
+    return {
+      tone: 'success',
+      text: `输入链路：已有可审计记忆，缓存已处理完。${scopeText}。本机已有 ${cacheSummary}，当前待提炼 0 条，已形成 ${formatMessageCount(
+        artifactCount,
+      )} 条活跃 artifact${revokedText}；这只是本机 Explorer 审计快照，不代表刚刚新增写入，只有下一轮抓到新缓存才会继续提炼或写入 Memory Service。预览可查看原句与 cursor。`,
+    };
+  }
+
+  return {
+    tone: 'muted',
+    text: `输入链路：已处理但暂无可沉淀内容。${scopeText}。本机已有 ${cacheSummary}，当前没有活跃 artifact；可预览清洗结果确认是否只是低信号对话。`,
+  };
+}
+
+function renderSourcePipelineReceipt(element, source, sourceStatus) {
+  if (!element) return;
+  const receipt = explorerSourceDirty.has(source)
+    ? buildPendingSourceSettingsReceipt(source, sourceStatus)
+    : buildSourcePipelineReceipt(source, sourceStatus);
+  element.hidden = false;
+  setMessage(element, receipt.text, receipt.tone);
+  element.classList.add('source-pipeline-receipt');
+}
+
 function pushUniqueRecoveryAction(actions, action) {
   if (
     !actions.some(
@@ -1039,7 +1652,11 @@ function pushUniqueRecoveryAction(actions, action) {
 }
 
 function getAttemptRecoveryActions(attempt) {
-  if (!attempt || attempt.status !== 'failed') return [];
+  if (!attempt) return [];
+
+  const hasFailure = attempt.status === 'failed';
+  const hasTelemetryIssue = Boolean(attempt.telemetryError);
+  if (!hasFailure && !hasTelemetryIssue) return [];
 
   const actions = [];
   const issueText = [attempt.errorMessage, attempt.telemetryError]
@@ -1050,6 +1667,7 @@ function getAttemptRecoveryActions(attempt) {
   const isMobileKind = kind === 'mobile_briefing' || kind === 'reminder_sync';
 
   if (
+    hasFailure &&
     /challenge|安全验证|真人验证|风险验证|No editable element|没有找到可输入区域|no composer|did not show the message|消息不可见|Browser page not available|browser has been closed|No existing doubao\.com tab|豆包浏览器/i.test(
       issueText,
     )
@@ -1061,10 +1679,11 @@ function getAttemptRecoveryActions(attempt) {
   }
 
   if (
-    /different thread|不同线程|mobile conversation|mobile_context|手机版对话|手机对话尚未绑定/i.test(
+    hasFailure &&
+    (/different thread|不同线程|mobile conversation|mobile_context|手机版对话|手机对话尚未绑定/i.test(
       issueText,
     ) ||
-    isMobileKind
+      isMobileKind)
   ) {
     pushUniqueRecoveryAction(actions, {
       action: 'bind_mobile',
@@ -1073,10 +1692,11 @@ function getAttemptRecoveryActions(attempt) {
   }
 
   if (
-    /memory_sync|目标线程尚未绑定|长期记忆线程|memory-sync/i.test(
+    hasFailure &&
+    (/memory_sync|目标线程尚未绑定|长期记忆线程|memory-sync/i.test(
       issueText,
     ) ||
-    isStableKind
+      isStableKind)
   ) {
     pushUniqueRecoveryAction(actions, {
       action: 'bind_memory',
@@ -1095,7 +1715,7 @@ function getAttemptRecoveryActions(attempt) {
     });
   }
 
-  if (kind) {
+  if (hasFailure && kind) {
     pushUniqueRecoveryAction(actions, {
       action: 'retry',
       kind,
@@ -1232,10 +1852,23 @@ function clearSettingsDirty() {
 
 function markExplorerSourceDirty(source) {
   explorerSourceDirty.add(source);
+  renderCurrentSourcePipelineReceipt(source);
 }
 
 function clearExplorerSourceDirty(source) {
   explorerSourceDirty.delete(source);
+}
+
+function renderCurrentSourcePipelineReceipt(source) {
+  const pipelineReceipt =
+    source === 'doubao'
+      ? elements.doubaoSourcePipelineReceipt
+      : elements.chatgptSourcePipelineReceipt;
+  renderSourcePipelineReceipt(
+    pipelineReceipt,
+    source,
+    latestExplorerStatus?.sources?.[source],
+  );
 }
 
 function selectedBroadcastTransport() {
@@ -1652,11 +2285,96 @@ function resolveBoundThread(status, bindingType) {
   };
 }
 
+function threadIdentityMatches(previousThread, nextThread) {
+  if (!previousThread || !nextThread) return false;
+  const previousId = previousThread.threadId || previousThread.binding?.threadId;
+  const nextId = nextThread.id || nextThread.threadId;
+  if (previousId && nextId && previousId === nextId) return true;
+
+  const previousUrl = previousThread.url || previousThread.binding?.threadUrl;
+  const nextUrl = nextThread.url || nextThread.threadUrl;
+  return Boolean(previousUrl && nextUrl && previousUrl === nextUrl);
+}
+
+function formatMemoryThreadBindingReceipt(thread, previousStatus) {
+  const previousThread = resolveBoundThread(previousStatus, 'memory_sync');
+  const previousReady = Boolean(
+    previousStatus?.setupChecklist?.memorySyncBound,
+  );
+  const previousHadBinding = Boolean(
+    previousThread.binding?.threadId || previousThread.binding?.threadUrl,
+  );
+  const previousHadRecord = Boolean(previousThread.record);
+  const sameThread = threadIdentityMatches(previousThread, thread);
+
+  let actionCopy;
+  let prefix = '创建回执';
+  if (previousReady && previousHadRecord && sameThread) {
+    prefix = '绑定回执';
+    actionCopy =
+      '复用已绑定的长期记忆线程，没有新建第二条线程，也没有发送新的建线 seed。';
+  } else if (previousReady && previousHadBinding && sameThread) {
+    prefix = '修复回执';
+    actionCopy =
+      '恢复本机长期线程记录，没有新建第二条线程，也没有发送新的建线 seed。';
+  } else if (previousHadBinding) {
+    prefix = '修复回执';
+    actionCopy =
+      '旧绑定不可用，已重新绑定可打开的 doubao.com 长期记忆线程。';
+  } else {
+    actionCopy =
+      '已创建并绑定专用长期记忆线程；创建时只发送建线 seed，不代表 persona 已同步。';
+  }
+
+  const target = thread?.title || thread?.id || '长期记忆同步线程';
+  const id = thread?.id || thread?.threadId;
+  const targetCopy = `目标：${target}${id ? ` · ${shortThreadId(id)}` : ''}。`;
+  const urlCopy = thread?.url ? `链接：${thread.url}。` : '';
+  const boundaryCopy =
+    '边界：这一步只写 memory_sync_thread 绑定，不同步 persona_core / voice_mode，不写 mobile_context_thread；真实内容投递、跳过原因和页面可见性仍以后续同步流水为准。';
+
+  return `${prefix}：${actionCopy} ${targetCopy} ${urlCopy}${boundaryCopy}`;
+}
+
 function appendThreadDetailLine(container, text) {
   if (!text) return;
   const line = document.createElement('span');
   line.textContent = text;
   container.appendChild(line);
+}
+
+function appendThreadActionReceipt(container, { title, badge, lines }) {
+  if (!container) return;
+  const safeLines = (lines || []).filter(Boolean);
+  if (safeLines.length === 0) return;
+
+  const receipt = document.createElement('div');
+  receipt.className = 'thread-action-receipt';
+
+  const head = document.createElement('div');
+  head.className = 'thread-action-receipt-head';
+
+  const titleEl = document.createElement('strong');
+  titleEl.textContent = title;
+  head.appendChild(titleEl);
+
+  if (badge) {
+    const badgeEl = document.createElement('span');
+    badgeEl.textContent = badge;
+    head.appendChild(badgeEl);
+  }
+  receipt.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'thread-action-receipt-body';
+  for (const lineText of safeLines) {
+    const line = document.createElement('span');
+    line.textContent = lineText;
+    body.appendChild(line);
+  }
+  receipt.appendChild(body);
+
+  container.appendChild(receipt);
 }
 
 function renderMemoryThreadDetail(status) {
@@ -1671,7 +2389,15 @@ function renderMemoryThreadDetail(status) {
   );
   const thread = resolveBoundThread(status, 'memory_sync');
   const hasFailure = stableAttempt?.status === 'failed';
-  const tone = hasFailure ? 'error' : ready ? 'ready' : 'pending';
+  const hasTelemetryIssue = Boolean(stableAttempt?.telemetryError);
+  const awaitingFirstStableSync = ready && !stableAttempt;
+  const tone = hasFailure
+    ? 'error'
+    : hasTelemetryIssue
+    ? 'pending'
+    : ready
+    ? 'ready'
+    : 'pending';
   panel.className = `thread-detail thread-detail-${tone}`;
 
   const head = document.createElement('div');
@@ -1680,11 +2406,21 @@ function renderMemoryThreadDetail(status) {
   title.textContent = ready
     ? hasFailure
       ? '长期记忆线程需要检查'
+      : hasTelemetryIssue
+      ? '长期记忆线程回写需检查'
+      : awaitingFirstStableSync
+      ? '长期记忆线程待首推'
       : '长期记忆线程已绑定'
     : '长期记忆线程未就绪';
   head.appendChild(title);
   const badge = document.createElement('span');
-  badge.textContent = ready ? '可审计' : '待修复';
+  badge.textContent = ready
+    ? awaitingFirstStableSync
+      ? '未投递'
+      : hasTelemetryIssue
+      ? '回写异常'
+      : '可审计'
+    : '待修复';
   head.appendChild(badge);
   panel.appendChild(head);
 
@@ -1719,6 +2455,13 @@ function renderMemoryThreadDetail(status) {
       )}`,
     );
     const attemptMessage = formatAttemptMessage(stableAttempt);
+    const attemptDetails = formatAttemptDetails(stableAttempt);
+    if (attemptDetails.length > 0) {
+      appendThreadDetailLine(
+        meta,
+        `最近同步审计：${attemptDetails.join(' · ')}`,
+      );
+    }
     appendThreadDetailLine(meta, attemptMessage);
   } else {
     appendThreadDetailLine(
@@ -1741,7 +2484,196 @@ function renderMemoryThreadDetail(status) {
   );
   panel.appendChild(meta);
 
+  if (awaitingFirstStableSync) {
+    const canPushNow = Boolean(
+      checklist.memoryServiceConfigured && checklist.doubaoConnected,
+    );
+    appendThreadActionReceipt(panel, {
+      title: '首次同步基线',
+      badge: 'Stable memory',
+      lines: [
+        '当前只确认 memory_sync_thread 已绑定；还没有 stable_memory 自动或手动同步流水。',
+        canPushNow
+          ? '下一次自动到期或点击“现在推一次 persona”后，才会渲染 persona_core / voice_mode 并写入审计。'
+          : '下一步先补齐 Memory Service 连接和豆包登录；首推前不会渲染 persona_core / voice_mode。',
+        '边界：无稳定画像更新时只记 skipped，不发送空占位；不会写 mobile_context_thread，也不会把建线 seed 当成 persona 已同步。',
+      ],
+    });
+  }
+
+  appendThreadActionReceipt(panel, {
+    title: '推送前会发生什么',
+    badge: 'Persona',
+    lines: [
+      '现在推一次 persona：先保存待生效的广播方式，再从 Memory Service 渲染 persona_core / voice_mode package。',
+      `目标：${
+        ready ? '已绑定长期记忆线程' : '长期记忆线程就绪后'
+      }的豆包随手记；不会进入手机版对话。`,
+      '边界：没有真实稳定画像更新时只记 skipped，不发送占位内容；失败或安全验证不会标记投递成功。',
+    ],
+  });
+
   const recoveryActions = getAttemptRecoveryActions(stableAttempt);
+  if (recoveryActions.length > 0) {
+    const actionRow = document.createElement('div');
+    actionRow.className = 'thread-detail-actions';
+    for (const recoveryAction of recoveryActions.slice(0, 3)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary compact-button thread-detail-action';
+      button.dataset.threadAction = recoveryAction.action;
+      if (recoveryAction.kind) {
+        button.dataset.threadKind = recoveryAction.kind;
+      }
+      button.textContent = recoveryAction.label;
+      actionRow.appendChild(button);
+    }
+    panel.appendChild(actionRow);
+  }
+}
+
+function latestMobileContextAttempt(status) {
+  return (status?.syncState?.recentAttempts || []).find(
+    (attempt) =>
+      attempt.kind === 'mobile_briefing' ||
+      attempt.kind === 'reminder_sync',
+  );
+}
+
+function renderMobileThreadDetail(status) {
+  const panel = elements.mobileThreadDetail;
+  if (!panel) return;
+
+  panel.replaceChildren();
+  const checklist = status?.setupChecklist || {};
+  const ready = Boolean(checklist.mobileContextBound);
+  const mobileAttempt = latestMobileContextAttempt(status);
+  const thread = resolveBoundThread(status, 'mobile_context');
+  const hasFailure = mobileAttempt?.status === 'failed';
+  const hasTelemetryIssue = Boolean(mobileAttempt?.telemetryError);
+  const tone = hasFailure
+    ? 'error'
+    : hasTelemetryIssue
+    ? 'pending'
+    : ready
+    ? 'ready'
+    : 'pending';
+  panel.className = `thread-detail thread-detail-${tone}`;
+
+  const head = document.createElement('div');
+  head.className = 'thread-detail-head';
+  const title = document.createElement('strong');
+  title.textContent = ready
+    ? hasFailure
+      ? '手机上下文通道需要检查'
+      : hasTelemetryIssue
+      ? '手机上下文通道回写需检查'
+      : '手机上下文通道已绑定'
+    : '手机上下文通道未就绪';
+  head.appendChild(title);
+  const badge = document.createElement('span');
+  badge.textContent = ready
+    ? hasTelemetryIssue
+      ? '回写异常'
+      : '短期上下文'
+    : '待绑定';
+  head.appendChild(badge);
+  panel.appendChild(head);
+
+  const meta = document.createElement('div');
+  meta.className = 'thread-detail-meta';
+  if (ready) {
+    appendThreadDetailLine(
+      meta,
+      `目标：${thread.title || '手机版对话'}${
+        thread.threadId ? ` · ${shortThreadId(thread.threadId)}` : ''
+      }`,
+    );
+    appendThreadDetailLine(meta, thread.url ? `链接：${thread.url}` : '');
+    appendThreadDetailLine(
+      meta,
+      '通道：近期重点、待办 / 通知和 Quick Ask 有证据回答会进入这条手机对话；长期 persona / voice 仍留在长期记忆线程。',
+    );
+  } else {
+    const blocker = (status?.blockingReasons || []).find(
+      (reason) => reason.code === 'mobile_context_not_bound',
+    );
+    appendThreadDetailLine(
+      meta,
+      blocker?.message ||
+        '还没有绑定可打开的 doubao.com /chat 或 /thread 手机对话；近期重点、待办和查询答案不会写入当前活动页。',
+    );
+  }
+
+  const mobileTask = status?.syncState?.tasks?.mobileBriefing;
+  const reminderTask = status?.syncState?.tasks?.reminderSync;
+  const mobileInterval = formatInterval(mobileTask?.intervalMs);
+  const reminderInterval = formatInterval(reminderTask?.intervalMs);
+  const dailyDigest = status?.settings?.reminderDailyDigestEnabled
+    ? `完整待办摘要 ${status.settings.reminderDailyDigestTime || '09:00'}`
+    : '完整待办摘要已关闭';
+  appendThreadDetailLine(
+    meta,
+    [
+      mobileInterval ? `近期重点每 ${mobileInterval}` : '',
+      reminderInterval ? `新待办每 ${reminderInterval}` : '',
+      dailyDigest,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
+
+  if (mobileAttempt) {
+    appendThreadDetailLine(
+      meta,
+      `最近手机上下文发送：${formatSyncKind(
+        mobileAttempt.kind,
+      )} · ${formatAttemptStatus(mobileAttempt.status)} · ${formatSyncTrigger(
+        mobileAttempt.trigger,
+      )} · ${formatTime(mobileAttempt.completedAt || mobileAttempt.startedAt)}`,
+    );
+    const attemptMessage = formatAttemptMessage(mobileAttempt);
+    const attemptDetails = formatAttemptDetails(mobileAttempt);
+    if (attemptDetails.length > 0) {
+      appendThreadDetailLine(
+        meta,
+        `最近手机上下文审计：${attemptDetails.join(' · ')}`,
+      );
+    }
+    appendThreadDetailLine(meta, attemptMessage);
+  } else {
+    appendThreadDetailLine(
+      meta,
+      '最近手机上下文发送：还没有记录，手动推送近期重点或待办后会写入审计。',
+    );
+  }
+
+  appendThreadDetailLine(
+    meta,
+    '边界：发送前会渲染真实 Memory package 并过滤空占位；失败或安全验证不会标记投递成功，跳过时不会写入豆包。',
+  );
+  panel.appendChild(meta);
+
+  appendThreadActionReceipt(panel, {
+    title: '推送前会发生什么',
+    badge: '手机上下文',
+    lines: [
+      '近期记忆重点：渲染 active_focus_digest，只发送真实高信号 bullet，过滤空摘要和重复占位。',
+      '待办 / 通知：手动触发按完整摘要模式渲染待办包，并在支持时追加通知包。',
+      `目标：${
+        ready ? '已绑定手机对话' : '手机对话绑定后'
+      }的豆包随手记；不会写入长期 persona / voice 线程。`,
+      '边界：发送结果、跳过原因和投递验证会写入最近同步流水，失败不会回写成已送达。',
+    ],
+  });
+
+  const recoveryActions = getAttemptRecoveryActions(mobileAttempt);
+  if (!ready) {
+    pushUniqueRecoveryAction(recoveryActions, {
+      action: 'bind_mobile',
+      label: '绑定手机对话',
+    });
+  }
   if (recoveryActions.length > 0) {
     const actionRow = document.createElement('div');
     actionRow.className = 'thread-detail-actions';
@@ -1933,7 +2865,7 @@ function clearSourceTransportBanner(source) {
   banner.className = 'inline-message';
 }
 
-function renderSourceCard(source, sourceStatus) {
+function renderSourceCard(source, sourceStatus, memoryConnected) {
   const isDoubao = source === 'doubao';
   const authPill = isDoubao
     ? elements.doubaoSourceAuthPill
@@ -1956,9 +2888,15 @@ function renderSourceCard(source, sourceStatus) {
   const runState = isDoubao
     ? elements.doubaoSourceRunState
     : elements.chatgptSourceRunState;
+  const pipelineReceipt = isDoubao
+    ? elements.doubaoSourcePipelineReceipt
+    : elements.chatgptSourcePipelineReceipt;
   const revokeScope = isDoubao
     ? elements.doubaoSourceRevokeScope
     : elements.chatgptSourceRevokeScope;
+  const revokeStatus = isDoubao
+    ? elements.doubaoSourceRevokeStatus
+    : elements.chatgptSourceRevokeStatus;
   const statusMessage = isDoubao
     ? elements.doubaoSourceStatusMessage
     : elements.chatgptSourceStatusMessage;
@@ -1975,6 +2913,13 @@ function renderSourceCard(source, sourceStatus) {
     if (revokeScope) {
       revokeScope.textContent = '-';
     }
+    renderRevokeBoundaryStatus(
+      revokeStatus,
+      source,
+      sourceStatus,
+      memoryConnected,
+    );
+    renderSourcePipelineReceipt(pipelineReceipt, source, sourceStatus);
     setVisibleMessage(
       statusMessage,
       formatExplorerIssueMessage(source, sourceStatus),
@@ -2012,11 +2957,18 @@ function renderSourceCard(source, sourceStatus) {
       defaultScope,
     );
   }
+  renderRevokeBoundaryStatus(
+    revokeStatus,
+    source,
+    sourceStatus,
+    memoryConnected,
+  );
   setVisibleMessage(
     statusMessage,
     formatExplorerIssueMessage(source, sourceStatus),
     explorerIssueTone(sourceStatus),
   );
+  renderSourcePipelineReceipt(pipelineReceipt, source, sourceStatus);
   renderSourceTransportBanner(source, sourceStatus);
 }
 
@@ -2082,15 +3034,19 @@ function renderSourceTransportBanner(source, sourceStatus) {
   banner.textContent = '';
 }
 
-function renderExplorerOverview(explorerStatus, explorerSettings) {
+function renderExplorerOverview(
+  explorerStatus,
+  explorerSettings,
+  memoryConnected = Boolean(latestStatus?.setupChecklist?.memoryServiceConfigured),
+) {
   const effectiveExplorerSettings =
     explorerSettings || latestSettingsPayload?.effective?.explorer;
   applyExplorerSettings(effectiveExplorerSettings);
   elements.explorerUpdatedAt.textContent = formatTime(
     explorerStatus?.updatedAt,
   );
-  renderSourceCard('doubao', explorerStatus?.sources?.doubao);
-  renderSourceCard('chatgpt', explorerStatus?.sources?.chatgpt);
+  renderSourceCard('doubao', explorerStatus?.sources?.doubao, memoryConnected);
+  renderSourceCard('chatgpt', explorerStatus?.sources?.chatgpt, memoryConnected);
 }
 
 function applyButtonAvailability(status, explorerStatus) {
@@ -2260,10 +3216,15 @@ async function refreshStatus() {
   renderBlockingReasons(status);
   renderStepStatuses(status);
   renderMemoryThreadDetail(status);
+  renderMobileThreadDetail(status);
   renderBroadcastTransportStatus(status);
   renderSyncAudit(status);
   applyRuntimeSettings(settings.effective);
-  renderExplorerOverview(explorerStatus, settings.effective.explorer);
+  renderExplorerOverview(
+    explorerStatus,
+    settings.effective.explorer,
+    Boolean(status?.setupChecklist?.memoryServiceConfigured),
+  );
   applyButtonAvailability(status, explorerStatus);
   return { status, settings, explorerStatus };
 }
@@ -2419,7 +3380,7 @@ async function saveExplorerSourceSettings(
 }
 
 async function savePendingExplorerSourceSettings(source) {
-  if (!explorerSourceDirty.has(source)) return;
+  if (!explorerSourceDirty.has(source)) return false;
 
   await saveExplorerSourceSettings(source, {
     silent: true,
@@ -2434,6 +3395,7 @@ async function savePendingExplorerSourceSettings(source) {
     } 来源设置已先保存，正在按最新设置继续执行。`,
     'success',
   );
+  return true;
 }
 
 async function previewExplorerCacheForSource(source) {
@@ -2514,37 +3476,33 @@ async function revokeIngestedMemoryForSource(source) {
   const legacyArtifacts = Number(preview?.legacyUnscopedArtifactCount ?? 0);
   const legacyNote =
     legacyArtifacts > 0
-      ? `\n其中 ${legacyArtifacts} 条来自旧版本地审计记录，缺少历史 scope；本次会按当前范围一起标记为已撤回。`
+      ? `\n其中 ${legacyArtifacts} 条来自旧版本地审计记录，缺少历史 scope；本次会按已保存范围一起标记为已撤回。`
       : '';
 
   const ok = window.confirm(
-    `确定撤回 ${sourceLabel} 来源写入「${formatAskScope(
+    `确定按已保存默认范围撤回 ${sourceLabel} 来源写入「${formatAskScope(
       scope,
-    )}」范围的已入库记忆吗？\n\n本地可审计 artifact 约 ${localArtifacts} 条。${legacyNote}\n这只会删除 Memory Service 中对应来源/范围的记忆，不会删除原始聊天，也不会清理本地审计缓存；成功后本地 artifact 会标记为已撤回，避免继续显示成活跃记忆。`,
+    )}」范围的已入库记忆吗？\n\n本地可审计 artifact 约 ${localArtifacts} 条。${legacyNote}\n这是删除 Memory Service 记忆的操作；不会删除原始聊天，也不会清理本地审计缓存。成功后本地 artifact 会标记为已撤回，避免继续显示成活跃记忆。`,
   );
   if (!ok) return;
 
   await withAction(button, '撤回中...', async () => {
     try {
-      const result = await explorerApi.revokeIngestedMemory(source, scope);
-      const deletedMessages = Number(result?.deletedMessages ?? 0);
-      const deletedChunks = Number(result?.deletedChunks ?? 0);
-      const localArtifactsRevoked = Number(
-        result?.localArtifactsRevoked ?? 0,
-      );
-      const localLegacyArtifactsRevoked = Number(
-        result?.localLegacyArtifactsRevoked ?? 0,
-      );
-      const legacyResult =
-        localLegacyArtifactsRevoked > 0
-          ? `，其中旧审计 ${localLegacyArtifactsRevoked} 条`
-          : '';
       setMessage(
         messageElement,
-        `已撤回 ${sourceLabel} / ${formatAskScope(
+        formatRevokeRequestMessage(
+          sourceLabel,
           scope,
-        )}：删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块；本地 ${localArtifactsRevoked} 条 artifact 已标记为审计撤回${legacyResult}。`,
-        'success',
+          localArtifacts,
+          legacyArtifacts,
+        ),
+        'warn',
+      );
+      const result = await explorerApi.revokeIngestedMemory(source, scope);
+      setMessage(
+        messageElement,
+        formatRevokeResultMessage(sourceLabel, scope, result),
+        getRevokeResultTone(result),
       );
       await refreshStatus();
     } catch (error) {
@@ -2576,9 +3534,10 @@ async function handleRefresh() {
     });
     renderStepStatuses(null);
     renderMemoryThreadDetail(null);
+    renderMobileThreadDetail(null);
     renderBroadcastTransportStatus(null);
     renderSyncAudit(null);
-    renderExplorerOverview(null, latestSettingsPayload?.effective?.explorer);
+    renderExplorerOverview(null, latestSettingsPayload?.effective?.explorer, false);
   }
 }
 
@@ -2596,6 +3555,12 @@ elements.syncAuditList?.addEventListener('click', (event) => {
 });
 
 elements.memoryThreadDetail?.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('[data-thread-action]');
+  if (!button) return;
+  handleSyncAuditAction(button.dataset.threadAction, button.dataset.threadKind);
+});
+
+elements.mobileThreadDetail?.addEventListener('click', (event) => {
   const button = event.target?.closest?.('[data-thread-action]');
   if (!button) return;
   handleSyncAuditAction(button.dataset.threadAction, button.dataset.threadKind);
@@ -2889,11 +3854,12 @@ elements.loginButton.addEventListener('click', () => {
 elements.memoryThreadButton.addEventListener('click', () => {
   void withAction(elements.memoryThreadButton, '创建中...', async () => {
     try {
+      const previousStatus = latestStatus;
       await savePendingBroadcastTransport();
       const thread = await bridgeApi.createMemorySyncThread();
       setMessage(
         elements.memoryThreadMessage,
-        `已绑定：${thread.title || thread.id}`,
+        formatMemoryThreadBindingReceipt(thread, previousStatus),
         'success',
       );
       await refreshStatus();
@@ -2931,9 +3897,11 @@ elements.mobileThreadButton.addEventListener('click', () => {
 elements.runStableButton.addEventListener('click', () => {
   void withAction(elements.runStableButton, '推送中...', async () => {
     try {
+      setManualRunPendingMessage(elements.memoryThreadMessage, 'stable_memory');
       await savePendingBroadcastTransport();
       const result = await bridgeApi.runNow('stable_memory');
       setManualRunResultMessage(elements.memoryThreadMessage, result, {
+        kind: 'stable_memory',
         succeeded: '已手动推送一次 persona 到长期记忆线程。',
         skipped:
           '本次没有可推送的长期记忆；Memory Service 当前未渲染出稳定画像更新。',
@@ -2955,9 +3923,14 @@ elements.runStableButton.addEventListener('click', () => {
 elements.runBriefingButton.addEventListener('click', () => {
   void withAction(elements.runBriefingButton, '推送中...', async () => {
     try {
+      setManualRunPendingMessage(
+        elements.mobileThreadMessage,
+        'mobile_briefing',
+      );
       await savePendingBroadcastTransport();
       const result = await bridgeApi.runNow('mobile_briefing');
       setManualRunResultMessage(elements.mobileThreadMessage, result, {
+        kind: 'mobile_briefing',
         succeeded: '已手动推送一次近期记忆重点到手机对话。',
         skipped:
           '本次没有可推送的近期记忆重点；没有真实高信号内容时不会向豆包发送占位文本。',
@@ -2979,9 +3952,11 @@ elements.runBriefingButton.addEventListener('click', () => {
 elements.runReminderButton.addEventListener('click', () => {
   void withAction(elements.runReminderButton, '推送中...', async () => {
     try {
+      setManualRunPendingMessage(elements.mobileThreadMessage, 'reminder_sync');
       await savePendingBroadcastTransport();
       const result = await bridgeApi.runNow('reminder_sync');
       setManualRunResultMessage(elements.mobileThreadMessage, result, {
+        kind: 'reminder_sync',
         succeeded: '已手动推送一次待办 / 通知到手机对话。',
         skipped: '本次没有可推送的待办或通知。',
       });
@@ -3082,11 +4057,19 @@ elements.chatgptSourceLoginButton.addEventListener('click', () => {
 elements.doubaoSourceRunButton.addEventListener('click', () => {
   void withAction(elements.doubaoSourceRunButton, '抓取中...', async () => {
     try {
-      await savePendingExplorerSourceSettings('doubao');
+      const willSavePendingSettings = explorerSourceDirty.has('doubao');
+      setExplorerRunRequestMessage('doubao', { willSavePendingSettings });
+      const savedPendingSettings =
+        await savePendingExplorerSourceSettings('doubao');
+      setExplorerRunRequestMessage('doubao', {
+        pendingSettingsSaved: savedPendingSettings,
+      });
       const result = await explorerApi.runNow('doubao');
       setMessage(
         elements.doubaoSourceMessage,
-        formatExplorerRunCompletionMessage('doubao', result),
+        formatExplorerRunCompletionMessage('doubao', result, {
+          savedPendingSettings,
+        }),
         'success',
       );
       await refreshStatus();
@@ -3103,14 +4086,22 @@ elements.doubaoSourceRunButton.addEventListener('click', () => {
 elements.chatgptSourceRunButton.addEventListener('click', () => {
   void withAction(elements.chatgptSourceRunButton, '抓取中...', async () => {
     try {
-      await savePendingExplorerSourceSettings('chatgpt');
+      const willSavePendingSettings = explorerSourceDirty.has('chatgpt');
+      setExplorerRunRequestMessage('chatgpt', { willSavePendingSettings });
+      const savedPendingSettings =
+        await savePendingExplorerSourceSettings('chatgpt');
+      setExplorerRunRequestMessage('chatgpt', {
+        pendingSettingsSaved: savedPendingSettings,
+      });
       const result = await explorerApi.runNow('chatgpt');
       if (!result.implemented) {
         throw new Error('ChatGPT explorer 抓取流程暂未实现。');
       }
       setMessage(
         elements.chatgptSourceMessage,
-        formatExplorerRunCompletionMessage('chatgpt', result),
+        formatExplorerRunCompletionMessage('chatgpt', result, {
+          savedPendingSettings,
+        }),
         'success',
       );
       await refreshStatus();

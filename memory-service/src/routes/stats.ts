@@ -40,6 +40,7 @@ interface StatsResponse {
   user: {
     id: string;
     isolation: 'per_user_sqlite';
+    identitySource: 'header' | 'default_fallback';
     storageKey: string;
     fallbackToDefault: boolean;
   };
@@ -99,6 +100,7 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
                 properties: {
                   id: { type: 'string' },
                   isolation: { type: 'string' },
+                  identitySource: { type: 'string' },
                   storageKey: { type: 'string' },
                   fallbackToDefault: { type: 'boolean' },
                 },
@@ -300,6 +302,7 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
         user: {
           id: userId,
           isolation: 'per_user_sqlite',
+          identitySource: headerMissingOrBlank ? 'default_fallback' : 'header',
           storageKey: `data/users/${userId}/memory.db`,
           fallbackToDefault: userId === 'default' && headerMissingOrBlank,
         },

@@ -143,6 +143,16 @@ Key environment variables (see `.env.example` for all options):
 | `EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model name |
 | `EMBEDDING_DIMENSION` | `384` | Vector dimension |
 | `API_KEY` | -- | Optional API key for authentication |
+| `PROACTIVE_SCHEDULER_ENABLED` | `false` | Enable all-user heartbeat and cron background jobs |
+| `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` | `false` | Enable passive browser/composer recall search |
+| `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` | `false` | Enable vector search on passive browser/composer recall |
+| `CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED` | `true` | Return empty passive recall before DB/FTS work when passive search is disabled |
+| `INGEST_LLM_EXTRACTION_ENABLED` | `false` | Enable LLM entity extraction during ingest |
+| `INGEST_EMBEDDING_ENABLED` | `false` | Enable local embedding indexing during ingest |
+| `RECALL_ROUTE_SAFE_MODE_ENABLED` | `true` | Keep `/recall` in FTS-only API-safe mode |
+| `RECALL_SLOW_CHANNELS_ENABLED` | `false` | Allow `/recall` vector/time/graph channels |
+| `RECALL_SAFE_TOP_K` | `10` | Default safe `/recall` result count |
+| `RECALL_SAFE_MAX_TOP_K` | `10` | Maximum safe `/recall` result count |
 | `HEARTBEAT_INTERVAL_MS` | `900000` | Heartbeat loop interval (ms) |
 | `DAILY_CRON` | `0 23 * * *` | Daily consolidation cron expression |
 | `WEEKLY_CRON` | `0 3 * * 0` | Weekly dreaming cron expression |

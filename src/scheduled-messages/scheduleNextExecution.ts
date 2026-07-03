@@ -51,8 +51,8 @@ export function getDefaultScheduleTimeLabel(message: ExecutorScheduleLike): stri
 
 export function getEmptyScheduleTimeHint(message: ExecutorScheduleLike): string {
   return isExecutorDrivenSchedule(message)
-    ? `留空则 ${EXECUTOR_DEFAULT_SCHEDULE_TIME} 后进入队列，每分钟执行一条。`
-    : `留空则 ${AS_ME_DEFAULT_SCHEDULE_TIME} 左右推送。`;
+    ? `留空则按 ${EXECUTOR_DEFAULT_SCHEDULE_TIME} 后排队。`
+    : `留空则按 ${AS_ME_DEFAULT_SCHEDULE_TIME} 推送。`;
 }
 
 export function formatScheduleDateTimeForDisplay(

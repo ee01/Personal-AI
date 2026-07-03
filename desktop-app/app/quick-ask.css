@@ -721,6 +721,16 @@ a,
   margin-bottom: 0;
 }
 
+.user-message-receipt {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(74, 95, 117, 0.12);
+  color: rgba(55, 69, 84, 0.72);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.38;
+}
+
 .message-card a {
   color: var(--qa-accent-strong);
   text-decoration: underline;
@@ -978,6 +988,8 @@ a,
 }
 
 .message-action-status {
+  flex: 1 1 180px;
+  min-width: 0;
   color: var(--qa-muted);
   font-size: 10px;
   line-height: 1.4;
@@ -1157,11 +1169,21 @@ a,
 }
 
 .status-card-meta,
+.status-card-composition,
 .status-refresh-note,
 .status-empty {
   color: var(--qa-muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.status-card-composition {
+  padding: 8px 10px;
+  border: 1px solid rgba(74, 95, 117, 0.12);
+  border-radius: 8px;
+  background: rgba(245, 248, 250, 0.82);
+  color: rgba(48, 62, 77, 0.82);
+  font-weight: 620;
 }
 
 .status-card-refresh {
@@ -1256,6 +1278,39 @@ a,
 }
 
 .status-item-details span {
+  overflow-wrap: anywhere;
+}
+
+.status-item-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(99, 112, 129, 0.1);
+}
+
+.status-item-action-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 95, 117, 0.16);
+  background: rgba(74, 95, 117, 0.1);
+  color: var(--qa-accent-strong);
+  font-size: 10px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.status-item-action-boundary {
+  min-width: 0;
+  color: rgba(74, 95, 117, 0.76);
+  font-size: 10px;
+  font-weight: 620;
+  line-height: 1.42;
   overflow-wrap: anywhere;
 }
 

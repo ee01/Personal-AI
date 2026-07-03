@@ -7,7 +7,18 @@
     <section v-else-if="errorMessage" class="state-panel error">
       <h2>资料记忆不可用</h2>
       <p>{{ errorMessage }}</p>
-      <button type="button" @click="loadCapsule">重试</button>
+      <div class="error-boundary-receipt" role="note">
+        <strong>详情读取失败回执</strong>
+        <p>
+          本次只是在读取资料详情时失败，没有创建、撤销、更新备注、写入 web 检索信号或同步外部系统。
+        </p>
+      </div>
+      <div class="state-actions">
+        <button type="button" @click="loadCapsule">重试</button>
+        <button type="button" class="secondary-state-action" @click="goBack">
+          返回时间轴
+        </button>
+      </div>
     </section>
 
     <article v-else-if="capsule" class="source-memory-detail">
@@ -29,7 +40,7 @@
             打开来源
           </button>
           <router-link
-            v-if="capsule.messageId"
+            v-if="linkedMemoryAvailable"
             class="secondary-action"
             :to="timelineRoute"
           >
@@ -53,6 +64,108 @@
           privacyLabel(capsule.privacyLevel)
         }}</span>
       </div>
+
+      <section
+        :class="['recall-boundary-panel', recallBoundaryTone]"
+        role="note"
+      >
+        <strong>{{ recallBoundaryTitle }}</strong>
+        <p>{{ recallBoundaryText }}</p>
+      </section>
+
+      <section v-if="actionReceipt" class="source-action-panel" role="note">
+        <div class="source-action-head">
+          <div>
+            <p class="eyebrow">最近操作回执</p>
+            <h2>{{ actionReceipt.label }}</h2>
+          </div>
+          <span v-if="actionOccurredAt" class="source-action-time">
+            {{ actionOccurredAt }}
+          </span>
+        </div>
+        <p>{{ actionReceipt.detail }}</p>
+        <div v-if="actionEvidence.length" class="source-action-evidence">
+          <span
+            v-for="item in actionEvidence"
+            :key="item"
+            class="source-action-chip"
+          >
+            {{ item }}
+          </span>
+        </div>
+        <p v-if="actionReceipt.nextStep" class="source-action-next">
+          {{ actionReceipt.nextStep }}
+        </p>
+      </section>
+
+      <section :class="['distillation-panel', distillationTone]" role="note">
+        <div class="distillation-head">
+          <div>
+            <p class="eyebrow">资料蒸馏回执</p>
+            <h2>{{ distillationPolicyLabel }}</h2>
+          </div>
+          <span class="distillation-badge">
+            {{ distillationStatusLabel }}
+          </span>
+        </div>
+        <p class="distillation-detail">{{ distillationPolicyDetail }}</p>
+
+        <dl class="distillation-summary">
+          <div v-if="distillationOneLineCue">
+            <dt>一行提示</dt>
+            <dd>{{ distillationOneLineCue }}</dd>
+          </div>
+          <div v-if="distillationSourceReliability">
+            <dt>来源可信度</dt>
+            <dd>{{ distillationSourceReliability }}</dd>
+          </div>
+          <div v-if="distillationGeneratedAt">
+            <dt>生成时间</dt>
+            <dd>{{ distillationGeneratedAt }}</dd>
+          </div>
+          <div v-if="distillationSourceAsOf">
+            <dt>来源快照</dt>
+            <dd>{{ distillationSourceAsOf }}</dd>
+          </div>
+          <div v-if="distillationInputHashShort">
+            <dt>输入指纹</dt>
+            <dd>{{ distillationInputHashShort }}</dd>
+          </div>
+        </dl>
+
+        <div v-if="distillationEvidence.length" class="distillation-evidence">
+          <span
+            v-for="item in distillationEvidence"
+            :key="item"
+            class="distillation-chip"
+          >
+            {{ item }}
+          </span>
+        </div>
+
+        <div v-if="distillationCompactMemo" class="distillation-memo">
+          <h3>Compact memo</h3>
+          <pre>{{ distillationCompactMemo }}</pre>
+        </div>
+
+        <div
+          v-if="downstreamAllowedLabels.length || downstreamBlockedLabels.length"
+          class="distillation-downstream"
+        >
+          <div v-if="downstreamAllowedLabels.length">
+            <strong>允许作为</strong>
+            <p>{{ downstreamAllowedLabels.join('、') }}</p>
+          </div>
+          <div v-if="downstreamBlockedLabels.length">
+            <strong>不会自动用于</strong>
+            <p>{{ downstreamBlockedLabels.join('、') }}</p>
+          </div>
+        </div>
+
+        <p v-if="distillationNextStep" class="distillation-next">
+          {{ distillationNextStep }}
+        </p>
+      </section>
 
       <section v-if="isVisualMemory" class="visual-panel">
         <div class="visual-head">
@@ -141,7 +254,14 @@
             </div>
             <div v-if="capsule.sourceUrl">
               <dt>来源链接</dt>
-              <dd class="source-url">{{ capsule.sourceUrl }}</dd>
+              <dd v-if="safeSourceUrl" class="source-url">{{ safeSourceUrl }}</dd>
+              <dd v-else class="source-url hidden">原始来源已隐藏</dd>
+              <dd
+                v-if="sourceLinkBoundaryText"
+                class="source-url-boundary"
+              >
+                {{ sourceLinkBoundaryText }}；资料详情仍可复核已保存内容。
+              </dd>
             </div>
           </dl>
         </div>
@@ -234,6 +354,7 @@ import {
   type SourceMemoryCaptureMode,
   type SourceMemoryPrivacyLevel,
 } from '../../services/MemoryServiceClient';
+import { getMemoryLinkSafetyState } from '../searchResultPresentation';
 
 const route = useRoute();
 const router = useRouter();
@@ -315,17 +436,113 @@ const visualTableColumnCount = computed(() => {
   return Math.max(visualTableHeaders.value.length, rowColumnCount, 1);
 });
 const visualTableTruncated = computed(() => Boolean(visualTable.value?.truncated));
-const safeSourceUrl = computed(() => {
-  const value = capsule.value?.sourceUrl?.trim();
-  if (!value) return '';
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-      ? parsed.href
-      : '';
-  } catch (_error) {
-    return '';
+const distillation = computed(() => asRecord(capsuleMetadata.value.distillation));
+const distillationPolicy = computed(() =>
+  asRecord(distillation.value?.policyReceipt),
+);
+const distillationStatus = computed(() =>
+  String(
+    distillation.value?.status ||
+      distillationPolicy.value?.state ||
+      '',
+  ).trim(),
+);
+const distillationTone = computed(() => {
+  if (distillationStatus.value === 'blocked') return 'blocked';
+  if (distillationStatus.value === 'partial') return 'partial';
+  if (distillationStatus.value === 'ready') return 'ready';
+  return 'missing';
+});
+const distillationStatusLabel = computed(() =>
+  distillationStatusDisplayLabel(distillationStatus.value),
+);
+const distillationPolicyLabel = computed(
+  () =>
+    String(distillationPolicy.value?.label || '').trim() ||
+    '资料蒸馏未生成',
+);
+const distillationPolicyDetail = computed(
+  () =>
+    String(distillationPolicy.value?.detail || '').trim() ||
+    '这条资料还没有可用的蒸馏回执；本页只按原始 capsule、证据锚点和草稿线索展示，不会把它当作 ready source pack。',
+);
+const distillationEvidence = computed(() =>
+  toStringArray(distillationPolicy.value?.evidence).filter(Boolean),
+);
+const distillationNextStep = computed(() =>
+  String(distillationPolicy.value?.nextStep || '').trim(),
+);
+const distillationOneLineCue = computed(() =>
+  String(distillation.value?.oneLineCue || '').trim(),
+);
+const distillationCompactMemo = computed(() =>
+  String(distillation.value?.compactMemo || '').trim(),
+);
+const distillationGeneratedAt = computed(() => {
+  const value = Number(distillation.value?.generatedAt || 0);
+  return value > 0 ? formatTimestamp(value) : '';
+});
+const distillationSourceAsOf = computed(() => {
+  const value = Number(distillation.value?.sourceAsOf || 0);
+  return value > 0 ? formatTimestamp(value) : '';
+});
+const distillationInputHashShort = computed(() => {
+  const value = String(distillation.value?.inputHash || '').trim();
+  return value ? value.slice(0, 12) : '';
+});
+const distillationSourceReliability = computed(() => {
+  const reliability = asRecord(distillation.value?.sourceReliability);
+  return String(reliability?.reason || '').trim();
+});
+const downstreamUse = computed(() => asRecord(distillation.value?.downstreamUse));
+const downstreamAllowedLabels = computed(() =>
+  toStringArray(downstreamUse.value?.allowed)
+    .filter(Boolean)
+    .map(downstreamUseLabel),
+);
+const downstreamBlockedLabels = computed(() =>
+  toStringArray(downstreamUse.value?.blocked)
+    .filter(Boolean)
+    .map(downstreamUseLabel),
+);
+const sourceLinkSafety = computed(() =>
+  getMemoryLinkSafetyState({
+    sourceUrl: capsule.value?.sourceUrl,
+  }),
+);
+const actionReceipt = computed(() => capsule.value?.actionReceipt || null);
+const actionEvidence = computed(() =>
+  toStringArray(actionReceipt.value?.evidence).filter(Boolean),
+);
+const actionOccurredAt = computed(() => {
+  const value = Number(actionReceipt.value?.occurredAt || 0);
+  return value > 0 ? formatTimestamp(value) : '';
+});
+const safeSourceUrl = computed(() => sourceLinkSafety.value.sourceUrl || '');
+const sourceLinkBoundaryText = computed(() =>
+  sourceLinkSafety.value.blockedLabels.join('；'),
+);
+const linkedMemoryAvailable = computed(
+  () => capsule.value?.status === 'saved' && Boolean(capsule.value?.messageId),
+);
+const recallBoundaryTone = computed(() => {
+  if (capsule.value?.status === 'dismissed') return 'dismissed';
+  if (!linkedMemoryAvailable.value) return 'missing';
+  return 'active';
+});
+const recallBoundaryTitle = computed(() => {
+  if (capsule.value?.status === 'dismissed') return '资料召回已关闭';
+  if (!linkedMemoryAvailable.value) return '关联记忆信号缺失';
+  return '资料召回已启用';
+});
+const recallBoundaryText = computed(() => {
+  if (capsule.value?.status === 'dismissed') {
+    return '撤销已移除关联的 web 记忆信号，后续 Ask、Memory Lens 和时间轴召回不再使用这条 capsule；本页仅保留已保存证据供复核，不会删除原网页或外部系统内容。';
   }
+  if (!linkedMemoryAvailable.value) {
+    return '这条资料仍保留 capsule 详情，但当前没有可跳转的 web 记忆信号；不会显示关联记忆入口，也不把缺失信号当作已召回证据。';
+  }
+  return '关联 web 记忆信号仍在，后续 Ask、Memory Lens 和时间轴可以召回这条资料；草稿要点只是候选，不等于已确认事实。';
 });
 
 const timelineRoute = computed(() => ({
@@ -457,6 +674,26 @@ function triggerKindLabel(value: string) {
   if (value === 'entity') return '实体';
   if (value === 'title') return '标题';
   return value || '线索';
+}
+
+function distillationStatusDisplayLabel(value: string) {
+  if (value === 'ready') return 'Ready';
+  if (value === 'partial') return 'Partial';
+  if (value === 'blocked') return 'Blocked';
+  return '未生成';
+}
+
+function downstreamUseLabel(value: string) {
+  const labels: Record<string, string> = {
+    source_memory_detail: '资料详情复核',
+    context_recall_source_card: 'Context Recall 资料卡',
+    reflection_seed: 'Reflection 证据种子',
+    dream_seed: 'Dream 证据种子',
+    auto_profile_write: '自动写用户画像',
+    auto_task_creation: '自动创建任务',
+    external_write_or_sync: '外部写入或同步',
+  };
+  return labels[value] || value;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -646,6 +883,40 @@ onMounted(() => {
   cursor: pointer;
 }
 
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.state-panel .secondary-state-action {
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+}
+
+.error-boundary-receipt {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  margin-top: 14px;
+}
+
+.error-boundary-receipt strong {
+  display: block;
+  color: #991b1b;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.error-boundary-receipt p {
+  margin: 0;
+  color: #374151;
+  line-height: 1.55;
+}
+
 .source-memory-detail {
   display: flex;
   flex-direction: column;
@@ -736,6 +1007,282 @@ onMounted(() => {
   border-color: #fecaca;
   background: #fff1f2;
   color: #be123c;
+}
+
+.recall-boundary-panel {
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 12px 14px;
+}
+
+.recall-boundary-panel strong {
+  display: block;
+  color: #1e3a8a;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.recall-boundary-panel p {
+  margin: 0;
+  color: #1f2937;
+  line-height: 1.55;
+}
+
+.recall-boundary-panel.dismissed {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.recall-boundary-panel.dismissed strong {
+  color: #991b1b;
+}
+
+.recall-boundary-panel.missing {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.recall-boundary-panel.missing strong {
+  color: #92400e;
+}
+
+.source-action-panel {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.source-action-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-action-head h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.source-action-time {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.source-action-panel p {
+  margin: 10px 0 0;
+  color: #334155;
+  line-height: 1.6;
+}
+
+.source-action-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.source-action-chip {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.source-action-next {
+  font-weight: 700;
+}
+
+.distillation-panel {
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  padding: 14px;
+}
+
+.distillation-panel.partial {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.distillation-panel.blocked,
+.distillation-panel.missing {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.distillation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.distillation-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.distillation-badge {
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.distillation-panel.partial .distillation-badge {
+  border-color: #facc15;
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.distillation-panel.blocked .distillation-badge,
+.distillation-panel.missing .distillation-badge {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.distillation-detail,
+.distillation-next {
+  margin: 10px 0 0;
+  color: #1f2937;
+  line-height: 1.6;
+}
+
+.distillation-summary {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.distillation-summary div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.distillation-summary dt {
+  color: #4b5563;
+  font-weight: 800;
+}
+
+.distillation-summary dd {
+  margin: 0;
+  color: #111827;
+  overflow-wrap: anywhere;
+}
+
+.distillation-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.distillation-chip {
+  border: 1px solid #d1fae5;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #065f46;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.distillation-panel.partial .distillation-chip {
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.distillation-panel.blocked .distillation-chip,
+.distillation-panel.missing .distillation-chip {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.distillation-memo {
+  margin-top: 12px;
+}
+
+.distillation-memo h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.distillation-memo pre {
+  margin: 0;
+  border: 1px solid #d1fae5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  font: inherit;
+}
+
+.distillation-downstream {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.distillation-downstream div {
+  border: 1px solid #d1fae5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.distillation-downstream strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #065f46;
+}
+
+.distillation-downstream p {
+  margin: 0;
+  color: #1f2937;
+  line-height: 1.5;
+}
+
+.distillation-panel.partial .distillation-memo pre,
+.distillation-panel.partial .distillation-downstream div {
+  border-color: #fde68a;
+}
+
+.distillation-panel.partial .distillation-downstream strong {
+  color: #92400e;
+}
+
+.distillation-panel.blocked .distillation-memo pre,
+.distillation-panel.missing .distillation-memo pre,
+.distillation-panel.blocked .distillation-downstream div,
+.distillation-panel.missing .distillation-downstream div {
+  border-color: #fecaca;
+}
+
+.distillation-panel.blocked .distillation-downstream strong,
+.distillation-panel.missing .distillation-downstream strong {
+  color: #991b1b;
 }
 
 .visual-panel {
@@ -918,6 +1465,18 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
+.source-url.hidden {
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.meta-list .source-url-boundary {
+  margin-top: 4px;
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .meta-list {
   display: grid;
   gap: 10px;
@@ -1021,6 +1580,11 @@ onMounted(() => {
   .danger-panel {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .distillation-downstream,
+  .distillation-summary div {
+    grid-template-columns: 1fr;
   }
 }
 </style>

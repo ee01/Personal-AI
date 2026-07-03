@@ -19,6 +19,7 @@ async function launchExtensionContext() {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
+    acceptDownloads: true,
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -48,6 +49,14 @@ function collectPageErrors(page) {
   return () => {
     assert.deepEqual(errors, [], `Project dashboard page errors: ${errors.join('; ')}`);
   };
+}
+
+function dataSourceCard(page, label, status = 'not_configured') {
+  return page.locator(`.data-source-card.${status}`).filter({
+    has: page.locator('.data-source-card-top strong', {
+      hasText: new RegExp(`^${label}$`),
+    }),
+  });
 }
 
 let launched;
@@ -107,11 +116,20 @@ try {
             milestones: [{ id: 'ga', label: 'GA', date: '2099-06-10' }],
             tasks: [
               {
+                id: 'foundation-task',
+                type: 'task',
+                title: 'Foundation work',
+                status: 'closed',
+                eta: '2099-05-20',
+                jira: [{ key: 'FRESH-0', title: 'Foundation work' }],
+              },
+              {
                 id: 'active-task',
                 type: 'task',
                 title: 'Future work',
                 status: 'progress',
                 eta: '2099-06-01',
+                dependencies: ['foundation-task', 'ga'],
                 jira: [{ key: 'FRESH-1', title: 'Future work' }],
               },
             ],
@@ -151,6 +169,49 @@ try {
   await page.locator('.data-source-action', {
     hasText: '同步/检查数据源',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.snapshot-receipt.fresh', {
+    hasText: '已读取 4 个项目',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.snapshot-receipt.fresh', {
+    hasText: '外部来源状态仍以“同步/检查数据源”为准',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.snapshot-receipt.fresh', {
+    hasText: '不会同步、清空、覆盖或写回 Memory Service、Jira、GitHub、Confluence',
+  }).waitFor({ timeout: 15000 });
+  await page.evaluate(() => {
+    globalThis.__projectDashboardOriginalSendMessage =
+      globalThis.__projectDashboardOriginalSendMessage || chrome.runtime.sendMessage.bind(chrome.runtime);
+    const originalSendMessage = globalThis.__projectDashboardOriginalSendMessage;
+    chrome.runtime.sendMessage = async (request, ...args) => {
+      if (request?.type === 'GET_PROJECT_DATA') {
+        return {
+          success: false,
+          error: 'e2e local snapshot unavailable',
+        };
+      }
+      return originalSendMessage(request, ...args);
+    };
+  });
+  await page.locator('.dashboard-controls .control-button', {
+    hasText: '刷新数据',
+  }).click();
+  await page.locator('.snapshot-receipt.stale', {
+    hasText: '刷新失败，仍显示',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.snapshot-receipt.stale', {
+    hasText: 'e2e local snapshot unavailable；失败 1 次',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.snapshot-receipt.stale', {
+    hasText: '已保留现有页面数据；不会清空、覆盖或同步外部系统',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.dashboard-status.error', {
+    hasText: 'e2e local snapshot unavailable',
+  }).waitFor({ timeout: 15000 });
+  await page.evaluate(() => {
+    if (globalThis.__projectDashboardOriginalSendMessage) {
+      chrome.runtime.sendMessage = globalThis.__projectDashboardOriginalSendMessage;
+    }
+  });
   await serviceWorker.evaluate(() => {
     globalThis.__projectDashboardOriginalFetch =
       globalThis.__projectDashboardOriginalFetch || globalThis.fetch.bind(globalThis);
@@ -170,8 +231,32 @@ try {
   await page.locator('.data-source-action', {
     hasText: '同步/检查数据源',
   }).click();
+  await page.locator('.dashboard-status.warning', {
+    hasText: 'Memory Service 关注项目暂不可用',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.dashboard-status.warning', {
+    hasText: '本次未读到 Memory Service',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-panel', {
     hasText: 'Memory Service 关注项目暂不可用',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-scope.attention', {
+    hasText: '本次未读到 Memory Service',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-scope.attention', {
+    hasText: '未接入跳过：Jira、GitHub、Confluence',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-scope.attention', {
+    hasText: '不代表 Jira/GitHub/Confluence 已同步',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '本地证据不完整：ETA 67%，来源 33%',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '缺来源：Resolve release blocker、Clarify launch readiness',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '先补 1 个缺 ETA、2 个缺来源，避免把本地工作台误当外部权威状态',
   }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-card.unavailable', {
     hasText: 'Memory Service',
@@ -184,19 +269,64 @@ try {
   await page.locator('.data-source-card.unavailable', {
     hasText: 'ETA 覆盖 67%，来源覆盖 33%',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-card.not_configured', {
-    hasText: 'Jira',
-  }).locator('.data-source-card-top span', {
+  await dataSourceCard(page, 'Jira').locator('.data-source-card-top span', {
     hasText: '未接入',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-card.not_configured', {
+  await dataSourceCard(page, 'Jira').filter({
     hasText: '不会读取 Jira 任务、状态、负责人或评论',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-card.not_configured', {
+  await dataSourceCard(page, 'Jira').filter({
     hasText: '1/3 个活动任务有 Jira key',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-card.not_configured', {
+  await dataSourceCard(page, 'Jira').filter({
     hasText: '缺来源任务：Resolve release blocker、Clarify launch readiness',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence-action.fix-source', {
+    hasText: '补来源：Resolve release blocker',
+  }).click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '本地修复入口',
+  }).locator('strong', {
+    hasText: '已打开 Resolve release blocker 的来源补齐位置',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '不会读取或写回 Jira/GitHub/Confluence/Memory Service',
+  }).waitFor({ timeout: 15000 });
+  await page.waitForFunction(() => document.activeElement?.matches('[data-evidence-control="platform-status"]'));
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ state: 'detached', timeout: 15000 });
+
+  const exportDownloadPromise = page.waitForEvent('download', { timeout: 15000 });
+  await page.locator('.control-button.success', {
+    hasText: '导出全部',
+  }).click();
+  const exportDownload = await exportDownloadPromise;
+  assert.match(exportDownload.suggestedFilename(), /^project-report-all-/);
+  await page.locator('.export-receipt', {
+    hasText: '全部项目报告已导出：4 项目 / 5 任务',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt-metrics', {
+    hasText: '活动任务 3',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt-metrics', {
+    hasText: 'Jira 来源 2',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt-gaps', {
+    hasText: '缺 ETA 1',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt-gaps', {
+    hasText: '缺来源 2',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt-projects', {
+    hasText: 'Risk Demo Project',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.export-receipt', {
+    hasText: '不会同步、删除、恢复或写回 Memory Service、Jira、GitHub、Confluence',
   }).waitFor({ timeout: 15000 });
 
   await page.locator('.decision-brief.critical', {
@@ -230,6 +360,50 @@ try {
   await page.locator('.project-filter-button', {
     hasText: '正常',
   }).locator('strong', { hasText: '1' }).waitFor({ timeout: 15000 });
+  await page.locator('.project-local-search input').fill('FRESH Future');
+  await page.locator('.project-search-receipt', {
+    hasText: '1/4 命中',
+  }).locator('.project-search-mode', {
+    hasText: '已按 2 个关键词同时收窄同一项目',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-search-hints span', {
+    hasText: '任务 1',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Fresh Demo Project',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-local-search input').fill('FRESH-1');
+  await page.locator('.project-search-receipt', {
+    hasText: '1/4 命中',
+  }).locator('em', {
+    hasText: '不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-search-hints span', {
+    hasText: 'Jira 1',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Fresh Demo Project',
+  }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('.project-card', { hasText: 'Risk Demo Project' }).count(), 0);
+  await page.locator('.project-filter-button', {
+    hasText: '需处理',
+  }).click();
+  await page.locator('.project-search-receipt small', {
+    hasText: '隐藏 1 个本地命中',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.empty-projects.filter-empty', {
+    hasText: '本地快照有 1 个命中',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.empty-projects.filter-empty .control-button.primary', {
+    hasText: '查看全部项目',
+  }).click();
+  await page.locator('.project-card', {
+    hasText: 'Fresh Demo Project',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-local-search-clear', { hasText: '清除' }).click();
+  await page.locator('.project-card', {
+    hasText: 'Risk Demo Project',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.review-queue', {
     hasText: '1 个项目待复核',
   }).waitFor({ timeout: 15000 });
@@ -322,6 +496,14 @@ try {
   await riskCard.locator('.chart-insight-strip', {
     hasText: '图表概览',
   }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-scope-receipt.attention', {
+    hasText: '1/3 就绪，2 个需处理',
+  }).locator('em', {
+    hasText: '依据本地任务 ETA、依赖任务',
+  }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-scope-receipt.attention', {
+    hasText: '本地轻量图表，不代表 Jira/GitHub/Confluence 权威同步',
+  }).waitFor({ timeout: 15000 });
   await riskCard.locator('.chart-insight-card.ready', {
     hasText: '甘特就绪度',
   }).locator('.chart-timeline-track').waitFor({ timeout: 15000 });
@@ -348,6 +530,9 @@ try {
   await page.locator('.evidence-repair-card.missing', {
     hasText: '来源',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.jira-source-boundary', {
+    hasText: '不会读取或写回 Jira',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.zoom-overlay.active .close-btn').click();
   await page.locator('.zoom-title', {
     hasText: 'Resolve release blocker',
@@ -355,6 +540,16 @@ try {
   await riskCard.locator('.chart-insight-card.attention', {
     hasText: '燃尽/完成',
   }).locator('.chart-progress').waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '燃尽/完成',
+  }).locator('.chart-insight-metrics', {
+    hasText: '任务数口径',
+  }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '燃尽/完成',
+  }).locator('p', {
+    hasText: '不含工时、故事点或范围变化',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.focus-item.blocked', {
     hasText: 'Resolve release blocker',
   }).locator('.focus-risk.risk-high', {
@@ -380,6 +575,23 @@ try {
   await staleCard.locator('.review-strip.overdue', {
     hasText: '复核过期',
   }).waitFor({ timeout: 15000 });
+  await staleCard.locator('.chart-scope-receipt.partial', {
+    hasText: '计划陈旧',
+  }).locator('small', {
+    hasText: '对外同步或承诺前先复核状态',
+  }).waitFor({ timeout: 15000 });
+  await staleCard.locator('.chart-insight-card.ready', {
+    hasText: '甘特就绪度',
+  }).locator('.chart-driver-item.complete', {
+    hasText: 'Closed work',
+  }).locator('span', {
+    hasText: '完成 ETA 2024-01-10',
+  }).waitFor({ timeout: 15000 });
+  await staleCard.locator('.chart-insight-card.ready', {
+    hasText: '甘特就绪度',
+  }).locator('p', {
+    hasText: '历史范围 2024-01-10 至 2024-01-15',
+  }).waitFor({ timeout: 15000 });
 
   const firstProjectTitle = (await page.locator('.project-card .project-title').first().textContent())?.trim();
   assert.equal(firstProjectTitle, 'Risk Demo Project');
@@ -392,9 +604,44 @@ try {
   assert.equal(await page.locator('.project-card', { hasText: 'Fresh Demo Project' }).count(), 0);
 
   await page.locator('.project-filter-button', { hasText: '正常' }).click();
-  await page.locator('.project-card', { hasText: 'Fresh Demo Project' }).waitFor({
+  const freshCard = page.locator('.project-card', { hasText: 'Fresh Demo Project' });
+  await freshCard.waitFor({
     timeout: 15000,
   });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '依赖图',
+  }).locator('.chart-insight-metrics', {
+    hasText: '2/2 依赖目标有效',
+  }).waitFor({ timeout: 15000 });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '依赖图',
+  }).locator('.chart-insight-metrics', {
+    hasText: '最长链 2 个任务',
+  }).waitFor({ timeout: 15000 });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '依赖图',
+  }).locator('.chart-driver-item.neutral', {
+    hasText: '关键链候选',
+  }).locator('em', {
+    hasText: 'Foundation work -> Future work',
+  }).waitFor({ timeout: 15000 });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '依赖图',
+  }).locator('.chart-driver-item.neutral', {
+    hasText: 'Future work',
+  }).locator('em', {
+    hasText: '依赖 foundation-task、ga',
+  }).waitFor({ timeout: 15000 });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '燃尽/完成',
+  }).locator('.chart-insight-metrics', {
+    hasText: '任务数口径',
+  }).waitFor({ timeout: 15000 });
+  await freshCard.locator('.chart-insight-card.ready', {
+    hasText: '燃尽/完成',
+  }).locator('p', {
+    hasText: '不是 effort/velocity 预测',
+  }).waitFor({ timeout: 15000 });
   assert.equal(await page.locator('.project-card', { hasText: 'Stale Demo Project' }).count(), 0);
   assert.equal(await page.locator('.project-card', { hasText: 'Evidence Gap Project' }).count(), 0);
 
@@ -569,6 +816,40 @@ try {
   }).click();
   await page.waitForFunction(() => document.querySelectorAll('.review-queue-item').length === 3);
 
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '依赖图',
+  }).locator('.chart-driver-item.critical', {
+    hasText: 'Resolve release blocker',
+  }).click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('[data-evidence-control="jira-key"]').fill('not-a-key');
+  await page.locator('.jira-source-form .add-jira-btn', {
+    hasText: '添加来源',
+  }).click();
+  await page.locator('.jira-source-error', {
+    hasText: '请输入类似 MTR-148115 的 Jira key',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('[data-evidence-control="jira-key"]').fill('mtr-148115');
+  await page.locator('[data-evidence-control="jira-title"]').fill('Release blocker Jira source');
+  await page.locator('.jira-source-form .add-jira-btn', {
+    hasText: '添加来源',
+  }).click();
+  await page.locator('.dashboard-status.success', {
+    hasText: '已把 MTR-148115 作为本地 Jira 来源记录到 Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.jira-item-editable', {
+    hasText: 'MTR-148115',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-card.complete', {
+    hasText: '来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ state: 'detached', timeout: 15000 });
+
   const reviewOnlyProject = {
     id: 'decision-review-only',
     name: 'Decision Review Only',
@@ -692,6 +973,14 @@ try {
             priority: 9,
             createdAt: 2,
           },
+          {
+            id: 'memory-import-followup',
+            name: 'Memory Import Followup',
+            description: 'Second imported watched project',
+            isActive: true,
+            priority: 8,
+            createdAt: 3,
+          },
         ]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -704,8 +993,33 @@ try {
   await page.locator('.data-source-action', {
     hasText: '同步/检查数据源',
   }).click();
+  await page.locator('.dashboard-status.warning', {
+    hasText: '已从 Memory Service 关注项目新增 2 个本地工作台',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.dashboard-status.warning', {
+    hasText: '本地证据待补：2 个项目待规划',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-panel', {
-    hasText: '新增：Memory Import Project',
+    hasText: '新增：Memory Import Project、Memory Import Followup',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-scope.ready', {
+    hasText: '本次读取 Memory Service',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-scope.ready', {
+    hasText: '已读取 1',
+  }).locator('span', {
+    hasText: '未接入 3',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '本地证据待补：2 个项目待规划，ETA 100%，来源 100%',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '活动任务 1',
+  }).locator('span', {
+    hasText: '来源 100%',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence.attention', {
+    hasText: '待规划项目：Memory Import Project、Memory Import Followup',
   }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-card.ready', {
     hasText: 'Memory Service',
@@ -713,13 +1027,52 @@ try {
     hasText: '可读取',
   }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-card.ready', {
-    hasText: '本地工作台：2 个项目，1 个活动任务',
+    hasText: '本地工作台：3 个项目，1 个活动任务',
+  }).waitFor({ timeout: 15000 });
+  await dataSourceCard(page, 'GitHub').locator('.data-source-diagnostics', {
+    hasText: '尚未配置项目仓库映射',
+  }).waitFor({ timeout: 15000 });
+  await dataSourceCard(page, 'GitHub').locator('.data-source-diagnostics', {
+    hasText: '本地映射种子：0/1 个活动任务有平台来源，1/1 个有 Jira key',
+  }).waitFor({ timeout: 15000 });
+  await dataSourceCard(page, 'Confluence').locator('.data-source-diagnostics', {
+    hasText: '本地页面映射种子：3/3 个项目有描述，1/3 个项目有里程碑（共 1 个）',
+  }).waitFor({ timeout: 15000 });
+  await dataSourceCard(page, 'Confluence').locator('.data-source-diagnostics', {
+    hasText: '待规划项目暂不适合作为状态报告依据：Memory Import Project、Memory Import Followup',
   }).waitFor({ timeout: 15000 });
   await page.locator('.project-card', {
     hasText: 'Memory Import Project',
   }).locator('.review-strip.unreviewed', {
     hasText: '未复核',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Memory Import Followup',
+  }).locator('.review-strip.unreviewed', {
+    hasText: '未复核',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence-action.plan-project', {
+    hasText: '规划 Memory Import Followup',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-evidence-action.plan-project', {
+    hasText: '规划 Memory Import Project',
+  }).click();
+  await page.locator('.zoom-overlay.active .zoom-title', {
+    hasText: '添加新任务',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '已打开 Memory Import Project 的首个任务填写入口',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '不会创建 Jira/GitHub/Confluence 任务，也不会反写 Memory Service',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.timeline-context', {
+    hasText: '50%',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-overlay.active .zoom-title', {
+    hasText: '添加新任务',
+  }).waitFor({ state: 'detached', timeout: 15000 });
 
   assertNoPageErrors();
   await context.close();

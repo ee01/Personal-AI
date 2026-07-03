@@ -300,10 +300,31 @@ try {
   await page.locator('text=执行器队列可能延迟').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=条消息正在排队').first().waitFor({
+    timeout: 15000,
+  });
+  await page.locator(
+    'text=38 条消息正在排队，4 个时间槽有拥挤，最大同槽 32 条，最大预计延后 31 分钟；1 个需要调整，展开后可查看建议依据和改期入口',
+  ).waitFor({
+    timeout: 15000,
+  });
+  assert.equal(
+    await page.locator('text=建议处理：Risk 32（第 32/32 个）').count(),
+    0,
+    'queue slot details should be collapsed by default',
+  );
+  await page.getByRole('button', { name: '查看执行器队列详情' }).click();
+  await page
+    .locator(
+      'text=操作边界：改到建议只写回最晚消息的 Schedule_Date / Schedule_Time，不会立即发送、不会跳过前序消息',
+    )
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('text=建议处理：Risk 32（第 32/32 个）').waitFor({
     timeout: 15000,
   });
-  await page.locator('text=前面 31 条会先执行').waitFor({
+  await page.getByText('前面 31 条会先执行', { exact: true }).waitFor({
     timeout: 15000,
   });
   await page.getByText('Risk 1', { exact: true }).first().waitFor({
@@ -312,6 +333,51 @@ try {
   await page.locator('text=建议改到 2026-05-04 10:01').waitFor({
     timeout: 15000,
   });
+  await page.locator(
+    'text=原因：同执行时间第 32/32 个，前面 31 条会先执行，可能超过 30 分钟补偿窗口',
+  ).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('text=写入后领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
+  await page.locator(
+    'text=建议依据：明确时间同槽；目标第 32/32 个；前面 31 条会先执行，已展示 3 条前序样例，另 28 条未展开；建议写入 2026-05-04 10:01；不会自动处理前序或发送消息',
+  ).waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('button[title="新增消息"]').click();
+  await page.getByRole('tab', { name: /Bot/ }).click();
+  await page.locator('input[type="date"]').fill('2026-05-04');
+  await page.locator('input[type="time"]').fill('09:30');
+  await page.locator('text=建议改到 2026-05-04 10:02').waitFor({
+    timeout: 15000,
+  });
+  await page.getByRole('button', { name: '使用建议时间' }).click();
+  const draftSuggestionReceipt = page.locator('[role="status"]', {
+    hasText: '建议时间已应用到草稿',
+  });
+  await draftSuggestionReceipt.getByText('目标: 2026-05-04 10:02').waitFor({
+    timeout: 15000,
+  });
+  await draftSuggestionReceipt
+    .getByText('原因: 同执行时间第 33/33 个，前面 32 条会先执行，可能超过 30 分钟补偿窗口')
+    .waitFor({ timeout: 15000 });
+  await draftSuggestionReceipt
+    .getByText('写入后: 领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
+  await draftSuggestionReceipt
+    .getByText(
+      '边界: 写入本地明确时间；这里只更新表单草稿，尚未写入 Messages、不会立即发送，也不会跳过前序消息，保存后才会写入 Sheet。',
+    )
+    .waitFor({ timeout: 15000 });
+  assert.equal(appliedUpdate, null, 'draft suggestion should not write the Sheet before save');
+  await page.getByRole('button', { name: '✕' }).click();
+
   await page.getByRole('button', {
     name: '显示全部 4 个时间槽',
   }).click();
@@ -322,20 +388,34 @@ try {
     name: '收起队列槽位',
   }).click();
 
-  const dialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
   await page.getByRole('button', {
     name: '将Risk 32改到建议时间2026-05-04 10:01',
   }).click();
-  const dialog = await dialogPromise;
-  assert.match(dialog.message(), /已将「Risk 32」改到 2026-05-04 10:01/);
-  await dialog.accept();
 
+  await page.waitForURL(/messageId=msg-32/, { timeout: 15000 });
+  const explicitReceipt = page.locator('[role="status"]', {
+    hasText: '已应用改期建议',
+  }).filter({ hasText: 'Risk 32' });
+  await explicitReceipt.getByText('来源: 队列建议').waitFor({ timeout: 15000 });
   assert.deepEqual(appliedUpdate, {
     id: 'msg-32',
     date: '2026-05-04',
     time: '10:01',
   });
-  await page.waitForURL(/messageId=msg-32/, { timeout: 15000 });
+  await explicitReceipt.getByText('写入: Messages 行 msg-32').waitFor({
+    timeout: 15000,
+  });
+  await explicitReceipt.getByText('边界: 写入未来本地明确时间').waitFor({
+    timeout: 15000,
+  });
+  await explicitReceipt
+    .getByText('写入后: 领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
+  await explicitReceipt.getByText(
+    '原因: 同执行时间第 32/32 个，前面 31 条会先执行，可能超过 30 分钟补偿窗口',
+  ).waitFor({
+    timeout: 15000,
+  });
 
   assertNoPageErrors();
   await page.close();
@@ -387,33 +467,76 @@ try {
   await noTimePage.locator('text=执行器队列可能延迟').waitFor({
     timeout: 15000,
   });
+  await noTimePage.locator('text=条消息正在排队').first().waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator(
+    'text=9 条消息正在排队，1 个时间槽有拥挤，最大同槽 9 条，最大预计延后 8 分钟；1 个需要调整，展开后可查看建议依据和改期入口',
+  ).waitFor({
+    timeout: 15000,
+  });
+  assert.equal(
+    await noTimePage.locator('text=建议处理：Late 9（第 9/9 个）').count(),
+    0,
+    'no-time queue slot details should be collapsed by default',
+  );
+  await noTimePage.getByRole('button', { name: '查看执行器队列详情' }).click();
   await noTimePage.locator('text=建议处理：Late 9（第 9/9 个）').waitFor({
     timeout: 15000,
   });
-  await noTimePage.locator('text=前面 8 条会先执行').waitFor({
+  await noTimePage.getByText('前面 8 条会先执行', { exact: true }).waitFor({
     timeout: 15000,
   });
-  await noTimePage.locator('text=已避开 1 个明确时间分钟').waitFor({
+  await noTimePage
+    .getByText('可能排到执行日期结束后 · 当天剩余约 8 条 · 已避开 1 个明确时间分钟', { exact: true })
+    .waitFor({
     timeout: 15000,
   });
   await noTimePage.locator('text=建议改到 2026-05-05 08:00 后队列').waitFor({
     timeout: 15000,
   });
+  await noTimePage.locator(
+    'text=原因：08:00 后队列第 9/9 个，前面 8 条会先执行，当天剩余约 8 条',
+  ).waitFor({
+    timeout: 15000,
+  });
+  await noTimePage
+    .locator('text=写入后领取口径：08:00 后队列 · 表格顺序每分钟一条 · 发送后回调写回')
+    .first()
+    .waitFor({
+      timeout: 15000,
+    });
+  await noTimePage.locator(
+    'text=建议依据：08:00 后队列；目标第 9/9 个；前面 8 条会先执行，已展示 3 条前序样例，另 5 条未展开；建议写入 2026-05-05 08:00 后队列，保留空时间队列语义；不会自动处理前序或发送消息',
+  ).waitFor({
+    timeout: 15000,
+  });
 
-  const noTimeDialogPromise = noTimePage.waitForEvent('dialog', { timeout: 15000 });
   await noTimePage.getByRole('button', {
     name: '将Late 9改到建议时间2026-05-05 08:00 后队列',
   }).click();
-  const noTimeDialog = await noTimeDialogPromise;
-  assert.match(noTimeDialog.message(), /已将「Late 9」改到 2026-05-05 08:00 后队列/);
-  await noTimeDialog.accept();
 
+  await noTimePage.waitForURL(/messageId=late-9/, { timeout: 15000 });
+  const noTimeReceipt = noTimePage.locator('[role="status"]', {
+    hasText: '已应用改期建议',
+  }).filter({ hasText: 'Late 9' });
+  await noTimeReceipt.getByText('来源: 队列建议').waitFor({
+    timeout: 15000,
+  });
   assert.deepEqual(appliedUpdate, {
     id: 'late-9',
     date: '2026-05-05',
     time: '',
   });
-  await noTimePage.waitForURL(/messageId=late-9/, { timeout: 15000 });
+  await noTimeReceipt
+    .getByText('边界: 清空 Schedule_Time，保留 08:00 后队列语义')
+    .waitFor({ timeout: 15000 });
+  await noTimeReceipt
+    .getByText('写入后: 领取口径：08:00 后队列 · 表格顺序每分钟一条 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
+  await noTimeReceipt
+    .getByText('原因: 08:00 后队列第 9/9 个，前面 8 条会先执行，当天剩余约 8 条')
+    .waitFor({ timeout: 15000 });
 
   assertNoTimePageErrors();
   await noTimePage.close();

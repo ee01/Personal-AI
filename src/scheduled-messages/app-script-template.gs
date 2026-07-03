@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.8.5';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-28';
+var APP_SCRIPT_VERSION = '2.8.6';
+var APP_SCRIPT_LAST_UPDATED = '2026-06-08';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -1069,6 +1069,89 @@ function isTruthyRequestValue(value) {
   return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
+function getAutoMarkOnFetchMode(parameters) {
+  const source = parameters || {};
+  const explicitMode = getRequestParameterValue(source.autoMarkOnFetch).trim().toLowerCase();
+
+  if (explicitMode === 'api' || explicitMode === 'api_only' || explicitMode === 'api-only') {
+    return 'api';
+  }
+
+  if (explicitMode === 'all' || explicitMode === 'true' || explicitMode === '1' || explicitMode === 'yes') {
+    return 'all';
+  }
+
+  if (isTruthyRequestValue(source.autoMarkApiExecuted) || isTruthyRequestValue(source.autoMarkApiOnFetch)) {
+    return 'api';
+  }
+
+  if (isTruthyRequestValue(source.autoMarkExecuted) || isTruthyRequestValue(source.autoMarkOnFetch)) {
+    return 'all';
+  }
+
+  return 'none';
+}
+
+function shouldAutoMarkMessageOnFetch(mode, message) {
+  if (!message || mode === 'none') {
+    return false;
+  }
+
+  if (mode === 'all') {
+    return true;
+  }
+
+  if (mode === 'api') {
+    return message.targetType === 'api' ||
+      message.Push_Method === 'AI' ||
+      (message.Push_Method === 'JiraAutomation' && String(message.AI_Endpoint || '').trim() !== '');
+  }
+
+  return false;
+}
+
+function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
+  const normalizedMode = mode || 'none';
+  if (!shouldAutoMarkMessageOnFetch(normalizedMode, message)) {
+    return {
+      requested: normalizedMode,
+      marked: false
+    };
+  }
+
+  const markResult = markBotMessageExecuted(
+    messageId,
+    message.rowIndex,
+    true,
+    '',
+    message.Topic || '',
+    message.Content || '',
+    executionKey || ''
+  );
+
+  if (!markResult || markResult.success !== true) {
+    return {
+      requested: normalizedMode,
+      marked: false,
+      success: false,
+      error: markResult && markResult.error ? markResult.error : 'auto mark on fetch failed',
+      messageId: messageId,
+      rowIndex: message.rowIndex,
+      executionKey: executionKey || ''
+    };
+  }
+
+  return {
+    requested: normalizedMode,
+    marked: true,
+    success: true,
+    duplicate: markResult.duplicate === true,
+    messageId: markResult.messageId || messageId,
+    rowIndex: markResult.rowIndex || message.rowIndex,
+    executionKey: markResult.executionKey || executionKey || ''
+  };
+}
+
 function parseJsonStringFragment(fragment) {
   try {
     return JSON.parse('"' + fragment + '"');
@@ -1848,7 +1931,8 @@ function doGet(e) {
     // 构建 postData 格式，复用现有函数
     const postData = {
       releaseInfo: releaseInfo || {},
-      currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+      currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'),
+      autoMarkOnFetch: getAutoMarkOnFetchMode(e.parameter || {})
     };
     
     const result = getMessageCurrentTimeWithReleaseInfo(postData);
@@ -1943,7 +2027,7 @@ function doPost(e) {
     
     if (action === 'getBotMessageCurrentTime') {
       // 解析 POST 数据
-      let requestData = postData;
+      let requestData = mergeRequestParameters(queryParameters, postData);
       Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(requestData).substring(0, 200)}...`);
       
       // 支持两种 body 格式：
@@ -2721,6 +2805,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     // 提取参数
     const releaseInfo = postData.releaseInfo || {};
     const currentTimeStr = postData.currentTime; // "yyyy-MM-dd HH:mm"
+    const autoMarkOnFetchMode = getAutoMarkOnFetchMode(postData);
     
     // 解析当前时间（如果没有传入，使用当前时间）
     let now;
@@ -2813,6 +2898,25 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     
     Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
     const executionKey = buildMessageExecutionKey(message, messageId, now);
+    const autoMarkOnFetchResult = markMessageOnFetchIfRequested(
+      message,
+      messageId,
+      executionKey,
+      autoMarkOnFetchMode
+    );
+
+    if (autoMarkOnFetchResult.success === false) {
+      Logger.log(`领取后自动标记失败，停止返回待发送消息: ${messageId} - ${autoMarkOnFetchResult.error}`);
+      return {
+        executed: false,
+        error: autoMarkOnFetchResult.error || 'auto mark on fetch failed',
+        messageId: messageId,
+        rowIndex: message.rowIndex,
+        executionKey: executionKey,
+        autoMarkOnFetch: autoMarkOnFetchResult,
+        timestamp: new Date().toISOString()
+      };
+    }
     
     // === 检查是否是 AI 消息或 JiraAutomation（有 AI_Endpoint）===
     if (message.Push_Method === 'AI' || (message.Push_Method === 'JiraAutomation' && String(message.AI_Endpoint || '').trim() !== '')) {
@@ -2843,7 +2947,8 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         aiBody: bodyStr,
         rowIndex: message.rowIndex,
         executionKey: executionKey,
-        requiresExecutionCallback: true,
+        requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
+        autoMarkOnFetch: autoMarkOnFetchResult,
         timestamp: new Date().toISOString()
       };
     }
@@ -2866,6 +2971,8 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       glipEmailAddress: message.glipEmailAddress || '',
       rowIndex: message.rowIndex,
       executionKey: executionKey,
+      requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
+      autoMarkOnFetch: autoMarkOnFetchResult,
       timestamp: new Date().toISOString()
     };
     

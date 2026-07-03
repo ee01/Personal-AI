@@ -38,6 +38,10 @@ import {
   type RecallContextExpansion,
 } from './RecallContextExpansionService.js';
 import { CueCompilerService } from './CueCompilerService.js';
+import {
+  LensPresentationCompiler,
+  matchHasVisibleFieldNovelty,
+} from './LensPresentationCompiler.js';
 import { MemoryCueFactService } from './MemoryCueFactService.js';
 import { MemoryOutcomeLoopService } from './MemoryOutcomeLoopService.js';
 import { RecallRelevancePatchService } from './RecallRelevancePatchService.js';
@@ -65,6 +69,16 @@ const MAX_QUERY_CHARS = 600;
 const MIN_SIGNAL_RATIO = 0.45;
 const LOW_INFORMATION_REJECT_REASON = 'low_information_match';
 const CONTEXT_OVER_FETCH_FACTOR = 6;
+const CONTEXT_FAST_OVER_FETCH_FACTOR = 1;
+const PASSIVE_FAST_QUERY_MAX_CHARS = 240;
+const PASSIVE_FAST_QUERY_MAX_TOKENS = 12;
+const PASSIVE_FAST_MODE_SURFACES = new Set([
+  'web_passive',
+  'meeting_passive',
+  'popup_passive',
+  'follow_thread',
+  'composer_guard',
+]);
 
 const GENERIC_CONTEXT_TERMS = new Set([
   'about',
@@ -268,6 +282,7 @@ interface SourceMemoryContextRow {
   summary: string | null;
   content_preview: string | null;
   message_id: string | null;
+  metadata_json: string | null;
   created_at: number;
   updated_at: number;
   anchor_preview: string | null;
@@ -291,6 +306,81 @@ type SuppressionReason =
   | 'user_relevance_patch'
   | 'weak_semantic_only';
 
+function parseOptionalBooleanEnv(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function isPassiveFastModeEnabled(request: ContextRecallRequest): boolean {
+  if (!PASSIVE_FAST_MODE_SURFACES.has(request.surface)) return false;
+  const envValue = parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_FAST_MODE');
+  if (envValue !== null) return envValue;
+  return process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true';
+}
+
+function isPassiveFastVectorEnabled(): boolean {
+  return parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED') === true;
+}
+
+function isPassiveFastSearchEnabled(): boolean {
+  return parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED') === true;
+}
+
+function getContextRecallChannels(
+  passiveFastMode: boolean,
+): Array<'vector' | 'fts'> {
+  if (passiveFastMode && !isPassiveFastVectorEnabled()) {
+    return ['fts'];
+  }
+  return ['vector', 'fts'];
+}
+
+function getRecallQueryText(
+  query: string,
+  passiveFastMode: boolean,
+): string {
+  if (!passiveFastMode) return query;
+  return compactPassiveFastQuery(query);
+}
+
+function compactPassiveFastQuery(query: string): string {
+  const issueKeys = query.match(ISSUE_KEY_PATTERN) ?? [];
+  const selected: string[] = [];
+  const seen = new Set<string>();
+
+  for (const token of issueKeys) {
+    const key = token.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      selected.push(token);
+    }
+  }
+
+  for (const rawToken of query.match(/[\p{L}\p{N}_-]+/gu) ?? []) {
+    const token = rawToken.trim();
+    const normalized = token.toLowerCase();
+    if (!token || seen.has(normalized)) continue;
+    if (GENERIC_CONTEXT_TERMS.has(normalized)) continue;
+    if (!isUsefulPassiveFastToken(normalized)) continue;
+    seen.add(normalized);
+    selected.push(token);
+    if (selected.length >= PASSIVE_FAST_QUERY_MAX_TOKENS) break;
+  }
+
+  const compact = selected.join(' ').trim();
+  return (compact || query).slice(0, PASSIVE_FAST_QUERY_MAX_CHARS);
+}
+
+function isUsefulPassiveFastToken(token: string): boolean {
+  if (/\d/.test(token)) return token.length >= 2;
+  if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(token)) return token.length >= 2;
+  return token.length >= 3;
+}
+
 const AUTOPILOT_QUIET_REASON_LABELS: Record<string, string> = {
   ambiguous_context: '当前指代存在多个候选话题',
   broadcast_without_scene_anchor: '广播/公告缺少当前场景锚点',
@@ -300,6 +390,11 @@ const AUTOPILOT_QUIET_REASON_LABELS: Record<string, string> = {
   low_anchor_overlap: '缺少当前场景锚点',
   low_information_match: '候选内容信息量不足',
   low_information_meeting_context: '当前会议只是空壳信息',
+  passive_fast_search_disabled: '被动召回检索已关闭',
+  low_value_lens_presentation: '没有可展示的新增记忆信息',
+  anchor_only_lens_presentation: '只命中同一主题或字段',
+  fact_followup_without_extractable_value: '事实跟进缺少可提取字段值',
+  source_memory_without_distilled_cue: '资料记忆尚未蒸馏成可展示提示',
   off_domain_tool_context: '工具或项目场景不一致',
   source_memory_missing_issue_anchor: '资料记忆缺少当前 Jira 票号锚点',
   query_too_short: '当前输入过短',
@@ -316,6 +411,7 @@ export class ContextRecallService {
   private sceneFrames: SceneFrameService;
   private cueFacts: MemoryCueFactService;
   private cueCompiler: CueCompilerService;
+  private lensPresentation: LensPresentationCompiler;
   private outcomeLoop: MemoryOutcomeLoopService;
 
   constructor(
@@ -329,6 +425,7 @@ export class ContextRecallService {
     this.sceneFrames = new SceneFrameService();
     this.cueFacts = new MemoryCueFactService();
     this.cueCompiler = new CueCompilerService();
+    this.lensPresentation = new LensPresentationCompiler();
     this.outcomeLoop = new MemoryOutcomeLoopService(db, userId);
   }
 
@@ -374,6 +471,45 @@ export class ContextRecallService {
               normalizedQuery: preliminaryNormalized.query,
               channelsHit: [],
               rejectedReason: preliminaryNormalized.rejectedReason,
+              autopilot,
+            }
+          : undefined,
+      };
+    }
+
+    const preliminaryPassiveFastMode = isPassiveFastModeEnabled(request);
+    if (preliminaryPassiveFastMode && !isPassiveFastSearchEnabled()) {
+      const sceneAnchors = extractSceneAnchors(
+        request,
+        preliminaryNormalized.query,
+      );
+      const autopilot = buildAutopilotDecision({
+        request,
+        sceneAnchors,
+        matches: [],
+        candidateCount: 0,
+        hiddenCount: 0,
+        lowInformationCount: 0,
+        sourceExcludedCount: 0,
+        duplicateMergedCount: 0,
+        quietReasons: [
+          {
+            reason: 'passive_fast_search_disabled',
+            count: 1,
+          },
+        ],
+      });
+      return {
+        matches: [],
+        topMatch: null,
+        queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(request, [], []),
+        autopilot,
+        debug: request.debug
+          ? {
+              normalizedQuery: preliminaryNormalized.query,
+              channelsHit: [],
+              rejectedReason: 'passive_fast_search_disabled',
               autopilot,
             }
           : undefined,
@@ -477,6 +613,44 @@ export class ContextRecallService {
     // Pin to vector + fts. Graph & time would slow us down without much win
     // for purely associative cases.
     const requestedSourceTypes = expandedRequest.sourceTypes ?? [];
+    const passiveFastMode = isPassiveFastModeEnabled(expandedRequest);
+    if (passiveFastMode && !isPassiveFastSearchEnabled()) {
+      const sceneAnchors = extractSceneAnchors(expandedRequest, normalized.query);
+      const autopilot = buildAutopilotDecision({
+        request: expandedRequest,
+        sceneAnchors,
+        matches: [],
+        candidateCount: 0,
+        hiddenCount: 0,
+        lowInformationCount: 0,
+        sourceExcludedCount: 0,
+        duplicateMergedCount: 0,
+        quietReasons: [
+          {
+            reason: 'passive_fast_search_disabled',
+            count: 1,
+          },
+        ],
+      });
+      return {
+        matches: [],
+        topMatch: null,
+        queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(expandedRequest, [], []),
+        autopilot,
+        debug: debug
+          ? {
+              ...debug,
+              rejectedReason: 'passive_fast_search_disabled',
+              autopilot,
+            }
+          : undefined,
+      };
+    }
+    const recallQueryText = getRecallQueryText(
+      normalized.query,
+      passiveFastMode,
+    );
     const sourceMemoryRequested =
       requestedSourceTypes.includes('source_memory');
     const sourceMemoryOnly =
@@ -485,10 +659,14 @@ export class ContextRecallService {
         (sourceType) => sourceType === 'source_memory',
       );
     const recallQuery: RecallQuery = {
-      query: normalized.query,
+      query: recallQueryText,
       scope: (expandedRequest.scope ?? 'all') as ContextRecallScope,
-      topK: limit * CONTEXT_OVER_FETCH_FACTOR,
-      channels: ['vector', 'fts'],
+      topK:
+        limit *
+        (passiveFastMode
+          ? CONTEXT_FAST_OVER_FETCH_FACTOR
+          : CONTEXT_OVER_FETCH_FACTOR),
+      channels: getContextRecallChannels(passiveFastMode),
       sourceTypes: expandSourceMemorySourceTypes(requestedSourceTypes),
       includeMetadata: true,
       presentationHint: 'compact',
@@ -509,6 +687,7 @@ export class ContextRecallService {
         }
       : await this.engine.recall(recallQuery, {
           reinforceAccess: false,
+          allowEmbeddingColdStart: false,
         });
     if (debug) debug.channelsHit = result.channels;
 
@@ -553,11 +732,10 @@ export class ContextRecallService {
       normalized.query,
       sceneAnchors,
     );
-    const rehearsalMatches = this.rehearsalActivation.getMatches(
-      expandedRequest,
-      limit,
-    );
-    const sourceMemoryMatches = sourceMemoryRequested
+    const rehearsalMatches = passiveFastMode
+      ? []
+      : this.rehearsalActivation.getMatches(expandedRequest, limit);
+    const sourceMemoryMatches = sourceMemoryRequested && !passiveFastMode
       ? getSourceMemoryContextMatches(
           this.db,
           expandedRequest,
@@ -570,6 +748,53 @@ export class ContextRecallService {
       ...sourceMemoryMatches,
       ...rankedMatches,
     ];
+
+    if (passiveFastMode) {
+      const hiddenCount = rankedMatches.filter(
+        (match) => match.displayPriority === 'hidden',
+      ).length;
+      const matches = rankedMatches
+        .filter(isDisplayableContextMatch)
+        .slice(0, limit);
+      const autopilot = buildAutopilotDecision({
+        request: expandedRequest,
+        sceneAnchors,
+        matches,
+        candidateCount: result.items.length,
+        hiddenCount,
+        lowInformationCount: lowInformationMatches,
+        sourceExcludedCount,
+        duplicateMergedCount,
+        quietReasons: buildAutopilotQuietReasons({
+          rankedMatches,
+          lowInformationCount: lowInformationMatches,
+          sourceExcludedCount,
+          duplicateMergedCount,
+          rejectedReason:
+            matches.length === 0 &&
+            (lowInformationMatches > 0 || sourceExcludedCount > 0)
+              ? LOW_INFORMATION_REJECT_REASON
+              : undefined,
+        }),
+      });
+      if (debug) {
+        debug.autopilot = autopilot;
+      }
+
+      return {
+        matches,
+        topMatch: matches[0] ?? null,
+        queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(
+          expandedRequest,
+          matches,
+          candidateMatches,
+        ),
+        autopilot,
+        debug,
+      };
+    }
+
     const patchedCandidateMatches = this.relevancePatches.applyPatchesToMatches(
       expandedRequest,
       candidateMatches,
@@ -599,7 +824,12 @@ export class ContextRecallService {
           sceneKey: buildOutcomeSceneKey(sceneFrame, request.url),
         }),
     });
-    const cueCandidateMatches = cueCompilation.matches;
+    const lensPresentationCompilation = this.lensPresentation.attachPresentations({
+      request: expandedRequest,
+      sceneFrame,
+      matches: cueCompilation.matches,
+    });
+    const cueCandidateMatches = lensPresentationCompilation.matches;
     const hiddenCount = cueCandidateMatches.filter(
       (match) => match.displayPriority === 'hidden',
     ).length;
@@ -644,6 +874,13 @@ export class ContextRecallService {
         boostedCount: cueCompilation.boostedCount,
         needsMoreEvidenceCount: cueCompilation.needsMoreEvidenceCount,
         factCount: cueFacts.length,
+      };
+      debug.lensPresentation = {
+        readyCount: lensPresentationCompilation.readyCount,
+        partialCount: lensPresentationCompilation.partialCount,
+        blockedCount: lensPresentationCompilation.blockedCount,
+        hiddenByPresentationCount:
+          lensPresentationCompilation.hiddenByPresentationCount,
       };
     }
       const autopilot = buildAutopilotDecision({
@@ -925,6 +1162,7 @@ function getSourceMemoryContextMatches(
          c.summary,
          c.content_preview,
          c.message_id,
+         c.metadata_json,
          c.created_at,
          c.updated_at,
          (
@@ -968,6 +1206,7 @@ function getSourceMemoryContextMatches(
       if (normalizedSourceUrl && currentUrls.includes(normalizedSourceUrl)) {
         return null;
       }
+      const readyDistillation = readReadySourceMemoryDistillation(row.metadata_json);
 
       const haystack = normalizeInformationText(
         [
@@ -976,6 +1215,8 @@ function getSourceMemoryContextMatches(
           row.content_preview,
           row.anchor_preview,
           row.takeaway_text,
+          readyDistillation.oneLineCue,
+          readyDistillation.compactMemo,
           sourceUrl,
         ]
           .filter(Boolean)
@@ -990,7 +1231,8 @@ function getSourceMemoryContextMatches(
       const feedbackBoost = recallFeedback === 'positive' ? 0.08 : 0;
       const score = Math.min(0.97, 0.58 + overlapScore + feedbackBoost);
       const snippet = clipContextText(
-        row.summary ||
+        readyDistillation.oneLineCue ||
+          row.summary ||
           row.content_preview ||
           row.anchor_preview ||
           row.source_title,
@@ -1007,6 +1249,9 @@ function getSourceMemoryContextMatches(
         .join(' / ');
       const whyRelevant = [
         provenance ? `已保存资料：${provenance}` : '',
+        readyDistillation.oneLineCue
+          ? `蒸馏提示：${readyDistillation.oneLineCue}`
+          : '',
         matchedTerms.length
           ? `命中资料关键词：${matchedTerms.slice(0, 3).join(' / ')}`
           : '',
@@ -1037,6 +1282,12 @@ function getSourceMemoryContextMatches(
           sourceKindLabel,
           captureModeLabel,
           matchedTerms,
+          ...(readyDistillation.status
+            ? {
+                sourceMemoryDistillationStatus: readyDistillation.status,
+                sourceMemoryCue: readyDistillation.oneLineCue,
+              }
+            : {}),
           ...(recallFeedback ? { recallFeedback } : {}),
         },
         sourceClusterKey: `source-memory:${row.id}`,
@@ -1062,6 +1313,46 @@ function formatSourceMemoryCaptureModeLabel(value?: string | null): string {
     SOURCE_MEMORY_CAPTURE_MODE_LABELS[normalized] ||
     normalizeInformationText(value || '')
   );
+}
+
+function readReadySourceMemoryDistillation(raw?: string | null): {
+  status?: string;
+  oneLineCue?: string;
+  compactMemo?: string;
+} {
+  const metadata = parseContextObject(raw);
+  const distillation = asContextObject(metadata.distillation);
+  if (distillation.status !== 'ready') {
+    return {};
+  }
+  const oneLineCue = readContextString(distillation.oneLineCue, 220);
+  if (!oneLineCue) {
+    return {};
+  }
+  return {
+    status: 'ready',
+    oneLineCue,
+    compactMemo: readContextString(distillation.compactMemo, 700),
+  };
+}
+
+function parseContextObject(raw?: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    return asContextObject(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+function asContextObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readContextString(value: unknown, maxLength: number): string {
+  return typeof value === 'string' ? clipContextText(value, maxLength) : '';
 }
 
 function extractSourceMemorySearchTerms(query: string): string[] {
@@ -1778,6 +2069,7 @@ function rankContextMatches(
       anchorOverlap.topics.length > 0 || anchorOverlap.projects.length > 0;
     const hasSourceOverlap = anchorOverlap.source.length > 0;
     const whyRelevant = buildWhyRelevant(anchorOverlap);
+    const capRehearsalToWeakPrompt = isStaleRehearsalMatch(match);
     const overlapSignals = specificQuerySignals.filter((signal) =>
       matchSignals.has(signal),
     );
@@ -1835,10 +2127,11 @@ function rankContextMatches(
 
     const nextScore = Math.max(0, Math.min(0.99, adjustedScore));
     const matchedAnchors = serializeAnchorOverlap(anchorOverlap);
+    const nextWhyRelevant = mergeRehearsalWhyRelevant(match, whyRelevant);
     const nextMatch: ContextRecallMatch = {
       ...match,
       score: nextScore,
-      whyRelevant: whyRelevant.length ? whyRelevant : undefined,
+      whyRelevant: nextWhyRelevant.length ? nextWhyRelevant : undefined,
       matchedAnchors,
       metadata: {
         ...(match.metadata ?? {}),
@@ -1889,7 +2182,7 @@ function rankContextMatches(
         overlapSignals.length >= 1 &&
         anchorOverlapCount > 0)
     ) {
-      nextMatch.displayPriority = 'p1';
+      nextMatch.displayPriority = capRehearsalToWeakPrompt ? 'p2' : 'p1';
     } else if (specificQuerySignals.length > 0 && nextMatch.score < 0.32) {
       suppressionReason = 'weak_semantic_only';
       nextMatch.displayPriority = 'hidden';
@@ -1902,6 +2195,9 @@ function rankContextMatches(
     ) {
       nextMatch.displayPriority = 'p2';
     }
+    if (capRehearsalToWeakPrompt && nextMatch.displayPriority === 'p1') {
+      nextMatch.displayPriority = 'p2';
+    }
 
     if (nextMatch.displayPriority === 'hidden') {
       nextMatch.suppressionReason = suppressionReason || 'weak_semantic_only';
@@ -1909,6 +2205,21 @@ function rankContextMatches(
 
     return nextMatch;
   });
+}
+
+function isStaleRehearsalMatch(match: ContextRecallMatch): boolean {
+  return (
+    match.type === 'rehearsal' &&
+    String(match.metadata?.rehearsal?.status || '') === 'stale'
+  );
+}
+
+function mergeRehearsalWhyRelevant(
+  match: ContextRecallMatch,
+  rerankReasons: string[],
+): string[] {
+  if (match.type !== 'rehearsal') return rerankReasons;
+  return Array.from(new Set([...(match.whyRelevant ?? []), ...rerankReasons])).slice(0, 4);
 }
 
 function applyCurrentSurfaceEchoSuppression(
@@ -1924,6 +2235,7 @@ function applyCurrentSurfaceEchoSuppression(
       matchEchoesVisibleField(match, field),
     );
     if (!echoedField) return match;
+    if (matchHasVisibleFieldNovelty(match, echoedField)) return match;
     return {
       ...match,
       displayPriority: 'hidden' as const,
@@ -2629,16 +2941,30 @@ function isLowQualityMeetingBoilerplate(item: RecallItem): boolean {
 
 function isDisplayableContextMatch(match: ContextRecallMatch): boolean {
   if (match.displayPriority === 'hidden') return false;
+  if (match.lensPresentation) {
+    if (match.lensPresentation.status === 'blocked') return false;
+    if (
+      match.lensPresentation.status === 'ready' &&
+      match.lensPresentation.informationValue !== 'low' &&
+      normalizeInformationText(
+        match.lensPresentation.extractedInfo || match.lensPresentation.title,
+      )
+    ) {
+      return true;
+    }
+  }
 
   const title = normalizeInformationText(match.title);
   const uiSummary = normalizeInformationText(match.uiSummary);
   const snippet = normalizeInformationText(match.snippet);
   const sourceTitle = normalizeInformationText(match.sourceTitle);
   const sourceLabel = normalizeInformationText(match.sourceLabel);
+  const lensInfo = normalizeInformationText(match.lensPresentation?.extractedInfo);
+  const lensTitle = normalizeInformationText(match.lensPresentation?.title);
 
-  if (!title && !uiSummary && !snippet) return false;
+  if (!title && !uiSummary && !snippet && !lensInfo && !lensTitle) return false;
 
-  const combined = [title, uiSummary, snippet, sourceTitle]
+  const combined = [lensInfo, lensTitle, title, uiSummary, snippet, sourceTitle]
     .filter(Boolean)
     .join(' ');
   const comparable = normalizeComparableText(combined);

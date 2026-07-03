@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 
 import type { ScheduledMessage } from '../types.js';
 import {
+  buildScheduleHealthTriageSummary,
+  formatScheduleCompensationWindowReceipt,
+  formatScheduleCompensationWindowReceiptDetail,
+  formatScheduleHealthDiagnosticSummary,
   formatScheduleHealthIssue,
+  formatScheduleHealthIssueDiagnostic,
   formatScheduleHealthSummary,
+  getScheduleCompensationWindowReceipt,
   getScheduleHealthIssue,
   getScheduleHealthIssues,
   getScheduleHealthRecoverySuggestion,
@@ -56,6 +62,32 @@ test('keeps explicit executor messages healthy inside the compensation window', 
   );
 });
 
+test('builds a row receipt while explicit executor messages are inside the compensation window', () => {
+  const receipt = getScheduleCompensationWindowReceipt(
+    makeMessage(),
+    new Date('2026-05-04T09:45:30'),
+  );
+
+  assert.deepEqual(receipt, {
+    headline: '补偿窗口回执',
+    summary: '已迟到 15 分钟，补偿窗口剩余 15 分钟',
+    detail:
+      '下一轮 Jira Automation 执行器仍会按过去 2-30 分钟补偿窗口查找这条明确时间消息；不会提前发送。',
+    boundary:
+      '这是领取资格，不代表已发送；最终发送或失败仍以 Last_Exec / Logs、发送回调和 Jira/API 运行记录为准。',
+    elapsedMinutes: 15,
+    remainingMinutes: 15,
+  });
+  assert.equal(
+    formatScheduleCompensationWindowReceipt(receipt!),
+    '补偿窗口回执: 已迟到 15 分钟，补偿窗口剩余 15 分钟',
+  );
+  assert.match(
+    formatScheduleCompensationWindowReceiptDetail(receipt!),
+    /领取资格，不代表已发送/,
+  );
+});
+
 test('keeps explicit executor messages healthy through the final compensation minute', () => {
   assert.equal(
     getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:00:30')),
@@ -66,6 +98,23 @@ test('keeps explicit executor messages healthy through the final compensation mi
     getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:01:00'))
       ?.summary,
     '已超过 30 分钟补偿窗口',
+  );
+});
+
+test('does not build a compensation receipt outside the live compensation window', () => {
+  assert.equal(
+    getScheduleCompensationWindowReceipt(
+      makeMessage(),
+      new Date('2026-05-04T09:31:30'),
+    ),
+    null,
+  );
+  assert.equal(
+    getScheduleCompensationWindowReceipt(
+      makeMessage(),
+      new Date('2026-05-04T10:01:00'),
+    ),
+    null,
   );
 });
 
@@ -148,6 +197,16 @@ test('ignores rows that already have a terminal execution result for the date', 
     ),
     null,
   );
+  assert.equal(
+    getScheduleCompensationWindowReceipt(
+      makeMessage({
+        Last_Exec: '2026-05-04 09:31',
+        Exec_Log: '✅ 推送成功',
+      }),
+      new Date('2026-05-04T09:45:00'),
+    ),
+    null,
+  );
 });
 
 test('ignores repeating messages when the scheduler has a future occurrence', () => {
@@ -176,6 +235,89 @@ test('summarizes multiple health issues for the top banner', () => {
     formatScheduleHealthSummary(issues),
     '2 条 Active 定时消息需要处理；1 条已错过执行窗口；1 条时间格式异常',
   );
+});
+
+test('builds a compact triage summary for health issues', () => {
+  const now = new Date('2026-05-04T10:01:30');
+  const messages = [
+    makeMessage({ ID: 'missed-1', Topic: 'Missed one' }),
+    makeMessage({ ID: 'invalid-1', Topic: 'Invalid one', Schedule_Time: '99:00' }),
+  ];
+  const issues = getScheduleHealthIssues(messages, now);
+  const suggestions = getScheduleHealthRecoverySuggestions(messages, now);
+
+  assert.deepEqual(buildScheduleHealthTriageSummary(issues, suggestions), {
+    priorityLabel: '优先处理: Missed one -> 2026-05-04 10:02',
+    diagnosticLabel: '诊断: 补偿超窗 1 条 / 时间异常 1 条',
+    recoverableLabel: '可一键恢复: 2/2 条',
+    manualReviewLabel: '需手动检查: 0 条',
+    boundaryLabel: '边界: 只写 Schedule_Date / Schedule_Time，不会立即发送或改 Logs',
+  });
+});
+
+test('formats diagnostic route labels for health issue cards', () => {
+  const missedExecutor = getScheduleHealthIssue(
+    makeMessage(),
+    new Date('2026-05-04T10:01:00'),
+  )!;
+  const invalidTime = getScheduleHealthIssue(
+    makeMessage({ Schedule_Time: '99:00' }),
+    new Date('2026-05-04T10:01:00'),
+  )!;
+  const missedDefaultQueue = getScheduleHealthIssue(
+    makeMessage({ Schedule_Time: '', Schedule_Date: '2026-05-03' }),
+    new Date('2026-05-04T10:01:00'),
+  )!;
+  const missedAsMe = getScheduleHealthIssue(
+    makeMessage({ Push_Method: 'AsMe', Schedule_Time: '' }),
+    new Date('2026-05-04T09:02:00'),
+  )!;
+
+  assert.equal(
+    formatScheduleHealthDiagnosticSummary([
+      missedExecutor,
+      invalidTime,
+      missedDefaultQueue,
+      missedAsMe,
+    ]),
+    '诊断: 补偿超窗 1 条 / 时间异常 1 条 / 默认队列日期过期 1 条 / 默认发送已过 1 条',
+  );
+  assert.equal(
+    formatScheduleHealthIssueDiagnostic(missedExecutor),
+    '诊断线索: 补偿超窗 · Jira Automation 执行器队列 · 预期 2026-05-04 09:30',
+  );
+  assert.equal(
+    formatScheduleHealthIssueDiagnostic(invalidTime),
+    '诊断线索: 时间异常 · Jira Automation 执行器队列 · 预期 无有效执行时间',
+  );
+  assert.equal(
+    formatScheduleHealthIssueDiagnostic(missedDefaultQueue),
+    '诊断线索: 默认队列日期过期 · Jira Automation 执行器队列 · 预期 2026-05-03 08:00',
+  );
+  assert.equal(
+    formatScheduleHealthIssueDiagnostic(missedAsMe),
+    '诊断线索: 默认发送已过 · Apps Script / AsMe · 预期 2026-05-04 09:00',
+  );
+});
+
+test('triage summary reports manual review when no recovery suggestion exists', () => {
+  const issue = {
+    code: 'missed_execution' as const,
+    messageId: 'missing-row',
+    topic: 'Missing row',
+    nextExecution: '2026-05-04 09:30',
+    isExecutorDriven: true,
+    summary: '已超过 30 分钟补偿窗口',
+    action: '同步刷新 Messages 后再处理健康告警。',
+  };
+
+  assert.deepEqual(buildScheduleHealthTriageSummary([issue], new Map()), {
+    priorityLabel: '优先处理: Missing row -> 同步刷新 Messages 后再处理健康告警。',
+    diagnosticLabel: '诊断: 补偿超窗 1 条',
+    recoverableLabel: '可一键恢复: 0/1 条',
+    manualReviewLabel: '需手动检查: 1 条',
+    boundaryLabel: '边界: 只写 Schedule_Date / Schedule_Time，不会立即发送或改 Logs',
+  });
 });
 
 test('suggests the next minute for missed explicit executor messages', () => {

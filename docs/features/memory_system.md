@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-06-18 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；补充 InteractionScene 查询契约、source-memory、timeline 跳转边界、主动召回范围回执、搜索范围边界回执、搜索失败真实回执、搜索/时间轴反馈状态校准、搜索反馈失败回执、时间轴范围/来源/定位/打开动作回执、时间轴来源覆盖与刷新失败快照回执、Outreach 列表会话推进回执与终态重试路径、决策中心操作回执、待观察只读查证边界与 OpenClaw 绑定动作结果回执、Action Queue 刷新失败快照回执、OpenClaw 失败委派证据校验回执与操作回执、批量摄入决策汇总、cue-level Outcome Loop、自我反思推进回执与真实运行计数边界、自我反思本地研究范围裁剪回执、Ambient Calibration 原文防漏与回执、Dream Digest 周期范围回执、Dream replay 复核路径回执、未解析身份 default fallback 边界；保留范围语义、摄入决策、抽取降级索引、备份导入边界、跨用户恢复确认、恢复失败回执与反思本地研究降级逻辑)_
+_最后更新: 2026-07-03 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；补充 InteractionScene 查询契约、source-memory、timeline 跳转边界、主动召回范围回执、搜索范围意图回执、搜索范围边界回执、搜索失败真实回执、搜索空结果完成回执、搜索结果打开动作回执、搜索结果类型筛选按钮预览与回执、搜索结果来源覆盖回执、搜索/时间轴链接安全状态、搜索结果安全诊断复制回执、时间轴卡片点击预告与安全诊断复制回执、搜索/时间轴反馈状态校准、搜索反馈失败回执、搜索反馈后续取证回执、召回通道跳过/失败可见原因回执、证据通道交叉回执、时间轴范围/来源/定位/打开动作回执、时间轴来源覆盖、时间轴空结果回执、刷新中快照回执与刷新失败快照回执、Outreach 本页优先级回执、Outreach 列表会话推进回执、列表发送前复核、终态重试路径、Outreach 详情操作范围、发送前复核与操作结果回执、决策中心提交中回执与操作回执、通知深链未命中队列口径与规则改进预填边界、通知稍后按钮点击前时间/边界回执、待观察只读查证边界与 OpenClaw 绑定动作结果回执、Action Queue 刷新失败快照回执、处理构成回执、泛用执行范围回执与操作提交中回执、OpenClaw 失败委派证据校验回执与恢复路径回执、审批前确认边界与操作回执、批量摄入决策汇总、cue-level Outcome Loop、自我反思列表查看范围/刷新中快照回执、自我反思推进回执与真实运行计数边界、自我反思本地研究范围裁剪和本轮研究范围回执、自我反思操作范围与操作结果回执、Ambient Calibration 原文防漏与回执、Dream Digest 周期范围回执、Dream replay 复核路径回执、未解析身份 default fallback、身份来源回执、Today Pilot 首屏统计身份回执与身份快照恢复入口、备份下载 manifest 摘要回执；保留范围语义、摄入决策、抽取降级索引、备份导入边界、跨用户恢复确认、恢复失败回执与反思本地研究降级逻辑)_
 
 ## 系统概述
 
@@ -35,10 +35,11 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 | 功能                                                    | 角色           | 一句话说明                                                                                                            |
 | ------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Memory Ingestion                                        | 入库基础层     | 消息、会议、Jira、AI 对话、手动记录等进入 `messages_raw`、`chunks`、实体和关系；显著性决定是否索引。                  |
-| [Memory Capture](./memory_capture.md) / 记忆捕捉        | 资料入库层     | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，并保存 source capsule、证据锚点和未来触发线索。           |
+| [Memory Capture](./memory_capture.md) / 记忆捕捉        | 资料入库与蒸馏层 | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，并把已保存 source capsule 蒸馏为可复用的 source evidence pack。 |
 | [Memory Lens](./memory_lens.md)                         | 场景提示层     | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。                          |
 | [Compose Assist](./compose_assist.md)                   | 输入框生成层   | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。                              |
 | `/recall` / [Ask](./ask.md)                             | 主动查询层     | 用户主动搜索或提问时，先处理范围、话题锁定和活答案 prior，再走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
+| [Evidence Watch Contracts](./evidence_watch_contracts.md) | 证据复核层     | 把可变化事实、未来复核和来源阻塞从一次性 action 变成可复用 contract，Ask/Reflection/Action Queue 共用去重与收据。 |
 | Memory Exploring                                        | 记忆浏览层     | 展示搜索结果、时间轴、反思线程、决策中心、Rehearsal、动作队列等用户可检查的记忆视图。                                 |
 | [Memory Coverage Map](./memory_coverage_map.md)         | 覆盖与导入层   | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。                                 |
 | [User Profile](./user_profile_system.md)                | 稳定画像层     | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。                            |
@@ -86,10 +87,11 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 
 第一版落地在 Compose Assist：
 
-- 用户点击 icon 插入建议，先记录原有的 `accepted` 阈值反馈；撤销窗口结束后，再写入 `action=inserted` 的中等强度正向 trace。
+- 用户点击 icon 插入建议，先记录原有的 `accepted` 阈值反馈；撤销窗口结束后，再写入 `action=inserted` 的中等强度正向 trace，并显示 `草稿保留已确认` 回执，区分草稿仍未发送/提交、本地保留和后台校准是否真正写入。
 - 用户插入建议后，在发送前改写措辞，点击原网页 Send / Submit / Reply 时，前端只生成 redacted diff summary，写入 `edited_before_send`、`sent_after_insert` 或 `deleted_before_send`。
-- 用户 hover 过建议但没有插入，随后自己发送回复，写入 `sent_without_insert`，用来区分“记忆匹配大致对但措辞不合适”和“这条记忆不该出现”。
+- 用户 hover 过建议或键盘聚焦预览超过观察门槛，但没有插入，随后自己发送回复，写入 `sent_without_insert`，用来区分“记忆匹配大致对但措辞不合适”和“这条记忆不该出现”；短暂扫过或快速 Tab 经过不会计入被动校准。
 - 用户点 thumb-down，写入 `wrong`，用于明确降低相似场景下的召回权重。
+- thumb-down 会先隐藏建议并调整本地谨慎度，但可见回执要区分后端 `wrong` trace 是否真的写入；如果 Memory Service 或隐私门拒收，只显示“建议已隐藏，但校准未写入”，不把本地隐藏冒充为后台学习完成。
 - 用户发送前的改写会被转成 `styleFeatureTags`，例如加了“哈哈”、句尾 `~`、同意图压短、删掉夸张热情或泛泛承诺；这些标签可以被聚合成写作风格记忆。
 - 如果其他入口传入对方后续反馈“AI 味”，可用 `downstream_reaction` + `ai_tone_called_out` 作为强修正信号。
 - 如果用户已经 thumb-down、取消复核或按 Escape 关闭当前建议，本次预览候选会被清掉，之后发送自己的回复不会再追加 `sent_without_insert`；这样显式拒绝不会被重复记成隐式负反馈。
@@ -229,7 +231,7 @@ POST /api/v1/ambient-calibration/traces
 | **HeartbeatLoop**                                                  | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行          |
 | **ProfileManager**                                                 | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy)               |
 
-摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、显著性分项、抽取状态、是否达到索引阈值和未索引原因。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。高显著性内容即使 LLM 实体抽取临时不可用，也会先写入 chunks、FTS 和 `memory_metadata`，只把实体/关系层降级，避免“已记住但搜索不到”的阻塞；如果索引本身失败，decision 会明确标成 `indexing_failed`。摄入侧也会记录 `trustClass`、`sanitization` 和 `injectionFlags`：外部网页、外部 AI 或 OpenClaw 结果中的指令式内容会被标成 untrusted / flagged，后续只能作为带来源的数据证据处理，不能被误当成系统指令。批量摄入除了保留每条结果，还返回 `decisionSummary`，按 indexed / stored_unindexed / duplicate / error、具体 reason、抽取状态、索引请求完成情况、trusted / internal / untrusted 以及 clean / flagged 计数；导入、会议归档和同步任务可以直接展示“本批为什么记住 / 没记住 / 被去重 / 有多少不可信或疑似注入内容”，不用再从每条结果临时拼统计。`/extractor/from-chat` 已经抽出的 conversation / agent-session artifact 会跳过第二次实体抽取，但仍按 artifact 类型做 salience scoring、写入 chunks 和 `memory_metadata`，并把同一份 decision 返回给调用方，避免外部 AI 历史或本地 agent 会话“入库成功但搜不到”。`/ingest`、`/ingest/batch` 与 extractor 共用同一份 source type 白名单，覆盖 RingCentral / Jira / Web / 手动记录 / 会议 / Calendar / 外部 AI 历史 / 豆包 / ChatGPT / 本地 Codex、Claude Code、Cursor agent 会话，避免 TypeScript 类型允许但运行时 schema 拒绝的入口不一致。
+摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、显著性分项、抽取状态、是否达到索引阈值和未索引原因。显著性分项会保留 importance、frequency、recency、surprise、redundancy、user interest boost，以及行为亲密度启用时的 `entityAffinityBoost`，避免“因为熟悉的人/项目被提升”只停留在服务端内部。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。高显著性内容即使 LLM 实体抽取临时不可用，也会先写入 chunks、FTS 和 `memory_metadata`，只把实体/关系层降级，避免“已记住但搜索不到”的阻塞；如果索引本身失败，decision 会明确标成 `indexing_failed`。摄入侧也会记录 `trustClass`、`sanitization` 和 `injectionFlags`：外部网页、外部 AI 或 OpenClaw 结果中的指令式内容会被标成 untrusted / flagged，后续只能作为带来源的数据证据处理，不能被误当成系统指令。重复摄入仍不新增记录；没有 sender 的网页/外部资料也用 null-safe sender 匹配去重，duplicate 回执会保留本次 payload 的信任分类和注入扫描结果，避免批量导入把“重复但不可信/疑似注入”的项目统计成 unknown。批量摄入除了保留每条结果，还返回 `decisionSummary`，按 indexed / stored_unindexed / duplicate / error、具体 reason、抽取状态、索引请求完成情况、trusted / internal / untrusted 以及 clean / flagged 计数；导入、会议归档和同步任务可以直接展示“本批为什么记住 / 没记住 / 被去重 / 有多少不可信或疑似注入内容”，不用再从每条结果临时拼统计。`/extractor/from-chat` 已经抽出的 conversation / agent-session artifact 会跳过第二次实体抽取，但仍按 artifact 类型做 salience scoring、写入 chunks 和 `memory_metadata`，并把同一份 decision 返回给调用方，避免外部 AI 历史或本地 agent 会话“入库成功但搜不到”。`/ingest`、`/ingest/batch` 与 extractor 共用同一份 source type 白名单，覆盖 RingCentral / Jira / Web / 手动记录 / 会议 / Calendar / 外部 AI 历史 / 豆包 / ChatGPT / 本地 Codex、Claude Code、Cursor agent 会话和 MCP 客户端，避免 TypeScript 类型允许但运行时 schema 拒绝的入口不一致。
 
 2026-06-01 复查业内记忆产品和研究后，本层继续优先做三件事：第一，像 [ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) 一样把“记住了什么、为什么置顶或降权、如何删除/恢复”保持可检查；第二，像 [Claude project memory](https://www.anthropic.com/news/memory) 和 [Microsoft 365 Copilot semantic index](https://learn.microsoft.com/en-gb/microsoftsearch/semantic-index-for-copilot) 一样让 scope、project、权限边界在入库和召回两端都生效；第三，参考 [Adaptive RAG Memory](https://arxiv.org/abs/2601.02428) 和 [Memory for Autonomous LLM Agents](https://arxiv.org/abs/2603.07670) 的方向，把写入过滤、选择性巩固、衰减、反馈和隐私治理做成可解释的 runtime 信号，而不是只扩充向量库容量。
 
@@ -291,6 +293,7 @@ flowchart LR
 - 压掉跨域噪音，例如 Codex/Cursor/额度场景里召回 AI Notes、虚拟背景、HR 通告或旅行记忆。
 - 合并同一会议、群组、会话或来源 URL 的重复 chunk，只把一个 source cluster 给 UI。
 - 返回 `autopilot` 摘要：候选数、展示数、强/弱相关数、静默数、hidden 数、低信息数、来源排除数、重复合并数、场景锚点和 quiet reasons。
+- 普通 Memory Lens Expanded Card 会把 `autopilot` 摘要渲染成首屏 `展示前过滤回执`，说明本次为什么是强卡片/低打扰入口、哪些弱候选被静默、当前场景锚点是什么，以及这只是只读展示前过滤，不写入记忆、不强化访问计数、不外发来源。
 - 在少数结构足够明确的场景进入 Cue Compiler。当前先覆盖 Jira estimate：`SceneFrameService` 从当前原始 request 提取 issueKey、sceneType 和 fieldHints；`MemoryCueFactService` 从候选记忆抽 `estimate.unit`、`jira.field`、`close_policy`、`due_date_policy`；`CueCompilerService` 返回带 `sourceRefs` 的 `ContextCue`。Memory Lens 使用 `remember` 只读 cue，Compose Assist 使用 `draft_hint` 草稿 cue。
 - Outcome Loop 在 cue 维度建立成效账本：`memory_outcome_events` 记录展开、插入、发送和不相关等行为，`memory_outcome_policy_patches` 写可撤销的 `suppress` / `boost` patch。Context Recall 读取 patch 后会把重复无效 cue 静默，把重复成功的 cue 提前；Compose Assist 的重复 `sent_after_insert` 还能生成 Personal Skill Foundry suggestion。
 
@@ -312,11 +315,11 @@ flowchart LR
 
 被动上下文召回（例如网页、会议或 popup 的“你之前见过这个”提示）默认使用 `all`，因为它的目标是发现关联线索，而不是替用户做工作/个人范围判断。主动研究型召回仍默认 `work`，需要用户或调用方显式切到 `personal` / `both` / `all`。
 
-记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `工作` 或 `个人` 范围下，即使已经有命中，也会显示本次排除了另一生活域，并给出“搜索全部记忆”的直接入口，避免用户把局部命中误当成跨域完整证据；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。搜索结果标题和摘要会安全高亮当前查询词，帮助用户快速判断命中原因；高亮只渲染转义后的文本，不信任记忆内容里的原始 HTML。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝；旧链接里的 `scope=both` 会在客户端规范化为“全部”，保持按钮状态、请求参数和文案一致。默认范围搜不到结果时，搜索页也会保留“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
+记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索入口先显示 `搜索范围意图` 回执：它说明下一次搜索或范围切换会读取哪个生活域、是否会立即重跑当前 query、被排除的生活域，以及这只是读取 Memory Service，不会写入、删除、同步外部来源或确认答案。搜索结果里继续显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `工作` 或 `个人` 范围下，即使已经有命中，也会显示本次排除了另一生活域，并给出“搜索全部记忆”的直接入口，避免用户把局部命中误当成跨域完整证据；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。搜索结果标题和摘要会安全高亮当前查询词，帮助用户快速判断命中原因；高亮只渲染转义后的文本，不信任记忆内容里的原始 HTML。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝；旧链接里的 `scope=both` 会在客户端规范化为“全部”，保持按钮状态、请求参数和文案一致。默认范围搜不到结果时，搜索页也会保留“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
 
 2026-05-28 范围可见性校准：当用户主动切到 `全部` 且结果里包含个人记忆时，搜索结果汇总会额外提示“已包含个人记忆”，提醒复制、引用或带到工作场景前先确认。2026-06-09 范围边界回执补齐：默认 `work` 或显式 `personal` 搜索即使命中，也会说明另一范围没有进入本次结果，并允许用户从结果摘要处直接扩展到 `全部`。2026-06-12 被动召回范围回执补齐：`/context-recall` 会返回 `scopeReceipt`，说明请求范围、服务端实际范围、候选/展示的工作/个人/未知范围数量；每条 Memory Lens 结果也携带自己的 `scope`，卡片元信息显示“工作记忆 / 个人记忆”，个人记忆进入提示时会额外显示“个人记忆已进入本次提示”。2026-06-15 主动召回范围回执补齐：`/recall` 返回 `scopeReceipt`，说明请求范围、实际范围、返回结果和候选里的工作/个人/未知数量；`/ask` 会透传这份回执，Memory Exploring 的 AI 智能分析区直接展示“检索范围回执”，避免非搜索卡片消费者把默认 `work` 的答案误读成全记忆结论。这些改动都不改变检索范围，只把跨工作/个人生活域的纳入或排除事实暴露出来。旧数据或旧 metadata 中若出现与 `messages_raw.scope` 不一致的范围值，返回项和回执以服务端实际用于过滤的列值为准，避免“工作检索”结果被显示成个人或未标明。
 
-产品和研究侧都支持这个边界：[ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) 已经把 Memory Sources、saved memories、past chats、files、Gmail 等来源分开展示，并允许查看、编辑、删除和标记来源相关性；[Claude memory](https://www.anthropic.com/news/memory) 强调 project-scoped memory、可查看编辑和 incognito chat；[Microsoft 365 Copilot Semantic Index](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot) 说明语义索引会结合 Microsoft Graph、用户级/租户级索引和 RBAC 权限边界；[Notion Content Search](https://www.notion.com/help/admin-content-search) 也把权限、受众和可访问范围当成检索结果可信度的一部分；[Personal Information Management](https://arxiv.org/abs/2107.03291) 研究把同一人的信息需求拆成 work-related and not、不同角色和信息需求映射。因此 `全部` 可以作为主动扩展范围，但界面必须明确说明个人证据已进入当前结果集，不能只靠卡片角标让用户自己发现。
+产品和研究侧都支持这个边界：[ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) 已经把 saved memories 和 reference chat history 作为可开关的记忆来源；[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 把普通聊天、project conversation 和 incognito chat 的检索边界分开；[Microsoft 365 Copilot Semantic Index](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot) 说明语义索引会结合 Microsoft Graph、租户边界和 RBAC 权限；[Notion Content Search](https://www.notion.com/help/admin-content-search) 也把权限、受众和可访问范围当成检索结果可信度的一部分；[Personal Information Management](https://informationr.net/ir/24-3/paper835.html) 研究把信息查找放在 personal、work-related 和多角色情境中理解。因此 `全部` 可以作为主动扩展范围，但界面必须在搜索前和结果后都明确说明个人证据是否进入当前结果集，不能只靠卡片角标让用户自己发现。
 
 搜索结果卡片提供与时间轴一致的轻量反馈入口。用户可以把某条证据标记为“有用”或“不相关”，也可以撤销反馈；已有反馈会在搜索结果重新打开时恢复高亮。反馈提交时会携带 `message` / `chunk` / `entity` / `source_memory` 目标类型，避免同 ID 的不同记忆类型串项。搜索页会把“有用”和“不相关”的激活态分成正向/纠错两种视觉反馈，避免用户把“不相关”误读成系统奖励；pending、已撤销状态也有单独文案和 tone。
 
@@ -330,7 +333,15 @@ flowchart LR
 
 2026-06-17 搜索反馈失败回执：如果 `/feedback` 提交失败，搜索结果卡片会在原地显示“反馈未提交”，恢复点击前的有用 / 不相关 / 已撤销状态，并明确说明没有创建相近场景修正、没有改变显著性、也没有删除记忆。顶部错误条仍保留，但用户不需要回到页面顶部才能判断这次点击是否真的写入服务端。
 
-召回结果现在会返回 `channelDiagnostics`，稳定列出本次请求中 `vector` / `fts` / `graph` / `time` 各通道的命中、空结果、跳过或失败状态。搜索结果页会在摘要里展示这些通道状态和命中数；如果本地语义 embedding 不可用，用户会直接看到“语义未运行”，而不是把关键词、图谱或时间通道的结果误解为完整四通道结果。
+2026-06-20 搜索反馈点击前边界：尚未反馈的搜索结果卡片会先显示 `反馈范围`。它说明本次反馈绑定的是 Ask 证据还是普通记忆搜索、当前 scope、目标类型、query 和结果序号；并在按钮点击前写清楚“有用”只提高相近召回优先级，“不相关”可能创建相近场景修正但不做全局排除，所有反馈都不会删除记忆、外发、同步来源系统、确认答案或立即重排当前页。这样用户不用等到点击后才知道自己正在写入什么反馈信号。
+
+2026-06-27 搜索反馈后续取证回执：有用、不相关或撤销反馈提交成功后，卡片会继续说明“当前页不会即时重排”，并提供“用同一条件重新取证”按钮。点击后会按当前 query、scope 和搜索模式重新请求 Memory Service，让用户观察后续召回是否已经吸收这次反馈；这仍不会删除记忆、同步外部来源、确认答案或把失败反馈冒充成已写入信号。
+
+召回结果现在会返回 `channelDiagnostics`，稳定列出本次请求中 `vector` / `fts` / `graph` / `time` 各通道的命中、空结果、跳过或失败状态。搜索结果页会在摘要里展示 `召回通道回执` 和通道状态：先告诉用户本轮结果实际来自几个通道、哪些通道未运行/失败/无命中，再展示单通道 chip 和命中数；如果本地语义 embedding 不可用，用户会直接看到“语义未运行”和“语义索引不可用”原因，而不是把关键词、图谱或时间通道的结果误解为完整四通道结果。跳过或失败原因会进入回执正文，不只依赖 hover title。多条结果同时可见时，页面还会显示 `证据通道交叉回执`：按当前可见卡片统计多通道共同命中、单通道命中、未标明通道以及最常见的交叉组合。这个摘要只读已返回结果和本地类型筛选后的可见集合；多通道命中只说明同一证据被多条检索路径找回，不等于事实已确认，也不会重新召回、重排、写反馈或写入记忆。
+
+2026-06-20 四通道召回复查：OpenAI Memory Sources 把个性化回答背后的来源、相关/不相关反馈和可管理入口放在用户可见处；Microsoft 365 Copilot Semantic Index 强调语义索引会结合 Microsoft Graph、权限和关系信息；Azure AI Search 的 RAG 指南也把 keyword + vector hybrid query 作为提高 recall 的常见路径。研究侧，GraphRAG / LightRAG 说明实体关系能补足平面 chunk 检索的上下文缺口，RAPTOR 则提醒仅检索短 chunk 会丢掉上层摘要结构。对应到 Personal AI，建设性方向不是把四个通道包装成一个“总分”，而是让用户先看到哪几个通道真的参与了当前证据：语义、关键词、图谱、时间各自缺席时都应显式暴露，并在后续 eval 里继续衡量“通道不完整但仍展示”的误导风险。
+
+2026-07-03 四通道结果层复查：[Azure AI Search hybrid search](https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview) 把 full-text 和 vector 并行检索后融合为一个结果集；[Microsoft 365 Copilot Semantic Index](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot) 同时强调 lexical、semantic、Microsoft Graph 关系和访问边界；[GraphRAG survey](https://arxiv.org/abs/2501.00309) 与 [RAPTOR](https://arxiv.org/abs/2401.18059) 都说明关系结构和摘要层能补足平面 chunk 召回。对应到 Personal AI，本轮不扩大召回算法，而是在搜索结果页补结果层交叉支持：用户能看见“这条证据被语义+关键词共同找回”或“当前全是单通道证据”，同时保留“这不是事实确认”的边界。
 
 ### Ask 主动问答
 
@@ -344,11 +355,13 @@ flowchart LR
 - Ask 最终回答仍必须由本次召回或外部查证证据支撑；ambiguous topic 不写活答案 observation/thread。
 - `/ask/stream` 不新增可见 SSE 事件，只在最终结果中可选携带诊断字段。
 
-搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。如果 Ask 或实体/向量搜索没有从 Memory Service 拿到真实结果，页面会显示“真实搜索没有完成”的回执，保留 query、scope、搜索模式、后端错误和重试入口；这不是普通空态，也不会展示模拟人物、项目或主题卡片，避免用户把开发样例误当成真实个人记忆。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且不能包含用户名/密码或 token、session、passcode 等敏感参数；可打开的来源按钮会标明目标 host，被隐藏的来源会说明“仅支持 http/https / 包含账号信息 / 包含敏感参数”，异常内部路由也会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。
+搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。用户按消息、片段、实体等类型收窄前，筛选按钮会先显示将显示多少、隐藏多少；点击后，结果摘要会显示当前可见数量 / 原始返回数量，并展示 `类型筛选回执`：说明这只是本页本地筛选，不会重新召回、重排、写反馈或隐藏服务端结果，也提供“显示全部类型”恢复入口。多条结果时，摘要区还会显示 `来源覆盖回执`，按当前可见结果汇总来源/标题数量、最大来源和可见/原始结果数；它只解释本轮已返回结果和本地筛选后的来源分布，不会重新读取来源、刷新连接器、同步外部系统、写反馈或确认事实。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。如果 Ask 或实体/向量搜索没有从 Memory Service 拿到真实结果，页面会显示“真实搜索没有完成”的回执，保留 query、scope、搜索模式、后端错误和重试入口；这不是普通空态，也不会展示模拟人物、项目或主题卡片，避免用户把开发样例误当成真实个人记忆。如果 Memory Service 成功返回但当前范围下是 0 条，页面显示 `真实空结果回执`，说明本轮查询已完成、使用了哪个 scope / 模式、哪些召回通道命中或未运行/无命中/失败，并明确空结果只代表本轮查询和已返回通道没有可展示结果，不会写入、删除、同步来源、刷新连接器、写反馈或确认事实；恢复路径是换更具体关键词、扩展到全部记忆，或等待刚导入/保存的内容完成索引后再搜。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且不能包含用户名/密码、token/session/passcode 等敏感参数，也会隐藏 AWS/GCS/CDN 这类带 signature、credential 或访问 key query 的 signed URL；可打开的来源按钮会标明目标 host，被隐藏的来源会说明“仅支持 http/https / 包含账号信息 / 包含敏感参数 / 包含签名或访问凭据参数”，异常内部路由也会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。2026-06-19 补齐搜索结果打开动作回执：点击安全来源后页面显示目标、host、`noopener/noreferrer` 新标签边界，并说明这不代表 Memory Service 重新读取、同步或确认来源；点击安全内链或详情页只切换 Memory Exploring 内部视图，不改写记忆、反馈或来源资料；如果结果只有被拦截的链接，不再退到泛化 `/entity/message` 之类页面，而是保留拦截原因和恢复路径。2026-07-01 搜索结果补齐 `复制安全诊断`：当结果没有安全内链、详情页或可打开来源时，用户可以复制只含标题、搜索条件、范围、结果 key、来源标签和拦截原因的诊断文本；诊断不会复制被拦截的原始 URL 或内部 route，也不会写入、同步、确认或重新读取来源。
+
+2026-06-24 搜索结果类型筛选复查：[Google Search filters](https://support.google.com/websearch/answer/2466433) 和 [Microsoft Search verticals](https://learn.microsoft.com/en-us/microsoftsearch/manage-verticals) 都把类型/来源垂直入口放在结果页内，用来收窄已有结果集合；Marti Hearst 的 faceted search / search UI 研究也强调筛选界面应让用户理解当前看到的是集合中的哪一部分。因此 Personal AI 的类型筛选不再只改变卡片列表，而是在筛选按钮上提前标出会显示 / 隐藏多少，并在摘要区明确当前显示、隐藏数量和本地无副作用边界。
 
 Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`source-memory` 是用户主动保存的资料证据 capsule，适合网页、选区、视觉证据、表格证据和 Jira 页面资料，重点是来源、保存原因、证据锚点、备注和未来触发线索；`timeline` 是普通原始记忆的时间线定位，适合 message、chunk、meeting、Glip、Jira 活动等，重点是发生时间、附近消息和上下文回放。召回结果如果引用“用户保存过的资料证据”，优先跳 `#/source-memory/:id`；如果引用“当时发生的消息/会议/上下文”，优先跳 `#/timeline?...focus=...`。完整例子和路由规则见 [Memory Capture](./memory_capture.md#source-memory-与-timeline-的边界)。
 
-`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口、来源筛选和命中通道，避免全局范围按钮与实际请求范围脱节。页面还会显示一个紧凑的“时间轴回执”：说明本次只读取哪个 scope、只请求哪个时间窗口、来源筛选只是收窄已加载结果而不会扩大检索，以及定位链接是否把窗口外或来源外的目标置顶。列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。加载后如果命中来自多个来源，页面会提供本地来源筛选下拉和来源覆盖 chip，不重新请求后端就能看到当前窗口的来源分布、哪些来源被当前筛选隐藏，并把同一时间窗口收窄到具体会议、网页、手动记录或其它 source。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天、全部范围或全部来源的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞；如果当前来源筛选会隐藏定位目标，页面会清除来源筛选并显示回执，说明是为了展示定位记忆，而不是让用户误以为置顶失败。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截。用户点击卡片、`在记忆中查看` 或 `打开来源` 后，页面会补一条“打开动作回执”：安全内链说明只在 Memory Exploring 内跳转且不改写记忆，安全来源说明新标签 host 与不重新同步/确认来源内容的边界；如果没有安全目标或链接被拦截，回执会保留拦截原因和恢复路径，避免卡片点击后像无响应。刷新失败时，如果当前请求的 scope 和时间窗口与上次成功快照一致，页面会保留已加载列表并显示“刷新失败 · 上次快照”：说明 Memory Service 当前状态未确认、下面只是最后一次成功读取的结果、来源筛选仍只作用于这批旧结果；如果用户切换到新的工作/个人范围或新的时间窗口后请求失败，则不会复用旧范围数据，避免把上一组记忆误当成当前范围的空/满状态。
+`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口、来源筛选和命中通道，避免全局范围按钮与实际请求范围脱节。页面还会显示一个紧凑的“时间轴回执”：说明本次只读取哪个 scope、只请求哪个时间窗口、来源筛选只是收窄已加载结果而不会扩大检索，以及定位链接是否把窗口外或来源外的目标置顶。列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。加载后如果命中来自多个来源，页面会提供本地来源筛选下拉和来源覆盖 chip，不重新请求后端就能看到当前窗口的来源分布、哪些来源被当前筛选隐藏，并把同一时间窗口收窄到具体会议、网页、手动记录或其它 source。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天、全部范围或全部来源的入口，而不是示例数据或静态占位；当 `/recall` 成功返回 0 条时，空态内会显示“时间轴空结果回执”，明确这是 successful empty，不是刷新失败、删除、清空索引、反馈写入或来源同步；如果只是来源筛选把本批结果收窄到 0 条，则显示“来源筛选空结果回执”，说明切回全部来源可恢复被隐藏结果。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞；如果当前来源筛选会隐藏定位目标，页面会清除来源筛选并显示回执，说明是为了展示定位记忆，而不是让用户误以为置顶失败。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截；signed URL、credential URL 和 token URL 会显示更具体的隐藏原因，避免把临时访问能力误当成普通可分享来源。时间轴卡片会在点击前说明“卡片点击”到底会做什么：有安全内链时只进入 Memory Exploring，有安全来源但无内链时才打开 sanitized host，被拦截时只展示拦截原因，无目标时明确是只读卡片，避免用户把 blocked/no-target 状态误当成可直接打开的来源。用户点击卡片、`在记忆中查看` 或 `打开来源` 后，页面会补一条“打开动作回执”：安全内链说明只在 Memory Exploring 内跳转且不改写记忆，安全来源说明新标签 host 与不重新同步/确认来源内容的边界；如果没有安全目标或链接被拦截，回执会保留拦截原因和恢复路径，避免卡片点击后像无响应。同一 scope 和时间窗口刷新中，页面不会把旧列表突然换成全屏 loading，而是显示“刷新中 · 上次快照”：说明下面暂时仍是上次成功读取的结果、来源筛选仍只作用于旧批次，刷新成功后才整体替换，且刷新中不代表 Memory Service 已确认最新状态或发生写入/同步。刷新失败时，如果当前请求的 scope 和时间窗口与上次成功快照一致，页面会继续保留已加载列表并显示“刷新失败 · 上次快照”：说明 Memory Service 当前状态未确认、下面只是最后一次成功读取的结果、来源筛选仍只作用于这批旧结果；如果用户切换到新的工作/个人范围或新的时间窗口后请求失败，则不会复用旧范围数据，避免把上一组记忆误当成当前范围的空/满状态。
 
 2026-06-09 时间轴体验复查：业内相似产品都把时间、来源和控制权放在时间线入口附近，例如 [Microsoft Recall](https://support.microsoft.com/en-us/windows/retrace-your-steps-with-recall-aa03f8a0-a78b-4b3e-b0a1-2eb8ac48701c) 同时提供可浏览时间线、app/site 过滤、暂停/删除和本地加密边界，[Google My Activity](https://support.google.com/accounts/answer/9784401) 明确支持按日期、产品和关键词过滤并说明部分活动不在 My Activity 中。研究侧的 [Re-Finding Found Things](https://arxiv.org/abs/cs/0310011)、[LifeSeeker](https://pmc.ncbi.nlm.nih.gov/articles/PMC10547623/) 和 [Towards Lifelong Dialogue Agents via Timeline-based Memory Management](https://arxiv.org/abs/2406.10996) 都指向同一个 UX 结论：用户在回找个人记忆时需要时间线索、来源/上下文线索和可恢复的浏览路径。因此本轮改动优先补“为什么看到这些、哪些被排除、定位为何置顶”的回执，而不是再增加一个新的 timeline 页面。
 
@@ -357,6 +370,14 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 2026-06-15 刷新失败复查：Google My Activity 和 Google Photos Memories 都把个人历史放在可回看、可过滤、可管理的时间线上；ChatGPT Memory 控制把 saved memories 与 reference chat history 分开，让用户知道当前在用哪种记忆状态。PIM/refinding 研究也强调时间、来源和上下文线索是回找信息的关键。Personal AI 的时间轴因此把短暂服务失败处理成“快照新鲜度”问题：同一范围刷新失败时保留上次线索并说明不代表当前状态，跨范围失败时宁可显示真实失败，也不拿旧快照冒充新范围。
 
 2026-06-18 来源覆盖复查：[Microsoft Recall](https://support.microsoft.com/en-us/windows/retrace-your-steps-with-recall-aa03f8a0-a78b-4b3e-b0a1-2eb8ac48701c) 把时间线段、搜索线索和 app/site 控制放在同一回找路径里，[Google My Activity](https://support.google.com/accounts/answer/465) 支持日期与产品同时过滤；KFTF / PIM 研究强调“找到后能再次找到”的来源和路径线索，[THEANINE](https://aclanthology.org/2025.naacl-long.435/) 则强调时间线记忆应保留事件演化和上下文关系。因此 Personal AI 的时间轴补上来源覆盖 chip：直接暴露本次已加载窗口里的来源分布和被隐藏来源，点击 chip 只收窄当前批次，不扩大检索、不重新读取来源、不写入记忆。
+
+2026-06-21 刷新中快照复查：[Microsoft Recall](https://support.microsoft.com/en-us/windows/retrace-your-steps-with-recall-aa03f8a0-a78b-4b3e-b0a1-2eb8ac48701c) 和 [Google My Activity](https://support.google.com/accounts/answer/9784401) 都把个人历史设计成可持续浏览、过滤和管理的时间线，而不是每次刷新都让上下文断掉；[THEANINE](https://aclanthology.org/2025.naacl-long.435/) 与 KFTF/PIM 研究也强调时间线要保留事件关系和可再次找到的路径。因此 Personal AI 在同范围刷新中保留旧快照和来源筛选，同时用独立回执说明“正在重新读取、尚未确认最新状态”，只在成功后替换结果；跨范围切换仍不复用旧快照。
+
+2026-06-23 来源链接安全复查：Memory Exploring 的打开路径继续参考 [Microsoft Recall](https://support.microsoft.com/en-us/windows/privacy-and-control-over-your-recall-experience-d404f672-7647-41e5-886c-a3c59680af15) 的敏感信息过滤、[Google My Activity](https://support.google.com/accounts/answer/9784401) 的 review/manage 定位，以及 [OWASP query string exposure](https://owasp.org/www-community/vulnerabilities/Information_exposure_through_query_strings_in_url) 对 URL query 泄露的风险说明；云存储侧的 [AWS S3 presigned URL](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sigv4-query-string-auth.html) 和 [Google Cloud signed URL](https://docs.cloud.google.com/storage/docs/access-control/signed-urls) 都把 signature/credential 放在 query 中作为临时访问能力。因此搜索结果和时间轴现在会把带 `signature` / `sig` / `X-Amz-*` / `X-Goog-*` / access key 这类 query 的来源隐藏，并显示“包含签名或访问凭据参数”，而不是让看似普通的 https 来源变成一键打开。SSO、SAML、JWT、OAuth token、ticket 等登录/会话交接参数也按敏感参数处理，页面只保留卡片内容和恢复路径，不提供 `打开来源`。
+
+2026-06-26 搜索结果和时间轴卡片增加了预点击的 `链接安全状态`：安全内链显示“可在记忆中查看”，安全 http/https 来源显示 host 和新标签边界，被策略隐藏的来源直接显示拦截原因和恢复路径，没有任何安全目标时显示只读卡片状态。内部 route 只接受 allowlist 中的 Memory Exploring 路径；如果 raw 文本或 percent-decode 后包含控制字符、`< >`、引号或反引号，会显示“不支持的目标”，避免 encoded 目标绕过点击前状态。点击卡片后仍保留原有打开动作回执；本次只是把 openability 提前到卡片内，不放宽内部路由 allowlist、凭据 URL 或 signed URL 拦截规则。
+
+2026-06-27 时间轴链接安全诊断复制：当时间轴卡片没有安全内链或安全 http/https 来源时，卡片提供 `复制安全诊断`。复制内容只包含标题、时间、来源标签、记忆 key、当前筛选和拦截原因，用于粘贴到搜索、工单或手动排查路径继续找原文；它不会复制被拦截的原始 URL 或内部 route，也不会写入、同步、确认或重新读取来源。这个恢复动作只补足“被拦截后还能怎么查”的用户路径，不放宽 signed URL、credential URL、敏感参数或内部 route allowlist。
 
 召回排序继续使用 MMR，但不再用 query embedding 当候选向量占位。没有候选 embedding 时，会用候选文本相似度作为多样性惩罚，避免时间窗口或图谱召回被近重复内容挤占；候选去重、排序和搜索结果卡片都使用 `type:id` 作为稳定身份，避免 `message`、`chunk`、`entity` 碰巧同 ID 时被误合并或前端复用错卡片；召回后的访问强化也按真实结果类型写入 `message` / `chunk` / `entity` 元数据。
 
@@ -439,7 +460,7 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 
 把写路径从「仅 INSERT」往「有决策的写入」升级。**三个切片 A/B/C 均已落地**。
 
-**切片 A（chunk 级合并决策）** `core/MergeDecisionService.ts`（migration `042_chunk_merge.sql` 给 chunks 加 `superseded_by`/`merged_into`/`merge_reason`）：开关 `chunkMergeDecisionEnabled`（env `CHUNK_MERGE_DECISION_ENABLED`，**默认 OFF**——它给写路径加一次嵌入+LLM 调用，建议部署后用记忆六能力体检验证 knowledge-update 提分再开）。新 chunk 入库后查 cos≥0.86 的近邻（低于 0.92 denoise 阈值，留决策空间），有近邻才让 LLM 决策 ADD/UPDATE/MERGE/NOOP：UPDATE→旧 chunk 标 `superseded_by` 并降到 weak；MERGE→近邻标 `merged_into` 折进新 chunk；NOOP→新 chunk 降权、旧 chunk 强化。无近邻或任何失败都回退 ADD（与旧行为逐字节一致）。decision 回执加 `mergeOp`（op≠ADD 时）。永不物理删除。
+**切片 A（chunk 级合并决策）** `core/MergeDecisionService.ts`（migration `042_chunk_merge.sql` 给 chunks 加 `superseded_by`/`merged_into`/`merge_reason`）：开关 `chunkMergeDecisionEnabled`（env `CHUNK_MERGE_DECISION_ENABLED`，**默认 OFF**——它给写路径加一次嵌入+LLM 调用，建议部署后用记忆六能力体检验证 knowledge-update 提分再开）。新 chunk 入库后查 cos≥0.86 的近邻（低于 0.92 denoise 阈值，留决策空间），有近邻才让 LLM 决策 ADD/UPDATE/MERGE/NOOP：UPDATE→旧 chunk 标 `superseded_by` 并降到 weak；MERGE→近邻标 `merged_into` 折进新 chunk；NOOP→新 chunk 降权、旧 chunk 强化。无近邻或任何失败都回退 ADD（与旧行为逐字节一致）。decision 回执加 `mergeOp`（op≠ADD 时），并通过 `/ingest`、`/ingest/batch` response schema 和扩展侧 `MemoryServiceClient` 类型原样暴露，让客户端不需要从 chunks 表反查才能展示“这次是更新、合并还是纯重复降权”。永不物理删除。
 
 **切片 B（记忆演化）** `core/MemoryEvolutionService.ts`（migration `043_memory_evolution.sql` 建 `memory_links`/`chunk_revisions`，夜间巩固 Phase 2.5）：对当日新 chunk（≤50）找 cos≥0.8 旧近邻，写 `memory_links`（关联边，幂等，同时供 PPR chunk 关联与 weave 缝合证据）；当近邻属于另一条 message 时，给那条 message 的 summary 追加一句「后续关联」注记并写 `chunk_revisions` 审计行——**原文（chunk content）永不改写**，只动派生 summary/links，可审计可回溯。
 
@@ -480,8 +501,9 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 `tools/eval-memory-abilities.ts` 是一套**端到端记忆能力体检**，对运行中的 `/ask` 打真实问题并按六个能力打分：extraction / multi_session / temporal / knowledge_update / abstention / prospective（LongMemEval 五能力 + 前瞻）。
 
 - **真实场景**：用例 `evals/cases/memory-abilities/cases.jsonl` 的 golden 全部从线上 `esone.qiu` 真实数据（`http://10.32.56.212:3210`）探测后人工编写——mThor 项目、Cursor 成本/许可政策、Everyone AI Campaign 跟进、不存在的「巴黎航班」拒答等。
-- **确定性判分**：判官是 keyword OR-group + forbidden-pattern 的启发式，**无判官模型方差**（规避 LoCoMo「换 judge 分数 ±10」问题），rubric 见 `evals/judges/memory-abilities.md`。
+- **确定性判分**：判官是 keyword OR-group + forbidden-pattern 的启发式，**无判官模型方差**（规避 LoCoMo「换 judge 分数 ±10」问题），rubric 见 `evals/judges/memory-abilities.md`。grounded case 必须返回 evidence，`contextMatch=ambiguous` 直接失败，判分会剥离问题回声和候选澄清文案，避免“问题里有 golden 词”或“候选列表里有 golden 词”误过关。
 - **基线与回归门**：`evals/.baseline/memory-abilities.json` 存 overall + 各能力分；任一能力较基线下降超过 0.05 即 exit 1。**召回/写入路径改动（PPR、行为亲密度、合并演化）落地后必须重跑，作为统一回归门。** 首版基线 overall=1.0、6/6 通过（2026-06-12）。
+- **2026-06-23 权威复跑**：修复明确 subject 问句被误澄清、LLM 超时 fallback 展示无关 evidence 后，线上 `10.32.56.212` 复跑 `mem-abilities-frontier-remote-after-cjk-fix-20260623` 通过 6/6、overall=1.0；report 见 `.eval-runs/memory-abilities/mem-abilities-frontier-remote-after-cjk-fix-20260623/reader-report.json`。
 - **已知边界（一条真实发现）**：`entity_properties` 的双时态精确值（如 Jira DEV Estimate 3→3.01）**不会被 `/ask` 的召回通道命中**，因此 temporal / knowledge_update 用例落在消息级演化事实上，双时态层的端到端验证是后续工作（见 `docs/progressing/memory-merge-evolution-ttl-plan.md`）。
 
 ---
@@ -587,26 +609,30 @@ ReflectionResearcher      ReflectionWorker
 - **同步执行**：和本轮自我反思是一个事务性思考过程，不需要等待队列
 - **低副作用**：只是查询本地记忆，不会触发外部写操作
 - **结果直接并入当前证据**：研究命中的消息、记忆片段和实体线索会作为补充 evidence 进入同一轮 `ReflectionWorker`；线程详情页会保留这些研究证据，实体线索会展示实体名、类型和少量 active 真值属性，方便刷新后复核“本地已经查到了什么”
-- **计划有降级**：如果 LLM 查询规划失败，`ReflectionResearcher` 会用 thread 标题、开放问题、当前假设和 topic key 生成一条保守的本地查询，避免整轮反思直接跳过“先查本地证据”。模型返回的 `sourceTypes` 会先裁剪到 Personal AI 支持的本地 recall 来源；非法来源不会让查询被静默收窄成 0 命中。
-- **过程可复核**：每条本地研究查询会记录目的、查询范围、状态、命中数、证据 refs、范围回执和错误摘要。线程详情页会先展示本轮研究摘要（查询数、命中查询、补充证据、无结果、部分失败和失败数），再展示每条 trace。单条查询失败不会中断整轮反思；用户在线程详情页能区分“没有计划查询”“查了但没命中”“某条查询失败”和“有命中但召回通道部分失败”。如果 `RecallEngine` 返回 vector / FTS / graph / time 的通道失败诊断而没有任何命中，该研究记录会显示为查询失败，而不是伪装成空结果。
-- **范围裁剪可见**：LLM 规划查询时可能提到 Personal AI 当前不支持的来源。系统只会查询支持的本地来源；如果部分来源被裁剪，详情页显示 `研究范围回执` 和被忽略来源。如果模型只给出不支持的来源，系统会退回到默认本地来源（Glip / Jira / Web / Manual / System），并把这个 fallback 写进同一条回执。这个状态不是错误，也不会生成新的用户 review 队列。
+- **计划有降级**：如果 LLM 查询规划失败，`ReflectionResearcher` 会用 thread 标题、开放问题、当前假设和 topic key 生成一条保守的本地查询，避免整轮反思直接跳过“先查本地证据”。默认本地来源不只查消息渠道，还会覆盖 `source_memory`、`user_core`、`reflection_thread`、`rehearsal`、daily/project/entity markdown 这类 Personal AI 自己沉淀出的本地证据；meeting / calendar / 外部 AI 会话等高噪声或场景专属来源仍需要规划器显式指定。模型返回的 `sourceTypes` 会先裁剪到 Personal AI 支持的本地 recall 来源；非法来源不会让查询被静默收窄成 0 命中。
+- **过程可复核**：每条本地研究查询会记录目的、查询范围、状态、命中数、证据 refs、范围回执和错误摘要。线程详情页会先展示 `本轮研究范围` 回执，说明本轮只读了 Personal AI 本地可见记忆、命中证据会直接进入同一轮反思、不会联网搜索/发送/确认决策/执行 OpenClaw/写 confirmed profile；随后展示本轮研究摘要（实际查询数、命中查询、补充证据、无结果、未补查、部分失败和失败数）和每条 trace。点击 `立即自我反思` 后、服务返回前，详情页会显示 `研究请求回执`，说明新的 manual_revisit 仍在规划/读取本地证据，下方研究 trace 只是上次成功读取快照，还没有被本次结果替换。单条查询失败不会中断整轮反思；如果规划器返回 0 条可执行查询，系统会记录 `skipped` trace，说明本轮没有额外 recall、继续使用已有线程证据，而不是把成功跳过误显示成“尚未计划”或失败。用户在线程详情页能区分“旧线程没有研究记录”“本轮无需额外补查”“查了但没命中”“某条查询失败”“新研究还在提交中”和“有命中但召回通道部分失败”。如果 `RecallEngine` 返回 vector / FTS / graph / time 的通道失败诊断而没有任何命中，该研究记录会显示为查询失败，而不是伪装成空结果。
+- **范围裁剪可见**：LLM 规划查询时可能提到 Personal AI 当前不支持的来源。系统只会查询支持的本地来源；如果部分来源被裁剪，详情页显示 `研究范围回执` 和被忽略来源。如果模型只给出不支持的来源，系统会退回到扩展默认本地来源（消息渠道 + source memory + user core + 反思 / 预演 / 本地 markdown 摘要），并把这个 fallback 写进同一条回执。这个状态不是错误，也不会生成新的用户 review 队列。
 
 因此，当前系统没有把“查本地消息”实现成 `query_memory action`。  
 这样做的好处是链路更短，模型可以在同一轮里“想到要查 -> 查到 -> 继续想”，不会把大量纯读查询挤进动作队列。
 
-业内产品上，[Slack Enterprise Search](https://slack.com/help/articles/39044407124755-Set-up-and-manage-Slack-enterprise-search) 和 [Notion Enterprise Search security](https://www.notion.com/help/enterprise-search-security-and-privacy-practices) 都强调按用户可访问数据检索、查询时权限过滤和来源边界；这里的本地研究补查也遵循同一方向，只查 Personal AI 本地可见记忆，并展示查询过程、命中证据和通道故障。研究上，[Generative Agents](https://arxiv.org/abs/2304.03442) 的 observation / planning / reflection 架构和 [Reflexion](https://arxiv.org/abs/2303.11366) 的 verbal reflection loop 都支持“先把经验和证据整理进可复用记忆，再让下一轮推理读取”的设计，但实际产品需要额外暴露失败和空结果，否则用户只看到结论，无法判断反思是否真的查过本地证据。
+业内产品上，[Slack Enterprise Search](https://slack.com/help/articles/39044407124755-Set-up-and-manage-Slack-enterprise-search) 和 [Notion Enterprise Search security](https://www.notion.com/help/enterprise-search-security-and-privacy-practices) 都强调按用户可访问数据检索、查询时权限过滤和来源边界；这里的本地研究补查也遵循同一方向，只查 Personal AI 本地可见记忆，并展示查询过程、命中证据和通道故障。研究上，[Generative Agents](https://arxiv.org/abs/2304.03442) 的 observation / planning / reflection 架构和 [Reflexion](https://arxiv.org/abs/2303.11366) 的 verbal reflection loop 都支持“先把经验和证据整理进可复用记忆，再让下一轮推理读取”的设计，但实际产品需要额外暴露失败、空结果和成功跳过，否则用户只看到结论，无法判断反思是否真的查过本地证据，还是判断已有证据已经足够。
 
 ### 线程查看与降级可见性
 
 反思线程列表和详情页都不能把服务错误伪装成空状态。列表读取失败时会显示错误横幅和重试入口，并保留上次成功读取的线程；详情页的主线程、关联主动询问、动作队列、研究补查和证据是可独立降级的部分。关联主动询问加载失败时，主反思详情仍应可打开，页面只在该区块显示错误和重试；手动 revisit、暂停、恢复、关闭或动作执行失败时，也会在页内显示具体错误，而不是只在 console 里失败。
 
+线程列表首屏会显示 `列表查看范围`，说明当前状态筛选、标题/topic key 搜索、梦境复核 handoff、可见/总计数和刷新边界。筛选、搜索和刷新只读 `reflection_threads` 列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作；如果已有线程时重新刷新，页面先保留下方上次成功快照并显示刷新中回执，刷新失败后继续说明下方保留的是上次成功读取的线程快照，避免用户误以为旧线程被清空或刷新已经确认最新状态。
+
 线程列表和详情页都会显示 `反思推进回执`。这个回执不新增 review 队列，只把现有状态翻译成用户能扫读的下一步：线程是已排下一轮、可立即反思、等待主动询问/决策/外部委派、动作失败需要修复，还是已暂停/关闭。详情页会同时写清楚“下一步”“边界”“恢复”，例如等待外部联系人回复时不会编造答案，动作失败或关联主动询问读取失败也不会被当成空结果。
 
 `运行次数` 和 `最近反思` 只代表真正成功进入 `ReflectionThreadService.runReflection()` 并创建了 `reflection_runs`。Heartbeat 发现线程被确认项、主动询问、外部委派或手动动作阻塞时，只更新下一次推进时间和等待原因；确认项完成或 `action_result` 回流时，也只是把线程重新排到下一轮。它们会出现在推进回执里，但不会伪装成新的一次反思运行。
 
+2026-06-25 操作范围校准：线程详情页会在按钮下方显示 `本次操作范围`。它把 `立即自我反思`、暂停、恢复和关闭翻译成点击前可读的边界：手动反思会读取本地可见证据，并可能写入一条 `manual_revisit` run、研究 trace、候选动作或 Rehearsal；但这次点击本身不会发送消息、确认决策、执行 OpenClaw、写 confirmed profile、删除原始证据，也不会把 paused / closed 自动改回 active。暂停、关闭和恢复只改变线程推进状态；历史证据、运行记录、动作队列、主动询问和外部委派结果仍保留给用户复核。操作成功后页面会保留 `操作结果回执`，说明 Memory Service 已确认的写入结果、不会发生的外部副作用和恢复路径；失败时仍显示错误，不把请求失败伪装成已运行、已暂停、已恢复或已关闭。
+
 这个边界和 agent observability 的方向一致：反思线程是用户复核 AI 长期推理的入口，任何子链路失败都要暴露“卡在哪里”，但不能阻断用户查看已经存在的总结、证据和研究过程。
 
-业内产品上，[OpenAI Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 和 [LangGraph memory overview](https://docs.langchain.com/oss/python/concepts/memory) 都强调记忆会在后台更新，但用户要能看到控制、写入边界和触发时机。研究上，Generative Agents、Reflexion 和 ReAP 都支持用 reflection 把经验与失败沉淀为后续决策输入；Personal AI 的实现因此把下一步、失败和等待边界直接放在线程页，而不是让用户从状态码里猜。
+业内产品上，[OpenAI Dreaming](https://openai.com/index/chatgpt-memory-dreaming/) 和 [OpenAI Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 都强调后台记忆综合要配可见摘要、更新和纠正入口；[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 与 [Claude Memory tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) 把跨会话记忆、检索工具调用和用户控制边界放在同一套体验里。研究上，Generative Agents、Reflexion 和 ReAP 都支持用 reflection 把经验与失败沉淀为后续决策输入；Personal AI 的实现因此把下一步、失败、等待和操作范围直接放在线程页，而不是让用户从状态码里猜。
 
 ### 典型产出
 
@@ -642,9 +668,15 @@ ReflectionResearcher      ReflectionWorker
 
 `memory-exploring` 的动作队列页会把当前筛选结果汇总成健康摘要：当前命中数量、需要处理的失败/到期/待审批/高风险动作、执行中动作、失败或 dead letter 数量。筛选为空时会说明是队列真正为空还是来源/状态/模式筛选没有命中；运行超过 30 分钟的动作会保留 running 状态并提示用户先检查服务日志、关联线程或外部系统，避免误以为页面刷新就是执行完成。
 
+2026-07-02 体验校准：顶部 `处理构成` 回执会把“需要处理”的总数拆成互斥类别：失败/死信、已到期自动动作、待人工确认、高风险已可执行。这个区域只统计当前可见筛选结果，不执行、批准、重试或取消动作；如果刷新失败后保留的是上次成功快照，回执会明确说这是旧快照构成，不能用来证明当前队列已经恢复、清空或完成。
+
 如果同一筛选条件下刷新失败，动作队列会保留上次成功读取的动作快照，并在顶部显示“当前显示上次成功快照”的回执：当前 Memory Service 状态未确认，下面的卡片只是最后一次成功读取的记录。切换来源、动作 ID、状态或模式筛选后若读取失败，不会拿旧筛选结果冒充当前筛选结果。
 
 需要人工确认的动作不会把“点执行”伪装成普通重试。前端按钮显示为“确认并执行”，后端 `POST /actions/:id/execute` 需要显式 `approve:true`，并在执行前写入 `approved_at`；未批准的手动动作会被拒绝执行，已批准动作的批准时间会留在卡片和审计记录里。
+
+2026-06-20 补齐普通动作的执行范围回执：非 OpenClaw 卡片会在按钮前显示 `执行范围`。`notify_user` 说明本页只是把通知交给 Memory Service 通知通道，送达仍以 Notification Center / provider 回执为准；`ask_external_user` 说明动作交给 Outreach 引擎，不在本页确认 RingCentral 已发送或外部人员已回复；`create_confirm_request` 说明只创建/更新决策中心请求，不替用户拍板；`update_truth_property` 说明这是本地 Memory Service 真值/画像写入，不外发、不跨平台同步、不删除原始证据。失败或死信动作的回执会优先说明“重试只重新入队”，不会抹掉错误、确认外部副作用或撤销已产生结果。
+
+2026-06-26 操作提交中回执：点击 `执行`、`确认并执行`、`重试入队` 或 `取消` 后，卡片会先显示 `操作提交中`，直到 Memory Service 返回确认。这个阶段的状态仍只是上次成功读取的队列快照；页面不会提前把动作显示为真实 `running`，也不会把批准、重试、取消、OpenClaw 开始执行、外部系统完成、通知送达或来源证据删除当作已经发生。成功后再显示 `操作回执`，失败则保留错误和原队列快照，方便用户重试或刷新核对。
 
 ### 用户侧三条主要呈现链路
 
@@ -689,14 +721,27 @@ ReflectionResearcher      ReflectionWorker
   - 如果能解析到唯一 RingCentral 用户/群组，才允许审批或发送
   - 如果目标未解析或有多个候选，会停在 `pending_approval`
   - UI 里需要先确认目标，不能直接批准
-- 会话详情页支持发送前编辑目标/问题/时间、审批、取消和重试；列表页也会在每张会话卡上显示“会话推进回执”，把下一步、不会自动发生的边界和恢复路径说清楚。`waiting_reply` / `deferred` 会说明等待窗口、下次检查和不会重复打扰；消息跟进来源会保留原消息核对路径；`failed` / `no_reply` / `escalated` 终态卡片上直接提供重试入口，避免用户必须先进入详情才能恢复常见失败路径。待触发计划也会显示“计划推进回执”，说明它还不是已发出的外部消息、预计何时生成下一次会话、是否仍要目标确认，以及应回到上次执行或定时计划里恢复。重试会写入独立 `retried` 审计事件，时间线直接显示从哪个终态重置到下一轮处理状态，避免把重试误看成新建会话。
+- 会话详情页支持发送前编辑目标/问题/时间、审批、取消和重试；首屏会显示“本次操作范围”回执，按当前状态说明批准可能触发外部发送、编辑只改目标/问题/计划、等待/延期只读取和轮询、重试只是重置终态并写审计事件、取消只停止后续推进而不撤回已发消息或删除来源证据。待审批或已排程详情页还会显示“发送前复核”，把目标是否确认、计划外发时间、会话新鲜度、已有证据/回复线索和只读快照边界放在批准前同屏展示，提醒用户在已有答案或旧问题场景下先取消或编辑，避免重复打扰外部群组。列表页会先显示“本页优先级”回执，按配置错误、可重试终态、待审批、等待回复、已排程和待触发计划排序，说明当前筛选下最该处理什么，并写清楚刷新/筛选只读取 Memory Service 状态，不会批准、发送、追问、重试或写回 RingCentral。其下方的“本轮处理对象”会点名当前最该打开的一个会话或待触发计划，提供只读导航入口，并说明该聚焦卡本身不会重试、审批、发送、追问、写入 RingCentral 或修改 Memory Service。每张会话卡也会显示“会话推进回执”，把下一步、不会自动发生的边界和恢复路径说清楚。`waiting_reply` / `deferred` 会说明等待窗口、下次检查和不会重复打扰；消息跟进来源会保留原消息核对路径；`failed` / `no_reply` / `escalated` 终态卡片上直接提供重试入口，避免用户必须先进入详情才能恢复常见失败路径。筛选后没有命中时，列表页会显示“筛选空结果回执”，说明当前筛选、未筛选快照里被隐藏的会话/待触发计划数量、清除筛选恢复路径，以及清除筛选/刷新仍只是读取状态而不会外发或写回。待触发计划也会显示“计划推进回执”，说明它还不是已发出的外部消息、预计何时生成下一次会话、是否仍要目标确认，以及应回到上次执行或定时计划里恢复。重试会写入独立 `retried` 审计事件，时间线直接显示从哪个终态重置到下一轮处理状态，避免把重试误看成新建会话。
 - 主动询问列表加载失败时会显示明确的错误横幅和重试入口；如果之前已经成功加载过会话或计划，刷新失败不会把旧数据清空成“暂无会话”，而是继续展示上次成功数据并标明这是服务错误后的保留视图。
+
+2026-06-24 体验校准：详情页的 `批准发送`、`重试`、`取消` 和 `保存调整` 会在原位置显示“操作回执”。成功回执写出 Memory Service 返回后的当前状态和目标，并提醒批准/重试/保存不等于 RingCentral 已发送、对方已回复、用户画像已写入或外部平台已同步；失败回执保留服务端错误并说明页面不会把这次点击当成已批准、已发送、已重试、已取消或已保存。
+
+2026-06-25 体验校准：详情页进入发送前调整时会显示“未保存草稿回执”。它区分当前只是本页草稿，保存调整前不会写入 Memory Service、审批、发送、追问或写回 RingCentral；当用户改动目标、问题、完成标准或计划时间时，会点名未保存字段，并在取消编辑、返回列表或离开页面前说明这些草稿会被丢弃。若目标已经解析为唯一对象，进入编辑不会自动重新检索目标，避免只打开编辑页就把草稿变成未保存状态。
+
+2026-06-29 体验校准：详情页对 `pending_approval` 和 `scheduled` 会话增加 `发送前复核`。它不新增后端状态，也不会自动刷新 RingCentral；只基于当前会话详情快照提示目标解析、预计外发时间、最后更新时间、已有 evidence / reply / outcome 线索和外发边界。若已有答案或会话过旧，用户在批准前能看到“先取消或编辑”的恢复路径，而不是把批准按钮误当成无风险继续执行。
+
+2026-06-30 体验校准：列表页待审批卡片如果已经带有 evidence / reply / outcome 线索，会显示 `列表发送前复核`，并把列表上的一键 `批准发送` 改成不可点的 `先到详情复核`。用户仍可进入详情页，在完整发送前复核、证据面板和操作范围回执同屏时决定批准、取消或编辑问题；这样列表筛选和批量扫读不会绕过高责任外发复核，也不会把已有答案的会话重复打扰外部对象。
 
 2026-05-28 体验校准：
 
 - [RingCentral Team Messaging API](https://developers.ringcentral.com/team-messaging-api) 支持对个人、群组和团队发送消息并通过 bot / webhook 处理响应；因此 Personal AI 的 Outreach 核心风险不在“能不能发”，而在目标解析、发送前审批、回复归因和失败可见性。
 - [Microsoft 365 Copilot Workflows](https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-workflows-in-microsoft-365-copilot) 和 [Slack Workflow Builder](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack) 都把自动化拆成 trigger、action、等待输入/按钮和权限控制，说明主动推进类功能应该把“当前卡在哪一步”暴露给用户，而不是只给一个总状态。
 - 研究上，[Human-centered Proactive Conversational Agents](https://arxiv.org/abs/2404.12670) 提醒主动系统若缺乏克制和用户预期管理，很容易被感知为打扰；[Human-in-the-Loop AI 系统综述](https://www.mdpi.com/1099-4300/28/4/377) 也强调高影响动作要按风险与不确定性调整人工控制点。因此 Outreach 页面优先展示配置缺口、目标确认、等待/升级、错误和重试路径，不把 API 失败伪装成空列表。
+
+2026-06-22 体验校准：
+
+- [Copilot Studio Request for information](https://learn.microsoft.com/en-us/microsoft-copilot-studio/flows-request-for-information) 把缺失信息处理成可暂停、可指定 reviewer、可恢复的流程；[OpenAI Agents SDK HITL](https://openai.github.io/openai-agents-python/human_in_the_loop/) 也把高责任工具调用暴露成待批准中断。对应到 Outreach 列表，首屏不能只给状态桶，还要点名当前最该处理的一个对象，并把“打开查看”和“真正批准/重试/发送”拆开。
+- [Slack Workflow Builder](https://slack.com/help/articles/360035692513-Guide-to-Slack-Workflow-Builder) 和主动对话代理研究都强调自动化流程需要可理解的触发、动作与用户控制点；因此“本轮处理对象”只做导航和边界说明，不在聚焦卡上直接执行外发或重试，避免把系统建议误读成已授权动作。
 
 #### 2. 决策中心（Confirm Requests）
 
@@ -720,16 +765,20 @@ ReflectionResearcher      ReflectionWorker
 - 主队列只展示 `routing=decision` 且 `state=pending` 的确认项；`routing=watch` 的观察项独立折叠展示，不计入主标题数字
 - 决策卡会展示优先级、原因、来源、上下文、可选项和 `evidenceRefs` 摘要，并提供“复制审核包”用于把问题、上下文、可选项和原始证据引用带到外部复核
 - 决策卡、稍后决策卡和待观察卡都会显示“操作边界”：说明点击答案、稍后、恢复、结束追踪或立即查证分别会写入什么状态；待观察的“立即查证”只会排入或复用只读 OpenClaw 查证动作，未配置或执行失败时以动作队列/后续回执为准，不会立刻确认结果、替用户拍板、直接发送外部消息或删除原始证据
+- 点击答案、稍后/恢复/结束或待观察查证后，卡片会先显示“提交中回执”：在 Memory Service 返回前，页面只承认请求已发起，不提前把答案写入、队列移出、OpenClaw 续跑、外部消息发送、只读查证动作创建或证据删除当作已经发生；失败时保留原卡片和错误，成功后才显示顶部操作回执
 - 每次点击答案、稍后、恢复、结束追踪或立即查证后，页面顶部会保留“操作回执”：说明确认项现在去了哪里、是否创建或复用了只读查证动作、是否仍需回到动作队列查看，以及哪些事情不会自动发生。OpenClaw 委派类答案会直接显示服务端返回的真实绑定动作结果：已续跑、暂不重试、已停止，或未返回动作变更；这样用户不用从卡片消失、数字变化或控制台请求里猜状态。
+- 从通知深链进入时，如果目标确认项未出现在已读取队列，页面会说明本次只读刷新已经查过哪些队列；如果某些队列刷新失败，则只说“成功读取或上次保留的数据里未找到”，不把失败队列伪装成已查无结果。这个回执同时说明刷新只是读取队列，不会批准、恢复、结束追踪、创建动作或发送消息。
+- 从通知深链打开的目标如果刚被本页回答或结束追踪，页面会显示“通知对应项已由本次操作处理”，避免把卡片消失误读成普通的未找到或旧通知；后续是否有外部动作、动作是否成功，仍以上方操作回执和 Action Queue 链接为准。
 - 决策项支持“稍后再决定”：`pending` 决策会进入独立的“稍后决策”折叠区，不计入主标题数字；到期后由 Heartbeat 自动回到 `pending`，用户也可以手动“现在处理”或“不再追踪”
+- 规则改进类确认项使用“打开并预填建议 / 忽略建议”的独立路径：打开只会把建议暂存到本机并进入记忆入口规则编辑器，保存前不会更新原规则，也不会把确认项标记为已应用；忽略只提交 `dismissed`，不会创建外部动作或发送消息。审核包也保留同一处理选项和边界，避免复制出去的上下文和页面按钮不一致。
 - 观察项继续保持“立即查证 / 继续观察 / 结束追踪”的独立路径；pending 或 snoozed 观察项点击“立即查证”都会创建或复用同一条只读 OpenClaw 查证动作，并在回执里提示 Action Queue 才是 OpenClaw 配置、执行和失败状态的真实查看入口；决策项的稍后/恢复只改变确认项状态，不自动创建外部动作
 - 决策中心按队列独立加载：如果稍后决策或待观察池临时失败，已加载的待拍板 decision 项仍可审批/稍后处理；页面会显示部分刷新失败并保留上次成功读取的数据，避免把辅助队列故障伪装成整个决策中心不可用
 
-2026-05-28 体验校准：
+2026-06-19 体验校准：
 
-- [Zapier Human in the Loop](https://help.zapier.com/hc/en-us/articles/38731463206029-Request-approval-to-keep-your-workflow-running-with-Human-in-the-Loop)、[Microsoft Copilot Studio Request for information](https://learn.microsoft.com/en-us/microsoft-copilot-studio/flows-request-for-information) / AI approvals 和 [GitHub Copilot cloud agent](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/about-cloud-agent) 都把“继续执行前的人类确认”做成可暂停、可审核、可恢复的控制点；Personal AI 的决策中心也按这个边界处理，不把用户还没准备好的判断伪装成已拒绝或已批准
+- [Zapier Human in the Loop](https://help.zapier.com/hc/en-us/articles/38731463206029-Request-approval-to-keep-your-workflow-running-with-Human-in-the-Loop)、[Microsoft Copilot Studio Request for information](https://learn.microsoft.com/en-us/microsoft-copilot-studio/flows-request-for-information) / AI approvals 和 [GitHub Copilot cloud agent](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/about-cloud-agent) 都把“继续执行前的人类确认”做成可暂停、可审核、可恢复的控制点；Personal AI 的决策中心也按这个边界处理，不把用户还没准备好的判断伪装成已拒绝、已批准或已应用
 - 相关人机决策研究提醒：解释和证据本身不一定降低过度依赖，关键是让用户能低成本核对证据、保留自己的判断空间，并把最终执行权留给人；因此决策卡保留审核包复制和明确的稍后入口
-- [Human-in-the-Loop AI 系统综述](https://www.mdpi.com/1099-4300/28/4/377) 对 automation bias、alert fatigue 和 cognitive load 的提醒也适用于这里：状态变化后要给短回执和恢复路径，而不是要求用户记住每个按钮背后的队列规则。
+- [Human-in-the-Loop AI 系统综述](https://www.mdpi.com/1099-4300/28/4/377) 与近期 automation-bias 研究都提醒：人在审核 AI 建议时容易把界面上的“建议”误读成默认正确或已执行；因此规则改进这类高责任路径必须把“预填建议”“保存应用”“忽略关闭”分开表达，状态变化后给短回执和恢复路径，而不是要求用户记住每个按钮背后的队列规则。
 
 #### 3. 通知提醒（Notifications / 免打扰路径）
 
@@ -750,7 +799,10 @@ ReflectionResearcher      ReflectionWorker
 - 数据表：`notification_records`
 - 能力：`acknowledge` / `dismiss` / `snooze`
 - `snooze` 默认顺延 24 小时，也接受调用方提供 5 分钟到 7 天的延迟；已处理或已 snooze 的原通知不会再次复制，避免重复提醒
-- `snooze` 生成的未来通知会保留原 payload，并写入 `payload.snooze`（来源通知、root 通知、延后时间、到点时间和第几次稍后）；Chrome 通知到点弹回时会在上下文里显示“稍后提醒 / 第 N 次稍后提醒”，避免用户误以为是全新的系统打扰
+- `snooze` 生成的未来通知会保留原 payload，并写入 `payload.snooze`（来源通知、root 通知、延后时间、到点时间和第几次稍后）；Chrome 通知到点弹回时会在上下文里显示“稍后提醒 / 第 N 次稍后提醒”、原定回提醒时间和上次延后长度，避免用户误以为是全新的系统打扰
+- `snooze` action response 会返回 `actionReceipt`：它明确说明本次只创建未来 `notification_records` 提醒并关闭当前提醒，不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据
+- 到点后的 `/notification-center/feed` envelope 会额外返回 `snoozeReceipt`，把来源通知、root 通知、原定回提醒、上次延后、第几次稍后和“未确认/未发送/未执行”边界结构化给 Chrome、Bot digest 等渠道共用；这样渠道不需要自己猜 `payload.snooze` 的语义
+- Chrome todo 通知在用户点击“稍后提醒”前，会在通知上下文里预告本次会延后多久、预计何时再提醒，并说明这不会确认、发送、执行或修改原始证据；临近 deadline 的通知会优先排在 deadline 前回提醒，过期通知默认短延后
 - Chrome 的“稍后提醒 / 不再提示”会先提交后端全局动作，再写渠道终止回执；如果后端 snooze 失败，原待办不会被 Chrome feed 提前隐藏
 - `GET /notifications?state=scheduled` 可以查看尚未到点的稍后提醒，`/notifications/stats` 会返回 `scheduled` 数量
 - `GET /notification-center/feed` 支持 `deliveryMode=retry_after_cooldown | incremental | daily_digest`：默认模式让未处理待办冷却后再次出现，`incremental` 只取从未成功送达的新待办，`daily_digest` 则把仍未完成的待办重新放进低打扰汇总
@@ -759,7 +811,7 @@ ReflectionResearcher      ReflectionWorker
   - Bot 推送
   - 点击通知后跳到 `memory-exploring` 对应页面，例如 `/decisions` 或 `/dreams`
 
-产品参考上，[Slack 的 DND / notification schedule](https://slack.com/help/articles/214908388-pause-notifications-with-do-not-disturb) 和 [Teams 的 Activity feed / notification settings](https://support.microsoft.com/en-US/teams/notifications-settings/manage-notifications-in-microsoft-teams) 都把“暂停打扰”和“稍后仍可回看”分开处理；[通知 snooze](https://weberdo.com/publications/2018-Snooze-Investigating-the-User-Defined-Deferral-of-Mobile-Notifications.pdf) 与 [notification deferral](https://www.microsoft.com/en-us/research/publication/balancing-awareness-interruption-investigation-notification-deferral-policies/) 研究也强调，延后提醒要让用户知道这是自己延后的事项，而不是一条没有来历的新通知。因此本功能优先保留延后来源、处理状态和再次提醒语义，不做静默吞掉。
+产品参考上，[Slack 的 DND / notification schedule](https://slack.com/help/articles/214908388-pause-notifications-with-do-not-disturb) 和 [Teams 的 Activity feed / notification settings](https://support.microsoft.com/en-US/teams/notifications-settings/manage-notifications-in-microsoft-teams) 都把“暂停打扰”和“稍后仍可回看”分开处理，[Teams mobile quiet time](https://support.microsoft.com/en-us/teams/platform/quiet-time-in-microsoft-teams-for-mobile-devices) 也把静音时段作为明确的 schedule 设置；[通知 snooze](https://weberdo.com/publications/2018-Snooze-Investigating-the-User-Defined-Deferral-of-Mobile-Notifications.pdf) 与 [notification deferral](https://www.microsoft.com/en-us/research/publication/balancing-awareness-interruption-investigation-notification-deferral-policies/) 研究强调，延后提醒要让用户知道这是自己延后的事项，而不是一条没有来历的新通知；[Human-centered Proactive Conversational Agents](https://arxiv.org/abs/2404.12670) 也提醒主动系统需要克制和用户预期管理。因此本功能优先保留延后来源、处理状态、再次提醒语义和操作边界，不做静默吞掉，也不把稍后提醒误表达成已确认或已执行。
 
 ### 触发逻辑与优先级
 
@@ -908,6 +960,12 @@ flowchart TD
 2026-06-09 体验校准：`delegate_openclaw` 失败或 dead letter 时，动作队列会保留结构化 `result_json`，不只保存 `lastError`。如果 OpenClaw 只返回纯文本摘要，或声称成功但缺少来源系统、对象、验证方式、字段/操作等可验证 artifact，Action Queue 会显示“证据校验回执”，说明这次结果不会写入 `action_results`，并提示改写任务或补齐 OpenClaw artifact 后再重试。2026-06-14 补齐一个展示细节：这类低可信返回即使带了 artifact 列表，卡片也只标为“未验证 artifact”，不再把未通过校验的对象计入“可验证 artifact”。这样刷新页面后仍能看到失败状态、payload、transcript 和派生恢复动作，用户不会把低可信外部文本误当成已验证事实。
 
 2026-06-17 体验校准：Action Queue 的 `执行` / `确认并执行` / `重试入队` / `取消` 成功后会在对应卡片保留“操作回执”。回执说明本次只写入了批准、执行、重试或取消的队列状态；OpenClaw 读操作不会立刻确认外部事实，写操作也不会把缺失回执等同于没有外部副作用，取消不会撤销已经发生的 Jira / Drive / 部署改动或删除反思证据。
+
+2026-06-23 体验校准：如果 `delegate_openclaw` 的执行请求本身失败，Action Queue 不会先把卡片乐观改成 `running`。失败回执会说明 Memory Service 没有确认接收这次 OpenClaw 读/写请求；若这是 `确认并执行`，批准是否写入也仍以刷新后的队列状态为准，不能把请求失败或后续刷新失败误读成 OpenClaw 已经开始或外部系统已经完成。
+
+2026-06-21 体验校准：当 `delegate_openclaw` 仍停在人工确认时，Action Queue 的“人工确认”面板会改用 OpenClaw 专属边界，不再只显示通用风险/模式。面板会在 `确认并执行` 前重复目标系统、只读/写操作模式、结果证明要求（artifact / transcript / 队列状态）以及“批准只授权继续执行，不证明 Jira / Drive / 部署等外部系统已经完成”。这样用户在真正点击批准的位置就能区分“我同意交给 OpenClaw”与“外部已经成功”。
+
+2026-06-27 体验校准：当 `delegate_openclaw` 因缺能力、鉴权失败、需要人工判断或规则联动失败而派生恢复动作时，服务端结果除了保留 `followUpActionIds`，还返回 `followUpActions` 轻量摘要。Action Queue 卡片会显示 `恢复路径回执`：列出派生的通知、决策中心确认或规则改进动作，并提供同页过滤链接。这个回执只说明恢复入口已经创建，不代表原 OpenClaw 动作已重试、外部事实已确认、外部消息已发送或外部写操作已撤销。
 
 ### 外部委派的安全边界
 
@@ -1076,9 +1134,11 @@ Rehearsal 默认不物理删除：
 - `risks`
 - 低置信度的新关系（来源标记为 dream / generative replay）
 
-前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数、新关系数、来源文件、原始证据条数和低置信提示。顶部还会统计“优先复核”“可带证据复核”和“缺证据”的梦境数量；如果通知深链指向的 dream 文件或列表里的某个文件读取失败，页面保留具体文件名并继续展示可用结果，避免把服务或文件错误误报成“暂无内容”。每张卡都会给出处理回执：有证据且包含风险时先核证风险，有证据且包含新关系时先核证关系，只有洞察时整理成反思线索，缺证据时先补原始证据；这些回执都明确不会自动通知、派发任务、写外部系统、写用户画像、创建 Rehearsal 或把 dream 关系升格为确定事实。展开梦境时会提示这是生成式低置信度联想，并展示 `Grounding Receipt` 里的召回数量、命中通道、结果类型和少量原始片段；用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用。旧梦境文件如果没有证据回执，页面会明确显示“证据回执未记录”，不把缺失证据伪装成已核对。从梦境卡片进入复核时会带上当前主题并在反思线程页自动筛选，避免用户跳过去后丢失要核对的线索。
+前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数、新关系数、来源文件、原始证据条数和低置信提示。顶部先展示“本页范围”回执：说明当前只读窗口是最近 10 个可读取 dream 文件，通知深链文件会额外尝试读取，并汇总可带证据复核、缺证据和读取失败数量；它同时说明 Dream Replay 每周离线生成，梦境报表只代表当前 digest 周期，页面不会写用户画像、创建 Rehearsal、确认关系、发送通知或执行外部动作。顶部还会统计“优先复核”“可带证据复核”和“缺证据”的梦境数量；如果通知深链指向的 dream 文件或列表里的某个文件读取失败，页面保留具体文件名并继续展示可用结果，避免把服务或文件错误误报成“暂无内容”。每张卡还会显示 `时间回执`：优先解析 Markdown 里的 `Generated` 日期，同时保留文件名日期；如果两者不一致或缺少 `Generated` 行，页面会说明当前只是按生成行或文件名归档线索阅读，不会重跑 Dream Replay、更新 digest、确认内容或写回记忆。每张卡都会给出处理回执：有证据且包含风险时先核证风险，有证据且包含新关系时先核证关系，只有洞察时整理成反思线索，缺证据时先补原始证据；这些回执都明确不会自动通知、派发任务、写外部系统、写用户画像、创建 Rehearsal 或把 dream 关系升格为确定事实。展开梦境时会提示这是生成式低置信度联想，并展示 `Grounding Receipt` 里的召回数量、命中通道、结果类型和少量原始片段；用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用。旧梦境文件如果没有证据回执，页面会明确显示“证据回执未记录”，不把缺失证据伪装成已核对。从梦境卡片进入复核时，行动区会先显示 `复核交接回执`，列出目标 Reflection 筛选、dream 文件、证据状态、风险/新关系数量，并说明跳转只携带筛选条件，不确认 dream 结论、不新增记忆或画像、不创建 Rehearsal、通知、动作或外部写回；实际跳转仍会带上当前主题并在反思线程页自动筛选，避免用户过去后丢失要核对的线索。
 
-2026-06-18 梦境重放复查：[OpenAI Dreaming](https://openai.com/index/chatgpt-memory-dreaming/) 和 [Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq) 都把后台记忆综合与可见摘要/可管理记忆绑定；[Microsoft 365 Copilot grounding](https://support.microsoft.com/en-us/microsoft-365-copilot/how-grounding-works-with-a-work-or-school-account) 强调回答可用信息取决于来源和账户边界；[Generative Agents](https://arxiv.org/abs/2304.03442) 与 [Reflective Memory Management](https://aclanthology.org/2025.acl-long.413.pdf) 支持 observation / reflection / retrieval refinement 的闭环；[SSGM](https://arxiv.org/html/2603.11768v1) 则提醒动态记忆演化要和执行治理分离。因此 Personal AI 的梦境只新增轻量复核路径和证据回执，不新增人工审查队列，也不把 dream 关系升格为确定事实。
+2026-06-27 体验校准：从 Dream Digest / 通知深链进入 `#/dreams?file=...` 时，命中的 dream 卡片会置顶、默认展开，并在卡片内显示 `通知命中回执`。这条回执说明通知请求的 `dreams/<file>`、当前证据是否足够进入 Reflection 筛选，以及“复核这个主题”只打开筛选、不确认风险/关系、不写用户画像、不创建 Rehearsal、不发送通知或外部写回。
+
+2026-06-19 梦境重放复查：[OpenAI Dreaming](https://openai.com/index/chatgpt-memory-dreaming/) 和 [Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq) 都把后台记忆综合与可见摘要/可管理记忆绑定；[Microsoft 365 Copilot grounding](https://support.microsoft.com/en-us/microsoft-365-copilot/how-grounding-works-with-a-work-or-school-account) 强调回答可用信息取决于来源和账户边界；[Generative Agents](https://arxiv.org/abs/2304.03442) 与 [Reflective Memory Management](https://aclanthology.org/2025.acl-long.413.pdf) 支持 observation / reflection / retrieval refinement 的闭环；[Replay in Deep Learning](https://pmc.ncbi.nlm.nih.gov/articles/PMC9074752/) 与 [Brain-inspired replay](https://www.nature.com/articles/s41467-020-17866-2) 支持离线重放作为巩固机制，但也提醒生成式回放应和执行权分离。因此 Personal AI 的梦境只新增轻量复核路径、证据回执和本页范围回执，不新增人工审查队列，也不把 dream 关系升格为确定事实。
 
 梦境报表只汇总当前 digest 周期内生成的 dream 文件。周一报表会覆盖上一周的梦境重放结果；旧文件和无法解析生成日期的历史文件仍可在梦境页查看，但不会被反复当成本周期内容推送。推送 payload 会带 `dreamDigestScopeReceipt` 和结构化 `dreamDigestScope`，说明覆盖周期、纳入的 dream 文件数、旧周期 / 日期缺失 / 未来日期 / 读取失败的排除数量，以及“本次推送只代表当前 Dream Digest 周期”的边界；通知摘要和系统弹窗预览会优先展示这段范围回执，避免用户把一次推送误读成完整梦境档案。
 
@@ -1135,7 +1195,7 @@ data/
 - 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
 - 实时事件流 `/events` 兼容浏览器 `EventSource`：客户端会在本地配置和 `userinfo.username` 解析完成后再用 `?userId=` 建立连接；如果身份仍未解析，则不附带 query userId，让服务端按 default fallback 回执处理。服务端优先校验 query userId 并按用户过滤事件；非法 userId 会直接拒绝，避免事件流误连到 `default` 用户。连接成功的 `connected` 事件会带 `user` 回执，说明身份来自 query、header 还是 default fallback，并列出 per-user storage key 与“只接收同用户或全局事件”的过滤边界。
-- `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`。Memory Exploring 侧栏会直接展示当前记忆用户、per-user SQLite storage key 和“读写 / 备份 / 恢复只作用于这个空间”的边界；如果正在使用 `default` 空间，会显示轻量警示并说明写入会被拦截，避免用户误把 fallback 数据当成自己的账号数据。
+- `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`identitySource`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`。Memory Exploring 侧栏会直接展示当前记忆用户、per-user SQLite storage key、身份来源和“读写 / 备份 / 恢复只作用于这个空间”的边界；Today Pilot 首屏也会把顶部统计和 mission 读取绑定到同一个身份快照，显示“当前统计来自哪个用户空间”和对应 storage key。如果正在使用 `default` fallback，会把身份来源标成未解析只读回退，并说明写入、导入和恢复都会被拦截，避免用户误把 fallback 数据当成自己的账号数据。身份卡还会显示本次只读 `/stats` 快照时间，并提供“刷新身份快照”和“打开设置”；刷新只重新检查身份边界，不写入、导入、恢复或迁移任何记忆，设置入口用于恢复登录 / `userinfo.username` / Memory Service 配置。
 
 ---
 
@@ -1144,6 +1204,9 @@ data/
 业内产品和论文对长期记忆系统的共同要求是：用户可控、按需取回、来源可追溯，并且要避免把全部历史无差别塞进上下文。
 
 - 2026-06-06 复查 ChatGPT Memory、Claude Managed Agents Memory、Collaborative Memory、Agent-Memory Protocol、Memory for Autonomous LLM Agents 和 AgentSys 后，本层继续把“身份可见、可导出/恢复、跨边界需确认、第三方调用前最小化打包”作为多用户隔离重点，而不是只满足物理分库。
+- 2026-06-21 多用户隔离复查：[ChatGPT Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 强调用户应能查看、管理和删除记忆；[Claude Memory](https://www.anthropic.com/news/memory) 把项目级 memory 分隔、可查看/编辑和 Incognito 不写入 memory 作为工作场景边界；[Notion Enterprise Search security](https://www.notion.com/help/enterprise-search-security-and-privacy-practices) 说明查询需尊重用户权限并保持 workspace 隔离；[`Memory in the Age of AI Agents`](https://arxiv.org/abs/2512.13564) 也提醒 persistent memory、RAG 和 context engineering 要有清晰边界。因此本轮补齐 `identitySource` 与侧栏身份路由回执，让用户直接区分显式用户空间和 default fallback。
+- 2026-06-26 多用户隔离体验复查：[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 把 project / incognito / settings 边界放进用户路径；[Notion Enterprise Search security](https://www.notion.com/help/enterprise-search-security-and-privacy-practices) 强调 query-time permission checks；[`Governed Shared Memory for Multi-Agent LLM Systems`](https://arxiv.org/html/2606.24535v1) 把 scope enforcement、stale propagation 和 provenance collapse 列为 shared memory 的核心失败模式；[`SuperLocalMemory`](https://arxiv.org/html/2603.02240v1) 也强调 local-first isolation 与 provenance。Personal AI 因此不只显示当前 userId，还要告诉用户身份快照何时读取、刷新是否有副作用，以及身份异常时该去哪里恢复。
+- 2026-06-29 多用户隔离体验复查：Today Pilot 这种摘要入口如果只展示记忆统计数字，用户仍可能误把 `default` fallback 的只读计数当作自己的真实账号空间。因此首屏统计也复用 `/stats.user`，把 `userId`、storage key、身份来源和只读/无写回边界放在 mission 前，而不是只在侧栏诊断区展示。
 - ChatGPT Memory 与 Claude Memory 都把“用户能查看、关闭、删除或控制记忆”作为核心产品语义；Claude Managed Agents 还把 scoped permissions、audit logs、per-user stores 和 rollback/redaction 作为生产级记忆边界。
 - Notion Enterprise Search 这类跨应用搜索把查询时权限检查、用户映射和工作区隔离作为核心约束；这说明长期记忆不只要分库，还要保证实时事件、召回和导出等所有读路径都带着同一份用户身份。
 - OpenAI Agents SDK / LangGraph 的 human-in-the-loop 都强调暂停、持久化、恢复和逐项审批；Zapier Agents 的 activity 页面强调按运行状态、使用的 app、时间和详细步骤审计。动作队列 UI 因此应把“等待什么、是否能恢复、失败原因在哪里”放在列表入口，而不只展示 raw status。
@@ -1226,7 +1289,7 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 
 ### 记忆导入 / 导出 / 备份
 
-- `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。
+- `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。下载响应同时带回 manifest 摘要头，Coverage 页面下载回执会显示备份用户、导出时间、清单路径数、format version 和 A/B/C 层计数；这只是下载审计，不会恢复、删除、同步或外发。
 - B 层会包含核心 Markdown、daily / dreams / entities / reflections / reflection-threads / reports / projects / rehearsals / source-memory / skills / agent 目录下的 `.md` 文件，保证 Rehearsal 审计快照和 Source Memory 资料卡不会在备份恢复后丢失。
 - `/import` 的默认模式是 `merge`，会合并数据库行并覆盖备份内同名文件，保留备份外的本地文件；`mode=replace` 会用备份目录替换当前用户目录。
 - 导入前可以先用同一个 multipart 请求加 `dryRun=true`，服务只校验 ZIP、manifest 和数据库可读性，并返回将写入、覆盖、保留、删除的路径及数据库表行数预览，不会修改当前用户数据。

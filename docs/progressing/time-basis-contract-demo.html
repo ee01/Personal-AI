@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Time Basis Contract Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8dee9;
+      --soft: #eef3f8;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --red: #b42318;
+      --green: #15803d;
+      --violet: #6d28d9;
+      --shadow: 0 18px 50px rgba(25, 36, 70, 0.14);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr) 390px;
+    }
+
+    .nav {
+      background: #182033;
+      color: #eef3ff;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: conic-gradient(from 180deg, #5eead4, #60a5fa, #c084fc, #5eead4);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .nav-group {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-button {
+      border: 0;
+      background: transparent;
+      color: #cbd5e1;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font: inherit;
+      cursor: default;
+    }
+
+    .nav-button.active {
+      background: rgba(255,255,255,0.12);
+      color: #ffffff;
+    }
+
+    .workspace {
+      min-width: 0;
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .title-block {
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 7px 10px;
+      font-size: 12px;
+      color: #344054;
+      white-space: nowrap;
+    }
+
+    .pill.locked {
+      border-color: rgba(15, 118, 110, 0.28);
+      background: #ecfdf5;
+      color: #115e59;
+    }
+
+    .scenario-tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: #344054;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 13px;
+      min-height: 40px;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      border-color: rgba(37, 99, 235, 0.35);
+      color: #1d4ed8;
+      background: #eff6ff;
+      font-weight: 700;
+    }
+
+    .host-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .host-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .host-title {
+      font-size: 14px;
+      font-weight: 750;
+    }
+
+    .host-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .prompt-area {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .editor {
+      min-height: 220px;
+      border: 1px solid #cfd7e6;
+      border-radius: 8px;
+      padding: 14px;
+      background: #ffffff;
+      font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .contract-inline {
+      border: 1px solid rgba(15, 118, 110, 0.28);
+      background: #f0fdfa;
+      color: #134e4a;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .contract-inline.warning {
+      border-color: rgba(180, 83, 9, 0.28);
+      background: #fffbeb;
+      color: #78350f;
+    }
+
+    .contract-headline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .contract-body {
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .button {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: #1f2937;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 13px;
+      min-height: 40px;
+    }
+
+    .button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #ffffff;
+      font-weight: 700;
+    }
+
+    .button.danger {
+      background: #fff1f2;
+      border-color: #fecdd3;
+      color: #9f1239;
+    }
+
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .mini-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .mini-value {
+      font-size: 14px;
+      font-weight: 760;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .side {
+      background: #f8fafc;
+      border-left: 1px solid var(--line);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+      min-width: 0;
+    }
+
+    .panel {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-title {
+      font-weight: 760;
+      font-size: 14px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 720;
+      background: #eef2ff;
+      color: #3730a3;
+      white-space: nowrap;
+    }
+
+    .badge.green { background: #dcfce7; color: #166534; }
+    .badge.amber { background: #fef3c7; color: #92400e; }
+    .badge.red { background: #fee2e2; color: #991b1b; }
+
+    .panel-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .frame-row {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .frame-key {
+      color: var(--muted);
+    }
+
+    .frame-value {
+      color: #1f2937;
+      font-weight: 650;
+      word-break: break-word;
+    }
+
+    .rule-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .rule {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      display: grid;
+      gap: 4px;
+      background: #fbfcfe;
+    }
+
+    .rule strong {
+      font-size: 13px;
+    }
+
+    .rule span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 9px;
+    }
+
+    .dot {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid rgba(37, 99, 235, 0.35);
+      background: #eff6ff;
+      color: #1d4ed8;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .step-copy {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #344054;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
+      background: #101828;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 11px 14px;
+      font-size: 13px;
+      box-shadow: var(--shadow);
+      max-width: min(560px, calc(100vw - 32px));
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 10;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-4px);
+    }
+
+    @media (max-width: 1080px) {
+      .app {
+        grid-template-columns: 82px minmax(0, 1fr);
+      }
+
+      .nav {
+        padding: 14px 8px;
+      }
+
+      .brand span,
+      .nav-button span {
+        display: none;
+      }
+
+      .side {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .app {
+        display: block;
+      }
+
+      .nav {
+        min-height: auto;
+        flex-direction: row;
+        align-items: center;
+        overflow-x: auto;
+      }
+
+      .brand {
+        min-width: max-content;
+      }
+
+      .brand span,
+      .nav-button span {
+        display: inline;
+      }
+
+      .nav-group {
+        display: flex;
+        gap: 6px;
+      }
+
+      .workspace,
+      .side {
+        padding: 14px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      .preview-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .host-head,
+      .contract-headline {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .host-meta {
+        white-space: normal;
+      }
+
+      .frame-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="nav" aria-label="Personal AI navigation">
+      <div class="brand"><div class="brand-mark" aria-hidden="true"></div><span>Personal AI</span></div>
+      <div class="nav-group">
+        <button class="nav-button active"><span>AI 任务</span></button>
+        <button class="nav-button"><span>Ask</span></button>
+        <button class="nav-button"><span>Action Queue</span></button>
+        <button class="nav-button"><span>Skills</span></button>
+      </div>
+    </nav>
+
+    <main class="workspace">
+      <section class="topbar">
+        <div class="title-block">
+          <h1>时间口径合约</h1>
+          <div class="subtitle">模拟集成在外部 AI / Codex / Skill Runner 输入现场。重点展示发送或执行前，Personal AI 如何先锁定业务时间、模拟日期和写回边界。</div>
+        </div>
+        <div class="status-strip">
+          <span class="pill locked" id="topPill">已锁定时间口径</span>
+          <span class="pill">未发送</span>
+          <span class="pill">未执行 action</span>
+        </div>
+      </section>
+
+      <section class="scenario-tabs" aria-label="场景切换">
+        <button class="tab active" data-scenario="nova">Nova RMI sync</button>
+        <button class="tab" data-scenario="ask">Ask 双口径</button>
+        <button class="tab" data-scenario="conflict">冲突阻断</button>
+      </section>
+
+      <section class="host-card">
+        <div class="host-head">
+          <div>
+            <div class="host-title" id="hostTitle">Codex / Skill Runner 草稿</div>
+            <div class="subtitle" id="hostSubtitle">用户准备运行一个 Nova CapDev RMI skill，明确要求模拟 2026-07-01。</div>
+          </div>
+          <div class="host-meta" id="hostMeta">生成时间：2026-07-03 04:18 CST</div>
+        </div>
+        <div class="prompt-area">
+          <div class="editor" id="promptText"></div>
+          <div class="contract-inline" id="inlineReceipt">
+            <div class="contract-headline">
+              <span id="receiptHeadline">时间口径已锁定</span>
+              <span class="badge green" id="receiptBadge">locked</span>
+            </div>
+            <div class="contract-body" id="receiptBody"></div>
+          </div>
+          <div class="preview-grid">
+            <div class="mini">
+              <div class="mini-label">业务时间</div>
+              <div class="mini-value" id="miniBusiness">2026-Q3</div>
+            </div>
+            <div class="mini">
+              <div class="mini-label">模拟日期</div>
+              <div class="mini-value" id="miniDate">2026-07-01</div>
+            </div>
+            <div class="mini">
+              <div class="mini-label">写回边界</div>
+              <div class="mini-value" id="miniBoundary">Dry-run first</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="button" id="viewContract">查看合约</button>
+            <button class="button" id="copyHeader">写入草稿边界</button>
+            <button class="button primary" id="runPreflight">运行 preflight</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="side" aria-label="Personal AI time basis panel">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Personal AI 合约</div>
+          <span class="badge green" id="sideBadge">ready</span>
+        </div>
+        <div class="panel-body">
+          <div class="frame-row">
+            <div class="frame-key">Mode</div>
+            <div class="frame-value" id="modeValue">simulation</div>
+          </div>
+          <div class="frame-row">
+            <div class="frame-key">Timezone</div>
+            <div class="frame-value">Asia/Shanghai</div>
+          </div>
+          <div class="frame-row">
+            <div class="frame-key">As of</div>
+            <div class="frame-value" id="asOfValue">simulate as 2026-07-01</div>
+          </div>
+          <div class="frame-row">
+            <div class="frame-key">Business window</div>
+            <div class="frame-value" id="windowValue">2026-Q3 · 2026-07-01 ~ 2026-09-30</div>
+          </div>
+          <div class="frame-row">
+            <div class="frame-key">Write boundary</div>
+            <div class="frame-value" id="writeValue">dry-run；先输出 JQL 和结果，不写 Jira</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">相对时间解析</div>
+          <span class="badge" id="termsBadge">3 terms</span>
+        </div>
+        <div class="panel-body">
+          <div class="rule-list" id="ruleList"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">传递链路</div>
+          <span class="badge amber">未执行</span>
+        </div>
+        <div class="panel-body">
+          <div class="timeline">
+            <div class="step"><div class="dot">1</div><div class="step-copy">输入框只生成本地 TimeBasisFrame，不发送给外部 AI。</div></div>
+            <div class="step"><div class="dot">2</div><div class="step-copy">Prompt Compiler 只插入 safe header，不包含内部消息原文或受限 URL。</div></div>
+            <div class="step"><div class="dot">3</div><div class="step-copy">Action Queue 审批页复用同一合约；外部写入仍需单独批准。</div></div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const scenarios = {
+      nova: {
+        topPill: '已锁定时间口径',
+        hostTitle: 'Codex / Skill Runner 草稿',
+        hostSubtitle: '用户准备运行一个 Nova CapDev RMI skill，明确要求模拟 2026-07-01。',
+        prompt: '你帮我跑一遍 nova-capdev-rmi-sync，但是不要用当前日期，模拟7/1，用 2026-Q3 来跑一遍。\n\nJQL:\nproject = INIT AND cf[27455] = Nova AND "Target Delivery Quarter" in (2026-Q3) AND status not in (Cancelled, Closed)\n\n输出：\n1. 先 dry-run，不创建 Jira，不写 Sheet。\n2. 列出 theme，不要重复。\n3. 说明如果要写回，需要人工确认哪些字段。',
+        receiptClass: '',
+        receiptHeadline: '时间口径已锁定',
+        receiptBadge: 'locked',
+        badgeClass: 'green',
+        receiptBody: '按 2026-07-01 在 Asia/Shanghai 模拟运行；Target Delivery Quarter = 2026-Q3；本轮禁止使用当前日期推导季度；先 dry-run，不写 Jira/Sheet。',
+        miniBusiness: '2026-Q3',
+        miniDate: '2026-07-01',
+        miniBoundary: 'Dry-run first',
+        mode: 'simulation',
+        asOf: 'simulate as 2026-07-01',
+        window: '2026-Q3 · 2026-07-01 ~ 2026-09-30',
+        write: 'dry-run；先输出 JQL 和结果，不写 Jira',
+        terms: [
+          ['模拟7/1', '2026-07-01 · Asia/Shanghai · 用户显式输入'],
+          ['2026-Q3', '2026-07-01 ~ 2026-09-30 · business window'],
+          ['当前日期', '被禁止用于季度推导，仅作为审计生成时间']
+        ],
+        toast: '已把 Time basis header 写入本机草稿；未发送、未运行、未写回。'
+      },
+      ask: {
+        topPill: '双时间口径',
+        hostTitle: 'Quick Ask 草稿',
+        hostSubtitle: '同一个问题里同时有“现在”和“按 7/1 做报表”。',
+        prompt: '这些 INIT 现在是不是都还在 2026-Q3？如果我是按 7/1 做报表，应该查哪些 theme？\n\n请不要把当前状态和 7/1 模拟结果混在一起。',
+        receiptClass: '',
+        receiptHeadline: '当前状态与 2026-07-01 模拟会分开回答',
+        receiptBadge: 'split',
+        badgeClass: 'green',
+        receiptBody: 'Ask 将生成两个 section：当前可读状态、按 2026-07-01 的模拟报表。历史证据必须带 source-as-of；缺少当时快照时会降级说明。',
+        miniBusiness: 'current + 2026-Q3',
+        miniDate: '2026-07-01 simulation',
+        miniBoundary: '只读回答',
+        mode: 'compare_current_to_as_of',
+        asOf: 'current answer + simulation as 2026-07-01',
+        window: '2026-Q3 · current evidence separated from simulated report',
+        write: 'read-only；不确认事实，不创建 action',
+        terms: [
+          ['现在', 'current · 使用当前可读 evidence'],
+          ['按 7/1 做报表', 'simulation · 2026-07-01'],
+          ['2026-Q3', 'business window · 两个 section 都必须显式标注']
+        ],
+        toast: 'Preflight 通过：Ask 答案会分栏，不混用当前状态和模拟日期。'
+      },
+      conflict: {
+        topPill: '时间冲突需处理',
+        hostTitle: 'Action Queue 创建前检查',
+        hostSubtitle: '用户说模拟 7/1，但草稿 JQL 仍指向 2026-Q2。',
+        prompt: '模拟7/1跑 Nova RMI，同步到 Sheet。\n\nJQL:\nproject = INIT AND cf[27455] = Nova AND "Target Delivery Quarter" in (2026-Q2) AND status not in (Cancelled, Closed)\n\n如果没问题就直接更新 Sheet。',
+        receiptClass: 'warning',
+        receiptHeadline: '时间口径冲突：暂不创建写回 action',
+        receiptBadge: 'blocked',
+        badgeClass: 'red',
+        receiptBody: '用户显式要求模拟 2026-07-01，通常对应 2026-Q3；但 JQL 指向 2026-Q2。由于目标包含 Sheet 写回，本轮必须先改合约或改 JQL。',
+        miniBusiness: '冲突：Q3 vs Q2',
+        miniDate: '2026-07-01',
+        miniBoundary: '阻断写回',
+        mode: 'blocked_conflicting_dates',
+        asOf: 'simulate as 2026-07-01',
+        window: 'conflict · prompt says 2026-Q3 basis but JQL says 2026-Q2',
+        write: 'external write blocked；只能 dry-run 或修改后重建 action',
+        terms: [
+          ['模拟7/1', '2026-07-01 · 推导业务季度为 2026-Q3'],
+          ['Target Delivery Quarter in (2026-Q2)', '与模拟日期冲突'],
+          ['直接更新 Sheet', '外部写入风险，需要阻断']
+        ],
+        toast: '已阻断：不会创建 Sheet 写回 action。请先改 JQL 或改模拟日期。'
+      }
+    };
+
+    let active = 'nova';
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+    function setBadge(element, cls) {
+      element.className = 'badge' + (cls ? ' ' + cls : '');
+    }
+
+    function renderScenario(key) {
+      active = key;
+      const data = scenarios[key];
+      $$('#topPill').forEach((el) => { el.textContent = data.topPill; });
+      $('#hostTitle').textContent = data.hostTitle;
+      $('#hostSubtitle').textContent = data.hostSubtitle;
+      $('#promptText').textContent = data.prompt;
+      $('#inlineReceipt').className = 'contract-inline' + (data.receiptClass ? ' ' + data.receiptClass : '');
+      $('#receiptHeadline').textContent = data.receiptHeadline;
+      $('#receiptBadge').textContent = data.receiptBadge;
+      setBadge($('#receiptBadge'), data.badgeClass);
+      $('#receiptBody').textContent = data.receiptBody;
+      $('#miniBusiness').textContent = data.miniBusiness;
+      $('#miniDate').textContent = data.miniDate;
+      $('#miniBoundary').textContent = data.miniBoundary;
+      $('#modeValue').textContent = data.mode;
+      $('#asOfValue').textContent = data.asOf;
+      $('#windowValue').textContent = data.window;
+      $('#writeValue').textContent = data.write;
+      $('#sideBadge').textContent = key === 'conflict' ? 'blocked' : 'ready';
+      setBadge($('#sideBadge'), key === 'conflict' ? 'red' : 'green');
+      $('#termsBadge').textContent = data.terms.length + ' terms';
+      $('#ruleList').innerHTML = data.terms.map(([title, body]) => (
+        '<div class="rule"><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(body) + '</span></div>'
+      )).join('');
+      $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.scenario === key));
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function showToast(message) {
+      const toast = $('#toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+
+    $$('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => renderScenario(tab.dataset.scenario));
+    });
+
+    $('#viewContract').addEventListener('click', () => {
+      const data = scenarios[active];
+      showToast('当前合约：' + data.mode + ' · ' + data.asOf + ' · ' + data.write);
+    });
+
+    $('#copyHeader').addEventListener('click', () => {
+      showToast(scenarios[active].toast);
+    });
+
+    $('#runPreflight').addEventListener('click', () => {
+      if (active === 'conflict') {
+        showToast('Preflight failed：时间冲突 + 外部写入风险，已阻断。');
+      } else {
+        showToast('Preflight passed：合约可传递给 Ask / Prompt Compiler / Action Queue。');
+      }
+    });
+
+    renderScenario(active);
+  </script>
+</body>
+</html>

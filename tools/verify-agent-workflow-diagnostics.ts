@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import {
   buildAgentWorkflowConfigDiagnostics,
   buildAgentWorkflowDecisionPath,
+  buildAgentWorkflowNotificationReviewReceipt,
+  buildAgentWorkflowOrchestrationReceipt,
   buildAgentWorkflowRecommendedActions,
   buildAgentWorkflowReadinessChecks,
   buildAgentWorkflowResultDiagnostics,
+  buildAgentWorkflowRunEvidencePacket,
   buildAgentWorkflowRunVerdict,
+  buildAgentWorkflowStructuralCoverage,
   getAgentWorkflowHighestSeverity,
   normalizeAgentWorkflowConfidence,
 } from '../src/agentWorkflowDiagnostics.ts';
@@ -99,6 +103,180 @@ const cleanConfigDiagnostics = buildAgentWorkflowConfigDiagnostics(
 assert.equal(cleanConfigDiagnostics.length, 0);
 assert.equal(getAgentWorkflowHighestSeverity(cleanConfigDiagnostics), 'ok');
 
+const structuralCovered = buildAgentWorkflowStructuralCoverage(
+  {
+    agentWorkflowTrace: [
+      {
+        agentId: 'entity',
+        agentName: 'Entity',
+        status: 'success',
+        tools: [{ name: 'entityExtraction', status: 'success' }],
+      },
+      {
+        agentId: 'relationship',
+        agentName: 'Relationship',
+        status: 'success',
+        tools: [{ name: 'relationshipAnalysis', status: 'success' }],
+      },
+    ],
+  },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+    {
+      id: 'relationship',
+      name: 'Relationship',
+      enabled: true,
+      priority: 90,
+      tools: ['relationshipAnalysis'],
+    },
+  ],
+);
+assert.equal(structuralCovered?.status, 'covered');
+assert.match(structuralCovered?.summary || '', /Agent 2\/2、工具 2\/2/);
+
+const structuralPartial = buildAgentWorkflowStructuralCoverage(
+  {
+    agentWorkflowTrace: [
+      {
+        agentId: 'entity',
+        agentName: 'Entity',
+        status: 'success',
+        tools: [{ name: 'entityExtraction', status: 'success' }],
+      },
+      {
+        agentId: 'external',
+        agentName: 'External',
+        status: 'success',
+        tools: [{ name: 'externalServiceQuery', status: 'placeholder' }],
+      },
+    ],
+  },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+    {
+      id: 'relationship',
+      name: 'Relationship',
+      enabled: true,
+      priority: 90,
+      tools: ['relationshipAnalysis'],
+    },
+    {
+      id: 'external',
+      name: 'External',
+      enabled: true,
+      priority: 70,
+      tools: ['externalServiceQuery'],
+    },
+  ],
+);
+assert.equal(structuralPartial?.status, 'partial');
+assert.match(structuralPartial?.summary || '', /Agent 2\/3、工具 2\/3/);
+assert.deepEqual(structuralPartial?.missingAgents, ['Relationship']);
+assert.match(structuralPartial?.summary || '', /占位工具 1/);
+
+const partialOrchestrationReceipt = buildAgentWorkflowOrchestrationReceipt(
+  {
+    shouldStore: true,
+    shouldNotify: false,
+    storageReview: {
+      traceStatus: 'partial',
+      primaryReason: 'Only notify me when blocker is mentioned',
+      toolPlaceholderCount: 1,
+    },
+    agentWorkflowTrace: [
+      {
+        agentId: 'entity',
+        agentName: 'Entity',
+        status: 'success',
+        tools: [{ name: 'entityExtraction', status: 'success' }],
+      },
+      {
+        agentId: 'external',
+        agentName: 'External',
+        status: 'success',
+        tools: [{ name: 'externalServiceQuery', status: 'placeholder' }],
+      },
+    ],
+  },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+    {
+      id: 'relationship',
+      name: 'Relationship',
+      enabled: true,
+      priority: 90,
+      tools: ['relationshipAnalysis'],
+    },
+    {
+      id: 'external',
+      name: 'External',
+      enabled: true,
+      priority: 70,
+      tools: ['externalServiceQuery'],
+    },
+  ],
+);
+assert.equal(partialOrchestrationReceipt?.status, 'review');
+assert.equal(partialOrchestrationReceipt?.title, '编排需复核');
+assert.match(partialOrchestrationReceipt?.summary || '', /Agent 2\/3/);
+assert.match(partialOrchestrationReceipt?.summary || '', /工具 2\/3/);
+assert.match(partialOrchestrationReceipt?.detail || '', /占位工具 1/);
+assert.match(partialOrchestrationReceipt?.detail || '', /缺阶段 Relationship/);
+assert.match(
+  partialOrchestrationReceipt?.boundary || '',
+  /不会写入 Memory Service、发送通知或执行规则自动化/,
+);
+assert.ok(partialOrchestrationReceipt?.chips.includes('本地测试'));
+
+const structuralMissing = buildAgentWorkflowStructuralCoverage(
+  { agentWorkflowTrace: [] },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+  ],
+);
+assert.equal(structuralMissing?.status, 'missing');
+
+const blockedOrchestrationReceipt = buildAgentWorkflowOrchestrationReceipt(
+  { shouldStore: false, shouldNotify: false, agentWorkflowTrace: [] },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+  ],
+);
+assert.equal(blockedOrchestrationReceipt?.status, 'blocked');
+assert.equal(blockedOrchestrationReceipt?.title, '编排未达门禁');
+assert.match(blockedOrchestrationReceipt?.summary || '', /Agent 0\/1/);
+assert.match(blockedOrchestrationReceipt?.summary || '', /工具 0\/1/);
+
 const resultDiagnostics = buildAgentWorkflowResultDiagnostics({
   shouldStore: true,
   shouldNotify: false,
@@ -173,6 +351,9 @@ assert.deepEqual(
   ],
 );
 assert.equal(getAgentWorkflowHighestSeverity(resultDiagnostics), 'error');
+assert.equal(resultDiagnostics[0].title, '通知复核候选');
+assert.match(resultDiagnostics[0].detail || '', /本地复核候选/);
+assert.match(resultDiagnostics[0].detail || '', /不会创建真实复核队列项/);
 
 const decisionPath = buildAgentWorkflowDecisionPath({
   shouldStore: true,
@@ -239,6 +420,7 @@ assert.deepEqual(
 );
 assert.match(decisionPath[0].detail || '', /置信度 42%/);
 assert.match(decisionPath[1].detail || '', /关注项匹配/);
+assert.match(decisionPath[2].detail || '', /真实复核入口尚未创建/);
 assert.match(decisionPath[3].detail || '', /重要性判断Agent/);
 
 const recommendedActions = buildAgentWorkflowRecommendedActions({
@@ -304,8 +486,147 @@ assert.deepEqual(
   recommendedActions.map((item) => item.status),
   ['review', 'fix', 'optimize', 'verify'],
 );
-assert.match(recommendedActions[0].detail || '', /manual:manual-1/);
+assert.equal(recommendedActions[0].title, '确认本地复核候选');
+assert.match(recommendedActions[0].detail || '', /不会创建真实复核队列项/);
 assert.match(recommendedActions[1].summary, /重要性判断Agent/);
+
+const notificationReviewReceipt = buildAgentWorkflowNotificationReviewReceipt({
+  shouldStore: true,
+  shouldNotify: false,
+  confidence: 0.42,
+  matchedRuleRefs: ['manual:manual-1'],
+  notificationReview: {
+    required: true,
+    message: '低置信度关注项命中待复核：42% < 70%',
+  },
+});
+assert.equal(notificationReviewReceipt?.title, '通知复核候选');
+assert.match(notificationReviewReceipt?.detail || '', /manual:manual-1/);
+assert.match(notificationReviewReceipt?.detail || '', /置信度 42%/);
+assert.match(notificationReviewReceipt?.boundary || '', /本地复核候选/);
+assert.match(notificationReviewReceipt?.boundary || '', /不会写入 Memory Service/);
+
+const rawEvidenceInput =
+  'API split has a blocker in the auth adapter. Please keep this on the radar today.';
+const runEvidencePacket = buildAgentWorkflowRunEvidencePacket(
+  {
+    shouldStore: true,
+    shouldNotify: true,
+    confidence: 0.88,
+    matchedRuleRefs: ['manual:manual-1'],
+    summary: 'API split has a blocker in the auth adapter',
+    storageReview: {
+      traceStatus: 'partial',
+      primaryReason: 'Please keep this on the radar today',
+      toolSkippedCount: 1,
+      matchedRuleRefs: ['manual:manual-1'],
+    },
+    agentWorkflowTrace: [
+      {
+        agentId: 'entity',
+        agentName: 'Entity',
+        status: 'success',
+        tools: [{ name: 'entityExtraction', status: 'success' }],
+      },
+      {
+        agentId: 'external',
+        agentName: 'External',
+        status: 'success',
+        tools: [{ name: 'externalServiceQuery', status: 'placeholder' }],
+      },
+    ],
+  },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+    {
+      id: 'external',
+      name: 'External',
+      enabled: true,
+      priority: 70,
+      tools: ['externalServiceQuery'],
+    },
+  ],
+  {
+    generatedAt: '2026-06-26T00:00:00.000Z',
+    stale: true,
+    staleReason: '当前输入已修改',
+    sourceLabel: 'Options 关注项测试 · 保存样例',
+    redactedInputContent: rawEvidenceInput,
+  },
+);
+assert.equal(runEvidencePacket?.title, '单次运行证据包（旧快照）');
+assert.match(runEvidencePacket?.summary || '', /旧快照/);
+assert.equal(runEvidencePacket?.qualification.status, 'stale');
+assert.equal(runEvidencePacket?.qualification.title, '证据需重跑');
+assert.match(runEvidencePacket?.detail || '', /结构覆盖 Agent 2\/2、工具 2\/2/);
+assert.match(runEvidencePacket?.detail || '', /证据资格 证据需重跑：当前输入已修改/);
+assert.ok(runEvidencePacket?.chips.includes('证据 证据需重跑'));
+assert.match(runEvidencePacket?.text || '', /生成时间: 2026-06-26T00:00:00.000Z/);
+assert.match(runEvidencePacket?.text || '', /快照状态: 旧快照/);
+assert.match(runEvidencePacket?.text || '', /来源: Options 关注项测试 · 保存样例/);
+assert.match(runEvidencePacket?.text || '', /证据资格: 证据需重跑 - 当前输入已修改/);
+assert.match(runEvidencePacket?.text || '', /资格说明: 这份证据包只能说明上一次运行/);
+assert.match(runEvidencePacket?.text || '', /匹配规则: manual:manual-1/);
+assert.match(runEvidencePacket?.text || '', /存储: 是/);
+assert.match(runEvidencePacket?.text || '', /通知: 发送/);
+assert.match(runEvidencePacket?.text || '', /置信度: 88%/);
+assert.match(runEvidencePacket?.text || '', /运行就绪:/);
+assert.match(runEvidencePacket?.text || '', /下一步:/);
+assert.match(runEvidencePacket?.text || '', /不会写入 Memory Service/);
+assert.match(runEvidencePacket?.text || '', /不会发送通知/);
+assert.match(runEvidencePacket?.text || '', /不会执行规则自动化/);
+assert.match(runEvidencePacket?.text || '', /不会包含原始消息正文或工具参数/);
+assert.match(runEvidencePacket?.text || '', /已省略测试消息片段/);
+assert.doesNotMatch(
+  runEvidencePacket?.text || '',
+  /API split has a blocker/i,
+);
+assert.doesNotMatch(
+  runEvidencePacket?.text || '',
+  /keep this on the radar today/i,
+);
+
+const readyEvidencePacket = buildAgentWorkflowRunEvidencePacket(
+  {
+    shouldStore: false,
+    shouldNotify: false,
+    confidence: 0.99,
+    agentWorkflowTrace: [
+      {
+        agentId: 'entity',
+        agentName: 'Entity',
+        status: 'success',
+        tools: [{ name: 'entityExtraction', status: 'success' }],
+      },
+    ],
+  },
+  [
+    {
+      id: 'entity',
+      name: 'Entity',
+      enabled: true,
+      priority: 100,
+      tools: ['entityExtraction'],
+    },
+  ],
+  {
+    qualification: {
+      status: 'ready',
+      title: '可作本地回归证据',
+      summary: '当前结果匹配保存样例、已有基线且 Agent 配置一致',
+      detail: '可作为本地发布前门禁证据。',
+    },
+  },
+);
+assert.equal(readyEvidencePacket?.qualification.status, 'ready');
+assert.match(readyEvidencePacket?.detail || '', /可作本地回归证据/);
+assert.match(readyEvidencePacket?.text || '', /证据资格: 可作本地回归证据/);
 
 const readinessChecks = buildAgentWorkflowReadinessChecks({
   shouldStore: true,
@@ -581,18 +902,94 @@ assert.deepEqual(
   buildAgentWorkflowResultDiagnostics(partialTraceToolErrorFromTraceOnly).map(
     (item) => `${item.id}:${item.message}`,
   ),
-  ['partial-trace:工具错误 1'],
+  ['partial-trace:工具错误 关系分析Agent / 历史消息搜索工具'],
+);
+assert.match(
+  buildAgentWorkflowResultDiagnostics(partialTraceToolErrorFromTraceOnly)[0]
+    .detail || '',
+  /Agent \/ 工具错误/,
 );
 assert.match(
   buildAgentWorkflowReadinessChecks(partialTraceToolErrorFromTraceOnly)[0]
     .summary,
-  /工具错误 1/,
+  /工具错误 关系分析Agent \/ 历史消息搜索工具/,
 );
 assert.deepEqual(
   buildAgentWorkflowRecommendedActions(partialTraceToolErrorFromTraceOnly).map(
     (item) => item.id,
   ),
   ['fix-tool-errors', 'verify-storage'],
+);
+assert.match(
+  buildAgentWorkflowRecommendedActions(partialTraceToolErrorFromTraceOnly)[0]
+    .summary,
+  /关系分析Agent \/ 历史消息搜索工具/,
+);
+
+const placeholderCountWithoutTraceLabels = {
+  shouldStore: true,
+  shouldNotify: false,
+  confidence: 0.8,
+  storageReview: {
+    primaryReason: 'External context may affect this message',
+    reasonSource: 'workflow',
+    traceStatus: 'partial',
+    toolPlaceholderCount: 2,
+  },
+  agentWorkflowTrace: [
+    {
+      agentId: 'externalInfo',
+      agentName: '外部信息获取Agent',
+      status: 'success',
+      durationMs: 120,
+      tools: [
+        {
+          name: 'externalServiceQuery',
+          displayName: '外部服务查询工具',
+          status: 'success',
+          durationMs: 90,
+        },
+      ],
+    },
+  ],
+};
+assert.deepEqual(
+  buildAgentWorkflowResultDiagnostics(placeholderCountWithoutTraceLabels).map(
+    (item) => `${item.id}:${item.message}`,
+  ),
+  ['external-query-placeholder-runtime:占位工具 2'],
+);
+assert.match(
+  buildAgentWorkflowResultDiagnostics(placeholderCountWithoutTraceLabels)[0]
+    .detail || '',
+  /当前 trace 快照没有具体 Agent \/ Tool 标签/,
+);
+assert.match(
+  buildAgentWorkflowDecisionPath(placeholderCountWithoutTraceLabels)[2]
+    .detail || '',
+  /占位工具 2/,
+);
+assert.deepEqual(
+  buildAgentWorkflowReadinessChecks(placeholderCountWithoutTraceLabels).map(
+    (item) => `${item.id}:${item.status}`,
+  ),
+  ['trace:review', 'storage:review', 'notification:skipped'],
+);
+assert.match(
+  buildAgentWorkflowReadinessChecks(placeholderCountWithoutTraceLabels)[0]
+    .summary,
+  /有 2 个工具仍是占位结果/,
+);
+assert.deepEqual(
+  buildAgentWorkflowRecommendedActions(placeholderCountWithoutTraceLabels).map(
+    (item) => item.id,
+  ),
+  ['connect-external-query-adapter', 'verify-storage'],
+);
+assert.match(
+  buildAgentWorkflowRecommendedActions(placeholderCountWithoutTraceLabels)[0]
+    .summary,
+  /占位工具 2/,
 );
 
 const reviewVerdict = buildAgentWorkflowRunVerdict({

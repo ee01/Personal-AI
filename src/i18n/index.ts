@@ -69,6 +69,11 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.memoryExplorer': '实体记忆查询',
     'popup.scheduledMessages': '定时消息管理',
     'popup.manageMemoryEntries': '管理记忆入口',
+    'popup.messageAnalysis.background': '静默消息分析',
+    'popup.messageAnalysis.every': '每 {interval}',
+    'popup.backgroundTasks': '后台任务',
+    'popup.helpDocs': '查看帮助文档',
+    'popup.shareWithColleagues': '分享给同事',
     'popup.meetingPilot.open': '打开会议全貌',
     'popup.meetingPilot.enableVision': '启用画面理解与纪要',
     'popup.meetingPilot.start': '开启会议全貌',
@@ -98,7 +103,25 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.currentUser': '当前记忆用户',
     'memoryExplorer.unconfirmed': '未确认',
     'memoryExplorer.defaultSpaceHint':
-      '未解析到个人身份，正在使用 default 空间。',
+      '未解析到个人身份，正在使用 default 空间；写入会被拦截，直到身份恢复。',
+    'memoryExplorer.identitySource.header':
+      '身份来源: 已解析并发送 X-User-Id',
+    'memoryExplorer.identitySource.defaultFallback':
+      '身份来源: 未解析，本次只读请求回退到 default',
+    'memoryExplorer.identitySource.localInferred':
+      '身份来源: 本机推断，服务端未确认',
+    'memoryExplorer.identityBoundary.explicit':
+      '读写、备份与恢复只作用于这个 per-user SQLite 空间。',
+    'memoryExplorer.identityBoundary.defaultFallback':
+      '仅只读兼容回退；写入、导入、恢复会被拦截，直到身份恢复。',
+    'memoryExplorer.identitySnapshot.pending':
+      '身份快照待刷新；不会写入、导入或恢复记忆。',
+    'memoryExplorer.identitySnapshot.loading':
+      '正在读取只读身份快照...',
+    'memoryExplorer.identitySnapshot.checkedAt':
+      '身份快照 {time} 来自只读 /stats；刷新只重新检查身份边界。',
+    'memoryExplorer.identityAction.refresh': '刷新身份快照',
+    'memoryExplorer.identityAction.openSettings': '打开设置',
     'memoryExplorer.nav.today': '今天',
     'memoryExplorer.nav.timeline': '时间轴',
     'memoryExplorer.nav.meetings': '会议记录',
@@ -126,6 +149,30 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.scope.work.title': '只检索工作记忆',
     'memoryExplorer.scope.personal.title': '只检索个人记忆',
     'memoryExplorer.scope.all.title': '同时检索工作与个人记忆',
+    'memoryExplorer.scopeIntent.label': '搜索范围意图',
+    'memoryExplorer.scopeIntent.summary.work':
+      '下一次搜索只读取工作记忆。',
+    'memoryExplorer.scopeIntent.summary.personal':
+      '下一次搜索只读取个人记忆。',
+    'memoryExplorer.scopeIntent.summary.all':
+      '下一次搜索会同时读取工作与个人记忆。',
+    'memoryExplorer.scopeIntent.detail.rerun':
+      '当前有查询，切换范围会立即重新召回并同步 URL；只读取 Memory Service。',
+    'memoryExplorer.scopeIntent.detail.idle':
+      '输入查询或点击搜索后才会按此范围读取 Memory Service；切换按钮本身不写入。',
+    'memoryExplorer.scopeIntent.caution.work':
+      '个人记忆不会进入候选；适合默认工作场景检索。',
+    'memoryExplorer.scopeIntent.caution.personal':
+      '工作记忆不会进入候选；适合只查私人生活域。',
+    'memoryExplorer.scopeIntent.caution.all':
+      '个人证据可能进入结果；复制、引用或带到工作场景前先确认。',
+    'memoryExplorer.scopeIntent.metric.workOnly': '仅工作',
+    'memoryExplorer.scopeIntent.metric.personalOnly': '仅个人',
+    'memoryExplorer.scopeIntent.metric.workAndPersonal': '工作 + 个人',
+    'memoryExplorer.scopeIntent.metric.personalExcluded': '不含个人',
+    'memoryExplorer.scopeIntent.metric.workExcluded': '不含工作',
+    'memoryExplorer.scopeIntent.metric.personalReview': '个人证据需确认',
+    'memoryExplorer.scopeIntent.metric.noWrite': '不写入/删除/同步/确认',
 
     'desktop.language.label': '界面语言',
     'desktop.language.updated': '界面语言已更新。',
@@ -228,6 +275,11 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.memoryExplorer': 'Memory Explorer',
     'popup.scheduledMessages': 'Scheduled Messages',
     'popup.manageMemoryEntries': 'Manage Memory Entries',
+    'popup.messageAnalysis.background': 'Analyze msg in background',
+    'popup.messageAnalysis.every': 'every {interval}',
+    'popup.backgroundTasks': 'Background Tasks',
+    'popup.helpDocs': 'View help docs',
+    'popup.shareWithColleagues': 'Share with colleagues',
     'popup.meetingPilot.open': 'Open Meeting Pilot',
     'popup.meetingPilot.enableVision': 'Enable Vision and Minutes',
     'popup.meetingPilot.start': 'Start Meeting Pilot',
@@ -257,7 +309,25 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.currentUser': 'Current memory user',
     'memoryExplorer.unconfirmed': 'Unconfirmed',
     'memoryExplorer.defaultSpaceHint':
-      'Personal identity was not resolved. Using the default space.',
+      'Personal identity was not resolved. Using the default space; writes are blocked until identity recovers.',
+    'memoryExplorer.identitySource.header':
+      'Identity source: resolved and sent as X-User-Id',
+    'memoryExplorer.identitySource.defaultFallback':
+      'Identity source: unresolved read request fell back to default',
+    'memoryExplorer.identitySource.localInferred':
+      'Identity source: inferred locally, not confirmed by service',
+    'memoryExplorer.identityBoundary.explicit':
+      'Reads, writes, backups, and restores apply only to this per-user SQLite space.',
+    'memoryExplorer.identityBoundary.defaultFallback':
+      'Read-only compatibility fallback; writes, imports, and restores are blocked until identity recovers.',
+    'memoryExplorer.identitySnapshot.pending':
+      'Identity snapshot has not refreshed yet; no memory writes, imports, or restores happen here.',
+    'memoryExplorer.identitySnapshot.loading':
+      'Reading the read-only identity snapshot...',
+    'memoryExplorer.identitySnapshot.checkedAt':
+      'Identity snapshot at {time} came from read-only /stats; refresh only checks the identity boundary again.',
+    'memoryExplorer.identityAction.refresh': 'Refresh identity',
+    'memoryExplorer.identityAction.openSettings': 'Open settings',
     'memoryExplorer.nav.today': 'Today Pilot',
     'memoryExplorer.nav.timeline': 'Timeline',
     'memoryExplorer.nav.meetings': 'Meetings',
@@ -285,6 +355,32 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.scope.work.title': 'Search work memories only',
     'memoryExplorer.scope.personal.title': 'Search personal memories only',
     'memoryExplorer.scope.all.title': 'Search work and personal memories',
+    'memoryExplorer.scopeIntent.label': 'Search scope intent',
+    'memoryExplorer.scopeIntent.summary.work':
+      'The next search reads work memories only.',
+    'memoryExplorer.scopeIntent.summary.personal':
+      'The next search reads personal memories only.',
+    'memoryExplorer.scopeIntent.summary.all':
+      'The next search reads work and personal memories.',
+    'memoryExplorer.scopeIntent.detail.rerun':
+      'A query is active, so changing scope reruns recall and updates the URL; it only reads Memory Service.',
+    'memoryExplorer.scopeIntent.detail.idle':
+      'This scope is used after you enter a query or press Search; switching the control itself does not write.',
+    'memoryExplorer.scopeIntent.caution.work':
+      'Personal memories are excluded from candidates; this is the default work-context search.',
+    'memoryExplorer.scopeIntent.caution.personal':
+      'Work memories are excluded from candidates; use this for the private life domain.',
+    'memoryExplorer.scopeIntent.caution.all':
+      'Personal evidence may enter results; review before copying, quoting, or bringing it into work.',
+    'memoryExplorer.scopeIntent.metric.workOnly': 'Work only',
+    'memoryExplorer.scopeIntent.metric.personalOnly': 'Personal only',
+    'memoryExplorer.scopeIntent.metric.workAndPersonal': 'Work + personal',
+    'memoryExplorer.scopeIntent.metric.personalExcluded': 'Personal excluded',
+    'memoryExplorer.scopeIntent.metric.workExcluded': 'Work excluded',
+    'memoryExplorer.scopeIntent.metric.personalReview':
+      'Review personal evidence',
+    'memoryExplorer.scopeIntent.metric.noWrite':
+      'No write/delete/sync/confirmation',
 
     'desktop.language.label': 'UI Language',
     'desktop.language.updated': 'UI language updated.',

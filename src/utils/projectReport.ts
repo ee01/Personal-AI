@@ -12,6 +12,7 @@ export interface ProjectReportTask {
   eta?: string;
   desc?: string;
   anchorPosition?: number;
+  dependencies?: string[];
   platforms?: Record<string, ProjectReportPlatformState>;
   jira?: Array<{ key: string; title: string }>;
 }
@@ -147,6 +148,11 @@ function sanitizeTask(task: any): ProjectReportTask {
         }))
         .filter((item) => item.key || item.title)
     : undefined;
+  const dependencies = Array.isArray(task?.dependencies)
+    ? task.dependencies
+        .map((item: any) => typeof item === 'string' ? item.trim() : '')
+        .filter(Boolean)
+    : undefined;
 
   return {
     id: typeof task?.id === 'string' ? task.id : '',
@@ -159,6 +165,7 @@ function sanitizeTask(task: any): ProjectReportTask {
       typeof task?.anchorPosition === 'number' && Number.isFinite(task.anchorPosition)
         ? Math.max(0, Math.min(100, task.anchorPosition))
         : undefined,
+    dependencies,
     platforms,
     jira,
   };

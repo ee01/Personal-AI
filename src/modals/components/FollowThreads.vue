@@ -29,6 +29,17 @@
       </p>
     </div>
 
+    <div
+      v-if="actionReceipt"
+      class="follow-action-receipt"
+      :class="actionReceipt.tone"
+      role="status"
+      aria-live="polite"
+    >
+      <strong>{{ actionReceipt.title }}</strong>
+      <span>{{ actionReceipt.body }}</span>
+    </div>
+
     <div class="summary-row">
       <span class="summary-pill">手动规则 {{ items.length }}</span>
       <span class="summary-pill">进行中 {{ activeCount }}</span>
@@ -43,10 +54,19 @@
 
     <div v-else-if="filteredItems.length === 0" class="empty-state">
       <div class="empty-icon">👁</div>
-      <p>暂无手动关注项</p>
-      <p class="hint">
-        在消息旁点击“关注后续”创建手动规则；系统内部跟踪不会显示在这里。
+      <p>{{ emptyStateTitle }}</p>
+      <p class="hint">{{ emptyStateHint }}</p>
+      <p v-if="showFilteredEmptyBoundary" class="hint filter-boundary">
+        {{ emptyStateBoundaryText }}
       </p>
+      <button
+        v-if="showFilteredEmptyBoundary"
+        type="button"
+        class="btn-secondary empty-reset-btn"
+        @click="resetStatusFilter"
+      >
+        查看全部
+      </button>
     </div>
 
     <div v-else class="follow-list">
@@ -119,6 +139,16 @@
           </div>
         </div>
 
+        <div class="watch-status-receipt" role="note">
+          <div class="watch-status-title">
+            {{ getManagementStatusReceipt(item).title }}
+          </div>
+          <p>{{ getManagementStatusReceipt(item).stateText }}</p>
+          <p>{{ getManagementStatusReceipt(item).hitText }}</p>
+          <p>{{ getManagementStatusReceipt(item).deliveryText }}</p>
+          <p>{{ getManagementStatusReceipt(item).boundaryText }}</p>
+        </div>
+
         <div class="original-message">
           <div class="message-label">原消息</div>
           <div class="message-content">
@@ -164,6 +194,9 @@
                 <div v-if="msg.summary" class="timeline-summary">
                   {{ msg.summary }}
                 </div>
+                <div class="timeline-notification-status">
+                  {{ getHitStatusText(msg) }}
+                </div>
               </div>
             </div>
 
@@ -182,6 +215,18 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import {
+  buildFollowThreadCancelReceipt,
+  buildFollowThreadExtendedReceipt,
+  buildFollowThreadHitStatusText,
+  buildFollowThreadManagementStatusReceipt,
+  formatFollowThreadExpiry,
+  getFollowThreadExtendedExpiry,
+  getFollowThreadNotifyMethodText,
+  isFollowThreadRuleExpired,
+  type FollowThreadManagementReceipt,
+  type FollowThreadManagementStatusReceipt,
+} from '../../message-reaction/followThreadPresentation';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -192,7 +237,7 @@ interface FollowThreadItem {
   text: string;
   expiredAt: number; // rule 的过期时间
   // 🆕 通用通知配置（移到外层）
-  notifyMethod?: 'bot' | 'chrome' | 'both';
+  notifyMethod?: string;
   notifyFrequency?: 'immediate' | 'merged';
   followConfig: {
     originalMessage: {
@@ -211,7 +256,14 @@ interface FollowThreadItem {
       postId: string;
       sender: string;
       datetime: string;
-      relationType: 'thread_reply' | 'mention' | 'quote' | 'semantic';
+      relationType:
+        | 'thread_reply'
+        | 'mention'
+        | 'quote'
+        | 'semantic'
+        | 'direct_reply'
+        | 'same_thread'
+        | 'semantic_related';
       notifiedAt?: string;
       summary?: string;
     }>;
@@ -223,6 +275,7 @@ const items = ref<FollowThreadItem[]>([]);
 const statusFilter = ref('all');
 const sortBy = ref('created');
 const expandedItems = ref(new Set<string>());
+const actionReceipt = ref<FollowThreadManagementReceipt | null>(null);
 
 onMounted(async () => {
   await loadFollowThreads();
@@ -266,6 +319,12 @@ function handleStorageChange(
   }
 }
 
+function getExpirySortValue(item: FollowThreadItem): number {
+  return item.expiredAt && item.expiredAt > 0
+    ? item.expiredAt
+    : Number.POSITIVE_INFINITY;
+}
+
 const filteredItems = computed(() => {
   let filtered = items.value;
 
@@ -284,7 +343,9 @@ const filteredItems = computed(() => {
         new Date(a.followConfig.createdAt).getTime(),
     );
   } else if (sortBy.value === 'expires') {
-    filtered = [...filtered].sort((a, b) => a.expiredAt - b.expiredAt);
+    filtered = [...filtered].sort(
+      (a, b) => getExpirySortValue(a) - getExpirySortValue(b),
+    );
   } else if (sortBy.value === 'related') {
     filtered = [...filtered].sort(
       (a, b) =>
@@ -311,26 +372,45 @@ const relatedHitCount = computed(() =>
   ),
 );
 
+const showFilteredEmptyBoundary = computed(
+  () =>
+    items.value.length > 0 &&
+    filteredItems.value.length === 0 &&
+    statusFilter.value !== 'all',
+);
+
+const emptyStateTitle = computed(() => {
+  if (!showFilteredEmptyBoundary.value) return '暂无手动关注项';
+  if (statusFilter.value === 'active') return '当前筛选没有进行中的 Watch';
+  if (statusFilter.value === 'expired') return '当前筛选没有已过期 Watch';
+  return '当前筛选无结果';
+});
+
+const emptyStateHint = computed(() => {
+  if (!showFilteredEmptyBoundary.value) {
+    return '在消息旁点击“关注后续”创建手动规则；系统内部跟踪不会显示在这里。';
+  }
+
+  const hiddenStatusText =
+    statusFilter.value === 'active'
+      ? `已有 ${expiredCount.value} 条已过期规则被当前筛选隐藏。`
+      : `已有 ${activeCount.value} 条进行中规则被当前筛选隐藏。`;
+  return `已有 ${items.value.length} 条手动 Watch 规则；${hiddenStatusText}这是筛选结果为空，不是规则丢失或读取失败。`;
+});
+
+const emptyStateBoundaryText =
+  '切换筛选只改变本页显示，不会取消、延长、补发通知或重新读取远端。';
+
+function resetStatusFilter() {
+  statusFilter.value = 'all';
+}
+
 function isExpired(item: FollowThreadItem): boolean {
-  // 🆕 使用外层 expiredAt
-  return item.expiredAt < Date.now();
+  return isFollowThreadRuleExpired(item.expiredAt);
 }
 
 function formatExpireTime(expiredAt: number): string {
-  // 🆕 接收时间戳而不是字符串
-  const now = Date.now();
-  const diff = expiredAt - now;
-
-  if (diff < 0) {
-    return '已过期';
-  }
-
-  const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-  if (days === 0) {
-    const hours = Math.ceil(diff / (1000 * 60 * 60));
-    return `${hours}小时后`;
-  }
-  return `${days}天后`;
+  return formatFollowThreadExpiry(expiredAt);
 }
 
 function formatTime(dateStr: string): string {
@@ -364,12 +444,37 @@ function latestRelatedTime(item: FollowThreadItem): string {
 }
 
 function getNotifyMethodText(method: string): string {
-  const map: Record<string, string> = {
-    bot: 'Bot推送',
-    chrome: 'Chrome通知',
-    both: '两者都推送',
-  };
-  return map[method] || method;
+  return getFollowThreadNotifyMethodText(method);
+}
+
+function getLatestNotifiedAt(item: FollowThreadItem): string | undefined {
+  const timestamps = item.followConfig.relatedMessages
+    .map((message) => new Date(message.notifiedAt || '').getTime())
+    .filter((value) => !Number.isNaN(value));
+  if (!timestamps.length) return undefined;
+  return new Date(Math.max(...timestamps)).toISOString();
+}
+
+function getManagementStatusReceipt(
+  item: FollowThreadItem,
+): FollowThreadManagementStatusReceipt {
+  return buildFollowThreadManagementStatusReceipt({
+    relatedCount: item.followConfig.relatedMessages.length,
+    latestHitText: latestRelatedTime(item),
+    latestNotifiedAt: getLatestNotifiedAt(item),
+    expiredAt: item.expiredAt,
+    notifyMethod: item.notifyMethod || 'bot',
+    notifyFrequency: item.notifyFrequency,
+  });
+}
+
+function getHitStatusText(
+  message: FollowThreadItem['followConfig']['relatedMessages'][number],
+): string {
+  return buildFollowThreadHitStatusText({
+    notifiedAt: message.notifiedAt,
+    summary: message.summary,
+  });
 }
 
 function getRelationTypeText(type: string): string {
@@ -378,6 +483,9 @@ function getRelationTypeText(type: string): string {
     mention: '@提及',
     quote: '引用',
     semantic: '语义相关',
+    direct_reply: '直接回复',
+    same_thread: '同线程',
+    semantic_related: '语义相关',
   };
   return map[type] || type;
 }
@@ -397,18 +505,25 @@ async function extendFollow(item: FollowThreadItem) {
     const index = allItems.findIndex((i: any) => i.id === item.id);
 
     if (index !== -1) {
-      // 🆕 只需更新外层 expiredAt（延长7天）
-      allItems[index].expiredAt =
-        allItems[index].expiredAt + 7 * 24 * 60 * 60 * 1000;
+      const nextExpiredAt = getFollowThreadExtendedExpiry(
+        allItems[index].expiredAt,
+      );
+      allItems[index].expiredAt = nextExpiredAt;
 
       await chrome.storage.local.set({ concernedItems: allItems });
       await loadFollowThreads();
-
-      alert('已延长7天关注时间');
+      actionReceipt.value = buildFollowThreadExtendedReceipt({
+        ruleName: item.text,
+        expiredAt: nextExpiredAt,
+      });
     }
   } catch (error) {
     console.error('❌ 延长关注失败:', error);
-    alert('延长失败，请稍后重试');
+    actionReceipt.value = {
+      tone: 'warning',
+      title: '延长关注失败',
+      body: '本地手动规则没有更新；请稍后重试，原关注状态保持不变。',
+    };
   }
 }
 
@@ -424,11 +539,16 @@ async function cancelFollow(item: FollowThreadItem) {
 
     await chrome.storage.local.set({ concernedItems: updatedItems });
     await loadFollowThreads();
-
-    // TODO: 同时删除 ChromaDB 中的记录
+    actionReceipt.value = buildFollowThreadCancelReceipt({
+      ruleName: item.text,
+    });
   } catch (error) {
     console.error('❌ 取消关注失败:', error);
-    alert('取消失败，请稍后重试');
+    actionReceipt.value = {
+      tone: 'warning',
+      title: '取消关注失败',
+      body: '本地手动规则没有删除；请稍后重试，原关注状态保持不变。',
+    };
   }
 }
 </script>
@@ -503,6 +623,29 @@ async function cancelFollow(item: FollowThreadItem) {
   margin-bottom: 20px;
 }
 
+.follow-action-receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(14, 165, 233, 0.12);
+  color: #dbeafe;
+  line-height: 1.45;
+}
+
+.follow-action-receipt.warning {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+}
+
+.follow-action-receipt strong {
+  color: #f8fafc;
+}
+
 .summary-pill {
   padding: 4px 10px;
   border-radius: 999px;
@@ -566,6 +709,14 @@ async function cancelFollow(item: FollowThreadItem) {
 .hint {
   font-size: 14px;
   color: #64748b;
+}
+
+.filter-boundary {
+  color: #94a3b8;
+}
+
+.empty-reset-btn {
+  margin-top: 12px;
 }
 
 .follow-list {
@@ -708,6 +859,26 @@ async function cancelFollow(item: FollowThreadItem) {
   color: #f8fafc;
 }
 
+.watch-status-receipt {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  background: rgba(14, 165, 233, 0.1);
+  color: #dbeafe;
+  line-height: 1.5;
+}
+
+.watch-status-title {
+  margin-bottom: 6px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.watch-status-receipt p {
+  margin: 4px 0;
+}
+
 .original-message {
   padding: 12px;
   background: rgba(15, 23, 42, 0.46);
@@ -830,6 +1001,13 @@ async function cancelFollow(item: FollowThreadItem) {
   font-size: 13px;
   color: #cbd5e1;
   line-height: 1.4;
+}
+
+.timeline-notification-status {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #bae6fd;
 }
 
 .timeline-empty {

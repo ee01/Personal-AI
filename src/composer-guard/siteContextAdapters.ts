@@ -1,10 +1,17 @@
 import { normalizeContextPageUrl } from '../web-intelligence/contextRecallGuards.js';
 import type {
+  ActiveElementSnapshot,
   ComposerContextItem,
   ComposerSurface,
   ComposerTarget,
+  InteractionSceneSnapshot,
+  InteractionSceneSurface,
+  InteractionSceneType,
+  InteractionSceneUserMode,
   SiteContextAdapter,
   SiteContextSnapshot,
+  VisibleFactSnapshot,
+  VisibleFieldSnapshot,
   VisibleMessageSnapshot,
 } from './types.js';
 
@@ -61,6 +68,48 @@ const WEB_AGENT_COMPOSER_SELECTORS: Record<string, string> = {
     'textarea[placeholder*="输入" i]',
   ].join(', '),
 };
+export const WEB_AGENT_SOURCE_TYPES = [
+  'ai_chat',
+  'chatgpt',
+  'doubao',
+  'doubao_chat',
+  'codex_cli',
+  'claude_code_cli',
+  'cursor_agent_cli',
+  'glip',
+  'jira',
+  'meeting',
+  'calendar',
+  'web',
+  'manual',
+  'source_memory',
+  'system',
+  'user_core',
+  'markdown',
+  'reflection',
+  'reflection_thread',
+  'rehearsal',
+];
+const WEB_AGENT_SELF_SOURCE_TYPES_BY_PROVIDER: Record<string, string[]> = {
+  chatgpt: ['chatgpt'],
+  doubao: ['doubao', 'doubao_chat'],
+  codex_cli: ['codex_cli'],
+  claude_code_cli: ['claude_code_cli'],
+  cursor_agent_cli: ['cursor_agent_cli'],
+};
+
+export function getWebAgentSourceTypesForProvider(
+  provider?: string | null,
+): string[] {
+  const currentProvider = normalizeText(provider).toLowerCase();
+  const selfSourceTypes = new Set(
+    WEB_AGENT_SELF_SOURCE_TYPES_BY_PROVIDER[currentProvider] ?? [],
+  );
+  if (!selfSourceTypes.size) return [...WEB_AGENT_SOURCE_TYPES];
+  return WEB_AGENT_SOURCE_TYPES.filter(
+    (sourceType) => !selfSourceTypes.has(sourceType),
+  );
+}
 
 function normalizeText(text?: string | null): string {
   return (text || '').replace(/\s+/g, ' ').trim();
@@ -181,7 +230,7 @@ function intersectsRect(a: DOMRect, b: DOMRect): boolean {
 function closestComposerElement(element?: Element | null): HTMLElement | null {
   if (!element) return null;
   const candidate = element.closest(COMPOSER_SELECTOR);
-  return candidate instanceof HTMLElement ? candidate : null;
+  return isHTMLElementLike(candidate) ? candidate : null;
 }
 
 function getControlHint(element: HTMLElement): string {
@@ -240,6 +289,10 @@ function targetFromElement(
 
   if (tag === 'input') {
     return { element, kind: 'input', placeholder, mode };
+  }
+
+  if (isJiraRichTextEditorFrame(element)) {
+    return { element, kind: 'richiframe', placeholder, mode };
   }
 
   if (
@@ -806,6 +859,9 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
         'web',
         'jira',
         'system',
+        'user_core',
+        'reflection',
+        'reflection_thread',
         'rehearsal',
       ],
     };
@@ -937,7 +993,7 @@ function getJiraVisibleComments(
     ),
   )
     .filter(isElementVisible)
-    .map((element, index) => {
+    .map((element, index): ComposerContextItem | null => {
       const text = clip(getContextTextContent(element), 500);
       if (!text) return null;
       const root =
@@ -1044,6 +1100,76 @@ function getJiraPeople(doc: Document): string[] | undefined {
   return people.length ? people : undefined;
 }
 
+const JIRA_ESTIMATE_FIELD_PATTERN =
+  /\b(?:dev\s+estimate\s+new|dev\s+estimate|original\s+estimate|remaining\s+estimate|time\s+estimate|story\s*points?|estimate)\b|估算|预估|工时|人天|人日/i;
+const JIRA_FIELD_VALUE_PATTERN =
+  /(?:DEV\s+Estimate\s+New|DEV\s+Estimate|Original\s+Estimate|Remaining\s+Estimate|Time\s+Estimate|Story\s*Points?|Estimate)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?(?:\s*(?:h|hour|hours|d|day|days|sp|SP|人天|人日))?)/gi;
+
+function getJiraVisibleFields(doc: Document): VisibleFieldSnapshot[] | undefined {
+  const fields: VisibleFieldSnapshot[] = [];
+  const addField = (name?: string | null, value?: string | null, rawText?: string | null) => {
+    const normalizedName = normalizeText(name);
+    const normalizedValue = normalizeText(value);
+    if (
+      !normalizedName ||
+      !normalizedValue ||
+      !JIRA_ESTIMATE_FIELD_PATTERN.test(normalizedName)
+    ) {
+      return;
+    }
+    fields.push({
+      name: clip(normalizedName, 120),
+      value: clip(normalizedValue, 120),
+      rawText: clip(rawText || `${normalizedName}: ${normalizedValue}`, 240),
+    });
+  };
+
+  doc
+    .querySelectorAll<HTMLElement>(
+      [
+        '#details-module .item',
+        '#peoplemodule .item',
+        '.issue-data-block',
+        '[data-testid*="issue.views.field"]',
+        '[data-testid*="issue-field"]',
+        '[data-test-id*="issue-field"]',
+      ].join(', '),
+    )
+    .forEach((root) => {
+      const label =
+        normalizeText(
+          root.querySelector<HTMLElement>(
+            '.name, .field-label, label, [data-testid*="label"], [data-test-id*="label"]',
+          )?.textContent,
+        ) ||
+        normalizeText(root.getAttribute('data-testid')) ||
+        normalizeText(root.getAttribute('data-test-id'));
+      const value =
+        normalizeText(
+          root.querySelector<HTMLElement>(
+            '.value, [data-testid*="value"], [data-test-id*="value"], [data-testid*="readview"], [data-test-id*="readview"]',
+          )?.textContent,
+        ) ||
+        normalizeText(root.textContent).replace(label, '').trim();
+      addField(label, value, root.textContent);
+    });
+
+  const pageText = (doc.body?.innerText || doc.body?.textContent || '').replace(
+    /\s+/g,
+    ' ',
+  );
+  for (const match of pageText.matchAll(JIRA_FIELD_VALUE_PATTERN)) {
+    addField(match[0].replace(match[1] || '', ''), match[1], match[0]);
+  }
+
+  const byKey = new Map<string, VisibleFieldSnapshot>();
+  for (const field of fields) {
+    const key = `${field.name.toLowerCase()}:${field.value.toLowerCase()}`;
+    if (!byKey.has(key)) byKey.set(key, field);
+  }
+  return byKey.size ? Array.from(byKey.values()).slice(0, 12) : undefined;
+}
+
 const jiraIssueAdapter: SiteContextAdapter = {
   id: 'jira-issue',
   match(location) {
@@ -1070,6 +1196,7 @@ const jiraIssueAdapter: SiteContextAdapter = {
         '#status-val, [data-testid="issue.fields.status"]',
       )?.textContent,
     );
+    const visibleFields = getJiraVisibleFields(doc);
     const primaryText = clip(
       [issueKey, summary, status, description].filter(Boolean).join('\n'),
       MAX_PRIMARY_TEXT,
@@ -1098,7 +1225,12 @@ const jiraIssueAdapter: SiteContextAdapter = {
       surface: 'jira_issue',
       contextType: 'jira_issue',
       scenario: 'jira_comment',
-      contextKey: `jira:${issueKey}|${signature(primaryText)}`,
+      contextKey: `jira:${issueKey}|${signature(
+        [
+          primaryText,
+          ...(visibleFields ?? []).map((field) => `${field.name}:${field.value}`),
+        ].join('\n'),
+      )}`,
       title: `${issueKey}: ${summary}`,
       url,
       primaryText,
@@ -1110,6 +1242,7 @@ const jiraIssueAdapter: SiteContextAdapter = {
         issueSummary: summary,
         people: getJiraPeople(doc),
       },
+      visibleFields,
       contextItems,
       sourceTypes: [
         'jira',
@@ -1119,6 +1252,9 @@ const jiraIssueAdapter: SiteContextAdapter = {
         'manual',
         'source_memory',
         'system',
+        'user_core',
+        'reflection',
+        'reflection_thread',
         'rehearsal',
       ],
     };
@@ -1176,30 +1312,97 @@ export function buildJiraOwnerCommentLearningPayloads(
 function closestJiraCommentComposerElement(
   element?: Element | null,
 ): HTMLElement | null {
+  if (isHTMLElementLike(element) && isJiraRichTextEditorFrame(element)) {
+    return isLikelyJiraCommentComposer(element, element) ? element : null;
+  }
   const candidate = closestComposerElement(element);
-  if (!candidate || !isLikelyJiraCommentComposer(candidate)) return null;
+  if (!candidate || !isLikelyJiraCommentComposer(candidate, element)) return null;
   return candidate;
 }
 
-function isLikelyJiraCommentComposer(element: HTMLElement): boolean {
+function isLikelyJiraCommentComposer(
+  element: HTMLElement,
+  fromElement?: Element | null,
+): boolean {
   if (!isElementVisible(element) || isSearchLikeControl(element)) return false;
   if (element.tagName.toLowerCase() === 'input') return false;
 
   const hint = getControlHint(element);
-  const commentAncestor = element.closest(
+  const commentSelector = [
+    '[data-testid*="comment"]',
+    '[data-test-id*="comment"]',
+    '[aria-label*="comment" i]',
+    '[id*="comment" i]',
+    '[class*="comment" i]',
+    '[data-testid*="issue-comment"]',
+    '[data-test-id*="issue-comment"]',
+    '[data-testid*="add-comment"]',
+    '[data-test-id*="add-comment"]',
+  ].join(', ');
+  const commentAncestor = element.closest(commentSelector);
+  const fromCommentAncestor = fromElement?.closest?.(commentSelector);
+  const nearbyComposerContainer = element.closest(
     [
-      '[data-testid*="comment"]',
-      '[aria-label*="comment" i]',
-      '[id*="comment" i]',
-      '[class*="comment" i]',
+      '[data-testid*="issue.activity"]',
+      '[data-testid*="issue-activity"]',
+      '[data-testid*="comment-container"]',
+      '[data-test-id*="comment-container"]',
+      'form',
     ].join(', '),
   );
 
   return (
     /\b(comment|reply)\b/.test(hint) ||
     includesAny(hint, ['评论', '回复']) ||
-    Boolean(commentAncestor)
+    Boolean(commentAncestor) ||
+    Boolean(fromCommentAncestor) ||
+    Boolean(
+      nearbyComposerContainer &&
+        /comment|评论|回复|add/i.test(
+          normalizeText(nearbyComposerContainer.textContent).slice(0, 500),
+        ),
+    )
   );
+}
+
+function isJiraRichTextEditorFrame(
+  element: Element | null | undefined,
+): element is HTMLIFrameElement {
+  if (!isHTMLElementLike(element)) return false;
+  if (element.tagName.toLowerCase() !== 'iframe') return false;
+  const id = element.id || '';
+  const className =
+    typeof element.className === 'string' ? element.className : '';
+  return (
+    /^mce_\d+_ifr$/i.test(id) ||
+    /tox-edit-area__iframe|mce-edit-area/i.test(className) ||
+    Boolean(
+      element.closest(
+        [
+          '#addcomment',
+          '#addcomment-inner',
+          '.field-group.comment-input',
+          '.wiki-edit-content',
+          '[id*="comment" i]',
+          '[class*="comment" i]',
+        ].join(', '),
+      ),
+    )
+  );
+}
+
+function getRichTextFrameDocument(element: HTMLElement): Document | null {
+  if (!isJiraRichTextEditorFrame(element)) return null;
+  try {
+    return element.contentDocument || element.contentWindow?.document || null;
+  } catch {
+    return null;
+  }
+}
+
+function getRichTextFrameBody(element: HTMLElement): HTMLElement | null {
+  const body = getRichTextFrameDocument(element)?.body;
+  return isHTMLElementLike(body) ? body : null;
 }
 
 function detectWebAgentProvider(location: Location): ComposerSurface | null {
@@ -1287,27 +1490,7 @@ const webAgentAdapter: SiteContextAdapter = {
         id: `turn-${index}`,
         text: turn,
       })),
-      sourceTypes: [
-        'ai_chat',
-        'chatgpt',
-        'doubao',
-        'doubao_chat',
-        'codex_cli',
-        'claude_code_cli',
-        'cursor_agent_cli',
-        'glip',
-        'jira',
-        'meeting',
-        'web',
-        'manual',
-        'source_memory',
-        'system',
-        'user_core',
-        'markdown',
-        'reflection',
-        'reflection_thread',
-        'rehearsal',
-      ],
+      sourceTypes: getWebAgentSourceTypesForProvider(provider),
     };
   },
   findComposer(doc, fromElement) {
@@ -1358,6 +1541,9 @@ const genericPageAdapter: SiteContextAdapter = {
         'meeting',
         'glip',
         'jira',
+        'user_core',
+        'reflection',
+        'reflection_thread',
         'rehearsal',
       ],
     };
@@ -1405,10 +1591,315 @@ export function buildPassiveContextSnapshot(
   return null;
 }
 
+export function buildInteractionSceneSnapshot(
+  snapshot: SiteContextSnapshot,
+  options: {
+    surface?: InteractionSceneSurface;
+    target?: ComposerTarget | null;
+    selectedText?: string;
+    nearbyText?: string;
+    activeElement?: Element | null;
+  } = {},
+): InteractionSceneSnapshot {
+  const target = options.target ?? null;
+  const sceneType = inferInteractionSceneType(snapshot, {
+    target,
+    selectedText: options.selectedText,
+  });
+  const userMode = inferInteractionUserMode(sceneType, target, options.selectedText);
+  const surface = options.surface ?? (target ? 'compose_assist' : 'memory_lens');
+  const identifiers = snapshot.identifiers ?? {};
+  const participants = snapshot.audience?.people?.slice(0, 8);
+  const visibleFacts = buildVisibleFacts(snapshot);
+  const nearbyMessages = buildInteractionNearbyMessages(snapshot);
+  const sourceAnchorHints = [
+    ...(snapshot.keywords ?? []),
+    ...(options.nearbyText ? [options.nearbyText] : []),
+  ].filter(Boolean).slice(0, 10);
+
+  return compactInteractionScene({
+    sceneType,
+    surface,
+    userMode,
+    url: snapshot.url,
+    title: snapshot.title,
+    issueKey: identifiers.issueKey || snapshot.audience?.issueKey,
+    conversationId: identifiers.conversationId || snapshot.audience?.conversationId,
+    groupId: identifiers.groupId || snapshot.audience?.groupId,
+    participants,
+    activeElement: buildActiveElementSnapshot(
+      target?.element ||
+        (isHTMLElementLike(options.activeElement) ? options.activeElement : null),
+      userMode,
+    ),
+    visibleFacts,
+    draftText:
+      target && surface === 'compose_assist'
+        ? clip(readComposerText(target), 520)
+        : undefined,
+    selectedText: options.selectedText ? clip(options.selectedText, 520) : undefined,
+    nearbyMessages,
+    sourceAnchorHints,
+    admission: buildInteractionAdmission(sceneType, userMode, {
+      snapshot,
+      visibleFacts,
+      nearbyMessages,
+      selectedText: options.selectedText,
+    }),
+  });
+}
+
+function inferInteractionSceneType(
+  snapshot: SiteContextSnapshot,
+  options: { target?: ComposerTarget | null; selectedText?: string },
+): InteractionSceneType {
+  if (options.selectedText) return 'selection_memory_search';
+  const target = options.target ?? null;
+  if (snapshot.contextType === 'jira_issue') {
+    if (target?.mode === 'comment') return 'jira_comment_composing';
+    return 'jira_issue_reading';
+  }
+  if (snapshot.contextType === 'message_thread') {
+    if (target) return 'ringcentral_reply_composing';
+    return isEstimateDiscussionSnapshot(snapshot)
+      ? 'ringcentral_estimate_discussion'
+      : 'ringcentral_thread_reading';
+  }
+  if (snapshot.contextType === 'web_agent_prompt') {
+    return target ? 'web_ai_prompt_composing' : 'web_reading';
+  }
+  return 'web_reading';
+}
+
+function inferInteractionUserMode(
+  sceneType: InteractionSceneType,
+  target?: ComposerTarget | null,
+  selectedText?: string,
+): InteractionSceneUserMode {
+  if (selectedText) return 'select_text';
+  if (target?.mode === 'comment' || sceneType === 'jira_comment_composing') {
+    return 'comment';
+  }
+  if (
+    target?.mode === 'thread' ||
+    target?.mode === 'main' ||
+    sceneType === 'ringcentral_reply_composing'
+  ) {
+    return 'reply';
+  }
+  if (target?.mode === 'prompt' || sceneType === 'web_ai_prompt_composing') {
+    return 'compose';
+  }
+  return 'read';
+}
+
+function buildActiveElementSnapshot(
+  element: HTMLElement | null,
+  mode: InteractionSceneUserMode,
+): ActiveElementSnapshot {
+  if (!element) {
+    return { kind: 'none', hasFocus: false };
+  }
+  const tag = element.tagName.toLowerCase();
+  const role = element.getAttribute('role') || undefined;
+  const richFrameBody = getRichTextFrameBody(element);
+  const kind: ActiveElementSnapshot['kind'] =
+    tag === 'textarea'
+      ? 'textarea'
+      : tag === 'input'
+      ? 'input'
+      : richFrameBody
+      ? 'editor'
+      : element.isContentEditable || element.getAttribute('contenteditable')
+      ? 'contenteditable'
+      : tag === 'button'
+      ? 'button'
+      : tag === 'a'
+      ? 'link'
+      : role === 'textbox'
+      ? 'editor'
+      : 'other';
+  const container = element.closest(
+    [
+      '[data-testid*="comment"]',
+      '[data-test-id*="comment"]',
+      '[data-testid*="composer"]',
+      '[data-test-id*="composer"]',
+      'form',
+      '[role="dialog"]',
+    ].join(', '),
+  );
+  const containerText =
+    isHTMLElementLike(container)
+      ? clip(normalizeText(container.textContent), 180)
+      : undefined;
+  const activeElement =
+    typeof document !== 'undefined' ? document.activeElement : null;
+  return {
+    kind,
+    role,
+    mode,
+    label:
+      element.getAttribute('aria-label') ||
+      element.getAttribute('data-placeholder') ||
+      undefined,
+    placeholder:
+      element.getAttribute('placeholder') ||
+      element.getAttribute('data-placeholder') ||
+      undefined,
+    nearbyText:
+      clip(
+        normalizeText(
+          richFrameBody?.innerText ||
+            richFrameBody?.textContent ||
+            element.textContent,
+        ),
+        180,
+      ) || undefined,
+    containerRole:
+      isHTMLElementLike(container)
+        ? container.getAttribute('role') || container.tagName.toLowerCase()
+        : undefined,
+    containerLabel: containerText,
+    selectorFingerprint: buildElementFingerprint(element),
+    hasFocus:
+      activeElement === element ||
+      Boolean(activeElement && element.contains(activeElement)),
+  };
+}
+
+function isHTMLElementLike(value: unknown): value is HTMLElement {
+  if (!value || typeof value !== 'object') return false;
+  if (typeof HTMLElement !== 'undefined' && value instanceof HTMLElement) {
+    return true;
+  }
+  const candidate = value as Partial<HTMLElement>;
+  return (
+    typeof candidate.tagName === 'string' &&
+    typeof candidate.getAttribute === 'function'
+  );
+}
+
+function buildElementFingerprint(element: HTMLElement): string | undefined {
+  const parts = [
+    element.tagName.toLowerCase(),
+    element.getAttribute('role'),
+    element.getAttribute('data-testid'),
+    element.getAttribute('data-test-id'),
+    element.id ? `#${element.id}` : '',
+    element.classList.length
+      ? `.${Array.from(element.classList).slice(0, 3).join('.')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return parts ? clip(parts, 160) : undefined;
+}
+
+function buildVisibleFacts(snapshot: SiteContextSnapshot): VisibleFactSnapshot[] | undefined {
+  const issueKey = snapshot.identifiers?.issueKey || snapshot.audience?.issueKey;
+  const facts: VisibleFactSnapshot[] = [];
+  for (const field of snapshot.visibleFields ?? []) {
+    facts.push({
+      kind: 'jira_field',
+      name: field.name,
+      value: field.value,
+      rawText: field.rawText,
+      source: 'current_page',
+      issueKey,
+      confidence: 0.94,
+    });
+  }
+  const seen = new Set<string>();
+  const deduped = facts.filter((fact) => {
+    const key = `${fact.kind}:${fact.name || ''}:${fact.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped.length ? deduped.slice(0, 16) : undefined;
+}
+
+function buildInteractionNearbyMessages(
+  snapshot: SiteContextSnapshot,
+): VisibleMessageSnapshot[] | undefined {
+  const messages = [
+    ...(snapshot.threadRoot ? [snapshot.threadRoot] : []),
+    ...(snapshot.visibleMessages ?? []),
+  ]
+    .filter((message) => normalizeText(message.text))
+    .slice(0, 8);
+  return messages.length ? messages : undefined;
+}
+
+function buildInteractionAdmission(
+  sceneType: InteractionSceneType,
+  userMode: InteractionSceneUserMode,
+  input: {
+    snapshot: SiteContextSnapshot;
+    visibleFacts?: VisibleFactSnapshot[];
+    nearbyMessages?: VisibleMessageSnapshot[];
+    selectedText?: string;
+  },
+): InteractionSceneSnapshot['admission'] {
+  const reasons: string[] = [];
+  if (input.selectedText) reasons.push('selected_text');
+  if (input.snapshot.identifiers?.issueKey) reasons.push('issue_key');
+  if (input.visibleFacts?.length) reasons.push('visible_facts');
+  if (input.nearbyMessages?.length) reasons.push('nearby_messages');
+  if (input.snapshot.keywords?.length) reasons.push('source_anchors');
+
+  if (userMode === 'comment' || userMode === 'reply' || userMode === 'compose') {
+    return { state: 'composer_ready', reasons, confidence: 0.9 };
+  }
+  if (
+    sceneType === 'jira_issue_reading' ||
+    sceneType === 'ringcentral_estimate_discussion' ||
+    sceneType === 'selection_memory_search' ||
+    reasons.length >= 2
+  ) {
+    return { state: 'passive_ready', reasons, confidence: 0.82 };
+  }
+  return { state: 'unknown', reasons, confidence: 0.44 };
+}
+
+function isEstimateDiscussionSnapshot(snapshot: SiteContextSnapshot): boolean {
+  const text = [
+    snapshot.title,
+    snapshot.primaryText,
+    ...(snapshot.secondaryTexts ?? []),
+    ...(snapshot.visibleMessages ?? []).map((message) => message.text),
+    ...(snapshot.keywords ?? []),
+  ]
+    .join('\n');
+  return (
+    /\b[A-Z][A-Z0-9]+-\d+\b/i.test(text) &&
+    /\b(?:estimate|estimated|estimation|story\s*points?|sp|dev\s+estimate|original\s+estimate)\b|估算|预估|人天|人日|工时/i.test(
+      text,
+    )
+  );
+}
+
+function compactInteractionScene(
+  value: InteractionSceneSnapshot,
+): InteractionSceneSnapshot {
+  const entries = Object.entries(value).filter(([, entry]) => {
+    if (entry == null) return false;
+    if (typeof entry === 'string') return entry.length > 0;
+    if (Array.isArray(entry)) return entry.length > 0;
+    return true;
+  });
+  return Object.fromEntries(entries) as InteractionSceneSnapshot;
+}
+
 export function readComposerText(target: ComposerTarget): string {
   const element = target.element as HTMLTextAreaElement | HTMLInputElement;
   if (target.kind === 'textarea' || target.kind === 'input') {
     return normalizeText(element.value);
+  }
+  if (target.kind === 'richiframe') {
+    const body = getRichTextFrameBody(target.element);
+    return normalizeText(body?.innerText || body?.textContent || '');
   }
   return normalizeText(
     target.element.innerText || target.element.textContent || '',
@@ -1487,6 +1978,14 @@ export function captureComposerTextSnapshot(
     };
   }
 
+  if (target.kind === 'richiframe') {
+    const body = getRichTextFrameBody(target.element);
+    return {
+      kind: target.kind,
+      html: body?.innerHTML || '',
+    };
+  }
+
   return {
     kind: target.kind,
     html: target.element.innerHTML,
@@ -1498,12 +1997,12 @@ export function restoreComposerTextSnapshot(
   snapshot: ComposerTextSnapshot,
 ): boolean {
   const element = target.element as HTMLTextAreaElement | HTMLInputElement;
-  target.element.focus({ preventScroll: true });
 
   if (
     (target.kind === 'textarea' || target.kind === 'input') &&
     typeof snapshot.value === 'string'
   ) {
+    target.element.focus({ preventScroll: true });
     element.value = snapshot.value;
     const selectionStart = Math.min(
       snapshot.selectionStart ?? snapshot.value.length,
@@ -1525,7 +2024,17 @@ export function restoreComposerTextSnapshot(
     return true;
   }
 
+  if (target.kind === 'richiframe' && typeof snapshot.html === 'string') {
+    const body = getRichTextFrameBody(target.element);
+    if (!body) return false;
+    body.innerHTML = snapshot.html;
+    body.focus({ preventScroll: true });
+    dispatchRichTextFrameInput(target.element, body, 'historyUndo', null);
+    return true;
+  }
+
   if (typeof snapshot.html === 'string') {
+    target.element.focus({ preventScroll: true });
     target.element.innerHTML = snapshot.html;
     const range = collapseRangeToEnd(target.element);
     setSelectionRange(range);
@@ -1551,10 +2060,17 @@ export function insertTextIntoComposer(
   const element = target.element as HTMLTextAreaElement | HTMLInputElement;
   const insertion = text.trim();
   if (!insertion) return false;
-
-  target.element.focus({ preventScroll: true });
+  if (
+    element.disabled ||
+    element.readOnly ||
+    element.getAttribute('aria-disabled') === 'true' ||
+    element.getAttribute('contenteditable') === 'false'
+  ) {
+    return false;
+  }
 
   if (target.kind === 'textarea' || target.kind === 'input') {
+    target.element.focus({ preventScroll: true });
     const current = element.value || '';
     const start = element.selectionStart ?? current.length;
     const end = element.selectionEnd ?? current.length;
@@ -1576,6 +2092,11 @@ export function insertTextIntoComposer(
     return true;
   }
 
+  if (target.kind === 'richiframe') {
+    return insertTextIntoRichTextFrame(target.element, insertion);
+  }
+
+  target.element.focus({ preventScroll: true });
   const activeRange =
     getSelectionRangeInside(target.element) ||
     collapseRangeToEnd(target.element);
@@ -1614,8 +2135,70 @@ export function insertTextIntoComposer(
   return true;
 }
 
+function dispatchRichTextFrameInput(
+  frame: HTMLElement,
+  body: HTMLElement,
+  inputType: string,
+  data: string | null,
+): void {
+  body.dispatchEvent(
+    new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      inputType,
+      data,
+    }),
+  );
+  body.dispatchEvent(new Event('change', { bubbles: true }));
+  frame.dispatchEvent(new Event('input', { bubbles: true }));
+  frame.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function insertTextIntoRichTextFrame(frame: HTMLElement, insertion: string): boolean {
+  const body = getRichTextFrameBody(frame);
+  if (!body) return false;
+  const frameDocument = body.ownerDocument;
+  body.focus({ preventScroll: true });
+
+  const currentText = normalizeText(body.innerText || body.textContent || '');
+  const insertedText = `${currentText ? '\n\n' : ''}${insertion}`;
+  let inserted = false;
+  try {
+    inserted = frameDocument.queryCommandSupported?.('insertText')
+      ? frameDocument.execCommand('insertText', false, insertedText)
+      : false;
+  } catch {
+    inserted = false;
+  }
+
+  if (!inserted) {
+    const textNode = frameDocument.createTextNode(insertedText);
+    const selection = frameDocument.getSelection();
+    const range =
+      selection && selection.rangeCount > 0
+        ? selection.getRangeAt(0)
+        : frameDocument.createRange();
+    if (!selection || selection.rangeCount === 0) {
+      range.selectNodeContents(body);
+      range.collapse(false);
+    }
+    range.deleteContents();
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  dispatchRichTextFrameInput(frame, body, 'insertText', insertedText);
+  return true;
+}
+
 export function isComposerElement(
   element: Element | null | undefined,
 ): boolean {
-  return Boolean(closestComposerElement(element || null));
+  return Boolean(
+    closestComposerElement(element || null) ||
+      (isHTMLElementLike(element) && isJiraRichTextEditorFrame(element)),
+  );
 }

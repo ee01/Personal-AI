@@ -3,7 +3,7 @@ import {
   normalizeMeetingTranscribeLanguage,
   type EnvConfigType,
   type MeetingTranscribeLanguage,
-} from '../utils';
+} from '../utils.js';
 
 export type MeetingTranscribeApiStyle =
   | 'openai_audio_transcriptions'

@@ -3,15 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Personal AI - Your Personal AI Assistant with brain-like memory design">
-    <title>Personal AI - Your Personal AI Assistant</title>
+    <meta name="description" content="Personal AI is a private memory copilot for Chrome that captures important context and recalls it when you read, write, meet, plan, or ask.">
+    <title>Personal AI - Private Memory Copilot for Chrome</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <!-- Particles Background -->
     <canvas id="particles-canvas"></canvas>
 
-    <!-- Navbar -->
     <nav class="navbar">
         <div class="nav-container">
             <a href="index-en.html" class="logo">Personal AI</a>
@@ -32,160 +30,226 @@
         </div>
     </nav>
 
-    <!-- Hero Section -->
     <section class="hero">
         <div class="hero-container">
-            <!-- AI Avatar -->
             <div class="ai-avatar-container">
                 <canvas id="ai-avatar"></canvas>
             </div>
-            
+
             <div class="hero-content">
+                <p class="hero-kicker">Private memory layer for your browser</p>
                 <h1 class="hero-title">
                     <span class="gradient-text">Personal AI</span>
-                    <br>Your Personal AI Assistant
+                    <br>remembers the context your tools forget
                 </h1>
                 <p class="hero-subtitle">
-                    Brain-like Memory Design · Intelligently Understands Your Needs
+                    Capture important sources, recall relevant history, and bring your own memory into messages, meetings, Jira, documents, and other AI tools.
                 </p>
                 <div class="hero-features">
                     <div class="hero-feature">
                         <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M5 12l4 4L19 6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>Remembers messages you've read</span>
+                        <span>Capture selected text, pages, tables, and Jira context</span>
                     </div>
                     <div class="hero-feature">
                         <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M21 15a4 4 0 01-4 4H7l-4 4V7a4 4 0 014-4h10a4 4 0 014 4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>Remembers pages you've visited</span>
+                        <span>Recall messages, meetings, projects, and saved sources</span>
                     </div>
                     <div class="hero-feature">
                         <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>Learns from your replies</span>
+                        <span>Draft replies and AI prompts from your own context</span>
                     </div>
                     <div class="hero-feature">
                         <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>Understands topics you focus on</span>
+                        <span>Prepare today, meetings, relationships, and projects</span>
                     </div>
                 </div>
                 <div class="hero-cta">
                     <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
-                        <span>Install to Chrome for Free</span>
+                        <span>Install to Chrome</span>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                             <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </a>
                     <a href="features-en.html" class="btn-secondary">
-                        <span>Learn More</span>
+                        <span>Explore Features</span>
                     </a>
                 </div>
+                <p class="hero-note">Low-interruption. Evidence-backed. No automatic sending or profile facts from ordinary browsing.</p>
             </div>
         </div>
     </section>
 
-    <!-- Features Section -->
     <section class="features-section">
         <div class="container">
-            <h2 class="section-title">Core Features</h2>
-            <p class="section-subtitle">Powerful AI assistant capabilities to boost your productivity</p>
-            
+            <h2 class="section-title">What Personal AI Helps You Do</h2>
+            <p class="section-subtitle">A structured memory workflow across capture, recall, assistance, preparation, organization, and control.</p>
+
             <div class="features-grid">
-                <!-- Feature 1: Smart Memory System -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M12 5v14M5 12h14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>Smart Memory System</h3>
-                    <p>Brain-like memory storage with intelligent association and proactive forgetting</p>
-                    <a href="demo/实体记忆查询界面.html" class="btn-preview" target="_blank">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>Preview Demo</span>
-                    </a>
+                    <h3>Capture What Matters</h3>
+                    <p>Save selected text, web pages, tables, visual evidence, Jira comments, and external AI material as traceable source memories.</p>
+                    <ul class="feature-pill-list">
+                        <li>Source capsules</li>
+                        <li>Evidence anchors</li>
+                        <li>Undo and duplicate handling</li>
+                    </ul>
                 </div>
 
-                <!-- Feature 2: AI Message Filter -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>AI Message Filter</h3>
-                    <p>Intelligently analyze chat messages and auto-filter important information</p>
+                    <h3>Recall In Context</h3>
+                    <p>Memory Lens quietly surfaces relevant memories while you browse pages, read messages, inspect Jira, select text, or enter a meeting.</p>
+                    <ul class="feature-pill-list">
+                        <li>Why it matched</li>
+                        <li>Source links</li>
+                        <li>Feedback and mute controls</li>
+                    </ul>
                 </div>
 
-                <!-- Feature 3: Scheduled Messages -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M4 20h16M5 4h14v10H5zM8 8h8M8 12h5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>Scheduled Messages</h3>
-                    <p>Schedule messages and automate workflows, never miss important reminders</p>
+                    <h3>Write With Memory</h3>
+                    <p>Compose Assist appears beside supported input boxes with previewable, insertable suggestions for replies, Jira comments, and Web AI context packs.</p>
+                    <ul class="feature-pill-list">
+                        <li>Preview before insert</li>
+                        <li>Writing style learning</li>
+                        <li>No auto-send</li>
+                    </ul>
                 </div>
 
-                <!-- Feature 4: Jira->Sheet Sync -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>Jira→Sheet Sync</h3>
-                    <p>Auto-sync Jira data to Google Sheet in real-time</p>
+                    <h3>Prepare The Day</h3>
+                    <p>Today Pilot turns meetings, open loops, reminders, rehearsal cues, relationships, and project risks into a short actionable brief.</p>
+                    <ul class="feature-pill-list">
+                        <li>Top missions</li>
+                        <li>Meeting prep</li>
+                        <li>Context packs</li>
+                    </ul>
                 </div>
 
-                <!-- Feature 5: Google Slides Analyzer -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M4 19V5m0 14h16M8 16V9m4 7V7m4 9v-5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>Google Slides Analyzer</h3>
-                    <p>AI-powered slide analysis and summarization, extract key information quickly</p>
+                    <h3>Organize Work Context</h3>
+                    <p>Explore memory through search, timelines, source capsules, project dashboards, relationship radar, action queues, and decision views.</p>
+                    <ul class="feature-pill-list">
+                        <li>Projects</li>
+                        <li>People</li>
+                        <li>Evidence trails</li>
+                    </ul>
                 </div>
 
-                <!-- Feature 6: Project Dashboard -->
                 <div class="feature-card">
                     <div class="feature-icon-box">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    <h3>Project Dashboard</h3>
-                    <p>Multi-dimensional project visualization and management</p>
-                    <a href="demo/项目进展图-新版.html" class="btn-preview" target="_blank">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>Preview Demo</span>
-                    </a>
+                    <h3>Stay In Control</h3>
+                    <p>Coverage Map, privacy controls, source links, feedback, confirmations, and backups make the memory system inspectable and correctable.</p>
+                    <ul class="feature-pill-list">
+                        <li>Coverage health</li>
+                        <li>Privacy gates</li>
+                        <li>Backup and restore</li>
+                    </ul>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Footer -->
+    <section class="features-section section-panel">
+        <div class="container">
+            <h2 class="section-title">How It Works</h2>
+            <p class="section-subtitle">Personal AI is not just a dashboard. It is a memory loop that follows your daily work surfaces.</p>
+            <div class="workflow-grid">
+                <div class="workflow-step">
+                    <span class="workflow-number">01</span>
+                    <h3>Capture</h3>
+                    <p>Important sources become structured memories with source, reason, evidence, and future triggers.</p>
+                </div>
+                <div class="workflow-step">
+                    <span class="workflow-number">02</span>
+                    <h3>Consolidate</h3>
+                    <p>Memory Service scores salience, links entities, applies decay, and keeps raw evidence available for review.</p>
+                </div>
+                <div class="workflow-step">
+                    <span class="workflow-number">03</span>
+                    <h3>Recall</h3>
+                    <p>Context-aware retrieval brings back relevant memories only when the current page, message, issue, or meeting provides enough signal.</p>
+                </div>
+                <div class="workflow-step">
+                    <span class="workflow-number">04</span>
+                    <h3>Assist</h3>
+                    <p>Suggestions, briefs, and context packs stay previewable and reversible before anything is inserted, copied, or sent elsewhere.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="features-section">
+        <div class="container">
+            <h2 class="section-title">Designed For Trust</h2>
+            <p class="section-subtitle">The system can be autonomous internally without turning the user into a daily review queue.</p>
+            <div class="trust-grid">
+                <div class="trust-item">
+                    <h3>Evidence first</h3>
+                    <p>Relevant memories show why they matched and where the source came from.</p>
+                </div>
+                <div class="trust-item">
+                    <h3>Low interruption</h3>
+                    <p>Weak matches stay quiet; strong context appears as small cues, cards, or context packs.</p>
+                </div>
+                <div class="trust-item">
+                    <h3>Clear boundaries</h3>
+                    <p>Personal AI does not auto-send replies, silently externalize private context, or promote browsing into stable profile facts.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Carry your context across tools</h2>
+            <p>Install Personal AI and let your browser remember the details that matter when you read, write, plan, and meet.</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">Install to Chrome</a>
+        </div>
+    </section>
+
     <footer class="footer">
         <div class="container">
             <div class="footer-content">
                 <div class="footer-brand">
                     <h3 class="logo">Personal AI</h3>
-                    <p>Your Personal AI Assistant</p>
+                    <p>Private memory copilot for Chrome</p>
                 </div>
                 <div class="footer-links">
                     <div class="footer-column">
@@ -199,7 +263,7 @@
                     <div class="footer-column">
                         <h4>Resources</h4>
                         <ul>
-                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://github.com/ee01/personal-ai" target="_blank">GitHub</a></li>
                             <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">Documentation</a></li>
                         </ul>
                     </div>
@@ -213,12 +277,11 @@
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+                <p>&copy; 2026 Personal AI. All rights reserved.</p>
             </div>
         </div>
     </footer>
 
-    <!-- Back to Top Button -->
     <button id="back-to-top" class="back-to-top" aria-label="Back to top">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -230,4 +293,3 @@
     <script src="js/animations.js"></script>
 </body>
 </html>
-

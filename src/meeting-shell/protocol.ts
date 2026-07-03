@@ -226,7 +226,7 @@ export interface MeetingPilotTimelineEvent {
 
 export interface MeetingPilotMemoryRef {
   id: string;
-  type?: 'message' | 'chunk' | 'entity';
+  type?: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   title: string;
   cueTitle?: string;
   cueBody?: string;
@@ -261,6 +261,36 @@ export interface MeetingPilotMemoryRef {
   mergedCount?: number;
   mergedIds?: string[];
   sourceClusterKey?: string;
+  lensPresentation?: {
+    status: 'ready' | 'partial' | 'blocked';
+    informationValue: 'high' | 'medium' | 'low';
+    title: string;
+    extractedInfo?: string;
+    suggestedAction?: string;
+    novelty: 'new_to_current_surface' | 'already_visible' | 'anchor_only' | 'unknown';
+    sourceBoundary: 'reviewable_memory' | 'derived_summary' | 'raw_source';
+    suppressReason?: string;
+    presentationId?: string;
+  };
+  cue?: {
+    id: string;
+    cueText: string;
+    actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+    surfaceEligibility: string[];
+    sourceRefs?: Array<{
+      type: string;
+      id: string;
+      title?: string;
+      url?: string;
+      timestamp?: number;
+    }>;
+    evidenceMatchIds?: string[];
+    whyNow?: string;
+    confidence?: number;
+    riskLevel?: 'low' | 'medium' | 'high';
+    compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+    suppressReason?: string;
+  };
 }
 
 export type MeetingPilotSpeechSuggestionIntent =
@@ -515,6 +545,23 @@ export interface MeetingPilotTierStatus {
   mode: 'auto' | 'local-only' | 'cloud-only';
   lastTransitionAt?: number;
   lastTransitionReason?: string;
+  lastStatusDetail?: string;
+  probeTrail?: MeetingPilotASRProbeTrailItem[];
+}
+
+export type MeetingPilotASRProbeState =
+  | 'unavailable'
+  | 'selected'
+  | 'running'
+  | 'start_failed'
+  | 'fatal_error'
+  | 'watchdog_timeout';
+
+export interface MeetingPilotASRProbeTrailItem {
+  tier: MeetingPilotASRTier;
+  state: MeetingPilotASRProbeState;
+  reason?: string;
+  ts: number;
 }
 
 export function isValidTierTransition(

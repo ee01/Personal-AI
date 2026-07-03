@@ -396,6 +396,10 @@
                 现在推一次待办 / 通知
               </button>
             </div>
+            <div
+              id="mobile-thread-detail"
+              class="thread-detail thread-detail-pending"
+            ></div>
             <p id="mobile-thread-message" class="inline-message"></p>
           </article>
 
@@ -532,6 +536,11 @@
               </div>
             </div>
 
+            <p
+              id="doubao-source-pipeline-receipt"
+              class="inline-message source-pipeline-receipt"
+            ></p>
+
             <div class="source-control-grid">
               <label>
                 <span>回看天数</span>
@@ -657,21 +666,28 @@
               hidden
             ></div>
 
-            <div class="source-revoke-panel">
+            <div class="source-revoke-panel source-revoke-danger">
               <div>
-                <label>已入库记忆控制</label>
+                <label>已入库记忆删除</label>
                 <strong id="doubao-source-revoke-scope">-</strong>
                 <p>
-                  撤回这个来源在当前范围写入 Memory Service
-                  的记忆；不会删除豆包聊天，本地 artifact 会保留为已撤回审计。
+                  按已保存默认范围撤回这个来源写入 Memory Service
+                  的记忆；不会删除豆包聊天，本地 artifact 会保留为已撤回审计，完成后会分别显示服务端删除数和本地审计数。
                 </p>
+                <p
+                  id="doubao-source-revoke-status"
+                  class="inline-message source-revoke-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
               </div>
               <button
                 id="doubao-source-revoke-button"
-                class="secondary"
+                class="danger source-revoke-button"
                 type="button"
+                aria-label="按已保存范围撤回豆包已入库记忆"
               >
-                撤回已入库记忆
+                按已保存范围撤回记忆
               </button>
             </div>
 
@@ -739,6 +755,11 @@
                 <strong id="chatgpt-source-run-state">-</strong>
               </div>
             </div>
+
+            <p
+              id="chatgpt-source-pipeline-receipt"
+              class="inline-message source-pipeline-receipt"
+            ></p>
 
             <div class="source-control-grid">
               <label>
@@ -875,21 +896,28 @@
               hidden
             ></div>
 
-            <div class="source-revoke-panel">
+            <div class="source-revoke-panel source-revoke-danger">
               <div>
-                <label>已入库记忆控制</label>
+                <label>已入库记忆删除</label>
                 <strong id="chatgpt-source-revoke-scope">-</strong>
                 <p>
-                  撤回这个来源在当前范围写入 Memory Service 的记忆；不会删除
-                  ChatGPT 对话，本地 artifact 会保留为已撤回审计。
+                  按已保存默认范围撤回这个来源写入 Memory Service 的记忆；不会删除
+                  ChatGPT 对话，本地 artifact 会保留为已撤回审计，完成后会分别显示服务端删除数和本地审计数。
                 </p>
+                <p
+                  id="chatgpt-source-revoke-status"
+                  class="inline-message source-revoke-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
               </div>
               <button
                 id="chatgpt-source-revoke-button"
-                class="secondary"
+                class="danger source-revoke-button"
                 type="button"
+                aria-label="按已保存范围撤回 ChatGPT 已入库记忆"
               >
-                撤回已入库记忆
+                按已保存范围撤回记忆
               </button>
             </div>
 

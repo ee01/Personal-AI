@@ -1,6 +1,6 @@
 # Relationship Radar / 关系记忆雷达
 
-*最后更新: 2026-05-30*
+*最后更新: 2026-06-29*
 
 ## 是什么
 
@@ -54,6 +54,10 @@ Relationship Radar 不是等用户点开页面才“凭空生成”。它采用 
 - 达到阈值的人物进入主列表，低频候选可以在页面里单独查看。
 - projection 会记录 `dataQuality` 和 `projectionSource`，避免把 lazy/generated/confirmed 状态混成同一类事实。
 - 人物搜索支持姓名、描述、别名和邮箱别名；页面会显示当前搜索 / 状态 / 候选筛选范围，空结果时可以直接清空筛选或打开低频候选。
+- 首屏在人物卡片前显示 `雷达路线回执`：说明当前筛选范围、优先推荐人物的原因、当前列表的数据质量构成和待确认事实数量；同时明确查看、搜索、筛选和复制准备都是只读，`后台整理` / `强制刷新` 只更新关系雷达投影和上下文卡，不写人物画像、不发送消息、不创建跟进，也不同步外部系统。画像写入只来自 Review Queue 的显式确认。
+- 首屏 spotlight 卡片内还会显示 `行动前回执`：在用户点击 `查看完整 brief`、`强制刷新此人` 或 `复制给 AI` 前，直接说明为什么推荐这个人、第一步应该先查看/刷新/复核什么、复制按钮是否已具备上下文卡条件，以及这些按钮不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统。
+
+这块的当前产品参考是 Microsoft Dynamics 365 relationship intelligence 的 relationship health / who-knows-whom 路线、Affinity 的 recency/frequency relationship strength 与 follow-up 触发、Salesforce Einstein Relationship Insights 的页面内关系证据和 CRM 更新入口。研究侧参考 AI-mediated communication、LLM transparency 和算法回复对人际感知的影响：关系型 AI 应该把排序依据、证据质量、AI 介入边界和写入权限放在用户行动前，而不是让用户从卡片细节里反推。
 
 ### 人物详情与证据
 
@@ -65,6 +69,7 @@ Relationship Radar 不是等用户点开页面才“凭空生成”。它采用 
 - 已确认事实、推断事实和待确认 review item。
 - 可跳转回记忆系统的 `exploreLink` 证据。
 - 证据按钮只接受安全的内部 `#/...` 路由和 `http(s)` 外部链接；导入数据里携带的危险 URL 会被拦截并给出提示。
+- 如果搜索、筛选或刷新间接切换了当前人物，页面会清空上一位人物的会议简报、回复草稿和复制回执，并显示“人物切换回执”；这些生成结果必须重新生成后才会用于当前人物，避免把旧人的上下文误带进新的 brief。
 
 证据需要能追溯到 message、entity property 或 relationship，不把无证据推断直接包装成事实。
 
@@ -81,6 +86,14 @@ Relationship Radar 不是等用户点开页面才“凭空生成”。它采用 
 
 Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI context package 复用。UI 默认显示“敏感上下文未纳入”的状态，并只展示隐藏类型计数（例如别名、事实、证据、跟进、检索），让用户不必揭开敏感内容也能判断是否需要临时包含。用户需要显式点“临时包含敏感上下文”才会重新拉取可外发前复核的完整卡片；此时复制按钮会标成“复制含敏感上下文”，复制成功提示也会提醒外发前复核。详情 brief 里的“复制当前上下文”始终复制当前选中人物的 context card；即使首屏 spotlight 仍然指向另一个更高优先级人物，用户也能把正在查看的人物上下文直接交给外部 AI 或聊天草稿使用。
 
+Context Card 顶部会显示“上下文卡回执”：说明这张卡来自索引即时计算、后台整理还是人工确认画像，当前适用场景和 token 预算，可引用的证据/事实/跟进/建议数量，以及敏感上下文是否默认隐藏或被临时包含。复制出的 `contextMd` 也保留这段回执，明确复制不会写入画像、发送消息或自动刷新其他场景；如果卡片是 `stale` 或包含敏感上下文，回执会提示先刷新或外发前复核。
+
+同一个人物的 Context Card 正在刷新或切换敏感范围时，UI 会显示 `上下文卡请求回执`：说明请求的是默认隐藏还是含敏感上下文版本、当前仍显示哪一版上次快照、结果尚未替换当前内容，并在返回前禁用复制，避免把请求中的隐私范围误读为已确认。
+
+如果 Context Card 刷新失败，但页面还有同一个人的上次成功卡片，UI 不会把卡片直接清空。它会显示 `上下文卡刷新失败回执`，说明当前状态未确认、页面保留的是上次快照、失败原因、请求范围和当前显示范围，并重申这次失败没有写入人物画像、发送消息、创建跟进任务或外发上下文。用户请求“临时包含敏感上下文”失败时，按钮状态会退回到上次实际显示的隐私范围，避免 UI 暗示敏感上下文已经成功纳入；复制这类保留卡片时 toast 会标明复制的是上次快照。
+
+已保存的 Context Card 只是后台整理快照，不会把旧来源状态永久带到后续场景。读取 stored card 时，服务端会先用当前人物投影重建 `dataQuality` / `projectionSource` 和回执：如果用户后来确认了 `relationship_context`，会跳过旧卡并即时重建，让确认事实进入卡片和复制文本；如果后台整理后又出现新互动，仍可复用旧卡，但回执会标成“有新互动待刷新”，提示外发前先刷新或核对最新证据。
+
 这块的产品参考是 Salesforce Einstein Relationship Insights 的 evidence-backed recommendation、Clay contact card 的 relationship timeline / network strength、Microsoft Dynamics 365 Copilot record summary 的嵌入式摘要；研究参考主要来自 mixed-initiative context 和 user-centered XAI。共同结论是：人物上下文应该是可解释、可调范围、可复核的对象，而不是默认把所有私密证据打包给下游 AI。
 
 ### Meeting Brief
@@ -90,22 +103,34 @@ Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI c
 - 每个 attendee 尝试匹配 Person 实体。
 - 支持 `Name <email>`、邮箱-only、常见日历 attendee object，并优先用显示名、别名、邮箱别名匹配 Person。
 - 返回 `coverage` 汇总和每个 attendee 的 `matchedBy`、`matchReason`、`matchConfidence`、`coverageState`。
-- 弱匹配（例如只靠邮箱前缀命中别名）会额外标成 `identityCheckRequired`，覆盖统计、会前准备状态、页面卡片和复制简报都会显示“身份待核对”；这些上下文只能作为会前线索，不能直接当成确认事实。
+- 弱匹配（例如只靠邮箱前缀命中别名）会额外标成 `identityCheckRequired`，覆盖统计、会前准备状态、页面卡片和复制简报都会显示“身份待核对”；在身份核对前，API 会暂缓展开该人物的历史证据、open loop 和上下文摘要，只保留核对问题，避免把可能错人的关系记忆直接带进会前 brief。
+- 简报会显示“简报来源回执”，说明本次来自日历事件还是手动输入、实际分析了多少参会人、匹配策略、证据边界，以及默认不外发敏感人物上下文；复制简报也会保留这段回执。
+- 如果调用方传了日历事件 id 但事件已经找不到，回执会明确显示“日历事件未找到，已改用手动输入”；如果传入日历事件的同时又手动覆盖了标题、时间或参会人，回执会显示“日历事件 + 手动覆盖”，避免复制出去的简报看起来像完全来自原始日历。
 - 有匹配时展示最近上下文、未闭环事项、建议问法和可引用证据入口。
 - 无匹配时保持低承诺提示，明确标出需要会中确认角色或补充人物别名，不伪造关系信息。
 - 大会议默认只展开前 16 位参会人的人物上下文；如果日历或手动输入超过上限，API、页面和复制简报都会显示已分析/未分析人数，并列出未展开参会人，避免覆盖统计看起来比实际更完整。
 - 页面内手动生成简报时，如果用户还没有改过默认会议标题/参会人，切换人物会自动把默认参会人同步到当前人物；一旦用户手动编辑，就保留用户输入。
+- 手动点击生成后会先显示“生成请求”回执：列出本次标题、参会人数、前 16 位分析上限、参会预览和旧简报快照状态；后端返回前，旧简报不会被暗示成新结果，失败时也会说明旧简报未被替换，且本次没有写入人物画像、发送消息、创建跟进或同步外部系统。
 - 生成结果会额外给出 `readiness`：把参会人覆盖、证据数量、open loop、未匹配和未展开名单压成“准备就绪 / 部分就绪 / 需要补齐 / 缺少参会人”，并列出下一步和成功标准；页面和复制简报都保留这段会前检查。
+- 生成结果还会给出 `focus` / “会前焦点”：把弱匹配身份、未闭环事项、未匹配/未展开参会人、证据复核和会后沉淀压成进入会议前先看的 3-4 条动作。每条焦点都带边界说明，明确只是会前提醒，不会发送、写入人物画像或自动创建任务；复制简报会保留同样的焦点和边界。
 
-这块的产品参考是 Read AI Pre-Read、Fireflies Meeting Prep、Microsoft Teams Intelligent Recap、Google Meet Gemini notes；研究参考包括 prospective reflection for meetings、LLM meeting recap 和 action-item-driven summarization。共同结论是：会前简报不能只列人物资料，还应该直接告诉用户“这场会还缺什么、先确认什么、会后要沉淀什么”。
+这块的产品参考包括 [Microsoft Copilot for Sales meeting preparation card](https://learn.microsoft.com/en-us/microsoft-sales-copilot/meeting-prep) 的 high-value highlights / risks / talking points、[Copilot for Sales enhanced pre-meeting card](https://learn.microsoft.com/en-us/copilot/release-plan/2025wave1/copilot-sales/improve-seller-efficiency-through-digest-recent-meetings-action-shortcuts) 的 recent communications / strategic insights / action shortcuts，以及 [Salesforce Einstein Relationship Insights](https://www.salesforce.com/news/stories/salesforces-new-ai-agent-identifies-business-connections-to-build-relationships-for-salespeople/) 的 relationship evidence 和 meeting-prep 定位。研究参考包括会话结构驱动的会议摘要（Georgia Tech EMNLP 2020 meeting-notes research）和长期记忆个人助手风险讨论。共同结论是：会前简报不能只列人物资料，还应该直接告诉用户“这场会还缺什么、先确认什么、会后要沉淀什么”，并把身份、来源、敏感范围和写入边界放在动作旁边。
 
 ### Assistant Draft
 
 `POST /api/v1/relationships/assistant/draft` 为给某个人的沟通场景生成草稿上下文：
 
-- 使用 relationship context 和 do-not-assume 约束。
-- 适合辅助用户起草 follow-up、确认问题或同步信息。
-- 当前只产出上下文和草稿建议，不自动发送消息。
+- 使用当前人物的 redacted relationship context，默认不把敏感人物上下文写进草稿。
+- 草稿会优先带入用户目标、第一条 open loop、当前建议和可确认事实；上下文很薄时，只生成轻量确认语气。
+- 返回 `safetyReview`，说明证据数、未闭环数、待确认关系事实、默认隐藏的敏感上下文数量，以及 `ready / review_first / thin_context` 状态。
+- 返回 `contextBasis` 和 `suggestedChecks`，让 UI 在复制前展示这版草稿用了什么依据、还要人工扫哪几项。
+- 用户点击生成后会先显示“草稿生成请求回执”：说明本次目标人物、用户目标、旧草稿是否仍在页面上、默认隐藏敏感上下文，以及返回前不会替换当前草稿、不会发送消息、写入画像、创建跟进或临时包含敏感上下文；生成中复制按钮保持锁定，避免把旧草稿误当成当前请求结果。
+- 草稿正文上方会显示“草稿生成回执”：说明人物上下文来自索引即时计算、后台整理还是人工确认画像，这版草稿用了多少证据 / open loop / 建议 / 确认事实，默认隐藏了多少敏感上下文，以及没有发送消息、写入画像或创建跟进任务。
+- API 只接受 `personId/personName`、`scenario` 和 `userGoal`，不会通过 `includeSensitive` 之类的额外字段临时放开敏感上下文。
+- 用户点击复制草稿后，页面会保留“草稿复制回执”：说明剪贴板里只有草稿正文，没有发送消息、写入人物画像或创建跟进任务，并重申默认隐藏的敏感上下文和待确认关系事实仍需发送前复核。
+- 当前只产出上下文和草稿建议，不自动发送消息；复制前用户仍要复核语气、事实和边界。
+
+这块的产品参考是 Outlook Copilot / Gmail Gemini / Salesforce Einstein 这类上下文驱动写作入口；研究参考包括 Smart Reply、AI-mediated communication 和 mixed-initiative writing assistant。共同结论是：关系型回复草稿应当提高起草效率，但必须让用户看到证据边界、敏感隐藏和人工复核点，避免把 AI 生成文本伪装成已确认的人际事实。
 
 ### Review Queue
 
@@ -114,9 +139,16 @@ Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI c
 - 用户可以 confirm / reject / snooze 待确认项。
 - confirm 可写入用户编辑后的值。
 - snooze 会延后再次提示；到期后会重新进入“待确认”，不会永久藏在“稍后”筛选里。
+- confirm / snooze / reject 后会返回并展示“校准回执”：确认说明写入了哪个人物画像字段，稍后说明何时回到队列，驳回说明没有写入画像；回执同时保留证据数量和复核备注状态，避免用户只看到卡片消失。
+- snooze 成功后还会展示“稍后回队列凭证”：明确回队列时间、当前状态、编辑草稿/备注/证据是否保留，以及本次只更新 Review Queue 的稍后状态，没有写入人物画像、确认或驳回候选事实、发送消息、创建跟进或同步外部系统；右侧紧凑回执也保留这条回队列摘要。
 - review item 保留 evidence refs、confidence、priority 和用户备注。
 - UI 的确认队列始终使用独立的待确认列表，不会被“已确认 / 已驳回 / 全部”等筛选误导。
 - 人工确认卡会展示人物、写入字段、优先级、置信度、证据入口、可编辑写入内容和复核备注，避免用户在缺少上下文时 rubber-stamp 关系事实。
+- 每张完整人工确认卡都会显示“校准影响预览”：确认会写入哪个人物画像字段，稍后只延后复核且不写画像，驳回不会写入、发送、创建跟进或删除原始证据。
+- 完整人工确认卡还会显示“草稿回执”：编辑建议写入内容或复核备注只会先留在本页；确认才提交写入画像，稍后会保留草稿和备注但不写画像，驳回只保存备注并保留不写入边界。
+- 如果确认 / 稍后 / 驳回请求失败，页面会显示“校准失败回执”，说明人物画像没有写入、队列没有被移出或候选没有被驳回，并保留本页草稿让用户修正后重试。
+- 当待确认、稍后、已确认、已驳回或全部筛选返回 0 条时，页面显示“空筛选回执”：说明本次读取成功、当前筛选范围、待确认是否仍有剩余，以及空态不会写入人物画像、自动确认、驳回、删除证据或同步外部系统；用户可以回到待确认、查看全部状态或重新读取队列。
+- 右侧 `确认队列` 只作为摘要和分流入口：侧栏不再提供一键确认写入，必须点击 `进入复核` 打开完整卡后，才能从带证据、字段和可编辑内容的 Review Queue 执行确认。侧栏仍可快速 `稍后 7 天`，因为它不会写入人物画像；稍后时编辑后的候选内容、备注和证据会保留，到期后重新回到待确认。
 
 这块的产品参考是 Google Contacts 的“Merge & fix”建议式合并、Salesforce Einstein Relationship Insights 的 evidence-backed relationship recommendation、HubSpot task queue 和 Covve relationship reminders；研究参考主要来自 mixed-initiative UI、AI suggestion review bias、task reminders 和 notification snooze/deferral。共同结论是：系统可以提出候选关系事实，但写入前必须保留证据、用户可编辑权和明确的稍后/驳回路径。
 

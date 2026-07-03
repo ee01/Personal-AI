@@ -142,6 +142,53 @@ async function installInitializedRoutes(page) {
   });
 }
 
+async function installSetupRequestRoutes(page) {
+  await page.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
+    }
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v2/userinfo', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        email: 'esone.qiu@example.com',
+        name: 'Esone Qiu',
+        given_name: 'Esone',
+        family_name: 'Qiu',
+        hd: 'example.com',
+      }),
+    });
+  });
+
+  let releaseSpreadsheetCreate;
+  const spreadsheetCreateGate = new Promise((resolve) => {
+    releaseSpreadsheetCreate = resolve;
+  });
+
+  await page.route('https://sheets.googleapis.com/v4/spreadsheets', async (route) => {
+    const request = route.request();
+    if (request.method() === 'POST') {
+      await spreadsheetCreateGate;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: 'E2E stopped after request receipt assertion' } }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    });
+  });
+
+  return () => releaseSpreadsheetCreate();
+}
+
 let launched;
 try {
   launched = await launchExtensionContext();
@@ -174,6 +221,34 @@ try {
   assertNoPageErrors();
 
   await page.close();
+
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.clear();
+  });
+
+  const setupRequestPage = await context.newPage();
+  const releaseSetupRequest = await installSetupRequestRoutes(setupRequestPage);
+  const assertNoSetupRequestPageErrors = collectPageErrors(setupRequestPage);
+
+  await setupRequestPage.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+
+  await setupRequestPage.locator('button', { hasText: '一键生成维护表' }).click();
+  await setupRequestPage.locator('text=初始化请求已提交').waitFor({
+    timeout: 15000,
+  });
+  await setupRequestPage.locator('text=本阶段还不会设置触发器、写测试消息或发送消息').waitFor({
+    timeout: 15000,
+  });
+  await setupRequestPage.locator('text=不会静默降级成 anyone-with-link 可编辑').waitFor({
+    timeout: 15000,
+  });
+
+  releaseSetupRequest();
+  await setupRequestPage.close();
+  assertNoSetupRequestPageErrors();
 
   await serviceWorker.evaluate(async ({ sheetId, receiptKey }) => {
     await chrome.storage.local.clear();
@@ -237,6 +312,9 @@ try {
     timeout: 15000,
   });
   await initializedPage.locator('text=分钟 / 每日触发器已写入 Config').waitFor({
+    timeout: 15000,
+  });
+  await initializedPage.locator('text=初始化不会立即发送正式消息').waitFor({
     timeout: 15000,
   });
   await initializedPage.locator('text=仅创建者可编辑').waitFor({

@@ -144,6 +144,7 @@ describe('Stats user isolation metadata', () => {
     expect(body.user).toEqual({
       id: 'owner.alpha',
       isolation: 'per_user_sqlite',
+      identitySource: 'header',
       storageKey: 'data/users/owner.alpha/memory.db',
       fallbackToDefault: false,
     });
@@ -162,6 +163,7 @@ describe('Stats user isolation metadata', () => {
     expect(res.json().user).toEqual({
       id: 'default',
       isolation: 'per_user_sqlite',
+      identitySource: 'default_fallback',
       storageKey: 'data/users/default/memory.db',
       fallbackToDefault: true,
     });

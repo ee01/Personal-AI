@@ -109,8 +109,8 @@ async function installChromeMock(page) {
       evidenceClusters: [
         {
           label: 'Workshop 经验',
-          sourceKinds: ['meeting', 'glip'],
-          evidenceCount: 3,
+          sourceKinds: [],
+          evidenceCount: 4,
         },
       ],
       suggestedArtifact: 'slides_outline',
@@ -148,9 +148,32 @@ async function installChromeMock(page) {
           whyMatched: 'workshop review',
           score: 0.88,
         },
+        {
+          id: 'memory-2',
+          type: 'chunk',
+          title: 'Project progress memory',
+          snippet: 'The project team agreed to turn the workshop lessons into a rollout plan.',
+          sourceLabel: 'glip',
+          sourceTitle: 'Project progress memory',
+          whyMatched: 'project progress',
+          score: 0.82,
+        },
+        {
+          id: 'memory-3',
+          type: 'chunk',
+          title: 'Stakeholder update memory',
+          snippet: 'Stakeholders asked for a concise story about outcomes, risks, and next steps.',
+          sourceLabel: 'meeting',
+          sourceTitle: 'Stakeholder update memory',
+          whyMatched: 'storytelling need',
+          score: 0.8,
+        },
       ],
       contextPackMd: '# Today Pilot meeting prep\n\nWorkshop recap.',
-      redaction: {},
+      redaction: {
+        redactionPreview: ['客户内部项目名需要脱敏'],
+        risksOrOpenLoops: ['外发前核对截图权限'],
+      },
       llmUsage: { storylineOpportunity },
       storylineOpportunity,
       sourceHash: 'source-storyline',
@@ -282,6 +305,44 @@ async function main() {
       cardText.includes('生成 workshop 故事线'),
       'storyline action label missing',
     );
+    assert(
+      cardText.includes('复核证据后手动复制'),
+      'storyline boundary copy missing',
+    );
+    assert(cardText.includes('入口回执'), 'storyline entry receipt missing');
+    assert(
+      cardText.includes('输出：Slides 提纲'),
+      'storyline target artifact receipt missing',
+    );
+    assert(cardText.includes('素材组 1'), 'storyline cluster receipt missing');
+    assert(
+      cardText.includes('素材估计 4 条'),
+      'storyline model-estimated evidence count receipt missing',
+    );
+    assert(
+      cardText.includes('实际 refs 3 条'),
+      'storyline actual evidence ref count receipt missing',
+    );
+    assert(
+      cardText.includes('素材来源：会议 / 消息'),
+      'storyline source-kind fallback receipt missing',
+    );
+    assert(
+      cardText.includes('点击后才调用 Draft API'),
+      'storyline lazy-generation boundary missing',
+    );
+    assert(
+      cardText.includes('模型素材数与实际 refs 不一致'),
+      'storyline evidence mismatch boundary missing',
+    );
+    assert(
+      cardText.includes('外发复核：私有素材 3 条 / 脱敏提示 1 条 / 风险提醒 1 条'),
+      'storyline share review summary missing',
+    );
+    assert(
+      cardText.includes('不是外发就绪稿'),
+      'storyline not-ready-to-share boundary missing',
+    );
 
     await clickShadow(page, 'button[data-action="storyline-generate"]');
     const openedUrls = await page.evaluate(() => window.__openedUrls);
@@ -304,6 +365,22 @@ async function main() {
     assert(
       !dismissedText.includes('可生成 Storyline'),
       'dismissed storyline strip should be hidden',
+    );
+    assert(
+      dismissedText.includes('Storyline 提示已隐藏'),
+      'storyline dismiss receipt missing',
+    );
+    assert(
+      dismissedText.includes('chrome.storage.local.storylineOpportunityDismissals'),
+      'storyline dismiss storage boundary missing',
+    );
+    assert(
+      dismissedText.includes('不删除会前准备、证据、Draft 草稿或 Meeting Pilot handoff'),
+      'storyline dismiss side-effect boundary missing',
+    );
+    assert(
+      dismissedText.includes('不会写回 Slides / Docs / RingCentral'),
+      'storyline dismiss writeback boundary missing',
     );
 
     console.log('Storyline Video Home E2E verified.');

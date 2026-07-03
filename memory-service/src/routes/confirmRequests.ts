@@ -11,6 +11,7 @@ import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
 import { reclassifyLegacyEvidenceResolutionConfirmRequests } from '../core/ConfirmRequestRoutingBackfill.js';
+import { EvidenceWatchContractService } from '../core/EvidenceWatchContractService.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 
@@ -347,6 +348,29 @@ export async function confirmRequestRoutes(
     let queuedActionId: string | undefined;
     if (isWatchItem && targetState === 'pending') {
       const actionRepo = new ActionRepository(db);
+      const evidenceWatchService = new EvidenceWatchContractService(db);
+      const evidenceWatchPreparation =
+        evidenceWatchService.prepareActionForProposal({
+          actionType: 'delegate_openclaw',
+          question: current.question,
+          title: `Watch 立即查证: ${current.question.slice(0, 60)}`,
+          summary: current.context ?? current.question,
+          params: {
+            mode: 'read',
+            routing: 'watch',
+            sourceAnchor: current.sourceAnchor,
+            gapType: current.gapType,
+            reasonCode: current.reasonCode,
+          },
+          createdFrom: { kind: 'confirm_request', refId: current.id },
+          cadence: 'on_revisit',
+        });
+      const idempotencyKey =
+        evidenceWatchPreparation?.idempotencyKey ??
+        `confirm_request_watch:${current.id}:verify`;
+      const existingAction =
+        actionRepo.findReusableByIdempotencyKey(idempotencyKey);
+      const paramsPatch = evidenceWatchPreparation?.paramsPatch ?? {};
       const action = actionRepo.create({
         actionType: 'delegate_openclaw',
         title: `立即查证: ${current.question.slice(0, 60)}`,
@@ -364,17 +388,31 @@ export async function confirmRequestRoutes(
           sourceAnchor: current.sourceAnchor,
           gapType: current.gapType,
           reasonCode: current.reasonCode,
+          ...paramsPatch,
         },
         executionMode: 'auto',
         requiresApproval: false,
         queueStatus: 'queued',
         priority: current.priority === 'high' ? 9 : 7,
-        idempotencyKey: `confirm_request_watch:${current.id}:verify`,
+        idempotencyKey,
         sourceKind: 'confirm_request_watch',
         sourceRefId: current.id,
         evidenceRefs: current.evidenceRefs,
       });
       queuedActionId = action.id;
+      if (evidenceWatchPreparation) {
+        evidenceWatchService.linkConfirmRequest(
+          evidenceWatchPreparation.contract.id,
+          current.id,
+        );
+        evidenceWatchService.recordActionResult({
+          contractId: evidenceWatchPreparation.contract.id,
+          action,
+          wasDuplicate:
+            Boolean(existingAction) && existingAction?.id === action.id,
+          summary: `Watch item 已复用现有 ${action.actionType} 动作，未重复创建外部查证。`,
+        });
+      }
     }
 
     return reply

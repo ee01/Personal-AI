@@ -162,9 +162,9 @@ export function normalizeSheetConfig<T extends Partial<SheetConfig> | null | und
   const nextConfig = {
     ...config,
     botAutomation,
-    botExecutor: botAutomation.executorRule,
     ringCentralSender: normalizeRingCentralSenderConfig(config.ringCentralSender),
   };
+  delete (nextConfig as Partial<SheetConfig>).botExecutor;
 
   return nextConfig as T;
 }
@@ -176,7 +176,6 @@ export function withBotAutomation(
   return normalizeSheetConfig({
     ...config,
     botAutomation,
-    botExecutor: botAutomation.executorRule,
   }) as SheetConfig;
 }
 

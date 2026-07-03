@@ -42,6 +42,7 @@ interface AskEvidence {
   content?: string;
   source?: string;
   sourceTitle?: string;
+  timestamp?: number;
 }
 interface AskResponse {
   answer?: string;
@@ -79,6 +80,39 @@ function lc(s: string): string {
   return (s || '').toLowerCase();
 }
 
+function stripQuestionEcho(answer: string, question: string): string {
+  const questionText = question.trim();
+  return answer
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (trimmed === questionText) return false;
+      if (/^(问题|question)\s*[:：]/i.test(trimmed)) return false;
+      if (/^(候选话题|candidate topics|topic candidates)\s*[:：]?/i.test(trimmed)) return false;
+      if (/^你可以直接回复候选序号|^you can reply with the candidate number/i.test(trimmed)) {
+        return false;
+      }
+      return true;
+    })
+    .join('\n')
+    .replaceAll(questionText, '');
+}
+
+function evidenceHaystack(evidence: AskEvidence[]): string {
+  return evidence
+    .map((e) =>
+      [
+        e.content,
+        e.sourceTitle,
+        e.timestamp ? new Date(e.timestamp * 1000).toISOString().slice(0, 10) : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join('\n');
+}
+
 async function ask(c: AbilityCase): Promise<AskResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -104,7 +138,8 @@ async function ask(c: AbilityCase): Promise<AskResponse> {
 function judge(c: AbilityCase, resp: AskResponse): CaseResult {
   const answer = resp.answer || '';
   const evidence = resp.evidence || [];
-  const haystack = lc(answer + '\n' + evidence.map((e) => e.content || '').join('\n'));
+  const answerForGrounding = stripQuestionEcho(answer, c.question);
+  const haystack = lc(answerForGrounding + '\n' + evidenceHaystack(evidence));
   const j = c.judge;
   const proofChecks: string[] = [];
   const base = {
@@ -135,6 +170,31 @@ function judge(c: AbilityCase, resp: AskResponse): CaseResult {
   }
 
   // grounded
+  if (resp.contextMatch?.state === 'ambiguous') {
+    proofChecks.push('✗ returned an ambiguous-topic clarification instead of grounded evidence');
+    return {
+      ...base,
+      verdict: 'fail',
+      score: 0,
+      groupsHit: 0,
+      groupsTotal: j.mustMention?.length ?? 0,
+      forbiddenHit: false,
+      proofChecks,
+    };
+  }
+  if (evidence.length === 0) {
+    proofChecks.push('✗ returned no evidence for a grounded memory-ability case');
+    return {
+      ...base,
+      verdict: 'fail',
+      score: 0,
+      groupsHit: 0,
+      groupsTotal: j.mustMention?.length ?? 0,
+      forbiddenHit: false,
+      proofChecks,
+    };
+  }
+
   const groups = j.mustMention || [];
   const hits = groups.map((g) => ({
     group: g,
@@ -185,7 +245,19 @@ async function main(): Promise<void> {
         attemptResults.push(judge(c, resp));
         fs.appendFileSync(
           path.join(runDir, 'responses.jsonl'),
-          JSON.stringify({ id: c.id, attempt, answer: resp.answer, evidenceCount: (resp.evidence || []).length }) + '\n',
+          JSON.stringify({
+            id: c.id,
+            attempt,
+            answer: resp.answer,
+            contextMatchState: resp.contextMatch?.state,
+            evidenceCount: (resp.evidence || []).length,
+            evidencePreview: (resp.evidence || []).slice(0, 5).map((item) => ({
+              source: item.source,
+              sourceTitle: item.sourceTitle,
+              timestamp: item.timestamp,
+              content: item.content?.slice(0, 240),
+            })),
+          }) + '\n',
         );
       } catch (err) {
         attemptResults.push({

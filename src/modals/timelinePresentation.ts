@@ -32,6 +32,87 @@ export interface TimelineSourceFilterOption {
   count: number;
 }
 
+export interface TimelineBoundaryReceiptInput {
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterKey: string;
+  sourceFilterLabel: string;
+  totalEventCount: number;
+  visibleEventCount: number;
+  hasFocusedEvent?: boolean;
+  isLoading?: boolean;
+}
+
+export interface TimelineBoundaryReceipt {
+  title: string;
+  items: string[];
+}
+
+export interface TimelineEmptyReceiptInput {
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterKey: string;
+  sourceFilterLabel: string;
+  totalEventCount: number;
+  visibleEventCount: number;
+}
+
+export interface TimelineEmptyReceipt {
+  title: string;
+  items: string[];
+}
+
+export type TimelineNavigationReceiptTone = 'info' | 'warning';
+
+export interface TimelineNavigationReceiptInput {
+  action: 'memory_route' | 'source_url' | 'blocked' | 'unavailable';
+  eventTitle?: string;
+  exploreRoute?: string;
+  sourceHost?: string;
+  blockedLabels?: string[];
+}
+
+export interface TimelineNavigationReceipt {
+  title: string;
+  tone: TimelineNavigationReceiptTone;
+  items: string[];
+}
+
+export interface TimelineLinkRecoveryDiagnosticInput {
+  event: MemoryTimelineEvent;
+  blockedLabels?: string[];
+  scopeLabel?: string;
+  rangeLabel?: string;
+  sourceFilterLabel?: string;
+}
+
+export interface TimelineRefreshFailureReceiptInput {
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterLabel: string;
+  totalEventCount: number;
+  visibleEventCount: number;
+  errorMessage?: string;
+}
+
+export interface TimelineRefreshFailureReceipt {
+  title: string;
+  items: string[];
+}
+
+export interface TimelineRefreshingSnapshotReceiptInput {
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterLabel: string;
+  totalEventCount: number;
+  visibleEventCount: number;
+}
+
+export interface TimelineRefreshingSnapshotReceipt {
+  title: string;
+  items: string[];
+}
+
 export interface ParsedTimelineFocus {
   id: string;
   type?: TimelineFocusType;
@@ -264,6 +345,264 @@ export function filterTimelineEventsBySource(
   return events.filter(
     (event) => getTimelineSourceFilterKey(event) === sourceFilterKey,
   );
+}
+
+function getTimelineReceiptScopeLabel(scope: RecallScope): string {
+  if (scope === 'work') return '工作';
+  if (scope === 'personal') return '个人';
+  return '全部';
+}
+
+export function buildTimelineBoundaryReceipt(
+  input: TimelineBoundaryReceiptInput,
+): TimelineBoundaryReceipt {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const visibleCount = Math.max(0, input.visibleEventCount);
+  const totalCount = Math.max(0, input.totalEventCount);
+  const hiddenBySourceCount = Math.max(0, totalCount - visibleCount);
+  const items: string[] = [];
+
+  if (input.scope === 'work') {
+    items.push('范围：只读取工作记忆；个人记忆没有进入本次时间轴。');
+  } else if (input.scope === 'personal') {
+    items.push('范围：只读取个人记忆；工作记忆没有进入本次时间轴。');
+  } else {
+    items.push('范围：读取全部记忆；卡片仍保留工作/个人标签。');
+  }
+
+  items.push(
+    `时间：通过 time 通道请求${input.rangeLabel}窗口，结果按记忆时间分组。`,
+  );
+
+  if (
+    input.sourceFilterKey &&
+    input.sourceFilterKey !== ALL_TIMELINE_SOURCE_FILTER_KEY
+  ) {
+    items.push(
+      `来源：当前只显示 ${input.sourceFilterLabel} 的 ${visibleCount} 条，隐藏 ${hiddenBySourceCount} 条其他来源；切回全部来源可恢复。`,
+    );
+  } else if (input.isLoading) {
+    items.push('来源：正在加载当前窗口，来源筛选会在本批结果内收窄。');
+  } else {
+    items.push(
+      `来源：当前展示 ${totalCount} 条已加载结果；来源筛选只收窄本批结果，不会扩大检索范围。`,
+    );
+  }
+
+  if (input.hasFocusedEvent) {
+    items.push(
+      '定位：目标记忆已置顶；它可能来自当前时间窗或来源筛选之外，请按“定位目标”标记判断。',
+    );
+  }
+
+  return {
+    title: `${scopeLabel} · ${input.rangeLabel} · 时间轴回执`,
+    items,
+  };
+}
+
+export function buildTimelineEmptyReceipt(
+  input: TimelineEmptyReceiptInput,
+): TimelineEmptyReceipt {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const totalCount = Math.max(0, input.totalEventCount);
+  const visibleCount = Math.max(0, input.visibleEventCount);
+  const hiddenBySourceCount = Math.max(0, totalCount - visibleCount);
+  const isSourceFiltered =
+    input.sourceFilterKey &&
+    input.sourceFilterKey !== ALL_TIMELINE_SOURCE_FILTER_KEY &&
+    totalCount > 0;
+
+  if (isSourceFiltered) {
+    return {
+      title: '来源筛选空结果回执',
+      items: [
+        `结果：本批 ${scopeLabel} · ${input.rangeLabel} 已成功读取 ${totalCount} 条，但 ${input.sourceFilterLabel} 下当前可见 ${visibleCount} 条。`,
+        '边界：这是本地来源筛选后的 successful empty；没有删除记忆、标记已读、写入反馈或重新同步来源。',
+        `恢复：切回全部来源可显示被隐藏的 ${hiddenBySourceCount} 条，也可以切换时间窗口重新请求。`,
+      ],
+    };
+  }
+
+  return {
+    title: '时间轴空结果回执',
+    items: [
+      `结果：本次 ${scopeLabel} · ${input.rangeLabel} 时间轴读取成功，Memory Service 返回 0 条可展示记忆。`,
+      '边界：这是 successful empty，不是刷新失败；没有删除记忆、清空索引、写入反馈或同步来源。',
+      '恢复：可以切换时间窗口或记忆范围后重新请求；新消息、网页、会议或手动记录写入后才会出现在这里。',
+    ],
+  };
+}
+
+function compactNavigationTargetTitle(value: unknown): string {
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  return normalized ? truncateTimelineText(normalized).slice(0, 96) : '这条记忆';
+}
+
+export function buildTimelineNavigationReceipt(
+  input: TimelineNavigationReceiptInput,
+): TimelineNavigationReceipt {
+  const targetTitle = compactNavigationTargetTitle(input.eventTitle);
+  const blockedLabels = Array.from(
+    new Set(
+      (input.blockedLabels || [])
+        .map((label) => label.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (input.action === 'memory_route') {
+    return {
+      title: '打开动作回执',
+      tone: 'info',
+      items: [
+        `目标：${targetTitle}。`,
+        `记忆内跳转：已进入 ${input.exploreRoute || '#/timeline'}；这次不会打开外部网页。`,
+        '边界：只切换 Memory Exploring 内部视图，不会改写记忆、反馈或来源资料。',
+      ],
+    };
+  }
+
+  if (input.action === 'source_url') {
+    return {
+      title: '打开动作回执',
+      tone: 'info',
+      items: [
+        `目标：${targetTitle}。`,
+        `来源：已请求浏览器打开 ${input.sourceHost || '安全 http/https 来源'}。`,
+        '边界：来源页在新标签打开，不代表 Memory Service 重新读取、同步或确认了来源内容。',
+      ],
+    };
+  }
+
+  if (input.action === 'blocked' && blockedLabels.length > 0) {
+    return {
+      title: '打开动作回执',
+      tone: 'warning',
+      items: [
+        `目标：${targetTitle}。`,
+        `拦截：${blockedLabels.join('；')}。`,
+        '恢复：可先阅读当前卡片和日期/来源上下文；需要原文时等待上游写入安全 http/https 来源或安全记忆内路由。',
+      ],
+    };
+  }
+
+  return {
+    title: '打开动作回执',
+    tone: 'warning',
+    items: [
+      `目标：${targetTitle}。`,
+      '结果：这条时间轴记忆没有可打开的安全内链或 http/https 来源。',
+      '恢复：可切换时间范围、来源筛选或从搜索页重新定位相关证据。',
+    ],
+  };
+}
+
+function getTimelineDiagnosticSourceLabel(event: MemoryTimelineEvent): string {
+  const sourceLabel = compactNavigationTargetTitle(
+    event.sourceTitle || event.source || '',
+  );
+  return sourceLabel === '这条记忆' ? '未标明来源' : sourceLabel;
+}
+
+export function buildTimelineLinkRecoveryDiagnostic(
+  input: TimelineLinkRecoveryDiagnosticInput,
+): string {
+  const { event } = input;
+  const blockedLabels = Array.from(
+    new Set(
+      (input.blockedLabels || [])
+        .map((label) => label.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+    ),
+  );
+  const reasonText =
+    blockedLabels.length > 0
+      ? blockedLabels.join('；')
+      : '没有安全记忆内路由或 http/https 来源';
+  const timeLabel = formatTimelineExactTime(event.timestamp);
+  const lines = [
+    'Personal AI 时间轴链接安全诊断',
+    `目标：${compactNavigationTargetTitle(event.title)}`,
+    `记忆键：${event.resultKey || `${event.type}:${event.id}`}`,
+    `时间：${timeLabel}`,
+    `范围：${input.scopeLabel || getTimelineReceiptScopeLabel(event.scope || 'all')}`,
+    `来源标签：${getTimelineDiagnosticSourceLabel(event)}`,
+    `当前筛选：${input.rangeLabel || '当前时间窗口'} · ${input.sourceFilterLabel || '当前来源筛选'}`,
+    `拦截/状态：${reasonText}`,
+    '边界：此诊断没有复制被拦截的原始 URL 或内部 route；复制本身不会写入、同步、确认或重新读取来源。',
+  ];
+
+  return lines.join('\n');
+}
+
+export function buildTimelineLinkRecoveryCopiedReceipt(
+  input: Pick<TimelineNavigationReceiptInput, 'eventTitle'>,
+): TimelineNavigationReceipt {
+  return {
+    title: '安全诊断复制回执',
+    tone: 'info',
+    items: [
+      `目标：${compactNavigationTargetTitle(input.eventTitle)}。`,
+      '结果：已复制时间轴链接安全诊断，可粘贴到搜索、工单或手动排查路径继续找原文。',
+      '边界：复制内容只包含标题、时间、来源标签、记忆 key 和拦截原因；不包含被拦截的原始 URL，也不会写入、同步或确认记忆。',
+    ],
+  };
+}
+
+export function buildTimelineLinkRecoveryCopyFailureReceipt(
+  input: Pick<TimelineNavigationReceiptInput, 'eventTitle'>,
+): TimelineNavigationReceipt {
+  return {
+    title: '安全诊断复制回执',
+    tone: 'warning',
+    items: [
+      `目标：${compactNavigationTargetTitle(input.eventTitle)}。`,
+      '结果：浏览器没有允许写入剪贴板。',
+      '恢复：可手动复制卡片标题、时间、来源标签和拦截原因；本次没有外发、写入、同步或确认记忆。',
+    ],
+  };
+}
+
+export function buildTimelineRefreshFailureReceipt(
+  input: TimelineRefreshFailureReceiptInput,
+): TimelineRefreshFailureReceipt {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const totalCount = Math.max(0, input.totalEventCount);
+  const visibleCount = Math.max(0, input.visibleEventCount);
+  const errorText = compactNavigationTargetTitle(input.errorMessage || '');
+  const items = [
+    `当前 Memory Service 状态未确认；下面仍显示上次成功读取的 ${visibleCount} / ${totalCount} 条时间轴记忆。`,
+    `失败请求：${scopeLabel} · ${input.rangeLabel} · ${input.sourceFilterLabel}；没有把失败结果当作空时间轴。`,
+    '恢复：可再次刷新；切换记忆范围或时间窗口会重新请求，失败时不会复用旧范围快照。',
+  ];
+
+  if (errorText !== '这条记忆') {
+    items.push(`错误：${errorText}。`);
+  }
+
+  return {
+    title: '刷新失败 · 上次快照',
+    items,
+  };
+}
+
+export function buildTimelineRefreshingSnapshotReceipt(
+  input: TimelineRefreshingSnapshotReceiptInput,
+): TimelineRefreshingSnapshotReceipt {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const totalCount = Math.max(0, input.totalEventCount);
+  const visibleCount = Math.max(0, input.visibleEventCount);
+
+  return {
+    title: '刷新中 · 上次快照',
+    items: [
+      `正在重新读取 ${scopeLabel} · ${input.rangeLabel} · ${input.sourceFilterLabel}；下面暂时仍是上次成功快照。`,
+      `当前可见 ${visibleCount} / ${totalCount} 条旧快照记忆；刷新成功后会整体替换为 Memory Service 新结果。`,
+      '边界：刷新中不代表 Memory Service 已确认最新状态，也不会写入、删除、同步来源或重排反馈。',
+    ],
+  };
 }
 
 function truncateTimelineText(value: string): string {

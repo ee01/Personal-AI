@@ -23,10 +23,19 @@ import { agentCoordinator } from './agentWorkflow';
 import {
   AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
   AGENT_WORKFLOW_TEST_SCENARIOS,
+  buildAgentWorkflowScenarioSourceReceipt,
+  buildAgentWorkflowDiagnosticSnapshot,
+  buildAgentWorkflowReplaySourceReceipt,
+  buildAgentWorkflowRunScopeReceipt,
+  buildAgentWorkflowSavedRegressionCoverageReceipt,
+  buildAgentWorkflowSavedRegressionScopeReceipt,
   buildAgentWorkflowResultExpectation,
+  buildAgentWorkflowSavedScenarioSourceReceipt,
   buildAgentWorkflowSavedScenario,
   buildAgentWorkflowScenarioInput,
+  buildAgentWorkflowAgentConfigSnapshot,
   buildAgentWorkflowReplayMessages,
+  formatAgentWorkflowAgentConfigSnapshot,
   formatAgentWorkflowSavedScenarioLabel,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowDatetimeInputValue,
@@ -35,7 +44,10 @@ import {
   normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
   type AgentWorkflowSavedExpectation,
+  type AgentWorkflowSavedDiagnosticSnapshot,
+  type AgentWorkflowAgentConfigSnapshot,
   type AgentWorkflowSavedScenario,
+  type AgentWorkflowTestSourceReceipt,
   type AgentWorkflowTestInput,
   type AgentWorkflowReplayMessage,
 } from './agentWorkflowReplay';
@@ -46,6 +58,10 @@ import {
   buildAgentWorkflowRecommendedActions,
   buildAgentWorkflowReadinessChecks,
   buildAgentWorkflowRunVerdict,
+  buildAgentWorkflowStructuralCoverage,
+  buildAgentWorkflowOrchestrationReceipt,
+  buildAgentWorkflowNotificationReviewReceipt,
+  buildAgentWorkflowRunEvidencePacket,
   normalizeAgentWorkflowConfidence,
   type AgentWorkflowDiagnostic,
 } from './agentWorkflowDiagnostics';
@@ -143,6 +159,79 @@ const PUSH_TARGET_RULES: Array<{
 ];
 
 const MIN_OPENCLAW_TIMEOUT_SECONDS = 5 * 60;
+
+type DigestManualPushKind = 'dream' | 'weekly';
+type DigestManualPushPhase = 'blocked' | 'pending' | 'result';
+
+interface DigestManualPushReceipt {
+  kind: DigestManualPushKind;
+  phase?: DigestManualPushPhase;
+  generated: boolean;
+  target: BotPushTargetMode;
+  targetLabel: string;
+  notificationCreated?: boolean;
+  botSent?: boolean;
+  botError?: string;
+  reportPath?: string;
+  messageCount?: number;
+  reflectionCount?: number;
+  dreamCount?: number;
+  latestDreamPath?: string;
+  reason?: string;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function formatDigestPushTargetLabel(
+  target: BotPushTargetMode,
+  groupId?: string,
+): string {
+  if (target === 'none') return '不推送';
+  if (target === 'group') {
+    return groupId ? `自定义群组 ${groupId}` : '自定义群组（未填写 ID）';
+  }
+  return 'Me';
+}
+
+function buildPendingDigestPushReceipt(
+  kind: DigestManualPushKind,
+  target: BotPushTargetMode,
+  groupId?: string,
+): DigestManualPushReceipt {
+  return {
+    kind,
+    phase: 'pending',
+    generated: false,
+    target,
+    targetLabel: formatDigestPushTargetLabel(target, groupId),
+  };
+}
+
+function buildBlockedDigestPushReceipt(
+  kind: DigestManualPushKind,
+  target: BotPushTargetMode,
+  groupId: string | undefined,
+  reason: string,
+): DigestManualPushReceipt {
+  return {
+    kind,
+    phase: 'blocked',
+    generated: false,
+    target,
+    targetLabel: formatDigestPushTargetLabel(target, groupId),
+    notificationCreated: false,
+    botSent: false,
+    reason,
+  };
+}
 
 const sanitizeLocalEnvConfig = (
   targetConfig: EnvConfigType,
@@ -1294,7 +1383,9 @@ function ContextSiteMuteSettings() {
       });
       setBlockedPages(toBlockedPageViews(record));
       setBlockPageInput('');
-      setMessage(`已永久关闭 ${prefix} 下的网页记忆提示`);
+      setMessage(
+        `已永久关闭 ${prefix} 下的被动网页处理；主动划词仍可用，不删除/同步/外发已有记忆`,
+      );
     } catch (error) {
       console.warn('Failed to block context page prefix:', error);
       setMessage('永久关闭页面路径失败');
@@ -1312,7 +1403,9 @@ function ContextSiteMuteSettings() {
         [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: record,
       });
       setBlockedPages(toBlockedPageViews(record));
-      setMessage(`已恢复 ${prefix} 下的网页记忆提示`);
+      setMessage(
+        `已恢复 ${prefix} 下的被动网页提示；不会写入、删除或外发记忆`,
+      );
     } catch (error) {
       console.warn('Failed to unblock context page prefix:', error);
       setMessage('恢复页面路径失败');
@@ -1326,7 +1419,9 @@ function ContextSiteMuteSettings() {
     try {
       await chrome.storage.local.set({ [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: {} });
       setBlockedPages([]);
-      setMessage('已恢复全部页面路径屏蔽规则');
+      setMessage(
+        '已恢复全部页面路径屏蔽规则；只恢复被动提示，不写入、删除或外发记忆',
+      );
     } catch (error) {
       console.warn('Failed to clear context page blocks:', error);
       setMessage('恢复全部页面路径失败');
@@ -1338,6 +1433,37 @@ function ContextSiteMuteSettings() {
   const controlSummary = allowlistMode
     ? `白名单模式 · 允许 ${allowedSites.length} 个站点 · 临时静默 ${mutedSites.length} · 屏蔽 ${blockedSites.length + blockedPages.length}`
     : `默认模式 · 临时静默 ${mutedSites.length} · 站点屏蔽 ${blockedSites.length} · 路径屏蔽 ${blockedPages.length}`;
+  const blockedRuleCount = blockedSites.length + blockedPages.length;
+  const siteControlStatusRows = [
+    {
+      label: '当前模式',
+      value: allowlistMode
+        ? `白名单模式：只允许 ${allowedSites.length} 个站点及其子域名被动提示`
+        : '默认模式：未命中静默/屏蔽规则的站点可被动提示',
+    },
+    {
+      label: '会被控制',
+      value: '右下角 Lens、页面召回、整页/视觉入库候选',
+    },
+    {
+      label: '当前阻断',
+      value: allowlistMode
+        ? allowedSites.length > 0
+          ? `${allowedSites.length} 个允许站点外会保持静默；另有 ${blockedRuleCount} 条屏蔽规则`
+          : '白名单已开启但没有允许站点：普通网页被动提示全部保持静默'
+        : mutedSites.length + blockedRuleCount > 0
+          ? `${mutedSites.length} 个临时静默、${blockedSites.length} 个整站屏蔽、${blockedPages.length} 个路径屏蔽正在生效`
+          : '没有站点控制阻断；仍受敏感页、低信息和召回质量门控',
+    },
+    {
+      label: '仍可使用',
+      value: '主动划词检索仍可用；敏感页和密钥类选区继续拦截',
+    },
+    {
+      label: '不会发生',
+      value: '不删除、不同步、不外发已有记忆，也不反写当前网站',
+    },
+  ];
 
   return (
     <div className="form-group">
@@ -1390,6 +1516,45 @@ function ContextSiteMuteSettings() {
               清空临时静默
             </button>
           </div>
+        </div>
+
+        <div
+          className="context-site-control-status"
+          aria-label="站点控制状态回执"
+          style={{
+            display: 'grid',
+            gap: 6,
+            border: '1px solid #bae6fd',
+            borderRadius: 8,
+            background: '#f0f9ff',
+            color: '#0f4c5c',
+            marginTop: 12,
+            padding: '10px 12px',
+          }}
+        >
+          <strong style={{ color: '#0c4a6e', fontSize: 13 }}>
+            站点控制状态
+          </strong>
+          {siteControlStatusRows.map((row) => (
+            <div
+              key={row.label}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '72px minmax(0, 1fr)',
+                gap: 8,
+                alignItems: 'start',
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              <span style={{ color: '#0369a1', fontWeight: 700 }}>
+                {row.label}
+              </span>
+              <span style={{ color: '#334155', overflowWrap: 'anywhere' }}>
+                {row.value}
+              </span>
+            </div>
+          ))}
         </div>
 
         <div
@@ -1823,6 +1988,10 @@ const Options = () => {
   });
   const [isDreamDigestPushing, setIsDreamDigestPushing] = useState(false);
   const [isWeeklyReportPushing, setIsWeeklyReportPushing] = useState(false);
+  const [dreamDigestPushReceipt, setDreamDigestPushReceipt] =
+    useState<DigestManualPushReceipt | null>(null);
+  const [weeklyReportPushReceipt, setWeeklyReportPushReceipt] =
+    useState<DigestManualPushReceipt | null>(null);
   const [outreachDirectoryStatus, setOutreachDirectoryStatus] = useState<
     OutreachDirectoryStatus[]
   >([]);
@@ -1849,6 +2018,236 @@ const Options = () => {
     const normalizedFallback =
       allowNone && enabled === false ? 'none' : fallback;
     return normalizeBotPushTarget(target, allowNone, normalizedFallback);
+  };
+
+  const buildDreamDigestPushReceipt = (
+    result: Record<string, unknown>,
+    target: BotPushTargetMode,
+    groupId?: string,
+    fallbackReason?: string,
+  ): DigestManualPushReceipt => ({
+    kind: 'dream',
+    generated: result.generated === true,
+    target,
+    targetLabel: formatDigestPushTargetLabel(target, groupId),
+    notificationCreated:
+      typeof result.notificationCreated === 'boolean'
+        ? result.notificationCreated
+        : typeof result.delivered === 'boolean'
+          ? result.delivered
+          : undefined,
+    botSent:
+      typeof result.botSent === 'boolean' ? result.botSent : undefined,
+    botError: readString(result.botError),
+    dreamCount: readNumber(result.dreamCount),
+    latestDreamPath: readString(result.latestDreamPath),
+    reason: readString(result.reason) || fallbackReason,
+  });
+
+  const buildWeeklyReportPushReceipt = (
+    result: Record<string, unknown>,
+    target: BotPushTargetMode,
+    groupId?: string,
+    fallbackReason?: string,
+  ): DigestManualPushReceipt => ({
+    kind: 'weekly',
+    generated: result.generated === true,
+    target,
+    targetLabel: formatDigestPushTargetLabel(target, groupId),
+    notificationCreated:
+      typeof result.notificationCreated === 'boolean'
+        ? result.notificationCreated
+        : undefined,
+    botSent:
+      typeof result.botSent === 'boolean' ? result.botSent : undefined,
+    botError: readString(result.botError),
+    reportPath: readString(result.reportPath),
+    messageCount: readNumber(result.messageCount),
+    reflectionCount: readNumber(result.reflectionCount),
+    reason: readString(result.reason) || fallbackReason,
+  });
+
+  const readCurrentInputValue = (key: string): string | undefined => {
+    const element = document.getElementById(key) as
+      | HTMLInputElement
+      | HTMLSelectElement
+      | null;
+    return element?.value;
+  };
+
+  const getCurrentPushTargetConfig = (
+    targetKey: PushTargetField,
+    groupKey: PushGroupField,
+  ): EnvConfigType => ({
+    ...config,
+    [targetKey]: readCurrentInputValue(targetKey) ?? config[targetKey],
+    [groupKey]: readCurrentInputValue(groupKey) ?? config[groupKey],
+  });
+
+  const renderDigestManualPushReceipt = (
+    receipt: DigestManualPushReceipt | null,
+  ) => {
+    if (!receipt) return null;
+
+    const isBlocked = receipt.phase === 'blocked';
+    const isPending = receipt.phase === 'pending';
+    const title = isBlocked
+      ? receipt.kind === 'weekly'
+        ? '周报手动门禁'
+        : 'Dream Digest 手动门禁'
+      : isPending
+        ? receipt.kind === 'weekly'
+          ? '周报手动请求'
+          : 'Dream Digest 手动请求'
+        : receipt.kind === 'weekly'
+          ? '周报手动结果'
+          : 'Dream Digest 手动结果';
+    const hasDeliveryIssue =
+      !isPending &&
+      receipt.generated &&
+      receipt.target !== 'none' &&
+      (receipt.notificationCreated === false ||
+        receipt.botSent === false ||
+        Boolean(receipt.botError));
+    const deliveryState = isBlocked
+      ? 'blocked'
+      : isPending
+      ? 'pending'
+      : !receipt.generated
+        ? 'not_generated'
+        : hasDeliveryIssue
+          ? 'partial_delivery'
+          : 'generated';
+    const receiptTone =
+      deliveryState === 'generated'
+        ? 'success'
+        : deliveryState === 'pending'
+          ? 'pending'
+          : 'warning';
+    const writeState = isBlocked
+      ? '未请求通知写入'
+      : isPending
+      ? receipt.target === 'none'
+        ? '本次不会请求通知写入'
+        : '等待后端确认 notice 写入'
+      : receipt.target === 'none'
+        ? '未请求通知写入'
+        : receipt.notificationCreated
+          ? '通知中心 notice 已写入'
+          : '通知中心 notice 未确认写入';
+    const botState = isBlocked
+      ? '未请求 Bot 投递'
+      : isPending
+      ? receipt.target === 'none'
+        ? '本次不会请求 Bot 投递'
+        : '等待后端 Bot 投递确认'
+      : receipt.target === 'none'
+        ? '未请求 Bot 投递'
+        : receipt.botSent
+          ? 'Bot 已确认送达'
+          : receipt.botError
+            ? `Bot 未送达：${receipt.botError}`
+            : 'Bot 未确认送达';
+    const contentDetail = isBlocked
+      ? receipt.kind === 'weekly'
+        ? '后端未收到周报生成请求'
+        : '后端未收到 Dream Digest 生成请求'
+      : isPending
+      ? receipt.kind === 'weekly'
+        ? '报告文件、消息数和反思数待后端返回'
+        : 'dream 数量和最新落点待后端返回'
+      : receipt.kind === 'weekly'
+        ? [
+            receipt.reportPath ? `文件 ${receipt.reportPath}` : '',
+            receipt.messageCount !== undefined
+              ? `消息 ${receipt.messageCount}`
+              : '',
+            receipt.reflectionCount !== undefined
+              ? `反思 ${receipt.reflectionCount}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : [
+            receipt.dreamCount !== undefined
+              ? `纳入 ${receipt.dreamCount} 个 dream`
+              : '',
+            receipt.latestDreamPath
+              ? `落点 ${receipt.latestDreamPath}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+    const boundary = isBlocked
+      ? receipt.kind === 'weekly'
+        ? '本次已在本页拦截：自定义群组目标缺少群组 ID；不会请求后端生成周报、写入 Notification Center、发送 Bot/Chrome/Doubao、改变自动周报调度或通知处理状态。填写群组 ID，或切回 Me/不推送后再试。'
+        : '本次已在本页拦截：自定义群组目标缺少群组 ID；不会请求后端生成 Dream Digest、写入通知中心、发送 Bot/Chrome/Doubao、停止梦境重放或改变通知处理状态。填写群组 ID，或切回 Me/不推送后再试。'
+      : isPending
+      ? receipt.target === 'none'
+        ? receipt.kind === 'weekly'
+          ? '请求已提交：使用当前可见目标“不推送”，只等待后端生成报告；预期不创建 Notification Center 通知、不发送 Bot/Chrome/Doubao，也不改变自动周报调度或通知处理状态。'
+          : '请求已提交：使用当前可见目标“不推送”，只等待后端生成 Dream Digest；预期不写入通知中心、不发送 Bot/Chrome/Doubao，也不停止梦境重放或改变通知处理状态。'
+        : `请求已提交：使用当前可见目标“${receipt.targetLabel}”，正在等待 Notification Center notice 写入与 Bot 投递结果；不会改变自动调度，也不会确认、忽略或完成任何通知。`
+      : !receipt.generated
+      ? '本次没有生成可推送内容；不会创建通知、发送 Bot、改变调度，或确认/忽略任何通知。'
+      : receipt.target === 'none'
+        ? receipt.kind === 'weekly'
+          ? '当前目标为不推送：只生成报告文件，不创建 Notification Center 通知、不发送 Bot/Chrome/Doubao，也不改变自动周报调度。'
+          : '当前目标为不推送：只生成本次 Dream Digest 结果，不写入通知中心、不发送 Bot/Chrome/Doubao，也不停止梦境重放。'
+        : hasDeliveryIssue
+          ? '内容已生成，但本次投递未完整确认；请以“写入”和“Bot”两行判断需要补救的渠道。这次操作不会自动点击、忽略或完成通知，不会改变定时配置，也不会绕过当前投递目标。'
+        : '通知中心写入和 Bot 投递分开显示；这次操作不会自动点击、忽略或完成通知，不会改变定时配置，也不会绕过当前投递目标。';
+
+    return (
+      <div
+        className={`digest-push-receipt ${receiptTone}`}
+        data-delivery-state={deliveryState}
+        aria-live="polite"
+      >
+        <strong>{title}</strong>
+        <dl>
+          <div>
+            <dt>状态</dt>
+            <dd>
+              {isBlocked
+                ? '已拦截'
+                : isPending
+                ? '请求已提交'
+                : !receipt.generated
+                ? '未生成'
+                : hasDeliveryIssue
+                  ? '已生成，投递部分失败'
+                  : '已生成'}
+            </dd>
+          </div>
+          <div>
+            <dt>目标</dt>
+            <dd>{receipt.targetLabel}</dd>
+          </div>
+          <div>
+            <dt>写入</dt>
+            <dd>{writeState}</dd>
+          </div>
+          <div>
+            <dt>Bot</dt>
+            <dd>{botState}</dd>
+          </div>
+          {contentDetail && (
+            <div>
+              <dt>内容</dt>
+              <dd>{contentDetail}</dd>
+            </div>
+          )}
+          {receipt.reason && (
+            <div>
+              <dt>原因</dt>
+              <dd>{receipt.reason}</dd>
+            </div>
+          )}
+        </dl>
+        <small>{boundary}</small>
+      </div>
+    );
   };
 
   const validatePushTargets = (
@@ -1922,6 +2321,19 @@ const Options = () => {
       'WEEKLY_REPORT_PUSH_TARGET',
     ]);
     if (validationError) {
+      const blockedTarget = resolvePushTargetValue(
+        currentPushConfig.DREAM_INSIGHT_PUSH_TARGET,
+        'me',
+        true,
+      );
+      setDreamDigestPushReceipt(
+        buildBlockedDigestPushReceipt(
+          'dream',
+          blockedTarget,
+          (currentPushConfig.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim(),
+          validationError,
+        ),
+      );
       setStatus({ message: validationError, type: 'error' });
       return;
     }
@@ -2237,6 +2649,23 @@ const Options = () => {
         RINGCENTRAL_JWT_CONFIGURED: Boolean(
           serverConfig?.ringCentralJwtConfigured,
         ),
+        BOT_API_BASE_URL:
+          typeof serverConfig?.botApiBaseUrl === 'string'
+            ? serverConfig.botApiBaseUrl.trim() || prev.BOT_API_BASE_URL
+            : prev.BOT_API_BASE_URL,
+        BOT_ID:
+          typeof serverConfig?.botId === 'string'
+            ? serverConfig.botId.trim() || prev.BOT_ID
+            : prev.BOT_ID,
+        BOT_TYPE:
+          serverConfig?.botType === 'team' || serverConfig?.botType === 'user'
+            ? serverConfig.botType
+            : prev.BOT_TYPE,
+        TEAM_ID:
+          typeof serverConfig?.botTeamId === 'string'
+            ? serverConfig.botTeamId
+            : prev.TEAM_ID,
+        BOT_TOKEN_CONFIGURED: Boolean(serverConfig?.botTokenConfigured),
       }));
     } catch (error) {
       console.warn('加载梦境重放报表配置失败:', error);
@@ -2532,6 +2961,7 @@ const Options = () => {
         'me',
         false,
       );
+      const botToken = (config.BOT_TOKEN || '').trim();
       const payload: UpdateRuntimeConfigPayload = {
         dreamDigestScheduleType:
           config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
@@ -2589,6 +3019,10 @@ const Options = () => {
           (config.OUTREACH_RESULT_PUSH_GROUP_ID || '').trim() || undefined,
         ringCentralServerUrl: (config.RINGCENTRAL_SERVER_URL || '').trim(),
         ringCentralClientId: (config.RINGCENTRAL_CLIENT_ID || '').trim(),
+        botApiBaseUrl: (config.BOT_API_BASE_URL || '').trim(),
+        botId: (config.BOT_ID || '').trim(),
+        botType: config.BOT_TYPE === 'team' ? 'team' : 'user',
+        botTeamId: (config.TEAM_ID || '').trim(),
         clearRingCentralClientSecret,
         clearRingCentralJwt,
       };
@@ -2600,6 +3034,9 @@ const Options = () => {
       }
       if (ringCentralJwt.length > 0) {
         payload.ringCentralJwt = ringCentralJwt;
+      }
+      if (botToken.length > 0) {
+        payload.botToken = botToken;
       }
       const client = await createMemoryServiceClient(config);
       await client.updateRuntimeConfig(payload);
@@ -2628,6 +3065,8 @@ const Options = () => {
           : ringCentralJwt.length > 0
             ? true
             : prev.RINGCENTRAL_JWT_CONFIGURED,
+        BOT_TOKEN_CONFIGURED:
+          botToken.length > 0 ? true : prev.BOT_TOKEN_CONFIGURED,
       }));
 
       setStatus({
@@ -2648,10 +3087,27 @@ const Options = () => {
   };
 
   const handlePushDreamDigestNow = async () => {
-    const validationError = validatePushTargets(config, [
+    const currentPushConfig = getCurrentPushTargetConfig(
+      'DREAM_INSIGHT_PUSH_TARGET',
+      'DREAM_INSIGHT_PUSH_GROUP_ID',
+    );
+    const validationError = validatePushTargets(currentPushConfig, [
       'DREAM_INSIGHT_PUSH_TARGET',
     ]);
     if (validationError) {
+      const blockedTarget = resolvePushTargetValue(
+        currentPushConfig.DREAM_INSIGHT_PUSH_TARGET,
+        'me',
+        true,
+      );
+      setDreamDigestPushReceipt(
+        buildBlockedDigestPushReceipt(
+          'dream',
+          blockedTarget,
+          (currentPushConfig.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim(),
+          validationError,
+        ),
+      );
       setStatus({ message: validationError, type: 'error' });
       return;
     }
@@ -2659,9 +3115,19 @@ const Options = () => {
     try {
       const headers = await getRequestHeaders(config);
       const dreamInsightPushTarget = resolvePushTargetValue(
-        config.DREAM_INSIGHT_PUSH_TARGET,
+        currentPushConfig.DREAM_INSIGHT_PUSH_TARGET,
         'me',
         true,
+      );
+      const dreamDigestPushGroupId = (
+        currentPushConfig.DREAM_INSIGHT_PUSH_GROUP_ID || ''
+      ).trim();
+      setDreamDigestPushReceipt(
+        buildPendingDigestPushReceipt(
+          'dream',
+          dreamInsightPushTarget,
+          dreamDigestPushGroupId,
+        ),
       );
       const response = await fetch(
         `${config.MEMORY_SERVICE_BASE_URL}/dream-digest/push-now`,
@@ -2671,8 +3137,7 @@ const Options = () => {
           body: JSON.stringify({
             force: true,
             dreamDigestPushTarget: dreamInsightPushTarget,
-            dreamDigestPushGroupId:
-              (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
+            dreamDigestPushGroupId: dreamDigestPushGroupId || undefined,
           }),
         },
       );
@@ -2680,6 +3145,13 @@ const Options = () => {
       if (!response.ok) {
         throw new Error(result?.error || '推送失败');
       }
+      setDreamDigestPushReceipt(
+        buildDreamDigestPushReceipt(
+          (result || {}) as Record<string, unknown>,
+          dreamInsightPushTarget,
+          dreamDigestPushGroupId,
+        ),
+      );
       if (result?.generated) {
         setStatus({
           message:
@@ -2698,6 +3170,18 @@ const Options = () => {
       }
     } catch (error) {
       console.error('立即推送梦境重放报表失败:', error);
+      setDreamDigestPushReceipt(
+        buildDreamDigestPushReceipt(
+          { generated: false },
+          resolvePushTargetValue(
+            currentPushConfig.DREAM_INSIGHT_PUSH_TARGET,
+            'me',
+            true,
+          ),
+          (currentPushConfig.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim(),
+          (error as Error).message,
+        ),
+      );
       setStatus({
         message: `立即推送失败: ${(error as Error).message}`,
         type: 'error',
@@ -2708,10 +3192,27 @@ const Options = () => {
   };
 
   const handlePushWeeklyReportNow = async () => {
-    const validationError = validatePushTargets(config, [
+    const currentPushConfig = getCurrentPushTargetConfig(
+      'WEEKLY_REPORT_PUSH_TARGET',
+      'WEEKLY_REPORT_PUSH_GROUP_ID',
+    );
+    const validationError = validatePushTargets(currentPushConfig, [
       'WEEKLY_REPORT_PUSH_TARGET',
     ]);
     if (validationError) {
+      const blockedTarget = resolvePushTargetValue(
+        currentPushConfig.WEEKLY_REPORT_PUSH_TARGET,
+        'me',
+        true,
+      );
+      setWeeklyReportPushReceipt(
+        buildBlockedDigestPushReceipt(
+          'weekly',
+          blockedTarget,
+          (currentPushConfig.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim(),
+          validationError,
+        ),
+      );
       setStatus({ message: validationError, type: 'error' });
       return;
     }
@@ -2719,9 +3220,19 @@ const Options = () => {
     try {
       const headers = await getRequestHeaders(config);
       const weeklyReportPushTarget = resolvePushTargetValue(
-        config.WEEKLY_REPORT_PUSH_TARGET,
+        currentPushConfig.WEEKLY_REPORT_PUSH_TARGET,
         'me',
         true,
+      );
+      const weeklyReportPushGroupId = (
+        currentPushConfig.WEEKLY_REPORT_PUSH_GROUP_ID || ''
+      ).trim();
+      setWeeklyReportPushReceipt(
+        buildPendingDigestPushReceipt(
+          'weekly',
+          weeklyReportPushTarget,
+          weeklyReportPushGroupId,
+        ),
       );
       const response = await fetch(
         `${config.MEMORY_SERVICE_BASE_URL}/weekly-report/push-now`,
@@ -2731,8 +3242,7 @@ const Options = () => {
           body: JSON.stringify({
             force: true,
             weeklyReportPushTarget,
-            weeklyReportPushGroupId:
-              (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
+            weeklyReportPushGroupId: weeklyReportPushGroupId || undefined,
           }),
         },
       );
@@ -2740,6 +3250,13 @@ const Options = () => {
       if (!response.ok) {
         throw new Error(result?.error || '推送失败');
       }
+      setWeeklyReportPushReceipt(
+        buildWeeklyReportPushReceipt(
+          (result || {}) as Record<string, unknown>,
+          weeklyReportPushTarget,
+          weeklyReportPushGroupId,
+        ),
+      );
       if (result?.generated) {
         setStatus({
           message:
@@ -2758,6 +3275,18 @@ const Options = () => {
       }
     } catch (error) {
       console.error('立即推送周报失败:', error);
+      setWeeklyReportPushReceipt(
+        buildWeeklyReportPushReceipt(
+          { generated: false },
+          resolvePushTargetValue(
+            currentPushConfig.WEEKLY_REPORT_PUSH_TARGET,
+            'me',
+            true,
+          ),
+          (currentPushConfig.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim(),
+          (error as Error).message,
+        ),
+      );
       setStatus({
         message: `立即推送周报失败: ${(error as Error).message}`,
         type: 'error',
@@ -3397,6 +3926,7 @@ const Options = () => {
             memory-service。选择「不推送」时只会关闭报表推送，不会停止梦境重放本身；点击「立即推送」会跳过时间窗口，直接触发
             Dream Digest。
           </small>
+          {renderDigestManualPushReceipt(dreamDigestPushReceipt)}
         </div>
       </div>
 
@@ -4208,6 +4738,7 @@ const Options = () => {
         >
           {isWeeklyReportPushing ? '推送中...' : '立即推送周报'}
         </button>
+        {renderDigestManualPushReceipt(weeklyReportPushReceipt)}
       </div>
 
       <div className="form-section">
@@ -4551,21 +5082,7 @@ const buildWorkflowTestInputComparisonKey = (
 };
 
 const buildWorkflowAgentConfigComparisonKey = (agents: any[]): string => {
-  const comparableAgents = agents
-    .map((agent) => ({
-      id: String(agent.id || '').trim(),
-      enabled: agent.enabled !== false,
-      priority: Number(agent.priority || 0),
-      tools: Array.isArray(agent.tools)
-        ? agent.tools.map((tool: any) => String(tool)).sort()
-        : [],
-    }))
-    .sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
-      return a.id.localeCompare(b.id);
-    });
-
-  return JSON.stringify(comparableAgents);
+  return buildAgentWorkflowAgentConfigSnapshot(agents)?.key || '[]';
 };
 
 const AGENT_WORKFLOW_SAVED_SCENARIOS_STORAGE_KEY =
@@ -4593,6 +5110,10 @@ interface WorkflowSavedRegressionResult {
   summary: string;
   detail?: string;
   actual?: AgentWorkflowSavedExpectation;
+  diagnostics?: AgentWorkflowSavedDiagnosticSnapshot;
+  baselineAgentConfig?: AgentWorkflowAgentConfigSnapshot;
+  actualAgentConfig?: AgentWorkflowAgentConfigSnapshot;
+  agentConfigChanged?: boolean;
 }
 
 interface WorkflowSavedRegressionSummary {
@@ -4602,6 +5123,34 @@ interface WorkflowSavedRegressionSummary {
   noBaseline: number;
   failed: number;
   results: WorkflowSavedRegressionResult[];
+}
+
+interface WorkflowSavedRegressionProgress {
+  currentIndex: number;
+  total: number;
+  label: string;
+}
+
+interface WorkflowBaselineWritebackReceipt {
+  scope?: 'single' | 'batch';
+  title?: string;
+  summary?: string;
+  boundary?: string;
+  accepted: number;
+  changed: number;
+  noBaseline: number;
+  failed: number;
+  total: number;
+  updatedAt: string;
+}
+
+interface WorkflowRunEvidenceCopyReceipt {
+  copiedAt: string;
+  title: string;
+  summary: string;
+  boundary: string;
+  stale: boolean;
+  qualification: string;
 }
 
 interface WorkflowSavedRegressionReport {
@@ -4621,6 +5170,10 @@ interface WorkflowSavedRegressionReport {
     summary: string;
     detail?: string;
     actual?: AgentWorkflowSavedExpectation;
+    diagnostics?: AgentWorkflowSavedDiagnosticSnapshot;
+    baselineAgentConfig?: AgentWorkflowAgentConfigSnapshot;
+    actualAgentConfig?: AgentWorkflowAgentConfigSnapshot;
+    agentConfigChanged?: boolean;
   }>;
 }
 
@@ -4701,6 +5254,22 @@ const buildWorkflowSavedBaselineRows = (
     },
   ];
 
+  if (expected.agentConfigSnapshot) {
+    const actualConfig = actual.agentConfigSnapshot;
+    rows.push({
+      id: 'agent-config',
+      label: '配置',
+      expected: formatAgentWorkflowAgentConfigSnapshot(
+        expected.agentConfigSnapshot,
+      ),
+      actual: formatAgentWorkflowAgentConfigSnapshot(actualConfig),
+      status:
+        actualConfig?.key && actualConfig.key === expected.agentConfigSnapshot.key
+          ? 'same'
+          : 'changed',
+    });
+  }
+
   return rows;
 };
 
@@ -4735,6 +5304,10 @@ const buildWorkflowSavedRegressionReport = (
     summary: item.summary,
     detail: item.detail,
     actual: item.actual,
+    diagnostics: item.diagnostics,
+    baselineAgentConfig: item.baselineAgentConfig,
+    actualAgentConfig: item.actualAgentConfig,
+    agentConfigChanged: item.agentConfigChanged,
   })),
 });
 
@@ -4819,6 +5392,16 @@ const AgentSettings = () => {
     useState(false);
   const [workflowSavedRegressionSummary, setWorkflowSavedRegressionSummary] =
     useState<WorkflowSavedRegressionSummary | null>(null);
+  const [workflowSavedRegressionProgress, setWorkflowSavedRegressionProgress] =
+    useState<WorkflowSavedRegressionProgress | null>(null);
+  const [
+    workflowBaselineWritebackReceipt,
+    setWorkflowBaselineWritebackReceipt,
+  ] = useState<WorkflowBaselineWritebackReceipt | null>(null);
+  const [
+    workflowRunEvidenceCopyReceipt,
+    setWorkflowRunEvidenceCopyReceipt,
+  ] = useState<WorkflowRunEvidenceCopyReceipt | null>(null);
   const workflowLastRunErrorRef = useRef('');
 
   // 获取可用工具列表
@@ -4962,6 +5545,8 @@ const AgentSettings = () => {
   ) => {
     const { name, value } = e.target;
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     setWorkflowTestInput((prev) => ({
       ...prev,
       [name]: value,
@@ -4985,6 +5570,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
   };
 
   const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
@@ -4996,6 +5583,7 @@ const AgentSettings = () => {
       setWorkflowTestResult(null);
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
+      setWorkflowRunEvidenceCopyReceipt(null);
       return null;
     }
 
@@ -5006,6 +5594,7 @@ const AgentSettings = () => {
     setWorkflowTestResult(null);
     setWorkflowTestResultInput(null);
     setWorkflowTestResultConfigKey('');
+    setWorkflowRunEvidenceCopyReceipt(null);
     try {
       const agentsForRun = await agentCoordinator.getAgents();
       setAgents(agentsForRun);
@@ -5041,6 +5630,8 @@ const AgentSettings = () => {
   const handleRunWorkflowTest = () => {
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     runWorkflowTest(workflowTestInput);
   };
 
@@ -5076,6 +5667,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
   };
 
   const handleRunWorkflowReplaySample = async () => {
@@ -5088,6 +5681,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     await runWorkflowTest(nextInput);
   };
 
@@ -5107,6 +5702,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
   };
 
   const handleRunWorkflowScenario = async () => {
@@ -5119,6 +5716,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     await runWorkflowTest(nextInput);
   };
 
@@ -5157,6 +5756,8 @@ const AgentSettings = () => {
     const snapshot = buildAgentWorkflowSavedScenario(
       workflowTestInput,
       baselineResult,
+      new Date(),
+      sortedAgents,
     );
     const snapshotInputKey = buildWorkflowTestInputComparisonKey(snapshot.input);
     const nextScenarios = [
@@ -5172,6 +5773,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioSelectedId(snapshot.id);
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     setWorkflowSavedScenarioStatus(
       baselineResult
         ? '已保存当前用例和结果基线'
@@ -5208,6 +5811,8 @@ const AgentSettings = () => {
 
     const nextExpectation = buildAgentWorkflowResultExpectation(
       workflowTestResult,
+      new Date(),
+      sortedAgents,
     );
     if (!nextExpectation) {
       setWorkflowSavedScenarioError('当前结果不能生成基线，请重新运行后再试');
@@ -5231,11 +5836,27 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioSelectedId(scenario.id);
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     setWorkflowSavedScenarioStatus(
       hadBaseline
         ? '已接受当前结果为新基线'
         : '已为保存样例建立当前结果基线',
     );
+    setWorkflowBaselineWritebackReceipt({
+      scope: 'single',
+      title: hadBaseline ? '单条基线写回回执' : '单条基线建立回执',
+      summary: `已更新 1 个保存样例：${
+        hadBaseline ? '覆盖原基线' : '建立新基线'
+      }；后续单条对比和批量回归会使用这个本地基线。`,
+      boundary:
+        '只改写 chrome.storage.local 的 agentWorkflowSavedScenarios 基线；不会写入 Memory Service、发送通知、执行规则自动化、导出报告、覆盖测试输入或导出原始消息正文。',
+      accepted: 1,
+      changed: hadBaseline ? 1 : 0,
+      noBaseline: hadBaseline ? 0 : 1,
+      failed: 0,
+      total: 1,
+      updatedAt,
+    });
   };
 
   const handleLoadWorkflowSavedScenario = () => {
@@ -5248,6 +5869,8 @@ const AgentSettings = () => {
     setWorkflowReplayError('');
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     setWorkflowSavedScenarioStatus(
       scenario.expectedResult ? '已填入保存样例和基线' : '已填入保存样例',
     );
@@ -5262,6 +5885,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     const result = await runWorkflowTest(scenario.input);
     if (result) {
       setWorkflowSavedScenarioStatus(
@@ -5277,6 +5902,9 @@ const AgentSettings = () => {
       setWorkflowSavedScenarioError('请先保存至少一个样例');
       setWorkflowSavedScenarioStatus('');
       setWorkflowSavedRegressionSummary(null);
+      setWorkflowSavedRegressionProgress(null);
+      setWorkflowBaselineWritebackReceipt(null);
+      setWorkflowRunEvidenceCopyReceipt(null);
       return;
     }
 
@@ -5284,6 +5912,9 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionRunning(true);
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowSavedRegressionProgress(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
 
     const results: WorkflowSavedRegressionResult[] = [];
 
@@ -5291,13 +5922,26 @@ const AgentSettings = () => {
       for (const [index, scenario] of workflowSavedScenarios.entries()) {
         setWorkflowSavedScenarioSelectedId(scenario.id);
         setWorkflowTestInput(scenario.input);
+        setWorkflowSavedRegressionProgress({
+          currentIndex: index + 1,
+          total: workflowSavedScenarios.length,
+          label: scenario.label,
+        });
         setWorkflowSavedScenarioStatus(
           `正在批量回归 ${index + 1}/${workflowSavedScenarios.length}：${scenario.label}`,
         );
 
         try {
           const result = await runWorkflowTest(scenario.input);
-          const actual = buildAgentWorkflowResultExpectation(result);
+          const actual = buildAgentWorkflowResultExpectation(
+            result,
+            new Date(),
+            sortedAgents,
+          );
+          const diagnostics = buildAgentWorkflowDiagnosticSnapshot(
+            result,
+            sortedAgents,
+          );
 
           if (!result || !actual) {
             results.push({
@@ -5321,6 +5965,8 @@ const AgentSettings = () => {
               detail:
                 '本次已能运行；可直接接受本次批量结果，建立后续对比基线。',
               actual,
+              diagnostics,
+              actualAgentConfig: actual.agentConfigSnapshot,
             });
             continue;
           }
@@ -5331,6 +5977,14 @@ const AgentSettings = () => {
           );
           const changedRows = baselineRows.filter(
             (row) => row.status === 'changed',
+          );
+          const baselineAgentConfig =
+            scenario.expectedResult.agentConfigSnapshot;
+          const actualAgentConfig = actual.agentConfigSnapshot;
+          const agentConfigChanged = Boolean(
+            baselineAgentConfig &&
+              actualAgentConfig &&
+              baselineAgentConfig.key !== actualAgentConfig.key,
           );
 
           results.push({
@@ -5351,6 +6005,10 @@ const AgentSettings = () => {
                     .join('；')
                 : '存储、通知、复核、Trace、规则和置信度都未漂移。',
             actual,
+            diagnostics,
+            baselineAgentConfig,
+            actualAgentConfig,
+            agentConfigChanged,
           });
         } catch (error) {
           const errorMessage =
@@ -5369,6 +6027,7 @@ const AgentSettings = () => {
 
       const summary = buildWorkflowSavedRegressionSummary(results);
       setWorkflowSavedRegressionSummary(summary);
+      setWorkflowSavedRegressionProgress(null);
       setWorkflowSavedScenarioStatus(
         `批量回归完成：通过 ${summary.same} / 变化 ${summary.changed} / 无基线 ${summary.noBaseline} / 失败 ${summary.failed}`,
       );
@@ -5378,6 +6037,7 @@ const AgentSettings = () => {
   };
 
   const handleAcceptWorkflowRegressionBaselines = async () => {
+    const previousSummary = workflowSavedRegressionSummary;
     const acceptables = (workflowSavedRegressionSummary?.results || []).filter(
       (item) =>
         (item.status === 'changed' || item.status === 'no-baseline') &&
@@ -5394,6 +6054,12 @@ const AgentSettings = () => {
       acceptables.map((item) => [item.id, item.actual!]),
     );
     const updatedAt = new Date().toISOString();
+    const acceptedChanged = acceptables.filter(
+      (item) => item.status === 'changed',
+    ).length;
+    const acceptedNoBaseline = acceptables.filter(
+      (item) => item.status === 'no-baseline',
+    ).length;
     const nextScenarios = workflowSavedScenarios.map((scenario) =>
       expectationsById.has(scenario.id)
         ? {
@@ -5424,6 +6090,21 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioStatus(
       `已接受 ${acceptables.length} 个批量回归结果为新基线`,
     );
+    setWorkflowBaselineWritebackReceipt({
+      scope: 'batch',
+      title: '批量基线写回回执',
+      summary: `已更新 ${acceptables.length} 个保存样例：变化 ${acceptedChanged} / 无基线 ${acceptedNoBaseline}；失败 ${
+        previousSummary?.failed || 0
+      } 个未覆盖；样例总数 ${previousSummary?.total || acceptables.length}。`,
+      boundary:
+        '只改写 chrome.storage.local 的 agentWorkflowSavedScenarios 基线；不会写入 Memory Service、发送通知、执行规则自动化、覆盖测试输入或导出原始消息正文。',
+      accepted: acceptables.length,
+      changed: acceptedChanged,
+      noBaseline: acceptedNoBaseline,
+      failed: previousSummary?.failed || 0,
+      total: previousSummary?.total || acceptables.length,
+      updatedAt,
+    });
   };
 
   const handleExportWorkflowRegressionReport = () => {
@@ -5451,6 +6132,8 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioSelectedId(persistedScenarios[0]?.id || '');
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
+    setWorkflowBaselineWritebackReceipt(null);
+    setWorkflowRunEvidenceCopyReceipt(null);
     setWorkflowSavedScenarioStatus('已删除保存样例');
   };
 
@@ -5545,7 +6228,10 @@ const AgentSettings = () => {
   const workflowExecutionBusy =
     workflowTestRunning || workflowSavedRegressionRunning;
   const workflowTestMessageReady = workflowTestInput.content.trim().length > 0;
-  const workflowCurrentConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
+  const workflowCurrentConfigSnapshot =
+    buildAgentWorkflowAgentConfigSnapshot(agents);
+  const workflowCurrentConfigKey =
+    workflowCurrentConfigSnapshot?.key || buildWorkflowAgentConfigComparisonKey(agents);
   const workflowResultInputIsStale = Boolean(
     workflowTestResult &&
       workflowTestResultInput &&
@@ -5629,6 +6315,14 @@ const AgentSettings = () => {
     workflowReadinessChecks,
     workflowRecommendedActions,
   );
+  const workflowStructuralCoverage = buildAgentWorkflowStructuralCoverage(
+    workflowTestResult,
+    sortedAgents,
+  );
+  const workflowOrchestrationReceipt =
+    buildAgentWorkflowOrchestrationReceipt(workflowTestResult, sortedAgents);
+  const workflowNotificationReviewReceipt =
+    buildAgentWorkflowNotificationReviewReceipt(workflowTestResult);
   const workflowDiagnosticSeverityLabels: Record<string, string> = {
     error: '阻塞',
     warning: '注意',
@@ -5661,6 +6355,17 @@ const AgentSettings = () => {
     blocked: '阻塞',
     idle: '无动作',
   };
+  const workflowStructuralCoverageStatusLabels: Record<string, string> = {
+    covered: '覆盖',
+    partial: '缺口',
+    missing: '缺失',
+  };
+  const workflowOrchestrationReceiptStatusLabels: Record<string, string> = {
+    ready: '就绪',
+    review: '复核',
+    blocked: '阻塞',
+    idle: '无动作',
+  };
   const workflowSavedRegressionStatusLabels: Record<
     WorkflowSavedRegressionStatus,
     string
@@ -5685,15 +6390,90 @@ const AgentSettings = () => {
   const selectedWorkflowSavedScenario = workflowSavedScenarios.find(
     (scenario) => scenario.id === workflowSavedScenarioSelectedId,
   );
+  const selectedWorkflowScenario = getSelectedWorkflowScenario();
+  const selectedWorkflowReplaySample = workflowReplaySamples.find(
+    (sample) => sample.id === workflowReplaySelectedId,
+  );
+  const workflowScenarioSourceReceipt =
+    buildAgentWorkflowScenarioSourceReceipt(selectedWorkflowScenario);
+  const workflowReplaySourceReceipt = buildAgentWorkflowReplaySourceReceipt(
+    selectedWorkflowReplaySample,
+  );
+  const workflowCurrentInputMatchesSavedScenario = Boolean(
+    selectedWorkflowSavedScenario &&
+      buildWorkflowTestInputComparisonKey(selectedWorkflowSavedScenario.input) ===
+        buildWorkflowTestInputComparisonKey(workflowTestInput),
+  );
   const workflowResultMatchesSavedScenario = Boolean(
     selectedWorkflowSavedScenario &&
       workflowTestResult &&
       workflowTestResultInput &&
       buildWorkflowTestInputComparisonKey(selectedWorkflowSavedScenario.input) ===
-        buildWorkflowTestInputComparisonKey(workflowTestResultInput),
+      buildWorkflowTestInputComparisonKey(workflowTestResultInput),
   );
+  const selectedWorkflowBaselineConfig =
+    selectedWorkflowSavedScenario?.expectedResult?.agentConfigSnapshot;
+  const workflowSavedScenarioConfigMatchesCurrent = Boolean(
+    !selectedWorkflowBaselineConfig ||
+      (workflowCurrentConfigSnapshot &&
+        selectedWorkflowBaselineConfig.key === workflowCurrentConfigSnapshot.key),
+  );
+  const workflowSavedScenarioSourceReceipt =
+    buildAgentWorkflowSavedScenarioSourceReceipt(selectedWorkflowSavedScenario, {
+      currentInputMatchesScenario: workflowCurrentInputMatchesSavedScenario,
+      hasResult: Boolean(workflowTestResult),
+      resultMatchesScenario: workflowResultMatchesSavedScenario,
+      resultIsStale: workflowResultIsStale,
+      agentConfigMatchesBaseline: workflowSavedScenarioConfigMatchesCurrent,
+      baselineAgentConfigLabel: formatAgentWorkflowAgentConfigSnapshot(
+        selectedWorkflowBaselineConfig,
+      ),
+      currentAgentConfigLabel: formatAgentWorkflowAgentConfigSnapshot(
+        workflowCurrentConfigSnapshot,
+      ),
+    });
+  const workflowSavedRegressionScopeReceipt =
+    buildAgentWorkflowSavedRegressionScopeReceipt({
+      savedScenarioCount: workflowSavedScenarios.length,
+      running: workflowSavedRegressionRunning,
+      currentIndex: workflowSavedRegressionProgress?.currentIndex,
+      currentLabel: workflowSavedRegressionProgress?.label,
+      summary: workflowSavedRegressionSummary
+        ? {
+            total: workflowSavedRegressionSummary.total,
+            same: workflowSavedRegressionSummary.same,
+            changed: workflowSavedRegressionSummary.changed,
+            noBaseline: workflowSavedRegressionSummary.noBaseline,
+            failed: workflowSavedRegressionSummary.failed,
+          }
+        : null,
+    });
+  const workflowSavedRegressionCoverageReceipt =
+    buildAgentWorkflowSavedRegressionCoverageReceipt({
+      scenarios: workflowSavedScenarios,
+    });
+  const workflowRunScopeReceipt = buildAgentWorkflowRunScopeReceipt({
+    input: workflowTestInput,
+    agentConfig: workflowCurrentConfigSnapshot,
+    savedScenarioCount: workflowSavedScenarios.length,
+    resultIsStale: workflowResultIsStale,
+    selectedSavedScenarioHasBaseline: selectedWorkflowSavedScenario
+      ? Boolean(selectedWorkflowSavedScenario.expectedResult)
+      : undefined,
+    currentInputMatchesSavedScenario: selectedWorkflowSavedScenario
+      ? workflowCurrentInputMatchesSavedScenario
+      : undefined,
+    agentConfigMatchesSavedBaseline:
+      selectedWorkflowSavedScenario?.expectedResult
+        ? workflowSavedScenarioConfigMatchesCurrent
+        : undefined,
+  });
   const workflowCurrentResultExpectation = workflowTestResult
-    ? buildAgentWorkflowResultExpectation(workflowTestResult)
+    ? buildAgentWorkflowResultExpectation(
+        workflowTestResult,
+        new Date(),
+        sortedAgents,
+      )
     : undefined;
   const workflowSavedBaselineRows =
     selectedWorkflowSavedScenario?.expectedResult &&
@@ -5707,6 +6487,8 @@ const AgentSettings = () => {
   const workflowSavedBaselineHasChanges = workflowSavedBaselineRows.some(
     (row) => row.status === 'changed',
   );
+  const workflowSavedBaselineDiagnostics =
+    selectedWorkflowSavedScenario?.expectedResult?.diagnosticSnapshot;
   const workflowCanUpdateSavedBaseline = Boolean(
     selectedWorkflowSavedScenario &&
       workflowCurrentResultExpectation &&
@@ -5719,6 +6501,147 @@ const AgentSettings = () => {
         ? '接受当前结果为基线'
         : '刷新当前基线'
       : '建立当前结果基线';
+  const workflowBaselineWritebackTitle =
+    workflowBaselineWritebackReceipt?.title ||
+    (workflowBaselineWritebackReceipt?.scope === 'single'
+      ? '单条基线写回回执'
+      : '批量基线写回回执');
+  const workflowBaselineWritebackSummary =
+    workflowBaselineWritebackReceipt?.summary ||
+    (workflowBaselineWritebackReceipt
+      ? `已更新 ${workflowBaselineWritebackReceipt.accepted} 个保存样例：变化 ${workflowBaselineWritebackReceipt.changed} / 无基线 ${workflowBaselineWritebackReceipt.noBaseline}；失败 ${workflowBaselineWritebackReceipt.failed} 个未覆盖；样例总数 ${workflowBaselineWritebackReceipt.total}。`
+      : '');
+  const workflowBaselineWritebackBoundary =
+    workflowBaselineWritebackReceipt?.boundary ||
+    '只改写 chrome.storage.local 的 agentWorkflowSavedScenarios 基线；不会写入 Memory Service、发送通知、执行规则自动化、覆盖测试输入或导出原始消息正文。';
+  const workflowRunEvidenceQualification = (() => {
+    if (!workflowTestResult) return undefined;
+
+    if (workflowResultIsStale) {
+      return {
+        status: 'stale' as const,
+        title: '证据需重跑',
+        summary: workflowStaleReason,
+        detail:
+          '这份证据包只代表上一次运行；复制会标成旧快照，作为当前排障或发布前门禁前请重新运行测试。',
+      };
+    }
+
+    if (selectedWorkflowSavedScenario) {
+      if (!workflowResultMatchesSavedScenario) {
+        return {
+          status: 'review' as const,
+          title: '保存样例未对齐',
+          summary: '当前结果不是所选保存样例的运行结果',
+          detail:
+            '先填入并运行该保存样例，或把当前输入另存为新样例后再建立基线。',
+        };
+      }
+
+      if (!selectedWorkflowSavedScenario.expectedResult) {
+        return {
+          status: 'review' as const,
+          title: '保存样例无基线',
+          summary: '当前结果可用于建立基线，但还不是回归证据',
+          detail:
+            '点击建立当前结果基线后，后续同一保存样例才能作为本地回归门禁比较。',
+        };
+      }
+
+      if (!workflowSavedScenarioConfigMatchesCurrent) {
+        return {
+          status: 'review' as const,
+          title: '基线配置已变更',
+          summary: '保存样例基线的 Agent 配置不同于当前配置',
+          detail:
+            '先复核配置差异并刷新基线，避免把配置版本差异误读成消息判断质量漂移。',
+        };
+      }
+
+      return {
+        status: 'ready' as const,
+        title: '可作本地回归证据',
+        summary: '当前结果匹配保存样例、已有基线且 Agent 配置一致',
+        detail:
+          '可作为本地发布前门禁证据；复制仍只写入本机剪贴板，不写入 Memory Service。',
+      };
+    }
+
+    if (selectedWorkflowReplaySample) {
+      return {
+        status: 'review' as const,
+        title: '最近消息回放证据',
+        summary: '当前结果来自 Memory Service 召回样本，未绑定保存样例基线',
+        detail:
+          '适合排障真实样本；作为回归证据前请保存为样例并建立基线。',
+      };
+    }
+
+    return {
+      status: 'review' as const,
+      title: '单次调试证据',
+      summary: '当前结果未绑定保存样例基线',
+      detail:
+        '可复制用于排障；作为本地发布前门禁前请保存样例并建立基线。',
+    };
+  })();
+  const workflowRunEvidencePacket = buildAgentWorkflowRunEvidencePacket(
+    workflowTestResult,
+    sortedAgents,
+    {
+      stale: workflowResultIsStale,
+      staleReason: workflowResultIsStale ? workflowStaleReason : undefined,
+      sourceLabel: selectedWorkflowSavedScenario
+        ? 'Options 关注项测试 · 保存样例'
+        : selectedWorkflowReplaySample
+          ? 'Options 关注项测试 · 最近消息回放'
+          : 'Options 关注项测试',
+      redactedInputContent: workflowTestResultInput?.content,
+      qualification: workflowRunEvidenceQualification,
+    },
+  );
+
+  const handleCopyWorkflowRunEvidencePacket = async () => {
+    if (!workflowRunEvidencePacket) return;
+
+    try {
+      await navigator.clipboard.writeText(workflowRunEvidencePacket.text);
+      setWorkflowRunEvidenceCopyReceipt({
+        copiedAt: new Date().toISOString(),
+        title: workflowRunEvidencePacket.title,
+        summary: workflowRunEvidencePacket.summary,
+        boundary: workflowRunEvidencePacket.boundary,
+        stale: workflowResultIsStale,
+        qualification: workflowRunEvidencePacket.qualification.title,
+      });
+      setWorkflowSavedScenarioError('');
+    } catch (error) {
+      console.error('复制 Agent Workflow 证据包失败:', error);
+      setWorkflowSavedScenarioError(
+        error instanceof Error ? error.message : '复制证据包失败',
+      );
+    }
+  };
+
+  const renderWorkflowTestSourceReceipt = (
+    receipt: AgentWorkflowTestSourceReceipt,
+  ) => (
+    <div
+      className={`agent-workflow-source-receipt ${receipt.tone}`}
+      aria-label={receipt.title}
+    >
+      <div>
+        <strong>{receipt.title}</strong>
+        <small>{receipt.summary}</small>
+        <em>{receipt.detail}</em>
+      </div>
+      <div className="agent-workflow-source-receipt-chips">
+        {receipt.chips.map((chip) => (
+          <span key={chip}>{chip}</span>
+        ))}
+      </div>
+    </div>
+  );
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
     if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
@@ -5882,6 +6805,7 @@ const AgentSettings = () => {
             {workflowRunButtonLabel}
           </button>
         </div>
+        {renderWorkflowTestSourceReceipt(workflowRunScopeReceipt)}
         <div className="agent-workflow-scenario-row">
           <div className="form-group">
             <label htmlFor="workflowScenario">内置样例</label>
@@ -5915,6 +6839,7 @@ const AgentSettings = () => {
             </button>
           </div>
         </div>
+        {renderWorkflowTestSourceReceipt(workflowScenarioSourceReceipt)}
         <div className="agent-workflow-replay-row">
           <div className="form-group">
             <label htmlFor="workflowReplaySample">最近消息</label>
@@ -5978,6 +6903,7 @@ const AgentSettings = () => {
             </button>
           </div>
         </div>
+        {renderWorkflowTestSourceReceipt(workflowReplaySourceReceipt)}
         <div className="agent-workflow-saved-row">
           <div className="form-group">
             <label htmlFor="workflowSavedScenario">保存样例</label>
@@ -5989,6 +6915,7 @@ const AgentSettings = () => {
                 setWorkflowSavedScenarioError('');
                 setWorkflowSavedScenarioStatus('');
                 setWorkflowSavedRegressionSummary(null);
+                setWorkflowBaselineWritebackReceipt(null);
               }}
               disabled={
                 workflowExecutionBusy || workflowSavedScenarios.length === 0
@@ -6051,6 +6978,9 @@ const AgentSettings = () => {
             </button>
           </div>
         </div>
+        {renderWorkflowTestSourceReceipt(workflowSavedScenarioSourceReceipt)}
+        {renderWorkflowTestSourceReceipt(workflowSavedRegressionCoverageReceipt)}
+        {renderWorkflowTestSourceReceipt(workflowSavedRegressionScopeReceipt)}
         {workflowReplayError && (
           <p className="error-message">{workflowReplayError}</p>
         )}
@@ -6061,6 +6991,24 @@ const AgentSettings = () => {
           <p className="agent-workflow-saved-status">
             {workflowSavedScenarioStatus}
           </p>
+        )}
+        {workflowBaselineWritebackReceipt && (
+          <div
+            className="agent-workflow-baseline-writeback"
+            aria-label={`Agent Workflow ${workflowBaselineWritebackTitle}`}
+          >
+            <span>已写回</span>
+            <div>
+              <strong>{workflowBaselineWritebackTitle}</strong>
+              <small>{workflowBaselineWritebackSummary}</small>
+              <em>
+                写回时间 {new Date(
+                  workflowBaselineWritebackReceipt.updatedAt,
+                ).toLocaleString()}
+              </em>
+              <em>{workflowBaselineWritebackBoundary}</em>
+            </div>
+          </div>
         )}
         {workflowSavedRegressionSummary && (
           <div
@@ -6073,8 +7021,9 @@ const AgentSettings = () => {
                   保存样例批量回归
                 </div>
                 {workflowSavedRegressionAcceptableCount > 0 && (
-                  <small>
-                    可把变化或无基线样例的本次结果一次性写回基线。
+                  <small className="agent-workflow-regression-boundary">
+                    接受后只把变化或无基线样例的本次结果写回本地基线；失败项不会被覆盖，也不会写入
+                    Memory Service、发送通知、执行规则自动化、导出报告或复制原始消息正文。
                   </small>
                 )}
               </div>
@@ -6115,6 +7064,25 @@ const AgentSettings = () => {
                     <strong>{item.label}</strong>
                     <small>{item.summary}</small>
                     {item.detail && <em>{item.detail}</em>}
+                    {(item.baselineAgentConfig || item.actualAgentConfig) && (
+                      <em className="agent-workflow-regression-diagnostics">
+                        配置{' '}
+                        {item.agentConfigChanged ? '已变更' : '一致或未记录'}
+                        ：基线{' '}
+                        {formatAgentWorkflowAgentConfigSnapshot(
+                          item.baselineAgentConfig,
+                        )}
+                        ；当前{' '}
+                        {formatAgentWorkflowAgentConfigSnapshot(
+                          item.actualAgentConfig,
+                        )}
+                      </em>
+                    )}
+                    {item.diagnostics && (
+                      <em className="agent-workflow-regression-diagnostics">
+                        {item.diagnostics.summary}
+                      </em>
+                    )}
                   </div>
                 </div>
               ))}
@@ -6213,7 +7181,14 @@ const AgentSettings = () => {
                 aria-label="Agent Workflow 保存基线对比"
               >
                 <div className="agent-workflow-baseline-header">
-                  <div className="agent-test-section-title">保存基线对比</div>
+                  <div>
+                    <div className="agent-test-section-title">保存基线对比</div>
+                    {workflowSavedBaselineDiagnostics?.summary && (
+                      <em className="agent-workflow-baseline-diagnostics">
+                        基线诊断：{workflowSavedBaselineDiagnostics.summary}
+                      </em>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={handleUpdateWorkflowSavedBaseline}
@@ -6264,6 +7239,29 @@ const AgentSettings = () => {
                   </div>
                 </div>
               )}
+            {workflowOrchestrationReceipt && (
+              <div
+                className={`agent-workflow-orchestration ${workflowOrchestrationReceipt.status}`}
+                aria-label="Agent Workflow 编排回执"
+              >
+                <span>
+                  {workflowOrchestrationReceiptStatusLabels[
+                    workflowOrchestrationReceipt.status
+                  ] || workflowOrchestrationReceipt.status}
+                </span>
+                <div>
+                  <strong>{workflowOrchestrationReceipt.title}</strong>
+                  <small>{workflowOrchestrationReceipt.summary}</small>
+                  <em>{workflowOrchestrationReceipt.detail}</em>
+                  <em>{workflowOrchestrationReceipt.boundary}</em>
+                  <div className="agent-workflow-orchestration-chips">
+                    {workflowOrchestrationReceipt.chips.map((chip) => (
+                      <b key={chip}>{chip}</b>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
             {workflowRunVerdict && (
               <div
                 className={`agent-workflow-verdict ${workflowRunVerdict.status}`}
@@ -6283,6 +7281,76 @@ const AgentSettings = () => {
                 {workflowRunVerdict.actionLabel && (
                   <b>{workflowRunVerdict.actionLabel}</b>
                 )}
+              </div>
+            )}
+            {workflowStructuralCoverage && (
+              <div
+                className={`agent-workflow-structure ${workflowStructuralCoverage.status}`}
+                aria-label="Agent Workflow 结构覆盖回执"
+              >
+                <span>
+                  {workflowStructuralCoverageStatusLabels[
+                    workflowStructuralCoverage.status
+                  ] || workflowStructuralCoverage.status}
+                </span>
+                <div>
+                  <strong>结构覆盖回执</strong>
+                  <small>{workflowStructuralCoverage.summary}</small>
+                  {(workflowStructuralCoverage.missingAgents.length > 0 ||
+                    workflowStructuralCoverage.missingTools.length > 0 ||
+                    workflowStructuralCoverage.issueSummary.length > 0) && (
+                    <em>
+                      {[
+                        workflowStructuralCoverage.missingAgents.length > 0
+                          ? `缺阶段 ${workflowStructuralCoverage.missingAgents.join('、')}`
+                          : '',
+                        workflowStructuralCoverage.missingTools.length > 0
+                          ? `缺工具 ${workflowStructuralCoverage.missingTools.join('、')}`
+                          : '',
+                        ...workflowStructuralCoverage.issueSummary,
+                      ]
+                        .filter(Boolean)
+                        .join('；')}
+                    </em>
+                  )}
+                </div>
+              </div>
+            )}
+            {workflowRunEvidencePacket && (
+              <div
+                className={`agent-workflow-evidence-packet ${workflowRunEvidencePacket.qualification.status}`}
+                aria-label="Agent Workflow 单次运行证据包"
+              >
+                <div>
+                  <strong>{workflowRunEvidencePacket.title}</strong>
+                  <small>{workflowRunEvidencePacket.summary}</small>
+                  <em>{workflowRunEvidencePacket.detail}</em>
+                  <em>{workflowRunEvidencePacket.boundary}</em>
+                  {workflowRunEvidenceCopyReceipt && (
+                    <em className="agent-workflow-evidence-copy-receipt">
+                      已复制到本机剪贴板 ·{' '}
+                      {workflowRunEvidenceCopyReceipt.stale
+                        ? '旧快照'
+                        : '当前结果'}{' '}
+                      · {workflowRunEvidenceCopyReceipt.qualification} ·{' '}
+                      {new Date(
+                        workflowRunEvidenceCopyReceipt.copiedAt,
+                      ).toLocaleString()}
+                    </em>
+                  )}
+                  <div className="agent-workflow-evidence-chips">
+                    {workflowRunEvidencePacket.chips.map((chip) => (
+                      <b key={chip}>{chip}</b>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyWorkflowRunEvidencePacket}
+                  disabled={workflowExecutionBusy}
+                >
+                  复制证据包
+                </button>
               </div>
             )}
             {workflowDecisionPath.length > 0 && (
@@ -6358,9 +7426,12 @@ const AgentSettings = () => {
                 '本次 trace 未发现阻塞项',
               )}
             </div>
-            {workflowTestResult.notificationReview?.required && (
+            {workflowNotificationReviewReceipt && (
               <div className="agent-test-review-banner">
-                {workflowTestResult.notificationReview.message}
+                <strong>{workflowNotificationReviewReceipt.title}</strong>
+                <small>{workflowNotificationReviewReceipt.summary}</small>
+                <em>{workflowNotificationReviewReceipt.detail}</em>
+                <em>{workflowNotificationReviewReceipt.boundary}</em>
               </div>
             )}
             <div className="agent-test-summary">

@@ -1,7 +1,10 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getSafeExternalUrl } from '../modals/topic-link-safety';
+import {
+  getExternalUrlBlockedReasonLabel,
+  getExternalUrlSafety,
+} from '../modals/topic-link-safety';
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { getEnvConfig } from '../utils';
 import { getDemoMeetingSessionSnapshot } from './demo';
@@ -64,6 +67,85 @@ const panoramaStyle = `
     font-weight: 600;
     font-size: 11px;
   }
+  .archive-detail-pill {
+    padding: 3px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: rgba(116,185,255,0.1);
+    color: var(--blue);
+    font-weight: 600;
+    font-size: 11px;
+  }
+  .archive-detail-pill.loaded {
+    background: rgba(105,219,124,0.12);
+    border-color: rgba(105,219,124,0.28);
+    color: #69db7c;
+  }
+  .archive-detail-pill.fallback {
+    background: rgba(255,165,2,0.1);
+    border-color: rgba(255,165,2,0.28);
+    color: var(--orange);
+  }
+  .archive-source-receipt {
+    margin: 14px 32px 0;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 188px 1fr;
+    gap: 14px;
+    border: 1px solid rgba(116,185,255,0.24);
+    border-radius: 10px;
+    background: rgba(116,185,255,0.08);
+  }
+  .archive-source-receipt.loaded {
+    border-color: rgba(105,219,124,0.3);
+    background: rgba(105,219,124,0.08);
+  }
+  .archive-source-receipt.fallback {
+    border-color: rgba(255,165,2,0.32);
+    background: rgba(255,165,2,0.08);
+  }
+  .archive-source-receipt-head { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+  .archive-source-receipt-icon { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: rgba(116,185,255,0.12); color: var(--blue); flex-shrink: 0; }
+  .archive-source-receipt.loaded .archive-source-receipt-icon { background: rgba(105,219,124,0.12); color: var(--p2); }
+  .archive-source-receipt.fallback .archive-source-receipt-icon { background: rgba(255,165,2,0.12); color: var(--orange); }
+  .archive-source-receipt-title { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.35; }
+  .archive-source-receipt-state { margin-top: 2px; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+  .archive-source-receipt-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .archive-source-receipt-field { min-width: 0; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(11,13,20,0.28); padding: 8px 10px; }
+  .archive-source-receipt-label { display: block; margin-bottom: 3px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .archive-source-receipt-value { display: block; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+  .panorama-output-receipt {
+    margin: 14px 32px 0;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 188px 1fr;
+    gap: 14px;
+    border: 1px solid rgba(116,185,255,0.24);
+    border-radius: 10px;
+    background: rgba(116,185,255,0.08);
+  }
+  .panorama-output-receipt.ready {
+    border-color: rgba(105,219,124,0.3);
+    background: rgba(105,219,124,0.08);
+  }
+  .panorama-output-receipt.review {
+    border-color: rgba(255,165,2,0.32);
+    background: rgba(255,165,2,0.08);
+  }
+  .panorama-output-receipt.limited {
+    border-color: rgba(116,185,255,0.24);
+    background: rgba(116,185,255,0.08);
+  }
+  .panorama-output-receipt-head { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+  .panorama-output-receipt-icon { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: rgba(116,185,255,0.12); color: var(--blue); flex-shrink: 0; }
+  .panorama-output-receipt.ready .panorama-output-receipt-icon { background: rgba(105,219,124,0.12); color: var(--p2); }
+  .panorama-output-receipt.review .panorama-output-receipt-icon { background: rgba(255,165,2,0.12); color: var(--orange); }
+  .panorama-output-receipt-title { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.35; }
+  .panorama-output-receipt-state { margin-top: 2px; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+  .panorama-output-receipt-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .panorama-output-receipt-field { min-width: 0; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(11,13,20,0.28); padding: 8px 10px; }
+  .panorama-output-receipt-label { display: block; margin-bottom: 3px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .panorama-output-receipt-value { display: block; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
   .page-header {
     position: sticky;
     top: 0;
@@ -257,6 +339,15 @@ const panoramaStyle = `
   .action-item:hover { border-color: var(--orange); transform: translateX(2px); }
   .action-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 6px; }
   .action-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-source {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.03);
+    font-weight: 600;
+  }
   .action-evidence { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--orange); border-radius: 6px; background: rgba(255,165,2,0.08); color: var(--text-dim); font-size: 11px; line-height: 1.45; }
   .action-gap-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .action-gap-tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,165,2,0.28); color: var(--orange); background: rgba(255,165,2,0.08); font-weight: 600; }
@@ -410,6 +501,7 @@ const panoramaStyle = `
   .feedback-btn:hover { border-color: var(--accent); color: var(--text); }
   .feedback-btn.confirm:hover { border-color: var(--p2); color: var(--p2); }
   .feedback-btn.reject:hover { border-color: var(--p0); color: var(--p0); }
+  .feedback-status { color: var(--text-dim); font-size: 11px; max-width: 360px; line-height: 1.45; }
   @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
@@ -417,6 +509,10 @@ const panoramaStyle = `
   @media (max-width: 1100px) {
     .stats-strip { grid-template-columns: repeat(2, 1fr); }
     .main-layout { grid-template-columns: 1fr; }
+    .archive-source-receipt { grid-template-columns: 1fr; }
+    .archive-source-receipt-body { grid-template-columns: 1fr; }
+    .panorama-output-receipt { grid-template-columns: 1fr; }
+    .panorama-output-receipt-body { grid-template-columns: 1fr; }
   }
 `;
 
@@ -506,8 +602,10 @@ function getArchivedSessionFromQuery():
   const date = parseTimestampParam(params.get('date')) || Date.now();
   const lastEventAt = parseTimestampParam(params.get('lastEventAt')) || date;
   const participants = parseHistoryParticipants(params.get('participants'));
-  const pdfUrl = getSafeExternalUrl(params.get('pdfUrl')) || undefined;
+  const pdfUrl = (params.get('pdfUrl') || '').trim() || undefined;
+  const videoUrl = (params.get('videoUrl') || '').trim() || undefined;
   const digestId = (params.get('digestId') || '').trim() || undefined;
+  const pdfSafety = getExternalUrlSafety(pdfUrl);
   const digestStatus = parseHistoryDigestStatus(
     params.get('digestStatus'),
     pdfUrl,
@@ -544,9 +642,12 @@ function getArchivedSessionFromQuery():
       taskId: digestId,
       lookupId: digestId,
       resultUrl: pdfUrl,
+      videoUrl,
       errorCode: digestErrorCode,
       updatedAt: lastEventAt,
-      message: pdfUrl
+      message: pdfSafety.blocked
+        ? '会议纪要 PDF 链接未通过安全检查。'
+        : pdfUrl
         ? '会议纪要 PDF 已就绪。'
         : digestStatus === 'failed'
         ? '会议记录已归档，但 PDF 生成失败。'
@@ -564,6 +665,221 @@ function getArchivedSessionFromQuery():
     updatedAt: lastEventAt,
     endedAt: lastEventAt,
   };
+}
+
+type ArchivedDetailStatus = 'idle' | 'loading' | 'loaded' | 'fallback';
+
+interface ArchiveSourceReceipt {
+  tone: ArchivedDetailStatus;
+  title: string;
+  source: string;
+  coverage: string;
+  boundary: string;
+  nextStep: string;
+}
+
+type PanoramaOutputReceiptTone = 'ready' | 'review' | 'limited';
+
+interface PanoramaOutputReceipt {
+  tone: PanoramaOutputReceiptTone;
+  title: string;
+  source: string;
+  outputs: string;
+  boundary: string;
+  nextStep: string;
+}
+
+function buildArchiveSourceReceipt(
+  status: ArchivedDetailStatus,
+  session: MeetingPilotSessionSnapshot,
+): ArchiveSourceReceipt {
+  if (status === 'loaded') {
+    return {
+      tone: 'loaded',
+      title: '已用 memory-service 完整归档刷新本页',
+      source: 'memory-service 会议详情 API；优先于当前浏览器活跃 session 缓存。',
+      coverage: `已载入 ${session.chapters.length} 个章节、${session.actionItems.length} 个行动项、${session.decisions.length} 个决议、${session.timelineEvents.length} 个时间线事件。`,
+      boundary:
+        '本页只读取归档明细；打开、复制或导出不会重写会议记忆、发送纪要或修改行动项状态。',
+      nextStep:
+        '先看会后跟进状态，再复制页面、PDF 或跟进清单给需要的人。',
+    };
+  }
+
+  if (status === 'fallback') {
+    return {
+      tone: 'fallback',
+      title: '完整归档未载入，当前是基础历史视图',
+      source: '会议记录列表带入的 URL 参数：标题、时间、参会者和 Digest/PDF 状态。',
+      coverage:
+        '行动项、决议、时间线和立场可能暂时为空；这不等于会议没有这些内容。',
+      boundary:
+        '不会自动重新生成 PDF、不会修改归档，也不会把缺失结构化内容写回 Memory Service。',
+      nextStep:
+        '刷新重试，或返回会议记录查看 Digest/PDF 状态并排查 memory-service 详情接口。',
+    };
+  }
+
+  return {
+    tone: status,
+    title:
+      status === 'loading'
+        ? '正在读取完整归档'
+        : '准备读取完整归档',
+    source: '会议记录列表先带入基础信息，随后向 memory-service 请求完整明细。',
+    coverage:
+      '完整归档返回前，页面可能只显示标题、时间、参会者和 Digest/PDF 状态。',
+    boundary:
+      '加载过程只读；不会开始录制、补发 PDF、发送纪要或修改行动项状态。',
+    nextStep:
+      '等待回执切换为已载入；如果进入基础视图，再按恢复提示处理。',
+  };
+}
+
+function getPanoramaSourceLabel(
+  isArchivedHistoryMode: boolean,
+  archivedDetailStatus: ArchivedDetailStatus,
+): string {
+  if (!isArchivedHistoryMode) {
+    return '当前浏览器 Meeting Pilot session；停止 capture 后的结构化会议结果。';
+  }
+  if (archivedDetailStatus === 'loaded') {
+    return 'memory-service 完整归档；优先于活跃 session 缓存。';
+  }
+  if (archivedDetailStatus === 'fallback') {
+    return '会议记录列表带入的基础归档参数；完整明细未载入。';
+  }
+  return '会议记录列表基础信息；正在尝试读取 memory-service 完整归档。';
+}
+
+interface PanoramaAssetSafety {
+  pdfUrl: string;
+  videoUrl: string;
+  pdfBlockedLabel: string;
+  videoBlockedLabel: string;
+}
+
+function getPanoramaAssetSafety(
+  session: MeetingPilotSessionSnapshot,
+): PanoramaAssetSafety {
+  const pdfSafety = getExternalUrlSafety(session.digest.resultUrl);
+  const videoSafety = getExternalUrlSafety(session.digest.videoUrl);
+  const pdfBlockedLabel = pdfSafety.blocked
+    ? `PDF 已隐藏 · ${getExternalUrlBlockedReasonLabel(pdfSafety.reason)}`
+    : '';
+  const videoBlockedLabel = videoSafety.blocked
+    ? `录制素材已隐藏 · ${getExternalUrlBlockedReasonLabel(
+        videoSafety.reason,
+      )}`
+    : '';
+
+  return {
+    pdfUrl: pdfSafety.safeUrl,
+    videoUrl: videoSafety.safeUrl,
+    pdfBlockedLabel,
+    videoBlockedLabel,
+  };
+}
+
+function getPanoramaPdfLabel(
+  session: MeetingPilotSessionSnapshot,
+  assets: PanoramaAssetSafety,
+): string {
+  if (assets.pdfUrl) return 'PDF 可打开/下载/复制链接';
+  if (assets.pdfBlockedLabel) return assets.pdfBlockedLabel;
+  if (session.digest.status === 'processing') return 'PDF 生成中';
+  if (session.digest.status === 'failed') return 'PDF 生成失败';
+  return 'PDF 暂不可用';
+}
+
+function getPanoramaVideoLabel(assets: PanoramaAssetSafety): string {
+  if (assets.videoUrl) return '录制素材可打开/复制链接';
+  if (assets.videoBlockedLabel) return assets.videoBlockedLabel;
+  return '没有录制素材';
+}
+
+function buildPanoramaOutputReceipt(args: {
+  session: MeetingPilotSessionSnapshot;
+  assets: PanoramaAssetSafety;
+  activeActionCount: number;
+  suggestedCount: number;
+  gapCount: number;
+  isArchivedHistoryMode: boolean;
+  archivedDetailStatus: ArchivedDetailStatus;
+}): PanoramaOutputReceipt {
+  const {
+    session,
+    assets,
+    activeActionCount,
+    suggestedCount,
+    gapCount,
+    isArchivedHistoryMode,
+    archivedDetailStatus,
+  } = args;
+  const needsReview = suggestedCount > 0 || gapCount > 0;
+  const blockedAssetCount =
+    (assets.pdfBlockedLabel ? 1 : 0) + (assets.videoBlockedLabel ? 1 : 0);
+  const hasExternalAsset = Boolean(assets.pdfUrl || assets.videoUrl);
+  const tone: PanoramaOutputReceiptTone = needsReview
+    ? 'review'
+    : hasExternalAsset
+    ? 'ready'
+    : 'limited';
+  const outputParts = [
+    '页面链接',
+    'JSON 本机导出',
+    activeActionCount
+      ? `Markdown 跟进清单 ${activeActionCount} 项`
+      : '跟进清单暂无可复制项',
+    getPanoramaPdfLabel(session, assets),
+    getPanoramaVideoLabel(assets),
+  ];
+
+  return {
+    tone,
+    title: needsReview
+      ? '先复核会后材料，再复制或外发'
+      : blockedAssetCount > 0
+      ? '部分素材链接已隐藏'
+      : hasExternalAsset
+      ? '可输出材料已就绪'
+      : '仅有结构化页面可输出',
+    source: getPanoramaSourceLabel(isArchivedHistoryMode, archivedDetailStatus),
+    outputs: outputParts.join('；'),
+    boundary:
+      blockedAssetCount > 0
+        ? '这些动作只会打开、复制、下载或导出当前页面已有的安全材料；被隐藏素材不会进入预览、打开、下载或剪贴板。不会发送纪要、创建外部任务、确认行动项、重跑分析、写回 Memory Service，或修改 Calendar/Jira/RingCentral。'
+        : '这些动作只会打开、复制、下载或导出当前页面已有材料；不会发送纪要、创建外部任务、确认行动项、重跑分析、写回 Memory Service，或修改 Calendar/Jira/RingCentral。',
+    nextStep: needsReview
+      ? `先处理 ${suggestedCount} 个待复核和 ${gapCount} 个需补信息项，再把跟进清单发给团队。`
+      : blockedAssetCount > 0
+      ? '先返回会议记录或检查 Minutes / 录制素材 URL，确认只保留无凭据的 http(s) 链接后再分享。'
+      : '确认材料范围后，再手动选择复制、下载或外发到目标系统。',
+  };
+}
+
+function normalizeArchivedActionSource(
+  value: unknown,
+): MeetingPilotActionItem['source'] | undefined {
+  if (value === 'llm' || value === 'heuristic' || value === 'manual') {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeArchivedTimelineType(
+  value: unknown,
+): 'topic' | 'decision' | 'action' | 'mention' | 'screen' {
+  if (
+    value === 'topic' ||
+    value === 'decision' ||
+    value === 'action' ||
+    value === 'mention' ||
+    value === 'screen'
+  ) {
+    return value;
+  }
+  return 'topic';
 }
 
 function hydrateArchivedSession(
@@ -633,12 +949,7 @@ function hydrateArchivedSession(
             chapterId: String(item.chapterId || '').trim() || undefined,
             evidence: String(item.evidence || '').trim() || undefined,
             timestamp: String(item.timestamp || '').trim() || undefined,
-            source:
-              item.source === 'llm'
-                ? 'llm'
-                : item.source === 'heuristic'
-                ? 'heuristic'
-                : undefined,
+            source: normalizeArchivedActionSource(item.source),
           };
         })
         .filter(Boolean)
@@ -665,20 +976,16 @@ function hydrateArchivedSession(
           const id = String(item.id || '').trim();
           const title = String(item.title || '').trim();
           if (!id || !title) return null;
-          const type = String(item.type || 'topic') as
-            | 'topic'
-            | 'decision'
-            | 'action'
-            | 'mention'
-            | 'screen';
           return {
             id,
-            type,
+            type: normalizeArchivedTimelineType(item.type),
             title,
             description: String(item.description || '').trim(),
             timestamp: String(item.timestamp || '').trim(),
             speaker: String(item.speaker || '').trim() || undefined,
             chapterId: String(item.chapterId || '').trim() || undefined,
+            actionItemId:
+              String(item.actionItemId || '').trim() || undefined,
           };
         })
         .filter(Boolean)
@@ -793,6 +1100,20 @@ function getActionStatusClass(item: MeetingPilotActionItem): string {
   if (item.status === 'done') return 'status-done';
   if (reviewState === 'confirmed') return 'status-confirmed';
   return 'status-pending';
+}
+
+function getActionSourceLabel(item: MeetingPilotActionItem): string {
+  if (item.source === 'manual') return '手动补录';
+  if (item.source === 'llm') return 'AI 识别';
+  if (item.source === 'heuristic') return '规则识别';
+  return '来源待确认';
+}
+
+function getArchiveDetailStatusLabel(status: ArchivedDetailStatus): string {
+  if (status === 'loading') return '正在加载完整归档';
+  if (status === 'loaded') return '已载入完整归档';
+  if (status === 'fallback') return '仅显示基础归档';
+  return '基础归档';
 }
 
 function isMissingActionOwner(owner: string | undefined): boolean {
@@ -1004,20 +1325,24 @@ function PanoramaPage() {
   const [renameDraft, setRenameDraft] = useState<string>('');
   const [followUpCopyState, setFollowUpCopyState] = useState('');
   const [linkCopyState, setLinkCopyState] = useState('');
+  const [panoramaFeedbackState, setPanoramaFeedbackState] = useState('');
+  const [archivedDetailStatus, setArchivedDetailStatus] =
+    useState<ArchivedDetailStatus>('idle');
   const archivedSession = useMemo(() => getArchivedSessionFromQuery(), []);
   const isArchivedHistoryMode = Boolean(archivedSession);
-  const session =
-    getSessionForPanorama(state) ||
-    archivedDetailSession ||
-    archivedSession ||
-    (new URLSearchParams(window.location.search).get('demo') === '1'
+  const liveSession = getSessionForPanorama(state);
+  const fallbackSession =
+    new URLSearchParams(window.location.search).get('demo') === '1'
       ? getDemoMeetingSessionSnapshot(0)
       : createMeetingPilotSessionSnapshot({
           meetingId: 'unbound',
           tabId: 0,
           url: '',
           title: 'Meeting Pilot',
-        }));
+        });
+  const session = isArchivedHistoryMode
+    ? archivedDetailSession || archivedSession || fallbackSession
+    : liveSession || fallbackSession;
 
   const submitRenameParticipant = async (
     participantId: string,
@@ -1046,6 +1371,7 @@ function PanoramaPage() {
     if (!archivedSession) return;
     let cancelled = false;
     const loadArchivedDetail = async () => {
+      setArchivedDetailStatus('loading');
       try {
         const client = getMemoryServiceClient();
         const detail = await client.getMeetingDetail(archivedSession.meetingId);
@@ -1053,10 +1379,12 @@ function PanoramaPage() {
           setArchivedDetailSession(
             hydrateArchivedSession(archivedSession, detail),
           );
+          setArchivedDetailStatus('loaded');
         }
       } catch {
         if (!cancelled) {
           setArchivedDetailSession(undefined);
+          setArchivedDetailStatus('fallback');
         }
       }
     };
@@ -1138,13 +1466,20 @@ function PanoramaPage() {
     suggestedActions.length,
     actionsWithReadinessGaps.length,
   );
-  const pdfUrl = session.digest.resultUrl;
+  const assetSafety = getPanoramaAssetSafety(session);
+  const pdfUrl = assetSafety.pdfUrl;
+  const videoUrl = assetSafety.videoUrl;
+  const rawPdfCandidate = String(session.digest.resultUrl || '').trim();
+  const rawVideoCandidate = String(session.digest.videoUrl || '').trim();
+  const pdfBlockedLabel = assetSafety.pdfBlockedLabel;
+  const videoBlockedLabel = assetSafety.videoBlockedLabel;
   const minutesConfigured = serviceConfig.minutesConfigured;
   const whisperConfigured = serviceConfig.whisperConfigured;
-  const missingMinutesAsset = !session.digest.videoUrl;
+  const missingMinutesAsset = !rawVideoCandidate || Boolean(videoBlockedLabel);
   const missingMinutesForThisMeeting =
-    session.digest.errorCode === 'missing_minutes_api_base_url' ||
-    (!minutesConfigured && !pdfUrl);
+    !rawPdfCandidate &&
+    (session.digest.errorCode === 'missing_minutes_api_base_url' ||
+      (!minutesConfigured && !pdfUrl));
   const energyLabels = useMemo(() => getEnergyLabels(session), [session]);
   const heatData = useMemo(() => {
     if (!session.timelineEvents.length) {
@@ -1174,6 +1509,18 @@ function PanoramaPage() {
     });
     return buckets;
   }, [session.timelineEvents]);
+  const archiveSourceReceipt = isArchivedHistoryMode
+    ? buildArchiveSourceReceipt(archivedDetailStatus, session)
+    : undefined;
+  const panoramaOutputReceipt = buildPanoramaOutputReceipt({
+    session,
+    assets: assetSafety,
+    activeActionCount: activeActionItems.length,
+    suggestedCount: suggestedActions.length,
+    gapCount: actionsWithReadinessGaps.length,
+    isArchivedHistoryMode,
+    archivedDetailStatus,
+  });
 
   const toggleParticipantStance = (participantId: string) => {
     setExpandedStanceParticipants((current) =>
@@ -1192,12 +1539,17 @@ function PanoramaPage() {
     anchor.href = url;
     anchor.download = `${session.meetingId || 'meeting-pilot'}.json`;
     anchor.click();
+    setLinkCopyState('JSON 导出已触发，本机下载，不上传/同步');
+    window.setTimeout(() => setLinkCopyState(''), 4200);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const replayRecording = () => {
-    if (!session.digest.videoUrl) return;
-    void chrome.tabs.create({ url: session.digest.videoUrl, active: true });
+    if (!videoUrl) {
+      setLinkCopyState(videoBlockedLabel || '没有可回放的录制素材');
+      return;
+    }
+    void chrome.tabs.create({ url: videoUrl, active: true });
   };
 
   const openMeetingArchive = () => {
@@ -1224,6 +1576,14 @@ function PanoramaPage() {
     } catch {
       setFollowUpCopyState('复制失败');
     }
+  };
+
+  const handlePanoramaFeedback = (kind: 'accurate' | 'needs_correction') => {
+    setPanoramaFeedbackState(
+      kind === 'accurate'
+        ? '反馈未写入：当前只在本页提示“内容准确”点击结果，尚未写入校准、训练或 Memory Service。'
+        : '反馈未写入：当前不会自动重跑会议分析、创建修正任务、改写行动项或发送纪要。',
+    );
   };
 
   const copyLink = async (url: string | undefined, successMessage: string) => {
@@ -1331,6 +1691,19 @@ function PanoramaPage() {
             : '🟣 已就绪'}
         </span>
         {isArchivedHistoryMode ? (
+          <span
+            className={`archive-detail-pill ${archivedDetailStatus}`}
+            data-archive-detail-state={archivedDetailStatus}
+            title={
+              archivedDetailStatus === 'fallback'
+                ? '完整会议结构加载失败，当前只显示历史列表带入的基础归档信息。'
+                : '从 memory-service 读取会议摘要、行动项、时间线和立场明细。'
+            }
+          >
+            {getArchiveDetailStatusLabel(archivedDetailStatus)}
+          </span>
+        ) : null}
+        {isArchivedHistoryMode ? (
           <button className="header-btn" onClick={openMeetingArchive}>
             ↩️ 返回会议记录
           </button>
@@ -1380,10 +1753,12 @@ function PanoramaPage() {
           <button
             className="header-btn primary"
             onClick={replayRecording}
-            disabled={!session.digest.videoUrl}
+            disabled={!videoUrl}
             title={
-              session.digest.videoUrl
+              videoUrl
                 ? '打开会议录制素材'
+                : videoBlockedLabel
+                ? `${videoBlockedLabel}；不会打开或复制`
                 : '当前会议没有可回放的录制素材，请查看 PDF 或会议记录'
             }
           >
@@ -1391,6 +1766,70 @@ function PanoramaPage() {
           </button>
         </div>
       </header>
+
+      <div
+        className={`panorama-output-receipt ${panoramaOutputReceipt.tone}`}
+        data-panorama-output-receipt="true"
+        data-output-state={panoramaOutputReceipt.tone}
+        aria-label="输出范围回执"
+      >
+        <div className="panorama-output-receipt-head">
+          <span className="panorama-output-receipt-icon">📤</span>
+          <div>
+            <div className="panorama-output-receipt-title">输出范围回执</div>
+            <div className="panorama-output-receipt-state">
+              {panoramaOutputReceipt.title}
+            </div>
+          </div>
+        </div>
+        <div className="panorama-output-receipt-body">
+          {[
+            ['来源', panoramaOutputReceipt.source],
+            ['可输出', panoramaOutputReceipt.outputs],
+            ['边界', panoramaOutputReceipt.boundary],
+            ['下一步', panoramaOutputReceipt.nextStep],
+          ].map(([label, value]) => (
+            <div className="panorama-output-receipt-field" key={label}>
+              <span className="panorama-output-receipt-label">{label}</span>
+              <span className="panorama-output-receipt-value">{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {archiveSourceReceipt ? (
+        <div
+          className={`archive-source-receipt ${archiveSourceReceipt.tone}`}
+          data-archive-source-receipt="true"
+          data-archive-source-state={archiveSourceReceipt.tone}
+          aria-label="归档来源回执"
+        >
+          <div className="archive-source-receipt-head">
+            <span className="archive-source-receipt-icon">🧾</span>
+            <div>
+              <div className="archive-source-receipt-title">
+                归档来源回执
+              </div>
+              <div className="archive-source-receipt-state">
+                {archiveSourceReceipt.title}
+              </div>
+            </div>
+          </div>
+          <div className="archive-source-receipt-body">
+            {[
+              ['来源', archiveSourceReceipt.source],
+              ['覆盖', archiveSourceReceipt.coverage],
+              ['边界', archiveSourceReceipt.boundary],
+              ['下一步', archiveSourceReceipt.nextStep],
+            ].map(([label, value]) => (
+              <div className="archive-source-receipt-field" key={label}>
+                <span className="archive-source-receipt-label">{label}</span>
+                <span className="archive-source-receipt-value">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="stats-strip">
         <div className="stat-card">
@@ -1501,7 +1940,11 @@ function PanoramaPage() {
             </div>
             <div className="timeline">
               {session.timelineEvents.map((event) => (
-                <div className={`timeline-item ${event.type}`} key={event.id}>
+                <div
+                  className={`timeline-item ${event.type}`}
+                  data-action-item-id={event.actionItemId}
+                  key={event.id}
+                >
                   <div className="timeline-dot" />
                   <div className="timeline-card">
                     <div className="card-top">
@@ -1839,6 +2282,9 @@ function PanoramaPage() {
                 return (
                   <div
                     className={`action-item ${getActionReviewState(item)}`}
+                    data-action-source={item.source || 'unknown'}
+                    data-review-state={getActionReviewState(item)}
+                    data-readiness-gaps={readinessGaps.join(',')}
                     key={item.id}
                   >
                     <div className="action-title">
@@ -1851,6 +2297,9 @@ function PanoramaPage() {
                       {item.timestamp ? (
                         <span>🕒 {item.timestamp}</span>
                       ) : null}
+                      <span className="action-source">
+                        {getActionSourceLabel(item)}
+                      </span>
                       <span
                         className={`action-status ${getActionStatusClass(
                           item,
@@ -1963,6 +2412,8 @@ function PanoramaPage() {
                 <div className="digest-desc">
                   {pdfUrl
                     ? '由 Meeting Minutes API 生成的正式会议纪要，包含完整 transcript、决议汇总、行动项与参会者签到。'
+                    : pdfBlockedLabel
+                    ? '会议纪要 PDF 链接没有通过安全检查，当前不会预览、打开、下载或复制。'
                     : missingMinutesForThisMeeting
                     ? '当前没有可用的 Meeting Minutes PDF。配置 Minutes API 后，新会议可以自动生成正式 PDF 纪要。'
                     : `Minutes API 仍在生成 PDF，当前 Digest 状态：${session.digest.status}。完成后这里会切换成正式预览。`}
@@ -1972,6 +2423,8 @@ function PanoramaPage() {
                     <span className="pdf-digest-preview-name">
                       {pdfUrl
                         ? '📄 meeting-pilot-minutes.pdf'
+                        : pdfBlockedLabel
+                        ? 'PDF 链接已隐藏'
                         : missingMinutesForThisMeeting
                         ? 'Minutes API 未配置'
                         : `Digest · ${session.digest.status}`}
@@ -2025,17 +2478,23 @@ function PanoramaPage() {
                       <div className="pdf-digest-placeholder-icon">📄</div>
                       <div>
                         <div className="pdf-digest-placeholder-title">
-                          {missingMinutesForThisMeeting
+                          {pdfBlockedLabel
+                            ? 'PDF 链接已隐藏'
+                            : missingMinutesForThisMeeting
                             ? 'Minutes API 尚未配置'
                             : '会议纪要生成中…'}
                         </div>
                         <div className="pdf-digest-placeholder-meta">
-                          {missingMinutesForThisMeeting
+                          {pdfBlockedLabel
+                            ? pdfBlockedLabel
+                            : missingMinutesForThisMeeting
                             ? '当前会议没有生成正式 PDF 纪要。配置后将对后续会议生效。'
                             : 'Minutes API 正在处理录制视频，预计需要几分钟完成。'}
                         </div>
                         <div className="pdf-digest-placeholder-sub">
-                          {missingMinutesForThisMeeting
+                          {pdfBlockedLabel
+                            ? '请回到会议记录或 Minutes API 写回链路，确认只保留无凭据的 http(s) PDF 链接。'
+                            : missingMinutesForThisMeeting
                             ? missingMinutesAsset
                               ? '这场会议结束时没有保留可重新提交的录制文件，因此当前实现下无法在配置后为这场历史会议补发 PDF。'
                               : '当前会话保留了录制素材，但前端还没有提供“重新发起 Minutes 生成”的动作。'
@@ -2043,7 +2502,19 @@ function PanoramaPage() {
                         </div>
                       </div>
                       <div className="pdf-digest-placeholder-actions">
-                        {missingMinutesForThisMeeting ? (
+                        {pdfBlockedLabel ? (
+                          <>
+                            <button
+                              className="pdf-digest-action primary"
+                              onClick={openMeetingArchive}
+                            >
+                              ↩️ 返回会议记录
+                            </button>
+                            <button className="pdf-digest-action" disabled>
+                              不可打开/下载
+                            </button>
+                          </>
+                        ) : missingMinutesForThisMeeting ? (
                           <>
                             <button
                               className="pdf-digest-action primary"
@@ -2110,6 +2581,8 @@ function PanoramaPage() {
                         分享链接
                       </a>
                     </>
+                  ) : pdfBlockedLabel ? (
+                    <span className="digest-link">{pdfBlockedLabel}</span>
                   ) : missingMinutesForThisMeeting ? (
                     <>
                       <a
@@ -2138,21 +2611,25 @@ function PanoramaPage() {
                   <span>🎬</span> 录制与原始素材
                 </div>
                 <div className="digest-desc">
-                  保留会议录制原始素材，方便回放完整上下文；如果 PDF 仍在生成，
-                  稍后也可以回到「会议记录」入口重新打开这场会议。
+                  {videoBlockedLabel
+                    ? `${videoBlockedLabel}。当前页面不会打开或复制这条录制素材链接；请回会议记录或录制写回链路复核。`
+                    : '保留会议录制原始素材，方便回放完整上下文；如果 PDF 仍在生成，稍后也可以回到「会议记录」入口重新打开这场会议。'}
                 </div>
                 <div className="digest-links">
                   <a
                     className="digest-link"
-                    href={session.digest.videoUrl || '#'}
+                    href={videoUrl || '#'}
                     onClick={(event) => {
-                      if (!session.digest.videoUrl) {
+                      if (!videoUrl) {
                         event.preventDefault();
+                        setLinkCopyState(
+                          videoBlockedLabel || '没有可回放的录制素材',
+                        );
                         return;
                       }
                       event.preventDefault();
                       void chrome.tabs.create({
-                        url: session.digest.videoUrl,
+                        url: videoUrl,
                         active: true,
                       });
                     }}
@@ -2161,14 +2638,17 @@ function PanoramaPage() {
                   </a>
                   <a
                     className="digest-link"
-                    href={session.digest.videoUrl || '#'}
+                    href={videoUrl || '#'}
                     onClick={(event) => {
-                      if (!session.digest.videoUrl) {
+                      if (!videoUrl) {
                         event.preventDefault();
+                        setLinkCopyState(
+                          videoBlockedLabel || '没有可复制的录制链接',
+                        );
                         return;
                       }
                       event.preventDefault();
-                      void copyLink(session.digest.videoUrl, '录制链接已复制');
+                      void copyLink(videoUrl, '录制链接已复制');
                     }}
                   >
                     复制链接
@@ -2191,8 +2671,21 @@ function PanoramaPage() {
         <span>•</span>
         <span>基于会议录制和 AI 分析自动生成</span>
         <div className="feedback-btns">
-          <button className="feedback-btn confirm">✅ 内容准确</button>
-          <button className="feedback-btn reject">❌ 需要修正</button>
+          <button
+            className="feedback-btn confirm"
+            onClick={() => handlePanoramaFeedback('accurate')}
+          >
+            ✅ 内容准确
+          </button>
+          <button
+            className="feedback-btn reject"
+            onClick={() => handlePanoramaFeedback('needs_correction')}
+          >
+            ❌ 需要修正
+          </button>
+          <span className="feedback-status" aria-live="polite">
+            {panoramaFeedbackState}
+          </span>
         </div>
       </footer>
     </>

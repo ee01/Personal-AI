@@ -501,6 +501,28 @@ function formatTimelineCacheAttemptDetails(attempt: TimelineCacheSyncAttempt): s
   return details.join('，');
 }
 
+function formatTimelineSyncDryRunScope(result: TimelineSyncDryRunResult): string {
+  const scope: string[] = [];
+  const project = result.project || result.paramKey;
+  if (project) {
+    scope.push(`项目 ${project}`);
+  }
+
+  const milestoneKeys = result.milestoneKeys || [];
+  if (milestoneKeys.length > 0) {
+    const preview = milestoneKeys.slice(0, 4).join('、');
+    const hasMore = milestoneKeys.length > 4 ||
+      (typeof result.milestoneCount === 'number' && result.milestoneCount > 4);
+    scope.push(`样例 Milestone ${preview}${hasMore ? ' 等' : ''}`);
+  } else if (typeof result.milestoneCount === 'number' && Number.isFinite(result.milestoneCount)) {
+    scope.push(`样例 Milestone ${result.milestoneCount} 个`);
+  }
+
+  return scope.length > 0
+    ? `验证范围：${scope.join('，')}。`
+    : '';
+}
+
 function formatTimelineCacheAttemptTime(attempt: TimelineCacheSyncAttempt): string {
   if (typeof attempt.ageMs === 'number' && Number.isFinite(attempt.ageMs)) {
     return formatTimelineCacheAge(attempt.ageMs);
@@ -526,6 +548,42 @@ export function formatTimelineCacheLastAttempt(attempt?: TimelineCacheSyncAttemp
   const nextAction = attempt.nextAction ? `；建议：${attempt.nextAction}` : '';
 
   return `最近同步失败（${ageText}）${reason ? `：${reason}` : ''}${details ? `；${details}` : ''}${nextAction}`;
+}
+
+export function getTimelineCacheScopeReceiptText(input: {
+  usage: TimelineCacheUsage;
+  selectedProject?: string;
+  selectedMilestone?: string;
+  hasStatus: boolean;
+  hasReadError: boolean;
+  canDryRun: boolean;
+  hasTimelineSyncRule: boolean;
+}): string {
+  const project = input.selectedProject?.trim();
+  const milestone = input.selectedMilestone?.trim();
+  const targetParts = [
+    project ? `项目 ${project}` : '',
+    milestone ? `Milestone ${milestone}` : '',
+  ].filter(Boolean);
+  const targetText = targetParts.length > 0
+    ? targetParts.join(' / ')
+    : '当前项目';
+  const usageText = input.usage === 'project-variables'
+    ? '保存后项目变量仍只在执行时按缓存替换，缓存不可用时保留原样。'
+    : '保存后 Timeline 仍只在执行时按缓存命中，缓存不可用或缺少 Milestone 时会跳过。';
+  const readText = input.hasReadError
+    ? '当前只拿到读取失败诊断'
+    : input.hasStatus
+      ? '当前只读取 App Script 已缓存状态'
+      : '当前尚未读取真实缓存状态';
+  const dryRunText = input.canDryRun
+    ? '样例测试只用 dryRun=true 验证样例 payload'
+    : '样例测试需要 Web App URL 和项目配置后才可运行';
+  const syncRuleText = input.hasTimelineSyncRule
+    ? '真实 Jira Sync Rule 需要在 Jira 执行后再刷新确认'
+    : '尚未绑定真实 Jira Sync Rule，无法确认真实同步';
+
+  return `诊断范围：${targetText}。${readText}；${dryRunText}，不会写 Timeline 缓存、不会保存或发送消息；${syncRuleText}。${usageText}`;
 }
 
 export function getTimelineCacheAttemptQuickFixText(attempt?: TimelineCacheSyncAttempt): string {
@@ -631,7 +689,10 @@ export function formatTimelineSyncDryRunResult(result: TimelineSyncDryRunResult)
 
   if (result.success) {
     return [
-      '样例测试通过：Apps Script Web App 可访问，payload 可解析并通过缓存预检；不会写入 Timeline 缓存，也不会代表 Jira Rule 已同步。',
+      '样例测试通过：Apps Script Web App 可访问，payload 可解析并通过缓存预检。',
+      formatTimelineSyncDryRunScope(result),
+      '边界：不会写入 Timeline 缓存，也不代表真实 Jira Rule 已同步。',
+      '下一步：在 Jira 手动运行 Timeline Sync Rule 后刷新状态，确认真实缓存包含目标 Milestone。',
       details,
     ].filter(Boolean).join(' ');
   }
@@ -643,6 +704,8 @@ export function formatTimelineSyncDryRunResult(result: TimelineSyncDryRunResult)
 
   return [
     `测试失败${reason ? `：${reason}` : ''}。`,
+    formatTimelineSyncDryRunScope(result),
+    '边界：这是样例 dry-run，失败表示 Web App 或样例 payload 尚未通过预检，真实 Jira 同步仍可能继续失败。',
     details,
     nextAction,
   ].filter(Boolean).join(' ');
@@ -661,6 +724,24 @@ export function getTimelineCacheStatusLabel(status: TimelineCacheProjectStatusCo
     default:
       return '尚未同步';
   }
+}
+
+export function getTimelineCacheProjectStatusHeadline(input: {
+  status: TimelineCacheProjectStatus;
+  selectedMilestone?: string;
+}): string {
+  const selectedMilestone = input.selectedMilestone?.trim();
+  const project = input.status.project;
+
+  if (input.status.status === 'ready' && isTimelineMilestoneMissingForDiagnostics(selectedMilestone, input.status.milestoneKeys)) {
+    return `${project}: 当前缓存缺少 ${selectedMilestone}`;
+  }
+
+  if (input.status.status === 'ready' && input.status.lastAttempt?.success === false) {
+    return `${project}: 当前使用已有缓存，最近同步失败`;
+  }
+
+  return `${project}: ${getTimelineCacheStatusLabel(input.status.status)}`;
 }
 
 export function getTimelineCacheStatusActionText(status: TimelineCacheProjectStatusCode): string {

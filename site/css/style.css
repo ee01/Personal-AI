@@ -246,6 +246,27 @@ body.menu-open {
     margin-bottom: var(--spacing-xl);
 }
 
+.hero-kicker {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin-bottom: var(--spacing-sm);
+    padding: 0.35rem 0.85rem;
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    border-radius: 999px;
+    background: rgba(0, 212, 255, 0.08);
+    color: var(--color-primary);
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+
+.hero-note {
+    margin-top: var(--spacing-md);
+    color: var(--color-text-muted);
+    font-size: 0.95rem;
+    max-width: 640px;
+}
+
 .hero-features {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -387,6 +408,71 @@ body.menu-open {
     color: var(--color-text-secondary);
     margin-bottom: var(--spacing-md);
     line-height: 1.7;
+}
+
+.feature-pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    list-style: none;
+    margin-top: var(--spacing-md);
+}
+
+.feature-pill-list li {
+    color: var(--color-text-secondary);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 999px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.85rem;
+}
+
+.section-panel {
+    background: rgba(6, 6, 10, 0.35);
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.workflow-grid,
+.trust-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.workflow-step,
+.trust-item {
+    background: var(--color-bg-card);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+}
+
+.workflow-number {
+    display: inline-block;
+    margin-bottom: var(--spacing-sm);
+    color: var(--color-primary);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+
+.workflow-step h3,
+.trust-item h3 {
+    font-size: 1.35rem;
+    margin-bottom: var(--spacing-sm);
+}
+
+.workflow-step p,
+.trust-item p {
+    color: var(--color-text-secondary);
+    line-height: 1.7;
+}
+
+.feature-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--spacing-lg);
 }
 
 .btn-preview {
@@ -1034,6 +1120,12 @@ body.menu-open {
     .hero-content {
         text-align: center;
     }
+
+    .hero-kicker,
+    .hero-note {
+        margin-left: auto;
+        margin-right: auto;
+    }
     
     .hero-cta {
         justify-content: center;
@@ -1133,4 +1225,3 @@ body.menu-open {
         font-size: 2rem;
     }
 }
-

@@ -148,7 +148,7 @@ const ASK_WINDOW_WIDTH = 540;
  * Must stay in sync with `HEIGHTS.compact` in `app/quick-ask.js` (anchor math uses this).
  */
 const ASK_WINDOW_COMPACT_HEIGHT = 140;
-const ASK_WINDOW_VOICE_HEIGHT = 214;
+const ASK_WINDOW_VOICE_HEIGHT = 254;
 const ASK_WINDOW_MIN_EXPANDED_HEIGHT = 428;
 const ASK_WINDOW_DEFAULT_EXPANDED_HEIGHT = 500;
 /** Extra transparent margin so CSS drop shadows are not clipped by the window rect. */
@@ -742,17 +742,23 @@ function createAskWindow() {
     rememberAskWindowAnchor(askWindow.getBounds());
   });
 
+  askWindow.on('show', () => {
+    syncWindowPresence();
+  });
+
   askWindow.on('hide', () => {
     clearPendingShortcutGesture();
     applyAskWindowBounds(ASK_WINDOW_COMPACT_HEIGHT, false);
     void shutdownSpeechHelper();
     sendToWindow(askWindow, 'quick-ask:prepare-hide');
+    syncWindowPresence();
   });
 
   askWindow.on('closed', () => {
     clearPendingShortcutGesture();
     void shutdownSpeechHelper();
     askWindow = null;
+    syncWindowPresence();
   });
 
   return askWindow;
@@ -764,6 +770,7 @@ function showAskWindow({ focus = true, focusInput = true } = {}) {
     window.isVisible() ? window.getBounds().height : ASK_WINDOW_COMPACT_HEIGHT,
     false,
   );
+  syncWindowPresence(true);
   window.show();
   notifyAskWindowShown({ focusInput });
   if (focus) {
@@ -1093,7 +1100,17 @@ function applyMacUiMode() {
   }
 }
 
-function syncWindowPresence(showWindow) {
+function isVisibleUserWindow(targetWindow) {
+  return Boolean(
+    targetWindow && !targetWindow.isDestroyed() && targetWindow.isVisible(),
+  );
+}
+
+function shouldShowDockIcon() {
+  return [mainWindow, askWindow, memoryListWindow].some(isVisibleUserWindow);
+}
+
+function syncWindowPresence(showWindow = shouldShowDockIcon()) {
   if (process.platform !== 'darwin') return;
   app.setActivationPolicy(showWindow ? 'regular' : 'accessory');
   if (showWindow) {
@@ -1294,8 +1311,8 @@ function createMenu() {
             hideAskWindow();
             return;
           }
-          syncWindowPresence(false);
           mainWindow?.hide();
+          syncWindowPresence();
         },
       },
       { type: 'separator' },
@@ -1407,10 +1424,10 @@ function createWindow() {
     toggleDevToolsForWindow(mainWindow);
   });
   mainWindow.on('show', () => {
-    syncWindowPresence(true);
+    syncWindowPresence();
   });
   mainWindow.on('hide', () => {
-    syncWindowPresence(false);
+    syncWindowPresence();
   });
   mainWindow.on('close', (event) => {
     if (allowQuit) return;
@@ -1420,10 +1437,12 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    syncWindowPresence();
   });
 }
 
 function showMemoryListWindow() {
+  syncWindowPresence(true);
   if (!memoryListWindow || memoryListWindow.isDestroyed()) {
     createMemoryListWindow();
     return;
@@ -1460,8 +1479,15 @@ function createMemoryListWindow() {
     void shell.openExternal(url);
     return { action: 'deny' };
   });
+  memoryListWindow.on('show', () => {
+    syncWindowPresence();
+  });
+  memoryListWindow.on('hide', () => {
+    syncWindowPresence();
+  });
   memoryListWindow.on('closed', () => {
     memoryListWindow = null;
+    syncWindowPresence();
   });
 }
 
@@ -1665,9 +1691,10 @@ app.on('second-instance', () => {
 app.on('before-quit', (event) => {
   if (allowQuit) return;
   event.preventDefault();
-  syncWindowPresence(false);
   hideAskWindow();
   mainWindow?.hide();
+  memoryListWindow?.hide();
+  syncWindowPresence(false);
 });
 
 app.on('will-quit', () => {

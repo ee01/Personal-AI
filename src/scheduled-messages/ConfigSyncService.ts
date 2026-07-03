@@ -51,7 +51,12 @@ const CONFIG_BASE_KEYS = [
   'appScriptLastUpdated',
 ];
 
-const BOT_RULE_PREFIXES = [
+const BOT_RULE_WRITE_PREFIXES = [
+  'bot_automation_executor',
+  'bot_automation_timeline_sync',
+];
+
+const BOT_RULE_MANAGED_PREFIXES = [
   'bot_executor',
   'bot_automation_executor',
   'bot_automation_timeline_sync',
@@ -77,7 +82,7 @@ const RINGCENTRAL_SENDER_KEYS = [
 ];
 
 const MANAGED_CONFIG_KEYS = new Set<string>(CONFIG_BASE_KEYS);
-for (const prefix of BOT_RULE_PREFIXES) {
+for (const prefix of BOT_RULE_MANAGED_PREFIXES) {
   for (const suffix of BOT_RULE_SUFFIXES) {
     MANAGED_CONFIG_KEYS.add(`${prefix}_${suffix}`);
   }
@@ -891,10 +896,9 @@ export class ConfigSyncService {
       pushRuleField('rule_last_updated', rule.ruleLastUpdated);
     };
 
-    // 旧字段镜像 executor rule，保证兼容老版本配置读取
-    pushRuleConfig('bot_executor', botAutomation.executorRule);
-    pushRuleConfig('bot_automation_executor', botAutomation.executorRule);
-    pushRuleConfig('bot_automation_timeline_sync', botAutomation.timelineSyncRule);
+    const [executorRulePrefix, timelineSyncRulePrefix] = BOT_RULE_WRITE_PREFIXES;
+    pushRuleConfig(executorRulePrefix, botAutomation.executorRule);
+    pushRuleConfig(timelineSyncRulePrefix, botAutomation.timelineSyncRule);
 
     const ringCentralSender = normalizeRingCentralSenderConfig(normalizedConfig.ringCentralSender);
     if (options.includeRingCentralSenderKeys) {

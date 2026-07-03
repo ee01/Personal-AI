@@ -7,6 +7,21 @@
           <p>基于您的行为模式和兴趣偏好生成的个性化画像</p>
         </div>
         <div class="header-actions">
+          <div class="export-scope-receipt" aria-live="polite">
+            <span class="export-scope-label">导出范围</span>
+            <span>{{ profileExportScopeSummary }}</span>
+          </div>
+          <ul
+            class="export-preflight-checklist"
+            aria-label="导出前检查"
+          >
+            <li
+              v-for="item in profileExportPreflightItems"
+              :key="item"
+            >
+              {{ item }}
+            </li>
+          </ul>
           <button 
             class="export-btn"
             :disabled="isExporting"
@@ -33,6 +48,46 @@
         >
           {{ isRestoringProfileItem ? '恢复中...' : '撤销排除' }}
         </button>
+      </div>
+      <div
+        v-if="profileExportReceipt"
+        class="profile-export-receipt"
+        :class="`receipt-${profileExportReceipt.tone}`"
+        aria-live="polite"
+      >
+        <div class="profile-export-receipt-copy">
+          <span class="profile-export-receipt-label">画像导出回执</span>
+          <strong>{{ profileExportReceipt.title }}</strong>
+          <p>{{ profileExportReceipt.detail }}</p>
+        </div>
+        <div class="profile-export-receipt-chips">
+          <span
+            v-for="chip in profileExportReceipt.chips"
+            :key="chip"
+          >
+            {{ chip }}
+          </span>
+        </div>
+      </div>
+      <div
+        v-if="profileCalibrationReceipt"
+        class="profile-calibration-receipt"
+        :class="`receipt-${profileCalibrationReceipt.tone}`"
+        aria-live="polite"
+      >
+        <div class="profile-calibration-receipt-copy">
+          <span class="profile-calibration-receipt-label">画像校准回执</span>
+          <strong>{{ profileCalibrationReceipt.title }}</strong>
+          <p>{{ profileCalibrationReceipt.detail }}</p>
+        </div>
+        <div class="profile-calibration-receipt-chips">
+          <span
+            v-for="chip in profileCalibrationReceipt.chips"
+            :key="chip"
+          >
+            {{ chip }}
+          </span>
+        </div>
       </div>
     </div>
     
@@ -86,7 +141,7 @@
       <div class="profile-card">
         <h3>✍️ 主人表达与偏好</h3>
         <p class="profile-card-description">
-          显式添加会立即用于 Context Assist，比自动推断优先级更高。
+          显式添加会写入一条手动画像；是否进入每次上下文仍受确认状态、场景和证据预算约束。
         </p>
         <div class="owner-profile-form">
           <select v-model="explicitProfileDraft.itemType">
@@ -117,6 +172,10 @@
             rows="3"
             placeholder="例如：中文回复尽量简短，先给结论，再给一个明确 next step。"
           />
+          <div class="explicit-profile-entry-receipt" aria-live="polite">
+            <span class="explicit-profile-entry-label">录入范围</span>
+            <span>{{ explicitProfileEntryReceipt }}</span>
+          </div>
           <button
             type="button"
             class="primary-action-btn"
@@ -166,6 +225,10 @@
                     </button>
                   </div>
                 </div>
+                <div class="star-calibration-receipt">
+                  <span class="star-calibration-label">星级校准</span>
+                  <span>{{ getStarCalibrationImpactReceipt(project) }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -204,6 +267,10 @@
                     </button>
                   </div>
                 </div>
+                <div class="star-calibration-receipt">
+                  <span class="star-calibration-label">星级校准</span>
+                  <span>{{ getStarCalibrationImpactReceipt(person) }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -241,6 +308,10 @@
                       ★
                     </button>
                   </div>
+                </div>
+                <div class="star-calibration-receipt">
+                  <span class="star-calibration-label">星级校准</span>
+                  <span>{{ getStarCalibrationImpactReceipt(topic) }}</span>
                 </div>
               </div>
             </div>
@@ -349,6 +420,8 @@
                 type="button"
                 class="evidence-toggle-btn"
                 :aria-expanded="isEvidenceExpanded(prediction.id)"
+                :aria-label="getEvidenceToggleAriaLabel(prediction)"
+                :title="getEvidenceToggleAriaLabel(prediction)"
                 @click="toggleEvidence(prediction.id)"
               >
                 {{ prediction.evidenceCount }} 条证据 · {{ isEvidenceExpanded(prediction.id) ? '收起' : '查看' }}
@@ -367,6 +440,10 @@
               v-if="(prediction.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(prediction.id)"
               class="profile-evidence-panel"
             >
+              <div class="profile-evidence-scope-receipt">
+                <span class="profile-evidence-scope-label">证据审计</span>
+                <span>{{ getEvidenceInspectReceipt(prediction) }}</span>
+              </div>
               <component
                 :is="evidence.sourceUrl ? 'a' : 'span'"
                 v-for="(evidence, evidenceIndex) in (prediction.evidencePreview || []).slice(0, 3)"
@@ -386,6 +463,13 @@
                 </span>
               </component>
             </div>
+            <div
+              v-if="getProfileActionImpactReceipt(prediction, 'prediction')"
+              class="profile-action-impact-receipt"
+            >
+              <span class="profile-action-impact-label">校准影响</span>
+              <span>{{ getProfileActionImpactReceipt(prediction, 'prediction') }}</span>
+            </div>
             <div class="prediction-actions">
               <button
                 class="secondary-action-btn"
@@ -397,7 +481,7 @@
               <button
                 class="secondary-action-btn influence-action-btn"
                 :disabled="isItemPending(prediction.id)"
-                @click="setProfileItemInfluence(prediction.id, prediction.type, 0.25, '已降低画像影响')"
+                @click="setProfileItemInfluence(prediction.id, prediction.type, 0.25, '已降低画像影响', { confirmAfterUpdate: false })"
               >
                 {{ isItemPending(prediction.id) ? '处理中' : '降低影响' }}
               </button>
@@ -501,6 +585,14 @@
           </button>
         </div>
         <div class="profile-items-summary">{{ profileItemsDisplaySummary }}</div>
+        <div
+          v-if="profileItemsSearchScopeReceipt"
+          class="profile-items-scope-receipt"
+          aria-live="polite"
+        >
+          <span class="profile-items-scope-label">检索范围</span>
+          <span>{{ profileItemsSearchScopeReceipt }}</span>
+        </div>
         <div v-if="filteredProfileItems.length === 0" class="inline-empty">
           {{ profileItemsEmptyMessage }}
         </div>
@@ -540,6 +632,8 @@
                   type="button"
                   class="evidence-toggle-btn"
                   :aria-expanded="isEvidenceExpanded(item.id)"
+                  :aria-label="getEvidenceToggleAriaLabel(item)"
+                  :title="getEvidenceToggleAriaLabel(item)"
                   @click="toggleEvidence(item.id)"
                 >
                   {{ getEvidenceLabel(item) }} · {{ isEvidenceExpanded(item.id) ? '收起' : '查看' }}
@@ -558,6 +652,10 @@
                 v-if="(item.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(item.id)"
                 class="profile-evidence-panel"
               >
+                <div class="profile-evidence-scope-receipt">
+                  <span class="profile-evidence-scope-label">证据审计</span>
+                  <span>{{ getEvidenceInspectReceipt(item) }}</span>
+                </div>
                 <component
                   :is="evidence.sourceUrl ? 'a' : 'span'"
                   v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
@@ -577,6 +675,13 @@
                   </span>
                 </component>
               </div>
+              <div
+                v-if="getProfileActionImpactReceipt(item, 'row')"
+                class="profile-action-impact-receipt"
+              >
+                <span class="profile-action-impact-label">校准影响</span>
+                <span>{{ getProfileActionImpactReceipt(item, 'row') }}</span>
+              </div>
             </div>
             <div class="profile-item-actions">
               <button
@@ -591,7 +696,7 @@
                 v-if="canLowerProfileItem(item)"
                 class="secondary-action-btn influence-action-btn"
                 :disabled="isItemPending(item.id)"
-                @click="setProfileItemInfluence(item.id, item.itemType, 0.25, '已降低画像影响')"
+                @click="setProfileItemInfluence(item.id, item.itemType, 0.25, '已降低画像影响', { confirmAfterUpdate: false })"
               >
                 {{ isItemPending(item.id) ? '处理中' : '降低影响' }}
               </button>
@@ -666,6 +771,8 @@
                     type="button"
                     class="evidence-toggle-btn"
                     :aria-expanded="isEvidenceExpanded(item.id)"
+                    :aria-label="getEvidenceToggleAriaLabel(item)"
+                    :title="getEvidenceToggleAriaLabel(item)"
                     @click="toggleEvidence(item.id)"
                   >
                     {{ getEvidenceLabel(item) }} · {{ isEvidenceExpanded(item.id) ? '收起' : '查看' }}
@@ -679,6 +786,10 @@
                   v-if="(item.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(item.id)"
                   class="profile-evidence-panel"
                 >
+                  <div class="profile-evidence-scope-receipt">
+                    <span class="profile-evidence-scope-label">证据审计</span>
+                    <span>{{ getEvidenceInspectReceipt(item) }}</span>
+                  </div>
                   <component
                     :is="evidence.sourceUrl ? 'a' : 'span'"
                     v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
@@ -1015,6 +1126,20 @@ const explicitProfileDraft = ref({
   customItemKey: '',
   itemValue: '',
 });
+type ProfileCalibrationReceipt = {
+  title: string;
+  detail: string;
+  tone: 'success' | 'info' | 'warning';
+  chips: string[];
+};
+const profileCalibrationReceipt = ref<ProfileCalibrationReceipt | null>(null);
+type ProfileExportReceipt = {
+  title: string;
+  detail: string;
+  tone: 'success' | 'info' | 'warning';
+  chips: string[];
+};
+const profileExportReceipt = ref<ProfileExportReceipt | null>(null);
 const PROFILE_ITEMS_PAGE_SIZE = 50;
 type ReviewQueueFilter = 'all' | 'pending' | 'withEvidence' | 'withoutEvidence';
 const reviewQueueFilter = ref<ReviewQueueFilter>('all');
@@ -1084,11 +1209,42 @@ const profileItemsCountLabel = computed(() =>
     ? `${profileItemsLoadedCount.value}/${profileItemsTotalCount.value} 条`
     : `${profileItemsTotalCount.value} 条`
 );
+const profileExportScopeSummary = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const filterHint = hasProfileItemFilters.value ? '当前搜索/筛选不会限制导出；' : '';
+
+  if (total === 0) {
+    return `${filterHint}导出会请求全部画像状态，诊断失败只写入 warning。`;
+  }
+
+  if (profileItemsAreTruncated.value) {
+    return `${filterHint}页面已加载 ${loaded}/${total} 条，导出会重新分页拉取全部状态与已排除审计。`;
+  }
+
+  return `${filterHint}导出包含全部画像状态与已排除审计，诊断失败只写入 warning。`;
+});
 const hasProfileItemFilters = computed(() =>
   Boolean(profileItemSearchQuery.value.trim()) ||
   profileItemStatusFilter.value !== 'all' ||
   profileItemSortMode.value !== 'priority'
 );
+const profileExportPreflightItems = computed(() => {
+  const items = [
+    'JSON + manifest 指纹，可对照下载文件',
+    profileItemsAreTruncated.value
+      ? `重新分页拉取全部状态，不限当前 ${profileItemsLoadedCount.value}/${profileItemsTotalCount.value} 切片`
+      : '包含 active/pending/retracted/archived/superseded 全部状态',
+    '诊断失败只写入 warning，不阻断画像拿回',
+    '只下载本地副本，不恢复、删除、同步或发送画像',
+  ];
+
+  if (hasProfileItemFilters.value) {
+    return ['当前搜索/筛选不限制导出', ...items];
+  }
+
+  return items;
+});
 const profileItemsDisplaySummary = computed(() => {
   const loaded = profileItemsLoadedCount.value;
   const total = profileItemsTotalCount.value;
@@ -1100,6 +1256,24 @@ const profileItemsDisplaySummary = computed(() => {
     : `共 ${total} 条`;
   if (matched === loaded) return `显示 ${visible}/${loaded} 条（${scopeLabel}）`;
   return `显示 ${visible}/${matched} 条匹配结果（${scopeLabel}）`;
+});
+const profileItemsSearchScopeReceipt = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  if (total === 0) return '';
+
+  if (profileItemsAreTruncated.value) {
+    const noMatchHint = hasProfileItemFilters.value && filteredProfileItems.value.length === 0
+      ? '当前无匹配只代表已加载切片无结果，不能证明全库没有该画像。'
+      : '';
+    return `${noMatchHint}当前搜索/筛选只匹配已加载 ${loaded}/${total} 条；先点“加载全部”再做全库判断。本区只读，不确认、排除或写入画像。`;
+  }
+
+  if (hasProfileItemFilters.value) {
+    return `当前搜索/筛选已覆盖本页全部 ${total} 条画像；它只改变列表显示，不限制导出，也不会确认、排除或写入画像。`;
+  }
+
+  return '';
 });
 const profileItemsEmptyMessage = computed(() => {
   if (profileItemsLoadedCount.value === 0) return '暂无可校准的画像条目';
@@ -1146,12 +1320,22 @@ const profileHealthMetrics = ref({
 const setStatus = (
   message: string,
   tone: 'success' | 'error' | 'info' = 'info',
-  options: { keepUndoAction?: boolean } = {},
+  options: {
+    keepUndoAction?: boolean;
+    keepProfileReceipt?: boolean;
+    keepExportReceipt?: boolean;
+  } = {},
 ) => {
   statusMessage.value = message;
   statusTone.value = tone;
   if (!options.keepUndoAction) {
     recentlyRetractedProfileItem.value = null;
+  }
+  if (!options.keepProfileReceipt) {
+    profileCalibrationReceipt.value = null;
+  }
+  if (!options.keepExportReceipt) {
+    profileExportReceipt.value = null;
   }
 };
 
@@ -1247,6 +1431,50 @@ const resolvedExplicitProfileItemKey = computed(() => {
     return explicitProfileDraft.value.customItemKey.trim();
   }
   return explicitProfileDraft.value.itemKey.trim();
+});
+
+const explicitProfileTypeLabels: Record<string, string> = {
+  preference: '偏好',
+  habit: '习惯',
+  constraint: '约束',
+  fact: '事实',
+  interest: '兴趣',
+};
+
+const explicitProfileKeyLabels: Record<string, string> = {
+  'writing_style.ringcentral.reply': 'RingCentral 回复风格',
+  'writing_style.ringcentral.thread_reply': 'Thread 回复风格',
+  'writing_style.jira.comment': 'Jira 评论风格',
+  communication_style: '通用沟通风格',
+  response_style: '默认回复风格',
+  owner_response_constraint: '不要替我说的话',
+};
+
+const getExplicitProfileKeyLabel = (selectedKey: string, resolvedKey: string) => {
+  if (selectedKey === CUSTOM_PROFILE_KEY) {
+    return resolvedKey || '待填写自定义 key';
+  }
+  return explicitProfileKeyLabels[selectedKey] || resolvedKey || '待选择画像键';
+};
+
+const explicitProfileEntryReceipt = computed(() => {
+  const itemTypeLabel = explicitProfileTypeLabels[explicitProfileDraft.value.itemType] ||
+    explicitProfileDraft.value.itemType;
+  const itemKey = resolvedExplicitProfileItemKey.value;
+  const itemKeyLabel = getExplicitProfileKeyLabel(
+    explicitProfileDraft.value.itemKey,
+    itemKey,
+  );
+  const hasValue = explicitProfileDraft.value.itemValue.trim().length > 0;
+  let readiness = `将创建 ${itemTypeLabel} · ${itemKeyLabel}，来源标记为用户手动录入。`;
+
+  if (!itemKey) {
+    readiness = `先补 ${itemTypeLabel} 的稳定 key，避免写到临时或过宽画像。`;
+  } else if (!hasValue) {
+    readiness = `将创建 ${itemTypeLabel} · ${itemKeyLabel}，先补画像内容。`;
+  }
+
+  return `${readiness} 提交后会写入 active + confirmed 画像，成为 USER_CORE、召回、Compose Assist 和 provider context 的场景个性化候选；不会外发、恢复旧画像或跨平台同步。`;
 });
 
 const loadMoreProfileItems = () => {
@@ -1355,13 +1583,485 @@ const getCalibrationPriorityLabel = (priority: UserProfileCalibrationPriority): 
   return names[priority] || '需校准';
 };
 
-const getEvidenceLabel = (item: UserProfileInterestItem): string => {
-  const count = item.evidenceRefs.length;
-  return count > 0 ? `${count} 条证据` : '暂无证据';
+  const getEvidenceLabel = (item: UserProfileInterestItem): string => {
+    const count = item.evidenceRefs.length;
+    return count > 0 ? `${count} 条证据` : '暂无证据';
+  };
+
+  const getEvidenceItemCount = (
+    item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  ): number => {
+    if ('evidenceRefs' in item) return item.evidenceRefs.length;
+    return item.evidenceCount ?? 0;
+  };
+
+  const getEvidenceInspectReceipt = (
+    item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  ): string => {
+    const evidenceCount = getEvidenceItemCount(item);
+    const countCopy = evidenceCount > 0
+      ? `${evidenceCount} 条已加载证据`
+      : '暂无已加载证据';
+    return `${countCopy}。只读审计：展开只显示本次已加载的来源、URL 或片段摘要；不会确认画像、写入 USER_CORE、刷新来源、同步外部平台或发送内容。可点击的 http(s) 来源会新标签打开；不安全链接只显示隐藏原因。`;
+  };
+
+  const getEvidenceToggleAriaLabel = (
+    item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  ): string => {
+    const action = isEvidenceExpanded(item.id) ? '收起' : '查看';
+    const evidenceCount = getEvidenceItemCount(item);
+    const evidenceLabel = evidenceCount > 0 ? `${evidenceCount} 条证据` : '暂无证据';
+    return `只读${action}${evidenceLabel}；不会确认画像、写入 USER_CORE 或刷新来源`;
+  };
+
+  const getContextUseLabel = (canUseForPersonalization: boolean): string =>
+    canUseForPersonalization ? '可用于个性化' : '确认前不使用';
+
+const parseMaybeJson = (value: unknown): unknown => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 };
 
-const getContextUseLabel = (canUseForPersonalization: boolean): string =>
-  canUseForPersonalization ? '可用于个性化' : '确认前不使用';
+const getRawEvidenceRefs = (rawItem: any): unknown[] => {
+  const refs = rawItem?.evidenceRefs ?? rawItem?.evidence_refs;
+  if (Array.isArray(refs)) return refs;
+  if (typeof refs === 'string') {
+    try {
+      const parsed = JSON.parse(refs);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const getProfileItemReceiptTarget = (itemId: string) =>
+  userProfile.value?.allItems.find((item) => item.id === itemId) ??
+  retractedProfileItems.value.find((item) => item.id === itemId);
+
+const getRawProfileItemName = (rawItem: any, fallback = '该画像条目') => {
+  const value = parseMaybeJson(rawItem?.itemValue ?? rawItem?.item_value);
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const named = record.name ?? record.title ?? record.value ?? record.label;
+    if (named != null && String(named).trim()) return String(named).trim();
+  }
+  if (value != null && String(value).trim()) return String(value).trim();
+  return fallback;
+};
+
+const getReceiptStatus = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+) => String(rawItem?.status ?? rawItem?.item_status ?? fallbackItem?.status ?? '').trim();
+
+const getReceiptConfirmed = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+) => {
+  const rawConfirmed = rawItem?.userConfirmed ?? rawItem?.user_confirmed;
+  if (rawConfirmed !== undefined) return Boolean(rawConfirmed);
+  return Boolean(fallbackItem?.userConfirmed);
+};
+
+const getReceiptEvidenceCount = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+) => {
+  const rawRefs = getRawEvidenceRefs(rawItem);
+  if (rawRefs.length > 0) return rawRefs.length;
+  return fallbackItem?.evidenceRefs.length ?? 0;
+};
+
+const getReceiptPersonalizationChip = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+) => {
+  const status = getReceiptStatus(rawItem, fallbackItem);
+  const confirmed = getReceiptConfirmed(rawItem, fallbackItem);
+  if (status === 'retracted') return '已排除，不参与个性化';
+  if (status === 'active' && confirmed) return '可用于个性化';
+  return '确认前不使用';
+};
+
+const getReceiptEvidenceChip = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+) => {
+  const evidenceCount = getReceiptEvidenceCount(rawItem, fallbackItem);
+  return evidenceCount > 0 ? `${evidenceCount} 条证据` : '暂无证据，后续建议补证';
+};
+
+const setProfileCalibrationReceipt = (receipt: ProfileCalibrationReceipt) => {
+  profileCalibrationReceipt.value = receipt;
+};
+
+const buildProfileExportPendingReceipt = (): ProfileExportReceipt => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const loadedChip = total > 0
+    ? `当前页 ${loaded}/${total} 条`
+    : '当前页暂无条目';
+
+  return {
+    title: '正在准备画像导出',
+    detail: '正在向 Memory Service 重新分页请求全部画像状态并生成本地 JSON 的 manifest；下载尚未开始，manifest ID 尚未生成。当前搜索、筛选或页面切片不会限制导出，本次操作不会恢复、删除、同步或发送画像。',
+    tone: 'info',
+    chips: [
+      loadedChip,
+      '请求 status=all',
+      '下载尚未开始',
+      '等待 manifest ID',
+    ],
+  };
+};
+
+const buildProfileExportReceipt = (exportData: any, fileName: string): ProfileExportReceipt => {
+  const pagination = exportData?.exportInfo?.pagination ?? {};
+  const manifest = exportData?.exportInfo?.manifest ?? {};
+  const warnings = Array.isArray(exportData?.exportInfo?.warnings)
+    ? exportData.exportInfo.warnings
+    : [];
+  const profileAudit = exportData?.exportInfo?.profileAudit ?? {};
+  const profileFingerprint = manifest?.integrity?.profileItemsSha256;
+  const manifestId = typeof manifest?.manifestId === 'string'
+    ? manifest.manifestId.trim()
+    : '';
+  const shortFingerprint = typeof profileFingerprint === 'string' &&
+    profileFingerprint &&
+    profileFingerprint !== 'unavailable'
+    ? profileFingerprint.slice(0, 12)
+    : '';
+  const exportedItems = Number(pagination.exportedProfileItems ?? exportData?.exportSummary?.exportedProfileItems ?? 0);
+  const totalItems = Number(pagination.totalProfileItems ?? exportData?.exportSummary?.totalProfileItems ?? exportedItems);
+  const usableItems = Number(profileAudit.usableProfileItems ?? exportData?.exportSummary?.usableProfileItems ?? 0);
+  const heldItems = Number(profileAudit.heldForConfirmationItems ?? exportData?.exportSummary?.heldForConfirmationItems ?? 0);
+  const inactiveItems = Number(profileAudit.inactiveAuditItems ?? exportData?.exportSummary?.inactiveAuditItems ?? 0);
+  const isTruncated = Boolean(pagination.truncated);
+  const chips = [
+    `全部状态 ${exportedItems}/${totalItems} 条`,
+    `可个性化 ${usableItems} 条`,
+    `确认前保留 ${heldItems} 条`,
+    inactiveItems > 0 ? `非活跃审计 ${inactiveItems} 条` : '非活跃审计 0 条',
+  ];
+  if (warnings.length > 0) {
+    chips.push(`诊断缺失 ${warnings.length} 项`);
+  }
+  if (isTruncated) {
+    chips.push('分页未完整');
+  }
+  if (shortFingerprint) {
+    chips.push(`指纹 ${shortFingerprint}`);
+  }
+  if (manifestId) {
+    chips.push('manifest ID 已显示');
+  }
+  const diagnosticDetail = warnings.length > 0
+    ? '画像条目已写入本地导出 JSON；缺失的系统健康或实体统计会记录在 exportInfo.warnings。'
+    : '系统健康和实体统计诊断已写入本地导出 JSON。';
+  const completenessDetail = isTruncated
+    ? '本次分页未完整，建议重试导出后再迁移或备份。'
+    : '导出已重新分页拉取全部画像状态。';
+  const fingerprintDetail = shortFingerprint
+    ? ` manifest 指纹 ${shortFingerprint} 可用于对照下载文件。`
+    : '';
+  const manifestIdDetail = manifestId
+    ? ` manifest ID ${manifestId} 可在 exportInfo.manifest.manifestId 中核对。`
+    : '';
+
+  return {
+    title: warnings.length > 0
+      ? `画像已导出，诊断部分缺失：${fileName}`
+      : `画像已导出：${fileName}`,
+    detail: `${completenessDetail}${diagnosticDetail}${fingerprintDetail}${manifestIdDetail} 本地 JSON 不会恢复、删除、同步或发送画像；个性化仍只读取 active + confirmed 条目。`,
+    tone: isTruncated || warnings.length > 0 ? 'info' : 'success',
+    chips,
+  };
+};
+
+const buildConfirmedReceipt = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || getRawProfileItemName(rawItem);
+  return {
+    title: `已确认画像：${name}`,
+    detail: '状态已切换为 active + confirmed，后续 USER_CORE、召回、Compose Assist 和 provider context 可以按场景使用它。',
+    tone: 'success',
+    chips: [
+      getReceiptPersonalizationChip(rawItem, fallbackItem),
+      getReceiptEvidenceChip(rawItem, fallbackItem),
+      '可继续降权或排除',
+    ],
+  };
+};
+
+const buildInfluenceReceipt = (
+  rawItem: any,
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  importance: number,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || getRawProfileItemName(rawItem);
+  const previousImportance = fallbackItem?.explicitImportance ??
+    fallbackItem?.confidence ??
+    fallbackItem?.salienceScore;
+  const delta = Number.isFinite(previousImportance)
+    ? importance - Number(previousImportance)
+    : 0;
+  const actionLabel = importance >= 0.85
+    ? '已设为重点'
+    : importance <= 0.3
+      ? '已降低影响'
+      : delta > 0.01
+        ? '已提高影响'
+        : delta < -0.01
+          ? '已降低影响'
+          : '已调整影响';
+  const tone = actionLabel === '已设为重点' || actionLabel === '已提高影响'
+    ? 'success'
+    : 'info';
+  const status = getReceiptStatus(rawItem, fallbackItem);
+  const confirmed = getReceiptConfirmed(rawItem, fallbackItem);
+  const canUse = status === 'active' && confirmed;
+  const confirmationDetail = canUse
+    ? '这次校准同步更新 confidence 和 salience；该条已确认，后续仍只会按场景进入个性化上下文。'
+    : '这次校准只更新 confidence 和 salience；该条仍未确认，确认前不会进入 USER_CORE、召回或 provider context。';
+  return {
+    title: canUse
+      ? `${actionLabel}：${name}`
+      : `${actionLabel}，仍待确认：${name}`,
+    detail: confirmationDetail,
+    tone,
+    chips: [
+      `影响力 ${formatPercent(importance)}`,
+      getReceiptPersonalizationChip(rawItem, fallbackItem),
+      getReceiptEvidenceChip(rawItem, fallbackItem),
+      canUse ? '可继续降权或排除' : '可点确认复核',
+    ],
+  };
+};
+
+const buildInfluencePendingReceipt = (
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  importance: number,
+  confirmAfterUpdate: boolean,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || '当前画像条目';
+  const status = fallbackItem?.status ?? '';
+  const confirmed = Boolean(fallbackItem?.userConfirmed);
+  const alreadyUsable = status === 'active' && confirmed;
+  const actionLabel = importance >= 0.85
+    ? '正在设为重点'
+    : importance <= 0.3
+      ? '正在降低影响'
+      : '正在调整影响';
+  const confirmationDetail = confirmAfterUpdate
+    ? alreadyUsable
+      ? '这条已确认，本次只会写入新的 confidence/salience。'
+      : '会先写入新的 confidence/salience，再尝试把该条确认成 active + confirmed。'
+    : '本次只写入新的 confidence/salience，不会自动确认该条。';
+  const evidenceCount = fallbackItem?.evidenceRefs.length ?? 0;
+
+  return {
+    title: `${actionLabel}：${name}`,
+    detail: `${confirmationDetail} 请求完成前还不能证明画像已写入或已进入个性化；不会外发、跨平台同步、恢复、删除或发送任何内容。`,
+    tone: 'info',
+    chips: [
+      `目标影响力 ${formatPercent(importance)}`,
+      confirmAfterUpdate ? '会尝试确认' : '不自动确认',
+      evidenceCount > 0 ? `${evidenceCount} 条证据保留` : '暂无证据，后续建议补证',
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildInfluencePartialReceipt = (
+  rawItem: any,
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  importance: number,
+  errorMessage?: string,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || getRawProfileItemName(rawItem);
+  const detailSuffix = errorMessage ? `失败原因：${errorMessage}` : '可以稍后重试确认。';
+  return {
+    title: `已更新影响力，确认未完成：${name}`,
+    detail: `confidence 和 salience 已写入，但确认步骤没有完成；确认前这条不会进入 USER_CORE、召回或 provider context。${detailSuffix}`,
+    tone: 'warning',
+    chips: [
+      `影响力 ${formatPercent(importance)}`,
+      getReceiptPersonalizationChip(rawItem, fallbackItem),
+      getReceiptEvidenceChip(rawItem, fallbackItem),
+      '可点确认重试',
+    ],
+  };
+};
+
+const buildInfluenceFailureReceipt = (
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  importance: number,
+  errorMessage?: string,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || '当前画像条目';
+  const detailSuffix = errorMessage ? `失败原因：${errorMessage}` : '可以稍后重试。';
+
+  return {
+    title: `画像校准未完成：${name}`,
+    detail: `服务没有确认新的 confidence/salience 写入；页面已重新拉取画像状态。不会外发、跨平台同步、恢复、删除或发送任何内容。${detailSuffix}`,
+    tone: 'warning',
+    chips: [
+      `目标影响力 ${formatPercent(importance)}`,
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '可重试校准',
+    ],
+  };
+};
+
+const buildRetractedReceipt = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || getRawProfileItemName(rawItem);
+  return {
+    title: `已排除画像：${name}`,
+    detail: '这条现在不会进入 USER_CORE、召回或 provider context。误排可以立即撤销，也可以稍后在已排除画像审计里恢复。',
+    tone: 'warning',
+    chips: [
+      '不参与个性化',
+      getReceiptEvidenceChip(rawItem, fallbackItem),
+      '可撤销 / 可恢复',
+    ],
+  };
+};
+
+const buildRestoredReceipt = (
+  rawItem: any,
+  fallbackItem?: UserProfileInterestItem | null,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || getRawProfileItemName(rawItem);
+  const usable = getReceiptStatus(rawItem, fallbackItem) === 'active' &&
+    getReceiptConfirmed(rawItem, fallbackItem);
+  return {
+    title: `已恢复画像：${name}`,
+    detail: usable
+      ? '这条已恢复为 active + confirmed，会重新按场景参与个性化；仍可再次降低影响或排除。'
+      : '这条已恢复到待确认状态，确认前仍不会参与个性化上下文。',
+    tone: usable ? 'success' : 'info',
+    chips: [
+      getReceiptPersonalizationChip(rawItem, fallbackItem),
+      getReceiptEvidenceChip(rawItem, fallbackItem),
+      usable ? '已回到可用画像' : '仍需确认',
+    ],
+  };
+};
+
+const buildCreatedReceipt = (rawItem: any): ProfileCalibrationReceipt => {
+  const name = getRawProfileItemName(rawItem);
+  return {
+    title: `已添加显式画像：${name}`,
+    detail: '这条来自你的手动录入，已写入 active + confirmed 画像，作为 USER_CORE、召回、Compose Assist 和 provider context 的场景个性化候选；不会外发、恢复旧画像或跨平台同步。后续可以在条目列表里降权、排除或导出审计。',
+    tone: 'success',
+    chips: [
+      '用户录入',
+      getReceiptPersonalizationChip(rawItem),
+      getReceiptEvidenceChip(rawItem),
+    ],
+  };
+};
+
+const buildConfirmPendingReceipt = (
+  fallbackItem?: UserProfileInterestItem | null,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || '当前画像条目';
+  return {
+    title: `正在确认画像：${name}`,
+    detail: '请求完成前还不能证明状态已切换为 active + confirmed；确认成功后才可能按场景进入 USER_CORE、召回、Compose Assist 和 provider context。不会外发、跨平台同步、删除或发送内容。',
+    tone: 'info',
+    chips: [
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildRetractPendingReceipt = (
+  fallbackItem?: UserProfileInterestItem | null,
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || '当前画像条目';
+  return {
+    title: `正在排除画像：${name}`,
+    detail: '请求完成前还不能证明这条已退出个性化；服务确认后才会变成 retracted，并从 USER_CORE、召回和 provider context 候选中移除。不会外发、跨平台同步、恢复旧画像或发送内容。',
+    tone: 'warning',
+    chips: [
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildRestorePendingReceipt = (
+  fallbackItem?: UserProfileInterestItem | null,
+  fallbackName = '当前画像条目',
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || fallbackName;
+  return {
+    title: `正在恢复画像：${name}`,
+    detail: '请求完成前还不能证明这条已恢复；服务会按原确认状态恢复为 active 或 pending_confirm，只有 active + confirmed 才会再次进入个性化候选。不会外发、跨平台同步或发送内容。',
+    tone: 'info',
+    chips: [
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildCreatePendingReceipt = (): ProfileCalibrationReceipt => {
+  const itemTypeLabel = explicitProfileTypeLabels[explicitProfileDraft.value.itemType] ||
+    explicitProfileDraft.value.itemType;
+  const itemKeyLabel = getExplicitProfileKeyLabel(
+    explicitProfileDraft.value.itemKey,
+    resolvedExplicitProfileItemKey.value,
+  );
+
+  return {
+    title: `正在添加显式画像：${itemKeyLabel}`,
+    detail: `请求完成前还不能证明 ${itemTypeLabel} 画像已写入，也不会先进入 USER_CORE、召回、Compose Assist 或 provider context。不会外发、恢复旧画像、跨平台同步或发送内容。`,
+    tone: 'info',
+    chips: [
+      itemTypeLabel,
+      '用户手动录入',
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildOperationFailureReceipt = (
+  actionLabel: string,
+  fallbackItem?: UserProfileInterestItem | null,
+  errorMessage?: string,
+  fallbackName = '当前画像条目',
+): ProfileCalibrationReceipt => {
+  const name = fallbackItem?.name || fallbackName;
+  const detailSuffix = errorMessage ? `失败原因：${errorMessage}` : '可以稍后重试。';
+  return {
+    title: `${actionLabel}未完成：${name}`,
+    detail: `Memory Service 没有确认这次画像状态变更；页面不会把它当作已写入、已确认、已排除或已恢复，也不会外发、跨平台同步或发送内容。${detailSuffix}`,
+    tone: 'warning',
+    chips: [
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '可重试操作',
+    ],
+  };
+};
 
 const replaceProfileItem = (itemId: string, updates: Partial<UserProfileInterestItem>) => {
   if (!userProfile.value) return;
@@ -1381,11 +2081,57 @@ const canBoostProfileItem = (item: UserProfileInterestItem) =>
 const canLowerProfileItem = (item: UserProfileInterestItem) =>
   (item.explicitImportance ?? item.confidence ?? 0) > 0.3;
 
+const getProfileActionImpactReceipt = (
+  item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  mode: 'row' | 'prediction',
+) => {
+  const fullItem = getProfileItemReceiptTarget(item.id);
+  const score = fullItem?.explicitImportance ??
+    ('explicitImportance' in item ? item.explicitImportance : item.confidence) ??
+    0;
+  const actions: string[] = [];
+  if (mode === 'row' && score < 0.85) actions.push('设为重点(95%)');
+  if (score > 0.3) actions.push('降低影响(25%)');
+  if (actions.length === 0) return '';
+
+  const status = fullItem?.status ?? item.status;
+  const confirmed = fullItem?.userConfirmed ?? false;
+  const hasBoostAction = mode === 'row' && score < 0.85;
+  const hasLowerAction = score > 0.3;
+  let confirmationCopy = '会同时确认该条，确认后才可能进入个性化';
+  if (status === 'active' && confirmed) {
+    confirmationCopy = '该条已确认，本次只改影响力';
+  } else if (hasBoostAction && hasLowerAction) {
+    confirmationCopy = '设为重点会同时确认；降低影响只改权重并保持待确认';
+  } else if (hasLowerAction) {
+    confirmationCopy = '降低影响只改权重并保持待确认';
+  }
+  const evidenceCount = fullItem?.evidenceRefs.length ??
+    ('evidenceCount' in item ? item.evidenceCount : 0);
+  const evidenceCopy = evidenceCount > 0
+    ? `${evidenceCount} 条证据保留`
+    : '暂无证据会继续提示补证';
+
+  return `当前影响力 ${formatPercent(score)}；${actions.join(' / ')} 会更新 confidence/salience；${confirmationCopy}；${evidenceCopy}；只影响后续画像选择，不会改旧回答、刷新证据或外发；active + confirmed 才进入个性化。`;
+};
+
+const getStarCalibrationImpactReceipt = (item: UserProfileInterestItem) => {
+  const evidenceCopy = item.evidenceRefs.length > 0
+    ? `${item.evidenceRefs.length} 条证据保留`
+    : '暂无证据会继续提示补证';
+  const confirmationCopy = item.status === 'active' && item.userConfirmed
+    ? '该条已确认，星级只改影响力'
+    : '未确认条目会同时确认，确认后才可能使用';
+  const currentInfluence = item.explicitImportance ?? item.confidence ?? item.salienceScore ?? 0;
+
+  return `当前影响力 ${formatPercent(currentInfluence)}；星级会更新 confidence/salience；${confirmationCopy}；${evidenceCopy}；只影响后续画像选择，不会改旧回答、刷新证据或外发；active + confirmed 才进入个性化。`;
+};
+
 const setImportance = async (
   itemId: string,
   type: string,
   importance: number,
-  options: { successMessage?: string } = {},
+  options: { successMessage?: string; confirmAfterUpdate?: boolean } = {},
 ) => {
   if (!itemId) {
     setStatus('缺少画像条目ID，无法设置重要性', 'error');
@@ -1394,15 +2140,17 @@ const setImportance = async (
 
   if (isItemPending(itemId)) return;
   setItemPending(itemId, true);
+  const targetItem = getProfileItemReceiptTarget(itemId);
+  const confirmAfterUpdate = options.confirmAfterUpdate !== false;
+  setStatus('正在校准画像影响力...', 'info');
+  setProfileCalibrationReceipt(
+    buildInfluencePendingReceipt(targetItem, importance, confirmAfterUpdate)
+  );
 
   replaceProfileItem(itemId, {
     explicitImportance: importance,
     confidence: importance,
     salienceScore: importance,
-    userConfirmed: true,
-    status: 'active',
-    canUseForPersonalization: true,
-    contextUseState: 'usable',
   });
 
   try {
@@ -1410,19 +2158,45 @@ const setImportance = async (
       type: 'SET_EXPLICIT_IMPORTANCE',
       itemId,
       itemType: type,
-      importance
+      importance,
+      confirmAfterUpdate,
     });
 
     if (response && (response as any).success) {
-      setStatus(options.successMessage || '重要性已更新', 'success');
+      const updatedCanUse = getReceiptStatus((response as any).data, targetItem) === 'active' &&
+        getReceiptConfirmed((response as any).data, targetItem);
+      setStatus(
+        options.successMessage || '重要性已更新',
+        updatedCanUse ? 'success' : 'info',
+      );
+      setProfileCalibrationReceipt(
+        buildInfluenceReceipt((response as any).data, targetItem, importance)
+      );
+      await loadUserProfile({ showLoading: false });
+    } else if ((response as any)?.partialSuccess && (response as any)?.phase === 'confirm') {
+      setStatus((response as any).message || '影响力已更新，确认未完成', 'info');
+      setProfileCalibrationReceipt(
+        buildInfluencePartialReceipt(
+          (response as any).data,
+          targetItem,
+          importance,
+          (response as any).error,
+        )
+      );
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '重要性更新失败', 'error');
+      setProfileCalibrationReceipt(
+        buildInfluenceFailureReceipt(targetItem, importance, (response as any)?.error)
+      );
       await loadUserProfile({ showLoading: false });
     }
   } catch (error: any) {
     console.error('设置重要性时发生错误:', error);
     setStatus(error?.message || '重要性更新失败', 'error');
+    setProfileCalibrationReceipt(
+      buildInfluenceFailureReceipt(targetItem, importance, error?.message)
+    );
     await loadUserProfile({ showLoading: false });
   } finally {
     setItemPending(itemId, false);
@@ -1434,13 +2208,20 @@ const setProfileItemInfluence = async (
   type: string,
   importance: number,
   successMessage: string,
+  options: { confirmAfterUpdate?: boolean } = {},
 ) => {
-  await setImportance(itemId, type || 'profile', importance, { successMessage });
+  await setImportance(itemId, type || 'profile', importance, {
+    successMessage,
+    confirmAfterUpdate: options.confirmAfterUpdate,
+  });
 };
 
 const confirmProfileItem = async (itemId: string) => {
   if (!itemId || isItemPending(itemId)) return;
+  const targetItem = getProfileItemReceiptTarget(itemId);
   setItemPending(itemId, true);
+  setStatus('正在确认画像条目...', 'info');
+  setProfileCalibrationReceipt(buildConfirmPendingReceipt(targetItem));
   try {
     const response = await chromeAPI.sendMessage({
       type: 'CONFIRM_PROFILE_ITEM',
@@ -1454,12 +2235,21 @@ const confirmProfileItem = async (itemId: string) => {
         contextUseState: 'usable',
       });
       setStatus('画像条目已确认', 'success');
+      setProfileCalibrationReceipt(
+        buildConfirmedReceipt((response as any).data, targetItem)
+      );
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '画像条目确认失败', 'error');
+      setProfileCalibrationReceipt(
+        buildOperationFailureReceipt('画像确认', targetItem, (response as any)?.error)
+      );
     }
   } catch (error: any) {
     setStatus(error?.message || '画像条目确认失败', 'error');
+    setProfileCalibrationReceipt(
+      buildOperationFailureReceipt('画像确认', targetItem, error?.message)
+    );
   } finally {
     setItemPending(itemId, false);
   }
@@ -1469,6 +2259,8 @@ const retractProfileItem = async (itemId: string) => {
   if (!itemId || isItemPending(itemId)) return;
   const targetItem = userProfile.value?.allItems.find((item) => item.id === itemId);
   setItemPending(itemId, true);
+  setStatus('正在排除画像条目...', 'info');
+  setProfileCalibrationReceipt(buildRetractPendingReceipt(targetItem));
   try {
     const response = await chromeAPI.sendMessage({
       type: 'RETRACT_PROFILE_ITEM',
@@ -1482,15 +2274,24 @@ const retractProfileItem = async (itemId: string) => {
       setStatus(`已排除“${recentlyRetractedProfileItem.value.name}”`, 'success', {
         keepUndoAction: true,
       });
+      setProfileCalibrationReceipt(
+        buildRetractedReceipt({ status: 'retracted' }, targetItem)
+      );
       await loadUserProfile({ showLoading: false });
       if (showRetractedProfileItems.value) {
         await loadRetractedProfileItems();
       }
     } else {
       setStatus((response as any)?.error || '画像条目排除失败', 'error');
+      setProfileCalibrationReceipt(
+        buildOperationFailureReceipt('画像排除', targetItem, (response as any)?.error)
+      );
     }
   } catch (error: any) {
     setStatus(error?.message || '画像条目排除失败', 'error');
+    setProfileCalibrationReceipt(
+      buildOperationFailureReceipt('画像排除', targetItem, error?.message)
+    );
   } finally {
     setItemPending(itemId, false);
   }
@@ -1503,11 +2304,16 @@ const restoreProfileItemById = async (
 ) => {
   if (!itemId || isItemPending(itemId)) return;
   if (options.fromUndo && isRestoringProfileItem.value) return;
+  const targetItem = getProfileItemReceiptTarget(itemId);
 
   if (options.fromUndo) {
     isRestoringProfileItem.value = true;
   }
   setItemPending(itemId, true);
+  setStatus('正在恢复画像条目...', 'info', {
+    keepUndoAction: options.fromUndo,
+  });
+  setProfileCalibrationReceipt(buildRestorePendingReceipt(targetItem, itemName));
   try {
     const response = await chromeAPI.sendMessage({
       type: 'RESTORE_PROFILE_ITEM',
@@ -1523,16 +2329,25 @@ const restoreProfileItemById = async (
         retractedProfileItemsTotal.value - 1
       );
       setStatus(`已恢复“${itemName}”`, 'success');
+      setProfileCalibrationReceipt(
+        buildRestoredReceipt((response as any).data, targetItem)
+      );
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '画像条目恢复失败', 'error', {
         keepUndoAction: options.fromUndo,
       });
+      setProfileCalibrationReceipt(
+        buildOperationFailureReceipt('画像恢复', targetItem, (response as any)?.error, itemName)
+      );
     }
   } catch (error: any) {
     setStatus(error?.message || '画像条目恢复失败', 'error', {
       keepUndoAction: options.fromUndo,
     });
+    setProfileCalibrationReceipt(
+      buildOperationFailureReceipt('画像恢复', targetItem, error?.message, itemName)
+    );
   } finally {
     setItemPending(itemId, false);
     if (options.fromUndo) {
@@ -1553,6 +2368,8 @@ const createExplicitProfileItem = async () => {
   if (!itemValue || !itemKey || isCreatingExplicitProfile.value) return;
 
   isCreatingExplicitProfile.value = true;
+  setStatus('正在添加主人表达画像...', 'info');
+  setProfileCalibrationReceipt(buildCreatePendingReceipt());
   try {
     const response = await chromeAPI.sendMessage({
       type: 'CREATE_PROFILE_ITEM',
@@ -1565,12 +2382,19 @@ const createExplicitProfileItem = async () => {
     if (response && (response as any).success) {
       explicitProfileDraft.value.itemValue = '';
       setStatus('主人表达画像已添加', 'success');
+      setProfileCalibrationReceipt(buildCreatedReceipt((response as any).data));
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '画像条目添加失败', 'error');
+      setProfileCalibrationReceipt(
+        buildOperationFailureReceipt('画像添加', undefined, (response as any)?.error)
+      );
     }
   } catch (error: any) {
     setStatus(error?.message || '画像条目添加失败', 'error');
+    setProfileCalibrationReceipt(
+      buildOperationFailureReceipt('画像添加', undefined, error?.message)
+    );
   } finally {
     isCreatingExplicitProfile.value = false;
   }
@@ -1580,6 +2404,12 @@ const exportUserProfile = async () => {
   if (isExporting.value) return;
 
   isExporting.value = true;
+  profileExportReceipt.value = buildProfileExportPendingReceipt();
+  setStatus(
+    '正在准备画像导出：重新分页拉取全部状态，下载尚未开始',
+    'info',
+    { keepExportReceipt: true },
+  );
   try {
     const response = await chromeAPI.sendMessage({
       type: 'EXPORT_USER_PROFILE'
@@ -1615,9 +2445,11 @@ const exportUserProfile = async () => {
       const warningLabel = warnings.length > 0
         ? `；${warnings.length} 个诊断项未同步`
         : '';
+      profileExportReceipt.value = buildProfileExportReceipt(exportData, fileName);
       setStatus(
         `画像已导出：${fileName}${itemCountLabel}${retractedAuditLabel}${warningLabel}`,
         warnings.length > 0 ? 'info' : 'success',
+        { keepExportReceipt: true },
       );
     } else {
       setStatus((response as any)?.error || '用户画像导出失败', 'error');
@@ -1780,6 +2612,62 @@ onMounted(() => {
 /* 🎨 导出按钮样式 */
 .header-actions {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.export-scope-receipt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: 100%;
+  color: #5d6d7e;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.export-scope-label {
+  color: #34495e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.export-preflight-checklist {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  border: 1px solid #d7e2ec;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #415466;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.export-preflight-checklist li {
+  position: relative;
+  padding-left: 14px;
+  overflow-wrap: anywhere;
+}
+
+.export-preflight-checklist li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.58em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2e7d32;
 }
 
 .export-btn {
@@ -1861,6 +2749,91 @@ onMounted(() => {
 .status-action-btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.profile-calibration-receipt,
+.profile-export-receipt {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 16px 0;
+  padding: 12px 14px;
+  border: 1px solid #cfd9e5;
+  border-left: 4px solid #1976d2;
+  border-radius: 8px;
+  background: #f7fbff;
+  color: #2c3e50;
+}
+
+.profile-calibration-receipt.receipt-success,
+.profile-export-receipt.receipt-success {
+  border-left-color: #2e7d32;
+  background: #f3fbf5;
+}
+
+.profile-calibration-receipt.receipt-info,
+.profile-export-receipt.receipt-info {
+  border-left-color: #1976d2;
+  background: #f4f8ff;
+}
+
+.profile-calibration-receipt.receipt-warning,
+.profile-export-receipt.receipt-warning {
+  border-left-color: #f57c00;
+  background: #fff9ee;
+}
+
+.profile-calibration-receipt-copy,
+.profile-export-receipt-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.profile-calibration-receipt-label,
+.profile-export-receipt-label {
+  color: #5f6f7f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.profile-calibration-receipt-copy strong,
+.profile-export-receipt-copy strong {
+  color: #243447;
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.profile-calibration-receipt-copy p,
+.profile-export-receipt-copy p {
+  margin: 0;
+  color: #51606f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.profile-calibration-receipt-chips,
+.profile-export-receipt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 48%;
+  flex-shrink: 0;
+}
+
+.profile-calibration-receipt-chips span,
+.profile-export-receipt-chips span {
+  border: 1px solid #d7dee5;
+  border-radius: 12px;
+  padding: 3px 8px;
+  background: #ffffff;
+  color: #34495e;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .loading-container {
@@ -2016,6 +2989,26 @@ onMounted(() => {
   resize: vertical;
 }
 
+.explicit-profile-entry-receipt {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #dce7f4;
+  border-radius: 6px;
+  background: #f8fbff;
+  color: #51606f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.explicit-profile-entry-label {
+  flex-shrink: 0;
+  color: #1d4f91;
+  font-weight: 800;
+}
+
 .owner-profile-form select:focus,
 .owner-profile-form textarea:focus,
 .owner-profile-form input:focus {
@@ -2069,9 +3062,13 @@ onMounted(() => {
 
 /* 🌟 兴趣项样式 - 带重要性评分 */
 .interest-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "icon name rating"
+    "receipt receipt receipt";
   align-items: center;
-  justify-content: space-between;
+  gap: 8px 12px;
   padding: 12px 16px;
   background: #f8f9fa;
   border-radius: 8px;
@@ -2092,20 +3089,44 @@ onMounted(() => {
 }
 
 .interest-icon {
-  margin-right: 12px;
+  grid-area: icon;
   font-size: 16px;
 }
 
 .interest-name {
-  flex-grow: 1;
+  grid-area: name;
+  min-width: 0;
   font-weight: 500;
   color: #2c3e50;
+  overflow-wrap: anywhere;
 }
 
 /* 🌟 重要性评分星级样式 */
 .importance-rating {
+  grid-area: rating;
   display: flex;
   align-items: center;
+  justify-self: end;
+}
+
+.star-calibration-receipt {
+  grid-area: receipt;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d7dee5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #526273;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.star-calibration-label {
+  flex-shrink: 0;
+  color: #2c3e50;
+  font-weight: 700;
 }
 
 .stars {
@@ -2424,10 +3445,30 @@ onMounted(() => {
 }
 
 .profile-items-summary {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   color: #6c757d;
   font-size: 12px;
   font-weight: 600;
+}
+
+.profile-items-scope-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f4;
+  border-radius: 6px;
+  background: #f7fbff;
+  color: #51606f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.profile-items-scope-label {
+  color: #1d4f91;
+  font-weight: 800;
+  flex-shrink: 0;
 }
 
 .inline-empty {
@@ -2578,6 +3619,25 @@ onMounted(() => {
   text-decoration: none;
 }
 
+.profile-evidence-scope-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f4;
+  border-radius: 6px;
+  background: #f7fbff;
+  color: #51606f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.profile-evidence-scope-label {
+  color: #1d4f91;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
 a.profile-evidence-item:hover .profile-evidence-label {
   color: #1565c0;
   text-decoration: underline;
@@ -2602,6 +3662,26 @@ a.profile-evidence-item:hover .profile-evidence-label {
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
+}
+
+.profile-action-impact-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f4;
+  border-radius: 6px;
+  background: #f8fbff;
+  color: #51606f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.profile-action-impact-label {
+  color: #1d4f91;
+  font-weight: 800;
+  flex-shrink: 0;
 }
 
 .profile-item-actions {
@@ -3274,12 +4354,35 @@ a.profile-evidence-item:hover .profile-evidence-label {
   
   .header-actions {
     align-self: flex-start;
+    align-items: stretch;
+    width: 100%;
+    max-width: none;
+  }
+
+  .export-scope-receipt {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .export-preflight-checklist {
+    max-width: none;
   }
   
   .export-btn {
     width: auto;
     padding: 10px 20px;
     font-size: 14px;
+  }
+
+  .profile-calibration-receipt,
+  .profile-export-receipt {
+    flex-direction: column;
+  }
+
+  .profile-calibration-receipt-chips,
+  .profile-export-receipt-chips {
+    max-width: none;
+    justify-content: flex-start;
   }
   
   .interest-grid {
@@ -3295,13 +4398,15 @@ a.profile-evidence-item:hover .profile-evidence-label {
   }
   
   .interest-item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "icon name"
+      "rating rating"
+      "receipt receipt";
   }
   
   .importance-rating {
-    align-self: flex-end;
+    justify-self: end;
   }
   
   /* 设置页面响应式 */

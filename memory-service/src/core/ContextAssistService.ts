@@ -90,6 +90,23 @@ const WORK_SOURCES: RecallSourceType[] = [
   'reflection_thread',
   'rehearsal',
 ];
+
+function parseOptionalBooleanEnv(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function isComposerSendableGenerationEnabled(): boolean {
+  const envValue = parseOptionalBooleanEnv(
+    'COMPOSER_SENDABLE_GENERATION_ENABLED',
+  );
+  if (envValue !== null) return envValue;
+  return process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+}
 const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'calendar',
   'meeting',
@@ -135,6 +152,18 @@ interface AgentComposeContext {
   sourceMix: Record<string, number>;
   egressRisk: 'low' | 'medium' | 'high';
   relatedAgentSessions: string[];
+}
+
+interface PromptContextPatch {
+  intentKind:
+    | 'codex_sites_dashboard'
+    | 'jira_estimate_analysis'
+    | 'ai_service_auto_run';
+  title: string;
+  summary: string;
+  insertText: string;
+  gaps: string[];
+  sourceLabels: string[];
 }
 
 export class ContextAssistService {
@@ -238,7 +267,7 @@ export class ContextAssistService {
       };
     }
 
-    const suggestionType = getComposerSuggestionType(request);
+    let suggestionType = getComposerSuggestionType(request);
     const riskLevel = getComposerRiskLevel(request, evidence);
     if (ownerReplyState.state === 'complete') {
       return {
@@ -268,12 +297,21 @@ export class ContextAssistService {
       riskLevel,
       taskFrame,
     );
+    const promptPatch = buildPromptContextPatch(
+      request,
+      evidence,
+      agentContext,
+    );
+    if (promptPatch) {
+      suggestionType = 'prompt_patch';
+    }
     const personalization = loadComposerPersonalization(this.db, request);
     const insertText = await buildComposerInsertText(
       request,
       evidence,
       personalization,
       agentContext,
+      promptPatch,
     );
 
     if (!insertText) {
@@ -296,6 +334,7 @@ export class ContextAssistService {
               sourceMix: agentContext?.sourceMix,
               egressRisk: agentContext?.egressRisk,
               relatedAgentSessions: agentContext?.relatedAgentSessions,
+              promptPatch,
               personalization: summarizeComposerPersonalization(personalization),
               rejectedReason: 'composer_generation_unavailable',
             }
@@ -306,8 +345,14 @@ export class ContextAssistService {
     return {
       available: true,
       suggestionType,
-      title: getComposerAssistTitle(request),
-      summary: getComposerSummary(request, evidence.length, riskLevel, evidence),
+      title: getComposerAssistTitle(request, promptPatch),
+      summary: getComposerSummary(
+        request,
+        evidence.length,
+        riskLevel,
+        evidence,
+        promptPatch,
+      ),
       insertText,
       evidence,
       riskLevel,
@@ -326,6 +371,7 @@ export class ContextAssistService {
             sourceMix: agentContext?.sourceMix,
             egressRisk: agentContext?.egressRisk,
             relatedAgentSessions: agentContext?.relatedAgentSessions,
+            promptPatch,
             personalization: summarizeComposerPersonalization(personalization),
           }
         : undefined,
@@ -723,7 +769,11 @@ function getComposerSuggestionType(
   return 'reply_context';
 }
 
-function getComposerAssistTitle(request: ComposerAssistRequest): string {
+function getComposerAssistTitle(
+  request: ComposerAssistRequest,
+  promptPatch?: PromptContextPatch,
+): string {
+  if (promptPatch) return promptPatch.title;
   if (request.contextType === 'web_agent_prompt') return '跨 AI 上下文';
   if (request.contextType === 'jira_issue') return 'Jira 相关记忆';
   if (request.surface === 'ringcentral_thread') return 'Thread 回复上下文';
@@ -735,7 +785,14 @@ function getComposerSummary(
   evidenceCount: number,
   riskLevel: ComposerAssistResponse['riskLevel'],
   evidence: ComposerAssistEvidence[] = [],
+  promptPatch?: PromptContextPatch,
 ): string {
+  if (promptPatch) {
+    const gaps = promptPatch.gaps.length
+      ? ` 缺口：${promptPatch.gaps.join(' / ')}。`
+      : ' ';
+    return `${promptPatch.summary}${gaps}点击 icon 只插入当前 prompt 草稿，不发送。`;
+  }
   const target =
     request.contextType === 'web_agent_prompt'
       ? '当前 AI prompt'
@@ -1081,8 +1138,12 @@ async function buildComposerInsertText(
   evidence: ComposerAssistEvidence[],
   personalization: ComposerPersonalization,
   agentContext?: AgentComposeContext,
+  promptPatch?: PromptContextPatch,
 ): Promise<string | null> {
   if (request.contextType === 'web_agent_prompt') {
+    if (promptPatch) {
+      return clipInsertText(promptPatch.insertText);
+    }
     return clipInsertText(
       renderWebAgentContextPack(request, evidence, agentContext),
     );
@@ -1157,6 +1218,222 @@ function renderWebAgentContextPack(
   ].join('\n');
 }
 
+function buildPromptContextPatch(
+  request: ComposerAssistRequest,
+  evidence: ComposerAssistEvidence[],
+  agentContext?: AgentComposeContext,
+): PromptContextPatch | undefined {
+  if (request.contextType !== 'web_agent_prompt') return undefined;
+  const draft = normalizeComposerDraft(request.draftText);
+  if (draft.length < 8) return undefined;
+
+  const evidenceText = buildPromptPatchEvidenceText(evidence);
+  const combined = [draft, request.primaryText, request.title, evidenceText]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+  const sourceLabels = evidence.map(formatPromptPatchSourceLabel).slice(0, 4);
+  const targetToolFit =
+    agentContext?.targetToolFit ??
+    buildTargetToolFit(request, inferAgentComposeTaskFrame(request));
+
+  if (isCodexSitesDashboardPrompt(combined, evidenceText)) {
+    return {
+      intentKind: 'codex_sites_dashboard',
+      title: '提问上下文补丁',
+      summary:
+        '当前 prompt 缺少 Jira 数据契约、Sites 部署边界和验证方式，建议先插入最小 brief。',
+      gaps: ['数据源', '输出契约', '写回/部署边界', '验证方式'],
+      sourceLabels,
+      insertText: renderPromptPatch({
+        heading: '请先按下面的任务补丁理解我的 prompt：',
+        sections: [
+          [
+            '目标',
+            '生成一个 Jira roadmap / release risk board，可用 Codex Sites 部署和分享；不要只给泛泛网页设计建议。',
+          ],
+          [
+            '数据源',
+            '优先设计 Jira 字段、release phase、roadmap/risk 维度的数据契约；内部链接、附件和群消息原文只用摘要，不要求我整段外发。',
+          ],
+          [
+            '输出格式',
+            '请输出 1) 数据契约，2) 页面布局，3) refresh/storage 边界，4) 部署步骤，5) 验证步骤。',
+          ],
+          [
+            '边界',
+            '不要自动写回 Jira；如果需要实时状态，请明确列出需要我回 Jira/项目面板核对的字段。',
+          ],
+          ['工具适配', targetToolFit.reason],
+        ],
+        sources: sourceLabels,
+      }),
+    };
+  }
+
+  if (isJiraEstimatePrompt(combined, evidenceText)) {
+    return {
+      intentKind: 'jira_estimate_analysis',
+      title: '估算口径补丁',
+      summary:
+        '当前 prompt 缺少 estimate 字段口径、输出列和写回边界，建议插入项目口径后再问 AI。',
+      gaps: ['estimate 字段口径', '输出列', '写回边界', '无法判断原因'],
+      sourceLabels,
+      insertText: renderPromptPatch({
+        heading: '请先按下面的 estimate 口径处理我的 prompt：',
+        sections: [
+          [
+            '依据字段',
+            '优先使用 Jira team field、Summary、Description、Issue type、Historical Story Points benchmark；字段不足时不要猜。',
+          ],
+          [
+            '输出列',
+            '请输出 Story Points、Dev estimate、QA estimate、diff comment、missing reason / low confidence reason。',
+          ],
+          [
+            '写回边界',
+            '先 dry-run 或写回 Google Sheet；不要自动写回 Jira，不要把内部讨论原文外发。',
+          ],
+          [
+            '验证',
+            '列出需要人工确认的 ticket、字段缺失、口径冲突，以及下一步应该核对的 Jira/Sheet 范围。',
+          ],
+        ],
+        sources: sourceLabels,
+      }),
+    };
+  }
+
+  if (isAiServiceAutoRunPrompt(combined, evidenceText)) {
+    return {
+      intentKind: 'ai_service_auto_run',
+      title: '自动运行边界补丁',
+      summary:
+        '当前 prompt 提到自动运行，但缺少触发条件、审批边界和失败回执，建议补齐后再交给 AI。',
+      gaps: ['触发条件', '审批边界', '失败回执', '停止条件'],
+      sourceLabels,
+      insertText: renderPromptPatch({
+        heading: '请先按下面的自动运行边界理解我的 prompt：',
+        sections: [
+          [
+            '触发条件',
+            '先明确哪些输入可以自动识别并运行，哪些必须停在预览/确认态。',
+          ],
+          [
+            '审批边界',
+            '外部发送、写回 Jira/Sheet、删除、同步 persona 或使用敏感来源时必须要求用户确认。',
+          ],
+          [
+            '失败回执',
+            '每次失败要说明未执行、未写入或仅生成草稿，并给出可重试/可复制的下一步。',
+          ],
+          [
+            '停止条件',
+            '低置信、来源过期、目标平台不可达或出现内部链接/secret 时不要自动继续。',
+          ],
+        ],
+        sources: sourceLabels,
+      }),
+    };
+  }
+
+  return undefined;
+}
+
+function buildPromptPatchEvidenceText(
+  evidence: ComposerAssistEvidence[],
+): string {
+  return evidence
+    .map((item) =>
+      [
+        item.title,
+        item.sourceTitle,
+        item.sourceLabel,
+        item.snippet,
+        item.cue?.cueText,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join('\n')
+    .toLowerCase();
+}
+
+function formatPromptPatchSourceLabel(item: ComposerAssistEvidence): string {
+  const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
+  const source = item.sourceLabel ? `${item.sourceLabel} / ` : '';
+  return `${source}${label}`.replace(/\s+/g, ' ').trim().slice(0, 96);
+}
+
+function isCodexSitesDashboardPrompt(
+  combined: string,
+  evidenceText: string,
+): boolean {
+  const promptHasSites =
+    /codex|sites?\b|site\s+部署|部署|dashboard|roadmap|board|看板|仪表盘/.test(
+      combined,
+    );
+  const promptHasJiraOrRelease =
+    /jira|roadmap|release|risk|dashboard|board|看板|风险|发布/.test(
+      combined,
+    );
+  const evidenceSupports =
+    /codex|sites?\b|jira|roadmap|release\s+risk|dashboard|board|看板|字段/.test(
+      evidenceText,
+    );
+  return promptHasSites && promptHasJiraOrRelease && evidenceSupports;
+}
+
+function isJiraEstimatePrompt(combined: string, evidenceText: string): boolean {
+  const promptHasEstimate =
+    /estimate|估算|story\s*points?|dev estimate|qa estimate|工时|人天|ticket/.test(
+      combined,
+    );
+  const promptHasJiraOrSheet = /jira|ticket|issue|sheet|表格|story\s*points?/.test(
+    combined,
+  );
+  const evidenceSupports =
+    /team field|summary|description|issue type|historical story points?|estimate|dev estimate|qa estimate|只写回 sheet|没有回写 jira|人天|估算/.test(
+      evidenceText,
+    );
+  return promptHasEstimate && promptHasJiraOrSheet && evidenceSupports;
+}
+
+function isAiServiceAutoRunPrompt(
+  combined: string,
+  evidenceText: string,
+): boolean {
+  const promptHasAutoRun =
+    /auto[-\s]?run|auto[-\s]?execute|自动运行|自动识别|智能识别|自动执行|自动触发|审批边界|确认边界|失败回执/.test(
+      combined,
+    );
+  const evidenceSupports =
+    /prompt|提示词|自动运行|自动识别|智能识别|approval|确认|回执/.test(
+      evidenceText,
+    );
+  return promptHasAutoRun && evidenceSupports;
+}
+
+function renderPromptPatch(input: {
+  heading: string;
+  sections: Array<[string, string]>;
+  sources: string[];
+}): string {
+  const sources = input.sources.length
+    ? input.sources.map((source, index) => `[P${index + 1}] ${source}`)
+    : ['[P1] Personal AI 相关记忆摘要'];
+  return [
+    input.heading,
+    '',
+    ...input.sections.map(([label, value]) => `${label}：${value}`),
+    '',
+    '来源处理：只使用 Personal AI 记忆摘要；不要要求我粘贴内部链接、群消息原文、附件下载链接或 secret。',
+    '',
+    '参考来源：',
+    ...sources,
+  ].join('\n');
+}
+
 function formatTaskFrame(taskFrame: AgentComposeTaskFrame): string {
   const confidence = Math.round(taskFrame.confidence * 100);
   return `${taskFrame.summary}（${taskFrame.kind}, ${confidence}%）`;
@@ -1189,6 +1466,8 @@ async function generateSendableComposerText(
   evidence: ComposerAssistEvidence[],
   personalization: ComposerPersonalization,
 ): Promise<string | null> {
+  if (!isComposerSendableGenerationEnabled()) return null;
+
   const scenario = getComposerScenario(request);
   const prompt = buildComposerGenerationPrompt(
     request,
@@ -1206,6 +1485,8 @@ async function generateSendableComposerText(
         maxTokens: scenario === 'jira_comment' ? 360 : 220,
         systemPrompt:
           'You write only the exact text the user can insert into the current composer. No explanation, no wrapper, no metadata.',
+        timeoutMs: COMPOSER_GENERATION_TIMEOUT_MS,
+        retryCount: 0,
       }),
       COMPOSER_GENERATION_TIMEOUT_MS,
     );

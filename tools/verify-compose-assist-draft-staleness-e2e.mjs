@@ -62,6 +62,8 @@ function installChromeStub(page) {
     };
     const storageListeners = [];
     window.__paiComposeAssistRequests = [];
+    window.__paiContextRecallRequests = [];
+    window.__paiEnableLensMatch = false;
 
     function normalizeKeys(keys) {
       if (Array.isArray(keys)) return keys;
@@ -100,6 +102,37 @@ function installChromeStub(page) {
           if (message?.type === 'COMPOSER_ASSIST_REQUEST') {
             const requestIndex = window.__paiComposeAssistRequests.length;
             window.__paiComposeAssistRequests.push(message.request);
+            const draftText = message.request?.draftText || '';
+            if (/Context only memory/i.test(draftText)) {
+              return respond(
+                callback,
+                {
+                  success: true,
+                  result: {
+                    available: true,
+                    suggestionType: 'reply_context',
+                    title: 'Message reply context',
+                    summary: 'Found matching memory, but no safe reply draft.',
+                    insertText: '',
+                    evidence: [
+                      {
+                        id: 'memory-context-only',
+                        type: 'message',
+                        snippet: 'Factory AI security approval was already answered.',
+                        sourceTitle: 'AI tools selection',
+                        whyRelevant: ['命中当前 RingCentral 回复上下文'],
+                        score: 0.9,
+                      },
+                    ],
+                    riskLevel: 'low',
+                    previewRequired: false,
+                    confidence: 0.9,
+                    queryTimeMs: 1,
+                  },
+                },
+                0,
+              );
+            }
             const insertText =
               requestIndex === 0
                 ? 'STALE RESPONSE SHOULD NOT RENDER'
@@ -134,7 +167,30 @@ function installChromeStub(page) {
           }
 
           if (message?.type === 'CONTEXT_RECALL_REQUEST') {
-            return respond(callback, { topMatch: null }, 0);
+            window.__paiContextRecallRequests.push(message.request);
+            if (!window.__paiEnableLensMatch) {
+              return respond(callback, { topMatch: null }, 0);
+            }
+            return respond(
+              callback,
+              {
+                topMatch: {
+                  id: 'lens-memory-1',
+                  type: 'message',
+                  score: 0.9,
+                  title: 'Factory AI security approval source',
+                  uiSummary: 'Factory AI security approval was already answered in RingCentral.',
+                  snippet: 'Factory AI security approval was already answered in RingCentral.',
+                  sourceLabel: 'ringcentral',
+                  sourceTitle: 'AI tools selection',
+                  links: [],
+                  whyMatched: '命中当前 RingCentral 回复上下文',
+                  whyRelevant: ['命中当前 RingCentral 回复上下文'],
+                  displayPriority: 'p1',
+                },
+              },
+              0,
+            );
           }
 
           return respond(callback, { success: true }, 0);
@@ -226,10 +282,86 @@ async function main() {
     assert.equal(requests[0].draftText, '');
     assert.equal(requests[1].draftText, 'Please make this concise.');
 
+    await page.locator('#composer').evaluate((element) => {
+      element.replaceChildren(
+        document.createTextNode('Silent DOM mutation without input event'),
+      );
+    });
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) =>
+            request.draftText === 'Silent DOM mutation without input event',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('.pai-composer-guard-text')
+          ?.textContent?.includes(
+            'FRESH RESPONSE: Silent DOM mutation without input event',
+          ),
+      null,
+      { timeout: 3000 },
+    );
+    const requestsAfterSilentMutation = await page.evaluate(
+      () => window.__paiComposeAssistRequests,
+    );
+    assert.equal(
+      requestsAfterSilentMutation.at(-1).draftText,
+      'Silent DOM mutation without input event',
+    );
+
     await page.locator('.pai-composer-guard-icon-button').click();
     const composerText = await page.locator('#composer').innerText();
-    assert.match(composerText, /FRESH RESPONSE: Please make this concise\./);
+    assert.match(
+      composerText,
+      /FRESH RESPONSE: Silent DOM mutation without input event/,
+    );
+    assert.doesNotMatch(
+      composerText,
+      /FRESH RESPONSE: Please make this concise\./,
+    );
     assert.doesNotMatch(composerText, /STALE RESPONSE/);
+
+    await page.goto(fixtureUrl);
+    await page.evaluate(() => {
+      window.__paiComposeAssistRequests = [];
+      window.__paiContextRecallRequests = [];
+      window.__paiEnableLensMatch = true;
+    });
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#composer').click();
+    await page.locator('#composer').fill('Context only memory');
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) => request.draftText === 'Context only memory',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.waitForFunction(
+      () =>
+        window.__paiContextRecallRequests?.some(
+          (request) => request.contextType === 'message_thread',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.locator('.pai-context-bubble').waitFor({
+      state: 'visible',
+      timeout: 6000,
+    });
+    assert.equal(
+      await page.locator('.pai-composer-guard-icon-button').count(),
+      0,
+      'context-only evidence must not render the compose assist icon',
+    );
+    const lensCardText = await page.locator('.pai-context-card').innerText();
+    assert.match(lensCardText, /Factory AI security approval source/);
 
     console.log('Compose Assist draft staleness E2E passed.');
   } finally {

@@ -35,13 +35,117 @@ export type ComposerContextItemType =
   | 'attachment'
   | 'image';
 
-export type ComposerTargetKind = 'textarea' | 'input' | 'contenteditable';
+export type ComposerTargetKind =
+  | 'textarea'
+  | 'input'
+  | 'contenteditable'
+  | 'richiframe';
 
 export interface VisibleMessageSnapshot {
   id?: string;
   sender?: string;
   text: string;
   timestampLabel?: string;
+}
+
+export interface VisibleFieldSnapshot {
+  name: string;
+  value: string;
+  rawText?: string;
+}
+
+export type InteractionSceneUserMode =
+  | 'read'
+  | 'inspect_field'
+  | 'focus_composer'
+  | 'compose'
+  | 'reply'
+  | 'comment'
+  | 'select_text'
+  | 'submit_candidate'
+  | 'unknown';
+
+export type InteractionSceneType =
+  | 'jira_issue_reading'
+  | 'jira_field_inspection'
+  | 'jira_comment_composing'
+  | 'ringcentral_thread_reading'
+  | 'ringcentral_estimate_discussion'
+  | 'ringcentral_reply_composing'
+  | 'web_reading'
+  | 'web_ai_prompt_composing'
+  | 'selection_memory_search'
+  | 'meeting_live'
+  | 'unknown';
+
+export type InteractionSceneSurface =
+  | 'memory_lens'
+  | 'compose_assist'
+  | 'meeting_pilot'
+  | 'today_pilot'
+  | 'ask';
+
+export interface ActiveElementSnapshot {
+  kind:
+    | 'none'
+    | 'button'
+    | 'input'
+    | 'textarea'
+    | 'contenteditable'
+    | 'editor'
+    | 'link'
+    | 'other';
+  role?: string;
+  mode?: InteractionSceneUserMode;
+  label?: string;
+  placeholder?: string;
+  nearbyText?: string;
+  containerRole?: string;
+  containerLabel?: string;
+  selectorFingerprint?: string;
+  hasFocus: boolean;
+}
+
+export interface VisibleFactSnapshot {
+  kind:
+    | 'jira_field'
+    | 'message'
+    | 'page_heading'
+    | 'status_badge'
+    | 'table_cell'
+    | 'other';
+  name?: string;
+  value: string;
+  rawText?: string;
+  source: 'current_page';
+  issueKey?: string;
+  confidence: number;
+}
+
+export interface InteractionSceneAdmissionSnapshot {
+  state: 'blocked' | 'passive_ready' | 'composer_ready' | 'unknown';
+  reasons?: string[];
+  confidence?: number;
+}
+
+export interface InteractionSceneSnapshot {
+  sceneType: InteractionSceneType;
+  surface: InteractionSceneSurface;
+  userMode: InteractionSceneUserMode;
+  url?: string;
+  title?: string;
+  issueKey?: string;
+  conversationId?: string;
+  groupId?: string;
+  meetingId?: string;
+  participants?: string[];
+  activeElement?: ActiveElementSnapshot;
+  visibleFacts?: VisibleFactSnapshot[];
+  draftText?: string;
+  selectedText?: string;
+  nearbyMessages?: VisibleMessageSnapshot[];
+  sourceAnchorHints?: string[];
+  admission?: InteractionSceneAdmissionSnapshot;
 }
 
 export interface ComposerAudience {
@@ -64,6 +168,39 @@ export interface ComposerContextItem {
   timestampLabel?: string;
   url?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface ContextCue {
+  id: string;
+  cueKey?: string;
+  cueText: string;
+  actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+  surfaceEligibility: Array<
+    'memory_lens' | 'compose_assist' | 'ask' | 'meeting_pilot'
+  >;
+  sourceRefs?: Array<{
+    type: string;
+    id: string;
+    title?: string;
+    url?: string;
+    timestamp?: number;
+  }>;
+  evidenceMatchIds?: string[];
+  whyNow?: string;
+  confidence?: number;
+  riskLevel?: 'low' | 'medium' | 'high';
+  compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+  suppressReason?: string;
+  outcomePolicy?: {
+    action: 'boost' | 'suppress' | 'send_to_skill_foundry';
+    patchId: string;
+    strength: number;
+    reasonCodes: string[];
+    positiveCount: number;
+    negativeCount: number;
+    signalCount: number;
+    expiresAt?: number;
+  };
 }
 
 export interface ComposerTarget {
@@ -93,10 +230,12 @@ export interface SiteContextSnapshot {
     provider?: string;
   };
   visibleMessages?: VisibleMessageSnapshot[];
+  visibleFields?: VisibleFieldSnapshot[];
   threadRoot?: VisibleMessageSnapshot;
   audience?: ComposerAudience;
   contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
+  interactionScene?: InteractionSceneSnapshot;
 }
 
 export interface SiteContextAdapter {
@@ -137,6 +276,7 @@ export interface ComposerAssistEvidence {
   metadata?: Record<string, unknown>;
   timestamp?: number;
   score?: number;
+  cue?: ContextCue;
 }
 
 export interface ComposerAssistRequest {
@@ -151,17 +291,24 @@ export interface ComposerAssistRequest {
   keywords?: string[];
   identifiers?: SiteContextSnapshot['identifiers'];
   visibleMessages?: VisibleMessageSnapshot[];
+  visibleFields?: VisibleFieldSnapshot[];
   threadRoot?: VisibleMessageSnapshot;
   audience?: ComposerAudience;
   contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
+  interactionScene?: InteractionSceneSnapshot;
   automationLevel?: 'L1' | 'L2';
   debug?: boolean;
 }
 
 export interface ComposerAssistResponse {
   available: boolean;
-  suggestionType: 'none' | 'context_pack' | 'reply_context' | 'issue_context';
+  suggestionType:
+    | 'none'
+    | 'context_pack'
+    | 'prompt_patch'
+    | 'reply_context'
+    | 'issue_context';
   title?: string;
   summary?: string;
   insertText?: string;

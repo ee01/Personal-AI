@@ -84,6 +84,14 @@ function installAuthStub(page) {
   });
 }
 
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 async function openSetupPage(launched, options = {}) {
   const { context, extensionId, serviceWorker } = launched;
   const configRows = options.configRows || [
@@ -467,8 +475,26 @@ await withLaunchedExtension(async (launched) => {
     timeout: 15000,
   });
 
-  await page.locator('button', { hasText: '同步' }).click();
-  await page.locator('text=已从 Sheet Config 刷新本机配置').waitFor({
+  await page.locator('button', { hasText: '同步' }).evaluate((button) => {
+    button.click();
+    button.click();
+  });
+  await page.locator('text=同步完成：Messages 已刷新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=当前列表读取到 1 条消息').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=采用配置: Sheet Config').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Config 阶段: 已从 Sheet Config 刷新本机配置').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=边界: Config 阶段：先写入本机缓存，再读取 Messages / Logs；Messages / Logs 已读取；本次同步不发送消息、不执行队列、不改 Logs').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=下一步: Messages / Logs 已刷新；Config 阶段后续：检查列表是否已使用新的 Web App、Bot / Timeline 与子表定位').waitFor({
     timeout: 15000,
   });
   await page.locator('text=最近动作: App Script 元数据更新').waitFor({
@@ -486,6 +512,598 @@ await withLaunchedExtension(async (launched) => {
   assert.equal(storageAfterSync.scheduledMessagesConfig.messagesSheetId, 101);
   assert.equal(storageAfterSync.scheduledMessagesConfig.logsSheetId, 102);
   assert.equal(storageAfterSync.scheduledMessagesConfig.last_sync_time, '2026-05-12T09:30:00.000Z');
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  const delayedConfigRows = [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-12T06:00:00.000Z'],
+    ['last_sync_time', '2026-05-12T09:30:00.000Z'],
+    ['last_sync_action', 'app_script_metadata_update'],
+    ['web_app_url', 'https://script.google.com/macros/s/delayed-remote/exec'],
+    ['script_id', 'delayed-remote-script'],
+    ['deployment_id', 'delayed-remote-deployment'],
+    ['app_script_version', '2.8.5'],
+    ['messages_sheet_id', '101'],
+    ['logs_sheet_id', '102'],
+  ];
+  const configReadGate = createDeferred();
+  let configReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T08:00:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local-delayed/exec',
+        scriptId: 'local-delayed-script',
+        deploymentId: 'local-delayed-deployment',
+        appScriptVersion: '2.7.0',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await configReadGate.promise;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ values: delayedConfigRows }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'sync-row-delayed',
+              'Delayed config sync proof',
+              'Shows running boundary before Config adoption',
+              '2026-05-12',
+              '12:30',
+              'AsMe',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 12:30',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected delayed sync Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="Delayed config sync proof"]').waitFor({
+    timeout: 15000,
+  });
+
+  const syncButton = page.locator('button', { hasText: '同步' });
+  await syncButton.click();
+  await page.locator('text=正在读取 Sheet Config；只有确认 Sheet 更新时才写本机缓存').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=边界: 尚未确认采用 Sheet；进行中不发送消息、不改 Messages / Logs、不执行队列').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=下一步: 等待读取完成后查看采用配置、写入边界和恢复建议').waitFor({
+    timeout: 15000,
+  });
+  assert.equal(await syncButton.isDisabled(), true, 'sync button should stay disabled during Config read');
+
+  configReadGate.resolve();
+
+  await page.locator('text=同步完成：Messages 已刷新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=采用配置: Sheet Config').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Config 阶段: 已从 Sheet Config 刷新本机配置').waitFor({
+    timeout: 15000,
+  });
+
+  const storageAfterSync = await serviceWorker.evaluate(async () => {
+    return chrome.storage.local.get(['scheduledMessagesConfig']);
+  });
+  assert.equal(configReadCount, 1);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.webAppUrl, 'https://script.google.com/macros/s/delayed-remote/exec');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.scriptId, 'delayed-remote-script');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.deploymentId, 'delayed-remote-deployment');
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  const conflictConfigRows = [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-12T06:00:00.000Z'],
+    ['last_sync_time', '2026-05-12T09:30:00.000Z'],
+    ['last_sync_action', 'app_script_metadata_update'],
+    ['web_app_url', 'https://script.google.com/macros/s/sheet-conflict/exec'],
+    ['script_id', 'sheet-conflict-script'],
+    ['deployment_id', 'sheet-conflict-deployment'],
+    ['app_script_version', '2.8.5'],
+    ['messages_sheet_id', '101'],
+    ['logs_sheet_id', '102'],
+  ];
+  let configReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T09:30:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local-conflict/exec',
+        scriptId: 'local-conflict-script',
+        deploymentId: 'local-conflict-deployment',
+        appScriptVersion: '2.8.4',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ values: conflictConfigRows }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'sync-row-conflict',
+              'Config conflict proof',
+              'Keeps local Config when freshness ties but fields differ',
+              '2026-05-12',
+              '11:30',
+              'AsMe',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 11:30',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected conflict page Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="Config conflict proof"]').waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('button', { hasText: '同步' }).click();
+  await page.locator('text=同步完成：Messages 已刷新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=采用配置: 本机缓存').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Config 阶段: Config 有差异，未自动覆盖').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=边界: Config 阶段：同步时间相同或不可判断，未覆盖本机缓存；Messages / Logs 已读取；本次同步不发送消息、不执行队列、不改 Logs').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=差异: 最近同步动作 | 本机: Bot / Timeline 配置更新 | Sheet: App Script 元数据更新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=差异: Web App URL | 本机: https://script.google.com/macros/s/local-conflict/exec | Sheet: https://script.google.com/macros/s/sheet-conflict/exec').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=更多差异: 另有 4 项，重新绑定可查看全部并选择采用哪一侧').waitFor({
+    timeout: 15000,
+  });
+
+  const storageAfterSync = await serviceWorker.evaluate(async () => {
+    return chrome.storage.local.get(['scheduledMessagesConfig']);
+  });
+  assert.equal(configReadCount, 1);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.webAppUrl, 'https://script.google.com/macros/s/local-conflict/exec');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.scriptId, 'local-conflict-script');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.deploymentId, 'local-conflict-deployment');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.appScriptVersion, '2.8.4');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.last_sync_action, 'bot_config_update');
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  let configReadCount = 0;
+  let messagesReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T09:30:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local-message-fail/exec',
+        scriptId: 'local-message-fail-script',
+        deploymentId: 'local-message-fail-deployment',
+        appScriptVersion: '2.8.4',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            ['sheet_version', '2.7'],
+            ['created_by', 'Personal AI Extension'],
+            ['created_at', '2026-05-12T06:00:00.000Z'],
+            ['last_sync_time', '2026-05-12T09:30:00.000Z'],
+            ['last_sync_action', 'bot_config_update'],
+            ['web_app_url', 'https://script.google.com/macros/s/local-message-fail/exec'],
+            ['script_id', 'local-message-fail-script'],
+            ['deployment_id', 'local-message-fail-deployment'],
+            ['app_script_version', '2.8.4'],
+          ],
+        }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      messagesReadCount += 1;
+      if (messagesReadCount > 1) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: 'Messages read unavailable' } }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'sync-row-message-fail',
+              'Messages refresh failure proof',
+              'Config can succeed while Messages refresh fails',
+              '2026-05-12',
+              '13:30',
+              'AsMe',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 13:30',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected message-failure Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="Messages refresh failure proof"]').waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('button', { hasText: '同步' }).click();
+  await page.locator('text=Messages 刷新失败').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Messages read unavailable').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=采用配置: 本机缓存').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Config 阶段: Config 已是最新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=未确认当前列表为最新；未发送消息、未执行队列、未改 Logs').waitFor({
+    timeout: 15000,
+  });
+
+  assert.equal(configReadCount, 1);
+  assert.equal(messagesReadCount, 2);
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  let configReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T08:00:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local/exec',
+        scriptId: 'local-script',
+        deploymentId: 'local-deployment',
+        appScriptVersion: '2.7.0',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: 'Config read unavailable' } }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'sync-row-local-cache',
+              'Local cache fallback proof',
+              'Keeps local Config when Sheet Config read fails',
+              '2026-05-12',
+              '10:30',
+              'AsMe',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 10:30',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected fallback page Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="Local cache fallback proof"]').waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('button', { hasText: '同步' }).click();
+  await page.locator('text=同步完成：Messages 已刷新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=采用配置: 本机缓存').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Config 阶段: Config 刷新失败').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=边界: Config 阶段：Sheet Config 读取失败，未更新本机缓存；Messages / Logs 已读取；本次同步不发送消息、不执行队列、不改 Logs').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=下一步: Messages / Logs 已刷新；Config 阶段后续：确认 Google 授权、网络或 Config 表后重试同步').waitFor({
+    timeout: 15000,
+  });
+
+  const storageAfterSync = await serviceWorker.evaluate(async () => {
+    return chrome.storage.local.get(['scheduledMessagesConfig']);
+  });
+  assert.equal(configReadCount, 1);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.webAppUrl, 'https://script.google.com/macros/s/local/exec');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.scriptId, 'local-script');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.deploymentId, 'local-deployment');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.appScriptVersion, '2.7.0');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.last_sync_time, '2026-05-12T08:00:00.000Z');
 
   assertNoPageErrors();
 });

@@ -21,6 +21,7 @@ vi.mock('../llm/EmbeddingClient.js', () => ({
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -40,6 +41,9 @@ describe('Context Recall API (POST /context-recall)', () => {
   });
 
   beforeEach(() => {
+    vi.mocked(EmbeddingClient.getInstance).mockClear();
+    vi.mocked(EmbeddingClient.isLoaded).mockReturnValue(false);
+
     db.prepare('DELETE FROM recall_training_cases').run();
     db.prepare('DELETE FROM recall_patch_runs').run();
     db.prepare('DELETE FROM recall_relevance_patches').run();
@@ -138,6 +142,50 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('short-circuits passive recall at the route when passive search is disabled', async () => {
+    const previousGuard =
+      process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+    const previousSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+    process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED = 'true';
+    process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = 'false';
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/context-recall',
+        payload: {
+          surface: 'web_passive',
+          contextType: 'webpage',
+          title: 'Falcon launch readiness',
+          primaryText: 'Project Falcon launch readiness weekend planning',
+          limit: 5,
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.matches).toEqual([]);
+      expect(body.topMatch).toBeNull();
+      expect(body.debug?.rejectedReason).toBe(
+        'passive_fast_search_disabled',
+      );
+      expect(EmbeddingClient.getInstance).not.toHaveBeenCalled();
+    } finally {
+      if (previousGuard === undefined) {
+        delete process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED =
+          previousGuard;
+      }
+      if (previousSearch === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = previousSearch;
+      }
+    }
+  });
+
   it('returns matches with exploreLink and a topMatch on relevant content', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -183,6 +231,25 @@ describe('Context Recall API (POST /context-recall)', () => {
       ),
     ).toBe(true);
     expect(body.topMatch?.id).toBe(top.id);
+  });
+
+  it('does not cold-start the embedding model for passive recall', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'Falcon launch readiness',
+        primaryText: 'Project Falcon launch readiness',
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(EmbeddingClient.getInstance).not.toHaveBeenCalled();
+    expect(res.json().debug?.channelsHit).toContain('fts');
   });
 
   it('returns a passive recall scope receipt for explicit work scope', async () => {
@@ -1300,7 +1367,7 @@ describe('Context Recall API (POST /context-recall)', () => {
   it('suppresses Jira Lens matches that only repeat an estimate value already visible on the issue page', async () => {
     const now = Math.floor(Date.now() / 1000);
     const content =
-      '如在与团队成员或相关方讨论 MTR-148115 的开发估算时，请明确说明：当前 DEV Estimate New 为 0.4，但尚未最终锁定，后续仍有变动可能。';
+      'MTR-148115 当前 DEV Estimate New 为 0.4。';
     db.prepare(
       `INSERT INTO chunks
         (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
@@ -1380,6 +1447,89 @@ describe('Context Recall API (POST /context-recall)', () => {
     );
     expect(body.debug?.sceneFrame?.visibleFacts?.[0]?.name).toBe(
       'DEV Estimate New',
+    );
+  });
+
+  it('keeps Jira Lens matches that add non-visible estimate status beyond the current page value', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const content =
+      'MTR-148115 当前 DEV Estimate New 为 0.4，但尚未最终锁定，后续仍有变动可能。';
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, 1, 1, ?, ?, 'work', 'glip', 'glip', 'MTR', ?)`,
+    ).run(
+      9074,
+      'messages/mtr-148115-dev-estimate-new-unlocked',
+      content,
+      'hash-mtr-148115-dev-estimate-new-unlocked',
+      now - 120,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9074,
+      content,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'jira_issue',
+        title: 'MTR-148115: Estimate review',
+        url: 'https://jira.ringcentral.com/browse/MTR-148115',
+        primaryText: 'MTR-148115 Estimate review',
+        currentContext: {
+          issueKey: 'MTR-148115',
+        },
+        interactionScene: {
+          sceneType: 'jira_issue_reading',
+          surface: 'memory_lens',
+          userMode: 'read',
+          url: 'https://jira.ringcentral.com/browse/MTR-148115',
+          title: 'MTR-148115: Estimate review',
+          issueKey: 'MTR-148115',
+          activeElement: {
+            kind: 'none',
+            hasFocus: false,
+          },
+          visibleFacts: [
+            {
+              kind: 'jira_field',
+              name: 'DEV Estimate New',
+              value: '0.4',
+              rawText: 'DEV Estimate New: 0.4',
+              source: 'current_page',
+              issueKey: 'MTR-148115',
+              confidence: 0.94,
+            },
+          ],
+          admission: {
+            state: 'passive_ready',
+            reasons: ['issue_key', 'visible_facts'],
+            confidence: 0.82,
+          },
+        },
+        entityHints: [{ kind: 'jira_issue_key', value: 'MTR-148115' }],
+        sourceTypes: ['glip'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches[0]?.id).toBe('9074');
+    expect(body.matches[0]?.displayPriority).toBe('p1');
+    expect(body.matches[0]?.lensPresentation).toEqual(
+      expect.objectContaining({
+        status: 'ready',
+        informationValue: 'high',
+        novelty: 'new_to_current_surface',
+      }),
+    );
+    expect(body.matches[0]?.lensPresentation?.extractedInfo).toContain(
+      '尚未最终锁定',
     );
   });
 

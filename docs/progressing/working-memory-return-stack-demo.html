@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作记忆回程栈 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d9dee7;
+      --panel: #ffffff;
+      --page: #f4f6f8;
+      --blue: #1f6feb;
+      --green: #11845b;
+      --amber: #b7791f;
+      --red: #c2413d;
+      --teal: #0f766e;
+      --shadow: 0 18px 50px rgba(22, 32, 42, 0.16);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 52px 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      min-width: 188px;
+    }
+
+    .mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: #17202a;
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      flex: 1;
+    }
+
+    .tab {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 11px;
+      border-radius: 7px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #f8fafc;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      min-height: 0;
+    }
+
+    .workspace {
+      position: relative;
+      min-height: calc(100vh - 52px);
+      padding: 22px;
+      overflow: hidden;
+    }
+
+    .browser {
+      height: calc(100vh - 96px);
+      min-height: 640px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      display: grid;
+      grid-template-rows: 44px 1fr;
+      overflow: hidden;
+      box-shadow: 0 10px 34px rgba(30, 41, 59, 0.08);
+    }
+
+    .browserbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #d0d5dd;
+    }
+
+    .url {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid #d5dbe5;
+      border-radius: 6px;
+      background: #fff;
+      color: #596273;
+      font-size: 13px;
+      padding: 7px 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .page {
+      display: none;
+      min-height: 0;
+      overflow: auto;
+      background: #fff;
+    }
+
+    .page.active {
+      display: block;
+    }
+
+    .mock-header {
+      padding: 24px 28px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .mock-title h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      border-radius: 999px;
+      padding: 0 9px;
+      font-size: 12px;
+      color: #334155;
+      background: #eef2f7;
+      border: 1px solid #e0e6ef;
+      white-space: nowrap;
+    }
+
+    .pill.green {
+      color: #075e45;
+      background: #e7f6ef;
+      border-color: #bfe8d5;
+    }
+
+    .pill.amber {
+      color: #784f12;
+      background: #fff4d8;
+      border-color: #efd58c;
+    }
+
+    .mock-body {
+      padding: 24px 28px 140px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 20px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .section h2 {
+      margin: 0;
+      padding: 14px 16px;
+      font-size: 15px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+      letter-spacing: 0;
+    }
+
+    .section-content {
+      padding: 14px 16px;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 128px 1fr;
+      gap: 14px;
+      padding: 10px 0;
+      border-bottom: 1px solid #eef1f5;
+      font-size: 14px;
+    }
+
+    .field:last-child {
+      border-bottom: 0;
+    }
+
+    .label {
+      color: var(--muted);
+    }
+
+    .comment {
+      padding: 12px 0;
+      border-bottom: 1px solid #eef1f5;
+    }
+
+    .comment:last-child {
+      border-bottom: 0;
+    }
+
+    .comment strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .comment p,
+    .chat-line p {
+      margin: 0;
+      color: #344054;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .rail-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      margin-bottom: 12px;
+      background: #fff;
+    }
+
+    .rail-card h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .rail-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .chat-feed {
+      padding: 22px 24px 140px;
+      display: grid;
+      gap: 14px;
+      max-width: 900px;
+    }
+
+    .chat-line {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #e8eef6;
+      color: #26384f;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .bubble {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 13px;
+      background: #fff;
+    }
+
+    .ai-page {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      min-height: 100%;
+      background: #fafafa;
+    }
+
+    .ai-history {
+      padding: 28px;
+      display: grid;
+      align-content: start;
+      gap: 18px;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .ai-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      background: #fff;
+      padding: 16px 28px 22px;
+    }
+
+    .composer-box {
+      max-width: 920px;
+      margin: 0 auto;
+      border: 1px solid #cfd7e3;
+      border-radius: 8px;
+      min-height: 112px;
+      padding: 14px;
+      background: #fff;
+      color: #344054;
+      line-height: 1.5;
+      position: relative;
+    }
+
+    .resume-card {
+      position: absolute;
+      right: 34px;
+      bottom: 34px;
+      width: min(430px, calc(100vw - 450px));
+      border: 1px solid #c6d3e1;
+      background: #ffffff;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      z-index: 5;
+    }
+
+    .resume-card.compact {
+      width: 360px;
+    }
+
+    .resume-head {
+      padding: 14px 15px;
+      display: flex;
+      gap: 11px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .resume-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #e9f0ff;
+      color: var(--blue);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .resume-title {
+      min-width: 0;
+    }
+
+    .resume-title strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .resume-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .resume-body {
+      padding: 14px 15px;
+      display: grid;
+      gap: 11px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .cue-row {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      gap: 10px;
+    }
+
+    .cue-row b {
+      color: #485468;
+      font-weight: 600;
+    }
+
+    .receipt {
+      border: 1px solid #e1e7ee;
+      border-radius: 7px;
+      padding: 10px;
+      background: #f8fafc;
+      color: #455468;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 15px 15px;
+    }
+
+    .btn {
+      border: 1px solid #cfd7e3;
+      background: #fff;
+      color: #253044;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .btn.ghost {
+      background: transparent;
+    }
+
+    .side {
+      border-left: 1px solid var(--line);
+      background: #fff;
+      min-height: calc(100vh - 52px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+
+    .side-head {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .side-head h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .side-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .stack {
+      padding: 14px;
+      overflow: auto;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+    }
+
+    .stack-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .stack-item.active {
+      border-color: #9db8f8;
+      box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.10);
+    }
+
+    .stack-top {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .stack-top strong {
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .score {
+      color: var(--green);
+      background: #e7f6ef;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .stack-item p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .source-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .source {
+      font-size: 12px;
+      color: #475467;
+      background: #f2f4f7;
+      border-radius: 999px;
+      padding: 3px 7px;
+    }
+
+    .toast {
+      position: absolute;
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%);
+      background: #17202a;
+      color: #fff;
+      border-radius: 8px;
+      padding: 10px 13px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease;
+      z-index: 10;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .side {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        min-height: auto;
+      }
+
+      .workspace {
+        padding: 14px;
+      }
+
+      .browser {
+        height: auto;
+        min-height: 720px;
+      }
+
+      .mock-body {
+        grid-template-columns: 1fr;
+        padding-bottom: 190px;
+      }
+
+      .resume-card {
+        position: fixed;
+        left: 14px;
+        right: 14px;
+        bottom: 14px;
+        width: auto;
+      }
+
+      .brand {
+        min-width: auto;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar {
+        padding: 0 10px;
+        gap: 8px;
+      }
+
+      .brand span {
+        display: none;
+      }
+
+      .tab {
+        padding: 7px 9px;
+      }
+
+      .mock-header {
+        padding: 18px 16px 14px;
+        display: grid;
+      }
+
+      .mock-body,
+      .chat-feed,
+      .ai-history {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .field {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+
+      .cue-row {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+
+      .actions .btn {
+        flex: 1 1 130px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><div class="mark">PA</div><span>Personal AI</span></div>
+      <nav class="tabs" aria-label="Demo surfaces">
+        <button class="tab active" data-tab="jira">Jira</button>
+        <button class="tab" data-tab="ringcentral">RingCentral</button>
+        <button class="tab" data-tab="ai">ChatGPT / Codex</button>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <section class="workspace">
+        <div class="browser">
+          <div class="browserbar">
+            <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+            <div class="url" id="urlText">jira.ringcentral.com/browse/MTR-148115</div>
+          </div>
+
+          <article class="page active" id="page-jira">
+            <div class="mock-header">
+              <div class="mock-title">
+                <h1>MTR-148115 · Migrate AI Notes Update Flow from Fixed Interval Polling to Long Polling</h1>
+                <div class="meta-row">
+                  <span class="pill green">Dev Estimate Original 0.3</span>
+                  <span class="pill amber">仍需核实</span>
+                  <span class="pill">AI Notes</span>
+                </div>
+              </div>
+              <button class="btn">Open in Project</button>
+            </div>
+            <div class="mock-body">
+              <div>
+                <section class="section">
+                  <h2>Issue fields</h2>
+                  <div class="section-content">
+                    <div class="field"><div class="label">Status</div><div>In review</div></div>
+                    <div class="field"><div class="label">Estimate note</div><div>Fixed interval polling to long polling, BE detail still unclear.</div></div>
+                    <div class="field"><div class="label">Owner signal</div><div>需要继续外部核实更精确细节。</div></div>
+                  </div>
+                </section>
+                <section class="section">
+                  <h2>Recent comments</h2>
+                  <div class="section-content">
+                    <div class="comment">
+                      <strong>Esone's AI · 15:40</strong>
+                      <p>Dev estimate appears to be 0.3, but the source line mixes original estimate and generated summary. Need confirm before writing final status.</p>
+                    </div>
+                    <div class="comment">
+                      <strong>Project bot · 15:46</strong>
+                      <p>Related reflection action is still pending external verification.</p>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <aside>
+                <div class="rail-card">
+                  <h3>Project evidence</h3>
+                  <p>Reflection thread、Jira memory、RingCentral discussion 都指向同一估算核对任务。</p>
+                </div>
+                <div class="rail-card">
+                  <h3>Open loop</h3>
+                  <p>下一步不是写结论，而是先列出需要 BE / owner 确认的问题。</p>
+                </div>
+              </aside>
+            </div>
+          </article>
+
+          <article class="page" id="page-ringcentral">
+            <div class="mock-header">
+              <div class="mock-title">
+                <h1>Video & BE collaborations</h1>
+                <div class="meta-row">
+                  <span class="pill">Juan de Bravo</span>
+                  <span class="pill">Release Process</span>
+                  <span class="pill amber">2 个断点相关</span>
+                </div>
+              </div>
+              <button class="btn">Open thread</button>
+            </div>
+            <div class="chat-feed">
+              <div class="chat-line">
+                <div class="avatar">JD</div>
+                <div class="bubble">
+                  <p>fixVersion 的日期是创建 release 的时间，实际部署会在之后几天完成。可以通过 rollout URL 查最终状态。</p>
+                </div>
+              </div>
+              <div class="chat-line">
+                <div class="avatar">EQ</div>
+                <div class="bubble">
+                  <p>Got it. I need to connect this with the Jira estimate note before I send the status summary.</p>
+                </div>
+              </div>
+              <div class="chat-line">
+                <div class="avatar">PA</div>
+                <div class="bubble">
+                  <p>Return Stack 已匹配到 Jira 估算核对断点。当前线程可以作为 evidence，但不应直接改写 estimate conclusion。</p>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="page" id="page-ai">
+            <div class="ai-page">
+              <div class="ai-history">
+                <div class="ai-card">
+                  <strong>ChatGPT</strong>
+                  <p>我可以帮你把 Jira / RingCentral / meeting 证据整理成一个核实清单。请提供当前目标和不能越界的地方。</p>
+                </div>
+                <div class="ai-card">
+                  <strong>Personal AI Return Cue</strong>
+                  <p>检测到你可能在继续 MTR-148115 估算核对。可插入一份本地 resume packet，restricted evidence 不会外发。</p>
+                </div>
+              </div>
+              <div class="composer">
+                <div class="composer-box" id="composerBox">
+                  请帮我继续处理这个 Jira 估算核对...
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="resume-card" id="resumeCard">
+          <div class="resume-head">
+            <div class="resume-icon">↩</div>
+            <div class="resume-title">
+              <strong id="cueTitle">继续刚才：MTR-148115 估算核对</strong>
+              <span id="cueSub">15 分钟前从 Jira 暂停 · return score 0.86</span>
+            </div>
+          </div>
+          <div class="resume-body">
+            <div class="cue-row"><b>停在</b><span id="lastAction">看到了 Dev Estimate Original=0.3，但来源仍混合了生成摘要。</span></div>
+            <div class="cue-row"><b>下一步</b><span id="nextStep">先列出要向 BE / owner 确认的 3 个问题，再生成 Jira comment 草稿。</span></div>
+            <div class="receipt" id="receiptText">证据：Jira memory、reflection_run action、RingCentral thread。1 条 restricted evidence 已隐藏。</div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" data-action="resume">继续</button>
+            <button class="btn" data-action="copy">复制给 Codex</button>
+            <button class="btn" data-action="snooze">稍后</button>
+            <button class="btn ghost" data-action="done">已完成</button>
+          </div>
+        </div>
+        <div class="toast" id="toast">已更新回程栈</div>
+      </section>
+
+      <aside class="side">
+        <div class="side-head">
+          <h2>工作记忆回程栈</h2>
+          <p>短期断点会自动衰减，只在当前页面或输入框相关时显示。</p>
+        </div>
+        <div class="stack">
+          <div class="stack-item active" data-stack="jira">
+            <div class="stack-top"><strong>MTR-148115 估算核对</strong><span class="score">0.86</span></div>
+            <p>停在 Jira comment evidence 对齐，下一步需要先确认 BE 口径。</p>
+            <div class="source-row"><span class="source">Jira</span><span class="source">RingCentral</span><span class="source">reflection_run</span></div>
+          </div>
+          <div class="stack-item" data-stack="meeting">
+            <div class="stack-top"><strong>AI Meetings focus areas</strong><span class="score">0.73</span></div>
+            <p>会前准备问题已生成，等待 Meeting Pilot 带入参会人上下文。</p>
+            <div class="source-row"><span class="source">Meeting</span><span class="source">Project</span><span class="source">Person</span></div>
+          </div>
+          <div class="stack-item" data-stack="codex">
+            <div class="stack-top"><strong>Codex status 可用性讨论</strong><span class="score">0.64</span></div>
+            <p>上次停在工具状态争议，适合进入 Ask，不适合直接写长期事实。</p>
+            <div class="source-row"><span class="source">ChatGPT</span><span class="source">Ask</span><span class="source">Authority</span></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const tabButtons = Array.from(document.querySelectorAll(".tab"));
+    const pages = {
+      jira: document.getElementById("page-jira"),
+      ringcentral: document.getElementById("page-ringcentral"),
+      ai: document.getElementById("page-ai")
+    };
+    const urls = {
+      jira: "jira.ringcentral.com/browse/MTR-148115",
+      ringcentral: "app.ringcentral.com/conversation/video-be-collaborations",
+      ai: "chat.openai.com/c/personal-ai-return-stack"
+    };
+    const cue = {
+      jira: {
+        title: "继续刚才：MTR-148115 估算核对",
+        sub: "15 分钟前从 Jira 暂停 · return score 0.86",
+        last: "看到了 Dev Estimate Original=0.3，但来源仍混合了生成摘要。",
+        next: "先列出要向 BE / owner 确认的 3 个问题，再生成 Jira comment 草稿。",
+        receipt: "证据：Jira memory、reflection_run action、RingCentral thread。1 条 restricted evidence 已隐藏。"
+      },
+      ringcentral: {
+        title: "相关断点：Release rollout 口径",
+        sub: "当前 thread 命中 2 个 anchors · return score 0.78",
+        last: "上次在 Jira 状态摘要前，需要确认 fixVersion 日期和实际 rollout 日期差异。",
+        next: "把 Juan 的解释作为 supporting evidence，不要直接覆盖 Jira 状态。",
+        receipt: "证据：RingCentral thread、Project topic、Jira relation。外发 packet 只包含摘要。"
+      },
+      ai: {
+        title: "插入 Resume Packet",
+        sub: "AI 输入框 focus · safe-to-pack evidence 3 条",
+        last: "当前 prompt 只写了“继续处理”，缺少任务目标和边界。",
+        next: "插入最小上下文：目标、停在何处、下一步、不可越界事项。",
+        receipt: "将插入摘要和 evidence labels；restricted 原文不会进入 ChatGPT / Codex。"
+      }
+    };
+
+    const urlText = document.getElementById("urlText");
+    const cueTitle = document.getElementById("cueTitle");
+    const cueSub = document.getElementById("cueSub");
+    const lastAction = document.getElementById("lastAction");
+    const nextStep = document.getElementById("nextStep");
+    const receiptText = document.getElementById("receiptText");
+    const toast = document.getElementById("toast");
+    const composerBox = document.getElementById("composerBox");
+
+    function setTab(name) {
+      tabButtons.forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
+      Object.entries(pages).forEach(([key, page]) => page.classList.toggle("active", key === name));
+      urlText.textContent = urls[name];
+      const current = cue[name];
+      cueTitle.textContent = current.title;
+      cueSub.textContent = current.sub;
+      lastAction.textContent = current.last;
+      nextStep.textContent = current.next;
+      receiptText.textContent = current.receipt;
+    }
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1600);
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", () => setTab(button.dataset.tab));
+    });
+
+    document.querySelectorAll(".stack-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        document.querySelectorAll(".stack-item").forEach((entry) => entry.classList.remove("active"));
+        item.classList.add("active");
+        if (item.dataset.stack === "meeting") {
+          cueTitle.textContent = "带入会议：AI Meetings focus areas";
+          cueSub.textContent = "Meeting Pilot 可用 · return score 0.73";
+          lastAction.textContent = "上次准备确认 Skills-Q2 interactive workflows 是否仍在 focus areas 内。";
+          nextStep.textContent = "加入会前 cue card，并在会议后吸收或关闭该断点。";
+          receiptText.textContent = "证据：active reflection thread、Project entity、Meeting participants。";
+        } else if (item.dataset.stack === "codex") {
+          cueTitle.textContent = "继续刚才：Codex status 可用性讨论";
+          cueSub.textContent = "Ask / AI 输入框相关 · return score 0.64";
+          lastAction.textContent = "状态仍是讨论中，存在 usability 和 negotiation 两类语义。";
+          nextStep.textContent = "适合进入 Ask 证据链，不适合直接写成长期事实。";
+          receiptText.textContent = "证据：ChatGPT memory、Ask prior、Authority Contracts 抑制边界。";
+        } else {
+          setTab("jira");
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.action;
+        if (action === "copy") {
+          composerBox.textContent = "我正在继续处理：MTR-148115 long polling 估算核对。刚才停在：Dev Estimate Original=0.3 需要来源确认。下一步：请列出要向 BE / owner 确认的 3 个点，并生成 Jira comment 草稿。不要把未核实状态写成已确认结论。";
+          setTab("ai");
+          showToast("Resume Packet 已放入输入框");
+          return;
+        }
+        if (action === "resume") {
+          showToast("已打开对应 evidence");
+        } else if (action === "snooze") {
+          showToast("已稍后到今天 18:00");
+        } else {
+          showToast("已标记完成，断点将衰减");
+        }
+      });
+    });
+  </script>
+</body>
+</html>

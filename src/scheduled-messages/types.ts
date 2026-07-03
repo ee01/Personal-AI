@@ -172,7 +172,7 @@ export interface SheetConfig {
   last_sync_action?: string;
   // 新版 Bot 配置（双 Jira Automation Rule）
   botAutomation?: BotAutomationConfig;
-  // 旧版兼容字段：仅 executor rule
+  // 旧版只读迁移字段：仅用于读取老缓存 / 老 Config，写回时不再持久化
   botExecutor?: BotAutomationRule;
   // AsMe RingCentral sender：配置后由 Jira rule 调内网 Dify workflow 发送
   ringCentralSender?: RingCentralSenderConfig;

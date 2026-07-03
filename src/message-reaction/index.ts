@@ -34,7 +34,9 @@ export { getSnoozeCreateFailureMessage } from './snoozeCreateResult';
 export type { 
   AutoReplyConfig, 
   TopicItemWithAutoReply, 
-  AutoReplyContext 
+  AutoReplyContext,
+  AutoReplyHandlingResult,
+  AutoReplySkipReason,
 } from './AutoReplyHandler';
 export { 
   handleAutoReplyRules,

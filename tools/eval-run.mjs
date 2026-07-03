@@ -237,6 +237,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runMemoryLifecycleCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'evidence-watch-contracts') {
+    return runEvidenceWatchContractsCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'scene-memory-autopilot') {
     return runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected });
   }
@@ -329,8 +333,20 @@ async function runCase({ suite, caseItem, runDir }) {
 }
 
 async function runComposeAssistCase({ suite, caseItem, runDir, collected }) {
-  if (caseItem.kind === 'compose_assist_context_pack') {
+  if (
+    caseItem.kind === 'compose_assist_context_pack' ||
+    caseItem.kind === 'compose_assist_prompt_patch'
+  ) {
     return runComposeAssistContextPackCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (caseItem.kind === 'compose_assist_lens_routing_contract') {
+    return runComposeAssistLensRoutingContractCase({
+      suite,
+      caseItem,
+      runDir,
+      collected,
+    });
   }
 
   if (caseItem.kind !== 'compose_assist_ambient_calibration') {
@@ -408,13 +424,103 @@ async function runComposeAssistCase({ suite, caseItem, runDir, collected }) {
   return result;
 }
 
-async function runComposeAssistContextPackCase({ suite, caseItem, runDir, collected }) {
-  const request = buildComposeAssistContextPackRequest({ caseItem, collected });
-  await appendJsonl(path.join(runDir, 'requests.jsonl'), { caseId: caseItem.id, request });
+async function runComposeAssistLensRoutingContractCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const sample = caseItem.sampleContext || {};
+  const expected = caseItem.expectedBehavior || {};
+  const assistResponse = sample.assistResponse || {};
+  const request = {
+    kind: caseItem.kind,
+    sampleContext: {
+      site: sample.site,
+      surface: sample.surface,
+      contextType: sample.contextType,
+      title: sample.title,
+      draftTextLength: String(sample.draftText || '').length,
+      assistResponse: summarizeComposeLensRoutingAssist(assistResponse),
+      memoryLensMatches: summarizeComposeLensRoutingMatches(
+        sample.memoryLensMatches || [],
+      ),
+    },
+    expectedBehavior: expected,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
 
-  const responseEnvelope = await postComposerAssist({ suite, caseItem, request });
+  const sourceChecks = await inspectComposeLensRoutingSourceContract();
+  const actual = evaluateComposeLensRoutingContract({
+    assistResponse,
+    memoryLensMatches: sample.memoryLensMatches || [],
+    sourceChecks,
+  });
+  const heuristic = judgeComposeLensRoutingContract({
+    caseItem,
+    actual,
+    expected,
+  });
+  const responseEnvelope = {
+    ok: heuristic.verdict !== 'error',
+    response: actual,
+  };
   await appendJsonl(path.join(runDir, 'responses.jsonl'), {
     caseId: caseItem.id,
+    ...responseEnvelope,
+  });
+
+  const status = heuristic.verdict;
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: expected,
+    sampleDetails: request.sampleContext,
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || sample.primaryText || sample.title || caseItem.title,
+    ),
+    status,
+    verdict: status,
+    scores: heuristic.scores,
+    overallScore: heuristic.overallScore,
+    userConclusion: heuristic.userConclusion,
+    improvementSuggestions: heuristic.improvementSuggestions,
+    why: heuristic.why,
+    actualOutput: actual,
+    judge: {
+      heuristic,
+      llm: null,
+    },
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runComposeAssistContextPackCase({ suite, caseItem, runDir, collected }) {
+  const request = buildComposeAssistContextPackRequest({ caseItem, collected });
+  const seed = await seedComposeAssistCaseMemories({ suite, caseItem });
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+    seed,
+  });
+
+  const responseEnvelope = seed.ok
+    ? await postComposerAssist({
+        suite,
+        caseItem,
+        request,
+        userIdOverride: seed.userId,
+      })
+    : { ok: false, error: seed.error };
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    seed,
     ...responseEnvelope,
   });
 
@@ -433,7 +539,11 @@ async function runComposeAssistContextPackCase({ suite, caseItem, runDir, collec
     expectedTopics: caseItem.expectedTopics || [],
     mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
     expectedBehavior: caseItem.expectedBehavior,
-    sampleDetails: summarizeComposeContextPackSample(collected, request),
+    sampleDetails: {
+      ...summarizeComposeContextPackSample(collected, request),
+      seededMemoryCount: seed.seededCount || 0,
+      seedUserId: seed.userId,
+    },
     sampleSummary: summarizeSampleText(collected.primaryText || request.primaryText || ''),
     status,
     verdict: status,
@@ -461,6 +571,192 @@ async function runComposeAssistContextPackCase({ suite, caseItem, runDir, collec
   };
   await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
   return result;
+}
+
+function summarizeComposeLensRoutingAssist(assistResponse = {}) {
+  return {
+    available: Boolean(assistResponse.available),
+    suggestionType: assistResponse.suggestionType,
+    confidence: assistResponse.confidence,
+    hasInsertText: Boolean(String(assistResponse.insertText || '').trim()),
+    insertTextLength: String(assistResponse.insertText || '').length,
+    evidenceCount: Array.isArray(assistResponse.evidence)
+      ? assistResponse.evidence.length
+      : 0,
+    title: assistResponse.title,
+    summary: truncateText(String(assistResponse.summary || ''), 220),
+  };
+}
+
+function summarizeComposeLensRoutingMatches(matches = []) {
+  return matches.slice(0, 5).map((match) => ({
+    id: match.id,
+    title: match.title,
+    displayPriority: match.displayPriority,
+    whyRelevant: (match.whyRelevant || []).slice(0, 3),
+  }));
+}
+
+function looksLikeEvalSendableComposerText(text) {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return false;
+  if (/^我理解当前是在讨论[:：]/.test(cleaned)) return false;
+  if (/^我这边先补充几个相关点[:：]/.test(cleaned)) return false;
+  if (/^我补充一下相关背景[:：]/.test(cleaned)) return false;
+  if (/Personal AI context|Please review/i.test(cleaned)) return false;
+  return true;
+}
+
+async function inspectComposeLensRoutingSourceContract() {
+  const [controller, previewPolicy, webIntelligence] = await Promise.all([
+    fs.readFile(
+      resolveRepoPath('src/composer-guard/ComposerGuardController.ts'),
+      'utf8',
+    ),
+    fs.readFile(
+      resolveRepoPath('src/composer-guard/assistPreviewPolicy.ts'),
+      'utf8',
+    ),
+    fs.readFile(
+      resolveRepoPath('src/contentScriptWebIntelligence.ts'),
+      'utf8',
+    ),
+  ]);
+  const shouldSuppressMatch = webIntelligence.match(
+    /private shouldSuppressContextBubbleForComposerAssist[\s\S]*?\n    }\n/,
+  );
+  const suppressorBody = shouldSuppressMatch?.[0] || '';
+
+  return {
+    controllerRemovedContextOnlyBranch:
+      !/hasContextOnlyAssist|contextOnly|上下文回执|只展示相关上下文/.test(
+        controller,
+      ),
+    previewPolicyRemovedContextOnlyReceipt:
+      !/contextOnly|上下文回执|只展示相关上下文/.test(previewPolicy),
+    lensHasGlobalComposeSuppression:
+      /COMPOSE_ASSIST_VISIBILITY_EVENT/.test(webIntelligence) &&
+      /hasVisibleComposerAssistAffordance\(\)/.test(suppressorBody) &&
+      !/isRingCentralMessagePage\(\)/.test(suppressorBody),
+    selectedTextBypassesComposeSuppression:
+      /payload\.contextType === 'selected_text'/.test(suppressorBody),
+  };
+}
+
+function evaluateComposeLensRoutingContract({
+  assistResponse = {},
+  memoryLensMatches = [],
+  sourceChecks = {},
+}) {
+  const confidence = Number(assistResponse.confidence);
+  const composeAssistIconVisible = Boolean(
+    assistResponse.available &&
+      looksLikeEvalSendableComposerText(assistResponse.insertText) &&
+      Number.isFinite(confidence) &&
+      confidence >= 0.78,
+  );
+  const memoryLensEligible = Boolean(
+    !composeAssistIconVisible &&
+      (memoryLensMatches.length ||
+        (Array.isArray(assistResponse.evidence) &&
+          assistResponse.evidence.length)),
+  );
+
+  return {
+    composeAssistIconVisible,
+    memoryLensEligible,
+    route:
+      composeAssistIconVisible
+        ? 'compose_assist'
+        : memoryLensEligible
+          ? 'memory_lens'
+          : 'silent',
+    sourceChecks,
+    assistSummary: summarizeComposeLensRoutingAssist(assistResponse),
+    memoryLensMatches: summarizeComposeLensRoutingMatches(memoryLensMatches),
+  };
+}
+
+function judgeComposeLensRoutingContract({ caseItem, actual, expected }) {
+  const failures = [];
+  const warnings = [];
+  const sourceChecks = actual.sourceChecks || {};
+
+  if (
+    typeof expected.composeAssistIconVisible === 'boolean' &&
+    actual.composeAssistIconVisible !== expected.composeAssistIconVisible
+  ) {
+    failures.push(
+      `Compose Assist icon visibility 应为 ${expected.composeAssistIconVisible}，实际为 ${actual.composeAssistIconVisible}`,
+    );
+  }
+  if (
+    typeof expected.memoryLensEligible === 'boolean' &&
+    actual.memoryLensEligible !== expected.memoryLensEligible
+  ) {
+    failures.push(
+      `Memory Lens eligible 应为 ${expected.memoryLensEligible}，实际为 ${actual.memoryLensEligible}`,
+    );
+  }
+  if (expected.route && actual.route !== expected.route) {
+    failures.push(`route 应为 ${expected.route}，实际为 ${actual.route}`);
+  }
+
+  const requiredSourceChecks = [
+    'controllerRemovedContextOnlyBranch',
+    'previewPolicyRemovedContextOnlyReceipt',
+    'lensHasGlobalComposeSuppression',
+    'selectedTextBypassesComposeSuppression',
+  ];
+  for (const key of requiredSourceChecks) {
+    if (!sourceChecks[key]) {
+      failures.push(`源码契约未满足：${key}`);
+    }
+  }
+
+  if (!actual.memoryLensMatches?.length) {
+    warnings.push('样本没有提供 Memory Lens matches，报告无法展示具体 lens 内容。');
+  }
+
+  const scores = {
+    compose_icon_suppression: actual.composeAssistIconVisible === false ? 3 : 0,
+    memory_lens_routing: actual.memoryLensEligible ? 3 : 0,
+    source_context_only_removed:
+      sourceChecks.controllerRemovedContextOnlyBranch &&
+      sourceChecks.previewPolicyRemovedContextOnlyReceipt
+        ? 3
+        : 0,
+    global_mutual_exclusion:
+      sourceChecks.lensHasGlobalComposeSuppression &&
+      sourceChecks.selectedTextBypassesComposeSuppression
+        ? 3
+        : 0,
+  };
+  const overallScore = computeOverallScore(scores, failures.length ? 'fail' : 'pass');
+  const verdict = failures.length ? 'fail' : warnings.length ? 'warn' : 'pass';
+
+  return {
+    verdict,
+    scores,
+    overallScore,
+    why:
+      failures[0] ||
+      warnings[0] ||
+      '证据-only 的 composer 场景不会占用 Compose Assist icon，且可交给 Memory Lens 展示。',
+    userConclusion: failures.length
+      ? '不通过：只读关联记忆仍可能占用 composer 入口，或 Lens/Compose 互斥没有全页面生效。'
+      : warnings.length
+        ? '需关注：路由契约通过，但样本证据不够完整。'
+        : '通过：无 insertText 的高相关证据走 Memory Lens；只有可插入草稿才显示 Compose Assist。',
+    improvementSuggestions: failures.length
+      ? failures
+      : warnings.length
+        ? warnings
+        : [
+            '保留这个 case 作为回归门；后续如果重新引入 context-only composer UI，需要先改产品契约和 eval。',
+          ],
+    caseTitle: caseItem.title,
+  };
 }
 
 async function runMemoryLifecycleCase({ suite, caseItem, runDir, collected }) {
@@ -718,6 +1014,106 @@ async function runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected 
     why: response.why || responseEnvelope.error,
     topMatch: response.topMatch,
     autopilot: response.autopilot || response.actualOutput?.autopilot,
+    sourceProvenanceAudit:
+      response.sourceProvenanceAudit ||
+      response.actualOutput?.sourceProvenanceAudit,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runEvidenceWatchContractsCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    question: caseItem.question,
+    expectedBehavior: caseItem.expectedBehavior,
+    action: caseItem.action,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-evidence-watch-contracts.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'evidence_watch_contracts_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      question: caseItem.question,
+      plan: {
+        disposition: caseItem.plan?.disposition,
+        reasonCode: caseItem.plan?.reasonCode,
+        gapType: caseItem.plan?.gapType,
+        sourceAnchor: caseItem.plan?.sourceAnchor,
+        recommendedAction: caseItem.plan?.recommendedAction,
+      },
+      action: caseItem.action,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.question || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Evidence Watch eval 时出错，未能判断守望契约体验。'
+        : 'Evidence Watch eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
     actualOutput:
       response.actualOutput || {
         ok: false,
@@ -942,7 +1338,11 @@ async function collectContext(caseItem) {
     const live = await collectLiveRingCentralContext(caseItem);
     if (live.ok) return live;
   }
-  if (args.live && caseItem.kind === 'compose_assist_context_pack') {
+  if (
+    args.live &&
+    (caseItem.kind === 'compose_assist_context_pack' ||
+      caseItem.kind === 'compose_assist_prompt_patch')
+  ) {
     const live = await collectLiveWebAiComposerContext(caseItem);
     if (live.ok) return live;
     return {
@@ -1932,13 +2332,126 @@ function normalizeVisibleMessages(messages, fallbackText) {
   return text ? [{ id: 'm-1', sender: 'visible-page', text }] : [];
 }
 
-async function postComposerAssist({ suite, caseItem, request }) {
+async function seedComposeAssistCaseMemories({ suite, caseItem }) {
+  const memories = Array.isArray(caseItem.sampleContext?.memories)
+    ? caseItem.sampleContext.memories
+    : [];
+  if (!memories.length) {
+    return { ok: true, seededCount: 0 };
+  }
+
+  const composerEndpoint =
+    process.env.EVAL_COMPOSER_ASSIST_URL ||
+    caseItem.endpoint?.url ||
+    suite.endpoint?.url;
+  if (!composerEndpoint) {
+    return {
+      ok: false,
+      seededCount: 0,
+      error: 'missing_composer_assist_endpoint_for_seed',
+    };
+  }
+
+  const userId =
+    process.env.EVAL_USER_ID ||
+    caseItem.endpoint?.userId ||
+    caseItem.sampleContext?.seedUserId ||
+    `eval-${String(caseItem.id || 'compose-assist')
+      .replace(/[^a-z0-9_-]+/gi, '-')
+      .slice(0, 80)}`;
+  const endpoint = buildSiblingMemoryServiceEndpoint(
+    composerEndpoint,
+    '/api/v1/ingest',
+  );
+  const timeoutMs = Number(
+    process.env.EVAL_COMPOSER_ASSIST_TIMEOUT_MS ||
+      process.env.EVAL_HTTP_TIMEOUT_MS ||
+      45_000,
+  );
+  let seededCount = 0;
+
+  for (const [index, memory] of memories.entries()) {
+    const content = String(memory.content || memory.text || '').trim();
+    if (!content) continue;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId,
+        },
+        body: JSON.stringify({
+          content,
+          scope: memory.scope || 'work',
+          source: memory.source || `eval-${caseItem.id}`,
+          sourceType: memory.sourceType || memory.type || 'manual',
+          sourceTitle: memory.sourceTitle || memory.title || caseItem.title,
+          sourceUrl: memory.sourceUrl || caseItem.canonicalUrl || caseItem.url,
+          skipExtraction: memory.skipExtraction,
+          metadata: {
+            ...(memory.metadata || {}),
+            evalSeed: true,
+            evalCaseId: caseItem.id,
+            evalSeedIndex: index + 1,
+          },
+        }),
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        return {
+          ok: false,
+          seededCount,
+          userId,
+          error: `seed_ingest_failed:${res.status}:${text}`,
+        };
+      }
+      seededCount += 1;
+    } catch (err) {
+      const isAbort = err?.name === 'AbortError';
+      return {
+        ok: false,
+        seededCount,
+        userId,
+        error: isAbort
+          ? `seed_ingest_timeout_after_${timeoutMs}ms`
+          : `seed_ingest_failed:${err.message}`,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { ok: true, seededCount, userId };
+}
+
+function buildSiblingMemoryServiceEndpoint(endpoint, pathname) {
+  try {
+    const url = new URL(endpoint);
+    url.pathname = pathname;
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return endpoint.replace(/\/api\/v1\/composer\/assist.*$/, pathname);
+  }
+}
+
+async function postComposerAssist({
+  suite,
+  caseItem,
+  request,
+  userIdOverride,
+}) {
   const endpoint =
     process.env.EVAL_COMPOSER_ASSIST_URL ||
     caseItem.endpoint?.url ||
     suite.endpoint?.url;
   const userId =
     process.env.EVAL_USER_ID ||
+    userIdOverride ||
     caseItem.endpoint?.userId ||
     suite.endpoint?.userId ||
     caseItem.owner;
@@ -2218,14 +2731,20 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   const expected = caseItem.expectedTopics || [];
   const banned = caseItem.mustNotReturnTopics || [];
   const expectedBehavior = caseItem.expectedBehavior || {};
+  const expectedSuggestionType = expectedBehavior.suggestionType || 'context_pack';
   const insertText = String(response?.insertText || '');
   const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
   const evidenceText = evidence.map(composeEvidenceText).join('\n');
-  const contextPackMemoryText = [
-    extractContextPackSection(insertText, '相关记忆'),
-    extractContextPackSection(insertText, '来源'),
-    evidenceText,
-  ].filter(Boolean).join('\n');
+  const contextPackMemoryText =
+    expectedSuggestionType === 'prompt_patch'
+      ? [insertText, evidenceText].filter(Boolean).join('\n')
+      : [
+          extractContextPackSection(insertText, '相关记忆'),
+          extractContextPackSection(insertText, '来源'),
+          evidenceText,
+        ]
+          .filter(Boolean)
+          .join('\n');
   const combinedText = [insertText, response?.summary, evidenceText].filter(Boolean).join('\n');
   const matchedExpectedTopics = hitTerms(contextPackMemoryText || evidenceText, expected);
   const matchedEvidenceTopics = hitTerms(evidenceText, expected);
@@ -2246,7 +2765,6 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   const matchedMustInclude = hitTerms(contextPackMemoryText || insertText, mustInclude);
   const matchedMustNotInclude = hitTerms(insertText, mustNotInclude);
   const hasMustInclude = mustInclude.length === 0 || matchedMustInclude.length >= mustInclude.length;
-  const expectedSuggestionType = expectedBehavior.suggestionType || 'context_pack';
   const hasExpectedSuggestionType = response?.suggestionType === expectedSuggestionType;
   const expectedPreview = expectedBehavior.previewRequired;
   const previewMatches = expectedPreview == null || response?.previewRequired === expectedPreview;
@@ -2340,6 +2858,7 @@ function judgeComposeContextPack({ caseItem, response, request }) {
       previewMatches,
       riskMatches,
       evidenceCount: evidence.length,
+      expectedSuggestionType,
     }),
     topMatch: summarizeComposeEvidence(evidence[0]),
     matchedExpectedTopics,
@@ -2757,6 +3276,9 @@ function deriveReaderCaseGoal(item) {
     return '验证当前场景下 Memory Lens / Autopilot 是否展示强相关记忆并静默弱噪音。';
   }
   if (item.suiteId === 'compose-assist') {
+    if (item.caseKind === 'compose_assist_lens_routing_contract') {
+      return '验证证据-only 的 composer 场景是否只走 Memory Lens，不占用 Compose Assist 插入入口。';
+    }
     return '验证 Compose Assist 是否基于当前 composer 场景生成可用、可追溯且隐私安全的结果。';
   }
   return item.caseTitle || item.sampleSummary || '验证该 eval case 的预期行为。';
@@ -2765,6 +3287,7 @@ function deriveReaderCaseGoal(item) {
 function buildReaderInputSummary(item) {
   const sample = item.sampleDetails || {};
   const request = sample.request || sample.composerRequest || {};
+  const sourceProvenanceAudit = getSourceProvenanceAudit(item);
   return {
     text: item.sampleSummary || sample.primaryText || item.caseTitle || '-',
     rows: [
@@ -2772,11 +3295,14 @@ function buildReaderInputSummary(item) {
       ['URL', request.url || sample.url || item.targetUrl],
       ['用户问句', item.query || sample.query],
       ['当前文本', request.primaryText || sample.primaryText],
-      ['surface', request.surface || sample.site],
-      ['contextType', request.contextType],
+      ['surface', request.surface || sample.surface || sample.site],
+      ['contextType', request.contextType || sample.contextType],
       ['采集方式', sample.collectionMode],
       ['记忆样本数', sample.memoryCount],
       ['样本来源', summarizeSourceProvenance(sample.sourceProvenance)],
+      ['样本来源审计', summarizeSourceProvenanceAudit(sourceProvenanceAudit)],
+      ['来源状态分布', summarizeSourceProvenanceStatus(sourceProvenanceAudit)],
+      ['来源告警', summarizeSourceProvenanceWarnings(sourceProvenanceAudit)],
     ],
     goodChips: item.expectedTopics || [],
     badChips: item.mustNotReturnTopics || [],
@@ -2803,6 +3329,7 @@ function buildReaderActualSummary(item) {
     output.insertText ||
     output.answer ||
     output.assist ||
+    output.route ||
     topMatch?.title ||
     output.summary ||
     '';
@@ -2821,6 +3348,13 @@ function buildReaderActualSummary(item) {
     ['suggestionType', output.suggestionType],
     ['riskLevel', output.riskLevel],
     ['previewRequired', output.previewRequired],
+    ['route', output.route],
+    ['Compose icon 可见', output.composeAssistIconVisible],
+    ['Memory Lens eligible', output.memoryLensEligible],
+    ['移除 context-only 分支', output.sourceChecks?.controllerRemovedContextOnlyBranch],
+    ['移除上下文回执', output.sourceChecks?.previewPolicyRemovedContextOnlyReceipt],
+    ['全页面 Compose/Lens 互斥', output.sourceChecks?.lensHasGlobalComposeSuppression],
+    ['划词检索不被互斥', output.sourceChecks?.selectedTextBypassesComposeSuppression],
     ['Trace action', output.ambientTrace?.action],
     ['Trace polarity', output.ambientTrace?.polarity],
     ['rawTextStored', output.ambientTrace?.redactedDiff?.rawTextStored],
@@ -3195,6 +3729,10 @@ function computeOverallScore(scores = {}, status = '') {
     explanation_quality: 10,
     answer_quality: 10,
     suppression_correctness: 10,
+    compose_icon_suppression: 25,
+    memory_lens_routing: 25,
+    source_context_only_removed: 25,
+    global_mutual_exclusion: 25,
   };
   const keys = Object.keys(weights).filter((key) => Number.isFinite(Number(scores[key])));
   if (!keys.length) return null;
@@ -3763,6 +4301,7 @@ function buildComposeContextPackWhy({
   previewMatches,
   riskMatches,
   evidenceCount,
+  expectedSuggestionType,
 }) {
   if (matchedMustNotReturnTopics.length || matchedMustNotInclude.length) {
     return `Compose context pack included banned topic(s): ${[
@@ -3774,7 +4313,7 @@ function buildComposeContextPackWhy({
     return `Composer Assist stayed quiet: ${response?.debug?.rejectedReason || response?.summary || 'available=false'}`;
   }
   if (!hasExpectedSuggestionType) {
-    return `Expected context_pack, got ${response?.suggestionType || '-'}.`;
+    return `Expected ${expectedSuggestionType || 'context_pack'}, got ${response?.suggestionType || '-'}.`;
   }
   if (!evidenceCount) return 'Composer Assist generated no evidence-backed context.';
   if (!matchedEvidenceTopics.length) return 'Evidence was returned, but it did not contain the expected memory anchors.';
@@ -3863,6 +4402,35 @@ function summarizeSourceProvenance(sourceProvenance) {
   const first = Array.isArray(sourceProvenance) ? sourceProvenance[0] : null;
   if (!first) return '';
   return [first.status, first.source].filter(Boolean).join(' · ');
+}
+
+function getSourceProvenanceAudit(item) {
+  return (
+    item.sourceProvenanceAudit ||
+    item.actualOutput?.sourceProvenanceAudit ||
+    item.judge?.heuristic?.sourceProvenanceAudit ||
+    item.judge?.heuristic?.actualOutput?.sourceProvenanceAudit ||
+    null
+  );
+}
+
+function summarizeSourceProvenanceAudit(audit) {
+  if (!audit || typeof audit !== 'object') return '';
+  return audit.summary || '';
+}
+
+function summarizeSourceProvenanceStatus(audit) {
+  if (!audit || typeof audit !== 'object') return '';
+  return Object.entries(audit.byStatus || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([status, count]) => `${status}: ${count}`)
+    .join(', ');
+}
+
+function summarizeSourceProvenanceWarnings(audit) {
+  if (!audit || typeof audit !== 'object') return '';
+  const warnings = Array.isArray(audit.warnings) ? audit.warnings : [];
+  return warnings.join(' | ');
 }
 
 function renderProofChecks(checks) {
@@ -4081,6 +4649,11 @@ function renderContextRecallCaseCard(item) {
   const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
   const topMatch = item.topMatch;
   const autopilot = item.autopilot || item.judge?.heuristic?.autopilot;
+  const sourceProvenanceAudit =
+    item.sourceProvenanceAudit ||
+    item.actualOutput?.sourceProvenanceAudit ||
+    item.judge?.heuristic?.sourceProvenanceAudit ||
+    item.judge?.heuristic?.actualOutput?.sourceProvenanceAudit;
   return `<article class="case-card">
     <div class="case-card-head">
       <div>
@@ -4100,6 +4673,7 @@ function renderContextRecallCaseCard(item) {
         <h4>跑了什么数据</h4>
         <p>${escapeHtml(item.sampleSummary || '-')}</p>
         ${renderSceneSourceProvenance(item.sampleDetails?.sourceProvenance)}
+        ${renderSceneSourceProvenanceAudit(sourceProvenanceAudit)}
         ${renderChipGroup('期望命中', item.expectedTopics || [], 'chip-good')}
         ${renderChipGroup('不能命中', item.mustNotReturnTopics || [], 'chip-bad')}
       </div>
@@ -4179,9 +4753,33 @@ function renderSceneSourceProvenance(sourceProvenance) {
   </div>`;
 }
 
+function renderSceneSourceProvenanceAudit(audit) {
+  if (!audit || typeof audit !== 'object') return '';
+  const statusRows = Object.entries(audit.byStatus || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([status, count]) => `${status}: ${count}`);
+  return `<div class="source-provenance">
+    <h5>样本来源审计</h5>
+    ${renderKeyValueList([
+      ['摘要', audit.summary || '-'],
+      ['来源数', audit.total ?? 0],
+      ['可信输入', audit.trustedInputCount ?? 0],
+      ['阻断来源', audit.blockedCount ?? 0],
+      ['状态分布', statusRows],
+    ])}
+    ${renderChipGroup('来源告警', audit.warnings || [], 'chip-bad')}
+  </div>`;
+}
+
 function renderComposeAssistCaseCard(item) {
-  if (item.caseKind === 'compose_assist_context_pack') {
+  if (
+    item.caseKind === 'compose_assist_context_pack' ||
+    item.caseKind === 'compose_assist_prompt_patch'
+  ) {
     return renderComposeContextPackCaseCard(item);
+  }
+  if (item.caseKind === 'compose_assist_lens_routing_contract') {
+    return renderComposeLensRoutingContractCaseCard(item);
   }
 
   const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
@@ -4250,6 +4848,82 @@ function renderComposeAssistCaseCard(item) {
         <h4>改进建议</h4>
         <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
       </div>
+    </div>
+
+    ${renderCaseReportContract(item)}
+    <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
+  </article>`;
+}
+
+function renderComposeLensRoutingContractCaseCard(item) {
+  const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
+  const sample = item.sampleDetails || {};
+  const output = item.actualOutput || {};
+  const sourceChecks = output.sourceChecks || {};
+  return `<article class="case-card">
+    <div class="case-card-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(item.caseId)}</p>
+        <h3>${escapeHtml(item.caseTitle || item.caseId)}</h3>
+        <p class="muted">${escapeHtml(item.caseKind || 'compose_assist_lens_routing_contract')}</p>
+      </div>
+      <div class="score-box">
+        ${statusBadge(item.status)}
+        ${score == null ? '' : `<strong>${escapeHtml(score)}</strong><span>体验分 / 100</span>`}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>跑了什么 composer 场景</h4>
+        ${renderKeyValueList([
+          ['站点', sample.site],
+          ['Surface', sample.surface],
+          ['Context Type', sample.contextType],
+          ['标题', sample.title],
+          ['草稿长度', sample.draftTextLength],
+          ['Assist available', sample.assistResponse?.available],
+          ['Assist has insertText', sample.assistResponse?.hasInsertText],
+          ['Evidence 数量', sample.assistResponse?.evidenceCount],
+        ])}
+        ${renderEvidenceRefs(sample.memoryLensMatches || [])}
+      </div>
+      <div>
+        <h4>期望路由</h4>
+        ${renderKeyValueList([
+          ['期望 route', item.expectedBehavior?.route],
+          ['Compose icon 可见', item.expectedBehavior?.composeAssistIconVisible],
+          ['Memory Lens eligible', item.expectedBehavior?.memoryLensEligible],
+        ])}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>实际路由</h4>
+        ${renderKeyValueList([
+          ['route', output.route],
+          ['Compose icon 可见', output.composeAssistIconVisible],
+          ['Memory Lens eligible', output.memoryLensEligible],
+        ])}
+      </div>
+      <div>
+        <h4>源码契约</h4>
+        ${renderKeyValueList([
+          ['移除 Controller context-only', sourceChecks.controllerRemovedContextOnlyBranch],
+          ['移除上下文回执', sourceChecks.previewPolicyRemovedContextOnlyReceipt],
+          ['全页面 Compose 抑制 Lens', sourceChecks.lensHasGlobalComposeSuppression],
+          ['划词检索不被抑制', sourceChecks.selectedTextBypassesComposeSuppression],
+        ])}
+      </div>
+    </div>
+
+    <div>
+      <h4>用户视角结论</h4>
+      <p>${escapeHtml(item.userConclusion || item.why || '-')}</p>
+      <p class="muted">${escapeHtml(item.why || '')}</p>
+      <h4>改进建议</h4>
+      <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
     </div>
 
     ${renderCaseReportContract(item)}

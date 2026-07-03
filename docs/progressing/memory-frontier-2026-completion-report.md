@@ -90,17 +90,35 @@ QW + P0（#1–#5）此前已基本落地，本轮**验证并补齐其 P1 缺口
 
 `report: .eval-runs/memory-abilities/mem-abilities-local/{reader-report.json,case-results.json,responses.jsonl}`
 
+### 2026-06-23 线上权威复跑（已闭环）
+
+后续按线上真实数据复跑时先收紧 judge：grounded case 必须返回 evidence，`contextMatch=ambiguous` 直接失败，评分会剥离问题回声和候选澄清文案；`responses.jsonl` 同步记录 `contextMatchState` 与 `evidencePreview`，便于检查到底是答案本身还是证据命中了 golden。第一次收紧后暴露两个真实缺口：明确写出 Cursor subject 的完整问句被当成短指代澄清；LLM 超时 fallback 可能把只命中弱中文 bigram 的无关记忆当 evidence。
+
+修复后只 scoped 同步 `/ask` 与话题锁定相关源文件到 `10.32.56.212`，避免 `npm run deploy:memory` 把本地大量无关 dirty `memory-service/` 文件一起 rsync 到线上。远端 clean source 上 `docker compose build memory-service` 通过 TypeScript 编译，`docker compose up -d memory-service` 后容器 health 为 healthy。
+
+| 能力 | 2026-06-23 线上复跑 | proof 摘要 |
+| --- | --- | --- |
+| extraction | PASS | 返回 mThor grounded evidence |
+| multi_session | PASS | Cursor 评价跨来源命中成本锚点 |
+| temporal | PASS | Cursor 成本/性价比问题 `contextMatch=locked`，evidence 命中 2026 时间锚 |
+| knowledge_update | PASS | Cursor 当前许可/不活跃用户处理命中最新政策锚点 |
+| abstention | PASS | 巴黎航班缺失事实返回 evidence 空列表，不展示无关时间闲聊 |
+| prospective | PASS | Everyone AI Campaign 跟进项命中 |
+| **overall** | **1.000** | **6/6，通过 baseline 回归门** |
+
+`report: .eval-runs/memory-abilities/mem-abilities-frontier-remote-after-cjk-fix-20260623/reader-report.json`
+
 ### 诚实标注（本地体检的可信边界）
 
 - **A/B 的有效结论是「行为中性」**：新旧代码在同一 fixture/同一 cases 上得到**逐项完全相同**的分数 → 本批未改变召回/作答行为。这是本次能给出的最强无回归证据。
 - **绝对分数不代表线上召回质量**：本地是 fresh fixture + 本地 Dify(gpt-4o-mini) + best-of-2，`responses.jsonl` 显示同一 case 不同尝试时而召回到真实证据（mThor fixVersion、Cursor 成本）、时而退化为「证据不足」，分数受 LLM 措辞抖动影响较大；`case-results` 记的 `evidence=0` 也说明评分以关键词命中为主、未稳定锚定证据条数。因此 0.722 是「新旧一致的本地参考值」，不是「线上真实数据上的召回质量」。
-- **线上权威体检待补**：仓库基线（overall=1.0、2026-06-12）是在 `10.32.56.212` 真实数据上采集的口径；本次因远端无法 `npm ci` 未能复跑。**待远端恢复网络后 `npm run deploy:memory` 再 `npm run eval:memory-abilities` 即可在权威口径上确认。**
+- **线上权威体检已补**：仓库基线（overall=1.0、2026-06-12）是在 `10.32.56.212` 真实数据上采集的口径；6/23 已用同一线上口径完成复跑并回到 6/6。
 
 **其它验证**：memory-service 全量 698 单测/集成测试通过（新增 6 plan 各带确定性套件：`synonymEdges`/`salience`/`actionExecutor`/`memoryProbationLifecycle`/`mergeDecision`/`memoryEvolution`/`anticipation`/`catchUp`/`proactivityV2`/`memoryLineage`/`skillQualityGate`/`mcpTools`）。所有默认关闭的开关（chunkMergeDecisionEnabled、utilityV2）保证 off 时与旧行为逐字节一致。
 
 ## 遗留与边界（透明记录）
 
-- **未部署线上**：远端无网络无法 `npm ci` 重建容器；本地 A/B 已证明无回归，但线上真实数据上的体检需在远端恢复网络后 `npm run deploy:memory` 再跑。
+- **线上部署缺口已于 2026-06-23 闭环**：6/18 当时远端无网络无法 `npm ci` 重建容器；6/23 改用 scoped 源文件同步 + 远端 clean `docker compose build`，已重建并启动 memory-service，线上真实数据体检 6/6。
 - **默认关闭的开关**：`chunkMergeDecisionEnabled`（#6-A，写路径加 LLM 调用）、`utilityV2`（#8，通知最敏感面建议影子模式先行）——按 plan 的灰度纪律默认 OFF，开启需先过体检。
 - **仍在推进的子切片**（已在各 feature 文档「仍在推进」标注）：#2 其它读路径（composer/provider/reflection/dream）的中性框架包裹与 per-item ⚠ UI；#3 P2 时间衰减边权；#4 P2 sceneKey 维度 + ProactivityPolicy 亲密度；#5 通知「依据」行前端 + P2 解释链路；#7 day-close cron + guardrail 蒸馏 + quick-ask 桌面卡片；#8 feed 依据行前端 + scheduled 次晨投递管线；#11 降级通知 + Foundry UI 黄标 + 修订回路；#9 SSE 远程档 + OpenClaw 双向。后端契约与数据层均已落地，余下多为前端呈现与灰度投递。
 - **工作树既有改动**：会话开始时仓库已有 498 个与本批无关的未提交改动（extension `src/`、`desktop-app/`、`tools/`、automation receipts 等，来自既往会话）。本批**只提交了自己拥有的 memory-service + 对应 docs 文件**，未触碰这些既有改动。

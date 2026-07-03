@@ -45,6 +45,60 @@
       </p>
     </div>
 
+    <div
+      v-if="!loading"
+      class="triage-banner"
+      :class="pageTriageReceipt.tone"
+      role="status"
+    >
+      <div class="triage-copy">
+        <div class="triage-title">{{ pageTriageReceipt.title }}</div>
+        <ul>
+          <li v-for="item in pageTriageReceipt.items" :key="item">
+            {{ item }}
+          </li>
+        </ul>
+      </div>
+      <div class="triage-stats" aria-label="主动询问当前筛选计数">
+        <span>待审批 {{ approvalSessions.length }}</span>
+        <span>可重试 {{ retriableSessions.length }}</span>
+        <span>等待/延期 {{ waitingSessions.length }}</span>
+        <span>已排程 {{ queuedSessions.length }}</span>
+        <span>待触发计划 {{ visibleTemplates.length }}</span>
+      </div>
+    </div>
+
+    <div
+      v-if="!loading && focusLane"
+      class="focus-lane"
+      :class="focusLane.tone"
+      role="status"
+      aria-label="主动询问本轮处理对象"
+    >
+      <div class="focus-copy">
+        <div class="focus-eyebrow">{{ focusLane.eyebrow }}</div>
+        <div class="focus-title">{{ focusLane.title }}</div>
+        <h3>{{ focusLane.subject }}</h3>
+        <p>{{ focusLane.context }}</p>
+        <div class="focus-meta" aria-label="本轮处理对象元信息">
+          <span v-for="item in focusLane.meta" :key="item">{{ item }}</span>
+        </div>
+      </div>
+      <div class="focus-action-panel">
+        <router-link
+          v-if="focusLane.route"
+          :to="focusLane.route"
+          class="focus-action"
+        >
+          {{ focusLane.actionLabel }}
+        </router-link>
+        <div class="focus-boundary-title">处理边界</div>
+        <ul>
+          <li v-for="item in focusLane.items" :key="item">{{ item }}</li>
+        </ul>
+      </div>
+    </div>
+
     <div class="filters">
       <select v-model="status" class="filter-select" @change="applyFilters">
         <option value="all">全部状态</option>
@@ -111,7 +165,24 @@
       v-else-if="sessions.length === 0 && visibleTemplates.length === 0"
       class="empty-state"
     >
-      <p>暂无主动询问会话。</p>
+      <div
+        v-if="hasActiveFilters"
+        class="filtered-empty-receipt"
+        role="status"
+        aria-label="主动询问筛选空结果回执"
+      >
+        <div class="handoff-title">筛选空结果回执</div>
+        <p>{{ filteredEmptyReceipt.summary }}</p>
+        <ul>
+          <li v-for="item in filteredEmptyReceipt.items" :key="item">
+            {{ item }}
+          </li>
+        </ul>
+        <button class="clear-filter-btn" @click="clearFilters">
+          清除筛选
+        </button>
+      </div>
+      <p v-else>暂无主动询问会话。</p>
     </div>
 
     <div v-else>
@@ -153,6 +224,27 @@
                   templateSyncStateLabel(item.template.syncState)
                 }}</span>
               </div>
+            </div>
+
+            <div class="stage-line">
+              <strong>当前阶段：</strong>{{ templateStageHint(item) }}
+            </div>
+
+            <div
+              class="handoff-receipt"
+              :class="templateHandoffReceipt(item).tone"
+            >
+              <div class="handoff-title">
+                {{ templateHandoffReceipt(item).title }}
+              </div>
+              <ul>
+                <li
+                  v-for="line in templateHandoffReceipt(item).items"
+                  :key="line"
+                >
+                  {{ line }}
+                </li>
+              </ul>
             </div>
 
             <div class="card-meta">
@@ -246,6 +338,23 @@
             </div>
 
             <div
+              class="handoff-receipt"
+              :class="sessionHandoffReceipt(session).tone"
+            >
+              <div class="handoff-title">
+                {{ sessionHandoffReceipt(session).title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in sessionHandoffReceipt(session).items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
+            <div
               v-if="evidenceSnapshot(session).hasEvidence"
               class="evidence-box"
             >
@@ -286,6 +395,25 @@
               </p>
             </div>
 
+            <div
+              v-if="approvalListReviewReceipt(session)"
+              class="handoff-receipt warn pre-approval-review"
+              role="status"
+              aria-label="主动询问列表发送前复核"
+            >
+              <div class="handoff-title">
+                {{ approvalListReviewReceipt(session)?.title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in approvalListReviewReceipt(session)?.items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
             <div class="card-meta">
               <span
                 >将发送给
@@ -322,11 +450,14 @@
               <button
                 class="inline-btn primary"
                 :disabled="
-                  Boolean(busyById[session.id]) || !canApproveSession(session)
+                  Boolean(busyById[session.id]) ||
+                  !canApproveSession(session) ||
+                  shouldForceDetailReviewBeforeApprove(session)
                 "
+                :title="approveButtonTitle(session)"
                 @click="approveSession(session.id)"
               >
-                {{ canApproveSession(session) ? '批准发送' : '先确认目标' }}
+                {{ approveButtonLabel(session) }}
               </button>
               <button
                 class="inline-btn ghost"
@@ -336,7 +467,11 @@
                 取消
               </button>
               <router-link :to="`/outreach/${session.id}`" class="inline-link"
-                >进入详情编辑</router-link
+                >{{
+                  shouldForceDetailReviewBeforeApprove(session)
+                    ? '进入详情复核'
+                    : '进入详情编辑'
+                }}</router-link
               >
             </div>
           </div>
@@ -388,6 +523,23 @@
 
             <div class="stage-line">
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
+            </div>
+
+            <div
+              class="handoff-receipt"
+              :class="sessionHandoffReceipt(session).tone"
+            >
+              <div class="handoff-title">
+                {{ sessionHandoffReceipt(session).title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in sessionHandoffReceipt(session).items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
             </div>
 
             <div
@@ -509,6 +661,23 @@
 
             <div class="stage-line">
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
+            </div>
+
+            <div
+              class="handoff-receipt"
+              :class="sessionHandoffReceipt(session).tone"
+            >
+              <div class="handoff-title">
+                {{ sessionHandoffReceipt(session).title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in sessionHandoffReceipt(session).items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
             </div>
 
             <div
@@ -643,6 +812,23 @@
             </div>
 
             <div
+              class="handoff-receipt"
+              :class="sessionHandoffReceipt(session).tone"
+            >
+              <div class="handoff-title">
+                {{ sessionHandoffReceipt(session).title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in sessionHandoffReceipt(session).items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
+            <div
               v-if="evidenceSnapshot(session).hasEvidence"
               class="evidence-box"
             >
@@ -725,6 +911,16 @@
               <div class="box-title">结构化结果</div>
               <pre>{{ formatJson(session.outcome) }}</pre>
             </div>
+
+            <div v-if="canRetrySession(session)" class="card-actions">
+              <button
+                class="inline-btn primary"
+                :disabled="Boolean(busyById[session.id])"
+                @click="retrySession(session.id)"
+              >
+                重试
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -754,6 +950,8 @@ const router = useRouter();
 
 const loading = ref(true);
 const sessions = ref<OutreachSession[]>([]);
+const allSessionsSnapshot = ref<OutreachSession[]>([]);
+const allSessionsSnapshotLoaded = ref(false);
 const templateItems = ref<OutreachTemplateRuntimeStatusItem[]>([]);
 const summary = ref<OutreachSummary>({
   upcomingCount: 0,
@@ -772,6 +970,26 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
   'cancelled',
   'failed',
 ]);
+type HandoffReceiptTone = 'default' | 'success' | 'warn' | 'danger';
+
+interface HandoffReceipt {
+  title: string;
+  tone: HandoffReceiptTone;
+  items: string[];
+}
+
+interface FocusLane {
+  eyebrow: string;
+  title: string;
+  tone: HandoffReceiptTone;
+  subject: string;
+  context: string;
+  meta: string[];
+  route: string;
+  actionLabel: string;
+  items: string[];
+}
+
 const approvalSessions = computed(() =>
   sessions.value.filter((session) => session.status === 'pending_approval'),
 );
@@ -791,13 +1009,29 @@ const historySessions = computed(() =>
     ),
   ),
 );
-const visibleTemplates = computed(() =>
-  sortTemplatesForDisplay(
-    templateItems.value.filter(
-      (item) => matchesTemplateFilters(item) && isPendingTemplate(item),
-    ),
-  ),
+const retriableSessions = computed(() =>
+  sessions.value.filter((session) => canRetrySession(session)),
 );
+const visibleTemplates = computed(() =>
+  pendingTemplates.value.filter((item) => matchesTemplateFilters(item)),
+);
+const pendingTemplates = computed(() =>
+  sortTemplatesForDisplay(templateItems.value.filter(isPendingTemplate)),
+);
+const hasActiveFilters = computed(
+  () =>
+    status.value !== 'all' ||
+    Boolean(originKind.value.trim()) ||
+    Boolean(templateId.value.trim()) ||
+    Boolean(threadId.value.trim()),
+);
+const hiddenSessionCount = computed(() =>
+  Math.max(0, allSessionsSnapshot.value.length - sessions.value.length),
+);
+const hiddenTemplateCount = computed(() =>
+  Math.max(0, pendingTemplates.value.length - visibleTemplates.value.length),
+);
+const filteredEmptyReceipt = computed(() => buildFilteredEmptyReceipt());
 const showSetupBanner = computed(() => {
   if (!runtimeConfig.value) return false;
   return (
@@ -815,6 +1049,10 @@ const setupBannerText = computed(() => {
   }
   return '你已经进入了主动询问页面，但缺少发送所需的 RingCentral 配置。补齐后，待审批和待发送会话才会继续推进。';
 });
+const pageTriageReceipt = computed<HandoffReceipt>(() =>
+  buildPageTriageReceipt(),
+);
+const focusLane = computed<FocusLane | null>(() => buildFocusLane());
 
 const status = ref<OutreachSessionStatus | 'all'>('all');
 const originKind = ref('');
@@ -876,6 +1114,7 @@ function applyFilters() {
 async function loadData() {
   loading.value = true;
   loadError.value = '';
+  const needsUnfilteredSnapshot = hasActiveFilters.value;
   try {
     const results = await Promise.allSettled([
       client.getRuntimeConfig(),
@@ -888,10 +1127,19 @@ async function loadData() {
         threadId: threadId.value || undefined,
         limit: 50,
       }),
+      needsUnfilteredSnapshot
+        ? client.getOutreachSessions({ limit: 50 })
+        : Promise.resolve(null),
     ] as const);
 
     const failures: string[] = [];
-    const [configResult, summaryResult, templateResult, listResult] = results;
+    const [
+      configResult,
+      summaryResult,
+      templateResult,
+      listResult,
+      unfilteredListResult,
+    ] = results;
 
     if (configResult.status === 'fulfilled') {
       runtimeConfig.value = configResult.value;
@@ -917,6 +1165,23 @@ async function loadData() {
       failures.push(formatLoadFailure('会话列表', listResult.reason));
     }
 
+    if (needsUnfilteredSnapshot) {
+      if (
+        unfilteredListResult.status === 'fulfilled' &&
+        unfilteredListResult.value
+      ) {
+        allSessionsSnapshot.value = sortSessionsForDisplay(
+          unfilteredListResult.value.items,
+        );
+        allSessionsSnapshotLoaded.value = true;
+      } else {
+        allSessionsSnapshotLoaded.value = false;
+      }
+    } else if (listResult.status === 'fulfilled') {
+      allSessionsSnapshot.value = sessions.value;
+      allSessionsSnapshotLoaded.value = true;
+    }
+
     if (failures.length > 0) {
       loadError.value = failures.join('；');
       console.error('Failed to load outreach sessions:', failures.join('; '));
@@ -939,6 +1204,316 @@ function formatLoadFailure(label: string, error: unknown) {
   return `${label}：${message || 'unknown error'}`;
 }
 
+function buildPageTriageReceipt(): HandoffReceipt {
+  const scopeLine = `范围：${triageFilterLabel()}，可见会话 ${sessions.value.length} 条、待触发计划 ${visibleTemplates.value.length} 条。`;
+  const boundary =
+    '边界：刷新和筛选只读取 Memory Service 状态，不会批准、发送、追问、重试或写回 RingCentral。';
+
+  if (loadError.value && !hasLoadedData.value) {
+    return {
+      title: '本页优先级',
+      tone: 'danger',
+      items: [
+        `先恢复数据加载：${loadError.value}`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (loadError.value) {
+    return {
+      title: '本页优先级',
+      tone: 'danger',
+      items: [
+        `先重试加载：当前继续展示上次成功数据，最新错误是 ${loadError.value}`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (showSetupBanner.value) {
+    return {
+      title: '本页优先级',
+      tone: 'warn',
+      items: [
+        `先修复配置：${setupBannerTitle.value}；待审批和已排程会话不会继续外发。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (retriableSessions.value.length > 0) {
+    return {
+      title: '本页优先级',
+      tone: 'danger',
+      items: [
+        `先处理 ${retriableSessions.value.length} 个失败、无回复或已升级终态；重试前核对旧失败原因和目标是否仍可用。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (approvalSessions.value.length > 0) {
+    return {
+      title: '本页优先级',
+      tone: 'warn',
+      items: [
+        `先处理 ${approvalSessions.value.length} 个待审批会话；批准前确认目标、问题和计划时间。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (waitingSessions.value.length > 0) {
+    return {
+      title: '本页优先级',
+      tone: 'default',
+      items: [
+        `当前重点是等待 ${waitingSessions.value.length} 个已发出会话的回复；系统不会在等待窗口内重复打扰同一目标。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (queuedSessions.value.length > 0) {
+    return {
+      title: '本页优先级',
+      tone: 'default',
+      items: [
+        `当前有 ${queuedSessions.value.length} 个已排程会话；发出前仍可进入详情修改或取消。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  if (visibleTemplates.value.length > 0) {
+    return {
+      title: '本页优先级',
+      tone: 'default',
+      items: [
+        `当前只有 ${visibleTemplates.value.length} 个待触发计划；它们还不是已发出的外部消息。`,
+        scopeLine,
+        boundary,
+      ],
+    };
+  }
+
+  return {
+    title: '本页优先级',
+    tone: 'success',
+    items: [
+      '当前筛选下没有需要你立即处理的主动询问。',
+      scopeLine,
+      boundary,
+    ],
+  };
+}
+
+function buildFocusLane(): FocusLane | null {
+  if (loadError.value && !hasLoadedData.value) return null;
+
+  const retriable = retriableSessions.value[0];
+  if (retriable) {
+    const failureReason =
+      retriable.errorMessage || extractOutcomeSummary(retriable.outcome);
+    return sessionFocusLane(retriable, {
+      eyebrow: '本轮处理对象 · 终态恢复',
+      title: '先核对旧失败，再决定是否重试',
+      tone: 'danger',
+      actionLabel: '打开重试详情',
+      items: [
+        '下一步：打开详情核对旧失败原因、目标对象和最近事件后，再决定是否重试。',
+        '边界：本卡只定位会话；不会调用重试、重新发送、写入 RingCentral 或修改 Memory Service。',
+        failureReason
+          ? `旧原因：${failureReason}`
+          : '恢复：重试会保留旧终态和 retried 审计事件，不会伪装成新建会话。',
+      ],
+    });
+  }
+
+  const approval = approvalSessions.value[0];
+  if (approval) {
+    return sessionFocusLane(approval, {
+      eyebrow: '本轮处理对象 · 待审批',
+      title:
+        approval.targetResolutionStatus === 'resolved'
+          ? '先确认发送范围'
+          : '先确认唯一目标',
+      tone: 'warn',
+      actionLabel: '进入详情审批',
+      items: [
+        '下一步：打开详情确认目标、问题和计划时间，再决定是否批准发送。',
+        '边界：本卡不批准、不发送；真正的批准动作仍要在详情或会话卡按钮执行。',
+        '恢复：目标不明确时先编辑目标或取消，不要让自动化猜收件人。',
+      ],
+    });
+  }
+
+  const waiting = waitingSessions.value[0];
+  if (waiting) {
+    return sessionFocusLane(waiting, {
+      eyebrow: '本轮处理对象 · 等待回复',
+      title: isMessageReactionSession(waiting)
+        ? '先核对原消息线程'
+        : '先看等待窗口',
+      tone: 'default',
+      actionLabel: '查看回复归因',
+      items: [
+        '下一步：打开详情查看回复归因、等待窗口和追问额度。',
+        '边界：查看不会追问、结束会话或发送新消息；引擎只按等待窗口继续检查。',
+        isMessageReactionSession(waiting)
+          ? '恢复：必要时从详情或原消息链接核对上下文，避免重复追问已经答过的问题。'
+          : '恢复：如果等待窗口或目标不合理，再进入详情取消或重新发起。',
+      ],
+    });
+  }
+
+  const queued = queuedSessions.value[0];
+  if (queued) {
+    return sessionFocusLane(queued, {
+      eyebrow: '本轮处理对象 · 已排程',
+      title: '先复核发出时间',
+      tone: 'default',
+      actionLabel: '查看排程详情',
+      items: [
+        '下一步：打开详情确认发出时间、目标和是否需要取消或修改。',
+        '边界：本卡不会立即发送，也不会跳过目标解析或写回 RingCentral。',
+        '恢复：发出前仍可在详情调整目标、问题、计划时间或取消这次会话。',
+      ],
+    });
+  }
+
+  const template = visibleTemplates.value[0];
+  if (template) {
+    return templateFocusLane(template);
+  }
+
+  return null;
+}
+
+function sessionFocusLane(
+  session: OutreachSession,
+  options: Pick<
+    FocusLane,
+    'eyebrow' | 'title' | 'tone' | 'actionLabel' | 'items'
+  >,
+): FocusLane {
+  return {
+    ...options,
+    subject: session.renderedQuestion || '(空问题)',
+    context: session.renderedContext || sessionStageHint(session),
+    route: `/outreach/${session.id}`,
+    meta: sessionFocusMeta(session),
+  };
+}
+
+function sessionFocusMeta(session: OutreachSession) {
+  const meta = [
+    `状态 ${statusLabel(session.status)}`,
+    originLabel(session.originKind),
+    `目标 ${formatTarget(session.targetType, session.targetRef)}`,
+    sessionTargetResolutionLabel(session),
+  ];
+  if (session.waitUntil) meta.push(`等待至 ${relativeTime(session.waitUntil)}`);
+  if (session.nextCheckAt) {
+    meta.push(`${nextSessionTimeLabel(session.status)} ${relativeTime(session.nextCheckAt)}`);
+  }
+  const evidence = evidenceSnapshot(session).stateLabel;
+  if (evidence) meta.push(evidence);
+  return meta;
+}
+
+function nextSessionTimeLabel(statusValue: OutreachSessionStatus) {
+  if (statusValue === 'scheduled') return '计划发送';
+  if (statusValue === 'waiting_reply' || statusValue === 'deferred')
+    return '下次检查';
+  if (statusValue === 'pending_approval') return '审批后计划';
+  return '更新时间';
+}
+
+function templateFocusLane(
+  item: OutreachTemplateRuntimeStatusItem,
+): FocusLane {
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  const target = formatTarget(item.template.targetType, item.template.targetRef);
+  const latest = item.latestSession;
+  return {
+    eyebrow: '本轮处理对象 · 待触发计划',
+    title: '先确认下一次计划是否仍有效',
+    tone: 'default',
+    subject:
+      item.template.questionTemplate || item.template.title || '(空问题)',
+    context: item.template.contextTemplate || '计划已同步，等待触发。',
+    route: templateListRoute(item),
+    actionLabel: '查看计划会话',
+    meta: [
+      `目标 ${target}`,
+      `同步 ${templateSyncStateLabel(item.template.syncState)}`,
+      nextDispatchAt ? `下次 ${relativeTime(nextDispatchAt)}` : '计划时间未解析',
+      latest ? `上次 ${statusLabel(latest.status)}` : '尚未生成会话',
+    ],
+    items: [
+      nextDispatchAt
+        ? `下一步：${relativeTime(nextDispatchAt)} 由 Outreach 引擎生成下一次会话。`
+        : '下一步：先修复计划时间，当前不会生成下一次会话。',
+      '边界：本卡只是计划视图，不会立即发送、创建会话、审批、追问或写回 RingCentral。',
+      latest?.id
+        ? '恢复：可查看上次执行或回到定时消息计划调整目标、问题和时间。'
+        : '恢复：需要调整目标、问题或时间时，回到定时消息计划修改。',
+    ],
+  };
+}
+
+function triageFilterLabel() {
+  const statusText =
+    status.value === 'all' ? '全部状态' : `状态 ${statusLabel(status.value)}`;
+  const originText = originKind.value
+    ? `来源 ${originLabel(originKind.value)}`
+    : '全部来源';
+  const templateText = templateId.value.trim()
+    ? `计划 ${templateId.value.trim()}`
+    : '';
+  const threadText = threadId.value.trim()
+    ? `线程 ${threadId.value.trim()}`
+    : '';
+  return [statusText, originText, templateText, threadText]
+    .filter(Boolean)
+    .join(' / ');
+}
+
+function buildFilteredEmptyReceipt() {
+  const items = [
+    `当前筛选：${triageFilterLabel()}。`,
+    allSessionsSnapshotLoaded.value
+      ? hiddenSessionCount.value > 0 || hiddenTemplateCount.value > 0
+        ? `未筛选快照里还有 ${hiddenSessionCount.value} 条会话和 ${hiddenTemplateCount.value} 个待触发计划被当前筛选隐藏。`
+        : '未筛选快照也没有可展示的会话或待触发计划。'
+      : '未筛选会话快照暂时不可用；可以清除筛选后重新读取全部列表。',
+    '恢复：清除筛选会回到全部状态、全部来源、全部计划和全部线程视图。',
+    '边界：清除筛选或刷新只会重新读取 Memory Service，不会批准、发送、追问、重试或写回 RingCentral。',
+  ];
+
+  return {
+    summary: '当前筛选没有匹配的主动询问会话或待触发计划。',
+    items,
+  };
+}
+
+function clearFilters() {
+  status.value = 'all';
+  originKind.value = '';
+  templateId.value = '';
+  threadId.value = '';
+  void router.replace({ path: '/outreach' });
+}
+
 async function approveSession(id: string) {
   busyById[id] = true;
   try {
@@ -958,6 +1533,22 @@ async function cancelSession(id: string) {
   try {
     await client.cancelOutreachSession(id, 'Cancelled from outreach list UI');
     await loadData();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.alert(message || '取消主动询问失败。');
+  } finally {
+    busyById[id] = false;
+  }
+}
+
+async function retrySession(id: string) {
+  busyById[id] = true;
+  try {
+    await client.retryOutreachSession(id);
+    await loadData();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.alert(message || '重试主动询问失败。');
   } finally {
     busyById[id] = false;
   }
@@ -1022,7 +1613,8 @@ function statusLabel(statusValue: string) {
 }
 
 function originLabel(originKind?: string) {
-  if (originKind === 'reflection_action') return '自我反思';
+  if (originKind === 'reflection_action' || originKind === 'reflection')
+    return '自我反思';
   if (originKind === 'message_reaction') return '消息跟进';
   if (originKind === 'scheduled_template' || originKind === 'manual_action')
     return '手动/定时';
@@ -1073,6 +1665,52 @@ function templateTargetResolutionLabel(
   return '运行时解析';
 }
 
+function templateStageHint(item: OutreachTemplateRuntimeStatusItem) {
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  const latest = item.latestSession;
+  if (!nextDispatchAt) {
+    return '计划时间暂未解析，不会自动生成下一次主动询问会话。';
+  }
+  if (latest && TERMINAL_OUTREACH_STATUSES.has(latest.status)) {
+    return `上次执行${statusLabel(
+      latest.status,
+    )}；这条计划仍保留，下一次预计 ${relativeTime(nextDispatchAt)} 重新进入处理。`;
+  }
+  return `计划尚未生成下一次会话；预计 ${relativeTime(
+    nextDispatchAt,
+  )} 进入 Outreach 引擎处理。`;
+}
+
+function templateHandoffReceipt(
+  item: OutreachTemplateRuntimeStatusItem,
+): HandoffReceipt {
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  const target = formatTarget(item.template.targetType, item.template.targetRef);
+  const latest = item.latestSession;
+  const targetBoundary =
+    latest?.targetResolutionStatus === 'ambiguous' ||
+    latest?.targetResolutionStatus === 'unresolved'
+      ? '边界：上次目标未唯一确认，下一次仍会停在待审批/详情确认，不会跳过目标确认。'
+      : '边界：这只是待触发计划，还不是已经发出的消息；刷新列表不会立即发送。';
+  const latestRecovery = latest?.id
+    ? `恢复：可查看上次执行（${statusLabel(
+        latest.status,
+      )}）或回到定时消息计划调整目标、问题和时间。`
+    : '恢复：需要调整目标、问题或时间时，回到定时消息计划修改。';
+
+  return {
+    title: '计划推进回执',
+    tone: 'default',
+    items: [
+      nextDispatchAt
+        ? `下一步：预计 ${relativeTime(nextDispatchAt)} 由 Outreach 引擎为 ${target} 生成下一次会话。`
+        : '下一步：先修复计划时间，当前不会生成下一次会话。',
+      targetBoundary,
+      latestRecovery,
+    ],
+  };
+}
+
 function sessionTargetResolutionLabel(session: OutreachSession) {
   if (session.targetResolutionStatus === 'resolved') {
     return `已确认：${session.targetResolvedLabel || session.targetRef}`;
@@ -1088,6 +1726,74 @@ function sessionTargetResolutionLabel(session: OutreachSession) {
 
 function canApproveSession(session: OutreachSession) {
   return session.targetResolutionStatus === 'resolved';
+}
+
+function preDispatchEvidenceLabel(session: OutreachSession) {
+  if (session.status !== 'pending_approval' && session.status !== 'scheduled') {
+    return '';
+  }
+  const snapshot = evidenceSnapshot(session);
+  return (
+    extractOutcomeSummary(session.outcome) ||
+    session.replyRawText?.trim() ||
+    snapshot.summary ||
+    snapshot.relatedMessage ||
+    (snapshot.hasEvidence ? '已有结构化证据或回复线索' : '')
+  );
+}
+
+function shouldForceDetailReviewBeforeApprove(session: OutreachSession) {
+  return (
+    session.status === 'pending_approval' &&
+    canApproveSession(session) &&
+    Boolean(preDispatchEvidenceLabel(session))
+  );
+}
+
+function approvalListReviewReceipt(session: OutreachSession): HandoffReceipt | null {
+  const evidenceLabel = preDispatchEvidenceLabel(session);
+  if (!evidenceLabel || session.status !== 'pending_approval') {
+    return null;
+  }
+  return {
+    title: '列表发送前复核',
+    tone: 'warn',
+    items: [
+      `已有证据/回复线索：${truncateInlineText(evidenceLabel)}。`,
+      '下一步：先进详情页核对发送前复核，再决定批准、取消或编辑问题。',
+      '边界：列表不会在已有线索时直接批准发送，避免绕过详情复核重复打扰外部对象。',
+    ],
+  };
+}
+
+function approveButtonLabel(session: OutreachSession) {
+  if (!canApproveSession(session)) return '先确认目标';
+  if (shouldForceDetailReviewBeforeApprove(session)) return '先到详情复核';
+  return '批准发送';
+}
+
+function approveButtonTitle(session: OutreachSession) {
+  if (!canApproveSession(session)) {
+    return '目标未确认，进入详情选择唯一 RingCentral 用户或群组后才能批准。';
+  }
+  if (shouldForceDetailReviewBeforeApprove(session)) {
+    return '这条会话已有证据或回复线索，请先进详情复核后再决定是否批准发送。';
+  }
+  return '批准后才会交给 Outreach 引擎处理；是否已发出仍以事件和等待回复状态为准。';
+}
+
+function truncateInlineText(value: string, maxLength = 96) {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function canRetrySession(session: OutreachSession) {
+  return (
+    session.status === 'failed' ||
+    session.status === 'no_reply' ||
+    session.status === 'escalated'
+  );
 }
 
 function targetTypeLabel(targetType?: string) {
@@ -1289,6 +1995,119 @@ function sessionStageHint(session: OutreachSession) {
   return '状态未知。';
 }
 
+function sessionHandoffReceipt(session: OutreachSession): HandoffReceipt {
+  const target = formatTarget(session.targetType, session.targetRef);
+  if (session.status === 'pending_approval') {
+    if (session.targetResolutionStatus !== 'resolved') {
+      return {
+        title: '会话推进回执',
+        tone: 'warn',
+        items: [
+          '下一步：进入详情确认唯一 RingCentral 用户或群组后才能批准。',
+          '边界：目标未确认前不会发送外部消息，也不会自动追问。',
+          '恢复：可取消这次询问，或保留在待审批队列稍后处理。',
+        ],
+      };
+    }
+    return {
+      title: '会话推进回执',
+      tone: 'warn',
+      items: [
+        `下一步：你批准后才会向 ${target} 发出询问。`,
+        '边界：批准发送不等于确认答案，后续仍会等待回复或追问。',
+        '恢复：发送前仍可进入详情修改目标、问题或计划时间。',
+      ],
+    };
+  }
+
+  if (session.status === 'scheduled') {
+    const sendTiming = session.nextCheckAt
+      ? `计划在 ${relativeTime(session.nextCheckAt)} 由引擎发出。`
+      : '等待 Outreach 引擎恢复后发出。';
+    return {
+      title: '会话推进回执',
+      tone: 'default',
+      items: [
+        `下一步：${sendTiming}`,
+        '边界：刷新列表不会立即发送，也不会跳过目标解析结果。',
+        '恢复：发出前可进入详情修改或取消这次会话。',
+      ],
+    };
+  }
+
+  if (session.status === 'waiting_reply' || session.status === 'deferred') {
+    const waitWindow = session.waitUntil
+      ? `等待窗口到 ${relativeTime(session.waitUntil)}。`
+      : '当前没有明确等待截止时间。';
+    const nextCheck = session.nextCheckAt
+      ? `下次检查在 ${relativeTime(session.nextCheckAt)}。`
+      : '暂未排定下次检查。';
+    return {
+      title: '会话推进回执',
+      tone: 'warn',
+      items: [
+        isMessageReactionSession(session)
+          ? '下一步：先检查原消息线程是否已有满足目标的回复，未命中才继续追问。'
+          : `下一步：${waitWindow} ${nextCheck}`,
+        '边界：不会在等待窗口内重复打扰同一目标。',
+        messageReactionSourceUrl(session)
+          ? '恢复：可打开原消息核对上下文，或进入详情检查回复归因。'
+          : '恢复：可进入详情检查回复归因、追问额度和时间线。',
+      ],
+    };
+  }
+
+  if (session.status === 'resolved') {
+    return {
+      title: '会话推进回执',
+      tone: 'success',
+      items: [
+        '下一步：结果已进入这条会话的结构化结果或回复记录。',
+        '边界：已完成会话不会自动再次发送外部消息。',
+        '恢复：如果结果不足，进入详情复核后再决定是否重新发起。',
+      ],
+    };
+  }
+
+  if (canRetrySession(session)) {
+    const failureReason =
+      session.errorMessage || extractOutcomeSummary(session.outcome);
+    return {
+      title: '会话推进回执',
+      tone: 'danger',
+      items: [
+        '下一步：可点重试，把这条终态会话重置到新一轮处理。',
+        failureReason
+          ? `边界：重试前先确认旧失败原因：${failureReason}`
+          : '边界：重试会保留旧终态和 retried 审计事件，不会伪装成新建会话。',
+        '恢复：先确认 RingCentral、目标对象或原消息仍可用，再重试。',
+      ],
+    };
+  }
+
+  if (session.status === 'cancelled') {
+    return {
+      title: '会话推进回执',
+      tone: 'default',
+      items: [
+        '下一步：这条会话已停止推进。',
+        '边界：取消状态不会自动恢复或重新发送。',
+        '恢复：需要时从原始场景重新发起新的主动询问。',
+      ],
+    };
+  }
+
+  return {
+    title: '会话推进回执',
+    tone: 'default',
+    items: [
+      '下一步：进入详情查看时间线和最新事件。',
+      '边界：列表只展示当前状态，不会替你发送或确认答案。',
+      '恢复：根据详情里的目标、回复和错误记录决定下一步。',
+    ],
+  };
+}
+
 function extractOutcomeSummary(outcome?: Record<string, unknown>) {
   if (!outcome) return '';
   const candidates = [
@@ -1415,6 +2234,184 @@ function evidenceMentionLabels(
   margin: 0;
   color: #ddd6fe;
   line-height: 1.55;
+}
+
+.triage-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(125, 211, 252, 0.22);
+}
+
+.triage-banner.warn {
+  background: rgba(120, 53, 15, 0.2);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.triage-banner.danger {
+  background: rgba(127, 29, 29, 0.22);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.triage-banner.success {
+  background: rgba(20, 83, 45, 0.16);
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.triage-copy {
+  min-width: 0;
+}
+
+.triage-title {
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.triage-banner ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #cbd5e1;
+  line-height: 1.55;
+  font-size: 0.84rem;
+}
+
+.triage-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.42rem;
+  max-width: 23rem;
+}
+
+.triage-stats span {
+  padding: 0.2rem 0.52rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.focus-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 28rem);
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(125, 211, 252, 0.24);
+}
+
+.focus-lane.warn {
+  background: rgba(120, 53, 15, 0.18);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.focus-lane.danger {
+  background: rgba(127, 29, 29, 0.2);
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.focus-lane.success {
+  background: rgba(20, 83, 45, 0.14);
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.focus-copy {
+  min-width: 0;
+}
+
+.focus-eyebrow {
+  color: #7dd3fc;
+  font-size: 0.76rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.focus-lane.warn .focus-eyebrow {
+  color: #fcd34d;
+}
+
+.focus-lane.danger .focus-eyebrow {
+  color: #fca5a5;
+}
+
+.focus-title {
+  color: #e2e8f0;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.focus-copy h3 {
+  margin: 0 0 0.45rem;
+  color: #f8fafc;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.focus-copy p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.focus-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin-top: 0.8rem;
+}
+
+.focus-meta span {
+  padding: 0.2rem 0.52rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 0.75rem;
+}
+
+.focus-action-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.focus-action {
+  align-self: flex-start;
+  padding: 0.55rem 0.8rem;
+  border-radius: 0.65rem;
+  background: #38bdf8;
+  color: #082f49;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.focus-boundary-title {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.focus-action-panel ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .filters {
@@ -1580,6 +2577,48 @@ function evidenceMentionLabels(
   color: #cbd5e1;
   font-size: 0.86rem;
   line-height: 1.5;
+}
+
+.handoff-receipt {
+  margin-top: 0.72rem;
+  padding: 0.78rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(30, 41, 59, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.handoff-receipt.warn {
+  background: rgba(120, 53, 15, 0.2);
+  border-color: rgba(245, 158, 11, 0.26);
+}
+
+.handoff-receipt.success {
+  background: rgba(20, 83, 45, 0.18);
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.handoff-receipt.danger {
+  background: rgba(127, 29, 29, 0.22);
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.handoff-title {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 0.42rem;
+}
+
+.handoff-receipt ul {
+  margin: 0;
+  padding-left: 1.05rem;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.handoff-receipt li + li {
+  margin-top: 0.2rem;
 }
 
 .evidence-box {
@@ -1782,6 +2821,45 @@ function evidenceMentionLabels(
   color: #94a3b8;
 }
 
+.filtered-empty-receipt {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1rem 1.1rem;
+  text-align: left;
+  border-radius: 1rem;
+  background: rgba(30, 41, 59, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.filtered-empty-receipt p {
+  margin: 0 0 0.55rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.filtered-empty-receipt ul {
+  margin: 0;
+  padding-left: 1.05rem;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.filtered-empty-receipt li + li {
+  margin-top: 0.22rem;
+}
+
+.clear-filter-btn {
+  margin-top: 0.85rem;
+  border: none;
+  border-radius: 0.8rem;
+  padding: 0.68rem 0.95rem;
+  cursor: pointer;
+  background: #38bdf8;
+  color: #082f49;
+  font-weight: 700;
+}
+
 .loading-spinner {
   width: 2.3rem;
   height: 2.3rem;
@@ -1796,6 +2874,10 @@ function evidenceMentionLabels(
   .page-header,
   .card-head {
     flex-direction: column;
+  }
+
+  .focus-lane {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

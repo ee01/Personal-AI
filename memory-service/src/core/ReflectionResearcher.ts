@@ -17,6 +17,15 @@ const DEFAULT_LOCAL_RESEARCH_SOURCE_TYPES: RecallSourceType[] = [
   'web',
   'manual',
   'system',
+  'source_memory',
+  'user_core',
+  'markdown',
+  'reflection',
+  'reflection_thread',
+  'rehearsal',
+  'daily_log',
+  'project_summary',
+  'entity_profile',
 ];
 
 const SUPPORTED_LOCAL_RESEARCH_SOURCE_TYPES = new Set<RecallSourceType>([

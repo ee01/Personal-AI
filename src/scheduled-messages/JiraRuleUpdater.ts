@@ -33,6 +33,12 @@ export interface JiraRuleUpdateResult {
   message: string;
   newVersion?: string;
   error?: string;
+  updatedConfig?: SheetConfig;
+}
+
+export interface JiraRuleUpdateOptions {
+  saveConfigToStorage?: boolean;
+  syncConfigToSheet?: boolean;
 }
 
 type ManagedRuleKind = 'executor' | 'timelineSync';
@@ -257,7 +263,7 @@ export class JiraRuleUpdater {
    * 执行更新
    * 使用 PUT API 更新现有规则，保持 Rule ID 不变
    */
-  async updateJiraRule(): Promise<JiraRuleUpdateResult> {
+  async updateJiraRule(options: JiraRuleUpdateOptions = {}): Promise<JiraRuleUpdateResult> {
     try {
       const executorRule = getExecutorRule(this.config);
       const timelineSyncRule = getTimelineSyncRule(this.config);
@@ -315,7 +321,8 @@ export class JiraRuleUpdater {
         await this.updateRuleConfigVersion(
           kind,
           kind === 'timelineSync' ? JIRA_TIMELINE_SYNC_RULE_VERSION : latestVersion,
-          updatedRule.name
+          updatedRule.name,
+          options
         );
       }
       
@@ -324,7 +331,8 @@ export class JiraRuleUpdater {
       return {
         success: true,
         message: `Jira Rule 已更新到版本 ${latestVersion}`,
-        newVersion: latestVersion
+        newVersion: latestVersion,
+        updatedConfig: this.config ? normalizeSheetConfig(this.config) : undefined,
       };
       
     } catch (error) {
@@ -395,7 +403,8 @@ export class JiraRuleUpdater {
   private async updateRuleConfigVersion(
     kind: ManagedRuleKind,
     version: string,
-    ruleName: string
+    ruleName: string,
+    options: JiraRuleUpdateOptions
   ): Promise<void> {
     if (!this.config) {
       return;
@@ -403,7 +412,7 @@ export class JiraRuleUpdater {
 
     const targetRule = kind === 'timelineSync'
       ? this.config.botAutomation?.timelineSyncRule
-      : this.config.botAutomation?.executorRule || this.config.botExecutor;
+      : getExecutorRule(this.config);
 
     if (!targetRule) {
       return;
@@ -414,14 +423,21 @@ export class JiraRuleUpdater {
     targetRule.ruleName = ruleName;
 
     this.config = normalizeSheetConfig(this.config);
-    
-    // 保存到 Chrome Storage
-    await this.saveConfigToStorage();
-    
-    // 尝试同步到 Google Sheet（不阻塞）
-    this.syncConfigToSheet().catch(err => {
-      console.warn('同步配置到 Sheet 失败（不影响功能）:', err);
-    });
+
+    const shouldSaveConfigToStorage = options.saveConfigToStorage ?? true;
+    const shouldSyncConfigToSheet = options.syncConfigToSheet ?? true;
+
+    if (shouldSaveConfigToStorage) {
+      await this.saveConfigToStorage();
+    }
+
+    if (shouldSyncConfigToSheet) {
+      // 独立升级入口继续尽力写回 Sheet；Bot 配置主流程会禁用这里，
+      // 等最终 ConfigSyncService.syncConfig 完成 Sheet-first 写入。
+      this.syncConfigToSheet().catch(err => {
+        console.warn('同步配置到 Sheet 失败（不影响功能）:', err);
+      });
+    }
   }
   
   /**

@@ -92,6 +92,42 @@ type ProfileExportAudit = {
     };
 };
 
+type ProfileExportManifest = {
+    manifestVersion: string;
+    manifestId: string;
+    createdAt: string;
+    generatedBy: string;
+    formatVersion: string;
+    scope: {
+        exportType: string;
+        statusScope: string;
+        includesCurrentItems: boolean;
+        includesInactiveAuditItems: boolean;
+        includesDiagnostics: boolean;
+        diagnosticWarnings: number;
+    };
+    pagination: {
+        exportedProfileItems: number;
+        totalProfileItems: number;
+        truncated: boolean;
+        statusScope: string;
+    };
+    personalizationBoundary: ProfileExportAudit['personalizationBoundary'];
+    portabilityBoundary: {
+        localJsonOnly: boolean;
+        importRequiresExplicitUserAction: boolean;
+        restoreRequiresSeparateFlow: boolean;
+        externalSyncAuthorized: boolean;
+    };
+    integrity: {
+        algorithm: string;
+        fingerprintAvailable: boolean;
+        profileItemsSha256: string;
+        userCoreSha256: string;
+        profileAuditSha256: string;
+    };
+};
+
 function getExportErrorMessage(error: unknown): string {
     if (error instanceof Error && error.message) return error.message;
     if (typeof error === 'string' && error.trim()) return error.trim();
@@ -138,6 +174,36 @@ function getProfileItemEvidenceCount(item: any): number {
         }
     }
     return 0;
+}
+
+function normalizeExportJsonValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map((item) => normalizeExportJsonValue(item));
+    }
+    if (value && typeof value === 'object') {
+        const normalized: Record<string, unknown> = {};
+        for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+            normalized[key] = normalizeExportJsonValue((value as Record<string, unknown>)[key]);
+        }
+        return normalized;
+    }
+    return value ?? null;
+}
+
+function stableExportJsonStringify(value: unknown): string {
+    return JSON.stringify(normalizeExportJsonValue(value));
+}
+
+async function buildSha256Hex(value: unknown): Promise<string> {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return 'unavailable';
+    const encoded = new TextEncoder().encode(
+        typeof value === 'string' ? value : stableExportJsonStringify(value),
+    );
+    const digest = await subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
 }
 
 function buildProfileExportAudit(items: any[]): ProfileExportAudit {
@@ -196,6 +262,58 @@ function buildProfileExportAudit(items: any[]): ProfileExportAudit {
             rule: 'Only active profile items with userConfirmed=true are eligible for personalization and provider context.',
             usableProfileItems,
             heldForConfirmationItems: exportedProfileItems - usableProfileItems,
+        },
+    };
+}
+
+async function buildProfileExportManifest(input: {
+    exportTime: string;
+    formatVersion: string;
+    profileItems: any[];
+    userCore: string;
+    profileAudit: ProfileExportAudit;
+    pagination: ProfileExportManifest['pagination'];
+    warnings: string[];
+}): Promise<ProfileExportManifest> {
+    const [profileItemsSha256, userCoreSha256, profileAuditSha256] = await Promise.all([
+        buildSha256Hex(input.profileItems),
+        buildSha256Hex(input.userCore),
+        buildSha256Hex(input.profileAudit),
+    ]);
+    const fingerprintAvailable = ![
+        profileItemsSha256,
+        userCoreSha256,
+        profileAuditSha256,
+    ].includes('unavailable');
+
+    return {
+        manifestVersion: '1.0',
+        manifestId: `profile-export-${input.exportTime.replace(/[:.]/g, '-')}-${profileItemsSha256.slice(0, 12)}`,
+        createdAt: input.exportTime,
+        generatedBy: 'Personal AI Chrome Extension',
+        formatVersion: input.formatVersion,
+        scope: {
+            exportType: 'complete_user_profile',
+            statusScope: input.pagination.statusScope,
+            includesCurrentItems: true,
+            includesInactiveAuditItems: input.profileAudit.inactiveAuditItems > 0,
+            includesDiagnostics: true,
+            diagnosticWarnings: input.warnings.length,
+        },
+        pagination: input.pagination,
+        personalizationBoundary: input.profileAudit.personalizationBoundary,
+        portabilityBoundary: {
+            localJsonOnly: true,
+            importRequiresExplicitUserAction: true,
+            restoreRequiresSeparateFlow: true,
+            externalSyncAuthorized: false,
+        },
+        integrity: {
+            algorithm: 'SHA-256',
+            fingerprintAvailable,
+            profileItemsSha256,
+            userCoreSha256,
+            profileAuditSha256,
         },
     };
 }
@@ -272,6 +390,7 @@ export class UserProfileMessageHandler {
             console.log('处理显式重要性标记请求:', request);
             const { itemId, importance } = request;
             const normalizedImportance = Number(importance);
+            const confirmAfterUpdate = request.confirmAfterUpdate !== false;
 
             if (!itemId || !Number.isFinite(normalizedImportance)) {
                 sendResponse({
@@ -284,27 +403,51 @@ export class UserProfileMessageHandler {
             const clampedImportance = Math.max(0, Math.min(1, normalizedImportance));
 
             const client = getMemoryServiceClient();
-            client.updateProfileItem(itemId, {
-                confidence: clampedImportance,
-                salienceScore: clampedImportance,
-                status: 'active'
-            })
-            .then(() => client.confirmProfileItem(itemId))
-            .then(result => {
-                console.log('重要性标记设置结果:', result);
-                sendResponse({
-                    success: true,
-                    data: result,
-                    message: '重要性标记设置成功'
-                });
-            })
-            .catch(error => {
-                console.error('重要性标记设置失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message
-                });
-            });
+            (async () => {
+                try {
+                    const updatedItem = await client.updateProfileItem(itemId, {
+                        confidence: clampedImportance,
+                        salienceScore: clampedImportance,
+                        ...(confirmAfterUpdate ? { status: 'active' } : {}),
+                    });
+
+                    if (!confirmAfterUpdate) {
+                        sendResponse({
+                            success: true,
+                            data: updatedItem,
+                            message: '影响力已更新，仍需确认',
+                        });
+                        return;
+                    }
+
+                    try {
+                        const result = await client.confirmProfileItem(itemId);
+                        console.log('重要性标记设置结果:', result);
+                        sendResponse({
+                            success: true,
+                            data: result,
+                            message: '重要性标记设置成功'
+                        });
+                    } catch (confirmError: any) {
+                        console.warn('重要性已更新，但画像确认失败:', confirmError);
+                        const errorMessage = confirmError?.message || '画像确认失败';
+                        sendResponse({
+                            success: false,
+                            partialSuccess: true,
+                            phase: 'confirm',
+                            data: updatedItem,
+                            error: `影响力已更新，但确认失败：${errorMessage}`,
+                            message: '影响力已更新，确认未完成'
+                        });
+                    }
+                } catch (error: any) {
+                    console.error('重要性标记设置失败:', error);
+                    sendResponse({
+                        success: false,
+                        error: error.message
+                    });
+                }
+            })();
             return true;
         }
 
@@ -517,6 +660,9 @@ export class UserProfileMessageHandler {
                     const coreResult = coreSection.value;
                     const healthStatus = healthSection.value;
                     const stats = statsSection.value;
+                    const exportTime = new Date().toISOString();
+                    const exportTimestamp = Date.now();
+                    const formatVersion = '2.2';
                     const profileAudit = buildProfileExportAudit(profileItems.items);
                     const currentProfileItems = profileItems.items.filter((item) => {
                         const status = String(item?.status ?? item?.item_status ?? '').trim();
@@ -534,6 +680,21 @@ export class UserProfileMessageHandler {
                             ? `画像条目导出被截断：已导出 ${profileItems.items.length}/${profileItems.total} 条`
                             : undefined,
                     ].filter(Boolean) as string[];
+                    const pagination = {
+                        exportedProfileItems: profileItems.items.length,
+                        totalProfileItems: profileItems.total,
+                        truncated: profileItems.truncated,
+                        statusScope: 'all',
+                    };
+                    const manifest = await buildProfileExportManifest({
+                        exportTime,
+                        formatVersion,
+                        profileItems: profileItems.items,
+                        userCore: coreResult.content,
+                        profileAudit,
+                        pagination,
+                        warnings: exportWarnings,
+                    });
 
                     const viewModel = buildUserProfileViewModel({
                         core: coreResult.content,
@@ -546,16 +707,12 @@ export class UserProfileMessageHandler {
                     const exportData = {
                         // 基本信息
                         exportInfo: {
-                            exportTime: new Date().toISOString(),
-                            exportTimestamp: Date.now(),
-                            version: '2.1',
+                            exportTime,
+                            exportTimestamp,
+                            version: formatVersion,
                             exportType: 'complete_user_profile',
-                            pagination: {
-                                exportedProfileItems: profileItems.items.length,
-                                totalProfileItems: profileItems.total,
-                                truncated: profileItems.truncated,
-                                statusScope: 'all',
-                            },
+                            manifest,
+                            pagination,
                             warnings: exportWarnings,
                             optionalSections: {
                                 userCore: {

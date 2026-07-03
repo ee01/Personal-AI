@@ -1,7 +1,27 @@
+export type UXTicketKeySource =
+  | 'api'
+  | 'jira_path'
+  | 'jira_query'
+  | 'jira_query_selected_issue'
+  | 'jira_query_issue_key'
+  | 'jira_query_jql'
+  | 'data_issue_key'
+  | 'aria_label'
+  | 'text';
+
 export type UXTicketReference = {
   key: string;
   summary: string;
   source: string;
+  keySource?: UXTicketKeySource;
+};
+
+export type JiraIssueKeyUrlCandidate = {
+  key: string;
+  keySource: Extract<
+    UXTicketKeySource,
+    'jira_path' | 'jira_query' | 'jira_query_selected_issue' | 'jira_query_issue_key' | 'jira_query_jql'
+  >;
 };
 
 export type FigmaDesignItem = {
@@ -12,6 +32,7 @@ export type FigmaDesignItem = {
   label?: string;
   status?: string;
   updatedAt?: string;
+  updatedAtSource?: string;
 };
 
 export type DesignTool = 'figma' | 'miro' | 'loom' | 'google_slides' | 'zeplin' | 'generic';
@@ -23,7 +44,20 @@ export type DesignLinkCandidate = {
   title?: string;
   status?: string;
   updatedAt?: string;
+  updatedAtSource?: string;
   source?: string;
+};
+
+export type IgnoredDesignLikeLink = {
+  url: string;
+  tool: Extract<DesignTool, 'figma' | 'zeplin'>;
+  label: string;
+  source?: string;
+};
+
+export type DesignLinkScanResult = {
+  links: DesignLinkCandidate[];
+  ignored: IgnoredDesignLikeLink[];
 };
 
 export type ExternalDesignItem = {
@@ -35,6 +69,7 @@ export type ExternalDesignItem = {
   title?: string;
   status?: string;
   updatedAt?: string;
+  updatedAtSource?: string;
 };
 
 export type UXDesignItem = {
@@ -44,6 +79,7 @@ export type UXDesignItem = {
   designLabel?: string;
   designStatus?: string;
   uxTicketKey: string;
+  uxTicketKeySource?: UXTicketKeySource;
   source: string;
   linkProvided: boolean;
   uxEpicKey?: string;
@@ -51,9 +87,22 @@ export type UXDesignItem = {
   uxEta?: string;
   uxEtaSource?: 'duedate' | 'fixVersion';
   designUpdatedAt?: string;
+  designUpdatedAtSource?: string;
 };
 
 export type DesignDisplayItem = FigmaDesignItem | ExternalDesignItem | UXDesignItem;
+
+export type DesignUpdateReviewScope = {
+  updateSignalCount: number;
+  missingUpdatedAtCount: number;
+  latestUpdatedAt?: string;
+  latestUpdatedAtSource?: string;
+  latestUpdatedAtSourceLabel?: string;
+  latestUpdatedAtBasisLabel?: string;
+  latestUpdatedDateLabel?: string;
+  summary: string;
+  tooltip: string;
+};
 
 export type UXEpicStatusTone = 'todo' | 'in-progress' | 'done' | 'blocked' | 'cancelled';
 export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'not-ready' | 'blocked' | 'review' | 'done' | 'neutral';
@@ -161,6 +210,10 @@ function getDesignTimestampMs(value?: string | null): number | null {
   return Number.isNaN(time) ? null : time;
 }
 
+function isDateOnlyDesignUpdatedValue(value?: string | null): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value?.trim() || '');
+}
+
 export function formatDesignUpdatedDate(value?: string | null): string | undefined {
   const trimmedValue = value?.trim();
   if (!trimmedValue) return undefined;
@@ -175,18 +228,64 @@ export function formatDesignUpdatedDate(value?: string | null): string | undefin
 }
 
 export function formatDesignUpdatedDateTime(value?: string | null): string | undefined {
+  if (isDateOnlyDesignUpdatedValue(value)) return undefined;
+
   const time = getDesignTimestampMs(value);
   if (time === null) return undefined;
 
   return `${new Date(time).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-export function formatDesignUpdatedTooltip(value?: string | null): string | undefined {
+const designUpdatedAtSourceLabels: Record<string, string> = {
+  'object.updatedDate': 'Jira object updated date',
+  'object.updatedAt': 'Jira object updated time',
+  'object.lastUpdated': 'Jira object last-updated time',
+  'object.status.updatedDate': 'Jira/Figma status updated date',
+  'object.status.updatedAt': 'Jira/Figma status updated time',
+  'remoteLink.updatedDate': 'Jira remote-link updated date',
+  'remoteLink.updatedAt': 'Jira remote-link updated time',
+};
+
+export function getDesignUpdatedAtSourceLabel(source?: string | null): string | undefined {
+  const trimmedSource = source?.trim();
+  if (!trimmedSource) return undefined;
+  return designUpdatedAtSourceLabels[trimmedSource] || trimmedSource;
+}
+
+export function getDesignUpdatedAtBasisLabel(source?: string | null, value?: string | null): string | undefined {
+  if (!formatDesignUpdatedDate(value)) return undefined;
+
+  const sourceKey = source?.trim();
+  if (!sourceKey) return undefined;
+
+  const precisionLabel = isDateOnlyDesignUpdatedValue(value) ? 'date' : 'time';
+  if (sourceKey.includes('.status.')) return `Status ${precisionLabel}`;
+  if (sourceKey.startsWith('object.')) return `Object ${precisionLabel}`;
+  if (sourceKey.startsWith('remoteLink.')) return `Remote link ${precisionLabel}`;
+  return `Metadata ${precisionLabel}`;
+}
+
+export function formatDesignUpdatedBasisTooltip(source?: string | null, value?: string | null): string | undefined {
+  const basisLabel = getDesignUpdatedAtBasisLabel(source, value);
+  if (!basisLabel) return undefined;
+
+  const sourceLabel = getDesignUpdatedAtSourceLabel(source) || 'available Jira/Figma metadata';
+  return `${basisLabel}. The visible updated date comes from ${sourceLabel}; this does not refresh Figma, edit Jira, or confirm that the design update was reviewed.`;
+}
+
+export function formatDesignUpdatedTooltip(value?: string | null, source?: string | null): string | undefined {
   const dateLabel = formatDesignUpdatedDate(value);
   if (!dateLabel) return undefined;
 
+  const sourceLabel = getDesignUpdatedAtSourceLabel(source);
+  const sourceSentence = sourceLabel ? ` Source: ${sourceLabel}.` : '';
+
+  if (isDateOnlyDesignUpdatedValue(value)) {
+    return `Design update reported on ${dateLabel}. Source did not provide a specific time; re-check the linked design if implementation started before this date.${sourceSentence}`;
+  }
+
   const dateTimeLabel = formatDesignUpdatedDateTime(value);
-  return `Design update reported ${dateTimeLabel || dateLabel}. Re-check the linked design if implementation started before this update.`;
+  return `Design update reported ${dateTimeLabel || dateLabel}. Re-check the linked design if implementation started before this update.${sourceSentence}`;
 }
 
 export function chooseLatestDesignUpdatedAt(...values: Array<string | undefined | null>): string | undefined {
@@ -209,25 +308,67 @@ export function chooseLatestDesignUpdatedAt(...values: Array<string | undefined 
   return selectedValue;
 }
 
-function chooseDesignUpdatedAt(
+export type DesignUpdatedAtCandidate = {
+  value?: string | null;
+  source?: string | null;
+};
+
+export type DesignUpdatedAtSelection = {
+  value?: string;
+  source?: string;
+};
+
+export function chooseLatestDesignUpdatedAtWithSource(
+  ...values: DesignUpdatedAtCandidate[]
+): DesignUpdatedAtSelection {
+  let selectedValue: string | undefined;
+  let selectedSource: string | undefined;
+  let selectedTime: number | null = null;
+
+  for (const candidate of values) {
+    const trimmedValue = candidate.value?.trim();
+    if (!trimmedValue) continue;
+
+    const time = getDesignTimestampMs(trimmedValue);
+    if (time === null) continue;
+
+    if (!selectedValue || selectedTime === null || time > selectedTime) {
+      selectedValue = trimmedValue;
+      selectedSource = candidate.source?.trim() || undefined;
+      selectedTime = time;
+    }
+  }
+
+  return {
+    value: selectedValue,
+    source: selectedSource,
+  };
+}
+
+function chooseDesignUpdatedAtWithSource(
   currentValue: string | undefined,
+  currentSource: string | undefined,
   nextValue: string | undefined,
-): string | undefined {
-  const latestValue = chooseLatestDesignUpdatedAt(currentValue, nextValue);
-  if (latestValue) return latestValue;
+  nextSource: string | undefined,
+): DesignUpdatedAtSelection {
+  const latestValue = chooseLatestDesignUpdatedAtWithSource(
+    { value: currentValue, source: currentSource },
+    { value: nextValue, source: nextSource },
+  );
+  if (latestValue.value) return latestValue;
 
   const trimmedCurrent = currentValue?.trim();
   const trimmedNext = nextValue?.trim();
-  if (!trimmedNext) return trimmedCurrent;
-  if (!trimmedCurrent) return trimmedNext;
+  if (!trimmedNext) return { value: trimmedCurrent, source: currentSource };
+  if (!trimmedCurrent) return { value: trimmedNext, source: nextSource };
 
   const currentTime = getDesignTimestampMs(trimmedCurrent);
   const nextTime = getDesignTimestampMs(trimmedNext);
-  if (currentTime !== null && nextTime !== null) {
-    return nextTime > currentTime ? trimmedNext : trimmedCurrent;
+  if (currentTime !== null && nextTime !== null && nextTime > currentTime) {
+    return { value: trimmedNext, source: nextSource };
   }
 
-  return trimmedCurrent;
+  return { value: trimmedCurrent, source: currentSource };
 }
 
 export function getDesignStatusTone(status?: string): DesignStatusTone {
@@ -334,6 +475,72 @@ export function getDesignDisplayUpdatedTimestamp(item: DesignDisplayItem): numbe
   return getDesignTimestampMs(updatedAt);
 }
 
+export function isDesignUpdatedDateMissing(item: DesignDisplayItem): boolean {
+  if (getDesignDisplayStatusTone(item) !== 'updated') return false;
+
+  const updatedAt = item.type === 'ux_ticket' ? item.designUpdatedAt : item.updatedAt;
+  return !formatDesignUpdatedDate(updatedAt);
+}
+
+function getDesignUpdatedAtCandidate(item: DesignDisplayItem): DesignUpdatedAtCandidate {
+  if (item.type === 'ux_ticket') {
+    return {
+      value: item.designUpdatedAt,
+      source: item.designUpdatedAtSource,
+    };
+  }
+
+  return {
+    value: item.updatedAt,
+    source: item.updatedAtSource,
+  };
+}
+
+export function getDesignUpdateReviewScope(items: DesignDisplayItem[]): DesignUpdateReviewScope | undefined {
+  const datedSignals = items
+    .map(getDesignUpdatedAtCandidate)
+    .filter(candidate => Boolean(formatDesignUpdatedDate(candidate.value)));
+  const missingUpdatedAtCount = items.filter(isDesignUpdatedDateMissing).length;
+  const updateSignalCount = datedSignals.length + missingUpdatedAtCount;
+  if (updateSignalCount <= 0) return undefined;
+
+  const latestSelection = chooseLatestDesignUpdatedAtWithSource(...datedSignals);
+  const latestUpdatedDateLabel = formatDesignUpdatedDate(latestSelection.value);
+  const latestUpdatedAtSourceLabel = getDesignUpdatedAtSourceLabel(latestSelection.source);
+  const latestUpdatedAtBasisLabel = getDesignUpdatedAtBasisLabel(latestSelection.source, latestSelection.value);
+  const summaryParts = [
+    `${updateSignalCount} design update ${updateSignalCount === 1 ? 'signal' : 'signals'}`,
+  ];
+  if (latestUpdatedDateLabel) {
+    summaryParts.push(`latest ${latestUpdatedDateLabel}`);
+  }
+  if (latestUpdatedAtBasisLabel) {
+    summaryParts.push(`latest source ${latestUpdatedAtBasisLabel}`);
+  }
+  if (missingUpdatedAtCount > 0) {
+    summaryParts.push(`${missingUpdatedAtCount} missing update ${missingUpdatedAtCount === 1 ? 'time' : 'times'}`);
+  }
+
+  const latestSentence = latestUpdatedDateLabel
+    ? ` Latest reported update: ${latestUpdatedDateLabel}${latestUpdatedAtSourceLabel ? ` from ${latestUpdatedAtSourceLabel}` : ''}.`
+    : '';
+  const missingSentence = missingUpdatedAtCount > 0
+    ? ` ${missingUpdatedAtCount} updated ${missingUpdatedAtCount === 1 ? 'row has' : 'rows have'} no usable update time.`
+    : '';
+
+  return {
+    updateSignalCount,
+    missingUpdatedAtCount,
+    latestUpdatedAt: latestSelection.value,
+    latestUpdatedAtSource: latestSelection.source,
+    latestUpdatedAtSourceLabel,
+    latestUpdatedAtBasisLabel,
+    latestUpdatedDateLabel,
+    summary: summaryParts.join('; '),
+    tooltip: `Review scope: ${summaryParts.join('; ')}.${latestSentence}${missingSentence} Personal AI only highlights Jira/Figma metadata that may require design re-check; it does not refresh Figma, edit Jira, or confirm that the design update was reviewed.`,
+  };
+}
+
 export function getDesignAttentionLevel(item: DesignDisplayItem): DesignAttentionLevel {
   return getDesignDisplayStatusTone(item);
 }
@@ -348,7 +555,7 @@ export function getDesignStatusActionHint(status?: string | null): string | unde
     case 'updated':
       return 'Design changed after handoff. Re-check the linked design before implementing.';
     case 'missing':
-      return 'A related UX ticket was found, but no design URL is available.';
+      return 'A related UX ticket was found, but no handoff URL is available. Open the UX ticket and add or check the design link before implementing.';
     case 'not-ready':
       return 'Design is not ready for development yet.';
     case 'blocked':
@@ -360,6 +567,83 @@ export function getDesignStatusActionHint(status?: string | null): string | unde
     case 'neutral':
       return undefined;
   }
+}
+
+const uxTicketKeySourceLabels: Record<UXTicketKeySource, string> = {
+  api: 'Jira API',
+  jira_path: 'Jira issue URL',
+  jira_query: 'URL query',
+  jira_query_selected_issue: 'selectedIssue query',
+  jira_query_issue_key: 'issueKey query',
+  jira_query_jql: 'JQL query',
+  data_issue_key: 'data-issue-key',
+  aria_label: 'ARIA label',
+  text: 'raw text',
+};
+
+export function shouldShowUXTicketKeySourceReceipt(source?: UXTicketKeySource): boolean {
+  return Boolean(source && source !== 'api' && source !== 'jira_path');
+}
+
+export function getUXTicketKeySourceLabel(source?: UXTicketKeySource): string | undefined {
+  if (!shouldShowUXTicketKeySourceReceipt(source)) return undefined;
+  return `Key from ${uxTicketKeySourceLabels[source]}`;
+}
+
+export function getUXTicketKeySourceHint(source?: UXTicketKeySource): string | undefined {
+  if (!shouldShowUXTicketKeySourceReceipt(source)) return undefined;
+  return `Jira did not expose a standard /browse/KEY linked issue URL here. Personal AI recovered the UX ticket key from ${uxTicketKeySourceLabels[source]} and only kept it because it matches the configured design project.`;
+}
+
+export function getUXTicketKeyRecoveryBoundaryLabel(source?: UXTicketKeySource): string | undefined {
+  if (!shouldShowUXTicketKeySourceReceipt(source)) return undefined;
+  return 'Read-only recovered';
+}
+
+export function getUXTicketKeyRecoveryBoundaryHint(source?: UXTicketKeySource): string | undefined {
+  if (!shouldShowUXTicketKeySourceReceipt(source)) return undefined;
+  return 'Personal AI only shows this recovered UX ticket candidate. It does not create or edit Jira issue links, design fields, or relationships.';
+}
+
+export function getRecoveredUXTicketCandidateCount(items: DesignDisplayItem[]): number {
+  return items.filter(item => item.type === 'ux_ticket' && shouldShowUXTicketKeySourceReceipt(item.uxTicketKeySource)).length;
+}
+
+const recoveredUXTicketKeySourceOrder: UXTicketKeySource[] = [
+  'jira_query_selected_issue',
+  'jira_query_issue_key',
+  'jira_query_jql',
+  'jira_query',
+  'data_issue_key',
+  'aria_label',
+  'text',
+];
+
+export function getRecoveredUXTicketSourceCounts(items: DesignDisplayItem[]): Partial<Record<UXTicketKeySource, number>> {
+  const counts: Partial<Record<UXTicketKeySource, number>> = {};
+  for (const item of items) {
+    if (item.type !== 'ux_ticket' || !shouldShowUXTicketKeySourceReceipt(item.uxTicketKeySource)) continue;
+    const source = item.uxTicketKeySource;
+    counts[source] = (counts[source] || 0) + 1;
+  }
+  return counts;
+}
+
+export function getUXTicketRecoverySourceSummary(items: DesignDisplayItem[]): string | undefined {
+  const counts = getRecoveredUXTicketSourceCounts(items);
+  const parts = recoveredUXTicketKeySourceOrder
+    .map(source => {
+      const count = counts[source] || 0;
+      if (count <= 0) return '';
+      return `${count} ${uxTicketKeySourceLabels[source]}`;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+export function getUXTicketRecoveryScopeSummary(count: number): string | undefined {
+  if (!Number.isFinite(count) || count <= 0) return undefined;
+  return `${count} recovered UX ticket ${count === 1 ? 'candidate' : 'candidates'}`;
 }
 
 export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDisplayItem[] {
@@ -441,7 +725,7 @@ export function parseJiraIssueKeyFromBrowseUrl(rawUrl?: string | null): string |
   }
 }
 
-export function parseJiraIssueKeyFromIssueUrl(rawUrl?: string | null): string | null {
+export function parseJiraIssueKeyFromIssuePath(rawUrl?: string | null): string | null {
   const trimmedUrl = rawUrl?.trim();
   if (!trimmedUrl) return null;
 
@@ -462,6 +746,98 @@ export function parseJiraIssueKeyFromIssueUrl(rawUrl?: string | null): string | 
   }
 
   return null;
+}
+
+function getJiraIssueQueryKeySource(name: string): Extract<
+  UXTicketKeySource,
+  'jira_query' | 'jira_query_selected_issue' | 'jira_query_issue_key' | 'jira_query_jql'
+> | null {
+  switch (name.toLowerCase()) {
+    case 'selectedissue':
+    case 'selectedissuekey':
+      return 'jira_query_selected_issue';
+    case 'idorkey':
+    case 'issue':
+    case 'issuekey':
+      return 'jira_query_issue_key';
+    case 'jql':
+      return 'jira_query_jql';
+    default:
+      return null;
+  }
+}
+
+function parseJiraIssueKeyCandidatesFromQueryParams(url: URL): Array<{
+  key: string;
+  keySource: Extract<
+    UXTicketKeySource,
+    'jira_query' | 'jira_query_selected_issue' | 'jira_query_issue_key' | 'jira_query_jql'
+  >;
+}> {
+  const candidates: Array<{
+    key: string;
+    keySource: Extract<
+      UXTicketKeySource,
+      'jira_query' | 'jira_query_selected_issue' | 'jira_query_issue_key' | 'jira_query_jql'
+    >;
+  }> = [];
+
+  const seenKeys = new Set<string>();
+  url.searchParams.forEach((value, name) => {
+    const keySource = getJiraIssueQueryKeySource(name);
+    if (!keySource) return;
+    for (const key of parseJiraIssueKeysFromText(value)) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      candidates.push({ key, keySource });
+    }
+  });
+
+  return candidates;
+}
+
+function parseJiraIssueKeyFromQueryParams(url: URL): string | null {
+  return parseJiraIssueKeyCandidatesFromQueryParams(url)[0]?.key || null;
+}
+
+export function parseJiraIssueKeyCandidatesFromUrl(rawUrl?: string | null): JiraIssueKeyUrlCandidate[] {
+  const trimmedUrl = rawUrl?.trim();
+  if (!trimmedUrl) return [];
+
+  try {
+    const url = new URL(trimmedUrl, 'https://jira.local');
+    const candidates: JiraIssueKeyUrlCandidate[] = [];
+    const seenKeys = new Set<string>();
+    const addCandidate = (key: string | null, keySource: JiraIssueKeyUrlCandidate['keySource']) => {
+      if (!key || seenKeys.has(key)) return;
+      seenKeys.add(key);
+      candidates.push({ key, keySource });
+    };
+
+    addCandidate(parseJiraIssueKeyFromIssuePath(trimmedUrl), 'jira_path');
+    for (const queryCandidate of parseJiraIssueKeyCandidatesFromQueryParams(url)) {
+      addCandidate(queryCandidate.key, queryCandidate.keySource);
+    }
+
+    return candidates;
+  } catch {
+    return [];
+  }
+}
+
+export function parseJiraIssueKeyFromIssueUrl(rawUrl?: string | null): string | null {
+  const trimmedUrl = rawUrl?.trim();
+  if (!trimmedUrl) return null;
+
+  const pathKey = parseJiraIssueKeyFromIssuePath(trimmedUrl);
+  if (pathKey) return pathKey;
+
+  try {
+    const url = new URL(trimmedUrl, 'https://jira.local');
+    return parseJiraIssueKeyFromQueryParams(url);
+  } catch {
+    return null;
+  }
 }
 
 export function parseJiraIssueKeyFromUrl(rawUrl?: string | null): string | null {
@@ -667,7 +1043,7 @@ export function classifyDesignUrl(
         label: getFigmaDisplayLabel(normalizedUrl)
       };
     }
-    if (!allowGeneric) return null;
+    return null;
   }
 
   if (hostname === 'miro.com' || hostname.endsWith('.miro.com')) {
@@ -705,6 +1081,15 @@ export function classifyDesignUrl(
     };
   }
 
+  if (
+    hostname === 'zeplin.io' ||
+    hostname.endsWith('.zeplin.io') ||
+    hostname === 'zpl.io' ||
+    hostname.endsWith('.zpl.io')
+  ) {
+    return null;
+  }
+
   if (matchesDesignDomain(hostname, extraDomainPatterns)) {
     return {
       url: normalizedUrl,
@@ -731,7 +1116,76 @@ function isFigmaHandoffUrl(pathname: string): boolean {
 function isZeplinHandoffUrl(hostname: string, pathname: string): boolean {
   if (hostname === 'zpl.io' || hostname.endsWith('.zpl.io')) return true;
   if (hostname !== 'app.zeplin.io') return false;
-  return /^\/project\//.test(pathname);
+  const pathParts = pathname.toLowerCase().split('/').filter(Boolean);
+  if (pathParts[0] !== 'project' || !pathParts[1]) return false;
+  if (pathParts.length === 2) return true;
+
+  return [
+    'screen',
+    'screens',
+    'section',
+    'sections',
+    'flow',
+    'flows',
+    'component',
+    'components',
+    'styleguide',
+    'styleguides',
+  ].includes(pathParts[2]);
+}
+
+function classifyIgnoredDesignLikeUrl(rawUrl?: string | null): IgnoredDesignLikeLink | null {
+  const normalizedUrl = normalizeDesignUrl(rawUrl);
+  if (!normalizedUrl) return null;
+
+  const url = new URL(normalizedUrl);
+  const hostname = url.hostname.toLowerCase();
+  const pathname = url.pathname.toLowerCase();
+
+  if (hostname === 'figma.com' || hostname.endsWith('.figma.com')) {
+    if (isFigmaHandoffUrl(pathname)) return null;
+
+    let label = 'Figma non-handoff URL';
+    if (hostname === 'help.figma.com' || hostname === 'developers.figma.com') {
+      label = 'Figma documentation';
+    } else if (pathname.startsWith('/community/')) {
+      label = 'Figma Community';
+    } else if (pathname.startsWith('/blog/') || pathname.startsWith('/about/') || pathname.startsWith('/pricing/')) {
+      label = 'Figma marketing page';
+    }
+
+    return {
+      url: normalizedUrl,
+      tool: 'figma',
+      label,
+    };
+  }
+
+  if (
+    hostname === 'zeplin.io' ||
+    hostname.endsWith('.zeplin.io') ||
+    hostname === 'zpl.io' ||
+    hostname.endsWith('.zpl.io')
+  ) {
+    if (isZeplinHandoffUrl(hostname, pathname)) return null;
+
+    let label = 'Zeplin non-handoff URL';
+    if (hostname === 'support.zeplin.io' || hostname === 'blog.zeplin.io' || hostname === 'zeplin.io') {
+      label = 'Zeplin documentation or marketing page';
+    } else if (hostname === 'app.zeplin.io') {
+      label = pathname.startsWith('/project/')
+        ? 'Zeplin non-resource project page'
+        : 'Zeplin app non-project page';
+    }
+
+    return {
+      url: normalizedUrl,
+      tool: 'zeplin',
+      label,
+    };
+  }
+
+  return null;
 }
 
 function getZeplinDisplayLabel(url: string): string {
@@ -783,22 +1237,188 @@ export function extractDesignLinks(
   allowGeneric = false,
   extraDomainPatterns: string[] = [],
 ): DesignLinkCandidate[] {
-  if (!rawValue || typeof rawValue !== 'string') return [];
+  return extractDesignLinkScan(rawValue, allowGeneric, extraDomainPatterns).links;
+}
+
+export function extractDesignLinkScan(
+  rawValue?: string | null,
+  allowGeneric = false,
+  extraDomainPatterns: string[] = [],
+): DesignLinkScanResult {
+  if (!rawValue || typeof rawValue !== 'string') {
+    return {
+      links: [],
+      ignored: [],
+    };
+  }
 
   const matches = rawValue.match(/https?:\/\/[^\s<>"']+/g) || [];
   const valuesToCheck = matches.length > 0 ? matches : [rawValue];
   const seenUrls = new Set<string>();
+  const seenIgnoredUrls = new Set<string>();
   const designLinks: DesignLinkCandidate[] = [];
+  const ignored: IgnoredDesignLikeLink[] = [];
 
   for (const value of valuesToCheck) {
     const candidate = classifyDesignUrl(value, allowGeneric, extraDomainPatterns);
     const dedupeKey = candidate ? getDesignUrlDedupeKey(candidate.url) : '';
-    if (!candidate || seenUrls.has(dedupeKey)) continue;
-    seenUrls.add(dedupeKey);
-    designLinks.push(candidate);
+    if (candidate && !seenUrls.has(dedupeKey)) {
+      seenUrls.add(dedupeKey);
+      designLinks.push(candidate);
+      continue;
+    }
+
+    if (candidate) continue;
+
+    const ignoredLink = classifyIgnoredDesignLikeUrl(value);
+    if (!ignoredLink || seenIgnoredUrls.has(ignoredLink.url)) continue;
+    seenIgnoredUrls.add(ignoredLink.url);
+    ignored.push(ignoredLink);
   }
 
-  return designLinks;
+  return {
+    links: designLinks,
+    ignored,
+  };
+}
+
+export function getIgnoredDesignLinkSummary(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  const count = ignoredLinks.length;
+  if (count === 0) return undefined;
+  return `${count} filtered non-handoff ${count === 1 ? 'ref' : 'refs'}`;
+}
+
+export function getIgnoredDesignLinkTooltip(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  if (ignoredLinks.length === 0) return undefined;
+
+  const labels = Array.from(new Set(ignoredLinks.map(link => link.label))).slice(0, 4);
+  const overflow = ignoredLinks.length > labels.length ? ` + ${ignoredLinks.length - labels.length} more` : '';
+  const sourceSummary = getIgnoredDesignLinkSourceSummary(ignoredLinks);
+  const sourceSentence = sourceSummary ? ` Sources: ${sourceSummary}.` : '';
+  return `Filtered design-looking URLs that were not shown as handoff rows: ${labels.join(', ')}${overflow}.${sourceSentence}`;
+}
+
+export function getIgnoredDesignLinkSourceSummary(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  const sourceCounts = new Map<string, { count: number; order: number }>();
+
+  ignoredLinks.forEach(link => {
+    splitSources(link.source || '').forEach(source => {
+      const existing = sourceCounts.get(source);
+      if (existing) {
+        existing.count += 1;
+        return;
+      }
+      sourceCounts.set(source, {
+        count: 1,
+        order: sourceCounts.size,
+      });
+    });
+  });
+
+  if (sourceCounts.size === 0) return undefined;
+
+  return Array.from(sourceCounts.entries())
+    .sort(([sourceA, metaA], [sourceB, metaB]) => {
+      const priorityDiff = getSourcePriority(sourceA) - getSourcePriority(sourceB);
+      return priorityDiff !== 0 ? priorityDiff : metaA.order - metaB.order;
+    })
+    .map(([source, meta]) => `${getDesignSourceLabel(source)} ${meta.count}`)
+    .join(', ');
+}
+
+function addRemoteLinkTextValue(values: string[], value: unknown): void {
+  if (typeof value !== 'string') return;
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return;
+  const queuedValues: string[] = [];
+  const seenValues = new Set<string>();
+
+  const addValue = (candidateValue: string): void => {
+    const normalizedValue = candidateValue.trim();
+    if (!normalizedValue || seenValues.has(normalizedValue)) return;
+    seenValues.add(normalizedValue);
+    values.push(normalizedValue);
+    queuedValues.push(normalizedValue);
+  };
+
+  addValue(trimmedValue);
+
+  for (let index = 0; index < queuedValues.length && index < 24; index += 1) {
+    const currentValue = queuedValues[index];
+
+    try {
+      const decodedValue = decodeURIComponent(currentValue);
+      if (decodedValue !== currentValue) addValue(decodedValue);
+    } catch {
+      // Some Jira globalId values are not URI-encoded strings.
+    }
+
+    try {
+      const url = new URL(currentValue);
+      url.searchParams.forEach(paramValue => addValue(paramValue));
+      if (url.hash.includes('=')) {
+        const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+        hashParams.forEach(paramValue => addValue(paramValue));
+      }
+      continue;
+    } catch {
+      // Not every remote-link field is a full URL.
+    }
+
+    if (!/[=&]/.test(currentValue)) continue;
+
+    try {
+      const params = new URLSearchParams(currentValue.replace(/^[?#]/, ''));
+      params.forEach(paramValue => addValue(paramValue));
+    } catch {
+      // URLSearchParams is best-effort only for Jira globalId-style fields.
+    }
+  }
+}
+
+export function extractDesignLinksFromRemoteLinkPayload(
+  remoteLink: any,
+  extraDomainPatterns: string[] = [],
+): DesignLinkScanResult {
+  const object = remoteLink?.object || {};
+  const objectStatus = object?.status || {};
+  const objectStatusIcon = objectStatus?.icon || {};
+  const values: string[] = [];
+
+  [
+    object.url,
+    object.title,
+    object.summary,
+    objectStatusIcon.link,
+    remoteLink?.globalId,
+    remoteLink?.relationship,
+  ].forEach(value => addRemoteLinkTextValue(values, value));
+
+  const seenDedupeKeys = new Set<string>();
+  const seenIgnoredUrls = new Set<string>();
+  const designLinks: DesignLinkCandidate[] = [];
+  const ignored: IgnoredDesignLikeLink[] = [];
+
+  for (const value of values) {
+    const scan = extractDesignLinkScan(value, false, extraDomainPatterns);
+    for (const ignoredLink of scan.ignored) {
+      if (seenIgnoredUrls.has(ignoredLink.url)) continue;
+      seenIgnoredUrls.add(ignoredLink.url);
+      ignored.push(ignoredLink);
+    }
+    for (const candidate of scan.links) {
+      const dedupeKey = getDesignUrlDedupeKey(candidate.url);
+      if (seenDedupeKeys.has(dedupeKey)) continue;
+      seenDedupeKeys.add(dedupeKey);
+      designLinks.push(candidate);
+    }
+  }
+
+  return {
+    links: designLinks,
+    ignored,
+  };
 }
 
 export function getDesignDisplayLabel(item: FigmaDesignItem | ExternalDesignItem): string {
@@ -892,7 +1512,14 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
         existing.source = mergeDesignSources(existing.source, item.source);
         existing.label = existing.label || item.label;
         existing.status = existing.status || item.status;
-        existing.updatedAt = chooseDesignUpdatedAt(existing.updatedAt, item.updatedAt);
+        const updatedSelection = chooseDesignUpdatedAtWithSource(
+          existing.updatedAt,
+          existing.updatedAtSource,
+          item.updatedAt,
+          item.updatedAtSource,
+        );
+        existing.updatedAt = updatedSelection.value;
+        existing.updatedAtSource = updatedSelection.source;
         continue;
       }
 
@@ -917,7 +1544,15 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       existing.uxEta = existing.uxEta || item.uxEta;
       existing.uxEtaSource = existing.uxEtaSource || item.uxEtaSource;
       existing.designStatus = existing.designStatus || item.designStatus;
-      existing.designUpdatedAt = chooseDesignUpdatedAt(existing.designUpdatedAt, item.designUpdatedAt);
+      const updatedSelection = chooseDesignUpdatedAtWithSource(
+        existing.designUpdatedAt,
+        existing.designUpdatedAtSource,
+        item.designUpdatedAt,
+        item.designUpdatedAtSource,
+      );
+      existing.designUpdatedAt = updatedSelection.value;
+      existing.designUpdatedAtSource = updatedSelection.source;
+      existing.uxTicketKeySource = existing.uxTicketKeySource || item.uxTicketKeySource;
       continue;
     }
 
@@ -942,7 +1577,14 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       || item.designLabel
       || matchingDirectItem.label;
     item.designStatus = item.designStatus || matchingDirectItem.status;
-    item.designUpdatedAt = chooseDesignUpdatedAt(item.designUpdatedAt, matchingDirectItem.updatedAt);
+    const updatedSelection = chooseDesignUpdatedAtWithSource(
+      item.designUpdatedAt,
+      item.designUpdatedAtSource,
+      matchingDirectItem.updatedAt,
+      matchingDirectItem.updatedAtSource,
+    );
+    item.designUpdatedAt = updatedSelection.value;
+    item.designUpdatedAtSource = updatedSelection.source;
     consumedDirectUrls.add(getDesignUrlDedupeKey(matchingDirectItem.url));
   }
 

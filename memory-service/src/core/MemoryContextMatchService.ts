@@ -490,6 +490,30 @@ function candidateDecisionScore(candidate: MemoryContextTopicCandidate): number 
   return candidate.score + directCurrentAnchorBoost + externalContextBoost + roleMatchBoost;
 }
 
+function shouldClarifyAmbiguousQuery(input: {
+  deictic: boolean;
+  statusIntent: boolean;
+  explicitQueryTokens: string[];
+  roleTerms: string[];
+  queryTokens: string[];
+}): boolean {
+  const hasExplicitSubject =
+    input.explicitQueryTokens.some((token) => token.length >= 4) &&
+    input.queryTokens.length >= 6 &&
+    input.roleTerms.length === 0;
+  if (input.deictic) return !hasExplicitSubject;
+  const shortStatusQuestion =
+    input.statusIntent &&
+    input.queryTokens.length <= 5 &&
+    input.explicitQueryTokens.length <= 1;
+  const roleOnlyStatusQuestion =
+    input.statusIntent &&
+    input.roleTerms.length > 0 &&
+    input.explicitQueryTokens.length === 0 &&
+    input.queryTokens.length <= 7;
+  return shortStatusQuestion || roleOnlyStatusQuestion;
+}
+
 export class MemoryContextMatchService {
   constructor(private db: Database.Database) {}
 
@@ -527,7 +551,15 @@ export class MemoryContextMatchService {
       top?.reasons.some((reason) => reason.includes('显式 query 锚点')),
     );
     const topHasCurrentContextAnchor = hasCurrentContextAnchor(top);
+    const shouldClarifyAmbiguous = shouldClarifyAmbiguousQuery({
+      deictic,
+      statusIntent,
+      explicitQueryTokens,
+      roleTerms,
+      queryTokens,
+    });
     const isAmbiguous =
+      shouldClarifyAmbiguous &&
       top &&
       second &&
       top.score >= AMBIGUOUS_SCORE_THRESHOLD &&

@@ -18,6 +18,7 @@ export interface ReflectionThreadRecord {
   openQuestions: string[];
   latestSummary?: string;
   latestMarkdownPath?: string;
+  metadata?: Record<string, unknown>;
   nextReflectionAt?: number;
   lastReflectedAt?: number;
   reflectionCount: number;
@@ -44,7 +45,11 @@ export interface ReflectionRunRecord {
   createdAt: number;
 }
 
-export type ReflectionResearchAttemptStatus = 'hit' | 'empty' | 'failed';
+export type ReflectionResearchAttemptStatus =
+  | 'hit'
+  | 'empty'
+  | 'failed'
+  | 'skipped';
 
 export interface ReflectionResearchAttemptRecord {
   id: string;
@@ -102,6 +107,7 @@ interface ReflectionThreadRow {
   open_questions_json: string | null;
   latest_summary: string | null;
   latest_markdown_path: string | null;
+  metadata_json: string | null;
   next_reflection_at: number | null;
   last_reflected_at: number | null;
   reflection_count: number;
@@ -204,6 +210,17 @@ function uniqStrings(values: Array<string | undefined | null>): string[] {
   );
 }
 
+function mergeMetadata(
+  existing?: Record<string, unknown>,
+  next?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!existing && !next) return undefined;
+  return {
+    ...(existing ?? {}),
+    ...(next ?? {}),
+  };
+}
+
 export interface ReflectionThreadListFilters {
   status?: ReflectionThreadStatus | 'all';
   limit?: number;
@@ -223,6 +240,7 @@ export interface UpsertReflectionThreadInput {
   openQuestions?: string[];
   latestSummary?: string;
   latestMarkdownPath?: string;
+  metadata?: Record<string, unknown>;
   nextReflectionAt?: number | null;
   lastReflectedAt?: number | null;
   continueReason?: string;
@@ -312,6 +330,7 @@ export class ReflectionThreadRepository {
       openQuestions: safeJsonParse<string[]>(row.open_questions_json, []),
       latestSummary: row.latest_summary ?? undefined,
       latestMarkdownPath: row.latest_markdown_path ?? undefined,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata_json, {}),
       nextReflectionAt: row.next_reflection_at ?? undefined,
       lastReflectedAt: row.last_reflected_at ?? undefined,
       reflectionCount: row.reflection_count,
@@ -488,9 +507,9 @@ export class ReflectionThreadRepository {
           `INSERT INTO reflection_threads
             (id, topic_key, title, status, priority, salience, source_type, source_ref_id,
              current_hypothesis, open_questions_json, latest_summary, latest_markdown_path,
-             next_reflection_at, last_reflected_at, reflection_count, continue_reason,
-             closure_reason, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+             metadata_json, next_reflection_at, last_reflected_at, reflection_count,
+             continue_reason, closure_reason, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -505,6 +524,7 @@ export class ReflectionThreadRepository {
           JSON.stringify(uniqStrings(input.openQuestions ?? [])),
           input.latestSummary ?? null,
           input.latestMarkdownPath ?? null,
+          JSON.stringify(input.metadata ?? {}),
           input.nextReflectionAt ?? null,
           input.lastReflectedAt ?? null,
           input.continueReason ?? null,
@@ -533,6 +553,7 @@ export class ReflectionThreadRepository {
              open_questions_json = ?,
              latest_summary = ?,
              latest_markdown_path = ?,
+             metadata_json = ?,
              next_reflection_at = ?,
              last_reflected_at = ?,
              continue_reason = ?,
@@ -551,6 +572,7 @@ export class ReflectionThreadRepository {
         JSON.stringify(mergedOpenQuestions),
         input.latestSummary ?? existing.latestSummary ?? null,
         input.latestMarkdownPath ?? existing.latestMarkdownPath ?? null,
+        JSON.stringify(mergeMetadata(existing.metadata, input.metadata) ?? {}),
         input.nextReflectionAt ?? existing.nextReflectionAt ?? null,
         input.lastReflectedAt ?? existing.lastReflectedAt ?? null,
         input.continueReason ?? existing.continueReason ?? null,

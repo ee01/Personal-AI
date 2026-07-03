@@ -17,6 +17,18 @@ import type {
   ContextRecallResponse,
 } from '../types/index.js';
 
+const DEFAULT_CONTEXT_RECALL_ROUTE_TIMEOUT_MS = 6000;
+const DEFAULT_MAX_CONCURRENT_CONTEXT_RECALL = 1;
+const PASSIVE_ROUTE_GUARD_SURFACES = new Set([
+  'web_passive',
+  'meeting_passive',
+  'popup_passive',
+  'follow_thread',
+  'composer_guard',
+]);
+
+let activeContextRecallRequests = 0;
+
 const contextRecallBodySchema = {
   type: 'object' as const,
   required: ['surface', 'contextType'],
@@ -336,6 +348,88 @@ const contextRecallBodySchema = {
   additionalProperties: false,
 };
 
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseOptionalBooleanEnv(name: string): boolean | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return undefined;
+}
+
+function isTestRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === 'test' ||
+    process.env.VITEST === 'true' ||
+    Boolean(process.env.VITEST_WORKER_ID)
+  );
+}
+
+function shouldUsePassiveRouteFallback(
+  requestBody: ContextRecallRequest | undefined,
+): boolean {
+  if (!requestBody || !PASSIVE_ROUTE_GUARD_SURFACES.has(requestBody.surface)) {
+    return false;
+  }
+  if (parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED') === true) {
+    return false;
+  }
+  const explicitGuard = parseOptionalBooleanEnv(
+    'CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED',
+  );
+  if (explicitGuard !== undefined) {
+    return explicitGuard;
+  }
+  return !isTestRuntime();
+}
+
+function buildContextRecallFallback(
+  requestBody: ContextRecallRequest | undefined,
+  startedAt: number,
+  rejectedReason: string,
+): ContextRecallResponse {
+  return {
+    matches: [],
+    topMatch: null,
+    queryTimeMs: Date.now() - startedAt,
+    debug: requestBody?.debug
+      ? {
+          normalizedQuery: '',
+          channelsHit: [],
+          rejectedReason,
+        }
+      : undefined,
+  };
+}
+
+function withContextRecallRouteTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('context_recall_route_timeout')),
+      timeoutMs,
+    );
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: ContextRecallRequest }>(
     '/context-recall',
@@ -345,12 +439,66 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
+      const startedAt = Date.now();
+      if (shouldUsePassiveRouteFallback(request.body)) {
+        request.log.info(
+          { surface: request.body.surface },
+          'context-recall skipped by passive route guard',
+        );
+        return reply.send(
+          buildContextRecallFallback(
+            request.body,
+            startedAt,
+            'passive_fast_search_disabled',
+          ),
+        );
+      }
+
+      const maxConcurrent = getPositiveIntegerEnv(
+        'CONTEXT_RECALL_MAX_CONCURRENT',
+        DEFAULT_MAX_CONCURRENT_CONTEXT_RECALL,
+      );
+      if (activeContextRecallRequests >= maxConcurrent) {
+        request.log.warn(
+          { activeContextRecallRequests, maxConcurrent },
+          'context-recall overloaded',
+        );
+        return reply
+          .header('Retry-After', '2')
+          .send(
+            buildContextRecallFallback(
+              request.body,
+              Date.now(),
+              'context_recall_busy',
+            ),
+          );
+      }
+
       const { db } = request.userContext;
       const service = new ContextRecallService(db, request.userId);
-      try {
-        const result: ContextRecallResponse = await service.recall(
-          request.body,
+      const timeoutMs = getPositiveIntegerEnv(
+        'CONTEXT_RECALL_ROUTE_TIMEOUT_MS',
+        DEFAULT_CONTEXT_RECALL_ROUTE_TIMEOUT_MS,
+      );
+      let routeReturned = false;
+      activeContextRecallRequests += 1;
+      const servicePromise = service.recall(request.body);
+      servicePromise.catch((err) => {
+        if (routeReturned) {
+          request.log.warn({ err }, 'context-recall failed after route returned');
+        }
+      }).finally(() => {
+        activeContextRecallRequests = Math.max(
+          0,
+          activeContextRecallRequests - 1,
         );
+      });
+      try {
+        const result: ContextRecallResponse = await withContextRecallRouteTimeout(
+          servicePromise,
+          timeoutMs,
+        );
+        routeReturned = true;
         // Weave provenance (P0-5): surface a badge only when the Lens hit
         // stitched ≥2 sources or a ≥7-day span. Single source → no field.
         const weave = buildWeaveStats(
@@ -365,20 +513,29 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
         if (weave.crossSource) result.weave = weave;
         return reply.send(result);
       } catch (err) {
+        routeReturned = true;
+        if (
+          err instanceof Error &&
+          err.message === 'context_recall_route_timeout'
+        ) {
+          request.log.warn({ timeoutMs }, 'context-recall timed out');
+          return reply.send(
+            buildContextRecallFallback(
+              request.body,
+              startedAt,
+              'context_recall_timeout',
+            ),
+          );
+        }
+
         request.log.warn({ err }, 'context-recall failed');
-        const fallback: ContextRecallResponse = {
-          matches: [],
-          topMatch: null,
-          queryTimeMs: 0,
-          debug: request.body?.debug
-            ? {
-                normalizedQuery: '',
-                channelsHit: [],
-                rejectedReason: 'internal_error',
-              }
-            : undefined,
-        };
-        return reply.send(fallback);
+        return reply.send(
+          buildContextRecallFallback(
+            request.body,
+            startedAt,
+            'internal_error',
+          ),
+        );
       }
     },
   );

@@ -43,6 +43,7 @@ import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
+import { EvidenceWatchContractService } from './EvidenceWatchContractService.js';
 import type {
   RecallChannelDiagnostic,
   Rehearsal,
@@ -75,6 +76,18 @@ interface EntityPropertySignalRow {
   confidence: number;
   source_context: string | null;
   tx_start: number;
+}
+
+interface ReflectionFactFollowupMetadata {
+  entity: string;
+  entityId: string;
+  propertyKey: string;
+  observedValue?: string;
+  status: 'unlocked' | 'changed' | 'needs_review' | 'stable';
+  evidenceRefs: string[];
+  confidence: number;
+  lastObservedAt: string;
+  sourceKind: string;
 }
 
 interface EntityRow {
@@ -129,6 +142,64 @@ function toPriorityFromLabel(label: string | undefined): number {
 function clampSalience(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0.5;
   return Math.max(0, Math.min(value!, 1));
+}
+
+function buildFactFollowupMetadata(
+  row: EntityPropertySignalRow,
+  entityName: string,
+): ReflectionFactFollowupMetadata {
+  const observedValue = normalizeFactValue(row.property_value);
+  const confidence = Math.max(0, Math.min(1, row.confidence || 0));
+  const status =
+    !observedValue || isEstimatePropertyKey(row.property_key) || confidence < 0.72
+      ? 'needs_review'
+      : 'changed';
+  return {
+    entity: entityName,
+    entityId: row.entity_id,
+    propertyKey: row.property_key,
+    ...(observedValue ? { observedValue } : {}),
+    status,
+    evidenceRefs: [`entity_property:${row.id}`],
+    confidence,
+    lastObservedAt: new Date((row.tx_start || now()) * 1000).toISOString(),
+    sourceKind: inferEntityPropertySourceKind(row.source_context),
+  };
+}
+
+function buildFactFollowupSummary(
+  fact: ReflectionFactFollowupMetadata,
+): string {
+  if (!fact.observedValue) {
+    return `${fact.entity} 只检测到字段 ${fact.propertyKey}，尚未提取到可用值。`;
+  }
+  if (fact.status === 'needs_review') {
+    return `${fact.entity} 的 ${fact.propertyKey} 当前记录为 ${fact.observedValue}；后续变化需要继续跟进。`;
+  }
+  return `${fact.entity} 的 ${fact.propertyKey} 更新为 ${fact.observedValue}。`;
+}
+
+function normalizeFactValue(value?: string | null): string {
+  return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isEstimatePropertyKey(value: string): boolean {
+  return /\b(?:dev\s+estimate\s+new|dev\s+estimate|original\s+estimate|remaining\s+estimate|story\s*points?|estimate)\b|估算|预估|工时|人天|人日/i.test(
+    value,
+  );
+}
+
+function inferEntityPropertySourceKind(raw?: string | null): string {
+  if (!raw) return 'entity_property';
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const candidate = parsed.sourceKind || parsed.sourceType || parsed.source;
+    return typeof candidate === 'string' && candidate.trim()
+      ? candidate.trim()
+      : 'entity_property';
+  } catch {
+    return 'entity_property';
+  }
 }
 
 function summarizeFailedRecallChannels(
@@ -217,6 +288,7 @@ export class ReflectionThreadService {
   private readonly worker: ReflectionWorker;
   private readonly researcher: ReflectionResearcher;
   private readonly rehearsalService: RehearsalService;
+  private readonly evidenceWatchService: EvidenceWatchContractService;
   private readonly markdownManager?: MarkdownManager;
 
   constructor(
@@ -230,6 +302,7 @@ export class ReflectionThreadService {
     this.worker = new ReflectionWorker();
     this.researcher = new ReflectionResearcher(userDataManager);
     this.rehearsalService = new RehearsalService(db, userDataManager);
+    this.evidenceWatchService = new EvidenceWatchContractService(db);
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
@@ -604,6 +677,8 @@ export class ReflectionThreadService {
       .prepare('SELECT id, name, type FROM entities WHERE id = ?')
       .get(row.entity_id) as EntityRow | undefined;
     const entityName = entity?.name ?? row.entity_id;
+    const factFollowup = buildFactFollowupMetadata(row, entityName);
+    const factSummary = buildFactFollowupSummary(factFollowup);
 
     const thread = this.repo.upsertThread({
       topicKey: `entity_property:${row.entity_id}:${row.property_key}`,
@@ -616,11 +691,14 @@ export class ReflectionThreadService {
       salience: clampSalience(row.confidence),
       sourceType: 'entity_property',
       sourceRefId: String(row.id),
-      currentHypothesis: `${entityName}.${row.property_key} -> ${row.property_value}`,
+      currentHypothesis: factSummary,
       openQuestions: [
         `${entityName} 的 ${row.property_key} 是否还会继续变化？`,
       ],
-      latestSummary: `${entityName} 的 ${row.property_key} 更新为 ${row.property_value}`,
+      latestSummary: factSummary,
+      metadata: {
+        factFollowup,
+      },
       nextReflectionAt: now(),
       continueReason:
         'A truth/property change was observed and needs follow-up.',
@@ -785,14 +863,36 @@ export class ReflectionThreadService {
     });
 
     const createdActions = generated.actionProposals.map((proposal, index) => {
+      const proposalParams =
+        proposal.params &&
+        typeof proposal.params === 'object' &&
+        !Array.isArray(proposal.params)
+          ? (proposal.params as Record<string, unknown>)
+          : {};
+      const evidenceWatchPreparation =
+        this.evidenceWatchService.prepareActionForProposal({
+          actionType: proposal.actionType,
+          question: proposal.title,
+          title: `Reflection 守望: ${thread.title}`,
+          summary: proposal.description ?? generated.summary,
+          params: proposalParams,
+          createdFrom: { kind: 'reflection', refId: thread.id },
+          cadence: 'on_revisit',
+        });
+      const paramsWithEvidenceWatch = evidenceWatchPreparation
+        ? {
+            ...proposalParams,
+            ...evidenceWatchPreparation.paramsPatch,
+          }
+        : proposal.params;
       const delegatePolicy =
         proposal.actionType === 'delegate_openclaw'
           ? resolveDelegateOpenClawPolicy({
               params:
-                proposal.params &&
-                typeof proposal.params === 'object' &&
-                !Array.isArray(proposal.params)
-                  ? (proposal.params as Record<string, unknown>)
+                paramsWithEvidenceWatch &&
+                typeof paramsWithEvidenceWatch === 'object' &&
+                !Array.isArray(paramsWithEvidenceWatch)
+                  ? (paramsWithEvidenceWatch as Record<string, unknown>)
                   : {},
               requestedExecutionMode: proposal.executionMode,
               requestedRequiresApproval: proposal.requiresApproval,
@@ -800,16 +900,22 @@ export class ReflectionThreadService {
               defaultRequiresApproval: proposal.requiresApproval,
             })
           : null;
-      return this.actionRepo.create({
+      const idempotencyKey =
+        evidenceWatchPreparation?.idempotencyKey ??
+        `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`;
+      const existingAction = this.actionRepo.findReusableByIdempotencyKey(
+        idempotencyKey,
+      );
+      const action = this.actionRepo.create({
         actionType: proposal.actionType,
         title: proposal.title,
         description: proposal.description,
         params:
           proposal.actionType === 'notify_user'
             ? {
-                ...(proposal.params ?? {}),
+                ...(paramsWithEvidenceWatch ?? {}),
                 payload: {
-                  ...(proposal.params?.payload as
+                  ...((paramsWithEvidenceWatch as Record<string, unknown> | undefined)?.payload as
                     | Record<string, unknown>
                     | undefined),
                   threadId: thread.id,
@@ -817,7 +923,7 @@ export class ReflectionThreadService {
                   userId: this.userId,
                 },
               }
-            : proposal.params,
+            : paramsWithEvidenceWatch,
         riskLevel: proposal.riskLevel,
         confidence: proposal.confidence,
         evidenceRefs: uniqStrings([
@@ -834,7 +940,7 @@ export class ReflectionThreadService {
         runId: run.id,
         executionMode: delegatePolicy?.executionMode ?? proposal.executionMode,
         priority: proposal.priority,
-        idempotencyKey: `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`,
+        idempotencyKey,
         scheduledAt: proposal.scheduledAt,
         sourceKind: 'reflection_run',
         sourceRefId: run.id,
@@ -842,6 +948,16 @@ export class ReflectionThreadService {
         utilityScore: proposal.utilityScore,
         urgencyScore: proposal.urgencyScore,
       });
+      if (evidenceWatchPreparation) {
+        this.evidenceWatchService.recordActionResult({
+          contractId: evidenceWatchPreparation.contract.id,
+          action,
+          wasDuplicate:
+            Boolean(existingAction) && existingAction?.id === action.id,
+          summary: `Reflection 已复用现有 ${action.actionType} 动作，未重复创建外部查证。`,
+        });
+      }
+      return action;
     });
 
     if (createdActions.length > 0) {
@@ -1210,7 +1326,20 @@ export class ReflectionThreadService {
     queries: LocalResearchQuery[],
     runId: string,
   ): Promise<ReflectionEvidenceItem[]> {
-    if (queries.length === 0) return [];
+    if (queries.length === 0) {
+      this.repo.recordResearchAttempt({
+        threadId: thread.id,
+        runId,
+        query: '未执行本地研究查询',
+        purpose: '规划器未返回可执行的本地研究查询',
+        status: 'skipped',
+        resultCount: 0,
+        scopeNotice:
+          '本轮没有执行额外 recall 查询；Memory Service 继续使用线程已有证据生成反思。这不是读取失败，也没有联网搜索、发送消息、确认决策或执行 OpenClaw。',
+        evidenceRefs: [],
+      });
+      return [];
+    }
     const recallEngine = new RecallEngine(this.db);
     const evidenceItems: ReflectionEvidenceItem[] = [];
     const seen = new Set<string>();

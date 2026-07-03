@@ -78,6 +78,32 @@ assert.equal(translateStaticText('稍后处理快捷选项', 'en-US'), 'Remind q
 assert.equal(translateStaticText('自定义时间', 'en-US'), 'Custom time');
 assert.equal(translateStaticText('选择日期和时间', 'en-US'), 'Choose date and time');
 assert.equal(translateStaticText('请选择未来时间', 'en-US'), 'Choose a future time');
+assert.equal(translateStaticText('打开中...', 'en-US'), 'Opening...');
+assert.equal(translateStaticText('提醒路径', 'en-US'), 'Reminder path');
+assert.equal(translateStaticText('去向', 'en-US'), 'Queue');
+assert.equal(
+  translateStaticText('到点由 Bot 推送，并在原消息显示稍后标注', 'en-US'),
+  'Bot sends it when due, and the original message shows a Remind marker',
+);
+assert.equal(translateStaticText('本次点击', 'en-US'), 'This pick');
+assert.equal(
+  translateStaticText('会改期这条同源 Snooze，不新增第二条', 'en-US'),
+  'Reschedules this same-source Remind item instead of adding another one',
+);
+assert.equal(
+  translateStaticText(
+    '来自本地 marker 快照；以 Scheduled Messages 管理页和后台同步为准',
+    'en-US',
+  ),
+  'Based on the local marker snapshot; Scheduled Messages and background sync remain authoritative',
+);
+assert.equal(
+  translateStaticText(
+    '原消息标注会随后台同步刷新，当前页面可能短暂仍显示旧快照',
+    'en-US',
+  ),
+  'Original message marker refreshes with background sync; this page may briefly show the old local snapshot',
+);
 assert.equal(translateStaticText('Openclaw', 'zh-CN'), '联动操作');
 
 const initial = await readExtensionUiPreferences();

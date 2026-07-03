@@ -221,9 +221,11 @@ const { getTaskEnabled, onTaskEnabledChanged } = await import(
 const { concernedItemsSyncService } = await import(
   '../src/services/ConcernedItemsSyncService.ts'
 );
-const { TaskScheduler, taskScheduler } = await import(
-  '../src/services/TaskScheduler.ts'
-);
+const {
+  TaskScheduler,
+  taskScheduler,
+  summarizeMessageAnalysisTaskRun,
+} = await import('../src/services/TaskScheduler.ts');
 const {
   CONCERNED_ITEMS_DIGEST_TASK_ID,
   digestQueueService,
@@ -231,6 +233,60 @@ const {
 } = await import('../src/services/DigestQueueService.ts');
 const { notificationService } = await import(
   '../src/services/NotificationService.ts'
+);
+
+const partialMessageAnalysisResult = summarizeMessageAnalysisTaskRun(4, {
+  success: true,
+  deliveryReceipt: {
+    version: 1,
+    status: 'partial',
+    runMode: 'filter',
+    source: 'scheduled',
+    startedAt: Date.now() - 15_000,
+    capturedAt: Date.now(),
+    counters: {
+      groupsAnalyzed: 2,
+      analyzedMessages: 4,
+      scopeRejected: 1,
+      memoryWriteRequests: 3,
+      memoryWritesAccepted: 2,
+      memoryDuplicateSkips: 0,
+      memoryWriteFailures: 1,
+      immediateNotificationAttempts: 1,
+      immediateNotificationFailures: 0,
+      digestQueueEntries: 1,
+      autoReplyHandled: 0,
+      autoReplySkipped: 0,
+      followThreadUpdates: 0,
+      followThreadFailures: 0,
+      automationPlanRequests: 1,
+      automationActionsCreated: 0,
+      automationPlanSkipped: 0,
+      automationPlanFailures: 1,
+      automationPlanPaused: 0,
+    },
+    notes: [],
+  },
+});
+assert.equal(
+  partialMessageAnalysisResult.success,
+  false,
+  'message analysis downstream partials should not flatten into scheduler success',
+);
+assert.match(
+  partialMessageAnalysisResult.error || '',
+  /下游失败 2/,
+  'partial scheduler result should expose the downstream failure count',
+);
+assert.match(
+  partialMessageAnalysisResult.summary || '',
+  /记忆写入失败 1/,
+  'partial scheduler result should include a failure breakdown',
+);
+assert.match(
+  partialMessageAnalysisResult.summary || '',
+  /联动规划失败 1/,
+  'partial scheduler result should include automation planning failures',
 );
 
 assert.equal(
@@ -258,6 +314,67 @@ assert.equal(
   true,
   'onTaskEnabledChanged should fall back to task defaults when a saved state lacks enabled',
 );
+
+await chrome.storage.local.set({
+  taskSchedulerStates: {
+    ...storage.taskSchedulerStates,
+    vectorized_data_maintenance: { enabled: false },
+  },
+});
+let observedRemovedEnabled: boolean | undefined;
+const unsubscribeRemoved = onTaskEnabledChanged(
+  'vectorized_data_maintenance',
+  (enabled) => {
+    observedRemovedEnabled = enabled;
+  },
+);
+const {
+  vectorized_data_maintenance: _removedVectorizedDataMaintenance,
+  ...taskStatesWithoutVectorMaintenance
+} = storage.taskSchedulerStates;
+await chrome.storage.local.set({
+  taskSchedulerStates: taskStatesWithoutVectorMaintenance,
+});
+unsubscribeRemoved();
+assert.equal(
+  observedRemovedEnabled,
+  true,
+  'onTaskEnabledChanged should fall back to task defaults when a saved state row is removed',
+);
+
+await chrome.storage.local.set({
+  taskSchedulerStates: {
+    ...storage.taskSchedulerStates,
+    message_analysis: { enabled: true },
+  },
+});
+let observedClearedEnabled: boolean | undefined;
+const unsubscribeCleared = onTaskEnabledChanged(
+  'message_analysis',
+  (enabled) => {
+    observedClearedEnabled = enabled;
+  },
+);
+await chrome.storage.local.set({ taskSchedulerStates: {} });
+unsubscribeCleared();
+assert.equal(
+  observedClearedEnabled,
+  false,
+  'onTaskEnabledChanged should fall back to task defaults when scheduler state storage is cleared',
+);
+
+await chrome.storage.local.set({
+  taskSchedulerStates: {
+    message_analysis: { enabled: false },
+    memory_sync: { enabled: false },
+    system_monitoring: { enabled: true },
+    user_profile_decay: { enabled: false },
+    vectorized_data_maintenance: { lastRun: 456 },
+    user_summary_generation: { enabled: false },
+    vector_quality_check: { enabled: false },
+    digest_queue_process: { enabled: false },
+  },
+});
 
 alarms.scheduled_task_removed_before_start = {
   name: 'scheduled_task_removed_before_start',
@@ -411,6 +528,16 @@ assert.equal(
   'manual task run should expose an executing state while in flight',
 );
 assert.equal(
+  systemMonitoring?.statusReceipt.state,
+  'executing',
+  'manual task run should expose an executing status receipt while in flight',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.nextAction || '',
+  /等待完成/,
+  'executing status receipt should explain the next safe action',
+);
+assert.equal(
   systemMonitoring?.nextRun,
   scheduledSystemMonitoringAlarm,
   'manual runs should preserve the real scheduled alarm time while executing',
@@ -441,6 +568,16 @@ assert.equal(
   storage.taskSchedulerStates.system_monitoring.runHistory[0].skipped,
   true,
   'skipped run history should be persisted to chrome.storage.local',
+);
+assert.equal(
+  systemMonitoring?.statusReceipt.state,
+  'executing',
+  'duplicate task triggers should keep the primary receipt in executing state while the original run is still active',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.nextAction || '',
+  /等待完成/,
+  'duplicate task trigger receipt should still guide users to wait for the active run',
 );
 
 await waitForPendingFetch();
@@ -522,6 +659,21 @@ assert.equal(
   false,
   'recent run history should be persisted to chrome.storage.local',
 );
+assert.equal(
+  systemMonitoring?.statusReceipt.state,
+  'failed',
+  'failed task status should expose a structured failed receipt',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.label || '',
+  /上次失败/,
+  'failed task receipt should label the lifecycle state',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.nextAction || '',
+  /重试一次/,
+  'failed task receipt should suggest a bounded retry path',
+);
 
 const originalSendNotification =
   notificationService.sendNotification.bind(notificationService);
@@ -599,6 +751,45 @@ try {
   (notificationService as any).sendNotification = originalSendNotification;
 }
 
+const originalGetDigestQueueStatusSummary = (digestQueueService as any)
+  .getQueueStatusSummary;
+(digestQueueService as any).getQueueStatusSummary = async () => {
+  throw new Error('digest queue index unavailable');
+};
+try {
+  const queueStatusUnavailableResult =
+    await taskScheduler.getTaskStatusFreshResult({
+      repairAlarms: false,
+      persist: false,
+    });
+  const digestTaskStatus = queueStatusUnavailableResult.tasks.find(
+    (task) => task.id === 'digest_queue_process',
+  );
+  assert.equal(
+    queueStatusUnavailableResult.refreshReceipt.queueStatusUnavailableCount,
+    1,
+    'refresh receipt should count digest queue status read failures separately from alarm repair failures',
+  );
+  assert.match(
+    digestTaskStatus?.currentQueueStatusError || '',
+    /digest queue index unavailable/,
+    'digest queue status read failures should be exposed on the task row',
+  );
+  assert.match(
+    digestTaskStatus?.currentQueueSummary || '',
+    /本地摘要队列状态未确认/,
+    'digest queue status read failures should leave a visible queue-status receipt',
+  );
+  assert.match(
+    digestTaskStatus?.currentQueueSummary || '',
+    /没有立即发送摘要、不写入 Memory Service、不确认通知/,
+    'digest queue unavailable receipt should preserve the no-send/no-write/no-confirm boundary',
+  );
+} finally {
+  (digestQueueService as any).getQueueStatusSummary =
+    originalGetDigestQueueStatusSummary;
+}
+
 for (let i = 0; i < 6; i += 1) {
   const result = await taskScheduler.runTaskManuallyWithResult(
     'user_profile_decay',
@@ -616,10 +807,21 @@ assert.equal(
 );
 
 delete alarms.scheduled_task_system_monitoring;
-status = await taskScheduler.getTaskStatusFresh({
+const missingAlarmStatusResult = await taskScheduler.getTaskStatusFreshResult({
   repairAlarms: false,
   persist: false,
 });
+status = missingAlarmStatusResult.tasks;
+assert.equal(
+  missingAlarmStatusResult.refreshReceipt.autoRepairAttempted,
+  false,
+  'status refresh receipt should say when automatic alarm repair was not attempted',
+);
+assert.equal(
+  missingAlarmStatusResult.refreshReceipt.scheduleAttentionCount,
+  1,
+  'status refresh receipt should count schedule-attention tasks',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -631,9 +833,35 @@ assert.equal(
   undefined,
   'missing alarms should not expose a stale nextRun value',
 );
+assert.equal(
+  systemMonitoring?.statusReceipt.state,
+  'schedule_attention',
+  'missing alarms should expose a schedule-attention status receipt',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.nextAction || '',
+  /重排 Chrome alarm/,
+  'missing alarm status receipt should point to the repair action',
+);
 
 nextAlarmCreateError = 'maximum number of alarms reached';
-status = await taskScheduler.getTaskStatusFresh();
+const failedRepairStatusResult = await taskScheduler.getTaskStatusFreshResult();
+status = failedRepairStatusResult.tasks;
+assert.equal(
+  failedRepairStatusResult.refreshReceipt.autoRepairAttempted,
+  true,
+  'status refresh receipt should say automatic alarm repair was attempted by default',
+);
+assert.equal(
+  failedRepairStatusResult.refreshReceipt.failedRepairs,
+  1,
+  'status refresh receipt should count failed automatic repairs',
+);
+assert.equal(
+  failedRepairStatusResult.refreshReceipt.createdAlarms,
+  0,
+  'failed automatic repair should not be counted as a created alarm',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -650,8 +878,25 @@ assert.equal(
   undefined,
   'failed automatic alarm repair should not leave a partial alarm behind',
 );
+assert.match(
+  systemMonitoring?.statusReceipt.detail || '',
+  /maximum number of alarms reached/,
+  'repair-failed status receipt should preserve the real Chrome alarm error',
+);
 
-status = await taskScheduler.getTaskStatusFresh();
+const repairedMissingAlarmStatusResult =
+  await taskScheduler.getTaskStatusFreshResult();
+status = repairedMissingAlarmStatusResult.tasks;
+assert.equal(
+  repairedMissingAlarmStatusResult.refreshReceipt.createdAlarms,
+  1,
+  'status refresh receipt should count a recreated missing Chrome alarm',
+);
+assert.equal(
+  repairedMissingAlarmStatusResult.refreshReceipt.failedRepairs,
+  0,
+  'successful alarm recreation should clear failed repair count for this refresh',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -668,7 +913,19 @@ const priorSystemMonitoringAlarm = {
 };
 alarms.scheduled_task_system_monitoring.periodInMinutes = 30;
 nextAlarmCreateError = 'temporary alarm replacement failure';
-status = await taskScheduler.getTaskStatusFresh();
+const failedMismatchRepairStatusResult =
+  await taskScheduler.getTaskStatusFreshResult();
+status = failedMismatchRepairStatusResult.tasks;
+assert.equal(
+  failedMismatchRepairStatusResult.refreshReceipt.failedRepairs,
+  1,
+  'status refresh receipt should count failed period-mismatch repair',
+);
+assert.equal(
+  failedMismatchRepairStatusResult.refreshReceipt.updatedAlarms,
+  0,
+  'failed period-mismatch repair should not be counted as an updated alarm',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -691,7 +948,14 @@ assert.equal(
   'failed period mismatch repair should keep the existing alarm interval',
 );
 
-status = await taskScheduler.getTaskStatusFresh();
+const repairedMismatchStatusResult =
+  await taskScheduler.getTaskStatusFreshResult();
+status = repairedMismatchStatusResult.tasks;
+assert.equal(
+  repairedMismatchStatusResult.refreshReceipt.updatedAlarms,
+  1,
+  'status refresh receipt should count successful period-mismatch repair',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -719,6 +983,16 @@ assert.match(
   systemMonitoring?.scheduleWarning || '',
   /超过预期触发时间/,
   'overdue alarms should include a user-visible warning',
+);
+assert.equal(
+  systemMonitoring?.statusReceipt.label,
+  '排程逾期',
+  'overdue alarm status receipt should distinguish late alarms from missing alarms',
+);
+assert.match(
+  systemMonitoring?.statusReceipt.nextAction || '',
+  /立即执行一次/,
+  'overdue alarm status receipt should recommend run-then-reschedule recovery',
 );
 
 const lastRunBeforeRepair = systemMonitoring?.lastRun;
@@ -807,6 +1081,16 @@ assert.equal(
   true,
   'skipped message analysis should be visible in recent run history',
 );
+assert.equal(
+  messageAnalysis?.statusReceipt.state,
+  'recent_skip',
+  'business-condition skips should expose a recent-skip status receipt',
+);
+assert.match(
+  messageAnalysis?.statusReceipt.detail || '',
+  /用户信息不完整/,
+  'business-condition skip receipts should carry the skip reason',
+);
 storage.userinfo = previousUserInfo;
 
 const originalSetTimeout = globalThis.setTimeout;
@@ -847,6 +1131,11 @@ try {
   assert.ok(
     alarms.scheduled_task_memory_sync,
     'first scheduler startup should still create alarms for default enabled tasks',
+  );
+  assert.equal(
+    freshStatus.find((task) => task.id === 'memory_sync')?.statusReceipt.state,
+    'idle',
+    'fresh enabled tasks should expose an idle receipt instead of pretending a run already happened',
   );
 } finally {
   (globalThis as any).setTimeout = originalSetTimeout;

@@ -49,6 +49,26 @@
         </div>
       </div>
 
+      <section v-if="!isInitialLoading" class="radar-route-receipt" aria-label="雷达路线回执">
+        <div class="radar-route-head">
+          <div>
+            <span>雷达路线回执</span>
+            <strong>{{ radarRouteReceipt.summary }}</strong>
+          </div>
+          <p>{{ radarRouteReceipt.boundary }}</p>
+        </div>
+        <div class="radar-route-grid">
+          <article
+            v-for="row in radarRouteReceipt.rows"
+            :key="row.label"
+            :class="['radar-route-row', row.tone]"
+          >
+            <span>{{ row.label }}</span>
+            <strong>{{ row.value }}</strong>
+          </article>
+        </div>
+      </section>
+
       <article :class="['spotlight', { loading: isInitialLoading }]">
         <template v-if="isInitialLoading">
           <div class="spotlight-tag skeleton-pill"></div>
@@ -92,6 +112,27 @@
           <div v-else class="spotlight-meta">
             <span>lazy fallback 会先展示索引信号</span>
             <span>后台整理会补齐高质量上下文卡</span>
+          </div>
+          <div
+            class="spotlight-action-receipt"
+            role="note"
+            aria-label="行动前回执"
+          >
+            <div class="spotlight-action-head">
+              <span>行动前回执</span>
+              <strong>{{ spotlightActionReceipt.summary }}</strong>
+            </div>
+            <p>{{ spotlightActionReceipt.boundary }}</p>
+            <div class="spotlight-action-grid">
+              <span
+                v-for="row in spotlightActionReceipt.rows"
+                :key="row.label"
+                :class="['spotlight-action-row', row.tone]"
+              >
+                <em>{{ row.label }}</em>
+                <strong>{{ row.value }}</strong>
+              </span>
+            </div>
           </div>
           <div class="spotlight-actions">
             <button
@@ -331,6 +372,19 @@
             </div>
           </div>
 
+          <div
+            v-if="personSwitchReceipt"
+            class="person-switch-receipt"
+            role="status"
+            aria-live="polite"
+          >
+            <div>
+              <span>人物切换回执</span>
+              <strong>{{ personSwitchReceipt.summary }}</strong>
+            </div>
+            <p>{{ personSwitchReceipt.boundary }}</p>
+          </div>
+
           <div class="detail-metrics">
             <div class="detail-metric">
               <span>关系分</span>
@@ -369,13 +423,94 @@
         </nav>
 
         <div class="tab-content">
-          <div v-if="isContextLoading && activeTab === 'context'" class="loading-state compact">
+          <div
+            v-if="isContextLoading && activeTab === 'context' && !isContextCardForSelected"
+            class="loading-state compact"
+          >
             正在生成上下文卡...
           </div>
 
-          <template v-else-if="activeTab === 'context' && contextCard">
+          <template v-else-if="activeTab === 'context' && contextCard && isContextCardForSelected">
+            <div
+              v-if="contextCardRequestReceipt"
+              class="context-refresh-receipt pending"
+              role="status"
+              aria-label="上下文卡请求回执"
+            >
+              <div class="context-refresh-head">
+                <div>
+                  <span>{{ contextCardRequestReceipt.title }}</span>
+                  <strong>{{ contextCardRequestReceipt.summary }}</strong>
+                </div>
+              </div>
+              <p>{{ contextCardRequestReceipt.boundary }}</p>
+              <div class="context-refresh-grid">
+                <article
+                  v-for="row in contextCardRequestReceipt.rows"
+                  :key="row.label"
+                  :class="['context-refresh-row', row.tone]"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
+            </div>
+
+            <div
+              v-else-if="contextCardLoadFailureReceipt"
+              class="context-refresh-receipt"
+              role="status"
+              aria-label="上下文卡刷新失败回执"
+            >
+              <div class="context-refresh-head">
+                <div>
+                  <span>{{ contextCardLoadFailureReceipt.title }}</span>
+                  <strong>{{ contextCardLoadFailureReceipt.summary }}</strong>
+                </div>
+                <button
+                  type="button"
+                  class="tiny-btn"
+                  :disabled="isContextLoading"
+                  @click="loadContextCard(contextCardLoadFailureReceipt.personId)"
+                >
+                  重试刷新
+                </button>
+              </div>
+              <p>{{ contextCardLoadFailureReceipt.boundary }}</p>
+              <div class="context-refresh-grid">
+                <article
+                  v-for="row in contextCardLoadFailureReceipt.rows"
+                  :key="row.label"
+                  :class="['context-refresh-row', row.tone]"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
+            </div>
+
             <div class="quote">
               <div class="quote-body">{{ contextQuote }}</div>
+            </div>
+
+            <div v-if="contextCard.contextReceipt" class="brief-source-receipt context-receipt">
+              <div class="brief-source-head">
+                <div>
+                  <span>来源与范围</span>
+                  <strong>{{ contextCard.contextReceipt.title }}</strong>
+                </div>
+                <p>{{ contextCard.contextReceipt.boundary }}</p>
+              </div>
+              <div class="brief-source-grid">
+                <article
+                  v-for="row in contextCard.contextReceipt.rows"
+                  :key="`${row.label}:${row.value}`"
+                  :class="['brief-source-row', row.tone]"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
             </div>
 
             <section class="action-suggestions">
@@ -581,6 +716,33 @@
               </button>
             </div>
 
+            <div
+              v-if="meetingBriefRequestReceipt"
+              :class="['meeting-request-receipt', meetingBriefRequestReceipt.status]"
+              aria-label="会议简报请求回执"
+            >
+              <div class="meeting-request-head">
+                <div>
+                  <span>生成请求</span>
+                  <strong>{{ meetingBriefRequestReceipt.title }}</strong>
+                </div>
+                <p>{{ meetingBriefRequestReceipt.summary }}</p>
+              </div>
+              <div class="meeting-request-grid">
+                <article
+                  v-for="row in meetingBriefRequestReceipt.rows"
+                  :key="`${row.label}:${row.value}`"
+                  :class="['meeting-request-row', row.tone]"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
+              <p class="meeting-request-boundary">
+                {{ meetingBriefRequestReceipt.boundary }}
+              </p>
+            </div>
+
             <div v-if="meetingBrief" class="panel full">
               <div class="panel-head">
                 <h4><span class="panel-icon">M</span>{{ meetingBrief.title }}</h4>
@@ -633,6 +795,26 @@
                 </div>
               </div>
 
+              <div v-if="meetingBrief.sourceReceipt" class="brief-source-receipt">
+                <div class="brief-source-head">
+                  <div>
+                    <span>来源与范围</span>
+                    <strong>{{ meetingBrief.sourceReceipt.title }}</strong>
+                  </div>
+                  <p>{{ meetingBrief.sourceReceipt.boundary }}</p>
+                </div>
+                <div class="brief-source-grid">
+                  <article
+                    v-for="row in meetingBrief.sourceReceipt.rows"
+                    :key="`${row.label}:${row.value}`"
+                    :class="['brief-source-row', row.tone]"
+                  >
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </article>
+                </div>
+              </div>
+
               <div :class="['brief-readiness', meetingReadinessTone(meetingBrief.readiness.status)]">
                 <div class="brief-readiness-head">
                   <div>
@@ -660,6 +842,31 @@
                       {{ criterion }}
                     </p>
                   </section>
+                </div>
+              </div>
+
+              <div
+                v-if="(meetingBrief.focus?.items.length || 0) > 0"
+                class="brief-focus"
+              >
+                <div class="brief-focus-head">
+                  <div>
+                    <span>进入会议前先看</span>
+                    <strong>{{ meetingBrief.focus.title }}</strong>
+                  </div>
+                  <p>{{ meetingBrief.focus.summary }}</p>
+                </div>
+                <div class="brief-focus-grid">
+                  <article
+                    v-for="item in meetingBrief.focus.items"
+                    :key="`${item.label}:${item.body}`"
+                    :class="['brief-focus-item', item.tone]"
+                  >
+                    <span>{{ item.label }}</span>
+                    <strong v-if="item.attendee">{{ item.attendee }}</strong>
+                    <p>{{ item.body }}</p>
+                    <small v-if="item.boundary">{{ item.boundary }}</small>
+                  </article>
                 </div>
               </div>
 
@@ -694,6 +901,9 @@
 
                   <p v-if="attendee.identityCheckRequired" class="identity-check-note">
                     {{ attendee.identityCheckReason || '这个匹配需要先核对身份，再使用历史上下文。' }}
+                  </p>
+                  <p v-if="attendee.contextSuppressedReason" class="identity-check-note protected">
+                    {{ attendee.contextSuppressedReason }}
                   </p>
 
                   <p>{{ attendee.summary }}</p>
@@ -777,14 +987,109 @@
               </button>
             </div>
 
+            <div
+              v-if="assistantDraftRequestReceipt"
+              :class="['draft-request-receipt', assistantDraftRequestReceipt.status]"
+              role="status"
+              aria-live="polite"
+              aria-label="草稿生成请求回执"
+            >
+              <div class="draft-copy-receipt-head">
+                <span>{{ assistantDraftRequestReceipt.title }}</span>
+                <strong>{{ assistantDraftRequestReceipt.summary }}</strong>
+              </div>
+              <p>{{ assistantDraftRequestReceipt.boundary }}</p>
+              <div class="draft-copy-receipt-grid">
+                <article
+                  v-for="row in assistantDraftRequestReceipt.rows"
+                  :key="`assistant-request:${row.label}:${row.value}`"
+                  :class="row.tone"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
+            </div>
+
             <div v-if="assistantDraft" class="panel full">
               <div class="panel-head">
                 <h4><span class="panel-icon purple">A</span>{{ assistantDraft.personName }}</h4>
-                <button class="tiny-btn primary" type="button" @click="copyAssistantDraft">
+                <button
+                  class="tiny-btn primary"
+                  type="button"
+                  :disabled="isAssistantLoading"
+                  @click="copyAssistantDraft"
+                >
                   复制草稿
                 </button>
               </div>
+              <div
+                v-if="assistantDraft.draftReceipt"
+                class="draft-generation-receipt"
+                role="status"
+                aria-live="polite"
+              >
+                <div class="draft-copy-receipt-head">
+                  <span>{{ assistantDraft.draftReceipt.title }}</span>
+                  <strong>{{ assistantDraft.draftReceipt.boundary }}</strong>
+                </div>
+                <div class="draft-copy-receipt-grid">
+                  <article
+                    v-for="row in assistantDraft.draftReceipt.rows"
+                    :key="`generation:${row.label}:${row.value}`"
+                    :class="row.tone"
+                  >
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </article>
+                </div>
+              </div>
               <div class="draft-box">{{ assistantDraft.draftText }}</div>
+              <div :class="['draft-review', assistantReviewTone(assistantDraft.safetyReview.status)]">
+                <div class="draft-review-head">
+                  <span>{{ assistantReviewLabel(assistantDraft.safetyReview.status) }}</span>
+                  <strong>{{ assistantDraft.safetyReview.summary }}</strong>
+                </div>
+                <div class="draft-review-metrics" aria-label="回复草稿上下文检查">
+                  <span>证据 {{ assistantDraft.safetyReview.evidenceCount }}</span>
+                  <span>未闭环 {{ assistantDraft.safetyReview.openLoopCount }}</span>
+                  <span>建议 {{ assistantDraft.safetyReview.actionSuggestionCount }}</span>
+                  <span>待确认 {{ assistantDraft.safetyReview.pendingReviewCount }}</span>
+                  <span>敏感隐藏 {{ assistantDraft.safetyReview.hiddenSensitiveCount }}</span>
+                </div>
+                <ul v-if="assistantDraft.suggestedChecks.length > 0" class="draft-checks">
+                  <li v-for="check in assistantDraft.suggestedChecks" :key="check">
+                    {{ check }}
+                  </li>
+                </ul>
+              </div>
+              <div
+                v-if="assistantDraftCopyReceipt"
+                class="draft-copy-receipt"
+                role="status"
+                aria-live="polite"
+              >
+                <div class="draft-copy-receipt-head">
+                  <span>草稿复制回执</span>
+                  <strong>{{ assistantDraftCopyReceipt.summary }}</strong>
+                </div>
+                <p>{{ assistantDraftCopyReceipt.boundary }}</p>
+                <div class="draft-copy-receipt-grid">
+                  <article
+                    v-for="row in assistantDraftCopyReceipt.rows"
+                    :key="`${row.label}:${row.value}`"
+                    :class="row.tone"
+                  >
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </article>
+                </div>
+              </div>
+              <div v-if="assistantDraft.contextBasis.primarySuggestion" class="draft-basis">
+                <span>本次依据</span>
+                <strong>{{ assistantDraft.contextBasis.primarySuggestion.title }}</strong>
+                <p>{{ assistantDraft.contextBasis.primarySuggestion.reason }}</p>
+              </div>
               <div v-if="assistantDraft.warnings.length > 0" class="warning-list">
                 <strong>发送前注意</strong>
                 <p v-for="warning in assistantDraft.warnings" :key="warning">
@@ -853,14 +1158,134 @@
               <span>{{ pendingReviewCount }} 条待确认</span>
               <span>确认后写入人物画像，稍后项到期会重新回到待确认。</span>
             </div>
-            <div v-if="reviewItems.length === 0" class="empty-state compact">
-              当前筛选下没有关系事实需要处理。
+            <div
+              v-if="reviewActionReceipt"
+              :class="['review-receipt', reviewReceiptTone(reviewActionReceipt.outcome)]"
+              role="status"
+            >
+              <div class="review-receipt-head">
+                <span>校准回执</span>
+                <strong>{{ reviewActionReceipt.title }}</strong>
+                <p>{{ reviewActionReceipt.summary }}</p>
+              </div>
+              <div class="review-receipt-meta">
+                <span>{{ reviewActionReceipt.personName }} · {{ reviewActionReceipt.proposedKey }}</span>
+                <span>证据 {{ reviewActionReceipt.evidenceCount }}</span>
+                <span>{{ reviewActionReceipt.noteCaptured ? '备注已保留' : '未写备注' }}</span>
+                <span v-if="reviewActionReceipt.availableAt">
+                  {{ formatDate(reviewActionReceipt.availableAt) }} 后回到队列
+                </span>
+              </div>
+              <ul>
+                <li
+                  v-for="action in reviewActionReceipt.nextActions"
+                  :key="action"
+                >
+                  {{ action }}
+                </li>
+              </ul>
+              <div
+                v-if="reviewReturnReceipt"
+                class="review-return-ticket"
+                role="note"
+              >
+                <strong>{{ reviewReturnReceipt.title }}</strong>
+                <p>{{ reviewReturnReceipt.summary }}</p>
+                <div class="review-receipt-meta">
+                  <span
+                    v-for="row in reviewReturnReceipt.rows"
+                    :key="row.label"
+                    :class="`tone-${row.tone}`"
+                  >
+                    {{ row.label }}：{{ row.value }}
+                  </span>
+                </div>
+                <p class="muted-line">{{ reviewReturnReceipt.boundary }}</p>
+              </div>
+            </div>
+            <div
+              v-if="reviewActionFailureReceipt"
+              class="review-receipt danger"
+              role="alert"
+            >
+              <div class="review-receipt-head">
+                <span>校准失败回执</span>
+                <strong>{{ reviewActionFailureReceipt.title }}</strong>
+                <p>{{ reviewActionFailureReceipt.summary }}</p>
+              </div>
+              <div class="review-receipt-meta">
+                <span>{{ reviewActionFailureReceipt.personName }} · {{ reviewActionFailureReceipt.proposedKey }}</span>
+                <span>{{ reviewActionFailureReceipt.actionLabel }}</span>
+                <span>{{ formatDate(reviewActionFailureReceipt.failedAt) }}</span>
+              </div>
+              <ul>
+                <li
+                  v-for="action in reviewActionFailureReceipt.nextActions"
+                  :key="action"
+                >
+                  {{ action }}
+                </li>
+              </ul>
+            </div>
+            <div
+              v-if="reviewItems.length === 0"
+              class="review-receipt muted"
+              role="status"
+            >
+              <div class="review-receipt-head">
+                <span>空筛选回执</span>
+                <strong>{{ reviewEmptyReceipt.title }}</strong>
+                <p>{{ reviewEmptyReceipt.summary }}</p>
+              </div>
+              <div class="review-receipt-meta">
+                <span
+                  v-for="row in reviewEmptyReceipt.rows"
+                  :key="row.label"
+                  :class="`tone-${row.tone}`"
+                >
+                  {{ row.label }}：{{ row.value }}
+                </span>
+              </div>
+              <ul>
+                <li
+                  v-for="action in reviewEmptyReceipt.nextActions"
+                  :key="action"
+                >
+                  {{ action }}
+                </li>
+              </ul>
+              <div class="review-actions review-empty-actions">
+                <button
+                  v-if="reviewStatus !== 'pending'"
+                  class="tiny-btn primary"
+                  type="button"
+                  @click="setReviewStatus('pending')"
+                >
+                  回到待确认
+                </button>
+                <button
+                  v-if="reviewStatus !== 'all'"
+                  class="tiny-btn"
+                  type="button"
+                  @click="setReviewStatus('all')"
+                >
+                  查看全部状态
+                </button>
+                <button
+                  class="tiny-btn"
+                  type="button"
+                  @click="loadReviewItems"
+                >
+                  重新读取
+                </button>
+              </div>
             </div>
             <div class="review-grid">
               <article
                 v-for="item in reviewItems"
                 :key="item.id"
-                class="review-card"
+                :class="['review-card', { focused: reviewFocusItemId === item.id }]"
+                :data-review-item-id="item.id"
               >
                 <div class="item-row">
                   <div class="review-title">
@@ -878,6 +1303,22 @@
                   </span>
                   <span>{{ formatConfidence(item.confidence) }}</span>
                   <span v-if="formatReviewDue(item)">{{ formatReviewDue(item) }}</span>
+                </div>
+                <div class="review-impact-preview" role="note">
+                  <strong>校准影响预览</strong>
+                  <ul>
+                    <li>确认会把当前写入内容保存到 {{ item.personName }} 的 {{ item.proposedKey }}，后续上下文卡、会议简报和回复草稿会按用户确认事实读取。</li>
+                    <li>稍后只把这条候选事实移出待确认约 7 天；不会写入人物画像，编辑后的候选内容和备注会保留。</li>
+                    <li>驳回不会写入人物画像，也不会发送消息、创建跟进或删除原始证据。</li>
+                  </ul>
+                </div>
+                <div :class="['review-draft-receipt', { dirty: isReviewDraftDirty(item) }]" role="note">
+                  <strong>
+                    {{ isReviewDraftDirty(item) ? '本页草稿未写入' : '写入草稿待复核' }}
+                  </strong>
+                  <p>
+                    {{ reviewDraftReceiptText(item) }}
+                  </p>
                 </div>
                 <label class="review-field">
                   建议写入内容
@@ -945,9 +1386,35 @@
             <h4>确认队列</h4>
             <button type="button" @click="openPendingReviewTab">查看全部</button>
           </div>
+          <div
+            v-if="reviewActionReceipt"
+            :class="['review-receipt', 'compact', reviewReceiptTone(reviewActionReceipt.outcome)]"
+            role="status"
+          >
+            <div class="review-receipt-head">
+              <span>刚刚校准</span>
+              <strong>{{ reviewActionReceipt.title }}</strong>
+              <p>{{ reviewActionReceipt.personName }} · {{ reviewActionReceipt.proposedKey }}</p>
+              <p v-if="reviewReturnReceipt">{{ reviewReturnReceipt.summary }}</p>
+            </div>
+          </div>
+          <div
+            v-if="reviewActionFailureReceipt"
+            class="review-receipt compact danger"
+            role="alert"
+          >
+            <div class="review-receipt-head">
+              <span>校准失败</span>
+              <strong>{{ reviewActionFailureReceipt.title }}</strong>
+              <p>{{ reviewActionFailureReceipt.personName }} · {{ reviewActionFailureReceipt.proposedKey }}</p>
+            </div>
+          </div>
           <div v-if="pendingReviewItems.length === 0" class="muted-line">
             当前没有需要确认的关系事实。
           </div>
+          <p v-else class="side-boundary">
+            侧栏只显示候选摘要；确认写入前先进入完整复核卡查看证据、字段和可编辑内容。
+          </p>
           <article
             v-for="item in pendingReviewItems.slice(0, 3)"
             :key="item.id"
@@ -963,10 +1430,9 @@
               <button
                 class="tiny-btn primary"
                 type="button"
-                :disabled="isReviewActionLoading(item.id)"
-                @click="applyReviewAction(item, 'confirm')"
+                @click="focusReviewItem(item)"
               >
-                确认
+                进入复核
               </button>
               <button
                 class="tiny-btn"
@@ -1037,6 +1503,7 @@ import {
   type RelationshipPersonSummary,
   type RelationshipRadarState,
   type RelationshipReviewAction,
+  type RelationshipReviewActionReceipt,
   type RelationshipReviewItem,
   type RelationshipReviewStatus,
 } from '../../services/MemoryServiceClient';
@@ -1052,10 +1519,114 @@ type DetailTab = 'context' | 'meeting' | 'assistant' | 'graph' | 'review';
 type ContextActionSuggestion = NonNullable<
   RelationshipContextCard['actionSuggestions']
 >[number];
+type AssistantDraftCopyReceipt = {
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  copiedAt: number;
+};
+type AssistantDraftRequestReceipt = {
+  title: string;
+  status: 'pending' | 'failed';
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  requestedAt: number;
+};
+type PersonSwitchReceipt = {
+  personId: string;
+  summary: string;
+  boundary: string;
+  resetAt: number;
+};
+type MeetingBriefRequestReceipt = {
+  title: string;
+  status: 'pending' | 'failed';
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  requestedAt: number;
+};
+type ContextCardLoadFailureReceipt = {
+  title: string;
+  personId: string;
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  failedAt: number;
+};
+type ContextCardRequestReceipt = {
+  title: string;
+  personId: string;
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  requestedAt: number;
+};
+type ReviewActionFailureReceipt = {
+  title: string;
+  summary: string;
+  actionLabel: string;
+  personName: string;
+  proposedKey: string;
+  nextActions: string[];
+  failedAt: number;
+};
+type ReviewReturnReceipt = {
+  title: string;
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+};
+type ReviewEmptyReceipt = {
+  title: string;
+  summary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  nextActions: string[];
+};
+type RadarRouteReceipt = {
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+};
+type SpotlightActionReceipt = RadarRouteReceipt;
 
 const client = getMemoryServiceClient();
 const router = useRouter();
 const store = useMemoryStore();
+const MEETING_BRIEF_ATTENDEE_PREVIEW_LIMIT = 16;
 
 const isLoading = ref(false);
 const isContextLoading = ref(false);
@@ -1089,6 +1660,10 @@ const pendingReviewTotal = ref(0);
 const reviewDrafts = ref<Record<string, string>>({});
 const reviewNoteDrafts = ref<Record<string, string>>({});
 const reviewActionLoadingId = ref('');
+const reviewActionReceipt = ref<RelationshipReviewActionReceipt | null>(null);
+const reviewActionFailureReceipt = ref<ReviewActionFailureReceipt | null>(null);
+const reviewReturnReceipt = ref<ReviewReturnReceipt | null>(null);
+const reviewFocusItemId = ref('');
 const copyMessage = ref('');
 const consolidationResult = ref<RelationshipConsolidationResult | null>(null);
 const meetingTitle = ref('');
@@ -1096,8 +1671,15 @@ const meetingAttendeesText = ref('');
 const meetingTitleAutoValue = ref('');
 const meetingAttendeesAutoValue = ref('');
 const meetingBrief = ref<RelationshipMeetingBrief | null>(null);
+const meetingBriefRequestReceipt = ref<MeetingBriefRequestReceipt | null>(null);
 const assistantGoal = ref('');
 const assistantDraft = ref<RelationshipAssistantDraft | null>(null);
+const assistantDraftCopyReceipt = ref<AssistantDraftCopyReceipt | null>(null);
+const assistantDraftRequestReceipt = ref<AssistantDraftRequestReceipt | null>(null);
+let assistantDraftRequestSeq = 0;
+const personSwitchReceipt = ref<PersonSwitchReceipt | null>(null);
+const contextCardLoadFailureReceipt = ref<ContextCardLoadFailureReceipt | null>(null);
+const contextCardRequestReceipt = ref<ContextCardRequestReceipt | null>(null);
 const detailBriefRef = ref<HTMLElement | null>(null);
 
 const stateFilterOptions: Array<{ value: RadarStateFilter; label: string }> = [
@@ -1147,6 +1729,53 @@ const peopleEmptyBody = computed(() => {
   }
   return '打开候选可查看低频人物；后台整理会在每日 consolidation 后补充更高质量的投影。';
 });
+const radarRouteReceipt = computed<RadarRouteReceipt>(() => {
+  const visibleCount = people.value.length;
+  const totalCount = peopleResponse.value?.totalCandidates ?? visibleCount;
+  const focus = spotlightPerson.value;
+  const rangeText = hasActivePeopleFilters.value
+    ? `${peopleFilterSummary.value} · ${visibleCount}/${totalCount} 位候选`
+    : `全部雷达人物 · ${visibleCount}/${totalCount} 位候选`;
+  const qualityMix = radarQualityMixText(people.value);
+  const reviewText =
+    pendingReviewCount.value > 0
+      ? `${pendingReviewCount.value} 条待确认事实`
+      : '暂无待确认事实';
+  const priorityReason = focus
+    ? spotlightPriorityReason(focus)
+    : hasActivePeopleFilters.value
+      ? '当前筛选没有可排序人物，可清空筛选或查看低频候选'
+      : '等待 Memory Service 生成可排序的人物投影';
+  return {
+    summary: focus
+      ? `先看 ${focus.name}：${spotlightTopicForPerson(focus)}`
+      : '当前没有可优先处理的人物',
+    boundary:
+      '查看、搜索、筛选和复制准备都是只读；后台整理/强制刷新只更新关系雷达投影和上下文卡，不写人物画像、不发送消息、不创建跟进，也不同步外部系统。画像写入只发生在 Review Queue 确认。',
+    rows: [
+      {
+        label: '当前范围',
+        value: rangeText,
+        tone: hasActivePeopleFilters.value ? 'warn' : 'ok',
+      },
+      {
+        label: '优先理由',
+        value: priorityReason,
+        tone: focus?.reviewPendingCount ? 'warn' : focus ? 'ok' : 'muted',
+      },
+      {
+        label: '数据质量',
+        value: qualityMix,
+        tone: hasWeakRadarQuality(people.value) ? 'warn' : 'ok',
+      },
+      {
+        label: '确认队列',
+        value: reviewText,
+        tone: pendingReviewCount.value > 0 ? 'warn' : 'muted',
+      },
+    ],
+  };
+});
 const selectedPerson = computed(() =>
   people.value.find((person) => person.id === selectedPersonId.value),
 );
@@ -1168,6 +1797,89 @@ const spotlightBody = computed(() => {
     person.contextBullets[0] || person.reason || person.description || '近期有高频交互，建议先扫一遍上下文再沟通。',
     168,
   );
+});
+const spotlightActionReceipt = computed<SpotlightActionReceipt>(() => {
+  const person = spotlightPerson.value;
+  if (!person) {
+    return {
+      summary: '等待可行动人物',
+      boundary:
+        '当前只有读取和筛选动作；不会写入人物画像、发送消息、创建跟进或同步外部系统。',
+      rows: [
+        {
+          label: '先做',
+          value: hasActivePeopleFilters.value ? '清空筛选或查看低频候选' : '等待人物投影生成',
+          tone: hasActivePeopleFilters.value ? 'warn' : 'muted',
+        },
+        {
+          label: '推荐依据',
+          value: hasActivePeopleFilters.value
+            ? '当前筛选没有可排序人物'
+            : 'Memory Service 暂未返回雷达人物',
+          tone: 'muted',
+        },
+        {
+          label: '复核状态',
+          value: pendingReviewCount.value > 0
+            ? `${pendingReviewCount.value} 条待确认事实仍需 Review Queue`
+            : '暂无待确认事实',
+          tone: pendingReviewCount.value > 0 ? 'warn' : 'muted',
+        },
+        {
+          label: '复制条件',
+          value: '上下文卡生成后才可复制给 AI',
+          tone: 'muted',
+        },
+      ],
+    };
+  }
+
+  const needsReview = person.reviewPendingCount > 0;
+  const needsRefresh =
+    person.dataQuality === 'stale' ||
+    person.dataQuality === 'indexed' ||
+    person.projectionSource === 'lazy' ||
+    person.radarState === 'dormant';
+  const firstAction = needsReview
+    ? '先进入完整 brief，再到 Review Queue 复核事实'
+    : needsRefresh
+      ? '先刷新此人的关系投影，再核对最新证据'
+      : '先打开完整 brief，按建议和证据决定沟通方式';
+  const copyReadiness = isSpotlightContextLoaded.value
+    ? contextCard.value?.privacySummary.sensitiveIncluded
+      ? '已加载含敏感上下文，复制前必须复核'
+      : '已加载默认隐藏敏感项的上下文卡'
+    : '复制给 AI 会保持禁用，直到此人的上下文卡加载完成';
+
+  return {
+    summary: `${person.name} · ${spotlightTopicForPerson(person)}`,
+    boundary:
+      '查看 brief 只导航到当前页；强制刷新只更新关系雷达投影和上下文卡；复制只复制已加载上下文。这里不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统。',
+    rows: [
+      {
+        label: '先做',
+        value: firstAction,
+        tone: needsReview || needsRefresh ? 'warn' : 'ok',
+      },
+      {
+        label: '推荐依据',
+        value: spotlightPriorityReason(person),
+        tone: needsReview ? 'warn' : 'ok',
+      },
+      {
+        label: '复核状态',
+        value: needsReview
+          ? `${person.reviewPendingCount} 条事实只能在 Review Queue 确认写入`
+          : `${qualityLabel(person.dataQuality)} · ${stateLabel(person.radarState)}`,
+        tone: needsReview || needsRefresh ? 'warn' : 'ok',
+      },
+      {
+        label: '复制条件',
+        value: copyReadiness,
+        tone: isSpotlightContextLoaded.value ? 'ok' : 'muted',
+      },
+    ],
+  };
 });
 const selectedShortName = computed(() =>
   selectedPerson.value ? shortPersonName(selectedPerson.value.name) : '',
@@ -1199,6 +1911,11 @@ const contextQuote = computed(() =>
     240,
   ),
 );
+const isContextCardForSelected = computed(
+  () =>
+    Boolean(contextCard.value && selectedPersonId.value) &&
+    contextCard.value?.person.id === selectedPersonId.value,
+);
 const isSpotlightContextLoaded = computed(
   () =>
     Boolean(contextCard.value && spotlightPerson.value) &&
@@ -1207,6 +1924,90 @@ const isSpotlightContextLoaded = computed(
 const pendingReviewCount = computed(() =>
   Math.max(pendingReviewTotal.value, pendingReviewItems.value.length),
 );
+const reviewEmptyReceipt = computed<ReviewEmptyReceipt>(() => {
+  const currentFilter = reviewFilterLabel(reviewStatus.value);
+  const pendingCount = pendingReviewCount.value;
+  const rows: ReviewEmptyReceipt['rows'] = [
+    {
+      label: '读取状态',
+      value: `成功读取 ${reviewTotal.value} 条`,
+      tone: 'ok',
+    },
+    {
+      label: '当前筛选',
+      value: currentFilter,
+      tone: 'muted',
+    },
+    {
+      label: '待确认',
+      value: pendingCount > 0 ? `${pendingCount} 条仍需处理` : '0 条待确认',
+      tone: pendingCount > 0 ? 'warn' : 'ok',
+    },
+  ];
+
+  if (reviewStatus.value === 'pending') {
+    return {
+      title: '待确认队列已读完',
+      summary:
+        '这次读取成功，当前没有待确认的关系事实；这不是服务失败，也没有自动确认、驳回或删除任何证据。',
+      rows,
+      nextActions: [
+        '确认写入仍只能从完整复核卡发起；当前空态不会写入人物画像。',
+        '稍后项到期后会重新回到待确认；可查看全部状态核对历史处理记录。',
+      ],
+    };
+  }
+
+  if (reviewStatus.value === 'snoozed') {
+    return {
+      title: '当前没有稍后复核项',
+      summary:
+        '这次读取成功，当前没有被延后的关系事实；这不代表待确认候选已经处理完。',
+      rows,
+      nextActions: [
+        '稍后只延后复核，不写入人物画像；到期后候选会回到待确认。',
+        '回到待确认可以继续处理还未校准的人物关系事实。',
+      ],
+    };
+  }
+
+  if (reviewStatus.value === 'confirmed') {
+    return {
+      title: '当前筛选没有已确认记录',
+      summary:
+        '这次读取成功，当前没有可回看的已确认关系事实；空态不会撤销或改写已存在的人物画像字段。',
+      rows,
+      nextActions: [
+        '需要写入新关系事实时，回到待确认并进入完整复核卡。',
+        '如果刚确认过但这里仍为空，可重新读取队列核对服务端最新状态。',
+      ],
+    };
+  }
+
+  if (reviewStatus.value === 'rejected') {
+    return {
+      title: '当前筛选没有已驳回记录',
+      summary:
+        '这次读取成功，当前没有被驳回的关系候选；空态不会删除原始证据，也不会隐藏待确认候选。',
+      rows,
+      nextActions: [
+        '驳回只保存处理结果和备注，不会删除消息、会议或关系证据。',
+        '回到待确认可以继续复核仍可写入的人物事实。',
+      ],
+    };
+  }
+
+  return {
+    title: 'Review Queue 没有可显示记录',
+    summary:
+      '这次读取成功，全部状态下都没有关系事实候选；可能是当前人物关系证据不足，或后台整理还没有生成 review item。',
+    rows,
+    nextActions: [
+      '这不是自动确认完成；页面不会因为空态写入人物画像或同步外部系统。',
+      '可重新读取，或先刷新关系投影后等待新的候选进入队列。',
+    ],
+  };
+});
 const contextHiddenSensitiveCount = computed(() => {
   const summary = contextCard.value?.privacySummary;
   if (!summary) return 0;
@@ -1246,7 +2047,9 @@ const contextPrivacySummaryText = computed(() => {
   return '这张卡没有检测到需要默认隐藏的人物上下文。';
 });
 const contextCopyActionLabel = computed(() =>
-  contextCard.value?.privacySummary.sensitiveIncluded
+  contextCardRequestReceipt.value
+    ? '请求中'
+    : contextCard.value?.privacySummary.sensitiveIncluded
     ? '复制含敏感上下文'
     : '复制当前上下文',
 );
@@ -1296,12 +2099,18 @@ async function loadPeople() {
     });
     peopleResponse.value = response;
     appliedPeopleFilters.value = requestFilters;
+    const previousSelectedPersonId = selectedPersonId.value;
     const stillSelected = response.items.some(
       (person) => person.id === selectedPersonId.value,
     );
-    selectedPersonId.value = stillSelected
+    const nextSelectedPersonId = stillSelected
       ? selectedPersonId.value
       : response.items[0]?.id || '';
+    selectedPersonId.value = nextSelectedPersonId;
+    if (previousSelectedPersonId && nextSelectedPersonId !== previousSelectedPersonId) {
+      const nextPerson = response.items.find((item) => item.id === nextSelectedPersonId);
+      resetPersonScopedArtifacts(nextPerson);
+    }
     if (selectedPersonId.value) {
       const person = response.items.find((item) => item.id === selectedPersonId.value);
       syncDefaultInputs(person);
@@ -1309,6 +2118,8 @@ async function loadPeople() {
       await loadContextCard(selectedPersonId.value);
     } else {
       contextCard.value = null;
+      contextCardLoadFailureReceipt.value = null;
+      contextCardRequestReceipt.value = null;
     }
   } catch (error: any) {
     errorMessage.value = error?.message || '加载关系雷达失败';
@@ -1317,8 +2128,21 @@ async function loadPeople() {
   }
 }
 
-async function loadContextCard(personId: string) {
+async function loadContextCard(personId: string): Promise<boolean> {
   isContextLoading.value = true;
+  const previousCard = contextCard.value;
+  const hasReusableSnapshot = previousCard?.person.id === personId;
+  const previousSensitiveIncluded =
+    previousCard?.privacySummary.sensitiveIncluded === true;
+  const requestedSensitiveIncluded = contextIncludeSensitive.value;
+  contextCardLoadFailureReceipt.value = null;
+  contextCardRequestReceipt.value =
+    previousCard && hasReusableSnapshot
+      ? buildContextCardRequestReceipt({
+          card: previousCard,
+          requestedSensitiveIncluded,
+        })
+      : null;
   try {
     contextCard.value = await client.getRelationshipContextCard({
       personId,
@@ -1326,9 +2150,28 @@ async function loadContextCard(personId: string) {
       tokenBudget: 1200,
       includeSensitive: contextIncludeSensitive.value,
     });
+    contextCardLoadFailureReceipt.value = null;
+    contextCardRequestReceipt.value = null;
+    return true;
   } catch (error: any) {
-    errorMessage.value = error?.message || '生成上下文卡失败';
-    contextCard.value = null;
+    const reason = error?.message || '生成上下文卡失败';
+    errorMessage.value = reason;
+    contextCardRequestReceipt.value = null;
+    if (previousCard && hasReusableSnapshot) {
+      contextCard.value = previousCard;
+      contextIncludeSensitive.value = previousSensitiveIncluded;
+      contextCardLoadFailureReceipt.value = buildContextCardLoadFailureReceipt({
+        card: previousCard,
+        reason,
+        requestedSensitiveIncluded,
+      });
+    } else {
+      contextCard.value = null;
+      contextCardLoadFailureReceipt.value = null;
+      contextCardRequestReceipt.value = null;
+      contextIncludeSensitive.value = false;
+    }
+    return false;
   } finally {
     isContextLoading.value = false;
   }
@@ -1379,6 +2222,50 @@ function syncReviewDrafts(items: RelationshipReviewItem[]) {
       reviewNoteDrafts.value[item.id] = item.userNote || '';
     }
   }
+}
+
+function normalizeReviewDraftText(value: string | undefined): string {
+  return (value || '').trim().replace(/\s+/g, ' ');
+}
+
+function reviewDraftValue(item: RelationshipReviewItem): string {
+  return reviewDrafts.value[item.id] ?? item.proposedValue ?? '';
+}
+
+function reviewNoteDraftValue(item: RelationshipReviewItem): string {
+  return reviewNoteDrafts.value[item.id] ?? item.userNote ?? '';
+}
+
+function reviewDraftDirtyFields(item: RelationshipReviewItem): string[] {
+  const fields: string[] = [];
+  if (
+    normalizeReviewDraftText(reviewDraftValue(item)) !==
+    normalizeReviewDraftText(item.proposedValue)
+  ) {
+    fields.push('写入内容');
+  }
+  if (
+    normalizeReviewDraftText(reviewNoteDraftValue(item)) !==
+    normalizeReviewDraftText(item.userNote)
+  ) {
+    fields.push('复核备注');
+  }
+  return fields;
+}
+
+function isReviewDraftDirty(item: RelationshipReviewItem): boolean {
+  return reviewDraftDirtyFields(item).length > 0;
+}
+
+function reviewDraftReceiptText(item: RelationshipReviewItem): string {
+  if (!canActOnReviewItem(item)) {
+    return `这条候选已${reviewStatusLabel(item.status)}，这里只能回看写入内容、证据和备注；不会再次改变人物画像或队列状态。`;
+  }
+  const fields = reviewDraftDirtyFields(item);
+  if (fields.length > 0) {
+    return `当前只改了本页草稿（${fields.join('、')}），尚未写入 Memory Service。确认会提交写入内容和备注；稍后会保留草稿和备注；驳回只保存备注，不写人物画像。`;
+  }
+  return '编辑建议写入内容或复核备注只会先留在本页；点击确认、稍后或驳回前，不会自动保存到 Memory Service，也不会写入人物画像。';
 }
 
 async function runConsolidation(force: boolean, personId?: string) {
@@ -1435,14 +2322,39 @@ function openPendingReviewTab() {
   }
 }
 
+async function focusReviewItem(item: RelationshipReviewItem) {
+  activeTab.value = 'review';
+  const targetStatus = item.status === 'snoozed' ? 'snoozed' : 'pending';
+  if (reviewStatus.value !== targetStatus) {
+    reviewStatus.value = targetStatus;
+    await loadReviewItems();
+  } else if (!reviewItems.value.some((candidate) => candidate.id === item.id)) {
+    await loadReviewItems();
+  }
+  reviewFocusItemId.value = item.id;
+  await nextTick();
+  const selector = `[data-review-item-id="${escapeAttributeSelector(item.id)}"]`;
+  const target = document.querySelector<HTMLElement>(selector);
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function selectPerson(
   person: RelationshipPersonSummary,
   options: { scrollToBrief?: boolean } = {},
 ) {
+  assistantDraftRequestSeq += 1;
+  isAssistantLoading.value = false;
   selectedPersonId.value = person.id;
   syncDefaultInputs(person);
   activeTab.value = 'context';
   contextIncludeSensitive.value = false;
+  assistantDraft.value = null;
+  assistantDraftCopyReceipt.value = null;
+  assistantDraftRequestReceipt.value = null;
+  meetingBrief.value = null;
+  meetingBriefRequestReceipt.value = null;
+  contextCardRequestReceipt.value = null;
+  personSwitchReceipt.value = null;
   void loadContextCard(person.id);
   if (options.scrollToBrief) {
     void scrollToBrief();
@@ -1510,35 +2422,214 @@ function setContextSensitiveIncluded(next: boolean) {
   }
 }
 
+function resetPersonScopedArtifacts(person?: RelationshipPersonSummary) {
+  assistantDraftRequestSeq += 1;
+  isAssistantLoading.value = false;
+  const hadGeneratedArtifacts = Boolean(
+    meetingBrief.value ||
+    assistantDraft.value ||
+    assistantDraftCopyReceipt.value,
+  );
+  meetingBrief.value = null;
+  meetingBriefRequestReceipt.value = null;
+  assistantDraft.value = null;
+  assistantDraftCopyReceipt.value = null;
+  assistantDraftRequestReceipt.value = null;
+  if (!hadGeneratedArtifacts || !person) {
+    personSwitchReceipt.value = null;
+    return;
+  }
+  personSwitchReceipt.value = {
+    personId: person.id,
+    summary: `已切换到 ${person.name}`,
+    boundary:
+      '上一位人物的会议简报、回复草稿和复制回执已清空；需要重新生成后才会用于当前人物，避免把旧上下文带进新的 brief。',
+    resetAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+function buildMeetingBriefRequestReceipt(input: {
+  title: string;
+  attendees: ReturnType<typeof parseAttendees>;
+  existingBrief: RelationshipMeetingBrief | null;
+  failedReason?: string;
+}): MeetingBriefRequestReceipt {
+  const attendeeCount = input.attendees.length;
+  const processedCount = Math.min(attendeeCount, MEETING_BRIEF_ATTENDEE_PREVIEW_LIMIT);
+  const omittedCount = Math.max(0, attendeeCount - MEETING_BRIEF_ATTENDEE_PREVIEW_LIMIT);
+  const attendeePreview = input.attendees
+    .slice(0, 3)
+    .map((attendee) => attendee.name || attendee.email || '未命名参会人')
+    .join('、');
+  const status: MeetingBriefRequestReceipt['status'] = input.failedReason ? 'failed' : 'pending';
+  const oldSnapshotText = input.existingBrief
+    ? `仍显示上次简报：${input.existingBrief.title}`
+    : '当前没有上次简报';
+
+  return {
+    title: status === 'failed' ? '生成未完成，旧简报未替换' : '正在生成会前人物简报',
+    status,
+    summary:
+      status === 'failed'
+        ? `${input.failedReason}；${oldSnapshotText}。`
+        : `正在基于「${input.title}」和 ${attendeeCount} 位参会人重新生成；返回前页面结果不会被当作新简报。`,
+    boundary:
+      status === 'failed'
+        ? '本次失败没有写入人物画像、发送消息、创建跟进或替换旧简报；修正参会人或稍后重试前，不要把旧简报当作这次请求的结果。'
+        : '生成期间只读取 Relationship Radar 记忆并计算覆盖；不会写入人物画像、发送消息、创建跟进或同步外部系统。旧简报若仍显示，只是上次成功快照。',
+    rows: [
+      {
+        label: '请求标题',
+        value: compactText(input.title, 48),
+        tone: 'ok',
+      },
+      {
+        label: '参会范围',
+        value:
+          omittedCount > 0
+            ? `${processedCount}/${attendeeCount} 位将先分析，${omittedCount} 位暂不展开`
+            : attendeeCount > 0
+              ? `${attendeeCount} 位参会人`
+              : '缺少参会人',
+        tone: attendeeCount === 0 || omittedCount > 0 ? 'warn' : 'ok',
+      },
+      {
+        label: '参会预览',
+        value: attendeePreview || '需要先补充参会人',
+        tone: attendeePreview ? 'muted' : 'warn',
+      },
+      {
+        label: '页面结果',
+        value: oldSnapshotText,
+        tone: input.existingBrief ? 'warn' : 'muted',
+      },
+    ],
+    requestedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
 async function generateMeetingBrief() {
+  const attendees = parseAttendees(meetingAttendeesText.value);
+  const titleInput = meetingTitle.value.trim();
+  const requestTitle = titleInput || '未命名会议';
+  meetingBriefRequestReceipt.value = buildMeetingBriefRequestReceipt({
+    title: requestTitle,
+    attendees,
+    existingBrief: meetingBrief.value,
+  });
   isMeetingLoading.value = true;
   errorMessage.value = '';
   try {
     meetingBrief.value = await client.getRelationshipMeetingBrief({
-      title: meetingTitle.value.trim() || undefined,
-      attendees: parseAttendees(meetingAttendeesText.value),
+      title: titleInput || undefined,
+      attendees,
     });
+    meetingBriefRequestReceipt.value = null;
+    personSwitchReceipt.value = null;
   } catch (error: any) {
-    errorMessage.value = error?.message || '生成会议简报失败';
+    const message = error?.message || '生成会议简报失败';
+    errorMessage.value = message;
+    meetingBriefRequestReceipt.value = buildMeetingBriefRequestReceipt({
+      title: requestTitle,
+      attendees,
+      existingBrief: meetingBrief.value,
+      failedReason: message,
+    });
   } finally {
     isMeetingLoading.value = false;
   }
 }
 
+function buildAssistantDraftRequestReceipt(input: {
+  person: RelationshipPersonSummary;
+  goal: string;
+  existingDraft: RelationshipAssistantDraft | null;
+  failedReason?: string;
+}): AssistantDraftRequestReceipt {
+  const status: AssistantDraftRequestReceipt['status'] = input.failedReason
+    ? 'failed'
+    : 'pending';
+  const oldSnapshotText = input.existingDraft
+    ? `仍显示上次草稿：${input.existingDraft.personName}`
+    : '当前没有上次草稿';
+  const goalText = input.goal || '未填写目标，使用人物上下文生成轻量跟进';
+
+  return {
+    title: status === 'failed' ? '草稿生成未确认' : '草稿生成请求回执',
+    status,
+    summary:
+      status === 'failed'
+        ? `${input.failedReason}；${oldSnapshotText}。`
+        : `正在生成给 ${input.person.name} 的回复草稿；返回前页面结果不会被当作新草稿。`,
+    boundary:
+      status === 'failed'
+        ? '本次失败没有写入人物画像、发送消息、创建跟进、放开敏感上下文或替换旧草稿；旧草稿若仍显示，只是上次成功快照。'
+        : '生成期间只读取默认隐藏敏感上下文的人物关系卡；不会写入人物画像、发送消息、创建跟进、同步外部系统或临时包含敏感上下文。旧草稿若仍显示，只是上次成功快照，复制会等本次生成结束后再开放。',
+    rows: [
+      {
+        label: '生成对象',
+        value: `${input.person.name} · follow-up`,
+        tone: 'ok',
+      },
+      {
+        label: '用户目标',
+        value: compactText(goalText, 56),
+        tone: input.goal ? 'ok' : 'muted',
+      },
+      {
+        label: '页面草稿',
+        value: oldSnapshotText,
+        tone: input.existingDraft ? 'warn' : 'muted',
+      },
+      {
+        label: '隐私范围',
+        value: '默认隐藏敏感上下文',
+        tone: 'ok',
+      },
+    ],
+    requestedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
 async function generateAssistantDraft() {
-  if (!selectedPerson.value) return;
+  const person = selectedPerson.value;
+  if (!person) return;
+  const requestSeq = assistantDraftRequestSeq + 1;
+  assistantDraftRequestSeq = requestSeq;
+  const goal = assistantGoal.value.trim();
+  const existingDraft = assistantDraft.value;
+  assistantDraftRequestReceipt.value = buildAssistantDraftRequestReceipt({
+    person,
+    goal,
+    existingDraft,
+  });
   isAssistantLoading.value = true;
   errorMessage.value = '';
+  assistantDraftCopyReceipt.value = null;
   try {
-    assistantDraft.value = await client.getRelationshipAssistantDraft({
-      personId: selectedPerson.value.id,
+    const nextDraft = await client.getRelationshipAssistantDraft({
+      personId: person.id,
       scenario: 'follow_up_message',
-      userGoal: assistantGoal.value.trim() || undefined,
+      userGoal: goal || undefined,
     });
+    if (requestSeq !== assistantDraftRequestSeq || selectedPersonId.value !== person.id) return;
+    assistantDraft.value = nextDraft;
+    assistantDraftRequestReceipt.value = null;
+    personSwitchReceipt.value = null;
   } catch (error: any) {
-    errorMessage.value = error?.message || '生成回复草稿失败';
+    if (requestSeq !== assistantDraftRequestSeq || selectedPersonId.value !== person.id) return;
+    const message = error?.message || '生成回复草稿失败';
+    errorMessage.value = message;
+    assistantDraftRequestReceipt.value = buildAssistantDraftRequestReceipt({
+      person,
+      goal,
+      existingDraft,
+      failedReason: message,
+    });
   } finally {
-    isAssistantLoading.value = false;
+    if (requestSeq === assistantDraftRequestSeq && selectedPersonId.value === person.id) {
+      isAssistantLoading.value = false;
+    }
   }
 }
 
@@ -1547,16 +2638,28 @@ async function applyReviewAction(
   action: RelationshipReviewAction,
 ) {
   reviewActionLoadingId.value = item.id;
+  reviewActionReceipt.value = null;
+  reviewActionFailureReceipt.value = null;
+  reviewReturnReceipt.value = null;
   try {
     const snoozeUntil =
       action === 'snooze'
         ? Math.floor(Date.now() / 1000) + 7 * 86400
         : undefined;
-    await client.updateRelationshipReviewItem(item.id, action, {
+    const updatedItem = await client.updateRelationshipReviewItem(item.id, action, {
       editedValue: reviewDrafts.value[item.id] || item.proposedValue,
       userNote: reviewNoteDrafts.value[item.id] || undefined,
       snoozeUntil,
     });
+    reviewFocusItemId.value = '';
+    reviewActionReceipt.value = updatedItem.actionReceipt || null;
+    reviewReturnReceipt.value = updatedItem.actionReceipt
+      ? buildReviewReturnReceipt(item, updatedItem.actionReceipt)
+      : null;
+    reviewActionFailureReceipt.value = null;
+    if (updatedItem.actionReceipt) {
+      showToast(updatedItem.actionReceipt.title);
+    }
     await Promise.all([
       loadReviewItems(),
       loadPendingReviewItems(),
@@ -1564,10 +2667,123 @@ async function applyReviewAction(
       loadGraph(),
     ]);
   } catch (error: any) {
-    errorMessage.value = error?.message || '更新审核项失败';
+    const message = error?.message || '更新审核项失败';
+    errorMessage.value = message;
+    reviewReturnReceipt.value = null;
+    reviewActionFailureReceipt.value = buildReviewActionFailureReceipt(
+      item,
+      action,
+      message,
+    );
   } finally {
     reviewActionLoadingId.value = '';
   }
+}
+
+function buildReviewReturnReceipt(
+  item: RelationshipReviewItem,
+  receipt: RelationshipReviewActionReceipt,
+): ReviewReturnReceipt | null {
+  if (receipt.outcome !== 'queued_for_later') return null;
+  const returnTime = receipt.availableAt
+    ? `${formatDateTime(receipt.availableAt)} 回到待确认`
+    : '服务端未返回回队列时间';
+  const currentDraft = reviewDrafts.value[item.id] || item.proposedValue;
+  const draftChanged = currentDraft.trim() !== item.proposedValue.trim();
+  const noteText = reviewNoteDrafts.value[item.id]?.trim();
+
+  return {
+    title: '稍后回队列凭证',
+    summary: `${receipt.personName} 的 ${receipt.proposedKey} 已移出当前待确认，${returnTime}。`,
+    boundary:
+      '这次只更新 Review Queue 的稍后状态；没有写入人物画像，没有确认或驳回候选事实，也没有发送消息、创建跟进或同步外部系统。',
+    rows: [
+      {
+        label: '回队列时间',
+        value: returnTime,
+        tone: receipt.availableAt ? 'warn' : 'muted',
+      },
+      {
+        label: '当前状态',
+        value: reviewStatusLabel(receipt.statusAfter),
+        tone: 'warn',
+      },
+      {
+        label: '写入内容',
+        value: draftChanged ? '编辑草稿已随稍后项保留' : '原建议内容已随稍后项保留',
+        tone: draftChanged ? 'ok' : 'muted',
+      },
+      {
+        label: '复核备注',
+        value: receipt.noteCaptured || noteText ? '备注已随稍后项保留' : '未写备注',
+        tone: receipt.noteCaptured || noteText ? 'ok' : 'muted',
+      },
+      {
+        label: '证据',
+        value: `${receipt.evidenceCount} 条证据保留`,
+        tone: receipt.evidenceCount > 0 ? 'ok' : 'muted',
+      },
+    ],
+  };
+}
+
+function reviewActionLabel(action: RelationshipReviewAction): string {
+  if (action === 'confirm') return '确认写入';
+  if (action === 'snooze') return '稍后复核';
+  return '驳回候选';
+}
+
+function buildReviewActionFailureReceipt(
+  item: RelationshipReviewItem,
+  action: RelationshipReviewAction,
+  reason: string,
+): ReviewActionFailureReceipt {
+  const actionLabel = reviewActionLabel(action);
+  const statusText = reviewStatusLabel(item.status);
+  const baseNextActions = [
+    '本页编辑的写入内容和备注仍保留在当前页面，修正后可以重试。',
+    '如担心服务端状态已变化，先刷新 Review Queue 再操作。',
+  ];
+  if (action === 'confirm') {
+    return {
+      title: '确认未完成，人物画像未写入',
+      summary: `${item.personName} 的 ${item.proposedKey} 仍保持${statusText}；${reason}`,
+      actionLabel,
+      personName: item.personName,
+      proposedKey: item.proposedKey,
+      nextActions: [
+        '本次没有写入 entity_properties，也没有把候选移出队列。',
+        ...baseNextActions,
+      ],
+      failedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+  if (action === 'snooze') {
+    return {
+      title: '稍后未完成，队列未更新',
+      summary: `${item.personName} 的 ${item.proposedKey} 仍保持${statusText}；${reason}`,
+      actionLabel,
+      personName: item.personName,
+      proposedKey: item.proposedKey,
+      nextActions: [
+        '本次没有设置 snooze_until，也没有从待确认队列移出。',
+        ...baseNextActions,
+      ],
+      failedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+  return {
+    title: '驳回未完成，候选仍保留',
+    summary: `${item.personName} 的 ${item.proposedKey} 仍保持${statusText}；${reason}`,
+    actionLabel,
+    personName: item.personName,
+    proposedKey: item.proposedKey,
+    nextActions: [
+      '本次没有改成已驳回，也没有删除原始证据。',
+      ...baseNextActions,
+    ],
+    failedAt: Math.floor(Date.now() / 1000),
+  };
 }
 
 function isReviewActionLoading(id: string) {
@@ -1578,17 +2794,30 @@ function canActOnReviewItem(item: RelationshipReviewItem) {
   return item.status === 'pending' || item.status === 'snoozed';
 }
 
+function escapeAttributeSelector(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 async function copyContextPackage() {
   if (!contextCard.value) return;
-  const message = contextCard.value.privacySummary.sensitiveIncluded
-    ? '已复制含敏感上下文，外发前请复核'
-    : '已复制上下文包';
+  const copiedStaleSnapshot =
+    contextCardLoadFailureReceipt.value?.personId === contextCard.value.person.id;
+  const message = copiedStaleSnapshot
+    ? contextCard.value.privacySummary.sensitiveIncluded
+      ? '已复制上次含敏感上下文快照，外发前请复核'
+      : '已复制上次上下文快照，外发前请复核'
+    : contextCard.value.privacySummary.sensitiveIncluded
+      ? '已复制含敏感上下文，外发前请复核'
+      : '已复制上下文包';
   await copyText(contextCard.value.contextMd, message);
 }
 
 async function copyAssistantDraft() {
   if (!assistantDraft.value) return;
-  await copyText(assistantDraft.value.draftText, '已复制回复草稿');
+  const copied = await copyText(assistantDraft.value.draftText, '已复制回复草稿');
+  if (copied) {
+    assistantDraftCopyReceipt.value = buildAssistantDraftCopyReceipt(assistantDraft.value);
+  }
 }
 
 async function copyMeetingBrief() {
@@ -1602,6 +2831,18 @@ async function copyMeetingBrief() {
     '',
     `匹配: ${brief.coverage.matchedAttendees}/${brief.coverage.totalAttendees}；证据: ${brief.coverage.evidenceRefs}；需确认: ${brief.coverage.unmatchedAttendees}；身份待核对: ${brief.coverage.identityCheckAttendees || 0}`,
     '',
+  ];
+
+  if (brief.sourceReceipt) {
+    lines.push(
+      `${brief.sourceReceipt.title}:`,
+      ...brief.sourceReceipt.rows.map((row) => `- ${row.label}: ${row.value}`),
+      `- 边界: ${brief.sourceReceipt.boundary}`,
+      '',
+    );
+  }
+
+  lines.push(
     `会前准备状态: ${meetingReadinessLabel(brief.readiness.status)}`,
     brief.readiness.summary,
     '',
@@ -1611,7 +2852,19 @@ async function copyMeetingBrief() {
     '成功标准:',
     ...brief.readiness.successCriteria.map((criterion) => `- ${criterion}`),
     '',
-  ];
+  );
+
+  if (brief.focus?.items.length) {
+    lines.push(
+      `${brief.focus.title}:`,
+      brief.focus.summary,
+      ...brief.focus.items.flatMap((item) => [
+        `- ${item.label}${item.attendee ? `（${item.attendee}）` : ''}: ${item.body}`,
+        ...(item.boundary ? [`  边界: ${item.boundary}`] : []),
+      ]),
+      '',
+    );
+  }
 
   if (brief.coverage.omittedAttendees > 0) {
     lines.push(
@@ -1639,6 +2892,9 @@ async function copyMeetingBrief() {
         `- 身份核对: ${attendee.identityCheckReason || '这个匹配需要先核对身份，再使用历史上下文。'}`,
       );
     }
+    if (attendee.contextSuppressedReason) {
+      lines.push(`- 上下文边界: ${attendee.contextSuppressedReason}`);
+    }
     if (attendee.suggestedQuestions[0]) {
       lines.push(`- 建议问法: ${attendee.suggestedQuestions[0]}`);
     }
@@ -1648,13 +2904,67 @@ async function copyMeetingBrief() {
   await copyText(lines.join('\n'), '已复制会议简报');
 }
 
-async function copyText(text: string, successMessage: string) {
+async function copyText(text: string, successMessage: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
     showToast(successMessage);
+    return true;
   } catch {
     showToast('当前环境无法写入剪贴板');
+    return false;
   }
+}
+
+function buildAssistantDraftCopyReceipt(
+  draft: RelationshipAssistantDraft,
+): AssistantDraftCopyReceipt {
+  const review = draft.safetyReview;
+  const needsReview =
+    review.status !== 'ready' ||
+    review.hiddenSensitiveCount > 0 ||
+    review.pendingReviewCount > 0;
+  const boundaryParts = [
+    `只复制给 ${draft.personName} 的草稿正文；不会发送消息、不会写入人物画像，也不会创建跟进任务。`,
+    review.hiddenSensitiveCount > 0
+      ? `默认隐藏的 ${review.hiddenSensitiveCount} 条敏感上下文仍未进入草稿。`
+      : '本次没有默认隐藏的人物上下文进入草稿。',
+    review.pendingReviewCount > 0
+      ? `${review.pendingReviewCount} 条待确认关系事实没有被升级为确认事实。`
+      : '没有待确认关系事实被自动确认。',
+  ];
+
+  return {
+    summary: needsReview
+      ? '已复制草稿，发送前仍需复核边界'
+      : '已复制草稿，边界已就绪',
+    boundary: boundaryParts.join(' '),
+    rows: [
+      {
+        label: '复制范围',
+        value: '仅草稿正文',
+        tone: 'ok',
+      },
+      {
+        label: '外部动作',
+        value: '未发送、未写回、未建任务',
+        tone: 'ok',
+      },
+      {
+        label: '复核状态',
+        value: assistantReviewLabel(review.status),
+        tone: review.status === 'ready' ? 'ok' : 'warn',
+      },
+      {
+        label: '敏感 / 待确认',
+        value: `敏感隐藏 ${review.hiddenSensitiveCount} · 待确认 ${review.pendingReviewCount}`,
+        tone:
+          review.hiddenSensitiveCount > 0 || review.pendingReviewCount > 0
+            ? 'warn'
+            : 'muted',
+      },
+    ],
+    copiedAt: Math.floor(Date.now() / 1000),
+  };
 }
 
 function openEvidence(evidence: RelationshipEvidenceRef) {
@@ -1742,6 +3052,11 @@ function reviewStatusLabel(status: RelationshipReviewStatus) {
   return labels[status];
 }
 
+function reviewFilterLabel(status: ReviewStatusFilter) {
+  if (status === 'all') return '全部状态';
+  return reviewStatusLabel(status);
+}
+
 function toneForPerson(person: RelationshipPersonSummary) {
   if (person.reviewPendingCount > 0) return 'tone-hot';
   if (person.dataQuality === 'confirmed' || person.dataQuality === 'generated') {
@@ -1798,6 +3113,17 @@ function reviewTone(status: RelationshipReviewStatus) {
   return tones[status];
 }
 
+function reviewReceiptTone(
+  outcome: RelationshipReviewActionReceipt['outcome'],
+) {
+  const tones: Record<RelationshipReviewActionReceipt['outcome'], string> = {
+    profile_updated: 'ok',
+    queued_for_later: 'warn',
+    dismissed: 'danger',
+  };
+  return tones[outcome] || 'muted';
+}
+
 function priorityLabel(priority: string) {
   if (priority === 'high') return '高优先级';
   if (priority === 'low') return '低优先级';
@@ -1847,6 +3173,45 @@ function personCardSummary(person: RelationshipPersonSummary) {
     person.contextBullets[0] || person.reason || person.description || '等待后台整理补齐关系上下文。',
     112,
   );
+}
+
+function radarQualityMixText(items: RelationshipPersonSummary[]) {
+  if (items.length === 0) return '暂无人物投影';
+  const counts: Record<RelationshipDataQuality, number> = {
+    indexed: 0,
+    generated: 0,
+    confirmed: 0,
+    stale: 0,
+  };
+  for (const item of items) {
+    counts[item.dataQuality] += 1;
+  }
+  return (Object.entries(counts) as Array<[RelationshipDataQuality, number]>)
+    .filter(([, count]) => count > 0)
+    .map(([quality, count]) => `${qualityLabel(quality)} ${count}`)
+    .join(' · ');
+}
+
+function hasWeakRadarQuality(items: RelationshipPersonSummary[]) {
+  return items.some(
+    (person) =>
+      person.dataQuality === 'indexed' ||
+      person.dataQuality === 'stale' ||
+      person.projectionSource === 'lazy',
+  );
+}
+
+function spotlightPriorityReason(person: RelationshipPersonSummary) {
+  if (person.reviewPendingCount > 0) {
+    return `${person.reviewPendingCount} 条待确认事实 · ${stateLabel(person.radarState)} · ${qualityLabel(person.dataQuality)}`;
+  }
+  if (person.dataQuality === 'stale' || person.radarState === 'dormant') {
+    return `${stateLabel(person.radarState)} · ${qualityLabel(person.dataQuality)} · 沟通前先刷新或核对最新证据`;
+  }
+  if (person.radarState === 'rising') {
+    return `近期协作升温 · ${person.interactionCount} 次交互 · ${person.activeDays} 个活跃日`;
+  }
+  return `${person.interactionCount} 次交互 · ${person.activeDays} 个活跃日 · 关系分 ${formatPercent(person.score)}`;
 }
 
 function spotlightPriority(person: RelationshipPersonSummary) {
@@ -1963,6 +3328,116 @@ function buildFallbackActionSuggestions(
   return suggestions.slice(0, 4);
 }
 
+function buildContextCardRequestReceipt(input: {
+  card: RelationshipContextCard;
+  requestedSensitiveIncluded: boolean;
+}): ContextCardRequestReceipt {
+  const requestedAt = Date.now();
+  const displayedSensitiveIncluded = input.card.privacySummary.sensitiveIncluded === true;
+  const displayedScope = contextPrivacyScopeLabel(displayedSensitiveIncluded);
+  const requestedScope = contextPrivacyScopeLabel(input.requestedSensitiveIncluded);
+  const boundaryParts = [
+    '页面仍显示上次成功生成的上下文卡快照，新请求返回前不会替换当前内容。',
+    '本次请求还没有写入人物画像、发送消息、创建跟进任务或外发上下文。',
+  ];
+  if (input.requestedSensitiveIncluded && !displayedSensitiveIncluded) {
+    boundaryParts.push('敏感上下文尚未纳入；复制按钮会保持禁用，直到新卡返回。');
+  } else if (!input.requestedSensitiveIncluded && displayedSensitiveIncluded) {
+    boundaryParts.push('默认隐藏版本尚未恢复；当前仍是上次含敏感上下文快照，复制按钮会保持禁用。');
+  } else {
+    boundaryParts.push('结果返回前复制按钮保持禁用，避免把请求中的范围当作已确认。');
+  }
+
+  return {
+    title: '上下文卡请求回执',
+    personId: input.card.person.id,
+    summary: `${input.card.person.name} 的${requestedScope}版本正在请求中，旧快照暂未替换。`,
+    boundary: boundaryParts.join(' '),
+    rows: [
+      {
+        label: '请求范围',
+        value: requestedScope,
+        tone: input.requestedSensitiveIncluded ? 'warn' : 'ok',
+      },
+      {
+        label: '当前显示',
+        value: `上次快照 · ${displayedScope}`,
+        tone: displayedSensitiveIncluded ? 'warn' : 'muted',
+      },
+      {
+        label: '替换状态',
+        value: '等待 Memory Service 返回新卡',
+        tone: 'muted',
+      },
+      {
+        label: '发起时间',
+        value: formatDate(Math.floor(requestedAt / 1000)),
+        tone: 'muted',
+      },
+    ],
+    requestedAt,
+  };
+}
+
+function buildContextCardLoadFailureReceipt(input: {
+  card: RelationshipContextCard;
+  reason: string;
+  requestedSensitiveIncluded: boolean;
+}): ContextCardLoadFailureReceipt {
+  const failedAt = Date.now();
+  const displayedSensitiveIncluded = input.card.privacySummary.sensitiveIncluded === true;
+  const displayedScope = contextPrivacyScopeLabel(displayedSensitiveIncluded);
+  const requestedScope = contextPrivacyScopeLabel(input.requestedSensitiveIncluded);
+  const boundaryParts = [
+    '当前状态未确认；页面仍显示上次成功生成的上下文卡快照。',
+    '这次刷新失败没有写入人物画像、发送消息、创建跟进任务或外发上下文。',
+  ];
+  if (input.requestedSensitiveIncluded && !displayedSensitiveIncluded) {
+    boundaryParts.push('临时包含敏感上下文没有成功，当前仍是默认隐藏敏感上下文的快照。');
+  } else if (!input.requestedSensitiveIncluded && displayedSensitiveIncluded) {
+    boundaryParts.push('恢复默认隐藏没有成功，当前仍是上次含敏感上下文的快照，复制或外发前必须先复核。');
+  } else {
+    boundaryParts.push('复制或外发前建议先重试刷新，或逐条核对来源和时间。');
+  }
+
+  return {
+    title: '上下文卡刷新失败回执',
+    personId: input.card.person.id,
+    summary: `${input.card.person.name} 的上下文刷新失败，已保留上次快照。`,
+    boundary: boundaryParts.join(' '),
+    rows: [
+      {
+        label: '失败原因',
+        value: compactText(input.reason, 96),
+        tone: 'warn',
+      },
+      {
+        label: '当前显示',
+        value: `上次快照 · ${displayedScope}`,
+        tone: displayedSensitiveIncluded ? 'warn' : 'muted',
+      },
+      {
+        label: '请求范围',
+        value: requestedScope,
+        tone:
+          input.requestedSensitiveIncluded === displayedSensitiveIncluded
+            ? 'muted'
+            : 'warn',
+      },
+      {
+        label: '失败时间',
+        value: formatDate(Math.floor(failedAt / 1000)),
+        tone: 'muted',
+      },
+    ],
+    failedAt,
+  };
+}
+
+function contextPrivacyScopeLabel(sensitiveIncluded: boolean) {
+  return sensitiveIncluded ? '含敏感上下文' : '默认隐藏敏感上下文';
+}
+
 function evidenceLabel(evidence: RelationshipEvidenceRef) {
   const labels: Record<RelationshipEvidenceRef['sourceKind'], string> = {
     message: '消息证据',
@@ -2018,6 +3493,24 @@ function meetingReadinessTone(status: RelationshipMeetingBrief['readiness']['sta
     empty: 'empty',
   };
   return tones[status];
+}
+
+function assistantReviewLabel(status: RelationshipAssistantDraft['safetyReview']['status']) {
+  const labels: Record<RelationshipAssistantDraft['safetyReview']['status'], string> = {
+    ready: '可复制',
+    review_first: '先复核',
+    thin_context: '上下文薄',
+  };
+  return labels[status] || '先复核';
+}
+
+function assistantReviewTone(status: RelationshipAssistantDraft['safetyReview']['status']) {
+  const tones: Record<RelationshipAssistantDraft['safetyReview']['status'], string> = {
+    ready: 'ok',
+    review_first: 'warn',
+    thin_context: 'muted',
+  };
+  return tones[status] || 'warn';
 }
 
 function matchLabel(matchedBy: RelationshipMeetingBrief['attendees'][number]['matchedBy']) {
@@ -2343,6 +3836,7 @@ button {
 }
 
 .spotlight,
+.radar-route-receipt,
 .stat-card,
 .person-card,
 .detail-main,
@@ -2350,6 +3844,84 @@ button {
   border: 1px solid var(--line);
   background: var(--glass);
   backdrop-filter: blur(18px);
+}
+
+.radar-route-receipt {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.8rem;
+  border-color: rgba(45, 212, 191, 0.22);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(20, 184, 166, 0.12), rgba(15, 23, 42, 0.56)),
+    var(--glass-soft);
+  padding: 1rem;
+}
+
+.radar-route-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.radar-route-head span,
+.radar-route-row span {
+  display: block;
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.radar-route-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.radar-route-head p {
+  max-width: 45rem;
+  margin: 0;
+  color: #ccfbf1;
+  line-height: 1.55;
+}
+
+.radar-route-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.radar-route-row {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 0.65rem;
+}
+
+.radar-route-row strong {
+  display: block;
+  margin-top: 0.24rem;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.radar-route-row.ok {
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.radar-route-row.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.radar-route-row.muted {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.26);
 }
 
 .spotlight {
@@ -2440,6 +4012,77 @@ button {
   margin-bottom: 18px;
   color: var(--ink-low);
   font-size: 12.5px;
+}
+
+.spotlight-action-receipt {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0 0 18px;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.spotlight-action-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.spotlight-action-head span,
+.spotlight-action-row em {
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.spotlight-action-head strong {
+  min-width: 0;
+  color: #f8fafc;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.spotlight-action-receipt p {
+  max-width: 72ch;
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.spotlight-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.spotlight-action-row {
+  min-width: 0;
+  display: grid;
+  gap: 0.22rem;
+  padding-left: 0.55rem;
+  border-left: 2px solid rgba(148, 163, 184, 0.2);
+}
+
+.spotlight-action-row strong {
+  color: #e2e8f0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.spotlight-action-row.ok {
+  border-left-color: rgba(34, 197, 94, 0.75);
+}
+
+.spotlight-action-row.warn {
+  border-left-color: rgba(245, 158, 11, 0.85);
+}
+
+.spotlight-action-row.muted {
+  border-left-color: rgba(148, 163, 184, 0.24);
 }
 
 .spotlight-actions button {
@@ -2879,6 +4522,44 @@ button {
 .detail-actions {
   gap: 0.5rem;
   align-self: flex-start;
+}
+
+.person-switch-receipt {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.75rem;
+  background: rgba(14, 165, 233, 0.08);
+  padding: 0.75rem 0.9rem;
+}
+
+.person-switch-receipt div {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.person-switch-receipt span {
+  flex: none;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.16);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.22rem 0.55rem;
+}
+
+.person-switch-receipt strong {
+  color: #e0f2fe;
+  font-size: 0.88rem;
+}
+
+.person-switch-receipt p {
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.55;
 }
 
 .detail-metrics {
@@ -3405,6 +5086,246 @@ button {
   font-weight: 700;
 }
 
+.brief-source-receipt {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.85rem 0.85rem 0;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 0.72rem;
+  background: rgba(14, 116, 144, 0.1);
+  padding: 0.85rem;
+}
+
+.brief-source-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brief-source-head span,
+.brief-source-row span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.brief-source-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.brief-source-head p {
+  max-width: 36rem;
+  margin: 0;
+  color: #bae6fd;
+  line-height: 1.55;
+}
+
+.brief-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.brief-source-row {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 0.65rem;
+}
+
+.brief-source-row.ok {
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.brief-source-row.warn {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.context-refresh-receipt {
+  display: grid;
+  gap: 0.72rem;
+  margin: 0.85rem 0.85rem 0;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  border-radius: 0.72rem;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 0.85rem;
+}
+
+.context-refresh-receipt.pending {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.context-refresh-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.context-refresh-head span,
+.context-refresh-row span {
+  display: block;
+  color: #fcd34d;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.context-refresh-receipt.pending .context-refresh-head span,
+.context-refresh-receipt.pending .context-refresh-row span {
+  color: #93c5fd;
+}
+
+.context-refresh-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #fef3c7;
+  font-size: 0.94rem;
+}
+
+.context-refresh-receipt p {
+  margin: 0;
+  color: #fde68a;
+  line-height: 1.55;
+}
+
+.context-refresh-receipt.pending p {
+  color: #bfdbfe;
+}
+
+.context-refresh-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.context-refresh-row {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.38);
+  padding: 0.65rem;
+}
+
+.context-refresh-row strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.context-refresh-row.warn {
+  border-color: rgba(245, 158, 11, 0.36);
+}
+
+.context-refresh-row.ok {
+  border-color: rgba(34, 197, 94, 0.26);
+}
+
+.brief-source-row.muted {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.brief-source-row strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #e2e8f0;
+  line-height: 1.45;
+}
+
+.meeting-request-receipt {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.85rem 0 0;
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  border-radius: 0.78rem;
+  background: rgba(4, 47, 46, 0.2);
+  padding: 0.85rem;
+}
+
+.meeting-request-receipt.failed {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(39, 27, 10, 0.34);
+}
+
+.meeting-request-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.meeting-request-head span,
+.meeting-request-row span {
+  display: block;
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.meeting-request-receipt.failed .meeting-request-head span,
+.meeting-request-receipt.failed .meeting-request-row span {
+  color: #fcd34d;
+}
+
+.meeting-request-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 0.98rem;
+}
+
+.meeting-request-head p,
+.meeting-request-boundary {
+  margin: 0;
+  color: #ccfbf1;
+  line-height: 1.55;
+}
+
+.meeting-request-receipt.failed .meeting-request-head p,
+.meeting-request-receipt.failed .meeting-request-boundary {
+  color: #fde68a;
+}
+
+.meeting-request-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.meeting-request-row {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 0.65rem;
+}
+
+.meeting-request-row.ok {
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.meeting-request-row.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.meeting-request-row.muted {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.meeting-request-row strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #e2e8f0;
+  line-height: 1.45;
+}
+
 .brief-readiness {
   display: grid;
   gap: 0.75rem;
@@ -3480,6 +5401,92 @@ button {
   padding: 0.7rem;
 }
 
+.brief-focus {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.85rem 0.85rem 0;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 0.72rem;
+  background: rgba(4, 47, 46, 0.22);
+  padding: 0.85rem;
+}
+
+.brief-focus-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brief-focus-head span,
+.brief-focus-item span {
+  display: block;
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.brief-focus-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.brief-focus-head p {
+  margin: 0;
+  max-width: 34rem;
+  color: #ccfbf1;
+  line-height: 1.55;
+}
+
+.brief-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.65rem;
+}
+
+.brief-focus-item {
+  display: grid;
+  gap: 0.38rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.42);
+  padding: 0.7rem;
+}
+
+.brief-focus-item.action {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.brief-focus-item.verify {
+  border-color: rgba(96, 165, 250, 0.26);
+}
+
+.brief-focus-item.risk {
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+.brief-focus-item.info {
+  border-color: rgba(45, 212, 191, 0.26);
+}
+
+.brief-focus-item strong {
+  color: #f8fafc;
+  font-size: 0.92rem;
+}
+
+.brief-focus-item p,
+.brief-focus-item small {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.brief-focus-item small {
+  color: #94a3b8;
+}
+
 .attendee-brief-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
@@ -3548,6 +5555,12 @@ button {
   color: #fde68a;
   padding: 0.55rem 0.65rem;
   line-height: 1.5;
+}
+
+.identity-check-note.protected {
+  border-color: rgba(56, 189, 248, 0.26);
+  background: rgba(14, 165, 233, 0.08);
+  color: #bae6fd;
 }
 
 .match-row {
@@ -3636,6 +5649,181 @@ button {
   white-space: pre-wrap;
   line-height: 1.7;
   padding: 0.9rem;
+}
+
+.draft-review,
+.draft-basis {
+  margin: 0 0.85rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.8rem;
+}
+
+.draft-copy-receipt,
+.draft-generation-receipt {
+  margin: 0 0.85rem 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(14, 165, 233, 0.08);
+  padding: 0.8rem;
+}
+
+.draft-request-receipt {
+  margin: 0.85rem 0 0;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 0.75rem;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 0.8rem;
+}
+
+.draft-request-receipt.failed {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.18);
+}
+
+.draft-request-receipt.failed .draft-copy-receipt-head span {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fecaca;
+}
+
+.draft-copy-receipt-head {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.draft-copy-receipt-head span {
+  flex: none;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.16);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.25rem 0.55rem;
+}
+
+.draft-copy-receipt-head strong {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.draft-copy-receipt p {
+  margin: 0.55rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.5;
+  font-size: 0.82rem;
+}
+
+.draft-copy-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.draft-copy-receipt-grid article {
+  min-height: 3rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0.6rem;
+  background: rgba(8, 14, 32, 0.42);
+  padding: 0.55rem;
+}
+
+.draft-copy-receipt-grid article.warn {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.draft-copy-receipt-grid article.ok {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.draft-copy-receipt-grid span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.draft-copy-receipt-grid strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.draft-review.warn {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.draft-review.ok {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.draft-review.muted {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.draft-review-head {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.draft-review-head span,
+.draft-basis span {
+  flex: none;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.25rem 0.55rem;
+}
+
+.draft-review-head strong,
+.draft-basis strong {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.draft-review-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(5rem, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.draft-review-metrics span {
+  min-height: 2rem;
+  border-radius: 0.55rem;
+  background: rgba(8, 14, 32, 0.46);
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.draft-checks {
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+  color: #fde68a;
+  line-height: 1.5;
+}
+
+.draft-basis p {
+  margin: 0.45rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.45;
 }
 
 .warning-list {
@@ -3760,6 +5948,147 @@ button {
   font-size: 0.78rem;
 }
 
+.review-receipt {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0 0 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 0.82rem;
+  background: rgba(96, 165, 250, 0.08);
+  padding: 0.8rem;
+}
+
+.review-receipt.ok {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.review-receipt.warn {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.review-receipt.danger {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.review-receipt.muted {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.review-receipt.compact {
+  margin: 0.75rem 0.8rem 0;
+  padding: 0.7rem;
+}
+
+.review-receipt-head {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.review-receipt-head span {
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-receipt.ok .review-receipt-head span {
+  color: #86efac;
+}
+
+.review-receipt.warn .review-receipt-head span {
+  color: #fcd34d;
+}
+
+.review-receipt.danger .review-receipt-head span {
+  color: #fca5a5;
+}
+
+.review-receipt.muted .review-receipt-head span {
+  color: #bfdbfe;
+}
+
+.review-receipt-head strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.review-receipt-head p {
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.review-receipt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.review-receipt-meta span {
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 999px;
+  background: rgba(8, 14, 32, 0.4);
+  color: #cbd5e1;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.review-receipt-meta span.tone-ok {
+  border-color: rgba(34, 197, 94, 0.22);
+  color: #bbf7d0;
+}
+
+.review-receipt-meta span.tone-warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+.review-receipt ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.05rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.review-return-ticket {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.38);
+  padding: 0.68rem;
+}
+
+.review-return-ticket strong {
+  color: #f8fafc;
+  font-size: 0.84rem;
+}
+
+.review-return-ticket p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.review-receipt.compact ul,
+.review-receipt.compact .review-receipt-meta {
+  display: none;
+}
+
+.review-empty-actions {
+  margin-top: 0.1rem;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
@@ -3769,6 +6098,11 @@ button {
 .review-card {
   display: grid;
   gap: 0.65rem;
+}
+
+.review-card.focused {
+  border-color: rgba(96, 165, 250, 0.5);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.16), 0 16px 34px rgba(15, 23, 42, 0.24);
 }
 
 .review-title {
@@ -3793,6 +6127,59 @@ button {
   color: #cbd5e1;
   font-size: 0.76rem;
   font-weight: 800;
+}
+
+.review-impact-preview {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(14, 116, 144, 0.1);
+  padding: 0.65rem 0.75rem;
+}
+
+.review-impact-preview strong {
+  color: #bfdbfe;
+  font-size: 0.78rem;
+}
+
+.review-impact-preview ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1rem;
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.review-draft-receipt {
+  display: grid;
+  gap: 0.3rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 0.6rem 0.7rem;
+}
+
+.review-draft-receipt.dirty {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.review-draft-receipt strong {
+  color: #e2e8f0;
+  font-size: 0.76rem;
+}
+
+.review-draft-receipt.dirty strong {
+  color: #fcd34d;
+}
+
+.review-draft-receipt p {
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  line-height: 1.45;
 }
 
 .review-evidence {
@@ -3851,6 +6238,13 @@ button {
 
 .side-review {
   margin: 0.75rem 0.8rem 0;
+}
+
+.side-boundary {
+  margin: 0.65rem 0.8rem 0;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.45;
 }
 
 .storage-list {
@@ -4086,6 +6480,14 @@ button {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .radar-route-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .spotlight-action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .detail-side {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
@@ -4105,15 +6507,32 @@ button {
 
   .hero,
   .brief-coverage,
+  .brief-focus-grid,
+  .brief-source-grid,
   .brief-readiness-grid,
+  .meeting-request-grid,
+  .draft-copy-receipt-grid,
+  .spotlight-action-grid,
+  .radar-route-grid,
   .panel-grid,
   .detail-metrics,
   .stat-strip {
     grid-template-columns: 1fr;
   }
 
-  .brief-readiness-head {
+  .radar-route-head,
+  .spotlight-action-head,
+  .brief-source-head,
+  .brief-focus-head,
+  .brief-readiness-head,
+  .meeting-request-head,
+  .draft-copy-receipt-head {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .draft-review-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .privacy-strip {

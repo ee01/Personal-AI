@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  WEB_AGENT_SOURCE_TYPES,
+  buildInteractionSceneSnapshot,
   buildJiraOwnerCommentLearningPayloads,
+  getWebAgentSourceTypesForProvider,
   markRingCentralSelfAuthoredMessages,
   markJiraSelfAuthoredComments,
 } from '../siteContextAdapters.ts';
-import type { ComposerContextItem, SiteContextSnapshot } from '../types.ts';
+import type { ComposerContextItem, ComposerTarget, SiteContextSnapshot } from '../types.ts';
 
 test('markJiraSelfAuthoredComments: only current Jira user comments are marked self', () => {
   const comments: ComposerContextItem[] = [
@@ -135,4 +138,110 @@ test('buildJiraOwnerCommentLearningPayloads: creates jira owner learning payload
     'owner-authored-comment',
     'jira-comment-style',
   ]);
+});
+
+test('WEB_AGENT_SOURCE_TYPES: keeps calendar available for Web AI context packs', () => {
+  assert.equal(WEB_AGENT_SOURCE_TYPES.includes('calendar'), true);
+  assert.equal(WEB_AGENT_SOURCE_TYPES.includes('user_core'), true);
+  assert.equal(WEB_AGENT_SOURCE_TYPES.includes('reflection_thread'), true);
+});
+
+test('getWebAgentSourceTypesForProvider: excludes current provider history from Web AI context packs', () => {
+  const chatgpt = getWebAgentSourceTypesForProvider('chatgpt');
+  assert.equal(chatgpt.includes('chatgpt'), false);
+  assert.equal(chatgpt.includes('doubao_chat'), true);
+  assert.equal(chatgpt.includes('codex_cli'), true);
+  assert.equal(chatgpt.includes('calendar'), true);
+
+  const doubao = getWebAgentSourceTypesForProvider('doubao');
+  assert.equal(doubao.includes('doubao'), false);
+  assert.equal(doubao.includes('doubao_chat'), false);
+  assert.equal(doubao.includes('chatgpt'), true);
+
+  const claude = getWebAgentSourceTypesForProvider('claude');
+  assert.deepEqual(claude, WEB_AGENT_SOURCE_TYPES);
+});
+
+test('buildInteractionSceneSnapshot: classifies Jira reading, RingCentral estimate discussion, and Jira comment composer', () => {
+  const jiraSnapshot: SiteContextSnapshot = {
+    adapterId: 'jira-issue',
+    surface: 'jira_issue',
+    contextType: 'jira_issue',
+    scenario: 'jira_comment',
+    contextKey: 'jira:MTR-148115',
+    title: 'MTR-148115: Estimate review',
+    url: 'https://jira.example/browse/MTR-148115',
+    primaryText: 'MTR-148115 Estimate review',
+    identifiers: { issueKey: 'MTR-148115' },
+    visibleFields: [
+      {
+        name: 'DEV Estimate New',
+        value: '0.4',
+        rawText: 'DEV Estimate New: 0.4',
+      },
+    ],
+    keywords: ['MTR-148115', 'estimate'],
+  };
+
+  const jiraRead = buildInteractionSceneSnapshot(jiraSnapshot, {
+    surface: 'memory_lens',
+  });
+  assert.equal(jiraRead.sceneType, 'jira_issue_reading');
+  assert.equal(jiraRead.userMode, 'read');
+  assert.equal(jiraRead.visibleFacts?.[0].name, 'DEV Estimate New');
+  assert.equal(jiraRead.admission?.state, 'passive_ready');
+
+  const ringCentralSnapshot: SiteContextSnapshot = {
+    adapterId: 'ringcentral-message',
+    surface: 'ringcentral_thread',
+    contextType: 'message_thread',
+    scenario: 'thread_reply',
+    contextKey: 'glip:eng-planning',
+    title: 'eng-planning',
+    url: 'https://app.ringcentral.com/messages/teams/eng-planning',
+    primaryText: 'David: MTR-148115 这个 DEV estimate 现在按多少沟通？',
+    identifiers: { groupId: 'eng-planning' },
+    visibleMessages: [
+      {
+        sender: 'David',
+        text: 'MTR-148115 这个 DEV estimate 现在按多少沟通？',
+      },
+    ],
+    keywords: ['MTR-148115', 'estimate'],
+  };
+  const discussion = buildInteractionSceneSnapshot(ringCentralSnapshot, {
+    surface: 'memory_lens',
+  });
+  assert.equal(discussion.sceneType, 'ringcentral_estimate_discussion');
+  assert.equal(discussion.admission?.state, 'passive_ready');
+
+  const commentElement = {
+    tagName: 'DIV',
+    isContentEditable: true,
+    classList: [],
+    textContent: '准备说明这张票的 estimate',
+    getAttribute(name: string) {
+      return name === 'role' ? 'textbox' : null;
+    },
+    closest() {
+      return null;
+    },
+    contains() {
+      return true;
+    },
+  } as unknown as HTMLElement;
+  const target: ComposerTarget = {
+    element: commentElement,
+    kind: 'contenteditable',
+    mode: 'comment',
+  };
+  const commentScene = buildInteractionSceneSnapshot(jiraSnapshot, {
+    surface: 'compose_assist',
+    target,
+    activeElement: commentElement,
+  });
+  assert.equal(commentScene.sceneType, 'jira_comment_composing');
+  assert.equal(commentScene.userMode, 'comment');
+  assert.equal(commentScene.surface, 'compose_assist');
+  assert.equal(commentScene.admission?.state, 'composer_ready');
 });

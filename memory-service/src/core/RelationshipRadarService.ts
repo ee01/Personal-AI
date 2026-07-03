@@ -326,6 +326,17 @@ export interface RelationshipMeetingBrief {
     nextActions: string[];
     successCriteria: string[];
   };
+  focus: {
+    title: string;
+    summary: string;
+    items: Array<{
+      label: string;
+      body: string;
+      tone: 'action' | 'verify' | 'risk' | 'info';
+      attendee?: string;
+      boundary?: string;
+    }>;
+  };
   sourceReceipt: {
     title: string;
     rows: Array<{
@@ -885,6 +896,7 @@ export class RelationshipRadarService {
       omittedAttendees: omittedAttendees.length,
     });
     const readiness = buildMeetingBriefReadiness(attendeeCards, coverage);
+    const focus = buildMeetingBriefFocus(attendeeCards, coverage, omittedAttendees);
     const sourceReceipt = buildMeetingBriefSourceReceipt({
       sourceState,
       coverage,
@@ -896,6 +908,7 @@ export class RelationshipRadarService {
       startAt,
       coverage,
       readiness,
+      focus,
       sourceReceipt,
       attendees: attendeeCards,
       matrix: attendeeCards.map((item) => ({
@@ -2448,6 +2461,18 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function uniqueBy<T>(values: T[], keyFn: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const value of values) {
+    const key = keyFn(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
 function uniqueEvidenceRefs(values: RelationshipEvidenceRef[]): RelationshipEvidenceRef[] {
   const seen = new Set<string>();
   const refs: RelationshipEvidenceRef[] = [];
@@ -3348,6 +3373,123 @@ function buildMeetingBriefReadiness(
     summary,
     nextActions: uniqueStrings(nextActions).slice(0, 4),
     successCriteria: uniqueStrings(successCriteria).slice(0, 4),
+  };
+}
+
+function buildMeetingBriefFocus(
+  attendees: RelationshipMeetingBrief['attendees'],
+  coverage: RelationshipMeetingBrief['coverage'],
+  omittedAttendees: RelationshipMeetingBrief['omittedAttendees'] = [],
+): RelationshipMeetingBrief['focus'] {
+  const identityCheckAttendees = attendees.filter((item) => item.identityCheckRequired);
+  const missingAttendees = attendees.filter((item) => item.coverageState === 'missing');
+  const openLoopAttendees = attendees.filter((item) => item.openLoops.length > 0);
+  const readyWithEvidence = attendees.filter((item) => item.evidenceRefs.length > 0);
+  const thinAttendees = attendees.filter(
+    (item) => item.coverageState === 'thin' && !item.identityCheckRequired,
+  );
+  const items: RelationshipMeetingBrief['focus']['items'] = [];
+
+  if (coverage.totalAttendees === 0) {
+    items.push({
+      label: '先补参会人',
+      body: '缺少参会人时不要生成关系判断；先从日历或逐行输入核心参会人的姓名/邮箱。',
+      tone: 'verify',
+      boundary: '补齐前只使用通用会前问题，不展开人物历史上下文。',
+    });
+  }
+
+  if (identityCheckAttendees.length > 0) {
+    items.push({
+      label: '先核对身份',
+      body: `${formatAttendeeNames(identityCheckAttendees)} 为弱匹配，先确认姓名、邮箱或别名，再使用历史关系记忆。`,
+      tone: 'verify',
+      attendee: formatAttendeeNames(identityCheckAttendees),
+      boundary: '身份确认前不展开历史证据、open loop 或上下文摘要。',
+    });
+  }
+
+  if (openLoopAttendees.length > 0) {
+    const first = openLoopAttendees[0];
+    const loop = first.openLoops[0];
+    items.push({
+      label: '先确认未闭环',
+      body: `优先问 ${formatAttendeeNames(openLoopAttendees)}：${loop?.snippet || '上次未闭环事项是否仍然有效'}。`,
+      tone: 'action',
+      attendee: formatAttendeeNames(openLoopAttendees),
+      boundary: '这只是会前提醒，不会自动写入行动队列或发送消息。',
+    });
+  }
+
+  if (coverage.omittedAttendees > 0 || missingAttendees.length > 0) {
+    const omittedNames = omittedAttendees
+      .slice(0, 2)
+      .map((item) => item.displayName)
+      .filter(Boolean)
+      .join('、');
+    const missingNames = formatAttendeeNames(missingAttendees);
+    const fragments = [
+      coverage.omittedAttendees > 0
+        ? `${coverage.omittedAttendees} 位未展开${omittedNames ? `（${omittedNames}）` : ''}`
+        : '',
+      missingAttendees.length > 0
+        ? `${missingNames} 未匹配人物记忆`
+        : '',
+    ].filter(Boolean);
+    items.push({
+      label: '补齐覆盖',
+      body: `${fragments.join('；')}。会议中先确认角色和关注点，必要时分批重新生成简报。`,
+      tone: 'risk',
+      attendee: missingAttendees.length > 0 ? missingNames : omittedNames || undefined,
+      boundary: '未覆盖参会人不会被算作已准备好，也不会伪造关系事实。',
+    });
+  }
+
+  if (readyWithEvidence.length > 0) {
+    items.push({
+      label: '复核证据',
+      body: `${coverage.attendeesWithEvidence} 位参会人有安全证据入口；会前点开关键证据，避免把过期上下文当成当前事实。`,
+      tone: 'info',
+      attendee: formatAttendeeNames(readyWithEvidence),
+      boundary: '证据入口仅用于复核；查看或复制简报不会刷新人物画像。',
+    });
+  }
+
+  if (items.length === 0 && thinAttendees.length > 0) {
+    items.push({
+      label: '低承诺开场',
+      body: `${formatAttendeeNames(thinAttendees)} 已匹配但证据较薄，先问角色、目标和当前阻塞，不要直接引用旧上下文。`,
+      tone: 'verify',
+      attendee: formatAttendeeNames(thinAttendees),
+      boundary: '薄上下文只适合生成确认问题，不适合外发为已确认事实。',
+    });
+  }
+
+  items.push({
+    label: '会后沉淀',
+    body: '会议结束后再把 owner、deadline、变更结论或新别名写回记忆/行动队列。',
+    tone: 'action',
+    boundary: '本简报只读；生成、查看或复制都不会发送、写入或创建任务。',
+  });
+
+  const uniqueItems = uniqueBy(items, (item) => `${item.label}:${item.body}`).slice(0, 4);
+  let summary = '把人物上下文压成会议入口动作，先处理会前最容易出错的身份、覆盖和未闭环。';
+  if (coverage.totalAttendees === 0) {
+    summary = '当前缺少参会人，焦点是先补齐输入，暂不使用关系记忆。';
+  } else if (identityCheckAttendees.length > 0) {
+    summary = '先核对弱匹配身份，再决定是否使用历史关系上下文。';
+  } else if (coverage.omittedAttendees > 0 || missingAttendees.length > 0) {
+    summary = '先补齐未匹配或未展开参会人，避免简报覆盖看起来比实际更完整。';
+  } else if (openLoopAttendees.length > 0) {
+    summary = '先围绕未闭环事项确认 owner、deadline 和下一步。';
+  } else if (readyWithEvidence.length > 0) {
+    summary = '人物上下文可用，重点是会前复核证据和会后沉淀结论。';
+  }
+
+  return {
+    title: '会前焦点',
+    summary,
+    items: uniqueItems,
   };
 }
 

@@ -134,6 +134,7 @@ export function buildScheduledMessagesSetupReceiptNotice(
       `Deployment: ${compactId(deploymentId)}`,
       `Script: ${compactId(scriptId)}`,
       `触发器: ${formatTriggerReceipt(config)}`,
+      '边界: 初始化不会立即发送正式消息，测试消息只按触发器计划执行；维护表不会静默开放为 anyone-with-link 可编辑。',
       `完成时间: ${formatConfigSyncTimestamp(completedAt)}`,
       ...warnings.slice(0, 2).map((warning) => `注意: ${warning}`),
     ],

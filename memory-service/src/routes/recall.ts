@@ -21,6 +21,10 @@ import type { FastifyInstance } from 'fastify';
 import type { RecallQuery, RecallResult } from '../types/index.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
 
+const SAFE_EVIDENCE_CHANNELS: RecallQuery['channels'] = ['fts'];
+const DEFAULT_SAFE_TOP_K = 10;
+const DEFAULT_SAFE_MAX_TOP_K = 10;
+
 const recallBodySchema = {
   type: 'object' as const,
   required: ['query'],
@@ -131,10 +135,7 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { db } = request.userContext;
       const service = new ActiveRecallService(db);
-      const query: RecallQuery = {
-        ...request.body,
-        scope: request.body.scope ?? 'work',
-      };
+      const query = normalizeRecallQueryForRuntime(request.body);
 
       try {
         const result: RecallResult = await service.recall(query);
@@ -150,5 +151,76 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
         });
       }
     },
+  );
+}
+
+function normalizeRecallQueryForRuntime(body: RecallQuery): RecallQuery {
+  const query: RecallQuery = {
+    ...body,
+    scope: body.scope ?? 'work',
+  };
+
+  if (!isRecallRouteSafeModeEnabled() || areRecallSlowChannelsEnabled()) {
+    return query;
+  }
+
+  return {
+    ...query,
+    channels: SAFE_EVIDENCE_CHANNELS,
+    topK: Math.min(
+      query.topK ?? getRecallSafeTopK(),
+      getRecallSafeMaxTopK(),
+    ),
+  };
+}
+
+function isRecallRouteSafeModeEnabled(): boolean {
+  const explicit = parseOptionalBooleanEnv('RECALL_ROUTE_SAFE_MODE_ENABLED');
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return !isTestRuntime();
+}
+
+function areRecallSlowChannelsEnabled(): boolean {
+  const explicit =
+    parseOptionalBooleanEnv('RECALL_SLOW_CHANNELS_ENABLED') ??
+    parseOptionalBooleanEnv('ACTIVE_RECALL_SLOW_CHANNELS_ENABLED');
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return isTestRuntime();
+}
+
+function getRecallSafeTopK(): number {
+  return parsePositiveIntEnv('RECALL_SAFE_TOP_K') ?? DEFAULT_SAFE_TOP_K;
+}
+
+function getRecallSafeMaxTopK(): number {
+  return parsePositiveIntEnv('RECALL_SAFE_MAX_TOP_K') ?? DEFAULT_SAFE_MAX_TOP_K;
+}
+
+function parsePositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 1) return undefined;
+  return value;
+}
+
+function parseOptionalBooleanEnv(name: string): boolean | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return undefined;
+}
+
+function isTestRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === 'test' ||
+    process.env.VITEST === 'true' ||
+    Boolean(process.env.VITEST_WORKER_ID)
   );
 }

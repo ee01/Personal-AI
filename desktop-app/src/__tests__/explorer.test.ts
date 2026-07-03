@@ -182,6 +182,10 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
           skippedConversationCount: 0,
           implemented: true,
         }),
+        getTransportStatus: () => ({
+          mode: 'playwright',
+          fallbackReason: 'No existing doubao.com tab found',
+        }),
       },
     },
   });
@@ -277,6 +281,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
       extractedMessageCount: number;
       artifactCount: number;
       skippedConversationCount: number;
+      transport?: { mode: string; fallbackReason?: string };
     };
     assert.equal(runNowBody.source, 'doubao');
     assert.equal(runNowBody.implemented, true);
@@ -285,6 +290,10 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
     assert.equal(runNowBody.extractedMessageCount, 2);
     assert.equal(runNowBody.artifactCount, 1);
     assert.equal(runNowBody.skippedConversationCount, 0);
+    assert.deepEqual(runNowBody.transport, {
+      mode: 'playwright',
+      fallbackReason: 'No existing doubao.com tab found',
+    });
     assert.ok(runNowBody.startedAt);
     assert.ok(runNowBody.finishedAt);
 
@@ -761,6 +770,9 @@ test('explorer revoke endpoint proxies memory deletion by source and scope', asy
       deletedChunks: 5,
       localArtifactsRevoked: 1,
       localLegacyArtifactsRevoked: 0,
+      localActiveArtifactsBefore: 1,
+      localActiveArtifactsAfter: 0,
+      revokeAuditState: 'remote_and_local',
     });
     assert.equal(rawStore.getStats('chatgpt').artifactCount, 0);
     assert.equal(rawStore.getStats('chatgpt').revokedArtifactCount, 1);

@@ -21,7 +21,7 @@
         <button
           class="meeting-refresh-btn"
           :disabled="loading"
-          @click="loadMeetings"
+          @click="loadMeetings('refresh')"
         >
           {{ loading ? '刷新中…' : '刷新列表' }}
         </button>
@@ -73,6 +73,76 @@
       </button>
     </section>
 
+    <section
+      v-if="archiveLoadReceipt"
+      class="meeting-archive-receipt"
+      data-meeting-archive-receipt="true"
+      aria-label="会议归档读取回执"
+    >
+      <div class="meeting-archive-receipt-head">
+        <div>
+          <div class="receipt-label">会议归档读取回执</div>
+          <strong>{{ archiveLoadReceipt.title }}</strong>
+        </div>
+        <span>{{ archiveLoadReceipt.receivedAt }}</span>
+      </div>
+      <div class="meeting-archive-receipt-grid">
+        <div>
+          <span>来源</span>
+          <strong>{{ archiveLoadReceipt.source }}</strong>
+        </div>
+        <div>
+          <span>范围</span>
+          <strong>{{ archiveLoadReceipt.scope }}</strong>
+        </div>
+        <div>
+          <span>已读</span>
+          <strong>{{ archiveLoadReceipt.loaded }}</strong>
+        </div>
+        <div>
+          <span>边界</span>
+          <strong>{{ archiveLoadReceipt.boundary }}</strong>
+        </div>
+      </div>
+      <p>{{ archiveLoadReceipt.nextStep }}</p>
+    </section>
+
+    <section
+      v-if="archiveCompletionReceipt"
+      class="meeting-completion-receipt"
+      data-meeting-completion-receipt="true"
+      aria-label="会议归档完整度回执"
+    >
+      <div class="receipt-label">归档完整度回执</div>
+      <div class="meeting-completion-head">
+        <div>
+          <strong>{{ archiveCompletionReceipt.title }}</strong>
+          <p>{{ archiveCompletionReceipt.scope }}</p>
+        </div>
+        <span>{{ archiveCompletionReceipt.basis }}</span>
+      </div>
+      <div class="meeting-completion-grid">
+        <div>
+          <span>完整可交付</span>
+          <strong>{{ archiveCompletionReceipt.ready }}</strong>
+        </div>
+        <div>
+          <span>需复核</span>
+          <strong>{{ archiveCompletionReceipt.attention }}</strong>
+        </div>
+        <div>
+          <span>生成中</span>
+          <strong>{{ archiveCompletionReceipt.processing }}</strong>
+        </div>
+        <div>
+          <span>仅基础归档</span>
+          <strong>{{ archiveCompletionReceipt.archived }}</strong>
+        </div>
+      </div>
+      <p>{{ archiveCompletionReceipt.nextStep }}</p>
+      <small>{{ archiveCompletionReceipt.boundary }}</small>
+    </section>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <span>正在加载会议记录…</span>
@@ -81,7 +151,9 @@
     <section v-else-if="error" class="meeting-feedback-card is-error">
       <div class="feedback-title">加载会议记录失败</div>
       <p>{{ error }}</p>
-      <button class="meeting-refresh-btn" @click="loadMeetings">重试</button>
+      <button class="meeting-refresh-btn" @click="loadMeetings('refresh')">
+        重试
+      </button>
     </section>
 
     <section
@@ -98,6 +170,30 @@
             : 'Meeting Pilot 会在会议结束后把结构化结果归档到这里。下次完成一场会议后，你就能从这个入口直接回看 Panorama 和 PDF 纪要。'
         }}
       </p>
+      <div
+        v-if="emptyArchiveReceipt"
+        class="meeting-empty-receipt"
+        data-meeting-empty-receipt="true"
+        aria-label="会议归档空结果回执"
+      >
+        <div class="section-label">空结果回执</div>
+        <div class="meeting-empty-receipt-body">
+          <strong>{{ emptyArchiveReceipt.title }}</strong>
+          <span>{{ emptyArchiveReceipt.scope }}</span>
+          <span>{{ emptyArchiveReceipt.coverage }}</span>
+          <small>{{ emptyArchiveReceipt.boundary }}</small>
+          <small>{{ emptyArchiveReceipt.recovery }}</small>
+        </div>
+      </div>
+      <button
+        v-if="emptyArchiveReceipt"
+        class="meeting-secondary-action meeting-empty-action"
+        type="button"
+        :disabled="loading"
+        @click="clearArchiveFilters"
+      >
+        回到完整归档
+      </button>
     </section>
 
     <template v-else>
@@ -196,6 +292,17 @@
             </div>
           </div>
 
+          <div
+            v-if="getAttentionRecoveryTitle(meeting)"
+            class="meeting-card-section is-attention"
+          >
+            <div class="section-label">处理建议</div>
+            <div class="meeting-attention-copy">
+              <strong>{{ getAttentionRecoveryTitle(meeting) }}</strong>
+              <span>{{ getAttentionRecoveryDetail(meeting) }}</span>
+            </div>
+          </div>
+
           <div v-if="meeting.summary" class="meeting-card-section">
             <div class="section-label">会议摘要</div>
             <div class="meeting-card-summary is-summary">
@@ -212,6 +319,14 @@
             </div>
           </div>
 
+          <div class="meeting-card-section is-action-scope">
+            <div class="section-label">打开范围</div>
+            <div class="meeting-action-scope">
+              <strong>{{ getOpenScopeTitle(meeting) }}</strong>
+              <span>{{ getOpenScopeDetail(meeting) }}</span>
+            </div>
+          </div>
+
           <div class="meeting-card-footer">
             <button
               class="meeting-primary-action"
@@ -222,10 +337,25 @@
             <button
               class="meeting-secondary-action"
               :disabled="!getSafePdfUrl(meeting.pdfUrl)"
-              @click="openPdf(meeting.pdfUrl)"
+              @click="openPdf(meeting.pdfUrl, meeting)"
             >
               打开 PDF
             </button>
+          </div>
+
+          <div
+            v-if="openReceipts[meeting.meetingId]"
+            class="meeting-card-section is-open-receipt"
+            data-meeting-open-receipt="true"
+            :data-meeting-id="meeting.meetingId"
+            aria-label="会议记录打开回执"
+          >
+            <div class="section-label">打开回执</div>
+            <div class="meeting-open-receipt">
+              <strong>{{ openReceipts[meeting.meetingId].title }}</strong>
+              <span>{{ openReceipts[meeting.meetingId].detail }}</span>
+              <small>{{ openReceipts[meeting.meetingId].boundary }}</small>
+            </div>
           </div>
         </article>
       </section>
@@ -254,6 +384,49 @@ interface MeetingResponseEnvelope {
   data?: MeetingRecordListResponse;
 }
 
+type ArchiveLoadTrigger =
+  | 'initial'
+  | 'refresh'
+  | 'filter'
+  | 'clear'
+  | 'load-more';
+
+interface MeetingArchiveLoadReceipt {
+  title: string;
+  source: string;
+  scope: string;
+  loaded: string;
+  boundary: string;
+  nextStep: string;
+  receivedAt: string;
+}
+
+interface MeetingArchiveOpenReceipt {
+  title: string;
+  detail: string;
+  boundary: string;
+}
+
+interface MeetingArchiveEmptyReceipt {
+  title: string;
+  scope: string;
+  coverage: string;
+  boundary: string;
+  recovery: string;
+}
+
+interface MeetingArchiveCompletionReceipt {
+  title: string;
+  scope: string;
+  basis: string;
+  ready: string;
+  attention: string;
+  processing: string;
+  archived: string;
+  nextStep: string;
+  boundary: string;
+}
+
 const MEETING_PAGE_SIZE = 50;
 
 const meetings = ref<MeetingRecord[]>([]);
@@ -265,6 +438,8 @@ const pageError = ref('');
 const searchInput = ref('');
 const appliedSearch = ref('');
 const statusFilter = ref<MeetingArchiveStatusFilter>('all');
+const archiveLoadReceipt = ref<MeetingArchiveLoadReceipt | null>(null);
+const openReceipts = ref<Record<string, MeetingArchiveOpenReceipt>>({});
 
 const statusFilterOptions: Array<{
   value: MeetingArchiveStatusFilter;
@@ -306,11 +481,91 @@ const activeFilterSummary = computed(() => {
   return parts.join('，') || '全部会议';
 });
 
-onMounted(() => {
-  void loadMeetings();
+const emptyArchiveReceipt = computed<MeetingArchiveEmptyReceipt | null>(() => {
+  if (
+    !hasActiveFilters.value ||
+    loading.value ||
+    sortedMeetings.value.length > 0
+  ) {
+    return null;
+  }
+  const query = appliedSearch.value.trim();
+  const statusLabel =
+    statusFilterOptions.find((option) => option.value === statusFilter.value)
+      ?.label || '全部状态';
+  const queryScope = query ? `关键词“${query}”` : '未输入关键词';
+  const statusScope =
+    statusFilter.value === 'all'
+      ? '未限制状态'
+      : `状态筛选为“${statusLabel}”`;
+
+  return {
+    title: '筛选已成功读取，但没有匹配会议',
+    scope: `${queryScope}；${statusScope}；服务端按同一条件返回 0 条。`,
+    coverage: query
+      ? '关键词会同时查标题、摘要、参会者、会议 ID、错误码，以及归档转写/观察文本。'
+      : '当前只按状态读取会议归档；没有隐藏本页之外的匹配结果。',
+    boundary:
+      '这不是读取失败，也不表示会议历史被删除；没有重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。',
+    recovery:
+      '可以清除筛选回到完整归档，放宽关键词，或切换到“需处理 / 生成中 / 仅归档”查看不同状态。',
+  };
 });
 
-async function loadMeetings() {
+const archiveCompletionReceipt =
+  computed<MeetingArchiveCompletionReceipt | null>(() => {
+    if (loading.value || sortedMeetings.value.length === 0) return null;
+
+    const counts = sortedMeetings.value.reduce(
+      (summary, meeting) => {
+        const bucket = getMeetingCompletionBucket(meeting);
+        summary[bucket] += 1;
+        return summary;
+      },
+      {
+        ready: 0,
+        attention: 0,
+        processing: 0,
+        archived: 0,
+      },
+    );
+    const total = sortedMeetings.value.length;
+    const needingReview =
+      counts.attention + counts.processing + counts.archived;
+    const scope = hasActiveFilters.value
+      ? `当前筛选：${activeFilterSummary.value}；只统计本页已加载的 ${total} 条会议。`
+      : `当前页已加载 ${total} / ${
+          meetingTotal.value || total
+        } 条会议；加载更早会议后会重新计算。`;
+
+    return {
+      title:
+        needingReview > 0
+          ? `有 ${needingReview} 条会议还不能当成完整纪要交付`
+          : '当前已加载会议都有可复核的完整交付物',
+      scope,
+      basis:
+        hasMoreMeetings.value && !hasActiveFilters.value
+          ? '当前页快照'
+          : '当前显示范围',
+      ready: `${counts.ready} 条`,
+      attention: `${counts.attention} 条`,
+      processing: `${counts.processing} 条`,
+      archived: `${counts.archived} 条`,
+      nextStep:
+        needingReview > 0
+          ? '先用“需处理 / 生成中 / 仅归档”筛选定位会议，打开 Panorama 复核结构化内容，再排查 Digest/PDF 链路。'
+          : '可以直接打开 Panorama 或安全 PDF 做会后复核；需要更早记录时继续加载下一页。',
+      boundary:
+        '这是当前已显示会议的只读完整度快照；不会重新分析会议、催跑 Minutes API、生成 PDF、发送纪要、写入 Memory Service 或修改行动项。',
+    };
+  });
+
+onMounted(() => {
+  void loadMeetings('initial');
+});
+
+async function loadMeetings(trigger: ArchiveLoadTrigger = 'refresh') {
   loading.value = true;
   pageError.value = '';
   error.value = '';
@@ -319,6 +574,10 @@ async function loadMeetings() {
     const response = await requestMeetingsPage(0);
     meetings.value = response.items;
     meetingTotal.value = Number(response.total || response.items.length);
+    archiveLoadReceipt.value = buildArchiveLoadReceipt(
+      trigger,
+      response.source,
+    );
   } catch (directError) {
     error.value =
       directError instanceof Error
@@ -333,14 +592,14 @@ async function loadMeetings() {
 
 function applyArchiveFilters() {
   appliedSearch.value = searchInput.value.trim();
-  void loadMeetings();
+  void loadMeetings('filter');
 }
 
 function clearArchiveFilters() {
   searchInput.value = '';
   appliedSearch.value = '';
   statusFilter.value = 'all';
-  void loadMeetings();
+  void loadMeetings('clear');
 }
 
 async function loadMoreMeetings() {
@@ -352,6 +611,10 @@ async function loadMoreMeetings() {
     const response = await requestMeetingsPage(meetings.value.length);
     meetings.value = mergeMeetingPages(meetings.value, response.items);
     meetingTotal.value = Number(response.total || meetings.value.length);
+    archiveLoadReceipt.value = buildArchiveLoadReceipt(
+      'load-more',
+      response.source,
+    );
   } catch (loadError) {
     pageError.value =
       loadError instanceof Error
@@ -380,7 +643,7 @@ async function requestMeetingsPage(offset: number) {
     const total = Number(
       response?.data?.total || response?.total || items.length,
     );
-    return { items, total };
+    return { items, total, source: 'extension background' };
   } catch (runtimeError) {
     console.warn(
       '通过 background 加载会议记录失败，尝试直接请求:',
@@ -397,12 +660,56 @@ async function requestMeetingsPage(offset: number) {
     return {
       items: response.items || [],
       total: Number(response.total || response.items?.length || 0),
+      source: 'memory-service direct',
     };
   } catch (directError) {
     throw directError instanceof Error
       ? directError
       : new Error('暂时无法连接会议记录服务');
   }
+}
+
+function buildArchiveLoadReceipt(
+  trigger: ArchiveLoadTrigger,
+  source: string,
+): MeetingArchiveLoadReceipt {
+  const query = appliedSearch.value.trim();
+  const statusLabel = statusFilterOptions.find(
+    (option) => option.value === statusFilter.value,
+  )?.label;
+  const filters: string[] = [];
+  if (query) filters.push(`关键词“${query}”`);
+  if (statusFilter.value !== 'all' && statusLabel) {
+    filters.push(`状态 ${statusLabel}`);
+  }
+  const titleByTrigger: Record<ArchiveLoadTrigger, string> = {
+    initial: '已读取最新会议归档',
+    refresh: '已刷新会议归档列表',
+    filter: '已按筛选读取会议归档',
+    clear: '已回到完整会议归档',
+    'load-more': '已追加更早会议',
+  };
+  const total = meetingTotal.value || meetings.value.length;
+  const loaded = `已显示 ${meetings.value.length} / ${total} 条`;
+  const scope = filters.length
+    ? `${filters.join('，')}；服务端筛选后分页`
+    : '全部会议；按最近会议时间分页';
+
+  return {
+    title: titleByTrigger[trigger],
+    source:
+      source === 'memory-service direct'
+        ? 'memory-service 直接读取'
+        : 'extension background 读取',
+    scope,
+    loaded,
+    boundary:
+      '只读取会议归档列表和状态；没有重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。',
+    nextStep: hasMoreMeetings.value
+      ? '需要更早记录时继续加载更早会议；要复核结构化内容或排查 PDF/Digest 时打开 Panorama。'
+      : '当前筛选范围已加载完；要复核结构化内容或排查 PDF/Digest 时打开 Panorama。',
+    receivedAt: formatReceiptTime(Date.now()),
+  };
 }
 
 function mergeMeetingPages(
@@ -505,6 +812,95 @@ function getPdfSummary(meeting: MeetingRecord) {
   return '该会议当前只保留了历史记录入口。';
 }
 
+function getAttentionRecoveryTitle(meeting: MeetingRecord) {
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.blocked) return 'PDF 链接被拦截';
+  if (digestState === 'failed') return 'Digest / PDF 生成失败';
+  if (digestState === 'completed' && !pdfSafety.safeUrl) {
+    return 'Digest 完成但缺少 PDF';
+  }
+  return '';
+}
+
+function getAttentionRecoveryDetail(meeting: MeetingRecord) {
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.blocked) {
+    return '不要打开该 PDF 链接；先用 Panorama 回看结构化归档，再检查 Minutes API 返回的 pdfUrl 或重新生成 PDF。';
+  }
+  if (digestState === 'failed') {
+    const errorCode = meeting.digestErrorCode
+      ? `错误码 ${meeting.digestErrorCode}`
+      : '后台没有返回错误码';
+    return `${errorCode}。可先从 Panorama 继续复核摘要、行动项和决议，再排查 Minutes API 或重新生成 PDF。`;
+  }
+  if (digestState === 'completed' && !pdfSafety.safeUrl) {
+    return '结构化归档可用，但正式 PDF 没有安全链接；优先检查 PDF 写回或重新触发纪要生成。';
+  }
+  return '';
+}
+
+function getMeetingCompletionBucket(
+  meeting: MeetingRecord,
+): 'ready' | 'attention' | 'processing' | 'archived' {
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.blocked || digestState === 'failed') return 'attention';
+  if (digestState === 'completed' && !pdfSafety.safeUrl) return 'attention';
+  if (pdfSafety.safeUrl || digestState === 'completed') return 'ready';
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
+    return 'processing';
+  }
+  return 'archived';
+}
+
+function getOpenScopeTitle(meeting: MeetingRecord) {
+  const digestState = getDigestState(meeting);
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  if (pdfSafety.safeUrl) return 'Panorama 复核 + 安全 PDF 可打开';
+  if (pdfSafety.blocked) return '优先 Panorama 复核，PDF 暂不打开';
+  if (digestState === 'failed') return 'PDF 失败，先回 Panorama';
+  if (digestState === 'completed') return 'Digest 已完成，PDF 待补';
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
+    return 'PDF 生成中，Panorama 先可用';
+  }
+  return '仅归档回看';
+}
+
+function getOpenScopeDetail(meeting: MeetingRecord) {
+  const digestState = getDigestState(meeting);
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  if (pdfSafety.safeUrl) {
+    return '打开 Panorama 只进入只读归档复盘；打开 PDF 只打开安全 http(s) 链接，不重新分析会议、发送纪要、写入 Memory Service 或修改行动项。';
+  }
+  if (pdfSafety.blocked) {
+    return 'PDF 链接未通过安全检查，按钮保持禁用；打开 Panorama 不带入不安全链接，也不会重新生成 PDF、发送纪要或写回归档。';
+  }
+  if (digestState === 'failed') {
+    return 'PDF 生成失败，按钮保持禁用；打开 Panorama 可复核摘要、行动项和决议，但不会重试 Minutes API、发送纪要或修改行动项。';
+  }
+  if (digestState === 'completed') {
+    return 'Digest 已完成但没有安全 PDF，按钮保持禁用；打开 Panorama 不会补发 PDF、写回 URL 或发送纪要。';
+  }
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
+    return 'Digest/PDF 仍在生成，按钮保持禁用；打开 Panorama 只回看已归档结构，不会催跑、重试或写入 Memory Service。';
+  }
+  return '当前只有基础会议归档；打开 Panorama 只回看已有结构，不会生成 PDF、重新分析会议或外发纪要。';
+}
+
 function displayParticipants(participants: string[] = []) {
   return participants.slice(0, 5);
 }
@@ -546,6 +942,14 @@ function formatMeetingTime(timestamp?: number) {
   });
 }
 
+function formatReceiptTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function shortMeetingId(meetingId: string) {
   if (!meetingId) return '未知会议';
   return meetingId.length > 18
@@ -579,12 +983,40 @@ function openPanorama(meeting: MeetingRecord) {
       ? chrome.runtime.getURL(`meeting-panorama.html?${params.toString()}`)
       : `meeting-panorama.html?${params.toString()}`;
   window.open(url, '_blank', 'noopener');
+  setOpenReceipt(meeting.meetingId, {
+    title: '已打开 Panorama',
+    detail: `${meeting.title || '未命名会议'} · ${formatReceiptTime(
+      Date.now(),
+    )} · 只读进入结构化归档复盘。`,
+    boundary:
+      '本次点击只打开现有归档页面；没有重新分析会议、生成 PDF、发送纪要、写入 Memory Service 或修改行动项。',
+  });
 }
 
-function openPdf(pdfUrl?: string) {
+function openPdf(pdfUrl: string | undefined, meeting?: MeetingRecord) {
   const safePdfUrl = getSafePdfUrl(pdfUrl);
   if (!safePdfUrl) return;
   window.open(safePdfUrl, '_blank', 'noopener,noreferrer');
+  if (meeting) {
+    setOpenReceipt(meeting.meetingId, {
+      title: '已打开安全 PDF',
+      detail: `${meeting.title || '未命名会议'} · ${formatReceiptTime(
+        Date.now(),
+      )} · 外部 http(s) PDF 链接已交给浏览器打开。`,
+      boundary:
+        '本次点击只打开已通过安全检查的 PDF；没有分享、发送、下载到归档、重跑 Minutes API 或写回会议记录。',
+    });
+  }
+}
+
+function setOpenReceipt(
+  meetingId: string,
+  receipt: MeetingArchiveOpenReceipt,
+) {
+  openReceipts.value = {
+    ...openReceipts.value,
+    [meetingId]: receipt,
+  };
 }
 </script>
 
@@ -792,6 +1224,39 @@ function openPdf(pdfUrl?: string) {
   border-color: rgba(255, 107, 107, 0.28);
 }
 
+.meeting-empty-receipt {
+  margin-top: 1rem;
+  padding-left: 0.9rem;
+  border-left: 3px solid rgba(34, 211, 238, 0.5);
+}
+
+.meeting-empty-receipt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.meeting-empty-receipt-body strong {
+  color: #cffafe;
+  font-size: 0.94rem;
+  line-height: 1.45;
+}
+
+.meeting-empty-receipt-body span,
+.meeting-empty-receipt-body small {
+  color: #bae6fd;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.meeting-empty-receipt-body small {
+  color: #a5f3fc;
+}
+
+.meeting-empty-action {
+  margin-top: 1rem;
+}
+
 .feedback-title {
   font-size: 1.05rem;
   font-weight: 700;
@@ -817,6 +1282,162 @@ function openPdf(pdfUrl?: string) {
   display: inline-block;
   margin-left: 0.5rem;
   color: #94a3b8;
+}
+
+.meeting-archive-receipt {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 0.85rem;
+  background: rgba(14, 116, 144, 0.18);
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  color: #dbeafe;
+}
+
+.meeting-archive-receipt-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.meeting-archive-receipt-head strong {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.meeting-archive-receipt-head > span {
+  flex: 0 0 auto;
+  color: #a5f3fc;
+  font-size: 0.78rem;
+}
+
+.receipt-label {
+  color: #67e8f9;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.meeting-archive-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.meeting-archive-receipt-grid div {
+  min-width: 0;
+  padding: 0.7rem;
+  border-radius: 0.7rem;
+  background: rgba(8, 47, 73, 0.36);
+  border: 1px solid rgba(125, 211, 252, 0.12);
+}
+
+.meeting-archive-receipt-grid span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #7dd3fc;
+  font-size: 0.7rem;
+}
+
+.meeting-archive-receipt-grid strong {
+  display: block;
+  color: #ecfeff;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.meeting-archive-receipt p {
+  margin: 0.8rem 0 0;
+  color: #bae6fd;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.meeting-completion-receipt {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 0.85rem;
+  background: rgba(88, 28, 135, 0.18);
+  border: 1px solid rgba(216, 180, 254, 0.2);
+  color: #f3e8ff;
+}
+
+.meeting-completion-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-top: 0.35rem;
+}
+
+.meeting-completion-head strong {
+  display: block;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.meeting-completion-head p {
+  margin: 0.35rem 0 0;
+  color: #e9d5ff;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.meeting-completion-head > span {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(216, 180, 254, 0.2);
+  color: #f5d0fe;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.meeting-completion-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
+.meeting-completion-grid div {
+  min-width: 0;
+  padding: 0.7rem;
+  border-radius: 0.7rem;
+  background: rgba(59, 7, 100, 0.34);
+  border: 1px solid rgba(216, 180, 254, 0.12);
+}
+
+.meeting-completion-grid span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #d8b4fe;
+  font-size: 0.7rem;
+}
+
+.meeting-completion-grid strong {
+  display: block;
+  color: #faf5ff;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.meeting-completion-receipt > p,
+.meeting-completion-receipt > small {
+  display: block;
+  margin: 0.8rem 0 0;
+  color: #e9d5ff;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.meeting-completion-receipt > small {
+  color: #f0abfc;
 }
 
 .meeting-card {
@@ -898,6 +1519,80 @@ function openPdf(pdfUrl?: string) {
   border-radius: 0.9rem;
   background: rgba(36, 40, 54, 0.68);
   border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.meeting-card-section.is-attention {
+  background: rgba(127, 29, 29, 0.22);
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.meeting-card-section.is-action-scope {
+  background: rgba(14, 116, 144, 0.14);
+  border-color: rgba(34, 211, 238, 0.18);
+}
+
+.meeting-card-section.is-open-receipt {
+  background: rgba(22, 101, 52, 0.16);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.meeting-action-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.meeting-action-scope strong {
+  color: #cffafe;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.meeting-action-scope span {
+  color: #bae6fd;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.meeting-attention-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.meeting-attention-copy strong {
+  color: #fecaca;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.meeting-attention-copy span {
+  color: #fca5a5;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.meeting-open-receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.meeting-open-receipt strong {
+  color: #bbf7d0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.meeting-open-receipt span,
+.meeting-open-receipt small {
+  color: #dcfce7;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.meeting-open-receipt small {
+  color: #a7f3d0;
 }
 
 .section-label {
@@ -987,6 +1682,11 @@ function openPdf(pdfUrl?: string) {
   .meeting-filter-bar {
     grid-template-columns: 1fr;
   }
+
+  .meeting-archive-receipt-grid,
+  .meeting-completion-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -1004,6 +1704,18 @@ function openPdf(pdfUrl?: string) {
 
   .meeting-card-badges {
     align-items: flex-start;
+  }
+
+  .meeting-archive-receipt-head,
+  .meeting-archive-receipt-grid,
+  .meeting-completion-head,
+  .meeting-completion-grid {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .meeting-completion-head > span {
+    justify-self: start;
   }
 }
 </style>

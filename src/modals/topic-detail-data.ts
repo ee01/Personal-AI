@@ -27,15 +27,166 @@ const MESSAGE_ID_KEYS = [
   'external_message_id',
 ] as const;
 
-const getMessageIds = (message: any): string[] => {
-  return MESSAGE_ID_KEYS.map((key) => message?.[key])
-    .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value).trim())
+const MESSAGE_URL_KEYS = ['teamUrl', 'sourceUrl', 'permalink', 'url'] as const;
+
+const URL_MESSAGE_ID_PARAM_KEYS = [
+  'messageId',
+  'message_id',
+  'conversationId',
+  'conversation_id',
+  'sourceMessageId',
+  'source_message_id',
+  'externalMessageId',
+  'external_message_id',
+  'id',
+  'msg',
+  'ts',
+  'thread_ts',
+] as const;
+
+const decodeIdentityValue = (value: string): string | null => {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded === value ? null : decoded;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const getSlackPermalinkTimestampAlias = (value: string): string | null => {
+  const match = /^p(\d{10})(\d{5,6})$/.exec(String(value || '').trim());
+  if (!match) return null;
+  return `${match[1]}.${match[2].padStart(6, '0')}`;
+};
+
+const getSlackTimestampPermalinkAlias = (value: string): string | null => {
+  const match = /^(\d{10,})\.(\d{6})$/.exec(String(value || '').trim());
+  if (!match) return null;
+  return `p${match[1]}${match[2]}`;
+};
+
+const appendIdentity = (
+  values: string[],
+  seen: Set<string>,
+  value: unknown,
+) => {
+  if (value === undefined || value === null) return;
+  const normalized = String(value).trim();
+  if (!normalized || seen.has(normalized)) return;
+  seen.add(normalized);
+  values.push(normalized);
+};
+
+const appendSlackIdentityAliases = (
+  values: string[],
+  seen: Set<string>,
+  value: string,
+) => {
+  appendIdentity(values, seen, getSlackPermalinkTimestampAlias(value));
+  appendIdentity(values, seen, getSlackTimestampPermalinkAlias(value));
+};
+
+const looksLikeMessagePathSegment = (value: string): boolean => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return false;
+  return normalized.length >= 8 || /\d/.test(normalized);
+};
+
+const appendUrlIdentityAliases = (
+  values: string[],
+  seen: Set<string>,
+  value: string,
+) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch (_error) {
+    return;
+  }
+
+  URL_MESSAGE_ID_PARAM_KEYS.forEach((key) => {
+    const paramValue = url.searchParams.get(key);
+    appendIdentity(values, seen, paramValue);
+    const decodedParamValue = paramValue ? decodeIdentityValue(paramValue) : null;
+    appendIdentity(values, seen, decodedParamValue);
+  });
+
+  const hashValue = url.hash.replace(/^#/, '').trim();
+  if (hashValue) {
+    appendIdentity(values, seen, hashValue);
+    const decodedHashValue = decodeIdentityValue(hashValue);
+    appendIdentity(values, seen, decodedHashValue);
+
+    const hashQuery =
+      hashValue.includes('?') || hashValue.includes('=')
+        ? hashValue.slice(hashValue.indexOf('?') + 1)
+        : '';
+    if (hashQuery) {
+      const hashParams = new URLSearchParams(hashQuery);
+      URL_MESSAGE_ID_PARAM_KEYS.forEach((key) => {
+        const paramValue = hashParams.get(key);
+        appendIdentity(values, seen, paramValue);
+        const decodedParamValue = paramValue
+          ? decodeIdentityValue(paramValue)
+          : null;
+        appendIdentity(values, seen, decodedParamValue);
+      });
+    }
+  }
+
+  const pathSegments = url.pathname
+    .split('/')
+    .map((segment) => decodeIdentityValue(segment) || segment)
+    .map((segment) => segment.trim())
     .filter(Boolean);
+  const lastSegment = pathSegments[pathSegments.length - 1];
+  if (looksLikeMessagePathSegment(lastSegment)) {
+    appendIdentity(values, seen, lastSegment);
+    appendSlackIdentityAliases(values, seen, lastSegment);
+  }
+};
+
+export const getTopicMessageIdentityCandidates = (value: unknown): string[] => {
+  const values: string[] = [];
+  const seen = new Set<string>();
+  appendIdentity(values, seen, value);
+
+  const normalized = values[0] || '';
+  if (normalized) {
+    appendIdentity(values, seen, decodeIdentityValue(normalized));
+    values.slice().forEach((candidate) => {
+      appendSlackIdentityAliases(values, seen, candidate);
+      appendUrlIdentityAliases(values, seen, candidate);
+    });
+  }
+
+  return values;
+};
+
+export const getTopicMessageIdentityValues = (message: any): string[] => {
+  const values: string[] = [];
+  const seen = new Set<string>();
+  [...MESSAGE_ID_KEYS, ...MESSAGE_URL_KEYS].forEach((key) => {
+    getTopicMessageIdentityCandidates(message?.[key]).forEach((candidate) =>
+      appendIdentity(values, seen, candidate),
+    );
+  });
+  return values;
+};
+
+export const topicMessageMatchesIdentity = (
+  message: any,
+  identity: unknown,
+): boolean => {
+  const identitySet = new Set(getTopicMessageIdentityCandidates(identity));
+  if (identitySet.size === 0) return false;
+  return getTopicMessageIdentityValues(message).some((value) =>
+    identitySet.has(value),
+  );
 };
 
 export const getTopicConversationPrimaryId = (conversation: any): string => {
-  return getMessageIds(conversation)[0] || '';
+  return getTopicMessageIdentityValues(conversation)[0] || '';
 };
 
 export const getTopicConversationReadSyncId = (conversation: any): string => {
@@ -46,11 +197,19 @@ export const getTopicConversationReadSyncId = (conversation: any): string => {
     ? conversation.contextMessages
     : [];
   for (const contextMessage of contextMessages) {
-    const contextMessageId = getMessageIds(contextMessage)[0];
+    const contextMessageId = getTopicMessageIdentityValues(contextMessage)[0];
     if (contextMessageId) return contextMessageId;
   }
 
   return '';
+};
+
+export const getTopicConversationRenderIdentity = (
+  conversation: any,
+  index = 0,
+): string => {
+  const stableMessageId = getTopicConversationReadSyncId(conversation);
+  return stableMessageId || `conversation-${index}`;
 };
 
 export type TopicConversationReadFilter = 'all' | 'unread' | 'read';
@@ -257,13 +416,12 @@ export const findTopicConversationByMessageId = (
   topic: any,
   messageId: string,
 ): any | null => {
-  const normalizedMessageId = String(messageId || '').trim();
-  if (!normalizedMessageId) return null;
+  if (getTopicMessageIdentityCandidates(messageId).length === 0) return null;
 
   const conversations = getTopicDetailRecentData(topic).conversations;
   return (
     conversations.find((conversation) => {
-      if (getMessageIds(conversation).includes(normalizedMessageId)) {
+      if (topicMessageMatchesIdentity(conversation, messageId)) {
         return true;
       }
 
@@ -271,7 +429,7 @@ export const findTopicConversationByMessageId = (
         ? conversation.contextMessages
         : [];
       return contextMessages.some((contextMessage: any) =>
-        getMessageIds(contextMessage).includes(normalizedMessageId),
+        topicMessageMatchesIdentity(contextMessage, messageId),
       );
     }) || null
   );

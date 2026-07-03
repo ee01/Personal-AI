@@ -157,10 +157,22 @@ export interface DisplayableContextRecallCandidate {
   sourceTitle?: string;
   displayPriority?: string | null;
   whyRelevant?: string[] | null;
+  lensPresentation?: {
+    status?: string | null;
+    informationValue?: string | null;
+    title?: string | null;
+    extractedInfo?: string | null;
+    novelty?: string | null;
+  } | null;
+  cue?: {
+    cueText?: string | null;
+    compileStatus?: string | null;
+  } | null;
 }
 
 export interface ContextRecallMetaCandidate {
   type?: string | null;
+  scope?: string | null;
   uiSummary?: string | null;
   sourceLabel?: string | null;
   sourceTitle?: string | null;
@@ -170,6 +182,7 @@ export interface ContextRecallMetaCandidate {
   reasonType?: string | null;
   evidenceRole?: string | null;
   sourceContext?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 const CONTEXT_RECALL_SOURCE_LABELS: Record<string, string> = {
@@ -187,11 +200,17 @@ const CONTEXT_RECALL_SOURCE_LABELS: Record<string, string> = {
   message: '消息',
   rehearsal: '预演提醒',
   reflection: '反思记录',
+  reflection_thread: '反思线程',
   source_memory: '资料记忆',
   system: '系统记忆',
   user_core: '用户画像',
   web: '网页',
   webpage: '网页',
+};
+
+const CONTEXT_RECALL_SCOPE_LABELS: Record<string, string> = {
+  work: '工作记忆',
+  personal: '个人记忆',
 };
 
 const CONTEXT_RECALL_REASON_TYPE_LABELS: Record<string, string> = {
@@ -236,6 +255,22 @@ const CONTEXT_RECALL_EVIDENCE_ROLE_LABELS: Record<string, string> = {
   rehearsal_cue: '预演提醒',
   risk: '风险',
   supporting: '支持证据',
+};
+
+const SOURCE_MEMORY_KIND_LABELS: Record<string, string> = {
+  jira_comment: 'Jira 评论',
+  manual: '手动资料',
+  message_reply: '外发回复',
+  selection: '选区资料',
+  visual_memory: '视觉证据',
+  web_ai_prompt: 'AI 提问',
+  webpage: '整页资料',
+};
+
+const SOURCE_MEMORY_CAPTURE_MODE_LABELS: Record<string, string> = {
+  auto: '自动保存',
+  manual: '主动保存',
+  suggested: '建议保存',
 };
 
 export function normalizeContextSiteMuteHost(rawHostname: string): string {
@@ -479,7 +514,21 @@ export function sanitizeContextExternalUrl(
 
   try {
     const parsed = new URL(value, baseUrl);
-    return SAFE_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.href : null;
+    if (!SAFE_EXTERNAL_PROTOCOLS.has(parsed.protocol)) return null;
+    if (parsed.username || parsed.password) return null;
+    if (hasSensitiveQueryParam(parsed)) return null;
+
+    parsed.username = '';
+    parsed.password = '';
+    parsed.hash = '';
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (shouldDropContextQueryParam(key)) {
+        parsed.searchParams.delete(key);
+      }
+    }
+    parsed.searchParams.sort();
+
+    return parsed.href;
   } catch (_error) {
     return null;
   }
@@ -503,16 +552,43 @@ export function isDisplayableContextRecallMatch(
   if (normalizeContextRecallInfo(match.displayPriority).toLowerCase() === 'hidden') {
     return false;
   }
+  const presentationStatus = normalizeContextRecallInfo(
+    match.lensPresentation?.status,
+  ).toLowerCase();
+  const presentationValue = normalizeContextRecallInfo(
+    match.lensPresentation?.informationValue,
+  ).toLowerCase();
+  if (presentationStatus === 'blocked') return false;
+  if (
+    presentationStatus === 'ready' &&
+    presentationValue !== 'low' &&
+    normalizeContextRecallInfo(
+      match.lensPresentation?.extractedInfo || match.lensPresentation?.title,
+    )
+  ) {
+    return true;
+  }
 
   const title = normalizeContextRecallInfo(match.title);
   const uiSummary = normalizeContextRecallInfo(match.uiSummary);
   const snippet = normalizeContextRecallInfo(match.snippet);
   const sourceTitle = normalizeContextRecallInfo(match.sourceTitle);
   const sourceLabel = normalizeContextRecallInfo(match.sourceLabel);
+  const presentationInfo = normalizeContextRecallInfo(
+    match.lensPresentation?.extractedInfo,
+  );
+  const presentationTitle = normalizeContextRecallInfo(
+    match.lensPresentation?.title,
+  );
+  const cueText =
+    normalizeContextRecallInfo(match.cue?.compileStatus).toLowerCase() ===
+    'compiled'
+      ? normalizeContextRecallInfo(match.cue?.cueText)
+      : '';
 
-  if (!title && !uiSummary && !snippet) return false;
+  if (!title && !uiSummary && !snippet && !cueText && !presentationInfo && !presentationTitle) return false;
 
-  const combined = [title, uiSummary, snippet, sourceTitle]
+  const combined = [presentationInfo, presentationTitle, title, uiSummary, snippet, sourceTitle, cueText]
     .filter(Boolean)
     .join(' ');
   const stripped = stripContextRecallShellLabels(combined);
@@ -580,6 +656,14 @@ export function formatContextRecallSourceLabel(
   return CONTEXT_RECALL_SOURCE_LABELS[cleaned.toLowerCase()] || cleaned;
 }
 
+export function formatContextRecallScopeLabel(
+  scope?: string | null,
+): string | null {
+  const cleaned = normalizeContextRecallInfo(scope);
+  if (!cleaned) return null;
+  return CONTEXT_RECALL_SCOPE_LABELS[cleaned.toLowerCase()] || null;
+}
+
 export function formatContextRecallReasonType(
   reasonType?: string | null,
 ): string | null {
@@ -598,6 +682,66 @@ export function formatContextRecallEvidenceRole(
   );
 }
 
+function formatSourceMemoryMetadataValue(
+  value?: string | null,
+  labels?: Record<string, string>,
+): string | null {
+  const cleaned = normalizeContextRecallInfo(value);
+  if (!cleaned) return null;
+  const normalized = cleaned.toLowerCase();
+  return labels?.[normalized] || cleaned;
+}
+
+function getContextRecallMetadataText(
+  match: ContextRecallMetaCandidate,
+  key: string,
+): string {
+  const metadata = match.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return '';
+  }
+  const value = metadata[key];
+  if (typeof value === 'string') return normalizeContextRecallInfo(value);
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return '';
+}
+
+function isSourceMemoryMetaCandidate(match: ContextRecallMetaCandidate): boolean {
+  const type = normalizeContextRecallInfo(match.type).toLowerCase();
+  const sourceLabel = normalizeContextRecallInfo(match.sourceLabel).toLowerCase();
+  return type === 'source_memory' || sourceLabel === 'source_memory';
+}
+
+function getSourceMemoryKindLabel(
+  match: ContextRecallMetaCandidate,
+): string | null {
+  return (
+    formatSourceMemoryMetadataValue(
+      getContextRecallMetadataText(match, 'sourceKindLabel'),
+    ) ||
+    formatSourceMemoryMetadataValue(
+      getContextRecallMetadataText(match, 'sourceKind'),
+      SOURCE_MEMORY_KIND_LABELS,
+    )
+  );
+}
+
+function getSourceMemoryCaptureModeLabel(
+  match: ContextRecallMetaCandidate,
+): string | null {
+  return (
+    formatSourceMemoryMetadataValue(
+      getContextRecallMetadataText(match, 'captureModeLabel'),
+    ) ||
+    formatSourceMemoryMetadataValue(
+      getContextRecallMetadataText(match, 'captureMode'),
+      SOURCE_MEMORY_CAPTURE_MODE_LABELS,
+    )
+  );
+}
+
 export function formatContextRecallDisplayPriorityLabel(
   displayPriority?: string | null,
 ): string | null {
@@ -612,22 +756,37 @@ export function buildContextRecallPeekFooterItems(
 ): string[] {
   const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
   const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
+  const scopeLabel = formatContextRecallScopeLabel(match.scope);
+  const timestamp = formatRecallTimestamp(match.timestamp ?? undefined);
+  const staleAgeLabel = formatRecallStaleAgeLabel(match.timestamp ?? undefined);
   const reasonType = formatContextRecallReasonType(match.reasonType);
   const evidenceRole = formatContextRecallEvidenceRole(match.evidenceRole);
+  const isSourceMemory = isSourceMemoryMetaCandidate(match);
+  const sourceMemoryKind = isSourceMemory
+    ? getSourceMemoryKindLabel(match)
+    : null;
+  const sourceMemoryCaptureMode = isSourceMemory
+    ? getSourceMemoryCaptureModeLabel(match)
+    : null;
   const items: string[] = [];
+  const addUnique = (value?: string | null): void => {
+    const cleaned = normalizeContextRecallInfo(value);
+    if (!cleaned) return;
+    if (items.some((item) => item.toLowerCase() === cleaned.toLowerCase())) return;
+    items.push(cleaned);
+  };
 
-  if (
-    sourceTitle &&
-    (!sourceLabel || sourceTitle.toLowerCase() !== sourceLabel.toLowerCase())
-  ) {
-    items.push(sourceTitle);
-  } else if (sourceLabel) {
-    items.push(sourceLabel);
-  }
-  if (reasonType) items.push(reasonType);
-  if (evidenceRole && evidenceRole !== reasonType) items.push(evidenceRole);
+  addUnique(sourceLabel || sourceTitle);
+  addUnique(scopeLabel);
+  addUnique(timestamp);
+  addUnique(staleAgeLabel);
+  if (sourceLabel && sourceTitle) addUnique(sourceTitle);
+  addUnique(sourceMemoryCaptureMode);
+  addUnique(sourceMemoryKind);
+  addUnique(reasonType);
+  if (evidenceRole !== reasonType) addUnique(evidenceRole);
 
-  return items.slice(0, 3);
+  return items.slice(0, 5);
 }
 
 export function normalizeContextSelectionText(value?: string | null): string {
@@ -714,6 +873,7 @@ export function buildContextRecallMetaItems(
   match: ContextRecallMetaCandidate,
 ): string[] {
   const items = [`记忆类型：${formatContextRecallMemoryType(match.type)}`];
+  const scopeLabel = formatContextRecallScopeLabel(match.scope);
   const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
   const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
   const timestamp = formatRecallTimestamp(match.timestamp ?? undefined);
@@ -725,15 +885,31 @@ export function buildContextRecallMetaItems(
   const reasonType = formatContextRecallReasonType(match.reasonType);
   const evidenceRole = formatContextRecallEvidenceRole(match.evidenceRole);
   const sourceContext = clipContextRecallMetaValue(match.sourceContext);
+  const isSourceMemory = isSourceMemoryMetaCandidate(match);
+  const sourceMemoryKind = isSourceMemory
+    ? getSourceMemoryKindLabel(match)
+    : null;
+  const sourceMemoryCaptureMode = isSourceMemory
+    ? getSourceMemoryCaptureModeLabel(match)
+    : null;
 
   if (sourceLabel) {
     items.push(`来源：${sourceLabel}`);
+  }
+  if (scopeLabel) {
+    items.push(`范围：${scopeLabel}`);
   }
   if (
     sourceTitle &&
     (!sourceLabel || sourceTitle.toLowerCase() !== sourceLabel.toLowerCase())
   ) {
     items.push(`来源标题：${sourceTitle}`);
+  }
+  if (sourceMemoryKind) {
+    items.push(`资料类型：${sourceMemoryKind}`);
+  }
+  if (sourceMemoryCaptureMode) {
+    items.push(`保存方式：${sourceMemoryCaptureMode}`);
   }
   if (timestamp) {
     items.push(`记录时间：${timestamp}`);
@@ -760,10 +936,18 @@ export function buildContextRecallMetaItems(
 export function buildContextRecallCompactMetaItems(
   match: ContextRecallMetaCandidate,
 ): string[] {
+  const scopeLabel = formatContextRecallScopeLabel(match.scope);
   const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
   const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
   const timestamp = formatRecallTimestamp(match.timestamp ?? undefined);
   const reasonType = formatContextRecallReasonType(match.reasonType);
+  const isSourceMemory = isSourceMemoryMetaCandidate(match);
+  const sourceMemoryKind = isSourceMemory
+    ? getSourceMemoryKindLabel(match)
+    : null;
+  const sourceMemoryCaptureMode = isSourceMemory
+    ? getSourceMemoryCaptureModeLabel(match)
+    : null;
   const items: string[] = [];
 
   if (
@@ -773,6 +957,15 @@ export function buildContextRecallCompactMetaItems(
     items.push(sourceTitle);
   } else if (sourceLabel) {
     items.push(sourceLabel);
+  }
+  if (scopeLabel) {
+    items.push(scopeLabel);
+  }
+  if (sourceMemoryCaptureMode) {
+    items.push(sourceMemoryCaptureMode);
+  }
+  if (sourceMemoryKind) {
+    items.push(sourceMemoryKind);
   }
   if (timestamp) {
     items.push(timestamp);
@@ -913,6 +1106,23 @@ export function formatRecallTimestamp(timestamp?: number): string | null {
   } catch (_error) {
     return date.toISOString().slice(0, 10);
   }
+}
+
+function formatRecallStaleAgeLabel(timestamp?: number): string | null {
+  if (!timestamp || !Number.isFinite(timestamp)) return null;
+  const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  const ageMs = Date.now() - ms;
+  if (!Number.isFinite(ageMs) || ageMs < 0) return null;
+
+  const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+  if (ageDays >= 365) {
+    const ageYears = Math.max(1, Math.floor(ageDays / 365));
+    return `${ageYears}年前记录，行动前复核`;
+  }
+  if (ageDays >= 90) {
+    return `${ageDays}天前记录，行动前复核`;
+  }
+  return null;
 }
 
 function normalizeQueryParamName(name: string): string {

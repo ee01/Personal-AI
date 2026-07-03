@@ -1,11 +1,11 @@
-import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
-import { createASREventEmitter } from './types';
-import { createPcmStreamer } from './pcmStreamer';
-import { sanitizeASRTranscriptText } from './transcriptFilter';
+import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types.js';
+import { createASREventEmitter } from './types.js';
+import { createPcmStreamer } from './pcmStreamer.js';
+import { sanitizeASRTranscriptText } from './transcriptFilter.js';
 import {
   normalizeMeetingTranscribeLanguage,
   type MeetingTranscribeLanguage,
-} from '../../utils';
+} from '../../utils.js';
 
 const MAX_CHUNK_BYTES = 900 * 1024;
 const DESKTOP_ASR_BASE_URL = 'http://127.0.0.1:46321';
@@ -32,10 +32,14 @@ interface AsrStatusResponse {
       modelReady?: boolean;
       whisperBinaryAvailable?: boolean;
       whisperBinaryInstallInProgress?: boolean;
+      whisperBinaryInstallProgress?: number;
+      whisperBinaryInstallError?: string;
     };
   };
   downloadInProgress?: boolean;
   downloadProgress?: number;
+  downloadTarget?: string;
+  lastDownloadError?: string;
 }
 
 interface AsrChunkResponse {
@@ -103,6 +107,66 @@ function formatEngineLabel(
           ? 'Whisper'
           : 'no final';
   return `Local ASR · ${live} → ${final}`;
+}
+
+function formatProgressToken(value: unknown): string {
+  const progress = Number(value);
+  if (!Number.isFinite(progress)) return '';
+  const bounded = Math.max(0, Math.min(100, Math.round(progress)));
+  return ` ${bounded}%`;
+}
+
+function compactReasonToken(value: unknown): string {
+  return String(value || '')
+    .replace(/\s+/g, '_')
+    .replace(/[^\w:./-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 96);
+}
+
+function formatLocalASRReadinessIssue(status: AsrStatusResponse): string {
+  if (status.lastDownloadError) {
+    return `asr_model_install_failed ${compactReasonToken(status.lastDownloadError)}`;
+  }
+  if (status.downloadInProgress) {
+    const target = compactReasonToken(status.downloadTarget);
+    return `asr_model_downloading${formatProgressToken(status.downloadProgress)}${
+      target ? ` ${target}` : ''
+    }`;
+  }
+
+  const whisper = status.engines?.whisperFallback;
+  if (whisper?.whisperBinaryInstallError) {
+    return `whisper_binary_install_failed ${compactReasonToken(
+      whisper.whisperBinaryInstallError,
+    )}`;
+  }
+  if (whisper?.whisperBinaryInstallInProgress) {
+    return `whisper_binary_installing${formatProgressToken(
+      whisper.whisperBinaryInstallProgress,
+    )}`;
+  }
+  if (whisper?.modelReady && !whisper.whisperBinaryAvailable) {
+    return 'whisper_binary_missing';
+  }
+
+  const finalReasons = [
+    status.engines?.funasrFinal?.reason,
+    whisper?.modelReady === false ? 'whisper_model_not_ready' : undefined,
+    whisper?.whisperBinaryAvailable === false
+      ? 'whisper_binary_missing'
+      : undefined,
+  ]
+    .map(compactReasonToken)
+    .filter(Boolean);
+  if (status.liveReady) {
+    return finalReasons.length
+      ? `live_ready_final_not_ready ${finalReasons.join('+')}`
+      : 'live_ready_final_not_ready';
+  }
+  return finalReasons.length
+    ? `final_model_not_ready ${finalReasons.join('+')}`
+    : 'final_model_not_ready';
 }
 
 function hasLikelySpeechPcm16(buffer: ArrayBuffer): boolean {
@@ -202,9 +266,7 @@ export class DesktopLocalAsrProvider implements ASRProvider {
       if (!hasFinal) {
         return {
           ok: false,
-          reason: status.downloadInProgress
-            ? 'asr_model_downloading'
-            : 'final_model_not_ready',
+          reason: formatLocalASRReadinessIssue(status),
         };
       }
       return { ok: true };

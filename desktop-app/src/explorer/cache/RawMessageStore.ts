@@ -423,6 +423,70 @@ export class RawMessageStore {
     }
   }
 
+  appendConversationArtifacts(options: {
+    source: SourceId;
+    conversationId: string;
+    scope?: 'work' | 'personal';
+    extractedAt?: string;
+    artifacts: Array<{
+      kind: 'fact' | 'preference' | 'event' | 'plan';
+      text: string;
+      sourceQuote: string;
+      conversationRef: string;
+    }>;
+  }): number {
+    if (options.artifacts.length === 0) return 0;
+
+    const extractedAt = options.extractedAt ?? new Date().toISOString();
+    const deleteBatchStatement = this.db.prepare(
+      'DELETE FROM conversation_artifacts WHERE source = ? AND conversation_id = ? AND extracted_at = ?',
+    );
+    const insertStatement = this.db.prepare(`
+      INSERT INTO conversation_artifacts (
+        source,
+        conversation_id,
+        extracted_at,
+        scope,
+        revoked_at,
+        revoked_scope,
+        kind,
+        text,
+        source_quote,
+        conversation_ref
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.db.exec('BEGIN');
+    try {
+      deleteBatchStatement.run(
+        options.source,
+        options.conversationId,
+        extractedAt,
+      );
+      let inserted = 0;
+      for (const artifact of options.artifacts) {
+        const result = insertStatement.run(
+          options.source,
+          options.conversationId,
+          extractedAt,
+          options.scope ?? null,
+          null,
+          null,
+          artifact.kind,
+          artifact.text,
+          artifact.sourceQuote,
+          artifact.conversationRef,
+        );
+        inserted += Number(result.changes ?? 0);
+      }
+      this.db.exec('COMMIT');
+      return inserted;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   /**
    * Returns artifacts across all sources, newest first. Supports optional
    * source filter, free-text search and pagination. Used by the

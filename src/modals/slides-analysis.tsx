@@ -42,6 +42,7 @@ interface SelectedFieldPreviewItem {
     fieldLabel: string;
     previewText: string;
     evidenceText: string;
+    targetText: string;
     reviewKind: 'ready' | 'review';
     reviewLabel: string;
 }
@@ -60,14 +61,38 @@ interface ApplyResultReceipt {
     submittedItems: SelectedFieldPreviewItem[];
 }
 
+interface ApplyFailureReceipt {
+    errorMessage: string;
+    errors: string[];
+    submittedItems: SelectedFieldPreviewItem[];
+}
+
+interface ReviewPacketCopyReceipt {
+    status: 'success' | 'failed';
+    copiedAt: string;
+    copiedFieldCount: number;
+    copiedProjectCount: number;
+    visibleSelectedUpdateCount: number;
+    hiddenSelectedUpdateCount: number;
+    selectedReviewFieldCount: number;
+    presentationId: string;
+    selectionSignature: string;
+}
+
 interface ApplySkippedHandoffItem {
     reason: string;
     projectLabel: string;
     fieldLabel: string;
     previewText: string;
     evidenceText: string;
+    targetText: string;
     nextStep: string;
     matched: boolean;
+}
+
+interface ApplySkippedMatchSummary {
+    matchedKeys: Set<string>;
+    unmatchedReasons: string[];
 }
 
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
@@ -79,6 +104,7 @@ const APPLY_RESULT_RECEIPT_LIMIT = 6;
 const APPLY_SKIPPED_HANDOFF_LIMIT = 6;
 const SELECTED_FIELD_PREVIEW_TEXT_LIMIT = 140;
 const SELECTED_FIELD_EVIDENCE_TEXT_LIMIT = 180;
+const WRITEBACK_SNAPSHOT_STALE_WARNING_MS = 10 * 60 * 1000;
 const UPDATE_FIELD_LABELS: Record<UpdateField, string> = {
     status: '状态列',
     owner: '负责人列',
@@ -97,6 +123,12 @@ const UPDATE_FIELD_COLUMN_LABELS: Record<UpdateField, string> = {
     track: UPDATE_FIELD_LABELS.track,
     comments: UPDATE_FIELD_LABELS.comments
 };
+const UPDATE_FIELD_MATCH_ALIASES: Record<UpdateField, string[]> = {
+    status: ['状态', '状态列', 'status', 'status column', 'health', 'rag'],
+    owner: ['负责人', '负责人列', 'owner', 'owner column', 'assignee', 'assignee column', 'dri'],
+    track: ['赛道', '赛道列', 'track', 'track column', 'workstream', 'workstream column', 'lane'],
+    comments: ['备注', '备注列', 'comments', 'comments column', 'comment', 'notes', 'updates', 'blockers', 'actions'],
+};
 const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = {
     all: '全部',
     selected: '已选',
@@ -105,6 +137,134 @@ const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = {
     blocked: '无法写回'
 };
 const fieldKey = (projectIndex: number, field: UpdateField) => `${projectIndex}:${field}`;
+
+const buildAnalysisScopeReceiptLines = (
+    analyzedSlideCount: unknown,
+    totalSlideCount: unknown,
+    requestedSlideId: unknown,
+    warningCount: number,
+): string[] => {
+    const lines: string[] = [];
+    const hasSlideCounts = typeof analyzedSlideCount === 'number' && typeof totalSlideCount === 'number';
+    const targetText = typeof requestedSlideId === 'string' && requestedSlideId.trim()
+        ? `当前目标 ${requestedSlideId.trim()}`
+        : '未带明确目标 slide';
+
+    if (hasSlideCounts && totalSlideCount > 0) {
+        if (analyzedSlideCount <= 0) {
+            lines.push(`范围判定回执: ${targetText} 没有进入本轮分析；当前没有可当作已检查的 slide。`);
+        } else if (analyzedSlideCount < totalSlideCount) {
+            lines.push(`范围判定回执: 只分析 ${analyzedSlideCount} / ${totalSlideCount} 张 slide，先按 ${targetText} 的项目建议复核；这不是整份 deck 完整扫描。`);
+        } else {
+            lines.push(`范围判定回执: 已覆盖 ${analyzedSlideCount} / ${totalSlideCount} 张 slide；仍需按字段来源核对建议，不把 AI 草稿当作事实确认。`);
+        }
+    } else {
+        lines.push(`范围判定回执: 本页只展示当前返回的分析结果快照；${targetText}，覆盖范围请以字段来源和解析提醒为准。`);
+    }
+
+    lines.push(
+        warningCount > 0
+            ? `解析提醒 ${warningCount} 条；先处理提醒和字段来源，再决定是否写回。`
+            : '没有解析提醒；写回前仍请核对字段来源、目标 slide/table/行列和建议值。',
+    );
+    lines.push('查看、筛选或复制本页内容不会重新分析 deck、不会写回 Slides，也不会反写 Jira 或 Memory Service。');
+
+    return lines;
+};
+
+const formatSnapshotReceivedAt = (timestamp: number): string => {
+    try {
+        return new Intl.DateTimeFormat('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        }).format(new Date(timestamp));
+    } catch {
+        return new Date(timestamp).toLocaleString();
+    }
+};
+
+const buildAnalysisSnapshotReceiptLines = (
+    result: DisplaySlideAnalysisResult,
+    presentationId: string,
+    receivedAt: string,
+    availableUpdateFieldCount: number,
+    defaultSelectedFieldCount: number,
+    selectedUpdateCount: number,
+): string[] => {
+    const targetSlide = typeof result.summary.requestedSlideId === 'string' && result.summary.requestedSlideId.trim()
+        ? result.summary.requestedSlideId.trim()
+        : '未带明确目标 slide';
+    const suggestionCount = result.updateSuggestions.length;
+    const receivedText = receivedAt || '本次页面加载';
+
+    return [
+        `分析快照回执: presentation ${presentationId || 'unknown'}；目标 ${targetSlide}；本页收到 ${receivedText}。`,
+        `快照内容: ${result.summary.totalProjects} 个项目，${suggestionCount} 张建议卡，${availableUpdateFieldCount} 个可写字段，高可信默认 ${defaultSelectedFieldCount} 个；当前本页已选 ${selectedUpdateCount} 个字段。`,
+        '新鲜度边界: 这是原 Google Slides 页面传来的分析结果快照，不会实时监听 deck 后续改动；如果 Slides 已被编辑、切页或表格重排，请从 Google Slides 重新点击「分析项目」。',
+        '非效果: 展示快照不会写回 Slides、不会重新分析 deck，也不会反写 Jira 或 Memory Service。',
+    ];
+};
+
+const buildWritebackSnapshotBasisLine = (
+    result: DisplaySlideAnalysisResult,
+    presentationId: string,
+    receivedAt: string,
+): string => {
+    const targetSlide = typeof result.summary.requestedSlideId === 'string' && result.summary.requestedSlideId.trim()
+        ? result.summary.requestedSlideId.trim()
+        : '未带明确目标 slide';
+    const receivedText = receivedAt || '本页加载时';
+
+    return `快照基准: 本次写回依据 ${receivedText} 收到的 presentation ${presentationId || 'unknown'} / 目标 ${targetSlide} 分析快照；应用前不会重新读取 deck、复查当前 slide/table/行列或确认协作编辑，若已切页、改表格或同事更新，请先回 Slides 重新分析。`;
+};
+
+const formatWritebackSnapshotAge = (receivedAtMs: number, nowMs = Date.now()): string => {
+    if (!Number.isFinite(receivedAtMs) || receivedAtMs <= 0) {
+        return '未知';
+    }
+
+    const ageMs = Math.max(0, nowMs - receivedAtMs);
+    if (ageMs < 60 * 1000) {
+        return '不到 1 分钟';
+    }
+
+    const ageMinutes = Math.floor(ageMs / (60 * 1000));
+    if (ageMinutes < 60) {
+        return `约 ${ageMinutes} 分钟`;
+    }
+
+    const ageHours = Math.floor(ageMinutes / 60);
+    const remainingMinutes = ageMinutes % 60;
+    if (ageHours < 24) {
+        return remainingMinutes > 0
+            ? `约 ${ageHours} 小时 ${remainingMinutes} 分钟`
+            : `约 ${ageHours} 小时`;
+    }
+
+    const ageDays = Math.floor(ageHours / 24);
+    const remainingHours = ageHours % 24;
+    return remainingHours > 0
+        ? `约 ${ageDays} 天 ${remainingHours} 小时`
+        : `约 ${ageDays} 天`;
+};
+
+const buildWritebackSnapshotAgeLine = (receivedAtMs: number): string => {
+    if (!Number.isFinite(receivedAtMs) || receivedAtMs <= 0) {
+        return '快照年龄: 本页没有可靠收到时间；写回前请回 Slides 重新分析，避免基于未知快照覆盖协作编辑。';
+    }
+
+    const ageMs = Math.max(0, Date.now() - receivedAtMs);
+    const ageText = formatWritebackSnapshotAge(receivedAtMs);
+    const actionText = ageMs >= WRITEBACK_SNAPSHOT_STALE_WARNING_MS
+        ? '已超过 10 分钟，建议先回 Slides 重新分析再写回。'
+        : '若 deck 已切页、表格重排或同事协作编辑，请先回 Slides 重新分析。';
+
+    return `快照年龄: 本页已持有这份分析快照${ageText}；${actionText}`;
+};
 
 const hasWritableColumnIndex = (columnIndex: unknown): columnIndex is number => (
     Number.isInteger(columnIndex) && (columnIndex as number) >= 0
@@ -333,6 +493,24 @@ const getFieldReviewHint = (suggestion: ProjectUpdateSuggestion, field: UpdateFi
     return `${UPDATE_FIELD_SHORT_LABELS[field]}缺少直接来源，不会默认写回。`;
 };
 
+const formatWritebackTargetText = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string => {
+    const slideLabel = suggestion.slideId
+        ? suggestion.slideId
+        : 'slide 未确认';
+    const tableLabel = suggestion.tableId
+        ? suggestion.tableId
+        : 'table 未确认';
+    const rowLabel = hasWritableColumnIndex(suggestion.rowIndex)
+        ? `表格第 ${suggestion.rowIndex + 1} 行`
+        : '行定位缺失';
+    const columnIndex = suggestion.columnIndices?.[field];
+    const columnLabel = hasWritableColumnIndex(columnIndex)
+        ? `${UPDATE_FIELD_SHORT_LABELS[field]}第 ${columnIndex + 1} 列`
+        : `${UPDATE_FIELD_SHORT_LABELS[field]}列定位缺失`;
+
+    return `写入目标: ${slideLabel} / ${tableLabel} / ${rowLabel} / ${columnLabel}`;
+};
+
 const formatUpdateFieldNames = (fields: UpdateField[]): string => (
     fields.map((field) => UPDATE_FIELD_SHORT_LABELS[field]).join('、')
 );
@@ -361,25 +539,209 @@ const normalizeForSkippedReasonMatch = (value: unknown): string => {
         .trim();
 };
 
-const applySkippedReasonMatchesField = (error: string, item: SelectedFieldPreviewItem): boolean => {
+const uniqueNormalizedMatchTokens = (values: unknown[]): string[] => {
+    const tokens: string[] = [];
+
+    values.forEach((value) => {
+        const normalized = normalizeForSkippedReasonMatch(value);
+        if (normalized && normalized.length > 1 && !tokens.includes(normalized)) {
+            tokens.push(normalized);
+        }
+    });
+
+    return tokens;
+};
+
+const getApplySkippedFieldMatchTokens = (item: SelectedFieldPreviewItem): string[] => (
+    uniqueNormalizedMatchTokens([
+        item.fieldLabel,
+        UPDATE_FIELD_LABELS[item.field],
+        UPDATE_FIELD_COLUMN_LABELS[item.field],
+        item.field,
+        ...UPDATE_FIELD_MATCH_ALIASES[item.field],
+    ])
+);
+
+const getApplySkippedTargetMatchTokens = (item: SelectedFieldPreviewItem): string[] => {
+    const targetText = item.targetText.replace(/^写入目标:\s*/, '');
+    const targetParts = targetText
+        .split('/')
+        .map((part) => part.trim())
+        .filter((part) => (
+            part &&
+            !/未确认|缺失/i.test(part)
+        ));
+
+    const rowMatch = targetText.match(/表格第\s*(\d+)\s*行/);
+    const columnMatch = targetText.match(/第\s*(\d+)\s*列/);
+    const rowNumber = rowMatch ? Number(rowMatch[1]) : undefined;
+    const columnNumber = columnMatch ? Number(columnMatch[1]) : undefined;
+    const generatedTokens: string[] = [];
+
+    if (Number.isInteger(rowNumber) && rowNumber && rowNumber > 0) {
+        generatedTokens.push(
+            `row ${rowNumber}`,
+            `row index ${rowNumber - 1}`,
+            `rowIndex ${rowNumber - 1}`,
+            `r${rowNumber}`,
+        );
+    }
+
+    if (Number.isInteger(columnNumber) && columnNumber && columnNumber > 0) {
+        generatedTokens.push(
+            `column ${columnNumber}`,
+            `column index ${columnNumber - 1}`,
+            `columnIndex ${columnNumber - 1}`,
+            `col ${columnNumber}`,
+            `c${columnNumber}`,
+        );
+    }
+
+    if (
+        Number.isInteger(rowNumber) &&
+        rowNumber &&
+        rowNumber > 0 &&
+        Number.isInteger(columnNumber) &&
+        columnNumber &&
+        columnNumber > 0
+    ) {
+        generatedTokens.push(
+            `row ${rowNumber} column ${columnNumber}`,
+            `r${rowNumber}c${columnNumber}`,
+        );
+    }
+
+    return uniqueNormalizedMatchTokens([...targetParts, ...generatedTokens]);
+};
+
+const getApplySkippedReasonMatchScore = (error: string, item: SelectedFieldPreviewItem): number => {
     const normalizedError = normalizeForSkippedReasonMatch(error);
     const projectParts = item.projectLabel.split('·').map((part) => part.trim()).filter(Boolean);
     const projectId = projectParts[0] || '';
     const projectName = projectParts.slice(1).join(' · ');
-    const projectMatched = Boolean(
-        (projectId && normalizedError.includes(normalizeForSkippedReasonMatch(projectId))) ||
-        (projectName && normalizedError.includes(normalizeForSkippedReasonMatch(projectName)))
-    );
-    const fieldMatched = [
-        item.fieldLabel,
-        UPDATE_FIELD_LABELS[item.field],
-        item.field,
-    ].some((fieldLabel) => normalizedError.includes(normalizeForSkippedReasonMatch(fieldLabel)));
+    const projectIdMatched = Boolean(projectId && normalizedError.includes(normalizeForSkippedReasonMatch(projectId)));
+    const projectNameMatched = Boolean(projectName && normalizedError.includes(normalizeForSkippedReasonMatch(projectName)));
+    const projectMatched = projectIdMatched || projectNameMatched;
+    const fieldMatched = getApplySkippedFieldMatchTokens(item)
+        .some((token) => normalizedError.includes(token));
+    const targetMatchCount = getApplySkippedTargetMatchTokens(item)
+        .filter((token) => normalizedError.includes(token))
+        .length;
 
-    return projectMatched && fieldMatched;
+    if (!projectMatched && !fieldMatched && targetMatchCount < 3) {
+        return 0;
+    }
+
+    if (!projectMatched && targetMatchCount < 2) {
+        return 0;
+    }
+
+    if (projectMatched && !fieldMatched && targetMatchCount < 2) {
+        return 0;
+    }
+
+    return (
+        (projectIdMatched ? 4 : 0) +
+        (projectNameMatched ? 2 : 0) +
+        (fieldMatched ? 4 : 0) +
+        targetMatchCount
+    );
+};
+
+const findApplySkippedHandoffMatch = (
+    error: string,
+    items: SelectedFieldPreviewItem[],
+): SelectedFieldPreviewItem | undefined => {
+    const matches = items
+        .map((item) => ({
+            item,
+            score: getApplySkippedReasonMatchScore(error, item),
+        }))
+        .filter((match) => match.score > 0)
+        .sort((a, b) => b.score - a.score);
+
+    if (matches.length === 0) {
+        return undefined;
+    }
+
+    if (matches.length > 1 && matches[0].score === matches[1].score) {
+        return undefined;
+    }
+
+    return matches[0].item;
+};
+
+const getSelectedFieldPreviewItemKey = (item: SelectedFieldPreviewItem): string => (
+    fieldKey(item.projectIndex, item.field)
+);
+
+const getSelectedFieldPreviewSignature = (items: SelectedFieldPreviewItem[]): string => (
+    items.map(getSelectedFieldPreviewItemKey).sort().join('|')
+);
+
+const getApplySkippedMatchSummary = (result: ApplyResultReceipt): ApplySkippedMatchSummary => {
+    const matchedKeys = new Set<string>();
+    const unmatchedReasons: string[] = [];
+
+    result.errors.forEach((reason) => {
+        const matchedItem = findApplySkippedHandoffMatch(reason, result.submittedItems);
+        if (matchedItem) {
+            matchedKeys.add(getSelectedFieldPreviewItemKey(matchedItem));
+        } else {
+            unmatchedReasons.push(reason);
+        }
+    });
+
+    return {
+        matchedKeys,
+        unmatchedReasons,
+    };
+};
+
+const getApplyConfirmedSubmittedItems = (result: ApplyResultReceipt): SelectedFieldPreviewItem[] => {
+    if (result.errors.length === 0) {
+        return result.submittedItems;
+    }
+
+    const skippedSummary = getApplySkippedMatchSummary(result);
+    if (skippedSummary.unmatchedReasons.length > 0) {
+        return [];
+    }
+
+    if (skippedSummary.matchedKeys.size === 0) {
+        return [];
+    }
+
+    return result.submittedItems.filter((item) => !skippedSummary.matchedKeys.has(getSelectedFieldPreviewItemKey(item)));
+};
+
+const getApplyMatchedSkippedSubmittedItems = (result: ApplyResultReceipt): SelectedFieldPreviewItem[] => {
+    if (result.errors.length === 0) {
+        return [];
+    }
+
+    const skippedSummary = getApplySkippedMatchSummary(result);
+    const emittedKeys = new Set<string>();
+    return result.submittedItems.filter((item) => {
+        const key = getSelectedFieldPreviewItemKey(item);
+        if (!skippedSummary.matchedKeys.has(key) || emittedKeys.has(key)) {
+            return false;
+        }
+
+        emittedKeys.add(key);
+        return true;
+    });
 };
 
 const getApplySkippedNextStep = (error: string): string => {
+    if (/没有返回具体跳过原因|未返回具体跳过原因|unexplained/i.test(error)) {
+        return '先回到 Slides 对照本次提交字段核对实际内容；未解释字段不要当成已写入，必要时重新分析后分批提交。';
+    }
+
+    if (/subrequest|invalid request|batchupdate rejected|atomic|整批/i.test(error)) {
+        return '先按本次字段目标核对 slide、表格、行列和权限；修复后整批重试，不要把这批字段当成已写入。';
+    }
+
     if (/缺少可写表格列|missing writable column/i.test(error)) {
         return '在 Slides 表格补齐对应列，或按建议值手动填入后重新分析。';
     }
@@ -395,9 +757,35 @@ const getApplySkippedNextStep = (error: string): string => {
     return '先核对本次提交字段和原因，再回到 Slides 手动处理或重新分析。';
 };
 
+const buildUnexplainedApplySkippedReason = (
+    updatedCount: number,
+    submittedCount: number,
+    unexplainedCount: number,
+): string => (
+    `Google Slides 返回已确认写回 ${updatedCount} 个字段，但本次提交 ${submittedCount} 个字段中还有 ${unexplainedCount} 个字段没有返回具体跳过原因；请回到 Slides 核对目标单元格，不要把未解释字段当成已落地。`
+);
+
+const normalizeApplySuccessSkippedErrors = (
+    updatedCount: number,
+    submittedItems: SelectedFieldPreviewItem[],
+    returnedErrors: string[],
+): string[] => {
+    const submittedCount = submittedItems.length;
+    const unexplainedCount = Math.max(0, submittedCount - updatedCount - returnedErrors.length);
+
+    if (unexplainedCount === 0) {
+        return returnedErrors;
+    }
+
+    return [
+        ...returnedErrors,
+        buildUnexplainedApplySkippedReason(updatedCount, submittedCount, unexplainedCount),
+    ];
+};
+
 const buildApplySkippedHandoffItems = (result: ApplyResultReceipt): ApplySkippedHandoffItem[] => (
     result.errors.map((reason) => {
-        const matchedItem = result.submittedItems.find((item) => applySkippedReasonMatchesField(reason, item));
+        const matchedItem = findApplySkippedHandoffMatch(reason, result.submittedItems);
 
         return {
             reason,
@@ -405,25 +793,179 @@ const buildApplySkippedHandoffItems = (result: ApplyResultReceipt): ApplySkipped
             fieldLabel: matchedItem?.fieldLabel || '跳过项',
             previewText: matchedItem?.previewText || '请根据跳过原因回到 Slides 手动核对。',
             evidenceText: matchedItem?.evidenceText || '没有匹配到字段级回执；请优先查看原始跳过原因。',
+            targetText: matchedItem?.targetText || '写入目标: 未匹配到字段级定位；请按跳过原因回到 Slides 手动核对。',
             nextStep: getApplySkippedNextStep(reason),
             matched: Boolean(matchedItem),
         };
     })
 );
 
-const formatApplySkippedHandoffChecklist = (items: ApplySkippedHandoffItem[]): string => (
-    items.map((item, index) => [
-        `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
-        `   建议: ${item.previewText}`,
-        `   依据: ${item.evidenceText}`,
-        `   跳过原因: ${item.reason}`,
-        `   下一步: ${item.nextStep}`,
-    ].join('\n')).join('\n\n')
+const formatApplySkippedHandoffChecklist = (
+    result: ApplyResultReceipt,
+    items: ApplySkippedHandoffItem[],
+    presentationId = '',
+): string => {
+    if (items.length === 0) {
+        return '';
+    }
+
+    const confirmedItems = getApplyConfirmedSubmittedItems(result);
+    const skippedMatchSummary = getApplySkippedMatchSummary(result);
+    const confirmedBatchLine = skippedMatchSummary.unmatchedReasons.length > 0
+        ? `Google Slides 已确认写回 ${result.updatedCount} 个字段，但 ${skippedMatchSummary.unmatchedReasons.length} 个跳过或缺失原因未能匹配到具体字段；已隐藏字段级确认列表。`
+        : confirmedItems.length > 0
+        ? getAtomicBatchSummary(confirmedItems)
+        : '没有可确认字段进入 Google Slides batchUpdate。';
+
+    return [
+        'Google Slides 跳过字段接管清单',
+        `Presentation: ${presentationId || 'unknown'}`,
+        `Confirmed writeback: Google Slides 已确认写回 ${result.updatedCount} 个字段。`,
+        `Skipped or unconfirmed: ${result.skippedCount} 项没有字段级写入确认；可能是本地预检跳过、API 跳过，或成功回包缺少具体原因。`,
+        `Confirmed batch: ${confirmedBatchLine}`,
+        `Selected before precheck: ${getAtomicBatchSummary(result.submittedItems)}`,
+        'Boundary: Google Slides 已确认已发送批次整体完成；下列跳过或未解释项没有字段级写入确认，也不应当成已落地。',
+        'Non-effects: 未选、无法写回、仅风险关注项不会写入，也不会反写 Jira 或 Memory Service。',
+        '',
+        ...items.map((item, index) => [
+            `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+            `   建议: ${item.previewText}`,
+            `   目标: ${item.targetText.replace(/^写入目标:\s*/, '')}`,
+            `   依据: ${item.evidenceText}`,
+            `   跳过原因: ${item.reason}`,
+            `   下一步: ${item.nextStep}`,
+        ].join('\n')),
+    ].join('\n');
+};
+
+const buildApplyFailureHandoffItems = (failure: ApplyFailureReceipt): ApplySkippedHandoffItem[] => {
+    const reason = failure.errors[0] || failure.errorMessage || 'Google Slides 未确认写回结果';
+    const nextStep = getApplySkippedNextStep(reason);
+
+    return failure.submittedItems.map((item) => ({
+        reason,
+        projectLabel: item.projectLabel,
+        fieldLabel: item.fieldLabel,
+        previewText: item.previewText,
+        evidenceText: item.evidenceText,
+        targetText: item.targetText,
+        nextStep,
+        matched: true,
+    }));
+};
+
+const formatApplyFailureHandoffChecklist = (
+    failure: ApplyFailureReceipt,
+    items: ApplySkippedHandoffItem[],
+): string => {
+    if (items.length === 0) {
+        return '';
+    }
+
+    return [
+        'Google Slides 写回失败接管清单',
+        `Failure: ${failure.errorMessage || 'Google Slides 未确认写回结果'}`,
+        `Boundary: Google Slides 没有确认这批字段写入；不要把它们当成已落地。`,
+        'Reasons:',
+        ...failure.errors.map((error) => `- ${error}`),
+        '',
+        ...items.map((item, index) => [
+            `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+            `   建议: ${item.previewText}`,
+            `   目标: ${item.targetText.replace(/^写入目标:\s*/, '')}`,
+            `   依据: ${item.evidenceText}`,
+            `   失败原因: ${item.reason}`,
+            `   下一步: ${item.nextStep}`,
+        ].join('\n')),
+    ].join('\n');
+};
+
+const getAtomicBatchProjectCount = (items: SelectedFieldPreviewItem[]): number => (
+    new Set(items.map((item) => item.projectIndex)).size
 );
+
+const getAtomicBatchRequestCount = (items: SelectedFieldPreviewItem[]): number => (
+    items.length * 2
+);
+
+const getAtomicBatchSummary = (items: SelectedFieldPreviewItem[]): string => (
+    `一次原子批量写回: ${items.length} 个字段 / ${getAtomicBatchProjectCount(items)} 个项目，约 ${getAtomicBatchRequestCount(items)} 个 Slides 子请求。`
+);
+
+const ATOMIC_BATCH_BOUNDARY_TEXT = 'Google Slides batchUpdate 任一子请求无效时，整批不会写入；本地预检跳过项不会进入这批请求。';
+
+const buildSelectedWritebackDecisionReceiptLines = (
+    items: SelectedFieldPreviewItem[],
+    visibleSelectedUpdateCount: number,
+    hiddenSelectedUpdateCount: number,
+    selectedReviewFieldCount: number,
+    snapshotBasisLine = '',
+    snapshotAgeLine = '',
+): string[] => {
+    if (items.length === 0) {
+        return [];
+    }
+
+    const sourcedFieldCount = Math.max(0, items.length - selectedReviewFieldCount);
+    const projectCount = getAtomicBatchProjectCount(items);
+    const reviewLine = selectedReviewFieldCount > 0
+        ? `复核状态: ${sourcedFieldCount} 个来源充分，${selectedReviewFieldCount} 个由你手动纳入；应用前仍需核对建议值、来源和目标单元格。`
+        : `复核状态: ${sourcedFieldCount} 个字段均有直接来源；应用前仍保留目标单元格核对。`;
+
+    return [
+        `提交范围: ${items.length} 个字段 / ${projectCount} 个项目；当前视图 ${visibleSelectedUpdateCount} 个，隐藏 ${hiddenSelectedUpdateCount} 个。`,
+        ...(snapshotBasisLine ? [snapshotBasisLine] : []),
+        ...(snapshotAgeLine ? [snapshotAgeLine] : []),
+        reviewLine,
+        '执行边界: 只把已选字段发给 Google Slides；未选、无法写回、仅风险关注项不会写入，也不会反写 Jira 或 Memory Service。',
+    ];
+};
+
+const buildReviewPacketCopyReceiptLines = (
+    receipt: ReviewPacketCopyReceipt,
+    currentSelectionSignature: string,
+    currentSelectedFieldCount: number,
+): string[] => {
+    const presentationText = receipt.presentationId || 'unknown';
+    const stale = receipt.selectionSignature !== currentSelectionSignature ||
+        receipt.copiedFieldCount !== currentSelectedFieldCount;
+    const statusLine = receipt.status === 'success'
+        ? `复核清单复制回执: ${receipt.copiedAt} 已复制 ${receipt.copiedFieldCount} 个字段 / ${receipt.copiedProjectCount} 个项目；presentation ${presentationText}。`
+        : `复核清单复制回执: 本机剪贴板未确认写入；${receipt.copiedFieldCount} 个字段仍只停留在页面预览。`;
+    const selectionLine = `复制快照: 当时当前视图 ${receipt.visibleSelectedUpdateCount} 个，隐藏 ${receipt.hiddenSelectedUpdateCount} 个，人工纳入 ${receipt.selectedReviewFieldCount} 个。`;
+    const staleLine = stale
+        ? `当前选择已变更: 现在已选 ${currentSelectedFieldCount} 个字段；剪贴板里的旧清单不会自动更新，提交前请重新复制或以页面预览为准。`
+        : '当前选择仍匹配这份复制清单；提交前仍以页面预览和 Google Slides 回包为准。';
+    const boundaryLine = receipt.status === 'success'
+        ? '非效果: 复制只写入本机剪贴板，不会写回 Slides、不重新分析 deck，也不会反写 Jira 或 Memory Service。'
+        : '失败边界: 页面没有提交任何字段，也没有写回 Slides、Jira 或 Memory Service；请直接查看页面预览或稍后重试复制。';
+
+    return [statusLine, selectionLine, staleLine, boundaryLine];
+};
+
+const buildApplySubmissionReceiptLines = (
+    items: SelectedFieldPreviewItem[],
+    presentationId: string,
+    snapshotBasisLine = '',
+    snapshotAgeLine = '',
+): string[] => {
+    if (items.length === 0) {
+        return [];
+    }
+
+    return [
+        `提交中回执: 已向原 Google Slides 页面发送 ${items.length} 个字段 / ${getAtomicBatchProjectCount(items)} 个项目的写回请求；presentation ${presentationId || 'unknown'}。`,
+        ...(snapshotBasisLine ? [snapshotBasisLine] : []),
+        ...(snapshotAgeLine ? [snapshotAgeLine] : []),
+        `锁定批次: ${getAtomicBatchSummary(items)}字段勾选、筛选视图、全选和复核队列已暂时锁定，等待 Google Slides API 返回。`,
+        '等待边界: 本页不会追加新字段、不会重新分析 deck、不会反写 Jira 或 Memory Service；如果超时，先回到 Slides 核对实际内容。',
+    ];
+};
 
 const formatSelectedWritebackReviewPacket = (
     items: SelectedFieldPreviewItem[],
     presentationId: string,
+    decisionReceiptLines: string[] = [],
 ): string => {
     if (items.length === 0) {
         return '';
@@ -433,10 +975,20 @@ const formatSelectedWritebackReviewPacket = (
         'Google Slides 写回复核清单',
         `Presentation: ${presentationId || 'unknown'}`,
         `Selected fields: ${items.length}`,
+        `Batch: ${getAtomicBatchSummary(items)}`,
+        `Batch boundary: ${ATOMIC_BATCH_BOUNDARY_TEXT}`,
         '',
+        ...(decisionReceiptLines.length > 0
+            ? [
+                'Decision receipt:',
+                ...decisionReceiptLines.map((line) => `- ${line}`),
+                '',
+            ]
+            : []),
         ...items.map((item, index) => [
             `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
             `   变更: ${item.previewText}`,
+            `   目标: ${item.targetText.replace(/^写入目标:\s*/, '')}`,
             `   依据: ${item.evidenceText}`,
             `   复核: ${item.reviewLabel}`,
         ].join('\n')),
@@ -526,6 +1078,7 @@ const buildSelectedFieldPreviewItem = (
             ? `${suggestion.currentComments ? '追加备注' : '设置备注'}: ${suggestedValue}`
             : `${currentValue} -> ${suggestedValue}`,
         evidenceText: compactPreviewText(rawEvidenceText, SELECTED_FIELD_EVIDENCE_TEXT_LIMIT),
+        targetText: formatWritebackTargetText(suggestion, field),
         reviewKind,
         reviewLabel: reviewKind === 'ready' ? '来源充分' : '需人工复核',
     };
@@ -682,12 +1235,19 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
 const SlidesAnalysis: React.FC = () => {
     const [analysisResult, setAnalysisResult] = useState<DisplaySlideAnalysisResult | null>(null);
     const [presentationId, setPresentationId] = useState<string>('');
+    const [analysisReceivedAt, setAnalysisReceivedAt] = useState<string>('');
+    const [analysisReceivedAtMs, setAnalysisReceivedAtMs] = useState<number>(0);
     const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
     const [isApplying, setIsApplying] = useState(false);
     const [selectedFields, setSelectedFields] = useState<Record<string, boolean>>({});
     const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
     const [lastApplyResult, setLastApplyResult] = useState<ApplyResultReceipt | null>(null);
+    const [lastApplyFailure, setLastApplyFailure] = useState<ApplyFailureReceipt | null>(null);
     const [loadError, setLoadError] = useState<string>('');
+    const [loadRecoveryReceipt, setLoadRecoveryReceipt] = useState<string>('');
+    const [selectionScopeReceipt, setSelectionScopeReceipt] = useState<string>('');
+    const [applySubmissionReceiptLines, setApplySubmissionReceiptLines] = useState<string[]>([]);
+    const [reviewPacketCopyReceipt, setReviewPacketCopyReceipt] = useState<ReviewPacketCopyReceipt | null>(null);
     const pendingApplyPreviewItemsRef = useRef<SelectedFieldPreviewItem[]>([]);
     const applyTimeoutRef = useRef<number | null>(null);
     const initialDataTimeoutRef = useRef<number | null>(null);
@@ -731,6 +1291,10 @@ const SlidesAnalysis: React.FC = () => {
         if (!analysisResult) {
             setSelectedFields({});
             setLastApplyResult(null);
+            setSelectionScopeReceipt('');
+            setApplySubmissionReceiptLines([]);
+            setReviewPacketCopyReceipt(null);
+            setAnalysisReceivedAtMs(0);
             return;
         }
 
@@ -743,15 +1307,25 @@ const SlidesAnalysis: React.FC = () => {
 
         setSelectedFields(defaults);
         setLastApplyResult(null);
+        setSelectionScopeReceipt('');
+        setApplySubmissionReceiptLines([]);
+        setReviewPacketCopyReceipt(null);
     }, [analysisResult]);
 
-    const initAnalysisPage = () => {
+    const initAnalysisPage = (isRetry = false) => {
         try {
             setLoadError('');
             clearInitialDataTimeout();
 
             // 告知父窗口页面已加载完成，请求数据
             if (window.opener) {
+                if (isRetry) {
+                    setLoadRecoveryReceipt(
+                        '重新请求回执: 只向原 Google Slides 页面请求当前分析结果快照；不会重新分析 deck、不会写回 Slides、不会反写 Jira 或 Memory Service。',
+                    );
+                } else {
+                    setLoadRecoveryReceipt('');
+                }
                 debugLog('向父窗口请求分析数据');
                 window.opener.postMessage({ type: 'REQUEST_ANALYSIS_DATA' }, getAllowedOpenerOrigin());
                 initialDataTimeoutRef.current = window.setTimeout(() => {
@@ -763,6 +1337,11 @@ const SlidesAnalysis: React.FC = () => {
                 }, INITIAL_DATA_TIMEOUT_MS);
             } else {
                 const message = '无法与父窗口通信，请从 Google Slides 页面重新触发分析。';
+                setLoadRecoveryReceipt(
+                    isRetry
+                        ? '重新请求回执: 未找到原 Google Slides 父窗口；没有重新分析、没有写回 Slides，也没有修改 Jira 或 Memory Service。'
+                        : '',
+                );
                 setLoadError(message);
                 showToast(message, 'error');
             }
@@ -795,36 +1374,65 @@ const SlidesAnalysis: React.FC = () => {
                 debugLog('收到分析数据');
                 clearInitialDataTimeout();
                 const data: AnalysisData = event.data.data;
+                const receivedAtMs = Date.now();
                 setAnalysisResult(data.result);
                 setPresentationId(data.presentationId);
+                setAnalysisReceivedAt(formatSnapshotReceivedAt(receivedAtMs));
+                setAnalysisReceivedAtMs(receivedAtMs);
                 setLoadError('');
+                setLoadRecoveryReceipt('');
             } else if (event.data.type === 'UPDATE_SUCCESS') {
                 debugLog('收到更新成功消息: ' + JSON.stringify(event.data));
                 clearApplyTimeout();
                 const updatedCount = Number(event.data.updatedCount) || 0;
-                const skippedErrors = Array.isArray(event.data.errors)
+                const returnedSkippedErrors = Array.isArray(event.data.errors)
                     ? event.data.errors
                         .filter((error): error is string => typeof error === 'string' && error.trim().length > 0)
                         .map((error) => error.trim())
                     : [];
+                const submittedItems = pendingApplyPreviewItemsRef.current;
+                const skippedErrors = normalizeApplySuccessSkippedErrors(
+                    updatedCount,
+                    submittedItems,
+                    returnedSkippedErrors,
+                );
                 const skippedCount = skippedErrors.length;
                 const skippedSummary = skippedCount > 0 ? `，跳过 ${skippedCount} 项` : '';
                 showToast(`更新成功: 已写回 ${updatedCount} 个字段${skippedSummary}`, skippedCount > 0 ? 'warning' : 'success');
                 setIsApplying(false);
+                setApplySubmissionReceiptLines([]);
+                setReviewPacketCopyReceipt(null);
                 setSelectedFields({});
                 setLastApplyResult({
                     updatedCount,
                     skippedCount,
                     errors: skippedErrors,
-                    submittedItems: pendingApplyPreviewItemsRef.current,
+                    submittedItems,
                 });
+                setLastApplyFailure(null);
                 pendingApplyPreviewItemsRef.current = [];
             } else if (event.data.type === 'UPDATE_ERROR') {
                 clearApplyTimeout();
-                showToast('更新失败: ' + (event.data.errorMessage || '未知错误'), 'error');
+                const errorMessage = typeof event.data.errorMessage === 'string' && event.data.errorMessage.trim()
+                    ? event.data.errorMessage.trim()
+                    : '未知错误';
+                const errors = Array.isArray(event.data.errors)
+                    ? event.data.errors
+                        .filter((error): error is string => typeof error === 'string' && error.trim().length > 0)
+                        .map((error) => error.trim())
+                    : [errorMessage];
+                showToast('更新失败: ' + errorMessage, 'error');
                 debugLog('收到更新错误消息: ' + JSON.stringify(event.data));
                 setIsApplying(false);
+                setApplySubmissionReceiptLines([]);
+                setReviewPacketCopyReceipt(null);
                 setLastApplyResult(null);
+                setLastApplyFailure({
+                    errorMessage,
+                    errors,
+                    submittedItems: pendingApplyPreviewItemsRef.current,
+                });
+                pendingApplyPreviewItemsRef.current = [];
             }
         } catch (err) {
             debugLog('处理消息时出错: ' + (err as Error).message);
@@ -854,6 +1462,7 @@ const SlidesAnalysis: React.FC = () => {
             });
             return next;
         });
+        setSelectionScopeReceipt('');
     };
 
     const handleFieldSelection = (projectIndex: number, field: UpdateField, isChecked: boolean) => {
@@ -865,6 +1474,7 @@ const SlidesAnalysis: React.FC = () => {
             ...current,
             [fieldKey(projectIndex, field)]: isChecked
         }));
+        setSelectionScopeReceipt('');
     };
 
     const isFieldSelected = (projectIndex: number, field: UpdateField): boolean => {
@@ -891,11 +1501,18 @@ const SlidesAnalysis: React.FC = () => {
         const defaults = buildHighConfidenceDefaults();
         const restoredCount = Object.keys(defaults).length;
         setSelectedFields(defaults);
+        setSelectionScopeReceipt(
+            `选择范围回执: 已恢复 ${restoredCount} 个高可信默认字段；这只更新结果页本地提交范围，没有重新分析 deck、没有写回 Slides、Jira 或 Memory Service。`,
+        );
         showToast(`已恢复 ${restoredCount} 个高可信默认选择`, restoredCount > 0 ? 'info' : 'warning');
     };
 
     const handleClearSelectedFields = () => {
+        const clearedCount = selectedUpdateCount;
         setSelectedFields({});
+        setSelectionScopeReceipt(
+            `选择范围回执: 已清空 ${clearedCount} 个已选字段；当前没有字段会提交，没有重新分析 deck、没有写回 Slides、Jira 或 Memory Service。`,
+        );
         showToast('已清空选择', 'info');
     };
 
@@ -977,11 +1594,13 @@ const SlidesAnalysis: React.FC = () => {
     const analyzedSlideCount = analysisResult?.summary.analyzedSlideCount;
     const totalSlideCount = analysisResult?.summary.totalSlideCount;
     const requestedSlideId = analysisResult?.summary.requestedSlideId;
-    const shouldShowAnalysisScope = analysisWarnings.length > 0 || (
-        typeof analyzedSlideCount === 'number' &&
-        typeof totalSlideCount === 'number' &&
-        totalSlideCount > 1
+    const analysisScopeReceiptLines = buildAnalysisScopeReceiptLines(
+        analyzedSlideCount,
+        totalSlideCount,
+        requestedSlideId,
+        analysisWarnings.length,
     );
+    const shouldShowAnalysisScope = analysisScopeReceiptLines.length > 0;
 
     const filteredSuggestionEntries = analysisResult
         ? analysisResult.updateSuggestions
@@ -1010,8 +1629,48 @@ const SlidesAnalysis: React.FC = () => {
                 .map((field) => buildSelectedFieldPreviewItem(suggestion, projectIndex, field))
         ))
         : [];
+    const selectedFieldPreviewSignature = getSelectedFieldPreviewSignature(selectedFieldPreviewItems);
     const selectedFieldPreviewVisibleItems = selectedFieldPreviewItems.slice(0, SELECTED_FIELD_PREVIEW_LIMIT);
     const selectedFieldPreviewOverflowCount = Math.max(0, selectedFieldPreviewItems.length - selectedFieldPreviewVisibleItems.length);
+    const writebackSnapshotBasisLine = analysisResult
+        ? buildWritebackSnapshotBasisLine(analysisResult, presentationId, analysisReceivedAt)
+        : '';
+    const writebackSnapshotAgeLine = analysisResult
+        ? buildWritebackSnapshotAgeLine(analysisReceivedAtMs)
+        : '';
+    const selectedWritebackDecisionReceiptLines = buildSelectedWritebackDecisionReceiptLines(
+        selectedFieldPreviewItems,
+        visibleSelectedUpdateCount,
+        hiddenSelectedUpdateCount,
+        selectedReviewFieldCount,
+        writebackSnapshotBasisLine,
+        writebackSnapshotAgeLine,
+    );
+    const analysisSnapshotReceiptLines = analysisResult
+        ? buildAnalysisSnapshotReceiptLines(
+            analysisResult,
+            presentationId,
+            analysisReceivedAt,
+            availableUpdateFieldCount,
+            defaultSelectedFieldCount,
+            selectedUpdateCount,
+        )
+        : [];
+    const hasSelectedWritebackDecisionAttention = hiddenSelectedUpdateCount > 0 || selectedReviewFieldCount > 0;
+    const reviewPacketCopyReceiptLines = reviewPacketCopyReceipt
+        ? buildReviewPacketCopyReceiptLines(
+            reviewPacketCopyReceipt,
+            selectedFieldPreviewSignature,
+            selectedFieldPreviewItems.length,
+        )
+        : [];
+    const reviewPacketCopyReceiptIsStale = Boolean(
+        reviewPacketCopyReceipt &&
+        (
+            reviewPacketCopyReceipt.selectionSignature !== selectedFieldPreviewSignature ||
+            reviewPacketCopyReceipt.copiedFieldCount !== selectedFieldPreviewItems.length
+        ),
+    );
 
     const fieldReviewQueueItems: FieldReviewQueueItem[] = analysisResult
         ? analysisResult.updateSuggestions.flatMap((suggestion, projectIndex) => {
@@ -1050,6 +1709,86 @@ const SlidesAnalysis: React.FC = () => {
     const reviewFieldQueueCount = fieldReviewQueueItems.filter((item) => item.kind === 'review').length;
     const blockedFieldQueueCount = fieldReviewQueueItems.filter((item) => item.kind === 'blocked').length;
 
+    const renderEmptyFilterState = () => {
+        const actionButtons: React.ReactNode[] = [];
+        const addAction = (
+            id: string,
+            label: string,
+            onClick: () => void,
+            disabled = false,
+        ) => {
+            actionButtons.push(
+                <button
+                    key={id}
+                    id={id}
+                    type="button"
+                    className="btn-quiet empty-filter-action"
+                    onClick={onClick}
+                    disabled={isApplying || disabled}
+                >
+                    {label}
+                </button>,
+            );
+        };
+
+        let title = '当前视图没有匹配的更新建议';
+        let detail = '这只是筛选结果为空，不代表重新分析 deck，也没有写回 Slides、Jira 或 Memory Service。';
+
+        if (reviewFilter === 'selected') {
+            title = selectedUpdateCount === 0
+                ? '当前没有已选字段'
+                : '当前已选字段不在这个筛选视图里';
+            detail = selectedUpdateCount === 0
+                ? '可以恢复高可信默认字段，再回到已选视图核对本次提交范围。'
+                : '已选字段仍会保留在全部视图里，应用前请先查看写回决策回执。';
+            addAction(
+                'empty-filter-restore-defaults',
+                '恢复高可信默认',
+                handleRestoreHighConfidenceDefaults,
+                defaultSelectedFieldCount === 0,
+            );
+            addAction('empty-filter-show-all', '查看全部建议', () => setReviewFilter('all'));
+        } else if (reviewFilter === 'review') {
+            title = '没有需要人工复核的建议';
+            detail = '当前结果没有低可信或缺少直接来源的可写字段；仍请在全部视图核对来源和目标单元格。';
+            addAction('empty-filter-show-all', '查看全部建议', () => setReviewFilter('all'));
+            if (selectedUpdateCount > 0) {
+                addAction('empty-filter-show-selected', '查看已选字段', () => setReviewFilter('selected'));
+            }
+        } else if (reviewFilter === 'risk') {
+            title = '没有风险关注项';
+            detail = '当前解析没有可见风险依据；这不代表 Slides 已更新，也不会修改任何外部系统。';
+            addAction('empty-filter-show-all', '查看全部建议', () => setReviewFilter('all'));
+            if (selectedUpdateCount > 0) {
+                addAction('empty-filter-show-selected', '查看已选字段', () => setReviewFilter('selected'));
+            }
+        } else if (reviewFilter === 'blocked') {
+            title = '没有无法写回字段';
+            detail = '当前建议都有可写目标或没有字段差异；写回前仍要核对字段级来源和 Google Slides 原子批次。';
+            addAction('empty-filter-show-all', '查看全部建议', () => setReviewFilter('all'));
+            if (reviewFieldQueueCount > 0) {
+                addAction('empty-filter-show-review', '查看需复核', () => setReviewFilter('review'));
+            }
+        } else {
+            addAction('empty-filter-show-selected', '查看已选字段', () => setReviewFilter('selected'), selectedUpdateCount === 0);
+        }
+
+        return (
+            <div className="empty-filter-state" role="status" aria-live="polite">
+                <div className="empty-filter-title">{title}</div>
+                <div className="empty-filter-detail">{detail}</div>
+                <div className="empty-filter-boundary">
+                    筛选或恢复选择只改变结果页本地选择；不会重新分析 deck、写回 Slides、Jira 或 Memory Service。
+                </div>
+                {actionButtons.length > 0 && (
+                    <div className="empty-filter-actions">
+                        {actionButtons}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     const handleShowSelectedFields = () => {
         setReviewFilter('selected');
     };
@@ -1060,6 +1799,7 @@ const SlidesAnalysis: React.FC = () => {
         }
 
         const removedCount = hiddenSelectedUpdateCount;
+        const remainingCount = Math.max(0, selectedUpdateCount - removedCount);
 
         setSelectedFields((current) => {
             const next: Record<string, boolean> = {};
@@ -1076,6 +1816,11 @@ const SlidesAnalysis: React.FC = () => {
             return next;
         });
 
+        setSelectionScopeReceipt(
+            removedCount > 0
+                ? `选择范围回执: 已移除 ${removedCount} 个当前筛选外的隐藏选择，保留 ${remainingCount} 个当前视图字段；这只收敛本地提交范围，没有重新分析 deck、没有写回 Slides、Jira 或 Memory Service。`
+                : '选择范围回执: 当前筛选没有隐藏选择，提交范围未改变；没有重新分析 deck、没有写回 Slides、Jira 或 Memory Service。',
+        );
         showToast(
             removedCount > 0
                 ? `已移除 ${removedCount} 个当前筛选外的选择`
@@ -1085,13 +1830,30 @@ const SlidesAnalysis: React.FC = () => {
     };
 
     const handleCopySelectedWritebackReview = async () => {
-        const reviewPacket = formatSelectedWritebackReviewPacket(selectedFieldPreviewItems, presentationId);
+        const reviewPacket = formatSelectedWritebackReviewPacket(
+            selectedFieldPreviewItems,
+            presentationId,
+            selectedWritebackDecisionReceiptLines,
+        );
         if (!reviewPacket) {
             showToast('没有已选字段可复制', 'warning');
             return;
         }
 
         const copied = await copyTextToClipboard(reviewPacket);
+        const receipt: ReviewPacketCopyReceipt = {
+            status: copied ? 'success' : 'failed',
+            copiedAt: formatSnapshotReceivedAt(Date.now()),
+            copiedFieldCount: selectedFieldPreviewItems.length,
+            copiedProjectCount: getAtomicBatchProjectCount(selectedFieldPreviewItems),
+            visibleSelectedUpdateCount,
+            hiddenSelectedUpdateCount,
+            selectedReviewFieldCount,
+            presentationId,
+            selectionSignature: selectedFieldPreviewSignature,
+        };
+        setReviewPacketCopyReceipt(receipt);
+
         if (copied) {
             showToast(`已复制 ${selectedFieldPreviewItems.length} 个字段写回复核清单`, 'success');
         } else {
@@ -1110,6 +1872,9 @@ const SlidesAnalysis: React.FC = () => {
             
             debugLog('选择了 ' + selectedUpdateCount + ' 个更新项');
             setLastApplyResult(null);
+            setLastApplyFailure(null);
+            setSelectionScopeReceipt('');
+            setReviewPacketCopyReceipt(null);
             pendingApplyPreviewItemsRef.current = selectedFieldPreviewItems;
 
             const selectedUpdates = analysisResult.updateSuggestions
@@ -1167,17 +1932,31 @@ const SlidesAnalysis: React.FC = () => {
                 clearApplyTimeout();
                 window.opener.postMessage(message, getAllowedOpenerOrigin());
                 showToast('正在应用更新...', 'info');
+                setApplySubmissionReceiptLines(buildApplySubmissionReceiptLines(
+                    selectedFieldPreviewItems,
+                    presentationId,
+                    writebackSnapshotBasisLine,
+                    writebackSnapshotAgeLine,
+                ));
                 setIsApplying(true);
                 applyTimeoutRef.current = window.setTimeout(() => {
                     applyTimeoutRef.current = null;
+                    const submittedItems = pendingApplyPreviewItemsRef.current;
                     pendingApplyPreviewItemsRef.current = [];
                     setIsApplying(false);
+                    setApplySubmissionReceiptLines([]);
                     setLastApplyResult(null);
+                    setLastApplyFailure({
+                        errorMessage: '写回请求超时，未收到 Google Slides 页面返回结果。',
+                        errors: ['写回结果未知；请先回到 Slides 确认实际内容，再决定是否重新分析和提交。'],
+                        submittedItems,
+                    });
                     showToast('写回请求超时，请回到 Slides 页面确认是否已更新后再重试', 'warning');
                     debugLog('写回请求超时，未收到父窗口结果消息');
                 }, APPLY_TIMEOUT_MS);
             } else {
                 pendingApplyPreviewItemsRef.current = [];
+                setApplySubmissionReceiptLines([]);
                 showToast('无法与父窗口通信，请重新打开分析窗口', 'error');
                 debugLog('父窗口引用不存在');
             }
@@ -1185,6 +1964,7 @@ const SlidesAnalysis: React.FC = () => {
             clearApplyTimeout();
             pendingApplyPreviewItemsRef.current = [];
             setIsApplying(false);
+            setApplySubmissionReceiptLines([]);
             showToast('更新操作失败: ' + (err as Error).message, 'error');
             debugLog('错误: ' + (err as Error).message);
             console.error(err);
@@ -1200,7 +1980,11 @@ const SlidesAnalysis: React.FC = () => {
             return;
         }
 
-        const checklist = formatApplySkippedHandoffChecklist(buildApplySkippedHandoffItems(lastApplyResult));
+        const checklist = formatApplySkippedHandoffChecklist(
+            lastApplyResult,
+            buildApplySkippedHandoffItems(lastApplyResult),
+            presentationId,
+        );
         if (!checklist) {
             return;
         }
@@ -1210,6 +1994,53 @@ const SlidesAnalysis: React.FC = () => {
             showToast('已复制跳过字段接管清单', 'success');
         } else {
             showToast('无法复制清单，请直接查看完成面板中的人工接管项', 'warning');
+        }
+    };
+
+    const handleReselectApplySkippedFields = () => {
+        if (!lastApplyResult) {
+            return;
+        }
+
+        const matchedItems = getApplyMatchedSkippedSubmittedItems(lastApplyResult);
+        if (matchedItems.length === 0) {
+            setSelectionScopeReceipt(
+                '选择范围回执: 当前跳过原因没有唯一匹配到字段；未恢复任何提交选择，也没有写回 Slides、Jira 或 Memory Service。',
+            );
+            showToast('没有可重选的字段级跳过项', 'warning');
+            return;
+        }
+
+        const skippedSummary = getApplySkippedMatchSummary(lastApplyResult);
+        const nextSelectedFields: Record<string, boolean> = {};
+        matchedItems.forEach((item) => {
+            nextSelectedFields[getSelectedFieldPreviewItemKey(item)] = true;
+        });
+
+        setSelectedFields(nextSelectedFields);
+        setReviewFilter('selected');
+        setSelectionScopeReceipt(
+            `选择范围回执: 已重新选择 ${matchedItems.length} 个已匹配跳过字段；这只恢复结果页本地提交范围，不会立即重试、不会写回 Slides，也不会反写 Jira 或 Memory Service。${skippedSummary.unmatchedReasons.length > 0 ? ` 另有 ${skippedSummary.unmatchedReasons.length} 项未匹配跳过原因仍需人工核对。` : ''}`,
+        );
+        showToast(`已重新选择 ${matchedItems.length} 个跳过字段`, 'info');
+    };
+
+    const handleCopyApplyFailureHandoff = async () => {
+        if (!lastApplyFailure || lastApplyFailure.submittedItems.length === 0) {
+            return;
+        }
+
+        const items = buildApplyFailureHandoffItems(lastApplyFailure);
+        const checklist = formatApplyFailureHandoffChecklist(lastApplyFailure, items);
+        if (!checklist) {
+            return;
+        }
+
+        const copied = await copyTextToClipboard(checklist);
+        if (copied) {
+            showToast('已复制失败字段接管清单', 'success');
+        } else {
+            showToast('无法复制失败清单，请直接查看未完成字段回执', 'warning');
         }
     };
 
@@ -1276,7 +2107,7 @@ const SlidesAnalysis: React.FC = () => {
                             <button
                                 type="button"
                                 className="btn-secondary"
-                                onClick={initAnalysisPage}
+                                onClick={() => initAnalysisPage(true)}
                                 disabled={!window.opener}
                             >
                                 重新请求数据
@@ -1284,6 +2115,14 @@ const SlidesAnalysis: React.FC = () => {
                         </div>
                     ) : (
                         <p className="loading-hint">请保持原 Google Slides 页面打开。</p>
+                    )}
+                    {loadRecoveryReceipt && (
+                        <div
+                            className="load-recovery-receipt"
+                            role="status"
+                        >
+                            {loadRecoveryReceipt}
+                        </div>
                     )}
                 </div>
                 {toast && (
@@ -1301,10 +2140,36 @@ const SlidesAnalysis: React.FC = () => {
     const applySkippedHandoffItems = lastApplyResult
         ? buildApplySkippedHandoffItems(lastApplyResult)
         : [];
+    const applySkippedMatchSummary = lastApplyResult
+        ? getApplySkippedMatchSummary(lastApplyResult)
+        : undefined;
+    const applyHasUnmatchedSkippedReasons = Boolean(applySkippedMatchSummary?.unmatchedReasons.length);
     const applySkippedHandoffVisibleItems = applySkippedHandoffItems.slice(0, APPLY_SKIPPED_HANDOFF_LIMIT);
     const applySkippedHandoffOverflowCount = Math.max(
         0,
         applySkippedHandoffItems.length - applySkippedHandoffVisibleItems.length
+    );
+    const applyConfirmedSubmittedItems = lastApplyResult
+        ? getApplyConfirmedSubmittedItems(lastApplyResult)
+        : [];
+    const applyMatchedSkippedSubmittedItems = lastApplyResult
+        ? getApplyMatchedSkippedSubmittedItems(lastApplyResult)
+        : [];
+    const applyConfirmedSubmittedVisibleItems = applyConfirmedSubmittedItems.slice(0, APPLY_RESULT_RECEIPT_LIMIT);
+    const applyConfirmedSubmittedOverflowCount = Math.max(
+        0,
+        applyConfirmedSubmittedItems.length - applyConfirmedSubmittedVisibleItems.length
+    );
+    const applySkippedOrUnconfirmedFieldCount = lastApplyResult
+        ? lastApplyResult.skippedCount
+        : 0;
+    const applyFailureHandoffItems = lastApplyFailure
+        ? buildApplyFailureHandoffItems(lastApplyFailure)
+        : [];
+    const applyFailureHandoffVisibleItems = applyFailureHandoffItems.slice(0, APPLY_SKIPPED_HANDOFF_LIMIT);
+    const applyFailureHandoffOverflowCount = Math.max(
+        0,
+        applyFailureHandoffItems.length - applyFailureHandoffVisibleItems.length
     );
 
     return (
@@ -1313,17 +2178,40 @@ const SlidesAnalysis: React.FC = () => {
                 <div className={`success-message ${lastApplyResult.skippedCount > 0 ? 'success-message-warning' : ''}`}>
                     <h3>更新完成</h3>
                     <p>
-                        已写回 {lastApplyResult.updatedCount} 个字段
+                        Google Slides 已确认写回 {lastApplyResult.updatedCount} 个字段
                         {lastApplyResult.skippedCount > 0 ? `，跳过 ${lastApplyResult.skippedCount} 项` : ''}。
                     </p>
                     {lastApplyResult.submittedItems.length > 0 && (
+                        <div className="apply-batch-receipt" aria-label="Google Slides 原子批次回执">
+                            <strong>
+                                {applyHasUnmatchedSkippedReasons
+                                    ? `Google Slides 已确认写回 ${lastApplyResult.updatedCount} 个字段，但 ${applySkippedMatchSummary?.unmatchedReasons.length || 0} 个跳过或缺失原因未能匹配到具体字段。`
+                                    : applyConfirmedSubmittedItems.length > 0
+                                    ? getAtomicBatchSummary(applyConfirmedSubmittedItems)
+                                    : `Google Slides 已确认写回 ${lastApplyResult.updatedCount} 个字段。`}
+                            </strong>
+                            <span>
+                                Google Slides 已确认实际发送的批次整体完成；{applyHasUnmatchedSkippedReasons
+                                    ? '字段级已确认列表已隐藏，避免把未写入字段误标为已落地。'
+                                    : lastApplyResult.skippedCount > 0
+                                    ? `另有 ${lastApplyResult.skippedCount} 项没有字段级写入确认；可能是本地预检、API 跳过或成功回包缺少具体原因。`
+                                    : '没有跳过或未解释项。'}
+                            </span>
+                            {applySkippedOrUnconfirmedFieldCount > 0 && (
+                                <span>
+                                    原始选择为 {lastApplyResult.submittedItems.length} 个字段，其中 {applySkippedOrUnconfirmedFieldCount} 个已转入下方人工接管清单。
+                                </span>
+                            )}
+                        </div>
+                    )}
+                    {applyConfirmedSubmittedItems.length > 0 && (
                         <div
                             className="applied-field-receipt"
-                            aria-label="本次提交字段回执"
+                            aria-label="Google Slides 已确认写回字段回执"
                         >
-                            <div className="applied-field-receipt-title">本次提交字段</div>
+                            <div className="applied-field-receipt-title">Google Slides 已确认写回字段</div>
                             <ul className="applied-field-receipt-list">
-                                {lastApplyResult.submittedItems.slice(0, APPLY_RESULT_RECEIPT_LIMIT).map((item) => (
+                                {applyConfirmedSubmittedVisibleItems.map((item) => (
                                     <li
                                         key={`${item.projectIndex}-${item.field}`}
                                         className="applied-field-receipt-item"
@@ -1331,6 +2219,9 @@ const SlidesAnalysis: React.FC = () => {
                                         <span className="applied-field-receipt-main">
                                             <strong>{item.projectLabel} · {item.fieldLabel}</strong>
                                             <span>{item.previewText}</span>
+                                            <span className="applied-field-receipt-target">
+                                                {item.targetText}
+                                            </span>
                                             <span className="applied-field-receipt-evidence">
                                                 {item.evidenceText}
                                             </span>
@@ -1341,9 +2232,9 @@ const SlidesAnalysis: React.FC = () => {
                                     </li>
                                 ))}
                             </ul>
-                            {lastApplyResult.submittedItems.length > APPLY_RESULT_RECEIPT_LIMIT && (
+                            {applyConfirmedSubmittedOverflowCount > 0 && (
                                 <div className="applied-field-receipt-more">
-                                    还有 {lastApplyResult.submittedItems.length - APPLY_RESULT_RECEIPT_LIMIT} 个提交字段未展示。
+                                    还有 {applyConfirmedSubmittedOverflowCount} 个已确认字段未展示。
                                 </div>
                             )}
                         </div>
@@ -1375,14 +2266,31 @@ const SlidesAnalysis: React.FC = () => {
                                         对照建议值和跳过原因，处理完再重新分析或手动更新 Slides。
                                     </div>
                                 </div>
-                                <button
-                                    id="copy-apply-skipped-handoff"
-                                    type="button"
-                                    className="btn-quiet"
-                                    onClick={handleCopyApplySkippedHandoff}
-                                >
-                                    复制清单
-                                </button>
+                                <div className="apply-skipped-handoff-actions">
+                                    <button
+                                        id="reselect-apply-skipped-fields"
+                                        type="button"
+                                        className="btn-quiet"
+                                        onClick={handleReselectApplySkippedFields}
+                                        disabled={applyMatchedSkippedSubmittedItems.length === 0}
+                                    >
+                                        重选跳过字段
+                                    </button>
+                                    <button
+                                        id="copy-apply-skipped-handoff"
+                                        type="button"
+                                        className="btn-quiet"
+                                        onClick={handleCopyApplySkippedHandoff}
+                                    >
+                                        复制清单
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="apply-skipped-reselect-boundary">
+                                已匹配 {applyMatchedSkippedSubmittedItems.length} 个可重选字段
+                                {applySkippedMatchSummary?.unmatchedReasons.length
+                                    ? `；${applySkippedMatchSummary.unmatchedReasons.length} 项未匹配原因只能人工核对`
+                                    : ''}。重选只改变本页选择，不会自动重试或写回。
                             </div>
                             <ul className="apply-skipped-handoff-list">
                                 {applySkippedHandoffVisibleItems.map((item, index) => (
@@ -1391,8 +2299,16 @@ const SlidesAnalysis: React.FC = () => {
                                         className={`apply-skipped-handoff-item ${item.matched ? '' : 'apply-skipped-handoff-item-unmatched'}`}
                                     >
                                         <span className="apply-skipped-handoff-main">
-                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span className="apply-skipped-handoff-title-row">
+                                                <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                                <span className={`apply-skipped-handoff-match-badge ${item.matched ? 'apply-skipped-handoff-match-badge-reselectable' : 'apply-skipped-handoff-match-badge-manual'}`}>
+                                                    {item.matched ? '可重选' : '人工核对'}
+                                                </span>
+                                            </span>
                                             <span>{item.previewText}</span>
+                                            <span className="apply-skipped-handoff-target">
+                                                {item.targetText}
+                                            </span>
                                             <span className="apply-skipped-handoff-evidence">
                                                 {item.evidenceText}
                                             </span>
@@ -1409,6 +2325,124 @@ const SlidesAnalysis: React.FC = () => {
                             {applySkippedHandoffOverflowCount > 0 && (
                                 <div className="apply-skipped-more">
                                     还有 {applySkippedHandoffOverflowCount} 个跳过字段未展示，可复制清单完整处理。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {lastApplyFailure && (
+                <div className="apply-failure-message" role="alert">
+                    <h3>写回未完成</h3>
+                    <p>{lastApplyFailure.errorMessage}</p>
+                    {lastApplyFailure.submittedItems.length > 0 && (
+                        <div className="apply-batch-receipt apply-batch-receipt-error" aria-label="Google Slides 原子批次失败回执">
+                            <strong>{getAtomicBatchSummary(lastApplyFailure.submittedItems)}</strong>
+                            <span>
+                                {ATOMIC_BATCH_BOUNDARY_TEXT} 这次没有确认任何字段写入，请先修复权限、表格列或定位问题再重新提交。
+                            </span>
+                        </div>
+                    )}
+                    {lastApplyFailure.submittedItems.length > 0 && (
+                        <div
+                            className="applied-field-receipt applied-field-receipt-error"
+                            aria-label="本次未完成字段回执"
+                        >
+                            <div className="applied-field-receipt-title">本次未完成字段</div>
+                            <ul className="applied-field-receipt-list">
+                                {lastApplyFailure.submittedItems.slice(0, APPLY_RESULT_RECEIPT_LIMIT).map((item) => (
+                                    <li
+                                        key={`${item.projectIndex}-${item.field}`}
+                                        className="applied-field-receipt-item"
+                                    >
+                                        <span className="applied-field-receipt-main">
+                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span>{item.previewText}</span>
+                                            <span className="applied-field-receipt-target">
+                                                {item.targetText}
+                                            </span>
+                                            <span className="applied-field-receipt-evidence">
+                                                {item.evidenceText}
+                                            </span>
+                                        </span>
+                                        <span className={`selected-writeback-preview-badge selected-writeback-preview-badge-${item.reviewKind}`}>
+                                            {item.reviewLabel}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                            {lastApplyFailure.submittedItems.length > APPLY_RESULT_RECEIPT_LIMIT && (
+                                <div className="applied-field-receipt-more">
+                                    还有 {lastApplyFailure.submittedItems.length - APPLY_RESULT_RECEIPT_LIMIT} 个未完成字段未展示。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {lastApplyFailure.errors.length > 0 && (
+                        <div className="apply-skipped-details apply-failure-details">
+                            <div className="apply-skipped-title">失败原因</div>
+                            <ul>
+                                {lastApplyFailure.errors.slice(0, 5).map((error, index) => (
+                                    <li key={index}>{error}</li>
+                                ))}
+                            </ul>
+                            {lastApplyFailure.errors.length > 5 && (
+                                <div className="apply-skipped-more">
+                                    还有 {lastApplyFailure.errors.length - 5} 项未展示。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {applyFailureHandoffItems.length > 0 && (
+                        <div
+                            className="apply-skipped-handoff apply-failure-handoff"
+                            aria-label="失败字段人工接管清单"
+                        >
+                            <div className="apply-skipped-handoff-header">
+                                <div>
+                                    <div className="apply-skipped-handoff-title">失败接管清单</div>
+                                    <div className="apply-skipped-handoff-summary">
+                                        整批没有确认写入；先对照字段目标和失败原因修复，再决定是否重新提交。
+                                    </div>
+                                </div>
+                                <button
+                                    id="copy-apply-failure-handoff"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={handleCopyApplyFailureHandoff}
+                                >
+                                    复制清单
+                                </button>
+                            </div>
+                            <ul className="apply-skipped-handoff-list">
+                                {applyFailureHandoffVisibleItems.map((item, index) => (
+                                    <li
+                                        key={`${item.projectLabel}-${item.fieldLabel}-${index}`}
+                                        className="apply-skipped-handoff-item apply-failure-handoff-item"
+                                    >
+                                        <span className="apply-skipped-handoff-main">
+                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span>{item.previewText}</span>
+                                            <span className="apply-skipped-handoff-target">
+                                                {item.targetText}
+                                            </span>
+                                            <span className="apply-skipped-handoff-evidence">
+                                                {item.evidenceText}
+                                            </span>
+                                        </span>
+                                        <span className="apply-skipped-handoff-reason">
+                                            失败原因: {item.reason}
+                                        </span>
+                                        <span className="apply-skipped-handoff-next">
+                                            下一步: {item.nextStep}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                            {applyFailureHandoffOverflowCount > 0 && (
+                                <div className="apply-skipped-more">
+                                    还有 {applyFailureHandoffOverflowCount} 个失败字段未展示，可复制清单完整处理。
                                 </div>
                             )}
                         </div>
@@ -1442,6 +2476,20 @@ const SlidesAnalysis: React.FC = () => {
                             )}
                         </div>
                     )}
+                    {analysisSnapshotReceiptLines.length > 0 && (
+                        <div
+                            className="analysis-snapshot-receipt"
+                            role="status"
+                            aria-label="Slides 分析快照回执"
+                        >
+                            <div className="analysis-snapshot-receipt-title">分析快照回执</div>
+                            <ul>
+                                {analysisSnapshotReceiptLines.map((line) => (
+                                    <li key={line}>{line}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                     {analysisResult.updateSuggestions.length > 0 && (
                         <div className="review-controls" aria-label="审阅筛选和批量选择">
                             <div className="review-filter-group" role="group" aria-label="审阅视图">
@@ -1453,6 +2501,7 @@ const SlidesAnalysis: React.FC = () => {
                                         className={`review-filter-button ${reviewFilter === filter ? 'review-filter-button-active' : ''}`}
                                         aria-pressed={reviewFilter === filter}
                                         onClick={() => setReviewFilter(filter)}
+                                        disabled={isApplying}
                                     >
                                         {REVIEW_FILTER_LABELS[filter]}
                                     </button>
@@ -1478,6 +2527,15 @@ const SlidesAnalysis: React.FC = () => {
                                     清空选择
                                 </button>
                             </div>
+                        </div>
+                    )}
+                    {selectionScopeReceipt && (
+                        <div
+                            className="selection-scope-receipt"
+                            role="status"
+                            aria-live="polite"
+                        >
+                            {selectionScopeReceipt}
                         </div>
                     )}
                 </div>
@@ -1512,6 +2570,18 @@ const SlidesAnalysis: React.FC = () => {
                             还有 {analysisWarnings.length - 4} 条解析提醒未展示。
                         </div>
                     )}
+                    <div
+                        className="analysis-scope-receipt"
+                        role="status"
+                        aria-label="Slides 分析范围判定回执"
+                    >
+                        <div className="analysis-scope-receipt-title">范围判定回执</div>
+                        <ul>
+                            {analysisScopeReceiptLines.map((line) => (
+                                <li key={line}>{line}</li>
+                            ))}
+                        </ul>
+                    </div>
                 </div>
             )}
 
@@ -1531,6 +2601,7 @@ const SlidesAnalysis: React.FC = () => {
                                     type="button"
                                     className="btn-quiet"
                                     onClick={() => setReviewFilter('review')}
+                                    disabled={isApplying}
                                 >
                                     只看需复核
                                 </button>
@@ -1541,6 +2612,7 @@ const SlidesAnalysis: React.FC = () => {
                                     type="button"
                                     className="btn-quiet"
                                     onClick={() => setReviewFilter('blocked')}
+                                    disabled={isApplying}
                                 >
                                     只看无法写回
                                 </button>
@@ -1622,6 +2694,7 @@ const SlidesAnalysis: React.FC = () => {
                             type="button"
                             className="btn-quiet"
                             onClick={() => setReviewFilter('risk')}
+                            disabled={isApplying}
                         >
                             只看风险
                         </button>
@@ -2028,11 +3101,7 @@ const SlidesAnalysis: React.FC = () => {
                                     )}
                                 </div>
                             );
-                        }) : (
-                            <div className="empty-filter-state">
-                                当前视图没有匹配的更新建议。
-                            </div>
-                        )
+                        }) : renderEmptyFilterState()
                     ) : (
                         <div className="center" style={{ padding: '20px', background: '#f9f9f9', borderRadius: '8px' }}>
                             <p>没有需要写回的字段建议或风险关注。</p>
@@ -2081,6 +3150,43 @@ const SlidesAnalysis: React.FC = () => {
                                             复制复核清单
                                         </button>
                                     </div>
+                                    {selectedWritebackDecisionReceiptLines.length > 0 && (
+                                        <div
+                                            className={`selected-writeback-decision-receipt ${hasSelectedWritebackDecisionAttention ? 'selected-writeback-decision-receipt-attention' : ''}`}
+                                            aria-label="写回决策回执"
+                                        >
+                                            <div className="selected-writeback-decision-receipt-title">写回决策回执</div>
+                                            <ul className="selected-writeback-decision-receipt-list">
+                                                {selectedWritebackDecisionReceiptLines.map((line) => (
+                                                    <li key={line}>{line}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    <div className="apply-batch-receipt apply-batch-receipt-preview" aria-label="Google Slides 原子写回回执">
+                                        <strong>{getAtomicBatchSummary(selectedFieldPreviewItems)}</strong>
+                                        <span>{ATOMIC_BATCH_BOUNDARY_TEXT}</span>
+                                    </div>
+                                    {reviewPacketCopyReceiptLines.length > 0 && (
+                                        <div
+                                            className={`selected-writeback-copy-receipt ${
+                                                reviewPacketCopyReceipt?.status === 'failed'
+                                                    ? 'selected-writeback-copy-receipt-error'
+                                                    : reviewPacketCopyReceiptIsStale
+                                                        ? 'selected-writeback-copy-receipt-stale'
+                                                        : ''
+                                            }`}
+                                            role="status"
+                                            aria-label="复核清单复制回执"
+                                        >
+                                            <div className="selected-writeback-copy-receipt-title">复核清单复制回执</div>
+                                            <ul className="selected-writeback-copy-receipt-list">
+                                                {reviewPacketCopyReceiptLines.map((line) => (
+                                                    <li key={line}>{line}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
                                     <ul className="selected-writeback-preview-list">
                                         {selectedFieldPreviewVisibleItems.map((item) => (
                                             <li
@@ -2090,6 +3196,9 @@ const SlidesAnalysis: React.FC = () => {
                                                 <span className="selected-writeback-preview-main">
                                                     <strong>{item.projectLabel} · {item.fieldLabel}</strong>
                                                     <span>{item.previewText}</span>
+                                                    <span className="selected-writeback-preview-target">
+                                                        {item.targetText}
+                                                    </span>
                                                     <span className="selected-writeback-preview-evidence">
                                                         {item.evidenceText}
                                                     </span>
@@ -2132,6 +3241,20 @@ const SlidesAnalysis: React.FC = () => {
                                             仅保留当前视图
                                         </button>
                                     </span>
+                                </div>
+                            )}
+                            {applySubmissionReceiptLines.length > 0 && (
+                                <div
+                                    className="apply-submission-receipt"
+                                    role="status"
+                                    aria-label="Slides 写回提交中回执"
+                                >
+                                    <div className="apply-submission-receipt-title">提交中回执</div>
+                                    <ul className="apply-submission-receipt-list">
+                                        {applySubmissionReceiptLines.map((line) => (
+                                            <li key={line}>{line}</li>
+                                        ))}
+                                    </ul>
                                 </div>
                             )}
                             {availableUpdateFieldCount > 0 ? (
@@ -2200,6 +3323,44 @@ const styles = `
         text-align: left;
     }
 
+    .load-recovery-receipt {
+        background: #f4f7ff;
+        border: 1px solid #d6e4ff;
+        border-radius: 6px;
+        color: #172b4d;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 12px;
+        padding: 10px 12px;
+    }
+
+    .analysis-snapshot-receipt {
+        background: #f6ffed;
+        border: 1px solid #b7eb8f;
+        border-radius: 8px;
+        color: #172b4d;
+        margin: 14px 0;
+        padding: 12px;
+    }
+
+    .analysis-snapshot-receipt-title {
+        color: #135200;
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+
+    .analysis-snapshot-receipt ul {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .analysis-snapshot-receipt li {
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 4px;
+    }
+
     .analysis-scope-section {
         background: #f4f7ff;
         border: 1px solid #d6e4ff;
@@ -2232,6 +3393,32 @@ const styles = `
         margin: 10px 0 0;
     }
 
+    .analysis-scope-receipt {
+        background: #fff;
+        border: 1px solid #c7d8ff;
+        border-radius: 8px;
+        color: #172b4d;
+        margin-top: 12px;
+        padding: 12px;
+    }
+
+    .analysis-scope-receipt-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+
+    .analysis-scope-receipt ul {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .analysis-scope-receipt li {
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 4px;
+    }
+
     .success-message {
         background: #d4edda;
         border: 1px solid #c3e6cb;
@@ -2245,6 +3432,41 @@ const styles = `
         background: #fff3cd;
         border-color: #ffeeba;
         color: #856404;
+    }
+
+    .apply-failure-message {
+        background: #ffebe6;
+        border: 1px solid #ffbdad;
+        border-radius: 5px;
+        color: #bf2600;
+        margin-bottom: 20px;
+        padding: 15px;
+    }
+
+    .apply-batch-receipt {
+        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid rgba(9, 30, 66, 0.16);
+        border-radius: 6px;
+        color: inherit;
+        display: grid;
+        font-size: 12px;
+        gap: 3px;
+        line-height: 1.4;
+        margin-top: 10px;
+        padding: 8px 10px;
+        text-align: left;
+    }
+
+    .apply-batch-receipt-preview {
+        background: #fff;
+        border-color: #dfe1e6;
+        color: #42526e;
+        margin: 0 0 7px;
+    }
+
+    .apply-batch-receipt-error {
+        background: rgba(255, 255, 255, 0.72);
+        border-color: rgba(191, 38, 0, 0.24);
     }
 
     .apply-skipped-details {
@@ -2291,6 +3513,13 @@ const styles = `
         margin-bottom: 8px;
     }
 
+    .apply-skipped-handoff-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: flex-end;
+    }
+
     .apply-skipped-handoff-title {
         font-weight: 700;
     }
@@ -2299,6 +3528,17 @@ const styles = `
         color: #6b5a11;
         font-size: 12px;
         margin-top: 2px;
+    }
+
+    .apply-skipped-reselect-boundary {
+        background: rgba(255, 248, 220, 0.58);
+        border: 1px solid rgba(133, 100, 4, 0.16);
+        border-radius: 5px;
+        color: #6b5a11;
+        font-size: 12px;
+        line-height: 1.4;
+        margin-bottom: 8px;
+        padding: 6px 8px;
     }
 
     .apply-skipped-handoff-list {
@@ -2327,6 +3567,32 @@ const styles = `
         gap: 3px;
     }
 
+    .apply-skipped-handoff-title-row {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .apply-skipped-handoff-match-badge {
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        padding: 2px 7px;
+    }
+
+    .apply-skipped-handoff-match-badge-reselectable {
+        background: #fff7d6;
+        color: #6b5a11;
+    }
+
+    .apply-skipped-handoff-match-badge-manual {
+        background: #eef2f7;
+        color: #5e6c84;
+    }
+
+    .apply-skipped-handoff-target,
     .apply-skipped-handoff-evidence,
     .apply-skipped-handoff-reason,
     .apply-skipped-handoff-next {
@@ -2336,6 +3602,21 @@ const styles = `
 
     .apply-skipped-handoff-next {
         font-weight: 700;
+    }
+
+    .apply-failure-handoff {
+        border-color: rgba(128, 26, 21, 0.22);
+    }
+
+    .apply-failure-handoff .apply-skipped-handoff-summary,
+    .apply-failure-handoff .apply-skipped-handoff-reason,
+    .apply-failure-handoff .apply-skipped-handoff-next {
+        color: #7f1d1d;
+    }
+
+    .apply-failure-handoff-item {
+        background: rgba(254, 242, 242, 0.72);
+        border-color: rgba(128, 26, 21, 0.18);
     }
 
     .applied-field-receipt {
@@ -2351,6 +3632,10 @@ const styles = `
 
     .success-message-warning .applied-field-receipt {
         border-color: rgba(133, 100, 4, 0.25);
+    }
+
+    .applied-field-receipt-error {
+        border-color: rgba(191, 38, 0, 0.24);
     }
 
     .applied-field-receipt-title {
@@ -2380,6 +3665,7 @@ const styles = `
         overflow-wrap: anywhere;
     }
 
+    .applied-field-receipt-target,
     .applied-field-receipt-evidence {
         color: #5e6c84;
         font-size: 11px;
@@ -2519,6 +3805,17 @@ const styles = `
         cursor: not-allowed;
     }
 
+    .selection-scope-receipt {
+        background: #f4f7ff;
+        border: 1px solid #d6e4ff;
+        border-radius: 6px;
+        color: #172b4d;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 10px;
+        padding: 9px 11px;
+    }
+
     .filter-summary {
         color: #6b778c;
         font-size: 13px;
@@ -2531,7 +3828,36 @@ const styles = `
         border-radius: 6px;
         color: #42526e;
         padding: 18px;
-        text-align: center;
+    }
+
+    .empty-filter-title {
+        color: #172b4d;
+        font-size: 15px;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+
+    .empty-filter-detail {
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+    }
+
+    .empty-filter-boundary {
+        color: #5e6c84;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+    }
+
+    .empty-filter-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .empty-filter-action {
+        border-color: #c1c7d0;
     }
 
     .risk-spotlight-section {
@@ -3030,10 +4356,104 @@ const styles = `
         margin-bottom: 5px;
     }
 
+    .selected-writeback-decision-receipt {
+        background: #e3fcef;
+        border: 1px solid #abf5d1;
+        border-radius: 6px;
+        color: #006644;
+        display: grid;
+        gap: 4px;
+        margin: 0 0 7px;
+        padding: 8px 10px;
+    }
+
+    .selected-writeback-decision-receipt-attention {
+        background: #fffbdd;
+        border-color: #ffe380;
+        color: #5f4b00;
+    }
+
+    .selected-writeback-decision-receipt-title {
+        color: inherit;
+        font-weight: 700;
+    }
+
+    .selected-writeback-decision-receipt-list {
+        display: grid;
+        gap: 3px;
+        list-style: disc;
+        margin: 0;
+        padding-left: 18px;
+    }
+
     .selected-writeback-copy-button {
         font-size: 12px;
         min-height: 28px;
         padding: 4px 8px;
+    }
+
+    .selected-writeback-copy-receipt {
+        background: #e9f2ff;
+        border: 1px solid #4c9aff;
+        border-radius: 6px;
+        color: #0747a6;
+        display: grid;
+        gap: 4px;
+        margin: 0 0 7px;
+        padding: 8px 10px;
+    }
+
+    .selected-writeback-copy-receipt-stale {
+        background: #fffbdd;
+        border-color: #ffe380;
+        color: #5f4b00;
+    }
+
+    .selected-writeback-copy-receipt-error {
+        background: #ffebe6;
+        border-color: #ff8f73;
+        color: #bf2600;
+    }
+
+    .selected-writeback-copy-receipt-title {
+        color: inherit;
+        font-weight: 700;
+    }
+
+    .selected-writeback-copy-receipt-list {
+        display: grid;
+        gap: 3px;
+        list-style: disc;
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .apply-submission-receipt {
+        background: #e9f2ff;
+        border: 1px solid #4c9aff;
+        border-radius: 6px;
+        color: #0747a6;
+        display: grid;
+        font-size: 12px;
+        gap: 4px;
+        line-height: 1.4;
+        margin: 0 auto 8px;
+        max-width: 760px;
+        padding: 8px 10px;
+        text-align: left;
+    }
+
+    .apply-submission-receipt-title {
+        color: inherit;
+        font-weight: 700;
+    }
+
+    .apply-submission-receipt-list {
+        display: grid;
+        gap: 3px;
+        list-style: disc;
+        margin: 0;
+        padding-left: 18px;
     }
 
     .selected-writeback-preview-list {
@@ -3058,6 +4478,7 @@ const styles = `
         overflow-wrap: anywhere;
     }
 
+    .selected-writeback-preview-target,
     .selected-writeback-preview-evidence {
         color: #5e6c84;
         font-size: 11px;

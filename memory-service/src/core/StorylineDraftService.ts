@@ -12,6 +12,7 @@ import {
 } from '../utils/storyline.js';
 import type {
   ComposerAssistEvidence,
+  StorylineDraftFallbackReason,
   StorylineDraftRequest,
   StorylineDraftResponse,
   StorylineDraftSegment,
@@ -65,6 +66,8 @@ function countDistinctSegmentEvidenceIds(
 
 const FALLBACK_GROUNDING_RISK =
   '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。';
+const LLM_FAILURE_FALLBACK_RISK =
+  '模型生成失败，已用会前准备证据生成 fallback 草稿；请按 Evidence key 复核后再外发。';
 
 export class StorylineDraftService {
   private readonly repo: TodayPilotMeetingPrepRepository;
@@ -104,8 +107,11 @@ export class StorylineDraftService {
       '会议参会人',
     );
 
-    const generated =
-      await this.llmClient.generateJSON<StorylineDraftLlmResponse>(
+    let generated: StorylineDraftLlmResponse = {};
+    let fallbackReason: StorylineDraftFallbackReason | undefined;
+    let fallbackRiskNote: string | undefined;
+    try {
+      generated = await this.llmClient.generateJSON<StorylineDraftLlmResponse>(
         this.buildPrompt(prep, targetArtifact, audience),
         {
           temperature: 0.25,
@@ -114,12 +120,17 @@ export class StorylineDraftService {
             'You turn personal memory evidence into a concise storyline draft. Use only provided evidence ids and facts. Return JSON only.',
         },
       );
+    } catch {
+      fallbackReason = 'llm_generation_failed';
+      fallbackRiskNote = LLM_FAILURE_FALLBACK_RISK;
+    }
 
     return this.normalizeDraftResponse(
       prep,
       generated,
       targetArtifact,
       audience,
+      { fallbackReason, fallbackRiskNote },
     );
   }
 
@@ -193,6 +204,10 @@ export class StorylineDraftService {
     response: StorylineDraftLlmResponse,
     requestedTarget: StorylineSuggestedArtifact,
     requestedAudience: string,
+    options: {
+      fallbackReason?: StorylineDraftFallbackReason;
+      fallbackRiskNote?: string;
+    } = {},
   ): StorylineDraftResponse {
     const targetArtifact = requestedTarget;
     const audience = firstNonEmpty(response.audience, requestedAudience);
@@ -220,7 +235,9 @@ export class StorylineDraftService {
           .slice(0, 6)
       : [];
     const minimumDistinctEvidence = Math.min(3, allowedEvidenceIds.size);
+    const forcedFallback = Boolean(options.fallbackReason);
     const usedFallbackSegments =
+      forcedFallback ||
       segments.length < 3 ||
       countDistinctSegmentEvidenceIds(segments) < minimumDistinctEvidence;
     const normalizedSegments = usedFallbackSegments
@@ -230,7 +247,7 @@ export class StorylineDraftService {
     const riskNotes = usedFallbackSegments
       ? appendOnce(
           normalizeStringArray(response.riskNotes, 6),
-          FALLBACK_GROUNDING_RISK,
+          options.fallbackRiskNote || FALLBACK_GROUNDING_RISK,
         )
       : normalizeStringArray(response.riskNotes, 6);
     const title = usedFallbackSegments
@@ -244,6 +261,11 @@ export class StorylineDraftService {
       prep.evidenceRefs,
       gaps,
       riskNotes,
+    );
+    const returnedEvidence = prep.evidenceRefs.slice(0, 8);
+    const returnedEvidenceIds = new Set(returnedEvidence.map((item) => item.id));
+    const citedEvidenceIds = Array.from(
+      new Set(normalizedSegments.flatMap((segment) => segment.evidenceIds)),
     );
 
     return {
@@ -262,9 +284,29 @@ export class StorylineDraftService {
       audience,
       targetArtifact,
       segments: normalizedSegments,
-      evidence: prep.evidenceRefs.slice(0, 8),
+      evidence: returnedEvidence,
       gaps,
       riskNotes,
+      generationReceipt: {
+        generationMode: usedFallbackSegments
+          ? 'fallback_cue_cards'
+          : 'llm_grounded',
+        sourceKind: 'today_meeting_prep',
+        sourceId: prep.id,
+        targetArtifact,
+        audience,
+        sourceEvidenceRefCount: prep.evidenceRefs.length,
+        citedEvidenceRefCount: citedEvidenceIds.length,
+        returnedEvidenceDetailCount: returnedEvidence.length,
+        missingEvidenceDetailCount: citedEvidenceIds.filter(
+          (id) => !returnedEvidenceIds.has(id),
+        ).length,
+        fallbackReason: usedFallbackSegments
+          ? options.fallbackReason ||
+            'model_output_underused_or_invalid_evidence'
+          : undefined,
+        boundary: 'draft_only_manual_copy_no_external_write',
+      },
       artifactText,
     };
   }

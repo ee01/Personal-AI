@@ -10,6 +10,7 @@ import {
   filterWatchRulesForMessageContext,
   filterWatchRulesForMessageGroups,
   getFirstManualItemFromMatchedRules,
+  getWatchRuleEligibilityIssues,
   isManualConcernedItem,
   resolveMatchedWatchRules,
 } from '../src/watchRules.ts';
@@ -280,6 +281,18 @@ function main() {
     [],
     'manual rule must not resolve outside filterGroup',
   );
+  const releaseOnlyRule = runtimeRules.find(
+    (rule) => rule.ruleRef === 'manual:manual-1',
+  )!;
+  assert.deepEqual(
+    getWatchRuleEligibilityIssues(releaseOnlyRule, {
+      groupName: 'Random Chat',
+      groupId: 'random-chat',
+      sender: 'Morgan',
+    }),
+    ['群组不在范围：期望 Release Chat，实际 random-chat / Random Chat'],
+    'manual rule diagnostics should explain deterministic scope rejection',
+  );
 
   const shortScopeFalsePositiveMatch = resolveMatchedWatchRules({
     watchRules: runtimeRules,
@@ -342,6 +355,58 @@ function main() {
     matchedRuleIds: [1],
   });
   assert.deepEqual(compatibilityMatch.matchedRuleRefs, ['manual:manual-1']);
+
+  const conflictRuntimeRules = buildRuntimeWatchRules({
+    manualItems: [
+      {
+        id: 'mention-enabled',
+        text: 'Marc Chan updates',
+        expiredAt: 0,
+        notifyMethod: 'bot',
+        mentionMe: true,
+      },
+      {
+        id: 'ai-tools',
+        text: 'AI related tooling discussion',
+        expiredAt: 0,
+        notifyMethod: 'bot',
+        mentionMe: false,
+      },
+    ],
+    outreachSessions: [],
+  });
+  const stableRefWinsMatch = resolveMatchedWatchRules({
+    watchRules: conflictRuntimeRules,
+    matchedRuleRefs: ['manual:ai-tools'],
+    matchedRuleIds: [0],
+    matchedRule:
+      '[RULE_REF:manual:ai-tools] [RULE_ID:0] AI related tooling discussion',
+  });
+  assert.deepEqual(
+    stableRefWinsMatch.matchedRuleRefs,
+    ['manual:ai-tools'],
+    'stable RULE_REF must win over a contradictory legacy RULE_ID',
+  );
+  const stableRefManualItems = stableRefWinsMatch.watchRules
+    .map((rule) => (rule.source === 'manual' ? rule.manualItem : undefined))
+    .filter((item): item is TopicItemWithAutoReply => Boolean(item));
+  assert.equal(
+    getImmediateNotificationItem({
+      manualItems: stableRefManualItems,
+    })?.mentionMe,
+    false,
+    'contradictory RULE_ID must not borrow @ settings from another rule',
+  );
+  const textFallbackWinsMatch = resolveMatchedWatchRules({
+    watchRules: conflictRuntimeRules,
+    matchedRule: '[RULE_ID:0] AI related tooling discussion',
+    matchedRuleIds: [0],
+  });
+  assert.deepEqual(
+    textFallbackWinsMatch.matchedRuleRefs,
+    ['manual:ai-tools'],
+    'rule text fallback must win over a contradictory legacy RULE_ID',
+  );
 
   const systemOnlyMatch = resolveMatchedWatchRules({
     watchRules: runtimeRules,

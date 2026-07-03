@@ -68,8 +68,19 @@ assert.ok(
   'Page-load update check should explicitly be non-interactive',
 );
 assert.ok(
+  managerSource.includes('updater.checkForUpdates({') &&
+    managerSource.includes('syncKnownVersionToConfig: interactive'),
+  'Page-load update checks should be read-only and avoid Config metadata writeback',
+);
+assert.ok(
   managerSource.includes('checkForUpdates({ interactive: true, showCurrentAlert: true })'),
   'The UI should expose an explicit manual update check path',
+);
+assert.ok(
+  managerSource.includes('if (deferEnrichment) {') &&
+    managerSource.includes('void enrichMessages()') &&
+    managerSource.includes('return baseMessages;'),
+  'Scheduled Messages should show the first screen from base Sheet rows before Jira/Outreach enrichment finishes',
 );
 assert.ok(
   managerSource.includes('App Script 可升级'),
@@ -215,6 +226,11 @@ assert.ok(
     updaterSource.includes('await this.syncConfigSheetFirst();'),
   'App Script version metadata should use the same Sheet-first Config sync path',
 );
+assert.ok(
+  updaterSource.includes('syncKnownVersionToConfig = true') &&
+    updaterSource.includes('if (!needsUpdate && syncKnownVersionToConfig)'),
+  'App Script update checks should support read-only checks that skip Config metadata sync',
+);
 assert.equal(
   updaterSource.includes('同步配置到 Sheet 失败（不影响功能）'),
   false,
@@ -343,6 +359,33 @@ assert.ok(
     updateAvailableBannerSource.includes('重新检查') &&
     updateAvailableBannerSource.includes('isCheckingUpdates || isUpdating'),
   'Scheduled Messages update banner should let users re-check after cleaning Project History without reloading',
+);
+assert.ok(
+  managerSource.includes('buildAppScriptUpgradeNotice') &&
+    managerSource.includes('App Script 升级结果回执') &&
+    managerSource.includes('App Script 升级结果需要处理'),
+  'Scheduled Messages should build a persistent App Script upgrade result receipt',
+);
+assert.ok(
+  managerSource.includes('buildAppScriptUpgradePendingNotice') &&
+    managerSource.includes('App Script 升级请求回执') &&
+    managerSource.includes('升级请求已提交，正在依次检查 Sheet、App Script deployment 和 Jira Automation') &&
+    managerSource.includes('尚未确认: Web App URL 返回新版本、Sheet/Storage 标记最新、Jira rule 更新完成') &&
+    managerSource.includes('等待完成前不发送定时消息、不触发 Bot/Chrome/Doubao、不确认通知'),
+  'Scheduled Messages should show an in-flight App Script upgrade request receipt before final results',
+);
+assert.ok(
+  managerSource.includes('setAppScriptUpgradeNotice(buildAppScriptUpgradeNotice') &&
+    managerSource.includes('边界: 已是最新时跳过脚本写入；失败项保留现有版本') &&
+    managerSource.includes('下一步:') &&
+    managerSource.includes('打开检查页面处理后重试检查'),
+  'App Script upgrade receipt should preserve skipped/mutation boundaries and recovery next steps',
+);
+assert.ok(
+  managerSource.includes('appScriptUpgradeNotice.recoveryUrl') &&
+    managerSource.includes('打开检查页面') &&
+    managerSource.includes('关闭 App Script 升级结果回执'),
+  'App Script upgrade receipt should expose recovery and dismissal controls',
 );
 
 assert.equal(compareAppScriptVersions('2.6.16', '2.6.16'), 0);
@@ -507,6 +550,100 @@ async function verifyAlreadyCurrentUpdateSkipsScriptMutations(): Promise<void> {
 }
 
 await verifyAlreadyCurrentUpdateSkipsScriptMutations();
+
+async function verifyReadOnlyUpdateCheckSkipsConfigMetadataSync(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let sheetCalls = 0;
+  let scriptApiCalls = 0;
+  let storageWrites = 0;
+
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => {
+          storageWrites += 1;
+        },
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        assert.equal(
+          init?.credentials,
+          'omit',
+          'read-only update checks should still use anonymous Web App version probes',
+        );
+        return new Response(JSON.stringify({
+          version: templateVersion,
+          lastUpdated: templateLastUpdated,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.startsWith('https://sheets.googleapis.com/')) {
+        sheetCalls += 1;
+        return new Response(JSON.stringify({ values: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.startsWith('https://script.googleapis.com/')) {
+        scriptApiCalls += 1;
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.checkForUpdates({ syncKnownVersionToConfig: false });
+
+    assert.equal(result.needsUpdate, false);
+    assert.equal(result.currentVersion, templateVersion);
+    assert.equal(result.latestVersion, templateVersion);
+    assert.equal(result.error, undefined);
+    assert.equal(sheetCalls, 0);
+    assert.equal(scriptApiCalls, 0);
+    assert.equal(storageWrites, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}
+
+await verifyReadOnlyUpdateCheckSkipsConfigMetadataSync();
 
 async function verifyMissingScriptIdBlocksUpgradeState(): Promise<void> {
   const originalFetch = globalThis.fetch;

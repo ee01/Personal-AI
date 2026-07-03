@@ -22,6 +22,7 @@ import {
   getActionReviewWarningSummary,
   getActionReviewWarnings,
 } from './actionItemReview';
+import { buildMeetingPilotAlertReceipt } from './alertPresentation';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
   buildMeetingPilotLiveFeedItems,
@@ -31,6 +32,7 @@ import {
   MeetingPilotActionItem,
   MeetingPilotAlert,
   MeetingPilotCaptureLogEntry,
+  MeetingPilotStateResponse,
   MeetingPilotTimelineEvent,
   MeetingPilotSessionSnapshot,
   createMeetingPilotSessionSnapshot,
@@ -164,6 +166,45 @@ function getRequestedSurfaceMode(): PanelSurfaceMode {
     return raw;
   }
   return params.get('embedded') === '1' ? 'embedded' : 'window';
+}
+
+function getPanelSurfaceLabel(surfaceMode: PanelSurfaceMode): string {
+  if (surfaceMode === 'embedded') return '页内面板';
+  if (surfaceMode === 'side-panel') return 'Chrome 侧边栏';
+  return '独立窗口';
+}
+
+function buildMeetingPilotUnboundSession(
+  requestedTabId: number | undefined,
+): MeetingPilotSessionSnapshot {
+  return createMeetingPilotSessionSnapshot({
+    meetingId: 'unbound',
+    tabId: requestedTabId || 0,
+    url: '',
+    title: 'Meeting Pilot',
+  });
+}
+
+function selectMeetingPilotPanelSession(
+  state: MeetingPilotStateResponse | null,
+  requestedTabId: number | undefined,
+  useDemoSession: boolean,
+): MeetingPilotSessionSnapshot {
+  if (useDemoSession) {
+    return getDemoMeetingSessionSnapshot(requestedTabId || 0);
+  }
+
+  if (requestedTabId) {
+    return (
+      (state?.activeSession?.tabId === requestedTabId
+        ? state.activeSession
+        : undefined) ||
+      state?.sessions.find((item) => item.tabId === requestedTabId) ||
+      buildMeetingPilotUnboundSession(requestedTabId)
+    );
+  }
+
+  return state?.activeSession || buildMeetingPilotUnboundSession(undefined);
 }
 
 function openChromeSidePanelFromUserGesture(
@@ -571,6 +612,12 @@ function normalizeMeetingPrepHandoff(
   const expiresAt = Number(raw.expiresAt);
   const text = String(raw.text || '').trim();
   const event = raw.event as CalendarEventSyncItem;
+  const cueCards = Array.isArray(raw.cueCards)
+    ? raw.cueCards.filter(isMeetingPrepCueCard).slice(0, 8)
+    : [];
+  const evidence = Array.isArray(raw.evidence)
+    ? raw.evidence.filter(isMeetingPrepEvidence).slice(0, 8)
+    : [];
   if (
     !Number.isFinite(createdAt) ||
     !Number.isFinite(expiresAt) ||
@@ -584,14 +631,12 @@ function normalizeMeetingPrepHandoff(
     createdAt,
     expiresAt,
     event,
-    goal: String(raw.goal || '').trim(),
+    goal:
+      String(raw.goal || '').trim() ||
+      buildMeetingPrepHandoffGoalFromCards(cueCards, event, text),
     text,
-    cueCards: Array.isArray(raw.cueCards)
-      ? raw.cueCards.filter(isMeetingPrepCueCard).slice(0, 8)
-      : [],
-    evidence: Array.isArray(raw.evidence)
-      ? raw.evidence.filter(isMeetingPrepEvidence).slice(0, 8)
-      : [],
+    cueCards,
+    evidence,
     source:
       raw.source === 'today_pilot' || raw.source === 'context_assist'
         ? raw.source
@@ -792,12 +837,218 @@ function countMeetingPrepTitleTokenOverlap(
   return overlap;
 }
 
+type MeetingPrepHandoffMatchReceipt = {
+  tone: 'exact' | 'fallback' | 'weak';
+  title: string;
+  detail: string;
+  chips: string[];
+  boundary: string;
+};
+
+function formatMeetingPrepHandoffDuration(ms: number): string {
+  const safeMs = Math.max(0, ms);
+  const minutes = Math.floor(safeMs / (60 * 1000));
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes
+      ? `${hours} 小时 ${remainingMinutes} 分钟`
+      : `${hours} 小时`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours ? `${days} 天 ${remainingHours} 小时` : `${days} 天`;
+}
+
+function formatMeetingPrepHandoffRemaining(ms: number): string {
+  if (ms <= 0) return '已过期';
+  return formatMeetingPrepHandoffDuration(ms);
+}
+
+function getMeetingPrepHandoffSourceLabel(
+  handoff: MeetingPrepHandoff,
+): string {
+  if (handoff.source === 'today_pilot') return 'Today Pilot';
+  if (handoff.source === 'context_assist') return 'Context Assist';
+  return '会前准备';
+}
+
+function getMeetingPrepGeneratedModeLabel(
+  generatedMode: string | undefined,
+): string {
+  const normalized = String(generatedMode || '').trim().toLowerCase();
+  if (!normalized) return '准备模式未标记';
+  if (normalized.includes('fallback')) return '规则 fallback';
+  if (normalized.includes('generated') || normalized.includes('fresh')) {
+    return '新生成准备';
+  }
+  if (normalized.includes('cached') || normalized.includes('pre')) {
+    return '预生成缓存';
+  }
+  return `模式 ${generatedMode}`;
+}
+
+function getMeetingPrepHandoffMatchReceipt(
+  handoff: MeetingPrepHandoff,
+  session: MeetingPilotSessionSnapshot,
+): MeetingPrepHandoffMatchReceipt {
+  const sessionMeetingIds = [
+    getRingCentralMeetingId(session.url),
+    normalizeRingCentralMeetingId(session.meetingId),
+  ].filter((id): id is string => Boolean(id));
+  const eventMeetingIds = [
+    handoff.event.joinUrl,
+    handoff.event.sourceUrl,
+    handoff.event.location,
+    handoff.text,
+  ]
+    .map(getRingCentralMeetingId)
+    .filter(Boolean);
+  const exactIdMatch =
+    sessionMeetingIds.length > 0 &&
+    eventMeetingIds.some((meetingId) => sessionMeetingIds.includes(meetingId));
+  const sessionTitle = normalizeMeetingPrepTitle(session.title);
+  const eventTitle = normalizeMeetingPrepTitle(handoff.event.title);
+  const timePlausible = isMeetingPrepHandoffTimePlausible(handoff, session);
+  const overlap =
+    sessionTitle && eventTitle
+      ? countMeetingPrepTitleTokenOverlap(sessionTitle, eventTitle)
+      : 0;
+  const nowMs = Date.now();
+  const sourceLabel = getMeetingPrepHandoffSourceLabel(handoff);
+  const chips = [
+    `来源 ${sourceLabel}`,
+    getMeetingPrepGeneratedModeLabel(handoff.generatedMode),
+    `缓存 ${formatMeetingPrepHandoffDuration(nowMs - handoff.createdAt)}前`,
+    `剩余 ${formatMeetingPrepHandoffRemaining(handoff.expiresAt - nowMs)}`,
+  ];
+  const boundary =
+    '这条回执只解释本机 handoff 如何被选中；不会加入会议、开启录音、发消息、创建/完成行动项、写回日历或外部系统。';
+
+  if (exactIdMatch) {
+    return {
+      tone: 'exact',
+      title: 'Meeting ID 精确命中',
+      detail: '当前会议链接/meeting id 与 handoff 里的会议链接一致。',
+      chips,
+      boundary,
+    };
+  }
+
+  if (sessionTitle && eventTitle && timePlausible) {
+    if (sessionTitle === eventTitle) {
+      return {
+        tone: 'fallback',
+        title: '标题 + 时间窗口命中',
+        detail: '当前 meeting id 未命中，按会议标题和日历事件时间窗口带入。',
+        chips,
+        boundary,
+      };
+    }
+    if (
+      (sessionTitle.length >= 8 && eventTitle.includes(sessionTitle)) ||
+      (eventTitle.length >= 8 && sessionTitle.includes(eventTitle))
+    ) {
+      return {
+        tone: 'fallback',
+        title: '标题包含 + 时间窗口兜底',
+        detail: '当前 meeting id 未命中，按标题包含关系和事件时间窗口带入。',
+        chips,
+        boundary,
+      };
+    }
+    if (overlap >= 2) {
+      return {
+        tone: 'weak',
+        title: '标题关键词 + 时间窗口兜底',
+        detail: '当前 meeting id 未命中，仅按标题关键词重叠和事件时间窗口带入，请先核对会议标题。',
+        chips,
+        boundary,
+      };
+    }
+  }
+
+  return {
+    tone: 'weak',
+    title: 'Handoff 匹配待复核',
+    detail: '当前 handoff 已带入，但匹配证据不足，请先核对会议标题和时间。',
+    chips,
+    boundary,
+  };
+}
+
 function getMeetingPrepDisplayCueCards(
   handoff: MeetingPrepHandoff,
 ): ContextAssistCueCard[] {
   const primary = handoff.cueCards.filter((card) => card.kind !== 'memory');
   const memoryCards = handoff.cueCards.filter((card) => card.kind === 'memory');
   return [...primary, ...memoryCards].slice(0, 4);
+}
+
+function buildMeetingPrepHandoffGoalFromCards(
+  cueCards: ContextAssistCueCard[],
+  event: CalendarEventSyncItem,
+  fallbackText?: string,
+): string {
+  const actionCard = cueCards.find((card) => {
+    return card.kind === 'action' && (card.body || card.title);
+  });
+  const questionCard = cueCards.find((card) => {
+    return card.kind === 'question' && (card.body || card.title);
+  });
+  const briefCard = cueCards.find((card) => {
+    return card.kind === 'brief' && (card.body || card.title);
+  });
+  const candidates = [
+    actionCard?.body || actionCard?.title || '',
+    questionCard
+      ? `会中确认：${questionCard.body || questionCard.title || ''}`
+      : '',
+    briefCard?.body || briefCard?.title || '',
+    fallbackText || '',
+  ];
+
+  for (const candidate of candidates) {
+    const goal = normalizeMeetingPrepGoalText(candidate, event.title);
+    if (goal) {
+      return goal;
+    }
+  }
+  return normalizeMeetingPrepGoalText(
+    `明确 ${event.title || '本场会议'} 的下一步、owner 和风险。`,
+    event.title,
+  );
+}
+
+function normalizeMeetingPrepGoalText(
+  value: string | undefined,
+  eventTitle: string | undefined,
+  maxLength = 120,
+): string {
+  const normalizedTitle = normalizeMeetingPrepTitle(eventTitle || '');
+  const lines = String(value || '')
+    .split(/\n+/)
+    .map((line) =>
+      line
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/^#+\s*/g, '')
+        .replace(/^[\s>*-]+/g, '')
+        .replace(/[`*_]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter(Boolean)
+    .filter((line) => normalizeMeetingPrepTitle(line) !== normalizedTitle)
+    .filter((line) => !/^today pilot (?:会前准备|meeting prep)/i.test(line));
+  const firstLine = lines[0] || '';
+  if (!firstLine) {
+    return '';
+  }
+  return firstLine.length <= maxLength
+    ? firstLine
+    : `${firstLine.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
 function getMeetingPrepCardKindLabel(
@@ -889,6 +1140,30 @@ function formatMeetingMemoryTime(
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function MeetingAlertReceipt({ alert }: { alert: MeetingPilotAlert }) {
+  const receipt = buildMeetingPilotAlertReceipt(alert);
+  return (
+    <div className="alert-reason-receipt" aria-label="会中提醒原因回执">
+      <div className="alert-reason-row">
+        <span>为什么</span>
+        <strong>{receipt.reason}</strong>
+      </div>
+      <div className="alert-reason-row">
+        <span>下一步</span>
+        <strong>{receipt.nextStep}</strong>
+      </div>
+      <div className="alert-reason-row">
+        <span>边界</span>
+        <strong>{receipt.boundary}</strong>
+      </div>
+      <div className="alert-reason-row">
+        <span>信号</span>
+        <strong>{receipt.signal}</strong>
+      </div>
+    </div>
+  );
 }
 
 function isMeetingPrepCueActionable(card: ContextAssistCueCard): boolean {
@@ -1081,6 +1356,74 @@ const shellStyle = `
     flex-shrink: 0;
   }
 
+  .panel-source-receipt {
+    padding: 9px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(12,14,24,0.72);
+  }
+
+  .panel-source-receipt.bound {
+    background: rgba(105,219,124,0.08);
+    border-bottom-color: rgba(105,219,124,0.22);
+  }
+
+  .panel-source-receipt.active,
+  .panel-source-receipt.demo {
+    background: rgba(64,192,255,0.08);
+    border-bottom-color: rgba(64,192,255,0.22);
+  }
+
+  .panel-source-receipt.missing {
+    background: rgba(255,212,59,0.08);
+    border-bottom-color: rgba(255,212,59,0.24);
+  }
+
+  .panel-source-main {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  .panel-source-title {
+    flex: 0 0 auto;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .panel-source-detail {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .panel-source-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+  }
+
+  .panel-source-chips span {
+    padding: 2px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(26,29,39,0.7);
+    color: var(--text);
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .panel-source-boundary {
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
   .panel-tabs {
     display: flex;
     border-bottom: 1px solid var(--border);
@@ -1216,6 +1559,111 @@ const shellStyle = `
     font-weight: 500;
   }
 
+  .meeting-focus-rail {
+    margin: 0 0 12px;
+    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(148,163,184,0.16);
+    background: rgba(12,14,24,0.42);
+  }
+
+  .meeting-focus-rail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .meeting-focus-rail-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .meeting-focus-rail-boundary {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.3;
+    text-align: right;
+  }
+
+  .meeting-focus-rail-items {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .focus-rail-item {
+    min-width: 0;
+    padding: 8px 9px;
+    border-radius: 9px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(26,29,39,0.74);
+  }
+
+  .focus-rail-item.urgent {
+    border-color: rgba(255,107,107,0.28);
+    background: rgba(255,107,107,0.09);
+  }
+
+  .focus-rail-item.warn {
+    border-color: rgba(255,212,59,0.25);
+    background: rgba(255,212,59,0.08);
+  }
+
+  .focus-rail-item.ready {
+    border-color: rgba(46,204,113,0.24);
+    background: rgba(46,204,113,0.07);
+  }
+
+  .focus-rail-label {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.35;
+    font-weight: 700;
+  }
+
+  .focus-rail-value {
+    margin-top: 2px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.35;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+
+  .focus-rail-detail {
+    margin-top: 2px;
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .focus-rail-action {
+    margin-top: 7px;
+    border: 1px solid rgba(148,163,184,0.18);
+    border-radius: 7px;
+    padding: 5px 7px;
+    background: rgba(255,255,255,0.05);
+    color: var(--text);
+    font-size: 10.5px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .focus-rail-action:hover {
+    border-color: rgba(162,155,254,0.38);
+    background: rgba(162,155,254,0.10);
+  }
+
+  @media (max-width: 360px) {
+    .meeting-focus-rail-items {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .meeting-prep-handoff-card {
     padding: 12px 14px;
     border-radius: 10px;
@@ -1244,6 +1692,88 @@ const shellStyle = `
     color: var(--text-dim);
     font-size: 11px;
     line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-match-receipt {
+    margin-top: 9px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    background: rgba(15,23,42,0.38);
+    border: 1px solid rgba(126,226,168,0.20);
+  }
+
+  .meeting-prep-match-receipt.fallback {
+    border-color: rgba(245,158,11,0.28);
+    background: rgba(245,158,11,0.08);
+  }
+
+  .meeting-prep-match-receipt.weak {
+    border-color: rgba(248,113,113,0.30);
+    background: rgba(248,113,113,0.08);
+  }
+
+  .meeting-prep-match-head {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .meeting-prep-match-head strong {
+    color: var(--text);
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+
+  .meeting-prep-match-head span,
+  .meeting-prep-match-boundary {
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-match-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+  }
+
+  .meeting-prep-match-chips span {
+    border-radius: 999px;
+    padding: 2px 6px;
+    background: rgba(255,255,255,0.07);
+    color: #c9f6d8;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .meeting-prep-match-boundary {
+    margin-top: 7px;
+  }
+
+  .meeting-prep-goal {
+    margin-top: 9px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    background: rgba(15,23,42,0.36);
+    border: 1px solid rgba(46,204,113,0.18);
+  }
+
+  .meeting-prep-goal span {
+    display: block;
+    color: #7ee7a4;
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 3px;
+  }
+
+  .meeting-prep-goal strong {
+    display: block;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
     overflow-wrap: anywhere;
   }
 
@@ -1494,6 +2024,42 @@ const shellStyle = `
     color: var(--text-dim);
   }
 
+  .capture-start-receipt {
+    display: grid;
+    grid-template-columns: minmax(58px, 0.32fr) minmax(0, 1fr);
+    gap: 6px 10px;
+    margin-top: 10px;
+    padding: 10px 11px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(12, 14, 24, 0.28);
+  }
+
+  .capture-start-receipt.warn {
+    border-color: rgba(255,107,107,0.24);
+    background: rgba(255,107,107,0.08);
+  }
+
+  .capture-start-receipt.low {
+    border-color: rgba(255,212,59,0.24);
+    background: rgba(255,212,59,0.07);
+  }
+
+  .capture-start-receipt-label {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+
+  .capture-start-receipt-value {
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.45;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .capture-start-actions {
     display: flex;
     gap: 10px;
@@ -1534,6 +2100,39 @@ const shellStyle = `
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .alert-reason-receipt {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 8px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(12,14,24,0.26);
+  }
+
+  .alert-reason-row {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  .alert-reason-row span {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+
+  .alert-reason-row strong {
+    color: var(--text);
+    font-size: 10.5px;
+    line-height: 1.45;
+    font-weight: 600;
+    overflow-wrap: anywhere;
   }
 
   .action-toolbar {
@@ -2368,6 +2967,42 @@ const shellStyle = `
     gap: 4px;
   }
   .speech-status-card .speech-error { color: var(--p0-color); }
+  .speech-asr-receipt {
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .speech-asr-receipt-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0;
+  }
+  .speech-asr-receipt-row {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+  .speech-asr-receipt-row span {
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .speech-asr-receipt-row strong {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .speech-asr-receipt-row[data-tone="success"] strong { color: #86efac; }
+  .speech-asr-receipt-row[data-tone="warning"] strong { color: #fde68a; }
+  .speech-asr-receipt-row[data-tone="danger"] strong { color: #fca5a5; }
   .speech-turn-list { display: flex; flex-direction: column; gap: 8px; }
   .speech-turn-card {
     padding: 10px 12px;
@@ -2571,6 +3206,200 @@ function formatConfigEndpoint(url: string): string {
   }
 }
 
+type CaptureHandoffReceipt = {
+  tone: 'ready' | 'warn' | 'low';
+  status: string;
+  scope: string;
+  nextStep: string;
+};
+
+type PanelStateSourceReceipt = {
+  tone: 'bound' | 'active' | 'demo' | 'missing';
+  title: string;
+  detail: string;
+  chips: string[];
+  boundary: string;
+};
+
+function formatCaptureStartErrorForPanel(error?: string): string {
+  if (error === 'tabCapture_stream_unavailable') {
+    return '浏览器没有返回可用的 tab capture stream；当前没有开始录制。';
+  }
+  return String(error || 'Capture 未能成功启动；当前没有开始录制。');
+}
+
+function buildCaptureHandoffReceipt(
+  session: MeetingPilotSessionSnapshot,
+  isTranscriptPilotActive: boolean,
+): CaptureHandoffReceipt {
+  const readiness = session.readiness;
+  if (session.capture.kind === 'recording' || session.capture.kind === 'armed') {
+    return {
+      tone: 'ready',
+      status: 'Capture 运行中',
+      scope: '本场会议已授权 Capture；会中总结、时间线和行动项会继续刷新。',
+      nextStep: '优先看提醒、行动项和当前话题；停止后会进入归档链路。',
+    };
+  }
+
+  if (session.capture.kind === 'uploading') {
+    return {
+      tone: 'low',
+      status: '上传中',
+      scope: '会中 Capture 已结束，录制素材正在上传到会议分析服务。',
+      nextStep: '先复核已生成行动项；上传完成后等待 Digest / PDF 状态。',
+    };
+  }
+
+  if (session.capture.kind === 'completed') {
+    return {
+      tone: 'ready',
+      status: 'Capture 已完成',
+      scope: '本场录制素材已处理完成；结构化归档和纪要状态以会后页为准。',
+      nextStep: '打开 Panorama 或会议历史复核摘要、行动项和纪要链接。',
+    };
+  }
+
+  if (!readiness.canStartCapture) {
+    return {
+      tone: 'warn',
+      status: '配置阻断',
+      scope: readiness.summary || 'Capture 暂不能开始。',
+      nextStep: '先去 Options 修复配置，再从 popup 开启。',
+    };
+  }
+
+  if (isTranscriptPilotActive) {
+    return {
+      tone: 'low',
+      status: '低配运行',
+      scope: '已读取 RingCentral Transcript；未授权画面/OCR/PDF。',
+      nextStep: '需要画面理解或会后纪要时，从 popup 授权。',
+    };
+  }
+
+  if (session.capture.kind === 'error') {
+    return {
+      tone: 'warn',
+      status: '启动失败',
+      scope: formatCaptureStartErrorForPanel(session.capture.lastError),
+      nextStep: '保持会议页打开，在 popup 第一项重试。',
+    };
+  }
+
+  if (session.capture.kind === 'stopped') {
+    return {
+      tone: 'warn',
+      status: '已停止',
+      scope: '当前没有继续录制；已收集内容会继续走归档链路。',
+      nextStep: '需要继续记录时，从 popup 重新授权开启。',
+    };
+  }
+
+  if (readiness.status === 'degraded') {
+    return {
+      tone: 'low',
+      status: '可开启，部分降级',
+      scope:
+        readiness.summary ||
+        readiness.degradations[0] ||
+        '授权后部分智能能力可能降级。',
+      nextStep: '从 popup 授权后，降级项会在会中继续刷新。',
+    };
+  }
+
+  return {
+    tone: 'ready',
+    status: '等待授权',
+    scope: '不会静默录制；授权后才开始录制、实时总结和会后分析。',
+    nextStep: '点击扩展 icon，在 popup 第一项开启会议全貌。',
+  };
+}
+
+function getPanelCaptureChip(session: MeetingPilotSessionSnapshot): string {
+  if (session.capture.kind === 'recording' || session.capture.kind === 'armed') {
+    return 'Capture 运行中';
+  }
+  if (session.capture.kind === 'uploading') return 'Capture 上传中';
+  if (session.capture.kind === 'completed') return 'Capture 已完成';
+  if (session.capture.kind === 'stopped') return 'Capture 已停止';
+  if (session.capture.kind === 'error') return 'Capture 启动失败';
+  return 'Capture 未开启';
+}
+
+function buildPanelStateSourceReceipt(
+  session: MeetingPilotSessionSnapshot,
+  requestedTabId: number | undefined,
+  surfaceMode: PanelSurfaceMode,
+  useDemoSession: boolean,
+  state: MeetingPilotStateResponse | null,
+): PanelStateSourceReceipt {
+  const surfaceLabel = getPanelSurfaceLabel(surfaceMode);
+  const tabChip = requestedTabId
+    ? `请求 tabId ${requestedTabId}`
+    : session.tabId > 0
+    ? `活跃 tabId ${session.tabId}`
+    : '未绑定 tab';
+  const meetingChip =
+    session.meetingId && session.meetingId !== 'unbound'
+      ? `meeting ${session.meetingId}`
+      : '未绑定 meeting';
+  const commonBoundary =
+    '本回执只说明侧栏正在读取哪份会中状态；不会开始/停止 Capture、发送纪要、创建外部任务或确认行动项。';
+
+  if (useDemoSession) {
+    return {
+      tone: 'demo',
+      title: '演示状态源',
+      detail: '当前 URL 启用了 demo=1，侧栏内容来自本地示例数据，不绑定真实会议页。',
+      chips: [surfaceLabel, tabChip, '本地 demo 数据'],
+      boundary: commonBoundary,
+    };
+  }
+
+  if (requestedTabId && session.meetingId === 'unbound') {
+    return {
+      tone: 'missing',
+      title: '请求的会议标签页未绑定',
+      detail:
+        '这个侧栏带着 tabId 打开，但 background 当前没有对应会议 session；不会回退显示其他活跃会议，避免旧窗口改写错会议。',
+      chips: [surfaceLabel, tabChip, '保持未绑定空态'],
+      boundary: commonBoundary,
+    };
+  }
+
+  if (requestedTabId && session.tabId === requestedTabId) {
+    return {
+      tone: 'bound',
+      title: '已绑定当前会议页',
+      detail:
+        '这个侧栏按 URL 里的 tabId 读取同一场会议状态；行动项、时间线和 Capture 操作都会带同一个 tabId 与 meetingId。',
+      chips: [surfaceLabel, tabChip, meetingChip, getPanelCaptureChip(session)],
+      boundary: commonBoundary,
+    };
+  }
+
+  if (!requestedTabId && state?.activeSession && session.meetingId !== 'unbound') {
+    return {
+      tone: 'active',
+      title: '读取当前活跃会议',
+      detail:
+        '这个侧栏没有指定 tabId，当前显示 background 最近的活跃会议；从会议页或 popup 打开可锁定到单场会议。',
+      chips: [surfaceLabel, tabChip, meetingChip, getPanelCaptureChip(session)],
+      boundary: commonBoundary,
+    };
+  }
+
+  return {
+    tone: 'missing',
+    title: '未绑定会议页',
+    detail:
+      '当前还没有可读取的 Meeting Pilot 会中状态。请先进入 RingCentral 会议页，再从 popup 或会议页入口打开侧栏。',
+    chips: [surfaceLabel, tabChip, '等待会议 session'],
+    boundary: commonBoundary,
+  };
+}
+
 function MeetingSidePanel() {
   const [state, refresh] = useMeetingPilotState();
   const [captureLogEntries, setCaptureLogEntries] = useState<
@@ -2657,21 +3486,11 @@ function MeetingSidePanel() {
   const showDebugTab =
     __DEV__ && new URLSearchParams(window.location.search).get('debug') !== '0';
   const useDemoSession = shouldUseMeetingPilotDemo();
-  const session = useDemoSession
-    ? getDemoMeetingSessionSnapshot(requestedTabId || 0)
-    : (requestedTabId
-        ? (state?.activeSession?.tabId === requestedTabId
-            ? state.activeSession
-            : undefined) ||
-          state?.sessions.find((item) => item.tabId === requestedTabId) ||
-          state?.activeSession
-        : state?.activeSession) ||
-      createMeetingPilotSessionSnapshot({
-        meetingId: 'unbound',
-        tabId: requestedTabId || 0,
-        url: '',
-        title: 'Meeting Pilot',
-      });
+  const session = selectMeetingPilotPanelSession(
+    state,
+    requestedTabId,
+    useDemoSession,
+  );
   const panelUiStorageKey = useMemo(
     () => buildPanelUiStorageKey(session),
     [session.meetingId, session.tabId],
@@ -3673,12 +4492,21 @@ function MeetingSidePanel() {
       return;
     }
     if (!nextPinned && surfaceMode !== 'embedded') {
-      await chrome.runtime.sendMessage({
+      const embeddedResponse = (await chrome.runtime.sendMessage({
         type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
         tabId: session.tabId,
         source: 'unpin',
         preferSurface: 'embedded',
-      });
+      })) as
+        | {
+            success?: boolean;
+            surface?: 'embedded' | 'side-panel' | 'window' | 'unavailable';
+          }
+        | undefined;
+      if (!embeddedResponse?.success) {
+        await refresh();
+        return;
+      }
       await closePanelHostSurface(session.tabId, surfaceMode);
       await refresh();
       return;
@@ -3772,6 +4600,82 @@ function MeetingSidePanel() {
       : session.capture.kind === 'error'
       ? '查看重试步骤'
       : '查看开启步骤';
+  const captureHandoffReceipt = buildCaptureHandoffReceipt(
+    session,
+    isTranscriptPilotActive,
+  );
+  const visibleAlertCount = liveFeedItems.filter(
+    (item) => item.kind === 'alert',
+  ).length;
+  const p0AlertCount = session.alerts.filter(
+    (alert) => !alert.resolved && alert.level === 'P0',
+  ).length;
+  const alertFocusTone = p0AlertCount
+    ? 'urgent'
+    : visibleAlertCount
+    ? 'warn'
+    : 'ready';
+  const alertFocusValue = p0AlertCount
+    ? `P0 ${p0AlertCount} 个`
+    : visibleAlertCount
+    ? `${visibleAlertCount} 个提醒`
+    : '无新提醒';
+  const alertFocusDetail = p0AlertCount
+    ? '优先确认是否需要当场回应。'
+    : visibleAlertCount
+    ? '先看原因和边界，再决定是否处理。'
+    : '继续保持低打扰。';
+  const actionFocusTone = needsInfoActions.length
+    ? 'warn'
+    : reviewQueueActions.length
+    ? 'warn'
+    : openActions.length
+    ? 'ready'
+    : '';
+  const actionFocusValue = needsInfoActions.length
+    ? `需补信息 ${needsInfoActions.length}`
+    : reviewQueueActions.length
+    ? `待复核 ${reviewQueueActions.length}`
+    : openActions.length
+    ? `处理中 ${openActions.length}`
+    : confirmedActions.length
+    ? `已确认 ${confirmedActions.length}`
+    : '无待办';
+  const actionFocusDetail = needsInfoActions.length
+    ? '补齐负责人、截止或依据。'
+    : reviewQueueActions.length
+    ? '先复核 AI 建议再复制跟进。'
+    : openActions.length
+    ? '可继续确认、完成或复制。'
+    : confirmedActions.length
+    ? '确认项可复制成跟进清单。'
+    : '新的明确任务会进入行动项页。';
+  const actionFocusCta = needsInfoActions.length
+    ? '补信息'
+    : reviewQueueActions.length
+    ? '复核'
+    : openActions.length
+    ? '查看'
+    : '';
+  const captureFocusTone =
+    captureHandoffReceipt.tone === 'warn'
+      ? 'warn'
+      : captureHandoffReceipt.tone === 'ready'
+      ? 'ready'
+      : '';
+  const captureFocusCta = !isEnhancedCaptureActive
+    ? session.readiness.canStartCapture
+      ? '开启步骤'
+      : '修复配置'
+    : '';
+  const topicFocusLabel = currentChapter?.title || session.currentTopic;
+  const rawTopicFocusDetail = String(
+    currentChapter?.summary || session.summary || '',
+  ).trim();
+  const topicFocusDetail =
+    rawTopicFocusDetail.length > 88
+      ? `${rawTopicFocusDetail.slice(0, 85)}...`
+      : rawTopicFocusDetail;
   const providerConfigured = Boolean(
     String(settings.providerBaseUrl || '').trim(),
   );
@@ -3806,6 +4710,24 @@ function MeetingSidePanel() {
   const meetingPrepEvidence = meetingPrepHandoff
     ? meetingPrepHandoff.evidence.slice(0, 5)
     : [];
+  const meetingPrepGoal = meetingPrepHandoff
+    ? meetingPrepHandoff.goal ||
+      buildMeetingPrepHandoffGoalFromCards(
+        meetingPrepHandoff.cueCards,
+        meetingPrepHandoff.event,
+        meetingPrepHandoff.text,
+      )
+    : '';
+  const meetingPrepMatchReceipt = meetingPrepHandoff
+    ? getMeetingPrepHandoffMatchReceipt(meetingPrepHandoff, session)
+    : null;
+  const panelStateSourceReceipt = buildPanelStateSourceReceipt(
+    session,
+    requestedTabId,
+    surfaceMode,
+    useDemoSession,
+    state,
+  );
 
   return (
     <div
@@ -3863,6 +4785,30 @@ function MeetingSidePanel() {
         </div>
       </div>
 
+      <section
+        className={`panel-source-receipt ${panelStateSourceReceipt.tone}`}
+        data-panel-source-receipt="true"
+        data-panel-source-tone={panelStateSourceReceipt.tone}
+        aria-label="侧栏状态源回执"
+      >
+        <div className="panel-source-main">
+          <div className="panel-source-title">
+            {panelStateSourceReceipt.title}
+          </div>
+          <div className="panel-source-detail">
+            {panelStateSourceReceipt.detail}
+          </div>
+        </div>
+        <div className="panel-source-chips">
+          {panelStateSourceReceipt.chips.map((chip, index) => (
+            <span key={`${chip}-${index}`}>{chip}</span>
+          ))}
+        </div>
+        <div className="panel-source-boundary">
+          {panelStateSourceReceipt.boundary}
+        </div>
+      </section>
+
       <div className="panel-tabs" id="panelTabs">
         {(['live', 'speech', 'timeline', 'actions', 'settings'] as TabId[]).map(
           (tab) => (
@@ -3897,6 +4843,69 @@ function MeetingSidePanel() {
       >
         {activeTab === 'live' ? (
           <>
+            <section
+              className="meeting-focus-rail"
+              data-meeting-focus-rail="true"
+              aria-label="会中重点"
+            >
+              <div className="meeting-focus-rail-head">
+                <div className="meeting-focus-rail-title">现在先看</div>
+                <div className="meeting-focus-rail-boundary">
+                  只提示，不代你发言或外发
+                </div>
+              </div>
+              <div className="meeting-focus-rail-items">
+                <div className={`focus-rail-item ${captureFocusTone}`}>
+                  <div className="focus-rail-label">Capture</div>
+                  <div className="focus-rail-value">
+                    {captureHandoffReceipt.status}
+                  </div>
+                  <div className="focus-rail-detail">
+                    {captureHandoffReceipt.nextStep}
+                  </div>
+                  {captureFocusCta ? (
+                    <button
+                      className="focus-rail-action"
+                      type="button"
+                      onClick={
+                        session.readiness.canStartCapture
+                          ? showCaptureAuthorizationGuide
+                          : openMeetingOptionsPage
+                      }
+                    >
+                      {captureFocusCta}
+                    </button>
+                  ) : null}
+                </div>
+                <div className={`focus-rail-item ${alertFocusTone}`}>
+                  <div className="focus-rail-label">提醒</div>
+                  <div className="focus-rail-value">{alertFocusValue}</div>
+                  <div className="focus-rail-detail">{alertFocusDetail}</div>
+                </div>
+                <div className={`focus-rail-item ${actionFocusTone}`}>
+                  <div className="focus-rail-label">行动项</div>
+                  <div className="focus-rail-value">{actionFocusValue}</div>
+                  <div className="focus-rail-detail">{actionFocusDetail}</div>
+                  {actionFocusCta ? (
+                    <button
+                      className="focus-rail-action"
+                      type="button"
+                      onClick={openActionReviewQueue}
+                    >
+                      {actionFocusCta}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="focus-rail-item">
+                  <div className="focus-rail-label">当前话题</div>
+                  <div className="focus-rail-value">{topicFocusLabel}</div>
+                  <div className="focus-rail-detail">
+                    {topicFocusDetail || '等待新的会议上下文。'}
+                  </div>
+                </div>
+              </div>
+            </section>
+
             {showCaptureStartCard ? (
               <div
                 className={`capture-start-card ${
@@ -3911,6 +4920,23 @@ function MeetingSidePanel() {
                 <div className="capture-start-title">{captureStartTitle}</div>
                 <div className="capture-start-copy">
                   {captureStartDescription}
+                </div>
+                <div
+                  className={`capture-start-receipt ${captureHandoffReceipt.tone}`}
+                  data-capture-handoff-receipt="true"
+                >
+                  <span className="capture-start-receipt-label">当前</span>
+                  <span className="capture-start-receipt-value">
+                    {captureHandoffReceipt.status}
+                  </span>
+                  <span className="capture-start-receipt-label">范围</span>
+                  <span className="capture-start-receipt-value">
+                    {captureHandoffReceipt.scope}
+                  </span>
+                  <span className="capture-start-receipt-label">下一步</span>
+                  <span className="capture-start-receipt-value">
+                    {captureHandoffReceipt.nextStep}
+                  </span>
                 </div>
                 {!session.readiness.canStartCapture ? (
                   <div className="capture-start-actions">
@@ -3958,10 +4984,32 @@ function MeetingSidePanel() {
                 <div className="value">会前准备已带入</div>
                 <div className="subtext">
                   {meetingPrepHandoff.event.title}
-                  {meetingPrepHandoff.goal
-                    ? ` · 目标：${meetingPrepHandoff.goal}`
-                    : ''}
                 </div>
+                {meetingPrepMatchReceipt ? (
+                  <div
+                    className={`meeting-prep-match-receipt ${meetingPrepMatchReceipt.tone}`}
+                    aria-label="Handoff 匹配回执"
+                  >
+                    <div className="meeting-prep-match-head">
+                      <strong>{meetingPrepMatchReceipt.title}</strong>
+                      <span>{meetingPrepMatchReceipt.detail}</span>
+                    </div>
+                    <div className="meeting-prep-match-chips">
+                      {meetingPrepMatchReceipt.chips.map((chip, index) => (
+                        <span key={`${chip}-${index}`}>{chip}</span>
+                      ))}
+                    </div>
+                    <div className="meeting-prep-match-boundary">
+                      {meetingPrepMatchReceipt.boundary}
+                    </div>
+                  </div>
+                ) : null}
+                {meetingPrepGoal ? (
+                  <div className="meeting-prep-goal">
+                    <span>本场关注</span>
+                    <strong>{meetingPrepGoal}</strong>
+                  </div>
+                ) : null}
                 {meetingPrepCards.length ? (
                   <div className="meeting-prep-cues">
                     {meetingPrepCards.map((card) => (
@@ -4253,6 +5301,7 @@ function MeetingSidePanel() {
                       <div className="content">
                         <strong>{item.alert.title}</strong>
                         <div>{item.alert.body}</div>
+                        <MeetingAlertReceipt alert={item.alert} />
                       </div>
                     </div>
                   ),

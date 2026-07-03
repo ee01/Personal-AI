@@ -18,7 +18,9 @@ import {
     buildPreferenceChangeImpact,
     buildPreferenceDraftPreviewReceipt,
     buildPreferenceInjectionReceipt,
+    buildPreferencePreviewScopeReceipt,
     buildUserContextSectionReceipts,
+    buildUserContextScopeBreakdown,
     createConfigHistoryEntry,
     describeIndependentUserConfigChange,
     detectPromptImprovementHints,
@@ -131,7 +133,7 @@ type TabType = 'prompts' | 'personal' | 'team' | 'work' | 'communication' | 'ana
 type PromptScope = keyof CustomPrompts;
 type CurrentUserInfo = { name: string; email: string };
 type ConfigBaselineStatus = 'default' | 'local' | 'memory' | 'backed-up';
-type PreviewCopyReceiptStatus = 'copied' | 'error';
+type PreviewCopyReceiptStatus = 'copied' | 'empty' | 'error' | 'stale';
 
 interface ConfigBaselineReceipt {
     sourceLabel: string;
@@ -144,6 +146,10 @@ interface PreviewCopyReceipt {
     status: PreviewCopyReceiptStatus;
     title: string;
     detail: string;
+    copiedAt?: number;
+    copiedScope?: UserContextPreferenceScope;
+    copiedPreview?: string;
+    copiedPreviewStateLabel?: string;
 }
 
 interface HistoryRestoreDraftReceipt {
@@ -151,6 +157,32 @@ interface HistoryRestoreDraftReceipt {
     sourceSavedAt: number;
     sourceSummary: string;
     sourceChangeSummary: string;
+}
+
+interface ResetDraftReceipt {
+    resetAt: number;
+    preservedName: string;
+    preservedEmail: string;
+}
+
+interface PromptExampleDraftReceipt {
+    scope: PromptScope;
+    label: string;
+    insertedAt: number;
+}
+
+type SafetyBlockReceiptKind = 'prompt-risk' | 'user-context-sensitive';
+type SafetyBlockReceiptOperation = 'save' | 'fusion';
+
+interface SafetyBlockReceipt {
+    kind: SafetyBlockReceiptKind;
+    operation: SafetyBlockReceiptOperation;
+    title: string;
+    detail: string;
+    nextStep: string;
+    actionLabel: string;
+    targetTab: TabType;
+    blockedAt: number;
 }
 
 const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: string }>> = {
@@ -429,6 +461,11 @@ const PromptConfig: React.FC = () => {
     const [previewCopyReceipt, setPreviewCopyReceipt] = useState<PreviewCopyReceipt | null>(null);
     const [historyRestoreReceipt, setHistoryRestoreReceipt] =
         useState<HistoryRestoreDraftReceipt | null>(null);
+    const [resetDraftReceipt, setResetDraftReceipt] = useState<ResetDraftReceipt | null>(null);
+    const [promptExampleDraftReceipt, setPromptExampleDraftReceipt] =
+        useState<PromptExampleDraftReceipt | null>(null);
+    const [safetyBlockReceipt, setSafetyBlockReceipt] =
+        useState<SafetyBlockReceipt | null>(null);
     const injectedPreview = useMemo(
         () => buildIndependentUserConfigPreview(configData, {
             userContextScope: previewScope
@@ -447,11 +484,21 @@ const PromptConfig: React.FC = () => {
         }),
         [configData, previewScope]
     );
+    const previewScopeReceipt = useMemo(
+        () => buildPreferencePreviewScopeReceipt(previewScope),
+        [previewScope]
+    );
     const userContextSectionReceipts = useMemo(
         () => buildUserContextSectionReceipts(configData, {
             previewScope
         }),
         [configData, previewScope]
+    );
+    const userContextScopeBreakdown = useMemo(
+        () => buildUserContextScopeBreakdown(configData.userContextConfig, {
+            scope: previewScope
+        }),
+        [configData.userContextConfig, previewScope]
     );
     const preferenceChangeImpact = useMemo(
         () => hasUnsavedChanges
@@ -468,6 +515,46 @@ const PromptConfig: React.FC = () => {
         }),
         [configData, hasUnsavedChanges, lastPersistedConfig, previewScope]
     );
+    const previewCopyDisplayReceipt = useMemo((): PreviewCopyReceipt | null => {
+        if (!previewCopyReceipt || previewCopyReceipt.status !== 'copied') {
+            return previewCopyReceipt;
+        }
+
+        const currentPreviewStateLabel = draftPreviewReceipt.status === 'active'
+            ? '已保存基线'
+            : '未保存草稿';
+        const copiedScope = previewCopyReceipt.copiedScope || previewScope;
+        const copiedPreviewStateLabel =
+            previewCopyReceipt.copiedPreviewStateLabel || currentPreviewStateLabel;
+        const copiedPreview = previewCopyReceipt.copiedPreview || '';
+        const isCurrentCopy = (
+            copiedScope === previewScope &&
+            copiedPreview === injectedPreview &&
+            copiedPreviewStateLabel === currentPreviewStateLabel
+        );
+
+        if (isCurrentCopy) return previewCopyReceipt;
+
+        const copiedScopeLabel = getPreviewScopeLabel(copiedScope);
+        const currentScopeLabel = getPreviewScopeLabel(previewScope);
+        const changedDetails = [
+            copiedScope !== previewScope ? `范围已切到${currentScopeLabel}` : '',
+            copiedPreview !== injectedPreview ? '预览文本已变化' : '',
+            copiedPreviewStateLabel !== currentPreviewStateLabel
+                ? `预览状态已变为${currentPreviewStateLabel}`
+                : ''
+        ].filter(Boolean);
+        const copiedTime = previewCopyReceipt.copiedAt
+            ? formatHistoryTimestamp(previewCopyReceipt.copiedAt)
+            : '刚才';
+
+        return {
+            ...previewCopyReceipt,
+            status: 'stale',
+            title: `剪贴板仍是${copiedScopeLabel}旧预览`,
+            detail: `${copiedPreviewStateLabel}的${copiedScopeLabel}预览已在 ${copiedTime} 复制；${changedDetails.join('，') || '当前页面预览已变化'}。重新点击复制才会更新剪贴板；这不会保存配置、触发真实分析或写入/备份到记忆服务。`
+        };
+    }, [draftPreviewReceipt.status, injectedPreview, previewCopyReceipt, previewScope]);
     const configSummary = useMemo(
         () => buildIndependentUserConfigSummary(configData),
         [configData]
@@ -475,12 +562,6 @@ const PromptConfig: React.FC = () => {
     const promptRiskHints = useMemo(
         () => detectPromptRiskHints(configData),
         [configData]
-    );
-    const activePromptRiskHints = useMemo(
-        () => promptRiskHints.filter((hint) =>
-            isCustomPromptScopeInjectionEnabled(configData, hint.scope)
-        ),
-        [configData, promptRiskHints]
     );
     const promptImprovementHints = useMemo(
         () => detectPromptImprovementHints(configData),
@@ -497,22 +578,25 @@ const PromptConfig: React.FC = () => {
         }, {} as Partial<Record<UserContextSectionReceiptId, UserContextSensitiveHint[]>>)
     ), [userContextSensitiveHints]);
     const promptRiskAcknowledgementKey = useMemo(() => {
-        if (activePromptRiskHints.length === 0) return '';
-        const riskyPromptContents = activePromptRiskHints.map((hint) => ({
+        if (promptRiskHints.length === 0) return '';
+        const riskyPromptContents = promptRiskHints.map((hint) => ({
             scope: hint.scope,
-            content: configData.customPrompts[hint.scope]?.content || ''
+            content: configData.customPrompts[hint.scope]?.content || '',
+            injectionState: isCustomPromptScopeInjectionEnabled(configData, hint.scope)
+                ? 'active'
+                : 'paused'
         }));
         return JSON.stringify({
-            hints: activePromptRiskHints,
+            hints: promptRiskHints,
             promptContents: riskyPromptContents
         });
-    }, [activePromptRiskHints, configData.customPrompts]);
+    }, [promptRiskHints, configData.customPrompts]);
     const userContextSensitiveAcknowledgementKey = useMemo(() => {
         if (userContextSensitiveHints.length === 0) return '';
         return JSON.stringify(userContextSensitiveHints.map((hint) => hint.fingerprint));
     }, [userContextSensitiveHints]);
     const hasUnacknowledgedPromptRisk = (
-        activePromptRiskHints.length > 0 &&
+        promptRiskHints.length > 0 &&
         promptRiskAcknowledgedKey !== promptRiskAcknowledgementKey
     );
     const hasUnacknowledgedUserContextSensitiveHint = (
@@ -536,10 +620,6 @@ const PromptConfig: React.FC = () => {
     useEffect(() => {
         initializeConfigPage();
     }, []);
-
-    useEffect(() => {
-        setPreviewCopyReceipt(null);
-    }, [hasUnsavedChanges, injectedPreview, previewScope]);
 
     const initializeConfigPage = async () => {
         const userInfo = await loadCurrentUserInfo();
@@ -636,6 +716,9 @@ const PromptConfig: React.FC = () => {
                 sourceSavedAt
             ));
             setHistoryRestoreReceipt(null);
+            setResetDraftReceipt(null);
+            setPromptExampleDraftReceipt(null);
+            setSafetyBlockReceipt(null);
             showStatusMessage(`已加载${sourceLabel}`, 'success');
         } catch (error) {
             console.error('加载配置失败:', error);
@@ -710,7 +793,42 @@ const PromptConfig: React.FC = () => {
         }
     };
 
-	const validateConfiguration = (): boolean => {
+    const showSafetyBlockReceipt = (
+        kind: SafetyBlockReceiptKind,
+        operation: SafetyBlockReceiptOperation,
+        targetTab: TabType
+    ) => {
+        const isFusion = operation === 'fusion';
+        const title = `${isFusion ? '融合' : '保存'}已拦截：${
+            kind === 'prompt-risk'
+                ? '安全提示未确认'
+                : '用户上下文疑似凭据未确认'
+        }`;
+        const detail = isFusion
+            ? '本次没有保存草稿、没有触发真实分析、没有写入或备份到记忆服务，也没有融合到用户画像；真实分析仍读取上方已生效基线。'
+            : '本次没有保存草稿、没有触发真实分析，也没有写入或备份到记忆服务；真实分析仍读取上方已生效基线。';
+        const nextStep = kind === 'prompt-risk'
+            ? '请确认这些语句只作为低优先级偏好保存，或改写/删除疑似覆盖系统规则、工具边界或返回格式的内容后再试。'
+            : '请删除可用 secret，或把它改成凭据所在系统、owner、用途等不可执行引用，再确认后保存。';
+        const actionLabel = kind === 'prompt-risk'
+            ? '查看提示词安全提示'
+            : '检查敏感上下文';
+
+        setSafetyBlockReceipt({
+            kind,
+            operation,
+            title,
+            detail,
+            nextStep,
+            actionLabel,
+            targetTab,
+            blockedAt: Date.now()
+        });
+    };
+
+	const validateConfiguration = (
+        operation: SafetyBlockReceiptOperation = 'save'
+    ): boolean => {
         const messagePromptContent = configData.customPrompts.message.content.trim();
         const projectPromptContent = configData.customPrompts.project.content.trim();
 
@@ -720,12 +838,14 @@ const PromptConfig: React.FC = () => {
 	    ) {
 	            showStatusMessage('消息分析提示词为空，已启用时需要填写内容', 'error');
 	            setActiveTab('prompts');
+                setSafetyBlockReceipt(null);
 	            return false;
 	        }
 
         if (messagePromptContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
             showStatusMessage(`消息分析提示词不能超过 ${USER_CONFIG_PROMPT_CHAR_LIMIT} 字符`, 'error');
             setActiveTab('prompts');
+            setSafetyBlockReceipt(null);
             return false;
         }
 
@@ -735,26 +855,29 @@ const PromptConfig: React.FC = () => {
         ) {
             showStatusMessage('项目分析提示词为空，已启用时需要填写内容', 'error');
             setActiveTab('prompts');
+            setSafetyBlockReceipt(null);
             return false;
         }
 
         if (projectPromptContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
             showStatusMessage(`项目分析提示词不能超过 ${USER_CONFIG_PROMPT_CHAR_LIMIT} 字符`, 'error');
             setActiveTab('prompts');
+            setSafetyBlockReceipt(null);
             return false;
         }
 
         if (hasUnacknowledgedPromptRisk) {
             showStatusMessage('检测到安全提示，请先确认这些语句只作为低优先级偏好保存', 'error');
+            showSafetyBlockReceipt('prompt-risk', operation, 'prompts');
             setActiveTab('prompts');
             return false;
         }
 
         if (hasUnacknowledgedUserContextSensitiveHint) {
+            const targetTab = USER_CONTEXT_SECTION_TAB[userContextSensitiveHints[0]?.section] || 'analysis';
             showStatusMessage('检测到用户上下文敏感提示，请先确认不会把可用凭据写入长期配置', 'error');
-            setActiveTab(
-                USER_CONTEXT_SECTION_TAB[userContextSensitiveHints[0]?.section] || 'analysis'
-            );
+            showSafetyBlockReceipt('user-context-sensitive', operation, targetTab);
+            setActiveTab(targetTab);
             return false;
         }
 
@@ -796,6 +919,9 @@ const PromptConfig: React.FC = () => {
         setConfigHistory(nextHistory);
 	    setHasUnsavedChanges(false);
         setHistoryRestoreReceipt(null);
+        setResetDraftReceipt(null);
+        setPromptExampleDraftReceipt(null);
+        setSafetyBlockReceipt(null);
 
 	    try {
 	        const response = await chrome.runtime.sendMessage({
@@ -840,7 +966,7 @@ const PromptConfig: React.FC = () => {
 	const triggerDataFusion = async () => {
 	    setIsSaving(true);
 	    try {
-            if (!validateConfiguration()) return;
+            if (!validateConfiguration('fusion')) return;
 
 	        let configForFusion = configData;
 	        if (hasUnsavedChanges) {
@@ -890,21 +1016,30 @@ const PromptConfig: React.FC = () => {
 	};
 
     const resetToDefaults = () => {
-        if (confirm('确定要重置所有配置为默认值吗？此操作不可撤销。')) {
+        if (confirm('重置默认只会把当前页面改成未保存草稿；保存前真实分析、本机配置和记忆服务备份都不变，也不会融合画像。继续重置当前草稿？')) {
             const savedUserInfo = {
                 name: configData.userContextConfig.personalInfo.name,
                 email: configData.userContextConfig.personalInfo.email
             };
+            const resetAt = Date.now();
 
             const nextConfig = createDefaultConfig();
             nextConfig.userContextConfig.personalInfo.name = savedUserInfo.name;
             nextConfig.userContextConfig.personalInfo.email = savedUserInfo.email;
-            nextConfig.userContextConfig.lastUpdated = Date.now();
+            nextConfig.userContextConfig.lastUpdated = resetAt;
 
             setConfigData(nextConfig);
             setHasUnsavedChanges(true);
             setHistoryRestoreReceipt(null);
-            showStatusMessage('配置已重置，保存后生效', 'success');
+            setPromptExampleDraftReceipt(null);
+            setSafetyBlockReceipt(null);
+            setResetDraftReceipt({
+                resetAt,
+                preservedName: savedUserInfo.name,
+                preservedEmail: savedUserInfo.email
+            });
+            setSyncSource('已重置为默认草稿');
+            showStatusMessage('已重置为默认草稿，保存后才会生效', 'success');
         }
     };
 
@@ -918,6 +1053,9 @@ const PromptConfig: React.FC = () => {
 
         setConfigData(normalizeConfig(entry.config));
         setHasUnsavedChanges(true);
+        setResetDraftReceipt(null);
+        setPromptExampleDraftReceipt(null);
+        setSafetyBlockReceipt(null);
         setHistoryRestoreReceipt({
             restoredAt: Date.now(),
             sourceSavedAt: entry.savedAt,
@@ -943,6 +1081,15 @@ const PromptConfig: React.FC = () => {
             ? '已保存基线'
             : '未保存草稿';
 
+        if (preferenceFootprint.previewCharCount <= 0) {
+            setPreviewCopyReceipt({
+                status: 'empty',
+                title: `当前${scopeLabel}预览没有可复制注入文本`,
+                detail: `当前${scopeLabel}范围只有空状态说明，没有会进入真实分析的清洗后偏好文本；本次没有写入剪贴板，也不会保存配置、触发真实分析或写入/备份到记忆服务。`
+            });
+            return;
+        }
+
         try {
             const copied = await copyTextToClipboard(injectedPreview);
             if (!copied) {
@@ -952,7 +1099,11 @@ const PromptConfig: React.FC = () => {
             setPreviewCopyReceipt({
                 status: 'copied',
                 title: `已复制${scopeLabel}预览`,
-                detail: `${previewStateLabel}的清洗后注入文本已复制；这只是审计文本，不会保存配置、不会触发真实分析、不会写入或备份到记忆服务。`
+                detail: `${previewStateLabel}的清洗后注入文本已复制；这只是审计文本，不会保存配置、不会触发真实分析、不会写入或备份到记忆服务。`,
+                copiedAt: Date.now(),
+                copiedScope: previewScope,
+                copiedPreview: injectedPreview,
+                copiedPreviewStateLabel: previewStateLabel
             });
         } catch (error) {
             console.warn('复制生效预览失败:', error);
@@ -971,6 +1122,9 @@ const PromptConfig: React.FC = () => {
 		    const keys = path.split('.');
 		    setHasUnsavedChanges(true);
             setHistoryRestoreReceipt(null);
+            setResetDraftReceipt(null);
+            setPromptExampleDraftReceipt(null);
+            setSafetyBlockReceipt(null);
 		    setConfigData(prev => {
 	        const newConfig: any = { ...prev };
 	        let currentNew = newConfig;
@@ -1010,11 +1164,14 @@ const PromptConfig: React.FC = () => {
 	    updateConfigAtPath(path, value);
 	};
 
-    const appendPromptExample = (scope: PromptScope, content: string) => {
+    const appendPromptExample = (
+        scope: PromptScope,
+        example: { label: string; content: string }
+    ) => {
         const currentContent = configData.customPrompts[scope].content.trim();
         const nextContent = currentContent
-            ? `${currentContent}\n\n${content}`
-            : content;
+            ? `${currentContent}\n\n${example.content}`
+            : example.content;
 
         if (nextContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
             showStatusMessage(
@@ -1030,6 +1187,11 @@ const PromptConfig: React.FC = () => {
             content: nextContent,
             position: prompt?.position || 'after_analysis_guide'
         }));
+        setPromptExampleDraftReceipt({
+            scope,
+            label: example.label,
+            insertedAt: Date.now()
+        });
     };
 
     const getPromptMetaClass = (content: string) => (
@@ -1037,6 +1199,31 @@ const PromptConfig: React.FC = () => {
             ? 'field-meta warning'
             : 'field-meta'
     );
+
+    const renderSafetyBlockReceipt = () => {
+        if (!safetyBlockReceipt) return null;
+
+        return (
+            <div
+                className={`safety-block-receipt ${safetyBlockReceipt.kind}`}
+                role="status"
+                aria-live="polite"
+            >
+                <span>
+                    {safetyBlockReceipt.operation === 'fusion' ? '融合阻塞' : '保存阻塞'}
+                </span>
+                <strong>{safetyBlockReceipt.title}</strong>
+                <small>{safetyBlockReceipt.detail}</small>
+                <small>{safetyBlockReceipt.nextStep}</small>
+                <button
+                    type="button"
+                    onClick={() => setActiveTab(safetyBlockReceipt.targetTab)}
+                >
+                    {safetyBlockReceipt.actionLabel}
+                </button>
+            </div>
+        );
+    };
 
     const renderConfigSummary = () => (
         <div
@@ -1179,6 +1366,30 @@ const PromptConfig: React.FC = () => {
         );
     };
 
+    const renderResetDraftReceipt = () => {
+        if (!resetDraftReceipt || !hasUnsavedChanges) return null;
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+        const preservedIdentity = [
+            resetDraftReceipt.preservedName,
+            resetDraftReceipt.preservedEmail
+        ].filter(Boolean).join(' / ') || '暂无姓名或邮箱';
+
+        return (
+            <div
+                className="reset-draft-receipt"
+                role="status"
+                aria-live="polite"
+            >
+                <span>重置草稿</span>
+                <strong>已把当前页面恢复为默认配置草稿</strong>
+                <small>
+                    本轮重置：{formatHistoryTimestamp(resetDraftReceipt.resetAt)}；保留身份字段：{preservedIdentity}。
+                    当前{scopeLabel}预览显示这份默认草稿；真实分析仍读取上方已生效基线。保存前不会改写本机配置、记忆服务备份或用户画像；重新加载可丢弃这份草稿。
+                </small>
+            </div>
+        );
+    };
+
 	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
 	    updateConfigAtPath(
 	        'userContextConfig.stakeholders.keyStakeholders',
@@ -1309,12 +1520,49 @@ const PromptConfig: React.FC = () => {
                             key={example.label}
                             type="button"
                             className="example-chip"
-                            onClick={() => appendPromptExample(scope, example.content)}
+                            onClick={() => appendPromptExample(scope, example)}
                         >
                             {example.label}
                         </button>
                     ))}
                 </div>
+                {promptExampleDraftReceipt?.scope === scope && hasUnsavedChanges && (() => {
+                    const targetPreviewScope: UserContextPreferenceScope =
+                        scope === 'message' ? 'message' : 'project';
+                    const currentPreviewIncludesPrompt =
+                        previewScope === 'all' || previewScope === targetPreviewScope;
+                    const currentScopeLabel = getPreviewScopeLabel(previewScope);
+                    const targetScopeLabel = getPreviewScopeLabel(targetPreviewScope);
+
+                    return (
+                        <div
+                            className={`prompt-example-draft-receipt ${
+                                currentPreviewIncludesPrompt ? 'included' : 'excluded'
+                            }`}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            <span>示例草稿</span>
+                            <strong>
+                                已插入“{promptExampleDraftReceipt.label}”并启用{title}提示词
+                            </strong>
+                            <small>
+                                当前只是页面草稿；保存前不会进入真实分析、写入本机配置或备份到记忆服务。
+                                {currentPreviewIncludesPrompt
+                                    ? ` 当前${currentScopeLabel}预览已包含这段示例，可在保存影响里核对。`
+                                    : ` 当前${currentScopeLabel}预览不会显示这段示例，切到${targetScopeLabel}或全部预览后再核对保存影响。`}
+                            </small>
+                            {!currentPreviewIncludesPrompt && (
+                                <button
+                                    type="button"
+                                    onClick={() => setPreviewScope(targetPreviewScope)}
+                                >
+                                    查看{targetScopeLabel}预览
+                                </button>
+                            )}
+                        </div>
+                    );
+                })()}
                 <div className="prompt-scope-note">
                     <strong>作用范围</strong>
                     <span>
@@ -1327,23 +1575,33 @@ const PromptConfig: React.FC = () => {
         );
     };
 
+    const renderPreviewScopeSwitch = (
+        ariaLabel = '预览注入范围',
+        className = ''
+    ) => (
+        <div
+            className={`preview-scope-switch ${className}`.trim()}
+            aria-label={ariaLabel}
+        >
+            {PREVIEW_SCOPE_OPTIONS.map((option) => (
+                <button
+                    key={option.value}
+                    type="button"
+                    className={previewScope === option.value ? 'active' : ''}
+                    onClick={() => setPreviewScope(option.value)}
+                >
+                    {option.label}
+                </button>
+            ))}
+        </div>
+    );
+
     const renderEffectPreview = () => (
         <div className="effect-preview-section">
             <div className="section-title-row">
                 <div className="preview-title-group">
                     <h4>生效预览</h4>
-                    <div className="preview-scope-switch" aria-label="预览注入范围">
-                        {PREVIEW_SCOPE_OPTIONS.map((option) => (
-                            <button
-                                key={option.value}
-                                type="button"
-                                className={previewScope === option.value ? 'active' : ''}
-                                onClick={() => setPreviewScope(option.value)}
-                            >
-                                {option.label}
-                            </button>
-                        ))}
-                    </div>
+                    {renderPreviewScopeSwitch()}
                 </div>
                 <div className="preview-meta-actions">
                     <span>
@@ -1359,6 +1617,15 @@ const PromptConfig: React.FC = () => {
                         复制预览
                     </button>
                 </div>
+            </div>
+            <div
+                className={`scope-basis-receipt ${previewScopeReceipt.status}`}
+                role="status"
+                aria-live="polite"
+            >
+                <span>{previewScopeReceipt.statusLabel}</span>
+                <strong>{previewScopeReceipt.title}</strong>
+                <small>{previewScopeReceipt.detail}</small>
             </div>
             {preferenceChangeImpact && (
                 <div
@@ -1385,21 +1652,35 @@ const PromptConfig: React.FC = () => {
                     </div>
                 </div>
             )}
-            {activePromptRiskHints.length > 0 && (
+            {promptRiskHints.length > 0 && (
                 <div className="preference-warnings" role="status">
-                    {activePromptRiskHints.map((hint, index) => (
-                        <div key={`${hint.scope}-${index}`}>
-                            <strong>{hint.scopeLabel}</strong>
-                            <span>{hint.message}</span>
-                        </div>
-                    ))}
+                    {promptRiskHints.map((hint, index) => {
+                        const scopeInjectionEnabled =
+                            isCustomPromptScopeInjectionEnabled(configData, hint.scope);
+                        return (
+                            <div key={`${hint.scope}-${index}`}>
+                                <strong>{hint.scopeLabel}</strong>
+                                <span>{hint.message}</span>
+                                <small>
+                                    {scopeInjectionEnabled
+                                        ? '当前会进入真实分析注入；保存前需要确认低优先级边界。'
+                                        : '当前注入已暂停，但内容仍会随配置保存；重新开启后才会进入真实分析。'}
+                                </small>
+                            </div>
+                        );
+                    })}
                     <label className="risk-acknowledgement">
                         <input
                             type="checkbox"
                             checked={!hasUnacknowledgedPromptRisk}
-                            onChange={(event) => setPromptRiskAcknowledgedKey(
-                                event.target.checked ? promptRiskAcknowledgementKey : ''
-                            )}
+                            onChange={(event) => {
+                                setPromptRiskAcknowledgedKey(
+                                    event.target.checked ? promptRiskAcknowledgementKey : ''
+                                );
+                                if (event.target.checked && safetyBlockReceipt?.kind === 'prompt-risk') {
+                                    setSafetyBlockReceipt(null);
+                                }
+                            }}
                         />
                         <span>我确认上述语句只作为低优先级偏好保存，不用于覆盖系统规则、工具边界或返回格式。</span>
                     </label>
@@ -1431,9 +1712,17 @@ const PromptConfig: React.FC = () => {
                         <input
                             type="checkbox"
                             checked={!hasUnacknowledgedUserContextSensitiveHint}
-                            onChange={(event) => setUserContextSensitiveAcknowledgedKey(
-                                event.target.checked ? userContextSensitiveAcknowledgementKey : ''
-                            )}
+                            onChange={(event) => {
+                                setUserContextSensitiveAcknowledgedKey(
+                                    event.target.checked ? userContextSensitiveAcknowledgementKey : ''
+                                );
+                                if (
+                                    event.target.checked &&
+                                    safetyBlockReceipt?.kind === 'user-context-sensitive'
+                                ) {
+                                    setSafetyBlockReceipt(null);
+                                }
+                            }}
                         />
                         <span>我确认这些内容不是可用凭据，或已改成不可执行的引用；保存只写入本机配置并尝试做记忆服务恢复备份，不会执行、验证或使用这些值调用外部系统。</span>
                     </label>
@@ -1448,15 +1737,23 @@ const PromptConfig: React.FC = () => {
                 <strong>{draftPreviewReceipt.title}</strong>
                 <small>{draftPreviewReceipt.detail}</small>
             </div>
-            {previewCopyReceipt && (
+            {previewCopyDisplayReceipt && (
                 <div
-                    className={`preview-copy-receipt ${previewCopyReceipt.status}`}
+                    className={`preview-copy-receipt ${previewCopyDisplayReceipt.status}`}
                     role="status"
                     aria-live="polite"
                 >
-                    <span>{previewCopyReceipt.status === 'copied' ? '已复制' : '失败'}</span>
-                    <strong>{previewCopyReceipt.title}</strong>
-                    <small>{previewCopyReceipt.detail}</small>
+                    <span>
+                        {previewCopyDisplayReceipt.status === 'copied'
+                            ? '已复制'
+                            : previewCopyDisplayReceipt.status === 'stale'
+                                ? '旧快照'
+                                : previewCopyDisplayReceipt.status === 'empty'
+                                    ? '无内容'
+                                    : '失败'}
+                    </span>
+                    <strong>{previewCopyDisplayReceipt.title}</strong>
+                    <small>{previewCopyDisplayReceipt.detail}</small>
                 </div>
             )}
             <div className="injection-receipt-grid" aria-label={`${preferenceReceipt.scopeLabel}注入回执`}>
@@ -1503,6 +1800,70 @@ const PromptConfig: React.FC = () => {
                     </div>
                 )}
             </>
+        );
+    };
+
+    const renderUserContextScopeOverview = () => {
+        if (activeTab === 'prompts') return null;
+
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+        const userContextPaused = !configSummary.userContextInjectionEnabled;
+        const includedParts = [
+            userContextScopeBreakdown.baseSignalCount > 0
+                ? `基础 ${userContextScopeBreakdown.baseSignalCount}`
+                : '',
+            previewScope !== 'project' && userContextScopeBreakdown.messageSignalCount > 0
+                ? `消息 ${userContextScopeBreakdown.messageSignalCount}`
+                : '',
+            previewScope !== 'message' && userContextScopeBreakdown.projectSignalCount > 0
+                ? `项目 ${userContextScopeBreakdown.projectSignalCount}`
+                : ''
+        ].filter(Boolean);
+        const excludedDetail = userContextScopeBreakdown.excludedScopeLabels.length > 0
+            ? `${userContextScopeBreakdown.excludedScopeLabels.join('、')}保留，但不进入当前${scopeLabel}预览`
+            : '没有因当前预览范围被排除的专项信号';
+        const statusClass = userContextPaused
+            ? 'paused'
+            : userContextScopeBreakdown.includedSignalCount > 0
+                ? 'included'
+                : userContextScopeBreakdown.excludedSignalCount > 0
+                    ? 'excluded'
+                    : 'empty';
+        const statusLabel = userContextPaused
+            ? '暂停'
+            : userContextScopeBreakdown.includedSignalCount > 0
+                ? '注入'
+                : userContextScopeBreakdown.excludedSignalCount > 0
+                    ? '不在范围'
+                    : '空';
+        const pauseReason = !configSummary.preferenceInjectionEnabled
+            ? '全局偏好注入已暂停'
+            : '用户上下文来源已暂停';
+        const detail = userContextPaused
+            ? `${userContextScopeBreakdown.baseSignalCount + userContextScopeBreakdown.messageSignalCount + userContextScopeBreakdown.projectSignalCount} 项用户上下文信号会保留在配置里，但${pauseReason}，当前预览和真实分析不会读取。`
+            : userContextScopeBreakdown.includedSignalCount > 0
+                ? `当前${scopeLabel}预览会读取 ${userContextScopeBreakdown.includedSignalCount} 项用户上下文信号${includedParts.length > 0 ? `（${includedParts.join(' · ')}）` : ''}；${excludedDetail}。`
+                : `当前${scopeLabel}预览没有会读取的用户上下文信号；${excludedDetail}。`;
+
+        return (
+            <div
+                className={`context-scope-overview ${statusClass}`}
+                role="status"
+                aria-live="polite"
+            >
+                <span>{statusLabel}</span>
+                <strong>用户上下文本轮范围</strong>
+                <small>
+                    {detail}
+                    本条只解释当前页面预览和保存后的注入范围，不会保存配置、触发真实分析、融合画像或写入记忆服务。
+                    {hasUnsavedChanges ? ' 页面草稿未保存时，真实分析仍读取上方已生效基线。' : ''}
+                </small>
+                <small className="context-scope-basis">{previewScopeReceipt.detail}</small>
+                <div className="context-scope-actions">
+                    <div className="context-scope-action-label">查看范围</div>
+                    {renderPreviewScopeSwitch('用户上下文预览范围', 'context-scope-switch')}
+                </div>
+            </div>
         );
     };
 
@@ -1988,11 +2349,15 @@ const PromptConfig: React.FC = () => {
 
             {renderHistoryRestoreReceipt()}
 
+            {renderResetDraftReceipt()}
+
             {statusMessage && (
                 <div className={`status-message ${statusType}`}>
                     {statusMessage}
                 </div>
             )}
+
+            {renderSafetyBlockReceipt()}
 
 	            <div className="config-tabs">
 	                {[
@@ -2016,6 +2381,7 @@ const PromptConfig: React.FC = () => {
             <div className="config-content">
                 {renderInjectionControl()}
                 {renderConfigSummary()}
+                {renderUserContextScopeOverview()}
                 {renderTab()}
                 {renderEffectPreview()}
                 {renderConfigHistory()}
@@ -2158,6 +2524,84 @@ const PromptConfig: React.FC = () => {
                     border: 1px solid #f5c6cb;
                 }
 
+                .safety-block-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 5px 9px;
+                    align-items: start;
+                    margin: -4px 0 16px;
+                    padding: 11px 12px;
+                    border: 1px solid #fed7aa;
+                    border-left: 4px solid #d97706;
+                    border-radius: 6px;
+                    background: #fff7ed;
+                    color: #9a3412;
+                    line-height: 1.45;
+                }
+
+                .safety-block-receipt.user-context-sensitive {
+                    border-color: #fecaca;
+                    border-left-color: #dc2626;
+                    background: #fef2f2;
+                    color: #991b1b;
+                }
+
+                .safety-block-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #fef3c7;
+                    color: #92400e;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .safety-block-receipt.user-context-sensitive span {
+                    background: #fee2e2;
+                    color: #991b1b;
+                }
+
+                .safety-block-receipt strong {
+                    min-width: 0;
+                    color: #7c2d12;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .safety-block-receipt.user-context-sensitive strong {
+                    color: #7f1d1d;
+                }
+
+                .safety-block-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .safety-block-receipt button {
+                    grid-column: 1 / -1;
+                    justify-self: start;
+                    min-height: 30px;
+                    padding: 5px 10px;
+                    border: 1px solid currentColor;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+
+                .safety-block-receipt button:hover,
+                .safety-block-receipt button:focus-visible {
+                    background: rgba(255, 255, 255, 0.72);
+                    outline: none;
+                }
+
                 .baseline-receipt {
                     display: grid;
                     grid-template-columns: auto 1fr;
@@ -2226,7 +2670,8 @@ const PromptConfig: React.FC = () => {
 	                    font-weight: 600;
 	                }
 
-                    .history-restore-receipt {
+                    .history-restore-receipt,
+                    .reset-draft-receipt {
                         display: grid;
                         grid-template-columns: auto 1fr;
                         gap: 4px 8px;
@@ -2241,7 +2686,8 @@ const PromptConfig: React.FC = () => {
                         line-height: 1.45;
                     }
 
-                    .history-restore-receipt span {
+                    .history-restore-receipt span,
+                    .reset-draft-receipt span {
                         width: fit-content;
                         max-width: 100%;
                         padding: 2px 7px;
@@ -2253,14 +2699,16 @@ const PromptConfig: React.FC = () => {
                         white-space: nowrap;
                     }
 
-                    .history-restore-receipt strong {
+                    .history-restore-receipt strong,
+                    .reset-draft-receipt strong {
                         min-width: 0;
                         color: #7c2d12;
                         font-size: 13px;
                         overflow-wrap: anywhere;
                     }
 
-                    .history-restore-receipt small {
+                    .history-restore-receipt small,
+                    .reset-draft-receipt small {
                         grid-column: 1 / -1;
                         min-width: 0;
                         color: inherit;
@@ -2544,6 +2992,55 @@ const PromptConfig: React.FC = () => {
                     outline-offset: 2px;
                 }
 
+                .scope-basis-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin-bottom: 12px;
+                    padding: 9px 10px;
+                    border: 1px solid #cbd5e1;
+                    border-left: 4px solid #64748b;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .scope-basis-receipt.runtime {
+                    border-color: #bfdbfe;
+                    border-left-color: #2563eb;
+                    background: #eff6ff;
+                    color: #1e40af;
+                }
+
+                .scope-basis-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: rgba(100, 116, 139, 0.12);
+                    color: inherit;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .scope-basis-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .scope-basis-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
                 .preference-change-impact {
                     display: grid;
                     gap: 10px;
@@ -2660,6 +3157,14 @@ const PromptConfig: React.FC = () => {
 
                 .preference-warnings strong {
                     color: #7c2d12;
+                }
+
+                .preference-warnings small {
+                    flex-basis: 100%;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
                 }
 
                 .risk-acknowledgement {
@@ -2834,6 +3339,20 @@ const PromptConfig: React.FC = () => {
                     color: #991b1b;
                 }
 
+                .preview-copy-receipt.stale {
+                    border-color: #fde68a;
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                    color: #92400e;
+                }
+
+                .preview-copy-receipt.empty {
+                    border-color: #cbd5e1;
+                    border-left-color: #64748b;
+                    background: #f8fafc;
+                    color: #475569;
+                }
+
                 .preview-copy-receipt span {
                     width: fit-content;
                     max-width: 100%;
@@ -2998,6 +3517,99 @@ const PromptConfig: React.FC = () => {
                 .context-section-receipt.empty {
                     border-left-color: #94a3b8;
                     background: #f8fafc;
+                }
+
+                .context-scope-overview {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin: 0 0 16px;
+                    padding: 10px 12px;
+                    border: 1px solid #d8dee4;
+                    border-left: 4px solid #8c959f;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .context-scope-overview span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .context-scope-overview strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-scope-overview small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-scope-actions {
+                    grid-column: 1 / -1;
+                    display: flex;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    gap: 8px;
+                    min-width: 0;
+                    padding-top: 2px;
+                }
+
+                .context-scope-action-label {
+                    color: #475569;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+
+                .context-scope-switch {
+                    min-height: 28px;
+                }
+
+                .context-scope-switch button {
+                    min-width: 42px;
+                    padding: 4px 9px;
+                }
+
+                .context-scope-overview.included {
+                    border-left-color: #16a34a;
+                    background: #f7fee7;
+                }
+
+                .context-scope-overview.included span {
+                    background: #dcfce7;
+                    color: #166534;
+                }
+
+                .context-scope-overview.excluded,
+                .context-scope-overview.empty {
+                    border-left-color: #64748b;
+                    background: #f8fafc;
+                }
+
+                .context-scope-overview.paused {
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                }
+
+                .context-scope-overview.paused span {
+                    background: #fef3c7;
+                    color: #92400e;
                 }
 
                 .context-section-sensitive-warning {
@@ -3264,6 +3876,68 @@ const PromptConfig: React.FC = () => {
                 .example-chip:hover {
                     background: #f1f5f9;
                     border-color: #94a3b8;
+                }
+
+                .prompt-example-draft-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr auto;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin-top: 10px;
+                    padding: 9px 10px;
+                    border: 1px solid #bbf7d0;
+                    border-left: 4px solid #16a34a;
+                    border-radius: 6px;
+                    background: #f0fdf4;
+                    color: #166534;
+                    line-height: 1.45;
+                }
+
+                .prompt-example-draft-receipt.excluded {
+                    border-color: #fde68a;
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                    color: #92400e;
+                }
+
+                .prompt-example-draft-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: rgba(22, 101, 52, 0.1);
+                    color: inherit;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .prompt-example-draft-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .prompt-example-draft-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .prompt-example-draft-receipt button {
+                    width: auto;
+                    margin: 0;
+                    padding: 5px 9px;
+                    border: 1px solid rgba(146, 64, 14, 0.25);
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #92400e;
+                    cursor: pointer;
+                    font-size: 12px;
+                    white-space: nowrap;
                 }
 
                 .prompt-scope-note {

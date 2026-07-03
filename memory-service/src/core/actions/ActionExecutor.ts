@@ -19,6 +19,7 @@ import { buildMessageRuleImprovementContextFromDelegationOutcome } from '../Mess
 import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
 import { ReflectionThreadService } from '../ReflectionThreadService.js';
 import { OutreachEngine } from '../OutreachEngine.js';
+import { EvidenceWatchContractService } from '../EvidenceWatchContractService.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
 
 const OPENCLAW_STALE_RUNNING_GRACE_SECONDS = 60;
@@ -40,6 +41,15 @@ interface DispatchOutcome {
   queueStatus?: Extract<ActionQueueStatus, 'failed' | 'dead_letter'>;
   errorMessage?: string;
   delegationOutcome?: DelegationOutcome;
+}
+
+interface FollowUpActionSummary {
+  id: string;
+  actionType: string;
+  title: string;
+  queueStatus: ActionQueueStatus;
+  sourceKind?: string;
+  sourceRefId?: string;
 }
 
 function safeJsonValue(value: unknown): Record<string, unknown> {
@@ -518,6 +528,17 @@ export class ActionExecutor {
       ? { record: reusedFromThread, created: false }
       : this.confirmRequestRepo.createOrReusePending(confirmRequestInput);
     const confirmRequestId = confirmRequest.id;
+    const evidenceWatchContractId =
+      typeof params.evidenceWatchContractId === 'string' &&
+      params.evidenceWatchContractId.trim().length > 0
+        ? params.evidenceWatchContractId.trim()
+        : undefined;
+    if (evidenceWatchContractId) {
+      new EvidenceWatchContractService(this.db).linkConfirmRequest(
+        evidenceWatchContractId,
+        confirmRequestId,
+      );
+    }
 
     let alertActionId: string | undefined;
     if (
@@ -660,14 +681,18 @@ export class ActionExecutor {
       );
       const improvementActionId =
         await this.enqueueMessageRuleImprovementRequest(action, outcome);
+      const allFollowUpActionIds = [
+        ...followUpActionIds,
+        ...(improvementActionId ? [improvementActionId] : []),
+      ];
       return {
         result: {
           status: outcome.status,
           summary: outcome.summary,
-          followUpActionIds: [
-            ...followUpActionIds,
-            ...(improvementActionId ? [improvementActionId] : []),
-          ],
+          followUpActionIds: allFollowUpActionIds,
+          followUpActions: this.getFollowUpActionSummaries(
+            allFollowUpActionIds,
+          ),
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
@@ -684,14 +709,18 @@ export class ActionExecutor {
       );
       const improvementActionId =
         await this.enqueueMessageRuleImprovementRequest(action, outcome);
+      const allFollowUpActionIds = [
+        ...(confirmActionId ? [confirmActionId] : []),
+        ...(improvementActionId ? [improvementActionId] : []),
+      ];
       return {
         result: {
           status: outcome.status,
           summary: outcome.summary,
-          followUpActionIds: [
-            ...(confirmActionId ? [confirmActionId] : []),
-            ...(improvementActionId ? [improvementActionId] : []),
-          ],
+          followUpActionIds: allFollowUpActionIds,
+          followUpActions: this.getFollowUpActionSummaries(
+            allFollowUpActionIds,
+          ),
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
@@ -703,12 +732,18 @@ export class ActionExecutor {
 
     const improvementActionId =
       await this.enqueueMessageRuleImprovementRequest(action, outcome);
+    const followUpActionIds = improvementActionId ? [improvementActionId] : [];
     return {
       result: {
         status: outcome.status,
         summary: outcome.summary,
-        ...(improvementActionId
-          ? { followUpActionIds: [improvementActionId] }
+        ...(followUpActionIds.length > 0
+          ? {
+              followUpActionIds,
+              followUpActions: this.getFollowUpActionSummaries(
+                followUpActionIds,
+              ),
+            }
           : {}),
         transcriptPath: outcome.transcriptPath,
         payload: outcome.payload,
@@ -717,6 +752,20 @@ export class ActionExecutor {
       queueStatus: action.retryCount >= 2 ? 'dead_letter' : 'failed',
       errorMessage: outcome.summary,
     };
+  }
+
+  private getFollowUpActionSummaries(ids: string[]): FollowUpActionSummary[] {
+    return ids
+      .map((id) => this.actionRepo.getById(id))
+      .filter((item): item is QueuedActionRecord => Boolean(item))
+      .map((item) => ({
+        id: item.id,
+        actionType: item.actionType,
+        title: item.title,
+        queueStatus: item.queueStatus,
+        ...(item.sourceKind ? { sourceKind: item.sourceKind } : {}),
+        ...(item.sourceRefId ? { sourceRefId: item.sourceRefId } : {}),
+      }));
   }
 
   private async recordDelegationSuccess(

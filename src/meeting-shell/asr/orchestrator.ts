@@ -3,13 +3,25 @@ import type {
   ASRTranscriptEvent,
   ASRErrorEvent,
   MeetingPilotASRTier,
-} from './types';
-import type { MeetingPilotTierStatus } from '../protocol';
-import { isValidTierTransition } from '../protocol';
+} from './types.js';
+import type {
+  MeetingPilotASRProbeState,
+  MeetingPilotASRProbeTrailItem,
+  MeetingPilotTierStatus,
+} from '../protocol.js';
+import { isValidTierTransition } from '../protocol.js';
 
 type TranscriptionMode = 'auto' | 'local-only' | 'cloud-only';
 
 const LOCAL_FIRST_TRANSCRIPT_TIMEOUT_MS = 12_000;
+const MAX_PROBE_TRAIL_ITEMS = 8;
+
+function formatFirstTranscriptWatchdogDetail(timeoutMs: number): string {
+  return (
+    `Chrome On-Device waiting for first transcript; fallback watchdog ${timeoutMs / 1000}s. ` +
+    'Chrome may not be consuming the extension/offscreen custom audio track.'
+  );
+}
 
 interface OrchestratorOptions {
   providers: ASRProvider[];
@@ -54,6 +66,7 @@ export class ASROrchestrator {
   private firstTranscriptTimer: ReturnType<typeof setTimeout> | undefined;
   private activeProviderHasTranscript = false;
   private demotionReason: string | undefined;
+  private probeTrail: MeetingPilotASRProbeTrailItem[] = [];
 
   constructor(opts: OrchestratorOptions) {
     this.providers = opts.providers;
@@ -68,6 +81,7 @@ export class ASROrchestrator {
     this.activeAudio = audio;
     this.currentBadge = 'Probing';
     this.demotionReason = undefined;
+    this.probeTrail = [];
     this._emitTierStatus(null, 'Probing');
 
     const eligibleProviders = this.providers.filter((p) =>
@@ -81,6 +95,11 @@ export class ASROrchestrator {
         await this._activateProvider(provider, audio);
         return;
       }
+      this._appendProbeTrail(
+        provider.tier,
+        'unavailable',
+        avail.reason || 'unknown',
+      );
       unavailableReasons.push(
         `${provider.tier}: ${avail.reason || 'unknown'}`,
       );
@@ -137,13 +156,19 @@ export class ASROrchestrator {
         e.state === 'running' &&
         this.activeProvider === provider
       ) {
-        this._emitTierStatus(provider.tier, badge, e.detail);
+        this._emitTierStatus(
+          provider.tier,
+          badge,
+          transitionReason || `ASR tier ${provider.tier} activated`,
+          e.detail,
+        );
       }
     });
 
     const unsubError = provider.on('error', (e: ASRErrorEvent) => {
       if (e.fatal && !this.stopped) {
         this.demotionReason = `ASR tier ${e.tier} fatal error: ${e.message}`;
+        this._appendProbeTrail(e.tier, 'fatal_error', e.message);
         this.onCaptureLog(
           'error',
           this.demotionReason,
@@ -160,6 +185,7 @@ export class ASROrchestrator {
     } else {
       this.currentBadge = newBadge;
     }
+    this._appendProbeTrail(provider.tier, 'selected');
     this._emitTierStatus(
       provider.tier,
       newBadge,
@@ -172,6 +198,11 @@ export class ASROrchestrator {
       this.demotionReason = `ASR tier ${provider.tier} start failed: ${String(
         (error as Error)?.message || error,
       )}`;
+      this._appendProbeTrail(
+        provider.tier,
+        'start_failed',
+        String((error as Error)?.message || error),
+      );
       this.onCaptureLog(
         'error',
         this.demotionReason,
@@ -180,8 +211,9 @@ export class ASROrchestrator {
       return;
     }
     if (this.stopped || this.activeProvider !== provider) return;
+    this._appendProbeTrail(provider.tier, 'running');
     this.onCaptureLog('info', `ASR tier ${provider.tier} activated`);
-    this._armFirstTranscriptWatchdog(provider);
+    this._armFirstTranscriptWatchdog(provider, transitionReason);
   }
 
   private async _demoteTier(): Promise<void> {
@@ -219,6 +251,11 @@ export class ASROrchestrator {
         );
         return;
       }
+      this._appendProbeTrail(
+        provider.tier,
+        'unavailable',
+        avail.reason || 'unknown',
+      );
       unavailableReasons.push(
         `${provider.tier}: ${avail.reason || 'unknown'}`,
       );
@@ -248,9 +285,18 @@ export class ASROrchestrator {
     this.unsubscribers = [];
   }
 
-  private _armFirstTranscriptWatchdog(provider: ASRProvider): void {
+  private _armFirstTranscriptWatchdog(
+    provider: ASRProvider,
+    transitionReason?: string,
+  ): void {
     this._clearFirstTranscriptTimer();
     if (provider.tier !== 'web_speech') return;
+    this._emitTierStatus(
+      provider.tier,
+      TIER_BADGE_MAP[provider.tier],
+      transitionReason || `ASR tier ${provider.tier} activated`,
+      formatFirstTranscriptWatchdogDetail(LOCAL_FIRST_TRANSCRIPT_TIMEOUT_MS),
+    );
     this.firstTranscriptTimer = setTimeout(() => {
       this.firstTranscriptTimer = undefined;
       if (
@@ -266,6 +312,11 @@ export class ASROrchestrator {
       );
       this.demotionReason =
         `Chrome On-Device started but produced no transcript within ${LOCAL_FIRST_TRANSCRIPT_TIMEOUT_MS / 1000}s. Chrome may not be consuming the extension/offscreen custom audio track.`;
+      this._appendProbeTrail(
+        provider.tier,
+        'watchdog_timeout',
+        `no transcript within ${LOCAL_FIRST_TRANSCRIPT_TIMEOUT_MS / 1000}s`,
+      );
       void this._demoteTier();
     }, LOCAL_FIRST_TRANSCRIPT_TIMEOUT_MS);
   }
@@ -280,6 +331,7 @@ export class ASROrchestrator {
     activeTier: MeetingPilotASRTier | null,
     badge: MeetingPilotTierStatus['badge'],
     reason?: string,
+    statusDetail?: string,
   ): void {
     this.onTierStatus({
       activeTier,
@@ -287,6 +339,33 @@ export class ASROrchestrator {
       mode: this.mode,
       lastTransitionAt: Date.now(),
       lastTransitionReason: reason,
+      lastStatusDetail: statusDetail,
+      probeTrail: this.probeTrail.slice(-MAX_PROBE_TRAIL_ITEMS),
     });
+  }
+
+  private _appendProbeTrail(
+    tier: MeetingPilotASRTier,
+    state: MeetingPilotASRProbeState,
+    reason?: string,
+  ): void {
+    const last = this.probeTrail[this.probeTrail.length - 1];
+    if (
+      last &&
+      last.tier === tier &&
+      last.state === state &&
+      last.reason === reason
+    ) {
+      return;
+    }
+    this.probeTrail.push({
+      tier,
+      state,
+      reason,
+      ts: Date.now(),
+    });
+    if (this.probeTrail.length > MAX_PROBE_TRAIL_ITEMS) {
+      this.probeTrail = this.probeTrail.slice(-MAX_PROBE_TRAIL_ITEMS);
+    }
   }
 }

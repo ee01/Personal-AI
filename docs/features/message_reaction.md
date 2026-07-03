@@ -10,7 +10,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 结果主要受这些因素影响：
 
-1. 悬停意图：工具栏 4 秒后出现，避免用户只是扫过消息时打扰阅读。
+1. 悬停意图：工具栏只在鼠标停留消息 4 秒后出现，点击消息或键盘聚焦消息卡片不会直接展示工具栏，避免用户只是扫过或选中消息时打扰阅读。
 2. 消息身份：别人消息显示自动答复，自己消息显示跟进追问；自我识别错误会直接影响入口。
 3. 原消息链接/ID：Snooze 和 pending 保护依赖同源消息 ID，决定是更新旧提醒还是创建新提醒。
 4. 功能开关：四个入口可独立关闭，全部关闭时不显示工具栏。
@@ -20,20 +20,30 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 - Gmail Snooze、Slack Later 都强调“先从当前消息流移出，再在明确时间回到可处理列表”。
 - Gmail Snooze 和 Slack Later 的桌面入口都从消息/邮件 hover 后直接出现操作按钮；本功能工具栏使用 4 秒停留作为明确意图判断，避免扫过消息时打扰阅读。
-- Slack 对聚焦消息提供键盘快捷操作，Teams / Slack 的消息动作也会落在可展开的 more actions 路径里；本功能不能只依赖鼠标 hover，键盘聚焦消息卡片也要能打开同一套工具栏。
+- Slack / Teams 的消息动作也会落在可展开的 more actions 路径里；本功能的 reaction bar 展示入口收敛为消息 hover 4 秒，不再把点击消息或键盘聚焦消息卡片作为展示条件，避免阅读、选中或复制消息时误弹出。
+- 2026-06-22 针对消息工具栏设置的检查补充：Gmail Hover actions 是本地显示偏好，Teams 从消息创建任务 / workflow 仍要进入配置并确认目标位置，Human-AI interaction guidelines 也强调状态反馈、用户控制和可恢复性。Personal AI 因此把长悬停齿轮明确成“本地显示开关”：关闭入口只隐藏本浏览器消息旁按钮，不会取消已创建的 Snooze、Watch、Followup、自动答复规则或联动操作；已排队或已保存事项仍回各自管理页处理。
 - Slack Later / Reminders 和 Microsoft Teams 定时消息都强调创建后的管理能力：可回到统一列表完成、编辑、重排期或删除；本功能创建提醒后会给出「撤销」和「管理」入口，可就地取消误触的新提醒，也可跳转到定时消息管理器的 Snooze 类别视图。
 - Slack Later 对同一保存项支持修改提醒时间，而不是为同一消息堆积多个提醒；本功能会用原消息链接识别仍待处理的同源 Snooze，再次设置时更新原提醒的时间和内容。
+- 2026-06-13 针对 Glip AI 标注的检查补充：Slack Later 把保存项和提醒集中到 Later，并能跳回原消息；Gmail Snooze 会把邮件临时移出 inbox，但保留 Snoozed 视图；Teams Recap 把 AI follow-up tasks 锚在会议聊天/Recap 里；MobileHCI 2018 的 Snooze 研究也说明短延后、下班前和次日早上这类日常节奏很重要。Personal AI 因此既要在原消息旁显示“已经被接管”，也要保证标注角标在键盘 focus 和 hover 时都能看到完整标注来源、缓存刷新时间和本地快照边界。
+- 2026-06-22 针对 Glip AI 标注的检查补充：同一个消息旁可能同时出现 Snooze、Outreach 和 Scheduled Messages 日志。角标不能只显示“AI 标注”，还要在 tooltip / `aria-label` 里说明这是待处理队列、等待原线程回复、已发送追问事件，还是成功执行日志，避免用户把历史投递日志误读成仍在排队，或把待处理 Snooze 误读成已完成提醒。
 - MobileHCI 2018 的 Snooze 研究显示，短延后（如 30 分钟 / 1 小时）和具体时间点（如下一个整点、当天晚上）都很常见；Android 原生通知 Snooze 也提供 15 分钟、30 分钟、1 小时、2 小时这类短选项。当前快捷项优先覆盖 15 分钟、30 分钟、1 小时、2 小时、3 小时、下个整点、工作日下班前、下个工作日早上和不重复时的下周一。
 - Snooze 快速菜单提供常驻「管理稍后处理」入口，避免用户错过成功 Toast 后找不到统一管理列表。
+- Snooze 快速菜单会先显示「提醒路径」回执，说明提醒会进入 Scheduled Messages 的 Snooze 队列、到点由 Bot 推送并回写原消息标注，以及选错后的撤销 / 管理改期路径。
+- 如果原消息本地 marker cache 已显示仍有待处理 Snooze，Snooze 快速菜单会把「提醒路径」切成改期预告：先显示当前本地「稍后 / Remind」标注，再说明本次点击会改期同源 Snooze、不会新增第二条；英文界面会把旧缓存里的中文 `稍后` 标签显示成 `Remind`，但这个预告仍只读本地 marker 快照，真实状态以 Scheduled Messages 管理页和后台同步为准。
 - 为避免用户连点或多个入口同时触发造成重复提醒，Snooze 在前端和 Background 都会用原消息链接 / 群组消息 ID 做同源 pending 保护；同源请求未完成前，后续请求不再进入 Google Sheets 创建流程。
-- Snooze 创建成功后，原消息会跟随统一 Glip AI 标注显示「稍后处理」状态；用户回到会话时能直接看到这条消息已经进入提醒队列。成功 Toast 的「管理」会带上本次提醒 ID，直接打开定时消息管理器里的对应行，避免用户在 Snooze 列表里重新搜索。
-- 配置型入口（关注后续 / Watch、自动答复 / Reply、跟进追问 / Followup、联动操作 / Openclaw）点击后会进入短暂 pending 状态，并等待 Background 明确返回成功后才提示正在打开配置，避免失败时给出误导性成功反馈或重复打开多个配置窗口。
+- Snooze 创建成功后，成功 Toast 是“已写入/已改期”的即时回执，并会说明原消息标注仍要等后台 marker 同步刷新，当前页面可能短暂显示旧的本地快照。原消息最终会跟随统一 Glip AI 标注显示「稍后处理」状态；成功 Toast 的「管理」会带上本次提醒 ID，直接打开定时消息管理器里的对应行，避免用户在 Snooze 列表里重新搜索。
+- 2026-06-21 针对 Snooze 撤销路径的检查补充：Slack Later/Reminders 保留统一 Later 管理页，Gmail Snooze 保留 Snoozed 视图，MobileHCI Snooze 研究强调延后通知要能安全找回和再处理。Personal AI 因此在撤销成功后说明只删除这条未完成 Snooze，不删除原消息、其他定时消息或改写记忆；撤销失败时保留「管理」入口定位该提醒，避免用户误以为旧 Toast 已经删除了最新改期的提醒。
+- 配置型入口（关注后续 / Watch、自动答复 / Reply、跟进追问 / Followup、联动操作 / Openclaw）点击后会进入短暂 pending 状态，并等待 Background 明确返回成功后才提示正在打开配置，避免失败时给出误导性成功反馈或重复打开多个配置窗口。其中 Watch、自动答复和联动操作入口的成功回执都会明确说明当前消息尚未开始关注/发送/执行、未创建规则或 RuntimeAction，只有保存规则后才会按对应口径执行。自动答复不会在 AI 生成失败且没有固定文本时写入默认短句，而是跳过本次队列创建。
+- 联动操作从消息入口进入时，配置页会先展示触发消息上下文：会话、发送人、原消息时间、消息 ID 和安全原消息链接。用户应能在写动作描述前确认“这条规则将被哪类消息触发”，而不是只看到一段 AI 生成动作。
+- 从联动操作入口保存规则后，页面会给出保存边界回执：这只是保存规则草稿，不会立刻回扫历史消息、创建 RuntimeAction 或调用 OpenClaw；只有后续新消息命中规则后才会进入动作队列，并按 OpenClaw 连接状态和审批设置继续。
 - Snooze 创建中会把快捷菜单标记为 busy 并禁用菜单项，避免鼠标或键盘重复触发；自定义时间选择器打开后会把焦点移到日期时间输入框，返回快捷菜单时恢复菜单焦点。
 - 隐藏后的工具栏和长悬停设置按钮会退出键盘 Tab 顺序；只有当前可见的操作按钮可聚焦，避免用户 Tab 到不可见控件。
 - 跟进追问参考 Boomerang / Superhuman 的 “if no reply” 跟进模型，但比单纯计时提醒多一层信息目标判断：系统先检查是否已有回复满足完成标准，未命中才继续追问；同一条消息已存在跟进时不会重复创建。
 - Teams Recap / Facilitator 把 follow-up tasks 放在可复核、可同步的任务路径里；本功能仍保持轻量弹窗入口，但会在创建前说明跟进范围、下一次检查语义和是否复用已有 session。
 - Teams thread notifications 和 Slack message reminders 都把动作锚定在原始消息/线程上；关注后续的配置预填也必须保留原消息时间、链接和群组范围，后台请求新鲜度另用 `requestedAt` 判断，避免把“点击配置的时间”误显示成“原消息时间”。
+- 2026-06-20 针对关注后续的检查补充：Microsoft Teams Followed threads 把自动/手动 follow、未读过滤和集中管理放在一起；Slack message reminders 从原消息创建并在指定时间提醒；多方聊天线程检测研究说明 reply/thread/context 关系需要显式消歧；AI-powered reminders 研究也强调 extracted commitment、提醒投递和任务完成不能混成同一个状态。Personal AI 因此在 Watch 保存前显示监听期限和匹配路线，并在保存后区分原消息索引是否已确认。
 - Gmail / Google Chat Smart Reply 和 Outlook Suggested Replies 都把生成文本作为可编辑建议，不会绕过用户发送动作；Intercom Fin 的 human-in-the-loop procedure 也会把高风险步骤交给 teammate 审核。自动答复因此在配置页直接展示发送口径：是否下一分钟直接发送、是否延迟可拦截、是否只进待审核列表，以及每次是否重新 AI 生成。
+- 2026-06-19 针对自动答复配置页的检查补充：Google Agent Assist Smart Reply 把建议展示给 human agent，Outlook Suggested Replies 仍需要用户选择/发送且移动端可先编辑，Fin Procedures 强调确定性控制和上线前模拟，Human-AI bias 研究提醒 AI 建议会锚定人的判断。Personal AI 因此在自动答复表单内补充“规则边界”回执，把命中范围、保存规则的非即时副作用、以及后续创建 `Active` / `PendingReview` 队列行的路径放在用户保存前可见的位置。
 
 ## 功能开关
 
@@ -54,7 +64,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 ## 工具栏结构
 
-鼠标在消息上停留 4 秒后显示工具栏，功能按钮顺序固定为：
+鼠标在消息上停留 4 秒后显示工具栏；点击消息、选中消息文本或键盘聚焦消息卡片都不会直接显示 reaction bar。功能按钮顺序固定为：
 
 1. **稍后处理 / Remind**：中文常态显示「稍后」，英文显示 `Remind`；点击或 hover 展开快速菜单，选择具体提醒时间后创建提醒
 2. **关注后续 / Watch**：紫色按钮，打开关注后续规则配置
@@ -65,9 +75,11 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 中文功能按钮 DOM 中保留完整四字文案，但常态宽度只露出两字短标识：稍后处理显示「稍后」、关注后续显示「关注」、自动答复显示「答复」、跟进追问显示「跟进」、联动操作显示「联动」。英文界面使用完整按钮名：`Remind`、`Watch`、`Reply`、`Followup`、`Openclaw`，按钮宽度按当前语言动态计算。工具栏右侧锚定在 Personal AI 图标上，按钮 hover、键盘 focus 或 Snooze 快速菜单打开时只通过正常布局宽度向左展开并推开左侧相邻按钮，不使用覆盖层，也不移动最右侧图标；其中中文「自动答复」使用末端紧凑对齐，在两字裁剪窗口中露出末尾的「答复」。
 
-工具栏按钮和 Snooze 快速菜单项使用可聚焦的原生 `button` 元素，保留 `aria-label`、悬停提示和键盘焦点样式。隐藏工具栏时会同步 `aria-hidden` 和按钮 `tabIndex`，避免不可见按钮留在键盘焦点顺序中。键盘用户可以先 Tab 到消息卡片来立即显示工具栏，再继续 Tab 进入按钮；在工具栏按钮上按 Esc 会隐藏工具栏并把焦点退回消息卡片。Snooze 快速菜单只会在鼠标仍停留在稍后处理按钮上时完成展示，避免消息信息异步提取较慢时，用户已经离开按钮但菜单又延迟弹出；键盘用户也可以在稍后处理按钮上按 `ArrowDown` 打开菜单，并在菜单内使用方向键、Home/End 和 Esc 完成选择或关闭。自定义时间选择器的返回入口也是原生按钮，方便键盘用户退回快捷菜单。
+工具栏按钮和 Snooze 快速菜单项使用可聚焦的原生 `button` 元素，保留 `aria-label`、悬停提示和键盘焦点样式。隐藏工具栏时会同步 `aria-hidden` 和按钮 `tabIndex`，避免不可见按钮留在键盘焦点顺序中。工具栏出现后，按钮 focus、按钮 hover 或 Snooze 快速菜单打开时只通过正常布局宽度向左展开；在工具栏按钮上按 Esc 会隐藏工具栏。Snooze 快速菜单只会在鼠标仍停留在稍后处理按钮上时完成展示，避免消息信息异步提取较慢时，用户已经离开按钮但菜单又延迟弹出；键盘用户也可以在稍后处理按钮上按 `ArrowDown` 打开菜单，并在菜单内使用方向键、Home/End 和 Esc 完成选择或关闭。自定义时间选择器的返回入口也是原生按钮，方便键盘用户退回快捷菜单。
 
-Remind 快捷时间菜单和自定义时间选择器跟随界面语言：中文显示「15 分钟后」「今天下班前」「自定义时间」「请选择未来时间」等文案；英文显示 `In 15 minutes`、`Today by EOD`、`Custom time`、`Choose a future time` 等文案。时间预览同样本地化，中文使用「明天 09:00 / 周一 09:00」，英文使用 `Tomorrow 9:00 AM / Mon 9:00 AM`。
+长悬停齿轮打开的设置弹窗会先显示「本地显示开关」回执：这些开关只改变当前浏览器消息旁工具栏按钮显示；不会取消已创建提醒、关注、追问、自动答复规则或联动操作；已排队或已保存的任务仍从各自管理页处理。保存成功 Toast 也保留同一边界，避免用户把“隐藏入口”误解成“清理或取消已接管事项”。弹窗跟随界面语言显示，英文界面不再混入中文设置项。
+
+Remind 快捷时间菜单和自定义时间选择器跟随界面语言：中文显示「15 分钟后」「今天下班前」「自定义时间」「请选择未来时间」等文案；英文显示 `In 15 minutes`、`Today by EOD`、`Custom time`、`Choose a future time` 等文案。时间预览同样本地化，中文使用「明天 09:00 / 周一 09:00」，英文使用 `Tomorrow 9:00 AM / Mon 9:00 AM`。菜单顶部回执在中英文下都会保持标签和说明分列可扫读，避免 `Writeback` / `Cache basis` 这类英文标签挤压说明文本。
 
 多个入口在视觉上以连续分段控件呈现；齿轮设置入口默认不占据分段控件宽度，只在长悬停后作为工具栏左侧的独立小按钮出现，避免短悬停时看到一段不可点击的空位。当用户点击创建、关闭浮层或点击页面其他区域后，仍在等待消息信息提取的旧 Snooze 菜单请求会被取消，避免操作完成后又弹出过期菜单。成功或失败 Toast 会在窄屏下自动换行，避免较长提醒时间或“管理”入口被挤出屏幕。
 
@@ -100,18 +112,26 @@ Remind 快捷时间菜单和自定义时间选择器跟随界面语言：中文�
 | 延迟拦截 | 设置延迟时间（如 X 小时后发送），期间可拦截 |
 | 仅审核   | 添加到待审核列表，需手动批准后发送          |
 
-配置页会在模式选择下方显示一条“发送口径”回执，把实际发送时间、审核/拦截路径和 AI 生成方式合并说明；延迟拦截时间统一限制在 1 到 72 小时，旧数据或导入配置超出范围时按边界值执行。
+配置页会在模式选择下方显示一条“发送口径”回执，把实际发送时间、审核/拦截路径、AI 生成方式和失败 fallback 合并说明；延迟拦截时间统一限制在 1 到 72 小时，旧数据或导入配置超出范围时按边界值执行。进入定时消息管理器后，`PendingReview` 自动答复行会继续显示“自动答复审核”回执：批准会把当前行改为 `Active` 并排到下一分钟发送当前正文；拒绝只把当前行标为 `Done`，不会删除触发规则或改动原消息。批准/拒绝完成后页面顶部保留对应结果回执，避免用户只能从行状态变化或控制台日志推断发生了什么。
+
+自动答复配置块和规则列表会显示“内容就绪”回执：固定回复为空且未开启 AI 生成时标为未就绪，说明后续命中只会跳过自动答复入队；开启 AI 生成但没有固定文本时标为无固定 fallback，说明生成失败或空文本会跳过；有固定文本时则在列表展示当前草稿或 AI fallback。
+
+自动答复配置块还会显示“自动答复规则边界”回执：先列出当前规则的发送人 / 群组命中范围；再说明保存规则只影响后续分析的新消息，不会回扫历史消息、不会把草稿插入 RingCentral、也不会立即向任何人发送；最后按当前模式说明后续命中会创建 `Active` 队列行、延迟可拦截队列行，或只创建 `PendingReview` 待审核行。
+
+消息分析完成后的“本轮分发回执”会把自动答复拆成“入队”和“未入队”两类：命中规则但因定时消息未初始化、同一消息已有历史、AI 生成失败且没有固定文本、固定文本为空或队列创建失败而跳过时，会显示未入队数量和补充说明；这只是本轮聚合回执，不会重跑分析或补发回复。
 
 ### 答复内容生成
 
-- **AI 生成**：勾选"每次 AI 生成类似答复"后，每次由 LLM 根据模板风格动态生成
-- **固定文本**：不勾选时，使用用户编辑的固定回复内容
+- **AI 生成**：勾选"每次 AI 生成类似答复"后，每次由 LLM 根据模板风格动态生成；如果生成失败且固定文本非空，会用固定文本入队；如果生成失败或生成空文本且没有固定文本，则跳过本次自动答复，不写入默认短句
+- **固定文本**：不勾选时，使用用户编辑的固定回复内容；固定文本为空会跳过本次创建，不入队空回复
 - **标题容错**：如果 LLM 分析摘要为空，自动答复定时消息标题会回退到原消息内容，避免创建流程被空摘要阻塞
 
 ### 配置入口
 
 1. **关注主题管理** (`topic-modal.tsx`)：添加关注项时勾选"自动答复"
 2. **消息交互工具栏** (`message-reaction/MessageReactionUI.ts`)：点击"自动答复 / Reply"按钮快速配置
+
+从消息工具栏点击自动答复只打开配置窗口，不会直接发送或创建规则；成功 Toast 会保留这个边界，避免用户把 `Reply` 按钮误解成“一键代发”。真正的发送口径仍以后续配置页里选择的直接发送、延迟拦截或仅审核模式为准。
 
 ### 核心数据结构
 
@@ -164,11 +184,13 @@ interface TopicItem {
 | 最多追问   | 1 次（折叠在更多选项中）       |
 | 信息目标   | 必填，自动聚焦                 |
 
-提交前会把追问间隔限制在 1 到 720 小时，最多追问次数限制在 0 到 10 次；创建失败会在弹窗内保留错误提示并允许用户直接重试。
+提交前会把追问间隔限制在 1 到 720 小时，最多追问次数限制在 0 到 10 次；`0` 次是只检查完成标准、不自动发送 AI 追问的监控模式。创建失败会在弹窗内保留错误提示并允许用户直接重试。
 
-弹窗会根据原消息时间和追问间隔显示执行口径：如果原消息已经超过间隔，创建后会立即检查当前会话是否已有满足目标的回复；如果还没到间隔，则显示预计检查时间。重复对同一条消息提交跟进追问时，后端返回已有 session，前端提示不会覆盖原目标，并在可用时带出原 session 的完成标准，避免用户误以为刚输入的新目标已经保存。
+弹窗会根据原消息时间、追问间隔和最多追问次数显示执行口径：如果原消息已经超过间隔，创建后会立即检查当前会话是否已有满足目标的回复；如果还没到间隔，则显示预计检查时间；最多追问次数为 `0` 时，摘要会明确说只检查完成标准，不自动发送 AI 追问。提交按钮显示为「创建跟进」，避免把创建 Outreach session 误读成马上追问。提交后状态行会先切换为「正在创建或复用跟进会话」回执，说明此刻不会发送追问、不写 Google Sheet、不创建可复用 Outreach template；若本次设置为 `0` 次追问，也会继续提示不会自动发送 AI 追问。成功后才会检查原消息线程并刷新本地跟进标注。重复对同一条消息提交跟进追问时，后端返回已有 session，前端提示不会覆盖原目标，并在可用时带出原 session 的完成标准，避免用户误以为刚输入的新目标已经保存。
 
-创建成功或复用已有 session 后，Toast 会提供「查看追问」入口，直接打开对应 Outreach session 详情；如果响应里缺少 session id，则退回到 Outreach 会话列表并筛选 message reaction 来源。Outreach 列表和详情页会把这类来源显示为「消息跟进」，并在安全的 `http(s)` 原消息链接存在时提供「打开原消息」入口，避免用户把它误解成普通手动/定时询问。
+弹窗提交前还会显示「创建边界」回执：这次跟进只锚定当前会话和原消息，创建后先检查原消息线程是否已有满足完成标准的回复，未命中才按间隔和追问次数处理；点击不会立刻发送新消息，不写 Google Sheet，也不会创建可复用 Outreach template；同一原消息已有跟进时会复用旧 session。
+
+创建成功或复用已有 session 后，Toast 会提供「查看追问」入口，直接打开对应 Outreach session 详情；如果响应里缺少 session id，则退回到 Outreach 会话列表并筛选 message reaction 来源。成功回执会明确说明只是创建了跟进会话，未立刻发送新追问，会先检查原消息线程；如果后端返回下一次检查或最早追问时间，也会直接显示在 Toast 里。最多追问次数为 `0` 时，Toast 会把后续动作写成再次检查，而不是“后追问”。复用已有 session 时，Toast 会继续说明当前输入没有覆盖旧的信息目标。Outreach 列表和详情页会把这类来源显示为「消息跟进」，并在安全的 `http(s)` 原消息链接存在时提供「打开原消息」入口，避免用户把它误解成普通手动/定时询问。
 
 ### 创建语义
 
@@ -217,6 +239,18 @@ Glip 消息标注统一通过 `chrome.storage.local.glipMessageMarkers` 缓存�
 
 Snooze marker 在有排期时直接显示紧凑到期时间，例如 `稍后 5/18 09:00`，tooltip 继续保留完整提醒时间和来源。这样用户回到原消息上下文时不用再 hover 或打开管理页才能确认提醒是否仍在队列里。同一条消息命中多个非关注后续 marker 时，页面角标显示最高优先级标签和 `+N` 数量；hover 或键盘 focus 会展开全部 marker 明细，避免「跟进中」遮住同时存在的 Snooze 或计划发送回执。这个处理参考 Slack Later / reminders 和 Gmail Snooze 的可见状态路径：用户回到消息上下文时应能立刻判断消息已经被系统接管，并能用键盘查看完整来源。
 
+关注后续原消息和关联消息虽然沿用更醒目的眼睛/关联样式，但交互语义也必须和普通 AI 标注一致：页面上是可聚焦 `button`，保留 `aria-label` 和 title；hover 或键盘 focus 都会展开 tooltip。这样用户不需要鼠标也能确认“为什么这条消息被标注”，不会只看到一个不可访问的装饰角标。
+
+普通 AI 标注的 tooltip 和 `aria-label` 还会显示一条轻量回执：这组标注来自哪些来源（本地关注配置、Sheet 排期/执行日志或 Memory Service 跟进）、本地缓存上次刷新时间，以及“本地标注快照，不代表实时远端查询”的状态边界。若 marker cache 超过 30 分钟未刷新，回执会提示缓存可能过旧，并引导用户刷新会话或等待后台 marker 同步后再确认。Remind 创建成功 Toast 也会同步提示“原消息标注会随后台同步刷新”，避免用户把刚写入队列后的短暂无角标误读成失败。这样用户从原消息回看时能判断“这条消息曾被系统接管”，但不会把角标误读成刚刚完成的远端状态检查。
+
+兼容旧缓存时，`updatedAt` 可以是当前毫秒时间戳，也可以是历史秒级时间戳；展示前会统一规范化，避免 tooltip / `aria-label` 把秒级缓存误显示成 1970 年或错误判成过旧。缺失或非法时间仍降级为“尚未刷新”，并保留本地快照边界。
+
+2026-06-22 状态口径补齐：普通 AI 标注的 tooltip / `aria-label` 现在还会按 marker 类型汇总 `状态口径`。`跟进中` 表示等待原消息线程或下一次 Outreach 检查，不代表已经发送新追问；`稍后` 表示仍在 Snooze 队列，完成、改期或删除以 Scheduled Messages 为准；`AI追问` 表示已记录一次追问发送事件；`AI代发`、`AI推送`、`AI报告` 来自成功执行日志，表示对应投递已经发生，不是待发送队列。多 marker 同时存在时，这些口径会合并展示，和来源 / 缓存刷新一起构成完整本地快照回执。
+
+2026-06-30 下一步路径补齐：普通 AI 标注的 tooltip / `aria-label` 还会按 marker 类型汇总 `下一步`。Snooze 会指向 Scheduled Messages 的 Snooze 列表，Outreach 跟进会指向主动询问会话，计划消息执行日志会指向 Scheduled Messages 日志核对，关注后续 marker 会指向关注后续管理页。这个字段只是恢复/复核路径提示，不会从 RingCentral 页面发起实时远端查询，也不会自动完成、改期、删除或发送消息。
+
+2026-06-26 英文界面补齐：当 RingCentral 内容脚本运行在英文界面时，普通 AI 标注的 badge 标签、tooltip 标题、`aria-label`、状态口径、来源和缓存刷新标签会切到英文；Snooze 紧凑时间仍沿用同一时间值，只把 `稍后` 展示为 `Remind`。缓存边界语义不变，仍说明这是本地 marker 快照，不是实时远端检查。
+
 计划消息创建时还没有 RingCentral `postId`，不会立刻标注。发送成功后，Jira rule 将 `chatId/postId/sentAt` 或紧凑的 `sentPayload` 传给 AppScript `markBotMessageExecuted`，AppScript 写入 `Logs` 的 `Sent_Chat_ID` / `Sent_Post_ID` / `Sent_At`；后台下次刷新 Sheet 后写入本地 marker cache。邮件 fallback 没有可靠 `postId`，不参与 Glip marker 标注。
 
 ---
@@ -259,17 +293,23 @@ Snooze marker 在有排期时直接显示紧凑到期时间，例如 `稍后 5/1
 | 明天/周 X 9 点 / Tomorrow/Wed 9 AM | 下个工作日 09:00，避免周末工作消息提醒落到休息日 |
 | 下周一 9 点 / Next Mon 9 AM | 下周一 09:00；如果和“下个工作日 9 点”是同一时间则隐藏 |
 | 自定义时间 / Custom time | 打开日期时间选择器 |
-| 管理稍后处理 / Manage Remind | 打开定时消息管理器的 Snooze 类别视图 |
+| 管理稍后处理 / Manage Remind | 打开定时消息管理器的 Snooze 类别视图；打开中会防止重复触发 |
 
-快速菜单会同时展示预计提醒时间，减少用户点选前的不确定性。同日提醒会精确显示到小时和分钟，避免自定义时间被粗略显示成错误的整小时。快捷项会按分钟去重，避免“2 小时后 / 3 小时后”和“今天下班前”等入口指向同一个提醒时间。
+快速菜单顶部会显示「提醒路径」回执：默认说明本次点击会创建或更新 Scheduled Messages 的 Snooze 队列，到点由 Bot 推送，并在原消息旁显示「稍后 / Remind」标注；如果选错，可以用成功 Toast 撤销，或从「管理稍后处理」进入 Snooze 列表改期。当当前消息的本地 `glipMessageMarkers` cache 已有 `snooze_pending` 标注时，回执会优先显示已有标注和“本次点击会改期这条同源 Snooze、不新增第二条”的预告；英文界面会把缓存中仍是中文的 `稍后 ...` 标注显示成 `Remind ...`，同时说明它只是本地 marker 快照，真实状态以 Scheduled Messages 管理页和后台同步为准。快速菜单会同时展示预计提醒时间，减少用户点选前的不确定性；用户悬停、键盘聚焦或点击某个快捷项前，菜单会刷新可见时间和无障碍标签，避免菜单长时间打开后“看到的时间”和实际写入时间不一致。同日提醒会精确显示到小时和分钟，避免自定义时间被粗略显示成错误的整小时。快捷项会按分钟去重，避免“2 小时后 / 3 小时后”和“今天下班前”等入口指向同一个提醒时间。
 
 快速菜单点击时会重新计算所选快捷项的提醒时间，并在创建前统一校验必须是未来时间，避免长时间停留在菜单上后写入已经过期的提醒。
 
-同一条消息的 Snooze 创建 / 更新请求会串行化：当前请求仍在处理中时，重复点击或键盘确认不会创建第二条定时消息，也不会弹出额外错误 Toast；首个请求完成后再显示成功或失败结果。
+如果用户在本地 marker 快照读取完成前已经离开 Remind 按钮、打开自定义时间选择器或触发了新的菜单请求，旧请求会被丢弃，不会在消息旁重新弹出过期快捷菜单。
+
+同一条消息的 Snooze 创建 / 更新请求会串行化：当前请求仍在处理中时，重复点击或键盘确认不会创建第二条定时消息，也不会弹出额外错误 Toast；界面会显示「提醒处理中」回执，说明这次点击没有创建第二条、没有改期、没有写记忆或发送 Bot 消息，首个请求完成后再显示成功或失败结果。
+
+「管理稍后处理」入口也会串行化：点击后菜单显示打开中并禁用其他选项，连续点击只会打开一个 Scheduled Messages Snooze 视图；如果打开失败，焦点留在管理入口并提示可重试。
 
 同源更新只接受能定位到具体消息的 RingCentral 链接或 `groupId + postId`；如果页面 DOM 只能提供会话级链接，则不会用它去匹配旧提醒，避免把另一条消息的 Snooze 静默改期。
 
-新建 Snooze 的成功 Toast 提供「撤销」入口，但撤销只匹配该 Toast 创建时的提醒日期和时间；如果用户随后对同一消息重新安排了提醒，旧 Toast 的撤销请求会被 Background 拒绝，避免误删最新的待处理提醒。新建和已更新提醒的「管理」入口都会把本次提醒 ID 传给 Scheduled Messages 页面，页面用 `messageId` 查询参数只显示并高亮对应行；如果没有拿到 ID，则退回到 Snooze 类别列表。
+新建 Snooze 的成功 Toast 提供「撤销」入口，但撤销只匹配该 Toast 创建时的提醒日期和时间；如果用户随后对同一消息重新安排了提醒，旧 Toast 的撤销请求会被 Background 拒绝，避免误删最新的待处理提醒。Toast 文案会直接说明「可撤销；管理会定位到这条提醒」和「原消息标注会随后台同步刷新，当前页面可能短暂仍显示旧快照」，避免用户把绿色成功提示误解成只能等 Bot 推送，或把短暂无角标误判为没有写入。撤销成功后会显示结果回执，说明只删除这条未完成 Snooze，不删除原消息、其他定时消息或改写记忆；撤销失败时会说明提醒可能仍在 Snooze 队列，并继续提供「管理」入口定位确认或删除。
+
+同源更新不会提供撤销按钮，因为旧提醒已经被改期；成功 Toast 会说明「同一条消息的旧提醒已改期；管理会定位到原提醒」，并沿用相同的 marker 同步边界。新建和已更新提醒的「管理」入口都会把本次提醒 ID 传给 Scheduled Messages 页面，页面用 `messageId` 查询参数只显示并高亮对应行；如果没有拿到 ID，则退回到 Snooze 类别列表并在 Toast 里说明只能打开列表确认。
 
 ### 自定义时间选择器
 
@@ -376,10 +416,14 @@ interface SnoozeRequest {
 
 ### 触发方式
 
-- **消息交互工具栏**：将鼠标悬停在消息上，点击"关注后续 / Watch"按钮快速添加
+- **消息交互工具栏**：将鼠标悬停在消息上，点击"关注后续 / Watch"按钮打开预填配置；点击本身不会直接开始关注
 - **关注主题管理**（`topic-modal.tsx`）：在关注项编辑界面启用"关注后续"开关，可进行详细配置
 
-工具栏打开关注后续配置时，Background 会写入 `pendingFollowThreadConfig`：`messageTimestamp` 保存原消息时间，用于配置页的原消息预览和后续存储；`requestedAt` 只用于判断这次打开请求是否仍在 5 分钟新鲜窗口内。配置页默认清空发送人筛选、保留当前群组筛选，让关注规则监听同会话内所有人的后续讨论。
+工具栏打开关注后续配置时，Background 会写入 `pendingFollowThreadConfig`：`messageTimestamp` 保存原消息时间，用于配置页的原消息预览和后续存储；`requestedAt` 只用于判断这次打开请求是否仍在 5 分钟新鲜窗口内。配置页默认清空发送人筛选、保留当前群组筛选，让关注规则监听同会话内所有人的后续讨论。工具栏 Toast 和配置页顶部都会显示「关注后续创建边界」：打开或编辑表单不会启用 Watch，只有保存后才会创建本地关注规则并索引原消息；保存也不会回扫历史消息、立刻发送通知、立即写入长期记忆、创建自动答复或创建联动操作。创建边界还会显示监听期限，以及后续匹配会优先走 reply / thread / @提及 / 引用 / 关键词，再必要时使用原消息语义匹配。
+
+保存 Watch 规则后的成功 Toast 会区分两层结果：规则是否已保存，以及原消息索引是否已确认。索引已写入时，Toast 说明语义匹配可用；索引未确认时，Toast 会说明本地规则仍会监听后续新消息，reply / thread / @提及 / 引用 / 关键词路径仍会尝试，但语义匹配可能降级。两种成功状态都会重申没有回扫历史消息，也没有立刻发送通知。
+
+关注后续管理页把 `expiredAt` 为空或 `0` 的规则显示为「手动结束」，不会误判为已过期；点击延长时从当前时间或原有未来到期时间继续加 7 天。每条规则会显示「监听状态回执」：说明规则是否仍在监听、已记录多少关联消息、最新关联 / 最新通知时间、通知渠道，以及展开时间线不会补发或重发通知。没有关联消息会显示为“尚未捕获到后续命中”，不是读取失败。状态筛选为空时会显示筛选空结果回执，说明已有手动 Watch 规则被当前筛选隐藏，并提供「查看全部」恢复；切换筛选只改变本页展示，不会取消、延长、补发通知或重新读取远端。命中时间线的每条记录还会显示通知状态：已记录通知时间时明确展示，旧缓存或只有关联记录时则提示以通知渠道记录为准。取消关注只删除本地手动规则，不删除 RingCentral 原消息，也不会立刻清理已写入 Memory Service 的历史索引；旧资料继续按后端遗忘策略处理。管理页整体仍是本机手动 Watch 规则快照，不会回扫历史消息、确认任务完成、发送消息或把关联记录改写成长期记忆。
 
 ---
 
@@ -395,6 +439,7 @@ interface SnoozeRequest {
 - 在 RingCentral 消息页面悬停一条消息后，点击工具栏里的 **联动操作 / Openclaw**
 - Background 会写入 `pendingLinkedActionConfig` 到 `chrome.storage.local`
 - 随后打开 `topic-modal.html`
+- 工具栏成功 Toast 只确认配置入口已打开：当前仍只是草稿入口，尚未创建 `RuntimeAction`、未调用 OpenClaw，也不会回扫历史消息；只有保存规则且后续新消息命中后，才会进入动作队列并按连接状态和审批设置执行
 - 手动新建或编辑记忆入口规则时，联动操作区默认折叠；从工具栏联动操作入口进入时会自动展开并进入建议生成流程
 
 ### 默认流程
@@ -431,9 +476,10 @@ interface SnoozeRequest {
 - 写入表格
 - 设置 Glip 状态
 - 创建日程 / 提醒
+- 通用 OpenClaw 黑盒委派
 - 文件 / 附件 / Drive 类任务的 OpenClaw 黑盒委派
 
-这些样例用于帮助生成更具体的自然语言建议，不再作为 planner 的硬白名单。规则命中后，Memory Service 会先尝试内部确定性规划；如果无法内部完成但 `automationPrompt` 非空，会把原消息、消息链接和附件上下文委派给 OpenClaw，让 OpenClaw 在执行阶段返回真实能力状态。
+这些样例用于帮助生成更具体的自然语言建议，不再作为 planner 的硬白名单。样例选择先看消息里的明确关键词；如果没有识别到 Jira、表格、状态、提醒、附件 / Drive 等目标，会回退到通用 OpenClaw 委派样例，要求先确认目标系统、对象、权限和成功回执，缺关键字段时返回 `need_human_decision` / `capability_missing`，避免把模糊消息误生成 Glip status 之类无关动作。规则命中后，Memory Service 会先尝试内部确定性规划；如果无法内部完成但 `automationPrompt` 非空，会把原消息、消息链接和附件上下文委派给 OpenClaw，让 OpenClaw 在执行阶段返回真实能力状态。
 
 ### OpenClaw 禁用态
 
@@ -441,6 +487,12 @@ interface SnoozeRequest {
 - UI 会在输入框下方显示连接 CTA，跳转到 `options.html#OPENCLAW_ENABLED`
 - 选项页配置完成后，topic-modal 通过 `chrome.storage.onChanged` 实时更新状态；若当前来自联动操作入口且文本仍为空，会自动触发一次建议生成
 - 从旧消息点击联动操作时，pending 配置的新鲜度以本次点击时间为准，原消息时间单独保留，避免历史消息被误判为过期而无法预填
+- 从消息入口创建草稿时，规则页会展示触发消息面板；其中“本次点击时间”只用于判断配置请求是否新鲜，“原消息时间”只用于用户核对和动作上下文，不混用。
+- 规则摘要会把未连接的联动操作标为 **待激活**，不会显示“自动执行”；只有 OpenClaw 已连接时，才按“需批准 / 自动执行”展示真实执行语义。
+- 新建或编辑联动操作时，输入框下方会显示保存前执行预览：保存本身只写本机手动规则，不回扫历史消息、不立即创建 RuntimeAction、不调用 OpenClaw；随后按当前连接和审批设置标出 **待激活**、**需批准** 或 **自动执行**。
+- 点击「预演并改进」后，规则页会显示 **预演结果回执**：列出本次 dry-run 使用的触发样本、候选动作数量、警告数量、是否可规划和下一步处理。预演只调用 Memory Service 规划接口，不保存规则、不创建 RuntimeAction、不调用 OpenClaw、不发送消息，也不写外部系统。
+- 如果自动建议失败，用户仍可直接手写动作描述；手动输入会清掉失败提示，并使仍在飞的自动建议请求失效，避免晚返回的建议覆盖用户文本。
+- 点击「确认」保存这条规则时，成功 Toast 会重申三个非效果边界：没有回扫历史消息、没有创建 RuntimeAction、没有调用 OpenClaw。OpenClaw 未连接时显示 **待激活**；已连接时会继续区分「需批准」和「免批准」的后续动作队列语义。
 
 ### 关联关系检测
 
@@ -604,10 +656,12 @@ LLM 返回的匹配结果格式：
 功能：
 
 - 按状态筛选（全部 / 进行中 / 已过期）
+- 筛选为空时显示“当前筛选无结果”回执和「查看全部」恢复入口，避免误读成没有手动规则或读取失败
 - 按创建时间、到期时间、关联消息数排序
 - 查看原消息内容和已捕获的后续消息列表
-- 延长关注时间
-- 取消关注（删除关注项及 ChromaDB 记录）
+- 查看每条规则的监听状态回执，区分成功空结果、已命中、已通知和只读本地快照边界
+- 延长关注时间；手动结束规则会从当前时间起新增 7 天，到期规则会从当前时间重新起算
+- 取消关注：删除本地手动规则并停止后续匹配，不删除原消息，也不立刻清理已写入 Memory Service 的历史索引
 
 ---
 
@@ -621,11 +675,13 @@ LLM 返回的匹配结果格式：
 | `src/message-reaction/SnoozeManager.ts`              | Snooze 功能核心逻辑                                                      |
 | `src/message-reaction/snoozeTime.ts`                 | Snooze 提醒时间格式化与未来时间校验                                      |
 | `src/message-reaction/snoozeCreateResult.ts`         | Snooze 创建结果和错误反馈文案                                            |
-| `src/message-reaction/snoozeToastActions.ts`         | Snooze 成功 Toast 的撤销 / 管理动作策略                                  |
+| `src/message-reaction/snoozeToastActions.ts`         | Snooze 成功 Toast 的撤销 / 管理动作策略、管理范围和 marker 同步边界回执  |
 | `src/message-reaction/snoozeDeduplication.ts`        | 根据原消息链接识别仍待处理的同源 Snooze，避免重复提醒堆积                |
 | `src/message-reaction/floatingPosition.ts`           | Snooze 菜单/选择器浮层定位计算                                           |
 | `src/message-reaction/messageReactionTiming.ts`      | 工具栏短悬停和长悬停延迟常量                                             |
 | `src/message-reaction/AutoReplyHandler.ts`           | 自动答复处理逻辑                                                         |
+| `src/message-reaction/autoReplyPresentation.ts`      | 自动答复标题、发送口径、内容就绪和规则边界回执                           |
+| `src/messageAnalysisDelivery.ts`                     | 消息分析分发回执；记录自动答复入队 / 未入队计数和补充说明                |
 | `src/message-reaction/FollowThreadHandler.ts`        | 关注后续核心逻辑：关联关系检测、ChromaDB 存储、过期清理                  |
 | `src/services/NotificationService.ts`                | 统一通知推送服务（Bot / Chrome），替代旧的 `sendBotMessage`              |
 | `src/types/followThread.ts`                          | 关注后续功能类型定义                                                     |
@@ -635,6 +691,7 @@ LLM 返回的匹配结果格式：
 | `src/agentThinking.ts`                               | Agent 模式消息分析，生成关注后续规则 Prompt                              |
 | `src/contentScriptGlip.tsx`                          | RingCentral 页面内容脚本，初始化消息交互功能                             |
 | `src/services/GlipMessageMarkerService.ts`           | 统一生成关注后续、Snooze、Outreach 和计划消息的 Glip 标注缓存            |
+| `tools/verify-glip-ai-markers-e2e.mjs`               | 验证 Glip 标注源码合约与键盘 focus 展开路径                              |
 | `src/background.ts`                                  | Snooze 请求处理、Chrome 通知点击事件处理                                 |
 | `src/bot.ts`                                         | Bot 消息底层发送                                                         |
 | `src/scheduled-messages/`                            | 定时消息管理                                                             |
@@ -654,7 +711,24 @@ LLM 返回的匹配结果格式：
 
 **外部参考**:
 
+- [Slack Later](https://slack.com/help/articles/360042650274-Save-messages-and-files-for-later)：Later 把保存项和提醒集中到 In progress / Archived / Completed，并支持跳回原消息、完成和改提醒时间；Snooze 成功后必须保留可回到统一管理的位置。
+- [Slack reminders](https://slack.com/help/articles/208423427-set-a-reminder)：消息提醒可以从原消息创建，并在 Later 里完成、编辑或删除；本功能的 Toast 要把“刚创建/已改期”和“去哪里管理”说清楚。
+- [Gmail hover actions](https://support.google.com/mail/answer/2473038)：邮件列表 hover 后展示归档、删除、Snooze 等快捷动作，且可在设置里关闭；工具栏设置应表达为显示偏好，不应暗示已创建事项被取消。
+- [Gmail Snooze](https://support.google.com/mail/answer/7622010)：Snooze 会把邮件临时移出 Inbox，并提供 Snoozed 统一视图；Personal AI 不移动 RingCentral 原消息，所以必须通过原消息标注和管理入口弥补可见性。
+- [Microsoft Teams create a task from a message](https://support.microsoft.com/en-us/teams/platform/create-a-task-from-a-teams-message)：消息动作进入任务创建后还要填写目标和选项；Personal AI 的消息动作入口也要区分“打开配置”和“已经创建 / 执行”。
+- [Microsoft Teams message workflows](https://support.microsoft.com/en-us/workflows/use-workflows-from-a-message-in-teams)：消息级 workflow 从单条消息 More actions 进入，并提供创建、查看和管理路径；本功能设置弹窗也要说明已保存任务仍回各自管理页处理。
+- [Microsoft Guidelines for Human-AI Interaction](https://www.microsoft.com/en-us/research/project/guidelines-for-human-ai-interaction/)：指南强调状态反馈、用户控制、谨慎适配和错误恢复；工具栏本地开关要把非效果和后续管理路径前置。
+- [Snooze! Investigating the User-Defined Deferral of Mobile Notifications](https://weberdo.com/publications/2018-Snooze-Investigating-the-User-Defined-Deferral-of-Mobile-Notifications.pdf)：研究说明通信类通知常被短延后，用户需要安全地暂时放下又能找回；因此快捷时间、原消息锚点和管理回执都属于核心体验。
+- [Coping with Prospective Memory Failures](https://arxiv.org/abs/1601.06230)：提醒系统需要可靠、可适配和符合用户偏好的提醒计划；本功能保持用户主动选择时间，并把后续修改路径放在成功回执里。
 - [Slack Workflow Builder](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack)：触发、步骤、变量、权限分开配置，提醒联动操作要把“触发上下文”和“外部执行能力”分清楚。
+- [Zapier trigger setup](https://help.zapier.com/hc/en-us/articles/8496288188429-Set-up-your-Zap-trigger)：trigger 需要选择事件、配置字段并测试样本；联动操作的建议生成和 dry-run 预演承担类似的触发样本核对职责。
 - [Zapier AI Actions](https://docs.zapier.com/integrations/reference/ai-actions)：自然语言动作可以接入外部自动化平台，但需要保留用户可编辑的动作描述。
+- [Zapier Custom Actions](https://help.zapier.com/hc/en-us/articles/16277139110157-Create-a-custom-action)：AI 生成的外部动作仍需要 summary、输入、逻辑、endpoint 和测试结果回执；本功能的预演 / 改进入口应承担同类核对责任。
+- [Microsoft Copilot Studio Request for Information](https://learn.microsoft.com/en-us/microsoft-copilot-studio/flows-request-for-information)：agent flow 可以暂停并请求人工输入 / 复核；联动操作的“需批准”路径应在保存前可见，而不是等 RuntimeAction 出现后才解释。
+- [Zapier Agents approval steps](https://help.zapier.com/hc/en-us/articles/41776074420493-Add-approval-steps-to-your-agent-s-instructions)：外部自动化 agent 可通过消息请求批准并回到 agent 内批准或停止；Personal AI 需要把“保存规则”和“批准执行”分成两个清晰动作。
+- [Slack coded workflow admin restrictions](https://docs.slack.dev/changelog/2024-05-security-updates-coded-workflows/)：外部动作能力可能受管理员限制；OpenClaw 未连接或缺少能力时，应清楚显示待激活或重试确认，而不是把规则保存解释成执行成功。
+- [SAFECHAIN: Securing Trigger-Action Programming from Attack Chains](https://arxiv.org/abs/1903.03760)：TAP 规则组合会带来隐蔽的权限升级和隐私泄露风险；黑盒委派默认要暴露缺权限、缺能力和需人工判断状态。
+- [Data Privacy in Trigger-Action Systems](https://arxiv.org/abs/2012.05749)：触发-计算-动作平台会在服务间传递敏感数据；联动操作应尽量只传必要消息上下文，并保留执行阶段的真实 blocker。
 - [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)：TAP 研究说明触发 / 动作类型混淆会造成误解，联动操作应明确点击时间、消息时间和执行前提。
 - [If This Context Then That Concern](https://arxiv.org/abs/2012.12518)：自动化风险会随上下文变化；OpenClaw 未连接时应可保存草稿，但不能暗示已具备外部执行能力。
+- [Towards Integrating Human-in-the-loop Control in Proactive Intelligent Personalised Agents](https://dl.acm.org/doi/10.1145/3631700.3664903)：主动 agent 需要在关键步骤上暴露人工控制点；联动操作因此把待激活、需批准、自动执行三种路径前置到保存前。

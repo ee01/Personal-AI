@@ -35,6 +35,7 @@ export interface FishboneTask {
   eta?: string;
   desc?: string;
   anchorPosition?: number;
+  dependencies?: string[];
   platforms?: Partial<Record<PlatformKey, PlatformState>>;
   jira?: Array<{ key: string; title: string }>;
 }
@@ -379,9 +380,18 @@ export interface ProjectVisualizationPanel {
   drivers?: ProjectVisualizationDriver[];
 }
 
+export interface ProjectVisualizationReceipt {
+  state: ProjectVisualizationState;
+  label: string;
+  headline: string;
+  detail: string;
+  boundary: string;
+}
+
 export interface ProjectVisualizationSummary {
   headline: string;
   nextStep: string;
+  receipt: ProjectVisualizationReceipt;
   panels: ProjectVisualizationPanel[];
 }
 
@@ -423,12 +433,61 @@ export interface ProjectSyncSourceStatus {
   boundaries?: string[];
 }
 
+export type ProjectSyncLocalEvidenceState = 'ready' | 'attention' | 'empty';
+
+export type ProjectSyncLocalEvidenceRepairActionType =
+  | 'plan-project'
+  | 'fix-eta'
+  | 'fix-source';
+
+export interface ProjectSyncLocalEvidenceRepairAction {
+  type: ProjectSyncLocalEvidenceRepairActionType;
+  label: string;
+  detail: string;
+  projectId?: string;
+  projectName?: string;
+  taskId?: string;
+  taskTitle?: string;
+  evidenceFocus?: ProjectEvidenceRepairTarget;
+}
+
+export interface ProjectSyncLocalEvidenceReceipt {
+  state: ProjectSyncLocalEvidenceState;
+  badge: string;
+  headline: string;
+  detail: string;
+  nextStep: string;
+  metrics: string[];
+  repairTargets?: string[];
+  repairActions?: ProjectSyncLocalEvidenceRepairAction[];
+}
+
+export type ProjectSyncSourceScopeState = 'ready' | 'attention' | 'empty';
+
+export interface ProjectSyncSourceScopeReceipt {
+  state: ProjectSyncSourceScopeState;
+  badge: string;
+  headline: string;
+  detail: string;
+  metrics: string[];
+  boundary: string;
+}
+
 export interface ProjectSyncReadiness {
   success: boolean;
   checkedAt: string;
   summary: string;
+  sourceScope: ProjectSyncSourceScopeReceipt;
+  localEvidence: ProjectSyncLocalEvidenceReceipt;
   sources: ProjectSyncSourceStatus[];
   error?: string;
+}
+
+export type ProjectDashboardActionStatusTone = 'success' | 'warning' | 'error';
+
+export interface ProjectDashboardActionStatus {
+  type: ProjectDashboardActionStatusTone;
+  text: string;
 }
 
 export interface ProjectDashboardLaunchContext {
@@ -467,6 +526,22 @@ export const PROJECT_DASHBOARD_VIEW_FILTER_LABELS: Record<ProjectDashboardViewFi
   empty: '待规划',
   'on-track': '正常',
 };
+
+export interface ProjectDashboardSearchSummary {
+  query: string;
+  queryTerms: string[];
+  matchedProjects: number;
+  totalProjects: number;
+  matchBreakdown: {
+    projectFields: number;
+    tasks: number;
+    jira: number;
+    platformSources: number;
+    milestones: number;
+  };
+  matchHints: string[];
+  boundary: string;
+}
 
 const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
 
@@ -508,6 +583,27 @@ const PROJECT_STALE_PLAN_THRESHOLD_DAYS = 30;
 const PROJECT_STATUS_REVIEW_CADENCE_DAYS = 7;
 const PROJECT_STATUS_REVIEW_OVERDUE_DAYS = 14;
 const DEFAULT_PROJECT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
+const PROJECT_SYNC_MAX_PLAN_REPAIR_ACTIONS = 3;
+const PROJECT_SYNC_MAX_TASK_REPAIR_ACTIONS = 4;
+
+function getProjectTimelineTaskSortKey(task: Pick<FishboneTask, 'eta' | 'id' | 'title'>): string {
+  return String(task.eta || task.id || task.title || '').trim();
+}
+
+export function sortProjectTimelineTasks<T extends Pick<FishboneTask, 'eta' | 'id' | 'title'>>(
+  tasks: readonly T[] | null | undefined,
+): T[] {
+  return [...(Array.isArray(tasks) ? tasks : [])].sort((left, right) => {
+    const keyDelta = getProjectTimelineTaskSortKey(left)
+      .localeCompare(getProjectTimelineTaskSortKey(right));
+    if (keyDelta !== 0) return keyDelta;
+
+    const idDelta = String(left.id || '').localeCompare(String(right.id || ''));
+    if (idDelta !== 0) return idDelta;
+
+    return String(left.title || '').localeCompare(String(right.title || ''));
+  });
+}
 
 function normalizeLaunchContextValue(value: unknown): string | undefined {
   const normalized = String(value || '').trim();
@@ -724,11 +820,17 @@ function buildWatchedProjectSyncHighlights(syncResult: ProjectWatchedProjectSync
 
 interface ProjectSyncLocalCoverage {
   projectCount: number;
+  projectsWithDescription: number;
+  projectsWithMilestones: number;
+  milestoneCount: number;
+  projectsMissingPlan: FishboneProject[];
   activeTaskCount: number;
   tasksWithEta: number;
   tasksMissingEta: FishboneTask[];
+  tasksMissingEtaRefs: ProjectSyncRepairTask[];
   tasksWithSource: number;
   tasksMissingSource: FishboneTask[];
+  tasksMissingSourceRefs: ProjectSyncRepairTask[];
   jiraTaskCount: number;
   jiraKeyCount: number;
   sampleJiraKeys: string[];
@@ -738,6 +840,12 @@ interface ProjectSyncLocalCoverage {
   sourceCoverage: number;
 }
 
+interface ProjectSyncRepairTask {
+  projectId: string;
+  projectName: string;
+  task: FishboneTask;
+}
+
 function coveragePercent(covered: number, total: number): number {
   if (!total) return 0;
   return Math.round((covered / total) * 100);
@@ -745,25 +853,48 @@ function coveragePercent(covered: number, total: number): number {
 
 function buildProjectSyncLocalCoverage(projects: FishboneProject[]): ProjectSyncLocalCoverage {
   const projectList = Array.isArray(projects) ? projects : [];
-  const activeTasks = projectList.flatMap((project) =>
-    (Array.isArray(project.tasks) ? project.tasks : []).filter((task) => !isCompletedStatus(task.status)),
+  const projectsWithDescription = projectList.filter((project) =>
+    Boolean(String(project.description || '').trim()),
+  ).length;
+  const projectsWithMilestones = projectList.filter((project) =>
+    Array.isArray(project.milestones) && project.milestones.length > 0,
+  ).length;
+  const milestoneCount = projectList.reduce(
+    (count, project) => count + (Array.isArray(project.milestones) ? project.milestones.length : 0),
+    0,
   );
+  const projectsMissingPlan = projectList.filter((project) =>
+    !Array.isArray(project.tasks) || project.tasks.length === 0,
+  );
+  const activeTaskRefs = projectList.flatMap((project) =>
+    (Array.isArray(project.tasks) ? project.tasks : [])
+      .filter((task) => !isCompletedStatus(task.status))
+      .map((task): ProjectSyncRepairTask => ({
+        projectId: project.id,
+        projectName: project.name,
+        task,
+      })),
+  );
+  const activeTasks = activeTaskRefs.map((ref) => ref.task);
   const tasksWithEta = activeTasks.filter((task) => Boolean(parseDateOnly(task.eta))).length;
-  const tasksMissingEta = activeTasks.filter((task) => !parseDateOnly(task.eta));
+  const tasksMissingEtaRefs = activeTaskRefs.filter((ref) => !parseDateOnly(ref.task.eta));
+  const tasksMissingEta = tasksMissingEtaRefs.map((ref) => ref.task);
   const tasksMissingSource: FishboneTask[] = [];
+  const tasksMissingSourceRefs: ProjectSyncRepairTask[] = [];
   let jiraTaskCount = 0;
   const jiraKeys = new Set<string>();
   let tasksWithSource = 0;
   let platformSourceTaskCount = 0;
   let platformSourceCount = 0;
 
-  activeTasks.forEach((task) => {
-    const sourceSummary = buildProjectTaskSourceSummary(task);
+  activeTaskRefs.forEach((ref) => {
+    const sourceSummary = buildProjectTaskSourceSummary(ref.task);
 
     if (sourceSummary.hasSource) {
       tasksWithSource += 1;
     } else {
-      tasksMissingSource.push(task);
+      tasksMissingSource.push(ref.task);
+      tasksMissingSourceRefs.push(ref);
     }
 
     if (sourceSummary.jiraKeys.length) {
@@ -779,11 +910,17 @@ function buildProjectSyncLocalCoverage(projects: FishboneProject[]): ProjectSync
 
   return {
     projectCount: projectList.length,
+    projectsWithDescription,
+    projectsWithMilestones,
+    milestoneCount,
+    projectsMissingPlan,
     activeTaskCount: activeTasks.length,
     tasksWithEta,
     tasksMissingEta,
+    tasksMissingEtaRefs,
     tasksWithSource,
     tasksMissingSource,
+    tasksMissingSourceRefs,
     jiraTaskCount,
     jiraKeyCount: jiraKeys.size,
     sampleJiraKeys: Array.from(jiraKeys).slice(0, 3),
@@ -794,11 +931,247 @@ function buildProjectSyncLocalCoverage(projects: FishboneProject[]): ProjectSync
   };
 }
 
+function buildProjectSyncLocalEvidenceRepairActions(
+  coverage: ProjectSyncLocalCoverage,
+): ProjectSyncLocalEvidenceRepairAction[] {
+  const planActions = coverage.projectsMissingPlan
+    .slice(0, PROJECT_SYNC_MAX_PLAN_REPAIR_ACTIONS)
+    .map((missingPlan): ProjectSyncLocalEvidenceRepairAction => ({
+      type: 'plan-project',
+      label: `规划 ${missingPlan.name}`,
+      detail: '打开新增任务入口，先补首个活动任务、ETA 和来源。',
+      projectId: missingPlan.id,
+      projectName: missingPlan.name,
+    }));
+
+  const taskActions: ProjectSyncLocalEvidenceRepairAction[] = [];
+  const etaActionTaskIds = new Set<string>();
+
+  for (const missingEta of coverage.tasksMissingEtaRefs) {
+    if (taskActions.length >= Math.min(2, PROJECT_SYNC_MAX_TASK_REPAIR_ACTIONS)) break;
+    etaActionTaskIds.add(`${missingEta.projectId}:${missingEta.task.id}`);
+    taskActions.push({
+      type: 'fix-eta',
+      label: `补 ETA：${missingEta.task.title}`,
+      detail: `${missingEta.projectName} 的活动任务缺少可复核日期。`,
+      projectId: missingEta.projectId,
+      projectName: missingEta.projectName,
+      taskId: missingEta.task.id,
+      taskTitle: missingEta.task.title,
+      evidenceFocus: 'eta',
+    });
+  }
+
+  for (const missingSource of coverage.tasksMissingSourceRefs) {
+    if (taskActions.length >= PROJECT_SYNC_MAX_TASK_REPAIR_ACTIONS) break;
+    if (etaActionTaskIds.has(`${missingSource.projectId}:${missingSource.task.id}`)) continue;
+    taskActions.push({
+      type: 'fix-source',
+      label: `补来源：${missingSource.task.title}`,
+      detail: `${missingSource.projectName} 的活动任务缺少 Jira 或平台来源。`,
+      projectId: missingSource.projectId,
+      projectName: missingSource.projectName,
+      taskId: missingSource.task.id,
+      taskTitle: missingSource.task.title,
+      evidenceFocus: 'source',
+    });
+  }
+
+  return [...planActions, ...taskActions];
+}
+
 function buildMemorySourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[] {
-  return [
+  const diagnostics = [
     `本地工作台：${coverage.projectCount} 个项目，${coverage.activeTaskCount} 个活动任务`,
     `ETA 覆盖 ${coverage.etaCoverage}%，来源覆盖 ${coverage.sourceCoverage}%`,
   ];
+  if (coverage.projectsMissingPlan.length) {
+    diagnostics.push(`待规划项目：${formatProjectNamePreview(coverage.projectsMissingPlan.map((project) => project.name), 2)}`);
+  }
+  return diagnostics;
+}
+
+function formatSourceLabelList(labels: string[]): string {
+  return labels.length ? labels.join('、') : '无';
+}
+
+function buildProjectSyncSourceScopeReceipt(
+  sources: ProjectSyncSourceStatus[],
+): ProjectSyncSourceScopeReceipt {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  const readySources = sourceList.filter((source) => source.status === 'ready').map((source) => source.label);
+  const unavailableSources = sourceList.filter((source) => source.status === 'unavailable').map((source) => source.label);
+  const skippedSources = sourceList.filter((source) => source.status === 'not_configured').map((source) => source.label);
+  const attemptedSources = sourceList.filter((source) => source.configured).map((source) => source.label);
+
+  if (!sourceList.length) {
+    return {
+      state: 'empty',
+      badge: '检查失败',
+      headline: '本次数据源检查未完成',
+      detail: '没有来源状态可展示；当前本地工作台没有被清空、覆盖或写回外部系统。',
+      metrics: ['已读取 0', '暂不可用 0', '未接入 0'],
+      boundary: '这只说明本次检查没有可用来源结果，不代表任何外部项目状态已同步。',
+    };
+  }
+
+  const state: ProjectSyncSourceScopeState = unavailableSources.length
+    ? 'attention'
+    : readySources.length
+      ? 'ready'
+      : 'empty';
+  const headline = readySources.length
+    ? `本次读取 ${formatSourceLabelList(readySources)}`
+    : unavailableSources.length
+      ? `本次未读到 ${formatSourceLabelList(unavailableSources)}`
+      : '本次没有读取外部项目源';
+
+  return {
+    state,
+    badge: unavailableSources.length ? '读取受限' : '检查口径',
+    headline,
+    detail: [
+      `实际发起读取：${formatSourceLabelList(attemptedSources)}`,
+      unavailableSources.length ? `暂不可用：${formatSourceLabelList(unavailableSources)}` : '暂无暂不可用来源',
+      skippedSources.length ? `未接入跳过：${formatSourceLabelList(skippedSources)}` : '没有未接入跳过来源',
+    ].join('；'),
+    metrics: [
+      `已读取 ${readySources.length}`,
+      `暂不可用 ${unavailableSources.length}`,
+      `未接入 ${skippedSources.length}`,
+    ],
+    boundary: '这只说明本次数据源检查口径；不代表 Jira/GitHub/Confluence 已同步，也不证明本地证据足够。',
+  };
+}
+
+function buildProjectSyncLocalEvidenceReceipt(
+  coverage: ProjectSyncLocalCoverage,
+): ProjectSyncLocalEvidenceReceipt {
+  const metrics = [
+    `项目 ${coverage.projectCount}`,
+    `活动任务 ${coverage.activeTaskCount}`,
+    `ETA ${coverage.etaCoverage}%`,
+    `来源 ${coverage.sourceCoverage}%`,
+  ];
+  if (coverage.projectsMissingPlan.length) {
+    metrics.push(`待规划 ${coverage.projectsMissingPlan.length}`);
+  }
+
+  if (!coverage.projectCount) {
+    return {
+      state: 'empty',
+      badge: '暂无项目',
+      headline: '本地工作台暂无项目证据',
+      detail: '当前没有本地项目，数据源检查只能确认来源运行状态，不能支撑项目健康判断。',
+      nextStep: '先新增项目或从 Memory Service 关注项目补齐入口，再补活动任务 ETA 和来源。',
+      metrics,
+    };
+  }
+
+  if (!coverage.activeTaskCount) {
+    const planRepairTargets = coverage.projectsMissingPlan.length
+      ? [`待规划项目：${formatProjectNamePreview(coverage.projectsMissingPlan.map((project) => project.name), 2)}`]
+      : undefined;
+    const planRepairActions = buildProjectSyncLocalEvidenceRepairActions(coverage);
+
+    return {
+      state: 'empty',
+      badge: '待规划',
+      headline: `${coverage.projectCount} 个本地项目还没有活动任务`,
+      detail: '已有项目入口，但缺少可用于状态判断的活动任务、ETA 和来源证据。',
+      nextStep: '先为项目补充活动任务、里程碑日期和来源，再复核项目状态。',
+      metrics,
+      repairTargets: planRepairTargets,
+      repairActions: planRepairActions.length ? planRepairActions : undefined,
+    };
+  }
+
+  const missingEtaCount = coverage.tasksMissingEta.length;
+  const missingSourceCount = coverage.tasksMissingSource.length;
+  const missingPlanCount = coverage.projectsMissingPlan.length;
+
+  if (missingPlanCount || missingEtaCount || missingSourceCount) {
+    const repairTargets: string[] = [];
+    const missingParts: string[] = [];
+    const detailParts: string[] = [];
+
+    if (missingPlanCount) {
+      repairTargets.push(`待规划项目：${formatProjectNamePreview(coverage.projectsMissingPlan.map((project) => project.name), 2)}`);
+      missingParts.push(`${missingPlanCount} 个项目待规划`);
+      detailParts.push(`${missingPlanCount} 个本地项目还没有任务`);
+    }
+
+    if (missingEtaCount) {
+      repairTargets.push(`缺 ETA：${summarizeTaskTitles(coverage.tasksMissingEta, 2)}`);
+      missingParts.push(`${missingEtaCount} 个缺 ETA`);
+    }
+
+    if (missingSourceCount) {
+      repairTargets.push(`缺来源：${summarizeTaskTitles(coverage.tasksMissingSource, 2)}`);
+      missingParts.push(`${missingSourceCount} 个缺来源`);
+    }
+
+    if (missingEtaCount || missingSourceCount) {
+      detailParts.push(`${coverage.activeTaskCount} 个活动任务中，${missingEtaCount} 个缺 ETA，${missingSourceCount} 个缺 Jira 或平台来源`);
+    } else {
+      detailParts.push(`${coverage.activeTaskCount} 个活动任务都有 ETA 和 Jira/平台来源证据`);
+    }
+
+    return {
+      state: 'attention',
+      badge: '需补证据',
+      headline: missingPlanCount
+        ? `本地证据待补：${missingPlanCount} 个项目待规划，ETA ${coverage.etaCoverage}%，来源 ${coverage.sourceCoverage}%`
+        : `本地证据不完整：ETA ${coverage.etaCoverage}%，来源 ${coverage.sourceCoverage}%`,
+      detail: `${detailParts.join('；')}。`,
+      nextStep: `先补 ${missingParts.join('、')}，避免把本地工作台误当外部权威状态。`,
+      metrics,
+      repairTargets,
+      repairActions: buildProjectSyncLocalEvidenceRepairActions(coverage),
+    };
+  }
+
+  return {
+    state: 'ready',
+    badge: '证据可用',
+    headline: '本地证据可支撑规则化状态判断',
+    detail: `${coverage.activeTaskCount} 个活动任务都有 ETA 和 Jira/平台来源证据。`,
+    nextStep: '可以继续复核状态草稿；对外承诺前仍需回 Jira/GitHub/Confluence 核对实时事实。',
+    metrics,
+  };
+}
+
+export function buildProjectSyncActionStatus(
+  result?: ProjectSyncReadiness,
+): ProjectDashboardActionStatus {
+  if (!result) {
+    return {
+      type: 'success',
+      text: '数据源已同步/检查',
+    };
+  }
+
+  if (!result.success) {
+    return {
+      type: 'error',
+      text: result.error || result.summary || '数据源状态检查失败',
+    };
+  }
+
+  const sourceNeedsAttention = result.sourceScope?.state !== 'ready';
+  const localEvidenceNeedsAttention = result.localEvidence?.state !== 'ready';
+  const textParts = [
+    result.summary || '数据源已同步/检查',
+    sourceNeedsAttention ? result.sourceScope?.headline : '',
+    localEvidenceNeedsAttention ? result.localEvidence?.headline : '',
+  ]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+
+  return {
+    type: sourceNeedsAttention || localEvidenceNeedsAttention ? 'warning' : 'success',
+    text: Array.from(new Set(textParts)).join('；'),
+  };
 }
 
 function buildJiraSourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[] {
@@ -822,19 +1195,45 @@ function buildJiraSourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[
   ];
 }
 
-function buildPlatformSourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[] {
+function buildGitHubSourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[] {
+  const scopeLine = '尚未配置项目仓库映射；本轮不会读取 PR、commit、release 或 GitHub issue';
+
   if (!coverage.activeTaskCount) {
     return [
-      '当前没有活动任务；外部映射接入前暂无本地来源缺口',
-      '新增任务后再补平台状态、负责人或来源字段',
+      scopeLine,
+      coverage.projectCount
+        ? `${coverage.projectCount} 个本地项目只有工作台线索；新增活动任务后再补仓库、PR、issue 或 release 映射种子`
+        : '当前没有本地项目；后续接入 GitHub 前先创建项目和仓库映射种子',
     ];
   }
 
   return [
-    `${coverage.platformSourceTaskCount}/${coverage.activeTaskCount} 个活动任务有平台状态、负责人或平台来源字段`,
-    coverage.tasksMissingEta.length
-      ? `缺 ETA 任务：${summarizeTaskTitles(coverage.tasksMissingEta, 2)}`
-      : '活动任务 ETA 已补齐，可继续补真实外部映射',
+    scopeLine,
+    coverage.platformSourceTaskCount || coverage.jiraTaskCount
+      ? `本地映射种子：${coverage.platformSourceTaskCount}/${coverage.activeTaskCount} 个活动任务有平台来源，${coverage.jiraTaskCount}/${coverage.activeTaskCount} 个有 Jira key`
+      : '当前活动任务没有平台来源或 Jira key；后续 GitHub 映射前先补仓库、PR、issue 或 release 线索',
+    coverage.tasksMissingSource.length
+      ? `缺仓库/PR/issue 映射种子的任务：${summarizeTaskTitles(coverage.tasksMissingSource, 2)}`
+      : '活动任务已有本地来源种子；仍未验证 GitHub 实时 PR、commit 或 release 状态',
+  ];
+}
+
+function buildConfluenceSourceDiagnostics(coverage: ProjectSyncLocalCoverage): string[] {
+  const scopeLine = '尚未配置空间/页面映射；本轮不会读取页面、决策记录、状态报告或更新时间';
+
+  if (!coverage.projectCount) {
+    return [
+      scopeLine,
+      '当前没有本地项目；后续接入 Confluence 前先创建项目和页面/空间映射线索',
+    ];
+  }
+
+  return [
+    scopeLine,
+    `本地页面映射种子：${coverage.projectsWithDescription}/${coverage.projectCount} 个项目有描述，${coverage.projectsWithMilestones}/${coverage.projectCount} 个项目有里程碑（共 ${coverage.milestoneCount} 个）`,
+    coverage.projectsMissingPlan.length
+      ? `待规划项目暂不适合作为状态报告依据：${formatProjectNamePreview(coverage.projectsMissingPlan.map((project) => project.name), 2)}`
+      : '本地项目都有任务；状态报告仍需后续接入 Confluence 才能核验',
   ];
 }
 
@@ -1358,6 +1757,202 @@ export function filterProjectsByDashboardView<T extends FishboneProject>(
   if (filter === 'all') return list;
 
   return list.filter((project) => getProjectDashboardViewFilter(project, now) === filter);
+}
+
+function normalizeProjectDashboardSearchQuery(query: string | undefined): string {
+  return normalizeProjectDashboardSearchTerms(query).join(' ');
+}
+
+function normalizeProjectDashboardSearchTerms(query: string | undefined): string[] {
+  return String(query || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function tokenMatchesProjectDashboardSearch(token: unknown, queryTerm: string): boolean {
+  return Boolean(String(token || '').trim().toLowerCase().includes(queryTerm));
+}
+
+function anyTokenMatchesProjectDashboardSearch(tokens: unknown[], queryTerm: string): boolean {
+  return tokens.some((token) => tokenMatchesProjectDashboardSearch(token, queryTerm));
+}
+
+function anySearchTermMatchesProjectDashboardTokens(tokens: unknown[], queryTerms: string[]): boolean {
+  return queryTerms.some((queryTerm) => anyTokenMatchesProjectDashboardSearch(tokens, queryTerm));
+}
+
+function allSearchTermsMatchProjectDashboardTokens(tokens: unknown[], queryTerms: string[]): boolean {
+  return queryTerms.every((queryTerm) => anyTokenMatchesProjectDashboardSearch(tokens, queryTerm));
+}
+
+function collectProjectDashboardSearchTokens(project: FishboneProject): string[] {
+  const tokens = [
+    project.id,
+    project.name,
+    project.description,
+    ...(project.platformConfig || []),
+  ];
+
+  (project.milestones || []).forEach((milestone) => {
+    tokens.push(milestone.id, milestone.label, milestone.date);
+  });
+
+  (project.tasks || []).forEach((task) => {
+    tokens.push(task.id, task.type, task.title, task.status, task.eta, task.desc);
+    (task.dependencies || []).forEach((dependency) => tokens.push(dependency));
+    (task.jira || []).forEach((jira) => {
+      tokens.push(jira?.key, jira?.title);
+    });
+    Object.entries(task.platforms || {}).forEach(([platformName, platform]) => {
+      tokens.push(platformName, platform?.status, platform?.assignee, platform?.jira);
+    });
+  });
+
+  return tokens.filter((token): token is string => Boolean(String(token || '').trim()));
+}
+
+function buildProjectDashboardSearchMatchBreakdown(
+  project: FishboneProject,
+  queryTerms: string[],
+): ProjectDashboardSearchSummary['matchBreakdown'] {
+  const breakdown: ProjectDashboardSearchSummary['matchBreakdown'] = {
+    projectFields: 0,
+    tasks: 0,
+    jira: 0,
+    platformSources: 0,
+    milestones: 0,
+  };
+
+  if (anySearchTermMatchesProjectDashboardTokens([
+    project.id,
+    project.name,
+    project.description,
+    ...(project.platformConfig || []),
+  ], queryTerms)) {
+    breakdown.projectFields += 1;
+  }
+
+  (project.milestones || []).forEach((milestone) => {
+    if (anySearchTermMatchesProjectDashboardTokens([
+      milestone.id,
+      milestone.label,
+      milestone.date,
+    ], queryTerms)) {
+      breakdown.milestones += 1;
+    }
+  });
+
+  (project.tasks || []).forEach((task) => {
+    if (anySearchTermMatchesProjectDashboardTokens([
+      task.id,
+      task.type,
+      task.title,
+      task.status,
+      task.eta,
+      task.desc,
+      ...(task.dependencies || []),
+    ], queryTerms)) {
+      breakdown.tasks += 1;
+    }
+
+    (task.jira || []).forEach((jira) => {
+      if (anySearchTermMatchesProjectDashboardTokens([jira?.key, jira?.title], queryTerms)) {
+        breakdown.jira += 1;
+      }
+    });
+
+    Object.entries(task.platforms || {}).forEach(([platformName, platform]) => {
+      if (anySearchTermMatchesProjectDashboardTokens([
+        platformName,
+        platform?.status,
+        platform?.assignee,
+        platform?.jira,
+      ], queryTerms)) {
+        breakdown.platformSources += 1;
+      }
+    });
+  });
+
+  return breakdown;
+}
+
+function buildProjectDashboardSearchHints(
+  breakdown: ProjectDashboardSearchSummary['matchBreakdown'],
+): string[] {
+  return [
+    breakdown.projectFields ? `项目字段 ${breakdown.projectFields}` : null,
+    breakdown.tasks ? `任务 ${breakdown.tasks}` : null,
+    breakdown.jira ? `Jira ${breakdown.jira}` : null,
+    breakdown.platformSources ? `平台来源 ${breakdown.platformSources}` : null,
+    breakdown.milestones ? `里程碑 ${breakdown.milestones}` : null,
+  ].filter((item): item is string => Boolean(item));
+}
+
+export function projectMatchesDashboardSearch(
+  project: FishboneProject,
+  query: string | undefined,
+): boolean {
+  const queryTerms = normalizeProjectDashboardSearchTerms(query);
+  if (queryTerms.length === 0) return true;
+
+  return allSearchTermsMatchProjectDashboardTokens(
+    collectProjectDashboardSearchTokens(project),
+    queryTerms,
+  );
+}
+
+export function filterProjectsByDashboardSearch<T extends FishboneProject>(
+  projects: T[],
+  query: string | undefined,
+): T[] {
+  const list = Array.isArray(projects) ? projects : [];
+  const normalizedQuery = normalizeProjectDashboardSearchQuery(query);
+  if (!normalizedQuery) return list;
+
+  return list.filter((project) => projectMatchesDashboardSearch(project, normalizedQuery));
+}
+
+export function buildProjectDashboardSearchSummary(
+  projects: FishboneProject[],
+  query: string | undefined,
+): ProjectDashboardSearchSummary | null {
+  const queryTerms = normalizeProjectDashboardSearchTerms(query);
+  if (queryTerms.length === 0) return null;
+
+  const list = Array.isArray(projects) ? projects : [];
+  const matchBreakdown: ProjectDashboardSearchSummary['matchBreakdown'] = {
+    projectFields: 0,
+    tasks: 0,
+    jira: 0,
+    platformSources: 0,
+    milestones: 0,
+  };
+  let matchedProjects = 0;
+
+  list.forEach((project) => {
+    const searchTokens = collectProjectDashboardSearchTokens(project);
+    if (!allSearchTermsMatchProjectDashboardTokens(searchTokens, queryTerms)) return;
+
+    const breakdown = buildProjectDashboardSearchMatchBreakdown(project, queryTerms);
+    matchedProjects += 1;
+    matchBreakdown.projectFields += breakdown.projectFields;
+    matchBreakdown.tasks += breakdown.tasks;
+    matchBreakdown.jira += breakdown.jira;
+    matchBreakdown.platformSources += breakdown.platformSources;
+    matchBreakdown.milestones += breakdown.milestones;
+  });
+
+  return {
+    query: String(query || '').trim(),
+    queryTerms,
+    matchedProjects,
+    totalProjects: list.length,
+    matchBreakdown,
+    matchHints: buildProjectDashboardSearchHints(matchBreakdown),
+    boundary: '只在当前浏览器本地项目快照内查找；不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence。',
+  };
 }
 
 export function buildProjectDashboardViewFilterCounts(
@@ -2065,7 +2660,12 @@ function buildGanttReadinessPanel(
 ): ProjectVisualizationPanel {
   const tasks = Array.isArray(project.tasks) ? project.tasks : [];
   const activeTasks = tasks.filter((task) => !isCompletedStatus(task.status));
+  const completedTasks = tasks.filter((task) => isCompletedStatus(task.status));
   const datedActiveTasks = activeTasks
+    .map((task) => ({ task, date: parseDateOnly(task.eta) }))
+    .filter((item): item is { task: FishboneTask; date: Date } => Boolean(item.date))
+    .sort((left, right) => left.date.getTime() - right.date.getTime());
+  const datedCompletedTasks = completedTasks
     .map((task) => ({ task, date: parseDateOnly(task.eta) }))
     .filter((item): item is { task: FishboneTask; date: Date } => Boolean(item.date))
     .sort((left, right) => left.date.getTime() - right.date.getTime());
@@ -2080,7 +2680,7 @@ function buildGanttReadinessPanel(
   const missingEtaTasks = activeTasks.filter((task) => !parseDateOnly(task.eta));
   const firstMissingEta = missingEtaTasks[0];
 
-  if (!activeTasks.length && !datedMilestones.length) {
+  if (!activeTasks.length && !datedMilestones.length && !datedCompletedTasks.length) {
     return {
       id: 'gantt',
       label: '甘特就绪度',
@@ -2089,6 +2689,91 @@ function buildGanttReadinessPanel(
       detail: '项目缺少活动任务和带日期里程碑，当前只能作为待规划工作台。',
       metrics: ['0 个活动任务', '0 个日期锚点'],
       nextStep: '先拆出任务并补上 ETA 或里程碑日期',
+    };
+  }
+
+  if (!activeTasks.length && datedCompletedTasks.length) {
+    const historicalDates = [
+      ...datedCompletedTasks.map((item) => item.date),
+      ...datedMilestones.map((item) => item.date),
+    ];
+    const earliest = historicalDates.reduce((min, date) => date < min ? date : min, historicalDates[0]);
+    const latest = historicalDates.reduce((max, date) => date > max ? date : max, historicalDates[0]);
+    const spanMs = Math.max(1, latest.getTime() - earliest.getTime());
+    const rangeLabel = formatDateOnly(earliest) === formatDateOnly(latest)
+      ? formatDateOnly(earliest)
+      : `${formatDateOnly(earliest)} 至 ${formatDateOnly(latest)}`;
+    const completedMissingEtaTasks = completedTasks.filter((task) => !parseDateOnly(task.eta));
+    const historicalDrivers = datedCompletedTasks.slice(0, 3).map(({ task, date }) => buildVisualizationTaskDriver(
+      task,
+      `完成 ETA ${formatDateOnly(date)}`,
+      `状态 ${task.status || 'unknown'}；历史锚点只用于回看完成节奏`,
+      'complete',
+    ));
+    const missingHistoricalDrivers = completedMissingEtaTasks
+      .slice(0, Math.max(0, 3 - historicalDrivers.length))
+      .map((task) => buildVisualizationTaskDriver(
+        task,
+        '完成缺 ETA',
+        '补历史 ETA 后才能把它纳入完成节奏回看',
+        'warning',
+        {
+          label: '补历史 ETA',
+          taskId: task.id,
+          evidenceFocus: 'eta',
+        },
+      ));
+
+    return {
+      id: 'gantt',
+      label: '甘特就绪度',
+      state: completedMissingEtaTasks.length ? 'partial' : 'ready',
+      headline: completedMissingEtaTasks.length
+        ? `可回看 ${datedCompletedTasks.length}/${completedTasks.length} 个已完成 ETA`
+        : `${datedCompletedTasks.length} 个已完成 ETA 可作历史锚点`,
+      detail: `没有活动任务；历史范围 ${rangeLabel}。这些锚点只用于回看完成节奏，不代表项目仍有待排工作。`,
+      metrics: [
+        '0 个活动任务',
+        `${datedCompletedTasks.length}/${completedTasks.length} 已完成任务有 ETA`,
+        `${datedMilestones.length} 个里程碑有日期`,
+        ...(completedMissingEtaTasks.length ? [`已完成缺 ETA ${completedMissingEtaTasks.length}`] : []),
+      ],
+      nextStep: completedMissingEtaTasks.length
+        ? '补齐已完成任务的历史 ETA，或新增活动任务后再做后续排期'
+        : '如果项目已结束，用历史锚点复核完成节奏；若仍在推进，新增活动任务',
+      action: completedMissingEtaTasks[0] ? {
+        label: '补历史 ETA',
+        taskId: completedMissingEtaTasks[0].id,
+        evidenceFocus: 'eta',
+      } : undefined,
+      markers: datedCompletedTasks.slice(0, 4).map(({ task, date }): ProjectVisualizationMarker => ({
+        id: task.id,
+        label: task.title || task.id,
+        detail: `${formatDateOnly(date)} · ${task.status || 'unknown'} · 已完成历史锚点`,
+        position: historicalDates.length === 1
+          ? 50
+          : Math.round(((date.getTime() - earliest.getTime()) / spanMs) * 100),
+        tone: 'complete',
+      })),
+      drivers: [
+        ...historicalDrivers,
+        ...missingHistoricalDrivers,
+      ],
+    };
+  }
+
+  if (!activeTasks.length) {
+    return {
+      id: 'gantt',
+      label: '甘特就绪度',
+      state: 'partial',
+      headline: '只有里程碑日期',
+      detail: `${datedMilestones.length} 个里程碑有日期，但没有活动任务 ETA，不能画任务排期。`,
+      metrics: [
+        '0 个活动任务',
+        `${datedMilestones.length} 个里程碑有日期`,
+      ],
+      nextStep: '如果项目仍在推进，先新增活动任务并补 ETA；如果已结束，归档项目',
     };
   }
 
@@ -2196,21 +2881,187 @@ function buildGanttReadinessPanel(
   };
 }
 
+function getTaskDependencyIds(task: FishboneTask): string[] {
+  return Array.isArray(task.dependencies)
+    ? task.dependencies
+        .map((dependency) => String(dependency || '').trim())
+        .filter(Boolean)
+    : [];
+}
+
+function getKnownProjectDependencyTargetIds(project: FishboneProject): Set<string> {
+  const knownIds = new Set<string>();
+  (Array.isArray(project.tasks) ? project.tasks : []).forEach((task) => {
+    if (task.id) knownIds.add(task.id);
+  });
+  (Array.isArray(project.milestones) ? project.milestones : []).forEach((milestone) => {
+    if (milestone.id) knownIds.add(milestone.id);
+  });
+  return knownIds;
+}
+
+function getMissingDependencyTargetIds(
+  task: FishboneTask,
+  knownTargetIds: Set<string>,
+): string[] {
+  return getTaskDependencyIds(task).filter(
+    (dependencyId) => dependencyId === task.id || !knownTargetIds.has(dependencyId),
+  );
+}
+
+function formatDependencyLinkDetail(task: FishboneTask): string {
+  const dependencies = getTaskDependencyIds(task);
+  if (!dependencies.length) return '显式依赖任务';
+  const visible = dependencies.slice(0, 2).join('、');
+  const hidden = dependencies.length - Math.min(dependencies.length, 2);
+  return `依赖 ${visible}${hidden > 0 ? ` 等 ${dependencies.length} 项` : ''}`;
+}
+
+interface DependencyChainCandidate {
+  taskIds: string[];
+  taskTitles: string[];
+  leafTask: FishboneTask;
+  blockedCount: number;
+  missingSourceCount: number;
+}
+
+function buildLongestDependencyChainCandidate(project: FishboneProject): DependencyChainCandidate | null {
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const taskById = new Map<string, FishboneTask>();
+  tasks.forEach((task) => {
+    if (task.id) taskById.set(task.id, task);
+  });
+
+  const memo = new Map<string, string[]>();
+  const visiting = new Set<string>();
+
+  const buildChainEndingAt = (task: FishboneTask): string[] => {
+    if (!task.id) return [];
+    const cached = memo.get(task.id);
+    if (cached) return cached;
+    if (visiting.has(task.id)) return [task.id];
+
+    visiting.add(task.id);
+    const dependencyTaskIds = getTaskDependencyIds(task).filter(
+      (dependencyId) => dependencyId !== task.id && taskById.has(dependencyId),
+    );
+    let bestChain = [task.id];
+
+    dependencyTaskIds.forEach((dependencyId) => {
+      const dependencyTask = taskById.get(dependencyId);
+      if (!dependencyTask) return;
+      const candidate = [
+        ...buildChainEndingAt(dependencyTask),
+        task.id,
+      ];
+      if (candidate.length > bestChain.length) bestChain = candidate;
+    });
+
+    visiting.delete(task.id);
+    memo.set(task.id, bestChain);
+    return bestChain;
+  };
+
+  const activeTasksWithLinks = tasks.filter(
+    (task) => !isCompletedStatus(task.status) && getTaskDependencyIds(task).length > 0,
+  );
+  let longestChain: string[] = [];
+
+  activeTasksWithLinks.forEach((task) => {
+    const chain = buildChainEndingAt(task);
+    if (chain.length > longestChain.length) longestChain = chain;
+  });
+
+  if (longestChain.length < 2) return null;
+
+  const chainTasks = longestChain
+    .map((taskId) => taskById.get(taskId))
+    .filter((task): task is FishboneTask => Boolean(task));
+  const leafTask = chainTasks[chainTasks.length - 1];
+  if (!leafTask) return null;
+
+  return {
+    taskIds: longestChain,
+    taskTitles: chainTasks.map((task) => task.title || task.id),
+    leafTask,
+    blockedCount: chainTasks.filter((task) => isBlockedStatus(task.status)).length,
+    missingSourceCount: chainTasks.filter((task) => !hasTaskSourceEvidence(task)).length,
+  };
+}
+
+function formatDependencyChainCandidate(candidate: DependencyChainCandidate): string {
+  const visible = candidate.taskTitles.slice(-3).join(' -> ');
+  const hidden = Math.max(0, candidate.taskTitles.length - 3);
+  return `${hidden > 0 ? `... -> ${visible}` : visible}`;
+}
+
+function buildDependencyChainDriver(candidate: DependencyChainCandidate): ProjectVisualizationDriver {
+  const tone: ProjectVisualizationMarkerTone = candidate.blockedCount > 0
+    ? 'critical'
+    : candidate.missingSourceCount > 0
+      ? 'warning'
+      : 'neutral';
+  const sourceDetail = candidate.missingSourceCount > 0
+    ? `；${candidate.missingSourceCount} 项缺来源，先补证据`
+    : '';
+
+  return buildVisualizationTaskDriver(
+    candidate.leafTask,
+    '关键链候选',
+    `本地链路 ${formatDependencyChainCandidate(candidate)}；只表示当前工作台 dependencies，不是完整关键路径计算${sourceDetail}`,
+    tone,
+    {
+      label: '查看关键链',
+      taskId: candidate.leafTask.id,
+      evidenceFocus: candidate.missingSourceCount > 0 ? 'source' : undefined,
+    },
+  );
+}
+
 function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisualizationPanel {
   const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const knownTargetIds = getKnownProjectDependencyTargetIds(project);
   const activeDependencyTasks = tasks.filter(
-    (task) => task.type === 'dep' && !isCompletedStatus(task.status),
+    (task) => !isCompletedStatus(task.status) && (
+      task.type === 'dep' || getTaskDependencyIds(task).length > 0
+    ),
   );
   const blockedDependencies = activeDependencyTasks.filter((task) => isBlockedStatus(task.status));
+  const brokenDependencyTargets = activeDependencyTasks.filter(
+    (task) => getMissingDependencyTargetIds(task, knownTargetIds).length > 0,
+  );
   const unsourcedDependencies = activeDependencyTasks.filter((task) => !hasTaskSourceEvidence(task));
-  const firstActionTask = blockedDependencies[0] || unsourcedDependencies[0];
+  const firstActionTask = blockedDependencies[0] || brokenDependencyTargets[0] || unsourcedDependencies[0];
   const sourceReadyCount = activeDependencyTasks.length - unsourcedDependencies.length;
+  const dependencyLinkCount = activeDependencyTasks.reduce(
+    (count, task) => count + getTaskDependencyIds(task).length,
+    0,
+  );
+  const validDependencyLinkCount = activeDependencyTasks.reduce(
+    (count, task) => count + (
+      getTaskDependencyIds(task).length - getMissingDependencyTargetIds(task, knownTargetIds).length
+    ),
+    0,
+  );
+  const chainCandidate = buildLongestDependencyChainCandidate(project);
+  const chainDriver = chainCandidate ? buildDependencyChainDriver(chainCandidate) : null;
+  const baseMetrics = [
+    `${activeDependencyTasks.length} 个活动依赖`,
+    `${blockedDependencies.length} 个阻塞`,
+    `${sourceReadyCount}/${activeDependencyTasks.length} 有来源`,
+  ];
+  if (dependencyLinkCount > 0) {
+    baseMetrics.push(`${validDependencyLinkCount}/${dependencyLinkCount} 依赖目标有效`);
+  }
+  if (chainCandidate) {
+    baseMetrics.push(`最长链 ${chainCandidate.taskIds.length} 个任务`);
+  }
   const blockedDrivers = blockedDependencies.slice(0, 3).map((task) => buildVisualizationTaskDriver(
     task,
     '阻塞',
     hasTaskSourceEvidence(task)
-      ? '已有来源；先确认 owner、解除条件和检查时间'
-      : '缺 Jira 或平台来源；先补来源再确认解除条件',
+      ? `${formatDependencyLinkDetail(task)}；已有来源；先确认 owner、解除条件和检查时间`
+      : `${formatDependencyLinkDetail(task)}；缺 Jira 或平台来源；先补来源再确认解除条件`,
     'critical',
     {
       label: hasTaskSourceEvidence(task) ? '打开依赖' : '补依赖来源',
@@ -2218,10 +3069,20 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
       evidenceFocus: hasTaskSourceEvidence(task) ? undefined : 'source',
     },
   ));
-  const unsourcedDrivers = unsourcedDependencies.slice(0, Math.max(1, 3 - blockedDrivers.length)).map((task) => buildVisualizationTaskDriver(
+  const brokenDrivers = brokenDependencyTargets.slice(0, Math.max(1, 3 - blockedDrivers.length)).map((task) => buildVisualizationTaskDriver(
+    task,
+    '目标无效',
+    `当前项目找不到依赖目标 ${getMissingDependencyTargetIds(task, knownTargetIds).slice(0, 2).join('、')}`,
+    'warning',
+    {
+      label: '检查依赖目标',
+      taskId: task.id,
+    },
+  ));
+  const unsourcedDrivers = unsourcedDependencies.slice(0, Math.max(1, 3 - blockedDrivers.length - brokenDrivers.length)).map((task) => buildVisualizationTaskDriver(
     task,
     '缺来源',
-    '依赖图缺少可审阅的 Jira 或平台来源',
+    `${formatDependencyLinkDetail(task)}；依赖图缺少可审阅的 Jira 或平台来源`,
     'warning',
     {
       label: '补依赖来源',
@@ -2231,8 +3092,8 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
   ));
   const readyDrivers = activeDependencyTasks.slice(0, 3).map((task) => buildVisualizationTaskDriver(
     task,
-    '可跟踪',
-    '已有来源；可用状态和 ETA 扫描依赖风险',
+    getTaskDependencyIds(task).length ? '依赖链' : '可跟踪',
+    `${formatDependencyLinkDetail(task)}；已有来源；可用状态和 ETA 扫描依赖风险`,
     'neutral',
   ));
 
@@ -2241,34 +3102,38 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
       id: 'dependencies',
       label: '依赖图',
       state: 'empty',
-      headline: '没有单独标记依赖任务',
-      detail: '当前项目没有活动 dependency 任务，依赖图只能显示为空。',
-      metrics: ['0 个活动依赖', '0 个阻塞依赖'],
-      nextStep: '如果存在跨团队或平台阻塞，把它建成依赖任务并关联来源',
+      headline: '没有依赖任务或依赖链',
+      detail: '当前项目没有活动 dependency 任务，也没有任务级 dependencies 链接，依赖图只能显示为空。',
+      metrics: ['0 个活动依赖', '0 个依赖链', '0 个阻塞依赖'],
+      nextStep: '如果存在跨团队或平台阻塞，把它建成依赖任务，或给受影响任务记录 dependencies 并关联来源',
     };
   }
 
-  if (blockedDependencies.length) {
+  if (blockedDependencies.length || brokenDependencyTargets.length) {
     return {
       id: 'dependencies',
       label: '依赖图',
       state: 'attention',
-      headline: `${blockedDependencies.length} 个依赖被阻塞`,
-      detail: summarizeTaskTitles(blockedDependencies, 2),
-      metrics: [
-        `${activeDependencyTasks.length} 个活动依赖`,
-        `${blockedDependencies.length} 个阻塞`,
-        `${sourceReadyCount}/${activeDependencyTasks.length} 有来源`,
-      ],
-      nextStep: '先确认阻塞依赖的 owner、解除条件和下一次检查时间',
+      headline: blockedDependencies.length
+        ? `${blockedDependencies.length} 个依赖被阻塞`
+        : `${brokenDependencyTargets.length} 个依赖目标无效`,
+      detail: blockedDependencies.length
+        ? summarizeTaskTitles(blockedDependencies, 2)
+        : summarizeTaskTitles(brokenDependencyTargets, 2),
+      metrics: baseMetrics,
+      nextStep: blockedDependencies.length
+        ? '先确认阻塞依赖的 owner、解除条件和下一次检查时间'
+        : '先修正缺失或自引用的依赖目标，再把依赖图用于排期判断',
       action: firstActionTask ? {
-        label: '打开阻塞依赖',
+        label: blockedDependencies.length ? '打开阻塞依赖' : '检查依赖目标',
         taskId: firstActionTask.id,
-        evidenceFocus: hasTaskSourceEvidence(firstActionTask) ? undefined : 'source',
+        evidenceFocus: blockedDependencies.length && !hasTaskSourceEvidence(firstActionTask) ? 'source' : undefined,
       } : undefined,
       drivers: [
         ...blockedDrivers,
+        ...brokenDrivers,
         ...unsourcedDrivers,
+        ...(chainDriver ? [chainDriver] : []),
       ],
     };
   }
@@ -2280,18 +3145,17 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
       state: 'partial',
       headline: `${unsourcedDependencies.length} 个依赖缺来源`,
       detail: '依赖关系可以显示，但缺少 Jira 或平台来源会降低可审阅性。',
-      metrics: [
-        `${activeDependencyTasks.length} 个活动依赖`,
-        '0 个阻塞',
-        `${sourceReadyCount}/${activeDependencyTasks.length} 有来源`,
-      ],
+      metrics: baseMetrics,
       nextStep: '给依赖任务补 Jira、平台状态或负责人后再对外同步状态',
       action: firstActionTask ? {
         label: '补依赖来源',
         taskId: firstActionTask.id,
         evidenceFocus: 'source',
       } : undefined,
-      drivers: unsourcedDrivers,
+      drivers: [
+        ...unsourcedDrivers,
+        ...(chainDriver ? [chainDriver] : []),
+      ],
     };
   }
 
@@ -2299,15 +3163,20 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
     id: 'dependencies',
     label: '依赖图',
     state: 'ready',
-    headline: `${activeDependencyTasks.length} 个依赖可跟踪`,
-    detail: '活动依赖都有来源，当前适合用状态和 ETA 扫描阻塞风险。',
-    metrics: [
-      `${activeDependencyTasks.length} 个活动依赖`,
-      '0 个阻塞',
-      `${sourceReadyCount}/${activeDependencyTasks.length} 有来源`,
+    headline: chainCandidate
+      ? `${activeDependencyTasks.length} 个依赖可跟踪，最长链 ${chainCandidate.taskIds.length} 项`
+      : `${activeDependencyTasks.length} 个依赖可跟踪`,
+    detail: dependencyLinkCount > 0
+      ? `${dependencyLinkCount} 条任务依赖链都能匹配当前项目任务或里程碑，且活动依赖都有来源；关键链候选只来自本地 dependencies。`
+      : '活动依赖都有来源，当前适合用状态和 ETA 扫描阻塞风险。',
+    metrics: baseMetrics,
+    nextStep: chainCandidate
+      ? '对外同步排期前先复核最长依赖链上的任务状态、ETA 和来源'
+      : '继续维护依赖状态，阻塞时优先记录 owner 和解除条件',
+    drivers: [
+      ...(chainDriver ? [chainDriver] : []),
+      ...readyDrivers,
     ],
-    nextStep: '继续维护依赖状态，阻塞时优先记录 owner 和解除条件',
-    drivers: readyDrivers,
   };
 }
 
@@ -2377,8 +3246,8 @@ function buildBurndownReadinessPanel(
       label: '燃尽/完成',
       state: 'empty',
       headline: '还没有可燃尽任务',
-      detail: '项目缺少任务，无法计算完成率或剩余工作。',
-      metrics: ['0/0 已完成', '0 个未完成'],
+      detail: '项目缺少任务，无法计算完成率或剩余工作；当前燃尽卡只支持本地任务数口径。',
+      metrics: ['0/0 已完成', '0 个未完成', '任务数口径'],
       nextStep: '先把里程碑拆成可关闭的任务',
       progressPercent: 0,
     };
@@ -2391,11 +3260,12 @@ function buildBurndownReadinessPanel(
       state: 'attention',
       headline: `${completionPercent}% 完成，${blockedTasks.length + overdueTasks.length} 个风险项`,
       detail: blockedTasks.length
-        ? `${blockedTasks.length} 个未完成任务被阻塞`
-        : `${overdueTasks.length} 个未完成任务已超过 ETA`,
+        ? `${blockedTasks.length} 个未完成任务被阻塞；当前完成率按任务数计算，不含工时、故事点或范围变化。`
+        : `${overdueTasks.length} 个未完成任务已超过 ETA；当前完成率按任务数计算，不含工时、故事点或范围变化。`,
       metrics: [
         `${completedTasks.length}/${tasks.length} 已完成`,
         `${activeTasks.length} 个未完成`,
+        '任务数口径',
         `${blockedTasks.length} 阻塞`,
         `${overdueTasks.length} 过期`,
       ],
@@ -2421,10 +3291,11 @@ function buildBurndownReadinessPanel(
       label: '燃尽/完成',
       state: 'partial',
       headline: `${completionPercent}% 完成，剩余工作缺 ETA`,
-      detail: `${missingEtaTasks.length} 个未完成任务没有 ETA，燃尽趋势只能作为完成率摘要。`,
+      detail: `${missingEtaTasks.length} 个未完成任务没有 ETA，燃尽趋势只能作为任务数完成率摘要，不含工时、故事点或速度预测。`,
       metrics: [
         `${completedTasks.length}/${tasks.length} 已完成`,
         `${activeTasks.length} 个未完成`,
+        '任务数口径',
         `缺 ETA ${missingEtaTasks.length}`,
       ],
       nextStep: '补齐未完成任务 ETA 后再判断进度是否偏离计划',
@@ -2443,16 +3314,64 @@ function buildBurndownReadinessPanel(
     label: '燃尽/完成',
     state: 'ready',
     headline: `${completionPercent}% 完成`,
-    detail: `${activeTasks.length} 个未完成任务都有 ETA，当前可用完成率和临期任务判断节奏。`,
+    detail: `${activeTasks.length} 个未完成任务都有 ETA，当前可用任务数完成率和临期任务判断节奏；这不是 effort/velocity 预测。`,
     metrics: [
       `${completedTasks.length}/${tasks.length} 已完成`,
       `${activeTasks.length} 个未完成`,
+      '任务数口径',
       '0 阻塞',
       '0 过期',
     ],
     nextStep: '继续关闭完成项并复核下一批 ETA',
     progressPercent: completionPercent,
     drivers: readyDrivers,
+  };
+}
+
+function buildProjectVisualizationReceipt(
+  project: FishboneProject,
+  panels: ProjectVisualizationPanel[],
+  now: Date,
+): ProjectVisualizationReceipt {
+  const attentionPanels = panels.filter((panel) => panel.state === 'attention');
+  const partialPanels = panels.filter((panel) => panel.state === 'partial');
+  const emptyPanels = panels.filter((panel) => panel.state === 'empty');
+  const readyPanels = panels.filter((panel) => panel.state === 'ready');
+  const dataQuality = buildProjectDataQualitySummary(project);
+  const freshness = buildProjectFreshnessSummary(project, now);
+  const headlineParts = [
+    readyPanels.length ? `${readyPanels.length}/3 就绪` : '',
+    attentionPanels.length ? `${attentionPanels.length} 个需处理` : '',
+    partialPanels.length ? `${partialPanels.length} 个待补证据` : '',
+    emptyPanels.length ? `${emptyPanels.length} 个暂无数据` : '',
+  ].filter(Boolean);
+  const state: ProjectVisualizationState = attentionPanels.length
+    ? 'attention'
+    : partialPanels.length
+      ? 'partial'
+      : emptyPanels.length === panels.length
+        ? 'empty'
+        : emptyPanels.length
+          ? 'partial'
+          : 'ready';
+  const dataDetail = dataQuality.state === 'empty'
+    ? '当前没有活动任务，图表只能展示历史/里程碑或空状态'
+    : `${dataQuality.activeTasks} 个活动任务，ETA 覆盖 ${dataQuality.etaCoverage}%，来源覆盖 ${dataQuality.sourceCoverage}%`;
+  const authorityBoundary = '本地轻量图表，不代表 Jira/GitHub/Confluence 权威同步，也不会自动预测或改期。';
+  const readinessBoundary = freshness.state === 'stale' || freshness.state === 'aging'
+    ? `${freshness.label}：${freshness.headline}；对外同步或承诺前先复核状态。`
+    : freshness.state === 'unscheduled'
+      ? '缺少 ETA 或里程碑日期时，图表只显示待规划状态，不推断排期。'
+      : dataQuality.state === 'partial' || dataQuality.state === 'poor'
+        ? `${dataQuality.label}：缺 ETA 或来源时，只展示可验证部分，不推断外部排期。`
+        : '当前图表依据齐全，仍需按本地计划持续复核。';
+
+  return {
+    state,
+    label: '图表依据',
+    headline: headlineParts.join('，') || '3 个图表依据齐全',
+    detail: `依据本地任务 ETA、依赖任务/链、完成/阻塞状态和里程碑日期生成；${dataDetail}。`,
+    boundary: `${readinessBoundary}${readinessBoundary.endsWith('。') ? '' : '。'}${authorityBoundary}`,
   };
 }
 
@@ -2469,12 +3388,15 @@ export function buildProjectVisualizationSummary(
   const attentionPanels = panels.filter((panel) => panel.state === 'attention');
   const partialPanels = panels.filter((panel) => panel.state === 'partial');
   const readyPanels = panels.filter((panel) => panel.state === 'ready');
+  const emptyPanels = panels.filter((panel) => panel.state === 'empty');
   const priorityPanel = attentionPanels[0] || partialPanels[0] || panels[0];
+  const receipt = buildProjectVisualizationReceipt(project, panels, now);
 
   if (attentionPanels.length) {
     return {
       headline: `${attentionPanels.length} 个图表需要先处理风险或数据缺口`,
       nextStep: priorityPanel.nextStep,
+      receipt,
       panels,
     };
   }
@@ -2483,6 +3405,25 @@ export function buildProjectVisualizationSummary(
     return {
       headline: `${readyPanels.length}/3 个图表数据已就绪`,
       nextStep: priorityPanel.nextStep,
+      receipt,
+      panels,
+    };
+  }
+
+  if (emptyPanels.length === panels.length) {
+    return {
+      headline: '还没有可用图表数据',
+      nextStep: priorityPanel.nextStep,
+      receipt,
+      panels,
+    };
+  }
+
+  if (emptyPanels.length) {
+    return {
+      headline: `${readyPanels.length}/3 个图表有可用数据`,
+      nextStep: '继续维护已有图表数据；需要依赖图时先补依赖任务和来源',
+      receipt,
       panels,
     };
   }
@@ -2490,6 +3431,7 @@ export function buildProjectVisualizationSummary(
   return {
     headline: '图表数据可用',
     nextStep: '继续维护 ETA、依赖来源和完成状态',
+    receipt,
     panels,
   };
 }
@@ -3644,10 +4586,7 @@ export class DashboardDataManager {
           badge: '未接入',
           detail: '尚未接入 GitHub PR / commit 同步',
           nextStep: '后续可按项目仓库映射接入 PR 状态',
-          diagnostics: [
-            '未配置项目仓库映射，当前不会用代码活动修正项目健康判断',
-            ...buildPlatformSourceDiagnostics(localCoverage),
-          ],
+          diagnostics: buildGitHubSourceDiagnostics(localCoverage),
           boundaries: [
             '不会读取 PR、commit、release 或 issue 状态',
             '不会用代码活动自动更新项目健康判断',
@@ -3661,10 +4600,7 @@ export class DashboardDataManager {
           badge: '未接入',
           detail: '尚未接入 Confluence 页面同步',
           nextStep: '后续可按项目空间或页面链接同步状态材料',
-          diagnostics: [
-            '未配置空间/页面映射，状态草稿不会引用决策记录或状态报告',
-            ...buildPlatformSourceDiagnostics(localCoverage),
-          ],
+          diagnostics: buildConfluenceSourceDiagnostics(localCoverage),
           boundaries: [
             '不会读取页面、决策记录或状态报告',
             '状态草稿仍只引用本地任务和手动来源',
@@ -3676,13 +4612,19 @@ export class DashboardDataManager {
         success: true,
         checkedAt: new Date().toISOString(),
         summary,
+        sourceScope: buildProjectSyncSourceScopeReceipt(sources),
+        localEvidence: buildProjectSyncLocalEvidenceReceipt(localCoverage),
         sources,
       };
     } catch (error: any) {
+      const fallbackCoverage = buildProjectSyncLocalCoverage([]);
+
       return {
         success: false,
         checkedAt: new Date().toISOString(),
         summary: '数据源状态检查失败',
+        sourceScope: buildProjectSyncSourceScopeReceipt([]),
+        localEvidence: buildProjectSyncLocalEvidenceReceipt(fallbackCoverage),
         sources: [],
         error: error.message,
       };

@@ -61,6 +61,7 @@ interface ImportPreviewResult {
   restoredLayers: Array<'A' | 'B'>;
   backup: {
     userId: string;
+    targetUserId: string;
     exportedAt: string;
     formatVersion: number;
     includeCount: number;
@@ -128,6 +129,14 @@ function parseContentDispositionFilename(
 
   const match = contentDisposition.match(/filename="?([^";]+)"?/i);
   return match?.[1] ?? null;
+}
+
+function readNumericHeader(headers: Headers, name: string): number {
+  const rawValue = headers.get(name);
+  assert(rawValue, `${name} header is missing`);
+  const value = Number(rawValue);
+  assert(Number.isFinite(value), `${name} header is not numeric`);
+  return value;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -238,6 +247,7 @@ async function main(): Promise<void> {
   const exportDir = path.join(workspaceDir, 'exported');
   const extractedDir = path.join(workspaceDir, 'extracted');
   const userId = 'verify-user';
+  const crossUserId = 'verify-user-restore-target';
 
   await fs.mkdir(exportDir, { recursive: true });
 
@@ -255,6 +265,10 @@ async function main(): Promise<void> {
     const userHeaders = {
       Accept: 'application/json',
       'X-User-Id': userId,
+    };
+    const crossUserHeaders = {
+      Accept: 'application/json',
+      'X-User-Id': crossUserId,
     };
 
     const initialContext = userContextManager.getContext(userId);
@@ -375,6 +389,55 @@ async function main(): Promise<void> {
     assert(manifest.formatVersion === 1, 'Unexpected backup format version');
     assert(manifest.transport === 'zip', 'Unexpected backup transport');
     assert(manifest.userId === userId, 'Manifest userId mismatch');
+    assert(
+      exportResponse.headers.get('x-personal-ai-backup-user-id') === manifest.userId,
+      'Backup user header should match manifest user',
+    );
+    assert(
+      exportResponse.headers.get('x-personal-ai-backup-exported-at') === manifest.exportedAt,
+      'Backup exportedAt header should match manifest',
+    );
+    assert(
+      readNumericHeader(exportResponse.headers, 'x-personal-ai-backup-format-version') ===
+        manifest.formatVersion,
+      'Backup format version header should match manifest',
+    );
+    assert(
+      readNumericHeader(exportResponse.headers, 'x-personal-ai-backup-include-count') ===
+        manifest.includes.length,
+      'Backup include count header should match manifest',
+    );
+    assert(
+      readNumericHeader(exportResponse.headers, 'x-personal-ai-backup-layer-a-count') ===
+        manifest.layers.A.paths.length,
+      'Backup layer A header should match manifest',
+    );
+    assert(
+      readNumericHeader(exportResponse.headers, 'x-personal-ai-backup-layer-b-count') ===
+        manifest.layers.B.paths.length,
+      'Backup layer B header should match manifest',
+    );
+    assert(
+      readNumericHeader(
+        exportResponse.headers,
+        'x-personal-ai-backup-layer-c-generated-count',
+      ) === manifest.layers.C.generated.length,
+      'Backup layer C generated header should match manifest',
+    );
+    assert(
+      readNumericHeader(
+        exportResponse.headers,
+        'x-personal-ai-backup-layer-c-failed-count',
+      ) === manifest.layers.C.failed.length,
+      'Backup layer C failed header should match manifest',
+    );
+    assert(
+      readNumericHeader(
+        exportResponse.headers,
+        'x-personal-ai-backup-layer-c-skipped-count',
+      ) === manifest.layers.C.skipped.length,
+      'Backup layer C skipped header should match manifest',
+    );
     assert(await pathExists(path.join(extractedDir, 'user', 'memory.db')), 'Backup zip is missing user/memory.db');
     assert(await pathExists(path.join(extractedDir, 'user', 'config.json')), 'Backup zip is missing user/config.json');
     assert(await pathExists(path.join(extractedDir, 'user', 'projects', 'project-alpha.md')), 'Backup zip is missing exported markdown');
@@ -586,6 +649,97 @@ async function main(): Promise<void> {
     assert(
       unsupportedManifestPathBody.includes('Backup manifest contains unsupported user file: user/agent/payload.js'),
       'Unsupported path response should explain the backup contract mismatch',
+    );
+
+    const crossUserDryRunForm = new FormData();
+    crossUserDryRunForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    crossUserDryRunForm.append('mode', 'merge');
+    crossUserDryRunForm.append('dryRun', 'true');
+
+    const crossUserDryRunResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: crossUserHeaders,
+      body: crossUserDryRunForm,
+    });
+
+    await ensureOkResponse(crossUserDryRunResponse, 'Cross-user import dry-run failed');
+    const crossUserDryRunResult = (await crossUserDryRunResponse.json()) as ImportPreviewResult;
+
+    assert(crossUserDryRunResult.backup.userId === userId, 'Cross-user dry-run should report backup user');
+    assert(
+      crossUserDryRunResult.backup.targetUserId === crossUserId,
+      'Cross-user dry-run should report target user',
+    );
+    assert(
+      crossUserDryRunResult.warnings.some((warning) => warning.includes(`import target is ${crossUserId}`)),
+      'Cross-user dry-run should warn about target mismatch',
+    );
+
+    const crossUserUnconfirmedForm = new FormData();
+    crossUserUnconfirmedForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    crossUserUnconfirmedForm.append('mode', 'merge');
+
+    const crossUserUnconfirmedResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: crossUserHeaders,
+      body: crossUserUnconfirmedForm,
+    });
+    const crossUserUnconfirmedBody = await crossUserUnconfirmedResponse.text();
+
+    assert(
+      crossUserUnconfirmedResponse.status === 400,
+      'Cross-user import should require explicit confirmation',
+    );
+    assert(
+      crossUserUnconfirmedBody.includes('confirmUserMismatch=true'),
+      'Cross-user rejection should explain how to confirm an intentional restore',
+    );
+
+    const crossUserConfirmedForm = new FormData();
+    crossUserConfirmedForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    crossUserConfirmedForm.append('mode', 'merge');
+    crossUserConfirmedForm.append('confirmUserMismatch', 'true');
+
+    const crossUserConfirmedResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: crossUserHeaders,
+      body: crossUserConfirmedForm,
+    });
+
+    await ensureOkResponse(crossUserConfirmedResponse, 'Confirmed cross-user import failed');
+    const crossUserConfirmedResult = (await crossUserConfirmedResponse.json()) as ImportResult;
+    const crossUserContext = userContextManager.getContext(crossUserId);
+
+    assert(crossUserConfirmedResult.mode === 'merge', 'Confirmed cross-user response mode mismatch');
+    assert(
+      crossUserConfirmedResult.warnings.some((warning) => warning.includes(`import target is ${crossUserId}`)),
+      'Confirmed cross-user import should preserve mismatch warning in the receipt',
+    );
+    assert(
+      Boolean(
+        crossUserContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('project-alpha'),
+      ),
+      'Confirmed cross-user import should restore backup database rows',
+    );
+    assert(
+      crossUserContext.userDataManager
+        .readFile('projects/project-alpha.md')
+        ?.includes('exported version'),
+      'Confirmed cross-user import should restore backup markdown files',
     );
 
     const mergeForm = new FormData();

@@ -153,6 +153,56 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('short-circuits RingCentral composer recall when passive search is disabled', async () => {
+    const previousFastMode = process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+    const previousSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+    process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = 'true';
+    process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = 'false';
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/composer/assist',
+        payload: {
+          surface: 'ringcentral_message',
+          contextType: 'message_thread',
+          scenario: 'instant_message_reply',
+          title: 'RingCentral Staff Slides Update',
+          primaryText:
+            'Staff slides Rooms NC JVD Webinar done. P1 non-production fixed.',
+          visibleMessages: [
+            {
+              id: 'm1',
+              sender: 'Daniel Huang',
+              text: '上周 Rooms 新增一个 P1 非 production，已 fix',
+              timestampLabel: '6/26 9:56 AM',
+            },
+          ],
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.available).toBe(false);
+      expect(body.debug?.recall?.rejectedReason).toBe(
+        'passive_fast_search_disabled',
+      );
+      expect(llmGenerateMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousFastMode === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = previousFastMode;
+      }
+      if (previousSearch === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = previousSearch;
+      }
+    }
+  });
+
   it('returns a preview-required AI context pack for web agent prompts', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -219,6 +269,91 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.debug.taskFrame.kind).toBe('repo_bugfix');
     expect(body.debug.targetToolFit.betterTool).toBe('codex_cli');
     expect(body.debug.sourceMix.codex_cli).toBeGreaterThan(0);
+  });
+
+  it('returns a prompt patch when a web AI prompt needs Jira/Sites task constraints', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9224,
+      content:
+        'Codex Sites project plan: build a Jira roadmap board and release risk dashboard. Define Jira field contract, release phase, refresh/storage boundary, deployment steps, validation steps, and do not auto-write back to Jira.',
+      sourceType: 'codex_cli',
+      source: 'codex_cli',
+      scope: 'work',
+      createdAt: now - 12,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT - Jira roadmap board',
+        draftText:
+          '帮我做一个 Jira roadmap board，用 Codex Sites 部署，最好能看到 release risk。',
+        primaryText: 'New AI chat for planning a Jira roadmap dashboard',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['codex_cli', 'jira', 'glip', 'web'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.title).toBe('提问上下文补丁');
+    expect(body.summary).toContain('数据源');
+    expect(body.summary).toContain('点击 icon 只插入当前 prompt 草稿');
+    expect(body.insertText).toContain('数据源');
+    expect(body.insertText).toContain('输出格式');
+    expect(body.insertText).toContain('不要自动写回 Jira');
+    expect(body.insertText).toContain('来源处理');
+    expect(body.insertText).toContain('Codex Sites');
+    expect(body.debug.promptPatch.intentKind).toBe('codex_sites_dashboard');
+  });
+
+  it('returns an estimate prompt patch with dry-run and missing-reason boundaries', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9225,
+      content:
+        'Task Estimate workflow: evaluate Jira ticket estimates from Jira team field, Summary, Description, Issue type, and Historical Story Points benchmark. AI Service dry-runs or writes Google Sheet only, not Jira, and must include missing reason or low confidence reason.',
+      sourceType: 'jira',
+      source: 'jira',
+      scope: 'work',
+      createdAt: now - 12,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT - estimate tickets',
+        draftText:
+          '帮我分析这些 Jira ticket 的 estimate，看看能不能自动生成 Dev/QA 估算。',
+        primaryText: 'New AI chat for Jira estimate analysis',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['jira', 'glip', 'manual'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.title).toBe('估算口径补丁');
+    expect(body.insertText).toContain('依据字段');
+    expect(body.insertText).toContain('Historical Story Points benchmark');
+    expect(body.insertText).toContain('missing reason / low confidence reason');
+    expect(body.insertText).toContain('不要自动写回 Jira');
+    expect(body.debug.promptPatch.intentKind).toBe('jira_estimate_analysis');
   });
 
   it('keeps Jira status prompts source-aware when composing to another AI', async () => {
@@ -708,6 +843,13 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).not.toContain('咱们一起捣鼓下');
     expect(body.debug.personalization.confirmedStyleHintKeys).toContain(
       'writing_style.ringcentral.peer.casual_reply.zh',
+    );
+    expect(llmGenerateMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        retryCount: 0,
+        timeoutMs: 4500,
+      }),
     );
   });
 

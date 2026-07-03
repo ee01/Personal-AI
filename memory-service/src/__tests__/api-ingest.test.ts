@@ -89,6 +89,7 @@ describe('Ingest API', () => {
       recency: expect.any(Number),
       surprise: expect.any(Number),
       redundancy: expect.any(Number),
+      entityAffinityBoost: expect.any(Number),
     });
 
     const indexedChunk = db
@@ -417,6 +418,9 @@ describe('Ingest API', () => {
       expect(result).toHaveProperty('status');
       expect(['created', 'duplicate', 'error']).toContain(result.status);
       expect(result).toHaveProperty('decision');
+      expect(result.decision.salienceComponents).toMatchObject({
+        entityAffinityBoost: expect.any(Number),
+      });
     }
   });
 

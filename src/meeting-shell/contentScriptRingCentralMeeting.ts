@@ -28,6 +28,7 @@ type OverlayState = {
   closeAffordanceVisible: boolean;
   closeConfirmOpen: boolean;
   embeddedPanelOpen: boolean;
+  embeddedPanelStatus: 'idle' | 'loading' | 'loaded' | 'stalled';
   coachmarkOpen: boolean;
   catchupOpen: boolean;
   note?: string;
@@ -57,6 +58,7 @@ const overlayState: OverlayState = {
   closeAffordanceVisible: false,
   closeConfirmOpen: false,
   embeddedPanelOpen: false,
+  embeddedPanelStatus: 'idle',
   coachmarkOpen: false,
   catchupOpen: false,
 };
@@ -68,6 +70,7 @@ let mounted = false;
 let observersInstalled = false;
 let hoverCloseTimer: number | undefined;
 let entryCloseRevealTimer: number | undefined;
+let embeddedPanelLoadTimer: number | undefined;
 let lastAlertMeetingId: string | undefined;
 const seenDanmakuIds = new Set<string>();
 const dismissedP0Ids = new Set<string>();
@@ -123,6 +126,24 @@ function buildEmbeddedPanelUrl(args?: {
   );
 }
 
+function clearEmbeddedPanelLoadTimer(): void {
+  window.clearTimeout(embeddedPanelLoadTimer);
+  embeddedPanelLoadTimer = undefined;
+}
+
+function scheduleEmbeddedPanelLoadWatch(): void {
+  clearEmbeddedPanelLoadTimer();
+  embeddedPanelLoadTimer = window.setTimeout(() => {
+    if (
+      overlayState.embeddedPanelOpen &&
+      overlayState.embeddedPanelStatus === 'loading'
+    ) {
+      overlayState.embeddedPanelStatus = 'stalled';
+      renderOverlay(overlayState.snapshot, getMeetingPageContext());
+    }
+  }, 4500);
+}
+
 function setEmbeddedPanelOpen(
   open: boolean,
   args?: { tabId?: number; catchup?: boolean; debug?: boolean },
@@ -152,9 +173,19 @@ function setEmbeddedPanelOpen(
       catchup: args?.catchup,
       debug: args?.debug,
     });
-    if (args?.catchup || args?.debug || frame.dataset.src !== nextSrc) {
+    const srcChanged = args?.catchup || args?.debug || frame.dataset.src !== nextSrc;
+    if (srcChanged) {
+      frame.dataset.meetingPilotLoaded = 'false';
+      overlayState.embeddedPanelStatus = 'loading';
       frame.src = nextSrc;
       frame.dataset.src = nextSrc;
+      scheduleEmbeddedPanelLoadWatch();
+    } else {
+      overlayState.embeddedPanelStatus =
+        frame.dataset.meetingPilotLoaded === 'true' ? 'loaded' : 'loading';
+      if (overlayState.embeddedPanelStatus === 'loading') {
+        scheduleEmbeddedPanelLoadWatch();
+      }
     }
     overlayState.embeddedPanelOpen = true;
     overlayState.hover = false;
@@ -167,12 +198,37 @@ function setEmbeddedPanelOpen(
     });
   } else {
     overlayState.embeddedPanelOpen = false;
+    overlayState.embeddedPanelStatus = 'idle';
+    clearEmbeddedPanelLoadTimer();
     backdrop.classList.remove('open');
     panel.classList.remove('open');
   }
 
   renderOverlay(overlayState.snapshot, getMeetingPageContext());
   return true;
+}
+
+function buildEmbeddedPanelReceiptText(
+  snapshot?: MeetingPilotSessionSnapshot,
+): { title: string; detail: string } {
+  const meetingLabel = normalizeText(snapshot?.title) || '当前会议页';
+  if (overlayState.embeddedPanelStatus === 'loaded') {
+    return {
+      title: '页内面板 · 已载入',
+      detail: `已绑定 ${meetingLabel}。关闭只隐藏这个页内面板，不会开始、停止或外发 Capture；录制状态仍以 popup / side panel 回执为准。`,
+    };
+  }
+  if (overlayState.embeddedPanelStatus === 'stalled') {
+    return {
+      title: '页内面板 · 加载未确认',
+      detail:
+        'Meeting Pilot 面板未确认载入。请保留会议页，从 Personal AI popup / Chrome 侧边栏重试，或打开 Options 检查配置。',
+    };
+  }
+  return {
+    title: '页内面板 · 加载中',
+    detail: `正在绑定 ${meetingLabel}。这个动作只打开会中控制面，不会自动开始录制或外发会议内容。`,
+  };
 }
 
 function resolveParticipantAlias(name: string): string {
@@ -905,6 +961,19 @@ function openMeetingPilotOptionsPage(): void {
     ? chrome.runtime.getURL('options.html#meeting-pilot-config')
     : 'options.html#meeting-pilot-config';
   window.open(url, '_blank', 'noopener');
+}
+
+function formatMeetingPanelOpenFailure(response?: {
+  surface?: string;
+  error?: string;
+}): string {
+  if (
+    response?.surface === 'unavailable' ||
+    response?.error === 'meeting_pilot_panel_surface_unavailable'
+  ) {
+    return '会议页内嵌面板没有打开。请先保留这个会议页，再从浏览器右上角 Personal AI popup 打开 Meeting Pilot；如果仍失败，可打开 Options 检查 Meeting Pilot 配置。';
+  }
+  return 'Meeting Pilot 面板没有打开。请从浏览器右上角 Personal AI popup 重试，或打开 Options 检查配置。';
 }
 
 async function updateMeetingPilotConfig(
@@ -2863,10 +2932,47 @@ function createOverlay(): void {
         z-index: 2147483645;
         pointer-events: none;
         display: flex;
+        flex-direction: column;
         background: rgba(11, 13, 20, 0.96);
         border-right: 1px solid rgba(46, 51, 64, 0.94);
         box-shadow: 16px 0 48px rgba(0, 0, 0, 0.42);
         overflow: hidden;
+      }
+      .side-panel-receipt {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(46, 51, 64, 0.94);
+        background: rgba(16, 19, 30, 0.98);
+        color: #eef2ff;
+      }
+      .side-panel-receipt-title {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+      }
+      .side-panel-receipt-copy {
+        margin-top: 3px;
+        font-size: 10px;
+        line-height: 1.4;
+        color: rgba(221, 226, 239, 0.74);
+      }
+      .side-panel-close-btn {
+        appearance: none;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(236, 242, 255, 0.84);
+        font-size: 11px;
+        font-weight: 700;
+        padding: 6px 8px;
+        cursor: pointer;
+      }
+      .side-panel-close-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
       }
       .side-panel.open {
         transform: translateX(0);
@@ -3129,8 +3235,10 @@ function createOverlay(): void {
         white-space: pre-wrap;
       }
       .side-panel-frame {
+        flex: 1;
+        min-height: 0;
         width: 100%;
-        height: 100%;
+        height: auto;
         border: 0;
         background: #0b0d14;
       }
@@ -3623,6 +3731,15 @@ function createOverlay(): void {
     <div class="p0-container" id="mpP0Container"></div>
     <div class="side-panel-backdrop" id="mpSidePanelBackdrop"></div>
     <div class="side-panel" id="mpSidePanelShell">
+      <div class="side-panel-receipt" id="mpSidePanelReceipt" data-state="idle">
+        <div>
+          <div class="side-panel-receipt-title" id="mpSidePanelReceiptTitle">页内面板 · 加载中</div>
+          <div class="side-panel-receipt-copy" id="mpSidePanelReceiptCopy">
+            正在绑定当前会议页。这个动作只打开会中控制面，不会自动开始录制或外发会议内容。
+          </div>
+        </div>
+        <button class="side-panel-close-btn" id="mpSidePanelClose" type="button">关闭</button>
+      </div>
       <iframe
         class="side-panel-frame"
         id="mpSidePanelFrame"
@@ -3764,6 +3881,10 @@ function createOverlay(): void {
   const entryWrap = shadow.getElementById('mpEntryWrap');
   const entryClosePopover = shadow.getElementById('mpEntryClosePopover');
   const sidePanelBackdrop = shadow.getElementById('mpSidePanelBackdrop');
+  const sidePanelClose = shadow.getElementById('mpSidePanelClose');
+  const sidePanelFrame = shadow.getElementById(
+    'mpSidePanelFrame',
+  ) as HTMLIFrameElement | null;
   const coachmarkBackdrop = shadow.getElementById('mpCoachmarkBackdrop');
   const coachmarkClose = shadow.getElementById('mpCoachmarkClose');
   const catchupBackdrop = shadow.getElementById('mpCatchupBackdrop');
@@ -3795,6 +3916,17 @@ function createOverlay(): void {
   });
   sidePanelBackdrop?.addEventListener('click', () => {
     setEmbeddedPanelOpen(false);
+  });
+  sidePanelClose?.addEventListener('click', () => {
+    setEmbeddedPanelOpen(false);
+  });
+  sidePanelFrame?.addEventListener('load', () => {
+    sidePanelFrame.dataset.meetingPilotLoaded = 'true';
+    if (overlayState.embeddedPanelOpen) {
+      overlayState.embeddedPanelStatus = 'loaded';
+      clearEmbeddedPanelLoadTimer();
+      renderOverlay(overlayState.snapshot, getMeetingPageContext());
+    }
   });
   coachmarkBackdrop?.addEventListener('click', () => {
     setCoachmarkOpen(false);
@@ -3843,6 +3975,12 @@ function createOverlay(): void {
   window.addEventListener('message', (event) => {
     const extensionOrigin = new URL(chrome.runtime.getURL('')).origin;
     if (event.origin !== extensionOrigin) {
+      return;
+    }
+    if (
+      !sidePanelFrame?.contentWindow ||
+      event.source !== sidePanelFrame.contentWindow
+    ) {
       return;
     }
     if (event.data?.type === 'MEETING_PILOT_EMBEDDED_PANEL_CLOSE') {
@@ -3906,12 +4044,14 @@ function createOverlay(): void {
           tabId: 0,
           source: 'overlay',
         });
-        if (!response?.success) return false;
+        if (!response?.success) {
+          throw new Error(formatMeetingPanelOpenFailure(response));
+        }
         return response?.surface === 'side-panel'
           ? '已打开 Chrome 侧边栏。'
           : response?.surface === 'window'
-          ? '已用独立窗口打开 Meeting Pilot。'
-          : '已打开面板。';
+            ? '已用独立窗口打开 Meeting Pilot。'
+            : '页内面板已打开，加载状态见面板顶部回执。';
       },
       (message) => String(message || '已打开面板。'),
     );
@@ -4069,6 +4209,13 @@ function renderOverlay(
   const topicTitle = shadow.getElementById('mpTopicTitle');
   const topicMeta = shadow.getElementById('mpTopicMeta');
   const note = shadow.getElementById('mpNote');
+  const sidePanelReceipt = shadow.getElementById('mpSidePanelReceipt');
+  const sidePanelReceiptTitle = shadow.getElementById(
+    'mpSidePanelReceiptTitle',
+  );
+  const sidePanelReceiptCopy = shadow.getElementById(
+    'mpSidePanelReceiptCopy',
+  );
   const actionCount = shadow.getElementById('mpActionCount');
   const mentionCount = shadow.getElementById('mpMentionCount');
   const topicCount = shadow.getElementById('mpTopicCount');
@@ -4272,6 +4419,16 @@ function renderOverlay(
   if (note) {
     note.textContent = overlayState.note || '';
     note.className = overlayState.note ? 'panel-note visible' : 'panel-note';
+  }
+  if (sidePanelReceipt instanceof HTMLElement) {
+    const receipt = buildEmbeddedPanelReceiptText(snapshot);
+    sidePanelReceipt.dataset.state = overlayState.embeddedPanelStatus;
+    if (sidePanelReceiptTitle) {
+      sidePanelReceiptTitle.textContent = receipt.title;
+    }
+    if (sidePanelReceiptCopy) {
+      sidePanelReceiptCopy.textContent = receipt.detail;
+    }
   }
 
   syncCoachmark(shadow, snapshot);

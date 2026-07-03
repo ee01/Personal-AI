@@ -71,6 +71,7 @@ import { storylineRoutes } from './routes/storylines.js';
 import { sourceMemoryRoutes } from './routes/sourceMemory.js';
 import { ambientCalibrationRoutes } from './routes/ambientCalibration.js';
 import { recallRelevanceRoutes } from './routes/recallRelevance.js';
+import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,18 @@ export async function buildApp(
     origin: true, // 允许所有跨域来源（反射请求的 Origin）
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
     allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-User-Id'],
-    exposedHeaders: ['Content-Disposition'],
+    exposedHeaders: [
+      'Content-Disposition',
+      'X-Personal-AI-Backup-User-Id',
+      'X-Personal-AI-Backup-Exported-At',
+      'X-Personal-AI-Backup-Format-Version',
+      'X-Personal-AI-Backup-Include-Count',
+      'X-Personal-AI-Backup-Layer-A-Count',
+      'X-Personal-AI-Backup-Layer-B-Count',
+      'X-Personal-AI-Backup-Layer-C-Generated-Count',
+      'X-Personal-AI-Backup-Layer-C-Failed-Count',
+      'X-Personal-AI-Backup-Layer-C-Skipped-Count',
+    ],
     credentials: false,
   });
 
@@ -219,6 +231,7 @@ export async function buildApp(
       await instance.register(sourceMemoryRoutes);
       await instance.register(ambientCalibrationRoutes);
       await instance.register(recallRelevanceRoutes);
+      await instance.register(evidenceWatchContractRoutes);
     },
     { prefix: '/api/v1' },
   );
@@ -243,7 +256,11 @@ async function main(): Promise<void> {
   // ---- Start Proactive Scheduler ----
   const scheduler = new ProactiveScheduler(userContextManager);
   scheduler.start();
-  console.log('[server] Proactive scheduler started (heartbeat + cron)');
+  if (scheduler.isRunning) {
+    console.log('[server] Proactive scheduler started (heartbeat + cron)');
+  } else {
+    console.log('[server] Proactive scheduler disabled');
+  }
 
   // ---- Graceful shutdown ----
   const shutdown = async (signal: string) => {

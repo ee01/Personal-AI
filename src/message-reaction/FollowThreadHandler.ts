@@ -410,9 +410,15 @@ export async function updateRelatedMessages(
 }
 
 /**
- * 存储关联消息到 Memory Service
+ * 存储关联消息到 Memory Service.
+ * By default this remains best-effort for runtime follow-thread matches.
+ * Toolbar-created Watch rules opt into throwOnError so the UI can report
+ * whether the original-message semantic index is actually ready.
  */
-export async function storeRelatedMessage(data: StoreData): Promise<void> {
+export async function storeRelatedMessage(
+  data: StoreData,
+  options: { throwOnError?: boolean } = {},
+): Promise<boolean> {
   try {
     const client = getMemoryServiceClient();
 
@@ -434,8 +440,13 @@ export async function storeRelatedMessage(data: StoreData): Promise<void> {
 
     const documentId = `followItem_${data.followItemId}_${data.message.postId}`;
     console.log(`✅ 关联消息已存储: ${documentId}`);
+    return true;
   } catch (error) {
     console.error('❌ 存储关联消息到 Memory Service 失败:', error);
+    if (options.throwOnError) {
+      throw error;
+    }
+    return false;
   }
 }
 

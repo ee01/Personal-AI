@@ -18,19 +18,29 @@ import {
   buildProjectHealthSummary,
   buildProjectReviewQueueSummary,
   buildProjectReviewSummary,
+  buildProjectSyncActionStatus,
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
   buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
   buildProjectVisualizationSummary,
   compareProjectsByDashboardPriority,
+  buildProjectDashboardSearchSummary,
+  filterProjectsByDashboardSearch,
   filterProjectsByDashboardView,
   getProjectDashboardViewFilter,
+  projectMatchesDashboardSearch,
   mergeWatchedProjectsIntoDashboard,
   parseProjectDashboardLaunchContext,
   projectMatchesDashboardLaunchContext,
   rankProjectSuggestionNames,
+  sortProjectTimelineTasks,
 } from '../src/utils/dashboardIntegration.ts';
+import {
+  buildProjectReport,
+  parseProjectReport,
+  serializeProjectReport,
+} from '../src/utils/projectReport.ts';
 
 const storageState: Record<string, any> = {};
 
@@ -334,6 +344,21 @@ function verifyProjectFocusItemsAndPrioritySorting() {
   );
 }
 
+function verifyProjectTimelineTaskSortingIsImmutable() {
+  const tasks = [
+    { id: 'z-late', type: 'task', title: 'Late work', status: 'progress', eta: '2026-06-10' },
+    { id: 'no-eta', type: 'task', title: 'No ETA work', status: 'progress' },
+    { id: 'a-early', type: 'task', title: 'Early work', status: 'progress', eta: '2026-05-01' },
+  ] as any[];
+  const originalOrder = tasks.map((task) => task.id);
+  const sorted = sortProjectTimelineTasks(tasks);
+
+  assert.deepEqual(sorted.map((task) => task.id), ['a-early', 'z-late', 'no-eta']);
+  assert.deepEqual(tasks.map((task) => task.id), originalOrder);
+  assert.notEqual(sorted, tasks);
+  assert.equal(sorted[0], tasks[2]);
+}
+
 function verifyProjectDashboardViewFilters() {
   const projects = [
     {
@@ -467,6 +492,114 @@ function verifyProjectDashboardViewFilters() {
     filterProjectsByDashboardView(projects, 'all', now).map((project) => project.id),
     ['steady', 'soon', 'blocked', 'empty', 'stale', 'unscheduled', 'poor-evidence', 'partial-evidence'],
   );
+}
+
+function verifyProjectDashboardLocalSearch() {
+  const projects = [
+    {
+      id: 'alpha-risk',
+      name: 'Alpha Risk',
+      description: 'Release readiness dashboard',
+      milestones: [
+        { id: 'ga', label: 'GA', date: '2026-06-30' },
+      ],
+      tasks: [
+        {
+          id: 'release-blocker',
+          type: 'dep',
+          title: 'Resolve API blocker',
+          status: 'blocked',
+          eta: '2026-06-18',
+          desc: 'API contract risk',
+          jira: [{ key: 'API-42', title: 'Contract blocker' }],
+          platforms: {
+            qa: { status: 'blocked', assignee: 'Dana', jira: 'QA-7' },
+          },
+        },
+      ],
+      platformConfig: ['qa'],
+    },
+    {
+      id: 'beta-clean',
+      name: 'Beta Clean',
+      description: 'Quiet project',
+      milestones: [],
+      tasks: [
+        {
+          id: 'copy-check',
+          type: 'task',
+          title: 'Review onboarding copy',
+          status: 'progress',
+          eta: '2026-07-02',
+        },
+      ],
+    },
+  ] as any[];
+
+  assert.equal(projectMatchesDashboardSearch(projects[0], 'api-42'), true);
+  assert.equal(projectMatchesDashboardSearch(projects[0], 'Dana'), true);
+  assert.equal(projectMatchesDashboardSearch(projects[0], 'API Dana'), true);
+  assert.equal(projectMatchesDashboardSearch(projects[0], 'API Beta'), false);
+  assert.equal(projectMatchesDashboardSearch(projects[0], '2026-06-30'), true);
+  assert.equal(projectMatchesDashboardSearch(projects[1], 'api-42'), false);
+  assert.deepEqual(
+    filterProjectsByDashboardSearch(projects, 'copy').map((project) => project.id),
+    ['beta-clean'],
+  );
+  assert.deepEqual(
+    filterProjectsByDashboardSearch(projects, 'Beta copy').map((project) => project.id),
+    ['beta-clean'],
+  );
+  assert.deepEqual(
+    filterProjectsByDashboardSearch(projects, '').map((project) => project.id),
+    ['alpha-risk', 'beta-clean'],
+  );
+  const multiTermSummary = buildProjectDashboardSearchSummary(projects, 'API Dana');
+  assert.equal(multiTermSummary?.matchedProjects, 1);
+  assert.deepEqual(multiTermSummary?.queryTerms, ['api', 'dana']);
+  assert.deepEqual(multiTermSummary?.matchBreakdown, {
+    projectFields: 0,
+    tasks: 1,
+    jira: 1,
+    platformSources: 1,
+    milestones: 0,
+  });
+  assert.deepEqual(multiTermSummary?.matchHints, ['任务 1', 'Jira 1', '平台来源 1']);
+
+  const platformSourceSummary = buildProjectDashboardSearchSummary(projects, 'QA-7');
+  assert.equal(platformSourceSummary?.matchedProjects, 1);
+  assert.deepEqual(platformSourceSummary?.matchBreakdown, {
+    projectFields: 0,
+    tasks: 0,
+    jira: 0,
+    platformSources: 1,
+    milestones: 0,
+  });
+  assert.deepEqual(platformSourceSummary?.matchHints, ['平台来源 1']);
+  assert.equal(
+    platformSourceSummary?.boundary,
+    '只在当前浏览器本地项目快照内查找；不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence。',
+  );
+
+  const jiraSummary = buildProjectDashboardSearchSummary(projects, 'API-42');
+  assert.deepEqual(jiraSummary?.matchBreakdown, {
+    projectFields: 0,
+    tasks: 0,
+    jira: 1,
+    platformSources: 0,
+    milestones: 0,
+  });
+  assert.deepEqual(jiraSummary?.matchHints, ['Jira 1']);
+
+  const milestoneSummary = buildProjectDashboardSearchSummary(projects, '2026-06-30');
+  assert.deepEqual(milestoneSummary?.matchBreakdown, {
+    projectFields: 0,
+    tasks: 0,
+    jira: 0,
+    platformSources: 0,
+    milestones: 1,
+  });
+  assert.deepEqual(milestoneSummary?.matchHints, ['里程碑 1']);
 }
 
 function verifyProjectDecisionSummary() {
@@ -725,6 +858,10 @@ function verifyProjectVisualizationSummary() {
   } as any, { now });
 
   assert.match(summary.headline, /2 个图表需要先处理风险或数据缺口/);
+  assert.equal(summary.receipt.state, 'attention');
+  assert.match(summary.receipt.headline, /2 个需处理，1 个待补证据/);
+  assert.match(summary.receipt.detail, /ETA 覆盖 50%，来源覆盖 50%/);
+  assert.match(summary.receipt.boundary, /缺 ETA 或来源时，只展示可验证部分/);
   assert.equal(summary.panels.length, 3);
 
   const gantt = summary.panels.find((panel) => panel.id === 'gantt');
@@ -747,6 +884,8 @@ function verifyProjectVisualizationSummary() {
   assert.equal(burndown?.state, 'attention');
   assert.equal(burndown?.progressPercent, 33);
   assert.match(burndown?.headline || '', /33% 完成/);
+  assert.equal(burndown?.metrics.includes('任务数口径'), true);
+  assert.match(burndown?.detail || '', /不含工时、故事点或范围变化/);
   assert.equal(burndown?.drivers?.some((driver) => driver.title === 'Resolve SDK dependency' && driver.label === '阻塞'), true);
 
   const empty = buildProjectVisualizationSummary({
@@ -756,9 +895,201 @@ function verifyProjectVisualizationSummary() {
     tasks: [],
   } as any, { now });
 
+  assert.match(empty.headline, /还没有可用图表数据/);
+  assert.equal(empty.receipt.state, 'empty');
+  assert.match(empty.receipt.headline, /3 个暂无数据/);
+  assert.match(empty.receipt.boundary, /缺少 ETA 或里程碑日期/);
   assert.equal(empty.panels.find((panel) => panel.id === 'gantt')?.state, 'empty');
   assert.equal(empty.panels.find((panel) => panel.id === 'dependencies')?.state, 'empty');
-  assert.equal(empty.panels.find((panel) => panel.id === 'burndown')?.state, 'empty');
+  const emptyBurndown = empty.panels.find((panel) => panel.id === 'burndown');
+  assert.equal(emptyBurndown?.state, 'empty');
+  assert.equal(emptyBurndown?.metrics.includes('任务数口径'), true);
+
+  const mixed = buildProjectVisualizationSummary({
+    id: 'mixed-visual-project',
+    name: 'Mixed Visual Project',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+    tasks: [
+      {
+        id: 'active-ready',
+        type: 'task',
+        title: 'Ready scheduled work',
+        status: 'progress',
+        eta: '2026-05-20',
+        jira: [{ key: 'VIS-3', title: 'Ready scheduled work' }],
+      },
+    ],
+  } as any, { now });
+
+  assert.match(mixed.headline, /2\/3 个图表有可用数据/);
+  assert.equal(mixed.receipt.state, 'partial');
+  assert.match(mixed.receipt.headline, /2\/3 就绪，1 个暂无数据/);
+  assert.match(mixed.receipt.boundary, /不代表 Jira\/GitHub\/Confluence 权威同步/);
+  const mixedBurndown = mixed.panels.find((panel) => panel.id === 'burndown');
+  assert.equal(mixedBurndown?.state, 'ready');
+  assert.equal(mixedBurndown?.metrics.includes('任务数口径'), true);
+  assert.match(mixedBurndown?.detail || '', /不是 effort\/velocity 预测/);
+
+  const missingEtaOnly = buildProjectVisualizationSummary({
+    id: 'missing-eta-burndown',
+    name: 'Missing ETA Burndown',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+    tasks: [
+      {
+        id: 'done-task',
+        type: 'task',
+        title: 'Done task',
+        status: 'closed',
+      },
+      {
+        id: 'remaining-no-eta',
+        type: 'task',
+        title: 'Remaining without ETA',
+        status: 'progress',
+      },
+    ],
+  } as any, { now });
+  const missingEtaBurndown = missingEtaOnly.panels.find((panel) => panel.id === 'burndown');
+  assert.equal(missingEtaBurndown?.state, 'partial');
+  assert.equal(missingEtaBurndown?.metrics.includes('任务数口径'), true);
+  assert.match(missingEtaBurndown?.detail || '', /不含工时、故事点或速度预测/);
+
+  const completed = buildProjectVisualizationSummary({
+    id: 'completed-visual-project',
+    name: 'Completed Visual Project',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-05-04' }],
+    tasks: [
+      {
+        id: 'completed-task',
+        type: 'task',
+        title: 'Finished work',
+        status: 'closed',
+        eta: '2026-05-03',
+      },
+    ],
+  } as any, { now });
+  const completedGantt = completed.panels.find((panel) => panel.id === 'gantt');
+  assert.equal(completedGantt?.state, 'ready');
+  assert.match(completedGantt?.headline || '', /1 个已完成 ETA 可作历史锚点/);
+  assert.equal(completedGantt?.metrics.includes('0 个活动任务'), true);
+  assert.equal(completedGantt?.metrics.includes('1/1 已完成任务有 ETA'), true);
+  assert.equal(completedGantt?.markers?.[0]?.label, 'Finished work');
+  assert.equal(
+    completedGantt?.drivers?.some((driver) =>
+      driver.title === 'Finished work' &&
+      driver.label === '完成 ETA 2026-05-03' &&
+      /历史锚点只用于回看完成节奏/.test(driver.detail),
+    ),
+    true,
+  );
+
+  const linked = buildProjectVisualizationSummary({
+    id: 'linked-visual-project',
+    name: 'Linked Visual Project',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-05-30' }],
+    tasks: [
+      {
+        id: 'api-contract',
+        type: 'task',
+        title: 'Publish API contract',
+        status: 'progress',
+        eta: '2026-05-08',
+        jira: [{ key: 'VIS-4', title: 'Publish API contract' }],
+      },
+      {
+        id: 'frontend-hookup',
+        type: 'task',
+        title: 'Hook up project chart',
+        status: 'progress',
+        eta: '2026-05-12',
+        dependencies: ['api-contract', 'ga'],
+        jira: [{ key: 'VIS-5', title: 'Hook up project chart' }],
+      },
+    ],
+  } as any, { now });
+  const linkedDependency = linked.panels.find((panel) => panel.id === 'dependencies');
+  assert.equal(linkedDependency?.state, 'ready');
+  assert.match(linkedDependency?.headline || '', /1 个依赖可跟踪，最长链 2 项/);
+  assert.equal(linkedDependency?.metrics.includes('2/2 依赖目标有效'), true);
+  assert.equal(linkedDependency?.metrics.includes('最长链 2 个任务'), true);
+  assert.match(linkedDependency?.detail || '', /关键链候选只来自本地 dependencies/);
+  assert.match(linkedDependency?.nextStep || '', /复核最长依赖链/);
+  assert.equal(
+    linkedDependency?.drivers?.some((driver) =>
+      driver.title === 'Hook up project chart' &&
+      driver.label === '关键链候选' &&
+      /Publish API contract -> Hook up project chart/.test(driver.detail) &&
+      /不是完整关键路径计算/.test(driver.detail),
+    ),
+    true,
+  );
+  assert.equal(
+    linkedDependency?.drivers?.some((driver) =>
+      driver.title === 'Hook up project chart' &&
+      driver.label === '依赖链' &&
+      /依赖 api-contract、ga/.test(driver.detail),
+    ),
+    true,
+  );
+
+  const broken = buildProjectVisualizationSummary({
+    id: 'broken-visual-project',
+    name: 'Broken Visual Project',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-05-30' }],
+    tasks: [
+      {
+        id: 'frontend-hookup',
+        type: 'task',
+        title: 'Hook up missing dependency',
+        status: 'progress',
+        eta: '2026-05-12',
+        dependencies: ['missing-contract'],
+        jira: [{ key: 'VIS-6', title: 'Hook up missing dependency' }],
+      },
+    ],
+  } as any, { now });
+  const brokenDependency = broken.panels.find((panel) => panel.id === 'dependencies');
+  assert.equal(brokenDependency?.state, 'attention');
+  assert.match(brokenDependency?.headline || '', /1 个依赖目标无效/);
+  assert.equal(brokenDependency?.action?.taskId, 'frontend-hookup');
+  assert.equal(brokenDependency?.metrics.includes('0/1 依赖目标有效'), true);
+  assert.equal(
+    brokenDependency?.drivers?.some((driver) =>
+      driver.label === '目标无效' &&
+      driver.title === 'Hook up missing dependency' &&
+      /missing-contract/.test(driver.detail),
+    ),
+    true,
+  );
+}
+
+function verifyProjectReportPreservesTaskDependencies() {
+  const report = buildProjectReport([
+    {
+      id: 'dependency-report',
+      name: 'Dependency Report',
+      milestones: [{ id: 'ga', label: 'GA', date: '2026-05-30' }],
+      tasks: [
+        {
+          id: 'frontend-hookup',
+          type: 'task',
+          title: 'Hook up project chart',
+          status: 'progress',
+          eta: '2026-05-12',
+          dependencies: ['api-contract', ' ', 42, 'ga'] as any,
+          jira: [{ key: 'VIS-5', title: 'Hook up project chart' }],
+        },
+      ],
+    },
+  ], {
+    exportedAt: new Date('2026-05-01T00:00:00Z'),
+  });
+
+  const parsed = parseProjectReport(serializeProjectReport(report));
+  assert.deepEqual(
+    parsed.projects[0].project.tasks[0].dependencies,
+    ['api-contract', 'ga'],
+  );
 }
 
 function verifyProjectEvidenceGapSummary() {
@@ -1159,11 +1490,19 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
         createdAt: 2,
       },
       {
+        id: 'memory-followup-project',
+        name: 'Memory Followup Project',
+        description: 'Second imported watched project',
+        isActive: true,
+        priority: 8,
+        createdAt: 3,
+      },
+      {
         id: 'inactive-project',
         name: 'Inactive Project',
         isActive: false,
         priority: 1,
-        createdAt: 3,
+        createdAt: 4,
       },
     ]), {
       status: 200,
@@ -1177,7 +1516,7 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
     const result = await manager.syncProjectData('all');
 
     assert.equal(result.success, true);
-    assert.match(result.summary, /新增 1 个本地工作台/);
+    assert.match(result.summary, /新增 2 个本地工作台/);
     assert.equal(Number.isNaN(Date.parse(result.checkedAt)), false);
     assert.deepEqual(
       result.sources.map((source) => `${source.label}:${source.status}:${source.configured}`),
@@ -1196,16 +1535,96 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
       result.sources.map((source) => source.badge),
       ['可读取', '未接入', '未接入', '未接入'],
     );
+    assert.equal(result.sourceScope.state, 'ready');
+    assert.equal(result.sourceScope.badge, '检查口径');
+    assert.equal(result.sourceScope.headline, '本次读取 Memory Service');
+    assert.match(result.sourceScope.detail, /实际发起读取：Memory Service/);
+    assert.match(result.sourceScope.detail, /未接入跳过：Jira、GitHub、Confluence/);
+    assert.deepEqual(result.sourceScope.metrics, ['已读取 1', '暂不可用 0', '未接入 3']);
+    assert.match(result.sourceScope.boundary, /不代表 Jira\/GitHub\/Confluence 已同步/);
     assert.deepEqual(result.sources[0].highlights, [
-      '新增：Memory Service Project',
+      '新增：Memory Service Project、Memory Followup Project',
       '已匹配：Existing Local',
     ]);
     assert.deepEqual(result.sources[0].diagnostics, [
-      '本地工作台：2 个项目，3 个活动任务',
+      '本地工作台：3 个项目，3 个活动任务',
       'ETA 覆盖 67%，来源覆盖 33%',
+      '待规划项目：Memory Service Project、Memory Followup Project',
     ]);
+    assert.equal(result.localEvidence.state, 'attention');
+    assert.equal(result.localEvidence.badge, '需补证据');
+    assert.equal(result.localEvidence.headline, '本地证据待补：2 个项目待规划，ETA 67%，来源 33%');
+    assert.equal(
+      result.localEvidence.detail,
+      '2 个本地项目还没有任务；3 个活动任务中，1 个缺 ETA，2 个缺 Jira 或平台来源。',
+    );
+    assert.equal(
+      result.localEvidence.nextStep,
+      '先补 2 个项目待规划、1 个缺 ETA、2 个缺来源，避免把本地工作台误当外部权威状态。',
+    );
+    assert.deepEqual(result.localEvidence.metrics, [
+      '项目 3',
+      '活动任务 3',
+      'ETA 67%',
+      '来源 33%',
+      '待规划 2',
+    ]);
+    assert.deepEqual(result.localEvidence.repairTargets, [
+      '待规划项目：Memory Service Project、Memory Followup Project',
+      '缺 ETA：Needs both',
+      '缺来源：Needs Jira source、Needs both',
+    ]);
+    assert.deepEqual(
+      result.localEvidence.repairActions?.map((action) => ({
+        type: action.type,
+        label: action.label,
+        projectId: action.projectId,
+        taskId: action.taskId,
+        evidenceFocus: action.evidenceFocus,
+      })),
+      [
+        {
+          type: 'plan-project',
+          label: '规划 Memory Service Project',
+          projectId: 'memory-service-project',
+          taskId: undefined,
+          evidenceFocus: undefined,
+        },
+        {
+          type: 'plan-project',
+          label: '规划 Memory Followup Project',
+          projectId: 'memory-followup-project',
+          taskId: undefined,
+          evidenceFocus: undefined,
+        },
+        {
+          type: 'fix-eta',
+          label: '补 ETA：Needs both',
+          projectId: 'existing-local',
+          taskId: 'missing-both',
+          evidenceFocus: 'eta',
+        },
+        {
+          type: 'fix-source',
+          label: '补来源：Needs Jira source',
+          projectId: 'existing-local',
+          taskId: 'missing-source',
+          evidenceFocus: 'source',
+        },
+      ],
+    );
+    const actionStatus = buildProjectSyncActionStatus(result);
+    assert.equal(actionStatus.type, 'warning');
+    assert.match(actionStatus.text, /已从 Memory Service 关注项目新增 2 个本地工作台/);
+    assert.match(actionStatus.text, /本地证据待补：2 个项目待规划/);
     assert.match(result.sources[1].diagnostics?.join('\n') || '', /1\/3 个活动任务有 Jira key/);
     assert.match(result.sources[1].diagnostics?.join('\n') || '', /缺来源任务：Needs Jira source、Needs both/);
+    assert.match(result.sources[2].diagnostics?.join('\n') || '', /尚未配置项目仓库映射/);
+    assert.match(result.sources[2].diagnostics?.join('\n') || '', /本地映射种子：0\/3 个活动任务有平台来源，1\/3 个有 Jira key/);
+    assert.match(result.sources[2].diagnostics?.join('\n') || '', /缺仓库\/PR\/issue 映射种子的任务：Needs Jira source、Needs both/);
+    assert.match(result.sources[3].diagnostics?.join('\n') || '', /尚未配置空间\/页面映射/);
+    assert.match(result.sources[3].diagnostics?.join('\n') || '', /本地页面映射种子：3\/3 个项目有描述，0\/3 个项目有里程碑/);
+    assert.match(result.sources[3].diagnostics?.join('\n') || '', /待规划项目暂不适合作为状态报告依据：Memory Service Project、Memory Followup Project/);
     assert.match(result.sources[2].diagnostics?.join('\n') || '', /未配置项目仓库映射/);
     assert.match(result.sources[3].diagnostics?.join('\n') || '', /未配置空间\/页面映射/);
     assert.match(result.sources[0].boundaries?.join('\n') || '', /不反写 Memory Service/);
@@ -1214,10 +1633,15 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
     assert.match(result.sources[0].detail, /已匹配：Existing Local/);
 
     const saved = storageState.projectDashboardFishboneProjects;
-    assert.equal(saved.projects.length, 2);
+    assert.equal(saved.projects.length, 3);
     assert.equal(saved.projects.some((project: any) => project.name === 'Memory Service Project'), true);
+    assert.equal(saved.projects.some((project: any) => project.name === 'Memory Followup Project'), true);
     assert.match(
       saved.projects.find((project: any) => project.name === 'Memory Service Project')?.description,
+      /来自 Memory Service 关注项目/,
+    );
+    assert.match(
+      saved.projects.find((project: any) => project.name === 'Memory Followup Project')?.description,
       /来自 Memory Service 关注项目/,
     );
     assert.equal(
@@ -1262,10 +1686,30 @@ async function verifySyncReadinessReportsMemoryFailure() {
     assert.equal(memorySource.status, 'unavailable');
     assert.equal(memorySource.badge, '暂不可用');
     assert.match(memorySource.detail, /memory offline/);
+    assert.equal(result.sourceScope.state, 'attention');
+    assert.equal(result.sourceScope.badge, '读取受限');
+    assert.equal(result.sourceScope.headline, '本次未读到 Memory Service');
+    assert.match(result.sourceScope.detail, /暂不可用：Memory Service/);
+    assert.match(result.sourceScope.detail, /未接入跳过：Jira、GitHub、Confluence/);
+    assert.deepEqual(result.sourceScope.metrics, ['已读取 0', '暂不可用 1', '未接入 3']);
     assert.deepEqual(memorySource.diagnostics, [
       '本地工作台：0 个项目，0 个活动任务',
       'ETA 覆盖 0%，来源覆盖 0%',
     ]);
+    assert.equal(result.localEvidence.state, 'empty');
+    assert.equal(result.localEvidence.badge, '暂无项目');
+    assert.equal(result.localEvidence.headline, '本地工作台暂无项目证据');
+    assert.deepEqual(result.localEvidence.metrics, [
+      '项目 0',
+      '活动任务 0',
+      'ETA 0%',
+      '来源 0%',
+    ]);
+    const actionStatus = buildProjectSyncActionStatus(result);
+    assert.equal(actionStatus.type, 'warning');
+    assert.match(actionStatus.text, /Memory Service 关注项目暂不可用/);
+    assert.match(actionStatus.text, /本次未读到 Memory Service/);
+    assert.match(actionStatus.text, /本地工作台暂无项目证据/);
     assert.match(memorySource.boundaries?.join('\n') || '', /不会清空或覆盖项目/);
     assert.equal(memorySource.highlights, undefined);
   } finally {
@@ -1381,11 +1825,14 @@ async function main() {
   verifyProjectHealthSummary();
   verifyProjectStatusUpdateDraft();
   verifyProjectFocusItemsAndPrioritySorting();
+  verifyProjectTimelineTaskSortingIsImmutable();
   verifyProjectDashboardViewFilters();
+  verifyProjectDashboardLocalSearch();
   verifyProjectDecisionSummary();
   verifyProjectTaskRiskSummary();
   verifyProjectDataQualitySummary();
   verifyProjectVisualizationSummary();
+  verifyProjectReportPreservesTaskDependencies();
   verifyProjectEvidenceGapSummary();
   verifyProjectDashboardDecisionBrief();
   verifyProjectFreshnessSummary();

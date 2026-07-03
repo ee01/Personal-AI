@@ -71,7 +71,44 @@ test('DesktopLocalAsrProvider.isAvailable accepts final-only Whisper fallback', 
   assert.equal(result.ok, true);
 });
 
-test('DesktopLocalAsrProvider.isAvailable still rejects when no final engine is ready', async (t) => {
+test('DesktopLocalAsrProvider.isAvailable reports local model download progress', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    Object.defineProperty(globalThis, 'fetch', {
+      value: originalFetch,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  setMacNavigator();
+  installDesktopAsrFetchStub({
+    ok: true,
+    liveReady: false,
+    finalReady: false,
+    downloadInProgress: true,
+    downloadProgress: 42,
+    downloadTarget: 'funasr_nano',
+    engines: {
+      appleSpeech: { ready: false, reason: 'not_authorized' },
+      sherpaStreaming: { modelReady: false, reason: 'missing_model' },
+      funasrFinal: { modelReady: false, reason: 'missing_model' },
+      whisperFallback: {
+        ready: false,
+        modelReady: false,
+        whisperBinaryAvailable: true,
+      },
+    },
+  });
+
+  const provider = new DesktopLocalAsrProvider('en-US');
+  const result = await provider.isAvailable();
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason || '', /asr_model_downloading 42% funasr_nano/);
+});
+
+test('DesktopLocalAsrProvider.isAvailable reports live-ready final-not-ready state', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     Object.defineProperty(globalThis, 'fetch', {
@@ -102,7 +139,44 @@ test('DesktopLocalAsrProvider.isAvailable still rejects when no final engine is 
   const result = await provider.isAvailable();
 
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'final_model_not_ready');
+  assert.match(result.reason || '', /^live_ready_final_not_ready/);
+  assert.match(result.reason || '', /missing_model/);
+  assert.match(result.reason || '', /whisper_binary_missing/);
+});
+
+test('DesktopLocalAsrProvider.isAvailable still rejects when no final engine is ready', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    Object.defineProperty(globalThis, 'fetch', {
+      value: originalFetch,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  setMacNavigator();
+  installDesktopAsrFetchStub({
+    ok: true,
+    liveReady: false,
+    finalReady: false,
+    engines: {
+      appleSpeech: { ready: false },
+      sherpaStreaming: { modelReady: false, reason: 'missing_model' },
+      funasrFinal: { modelReady: false, reason: 'missing_model' },
+      whisperFallback: {
+        ready: false,
+        modelReady: false,
+        whisperBinaryAvailable: false,
+      },
+    },
+  });
+
+  const provider = new DesktopLocalAsrProvider('en-US');
+  const result = await provider.isAvailable();
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason || '', /^final_model_not_ready/);
+  assert.match(result.reason || '', /missing_model/);
 });
 
 test('DesktopLocalAsrProvider emits a fatal error after repeated chunk response failures', async () => {

@@ -14,6 +14,19 @@ export interface ExternalUrlSafetyResult {
   hostname?: string;
 }
 
+export interface ExternalLinkCandidate {
+  url: unknown;
+  label?: string;
+  titleLabel?: string;
+}
+
+export interface SafeExternalLinkPresentation {
+  url: string;
+  label: string;
+  host: string;
+  title: string;
+}
+
 export const getExternalUrlSafety = (
   url: unknown,
 ): ExternalUrlSafetyResult => {
@@ -85,3 +98,91 @@ export const getFirstSafeExternalUrl = (...urls: unknown[]): string => {
 
 export const hasBlockedExternalUrlCandidate = (...urls: unknown[]): boolean =>
   urls.some((url) => getExternalUrlSafety(url).blocked);
+
+export const getExternalUrlBlockedReasonLabel = (
+  reason: ExternalUrlSafetyReason,
+): string => {
+  switch (reason) {
+    case 'credentialed_url':
+      return '包含账号信息';
+    case 'invalid':
+      return '格式无效';
+    case 'unsupported_protocol':
+      return '非 http/https';
+    default:
+      return '不符合安全规则';
+  }
+};
+
+export const getBlockedExternalUrlResults = (
+  ...urls: unknown[]
+): ExternalUrlSafetyResult[] =>
+  urls.map((url) => getExternalUrlSafety(url)).filter((result) => result.blocked);
+
+export const getFirstSafeExternalLinkPresentation = (
+  candidates: ExternalLinkCandidate[],
+  fallbackLabel = '来源',
+  fallbackTitleLabel = fallbackLabel,
+): SafeExternalLinkPresentation | null => {
+  for (const candidate of candidates) {
+    const safety = getExternalUrlSafety(candidate.url);
+    if (!safety.safeUrl) continue;
+
+    const label = candidate.label || fallbackLabel;
+    const titleLabel = candidate.titleLabel || label || fallbackTitleLabel;
+
+    return {
+      url: safety.safeUrl,
+      label,
+      host: safety.hostname || '',
+      title: safety.hostname
+        ? `打开${titleLabel}：${safety.hostname}`
+        : `打开${titleLabel}`,
+    };
+  }
+
+  return null;
+};
+
+export const getHiddenExternalUrlLabel = (
+  blockedResults: ExternalUrlSafetyResult[],
+  prefix = '来源已隐藏',
+): string => {
+  if (!blockedResults.length) return prefix;
+
+  const reasonLabels = Array.from(
+    new Set(
+      blockedResults.map((safety) =>
+        getExternalUrlBlockedReasonLabel(safety.reason),
+      ),
+    ),
+  );
+
+  if (blockedResults.length === 1 && reasonLabels.length === 1) {
+    return `${prefix} · ${reasonLabels[0]}`;
+  }
+
+  const reasonSummary =
+    reasonLabels.length > 2
+      ? `${reasonLabels.slice(0, 2).join('/')}等`
+      : reasonLabels.join('/');
+
+  return `${prefix} · ${blockedResults.length} 个不可信：${reasonSummary}`;
+};
+
+export const getHiddenExternalUrlTitle = (
+  blockedResults: ExternalUrlSafetyResult[],
+  subject = '来源链接',
+): string => {
+  const reasonSummary = Array.from(
+    new Set(
+      blockedResults.map((safety) =>
+        getExternalUrlBlockedReasonLabel(safety.reason),
+      ),
+    ),
+  ).join('、');
+
+  return blockedResults.length > 1
+    ? `已隐藏 ${blockedResults.length} 个不可信${subject}：${reasonSummary}`
+    : `${subject}已隐藏：${reasonSummary || '不符合安全规则'}`;
+};

@@ -29,7 +29,20 @@
         <p class="empty-hint">生成周报后，`reports/` 目录里的 Markdown 会出现在这里。</p>
       </div>
 
-      <div v-else class="reports-layout">
+      <div
+        v-if="requestedMissingFilename"
+        class="report-target-warning"
+      >
+        <div class="target-warning-title">周报通知目标暂时不可读</div>
+        <p>
+          通知指向的周报文件 reports/{{ requestedMissingFilename }} 暂时无法读取；已先展示最近可用周报。
+        </p>
+        <p>
+          本页只读取 reports/ 目录里的已生成 Markdown，不会重新生成周报、写入通知中心、发送 Bot/Chrome/Doubao，或改变通知处理状态。
+        </p>
+      </div>
+
+      <div v-if="reportFiles.length > 0" class="reports-layout">
         <aside class="report-list" aria-label="周报列表">
           <button
             v-for="report in reportFiles"
@@ -84,6 +97,7 @@ const selectedLoadError = ref('');
 const reportFiles = ref<ReportFile[]>([]);
 const selectedFilename = ref('');
 const selectedContent = ref('');
+const requestedMissingFilename = ref('');
 
 const currentReportTitle = computed(() => {
   const fromContent = extractTitle(selectedContent.value, selectedFilename.value);
@@ -163,7 +177,7 @@ function errorMessage(error: unknown): string {
   return '无法连接 Memory Service 或读取 reports 目录。';
 }
 
-async function loadSelectedReport(filename: string) {
+async function loadSelectedReport(filename: string): Promise<boolean> {
   selectedLoadError.value = '';
   selectedContent.value = '';
   selectedFilename.value = filename;
@@ -172,15 +186,17 @@ async function loadSelectedReport(filename: string) {
   const content = await client.readUserFile('reports', filename);
   if (content === null) {
     selectedLoadError.value = `无法读取 reports/${filename}。`;
-    return;
+    return false;
   }
   selectedContent.value = content;
+  return true;
 }
 
 async function loadReports() {
   loading.value = true;
   loadError.value = '';
   selectedLoadError.value = '';
+  requestedMissingFilename.value = '';
 
   try {
     const client = getMemoryServiceClient();
@@ -195,19 +211,30 @@ async function loadReports() {
 
     reportFiles.value = normalized.map(buildReportFile);
     const requested = normalizeReportFilename(firstQueryValue(route.query.file));
-    const nextFilename = requested || reportFiles.value[0]?.filename || '';
+    const fallbackFilename = reportFiles.value[0]?.filename || '';
 
-    if (!nextFilename) {
+    if (!requested && !fallbackFilename) {
       selectedFilename.value = '';
       selectedContent.value = '';
       return;
     }
 
-    if (!reportFiles.value.some((report) => report.filename === nextFilename)) {
-      reportFiles.value = [buildReportFile(nextFilename), ...reportFiles.value];
+    if (requested) {
+      const requestedLoaded = await loadSelectedReport(requested);
+      if (requestedLoaded) {
+        if (!reportFiles.value.some((report) => report.filename === requested)) {
+          reportFiles.value = [buildReportFile(requested), ...reportFiles.value];
+        }
+        return;
+      }
+
+      requestedMissingFilename.value = requested;
     }
 
-    await loadSelectedReport(nextFilename);
+    if (fallbackFilename && fallbackFilename !== requested) {
+      await loadSelectedReport(fallbackFilename);
+      return;
+    }
   } catch (error) {
     console.error('Failed to load weekly reports:', error);
     loadError.value = errorMessage(error);
@@ -298,7 +325,8 @@ watch(
 }
 
 .load-error,
-.report-inline-error {
+.report-inline-error,
+.report-target-warning {
   border: 1px solid rgba(248, 113, 113, 0.28);
   border-radius: 8px;
   background: rgba(127, 29, 29, 0.18);
@@ -316,6 +344,24 @@ watch(
 
 .load-error-title {
   color: #fee2e2;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.report-target-warning {
+  border-color: rgba(251, 191, 36, 0.36);
+  background: rgba(120, 53, 15, 0.18);
+  color: #fde68a;
+  margin-bottom: 1rem;
+}
+
+.report-target-warning p {
+  margin: 0.35rem 0 0;
+  line-height: 1.5;
+}
+
+.target-warning-title {
+  color: #fef3c7;
   font-weight: 700;
   margin-bottom: 0.25rem;
 }

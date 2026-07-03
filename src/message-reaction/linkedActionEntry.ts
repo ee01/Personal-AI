@@ -25,3 +25,11 @@ export function buildPendingLinkedActionConfig(
     messageLink: payload.messageLink,
   };
 }
+
+export function buildLinkedActionConfigLaunchReceipt(): string {
+  return [
+    '已打开联动操作配置',
+    '当前只是草稿入口，尚未创建 RuntimeAction、未调用 OpenClaw，也不会回扫历史消息',
+    '只有保存规则且后续新消息命中后，才会进入动作队列并按连接状态和审批设置执行',
+  ].join('；');
+}

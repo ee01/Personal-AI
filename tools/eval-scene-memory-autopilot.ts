@@ -26,6 +26,24 @@ interface EvalMemory {
   metadata?: Record<string, unknown>;
 }
 
+interface SourceProvenance {
+  source?: string;
+  status?: string;
+  note?: string;
+}
+
+interface SourceProvenanceAudit {
+  total: number;
+  byStatus: Record<string, number>;
+  trustedInputCount: number;
+  blockedCount: number;
+  staleCount: number;
+  unverifiedCount: number;
+  unknownCount: number;
+  summary: string;
+  warnings: string[];
+}
+
 interface SceneAutopilotCase {
   id: string;
   title: string;
@@ -33,6 +51,7 @@ interface SceneAutopilotCase {
   expectedBehavior?: {
     topMatchId?: string;
     mustIncludeIds?: string[];
+    mustIncludeAnyIds?: string[];
     mustSuppressIds?: string[];
     expectedMode?: string;
     requiredQuietReasons?: string[];
@@ -42,6 +61,7 @@ interface SceneAutopilotCase {
   };
   sampleContext?: {
     memories?: EvalMemory[];
+    sourceProvenance?: SourceProvenance[];
   };
   request: ContextRecallRequest;
 }
@@ -59,6 +79,9 @@ const currentTime = Math.floor(Date.now() / 1000);
 
 // Keep this eval deterministic and fast. FTS remains active; vector recall is
 // intentionally skipped exactly like the unit harness.
+process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = 'true';
+process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = 'true';
+process.env.CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED = 'false';
 (EmbeddingClient as unknown as {
   getInstance: () => Promise<EmbeddingClient>;
 }).getInstance = async () => {
@@ -73,13 +96,14 @@ try {
 
   const service = new ContextRecallService(db);
   const response = await service.recall({ ...caseItem.request, debug: true });
-  const heuristic = judgeResponse(caseItem, response);
+  const sourceProvenanceAudit = auditSourceProvenance(caseItem);
+  const heuristic = judgeResponse(caseItem, response, sourceProvenanceAudit);
   const status = heuristic.failures.length
     ? 'fail'
     : heuristic.warnings.length
       ? 'warn'
       : 'pass';
-  const scores = buildScores(heuristic);
+  const scores = buildScores(heuristic, sourceProvenanceAudit);
   const overallScore =
     status === 'fail' ? Math.min(scoreAverage(scores), 49) : scoreAverage(scores);
 
@@ -104,9 +128,13 @@ try {
         : heuristic.warnings.length
           ? heuristic.warnings
           : ['把真实误召回样本继续加入 context-recall 和 scene-memory-autopilot suites。'],
-      actualOutput: summarizeResponse(response),
+      actualOutput: {
+        ...summarizeResponse(response),
+        sourceProvenanceAudit,
+      },
       topMatch: summarizeMatch(response.topMatch),
       autopilot: response.autopilot,
+      sourceProvenanceAudit,
     }),
   );
 } finally {
@@ -179,9 +207,12 @@ function insertMemory(memory: EvalMemory): void {
 function judgeResponse(
   caseItem: SceneAutopilotCase,
   response: Awaited<ReturnType<ContextRecallService['recall']>>,
+  sourceProvenanceAudit: SourceProvenanceAudit,
 ) {
   const expected = caseItem.expectedBehavior ?? {};
-  const returnedIds = response.matches.map((match) => match.id);
+  const visibleReturnedIds = response.matches
+    .filter((match) => match.displayPriority !== 'hidden')
+    .map((match) => match.id);
   const quietReasons = new Set(
     (response.autopilot?.quietReasons || []).map((item) => item.reason),
   );
@@ -194,10 +225,18 @@ function judgeResponse(
     );
   }
   for (const id of expected.mustIncludeIds ?? []) {
-    if (!returnedIds.includes(id)) failures.push(`expected ${id} to be shown.`);
+    if (!visibleReturnedIds.includes(id)) failures.push(`expected ${id} to be shown.`);
+  }
+  if (
+    expected.mustIncludeAnyIds?.length &&
+    !expected.mustIncludeAnyIds.some((id) => visibleReturnedIds.includes(id))
+  ) {
+    failures.push(
+      `expected one of ${expected.mustIncludeAnyIds.join(', ')} to be shown.`,
+    );
   }
   for (const id of expected.mustSuppressIds ?? []) {
-    if (returnedIds.includes(id)) failures.push(`expected ${id} to be quieted.`);
+    if (visibleReturnedIds.includes(id)) failures.push(`expected ${id} to be quieted.`);
   }
   if (expected.expectedMode && response.autopilot?.mode !== expected.expectedMode) {
     failures.push(
@@ -238,6 +277,7 @@ function judgeResponse(
   if (!response.autopilot) {
     warnings.push('response did not include autopilot diagnostics.');
   }
+  warnings.push(...sourceProvenanceAudit.warnings);
 
   return { failures, warnings };
 }
@@ -245,13 +285,14 @@ function judgeResponse(
 function buildScores(heuristic: {
   failures: string[];
   warnings: string[];
-}): Record<string, number> {
+}, sourceProvenanceAudit: SourceProvenanceAudit): Record<string, number> {
   const failed = heuristic.failures.length > 0;
   return {
     scene_filtering: failed ? 0 : 3,
     quiet_reasoning: failed ? 0 : heuristic.warnings.length ? 2 : 3,
     deduplication: failed ? 0 : 3,
     explainability: failed ? 0 : 3,
+    source_provenance: failed ? 0 : sourceProvenanceAudit.warnings.length ? 2 : 3,
   };
 }
 
@@ -273,6 +314,89 @@ function summarizeResponse(
     autopilot: response.autopilot,
     debug: response.debug,
   };
+}
+
+function auditSourceProvenance(caseItem: SceneAutopilotCase): SourceProvenanceAudit {
+  const entries = caseItem.sampleContext?.sourceProvenance ?? [];
+  const byStatus: Record<string, number> = {};
+  let trustedInputCount = 0;
+  let blockedCount = 0;
+  let staleCount = 0;
+  let unverifiedCount = 0;
+  let unknownCount = 0;
+
+  for (const entry of entries) {
+    const status = normalizeProvenanceStatus(entry.status);
+    byStatus[status] = (byStatus[status] ?? 0) + 1;
+    if (isTrustedInputStatus(status)) trustedInputCount += 1;
+    if (isBlockedStatus(status)) blockedCount += 1;
+    if (isStaleStatus(status)) staleCount += 1;
+    if (isUnverifiedStatus(status)) unverifiedCount += 1;
+    if (status === 'unknown') unknownCount += 1;
+  }
+
+  const warnings: string[] = [];
+  if (!entries.length) {
+    warnings.push('sourceProvenance is missing; report cannot prove where the sample came from.');
+  } else if (trustedInputCount === 0) {
+    warnings.push('sourceProvenance has no used, verified, synthetic, or fixture input source.');
+  }
+  if (staleCount > 0) {
+    warnings.push(`sourceProvenance includes ${staleCount} stale source(s); refresh or label the case as historical.`);
+  }
+  if (unverifiedCount + unknownCount > 0) {
+    warnings.push(
+      `sourceProvenance includes ${unverifiedCount + unknownCount} unverified or unknown source(s).`,
+    );
+  }
+
+  const summary = [
+    `${trustedInputCount} trusted input`,
+    `${blockedCount} blocked`,
+    `${staleCount} stale`,
+    `${unverifiedCount + unknownCount} unverified/unknown`,
+  ].join(', ');
+
+  return {
+    total: entries.length,
+    byStatus,
+    trustedInputCount,
+    blockedCount,
+    staleCount,
+    unverifiedCount,
+    unknownCount,
+    summary,
+    warnings,
+  };
+}
+
+function normalizeProvenanceStatus(status: unknown): string {
+  if (typeof status !== 'string' || !status.trim()) return 'unknown';
+  return status.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function isTrustedInputStatus(status: string): boolean {
+  return [
+    'used',
+    'verified',
+    'synthetic',
+    'fixture',
+    'live_snapshot',
+    'private_live_data_snapshot',
+    'synthetic_redacted',
+  ].includes(status);
+}
+
+function isBlockedStatus(status: string): boolean {
+  return ['blocked', 'unavailable', 'failed', 'skipped', 'inaccessible', 'denied'].includes(status);
+}
+
+function isStaleStatus(status: string): boolean {
+  return ['stale', 'outdated'].includes(status);
+}
+
+function isUnverifiedStatus(status: string): boolean {
+  return ['unverified', 'unclear', 'manual_note'].includes(status);
 }
 
 function summarizeMatch(match: unknown) {

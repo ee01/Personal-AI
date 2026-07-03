@@ -4,18 +4,26 @@ import assert from 'node:assert/strict';
 import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH,
+  JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  buildJiraAutomationImportCredentialRestoreGateSummary,
   buildJiraAutomationImportEnablementPlan,
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
   buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportReviewNote,
+  buildJiraAutomationImportNameCheckReceipt,
   buildJiraAutomationImportReviewPacket,
   buildJiraAutomationImportWarnings,
   buildJiraAutomationUniqueImportedRuleName,
+  collectJiraAutomationImportSecretReentrySlots,
   collectJiraAutomationImportReviewSignals,
+  formatJiraAutomationImportSecretReentrySummary,
+  formatJiraAutomationImportSourceFormat,
   isJiraAutomationImportFileSizeAllowed,
   parseJiraAutomationExport,
+  redactJiraAutomationImportErrorText,
+  sanitizeJiraAutomationImportDisplayText,
   summarizeJiraAutomationImportRule,
 } from '../transform.js';
 
@@ -69,6 +77,7 @@ test('buildJiraAutomationImportRule remaps project and imports disabled copy', (
   assert.equal(importRule.components[1].id, '__NEW__COMPONENT__1777600000001');
   assert.ok(importRule.description?.includes('Rule purpose: Notify release owner.'));
   assert.ok(importRule.description?.includes('a scheduled trigger'));
+  assert.ok(importRule.description?.includes('Personal AI import review'));
 });
 
 test('buildJiraAutomationImportRule preserves chained rule triggers only when explicitly allowed', () => {
@@ -92,10 +101,11 @@ test('buildJiraAutomationImportRule can block chained rule triggers for safer UI
 
   assert.equal(importRule.canOtherRuleTrigger, false);
   assert.ok(importRule.description?.includes('Rule purpose: Notify release owner.'));
-  assert.ok(!importRule.description?.includes('Personal AI import review'));
+  assert.ok(importRule.description?.includes('Personal AI import review'));
+  assert.ok(importRule.description?.includes('Rule chaining: blocked in imported copy.'));
 });
 
-test('buildJiraAutomationImportRule preserves source description without appending review note', () => {
+test('buildJiraAutomationImportRule preserves source description and appends review note', () => {
   const importRule = buildJiraAutomationImportRule(
     {
       ...baseRule,
@@ -116,7 +126,37 @@ test('buildJiraAutomationImportRule preserves source description without appendi
     },
   );
 
-  assert.equal(importRule.description, 'Existing business context for the release rule.');
+  assert.ok(importRule.description?.startsWith('Existing business context for the release rule.\n\nPersonal AI import review'));
+  assert.ok(importRule.description?.includes('Imported as a disabled copy into TGT (22222).'));
+  assert.ok(importRule.description?.includes('High-risk gate: no checkbox required before disabled-copy creation; Jira-side review remains open before enablement'));
+  assert.ok(importRule.description?.includes('Create-stage acknowledgement: not required before disabled-copy creation; Personal AI preview showed high-risk review items, and disabled-copy creation is not enablement approval.'));
+  assert.ok(importRule.description?.includes('Top detected bindings: JQL / filters (1): project = SRC'));
+});
+
+test('buildJiraAutomationImportReviewNote records completed create-stage acknowledgement as non-enablement approval', () => {
+  const note = buildJiraAutomationImportReviewNote(
+    {
+      ...baseRule,
+      trigger: {
+        ...baseRule.trigger,
+        value: {
+          jql: 'project = SRC AND filter = 98765',
+        },
+      },
+      projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    },
+    {
+      projectId: '22222',
+      projectKey: 'TGT',
+      createStageAcknowledgement: {
+        required: true,
+        completed: true,
+      },
+    },
+  );
+
+  assert.ok(note.includes('High-risk gate: no checkbox required before disabled-copy creation; Jira-side review remains open before enablement'));
+  assert.ok(note.includes('Create-stage acknowledgement: checked in Personal AI preview only to create this disabled copy; Jira-side Activation plan review remains open before enablement.'));
 });
 
 test('buildJiraAutomationImportReviewNote records explicitly preserved rule chaining', () => {
@@ -502,6 +542,8 @@ test('collectJiraAutomationImportReviewSignals gives hidden secrets safe re-entr
   const checklist = buildJiraAutomationImportReviewChecklist(rule);
   const enablementPlan = buildJiraAutomationImportEnablementPlan(rule);
   const warnings = buildJiraAutomationImportWarnings(rule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(rule);
+  const secretReentrySummary = formatJiraAutomationImportSecretReentrySummary(secretReentrySlots);
   const packet = buildJiraAutomationImportReviewPacket(rule, {
     projectId: '22222',
     projectKey: 'TGT',
@@ -512,12 +554,162 @@ test('collectJiraAutomationImportReviewSignals gives hidden secrets safe re-entr
     'secretSlot: hidden secret value',
   ]);
   assert.ok(checklist.some((item) => item.detail.includes('Authorization: hidden secret value')));
-  assert.ok(enablementPlan.some((step) => step.detail.includes('secretSlot: hidden secret value')));
+  assert.ok(enablementPlan.some((step) => step.detail.includes('Secret re-entry map')));
+  assert.ok(enablementPlan.some((step) => step.detail.includes('components[0].value.secretSlot')));
   assert.ok(warnings.some((warning) => warning.includes('Jira export/import will not restore hidden values')));
+  assert.ok(warnings.some((warning) => warning.includes('Secret re-entry map')));
+  assert.ok(secretReentrySummary.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
+  assert.ok(secretReentrySummary.includes('components[0].value.secretSlot (secretSlot: hidden secret value)'));
+  assert.ok(buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots).includes('Credential restore gate: open before enablement'));
+  assert.ok(buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots).includes('PERSONAL_AI_REENTER_SECRET or REDACTED placeholders'));
   assert.ok(packet.includes('Authorization: hidden secret value'));
+  assert.ok(packet.includes('Credential restore gate: open before enablement'));
+  assert.ok(packet.includes('## Secret re-entry map'));
+  assert.ok(packet.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
+  assert.ok(packet.includes('components[0].value.secretSlot (secretSlot: hidden secret value)'));
   assert.ok(!packet.includes('sk-prod-secret-should-not-leak'));
   assert.ok(!packet.includes('xoxb123456789ABCDEFGHIJKLMNOP'));
   assert.ok(!packet.includes('hooks.slack.com/services'));
+  assert.ok(!secretReentrySummary.includes('sk-prod-secret-should-not-leak'));
+  assert.ok(!secretReentrySummary.includes('xoxb123456789ABCDEFGHIJKLMNOP'));
+  assert.ok(!secretReentrySummary.includes('hooks.slack.com/services'));
+});
+
+test('buildJiraAutomationImportRule scrubs hidden and sensitive payloads before create request', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        id: 'source-component-1',
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.example.com/SRC/release/releaseSecretPath1234567890ABCD?apiToken=prod-api-token-123&project=SRC',
+          authorizationHeader: 'Bearer sk-prod-secret-should-not-leak',
+          apiToken: 'prod-api-token-123',
+          headers: [
+            {
+              name: 'Authorization',
+              value: {
+                secret: true,
+                keyOrValue: 'Bearer sk-prod-secret-should-not-leak',
+              },
+            },
+          ],
+          secretSlot: {
+            secret: true,
+            name: 'https://hooks.slack.com/services/T00000000/B00000000/xoxb123456789ABCDEFGHIJKLMNOP',
+            keyOrValue: 'xoxb123456789ABCDEFGHIJKLMNOP',
+          },
+        },
+      },
+    ],
+  };
+
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    now: 1777600000700,
+  });
+  const payloadText = JSON.stringify(importRule);
+
+  assert.equal(importRule.components[0].id, '__NEW__COMPONENT__1777600000700');
+  assert.equal(
+    importRule.components[0].value.url,
+    'https://hooks.example.com/SRC/release/REDACTED?apiToken=REDACTED&project=SRC',
+  );
+  assert.equal(
+    importRule.components[0].value.authorizationHeader,
+    JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  );
+  assert.equal(
+    importRule.components[0].value.apiToken,
+    JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  );
+  assert.equal(
+    importRule.components[0].value.headers[0].value.keyOrValue,
+    JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  );
+  assert.equal(
+    importRule.components[0].value.secretSlot.name,
+    JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  );
+  assert.equal(
+    importRule.components[0].value.secretSlot.keyOrValue,
+    JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  );
+  assert.match(payloadText, new RegExp(JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER));
+  assert.doesNotMatch(payloadText, /sk-prod-secret-should-not-leak/);
+  assert.doesNotMatch(payloadText, /prod-api-token-123/);
+  assert.doesNotMatch(payloadText, /releaseSecretPath1234567890ABCD/);
+  assert.doesNotMatch(payloadText, /xoxb123456789ABCDEFGHIJKLMNOP/);
+  assert.doesNotMatch(payloadText, /hooks\.slack\.com\/services/);
+  assert.equal(
+    rule.components[0].value.headers[0].value.keyOrValue,
+    'Bearer sk-prod-secret-should-not-leak',
+  );
+});
+
+test('free-text import fields redact inline secrets across display, notes, labels, and payload', () => {
+  const rule = {
+    ...baseRule,
+    name: 'Deploy token=prod-name-token-123',
+    description: [
+      'Source handoff keeps business context.',
+      'clientSecret="desc-client-secret-456"',
+      'Authorization: Bearer desc-bearer-secret-789',
+      'Webhook https://hooks.example.com/SRC/description/descSecretPath1234567890ABCD?apiToken=desc-api-token-123',
+    ].join('\n'),
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    labels: ['release', 'token=label-secret-token-123'],
+    components: [
+      {
+        id: 'source-component-1',
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          customBody: JSON.stringify({
+            clientId: 'visible-client-id',
+            clientSecret: 'body-client-secret-123',
+            nested: {
+              jwt: 'body-jwt-secret-456',
+            },
+          }),
+          body: 'Authorization: Bearer body-bearer-secret-789 token=body-token-secret-123',
+          safeMessage: 'Release note for project SRC',
+        },
+      },
+    ],
+  };
+
+  const displayName = sanitizeJiraAutomationImportDisplayText(rule.name);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    now: 1777600000900,
+  });
+  const payloadText = JSON.stringify(importRule);
+
+  assert.equal(displayName, 'Deploy token=REDACTED');
+  assert.equal(importRule.name, '(Imported by Personal AI) Deploy token=REDACTED');
+  assert.deepEqual(importRule.labels, ['release', `token=${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}`]);
+  assert.match(importRule.description || '', /clientSecret="REDACTED"/);
+  assert.match(importRule.description || '', /Authorization: Bearer REDACTED/);
+  assert.match(importRule.description || '', /description\/REDACTED\?apiToken=REDACTED/);
+  assert.match(importRule.components[0].value.customBody, new RegExp(`"clientSecret":"${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}"`));
+  assert.match(importRule.components[0].value.customBody, new RegExp(`"jwt":"${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}"`));
+  assert.match(importRule.components[0].value.body, new RegExp(`Authorization: Bearer ${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}`));
+  assert.match(importRule.components[0].value.body, new RegExp(`token=${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}`));
+  assert.ok(packet.includes('- Source rule: Deploy token=REDACTED'));
+  assert.ok(reviewSignals.sourceProjectReferences.some((reference) => reference.includes('clientSecret="REDACTED"')));
+  assert.doesNotMatch(packet, /prod-name-token-123|desc-client-secret-456|desc-bearer-secret-789|descSecretPath1234567890ABCD|desc-api-token-123/);
+  assert.doesNotMatch(payloadText, /prod-name-token-123|label-secret-token-123|body-client-secret-123|body-jwt-secret-456|body-bearer-secret-789|body-token-secret-123/);
+  assert.doesNotMatch(payloadText, /desc-client-secret-456|desc-bearer-secret-789|descSecretPath1234567890ABCD|desc-api-token-123/);
 });
 
 test('buildJiraAutomationImportReviewPacket creates a sanitized enablement handoff', () => {
@@ -567,12 +759,17 @@ test('buildJiraAutomationImportReviewPacket creates a sanitized enablement hando
   assert.ok(packet.includes('- Target project: TGT (22222)'));
   assert.ok(packet.includes('- Imported state: DISABLED'));
   assert.ok(packet.includes('- Rule chaining: blocked in imported copy'));
+  assert.ok(packet.includes('- High-risk gate: no checkbox required before disabled-copy creation; Jira-side review remains open before enablement'));
+  assert.ok(packet.includes('- Credential restore gate: open before enablement'));
   assert.ok(packet.includes('## Review before enabling'));
   assert.ok(packet.includes('[HIGH] JQL and filters'));
   assert.ok(packet.includes('[HIGH] External effects and credentials'));
   assert.ok(packet.includes('## Detected environment bindings'));
   assert.ok(packet.includes('[HIGH] Secrets (2): release-webhook-token | Authorization: hidden secret value'));
   assert.ok(packet.includes('/SRC/release/REDACTED?apiToken=REDACTED'));
+  assert.ok(packet.includes('## Secret re-entry map'));
+  assert.ok(packet.includes('components[0].value.url (url): URL credential, sensitive query, fragment, or token-like path was redacted'));
+  assert.ok(packet.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
   assert.ok(packet.includes('## Activation plan'));
   assert.ok(packet.includes('[HIGH] Map target-project search dependencies'));
   assert.ok(packet.includes('[HIGH] Reconnect external effects and credentials'));
@@ -581,6 +778,110 @@ test('buildJiraAutomationImportReviewPacket creates a sanitized enablement hando
   assert.ok(!packet.includes('prod-api-token-123'));
   assert.ok(!packet.includes('releaseSecretPath1234567890ABCD'));
   assert.ok(!packet.includes('hidden-secret-token'));
+});
+
+test('name collision check receipt records confirmed and unconfirmed target-rule lookup state', () => {
+  const confirmedReceipt = buildJiraAutomationImportNameCheckReceipt(
+    baseRule,
+    {
+      projectId: '22222',
+      projectKey: 'TGT',
+      existingRuleNames: ['(Imported by Personal AI) Notify release owner'],
+      nameCheck: {
+        status: 'confirmed',
+        checkedRuleCount: 1,
+      },
+    },
+  );
+
+  assert.match(confirmedReceipt, /confirmed against 1 target rule/);
+  assert.match(confirmedReceipt, /Personal AI selected "\(Imported by Personal AI\) Notify release owner \(2\)"/);
+
+  const packet = buildJiraAutomationImportReviewPacket(baseRule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    nameCheck: {
+      status: 'unconfirmed',
+      failureReason: 'GET failed for https://jira.example.test/rule?token=secret-token-123&owner=secret-owner@example.com',
+    },
+  });
+  const note = buildJiraAutomationImportReviewNote(baseRule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    nameCheck: {
+      status: 'unconfirmed',
+      failureReason: 'Authorization: Bearer sk-prod-secret-should-not-leak; owner=secret-owner@example.com',
+    },
+  });
+
+  assert.match(packet, /Name collision check: not confirmed/);
+  assert.match(packet, /best-effort disabled-copy name/);
+  assert.match(packet, /token=REDACTED/);
+  assert.doesNotMatch(packet, /secret-token-123/);
+  assert.doesNotMatch(packet, /secret-owner@example.com/);
+  assert.match(note, /Name collision check: not confirmed/);
+  assert.match(note, /Authorization: Bearer REDACTED/);
+  assert.match(note, /REDACTED_EMAIL/);
+  assert.doesNotMatch(note, /sk-prod-secret-should-not-leak/);
+  assert.doesNotMatch(note, /secret-owner@example.com/);
+});
+
+test('source cloud=false adds source-format compatibility handoff', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.example.com/SRC/release?apiToken=prod-api-token-123',
+          connectionId: 'prod-webhook-connection',
+        },
+      },
+      {
+        component: 'ACTION',
+        type: 'vendor.release.deployment.action',
+        value: {
+          deploymentTemplateId: 'release-gate',
+        },
+      },
+    ],
+  };
+
+  const checklist = buildJiraAutomationImportReviewChecklist(rule, false);
+  const steps = buildJiraAutomationImportEnablementPlan(rule, false);
+  const warnings = buildJiraAutomationImportWarnings(rule, false);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    sourceCloud: false,
+  });
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    sourceCloud: false,
+  });
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    sourceCloud: false,
+    now: 1777600000800,
+  });
+
+  assert.equal(formatJiraAutomationImportSourceFormat(false), 'Jira Server/Data Center export (cloud=false)');
+  assert.ok(checklist.some((item) => item.id === 'source-format' && item.severity === 'high'));
+  assert.equal(steps[1].id, 'confirm-source-format');
+  assert.equal(steps[1].severity, 'high');
+  assert.match(steps[1].detail, /source file is marked cloud=false/i);
+  assert.match(steps[1].detail, /web request/);
+  assert.ok(warnings.some((warning) => warning.includes('Source export is marked cloud=false')));
+  assert.ok(note.includes('Source format: Jira Server/Data Center export (cloud=false).'));
+  assert.ok(note.includes('High-risk gate: no checkbox required before disabled-copy creation; Jira-side review remains open before enablement'));
+  assert.ok(packet.includes('- Source format: Jira Server/Data Center export (cloud=false)'));
+  assert.ok(packet.includes('- High-risk gate: no checkbox required before disabled-copy creation; Jira-side review remains open before enablement'));
+  assert.ok(packet.includes('[HIGH] Source format compatibility'));
+  assert.ok(packet.includes('[HIGH] Confirm source-format compatibility'));
+  assert.ok(importRule.description?.includes('Source format: Jira Server/Data Center export (cloud=false).'));
 });
 
 test('buildJiraAutomationImportEnablementPlan prioritizes post-import activation steps', () => {
@@ -669,6 +970,148 @@ test('collectJiraAutomationImportReviewSignals redacts sensitive URL credentials
   assert.ok(!note.includes('secret-fragment'));
 });
 
+test('signed URL credential query parameters are redacted across handoff artifacts', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://bucket.s3.amazonaws.com/release.json?X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260623%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Security-Token=aws-session-token-123456789&X-Amz-Signature=aws-signature-secret-1234567890&project=SRC',
+          azureWebhookUrl: 'https://storage.blob.core.windows.net/container/release.json?sv=2025-01-05&sp=r&sig=azure-sas-signature-secret-1234567890&sr=b',
+          googleSignedUrl: 'https://storage.googleapis.com/bucket/release.json?GoogleAccessId=service-account@example.iam.gserviceaccount.com&Signature=gcs-signature-secret-1234567890&Expires=1777600000',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const slots = collectJiraAutomationImportSecretReentrySlots(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    sourceCloud: true,
+  });
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    projectTypeKey: 'software',
+    now: 1777600000700,
+  });
+  const artifactText = [
+    JSON.stringify(reviewSignals),
+    JSON.stringify(slots),
+    note,
+    packet,
+    JSON.stringify(importRule),
+  ].join('\n');
+
+  assert.equal(summary.hardcodedUrlCount, 3);
+  assert.equal(summary.sensitiveReferenceCount, 6);
+  assert.deepEqual(reviewSignals.sensitiveReferences, [
+    'URL query X-Amz-Credential: sensitive value present',
+    'URL query X-Amz-Security-Token: sensitive value present',
+    'URL query X-Amz-Signature: sensitive value present',
+    'URL query sig: sensitive value present',
+    'URL query GoogleAccessId: sensitive value present',
+    'URL query Signature: sensitive value present',
+  ]);
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('X-Amz-Credential=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('sig=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('GoogleAccessId=REDACTED')));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.url'));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.azureWebhookUrl'));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.googleSignedUrl'));
+  assert.match(JSON.stringify(importRule.components), /X-Amz-Signature=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /X-Amz-Security-Token=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /sig=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /GoogleAccessId=REDACTED/);
+  assert.doesNotMatch(artifactText, /AKIAIOSFODNN7EXAMPLE/);
+  assert.doesNotMatch(artifactText, /aws-session-token-123456789/);
+  assert.doesNotMatch(artifactText, /aws-signature-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /azure-sas-signature-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /service-account@example\.iam\.gserviceaccount\.com/);
+  assert.doesNotMatch(artifactText, /gcs-signature-secret-1234567890/);
+});
+
+test('function and API gateway URL query credentials are redacted across handoff artifacts', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://release-fn.azurewebsites.net/api/notify?code=azure-function-code-secret-1234567890&project=SRC',
+          gatewayUrl: 'https://gateway.example.test/release?subscription-key=apim-subscription-secret-1234567890&Ocp-Apim-Subscription-Key=ocp-apim-secret-1234567890&ticket=SRC-123',
+          sasCallbackUrl: 'https://storage.example.test/release?sasToken=sas-token-secret-1234567890&sharedAccessKey=shared-access-secret-1234567890',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const slots = collectJiraAutomationImportSecretReentrySlots(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    projectTypeKey: 'software',
+    now: 1777600000710,
+  });
+  const artifactText = [
+    JSON.stringify(reviewSignals),
+    JSON.stringify(slots),
+    note,
+    packet,
+    JSON.stringify(importRule),
+  ].join('\n');
+
+  assert.equal(summary.hardcodedUrlCount, 3);
+  assert.equal(summary.sensitiveReferenceCount, 5);
+  assert.deepEqual(reviewSignals.sensitiveReferences, [
+    'URL query code: sensitive value present',
+    'URL query subscription-key: sensitive value present',
+    'URL query Ocp-Apim-Subscription-Key: sensitive value present',
+    'URL query sasToken: sensitive value present',
+    'URL query sharedAccessKey: sensitive value present',
+  ]);
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('code=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('subscription-key=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('Ocp-Apim-Subscription-Key=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('sasToken=REDACTED')));
+  assert.ok(reviewSignals.hardcodedUrls.some((url) => url.includes('sharedAccessKey=REDACTED')));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.url'));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.gatewayUrl'));
+  assert.ok(slots.some((slot) => slot.path === 'components[0].value.sasCallbackUrl'));
+  assert.match(JSON.stringify(importRule.components), /code=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /subscription-key=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /Ocp-Apim-Subscription-Key=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /sasToken=REDACTED/);
+  assert.match(JSON.stringify(importRule.components), /sharedAccessKey=REDACTED/);
+  assert.match(packet, /URL query code: sensitive value present/);
+  assert.match(note, /Sensitive \/ hidden values \(5\): URL query code: sensitive value present/);
+  assert.doesNotMatch(artifactText, /azure-function-code-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /apim-subscription-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /ocp-apim-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /sas-token-secret-1234567890/);
+  assert.doesNotMatch(artifactText, /shared-access-secret-1234567890/);
+});
+
 test('collectJiraAutomationImportReviewSignals redacts sensitive webhook URL path tokens', () => {
   const rule = {
     ...baseRule,
@@ -701,6 +1144,28 @@ test('collectJiraAutomationImportReviewSignals redacts sensitive webhook URL pat
   assert.ok(note.includes('Hard-coded URLs (1): https://hooks.slack.com/services/REDACTED/REDACTED/REDACTED'));
   assert.ok(note.includes('Sensitive / hidden values (1): URL path segment: sensitive value present'));
   assert.ok(!note.includes('xoxb123456789ABCDEFGHIJKLMNOP'));
+});
+
+test('redactJiraAutomationImportErrorText removes secrets from failed API details', () => {
+  const redacted = redactJiraAutomationImportErrorText([
+    'API call failed: 400 Bad Request',
+    '{"message":"Invalid webhook URL https://user:pass@hooks.example.com/SRC/hiddenSecretPath1234567890ABCD?apiToken=prod-api-token-123&owner=secret-owner@example.com#access_token=secret-fragment"}',
+    'Authorization: Bearer sk-prod-secret-should-not-leak',
+    'Contact secret-owner@example.com for details',
+    '"keyOrValue":"hidden-secret-token"',
+  ].join('\n'));
+
+  assert.match(redacted, /API call failed: 400 Bad Request/);
+  assert.match(redacted, /apiToken=REDACTED/);
+  assert.match(redacted, /Authorization: Bearer REDACTED/);
+  assert.match(redacted, /keyOrValue":"REDACTED/);
+  assert.match(redacted, /REDACTED_EMAIL/);
+  assert.doesNotMatch(redacted, /prod-api-token-123/);
+  assert.doesNotMatch(redacted, /hiddenSecretPath1234567890ABCD/);
+  assert.doesNotMatch(redacted, /secret-fragment/);
+  assert.doesNotMatch(redacted, /sk-prod-secret-should-not-leak/);
+  assert.doesNotMatch(redacted, /hidden-secret-token/);
+  assert.doesNotMatch(redacted, /secret-owner@example.com/);
 });
 
 test('buildJiraAutomationImportReviewFindings groups environment-bound values for preview and review note', () => {

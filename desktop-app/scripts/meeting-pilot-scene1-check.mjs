@@ -437,6 +437,156 @@ try {
     Number.isFinite(meetingTabId),
     `未找到会议 tabId: ${String(meetingTabId)}`,
   );
+
+  log('附加校验: 会议页内嵌面板显示加载与 Capture 边界回执');
+  const embeddedOpenResponse = await panelPage.evaluate(async (tabId) => {
+    return chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
+      tabId,
+      source: 'scene1-embedded-receipt',
+      preferSurface: 'embedded',
+    });
+  }, meetingTabId);
+  assert.equal(
+    embeddedOpenResponse?.success,
+    true,
+    `内嵌面板应能在会议页打开: ${JSON.stringify(embeddedOpenResponse)}`,
+  );
+  assert.equal(
+    embeddedOpenResponse?.surface,
+    'embedded',
+    `内嵌面板打开后应返回 embedded surface: ${JSON.stringify(
+      embeddedOpenResponse,
+    )}`,
+  );
+  await page.waitForFunction(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const shell = shadow?.getElementById('mpSidePanelShell');
+    const receipt = shadow?.getElementById('mpSidePanelReceipt');
+    const copy = shadow?.getElementById('mpSidePanelReceiptCopy')?.textContent || '';
+    return (
+      shell?.classList.contains('open') &&
+      receipt instanceof HTMLElement &&
+      /不会自动开始录制|不会开始、停止/.test(copy)
+    );
+  });
+  await page.waitForFunction(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const receipt = shadow?.getElementById('mpSidePanelReceipt');
+    return receipt instanceof HTMLElement && receipt.dataset.state === 'loaded';
+  });
+  const embeddedReceiptState = await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const shell = shadow?.getElementById('mpSidePanelShell');
+    const receipt = shadow?.getElementById('mpSidePanelReceipt');
+    return {
+      shellOpen: Boolean(shell?.classList.contains('open')),
+      state: receipt instanceof HTMLElement ? receipt.dataset.state : '',
+      title:
+        shadow?.getElementById('mpSidePanelReceiptTitle')?.textContent || '',
+      copy: shadow?.getElementById('mpSidePanelReceiptCopy')?.textContent || '',
+      hasClose: Boolean(shadow?.getElementById('mpSidePanelClose')),
+    };
+  });
+  assert.equal(
+    embeddedReceiptState.shellOpen,
+    true,
+    `内嵌面板 shell 未打开: ${JSON.stringify(embeddedReceiptState)}`,
+  );
+  assert.equal(
+    embeddedReceiptState.state,
+    'loaded',
+    `内嵌面板未确认加载: ${JSON.stringify(embeddedReceiptState)}`,
+  );
+  assert.match(embeddedReceiptState.title, /页内面板/);
+  assert.match(embeddedReceiptState.copy, /已绑定/);
+  assert.match(embeddedReceiptState.copy, /不会开始、停止|不会自动开始录制/);
+  assert.equal(embeddedReceiptState.hasClose, true, '内嵌面板缺少父级关闭按钮');
+  await saveScreenshot(page, 'scene1-2a-embedded-panel-receipt.png');
+
+  log('附加校验: 非当前受控 iframe 不能伪造内嵌面板关闭消息');
+  await page.evaluate(
+    ({ extensionId: currentExtensionId, tabId }) => {
+      const existing = document.getElementById('mpRogueSidePanelFrame');
+      existing?.remove();
+      const iframe = document.createElement('iframe');
+      iframe.id = 'mpRogueSidePanelFrame';
+      iframe.hidden = true;
+      iframe.src = `chrome-extension://${currentExtensionId}/meeting-sidepanel.html?embedded=1&surface=embedded&tabId=${tabId}&rogue=1`;
+      document.body.appendChild(iframe);
+    },
+    { extensionId, tabId: meetingTabId },
+  );
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('iframe')).some((frame) =>
+      String(frame.getAttribute('src') || '').includes('rogue=1'),
+    ),
+  );
+  let rogueFrame;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    rogueFrame = page.frames().find((frame) =>
+      frame.url().includes('rogue=1'),
+    );
+    if (rogueFrame) break;
+    await page.waitForTimeout(100);
+  }
+  assert.ok(rogueFrame, '未加载用于伪造消息的 extension iframe');
+  await rogueFrame.evaluate(() => {
+    window.parent.postMessage(
+      {
+        type: 'MEETING_PILOT_EMBEDDED_PANEL_CLOSE',
+        source: 'meeting-pilot-rogue-frame',
+      },
+      '*',
+    );
+  });
+  await page.waitForTimeout(300);
+  const spoofCloseState = await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const shell = shadow?.getElementById('mpSidePanelShell');
+    const receipt = shadow?.getElementById('mpSidePanelReceipt');
+    return {
+      shellOpen: Boolean(shell?.classList.contains('open')),
+      receiptState: receipt instanceof HTMLElement ? receipt.dataset.state : '',
+    };
+  });
+  assert.equal(
+    spoofCloseState.shellOpen,
+    true,
+    `非当前受控 iframe 不应关闭内嵌面板: ${JSON.stringify(
+      spoofCloseState,
+    )}`,
+  );
+  await page.evaluate(() => {
+    document.getElementById('mpRogueSidePanelFrame')?.remove();
+  });
+  await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    shadow?.getElementById('mpSidePanelClose')?.click();
+  });
+  await page.waitForFunction(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const shell = shadow?.getElementById('mpSidePanelShell');
+    const receipt = shadow?.getElementById('mpSidePanelReceipt');
+    return (
+      !shell?.classList.contains('open') &&
+      receipt instanceof HTMLElement &&
+      receipt.dataset.state === 'idle'
+    );
+  });
+
   await panelPage.goto(
     `chrome-extension://${extensionId}/meeting-sidepanel.html?tabId=${meetingTabId}&scene1Check=1`,
     { waitUntil: 'load' },
@@ -493,6 +643,60 @@ try {
     panelLayout.shellLeft <= 1 && panelLayout.shellRightGap <= 1,
     `独立窗口仍存在大面积边缘空白: ${JSON.stringify(panelLayout)}`,
   );
+  const panelSourceReceiptState = await panelPage.evaluate(() => {
+    const receipt = document.querySelector('[data-panel-source-receipt="true"]');
+    return {
+      tone: receipt?.getAttribute('data-panel-source-tone') || '',
+      text: receipt?.textContent || '',
+    };
+  });
+  assert.equal(
+    panelSourceReceiptState.tone,
+    'bound',
+    `真实 side panel 应标记为绑定会议页: ${JSON.stringify(
+      panelSourceReceiptState,
+    )}`,
+  );
+  assert.match(panelSourceReceiptState.text, /已绑定当前会议页/);
+  assert.match(panelSourceReceiptState.text, new RegExp(`tabId ${meetingTabId}`));
+  assert.match(panelSourceReceiptState.text, new RegExp(meetingId));
+  assert.match(panelSourceReceiptState.text, /不会开始\/停止 Capture/);
+
+  log('附加校验: 失效 tabId 的 side panel 不回退到其它活跃会议');
+  const staleTabPage = await context.newPage();
+  const assertNoStaleTabErrors = buildPageErrorCollector(staleTabPage);
+  const staleRequestedTabId = meetingTabId + 900000;
+  await staleTabPage.goto(
+    `chrome-extension://${extensionId}/meeting-sidepanel.html?tabId=${staleRequestedTabId}&scene1MissingTab=1`,
+    { waitUntil: 'load' },
+  );
+  await staleTabPage
+    .locator('[data-panel-source-receipt="true"]')
+    .waitFor({ state: 'attached', timeout: 15000 });
+  const staleTabState = await staleTabPage.evaluate(() => {
+    const shell = document.querySelector('.meeting-shell');
+    const receipt = document.querySelector('[data-panel-source-receipt="true"]');
+    return {
+      title: shell?.getAttribute('data-session-title') || '',
+      tone: receipt?.getAttribute('data-panel-source-tone') || '',
+      text: receipt?.textContent || '',
+    };
+  });
+  assert.equal(
+    staleTabState.title,
+    'Meeting Pilot',
+    `失效 tabId 不应显示当前活跃会议标题: ${JSON.stringify(staleTabState)}`,
+  );
+  assert.equal(
+    staleTabState.tone,
+    'missing',
+    `失效 tabId 应进入未绑定状态: ${JSON.stringify(staleTabState)}`,
+  );
+  assert.match(staleTabState.text, /请求的会议标签页未绑定/);
+  assert.match(staleTabState.text, new RegExp(`tabId ${staleRequestedTabId}`));
+  assert.doesNotMatch(staleTabState.text, new RegExp(meetingId));
+  assertNoStaleTabErrors();
+  await staleTabPage.close();
 
   log('附加校验: Context Assist handoff 在 side panel 实时页可见');
   await panelPage
@@ -565,6 +769,29 @@ try {
     `会前准备行动项缺少时间线入口: ${JSON.stringify(prepActionState)}`,
   );
   await panelPage.locator('.panel-tab', { hasText: '实时' }).click();
+
+  log('附加校验: side panel 展示 Capture handoff 回执');
+  const captureReceiptState = await panelPage.evaluate(() => {
+    const receipt = document.querySelector(
+      '[data-capture-handoff-receipt="true"]',
+    );
+    return {
+      text: receipt?.textContent || '',
+      rowCount: receipt?.querySelectorAll('.capture-start-receipt-value')
+        .length || 0,
+    };
+  });
+  assert.equal(
+    captureReceiptState.rowCount,
+    3,
+    `Capture handoff 回执缺少状态/范围/下一步: ${JSON.stringify(
+      captureReceiptState,
+    )}`,
+  );
+  assert.match(captureReceiptState.text, /当前/);
+  assert.match(captureReceiptState.text, /范围/);
+  assert.match(captureReceiptState.text, /下一步/);
+  assert.match(captureReceiptState.text, /popup/);
 
   log('附加校验: side panel 可直接打开 Capture 授权步骤');
   await panelPage
@@ -756,6 +983,58 @@ try {
     },
     { timeout: 15000 },
   );
+  const demoSourceReceiptState = await actionJumpPage.evaluate(() => {
+    const receipt = document.querySelector('[data-panel-source-receipt="true"]');
+    return {
+      tone: receipt?.getAttribute('data-panel-source-tone') || '',
+      text: receipt?.textContent || '',
+    };
+  });
+  assert.equal(
+    demoSourceReceiptState.tone,
+    'demo',
+    `demo side panel 应标记为演示状态源: ${JSON.stringify(
+      demoSourceReceiptState,
+    )}`,
+  );
+  assert.match(demoSourceReceiptState.text, /演示状态源/);
+  assert.match(demoSourceReceiptState.text, /本地示例数据/);
+  assert.match(demoSourceReceiptState.text, /不绑定真实会议页/);
+  await actionJumpPage
+    .locator('[data-meeting-focus-rail="true"]')
+    .waitFor({ state: 'attached', timeout: 15000 });
+  const focusRailState = await actionJumpPage.evaluate(() => {
+    const rail = document.querySelector('[data-meeting-focus-rail="true"]');
+    return {
+      text: rail?.textContent || '',
+      actionButtons: Array.from(
+        rail?.querySelectorAll('.focus-rail-action') || [],
+      ).map((button) => button.textContent || ''),
+    };
+  });
+  assert.match(focusRailState.text, /现在先看/);
+  assert.match(focusRailState.text, /Capture 运行中/);
+  assert.match(focusRailState.text, /待复核 3/);
+  assert.match(focusRailState.text, /2 个提醒/);
+  assert.match(focusRailState.text, /Shared screen review/);
+  assert.ok(
+    focusRailState.actionButtons.some((label) => /复核/.test(label)),
+    `会中重点栏缺少行动项复核入口: ${JSON.stringify(focusRailState)}`,
+  );
+  await actionJumpPage
+    .locator('[data-meeting-focus-rail="true"] .focus-rail-action', {
+      hasText: '复核',
+    })
+    .click();
+  await actionJumpPage.waitForFunction(() => {
+    const activeTab = document.querySelector('.panel-tab.active');
+    const activeFilter = document.querySelector('.action-review-filter.active');
+    return (
+      /行动项/.test(activeTab?.textContent || '') &&
+      /待复核/.test(activeFilter?.textContent || '')
+    );
+  });
+  await actionJumpPage.locator('.panel-tab', { hasText: '实时' }).click();
   await actionJumpPage
     .locator('.action-review-card', { hasText: '3 个待复核行动项' })
     .waitFor({ state: 'attached', timeout: 15000 });
@@ -801,6 +1080,38 @@ try {
   await saveScreenshot(actionJumpPage, 'scene1-3b-action-timeline-jump.png');
   assertNoActionJumpErrors();
   await actionJumpPage.close();
+
+  log('附加校验: 内嵌面板不可用时 background 返回可恢复失败');
+  const embeddedUnavailableResponse = await panelPage.evaluate(async () => {
+    const currentTab = await chrome.tabs.getCurrent();
+    return chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
+      tabId: currentTab?.id,
+      source: 'scene1-embedded-unavailable',
+      preferSurface: 'embedded',
+    });
+  });
+  assert.equal(
+    embeddedUnavailableResponse?.success,
+    false,
+    `内嵌面板不可用时不应返回成功: ${JSON.stringify(
+      embeddedUnavailableResponse,
+    )}`,
+  );
+  assert.equal(
+    embeddedUnavailableResponse?.surface,
+    'unavailable',
+    `内嵌面板不可用时应返回 unavailable surface: ${JSON.stringify(
+      embeddedUnavailableResponse,
+    )}`,
+  );
+  assert.equal(
+    embeddedUnavailableResponse?.error,
+    'meeting_pilot_panel_surface_unavailable',
+    `内嵌面板不可用时缺少可恢复错误码: ${JSON.stringify(
+      embeddedUnavailableResponse,
+    )}`,
+  );
 
   log('附加校验: overlay 渲染 P0 年龄标签与记忆弹幕链接');
   await panelPage.evaluate(
@@ -1019,6 +1330,62 @@ try {
   assert.match(hoverStanceState.text, /Q2 预算/);
   await saveScreenshot(page, 'scene1-4b-hover-stance.png');
   await saveScreenshot(page, 'scene1-4-overlay-alerts.png');
+
+  log('附加校验: side panel 会中提醒展示原因、下一步和边界回执');
+  const panelAlertUpdateResponse = await panelPage.evaluate(async (tabId) => {
+    return chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_UPDATE_ALERTS',
+      tabId,
+      alert: {
+        id: 'fixture-panel-p0-reason',
+        level: 'P0',
+        title: '你被点名',
+        body: 'Alex 要求你确认技术评审 owner。',
+        source: 'mention',
+        createdAt: Date.now() - 65000,
+      },
+    });
+  }, meetingTabId);
+  assert.equal(
+    panelAlertUpdateResponse?.success,
+    true,
+    `会中提醒写入 background registry 失败: ${JSON.stringify(
+      panelAlertUpdateResponse,
+    )}`,
+  );
+  await panelPage.reload({ waitUntil: 'load' });
+  await panelPage.locator('.panel-tab', { hasText: '实时' }).click();
+  await panelPage.waitForFunction(() => {
+    return Array.from(document.querySelectorAll('.alert-card')).some((card) =>
+      /你被点名/.test(card.textContent || ''),
+    );
+  });
+  const panelAlertReceiptState = await panelPage.evaluate(() => {
+    const card =
+      Array.from(document.querySelectorAll('.alert-card')).find((item) =>
+        /你被点名/.test(item.textContent || ''),
+      ) || null;
+    return {
+      text: card?.textContent || '',
+      receiptRows:
+        card?.querySelectorAll('.alert-reason-receipt .alert-reason-row')
+          .length || 0,
+    };
+  });
+  assert.equal(
+    panelAlertReceiptState.receiptRows,
+    4,
+    `会中提醒回执应展示原因/下一步/边界/信号: ${JSON.stringify(
+      panelAlertReceiptState,
+    )}`,
+  );
+  assert.match(panelAlertReceiptState.text, /为什么/);
+  assert.match(panelAlertReceiptState.text, /下一步/);
+  assert.match(panelAlertReceiptState.text, /边界/);
+  assert.match(panelAlertReceiptState.text, /信号/);
+  assert.match(panelAlertReceiptState.text, /新近信号|较旧信号|信号时间未知/);
+  assert.match(panelAlertReceiptState.text, /不会替你发言/);
+  assert.match(panelAlertReceiptState.text, /外部任务/);
 
   log('附加校验: 扩展 panorama 页面支持 PDF 区块与立场展开');
   const panoramaPage = await context.newPage();

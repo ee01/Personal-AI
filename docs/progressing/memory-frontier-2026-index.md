@@ -8,7 +8,13 @@
 
 本系统的地基（双时态真值、夜间巩固、梦境重放、Rehearsal 前瞻、无感校准）已厚于行业开源水平；本批 plan 的主线是三件事：**把台面下的缝合搬到台面上（可感知）、把已收集的行为信号接进主排序（反馈闭环到底）、把写入与删除做出"决策与级联"（从 RAG 升格为记忆）**——外加一个真实存在的注入攻击面修补。
 
-## Plan 清单（10 个新 plan）
+## 2026-06-23 交付闭环
+
+6/18 完成报告里的本地 A/B 已证明大批需求不回退，但当时线上部署和权威体检仍有缺口。6/23 复跑后，把期望标准收紧为：**grounded case 必须返回 evidence，不能靠复述问题或候选澄清过关；abstention case 不能把弱相关召回项包装成证据；明确 subject 的完整问句不应被短问句歧义澄清截断。**
+
+本轮已按这个标准补齐 `/ask` 和 eval：Cursor 成本/性价比的时间问题会继续召回证据而不是要求用户在多个 Cursor 话题里再选一次；巴黎航班这类库中无事实的问题，即使 LLM 超时 fallback 也返回 `resolutionState=insufficient`、`evidence=[]`。远端 `10.32.56.212` scoped 部署后，`mem-abilities-frontier-remote-after-cjk-fix-20260623` 通过 6/6、overall=1.0，较 `evals/.baseline/memory-abilities.json` 无回归。
+
+## Plan 清单（11 个新 plan）
 
 | # | Plan | 优先级 | 规模 | 对应建议 | 依赖 | 场景与 Demo |
 | --- | --- | --- | --- | --- | --- | --- |

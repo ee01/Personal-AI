@@ -26,6 +26,22 @@
         <button class="load-error-retry" @click="loadDreams()">重试</button>
       </div>
 
+      <div v-if="!loadError" class="dream-scope-receipt" aria-label="梦境重放本页范围">
+        <div class="scope-receipt-main">
+          <span class="scope-receipt-label">本页范围</span>
+          <strong>{{ dreamScopeReceiptTitle }}</strong>
+        </div>
+        <div class="scope-receipt-grid">
+          <span>{{ dreamScopeEvidenceLine }}</span>
+          <span>{{ dreamScopeDeepLinkLine }}</span>
+          <span>读取窗口：最近 10 个 dreams/*.md；通知深链文件会额外尝试读取。</span>
+          <span>生成节奏：Dream Replay 每周离线生成；梦境报表只代表当前 digest 周期。</span>
+        </div>
+        <div class="scope-receipt-boundary">
+          边界：这里只读展示低置信线索，不会写用户画像、创建 Rehearsal、确认关系、发送通知或执行外部动作。
+        </div>
+      </div>
+
       <div v-if="dreams.length > 0" class="dream-overview">
         <div class="overview-metric">
           <span class="metric-label">梦境主题</span>
@@ -43,10 +59,30 @@
           <span class="metric-label">新关系</span>
           <strong>{{ totalRelationships }}</strong>
         </div>
+        <div class="overview-metric priority">
+          <span class="metric-label">优先复核</span>
+          <strong>{{ priorityReviewDreamCount }}</strong>
+        </div>
+        <div class="overview-metric ready">
+          <span class="metric-label">可带证据复核</span>
+          <strong>{{ reviewReadyDreamCount }}</strong>
+        </div>
+        <div class="overview-metric warning">
+          <span class="metric-label">缺证据</span>
+          <strong>{{ ungroundedDreamCount }}</strong>
+        </div>
+      </div>
+
+      <div v-if="requestedFileMissing" class="partial-warning targeted-warning">
+        通知指向的梦境文件 {{ requestedFilename }} 暂时无法读取；已先展示最近可用内容。
       </div>
 
       <div v-if="skippedFiles.length > 0" class="partial-warning">
-        {{ skippedFiles.length }} 个梦境文件暂时无法读取；已先展示可用结果。
+        {{ skippedFiles.length }} 个梦境文件暂时无法读取：{{ skippedFilesLabel }}；已先展示可用结果。
+      </div>
+
+      <div v-if="ungroundedDreamCount > 0" class="grounding-warning">
+        {{ ungroundedDreamCount }} 个梦境缺少可核对证据或没有召回结果；这些内容只能作为低置信假设，先走自我反思或原始记忆复核。
       </div>
 
       <div v-if="dreams.length === 0 && !loadError" class="empty-state">
@@ -59,7 +95,10 @@
           v-for="dream in dreams"
           :key="dream.filename"
           class="dream-card"
-          :class="{ expanded: dream.expanded }"
+          :class="{
+            expanded: dream.expanded,
+            targeted: dream.filename === requestedFilename,
+          }"
         >
           <button
             class="dream-toggle"
@@ -70,6 +109,9 @@
               <div class="dream-title-block">
                 <div class="dream-title-row">
                   <div class="dream-title">{{ dream.title }}</div>
+                  <span v-if="isRequestedDream(dream)" class="dream-target-chip">
+                    通知命中
+                  </span>
                   <span class="dream-date">{{ dream.date || '未知日期' }}</span>
                 </div>
                 <div class="dream-badges">
@@ -86,6 +128,25 @@
                     来源 dreams/{{ dream.filename }}
                   </span>
                   <span>低置信联想，需复核后使用</span>
+                  <span>{{ dreamFreshnessLabel(dream) }}</span>
+                  <span
+                    class="dream-grounding-chip"
+                    :class="{ missing: !dream.grounding.available }"
+                  >
+                    {{ groundingSummary(dream) }}
+                  </span>
+                  <span
+                    class="dream-readiness-chip"
+                    :class="dreamReadinessClass(dream)"
+                  >
+                    {{ dreamReadinessLabel(dream) }}
+                  </span>
+                  <span
+                    class="dream-triage-chip"
+                    :class="dreamTriage(dream).tone"
+                  >
+                    {{ dreamTriage(dream).label }}
+                  </span>
                 </div>
               </div>
               <span class="expand-indicator">{{
@@ -96,6 +157,55 @@
               {{ dream.preview }}
             </div>
           </button>
+
+          <div
+            v-if="isRequestedDream(dream)"
+            class="dream-notification-receipt"
+            aria-label="梦境通知命中回执"
+          >
+            <div class="notification-receipt-head">
+              <span>通知命中回执</span>
+              <strong>{{ dreamNotificationHandoffReceipt(dream).title }}</strong>
+            </div>
+            <div class="notification-receipt-lines">
+              <span
+                v-for="line in dreamNotificationHandoffReceipt(dream).lines"
+                :key="line"
+              >
+                {{ line }}
+              </span>
+            </div>
+            <div class="notification-receipt-boundary">
+              {{ dreamNotificationHandoffReceipt(dream).boundary }}
+            </div>
+          </div>
+
+          <div class="dream-freshness-receipt" aria-label="梦境时间回执">
+            <div class="freshness-receipt-head">
+              <span>时间回执</span>
+              <strong>{{ dreamFreshnessReceipt(dream).title }}</strong>
+            </div>
+            <div class="freshness-receipt-lines">
+              <span
+                v-for="line in dreamFreshnessReceipt(dream).lines"
+                :key="line"
+              >
+                {{ line }}
+              </span>
+            </div>
+            <div class="freshness-receipt-boundary">
+              {{ dreamFreshnessReceipt(dream).boundary }}
+            </div>
+          </div>
+
+          <div class="dream-triage-receipt" :class="dreamTriage(dream).tone">
+            <div class="triage-head">
+              <span>处理回执</span>
+              <strong>{{ dreamTriage(dream).title }}</strong>
+            </div>
+            <p>{{ dreamTriage(dream).summary }}</p>
+            <div class="triage-boundary">{{ dreamTriage(dream).boundary }}</div>
+          </div>
 
           <div class="dream-brief" v-if="!dream.expanded">
             <div v-if="dream.risks.length > 0" class="brief-block risk">
@@ -124,14 +234,57 @@
             <div class="review-note">
               这是生成式回放产出的低置信度联想；进入行动前先核对原始记忆或对应反思线程。
             </div>
+            <div
+              class="grounding-receipt"
+              :class="{ missing: !dream.grounding.available }"
+            >
+              <div class="grounding-title">证据回执</div>
+              <div class="grounding-body">{{ groundingSummary(dream) }}</div>
+              <div class="grounding-meta" v-if="groundingMeta(dream)">
+                {{ groundingMeta(dream) }}
+              </div>
+              <ul v-if="dream.grounding.snippets.length > 0">
+                <li
+                  v-for="snippet in visibleItems(dream.grounding.snippets)"
+                  :key="snippet"
+                >
+                  {{ snippet }}
+                </li>
+              </ul>
+              <div v-else class="grounding-empty">
+                旧梦境或无召回结果没有记录可核对片段；先进入反思线程确认。
+              </div>
+            </div>
             <div class="dream-review-actions">
-              <router-link
-                class="dream-review-topic-link"
-                :to="reflectionReviewRoute(dream)"
+              <div class="dream-review-command">
+                <router-link
+                  class="dream-review-topic-link"
+                  :to="reflectionReviewRoute(dream)"
+                >
+                  复核这个主题
+                </router-link>
+                <span>会带上当前梦境主题，方便定位对应反思线程。</span>
+              </div>
+              <div
+                class="dream-review-handoff-receipt"
+                aria-label="梦境复核交接回执"
               >
-                复核这个主题
-              </router-link>
-              <span>会带上当前梦境主题，方便定位对应反思线程。</span>
+                <div class="handoff-receipt-head">
+                  <span>复核交接回执</span>
+                  <strong>{{ dreamReviewHandoffReceipt(dream).title }}</strong>
+                </div>
+                <div class="handoff-receipt-lines">
+                  <span
+                    v-for="line in dreamReviewHandoffReceipt(dream).lines"
+                    :key="line"
+                  >
+                    {{ line }}
+                  </span>
+                </div>
+                <div class="handoff-receipt-boundary">
+                  {{ dreamReviewHandoffReceipt(dream).boundary }}
+                </div>
+              </div>
             </div>
             <div class="dream-markdown" v-html="renderMarkdown(dream.content)"></div>
           </div>
@@ -142,25 +295,63 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { getMemoryServiceClient } from '../../services/MemoryServiceClient';
 
 interface DreamItem {
   filename: string;
   title: string;
   date: string;
+  fileDate: string;
+  generatedDate: string;
   preview: string;
   content: string;
   insights: string[];
   risks: string[];
   relationships: string[];
+  grounding: DreamGroundingReceipt;
   expanded: boolean;
+}
+
+interface DreamGroundingReceipt {
+  available: boolean;
+  memoryCount: number | null;
+  resultTypes: string[];
+  hitChannels: string[];
+  checkedChannels: string[];
+  snippets: string[];
+}
+
+interface DreamReviewTriage {
+  tone: 'risk' | 'relation' | 'evidence' | 'insight' | 'quiet';
+  label: string;
+  title: string;
+  summary: string;
+  boundary: string;
+}
+
+interface DreamReviewHandoffReceipt {
+  title: string;
+  lines: string[];
+  boundary: string;
+}
+
+interface DreamFreshnessReceipt {
+  title: string;
+  lines: string[];
+  boundary: string;
 }
 
 const loading = ref(true);
 const loadError = ref('');
 const dreams = ref<DreamItem[]>([]);
 const skippedFiles = ref<string[]>([]);
+const route = useRoute();
+
+const requestedFilename = computed(() =>
+  normalizeDreamFilename(firstQueryValue(route.query.file)),
+);
 
 const totalInsights = computed(() =>
   dreams.value.reduce((count, dream) => count + dream.insights.length, 0),
@@ -171,9 +362,65 @@ const totalRisks = computed(() =>
 const totalRelationships = computed(() =>
   dreams.value.reduce((count, dream) => count + dream.relationships.length, 0),
 );
+const priorityReviewDreamCount = computed(
+  () => dreams.value.filter(isPriorityReviewDream).length,
+);
+const reviewReadyDreamCount = computed(
+  () => dreams.value.filter(isDreamReviewReady).length,
+);
+const ungroundedDreamCount = computed(
+  () => dreams.value.filter(needsGroundingReview).length,
+);
+const requestedFileLoaded = computed(
+  () =>
+    Boolean(requestedFilename.value) &&
+    dreams.value.some((dream) => dream.filename === requestedFilename.value),
+);
+const requestedFileMissing = computed(
+  () =>
+    Boolean(requestedFilename.value) &&
+    skippedFiles.value.includes(requestedFilename.value),
+);
+const dreamScopeReceiptTitle = computed(() => {
+  if (dreams.value.length === 0) {
+    return '当前没有可读取的梦境文件';
+  }
+  return `最近可读取的 ${dreams.value.length} 个梦境文件`;
+});
+const dreamScopeEvidenceLine = computed(
+  () =>
+    `证据状态：${reviewReadyDreamCount.value} 个可带证据复核，${ungroundedDreamCount.value} 个缺证据，${skippedFiles.value.length} 个读取失败。`,
+);
+const dreamScopeDeepLinkLine = computed(() => {
+  if (!requestedFilename.value) {
+    return '深链状态：未指定通知文件，按最近生成日期展示。';
+  }
+  if (requestedFileLoaded.value) {
+    return `深链状态：已额外载入通知文件 ${requestedFilename.value}。`;
+  }
+  if (requestedFileMissing.value) {
+    return `深链状态：通知文件 ${requestedFilename.value} 暂时无法读取。`;
+  }
+  return `深链状态：正在尝试读取通知文件 ${requestedFilename.value}。`;
+});
+const skippedFilesLabel = computed(() => {
+  const visible = skippedFiles.value.slice(0, 3);
+  const suffix =
+    skippedFiles.value.length > visible.length
+      ? ` 等 ${skippedFiles.value.length} 个`
+      : '';
+  return `${visible.join('、')}${suffix}`;
+});
 
 function extractDate(filename: string): string {
   const match = filename.match(/(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+function extractGeneratedDate(content: string): string {
+  const match = content.match(
+    /^_?\s*Generated:\s*(\d{4}-\d{2}-\d{2})(?:[T\s][^_\n]*)?_?\s*$/im,
+  );
   return match ? match[1] : '';
 }
 
@@ -182,6 +429,31 @@ function extractTitle(content: string, filename: string): string {
   if (headingMatch) return headingMatch[1].trim().replace(/^Dream:\s*/i, '');
   // Fallback: use filename without extension
   return filename.replace(/\.md$/, '').replace(/-/g, ' ');
+}
+
+function firstQueryValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : undefined;
+  }
+  return typeof value === 'string' ? value : undefined;
+}
+
+function normalizeDreamFilename(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  const filename = trimmed.startsWith('dreams/')
+    ? trimmed.slice('dreams/'.length)
+    : trimmed;
+  if (
+    !filename ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    filename.includes('..') ||
+    !filename.endsWith('.md')
+  ) {
+    return '';
+  }
+  return filename;
 }
 
 function escapeRegExp(text: string): string {
@@ -215,6 +487,262 @@ function extractListItems(content: string, heading: string): string[] {
     .filter((line) => line.startsWith('- '))
     .map((line) => cleanInlineMarkdown(line.slice(2)))
     .filter((line) => line.length > 0 && line.toLowerCase() !== 'none');
+}
+
+function extractReceiptValue(section: string, label: string): string {
+  const pattern = new RegExp(`^-\\s+${escapeRegExp(label)}:\\s*(.+)$`, 'im');
+  const match = pattern.exec(section);
+  return match ? cleanInlineMarkdown(match[1]) : '';
+}
+
+function splitReceiptList(value: string): string[] {
+  if (!value || value.toLowerCase() === 'none') return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function extractGroundingReceipt(content: string): DreamGroundingReceipt {
+  const section = extractSection(content, 'Grounding Receipt');
+  if (!section) {
+    return {
+      available: false,
+      memoryCount: null,
+      resultTypes: [],
+      hitChannels: [],
+      checkedChannels: [],
+      snippets: [],
+    };
+  }
+
+  const memoryCountValue = extractReceiptValue(section, 'Recalled memories');
+  const parsedMemoryCount = Number.parseInt(memoryCountValue, 10);
+
+  return {
+    available: true,
+    memoryCount: Number.isFinite(parsedMemoryCount) ? parsedMemoryCount : null,
+    resultTypes: splitReceiptList(
+      extractReceiptValue(section, 'Recall result types'),
+    ),
+    hitChannels: splitReceiptList(
+      extractReceiptValue(section, 'Recall hit channels'),
+    ),
+    checkedChannels: splitReceiptList(
+      extractReceiptValue(section, 'Recall checked channels'),
+    ),
+    snippets: extractListItems(content, 'Grounding Snippets'),
+  };
+}
+
+function formatList(items: string[]): string {
+  return items.length > 0 ? items.join(' / ') : '';
+}
+
+function groundingSummary(dream: DreamItem): string {
+  if (!dream.grounding.available) return '证据回执未记录';
+  if (dream.grounding.memoryCount === null) return '原始证据数量未记录';
+  return `原始证据 ${dream.grounding.memoryCount} 条`;
+}
+
+function groundingMeta(dream: DreamItem): string {
+  if (!dream.grounding.available) return '';
+  const parts = [];
+  const hitChannels = formatList(dream.grounding.hitChannels);
+  if (hitChannels) parts.push(`命中通道 ${hitChannels}`);
+  const resultTypes = formatList(dream.grounding.resultTypes);
+  if (resultTypes) parts.push(`结果类型 ${resultTypes}`);
+  const checkedChannels = formatList(dream.grounding.checkedChannels);
+  if (checkedChannels) parts.push(`检查通道 ${checkedChannels}`);
+  return parts.join('；');
+}
+
+function isDreamReviewReady(dream: DreamItem): boolean {
+  return dream.grounding.available && (dream.grounding.memoryCount ?? 0) > 0;
+}
+
+function needsGroundingReview(dream: DreamItem): boolean {
+  return !isDreamReviewReady(dream);
+}
+
+function dreamReadinessLabel(dream: DreamItem): string {
+  if (isDreamReviewReady(dream)) return '复核就绪';
+  if (dream.grounding.available) return '无召回证据';
+  return '缺证据回执';
+}
+
+function dreamReadinessClass(dream: DreamItem): string {
+  if (isDreamReviewReady(dream)) return 'ready';
+  if (dream.grounding.available) return 'empty';
+  return 'missing';
+}
+
+function dreamFreshnessLabel(dream: DreamItem): string {
+  if (dream.generatedDate) return `生成 ${dream.generatedDate}`;
+  if (dream.fileDate) return `文件日期 ${dream.fileDate}`;
+  return '生成日期未记录';
+}
+
+function dreamFreshnessReceipt(dream: DreamItem): DreamFreshnessReceipt {
+  const generated = dream.generatedDate || '未记录';
+  const fileDate = dream.fileDate || '未记录';
+  const boundary =
+    '本回执只说明时间依据；不会重跑 Dream Replay、更新 digest、确认内容、写用户画像或写回记忆。';
+
+  if (
+    dream.generatedDate &&
+    dream.fileDate &&
+    dream.generatedDate !== dream.fileDate
+  ) {
+    return {
+      title: '生成时间与文件名日期不一致',
+      lines: [
+        `生成日期：${generated}；文件名日期：${fileDate}。`,
+        '阅读口径：优先按 Markdown Generated 行理解生成时间，文件名只作为归档线索。',
+      ],
+      boundary,
+    };
+  }
+
+  if (dream.generatedDate) {
+    return {
+      title: '按生成时间阅读',
+      lines: [
+        `生成日期：${generated}；文件名日期：${fileDate}。`,
+        '阅读口径：这条梦境代表该生成周期的低置信回放，不代表当前状态已重新核对。',
+      ],
+      boundary,
+    };
+  }
+
+  if (dream.fileDate) {
+    return {
+      title: '按文件名日期阅读',
+      lines: [
+        `生成日期：${generated}；文件名日期：${fileDate}。`,
+        '阅读口径：Markdown 未记录 Generated 行，只能把文件名日期当作归档线索。',
+      ],
+      boundary,
+    };
+  }
+
+  return {
+    title: '生成日期未记录',
+    lines: [
+      `生成日期：${generated}；文件名日期：${fileDate}。`,
+      '阅读口径：这是一条无日期依据的历史 dream，进入复核前先核对原始证据。',
+    ],
+    boundary,
+  };
+}
+
+function isPriorityReviewDream(dream: DreamItem): boolean {
+  return (
+    isDreamReviewReady(dream) &&
+    (dream.risks.length > 0 || dream.relationships.length > 0)
+  );
+}
+
+function isRequestedDream(dream: DreamItem): boolean {
+  return Boolean(requestedFilename.value) && dream.filename === requestedFilename.value;
+}
+
+function dreamTriage(dream: DreamItem): DreamReviewTriage {
+  if (!isDreamReviewReady(dream)) {
+    return {
+      tone: 'evidence',
+      label: '先补证据',
+      title: '不要直接采用这条梦境',
+      summary:
+        '没有可核对原始片段，先在自我反思或搜索里补到证据，再判断洞察、风险或新关系。',
+      boundary:
+        '不会写用户画像、创建 Rehearsal、确认新关系、派发动作或外部通知。',
+    };
+  }
+
+  if (dream.risks.length > 0) {
+    return {
+      tone: 'risk',
+      label: '高优先复核',
+      title: '先核证风险',
+      summary: `${dream.risks.length} 条风险线索带有 ${groundingSummary(
+        dream,
+      )}；先打开反思线程核对原始片段和责任人。`,
+      boundary:
+        '这里只是风险线索，不会自动通知、派发任务、写外部系统或确认事实。',
+    };
+  }
+
+  if (dream.relationships.length > 0) {
+    return {
+      tone: 'relation',
+      label: '关系待确认',
+      title: '先核证新关系',
+      summary: `${dream.relationships.length} 条低置信新关系带有 ${groundingSummary(
+        dream,
+      )}；先核对双方实体、时间和上下文是否真实成立。`,
+      boundary:
+        '不会把 dream 关系升格为稳定图谱事实、画像事实或 Rehearsal。',
+    };
+  }
+
+  if (dream.insights.length > 0) {
+    return {
+      tone: 'insight',
+      label: '洞察可整理',
+      title: '整理为反思线索',
+      summary: `${dream.insights.length} 条洞察已带 ${groundingSummary(
+        dream,
+      )}；适合进入反思线程沉淀开放问题或后续观察点。`,
+      boundary: '不会自动改写记忆权重、创建行动项或替用户做结论。',
+    };
+  }
+
+  return {
+    tone: 'quiet',
+    label: '低优先浏览',
+    title: '只作背景回放',
+    summary: `已有 ${groundingSummary(
+      dream,
+    )}，但暂无风险、关系或洞察列表；先作为长期背景阅读。`,
+    boundary: '只读浏览，不会写入、发送、同步或触发外部动作。',
+  };
+}
+
+function dreamReviewHandoffReceipt(dream: DreamItem): DreamReviewHandoffReceipt {
+  const evidenceState = isDreamReviewReady(dream)
+    ? '可带证据复核'
+    : '先补原始证据';
+
+  return {
+    title: '只打开复核筛选',
+    lines: [
+      `目标：Reflection 以“${dream.title}”筛选，来源标记为 dream。`,
+      `来源：dreams/${dream.filename}；风险 ${dream.risks.length} 条，新关系 ${dream.relationships.length} 条。`,
+      `证据：${groundingSummary(dream)}；${evidenceState}。`,
+    ],
+    boundary:
+      '跳转只携带筛选条件，不确认 dream 结论，不新增记忆或画像，不创建 Rehearsal、通知、动作或外部写回。',
+  };
+}
+
+function dreamNotificationHandoffReceipt(
+  dream: DreamItem,
+): DreamReviewHandoffReceipt {
+  const evidenceState = isDreamReviewReady(dream)
+    ? '可带证据进入反思筛选'
+    : '缺少可核对证据，先补原始片段';
+
+  return {
+    title: '这条是通知指向的梦境',
+    lines: [
+      `来源：通知深链请求 dreams/${dream.filename}，页面已展开并置顶这条梦境。`,
+      `证据：${groundingSummary(dream)}；${evidenceState}。`,
+      `下一步：复核这个主题只会打开 Reflection 筛选，不会确认风险或新关系。`,
+    ],
+    boundary:
+      '本回执只说明打开来源和复核范围，不写用户画像、不创建 Rehearsal、不发送通知或外部写回。',
+  };
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -290,38 +818,58 @@ async function loadDreams() {
       return dateB.localeCompare(dateA);
     });
 
-    // Limit to 10 most recent
+    // Limit to 10 most recent, plus an explicit notification deep-link target.
+    const requested = requestedFilename.value;
     const recent = sorted.slice(0, 10);
+    const filesToLoad =
+      requested && !recent.includes(requested)
+        ? [requested, ...recent]
+        : recent;
 
     // Fetch content for each file
     const items: DreamItem[] = [];
-    const results = await Promise.allSettled(
-      recent.map(async (filename) => {
-        const content = await client.readUserFile('dreams', filename);
-        return { filename, content };
+    const results = await Promise.all(
+      filesToLoad.map(async (filename) => {
+        try {
+          const content = await client.readUserFile('dreams', filename);
+          return { filename, content };
+        } catch {
+          return { filename, content: null };
+        }
       }),
     );
 
     for (const result of results) {
-      if (result.status === 'fulfilled' && result.value.content !== null) {
-        const { filename, content } = result.value;
+      if (result.content !== null) {
+        const { filename, content } = result;
+        const fileDate = extractDate(filename);
+        const generatedDate = extractGeneratedDate(content!);
         const narrative = extractSection(content!, 'Narrative');
         items.push({
           filename,
           title: extractTitle(content!, filename),
-          date: extractDate(filename),
+          date: generatedDate || fileDate,
+          fileDate,
+          generatedDate,
           preview: truncate(narrative || content!, 300),
           content: content!,
           insights: extractListItems(content!, 'Insights'),
           risks: extractListItems(content!, 'Risks'),
           relationships: extractListItems(content!, 'Discovered Relationships'),
-          expanded: false,
+          grounding: extractGroundingReceipt(content!),
+          expanded: filename === requested,
         });
-      } else if (result.status === 'fulfilled') {
-        skippedFiles.value.push(result.value.filename);
       } else {
-        skippedFiles.value.push('unknown');
+        skippedFiles.value.push(result.filename);
       }
+    }
+
+    if (requested) {
+      items.sort((a, b) => {
+        if (a.filename === requested) return -1;
+        if (b.filename === requested) return 1;
+        return 0;
+      });
     }
 
     dreams.value = items;
@@ -334,6 +882,12 @@ async function loadDreams() {
 }
 
 onMounted(loadDreams);
+watch(
+  () => route.query.file,
+  () => {
+    void loadDreams();
+  },
+);
 </script>
 
 <style scoped>
@@ -422,9 +976,57 @@ onMounted(loadDreams);
   margin-bottom: 0.25rem;
 }
 
+.dream-scope-receipt {
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(20, 83, 45, 0.16), rgba(30, 41, 59, 0.56)),
+    rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  padding: 0.85rem 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.scope-receipt-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.scope-receipt-label {
+  color: #99f6e4;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.scope-receipt-main strong {
+  color: #e5e7eb;
+  font-size: 0.92rem;
+}
+
+.scope-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.8rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.scope-receipt-boundary {
+  margin-top: 0.6rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 0.55rem;
+  color: #fde68a;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .dream-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 0.75rem;
   margin-bottom: 1rem;
 }
@@ -456,6 +1058,18 @@ onMounted(loadDreams);
   color: #6ee7b7;
 }
 
+.overview-metric.priority strong {
+  color: #fca5a5;
+}
+
+.overview-metric.ready strong {
+  color: #a7f3d0;
+}
+
+.overview-metric.warning strong {
+  color: #fcd34d;
+}
+
 .partial-warning {
   border: 1px solid rgba(251, 191, 36, 0.26);
   border-radius: 8px;
@@ -464,6 +1078,23 @@ onMounted(loadDreams);
   padding: 0.75rem 0.9rem;
   margin-bottom: 1rem;
   font-size: 0.82rem;
+}
+
+.targeted-warning {
+  border-color: rgba(45, 212, 191, 0.3);
+  background: rgba(20, 83, 45, 0.14);
+  color: #ccfbf1;
+}
+
+.grounding-warning {
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  border-radius: 8px;
+  background: rgba(120, 53, 15, 0.12);
+  color: #fde68a;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .empty-state {
@@ -516,6 +1147,15 @@ onMounted(loadDreams);
   background: rgba(42, 42, 62, 0.95);
 }
 
+.dream-card.targeted {
+  border-color: rgba(45, 212, 191, 0.5);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.16);
+}
+
+.dream-card.targeted .dream-toggle {
+  background: rgba(20, 83, 45, 0.1);
+}
+
 .dream-toggle {
   width: 100%;
   border: 0;
@@ -551,6 +1191,16 @@ onMounted(loadDreams);
   color: #e0e0e0;
 }
 
+.dream-target-chip {
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 999px;
+  background: rgba(20, 83, 45, 0.18);
+  color: #99f6e4;
+  padding: 0.14rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
 .dream-badges {
   display: flex;
   flex-wrap: wrap;
@@ -570,6 +1220,60 @@ onMounted(loadDreams);
 
 .dream-source-row span:first-child {
   color: #cbd5e1;
+}
+
+.dream-grounding-chip {
+  color: #a7f3d0;
+}
+
+.dream-grounding-chip.missing {
+  color: #fcd34d;
+}
+
+.dream-readiness-chip {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  font-weight: 700;
+}
+
+.dream-readiness-chip.ready {
+  border-color: rgba(45, 212, 191, 0.22);
+  color: #a7f3d0;
+}
+
+.dream-readiness-chip.empty,
+.dream-readiness-chip.missing {
+  border-color: rgba(251, 191, 36, 0.24);
+  color: #fcd34d;
+}
+
+.dream-triage-chip {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  font-weight: 700;
+}
+
+.dream-triage-chip.risk {
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.dream-triage-chip.relation {
+  border-color: rgba(45, 212, 191, 0.26);
+  color: #99f6e4;
+}
+
+.dream-triage-chip.evidence {
+  border-color: rgba(251, 191, 36, 0.26);
+  color: #fde68a;
+}
+
+.dream-triage-chip.insight,
+.dream-triage-chip.quiet {
+  border-color: rgba(96, 165, 250, 0.22);
+  color: #bfdbfe;
 }
 
 .dream-badge {
@@ -620,6 +1324,149 @@ onMounted(loadDreams);
 
 .dream-brief {
   padding: 0 1.35rem 1.1rem;
+}
+
+.dream-triage-receipt {
+  margin: 0 1.35rem 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.34);
+  color: #cbd5e1;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.dream-notification-receipt {
+  margin: 0 1.35rem 0.9rem;
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 8px;
+  background: rgba(20, 83, 45, 0.14);
+  color: #cbd5e1;
+  padding: 0.72rem 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.notification-receipt-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+}
+
+.notification-receipt-head span {
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.notification-receipt-head strong {
+  color: #e5e7eb;
+}
+
+.notification-receipt-lines {
+  display: grid;
+  gap: 0.26rem;
+}
+
+.notification-receipt-lines span {
+  display: block;
+}
+
+.notification-receipt-boundary {
+  margin-top: 0.4rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 0.4rem;
+  color: #fde68a;
+}
+
+.dream-freshness-receipt {
+  margin: 0 1.35rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.28);
+  color: #cbd5e1;
+  padding: 0.68rem 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.freshness-receipt-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.freshness-receipt-head span {
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.freshness-receipt-head strong {
+  color: #e5e7eb;
+}
+
+.freshness-receipt-lines {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.freshness-receipt-lines span {
+  display: block;
+}
+
+.freshness-receipt-boundary {
+  margin-top: 0.38rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 0.38rem;
+  color: #94a3b8;
+}
+
+.dream-triage-receipt.risk {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.dream-triage-receipt.relation {
+  border-color: rgba(45, 212, 191, 0.22);
+  background: rgba(20, 83, 45, 0.13);
+}
+
+.dream-triage-receipt.evidence {
+  border-color: rgba(251, 191, 36, 0.24);
+  background: rgba(120, 53, 15, 0.12);
+}
+
+.triage-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.triage-head span {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.triage-head strong {
+  color: #e5e7eb;
+}
+
+.dream-triage-receipt p {
+  margin: 0;
+}
+
+.triage-boundary {
+  margin-top: 0.35rem;
+  color: #94a3b8;
 }
 
 .brief-block {
@@ -679,14 +1526,57 @@ onMounted(loadDreams);
   line-height: 1.5;
 }
 
+.grounding-receipt {
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 8px;
+  background: rgba(20, 83, 45, 0.12);
+  color: #ccfbf1;
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.grounding-receipt.missing {
+  border-color: rgba(251, 191, 36, 0.24);
+  background: rgba(120, 53, 15, 0.12);
+  color: #fde68a;
+}
+
+.grounding-title {
+  color: #e5e7eb;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.grounding-body {
+  font-weight: 700;
+}
+
+.grounding-meta,
+.grounding-empty {
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+
+.grounding-receipt ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1rem;
+  color: #cbd5e1;
+}
+
 .dream-review-actions {
+  margin-bottom: 0.9rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.dream-review-command {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.65rem;
-  margin-bottom: 0.9rem;
-  color: #94a3b8;
-  font-size: 0.8rem;
+  margin-bottom: 0.65rem;
 }
 
 .dream-review-topic-link {
@@ -703,6 +1593,46 @@ onMounted(loadDreams);
 .dream-review-topic-link:hover {
   border-color: rgba(45, 212, 191, 0.5);
   color: #ccfbf1;
+}
+
+.dream-review-handoff-receipt {
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.38);
+  color: #cbd5e1;
+  padding: 0.68rem 0.78rem;
+  line-height: 1.5;
+}
+
+.handoff-receipt-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+
+.handoff-receipt-head span {
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.handoff-receipt-head strong {
+  color: #e5e7eb;
+}
+
+.handoff-receipt-lines {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+}
+
+.handoff-receipt-boundary {
+  margin-top: 0.45rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 0.45rem;
+  color: #fde68a;
 }
 
 .dream-markdown {
@@ -789,6 +1719,10 @@ onMounted(loadDreams);
 
   .dream-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scope-receipt-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -1,6 +1,6 @@
 # Ask
 
-_最后更新: 2026-06-17_
+_最后更新: 2026-06-26_
 
 Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标不是简单搜索关键词，而是先判断用户到底在问哪个话题，再从消息、网页、会议、外部 AI 对话、实体图谱、时间线和外部查证动作里组织证据，最后给出带来源感的答案。
 
@@ -13,7 +13,7 @@ Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标
 3. 如果这个话题以前形成过“活答案”，把上次答案、证据缺口和可能变化条件拿出来作为提示，但不能把旧答案当事实。
 4. 再跑正式召回：vector、FTS、graph、time 四通道一起找证据。
 5. 把当前场景 anchor、高频互动记忆、旧证据 refs 和普通召回结果一起去重、排序、降权或前置。
-6. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；Search Result 的 Ask 答案区会展示查证/缺口回执，说明动作队列、外部证据和未确认边界。
+6. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；如果缺口是未来可能变化的事实，会进入 [Evidence Watch Contracts](./evidence_watch_contracts.md)，Ask response 返回 `evidenceWatch` 收据，用来说明复核状态、来源阻塞和重复动作合并边界。Search Result 的 Ask 答案区会先展示 `Ask 本轮状态`，再展示答案正文，随后用查证/缺口回执说明动作队列、外部证据和未确认边界。
 7. 生成答案后，异步观察这次 Ask 是否值得写入 observation、promote 成活答案 thread，或经过权威证据门控后更新活答案 version。
 
 这意味着 Ask 的回答仍然由“本次证据”支撑；活答案 prior 只是帮助系统少走弯路。
@@ -30,7 +30,11 @@ Ask 与 Context Recall 共用 `MemoryContextMatchService` 做短问句话题锁�
 
 Quick Ask 当前 RingCentral chat context 只是可选 hint；真实使用中用户可能只发送一句“BE 现在怎么样了？”，因此 memory service 必须能依赖近期高频、强互动、强锚点记忆先锁定话题。Ask 会从自然语言 context 里识别 `Current chat title:`、`Current page title:`、`Current conversation:`、`Group name:`、`Thread:` 等常见标签，把会话标题、页面标题和 issue key 作为当前场景锚点。客户端即使把 `Current URL:`、`Selected text:`、`Visible page text:` 放在同一行，服务端也会先切出真正的 title，避免把 URL 或选中文本拼进 topic label。锁定后的 topic frame 只负责补齐检索意图，最终事实仍必须来自 `messages_raw` / chunks / episodes 等原始证据。
 
-如果 `contextMatch` 返回 `ambiguous`，Ask 不会继续生成一个貌似确定的答案，也不会写活答案 observation/thread。返回文案会列出候选话题，并提示用户可以直接回复候选序号，或补上项目、群组、issue key；确认后才继续查证状态和证据。Quick Ask 会把这些候选渲染成按钮，点击候选等价于回复对应序号；界面和后续对话上下文会回显“选择话题：xxx”，避免用户回看时只看到裸数字。服务端也会读取上一轮 Ask context 里的候选列表和原始问题，把 `2` / `选 2` / `第二个` / `candidate 2` / `second one` 这类回复恢复成“原问题 + 已选话题”再召回；候选列表标题可以是中文 `候选话题：`，也可以是英文 `Candidate topics:` / `Topic candidates:`。如果调用方没有带上一轮 context，则仍需要用户补上项目、群组或 issue key。流式 Ask 也走同一边界：`/ask/stream` 会先发“需要先确认你指的是哪个话题...”状态，然后直接返回候选澄清，不再发“正在生成回答...”或 answer delta。
+如果 `contextMatch` 返回 `ambiguous`，Ask 不会继续生成一个貌似确定的答案，也不会写活答案 observation/thread。返回文案会列出候选话题，并提示用户可以直接回复候选序号，或补上项目、群组、issue key；确认后才继续查证状态和证据。Quick Ask 和 Memory Exploring 的 Search Result Ask 答案区都会把这些候选渲染成按钮；Search Result 会在按钮前展示 `候选选择回执`，说明选择候选只会把短问句绑定到对应话题后继续 Ask，不会确认事实、写活答案或创建外部查证动作。界面和后续对话上下文会回显“选择话题：xxx”，避免用户回看时只看到裸数字。服务端也会读取上一轮 Ask context 里的候选列表和原始问题，把 `2` / `选 2` / `第二个` / `candidate 2` / `second one` 这类回复恢复成“原问题 + 已选话题”再召回；候选列表标题可以是中文 `候选话题：`，也可以是英文 `Candidate topics:` / `Topic candidates:`。如果调用方没有带上一轮 context，则仍需要用户补上项目、群组或 issue key。流式 Ask 也走同一边界：`/ask/stream` 会先发“需要先确认你指的是哪个话题...”状态，然后直接返回候选澄清，不再发“正在生成回答...”或 answer delta。
+
+候选确认后的下一轮 Search Result 会在答案正文前显示 `承接候选回执`：它列出原始短问句、用户选择的候选序号/话题、是否带上上一轮候选上下文，并再次说明这只是补检索锚点，不确认事实、不写活答案、不创建外部查证动作。这样用户连续追问时能看懂“这轮答案继承了什么”，而不是只看到一个裸数字或被拼接过的查询词。
+
+候选澄清只用于真正缺锚点的短指代/短状态问题。完整主题问句如果已经明确写出 subject，例如“Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？”，其中的“这个结论”只指代同一句里的 Cursor 结论，不应触发多话题候选澄清；Ask 会继续进入普通召回或 topic lock，并用返回 evidence 回答。
 
 ## 短问句与记忆话题锁定
 
@@ -148,6 +152,8 @@ flowchart TD
 
 `/ask` 保持现有 UI 行为，不新增页面、不弹卡、不改变用户看到的 Ask 展示。底层增强主要通过召回提示、证据锚定和异步活答案观察生效。
 
+Search Result 的 Ask 答案区会把 `resolutionState`、`answerMemory.receipt`、`answerMemory.authority`、`followUpActions`、`externalEvidence` 和 `missingInfo` 合并成第一行 `Ask 本轮状态`。这行在答案正文之前出现，用来先说明本轮是完整、部分、证据不足还是已转待查，当前证据和旧 prior 各有多少，以及这次展示不会自动确认结论、代表用户发消息、执行外部写入，或把缺口写成长期事实。如果命中过往活答案但本轮没有当前证据，状态栏会先显示旧答案未复核，明确旧 prior 只作召回提示，不确认当前事实、不写新版本，也不代表用户执行外部动作。下面的活答案、范围、查证/缺口回执仍保留，用于看更细的证据门控和后续动作状态。
+
 Ask response 会带可选诊断字段 `answerMemory`，用于 eval 和排障：
 
 ```ts
@@ -186,15 +192,38 @@ answerMemory?: {
 }
 ```
 
+当本轮问题属于“事实可能变化 / 需要未来复核 / 来源暂不可读”时，Ask response 还会带可选 `evidenceWatch`：
+
+```ts
+evidenceWatch?: {
+  contractId: string;
+  state: 'active' | 'quiet_no_change' | 'due' | 'authority_changed' | 'source_blocked' | 'paused' | 'archived';
+  label: string;
+  detail: string;
+  subjectKey: string;
+  lastCheckedAt?: number;
+  nextCheckAt?: number;
+  confirmRequestId?: string;
+  duplicateSuppressedCount: number;
+  runId?: string;
+  created?: boolean;
+}
+```
+
+这个字段只表示 Personal AI 已建立或命中证据守望契约，并记录本轮是否复用/抑制了重复查证动作；它不会自动确认事实、代表用户发消息、执行外部写入，或把旧答案当成当前事实。详细 contract / run receipt 见 [Evidence Watch Contracts](./evidence_watch_contracts.md)。
+
 客户端可以忽略这个字段。`contextMatch.ambiguous` 时会返回 `answerMemory.state = 'skipped'`、`skipReason = 'context_ambiguous'` 和“等待话题确认”回执，用于说明这轮 Ask 是刻意等待澄清，不是召回失败，也不会写活答案。`/ask/stream` 在真正生成 `answer_done` 后同样异步 observe；如果先进入澄清状态，则不会触发 observe。
 
 当 `/ask` 返回 `followUpActions`、`externalEvidence`、`missingInfo` 或 `resolutionState = partial / insufficient / deferred` 时，Search Result 的 Ask 答案区会显示 `Ask 查证回执` 或 `Ask 缺口回执`。这个回执只解释本轮是否留下查证动作、队列状态、外部证据数和缺口数；不会把队列中动作说成已经确认，也不会暗示 Personal AI 已代表用户发消息、执行外部写入、确认结论或把缺口写成长期事实。
+
+如果 LLM 生成超时，`/ask` 会退回确定性证据摘要，但只允许与问题关键锚点有最低交集的 evidence 进入摘要和 response.evidence。像“巴黎航班几点起飞/登机口”这类库中无事实的问题，即使宽召回找到了“我下午会议有点多”这样的时间闲聊，也会返回 `resolutionState = insufficient`、`evidence = []` 和“本地记忆没有检索到足够证据”，不会把无关候选包装成证据。
 
 ## 业内参考与产品取舍
 
 - [ChatGPT Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 和 [OpenAI memory controls](https://openai.com/index/memory-and-new-controls-for-chatgpt/) 强调个人上下文要可控、可删除、可关闭，且 Memory Sources 会解释哪些记忆影响了回答；Ask 因此只把活答案 prior 当召回提示，并用 receipt 说明旧答案不是当前事实。
 - [OpenAI Dreaming memory update](https://openai.com/index/chatgpt-memory-dreaming/) 和 [Claude Memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 都把“可见 summary / sources / project boundaries / past chat citations”作为长期记忆的产品边界；Ask 的选择是只在回答旁展示活答案回执，不新增管理页面。
 - [Raycast Quick AI / AI Chat](https://manual.raycast.com/ai/chat) 把 one-off quick ask、follow-up 和完整 chat handoff 分开；Ask 也保留轻量入口，不在歧义时弹出新管理面板，而是让用户用最短回复补锚点。
+- 2026-06-26 检查补充：Claude chat search 会把过去聊天检索表现为 tool call，OpenAI Memory Sources 让用户看到影响个性化回答的来源，Raycast Quick AI 则把短问、follow-up 和转入完整 chat 做清楚分层。Personal AI 的 Ask 不需要新增会话管理页，但在候选确认后必须显示本轮承接了哪个上一轮短问句和候选锚点。
 - Microsoft 的 [Few-Shot Generative Conversational Query Rewriting](https://www.microsoft.com/en-us/research/publication/few-shot-generative-conversational-query-rewriting/) 和 Apple 的 [Question Rewriting](https://machinelearning.apple.com/research/question-rewriting) 都指出短问句需要先转成上下文完整的检索 query。Personal AI 的实现选择不是直接让 LLM 改写，而是先用 `MemoryContextMatchService` 锁 topic，再把 aliases、role terms、source anchors 注入召回。
 - [CONQRR](https://arxiv.org/abs/2112.08558) 把 conversational question 改写成 standalone query 来适配现有检索器；Ask 的数字澄清承接也是同一思路：不要让 `2` 进入检索，而是先恢复成带 topic 的可检索问题。
 - [QReCC](https://arxiv.org/abs/2010.04898) 这类 conversational QA 数据集提醒：上下文补全能提升检索，但错误补全会把答案带偏。因此 Ask 对强锚点、低信号网页壳、角色词和歧义候选都要显式打分；不够确定时返回澄清，而不是猜。
@@ -209,10 +238,13 @@ Ask 相关改动应优先覆盖这些场景：
 - 第二次同 topic 问“AI VBG 的 BE 部分完成情况如何？”：promote thread，返回 `answerMemory.promoted`。
 - 第三次再问：prior 命中；如果只是同一组当前证据下的同义改写，应返回 `answerMemory.priorHit` + `authority.decision = same_meaning_no_change`，不新增 version。无论是 `priorHit` 还是 `updated`，recall 仍执行，答案必须包含最新 evidence，不只复述旧答案。
 - 如果同一组当前证据下答案 stance 翻转，例如从“还没有 ready”变成“已经 ready”，应返回 `authority.decision = wait_for_authority_source`，旧长期答案保持不变；只有出现新的 authority evidence 才返回 `updated` 并刷新 version。
-- Search Result Ask 答案区应展示 `answerMemory.receipt` 和 `answerMemory.authority`，能看出本轮当前证据数、旧证据数、查证动作数、权威证据门控和是否未写新版本；没有当前证据时应说明“活答案未复核”。
+- Search Result Ask 答案区应展示 `answerMemory.receipt` 和 `answerMemory.authority`，能看出本轮当前证据数、旧证据数、查证动作数、权威证据门控和是否未写新版本；没有当前证据时应在第一行状态栏和活答案回执里说明“旧答案未复核 / 活答案未复核”。
+- Search Result Ask 答案区应先展示 `Ask 本轮状态`，再展示答案正文；当状态是 partial / insufficient / deferred、存在查证动作、缺口或仅辅助证据时，第一行必须说明回答只按本轮证据和查证状态展示，不会自动确认结论、代表用户发消息、执行外部写入或把缺口写成长期事实。
 - Search Result Ask 答案区应展示 `Ask 查证回执` / `Ask 缺口回执`，能看出本轮是否创建/执行查证动作、是否仍有缺口、外部证据数量，以及这些状态不会自动确认结论或代表用户发消息。
-- `contextMatch.ambiguous`：返回候选澄清，不写 observation/thread；`/ask/stream` 不能先显示“正在生成回答”或发 answer delta。
+- `contextMatch.ambiguous`：返回候选澄清，不写 observation/thread；Search Result Ask 答案区要在候选按钮前显示 `候选选择回执`，点击后发起带上轮 `User:` / `Assistant:` 候选列表 context 的第二次 Ask；`/ask/stream` 不能先显示“正在生成回答”或发 answer delta。
+- 明确主题问句不应被 `contextMatch.ambiguous` 截断：`Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？` 应直接召回 Cursor 成本 evidence，而不是要求用户在 AI Tools / AI Tooling SWAT / Cursor 之间再选一次。
 - 候选澄清承接：上一轮 context 只要保留中文或英文候选列表，用户回复 `2`、`candidate 2` 或 `second one` 都应恢复成“原问题 + 已选话题”，而不是把裸数字当新问题。
+- LLM 超时 fallback 不得展示无关证据：不存在的巴黎航班 case 应返回 evidence 空列表和证据不足，而不是引用“下午会议”这类只命中弱中文 bigram 的噪声。
 - 同一活答案 thread 的外部查证和 confirm request 应该去重，避免重复任务。
 
 当前实现落点：
@@ -225,6 +257,7 @@ Ask 相关改动应优先覆盖这些场景：
 
 ```bash
 npm --prefix memory-service test -- --run src/__tests__/answerMemoryService.test.ts src/__tests__/api-ask.test.ts
+node tools/verify-ask-clarification-e2e.mjs
 npm run eval:run -- --suite ask-context-gap --no-repair
 npm run eval:run -- --suite answer-memory-tracker --no-repair
 ```

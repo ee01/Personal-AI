@@ -185,8 +185,8 @@ export class ScheduledMessageService {
             
             // 如果有更新，写回 Sheet
             if (hasUpdates) {
-              const row = await this.messageToRow(message);
-              await this.updateRow(i + 1, row);
+              const row = await this.messageToRow(message, headers);
+              await this.updateRow(i + 1, row, headers);
             }
             
             messages.push(message);
@@ -281,7 +281,8 @@ export class ScheduledMessageService {
     message.Next_Exec = this.calculateNextExecution(message);
     
     // 添加到 Sheet
-    const row = await this.messageToRow(message);
+    const liveHeaders = await this.getHeaders({ forceRefresh: true });
+    const row = await this.messageToRow(message, liveHeaders);
     await this.appendRow(row);
     
     return message;
@@ -333,8 +334,9 @@ export class ScheduledMessageService {
     }
     
     // 更新到 Sheet（行号 = 索引 + 2，因为有表头且从1开始）
-    const row = await this.messageToRow(updatedMessage);
-    await this.updateRow(index + 2, row);
+    const liveHeaders = await this.getHeaders({ forceRefresh: true });
+    const row = await this.messageToRow(updatedMessage, liveHeaders);
+    await this.updateRow(index + 2, row, liveHeaders);
     
     return updatedMessage;
   }
@@ -430,8 +432,8 @@ export class ScheduledMessageService {
   /**
    * 获取 Sheet 的 Header（带缓存）
    */
-  private async getHeaders(): Promise<string[]> {
-    if (this.headerCache) {
+  private async getHeaders(options: { forceRefresh?: boolean } = {}): Promise<string[]> {
+    if (!options.forceRefresh && this.headerCache) {
       return this.headerCache;
     }
     
@@ -528,12 +530,12 @@ export class ScheduledMessageService {
   /**
    * 将消息对象转换为行数据（根据 header 顺序动态生成）
    */
-  private async messageToRow(message: ScheduledMessage): Promise<any[]> {
-    const headers = await this.getHeaders();
+  private async messageToRow(message: ScheduledMessage, headers?: string[]): Promise<any[]> {
+    const resolvedHeaders = headers || await this.getHeaders();
     const row: any[] = [];
     
     // 根据 header 顺序构建行数据
-    for (const header of headers) {
+    for (const header of resolvedHeaders) {
       if (NON_PERSISTED_OUTREACH_FIELDS.has(header)) {
         row.push('');
         continue;
@@ -587,15 +589,15 @@ export class ScheduledMessageService {
   /**
    * 更新行（根据 header 数量动态确定列范围）
    */
-  private async updateRow(rowIndex: number, row: any[]): Promise<void> {
+  private async updateRow(rowIndex: number, row: any[], headers?: string[]): Promise<void> {
     if (!this.config) {
       throw new Error('未找到配置');
     }
     
     await this.withTokenRetry(async () => {
       // 获取 header 以确定列数
-      const headers = await this.getHeaders();
-      const columnCount = headers.length;
+      const resolvedHeaders = headers || await this.getHeaders({ forceRefresh: true });
+      const columnCount = resolvedHeaders.length;
       
       // 将列数转换为字母（A, B, C, ... Z, AA, AB, ...）
       const endColumn = this.numberToColumn(columnCount);

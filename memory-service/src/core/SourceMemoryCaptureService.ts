@@ -67,6 +67,29 @@ export interface SourceMemoryCapturePolicyReceipt {
   nextStep: string;
 }
 
+export interface SourceMemoryCaptureWriteReceipt {
+  state: 'saved_with_recall_signal' | 'saved_without_recall_signal' | 'dismissed_no_recall';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+}
+
+export interface SourceMemoryCaptureActionReceipt {
+  state:
+    | 'saved'
+    | 'resaved'
+    | 'duplicate_no_change'
+    | 'duplicate_note_updated'
+    | 'note_updated'
+    | 'dismissed';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+  occurredAt: number;
+}
+
 export interface SourceMemoryCreateInput extends SourceMemoryCandidateInput {
   captureMode?: SourceMemoryCaptureMode;
   captureReason?: string;
@@ -90,6 +113,8 @@ export interface SourceMemoryCapsule {
   contentPreview: string;
   messageId?: string;
   metadata?: Record<string, unknown>;
+  writeReceipt: SourceMemoryCaptureWriteReceipt;
+  actionReceipt?: SourceMemoryCaptureActionReceipt;
   createdAt: number;
   updatedAt: number;
   savedAt?: number;
@@ -173,6 +198,54 @@ interface SourceMemoryTriggerRow {
   default_behavior: string;
 }
 
+interface SourceMemoryActionEventRow {
+  event_type: string;
+  event_strength: string;
+  metadata_json: string | null;
+  created_at: number;
+}
+
+type SourceMemoryDistillationStatus = 'ready' | 'partial' | 'blocked';
+
+interface SourceMemoryDistillationReceipt {
+  status: SourceMemoryDistillationStatus;
+  schemaVersion: 1;
+  oneLineCue: string;
+  compactMemo: string;
+  policyReceipt: {
+    state: SourceMemoryDistillationStatus;
+    label: string;
+    detail: string;
+    evidence: string[];
+    nextStep: string;
+  };
+  sourceReliability: {
+    level: string;
+    reason: string;
+  };
+  downstreamUse: {
+    allowed: string[];
+    blocked: string[];
+  };
+  generatedAt: number;
+  sourceAsOf: number;
+  inputHash: string;
+  evidenceAnchorIds: string[];
+  takeawayCount: number;
+  triggerCount: number;
+}
+
+interface SourceMemoryAnchorForDistillation {
+  id: string;
+  quote_or_preview: string;
+}
+
+interface SourceMemoryLinkCandidate {
+  targetType: string;
+  targetId: string;
+  confidence: number;
+}
+
 export class SourceMemoryCaptureValidationError extends Error {
   constructor(
     message: string,
@@ -200,6 +273,9 @@ function getCaptureModeMessageImportance(captureMode: SourceMemoryCaptureMode): 
 }
 const SENSITIVE_URL_PATTERN =
   /(?:^|[/?#._-])(login|sign[-_]?in|auth|oauth|password|reset[-_]?password|checkout|payment|billing|mfa|2fa|verification|verify|otp)(?:$|[/?#._-])/i;
+const SENSITIVE_URL_PARAM_PATTERN =
+  /^(?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|oauth[_-]?token|token|session(?:id|[_-]?id)?|sid|jwt|password|passcode|client[_-]?secret|api[_-]?key|apikey|secret|signature|sig|x[_-]?amz[_-]?(?:signature|credential)|x[_-]?goog[_-]?(?:signature|credential)|awsaccesskeyid)$/i;
+const OAUTH_CODE_CONTEXT_PATTERN = /(?:oauth|auth|login|sign[-_]?in|callback)/i;
 const LOW_INFORMATION_PATTERN =
   /^(ok|yes|no|thanks|thank you|sure|好的|可以|收到|谢谢|测试|test|hello|hi)[.!。！\s]*$/i;
 const SENTENCE_SPLIT_PATTERN = /(?<=[.!?。！？])\s+/;
@@ -212,9 +288,10 @@ export class SourceMemoryCaptureService {
 
   scoreCandidate(input: SourceMemoryCandidateInput): SourceMemoryCandidateResult {
     const text = this.getSignalText(input);
+    const rawSourceUrl = normalizeText(input.sourceUrl);
     const sourceUrl = normalizeUrl(input.sourceUrl);
     const sourceTitle = normalizeText(input.sourceTitle).slice(0, 240);
-    const blockedReason = this.getBlockedReason(text, sourceUrl);
+    const blockedReason = this.getBlockedReason(text, sourceUrl, rawSourceUrl);
 
     if (blockedReason) {
       return {
@@ -383,6 +460,7 @@ export class SourceMemoryCaptureService {
       candidateReasons: candidate.reasons,
       captureMode,
       interactions: input.interactions ?? {},
+      entityHints: normalizeEntityHints(input.entityHints),
       sourceHost,
       sourceKind,
     };
@@ -540,6 +618,7 @@ export class SourceMemoryCaptureService {
           });
         }
       }
+      this.distillCapsule(existing.id, 'duplicate_save');
       return { ...this.getCapsule(existing.id), duplicate: true };
     }
 
@@ -660,6 +739,7 @@ export class SourceMemoryCaptureService {
     });
 
     transaction();
+    this.distillCapsule(capsuleId, 'post_save');
     this.writeMarkdownSnapshot(capsuleId, fullContent, ts);
 
     return this.getCapsule(capsuleId);
@@ -735,6 +815,7 @@ export class SourceMemoryCaptureService {
     });
 
     transaction();
+    this.distillCapsule(id, 'note_updated');
     this.writeMarkdownSnapshot(id, fullContent, ts);
     return this.getCapsule(id);
   }
@@ -744,6 +825,9 @@ export class SourceMemoryCaptureService {
     const existing = this.findCapsule(id);
     if (!existing) {
       throw new SourceMemoryCaptureValidationError('Source memory capsule not found.', 404);
+    }
+    if (existing.status === 'dismissed') {
+      return this.getCapsule(id);
     }
 
     const transaction = this.db.transaction(() => {
@@ -799,6 +883,8 @@ export class SourceMemoryCaptureService {
       row.status === 'saved' && this.hasLinkedMemorySignal(row.message_id)
         ? row.message_id ?? undefined
         : undefined;
+    const linkedSignalActive = Boolean(linkedMessageId);
+    const actionEvent = this.getLatestActionEvent(id);
 
     return {
       id: row.id,
@@ -815,6 +901,20 @@ export class SourceMemoryCaptureService {
       contentPreview: row.content_preview ?? '',
       messageId: linkedMessageId,
       metadata: parseObject(row.metadata_json ?? '{}'),
+      writeReceipt: buildWriteReceipt({
+        sourceKind: row.source_kind,
+        captureMode: row.capture_mode,
+        scope: row.scope,
+        status: row.status,
+        linkedSignalActive,
+      }),
+      actionReceipt: actionEvent
+        ? buildActionReceipt(actionEvent, {
+            sourceKind: row.source_kind,
+            captureMode: row.capture_mode,
+            scope: row.scope,
+          })
+        : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       savedAt: row.saved_at ?? undefined,
@@ -843,6 +943,167 @@ export class SourceMemoryCaptureService {
         defaultBehavior: trigger.default_behavior,
       })),
     };
+  }
+
+  distillCapsule(id: string, reason = 'manual'): SourceMemoryCapsule {
+    const row = this.findCapsule(id);
+    if (!row) {
+      throw new SourceMemoryCaptureValidationError('Source memory capsule not found.', 404);
+    }
+    if (row.status !== 'saved') {
+      return this.getCapsule(id);
+    }
+
+    const metadata = parseObject(row.metadata_json ?? '{}');
+    const evidenceText = this.getEvidenceTextForCapsule(row);
+    const anchors = this.db
+      .prepare(
+        `SELECT id, quote_or_preview
+         FROM source_memory_anchors
+         WHERE capsule_id = ?
+         ORDER BY created_at ASC`,
+      )
+      .all(id) as SourceMemoryAnchorForDistillation[];
+    const takeaways = this.db
+      .prepare(
+        `SELECT id, kind, title, body, evidence_anchor_ids_json, confidence, status
+         FROM source_memory_takeaways
+         WHERE capsule_id = ?
+         ORDER BY created_at ASC`,
+      )
+      .all(id) as SourceMemoryTakeawayRow[];
+    const triggers = this.db
+      .prepare(
+        `SELECT id, trigger_kind, description, matcher_json, default_behavior
+         FROM source_memory_triggers
+         WHERE capsule_id = ?
+         ORDER BY created_at ASC`,
+      )
+      .all(id) as SourceMemoryTriggerRow[];
+    const entityHints = normalizeEntityHints(readEntityHints(metadata));
+    const inputHash = contentHash(
+      [
+        row.id,
+        row.source_kind,
+        row.source_url ?? '',
+        row.source_title,
+        row.capture_reason,
+        row.summary ?? '',
+        row.content_preview ?? '',
+        evidenceText,
+        JSON.stringify(entityHints),
+      ].join('\n'),
+    );
+    const previousDistillation = asRecord(metadata.distillation);
+    if (
+      previousDistillation.inputHash === inputHash &&
+      typeof previousDistillation.status === 'string'
+    ) {
+      return this.getCapsule(id);
+    }
+
+    const ts = now();
+    const distillation = buildDistillationReceipt({
+      row,
+      metadata,
+      evidenceText,
+      anchors,
+      takeaways,
+      triggerCount: triggers.length,
+      entityHints,
+      inputHash,
+      generatedAt: ts,
+    });
+    const nextMetadata = {
+      ...metadata,
+      distillation,
+    };
+    const distilledLinks = buildDistillationLinks(row, entityHints);
+    const transaction = this.db.transaction(() => {
+      this.insertEvent(id, 'distillation_started', 'low', row.source_url, {
+        reason,
+        schemaVersion: distillation.schemaVersion,
+        inputHash,
+      });
+
+      this.db
+        .prepare(
+          `UPDATE source_memory_capsules
+           SET metadata_json = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(nextMetadata), ts, id);
+
+      this.db
+        .prepare(
+          `UPDATE source_memory_takeaways
+           SET status = ?
+           WHERE capsule_id = ?`,
+        )
+        .run(distillation.status, id);
+
+      const updateTrigger = this.db.prepare(
+        `UPDATE source_memory_triggers
+         SET matcher_json = ?,
+             default_behavior = ?
+         WHERE id = ?`,
+      );
+      for (const trigger of triggers) {
+        updateTrigger.run(
+          JSON.stringify(
+            buildDistilledTriggerMatcher(
+              parseObject(trigger.matcher_json),
+              row,
+              distillation,
+              entityHints,
+            ),
+          ),
+          distillation.status === 'ready' ? trigger.default_behavior : 'needs_review',
+          trigger.id,
+        );
+      }
+
+      this.db
+        .prepare(
+          `DELETE FROM source_memory_links
+           WHERE capsule_id = ? AND relation = 'distilled_anchor'`,
+        )
+        .run(id);
+      const insertLink = this.db.prepare(
+        `INSERT INTO source_memory_links (
+           id, capsule_id, target_type, target_id, relation, confidence, created_at
+         ) VALUES (?, ?, ?, ?, 'distilled_anchor', ?, ?)`,
+      );
+      for (const link of distilledLinks) {
+        insertLink.run(
+          uuidv4(),
+          id,
+          link.targetType,
+          link.targetId,
+          link.confidence,
+          ts,
+        );
+      }
+
+      this.insertEvent(
+        id,
+        `distillation_${distillation.status}`,
+        distillation.status === 'ready' ? 'medium' : 'low',
+        row.source_url,
+        {
+          reason,
+          schemaVersion: distillation.schemaVersion,
+          inputHash,
+          takeawayCount: distillation.takeawayCount,
+          triggerCount: distillation.triggerCount,
+          linkCount: distilledLinks.length,
+        },
+      );
+    });
+
+    transaction();
+    return this.getCapsule(id);
   }
 
   private insertMessageAndChunks(input: {
@@ -977,6 +1238,34 @@ export class SourceMemoryCaptureService {
     return Boolean(row?.present);
   }
 
+  private getLatestActionEvent(capsuleId: string): SourceMemoryActionEventRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT event_type, event_strength, metadata_json, created_at
+         FROM source_memory_events
+         WHERE capsule_id = ?
+           AND event_type NOT LIKE 'distillation_%'
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1`,
+      )
+      .get(capsuleId) as SourceMemoryActionEventRow | undefined;
+  }
+
+  private getEvidenceTextForCapsule(row: SourceMemoryRow): string {
+    const existingMessage = row.message_id
+      ? (this.db
+          .prepare(`SELECT content FROM messages_raw WHERE id = ?`)
+          .get(row.message_id) as { content: string } | undefined)
+      : undefined;
+    return clipText(
+      extractStoredEvidenceText(existingMessage?.content) ||
+        row.content_preview ||
+        row.summary ||
+        row.source_title,
+      MAX_CAPTURE_TEXT_CHARS,
+    );
+  }
+
   private insertEvent(
     capsuleId: string | null,
     eventType: string,
@@ -1028,9 +1317,16 @@ export class SourceMemoryCaptureService {
     );
   }
 
-  private getBlockedReason(text: string, sourceUrl?: string): string | undefined {
+  private getBlockedReason(
+    text: string,
+    sourceUrl?: string,
+    rawSourceUrl?: string,
+  ): string | undefined {
     if (sourceUrl && SENSITIVE_URL_PATTERN.test(sourceUrl)) {
       return 'Sensitive URL is not eligible for Memory Capture.';
+    }
+    if (isCredentialBearingSourceUrl(rawSourceUrl || sourceUrl)) {
+      return 'Sensitive source URL carries credentials or signed-access parameters and is not eligible for Memory Capture.';
     }
     if (SECRET_PATTERN.test(text)) {
       return 'Selected text appears to contain secrets or credentials.';
@@ -1158,6 +1454,233 @@ function buildTriggers(
   return triggers;
 }
 
+function buildDistillationReceipt(input: {
+  row: SourceMemoryRow;
+  metadata: Record<string, unknown>;
+  evidenceText: string;
+  anchors: SourceMemoryAnchorForDistillation[];
+  takeaways: SourceMemoryTakeawayRow[];
+  triggerCount: number;
+  entityHints: Array<{ kind: string; value: string }>;
+  inputHash: string;
+  generatedAt: number;
+}): SourceMemoryDistillationReceipt {
+  const evidenceAnchorIds = input.anchors.map((anchor) => anchor.id);
+  const hasEvidence =
+    hasEnoughSignal(input.evidenceText) ||
+    input.anchors.some((anchor) => hasEnoughSignal(anchor.quote_or_preview));
+  const status: SourceMemoryDistillationStatus = !hasEvidence
+    ? 'blocked'
+    : input.row.privacy_level === 'needs_review' || input.takeaways.length === 0
+      ? 'partial'
+      : 'ready';
+  const summary =
+    normalizeText(input.row.summary) ||
+    summarizeText(input.evidenceText, input.row.source_title);
+  const oneLineCue = clipText(
+    `已保存资料 · ${input.row.source_title}：${summary}`,
+    220,
+  );
+  const compactMemo = buildDistillationCompactMemo(
+    input.row,
+    input.evidenceText,
+    input.takeaways,
+  );
+
+  return {
+    status,
+    schemaVersion: 1,
+    oneLineCue,
+    compactMemo,
+    policyReceipt: buildDistillationPolicyReceipt(status, {
+      anchorCount: evidenceAnchorIds.length,
+      takeawayCount: input.takeaways.length,
+      triggerCount: input.triggerCount,
+      linkCount: buildDistillationLinks(input.row, input.entityHints).length,
+      privacyLevel: input.row.privacy_level,
+    }),
+    sourceReliability: buildDistillationSourceReliability(
+      input.row,
+      input.metadata,
+    ),
+    downstreamUse: {
+      allowed: [
+        'source_memory_detail',
+        'context_recall_source_card',
+        'reflection_seed',
+        'dream_seed',
+      ],
+      blocked: [
+        'auto_profile_write',
+        'auto_task_creation',
+        'external_write_or_sync',
+      ],
+    },
+    generatedAt: input.generatedAt,
+    sourceAsOf: input.row.updated_at || input.row.saved_at || input.generatedAt,
+    inputHash: input.inputHash,
+    evidenceAnchorIds,
+    takeawayCount: input.takeaways.length,
+    triggerCount: input.triggerCount,
+  };
+}
+
+function buildDistillationCompactMemo(
+  row: SourceMemoryRow,
+  evidenceText: string,
+  takeaways: SourceMemoryTakeawayRow[],
+): string {
+  const lines = [
+    `摘要：${normalizeText(row.summary) || summarizeText(evidenceText, row.source_title)}`,
+  ];
+  for (const takeaway of takeaways.slice(0, 3)) {
+    lines.push(`- ${clipText(takeaway.body || takeaway.title, 140)}`);
+  }
+  if (takeaways.length === 0) {
+    lines.push(`- ${clipText(evidenceText || row.content_preview || row.source_title, 140)}`);
+  }
+  return clipText(lines.join('\n'), 700);
+}
+
+function buildDistillationPolicyReceipt(
+  status: SourceMemoryDistillationStatus,
+  input: {
+    anchorCount: number;
+    takeawayCount: number;
+    triggerCount: number;
+    linkCount: number;
+    privacyLevel: SourceMemoryPrivacyLevel;
+  },
+): SourceMemoryDistillationReceipt['policyReceipt'] {
+  const evidence = [
+    `证据锚点：${input.anchorCount}`,
+    `要点：${input.takeawayCount}`,
+    `触发线索：${input.triggerCount}`,
+    `低副作用链接：${input.linkCount}`,
+  ];
+
+  if (status === 'blocked') {
+    return {
+      state: 'blocked',
+      label: '资料蒸馏已阻断',
+      detail: '这条资料缺少可用证据锚点，系统只保留原始 capsule，不生成可复用提示。',
+      evidence,
+      nextStep: '重新保存更完整的资料，或在详情页补充备注后再进入召回。',
+    };
+  }
+
+  if (status === 'partial') {
+    return {
+      state: 'partial',
+      label: '资料蒸馏需复核',
+      detail:
+        input.privacyLevel === 'needs_review'
+          ? '这条资料带复核隐私级别，只生成受限提示；不会自动写用户画像、创建任务或同步外部平台。'
+          : '这条资料的结构化要点不足，只生成受限提示；不会自动写用户画像、创建任务或同步外部平台。',
+      evidence,
+      nextStep: '在资料详情页复核证据、补备注或补锚点后，再作为 Reflection / Dream 种子使用。',
+    };
+  }
+
+  return {
+    state: 'ready',
+    label: '资料蒸馏已就绪',
+    detail:
+      '已生成一行提示、compact memo、ready takeaways 和安静触发 matcher；只作为证据提示，不自动写用户画像、创建任务或外部写入。',
+    evidence,
+    nextStep: '后续 Ask、Memory Lens、Reflection 和 Dream 可把它作为带来源的上下文单元引用。',
+  };
+}
+
+function buildDistillationSourceReliability(
+  row: SourceMemoryRow,
+  metadata: Record<string, unknown>,
+): SourceMemoryDistillationReceipt['sourceReliability'] {
+  const interactions = asRecord(metadata.interactions);
+  if (
+    interactions.ownerAuthored === true &&
+    ['jira_comment', 'message_reply', 'web_ai_prompt'].includes(row.source_kind)
+  ) {
+    return {
+      level: 'owner_authored',
+      reason: '来源是用户自己写下或发出的资料，可作为用户意图证据处理。',
+    };
+  }
+  if (row.source_kind === 'selection' || row.source_kind === 'webpage') {
+    return {
+      level: 'source_grounded',
+      reason: '来源来自用户保存的网页或选区，需要按外部资料证据处理。',
+    };
+  }
+  if (row.source_kind === 'visual_memory') {
+    return {
+      level: 'visual_evidence',
+      reason: '来源来自用户保存的视觉区域，需要保留原始图表或表格锚点。',
+    };
+  }
+  return {
+    level: 'supporting_evidence',
+    reason: '来源可作为带出处的支持证据，不自动升格为确定事实。',
+  };
+}
+
+function buildDistilledTriggerMatcher(
+  matcher: Record<string, unknown>,
+  row: SourceMemoryRow,
+  distillation: SourceMemoryDistillationReceipt,
+  entityHints: Array<{ kind: string; value: string }>,
+): Record<string, unknown> {
+  return {
+    ...matcher,
+    sourceMemoryDistillation: {
+      status: distillation.status,
+      schemaVersion: distillation.schemaVersion,
+      showAs: distillation.status === 'ready' ? 'quiet_source_cue' : 'review_first',
+      budgetTokens: distillation.status === 'ready' ? 80 : 40,
+      oneLineCue: distillation.oneLineCue,
+    },
+    sceneAnchors: {
+      sourceKind: row.source_kind,
+      sourceHost: row.source_host ?? undefined,
+      sourceTitle: row.source_title,
+      entities: entityHints,
+    },
+    suppressionRules: [
+      'suppress_on_same_source_url',
+      'suppress_after_negative_feedback',
+      'suppress_when_capsule_dismissed',
+    ],
+  };
+}
+
+function buildDistillationLinks(
+  row: SourceMemoryRow,
+  entityHints: Array<{ kind: string; value: string }>,
+): SourceMemoryLinkCandidate[] {
+  const links: SourceMemoryLinkCandidate[] = [];
+  if (row.source_host) {
+    links.push({
+      targetType: 'source_host',
+      targetId: row.source_host,
+      confidence: 0.58,
+    });
+  }
+  for (const hint of entityHints.slice(0, 8)) {
+    links.push({
+      targetType: normalizeLinkTargetType(hint.kind),
+      targetId: hint.value,
+      confidence: 0.66,
+    });
+  }
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    const key = `${link.targetType}:${link.targetId.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildPolicyReceipt(
   action: SourceMemoryCandidateResult['suggestedAction'],
   input: { reasons?: string[]; blockedReason?: string; score?: number },
@@ -1210,6 +1733,172 @@ function buildPolicyReceipt(
   };
 }
 
+function buildWriteReceipt(input: {
+  sourceKind: string;
+  captureMode: SourceMemoryCaptureMode;
+  scope: MemoryScope;
+  status: string;
+  linkedSignalActive: boolean;
+}): SourceMemoryCaptureWriteReceipt {
+  const sourceKindLabel = getSourceMemorySourceKindLabel(input.sourceKind);
+  const captureModeLabel = getSourceMemoryCaptureModeLabel(input.captureMode);
+  const scopeLabel = getSourceMemoryScopeLabel(input.scope);
+  const signalLabel = input.sourceKind === 'visual_memory'
+    ? '视觉证据检索信号'
+    : '网页检索信号';
+  const evidence = [
+    `资料类型：${sourceKindLabel}`,
+    `保存方式：${captureModeLabel}`,
+    `范围：${scopeLabel}`,
+    `检索信号：${input.linkedSignalActive ? '已启用' : '已关闭'}`,
+  ];
+
+  if (input.status === 'dismissed') {
+    return {
+      state: 'dismissed_no_recall',
+      label: '资料召回已关闭',
+      detail: `这条 source-memory capsule 仅保留为复核记录；关联 ${signalLabel} 已移除，不再进入 Ask、Memory Lens 或时间轴召回。`,
+      evidence,
+      nextStep: '如需再次使用这份资料，需要重新保存；撤销状态不会自动外发、插入或同步。',
+    };
+  }
+
+  if (!input.linkedSignalActive) {
+    return {
+      state: 'saved_without_recall_signal',
+      label: '资料已保存，召回信号缺失',
+      detail: `已保留 source-memory capsule，但没有可用的关联 ${signalLabel}；后续召回和搜索不会依赖这条缺失信号。`,
+      evidence,
+      nextStep: '可在资料详情复核内容，必要时重新保存或补备注；不会自动外发、插入或同步。',
+    };
+  }
+
+  return {
+    state: 'saved_with_recall_signal',
+    label: '资料记忆已写入',
+    detail: `已创建或更新 source-memory capsule，并写入关联 ${signalLabel}；后续 Ask、Memory Lens 和时间轴可按证据召回。`,
+    evidence,
+    nextStep: '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+  };
+}
+
+function buildActionReceipt(
+  event: SourceMemoryActionEventRow,
+  input: {
+    sourceKind: string;
+    captureMode: SourceMemoryCaptureMode;
+    scope: MemoryScope;
+  },
+): SourceMemoryCaptureActionReceipt {
+  const metadata = parseObject(event.metadata_json ?? '{}');
+  const sourceKindLabel = getSourceMemorySourceKindLabel(input.sourceKind);
+  const captureModeLabel = getSourceMemoryCaptureModeLabel(input.captureMode);
+  const scopeLabel = getSourceMemoryScopeLabel(input.scope);
+  const captureReason = normalizeText(String(metadata.captureReason || ''));
+  const dismissReason = normalizeText(String(metadata.reason || ''));
+  const evidence = [
+    `资料类型：${sourceKindLabel}`,
+    `保存方式：${captureModeLabel}`,
+    `范围：${scopeLabel}`,
+    captureReason ? `原因：${captureReason}` : '',
+  ].filter(Boolean);
+  const base = {
+    evidence,
+    occurredAt: event.created_at,
+  };
+
+  if (event.event_type === 'dismissed') {
+    return {
+      state: 'dismissed',
+      label: '最近操作：资料已撤销',
+      detail:
+        '最近一次操作关闭了这条资料的关联检索信号；capsule 只保留为复核记录，不再进入 Ask、Memory Lens 或时间轴召回。',
+      evidence: [
+        ...evidence,
+        dismissReason ? `撤销原因：${dismissReason}` : '撤销原因：用户请求',
+      ],
+      nextStep: '如需再次使用这份资料，需要重新保存；撤销不会删除原网页或外部系统内容。',
+      occurredAt: event.created_at,
+    };
+  }
+
+  if (event.event_type === 'note_updated') {
+    return {
+      state: 'note_updated',
+      label: '最近操作：备注已更新',
+      detail:
+        metadata.hasNote === false
+          ? '最近一次操作清空了资料备注，并刷新同一条 capsule 与关联检索信号。'
+          : '最近一次操作更新了资料备注，并刷新同一条 capsule、summary 与关联检索信号。',
+      ...base,
+      nextStep: '可继续在资料详情复核、补备注或撤销；没有创建第二条资料。',
+    };
+  }
+
+  if (event.event_type === 'duplicate_save') {
+    if (metadata.updatedNote === true) {
+      return {
+        state: 'duplicate_note_updated',
+        label: '最近操作：重复资料已刷新备注',
+        detail:
+          '最近一次保存命中了已有资料；系统没有创建第二条 capsule，而是更新同一条资料的备注、summary 和关联检索信号。',
+        ...base,
+        nextStep: '后续召回会使用这条更新后的资料；不会自动外发、插入输入框或同步其他平台。',
+      };
+    }
+
+    return {
+      state: 'duplicate_no_change',
+      label: '最近操作：已有资料保持可用',
+      detail:
+        '最近一次保存命中了已有资料；本次没有新建第二条 capsule，也没有更新备注或正文，只保留已有资料和关联检索信号。',
+      ...base,
+      nextStep: '可打开详情核对已有资料；如需改变用途，请补备注后重新保存。',
+    };
+  }
+
+  if (event.event_type === 'resaved') {
+    return {
+      state: 'resaved',
+      label: '最近操作：撤销资料已重新保存',
+      detail:
+        '最近一次操作重新启用了之前撤销的资料，沿用原 capsule，并重新写入关联检索信号。',
+      ...base,
+      nextStep: '可在详情页复核新备注、保存方式和召回状态；不会恢复任何外部系统内容。',
+    };
+  }
+
+  return {
+    state: 'saved',
+    label: '最近操作：资料已保存',
+    detail:
+      '最近一次操作创建了 source-memory capsule，并写入关联检索信号，后续可作为带来源证据被召回。',
+    ...base,
+    nextStep: '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+  };
+}
+
+function getSourceMemorySourceKindLabel(sourceKind: string): string {
+  if (sourceKind === 'selection') return '选区资料';
+  if (sourceKind === 'visual_memory') return '视觉证据';
+  if (sourceKind === 'jira_comment') return 'Jira 评论资料';
+  if (sourceKind === 'message_reply') return '对外回复资料';
+  if (sourceKind === 'web_ai_prompt') return '外部 AI 提示资料';
+  if (sourceKind === 'manual') return '手动资料';
+  return '整页资料';
+}
+
+function getSourceMemoryCaptureModeLabel(captureMode: SourceMemoryCaptureMode): string {
+  if (captureMode === 'auto') return '自动保存';
+  if (captureMode === 'manual') return '主动保存';
+  return '建议保存';
+}
+
+function getSourceMemoryScopeLabel(scope: MemoryScope): string {
+  if (scope === 'personal') return '个人记忆';
+  return '工作记忆';
+}
+
 function isIntentPolicyEvidence(reason: string): boolean {
   return /用户|选中|复制|停留|阅读|重复访问|实体线索/.test(reason);
 }
@@ -1240,6 +1929,39 @@ function normalizeText(text?: string | null): string {
   return (text || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeEntityHints(
+  entityHints?: Array<{ kind?: string; value?: string }> | unknown,
+): Array<{ kind: string; value: string }> {
+  if (!Array.isArray(entityHints)) return [];
+  const normalized: Array<{ kind: string; value: string }> = [];
+  for (const hint of entityHints) {
+    if (!hint || typeof hint !== 'object') continue;
+    const record = hint as Record<string, unknown>;
+    const kind = normalizeLinkTargetType(
+      typeof record.kind === 'string' ? record.kind : 'entity',
+    );
+    const value = clipText(
+      normalizeText(typeof record.value === 'string' ? record.value : ''),
+      160,
+    );
+    if (!value) continue;
+    normalized.push({ kind, value });
+  }
+  return normalized.slice(0, 12);
+}
+
+function readEntityHints(metadata: Record<string, unknown>): unknown {
+  return metadata.entityHints;
+}
+
+function normalizeLinkTargetType(value: string): string {
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || 'entity';
+}
+
 function clipText(text: string, maxLength: number): string {
   const normalized = normalizeText(text);
   return normalized.length > maxLength
@@ -1259,6 +1981,41 @@ function normalizeUrl(value?: string): string | undefined {
     return url.toString();
   } catch {
     return undefined;
+  }
+}
+
+function isCredentialBearingSourceUrl(value?: string): boolean {
+  const raw = normalizeText(value);
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) return true;
+
+    const hasSensitiveParam = (params: URLSearchParams): boolean => {
+      for (const key of params.keys()) {
+        const normalizedKey = key.trim();
+        if (!normalizedKey) continue;
+        if (SENSITIVE_URL_PARAM_PATTERN.test(normalizedKey)) return true;
+        if (
+          normalizedKey.toLowerCase() === 'code' &&
+          OAUTH_CODE_CONTEXT_PATTERN.test(raw)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (hasSensitiveParam(url.searchParams)) return true;
+
+    const hash = url.hash.replace(/^#/, '');
+    if (!hash || !hash.includes('=')) return false;
+    const hashQuery = hash.includes('?')
+      ? hash.slice(hash.indexOf('?') + 1)
+      : hash;
+    return hasSensitiveParam(new URLSearchParams(hashQuery));
+  } catch {
+    return false;
   }
 }
 

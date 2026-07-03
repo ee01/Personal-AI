@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory Change Ledger Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f4;
+      --panel: #ffffff;
+      --ink: #1c2430;
+      --muted: #687385;
+      --line: #d9dfd7;
+      --blue: #2563eb;
+      --green: #0f766e;
+      --amber: #b45309;
+      --red: #b42318;
+      --slate: #334155;
+      --soft-blue: #eaf1ff;
+      --soft-green: #e8f5f1;
+      --soft-amber: #fff4df;
+      --soft-red: #fff0ef;
+      --shadow: 0 16px 44px rgba(31, 41, 55, 0.12);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .rail {
+      border-right: 1px solid var(--line);
+      background: #fbfcfa;
+      padding: 20px 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .brand img {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.1;
+    }
+
+    .brand span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: var(--slate);
+      min-height: 38px;
+      padding: 8px 10px;
+      border-radius: 7px;
+      text-align: left;
+      font: inherit;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      cursor: pointer;
+    }
+
+    .nav button[aria-current="true"] {
+      background: #e8eee7;
+      color: #111827;
+      font-weight: 650;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex: 0 0 auto;
+    }
+
+    .dot.blue { background: var(--blue); }
+    .dot.green { background: var(--green); }
+    .dot.amber { background: var(--amber); }
+
+    .rail-note {
+      margin-top: 24px;
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(10px);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--slate);
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .workspace {
+      padding: 22px 24px 28px;
+      display: grid;
+      grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 0.95fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .surface,
+    .ledger {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .surface-head,
+    .ledger-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .kicker {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0;
+      line-height: 1.25;
+    }
+
+    .scene-switcher {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .scene-switcher button,
+    .tabs button,
+    .action-row button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--slate);
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      min-height: 34px;
+    }
+
+    .scene-switcher button.active,
+    .tabs button.active {
+      border-color: #9fb5e8;
+      background: var(--soft-blue);
+      color: #173b8f;
+      font-weight: 650;
+    }
+
+    .question {
+      margin: 18px;
+      padding: 16px;
+      border-left: 4px solid var(--blue);
+      background: #f8fbff;
+      border-radius: 0 7px 7px 0;
+    }
+
+    .question p {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .receipt {
+      margin: 0 18px 18px;
+      padding: 14px;
+      border: 1px solid #b8d9ce;
+      background: var(--soft-green);
+      border-radius: var(--radius);
+      display: grid;
+      gap: 8px;
+    }
+
+    .receipt-title {
+      color: var(--green);
+      font-weight: 750;
+      font-size: 14px;
+    }
+
+    .receipt p {
+      margin: 0;
+      color: #1f4c45;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .answer {
+      margin: 0 18px 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .answer-block {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: #fff;
+    }
+
+    .answer-block strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .answer-block p {
+      margin: 0;
+      color: #394456;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 0 18px 18px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fcfdfb;
+      min-width: 0;
+    }
+
+    .metric .value {
+      font-size: 20px;
+      font-weight: 760;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .ledger-body {
+      padding: 16px 18px 18px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .current-card {
+      border: 1px solid #bdd9d3;
+      background: var(--soft-green);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .current-card .label {
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+
+    .current-card .value {
+      font-size: 22px;
+      font-weight: 780;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+
+    .current-card .meta {
+      margin-top: 8px;
+      color: #315b54;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      position: relative;
+    }
+
+    .event {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      gap: 7px;
+      background: #fff;
+    }
+
+    .event.current {
+      border-color: #9ccbc1;
+      background: #f7fcfa;
+    }
+
+    .event.conflict {
+      border-color: #f2c484;
+      background: var(--soft-amber);
+    }
+
+    .event-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .event-title {
+      font-weight: 720;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .tag.current { color: var(--green); border-color: #a7d5cb; background: #f0faf7; }
+    .tag.old { color: var(--muted); }
+    .tag.warn { color: var(--amber); border-color: #f0c98f; background: #fff8eb; }
+    .tag.block { color: var(--red); border-color: #ffc3bd; background: var(--soft-red); }
+
+    .event p {
+      margin: 0;
+      color: #4b5563;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fff;
+    }
+
+    .source strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+
+    .source p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .external-summary {
+      border: 1px solid #c9d7f4;
+      border-radius: var(--radius);
+      background: var(--soft-blue);
+      padding: 14px;
+      color: #1e3a70;
+      line-height: 1.55;
+      font-size: 14px;
+      white-space: pre-line;
+    }
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .action-row button.primary {
+      background: #173b8f;
+      color: #fff;
+      border-color: #173b8f;
+    }
+
+    .toast {
+      min-height: 34px;
+      margin-top: 12px;
+      color: var(--green);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .rail {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+
+      .topbar {
+        height: auto;
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 16px;
+      }
+
+      .status-strip {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .surface-head,
+      .ledger-head {
+        flex-direction: column;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      h2 {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand">
+        <img src="../../static/icons/icon128.png" alt="Personal AI" />
+        <div>
+          <strong>Personal AI</strong>
+          <span>Memory Exploring</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Personal AI sections">
+        <button aria-current="true"><span class="dot blue"></span>Ask 现场</button>
+        <button><span class="dot green"></span>Memory Lens</button>
+        <button><span class="dot amber"></span>Source Memory</button>
+        <button><span class="dot"></span>Evidence Watch</button>
+      </nav>
+      <div class="rail-note">
+        Demo 模拟集成式抽屉。所有数据均为本地样例，不读取线上服务，不创建确认请求，不发送消息。
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1>记忆变更账本</h1>
+        <div class="status-strip">
+          <span class="pill">只读预览</span>
+          <span class="pill">未写入记忆</span>
+          <span class="pill">未发送外部 AI</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="surface" aria-label="Ask surface">
+          <div class="surface-head">
+            <div>
+              <p class="kicker" id="surfaceKicker">Quick Ask</p>
+              <h2 id="sceneTitle">Jira Estimate 当前值</h2>
+            </div>
+            <div class="scene-switcher" role="group" aria-label="切换场景">
+              <button class="active" data-scene="estimate">Estimate</button>
+              <button data-scene="be">BE Ready</button>
+              <button data-scene="prompt">外部 AI</button>
+            </div>
+          </div>
+
+          <div class="question">
+            <p id="questionText">MTR-148115 的 DEV Estimate 现在应该用哪个值？之前好像出现过 0.3 和 0.4，别把旧值写进结论。</p>
+          </div>
+
+          <div class="receipt">
+            <div class="receipt-title" id="receiptTitle">变更账本：当前值可用，但旧值已隔离</div>
+            <p id="receiptText">当前采用 DEV Estimate New = 0.4；已隔离 2 条旧 estimate 片段；来源截至 2026-06-30。本轮未写入、未确认、未发送。</p>
+          </div>
+
+          <div class="answer">
+            <div class="answer-block">
+              <strong>Personal AI 回答</strong>
+              <p id="answerText">建议在本轮回答中使用 0.4 作为当前候选值，并把 0.3 / 0.2 作为历史值处理。若要写回 Jira，仍需要走现有确认或 Jira 权威来源校验。</p>
+            </div>
+          </div>
+
+          <div class="metrics">
+            <div class="metric">
+              <div class="value" id="metricCurrent">1</div>
+              <div class="label">当前值候选</div>
+            </div>
+            <div class="metric">
+              <div class="value" id="metricOld">2</div>
+              <div class="label">旧值已隔离</div>
+            </div>
+            <div class="metric">
+              <div class="value" id="metricConflict">0</div>
+              <div class="label">冲突待确认</div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="ledger" aria-label="Change ledger">
+          <div class="ledger-head">
+            <div>
+              <p class="kicker">Ledger drawer</p>
+              <h2 id="ledgerTitle">MTR-148115 · DEV Estimate</h2>
+            </div>
+            <span class="tag current" id="ledgerState">current</span>
+          </div>
+
+          <div class="ledger-body">
+            <div class="tabs" role="tablist" aria-label="账本视图">
+              <button class="active" data-tab="current" role="tab">当前值</button>
+              <button data-tab="timeline" role="tab">变化链</button>
+              <button data-tab="sources" role="tab">证据</button>
+              <button data-tab="external" role="tab">外发摘要</button>
+            </div>
+
+            <section class="tab-panel active" id="tab-current">
+              <div class="current-card">
+                <div class="label">当前采用</div>
+                <div class="value" id="currentValue">DEV Estimate New = 0.4</div>
+                <div class="meta" id="currentMeta">authority: inferred + Jira comment; source-as-of: 2026-06-30; completeness: partial but usable for Ask.</div>
+              </div>
+              <div class="source">
+                <strong>边界回执</strong>
+                <p id="boundaryText">这只是消费时账本：不更新 active property，不确认 Jira 事实，不发送外部消息。写回或确认仍走原有门禁。</p>
+              </div>
+            </section>
+
+            <section class="tab-panel" id="tab-timeline">
+              <div class="timeline" id="timeline"></div>
+            </section>
+
+            <section class="tab-panel" id="tab-sources">
+              <div class="source-list" id="sources"></div>
+            </section>
+
+            <section class="tab-panel" id="tab-external">
+              <div class="external-summary" id="externalSummary"></div>
+              <div class="action-row">
+                <button class="primary" id="copyBtn">加入草稿</button>
+                <button id="hideBtn">本轮隐藏</button>
+              </div>
+              <div class="toast" id="toast" aria-live="polite"></div>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const scenes = {
+      estimate: {
+        kicker: 'Quick Ask',
+        title: 'Jira Estimate 当前值',
+        question: 'MTR-148115 的 DEV Estimate 现在应该用哪个值？之前好像出现过 0.3 和 0.4，别把旧值写进结论。',
+        receiptTitle: '变更账本：当前值可用，但旧值已隔离',
+        receipt: '当前采用 DEV Estimate New = 0.4；已隔离 2 条旧 estimate 片段；来源截至 2026-06-30。本轮未写入、未确认、未发送。',
+        answer: '建议在本轮回答中使用 0.4 作为当前候选值，并把 0.3 / 0.2 作为历史值处理。若要写回 Jira，仍需要走现有确认或 Jira 权威来源校验。',
+        ledgerTitle: 'MTR-148115 · DEV Estimate',
+        state: 'partial current',
+        current: 'DEV Estimate New = 0.4',
+        meta: 'authority: inferred + Jira comment; source-as-of: 2026-06-30; completeness: partial but usable for Ask.',
+        boundary: '这只是消费时账本：不更新 active property，不确认 Jira 事实，不发送外部消息。写回或确认仍走原有门禁。',
+        metrics: ['1', '2', '0'],
+        timeline: [
+          ['当前候选', '2026-06-30', 'DEV Estimate New = 0.4。作为本轮 Ask 的当前候选值，但没有自动写回 Jira。', 'current'],
+          ['旧值', '2026-05-13', 'DEV Estimate Original = 0.3。仅保留为历史口径，不进入当前答案。', 'old'],
+          ['候选旧片段', '2026-05-13', 'Jira comment capsule 中出现 estimate 相关片段，但含 UI 噪音，不能单独作为强事实。', 'warn']
+        ],
+        sources: [
+          ['entity_properties', '读取 active/superseded property chain；当前只读，不修改线上 DB。'],
+          ['source_memory_capsules', 'Jira comment 来源可打开，但 preview 可能含 Collapse comment，默认不直接当变化事实。'],
+          ['confirm_requests', 'pending 请求只显示待确认，不能升级为 current。']
+        ],
+        external: 'DEV Estimate 存在变化链。当前上下文优先使用 source-as-of 2026-06-30 后的候选值 0.4；0.3 / 0.2 仅作为历史值，不应写入当前结论。不要自动回写 Jira；如需写回，先走确认。'
+      },
+      be: {
+        kicker: 'Memory Lens',
+        title: 'BE readiness 变化链',
+        question: '打开 MTR-141852 页面时，右侧提示 BE 到底 ready 没有？为什么历史里有好几种 not ready 表述？',
+        receiptTitle: '变更账本：连续状态被合并为一条当前链',
+        receipt: '当前采用 BE readiness = Not ready, waiting for new RCV BE design；已合并 7 条旧 status 表述；来源截至 2026-05-28。本轮只读。',
+        answer: '右侧 Memory Lens 只展示当前口径，并说明旧表述已经被用户确认替换。相邻的 BE.status 历史仍可展开查看，但不会作为新的 ready 证据。',
+        ledgerTitle: 'BE · readiness/status',
+        state: 'current',
+        current: 'Not ready, waiting for new RCV BE design',
+        meta: 'authority: user confirmed replacement; source-as-of: 2026-05-28; completeness: complete for local recall.',
+        boundary: '旧 status 只解释历史，不触发新的 Evidence Watch，不创建 OpenClaw action。',
+        metrics: ['1', '7', '0'],
+        timeline: [
+          ['当前值', '2026-05-28', 'Not ready, waiting for new RCV BE design。用户确认 replacement 后成为当前链路。', 'current'],
+          ['旧值', '2026-05-28', 'not ready; still in progress; open questions remain; some features mocked/not integrated。', 'old'],
+          ['旧值', '2026-05-28', 'waiting for new design, not ready。已被 higher-authority replacement supersede。', 'old']
+        ],
+        sources: [
+          ['entity_properties.superseded_by', '旧 status 节点保留 superseded_by 和 supersede_reason，适合生成可回放链。'],
+          ['property_change confirm', '用户确认 replacement 是当前链路的关键依据。'],
+          ['Memory Lens receipt', '页面只显示一行回执，展开才看完整链。']
+        ],
+        external: 'BE readiness 当前仍是 not ready，等待 new RCV BE design。旧的 not ready 表述只是历史链路，不代表多个独立新问题。本摘要只用于上下文，不写入、不确认、不创建外部查证。'
+      },
+      prompt: {
+        kicker: 'Prompt Context Compiler',
+        title: '外部 AI prompt 变化边界',
+        question: '我要把 Jira estimate 规则发给 Codex，让它检查 Sheet 写回逻辑。请自动带上变化边界，但不要泄露内部原文。',
+        receiptTitle: '变更账本：已生成外部安全摘要',
+        receipt: '已加入当前值、旧值角色和 source-as-of 到草稿；隐藏内部 raw source 和 UI 噪音；未发送给外部 AI。',
+        answer: 'Prompt patch 会说明哪些值是当前候选，哪些只是历史值，并保留“不自动回写 Jira”的限制。外部 AI 不会看到 restricted comment 原文。',
+        ledgerTitle: 'External-safe change summary',
+        state: 'draft only',
+        current: '外部摘要可用',
+        meta: 'projection: summary_ok; hidden sources: restricted comments + UI noise; sendsExternal: false.',
+        boundary: '点击加入草稿只改本机草稿，不发送，不同步，不创建确认请求。',
+        metrics: ['1', '3', '1'],
+        timeline: [
+          ['草稿摘要', '本轮', '只保留变化边界和当前候选值，不包含 restricted raw source。', 'current'],
+          ['隐藏来源', '本轮', '内部 Jira comment 原文、URL query、UI 噪音被隐藏。', 'warn'],
+          ['待确认', '本轮', '如果要写回 Jira，必须走现有确认门禁。', 'conflict']
+        ],
+        sources: [
+          ['externalSafeSummary', '给外部 AI 的摘要只包含当前值、旧值角色、source-as-of 和禁止写回边界。'],
+          ['Composer draft', '只写本机草稿。用户未点击发送前没有外部副作用。'],
+          ['Evidence Watch', '需要未来复核的事实仍交给 Watch，不由 prompt patch 自行确认。']
+        ],
+        external: '请检查 Jira estimate / Sheet 写回逻辑。上下文边界：当前值优先使用 source-as-of 最新候选；旧 estimate 只作为历史，不作为当前事实。不要自动回写 Jira，只输出 Sheet 写回建议和需要人工确认的事项。'
+      }
+    };
+
+    let activeScene = 'estimate';
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function renderScene(name) {
+      activeScene = name;
+      const data = scenes[name];
+      setText('surfaceKicker', data.kicker);
+      setText('sceneTitle', data.title);
+      setText('questionText', data.question);
+      setText('receiptTitle', data.receiptTitle);
+      setText('receiptText', data.receipt);
+      setText('answerText', data.answer);
+      setText('ledgerTitle', data.ledgerTitle);
+      setText('ledgerState', data.state);
+      setText('currentValue', data.current);
+      setText('currentMeta', data.meta);
+      setText('boundaryText', data.boundary);
+      setText('metricCurrent', data.metrics[0]);
+      setText('metricOld', data.metrics[1]);
+      setText('metricConflict', data.metrics[2]);
+      setText('externalSummary', data.external);
+      setText('toast', '');
+
+      document.querySelectorAll('[data-scene]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.scene === name);
+      });
+
+      const timeline = document.getElementById('timeline');
+      timeline.innerHTML = data.timeline.map(([title, date, body, tone]) => `
+        <article class="event ${tone === 'current' ? 'current' : tone === 'conflict' ? 'conflict' : ''}">
+          <div class="event-head">
+            <div class="event-title">${title}</div>
+            <span class="tag ${tone === 'current' ? 'current' : tone === 'warn' ? 'warn' : tone === 'conflict' ? 'block' : 'old'}">${date}</span>
+          </div>
+          <p>${body}</p>
+        </article>
+      `).join('');
+
+      const sources = document.getElementById('sources');
+      sources.innerHTML = data.sources.map(([title, body]) => `
+        <article class="source">
+          <strong>${title}</strong>
+          <p>${body}</p>
+        </article>
+      `).join('');
+    }
+
+    function showTab(tab) {
+      document.querySelectorAll('[data-tab]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.tab === tab);
+      });
+      document.querySelectorAll('.tab-panel').forEach((panel) => {
+        panel.classList.toggle('active', panel.id === `tab-${tab}`);
+      });
+    }
+
+    document.querySelectorAll('[data-scene]').forEach((button) => {
+      button.addEventListener('click', () => renderScene(button.dataset.scene));
+    });
+
+    document.querySelectorAll('[data-tab]').forEach((button) => {
+      button.addEventListener('click', () => showTab(button.dataset.tab));
+    });
+
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      setText('toast', '已加入本机草稿。未发送，未写入记忆，未创建确认请求。');
+    });
+
+    document.getElementById('hideBtn').addEventListener('click', () => {
+      setText('toast', '本轮已隐藏账本提示。只影响当前 demo 视图，不修改偏好。');
+    });
+
+    renderScene(activeScene);
+  </script>
+</body>
+</html>

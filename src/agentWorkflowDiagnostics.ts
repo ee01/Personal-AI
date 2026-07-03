@@ -21,6 +21,15 @@ export type AgentWorkflowRunVerdictStatus =
   | 'review'
   | 'blocked'
   | 'idle';
+export type AgentWorkflowOrchestrationReceiptStatus =
+  | 'ready'
+  | 'review'
+  | 'blocked'
+  | 'idle';
+export type AgentWorkflowRunEvidenceQualificationStatus =
+  | 'ready'
+  | 'review'
+  | 'stale';
 
 export interface AgentWorkflowDiagnostic {
   id: string;
@@ -60,6 +69,48 @@ export interface AgentWorkflowRunVerdict {
   summary: string;
   detail?: string;
   actionLabel?: string;
+}
+
+export interface AgentWorkflowOrchestrationReceipt {
+  status: AgentWorkflowOrchestrationReceiptStatus;
+  title: string;
+  summary: string;
+  detail: string;
+  boundary: string;
+  chips: string[];
+}
+
+export interface AgentWorkflowNotificationReviewReceipt {
+  title: string;
+  summary: string;
+  detail: string;
+  boundary: string;
+}
+
+export interface AgentWorkflowRunEvidencePacket {
+  title: string;
+  summary: string;
+  detail: string;
+  boundary: string;
+  chips: string[];
+  text: string;
+  qualification: AgentWorkflowRunEvidenceQualification;
+}
+
+export interface AgentWorkflowRunEvidenceQualification {
+  status: AgentWorkflowRunEvidenceQualificationStatus;
+  title: string;
+  summary: string;
+  detail?: string;
+}
+
+export interface AgentWorkflowRunEvidencePacketOptions {
+  generatedAt?: Date | string;
+  stale?: boolean;
+  staleReason?: string;
+  sourceLabel?: string;
+  redactedInputContent?: string;
+  qualification?: AgentWorkflowRunEvidenceQualification;
 }
 
 export interface AgentWorkflowAgentLike {
@@ -120,8 +171,29 @@ export interface AgentWorkflowResultLike {
   };
 }
 
+export type AgentWorkflowStructuralCoverageStatus =
+  | 'covered'
+  | 'partial'
+  | 'missing';
+
+export interface AgentWorkflowStructuralCoverage {
+  status: AgentWorkflowStructuralCoverageStatus;
+  summary: string;
+  expectedAgentCount: number;
+  executedAgentCount: number;
+  expectedToolCount: number;
+  observedToolCount: number;
+  missingAgents: string[];
+  missingTools: string[];
+  issueSummary: string[];
+}
+
 const SLOW_AGENT_MS = 12000;
 const SLOW_TOOL_MS = 5000;
+const AGENT_WORKFLOW_NOTIFICATION_REVIEW_BOUNDARY =
+  'Options 测试只标记本地复核候选；不会创建真实复核队列项，不会写入 Memory Service，不会发送通知，也不会执行规则自动化。真实消息入口只会把 notificationReview 写入审计并暂停通知/自动化。';
+const AGENT_WORKFLOW_RUN_EVIDENCE_BOUNDARY =
+  '复制证据包只写入本机剪贴板；不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会覆盖基线、不会导出报告，也不会包含原始消息正文或工具参数。';
 
 function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
@@ -188,6 +260,34 @@ function getMatchedRuleLabel(result: AgentWorkflowResultLike): string {
   return result.matchedRule || '';
 }
 
+export function buildAgentWorkflowNotificationReviewReceipt(
+  result?: AgentWorkflowResultLike | null,
+): AgentWorkflowNotificationReviewReceipt | undefined {
+  if (!result?.notificationReview?.required) return undefined;
+
+  const matchedRuleLabel = getMatchedRuleLabel(result);
+  const confidenceLabel =
+    getConfidenceLabel(result.confidence) ||
+    getConfidenceLabel(result.storageReview?.confidence);
+  const summary =
+    result.notificationReview.message ||
+    '低置信度关注项命中已暂停通知和规则自动化。';
+  const detail = [
+    matchedRuleLabel ? `规则：${matchedRuleLabel}` : '',
+    confidenceLabel ? `置信度 ${confidenceLabel}` : '',
+    '真实复核入口尚未创建，本地测试结果只作为配置调试依据。',
+  ]
+    .filter(Boolean)
+    .join('；');
+
+  return {
+    title: '通知复核候选',
+    summary,
+    detail,
+    boundary: AGENT_WORKFLOW_NOTIFICATION_REVIEW_BOUNDARY,
+  };
+}
+
 function getTrace(
   result: AgentWorkflowResultLike,
 ): AgentWorkflowTraceStepLike[] {
@@ -202,6 +302,8 @@ function getTraceIssueSummary(trace: AgentWorkflowTraceStepLike[]): {
   toolErrorCount: number;
   slowStepLabels: string[];
   slowToolLabels: string[];
+  toolErrorLabels: string[];
+  placeholderToolLabels: string[];
   externalPlaceholderLabels: string[];
   placeholderToolCount: number;
 } {
@@ -241,11 +343,25 @@ function getTraceIssueSummary(trace: AgentWorkflowTraceStepLike[]): {
           )}ms`,
       ),
   );
+  const toolErrorLabels = uniq(
+    trace.flatMap((step) =>
+      (step.tools || [])
+        .filter((tool) => tool.status === 'error')
+        .map((tool) => `${getTraceStepLabel(step)} / ${getToolLabel(tool)}`),
+    ),
+  );
   const placeholderToolCount = trace.reduce(
     (count, step) =>
       count +
       (step.tools || []).filter((tool) => tool.status === 'placeholder').length,
     0,
+  );
+  const placeholderToolLabels = uniq(
+    trace.flatMap((step) =>
+      (step.tools || [])
+        .filter((tool) => tool.status === 'placeholder')
+        .map((tool) => `${getTraceStepLabel(step)} / ${getToolLabel(tool)}`),
+    ),
   );
   const externalPlaceholderLabels = uniq(
     trace.flatMap((step) =>
@@ -272,9 +388,27 @@ function getTraceIssueSummary(trace: AgentWorkflowTraceStepLike[]): {
     toolErrorCount,
     slowStepLabels,
     slowToolLabels,
+    toolErrorLabels,
+    placeholderToolLabels,
     externalPlaceholderLabels,
     placeholderToolCount,
   };
+}
+
+function formatToolErrorSummary(
+  traceIssues: ReturnType<typeof getTraceIssueSummary>,
+  fallbackCount = 0,
+): string {
+  if (traceIssues.toolErrorLabels.length > 0) {
+    const visibleLabels = traceIssues.toolErrorLabels.slice(0, 3).join('、');
+    const hiddenCount = Math.max(0, traceIssues.toolErrorLabels.length - 3);
+    return hiddenCount > 0
+      ? `工具错误 ${visibleLabels} 等 ${traceIssues.toolErrorLabels.length} 个`
+      : `工具错误 ${visibleLabels}`;
+  }
+
+  const count = traceIssues.toolErrorCount || fallbackCount;
+  return `工具错误 ${count}`;
 }
 
 function getStorageReasonSourceLabel(reasonSource?: string): string {
@@ -291,6 +425,502 @@ function getEnabledAgents(agents: AgentWorkflowAgentLike[]) {
   return agents
     .filter((agent) => agent.enabled !== false)
     .sort((a, b) => (b.priority || 0) - (a.priority || 0));
+}
+
+function getAgentId(agent: AgentWorkflowAgentLike): string {
+  return String(agent.id || '').trim();
+}
+
+function getTraceAgentId(step: AgentWorkflowTraceStepLike): string {
+  return String(step.agentId || '').trim();
+}
+
+function getAgentToolKey(agentId: string, toolName: string): string {
+  return `${agentId}::${toolName}`;
+}
+
+export function buildAgentWorkflowStructuralCoverage(
+  result?: AgentWorkflowResultLike | null,
+  agents: AgentWorkflowAgentLike[] = [],
+): AgentWorkflowStructuralCoverage | undefined {
+  if (!result) return undefined;
+
+  const trace = getTrace(result);
+  const enabledAgents = getEnabledAgents(agents).filter((agent) =>
+    Boolean(getAgentId(agent)),
+  );
+  const expectedAgentsById = new Map(
+    enabledAgents.map((agent) => [getAgentId(agent), getAgentLabel(agent)]),
+  );
+  const expectedToolsByKey = new Map<string, string>();
+
+  enabledAgents.forEach((agent) => {
+    const agentId = getAgentId(agent);
+    const agentLabel = getAgentLabel(agent);
+    (agent.tools || []).forEach((toolName) => {
+      const normalizedToolName = String(toolName || '').trim();
+      if (!normalizedToolName) return;
+      expectedToolsByKey.set(
+        getAgentToolKey(agentId, normalizedToolName),
+        `${agentLabel} / ${normalizedToolName}`,
+      );
+    });
+  });
+
+  const tracedAgentIds = new Set(
+    trace.map(getTraceAgentId).filter((agentId) => agentId.length > 0),
+  );
+  const executedAgentIds = new Set(
+    trace
+      .filter((step) => step.status !== 'skipped')
+      .map(getTraceAgentId)
+      .filter((agentId) => agentId.length > 0),
+  );
+  const observedToolKeys = new Set<string>();
+  trace.forEach((step) => {
+    const agentId = getTraceAgentId(step);
+    if (!agentId) return;
+    (step.tools || []).forEach((tool) => {
+      const toolName = String(tool.name || '').trim();
+      if (!toolName) return;
+      observedToolKeys.add(getAgentToolKey(agentId, toolName));
+    });
+  });
+
+  const missingAgents = Array.from(expectedAgentsById.entries())
+    .filter(([agentId]) => !tracedAgentIds.has(agentId))
+    .map(([, label]) => label);
+  const missingTools = Array.from(expectedToolsByKey.entries())
+    .filter(([toolKey]) => !observedToolKeys.has(toolKey))
+    .map(([, label]) => label);
+  const traceIssues = getTraceIssueSummary(trace);
+  const issueSummary = [
+    traceIssues.failedSteps.length > 0
+      ? `失败 Agent ${traceIssues.failedSteps.map(getTraceStepLabel).join('、')}`
+      : '',
+    traceIssues.toolErrorCount > 0
+      ? formatToolErrorSummary(traceIssues)
+      : '',
+    traceIssues.skippedToolCount > 0
+      ? `跳过工具 ${traceIssues.skippedToolCount}`
+      : '',
+    traceIssues.placeholderToolCount > 0
+      ? `占位工具 ${traceIssues.placeholderToolCount}`
+      : '',
+    traceIssues.slowStepLabels.length > 0
+      ? `慢 Agent ${traceIssues.slowStepLabels.slice(0, 2).join('、')}`
+      : '',
+    traceIssues.slowToolLabels.length > 0
+      ? `慢工具 ${traceIssues.slowToolLabels.slice(0, 2).join('、')}`
+      : '',
+  ].filter(Boolean);
+
+  const expectedAgentCount = expectedAgentsById.size;
+  const expectedToolCount = expectedToolsByKey.size;
+  const executedAgentCount =
+    expectedAgentCount > 0
+      ? Array.from(expectedAgentsById.keys()).filter((agentId) =>
+          executedAgentIds.has(agentId),
+        ).length
+      : executedAgentIds.size;
+  const observedToolCount =
+    expectedToolCount > 0
+      ? Array.from(expectedToolsByKey.keys()).filter((toolKey) =>
+          observedToolKeys.has(toolKey),
+        ).length
+      : observedToolKeys.size;
+  const status: AgentWorkflowStructuralCoverageStatus =
+    trace.length === 0
+      ? 'missing'
+      : missingAgents.length > 0 ||
+          missingTools.length > 0 ||
+          issueSummary.length > 0
+        ? 'partial'
+        : 'covered';
+  const baseSummary =
+    expectedAgentCount > 0 || expectedToolCount > 0
+      ? `结构覆盖 Agent ${executedAgentCount}/${expectedAgentCount}、工具 ${observedToolCount}/${expectedToolCount}`
+      : `结构覆盖 Trace Agent ${executedAgentCount}、工具 ${observedToolCount}`;
+  const detailSummary = [
+    missingAgents.length > 0
+      ? `缺阶段 ${missingAgents.slice(0, 3).join('、')}`
+      : '',
+    missingTools.length > 0
+      ? `缺工具 ${missingTools.slice(0, 3).join('、')}`
+      : '',
+    ...issueSummary.slice(0, 3),
+  ].filter(Boolean);
+
+  return {
+    status,
+    summary: [baseSummary, ...detailSummary].join('；'),
+    expectedAgentCount,
+    executedAgentCount,
+    expectedToolCount,
+    observedToolCount,
+    missingAgents,
+    missingTools,
+    issueSummary,
+  };
+}
+
+export function buildAgentWorkflowOrchestrationReceipt(
+  result?: AgentWorkflowResultLike | null,
+  agents: AgentWorkflowAgentLike[] = [],
+): AgentWorkflowOrchestrationReceipt | undefined {
+  if (!result) return undefined;
+
+  const trace = getTrace(result);
+  const enabledAgents = getEnabledAgents(agents).filter((agent) =>
+    Boolean(getAgentId(agent)),
+  );
+  const structuralCoverage = buildAgentWorkflowStructuralCoverage(
+    result,
+    agents,
+  );
+  const traceIssues = getTraceIssueSummary(trace);
+  const matchedRuleLabel = getMatchedRuleLabel(result);
+  const notificationReviewReceipt =
+    buildAgentWorkflowNotificationReviewReceipt(result);
+  const confidenceLabel =
+    getConfidenceLabel(result.confidence) ||
+    getConfidenceLabel(result.storageReview?.confidence);
+  const storageToolErrorCount = result.storageReview?.toolErrorCount || 0;
+  const storageFailedAgents = Array.isArray(result.storageReview?.failedAgents)
+    ? result.storageReview.failedAgents.filter(Boolean)
+    : [];
+  const effectiveSkippedToolCount =
+    traceIssues.skippedToolCount || result.storageReview?.toolSkippedCount || 0;
+  const effectivePlaceholderToolCount =
+    traceIssues.placeholderToolCount ||
+    result.storageReview?.toolPlaceholderCount ||
+    0;
+  const toolCount = trace.reduce(
+    (count, step) => count + (step.tools || []).length,
+    0,
+  );
+  const hasBlockingIssue =
+    trace.length === 0 ||
+    traceIssues.failedSteps.length > 0 ||
+    traceIssues.toolErrorCount > 0 ||
+    storageToolErrorCount > 0 ||
+    storageFailedAgents.length > 0;
+  const hasReviewIssue =
+    Boolean(result.notificationReview?.required) ||
+    effectiveSkippedToolCount > 0 ||
+    effectivePlaceholderToolCount > 0 ||
+    result.storageReview?.traceStatus === 'partial' ||
+    structuralCoverage?.status === 'partial' ||
+    structuralCoverage?.status === 'missing';
+  const hasOutcome = Boolean(
+    result.shouldStore ||
+      result.shouldNotify ||
+      result.notificationReview?.required ||
+      matchedRuleLabel,
+  );
+  const status: AgentWorkflowOrchestrationReceiptStatus = hasBlockingIssue
+    ? 'blocked'
+    : hasReviewIssue
+      ? 'review'
+      : hasOutcome
+        ? 'ready'
+        : 'idle';
+  const expectedAgentCount =
+    structuralCoverage?.expectedAgentCount || enabledAgents.length;
+  const executedAgentCount =
+    structuralCoverage?.executedAgentCount ||
+    trace.filter((step) => step.status !== 'skipped').length;
+  const expectedToolCount =
+    structuralCoverage?.expectedToolCount ||
+    enabledAgents.reduce(
+      (count, agent) => count + (agent.tools || []).filter(Boolean).length,
+      0,
+    );
+  const observedToolCount = structuralCoverage?.observedToolCount || toolCount;
+  const notificationState = notificationReviewReceipt
+    ? '通知待复核（本地候选）'
+    : result.shouldNotify
+      ? '通知会在真实入口发送'
+      : '不发送通知';
+  const storageState = result.shouldStore
+    ? result.storageReview
+      ? '存储审计已生成'
+      : '存储审计缺失'
+    : '不写入记忆';
+  const issueParts = [
+    storageFailedAgents.length > 0
+      ? `失败阶段 ${storageFailedAgents.join('、')}`
+      : '',
+    traceIssues.failedSteps.length > 0
+      ? `失败 Agent ${traceIssues.failedSteps.map(getTraceStepLabel).join('、')}`
+      : '',
+    traceIssues.toolErrorCount || storageToolErrorCount
+      ? formatToolErrorSummary(traceIssues, storageToolErrorCount)
+      : '',
+    effectiveSkippedToolCount
+      ? `跳过工具 ${effectiveSkippedToolCount}`
+      : '',
+    effectivePlaceholderToolCount
+      ? `占位工具 ${effectivePlaceholderToolCount}`
+      : '',
+    structuralCoverage?.missingAgents.length
+      ? `缺阶段 ${structuralCoverage.missingAgents.slice(0, 2).join('、')}`
+      : '',
+    structuralCoverage?.missingTools.length
+      ? `缺工具 ${structuralCoverage.missingTools.slice(0, 2).join('、')}`
+      : '',
+  ].filter(Boolean);
+  const outcomeParts = [
+    matchedRuleLabel ? `规则 ${matchedRuleLabel}` : '',
+    confidenceLabel ? `置信度 ${confidenceLabel}` : '',
+    storageState,
+    notificationState,
+  ].filter(Boolean);
+  const title: Record<AgentWorkflowOrchestrationReceiptStatus, string> = {
+    ready: '编排已跑通',
+    review: '编排需复核',
+    blocked: '编排未达门禁',
+    idle: '编排无后续动作',
+  };
+  const summary = [
+    `已执行 Agent ${executedAgentCount}/${expectedAgentCount || executedAgentCount}`,
+    `工具 ${observedToolCount}/${expectedToolCount || observedToolCount}`,
+    issueParts[0] || storageState,
+    notificationState,
+  ].join('；');
+  const detail =
+    issueParts.length > 0
+      ? issueParts.join('；')
+      : outcomeParts.join('；') || '本次没有命中需要存储、通知或复核的动作。';
+  const chips = [
+    `Agent ${executedAgentCount}/${expectedAgentCount || executedAgentCount}`,
+    `工具 ${observedToolCount}/${expectedToolCount || observedToolCount}`,
+    result.storageReview?.traceStatus === 'partial' ||
+    status === 'review' ||
+    status === 'blocked'
+      ? `Trace ${status === 'blocked' ? '阻塞' : status === 'review' ? '需复核' : '完整'}`
+      : 'Trace 完整',
+    result.shouldStore ? '存储 是' : '存储 否',
+    result.notificationReview?.required
+      ? '通知 待复核'
+      : result.shouldNotify
+        ? '通知 发送'
+        : '通知 否',
+    '本地测试',
+  ];
+
+  return {
+    status,
+    title: title[status],
+    summary,
+    detail,
+    boundary:
+      notificationReviewReceipt?.boundary ||
+      'Options 测试只运行本地编排预览；不会写入 Memory Service、发送通知或执行规则自动化，真实副作用仍由消息入口统一处理。',
+    chips,
+  };
+}
+
+function formatEvidenceGeneratedAt(
+  generatedAt?: Date | string,
+): string {
+  if (generatedAt instanceof Date) return generatedAt.toISOString();
+  if (typeof generatedAt === 'string' && generatedAt.trim()) {
+    return generatedAt.trim();
+  }
+  return new Date().toISOString();
+}
+
+function escapeEvidenceRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeEvidenceSnippet(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function collectEvidenceRedactionSnippets(inputContent?: string): string[] {
+  const rawContent = String(inputContent || '').trim();
+  if (!rawContent) return [];
+
+  const snippets = new Map<string, string>();
+  const addSnippet = (value: string) => {
+    const normalized = normalizeEvidenceSnippet(value);
+    if (normalized.length >= 16 && !snippets.has(normalized.toLowerCase())) {
+      snippets.set(normalized.toLowerCase(), normalized);
+    }
+  };
+
+  addSnippet(rawContent);
+  addSnippet(normalizeEvidenceSnippet(rawContent));
+  rawContent
+    .split(/[\n\r.!?。！？;；]+/)
+    .forEach((part) => addSnippet(part));
+
+  const words = rawContent.match(/[\p{L}\p{N}_-]+/gu) || [];
+  const maxWindow = Math.min(words.length, 12);
+  for (let size = maxWindow; size >= 5; size -= 1) {
+    for (let index = 0; index + size <= words.length; index += 1) {
+      addSnippet(words.slice(index, index + size).join(' '));
+      if (snippets.size >= 120) break;
+    }
+    if (snippets.size >= 120) break;
+  }
+
+  return Array.from(snippets.values()).sort((a, b) => b.length - a.length);
+}
+
+function redactEvidenceSnippet(text: string, snippet: string): string {
+  const replacement = '[已省略测试消息片段]';
+  let redacted = text.replace(
+    new RegExp(escapeEvidenceRegExp(snippet), 'giu'),
+    replacement,
+  );
+  const tokens = snippet.match(/[\p{L}\p{N}_-]+/gu) || [];
+  if (tokens.length >= 2) {
+    const flexiblePattern = tokens
+      .map((token) => escapeEvidenceRegExp(token))
+      .join('[\\s\\p{P}\\p{S}]+');
+    redacted = redacted.replace(new RegExp(flexiblePattern, 'giu'), replacement);
+  }
+  return redacted;
+}
+
+function redactEvidenceInputContent(text: string, inputContent?: string): string {
+  return collectEvidenceRedactionSnippets(inputContent).reduce(
+    (redacted, snippet) => redactEvidenceSnippet(redacted, snippet),
+    text,
+  );
+}
+
+function buildDefaultEvidenceQualification(
+  options: AgentWorkflowRunEvidencePacketOptions,
+): AgentWorkflowRunEvidenceQualification {
+  if (options.qualification) return options.qualification;
+
+  if (options.stale) {
+    return {
+      status: 'stale',
+      title: '证据需重跑',
+      summary: options.staleReason || '当前结果已不是最新输入或配置的运行结果',
+      detail:
+        '这份证据包只能说明上一次运行；作为当前排障或发布前门禁前，请重新运行同一条测试。',
+    };
+  }
+
+  return {
+    status: 'review',
+    title: '单次调试证据',
+    summary: '当前结果未声明为保存样例回归证据',
+    detail:
+      '可复制用于排障；若要作为本地发布前门禁，请保存样例并建立或刷新基线。',
+  };
+}
+
+export function buildAgentWorkflowRunEvidencePacket(
+  result?: AgentWorkflowResultLike | null,
+  agents: AgentWorkflowAgentLike[] = [],
+  options: AgentWorkflowRunEvidencePacketOptions = {},
+): AgentWorkflowRunEvidencePacket | undefined {
+  if (!result) return undefined;
+
+  const diagnostics = buildAgentWorkflowResultDiagnostics(result);
+  const readiness = buildAgentWorkflowReadinessChecks(result);
+  const actions = buildAgentWorkflowRecommendedActions(result, diagnostics);
+  const verdict = buildAgentWorkflowRunVerdict(result, readiness, actions);
+  const coverage = buildAgentWorkflowStructuralCoverage(result, agents);
+  const orchestration = buildAgentWorkflowOrchestrationReceipt(result, agents);
+  const generatedAt = formatEvidenceGeneratedAt(options.generatedAt);
+  const snapshotLabel = options.stale ? '旧快照' : '当前结果';
+  const sourceLabel = options.sourceLabel || 'Options 关注项测试';
+  const qualification = buildDefaultEvidenceQualification(options);
+  const confidenceLabel =
+    getConfidenceLabel(result.confidence) ||
+    getConfidenceLabel(result.storageReview?.confidence) ||
+    '-';
+  const matchedRuleLabel = getMatchedRuleLabel(result) || '-';
+  const storageLabel = result.shouldStore ? '是' : '否';
+  const notificationLabel = result.notificationReview?.required
+    ? '待复核'
+    : result.shouldNotify
+      ? '发送'
+      : '否';
+  const verdictLabel = verdict
+    ? `${verdict.title}：${verdict.summary}`
+    : '未生成运行结论';
+  const coverageLabel = coverage?.summary || '未生成结构覆盖';
+  const orchestrationLabel =
+    orchestration?.summary || '未生成编排回执';
+  const readinessLines = readiness.length
+    ? readiness
+        .slice(0, 5)
+        .map(
+          (item) =>
+            `- [${item.status}] ${item.title}: ${item.summary}${
+              item.detail ? ` (${item.detail})` : ''
+            }`,
+        )
+    : ['- 无运行就绪检查'];
+  const actionLines = actions.length
+    ? actions
+        .slice(0, 5)
+        .map(
+          (item) =>
+            `- [${item.status}] ${item.title}: ${item.summary}${
+              item.detail ? ` (${item.detail})` : ''
+            }`,
+        )
+    : ['- 无下一步动作'];
+  const title = options.stale
+    ? '单次运行证据包（旧快照）'
+    : '单次运行证据包';
+  const summary = `${snapshotLabel} · ${verdictLabel}`;
+  const detail = `${coverageLabel}；证据资格 ${qualification.title}：${qualification.summary}；存储 ${storageLabel}；通知 ${notificationLabel}；置信度 ${confidenceLabel}`;
+  const chips = [
+    snapshotLabel,
+    `证据 ${qualification.title}`,
+    verdict?.status ? `结论 ${verdict.status}` : '结论 -',
+    coverage?.status ? `结构 ${coverage.status}` : '结构 -',
+    result.shouldStore ? '存储 是' : '存储 否',
+    result.notificationReview?.required
+      ? '通知 待复核'
+      : result.shouldNotify
+        ? '通知 发送'
+        : '通知 否',
+  ];
+  const text = redactEvidenceInputContent(
+    [
+    'Agent Workflow 单次运行证据包',
+    `生成时间: ${generatedAt}`,
+    `快照状态: ${snapshotLabel}`,
+    `来源: ${sourceLabel}`,
+    `证据资格: ${qualification.title} - ${qualification.summary}`,
+    qualification.detail ? `资格说明: ${qualification.detail}` : '',
+    `运行结论: ${verdictLabel}`,
+    `编排回执: ${orchestrationLabel}`,
+    `结构覆盖: ${coverageLabel}`,
+    `匹配规则: ${matchedRuleLabel}`,
+    `存储: ${storageLabel}`,
+    `通知: ${notificationLabel}`,
+    `置信度: ${confidenceLabel}`,
+    '运行就绪:',
+    ...readinessLines,
+    '下一步:',
+    ...actionLines,
+    `边界: ${AGENT_WORKFLOW_RUN_EVIDENCE_BOUNDARY}`,
+    ].filter(Boolean).join('\n'),
+    options.redactedInputContent,
+  );
+
+  return {
+    title,
+    summary,
+    detail,
+    boundary: AGENT_WORKFLOW_RUN_EVIDENCE_BOUNDARY,
+    chips,
+    text,
+    qualification,
+  };
 }
 
 export function buildAgentWorkflowConfigDiagnostics(
@@ -399,13 +1029,16 @@ export function buildAgentWorkflowResultDiagnostics(
   const matchedRuleLabel = getMatchedRuleLabel(result);
 
   if (result.notificationReview?.required) {
+    const receipt = buildAgentWorkflowNotificationReviewReceipt(result);
     diagnostics.push({
       id: 'notification-review-required',
       severity: 'warning',
-      title: '通知已转待复核',
+      title: receipt?.title || '通知已转待复核',
       message:
+        receipt?.summary ||
         result.notificationReview.message ||
         '低置信度关注项命中没有直接触发通知。',
+      detail: receipt?.boundary,
     });
   }
 
@@ -507,15 +1140,27 @@ export function buildAgentWorkflowResultDiagnostics(
   }
 
   const traceIssues = getTraceIssueSummary(trace);
-  const externalPlaceholderLabels = traceIssues.externalPlaceholderLabels;
-  if (externalPlaceholderLabels.length > 0) {
+  const effectivePlaceholderToolCount =
+    traceIssues.placeholderToolCount ||
+    result.storageReview?.toolPlaceholderCount ||
+    0;
+  const placeholderLabels =
+    traceIssues.externalPlaceholderLabels.length > 0
+      ? traceIssues.externalPlaceholderLabels
+      : traceIssues.placeholderToolLabels;
+  if (effectivePlaceholderToolCount > 0) {
     diagnostics.push({
       id: 'external-query-placeholder-runtime',
       severity: 'info',
       title: '外部查询仍是占位',
-      message: externalPlaceholderLabels.join('、'),
+      message:
+        placeholderLabels.length > 0
+          ? placeholderLabels.join('、')
+          : `占位工具 ${effectivePlaceholderToolCount}`,
       detail:
-        '本次没有读取真实 Jira/Wiki 数据；接入 adapter 前，这个阶段只能作为占位信号。',
+        placeholderLabels.length > 0
+          ? '本次没有读取真实 Jira/Wiki 数据；接入 adapter 前，这个阶段只能作为占位信号。'
+          : 'storageReview 标记了占位工具，但当前 trace 快照没有具体 Agent / Tool 标签；接入 adapter 后用同一条消息重跑验证。',
     });
   }
 
@@ -524,13 +1169,19 @@ export function buildAgentWorkflowResultDiagnostics(
     failedSteps.length === 0 &&
     (result.storageReview.toolErrorCount || traceIssues.toolErrorCount || 0) > 0
   ) {
-    const toolErrorCount =
-      result.storageReview.toolErrorCount || traceIssues.toolErrorCount;
+    const toolErrorSummary = formatToolErrorSummary(
+      traceIssues,
+      result.storageReview.toolErrorCount,
+    );
     diagnostics.push({
       id: 'partial-trace',
       severity: 'warning',
       title: 'Trace 部分异常',
-      message: `工具错误 ${toolErrorCount}`,
+      message: toolErrorSummary,
+      detail:
+        traceIssues.toolErrorLabels.length > 0
+          ? '先修复上述 Agent / 工具错误，再重新运行同一条测试消息。'
+          : undefined,
     });
   }
 
@@ -612,13 +1263,16 @@ export function buildAgentWorkflowDecisionPath(
   }
 
   if (result.notificationReview?.required) {
+    const receipt = buildAgentWorkflowNotificationReviewReceipt(result);
     decisionPath.push({
       id: 'notification-review',
       status: 'warning',
-      title: '通知复核',
+      title: receipt?.title || '通知复核',
       summary:
+        receipt?.summary ||
         result.notificationReview.message ||
         '低置信度关注项命中已转为人工复核。',
+      detail: receipt?.detail,
     });
   } else if (result.shouldNotify) {
     decisionPath.push({
@@ -698,7 +1352,7 @@ export function buildAgentWorkflowDecisionPath(
       failedSteps.length > 0
         ? `失败：${failedSteps.map(getTraceStepLabel).join('、')}`
         : toolErrorCount > 0
-        ? `工具错误 ${toolErrorCount}`
+        ? formatToolErrorSummary(traceIssues, toolErrorCount)
         : effectiveSkippedToolCount > 0 || effectivePlaceholderToolCount > 0
         ? [
             effectiveSkippedToolCount
@@ -732,19 +1386,16 @@ export function buildAgentWorkflowRecommendedActions(
     getConfidenceLabel(result.storageReview?.confidence);
 
   if (result.notificationReview?.required) {
+    const receipt = buildAgentWorkflowNotificationReviewReceipt(result);
     actions.push({
       id: 'review-notification',
       status: 'review',
-      title: '处理通知/自动化复核',
+      title: '确认本地复核候选',
       summary:
-        result.notificationReview.message || '低置信度关注项命中需要人工确认。',
-      detail: matchedRuleLabel
-        ? `规则：${matchedRuleLabel}${
-            confidenceLabel ? ` / ${confidenceLabel}` : ''
-          }`
-        : confidenceLabel
-        ? `置信度 ${confidenceLabel}`
-        : undefined,
+        receipt?.summary ||
+        result.notificationReview.message ||
+        '低置信度关注项命中需要人工确认。',
+      detail: receipt?.boundary,
     });
   }
 
@@ -770,7 +1421,9 @@ export function buildAgentWorkflowRecommendedActions(
       summary:
         runDiagnostics.find((item) => item.id === 'partial-trace')?.message ||
         'Trace 标记为部分异常。',
-      detail: '先定位工具错误来源，再重新运行同一条测试消息。',
+      detail:
+        runDiagnostics.find((item) => item.id === 'partial-trace')?.detail ||
+        '先定位工具错误来源，再重新运行同一条测试消息。',
     });
   }
 
@@ -938,9 +1591,12 @@ export function buildAgentWorkflowReadinessChecks(
       summary: `失败：${
         traceIssues.failedSteps.map(getTraceStepLabel).join('、') ||
         storageFailedAgents.join('、') ||
-        `工具错误 ${traceIssues.toolErrorCount || storageToolErrorCount}`
+        formatToolErrorSummary(traceIssues, storageToolErrorCount)
       }`,
-      detail: '修复失败阶段后再允许自动运行。',
+      detail:
+        traceIssues.toolErrorLabels.length > 0
+          ? '先修复上述 Agent / 工具错误，再重新运行同一条测试消息。'
+          : '修复失败阶段后再允许自动运行。',
     });
   } else if (
     effectiveSkippedToolCount > 0 ||
@@ -1012,13 +1668,16 @@ export function buildAgentWorkflowReadinessChecks(
   }
 
   if (result.notificationReview?.required) {
+    const receipt = buildAgentWorkflowNotificationReviewReceipt(result);
     checks.push({
       id: 'notification',
       status: 'review',
       title: '通知/自动化',
       summary:
-        result.notificationReview.message || '低置信度命中已暂停通知和自动化。',
-      detail: matchedRuleLabel ? `规则：${matchedRuleLabel}` : undefined,
+        receipt?.summary ||
+        result.notificationReview.message ||
+        '低置信度命中已暂停通知和自动化。',
+      detail: receipt?.detail,
     });
   } else if (result.shouldNotify && !matchedRuleLabel) {
     checks.push({

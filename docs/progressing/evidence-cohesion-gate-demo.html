@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Evidence Cohesion Gate Demo</title>
+  <style>
+    :root {
+      --bg: #f4f2ec;
+      --surface: #ffffff;
+      --surface-2: #f8f7f3;
+      --ink: #202223;
+      --muted: #6c6f73;
+      --line: #d9d6cd;
+      --green: #2f7d5b;
+      --amber: #a8641a;
+      --red: #a33a35;
+      --blue: #315f93;
+      --violet: #67508e;
+      --shadow: 0 16px 40px rgba(38, 36, 28, 0.12);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0)) 0 0 / 100% 260px no-repeat,
+        var(--bg);
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      padding: 24px 18px;
+      border-right: 1px solid var(--line);
+      background: #ebe7dd;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 26px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: #202223;
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .brand-title {
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .brand-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      border: 0;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 7px;
+      background: transparent;
+      color: #3b3d3f;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: #fff;
+      color: #121314;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.04);
+      font-weight: 700;
+    }
+
+    .side-meter {
+      margin-top: 28px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(0,0,0,0.1);
+      display: grid;
+      gap: 12px;
+    }
+
+    .meter-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .meter-row strong {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 26px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 760px;
+      line-height: 1.55;
+    }
+
+    .receipt {
+      min-width: 300px;
+      max-width: 420px;
+      border: 1px solid #d2c8b4;
+      background: #fffaf0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .receipt-title {
+      font-size: 13px;
+      color: var(--amber);
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .receipt-body {
+      font-size: 13px;
+      color: #4c4030;
+      line-height: 1.45;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 10px 28px rgba(38, 36, 28, 0.08);
+      min-width: 0;
+    }
+
+    .panel-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .panel-title {
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .panel-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 3px;
+      background: var(--surface-2);
+    }
+
+    .segmented button {
+      border: 0;
+      background: transparent;
+      padding: 7px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .segmented button.active {
+      background: #202223;
+      color: #fff;
+    }
+
+    .ask-box {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .query {
+      padding: 14px 15px;
+      border: 1px solid #d8d2c2;
+      background: #fbfaf6;
+      border-radius: 8px;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .answer-status {
+      border-left: 4px solid var(--amber);
+      background: #fff7e5;
+      padding: 12px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .answer {
+      display: grid;
+      gap: 10px;
+      font-size: 14px;
+      line-height: 1.62;
+    }
+
+    .answer strong {
+      color: var(--ink);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: 999px;
+      padding: 5px 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .flow {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 10px;
+      padding: 12px 0;
+      border-bottom: 1px solid #ece8df;
+    }
+
+    .step:last-child {
+      border-bottom: 0;
+    }
+
+    .step-index {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: #ece8df;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 12px;
+    }
+
+    .step.good .step-index {
+      background: #e3efe8;
+      color: var(--green);
+    }
+
+    .step.warn .step-index {
+      background: #fff0d2;
+      color: var(--amber);
+    }
+
+    .step.stop .step-index {
+      background: #f4dedb;
+      color: var(--red);
+    }
+
+    .step-title {
+      font-weight: 800;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .step-detail {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .status-pill {
+      font-size: 11px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .status-pill.good {
+      border-color: #bad8c7;
+      color: var(--green);
+      background: #edf7f1;
+    }
+
+    .status-pill.warn {
+      border-color: #ebd2a1;
+      color: var(--amber);
+      background: #fff7e5;
+    }
+
+    .status-pill.stop {
+      border-color: #e6b8b4;
+      color: var(--red);
+      background: #fff0ef;
+    }
+
+    .evidence-list {
+      padding: 14px 18px 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .evidence-item {
+      display: grid;
+      grid-template-columns: 7px minmax(0, 1fr);
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .evidence-item.allowed {
+      border-color: #bdd9ca;
+      background: #f4fbf7;
+    }
+
+    .evidence-item.quarantined {
+      border-color: #ead1a5;
+      background: #fff9ec;
+    }
+
+    .evidence-item.blocked {
+      border-color: #e5b5b0;
+      background: #fff3f2;
+    }
+
+    .bar {
+      border-radius: 999px;
+      background: var(--line);
+    }
+
+    .allowed .bar {
+      background: var(--green);
+    }
+
+    .quarantined .bar {
+      background: var(--amber);
+    }
+
+    .blocked .bar {
+      background: var(--red);
+    }
+
+    .evidence-title {
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .evidence-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .details {
+      padding: 16px 18px 18px;
+      border-top: 1px solid var(--line);
+      background: #fbfaf6;
+    }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .metric-value {
+      font-size: 20px;
+      font-weight: 900;
+    }
+
+    .metric-label {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 18px 18px;
+    }
+
+    .action-row button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 7px;
+      padding: 9px 11px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .action-row button.primary {
+      border-color: #1f2326;
+      background: #1f2326;
+      color: #fff;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      max-width: 360px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #202223;
+      color: #fff;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      line-height: 1.45;
+      transform: translateY(14px);
+      opacity: 0;
+      pointer-events: none;
+      transition: 160ms ease;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .topbar,
+      .workspace {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .receipt {
+        min-width: 0;
+        max-width: none;
+      }
+    }
+
+    @media (max-width: 560px) {
+      main {
+        padding: 16px;
+      }
+
+      .panel-header {
+        display: grid;
+      }
+
+      .details-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .step {
+        grid-template-columns: 28px minmax(0, 1fr);
+      }
+
+      .step .status-pill {
+        grid-column: 2;
+        justify-self: start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">PA</div>
+        <div>
+          <div class="brand-title">Personal AI</div>
+          <div class="brand-sub">Memory Exploring</div>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Demo scenes">
+        <button class="active" data-scene="ask">Ask</button>
+        <button data-scene="reflection">Reflection</button>
+        <button data-scene="pack">Context Pack</button>
+      </nav>
+
+      <div class="side-meter" aria-label="Current dataset">
+        <div class="meter-row"><span>messages</span><strong>10,933</strong></div>
+        <div class="meter-row"><span>relationships</span><strong>53,013</strong></div>
+        <div class="meter-row"><span>active reflections</span><strong>817</strong></div>
+        <div class="meter-row"><span>queued actions</span><strong>104</strong></div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="topbar">
+        <div>
+          <h1 id="pageTitle">证据同场门</h1>
+          <div class="subtitle" id="pageSubtitle">在 Ask 生成答案前，先把候选证据缩窄到同一个 subject / property / scene。相邻证据不会被当成当前事实。</div>
+        </div>
+        <div class="receipt">
+          <div class="receipt-title" id="receiptTitle">证据已缩窄</div>
+          <div class="receipt-body" id="receiptBody">本轮只允许 `MTR-145975 / story_points_new` 的同场证据进入答案；2 组相邻 estimate 已隔离。</div>
+        </div>
+      </div>
+
+      <section class="workspace">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title" id="surfaceTitle">Ask 本轮状态</div>
+              <div class="panel-sub" id="surfaceSub">当前问题：MTR-145975 story point 是否仍为 68</div>
+            </div>
+            <div class="segmented" aria-label="Scene switcher">
+              <button class="active" data-scene="ask">Ask</button>
+              <button data-scene="reflection">Reflection</button>
+              <button data-scene="pack">Pack</button>
+            </div>
+          </div>
+
+          <div class="ask-box">
+            <div class="query" id="queryText">MTR-145975 的 story point 现在还是 68 吗？如果不确定，帮我留一个 OpenClaw 查证。</div>
+            <div class="answer-status" id="answerStatus">证据同场门：已排除 2 组相邻 estimate，只使用 MTR-145975 / story_points_new 的 3 条证据。未确认当前 Jira 权威值，建议只查该 ticket 的权威来源。</div>
+            <div class="answer" id="answerText">
+              <p><strong>当前只能按历史证据回答：</strong>MTR-145975 的 `story_points_new = 68` 是本轮最强同场线索，但没有新的 Jira authority evidence 证明它仍然未变。</p>
+              <p>Personal AI 可以创建一个窄化的查证目标：只查 `MTR-145975.story_points_new`，不携带 MTR-144266 或 MTR-148115 的 estimate 证据。</p>
+            </div>
+            <div class="chips" id="chips">
+              <span class="chip">subject: MTR-145975</span>
+              <span class="chip">property: story_points_new</span>
+              <span class="chip">decision: narrowed</span>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button class="primary" id="primaryAction">创建窄化查证目标</button>
+            <button id="secondaryAction">查看隔离原因</button>
+            <button id="copyAction">复制审计摘要</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Gate Pipeline</div>
+              <div class="panel-sub">消费前检查，不改写原始记忆</div>
+            </div>
+          </div>
+          <div class="flow" id="flow"></div>
+        </div>
+      </section>
+
+      <section class="workspace" style="margin-top:18px;">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Allowed Evidence</div>
+              <div class="panel-sub">允许进入答案 / action / context pack</div>
+            </div>
+            <span class="status-pill good" id="allowedCount">3 allowed</span>
+          </div>
+          <div class="evidence-list" id="allowedEvidence"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Quarantined Evidence</div>
+              <div class="panel-sub">相邻但不同场，只能作为经验或被丢弃</div>
+            </div>
+            <span class="status-pill warn" id="blockedCount">2 held</span>
+          </div>
+          <div class="evidence-list" id="blockedEvidence"></div>
+          <div class="details">
+            <div class="details-grid">
+              <div class="metric">
+                <div class="metric-value" id="precisionMetric">0.91</div>
+                <div class="metric-label">同场置信度</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value" id="hiddenMetric">2</div>
+                <div class="metric-label">隔离相邻组</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value" id="actionMetric">1</div>
+                <div class="metric-label">窄化动作</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const scenes = {
+      ask: {
+        title: '证据同场门',
+        subtitle: '在 Ask 生成答案前，先把候选证据缩窄到同一个 subject / property / scene。相邻证据不会被当成当前事实。',
+        receiptTitle: '证据已缩窄',
+        receiptBody: '本轮只允许 `MTR-145975 / story_points_new` 的同场证据进入答案；2 组相邻 estimate 已隔离。',
+        surfaceTitle: 'Ask 本轮状态',
+        surfaceSub: '当前问题：MTR-145975 story point 是否仍为 68',
+        query: 'MTR-145975 的 story point 现在还是 68 吗？如果不确定，帮我留一个 OpenClaw 查证。',
+        status: '证据同场门：已排除 2 组相邻 estimate，只使用 MTR-145975 / story_points_new 的 3 条证据。未确认当前 Jira 权威值，建议只查该 ticket 的权威来源。',
+        answer: [
+          '<strong>当前只能按历史证据回答：</strong>MTR-145975 的 `story_points_new = 68` 是本轮最强同场线索，但没有新的 Jira authority evidence 证明它仍然未变。',
+          'Personal AI 可以创建一个窄化的查证目标：只查 `MTR-145975.story_points_new`，不携带 MTR-144266 或 MTR-148115 的 estimate 证据。'
+        ],
+        chips: ['subject: MTR-145975', 'property: story_points_new', 'decision: narrowed'],
+        steps: [
+          ['good', 'Frame locked', 'subject=MTR-145975, property=story_points_new, intent=fact_followup', 'locked'],
+          ['warn', 'Adjacent groups found', 'MTR-144266 / MTR-148115 都是 estimate，但不是当前 issue', '2 held'],
+          ['good', 'Consumption narrowed', 'allowed evidence 进入答案；quarantined evidence 不进入 OpenClaw 参数', 'safe'],
+          ['warn', 'Authority still missing', '未把历史值冒充为当前 Jira 权威值', 'watch']
+        ],
+        allowed: [
+          ['MTR-145975 · story_points_new = 68', 'reflection_run / 同 issue + 同 property / 历史值，等待权威复核'],
+          ['MTR-145975 · story point follow-up', 'raw Glip memory / 讨论同一 ticket 的估算变化风险'],
+          ['MTR-145975 · Jira estimate context', 'chunk / 同 subject anchor，可作为 supporting evidence']
+        ],
+        blocked: [
+          ['MTR-144266 · DEV Estimate Original = 3', '同类 estimate，但 subject 是另一个 ticket；不可支持 MTR-145975 结论'],
+          ['MTR-148115 · DEV Estimate New = 0.4', '同为 AI Notes estimate，但 property 和 issue 都不同，只能作为相邻经验']
+        ],
+        metrics: ['0.91', '2', '1'],
+        buttons: ['创建窄化查证目标', '查看隔离原因', '复制审计摘要'],
+        toast: '已准备窄化查证目标：MTR-145975.story_points_new。未发送、未执行、未写入新事实。'
+      },
+      reflection: {
+        title: 'Reflection 事实跟进',
+        subtitle: '在创建 delegate_openclaw action 前，先拆分同名项目和不同 property，避免一个 action 带着混合问题运行。',
+        receiptTitle: '已阻断混合查证',
+        receiptBody: 'NOVA mailing group 与 NOVA-13780 assignee 已拆成两个 problem frame，本轮不创建混合 OpenClaw action。',
+        surfaceTitle: 'Reflection Proposal',
+        surfaceSub: '当前线程：NOVA / Brandy / assignee 相关事实跟进',
+        query: '继续外部核实：Nova CA - Brandy 的 mailing_group_email，同时检查 NOVA-13780 assignee / cc 是否变化。',
+        status: '证据同场门：检测到同名 NOVA 生态下的 2 个不同 property。mailing_group_email 与 assignee/cc 不会放进同一个委派动作。',
+        answer: [
+          '<strong>本轮建议拆分：</strong>一个 action 查 `Nova CA - Brandy.mailing_group_email`，另一个 action 查 `NOVA-13780.assignee/cc`。',
+          '如果预算只允许一个外部查证，优先执行当前用户问题指向的 property；另一个保留为 due contract，不自动混入。'
+        ],
+        chips: ['subject family: NOVA', 'split: 2 frames', 'decision: split_required'],
+        steps: [
+          ['good', 'Source family matched', 'NOVA / Brandy / Jira 都属于相近工作域', 'nearby'],
+          ['warn', 'Property conflict', 'mailing_group_email 和 assignee/cc 是不同事实槽', 'split'],
+          ['stop', 'Mixed delegation blocked', '不创建一个含多个 property 的 OpenClaw action', 'blocked'],
+          ['good', 'Contracts reusable', '每个 problem frame 可绑定独立 Evidence Watch contract', 'ready']
+        ],
+        allowed: [
+          ['Nova CA - Brandy · mailing_group_email', 'reflection_run / 同 subject + 同 property，可形成一个窄化 action'],
+          ['Nova CA - Brandy · team', 'supporting / 帮助识别 mailing group 所属团队，不证明 assignee']
+        ],
+        blocked: [
+          ['NOVA-13780 · assignee', '同项目生态但不同 Jira issue + 不同 property，需要独立 action'],
+          ['NOVA-13780 · cc', '同 issue family，但和 mailing_group_email 不同场']
+        ],
+        metrics: ['0.84', '2', '2'],
+        buttons: ['拆分为两个查证目标', '保留当前 property', '复制拆分摘要'],
+        toast: '已拆分 problem frame。当前 demo 未创建 OpenClaw action，也未写入线上数据。'
+      },
+      pack: {
+        title: 'Context Pack 外发前检查',
+        subtitle: '在把 Personal AI 记忆交给外部 AI 前，先排除同类但不同 subject 的证据，减少 prompt 污染。',
+        receiptTitle: '上下文已裁剪',
+        receiptBody: '仅保留当前 repo_url 问题的证据；相邻仓库和 AI model 推荐被隔离，不进入外部 AI prompt。',
+        surfaceTitle: 'Web AI Context Pack',
+        surfaceSub: '当前任务：让外部 AI 帮忙核对 repository_url',
+        query: '帮我整理 rc-ai-learning 的 repository_url 和最近相关上下文，准备发给 Codex。',
+        status: '证据同场门：`rc-ai-learning.repository_url` 与 `nikita-karatun-shinobi.repository_url` 是两个 repo subject；后者不会进入这个 context pack。',
+        answer: [
+          '<strong>可外发摘要：</strong>当前问题只关于 `rc-ai-learning.repository_url`，已保留 repo URL 相关历史线索和待核实状态。',
+          '被隔离的 AI model recommendation / 其他 repository_url 只会在“相邻参考”里显示给用户，不写入 prompt。'
+        ],
+        chips: ['subject: rc-ai-learning', 'property: repository_url', 'decision: narrowed'],
+        steps: [
+          ['good', 'Prompt target parsed', '目标是 repo URL，不是 AI model / release status', 'parsed'],
+          ['warn', 'Sibling repo detected', 'nikita-karatun-shinobi 与 rc-ai-learning 共享 org 但不是同一 repo', 'held'],
+          ['good', 'Pack compiled', '只把 allowed evidence 写入草稿，未发送给外部 AI', 'draft'],
+          ['good', 'Egress still separate', '外发权限和敏感信息由后续 Projection / Egress gate 处理', 'next']
+        ],
+        allowed: [
+          ['rc-ai-learning · repository_url', 'entity property / 当前 subject 的主证据'],
+          ['rc-ai-learning · repo discussion', 'raw message / 说明用户正在找该仓库代码']
+        ],
+        blocked: [
+          ['nikita-karatun-shinobi · repository_url', '同 org 相邻仓库，但不是当前 subject'],
+          ['AI-Native Challenge · recommended_ai_model', '同为 AI 工具上下文，但 property 不同，不进入 repo URL pack']
+        ],
+        metrics: ['0.88', '2', '1'],
+        buttons: ['插入裁剪后的 context pack', '查看相邻参考', '复制外发边界'],
+        toast: '已插入裁剪后的 context pack 到本机草稿。未发送给外部 AI，未创建任务。'
+      }
+    };
+
+    const sceneButtons = document.querySelectorAll('[data-scene]');
+    const toast = document.getElementById('toast');
+
+    function setScene(sceneKey) {
+      const scene = scenes[sceneKey];
+      document.getElementById('pageTitle').textContent = scene.title;
+      document.getElementById('pageSubtitle').textContent = scene.subtitle;
+      document.getElementById('receiptTitle').textContent = scene.receiptTitle;
+      document.getElementById('receiptBody').textContent = scene.receiptBody;
+      document.getElementById('surfaceTitle').textContent = scene.surfaceTitle;
+      document.getElementById('surfaceSub').textContent = scene.surfaceSub;
+      document.getElementById('queryText').textContent = scene.query;
+      document.getElementById('answerStatus').textContent = scene.status;
+      document.getElementById('answerText').innerHTML = scene.answer.map(item => `<p>${item}</p>`).join('');
+      document.getElementById('chips').innerHTML = scene.chips.map(item => `<span class="chip">${item}</span>`).join('');
+      document.getElementById('flow').innerHTML = scene.steps.map((step, index) => `
+        <div class="step ${step[0]}">
+          <div class="step-index">${index + 1}</div>
+          <div>
+            <div class="step-title">${step[1]}</div>
+            <div class="step-detail">${step[2]}</div>
+          </div>
+          <span class="status-pill ${step[0]}">${step[3]}</span>
+        </div>
+      `).join('');
+      document.getElementById('allowedEvidence').innerHTML = scene.allowed.map(item => evidenceTemplate(item, 'allowed')).join('');
+      document.getElementById('blockedEvidence').innerHTML = scene.blocked.map((item, index) => evidenceTemplate(item, index === 0 ? 'quarantined' : 'blocked')).join('');
+      document.getElementById('allowedCount').textContent = `${scene.allowed.length} allowed`;
+      document.getElementById('blockedCount').textContent = `${scene.blocked.length} held`;
+      document.getElementById('precisionMetric').textContent = scene.metrics[0];
+      document.getElementById('hiddenMetric').textContent = scene.metrics[1];
+      document.getElementById('actionMetric').textContent = scene.metrics[2];
+      document.getElementById('primaryAction').textContent = scene.buttons[0];
+      document.getElementById('secondaryAction').textContent = scene.buttons[1];
+      document.getElementById('copyAction').textContent = scene.buttons[2];
+      sceneButtons.forEach(button => {
+        button.classList.toggle('active', button.dataset.scene === sceneKey);
+      });
+      document.body.dataset.scene = sceneKey;
+    }
+
+    function evidenceTemplate(item, kind) {
+      return `
+        <div class="evidence-item ${kind}">
+          <div class="bar"></div>
+          <div>
+            <div class="evidence-title">${item[0]}</div>
+            <div class="evidence-meta">${item[1]}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    sceneButtons.forEach(button => {
+      button.addEventListener('click', () => setScene(button.dataset.scene));
+    });
+
+    document.getElementById('primaryAction').addEventListener('click', () => {
+      showToast(scenes[document.body.dataset.scene || 'ask'].toast);
+    });
+
+    document.getElementById('secondaryAction').addEventListener('click', () => {
+      showToast('已展开隔离理由：subject/property/scene 不一致的证据不会进入本轮消费。');
+    });
+
+    document.getElementById('copyAction').addEventListener('click', () => {
+      showToast('审计摘要已复制到本机剪贴板示意；demo 未写入系统剪贴板。');
+    });
+
+    setScene('ask');
+  </script>
+</body>
+</html>

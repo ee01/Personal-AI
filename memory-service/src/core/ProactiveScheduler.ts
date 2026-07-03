@@ -55,15 +55,25 @@ export class ProactiveScheduler {
     }
 
     const config = getConfig();
+    if (!config.proactiveSchedulerEnabled) {
+      console.log(
+        '[ProactiveScheduler] Background scheduler disabled; set PROACTIVE_SCHEDULER_ENABLED=true to enable heartbeat and cron jobs',
+      );
+      return;
+    }
 
     // 1. Heartbeat loop
     this.heartbeatIntervalId = setInterval(() => {
       this.safeRun('heartbeat', () => this.runHeartbeat());
     }, config.heartbeatIntervalMs);
 
-    this.outreachIntervalId = setInterval(() => {
-      this.safeRun('outreach', () => this.runOutreachCycle());
-    }, config.outreachIntervalMs);
+    if (config.outreachEnabled) {
+      this.outreachIntervalId = setInterval(() => {
+        this.safeRun('outreach', () => this.runOutreachCycle());
+      }, config.outreachIntervalMs);
+    } else {
+      console.log('[ProactiveScheduler] Outreach scheduler disabled');
+    }
 
     // 2. Daily consolidation cron
     this.dailyTask = cron.schedule(config.dailyCron, () => {
@@ -91,8 +101,10 @@ export class ProactiveScheduler {
     this.running = true;
 
     console.log(
-      `[ProactiveScheduler] Started — heartbeat every ${config.heartbeatIntervalMs}ms, ` +
-        `outreach every ${config.outreachIntervalMs}ms, ` +
+      `[ProactiveScheduler] Started - heartbeat every ${config.heartbeatIntervalMs}ms, ` +
+        (config.outreachEnabled
+          ? `outreach every ${config.outreachIntervalMs}ms, `
+          : 'outreach disabled, ') +
         `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}", ` +
         `weekly report cron "${config.weeklyReportCron}", ` +
         `today pilot prep cron "${config.todayPilotPrepCron}"`,

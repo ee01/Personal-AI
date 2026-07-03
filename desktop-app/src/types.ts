@@ -287,6 +287,12 @@ export interface BridgeRecallAnalysis {
 export interface BridgeAssistantAskResponse {
   answer: string;
   queryTimeMs: number;
+  contextMatch?: {
+    state?: string;
+    userFacingSummary?: string;
+    selectedTopic?: Record<string, unknown>;
+    candidates?: Array<Record<string, unknown>>;
+  };
   blocks?: BridgeRecallBlock[];
   analysis?: BridgeRecallAnalysis;
   structuredAnswer?: BridgeStructuredAnswer;
@@ -335,6 +341,7 @@ export type BridgeAssistantStreamEvent =
       type: 'result';
       answer: string;
       queryTimeMs: number;
+      contextMatch?: BridgeAssistantAskResponse['contextMatch'];
       blocks?: BridgeRecallBlock[];
       analysis?: BridgeRecallAnalysis;
       structuredAnswer?: BridgeStructuredAnswer;

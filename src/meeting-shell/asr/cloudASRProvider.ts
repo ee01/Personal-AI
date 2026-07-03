@@ -1,16 +1,51 @@
-import { getEnvConfig } from '../../utils';
 import {
+  getEnvConfig,
+  normalizeMeetingTranscribeLanguage,
+  type EnvConfigType,
+} from '../../utils.js';
+import {
+  getMeetingTranscribeApiStyleLabel,
   getMeetingTranscribeCompatibilityIssue,
   normalizeMeetingTranscribeApiStyle,
   requestMeetingTranscription,
-} from '../asrProvider';
-import { prepareMediaBlobForTranscription } from '../transcodeForWhisper';
-import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
-import { createASREventEmitter } from './types';
-import { sanitizeASRTranscriptText } from './transcriptFilter';
+} from '../asrProvider.js';
+import { prepareMediaBlobForTranscription } from '../transcodeForWhisper.js';
+import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types.js';
+import { createASREventEmitter } from './types.js';
+import { sanitizeASRTranscriptText } from './transcriptFilter.js';
 
 const SEGMENT_MS = 5000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+
+function getCloudASREndpointLabel(
+  apiStyle: ReturnType<typeof normalizeMeetingTranscribeApiStyle>,
+): string {
+  return apiStyle === 'openai_chat_completions'
+    ? 'POST /v1/chat/completions + input_audio'
+    : 'POST /v1/audio/transcriptions';
+}
+
+export function buildCloudASRStatusDetail(
+  envConfig: Pick<
+    EnvConfigType,
+    | 'MEETING_TRANSCRIBE_API_STYLE'
+    | 'MEETING_TRANSCRIBE_MODEL'
+    | 'MEETING_TRANSCRIBE_LANGUAGE'
+  >,
+): string {
+  const apiStyle = normalizeMeetingTranscribeApiStyle(
+    envConfig.MEETING_TRANSCRIBE_API_STYLE,
+  );
+  const endpointLabel = getCloudASREndpointLabel(apiStyle);
+  const styleLabel = getMeetingTranscribeApiStyleLabel(apiStyle);
+  const model =
+    String(envConfig.MEETING_TRANSCRIBE_MODEL || 'whisper-1').trim() ||
+    'whisper-1';
+  const language = normalizeMeetingTranscribeLanguage(
+    envConfig.MEETING_TRANSCRIBE_LANGUAGE,
+  );
+  return `Cloud ASR · ${endpointLabel} · ${styleLabel} · model ${model} · language ${language} · segment ${SEGMENT_MS / 1000}s`;
+}
 
 export class CloudASRProvider implements ASRProvider {
   readonly tier: MeetingPilotASRTier = 'cloud';
@@ -51,10 +86,17 @@ export class CloudASRProvider implements ASRProvider {
     const stream =
       audio instanceof MediaStream ? audio : new MediaStream([audio]);
     this._startSegment(stream);
+    let statusDetail: string | undefined;
+    try {
+      statusDetail = buildCloudASRStatusDetail(await getEnvConfig());
+    } catch {
+      statusDetail = undefined;
+    }
     this.emitter.emit('status', {
       tier: 'cloud',
       state: 'running',
       ts: Date.now(),
+      detail: statusDetail,
     });
   }
 

@@ -95,6 +95,10 @@ export interface MemoryCoveragePriorityFocus {
   actionSeverity?: MemoryCoverageRepairAction['severity'];
   reason: string;
   source: string;
+  selectionBasis: string;
+  comparedPlatformCount: number;
+  ignoredInfoActionCount: number;
+  boundary: string;
 }
 
 export interface MemoryCoverageTimelineEvent {
@@ -106,9 +110,37 @@ export interface MemoryCoverageTimelineEvent {
   source: string;
 }
 
+export interface MemoryCoverageMapReceipt {
+  generatedAt: number;
+  staleAfterDays: number;
+  source: string;
+  summary: MemoryCoverageMapReceiptSummary;
+  boundary: string;
+  note: string;
+}
+
+export interface MemoryCoverageMapReceiptSummary {
+  platformCount: number;
+  activeDerivedPlatformCount: number;
+  healthyPlatformCount: number;
+  warningPlatformCount: number;
+  repairActionCount: number;
+  coverageGapCount: number;
+  infoPlanningActionCount: number;
+  pressureItemCount: number;
+  totalMessages: number;
+  totalChunks: number;
+  totalEntities: number;
+  timelineEventCount: number;
+  latestAt?: number | null;
+  windowLabel: string;
+  emptyState: string;
+}
+
 export interface MemoryCoverageMapResponse {
   generatedAt: number;
   staleAfterDays: number;
+  receipt: MemoryCoverageMapReceipt;
   summary: MemoryCoverageSummary;
   platforms: MemoryCoveragePlatform[];
   repairActions: MemoryCoverageRepairAction[];
@@ -154,6 +186,39 @@ export interface SkillSyncCoverageRow {
   lastError: string | null;
   bindingsByState: Record<string, number>;
 }
+
+export type MemoryCoverageSliceName =
+  | 'messages-by-source'
+  | 'provider-jobs-recent'
+  | 'pressure'
+  | 'skills-sync';
+
+export interface MemoryCoverageSliceReceipt {
+  slice: MemoryCoverageSliceName;
+  generatedAt: number;
+  staleAfterDays: number;
+  source: string;
+  summary: MemoryCoverageSliceReceiptSummary;
+  boundary: string;
+  note: string;
+}
+
+export interface MemoryCoverageSliceReceiptSummary {
+  itemCount: number;
+  totalCount?: number;
+  recentCount?: number;
+  failureCount?: number;
+  enabledCount?: number;
+  latestAt?: number | null;
+  windowLabel: string;
+  emptyState: string;
+}
+
+export type MemoryCoverageSliceResponse<T extends object> = T & {
+  generatedAt: number;
+  staleAfterDays: number;
+  receipt: MemoryCoverageSliceReceipt;
+};
 
 interface CountRow {
   count: number | null;
@@ -221,7 +286,8 @@ interface ExternalAiImportCoverageStats {
   latestCommittedAt: number | null;
 }
 
-const STALE_AFTER_DAYS = 7;
+export const MEMORY_COVERAGE_STALE_AFTER_DAYS = 7;
+const STALE_AFTER_DAYS = MEMORY_COVERAGE_STALE_AFTER_DAYS;
 
 const INACTIVE_SKILL_PLATFORMS = [
   {
@@ -553,11 +619,17 @@ function priorityReasonForContribution(
 function priorityFocusForPlatforms(
   platforms: MemoryCoveragePlatform[],
 ): MemoryCoveragePriorityFocus | null {
-  const candidates = platforms
-    .filter(
-      (platform) =>
-        platform.group === 'active' || platform.group === 'derived',
-    )
+  const eligiblePlatforms = platforms.filter(
+    (platform) => platform.group === 'active' || platform.group === 'derived',
+  );
+  const ignoredInfoActionCount = platforms
+    .flatMap((platform) => platform.repairActions)
+    .filter((action) => action.severity === 'info').length;
+  const selectionBasis =
+    '先比较 active / derived 平台里的 critical / warning 修复项，再按质量分、状态严重度和平台名排序；info 规划项只进入修复队列，不参与当前故障焦点。';
+  const boundary =
+    '这是只读诊断路线；查看平台不会重跑同步、改配置、写入记忆、标记已读或外发。';
+  const candidates = eligiblePlatforms
     .map((platform) => {
       const repairAction = primaryNonInfoRepairAction(platform.repairActions);
       const contribution = pickScoreRepairContribution(platform.contributions);
@@ -601,6 +673,10 @@ function priorityFocusForPlatforms(
     actionSeverity: selected.repairAction?.severity,
     reason: priorityReasonForContribution(contribution, STALE_AFTER_DAYS),
     source: selected.repairAction?.source ?? contribution.evidence,
+    selectionBasis,
+    comparedPlatformCount: candidates.length,
+    ignoredInfoActionCount,
+    boundary,
   };
 }
 
@@ -629,6 +705,32 @@ function repairActionForInactiveSkillPlatform(input: {
 
 export class MemoryCoverageService {
   constructor(private readonly db: BetterSqlite3.Database) {}
+
+  buildSliceResponse<T extends object>(input: {
+    slice: MemoryCoverageSliceName;
+    source: string;
+    summary: MemoryCoverageSliceReceiptSummary;
+    note: string;
+    payload: T;
+  }): MemoryCoverageSliceResponse<T> {
+    const generatedAt = now();
+    const receipt: MemoryCoverageSliceReceipt = {
+      slice: input.slice,
+      generatedAt,
+      staleAfterDays: STALE_AFTER_DAYS,
+      source: input.source,
+      summary: input.summary,
+      boundary:
+        '只读覆盖诊断切片；不会写入记忆、重跑同步、修复配置、标记已读或外发到任何平台。',
+      note: input.note,
+    };
+    return {
+      ...input.payload,
+      generatedAt,
+      staleAfterDays: STALE_AFTER_DAYS,
+      receipt,
+    };
+  }
 
   buildMap(): MemoryCoverageMapResponse {
     const generatedAt = now();
@@ -708,9 +810,44 @@ export class MemoryCoverageService {
       .sort((a, b) => b.at - a.at)
       .slice(0, 8);
 
+    const infoPlanningActionCount = repairActions.filter(
+      (action) => action.severity === 'info',
+    ).length;
+    const receipt: MemoryCoverageMapReceipt = {
+      generatedAt,
+      staleAfterDays: STALE_AFTER_DAYS,
+      source:
+        'messages_raw + chunks + entities + provider_sync_jobs + skill_platform_sync_settings + notification_records + proposed_actions + confirm_requests + reflection_threads + memory_import_batches',
+      summary: {
+        platformCount: platforms.length,
+        activeDerivedPlatformCount: activeAndDerived.length,
+        healthyPlatformCount: summary.healthyPlatforms,
+        warningPlatformCount: summary.warningPlatforms,
+        repairActionCount: repairActions.length,
+        coverageGapCount: summary.coverageGaps,
+        infoPlanningActionCount,
+        pressureItemCount: summary.pressureItems,
+        totalMessages: summary.totalMessages,
+        totalChunks: summary.totalChunks,
+        totalEntities: summary.totalEntities,
+        timelineEventCount: timeline.length,
+        latestAt: timeline[0]?.at ?? null,
+        windowLabel: `Coverage Map 聚合快照 + 近 ${STALE_AFTER_DAYS} 天新鲜度窗口`,
+        emptyState:
+          summary.totalMessages + summary.totalChunks + summary.totalEntities > 0
+            ? '已聚合当前 Memory Service 覆盖快照；平台健康只代表本轮可读信号。'
+            : '没有读到 messages/chunks/entities；这不代表连接器已经重扫、来源已经修复或外部平台为空。',
+      },
+      boundary:
+        '只读覆盖聚合快照；不会写入记忆、重跑 provider sync、修复配置、标记已读或外发到任何平台。',
+      note:
+        '主聚合用于解释当前可读覆盖、质量分和修复队列；不是外部连接器同步结果、权限/ACL 完整验证或内容事实正确性证明。',
+    };
+
     return {
       generatedAt,
       staleAfterDays: STALE_AFTER_DAYS,
+      receipt,
       summary,
       platforms,
       repairActions,

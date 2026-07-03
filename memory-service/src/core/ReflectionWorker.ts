@@ -435,6 +435,32 @@ Rules:
     } else {
       title = question.slice(0, 48);
     }
+    const planActionParams =
+      plan.actionParams &&
+      typeof plan.actionParams === 'object' &&
+      !Array.isArray(plan.actionParams)
+        ? plan.actionParams
+        : {};
+    const sourceAnchor =
+      typeof planActionParams.sourceAnchor === 'string' &&
+      planActionParams.sourceAnchor.trim().length > 0
+        ? planActionParams.sourceAnchor.trim()
+        : (plan.sourceAnchor ?? `thread:${thread.id}`);
+    const resolutionParams = {
+      sourceAnchor,
+      gapType: plan.gapType,
+      reasonCode: plan.reasonCode,
+      routing:
+        actionType === 'create_confirm_request' && plan.disposition === 'watch'
+          ? 'watch'
+          : undefined,
+      evidenceResolution: {
+        disposition: plan.disposition,
+        reasonCode: plan.reasonCode,
+        gapType: plan.gapType,
+        sourceAnchor,
+      },
+    };
 
     return this.normalizeAction(
       {
@@ -444,13 +470,13 @@ Rules:
         params:
           actionType === 'create_confirm_request'
             ? {
-                ...(plan.actionParams ?? {}),
-                sourceAnchor:
-                  typeof plan.actionParams?.sourceAnchor === 'string'
-                    ? plan.actionParams.sourceAnchor
-                    : `thread:${thread.id}`,
+                ...planActionParams,
+                ...resolutionParams,
               }
-            : plan.actionParams,
+            : {
+                ...planActionParams,
+                ...resolutionParams,
+              },
         confidence: plan.confidence,
         priority:
           actionType === 'create_confirm_request'

@@ -85,6 +85,17 @@ export interface PreferenceInjectionReceipt {
   items: PreferenceInjectionReceiptItem[];
 }
 
+export type PreferencePreviewScopeReceiptStatus = 'audit' | 'runtime';
+
+export interface PreferencePreviewScopeReceipt {
+  scope: UserContextPreferenceScope;
+  scopeLabel: string;
+  status: PreferencePreviewScopeReceiptStatus;
+  statusLabel: string;
+  title: string;
+  detail: string;
+}
+
 export type PreferenceChangeImpactStatus =
   | 'neutral'
   | 'increase'
@@ -112,6 +123,12 @@ export interface PreferenceChangeImpact {
   hasChanges: boolean;
   summary: string;
   items: PreferenceChangeImpactItem[];
+}
+
+interface ScopedPromptRiskState {
+  total: number;
+  active: number;
+  paused: number;
 }
 
 export type PreferenceDraftPreviewReceiptStatus =
@@ -177,6 +194,44 @@ const PREVIEW_SCOPE_LABELS: Record<UserContextPreferenceScope, string> = {
   message: '消息',
   project: '项目',
 };
+
+export function buildPreferencePreviewScopeReceipt(
+  scope: UserContextPreferenceScope = 'all',
+): PreferencePreviewScopeReceipt {
+  if (scope === 'message') {
+    return {
+      scope,
+      scopeLabel: PREVIEW_SCOPE_LABELS[scope],
+      status: 'runtime',
+      statusLabel: '运行时范围',
+      title: '消息分析范围',
+      detail:
+        '当前消息预览对应真实消息分析：会读取基础上下文、消息专项上下文和消息提示词；不会注入项目专项上下文或项目提示词。',
+    };
+  }
+
+  if (scope === 'project') {
+    return {
+      scope,
+      scopeLabel: PREVIEW_SCOPE_LABELS[scope],
+      status: 'runtime',
+      statusLabel: '运行时范围',
+      title: '项目 / 会议 / 文档范围',
+      detail:
+        '当前项目预览对应项目、会议、文档和通用内容分析：会读取基础上下文、项目专项上下文和项目提示词；不会注入消息专项上下文或消息提示词。',
+    };
+  }
+
+  return {
+    scope: 'all',
+    scopeLabel: PREVIEW_SCOPE_LABELS.all,
+    status: 'audit',
+    statusLabel: '审计并集',
+    title: '全部预览不是单次运行',
+    detail:
+      '当前全部预览会合并展示消息和项目长期偏好，方便一次性审计；不代表某一次真实分析会同时注入两套专项上下文或两类提示词。切到消息或项目可核对运行时范围。',
+  };
+}
 
 const PROMPT_SCOPE_INJECTION_KEYS: Record<
   'message' | 'project',
@@ -1411,13 +1466,46 @@ function getScopedRiskHintCount(
   scope: UserContextPreferenceScope,
 ): number {
   const sanitized = sanitizeIndependentUserConfig(config);
-  if (!isCustomPromptsInjectionEnabled(sanitized)) return 0;
 
   return detectPromptRiskHints(sanitized).filter(
-    (hint) =>
-      shouldIncludePromptScope(scope, hint.scope) &&
-      isCustomPromptScopeInjectionEnabled(sanitized, hint.scope),
+    (hint) => shouldIncludePromptScope(scope, hint.scope),
   ).length;
+}
+
+function getScopedPromptRiskState(
+  config: any,
+  scope: UserContextPreferenceScope,
+): ScopedPromptRiskState {
+  const sanitized = sanitizeIndependentUserConfig(config);
+  const relevantHints = detectPromptRiskHints(sanitized).filter((hint) =>
+    shouldIncludePromptScope(scope, hint.scope),
+  );
+
+  return relevantHints.reduce(
+    (state, hint) => {
+      if (isCustomPromptScopeInjectionEnabled(sanitized, hint.scope)) {
+        state.active += 1;
+      } else {
+        state.paused += 1;
+      }
+      state.total += 1;
+      return state;
+    },
+    { total: 0, active: 0, paused: 0 },
+  );
+}
+
+function formatPromptRiskState(state: ScopedPromptRiskState): string {
+  if (state.total === 0) return '0 条';
+  if (state.active > 0 && state.paused > 0) {
+    return `${state.active} 条注入 / ${state.paused} 条暂停`;
+  }
+  if (state.active > 0) return `${state.active} 条注入`;
+  return `${state.paused} 条暂停`;
+}
+
+function getPromptRiskStateFingerprint(state: ScopedPromptRiskState): string {
+  return `${state.total}:${state.active}:${state.paused}`;
 }
 
 function summarizeReceiptState(receipt: PreferenceInjectionReceipt): string {
@@ -1471,6 +1559,8 @@ export function buildPreferenceChangeImpact(
   const nextPromptLabels = getScopedEnabledPromptLabels(next, scope);
   const previousRiskHintCount = getScopedRiskHintCount(previous, scope);
   const nextRiskHintCount = getScopedRiskHintCount(next, scope);
+  const previousRiskState = getScopedPromptRiskState(previous, scope);
+  const nextRiskState = getScopedPromptRiskState(next, scope);
   const previousReceipt = buildPreferenceInjectionReceipt(previous, {
     userContextScope: scope,
   });
@@ -1497,11 +1587,19 @@ export function buildPreferenceChangeImpact(
     formatPromptLabels(previousPromptLabels) !== formatPromptLabels(nextPromptLabels);
   const contextChanged =
     previousFootprint.contextSignalCount !== nextFootprint.contextSignalCount;
-  const riskChanged = previousRiskHintCount !== nextRiskHintCount;
+  const riskStateChanged =
+    getPromptRiskStateFingerprint(previousRiskState) !==
+    getPromptRiskStateFingerprint(nextRiskState);
+  const riskChanged = previousRiskHintCount !== nextRiskHintCount || riskStateChanged;
   const footprintChanged =
     previousFootprint.estimatedTokenCount !== nextFootprint.estimatedTokenCount ||
     previousFootprint.previewCharCount !== nextFootprint.previewCharCount;
   const previewChanged = previousPreviewText !== nextPreviewText;
+  const riskDetail = previousRiskHintCount !== nextRiskHintCount
+    ? `数量变化 ${formatSignedNumber(riskDelta, ' 条')}`
+    : riskStateChanged
+      ? '激活状态会变化，保存前需要按当前注入状态重新确认'
+      : '数量和注入状态不变';
 
   const items: PreferenceChangeImpactItem[] = [
     {
@@ -1541,11 +1639,11 @@ export function buildPreferenceChangeImpact(
     {
       id: 'risk-hints',
       label: '安全提示',
-      before: `${previousRiskHintCount} 条`,
-      after: `${nextRiskHintCount} 条`,
-      detail: `变化 ${formatSignedNumber(riskDelta, ' 条')}`,
+      before: formatPromptRiskState(previousRiskState),
+      after: formatPromptRiskState(nextRiskState),
+      detail: riskDetail,
       status:
-        nextRiskHintCount > 0 && riskDelta >= 0
+        nextRiskHintCount > 0 && (riskDelta >= 0 || nextRiskState.active > 0)
           ? 'warning'
           : impactStatusForDelta(riskDelta),
     },
@@ -1992,11 +2090,7 @@ export function buildIndependentUserConfigSummary(
   const contextSignalCount = userContextInjectionEnabled
     ? countContextSignals(sanitized.userContextConfig || {})
     : 0;
-  const riskHintCount = customPromptsInjectionEnabled
-    ? detectPromptRiskHints(sanitized).filter((hint) =>
-        isCustomPromptScopeInjectionEnabled(sanitized, hint.scope),
-      ).length
-    : 0;
+  const riskHintCount = detectPromptRiskHints(sanitized).length;
   const userContextSensitiveHintCount =
     detectUserContextSensitiveHints(sanitized).length;
 

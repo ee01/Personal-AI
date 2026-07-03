@@ -645,6 +645,7 @@ describe('NotificationCenterService', () => {
       lastStatus: 'failed',
       effectiveStatus: 'failed',
       hasSuccessfulDelivery: false,
+      lastError: 'chrome_unavailable',
     });
   });
 
@@ -711,6 +712,7 @@ describe('NotificationCenterService', () => {
       hasSuccessfulDelivery: true,
       lastAttemptAt: now - 60,
       lastDeliveredAt: staleDeliveredAt,
+      lastError: 'chrome_api_unavailable',
     });
 
     const renderedDailyDigest = service.formatTodoDigest('chrome', 500, {
@@ -794,6 +796,56 @@ describe('NotificationCenterService', () => {
     expect(rendered.bodyMd).toContain(
       '其他渠道：豆包已送达，Glip发送失败；失败原因：Glip：bot_not_configured',
     );
+  });
+
+  it('exposes read-only evidence receipts on feed and digest items', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, evidence_refs_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'truth_conflict', ?, ?, ?, ?, ?)`,
+    ).run(
+      'notif-evidence-receipt',
+      'Memory conflict needs review',
+      'A profile fact has conflicting evidence',
+      JSON.stringify([
+        'message:team-alpha:123',
+        { sourceType: 'memory', id: 'profile-fact-42' },
+        'reflection:run-7',
+        'confirm_request:old-check',
+      ]),
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['todo'],
+      limit: 10,
+    });
+    const item = feed.find(
+      (candidate) =>
+        candidate.sourceRef === 'notification:notif-evidence-receipt',
+    );
+
+    expect(item?.evidenceReceipt).toMatchObject({
+      evidenceCount: 4,
+      label: '依据 4 条记忆',
+      detail:
+        '本次通知依据：message:team-alpha:123、memory:profile-fact-42、reflection:run-7，另有 1 条',
+      boundary:
+        '只说明生成这条通知时引用过的记忆证据；不会确认、忽略、重发通知，或改变任何渠道投递状态。',
+      sampleRefs: [
+        'message:team-alpha:123',
+        'memory:profile-fact-42',
+        'reflection:run-7',
+      ],
+    });
+
+    const rendered = service.formatTodoDigest('chrome', 500);
+    expect(rendered.bodyMd).toContain('[依据 4 条记忆；只读依据]');
   });
 
   it('keeps terminal channel states visible after a later failure receipt', () => {
@@ -897,6 +949,64 @@ describe('NotificationCenterService', () => {
     expect(rendered.bodyMd).not.toContain('Digest truncation todo 4');
   });
 
+  it('marks todo digests as a limited feed view when more todos remain', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (let i = 0; i < 3; i += 1) {
+      db.prepare(
+        `INSERT INTO proposed_actions
+          (id, type, title, description, state, created_at, action_type, queue_status, priority)
+         VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', ?)`,
+      ).run(
+        `action-feed-more-${i}`,
+        `Digest feed todo ${i}`,
+        `Short todo body ${i}`,
+        now - i,
+        9 - i,
+      );
+    }
+
+    const service = new NotificationCenterService(db);
+    const rendered = service.formatTodoDigest('doubao', 500, {
+      deliveryMode: 'incremental',
+      limit: 2,
+    });
+
+    expect(rendered.feedHasMore).toBe(true);
+    expect(rendered.feedLimit).toBe(2);
+    expect(rendered.itemCount).toBe(2);
+    expect(rendered.omittedItemCount).toBe(0);
+    expect(rendered.bodyMd).toContain('Feed 还有更多');
+    expect(rendered.bodyMd).toContain('本次新条目同步只纳入前 2 条待办');
+    expect(rendered.bodyMd).toContain(
+      '未展示条目仍留在 Notification Center feed',
+    );
+    expect(rendered.bodyMd).toContain('不会写入本次渠道送达回执');
+    expect(rendered.sourceRefs).toEqual([
+      'proposed_action:action-feed-more-0',
+      'proposed_action:action-feed-more-1',
+    ]);
+
+    service.recordDelivery(
+      rendered.sourceRefs.map((sourceRef) => ({
+        sourceRef,
+        channel: 'doubao' as const,
+        lane: 'todo' as const,
+        status: 'delivered' as const,
+      })),
+    );
+
+    const remainingRefs = service
+      .listFeed({
+        channel: 'doubao',
+        lanes: ['todo'],
+        deliveryMode: 'incremental',
+        limit: 10,
+      })
+      .map((item) => item.sourceRef);
+    expect(remainingRefs).toEqual(['proposed_action:action-feed-more-2']);
+  });
+
   it('leaves notice digest items in feed when they were omitted by budget', () => {
     const now = Math.floor(Date.now() / 1000);
     const longBody =
@@ -948,6 +1058,52 @@ describe('NotificationCenterService', () => {
     for (const visibleRef of rendered.sourceRefs) {
       expect(remainingRefs).not.toContain(visibleRef);
     }
+  });
+
+  it('marks notice digests as a limited feed view when more notices remain', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (let i = 0; i < 9; i += 1) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, sent_at, created_at)
+         VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+      ).run(
+        `notif-feed-more-${i}`,
+        `Digest feed notice ${i}`,
+        `Short notice body ${i}`,
+        now - i,
+        now - i,
+      );
+    }
+
+    const service = new NotificationCenterService(db);
+    const rendered = service.formatNoticeDigest('doubao', 500);
+
+    expect(rendered.feedHasMore).toBe(true);
+    expect(rendered.feedLimit).toBe(8);
+    expect(rendered.itemCount).toBe(8);
+    expect(rendered.omittedItemCount).toBe(0);
+    expect(rendered.bodyMd).toContain('Feed 还有更多');
+    expect(rendered.bodyMd).toContain('本次滚动同步只纳入前 8 条通知');
+    expect(rendered.bodyMd).toContain(
+      '未展示条目仍留在 Notification Center feed',
+    );
+    expect(rendered.sourceRefs).not.toContain('notification:notif-feed-more-8');
+
+    service.recordDelivery(
+      rendered.sourceRefs.map((sourceRef) => ({
+        sourceRef,
+        channel: 'doubao' as const,
+        lane: 'notice' as const,
+        status: 'delivered' as const,
+      })),
+    );
+
+    const remainingRefs = service
+      .listFeed({ channel: 'doubao', lanes: ['notice'], limit: 10 })
+      .map((item) => item.sourceRef);
+    expect(remainingRefs).toEqual(['notification:notif-feed-more-8']);
   });
 
   it('does not surface expired proposed actions as todos', () => {
@@ -1113,7 +1269,15 @@ describe('NotificationCenterService', () => {
     });
 
     expect(feedAfterDelivery.statusCode).toBe(200);
-    expect(feedAfterDelivery.json().total).toBe(0);
+    const emptyFeedBody = feedAfterDelivery.json();
+    expect(emptyFeedBody.total).toBe(0);
+    expect(emptyFeedBody.meta.emptyReceipt).toMatchObject({
+      label: 'Feed 空结果回执',
+      detail:
+        'Chrome 滚动同步已成功读取；当前没有符合本次通知范围的可投递条目。',
+      boundary:
+        '这是成功但为空的快照；不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+    });
   });
 
   it('exposes feed meta when the limited response has more items', async () => {
@@ -1229,6 +1393,40 @@ describe('NotificationCenterService', () => {
     });
   });
 
+  it('explains empty feed and digest responses as successful empty snapshots', async () => {
+    const feedRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=doubao&lanes=todo&deliveryMode=daily_digest',
+    });
+
+    expect(feedRes.statusCode).toBe(200);
+    const feedBody = feedRes.json();
+    expect(feedBody.total).toBe(0);
+    expect(feedBody.meta.emptyReceipt).toMatchObject({
+      label: 'Feed 空结果回执',
+      detail:
+        '豆包 每日摘要已成功读取；当前没有符合本次待办范围的可投递条目。',
+      boundary:
+        '这是成功但为空的快照；不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+    });
+
+    const service = new NotificationCenterService(db);
+    const todoDigest = service.formatTodoDigest('doubao', 500, {
+      deliveryMode: 'daily_digest',
+    });
+    expect(todoDigest.itemCount).toBe(0);
+    expect(todoDigest.bodyMd).toContain('暂无待处理事项');
+    expect(todoDigest.bodyMd).toContain('豆包 每日摘要已成功读取');
+    expect(todoDigest.bodyMd).toContain('这是成功但为空的快照');
+    expect(todoDigest.bodyMd).toContain('不会写渠道送达回执');
+
+    const noticeDigest = service.formatNoticeDigest('chrome', 500);
+    expect(noticeDigest.itemCount).toBe(0);
+    expect(noticeDigest.bodyMd).toContain('暂无新通知');
+    expect(noticeDigest.bodyMd).toContain('Chrome 滚动同步已成功读取');
+    expect(noticeDigest.bodyMd).toContain('不会改变全局处理状态');
+  });
+
   it('snoozes notifications with a caller-provided delay', async () => {
     const now = Math.floor(Date.now() / 1000);
 
@@ -1261,6 +1459,16 @@ describe('NotificationCenterService', () => {
     expect(snoozeBody.delaySeconds).toBe(45 * 60);
     expect(snoozeBody.scheduledAt).toBeGreaterThanOrEqual(before + 45 * 60);
     expect(snoozeBody.scheduledAt).toBeLessThanOrEqual(after + 45 * 60);
+    expect(snoozeBody.actionReceipt).toMatchObject({
+      title: '稍后提醒已安排',
+      boundary:
+        '只创建未来 notification_records 提醒并关闭当前提醒；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+    });
+    expect(snoozeBody.actionReceipt.detail).toContain('再提醒');
+    expect(snoozeBody.actionReceipt.detail).toContain('延后 45分钟');
+    expect(snoozeBody.actionReceipt.detail).toContain(
+      snoozeBody.newNotificationId,
+    );
 
     const created = db
       .prepare(
@@ -1329,6 +1537,65 @@ describe('NotificationCenterService', () => {
       )
       .get(now) as { count: number };
     expect(scheduledCount.count).toBe(1);
+  });
+
+  it('exposes snooze receipts on due reminder feed items and digests', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, payload_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?)`,
+    ).run(
+      'notif-snoozed-due',
+      'Deadline needs attention',
+      'This reminder was deferred by the user.',
+      JSON.stringify({
+        summary: 'Original context should stay visible.',
+        snooze: {
+          sourceNotificationId: 'notif-snoozed-source',
+          rootNotificationId: 'notif-snoozed-root',
+          snoozedAt: now - 90 * 60,
+          scheduledAt: now,
+          delaySeconds: 90 * 60,
+          count: 2,
+        },
+      }),
+      now,
+      now - 90 * 60,
+    );
+
+    const feedRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=chrome&lanes=todo',
+    });
+
+    expect(feedRes.statusCode).toBe(200);
+    const feedItem = feedRes
+      .json()
+      .items.find(
+        (item: { sourceRef: string }) =>
+          item.sourceRef === 'notification:notif-snoozed-due',
+      );
+    expect(feedItem?.snoozeReceipt).toMatchObject({
+      label: '第2次稍后提醒',
+      sourceNotificationId: 'notif-snoozed-source',
+      rootNotificationId: 'notif-snoozed-root',
+      delaySeconds: 90 * 60,
+      count: 2,
+      boundary:
+        '这是稍后提醒到点的上下文；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+    });
+    expect(feedItem.snoozeReceipt.detail).toContain('来源通知 notif-snoozed-source');
+    expect(feedItem.snoozeReceipt.detail).toContain('根通知 notif-snoozed-root');
+    expect(feedItem.snoozeReceipt.detail).toContain('上次延后 90分钟');
+
+    const service = new NotificationCenterService(db);
+    const digest = service.formatTodoDigest('chrome', 500);
+
+    expect(digest.bodyMd).toContain('第2次稍后提醒');
+    expect(digest.bodyMd).toContain('来源通知 notif-snoozed-source');
+    expect(digest.bodyMd).toContain('仍未处理');
   });
 
   it('rejects invalid feed query parameters', async () => {

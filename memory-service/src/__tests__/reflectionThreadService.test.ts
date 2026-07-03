@@ -321,6 +321,56 @@ describe('ReflectionThreadService', () => {
     ).toContain('vector(embedding timeout)');
   });
 
+  it('records a skipped local research receipt when the planner returns no queries', async () => {
+    const currentTime = now();
+    const thread = repo.upsertThread({
+      topicKey: 'project:quiet',
+      title: '项目反思: Quiet',
+      status: 'active',
+      priority: 6,
+      salience: 0.7,
+      openQuestions: ['Quiet 是否还需要额外补查？'],
+      nextReflectionAt: currentTime,
+    });
+
+    vi.spyOn(ReflectionResearcher.prototype, 'plan').mockResolvedValue([]);
+    const recallSpy = vi.spyOn(RecallEngine.prototype, 'recall');
+    vi.spyOn(ReflectionWorker.prototype, 'generate').mockResolvedValue({
+      summary: '已有证据足够，本轮无需额外本地查询。',
+      hypothesisAfter: 'Quiet 先保持当前结论。',
+      discoveries: ['当前线程证据足够继续反思'],
+      openQuestions: [],
+      actionProposals: [],
+    });
+
+    const result = await new ReflectionThreadService(db).runReflection(
+      thread.id,
+      {
+        runType: 'manual_revisit',
+        triggerType: 'manual',
+        force: true,
+      },
+    );
+
+    const detail = new ReflectionThreadService(db).getThreadDetail(thread.id);
+    expect(recallSpy).not.toHaveBeenCalled();
+    expect(detail?.researchAttempts).toHaveLength(1);
+    expect(detail?.researchAttempts[0]).toMatchObject({
+      runId: result.run.id,
+      query: '未执行本地研究查询',
+      purpose: '规划器未返回可执行的本地研究查询',
+      status: 'skipped',
+      resultCount: 0,
+      evidenceRefs: [],
+    });
+    expect(detail?.researchAttempts[0].scopeNotice).toContain(
+      '没有执行额外 recall 查询',
+    );
+    expect(detail?.researchAttempts[0].scopeNotice).toContain(
+      '这不是读取失败',
+    );
+  });
+
   it('persists worker-generated rehearsal candidates from reflection runs', async () => {
     const currentTime = now();
     const thread = repo.upsertThread({

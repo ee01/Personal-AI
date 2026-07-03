@@ -221,6 +221,19 @@ function isNotificationCenterCompatError(error: any): boolean {
   return error?.status === 404 || error?.status === 501;
 }
 
+function formatChromeNotificationCreateError(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : String(error ?? 'chrome_notification_create_failed');
+  const compacted = message.replace(/\s+/g, ' ').trim();
+  if (!compacted) return 'chrome_notification_create_failed';
+  if (compacted.length <= 140) return compacted;
+  return `${compacted.slice(0, 139).trim()}…`;
+}
+
 async function safeReportChromeDelivery(
   events: Array<{
     sourceRef: string;
@@ -471,6 +484,23 @@ async function syncOutreachTemplateMirror(
 async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
   const client = getMemoryServiceClient();
   await client.cancelOutreachTemplate(messageId);
+}
+
+async function pauseOutreachTemplateMirror(
+  message: ScheduledMessage,
+): Promise<void> {
+  const client = getMemoryServiceClient();
+  try {
+    await client.pauseOutreachTemplate(message.ID);
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error);
+    if (!messageText.includes('404')) {
+      throw error;
+    }
+    await client.upsertOutreachTemplate(
+      buildOutreachTemplatePayload({ ...message, Status: 'Paused' }),
+    );
+  }
 }
 
 let glipMarkerRefreshInFlight: Promise<any> | null = null;
@@ -949,6 +979,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'PAUSE_OUTREACH_TEMPLATE_MIRROR') {
+    (async () => {
+      try {
+        await pauseOutreachTemplateMirror(
+          request.data?.message as ScheduledMessage,
+        );
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'pause_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.type === 'REFRESH_GLIP_MESSAGE_MARKERS') {
     (async () => {
       try {
@@ -1054,8 +1101,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         await taskScheduler.startAllTasks();
-        const status = await taskScheduler.getTaskStatusFresh();
-        sendResponse({ success: true, tasks: status });
+        const status = await taskScheduler.getTaskStatusFreshResult();
+        sendResponse({
+          success: true,
+          tasks: status.tasks,
+          refreshReceipt: status.refreshReceipt,
+        });
       } catch (error) {
         sendResponse({ success: false, error: error.message });
       }
@@ -1372,6 +1423,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           success: true,
           topMatch: result.topMatch,
           matches: result.matches,
+          autopilot: result.autopilot,
+          debug: result.debug,
           queryTimeMs: result.queryTimeMs,
         });
       } catch (err) {
@@ -1485,7 +1538,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sourceKind: request.request?.sourceKind || 'selection',
           captureMode: request.request?.captureMode || 'manual',
           captureReason:
-            request.request?.captureReason || '用户点击右侧半露出 + 入库按钮',
+            request.request?.captureReason || '用户点击右侧半露出 + 记住按钮',
           interactions: {
             ...(request.request?.interactions || {}),
             selectedText: true,
@@ -1514,7 +1567,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sourceKind: request.request?.sourceKind || 'webpage',
           captureMode,
           captureReason:
-            request.request?.captureReason || '用户点击右侧半露出 + 入库当前页面',
+            request.request?.captureReason || '用户点击右侧半露出 + 记住当前页面',
           interactions: {
             ...(request.request?.interactions || {}),
             manualClick:
@@ -3366,7 +3419,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // 存储关注后续的原消息到 ChromaDB
   if (request.type === 'STORE_FOLLOWED_MESSAGE') {
-    storeRelatedMessage(request.data)
+    storeRelatedMessage(request.data, { throwOnError: true })
       .then(() => sendResponse({ success: true }))
       .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;
@@ -3693,33 +3746,56 @@ async function pollBackendNotifications(): Promise<void> {
           notificationId:
             item.sourceType === 'notification' ? item.sourceId : undefined,
         });
-        await chrome.notifications.create(notifId, {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: item.title || 'Personal AI',
-          message: buildBackendNotificationMessage({
-            body: item.body,
-            type: item.type,
-            payload: item.payload,
-          }),
-          contextMessage: buildBackendNotificationContextMessage(
-            item.lane,
-            item.priority,
-            item.dueAt,
-            item.deliveryContext,
-            item.payload,
-          ),
-          priority: item.priority === 'high' ? 2 : 1,
-          buttons: buildBackendNotificationButtons(item.lane, item.sourceType),
-        });
-        await safeReportChromeDelivery([
-          {
-            sourceRef: item.sourceRef,
-            lane: item.lane,
-            status: 'delivered',
-            externalRef: notifId,
-          },
-        ]);
+        try {
+          await chrome.notifications.create(notifId, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+            title: item.title || 'Personal AI',
+            message: buildBackendNotificationMessage({
+              body: item.body,
+              type: item.type,
+              payload: item.payload,
+            }),
+            contextMessage: buildBackendNotificationContextMessage(
+              item.lane,
+              item.priority,
+              item.dueAt,
+              item.deliveryContext,
+              item.payload,
+              item.channelReceipts,
+              item.evidenceReceipt,
+              item.snoozeReceipt,
+              item.sourceType,
+            ),
+            priority: item.priority === 'high' ? 2 : 1,
+            buttons: buildBackendNotificationButtons(
+              item.lane,
+              item.sourceType,
+            ),
+          });
+          await safeReportChromeDelivery([
+            {
+              sourceRef: item.sourceRef,
+              lane: item.lane,
+              status: 'delivered',
+              externalRef: notifId,
+            },
+          ]);
+        } catch (createError) {
+          const errorMessage =
+            formatChromeNotificationCreateError(createError);
+          await clearBackendNotificationMeta(notifId);
+          await safeReportChromeDelivery([
+            {
+              sourceRef: item.sourceRef,
+              lane: item.lane,
+              status: 'failed',
+              externalRef: notifId,
+              error: errorMessage,
+            },
+          ]);
+          console.debug('Backend notification create failed:', errorMessage);
+        }
       }
       return;
     } catch (feedError: any) {
@@ -3786,6 +3862,22 @@ async function pollBackendNotifications(): Promise<void> {
     console.debug('pollBackendNotifications error:', err);
   }
 }
+
+(globalThis as typeof globalThis & {
+  __personalAiPollBackendNotificationsForE2E?: (config?: {
+    baseUrl?: string;
+    timeoutMs?: number;
+  }) => Promise<void>;
+}).__personalAiPollBackendNotificationsForE2E = async (config) => {
+  if (config?.baseUrl) {
+    const client = getMemoryServiceClient();
+    client.setBaseUrl(config.baseUrl);
+    if (config.timeoutMs !== undefined) {
+      client.setTimeout(config.timeoutMs);
+    }
+  }
+  await pollBackendNotifications();
+};
 console.log('✅ Backend notification poller 已设置 (15min)');
 
 // 监听扩展命令

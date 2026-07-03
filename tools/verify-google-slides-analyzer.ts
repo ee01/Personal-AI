@@ -1035,7 +1035,25 @@ const invalidRowResult = await applyProjectUpdates('presentation-1', 'token-1', 
 
 assert.equal(invalidRowResult.success, false);
 assert.equal(invalidRowResult.updatedCount, 0);
-assert.match(invalidRowResult.errors?.[0] || '', /缺少或无效更新位置信息/);
+assert.deepEqual(invalidRowResult.errors, [
+  '无法更新状态: MTR-123407 - Slides writeback 缺少或无效更新位置信息',
+]);
+assert.equal(requestsSeen.length, 0);
+
+requestsSeen.length = 0;
+const invalidRowMultiFieldResult = await applyProjectUpdates('presentation-1', 'token-1', [{
+  ...fullUpdate,
+  rowIndex: -1,
+  suggestedComments: undefined,
+}]);
+
+assert.equal(invalidRowMultiFieldResult.success, false);
+assert.equal(invalidRowMultiFieldResult.updatedCount, 0);
+assert.deepEqual(invalidRowMultiFieldResult.errors, [
+  '无法更新状态: MTR-123407 - Slides writeback 缺少或无效更新位置信息',
+  '无法更新负责人: MTR-123407 - Slides writeback 缺少或无效更新位置信息',
+  '无法更新赛道: MTR-123407 - Slides writeback 缺少或无效更新位置信息',
+]);
 assert.equal(requestsSeen.length, 0);
 
 console.log('google_slides_analyzer checks passed');

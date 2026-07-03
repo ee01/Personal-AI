@@ -47,6 +47,7 @@ export interface EnvConfigType {
   BOT_TOKEN: string;
   BOT_ID: string;
   BOT_TYPE: string;
+  BOT_TOKEN_CONFIGURED?: boolean;
   TEAM_ID: string;
   /** @deprecated 使用每个 concernedItem 的 notifyMethod 替代 */
   ENABLE_BOT?: boolean;
@@ -519,6 +520,7 @@ export const defaultEnvConfig: EnvConfigType = {
   BOT_TOKEN: process.env.BOT_TOKEN || '',
   BOT_ID: process.env.BOT_ID || '4700372020@37439510.bot.glip.net',
   BOT_TYPE: process.env.BOT_TYPE || 'user',
+  BOT_TOKEN_CONFIGURED: Boolean(process.env.BOT_TOKEN),
   TEAM_ID: process.env.TEAM_ID || '',
   // ENABLE_BOT 已废弃，使用每个 concernedItem 的 notifyMethod 替代
   ENABLE_BOT: undefined,
@@ -791,9 +793,11 @@ export const DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL = [
   'daily_log',
   'project_summary',
   'reflection',
+  'reflection_thread',
   'dream',
   'entity_profile',
   'markdown',
+  'source_memory',
   'user_core',
 ] as const;
 
@@ -809,7 +813,7 @@ export function isSceneRehearsalDisplayEnabledFromConfig(
 export function filterSceneRehearsalSourceTypes<T extends string>(
   sourceTypes: T[] | undefined,
   config?: Partial<EnvConfigType> | Record<string, unknown> | null,
-  fallbackWhenDisabled: readonly T[] = DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL as readonly T[],
+  fallbackWhenDisabled: readonly T[] = DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL as unknown as readonly T[],
 ): T[] | undefined {
   if (isSceneRehearsalDisplayEnabledFromConfig(config)) {
     return sourceTypes;

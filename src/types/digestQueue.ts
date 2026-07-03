@@ -149,15 +149,22 @@ export interface DigestProcessResult {
   itemsDue?: number;
   /** 未到期条目的下一次释放时间 ISO string */
   nextReleaseAt?: string;
+  /** 执行后仍留在本地队列里的可读快照 */
+  queueSnapshot?: DigestQueueTaskSnapshot;
   /** 错误信息（如有） */
   error?: string;
 }
 
 export interface DigestQueueTaskSnapshot {
   taskId: string;
+  taskName?: string;
   totalItems: number;
   dueItems: number;
   nextReleaseAt?: string;
+  sourceBreakdown?: DigestQueueSourceBreakdownItem[];
+  sourceOverflowCount?: number;
+  scheduleBreakdown?: DigestQueueScheduleBreakdownItem[];
+  scheduleOverflowCount?: number;
 }
 
 export interface DigestQueueStatusSummary {
@@ -165,6 +172,18 @@ export interface DigestQueueStatusSummary {
   dueItems: number;
   nextReleaseAt?: string;
   tasks: DigestQueueTaskSnapshot[];
+}
+
+export interface DigestQueueSourceBreakdownItem {
+  label: string;
+  count: number;
+}
+
+export interface DigestQueueScheduleBreakdownItem {
+  frequency: 'daily' | 'weekly';
+  preferredHour: number;
+  preferredDayOfWeek?: number;
+  count: number;
 }
 
 // ==================== ConcernedItems 扩展 ====================

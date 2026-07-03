@@ -98,6 +98,33 @@ const ALLOWED_PROFILE_ITEM_TYPES = new Set([
   'constraint',
 ]);
 
+function parseOptionalBooleanEnv(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function isTestRuntime(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+}
+
+function isIngestExtractionEnabled(): boolean {
+  const envValue = parseOptionalBooleanEnv('INGEST_LLM_EXTRACTION_ENABLED');
+  if (envValue !== null) return envValue;
+  return isTestRuntime();
+}
+
+function isIngestEmbeddingEnabled(): boolean {
+  const envValue =
+    parseOptionalBooleanEnv('INGEST_EMBEDDING_ENABLED') ??
+    parseOptionalBooleanEnv('MEMORY_INDEX_EMBEDDING_ENABLED');
+  if (envValue !== null) return envValue;
+  return isTestRuntime();
+}
+
 // ---------------------------------------------------------------------------
 // IngestionPipeline
 // ---------------------------------------------------------------------------
@@ -166,7 +193,7 @@ export class IngestionPipeline {
           `SELECT id FROM messages_raw
            WHERE content = ?
              AND source_type = ?
-             AND sender = ?
+             AND COALESCE(sender, '') = COALESCE(?, '')
              AND COALESCE(scope, 'work') = ?
              AND COALESCE(source, '') = COALESCE(?, '')
             LIMIT 1`,
@@ -186,6 +213,13 @@ export class IngestionPipeline {
       }
     }
 
+    // ---- Injection defense (P0-2): trust class + screen content ----
+    // Run this before a duplicate early return as well: duplicate attempts do
+    // not create a new record, but callers still need to know the attempted
+    // payload's trust/sanitization state for batch receipts and audits.
+    const trustClass = classifyTrust(payload.sourceType);
+    const injectionScreen = screenForInjection(payload.content);
+
     if (existing) {
       return {
         id: existing.id,
@@ -199,6 +233,9 @@ export class IngestionPipeline {
           duplicateOf: existing.id,
           dedupeReason: existing.dedupeReason,
           indexed: false,
+          trustClass,
+          sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
+          injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
         },
       };
     }
@@ -207,15 +244,10 @@ export class IngestionPipeline {
       ? payload.content
       : normalizeContentForDedup(payload.content);
 
-    // ---- Injection defense (P0-2): trust class + screen content ----
-    // Untrusted sources (web pages, external AI, OpenClaw) get a neutral data
-    // frame at recall time; flagged patterns are persisted for provenance.
-    const trustClass = classifyTrust(payload.sourceType);
-    const injectionScreen = screenForInjection(payload.content);
-
     // ---- 2. LLM entity extraction (non-blocking on failure) ----
     let extraction: LLMExtraction | null = null;
-    const skip = payload.skipExtraction === true;
+    const skip =
+      payload.skipExtraction === true || !isIngestExtractionEnabled();
 
     if (!skip) {
       try {
@@ -322,20 +354,22 @@ export class IngestionPipeline {
     }
 
     // ---- 5. Generate embedding & store in messages_vec ----
-    try {
-      const client = await EmbeddingClient.getInstance();
-      const embedding = await client.embed(contentNormalized);
-      this.db
-        .prepare(
-          `INSERT INTO messages_vec (message_id, embedding)
-           VALUES (?, ?)`,
-        )
-        .run(id, JSON.stringify(embedding));
-    } catch (err) {
-      console.warn(
-        '[IngestionPipeline] Embedding skipped (model may not be loaded):',
-        (err as Error).message,
-      );
+    if (isIngestEmbeddingEnabled()) {
+      try {
+        const client = await EmbeddingClient.getInstance();
+        const embedding = await client.embed(contentNormalized);
+        this.db
+          .prepare(
+            `INSERT INTO messages_vec (message_id, embedding)
+             VALUES (?, ?)`,
+          )
+          .run(id, JSON.stringify(embedding));
+      } catch (err) {
+        console.warn(
+          '[IngestionPipeline] Embedding skipped (model may not be loaded):',
+          (err as Error).message,
+        );
+      }
     }
 
     // ---- 6. High-salience processing: entities, relationships, chunks ----
@@ -1253,6 +1287,7 @@ Rules:
    * Failures are logged but do not propagate.
    */
   private embedChunkAsync(chunkId: number, content: string): void {
+    if (!isIngestEmbeddingEnabled()) return;
     EmbeddingClient.getInstance()
       .then((client) => client.embed(content))
       .then((embedding) => {

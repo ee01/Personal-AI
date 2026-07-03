@@ -8,7 +8,9 @@ import {
   formatTimelineCacheLastAttempt,
   getTimelineCacheAttemptQuickFixText,
   getTimelineCacheExecutionImpactText,
+  getTimelineCacheProjectStatusHeadline,
   getTimelineCacheProjectStatus,
+  getTimelineCacheScopeReceiptText,
   getTimelineProjectCacheSaveBlockText,
   getTimelineCacheReadinessBlockText,
   getTimelineCacheSaveBlockText,
@@ -164,6 +166,72 @@ test('Timeline cache labels and actions stay user-facing', () => {
     expired: true,
     status: 'expired',
   }), /手动运行 Timeline Sync Rule/);
+});
+
+test('Timeline cache status headline exposes stale ready cache boundary', () => {
+  assert.equal(
+    getTimelineCacheProjectStatusHeadline({
+      status: {
+        ...readyStatus.projects[0],
+        lastAttempt: {
+          success: false,
+          ageMs: 12 * 60 * 1000,
+          errorCode: 'INVALID_POST_JSON',
+        },
+      },
+      selectedMilestone: 'FF',
+    }),
+    'mThor: 当前使用已有缓存，最近同步失败',
+  );
+
+  assert.equal(
+    getTimelineCacheProjectStatusHeadline({
+      status: {
+        ...readyStatus.projects[0],
+        lastAttempt: {
+          success: false,
+          ageMs: 12 * 60 * 1000,
+          errorCode: 'INVALID_POST_JSON',
+        },
+      },
+      selectedMilestone: 'Regression',
+    }),
+    'mThor: 当前缓存缺少 Regression',
+  );
+});
+
+test('Timeline cache scope receipt separates cache read, dry-run, sync rule, and save boundaries', () => {
+  const timelineReceipt = getTimelineCacheScopeReceiptText({
+    usage: 'timeline-trigger',
+    selectedProject: 'mThor',
+    selectedMilestone: 'FF',
+    hasStatus: true,
+    hasReadError: false,
+    canDryRun: true,
+    hasTimelineSyncRule: true,
+  });
+
+  assert.match(timelineReceipt, /项目 mThor \/ Milestone FF/);
+  assert.match(timelineReceipt, /只读取 App Script 已缓存状态/);
+  assert.match(timelineReceipt, /dryRun=true/);
+  assert.match(timelineReceipt, /不会写 Timeline 缓存、不会保存或发送消息/);
+  assert.match(timelineReceipt, /真实 Jira Sync Rule 需要在 Jira 执行后再刷新确认/);
+  assert.match(timelineReceipt, /缓存不可用或缺少 Milestone 时会跳过/);
+
+  const variableReceipt = getTimelineCacheScopeReceiptText({
+    usage: 'project-variables',
+    selectedProject: 'Jupiter web',
+    hasStatus: false,
+    hasReadError: true,
+    canDryRun: false,
+    hasTimelineSyncRule: false,
+  });
+
+  assert.match(variableReceipt, /当前只拿到读取失败诊断/);
+  assert.match(variableReceipt, /样例测试需要 Web App URL 和项目配置后才可运行/);
+  assert.match(variableReceipt, /尚未绑定真实 Jira Sync Rule/);
+  assert.match(variableReceipt, /项目变量仍只在执行时按缓存替换/);
+  assert.match(variableReceipt, /缓存不可用时保留原样/);
 });
 
 test('Timeline cache age formatter keeps compact Chinese labels', () => {
@@ -542,7 +610,10 @@ test('Timeline dry-run response parser formats successful validation', () => {
   assert.equal(result.requestId, 'tl_mThor_dry');
   assert.deepEqual(result.milestoneKeys, ['FF', 'Release']);
   assert.match(formatTimelineSyncDryRunResult(result), /样例测试通过/);
+  assert.match(formatTimelineSyncDryRunResult(result), /验证范围：项目 mThor，样例 Milestone FF、Release。/);
   assert.match(formatTimelineSyncDryRunResult(result), /不会写入 Timeline 缓存/);
+  assert.match(formatTimelineSyncDryRunResult(result), /不代表真实 Jira Rule 已同步/);
+  assert.match(formatTimelineSyncDryRunResult(result), /手动运行 Timeline Sync Rule 后刷新状态/);
   assert.match(formatTimelineSyncDryRunResult(result), /payload 2KB\/9KB/);
   assert.match(formatTimelineSyncDryRunResult(result), /请求 ID tl_mThor_dry/);
 });
@@ -562,6 +633,8 @@ test('Timeline dry-run response parser keeps actionable failure diagnostics', ()
   assert.equal(result.success, false);
   assert.equal(result.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
   assert.match(formatTimelineSyncDryRunResult(result), /测试失败：INVALID_RELEASE_INFO_SCHEMA/);
+  assert.match(formatTimelineSyncDryRunResult(result), /边界：这是样例 dry-run/);
+  assert.match(formatTimelineSyncDryRunResult(result), /真实 Jira 同步仍可能继续失败/);
   assert.match(formatTimelineSyncDryRunResult(result), /下一步：确认 Milestone 日期格式。/);
 });
 

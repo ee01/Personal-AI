@@ -33,6 +33,25 @@
                 }}
               </div>
               <div
+                v-if="memoryUserIdentity?.storageKey"
+                class="memory-user-storage"
+                :title="memoryUserIdentity.storageKey"
+              >
+                {{ memoryUserIdentity.storageKey }}
+              </div>
+              <div
+                v-if="memoryUserIdentity?.identitySource"
+                class="memory-user-source"
+              >
+                {{ memoryUserIdentitySourceLabel }}
+              </div>
+              <div
+                v-if="memoryUserIdentity?.isolation"
+                class="memory-user-boundary"
+              >
+                {{ memoryUserIdentityBoundary }}
+              </div>
+              <div
                 v-if="memoryUserIdentity?.fallbackToDefault"
                 class="memory-user-hint"
               >
@@ -40,6 +59,30 @@
               </div>
               <div v-else-if="memoryUserIdentityError" class="memory-user-hint">
                 {{ memoryUserIdentityError }}
+              </div>
+              <div class="memory-user-snapshot">
+                {{ memoryUserIdentitySnapshotLabel }}
+              </div>
+              <div class="memory-user-actions">
+                <button
+                  type="button"
+                  class="memory-user-action"
+                  :disabled="memoryUserIdentityRefreshing"
+                  @click="refreshMemoryUserIdentity"
+                >
+                  {{
+                    memoryUserIdentityRefreshing
+                      ? t('common.loading')
+                      : t('memoryExplorer.identityAction.refresh')
+                  }}
+                </button>
+                <button
+                  type="button"
+                  class="memory-user-action"
+                  @click="openMemoryIdentitySettings"
+                >
+                  {{ t('memoryExplorer.identityAction.openSettings') }}
+                </button>
               </div>
             </div>
           </div>
@@ -319,6 +362,32 @@
           </button>
         </div>
 
+        <div
+          :class="[
+            'scope-intent-receipt',
+            `scope-intent-receipt-${scopeIntentReceipt.tone}`,
+          ]"
+          role="note"
+          aria-label="搜索范围意图"
+        >
+          <div class="scope-intent-copy">
+            <span>{{ scopeIntentReceipt.label }}</span>
+            <div>
+              <strong>{{ scopeIntentReceipt.summary }}</strong>
+              <p>{{ scopeIntentReceipt.detail }}</p>
+              <p class="scope-intent-caution">{{ scopeIntentReceipt.caution }}</p>
+            </div>
+          </div>
+          <div class="scope-intent-metrics" aria-label="搜索范围指标">
+            <span
+              v-for="metric in scopeIntentReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
         <!-- 路由内容 -->
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
@@ -341,7 +410,7 @@ import {
   type OutreachTemplateRuntimeStatusItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
-import { initExtensionVueI18n, vueT } from '../i18n/vue';
+import { extensionUiLanguage, initExtensionVueI18n, vueT } from '../i18n/vue';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -364,9 +433,14 @@ const outreachSessionCount = ref(0);
 const skillCount = ref(0);
 const memoryUserIdentity = ref<{
   id: string;
+  isolation?: string;
+  identitySource?: 'header' | 'default_fallback' | 'local_inferred';
+  storageKey?: string;
   fallbackToDefault: boolean;
 } | null>(null);
 const memoryUserIdentityError = ref('');
+const memoryUserIdentityCheckedAt = ref<number | null>(null);
+const memoryUserIdentityRefreshing = ref(false);
 let outreachCountTimer: ReturnType<typeof setInterval> | null = null;
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
@@ -403,6 +477,91 @@ const recallScopeOptions = computed<
     title: t('memoryExplorer.scope.all.title'),
   },
 ]);
+
+const scopeIntentReceipt = computed(() => {
+  const scope = selectedRecallScope.value;
+  const rerunsCurrentSearch =
+    route.path === '/search' && searchQuery.value.trim().length >= 2;
+  const detailKey = rerunsCurrentSearch
+    ? 'memoryExplorer.scopeIntent.detail.rerun'
+    : 'memoryExplorer.scopeIntent.detail.idle';
+
+  if (scope === 'personal') {
+    return {
+      tone: 'personal',
+      label: t('memoryExplorer.scopeIntent.label'),
+      summary: t('memoryExplorer.scopeIntent.summary.personal'),
+      detail: t(detailKey),
+      caution: t('memoryExplorer.scopeIntent.caution.personal'),
+      metrics: [
+        t('memoryExplorer.scopeIntent.metric.personalOnly'),
+        t('memoryExplorer.scopeIntent.metric.workExcluded'),
+        t('memoryExplorer.scopeIntent.metric.noWrite'),
+      ],
+    };
+  }
+
+  if (scope === 'all') {
+    return {
+      tone: 'all',
+      label: t('memoryExplorer.scopeIntent.label'),
+      summary: t('memoryExplorer.scopeIntent.summary.all'),
+      detail: t(detailKey),
+      caution: t('memoryExplorer.scopeIntent.caution.all'),
+      metrics: [
+        t('memoryExplorer.scopeIntent.metric.workAndPersonal'),
+        t('memoryExplorer.scopeIntent.metric.personalReview'),
+        t('memoryExplorer.scopeIntent.metric.noWrite'),
+      ],
+    };
+  }
+
+  return {
+    tone: 'work',
+    label: t('memoryExplorer.scopeIntent.label'),
+    summary: t('memoryExplorer.scopeIntent.summary.work'),
+    detail: t(detailKey),
+    caution: t('memoryExplorer.scopeIntent.caution.work'),
+    metrics: [
+      t('memoryExplorer.scopeIntent.metric.workOnly'),
+      t('memoryExplorer.scopeIntent.metric.personalExcluded'),
+      t('memoryExplorer.scopeIntent.metric.noWrite'),
+    ],
+  };
+});
+
+const memoryUserIdentitySourceLabel = computed(() => {
+  const source = memoryUserIdentity.value?.identitySource;
+  if (source === 'default_fallback') {
+    return t('memoryExplorer.identitySource.defaultFallback');
+  }
+  if (source === 'local_inferred') {
+    return t('memoryExplorer.identitySource.localInferred');
+  }
+  return t('memoryExplorer.identitySource.header');
+});
+
+const memoryUserIdentityBoundary = computed(() => {
+  if (memoryUserIdentity.value?.fallbackToDefault) {
+    return t('memoryExplorer.identityBoundary.defaultFallback');
+  }
+  return t('memoryExplorer.identityBoundary.explicit');
+});
+
+const memoryUserIdentitySnapshotLabel = computed(() => {
+  if (memoryUserIdentityRefreshing.value) {
+    return t('memoryExplorer.identitySnapshot.loading');
+  }
+  if (!memoryUserIdentityCheckedAt.value) {
+    return t('memoryExplorer.identitySnapshot.pending');
+  }
+  const checkedAt = new Intl.DateTimeFormat(extensionUiLanguage.value, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(memoryUserIdentityCheckedAt.value));
+  return t('memoryExplorer.identitySnapshot.checkedAt', { time: checkedAt });
+});
 
 function normalizeClientRecallScope(value: unknown): RecallScope | null {
   const rawValue = Array.isArray(value) ? value[0] : value;
@@ -529,6 +688,7 @@ async function loadPendingDecisionCount() {
 }
 
 async function loadMemoryUserIdentity() {
+  memoryUserIdentityRefreshing.value = true;
   try {
     const client = getMemoryServiceClient();
     const stats = await client.getStats();
@@ -536,6 +696,11 @@ async function loadMemoryUserIdentity() {
     const fallbackId = client.getUserId();
     memoryUserIdentity.value = {
       id: identity?.id || fallbackId,
+      isolation: identity?.isolation,
+      identitySource:
+        identity?.identitySource ||
+        (identity?.fallbackToDefault ? 'default_fallback' : 'header'),
+      storageKey: identity?.storageKey,
       fallbackToDefault:
         identity?.fallbackToDefault ?? fallbackId === 'default',
     };
@@ -543,12 +708,29 @@ async function loadMemoryUserIdentity() {
   } catch (error) {
     console.error('加载当前记忆用户失败:', error);
     const client = getMemoryServiceClient();
+    const userId = client.getUserId();
     memoryUserIdentity.value = {
-      id: client.getUserId(),
-      fallbackToDefault: client.getUserId() === 'default',
+      id: userId,
+      isolation: 'per_user_sqlite',
+      identitySource: 'local_inferred',
+      storageKey: `data/users/${userId}/memory.db`,
+      fallbackToDefault: userId === 'default',
     };
     memoryUserIdentityError.value = describeMemoryUserIdentityError(error);
+  } finally {
+    memoryUserIdentityCheckedAt.value = Date.now();
+    memoryUserIdentityRefreshing.value = false;
   }
+}
+
+async function refreshMemoryUserIdentity() {
+  await loadMemoryUserIdentity();
+}
+
+function openMemoryIdentitySettings() {
+  const runtime = typeof chrome !== 'undefined' ? chrome.runtime : undefined;
+  const url = runtime?.getURL ? runtime.getURL('options.html') : 'options.html';
+  window.open(url, '_blank', 'noopener');
 }
 
 function describeMemoryUserIdentityError(error: unknown) {
@@ -940,11 +1122,81 @@ html,
   overflow-wrap: anywhere;
 }
 
+.memory-user-storage {
+  margin-top: 0.28rem;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.64rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.memory-user-source {
+  margin-top: 0.32rem;
+  color: #bfdbfe;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.memory-user-boundary {
+  margin-top: 0.35rem;
+  color: #86efac;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
 .memory-user-hint {
   margin-top: 0.35rem;
   color: #fbbf24;
   font-size: 0.7rem;
   line-height: 1.4;
+}
+
+.memory-user-snapshot {
+  margin-top: 0.4rem;
+  color: #94a3b8;
+  font-size: 0.66rem;
+  line-height: 1.4;
+}
+
+.memory-user-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.memory-user-action {
+  appearance: none;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 0.35rem;
+  background: rgba(15, 23, 42, 0.74);
+  color: #dbeafe;
+  cursor: pointer;
+  font-size: 0.66rem;
+  font-weight: 650;
+  line-height: 1.2;
+  min-height: 1.75rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.memory-user-action:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.58);
+  color: #eff6ff;
+}
+
+.memory-user-action:disabled {
+  cursor: progress;
+  opacity: 0.62;
+}
+
+.memory-user-status.warning .memory-user-boundary {
+  color: #fcd34d;
+}
+
+.memory-user-status.warning .memory-user-source {
+  color: #fde68a;
 }
 
 .logo {
@@ -1118,6 +1370,87 @@ html,
   color: #f8fafc;
   background: rgba(16, 185, 129, 0.26);
   box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.35);
+}
+
+.scope-intent-receipt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  margin: -1rem 0 1.5rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-left: 4px solid rgba(16, 185, 129, 0.85);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.18);
+}
+
+.scope-intent-receipt-personal {
+  border-left-color: rgba(168, 85, 247, 0.85);
+}
+
+.scope-intent-receipt-all {
+  border-left-color: rgba(245, 158, 11, 0.9);
+}
+
+.scope-intent-copy {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.scope-intent-copy > span {
+  flex: 0 0 auto;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.78);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.scope-intent-copy strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.scope-intent-copy p {
+  margin: 0.18rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.scope-intent-copy .scope-intent-caution {
+  color: #e2e8f0;
+}
+
+.scope-intent-metrics {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.scope-intent-metrics span {
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.7);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 /* 页面过渡动画 */
@@ -2679,6 +3012,15 @@ html,
 
   .scope-option {
     flex: 1;
+  }
+
+  .scope-intent-receipt {
+    grid-template-columns: 1fr;
+    margin-top: 0;
+  }
+
+  .scope-intent-metrics {
+    justify-content: flex-start;
   }
 
   .topic-header {

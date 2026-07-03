@@ -2,7 +2,9 @@ import type {
   CalendarEventSyncItem,
   ContextAssistResponse,
   StorylineOpportunity,
+  StorylineSuggestedArtifact,
   TodayPilotMeetingPrepRecord,
+  TodayPilotMeetingPrepPrepareResponse,
   TodayPilotMeetingPrepResolveResponse,
 } from './services/MemoryServiceClient';
 import { readRingCentralCalendarEvents } from './context-assist/ringCentralCalendar';
@@ -58,9 +60,18 @@ interface MeetingPrepState {
   selectedEvent: CalendarEventSyncItem | null;
   assist: ContextAssistResponse | null;
   prep: TodayPilotMeetingPrepRecord | null;
+  refreshReceipt: MeetingPrepRefreshReceipt | null;
   loading: boolean;
   syncLabel: string;
   error: string;
+}
+
+interface MeetingPrepRefreshReceipt {
+  status: 'pending' | 'success' | 'warning' | 'failed';
+  title: string;
+  body: string;
+  chips: string[];
+  boundary: string;
 }
 
 interface MeetingPrepHandoffStorageItem {
@@ -75,6 +86,12 @@ interface MeetingPrepHandoffStorageItem {
   prepId?: string;
   missionId?: string;
   generatedMode?: string;
+}
+
+interface StorylineDismissReceipt {
+  dismissKey: string;
+  eventTitle: string;
+  expiresAt: number;
 }
 
 class RingCentralVideoHomePrep {
@@ -92,16 +109,35 @@ class RingCentralVideoHomePrep {
   private config: EnvConfigType | null = null;
   private storylineDismissals: Record<string, number> = {};
   private storylineDismissalsLoaded = false;
+  private storylineDismissReceipt: StorylineDismissReceipt | null = null;
   private state: MeetingPrepState = {
     enabled: true,
     events: [],
     selectedEvent: null,
     assist: null,
     prep: null,
+    refreshReceipt: null,
     loading: false,
     syncLabel: '未同步',
     error: '',
   };
+
+  handleRouteChange(): void {
+    if (this.deactivateForNonVideoHomeRoute()) {
+      return;
+    }
+    if (this.state.enabled) {
+      this.scheduleRefresh();
+    }
+    if (
+      !this.state.events.length &&
+      (this.state.enabled || this.nativeJoinEnabled)
+    ) {
+      void this.syncRingCentralCalendar({
+        forceRingCentral: this.nativeJoinEnabled,
+      });
+    }
+  }
 
   async start(): Promise<void> {
     this.config = await this.loadConfig();
@@ -292,12 +328,16 @@ class RingCentralVideoHomePrep {
     if (this.refreshTimer != null) return;
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
+      if (this.deactivateForNonVideoHomeRoute()) {
+        return;
+      }
       const changed = this.refreshSelectedMeeting();
       if (changed) {
-        this.state.assist = null;
-        this.state.prep = null;
-        this.render();
-        void this.loadMeetingPrep();
+      this.state.assist = null;
+      this.state.prep = null;
+      this.state.refreshReceipt = null;
+      this.render();
+      void this.loadMeetingPrep();
       } else {
         this.render();
       }
@@ -340,7 +380,11 @@ class RingCentralVideoHomePrep {
       }
       this.state.error = '';
       this.refreshSelectedMeeting();
-      if (this.state.enabled && options.loadPrepAfterSync !== false) {
+      if (
+        this.state.enabled &&
+        options.loadPrepAfterSync !== false &&
+        isRingCentralVideoHomeRoute()
+      ) {
         void this.loadMeetingPrep();
       }
     } catch (error) {
@@ -349,11 +393,19 @@ class RingCentralVideoHomePrep {
       this.state.error =
         error instanceof Error ? error.message : 'calendar_sync_failed';
     } finally {
-      this.render();
+      if (isRingCentralVideoHomeRoute()) {
+        this.render();
+      } else {
+        this.deactivateForNonVideoHomeRoute();
+      }
     }
   }
 
   private refreshSelectedMeeting(): boolean {
+    if (!isRingCentralVideoHomeRoute()) {
+      return this.clearRouteScopedState();
+    }
+
     const previous = this.state.selectedEvent;
     const previousKey = getEventKey(previous);
 
@@ -366,6 +418,8 @@ class RingCentralVideoHomePrep {
       this.lastPrepEventKey = null;
       this.state.assist = null;
       this.state.prep = null;
+      this.state.refreshReceipt = null;
+      this.storylineDismissReceipt = null;
     }
     return changed;
   }
@@ -399,8 +453,19 @@ class RingCentralVideoHomePrep {
     return null;
   }
 
-  private async loadMeetingPrep(): Promise<void> {
-    if (!this.state.selectedEvent || this.state.assist) return;
+  private async loadMeetingPrep(options: {
+    refresh?: {
+      prepareResult?: TodayPilotMeetingPrepPrepareResponse | null;
+      prepareError?: string;
+    };
+  } = {}): Promise<void> {
+    if (
+      !isRingCentralVideoHomeRoute() ||
+      !this.state.selectedEvent ||
+      this.state.assist
+    ) {
+      return;
+    }
 
     const requestSeq = ++this.assistRequestSeq;
     const event = this.state.selectedEvent;
@@ -427,6 +492,7 @@ class RingCentralVideoHomePrep {
         },
       });
       if (
+        !isRingCentralVideoHomeRoute() ||
         requestSeq !== this.assistRequestSeq ||
         eventKey !== getEventKey(this.state.selectedEvent)
       ) {
@@ -435,6 +501,15 @@ class RingCentralVideoHomePrep {
       this.state.assist = response?.result?.assist || null;
       this.state.prep = response?.result?.prep || null;
       this.lastPrepEventKey = eventKey;
+      if (options.refresh) {
+        this.state.refreshReceipt = buildRefreshReceipt({
+          event,
+          prepareResult: options.refresh.prepareResult,
+          prepareError: options.refresh.prepareError,
+          resolve: response?.result || null,
+          syncLabel: this.state.syncLabel,
+        });
+      }
       await this.persistMeetingPilotHandoff();
     } catch (error) {
       if (requestSeq !== this.assistRequestSeq) return;
@@ -443,8 +518,20 @@ class RingCentralVideoHomePrep {
         error instanceof Error
           ? error.message
           : 'today_pilot_meeting_prep_failed';
+      if (options.refresh) {
+        this.state.refreshReceipt = buildRefreshReceipt({
+          event,
+          prepareResult: options.refresh.prepareResult,
+          prepareError: options.refresh.prepareError,
+          resolveError: this.state.error,
+          syncLabel: this.state.syncLabel,
+        });
+      }
     } finally {
-      if (requestSeq === this.assistRequestSeq) {
+      if (
+        requestSeq === this.assistRequestSeq &&
+        isRingCentralVideoHomeRoute()
+      ) {
         this.state.loading = false;
         this.render();
       }
@@ -455,11 +542,15 @@ class RingCentralVideoHomePrep {
     if (!this.state.selectedEvent || !this.state.assist?.insertText) return;
     if (!this.isPrepCurrent()) return;
     const createdAt = Date.now();
+    const goal = buildMeetingPrepHandoffGoal(
+      this.state.assist,
+      this.state.selectedEvent,
+    );
     const handoff: MeetingPrepHandoffStorageItem = {
       createdAt,
       expiresAt: createdAt + 12 * 60 * 60 * 1000,
       event: this.state.selectedEvent,
-      goal: '',
+      goal,
       text: this.state.assist.insertText,
       cueCards: this.state.assist.cueCards,
       evidence: this.state.assist.evidence,
@@ -491,6 +582,11 @@ class RingCentralVideoHomePrep {
   }
 
   private ensureHost(): HTMLElement | null {
+    if (!isRingCentralVideoHomeRoute()) {
+      this.removeHost();
+      return null;
+    }
+
     const target = findInjectionTarget();
     if (!target) {
       this.removeHost();
@@ -528,6 +624,10 @@ class RingCentralVideoHomePrep {
 
   private render(): void {
     if (!this.state.enabled) return;
+    if (!isRingCentralVideoHomeRoute()) {
+      this.deactivateForNonVideoHomeRoute();
+      return;
+    }
 
     const event = this.state.selectedEvent;
     if (!event) {
@@ -548,6 +648,10 @@ class RingCentralVideoHomePrep {
     const storylineOpportunity =
       displayAssist && prep
         ? this.getVisibleStorylineOpportunity(displayAssist, prep, event)
+        : null;
+    const storylineDismissReceipt =
+      displayAssist && prep && !storylineOpportunity
+        ? this.getStorylineDismissReceipt(prep, event)
         : null;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     this.shadow.innerHTML = `
@@ -585,6 +689,8 @@ class RingCentralVideoHomePrep {
             ? `<div class="pai-error">${escapeHtml(this.state.error)}</div>`
             : ''
         }
+        ${displayAssist && prep ? renderPrepReceipt(prep, displayAssist, evidence.length) : ''}
+        ${this.state.refreshReceipt ? renderRefreshReceipt(this.state.refreshReceipt) : ''}
         <div class="pai-assist-output" data-role="assist-output">
           ${
             !this.state.error && displayAssist?.summary
@@ -600,6 +706,11 @@ class RingCentralVideoHomePrep {
                   prep,
                   event,
                 )
+              : ''
+          }
+          ${
+            storylineDismissReceipt
+              ? renderStorylineDismissReceipt(storylineDismissReceipt)
               : ''
           }
           ${
@@ -691,6 +802,22 @@ class RingCentralVideoHomePrep {
     return opportunity;
   }
 
+  private getStorylineDismissReceipt(
+    prep: TodayPilotMeetingPrepRecord,
+    event: CalendarEventSyncItem,
+  ): StorylineDismissReceipt | null {
+    const dismissKey = getStorylineDismissKey(prep, event);
+    if (
+      !dismissKey ||
+      !this.storylineDismissReceipt ||
+      this.storylineDismissReceipt.dismissKey !== dismissKey ||
+      this.storylineDismissReceipt.expiresAt <= Date.now()
+    ) {
+      return null;
+    }
+    return this.storylineDismissReceipt;
+  }
+
   private openStorylineDraft(): void {
     const prep = this.state.prep;
     const event = this.state.selectedEvent;
@@ -718,18 +845,31 @@ class RingCentralVideoHomePrep {
     if (!prep || !event) return;
     const dismissKey = getStorylineDismissKey(prep, event);
     if (!dismissKey) return;
-    this.storylineDismissals[dismissKey] =
-      Date.now() + STORYLINE_DISMISS_TTL_MS;
+    const expiresAt = Date.now() + STORYLINE_DISMISS_TTL_MS;
+    this.storylineDismissals[dismissKey] = expiresAt;
     await chrome.storage.local.set({
       [STORYLINE_DISMISS_STORAGE_KEY]: this.storylineDismissals,
     });
+    this.storylineDismissReceipt = {
+      dismissKey,
+      eventTitle: event.title || prep.eventTitle || '当前会议',
+      expiresAt,
+    };
     this.render();
   }
 
   private async refreshMeetingPrep(): Promise<void> {
+    if (!isRingCentralVideoHomeRoute()) {
+      this.deactivateForNonVideoHomeRoute();
+      return;
+    }
     this.state.assist = null;
     this.state.prep = null;
     this.lastPrepEventKey = null;
+    this.state.refreshReceipt = buildPendingRefreshReceipt(
+      this.state.selectedEvent,
+      this.state.syncLabel,
+    );
     this.state.loading = true;
     this.state.error = '';
     this.render();
@@ -742,27 +882,44 @@ class RingCentralVideoHomePrep {
       this.render();
       return;
     }
+    let prepareResult: TodayPilotMeetingPrepPrepareResponse | null = null;
     let prepareError = '';
     try {
-      await this.prepareMeetingPrepBackfill();
+      prepareResult = await this.prepareMeetingPrepBackfill();
     } catch (error) {
       prepareError =
         error instanceof Error ? error.message : 'today_pilot_prepare_failed';
       console.warn('[TodayPilot] meeting prep backfill failed:', error);
     }
-    await this.loadMeetingPrep();
+    await this.loadMeetingPrep({
+      refresh: {
+        prepareResult,
+        prepareError,
+      },
+    });
     if (prepareError && !this.state.assist) {
       this.state.error = prepareError;
+      this.state.refreshReceipt = buildRefreshReceipt({
+        event: this.state.selectedEvent,
+        prepareResult,
+        prepareError,
+        resolveError: prepareError,
+        syncLabel: this.state.syncLabel,
+      });
       this.render();
     }
   }
 
-  private async prepareMeetingPrepBackfill(): Promise<void> {
-    if (!this.state.selectedEvent) {
-      return;
+  private async prepareMeetingPrepBackfill(): Promise<TodayPilotMeetingPrepPrepareResponse | null> {
+    if (!isRingCentralVideoHomeRoute() || !this.state.selectedEvent) {
+      return null;
     }
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    await sendRuntimeMessage({
+    const response = await sendRuntimeMessage<{
+      result?: TodayPilotMeetingPrepPrepareResponse;
+      success?: boolean;
+      error?: string;
+    }>({
       type: 'TODAY_PILOT_PREPARE_MEETINGS_REQUEST',
       request: {
         date: formatLocalDate(this.state.selectedEvent.startTime, timezone),
@@ -772,6 +929,45 @@ class RingCentralVideoHomePrep {
         mode: 'nightly_llm',
       },
     });
+    if (response?.success === false) {
+      throw new Error(response.error || 'today_pilot_prepare_failed');
+    }
+    return response?.result || null;
+  }
+
+  private deactivateForNonVideoHomeRoute(): boolean {
+    if (isRingCentralVideoHomeRoute()) {
+      return false;
+    }
+    this.clearRouteScopedState();
+    this.removeHost();
+    return true;
+  }
+
+  private clearRouteScopedState(): boolean {
+    const hadRouteScopedState = Boolean(
+      this.state.selectedEvent ||
+      this.state.assist ||
+      this.state.prep ||
+      this.state.refreshReceipt ||
+      this.state.loading ||
+        this.state.error ||
+        this.lastPrepEventKey ||
+        this.storylineDismissReceipt,
+    );
+    if (!hadRouteScopedState) {
+      return false;
+    }
+    this.assistRequestSeq += 1;
+    this.state.selectedEvent = null;
+    this.state.assist = null;
+    this.state.prep = null;
+    this.state.refreshReceipt = null;
+    this.state.loading = false;
+    this.state.error = '';
+    this.lastPrepEventKey = null;
+    this.storylineDismissReceipt = null;
+    return true;
   }
 }
 
@@ -1172,6 +1368,72 @@ function getMeetingPrepHandoffStorageKey(
     .join('|');
 }
 
+function buildMeetingPrepHandoffGoal(
+  assist: ContextAssistResponse,
+  event: CalendarEventSyncItem,
+): string {
+  const cards = Array.isArray(assist.cueCards) ? assist.cueCards : [];
+  const actionCard = cards.find((card) => {
+    return card.kind === 'action' && (card.body || card.title);
+  });
+  const questionCard = cards.find((card) => {
+    return card.kind === 'question' && (card.body || card.title);
+  });
+  const briefCard = cards.find((card) => {
+    return card.kind === 'brief' && (card.body || card.title);
+  });
+
+  const candidates = [
+    actionCard?.body || actionCard?.title || '',
+    questionCard
+      ? `会中确认：${questionCard.body || questionCard.title || ''}`
+      : '',
+    assist.summary || '',
+    briefCard?.body || briefCard?.title || '',
+  ];
+
+  for (const candidate of candidates) {
+    const goal = normalizeMeetingPrepGoalText(candidate, event.title);
+    if (goal) {
+      return goal;
+    }
+  }
+
+  return normalizeMeetingPrepGoalText(
+    `明确 ${event.title || '本场会议'} 的下一步、owner 和风险。`,
+    event.title,
+  );
+}
+
+function normalizeMeetingPrepGoalText(
+  value: string | undefined,
+  eventTitle: string | undefined,
+  maxLength = 120,
+): string {
+  const normalizedTitle = normalizeMeetingTitle(eventTitle || '');
+  const lines = String(value || '')
+    .split(/\n+/)
+    .map((line) =>
+      line
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/^#+\s*/g, '')
+        .replace(/^[\s>*-]+/g, '')
+        .replace(/[`*_]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter(Boolean)
+    .filter((line) => normalizeMeetingTitle(line) !== normalizedTitle)
+    .filter((line) => !/^today pilot (?:会前准备|meeting prep)/i.test(line));
+  const firstLine = lines[0] || '';
+  if (!firstLine) {
+    return '';
+  }
+  return firstLine.length <= maxLength
+    ? firstLine
+    : `${firstLine.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
 function isMeetingPrepHandoffStorageItem(
   value: unknown,
 ): value is MeetingPrepHandoffStorageItem {
@@ -1334,24 +1596,32 @@ function isUsefulMeetingPrepEvidence(
   const snippet = item.snippet?.trim() || '';
   if (!snippet) return false;
 
+  if (isCalendarOnlyMeetingPrepEvidence(item)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isCalendarOnlyMeetingPrepEvidence(
+  item: ContextAssistResponse['evidence'][number],
+): boolean {
   const labelText = [
+    item.id,
     item.sourceLabel,
     item.sourceTitle,
     item.title,
     item.whyMatched,
+    item.snippet,
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
-  const fullText = `${labelText} ${snippet}`.toLowerCase();
-  const looksLikeCalendarOnly =
-    /calendar event|ringcentral video|会议:\s*ringcentral video/.test(fullText);
-  const hasWorkSignal =
-    /\b(mtr|jira|glip|thread|message|bug|issue|follow|dependency|blocked)\b/i.test(
-      fullText,
-    ) || /承诺|依赖|进展|问题|风险|决定|待办|阻塞/.test(fullText);
-
-  return !looksLikeCalendarOnly || hasWorkSignal;
+  return (
+    String(item.id || '').startsWith('calendar:') ||
+    String(item.sourceLabel || '').toLowerCase() === 'calendar' ||
+    /calendar event|ringcentral video|会议:\s*ringcentral video/.test(labelText)
+  );
 }
 
 function getMeetingPrepSubtitle(
@@ -1365,8 +1635,17 @@ function getMeetingPrepSubtitle(
     syncLabel && syncLabel !== '未同步' ? ` · ${syncLabel}` : '';
   if (loading) return `正在读取 Today Pilot 会前准备${syncSuffix}`;
   if (!assist) return `Today Pilot 暂未为这场会议生成提前准备${syncSuffix}`;
-  if (!assist.available || evidenceCount === 0) {
+  if (!assist.available) {
     return `暂无高置信记忆，仍可查看会议基础信息${syncSuffix}`;
+  }
+  if (evidenceCount === 0) {
+    const baseMode =
+      prep?.generatedMode === 'deterministic_fallback'
+        ? 'fallback'
+        : prep?.generatedMode === 'on_demand_llm'
+          ? '目标版本'
+          : '基础版';
+    return `已准备${baseMode} · 高置信记忆 0 条${syncSuffix}`;
   }
   if (prep?.generatedMode === 'nightly_llm') {
     return `已提前准备 · ${evidenceCount} 条证据${syncSuffix}`;
@@ -1418,6 +1697,201 @@ function renderMeetingMeta(event: CalendarEventSyncItem): string {
   return `<div class="pai-time">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
+function getMeetingPrepModeLabel(
+  prep: TodayPilotMeetingPrepRecord,
+): string {
+  if (prep.status === 'fallback') {
+    return '规则 fallback';
+  }
+  if (prep.generatedMode === 'on_demand_llm') {
+    return '目标版本';
+  }
+  if (prep.generatedMode === 'nightly_llm') {
+    return '提前准备';
+  }
+  return '基础准备';
+}
+
+function getMeetingPrepBoundaryText(
+  prep: TodayPilotMeetingPrepRecord,
+  assist: ContextAssistResponse,
+  visibleEvidenceCount: number,
+): string {
+  const stats = getMeetingPrepReceiptStats(prep, assist, visibleEvidenceCount);
+  if (prep.status === 'fallback') {
+    return 'LLM 暂不可用时使用规则 fallback；先核对 owner、下一步和风险，刷新后可补齐更完整记忆。';
+  }
+  if (stats.visibleEvidence === 0 && stats.totalEvidence > 0) {
+    return '仅命中日历/基础信息；它会带入 Meeting Pilot 作为准备背景，但不会伪装成高置信记忆。';
+  }
+  if (stats.totalEvidence === 0) {
+    return '暂无可追溯记忆来源；先用日历信息明确 owner、下一步和风险，刷新后可补齐。';
+  }
+  if (stats.backgroundEvidence > 0) {
+    return `${stats.visibleEvidence} 条高置信来源可展开，${stats.backgroundEvidence} 条日历或低信号来源只作为准备背景保留。`;
+  }
+  return '已按可追溯来源生成；可展开证据查看来源。';
+}
+
+function getMeetingPrepReceiptStats(
+  prep: TodayPilotMeetingPrepRecord,
+  assist: ContextAssistResponse,
+  visibleEvidenceCount: number,
+): {
+  totalEvidence: number;
+  visibleEvidence: number;
+  backgroundEvidence: number;
+} {
+  const totalEvidence = Math.max(
+    prep.evidenceRefs?.length || 0,
+    assist.evidence?.length || 0,
+  );
+  const visibleEvidence = Math.min(
+    Math.max(0, visibleEvidenceCount),
+    totalEvidence,
+  );
+  return {
+    totalEvidence,
+    visibleEvidence,
+    backgroundEvidence: Math.max(0, totalEvidence - visibleEvidence),
+  };
+}
+
+function renderPrepReceipt(
+  prep: TodayPilotMeetingPrepRecord,
+  assist: ContextAssistResponse,
+  visibleEvidenceCount: number,
+): string {
+  const stats = getMeetingPrepReceiptStats(prep, assist, visibleEvidenceCount);
+  const modeLabel = getMeetingPrepModeLabel(prep);
+  const receiptChips = [
+    modeLabel,
+    `高置信 ${stats.visibleEvidence} 条`,
+    `基础背景 ${stats.backgroundEvidence} 条`,
+  ];
+  return `
+    <section class="pai-prep-receipt" aria-label="Today Pilot 会前准备回执">
+      <div class="pai-prep-receipt-head">
+        ${receiptChips
+          .map((label) => `<span>${escapeHtml(label)}</span>`)
+          .join('')}
+      </div>
+      <div class="pai-prep-receipt-body">${escapeHtml(
+        getMeetingPrepBoundaryText(prep, assist, visibleEvidenceCount),
+      )}</div>
+      <div class="pai-prep-receipt-handoff">
+        本机会写入 Meeting Pilot handoff，只带入本场关注、cue cards 和证据背景；不会加入会议、录音、发消息、审批或写回日历/外部系统。
+      </div>
+      <div class="pai-prep-receipt-next">会中核对 owner / 下一步 / 风险</div>
+    </section>
+  `;
+}
+
+function buildPendingRefreshReceipt(
+  event: CalendarEventSyncItem | null,
+  syncLabel: string,
+): MeetingPrepRefreshReceipt {
+  return {
+    status: 'pending',
+    title: '刷新会前准备中',
+    body: `${event?.title || '当前会议'} 正在重新读取本机会议列表，并请求 Today Pilot 为当天会议补齐预生成准备。`,
+    chips: ['刷新中', syncLabel || '日历同步待确认'],
+    boundary:
+      '这一步只读取本机会议和 Personal AI 会前准备缓存，不会加入会议、录音、发消息或写回日历/外部系统。',
+  };
+}
+
+function buildRefreshReceipt(input: {
+  event: CalendarEventSyncItem | null;
+  prepareResult?: TodayPilotMeetingPrepPrepareResponse | null;
+  prepareError?: string;
+  resolve?: TodayPilotMeetingPrepResolveResponse | null;
+  resolveError?: string;
+  syncLabel: string;
+}): MeetingPrepRefreshReceipt {
+  const { prepareResult, prepareError, resolve, resolveError } = input;
+  const hasPrep = Boolean(resolve?.assist && resolve.prep);
+  const status: MeetingPrepRefreshReceipt['status'] = resolveError
+    ? 'failed'
+    : prepareError
+      ? hasPrep
+        ? 'warning'
+        : 'failed'
+      : resolve?.source === 'none'
+        ? 'warning'
+        : 'success';
+  const title =
+    status === 'success'
+      ? '刷新会前准备完成'
+      : status === 'warning'
+        ? '刷新会前准备部分完成'
+        : '刷新会前准备未完成';
+  const resolveLabel = getMeetingPrepResolveLabel(resolve, resolveError);
+  const prepareLabel = prepareResult
+    ? `backfill 准备 ${prepareResult.prepared} / 跳过 ${prepareResult.skipped} / 失败 ${prepareResult.failed}`
+    : prepareError
+      ? 'backfill 请求失败'
+      : 'backfill 结果未返回';
+  const warningText =
+    prepareError ||
+    resolveError ||
+    prepareResult?.warnings?.find(Boolean) ||
+    resolve?.warnings?.find(Boolean) ||
+    '';
+  const body = [
+    `${input.event?.title || '当前会议'}：${prepareLabel}；${resolveLabel}。`,
+    warningText ? `提示：${warningText}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const chips = [
+    input.syncLabel || '日历同步待确认',
+    prepareResult
+      ? `准备 ${prepareResult.prepared}`
+      : prepareError
+        ? '准备失败'
+        : '准备未确认',
+    resolveLabel,
+  ];
+  return {
+    status,
+    title,
+    body,
+    chips,
+    boundary:
+      '刷新只更新本地会前准备展示和 Meeting Pilot handoff 缓存；不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统。',
+  };
+}
+
+function getMeetingPrepResolveLabel(
+  resolve: TodayPilotMeetingPrepResolveResponse | null | undefined,
+  resolveError?: string,
+): string {
+  if (resolveError) return 'resolve 失败';
+  if (!resolve) return 'resolve 未返回';
+  if (resolve.source === 'cached') return '读取预生成缓存';
+  if (resolve.source === 'generated') return '已生成新准备';
+  if (resolve.source === 'fallback') return '使用规则 fallback';
+  return '暂无可用准备';
+}
+
+function renderRefreshReceipt(receipt: MeetingPrepRefreshReceipt): string {
+  return `
+    <section class="pai-refresh-receipt ${escapeHtmlAttribute(
+      receipt.status,
+    )}" aria-label="Today Pilot 刷新会前准备回执">
+      <div class="pai-refresh-title">${escapeHtml(receipt.title)}</div>
+      <div class="pai-refresh-chips">
+        ${receipt.chips
+          .map((label) => `<span>${escapeHtml(label)}</span>`)
+          .join('')}
+      </div>
+      <div class="pai-refresh-body">${escapeHtml(receipt.body)}</div>
+      <div class="pai-refresh-boundary">${escapeHtml(receipt.boundary)}</div>
+    </section>
+  `;
+}
+
 function getStorylineDismissKey(
   prep: TodayPilotMeetingPrepRecord,
   event: CalendarEventSyncItem,
@@ -1438,18 +1912,14 @@ function renderStorylineOpportunity(
   prep: TodayPilotMeetingPrepRecord,
   event: CalendarEventSyncItem,
 ): string {
-  const evidenceCount =
-    opportunity.evidenceClusters?.reduce(
-      (sum, cluster) => sum + cluster.evidenceCount,
-      0,
-    ) || prep.evidenceRefs.length;
+  const evidenceSummary = getStorylineEvidenceSummary(opportunity, prep);
   const clusters = (opportunity.evidenceClusters || [])
     .slice(0, 3)
     .map((cluster) => cluster.label)
     .join(' · ');
   const meta = [
     opportunity.audienceHint ? `受众：${opportunity.audienceHint}` : '',
-    evidenceCount ? `${evidenceCount} 条素材` : '',
+    getStorylineEvidenceMetaLabel(evidenceSummary),
     opportunity.estimatedLengthMinutes
       ? `约 ${opportunity.estimatedLengthMinutes} 分钟`
       : '',
@@ -1471,6 +1941,10 @@ function renderStorylineOpportunity(
               )}</div>`
             : ''
         }
+        ${renderStorylineEntryReceipt(opportunity, prep)}
+        <div class="pai-storyline-boundary">
+          只打开草稿页；复核证据后手动复制，不会自动写回外部平台。
+        </div>
       </div>
       <div class="pai-storyline-actions">
         <button class="pai-primary" data-action="storyline-generate" type="button">${escapeHtml(
@@ -1480,6 +1954,227 @@ function renderStorylineOpportunity(
       </div>
     </section>
   `;
+}
+
+function renderStorylineEntryReceipt(
+  opportunity: StorylineOpportunity,
+  prep: TodayPilotMeetingPrepRecord,
+): string {
+  const evidenceSummary = getStorylineEvidenceSummary(opportunity, prep);
+  const evidenceChips = getStorylineEvidenceChips(evidenceSummary);
+  const shareReviewSummary = getStorylineShareReviewSummary(prep);
+  const chips = [
+    `输出：${getStorylineArtifactLabel(opportunity.suggestedArtifact)}`,
+    evidenceSummary.clusterCount ? `素材组 ${evidenceSummary.clusterCount}` : '',
+    ...evidenceChips,
+    opportunity.audienceHint ? `受众：${opportunity.audienceHint}` : '',
+    opportunity.estimatedLengthMinutes
+      ? `约 ${opportunity.estimatedLengthMinutes} 分钟`
+      : '',
+  ].filter(Boolean);
+  const sourceKinds = getStorylineSourceKindLabels(opportunity, prep);
+  const evidenceBoundary = evidenceSummary.countsDiffer
+    ? '模型素材数与实际 refs 不一致；以 Draft 页 evidence refs、缺口和风险复核为准。'
+    : '草稿页会重新核对 evidence refs、缺口和风险。';
+  return `
+    <div class="pai-storyline-receipt" aria-label="Storyline 入口回执">
+      <div class="pai-storyline-receipt-title">入口回执</div>
+      <div class="pai-storyline-receipt-chips">
+        ${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join('')}
+      </div>
+      <div class="pai-storyline-receipt-body">
+        ${escapeHtml(
+          `素材来源：${sourceKinds || '以 Draft 页返回的 evidence refs 为准'}；点击后才调用 Draft API，${evidenceBoundary}`,
+        )}
+      </div>
+      <div class="pai-storyline-receipt-review">
+        ${escapeHtml(
+          `外发复核：${formatStorylineShareReviewSummary(shareReviewSummary)}；当前只是素材入口，不是外发就绪稿。`,
+        )}
+      </div>
+    </div>
+  `;
+}
+
+function renderStorylineDismissReceipt(
+  receipt: StorylineDismissReceipt,
+): string {
+  return `
+    <section class="pai-storyline-dismiss-receipt" aria-label="Storyline 隐藏回执">
+      <div class="pai-storyline-dismiss-title">Storyline 提示已隐藏</div>
+      <div class="pai-storyline-dismiss-body">${escapeHtml(
+        `只把「${receipt.eventTitle}」这条会前 Storyline 入口在本机隐藏到 ${formatStorylineDismissExpiry(
+          receipt.expiresAt,
+        )}；写入 chrome.storage.local.storylineOpportunityDismissals，不删除会前准备、证据、Draft 草稿或 Meeting Pilot handoff，也不会写回 Slides / Docs / RingCentral。`,
+      )}</div>
+    </section>
+  `;
+}
+
+function formatStorylineDismissExpiry(expiresAtMs: number): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(expiresAtMs));
+  } catch {
+    return '约 30 天后';
+  }
+}
+
+interface StorylineEvidenceSummary {
+  clusterCount: number;
+  clusterEvidenceCount: number;
+  actualEvidenceRefCount: number;
+  displayEvidenceCount: number;
+  countsDiffer: boolean;
+}
+
+function getStorylineEvidenceSummary(
+  opportunity: StorylineOpportunity,
+  prep: TodayPilotMeetingPrepRecord,
+): StorylineEvidenceSummary {
+  const clusters = opportunity.evidenceClusters || [];
+  const clusterEvidenceCount = clusters.reduce(
+    (sum, cluster) => sum + cluster.evidenceCount,
+    0,
+  );
+  const actualEvidenceRefCount = prep.evidenceRefs?.length || 0;
+  return {
+    clusterCount: clusters.length,
+    clusterEvidenceCount,
+    actualEvidenceRefCount,
+    displayEvidenceCount: clusterEvidenceCount || actualEvidenceRefCount,
+    countsDiffer:
+      clusterEvidenceCount > 0 &&
+      actualEvidenceRefCount > 0 &&
+      clusterEvidenceCount !== actualEvidenceRefCount,
+  };
+}
+
+function getStorylineEvidenceMetaLabel(
+  summary: StorylineEvidenceSummary,
+): string {
+  if (summary.countsDiffer) {
+    return `素材估计 ${summary.clusterEvidenceCount} 条 · 实际 refs ${summary.actualEvidenceRefCount} 条`;
+  }
+  return summary.displayEvidenceCount
+    ? `${summary.displayEvidenceCount} 条素材`
+    : '';
+}
+
+function getStorylineEvidenceChips(
+  summary: StorylineEvidenceSummary,
+): string[] {
+  if (summary.countsDiffer) {
+    return [
+      `素材估计 ${summary.clusterEvidenceCount} 条`,
+      `实际 refs ${summary.actualEvidenceRefCount} 条`,
+    ];
+  }
+  return summary.displayEvidenceCount
+    ? [`证据 ${summary.displayEvidenceCount} 条`]
+    : [];
+}
+
+function getStorylineArtifactLabel(
+  target: StorylineSuggestedArtifact | undefined,
+): string {
+  if (target === 'slides_outline') return 'Slides 提纲';
+  if (target === 'ringcentral_post') return 'RingCentral 分享帖';
+  if (target === 'docs_brief') return 'Docs 简报';
+  return '口播稿';
+}
+
+function getStorylineSourceKindLabels(
+  opportunity: StorylineOpportunity,
+  prep: TodayPilotMeetingPrepRecord,
+): string {
+  const labelsByKind: Record<string, string> = {
+    calendar: '日历',
+    chunk: '记忆片段',
+    document: '文档',
+    glip: '消息',
+    jira: 'Jira',
+    meeting: '会议',
+    message: '消息',
+    ringcentral: '消息',
+    source_memory: '资料记忆',
+    source_memory_capsule: '资料记忆',
+    web: '网页',
+  };
+  const labels = new Set<string>();
+  const addLabel = (value: unknown): void => {
+    const raw = String(value || '').trim();
+    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_');
+    if (!normalized) return;
+    labels.add(labelsByKind[normalized] || compactInlineLabel(raw, 18));
+  };
+  for (const cluster of opportunity.evidenceClusters || []) {
+    for (const kind of cluster.sourceKinds || []) {
+      addLabel(kind);
+    }
+  }
+  for (const ref of prep.evidenceRefs || []) {
+    addLabel(ref.sourceLabel || ref.type);
+  }
+  return Array.from(labels).slice(0, 5).join(' / ');
+}
+
+interface StorylineShareReviewSummary {
+  privateEvidenceCount: number;
+  redactionPreviewCount: number;
+  riskOrOpenLoopCount: number;
+}
+
+function getStorylineShareReviewSummary(
+  prep: TodayPilotMeetingPrepRecord,
+): StorylineShareReviewSummary {
+  return {
+    privateEvidenceCount: prep.evidenceRefs?.length || 0,
+    redactionPreviewCount: readRedactionList(
+      prep.redaction,
+      'redactionPreview',
+    ).length,
+    riskOrOpenLoopCount: readRedactionList(
+      prep.redaction,
+      'risksOrOpenLoops',
+    ).length,
+  };
+}
+
+function readRedactionList(
+  redaction: Record<string, unknown> | undefined,
+  key: string,
+): string[] {
+  const value = redaction?.[key];
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => compactInlineLabel(item, 120))
+    .filter(Boolean);
+}
+
+function formatStorylineShareReviewSummary(
+  summary: StorylineShareReviewSummary,
+): string {
+  const items = [`私有素材 ${summary.privateEvidenceCount} 条`];
+  if (summary.redactionPreviewCount > 0) {
+    items.push(`脱敏提示 ${summary.redactionPreviewCount} 条`);
+  }
+  if (summary.riskOrOpenLoopCount > 0) {
+    items.push(`风险提醒 ${summary.riskOrOpenLoopCount} 条`);
+  }
+  return items.join(' / ');
+}
+
+function compactInlineLabel(value: unknown, maxLength: number): string {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function styles(): string {
@@ -1611,6 +2306,98 @@ function styles(): string {
       color: #92400e;
       font-size: 12px;
     }
+    .pai-prep-receipt {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px solid #d8e1ed;
+      border-radius: 6px;
+      background: #fbfdff;
+    }
+    .pai-prep-receipt-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pai-prep-receipt-head span {
+      padding: 2px 7px;
+      border: 1px solid #cbd8e6;
+      border-radius: 6px;
+      background: #fff;
+    }
+    .pai-prep-receipt-body {
+      margin-top: 6px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .pai-prep-receipt-handoff {
+      margin-top: 6px;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .pai-prep-receipt-next {
+      margin-top: 6px;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pai-refresh-receipt {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #d7dce5;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+    .pai-refresh-receipt.success {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .pai-refresh-receipt.warning {
+      border-color: #fed7aa;
+      background: #fff7ed;
+    }
+    .pai-refresh-receipt.failed {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .pai-refresh-title {
+      color: #1f2937;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pai-refresh-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .pai-refresh-chips span {
+      padding: 2px 7px;
+      border: 1px solid rgba(100, 116, 139, 0.28);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.72);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pai-refresh-body,
+    .pai-refresh-boundary {
+      margin-top: 6px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .pai-refresh-boundary {
+      color: #475569;
+    }
     .pai-assist-output[hidden] {
       display: none !important;
     }
@@ -1640,6 +2427,73 @@ function styles(): string {
       margin-top: 4px;
       color: #64748b;
       font-size: 12px;
+      word-break: break-word;
+    }
+    .pai-storyline-receipt {
+      margin-top: 8px;
+      padding: 8px;
+      border: 1px solid #c7ddf5;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .pai-storyline-receipt-title {
+      color: #0f4f8f;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 5px;
+    }
+    .pai-storyline-receipt-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .pai-storyline-receipt-chips span {
+      padding: 2px 6px;
+      border: 1px solid #bfd7ef;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pai-storyline-receipt-body {
+      margin-top: 6px;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .pai-storyline-receipt-review {
+      margin-top: 5px;
+      color: #7c2d12;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .pai-storyline-boundary {
+      margin-top: 5px;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .pai-storyline-dismiss-receipt {
+      margin-top: 12px;
+      padding: 9px 10px;
+      border: 1px solid #d8e3ef;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+    .pai-storyline-dismiss-title {
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .pai-storyline-dismiss-body {
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
       word-break: break-word;
     }
     .pai-storyline-actions {
@@ -1731,6 +2585,7 @@ function styles(): string {
 let ringCentralVideoHomePrepStarted = false;
 let ringCentralVideoHomeRouteWatcherAttached = false;
 let ringCentralVideoHomeLastHref = location.href;
+let ringCentralVideoHomePrepInstance: RingCentralVideoHomePrep | null = null;
 
 function isRingCentralVideoHomeRoute(): boolean {
   return (
@@ -1740,12 +2595,18 @@ function isRingCentralVideoHomeRoute(): boolean {
 }
 
 function startRingCentralVideoHomePrepIfNeeded(): void {
-  if (ringCentralVideoHomePrepStarted || !isRingCentralVideoHomeRoute()) {
+  if (ringCentralVideoHomePrepStarted) {
+    ringCentralVideoHomePrepInstance?.handleRouteChange();
+    return;
+  }
+
+  if (!isRingCentralVideoHomeRoute()) {
     return;
   }
 
   ringCentralVideoHomePrepStarted = true;
-  void new RingCentralVideoHomePrep().start();
+  ringCentralVideoHomePrepInstance = new RingCentralVideoHomePrep();
+  void ringCentralVideoHomePrepInstance.start();
 }
 
 function scheduleRingCentralVideoHomePrepCheck(): void {

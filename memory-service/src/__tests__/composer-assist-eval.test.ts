@@ -238,7 +238,9 @@ describe('Composer Assist evals', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.available).toBe(false);
-    expect(body.debug.rejectedReason).toBe('owner_already_replied');
+    expect(body.debug.rejectedReason).toBe(
+      'owner_already_replied_context_only',
+    );
     expect(llmGenerateMock).not.toHaveBeenCalled();
   });
 

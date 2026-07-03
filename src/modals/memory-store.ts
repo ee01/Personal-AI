@@ -2,9 +2,14 @@ import { defineStore } from 'pinia';
 import { ref, nextTick, toRaw } from 'vue';
 import {
   getMemoryServiceClient,
+  type RecallChannelDiagnostic,
   type RecallItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
+import {
+  getTopicMessageIdentityCandidates,
+  getTopicMessageIdentityValues,
+} from './topic-detail-data';
 import { getTopicUnreadTotalCount } from './topic-unread-preview';
 
 // 实体类型配置
@@ -115,6 +120,44 @@ interface _ConversationReadUndoState {
   conversationLabel: string;
   capturedAt: number;
   targets: _TopicReadUndoTarget[];
+}
+
+export interface MemorySearchFailureReceipt {
+  mode: 'overview' | 'entity';
+  query: string;
+  scope: RecallScope;
+  entityType?: string;
+  source: 'ask' | 'recall';
+  message: string;
+  occurredAt: number;
+}
+
+export interface MemorySearchEmptyResultReceipt {
+  mode: 'overview' | 'entity';
+  query: string;
+  scope: RecallScope;
+  entityType?: string;
+  source: 'ask' | 'recall';
+  totalFound: number;
+  queryTimeMs?: number;
+  channelDiagnostics: RecallChannelDiagnostic[];
+  occurredAt: number;
+}
+
+export interface EntityLoadFailureReceipt {
+  entityType: string;
+  message: string;
+  occurredAt: number;
+  previousDataRetained: boolean;
+  retainedCount: number;
+}
+
+export interface AskContinuationReceipt {
+  source: 'candidate_clarification';
+  originalQuery: string;
+  selectedCandidateIndex: number;
+  selectedCandidateLabel: string;
+  contextAttached: boolean;
 }
 
 export type TopicDeferPresetKey =
@@ -353,36 +396,31 @@ const TOPIC_TOP_LEVEL_CONVERSATION_KEYS = [
   'latestConversations',
 ] as const;
 
-const getMessageIdentityValues = (message: any): string[] => {
-  return [
-    message?.id,
-    message?.messageId,
-    message?.message_id,
-    message?.conversationId,
-    message?.conversation_id,
-    message?.sourceMessageId,
-    message?.source_message_id,
-    message?.externalMessageId,
-    message?.external_message_id,
-  ]
-    .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value).trim())
-    .filter(Boolean);
-};
-
 const getConversationIdentitySet = (conversation: any): Set<string> => {
-  const identitySet = new Set(getMessageIdentityValues(conversation));
+  const identitySet = new Set(getTopicMessageIdentityValues(conversation));
   const contextMessages = Array.isArray(conversation?.contextMessages)
     ? conversation.contextMessages
     : [];
 
   contextMessages.forEach((contextMessage: any) => {
-    getMessageIdentityValues(contextMessage).forEach((value) =>
+    getTopicMessageIdentityValues(contextMessage).forEach((value) =>
       identitySet.add(value),
     );
   });
 
   return identitySet;
+};
+
+const getMessageIdentityQuerySet = (value: unknown): Set<string> =>
+  new Set(getTopicMessageIdentityCandidates(value));
+
+const doesConversationIdentityMatch = (
+  conversation: any,
+  identity: unknown,
+): boolean => {
+  const identitySet = getConversationIdentitySet(conversation);
+  const querySet = getMessageIdentityQuerySet(identity);
+  return Array.from(querySet).some((value) => identitySet.has(value));
 };
 
 const getConversationReadStateNodes = (conversation: any): any[] => {
@@ -507,9 +545,7 @@ const markKnownConversationAsRead = (
 
   getTopicConversationLists(topic).forEach((conversations) => {
     conversations.forEach((conversation: any) => {
-      if (
-        !getConversationIdentitySet(conversation).has(normalizedConversationId)
-      ) {
+      if (!doesConversationIdentityMatch(conversation, normalizedConversationId)) {
         return;
       }
       if (markConversationReadStateNodesAsRead(conversation, timestamp)) {
@@ -525,12 +561,10 @@ const getTopicConversationMatchingIds = (
   topic: any,
   conversationId: string,
 ): Set<string> => {
-  const matchingIds = new Set([String(conversationId)]);
+  const matchingIds = getMessageIdentityQuerySet(conversationId);
   getTopicConversationLists(topic).forEach((conversations) => {
     conversations.forEach((conversation: any) => {
-      if (
-        !getConversationIdentitySet(conversation).has(String(conversationId))
-      ) {
+      if (!doesConversationIdentityMatch(conversation, conversationId)) {
         return;
       }
 
@@ -551,9 +585,8 @@ const hasUnreadConversationMatch = (
   return getTopicConversationLists(topic).some((conversations) =>
     conversations.some(
       (conversation: any) =>
-        getConversationIdentitySet(conversation).has(
-          normalizedConversationId,
-        ) && hasExplicitUnreadReadStateNode(conversation),
+        doesConversationIdentityMatch(conversation, normalizedConversationId) &&
+        hasExplicitUnreadReadStateNode(conversation),
     ),
   );
 };
@@ -566,7 +599,7 @@ const hasUnreadDiscussionMatch = (
 
   const matchingIds = getTopicConversationMatchingIds(topic, conversationId);
   return topic.unreadDiscussions.some((discussion: any) => {
-    return getMessageIdentityValues(discussion).some((discussionId) =>
+    return getTopicMessageIdentityValues(discussion).some((discussionId) =>
       matchingIds.has(discussionId),
     );
   });
@@ -579,7 +612,7 @@ const getConversationDisplayLabel = (
   const normalizedConversationId = String(conversationId);
   for (const conversations of getTopicConversationLists(topic)) {
     const conversation = conversations.find((candidate: any) =>
-      getConversationIdentitySet(candidate).has(normalizedConversationId),
+      doesConversationIdentityMatch(candidate, normalizedConversationId),
     );
     const summary =
       conversation?.summary ||
@@ -598,7 +631,7 @@ const pruneReadDiscussion = (topic: any, conversationId: string): number => {
   const previousLength = topic.unreadDiscussions.length;
   topic.unreadDiscussions = topic.unreadDiscussions.filter(
     (discussion: any) => {
-      const discussionIds = getMessageIdentityValues(discussion);
+      const discussionIds = getTopicMessageIdentityValues(discussion);
       return (
         discussionIds.length === 0 ||
         !discussionIds.some((discussionId) => matchingIds.has(discussionId))
@@ -685,6 +718,9 @@ export const useMemoryStore = defineStore('memory', () => {
   const isLoading = ref(false);
   const isAISearching = ref(false); // AI 搜索动画状态
   const searchQuery = ref('');
+  const searchFailureReceipt = ref<MemorySearchFailureReceipt | null>(null);
+  const entityLoadFailureReceipt = ref<EntityLoadFailureReceipt | null>(null);
+  const lastLoadedEntityType = ref<string | null>(null);
   const entities = ref([]);
   const entityTypes = ref([
     { type: 'Project', name: '项目', icon: '🚀', count: 12 },
@@ -738,6 +774,34 @@ export const useMemoryStore = defineStore('memory', () => {
     limit = 30,
   ) => {
     isLoading.value = true;
+    const handleLoadFailure = (message: string) => {
+      if (entityType === 'Topic') {
+        const canRetainPreviousSnapshot =
+          lastLoadedEntityType.value === entityType && entities.value.length > 0;
+        const retainedCount = canRetainPreviousSnapshot
+          ? entities.value.length
+          : 0;
+
+        if (!canRetainPreviousSnapshot) {
+          entities.value = [];
+        }
+
+        entityLoadFailureReceipt.value = {
+          entityType,
+          message,
+          occurredAt: Date.now(),
+          previousDataRetained: canRetainPreviousSnapshot,
+          retainedCount,
+        };
+        lastLoadedEntityType.value = entityType;
+        return;
+      }
+
+      entities.value = generateMockEntities(entityType);
+      entityLoadFailureReceipt.value = null;
+      lastLoadedEntityType.value = entityType;
+    };
+
     try {
       const response = await chromeAPI.sendMessage({
         type: 'GET_ENTITIES_BY_TYPE',
@@ -748,12 +812,21 @@ export const useMemoryStore = defineStore('memory', () => {
 
       if (response && (response as any).success) {
         entities.value = (response as any).data || [];
+        entityLoadFailureReceipt.value = null;
+        lastLoadedEntityType.value = entityType;
         await nextTick();
       } else {
-        entities.value = generateMockEntities(entityType);
+        handleLoadFailure(
+          (response as any)?.error ||
+            'Memory Service 未返回可用的实体列表。',
+        );
       }
     } catch (error) {
-      entities.value = generateMockEntities(entityType);
+      handleLoadFailure(
+        error instanceof Error
+          ? error.message
+          : 'Memory Service 实体列表请求失败。',
+      );
     } finally {
       isLoading.value = false;
 
@@ -790,6 +863,7 @@ export const useMemoryStore = defineStore('memory', () => {
     if (!query.trim()) return;
     isLoading.value = true;
     searchQuery.value = query;
+    searchFailureReceipt.value = null;
     try {
       const response = await chromeAPI.sendMessage({
         type: 'SEARCH_ENTITIES',
@@ -804,15 +878,37 @@ export const useMemoryStore = defineStore('memory', () => {
           entities.value.length,
           '个实体',
         );
+        searchFailureReceipt.value = null;
       } else {
-        // 使用模拟数据展示向量搜索结果
-        console.log('[向量搜索] API返回失败，使用mock数据');
-        entities.value = generateMockVectorSearchResults(query, entityType);
+        console.warn('[向量搜索] API返回失败，不展示模拟结果');
+        entities.value = [];
+        searchFailureReceipt.value = {
+          mode: 'entity',
+          query,
+          scope: 'work',
+          entityType,
+          source: 'recall',
+          message:
+            (response as any)?.error ||
+            'Memory Service 未返回可用的搜索结果。',
+          occurredAt: Date.now(),
+        };
       }
     } catch (error) {
       console.error('[向量搜索] 搜索失败:', error);
-      // 使用模拟数据
-      entities.value = generateMockVectorSearchResults(query, entityType);
+      entities.value = [];
+      searchFailureReceipt.value = {
+        mode: 'entity',
+        query,
+        scope: 'work',
+        entityType,
+        source: 'recall',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Memory Service 搜索请求失败。',
+        occurredAt: Date.now(),
+      };
     } finally {
       isLoading.value = false;
     }
@@ -1528,219 +1624,6 @@ export const useMemoryStore = defineStore('memory', () => {
         cooccurringEntities: [] as any[],
       },
     }));
-  };
-
-  const generateMockVectorSearchResults = (
-    query: string,
-    entityType?: string,
-  ) => {
-    // 基于查询生成模拟的向量搜索结果，包含多种类型的实体
-    const searchTerms = query.toLowerCase();
-    const results = [];
-
-    // 如果指定了实体类型，优先返回该类型的结果
-    if (entityType === 'Person') {
-      // 返回人物相关的 mock 数据
-      results.push(
-        {
-          id: 'person-zhangsan',
-          name: '张三',
-          type: 'Person',
-          description:
-            '前端开发工程师，擅长React和TypeScript开发，团队中的技术专家',
-          role: '前端工程师',
-          team: '技术团队',
-          relevanceScore: 0.92,
-          tags: ['前端', '技术专家', 'React'],
-          lastContact: Date.now() - 3600000,
-        },
-        {
-          id: 'person-lisi',
-          name: '李四',
-          type: 'Person',
-          description:
-            'UI/UX设计师，专注用户体验设计和交互原型，设计团队核心成员',
-          role: 'UI/UX设计师',
-          team: '设计团队',
-          relevanceScore: 0.88,
-          tags: ['设计', 'UX', '原型'],
-          lastContact: Date.now() - 10800000,
-        },
-        {
-          id: 'person-wangwu',
-          name: '王五',
-          type: 'Person',
-          description:
-            '后端开发工程师，负责系统架构设计和API开发，技术栈涵盖多种语言',
-          role: '后端工程师',
-          team: '技术团队',
-          relevanceScore: 0.85,
-          tags: ['后端', '架构师', 'API'],
-          lastContact: Date.now() - 21600000,
-        },
-      );
-    } else if (entityType === 'Topic') {
-      // 返回主题相关的 mock 数据
-      results.push(
-        {
-          id: 'topic-ai-workflow',
-          name: 'AI 工作流自动化',
-          type: 'Topic',
-          description: '讨论AI在工作流程中的应用和自动化实践',
-          relevanceScore: 0.95,
-          tags: ['AI', '自动化', '工作流'],
-        },
-        {
-          id: 'topic-frontend-optimization',
-          name: '前端性能优化策略',
-          type: 'Topic',
-          description: '前端应用性能优化的技术讨论和最佳实践分享',
-          relevanceScore: 0.88,
-          tags: ['前端', '性能', 'React'],
-        },
-        {
-          id: 'topic-design-thinking',
-          name: '产品设计思维方法',
-          type: 'Topic',
-          description: '产品设计流程、用户体验设计方法论的探讨',
-          relevanceScore: 0.82,
-          tags: ['设计', 'UX', '产品'],
-        },
-      );
-    } else if (entityType === 'Project') {
-      // 返回项目相关的 mock 数据
-      results.push(
-        {
-          id: 'project-personal-ai',
-          name: 'Personal-AI',
-          type: 'Project',
-          description: 'Chrome扩展智能助手，帮助用户管理知识图谱',
-          relevanceScore: 0.93,
-          tags: ['Chrome扩展', 'AI', '智能助手'],
-        },
-        {
-          id: 'project-web-platform',
-          name: 'Web Platform',
-          type: 'Project',
-          description: '前端Web平台，提供统一的用户界面和交互体验',
-          relevanceScore: 0.87,
-          tags: ['前端', 'Web', '用户体验'],
-        },
-      );
-    } else {
-      // 没有指定类型，返回混合结果
-
-      // AI相关搜索
-      if (
-        searchTerms.includes('ai') ||
-        searchTerms.includes('人工智能') ||
-        searchTerms.includes('智能')
-      ) {
-        results.push(
-          {
-            id: 'topic-ai-workflow',
-            name: 'AI 工作流自动化',
-            type: 'Topic',
-            description: '讨论AI在工作流程中的应用和自动化实践',
-            relevanceScore: 0.95,
-            tags: ['AI', '自动化', '工作流'],
-          },
-          {
-            id: 'project-personal-ai',
-            name: 'Personal-AI',
-            type: 'Project',
-            description: 'Chrome扩展智能助手，帮助用户管理知识图谱',
-            relevanceScore: 0.88,
-            tags: ['Chrome扩展', 'AI', '智能助手'],
-          },
-        );
-      }
-
-      // 前端相关搜索
-      if (
-        searchTerms.includes('前端') ||
-        searchTerms.includes('react') ||
-        searchTerms.includes('web')
-      ) {
-        results.push(
-          {
-            id: 'topic-frontend-optimization',
-            name: '前端性能优化策略',
-            type: 'Topic',
-            description: '前端应用性能优化的技术讨论和最佳实践分享',
-            relevanceScore: 0.82,
-            tags: ['前端', '性能', 'React'],
-          },
-          {
-            id: 'person-zhangsan',
-            name: '张三',
-            type: 'Person',
-            description: '前端开发工程师，擅长React和TypeScript开发',
-            relevanceScore: 0.75,
-            tags: ['前端', '技术专家', 'React'],
-          },
-        );
-      }
-
-      // 设计相关搜索
-      if (
-        searchTerms.includes('设计') ||
-        searchTerms.includes('ui') ||
-        searchTerms.includes('ux')
-      ) {
-        results.push(
-          {
-            id: 'topic-design-thinking',
-            name: '产品设计思维方法',
-            type: 'Topic',
-            description: '产品设计流程、用户体验设计方法论的探讨',
-            relevanceScore: 0.78,
-            tags: ['设计', 'UX', '产品'],
-          },
-          {
-            id: 'person-lisi',
-            name: '李四',
-            type: 'Person',
-            description: 'UI/UX设计师，专注用户体验设计和交互原型',
-            relevanceScore: 0.73,
-            tags: ['设计', 'UX', '原型'],
-          },
-        );
-      }
-
-      // 默认结果（通用搜索）
-      if (results.length === 0) {
-        results.push(
-          {
-            id: 'topic-ai-workflow',
-            name: 'AI 工作流自动化',
-            type: 'Topic',
-            description: '讨论AI在工作流程中的应用和自动化实践',
-            relevanceScore: 0.65,
-            tags: ['AI', '自动化', '工作流'],
-          },
-          {
-            id: 'project-web-platform',
-            name: 'Web Platform',
-            type: 'Project',
-            description: '前端Web平台，提供统一的用户界面和交互体验',
-            relevanceScore: 0.58,
-            tags: ['前端', 'Web', '用户体验'],
-          },
-          {
-            id: 'person-zhangsan',
-            name: '张三',
-            type: 'Person',
-            description: '前端开发工程师，擅长React和TypeScript开发',
-            relevanceScore: 0.55,
-            tags: ['前端', '技术专家', 'React'],
-          },
-        );
-      }
-    }
-
-    // 按相关性分数排序
-    return results.sort((a, b) => b.relevanceScore - a.relevanceScore);
   };
 
   const getMockTopicDetail = (topicId: string) => {
@@ -2707,14 +2590,66 @@ export const useMemoryStore = defineStore('memory', () => {
     mode: 'overview' | 'entity' | null; // 搜索模式
     query: string; // 搜索关键词
     askResult: any | null; // ask() 的返回结果
+    emptyResult: MemorySearchEmptyResultReceipt | null; // 成功空返回的诊断回执
     entityType?: string; // 如果是实体搜索，记录类型
     scope: RecallScope; // 召回范围
   }>({
     mode: null,
     query: '',
     askResult: null,
+    emptyResult: null,
     scope: 'work',
   });
+
+  const getSearchFailureMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message;
+    }
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+    if (
+      error &&
+      typeof error === 'object' &&
+      typeof (error as any).message === 'string' &&
+      (error as any).message.trim()
+    ) {
+      return (error as any).message.trim();
+    }
+    return fallback;
+  };
+
+  const readFiniteNumber = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+  const getSearchResponseChannelDiagnostics = (
+    response: any,
+  ): RecallChannelDiagnostic[] => {
+    const raw =
+      response?.channelDiagnostics ||
+      response?.data?.channelDiagnostics ||
+      response?.result?.channelDiagnostics;
+    return Array.isArray(raw)
+      ? raw.filter(
+          (diagnostic): diagnostic is RecallChannelDiagnostic =>
+            Boolean(diagnostic && typeof diagnostic === 'object'),
+        )
+      : [];
+  };
+
+  const getSearchResponseQueryTimeMs = (response: any): number | undefined =>
+    readFiniteNumber(response?.queryTimeMs) ??
+    readFiniteNumber(response?.data?.queryTimeMs) ??
+    readFiniteNumber(response?.result?.queryTimeMs);
+
+  const getSearchResponseTotalFound = (
+    response: any,
+    fallback: number,
+  ): number =>
+    readFiniteNumber(response?.totalFound) ??
+    readFiniteNumber(response?.data?.totalFound) ??
+    readFiniteNumber(response?.result?.totalFound) ??
+    fallback;
 
   /**
    * 执行智能搜索 (使用 ask() 方法)
@@ -2723,24 +2658,38 @@ export const useMemoryStore = defineStore('memory', () => {
   const performAskSearch = async (
     query: string,
     scope: RecallScope = 'work',
+    askContext?: string,
+    displayQuery?: string,
+    continuationReceipt?: AskContinuationReceipt,
   ) => {
+    const visibleQuery = displayQuery || query;
     isLoading.value = true;
     isAISearching.value = true; // 显示 AI 搜索动画
     searchContext.value.mode = 'overview';
-    searchContext.value.query = query;
+    searchContext.value.query = visibleQuery;
     searchContext.value.scope = scope;
-    searchQuery.value = query;
+    searchQuery.value = visibleQuery;
+    searchFailureReceipt.value = null;
 
     try {
       const client = getMemoryServiceClient();
-      const result = await client.ask(query, undefined, true, { scope });
+      const result = await client.ask(query, askContext, true, { scope });
       const evidence = result.evidence || [];
+      const channelDiagnostics = result.channelDiagnostics || [];
       searchContext.value.askResult = {
         success: true,
         answer: result.answer,
         structuredAnswer: result.structuredAnswer,
+        continuationReceipt,
+        contextMatch: result.contextMatch,
+        answerMemory: result.answerMemory,
+        scopeReceipt: result.scopeReceipt,
+        resolutionState: result.resolutionState,
+        missingInfo: result.missingInfo || [],
+        followUpActions: result.followUpActions || [],
+        externalEvidence: result.externalEvidence || [],
         blocks: result.blocks || [],
-        channelDiagnostics: result.channelDiagnostics || [],
+        channelDiagnostics,
         evidence,
         entitiesByType: {},
         metadata: {
@@ -2753,6 +2702,20 @@ export const useMemoryStore = defineStore('memory', () => {
       // links, scope and source metadata for the UI.
       const allEntities: any[] = evidence.map(mapRecallItemToSearchResult);
       entities.value = allEntities;
+      searchContext.value.emptyResult =
+        allEntities.length === 0
+          ? {
+              mode: 'overview',
+              query: visibleQuery,
+              scope,
+              source: 'ask',
+              totalFound: 0,
+              queryTimeMs: result.queryTimeMs,
+              channelDiagnostics,
+              occurredAt: Date.now(),
+            }
+          : null;
+      searchFailureReceipt.value = null;
 
       console.log('[智能搜索] Ask 搜索完成:', {
         query,
@@ -2764,6 +2727,18 @@ export const useMemoryStore = defineStore('memory', () => {
       console.error('[智能搜索] Ask 搜索异常:', error);
       entities.value = [];
       searchContext.value.askResult = null;
+      searchContext.value.emptyResult = null;
+      searchFailureReceipt.value = {
+        mode: 'overview',
+        query,
+        scope,
+        source: 'ask',
+        message: getSearchFailureMessage(
+          error,
+          'Memory Service Ask 搜索请求失败。',
+        ),
+        occurredAt: Date.now(),
+      };
     } finally {
       isLoading.value = false;
       isAISearching.value = false; // 隐藏 AI 搜索动画
@@ -2785,7 +2760,9 @@ export const useMemoryStore = defineStore('memory', () => {
     searchContext.value.entityType = entityType;
     searchContext.value.scope = scope;
     searchContext.value.askResult = null; // 清空之前的 AI 结果
+    searchContext.value.emptyResult = null;
     searchQuery.value = query;
+    searchFailureReceipt.value = null;
 
     try {
       const response = (await chromeAPI.sendMessage({
@@ -2797,7 +2774,24 @@ export const useMemoryStore = defineStore('memory', () => {
       })) as any;
 
       if (response && response.success) {
-        entities.value = response.data || [];
+        const results = Array.isArray(response.data) ? response.data : [];
+        const channelDiagnostics = getSearchResponseChannelDiagnostics(response);
+        entities.value = results;
+        searchContext.value.emptyResult =
+          results.length === 0
+            ? {
+                mode: 'entity',
+                query,
+                scope,
+                entityType,
+                source: 'recall',
+                totalFound: getSearchResponseTotalFound(response, 0),
+                queryTimeMs: getSearchResponseQueryTimeMs(response),
+                channelDiagnostics,
+                occurredAt: Date.now(),
+              }
+            : null;
+        searchFailureReceipt.value = null;
         console.log('[向量搜索] 搜索完成，获取实际数据:', {
           query,
           entityType,
@@ -2806,14 +2800,36 @@ export const useMemoryStore = defineStore('memory', () => {
           source: response.source,
         });
       } else {
-        // 使用模拟数据展示向量搜索结果
-        console.log('[向量搜索] API返回失败，使用mock数据');
-        entities.value = generateMockVectorSearchResults(query, entityType);
+        console.warn('[向量搜索] API返回失败，不展示模拟结果');
+        entities.value = [];
+        searchContext.value.emptyResult = null;
+        searchFailureReceipt.value = {
+          mode: 'entity',
+          query,
+          scope,
+          entityType,
+          source: 'recall',
+          message:
+            response?.error || 'Memory Service 未返回可用的搜索结果。',
+          occurredAt: Date.now(),
+        };
       }
     } catch (error) {
       console.error('[向量搜索] 搜索异常:', error);
-      // 使用模拟数据
-      entities.value = generateMockVectorSearchResults(query, entityType);
+      entities.value = [];
+      searchContext.value.emptyResult = null;
+      searchFailureReceipt.value = {
+        mode: 'entity',
+        query,
+        scope,
+        entityType,
+        source: 'recall',
+        message: getSearchFailureMessage(
+          error,
+          'Memory Service 搜索请求失败。',
+        ),
+        occurredAt: Date.now(),
+      };
     } finally {
       isLoading.value = false;
     }
@@ -2827,14 +2843,18 @@ export const useMemoryStore = defineStore('memory', () => {
       mode: null,
       query: '',
       askResult: null,
+      emptyResult: null,
       scope: 'work',
     };
     searchQuery.value = '';
+    searchFailureReceipt.value = null;
   };
 
   return {
     isLoading,
     isAISearching,
+    searchFailureReceipt,
+    entityLoadFailureReceipt,
     searchQuery,
     entities,
     entityTypes,

@@ -113,6 +113,37 @@ function hasMeaningfulTextChange(currentValue: unknown, suggestedValue: unknown)
   return normalizeComparableText(currentValue) !== normalizeComparableText(suggestedValue);
 }
 
+type ProjectUpdateField = 'status' | 'owner' | 'track' | 'comments';
+
+const PROJECT_UPDATE_FIELD_LABELS: Record<ProjectUpdateField, string> = {
+  status: '状态',
+  owner: '负责人',
+  track: '赛道',
+  comments: '备注',
+};
+
+function getRequestedUpdateFields(update: ProjectUpdateSuggestion): ProjectUpdateField[] {
+  const fields: ProjectUpdateField[] = [];
+
+  if (hasMeaningfulTextChange(update.currentStatus, update.suggestedStatus)) {
+    fields.push('status');
+  }
+
+  if (hasMeaningfulTextChange(update.currentOwner, update.suggestedOwner)) {
+    fields.push('owner');
+  }
+
+  if (hasMeaningfulTextChange(update.currentTrack, update.suggestedTrack)) {
+    fields.push('track');
+  }
+
+  if (update.suggestedComments) {
+    fields.push('comments');
+  }
+
+  return fields;
+}
+
 function addReplaceTableCellTextRequests(
   requests: Array<Record<string, unknown>>,
   tableId: string,
@@ -151,6 +182,24 @@ function addMissingColumnError(
   fieldLabel: string,
 ): void {
   errors.push(`无法更新${fieldLabel}: ${update.projectId} - ${update.projectName} 缺少可写表格列`);
+}
+
+function addInvalidLocationErrors(
+  errors: string[],
+  update: ProjectUpdateSuggestion,
+): void {
+  const fields = getRequestedUpdateFields(update);
+
+  if (fields.length === 0) {
+    errors.push(`缺少或无效更新位置信息: ${update.projectId} - ${update.projectName}`);
+    return;
+  }
+
+  for (const field of fields) {
+    errors.push(
+      `无法更新${PROJECT_UPDATE_FIELD_LABELS[field]}: ${update.projectId} - ${update.projectName} 缺少或无效更新位置信息`,
+    );
+  }
 }
 
 /**
@@ -402,7 +451,7 @@ export async function applyProjectUpdates(
     for (const update of updates) {
       // 确保有必要的定位信息
       if (!update.slideId || !update.tableId || !isValidRowIndex(update.rowIndex)) {
-        errors.push(`缺少或无效更新位置信息: ${update.projectId} - ${update.projectName}`);
+        addInvalidLocationErrors(errors, update);
         continue;
       }
 

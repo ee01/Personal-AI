@@ -22,6 +22,7 @@ import {
 } from '../watchRules';
 import {
   buildAutoReplyTopic,
+  normalizeAutoReplyContent,
   normalizeAutoReplyDelayHours,
 } from './autoReplyPresentation';
 
@@ -94,6 +95,45 @@ export interface AutoReplyContext {
   };
 }
 
+export type AutoReplySkipReason =
+  | 'scheduled_messages_not_initialized'
+  | 'duplicate_for_message'
+  | 'ai_generation_empty_without_fallback'
+  | 'fixed_reply_empty'
+  | 'create_failed';
+
+export interface AutoReplyHandlingResult {
+  handled: boolean;
+  skipped?: boolean;
+  skipReason?: AutoReplySkipReason;
+  skipNote?: string;
+  replyInfo?: {
+    content: string;
+    scheduleTime: Date;
+    status: string;
+    messageId?: string;
+  };
+}
+
+function buildAutoReplySkipResult(
+  skipReason: AutoReplySkipReason,
+  skipNote: string,
+): AutoReplyHandlingResult {
+  return {
+    handled: false,
+    skipped: true,
+    skipReason,
+    skipNote,
+  };
+}
+
+function getAutoReplyErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error || '').trim() || '未知错误';
+}
+
 export function getMatchedAutoReplyItem(
   context: AutoReplyContext,
   concernedItems: TopicItemWithAutoReply[],
@@ -124,15 +164,7 @@ export function getMatchedAutoReplyItem(
 export async function handleAutoReplyRules(
   context: AutoReplyContext,
   concernedItems: TopicItemWithAutoReply[],
-): Promise<{
-  handled: boolean;
-  replyInfo?: {
-    content: string;
-    scheduleTime: Date;
-    status: string;
-    messageId?: string;
-  };
-}> {
+): Promise<AutoReplyHandlingResult> {
   try {
     const matchedItem = getMatchedAutoReplyItem(context, concernedItems);
     if (!matchedItem || !matchedItem.autoReplyConfig) {
@@ -143,7 +175,10 @@ export async function handleAutoReplyRules(
     if (!initialized) {
       console.log('🤖 自动答复: 定时消息未初始化，跳过自动答复处理');
       // 注意：在后台任务中不显示对话框，只记录日志并跳过
-      return { handled: false };
+      return buildAutoReplySkipResult(
+        'scheduled_messages_not_initialized',
+        `自动答复未入队：规则「${matchedItem.text}」已命中，但定时消息尚未初始化。`,
+      );
     }
 
     const config = matchedItem.autoReplyConfig;
@@ -163,29 +198,50 @@ export async function handleAutoReplyRules(
       const existingReplies = await checkExistingAutoReply(msgContext.postId);
       if (existingReplies) {
         console.log('🤖 已存在对此消息的自动答复，跳过');
-        return { handled: false };
+        return buildAutoReplySkipResult(
+          'duplicate_for_message',
+          `自动答复未入队：消息 ${msgContext.postId} 已有自动答复历史，避免重复创建。`,
+        );
       }
     }
 
     // 2. 生成答复内容
-    let replyContent = config.replyContent;
+    let replyContent = normalizeAutoReplyContent(config.replyContent);
     if (config.useAIGenerate) {
       console.log('🤖 使用 AI 生成答复内容...');
       try {
-        replyContent = await generateAutoReply({
+        const generatedReply = await generateAutoReply({
           messageContent: msgContext.messageContent,
           sender: msgContext.sender,
           groupName: msgContext.groupName,
           summary: msgContext.summary,
           replyTemplate: config.replyContent,
         });
+        replyContent = normalizeAutoReplyContent(generatedReply);
+        if (!replyContent) {
+          throw new Error('AI 生成了空自动答复');
+        }
         console.log('🤖 AI 生成的答复:', replyContent);
       } catch (error) {
         console.error('🤖 AI 生成回复失败，使用固定模板:', error);
         if (!replyContent) {
-          replyContent = '嗯。好';
+          console.warn(
+            '🤖 AI 生成失败且没有固定答复模板，跳过本次自动答复，避免写入默认短句',
+          );
+          return buildAutoReplySkipResult(
+            'ai_generation_empty_without_fallback',
+            `自动答复未入队：规则「${matchedItem.text}」已命中，但 AI 生成失败或为空，且没有固定文本 fallback。`,
+          );
         }
       }
+    }
+
+    if (!replyContent) {
+      console.warn('🤖 自动答复固定文本为空，跳过本次创建');
+      return buildAutoReplySkipResult(
+        'fixed_reply_empty',
+        `自动答复未入队：规则「${matchedItem.text}」已命中，但固定回复文本为空。`,
+      );
     }
 
     // 3. 创建定时消息并获取调度信息
@@ -209,7 +265,10 @@ export async function handleAutoReplyRules(
     };
   } catch (error) {
     console.error('🤖 处理自动答复规则失败:', error);
-    return { handled: false };
+    return buildAutoReplySkipResult(
+      'create_failed',
+      `自动答复未入队：创建队列行失败（${getAutoReplyErrorMessage(error).slice(0, 80)}）。`,
+    );
   }
 }
 

@@ -41,6 +41,35 @@
         </div>
       </div>
 
+      <div
+        v-if="transitionReceipt"
+        class="transition-receipt"
+        :class="transitionReceipt.kind"
+        role="status"
+      >
+        <div>
+          <div class="transition-receipt-title">
+            {{ transitionReceipt.title }}
+          </div>
+          <p>{{ transitionReceipt.body }}</p>
+          <router-link
+            v-if="transitionReceipt.linkTo"
+            class="transition-receipt-link"
+            :to="transitionReceipt.linkTo"
+          >
+            {{ transitionReceipt.linkLabel }}
+          </router-link>
+        </div>
+        <button
+          class="transition-receipt-close"
+          type="button"
+          aria-label="关闭操作回执"
+          @click="transitionReceipt = null"
+        >
+          关闭
+        </button>
+      </div>
+
       <section class="lane-section">
         <div class="lane-header">
           <div>
@@ -133,7 +162,9 @@
               <div v-else class="evidence-empty">
                 未附带证据引用；请根据问题和上下文判断。
               </div>
-              <div class="option-preview">可选项：{{ optionPreview(req) }}</div>
+              <div class="option-preview">
+                处理选项：{{ decisionActionPreview(req) }}
+              </div>
               <div v-if="copyStatus[req.id]" class="copy-status">
                 {{ copyStatus[req.id] }}
               </div>
@@ -144,6 +175,29 @@
               <span v-if="req.updatedAt"
                 >最近更新 {{ relativeTime(req.updatedAt) }}</span
               >
+            </div>
+
+            <div class="action-boundary">
+              <div class="action-boundary-title">操作边界</div>
+              <ul class="action-boundary-lines">
+                <li
+                  v-for="line in actionBoundaryLines(req, 'decision')"
+                  :key="line"
+                >
+                  {{ line }}
+                </li>
+              </ul>
+            </div>
+
+            <div
+              v-if="pendingActionReceipts[req.id]"
+              class="pending-action-receipt"
+              role="status"
+            >
+              <div class="pending-action-receipt-title">
+                {{ pendingActionReceipts[req.id].title }}
+              </div>
+              <p>{{ pendingActionReceipts[req.id].body }}</p>
             </div>
 
             <div v-if="cardErrors[req.id]" class="card-error">
@@ -168,12 +222,12 @@
                   :disabled="submitting[req.id]"
                   @click="openMessageRuleImprovement(req)"
                 >
-                  {{ submitting[req.id] ? '打开中...' : '打开规则并应用建议' }}
+                  {{ submitting[req.id] ? '打开中...' : '打开并预填建议' }}
                 </button>
                 <button
                   class="option-btn quiet"
                   :disabled="submitting[req.id]"
-                  @click="submitAnswer(req.id, 'dismissed')"
+                  @click="submitAnswer(req, 'dismissed')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '忽略' }}
                 </button>
@@ -184,7 +238,7 @@
                   :key="opt.value"
                   class="option-btn"
                   :disabled="submitting[req.id]"
-                  @click="submitAnswer(req.id, opt.value)"
+                  @click="submitAnswer(req, opt.value)"
                 >
                   {{ submitting[req.id] ? '提交中...' : opt.label }}
                 </button>
@@ -193,14 +247,14 @@
                 <button
                   class="option-btn yes"
                   :disabled="submitting[req.id]"
-                  @click="submitAnswer(req.id, 'yes')"
+                  @click="submitAnswer(req, 'yes')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '是' }}
                 </button>
                 <button
                   class="option-btn no"
                   :disabled="submitting[req.id]"
-                  @click="submitAnswer(req.id, 'no')"
+                  @click="submitAnswer(req, 'no')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '否' }}
                 </button>
@@ -311,7 +365,7 @@
                   未附带证据引用；恢复到主队列后再处理也可以。
                 </div>
                 <div class="option-preview">
-                  可选项：{{ optionPreview(req) }}
+                  原处理选项：{{ decisionActionPreview(req) }}
                 </div>
                 <div v-if="copyStatus[req.id]" class="copy-status">
                   {{ copyStatus[req.id] }}
@@ -326,6 +380,29 @@
                 <span v-if="req.snoozeCount > 0"
                   >已稍后 {{ req.snoozeCount }} 次</span
                 >
+              </div>
+
+              <div class="action-boundary muted">
+                <div class="action-boundary-title">操作边界</div>
+                <ul class="action-boundary-lines">
+                  <li
+                    v-for="line in actionBoundaryLines(req, 'deferred')"
+                    :key="line"
+                  >
+                    {{ line }}
+                  </li>
+                </ul>
+              </div>
+
+              <div
+                v-if="pendingActionReceipts[req.id]"
+                class="pending-action-receipt"
+                role="status"
+              >
+                <div class="pending-action-receipt-title">
+                  {{ pendingActionReceipts[req.id].title }}
+                </div>
+                <p>{{ pendingActionReceipts[req.id].body }}</p>
               </div>
 
               <div v-if="cardErrors[req.id]" class="card-error">
@@ -442,6 +519,29 @@
                     >
                   </div>
 
+                  <div class="action-boundary muted">
+                    <div class="action-boundary-title">操作边界</div>
+                    <ul class="action-boundary-lines">
+                      <li
+                        v-for="line in actionBoundaryLines(req, 'watch')"
+                        :key="line"
+                      >
+                        {{ line }}
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div
+                    v-if="pendingActionReceipts[req.id]"
+                    class="pending-action-receipt"
+                    role="status"
+                  >
+                    <div class="pending-action-receipt-title">
+                      {{ pendingActionReceipts[req.id].title }}
+                    </div>
+                    <p>{{ pendingActionReceipts[req.id].body }}</p>
+                  </div>
+
                   <div v-if="cardErrors[req.id]" class="card-error">
                     {{ cardErrors[req.id] }}
                   </div>
@@ -485,6 +585,8 @@ import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
   type ConfirmRequest,
+  type ConfirmRequestAnswerResponse,
+  type ConfirmRequestStateTransitionResponse,
 } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
@@ -508,6 +610,18 @@ const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
 const copyStatus = reactive<Record<string, string>>({});
 const loadError = ref<string | null>(null);
+type TransitionReceiptKind = 'success' | 'info' | 'warning';
+interface TransitionReceipt {
+  kind: TransitionReceiptKind;
+  title: string;
+  body: string;
+  linkTo?: string;
+  linkLabel?: string;
+}
+interface PendingActionReceipt {
+  title: string;
+  body: string;
+}
 type QueueErrorKey =
   | 'decisionPending'
   | 'decisionSnoozed'
@@ -529,8 +643,17 @@ const queueLabels: Record<QueueErrorKey, string> = {
 };
 
 const queueErrors = reactive<Partial<Record<QueueErrorKey, string>>>({});
+const transitionReceipt = ref<TransitionReceipt | null>(null);
+const pendingActionReceipts = reactive<Record<string, PendingActionReceipt>>(
+  {},
+);
 const targetStatus = ref<
-  'idle' | 'found-decision' | 'found-deferred' | 'found-watch' | 'missing'
+  | 'idle'
+  | 'found-decision'
+  | 'found-deferred'
+  | 'found-watch'
+  | 'missing'
+  | 'handled'
 >('idle');
 
 const targetConfirmRequestId = computed(() =>
@@ -563,6 +686,32 @@ const watchQueueErrorText = computed(() =>
     .filter(Boolean)
     .join('；'),
 );
+const targetLookupQueueLabels = [
+  '需你拍板',
+  '稍后决策',
+  '待观察',
+  '待观察（稍后）',
+];
+
+function failedQueueLabels() {
+  return (Object.keys(queueLabels) as QueueErrorKey[])
+    .filter((key) => queueErrors[key])
+    .map((key) => queueLabels[key]);
+}
+
+function missingTargetNoticeBody() {
+  const failedLabels = failedQueueLabels();
+  const refreshBoundary =
+    '刷新只重新读取队列，不会批准、恢复、结束追踪、创建动作或发送消息。';
+  if (failedLabels.length > 0) {
+    return `当前只在成功读取或上次保留的队列里未找到目标；${failedLabels.join(
+      '、',
+    )}刷新失败，不能确认目标不在这些队列。${refreshBoundary}`;
+  }
+  return `本次只读刷新已查过${targetLookupQueueLabels.join(
+    '、',
+  )}，仍未找到目标。它可能已被回答、过期、去重合并，或通知指向旧数据。${refreshBoundary}`;
+}
 
 const targetNotice = computed(() => {
   if (!targetConfirmRequestId.value || targetStatus.value === 'idle') {
@@ -589,10 +738,17 @@ const targetNotice = computed(() => {
       body: '已展开待观察池并高亮这条确认项，你可以立即查证、继续观察或结束追踪。',
     };
   }
+  if (targetStatus.value === 'handled') {
+    return {
+      kind: 'handled',
+      title: '通知对应项已由本次操作处理',
+      body: '这条通知打开的确认项刚刚被本页操作移出当前队列；页面保留的操作回执才是本次真实结果。刷新只重新读取队列，不会撤销答案、恢复追踪、创建动作或发送消息。',
+    };
+  }
   return {
     kind: 'missing',
-    title: '通知对应确认项不在当前队列',
-    body: '它可能已经被处理、过期，或暂时不属于当前筛选队列；刷新后仍缺失时可回到通知来源查证。',
+    title: '通知对应确认项不在已读取队列',
+    body: missingTargetNoticeBody(),
   };
 });
 
@@ -817,23 +973,27 @@ function toggleDetail(id: string) {
   showDetail[id] = !showDetail[id];
 }
 
-async function submitAnswer(id: string, answer: string) {
+async function submitAnswer(req: ConfirmRequest, answer: string) {
+  const id = req.id;
   submitting[id] = true;
+  setAnswerPendingReceipt(req, answer);
   delete cardErrors[id];
   try {
     const detail = detailTexts[id]?.trim() || undefined;
-    await client.answerConfirmRequest(id, answer, detail);
+    const response = await client.answerConfirmRequest(id, answer, detail);
     decisionRequests.value = decisionRequests.value.filter((r) => r.id !== id);
     decisionTotal.value = Math.max(0, decisionTotal.value - 1);
     delete detailTexts[id];
     delete showDetail[id];
     delete copyStatus[id];
     if (id === targetConfirmRequestId.value) {
-      targetStatus.value = 'missing';
+      targetStatus.value = 'handled';
     }
+    transitionReceipt.value = answerTransitionReceipt(req, answer, response);
   } catch (e: any) {
     cardErrors[id] = e.message || '提交失败，请重试';
   } finally {
+    clearPendingActionReceipt(id);
     submitting[id] = false;
   }
 }
@@ -843,13 +1003,19 @@ async function transitionDecisionRequest(
   state: 'pending' | 'snoozed' | 'expired',
 ) {
   submitting[id] = true;
+  setDecisionStatePendingReceipt(id, state);
   delete cardErrors[id];
   try {
-    await client.transitionConfirmRequestState(id, state);
+    const response = await client.transitionConfirmRequestState(id, state);
     await loadQueues(false);
+    if (id === targetConfirmRequestId.value && state === 'expired') {
+      targetStatus.value = 'handled';
+    }
+    transitionReceipt.value = decisionTransitionReceipt(response, state);
   } catch (e: any) {
     cardErrors[id] = e.message || '操作失败，请重试';
   } finally {
+    clearPendingActionReceipt(id);
     submitting[id] = false;
   }
 }
@@ -928,6 +1094,62 @@ function optionPreview(req: ConfirmRequest) {
   return options.join(' / ');
 }
 
+function decisionActionPreview(req: ConfirmRequest) {
+  if (isMessageRuleImprovement(req)) {
+    return '打开并预填建议 / 忽略建议';
+  }
+  return optionPreview(req);
+}
+
+type ActionBoundaryMode = 'decision' | 'deferred' | 'watch';
+
+function actionBoundaryLines(
+  req: ConfirmRequest,
+  mode: ActionBoundaryMode,
+): string[] {
+  if (mode === 'deferred') {
+    return [
+      '现在处理只恢复到主队列，不会提交答案或恢复外部动作。',
+      '不再追踪会把这条确认项设为 expired；原始证据和来源记录不会被删除。',
+    ];
+  }
+
+  if (mode === 'watch') {
+    return [
+      '立即查证只会排入或复用一条只读 OpenClaw 查证动作，不会立刻确认结果、替你拍板或发送外部消息。',
+      'OpenClaw 未配置或执行失败会留在动作队列或后续回执里，不会把这条观察项当成已解决。',
+      '继续观察只延后 72 小时；结束追踪只关闭这条观察项。',
+    ];
+  }
+
+  if (isMessageRuleImprovement(req)) {
+    return [
+      '打开并预填建议只会把建议暂存到本机并打开记忆入口规则编辑器；保存前不会更新原规则，也不会把确认项标记为已应用。',
+      '在规则页保存后才会更新本机手动规则，并尝试把该确认项回写为 applied。',
+      '忽略只提交 dismissed 并移出主队列；不会修改规则、创建外部动作或发送消息。',
+    ];
+  }
+
+  const lines = [
+    `${req.options?.length ? '选择任一答案' : '是/否'}会写入该确认项并移出主队列；可选备注会随答案保存。`,
+  ];
+  if (req.category === 'openclaw_delegation') {
+    const optionValues = new Set((req.options ?? []).map((opt) => opt.value));
+    const hasActionControl = ['retry', 'skip_once', 'stop'].some((value) =>
+      optionValues.has(value),
+    );
+    lines.push(
+      hasActionControl
+        ? '只有 retry / skip_once / stop 这类明确选项会续跑、跳过或停止绑定动作。'
+        : '普通审批文案不会直接续跑 OpenClaw；后续动作以服务端返回和审核包证据为准。',
+    );
+  } else {
+    lines.push('提交答案不会直接发送外部消息、创建主动询问或改动其它确认项。');
+  }
+  lines.push('稍后再决定只收起 24 小时，到期回到主队列；不会创建外部动作。');
+  return lines;
+}
+
 function buildDecisionReviewText(req: ConfirmRequest) {
   const lines = [
     `# 决策审核包: ${req.question}`,
@@ -949,9 +1171,17 @@ function buildDecisionReviewText(req: ConfirmRequest) {
       `理由: ${improvement.reason}`,
     );
   }
-  lines.push('', `可选项: ${optionPreview(req)}`);
+  lines.push('', `处理选项: ${decisionActionPreview(req)}`);
   if (req.evidenceRefs?.length) {
     lines.push('', '证据引用:', ...req.evidenceRefs.map((ref) => `- ${ref}`));
+  }
+  if (improvement) {
+    lines.push(
+      '',
+      '处理边界:',
+      '- 打开并预填建议只会打开规则编辑器；保存前不会更新原规则或标记确认项。',
+      '- 忽略建议只提交 dismissed；不会改规则、创建外部动作或发送消息。',
+    );
   }
   return lines.join('\n');
 }
@@ -990,6 +1220,11 @@ async function openMessageRuleImprovement(req: ConfirmRequest) {
   }
 
   submitting[req.id] = true;
+  setPendingActionReceipt(
+    req.id,
+    '正在打开规则编辑器',
+    '正在把建议暂存到本机并打开记忆入口规则编辑器；窗口打开前不会更新规则、提交确认项、创建外部动作或发送消息。',
+  );
   delete cardErrors[req.id];
   try {
     await chrome.storage.local.set({
@@ -1013,6 +1248,7 @@ async function openMessageRuleImprovement(req: ConfirmRequest) {
   } catch (e: any) {
     cardErrors[req.id] = e.message || '打开规则编辑失败';
   } finally {
+    clearPendingActionReceipt(req.id);
     submitting[req.id] = false;
   }
 }
@@ -1022,19 +1258,232 @@ async function transitionWatchRequest(
   state: 'pending' | 'snoozed' | 'expired',
 ) {
   submitting[id] = true;
+  setWatchStatePendingReceipt(id, state);
   delete cardErrors[id];
   try {
-    await client.transitionConfirmRequestState(id, state);
+    const response = await client.transitionConfirmRequestState(id, state);
     await loadQueues(false);
-  } catch (e: any) {
-    if (state === 'snoozed') {
-      await loadQueues(false);
-      return;
+    if (id === targetConfirmRequestId.value && state === 'expired') {
+      targetStatus.value = 'handled';
     }
+    transitionReceipt.value = watchTransitionReceipt(id, response, state);
+  } catch (e: any) {
     cardErrors[id] = e.message || '操作失败，请重试';
   } finally {
+    clearPendingActionReceipt(id);
     submitting[id] = false;
   }
+}
+
+function answerLabel(req: ConfirmRequest, answer: string) {
+  const matched = req.options?.find((option) => option.value === answer);
+  if (matched?.label) return matched.label;
+  if (answer === 'yes') return '是';
+  if (answer === 'no') return '否';
+  if (answer === 'dismissed') return '忽略';
+  return answer;
+}
+
+function setPendingActionReceipt(
+  id: string,
+  title: string,
+  body: string,
+) {
+  pendingActionReceipts[id] = { title, body };
+}
+
+function clearPendingActionReceipt(id: string) {
+  delete pendingActionReceipts[id];
+}
+
+function setAnswerPendingReceipt(req: ConfirmRequest, answer: string) {
+  const label = answerLabel(req, answer);
+  setPendingActionReceipt(
+    req.id,
+    '正在提交决策',
+    `正在把「${label}」提交给 Memory Service；服务端返回前还不是已写入答案，卡片仍是上次成功读取的队列快照，也不会提前续跑 OpenClaw、发送消息、移出当前队列或改动其它确认项。`,
+  );
+}
+
+function setDecisionStatePendingReceipt(
+  id: string,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  if (state === 'snoozed') {
+    setPendingActionReceipt(
+      id,
+      '正在移到稍后决策',
+      '正在请求 Memory Service 收起这条确认项；返回前尚未确认写入 snoozed 状态，也不会提交答案、创建外部动作或发送消息。',
+    );
+    return;
+  }
+  if (state === 'pending') {
+    setPendingActionReceipt(
+      id,
+      '正在恢复到主队列',
+      '正在请求 Memory Service 恢复这条确认项；返回前仍以上次队列快照为准，不会提交答案或恢复任何外部动作。',
+    );
+    return;
+  }
+  setPendingActionReceipt(
+    id,
+    '正在结束追踪',
+    '正在请求 Memory Service 把这条确认项设为 expired；返回前尚未确认关闭，也不会删除原始证据、取消外部动作或发送消息。',
+  );
+}
+
+function setWatchStatePendingReceipt(
+  id: string,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  if (state === 'pending') {
+    setPendingActionReceipt(
+      id,
+      '正在排入只读查证',
+      '正在请求 Memory Service 创建或复用只读查证动作；返回前还没有动作 ID 或排队结果，不会确认事实、替你拍板、续跑 OpenClaw 或发送消息。',
+    );
+    return;
+  }
+  if (state === 'snoozed') {
+    setPendingActionReceipt(
+      id,
+      '正在继续观察',
+      '正在请求 Memory Service 延后这条观察项；返回前尚未确认 snoozed 状态，也不会创建新的外部动作或提交答案。',
+    );
+    return;
+  }
+  setPendingActionReceipt(
+    id,
+    '正在结束观察',
+    '正在请求 Memory Service 关闭这条观察项；返回前尚未确认关闭，也不会删除原始证据或取消已存在的外部动作记录。',
+  );
+}
+
+function actionQueueLink(actionId: string) {
+  return `/actions?actionId=${encodeURIComponent(actionId)}`;
+}
+
+function isOpenClawActionControlAnswer(req: ConfirmRequest, answer: string) {
+  return (
+    req.category === 'openclaw_delegation' &&
+    ['retry', 'skip_once', 'stop'].includes(answer)
+  );
+}
+
+function answerTransitionReceipt(
+  req: ConfirmRequest,
+  answer: string,
+  response: ConfirmRequestAnswerResponse,
+): TransitionReceipt {
+  const label = answerLabel(req, answer);
+
+  if (response.retriedActionId) {
+    return {
+      kind: 'success',
+      title: '已提交并续跑动作',
+      body: `已提交「${label}」，并续跑动作 ${response.retriedActionId}；执行结果请到动作队列查看，不会自动发送外部消息或改动其它确认项。`,
+      linkTo: actionQueueLink(response.retriedActionId),
+      linkLabel: '查看动作队列',
+    };
+  }
+
+  if (response.skippedActionId) {
+    return {
+      kind: 'info',
+      title: '已提交并暂不重试',
+      body: `已提交「${label}」；动作 ${response.skippedActionId} 保留原状态，未触发新的 OpenClaw 调用。`,
+      linkTo: actionQueueLink(response.skippedActionId),
+      linkLabel: '查看动作队列',
+    };
+  }
+
+  if (response.stoppedActionId) {
+    return {
+      kind: 'warning',
+      title: '已提交并停止绑定动作',
+      body: `已提交「${label}」；动作 ${response.stoppedActionId} 已取消，原始证据和来源记录仍保留。`,
+      linkTo: actionQueueLink(response.stoppedActionId),
+      linkLabel: '查看动作队列',
+    };
+  }
+
+  if (isOpenClawActionControlAnswer(req, answer)) {
+    return {
+      kind: 'warning',
+      title: '决策已提交，未产生动作变更',
+      body: `已提交「${label}」并移出主队列，但服务端没有返回绑定动作 ID；请到动作队列或审核包确认是否还有待处理动作。`,
+      linkTo: '/actions',
+      linkLabel: '查看动作队列',
+    };
+  }
+
+  return {
+    kind: 'success',
+    title: '决策已提交',
+    body: `已提交「${label}」并移出主队列；只有服务端明确绑定的动作选项才会继续执行。`,
+  };
+}
+
+function decisionTransitionReceipt(
+  response: ConfirmRequestStateTransitionResponse,
+  state: 'pending' | 'snoozed' | 'expired',
+): TransitionReceipt {
+  if (state === 'snoozed') {
+    const returnText = response.confirmRequest.snoozeUntil
+      ? `${futureTime(response.confirmRequest.snoozeUntil)}回到主队列`
+      : '到期后回到主队列';
+    return {
+      kind: 'info',
+      title: '已移到稍后决策',
+      body: `${returnText}；没有提交答案，也没有创建外部动作。`,
+    };
+  }
+  if (state === 'pending') {
+    return {
+      kind: 'success',
+      title: '已恢复到需你拍板',
+      body: '这条确认项已回到主队列；恢复本身不会提交答案或恢复外部动作。',
+    };
+  }
+  return {
+    kind: 'warning',
+    title: '已结束追踪',
+    body: '这条确认项已设为 expired；原始证据和来源记录仍保留。',
+  };
+}
+
+function watchTransitionReceipt(
+  id: string,
+  response: ConfirmRequestStateTransitionResponse,
+  state: 'pending' | 'snoozed' | 'expired',
+): TransitionReceipt {
+  if (state === 'pending') {
+    const actionText = response.queuedActionId
+      ? `动作 ${response.queuedActionId}`
+      : '只读查证动作';
+    return {
+      kind: 'success',
+      title: '已排入只读查证',
+      body: `已创建或复用${actionText}；观察项仍保留在待观察池。OpenClaw 未配置或执行失败时以动作队列状态为准，查证结果回流前不会自动替你拍板。`,
+      linkTo: `/actions?sourceKind=confirm_request_watch&sourceRefId=${encodeURIComponent(id)}`,
+      linkLabel: '查看动作队列',
+    };
+  }
+  if (state === 'snoozed') {
+    const returnText = response.confirmRequest.snoozeUntil
+      ? `${futureTime(response.confirmRequest.snoozeUntil)}后再次出现`
+      : '稍后再次出现';
+    return {
+      kind: 'info',
+      title: '已继续观察',
+      body: `${returnText}；没有创建新的外部动作。`,
+    };
+  }
+  return {
+    kind: 'warning',
+    title: '已结束观察',
+    body: '这条观察项已关闭；不会删除原始证据，也不会取消已存在的外部动作记录。',
+  };
 }
 
 function priorityClass(p: string) {
@@ -1219,6 +1668,13 @@ function futureTime(ts: number) {
   color: #fde68a;
 }
 
+.target-notice.handled {
+  border-color: rgba(34, 197, 94, 0.24);
+  border-left-color: #22c55e;
+  background: rgba(20, 83, 45, 0.16);
+  color: #bbf7d0;
+}
+
 .target-notice-title {
   margin-bottom: 0.25rem;
   color: #e0f2fe;
@@ -1229,10 +1685,85 @@ function futureTime(ts: number) {
   color: #fef3c7;
 }
 
+.target-notice.handled .target-notice-title {
+  color: #dcfce7;
+}
+
 .target-notice p {
   margin: 0;
   font-size: 0.86rem;
   line-height: 1.45;
+}
+
+.transition-receipt {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  border-left: 4px solid #34d399;
+  border-radius: 0.75rem;
+  background: rgba(6, 78, 59, 0.16);
+  color: #d1fae5;
+}
+
+.transition-receipt.info {
+  border-color: rgba(56, 189, 248, 0.22);
+  border-left-color: #38bdf8;
+  background: rgba(14, 116, 144, 0.14);
+  color: #cffafe;
+}
+
+.transition-receipt.warning {
+  border-color: rgba(251, 191, 36, 0.22);
+  border-left-color: #f59e0b;
+  background: rgba(120, 53, 15, 0.15);
+  color: #fde68a;
+}
+
+.transition-receipt-title {
+  margin-bottom: 0.25rem;
+  color: #ecfdf5;
+  font-weight: 700;
+}
+
+.transition-receipt.info .transition-receipt-title {
+  color: #e0f2fe;
+}
+
+.transition-receipt.warning .transition-receipt-title {
+  color: #fef3c7;
+}
+
+.transition-receipt p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.transition-receipt-link {
+  display: inline-flex;
+  margin-top: 0.45rem;
+  color: #bfdbfe;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.transition-receipt-link:hover {
+  text-decoration: underline;
+}
+
+.transition-receipt-close {
+  flex: 0 0 auto;
+  border: 1px solid rgba(226, 232, 240, 0.14);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: rgba(15, 23, 42, 0.24);
+  color: inherit;
+  cursor: pointer;
 }
 
 .lane-section {
@@ -1544,6 +2075,69 @@ function futureTime(ts: number) {
   color: #94a3b8;
   font-size: 0.78rem;
   margin-bottom: 0.75rem;
+}
+
+.action-boundary {
+  margin-bottom: 0.8rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(52, 211, 153, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(6, 78, 59, 0.14);
+}
+
+.action-boundary.muted {
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(30, 41, 59, 0.24);
+}
+
+.action-boundary-title {
+  margin-bottom: 0.4rem;
+  color: #bbf7d0;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.action-boundary.muted .action-boundary-title {
+  color: #cbd5e1;
+}
+
+.action-boundary-lines {
+  margin: 0;
+  padding-left: 1rem;
+  color: #d1fae5;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.action-boundary.muted .action-boundary-lines {
+  color: #cbd5e1;
+}
+
+.action-boundary-lines li + li {
+  margin-top: 0.25rem;
+}
+
+.pending-action-receipt {
+  margin-bottom: 0.8rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-left: 4px solid #38bdf8;
+  border-radius: 0.7rem;
+  background: rgba(14, 116, 144, 0.14);
+  color: #cffafe;
+}
+
+.pending-action-receipt-title {
+  margin-bottom: 0.25rem;
+  color: #e0f2fe;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pending-action-receipt p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .card-error {

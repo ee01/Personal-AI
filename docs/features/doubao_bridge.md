@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-05-31_
+_最后更新: 2026-07-01_
 
 ## 概述
 
@@ -71,6 +71,7 @@ Desktop App 使用双线程模型：
   - 绑定到用户真实使用的“手机版对话”
   - 承接近期重点、提醒、查询结果等短期上下文
   - 自动绑定会先查找默认标题；如果找不到，但当前桥接器浏览器已经打开一个可用的豆包 `/chat` 或 `/thread` 页面，会把当前页作为手机版对话绑定
+  - app 会在绑定步骤下方显示“手机上下文通道”回执，提前说明当前目标线程、近期重点 / 新待办 / 每日完整摘要节奏、最近一次手机上下文发送结果，以及失败或安全验证不会标记投递成功
 
 这个设计来自豆包的实际行为边界：
 
@@ -83,6 +84,7 @@ Desktop App 使用双线程模型：
 - 近期重点、提醒、查询结果要发到真实使用的 `mobile_context_thread`
 - 线程链接必须是 `doubao.com` 或其子域名下的 `/chat/...` / `/thread/...`。只有路径长得像线程但 host 不是豆包的链接，会保留为待修复状态，不会被当作已就绪线程，也不会被 app 自动打开。
 - 如果本机还保留可打开的旧 `memory_sync_thread` 绑定，但本机 thread record 丢失，`创建 / 修复长期记忆线程` 会先恢复旧线程记录，不会直接新建第二条长期记忆线程。
+- 用户点击 `创建 / 修复长期记忆线程` 后，app 会留下即时绑定回执，区分复用已绑定线程、恢复本机记录、修复不可用旧绑定或新建线程；回执会说明这一步只写 `memory_sync_thread` 绑定，不同步 `persona_core` / `voice_mode`，不写 `mobile_context_thread`，真实内容投递、跳过原因和页面可见性仍以后续同步流水为准。
 
 ### 4. 输出侧同步，写回豆包
 
@@ -109,6 +111,15 @@ Desktop App 支持三类定时同步：
 - `现在推一次提醒`
 - `查记忆并注入当前会话`
 
+app 会在两个线程步骤卡片里提前显示“推送前会发生什么”回执：
+
+- 长期记忆线程会说明 `persona` 手动推送会先保存待生效的广播方式，再渲染 `persona_core` / `voice_mode` package，并只写入长期记忆线程的豆包随手记
+- 手机上下文通道会分别说明“近期重点”使用 `active_focus_digest`、“待办 / 通知”使用手动完整摘要模式，以及它们只写入已绑定手机版对话，不混入长期 persona / voice 线程
+- 这些回执是点击前的边界说明；真正的送达、跳过、失败、安全验证和状态回写结果仍以后面的最近同步流水为准
+- 点击手动推送后，在后台确认返回前会先显示“推送待确认”回执：说明正在保存待生效广播方式、渲染哪类 package，以及尚未写入长期记忆线程或 `mobile_context_thread`、尚未标记送达；提醒推送还会明确尚未把待办标记完成，也不会发送空占位文本
+- 用户点击手动推送后，成功和跳过文案也会保留同样的边界：本次渲染的 package 类型、目标线程、是否未发送占位、是否不会混入长期 persona / voice、是否不会把待办标记完成，以及真实送达仍以后续同步流水为准
+- 手动推送按钮旁的即时回执会直接带上本次审计摘要，包括 package 类型、内容条目数、来源引用数、目标线程、验证 / 传输状态和状态回写异常；用户不用先翻最近同步流水，才能判断这次点击是送达、跳过还是需要复查
+
 其中：
 
 - 自动同步与“现在推一次 persona”走同一条 `stable_memory` 发送链路
@@ -126,8 +137,14 @@ Desktop App 支持三类定时同步：
 - 豆包发送结果和 Memory Service 状态回写会分开呈现；如果内容已经送达但 delivery / sync job 回写失败，流水会保留“已送达”并追加“状态回写异常”，避免用户误以为需要重发内容。
 - 失败流水会根据失败类型直接给出恢复动作，例如打开豆包处理安全验证、重新绑定手机对话、测试 Memory Service、重试对应同步或查看日志；用户不需要先在页面其它位置重新寻找入口
 - “绑定长期记忆线程”步骤卡片会直接展示目标线程、最近一次长期记忆同步结果、同步节奏和对应恢复动作；用户不用先翻完整同步流水，才能判断 persona / voice 这类长期记忆是否真的送到同一条稳定线程。
+- 如果长期记忆线程已经绑定但还没有任何 `stable_memory` 自动或手动同步流水，卡片会显示“首次同步基线”：当前只是 `memory_sync_thread` 绑定就绪，persona / voice 尚未投递；下一次自动到期或手动首推才会渲染 `persona_core` / `voice_mode`，无内容只记 skipped，不发送空占位，也不会写入 `mobile_context_thread`。
+- 这张卡片还会显示最近同步审计摘要，包括包类型、内容条目数、来源引用数、目标线程、正文可见性 / 验证状态、实际传输方式和状态回写异常；如果内容已经送达但 Memory Service 状态回写失败，只提示测试 Memory Service 或查看日志，不鼓励用户重复发送同一批长期 persona。
+- “绑定手机版对话”步骤卡片也会直接展示短期上下文通道回执：未绑定时说明不会写入当前活动页，已绑定时说明近期重点、待办 / 通知和 Quick Ask 有证据回答都会进入这条手机对话；长期 persona / voice 不会混进这条手机对话。
+- 这张手机上下文卡片会直接展示最近一次手机发送审计，包括 package 类型、内容条目数、来源引用数、目标线程、正文可见性 / 验证状态、实际传输方式和状态回写异常；如果内容已经送达但 Memory Service 状态回写失败，卡片会显示为“回写需检查”，避免用户把“豆包可见”和“服务端状态已记录”混成同一件事。
 
 随手记格式发送后的内容，目标是让用户可以在豆包手机端按更结构化的方式查看和管理，而不是只停留在桥接线程里的一段普通上下文文本。
+
+这次手动推送路径的 UX 判断参考了 [ChatGPT Scheduled Tasks](https://help.openai.com/en/articles/10291617-tasks-in-chatgpt) 的确认 / 通知 / 监控任务边界、[ChatGPT Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq) 的来源透明度，以及数字提醒系统研究对“提醒意图、过去信息和会话线索”混合场景的讨论；结论是按钮发起后也要先给待确认回执，不能等后台结果回来后才解释影响范围。
 
 ### 5. 输入侧探索，写回 Memory Service
 
@@ -140,15 +157,24 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 - 支持 reset cache，只清理本机 raw message cache 与 cursor，不删除远端会话
 - 豆包 / ChatGPT 来源卡片可直接预览本机 raw cache、清洗后消息、artifact 与 cursor；也可重置本地缓存和 cursor，重抓输入链路时不影响已写入 `Memory Service` 的记忆
 - 支持 revoke ingested memory，按来源和 `work/personal` scope 删除之前写入 `Memory Service` 的记忆，不回删远端聊天记录
-- 来源卡片现在直接提供“撤回已入库记忆”入口，按当前来源与默认范围执行；操作前会显示当前范围可撤回的本地 artifact 数量，并提示不会删除远端聊天
-- 撤回成功后，本地 Explorer artifact 不会被清理，但会标记为“审计已撤回”，来源卡片的“活跃提炼记忆”只统计仍视为 Memory Service 活跃输入的 artifact，避免用户把已撤回内容误读成还在长期记忆里
-- 手动触发某个来源抓取前，如果该来源卡片有未保存的抓取范围、默认范围或浏览器传输方式，app 会先保存再执行，避免本次抓取沿用旧设置
+- 来源卡片现在直接提供危险区样式的“按已保存范围撤回记忆”入口，按当前来源与已保存默认范围执行；操作前会显示当前范围可撤回的本地 artifact 数量，并提示这是删除 `Memory Service` 记忆的操作，但不会删除远端聊天
+- 撤回入口旁会显示“撤回范围回执”：如果 Memory Service 未连接或来源正在读取，会直接说明按钮为什么不可用；可执行时会写明当前保存的默认范围、另一个范围不会受影响、远端原始聊天不会被删除，以及本地可撤回 / 旧版无 scope / 已撤回 artifact 数量
+- 用户确认撤回后、后台返回前，来源卡片会先显示“撤回请求回执”：说明请求已经提交，但尚未证明 Memory Service 消息 / chunk 已删除、本地 Explorer artifact 已标记撤回，也尚未刷新预览、缓存、cursor 或删除原始对话；最终状态仍以返回结果为准
+- 撤回成功后会分别展示 `Memory Service` 删除的消息 / chunk 数，以及本地 Explorer artifact 从多少条活跃审计变成多少条；如果只有服务端或只有本地审计发生变化，界面会直接提示可能是已删过、来源 / 范围不一致或旧版本审计缺口
+- 撤回结果只有在 `Memory Service` 删除和本地 artifact 标记都发生时才显示为成功态；远端-only、本地-only 或空结果会显示为注意态，并说明预览里保留的已撤回行只是本地审计，不代表仍是活跃记忆
+- 本地 Explorer artifact 不会被清理，但会标记为“审计已撤回”，来源卡片的“活跃提炼记忆”只统计仍视为 Memory Service 活跃输入的 artifact，避免用户把已撤回内容误读成还在长期记忆里
+- Explorer 本地 artifact 审计按每次提炼批次追加保留；同一会话后续增量抓取不会覆盖之前的提炼结果，只有 reset cache 或 revoke 才会改变本地审计可见性
+- 来源卡片修改自动读取、回看天数、默认范围、ChatGPT 对话上限、抓取间隔或日常浏览器传输方式后，会立即显示“待保存输入范围”回执。回执对比已保存后台设置和当前表单草稿，说明保存前后台自动读取、撤回已入库记忆和缓存统计仍按已保存设置执行；点击保存、登录来源或立即抓取才会先保存再继续。
+- 手动触发某个来源抓取前，如果该来源卡片有未保存的抓取范围、默认范围或浏览器传输方式，app 会先保存再执行，避免本次抓取沿用旧设置；抓取完成后会留下“抓取回执”，说明本轮是否先保存了待生效设置、实际使用的范围 / 天数 / 传输方式，以及本次只读取来源到本机 cache 并提炼 Memory Service artifact，不删除远端聊天、也不向来源写回内容；如果来源的 lookback days 为 `0`，回执会写成“不限制历史天数”，不会误写成“最近 0 天”
+- 点击“立即抓取”后、后台结果返回前，来源卡片会先显示“抓取请求回执”：说明是否会先保存待生效设置、准备使用的范围 / 回看窗口 / ChatGPT 对话上限 / 传输偏好，以及当前只是提交请求，尚未确认新的 Memory Service artifact、尚未刷新本机 cache / cursor，也不会删除远端聊天或向来源写回内容；完成或失败后再由真实运行结果替换这条请求态回执。
+- 抓取回执会区分保存的传输偏好和本轮实际传输；如果用户选择了日常 Chrome / `webpage-mcp` 但本轮临时回退到桌面端 Chromium，会在完成消息里保留回退原因和重试窗口，不把 fallback 误写成日常浏览器已成功读取。
 - 使用日常 Chrome 抓取或广播豆包时，必须先存在明确的 `doubao.com` 标签页；不会把当前活动页误当作豆包页面读取或写入。DOM fallback 也会统一处理 `/chat/<id>`、`/thread/<id>` 与绝对链接。
 - 当 `webpage-mcp` 来源读取失败并临时回退到桌面端 Chromium 时，Explorer 状态会保留最近一次回退原因，UI 会在来源卡片内显示，用户可以据此补齐扩展连接、Chrome 标签页或登录态
 - 使用日常 Chrome 读取豆包时，会优先走页面接口；接口不可用时再尝试 DOM fallback。fallback 自身失败会作为可见读取失败或回退原因呈现，不会被吞成“本轮没有新增内容”
 - 如果某个 Explorer 来源最近一次自动读取失败，来源卡片会直接显示失败原因和下一步恢复提示，例如重新登录、补齐日常浏览器标签页、测试 Memory Service 或重新抓取
 - 如果某个 Explorer 来源最近一次自动读取成功，来源卡片和手动抓取反馈会显示本轮摘要：新增缓存消息数、提炼消息数、写入记忆数，以及因无可沉淀内容被跳过的对话数。这样 `新增 0 条缓存` 不会被误解成“没有做事”，因为本轮可能只是把已有缓存提炼并写回 Memory Service。
 - 来源卡片的常驻状态会同时显示缓存消息、对话数、待提炼消息数和已提炼记忆数；用户不用打开日志，也能判断当前是“还没抓到内容”“有缓存等待提炼”，还是“已经形成可审计记忆”。
+- 来源卡片还会把这些数字整理成一条输入链路回执：区分等待登录、读取失败但仍展示上次成功缓存、缓存待提炼、已有可审计记忆、已处理但低信号、自动读取关闭和 Explorer 未响应；当已有活跃 artifact 且待提炼为 0 时，会明确写成缓存已处理完，只是本机 Explorer 审计快照，不代表刚刚新增写入，只有下一轮抓到新缓存才会继续提炼或写入 Memory Service；这条回执也会直接写出该来源当前保存的默认范围（工作 / 个人），避免用户把本地旧状态误读成刚刚成功抓取，或误判后续提炼 / 撤回会落在哪个范围。
 - 如果 Explorer 状态接口暂时不可用或某个来源缺失，来源卡片会先清空旧的传输提示，再显示“Explorer 未响应”和恢复建议；不会把上一轮“已借用日常浏览器”或“已临时回退”的提示留在错误状态旁边。
 - ChatGPT 来源在日常浏览器读取失败后，会和豆包来源一样保留回退原因和大致重试时间；后续冷却期轮询不会把“已临时回退到内置 Chromium”误刷成待保存状态。
 
@@ -169,7 +195,7 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 
 研究侧也支持当前实现方向：不要把完整聊天原文直接当长期记忆，而应拆成可审计的提炼结果。[Mem0](https://arxiv.org/abs/2504.19413) 讨论了从持续对话中动态提取、整合、检索显著信息，并用结构化持久记忆降低延迟和 token 成本；[LongMemEval](https://arxiv.org/abs/2410.10813) 则把长期记忆能力拆成信息抽取、多会话推理、时间推理、知识更新和拒答能力，提示 Explorer 输入链路需要保留来源、时间、跳过/提炼结果，后续才方便校准质量。近期的 [MemX](https://arxiv.org/abs/2603.16171) 和 [MemReader](https://arxiv.org/abs/2604.07877) 也都强调本地优先、可解释检索、低置信拒答或主动判断是否写入，进一步支持“显示真实状态、不要用旧成功态掩盖当前不可用”的 UI 边界。
 
-撤回路径的产品边界是“删除长期记忆，不删除原始来源”。这与 ChatGPT / Gemini 这类产品把记忆控制、聊天活动和来源数据分开管理的做法一致，也符合数据系统研究里对 provenance / deletion 的要求：用户需要知道删除影响的是哪一层，系统也要保留足够的本地审计状态来解释为什么某条提炼结果后来不再参与召回。
+撤回路径的产品边界是“删除长期记忆，不删除原始来源”。这与 ChatGPT / Gemini 这类产品把记忆控制、聊天活动和来源数据分开管理的做法一致，也符合数据系统研究里对 provenance / deletion 的要求：用户需要知道删除影响的是哪一层，系统也要保留足够的本地审计状态来解释为什么某条提炼结果后来不再参与召回。[ChatGPT 删除聊天](https://help.openai.com/en/articles/8809935-how-to-delete-and-archive-chats-in-chatgpt)会区分聊天视图移除、服务端保留窗口和已连接数据；[machine unlearning verification](https://arxiv.org/abs/2003.04247) 也强调用户需要能验证删除请求是否被执行。因此 Explorer 撤回结果不能只给一个“成功”，而要分开显示 Memory Service 删除结果、本地 artifact 审计标记，以及两者不一致时的解释。
 
 ### 6. 本机状态与后台运行
 
@@ -339,6 +365,9 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
 - `近期重点` 的自动同步和手动推送，底层会明确要求豆包把近期重点记录到随手记
 - `提醒` 的自动同步和手动推送，底层会转成随手记待办格式后再发送到 `mobile_context_thread`
 - 用户在 app 里看到的按钮文案仍然是 `现在推一次 persona / 近期重点 / 提醒`，但发送给豆包的内容已经不是旧格式
+- 点击后会先显示待确认回执；后台确认前，按钮忙碌只代表请求已发起，不代表豆包已经可见、Memory Service 已回写或提醒已处理
+- 每次手动点击后的即时回执会复用最近同步流水的审计口径，显示本次 package、条目数、来源引用、线程、验证 / 传输和状态回写异常；如果只是跳过，则明确说明没有内容被写入豆包
+- 手机上下文步骤卡也会保留最近一次 `mobile_briefing` / `reminder_sync` 审计摘要；用户不用跳到完整流水才能确认最近一次近期重点或提醒推送的目标线程、内容计数、来源计数和验证状态
 - 用户可在豆包手机端查看这些同步过去的随手记内容
 
 ### Extension 中的 `desktop-app.html`
@@ -408,6 +437,8 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
   - 底部帮助文案
   - 单独占一整行的底部按钮区
 
+范围切换会立即写入 `explorer.askDefaultScope`，成为后续 Quick Ask / Ask 的默认范围。切换后小窗会显示范围回执：保存成功时说明后续默认范围已经改变，但不会改已入库记忆、触发同步发送或改变已显示答案；如果设置不可用或保存失败，则说明只影响当前 Quick Ask 窗口里的后续提问，默认值没有持久化。
+
 当用户真正发起问题后，窗口再平滑展开成轻量对话面板：
 
 - 上方是消息流
@@ -420,9 +451,11 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
   - `confidence`
 - 证据默认折叠为轻量列表，而不是完整 dashboard
 
-发起 Ask 时，Quick Ask 会机会性读取日常 Chrome 的当前页面上下文：如果当前页是 RingCentral，会把聊天标题、URL、选中文本和少量可见文本拼入 `context`，作为 `MemoryContextMatchService` 的可选 hint；如果当前页只是 Google Docs 等弱相关页面，且用户问的是 `那个/这个/ready` 这类指代问题，则不会把该页面塞进请求，避免活动页噪声覆盖真实项目记忆。真实 Quick Ask 仍可能完全没有当前 chat context，因此 `/ask` 不能依赖客户端补上下文，而要先用近期高频、互动和 source anchor 记忆锁定话题。
+发起 Ask 时，Quick Ask 会先把用户消息和 `正在检索相关记忆` pending 状态渲染出来，再机会性读取日常 Chrome 的当前页面上下文和发起流式 `/ask`；页面上下文读取、Memory Service 首个 SSE status 或后端 API 往返都不能阻塞这个即时反馈。如果当前页是 RingCentral，会把聊天标题、URL、选中文本和少量可见文本拼入 `context`，作为 `MemoryContextMatchService` 的可选 hint；如果当前页只是 Google Docs 等弱相关页面，且用户问的是 `那个/这个/ready` 这类指代问题，则不会把该页面塞进请求，避免活动页噪声覆盖真实项目记忆。真实 Quick Ask 仍可能完全没有当前 chat context，因此 `/ask` 不能依赖客户端补上下文，而要先用近期高频、互动和 source anchor 记忆锁定话题。
 
 证据卡片只展示可读摘要：标题优先使用群名、sourceTitle 或网页标题，正文会清理 Google Docs/网页抓取 chrome 文本，并限制为三行；网页快照、Memory Capture 等弱相关证据会标注“弱相关网页快照”，原文片段放到可展开区域。原文区域会保留消息换行，安全渲染 `a` 链接和 mention 文本，禁止横向溢出。这样用户先看到“来源是什么、为什么匹配、摘要是什么”，需要时再看格式化后的原始消息。
+
+当 Quick Ask 生成有证据答案时，答案卡可以一键 `发到豆包手机对话`。这条操作会先显示 `query_answer_card -> mobile_context_thread` 的发送范围回执：只发送本轮答案和证据摘要到已绑定手机对话，不写长期记忆、不确认答案、不改绑定、不标记待办完成。发送中、成功和失败状态都会保留同一条边界；成功时还会内联展示本次线程、传输方式、回退原因、正文可见性和验证结果，避免用户需要回到完整同步流水才能确认实际送达路径；失败时明确本次没有写入 `mobile_context_thread`，避免用户把按钮理解成已同步、已确认或已处理提醒。
 
 当前交互约定：
 
@@ -435,7 +468,7 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
   - 如果距离上一轮互动超过 30 分钟，会自动开始新对话，避免新问题误带旧上下文
   - 历史对话只保存在当前 Quick Ask renderer 内存里，app 重启后不恢复
 
-Quick Ask 的产品参照是“低打扰快问 + 必要时继续深入”：[Raycast Quick AI](https://manual.raycast.com/ai/chat) 同时支持一问一答、继续追问、超时自动新对话和升级到完整 AI Chat；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把全局快捷键、菜单栏入口、文件 / 截图入口放在轻量 prompt window 里。研究侧的 [just-in-time information access](https://www.scholars.northwestern.edu/en/publications/user-interactions-with-everyday-applications-as-context-for-just-) 和 [mixed-initiative context](https://arxiv.org/abs/2604.07121) 都指向同一个原则：上下文可以主动利用，但生命周期和用户控制必须清楚，所以当前实现把短期会话保留和 30 分钟自动新对话放在 Quick Ask 本地层处理。
+Quick Ask 的产品参照是“低打扰快问 + 必要时继续深入”：[Raycast Quick AI](https://manual.raycast.com/ai/chat) 同时支持一问一答、继续追问、超时自动新对话和升级到完整 AI Chat；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把全局快捷键、菜单栏入口、文件 / 截图入口放在轻量 prompt window 里。手机上下文发送还参考了 [ChatGPT Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq)、[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 和 [Gemini Enterprise personalization](https://docs.cloud.google.com/gemini/enterprise/docs/configure-personalization) 的来源 / 记忆控制原则：跨设备或跨线程上下文必须解释来源、目标和删除 / 关闭边界。研究侧的 [just-in-time information access](https://www.scholars.northwestern.edu/en/publications/user-interactions-with-everyday-applications-as-context-for-just-)、[mixed-initiative context](https://arxiv.org/abs/2604.07121) 和 [digital reminder systems](https://cs.stanford.edu/~merrie/papers/memory_imwut2017.pdf) 都指向同一个原则：上下文可以主动利用，但生命周期、未来提醒语义和用户控制必须清楚，所以当前实现把短期会话保留、30 分钟自动新对话和手机对话发送边界放在 Quick Ask 本地层处理。
 
 ### 状态胶囊与状态卡
 
@@ -471,7 +504,7 @@ compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 
 当前 v1 中，状态卡只做“显示与引导”，不直接在卡片里完成 approve / retry / openclaw / outreach 操作。
 
-状态卡会展示本次运行态快照距离现在多久，以及每一项来自哪条状态来源（例如本机同步流水、Memory Service 确认请求、Outreach 运行态或 Action Queue）。卡片内可以手动 `重新读取`，用于用户刚修复 Memory Service、豆包验证或配置后立即确认状态是否变化；如果重新读取后没有需要关注的状态，卡片会保留“暂无状态项”的反馈，而不是继续展示旧异常。
+状态卡会展示本次运行态快照距离现在多久，以及每一项来自哪条状态来源（例如本机同步流水、Memory Service 确认请求、Outreach 运行态或 Action Queue）。当同一快照里有多类状态时，卡片顶部会显示 `状态构成` 摘要，例如同步异常、待确认、排队动作各有几项；这只是当前快照的构成说明，不会批准、重试、发送、取消、归档或写入。每条状态项还会直接显示读取新鲜度和“为什么现在显示”：例如缺配置会阻断同步、状态读取失败不能沿用旧快照、确认请求不会自动写入或发送、外部询问要先区分待批准发送还是等待对方回复。状态项底部会显示明确的处理入口条：`setup_blocker` 只打开 Desktop App 设置，其它状态只把来源、新鲜度、显示原因和处理边界带入 Quick Ask 输入框继续追问；不会在卡片内直接 approve、retry、send、cancel、归档或写入。卡片内可以手动 `重新读取`，用于用户刚修复 Memory Service、豆包验证或配置后立即确认状态是否变化；如果重新读取后没有需要关注的状态，卡片会保留“暂无状态项”的反馈，而不是继续展示旧异常。如果重新读取失败，状态卡会保留上次成功快照但把卡片和状态项标成“刷新失败 · 上次快照”，点击追问时也会带入当前状态未确认和失败原因，避免把旧状态误当成刚确认过的运行态。
 
 如果后台自动同步遇到 Memory Service 连接失败、豆包发送失败或其他桥接异常，`sync_issue` 会在 Quick Ask 状态卡中直接显示最近一次错误、失败链路、触发方式和失败时间。点击这类状态项会把错误摘要带入输入框，方便用户继续追问排查顺序；不用先去翻本机日志才知道同步曾经失败。
 
@@ -509,12 +542,15 @@ Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天�
 - macOS 上通过本机 `Speech` + `AVFoundation` helper 做系统语音识别
 - helper 会按需编译/启动，并把 transcript、音量、权限错误回传给 quick ask
 - transcript 先进入语音草稿，用户仍可确认后再发送
+- voice sheet 会显示 `语音草稿回执`：听写时说明这是本机语音识别且不会自动发送；可发送时说明点箭头才会按当前 Quick Ask 范围发起 Ask，点叉号会把草稿带回文本框继续编辑；出错时说明语音未发送、草稿仍保留
+- 用户点中间按钮停止监听后，voice sheet 会把 ready 态拆成两种回执：有转写草稿时显示 `已停止监听`、草稿仍留在本机、点箭头才会发送转写文本；没有可发送内容时显示没有发送、没有保存音频、没有发起 Ask，可继续说话或回到文本输入
+- 点箭头真正提交后，对话里的用户消息会保留 `语音草稿已确认发送` 回执，说明只提交转写文本、不发送或保存原始音频；如果文本本身包含“请记住”等明确意图，仍走现有记忆保存回执
 - 如果麦克风或系统 Speech Recognition 权限被拒绝，voice sheet 会保留当前草稿，显示明确原因，并直接提供“打开麦克风设置 / 打开语音识别设置”的恢复入口；主配置页也保留这两个系统权限入口
 - 如果本机 helper 启动失败或重启失败，Quick Ask 会停在可恢复的 voice-ready 状态并显示失败原因，不把界面继续伪装成正在监听
 
 当前不做离线识别；如果后续需要完全离线能力，再考虑接入本地模型。
 
-语音路径的产品参照是把“开始说话、看到实时反馈、修正/取消、修复权限”放在同一个短路径里：[Raycast Dictation](https://manual.raycast.com/ai/dictation) 把首次授权、输入设备、快捷键、push-to-talk、波形和本机历史/设置作为 dictation 的核心流程；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把 voice input 放在轻量 launcher 内。实现侧要遵循 Apple Speech 的授权模型：[SFSpeechRecognizer.requestAuthorization](https://developer.apple.com/documentation/speech/sfspeechrecognizer/1649892-requestauthorization) 会异步返回授权状态，用户之后也可能在系统设置中改掉权限，所以 UI 必须提供回到系统设置的恢复路径。研究侧同样提示不要只追求 transcript：Google 的 [Mondegreen](https://arxiv.org/abs/2105.09930) 把 ASR 错误视为会直接伤害查询结果的问题；[Typist Experiment](https://arxiv.org/abs/2403.05785) 指出 dictation 需要覆盖 composition、review、editing；Microsoft Research 的 [Voice Typing](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/chi2012_VoiceTyping.pdf) 也强调实时可见和即时修正能降低用户纠错负担。因此当前 Quick Ask 先让 transcript 落在可编辑草稿，并把权限/启动失败做成可点击恢复，而不是自动发送或只报错。
+语音路径的产品参照是把“开始说话、看到实时反馈、修正/取消、修复权限”放在同一个短路径里：[Raycast Dictation](https://manual.raycast.com/ai/dictation) 把首次授权、输入设备、快捷键、push-to-talk、波形、本机历史/设置、隐私说明和 review/insert mode 作为 dictation 的核心流程；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把 voice input 放在轻量 launcher 内。实现侧要遵循 Apple Speech 的授权模型：[SFSpeechRecognizer.requestAuthorization](https://developer.apple.com/documentation/speech/sfspeechrecognizer/1649892-requestauthorization) 会异步返回授权状态，用户之后也可能在系统设置中改掉权限；Apple 的 macOS 说明也明确用户可以逐个 app 开关 Speech Recognition 访问，所以 UI 必须提供回到系统设置的恢复路径。2026-06-21 复核还参考了 [Apple SpeechAnalyzer](https://developer.apple.com/videos/play/wwdc2025/277/) 对 live transcription、文本输出和传递给 LLM 的说明。研究侧同样提示不要只追求 transcript：Google 的 [Mondegreen](https://arxiv.org/abs/2105.09930) 把 ASR 错误视为会直接伤害查询结果的问题；[High-precision Voice Search Query Correction](https://arxiv.org/abs/2401.04235) 也强调 ASR hypothesis 可能因为噪声和领域词召回差而需要纠错；[Typist Experiment](https://arxiv.org/abs/2403.05785) 指出 dictation 需要覆盖 composition、review、editing；Microsoft Research 的 [Voice Typing](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/chi2012_VoiceTyping.pdf) 也强调实时可见和即时修正能降低用户纠错负担。因此当前 Quick Ask 先让 transcript 落在可编辑草稿，并把“停止监听 / 不会自动发送 / 当前范围 / 草稿保留 / 权限恢复 / 不保存原始音频”做成同屏回执，而不是自动发送或只报错。
 
 ### Demo
 

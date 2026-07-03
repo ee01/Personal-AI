@@ -15,7 +15,7 @@
           {{ prepId ? `${sourceLabel} · ${prepShortId}` : '等待会前准备入口' }}
         </span>
         <div
-          v-if="prepId"
+          v-if="canRequestDraft"
           class="target-segmented"
           role="group"
           aria-label="输出格式"
@@ -30,11 +30,11 @@
             {{ option.shortLabel }}
           </button>
         </div>
-        <button v-if="prepId" class="btn ghost" type="button" @click="reloadDraft">
+        <button v-if="canRequestDraft" class="btn ghost" type="button" @click="reloadDraft">
           重新生成
         </button>
         <button
-          v-if="prepId"
+          v-if="canRequestDraft"
           class="btn primary"
           type="button"
           :disabled="!canCopyArtifact"
@@ -64,9 +64,55 @@
     </section>
 
     <section v-else-if="draft" class="storyline-workbench">
+      <section
+        v-if="generationReceipt"
+        class="generation-receipt"
+        aria-label="Storyline 生成范围回执"
+      >
+        <div class="receipt-copy">
+          <div class="label">生成范围回执</div>
+          <h2>{{ generationModeLabel }}</h2>
+          <p>{{ generationReceiptBoundary }}</p>
+        </div>
+        <div class="receipt-metrics" aria-label="Storyline API generation receipt">
+          <span>来源 {{ generationReceipt.sourceEvidenceRefCount }} refs</span>
+          <span>草稿引用 {{ generationReceipt.citedEvidenceRefCount }} refs</span>
+          <span>返回详情 {{ generationReceipt.returnedEvidenceDetailCount }} 条</span>
+          <span
+            :class="{ warn: generationReceipt.missingEvidenceDetailCount > 0 }"
+          >
+            缺详情 {{ generationReceipt.missingEvidenceDetailCount }} 条
+          </span>
+        </div>
+        <p
+          v-if="generationReceipt.generationMode === 'fallback_cue_cards'"
+          class="receipt-warning"
+        >
+          {{ fallbackReceiptWarning }}
+        </p>
+      </section>
+
+      <section
+        v-if="sessionCacheReceipt"
+        class="session-cache-receipt"
+        aria-label="Storyline 会话缓存回执"
+      >
+        <div class="receipt-copy">
+          <div class="label">会话缓存回执</div>
+          <h2>复用本页会话缓存</h2>
+          <p>{{ sessionCacheReceiptBoundary }}</p>
+        </div>
+        <div class="receipt-metrics" aria-label="Storyline session cache receipt">
+          <span>缓存 {{ sessionCacheReceipt.cachedAtLabel }}</span>
+          <span>{{ artifactLabel(sessionCacheReceipt.targetArtifact) }}</span>
+          <span>草稿引用 {{ evidenceCount }} refs</span>
+          <span>返回详情 {{ returnedEvidenceDetailCount }} 条</span>
+        </div>
+      </section>
+
       <section class="coverage-strip" aria-label="Storyline coverage">
         <div class="metric ok">
-          <div class="label">Evidence refs</div>
+          <div class="label">Cited refs</div>
           <div class="value">{{ evidenceCount }}</div>
           <div class="sub">{{ evidenceClusterLabel }}</div>
         </div>
@@ -232,7 +278,8 @@
                     :key="`${evidence.id}:${link.href}`"
                     :href="link.href"
                     :target="link.external ? '_blank' : undefined"
-                    :rel="link.external ? 'noreferrer' : undefined"
+                    :rel="link.external ? 'noopener noreferrer' : undefined"
+                    @click="recordEvidenceSourceOpen(evidence, link)"
                   >
                     {{ link.label }}
                   </a>
@@ -245,6 +292,44 @@
                   </span>
                 </div>
               </article>
+              <div
+                v-if="sourceOpenReceipt"
+                class="source-open-receipt"
+                role="status"
+                aria-live="polite"
+              >
+                <strong>来源打开回执</strong>
+                <span>{{ sourceOpenReceipt.summary }}</span>
+                <p>{{ sourceOpenReceipt.boundary }}</p>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <div class="label">Draft grounding review</div>
+              <div
+                v-if="groundingReviewFindings.length === 0"
+                class="grounding-review ok"
+              >
+                <strong>所有段落都有多证据支撑</strong>
+                复制前仍建议按 Evidence key 核对关键事实和外发边界。
+              </div>
+              <div v-else class="grounding-review-summary">
+                <strong>{{ groundingReviewFindings.length }} 段需要复核证据边界</strong>
+                <span>复制前逐段检查单条证据、缺详情或未绑定证据的段落。</span>
+              </div>
+              <div class="segment-grounding-list">
+                <button
+                  v-for="item in segmentGroundingReviews"
+                  :key="`grounding-${item.index}`"
+                  type="button"
+                  :class="['segment-grounding-item', item.tone, { active: item.index === selectedIndex }]"
+                  @click="selectedIndex = item.index"
+                >
+                  <span>SEG {{ String(item.index + 1).padStart(2, '0') }}</span>
+                  <strong>{{ item.label }}</strong>
+                  <p>{{ item.detail }}</p>
+                </button>
+              </div>
             </section>
 
             <section class="inspector-section">
@@ -306,10 +391,67 @@
           <label>
             <input v-model="reviewAcknowledged" type="checkbox" />
             <span>
-              已复核 {{ draft.gaps.length }} 个待确认和 {{ draft.riskNotes.length }} 条边界提醒
+              已复核 {{ reviewAcknowledgementLabel }}
             </span>
           </label>
-          <p>Evidence refs 和 Evidence key 会随输出一起复制；外发前按当前边界处理。</p>
+          <div
+            v-if="copyReviewChecklist.length"
+            class="review-checklist"
+            aria-label="复制前复核清单"
+          >
+            <div class="review-checklist-head">
+              <strong>复制前复核清单</strong>
+              <span>{{ copyReviewChecklist.length }} 项</span>
+            </div>
+            <component
+              :is="item.segmentIndex === undefined ? 'div' : 'button'"
+              v-for="item in copyReviewChecklist"
+              :key="item.id"
+              :type="item.segmentIndex === undefined ? undefined : 'button'"
+              :class="[
+                'review-checklist-item',
+                item.tone,
+                {
+                  actionable: item.segmentIndex !== undefined,
+                  active: item.segmentIndex === selectedIndex,
+                },
+              ]"
+              :aria-current="item.segmentIndex === selectedIndex ? 'true' : undefined"
+              @click="selectReviewItem(item)"
+            >
+              <span>{{ item.label }}</span>
+              <p>{{ item.detail }}</p>
+            </component>
+          </div>
+          <p>
+            Evidence refs 和 Evidence key 会随输出一起复制；外发前按当前段落证据、
+            待确认项和边界提醒处理。
+          </p>
+        </div>
+        <div
+          v-if="copyReceipt"
+          :class="['copy-receipt', { stale: copyReceiptIsStale }]"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="copy-receipt-head">
+            <strong>{{ copyReceiptTitle }}</strong>
+            <span>{{ artifactLabel(copyReceipt.targetArtifact) }} · {{ copyReceipt.title }}</span>
+          </div>
+          <div class="copy-receipt-chips">
+            <span>剪贴板快照 {{ copyReceipt.copiedAt }}</span>
+            <span>引用 {{ copyReceipt.citedEvidenceCount }} refs</span>
+            <span>返回详情 {{ copyReceipt.returnedEvidenceDetailCount }} 条</span>
+            <span>{{ copyReceipt.reviewSummary }}</span>
+          </div>
+          <p v-if="copyReceiptIsStale">
+            剪贴板仍是上一份 Storyline 输出；当前页面已经切到
+            {{ draft ? artifactLabel(draft.targetArtifact) : '新的草稿状态' }}，交付前请重新复制。
+          </p>
+          <p>
+            只复制到本机剪贴板；没有写回 Slides / Docs / RingCentral，没有发送消息，
+            没有保存长期 Storyline 历史，也没有更新 Memory Service 证据状态。
+          </p>
         </div>
         <textarea :value="draft.artifactText" readonly aria-label="完整输出草稿"></textarea>
         <p v-if="copyError" class="copy-status error" role="alert">
@@ -342,6 +484,7 @@ import {
   MemoryServiceError,
   type ComposerAssistEvidence,
   type StorylineDraftResponse,
+  type StorylineSourceKind,
   type StorylineSuggestedArtifact,
 } from '../../services/MemoryServiceClient';
 import {
@@ -397,6 +540,47 @@ interface EvidenceVisibleLink {
   external: boolean;
 }
 
+interface SegmentGroundingReview {
+  index: number;
+  tone: 'ok' | 'warn' | 'risk';
+  label: string;
+  detail: string;
+  requiresReview: boolean;
+}
+
+interface SourceOpenReceipt {
+  summary: string;
+  boundary: string;
+}
+
+interface CopyReceipt {
+  snapshotSignature: string;
+  title: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  copiedAt: string;
+  citedEvidenceCount: number;
+  returnedEvidenceDetailCount: number;
+  reviewSummary: string;
+}
+
+interface CopyReviewChecklistItem {
+  id: string;
+  label: string;
+  detail: string;
+  tone: 'warn' | 'risk';
+  segmentIndex?: number;
+}
+
+interface CachedDraftReadResult {
+  draft: StorylineDraftResponse;
+  cachedAt?: string;
+}
+
+interface SessionCacheReceipt {
+  cachedAtLabel: string;
+  targetArtifact: StorylineSuggestedArtifact;
+}
+
 const loading = ref(false);
 const loadError = ref('');
 const draft = ref<StorylineDraftResponse | null>(null);
@@ -404,6 +588,9 @@ const copied = ref(false);
 const copyError = ref('');
 const reviewAcknowledged = ref(false);
 const selectedIndex = ref(0);
+const sourceOpenReceipt = ref<SourceOpenReceipt | null>(null);
+const copyReceipt = ref<CopyReceipt | null>(null);
+const cacheHit = ref<{ cachedAt?: string } | null>(null);
 let draftLoadToken = 0;
 
 const pagePath = computed(() =>
@@ -419,6 +606,9 @@ const targetArtifact = computed(
 const audienceHint = computed(() => String(route.query.audience || '').trim());
 const activeTarget = computed(
   () => draft.value?.targetArtifact || targetArtifact.value,
+);
+const canRequestDraft = computed(
+  () => Boolean(prepId.value) && isSupportedStorylineSourceKind(sourceKind.value),
 );
 const cacheKey = computed(() =>
   [
@@ -438,6 +628,19 @@ const prepShortId = computed(() => shortEvidenceId(prepId.value));
 const selectedSegment = computed(
   () => draft.value?.segments[selectedIndex.value] ?? null,
 );
+const citedEvidenceIds = computed(() => {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const segment of draft.value?.segments ?? []) {
+    for (const rawId of segment.evidenceIds) {
+      const id = String(rawId || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+});
 const selectedEvidenceIds = computed(() => {
   const segment = selectedSegment.value;
   if (!segment) return [];
@@ -476,9 +679,6 @@ const selectedEvidenceDetailCount = computed(
   () =>
     selectedEvidenceIds.value.filter((id) => evidenceById.value.has(id)).length,
 );
-const selectedEvidenceMissingCount = computed(
-  () => selectedEvidenceIds.value.length - selectedEvidenceDetailCount.value,
-);
 const selectedEvidenceSourceLabels = computed(() => {
   const labels = selectedEvidenceIds.value.map((id) => {
     const item = evidenceById.value.get(id);
@@ -492,84 +692,123 @@ const selectedEvidenceSourceSummary = computed(() => {
   if (labels.length <= 2) return labels.join(' / ');
   return `${labels.slice(0, 2).join(' / ')} +${labels.length - 2}`;
 });
+const segmentGroundingReviews = computed<SegmentGroundingReview[]>(() =>
+  (draft.value?.segments ?? []).map((segment, index) =>
+    buildSegmentGroundingReview(segment, index),
+  ),
+);
+const selectedGroundingReview = computed<SegmentGroundingReview>(() => {
+  return (
+    segmentGroundingReviews.value[selectedIndex.value] || {
+      index: selectedIndex.value,
+      tone: 'risk',
+      label: '未选择段落',
+      detail: '请选择一个故事线段落后再复核证据。',
+      requiresReview: true,
+    }
+  );
+});
 const selectedGroundingState = computed<{
   tone: 'ok' | 'warn' | 'risk';
   label: string;
   detail: string;
-}>(() => {
-  if (!selectedSegment.value) {
-    return {
-      tone: 'risk',
-      label: '未选择段落',
-      detail: '请选择一个故事线段落后再复核证据。',
-    };
-  }
-
-  const refCount = selectedEvidenceIds.value.length;
-  const detailCount = selectedEvidenceDetailCount.value;
-  const missingCount = selectedEvidenceMissingCount.value;
-  const sourceCount = selectedEvidenceSourceLabels.value.filter(
-    (label) => label !== '仅 ref',
-  ).length;
-
-  if (refCount === 0) {
-    return {
-      tone: 'risk',
-      label: '未绑定证据',
-      detail: '当前段落没有 evidence ref，不应作为可外发内容。',
-    };
-  }
-  if (detailCount === 0) {
-    return {
+}>(() => ({
+  tone: selectedGroundingReview.value.tone,
+  label: selectedGroundingReview.value.label,
+  detail: selectedGroundingReview.value.detail,
+}));
+const groundingReviewFindings = computed(() =>
+  segmentGroundingReviews.value.filter((item) => item.requiresReview),
+);
+const copyReviewChecklist = computed<CopyReviewChecklistItem[]>(() => {
+  const items: CopyReviewChecklistItem[] = [];
+  draft.value?.gaps.forEach((gap, index) => {
+    items.push({
+      id: `gap-${index}`,
+      label: `待确认 ${index + 1}`,
+      detail: gap,
       tone: 'warn',
-      label: '只有 ref id',
-      detail: '复制文本会保留 ref id，但页面缺少可点开的证据详情。',
-    };
+    });
+  });
+  draft.value?.riskNotes.forEach((note, index) => {
+    items.push({
+      id: `risk-${index}`,
+      label: `边界提醒 ${index + 1}`,
+      detail: note,
+      tone: 'risk',
+    });
+  });
+  for (const item of groundingReviewFindings.value) {
+    items.push({
+      id: `segment-${item.index}`,
+      label: `SEG ${String(item.index + 1).padStart(2, '0')} · ${item.label}`,
+      detail: item.detail,
+      tone: item.tone === 'risk' ? 'risk' : 'warn',
+      segmentIndex: item.index,
+    });
   }
-  if (missingCount > 0) {
-    return {
-      tone: 'warn',
-      label: '证据详情不完整',
-      detail: `${missingCount} 条 ref 缺少详情，复制前需要回到 Evidence key 核查。`,
-    };
-  }
-  if (refCount >= 2 && sourceCount >= 2) {
-    return {
-      tone: 'ok',
-      label: '多源支持',
-      detail: `当前段落引用 ${refCount} 条 ref，覆盖 ${sourceCount} 类来源。`,
-    };
-  }
-  if (refCount >= 2) {
-    return {
-      tone: 'ok',
-      label: '多条证据',
-      detail: `当前段落引用 ${refCount} 条 ref，来源集中在 ${selectedEvidenceSourceSummary.value}。`,
-    };
-  }
-  return {
-    tone: 'warn',
-    label: '单条证据',
-    detail: '当前段落只有 1 条 ref，适合内部草稿，外发前重点复核。',
-  };
+  return items;
 });
 const evidenceCount = computed(() => {
-  if (draft.value?.evidence?.length) return draft.value.evidence.length;
-  const segmentEvidenceIds =
-    draft.value?.segments.flatMap((segment) => segment.evidenceIds) ?? [];
-  return new Set(segmentEvidenceIds).size;
+  return citedEvidenceIds.value.length;
 });
+const returnedEvidenceDetailCount = computed(() => draft.value?.evidence?.length ?? 0);
+const citedEvidenceMissingDetailCount = computed(
+  () => citedEvidenceIds.value.filter((id) => !evidenceById.value.has(id)).length,
+);
 const sourceClusters = computed(() => {
   const counts = new Map<string, number>();
-  for (const item of draft.value?.evidence ?? []) {
-    const key = item.sourceLabel || item.type || 'memory';
+  for (const id of citedEvidenceIds.value) {
+    const item = evidenceById.value.get(id);
+    const key = item ? item.sourceLabel || item.type || 'memory' : '仅 ref';
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return Array.from(counts, ([label, count]) => ({ label, count })).slice(0, 6);
 });
 const evidenceClusterLabel = computed(() => {
-  if (sourceClusters.value.length === 0) return '来自 segment refs';
-  return `来自 ${sourceClusters.value.length} 类来源`;
+  if (sourceClusters.value.length === 0) return '当前草稿未引用证据';
+  if (citedEvidenceMissingDetailCount.value > 0) {
+    return `已引用 ${evidenceCount.value} refs · ${citedEvidenceMissingDetailCount.value} 条缺详情`;
+  }
+  return `已引用 ${evidenceCount.value} refs · 返回 ${returnedEvidenceDetailCount.value} 详情`;
+});
+const generationReceipt = computed(() => draft.value?.generationReceipt ?? null);
+const generationModeLabel = computed(() => {
+  const receipt = generationReceipt.value;
+  if (!receipt) return '等待生成回执';
+  return receipt.generationMode === 'fallback_cue_cards'
+    ? 'Fallback 草稿，已重新绑定证据'
+    : 'LLM 草稿，服务端已核对证据';
+});
+const generationReceiptBoundary = computed(() => {
+  const receipt = generationReceipt.value;
+  if (!receipt) return '';
+  return [
+    `${sourceLabel.value} · ${artifactLabel(receipt.targetArtifact)} · ${receipt.audience}`,
+    '只生成可复制草稿，不写回 Slides / Docs / RingCentral，不保存长期 Storyline 历史，也不发送消息。',
+  ].join('。');
+});
+const fallbackReceiptWarning = computed(() => {
+  const receipt = generationReceipt.value;
+  if (!receipt || receipt.generationMode !== 'fallback_cue_cards') return '';
+  if (receipt.fallbackReason === 'llm_generation_failed') {
+    return '服务端未拿到模型草稿，已回退到会前 cue cards：这份输出仍绑定 Evidence key，复制前重点复核事实和外发边界。';
+  }
+  return '服务端已回退到会前 cue cards：模型输出证据不足或引用无效，复制前按 Evidence key 复核。';
+});
+const sessionCacheReceipt = computed<SessionCacheReceipt | null>(() => {
+  if (!cacheHit.value || !draft.value) return null;
+  return {
+    cachedAtLabel: formatCacheTimestamp(cacheHit.value.cachedAt),
+    targetArtifact: draft.value.targetArtifact,
+  };
+});
+const sessionCacheReceiptBoundary = computed(() => {
+  if (!sessionCacheReceipt.value) return '';
+  return [
+    '这次没有重新调用 Draft API，也没有重新读取会前准备、刷新证据详情、同步 Memory Service 或确认外发状态',
+    '如会议资料、证据或目标格式刚变化，请点重新生成后再复制',
+  ].join('；');
 });
 const sendableScore = computed(() => {
   const gaps = draft.value?.gaps.length ?? 0;
@@ -579,20 +818,47 @@ const sendableScore = computed(() => {
 const requiresReviewBeforeCopy = computed(() => {
   const gaps = draft.value?.gaps.length ?? 0;
   const risks = draft.value?.riskNotes.length ?? 0;
-  return gaps + risks > 0;
+  return gaps + risks + groundingReviewFindings.value.length > 0;
 });
+const reviewRequirementParts = computed(() => {
+  const gaps = draft.value?.gaps.length ?? 0;
+  const risks = draft.value?.riskNotes.length ?? 0;
+  const grounding = groundingReviewFindings.value.length;
+  const parts: string[] = [];
+  if (gaps > 0) parts.push(`${gaps} 个待确认`);
+  if (risks > 0) parts.push(`${risks} 条边界提醒`);
+  if (grounding > 0) parts.push(`${grounding} 段证据边界`);
+  return parts;
+});
+const reviewAcknowledgementLabel = computed(() =>
+  joinChineseParts(reviewRequirementParts.value),
+);
 const canCopyArtifact = computed(
   () =>
+    canRequestDraft.value &&
+    !loading.value &&
+    !loadError.value &&
     Boolean(draft.value?.artifactText) &&
     (!requiresReviewBeforeCopy.value || reviewAcknowledged.value),
 );
 const copyGateReason = computed(() => {
+  if (!canRequestDraft.value) return '';
+  if (loading.value) return '正在生成，暂不能复制';
+  if (loadError.value) return '生成失败，未复制旧草稿';
   if (!draft.value?.artifactText) return '';
   if (!requiresReviewBeforeCopy.value || reviewAcknowledged.value) return '';
-  return `先复核 ${draft.value.gaps.length} 个待确认和 ${draft.value.riskNotes.length} 条边界提醒`;
+  return `先复核 ${reviewAcknowledgementLabel.value}`;
 });
 const copyButtonTitle = computed(() =>
   copyGateReason.value || '复制当前 Storyline 输出',
+);
+const copyReceiptIsStale = computed(() => {
+  const receipt = copyReceipt.value;
+  if (!receipt || !draft.value) return false;
+  return receipt.snapshotSignature !== snapshotSignatureForDraft(draft.value);
+});
+const copyReceiptTitle = computed(() =>
+  copyReceiptIsStale.value ? '旧复制回执' : '复制回执',
 );
 
 function normalizeTargetArtifact(
@@ -610,6 +876,12 @@ function normalizeTargetArtifact(
   return undefined;
 }
 
+function isSupportedStorylineSourceKind(
+  value: string,
+): value is StorylineSourceKind {
+  return value === 'today_meeting_prep';
+}
+
 function artifactLabel(target: StorylineSuggestedArtifact): string {
   const labels: Record<StorylineSuggestedArtifact, string> = {
     speaker_notes: 'Speaker Notes',
@@ -625,6 +897,143 @@ function shortEvidenceId(value: string | undefined): string {
   if (!text) return '';
   if (text.length <= 18) return text;
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}
+
+function uniqueEvidenceIdsForSegment(
+  segment: StorylineDraftResponse['segments'][number] | null | undefined,
+): string[] {
+  const seen = new Set<string>();
+  return (segment?.evidenceIds ?? [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+}
+
+function sourceLabelsForEvidenceIds(ids: string[]): string[] {
+  const labels = ids.map((id) => {
+    const item = evidenceById.value.get(id);
+    return item ? item.sourceLabel || item.type || 'memory' : '仅 ref';
+  });
+  return Array.from(new Set(labels.filter(Boolean))).slice(0, 4);
+}
+
+function summarizeSourceLabels(labels: string[]): string {
+  if (labels.length === 0) return '无来源';
+  if (labels.length <= 2) return labels.join(' / ');
+  return `${labels.slice(0, 2).join(' / ')} +${labels.length - 2}`;
+}
+
+function buildSegmentGroundingReview(
+  segment: StorylineDraftResponse['segments'][number],
+  index: number,
+): SegmentGroundingReview {
+  const evidenceIds = uniqueEvidenceIdsForSegment(segment);
+  const refCount = evidenceIds.length;
+  const detailCount = evidenceIds.filter((id) => evidenceById.value.has(id)).length;
+  const missingCount = refCount - detailCount;
+  const sourceLabels = sourceLabelsForEvidenceIds(evidenceIds);
+  const sourceCount = sourceLabels.filter((label) => label !== '仅 ref').length;
+  const sourceSummary = summarizeSourceLabels(sourceLabels);
+  const prefix = `SEG ${String(index + 1).padStart(2, '0')}`;
+
+  if (refCount === 0) {
+    return {
+      index,
+      tone: 'risk',
+      label: '未绑定证据',
+      detail: `${prefix} 没有 evidence ref，不应作为可外发内容。`,
+      requiresReview: true,
+    };
+  }
+  if (detailCount === 0) {
+    return {
+      index,
+      tone: 'warn',
+      label: '只有 ref id',
+      detail: `${prefix} 会把 ref id 复制出去，但页面缺少可点开的证据详情。`,
+      requiresReview: true,
+    };
+  }
+  if (missingCount > 0) {
+    return {
+      index,
+      tone: 'warn',
+      label: '证据详情不完整',
+      detail: `${prefix} 有 ${missingCount} 条 ref 缺少详情，需要回到 Evidence key 核查。`,
+      requiresReview: true,
+    };
+  }
+  if (refCount >= 2 && sourceCount >= 2) {
+    return {
+      index,
+      tone: 'ok',
+      label: '多源支持',
+      detail: `${prefix} 引用 ${refCount} 条 ref，覆盖 ${sourceCount} 类来源。`,
+      requiresReview: false,
+    };
+  }
+  if (refCount >= 2) {
+    return {
+      index,
+      tone: 'warn',
+      label: '单一来源',
+      detail: `${prefix} 引用 ${refCount} 条 ref，但来源集中在 ${sourceSummary}。`,
+      requiresReview: true,
+    };
+  }
+  return {
+    index,
+    tone: 'warn',
+    label: '单条证据',
+    detail: `${prefix} 只有 1 条 ref，适合内部草稿，外发前重点复核。`,
+    requiresReview: true,
+  };
+}
+
+function joinChineseParts(parts: string[]): string {
+  if (parts.length === 0) return '当前草稿证据和边界';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]}和 ${parts[1]}`;
+  return `${parts.slice(0, -1).join('、')}和 ${parts[parts.length - 1]}`;
+}
+
+function snapshotSignatureForDraft(value: StorylineDraftResponse): string {
+  const text = value.artifactText || '';
+  return [
+    value.id,
+    value.targetArtifact,
+    text.length,
+    text.slice(0, 96),
+    text.slice(-96),
+  ].join('|');
+}
+
+function buildCopyReceipt(value: StorylineDraftResponse): CopyReceipt {
+  return {
+    snapshotSignature: snapshotSignatureForDraft(value),
+    title: value.title,
+    targetArtifact: value.targetArtifact,
+    copiedAt: new Date().toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }),
+    citedEvidenceCount: citedEvidenceIds.value.length,
+    returnedEvidenceDetailCount: returnedEvidenceDetailCount.value,
+    reviewSummary: requiresReviewBeforeCopy.value
+      ? `已复核 ${reviewAcknowledgementLabel.value}`
+      : '当前草稿无强制复核项',
+  };
+}
+
+function selectReviewItem(item: CopyReviewChecklistItem): void {
+  if (item.segmentIndex === undefined) return;
+  selectedIndex.value = item.segmentIndex;
 }
 
 function boundaryForSegment(
@@ -729,14 +1138,74 @@ function evidenceBlockedLabels(evidence: ComposerAssistEvidence): string[] {
   return Array.from(new Set(labels)).slice(0, 3);
 }
 
-function readCachedDraft(): StorylineDraftResponse | null {
+function recordEvidenceSourceOpen(
+  evidence: ComposerAssistEvidence,
+  link: EvidenceVisibleLink,
+): void {
+  if (!link.external) return;
+  let host = '';
+  try {
+    host = new URL(link.href).host;
+  } catch {
+    host = '';
+  }
+  const title = firstNonEmptyString(
+    evidence.sourceTitle,
+    evidence.title,
+    evidence.id,
+  );
+  sourceOpenReceipt.value = {
+    summary: `${host || '外部来源'} · ${title}`,
+    boundary:
+      '只在新标签打开这个来源；本页没有重新读取会前准备、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也没有满足复制前复核。',
+  };
+}
+
+function firstNonEmptyString(
+  ...values: Array<string | undefined | null>
+): string {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '未命名证据';
+}
+
+function formatCacheTimestamp(value: string | undefined): string {
+  if (!value) return '旧格式';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '旧格式';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function readCachedDraft(): CachedDraftReadResult | null {
   try {
     const raw = sessionStorage.getItem(cacheKey.value);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StorylineDraftResponse;
-    return parsed?.sourceId === prepId.value &&
-      parsed?.targetArtifact === targetArtifact.value
-      ? parsed
+    const parsed = JSON.parse(raw);
+    const record =
+      parsed && typeof parsed === 'object'
+        ? (parsed as { cachedAt?: unknown; draft?: unknown })
+        : null;
+    const cachedAt =
+      typeof record?.cachedAt === 'string' ? record.cachedAt : undefined;
+    const candidate =
+      record?.draft && typeof record.draft === 'object'
+        ? (record.draft as StorylineDraftResponse)
+        : (parsed as StorylineDraftResponse);
+    return candidate?.sourceKind === sourceKind.value &&
+      candidate?.sourceId === prepId.value &&
+      candidate?.targetArtifact === targetArtifact.value &&
+      candidate?.generationReceipt?.boundary ===
+        'draft_only_manual_copy_no_external_write'
+      ? { draft: candidate, cachedAt }
       : null;
   } catch {
     return null;
@@ -748,7 +1217,14 @@ function writeCachedDraft(
   storageKey = cacheKey.value,
 ): void {
   try {
-    sessionStorage.setItem(storageKey, JSON.stringify(value));
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        cachedAt: new Date().toISOString(),
+        draft: value,
+      }),
+    );
   } catch {
     // Session cache is best effort.
   }
@@ -760,18 +1236,35 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     draft.value = null;
     loadError.value = '';
     loading.value = false;
+    sourceOpenReceipt.value = null;
+    cacheHit.value = null;
+    return;
+  }
+  const requestedSourceKind = sourceKind.value;
+  if (!isSupportedStorylineSourceKind(requestedSourceKind)) {
+    draft.value = null;
+    loadError.value =
+      '当前 Storyline Draft 只支持 Today Pilot 会前准备来源，请回到会前准备入口重新打开。';
+    loading.value = false;
+    copied.value = false;
+    copyError.value = '';
+    reviewAcknowledged.value = false;
+    sourceOpenReceipt.value = null;
+    cacheHit.value = null;
     return;
   }
   if (!options.force) {
     const cached = readCachedDraft();
     if (cached) {
-      draft.value = cached;
+      draft.value = cached.draft;
       selectedIndex.value = 0;
       loading.value = false;
       loadError.value = '';
       copied.value = false;
       copyError.value = '';
       reviewAcknowledged.value = false;
+      sourceOpenReceipt.value = null;
+      cacheHit.value = { cachedAt: cached.cachedAt };
       return;
     }
   }
@@ -784,9 +1277,11 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   copied.value = false;
   copyError.value = '';
   reviewAcknowledged.value = false;
+  sourceOpenReceipt.value = null;
+  cacheHit.value = null;
   try {
     const result = await client.createStorylineDraft({
-      sourceKind: 'today_meeting_prep',
+      sourceKind: requestedSourceKind,
       prepId: requestedPrepId,
       targetArtifact: requestedTarget,
       audienceHint: requestedAudience,
@@ -798,6 +1293,7 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     draft.value = result;
     selectedIndex.value = 0;
     reviewAcknowledged.value = false;
+    cacheHit.value = null;
     writeCachedDraft(result, requestCacheKey);
   } catch (error) {
     if (loadToken !== draftLoadToken) return;
@@ -844,15 +1340,24 @@ function setTarget(target: StorylineSuggestedArtifact): void {
 }
 
 async function copyArtifact(): Promise<void> {
-  if (!draft.value?.artifactText) return;
+  if (
+    !canRequestDraft.value ||
+    loading.value ||
+    loadError.value ||
+    !draft.value?.artifactText
+  ) {
+    copyError.value = '当前没有可复制的 Storyline 输出。';
+    return;
+  }
   if (!canCopyArtifact.value) {
-    copyError.value = '请先复核待确认项和边界提醒。';
+    copyError.value = `请先复核 ${reviewAcknowledgementLabel.value}。`;
     return;
   }
   try {
     await writeClipboardText(draft.value.artifactText);
     copyError.value = '';
     copied.value = true;
+    copyReceipt.value = buildCopyReceipt(draft.value);
     window.setTimeout(() => {
       copied.value = false;
     }, 1600);
@@ -894,12 +1399,16 @@ function copyWithTextarea(text: string): boolean {
 }
 
 watch(
-  () => [prepId.value, targetArtifact.value, audienceHint.value],
+  () => [sourceKind.value, prepId.value, targetArtifact.value, audienceHint.value],
   () => {
     void loadDraft();
   },
   { immediate: true },
 );
+
+watch(selectedIndex, () => {
+  sourceOpenReceipt.value = null;
+});
 </script>
 
 <style scoped>
@@ -1117,6 +1626,71 @@ watch(
 .storyline-workbench {
   display: grid;
   gap: 12px;
+}
+
+.generation-receipt,
+.session-cache-receipt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 8px;
+  background: rgba(14, 44, 74, 0.45);
+  padding: 12px 14px;
+}
+
+.session-cache-receipt {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(74, 54, 14, 0.34);
+}
+
+.session-cache-receipt .label,
+.session-cache-receipt h2 {
+  color: #fde68a;
+}
+
+.receipt-copy h2 {
+  margin: 3px 0 5px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.receipt-copy p,
+.receipt-warning {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.receipt-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(118px, 1fr));
+  gap: 6px;
+  min-width: min(380px, 100%);
+}
+
+.receipt-metrics span {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.26);
+  color: var(--ink-2);
+  padding: 7px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.receipt-metrics span.warn,
+.receipt-warning {
+  color: #fde68a;
+}
+
+.receipt-warning {
+  grid-column: 1 / -1;
+  border-top: 1px solid rgba(251, 191, 36, 0.22);
+  padding-top: 8px;
 }
 
 .coverage-strip {
@@ -1517,6 +2091,94 @@ watch(
   font-weight: 800;
 }
 
+.grounding-review,
+.grounding-review-summary {
+  margin-top: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  padding: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.grounding-review.ok {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.08);
+  color: #bbf7d0;
+}
+
+.grounding-review strong,
+.grounding-review-summary strong {
+  display: block;
+}
+
+.grounding-review-summary span {
+  color: var(--ink-2);
+}
+
+.segment-grounding-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.segment-grounding-item {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.26);
+  color: var(--ink-2);
+  padding: 8px 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.segment-grounding-item.active,
+.segment-grounding-item:hover {
+  border-color: rgba(96, 165, 250, 0.48);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.segment-grounding-item.warn {
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.segment-grounding-item.risk {
+  border-color: rgba(251, 113, 133, 0.34);
+}
+
+.segment-grounding-item span {
+  display: inline-block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.segment-grounding-item strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--green);
+  font-size: 12px;
+}
+
+.segment-grounding-item.warn strong {
+  color: var(--amber);
+}
+
+.segment-grounding-item.risk strong {
+  color: var(--red);
+}
+
+.segment-grounding-item p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.42;
+}
+
 .empty-note,
 .evidence,
 .gap,
@@ -1597,6 +2259,34 @@ watch(
   border-color: rgba(251, 191, 36, 0.28);
   color: #fde68a;
   background: rgba(251, 191, 36, 0.08);
+}
+
+.source-open-receipt {
+  margin-top: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  border-radius: 8px;
+  background: rgba(96, 165, 250, 0.08);
+  color: var(--ink-2);
+  padding: 9px;
+  font-size: 12px;
+  line-height: 1.48;
+}
+
+.source-open-receipt strong {
+  display: block;
+  color: var(--accent);
+}
+
+.source-open-receipt span {
+  display: block;
+  margin-top: 3px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.source-open-receipt p {
+  margin: 5px 0 0;
+  color: var(--muted);
 }
 
 .gap {
@@ -1716,6 +2406,139 @@ watch(
   line-height: 1.45;
 }
 
+.review-checklist {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0 24px;
+}
+
+.review-checklist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-checklist-head strong {
+  color: var(--ink);
+}
+
+.review-checklist-head span {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 999px;
+  color: #fde68a;
+  padding: 2px 7px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.review-checklist-item {
+  width: 100%;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.2);
+  color: var(--ink-2);
+  padding: 8px 9px;
+  text-align: left;
+}
+
+.review-checklist-item.actionable {
+  cursor: pointer;
+}
+
+.review-checklist-item.actionable:hover,
+.review-checklist-item.active {
+  border-color: rgba(96, 165, 250, 0.52);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.review-checklist-item.risk {
+  border-color: rgba(251, 113, 133, 0.34);
+}
+
+.review-checklist-item span {
+  display: block;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.review-checklist-item.risk span {
+  color: var(--red);
+}
+
+.review-checklist-item p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.copy-receipt {
+  margin: 12px 14px 0;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  border-radius: 8px;
+  background: rgba(52, 211, 153, 0.08);
+  color: var(--ink-2);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.48;
+}
+
+.copy-receipt.stale {
+  border-color: rgba(251, 191, 36, 0.36);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.copy-receipt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.copy-receipt-head strong {
+  color: var(--green);
+  font-size: 13px;
+}
+
+.copy-receipt.stale .copy-receipt-head strong {
+  color: var(--amber);
+}
+
+.copy-receipt-head span {
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.copy-receipt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.copy-receipt-chips span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.22);
+  color: var(--muted);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.copy-receipt p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
 .copy-status {
   margin: -6px 14px 14px;
   color: var(--muted);
@@ -1728,7 +2551,9 @@ watch(
 
 @media (max-width: 1120px) {
   .page-header,
-  .workspace {
+  .workspace,
+  .generation-receipt,
+  .session-cache-receipt {
     grid-template-columns: 1fr;
     display: grid;
   }
@@ -1754,6 +2579,11 @@ watch(
 
   .coverage-strip {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .receipt-metrics {
+    grid-template-columns: 1fr;
+    min-width: 0;
   }
 
   .target-segmented {

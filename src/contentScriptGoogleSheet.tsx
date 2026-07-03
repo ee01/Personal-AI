@@ -213,7 +213,11 @@ async function openJqlDialog(url: string, sheetToken: string) {
             } catch (error) {
                 console.error('查询或处理失败: ', error);
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                showToast(`${ui('查询或处理失败:')} ${errorMessage}`, 'error');
+                if (isJiraSheetUserMessageError(error)) {
+                    showToast(errorMessage, 'error', error.toastDurationMs);
+                } else {
+                    showToast(`${ui('查询或处理失败:')} ${errorMessage}`, 'error');
+                }
                 
                 // 如果是登录错误，重新打开对话框并带入之前的输入
                 if (errorMessage.includes('需要登录')) {
@@ -256,7 +260,11 @@ async function openJqlDialog(url: string, sheetToken: string) {
             // 获取所有现有的 Jira keys
             const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
             if (keyColumnIndex === -1) {
-                showToast(ui('未找到 Jira Key 列'), 'error');
+                showToast(
+                    getMissingJiraKeyColumnMessage(metadata),
+                    'error',
+                    MISSING_JIRA_KEY_COLUMN_TOAST_DURATION_MS
+                );
                 return;
             }
 
@@ -386,6 +394,29 @@ interface TicketOperation {
     ticket: JiraTicket;
     type: 'update' | 'append' | 'remove';
     rowIndex?: number;
+}
+
+const MISSING_JIRA_KEY_COLUMN_TOAST_DURATION_MS = 8000;
+
+class JiraSheetUserMessageError extends Error {
+    toastDurationMs: number;
+
+    constructor(message: string, toastDurationMs = 3000) {
+        super(message);
+        this.name = 'JiraSheetUserMessageError';
+        this.toastDurationMs = toastDurationMs;
+        Object.setPrototypeOf(this, JiraSheetUserMessageError.prototype);
+    }
+}
+
+function isJiraSheetUserMessageError(error: unknown): error is JiraSheetUserMessageError {
+    return error instanceof JiraSheetUserMessageError;
+}
+
+function getMissingJiraKeyColumnMessage(metadata: JiraFieldMetadata): string {
+    const configuredSheetColumnName = metadata.jiraFieldToSheetHeader.key?.trim() || 'JIRA key';
+    return ui('未找到 {columnName} 列，或到 config 表中配置')
+        .replace('{columnName}', configuredSheetColumnName);
 }
 
 // 从配置表解析全局设置
@@ -929,6 +960,39 @@ function findMissingJiraFields(
 interface ConfirmationResult {
     operations: TicketOperation[];
     dialogElement: HTMLDivElement | null;  // null 表示用户取消，对话框已关闭
+    selectedFields: string[];
+}
+
+interface ConfirmationColumnOption {
+    field: string;
+    displayName: string;
+    checked: boolean;
+    disabled: boolean;
+    reason: string;
+}
+
+function escapeHtml(value: unknown): string {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getConfirmationColumnDisplayName(
+    field: string,
+    sheetHeaders: JiraHeaders,
+    jiraFieldToSheetHeader: { [jiraField: string]: string },
+    actualSheetHeaders: string[]
+): string {
+    const columnLetter = sheetHeaders[field as keyof JiraHeaders];
+    if (columnLetter) {
+        const colIndex = getColumnIndex(columnLetter);
+        const actualHeaderName = actualSheetHeaders[colIndex];
+        if (actualHeaderName) return actualHeaderName;
+    }
+    return jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
 }
 
 // 显示确认弹窗
@@ -962,19 +1026,25 @@ async function showConfirmationDialog(
             flex-direction: column;
         `;
 
-        // 生成友好的列名显示
-        const columnsToUpdateDisplay = displayHeaders
+        const missingFieldSet = new Set(missingFields);
+
+        // 生成可选更新列；key 用于定位和写入，不能取消；Jira 未返回的字段不能勾选。
+        const columnOptions: ConfirmationColumnOption[] = displayHeaders
             .filter(field => sheetHeaders[field as keyof JiraHeaders])
             .map(field => {
-                const columnLetter = sheetHeaders[field as keyof JiraHeaders];
-                if (!columnLetter) return field;
-                
-                // 查找该列对应的实际表头名称
-                const colIndex = getColumnIndex(columnLetter);
-                const actualHeaderName = actualSheetHeaders[colIndex];
-                
-                // 优先使用实际表头名称，其次使用配置中的映射，最后使用 Jira 字段名
-                return actualHeaderName || jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
+                const isKeyColumn = field === 'key';
+                const isMissingField = missingFieldSet.has(field);
+                return {
+                    field,
+                    displayName: getConfirmationColumnDisplayName(field, sheetHeaders, jiraFieldToSheetHeader, actualSheetHeaders),
+                    checked: isKeyColumn || !isMissingField,
+                    disabled: isKeyColumn || isMissingField,
+                    reason: isKeyColumn
+                        ? ui('JIRA key 用于匹配行，不能取消')
+                        : isMissingField
+                            ? ui('Jira filter 未返回该字段')
+                            : ''
+                };
             });
 
         const updateCount = operations.filter(op => op.type === 'update').length;
@@ -993,9 +1063,9 @@ async function showConfirmationDialog(
                         </div>
                         <div style="color: #856404; margin-bottom: 8px;">
                             ${missingFields.map(field => {
-                                // 优先使用配置表中的 Sheet Column 名称，其次使用预定义的友好名称，最后使用原始字段名
-                                const displayName = jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
-                                return `<span style="display: inline-block; background: #ffeeba; padding: 2px 8px; border-radius: 3px; margin: 2px 4px 2px 0; font-size: 13px;">${displayName}</span>`;
+                                const option = columnOptions.find(item => item.field === field);
+                                const displayName = option?.displayName || jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
+                                return `<span style="display: inline-block; background: #ffeeba; padding: 2px 8px; border-radius: 3px; margin: 2px 4px 2px 0; font-size: 13px;">${escapeHtml(displayName)}</span>`;
                             }).join('')}
                         </div>
                         <div style="font-size: 12px; color: #856404;">
@@ -1010,12 +1080,19 @@ async function showConfirmationDialog(
 
         dialog.innerHTML = `
             <h3 style="margin-top: 0; flex-shrink: 0;">${ui('确认数据操作')}</h3>
-            ${missingFieldsWarningHtml}
             <div style="margin-bottom: 15px; flex-shrink: 0;">
-                <div style="margin-bottom: 10px;">
+                <div style="margin-bottom: 12px;">
                     <strong>${ui('将要操作的列：')}</strong>
-                    <span style="color: #666;">${columnsToUpdateDisplay.join(', ')}</span>
+                    <div id="jiraColumnSelector" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+                        ${columnOptions.map(option => `
+                            <label style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid ${option.disabled ? '#d6d8db' : '#b8c7dc'}; border-radius: 4px; background: ${option.disabled ? '#f1f3f5' : '#f8fbff'}; color: ${option.disabled ? '#6c757d' : '#243447'}; font-size: 13px; cursor: ${option.disabled ? 'not-allowed' : 'pointer'};" title="${escapeHtml(option.reason)}">
+                                <input type="checkbox" class="jira-column-checkbox" data-field="${escapeHtml(option.field)}" ${option.checked ? 'checked' : ''} ${option.disabled ? 'disabled' : ''} style="margin: 0;">
+                                <span>${escapeHtml(option.displayName)}</span>
+                            </label>
+                        `).join('')}
+                    </div>
                 </div>
+                ${missingFieldsWarningHtml}
                 <div style="color: #666;">
                     <div>${ui('更新现有数据：')}<span style="color: #f0ad4e; font-weight: bold;">${updateCount}</span> ${ui('条')}</div>
                     <div>${ui('新增数据：')}<span style="color: #5cb85c; font-weight: bold;">${appendCount}</span> ${ui('条')}</div>
@@ -1034,7 +1111,7 @@ async function showConfirmationDialog(
                         <tr>
                             <th style="padding: 8px; text-align: left; width: 50px;">${ui('选择')}</th>
                             <th style="padding: 8px; text-align: left; width: 80px;">${ui('操作')}</th>
-                            ${columnsToUpdateDisplay.map(header => `<th style="padding: 8px; text-align: left;">${header}</th>`).join('')}
+                            ${columnOptions.map(option => `<th class="jira-preview-column" data-field="${escapeHtml(option.field)}" style="padding: 8px; text-align: left; ${option.checked ? '' : 'display: none;'}">${escapeHtml(option.displayName)}</th>`).join('')}
                         </tr>
                     </thead>
                     <tbody>
@@ -1048,10 +1125,11 @@ async function showConfirmationDialog(
                                         ${getOperationText(op.type)}
                                     </span>
                                 </td>
-                                ${displayHeaders.map(field => {
-                                    let value = op.ticket[field as keyof JiraTicket] || '';
+                                ${columnOptions.map(option => {
+                                    const field = option.field;
+                                    let value = String(op.ticket[field as keyof JiraTicket] || '');
                                     if (value.length > 100) value = value.substring(0, 97) + '...'; 
-                                    return `<td style="padding: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; ${op.type === 'remove' ? 'text-decoration: line-through; color: #999;' : ''}" title="${op.ticket[field as keyof JiraTicket] || ''}">${value}</td>`;
+                                    return `<td class="jira-preview-column" data-field="${escapeHtml(field)}" style="padding: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; ${option.checked ? '' : 'display: none;'} ${op.type === 'remove' ? 'text-decoration: line-through; color: #999;' : ''}" title="${escapeHtml(op.ticket[field as keyof JiraTicket] || '')}">${escapeHtml(value)}</td>`;
                                 }).join('')}
                             </tr>
                         `).join('')}
@@ -1068,12 +1146,27 @@ async function showConfirmationDialog(
 
         const selectAllCheckbox = document.getElementById('selectAllTickets') as HTMLInputElement;
         const ticketCheckboxes = dialog.getElementsByClassName('ticket-checkbox') as HTMLCollectionOf<HTMLInputElement>;
+        const columnCheckboxes = dialog.getElementsByClassName('jira-column-checkbox') as HTMLCollectionOf<HTMLInputElement>;
         const confirmButton = document.getElementById('confirmOperation') as HTMLButtonElement;
+
+        const getSelectedColumnFields = () => Array.from(columnCheckboxes)
+            .filter(checkbox => checkbox.checked)
+            .map(checkbox => checkbox.dataset.field || '')
+            .filter(Boolean);
 
         const updateConfirmButtonCount = () => {
             const selectedCount = Array.from(ticketCheckboxes).filter(cb => cb.checked).length;
             confirmButton.textContent = `${ui('确认')} (${selectedCount})`;
             confirmButton.disabled = selectedCount === 0;
+        };
+
+        const updatePreviewColumns = () => {
+            const selectedFields = new Set(getSelectedColumnFields());
+            Array.from(dialog.getElementsByClassName('jira-preview-column')).forEach(element => {
+                const htmlElement = element as HTMLElement;
+                const field = htmlElement.dataset.field || '';
+                htmlElement.style.display = selectedFields.has(field) ? '' : 'none';
+            });
         };
 
         selectAllCheckbox.addEventListener('change', () => {
@@ -1090,9 +1183,13 @@ async function showConfirmationDialog(
             });
         });
 
+        Array.from(columnCheckboxes).forEach(checkbox => {
+            checkbox.addEventListener('change', updatePreviewColumns);
+        });
+
         document.getElementById('cancelOperation')?.addEventListener('click', () => {
             document.body.removeChild(dialog);
-            resolve({ operations: [], dialogElement: null });
+            resolve({ operations: [], dialogElement: null, selectedFields: [] });
         });
 
         confirmButton.addEventListener('click', () => {
@@ -1107,15 +1204,16 @@ async function showConfirmationDialog(
             const cancelButton = document.getElementById('cancelOperation') as HTMLButtonElement;
             if (cancelButton) cancelButton.disabled = true;
             
-            resolve({ operations: selectedOperations, dialogElement: dialog });
+            resolve({ operations: selectedOperations, dialogElement: dialog, selectedFields: getSelectedColumnFields() });
         });
 
+        updatePreviewColumns();
         updateConfirmButtonCount(); 
     });
 }
 
 // 添加显示 toast 的函数
-function showToast(message: string, type = 'info') {
+function showToast(message: string, type = 'info', durationMs = 3000) {
     const existingToasts = document.querySelectorAll(`.jira-toast-${type}`);
     existingToasts.forEach(t => t.remove());
 
@@ -1148,9 +1246,11 @@ function showToast(message: string, type = 'info') {
     setTimeout(() => {
         toast.style.opacity = '0';
         setTimeout(() => {
-            document.body.removeChild(toast);
+            if (document.body.contains(toast)) {
+                document.body.removeChild(toast);
+            }
         }, 300);
-    }, 3000);
+    }, durationMs);
 }
 
 // 从 Jira 查询 tickets 并更新到 Google Sheet
@@ -1188,26 +1288,30 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             const fieldTypes = metadata.fieldTypes;
             const globalSettings = metadata.globalSettings;
             // const jiraFieldToSheetHeader = metadata.jiraFieldToSheetHeader;
-            
-            // 根据实际映射的字段动态生成 displayHeaders
-            const displayHeaders = Object.keys(sheetHeaders).filter(field => sheetHeaders[field as keyof JiraHeaders]); 
 
             // 使用全局设置中的 headerRow（1-based）
             const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
             const dataStartRowIndex = headerRowIndex + 1; // 数据从表头下一行开始
             console.log(`使用配置: 表头行=${globalSettings.headerRow}, 数据起始行=${dataStartRowIndex + 1}`);
 
-            const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
+            let keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
             if (keyColumnIndex === -1) {
                 const headerRow = values[headerRowIndex];
                 const inferredKeyIndex = headerRow?.findIndex((header: string) => header.toLowerCase().includes('key') || header.toLowerCase().includes('jira'));
                 if (inferredKeyIndex !== -1 && inferredKeyIndex !== undefined) {
                     sheetHeaders.key = indexToColumnLetter(inferredKeyIndex);
+                    keyColumnIndex = inferredKeyIndex;
                     console.warn(`未在配置中找到 Key 列，已推断为列 ${sheetHeaders.key}`);
                 } else {
-                    throw new Error('未找到或无法推断 Jira Key 列，请检查表头或配置');
+                    throw new JiraSheetUserMessageError(
+                        getMissingJiraKeyColumnMessage(metadata),
+                        MISSING_JIRA_KEY_COLUMN_TOAST_DURATION_MS
+                    );
                 }
             }
+
+            // 根据实际映射的字段动态生成 displayHeaders。放在 key 推断之后，确保 key 列进入确认弹窗。
+            const displayHeaders = Object.keys(sheetHeaders).filter(field => sheetHeaders[field as keyof JiraHeaders]);
 
             const keyToRowMap = new Map<string, number>();
             const existingTicketsInfo = new Map<string, { rowIndex: number; rowData: string[] }>();
@@ -1296,6 +1400,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             
             const confirmedOperations = confirmResult.operations;
             const dialogElement = confirmResult.dialogElement;
+            const selectedFieldSet = new Set(confirmResult.selectedFields);
+            selectedFieldSet.add('key');
             
             if (confirmedOperations.length === 0) {
                 showToast(ui('操作已取消'));
@@ -1311,9 +1417,12 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
 
             const updatesData: UpdateData[] = [];
             const appendData: string[][] = [];
-                const headerValues = Object.values(sheetHeaders).filter((value): value is string => 
-                    typeof value === 'string' && value.length > 0
-                );
+                const headerValues = Object.keys(sheetHeaders)
+                    .filter(field => selectedFieldSet.has(field))
+                    .map(field => sheetHeaders[field as keyof JiraHeaders])
+                    .filter((value): value is string =>
+                        typeof value === 'string' && value.length > 0
+                    );
                 const maxColIndex = getMaxColumnIndex(headerValues);
 
             confirmedOperations.forEach(operation => {
@@ -1322,6 +1431,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     const columnUpdates: { [columnIndex: number]: string } = {};
                     
                     Object.keys(operation.ticket).forEach(ticketKey => {
+                        if (!selectedFieldSet.has(ticketKey)) return;
                         const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
                         if (columnLetter && typeof columnLetter === 'string') {
                             try {
@@ -1356,6 +1466,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     // 只对新增操作创建完整行数据（跳过 'remove' 类型）
                     const row = new Array(maxColIndex).fill('');
                     Object.keys(operation.ticket).forEach(ticketKey => {
+                        if (!selectedFieldSet.has(ticketKey)) return;
                         const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
                         if (columnLetter && typeof columnLetter === 'string') {
                             try {
@@ -1408,8 +1519,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     const columnRanges = groupConsecutiveColumns(Object.keys(update.columnUpdates).map(Number));
                     
                     return columnRanges.map(range => {
-                        const startColumn = String.fromCharCode(65 + range.start);
-                        const endColumn = String.fromCharCode(65 + range.end);
+                        const startColumn = indexToColumnLetter(range.start);
+                        const endColumn = indexToColumnLetter(range.end);
                         const rangeName = range.start === range.end 
                             ? `${startColumn}${update.rowIndex + 1}`
                             : `${startColumn}${update.rowIndex + 1}:${endColumn}${update.rowIndex + 1}`;

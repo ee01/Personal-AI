@@ -27,6 +27,7 @@ const headers = [
   'Exec_Log',
   'Last_Exec',
   'Next_Exec',
+  'Category',
 ];
 
 let messageRows = [
@@ -45,6 +46,41 @@ let messageRows = [
     '待执行',
     '',
     '2026-05-04 09:15',
+    'General',
+  ],
+  [
+    'pending-review-1',
+    'Review Snooze Topic',
+    'Review me later',
+    '2026-05-04',
+    '10:00',
+    'Bot',
+    'private',
+    'john.doe',
+    '',
+    'PendingReview',
+    '0',
+    '待审核',
+    '',
+    '2026-05-04 10:00',
+    'Snooze',
+  ],
+  [
+    'pending-self-1',
+    'Self Snooze Topic',
+    'My own reminder',
+    '2026-05-04',
+    '10:05',
+    'Bot',
+    'private',
+    'Esone Qiu',
+    '',
+    'PendingReview',
+    '0',
+    '待审核',
+    '',
+    '2026-05-04 10:05',
+    'Snooze',
   ],
 ];
 const appendedRows = [];
@@ -262,6 +298,45 @@ try {
   });
   await page.getByText('Existing Topic').waitFor({ timeout: 15000 });
 
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html?category=Snooze&filterPendingReview=true&filterSelfOnly=1`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('[role="status"]', { hasText: '列表筛选回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('当前显示 1/3 条，2 条暂时隐藏。').waitFor({ timeout: 15000 });
+  await page.getByText('个人提醒条件: 1 条仅发给 esone.qiu 的消息不满足当前筛选').waitFor({ timeout: 15000 });
+  await page.getByText('个人提醒识别: 按 esone.qiu / Esone Qiu / 邮箱本地名 归一匹配；多人或群组消息不会被隐藏').waitFor({ timeout: 15000 });
+  await page.getByText('边界: 筛选只改变当前列表，不会暂停、删除、改期或同步 Sheet').waitFor({ timeout: 15000 });
+  await page.locator('tr[data-message-id="pending-review-1"]').waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.locator('tr[data-message-id="pending-self-1"]').count(),
+    0,
+    'self-only filter should hide reminders sent only to the current user',
+  );
+
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await page.locator('tr[data-message-id="existing-1"]').waitFor({ timeout: 15000 });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html?category=Snooze&filterPendingReview=true&filterSelfOnly=1&messageId=existing-1`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('[role="status"]', { hasText: '消息定位回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('正在显示目标消息 existing-1，当前状态 Active。').waitFor({ timeout: 15000 });
+  await page.getByText('覆盖筛选: 待审核 / 隐藏仅发给我的消息 / 类别 Snooze').waitFor({ timeout: 15000 });
+  await page.getByText('待审核条件: 目标状态是 Active，普通待审核筛选会隐藏它').waitFor({ timeout: 15000 });
+  await page.getByText('类别条件: 目标类别 General，普通类别筛选会隐藏它').waitFor({ timeout: 15000 });
+  await page.getByText('边界: 只是把目标行显示出来；不会批准、拒绝、暂停、删除、改期、发送或同步 Sheet').waitFor({ timeout: 15000 });
+  await page.locator('tr[data-message-id="existing-1"]').waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.locator('tr[data-message-id="pending-review-1"]').count(),
+    0,
+    'target message focus should keep the list scoped to the target row even when filters are active',
+  );
+
+  await page.getByRole('button', { name: '返回完整列表' }).click();
+  await page.locator('tr[data-message-id="pending-review-1"]').waitFor({ timeout: 15000 });
+
   await page.getByRole('button', { name: /新增/ }).click();
   await page.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
   await page.getByPlaceholder('输入消息内容').fill('Created content');
@@ -270,12 +345,15 @@ try {
   await page.getByRole('button', { name: /群组消息/ }).click();
   await page.locator('input[placeholder="例如：148192141318"]').last().fill('654321');
 
-  const createDialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
-  await page.getByRole('button', { name: /创建消息/ }).click();
-  const createDialog = await createDialogPromise;
-  assert.match(createDialog.message(), /消息创建成功，已定位到列表/);
-  assert.match(createDialog.message(), /下次执行：2026-05-04 09:00/);
-  await createDialog.accept();
+  await page.locator('form').evaluate((form) => {
+    const htmlForm = form;
+    htmlForm.requestSubmit();
+    htmlForm.requestSubmit();
+  });
+  await page.locator('[role="status"]', { hasText: '定时消息创建回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('「Created Topic」已写入 Messages 并定位到列表。').waitFor({ timeout: 15000 });
+  await page.getByText('下次执行: 2026-05-04 09:00').waitFor({ timeout: 15000 });
+  await page.getByText('边界: 已保存计划但没有立即发送；定位只改变当前列表视图').waitFor({ timeout: 15000 });
 
   assert.equal(appendedRows.length, 1);
   const createdId = appendedRows[0].ID;
@@ -285,7 +363,7 @@ try {
 
   await page.waitForURL(new RegExp(`messageId=${createdId}`), { timeout: 15000 });
   await page.locator(`tr[data-message-id="${createdId}"]`).waitFor({ timeout: 15000 });
-  await page.getByText('已定位消息').waitFor({ timeout: 15000 });
+  await page.locator('[role="status"]', { hasText: '消息定位回执' }).waitFor({ timeout: 15000 });
   assert.equal(
     await page.locator(`tr[data-message-id="existing-1"]`).count(),
     0,
@@ -298,12 +376,10 @@ try {
   await page.getByRole('heading', { name: /编辑定时消息/ }).waitFor({ timeout: 15000 });
   await page.getByPlaceholder('输入消息主题').fill('Existing Topic Edited');
 
-  const editDialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
   await page.getByRole('button', { name: /保存修改/ }).click();
-  const editDialog = await editDialogPromise;
-  assert.match(editDialog.message(), /消息更新成功，已定位到列表/);
-  assert.match(editDialog.message(), /下次执行：2026-05-04 09:15/);
-  await editDialog.accept();
+  await page.locator('[role="status"]', { hasText: '定时消息更新回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('「Existing Topic Edited」已写入 Messages 并定位到列表。').waitFor({ timeout: 15000 });
+  await page.getByText('下次执行: 2026-05-04 09:15').waitFor({ timeout: 15000 });
 
   assert.equal(updatedRows.at(-1).ID, 'existing-1');
   assert.equal(updatedRows.at(-1).Topic, 'Existing Topic Edited');
@@ -319,19 +395,18 @@ try {
   assert.match(confirmDialog.message(), /下次执行: 2026-05-04 09:15/);
   assert.match(confirmDialog.message(), /频率: 推送一次 09:15/);
   assert.match(confirmDialog.message(), /发给: 123456/);
-  const deleteAlertPromise = page.waitForEvent('dialog', { timeout: 15000 });
   await confirmDialog.accept();
   await deleteClickPromise;
-  const deleteAlert = await deleteAlertPromise;
-  assert.match(deleteAlert.message(), /消息已删除，已返回完整列表/);
-  await deleteAlert.accept();
+  await page.locator('[role="status"]', { hasText: '定时消息删除回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('「Existing Topic Edited」已从 Messages 表删除。').waitFor({ timeout: 15000 });
+  await page.getByText('恢复: 已清除 messageId，页面返回完整列表').waitFor({ timeout: 15000 });
 
   assert.equal(deletedRows.length, 1);
   assert.equal(deletedRows[0].ID, 'existing-1');
   await page.waitForFunction(() => !new URL(window.location.href).searchParams.has('messageId'), null, {
     timeout: 15000,
   });
-  assert.equal(await page.getByText('已定位消息').count(), 0);
+  assert.equal(await page.getByText('消息定位回执').count(), 0);
   assert.equal(await page.locator(`tr[data-message-id="existing-1"]`).count(), 0);
   await page.locator(`tr[data-message-id="${createdId}"]`).waitFor({ timeout: 15000 });
 

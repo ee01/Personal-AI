@@ -177,6 +177,7 @@ describe('Recall API', () => {
       payload: {
         query: 'Q2 planning review',
         topK: 5,
+        channels: ['vector', 'fts', 'graph', 'time'],
         timeRange: {
           start: now - 3600,
           end: now + 60,
@@ -201,9 +202,132 @@ describe('Recall API', () => {
     ]);
   });
 
+  it('defaults evidence-only recall to FTS so ambient clients avoid slow channels', async () => {
+    vi.mocked(EmbeddingClient.getInstance).mockClear();
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      2001,
+      'messages/staff-slides',
+      1,
+      1,
+      'RingCentral Staff Slides Update P1 non-production fixed.',
+      'hash-staff-slides',
+      'work',
+      'glip',
+      'glip',
+      'Staff Slides',
+      now,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      2001,
+      'RingCentral Staff Slides Update P1 non-production fixed.',
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'RingCentral Staff Slides Update',
+        topK: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.channels).toEqual(['fts']);
+    expect(body.channelDiagnostics).toEqual([
+      { channel: 'fts', status: 'hit', candidateCount: 1 },
+    ]);
+    expect(body.items.map((item: any) => item.id)).toContain('2001');
+    expect(body.blocks).toBeUndefined();
+    expect(body.analysis).toBeUndefined();
+    expect(EmbeddingClient.getInstance).not.toHaveBeenCalled();
+  });
+
+  it('coerces explicit slow recall channels in route safe mode', async () => {
+    const previousSafeMode = process.env.RECALL_ROUTE_SAFE_MODE_ENABLED;
+    const previousSlowChannels = process.env.RECALL_SLOW_CHANNELS_ENABLED;
+    const previousSafeMaxTopK = process.env.RECALL_SAFE_MAX_TOP_K;
+    process.env.RECALL_ROUTE_SAFE_MODE_ENABLED = 'true';
+    process.env.RECALL_SLOW_CHANNELS_ENABLED = 'false';
+    process.env.RECALL_SAFE_MAX_TOP_K = '3';
+    vi.mocked(EmbeddingClient.getInstance).mockClear();
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      for (let index = 0; index < 6; index += 1) {
+        const chunkId = 3000 + index;
+        db.prepare(
+          `INSERT INTO chunks
+            (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          chunkId,
+          `messages/safe-recall-${index}`,
+          1,
+          1,
+          `Safe recall route should use fts only result ${index}.`,
+          `hash-safe-recall-${index}`,
+          'work',
+          'glip',
+          'glip',
+          'Safe Recall',
+          now,
+        );
+        db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+          chunkId,
+          `Safe recall route should use fts only result ${index}.`,
+        );
+      }
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/recall',
+        payload: {
+          query: 'Safe recall route fts only',
+          topK: 50,
+          channels: ['vector', 'time'],
+          includeMetadata: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.channels).toEqual(['fts']);
+      expect(body.items.length).toBeLessThanOrEqual(3);
+      expect(body.channelDiagnostics).toEqual([
+        { channel: 'fts', status: 'hit', candidateCount: 6 },
+      ]);
+      expect(EmbeddingClient.getInstance).not.toHaveBeenCalled();
+    } finally {
+      if (previousSafeMode === undefined) {
+        delete process.env.RECALL_ROUTE_SAFE_MODE_ENABLED;
+      } else {
+        process.env.RECALL_ROUTE_SAFE_MODE_ENABLED = previousSafeMode;
+      }
+      if (previousSlowChannels === undefined) {
+        delete process.env.RECALL_SLOW_CHANNELS_ENABLED;
+      } else {
+        process.env.RECALL_SLOW_CHANNELS_ENABLED = previousSlowChannels;
+      }
+      if (previousSafeMaxTopK === undefined) {
+        delete process.env.RECALL_SAFE_MAX_TOP_K;
+      } else {
+        process.env.RECALL_SAFE_MAX_TOP_K = previousSafeMaxTopK;
+      }
+    }
+  });
+
   it('skips vector recall when embedding loading exceeds the recall timeout', async () => {
     const previousTimeout = process.env.RECALL_EMBEDDING_TIMEOUT_MS;
+    const previousColdStart =
+      process.env.RECALL_EMBEDDING_COLD_START_ENABLED;
     process.env.RECALL_EMBEDDING_TIMEOUT_MS = '100';
+    process.env.RECALL_EMBEDDING_COLD_START_ENABLED = 'true';
     vi.mocked(EmbeddingClient.getInstance).mockImplementationOnce(
       () => new Promise(() => undefined) as Promise<any>,
     );
@@ -216,6 +340,7 @@ describe('Recall API', () => {
         payload: {
           query: 'Q2 planning review',
           topK: 5,
+          channels: ['vector', 'time'],
           timeRange: {
             start: now - 3600,
             end: now + 60,
@@ -238,6 +363,11 @@ describe('Recall API', () => {
         delete process.env.RECALL_EMBEDDING_TIMEOUT_MS;
       } else {
         process.env.RECALL_EMBEDDING_TIMEOUT_MS = previousTimeout;
+      }
+      if (previousColdStart === undefined) {
+        delete process.env.RECALL_EMBEDDING_COLD_START_ENABLED;
+      } else {
+        process.env.RECALL_EMBEDDING_COLD_START_ENABLED = previousColdStart;
       }
     }
   });

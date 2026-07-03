@@ -107,6 +107,11 @@ try {
       return;
     }
 
+    if (pathname.endsWith('/user-files/reports/weekly-2026-06-03.md')) {
+      await route.fulfill(jsonResponse({ error: 'report not found' }, 404));
+      return;
+    }
+
     await route.fulfill(jsonResponse(apiFallback(requestUrl)));
   });
 
@@ -153,6 +158,42 @@ try {
   assert.ok(
     page.url().includes('#/reports?file=weekly-2026-05-20.md'),
     'selecting another report should preserve report deep-link state',
+  );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/reports?file=weekly-2026-06-03.md`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page
+    .getByText('周报通知目标暂时不可读')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      '通知指向的周报文件 reports/weekly-2026-06-03.md 暂时无法读取；已先展示最近可用周报。',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      '不会重新生成周报、写入通知中心、发送 Bot/Chrome/Doubao，或改变通知处理状态。',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.report-reader')
+    .getByText('reports/weekly-2026-05-27.md')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('Launch weekly summary: rollout is on track.')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await page
+      .locator('.report-list-item', { hasText: 'weekly 2026 06 03' })
+      .count(),
+    0,
+    'missing notification target should not be inserted as a synthetic report',
+  );
+  assert.ok(
+    page.url().includes('#/reports?file=weekly-2026-06-03.md'),
+    'missing report notification target should remain visible in the route',
   );
 
   console.log('verify-weekly-report-notification-e2e: ok');

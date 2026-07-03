@@ -390,6 +390,186 @@ try {
   );
 
   await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'web_speech',
+          badge: 'On-Device',
+          mode: 'auto',
+          lastTransitionAt: Date.now() - 3000,
+          lastTransitionReason: 'ASR tier web_speech activated',
+          lastStatusDetail:
+            'Chrome On-Device waiting for first transcript; fallback watchdog 12s. Chrome may not be consuming the extension/offscreen custom audio track.',
+          probeTrail: [
+            {
+              tier: 'web_speech',
+              state: 'selected',
+              ts: Date.now() - 3200,
+            },
+          ],
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.locator('.panel-tab', { hasText: '发言' }).click();
+  await panelPage
+    .locator('.speech-asr-receipt', { hasText: 'ASR 链路回执' })
+    .waitFor({ timeout: 15000 });
+  const webSpeechReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    webSpeechReceiptText,
+    /本机 Web Speech · 等待首条转写（12s 无文本将 fallback）/,
+    `Web Speech 回执未展示首条转写 watchdog: ${webSpeechReceiptText}`,
+  );
+  assert.match(
+    webSpeechReceiptText,
+    /探测路径[\s\S]*本机 Web Speech 已选中/,
+    `Web Speech 回执未展示本轮 ASR 探测路径: ${webSpeechReceiptText}`,
+  );
+  assert.match(
+    webSpeechReceiptText,
+    /不要把空 transcript 当成会议无人发言/,
+    `Web Speech 回执未说明空 transcript 边界: ${webSpeechReceiptText}`,
+  );
+  assert.match(
+    webSpeechReceiptText,
+    /实时状态[\s\S]*正在等浏览器给出第一条 live transcript/,
+    `Web Speech 回执未把首条 live transcript 等待态放入实时状态: ${webSpeechReceiptText}`,
+  );
+  assert.match(
+    webSpeechReceiptText,
+    /Desktop App \/ Cloud ASR/,
+    `Web Speech 回执未给出替代恢复路径: ${webSpeechReceiptText}`,
+  );
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'desktop_whisper',
+          badge: 'Local ASR',
+          mode: 'local-only',
+          lastTransitionAt: Date.now() - 3000,
+          lastTransitionReason: 'Local ASR · no live → Whisper',
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(500);
+  const localFinalOnlyEmptyStatusText = await panelPage
+    .locator('.speech-status-card')
+    .innerText();
+  assert.match(
+    localFinalOnlyEmptyStatusText,
+    /等待 final transcript · 当前无 live preview/,
+    `Local ASR 空转写状态摘要未区分 final-only 等待态: ${localFinalOnlyEmptyStatusText}`,
+  );
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: null,
+          badge: 'No ASR',
+          mode: 'local-only',
+          lastTransitionAt: Date.now() - 2500,
+          lastTransitionReason:
+            'All ASR tiers unavailable (desktop_whisper: asr_model_downloading 42% funasr_nano)',
+          probeTrail: [
+            {
+              tier: 'desktop_whisper',
+              state: 'unavailable',
+              reason: 'asr_model_downloading 42% funasr_nano',
+              ts: Date.now() - 2500,
+            },
+          ],
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(500);
+  const localSetupReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    localSetupReceiptText,
+    /本地准备[\s\S]*本机 ASR 模型下载中（42%） · funasr nano/,
+    `Local ASR 准备回执未展示模型下载进度: ${localSetupReceiptText}`,
+  );
+  assert.match(
+    localSetupReceiptText,
+    /恢复动作[\s\S]*保持 Personal AI Desktop App 开启并等待模型下载完成/,
+    `Local ASR 准备回执未展示具体恢复动作: ${localSetupReceiptText}`,
+  );
+  assert.doesNotMatch(
+    localSetupReceiptText,
+    /asr_model_downloading/,
+    `Local ASR 准备回执不应暴露 raw readiness code: ${localSetupReceiptText}`,
+  );
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: null,
+          badge: 'No ASR',
+          mode: 'local-only',
+          lastTransitionAt: Date.now() - 2400,
+          lastTransitionReason:
+            'All ASR tiers unavailable (desktop_whisper: live_ready_final_not_ready missing_model+whisper_binary_missing)',
+          probeTrail: [
+            {
+              tier: 'desktop_whisper',
+              state: 'unavailable',
+              reason:
+                'live_ready_final_not_ready missing_model+whisper_binary_missing',
+              ts: Date.now() - 2400,
+            },
+          ],
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(500);
+  const liveReadyFinalMissingReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    liveReadyFinalMissingReceiptText,
+    /本地准备[\s\S]*本地实时引擎已就绪/,
+    `Local ASR 准备回执未区分 live-ready/final-not-ready: ${liveReadyFinalMissingReceiptText}`,
+  );
+  assert.match(
+    liveReadyFinalMissingReceiptText,
+    /Local ASR session 仍需要 FunASR 或 Whisper fallback/,
+    `Local ASR 准备回执未说明 session 仍依赖 final 兜底: ${liveReadyFinalMissingReceiptText}`,
+  );
+  assert.match(
+    liveReadyFinalMissingReceiptText,
+    /local-only 不会调用云端/,
+    `Local ASR 准备回执未说明 local-only 上传边界: ${liveReadyFinalMissingReceiptText}`,
+  );
+  assert.doesNotMatch(
+    liveReadyFinalMissingReceiptText,
+    /live_ready_final_not_ready/,
+    `Local ASR 准备回执不应暴露 raw live-ready code: ${liveReadyFinalMissingReceiptText}`,
+  );
+
+  await panelPage.evaluate(
     async ({ meetingId }) => {
       await chrome.runtime.sendMessage({
         type: 'MEETING_PILOT_TEST_INJECT_CAPTURE_CHUNK',
@@ -400,24 +580,28 @@ try {
   );
 
   log('注入 transcript update，验证真实结构化链路');
+  const staleTranscriptBaseTs = Date.now() - 155000;
   const transcriptChunks = [
     {
       id: 'scene2-t1',
       speaker: 'Alex Chen',
       text: '今天先讨论 Q2 预算，然后看技术评审 owner。',
-      ts: Date.now() - 30000,
+      ts: staleTranscriptBaseTs - 20000,
+      source: 'cloud',
     },
     {
       id: 'scene2-t2',
       speaker: 'Sarah Wang',
       text: 'Sprint 8 排期已拉通，QA 资源需要我来跟进。',
-      ts: Date.now() - 20000,
+      ts: staleTranscriptBaseTs - 10000,
+      source: 'cloud',
     },
     {
       id: 'scene2-t3',
       speaker: 'Alex Chen',
       text: '决定由 Esone 负责 Meeting Pilot 技术评审，DDL 下周三。',
-      ts: Date.now() - 10000,
+      ts: staleTranscriptBaseTs,
+      source: 'cloud',
     },
   ];
 
@@ -433,6 +617,222 @@ try {
       { tabId: meetingTabId, transcriptChunk },
     );
   }
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'cloud',
+          badge: 'Cloud',
+          mode: 'auto',
+          lastTransitionAt: Date.now() - 9000,
+          lastTransitionReason:
+            'Local ASR start failed: desktop_app_not_running. ASR fallback activated: cloud',
+          lastStatusDetail:
+            'Cloud ASR · POST /v1/chat/completions + input_audio · OpenAI Chat Completions + input_audio · model qwen3-asr-flash · language auto · segment 5s',
+          probeTrail: [
+            {
+              tier: 'desktop_whisper',
+              state: 'start_failed',
+              reason: 'desktop_app_not_running',
+              ts: Date.now() - 9500,
+            },
+            {
+              tier: 'cloud',
+              state: 'selected',
+              ts: Date.now() - 9000,
+            },
+          ],
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+
+  await panelPage.locator('.panel-tab', { hasText: '发言' }).click();
+  await panelPage
+    .locator('.speech-asr-receipt', { hasText: 'ASR 链路回执' })
+    .waitFor({ timeout: 15000 });
+  const asrReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    asrReceiptText,
+    /自动 · 本地优先/,
+    `ASR 回执未展示当前转写模式: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /云端 ASR/,
+    `ASR 回执未展示当前云端层级: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /探测路径[\s\S]*本地 ASR \/ Whisper 启动失败：Personal AI Desktop App 未连接[\s\S]*云端 ASR 已选中/,
+    `ASR 回执未展示云端 fallback 前的探测路径: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /本地准备[\s\S]*Personal AI Desktop App 未连接/,
+    `ASR 回执未展示本地 ASR 准备失败原因: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /每段约 5s 音频会转成 WAV 后以内联 input_audio 发送/,
+    `ASR 回执未展示云端 input_audio 上传边界: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /单片超过 7\.5MB 会拒绝/,
+    `ASR 回执未展示 chat audio 大小边界: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /POST \/v1\/chat\/completions \+ input_audio/,
+    `ASR 回执未展示云端 endpoint: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /模型 qwen3-asr-flash · 语言 auto/,
+    `ASR 回执未展示云端模型与语言: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /云端 ASR · 3 条/,
+    `ASR 回执未使用最近 transcript source 兜底展示结果来源: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /新鲜度[\s\S]*云端 ASR 仍标记为运行/,
+    `ASR 回执未展示 active tier 的转写新鲜度: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /旧转写不代表当前仍在收到音频/,
+    `ASR 回执未说明旧 transcript 的当前性边界: ${asrReceiptText}`,
+  );
+  assert.match(
+    asrReceiptText,
+    /请检查会议是否静音、语言设置、Desktop App 或云端网络/,
+    `ASR 回执未提供 stale transcript 恢复方向: ${asrReceiptText}`,
+  );
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+        tabId,
+        transcriptChunk: {
+          id: 'scene2-local-final',
+          speaker: 'Esone Qiu',
+          text: '本地 final fallback 已生成最后一句转写。',
+          ts: Date.now() - 2000,
+          source: 'desktop_whisper',
+        },
+      });
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'desktop_whisper',
+          badge: 'Local ASR',
+          mode: 'local-only',
+          lastTransitionAt: Date.now() - 3000,
+          lastTransitionReason: 'Local ASR · no live → Whisper',
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(1000);
+  const localAsrReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    localAsrReceiptText,
+    /本地 ASR · 无实时预览 → Whisper final/,
+    `Local ASR 回执未翻译 final-only 链路: ${localAsrReceiptText}`,
+  );
+  assert.match(
+    localAsrReceiptText,
+    /当前只有 final transcript/,
+    `Local ASR 回执未说明 final-only 延迟边界: ${localAsrReceiptText}`,
+  );
+  assert.match(
+    localAsrReceiptText,
+    /实时状态[\s\S]*当前没有 live partial preview/,
+    `Local ASR 回执未把 final-only live preview 边界放入实时状态: ${localAsrReceiptText}`,
+  );
+  assert.match(
+    localAsrReceiptText,
+    /音频片段只发给本机 Desktop App/,
+    `Local ASR 回执未展示本机上传边界: ${localAsrReceiptText}`,
+  );
+  assert.match(
+    localAsrReceiptText,
+    /仅本地/,
+    `Local ASR 回执未展示 local-only 模式: ${localAsrReceiptText}`,
+  );
+  assert.doesNotMatch(
+    localAsrReceiptText,
+    /no live/,
+    `Local ASR 回执不应暴露 raw engine 状态: ${localAsrReceiptText}`,
+  );
+
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'desktop_whisper',
+          badge: 'Local ASR',
+          mode: 'auto',
+          lastTransitionAt: Date.now() - 2000,
+          lastTransitionReason: 'ASR tier desktop_whisper activated',
+          lastStatusDetail:
+            'Local ASR stream warning (2/3): desktop ASR stream lost',
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(1000);
+  const localWarningReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    localWarningReceiptText,
+    /本地 ASR · 流暂不稳定（2\/3）/,
+    `Local ASR warning 回执未展示重试计数: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /实时 partial preview 可能短暂停住/,
+    `Local ASR warning 回执未说明实时预览暂停边界: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /实时状态[\s\S]*本地 live partial preview 正在重试/,
+    `Local ASR warning 回执未把 live retry 状态放到实时状态: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /已收到的 final \/ 历史 transcript 会保留/,
+    `Local ASR warning 回执未说明已有转写保留: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /当前音频仍只发给本机 Desktop App/,
+    `Local ASR warning 回执未说明本机上传边界: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /继续失败才会按当前模式切到下一层/,
+    `Local ASR warning 回执未说明切层条件: ${localWarningReceiptText}`,
+  );
 
   await panelPage.locator('.panel-tab', { hasText: '时间线' }).click();
   await panelPage.waitForFunction(

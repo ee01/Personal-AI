@@ -43,7 +43,7 @@ const MIN_REQUEST_TIMEOUT_MS = 1000;
 const RETRY_COUNT = 1;
 const RETRY_DELAY_MS = 1000;
 
-const OPENAI_BASE_URL = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ export class LLMClient {
     const attempt = async (): Promise<LLMResponse> => {
       switch (provider) {
         case 'openai':
-          return this.callOpenAICompatible(OPENAI_BASE_URL, this.config.openaiApiKey, this.config.openaiModel, prompt, options);
+          return this.callOpenAICompatible(this.getOpenAIChatCompletionsUrl(), this.config.openaiApiKey, this.config.openaiModel, prompt, options);
         case 'groq':
           return this.callOpenAICompatible(GROQ_BASE_URL, this.config.groqApiKey, this.config.openaiModel, prompt, options);
         case 'ollama':
@@ -97,7 +97,7 @@ export class LLMClient {
     switch (provider) {
       case 'openai':
         return this.callOpenAICompatibleStream(
-          OPENAI_BASE_URL,
+          this.getOpenAIChatCompletionsUrl(),
           this.config.openaiApiKey,
           this.config.openaiModel,
           prompt,
@@ -132,6 +132,26 @@ export class LLMClient {
   }
 
   // ---- Provider implementations -------------------------------------------
+
+  private getOpenAIChatCompletionsUrl(): string {
+    return this.normalizeOpenAICompatibleChatUrl(
+      this.config.openaiApiBaseUrl || OPENAI_BASE_URL,
+    );
+  }
+
+  private normalizeOpenAICompatibleChatUrl(baseUrl: string): string {
+    const trimmed = baseUrl.trim().replace(/\/+$/, '');
+    if (!trimmed) {
+      return `${OPENAI_BASE_URL}/chat/completions`;
+    }
+    if (trimmed.endsWith('/chat/completions')) {
+      return trimmed;
+    }
+    if (trimmed.endsWith('/v1')) {
+      return `${trimmed}/chat/completions`;
+    }
+    return `${trimmed}/v1/chat/completions`;
+  }
 
   /**
    * Call an OpenAI-compatible chat completions endpoint (OpenAI / Groq).

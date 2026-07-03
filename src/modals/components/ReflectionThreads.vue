@@ -35,6 +35,41 @@
       </button>
     </div>
 
+    <section class="list-scope-box" :class="listScopeReceipt.tone">
+      <div class="list-scope-main">
+        <div class="list-scope-title">列表查看范围</div>
+        <h3>{{ listScopeReceipt.title }}</h3>
+        <p>{{ listScopeReceipt.summary }}</p>
+      </div>
+      <div class="list-scope-grid">
+        <div>
+          <span>状态筛选</span>
+          <strong>{{ listScopeReceipt.statusLine }}</strong>
+        </div>
+        <div>
+          <span>搜索范围</span>
+          <strong>{{ listScopeReceipt.searchLine }}</strong>
+        </div>
+        <div>
+          <span>当前快照</span>
+          <strong>{{ listScopeReceipt.countLine }}</strong>
+        </div>
+        <div>
+          <span>边界</span>
+          <strong>{{ listScopeReceipt.boundary }}</strong>
+        </div>
+      </div>
+      <div class="list-scope-chips">
+        <span
+          v-for="chip in listScopeReceipt.chips"
+          :key="chip"
+          class="list-scope-chip"
+        >
+          {{ chip }}
+        </span>
+      </div>
+    </section>
+
     <div v-if="loadError" class="load-error">
       <div>
         <div class="load-error-title">自我反思线程暂时不可用</div>
@@ -46,7 +81,16 @@
       <button class="load-error-retry" @click="loadThreads">重试</button>
     </div>
 
-    <div v-if="loading" class="loading-container">
+    <div v-if="loading && threads.length > 0" class="refreshing-snapshot">
+      <div>
+        <strong>刷新中 · 保留上次成功快照</strong>
+        <span>
+          下方线程仍是上次读取结果；刷新完成前不会运行反思、写记忆或改变线程状态。
+        </span>
+      </div>
+    </div>
+
+    <div v-if="loading && threads.length === 0" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载自我反思线程中...</p>
     </div>
@@ -72,6 +116,20 @@
         <h3 class="thread-title">{{ displayThreadTitle(thread.title) }}</h3>
         <p class="thread-summary">{{ thread.latestSummary || '暂无总结，等待首次反思运行。' }}</p>
 
+        <div class="thread-handoff" :class="threadReceipt(thread).tone">
+          <div class="thread-handoff-title">{{ threadReceipt(thread).title }}</div>
+          <p>{{ threadReceipt(thread).summary }}</p>
+          <div class="thread-handoff-chips">
+            <span
+              v-for="chip in threadReceipt(thread).chips.slice(0, 4)"
+              :key="chip"
+              class="handoff-chip"
+            >
+              {{ chip }}
+            </span>
+          </div>
+        </div>
+
         <div class="thread-meta">
           <span>问题 {{ thread.openQuestions.length }}</span>
           <span>运行 {{ thread.reflectionCount }}</span>
@@ -94,12 +152,14 @@ import {
   getMemoryServiceClient,
   type ReflectionThread,
 } from '../../services/MemoryServiceClient';
+import { buildReflectionHandoffReceipt } from '../reflectionThreadPresentation';
 
 const route = useRoute();
 const router = useRouter();
 const client = getMemoryServiceClient();
 const loading = ref(true);
 const threads = ref<ReflectionThread[]>([]);
+const totalThreads = ref(0);
 const loadError = ref('');
 const statusFilter = ref<'active' | 'paused' | 'closed' | 'all'>('active');
 const searchText = ref('');
@@ -111,12 +171,60 @@ const handoffSearch = computed(() =>
 const handoffSourceLabel = computed(() =>
   handoffSource.value === 'dream' ? '来自梦境重放' : '来自外部入口',
 );
+const threadReceipts = computed(() =>
+  new Map(
+    threads.value.map((thread) => [
+      thread.id,
+      buildReflectionHandoffReceipt({ thread }),
+    ]),
+  ),
+);
 const emptyMessage = computed(() => {
   const query = searchText.value.trim();
   if (handoffSource.value === 'dream' && query) {
     return `没有找到与“${query}”对应的自我反思线程；可清除筛选后查看全部线程。`;
   }
   return '当前没有符合条件的自我反思线程';
+});
+const listScopeReceipt = computed(() => {
+  const query = searchText.value.trim();
+  const fromDream = handoffSource.value === 'dream' && query.length > 0;
+  const staleSnapshot = Boolean(loadError.value && threads.value.length > 0);
+  const visible = threads.value.length;
+  const total = totalThreads.value || visible;
+  const status = statusLabel(statusFilter.value);
+
+  return {
+    tone: staleSnapshot ? 'attention' : fromDream || query ? 'handoff' : 'ready',
+    title: staleSnapshot
+      ? '保留上次成功快照'
+      : fromDream
+        ? '梦境复核筛选中的反思快照'
+        : query
+          ? '筛选后的反思快照'
+          : '当前反思快照',
+    summary: staleSnapshot
+      ? '本次刷新没有拿到新的 Reflection 列表；下方仍是上次成功读取的线程快照。'
+      : fromDream
+        ? `当前只在自我反思线程内查找“${query}”，用于承接梦境重放复核。`
+        : query
+          ? `当前只按标题或 topic key 查找“${query}”，不会搜索全部原始记忆。`
+          : '当前列表只读取 Reflection thread 索引，用来查看长期复盘主题。',
+    statusLine: `${statusFilter.value === 'all' ? '全部状态' : status}`,
+    searchLine: query
+      ? `${fromDream ? '梦境 handoff' : '本页搜索'}: ${query}`
+      : '未输入搜索词',
+    countLine: `可见 ${visible} / 总计 ${total}`,
+    boundary:
+      '筛选、搜索和刷新只读列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作。',
+    chips: [
+      staleSnapshot ? '上次成功快照' : '最新读取快照',
+      statusFilter.value === 'all' ? '全部状态' : `状态 ${status}`,
+      query ? '标题/topic key' : '无搜索词',
+      fromDream ? '梦境复核' : '',
+      `可见 ${visible}`,
+    ].filter((chip): chip is string => Boolean(chip)),
+  };
 });
 
 onMounted(() => {
@@ -163,6 +271,7 @@ async function loadThreads() {
       limit: 50,
     });
     threads.value = response.items;
+    totalThreads.value = response.total;
     loadError.value = '';
   } catch (error) {
     console.error('Failed to load reflection threads:', error);
@@ -187,6 +296,13 @@ function statusLabel(status: string) {
 
 function displayThreadTitle(title: string) {
   return title.replace(/^思考反思:/, '自我反思:');
+}
+
+function threadReceipt(thread: ReflectionThread) {
+  return (
+    threadReceipts.value.get(thread.id) ??
+    buildReflectionHandoffReceipt({ thread })
+  );
 }
 
 function errorMessage(error: unknown) {
@@ -271,6 +387,92 @@ function relativeTime(ts?: number) {
   color: #ccfbf1;
 }
 
+.list-scope-box {
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-left: 3px solid rgba(45, 212, 191, 0.7);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.66);
+  color: #cbd5e1;
+  padding: 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.list-scope-box.handoff {
+  border-color: rgba(45, 212, 191, 0.24);
+  border-left-color: rgba(20, 184, 166, 0.86);
+}
+
+.list-scope-box.attention {
+  border-color: rgba(248, 113, 113, 0.28);
+  border-left-color: rgba(248, 113, 113, 0.82);
+}
+
+.list-scope-title {
+  color: #99f6e4;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.list-scope-box h3 {
+  color: #e2e8f0;
+  font-size: 0.96rem;
+  margin: 0 0 0.3rem;
+}
+
+.list-scope-box p {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.list-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.list-scope-grid div {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.5);
+  padding: 0.62rem;
+  min-width: 0;
+}
+
+.list-scope-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 0.72rem;
+  margin-bottom: 0.26rem;
+}
+
+.list-scope-grid strong {
+  display: block;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.list-scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.72rem;
+}
+
+.list-scope-chip {
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.82);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.48rem;
+}
+
 .load-error {
   display: flex;
   align-items: center;
@@ -282,6 +484,29 @@ function relativeTime(ts?: number) {
   color: #fecaca;
   padding: 0.85rem 0.95rem;
   margin-bottom: 1rem;
+}
+
+.refreshing-snapshot {
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-left: 3px solid rgba(56, 189, 248, 0.78);
+  border-radius: 8px;
+  background: rgba(8, 47, 73, 0.36);
+  color: #cbd5e1;
+  padding: 0.78rem 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.refreshing-snapshot strong {
+  display: block;
+  color: #bae6fd;
+  font-size: 0.84rem;
+  margin-bottom: 0.25rem;
+}
+
+.refreshing-snapshot span {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .load-error-title {
@@ -386,8 +611,62 @@ function relativeTime(ts?: number) {
   color: #cbd5e1;
   font-size: 0.88rem;
   line-height: 1.55;
-  min-height: 4.2rem;
   margin-bottom: 0.8rem;
+}
+
+.thread-handoff {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 3px solid rgba(56, 189, 248, 0.55);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.thread-handoff.waiting {
+  border-left-color: rgba(251, 191, 36, 0.78);
+}
+
+.thread-handoff.attention {
+  border-left-color: rgba(248, 113, 113, 0.82);
+}
+
+.thread-handoff.paused {
+  border-left-color: rgba(167, 139, 250, 0.76);
+}
+
+.thread-handoff.closed {
+  border-left-color: rgba(148, 163, 184, 0.66);
+}
+
+.thread-handoff-title {
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 0.32rem;
+}
+
+.thread-handoff p {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.thread-handoff-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  margin-top: 0.55rem;
+}
+
+.handoff-chip {
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.82);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.48rem;
 }
 
 .thread-meta,
@@ -475,9 +754,19 @@ function relativeTime(ts?: number) {
     flex-direction: column;
   }
 
+  .list-scope-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .search-input {
     min-width: 0;
     width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .list-scope-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

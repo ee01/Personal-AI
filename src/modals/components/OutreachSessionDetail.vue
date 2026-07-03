@@ -1,7 +1,7 @@
 <template>
   <div class="outreach-detail-page">
     <div class="page-head">
-      <button class="back-btn" @click="router.push('/outreach')">
+      <button class="back-btn" @click="goBackToList">
         ← 返回主动询问列表
       </button>
       <div class="action-bar">
@@ -114,6 +114,59 @@
             >打开原消息</a
           >
         </div>
+
+        <div
+          class="operation-scope-receipt"
+          :class="sessionOperationReceipt(detail).tone"
+          role="status"
+          aria-label="主动询问本次操作范围"
+        >
+          <div class="operation-scope-title">
+            {{ sessionOperationReceipt(detail).title }}
+          </div>
+          <ul>
+            <li
+              v-for="item in sessionOperationReceipt(detail).items"
+              :key="item"
+            >
+              {{ item }}
+            </li>
+          </ul>
+        </div>
+
+        <div
+          v-if="preDispatchReviewReceipt"
+          class="pre-dispatch-review-receipt"
+          :class="preDispatchReviewReceipt.tone"
+          role="status"
+          aria-label="主动询问发送前复核"
+        >
+          <div class="pre-dispatch-review-title">
+            {{ preDispatchReviewReceipt.title }}
+          </div>
+          <ul>
+            <li v-for="item in preDispatchReviewReceipt.items" :key="item">
+              {{ item }}
+            </li>
+          </ul>
+        </div>
+
+        <div
+          v-if="operationResult"
+          class="operation-result-receipt"
+          :class="operationResult.tone"
+          role="status"
+          aria-label="主动询问操作回执"
+        >
+          <div class="operation-result-title">
+            {{ operationResult.title }}
+          </div>
+          <ul>
+            <li v-for="item in operationResult.items" :key="item">
+              {{ item }}
+            </li>
+          </ul>
+        </div>
       </section>
 
       <section v-if="detail && canEdit(detail.status)" class="panel">
@@ -122,6 +175,23 @@
           <span class="muted small"
             >待审批或已排程时可修改目标、问题和计划发送时间。</span
           >
+        </div>
+
+        <div
+          v-if="editing"
+          class="draft-boundary-receipt"
+          :class="draftChangeReceipt.tone"
+          role="status"
+          aria-label="主动询问未保存草稿回执"
+        >
+          <div class="draft-boundary-title">
+            {{ draftChangeReceipt.title }}
+          </div>
+          <ul>
+            <li v-for="item in draftChangeReceipt.items" :key="item">
+              {{ item }}
+            </li>
+          </ul>
         </div>
 
         <div v-if="editing" class="edit-grid">
@@ -457,7 +527,7 @@ import {
   ref,
   watch,
 } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
   type OutreachDirectoryStatus,
@@ -488,6 +558,7 @@ const syncingDirectory = ref(false);
 const searchError = ref('');
 const directoryStatus = ref<OutreachDirectoryStatus[]>([]);
 const detail = ref<OutreachSession | null>(null);
+const operationResult = ref<OperationResultReceipt | null>(null);
 const draft = reactive({
   targetType: 'private',
   targetRef: '',
@@ -505,15 +576,36 @@ const draft = reactive({
   nextCheckAtInput: '',
 });
 
+interface OperationScopeReceipt {
+  title: string;
+  tone: 'queued' | 'waiting' | 'ok' | 'error' | 'muted';
+  items: string[];
+}
+
+interface OperationResultReceipt {
+  title: string;
+  tone: 'ok' | 'queued' | 'error' | 'muted';
+  items: string[];
+}
+
 const events = computed<OutreachEvent[]>(() => {
   const list = detail.value?.events ?? [];
   return [...list].sort(
     (a, b) => normalizeTimestamp(b.createdAt) - normalizeTimestamp(a.createdAt),
   );
 });
+const preDispatchReviewReceipt = computed<OperationScopeReceipt | null>(() =>
+  detail.value ? buildPreDispatchReviewReceipt(detail.value) : null,
+);
+const draftChangedFields = computed(() => buildDraftChangedFields());
+const draftChangeReceipt = computed<OperationResultReceipt>(() =>
+  buildDraftChangeReceipt(),
+);
 
 let targetSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let targetSearchSequence = 0;
+let skipNextUnsavedDraftPrompt = false;
+const PRE_DISPATCH_STALE_MS = 24 * 60 * 60 * 1000;
 
 onMounted(() => {
   void loadDetail();
@@ -526,6 +618,26 @@ onBeforeUnmount(() => {
   }
 });
 
+onBeforeRouteLeave((_to, _from, next) => {
+  if (skipNextUnsavedDraftPrompt) {
+    skipNextUnsavedDraftPrompt = false;
+    next();
+    return;
+  }
+  if (!shouldWarnUnsavedDraft()) {
+    next();
+    return;
+  }
+  const confirmed = window.confirm(
+    '当前主动询问编辑草稿尚未保存，离开会丢弃本页草稿。确认离开？',
+  );
+  if (confirmed) {
+    next();
+    return;
+  }
+  next(false);
+});
+
 watch(
   () => route.params.id,
   () => {
@@ -533,10 +645,15 @@ watch(
   },
 );
 
-async function loadDetail() {
+async function loadDetail(
+  options: { preserveOperationResult?: boolean } = {},
+) {
   const id = route.params.id as string;
   if (!id) return;
   loading.value = true;
+  if (!options.preserveOperationResult) {
+    operationResult.value = null;
+  }
   try {
     const [session, directory] = await Promise.all([
       client.getOutreachSession(id),
@@ -593,10 +710,17 @@ function handleTargetTypeChange() {
 
 async function approveSession() {
   if (!detail.value) return;
+  operationResult.value = null;
   busy.value = true;
   try {
-    await client.approveOutreachSession(detail.value.id);
-    await loadDetail();
+    const response = await client.approveOutreachSession(detail.value.id);
+    await loadDetail({ preserveOperationResult: true });
+    operationResult.value = buildOperationSuccessReceipt(
+      'approve',
+      detail.value || response.session,
+    );
+  } catch (error) {
+    operationResult.value = buildOperationFailureReceipt('批准发送', error);
   } finally {
     busy.value = false;
   }
@@ -605,13 +729,20 @@ async function approveSession() {
 async function cancelSession() {
   if (!detail.value) return;
   if (!window.confirm('确认取消这个主动询问会话吗？')) return;
+  operationResult.value = null;
   busy.value = true;
   try {
-    await client.cancelOutreachSession(
+    const response = await client.cancelOutreachSession(
       detail.value.id,
       'Cancelled from outreach detail UI',
     );
-    await loadDetail();
+    await loadDetail({ preserveOperationResult: true });
+    operationResult.value = buildOperationSuccessReceipt(
+      'cancel',
+      detail.value || response.session,
+    );
+  } catch (error) {
+    operationResult.value = buildOperationFailureReceipt('取消主动询问', error);
   } finally {
     busy.value = false;
   }
@@ -619,10 +750,17 @@ async function cancelSession() {
 
 async function retrySession() {
   if (!detail.value) return;
+  operationResult.value = null;
   busy.value = true;
   try {
-    await client.retryOutreachSession(detail.value.id);
-    await loadDetail();
+    const response = await client.retryOutreachSession(detail.value.id);
+    await loadDetail({ preserveOperationResult: true });
+    operationResult.value = buildOperationSuccessReceipt(
+      'retry',
+      detail.value || response.session,
+    );
+  } catch (error) {
+    operationResult.value = buildOperationFailureReceipt('重试主动询问', error);
   } finally {
     busy.value = false;
   }
@@ -631,11 +769,12 @@ async function retrySession() {
 async function saveDraft() {
   if (!detail.value) return;
   if (!draft.targetRef.trim()) {
-    window.alert('请先填写目标对象。');
+    operationResult.value = buildOperationValidationReceipt('请先填写目标对象。');
     return;
   }
   if (!draft.renderedQuestion.trim()) {
-    window.alert('请先填写要发送的问题。');
+    operationResult.value =
+      buildOperationValidationReceipt('请先填写要发送的问题。');
     return;
   }
   const normalizedTargetRef = draft.targetRef.trim().toLowerCase();
@@ -645,19 +784,22 @@ async function saveDraft() {
       normalizedTargetRef === 'me' ||
       normalizedTargetRef === 'self')
   ) {
-    window.alert('主动询问只用于对外询问，不应把当前用户作为目标。');
+    operationResult.value = buildOperationValidationReceipt(
+      '主动询问只用于对外询问，不应把当前用户作为目标。',
+    );
     return;
   }
   if (draft.targetResolutionStatus !== 'resolved') {
-    window.alert(
+    operationResult.value = buildOperationValidationReceipt(
       '请先通过 RingCentral 检索并确认目标，确认后才能保存可审批的主动询问。',
     );
     return;
   }
 
+  operationResult.value = null;
   busy.value = true;
   try {
-    await client.updateOutreachSessionDraft(detail.value.id, {
+    const response = await client.updateOutreachSessionDraft(detail.value.id, {
       targetType: draft.targetType,
       targetRef: draft.targetRef.trim(),
       targetResolutionStatus: draft.targetResolutionStatus,
@@ -671,10 +813,14 @@ async function saveDraft() {
       nextCheckAt: parseDateTimeLocal(draft.nextCheckAtInput),
     });
     editing.value = false;
-    await loadDetail();
+    await loadDetail({ preserveOperationResult: true });
+    operationResult.value = buildOperationSuccessReceipt(
+      'save',
+      detail.value || response.session,
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    window.alert(message || '保存主动询问调整失败。');
+    operationResult.value =
+      buildOperationFailureReceipt('保存主动询问调整', error);
   } finally {
     busy.value = false;
   }
@@ -684,13 +830,17 @@ function startEdit() {
   resetDraft(detail.value);
   searchError.value = '';
   editing.value = true;
-  scheduleTargetSearch(80);
+  if (detail.value?.targetResolutionStatus !== 'resolved') {
+    scheduleTargetSearch(80);
+  }
 }
 
 function cancelEdit() {
+  const hadChanges = draftChangedFields.value.length > 0;
   resetDraft(detail.value);
   searchError.value = '';
   editing.value = false;
+  operationResult.value = buildDiscardDraftReceipt(hadChanges);
 }
 
 function canRetry(status: OutreachSessionStatus) {
@@ -762,6 +912,102 @@ function resetDraft(session: OutreachSession | null) {
   draft.renderedQuestion = session?.renderedQuestion || '';
   draft.renderedContext = session?.renderedContext || '';
   draft.nextCheckAtInput = toDateTimeLocal(session?.nextCheckAt);
+}
+
+function goBackToList() {
+  if (shouldWarnUnsavedDraft()) {
+    const confirmed = window.confirm(
+      '当前主动询问编辑草稿尚未保存，返回列表会丢弃本页草稿。确认返回？',
+    );
+    if (!confirmed) return;
+    skipNextUnsavedDraftPrompt = true;
+  }
+  void router.push('/outreach');
+}
+
+function shouldWarnUnsavedDraft() {
+  return editing.value && draftChangedFields.value.length > 0;
+}
+
+function normalizeDraftValue(value: string | null | undefined) {
+  return (value ?? '').trim();
+}
+
+function buildDraftChangedFields() {
+  const session = detail.value;
+  if (!editing.value || !session) return [];
+
+  const fields: string[] = [];
+  const targetChanged =
+    draft.targetType !==
+      (session.targetType === 'group' ? 'group' : 'private') ||
+    normalizeDraftValue(draft.targetRef) !==
+      normalizeDraftValue(session.targetRef) ||
+    draft.targetResolutionStatus !==
+      (session.targetResolutionStatus || 'unresolved') ||
+    normalizeDraftValue(draft.targetResolvedType) !==
+      normalizeDraftValue(session.targetResolvedType) ||
+    normalizeDraftValue(draft.targetResolvedId) !==
+      normalizeDraftValue(session.targetResolvedId) ||
+    normalizeDraftValue(draft.targetResolvedLabel) !==
+      normalizeDraftValue(session.targetResolvedLabel) ||
+    normalizeDraftValue(draft.targetResolvedChatId) !==
+      normalizeDraftValue(session.targetResolvedChatId);
+  if (targetChanged) fields.push('目标对象');
+  if (
+    normalizeDraftValue(draft.renderedQuestion) !==
+    normalizeDraftValue(session.renderedQuestion)
+  ) {
+    fields.push('问题');
+  }
+  if (
+    normalizeDraftValue(draft.renderedContext) !==
+    normalizeDraftValue(session.renderedContext)
+  ) {
+    fields.push('信息目标 / 完成标准');
+  }
+  if (draft.nextCheckAtInput !== toDateTimeLocal(session.nextCheckAt)) {
+    fields.push('计划发送时间');
+  }
+  return fields;
+}
+
+function buildDraftChangeReceipt(): OperationResultReceipt {
+  const fields = draftChangedFields.value;
+  if (fields.length === 0) {
+    return {
+      title: '未保存草稿回执',
+      tone: 'muted',
+      items: [
+        '当前只是打开本页编辑草稿；保存调整前不会写入 Memory Service、审批、发送、追问或写回 RingCentral。',
+        '暂无未保存字段；你可以继续修改、保存调整或取消编辑。',
+      ],
+    };
+  }
+  return {
+    title: '未保存草稿回执',
+    tone: 'queued',
+    items: [
+      `未保存字段：${fields.join('、')}。`,
+      '保存调整后才会更新 Memory Service 会话草稿；批准、发送和追问仍按当前状态另行推进。',
+      '取消编辑、返回列表或离开页面会丢弃这些本页草稿，不会把草稿写入队列。',
+    ],
+  };
+}
+
+function buildDiscardDraftReceipt(hadChanges: boolean): OperationResultReceipt {
+  return {
+    title: hadChanges
+      ? '操作回执：未保存草稿已丢弃'
+      : '操作回执：已退出编辑',
+    tone: 'muted',
+    items: [
+      hadChanges
+        ? '已恢复为 Memory Service 上次确认的会话内容。'
+        : '本页没有检测到未保存字段。',
+      '没有保存目标、问题、完成标准或计划时间，也没有批准、发送、追问或写回 RingCentral。',
+    ],
+  };
 }
 
 async function searchTargets(manual = true) {
@@ -1068,6 +1314,297 @@ function nextTimeLabel(status: OutreachSessionStatus) {
   return '下次检查';
 }
 
+function receiptTargetLabel(session: OutreachSession) {
+  const resolved =
+    session.targetResolvedLabel?.trim() ||
+    session.targetResolvedChatId?.trim() ||
+    session.targetResolvedId?.trim();
+  const fallback = session.targetRef?.trim() || '未确认目标';
+  return `${targetTypeLabel(session.targetType)}「${resolved || fallback}」`;
+}
+
+function buildOperationSuccessReceipt(
+  action: 'approve' | 'cancel' | 'retry' | 'save',
+  session: OutreachSession | null | undefined,
+): OperationResultReceipt {
+  const statusText = session ? statusLabel(session.status) : '未知状态';
+  const targetText = session ? receiptTargetLabel(session) : '未知目标';
+
+  if (action === 'approve') {
+    return {
+      title: '操作回执：批准请求已由 Memory Service 处理',
+      tone:
+        session?.status === 'failed'
+          ? 'error'
+          : session?.status === 'scheduled'
+            ? 'queued'
+            : 'ok',
+      items: [
+        `当前会话状态：${statusText}；目标：${targetText}。`,
+        '这表示审批状态已刷新；是否已经发出仍以 dispatched 事件、sentPostId 和等待回复状态为准。',
+        '这次回执不代表对方已回复、不写用户画像、不确认决策，也不向其它外部系统同步。',
+      ],
+    };
+  }
+
+  if (action === 'retry') {
+    return {
+      title: '操作回执：重试请求已记录',
+      tone: session?.status === 'pending_approval' ? 'queued' : 'ok',
+      items: [
+        `当前会话状态：${statusText}；目标：${targetText}。`,
+        '重试会保留旧终态和 retried 审计事件；它不证明 RingCentral 已重新发送或外部人员已回复。',
+        '下一轮是否外发仍取决于目标确认、审批状态、计划时间和 Outreach 引擎轮询。',
+      ],
+    };
+  }
+
+  if (action === 'cancel') {
+    return {
+      title: '操作回执：会话已取消',
+      tone: 'muted',
+      items: [
+        `当前会话状态：${statusText}；目标：${targetText}。`,
+        '取消只停止这个 Outreach session 的后续发送、检查和追问。',
+        '它不会撤回已发 RingCentral 消息，不删除来源证据、反思线程、事件记录或定时模板。',
+      ],
+    };
+  }
+
+  return {
+    title: '操作回执：发送前调整已保存',
+    tone: 'queued',
+    items: [
+      `当前会话状态：${statusText}；目标：${targetText}。`,
+      '保存调整只更新目标、问题、完成标准和计划发送时间。',
+      '保存本身不会发送消息、追问、确认答案、写用户画像或同步外部平台。',
+    ],
+  };
+}
+
+function buildOperationFailureReceipt(
+  actionLabel: string,
+  error: unknown,
+): OperationResultReceipt {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = raw.replace(/^MemoryService\s+\d+:\s*/i, '').trim();
+  return {
+    title: `操作失败回执：${actionLabel}未确认`,
+    tone: 'error',
+    items: [
+      message || 'Memory Service 没有返回可用错误信息。',
+      '页面不会把这次点击当成已批准、已发送、已重试、已取消或已保存。',
+      '请先刷新详情或回到列表核对当前队列状态，再决定是否重试。',
+    ],
+  };
+}
+
+function buildOperationValidationReceipt(
+  message: string,
+): OperationResultReceipt {
+  return {
+    title: '操作前检查未通过',
+    tone: 'error',
+    items: [
+      message,
+      '这次检查只在本页拦截输入，没有发送消息、保存调整或修改 Memory Service 队列。',
+    ],
+  };
+}
+
+function sessionOperationReceipt(
+  session: OutreachSession,
+): OperationScopeReceipt {
+  const targetLabel = receiptTargetLabel(session);
+  const nextCheckText = session.nextCheckAt
+    ? relativeTime(session.nextCheckAt)
+    : '引擎下次轮询时';
+  const waitText = session.waitUntil
+    ? relativeTime(session.waitUntil)
+    : '对方给出新回复前';
+
+  if (session.status === 'pending_approval') {
+    return {
+      title: '本次操作范围',
+      tone: canApprove(session) ? 'queued' : 'error',
+      items: [
+        canApprove(session)
+          ? `批准会把问题交给 Outreach 引擎，${nextCheckText}发送到 ${targetLabel}。`
+          : '目标尚未确认，顶部批准按钮不会发起外部消息；先编辑并选择唯一 RingCentral 候选。',
+        '编辑只更新目标、问题、完成标准和计划时间；保存调整不会发送、追问或写回 RingCentral。',
+        '取消只关闭这个 Outreach session，保留事件和来源证据，不删除原始消息、反思线程或定时模板。',
+      ],
+    };
+  }
+
+  if (session.status === 'scheduled') {
+    return {
+      title: '本次操作范围',
+      tone: 'queued',
+      items: [
+        `这条会话已完成审批或无需审批；到达计划时间才会尝试发送到 ${targetLabel}。`,
+        '编辑仍只更新目标、问题、完成标准和计划时间；保存后不会立刻发送。',
+        '取消会停止本会话后续发送和轮询，不撤回已存在的原消息，也不改写模板历史。',
+      ],
+    };
+  }
+
+  if (session.status === 'waiting_reply') {
+    return {
+      title: '本次操作范围',
+      tone: 'waiting',
+      items: [
+        isMessageReactionSession(session)
+          ? '这条跟进先检查原消息线程和目标会话回复；刷新详情不会发送新追问。'
+          : `当前只等待 ${targetLabel} 回复；刷新详情不会重复打扰同一目标。`,
+        `下次检查在 ${nextCheckText}，届时引擎才会判断是否追问、延期或结束；追问上限仍是 ${session.followupCount}/${session.maxFollowup}。`,
+        '取消只停止后续检查和追问，不删除已发 RingCentral 消息、来源证据或已记录事件。',
+      ],
+    };
+  }
+
+  if (session.status === 'deferred') {
+    return {
+      title: '本次操作范围',
+      tone: 'waiting',
+      items: [
+        `当前按对方回复或系统判断延期等待；${waitText} 不会重复追问 ${targetLabel}。`,
+        `下次检查在 ${nextCheckText}，刷新页面只读取 Memory Service 状态。`,
+        '取消只停止后续检查和追问，不确认答案、不写外部系统，也不删除已有回复证据。',
+      ],
+    };
+  }
+
+  if (
+    session.status === 'failed' ||
+    session.status === 'no_reply' ||
+    session.status === 'escalated'
+  ) {
+    const nextStatus = session.requiresApproval ? '待审批' : '已排程';
+    const errorText = session.errorMessage?.trim()
+      ? `旧失败原因仍保留：${session.errorMessage.trim()}。`
+      : '旧终态和事件仍保留在时间线中。';
+    return {
+      title: '本次操作范围',
+      tone: 'error',
+      items: [
+        `重试会把这个终态会话重置为「${nextStatus}」，并写入 retried 审计事件。`,
+        '重试不是确认已发送或已回复；下一轮是否外发仍取决于目标确认、审批状态和引擎轮询。',
+        errorText,
+      ],
+    };
+  }
+
+  if (session.status === 'resolved') {
+    return {
+      title: '本次操作范围',
+      tone: 'ok',
+      items: [
+        '当前只是查看已归档结果；刷新详情不会重新发送、追问或改写原消息。',
+        '结果摘要和结构化证据来自 Memory Service 记录；需要继续查证时应从后续查证动作或新会话进入。',
+        '本页不会把结果自动写入用户画像、确认决策或同步到外部平台。',
+      ],
+    };
+  }
+
+  if (session.status === 'cancelled') {
+    return {
+      title: '本次操作范围',
+      tone: 'muted',
+      items: [
+        '这条主动询问已取消；查看详情不会恢复发送、追问或轮询。',
+        '历史事件和来源证据仍保留供复核，不会删除原始消息或反思线程。',
+        '如需重新询问，应从新的触发来源或可重试终态重新进入。',
+      ],
+    };
+  }
+
+  return {
+    title: '本次操作范围',
+    tone: 'muted',
+    items: [
+      '本页读取当前 Outreach session 状态，不会自动发送、追问、重试或写回 RingCentral。',
+      '可用按钮会按当前状态决定是否需要目标确认、审批或人工恢复。',
+    ],
+  };
+}
+
+function buildPreDispatchReviewReceipt(
+  session: OutreachSession,
+): OperationScopeReceipt | null {
+  if (session.status !== 'pending_approval' && session.status !== 'scheduled') {
+    return null;
+  }
+
+  const snapshot = getOutreachEvidenceSnapshot(session);
+  const hasReply = Boolean(session.replyRawText?.trim());
+  const outcomeSummary = extractOutcomeSummary(session.outcome);
+  const hasExistingAnswer =
+    hasReply || Boolean(outcomeSummary) || snapshot.hasEvidence;
+  const updatedAt = normalizeTimestamp(session.updatedAt || session.createdAt);
+  const ageMs = Date.now() - updatedAt;
+  const stale = ageMs > PRE_DISPATCH_STALE_MS;
+  const targetText = receiptTargetLabel(session);
+  const timing =
+    session.status === 'pending_approval'
+      ? session.nextCheckAt
+        ? `批准后计划在 ${relativeTime(session.nextCheckAt)} 发送。`
+        : '批准后会交给 Outreach 引擎在下一轮轮询中尽快发送。'
+      : session.nextCheckAt
+        ? `当前已排程，计划在 ${relativeTime(session.nextCheckAt)} 发送。`
+        : '当前已排程但缺少下一次检查时间，需刷新详情或回到列表核对。';
+  const items = [
+    canApprove(session)
+      ? `目标已确认：${targetText}。`
+      : '目标尚未确认，不能批准外发；先编辑并选择唯一 RingCentral 候选。',
+    timing,
+    stale
+      ? `这条会话最后更新于 ${relativeTime(updatedAt)}；批准前建议核对问题是否仍然需要外发。`
+      : `这条会话最近更新于 ${relativeTime(updatedAt)}，仍按当前详情复核。`,
+  ];
+
+  if (hasExistingAnswer) {
+    const evidenceLabel =
+      outcomeSummary ||
+      session.replyRawText?.trim() ||
+      snapshot.summary ||
+      '已有结构化证据或回复线索';
+    items.push(
+      `本页已有证据线索：${truncateReviewText(evidenceLabel)}。如果这已经回答问题，优先取消或编辑问题，避免重复打扰。`,
+    );
+  } else {
+    items.push(
+      '本页未看到可直接替代外发的问题答案；仍需以目标、时间和完成标准为准复核。',
+    );
+  }
+
+  if (isMessageReactionSession(session) && messageReactionSourceUrl(session)) {
+    items.push(
+      '这条来自消息跟进；批准前可以先打开原消息确认线程里没有新回复。',
+    );
+  }
+
+  items.push(
+    '复核回执只读取当前详情页快照，不会自动刷新 RingCentral、发送消息、确认答案或写用户画像。',
+  );
+
+  return {
+    title: '发送前复核',
+    tone: !canApprove(session)
+      ? 'error'
+      : stale || hasExistingAnswer
+        ? 'waiting'
+        : 'queued',
+    items,
+  };
+}
+
+function truncateReviewText(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 90) return normalized;
+  return `${normalized.slice(0, 87)}...`;
+}
+
 function replyClassificationLabel(value?: string) {
   if (value === 'answer') return '已答复';
   if (value === 'defer') return '稍后回复';
@@ -1283,6 +1820,81 @@ function followUpActionStatusLabel(action: RuntimeAction) {
   color: #94a3b8;
   font-size: 0.83rem;
   flex-wrap: wrap;
+}
+
+.operation-scope-receipt,
+.operation-result-receipt,
+.draft-boundary-receipt,
+.pre-dispatch-review-receipt {
+  margin-top: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0.85rem;
+  padding: 0.9rem 1rem;
+  background: rgba(30, 41, 59, 0.56);
+  color: #cbd5e1;
+}
+
+.operation-scope-title,
+.operation-result-title,
+.draft-boundary-title,
+.pre-dispatch-review-title {
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 0.55rem;
+}
+
+.operation-scope-receipt ul,
+.operation-result-receipt ul,
+.draft-boundary-receipt ul,
+.pre-dispatch-review-receipt ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.operation-scope-receipt li,
+.operation-result-receipt li,
+.draft-boundary-receipt li,
+.pre-dispatch-review-receipt li {
+  line-height: 1.55;
+}
+
+.operation-scope-receipt.queued,
+.operation-result-receipt.queued,
+.draft-boundary-receipt.queued,
+.pre-dispatch-review-receipt.queued {
+  border-color: rgba(56, 189, 248, 0.26);
+  background: rgba(8, 47, 73, 0.34);
+}
+
+.operation-scope-receipt.waiting,
+.pre-dispatch-review-receipt.waiting {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(69, 26, 3, 0.28);
+}
+
+.operation-scope-receipt.ok,
+.operation-result-receipt.ok,
+.pre-dispatch-review-receipt.ok {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(20, 83, 45, 0.25);
+}
+
+.operation-scope-receipt.error,
+.operation-result-receipt.error,
+.draft-boundary-receipt.error,
+.pre-dispatch-review-receipt.error {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(69, 10, 10, 0.28);
+}
+
+.operation-scope-receipt.muted,
+.operation-result-receipt.muted,
+.draft-boundary-receipt.muted,
+.pre-dispatch-review-receipt.muted {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.5);
 }
 
 .evidence-metrics {

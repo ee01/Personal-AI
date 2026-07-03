@@ -590,6 +590,13 @@ export class DayPilotRepository {
     const visibleCards = cards
       .map((cardRow) => this.rowToCard(cardRow))
       .filter((card) => this.isCardVisible(card, feedbackRows, currentTime));
+    const sourceStats = this.sourceStatsWithVisibleSelectedCounts(
+      safeJsonParse<DayPilotSourceStats>(
+        row.source_stats_json,
+        this.emptySourceStats(),
+      ),
+      visibleCards,
+    );
 
     return {
       id: row.id,
@@ -604,10 +611,7 @@ export class DayPilotRepository {
         row.attention_budget_json,
         { maxInterruptions: 3, usedInterruptions: 0, quietWindows: [] },
       ),
-      sourceStats: safeJsonParse<DayPilotSourceStats>(
-        row.source_stats_json,
-        this.emptySourceStats(),
-      ),
+      sourceStats,
       missions: missions.map((missionRow) => this.rowToMission(missionRow)),
       cards: visibleCards,
       createdAt: row.created_at,
@@ -660,6 +664,96 @@ export class DayPilotRepository {
         .get(ref.sourceId) as { queue_status: string | null } | undefined;
       return OPEN_ACTION_STATUSES.has(row?.queue_status ?? '');
     });
+  }
+
+  private sourceStatsWithVisibleSelectedCounts(
+    sourceStats: DayPilotSourceStats,
+    cards: DayPilotCard[],
+  ): DayPilotSourceStats {
+    const selected = this.countVisibleSelectedSourceRefs(cards);
+    return {
+      messages: {
+        ...sourceStats.messages,
+        selected: selected.messages,
+      },
+      calendar: {
+        ...sourceStats.calendar,
+        selected: selected.calendar,
+      },
+      notifications: {
+        ...sourceStats.notifications,
+        selected: selected.notifications,
+      },
+      actions: {
+        ...sourceStats.actions,
+        selected: selected.actions,
+      },
+      reflections: {
+        ...sourceStats.reflections,
+        selected: selected.reflections,
+      },
+      rehearsals: {
+        ...sourceStats.rehearsals,
+        selected: selected.rehearsals,
+      },
+      skills: {
+        ...sourceStats.skills,
+        selected: selected.skills,
+      },
+      relationships: {
+        ...sourceStats.relationships,
+        selected: selected.relationships,
+      },
+    };
+  }
+
+  private countVisibleSelectedSourceRefs(
+    cards: DayPilotCard[],
+  ): Record<keyof DayPilotSourceStats, number> {
+    const counts: Record<keyof DayPilotSourceStats, number> = {
+      messages: 0,
+      calendar: 0,
+      notifications: 0,
+      actions: 0,
+      reflections: 0,
+      rehearsals: 0,
+      skills: 0,
+      relationships: 0,
+    };
+    const seen = new Set<string>();
+    for (const card of cards) {
+      for (const ref of card.evidenceRefs || []) {
+        const key = `${ref.sourceKind}:${ref.sourceId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        counts[this.sourceStatsBucketForEvidence(ref)] += 1;
+      }
+    }
+    return counts;
+  }
+
+  private sourceStatsBucketForEvidence(
+    ref: DayPilotEvidenceRef,
+  ): keyof DayPilotSourceStats {
+    switch (ref.sourceKind) {
+      case 'calendar':
+        return 'calendar';
+      case 'notification':
+        return 'notifications';
+      case 'action':
+        return 'actions';
+      case 'reflection':
+        return 'reflections';
+      case 'rehearsal':
+        return 'rehearsals';
+      case 'skill':
+        return 'skills';
+      case 'relationship':
+        return 'relationships';
+      case 'message':
+      default:
+        return 'messages';
+    }
   }
 
   private rowToMission(row: DayMissionRow): DayPilotMission {

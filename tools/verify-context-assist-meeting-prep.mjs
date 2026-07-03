@@ -68,6 +68,33 @@ function renderFixtureHtml() {
 </html>`;
 }
 
+function renderMessagesRouteHtml() {
+  return `
+    <main style="min-height: 820px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+      <aside style="width: 360px; float: left; min-height: 820px; border-right: 1px solid #e5e7eb;">
+        <h2>Chat</h2>
+        <div aria-selected="true">Nova weekly sync</div>
+      </aside>
+      <section
+        class="conversation-route"
+        style="margin-left: 560px; width: 620px; min-height: 560px; padding: 24px;"
+      >
+        <h1>Nova weekly sync</h1>
+        <p>Hyperlink to team</p>
+        <div role="listbox" aria-label="Hyperlink to team">
+          <div role="option">2026 Hackathon Project</div>
+          <div role="option">AI Relevant Scrum Masters</div>
+          <div role="option">RCV SRE Support</div>
+        </div>
+        <article>
+          <p>Participants accepted declined join are words that may exist in old chat history.</p>
+          <p>Message composer text: #</p>
+        </article>
+      </section>
+    </main>
+  `;
+}
+
 async function seedCalendarIndexedDb(page) {
   await page.evaluate(
     async ({ eventId: id, startTime: start, endTime: end }) => {
@@ -123,29 +150,10 @@ async function seedCalendarIndexedDb(page) {
 
 async function installChromeMock(page) {
   await page.addInitScript(() => {
-    window.__paiContextRequests = [];
+    window.__paiTodayPilotRequests = [];
+    window.__paiPrepareRequests = [];
     window.__paiStorageSets = [];
-
-    const fallbackAssist = {
-      available: false,
-      surface: 'meeting_prep',
-      suggestionType: 'none',
-      title: '暂无会前上下文',
-      summary: '没有找到与本次会议足够相关的 Personal AI 记忆。',
-      cueCards: [
-        {
-          id: 'fallback-brief',
-          kind: 'brief',
-          title: '暂无高置信记忆',
-          body: 'Nova weekly sync 暂时没有命中足够相关的历史上下文。可以补充本次会议目标后重新生成。',
-        },
-      ],
-      evidence: [],
-      riskLevel: 'low',
-      previewRequired: false,
-      confidence: 0,
-      queryTimeMs: 6,
-    };
+    const storageState = {};
 
     const preparedAssist = {
       available: true,
@@ -203,6 +211,16 @@ async function installChromeMock(page) {
           whyMatched: '关键词匹配 Rooms dependency',
           score: 0.82,
         },
+        {
+          id: 'calendar-rc-event-context-assist-e2e',
+          type: 'message',
+          title: 'RingCentral Video',
+          snippet:
+            'Calendar event: RingCentral Video · Discuss Rooms dependency and handoff risk · Participants accepted: Sophia, Fred, Esone.',
+          sourceLabel: 'calendar',
+          whyMatched: '会议基础信息',
+          score: 0.78,
+        },
       ],
       riskLevel: 'low',
       previewRequired: false,
@@ -240,24 +258,40 @@ async function installChromeMock(page) {
             });
             return;
           }
-          if (message?.type === 'CONTEXT_ASSIST_REQUEST') {
-            window.__paiContextRequests.push(message.request);
-            const userGoal = String(message.request?.userGoal || '').trim();
+          if (message?.type === 'TODAY_PILOT_MEETING_PREP_REQUEST') {
+            window.__paiTodayPilotRequests.push(message.request);
             respond({
               success: true,
-              result: userGoal
-                ? {
-                    ...preparedAssist,
-                    cueCards: preparedAssist.cueCards.map((card) =>
-                      card.id === 'goal'
-                        ? {
-                            ...card,
-                            body: `围绕用户补充目标准备：${userGoal}`,
-                          }
-                        : card,
-                    ),
-                  }
-                : fallbackAssist,
+              result: {
+                assist: preparedAssist,
+                prep: {
+                  id: 'prep-nova-weekly-sync',
+                  missionId: 'mission-nova-weekly-sync',
+                  eventTitle: 'Nova weekly sync',
+                  status: 'ready',
+                  generatedMode: 'nightly_llm',
+                  evidenceRefs: preparedAssist.evidence,
+                  storylineOpportunity: null,
+                },
+                generated: false,
+                source: 'cache',
+                warnings: [],
+              },
+            });
+            return;
+          }
+          if (message?.type === 'TODAY_PILOT_PREPARE_MEETINGS_REQUEST') {
+            window.__paiPrepareRequests.push(message.request);
+            respond({
+              success: true,
+              result: {
+                date: message.request?.date || '',
+                timezone: message.request?.timezone || '',
+                prepared: 1,
+                reused: 0,
+                failed: 0,
+                records: [],
+              },
             });
             return;
           }
@@ -266,7 +300,27 @@ async function installChromeMock(page) {
       },
       storage: {
         local: {
+          get: async (keys) => {
+            if (Array.isArray(keys)) {
+              return keys.reduce((next, key) => {
+                next[key] = storageState[key];
+                return next;
+              }, {});
+            }
+            if (typeof keys === 'string') {
+              return { [keys]: storageState[keys] };
+            }
+            if (keys && typeof keys === 'object') {
+              return Object.keys(keys).reduce((next, key) => {
+                next[key] =
+                  storageState[key] === undefined ? keys[key] : storageState[key];
+                return next;
+              }, {});
+            }
+            return { ...storageState };
+          },
           set: async (value) => {
+            Object.assign(storageState, value);
             window.__paiStorageSets.push(value);
           },
         },
@@ -300,16 +354,11 @@ async function clickShadow(page, selector) {
   }, selector);
 }
 
-async function fillGoal(page, value) {
-  await page.evaluate((goal) => {
-    const host = document.querySelector('#pai-meeting-prep-host');
-    const textarea = host?.shadowRoot?.querySelector('textarea[data-role="goal"]');
-    if (!(textarea instanceof HTMLTextAreaElement)) {
-      throw new Error('Missing goal textarea');
-    }
-    textarea.value = goal;
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  }, value);
+async function switchToMessagesRouteWithTeamPicker(page) {
+  await page.evaluate((html) => {
+    history.pushState({}, '', '/messages/6543474694');
+    document.body.innerHTML = html;
+  }, renderMessagesRouteHtml());
 }
 
 async function main() {
@@ -340,31 +389,31 @@ async function main() {
     await seedCalendarIndexedDb(page);
     await page.addScriptTag({ path: contentScriptPath });
 
-    await waitForShadowSelector(page, 'textarea[data-role="goal"]');
+    await waitForShadowSelector(page, '.pai-card');
     await page.waitForFunction(() => {
       const host = document.querySelector('#pai-meeting-prep-host');
-      return host?.shadowRoot?.textContent?.includes('暂无高置信记忆');
+      return host?.shadowRoot?.textContent?.includes('Rooms dependency');
     });
 
     const initialText = await shadowText(page, '.pai-card');
     assert(
-      initialText.includes('Personal AI 会前准备') &&
-        initialText.includes('生成建议') &&
-        initialText.includes('暂无高置信记忆'),
-      'Initial empty-state meeting prep card did not render expected controls',
+      initialText.includes('Today Pilot 会前准备') &&
+        initialText.includes('建议带进会议的问题') &&
+        initialText.includes('提前准备') &&
+        initialText.includes('高置信 1 条') &&
+        initialText.includes('基础背景 1 条') &&
+        initialText.includes('1 条高置信来源可展开') &&
+        initialText.includes('1 条日历或低信号来源只作为准备背景保留') &&
+        initialText.includes('本机会写入 Meeting Pilot handoff') &&
+        initialText.includes('不会加入会议、录音、发消息、审批或写回日历/外部系统') &&
+        initialText.includes('会中核对 owner / 下一步 / 风险') &&
+        initialText.includes('Rooms dependency'),
+      'Today Pilot meeting prep card did not render expected cached output',
     );
 
-    await fillGoal(page, '确认 Rooms 依赖 owner 和下一步');
     await page.waitForFunction(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      const stale = host?.shadowRoot?.querySelector('[data-role="stale"]');
-      return stale instanceof HTMLElement && !stale.hidden;
-    });
-
-    await clickShadow(page, 'button[data-action="generate"]');
-    await page.waitForFunction(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      return host?.shadowRoot?.textContent?.includes('Rooms dependency');
+      const sets = window.__paiStorageSets || [];
+      return sets.some((item) => item.meetingPrepHandoff);
     });
     const preparedText = await shadowText(page, '.pai-card');
     assert(
@@ -372,69 +421,68 @@ async function main() {
       'Question cue should be visible in meeting prep output',
     );
 
-    const requests = await page.evaluate(() => window.__paiContextRequests);
+    const requests = await page.evaluate(() => window.__paiTodayPilotRequests);
     const lastRequest = requests.at(-1);
     assert(
-      lastRequest?.userGoal === '确认 Rooms 依赖 owner 和下一步',
-      'Generate action did not send the latest user goal',
+      lastRequest?.autoGenerate === false &&
+        lastRequest?.forceGenerate === false &&
+        lastRequest?.event?.externalId === 'rc-event-context-assist-e2e',
+      'Video Home did not read cached Today Pilot meeting prep for the selected event',
     );
 
-    const handoffDisabled = await page.evaluate(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      const button = host?.shadowRoot?.querySelector('button[data-action="handoff"]');
-      return button instanceof HTMLButtonElement ? button.disabled : true;
-    });
-    assert(!handoffDisabled, 'Handoff button should be enabled after fresh assist');
-
-    await fillGoal(page, '确认 rollout 风险');
-    await page.waitForFunction(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      const shadow = host?.shadowRoot;
-      const stale = shadow?.querySelector('[data-role="stale"]');
-      const output = shadow?.querySelector('[data-role="assist-output"]');
-      const button = shadow?.querySelector('button[data-action="handoff"]');
-      return (
-        stale instanceof HTMLElement &&
-        !stale.hidden &&
-        output instanceof HTMLElement &&
-        output.hidden &&
-        button instanceof HTMLButtonElement &&
-        button.disabled
-      );
-    });
-    const outputHidden = await page.evaluate(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      const output = host?.shadowRoot?.querySelector('[data-role="assist-output"]');
-      return output instanceof HTMLElement && output.hidden;
-    });
-    assert(
-      outputHidden,
-      'Stale assist output should be hidden after the meeting goal changes',
-    );
-
-    await clickShadow(page, 'button[data-action="generate"]');
-    await page.waitForFunction(() => {
-      const requests = window.__paiContextRequests || [];
-      return requests.at(-1)?.userGoal === '确认 rollout 风险';
-    });
-    await page.waitForFunction(() => {
-      const host = document.querySelector('#pai-meeting-prep-host');
-      const button = host?.shadowRoot?.querySelector('button[data-action="handoff"]');
-      return button instanceof HTMLButtonElement && !button.disabled;
-    });
-
-    await clickShadow(page, 'button[data-action="handoff"]');
-    await page.waitForFunction(() => window.__paiStorageSets.length > 0);
     const storageSets = await page.evaluate(() => window.__paiStorageSets);
-    const handoff = storageSets.at(-1)?.meetingPrepHandoff;
+    const handoffSet = storageSets.find((item) => item.meetingPrepHandoff);
+    const handoff = handoffSet?.meetingPrepHandoff;
     assert(
-      handoff?.goal === '确认 rollout 风险' &&
+      handoff?.goal === '围绕用户补充目标准备：确认 Rooms 依赖 owner 和下一步' &&
+        handoff?.source === 'today_pilot' &&
+        handoff?.prepId === 'prep-nova-weekly-sync' &&
         handoff?.text?.includes('Personal AI meeting prep'),
-      'Meeting Pilot handoff was not stored with the generated brief',
+      'Meeting Pilot handoff was not stored with the Today Pilot goal and brief',
+    );
+    assert(
+      handoffSet?.meetingPrepHandoffs &&
+        Object.values(handoffSet.meetingPrepHandoffs).some(
+          (item) => item.prepId === 'prep-nova-weekly-sync',
+        ),
+      'Meeting Pilot multi-handoff cache did not include the Today Pilot handoff',
+    );
+
+    const requestsBeforeMessageRoute = requests.length;
+    await switchToMessagesRouteWithTeamPicker(page);
+    await page.waitForTimeout(3200);
+    const messageRouteState = await page.evaluate(() => ({
+      href: location.href,
+      hostExists: Boolean(document.querySelector('#pai-meeting-prep-host')),
+      requestCount: (window.__paiTodayPilotRequests || []).length,
+      bodyText: document.body.textContent || '',
+    }));
+    assert(
+      messageRouteState.href.endsWith('/messages/6543474694') &&
+        messageRouteState.bodyText.includes('Hyperlink to team') &&
+        !messageRouteState.hostExists &&
+        messageRouteState.requestCount === requestsBeforeMessageRoute,
+      'Today Pilot prep should not mount or request prep after RingCentral SPA moves to messages route',
+    );
+
+    await page.goto(fixtureUrl);
+    await seedCalendarIndexedDb(page);
+    await page.addScriptTag({ path: contentScriptPath });
+    await waitForShadowSelector(page, '.pai-card');
+
+    await clickShadow(page, 'button[data-action="sync"]');
+    await page.waitForFunction(() => {
+      return (window.__paiPrepareRequests || []).length > 0;
+    });
+    const prepareRequests = await page.evaluate(() => window.__paiPrepareRequests);
+    assert(
+      prepareRequests.at(-1)?.mode === 'nightly_llm' &&
+        prepareRequests.at(-1)?.maxMeetings === 5,
+      'Refresh did not backfill Today Pilot meeting prep before rereading cache',
     );
 
     console.log(
-      `Context Assist meeting prep E2E passed (${requests.length} assist requests).`,
+      `Today Pilot meeting prep E2E passed (${requests.length} cached prep requests).`,
     );
   } finally {
     if (context) await context.close();

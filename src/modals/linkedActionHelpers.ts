@@ -1,5 +1,3 @@
-import { generateLinkedActionSuggestionText } from '../llm';
-
 export interface PendingLinkedActionConfig {
   sender?: string;
   groupId?: string;
@@ -18,6 +16,7 @@ export interface LinkedActionSample {
   canSchedule: boolean;
   examplePrompt: string;
   matchKeywords: string[];
+  fallback?: boolean;
 }
 
 export interface LinkedActionSuggestionResult {
@@ -47,6 +46,63 @@ export interface LinkedActionDraftPrefill {
   autoReply: boolean;
   followThread: boolean;
   digestEnabled: boolean;
+}
+
+export interface LinkedActionTriggerContextItem {
+  label: string;
+  value: string;
+}
+
+export interface LinkedActionSaveReceiptInput {
+  context?: PendingLinkedActionConfig | null;
+  openClawConfigured: boolean;
+  requiresApproval: boolean;
+}
+
+export type LinkedActionExecutionPreviewTone = 'pending' | 'review' | 'auto';
+
+export interface LinkedActionExecutionPreviewInput {
+  context?: PendingLinkedActionConfig | null;
+  openClawConfigured: boolean;
+  requiresApproval: boolean;
+}
+
+export interface LinkedActionExecutionPreview {
+  tone: LinkedActionExecutionPreviewTone;
+  label: string;
+  headline: string;
+  contextLine: string;
+  items: string[];
+}
+
+export type LinkedActionPreviewReceiptTone = 'ready' | 'warning';
+
+export interface LinkedActionPreviewReceiptInput {
+  context?: PendingLinkedActionConfig | null;
+  canPlan: boolean;
+  skippedReason?: string;
+  actionFamily?: string;
+  actions?: Array<{
+    actionType?: string;
+    title?: string;
+    targetSystem?: string;
+    executionMode?: string;
+    requiresApproval?: boolean;
+  }>;
+  warnings?: Array<{
+    code?: string;
+    severity?: 'info' | 'warning' | 'critical' | string;
+    message?: string;
+  }>;
+  suggestedPrompt?: string;
+  requiresApproval?: boolean;
+}
+
+export interface LinkedActionPreviewReceipt {
+  tone: LinkedActionPreviewReceiptTone;
+  title: string;
+  summary: string;
+  items: string[];
 }
 
 export const LINKED_ACTION_SAMPLE_CATALOG: LinkedActionSample[] = [
@@ -96,12 +152,22 @@ export const LINKED_ACTION_SAMPLE_CATALOG: LinkedActionSample[] = [
     matchKeywords: ['提醒', 'remind', 'schedule', 'meeting', '明天', '下周'],
   },
   {
+    sampleId: 'openclaw-general-delegation',
+    actionFamily: 'openclaw_delegation',
+    targetSystem: 'OpenClaw',
+    canSchedule: false,
+    fallback: true,
+    examplePrompt:
+      '根据当前消息整理一条最小可执行的 OpenClaw 委派：先确认目标系统、对象、动作、所需权限和成功回执；如果缺少关键字段、账号授权或执行能力，就停止并返回 need_human_decision / capability_missing，而不是自动猜测。',
+    matchKeywords: [],
+  },
+  {
     sampleId: 'openclaw-file-delegation',
     actionFamily: 'openclaw_delegation',
     targetSystem: 'OpenClaw / Google Drive',
     canSchedule: false,
     examplePrompt:
-      '把当前消息里的附件或视频按要求下载、重命名并上传到指定目标；完成后把可访问链接单独发给我。如果缺少附件链接、权限或目标目录访问能力，就停止并报告具体 blocker。',
+      '把当前消息里的附件或视频按要求下载、重命名并上传到指定目标；完成后在执行结果里返回可访问链接。如果缺少附件链接、权限或目标目录访问能力，就停止并报告具体 blocker。',
     matchKeywords: ['附件', '视频', '文件', '下载', '上传', 'drive', 'link'],
   },
 ];
@@ -181,6 +247,174 @@ export const getLinkedActionContextLine = (
   return snippet ? `${scope}：${snippet}` : scope;
 };
 
+export function buildLinkedActionSaveReceipt(
+  input: LinkedActionSaveReceiptInput,
+): string {
+  const contextLine = input.context
+    ? getLinkedActionContextLine(input.context)
+    : '这条联动操作规则';
+  const executionBoundary = input.openClawConfigured
+    ? input.requiresApproval
+      ? '后续新消息命中后才会生成需批准的 RuntimeAction，外部写操作前仍要你批准。'
+      : '后续新消息命中后才会生成 RuntimeAction，并按免批准设置执行可执行动作。'
+    : 'OpenClaw 未连接，已先保存为待激活；连接前不会执行外部写操作。';
+
+  return [
+    `已保存联动操作草稿：${contextLine}。`,
+    '当前没有回扫历史消息、没有创建 RuntimeAction，也没有调用 OpenClaw。',
+    executionBoundary,
+  ].join('');
+}
+
+export function buildLinkedActionExecutionPreview(
+  input: LinkedActionExecutionPreviewInput,
+): LinkedActionExecutionPreview {
+  const contextLine = input.context
+    ? getLinkedActionContextLine(input.context)
+    : '这条联动操作规则';
+  const saveBoundary =
+    '保存只写本机手动规则；不会回扫历史消息、不会立即创建 RuntimeAction，也不会立刻调用 OpenClaw。';
+
+  if (!input.openClawConfigured) {
+    return {
+      tone: 'pending',
+      label: '待激活',
+      headline: '保存后：待激活动作计划',
+      contextLine,
+      items: [
+        saveBoundary,
+        '后续新消息命中后可形成待激活动作计划；连接 OpenClaw 前不会执行外部写操作。',
+        '恢复路径：先连接 OpenClaw，再到 Action Queue 核对目标系统、对象、权限和执行结果。',
+      ],
+    };
+  }
+
+  if (input.requiresApproval) {
+    return {
+      tone: 'review',
+      label: '需批准',
+      headline: '保存后：命中进入批准队列',
+      contextLine,
+      items: [
+        saveBoundary,
+        '后续新消息命中后才会生成需批准的 RuntimeAction。',
+        '外部写操作前仍要你在 Action Queue 批准；拒绝或取消不会改动原消息。',
+      ],
+    };
+  }
+
+  return {
+    tone: 'auto',
+    label: '自动执行',
+    headline: '保存后：命中可自动执行',
+    contextLine,
+    items: [
+      saveBoundary,
+      '后续新消息命中后可生成 RuntimeAction，并按免批准设置执行可执行动作。',
+      '建议只用于窄范围、低风险动作；执行结果仍回到 Action Queue 审计。',
+    ],
+  };
+}
+
+export function buildLinkedActionPreviewReceipt(
+  input: LinkedActionPreviewReceiptInput,
+): LinkedActionPreviewReceipt {
+  const actions = input.actions || [];
+  const warnings = input.warnings || [];
+  const actionCount = actions.length;
+  const warningCount = warnings.length;
+  const hasBlockingWarning = warnings.some((warning) =>
+    ['warning', 'critical'].includes(String(warning.severity || '')),
+  );
+  const actionFamily = input.actionFamily || 'unknown';
+  const contextLine = input.context
+    ? getLinkedActionContextLine(input.context)
+    : '当前预演样本';
+  const executionLane = input.requiresApproval
+    ? 'Action Queue 批准'
+    : '免批准设置';
+  const tone: LinkedActionPreviewReceiptTone =
+    input.canPlan && !hasBlockingWarning ? 'ready' : 'warning';
+  const summary = input.canPlan
+    ? `dry-run 可规划 ${actionCount} 个候选动作；动作族 ${actionFamily}。`
+    : `dry-run 暂不能稳定规划；原因 ${input.skippedReason || '需要改写动作描述'}。`;
+
+  const items = [
+    `样本：${contextLine}`,
+    `结果：${input.canPlan ? `候选动作 ${actionCount} 个` : '未生成候选动作'}，警告 ${warningCount} 条`,
+    '边界：这次只是 Memory Service dry-run；不会保存规则、不会创建 RuntimeAction、不会调用 OpenClaw、不会发送消息，也不会写外部系统。',
+    input.canPlan
+      ? `下一步：保存后仍要等后续新消息命中；执行路径继续按 ${executionLane} 和 OpenClaw 连接状态处理。`
+      : '下一步：先应用建议文案或手动补足目标系统、对象、权限和成功回执。',
+  ];
+
+  if (input.suggestedPrompt) {
+    items.push('改写建议：可先应用建议文案，不会自动覆盖当前输入。');
+  }
+
+  return {
+    tone,
+    title: '预演结果回执',
+    summary,
+    items,
+  };
+}
+
+export function parseLinkedActionMessageTimestamp(
+  value?: string | number,
+): Date | null {
+  if (typeof value === 'number') {
+    const epochMs = value < 100000000000 ? value * 1000 : value;
+    const date = new Date(epochMs);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value.trim());
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed);
+    }
+
+    const numeric = Number(value.trim());
+    if (Number.isFinite(numeric)) {
+      return parseLinkedActionMessageTimestamp(numeric);
+    }
+  }
+
+  return null;
+}
+
+export function getLinkedActionTriggerContextItems(
+  context: PendingLinkedActionConfig,
+  options: { formatDate?: (date: Date) => string } = {},
+): LinkedActionTriggerContextItem[] {
+  const items: LinkedActionTriggerContextItem[] = [];
+  if (context.groupName?.trim()) {
+    items.push({ label: '会话', value: context.groupName.trim() });
+  }
+  if (context.sender?.trim()) {
+    items.push({ label: '发送人', value: context.sender.trim() });
+  }
+
+  const originalTime = parseLinkedActionMessageTimestamp(
+    context.messageTimestamp,
+  );
+  if (originalTime) {
+    items.push({
+      label: '原消息时间',
+      value: options.formatDate
+        ? options.formatDate(originalTime)
+        : originalTime.toLocaleString(),
+    });
+  }
+
+  if (context.messageId?.trim()) {
+    items.push({ label: '消息 ID', value: context.messageId.trim() });
+  }
+
+  return items;
+}
+
 export const getFallbackLinkedActionPrompt = (
   context: PendingLinkedActionConfig,
   configSignals?: LinkedActionConfigSignals,
@@ -204,9 +438,40 @@ export const scoreSampleForMessage = (
         ? score + 2
         : score;
     },
-    sample.canSchedule ? 1 : 0,
+    0,
   );
 };
+
+export function selectLinkedActionSampleForMessage(
+  samples: LinkedActionSample[],
+  messageContent: string,
+): LinkedActionSample {
+  const scoredSamples = samples
+    .map((sample, index) => ({
+      sample,
+      index,
+      score: scoreSampleForMessage(sample, messageContent),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    });
+
+  const matchedSample = scoredSamples.find((item) => item.score > 0)?.sample;
+  if (matchedSample) {
+    return matchedSample;
+  }
+
+  return (
+    samples.find((sample) => sample.fallback) ||
+    samples.find(
+      (sample) => sample.sampleId === 'openclaw-general-delegation',
+    ) ||
+    samples[0]
+  );
+}
 
 export const buildHistoryLinkedActionSuggestion = (
   topic: LinkedActionHistoryEntry,
@@ -239,6 +504,7 @@ export async function generateLinkedActionSuggestion(params: {
   historyTopics: LinkedActionHistoryEntry[];
   configSignals: LinkedActionConfigSignals;
 }): Promise<LinkedActionSuggestionResult> {
+  const { generateLinkedActionSuggestionText } = await import('../llm');
   const bestHistoryTopic = params.historyTopics[0];
   if (bestHistoryTopic?.automationPrompt?.trim()) {
     return {
@@ -261,11 +527,10 @@ export async function generateLinkedActionSuggestion(params: {
   }
 
   const messageContent = String(params.context.content || '');
-  const matchedSample = [...LINKED_ACTION_SAMPLE_CATALOG].sort(
-    (left, right) =>
-      scoreSampleForMessage(right, messageContent) -
-      scoreSampleForMessage(left, messageContent),
-  )[0];
+  const matchedSample = selectLinkedActionSampleForMessage(
+    LINKED_ACTION_SAMPLE_CATALOG,
+    messageContent,
+  );
 
   return {
     prompt: await generateLinkedActionSuggestionText({

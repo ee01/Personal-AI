@@ -22,6 +22,7 @@ type ContextRecallMatchV2 = ContextRecallMatch & {
   mergedCount?: number;
   mergedIds?: string[];
   sourceClusterKey?: string;
+  lensPresentation?: MeetingPilotMemoryRef['lensPresentation'];
 };
 
 type MeetingPilotContextRecallRequestV2 = ContextRecallRequest & {
@@ -369,6 +370,8 @@ export function contextMatchToMeetingPilotMemoryRef(
     mergedCount: v2.mergedCount,
     mergedIds: v2.mergedIds,
     sourceClusterKey: v2.sourceClusterKey,
+    lensPresentation: v2.lensPresentation,
+    cue: v2.cue,
   };
 }
 

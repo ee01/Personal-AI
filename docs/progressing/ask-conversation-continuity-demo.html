@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask 会话续接 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f7;
+      --panel: #ffffff;
+      --panel-2: #f8fafb;
+      --ink: #202428;
+      --muted: #68717a;
+      --line: #dfe4e8;
+      --accent: #256f63;
+      --accent-2: #e8f4f1;
+      --warn: #a45d12;
+      --warn-bg: #fff5e7;
+      --danger: #a23b3b;
+      --shadow: 0 18px 60px rgba(28, 35, 42, 0.14);
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #eef1f3 0%, #f7f8f9 52%, #eceff1 100%);
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(360px, 760px) minmax(280px, 360px);
+      gap: 24px;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+    }
+
+    .quick-ask {
+      width: min(760px, 100%);
+      height: min(820px, calc(100vh - 64px));
+      min-height: 620px;
+      background: var(--panel);
+      border: 1px solid rgba(32, 36, 40, 0.08);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+    }
+
+    .titlebar {
+      height: 48px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfc;
+    }
+
+    .traffic {
+      display: flex;
+      gap: 7px;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #d7dde2;
+    }
+
+    .dot.red { background: #ee6a5f; }
+    .dot.yellow { background: #f5bd4f; }
+    .dot.green { background: #61c554; }
+
+    .window-title {
+      font-size: 14px;
+      font-weight: 680;
+      text-align: center;
+    }
+
+    .local-pill {
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .resume-strip {
+      margin: 12px 14px 0;
+      border: 1px solid #cfe4df;
+      background: var(--accent-2);
+      border-radius: var(--radius);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      padding: 12px;
+      align-items: center;
+    }
+
+    .resume-strip.hidden {
+      display: none;
+    }
+
+    .resume-main {
+      min-width: 0;
+    }
+
+    .resume-label {
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 700;
+      color: #1f554e;
+      overflow-wrap: anywhere;
+    }
+
+    .resume-meta {
+      margin-top: 4px;
+      color: #4e6a66;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .resume-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 10px;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn.text {
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .btn:hover {
+      filter: brightness(0.98);
+    }
+
+    .chat {
+      overflow: auto;
+      padding: 18px 18px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.9), rgba(248,250,251,0.72));
+    }
+
+    .message {
+      display: grid;
+      gap: 8px;
+      max-width: 86%;
+      padding: 12px 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .message.user {
+      align-self: flex-end;
+      background: #eef3fb;
+      border-color: #d6e1f0;
+    }
+
+    .message.system {
+      max-width: 100%;
+      background: #fbfcfc;
+      border-style: dashed;
+      color: var(--muted);
+    }
+
+    .message.resume {
+      max-width: 100%;
+      background: #f3faf8;
+      border-color: #d4e8e3;
+    }
+
+    .message-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .evidence-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
+    .chip {
+      max-width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .context-receipt {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid #ead6b9;
+      background: var(--warn-bg);
+      color: #68410e;
+      border-radius: var(--radius);
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .context-receipt.visible {
+      display: flex;
+    }
+
+    .input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+
+    .ask-input {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0 12px;
+      outline: none;
+      background: var(--panel-2);
+    }
+
+    .ask-input:focus {
+      border-color: var(--accent);
+      background: #fff;
+    }
+
+    .side {
+      align-self: stretch;
+      min-height: 620px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+    }
+
+    .note,
+    .scenes {
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(32, 36, 40, 0.08);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 12px 36px rgba(28, 35, 42, 0.08);
+    }
+
+    .note h1 {
+      margin: 0 0 10px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .note p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .scenes h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+
+    .scene-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .scene {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 11px;
+    }
+
+    .scene strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .scene span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .status {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 980px) {
+      .stage {
+        grid-template-columns: 1fr;
+        align-items: start;
+        padding: 18px;
+      }
+
+      .quick-ask {
+        height: auto;
+        min-height: 720px;
+      }
+
+      .side {
+        min-height: 0;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .stage {
+        padding: 10px;
+      }
+
+      .quick-ask {
+        border-radius: 10px;
+        min-height: 700px;
+      }
+
+      .resume-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .resume-actions {
+        justify-content: flex-start;
+      }
+
+      .message {
+        max-width: 100%;
+      }
+
+      .input-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="quick-ask" aria-label="Quick Ask 模拟窗口">
+      <header class="titlebar">
+        <div class="traffic" aria-hidden="true">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+        <div class="window-title">Quick Ask</div>
+        <div class="local-pill">本机续聊</div>
+      </header>
+
+      <div id="resumeStrip" class="resume-strip">
+        <div class="resume-main">
+          <div class="resume-label">继续上次 Ask：MTR-148115 阻塞排查</div>
+          <div class="resume-meta">5 分钟前 · 本地保存 · 未写入长期记忆 · 继续后会重新检索关键证据</div>
+        </div>
+        <div class="resume-actions">
+          <button id="continueBtn" class="btn primary" type="button">继续</button>
+          <button id="newBtn" class="btn" type="button">新问题</button>
+          <button id="discardBtn" class="btn text" type="button">丢弃</button>
+        </div>
+      </div>
+
+      <section id="chat" class="chat" aria-live="polite">
+        <article class="message user">
+          MTR-148115 昨天到底卡在哪里？
+        </article>
+        <article class="message">
+          <div class="message-title">Ask 回答摘要</div>
+          目前看主要卡在审批状态未确认。上一轮证据包括 Jira issue 里的 owner 变更，以及 RingCentral 里 6 月 22 日的 followup 讨论。
+          <div class="evidence-row">
+            <span class="chip">Jira · MTR-148115</span>
+            <span class="chip">RingCentral · approval followup</span>
+            <span class="chip">操作记忆 · 昨日排查</span>
+          </div>
+        </article>
+      </section>
+
+      <footer class="composer">
+        <div id="receipt" class="context-receipt">
+          <span>本轮将带上本机续聊线索；Ask 仍会重新检索证据。</span>
+          <button id="clearContextBtn" class="btn text" type="button">不用这条线索</button>
+        </div>
+        <div class="input-row">
+          <input id="askInput" class="ask-input" value="" placeholder="继续追问，或直接输入一个新问题" />
+          <button id="sendBtn" class="btn primary" type="button">发送</button>
+        </div>
+      </footer>
+    </section>
+
+    <aside class="side">
+      <section class="note">
+        <h1>Ask 会话续接</h1>
+        <p>
+          这个 demo 模拟的是打开 Quick Ask 时自然出现的本地续聊条。它不是独立页面，也不是记忆健康控制台。用户可以继续、开新问题，或者丢弃本机快照。
+        </p>
+        <div id="status" class="status">状态：检测到 1 条未过期的本机 Ask 快照。</div>
+      </section>
+
+      <section class="scenes">
+        <h2>同类场景</h2>
+        <div class="scene-list">
+          <div class="scene">
+            <strong>Compose Assist</strong>
+            <span>继续上一条未发送草稿；必须写清楚未发送、未写回。</span>
+          </div>
+          <div class="scene">
+            <strong>Meeting Pilot</strong>
+            <span>继续本场会议里的 Ask；区分本地捕获片段和已沉淀会议记忆。</span>
+          </div>
+          <div class="scene">
+            <strong>Search Result Ask</strong>
+            <span>继续结果页中的 topic 和证据候选；不新增 review 页面。</span>
+          </div>
+          <div class="scene">
+            <strong>Jira / Slides Preview</strong>
+            <span>恢复上次写回预览；强调 preview 不等于已提交。</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const resumeStrip = document.getElementById('resumeStrip');
+    const continueBtn = document.getElementById('continueBtn');
+    const newBtn = document.getElementById('newBtn');
+    const discardBtn = document.getElementById('discardBtn');
+    const chat = document.getElementById('chat');
+    const receipt = document.getElementById('receipt');
+    const clearContextBtn = document.getElementById('clearContextBtn');
+    const askInput = document.getElementById('askInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const status = document.getElementById('status');
+
+    let useResumeContext = false;
+
+    function addMessage(className, title, body) {
+      const article = document.createElement('article');
+      article.className = `message ${className}`.trim();
+      if (title) {
+        const heading = document.createElement('div');
+        heading.className = 'message-title';
+        heading.textContent = title;
+        article.appendChild(heading);
+      }
+      const text = document.createElement('div');
+      text.textContent = body;
+      article.appendChild(text);
+      chat.appendChild(article);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    continueBtn.addEventListener('click', () => {
+      useResumeContext = true;
+      resumeStrip.classList.add('hidden');
+      receipt.classList.add('visible');
+      askInput.placeholder = '继续追问 MTR-148115...';
+      status.textContent = '状态：已把本机 Ask 快照作为本轮线索，发送时会附带 contextHints。';
+      addMessage('resume', '本地恢复', '已恢复上次 Ask 摘要：MTR-148115 可能卡在审批状态未确认。该摘要只作为线索，发送后仍会重新检索证据。');
+      askInput.focus();
+    });
+
+    newBtn.addEventListener('click', () => {
+      useResumeContext = false;
+      resumeStrip.classList.add('hidden');
+      receipt.classList.remove('visible');
+      askInput.placeholder = '输入一个新问题';
+      status.textContent = '状态：本轮按新问题处理，不会继承上次 Ask。';
+      addMessage('system', '新问题', '本轮不会带入上次 Ask 上下文。本地快照仍可保留到 TTL 到期。');
+      askInput.focus();
+    });
+
+    discardBtn.addEventListener('click', () => {
+      useResumeContext = false;
+      resumeStrip.classList.add('hidden');
+      receipt.classList.remove('visible');
+      status.textContent = '状态：已丢弃本机 Ask 续聊记录；未删除长期记忆。';
+      addMessage('system', '本地丢弃', '已删除本机 Ask 快照。这个操作不会删除 memory service 中的长期记忆。');
+    });
+
+    clearContextBtn.addEventListener('click', () => {
+      useResumeContext = false;
+      receipt.classList.remove('visible');
+      askInput.placeholder = '输入一个新问题';
+      status.textContent = '状态：已取消本轮续聊线索。';
+    });
+
+    sendBtn.addEventListener('click', () => {
+      const value = askInput.value.trim() || (useResumeContext ? '所以我现在应该先找谁确认？' : '今天有哪些需要我跟进的事项？');
+      addMessage('user', '', value);
+      if (useResumeContext) {
+        addMessage('system', '请求边界', '发送 payload 将包含 contextHints.source = local_ask_resume_snapshot；该线索不会写入长期记忆。');
+      } else {
+        addMessage('system', '请求边界', '发送 payload 不包含上次 Ask 快照。');
+      }
+      askInput.value = '';
+    });
+  </script>
+</body>
+</html>
