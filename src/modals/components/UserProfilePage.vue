@@ -25,6 +25,8 @@
           <button 
             class="export-btn"
             :disabled="isExporting"
+            :title="profileExportButtonBoundary"
+            :aria-label="profileExportButtonBoundary"
             @click="exportUserProfile"
           >
             <span v-if="!isExporting">📥 导出画像</span>
@@ -79,6 +81,24 @@
           <span class="profile-calibration-receipt-label">画像校准回执</span>
           <strong>{{ profileCalibrationReceipt.title }}</strong>
           <p>{{ profileCalibrationReceipt.detail }}</p>
+          <div
+            v-if="profileInfluenceUndo"
+            class="profile-calibration-receipt-actions"
+          >
+            <button
+              type="button"
+              class="secondary-action-btn compact-action-btn"
+              :disabled="isUndoingProfileInfluence || isItemPending(profileInfluenceUndo.itemId)"
+              :title="profileInfluenceUndoButtonBoundary"
+              :aria-label="profileInfluenceUndoButtonBoundary"
+              @click="undoProfileInfluenceAdjustment"
+            >
+              {{ isUndoingProfileInfluence ? '撤销中...' : '撤销影响力调整' }}
+            </button>
+            <span>
+              恢复到 {{ formatPercent(profileInfluenceUndo.previousImportance) }}；只恢复影响力，不撤销确认、证据、旧回答或外部同步。
+            </span>
+          </div>
         </div>
         <div class="profile-calibration-receipt-chips">
           <span
@@ -105,7 +125,7 @@
             type="button"
             class="review-link"
             :disabled="profileHealthMetrics.inferredCount === 0"
-            @click="scrollToSection('profile-predictions')"
+            @click="openReviewEntry('pending')"
           >
             处理
           </button>
@@ -116,7 +136,7 @@
           <button
             type="button"
             class="review-link"
-            @click="scrollToSection('profile-items')"
+            @click="openReviewEntry('all')"
           >
             查看
           </button>
@@ -127,7 +147,7 @@
           <button
             type="button"
             class="review-link"
-            @click="scrollToSection('profile-items')"
+            @click="openReviewEntry('withoutEvidence')"
           >
             核对
           </button>
@@ -135,6 +155,26 @@
         <div class="review-summary-card">
           <span class="review-label">最近信号</span>
           <strong class="review-time">{{ formatTime(userProfile.statistics.lastActiveTime) }}</strong>
+        </div>
+      </div>
+
+      <div
+        v-if="profileReviewEntryReceipt"
+        class="profile-review-entry-receipt"
+        aria-live="polite"
+      >
+        <div class="profile-review-entry-receipt-copy">
+          <span class="profile-review-entry-receipt-label">校准入口回执</span>
+          <strong>{{ profileReviewEntryReceipt.title }}</strong>
+          <p>{{ profileReviewEntryReceipt.detail }}</p>
+        </div>
+        <div class="profile-review-entry-receipt-chips">
+          <span
+            v-for="chip in profileReviewEntryReceipt.chips"
+            :key="chip"
+          >
+            {{ chip }}
+          </span>
         </div>
       </div>
 
@@ -180,6 +220,8 @@
             type="button"
             class="primary-action-btn"
             :disabled="isCreatingExplicitProfile || !resolvedExplicitProfileItemKey || !explicitProfileDraft.itemValue.trim()"
+            :title="explicitProfileSubmitBoundary"
+            :aria-label="explicitProfileSubmitBoundary"
             @click="createExplicitProfileItem"
           >
             {{ isCreatingExplicitProfile ? '添加中...' : '添加到画像' }}
@@ -481,6 +523,8 @@
               <button
                 class="secondary-action-btn influence-action-btn"
                 :disabled="isItemPending(prediction.id)"
+                :title="getProfileInfluenceActionBoundary(prediction, 'prediction', 'lower')"
+                :aria-label="getProfileInfluenceActionBoundary(prediction, 'prediction', 'lower')"
                 @click="setProfileItemInfluence(prediction.id, prediction.type, 0.25, '已降低画像影响', { confirmAfterUpdate: false })"
               >
                 {{ isItemPending(prediction.id) ? '处理中' : '降低影响' }}
@@ -532,11 +576,17 @@
               v-model.trim="profileItemSearchQuery"
               type="search"
               placeholder="名称、键、来源、状态或证据"
+              :title="profileItemSearchBoundary"
+              :aria-label="profileItemSearchBoundary"
             />
           </label>
           <label class="profile-filter-control">
             <span>状态</span>
-            <select v-model="profileItemStatusFilter">
+            <select
+              v-model="profileItemStatusFilter"
+              :title="profileItemStatusFilterBoundary"
+              :aria-label="profileItemStatusFilterBoundary"
+            >
               <option
                 v-for="option in profileItemStatusOptions"
                 :key="option.value"
@@ -548,7 +598,11 @@
           </label>
           <label class="profile-filter-control">
             <span>排序</span>
-            <select v-model="profileItemSortMode">
+            <select
+              v-model="profileItemSortMode"
+              :title="profileItemSortBoundary"
+              :aria-label="profileItemSortBoundary"
+            >
               <option
                 v-for="option in profileItemSortOptions"
                 :key="option.value"
@@ -562,6 +616,8 @@
             type="button"
             class="tertiary-action-btn"
             :disabled="!hasProfileItemFilters"
+            :title="profileItemClearFiltersBoundary"
+            :aria-label="profileItemClearFiltersBoundary"
             @click="clearProfileItemFilters"
           >
             清除
@@ -571,6 +627,8 @@
             type="button"
             class="secondary-action-btn load-all-items-btn"
             :disabled="isLoadingAllProfileItems"
+            :title="profileItemsLoadAllButtonBoundary"
+            :aria-label="profileItemsLoadAllButtonBoundary"
             @click="loadAllProfileItems"
           >
             {{ isLoadingAllProfileItems ? '加载中...' : '加载全部' }}
@@ -579,6 +637,8 @@
             type="button"
             class="secondary-action-btn retracted-items-toggle-btn"
             :disabled="isLoadingRetractedProfileItems"
+            :title="retractedItemsToggleBoundary"
+            :aria-label="retractedItemsToggleBoundary"
             @click="toggleRetractedProfileItems"
           >
             {{ retractedItemsToggleLabel }}
@@ -592,6 +652,26 @@
         >
           <span class="profile-items-scope-label">检索范围</span>
           <span>{{ profileItemsSearchScopeReceipt }}</span>
+        </div>
+        <div
+          v-if="profileItemsLoadReceipt"
+          class="profile-items-load-receipt"
+          :class="`receipt-${profileItemsLoadReceipt.tone}`"
+          aria-live="polite"
+        >
+          <div class="profile-items-load-receipt-copy">
+            <span class="profile-items-load-receipt-label">加载全部回执</span>
+            <strong>{{ profileItemsLoadReceipt.title }}</strong>
+            <p>{{ profileItemsLoadReceipt.detail }}</p>
+          </div>
+          <div class="profile-items-load-receipt-chips">
+            <span
+              v-for="chip in profileItemsLoadReceipt.chips"
+              :key="chip"
+            >
+              {{ chip }}
+            </span>
+          </div>
         </div>
         <div v-if="filteredProfileItems.length === 0" class="inline-empty">
           {{ profileItemsEmptyMessage }}
@@ -688,6 +768,8 @@
                 v-if="canBoostProfileItem(item)"
                 class="secondary-action-btn influence-action-btn"
                 :disabled="isItemPending(item.id)"
+                :title="getProfileInfluenceActionBoundary(item, 'row', 'boost')"
+                :aria-label="getProfileInfluenceActionBoundary(item, 'row', 'boost')"
                 @click="setProfileItemInfluence(item.id, item.itemType, 0.95, '已设为重点画像')"
               >
                 {{ isItemPending(item.id) ? '处理中' : '设为重点' }}
@@ -696,6 +778,8 @@
                 v-if="canLowerProfileItem(item)"
                 class="secondary-action-btn influence-action-btn"
                 :disabled="isItemPending(item.id)"
+                :title="getProfileInfluenceActionBoundary(item, 'row', 'lower')"
+                :aria-label="getProfileInfluenceActionBoundary(item, 'row', 'lower')"
                 @click="setProfileItemInfluence(item.id, item.itemType, 0.25, '已降低画像影响', { confirmAfterUpdate: false })"
               >
                 {{ isItemPending(item.id) ? '处理中' : '降低影响' }}
@@ -724,6 +808,8 @@
             <button
               type="button"
               class="secondary-action-btn"
+              :title="profileItemsLoadMoreBoundary"
+              :aria-label="profileItemsLoadMoreBoundary"
               @click="loadMoreProfileItems"
             >
               显示更多 {{ hiddenProfileItemsCount }} 条
@@ -741,8 +827,34 @@
             </div>
             <span>{{ retractedProfileItems.length }}/{{ retractedProfileItemsTotal }} 条</span>
           </div>
+          <div
+            v-if="profileRetractedAuditReceipt"
+            class="profile-retracted-audit-receipt"
+            :class="`receipt-${profileRetractedAuditReceipt.tone}`"
+            aria-live="polite"
+          >
+            <div class="profile-retracted-audit-receipt-copy">
+              <span class="profile-retracted-audit-receipt-label">已排除审计回执</span>
+              <strong>{{ profileRetractedAuditReceipt.title }}</strong>
+              <p>{{ profileRetractedAuditReceipt.detail }}</p>
+            </div>
+            <div class="profile-retracted-audit-receipt-chips">
+              <span
+                v-for="chip in profileRetractedAuditReceipt.chips"
+                :key="chip"
+              >
+                {{ chip }}
+              </span>
+            </div>
+          </div>
           <div v-if="isLoadingRetractedProfileItems" class="inline-empty compact">
             加载已排除画像...
+          </div>
+          <div
+            v-else-if="hasRetractedProfileAuditFailure && retractedProfileItems.length === 0"
+            class="inline-empty compact warning-empty"
+          >
+            已排除画像读取失败；当前没有可验证快照，不能证明没有已排除画像。
           </div>
           <div v-else-if="retractedProfileItems.length === 0" class="inline-empty compact">
             暂无已排除画像条目
@@ -1110,6 +1222,7 @@ const showRetractedProfileItems = ref(false);
 const isApplyingSettings = ref(false);
 const isCreatingExplicitProfile = ref(false);
 const isRestoringProfileItem = ref(false);
+const isUndoingProfileInfluence = ref(false);
 const statusMessage = ref('');
 const statusTone = ref<'success' | 'error' | 'info'>('info');
 const userProfile = ref<UserProfileViewModel | null>(null);
@@ -1133,6 +1246,14 @@ type ProfileCalibrationReceipt = {
   chips: string[];
 };
 const profileCalibrationReceipt = ref<ProfileCalibrationReceipt | null>(null);
+type ProfileInfluenceUndo = {
+  itemId: string;
+  itemType: string;
+  itemName: string;
+  previousImportance: number;
+  currentImportance: number;
+};
+const profileInfluenceUndo = ref<ProfileInfluenceUndo | null>(null);
 type ProfileExportReceipt = {
   title: string;
   detail: string;
@@ -1140,6 +1261,26 @@ type ProfileExportReceipt = {
   chips: string[];
 };
 const profileExportReceipt = ref<ProfileExportReceipt | null>(null);
+type ProfileReviewEntryReceipt = {
+  title: string;
+  detail: string;
+  chips: string[];
+};
+const profileReviewEntryReceipt = ref<ProfileReviewEntryReceipt | null>(null);
+type ProfileRetractedAuditReceipt = {
+  title: string;
+  detail: string;
+  tone: 'success' | 'info' | 'warning';
+  chips: string[];
+};
+const profileRetractedAuditReceipt = ref<ProfileRetractedAuditReceipt | null>(null);
+type ProfileItemsLoadReceipt = {
+  title: string;
+  detail: string;
+  tone: 'success' | 'info' | 'warning';
+  chips: string[];
+};
+const profileItemsLoadReceipt = ref<ProfileItemsLoadReceipt | null>(null);
 const PROFILE_ITEMS_PAGE_SIZE = 50;
 type ReviewQueueFilter = 'all' | 'pending' | 'withEvidence' | 'withoutEvidence';
 const reviewQueueFilter = ref<ReviewQueueFilter>('all');
@@ -1245,6 +1386,86 @@ const profileExportPreflightItems = computed(() => {
 
   return items;
 });
+const profileItemsLoadedScopeBoundary = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  if (total === 0) {
+    return '当前没有可校准画像条目；本区控件只影响本地显示，不证明 Memory Service 全库为空。';
+  }
+  if (profileItemsAreTruncated.value) {
+    return `当前列表只加载 ${loaded}/${total} 条画像；搜索、筛选和排序只作用于已加载切片，加载全部前不能证明全库不存在更多匹配。`;
+  }
+  return `当前列表已加载全部 ${total} 条画像；搜索、筛选和排序只改变本页显示。`;
+});
+const profileExportButtonBoundary = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const sliceCopy = total > 0
+    ? `当前页 ${loaded}/${total} 条`
+    : '当前页暂无条目';
+  const filterCopy = hasProfileItemFilters.value
+    ? '当前搜索/筛选不会限制导出；'
+    : '';
+  if (isExporting.value) {
+    return `${filterCopy}同一轮画像导出进行中：正在重新分页请求 status=all 并生成本地 JSON manifest；重复点击不会启动第二次分页、生成第二个 manifest、请求第二次下载、恢复、删除、同步、发送画像或改写 Memory Service。`;
+  }
+  return `${filterCopy}导出画像会重新分页请求全部状态与已排除审计，不限 ${sliceCopy} 或本页筛选；只生成本地 JSON + manifest，不恢复、删除、同步或发送画像。`;
+});
+const explicitProfileSubmitBoundary = computed(() => {
+  const itemTypeLabel = explicitProfileTypeLabels[explicitProfileDraft.value.itemType] ||
+    explicitProfileDraft.value.itemType;
+  const itemKey = resolvedExplicitProfileItemKey.value;
+  const itemKeyLabel = getExplicitProfileKeyLabel(
+    explicitProfileDraft.value.itemKey,
+    itemKey,
+  );
+  const hasValue = explicitProfileDraft.value.itemValue.trim().length > 0;
+  if (isCreatingExplicitProfile.value) {
+    return `正在提交 ${itemTypeLabel} · ${itemKeyLabel || '待填写 key'} 到 Memory Service；服务确认前不能证明已写入 USER_CORE 或进入个性化。`;
+  }
+  if (!itemKey) {
+    return `先填写稳定画像 key；点击前不会写入画像、USER_CORE、召回或 provider context。`;
+  }
+  if (!hasValue) {
+    return `先填写画像内容；点击前不会写入 ${itemTypeLabel} · ${itemKeyLabel}。`;
+  }
+  return `提交会创建 active + confirmed 手动画像：${itemTypeLabel} · ${itemKeyLabel}；服务确认后才可能进入 USER_CORE、召回、Compose Assist 和 provider context，不会外发、恢复旧画像或跨平台同步。`;
+});
+const profileItemSearchBoundary = computed(() =>
+  `${profileItemsLoadedScopeBoundary.value} 输入只过滤名称、键、来源、状态或证据；不会确认、排除、恢复、写入 USER_CORE、导出或调用外部 provider。`
+);
+const profileItemStatusFilterBoundary = computed(() =>
+  `${profileItemsLoadedScopeBoundary.value} 状态筛选只改变本地列表显示；不会确认、排除、恢复、写入 USER_CORE、导出或调用外部 provider。`
+);
+const profileItemSortBoundary = computed(() =>
+  `${profileItemsLoadedScopeBoundary.value} 排序只重排本地已加载画像；不会改变 confidence、salience、确认状态、证据或导出范围。`
+);
+const profileItemClearFiltersBoundary = computed(() => {
+  if (!hasProfileItemFilters.value) {
+    return '当前没有搜索、状态筛选或排序可清除；按钮不会写入画像。';
+  }
+  return `${profileItemsLoadedScopeBoundary.value} 清除只恢复本地搜索、状态筛选和排序；不会重新分页、确认、排除、写入 USER_CORE 或限制导出。`;
+});
+const profileItemsLoadAllButtonBoundary = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  if (isLoadingAllProfileItems.value) {
+    return `正在只读重新分页加载全部画像；当前列表仍是旧切片 ${loaded}/${total} 条，等待服务确认前不能做全库判断。`;
+  }
+  return `只读请求 Memory Service 加载全部当前画像条目，扩大本页搜索/筛选审计范围；不会确认、排除、恢复、写入 USER_CORE、刷新证据、导出或调用外部 provider。`;
+});
+const retractedItemsToggleBoundary = computed(() => {
+  if (isLoadingRetractedProfileItems.value) {
+    return '正在只读请求 status=retracted 已排除画像审计快照；读取完成前不能证明没有已排除画像。';
+  }
+  if (showRetractedProfileItems.value) {
+    return '收起已排除画像审计区；只隐藏本地视图，不恢复、重新排除、确认、写入 USER_CORE 或删除画像。';
+  }
+  return '只读加载 status=retracted 已排除画像审计快照；用于复核和恢复误排，不会确认、恢复、重新排除、写入 USER_CORE、刷新证据、导出或调用外部 provider。';
+});
+const profileItemsLoadMoreBoundary = computed(() =>
+  `显示当前筛选下后续 ${hiddenProfileItemsCount.value} 条已加载画像；只扩展本地可见列表，不重新请求服务、不确认、排除、恢复、写入 USER_CORE 或改变导出范围。`
+);
 const profileItemsDisplaySummary = computed(() => {
   const loaded = profileItemsLoadedCount.value;
   const total = profileItemsTotalCount.value;
@@ -1286,6 +1507,9 @@ const retractedItemsToggleLabel = computed(() => {
   if (isLoadingRetractedProfileItems.value) return '加载已排除...';
   return showRetractedProfileItems.value ? '收起已排除' : '查看已排除';
 });
+const hasRetractedProfileAuditFailure = computed(() =>
+  profileRetractedAuditReceipt.value?.tone === 'warning'
+);
 
 watch([profileItemSearchQuery, profileItemStatusFilter, profileItemSortMode], () => {
   profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
@@ -1333,6 +1557,7 @@ const setStatus = (
   }
   if (!options.keepProfileReceipt) {
     profileCalibrationReceipt.value = null;
+    profileInfluenceUndo.value = null;
   }
   if (!options.keepExportReceipt) {
     profileExportReceipt.value = null;
@@ -1371,8 +1596,14 @@ const applyViewModel = (payload: any) => {
   updateChartData();
 };
 
-const loadUserProfile = async (options: { showLoading?: boolean; maxItems?: number | 'all' } = {}) => {
+const loadUserProfile = async (options: {
+  showLoading?: boolean;
+  maxItems?: number | 'all';
+  preserveOnFailure?: boolean;
+} = {}) => {
   const showLoading = options.showLoading ?? true;
+  const previousProfile = userProfile.value;
+  const previousAnalysis = userProfileAnalysis.value;
   if (showLoading) {
     isLoading.value = true;
   }
@@ -1391,14 +1622,27 @@ const loadUserProfile = async (options: { showLoading?: boolean; maxItems?: numb
 
     if (response && (response as any).success) {
       applyViewModel((response as any).data);
+      return true;
     } else {
-      applyViewModel(buildUserProfileViewModel());
+      if (!options.preserveOnFailure || !previousProfile || !previousAnalysis) {
+        applyViewModel(buildUserProfileViewModel());
+      } else {
+        userProfile.value = previousProfile;
+        userProfileAnalysis.value = previousAnalysis;
+      }
       setStatus((response as any)?.error || '用户画像服务暂不可用', 'error');
+      return false;
     }
   } catch (error: any) {
     console.error('加载用户画像失败:', error);
-    applyViewModel(buildUserProfileViewModel());
+    if (!options.preserveOnFailure || !previousProfile || !previousAnalysis) {
+      applyViewModel(buildUserProfileViewModel());
+    } else {
+      userProfile.value = previousProfile;
+      userProfileAnalysis.value = previousAnalysis;
+    }
     setStatus(error?.message || '加载用户画像失败', 'error');
+    return false;
   } finally {
     if (showLoading) {
       isLoading.value = false;
@@ -1418,6 +1662,80 @@ const scrollToSection = (sectionId: string) => {
     behavior: 'smooth',
     block: 'start',
   });
+};
+
+const buildReviewEntryReceipt = (
+  entry: 'pending' | 'all' | 'withoutEvidence',
+): ProfileReviewEntryReceipt => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const loadedChip = total > 0
+    ? `当前已加载 ${loaded}/${total} 条`
+    : '当前暂无画像条目';
+  const sliceDetail = profileItemsAreTruncated.value
+    ? '当前计数和筛选只基于已加载画像切片；需要全库判断时先点“加载全部”。'
+    : '当前计数和筛选覆盖本页已拉取的全部画像。';
+  const commonBoundary = '本次入口只导航和调整本地筛选，不确认、降权、排除、写入 USER_CORE、刷新证据、导出或调用外部 provider。';
+
+  if (entry === 'pending') {
+    return {
+      title: '已定位待确认推断',
+      detail: `${sliceDetail}${commonBoundary} 下面队列已切到“待确认”，确认前不会进入个性化上下文。`,
+      chips: [
+        '筛选：待确认',
+        `待确认推断 ${profileReviewQueue.value.length}/${reviewQueueTotal.value} 条`,
+        loadedChip,
+        '确认前不使用',
+      ],
+    };
+  }
+
+  if (entry === 'withoutEvidence') {
+    return {
+      title: '已定位缺证据画像',
+      detail: `${sliceDetail}${commonBoundary} 当前列表只用于核对缺证据条目，不能证明全库没有更多缺证据画像。`,
+      chips: [
+        '列表筛选：缺证据',
+        `匹配 ${filteredProfileItems.value.length} 条`,
+        loadedChip,
+        '只读核对',
+      ],
+    };
+  }
+
+  return {
+    title: '已定位画像条目',
+    detail: `${sliceDetail}${commonBoundary} 当前列表已恢复为全部状态和优先处理排序，便于继续选择要校准的条目。`,
+    chips: [
+      '列表筛选：全部',
+      `可见 ${visibleProfileItems.value.length}/${filteredProfileItems.value.length} 条`,
+      loadedChip,
+      '本地导航',
+    ],
+  };
+};
+
+const openReviewEntry = (entry: 'pending' | 'all' | 'withoutEvidence') => {
+  if (entry === 'pending') {
+    reviewQueueFilter.value = 'pending';
+    profileReviewEntryReceipt.value = buildReviewEntryReceipt(entry);
+    scrollToSection('profile-predictions');
+    return;
+  }
+
+  if (entry === 'withoutEvidence') {
+    profileItemSearchQuery.value = '';
+    profileItemStatusFilter.value = 'withoutEvidence';
+    profileItemSortMode.value = 'priority';
+    profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
+    profileReviewEntryReceipt.value = buildReviewEntryReceipt(entry);
+    scrollToSection('profile-items');
+    return;
+  }
+
+  clearProfileItemFilters();
+  profileReviewEntryReceipt.value = buildReviewEntryReceipt(entry);
+  scrollToSection('profile-items');
 };
 
 const clearProfileItemFilters = () => {
@@ -1481,13 +1799,100 @@ const loadMoreProfileItems = () => {
   profileItemsVisibleLimit.value += PROFILE_ITEMS_PAGE_SIZE;
 };
 
+const buildProfileItemsLoadPendingReceipt = (): ProfileItemsLoadReceipt => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const sliceChip = total > 0
+    ? `当前切片 ${loaded}/${total} 条`
+    : '当前暂无画像条目';
+  return {
+    title: '正在加载全部画像条目',
+    detail: `正在重新分页请求 Memory Service 的当前画像条目；完成前列表仍只代表已加载切片，不能证明全库搜索或筛选已覆盖。这个只读请求不会确认、排除、恢复、写入 USER_CORE、刷新证据、导出或调用外部 provider。`,
+    tone: 'info',
+    chips: [
+      sliceChip,
+      '只读重新分页',
+      hasProfileItemFilters.value ? '保留当前筛选' : '不改变筛选',
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildProfileItemsLoadSuccessReceipt = (): ProfileItemsLoadReceipt => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const matched = filteredProfileItems.value.length;
+  return {
+    title: '已加载全部画像条目',
+    detail: `Memory Service 已返回 ${loaded}/${total} 条当前画像，当前搜索和筛选覆盖这次已拉取的完整条目集。加载全部只扩大本页审计范围，不会确认、排除、恢复、写入 USER_CORE、刷新证据、导出或调用外部 provider；个性化仍只读取 active + confirmed 条目。`,
+    tone: 'success',
+    chips: [
+      `快照 ${loaded}/${total} 条`,
+      hasProfileItemFilters.value ? `匹配 ${matched} 条` : '全量已覆盖',
+      '只读查看',
+      'active + confirmed 才个性化',
+    ],
+  };
+};
+
+const buildProfileItemsLoadFailureReceipt = (
+  previousLoaded: number,
+  previousTotal: number,
+  reason?: string,
+): ProfileItemsLoadReceipt => {
+  const sliceChip = previousTotal > 0
+    ? `保留旧切片 ${previousLoaded}/${previousTotal} 条`
+    : '没有可验证切片';
+  const detailReason = reason?.trim() || 'Memory Service 没有返回完整画像条目快照。';
+  return {
+    title: '加载全部画像未完成',
+    detail: `本次重新分页失败：${detailReason} 当前列表仍只能代表上一轮已加载切片，不能证明全库没有更多画像或匹配结果；这次失败不会确认、排除、恢复、写入 USER_CORE、刷新证据、导出或调用外部 provider。`,
+    tone: 'warning',
+    chips: [
+      sliceChip,
+      '不证明全库',
+      '未写入画像',
+      '可重试加载',
+    ],
+  };
+};
+
 const loadAllProfileItems = async () => {
   if (!profileItemsAreTruncated.value || isLoadingAllProfileItems.value) return;
+  const previousLoaded = profileItemsLoadedCount.value;
+  const previousTotal = profileItemsTotalCount.value;
   isLoadingAllProfileItems.value = true;
+  profileItemsLoadReceipt.value = buildProfileItemsLoadPendingReceipt();
   try {
-    await loadUserProfile({ showLoading: false, maxItems: 'all' });
-    profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
-    setStatus('已加载全部画像条目', 'success');
+    const loaded = await loadUserProfile({
+      showLoading: false,
+      maxItems: 'all',
+      preserveOnFailure: true,
+    });
+    if (loaded && !profileItemsAreTruncated.value) {
+      profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
+      profileItemsLoadReceipt.value = buildProfileItemsLoadSuccessReceipt();
+      setStatus('已加载全部画像条目', 'success');
+    } else {
+      const reason = loaded
+        ? 'Memory Service 仍返回截断快照。'
+        : statusMessage.value;
+      profileItemsLoadReceipt.value = buildProfileItemsLoadFailureReceipt(
+        previousLoaded,
+        previousTotal,
+        reason,
+      );
+      if (loaded) {
+        setStatus('加载全部画像未完成：服务仍返回截断快照', 'error');
+      }
+    }
+  } catch (error: any) {
+    profileItemsLoadReceipt.value = buildProfileItemsLoadFailureReceipt(
+      previousLoaded,
+      previousTotal,
+      error?.message,
+    );
+    setStatus(error?.message || '加载全部画像失败', 'error');
   } finally {
     isLoadingAllProfileItems.value = false;
   }
@@ -1496,6 +1901,7 @@ const loadAllProfileItems = async () => {
 const loadRetractedProfileItems = async () => {
   if (isLoadingRetractedProfileItems.value) return;
   isLoadingRetractedProfileItems.value = true;
+  profileRetractedAuditReceipt.value = buildRetractedAuditPendingReceipt();
   try {
     const response = await chromeAPI.sendMessage({
       type: 'GET_RETRACTED_PROFILE_ITEMS',
@@ -1515,11 +1921,19 @@ const loadRetractedProfileItems = async () => {
         (item) => item.status === 'retracted'
       );
       retractedProfileItemsTotal.value = page.total ?? retractedProfileItems.value.length;
+      profileRetractedAuditReceipt.value = buildRetractedAuditSuccessReceipt(
+        retractedProfileItems.value.length,
+        retractedProfileItemsTotal.value,
+      );
     } else {
-      setStatus((response as any)?.error || '已排除画像加载失败', 'error');
+      const errorMessage = (response as any)?.error || '已排除画像加载失败';
+      profileRetractedAuditReceipt.value = buildRetractedAuditFailureReceipt(errorMessage);
+      setStatus(errorMessage, 'error');
     }
   } catch (error: any) {
-    setStatus(error?.message || '已排除画像加载失败', 'error');
+    const errorMessage = error?.message || '已排除画像加载失败';
+    profileRetractedAuditReceipt.value = buildRetractedAuditFailureReceipt(errorMessage);
+    setStatus(errorMessage, 'error');
   } finally {
     isLoadingRetractedProfileItems.value = false;
   }
@@ -1533,6 +1947,18 @@ const toggleRetractedProfileItems = async () => {
 };
 
 const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`;
+
+const getProfileInfluenceScore = (
+  item?: UserProfileInterestItem | UserProfileReviewQueueItem | null,
+) => {
+  if (!item) return null;
+  const rawScore = 'explicitImportance' in item
+    ? item.explicitImportance ?? item.confidence
+    : item.confidence;
+  const score = Number(rawScore);
+  if (!Number.isFinite(score)) return null;
+  return Math.max(0, Math.min(1, score));
+};
 
 const formatTime = (timestamp: number) => {
   if (!timestamp) return '暂无时间';
@@ -1710,11 +2136,12 @@ const buildProfileExportPendingReceipt = (): ProfileExportReceipt => {
 
   return {
     title: '正在准备画像导出',
-    detail: '正在向 Memory Service 重新分页请求全部画像状态并生成本地 JSON 的 manifest；下载尚未开始，manifest ID 尚未生成。当前搜索、筛选或页面切片不会限制导出，本次操作不会恢复、删除、同步或发送画像。',
+    detail: '正在向 Memory Service 重新分页请求全部画像状态并生成本地 JSON 的 manifest；下载尚未开始，manifest ID 尚未生成。同一轮导出单飞中，重复点击不会启动第二次 status=all 分页、生成第二个 manifest 或请求第二次下载。当前搜索、筛选或页面切片不会限制导出，本次操作不会恢复、删除、同步、发送画像或改写 Memory Service。',
     tone: 'info',
     chips: [
       loadedChip,
       '请求 status=all',
+      '单飞中：忽略重复点击',
       '下载尚未开始',
       '等待 manifest ID',
     ],
@@ -1748,6 +2175,8 @@ const buildProfileExportReceipt = (exportData: any, fileName: string): ProfileEx
     `可个性化 ${usableItems} 条`,
     `确认前保留 ${heldItems} 条`,
     inactiveItems > 0 ? `非活跃审计 ${inactiveItems} 条` : '非活跃审计 0 条',
+    '浏览器下载已请求',
+    '磁盘保存未校验',
   ];
   if (warnings.length > 0) {
     chips.push(`诊断缺失 ${warnings.length} 项`);
@@ -1767,6 +2196,7 @@ const buildProfileExportReceipt = (exportData: any, fileName: string): ProfileEx
   const completenessDetail = isTruncated
     ? '本次分页未完整，建议重试导出后再迁移或备份。'
     : '导出已重新分页拉取全部画像状态。';
+  const deliveryDetail = '文件已生成并交给浏览器下载；页面不能确认浏览器是否保存到磁盘、被拦截或被取消。';
   const fingerprintDetail = shortFingerprint
     ? ` manifest 指纹 ${shortFingerprint} 可用于对照下载文件。`
     : '';
@@ -1776,11 +2206,33 @@ const buildProfileExportReceipt = (exportData: any, fileName: string): ProfileEx
 
   return {
     title: warnings.length > 0
-      ? `画像已导出，诊断部分缺失：${fileName}`
-      : `画像已导出：${fileName}`,
-    detail: `${completenessDetail}${diagnosticDetail}${fingerprintDetail}${manifestIdDetail} 本地 JSON 不会恢复、删除、同步或发送画像；个性化仍只读取 active + confirmed 条目。`,
+      ? `画像导出文件已生成，诊断部分缺失：${fileName}`
+      : `画像导出文件已生成：${fileName}`,
+    detail: `${completenessDetail}${diagnosticDetail}${deliveryDetail}${fingerprintDetail}${manifestIdDetail} 本地 JSON 不会恢复、删除、同步或发送画像；个性化仍只读取 active + confirmed 条目。`,
     tone: isTruncated || warnings.length > 0 ? 'info' : 'success',
     chips,
+  };
+};
+
+const buildProfileExportFailureReceipt = (errorMessage?: string): ProfileExportReceipt => {
+  const reason = errorMessage?.trim() || 'Memory Service 没有返回可导出的画像数据。';
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const loadedChip = total > 0
+    ? `当前页 ${loaded}/${total} 条`
+    : '当前页暂无条目';
+
+  return {
+    title: '画像导出未完成',
+    detail: `本次导出失败：${reason} 没有生成新的本地 JSON、manifest ID 或浏览器下载请求；旧的成功回执或旧文件不能证明本次导出完成。当前页面仍只是已加载画像切片，本次失败不会恢复、删除、同步、发送画像，也不会改写 Memory Service。可确认服务可用后重新点击导出。`,
+    tone: 'warning',
+    chips: [
+      loadedChip,
+      '未生成新 JSON',
+      '未生成 manifest ID',
+      '未请求下载',
+      '可重试导出',
+    ],
   };
 };
 
@@ -1922,6 +2374,54 @@ const buildInfluenceFailureReceipt = (
   };
 };
 
+const buildInfluenceUndoPendingReceipt = (
+  undo: ProfileInfluenceUndo,
+): ProfileCalibrationReceipt => ({
+  title: `正在撤销影响力调整：${undo.itemName}`,
+  detail: `正在把 confidence/salience 从 ${formatPercent(undo.currentImportance)} 恢复到 ${formatPercent(undo.previousImportance)}。这次只恢复影响力，不撤销确认状态、不排除画像、不刷新证据、不改旧回答，也不会外发、跨平台同步或发送内容。`,
+  tone: 'info',
+  chips: [
+    `恢复到 ${formatPercent(undo.previousImportance)}`,
+    '不撤销确认',
+    '等待服务确认',
+  ],
+});
+
+const buildInfluenceUndoReceipt = (
+  rawItem: any,
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  undo: ProfileInfluenceUndo,
+): ProfileCalibrationReceipt => ({
+  title: `已撤销影响力调整：${undo.itemName}`,
+  detail: `Memory Service 已确认 confidence/salience 恢复到 ${formatPercent(undo.previousImportance)}。这不撤销已经完成的确认、排除、证据保留、旧回答或外部 provider 状态；后续个性化仍只读取 active + confirmed 条目。`,
+  tone: 'info',
+  chips: [
+    `影响力 ${formatPercent(undo.previousImportance)}`,
+    getReceiptPersonalizationChip(rawItem, fallbackItem),
+    getReceiptEvidenceChip(rawItem, fallbackItem),
+    '仅撤销权重',
+  ],
+});
+
+const buildInfluenceUndoFailureReceipt = (
+  fallbackItem: UserProfileInterestItem | null | undefined,
+  undo: ProfileInfluenceUndo,
+  errorMessage?: string,
+): ProfileCalibrationReceipt => {
+  const detailSuffix = errorMessage ? `失败原因：${errorMessage}` : '可以稍后重试撤销。';
+  return {
+    title: `影响力撤销未完成：${undo.itemName}`,
+    detail: `Memory Service 没有确认恢复到 ${formatPercent(undo.previousImportance)}；页面不会把它当作已撤销。不会外发、跨平台同步、恢复旧画像、排除画像或发送内容。${detailSuffix}`,
+    tone: 'warning',
+    chips: [
+      `目标 ${formatPercent(undo.previousImportance)}`,
+      getReceiptPersonalizationChip({}, fallbackItem),
+      getReceiptEvidenceChip({}, fallbackItem),
+      '可重试撤销',
+    ],
+  };
+};
+
 const buildRetractedReceipt = (
   rawItem: any,
   fallbackItem?: UserProfileInterestItem | null,
@@ -2023,6 +2523,72 @@ const buildRestorePendingReceipt = (
   };
 };
 
+const buildRetractedAuditPendingReceipt = (): ProfileRetractedAuditReceipt => {
+  const previousCount = retractedProfileItems.value.length;
+  const previousTotal = retractedProfileItemsTotal.value;
+  const snapshotChip = previousTotal > 0
+    ? `上次快照 ${previousCount}/${previousTotal} 条`
+    : '当前无可验证快照';
+
+  return {
+    title: '正在读取已排除画像',
+    detail: '正在请求 Memory Service 的 status=retracted 审计快照；读取完成前不能证明没有已排除画像。这个只读请求不会确认、恢复、排除、写入 USER_CORE、刷新证据、导出或调用外部 provider。',
+    tone: 'info',
+    chips: [
+      '请求 status=retracted',
+      snapshotChip,
+      '只读审计',
+      '等待服务确认',
+    ],
+  };
+};
+
+const buildRetractedAuditSuccessReceipt = (
+  loadedCount: number,
+  totalCount: number,
+  options: { localRestore?: boolean } = {},
+): ProfileRetractedAuditReceipt => {
+  const normalizedTotal = Math.max(0, totalCount || loadedCount);
+  const countChip = `快照 ${loadedCount}/${normalizedTotal} 条`;
+  const empty = normalizedTotal === 0;
+  const basis = options.localRestore
+    ? '本页已按刚才恢复结果更新已排除审计快照；需要重新确认全库时，可收起后再次打开重新读取。'
+    : 'Memory Service 已返回 status=retracted 的已排除画像审计快照。';
+
+  return {
+    title: empty ? '已排除画像快照为空' : '已读取已排除画像',
+    detail: `${basis} 这只是只读审计，不会确认、恢复、重新排除、写入 USER_CORE、刷新证据、导出或调用外部 provider；只有单独点击“恢复”才会提交恢复请求。`,
+    tone: empty ? 'info' : 'success',
+    chips: [
+      countChip,
+      'status=retracted',
+      '不参与个性化',
+      '恢复需单独点击',
+    ],
+  };
+};
+
+const buildRetractedAuditFailureReceipt = (errorMessage?: string): ProfileRetractedAuditReceipt => {
+  const reason = errorMessage?.trim() || 'Memory Service 没有返回已排除画像快照。';
+  const previousCount = retractedProfileItems.value.length;
+  const previousTotal = retractedProfileItemsTotal.value;
+  const snapshotChip = previousTotal > 0
+    ? `保留旧快照 ${previousCount}/${previousTotal} 条`
+    : '没有可验证快照';
+
+  return {
+    title: '已排除画像读取失败',
+    detail: `本次读取失败：${reason} 当前列表只能代表上一轮成功快照或空的本地状态，不能证明没有已排除画像；这次失败不会确认、恢复、重新排除、写入 USER_CORE、刷新证据、导出或调用外部 provider。`,
+    tone: 'warning',
+    chips: [
+      snapshotChip,
+      '不证明为空',
+      '未恢复画像',
+      '可重试读取',
+    ],
+  };
+};
+
 const buildCreatePendingReceipt = (): ProfileCalibrationReceipt => {
   const itemTypeLabel = explicitProfileTypeLabels[explicitProfileDraft.value.itemType] ||
     explicitProfileDraft.value.itemType;
@@ -2081,6 +2647,8 @@ const canBoostProfileItem = (item: UserProfileInterestItem) =>
 const canLowerProfileItem = (item: UserProfileInterestItem) =>
   (item.explicitImportance ?? item.confidence ?? 0) > 0.3;
 
+type ProfileInfluenceAction = 'boost' | 'lower';
+
 const getProfileActionImpactReceipt = (
   item: UserProfileInterestItem | UserProfileReviewQueueItem,
   mode: 'row' | 'prediction',
@@ -2115,6 +2683,62 @@ const getProfileActionImpactReceipt = (
   return `当前影响力 ${formatPercent(score)}；${actions.join(' / ')} 会更新 confidence/salience；${confirmationCopy}；${evidenceCopy}；只影响后续画像选择，不会改旧回答、刷新证据或外发；active + confirmed 才进入个性化。`;
 };
 
+const getProfileInfluenceActionBoundary = (
+  item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  mode: 'row' | 'prediction',
+  action: ProfileInfluenceAction,
+) => {
+  const fullItem = getProfileItemReceiptTarget(item.id);
+  const score = fullItem?.explicitImportance ??
+    ('explicitImportance' in item ? item.explicitImportance : item.confidence) ??
+    0;
+  const status = fullItem?.status ?? item.status;
+  const confirmed = fullItem?.userConfirmed ?? false;
+  const evidenceCount = fullItem?.evidenceRefs.length ??
+    ('evidenceCount' in item ? item.evidenceCount : 0);
+  const name = fullItem?.name || item.name || '当前画像条目';
+  const actionLabel = action === 'boost' ? '设为重点' : '降低影响';
+  const targetImportance = action === 'boost' ? 0.95 : 0.25;
+  const targetCopy = `目标影响力 ${formatPercent(targetImportance)}`;
+  const evidenceCopy = evidenceCount > 0
+    ? `${evidenceCount} 条证据会保留`
+    : '暂无证据会继续提示补证';
+  const alreadyUsable = status === 'active' && confirmed;
+  const pendingCopy = `${actionLabel}提交中：正在请求 Memory Service 将 ${name} 写为 ${targetCopy}；不会重复提交、不会提前证明已写入、不会外发、跨平台同步、删除证据、排除/恢复画像、导出或发送内容。`;
+
+  if (isItemPending(item.id)) return pendingCopy;
+
+  let confirmationCopy = '';
+  if (action === 'boost') {
+    confirmationCopy = alreadyUsable
+      ? '该条已确认，本次只写入新的 confidence/salience，不重复确认。'
+      : '会先写入新的 confidence/salience，再尝试确认成 active + confirmed；确认完成后才可能进入个性化。';
+  } else {
+    confirmationCopy = alreadyUsable
+      ? '只写入新的 confidence/salience；该条已确认，后续仍按场景选择是否使用。'
+      : '只写入新的 confidence/salience，不会自动确认；确认前不会进入 USER_CORE、召回或 provider context。';
+  }
+
+  const scopeCopy = mode === 'prediction'
+    ? '这是待确认推断队列中的快速校准。'
+    : '这是画像条目列表中的快速校准。';
+
+  return `${actionLabel} ${name}：当前影响力 ${formatPercent(score)}，${targetCopy}。${scopeCopy}${confirmationCopy} ${evidenceCopy}。服务确认前不能证明已写入或进入个性化；不会改旧回答、刷新或删除证据、排除/恢复画像、外发、跨平台同步、导出或发送内容。`;
+};
+
+const profileInfluenceUndoButtonBoundary = computed(() => {
+  const undo = profileInfluenceUndo.value;
+  if (!undo) {
+    return '当前没有可撤销的画像影响力调整。';
+  }
+  const baseCopy = `撤销影响力调整：将 ${undo.itemName} 的 confidence/salience 从 ${formatPercent(undo.currentImportance)} 恢复到 ${formatPercent(undo.previousImportance)}。`;
+  const boundaryCopy = '只恢复影响力，不撤销确认状态、证据、旧回答、排除、恢复、外部同步、导出或发送内容；服务确认前不能证明已恢复。';
+  if (isUndoingProfileInfluence.value || isItemPending(undo.itemId)) {
+    return `${baseCopy}撤销请求提交中，不会重复提交。${boundaryCopy}`;
+  }
+  return `${baseCopy}${boundaryCopy}`;
+});
+
 const getStarCalibrationImpactReceipt = (item: UserProfileInterestItem) => {
   const evidenceCopy = item.evidenceRefs.length > 0
     ? `${item.evidenceRefs.length} 条证据保留`
@@ -2141,6 +2765,7 @@ const setImportance = async (
   if (isItemPending(itemId)) return;
   setItemPending(itemId, true);
   const targetItem = getProfileItemReceiptTarget(itemId);
+  const previousImportance = getProfileInfluenceScore(targetItem);
   const confirmAfterUpdate = options.confirmAfterUpdate !== false;
   setStatus('正在校准画像影响力...', 'info');
   setProfileCalibrationReceipt(
@@ -2172,6 +2797,15 @@ const setImportance = async (
       setProfileCalibrationReceipt(
         buildInfluenceReceipt((response as any).data, targetItem, importance)
       );
+      if (targetItem && previousImportance != null && Math.abs(previousImportance - importance) > 0.005) {
+        profileInfluenceUndo.value = {
+          itemId,
+          itemType: type || targetItem.itemType || 'profile',
+          itemName: targetItem.name || '当前画像条目',
+          previousImportance,
+          currentImportance: importance,
+        };
+      }
       await loadUserProfile({ showLoading: false });
     } else if ((response as any)?.partialSuccess && (response as any)?.phase === 'confirm') {
       setStatus((response as any).message || '影响力已更新，确认未完成', 'info');
@@ -2183,6 +2817,15 @@ const setImportance = async (
           (response as any).error,
         )
       );
+      if (targetItem && previousImportance != null && Math.abs(previousImportance - importance) > 0.005) {
+        profileInfluenceUndo.value = {
+          itemId,
+          itemType: type || targetItem.itemType || 'profile',
+          itemName: targetItem.name || '当前画像条目',
+          previousImportance,
+          currentImportance: importance,
+        };
+      }
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '重要性更新失败', 'error');
@@ -2214,6 +2857,55 @@ const setProfileItemInfluence = async (
     successMessage,
     confirmAfterUpdate: options.confirmAfterUpdate,
   });
+};
+
+const undoProfileInfluenceAdjustment = async () => {
+  const undo = profileInfluenceUndo.value;
+  if (!undo || isUndoingProfileInfluence.value || isItemPending(undo.itemId)) return;
+
+  const targetItem = getProfileItemReceiptTarget(undo.itemId);
+  isUndoingProfileInfluence.value = true;
+  setItemPending(undo.itemId, true);
+  setStatus('正在撤销画像影响力调整...', 'info', { keepProfileReceipt: true });
+  setProfileCalibrationReceipt(buildInfluenceUndoPendingReceipt(undo));
+
+  try {
+    const response = await chromeAPI.sendMessage({
+      type: 'SET_EXPLICIT_IMPORTANCE',
+      itemId: undo.itemId,
+      itemType: undo.itemType || targetItem?.itemType || 'profile',
+      importance: undo.previousImportance,
+      confirmAfterUpdate: false,
+    });
+
+    if (response && (response as any).success) {
+      profileInfluenceUndo.value = null;
+      setStatus('已撤销画像影响力调整', 'success');
+      setProfileCalibrationReceipt(
+        buildInfluenceUndoReceipt((response as any).data, targetItem, undo)
+      );
+      await loadUserProfile({ showLoading: false });
+    } else {
+      const errorMessage = (response as any)?.error || '画像影响力撤销失败';
+      setStatus(errorMessage, 'error', { keepProfileReceipt: true });
+      profileInfluenceUndo.value = undo;
+      setProfileCalibrationReceipt(
+        buildInfluenceUndoFailureReceipt(targetItem, undo, errorMessage)
+      );
+      await loadUserProfile({ showLoading: false });
+    }
+  } catch (error: any) {
+    const errorMessage = error?.message || '画像影响力撤销失败';
+    setStatus(errorMessage, 'error', { keepProfileReceipt: true });
+    profileInfluenceUndo.value = undo;
+    setProfileCalibrationReceipt(
+      buildInfluenceUndoFailureReceipt(targetItem, undo, errorMessage)
+    );
+    await loadUserProfile({ showLoading: false });
+  } finally {
+    setItemPending(undo.itemId, false);
+    isUndoingProfileInfluence.value = false;
+  }
 };
 
 const confirmProfileItem = async (itemId: string) => {
@@ -2328,6 +3020,13 @@ const restoreProfileItemById = async (
         0,
         retractedProfileItemsTotal.value - 1
       );
+      if (showRetractedProfileItems.value) {
+        profileRetractedAuditReceipt.value = buildRetractedAuditSuccessReceipt(
+          retractedProfileItems.value.length,
+          retractedProfileItemsTotal.value,
+          { localRestore: true },
+        );
+      }
       setStatus(`已恢复“${itemName}”`, 'success');
       setProfileCalibrationReceipt(
         buildRestoredReceipt((response as any).data, targetItem)
@@ -2447,16 +3146,20 @@ const exportUserProfile = async () => {
         : '';
       profileExportReceipt.value = buildProfileExportReceipt(exportData, fileName);
       setStatus(
-        `画像已导出：${fileName}${itemCountLabel}${retractedAuditLabel}${warningLabel}`,
+        `画像导出文件已生成：${fileName}${itemCountLabel}${retractedAuditLabel}${warningLabel}`,
         warnings.length > 0 ? 'info' : 'success',
         { keepExportReceipt: true },
       );
     } else {
-      setStatus((response as any)?.error || '用户画像导出失败', 'error');
+      const errorMessage = (response as any)?.error || '用户画像导出失败';
+      profileExportReceipt.value = buildProfileExportFailureReceipt(errorMessage);
+      setStatus(errorMessage, 'error', { keepExportReceipt: true });
     }
   } catch (error: any) {
     console.error('导出用户画像时发生错误:', error);
-    setStatus(error?.message || '用户画像导出失败', 'error');
+    const errorMessage = error?.message || '用户画像导出失败';
+    profileExportReceipt.value = buildProfileExportFailureReceipt(errorMessage);
+    setStatus(errorMessage, 'error', { keepExportReceipt: true });
   } finally {
     isExporting.value = false;
   }
@@ -2752,7 +3455,9 @@ onMounted(() => {
 }
 
 .profile-calibration-receipt,
-.profile-export-receipt {
+.profile-export-receipt,
+.profile-retracted-audit-receipt,
+.profile-items-load-receipt {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2767,39 +3472,51 @@ onMounted(() => {
 }
 
 .profile-calibration-receipt.receipt-success,
-.profile-export-receipt.receipt-success {
+.profile-export-receipt.receipt-success,
+.profile-retracted-audit-receipt.receipt-success,
+.profile-items-load-receipt.receipt-success {
   border-left-color: #2e7d32;
   background: #f3fbf5;
 }
 
 .profile-calibration-receipt.receipt-info,
-.profile-export-receipt.receipt-info {
+.profile-export-receipt.receipt-info,
+.profile-retracted-audit-receipt.receipt-info,
+.profile-items-load-receipt.receipt-info {
   border-left-color: #1976d2;
   background: #f4f8ff;
 }
 
 .profile-calibration-receipt.receipt-warning,
-.profile-export-receipt.receipt-warning {
+.profile-export-receipt.receipt-warning,
+.profile-retracted-audit-receipt.receipt-warning,
+.profile-items-load-receipt.receipt-warning {
   border-left-color: #f57c00;
   background: #fff9ee;
 }
 
 .profile-calibration-receipt-copy,
-.profile-export-receipt-copy {
+.profile-export-receipt-copy,
+.profile-retracted-audit-receipt-copy,
+.profile-items-load-receipt-copy {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
 .profile-calibration-receipt-label,
-.profile-export-receipt-label {
+.profile-export-receipt-label,
+.profile-retracted-audit-receipt-label,
+.profile-items-load-receipt-label {
   color: #5f6f7f;
   font-size: 11px;
   font-weight: 800;
 }
 
 .profile-calibration-receipt-copy strong,
-.profile-export-receipt-copy strong {
+.profile-export-receipt-copy strong,
+.profile-retracted-audit-receipt-copy strong,
+.profile-items-load-receipt-copy strong {
   color: #243447;
   font-size: 14px;
   line-height: 1.35;
@@ -2807,15 +3524,35 @@ onMounted(() => {
 }
 
 .profile-calibration-receipt-copy p,
-.profile-export-receipt-copy p {
+.profile-export-receipt-copy p,
+.profile-retracted-audit-receipt-copy p,
+.profile-items-load-receipt-copy p {
   margin: 0;
   color: #51606f;
   font-size: 13px;
   line-height: 1.45;
 }
 
+.profile-calibration-receipt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  color: #51606f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.secondary-action-btn.compact-action-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .profile-calibration-receipt-chips,
-.profile-export-receipt-chips {
+.profile-export-receipt-chips,
+.profile-retracted-audit-receipt-chips,
+.profile-items-load-receipt-chips {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -2825,7 +3562,9 @@ onMounted(() => {
 }
 
 .profile-calibration-receipt-chips span,
-.profile-export-receipt-chips span {
+.profile-export-receipt-chips span,
+.profile-retracted-audit-receipt-chips span,
+.profile-items-load-receipt-chips span {
   border: 1px solid #d7dee5;
   border-radius: 12px;
   padding: 3px 8px;
@@ -2863,7 +3602,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .review-summary-card {
@@ -2928,6 +3667,66 @@ onMounted(() => {
   color: #8a97a3;
   cursor: not-allowed;
   background: #f8f9fa;
+}
+
+.profile-review-entry-receipt {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 20px 0;
+  padding: 12px 14px;
+  border: 1px solid #d6e4f5;
+  border-left: 4px solid #1565c0;
+  border-radius: 8px;
+  background: #f5f9ff;
+  color: #2c3e50;
+}
+
+.profile-review-entry-receipt-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.profile-review-entry-receipt-label {
+  color: #5f6f7f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.profile-review-entry-receipt-copy strong {
+  color: #243447;
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.profile-review-entry-receipt-copy p {
+  margin: 0;
+  color: #51606f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.profile-review-entry-receipt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 48%;
+  flex-shrink: 0;
+}
+
+.profile-review-entry-receipt-chips span {
+  border: 1px solid #d7dee5;
+  border-radius: 12px;
+  padding: 3px 8px;
+  background: #ffffff;
+  color: #34495e;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .profile-card {
@@ -3485,6 +4284,12 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.inline-empty.warning-empty {
+  border-color: #f5d3a3;
+  background: #fff9ee;
+  color: #8a5a00;
+}
+
 .profile-items-list {
   display: flex;
   flex-direction: column;
@@ -3775,6 +4580,10 @@ a.profile-evidence-item:hover .profile-evidence-label {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid #e9ecef;
+}
+
+.profile-retracted-audit-receipt {
+  margin-bottom: 12px;
 }
 
 .retracted-profile-header {
@@ -4375,12 +5184,16 @@ a.profile-evidence-item:hover .profile-evidence-label {
   }
 
   .profile-calibration-receipt,
-  .profile-export-receipt {
+  .profile-export-receipt,
+  .profile-review-entry-receipt,
+  .profile-retracted-audit-receipt {
     flex-direction: column;
   }
 
   .profile-calibration-receipt-chips,
-  .profile-export-receipt-chips {
+  .profile-export-receipt-chips,
+  .profile-review-entry-receipt-chips,
+  .profile-retracted-audit-receipt-chips {
     max-width: none;
     justify-content: flex-start;
   }

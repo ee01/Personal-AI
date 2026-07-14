@@ -25,7 +25,42 @@
         已将「{{ topicDeferredUndo.topicName }}」稍后到
         {{ formatDeferredUntil(topicDeferredUndo.until) }}
       </span>
-      <button type="button" @click="handleUndoTopicDefer">恢复</button>
+      <div class="topic-undo-actions">
+        <button
+          type="button"
+          :title="getTopicDeferToastViewBoundary(topicDeferredUndo)"
+          :aria-label="getTopicDeferToastViewBoundary(topicDeferredUndo)"
+          @click="handleViewDeferredTopics"
+        >
+          查看稍后
+        </button>
+        <button
+          type="button"
+          :title="getTopicDeferredRestoreBoundary(topicDeferredUndo)"
+          :aria-label="getTopicDeferredRestoreBoundary(topicDeferredUndo)"
+          @click="handleUndoTopicDefer"
+        >
+          恢复
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="topicDeferRestoreReceipt"
+      class="topic-undo-toast topic-defer-restore-receipt"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="topic-defer-restore-copy">
+        <strong>{{ topicDeferRestoreReceipt.title }}</strong>
+        <span>{{ topicDeferRestoreReceipt.summary }}</span>
+        <small
+          v-for="detail in topicDeferRestoreReceipt.details"
+          :key="detail"
+        >
+          {{ detail }}
+        </small>
+      </div>
     </div>
 
     <div
@@ -38,7 +73,28 @@
           formatMutedReason(topicMuteUndo.reason)
         }}{{ formatMutedUntil(topicMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
-      <button type="button" @click="handleUndoTopicMute">取消静音</button>
+      <div class="topic-undo-actions">
+        <button type="button" @click="handleViewMutedTopics">查看静音</button>
+        <button type="button" @click="handleUndoTopicMute">取消静音</button>
+      </div>
+    </div>
+
+    <div
+      v-if="topicMuteRestoreReceipt"
+      class="topic-undo-toast topic-mute-restore-receipt"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="topic-mute-restore-copy">
+        <strong>{{ topicMuteRestoreReceipt.title }}</strong>
+        <span>{{ topicMuteRestoreReceipt.summary }}</span>
+        <small
+          v-for="detail in topicMuteRestoreReceipt.details"
+          :key="detail"
+        >
+          {{ detail }}
+        </small>
+      </div>
     </div>
 
     <!-- 过滤控件 -->
@@ -435,14 +491,24 @@
                 @click.stop="handleResourcePreviewClick(entity, resource)"
               >
                 <span>📖</span>
-                <span class="preview-content">{{ resource.name }}</span>
+                <span class="preview-content resource-preview-content">
+                  <span>{{ resource.name }}</span>
+                  <small
+                    :class="[
+                      'resource-source-note',
+                      { muted: !getSafeExternalUrl(resource.url) },
+                    ]"
+                  >
+                    {{ getResourcePreviewSourceNote(resource) }}
+                  </small>
+                </span>
                 <span
                   :class="[
                     'preview-action-hint',
                     { muted: !getSafeExternalUrl(resource.url) },
                   ]"
                 >
-                  {{ getSafeExternalUrl(resource.url) ? '打开' : '详情' }}
+                  {{ getResourcePreviewActionLabel(resource) }}
                 </span>
               </li>
             </ul>
@@ -492,7 +558,8 @@
               v-else-if="isTopicDeferred(entity.id)"
               type="button"
               class="topic-action-btn restore"
-              :aria-label="`恢复 ${entity.name} 到未读主题`"
+              :title="getTopicDeferredRestoreBoundary(entity)"
+              :aria-label="getTopicDeferredRestoreBoundary(entity)"
               @click.stop="handleRestoreDeferredTopic(entity.id)"
             >
               ↩ 恢复
@@ -510,7 +577,8 @@
                 <button
                   type="button"
                   class="topic-action-btn later"
-                  :aria-label="`选择 ${entity.name} 的稍后处理时间`"
+                  :title="getTopicDeferMenuButtonBoundary(entity)"
+                  :aria-label="getTopicDeferMenuButtonBoundary(entity)"
                   :aria-expanded="activeDeferTopicId === entity.id"
                   @click.stop="toggleTopicDeferMenu(entity.id)"
                 >
@@ -538,6 +606,10 @@
                     type="button"
                     class="topic-defer-option"
                     role="menuitem"
+                    :title="getTopicDeferOptionBoundary(entity, option)"
+                    :aria-label="
+                      getTopicDeferOptionBoundary(entity, option)
+                    "
                     @click.stop="
                       handleDeferTopicForLater(entity.id, option.until)
                     "
@@ -555,12 +627,16 @@
                         v-model="customDeferValue"
                         type="datetime-local"
                         :min="customDeferMin"
+                        :title="getTopicCustomDeferInputBoundary(entity)"
+                        :aria-label="getTopicCustomDeferInputBoundary(entity)"
                         @click.stop
                         @keydown.enter.prevent="handleCustomDefer(entity.id)"
                       />
                       <button
                         type="button"
                         :disabled="!customDeferTimestamp"
+                        :title="getTopicCustomDeferConfirmBoundary(entity)"
+                        :aria-label="getTopicCustomDeferConfirmBoundary(entity)"
                         @click.stop="handleCustomDefer(entity.id)"
                       >
                         确定
@@ -978,6 +1054,8 @@
             <button
               v-if="topicDeferredUnreadCount > 0"
               class="view-toggle-btn"
+              :title="getTopicHiddenDeferredViewBoundary()"
+              :aria-label="getTopicHiddenDeferredViewBoundary()"
               @click="topicViewMode = 'later'"
             >
               查看稍后 {{ topicDeferredUnreadCount }}
@@ -1028,9 +1106,14 @@ import {
   getTopicMutePresetOptions,
   getTopicMuteReasonLabel,
   getTopicMuteReasonOptions,
+  type TopicDeferPresetOption,
   type TopicMuteReasonKey,
 } from '../memory-store';
-import { getSafeExternalUrl } from '../topic-link-safety';
+import {
+  getExternalUrlBlockedReasonLabel,
+  getExternalUrlSafety,
+  getSafeExternalUrl,
+} from '../topic-link-safety';
 import {
   getTopicParticipantLabels,
   getTopicParticipantTotalCount,
@@ -1125,7 +1208,23 @@ const topicMuteUndo = ref<{
   until: number | null;
   reason?: TopicMuteReasonKey;
 } | null>(null);
+const topicMuteRestoreReceipt = ref<{
+  title: string;
+  summary: string;
+  details: string[];
+} | null>(null);
+const topicDeferRestoreReceipt = ref<{
+  title: string;
+  summary: string;
+  details: string[];
+} | null>(null);
 let topicMuteUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
+let topicMuteRestoreReceiptTimer:
+  | ReturnType<typeof window.setTimeout>
+  | null = null;
+let topicDeferRestoreReceiptTimer:
+  | ReturnType<typeof window.setTimeout>
+  | null = null;
 let topicDeferredUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
 let topicDeferredReleaseTimer: ReturnType<typeof window.setTimeout> | null =
   null;
@@ -1180,6 +1279,55 @@ const getTopicViewModeLabel = () => {
       return '仅未读视图';
   }
 };
+
+const getTopicBoundaryName = (topic: any): string =>
+  String(topic?.topicName || topic?.name || topic?.id || '当前主题');
+
+const getTopicDeferMenuButtonBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `稍后处理边界：点击只打开或收起「${topicName}」的本机稍后时间菜单；选择时间前不会写入本机稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getTopicDeferOptionBoundary = (
+  topic: any,
+  optionOrUntil?: TopicDeferPresetOption | number,
+): string => {
+  const topicName = getTopicBoundaryName(topic);
+  const option =
+    typeof optionOrUntil === 'object' && optionOrUntil !== null
+      ? optionOrUntil
+      : null;
+  const until = option ? option.until : optionOrUntil;
+  const optionLabel = option?.label ? `${option.label}：` : '';
+  const deferTime = formatDeferredUntil(until) || '所选时间';
+  return `${optionLabel}稍后处理到 ${deferTime}：只把「${topicName}」写入本机浏览器稍后状态并暂时移出未读队列；不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。到期或恢复后回到未读流。`;
+};
+
+const getTopicCustomDeferInputBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `为「${topicName}」选择自定义稍后时间；这里只编辑本机表单，点击确定前不会写入稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getTopicCustomDeferConfirmBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  if (!customDeferTimestamp.value) {
+    return `自定义稍后时间无效：不会写入「${topicName}」的本机稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+  }
+  return getTopicDeferOptionBoundary(topic, customDeferTimestamp.value);
+};
+
+const getTopicDeferredRestoreBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `恢复未读回执：点击只删除「${topicName}」的本机稍后处理状态；未读信号保留，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。`;
+};
+
+const getTopicDeferToastViewBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `查看稍后：只切换到本页稍后视图核对「${topicName}」；不会恢复未读、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getTopicHiddenDeferredViewBoundary = (): string =>
+  `查看稍后 ${topicDeferredUnreadCount.value}：只切换到本页稍后视图核对被本机隐藏的未读主题；不会恢复未读、标记已读、同步 Memory Service 或改写原始聊天平台。`;
 
 const getTopicHiddenUnreadText = () => {
   const hiddenPieces: string[] = [];
@@ -1443,10 +1591,40 @@ const handleUnreadDiscussionClick = (topic: any, discussion: any) => {
   handleEntityClick(topic);
 };
 
+const getResourcePreviewHost = (resource: any): string => {
+  const safety = getExternalUrlSafety(resource?.url);
+  return safety.safeUrl
+    ? safety.hostname || getSourceOpenHost(safety.safeUrl)
+    : '';
+};
+
+const getResourcePreviewSourceNote = (resource: any): string => {
+  const safety = getExternalUrlSafety(resource?.url);
+  if (safety.safeUrl) {
+    const host = safety.hostname || getSourceOpenHost(safety.safeUrl);
+    return `来源 ${host} · 仅打开标签页`;
+  }
+  if (safety.blocked) {
+    return `来源已隐藏 · ${getExternalUrlBlockedReasonLabel(safety.reason)}`;
+  }
+  return '无可信外链 · 打开详情';
+};
+
+const getResourcePreviewActionLabel = (resource: any): string =>
+  getSafeExternalUrl(resource?.url) ? '打开' : '详情';
+
 const getResourcePreviewTitle = (resource: any) => {
-  return getSafeExternalUrl(resource?.url)
-    ? '打开资源来源'
-    : '查看主题详情中的资源上下文';
+  const safety = getExternalUrlSafety(resource?.url);
+  if (safety.safeUrl) {
+    const host = getResourcePreviewHost(resource);
+    return `打开资源来源：${host}；只请求外部标签页，不重新读取、不同步、不标记已读或写回原始平台。`;
+  }
+  if (safety.blocked) {
+    return `资源来源已隐藏：${getExternalUrlBlockedReasonLabel(
+      safety.reason,
+    )}；点击查看主题详情中的资源上下文。`;
+  }
+  return '无可信外链；查看主题详情中的资源上下文';
 };
 
 const handleResourcePreviewClick = (topic: any, resource: any) => {
@@ -1726,6 +1904,7 @@ const toggleTopicMuteMenu = (topicId: string) => {
 
 const handleDeferTopicForLater = async (topicId: string, until?: number) => {
   activeDeferTopicId.value = null;
+  clearTopicDeferRestoreReceipt();
   const topic = entities.value.find((entity) => entity.id === topicId);
   const cardElement = document.querySelector(
     `[data-topic-id="${topicId}"]`,
@@ -1753,6 +1932,7 @@ const handleMuteTopic = async (
   reason: TopicMuteReasonKey = selectedMuteReason.value,
 ) => {
   activeMuteTopicId.value = null;
+  clearTopicMuteRestoreReceipt();
   const topic = entities.value.find((entity) => entity.id === topicId);
   const cardElement = document.querySelector(
     `[data-topic-id="${topicId}"]`,
@@ -1783,15 +1963,24 @@ const handleCustomDefer = async (topicId: string) => {
 
 const handleRestoreDeferredTopic = (topicId: string) => {
   activeDeferTopicId.value = null;
+  const topic = entities.value.find((entity) => entity.id === topicId);
+  const topicName = String(topic?.name || topicId);
   store.restoreDeferredTopic(topicId);
   if (topicDeferredUndo.value?.topicId === topicId) {
     clearTopicDeferredUndo();
   }
+  showTopicDeferRestoreReceipt(topicName);
 };
 
 const handleRestoreMutedTopic = (topicId: string) => {
   activeMuteTopicId.value = null;
+  const topic = entities.value.find((entity) => entity.id === topicId);
+  const topicName = String(topic?.name || topicId);
   store.restoreMutedTopic(topicId);
+  if (topicMuteUndo.value?.topicId === topicId) {
+    clearTopicMuteUndo();
+  }
+  showTopicMuteRestoreReceipt(topicName);
 };
 
 const handleUndoTopicRead = async () => {
@@ -1825,6 +2014,7 @@ const handleUndoTopicDefer = () => {
 
   store.restoreDeferredTopic(undoState.topicId);
   clearTopicDeferredUndo();
+  showTopicDeferRestoreReceipt(undoState.topicName);
   if (entityType.value === 'Topic' && topicViewMode.value === 'later') {
     topicViewMode.value = 'unread';
   }
@@ -1835,6 +2025,22 @@ const clearTopicMuteUndo = () => {
   if (topicMuteUndoTimer !== null) {
     window.clearTimeout(topicMuteUndoTimer);
     topicMuteUndoTimer = null;
+  }
+};
+
+const clearTopicMuteRestoreReceipt = () => {
+  topicMuteRestoreReceipt.value = null;
+  if (topicMuteRestoreReceiptTimer !== null) {
+    window.clearTimeout(topicMuteRestoreReceiptTimer);
+    topicMuteRestoreReceiptTimer = null;
+  }
+};
+
+const clearTopicDeferRestoreReceipt = () => {
+  topicDeferRestoreReceipt.value = null;
+  if (topicDeferRestoreReceiptTimer !== null) {
+    window.clearTimeout(topicDeferRestoreReceiptTimer);
+    topicDeferRestoreReceiptTimer = null;
   }
 };
 
@@ -1870,20 +2076,71 @@ const showTopicMuteUndo = (
   topicMuteUndoTimer = window.setTimeout(clearTopicMuteUndo, 10_000);
 };
 
+const showTopicMuteRestoreReceipt = (topicName: string) => {
+  clearTopicMuteRestoreReceipt();
+  const displayName = topicName || '当前主题';
+  topicMuteRestoreReceipt.value = {
+    title: '取消静音回执',
+    summary: `已取消「${displayName}」的本机静音。`,
+    details: [
+      '只删除本机静音过滤；未读信号保留，不会标记已读。',
+      '没有同步 Memory Service、发送、删除或改写原始聊天平台。',
+      '如果这个主题仍有未读，它会重新进入未读流；当前页面仍按你选中的视图显示。',
+    ],
+  };
+  topicMuteRestoreReceiptTimer = window.setTimeout(
+    clearTopicMuteRestoreReceipt,
+    10_000,
+  );
+};
+
+const showTopicDeferRestoreReceipt = (topicName: string) => {
+  clearTopicDeferRestoreReceipt();
+  const displayName = topicName || '当前主题';
+  topicDeferRestoreReceipt.value = {
+    title: '恢复未读回执',
+    summary: `已把「${displayName}」移回未读流（本机）。`,
+    details: [
+      '只删除本机稍后处理状态；未读信号保留，不会标记已读。',
+      '没有同步 Memory Service、发送、删除或改写原始聊天平台。',
+      '如果这个主题仍有未读，它会重新进入未读队列；当前页面仍按你选中的视图显示。',
+    ],
+  };
+  topicDeferRestoreReceiptTimer = window.setTimeout(
+    clearTopicDeferRestoreReceipt,
+    10_000,
+  );
+};
+
 const handleUndoTopicMute = () => {
   const undoState = topicMuteUndo.value;
   if (!undoState) return;
 
   store.restoreMutedTopic(undoState.topicId);
   clearTopicMuteUndo();
+  showTopicMuteRestoreReceipt(undoState.topicName);
   if (entityType.value === 'Topic' && topicViewMode.value === 'muted') {
     topicViewMode.value = 'unread';
   }
 };
 
+const handleViewMutedTopics = () => {
+  activeDeferTopicId.value = null;
+  activeMuteTopicId.value = null;
+  topicViewMode.value = 'muted';
+};
+
+const handleViewDeferredTopics = () => {
+  activeDeferTopicId.value = null;
+  activeMuteTopicId.value = null;
+  topicViewMode.value = 'later';
+};
+
 onBeforeUnmount(() => {
   clearTopicDeferredUndo();
+  clearTopicDeferRestoreReceipt();
   clearTopicMuteUndo();
+  clearTopicMuteRestoreReceipt();
   clearTopicDeferredReleaseTimer();
   clearSourceOpenReceiptTimer();
 });
@@ -2446,6 +2703,24 @@ watch(
   cursor: pointer;
 }
 
+.resource-preview-content {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.resource-source-note {
+  color: #bfdbfe;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.resource-source-note.muted {
+  color: #94a3b8;
+}
+
 .preview-action-hint {
   margin-left: auto;
   color: #93c5fd;
@@ -2547,6 +2822,57 @@ watch(
   outline: none;
   background: rgba(37, 99, 235, 0.32);
   color: #ffffff;
+}
+
+.topic-undo-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.topic-mute-restore-receipt {
+  align-items: flex-start;
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+
+.topic-defer-restore-receipt {
+  align-items: flex-start;
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(22, 163, 74, 0.1);
+  color: #bbf7d0;
+}
+
+.topic-mute-restore-copy {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.topic-mute-restore-copy strong {
+  color: #cbd5e1;
+}
+
+.topic-mute-restore-copy small {
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.topic-defer-restore-copy {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.topic-defer-restore-copy strong {
+  color: #dcfce7;
+}
+
+.topic-defer-restore-copy small {
+  color: inherit;
+  opacity: 0.9;
 }
 
 .topic-defer-options {

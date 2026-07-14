@@ -18,7 +18,12 @@
           <span class="pulse"></span>
           Flight Recorder 已联通
         </span>
-        <button class="btn secondary secondary-btn" @click="openSyncDialog">
+        <button
+          class="btn secondary secondary-btn"
+          :title="syncDialogActionBoundary()"
+          :aria-label="syncDialogActionBoundary()"
+          @click="openSyncDialog"
+        >
           ⚙ 平台级自动同步
         </button>
       </div>
@@ -112,6 +117,16 @@
             :disabled="
               suggestionWriteLocked(suggestionPriorityInsight.suggestion.id)
             "
+            :title="
+              suggestionPrimaryActionBoundary(
+                suggestionPriorityInsight.suggestion,
+              )
+            "
+            :aria-label="
+              suggestionPrimaryActionBoundary(
+                suggestionPriorityInsight.suggestion,
+              )
+            "
             @click.stop="
               handleSuggestionPrimary(suggestionPriorityInsight.suggestion.id)
             "
@@ -141,6 +156,8 @@
                 }"
                 role="button"
                 tabindex="0"
+                :title="suggestionCardSelectionBoundary(suggestion)"
+                :aria-label="suggestionCardSelectionBoundary(suggestion)"
                 @click="selectSkill(suggestion.id)"
                 @keydown.enter="selectSkill(suggestion.id)"
                 @keydown.space.prevent="selectSkill(suggestion.id)"
@@ -168,6 +185,26 @@
                   <span class="source-link">
                     {{ suggestionOriginText(suggestion) }}
                   </span>
+                </div>
+                <div
+                  class="suggestion-card-receipt"
+                  :class="suggestionCardReceiptTone(suggestion)"
+                  aria-live="polite"
+                >
+                  <div class="suggestion-card-receipt-head">
+                    <span>建议处理回执</span>
+                    <strong>{{ suggestionCardReceiptTitle(suggestion) }}</strong>
+                  </div>
+                  <div class="suggestion-card-receipt-rows">
+                    <div
+                      v-for="row in suggestionCardReceiptRows(suggestion)"
+                      :key="`${suggestion.id}:card-receipt:${row.label}`"
+                      :class="['suggestion-card-receipt-row', row.tone || '']"
+                    >
+                      <span class="label">{{ row.label }}</span>
+                      <span>{{ row.text }}</span>
+                    </div>
+                  </div>
                 </div>
                 <div
                   v-if="requiresReview(suggestion)"
@@ -204,6 +241,8 @@
                     class="btn primary"
                     type="button"
                     :disabled="suggestionWriteLocked(suggestion.id)"
+                    :title="suggestionPrimaryActionBoundary(suggestion)"
+                    :aria-label="suggestionPrimaryActionBoundary(suggestion)"
                     @click.stop="handleSuggestionPrimary(suggestion.id)"
                   >
                     {{ suggestionPrimaryLabel(suggestion) }}
@@ -212,6 +251,8 @@
                     class="btn danger"
                     type="button"
                     :disabled="suggestionWriteLocked(suggestion.id)"
+                    :title="suggestionDismissActionBoundary(suggestion)"
+                    :aria-label="suggestionDismissActionBoundary(suggestion)"
                     @click.stop="dismissSuggestion(suggestion.id)"
                   >
                     ✕ 丢弃
@@ -220,6 +261,8 @@
                     class="btn secondary"
                     type="button"
                     :disabled="suggestionWriteLocked(suggestion.id)"
+                    :title="suggestionSnoozeActionBoundary(suggestion)"
+                    :aria-label="suggestionSnoozeActionBoundary(suggestion)"
                     @click.stop="snoozeSuggestion(suggestion.id)"
                   >
                     稍后审
@@ -252,6 +295,8 @@
           }"
           role="button"
           tabindex="0"
+          :title="snoozedSuggestionCardSelectionBoundary(suggestion)"
+          :aria-label="snoozedSuggestionCardSelectionBoundary(suggestion)"
           @click="selectSkill(suggestion.id)"
           @keydown.enter="selectSkill(suggestion.id)"
           @keydown.space.prevent="selectSkill(suggestion.id)"
@@ -272,6 +317,8 @@
               class="btn primary"
               type="button"
               :disabled="suggestionWriteLocked(suggestion.id)"
+              :title="suggestionUnsnoozeActionBoundary(suggestion)"
+              :aria-label="suggestionUnsnoozeActionBoundary(suggestion)"
               @click.stop="unsnoozeSuggestion(suggestion.id)"
             >
               现在审
@@ -280,6 +327,8 @@
               class="btn danger"
               type="button"
               :disabled="suggestionWriteLocked(suggestion.id)"
+              :title="suggestionDismissActionBoundary(suggestion)"
+              :aria-label="suggestionDismissActionBoundary(suggestion)"
               @click.stop="dismissSuggestion(suggestion.id)"
             >
               丢弃
@@ -368,6 +417,8 @@
             type="button"
             class="candidate skill-card"
             :class="{ active: selectedId === skill.id }"
+            :title="skillCardSelectionBoundary(skill)"
+            :aria-label="skillCardSelectionBoundary(skill)"
             @click="selectSkill(skill.id)"
           >
             <div class="candidate-top skill-card-head">
@@ -430,6 +481,8 @@
                 "
                 class="btn secondary secondary-btn"
                 :disabled="suggestionWriteLocked(selectedSkill.id)"
+                :title="suggestionUnsnoozeActionBoundary(selectedSkill)"
+                :aria-label="suggestionUnsnoozeActionBoundary(selectedSkill)"
                 @click="unsnoozeSuggestion(selectedSkill.id)"
               >
                 现在审
@@ -441,6 +494,8 @@
                   !canConfirmSuggestion(selectedSkill)
                 "
                 class="btn secondary secondary-btn"
+                :title="suggestionReviewActionBoundary(selectedSkill)"
+                :aria-label="suggestionReviewActionBoundary(selectedSkill)"
                 @click="prepareSuggestionReview(selectedSkill.id)"
               >
                 查看证据
@@ -452,6 +507,8 @@
                 "
                 class="btn primary primary-btn"
                 :disabled="suggestionWriteLocked(selectedSkill.id)"
+                :title="suggestionPrimaryActionBoundary(selectedSkill)"
+                :aria-label="suggestionPrimaryActionBoundary(selectedSkill)"
                 @click="handleSuggestionPrimary(selectedSkill.id)"
               >
                 {{ suggestionPrimaryLabel(selectedSkill) }}
@@ -460,6 +517,8 @@
                 v-if="selectedSkill.status === 'suggestion'"
                 class="btn danger secondary-btn"
                 :disabled="suggestionWriteLocked(selectedSkill.id)"
+                :title="suggestionDismissActionBoundary(selectedSkill)"
+                :aria-label="suggestionDismissActionBoundary(selectedSkill)"
                 @click="dismissSuggestion(selectedSkill.id)"
               >
                 ✕ 丢弃
@@ -533,6 +592,8 @@
                 class="btn primary mini"
                 type="button"
                 :disabled="suggestionWriteLocked(selectedSkill.id)"
+                :title="suggestionUnsnoozeActionBoundary(selectedSkill)"
+                :aria-label="suggestionUnsnoozeActionBoundary(selectedSkill)"
                 @click="unsnoozeSuggestion(selectedSkill.id)"
               >
                 现在审
@@ -584,6 +645,8 @@
                 v-if="!canConfirmSuggestion(selectedSkill)"
                 class="btn secondary mini"
                 type="button"
+                :title="suggestionReviewActionBoundary(selectedSkill)"
+                :aria-label="suggestionReviewActionBoundary(selectedSkill)"
                 @click="prepareSuggestionReview(selectedSkill.id)"
               >
                 查看证据
@@ -593,6 +656,8 @@
                 class="btn primary mini"
                 type="button"
                 :disabled="suggestionWriteLocked(selectedSkill.id)"
+                :title="suggestionPrimaryActionBoundary(selectedSkill)"
+                :aria-label="suggestionPrimaryActionBoundary(selectedSkill)"
                 @click="
                   useSuggestion(selectedSkill.id, { reviewConfirmed: true })
                 "
@@ -855,6 +920,8 @@
                         class="btn secondary mini"
                         type="button"
                         :disabled="!selectedSkill.share"
+                        :title="shareActionTitle('url')"
+                        :aria-label="shareActionTitle('url')"
                         @click="copySkillUrl"
                       >
                         复制可访问 URL
@@ -863,6 +930,8 @@
                         class="btn secondary mini"
                         type="button"
                         :disabled="!selectedSkill.share"
+                        :title="shareActionTitle('preview')"
+                        :aria-label="shareActionTitle('preview')"
                         @click="openSkillPreview"
                       >
                         打开预览
@@ -902,7 +971,7 @@
                       aria-live="polite"
                     >
                       <div class="share-copy-head">
-                        <span>复制回执</span>
+                        <span>{{ currentShareCopyReceipt.heading || '复制回执' }}</span>
                         <strong>{{ currentShareCopyReceipt.title }}</strong>
                       </div>
                       <p>{{ currentShareCopyReceipt.summary }}</p>
@@ -934,6 +1003,8 @@
                   <button
                     class="btn secondary mini"
                     type="button"
+                    :title="syncDialogActionBoundary()"
+                    :aria-label="syncDialogActionBoundary()"
                     @click="openSyncDialog"
                   >
                     ⚙ 平台级自动同步
@@ -1009,6 +1080,8 @@
                             "
                             type="button"
                             class="text-action"
+                            :title="syncDialogActionBoundary()"
+                            :aria-label="syncDialogActionBoundary()"
                             @click="openSyncDialog"
                           >
                             {{ bindingHint(binding)?.cta }}
@@ -1025,6 +1098,8 @@
                         <button
                           class="btn secondary mini"
                           :disabled="!selectedSkill.share"
+                          :title="shareActionTitle('install', binding.platform)"
+                          :aria-label="shareActionTitle('install', binding.platform)"
                           @click="copyInstallCommand(binding.platform)"
                         >
                           复制
@@ -1073,7 +1148,14 @@
             </p>
           </div>
           <div class="dialog-actions">
-            <button class="secondary-btn" @click="closeSyncDialog">关闭</button>
+            <button
+              class="secondary-btn"
+              :title="syncDialogCloseBoundary()"
+              :aria-label="syncDialogCloseBoundary()"
+              @click="closeSyncDialog"
+            >
+              关闭
+            </button>
           </div>
         </header>
         <div
@@ -1158,12 +1240,8 @@
                 :disabled="
                   syncRunning || isAnySyncTogglePending() || !setting.enabled
                 "
-                :title="
-                  syncRunning || isAnySyncTogglePending()
-                    ? '同步设置保存中'
-                    : '立即同步 OpenClaw'
-                "
-                aria-label="立即同步 OpenClaw"
+                :title="syncRunNowBoundary(setting)"
+                :aria-label="syncRunNowBoundary(setting)"
                 @click="runOpenClawSync"
               >
                 <span aria-hidden="true">⟳</span>
@@ -1177,21 +1255,23 @@
                   !setting.enabled ||
                   !desktopAppInstalled
                 "
-                :title="
-                  syncRunning || isAnySyncTogglePending()
-                    ? '同步中'
-                    : `立即同步 ${platformLabel(setting.platform)}`
-                "
-                :aria-label="`立即同步 ${platformLabel(setting.platform)}`"
+                :title="syncRunNowBoundary(setting)"
+                :aria-label="syncRunNowBoundary(setting)"
                 @click="runDesktopSkillSync(setting.platform)"
               >
                 <span aria-hidden="true">⟳</span>
               </button>
-              <label class="switch">
+              <label
+                class="switch"
+                :title="syncToggleActionBoundary(setting)"
+                :aria-label="syncToggleActionBoundary(setting)"
+              >
                 <input
                   type="checkbox"
                   :checked="syncToggleChecked(setting)"
                   :disabled="syncWriteDisabled(setting)"
+                  :title="syncToggleActionBoundary(setting)"
+                  :aria-label="syncToggleActionBoundary(setting)"
                   @change="toggleSync(setting, $event)"
                 />
                 <span>{{ syncControlLabel(setting) }}</span>
@@ -1222,7 +1302,7 @@ type UseSuggestionOptions = { reviewConfirmed?: boolean };
 type SuggestionActionKind = 'use' | 'dismiss' | 'snooze' | 'unsnooze';
 type DecisionReceiptRow = { label: string; text: string };
 type ShareReceiptRow = { label: string; text: string };
-type ShareCopyKind = 'url' | 'install';
+type ShareCopyKind = 'url' | 'install' | 'preview';
 type ShareCopySnapshot = {
   kind: ShareCopyKind;
   platform?: string;
@@ -1236,6 +1316,7 @@ type ShareCopySnapshot = {
   copiedAt: number;
 };
 type ShareCopyReceipt = {
+  heading?: string;
   title: string;
   summary: string;
   tone: 'success' | 'warn';
@@ -1268,7 +1349,7 @@ type SyncTogglePending = {
 };
 type ReviewableSkill = Pick<
   PersonalSkillListItem,
-  'id' | 'slug' | 'reviewRequired' | 'reviewReasons' | 'bindings'
+  'id' | 'slug' | 'title' | 'reviewRequired' | 'reviewReasons' | 'bindings'
 >;
 type SyncReceiptPlatformResult = {
   platform: string;
@@ -1292,6 +1373,15 @@ type PendingSuggestionAction = {
   id: string;
   action: SuggestionActionKind;
   title: string;
+  snapshot: SuggestionActionSnapshot;
+};
+type SuggestionActionSnapshot = {
+  title: string;
+  state: string;
+  origin: string;
+  version: string;
+  review: string;
+  target: string;
 };
 
 const client = getMemoryServiceClient();
@@ -1646,7 +1736,15 @@ const suggestionGroups = computed(() => {
 });
 
 const displaySkillUrl = computed(() => {
-  if (!selectedSkill.value?.share) return '使用后生成 tokenized skill URL';
+  if (!selectedSkill.value?.share) {
+    if (selectedSkill.value?.shareError) {
+      return '分享已阻断，未生成展示短链';
+    }
+    if (selectedSkill.value?.status === 'active') {
+      return '未返回 tokenized skill URL';
+    }
+    return '使用后生成 tokenized skill URL';
+  }
   return client.buildPublicSkillUrl(selectedSkill.value.share.displayUrl);
 });
 
@@ -1714,17 +1812,29 @@ const showDesktopAppBindingNotice = computed(() => {
 });
 
 const syncScopeOverviewTitle = computed(() => {
-  const enabledTargets = syncSettings.value.filter(
+  const apiEnabledTargets = syncSettings.value.filter(
     (setting) =>
-      setting.enabled &&
-      ['api', 'fs_via_desktop_app'].includes(setting.capability),
+      setting.enabled && setting.capability === 'api',
   ).length;
+  const desktopEnabledTargets = syncSettings.value.filter(
+    (setting) =>
+      setting.enabled && setting.capability === 'fs_via_desktop_app',
+  ).length;
+  const readyTargets =
+    apiEnabledTargets +
+    (desktopAppInstalled.value ? desktopEnabledTargets : 0);
+  const waitingDesktopTargets = desktopAppInstalled.value
+    ? 0
+    : desktopEnabledTargets;
   const failedTargets = syncSettings.value.filter((setting) =>
     truncateSyncError(setting.lastError),
   ).length;
   return [
     `${activeSkillCount.value} 条 active`,
-    `${enabledTargets} 个可同步平台`,
+    `${readyTargets} 个可同步平台`,
+    waitingDesktopTargets
+      ? `${waitingDesktopTargets} 个等待 Desktop App`
+      : '',
     failedTargets ? `${failedTargets} 个有失败` : '',
   ]
     .filter(Boolean)
@@ -1947,6 +2057,76 @@ function suggestionPrimaryLabel(skill?: ReviewableSkill | null) {
     return canConfirmSuggestion(skill) ? '确认覆盖' : '查看变更';
   }
   return canConfirmSuggestion(skill) ? '确认使用' : '查看风险';
+}
+
+function suggestionActionTitle(skill?: ReviewableSkill | null) {
+  return skill?.title || '这条技能建议';
+}
+
+function suggestionPrimaryActionBoundary(skill?: ReviewableSkill | null) {
+  const title = suggestionActionTitle(skill);
+  if (!skill) {
+    return '使用技能建议：等待当前 suggestion 加载完成，不会立即写入或执行 skill。';
+  }
+  if (requiresReview(skill) && !canConfirmSuggestion(skill)) {
+    return isExternalChangeSuggestion(skill)
+      ? `查看变更 ${title}：只会打开证据/风险审核页，不会覆盖 active 真源、触发同步或执行 skill。`
+      : `查看风险 ${title}：只会打开证据/风险审核页，不会入库、触发同步或执行 skill。`;
+  }
+  if (isExternalChangeSuggestion(skill)) {
+    return `确认覆盖 ${title}：会向 Memory Service 提交覆盖 active 真源请求；成功后才按已开启平台同步，不会执行 skill。`;
+  }
+  return `确认使用 ${title}：会向 Memory Service 提交入库请求并提升为 active 真源；成功后才按已开启平台同步，不会执行 skill。`;
+}
+
+function suggestionReviewActionBoundary(skill?: ReviewableSkill | null) {
+  const title = suggestionActionTitle(skill);
+  return isExternalChangeSuggestion(skill)
+    ? `查看证据 ${title}：只标记当前页已看过外部变更证据，不会覆盖 active 真源、触发同步或执行 skill。`
+    : `查看证据 ${title}：只标记当前页已看过证据和风险，不会入库、触发同步或执行 skill。`;
+}
+
+function suggestionCardSelectionBoundary(skill?: ReviewableSkill | null) {
+  const title = suggestionActionTitle(skill);
+  if (!skill) {
+    return '查看技能建议：只会打开详情，不会使用、丢弃、稍后审、覆盖 active 真源、触发同步或执行 skill。';
+  }
+  const reviewContext = requiresReview(skill)
+    ? isExternalChangeSuggestion(skill)
+      ? '并显示外部变更证据'
+      : '并显示证据/风险'
+    : '并显示可确认入库信息';
+  return `查看建议 ${title}：只会在右侧打开详情${reviewContext}，不会使用、丢弃、稍后审、覆盖 active 真源、触发同步或执行 skill。`;
+}
+
+function snoozedSuggestionCardSelectionBoundary(skill?: ReviewableSkill | null) {
+  return `查看稍后建议 ${suggestionActionTitle(
+    skill,
+  )}：只会打开稍后详情和恢复路径；不会现在审、丢弃、使用、覆盖 active 真源、触发同步或执行 skill。`;
+}
+
+function skillCardSelectionBoundary(skill?: PersonalSkillListItem | null) {
+  const title = skill?.title || '这条技能';
+  const status = skill ? statusLabel(skill.status) : '技能';
+  return `查看${status} ${title}：只会打开技能详情；不会改变状态、生成或复制分享 token、触发平台同步、写外部平台或执行 skill。`;
+}
+
+function suggestionDismissActionBoundary(skill?: ReviewableSkill | null) {
+  return `丢弃 ${suggestionActionTitle(
+    skill,
+  )}：会提交 dismissed 决策并让同来源重复建议按冷却去重；不会删除 active 技能、改写外部平台、触发同步或执行 skill。`;
+}
+
+function suggestionSnoozeActionBoundary(skill?: ReviewableSkill | null) {
+  return `稍后审 ${suggestionActionTitle(
+    skill,
+  )}：会提交 snoozed_until 并移出当前 Inbox；仍是 suggestion，不会入库、覆盖、触发同步或执行 skill。`;
+}
+
+function suggestionUnsnoozeActionBoundary(skill?: ReviewableSkill | null) {
+  return `现在审 ${suggestionActionTitle(
+    skill,
+  )}：会清除 snoozed_until 并恢复到 Inbox；不会入库、覆盖、触发同步或执行 skill。`;
 }
 
 function reviewGateTitle(skill?: ReviewableSkill | null) {
@@ -2218,6 +2398,110 @@ function suggestionDecisionReceiptRows(
   return rows;
 }
 
+function suggestionCardReceiptTitle(skill: PersonalSkillListItem) {
+  if (isExternalChangeSuggestion(skill)) {
+    return canConfirmSuggestion(skill) ? '证据已看，可覆盖' : '先看变更证据';
+  }
+  if (requiresReview(skill)) {
+    return canConfirmSuggestion(skill) ? '证据已看，可入库' : '先看证据风险';
+  }
+  return '可直接入库';
+}
+
+function suggestionCardReceiptTone(skill: PersonalSkillListItem) {
+  if (isExternalChangeSuggestion(skill) || requiresReview(skill)) return 'warn';
+  return 'success';
+}
+
+function suggestionCardSyncPreviewText() {
+  const desktopPlatforms = enabledDesktopSyncPlatformLabels();
+  const parts = [
+    openClawSyncEnabled()
+      ? '确认后会即时尝试 OpenClaw 同步'
+      : '不会即时触发 OpenClaw',
+    desktopPlatforms.length > 0
+      ? `${desktopPlatforms.join('、')} 等 Desktop App 同步`
+      : '本机目录不由这次点击直接写入',
+    'manual-only 只提供复制安装',
+  ];
+  return parts.join('；');
+}
+
+function suggestionCardLocalScanRows(
+  skill: PersonalSkillListItem,
+): SyncResultReceiptRow[] {
+  const binding = localSkillSourceBinding(skill);
+  if (!binding) return [];
+
+  const source = localSkillSourceSummary(binding);
+  const packageSummary = localSkillPackageSummary(binding);
+  const validation = localSkillValidationSummary(binding);
+  const validationText = validation
+    ? validation.includes('未发现')
+      ? `${validation}；确认后仍不会被当成已验证。`
+      : `${validation}；只是包内线索，卡片不会运行验证。`
+    : '未返回测试/eval/fixture/verify 线索；卡片不会运行验证。';
+
+  return [
+    {
+      label: '本机扫描',
+      text: [
+        source ? `本机目录 ${source}` : '本机目录未返回',
+        packageSummary || '未返回资源文件规模',
+        '来自 Desktop App 扫描快照；本页不会重新读取本机目录。',
+      ].join('；'),
+      tone: 'warn',
+    },
+    {
+      label: '验证',
+      text: `${validationText} 不会运行包内脚本、安装依赖、连接 MCP 或执行 skill。`,
+      tone: validation.includes('未发现') || !validation ? 'warn' : 'info',
+    },
+  ];
+}
+
+function suggestionCardReceiptRows(
+  skill: PersonalSkillListItem,
+): SyncResultReceiptRow[] {
+  const externalChange = isExternalChangeSuggestion(skill);
+  const rows: SyncResultReceiptRow[] = [
+    {
+      label: '确认',
+      text: externalChange
+        ? `确认后覆盖 ${externalChangeOriginalSlug(
+            skill,
+          )} 的 active 真源；未确认前仍只是 suggestion。`
+        : '确认后才提升为 active 真源；未确认前不会分发到其它平台。',
+      tone: externalChange ? 'warn' : 'info',
+    },
+    {
+      label: '审核',
+      text: requiresReview(skill)
+        ? canConfirmSuggestion(skill)
+          ? '证据页已打开；主按钮下一步会发起确认请求。'
+          : '主按钮只会进入证据/风险页，不会直接入库或覆盖。'
+        : '无需强审核；仍可先点卡片查看证据和版本。',
+      tone: requiresReview(skill)
+        ? canConfirmSuggestion(skill)
+          ? 'success'
+          : 'warn'
+        : 'success',
+    },
+    ...suggestionCardLocalScanRows(skill),
+    {
+      label: '同步',
+      text: suggestionCardSyncPreviewText(),
+      tone: 'info',
+    },
+    {
+      label: '边界',
+      text: '展开、搜索和查看卡片只读；只有使用/确认、丢弃、稍后审会写 suggestion 状态。',
+      tone: 'info',
+    },
+  ];
+  return rows;
+}
+
 function activeSkillVersionText(skill: PersonalSkillDetail) {
   const version = skill.currentVersion || skill.activeVersion?.version || 'no version';
   const sha = skill.currentSha256 || skill.activeVersion?.sha256 || '';
@@ -2316,6 +2600,80 @@ function suggestionActionVerb(
   return '现在审';
 }
 
+function suggestionActionSnapshotState(
+  skill?: PersonalSkillListItem | PersonalSkillDetail | null,
+) {
+  if (!skill) return '未知 suggestion';
+  if (skill.status === 'suggestion' && isSnoozedSuggestion(skill)) {
+    return 'suggestion / 稍后建议';
+  }
+  if (skill.status === 'suggestion') return 'suggestion / 当前 Inbox';
+  return statusLabel(skill.status);
+}
+
+function suggestionActionSnapshotReview(
+  skill?: PersonalSkillListItem | PersonalSkillDetail | null,
+) {
+  if (!skill) return '审核状态未返回';
+  if (!requiresReview(skill)) return '无强审核';
+  return canConfirmSuggestion(skill)
+    ? '审核 gate 已满足'
+    : '仍需先查看证据/风险';
+}
+
+function suggestionActionSnapshotTarget(
+  skill?: PersonalSkillListItem | PersonalSkillDetail | null,
+) {
+  if (!skill) return '未返回来源目标';
+  if (isExternalChangeSuggestion(skill)) {
+    return `外部变更将覆盖 ${externalChangeOriginalSlug(skill)}`;
+  }
+  if (localSkillSourceBinding(skill)) {
+    return `本机导入 ${localSkillSourceSummary(
+      localSkillSourceBinding(skill)!,
+    ) || '目录未返回'}`;
+  }
+  return `来源 ${suggestionOriginText(skill)}`;
+}
+
+function buildSuggestionActionSnapshot(
+  skill: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
+  fallbackId: string,
+): SuggestionActionSnapshot {
+  return {
+    title: skill?.title || fallbackId,
+    state: suggestionActionSnapshotState(skill),
+    origin: skill ? suggestionOriginText(skill) : '来源未返回',
+    version: skill?.currentVersion || '版本未返回',
+    review: suggestionActionSnapshotReview(skill),
+    target: suggestionActionSnapshotTarget(skill),
+  };
+}
+
+function suggestionActionSnapshotText(snapshot: SuggestionActionSnapshot) {
+  return [
+    `点击目标 ${snapshot.title}`,
+    `原状态 ${snapshot.state}`,
+    `来源 ${snapshot.origin}`,
+    `版本 ${snapshot.version}`,
+    snapshot.review,
+    snapshot.target,
+  ].join('；');
+}
+
+function suggestionActionSnapshotRows(
+  snapshot?: SuggestionActionSnapshot,
+): SyncResultReceiptRow[] {
+  if (!snapshot) return [];
+  return [
+    {
+      label: '点击快照',
+      text: suggestionActionSnapshotText(snapshot),
+      tone: 'info',
+    },
+  ];
+}
+
 function buildSuggestionPendingReceipt(
   pending: PendingSuggestionAction,
 ): SyncResultReceipt {
@@ -2326,6 +2684,7 @@ function buildSuggestionPendingReceipt(
     summary: '请求已提交到 Memory Service，返回前写入类按钮保持锁定。',
     tone: 'info',
     rows: [
+      ...suggestionActionSnapshotRows(pending.snapshot),
       {
         label: '状态',
         text: '等待服务端返回；本页不会重复发送使用、丢弃、稍后审或现在审请求。',
@@ -2346,6 +2705,7 @@ function buildSuggestionActionFailureReceipt(
   before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
   action: SuggestionActionKind,
   errorText: string,
+  snapshot?: SuggestionActionSnapshot,
 ): SyncResultReceipt {
   const title = before?.title || '这条技能建议';
   const actionLabel = suggestionActionVerb(action, before);
@@ -2355,6 +2715,7 @@ function buildSuggestionActionFailureReceipt(
     summary: 'Memory Service 没有确认这次 suggestion 决策，页面保持可重试。',
     tone: 'failed',
     rows: [
+      ...suggestionActionSnapshotRows(snapshot),
       {
         label: '状态',
         text: '未确认写入；请按当前列表状态重新判断是否重试。',
@@ -2409,6 +2770,7 @@ function buildSuggestionUseReceipt(
   before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
   after: PersonalSkillDetail,
   sync?: SyncReceiptPlatformResult,
+  snapshot?: SuggestionActionSnapshot,
 ): SyncResultReceipt {
   const externalChange = isExternalChangeSuggestion(before);
   const target = externalChange ? externalChangeOriginalSlug(before) : after.slug;
@@ -2425,6 +2787,7 @@ function buildSuggestionUseReceipt(
         : 'Suggestion 已提升为 active 真源；不再留在 Inbox，也不会作为待决策建议重复出现。',
       tone: 'success',
     },
+    ...suggestionActionSnapshotRows(snapshot),
     {
       label: '真源版本',
       text: activeSkillVersionText(after),
@@ -2469,6 +2832,7 @@ function buildSuggestionUseReceipt(
 function buildSuggestionSnoozeReceipt(
   before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
   after: PersonalSkillDetail,
+  snapshot?: SuggestionActionSnapshot,
 ): SyncResultReceipt {
   const title = before?.title || after.title;
   const reviewText = requiresReview(before || after)
@@ -2480,6 +2844,7 @@ function buildSuggestionSnoozeReceipt(
     summary: '这条技能建议已移出当前 Inbox，但还没有被使用或丢弃。',
     tone: 'info',
     rows: [
+      ...suggestionActionSnapshotRows(snapshot),
       {
         label: '状态',
         text: `仍是 suggestion；${formatSnoozedUntil(
@@ -2505,6 +2870,7 @@ function buildSuggestionSnoozeReceipt(
 function buildSuggestionUnsnoozeReceipt(
   before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
   after: PersonalSkillDetail,
+  snapshot?: SuggestionActionSnapshot,
 ): SyncResultReceipt {
   const title = before?.title || after.title;
   const nextStep = requiresReview(after)
@@ -2516,6 +2882,7 @@ function buildSuggestionUnsnoozeReceipt(
     summary: '暂缓标记已清除，建议重新回到可审 Inbox。',
     tone: 'info',
     rows: [
+      ...suggestionActionSnapshotRows(snapshot),
       {
         label: '状态',
         text: '仍是 suggestion；snoozed_until 已清除，不再停留在稍后建议队列。',
@@ -2535,6 +2902,7 @@ function buildSuggestionUnsnoozeReceipt(
 function buildSuggestionDismissReceipt(
   before: PersonalSkillListItem | PersonalSkillDetail | null | undefined,
   after: PersonalSkillDetail,
+  snapshot?: SuggestionActionSnapshot,
 ): SyncResultReceipt {
   const title = before?.title || after.title;
   const clusterText = after.dismissReason
@@ -2546,6 +2914,7 @@ function buildSuggestionDismissReceipt(
     summary: '这条技能建议已结束，不再作为待决策或稍后建议出现。',
     tone: 'warn',
     rows: [
+      ...suggestionActionSnapshotRows(snapshot),
       {
         label: '状态',
         text: '状态已变为 dismissed；已从 Inbox 和稍后建议队列移除。',
@@ -2602,6 +2971,7 @@ function beginSuggestionAction(
     id,
     action,
     title: candidate?.title || id,
+    snapshot: buildSuggestionActionSnapshot(candidate, id),
   };
   skillActionReceipt.value = null;
   actionMessage.value = '';
@@ -2647,12 +3017,14 @@ async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
     const response = await client.useSkillSuggestion(id, {
       reviewConfirmed: Boolean(options.reviewConfirmed),
     });
+    const snapshot = pendingSuggestionAction.value?.snapshot;
     errorMessage.value = '';
     actionMessage.value = '';
     skillActionReceipt.value = buildSuggestionUseReceipt(
       candidate,
       response.skill,
       response.sync,
+      snapshot,
     );
     filter.value = 'active';
     await loadData(response.skill.id);
@@ -2665,6 +3037,7 @@ async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
         candidate,
         'use',
         '使用前需要先确认审核项。',
+        pendingSuggestionAction.value?.snapshot,
       );
       return;
     }
@@ -2673,6 +3046,7 @@ async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
       candidate,
       'use',
       message,
+      pendingSuggestionAction.value?.snapshot,
     );
   } finally {
     finishSuggestionAction(id);
@@ -2687,6 +3061,7 @@ async function dismissSuggestion(id: string) {
     skillActionReceipt.value = buildSuggestionDismissReceipt(
       candidate,
       response.skill,
+      pendingSuggestionAction.value?.snapshot,
     );
     actionMessage.value = '';
     await loadData(response.skill.id);
@@ -2697,6 +3072,7 @@ async function dismissSuggestion(id: string) {
       candidate,
       'dismiss',
       message,
+      pendingSuggestionAction.value?.snapshot,
     );
   } finally {
     finishSuggestionAction(id);
@@ -2711,6 +3087,7 @@ async function snoozeSuggestion(id: string) {
     skillActionReceipt.value = buildSuggestionSnoozeReceipt(
       candidate,
       response.skill,
+      pendingSuggestionAction.value?.snapshot,
     );
     actionMessage.value = '';
     selectedId.value = '';
@@ -2722,6 +3099,7 @@ async function snoozeSuggestion(id: string) {
       candidate,
       'snooze',
       message,
+      pendingSuggestionAction.value?.snapshot,
     );
   } finally {
     finishSuggestionAction(id);
@@ -2736,6 +3114,7 @@ async function unsnoozeSuggestion(id: string) {
     skillActionReceipt.value = buildSuggestionUnsnoozeReceipt(
       candidate,
       response.skill,
+      pendingSuggestionAction.value?.snapshot,
     );
     actionMessage.value = '';
     await loadData(response.skill.id);
@@ -2746,6 +3125,7 @@ async function unsnoozeSuggestion(id: string) {
       candidate,
       'unsnooze',
       message,
+      pendingSuggestionAction.value?.snapshot,
     );
   } finally {
     finishSuggestionAction(id);
@@ -3122,6 +3502,43 @@ function installCommand(platform: string) {
   }
 }
 
+function shareUnavailableReason(skill = selectedSkill.value) {
+  if (!skill) return '技能详情尚未加载完成';
+  if (skill.share) return '';
+  if (skill.shareError) {
+    return `分享已被安全扫描阻断：${truncateSyncError(skill.shareError)}`;
+  }
+  if (skill.status !== 'active') {
+    return '只有 active 真源技能才会生成可访问 token URL';
+  }
+  return 'Memory Service 当前没有返回可访问 token URL；展示短链不带 token';
+}
+
+function shareActionTitle(kind: ShareCopyKind, platform?: string) {
+  const platformText = platform ? platformLabel(platform) : '';
+  const action =
+    kind === 'url'
+      ? '复制可访问 URL'
+      : kind === 'preview'
+        ? '打开预览'
+        : `复制 ${platformText || '平台'} 安装指令`;
+  const unavailableReason = shareUnavailableReason();
+  if (unavailableReason) {
+    return `${action}不可用：${unavailableReason}。本页不会复制短链、打开无 token 地址、安装 skill、触发平台同步或执行脚本。`;
+  }
+  const snapshot = buildShareCopySnapshot(kind, platform);
+  const snapshotText = snapshot
+    ? `${snapshot.skillTitle} · ${shareCopySnapshotText(snapshot)}`
+    : '当前 active version 与 token 指纹待确认';
+  if (kind === 'preview') {
+    return `打开带 token 的只读预览：${snapshotText}。不会复制剪贴板、安装 skill、触发平台同步、写外部平台或执行脚本。`;
+  }
+  if (kind === 'url') {
+    return `复制带 token 的可访问 URL：${snapshotText}。只写本机剪贴板，不会打开链接、安装 skill、触发平台同步或执行脚本。`;
+  }
+  return `复制 ${platformText || '平台'} 安装指令：${snapshotText}。只写本机剪贴板，不会打开链接、安装 skill、触发平台同步或执行脚本。`;
+}
+
 function tokenTailFromUrl(url: string) {
   try {
     const token = new URL(url, 'https://personal-ai.local').searchParams.get(
@@ -3157,6 +3574,7 @@ function buildShareCopySnapshot(
 
 function shareCopyTargetLabel(snapshot: ShareCopySnapshot) {
   if (snapshot.kind === 'url') return '可访问 URL';
+  if (snapshot.kind === 'preview') return '只读预览链接';
   return `${platformLabel(snapshot.platform || '')} 安装指令`;
 }
 
@@ -3171,17 +3589,27 @@ function staleShareCopyReceipt(
 ): ShareCopyReceipt {
   const currentText =
     typeof current === 'string' ? current : shareCopySnapshotText(current);
+  const wasPreview = snapshot.kind === 'preview';
   return {
     ...receipt,
     tone: 'warn',
-    title: '旧复制回执 · 当前详情已刷新',
-    summary: `剪贴板仍是上次复制的${shareCopyTargetLabel(
-      snapshot,
-    )}；当前详情已经生成不同的 live token 或版本指纹。`,
+    title: wasPreview
+      ? '旧预览回执 · 当前详情已刷新'
+      : '旧复制回执 · 当前详情已刷新',
+    heading: wasPreview ? '预览回执' : receipt.heading,
+    summary: wasPreview
+      ? `本页仍显示上次打开的${shareCopyTargetLabel(
+          snapshot,
+        )}；当前详情已经生成不同的 live token 或版本指纹。`
+      : `剪贴板仍是上次复制的${shareCopyTargetLabel(
+          snapshot,
+        )}；当前详情已经生成不同的 live token 或版本指纹。`,
     rows: [
       {
-        label: '旧剪贴板',
-        text: `复制时 ${snapshot.skillTitle} · ${shareCopySnapshotText(
+        label: wasPreview ? '旧预览' : '旧剪贴板',
+        text: `${wasPreview ? '打开时' : '复制时'} ${
+          snapshot.skillTitle
+        } · ${shareCopySnapshotText(
           snapshot,
         )}；展示短链 ${snapshot.displayUrl} 没有复制。`,
       },
@@ -3191,11 +3619,15 @@ function staleShareCopyReceipt(
       },
       {
         label: '恢复',
-        text: `重新点击复制可访问 URL 或安装指令后再粘贴；旧 token 仍有效直到后台 revoke。`,
+        text: wasPreview
+          ? '重新点击打开预览、复制可访问 URL 或安装指令后再交给目标 agent；旧 token 仍有效直到后台 revoke。'
+          : '重新点击复制可访问 URL 或安装指令后再粘贴；旧 token 仍有效直到后台 revoke。',
       },
       {
         label: '未执行',
-        text: '旧复制回执只说明本机剪贴板曾被写入，不代表已打开链接、安装 skill、同步平台或执行脚本。',
+        text: wasPreview
+          ? '旧预览回执只说明当时请求打开过只读预览，不代表已安装 skill、同步平台、写外部平台或执行脚本。'
+          : '旧复制回执只说明本机剪贴板曾被写入，不代表已打开链接、安装 skill、同步平台或执行脚本。',
       },
     ],
   };
@@ -3276,6 +3708,53 @@ function shareCopyFailureReceipt(kind: ShareCopyKind, platform?: string) {
   };
 }
 
+function sharePreviewReceipt(opened: boolean) {
+  const snapshot = buildShareCopySnapshot('preview') || undefined;
+  const rows: ShareReceiptRow[] = [
+    ...(snapshot
+      ? [
+          {
+            label: '预览对象',
+            text: `${snapshot.skillTitle} · ${shareCopySnapshotText(
+              snapshot,
+            )}；短链 ${snapshot.displayUrl} 只作识别。`,
+          },
+        ]
+      : []),
+    opened
+      ? {
+          label: '访问范围',
+          text: '新标签页使用完整 token URL，只读拉取 HTML 预览、SKILL.md、package.json 和 files/* 资源。',
+        }
+      : {
+          label: '未打开',
+          text: '浏览器没有返回新标签页；本页没有确认访问 token URL 或读取 skill package。',
+        },
+    {
+      label: '未做',
+      text: opened
+        ? '本次只请求打开只读预览，不复制剪贴板、不安装 skill、不触发平台同步、不写外部平台或执行脚本。'
+        : '弹窗被拦截或浏览器拒绝打开时，也不会复制剪贴板、安装 skill、触发平台同步、写外部平台或执行脚本。',
+    },
+    {
+      label: opened ? '未确认' : '恢复',
+      text: opened
+        ? '预览打开不代表目标 agent 已读取、导入或启用该 skill；旧 token 仍有效直到后台 revoke。'
+        : '可允许弹窗后重试，或改用复制可访问 URL / 安装指令交给目标 agent。',
+    },
+  ];
+  shareCopyReceipt.value = {
+    heading: '预览回执',
+    tone: opened ? 'success' : 'warn',
+    title: opened ? '已打开只读预览' : '预览未打开',
+    summary: opened
+      ? '已请求打开带 token 的只读预览；这不是安装、同步或执行确认。'
+      : '浏览器没有确认打开预览；当前 skill 分享状态没有改变。',
+    rows,
+    snapshot,
+  };
+}
+
 async function copyInstallCommand(platform: string) {
   if (!selectedSkill.value?.share) return;
   try {
@@ -3322,6 +3801,10 @@ function skillShareReceiptRows(skill: PersonalSkillDetail): ShareReceiptRow[] {
         text: `${skill.shareError}；不会生成 tokenized URL。`,
       },
       {
+        label: '动作按钮',
+        text: '复制可访问 URL、打开预览和平台安装指令保持不可用；本页不会复制短链、打开无 token 地址、安装 skill、触发平台同步或执行脚本。',
+      },
+      {
         label: '短链边界',
         text: '展示短链不带 token，不能直接打开，也不能交给 agent 安装。',
       },
@@ -3344,6 +3827,10 @@ function skillShareReceiptRows(skill: PersonalSkillDetail): ShareReceiptRow[] {
       {
         label: '访问边界',
         text: '没有 token 时，短链只用于识别 slug/version，不授予外部读取权限。',
+      },
+      {
+        label: '动作按钮',
+        text: '复制可访问 URL、打开预览和平台安装指令保持不可用；本页不会把展示短链写入剪贴板，也不会请求打开无 token URL。',
       },
     ];
   }
@@ -3377,7 +3864,14 @@ function skillShareReceiptRows(skill: PersonalSkillDetail): ShareReceiptRow[] {
 
 function openSkillPreview() {
   if (!actualSkillUrl.value) return;
-  window.open(actualSkillUrl.value, '_blank', 'noopener');
+  const previewWindow = window.open('', '_blank');
+  if (!previewWindow) {
+    sharePreviewReceipt(false);
+    return;
+  }
+  previewWindow.opener = null;
+  previewWindow.location.href = actualSkillUrl.value;
+  sharePreviewReceipt(true);
 }
 
 function settingFor(platform: string) {
@@ -3462,6 +3956,85 @@ function syncScope(setting: SkillSyncSetting) {
   return setting.enabled
     ? `作用域：所有 active 技能（${activeSkillCount.value} 条）`
     : `开启后将自动推送 ${activeSkillCount.value} 条 active 技能`;
+}
+
+function syncDialogActionBoundary() {
+  return [
+    '打开平台级自动同步设置',
+    `查看 ${activeSkillCount.value} 条 active 真源技能的同步范围、可执行平台、等待 Desktop App 和最近失败配置`,
+    '只打开本页弹窗',
+    '不会保存开关、立即同步、扫描或写入本机目录、调用远端 API、写 manual-only 平台、覆盖 active 真源或执行 skill',
+  ].join('；');
+}
+
+function syncDialogCloseBoundary() {
+  return [
+    '关闭平台级自动同步弹窗',
+    '只隐藏当前设置面板并保留页面已加载的技能和回执',
+    '不会取消已发出的保存或同步请求、回滚开关、清空结果、写外部平台、覆盖 active 真源或执行 skill',
+  ].join('；');
+}
+
+function syncRunNowBoundary(setting: SkillSyncSetting) {
+  const platform = platformLabel(setting.platform);
+  if (syncRunning.value) {
+    return `${platform} 立即同步暂不可用：已有同步请求处理中；不会发起第二次同步、保存开关、写 manual-only 平台、覆盖 active 真源或执行 skill。`;
+  }
+  if (isAnySyncTogglePending()) {
+    return `${platform} 立即同步暂不可用：平台开关保存中；返回前不会发起同步、扫描本机目录、调用远端 API、写外部平台或执行 skill。`;
+  }
+  if (setting.capability === 'internal') {
+    return 'Personal AI 是 active 技能真源，不需要手动立即同步；不会写外部平台或执行 skill。';
+  }
+  if (setting.capability === 'manual_only') {
+    return `${platform} 只支持手动安装指引，不参与立即同步；不会写该 Web 平台、安装 skill、触发平台同步或执行脚本。`;
+  }
+  if (!setting.enabled) {
+    return `${platform} 立即同步不可用：平台级开关未开启；需要先保存开启，当前不会调用远端 API、扫描或写入本机目录、覆盖 active 真源或执行 skill。`;
+  }
+  if (
+    setting.capability === 'fs_via_desktop_app' &&
+    !desktopAppInstalled.value
+  ) {
+    return `${platform} 立即同步不可用：Desktop App 未运行；Chrome 页面不会直接读写本机 skill 目录、安装 skill、覆盖 active 真源或执行脚本。`;
+  }
+  if (setting.capability === 'fs_via_desktop_app') {
+    return `立即同步 ${platform}：请求 Desktop App 扫描/写回该平台本机 skill 目录，并对照 ${activeSkillCount.value} 条 active 真源技能；Chrome 页面不会直接读写文件，不会写 manual-only 平台，不会自动覆盖 active 真源或执行 skill。`;
+  }
+  return `立即同步 ${platform}：通过 Memory Service 请求远端 API，对照 ${activeSkillCount.value} 条 active 真源技能处理候选和 package；不会执行 skill、写 manual-only 平台、撤销分享 URL 或自动覆盖 active 真源。`;
+}
+
+function syncToggleActionBoundary(setting: SkillSyncSetting) {
+  const platform = platformLabel(setting.platform);
+  const targetEnabled = !syncToggleChecked(setting);
+  if (setting.capability === 'internal') {
+    return `${platform} 是 Personal AI active 真源，始终开启且不可关闭；不会写外部平台、触发同步或执行 skill。`;
+  }
+  if (setting.capability === 'manual_only') {
+    return `${platform} 仅支持手动安装指引，自动同步开关不可用；不会写该平台、保存 enabled、安装 skill、触发同步或执行脚本。`;
+  }
+  if (isSyncTogglePending(setting.platform)) {
+    return `${platform} 开关保存中：目标状态 enabled=${String(
+      syncTogglePending.value?.enabled,
+    )}；返回前不能确认已保存，不会扫描/写入本机目录、调用远端 API、写 manual-only 平台、覆盖 active 真源或执行 skill。`;
+  }
+  if (syncRunning.value) {
+    return `${platform} 开关暂不可改：同步请求处理中；不会并发保存开关、写外部平台、覆盖 active 真源或执行 skill。`;
+  }
+  if (
+    setting.capability === 'fs_via_desktop_app' &&
+    !desktopAppInstalled.value
+  ) {
+    return `${platform} 开关暂不可改：需要 Desktop App 运行后才能读写本机 skill 目录；当前不会保存设置、扫描/写入文件或执行 skill。`;
+  }
+  if (targetEnabled) {
+    return `${platform} 开启自动同步：只保存平台级 enabled=true，后续会把 ${activeSkillCount.value} 条 active 真源技能纳入该平台范围；本次不会立即同步、写平台、覆盖 active 真源或执行 skill。`;
+  }
+  const disableBoundary =
+    setting.capability === 'fs_via_desktop_app'
+      ? '关闭不会删除、修复或回滚本机 skill 目录里的已有文件'
+      : '关闭不会删除远端已安装 skill，也不会撤销已经生成的 Public Skill URL';
+  return `${platform} 关闭自动同步：只保存平台级 enabled=false，后续不再自动推送 ${activeSkillCount.value} 条 active 真源技能到该平台；${disableBoundary}，不会写 manual-only 平台、覆盖 active 真源或执行 skill。`;
 }
 
 function syncControlLabel(setting: SkillSyncSetting) {
@@ -4718,6 +5291,91 @@ button:disabled {
 .source-link {
   color: #93c5fd;
   text-decoration: none;
+}
+
+.suggestion-card-receipt {
+  display: grid;
+  gap: 0.38rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 0.5rem;
+  background: rgba(96, 165, 250, 0.06);
+  color: var(--muted);
+}
+
+.suggestion-card-receipt.warn {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.suggestion-card-receipt.success {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.suggestion-card-receipt-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.45rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.suggestion-card-receipt-head span {
+  flex: none;
+  color: var(--muted-2);
+  font-size: 0.64rem;
+  font-weight: 750;
+}
+
+.suggestion-card-receipt-head strong {
+  min-width: 0;
+  color: #bfdbfe;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.suggestion-card-receipt.warn .suggestion-card-receipt-head strong {
+  color: #fde68a;
+}
+
+.suggestion-card-receipt.success .suggestion-card-receipt-head strong {
+  color: #bbf7d0;
+}
+
+.suggestion-card-receipt-rows {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.suggestion-card-receipt-row {
+  display: grid;
+  grid-template-columns: 2.7rem minmax(0, 1fr);
+  gap: 0.35rem;
+  align-items: start;
+  font-size: 0.66rem;
+  line-height: 1.42;
+}
+
+.suggestion-card-receipt-row .label {
+  color: var(--ink-2);
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.suggestion-card-receipt-row span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.suggestion-card-receipt-row.warn span:last-child {
+  color: #fde68a;
+}
+
+.suggestion-card-receipt-row.success span:last-child {
+  color: #bbf7d0;
 }
 
 .review-preview {

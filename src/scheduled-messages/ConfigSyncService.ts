@@ -3,9 +3,11 @@
  * 负责在 Chrome Storage 和 Sheet Config 表之间同步配置
  */
 
-import { BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types.js';
+import { AgentTaskWebhookConfig, BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types.js';
 import {
+  getAgentTaskWebhookConfig,
   getBotAutomationConfig,
+  normalizeAgentTaskWebhookConfig,
   normalizeRingCentralSenderConfig,
   normalizeSheetConfig,
 } from './botAutomationConfig.js';
@@ -21,6 +23,7 @@ type SheetMetadata = {
 };
 type SaveConfigToSheetOptions = {
   includeRingCentralSenderKeys?: boolean;
+  includeAgentTaskWebhookKeys?: boolean;
   expectedLastSyncTime?: string;
   syncAction?: string;
 };
@@ -81,25 +84,37 @@ const RINGCENTRAL_SENDER_KEYS = [
   'ringcentral_sender_updated_at',
 ];
 
+const AGENT_TASK_WEBHOOK_KEYS = [
+  'agent_task_webhook_url',
+  'agent_task_webhook_token',
+  'agent_task_user_id',
+  'agent_task_webhook_updated_at',
+];
+
 const MANAGED_CONFIG_KEYS = new Set<string>(CONFIG_BASE_KEYS);
 for (const prefix of BOT_RULE_MANAGED_PREFIXES) {
   for (const suffix of BOT_RULE_SUFFIXES) {
     MANAGED_CONFIG_KEYS.add(`${prefix}_${suffix}`);
   }
 }
-for (const key of RINGCENTRAL_SENDER_KEYS) {
-  MANAGED_CONFIG_KEYS.add(key);
-}
-
-function getManagedConfigKeysForWrite(includeRingCentralSenderKeys: boolean): Set<string> {
-  if (includeRingCentralSenderKeys) {
-    return MANAGED_CONFIG_KEYS;
-  }
-
+function getManagedConfigKeysForWrite(options: {
+  includeRingCentralSenderKeys: boolean;
+  includeAgentTaskWebhookKeys: boolean;
+}): Set<string> {
   const managedKeys = new Set(MANAGED_CONFIG_KEYS);
-  for (const key of RINGCENTRAL_SENDER_KEYS) {
-    managedKeys.delete(key);
+
+  if (options.includeRingCentralSenderKeys) {
+    for (const key of RINGCENTRAL_SENDER_KEYS) {
+      managedKeys.add(key);
+    }
   }
+
+  if (options.includeAgentTaskWebhookKeys) {
+    for (const key of AGENT_TASK_WEBHOOK_KEYS) {
+      managedKeys.add(key);
+    }
+  }
+
   return managedKeys;
 }
 
@@ -263,6 +278,13 @@ export class ConfigSyncService {
         return config.ringCentralSender;
       };
 
+      const ensureAgentTaskWebhook = (): AgentTaskWebhookConfig => {
+        if (!config.agentTaskWebhook) {
+          config.agentTaskWebhook = {};
+        }
+        return config.agentTaskWebhook;
+      };
+
       const scalarFieldPriority = new Map<string, number>();
       const setScalarField = <K extends keyof SheetConfig>(
         field: K,
@@ -308,6 +330,21 @@ export class ConfigSyncService {
 
         ensureRingCentralSender()[field] = value as never;
         ringCentralSenderFieldPriority.set(String(field), priority);
+      };
+
+      const agentTaskWebhookFieldPriority = new Map<string, number>();
+      const setAgentTaskWebhookField = <K extends keyof AgentTaskWebhookConfig>(
+        field: K,
+        value: AgentTaskWebhookConfig[K],
+        priority = 2
+      ) => {
+        const existingPriority = agentTaskWebhookFieldPriority.get(String(field));
+        if (existingPriority !== undefined && existingPriority >= priority) {
+          return;
+        }
+
+        ensureAgentTaskWebhook()[field] = value as never;
+        agentTaskWebhookFieldPriority.set(String(field), priority);
       };
 
       let newestLastSyncTime: { value: string; timestamp: number } | null = null;
@@ -476,6 +513,21 @@ export class ConfigSyncService {
           case 'ringcentral_sender_updated_at':
             setRingCentralSenderField('updatedAt', value);
             break;
+          case 'agent_task_webhook_url':
+          case 'memory_service_agent_task_webhook_url':
+            setAgentTaskWebhookField('webhookUrl', value, key === 'agent_task_webhook_url' ? 2 : 1);
+            break;
+          case 'agent_task_webhook_token':
+          case 'memory_service_agent_task_token':
+            setAgentTaskWebhookField('authToken', value, key === 'agent_task_webhook_token' ? 2 : 1);
+            break;
+          case 'agent_task_user_id':
+          case 'memory_service_user_id':
+            setAgentTaskWebhookField('userId', value, key === 'agent_task_user_id' ? 2 : 1);
+            break;
+          case 'agent_task_webhook_updated_at':
+            setAgentTaskWebhookField('updatedAt', value);
+            break;
         }
       }
 
@@ -503,6 +555,8 @@ export class ConfigSyncService {
     try {
       const includeRingCentralSenderKeys = options?.includeRingCentralSenderKeys ??
         config.ringCentralSender !== undefined;
+      const includeAgentTaskWebhookKeys = options?.includeAgentTaskWebhookKeys ??
+        config.agentTaskWebhook !== undefined;
       const normalizedConfig = normalizeSheetConfig({
         ...config,
         last_sync_time: lastSyncTime || new Date().toISOString(),
@@ -510,13 +564,17 @@ export class ConfigSyncService {
       }) as SheetConfig;
       const configData = this.buildManagedConfigRows(normalizedConfig, {
         includeRingCentralSenderKeys,
+        includeAgentTaskWebhookKeys,
       });
       const existingRows = await this.readRawConfigRowsForWrite(normalizedConfig.sheetId);
       assertSheetConfigNotNewer(
         existingRows,
         options?.expectedLastSyncTime ?? config.last_sync_time
       );
-      const managedKeysForWrite = getManagedConfigKeysForWrite(includeRingCentralSenderKeys);
+      const managedKeysForWrite = getManagedConfigKeysForWrite({
+        includeRingCentralSenderKeys,
+        includeAgentTaskWebhookKeys,
+      });
       const mergedConfigData = this.mergeConfigRows(existingRows, configData, managedKeysForWrite);
       const rowCount = Math.max(CONFIG_MIN_ROW_COUNT, existingRows.length, mergedConfigData.length);
       const paddedConfigData = [...mergedConfigData];
@@ -577,6 +635,7 @@ export class ConfigSyncService {
     const lastSyncTime = new Date().toISOString();
     const expectedLastSyncTime = config.last_sync_time;
     const includeRingCentralSenderKeys = config.ringCentralSender !== undefined;
+    const includeAgentTaskWebhookKeys = config.agentTaskWebhook !== undefined;
     const normalizedConfig = normalizeSheetConfig({
       ...config,
       last_sync_time: lastSyncTime,
@@ -586,6 +645,7 @@ export class ConfigSyncService {
     // Sheet 是跨设备恢复来源，先写入成功后再更新本地，避免失败时留下半同步状态。
     await this.saveConfigToSheet(normalizedConfig, lastSyncTime, {
       includeRingCentralSenderKeys,
+      includeAgentTaskWebhookKeys,
       expectedLastSyncTime,
       syncAction: normalizedConfig.last_sync_action,
     });
@@ -815,7 +875,10 @@ export class ConfigSyncService {
 
   private buildManagedConfigRows(
     normalizedConfig: SheetConfig,
-    options: { includeRingCentralSenderKeys: boolean }
+    options: {
+      includeRingCentralSenderKeys: boolean;
+      includeAgentTaskWebhookKeys: boolean;
+    }
   ): ConfigRow[] {
     const configData: ConfigRow[] = [];
 
@@ -914,6 +977,24 @@ export class ConfigSyncService {
       }
       if (ringCentralSender?.updatedAt) {
         configData.push(['ringcentral_sender_updated_at', ringCentralSender.updatedAt]);
+      }
+    }
+
+    const agentTaskWebhook = normalizeAgentTaskWebhookConfig(
+      getAgentTaskWebhookConfig(normalizedConfig)
+    );
+    if (options.includeAgentTaskWebhookKeys) {
+      if (agentTaskWebhook?.webhookUrl) {
+        configData.push(['agent_task_webhook_url', agentTaskWebhook.webhookUrl]);
+      }
+      if (agentTaskWebhook?.authToken) {
+        configData.push(['agent_task_webhook_token', agentTaskWebhook.authToken]);
+      }
+      if (agentTaskWebhook?.userId) {
+        configData.push(['agent_task_user_id', agentTaskWebhook.userId]);
+      }
+      if (agentTaskWebhook?.updatedAt) {
+        configData.push(['agent_task_webhook_updated_at', agentTaskWebhook.updatedAt]);
       }
     }
 

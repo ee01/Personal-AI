@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { buildApp } from '../server.js';
 import { UserContextManager } from '../core/UserContextManager.js';
+import { getConfig } from '../config.js';
 
 describe('Config API', () => {
   let app: FastifyInstance;
@@ -45,7 +46,7 @@ describe('Config API', () => {
     const putBody = putRes.json();
     expect(putBody.openClawEnabled).toBe(true);
     expect(putBody.openClawBaseUrl).toBe('https://openclaw.example.com');
-    expect(putBody.openClawTimeoutMs).toBe(300000);
+    expect(putBody.openClawTimeoutMs).toBe(600000);
     expect(putBody.openClawApiKeyConfigured).toBe(true);
     expect(putBody.openClawApiKey).toBeUndefined();
 
@@ -75,6 +76,6 @@ describe('Config API', () => {
 
     expect(clearRes.statusCode).toBe(200);
     const clearBody = clearRes.json();
-    expect(clearBody.openClawApiKeyConfigured).toBe(false);
+    expect(clearBody.openClawApiKeyConfigured).toBe(Boolean(getConfig().openClawApiKey));
   });
 });

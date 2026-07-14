@@ -184,6 +184,45 @@ describe('SalienceScorer.computeRecency()', () => {
   });
 });
 
+describe('SalienceScorer.computeEntityAffinityBoost()', () => {
+  it('matches behavior affinity through entity names and aliases', () => {
+    const ts = now();
+    const entityId = `salience-alias-${ts}`;
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, aliases_json, importance, mention_count, status, created_at, updated_at)
+       VALUES (?, 'Project', 'Apollo Backend', ?, 0.7, 3, 'active', ?, ?)`,
+    ).run(entityId, JSON.stringify(['VBG', 'Apollo BE']), ts, ts);
+    db.prepare(
+      `INSERT INTO behavior_affinity
+        (id, subject_type, subject_key, affinity, positive_events, negative_events, updated_at)
+       VALUES (?, 'entity', ?, 0.74, 5, 0, ?)`,
+    ).run(`aff-${entityId}`, entityId, ts);
+
+    expect(scorer.computeEntityAffinityBoost(['Apollo Backend'])).toBeCloseTo(
+      0.74,
+    );
+    expect(scorer.computeEntityAffinityBoost(['VBG'])).toBeCloseTo(0.74);
+  });
+
+  it('ignores negative alias affinity during intake scoring', () => {
+    const ts = now();
+    const entityId = `salience-negative-alias-${ts}`;
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, aliases_json, importance, mention_count, status, created_at, updated_at)
+       VALUES (?, 'Project', 'Noisy Project', ?, 0.5, 1, 'active', ?, ?)`,
+    ).run(entityId, JSON.stringify(['Noisy Alias']), ts, ts);
+    db.prepare(
+      `INSERT INTO behavior_affinity
+        (id, subject_type, subject_key, affinity, positive_events, negative_events, updated_at)
+       VALUES (?, 'entity', ?, -0.42, 0, 4, ?)`,
+    ).run(`aff-${entityId}`, entityId, ts);
+
+    expect(scorer.computeEntityAffinityBoost(['Noisy Alias'])).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // shouldIndex threshold
 // ---------------------------------------------------------------------------

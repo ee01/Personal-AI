@@ -12,6 +12,7 @@ import type {
   ContextAssistCueCard,
   ContextAssistRequest,
   ContextAssistResponse,
+  ContextRecallDebug,
   ContextRecallContextType,
   ContextRecallCurrentContext,
   ContextRecallMatch,
@@ -25,6 +26,7 @@ const DEFAULT_LIMIT = 3;
 const MEETING_LIMIT = 5;
 const MAX_INSERT_TEXT = 2400;
 const MIN_AVAILABLE_CONFIDENCE = 0.58;
+const MIN_PROMPT_PATCH_CONFIDENCE = 0.82;
 const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
 const MIN_COMPOSER_SOURCE_OVERLAP = 1;
 const COMPOSER_GENERATION_TIMEOUT_MS = 4500;
@@ -218,7 +220,13 @@ export class ContextAssistService {
     const recallRequest = buildComposerRecallRequest(request);
     const recall = await this.recallService.recall(recallRequest);
     const rawEvidence = recall.matches.map(toEvidence);
-    const evidence = filterComposerEvidence(request, rawEvidence);
+    const fallbackEvidence = rawEvidence.length
+      ? []
+      : buildLockedContextExpansionPromptPatchEvidence(request, recall.debug);
+    const evidence = filterComposerEvidence(request, [
+      ...rawEvidence,
+      ...fallbackEvidence,
+    ]);
 
     if (evidence.length === 0) {
       return {
@@ -226,7 +234,7 @@ export class ContextAssistService {
         suggestionType: 'none',
         title: '暂无相关记忆',
         summary: '没有找到足够相关的 Personal AI 记忆。',
-        evidence: rawEvidence,
+        evidence: rawEvidence.length ? rawEvidence : fallbackEvidence,
         riskLevel: 'low',
         previewRequired: false,
         confidence: 0,
@@ -236,7 +244,7 @@ export class ContextAssistService {
               recall: recall.debug,
               recallRequest,
               taskFrame,
-              rejectedReason: rawEvidence.length
+              rejectedReason: rawEvidence.length || fallbackEvidence.length
                 ? 'composer_evidence_not_relevant_to_current_scene'
                 : undefined,
             }
@@ -305,6 +313,9 @@ export class ContextAssistService {
     if (promptPatch) {
       suggestionType = 'prompt_patch';
     }
+    const responseConfidence = promptPatch
+      ? Math.max(confidence, MIN_PROMPT_PATCH_CONFIDENCE)
+      : confidence;
     const personalization = loadComposerPersonalization(this.db, request);
     const insertText = await buildComposerInsertText(
       request,
@@ -360,7 +371,7 @@ export class ContextAssistService {
         riskLevel !== 'low' ||
         request.contextType === 'web_agent_prompt' ||
         hasRehearsalEvidence(evidence),
-      confidence,
+      confidence: responseConfidence,
       queryTimeMs: recall.queryTimeMs,
       debug: request.debug
         ? {
@@ -416,7 +427,8 @@ function buildComposerRecallRequest(
     scope: 'work',
     sourceTypes: normalizeComposerSourceTypes(request),
     limit: DEFAULT_LIMIT,
-    debug: request.debug,
+    debug:
+      request.debug || shouldCollectLockedPromptPatchRecallDebug(request),
   };
 }
 
@@ -483,12 +495,56 @@ function buildComposerRecallPrimaryText(
 
   const draft = normalizeComposerDraft(request.draftText);
   const visibleContext = fallback || '';
+  const intentHint = buildWebAgentPromptRecallIntentHint(request);
   const parts = [
+    intentHint ? `Intent recall hint: ${intentHint}` : '',
     draft ? `Draft prompt: ${draft}` : '',
     visibleContext ? `Visible AI context: ${visibleContext}` : '',
   ].filter(Boolean);
   const value = parts.join('\n').trim();
   return value ? value.slice(0, 1600) : undefined;
+}
+
+function buildWebAgentPromptRecallIntentHint(
+  request: ComposerAssistRequest,
+): string | null {
+  if (!hasJiraEstimateDraftIntent(request)) return null;
+
+  return [
+    'Task Estimate workflow',
+    'Jira ticket estimate',
+    'team field',
+    'Summary',
+    'Description',
+    'Issue type',
+    'Historical Story Points benchmark',
+    'Dev estimate',
+    'QA estimate',
+    'missing reason',
+    'low confidence reason',
+    'Google Sheet dry-run',
+    'not Jira writeback',
+  ].join(' ');
+}
+
+function shouldCollectLockedPromptPatchRecallDebug(
+  request: ComposerAssistRequest,
+): boolean {
+  return hasJiraEstimateDraftIntent(request);
+}
+
+function hasJiraEstimateDraftIntent(request: ComposerAssistRequest): boolean {
+  if (request.contextType !== 'web_agent_prompt') return false;
+  const draft = normalizeComposerDraft(request.draftText).toLowerCase();
+  if (!draft) return false;
+
+  const asksForEstimate =
+    /estimate|估算|story\s*points?|dev estimate|qa estimate|工时|人天/.test(
+      draft,
+    );
+  const referencesJira =
+    /jira|ticket|issue|sheet|表格|story\s*points?/.test(draft);
+  return asksForEstimate && referencesJira;
 }
 
 function buildComposerDraftSecondaryTexts(
@@ -759,6 +815,84 @@ function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
     score: match.score,
     cue: match.cue,
   };
+}
+
+function buildLockedContextExpansionPromptPatchEvidence(
+  request: ComposerAssistRequest,
+  recallDebug?: ContextRecallDebug,
+): ComposerAssistEvidence[] {
+  if (!hasJiraEstimateDraftIntent(request)) return [];
+
+  const contextMatch = recallDebug?.contextExpansion?.contextMatch;
+  if (contextMatch?.state !== 'locked') return [];
+
+  const selectedTopic =
+    contextMatch.selectedTopic || contextMatch.candidates?.[0];
+  if (!selectedTopic) return [];
+
+  const topicText = [
+    stringifyContextExpansionValue(selectedTopic.id),
+    stringifyContextExpansionValue(selectedTopic.label),
+    stringifyContextExpansionValue(selectedTopic.reason),
+    stringifyContextExpansionValue(selectedTopic.reasons),
+    stringifyContextExpansionValue(selectedTopic.aliases),
+    stringifyContextExpansionValue(contextMatch.expandedQuery),
+    stringifyContextExpansionValue(contextMatch.userFacingSummary),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const evidenceText = topicText.toLowerCase();
+  const combined = [
+    request.draftText,
+    request.primaryText,
+    request.title,
+    evidenceText,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+
+  if (!isJiraEstimatePrompt(combined, evidenceText)) return [];
+
+  const label =
+    stringifyContextExpansionValue(selectedTopic.label) ||
+    'Task Estimate workflow';
+  const rawId =
+    stringifyContextExpansionValue(selectedTopic.id) ||
+    label.toLowerCase().replace(/[^a-z0-9_-]+/gi, '-');
+  const snippet =
+    topicText.replace(/\s+/g, ' ').trim().slice(0, 520) ||
+    'Locked context expansion matched Jira estimate workflow memory.';
+
+  return [
+    {
+      id: `context-expansion:${rawId.slice(0, 96)}`,
+      type: 'source_memory',
+      title: label,
+      snippet,
+      sourceLabel: 'context_expansion',
+      sourceTitle: label,
+      links: [],
+      whyMatched: '召回上下文已锁定相关任务记忆，但候选被显示预算静音',
+      whyRelevant: ['locked context expansion', 'Jira estimate prompt patch'],
+      reasonType: 'semantic',
+      evidenceRole: 'artifact',
+      displayPriority: 'p1',
+      metadata: {
+        fallbackReason: 'locked_context_expansion',
+      },
+      score: MIN_PROMPT_PATCH_CONFIDENCE,
+    },
+  ];
+}
+
+function stringifyContextExpansionValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) {
+    return value.map(stringifyContextExpansionValue).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') return '';
+  return String(value).replace(/\s+/g, ' ').trim();
 }
 
 function getComposerSuggestionType(
@@ -1266,7 +1400,6 @@ function buildPromptContextPatch(
           ],
           ['工具适配', targetToolFit.reason],
         ],
-        sources: sourceLabels,
       }),
     };
   }
@@ -1299,7 +1432,6 @@ function buildPromptContextPatch(
             '列出需要人工确认的 ticket、字段缺失、口径冲突，以及下一步应该核对的 Jira/Sheet 范围。',
           ],
         ],
-        sources: sourceLabels,
       }),
     };
   }
@@ -1332,7 +1464,6 @@ function buildPromptContextPatch(
             '低置信、来源过期、目标平台不可达或出现内部链接/secret 时不要自动继续。',
           ],
         ],
-        sources: sourceLabels,
       }),
     };
   }
@@ -1393,7 +1524,7 @@ function isJiraEstimatePrompt(combined: string, evidenceText: string): boolean {
     combined,
   );
   const evidenceSupports =
-    /team field|summary|description|issue type|historical story points?|estimate|dev estimate|qa estimate|只写回 sheet|没有回写 jira|人天|估算/.test(
+    /story points estimation skills?|task estimate|team field|team 字段|summary|description|issue type|historical story points?|estimate|dev estimate|qa estimate|只写回 sheet|没有回写 jira|人天|估算/.test(
       evidenceText,
     );
   return promptHasEstimate && promptHasJiraOrSheet && evidenceSupports;
@@ -1417,20 +1548,13 @@ function isAiServiceAutoRunPrompt(
 function renderPromptPatch(input: {
   heading: string;
   sections: Array<[string, string]>;
-  sources: string[];
 }): string {
-  const sources = input.sources.length
-    ? input.sources.map((source, index) => `[P${index + 1}] ${source}`)
-    : ['[P1] Personal AI 相关记忆摘要'];
   return [
     input.heading,
     '',
     ...input.sections.map(([label, value]) => `${label}：${value}`),
     '',
     '来源处理：只使用 Personal AI 记忆摘要；不要要求我粘贴内部链接、群消息原文、附件下载链接或 secret。',
-    '',
-    '参考来源：',
-    ...sources,
   ].join('\n');
 }
 

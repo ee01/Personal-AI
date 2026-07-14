@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-06-27_
+_最后更新: 2026-07-14_
 
 ## 是什么
 
@@ -191,6 +191,31 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 - 当 ready suggestion 和“稍后建议”都为空且读取成功时，页面首屏显示 `建议队列空回执`，说明这是成功空结果，不是加载失败、过滤隐藏、质量门控降级或同步开关关闭。
 - 空回执同时保留 active 真源技能数量、后续 suggestion 来源和只读边界：不会创建 suggestion、提升 active、触发 OpenClaw / Desktop App 同步、写外部平台或执行 skill。
 
+2026-07-06 状态：
+
+- 每张 suggestion 卡片现在都有 `建议处理回执`：在用户进入详情前先说明确认后会提升 active 还是覆盖现有 active 真源、当前主按钮是否只是进入证据 / 风险页、已开启平台的同步边界，以及查看卡片本身是只读。
+- 这条卡片回执只消费现有 suggestion、review、external-change binding、平台同步设置和 Desktop App 可用性；不新增状态机，不绕过 review gate，不触发同步，也不改变使用 / 丢弃 / 稍后审 / 现在审的写入语义。
+
+2026-07-07 状态：
+
+- 本机 agent skill 导入建议的卡片级 `建议处理回执` 会直接显示 `本机扫描` 和 `验证` 行，列出 Desktop App 扫描到的目录、资源包规模、被忽略的越界 / 重复路径，以及是否发现 test / eval / fixture / verify 线索。
+- 这两行只展示扫描快照和审核事实；卡片查看不会重新读取本机目录、运行验证、执行包内脚本、安装依赖、连接 MCP、提升 active 真源或写回原本机 skill 目录。
+
+2026-07-08 状态：
+
+- `使用` / `确认覆盖` / `丢弃` / `稍后审` / `现在审` 的处理中、成功和失败回执会保留点击时的 suggestion 快照：目标标题、点击前状态、来源/版本、审核 gate 和外部覆盖或本机导入目标。
+- 这条快照只解释本次回执对应的原始对象；不改变 suggestion 状态机、review gate、后端 API payload、平台同步或 skill 执行语义。
+
+2026-07-09 状态：
+
+- Suggestion 的优先处理、卡片、稍后队列、详情页和审核 gate 按钮都带动态 `title` / `aria-label`：在 hover、键盘焦点或读屏语境下说明这次点击是只读查看证据、确认入库/覆盖、丢弃、稍后审还是恢复审阅。
+- 这些按钮级边界只改善操作前可理解性；不改变 suggestion 状态机、review gate、后端 API payload、平台同步、外部写入或 skill 执行语义。
+
+2026-07-14 状态：
+
+- 可审 suggestion 卡片、稍后 suggestion 卡片和左侧 active / dismissed skill 卡片本身也带 `title` / `aria-label`，说明整卡点击只是只读打开详情、证据或恢复路径；真正写入状态仍只发生在 `使用 / 确认覆盖`、`丢弃`、`稍后审`、`现在审` 等明确按钮上。
+- 这次只补齐卡片级查看边界；不改变 suggestion 状态机、review gate、按钮写入语义、平台同步、Public Skill URL、外部平台写入或 skill 执行。
+
 ### 2. 管理在用技能
 
 左侧技能列表默认只显示 `active` 技能。
@@ -260,6 +285,9 @@ eval / run receipt 以后作为次级能力再加，不进入 MVP 主链路。
 - 绑定页会显示“分享回执”：说明复制给 agent 的安装 URL 会包含 bearer token、只能只读拉取 HTML 预览 / `SKILL.md` / `package.json` / `files/*`，不会写入、覆盖、执行或触发平台同步；同时露出当前 active version、sha256、资源文件数量、secret-scan 阻断和旧 token 需后台 revoke 的边界。
 - 复制可访问 URL 或平台安装指令后，绑定页会保留一条“复制回执”：确认剪贴板写入的是完整 token URL / 含 token 的安装文案，不是展示短链；同时说明复制只写本机剪贴板，不会打开链接、安装 skill、触发平台同步、写外部平台或执行脚本。剪贴板写入失败时也会显示未写入和可重试边界。
 - 复制回执会绑定复制当时的 skill、active version、sha256 和 token 尾号；如果同一个 skill 详情后来刷新出新的 live token 或 active version 指纹，回执会变成 `旧复制回执`，提醒用户剪贴板仍是上次复制的凭证，需要重新复制后再粘贴。旧 token 是否失效仍以后台 revoke 为准。
+- 点击 `打开预览` 后，绑定页会保留一条“预览回执”：说明新标签页请求的是完整 token URL、只读拉取 HTML / `SKILL.md` / `package.json` / `files/*`，不会复制剪贴板、安装 skill、触发平台同步、写外部平台或执行脚本；如果浏览器拦截弹窗，也会显示 `预览未打开` 和未访问边界。
+- 当详情没有 `share` 或 secret-scan 返回 `shareError` 时，`复制可访问 URL`、`打开预览` 和平台安装指令按钮会在 title / aria-label 与分享回执里说明不可用原因：不会复制展示短链、不会打开无 token 地址、不会安装 skill、触发平台同步或执行脚本。
+- 当详情有可用 `share` 时，`复制可访问 URL`、`打开预览` 和平台安装指令按钮的 title / aria-label 会提前显示当前 active version、sha256 短指纹和 token 尾号；用户不用等点击后的回执才知道即将复制或打开哪一次 bearer 凭证。
 
 ## 平台同步
 
@@ -366,6 +394,17 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 - 用户点击 OpenClaw 或 Desktop App 平台的 `立即同步` 后，弹窗会先显示 `同步处理中` 回执，说明这次请求的目标平台、远端 API 或本机 Desktop App 路径、会对照的 active 真源范围，以及请求返回前尚未确认任何新增 suggestion、binding 更新、推送、回拉、安装或外部写入。
 - 处理中回执会在成功、跳过或失败后替换为原有 `同步回执`；同步语义不变，manual-only 平台不参与自动写入，skill 不会被执行，外部变更仍只进入 Inbox 审核，不会自动覆盖 active 真源。
 
+2026-07-04 状态：
+
+- 平台级同步弹窗的 `本次范围总览` 只把当前可执行的 API 平台和 Desktop App 已可用的本机目录平台计入 `可同步平台`。
+- 如果 Codex CLI / Claude Code / Cursor 已开启但 Desktop App 当前不可用，总览会单独显示 `等待 Desktop App` 数量；对应平台行仍显示 `需 Desktop App` 和 `Desktop App 未运行，无法读写本机目录`。
+- 这只是可执行性口径修正，不改变平台开关、同步请求、binding 写入、manual-only 排除、外部变更审核或 skill 执行语义。
+
+2026-07-13 状态：
+
+- 平台级自动同步入口、弹窗关闭、`立即同步` 和平台开关都带 hover / 读屏边界：点击前会说明这是打开设置、保存平台级 enabled，还是发起 OpenClaw / Desktop App 同步。
+- 这些控件级边界会同时说明 active 真源范围、Desktop App / 远端 API 路径、manual-only 排除和禁用原因；不改变同步请求、平台开关、binding 写入、外部变更审核、Public Skill URL 或 skill 执行语义。
+
 ### Manual-only 平台
 
 ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句安装指引。
@@ -456,6 +495,15 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - 2026-06-28 再核对 Anthropic Agent Skills、OpenAI GPT Actions、agent skill lifecycle 和 agent-skill 供应链安全讨论后，平台同步的 pending 态也需要单独露出：远端 API 同步、本机目录同步、manual-only 复制安装、执行 skill 和覆盖 active 真源是不同边界；请求返回前不能把“已发出”误显示成“已同步”。
 - 2026-07-01 再核对 Anthropic Agent Skills、OpenAI GPTs、Agent Skills 生命周期综述和 SkillFortify / supply-chain 安全研究后，短期应优先把已有执行账本状态露出为只读质量门控，而不是先做完整修订工作流。skill 是可共享、可执行资源包；用户需要在继续使用或复制安装前看到 degraded / retired 不是删除，也不是同步失败，而是“自动推荐已暂停、仍可人工复核”的生命周期状态。
 - 2026-07-03 再核对 Claude Agent Skills、OpenAI Agents SDK、LangChain Deep Agents procedural memory、SkillFortify 和 agent skill 供应链攻击讨论后，Suggestion Inbox 的空状态也应保留 lifecycle / trust 边界：成功为空不是失败，也不代表同步或质量检查已经运行；它只说明当前没有需要用户审核的技能包候选。
+- 2026-07-04 再核对 Anthropic Agent Skills、OpenAI GPT Actions、Agent Skills 架构/生命周期综述、SKILL.md supply-chain attack 和 ToxicSkills 后，平台同步总览应把“已开启配置”和“当前可执行”拆开：本机目录同步依赖 Desktop App 实时可用性，不能只因 Codex CLI / Claude Code / Cursor 开关为 enabled 就计入可同步平台。
+- 2026-07-05 再核对 Anthropic Agent Skills、OpenAI GPT Actions、W3C Capability URL 和 Macaroons 后，Public Skill URL 的 `打开预览` 也要像复制一样留下 bearer URL 使用回执：预览是只读访问，不是安装、同步、执行或外部平台写入；弹窗被拦截时不能让用户误以为 token URL 已访问。
+- 2026-07-06 再核对 Anthropic Agent Skills、OpenAI GPTs 和 demonstration-to-reusable-workflow 研究后，Suggestion Inbox 的卡片第一屏也要显示处理边界：skill 是可共享、可执行、可同步的能力包，用户在点主按钮前应知道这一步只是看证据、提升 active、覆盖 active，还是等待平台同步。
+- 2026-07-08 再核对 Anthropic Agent Skills、OpenAI GPT Actions、AutoSkill、MUSE-Autoskill 和 Voyager 后，决策回执应继续绑定点击时对象：skill 生命周期需要来源、版本、验证和反馈可审计；当列表刷新到另一张卡片时，结果回执不能只依赖当前详情状态来解释刚才的使用、丢弃或稍后审。
+- 2026-07-09 再核对 Anthropic Agent Skills、OpenAI Agents SDK human-in-the-loop、ChatGPT app action permissions、人机协作设计和 agent skill 供应链风险讨论后，Suggestion Inbox 的高影响按钮也应自带 hover / 读屏边界：重要动作要在点击前说明是只读审核还是写入状态，skill 包也要像供应链 artifact 一样保留来源、版本、权限和执行边界。
+- 2026-07-10 再核对 Anthropic Agent Skills、W3C Capability URL、Macaroons 和 SKILL.md 供应链攻击讨论后，Public Skill URL 的不可用状态也要有预点击边界：无 token 或 secret-scan 阻断时，按钮本身需要说明为什么不能复制/预览，并明确不会把展示短链当成 bearer URL。
+- 2026-07-11 再核对 Anthropic Agent Skills、W3C Capability URL、Macaroons 和 SKILL.md 供应链攻击讨论后，Public Skill URL 的可用状态也要有预点击边界：按钮本身应显示当前 version、sha 和 token 尾号，因为 bearer URL 一旦复制或打开就成为可转交凭证。
+- 2026-07-13 再核对 Anthropic / Claude Skills、Zapier Agents 发布模型、OpenAI Agents SDK human-in-the-loop 和 trigger-action debugging 研究后，平台同步控件也应在点击前暴露后果：保存开关、立即同步、关闭弹窗和打开设置是不同动作；用户不应等到点击后的回执才知道是否会调用远端 API、扫描本机目录、写 manual-only 平台、覆盖 active 真源或执行 skill。
+- 2026-07-14 再核对 Anthropic Agent Skills、OpenAI Agents SDK human-in-the-loop / guardrails、AutoSkill 和 SKILL.md 供应链攻击讨论后，Suggestion Inbox 的整卡点击也要保留只读边界：卡片查看是 progressive disclosure 的详情入口，不应被误读成使用、丢弃、稍后审、覆盖 active 真源、同步或执行 skill。
 
 ## Reminders 反馈
 
@@ -485,9 +533,33 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 
 2026-07-03 自动化核对：AppleScript 未列出 `Personal AI`，但 EventKit 读到了该列表；4 条均为已完成的历史 Doubao / digest / sync 反馈，没有 open 或与 Skill Foundry suggestion inbox 相关的条目，因此没有纳入或标记完成的 Reminder 项。
 
+2026-07-04 自动化核对：AppleScript 仍未列出 `Personal AI`，EventKit 读到了该列表；4 条均为已完成的历史 Doubao / digest / sync 反馈，没有 open 或与 Skill Foundry 平台同步相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-05 自动化核对：AppleScript 未列出 `Personal AI`，EventKit 读到了该列表；4 条均为已完成的历史 Doubao / digest / sync 反馈，没有 open 或与 Public Skill URL、skill 分享、token URL 或预览相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-06 自动化核对：EventKit 读到了 `Personal AI` 列表；4 条均为已完成的历史 Doubao / digest / sync 反馈，没有 open 或与 Skill Foundry suggestion inbox、技能建议处理、active 覆盖或同步边界相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-08 自动化核对：AppleScript 未列出 `Personal AI`，但 EventKit 读到了该列表；4 条均为已完成的历史 Doubao / Notification / 测试反馈，没有 open 或与 Skill Foundry 决策快照、使用、丢弃、稍后审相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-09 自动化核对：EventKit 读到了 `Personal AI` 列表；4 条均为已完成的历史 Doubao / Notification / 测试反馈，没有 open 或与 Skill Foundry suggestion 按钮、审核、入库、丢弃或稍后审边界相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-10 自动化核对：AppleScript 未列出 `Personal AI`，EventKit 读到了该列表；4 条均为已完成的历史 Doubao / Notification / 测试反馈，没有 open 或与 Public Skill URL、token URL、secret-scan 阻断、复制或预览相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-11 自动化核对：AppleScript 未列出 `Personal AI`，EventKit 读到了该列表；4 条均为已完成的历史 Doubao / Notification / 测试反馈，没有 open 或与 Public Skill URL、token URL、token 尾号、复制、预览或撤销边界相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-13 自动化核对：AppleScript 未列出 `Personal AI`，EventKit 读到了该列表；4 条均为已完成的历史 Doubao / Notification / 测试反馈，没有 open 或与 Skill Foundry 平台同步、开关保存、立即同步或 Desktop App 同步路径相关的条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-07-14 自动化核对：EventKit 读到了 `Personal AI` 列表；4 条均为已完成项目，未完成 0 条。本轮没有 open 或与 Skill Foundry suggestion 使用、丢弃、稍后审、现在审或卡片查看边界相关的 Reminder 条目，因此没有纳入或标记完成的 Reminder 项。
+
 外部参考：
 
 - [Claude Skills Help](https://support.claude.com/en/articles/12512180-use-skills-in-claude)
+- [Anthropic Agent Skills docs](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
+- [OpenAI GPT Actions docs](https://developers.openai.com/api/docs/actions/introduction)
+- [OpenAI GPTs Help](https://help.openai.com/en/articles/8554397-creating-and-editing-gpts)
+- [Alloy: Generating Reusable Agent Workflows from User Demonstration](https://arxiv.org/html/2510.10049v1)
+- [W3C Good Practices for Capability URLs](https://www.w3.org/TR/capability-urls/)
+- [Google Research: Macaroons](https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/)
 - [OpenAI GPTs](https://help.openai.com/en/articles/8554407-gpts)
 - [Claude Skills Overview](https://claude.com/docs/skills/overview)
 - [Microsoft Copilot Studio agents](https://learn.microsoft.com/en-gb/microsoft-copilot-studio/microsoft-copilot-extend-copilot-extensions)
@@ -500,6 +572,10 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - [Anthropic: Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)
 - [OpenAI Creating and editing GPTs](https://help.openai.com/en/articles/8554397-creating-and-editing-gpts)
 - [OpenAI Agents SDK Human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [ChatGPT agent safety controls](https://help.openai.com/en/articles/11752874-chatgpt-agent)
+- [ChatGPT app permissions](https://help.openai.com/en/articles/11487775-connectors-in-chatgpt)
+- [Stanford HAI: Humans in the Loop](https://hai.stanford.edu/news/humans-loop-design-interactive-ai-systems)
+- [SafeDep Agent Skills Threat Model](https://safedep.io/agent-skills-threat-model)
 - [LangGraph Interrupts](https://docs.langchain.com/oss/javascript/langgraph/interrupts)
 - [W3C Good Practices for Capability URLs](https://www.w3.org/TR/capability-urls/)
 - [RFC 7009 OAuth 2.0 Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009)

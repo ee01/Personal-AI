@@ -24,6 +24,10 @@
   animation: blink 1.5s infinite;
 }
 
+.processing-indicator.finalizing {
+  color: #9a6700;
+}
+
 @keyframes blink {
   0% { opacity: 0.5; }
   50% { opacity: 1; }
@@ -122,6 +126,57 @@
   margin-top: 8px;
 }
 
+.agent-result-handoff-receipt {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #f0d98c;
+  border-radius: 6px;
+  background: #fff8c5;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-result-handoff-receipt > span {
+  color: #7d4e00;
+  font-weight: 700;
+}
+
+.agent-result-handoff-receipt p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-result-handoff-receipt small {
+  color: #6e5a00;
+  overflow-wrap: anywhere;
+}
+
+.agent-result-handoff-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-result-handoff-steps button {
+  border: 1px solid #bf8700;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #6e5a00;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 4px 7px;
+}
+
+.agent-result-handoff-steps button:focus-visible {
+  outline: 2px solid #9a6700;
+  outline-offset: 2px;
+}
+
 .agent-trace-review-lane {
   display: grid;
   gap: 8px;
@@ -195,8 +250,17 @@
   margin-top: 3px;
 }
 
+.agent-trace-review-lane-step-route {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .agent-trace-review-lane-steps button {
   min-height: 24px;
+  flex: 0 0 auto;
   padding: 3px 7px;
   border: 1px solid #8c959f;
   border-radius: 6px;
@@ -206,6 +270,14 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
+}
+
+.agent-trace-review-lane-step-route span {
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .agent-trace-review-lane-steps button:hover {
@@ -265,14 +337,21 @@
 }
 
 .agent-trace-navigation-steps {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 5px;
   margin-top: 2px;
 }
 
+.agent-trace-navigation-route {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
 .agent-trace-navigation-steps button {
   min-height: 24px;
+  flex: 0 0 auto;
   padding: 3px 7px;
   border: 1px solid #0969da;
   border-radius: 6px;
@@ -282,6 +361,13 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
+}
+
+.agent-trace-navigation-route span {
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .agent-trace-navigation-steps button:hover {
@@ -428,6 +514,36 @@
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.agent-trace-span-composition-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.agent-trace-span-composition-steps button {
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid #8c959f;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #24292f;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.agent-trace-span-composition-steps button:hover {
+  border-color: #0969da;
+  color: #0969da;
+}
+
+.agent-trace-span-composition-steps button:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
 }
 
 .agent-trace-span-composition-item.ok {
@@ -762,6 +878,62 @@
   color: #57606a;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.agent-approval-queue-receipt {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid #f0d98c;
+  border-radius: 4px;
+  background: #fff8c5;
+}
+
+.agent-approval-queue-receipt > span {
+  color: #7d4e00;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-approval-queue-receipt p {
+  margin: 0;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-queue-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.agent-approval-queue-steps button {
+  min-width: 74px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0969da;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-approval-queue-steps button:hover {
+  border-color: #0969da;
+  background: #ddf4ff;
+}
+
+.agent-approval-queue-steps button:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
 }
 
 .agent-approval-list {
@@ -1189,6 +1361,40 @@
 
 .agent-approval-copy-status.failed {
   color: #cf222e;
+}
+
+.agent-approval-copy-receipt {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #f6f8fa;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-copy-receipt.current {
+  border-color: #aceebb;
+  background: #f0fff4;
+}
+
+.agent-approval-copy-receipt.stale {
+  border-color: #f0d98c;
+  background: #fff8c5;
+  color: #7d4e00;
+}
+
+.agent-approval-copy-receipt > span {
+  color: #24292f;
+  font-weight: 700;
+}
+
+.agent-approval-copy-receipt p {
+  margin: 0;
 }
 
 @media (max-width: 640px) {

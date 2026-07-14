@@ -67,6 +67,10 @@ export interface WatchRuleMessageContext {
   timestamps?: Array<number | string | undefined | null>;
 }
 
+export interface WatchRuleEligibilityOptions {
+  rejectMissingScopeValues?: boolean;
+}
+
 export interface ConcernedItemsPartition {
   manualItems: TopicItemWithAutoReply[];
   systemItems: TopicItemWithAutoReply[];
@@ -291,11 +295,19 @@ function isOutreachRuleInsideObservationWindow(
 export function isWatchRuleEligibleForMessage(
   rule: WatchRule,
   context?: WatchRuleMessageContext,
+  options: WatchRuleEligibilityOptions = {},
 ): boolean {
   if (!context) return true;
 
   if (rule.source === 'manual') {
     const senderValues = getContextSenderValues(context);
+    if (
+      options.rejectMissingScopeValues &&
+      rule.filterSender &&
+      !hasScopeValues(senderValues)
+    ) {
+      return false;
+    }
     if (
       rule.filterSender &&
       hasScopeValues(senderValues) &&
@@ -305,6 +317,13 @@ export function isWatchRuleEligibleForMessage(
     }
 
     const groupValues = getContextGroupValues(context);
+    if (
+      options.rejectMissingScopeValues &&
+      rule.filterGroup &&
+      !hasScopeValues(groupValues)
+    ) {
+      return false;
+    }
     if (
       rule.filterGroup &&
       hasScopeValues(groupValues) &&
@@ -346,6 +365,7 @@ export function isWatchRuleEligibleForMessage(
 export function getWatchRuleEligibilityIssues(
   rule: WatchRule,
   context?: WatchRuleMessageContext,
+  options: WatchRuleEligibilityOptions = {},
 ): string[] {
   if (!context) return [];
 
@@ -353,6 +373,17 @@ export function getWatchRuleEligibilityIssues(
 
   if (rule.source === 'manual') {
     const senderValues = getContextSenderValues(context);
+    if (
+      options.rejectMissingScopeValues &&
+      rule.filterSender &&
+      !hasScopeValues(senderValues)
+    ) {
+      issues.push(
+        `发送人上下文缺失：规则限定 ${formatScopeDiagnosticList(
+          rule.filterSender,
+        )}，本条消息未提供发送人`,
+      );
+    }
     if (
       rule.filterSender &&
       hasScopeValues(senderValues) &&
@@ -366,6 +397,17 @@ export function getWatchRuleEligibilityIssues(
     }
 
     const groupValues = getContextGroupValues(context);
+    if (
+      options.rejectMissingScopeValues &&
+      rule.filterGroup &&
+      !hasScopeValues(groupValues)
+    ) {
+      issues.push(
+        `群组上下文缺失：规则限定 ${formatScopeDiagnosticList(
+          rule.filterGroup,
+        )}，本条消息未提供群组`,
+      );
+    }
     if (
       rule.filterGroup &&
       hasScopeValues(groupValues) &&
@@ -694,7 +736,11 @@ export function resolveMatchedWatchRules(params: {
     const matchedRules = resolvedRefs
       .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
       .filter((rule): rule is WatchRule => Boolean(rule))
-      .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
+      .filter((rule) =>
+        isWatchRuleEligibleForMessage(rule, messageContext, {
+          rejectMissingScopeValues: true,
+        }),
+      );
 
     if (matchedRules.length > 0) {
       return {
@@ -714,7 +760,9 @@ export function resolveMatchedWatchRules(params: {
   const fallbackMatch = fallbackMatchWatchRuleByText(matchedRule, watchRules);
   if (
     fallbackMatch &&
-    isWatchRuleEligibleForMessage(fallbackMatch, messageContext)
+    isWatchRuleEligibleForMessage(fallbackMatch, messageContext, {
+      rejectMissingScopeValues: true,
+    })
   ) {
     return {
       watchRules: [fallbackMatch],
@@ -729,7 +777,11 @@ export function resolveMatchedWatchRules(params: {
   const matchedRules = refsFromIds
     .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
     .filter((rule): rule is WatchRule => Boolean(rule))
-    .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
+    .filter((rule) =>
+      isWatchRuleEligibleForMessage(rule, messageContext, {
+        rejectMissingScopeValues: true,
+      }),
+    );
 
   if (matchedRules.length > 0) {
     return {

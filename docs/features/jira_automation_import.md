@@ -57,6 +57,16 @@
 
 2026-07-02 补充：`Secret re-entry map` 现在会配套显示 `Credential restore gate` / `凭据恢复门控`。这条摘要说明 disabled copy 只带 `PERSONAL_AI_REENTER_SECRET` 或 `REDACTED` 占位，导入成功仍不代表凭据已恢复；启用前必须在 Jira 里重新录入、重建或明确留空这些字段。这个 gate 会进入预览边界回执、详情、复制复核包、导入副本描述和成功回执。
 
+2026-07-03 补充：脱敏层继续覆盖 AI / webhook provider 常见凭据形态。URL query 里的 `key`、`id_token`、`jwt`、`client_assertion` 等如果值像 provider API key、JWT 或长 token，会按 secret 处理；普通文本 / JSON body 里的 `jwt`、`idToken`、`clientAssertion`、`openaiApiKey`、Anthropic / Gemini / Google 风格 key 和 `X-API-Key` header 值也会进入 `Secret re-entry map` 并在 create payload 中替换为占位。预览、复制包、导入描述、失败回执和 console 只显示安全路径与重录原因，不展示原始 provider credential。
+
+2026-07-05 补充：导入成功后会先显示 `Post-import navigation receipt` / `导入后跳转回执`。默认仍会进入导入后的 Jira 规则详情，但用户可以留在当前页取消自动跳转；取消只影响导航，不会撤销已创建的 disabled copy、启用规则、运行自动化或完成 Jira 侧 Activation plan。
+
+2026-07-07 补充：`Create request pending` 不再是短暂 toast。点击 `Import disabled copy` 后，等待回执会保留到 Jira 返回成功或失败，并说明关闭或刷新页面不会撤销已经发送的 create request；成功或失败回执出现前会先清掉 pending 状态，避免用户把等待中和最终结果并列误读。
+
+2026-07-08 补充：链式触发保护旁边会显示 `Rule chaining choice` / `规则链式触发选择` 回执。它随 checkbox 更新，说明当前预览会阻止还是保留 `canOtherRuleTrigger`，这个选择只会进入后续 disabled-copy create payload；切换本身只重算预览和复核包，不会立即向 Jira 发送 create request。
+
+2026-07-09 补充：`Secret re-entry map` 会再压成 `Credential re-entry queue` / `凭据重录队列`。队列按 hidden Jira secret、URL / signed query 凭据、inline secret-like text、命名 credential 字段等原因分组，帮助用户知道启用前要在 Jira 里先重建哪类凭据；它只来自已经脱敏的 slot 元数据，不展示 raw value，也不表示 disabled copy 已恢复凭据。
+
 ## 使用方法
 
 1. **访问 Jira 自动化页面**
@@ -65,7 +75,7 @@
 
 2. **导入规则**
    - 在页面加载完成后，会在 "Create rule" 按钮旁边看到新的 "Import rule" / "导入规则" 按钮，显示语言跟随 Options 页语言设置
-   - 点击 "Import rule" / "导入规则" 按钮
+   - 点击 "Import rule" / "导入规则" 按钮只会打开本机 JSON 选择器并准备 disabled-copy 预览；按钮 hover / 读屏会先说明这一步不会创建、编辑、启用、运行 Jira automation、激活 schedule 或恢复 secret
    - 选择之前从 Jira Automation 导出的 JSON 文件
    - 文件选中后，如果 Personal AI 正在解析 JSON 或读取目标项目已有规则名，会先看到预检回执；这一步只是准备 disabled-copy 预览，不会向 Jira 创建或修改规则
    - 如果文件中有多条规则，先在预览弹窗中选择要导入的一条
@@ -79,16 +89,19 @@
    - 隐藏 secret、明显 token/password/API key 字段和 URL 里的凭据片段不会随导入原样迁移；Personal AI 在创建 disabled copy 时用 `PERSONAL_AI_REENTER_SECRET` / `REDACTED` 占位，用户需要在目标 Jira 里重新录入真实值后再启用
    - 预览会显示 `Secret re-entry map`，把需要重录或复核的安全字段路径压缩成清单；占位符不是可工作的凭据，启用前仍要在 Jira 里重新录入或确认留空
    - `Credential restore gate` 会把 Secret 重录图压缩成启用前门控摘要，明确创建 disabled copy 可以继续，但凭据恢复仍未完成
+   - `Credential re-entry queue` 会把同一批脱敏 slot 按处理类型分组：hidden Jira secret 需要在目标规则重录或重建，signed URL / function key / API gateway query 需要重新生成，inline secret-like text 需要确认是否恢复目标环境安全值，命名 credential 字段需要重新录入 API key / JWT / Authorization 等；这只是启用前队列，不会恢复真实凭据
    - 如果 secret 被写在规则名、描述、label、Web request body 等普通文本里，也会先被脱敏再展示、复制或写入导入副本；这些文本只保留业务上下文和重录提示，不保留原始 token
    - 如果 Web request URL 使用 AWS / Azure / Google 等 signed URL query，或用 `code` / `subscription-key` / `sasToken` 等 query 传递临时授权，签名、credential、security token、access id、function key 和 API gateway key 都会被当作 secret 清洗；目标 Jira 里需要重新生成或重新配置这类 URL 后再启用
+   - 如果 URL 或请求体里使用 AI / provider 凭据，例如 `key=AIza...`、`id_token=...`、`jwt`、`clientAssertion`、`openaiApiKey`、`X-API-Key` 或 Anthropic / Gemini / OpenAI 风格 token，也会作为需要重录的 credential slot 处理
    - 预览里可复制一份脱敏的启用前复核包，包含目标项目、最终导入名、高/中/低风险检查、环境绑定样例、隐藏 secret 重录提示、Activation plan 和导入警告，便于在 Jira 规则详情或审查线程里继续跟进
    - 复制复核包前会显示 `Clipboard only` / `Does not` 范围回执；复制成功也只表示本机剪贴板写入成功，不会替用户完成 Jira 侧复核、创建 Jira 副本、启用规则或恢复 secret
    - 复制包和导入副本描述会包含 `Secret re-entry map`，但只包含安全路径和原因，不包含原始 secret 值
+   - 复制包、导入副本描述和成功回执也会包含 `Credential re-entry queue`，避免用户离开预览后只看到占位符却不知道下一步先处理哪类凭据
    - 如果预检发现高风险项，预览会直接列出高风险类别和下一步处理建议，但不再强制勾选确认；用户可以直接创建禁用态副本，启用前仍需在 Jira 里完成高风险复核
    - sticky header 会同步显示当前 create stage 是 ready：按钮只会创建 disabled-copy，不会启用、运行、激活 schedule 或恢复 secret；高风险复核仍然留在 Jira 启用前完成
-   - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留。切换这个安全选项会重算预览和回执，但不会要求重新勾选确认
+   - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留。旁边的链式触发选择回执会说明当前状态会怎样进入 disabled-copy payload；切换这个安全选项只会重算预览、复核包和 create payload，不会发送 Jira create request，也不会要求重新勾选确认
    - 预览首屏会显示 `Create request scope`：当前还没有向 Jira 发送 create request；点击确认后只创建一个脱敏的 disabled copy；源规则不会被编辑、启用或运行；嵌入的环境引用只进入复核，不会被自动重写
-   - 点击导入后、Jira 返回前，会显示 `Create request pending`：说明一个脱敏 POST 正在创建该 disabled copy，Jira 尚未确认成功，且不会自动启用、运行、激活 schedule 或恢复 secret
+   - 点击导入后、Jira 返回前，会显示持久 `Create request pending`：说明一个脱敏 POST 正在创建该 disabled copy，Jira 尚未确认成功；这条回执会保留到成功或失败返回，且关闭或刷新页面不会撤销已经发送的 create request；它也会继续说明不会自动启用、运行、激活 schedule 或恢复 secret
 
 3. **导入完成**
    - 导入成功后会显示成功回执，使用实际导入副本名，而不是源规则名；如果因为同名自动编号，用户可以在跳转前确认这次创建的是哪一个 disabled copy
@@ -98,6 +111,8 @@
    - 如果预检发现 secret 或敏感隐藏值，成功回执会继续提醒先在 Jira 规则详情里重录隐藏值、手动测试，再启用
    - 成功回执会复述 `Secret re-entry map` 摘要，避免用户离开预览后忘记哪些字段只是占位符
    - 成功回执会继续显示凭据恢复门控，提醒导入成功后仍要在 Jira 规则详情里复录或明确留空这些凭据字段，再考虑启用
+   - 成功回执会继续显示凭据重录队列；如果队列还存在，导入成功只代表 disabled copy 创建成功，不代表凭据、signed URL、provider token 或隐藏值已经可用
+   - 成功回执会显示导入后跳转状态：可以立即打开规则详情，也可以留在当前页继续复制或核对；留在当前页只取消自动跳转，不撤销 disabled copy 或确认启用复核
    - 如果 Jira API 创建失败，失败回执不会直接展示原始 API response；URL 凭据、token/query、Authorization、`keyOrValue`、email 和高熵 path token 会被替换为 `REDACTED` / `REDACTED_EMAIL`，并提示先检查是否已有 disabled copy 后再重试
    - 新规则默认是 `DISABLED`，需要用户检查后在 Jira 中手动启用
    - 页面会跳转到新导入的规则详情
@@ -143,8 +158,10 @@
    - 复核备注会保留关键 JQL/filter、URL、secret、敏感或隐藏值、custom field、saved filter、connection、账号/收件人、smart value 和源项目引用样例；复核备注中的敏感值只记录脱敏标签，URL 中的 token/API key/password 等参数和常见 webhook path token 会写成 `REDACTED`
    - 对 `secret=true` 字段只记录安全标签：有安全 secret 名时展示名称；没有时使用邻近字段名生成 `Authorization: hidden secret value` 这类重录槽位；不会把 `keyOrValue` 里的原始值写进预览、描述、复制包或浏览器 console，也不再把隐藏值二次识别成 URL、JQL、smart value 或 source project 样例
    - 创建 disabled copy 的 POST payload 会把 `secret=true` 容器里的 `keyOrValue`、`value`、token/password/API key 等值承载字段，以及普通字段里明显命名为 token/password/API key 的值替换为 `PERSONAL_AI_REENTER_SECRET`；规则名、描述、label 和普通文本字段里的内嵌 secret 也会用同一套规则清洗；URL 会保留主机和业务路径，但 token query、function/API gateway key query、signed URL signature/credential/security token、凭据用户名密码和常见 webhook path token 会写成 `REDACTED`
+   - Provider credential 也走同一套 create payload 清洗：JWT/id token/client assertion、`key=` 携带的高熵 provider key、`openaiApiKey`、Anthropic / Gemini / Google 风格 key 和 `X-API-Key` header 值不会写入导入副本
    - 转换层会生成 `Secret re-entry map`，记录被替换或脱敏的安全 payload 路径、可展示字段标签和处理原因；UI、复制包、review note 和成功回执复用这一份 map，避免各处对“哪些字段需要重录”的说法不一致
    - 转换层会基于同一份 map 生成 `Credential restore gate` 摘要；它不重新读取原始值，只说明哪些占位位置仍阻止启用前的凭据恢复
+   - 转换层会基于同一份已脱敏 slot 元数据生成 `Credential re-entry queue`，按 hidden secret、URL / query credential、inline secret-like text、命名 credential field 等原因分组，并把队列写入预览、复制包、导入副本描述、warning 和成功回执
    - 导入 UI 默认关闭链式触发开关，避免启用后被其它规则意外触发
    - 转换层默认不保留链式触发能力，只有用户在预览中明确保留时才会写入
    - 对超长规则名做截断，降低 Jira API 因名称长度拒绝创建的概率
@@ -159,6 +176,7 @@
 3. **用户界面**
    - 在 iframe 内动态添加导入按钮
    - 如果 Jira Automation 工具栏异步渲染，会继续等待 `Create rule` 按钮出现再插入；慢加载时会有限重试，避免按钮只尝试一次后消失
+   - 入口按钮的 `title` / `aria-label` 先说明只打开本机 JSON 选择器并准备 disabled-copy 预览；取消文件选择或尚未确认预览时不会发送 Jira create request
    - 提供文件选择、规则选择、导入预览和进度反馈
    - 预览中突出显示 custom/app component、Web request、外部集成动作、secret 引用、敏感或隐藏值、JQL/filter、custom field、saved filter、connection/credential、硬编码 URL、账号引用、smart value、源项目引用、scheduled trigger、链式触发和版本兼容风险，并按高 / 中 / 低风险生成启用前复核清单
    - 预览顶部先显示 create request scope，区分当前 preview 无写入、确认后的单个 disabled-copy POST、源规则不变、以及内嵌环境引用不自动重写
@@ -174,10 +192,11 @@
    - 预览详情和导入边界回执显示 `Secret re-entry map`；用户可以在创建 disabled copy 前看到哪些字段只是占位符，而不是导入后才发现凭据没有恢复
    - 检测到高风险项时，预览会显示 JQL/过滤器、源项目引用、外部效果、环境绑定等高风险类别，以及 Activation plan 的首个高风险步骤；导入按钮不再因为高风险项而禁用
    - sticky header 的导入按钮旁会显示 create-stage ready 回执，说明点击只会创建禁用副本，Jira-side Activation plan review 仍然 open
-   - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要中；每次切换都会重算导入副本预览，但不再重新锁住导入按钮
+   - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要和 `规则链式触发选择` 回执中；每次切换都会重算导入副本预览和复核包，但不再重新锁住导入按钮，也不会在点击导入前写 Jira
    - 导入预览、按钮、复制复核包状态、预检 / pending / success / failure 回执会读取 Options 页的 `personalAiUiPreferences.language`，按中文或 English 展示
    - 创建成功后显示短暂但可读的 post-import 回执，复述 disabled copy、secret 重录、手动测试、Jira 描述中保留 Activation plan，以及即将跳转到导入规则详情；错误时显示脱敏失败回执，不回显 Jira/API 返回的原始 secret-bearing response
-   - 创建请求等待中会先显示 pending 回执，绑定实际导入名、目标项目、payload disabled 状态和链式触发处理结果；成功或失败回执出现后再确认最终结果
+   - post-import 回执会给出自动跳转、立即打开和留在当前页三个状态；留在当前页只取消导航，不改变导入结果或启用复核状态
+   - 创建请求等待中会先显示持久 pending 回执，绑定实际导入名、目标项目、payload disabled 状态和链式触发处理结果；成功或失败回执出现后会清理 pending 状态再确认最终结果
 
 ### 文件列表
 

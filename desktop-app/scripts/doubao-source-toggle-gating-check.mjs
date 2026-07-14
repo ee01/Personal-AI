@@ -413,7 +413,11 @@ async function main() {
               };
             });
           }
-          return window.__manualSyncResults?.[kind] || {
+          const result = window.__manualSyncResults?.[kind];
+          if (result?.throws) {
+            throw new Error(result.throws);
+          }
+          return result || {
             status: 'skipped',
           };
         },
@@ -464,6 +468,14 @@ async function main() {
                 resolve();
               };
             });
+          }
+          if (window.__failExplorerRunSource === source) {
+            const message =
+              window.__failExplorerRunMessage ||
+              `${source} explorer synthetic failure`;
+            window.__failExplorerRunSource = null;
+            window.__failExplorerRunMessage = null;
+            throw new Error(message);
           }
           return {
             implemented: true,
@@ -707,6 +719,36 @@ async function main() {
     await expectText(page, '#memory-thread-detail', /修复长期记忆线程/);
     await expectText(page, '#memory-thread-detail', /重试长期记忆/);
     await expectText(page, '#memory-thread-detail', /推送前会发生什么/);
+    await expectAttribute(
+      page,
+      '#memory-thread-button',
+      'title',
+      /需要先完成豆包登录.*不同步 persona_core \/ voice_mode.*不写 mobile_context_thread/,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-button',
+      'aria-label',
+      /需要先完成豆包登录.*真实投递仍以后续 stable_memory 流水为准/,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="open_doubao"]',
+      'title',
+      /只打开登录\/验证路径.*不代表长期记忆已经投递/,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="bind_memory"]',
+      'aria-label',
+      /只复用、恢复或重新绑定 memory_sync_thread.*不推送 persona_core \/ voice_mode/,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="retry"][data-thread-kind="stable_memory"]',
+      'title',
+      /重新运行 stable_memory 同步.*待确认回执.*最近同步流水/,
+    );
     await expectText(
       page,
       '#memory-thread-detail',
@@ -718,6 +760,13 @@ async function main() {
     await expectText(page, '#memory-thread-detail', /来源引用：2/);
     await expectText(page, '#memory-thread-detail', /未验证 · 未看到正文/);
     await expectText(page, '#memory-thread-detail', /不会进入手机版对话/);
+    await expectText(page, '#memory-thread-detail', /投递目标回执/);
+    await expectText(page, '#memory-thread-detail', /目标一致/);
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /与当前绑定 memory_sync_thread/,
+    );
 
     await page.evaluate(() => {
       window.__status = {
@@ -732,6 +781,12 @@ async function main() {
     await page.locator('#refresh-button').click();
     await page.waitForFunction(
       () => !document.querySelector('#memory-thread-button')?.disabled,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-button',
+      'title',
+      /复用或修复已绑定的 旧长期记忆线程.*只处理 memory_sync_thread 绑定/,
     );
     await page.locator('#memory-thread-button').click();
     await expectText(page, '#memory-thread-message', /绑定回执/);
@@ -783,6 +838,18 @@ async function main() {
     await expectText(page, '#memory-thread-detail', /测试 Memory Service/);
     await expectText(page, '#memory-thread-detail', /查看日志/);
     await expectNoText(page, '#memory-thread-detail', /重试长期记忆/);
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="test_memory"]',
+      'title',
+      /只检查本机配置的 Memory Service 连通性.*不读取豆包/,
+    );
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="open_log"]',
+      'aria-label',
+      /只打开本机运行日志.*不重试同步/,
+    );
 
     await page.evaluate(() => {
       const stableAttempt = window.__status.syncState.recentAttempts.find(
@@ -825,6 +892,96 @@ async function main() {
       /不会写 mobile_context_thread/,
     );
     await expectText(page, '#memory-thread-detail', /建线 seed/);
+    await expectAttribute(
+      page,
+      '#run-stable-button',
+      'title',
+      /渲染 persona_core \/ voice_mode package.*没有真实稳定画像更新时只记 skipped/,
+    );
+
+    await page.evaluate(() => {
+      const stableAttempt = window.__stableAttemptTemplate;
+      const rest = window.__status.syncState.recentAttempts.filter(
+        (attempt) => attempt.kind !== 'stable_memory',
+      );
+      window.__status = {
+        ...window.__status,
+        syncState: {
+          ...window.__status.syncState,
+          recentAttempts: [
+            {
+              ...stableAttempt,
+              status: 'succeeded',
+              trigger: 'manual',
+              errorMessage: '',
+              telemetryError: undefined,
+              externalThreadId: 'wrong-memory-thread-999999',
+              verified: true,
+              messageVisible: true,
+              challengeDetected: false,
+            },
+            ...rest,
+          ],
+        },
+      };
+    });
+    await page.locator('#refresh-button').click();
+    await expectText(page, '#memory-thread-detail', /长期记忆线程目标不一致/);
+    await expectText(page, '#memory-thread-detail', /目标不一致/);
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /最近 stable_memory 流水目标 wrong-me.*999999/,
+    );
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /不要把这条流水当成当前长期线程已送达证明/,
+    );
+    await expectText(page, '#memory-thread-detail', /修复长期记忆线程/);
+    await expectText(page, '#memory-thread-detail', /查看日志/);
+    await expectAttribute(
+      page,
+      '#memory-thread-detail [data-thread-action="bind_memory"]',
+      'title',
+      /只复用、恢复或重新绑定 memory_sync_thread.*后续是否送达仍看 stable_memory 流水/,
+    );
+
+    await page.evaluate(() => {
+      const stableAttempt = window.__stableAttemptTemplate;
+      const rest = window.__status.syncState.recentAttempts.filter(
+        (attempt) => attempt.kind !== 'stable_memory',
+      );
+      const nextAttempt = {
+        ...stableAttempt,
+        status: 'succeeded',
+        trigger: 'manual',
+        errorMessage: '',
+        telemetryError: undefined,
+        verified: true,
+        messageVisible: true,
+        challengeDetected: false,
+      };
+      delete nextAttempt.externalThreadId;
+      window.__status = {
+        ...window.__status,
+        syncState: {
+          ...window.__status.syncState,
+          recentAttempts: [nextAttempt, ...rest],
+        },
+      };
+    });
+    await page.locator('#refresh-button').click();
+    await expectText(page, '#memory-thread-detail', /长期记忆线程目标待核对/);
+    await expectText(page, '#memory-thread-detail', /目标缺失/);
+    await expectText(page, '#memory-thread-detail', /没有 externalThreadId/);
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /让下一条流水带上目标线程审计/,
+    );
+    await expectText(page, '#memory-thread-detail', /修复长期记忆线程/);
+    await expectText(page, '#memory-thread-detail', /查看日志/);
 
     await page.evaluate(() => {
       const stableAttempt =
@@ -1057,8 +1214,45 @@ async function main() {
       '#mobile-thread-message',
       /不会在没有内容时发送占位文本/,
     );
+
+    await page.evaluate(() => {
+      window.__manualSyncResults = {
+        mobile_briefing: {
+          throws: 'Memory Service fetch failed: ECONNRESET',
+        },
+      };
+    });
+    await page.locator('#run-briefing-button').click();
+    await expectText(
+      page,
+      '#mobile-thread-message',
+      /Memory Service fetch failed: ECONNRESET/,
+    );
+    await expectText(page, '#mobile-thread-message', /失败回执/);
+    await expectText(
+      page,
+      '#mobile-thread-message',
+      /本次未确认写入 mobile_context_thread/,
+    );
+    await expectText(
+      page,
+      '#mobile-thread-message',
+      /不会混入长期 persona \/ voice 线程/,
+    );
+    await expectText(
+      page,
+      '#mobile-thread-message',
+      /不会把近期重点标记为已送达/,
+    );
+    await expectText(
+      page,
+      '#mobile-thread-message',
+      /最近同步流水可能仍是上一次快照/,
+    );
+
     await page.evaluate(() => {
       window.__actionSequence = [];
+      window.__manualSyncResults = {};
       window.__status = JSON.parse(JSON.stringify(window.__initialStatus));
     });
     await page.locator('#refresh-button').click();
@@ -1308,6 +1502,43 @@ async function main() {
     );
 
     await page.evaluate(() => {
+      window.__failExplorerRunSource = 'doubao';
+      window.__failExplorerRunMessage =
+        'No editable element found on the current Doubao page';
+    });
+    await page.locator('#doubao-source-run-button').click();
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /豆包 抓取失败：No editable element found on the current Doubao page/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /抓取失败回执：使用已保存设置发起，本次失败没有确认任何新结果/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /准备按 个人 范围读取最近 11 天/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /传输偏好为 日常浏览器 doubao\.com 标签页/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /本次失败尚未确认新的 Memory Service artifact、尚未刷新本机 cache \/ cursor/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /不会删除远端聊天或向 豆包 写回内容/,
+    );
+
+    await page.evaluate(() => {
       window.__holdExplorerRunSource = 'chatgpt';
     });
     await page.locator('#chatgpt-source-run-button').click();
@@ -1424,6 +1655,46 @@ async function main() {
       page,
       '#chatgpt-source-message',
       /原因：No existing chatgpt\.com tab found in Chrome/,
+    );
+
+    await page.locator('#chatgpt-source-max-conversations').fill('5');
+    await page.waitForFunction(
+      () => !document.querySelector('#chatgpt-source-save-button')?.disabled,
+    );
+    await page.evaluate(() => {
+      window.__failExplorerRunSource = 'chatgpt';
+      window.__failExplorerRunMessage = 'ChatGPT daily browser connection lost';
+    });
+    await page.locator('#chatgpt-source-run-button').click();
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /ChatGPT 抓取失败：ChatGPT daily browser connection lost/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /抓取失败回执：已先保存待生效设置，本次失败发生在抓取执行或结果确认阶段/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /准备按 工作 范围读取不限制历史天数，最多 5 个对话/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /传输偏好为 日常浏览器 chatgpt\.com 标签页/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /本次失败尚未确认新的 Memory Service artifact、尚未刷新本机 cache \/ cursor/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-message',
+      /不会删除远端聊天或向 ChatGPT 写回内容/,
     );
 
     await page.evaluate(() => {
@@ -1667,6 +1938,10 @@ async function main() {
     assert.match(confirmMessage, /按已保存默认范围撤回 豆包 来源写入「个人」范围/);
     assert.match(confirmMessage, /这是删除 Memory Service 记忆的操作/);
     assert.match(confirmMessage, /不会删除原始聊天/);
+    assert.match(confirmMessage, /点击快照/);
+    assert.match(confirmMessage, /确认时保存的 豆包 \/ 个人/);
+    assert.match(confirmMessage, /确认时本地可撤回 artifact 8 条/);
+    assert.match(confirmMessage, /这不是刷新后的 Explorer 统计/);
     const revokePayload = await page.evaluate(() => window.__lastRevokeMemory);
     assert.deepEqual(revokePayload, {
       source: 'doubao',
@@ -1698,6 +1973,17 @@ async function main() {
       '#doubao-source-message',
       /2 条旧版无 scope 审计会在确认后按本次范围补标记/,
     );
+    await expectText(page, '#doubao-source-message', /点击快照/);
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /确认时保存的 豆包 \/ 个人/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /这不是刷新后的 Explorer 统计/,
+    );
     assert.equal(
       await page.locator('#doubao-source-message').evaluate((element) =>
         element.classList.contains('status-blocked'),
@@ -1711,6 +1997,17 @@ async function main() {
     await expectText(page, '#doubao-source-message', /旧审计 2 条/);
     await expectText(page, '#doubao-source-message', /本地审计已撤回/);
     await expectText(page, '#doubao-source-message', /预览仍会保留这些审计行/);
+    await expectText(page, '#doubao-source-message', /点击快照/);
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /确认时本地可撤回 artifact 8 条/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /不会删除原始对话、预览、缓存或 cursor/,
+    );
     assert.equal(
       await page.locator('#doubao-source-message').evaluate((element) =>
         element.classList.contains('status-blocked'),
@@ -1734,6 +2031,11 @@ async function expectText(page, selector, pattern) {
 async function expectNoText(page, selector, pattern) {
   const text = await page.locator(selector).textContent();
   assert.doesNotMatch(text || '', pattern);
+}
+
+async function expectAttribute(page, selector, attributeName, pattern) {
+  const value = await page.locator(selector).getAttribute(attributeName);
+  assert.match(value || '', pattern);
 }
 
 main().catch((error) => {

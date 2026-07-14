@@ -50,6 +50,40 @@ function apiFallback(url) {
   return {};
 }
 
+async function assertSourceLinkBoundary(linkLocator, label) {
+  const title = (await linkLocator.getAttribute('title')) || '';
+  assert.equal(
+    await linkLocator.getAttribute('aria-label'),
+    title,
+    `${label} should expose the same source boundary to screen readers`,
+  );
+  assert.match(
+    title,
+    /只请求外部标签页/,
+    `${label} title should explain the click only opens an external tab`,
+  );
+  assert.match(
+    title,
+    /不会重新读取来源内容/,
+    `${label} title should explain the click does not reread the source`,
+  );
+  assert.match(
+    title,
+    /同步 Memory Service/,
+    `${label} title should explain there is no Memory Service sync`,
+  );
+  assert.match(
+    title,
+    /标记已读/,
+    `${label} title should explain there is no read-state write`,
+  );
+  assert.match(
+    title,
+    /写回原始平台/,
+    `${label} title should explain there is no platform writeback`,
+  );
+}
+
 function createTopicDetail() {
   return {
     id: 'topic-context-neutral',
@@ -900,11 +934,42 @@ try {
     .getByText('当前主题详情没有返回链接里的消息')
     .waitFor({ timeout: 10000 });
   await missingFocusReceipt
+    .getByText(
+      '定位请求：ctx-missing；当前详情返回的聊天记录、上下文、permalink 和 Slack 别名都未命中。',
+    )
+    .waitFor({ timeout: 10000 });
+  await missingFocusReceipt
     .getByText('没有标记任何消息已读，也没有改写未读计数。')
+    .waitFor({ timeout: 10000 });
+  await missingFocusReceipt
+    .getByText('没有额外补拉历史消息、同步 Memory Service')
     .waitFor({ timeout: 10000 });
   await missingFocusReceipt
     .getByRole('button', { name: /查看全部聊天记录/ })
     .click({ timeout: 10000 });
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/topic/topic-context-neutral?messageId=`,
+    { waitUntil: 'domcontentloaded', timeout: 15000 },
+  );
+  const invalidFocusReceipt = page.locator('.message-focus-notice.warning');
+  await invalidFocusReceipt.getByText('消息定位请求无效').waitFor({
+    timeout: 10000,
+  });
+  await invalidFocusReceipt
+    .getByText('链接里的 messageId 为空，已保留当前阅读视图。')
+    .waitFor({ timeout: 10000 });
+  await invalidFocusReceipt
+    .getByText('定位请求：空值或空白参数。')
+    .waitFor({ timeout: 10000 });
+  await invalidFocusReceipt
+    .getByText('没有补拉历史消息、同步 Memory Service')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator('.targeted-message-badge').count(),
+    0,
+    'blank messageId should not target or highlight any conversation',
+  );
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/topic/topic-context-neutral`,
@@ -950,6 +1015,18 @@ try {
     0,
     'restoring a muted read topic should remove the muted header state',
   );
+  const readTopicMuteRestoreReceipt = page.locator(
+    '.topic-triage-restore-receipt.mute',
+  );
+  await readTopicMuteRestoreReceipt.getByText('取消静音回执').waitFor({
+    timeout: 10000,
+  });
+  await readTopicMuteRestoreReceipt
+    .getByText('已取消「Context Neutral Topic」的本机静音。')
+    .waitFor({ timeout: 10000 });
+  await readTopicMuteRestoreReceipt
+    .getByText('未来未读会按普通主题进入未读流')
+    .waitFor({ timeout: 10000 });
 
   const parentSourceLink = page.locator(
     '[data-conversation-id="conv-read-unknown"] .conversation-source-link',
@@ -965,6 +1042,7 @@ try {
     /example\.com/,
     'source link title should expose the destination host',
   );
+  await assertSourceLinkBoundary(parentSourceLink, 'parent source link');
   assert.equal(
     (
       await parentSourceLink.locator('.conversation-source-host').textContent()
@@ -996,6 +1074,7 @@ try {
     'https://example.com/messages/context-source',
     'context message source should backfill the conversation source link',
   );
+  await assertSourceLinkBoundary(contextSourceLink, 'context source link');
   assert.equal(
     (
       await contextSourceLink.locator('.conversation-source-label').textContent()
@@ -1088,6 +1167,7 @@ try {
     'https://docs.example.com/runbook/release',
     'safe resource links should remain directly openable',
   );
+  await assertSourceLinkBoundary(safeResourceLink, 'resource source link');
   assert.equal(
     (await safeResourceLink.locator('.topic-source-host').textContent())?.trim(),
     'docs.example.com',
@@ -1122,6 +1202,7 @@ try {
     'https://wiki.example.com/pages/release-source',
     'safe webpage links should stay openable from the webpage panel',
   );
+  await assertSourceLinkBoundary(safeWebpageLink, 'webpage source link');
   assert.equal(
     (await safeWebpageLink.locator('.topic-source-host').textContent())?.trim(),
     'wiki.example.com',
@@ -1280,6 +1361,29 @@ try {
   );
 
   await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/topic/topic-slack-permalink-link?ts=1358546515.000008`,
+    { waitUntil: 'domcontentloaded', timeout: 15000 },
+  );
+  const slackTimestampAliasReceipt = page.locator(
+    '.message-focus-notice.info',
+  );
+  await slackTimestampAliasReceipt
+    .getByText('本次读取 ts 查询参数；这是 messageId 深链的兼容别名')
+    .waitFor({ timeout: 10000 });
+  await slackTimestampAliasReceipt
+    .getByText(
+      '定位请求：1358546515.000008；命中依据：1358546515.000008（含 URL 参数、编码值或 Slack 别名归一化）。',
+    )
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await page
+      .locator('[data-conversation-id="p135854651500008"]')
+      .evaluate((node) => node.classList.contains('targeted')),
+    true,
+    'Slack ts query aliases should trigger the same message focus path as messageId',
+  );
+
+  await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/topic/topic-unread-sticky?readFilter=unread`,
     { waitUntil: 'domcontentloaded', timeout: 15000 },
   );
@@ -1322,6 +1426,20 @@ try {
   await readBatchReceipt
     .getByText('全部已阅只更新当前主题的已知未读信号')
     .waitFor({ timeout: 10000 });
+  const markAllReadButton = page.locator('.mark-all-read-btn');
+  await markAllReadButton.waitFor({ timeout: 10000 });
+  const markAllReadTitle = (await markAllReadButton.getAttribute('title')) || '';
+  assert.match(markAllReadTitle, /全部已阅回执/);
+  assert.match(markAllReadTitle, /Unread Sticky Topic/);
+  assert.match(markAllReadTitle, /当前阅读批次 1\/1/);
+  assert.match(markAllReadTitle, /当前实体缓存路径/);
+  assert.match(markAllReadTitle, /可短时间撤销/);
+  assert.match(markAllReadTitle, /不会发送、删除、补拉历史消息/);
+  assert.equal(
+    await markAllReadButton.getAttribute('aria-label'),
+    markAllReadTitle,
+    'mark-all-read button should expose the same boundary to screen readers',
+  );
 
   const detailConversationSearch = page
     .locator('.tab-content.active .search-input')
@@ -1352,11 +1470,29 @@ try {
     'restoring the unread batch should clear the empty-batch recovery receipt',
   );
 
-  await page
-    .locator('.topic-detail-action-btn', { hasText: '稍后处理' })
-    .click({
-      timeout: 10000,
-    });
+  const detailDeferButton = page.locator('.topic-detail-action-btn', {
+    hasText: '稍后处理',
+  });
+  const detailDeferButtonTitle =
+    (await detailDeferButton.getAttribute('title')) || '';
+  assert.match(
+    detailDeferButtonTitle,
+    /点击只打开或收起「Unread Sticky Topic」的本机稍后时间菜单/,
+    'detail defer button should explain the pre-write local-only boundary',
+  );
+  assert.match(
+    detailDeferButtonTitle,
+    /选择时间前不会写入本机稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'detail defer button should distinguish menu opening from state mutation',
+  );
+  assert.equal(
+    await detailDeferButton.getAttribute('aria-label'),
+    detailDeferButtonTitle,
+    'detail defer button should expose the same boundary to screen readers',
+  );
+  await detailDeferButton.click({
+    timeout: 10000,
+  });
   const detailDeferBoundary = page.locator('.topic-detail-defer-boundary');
   await detailDeferBoundary.getByText('稍后处理边界').waitFor({
     timeout: 10000,
@@ -1367,7 +1503,25 @@ try {
   await detailDeferBoundary.getByText('Memory Service').waitFor({
     timeout: 10000,
   });
-  await page.getByRole('menuitem', { name: /1小时后/ }).click({
+  const detailDeferOneHour = page.getByRole('menuitem', { name: /1小时后/ });
+  const detailDeferOneHourTitle =
+    (await detailDeferOneHour.getAttribute('title')) || '';
+  assert.match(
+    detailDeferOneHourTitle,
+    /稍后处理到/,
+    'detail defer preset should state the selected defer time',
+  );
+  assert.match(
+    detailDeferOneHourTitle,
+    /只把「Unread Sticky Topic」写入本机浏览器稍后状态并暂时移出未读队列/,
+    'detail defer preset should explain the local defer write before click',
+  );
+  assert.equal(
+    await detailDeferOneHour.getAttribute('aria-label'),
+    detailDeferOneHourTitle,
+    'detail defer preset should expose the same boundary to screen readers',
+  );
+  await detailDeferOneHour.click({
     timeout: 10000,
   });
   const detailDeferUndoToast = page.locator('.topic-defer-undo-toast');
@@ -1385,12 +1539,25 @@ try {
   await page.locator('.deferred-meta', { hasText: '已稍后到' }).waitFor({
     timeout: 10000,
   });
-  await page
-    .locator('.topic-detail-defer-restore', { hasText: '恢复未读' })
-    .waitFor({
-      timeout: 10000,
-    });
-  await page.locator('.topic-detail-defer-restore').click({
+  const detailDeferRestoreButton = page.locator('.topic-detail-defer-restore', {
+    hasText: '恢复未读',
+  });
+  await detailDeferRestoreButton.waitFor({
+    timeout: 10000,
+  });
+  const detailDeferRestoreTitle =
+    (await detailDeferRestoreButton.getAttribute('title')) || '';
+  assert.match(
+    detailDeferRestoreTitle,
+    /恢复未读回执：点击只删除「Unread Sticky Topic」的本机稍后处理状态/,
+    'detail defer restore should explain it only clears local defer state',
+  );
+  assert.equal(
+    await detailDeferRestoreButton.getAttribute('aria-label'),
+    detailDeferRestoreTitle,
+    'detail defer restore should expose the same boundary to screen readers',
+  );
+  await detailDeferRestoreButton.click({
     timeout: 10000,
   });
   const detailDeferredStateAfterRestore = await page.evaluate(() => {
@@ -1402,6 +1569,21 @@ try {
     null,
     'detail defer undo should restore the topic without leaving stale local state',
   );
+  const detailDeferRestoreReceipt = page.locator(
+    '.topic-triage-restore-receipt.defer',
+  );
+  await detailDeferRestoreReceipt.getByText('恢复未读回执').waitFor({
+    timeout: 10000,
+  });
+  await detailDeferRestoreReceipt
+    .getByText('已把「Unread Sticky Topic」移回未读流（本机）。')
+    .waitFor({ timeout: 10000 });
+  await detailDeferRestoreReceipt
+    .getByText('只删除本机稍后处理状态；未读信号保留')
+    .waitFor({ timeout: 10000 });
+  await detailDeferRestoreReceipt
+    .getByText('没有同步 Memory Service、发送、删除或改写原始聊天平台。')
+    .waitFor({ timeout: 10000 });
 
   await page.locator('.topic-detail-action-btn.mute').click({
     timeout: 10000,
@@ -1457,16 +1639,46 @@ try {
     null,
     'detail mute undo should restore the topic without leaving stale local muted state',
   );
+  const detailMuteRestoreReceipt = page.locator(
+    '.topic-triage-restore-receipt.mute',
+  );
+  await detailMuteRestoreReceipt.getByText('取消静音回执').waitFor({
+    timeout: 10000,
+  });
+  await detailMuteRestoreReceipt
+    .getByText('已取消「Unread Sticky Topic」的本机静音。')
+    .waitFor({ timeout: 10000 });
+  await detailMuteRestoreReceipt
+    .getByText('只删除本机静音过滤；未读信号保留')
+    .waitFor({ timeout: 10000 });
+  await detailMuteRestoreReceipt
+    .getByText('没有同步 Memory Service、发送、删除或改写原始聊天平台。')
+    .waitFor({ timeout: 10000 });
 
   const stickyConversation = page.locator(
     '[data-conversation-id="unread-sticky-conv"]',
   );
-  await stickyConversation
-    .locator('.context-indicator')
-    .click({ timeout: 10000 });
+  const stickyContextButton = stickyConversation.locator('.context-indicator');
+  const stickyContextTitle =
+    (await stickyContextButton.getAttribute('title')) || '';
+  assert.match(stickyContextTitle, /查看上下文回执/);
+  assert.match(stickyContextTitle, /2 个明确未读项/);
+  assert.match(stickyContextTitle, /当前实体缓存路径标记已读/);
+  assert.match(stickyContextTitle, /仅未读视图短暂保留当前讨论/);
+  assert.match(stickyContextTitle, /不会改写原始聊天平台、发送、删除或补拉历史消息/);
+  assert.equal(
+    await stickyContextButton.getAttribute('aria-label'),
+    stickyContextTitle,
+    'context button should expose the same read boundary to screen readers',
+  );
+  await stickyContextButton.click({ timeout: 10000 });
   await page
     .getByText('Context stays visible after read sync')
     .waitFor({ timeout: 10000 });
+  const stickyContextExpandedTitle =
+    (await stickyContextButton.getAttribute('title')) || '';
+  assert.match(stickyContextExpandedTitle, /收起上下文回执/);
+  assert.match(stickyContextExpandedTitle, /不会写入已读/);
   await readBatchReceipt
     .getByText('有 1 条刚展开的未读讨论被临时留在当前批次')
     .waitFor({ timeout: 10000 });
@@ -1580,6 +1792,19 @@ try {
   await searchOnlyCard.getByText('Quiet Planning Topic').waitFor({
     timeout: 10000,
   });
+  const previewResourceItem = searchOnlyCard.locator('.resource-item', {
+    hasText: 'Release checklist',
+  });
+  await previewResourceItem
+    .locator('.resource-source-note', {
+      hasText: '来源 example.com · 仅打开标签页',
+    })
+    .waitFor({ timeout: 10000 });
+  assert.match(
+    (await previewResourceItem.getAttribute('title')) || '',
+    /只请求外部标签页，不重新读取、不同步、不标记已读或写回原始平台/,
+    'list resource preview title should state the pre-click no-sync boundary',
+  );
   await page.evaluate(() => {
     window.__topicListOpenCalls = [];
     window.open = (url, target, features) => {
@@ -1591,9 +1816,7 @@ try {
       return null;
     };
   });
-  await searchOnlyCard
-    .locator('.resource-item', { hasText: 'Release checklist' })
-    .click({ timeout: 10000 });
+  await previewResourceItem.click({ timeout: 10000 });
   const listSourceOpenReceipt = page.locator('.topic-list-source-open-receipt');
   await listSourceOpenReceipt.getByText('来源打开回执').waitFor({
     timeout: 10000,
@@ -1637,7 +1860,25 @@ try {
   await deferUndoCard.getByText('Defer Undo Topic').waitFor({
     timeout: 10000,
   });
-  await deferUndoCard.locator('.topic-action-btn.later').click({
+  const listDeferButton = deferUndoCard.locator('.topic-action-btn.later');
+  const listDeferButtonTitle =
+    (await listDeferButton.getAttribute('title')) || '';
+  assert.match(
+    listDeferButtonTitle,
+    /点击只打开或收起「Defer Undo Topic」的本机稍后时间菜单/,
+    'list defer button should explain menu opening before mutation',
+  );
+  assert.match(
+    listDeferButtonTitle,
+    /选择时间前不会写入本机稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'list defer button should keep local-only/no-read/no-sync visible before click',
+  );
+  assert.equal(
+    await listDeferButton.getAttribute('aria-label'),
+    listDeferButtonTitle,
+    'list defer button should expose the same boundary to screen readers',
+  );
+  await listDeferButton.click({
     timeout: 10000,
   });
   const deferBoundary = deferUndoCard.locator('.topic-defer-boundary-receipt');
@@ -1650,16 +1891,88 @@ try {
   await deferBoundary.getByText('Memory Service').waitFor({
     timeout: 10000,
   });
-  await deferUndoCard.getByRole('menuitem', { name: /1小时后/ }).click({
+  const listDeferOneHour = deferUndoCard.getByRole('menuitem', {
+    name: /1小时后/,
+  });
+  const listDeferOneHourTitle =
+    (await listDeferOneHour.getAttribute('title')) || '';
+  assert.match(
+    listDeferOneHourTitle,
+    /只把「Defer Undo Topic」写入本机浏览器稍后状态并暂时移出未读队列/,
+    'list defer preset should explain the local defer write before click',
+  );
+  assert.equal(
+    await listDeferOneHour.getAttribute('aria-label'),
+    listDeferOneHourTitle,
+    'list defer preset should expose the same boundary to screen readers',
+  );
+  await listDeferOneHour.click({
     timeout: 10000,
   });
   const deferUndoToast = page.locator('.topic-defer-undo-toast');
   await deferUndoToast.getByText('已将「Defer Undo Topic」稍后到').waitFor({
     timeout: 10000,
   });
-  await deferUndoToast.getByRole('button', { name: /恢复/ }).click({
+  const viewDeferredToastButton = deferUndoToast.getByRole('button', {
+    name: /查看稍后/,
+  });
+  const viewDeferredToastTitle =
+    (await viewDeferredToastButton.getAttribute('title')) || '';
+  assert.match(
+    viewDeferredToastTitle,
+    /查看稍后：只切换到本页稍后视图核对「Defer Undo Topic」/,
+    'defer toast view action should be scoped to local view switching',
+  );
+  assert.equal(
+    await viewDeferredToastButton.getAttribute('aria-label'),
+    viewDeferredToastTitle,
+    'defer toast view action should expose the same boundary to screen readers',
+  );
+  await viewDeferredToastButton.click({
     timeout: 10000,
   });
+  await page.locator('.view-toggle-btn.active', { hasText: '稍后' }).waitFor({
+    timeout: 10000,
+  });
+  await page
+    .locator('[data-topic-id="topic-defer-undo"] .topic-deferred-note', {
+      hasText: '稍后到',
+    })
+    .waitFor({ timeout: 10000 });
+  const deferToastRestoreButton = deferUndoToast.getByRole('button', {
+    name: /^恢复未读回执/,
+  });
+  const deferToastRestoreTitle =
+    (await deferToastRestoreButton.getAttribute('title')) || '';
+  assert.match(
+    deferToastRestoreTitle,
+    /恢复未读回执：点击只删除「Defer Undo Topic」的本机稍后处理状态/,
+    'defer toast restore should explain it clears only local defer state',
+  );
+  assert.equal(
+    await deferToastRestoreButton.getAttribute('aria-label'),
+    deferToastRestoreTitle,
+    'defer toast restore should expose the same boundary to screen readers',
+  );
+  await deferToastRestoreButton.click({
+    timeout: 10000,
+  });
+  await page.locator('.view-toggle-btn.active', { hasText: '仅未读' }).waitFor({
+    timeout: 10000,
+  });
+  const listDeferRestoreReceipt = page.locator('.topic-defer-restore-receipt');
+  await listDeferRestoreReceipt.getByText('恢复未读回执').waitFor({
+    timeout: 10000,
+  });
+  await listDeferRestoreReceipt
+    .getByText('已把「Defer Undo Topic」移回未读流（本机）。')
+    .waitFor({ timeout: 10000 });
+  await listDeferRestoreReceipt
+    .getByText('只删除本机稍后处理状态；未读信号保留')
+    .waitFor({ timeout: 10000 });
+  await listDeferRestoreReceipt
+    .getByText('没有同步 Memory Service、发送、删除或改写原始聊天平台。')
+    .waitFor({ timeout: 10000 });
   await deferUndoCard.getByText('Defer Undo Topic').waitFor({
     timeout: 10000,
   });
@@ -1734,16 +2047,43 @@ try {
   await muteUndoToast.getByText('未同步或标记已读').waitFor({
     timeout: 10000,
   });
+  await muteUndoToast.getByRole('button', { name: /查看静音/ }).click({
+    timeout: 10000,
+  });
+  await page.locator('.view-toggle-btn.active', { hasText: '静音' }).waitFor({
+    timeout: 10000,
+  });
+  await page
+    .locator('[data-topic-id="topic-mute-reason"] .topic-muted-note', {
+      hasText: '已静音：低相关度',
+    })
+    .waitFor({ timeout: 10000 });
   await muteUndoToast.getByRole('button', { name: /取消静音/ }).click({
     timeout: 10000,
   });
+  await page.locator('.view-toggle-btn.active', { hasText: '仅未读' }).waitFor({
+    timeout: 10000,
+  });
+  const listMuteRestoreReceipt = page.locator('.topic-mute-restore-receipt');
+  await listMuteRestoreReceipt.getByText('取消静音回执').waitFor({
+    timeout: 10000,
+  });
+  await listMuteRestoreReceipt
+    .getByText('已取消「Mute Reason Topic」的本机静音。')
+    .waitFor({ timeout: 10000 });
+  await listMuteRestoreReceipt
+    .getByText('只删除本机静音过滤；未读信号保留')
+    .waitFor({ timeout: 10000 });
+  await listMuteRestoreReceipt
+    .getByText('没有同步 Memory Service、发送、删除或改写原始聊天平台。')
+    .waitFor({ timeout: 10000 });
   await muteReasonCard.getByText('Mute Reason Topic').waitFor({
     timeout: 10000,
   });
   assert.equal(
     await muteReasonCard.locator('.topic-muted-note').count(),
     0,
-    'mute undo should restore the topic to the unread view without switching to the muted filter',
+    'mute undo should restore the topic to the unread view after the muted-view handoff',
   );
 
   await muteReasonCard.locator('.topic-action-btn.mute').click({
@@ -1789,6 +2129,28 @@ try {
       hasText: '未同步、未标记已读',
     })
     .waitFor({ timeout: 10000 });
+  await page
+    .locator('[data-topic-id="topic-mute-reason"] .mute-restore')
+    .click({ timeout: 10000 });
+  const mutedViewRestoreReceipt = page.locator('.topic-mute-restore-receipt');
+  await mutedViewRestoreReceipt.getByText('取消静音回执').waitFor({
+    timeout: 10000,
+  });
+  await mutedViewRestoreReceipt
+    .getByText('已取消「Mute Reason Topic」的本机静音。')
+    .waitFor({ timeout: 10000 });
+  await mutedViewRestoreReceipt
+    .getByText('当前页面仍按你选中的视图显示')
+    .waitFor({ timeout: 10000 });
+  const mutedStateAfterListRestore = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-muted-topics-v1');
+    return raw ? JSON.parse(raw)['topic-mute-reason'] || null : null;
+  });
+  assert.equal(
+    mutedStateAfterListRestore,
+    null,
+    'muted view restore should remove the local muted state and leave a no-write receipt',
+  );
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/entity/Topic`,
@@ -1858,16 +2220,30 @@ try {
   await hiddenUnreadEmptyState.getByText('稍后/静音不等于已读').waitFor({
     timeout: 10000,
   });
-  await hiddenUnreadEmptyState
-    .getByRole('button', { name: /查看稍后 1/ })
-    .waitFor({ timeout: 10000 });
+  const hiddenUnreadViewDeferredButton = hiddenUnreadEmptyState.getByRole(
+    'button',
+    { name: /查看稍后 1/ },
+  );
+  await hiddenUnreadViewDeferredButton.waitFor({ timeout: 10000 });
+  const hiddenUnreadViewDeferredTitle =
+    (await hiddenUnreadViewDeferredButton.getAttribute('title')) || '';
+  assert.match(
+    hiddenUnreadViewDeferredTitle,
+    /只切换到本页稍后视图核对被本机隐藏的未读主题/,
+    'hidden-unread recovery should explain that viewing Later is only a local view switch',
+  );
+  assert.equal(
+    await hiddenUnreadViewDeferredButton.getAttribute('aria-label'),
+    hiddenUnreadViewDeferredTitle,
+    'hidden-unread recovery should expose the same boundary to screen readers',
+  );
   await hiddenUnreadEmptyState
     .getByRole('button', { name: /查看静音 5/ })
     .waitFor({ timeout: 10000 });
   await hiddenUnreadEmptyState
     .getByRole('button', { name: /查看所有主题/ })
     .waitFor({ timeout: 10000 });
-  await hiddenUnreadEmptyState.getByRole('button', { name: /查看稍后 1/ }).click({
+  await hiddenUnreadViewDeferredButton.click({
     timeout: 10000,
   });
   await page
@@ -1875,6 +2251,43 @@ try {
       hasText: '稍后到',
     })
     .waitFor({ timeout: 10000 });
+  const laterViewRestoreButton = page.locator(
+    '[data-topic-id="topic-defer-undo"] .topic-action-btn.restore',
+    {
+      hasText: '恢复',
+    },
+  );
+  const laterViewRestoreTitle =
+    (await laterViewRestoreButton.getAttribute('title')) || '';
+  assert.match(
+    laterViewRestoreTitle,
+    /恢复未读回执：点击只删除「Defer Undo Topic」的本机稍后处理状态/,
+    'Later-view restore should explain it only clears local defer state',
+  );
+  assert.equal(
+    await laterViewRestoreButton.getAttribute('aria-label'),
+    laterViewRestoreTitle,
+    'Later-view restore should expose the same boundary to screen readers',
+  );
+  await laterViewRestoreButton.click({ timeout: 10000 });
+  const laterViewDeferRestoreReceipt = page.locator(
+    '.topic-defer-restore-receipt',
+  );
+  await laterViewDeferRestoreReceipt.getByText('恢复未读回执').waitFor({
+    timeout: 10000,
+  });
+  await laterViewDeferRestoreReceipt
+    .getByText('当前页面仍按你选中的视图显示')
+    .waitFor({ timeout: 10000 });
+  const deferredStateAfterListRestore = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-deferred-topics-v1');
+    return raw ? JSON.parse(raw)['topic-defer-undo'] || null : null;
+  });
+  assert.equal(
+    deferredStateAfterListRestore,
+    null,
+    'later-view restore should remove local deferred state and leave a no-write receipt',
+  );
 
   assert.deepEqual(
     pageErrors,

@@ -13,7 +13,8 @@
         <select
           v-model="statusFilter"
           class="filter-select"
-          aria-label="按状态筛选场景预演"
+          :title="filterControlBoundary()"
+          :aria-label="filterControlBoundary()"
           @change="applyFilters"
         >
           <option value="active">Active</option>
@@ -29,9 +30,18 @@
           v-model="searchText"
           class="search-input"
           placeholder="搜索标题 / 预演内容"
+          :title="searchControlBoundary()"
+          :aria-label="searchControlBoundary()"
           @keyup.enter="applyFilters"
         />
-        <button class="refresh-btn" @click="applyFilters">刷新</button>
+        <button
+          class="refresh-btn"
+          :title="refreshControlBoundary()"
+          :aria-label="refreshControlBoundary()"
+          @click="applyFilters"
+        >
+          刷新
+        </button>
       </div>
     </header>
 
@@ -63,8 +73,22 @@
         <p>{{ focusFailureReceipt.recovery }}</p>
       </div>
       <div class="focus-failure-actions">
-        <button type="button" @click="retryFocusLookup">重试目标</button>
-        <button type="button" @click="showAllAfterFocusFailure">查看 All</button>
+        <button
+          type="button"
+          :title="retryFocusLookupBoundary()"
+          :aria-label="retryFocusLookupBoundary()"
+          @click="retryFocusLookup"
+        >
+          重试目标
+        </button>
+        <button
+          type="button"
+          :title="showAllAfterFocusFailureBoundary()"
+          :aria-label="showAllAfterFocusFailureBoundary()"
+          @click="showAllAfterFocusFailure"
+        >
+          查看 All
+        </button>
       </div>
     </section>
 
@@ -89,15 +113,31 @@
       <p>{{ emptyFilterReceipt.boundary }}</p>
       <p>{{ emptyFilterReceipt.recovery }}</p>
       <div class="empty-filter-actions">
-        <button type="button" @click="showAllFromEmptyState">查看 All</button>
+        <button
+          type="button"
+          :title="showAllFromEmptyBoundary()"
+          :aria-label="showAllFromEmptyBoundary()"
+          @click="showAllFromEmptyState"
+        >
+          查看 All
+        </button>
         <button
           v-if="searchText.trim()"
           type="button"
+          :title="clearSearchFromEmptyBoundary()"
+          :aria-label="clearSearchFromEmptyBoundary()"
           @click="clearSearchFromEmptyState"
         >
           清空搜索
         </button>
-        <button type="button" @click="applyFilters">刷新</button>
+        <button
+          type="button"
+          :title="refreshControlBoundary()"
+          :aria-label="refreshControlBoundary()"
+          @click="applyFilters"
+        >
+          刷新
+        </button>
       </div>
     </section>
 
@@ -125,12 +165,37 @@
           <p>{{ listScopeReceipt.summary }}</p>
           <p>{{ listScopeReceipt.boundary }}</p>
         </section>
+        <section
+          v-if="hasMoreRehearsals || listLoadError"
+          class="list-pagination-receipt"
+          role="status"
+          aria-label="列表分页回执"
+        >
+          <div>
+            <strong>{{ listPaginationReceipt.title }}</strong>
+            <span>{{ listPaginationReceipt.summary }}</span>
+          </div>
+          <p>{{ listPaginationReceipt.boundary }}</p>
+          <p v-if="listLoadError" class="list-load-error">{{ listLoadError }}</p>
+          <button
+            v-if="hasMoreRehearsals"
+            type="button"
+            :disabled="listLoadingMore"
+            :title="loadMoreControlBoundary()"
+            :aria-label="loadMoreControlBoundary()"
+            @click="loadMoreRehearsals"
+          >
+            {{ listLoadingMore ? '加载中...' : '加载更多' }}
+          </button>
+        </section>
         <button
           v-for="item in items"
           :key="item.id"
           type="button"
           class="rehearsal-card"
           :class="{ selected: selectedId === item.id }"
+          :title="cardSelectionBoundary(item)"
+          :aria-label="cardSelectionBoundary(item)"
           @click="selectRehearsal(item.id)"
         >
           <div class="card-top">
@@ -159,7 +224,14 @@
       <section v-if="selected" class="detail-panel" aria-label="场景预演详情">
         <div v-if="focusNotice" class="focus-notice" role="status">
           <span>{{ focusNotice }}</span>
-          <button type="button" @click="showAllForSelected">查看全部</button>
+          <button
+            type="button"
+            :title="showAllForSelectedBoundary()"
+            :aria-label="showAllForSelectedBoundary()"
+            @click="showAllForSelected"
+          >
+            查看全部
+          </button>
         </div>
         <div v-if="actionMessage" class="action-message" role="status">
           {{ actionMessage }}
@@ -217,6 +289,8 @@
             <button
               v-if="canReactivateSelected"
               :disabled="actionPending"
+              :title="actionButtonBoundary(selectedReactivateAction, selected)"
+              :aria-label="actionButtonAriaLabel(selectedReactivateAction, selected)"
               @click="reactivateSelected"
             >
               {{ reactivateLabel }}
@@ -224,6 +298,8 @@
             <button
               v-if="selected.status !== 'paused'"
               :disabled="actionPending"
+              :title="actionButtonBoundary('pause', selected)"
+              :aria-label="actionButtonAriaLabel('pause', selected)"
               @click="setStatus('paused')"
             >
               暂停
@@ -231,13 +307,35 @@
             <button
               v-if="selected.status === 'paused'"
               :disabled="actionPending"
+              :title="actionButtonBoundary('restore', selected)"
+              :aria-label="actionButtonAriaLabel('restore', selected)"
               @click="setStatus('active')"
             >
               恢复
             </button>
-            <button :disabled="actionPending" @click="markUsed">标记已使用</button>
-            <button :disabled="actionPending" @click="markIrrelevant">不相关</button>
-            <button class="danger" :disabled="actionPending" @click="archiveSelected">
+            <button
+              :disabled="actionPending"
+              :title="actionButtonBoundary('mark-used', selected)"
+              :aria-label="actionButtonAriaLabel('mark-used', selected)"
+              @click="markUsed"
+            >
+              标记已使用
+            </button>
+            <button
+              :disabled="actionPending"
+              :title="actionButtonBoundary('mark-irrelevant', selected)"
+              :aria-label="actionButtonAriaLabel('mark-irrelevant', selected)"
+              @click="markIrrelevant"
+            >
+              不相关
+            </button>
+            <button
+              class="danger"
+              :disabled="actionPending"
+              :title="actionButtonBoundary('archive', selected)"
+              :aria-label="actionButtonAriaLabel('archive', selected)"
+              @click="archiveSelected"
+            >
               归档
             </button>
           </div>
@@ -306,6 +404,67 @@
             <span>
               这条历史记录没有人物、项目、会议、工单、URL、主题或 surface 线索；请先补充触发条件，再恢复现场提示。
             </span>
+          </div>
+          <div class="cue-editor" aria-label="触发线索编辑">
+            <div class="section-title">
+              <span>修正触发线索</span>
+              <small>用逗号或换行分隔多个值；优先补人物、项目、会议、工单、URL 等锚点</small>
+            </div>
+            <div class="cue-editor-grid">
+              <label
+                v-for="field in CUE_EDITOR_FIELDS"
+                :key="field.key"
+                class="cue-editor-field"
+              >
+                <span>{{ field.label }}</span>
+                <input
+                  v-model="cueDraft[field.key]"
+                  type="text"
+                  :aria-label="`${field.label}触发线索`"
+                  :placeholder="field.placeholder"
+                  :disabled="actionPending"
+                />
+                <small>{{ field.help }}</small>
+              </label>
+            </div>
+            <section
+              class="cue-editor-receipt"
+              :class="cueEditorReceipt.tone"
+              role="status"
+              aria-label="触发线索草稿回执"
+            >
+              <div class="section-title">
+                <span>{{ cueEditorReceipt.title }}</span>
+                <small>{{ cueEditorReceipt.summary }}</small>
+              </div>
+              <div class="receipt-grid">
+                <div v-for="row in cueEditorReceipt.rows" :key="row.label">
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </div>
+              </div>
+              <p>{{ cueEditorReceipt.boundary }}</p>
+            </section>
+            <div class="cue-editor-actions">
+              <button
+                type="button"
+                :disabled="actionPending || !cueDraftChanged || !cueDraftHasAny"
+                :title="cueSaveBoundary()"
+                :aria-label="cueSaveBoundary()"
+                @click="saveCueDraft"
+              >
+                保存触发线索
+              </button>
+              <button
+                type="button"
+                :disabled="actionPending || !cueDraftChanged"
+                :title="cueResetBoundary()"
+                :aria-label="cueResetBoundary()"
+                @click="resetCueDraftFromSelected"
+              >
+                重置
+              </button>
+            </div>
           </div>
         </section>
 
@@ -417,9 +576,14 @@ import {
 const client = getMemoryServiceClient();
 const route = useRoute();
 const router = useRouter();
+const REHEARSAL_PAGE_SIZE = 80;
 const loading = ref(true);
 const errorMessage = ref('');
 const items = ref<Rehearsal[]>([]);
+const listTotal = ref(0);
+const listPageLimit = ref(REHEARSAL_PAGE_SIZE);
+const listLoadingMore = ref(false);
+const listLoadError = ref('');
 const selectedId = ref<string>('');
 const activations = ref<RehearsalActivation[]>([]);
 const statusFilter = ref<RehearsalStatus | 'all'>('active');
@@ -429,6 +593,7 @@ const actionMessage = ref('');
 const actionReceipt = ref<ActionReceipt | null>(null);
 const actionPending = ref(false);
 const focusFailureReceipt = ref<FocusFailureReceipt | null>(null);
+const cueDraft = ref<CueDraft>(emptyCueDraft());
 
 type RehearsalActionKind =
   | 'pause'
@@ -437,6 +602,7 @@ type RehearsalActionKind =
   | 'mark-used'
   | 'mark-irrelevant'
   | 'archive'
+  | 'update-cues'
   | 'status';
 
 interface ActionReceipt {
@@ -454,6 +620,10 @@ interface FocusFailureReceipt {
   summary: string;
   boundary: string;
   recovery: string;
+}
+
+interface DetailLoadOptions {
+  preserveConfirmed?: Rehearsal;
 }
 
 interface ScenarioReadiness {
@@ -478,7 +648,99 @@ interface EmptyFilterReceipt {
   recovery: string;
 }
 
+interface ListPaginationReceipt {
+  title: string;
+  summary: string;
+  boundary: string;
+}
+
+interface CueEditorReceipt {
+  title: string;
+  summary: string;
+  tone: 'ready' | 'warning' | 'quiet';
+  rows: Array<{ label: string; value: string }>;
+  boundary: string;
+}
+
 type CueStrength = 'anchored' | 'weak' | 'missing';
+
+interface CueEditorField {
+  key: keyof RehearsalActivationCues;
+  label: string;
+  placeholder: string;
+  help: string;
+}
+
+type CueDraft = Record<keyof RehearsalActivationCues, string>;
+
+const CUE_EDITOR_FIELDS: CueEditorField[] = [
+  {
+    key: 'people',
+    label: '人物',
+    placeholder: 'Colin Liu, Mina Chen',
+    help: '最可靠的现场锚点之一',
+  },
+  {
+    key: 'projects',
+    label: '项目',
+    placeholder: 'Launch Review',
+    help: '项目或产品名',
+  },
+  {
+    key: 'groupIds',
+    label: '群组',
+    placeholder: 'ringcentral:team-room',
+    help: '群组或房间标识',
+  },
+  {
+    key: 'conversationIds',
+    label: '会话',
+    placeholder: 'conversation:123',
+    help: '具体聊天线程',
+  },
+  {
+    key: 'meetingIds',
+    label: '会议',
+    placeholder: 'meeting:weekly-review',
+    help: '会议或日程场景',
+  },
+  {
+    key: 'calendarEventIds',
+    label: '日历',
+    placeholder: 'calendar:event-id',
+    help: '日历事件标识',
+  },
+  {
+    key: 'issueKeys',
+    label: '工单',
+    placeholder: 'PAI-123',
+    help: 'Jira / issue key',
+  },
+  {
+    key: 'urls',
+    label: '页面',
+    placeholder: 'https://jira.example/browse/PAI-123',
+    help: '网页或文档 URL',
+  },
+  {
+    key: 'topics',
+    label: '主题',
+    placeholder: 'handoff risk',
+    help: '弱泛化线索',
+  },
+  {
+    key: 'keywords',
+    label: '关键词',
+    placeholder: 'handoff, review owner',
+    help: '弱泛化线索',
+  },
+  {
+    key: 'surfaces',
+    label: '场景',
+    placeholder: 'web_ai, composer_guard',
+    help: '弱泛化线索',
+  },
+];
 
 const ANCHORED_CUE_KEYS: Array<keyof RehearsalActivationCues> = [
   'people',
@@ -501,6 +763,16 @@ const selected = computed(() =>
   items.value.find((item) => item.id === selectedId.value) || null,
 );
 
+const currentViewItems = computed(() =>
+  items.value.filter((item) => rehearsalMatchesCurrentView(item)),
+);
+
+const loadedMatchingCount = computed(() => currentViewItems.value.length);
+
+const hasMoreRehearsals = computed(
+  () => loadedMatchingCount.value < listTotal.value,
+);
+
 const selectedEvidenceRows = computed(() =>
   evidenceRows(selected.value?.evidenceRefs ?? []),
 );
@@ -518,10 +790,35 @@ const selectedScenarioReadiness = computed(() =>
 );
 
 const listScopeReceipt = computed(() =>
-  buildListScopeReceipt(items.value, selected.value, focusedOutsideFilter.value),
+  buildListScopeReceipt(
+    items.value,
+    selected.value,
+    focusedOutsideFilter.value,
+    listTotal.value,
+    loadedMatchingCount.value,
+    hasMoreRehearsals.value,
+  ),
 );
 
 const emptyFilterReceipt = computed(() => buildEmptyFilterReceipt());
+
+const listPaginationReceipt = computed(() =>
+  buildListPaginationReceipt(listTotal.value, loadedMatchingCount.value),
+);
+
+const cueDraftPayload = computed(() => buildCueDraftPayload());
+
+const cueDraftChanged = computed(() =>
+  selected.value ? !sameCues(cueDraftPayload.value, selected.value.activationCues) : false,
+);
+
+const cueDraftHasAny = computed(
+  () => cueStrength(cueDraftPayload.value) !== 'missing',
+);
+
+const cueEditorReceipt = computed(() =>
+  buildCueEditorReceipt(selected.value, cueDraftPayload.value, cueDraftChanged.value),
+);
 
 const selectedPromptEligibility = computed(() =>
   selected.value ? promptEligibilityLabel(selected.value.status, selected.value) : '-',
@@ -535,9 +832,14 @@ const focusNotice = computed(() => {
 const canReactivateSelected = computed(() =>
   Boolean(
     selected.value &&
-      ['candidate', 'paused', 'stale', 'dismissed'].includes(selected.value.status),
+      ['candidate', 'stale', 'dismissed'].includes(selected.value.status),
   ),
 );
+
+const selectedReactivateAction = computed<RehearsalActionKind>(() => {
+  if (!selected.value) return 'restore';
+  return selected.value.status === 'candidate' ? 'restore' : 'reactivate';
+});
 
 const reactivateLabel = computed(() => {
   if (!selected.value) return '恢复';
@@ -607,8 +909,11 @@ async function loadRehearsals(
     const response = await client.listRehearsals({
       status: statusFilter.value,
       search: searchText.value.trim() || undefined,
-      limit: 80,
+      limit: REHEARSAL_PAGE_SIZE,
     });
+    listTotal.value = response.total;
+    listPageLimit.value = response.limit || REHEARSAL_PAGE_SIZE;
+    listLoadError.value = '';
     items.value = response.items;
     actionMessage.value = '';
     actionReceipt.value = null;
@@ -648,9 +953,34 @@ async function loadRehearsals(
     console.error('Failed to load rehearsals:', error);
     errorMessage.value = 'Rehearsal 暂不可用，请确认 Memory Service 已启动。';
     items.value = [];
+    listTotal.value = 0;
+    listLoadError.value = '';
     focusedOutsideFilter.value = false;
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMoreRehearsals() {
+  if (listLoadingMore.value || !hasMoreRehearsals.value) return;
+  listLoadingMore.value = true;
+  listLoadError.value = '';
+  try {
+    const response = await client.listRehearsals({
+      status: statusFilter.value,
+      search: searchText.value.trim() || undefined,
+      limit: listPageLimit.value || REHEARSAL_PAGE_SIZE,
+      offset: loadedMatchingCount.value,
+    });
+    listTotal.value = response.total;
+    listPageLimit.value = response.limit || listPageLimit.value || REHEARSAL_PAGE_SIZE;
+    mergeRehearsalPage(response.items);
+  } catch (error) {
+    console.error('Failed to load more rehearsals:', error);
+    listLoadError.value =
+      '加载更多失败：当前只显示已加载切片；未加载 Rehearsal 不应被当作不存在或已处理。';
+  } finally {
+    listLoadingMore.value = false;
   }
 }
 
@@ -679,12 +1009,18 @@ async function replaceRouteRehearsalId(id: string) {
   await router.replace({ query });
 }
 
-async function loadDetail(id: string) {
+async function loadDetail(id: string, options: DetailLoadOptions = {}) {
   try {
     const detail = await client.getRehearsal(id);
+    const rehearsal = options.preserveConfirmed
+      ? mergeConfirmedRehearsal(detail.rehearsal, options.preserveConfirmed)
+      : detail.rehearsal;
     activations.value = detail.activations;
-    upsertRehearsal(detail.rehearsal);
-    return detail;
+    upsertRehearsal(rehearsal);
+    if (selectedId.value === id) {
+      resetCueDraftFromRehearsal(rehearsal);
+    }
+    return { ...detail, rehearsal };
   } catch (error) {
     console.error('Failed to load rehearsal detail:', error);
     activations.value = [];
@@ -752,8 +1088,18 @@ async function markUsed() {
       response.rehearsal,
       previousStatus,
       activations.value,
+      '等待详情刷新；确认状态保留',
     );
-    await loadDetail(response.rehearsal.id);
+    const refreshed = await loadDetail(response.rehearsal.id, {
+      preserveConfirmed: response.rehearsal,
+    });
+    actionReceipt.value = buildActionReceipt(
+      'mark-used',
+      refreshed?.rehearsal ?? response.rehearsal,
+      previousStatus,
+      activations.value,
+      refreshed ? '已刷新命中历史；确认状态保留' : '刷新失败；确认状态保留',
+    );
   });
 }
 
@@ -772,8 +1118,18 @@ async function markIrrelevant() {
       response.rehearsal,
       previousStatus,
       activations.value,
+      '等待详情刷新；确认状态保留',
     );
-    await loadDetail(response.rehearsal.id);
+    const refreshed = await loadDetail(response.rehearsal.id, {
+      preserveConfirmed: response.rehearsal,
+    });
+    actionReceipt.value = buildActionReceipt(
+      'mark-irrelevant',
+      refreshed?.rehearsal ?? response.rehearsal,
+      previousStatus,
+      activations.value,
+      refreshed ? '已刷新命中历史；确认状态保留' : '刷新失败；确认状态保留',
+    );
   });
 }
 
@@ -794,6 +1150,28 @@ async function archiveSelected() {
   });
 }
 
+async function saveCueDraft() {
+  const rehearsal = selected.value;
+  if (!rehearsal || !cueDraftChanged.value || !cueDraftHasAny.value) return;
+  const previousStatus = rehearsal.status;
+  const nextCues = cueDraftPayload.value;
+  await runRehearsalAction('update-cues', rehearsal, previousStatus, async () => {
+    const response = await client.updateRehearsal(rehearsal.id, {
+      activationCues: nextCues,
+    });
+    replaceSelected(response.rehearsal);
+    resetCueDraftFromRehearsal(response.rehearsal);
+    actionMessage.value =
+      '已保存触发线索；现场提示资格会按新的 future cue 重新呈现。';
+    actionReceipt.value = buildActionReceipt(
+      'update-cues',
+      response.rehearsal,
+      previousStatus,
+      activations.value,
+    );
+  });
+}
+
 async function runRehearsalAction(
   action: RehearsalActionKind,
   rehearsal: Rehearsal,
@@ -802,6 +1180,13 @@ async function runRehearsalAction(
 ) {
   if (actionPending.value) return;
   actionPending.value = true;
+  actionMessage.value = `正在提交${actionRequestLabel(action)}请求；Memory Service 返回前，当前状态仍以 ${statusLabel(previousStatus)} 为准。`;
+  actionReceipt.value = buildActionPendingReceipt(
+    action,
+    rehearsal,
+    previousStatus,
+    activations.value,
+  );
   try {
     await operation();
   } catch (error) {
@@ -830,6 +1215,32 @@ function upsertRehearsal(next: Rehearsal) {
     return;
   }
   items.value = [next, ...items.value];
+}
+
+function mergeRehearsalPage(nextItems: Rehearsal[]) {
+  const merged = [...items.value];
+  for (const next of nextItems) {
+    const existingIndex = merged.findIndex((item) => item.id === next.id);
+    if (existingIndex >= 0) {
+      merged[existingIndex] = next;
+    } else {
+      merged.push(next);
+    }
+  }
+  items.value = merged;
+}
+
+function mergeConfirmedRehearsal(detail: Rehearsal, confirmed: Rehearsal) {
+  if (detail.id !== confirmed.id) return detail;
+  if (detail.updatedAt > confirmed.updatedAt) return detail;
+  return {
+    ...detail,
+    status: confirmed.status,
+    usedCount: Math.max(detail.usedCount, confirmed.usedCount),
+    dismissedCount: Math.max(detail.dismissedCount, confirmed.dismissedCount),
+    lastUsedAt: Math.max(detail.lastUsedAt ?? 0, confirmed.lastUsedAt ?? 0) || undefined,
+    updatedAt: Math.max(detail.updatedAt, confirmed.updatedAt),
+  };
 }
 
 async function showAllForSelected() {
@@ -902,25 +1313,144 @@ function currentFilterLabel() {
   return query ? `${status} / 搜索 ${query}` : status;
 }
 
+function filterControlBoundary() {
+  return [
+    `按状态筛选场景预演：当前将读取「${currentFilterLabel()}」范围`,
+    '切换只重新读取列表并同步当前详情，不会激活、暂停、归档、标记反馈、保存触发线索、写入外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function searchControlBoundary() {
+  const query = searchText.value.trim();
+  return [
+    query ? `搜索草稿「${truncateButtonLabel(query)}」` : '搜索标题 / 预演内容',
+    '输入只更新本地搜索草稿，按 Enter 或点击刷新后才重新读取当前列表',
+    '不会改状态、写入 Memory Service、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function refreshControlBoundary() {
+  return [
+    `刷新当前 Rehearsal 列表：${currentFilterLabel()}`,
+    '只重新读取列表、详情和命中历史快照',
+    '不会激活、暂停、归档、标记反馈、保存触发线索、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function loadMoreControlBoundary() {
+  if (listLoadingMore.value) {
+    return '正在读取当前筛选的下一页；重复点击不会启动第二次列表读取，也不会写入状态或执行预演脚本';
+  }
+  return [
+    `加载更多 Rehearsal：已加载 ${Math.min(
+      loadedMatchingCount.value,
+      listTotal.value,
+    )}/${listTotal.value} 条`,
+    '只读取当前筛选的下一页并追加到列表',
+    '不会改变筛选、选中详情、现场提示资格、反馈状态、外部系统或预演脚本',
+  ].join('；');
+}
+
+function showAllForSelectedBoundary() {
+  const label = selected.value?.title ? `「${truncateButtonLabel(selected.value.title)}」` : '当前深链目标';
+  return [
+    `查看全部并保留 ${label}`,
+    '只把状态筛选切到 All、清空搜索并重新读取列表',
+    '不会恢复、激活、暂停、归档、标记反馈、保存触发线索或执行预演脚本',
+  ].join('；');
+}
+
+function retryFocusLookupBoundary() {
+  const id = focusFailureReceipt.value?.requestedId || '当前深链目标';
+  return [
+    `重试目标：重新读取深链目标 ${id}`,
+    '只重新请求目标详情和命中历史',
+    '失败时继续保留当前可用列表，不会改状态、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function showAllAfterFocusFailureBoundary() {
+  return [
+    '查看 All 以恢复浏览',
+    '只清空失败的深链目标、切到 All 并重新读取列表',
+    '不会把目标当作已删除、已归档或不相关，也不会改状态、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function showAllFromEmptyBoundary() {
+  return [
+    '查看 All 扩大 Rehearsal 读取范围',
+    '只清空当前筛选/搜索并重新读取列表',
+    '不会恢复、激活、暂停、归档、标记反馈、保存触发线索、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function clearSearchFromEmptyBoundary() {
+  const query = searchText.value.trim();
+  return [
+    query ? `清空搜索「${truncateButtonLabel(query)}」` : '清空搜索',
+    '只删除本页搜索草稿并按当前状态重新读取列表',
+    '不会改 Rehearsal 状态、保存触发线索、写外部系统或执行预演脚本',
+  ].join('；');
+}
+
+function cueSaveBoundary() {
+  if (actionPending.value) {
+    return '保存触发线索：已有 Rehearsal 处理请求在提交中；按钮临时禁用，避免重复 PATCH 或误以为已经确认写入';
+  }
+  if (!cueDraftChanged.value) {
+    return '保存触发线索：草稿与当前记录一致；无需保存，不会发起 PATCH、写外部系统或执行预演脚本';
+  }
+  if (!cueDraftHasAny.value) {
+    return '保存触发线索：草稿缺少 future cue；请先补人物、项目、会议、issue、URL、主题、关键词或 surface，再保存';
+  }
+  return actionButtonBoundary('update-cues', selected.value);
+}
+
+function cueResetBoundary() {
+  if (actionPending.value) {
+    return '重置触发线索草稿：已有 Rehearsal 处理请求在提交中；按钮临时禁用，避免混淆本地草稿和未确认写入';
+  }
+  if (!cueDraftChanged.value) {
+    return '重置触发线索草稿：草稿与当前记录一致；重置不会改变列表、详情、Memory Service 或外部系统';
+  }
+  const label = selected.value?.title ? `「${truncateButtonLabel(selected.value.title)}」` : '当前 Rehearsal';
+  return `重置 ${label} 的触发线索草稿：只把本地输入恢复为当前记录，不发起 PATCH、不改脚本、不写外部系统或执行预演动作`;
+}
+
 function buildListScopeReceipt(
   rows: Rehearsal[],
   selectedRehearsal: Rehearsal | null,
   hasPinnedFocus: boolean,
+  total: number,
+  loadedCount: number,
+  hasMore: boolean,
 ): ListScopeReceipt {
   const filterLabel = currentFilterLabel();
   const cueLessCount = rows.filter((item) => !hasFutureSceneCue(item)).length;
   const weakOnlyCount = rows.filter(
     (item) => cueStrength(item.activationCues) === 'weak',
   ).length;
+  const pinnedCount = hasPinnedFocus && selectedRehearsal ? 1 : 0;
   const pinnedLabel =
     hasPinnedFocus && selectedRehearsal
       ? `${statusLabel(selectedRehearsal.status)} · 临时置顶`
       : '无';
   return {
-    title: `${filterLabel} · ${rows.length} 条`,
+    title: `${filterLabel} · 可见 ${rows.length} 条`,
     rows: [
       { label: '读取范围', value: filterLabel },
-      { label: '可见结果', value: `${rows.length} 条` },
+      { label: '匹配总数', value: total ? `${total} 条` : `${rows.length} 条` },
+      {
+        label: '已加载',
+        value: total
+          ? `${Math.min(loadedCount, total)} / ${total} 条`
+          : `${loadedCount} 条`,
+      },
+      {
+        label: '可见结果',
+        value: pinnedCount ? `${rows.length} 条（含置顶 ${pinnedCount}）` : `${rows.length} 条`,
+      },
       {
         label: '缺少 future cue',
         value: cueLessCount ? `${cueLessCount} 条仅审计` : '0 条',
@@ -938,9 +1468,12 @@ function buildListScopeReceipt(
       weakOnlyCount,
       selectedRehearsal,
       hasPinnedFocus,
+      total,
+      loadedCount,
+      hasMore,
     ),
     boundary:
-      '切换筛选、搜索、查看 All 或深链定位只读取和置顶本页列表；不会激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本。',
+      '切换筛选、搜索、查看 All、加载更多或深链定位只读取和置顶本页列表；不会激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本。',
   };
 }
 
@@ -951,6 +1484,9 @@ function listScopeSummary(
   weakOnlyCount: number,
   selectedRehearsal: Rehearsal | null,
   hasPinnedFocus: boolean,
+  total: number,
+  loadedCount: number,
+  hasMore: boolean,
 ) {
   const base = hasPinnedFocus && selectedRehearsal
     ? `当前按「${filterLabel}」读取列表，同时临时置顶 ${statusLabel(
@@ -960,13 +1496,39 @@ function listScopeSummary(
   if (!rows.length) {
     return `${base} 当前没有可见结果。`;
   }
+  const sliceNote = hasMore
+    ? `当前只加载匹配结果的 ${Math.min(
+        loadedCount,
+        total,
+      )}/${total} 条；未加载 ${Math.max(
+        total - loadedCount,
+        0,
+      )} 条不纳入缺少 future cue 或仅弱线索统计。`
+    : total
+      ? `当前匹配结果已加载 ${Math.min(loadedCount, total)}/${total} 条。`
+      : '';
   if (cueLessCount > 0 || weakOnlyCount > 0) {
     const parts = [];
     if (cueLessCount > 0) parts.push(`${cueLessCount} 条缺少结构化 future cue`);
     if (weakOnlyCount > 0) parts.push(`${weakOnlyCount} 条只有关键词/主题/surface 弱线索`);
-    return `${base} 其中 ${parts.join('，')}；先按卡片补锚点、暂停或继续观察。`;
+    return `${base} ${sliceNote} 其中 ${parts.join('，')}；先按卡片补锚点、暂停或继续观察。`;
   }
-  return `${base} 可见条目仍需按卡片提示资格判断 active、candidate、stale 或 archived 的现场消费边界。`;
+  return `${base} ${sliceNote} 可见条目仍需按卡片提示资格判断 active、candidate、stale 或 archived 的现场消费边界。`;
+}
+
+function buildListPaginationReceipt(
+  total: number,
+  loadedCount: number,
+): ListPaginationReceipt {
+  const remaining = Math.max(total - loadedCount, 0);
+  return {
+    title: '列表分页回执',
+    summary: remaining
+      ? `已加载 ${Math.min(loadedCount, total)} / ${total} 条，仍有 ${remaining} 条未读取。`
+      : `已加载 ${Math.min(loadedCount, total)} / ${total} 条。`,
+    boundary:
+      '加载更多只读取当前筛选的下一页；未加载条目不能被视为不存在、已处理或没有弱线索，也不会触发任何状态写入或预演动作。',
+  };
 }
 
 function buildEmptyFilterReceipt(): EmptyFilterReceipt {
@@ -989,25 +1551,58 @@ function buildEmptyFilterReceipt(): EmptyFilterReceipt {
   };
 }
 
-function buildActionReceipt(
+function buildActionPendingReceipt(
   action: RehearsalActionKind,
   rehearsal: Rehearsal,
   previousStatus: RehearsalStatus,
   rows: RehearsalActivation[],
 ): ActionReceipt {
   return {
-    title: actionReceiptTitle(action),
-    summary: `${statusLabel(previousStatus)} -> ${statusLabel(rehearsal.status)}`,
-    tone: actionReceiptTone(action, rehearsal.status),
+    title: '处理请求回执',
+    summary: `${actionReceiptTitle(action)} 请求中`,
+    tone: 'neutral',
     rows: [
-      { label: '当前状态', value: statusLabel(rehearsal.status) },
-      { label: '现场提示', value: promptEligibilityLabel(rehearsal.status, rehearsal) },
+      { label: '当前状态', value: statusLabel(previousStatus) },
+      { label: '请求动作', value: actionRequestLabel(action) },
+      { label: '写入结果', value: '请求中，未确认写入' },
+      { label: '现场提示', value: promptEligibilityLabel(previousStatus, rehearsal) },
       {
         label: '审计保留',
         value: `来源 ${rehearsal.evidenceRefs.length} · 触发 ${rows.length}`,
       },
-      { label: '恢复/复核', value: actionRecoveryLabel(action, rehearsal.status) },
+      { label: '按钮状态', value: '临时禁用，防重复提交' },
     ],
+    boundary:
+      `等待 Memory Service 返回前，本页仍以 ${statusLabel(previousStatus)} 作为真实状态；不会提前激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本。`,
+    recovery:
+      '成功后会替换为处理回执；失败会替换为写入失败回执，并继续保留旧状态和重试路径。',
+  };
+}
+
+function buildActionReceipt(
+  action: RehearsalActionKind,
+  rehearsal: Rehearsal,
+  previousStatus: RehearsalStatus,
+  rows: RehearsalActivation[],
+  detailRefreshLabel = '',
+): ActionReceipt {
+  const receiptRows = [
+    { label: '当前状态', value: statusLabel(rehearsal.status) },
+    { label: '现场提示', value: promptEligibilityLabel(rehearsal.status, rehearsal) },
+    {
+      label: '审计保留',
+      value: `来源 ${rehearsal.evidenceRefs.length} · 触发 ${rows.length}`,
+    },
+    { label: '恢复/复核', value: actionRecoveryLabel(action, rehearsal.status) },
+  ];
+  if (detailRefreshLabel) {
+    receiptRows.push({ label: '详情刷新', value: detailRefreshLabel });
+  }
+  return {
+    title: actionReceiptTitle(action),
+    summary: `${statusLabel(previousStatus)} -> ${statusLabel(rehearsal.status)}`,
+    tone: actionReceiptTone(action, rehearsal.status),
+    rows: receiptRows,
     boundary: actionBoundary(action),
     recovery: actionRecovery(action, rehearsal.status),
   };
@@ -1048,7 +1643,22 @@ function actionReceiptTitle(action: RehearsalActionKind) {
     'mark-used': '已使用回执',
     'mark-irrelevant': '不相关回执',
     archive: '归档回执',
+    'update-cues': '触发线索回执',
     status: '状态回执',
+  };
+  return labels[action];
+}
+
+function actionRequestLabel(action: RehearsalActionKind) {
+  const labels: Record<RehearsalActionKind, string> = {
+    pause: '暂停',
+    restore: '激活',
+    reactivate: '重新激活',
+    'mark-used': '标记已使用',
+    'mark-irrelevant': '标记不相关',
+    archive: '归档',
+    'update-cues': '保存触发线索',
+    status: '状态更新',
   };
   return labels[action];
 }
@@ -1177,6 +1787,18 @@ function cardReadinessBoundary(rehearsal: Rehearsal) {
   return '已归档，不再进入现场提示';
 }
 
+function cardSelectionBoundary(rehearsal: Rehearsal) {
+  const selectionState =
+    selectedId.value === rehearsal.id ? '当前已选中，点击只会重新聚焦详情' : '点击只会选中并打开右侧详情';
+  return [
+    `${selectionState}：${truncateButtonLabel(rehearsal.title)}`,
+    `状态 ${statusLabel(rehearsal.status)}`,
+    `提示资格 ${promptEligibilityLabel(rehearsal.status, rehearsal)}`,
+    `触发线索 ${futureCueSummary(rehearsal.activationCues)}`,
+    '不会激活、暂停、归档、标记反馈、保存触发线索、写入外部系统或执行预演脚本',
+  ].join('；');
+}
+
 function scenarioReadinessSummary(rehearsal: Rehearsal, hasCue: boolean) {
   if (!hasCue) {
     return '这条预演没有可识别的未来场景；先补人物、项目、issue、URL、主题或 surface，再恢复现场提示。';
@@ -1242,6 +1864,7 @@ function cueValueCount(
 }
 
 function actionRecoveryLabel(action: RehearsalActionKind, status: RehearsalStatus) {
+  if (action === 'update-cues') return '继续复核命中诊断';
   if (status === 'active') return '可暂停或标记不相关';
   if (status === 'paused') return '点击恢复';
   if (status === 'dismissed') return '点击恢复待观察';
@@ -1258,12 +1881,16 @@ function actionBoundary(action: RehearsalActionKind) {
     'mark-used': '标记已使用会退出普通现场提示；脚本和命中历史仍作为审计记录保留。',
     'mark-irrelevant': '不相关会降权并退出现场提示；这不是物理删除，来源证据仍可复核。',
     archive: '归档只把这条预演变成审计记录；不会删除来源系统或 Memory Service 里的其他记忆。',
+    'update-cues': '保存触发线索只更新这条 Rehearsal 的 future cue；不会改变脚本正文、自动激活外部系统或执行预演动作。',
     status: '状态更新只影响这条 Rehearsal 的现场匹配资格，不改变来源证据。',
   };
   return labels[action];
 }
 
 function actionRecovery(action: RehearsalActionKind, status: RehearsalStatus) {
+  if (action === 'update-cues') {
+    return '保存后继续看场景资格总览和命中诊断；如果仍只有弱线索，先补锚点或保持观察。';
+  }
   if (status === 'active') {
     return '如果后续再次误命中，可以直接暂停或标记不相关。';
   }
@@ -1280,6 +1907,44 @@ function actionRecovery(action: RehearsalActionKind, status: RehearsalStatus) {
     return '如果脚本仍会反复复用，后续更适合沉淀为 Personal Skill。';
   }
   return '继续观察后续命中，并用来源证据确认这条脚本是否仍可信。';
+}
+
+function actionButtonBoundary(
+  action: RehearsalActionKind,
+  rehearsal: Rehearsal | null,
+) {
+  const target = rehearsal?.title ? `「${truncateButtonLabel(rehearsal.title)}」` : '当前 Rehearsal';
+  const labels: Record<RehearsalActionKind, string> = {
+    pause:
+      '提交后只暂停后续现场提示；脚本、来源证据和触发历史仍保留，Memory Service 确认前仍按旧状态显示。',
+    restore:
+      '提交后只恢复场景匹配资格；不会发送消息、创建任务或执行脚本，Memory Service 确认前仍按旧状态显示。',
+    reactivate:
+      '提交后只重新参与场景匹配；不会发送消息、写入外部系统或执行脚本，Memory Service 确认前仍按旧状态显示。',
+    'mark-used':
+      '提交后标记已使用并退出普通现场提示；脚本、来源证据和命中历史仍保留，不会生成新任务。',
+    'mark-irrelevant':
+      '提交后只降权并退出现场提示；这不是物理删除，来源证据和审计历史仍可复核。',
+    archive:
+      '提交后归档为审计记录；不会删除来源系统或 Memory Service 里的其他记忆，也不会执行脚本。',
+    'update-cues':
+      '保存只 PATCH 当前 Rehearsal 的 activationCues；不会改写脚本正文、创建任务或执行预演动作。',
+    status:
+      '提交后只更新这条 Rehearsal 的现场匹配资格；不会改变来源证据或执行预演脚本。',
+  };
+  return `${actionRequestLabel(action)} ${target}：${labels[action]}`;
+}
+
+function actionButtonAriaLabel(
+  action: RehearsalActionKind,
+  rehearsal: Rehearsal | null,
+) {
+  return actionButtonBoundary(action, rehearsal);
+}
+
+function truncateButtonLabel(value: string) {
+  const text = String(value || '').trim();
+  return text.length > 36 ? `${text.slice(0, 35)}...` : text;
 }
 
 function statusLabel(status: string) {
@@ -1339,6 +2004,108 @@ function cueRows(cues: RehearsalActivationCues) {
       value: cueValue(cues[key] ?? []),
     }))
     .filter((row) => row.value);
+}
+
+function emptyCueDraft(): CueDraft {
+  return {
+    people: '',
+    projects: '',
+    topics: '',
+    keywords: '',
+    groupIds: '',
+    conversationIds: '',
+    meetingIds: '',
+    calendarEventIds: '',
+    issueKeys: '',
+    urls: '',
+    surfaces: '',
+  };
+}
+
+function resetCueDraftFromSelected() {
+  resetCueDraftFromRehearsal(selected.value);
+}
+
+function resetCueDraftFromRehearsal(rehearsal: Rehearsal | null) {
+  const next = emptyCueDraft();
+  if (rehearsal) {
+    for (const field of CUE_EDITOR_FIELDS) {
+      next[field.key] = cueDraftValue(rehearsal.activationCues[field.key] ?? []);
+    }
+  }
+  cueDraft.value = next;
+}
+
+function buildCueDraftPayload(): RehearsalActivationCues {
+  const next: RehearsalActivationCues = {};
+  for (const field of CUE_EDITOR_FIELDS) {
+    const values = splitCueDraftValue(cueDraft.value[field.key]);
+    if (values.length) {
+      next[field.key] = values;
+    }
+  }
+  return next;
+}
+
+function splitCueDraftValue(value: string) {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const part of String(value || '').split(/[\n,，;；]+/)) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    values.push(clean);
+  }
+  return values;
+}
+
+function sameCues(left: RehearsalActivationCues, right: RehearsalActivationCues) {
+  return CUE_EDITOR_FIELDS.every((field) => {
+    const a = normalizeCueArray(left[field.key] ?? []);
+    const b = normalizeCueArray(right[field.key] ?? []);
+    if (a.length !== b.length) return false;
+    return a.every((value, index) => value === b[index]);
+  });
+}
+
+function cueDraftValue(values: string[]) {
+  return normalizeCueArray(values).join(', ');
+}
+
+function normalizeCueArray(values: string[]) {
+  return values.map((value) => String(value || '').trim()).filter(Boolean);
+}
+
+function buildCueEditorReceipt(
+  rehearsal: Rehearsal | null,
+  cues: RehearsalActivationCues,
+  changed: boolean,
+): CueEditorReceipt {
+  const strength = cueStrength(cues);
+  const summary =
+    strength === 'anchored'
+      ? '草稿已有稳定现场锚点'
+      : strength === 'weak'
+        ? '草稿只有弱泛化线索'
+        : '草稿还没有可保存的 future cue';
+  return {
+    title: changed ? '触发线索草稿待保存' : '触发线索草稿回执',
+    summary,
+    tone: strength === 'anchored' ? 'ready' : strength === 'weak' ? 'warning' : 'quiet',
+    rows: [
+      { label: '当前对象', value: rehearsal?.title || '-' },
+      { label: '草稿线索', value: futureCueSummary(cues) },
+      { label: '线索强度', value: cueStrengthLabel(cues) },
+      {
+        label: '保存状态',
+        value: changed ? '本地草稿，未确认写入' : '与当前记录一致',
+      },
+    ],
+    boundary:
+      '保存只 PATCH 当前 Rehearsal 的 activationCues；不会自动发送消息、写入外部系统、创建任务、改写脚本正文或执行预演动作。',
+  };
 }
 
 function activationCueSummary(activation: RehearsalActivation) {
@@ -1576,7 +2343,8 @@ function isExpired(rehearsal: Rehearsal) {
 .detail-actions button,
 .focus-notice button,
 .focus-failure-actions button,
-.empty-filter-actions button {
+.empty-filter-actions button,
+.cue-editor-actions button {
   border: 1px solid rgba(59, 130, 246, 0.38);
   border-radius: 8px;
   padding: 0.68rem 0.9rem;
@@ -1605,6 +2373,7 @@ function isExpired(rehearsal: Rehearsal) {
 .section-title small,
 .fact-grid span,
 .cue-row span,
+.cue-editor-field span,
 .evidence-row span {
   display: block;
   color: #94a3b8;
@@ -1955,6 +2724,53 @@ function isExpired(rehearsal: Rehearsal) {
   line-height: 1.45;
 }
 
+.list-pagination-receipt {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 8px;
+  padding: 0.68rem 0.75rem;
+  background: rgba(120, 53, 15, 0.14);
+  color: #fde68a;
+}
+
+.list-pagination-receipt div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.list-pagination-receipt strong {
+  color: #fde68a;
+  font-size: 0.82rem;
+}
+
+.list-pagination-receipt span,
+.list-pagination-receipt p {
+  margin: 0;
+  color: #fef3c7;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.list-pagination-receipt button {
+  justify-self: start;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  background: rgba(180, 83, 9, 0.22);
+  color: #fef3c7;
+  cursor: pointer;
+}
+
+.list-pagination-receipt button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.list-load-error {
+  color: #fecaca !important;
+}
+
 .card-top,
 .card-meta,
 .activation-main {
@@ -2108,6 +2924,89 @@ function isExpired(rehearsal: Rehearsal) {
 .cue-boundary-warning span {
   color: #fef3c7;
   line-height: 1.55;
+}
+
+.cue-editor {
+  margin-top: 0.9rem;
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  border-radius: 8px;
+  padding: 0.85rem;
+  background: rgba(6, 78, 59, 0.12);
+}
+
+.cue-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.7rem;
+}
+
+.cue-editor-field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.cue-editor-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 0.62rem 0.72rem;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  outline: none;
+}
+
+.cue-editor-field input:focus {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
+}
+
+.cue-editor-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.cue-editor-field small {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.cue-editor-receipt {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.cue-editor-receipt.ready {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(20, 83, 45, 0.16);
+}
+
+.cue-editor-receipt.warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(120, 53, 15, 0.16);
+}
+
+.cue-editor-receipt p {
+  margin: 0.65rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.cue-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.cue-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .activation-row {

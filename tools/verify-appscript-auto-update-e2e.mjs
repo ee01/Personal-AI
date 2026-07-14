@@ -347,12 +347,34 @@ try {
   await page.locator('text=Project History 200/200').waitFor({
     timeout: 15000,
   });
-  await page.getByRole('button', { name: '重新检查' }).waitFor({
+  const limitProjectHistoryButton = page.locator('button', { hasText: '打开 Project History' }).first();
+  await limitProjectHistoryButton.waitFor({
     timeout: 15000,
   });
+  assert.match(
+    await limitProjectHistoryButton.getAttribute('title') || '',
+    /打开 App Script Project History/,
+  );
+  assert.match(
+    await limitProjectHistoryButton.getAttribute('aria-label') || '',
+    /不升级 deployment、不写 Sheet、不改 Jira Rule/,
+  );
+
+  const recheckButton = page.locator('button', { hasText: '重新检查' });
+  await recheckButton.waitFor({
+    timeout: 15000,
+  });
+  assert.match(
+    await recheckButton.getAttribute('title') || '',
+    /重新读取 App Script 版本和 Project History 额度/,
+  );
+  assert.match(
+    await recheckButton.getAttribute('aria-label') || '',
+    /只读取版本端点、deployment 和 Project History，不写 Sheet、Script 或 Jira Rule/,
+  );
 
   const dialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
-  await page.getByRole('button', { name: '重新检查' }).click();
+  await recheckButton.click();
   const dialog = await dialogPromise;
   assert.match(
     dialog.message(),
@@ -366,9 +388,27 @@ try {
   await page.locator('text=Project History 198/200').waitFor({
     timeout: 15000,
   });
-  await page.getByRole('button', { name: '升级调度系统', exact: true }).waitFor({
+  const cleanupButton = page.locator('button', { hasText: '打开 Project History' }).first();
+  await cleanupButton.waitFor({
     timeout: 15000,
   });
+  assert.match(
+    await cleanupButton.getAttribute('aria-label') || '',
+    /点击只打开检查页面，不升级 deployment、不写 Sheet、不改 Jira Rule/,
+  );
+
+  const upgradeButton = page.locator('button', { hasText: '升级调度系统' }).last();
+  await upgradeButton.waitFor({
+    timeout: 15000,
+  });
+  assert.match(
+    await upgradeButton.getAttribute('title') || '',
+    /只有 Web App 版本端点确认目标版本后才标记 Sheet\/Storage 为最新/,
+  );
+  assert.match(
+    await upgradeButton.getAttribute('aria-label') || '',
+    /失败项保留现有版本/,
+  );
 
   const confirmPromise = page.waitForEvent('dialog', { timeout: 15000 }).then(async (confirmDialog) => {
     assert.match(confirmDialog.message(), /确定要升级调度系统吗/);
@@ -377,7 +417,7 @@ try {
   });
   await Promise.all([
     confirmPromise,
-    page.getByRole('button', { name: '升级调度系统', exact: true }).click(),
+    upgradeButton.click(),
   ]);
 
   await page.locator('text=App Script 升级请求回执').waitFor({

@@ -8,6 +8,7 @@ import {
   formatScheduleQueueSummary,
   formatScheduleQueueBlockReason,
   formatScheduleQueueCompactSummary,
+  formatScheduleQueueDetailsReceipt,
   formatScheduleQueuePressure,
   formatScheduleQueueSuggestion,
   getScheduleQueuePressure,
@@ -448,6 +449,10 @@ test('summarizes congested executor queue slots and sorts risk first', () => {
     formatScheduleQueueCompactSummary(summary!),
     '14 条消息正在排队，2 个时间槽有拥挤，最大同槽 12 条，最大预计延后 11 分钟；1 个需要调整，展开后可查看建议依据和改期入口',
   );
+  assert.equal(
+    formatScheduleQueueDetailsReceipt(summary!, new Date('2026-05-04T09:50:30')),
+    '队列详情展开回执：基于已读取 Messages 快照和本机时间 2026-05-04 09:50 计算；当前展示全部 2 个拥挤槽位；14 条执行器消息受影响，最大同槽 12 条，最大预计延后 11 分钟；1 个槽位存在执行窗口风险；展开详情只显示本地队列诊断，不会同步 Sheet、刷新 Jira Automation、改期、发送消息、改 Logs 或跳过前序',
+  );
 });
 
 test('reports hidden queue slots when the summary is display-limited', () => {
@@ -466,6 +471,10 @@ test('reports hidden queue slots when the summary is display-limited', () => {
   assert.equal(compactSummary?.congestedSlotCount, 4);
   assert.equal(compactSummary?.hiddenSlotCount, 1);
   assert.equal(compactSummary?.topSlots.length, 3);
+  assert.equal(
+    formatScheduleQueueDetailsReceipt(compactSummary!, beforeSlot),
+    '队列详情展开回执：基于已读取 Messages 快照和本机时间 2026-05-04 08:00 计算；当前展示 3/4 个拥挤槽位，另 1 个未展开；8 条执行器消息受影响，最大同槽 2 条，最大预计延后 1 分钟；暂无执行窗口风险；展开详情只显示本地队列诊断，不会同步 Sheet、刷新 Jira Automation、改期、发送消息、改 Logs 或跳过前序',
+  );
 
   const expandedSummary = getScheduleQueueSummary(messages, beforeSlot, 10);
   assert.equal(expandedSummary?.hiddenSlotCount, 0);

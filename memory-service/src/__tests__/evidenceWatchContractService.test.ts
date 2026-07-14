@@ -136,6 +136,9 @@ describe('EvidenceWatchContractService', () => {
       contractAfterDuplicate,
     );
     expect(uiReceipt.duplicateSuppressedCount).toBe(1);
+    expect(uiReceipt.runId).toBe(duplicateReceipt?.id);
+    expect(uiReceipt.lastRunState).toBe('skipped_duplicate');
+    expect(uiReceipt.lastRunSummary).toContain('未创建重复外部查证');
     expect(uiReceipt.label).toBe('证据守望已建立');
     expect(uiReceipt.detail).toContain('不代表权威来源已完成复核');
     expect(uiReceipt.detail).toContain('已合并 1 次重复查证动作');

@@ -79,6 +79,18 @@ interface ReviewPacketCopyReceipt {
     selectionSignature: string;
 }
 
+interface ApplyHandoffCopyReceipt {
+    status: 'success' | 'failed';
+    kind: 'skipped' | 'failure';
+    copiedAt: string;
+    copiedItemCount: number;
+    reselectableItemCount: number;
+    manualOnlyItemCount: number;
+    updatedCount: number;
+    submittedFieldCount: number;
+    presentationId: string;
+}
+
 interface ApplySkippedHandoffItem {
     reason: string;
     projectLabel: string;
@@ -301,6 +313,81 @@ const addUniqueEvidenceItem = (items: string[], value: unknown): void => {
     items.push(trimmed);
 };
 
+const SENSITIVE_URL_PARAM_NAMES = new Set([
+    'access_token',
+    'api_key',
+    'apikey',
+    'auth',
+    'authorization',
+    'client_assertion',
+    'code',
+    'credential',
+    'googleaccessid',
+    'id_token',
+    'jwt',
+    'oauth_token',
+    'password',
+    'passcode',
+    'refresh_token',
+    'secret',
+    'session',
+    'sessionid',
+    'signature',
+    'sig',
+    'token',
+    'x-api-key',
+    'x-amz-credential',
+    'x-amz-signature',
+    'x-goog-signature',
+]);
+
+const SENSITIVE_URL_PARAM_NAME_PATTERN = /(^|[_-])(access|api|auth|bearer|client|credential|jwt|oauth|refresh|session|signed|token)([_-]|$)|password|passcode|secret|signature/i;
+const SENSITIVE_URL_VALUE_PATTERN = /^(sk-|pk-|rk-|ya29\.|AIza|ghp_|gho_|ghu_|ghs_|github_pat_|xox[baprs]-)/i;
+
+const collectUrlParamsIncludingHash = (url: URL): [string, string][] => {
+    const params: [string, string][] = [];
+    url.searchParams.forEach((value, key) => {
+        params.push([key, value]);
+    });
+
+    const hash = url.hash.replace(/^#/, '');
+    const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : hash;
+    if (hashQuery.includes('=')) {
+        try {
+            const hashParams = new URLSearchParams(hashQuery);
+            hashParams.forEach((value, key) => {
+                params.push([key, value]);
+            });
+        } catch {
+            // Ignore malformed hash params; normal search params still decide link safety.
+        }
+    }
+
+    return params;
+};
+
+const isSensitiveUrlParam = (key: string, value: string): boolean => {
+    const normalizedKey = key.trim().toLowerCase();
+    const normalizedValue = value.trim();
+
+    if (!normalizedKey) {
+        return false;
+    }
+
+    if (SENSITIVE_URL_PARAM_NAMES.has(normalizedKey) || SENSITIVE_URL_PARAM_NAME_PATTERN.test(normalizedKey)) {
+        return true;
+    }
+
+    if (
+        normalizedKey === 'key' &&
+        (normalizedValue.length >= 20 || SENSITIVE_URL_VALUE_PATTERN.test(normalizedValue))
+    ) {
+        return true;
+    }
+
+    return SENSITIVE_URL_VALUE_PATTERN.test(normalizedValue);
+};
+
 const getSafeExternalUrl = (value: unknown): string | undefined => {
     if (typeof value !== 'string' || !value.trim()) {
         return undefined;
@@ -308,13 +395,29 @@ const getSafeExternalUrl = (value: unknown): string | undefined => {
 
     try {
         const url = new URL(value);
-        return url.protocol === 'https:' || url.protocol === 'http:'
-            ? url.toString()
-            : undefined;
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+            return undefined;
+        }
+
+        if (url.username || url.password) {
+            return undefined;
+        }
+
+        const sensitiveParam = collectUrlParamsIncludingHash(url)
+            .some(([key, paramValue]) => isSensitiveUrlParam(key, paramValue));
+        if (sensitiveParam) {
+            return undefined;
+        }
+
+        return url.toString();
     } catch {
         return undefined;
     }
 };
+
+const shouldHideExternalUrl = (value: unknown): boolean => (
+    typeof value === 'string' && value.trim().length > 0 && !getSafeExternalUrl(value)
+);
 
 const getJiraIssueUpdatedLabel = (issue: Pick<JiraTicket, 'updated'>): string => {
     if (!issue.updated) {
@@ -800,6 +903,12 @@ const buildApplySkippedHandoffItems = (result: ApplyResultReceipt): ApplySkipped
     })
 );
 
+const getApplySkippedHandoffModeLine = (item: ApplySkippedHandoffItem): string => (
+    item.matched
+        ? '接管方式: 可重选 - 可用页面「重选跳过字段」恢复本地提交范围；不会自动重试或写回。'
+        : '接管方式: 人工核对 - 未唯一匹配提交字段；请按原因回 Slides 对照目标和建议值处理。'
+);
+
 const formatApplySkippedHandoffChecklist = (
     result: ApplyResultReceipt,
     items: ApplySkippedHandoffItem[],
@@ -829,6 +938,7 @@ const formatApplySkippedHandoffChecklist = (
         '',
         ...items.map((item, index) => [
             `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+            `   ${getApplySkippedHandoffModeLine(item)}`,
             `   建议: ${item.previewText}`,
             `   目标: ${item.targetText.replace(/^写入目标:\s*/, '')}`,
             `   依据: ${item.evidenceText}`,
@@ -871,6 +981,7 @@ const formatApplyFailureHandoffChecklist = (
         '',
         ...items.map((item, index) => [
             `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+            '   写回状态: 整批未确认 - 复制只保留本次未完成字段，不能当作已写入。',
             `   建议: ${item.previewText}`,
             `   目标: ${item.targetText.replace(/^写入目标:\s*/, '')}`,
             `   依据: ${item.evidenceText}`,
@@ -878,6 +989,29 @@ const formatApplyFailureHandoffChecklist = (
             `   下一步: ${item.nextStep}`,
         ].join('\n')),
     ].join('\n');
+};
+
+const buildApplyHandoffCopyReceiptLines = (receipt: ApplyHandoffCopyReceipt): string[] => {
+    const presentationText = receipt.presentationId || 'unknown';
+    const title = receipt.kind === 'skipped' ? '跳过清单复制回执' : '失败清单复制回执';
+    const objectText = receipt.kind === 'skipped' ? '接管项' : '未完成字段';
+    const statusLine = receipt.status === 'success'
+        ? `${title}: ${receipt.copiedAt} 已复制 ${receipt.copiedItemCount} 个${objectText}；presentation ${presentationText}。`
+        : `${title}: 本机剪贴板未确认写入；${receipt.copiedItemCount} 个${objectText}仍只停留在页面清单。`;
+
+    if (receipt.kind === 'skipped') {
+        return [
+            statusLine,
+            `复制范围: Google Slides 已确认写回 ${receipt.updatedCount} 个字段；${receipt.reselectableItemCount} 个跳过项可重选，${receipt.manualOnlyItemCount} 个仍只能人工核对。`,
+            '非效果: 复制只写入本机剪贴板，不会重选字段、不会自动重试、不会写回 Slides，也不会反写 Jira 或 Memory Service。',
+        ];
+    }
+
+    return [
+        statusLine,
+        `失败范围: 本次 ${receipt.submittedFieldCount} 个提交字段没有字段级写入确认；复制清单只保留建议值、目标和失败原因。`,
+        '非效果: 复制只写入本机剪贴板，不会重新提交失败批次、不会写回 Slides，也不会反写 Jira 或 Memory Service。',
+    ];
 };
 
 const getAtomicBatchProjectCount = (items: SelectedFieldPreviewItem[]): number => (
@@ -918,6 +1052,24 @@ const buildSelectedWritebackDecisionReceiptLines = (
         ...(snapshotAgeLine ? [snapshotAgeLine] : []),
         reviewLine,
         '执行边界: 只把已选字段发给 Google Slides；未选、无法写回、仅风险关注项不会写入，也不会反写 Jira 或 Memory Service。',
+    ];
+};
+
+const buildPostApplySelectionReceiptLines = (
+    previousResult: ApplyResultReceipt | null,
+    selectedFieldCount: number,
+    visibleSelectedUpdateCount: number,
+    hiddenSelectedUpdateCount: number,
+    selectedReviewFieldCount: number,
+): string[] => {
+    if (!previousResult || selectedFieldCount === 0) {
+        return [];
+    }
+
+    return [
+        `接管中回执: 上方 Google Slides 确认/跳过结果只属于上一批 ${previousResult.submittedItems.length} 个提交字段；当前本页又选中 ${selectedFieldCount} 个字段，尚未重新提交。`,
+        `本地范围: 当前视图 ${visibleSelectedUpdateCount} 个，隐藏 ${hiddenSelectedUpdateCount} 个，需人工复核 ${selectedReviewFieldCount} 个；点击应用前仍以本预览为准。`,
+        '非效果: 重选或勾选不会自动重试、不会写回 Slides，也不会反写 Jira 或 Memory Service；要处理这些字段需要再次点击应用。',
     ];
 };
 
@@ -1084,6 +1236,206 @@ const buildSelectedFieldPreviewItem = (
     };
 };
 
+const buildFieldSelectionControlLabel = (
+    suggestion: ProjectUpdateSuggestion,
+    projectIndex: number,
+    field: UpdateField,
+): string => {
+    const previewItem = buildSelectedFieldPreviewItem(suggestion, projectIndex, field);
+    const reviewText = previewItem.reviewKind === 'ready'
+        ? '默认选中字段，来源充分'
+        : '需人工复核字段，手动勾选才会进入提交范围';
+
+    return [
+        `${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS[field]} 写回选择。`,
+        `${previewItem.previewText}。`,
+        `${previewItem.targetText}。`,
+        `${reviewText}: ${previewItem.evidenceText}。`,
+        '勾选只改变结果页本地提交范围，不会立即写回 Slides、重新分析 deck 或反写 Jira / Memory Service。',
+    ].join(' ');
+};
+
+const buildProjectSelectionControlLabel = (suggestion: ProjectUpdateSuggestion): string => {
+    const availableFields = getAvailableUpdateFields(suggestion);
+    const defaultFields = getDefaultSelectableFields(suggestion);
+    const reviewFields = getReviewRequiredFields(suggestion);
+    const fieldText = availableFields.length > 0
+        ? formatUpdateFieldNames(availableFields)
+        : '无可写字段';
+
+    return [
+        `${suggestion.projectId} 全选写回字段。`,
+        `将切换 ${availableFields.length} 个可写字段: ${fieldText}。`,
+        `其中 ${defaultFields.length} 个来源充分，${reviewFields.length} 个需人工复核。`,
+        '全选只改变结果页本地提交范围，不会立即写回 Slides、重新分析 deck 或反写 Jira / Memory Service。',
+    ].join(' ');
+};
+
+const buildReviewFilterButtonBoundary = (
+    filter: ReviewFilter,
+    isActive: boolean,
+    visibleSuggestionCount: number,
+    totalSuggestionCount: number,
+    selectedFieldCount: number,
+    hiddenSelectedFieldCount: number,
+): string => {
+    const label = REVIEW_FILTER_LABELS[filter];
+    const activeText = isActive ? '当前已在此视图。' : `点击只切换到「${label}」审阅视图。`;
+    const hiddenText = hiddenSelectedFieldCount > 0
+        ? `当前有 ${hiddenSelectedFieldCount} 个已选字段可能被筛选隐藏，应用前仍以写回决策回执为准。`
+        : '当前没有被筛选隐藏的已选字段。';
+
+    return [
+        `${label}筛选控制。${activeText}`,
+        `本页会显示 ${visibleSuggestionCount} / ${totalSuggestionCount} 张建议卡；全部已选 ${selectedFieldCount} 个字段。`,
+        hiddenText,
+        '筛选只改变结果页可见范围，不会重新分析 deck、不会写回 Slides、Jira 或 Memory Service。',
+    ].join(' ');
+};
+
+const buildBulkSelectionButtonBoundary = (
+    action: 'restore-defaults' | 'clear-selected',
+    defaultSelectedFieldCount: number,
+    selectedFieldCount: number,
+): string => {
+    if (action === 'restore-defaults') {
+        return [
+            `恢复高可信默认选择。将把本页提交范围恢复为 ${defaultSelectedFieldCount} 个来源充分字段。`,
+            `当前已选 ${selectedFieldCount} 个字段会被这次本地恢复范围替换。`,
+            '这只更新结果页本地选择，不会立即应用、重新分析 deck、写回 Slides、Jira 或 Memory Service。',
+        ].join(' ');
+    }
+
+    return [
+        `清空当前选择。将从本页提交范围移除 ${selectedFieldCount} 个已选字段。`,
+        '清空后应用按钮不会提交字段，除非你重新勾选。',
+        '这只更新结果页本地选择，不会重新分析 deck、写回 Slides、Jira 或 Memory Service。',
+    ].join(' ');
+};
+
+const buildEmptyFilterActionBoundary = (label: string): string => (
+    [
+        `空筛选视图操作: ${label}。`,
+        '点击只切换审阅视图或恢复本页默认选择。',
+        '不会重新分析 deck、不会写回 Slides、Jira 或 Memory Service。',
+    ].join(' ')
+);
+
+const buildQueueFilterButtonBoundary = (
+    filter: 'review' | 'blocked',
+    itemCount: number,
+): string => {
+    const label = filter === 'review' ? '需复核字段' : '无法写回字段';
+
+    return [
+        `字段复核队列筛选: 只看${label}。`,
+        `点击只把结果页切到对应视图，当前队列有 ${itemCount} 个${label}。`,
+        '不会勾选字段、不会提交写回、不会重新分析 deck，也不会反写 Jira 或 Memory Service。',
+    ].join(' ');
+};
+
+const buildReviewPacketCopyButtonBoundary = (
+    selectedFieldCount: number,
+    selectedProjectCount: number,
+    selectedReviewFieldCount: number,
+    presentationId: string,
+): string => (
+    [
+        `复制当前写回复核清单: ${selectedFieldCount} 个字段 / ${selectedProjectCount} 个项目；presentation ${presentationId || 'unknown'}。`,
+        `清单包含字段目标、来源依据、快照基准、原子批次边界和 ${selectedReviewFieldCount} 个人工纳入字段。`,
+        '只写入本机剪贴板，不会应用写回、重新分析 deck、打开 Slides、反写 Jira 或 Memory Service。',
+    ].join(' ')
+);
+
+const buildHiddenSelectionButtonBoundary = (
+    action: 'show-selected' | 'keep-visible',
+    hiddenSelectedFieldCount: number,
+    visibleSelectedFieldCount: number,
+): string => {
+    if (action === 'show-selected') {
+        return [
+            `查看已选字段。当前筛选隐藏了 ${hiddenSelectedFieldCount} 个已选字段。`,
+            '点击只切到已选视图，方便核对完整提交范围。',
+            '不会改变选择、不会重新分析 deck、不会写回 Slides、Jira 或 Memory Service。',
+        ].join(' ');
+    }
+
+    return [
+        `仅保留当前视图字段。将移除 ${hiddenSelectedFieldCount} 个当前筛选外的隐藏选择，保留 ${visibleSelectedFieldCount} 个当前可见已选字段。`,
+        '点击只收敛本页本地提交范围。',
+        '不会应用写回、不会重新分析 deck、不会反写 Jira 或 Memory Service。',
+    ].join(' ');
+};
+
+const buildApplyUpdatesButtonBoundary = (
+    selectedItems: SelectedFieldPreviewItem[],
+    visibleSelectedFieldCount: number,
+    hiddenSelectedFieldCount: number,
+    selectedReviewFieldCount: number,
+    presentationId: string,
+    isApplying: boolean,
+): string => {
+    if (isApplying) {
+        return [
+            '正在更新: 本页已把上一批已选字段发送给原 Google Slides 页面。',
+            '等待 Google Slides API 回包前，字段勾选、筛选、全选和复核队列保持锁定。',
+            '不会追加新字段、不会重新分析 deck、不会反写 Jira 或 Memory Service。',
+        ].join(' ');
+    }
+
+    if (selectedItems.length === 0) {
+        return [
+            '应用写回不可用: 当前没有已选字段会提交。',
+            '请先勾选字段或恢复高可信默认选择。',
+            '不会写回 Slides、重新分析 deck、反写 Jira 或 Memory Service。',
+        ].join(' ');
+    }
+
+    return [
+        `应用写回: 将提交 ${selectedItems.length} 个字段 / ${getAtomicBatchProjectCount(selectedItems)} 个项目到原 Google Slides 页面；presentation ${presentationId || 'unknown'}。`,
+        `当前视图 ${visibleSelectedFieldCount} 个，隐藏 ${hiddenSelectedFieldCount} 个；其中 ${selectedReviewFieldCount} 个由你手动纳入。`,
+        `${getAtomicBatchSummary(selectedItems)}${ATOMIC_BATCH_BOUNDARY_TEXT}`,
+        '点击才会发起 Google Slides 写回请求；不会重新分析 deck，也不会反写 Jira 或 Memory Service。',
+    ].join(' ');
+};
+
+const buildSkippedReselectButtonBoundary = (
+    matchedFieldCount: number,
+    unmatchedReasonCount: number,
+): string => (
+    [
+        `重选跳过字段: 可恢复 ${matchedFieldCount} 个已唯一匹配的跳过字段到本页提交范围。`,
+        unmatchedReasonCount > 0
+            ? `另有 ${unmatchedReasonCount} 项未匹配原因只能人工核对。`
+            : '所有跳过原因都已匹配或当前没有未匹配原因。',
+        '重选只改变本页选择，不会自动重试、不会写回 Slides、Jira 或 Memory Service。',
+    ].join(' ')
+);
+
+const buildSkippedCopyButtonBoundary = (
+    itemCount: number,
+    reselectableItemCount: number,
+    manualOnlyItemCount: number,
+    presentationId: string,
+): string => (
+    [
+        `复制跳过字段接管清单: ${itemCount} 个接管项；presentation ${presentationId || 'unknown'}。`,
+        `${reselectableItemCount} 个可重选，${manualOnlyItemCount} 个只能人工核对。`,
+        '只写入本机剪贴板，不会重选字段、不会自动重试、不会写回 Slides，也不会反写 Jira 或 Memory Service。',
+    ].join(' ')
+);
+
+const buildFailureCopyButtonBoundary = (
+    itemCount: number,
+    presentationId: string,
+): string => (
+    [
+        `复制失败字段接管清单: ${itemCount} 个未完成字段；presentation ${presentationId || 'unknown'}。`,
+        '整批没有字段级写入确认，清单只保留建议值、目标和失败原因。',
+        '只写入本机剪贴板，不会重新提交失败批次、不会写回 Slides，也不会反写 Jira 或 Memory Service。',
+    ].join(' ')
+);
+
 const buildBlockedFieldDetailItem = (
     suggestion: ProjectUpdateSuggestion,
     field: UpdateField,
@@ -1248,6 +1600,7 @@ const SlidesAnalysis: React.FC = () => {
     const [selectionScopeReceipt, setSelectionScopeReceipt] = useState<string>('');
     const [applySubmissionReceiptLines, setApplySubmissionReceiptLines] = useState<string[]>([]);
     const [reviewPacketCopyReceipt, setReviewPacketCopyReceipt] = useState<ReviewPacketCopyReceipt | null>(null);
+    const [applyHandoffCopyReceipt, setApplyHandoffCopyReceipt] = useState<ApplyHandoffCopyReceipt | null>(null);
     const pendingApplyPreviewItemsRef = useRef<SelectedFieldPreviewItem[]>([]);
     const applyTimeoutRef = useRef<number | null>(null);
     const initialDataTimeoutRef = useRef<number | null>(null);
@@ -1294,6 +1647,8 @@ const SlidesAnalysis: React.FC = () => {
             setSelectionScopeReceipt('');
             setApplySubmissionReceiptLines([]);
             setReviewPacketCopyReceipt(null);
+            setApplyHandoffCopyReceipt(null);
+            setLastApplyFailure(null);
             setAnalysisReceivedAtMs(0);
             return;
         }
@@ -1307,9 +1662,11 @@ const SlidesAnalysis: React.FC = () => {
 
         setSelectedFields(defaults);
         setLastApplyResult(null);
+        setLastApplyFailure(null);
         setSelectionScopeReceipt('');
         setApplySubmissionReceiptLines([]);
         setReviewPacketCopyReceipt(null);
+        setApplyHandoffCopyReceipt(null);
     }, [analysisResult]);
 
     const initAnalysisPage = (isRetry = false) => {
@@ -1402,6 +1759,7 @@ const SlidesAnalysis: React.FC = () => {
                 setIsApplying(false);
                 setApplySubmissionReceiptLines([]);
                 setReviewPacketCopyReceipt(null);
+                setApplyHandoffCopyReceipt(null);
                 setSelectedFields({});
                 setLastApplyResult({
                     updatedCount,
@@ -1426,6 +1784,7 @@ const SlidesAnalysis: React.FC = () => {
                 setIsApplying(false);
                 setApplySubmissionReceiptLines([]);
                 setReviewPacketCopyReceipt(null);
+                setApplyHandoffCopyReceipt(null);
                 setLastApplyResult(null);
                 setLastApplyFailure({
                     errorMessage,
@@ -1520,20 +1879,24 @@ const SlidesAnalysis: React.FC = () => {
         return getAvailableUpdateFields(suggestion).some((field) => isFieldSelected(projectIndex, field));
     };
 
-    const suggestionMatchesReviewFilter = (suggestion: ProjectUpdateSuggestion, projectIndex: number): boolean => {
-        if (reviewFilter === 'selected') {
+    const suggestionMatchesReviewFilter = (
+        suggestion: ProjectUpdateSuggestion,
+        projectIndex: number,
+        filter: ReviewFilter = reviewFilter,
+    ): boolean => {
+        if (filter === 'selected') {
             return suggestionHasSelectedField(suggestion, projectIndex);
         }
 
-        if (reviewFilter === 'review') {
+        if (filter === 'review') {
             return isSuggestionReviewRequired(suggestion);
         }
 
-        if (reviewFilter === 'risk') {
+        if (filter === 'risk') {
             return isRiskSpotlightSuggestion(suggestion);
         }
 
-        if (reviewFilter === 'blocked') {
+        if (filter === 'blocked') {
             return getUnavailableUpdateFields(suggestion).length > 0;
         }
 
@@ -1614,6 +1977,13 @@ const SlidesAnalysis: React.FC = () => {
     }, 0);
 
     const hiddenSelectedUpdateCount = Math.max(0, selectedUpdateCount - visibleSelectedUpdateCount);
+    const getReviewFilterSuggestionCount = (filter: ReviewFilter): number => (
+        analysisResult
+            ? analysisResult.updateSuggestions
+                .filter((suggestion, index) => suggestionMatchesReviewFilter(suggestion, index, filter))
+                .length
+            : 0
+    );
     const selectedReviewFieldCount = analysisResult
         ? analysisResult.updateSuggestions.reduce((count, suggestion, projectIndex) => {
             return count + getAvailableUpdateFields(suggestion)
@@ -1657,6 +2027,14 @@ const SlidesAnalysis: React.FC = () => {
         )
         : [];
     const hasSelectedWritebackDecisionAttention = hiddenSelectedUpdateCount > 0 || selectedReviewFieldCount > 0;
+    const postApplySelectionReceiptLines = buildPostApplySelectionReceiptLines(
+        lastApplyResult,
+        selectedFieldPreviewItems.length,
+        visibleSelectedUpdateCount,
+        hiddenSelectedUpdateCount,
+        selectedReviewFieldCount,
+    );
+    const hasPostApplySelectedFields = postApplySelectionReceiptLines.length > 0;
     const reviewPacketCopyReceiptLines = reviewPacketCopyReceipt
         ? buildReviewPacketCopyReceiptLines(
             reviewPacketCopyReceipt,
@@ -1717,12 +2095,15 @@ const SlidesAnalysis: React.FC = () => {
             onClick: () => void,
             disabled = false,
         ) => {
+            const boundary = buildEmptyFilterActionBoundary(label);
             actionButtons.push(
                 <button
                     key={id}
                     id={id}
                     type="button"
                     className="btn-quiet empty-filter-action"
+                    aria-label={boundary}
+                    title={boundary}
                     onClick={onClick}
                     disabled={isApplying || disabled}
                 >
@@ -1938,6 +2319,7 @@ const SlidesAnalysis: React.FC = () => {
                     writebackSnapshotBasisLine,
                     writebackSnapshotAgeLine,
                 ));
+                setApplyHandoffCopyReceipt(null);
                 setIsApplying(true);
                 applyTimeoutRef.current = window.setTimeout(() => {
                     applyTimeoutRef.current = null;
@@ -1945,6 +2327,7 @@ const SlidesAnalysis: React.FC = () => {
                     pendingApplyPreviewItemsRef.current = [];
                     setIsApplying(false);
                     setApplySubmissionReceiptLines([]);
+                    setApplyHandoffCopyReceipt(null);
                     setLastApplyResult(null);
                     setLastApplyFailure({
                         errorMessage: '写回请求超时，未收到 Google Slides 页面返回结果。',
@@ -1957,6 +2340,7 @@ const SlidesAnalysis: React.FC = () => {
             } else {
                 pendingApplyPreviewItemsRef.current = [];
                 setApplySubmissionReceiptLines([]);
+                setApplyHandoffCopyReceipt(null);
                 showToast('无法与父窗口通信，请重新打开分析窗口', 'error');
                 debugLog('父窗口引用不存在');
             }
@@ -1965,6 +2349,7 @@ const SlidesAnalysis: React.FC = () => {
             pendingApplyPreviewItemsRef.current = [];
             setIsApplying(false);
             setApplySubmissionReceiptLines([]);
+            setApplyHandoffCopyReceipt(null);
             showToast('更新操作失败: ' + (err as Error).message, 'error');
             debugLog('错误: ' + (err as Error).message);
             console.error(err);
@@ -1980,9 +2365,10 @@ const SlidesAnalysis: React.FC = () => {
             return;
         }
 
+        const items = buildApplySkippedHandoffItems(lastApplyResult);
         const checklist = formatApplySkippedHandoffChecklist(
             lastApplyResult,
-            buildApplySkippedHandoffItems(lastApplyResult),
+            items,
             presentationId,
         );
         if (!checklist) {
@@ -1990,6 +2376,17 @@ const SlidesAnalysis: React.FC = () => {
         }
 
         const copied = await copyTextToClipboard(checklist);
+        setApplyHandoffCopyReceipt({
+            status: copied ? 'success' : 'failed',
+            kind: 'skipped',
+            copiedAt: formatSnapshotReceivedAt(Date.now()),
+            copiedItemCount: items.length,
+            reselectableItemCount: items.filter((item) => item.matched).length,
+            manualOnlyItemCount: items.filter((item) => !item.matched).length,
+            updatedCount: lastApplyResult.updatedCount,
+            submittedFieldCount: lastApplyResult.submittedItems.length,
+            presentationId,
+        });
         if (copied) {
             showToast('已复制跳过字段接管清单', 'success');
         } else {
@@ -2037,6 +2434,17 @@ const SlidesAnalysis: React.FC = () => {
         }
 
         const copied = await copyTextToClipboard(checklist);
+        setApplyHandoffCopyReceipt({
+            status: copied ? 'success' : 'failed',
+            kind: 'failure',
+            copiedAt: formatSnapshotReceivedAt(Date.now()),
+            copiedItemCount: items.length,
+            reselectableItemCount: 0,
+            manualOnlyItemCount: items.length,
+            updatedCount: 0,
+            submittedFieldCount: lastApplyFailure.submittedItems.length,
+            presentationId,
+        });
         if (copied) {
             showToast('已复制失败字段接管清单', 'success');
         } else {
@@ -2107,6 +2515,8 @@ const SlidesAnalysis: React.FC = () => {
                             <button
                                 type="button"
                                 className="btn-secondary"
+                                aria-label="重新请求分析数据。只向原 Google Slides 页面索取当前分析结果快照；不会重新分析 deck、不会写回 Slides，也不会反写 Jira 或 Memory Service。"
+                                title="重新请求分析数据。只向原 Google Slides 页面索取当前分析结果快照；不会重新分析 deck、不会写回 Slides，也不会反写 Jira 或 Memory Service。"
                                 onClick={() => initAnalysisPage(true)}
                                 disabled={!window.opener}
                             >
@@ -2171,12 +2581,64 @@ const SlidesAnalysis: React.FC = () => {
         0,
         applyFailureHandoffItems.length - applyFailureHandoffVisibleItems.length
     );
+    const applyHandoffCopyReceiptLines = applyHandoffCopyReceipt
+        ? buildApplyHandoffCopyReceiptLines(applyHandoffCopyReceipt)
+        : [];
+    const selectedWritebackProjectCount = getAtomicBatchProjectCount(selectedFieldPreviewItems);
+    const reviewPacketCopyButtonBoundary = buildReviewPacketCopyButtonBoundary(
+        selectedFieldPreviewItems.length,
+        selectedWritebackProjectCount,
+        selectedReviewFieldCount,
+        presentationId,
+    );
+    const applyUpdatesButtonBoundary = buildApplyUpdatesButtonBoundary(
+        selectedFieldPreviewItems,
+        visibleSelectedUpdateCount,
+        hiddenSelectedUpdateCount,
+        selectedReviewFieldCount,
+        presentationId,
+        isApplying,
+    );
+    const skippedReselectButtonBoundary = buildSkippedReselectButtonBoundary(
+        applyMatchedSkippedSubmittedItems.length,
+        applySkippedMatchSummary?.unmatchedReasons.length || 0,
+    );
+    const skippedCopyButtonBoundary = buildSkippedCopyButtonBoundary(
+        applySkippedHandoffItems.length,
+        applyMatchedSkippedSubmittedItems.length,
+        applySkippedMatchSummary?.unmatchedReasons.length || 0,
+        presentationId,
+    );
+    const failureCopyButtonBoundary = buildFailureCopyButtonBoundary(
+        applyFailureHandoffItems.length,
+        presentationId,
+    );
+    const showSelectedFieldsButtonBoundary = buildHiddenSelectionButtonBoundary(
+        'show-selected',
+        hiddenSelectedUpdateCount,
+        visibleSelectedUpdateCount,
+    );
+    const keepVisibleSelectedFieldsButtonBoundary = buildHiddenSelectionButtonBoundary(
+        'keep-visible',
+        hiddenSelectedUpdateCount,
+        visibleSelectedUpdateCount,
+    );
+    const restoreDefaultsButtonBoundary = buildBulkSelectionButtonBoundary(
+        'restore-defaults',
+        defaultSelectedFieldCount,
+        selectedUpdateCount,
+    );
+    const clearSelectionButtonBoundary = buildBulkSelectionButtonBoundary(
+        'clear-selected',
+        defaultSelectedFieldCount,
+        selectedUpdateCount,
+    );
 
     return (
         <div className="slides-analysis">
             {lastApplyResult && (
                 <div className={`success-message ${lastApplyResult.skippedCount > 0 ? 'success-message-warning' : ''}`}>
-                    <h3>更新完成</h3>
+                    <h3>{hasPostApplySelectedFields ? '上一批更新完成' : '更新完成'}</h3>
                     <p>
                         Google Slides 已确认写回 {lastApplyResult.updatedCount} 个字段
                         {lastApplyResult.skippedCount > 0 ? `，跳过 ${lastApplyResult.skippedCount} 项` : ''}。
@@ -2271,6 +2733,8 @@ const SlidesAnalysis: React.FC = () => {
                                         id="reselect-apply-skipped-fields"
                                         type="button"
                                         className="btn-quiet"
+                                        aria-label={skippedReselectButtonBoundary}
+                                        title={skippedReselectButtonBoundary}
                                         onClick={handleReselectApplySkippedFields}
                                         disabled={applyMatchedSkippedSubmittedItems.length === 0}
                                     >
@@ -2280,6 +2744,8 @@ const SlidesAnalysis: React.FC = () => {
                                         id="copy-apply-skipped-handoff"
                                         type="button"
                                         className="btn-quiet"
+                                        aria-label={skippedCopyButtonBoundary}
+                                        title={skippedCopyButtonBoundary}
                                         onClick={handleCopyApplySkippedHandoff}
                                     >
                                         复制清单
@@ -2292,6 +2758,16 @@ const SlidesAnalysis: React.FC = () => {
                                     ? `；${applySkippedMatchSummary.unmatchedReasons.length} 项未匹配原因只能人工核对`
                                     : ''}。重选只改变本页选择，不会自动重试或写回。
                             </div>
+                            {applyHandoffCopyReceipt?.kind === 'skipped' && applyHandoffCopyReceiptLines.length > 0 && (
+                                <div
+                                    className={`apply-handoff-copy-receipt ${applyHandoffCopyReceipt.status === 'failed' ? 'apply-handoff-copy-receipt-error' : ''}`}
+                                    aria-label="跳过清单复制回执"
+                                >
+                                    {applyHandoffCopyReceiptLines.map((line) => (
+                                        <div key={line}>{line}</div>
+                                    ))}
+                                </div>
+                            )}
                             <ul className="apply-skipped-handoff-list">
                                 {applySkippedHandoffVisibleItems.map((item, index) => (
                                     <li
@@ -2410,11 +2886,23 @@ const SlidesAnalysis: React.FC = () => {
                                     id="copy-apply-failure-handoff"
                                     type="button"
                                     className="btn-quiet"
+                                    aria-label={failureCopyButtonBoundary}
+                                    title={failureCopyButtonBoundary}
                                     onClick={handleCopyApplyFailureHandoff}
                                 >
                                     复制清单
                                 </button>
                             </div>
+                            {applyHandoffCopyReceipt?.kind === 'failure' && applyHandoffCopyReceiptLines.length > 0 && (
+                                <div
+                                    className={`apply-handoff-copy-receipt ${applyHandoffCopyReceipt.status === 'failed' ? 'apply-handoff-copy-receipt-error' : ''}`}
+                                    aria-label="失败清单复制回执"
+                                >
+                                    {applyHandoffCopyReceiptLines.map((line) => (
+                                        <div key={line}>{line}</div>
+                                    ))}
+                                </div>
+                            )}
                             <ul className="apply-skipped-handoff-list">
                                 {applyFailureHandoffVisibleItems.map((item, index) => (
                                     <li
@@ -2422,7 +2910,12 @@ const SlidesAnalysis: React.FC = () => {
                                         className="apply-skipped-handoff-item apply-failure-handoff-item"
                                     >
                                         <span className="apply-skipped-handoff-main">
-                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span className="apply-skipped-handoff-title-row">
+                                                <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                                <span className="apply-skipped-handoff-match-badge apply-skipped-handoff-match-badge-manual apply-failure-handoff-status-badge">
+                                                    整批未确认
+                                                </span>
+                                            </span>
                                             <span>{item.previewText}</span>
                                             <span className="apply-skipped-handoff-target">
                                                 {item.targetText}
@@ -2499,7 +2992,23 @@ const SlidesAnalysis: React.FC = () => {
                                         id={`review-filter-${filter}`}
                                         type="button"
                                         className={`review-filter-button ${reviewFilter === filter ? 'review-filter-button-active' : ''}`}
+                                        aria-label={buildReviewFilterButtonBoundary(
+                                            filter,
+                                            reviewFilter === filter,
+                                            getReviewFilterSuggestionCount(filter),
+                                            analysisResult.updateSuggestions.length,
+                                            selectedUpdateCount,
+                                            hiddenSelectedUpdateCount,
+                                        )}
                                         aria-pressed={reviewFilter === filter}
+                                        title={buildReviewFilterButtonBoundary(
+                                            filter,
+                                            reviewFilter === filter,
+                                            getReviewFilterSuggestionCount(filter),
+                                            analysisResult.updateSuggestions.length,
+                                            selectedUpdateCount,
+                                            hiddenSelectedUpdateCount,
+                                        )}
                                         onClick={() => setReviewFilter(filter)}
                                         disabled={isApplying}
                                     >
@@ -2512,6 +3021,8 @@ const SlidesAnalysis: React.FC = () => {
                                     id="restore-high-confidence-fields"
                                     type="button"
                                     className="btn-quiet"
+                                    aria-label={restoreDefaultsButtonBoundary}
+                                    title={restoreDefaultsButtonBoundary}
                                     onClick={handleRestoreHighConfidenceDefaults}
                                     disabled={isApplying || defaultSelectedFieldCount === 0}
                                 >
@@ -2521,6 +3032,8 @@ const SlidesAnalysis: React.FC = () => {
                                     id="clear-selected-fields"
                                     type="button"
                                     className="btn-quiet"
+                                    aria-label={clearSelectionButtonBoundary}
+                                    title={clearSelectionButtonBoundary}
                                     onClick={handleClearSelectedFields}
                                     disabled={isApplying || selectedUpdateCount === 0}
                                 >
@@ -2600,6 +3113,8 @@ const SlidesAnalysis: React.FC = () => {
                                     id="queue-filter-review"
                                     type="button"
                                     className="btn-quiet"
+                                    aria-label={buildQueueFilterButtonBoundary('review', reviewFieldQueueCount)}
+                                    title={buildQueueFilterButtonBoundary('review', reviewFieldQueueCount)}
                                     onClick={() => setReviewFilter('review')}
                                     disabled={isApplying}
                                 >
@@ -2611,6 +3126,8 @@ const SlidesAnalysis: React.FC = () => {
                                     id="queue-filter-blocked"
                                     type="button"
                                     className="btn-quiet"
+                                    aria-label={buildQueueFilterButtonBoundary('blocked', blockedFieldQueueCount)}
+                                    title={buildQueueFilterButtonBoundary('blocked', blockedFieldQueueCount)}
                                     onClick={() => setReviewFilter('blocked')}
                                     disabled={isApplying}
                                 >
@@ -2634,7 +3151,8 @@ const SlidesAnalysis: React.FC = () => {
                                             type="checkbox"
                                             className="field-review-queue-checkbox"
                                             checked={isFieldSelected(projectIndex, field)}
-                                            aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS[field]} 复核选择`}
+                                            aria-label={buildFieldSelectionControlLabel(suggestion, projectIndex, field)}
+                                            title={buildFieldSelectionControlLabel(suggestion, projectIndex, field)}
                                             onChange={(event) => handleFieldSelection(projectIndex, field, event.target.checked)}
                                             disabled={isApplying}
                                         />
@@ -2693,6 +3211,22 @@ const SlidesAnalysis: React.FC = () => {
                             id="review-filter-risk-inline"
                             type="button"
                             className="btn-quiet"
+                            aria-label={buildReviewFilterButtonBoundary(
+                                'risk',
+                                reviewFilter === 'risk',
+                                getReviewFilterSuggestionCount('risk'),
+                                analysisResult.updateSuggestions.length,
+                                selectedUpdateCount,
+                                hiddenSelectedUpdateCount,
+                            )}
+                            title={buildReviewFilterButtonBoundary(
+                                'risk',
+                                reviewFilter === 'risk',
+                                getReviewFilterSuggestionCount('risk'),
+                                analysisResult.updateSuggestions.length,
+                                selectedUpdateCount,
+                                hiddenSelectedUpdateCount,
+                            )}
                             onClick={() => setReviewFilter('risk')}
                             disabled={isApplying}
                         >
@@ -2835,6 +3369,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 {suggestion.sourceInfo.jiraIssues.map((issue, issueIndex) => {
                                                     const isOpenPastDue = isOpenJiraIssue(issue) && isPastDueDate(issue.duedate);
                                                     const issueUrl = getSafeExternalUrl(issue.url);
+                                                    const hiddenIssueUrl = shouldHideExternalUrl(issue.url);
                                                     const updatedLabel = getJiraIssueUpdatedLabel(issue);
 
                                                     return (
@@ -2844,13 +3379,25 @@ const SlidesAnalysis: React.FC = () => {
                                                         borderLeft: '3px solid #0052CC'
                                                     }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            {issueUrl ? (
-                                                                <a href={issueUrl} target="_blank" rel="noreferrer" className="jira-issue-key-link">
-                                                                    {issue.key}
-                                                                </a>
-                                                            ) : (
-                                                                <span className="jira-issue-key-text">{issue.key}</span>
-                                                            )}
+                                                            <span className="jira-issue-key-row">
+                                                                {issueUrl ? (
+                                                                    <a href={issueUrl} target="_blank" rel="noreferrer" className="jira-issue-key-link">
+                                                                        {issue.key}
+                                                                    </a>
+                                                                ) : (
+                                                                    <span
+                                                                        className="jira-issue-key-text"
+                                                                        title={hiddenIssueUrl ? '来源 URL 含凭据或不安全，已隐藏可点击链接' : undefined}
+                                                                    >
+                                                                        {issue.key}
+                                                                    </span>
+                                                                )}
+                                                                {hiddenIssueUrl && (
+                                                                    <span className="jira-issue-link-boundary">
+                                                                        链接已隐藏：来源 URL 含凭据或不安全
+                                                                    </span>
+                                                                )}
+                                                            </span>
                                                             <div style={{ display: 'flex', alignItems: 'center' }}>
                                                                 {issue.priority && (
                                                                     <span className="jira-priority" style={{
@@ -2949,6 +3496,8 @@ const SlidesAnalysis: React.FC = () => {
                                                     type="checkbox" 
                                                     id={`select-all-${index}`} 
                                                     className="select-all-checkbox"
+                                                    aria-label={buildProjectSelectionControlLabel(suggestion)}
+                                                    title={buildProjectSelectionControlLabel(suggestion)}
                                                     checked={allAvailableSelected}
                                                     disabled={isApplying || availableFields.length === 0}
                                                     onChange={(e) => handleSelectAll(index, e.target.checked)}
@@ -2970,7 +3519,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-status-${index}`} 
                                                 className="update-item-checkbox"
-                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.status} 写回选择`}
+                                                aria-label={buildFieldSelectionControlLabel(suggestion, index, 'status')}
+                                                title={buildFieldSelectionControlLabel(suggestion, index, 'status')}
                                                 checked={isFieldSelected(index, 'status')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'status', e.target.checked)}
@@ -3005,7 +3555,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-comments-${index}`} 
                                                 className="update-item-checkbox"
-                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.comments} 写回选择`}
+                                                aria-label={buildFieldSelectionControlLabel(suggestion, index, 'comments')}
+                                                title={buildFieldSelectionControlLabel(suggestion, index, 'comments')}
                                                 checked={isFieldSelected(index, 'comments')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'comments', e.target.checked)}
@@ -3046,7 +3597,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-owner-${index}`} 
                                                 className="update-item-checkbox"
-                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.owner} 写回选择`}
+                                                aria-label={buildFieldSelectionControlLabel(suggestion, index, 'owner')}
+                                                title={buildFieldSelectionControlLabel(suggestion, index, 'owner')}
                                                 checked={isFieldSelected(index, 'owner')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'owner', e.target.checked)}
@@ -3081,7 +3633,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-track-${index}`} 
                                                 className="update-item-checkbox"
-                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.track} 写回选择`}
+                                                aria-label={buildFieldSelectionControlLabel(suggestion, index, 'track')}
+                                                title={buildFieldSelectionControlLabel(suggestion, index, 'track')}
                                                 checked={isFieldSelected(index, 'track')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'track', e.target.checked)}
@@ -3144,6 +3697,8 @@ const SlidesAnalysis: React.FC = () => {
                                             id="copy-selected-writeback-review"
                                             type="button"
                                             className="btn-quiet selected-writeback-copy-button"
+                                            aria-label={reviewPacketCopyButtonBoundary}
+                                            title={reviewPacketCopyButtonBoundary}
                                             onClick={handleCopySelectedWritebackReview}
                                             disabled={isApplying}
                                         >
@@ -3158,6 +3713,20 @@ const SlidesAnalysis: React.FC = () => {
                                             <div className="selected-writeback-decision-receipt-title">写回决策回执</div>
                                             <ul className="selected-writeback-decision-receipt-list">
                                                 {selectedWritebackDecisionReceiptLines.map((line) => (
+                                                    <li key={line}>{line}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {postApplySelectionReceiptLines.length > 0 && (
+                                        <div
+                                            className="post-apply-selection-receipt"
+                                            role="status"
+                                            aria-label="上一批回执后的接管选择回执"
+                                        >
+                                            <div className="post-apply-selection-receipt-title">接管中回执</div>
+                                            <ul className="post-apply-selection-receipt-list">
+                                                {postApplySelectionReceiptLines.map((line) => (
                                                     <li key={line}>{line}</li>
                                                 ))}
                                             </ul>
@@ -3226,6 +3795,8 @@ const SlidesAnalysis: React.FC = () => {
                                             id="show-selected-fields"
                                             type="button"
                                             className="hidden-selection-button"
+                                            aria-label={showSelectedFieldsButtonBoundary}
+                                            title={showSelectedFieldsButtonBoundary}
                                             onClick={handleShowSelectedFields}
                                             disabled={isApplying}
                                         >
@@ -3235,6 +3806,8 @@ const SlidesAnalysis: React.FC = () => {
                                             id="keep-visible-selected-fields"
                                             type="button"
                                             className="hidden-selection-button"
+                                            aria-label={keepVisibleSelectedFieldsButtonBoundary}
+                                            title={keepVisibleSelectedFieldsButtonBoundary}
                                             onClick={handleKeepCurrentViewSelectedFields}
                                             disabled={isApplying}
                                         >
@@ -3261,6 +3834,8 @@ const SlidesAnalysis: React.FC = () => {
                                 <button
                                     id="apply-updates-button"
                                     className="btn-primary"
+                                    aria-label={applyUpdatesButtonBoundary}
+                                    title={applyUpdatesButtonBoundary}
                                     onClick={handleApplyUpdates}
                                     disabled={isApplying || selectedUpdateCount === 0}
                                 >
@@ -3539,6 +4114,24 @@ const styles = `
         line-height: 1.4;
         margin-bottom: 8px;
         padding: 6px 8px;
+    }
+
+    .apply-handoff-copy-receipt {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(9, 30, 66, 0.14);
+        border-radius: 5px;
+        color: #42526e;
+        display: grid;
+        font-size: 12px;
+        gap: 3px;
+        line-height: 1.4;
+        margin-bottom: 8px;
+        padding: 7px 9px;
+    }
+
+    .apply-handoff-copy-receipt-error {
+        border-color: rgba(191, 38, 0, 0.24);
+        color: #bf2600;
     }
 
     .apply-skipped-handoff-list {
@@ -4095,6 +4688,14 @@ const styles = `
         color: inherit;
     }
 
+    .jira-issue-key-row {
+        align-items: center;
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+    }
+
     .jira-issue-key-link,
     .jira-issue-key-text {
         color: #0052cc;
@@ -4105,6 +4706,17 @@ const styles = `
 
     .jira-issue-key-text {
         color: #172b4d;
+    }
+
+    .jira-issue-link-boundary {
+        background: #fff4e5;
+        border: 1px solid #ffd59e;
+        border-radius: 999px;
+        color: #8a4b00;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 7px;
+        overflow-wrap: anywhere;
     }
 
     .jira-updated-meta {
@@ -4379,6 +4991,30 @@ const styles = `
     }
 
     .selected-writeback-decision-receipt-list {
+        display: grid;
+        gap: 3px;
+        list-style: disc;
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .post-apply-selection-receipt {
+        background: #fffbdd;
+        border: 1px solid #ffe380;
+        border-radius: 6px;
+        color: #5f4b00;
+        display: grid;
+        gap: 4px;
+        margin: 0 0 7px;
+        padding: 8px 10px;
+    }
+
+    .post-apply-selection-receipt-title {
+        color: inherit;
+        font-weight: 700;
+    }
+
+    .post-apply-selection-receipt-list {
         display: grid;
         gap: 3px;
         list-style: disc;

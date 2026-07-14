@@ -1,6 +1,6 @@
 # Memory Coverage Map / 记忆覆盖地图
 
-*最后更新: 2026-07-01*
+*最后更新: 2026-07-14*
 
 ## 是什么
 
@@ -36,8 +36,9 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 页面顶部展示整体状态：
 
 - 覆盖快照回执：说明服务端生成时间、本机读取时间；如果重扫失败但旧数据仍在屏幕上，会明确说当前显示的是上次成功快照，失败结果不会覆盖平台卡片。
+- 快照年龄回执：首屏直接显示快照年龄；如果服务端 `generatedAt` 已超过 `staleAfterDays` 新鲜度窗口，会把标题切成“覆盖快照已过期”，并说明质量分和平台卡片仍来自旧快照，用户应先点击 `重扫覆盖` 确认当前状态。这个提示不触发 provider sync、不改配置、不写库，也不外发。
 - 手动重扫回执：用户点击 `重扫覆盖` 后会保留本次请求的发起/完成时间、旧快照、新快照、本次 messages / chunks / entities / 覆盖缺口读数，以及只读边界；重扫失败时不会用失败结果覆盖旧平台卡片。
-- 最近覆盖信号回执：时间线只展示当前快照中带 `lastSeenAt` 的平台事件，用来辅助判断地图新鲜度；如果没有可排序事件，会显示空态并说明这不等于所有来源健康或全部失联，且不会触发同步、写库、标记已读或外发。
+- 最近覆盖信号回执：时间线只展示当前快照中带 `lastSeenAt` 的平台事件，用来辅助判断地图新鲜度；回执会标明这是最多 8 条的可见切片，不是完整同步 / 错误日志或权限证明。如果没有可排序事件，会显示空态并说明这不等于所有来源健康或全部失联，且不会触发同步、写库、标记已读或外发。
 - 已接入平台数。
 - 健康平台数。
 - 需关注平台数。
@@ -49,6 +50,8 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 这些数字来自 `GET /api/v1/coverage/map`，不是 demo 固定值。主聚合接口也会返回响应级 `receipt`：它说明本轮读取的聚合来源、平台 / 缺口 / info 规划项 / 时间线读数、近 7 天新鲜度窗口，以及“只读覆盖聚合快照”的边界。这个 receipt 用来避免调用方把 `/coverage/map` 误读成一次 provider sync、权限 / ACL 完整校验、外部平台修复或内容事实正确性证明。
 
 P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays` 和 `receipt`。`receipt.slice` 标明当前读取的是 messages / provider jobs / pressure / skills sync 哪个切片，`receipt.source` 标明聚合来源，`receipt.boundary` 明确这只是只读覆盖诊断，不会写入记忆、重跑同步、修复配置、标记已读或外发到任何平台。`receipt.summary` 会补充本轮读数摘要，例如行数、总量、近 7 天新鲜度、失败数、启用数、最新时间、诊断窗口和空态解释，避免用户或调试脚本只看到空数组时误以为已经执行了同步、修复或完整审计。
+
+Coverage 页面会在主快照下方展示 `P0 只读诊断切片` 面板，把 messages-by-source、pressure、provider-jobs-recent 和 skills-sync 四个切片的 source、窗口、读数、空态解释、诊断说明和无副作用边界直接显示出来。切片读取失败只影响这个诊断面板，不会覆盖主平台卡片；`刷新切片` 的 hover / 读屏也说明它只重新读取这四个只读 API，不会重扫 `/coverage/map`、不会替换质量分、不会重跑 provider sync、不会写库、不会修复配置、不会标记已读或外发。
 
 ### 平台地图
 
@@ -71,12 +74,13 @@ P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays`
 - 质量分 `qualityScore`，范围 0-100。
 - 平台卡片直接显示质量分摘要、近 7 天信号占比和失败扣分；点开平台后再看完整 `qualityScoreBreakdown`。
 - 质量分解释 `qualityScoreBreakdown`，把状态基准、健康贡献、新鲜度和失败惩罚拆开，避免只给一个黑箱数字。
+- 质量分解释先显示 `质量分快照口径`：说明分数来自当前 Coverage API 快照、快照年龄、最近信号、新鲜度窗口，以及只有 `重扫覆盖` 拿到新的 `/coverage/map` 响应后才会替换质量分、平台卡片和优先处理。
 - 低分平台会在质量分解释里标出 `优先处理` 的贡献项、状态、最近信号和证据 source，让用户不用从列表里猜先修哪里。
 - 质量分解释同时显示 `质量分边界`：分数只衡量当前可读覆盖状态、贡献项健康、新鲜度和失败/积压惩罚；不判断内容事实是否正确、是否完整，也不代表可以直接进入回复、画像或外部同步。未启用的可选通道不会混进当前平台低分，修复仍需要用户检查来源或显式执行录入/同步动作。
-- 总览下方会高亮 active / derived 平台里最需要处理的最低分平台，直接展示短板贡献项、焦点来源、证据 source 和下一步；`查看平台` 只定位当前覆盖快照与修复队列，不会重跑同步、改配置、写入记忆、标记已读或外发。
+- 总览下方会高亮 active / derived 平台里最需要处理的最低分平台，直接展示短板贡献项、焦点来源、证据 source 和下一步；`查看平台` 的 hover / 读屏说明它只定位当前覆盖快照与修复队列，不会重扫 Coverage API、刷新诊断切片、重跑同步、改配置、写入记忆、标记已读或外发。
 - Coverage API 会返回结构化 `priorityFocus`，优先选择 active / derived 平台里的 critical / warning 修复项，再按质量分和状态排序；前端优先消费这个字段，旧数据缺字段时才回退到本地低分推断。这样 info 级 P1+ 规划项不会被误当成当前故障。
 - `priorityFocus` 还会返回质量分修复路线回执：本轮比较了多少候选平台、排除了多少 info 规划项、为什么当前短板成为下一步，以及查看平台的只读边界。平台详情里的 `质量分修复路线` 会复述同一条路线，避免用户把可选未启用通道误读成当前故障。
-- 平台列表支持 `默认` / `低分优先` 排序；低分优先只作用于 active / derived 平台，不把未启用的 P1+ 规划通道混成当前故障。
+- 平台列表支持 `默认` / `低分优先` 排序；低分优先只作用于 active / derived 平台，不把未启用的 P1+ 规划通道混成当前故障。排序按钮本身带 hover / 读屏边界：`低分优先` 只重排当前前端快照，`默认` 只恢复 API 返回顺序和平台分组；两者都不会重扫 Coverage API、重算质量分、重跑 provider sync、写库、标记已读或外发。切到低分优先时页面显示 `质量分排序回执`，说明排序范围、未启用 / 系统入口的排除口径，以及质量分不判断内容事实正确性。
 - 选中后的详情、贡献列表和修复队列。
 
 ### 修复队列
@@ -114,6 +118,7 @@ P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays`
 - 空文本文件、空粘贴内容、扫描件 PDF 或不支持格式会显示阻塞原因，不允许写入空 shadow memory。
 - dry-run warning 会在抽屉里直接展示；普通文档 / zip 会额外显示预检回执，说明可录入、阻塞、未预检和 chunks 数，避免用户误以为大型 zip 已完整分析。
 - 普通文档 / zip dry-run 后还会显示 `资料录入恢复回执`：说明现在提交只会写入 ready 条目，阻塞或未预检内容不会被后台自动补扫，并给出拆分 zip、修正格式、重新 dry-run 的恢复路径。
+- 抽屉底部主按钮会把当前动作边界写进 hover 和读屏名称：未 dry-run 时说明 `查看 dry-run` 只读不建 batch / messages / chunks；ready 后说明 `提交录入` 会写入哪个范围的低权重 `manual` shadow memory；高风险、重复、阻塞、外部 AI 和备份恢复状态也会在同一控制点说明禁用或下一步原因。
 - 如果发现 password / token / api key / 密钥等高风险词，用户必须勾选确认后才能提交；后端 `/import/commit` 也会重新计算高风险信号，没有明确 `confirmHighRisk` 时拒绝写入，避免绕过 UI。
 - 确认后写入 `messages_raw` 和 `chunks`。
 - 使用 `source_type = manual`、`source = import:<batchId>`。
@@ -124,14 +129,18 @@ P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays`
 - batch summary 会记录 `profileCandidates`、`skillSignals`、`highRisk`、`unsupported`、`externalAiConversations` 和被跳过/忽略的 warning，方便后续把高价值条目升级成候选。
 - 外部 AI 历史包不会受普通 zip 80 文件预检上限影响；命中 `conversations.json` 后只把对话内容作为导入候选，归档里的附件、账户文件或其他导出元数据会被忽略并在 dry-run 中提示。
 - 外部 AI dry-run 会显示 `外部 AI 导入范围` 回执，明确读取哪个 `conversations.json`、纳入多少文本消息、多少长会话被截断、多少非文本部件和非对话归档文件被忽略；commit 后这些字段也写入 `memory_import_batches.summary_json`，用于 Coverage Map 平台卡继续展示来源范围。
-- 外部 AI dry-run 还会显示 `提交前会发生什么` 回执，说明本次会把多少会话/文本消息写入哪个范围、写入后只是低权重 `manual` shadow memory、不会自动抓取原平台或外发回原平台、不会直接升级为 confirmed 画像/skill/项目事实，并提示重复归档按 source hash 去重、需要复查时按 import batch / source 路径审计。
+- 外部 AI dry-run 还会显示 `提交前会发生什么` 回执，说明本次会把多少会话/文本消息写入哪个范围、写入后只是低权重 `manual` shadow memory、不会自动抓取原平台或外发回原平台、不会直接升级为 confirmed 画像/skill/项目事实，并提示重复归档按 source hash 去重、需要复查时按 import batch / source 路径审计。回执还会明确旧 assistant 回答只是对话证据，不等于事实确认。
+- 点击普通资料 / 文档 / 普通 zip 的 `提交录入` 后、服务端确认前，抽屉显示 `资料写入提交中回执`：复述 ready 条目、chunks、目标范围、高风险确认状态、阻塞/未预检遗漏，以及提交中不等于写入成功；成功也只是低权重 `manual` shadow memory，不会自动同步外部平台、覆盖旧 batch、确认画像/skill/项目事实、发送消息或外发导入内容。
+- 点击 `提交录入` 后、服务端确认前，外部 AI 历史会显示 `外部 AI 写入提交中回执`：复述本次会话/文本消息/遗漏项、目标范围和 `conversations.json` 路径，并说明提交中不等于写入成功，不会继续抓取 ChatGPT / Claude / Gemini、不会外发回原平台，也不会直接升级为 confirmed 画像、skill 或项目事实；旧 assistant 回答同样不会在服务端确认后直接变成事实。
+- dry-run 或提交请求处理中，来源切换、文件选择、work/personal 范围和粘贴文本会临时锁定；按钮 / 输入框 hover 与读屏说明本次请求仍使用点击时的输入快照和范围，完成前不能改来源、文件、范围或文本，避免旧 dry-run / 写入结果挂到新输入旁边。
+- 录入完成后，完成回执会保留 batch/source hash 审计路径和事实边界：已写入的用户原话与旧 assistant 回答仍只是可追溯对话证据，后续召回、画像、skill 或项目事实需要各自证据门控。
 - 普通 zip 只预检前 80 个文件，dry-run summary 会返回 zip 总文件数、已预检文件数和未预检文件数；未预检部分不会在 commit 中写入。
 - 外部 AI 历史最多预检前 40 个会话、每个会话纳入前 80 条消息；如果长会话被截断，dry-run 会显示纳入消息数、总消息数、截断会话数和 warning，避免用户误以为完整历史已经写入。
 - ChatGPT mapping 会按会话树和时间回退保持真实对话顺序；没有文本内容的图片、附件和对象型 message part 不会被 JSON 原样塞进记忆，而是在 dry-run 中计为“跳过非文本”并写入 warning。
 
 ### 备份下载与恢复
 
-右上角 `记忆备份` 直接调用 `POST /api/v1/export` 下载 Personal AI backup zip，不再进入 Options 设置页。点击前页面会先显示 `备份操作前回执`，说明这个按钮只会请求并保存本机 backup zip，不会恢复、删除、替换、同步或外发；真正恢复必须从 `录入 > 备份 zip` 重新选择文件，先 dry-run，再按 merge/replace 影响预览确认。下载成功后页面会保留 `备份下载回执`，展示文件名、下载时间、zip 类型/大小和边界：这只是本机保存的备份文件，不会自动恢复、删除、同步或外发。如果下载失败，页面会保留 `备份下载失败回执` 并替换旧的成功回执，明确本次没有生成或保存 backup zip，也没有恢复、删除、同步或外发任何记忆，用户需要确认 Memory Service 可用后重试。
+右上角 `记忆备份` 直接调用 `POST /api/v1/export` 下载 Personal AI backup zip，不再进入 Options 设置页。点击前页面会先显示 `备份操作前回执`，说明这个按钮只会请求并保存本机 backup zip，不会恢复、删除、替换、同步或外发；请求等待期间会显示 `备份下载提交中回执`，把当前未确认的新 zip、旧成功/失败回执和无副作用边界分开；真正恢复必须从 `录入 > 备份 zip` 重新选择文件，先 dry-run，再按 merge/replace 影响预览确认。下载成功后页面会保留 `备份下载回执`，展示文件名、下载时间、zip 类型/大小、manifest 摘要和 archive SHA-256 短指纹；这只是本机保存的备份文件，不会自动恢复、删除、同步或外发。如果下载失败，页面会保留 `备份下载失败回执` 并替换旧的成功回执，明确本次没有生成或保存 backup zip，也没有恢复、删除、同步或外发任何记忆，用户需要确认 Memory Service 可用后重试。
 
 备份恢复共用 `录入` 抽屉：
 
@@ -139,11 +148,11 @@ P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays`
 2. `POST /api/v1/import/inspect` 识别是否为 Personal AI backup schema。
 3. 只有后端预检明确返回 `backup_zip` 后才显示恢复区域；如果用户从 `备份 zip` 入口选了普通 zip，页面会退回普通资料 dry-run，不会误报成备份。
 4. 命中备份 zip 后，抽屉会隐藏普通资料的 `work/personal` 写入范围，改为显示 `备份恢复目标回执`：恢复目标来自当前 Memory Service 用户空间，普通资料范围只用于文档 / 普通 zip / 外部 AI 历史录入。
-5. 命中备份 zip 但还没有 restore dry-run 预览前，抽屉显示 `备份恢复预览门禁`：说明当前文件、merge/replace 预览模式、下一步只是读取 manifest / DB / 文件影响的 dry-run，不会写入、删除、替换、同步外部平台或外发。
+5. 命中备份 zip 但还没有 restore dry-run 预览前，抽屉显示 `备份恢复预览门禁`：说明当前文件、merge/replace 预览模式、下一步只是读取 manifest / archive 指纹 / DB / 文件影响的 dry-run，不会写入、删除、替换、同步外部平台或外发。
 6. 命中备份 zip 后默认 merge；勾选 `覆盖替换现有记忆` 后使用 replace。
-7. restore dry-run 会先展示备份用户、导出时间、DB 行数、文件写入/覆盖/保留/删除影响、关键影响路径和 warning，避免用户在不知道影响范围时确认。
+7. restore dry-run 会先展示备份用户、导出时间、archive SHA-256 短指纹、DB 行数、文件写入/覆盖/保留/删除影响、关键影响路径和 warning，避免用户在不知道影响范围或无法核对备份快照时确认。
 8. 如果存在跨用户 warning、replace、覆盖或删除影响，确认恢复前必须勾选已复核影响预览；replace 不再使用浏览器原生 confirm，而是在抽屉内额外要求勾选“确认按 replace 替换当前记忆数据库”后才允许写入。
-9. 最终恢复复用现有 `POST /api/v1/import`；恢复完成后抽屉显示写入回执和 `恢复后续回执`，说明已写入的 Layer、Coverage Map 自动刷新结果、再次恢复必须重新选 zip，以及恢复不会自动同步外部平台、启用未配置通道或替用户发送内容。如果写入成功但自动刷新 Coverage Map 失败，回执会明确说当前主视图可能仍是旧快照，并保留失败原因与手动 `重扫覆盖` 路径；同时禁用重复确认按钮，需要再次恢复时重新选择备份文件。
+9. 最终恢复复用现有 `POST /api/v1/import`；恢复完成后抽屉显示写入回执和 `恢复后续回执`，说明已写入的 Layer、同一 archive 指纹、Coverage Map 自动刷新结果、再次恢复必须重新选 zip，以及恢复不会自动同步外部平台、启用未配置通道或替用户发送内容。如果写入成功但自动刷新 Coverage Map 失败，回执会明确说当前主视图可能仍是旧快照，并保留失败原因与手动 `重扫覆盖` 路径；同时禁用重复确认按钮，需要再次恢复时重新选择备份文件。
 
 备份 zip 的 schema 识别会先扫描完整 zip 文件列表确认 `manifest.json`、`user/memory.db`、`user/config.json` 和 `personal-ai-memory-backup` manifest，再把普通资料解析限制在前 80 个文件内。这样大型 Personal AI 备份不会因为条目数较多而被误判为普通文档包，但普通资料导入仍保持预检上限。
 
@@ -206,7 +215,7 @@ P0 切片接口也会返回只读诊断回执：`generatedAt`、`staleAfterDays`
 - Notion Enterprise Search 说明 connector 查询要遵守源系统权限、同步失败会重试并暴露进度/错误；Coverage Map 因此保留 source / permission / sync 语义，不把切片读数伪装成权限确认或外部平台写入。
 - OpenAI ChatGPT data export 与 Claude data export 说明外部 AI 历史迁移正在变成用户预期，但导出通常是用户主动下载的 zip / conversations 数据，不能假设所有内容都安全、完整或高质量；长对话必须把纳入范围展示清楚。
 - ChatGPT exported conversation transfer、Claude memory/file upload 和 Notion import docs 都把支持格式、大小限制、迁移边界或拆分大文件作为显性步骤；普通资料 dry-run 因此需要把 ready、blocked、uninspected 与恢复动作放在同一个回执里，而不是只给汇总数字。
-- Google Takeout、ChatGPT data export 和 Claude memory import/export 都把“先生成/下载归档，再由用户选择导入或保存”的路径变成常见心智；Coverage Map 因此保持一键下载、上传后自动识别、恢复前 dry-run 的轻量路径。
+- Google Takeout、ChatGPT data export 和 Claude memory import/export 都把“先生成/下载归档，再由用户选择导入或保存”的路径变成常见心智；NIST 的数据完整性恢复指南也强调恢复前识别正确备份版本和完整性。Coverage Map 因此保持一键下载、上传后自动识别、恢复前 dry-run，并把 archive 指纹贯穿下载、预览、失败和写入回执。
 - PIM 研究反复指出，个人信息会碎片化在多个设备和应用之间；Coverage Map 的价值是让用户先看见 Personal AI 实际覆盖了哪里，而不是假设所有来源都已统一。
 - 数据质量研究通常把完整性、时效性/新鲜度、准确性、一致性和相关性视为核心维度；当前 `qualityScore` 先落在覆盖状态、新鲜度和失败/积压可解释性上，暂不假装评估内容准确性。
 - 数据可携带性用户研究显示，用户查看导出数据本身会增强控制感，但“迁移到替代服务”的可用性经常有限；恢复入口要把归档识别、影响预览和失败原因直接展示出来，而不是只给一个成功/失败提示。

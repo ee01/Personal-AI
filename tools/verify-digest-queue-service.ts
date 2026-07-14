@@ -595,6 +595,7 @@ async function verifyPendingDigestQueueStatusIsExplainable() {
   const statusSummary = await digestQueueService.getQueueStatusSummary(now);
   assert.equal(statusSummary.totalItems, 2);
   assert.equal(statusSummary.dueItems, 0);
+  assert.equal(statusSummary.checkedAt, now.toISOString());
   assert.ok(statusSummary.nextReleaseAt, 'next release time should be exposed');
   assert.equal(statusSummary.tasks[0]?.taskName, 'ConcernedItems 定时消息摘要');
   assert.deepEqual(statusSummary.tasks[0]?.sourceBreakdown, [
@@ -659,6 +660,7 @@ async function verifyDueAndFutureDigestQueueStatusIsExplainable() {
   const statusSummary = await digestQueueService.getQueueStatusSummary(now);
   assert.equal(statusSummary.totalItems, 2);
   assert.equal(statusSummary.dueItems, 1);
+  assert.equal(statusSummary.checkedAt, now.toISOString());
   assert.ok(
     statusSummary.nextReleaseAt,
     'future digest item should keep the next release timestamp visible',

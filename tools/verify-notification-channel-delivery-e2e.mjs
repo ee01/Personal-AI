@@ -61,6 +61,14 @@ async function startMockMemoryServer() {
             limit: 20,
             returned: feedItems.length,
             hasMore: false,
+            snapshotReceipt: {
+              label: 'Feed 快照口径回执',
+              generatedAt: 1_777_000_002,
+              detail:
+                'Chrome 滚动同步在 2026-04-25 08:26:42 读取；本次按待办/通知范围和 limit=20 返回 4 条，当前页未发现更多条目。',
+              boundary:
+                '这是本次读取时的只读队列快照；不代表之后没有新通知，不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+            },
           },
         });
         return;
@@ -195,6 +203,109 @@ const feedItems = [
     },
     channelReceipts: [],
   },
+  {
+    sourceRef: 'notification:notif-snoozed-due',
+    sourceType: 'notification',
+    sourceId: 'notif-snoozed-due',
+    lane: 'todo',
+    priority: 'high',
+    title: 'Deferred deadline probe',
+    body: 'This deferred reminder should clearly remain unresolved.',
+    dueAt: 1_777_003_600,
+    createdAt: 1_777_000_002,
+    sentAt: 1_777_000_002,
+    type: 'deadline',
+    payload: {
+      summary: 'Original reminder context should stay visible.',
+      snooze: {
+        sourceNotificationId: 'notif-snoozed-source',
+        rootNotificationId: 'notif-snoozed-root',
+        snoozedAt: 1_776_994_202,
+        scheduledAt: 1_777_000_002,
+        delaySeconds: 90 * 60,
+        count: 2,
+      },
+    },
+    deliveryContext: {
+      channel: 'chrome',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    },
+    snoozeReceipt: {
+      label: '第2次稍后提醒',
+      detail:
+        '来源通知 notif-snoozed-source；根通知 notif-snoozed-root；原定回提醒 2026-04-25 08:26；上次延后 90分钟',
+      boundary:
+        '这是稍后提醒到点的上下文；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+      sourceNotificationId: 'notif-snoozed-source',
+      rootNotificationId: 'notif-snoozed-root',
+      snoozedAt: 1_776_994_202,
+      scheduledAt: 1_777_000_002,
+      delaySeconds: 90 * 60,
+      count: 2,
+    },
+    evidenceReceipt: {
+      evidenceCount: 2,
+      label: '依据 2 条记忆',
+      detail: '本次通知依据：message:deadline:source、memory:project-risk',
+      boundary:
+        '只说明生成这条通知时引用过的记忆证据；不会确认、忽略、重发通知，或改变任何渠道投递状态。',
+      sampleRefs: ['message:deadline:source', 'memory:project-risk'],
+    },
+    channelReceipts: [],
+  },
+  {
+    sourceRef: 'notification:notif-cross-channel',
+    sourceType: 'notification',
+    sourceId: 'notif-cross-channel',
+    lane: 'notice',
+    priority: 'high',
+    title: 'Cross channel delivery probe',
+    body: 'This item should expose other-channel state in Chrome.',
+    createdAt: 1_777_000_003,
+    sentAt: 1_777_000_003,
+    type: 'project_update',
+    payload: {
+      summary: 'Chrome is seeing this for the first time after other channels.',
+    },
+    deliveryContext: {
+      channel: 'chrome',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    },
+    channelReceipts: [
+      {
+        channel: 'chrome',
+        state: 'not_attempted',
+        label: '未尝试',
+        detail: '该渠道尚未写入投递回执',
+        hasSuccessfulDelivery: false,
+      },
+      {
+        channel: 'doubao',
+        state: 'delivered',
+        label: '已送达',
+        detail: '渠道已报告送达；这不等于用户已处理',
+        status: 'delivered',
+        effectiveStatus: 'delivered',
+        hasSuccessfulDelivery: true,
+        firstDeliveredAt: 1_777_000_000,
+        lastDeliveredAt: 1_777_000_000,
+        lastAttemptAt: 1_777_000_000,
+      },
+      {
+        channel: 'glip',
+        state: 'failed',
+        label: '发送失败',
+        detail: '最近一次渠道发送失败：bot_not_configured',
+        status: 'failed',
+        effectiveStatus: 'failed',
+        hasSuccessfulDelivery: false,
+        lastAttemptAt: 1_777_000_001,
+        lastError: 'bot_not_configured',
+      },
+    ],
+  },
 ];
 
 const deliveryBatches = [];
@@ -219,6 +330,9 @@ try {
       globalThis.__notificationCreateCalls.push({
         notificationId,
         title: options?.title,
+        message: options?.message,
+        contextMessage: options?.contextMessage,
+        buttons: options?.buttons?.map((button) => button.title),
       });
       if (notificationId.includes('notif-create-fail')) {
         throw new Error('simulated_chrome_notification_create_failure');
@@ -233,7 +347,7 @@ try {
   }, mockMemory.baseUrl);
 
   await waitFor(
-    () => deliveryBatches.flat().length >= 2,
+    () => deliveryBatches.flat().length >= 4,
     'failed and delivered delivery reports',
     70000,
   );
@@ -249,6 +363,8 @@ try {
     [
       ['notification:notif-create-fail', 'chrome', 'notice', 'failed'],
       ['notification:notif-create-ok', 'chrome', 'notice', 'delivered'],
+      ['notification:notif-snoozed-due', 'chrome', 'todo', 'delivered'],
+      ['notification:notif-cross-channel', 'chrome', 'notice', 'delivered'],
     ],
   );
   assert.match(
@@ -261,12 +377,26 @@ try {
   const createCalls = await serviceWorker.evaluate(
     () => globalThis.__notificationCreateCalls,
   );
-  assert.equal(createCalls.length, 2);
+  assert.equal(createCalls.length, 4);
   assert.match(createCalls[0].notificationId, /notif-create-fail/);
   assert.match(createCalls[1].notificationId, /notif-create-ok/);
+  assert.match(createCalls[2].notificationId, /notif-snoozed-due/);
+  assert.match(createCalls[3].notificationId, /notif-cross-channel/);
+  assert.match(createCalls[2].contextMessage, /第2次稍后提醒/);
+  assert.match(createCalls[2].contextMessage, /依据 2 条记忆/);
+  assert.match(createCalls[2].contextMessage, /仍未处理/);
+  assert.match(createCalls[2].contextMessage, /延后90分钟/);
+  assert.match(createCalls[2].contextMessage, /稍后按钮：/);
+  assert.deepEqual(createCalls[2].buttons, ['查看待办', '稍后提醒']);
+  assert.match(createCalls[3].contextMessage, /本渠道首次提醒/);
+  assert.match(createCalls[3].contextMessage, /其他渠道 豆包已送达/);
+  assert.match(
+    createCalls[3].contextMessage,
+    /Glip发送失败（bot_not_configured，未送达）/,
+  );
 
   console.log(
-    '✅ notification channel delivery E2E passed: create failure wrote failed receipt and later item still delivered',
+    '✅ notification channel delivery E2E passed: create failure wrote failed receipt, later items still delivered, due snooze kept unresolved context, and cross-channel receipts stayed visible',
   );
 } finally {
   if (launched?.context) {

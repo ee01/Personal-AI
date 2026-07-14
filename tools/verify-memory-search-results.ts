@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   buildMemoryLinkRecoveryCopiedReceipt,
@@ -9,6 +10,7 @@ import {
   formatScopeBoundaryNotice,
   formatEmptySearchReceipt,
   formatEvidenceChannelOverlapReceipt,
+  formatSearchResultBatchReceipt,
   formatSourceCoverageReceipt,
   formatRecallChannelDiagnostics,
   formatRecallChannelReceipt,
@@ -30,6 +32,23 @@ import {
   formatTypeFilterChipHint,
   formatTypeFilterReceipt,
 } from '../src/modals/searchResultPresentation.js';
+
+const searchResultPageSource = readFileSync(
+  new URL('../src/modals/components/SearchResultPage.vue', import.meta.url),
+  'utf8',
+);
+
+assert.match(searchResultPageSource, /aria-label="搜索范围请求中"/);
+assert.match(searchResultPageSource, /aria-label="结果批次回执"/);
+assert.match(searchResultPageSource, /formatSearchResultBatchReceipt/);
+assert.match(searchResultPageSource, /上一次可见快照[\s\S]+返回前不会把它当成本轮证据/);
+assert.match(
+  searchResultPageSource,
+  /这次只读取当前范围，不会写入、删除、同步外部来源、写反馈或确认事实/,
+);
+assert.match(searchResultPageSource, /class="action-btn primary result-open-btn"/);
+assert.match(searchResultPageSource, /:aria-label="getSearchResultOpenActionLabel\(entity\)"/);
+assert.match(searchResultPageSource, /不会写入记忆、反馈或来源系统/);
 
 assert.equal(getScopeLabel('work'), '工作记忆');
 assert.equal(getScopeLabel('personal'), '个人记忆');
@@ -228,6 +247,74 @@ assert.equal(
   null,
 );
 assert.deepEqual(
+  formatSearchResultBatchReceipt({
+    query: 'feedback query',
+    scope: 'work',
+    mode: 'overview',
+    selectedTypeFilter: 'all',
+    selectedTypeLabel: '全部',
+    visibleCount: 2,
+    totalCount: 2,
+    channelDiagnostics: [
+      { channel: 'vector', status: 'hit', candidateCount: 1 },
+      { channel: 'fts', status: 'hit', candidateCount: 2 },
+      { channel: 'graph', status: 'empty', candidateCount: 0 },
+    ],
+  }),
+  {
+    title: '结果批次回执',
+    detail:
+      '当前 2 条卡片绑定查询“feedback query”、工作记忆和Ask 智能搜索；这是 Memory Service 已返回结果的页面批次基准，类型筛选只收窄这批结果，不会重新召回、重排、同步外部来源或确认事实。反馈按钮仍按卡片上的反馈范围单独写入。',
+    tone: 'info',
+    metrics: [
+      '查询 feedback query',
+      '范围 工作记忆',
+      'Ask 智能搜索',
+      '结果 2',
+      '通道 2/3 命中',
+      '批次只读',
+    ],
+  },
+);
+assert.deepEqual(
+  formatSearchResultBatchReceipt({
+    query: 'changed feedback query',
+    scope: 'all',
+    mode: 'entity',
+    entityTypeLabel: '片段',
+    selectedTypeFilter: 'chunk',
+    selectedTypeLabel: '片段',
+    visibleCount: 1,
+    totalCount: 3,
+    channelDiagnostics: [
+      { channel: 'vector', status: 'skipped', candidateCount: 0 },
+      { channel: 'fts', status: 'hit', candidateCount: 3 },
+    ],
+  }),
+  {
+    title: '结果批次回执',
+    detail:
+      '当前片段可见 1/3 条卡片绑定查询“changed feedback query”、全部记忆和实体搜索 片段；这是 Memory Service 已返回结果的页面批次基准，类型筛选只收窄这批结果，不会重新召回、重排、同步外部来源或确认事实。反馈按钮仍按卡片上的反馈范围单独写入。',
+    tone: 'warning',
+    metrics: [
+      '查询 changed feedback query',
+      '范围 全部记忆',
+      '实体搜索 片段',
+      '可见 1/3',
+      '通道 1/2 命中',
+      '批次只读',
+    ],
+  },
+);
+assert.equal(
+  formatSearchResultBatchReceipt({
+    query: '',
+    totalCount: 2,
+    visibleCount: 2,
+  }),
+  null,
+);
+assert.deepEqual(
   formatTypeFilterReceipt({
     selectedTypeFilter: 'chunk',
     selectedTypeLabel: '片段',
@@ -400,9 +487,36 @@ assert.deepEqual(
     metrics: ['多通道 0', '单通道 2', '本地摘要'],
   },
 );
-assert.equal(
+assert.deepEqual(
   formatEvidenceChannelOverlapReceipt({
     visibleResults: [{ id: 'single-result', channels: ['fts'] }],
+  }),
+  {
+    title: '证据通道交叉回执',
+    summary: '当前 1 条可见结果为单通道证据，尚无通道交叉支持。',
+    detail:
+      '这是已返回证据的本地交叉支持摘要；多通道命中只说明同一证据被多条检索路径找回，不等于事实已确认，也不会重新召回、重排、写反馈或写入记忆。',
+    tone: 'warning',
+    metrics: ['多通道 0', '单通道 1', '本地摘要'],
+  },
+);
+assert.deepEqual(
+  formatEvidenceChannelOverlapReceipt({
+    visibleResults: [{ id: 'single-multi-result', channels: ['vector', 'fts'] }],
+  }),
+  {
+    title: '证据通道交叉回执',
+    summary:
+      '当前 1 条可见结果由多个召回通道共同命中。常见交叉：语义+关键词 1。',
+    detail:
+      '这是已返回证据的本地交叉支持摘要；多通道命中只说明同一证据被多条检索路径找回，不等于事实已确认，也不会重新召回、重排、写反馈或写入记忆。',
+    tone: 'info',
+    metrics: ['多通道 1', '单通道 0', '交叉 语义+关键词 1', '本地摘要'],
+  },
+);
+assert.equal(
+  formatEvidenceChannelOverlapReceipt({
+    visibleResults: [{ id: 'legacy-no-channel' }],
   }),
   null,
 );

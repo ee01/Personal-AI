@@ -27,6 +27,8 @@ import {
   buildAgentWorkflowDiagnosticSnapshot,
   buildAgentWorkflowReplaySourceReceipt,
   buildAgentWorkflowRunScopeReceipt,
+  buildAgentWorkflowSavedScenarioDeleteReceipt,
+  buildAgentWorkflowSavedScenarioCapacityReceipt,
   buildAgentWorkflowSavedRegressionCoverageReceipt,
   buildAgentWorkflowSavedRegressionScopeReceipt,
   buildAgentWorkflowResultExpectation,
@@ -81,6 +83,7 @@ import {
   getContextSiteMuteExpiresAt,
   normalizeContextPageBlockPrefix,
   normalizeContextSiteMuteHost,
+  isContextHostCoveredBySiteRecord,
   pruneContextPageBlockRecord,
   pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
@@ -168,6 +171,7 @@ interface DigestManualPushReceipt {
   phase?: DigestManualPushPhase;
   generated: boolean;
   target: BotPushTargetMode;
+  groupId?: string;
   targetLabel: string;
   notificationCreated?: boolean;
   botSent?: boolean;
@@ -201,17 +205,23 @@ function formatDigestPushTargetLabel(
   return 'Me';
 }
 
+function normalizeDigestPushGroupId(groupId?: string): string {
+  return String(groupId || '').trim();
+}
+
 function buildPendingDigestPushReceipt(
   kind: DigestManualPushKind,
   target: BotPushTargetMode,
   groupId?: string,
 ): DigestManualPushReceipt {
+  const normalizedGroupId = normalizeDigestPushGroupId(groupId);
   return {
     kind,
     phase: 'pending',
     generated: false,
     target,
-    targetLabel: formatDigestPushTargetLabel(target, groupId),
+    groupId: normalizedGroupId,
+    targetLabel: formatDigestPushTargetLabel(target, normalizedGroupId),
   };
 }
 
@@ -221,12 +231,14 @@ function buildBlockedDigestPushReceipt(
   groupId: string | undefined,
   reason: string,
 ): DigestManualPushReceipt {
+  const normalizedGroupId = normalizeDigestPushGroupId(groupId);
   return {
     kind,
     phase: 'blocked',
     generated: false,
     target,
-    targetLabel: formatDigestPushTargetLabel(target, groupId),
+    groupId: normalizedGroupId,
+    targetLabel: formatDigestPushTargetLabel(target, normalizedGroupId),
     notificationCreated: false,
     botSent: false,
     reason,
@@ -1113,6 +1125,37 @@ function ContextSiteMuteSettings() {
     return pruned.record;
   };
 
+  const buildAllowedSiteRecordFromViews = (): Record<string, number> =>
+    Object.fromEntries(allowedSites.map((site) => [site.host, Date.now()]));
+
+  const formatSiteControlActionReceipt = (
+    actionSummary: string,
+    options: {
+      host?: string;
+      allowRecord?: Record<string, number>;
+      nextAllowlistMode?: boolean;
+      forceAllPassiveQuiet?: boolean;
+      forceDefaultMode?: boolean;
+    } = {},
+  ): string => {
+    const nextAllowlistMode =
+      options.nextAllowlistMode ?? (options.forceDefaultMode ? false : allowlistMode);
+    const allowRecord = options.allowRecord ?? buildAllowedSiteRecordFromViews();
+    let effectSummary = '已打开页面会实时重新评估右下角 Lens、页面召回和被动入库候选';
+
+    if (options.forceAllPassiveQuiet) {
+      effectSummary = '白名单模式下普通网页被动提示会全部保持静默';
+    } else if (nextAllowlistMode && options.host) {
+      effectSummary = isContextHostCoveredBySiteRecord(options.host, allowRecord)
+        ? '此站点在允许列表内，已打开页面会实时重新评估右下角 Lens、页面召回和被动入库候选'
+        : '白名单模式仍会让此站点的被动提示保持静默，除非重新加入允许列表';
+    } else if (nextAllowlistMode && Object.keys(allowRecord).length === 0) {
+      effectSummary = '白名单模式当前没有允许站点，普通网页被动提示全部保持静默';
+    }
+
+    return `${actionSummary}；${effectSummary}；主动划词仍可用；不会写入、删除、同步或外发已有记忆。`;
+  };
+
   const refreshSiteControls = async (nextMessage = '') => {
     setLoading(true);
     try {
@@ -1156,7 +1199,11 @@ function ContextSiteMuteSettings() {
         [CONTEXT_SITE_MUTE_STORAGE_KEY]: record,
       });
       setMutedSites(toMutedSiteViews(record));
-      setMessage(`已恢复 ${host} 的网页记忆提示`);
+      setMessage(
+        formatSiteControlActionReceipt(`已移除 ${host} 的临时静默`, {
+          host,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to unmute context site:', error);
       setMessage('恢复站点失败');
@@ -1170,7 +1217,11 @@ function ContextSiteMuteSettings() {
     try {
       await chrome.storage.local.set({ [CONTEXT_SITE_MUTE_STORAGE_KEY]: {} });
       setMutedSites([]);
-      setMessage('已恢复全部网页记忆提示站点');
+      setMessage(
+        formatSiteControlActionReceipt('已清空全部临时静默站点', {
+          forceAllPassiveQuiet: allowlistMode && allowedSites.length === 0,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to clear context site mutes:', error);
       setMessage('恢复全部站点失败');
@@ -1187,9 +1238,16 @@ function ContextSiteMuteSettings() {
       });
       setAllowlistMode(nextValue);
       setMessage(
-        nextValue
-          ? '已开启白名单模式：仅允许列表内站点显示网页记忆提示'
-          : '已关闭白名单模式：恢复默认站点规则',
+        formatSiteControlActionReceipt(
+          nextValue
+            ? '已开启白名单模式：仅允许列表内站点显示网页记忆提示'
+            : '已关闭白名单模式：恢复默认站点规则',
+          {
+            nextAllowlistMode: nextValue,
+            forceAllPassiveQuiet: nextValue && allowedSites.length === 0,
+            forceDefaultMode: !nextValue,
+          },
+        ),
       );
     } catch (error) {
       console.warn('Failed to update context allowlist mode:', error);
@@ -1239,9 +1297,15 @@ function ContextSiteMuteSettings() {
       const removedConflictCount =
         nextMuteRecord.removedHosts.length + nextBlockRecord.removedHosts.length;
       setMessage(
-        removedConflictCount > 0
-          ? `已允许 ${host} 显示网页记忆提示，并移除 ${removedConflictCount} 条覆盖它的静默/屏蔽规则`
-          : `已允许 ${host} 显示网页记忆提示`,
+        formatSiteControlActionReceipt(
+          removedConflictCount > 0
+            ? `已允许 ${host} 显示网页记忆提示，并移除 ${removedConflictCount} 条覆盖它的静默/屏蔽规则`
+            : `已允许 ${host} 显示网页记忆提示`,
+          {
+            host,
+            allowRecord,
+          },
+        ),
       );
     } catch (error) {
       console.warn('Failed to allow context site:', error);
@@ -1260,7 +1324,12 @@ function ContextSiteMuteSettings() {
         [CONTEXT_SITE_ALLOW_STORAGE_KEY]: record,
       });
       setAllowedSites(toAllowedSiteViews(record));
-      setMessage(`已从允许列表移除 ${host}`);
+      setMessage(
+        formatSiteControlActionReceipt(`已从允许列表移除 ${host}`, {
+          host,
+          allowRecord: record,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to remove context allowed site:', error);
       setMessage('移除允许站点失败');
@@ -1274,7 +1343,12 @@ function ContextSiteMuteSettings() {
     try {
       await chrome.storage.local.set({ [CONTEXT_SITE_ALLOW_STORAGE_KEY]: {} });
       setAllowedSites([]);
-      setMessage('已清空允许站点列表');
+      setMessage(
+        formatSiteControlActionReceipt('已清空允许站点列表', {
+          allowRecord: {},
+          forceAllPassiveQuiet: allowlistMode,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to clear context allowed sites:', error);
       setMessage('清空允许站点失败');
@@ -1323,9 +1397,15 @@ function ContextSiteMuteSettings() {
       const removedConflictCount =
         nextMuteRecord.removedHosts.length + nextAllowRecord.removedHosts.length;
       setMessage(
-        removedConflictCount > 0
-          ? `已永久关闭 ${host} 的网页记忆提示，并移除 ${removedConflictCount} 条允许/静默冲突规则`
-          : `已永久关闭 ${host} 的网页记忆提示`,
+        formatSiteControlActionReceipt(
+          removedConflictCount > 0
+            ? `已永久关闭 ${host} 的网页记忆提示，并移除 ${removedConflictCount} 条允许/静默冲突规则`
+            : `已永久关闭 ${host} 的网页记忆提示`,
+          {
+            host,
+            allowRecord: nextAllowRecord.record,
+          },
+        ),
       );
     } catch (error) {
       console.warn('Failed to block context site:', error);
@@ -1344,7 +1424,11 @@ function ContextSiteMuteSettings() {
         [CONTEXT_SITE_BLOCK_STORAGE_KEY]: record,
       });
       setBlockedSites(toBlockedSiteViews(record));
-      setMessage(`已恢复 ${host} 的网页记忆提示`);
+      setMessage(
+        formatSiteControlActionReceipt(`已移除 ${host} 的永久屏蔽`, {
+          host,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to unblock context site:', error);
       setMessage('恢复永久屏蔽站点失败');
@@ -1358,7 +1442,11 @@ function ContextSiteMuteSettings() {
     try {
       await chrome.storage.local.set({ [CONTEXT_SITE_BLOCK_STORAGE_KEY]: {} });
       setBlockedSites([]);
-      setMessage('已恢复全部永久屏蔽站点');
+      setMessage(
+        formatSiteControlActionReceipt('已清空全部永久屏蔽站点', {
+          forceAllPassiveQuiet: allowlistMode && allowedSites.length === 0,
+        }),
+      );
     } catch (error) {
       console.warn('Failed to clear context site blocks:', error);
       setMessage('恢复全部永久屏蔽站点失败');
@@ -1384,7 +1472,12 @@ function ContextSiteMuteSettings() {
       setBlockedPages(toBlockedPageViews(record));
       setBlockPageInput('');
       setMessage(
-        `已永久关闭 ${prefix} 下的被动网页处理；主动划词仍可用，不删除/同步/外发已有记忆`,
+        formatSiteControlActionReceipt(
+          `已永久关闭 ${prefix} 下的被动网页处理`,
+          {
+            forceAllPassiveQuiet: allowlistMode && allowedSites.length === 0,
+          },
+        ),
       );
     } catch (error) {
       console.warn('Failed to block context page prefix:', error);
@@ -1404,7 +1497,12 @@ function ContextSiteMuteSettings() {
       });
       setBlockedPages(toBlockedPageViews(record));
       setMessage(
-        `已恢复 ${prefix} 下的被动网页提示；不会写入、删除或外发记忆`,
+        formatSiteControlActionReceipt(
+          `已移除 ${prefix} 下的页面路径屏蔽`,
+          {
+            forceAllPassiveQuiet: allowlistMode && allowedSites.length === 0,
+          },
+        ),
       );
     } catch (error) {
       console.warn('Failed to unblock context page prefix:', error);
@@ -1420,7 +1518,9 @@ function ContextSiteMuteSettings() {
       await chrome.storage.local.set({ [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: {} });
       setBlockedPages([]);
       setMessage(
-        '已恢复全部页面路径屏蔽规则；只恢复被动提示，不写入、删除或外发记忆',
+        formatSiteControlActionReceipt('已清空全部页面路径屏蔽规则', {
+          forceAllPassiveQuiet: allowlistMode && allowedSites.length === 0,
+        }),
       );
     } catch (error) {
       console.warn('Failed to clear context page blocks:', error);
@@ -1464,6 +1564,100 @@ function ContextSiteMuteSettings() {
       value: '不删除、不同步、不外发已有记忆，也不反写当前网站',
     },
   ];
+  const siteControlPassiveScope = '右下角 Lens、页面召回、整页/视觉入库候选';
+  const siteControlNoEffectBoundary =
+    '主动划词仍可用；不会写入、删除、同步或外发已有记忆';
+  const siteControlLiveRecheck =
+    `已打开页面会实时重新评估${siteControlPassiveScope}`;
+  const formatSiteControlButtonBoundary = (
+    actionSummary: string,
+    effectSummary = siteControlLiveRecheck,
+  ): string =>
+    `${actionSummary}；${effectSummary}；${siteControlNoEffectBoundary}。`;
+  const siteControlRefreshBoundary = formatSiteControlButtonBoundary(
+    '刷新只重读本机 extension storage 的站点控制快照，不新增、恢复或删除规则',
+    '只更新本页状态显示，不触发新的记忆写入',
+  );
+  const clearMutedSitesBoundary = formatSiteControlButtonBoundary(
+    '清空全部 24 小时临时静默站点',
+    allowlistMode && allowedSites.length === 0
+      ? '白名单模式当前没有允许站点，普通网页被动提示仍会全部保持静默'
+      : '已打开页面会按剩余白名单、整站屏蔽和路径屏蔽实时重新评估',
+  );
+  const allowlistModeBoundary = allowlistMode
+    ? formatSiteControlButtonBoundary(
+        '关闭白名单模式，恢复默认站点规则',
+        siteControlLiveRecheck,
+      )
+    : formatSiteControlButtonBoundary(
+        '开启白名单模式：仅允许列表内站点被动提示',
+        allowedSites.length > 0
+          ? `${allowedSites.length} 个允许站点可被动提示，其他普通网页保持静默`
+          : '没有允许站点时普通网页被动提示会全部保持静默',
+      );
+  const allowHostCandidate = normalizeSiteControlHost(allowHostInput);
+  const allowSiteBoundary = formatSiteControlButtonBoundary(
+    allowHostCandidate
+      ? `把 ${allowHostCandidate} 加入允许站点列表，并移除覆盖它的静默/屏蔽冲突`
+      : '把输入域名加入允许站点列表；页面路径不会在这里写入',
+    allowlistMode
+      ? siteControlLiveRecheck
+      : '默认模式下只是保存允许候选；开启白名单后才限制为允许列表',
+  );
+  const clearAllowedSitesBoundary = formatSiteControlButtonBoundary(
+    '清空全部允许站点',
+    allowlistMode
+      ? '白名单模式会让普通网页被动提示全部保持静默'
+      : '默认模式下只是清空未来白名单候选',
+  );
+  const blockHostCandidate = normalizeSiteControlHost(blockHostInput);
+  const blockSiteBoundary = formatSiteControlButtonBoundary(
+    blockHostCandidate
+      ? `永久屏蔽 ${blockHostCandidate} 的被动网页处理，并移除允许/静默冲突`
+      : '永久屏蔽输入域名的被动网页处理；页面路径请用路径屏蔽',
+    '只停止该站点及覆盖范围内的被动网页处理',
+  );
+  const clearBlockedSitesBoundary = formatSiteControlButtonBoundary(
+    '清空全部永久屏蔽站点',
+    allowlistMode && allowedSites.length === 0
+      ? '白名单模式当前没有允许站点，普通网页被动提示仍会全部保持静默'
+      : '已打开页面会按剩余白名单、临时静默和路径屏蔽实时重新评估',
+  );
+  const blockPageCandidate = normalizePageControlPrefix(blockPageInput);
+  const blockPageBoundary = formatSiteControlButtonBoundary(
+    blockPageCandidate
+      ? `永久屏蔽 ${blockPageCandidate} 路径及其子路径的被动网页处理`
+      : '永久屏蔽输入 URL 路径及其子路径的被动网页处理',
+    '只影响该路径范围，不影响同域名其他页面',
+  );
+  const clearBlockedPagesBoundary = formatSiteControlButtonBoundary(
+    '清空全部页面路径屏蔽规则',
+    allowlistMode && allowedSites.length === 0
+      ? '白名单模式当前没有允许站点，普通网页被动提示仍会全部保持静默'
+      : '已打开页面会按剩余白名单、临时静默和整站屏蔽实时重新评估',
+  );
+  const buildRemoveAllowedSiteBoundary = (host: string): string =>
+    formatSiteControlButtonBoundary(
+      `从允许站点列表移除 ${host}`,
+      allowlistMode
+        ? '白名单模式会让此站点被动提示保持静默，除非重新加入允许列表'
+        : '默认模式下只是移除未来白名单候选',
+    );
+  const buildUnmuteSiteBoundary = (host: string): string =>
+    formatSiteControlButtonBoundary(
+      `恢复 ${host} 的 24 小时临时静默`,
+      '只移除临时静默规则；是否恢复被动提示仍受白名单、整站屏蔽、路径屏蔽和敏感页门控',
+    );
+  const buildUnblockSiteBoundary = (host: string): string =>
+    formatSiteControlButtonBoundary(
+      `移除 ${host} 的永久屏蔽`,
+      '只移除整站屏蔽规则；是否恢复被动提示仍受白名单、临时静默、路径屏蔽和敏感页门控',
+    );
+  const buildUnblockPageBoundary = (prefix: string): string =>
+    formatSiteControlButtonBoundary(
+      `移除 ${prefix} 的页面路径屏蔽`,
+      '只恢复该路径被动候选资格；同站其他规则和敏感页门控仍会继续生效',
+    );
 
   return (
     <div className="form-group">
@@ -1501,6 +1695,8 @@ function ContextSiteMuteSettings() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
+              title={siteControlRefreshBoundary}
+              aria-label={siteControlRefreshBoundary}
               onClick={() => refreshSiteControls('已刷新站点控制')}
               disabled={loading}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1509,6 +1705,8 @@ function ContextSiteMuteSettings() {
             </button>
             <button
               type="button"
+              title={clearMutedSitesBoundary}
+              aria-label={clearMutedSitesBoundary}
               onClick={clearMutedSites}
               disabled={loading || mutedSites.length === 0}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1592,6 +1790,8 @@ function ContextSiteMuteSettings() {
             >
               <input
                 type="checkbox"
+                title={allowlistModeBoundary}
+                aria-label={allowlistModeBoundary}
                 checked={allowlistMode}
                 onChange={(event) =>
                   setAllowlistModeValue(event.currentTarget.checked)
@@ -1621,6 +1821,8 @@ function ContextSiteMuteSettings() {
             />
             <button
               type="button"
+              title={allowSiteBoundary}
+              aria-label={allowSiteBoundary}
               onClick={allowSite}
               disabled={loading || !allowHostInput.trim()}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1661,7 +1863,8 @@ function ContextSiteMuteSettings() {
                   </div>
                   <button
                     type="button"
-                    aria-label={`移除允许站点 ${site.host}`}
+                    title={buildRemoveAllowedSiteBoundary(site.host)}
+                    aria-label={buildRemoveAllowedSiteBoundary(site.host)}
                     onClick={() => removeAllowedSite(site.host)}
                     disabled={loading}
                     style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1679,6 +1882,8 @@ function ContextSiteMuteSettings() {
 
           <button
             type="button"
+            title={clearAllowedSitesBoundary}
+            aria-label={clearAllowedSitesBoundary}
             onClick={clearAllowedSites}
             disabled={loading || allowedSites.length === 0}
             style={{ fontSize: 12, padding: '4px 10px', marginTop: 10 }}
@@ -1726,6 +1931,8 @@ function ContextSiteMuteSettings() {
                 </div>
                 <button
                   type="button"
+                  title={buildUnmuteSiteBoundary(site.host)}
+                  aria-label={buildUnmuteSiteBoundary(site.host)}
                   onClick={() => unmuteSite(site.host)}
                   disabled={loading}
                   style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1767,6 +1974,8 @@ function ContextSiteMuteSettings() {
             </div>
             <button
               type="button"
+              title={clearBlockedSitesBoundary}
+              aria-label={clearBlockedSitesBoundary}
               onClick={clearBlockedSites}
               disabled={loading || blockedSites.length === 0}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1793,6 +2002,8 @@ function ContextSiteMuteSettings() {
             />
             <button
               type="button"
+              title={blockSiteBoundary}
+              aria-label={blockSiteBoundary}
               onClick={blockSite}
               disabled={loading || !blockHostInput.trim()}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1833,6 +2044,8 @@ function ContextSiteMuteSettings() {
                   </div>
                   <button
                     type="button"
+                    title={buildUnblockSiteBoundary(site.host)}
+                    aria-label={buildUnblockSiteBoundary(site.host)}
                     onClick={() => unblockSite(site.host)}
                     disabled={loading}
                     style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1875,6 +2088,8 @@ function ContextSiteMuteSettings() {
             </div>
             <button
               type="button"
+              title={clearBlockedPagesBoundary}
+              aria-label={clearBlockedPagesBoundary}
               onClick={clearBlockedPages}
               disabled={loading || blockedPages.length === 0}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1901,6 +2116,8 @@ function ContextSiteMuteSettings() {
             />
             <button
               type="button"
+              title={blockPageBoundary}
+              aria-label={blockPageBoundary}
               onClick={blockPage}
               disabled={loading || !blockPageInput.trim()}
               style={{ fontSize: 12, padding: '4px 10px' }}
@@ -1941,7 +2158,8 @@ function ContextSiteMuteSettings() {
                   </div>
                   <button
                     type="button"
-                    aria-label={`恢复页面路径 ${page.prefix}`}
+                    title={buildUnblockPageBoundary(page.prefix)}
+                    aria-label={buildUnblockPageBoundary(page.prefix)}
                     onClick={() => unblockPage(page.prefix)}
                     disabled={loading}
                     style={{ fontSize: 12, padding: '4px 10px' }}
@@ -2025,47 +2243,55 @@ const Options = () => {
     target: BotPushTargetMode,
     groupId?: string,
     fallbackReason?: string,
-  ): DigestManualPushReceipt => ({
-    kind: 'dream',
-    generated: result.generated === true,
-    target,
-    targetLabel: formatDigestPushTargetLabel(target, groupId),
-    notificationCreated:
-      typeof result.notificationCreated === 'boolean'
-        ? result.notificationCreated
-        : typeof result.delivered === 'boolean'
-          ? result.delivered
-          : undefined,
-    botSent:
-      typeof result.botSent === 'boolean' ? result.botSent : undefined,
-    botError: readString(result.botError),
-    dreamCount: readNumber(result.dreamCount),
-    latestDreamPath: readString(result.latestDreamPath),
-    reason: readString(result.reason) || fallbackReason,
-  });
+  ): DigestManualPushReceipt => {
+    const normalizedGroupId = normalizeDigestPushGroupId(groupId);
+    return {
+      kind: 'dream',
+      generated: result.generated === true,
+      target,
+      groupId: normalizedGroupId,
+      targetLabel: formatDigestPushTargetLabel(target, normalizedGroupId),
+      notificationCreated:
+        typeof result.notificationCreated === 'boolean'
+          ? result.notificationCreated
+          : typeof result.delivered === 'boolean'
+            ? result.delivered
+            : undefined,
+      botSent:
+        typeof result.botSent === 'boolean' ? result.botSent : undefined,
+      botError: readString(result.botError),
+      dreamCount: readNumber(result.dreamCount),
+      latestDreamPath: readString(result.latestDreamPath),
+      reason: readString(result.reason) || fallbackReason,
+    };
+  };
 
   const buildWeeklyReportPushReceipt = (
     result: Record<string, unknown>,
     target: BotPushTargetMode,
     groupId?: string,
     fallbackReason?: string,
-  ): DigestManualPushReceipt => ({
-    kind: 'weekly',
-    generated: result.generated === true,
-    target,
-    targetLabel: formatDigestPushTargetLabel(target, groupId),
-    notificationCreated:
-      typeof result.notificationCreated === 'boolean'
-        ? result.notificationCreated
-        : undefined,
-    botSent:
-      typeof result.botSent === 'boolean' ? result.botSent : undefined,
-    botError: readString(result.botError),
-    reportPath: readString(result.reportPath),
-    messageCount: readNumber(result.messageCount),
-    reflectionCount: readNumber(result.reflectionCount),
-    reason: readString(result.reason) || fallbackReason,
-  });
+  ): DigestManualPushReceipt => {
+    const normalizedGroupId = normalizeDigestPushGroupId(groupId);
+    return {
+      kind: 'weekly',
+      generated: result.generated === true,
+      target,
+      groupId: normalizedGroupId,
+      targetLabel: formatDigestPushTargetLabel(target, normalizedGroupId),
+      notificationCreated:
+        typeof result.notificationCreated === 'boolean'
+          ? result.notificationCreated
+          : undefined,
+      botSent:
+        typeof result.botSent === 'boolean' ? result.botSent : undefined,
+      botError: readString(result.botError),
+      reportPath: readString(result.reportPath),
+      messageCount: readNumber(result.messageCount),
+      reflectionCount: readNumber(result.reflectionCount),
+      reason: readString(result.reason) || fallbackReason,
+    };
+  };
 
   const readCurrentInputValue = (key: string): string | undefined => {
     const element = document.getElementById(key) as
@@ -2088,6 +2314,33 @@ const Options = () => {
     receipt: DigestManualPushReceipt | null,
   ) => {
     if (!receipt) return null;
+
+    const currentTargetKey =
+      receipt.kind === 'weekly'
+        ? 'WEEKLY_REPORT_PUSH_TARGET'
+        : 'DREAM_INSIGHT_PUSH_TARGET';
+    const currentGroupKey =
+      receipt.kind === 'weekly'
+        ? 'WEEKLY_REPORT_PUSH_GROUP_ID'
+        : 'DREAM_INSIGHT_PUSH_GROUP_ID';
+    const currentTarget = resolvePushTargetValue(
+      String(config[currentTargetKey] || ''),
+      'me',
+      true,
+    );
+    const currentGroupId = normalizeDigestPushGroupId(
+      String(config[currentGroupKey] || ''),
+    );
+    const receiptGroupId = normalizeDigestPushGroupId(receipt.groupId);
+    const currentTargetLabel = formatDigestPushTargetLabel(
+      currentTarget,
+      currentGroupId,
+    );
+    const currentTargetChanged =
+      currentTarget !== receipt.target ||
+      (currentTarget === 'group' &&
+        receipt.target === 'group' &&
+        currentGroupId !== receiptGroupId);
 
     const isBlocked = receipt.phase === 'blocked';
     const isPending = receipt.phase === 'pending';
@@ -2221,9 +2474,17 @@ const Options = () => {
             </dd>
           </div>
           <div>
-            <dt>目标</dt>
+            <dt>提交目标</dt>
             <dd>{receipt.targetLabel}</dd>
           </div>
+          {currentTargetChanged && (
+            <div>
+              <dt>当前设置</dt>
+              <dd>
+                已改为 {currentTargetLabel}；本回执仍是提交时快照，不代表当前可见设置已保存、已投递或已处理。
+              </dd>
+            </div>
+          )}
           <div>
             <dt>写入</dt>
             <dd>{writeState}</dd>
@@ -5145,12 +5406,14 @@ interface WorkflowBaselineWritebackReceipt {
 }
 
 interface WorkflowRunEvidenceCopyReceipt {
+  status: 'pending' | 'success' | 'error';
   copiedAt: string;
   title: string;
   summary: string;
   boundary: string;
   stale: boolean;
   qualification: string;
+  error?: string;
 }
 
 interface WorkflowSavedRegressionReport {
@@ -5183,6 +5446,10 @@ const formatWorkflowConfidence = (value: number | null): string =>
   typeof value === 'number' && Number.isFinite(value)
     ? `${Math.round(value * 100)}%`
     : '-';
+
+const joinAgentWorkflowControlBoundary = (
+  ...parts: Array<string | false | null | undefined>
+): string => parts.filter(Boolean).join(' ');
 
 const formatWorkflowRuleRefs = (
   refs: string[] = [],
@@ -5402,6 +5669,10 @@ const AgentSettings = () => {
     workflowRunEvidenceCopyReceipt,
     setWorkflowRunEvidenceCopyReceipt,
   ] = useState<WorkflowRunEvidenceCopyReceipt | null>(null);
+  const [
+    workflowSavedScenarioDeleteReceipt,
+    setWorkflowSavedScenarioDeleteReceipt,
+  ] = useState<AgentWorkflowTestSourceReceipt | null>(null);
   const workflowLastRunErrorRef = useRef('');
 
   // 获取可用工具列表
@@ -5467,9 +5738,6 @@ const AgentSettings = () => {
       const samples = buildAgentWorkflowReplayMessages(result.items || [], 8);
       setWorkflowReplaySamples(samples);
       setWorkflowReplaySelectedId(samples[0]?.id || '');
-      if (samples.length === 0) {
-        setWorkflowReplayError('没有可回放的最近消息');
-      }
     } catch (error) {
       console.error('加载 Agent Workflow 回放样本失败:', error);
       setWorkflowReplaySamples([]);
@@ -5547,6 +5815,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     setWorkflowTestInput((prev) => ({
       ...prev,
       [name]: value,
@@ -5572,6 +5841,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
   };
 
   const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
@@ -5584,6 +5854,7 @@ const AgentSettings = () => {
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
       setWorkflowRunEvidenceCopyReceipt(null);
+      setWorkflowSavedScenarioDeleteReceipt(null);
       return null;
     }
 
@@ -5595,6 +5866,7 @@ const AgentSettings = () => {
     setWorkflowTestResultInput(null);
     setWorkflowTestResultConfigKey('');
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     try {
       const agentsForRun = await agentCoordinator.getAgents();
       setAgents(agentsForRun);
@@ -5632,6 +5904,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     runWorkflowTest(workflowTestInput);
   };
 
@@ -5669,6 +5942,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
   };
 
   const handleRunWorkflowReplaySample = async () => {
@@ -5683,6 +5957,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     await runWorkflowTest(nextInput);
   };
 
@@ -5704,6 +5979,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
   };
 
   const handleRunWorkflowScenario = async () => {
@@ -5718,6 +5994,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     await runWorkflowTest(nextInput);
   };
 
@@ -5760,6 +6037,16 @@ const AgentSettings = () => {
       sortedAgents,
     );
     const snapshotInputKey = buildWorkflowTestInputComparisonKey(snapshot.input);
+    const replacedScenario = workflowSavedScenarios.find(
+      (scenario) =>
+        buildWorkflowTestInputComparisonKey(scenario.input) ===
+        snapshotInputKey,
+    );
+    const evictedScenario =
+      !replacedScenario &&
+      workflowSavedScenarios.length >= AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT
+        ? workflowSavedScenarios[AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT - 1]
+        : null;
     const nextScenarios = [
       snapshot,
       ...workflowSavedScenarios.filter(
@@ -5775,10 +6062,18 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
-    setWorkflowSavedScenarioStatus(
-      baselineResult
+    setWorkflowSavedScenarioDeleteReceipt(null);
+    const saveStatus = replacedScenario
+      ? baselineResult
+        ? '已更新同输入保存样例和结果基线；未增加样例数'
+        : '已更新同输入保存样例；运行后可再次保存基线'
+      : baselineResult
         ? '已保存当前用例和结果基线'
-        : '已保存当前用例；运行后可再次保存基线',
+        : '已保存当前用例；运行后可再次保存基线';
+    setWorkflowSavedScenarioStatus(
+      evictedScenario
+        ? `${saveStatus}；本地上限 ${AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT}，已移出旧样例：${evictedScenario.label}`
+        : saveStatus,
     );
   };
 
@@ -5837,6 +6132,7 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     setWorkflowSavedScenarioStatus(
       hadBaseline
         ? '已接受当前结果为新基线'
@@ -5871,6 +6167,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     setWorkflowSavedScenarioStatus(
       scenario.expectedResult ? '已填入保存样例和基线' : '已填入保存样例',
     );
@@ -5887,6 +6184,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
     const result = await runWorkflowTest(scenario.input);
     if (result) {
       setWorkflowSavedScenarioStatus(
@@ -5905,6 +6203,7 @@ const AgentSettings = () => {
       setWorkflowSavedRegressionProgress(null);
       setWorkflowBaselineWritebackReceipt(null);
       setWorkflowRunEvidenceCopyReceipt(null);
+      setWorkflowSavedScenarioDeleteReceipt(null);
       return;
     }
 
@@ -5915,6 +6214,7 @@ const AgentSettings = () => {
     setWorkflowSavedRegressionProgress(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
+    setWorkflowSavedScenarioDeleteReceipt(null);
 
     const results: WorkflowSavedRegressionResult[] = [];
 
@@ -6090,6 +6390,7 @@ const AgentSettings = () => {
     setWorkflowSavedScenarioStatus(
       `已接受 ${acceptables.length} 个批量回归结果为新基线`,
     );
+    setWorkflowSavedScenarioDeleteReceipt(null);
     setWorkflowBaselineWritebackReceipt({
       scope: 'batch',
       title: '批量基线写回回执',
@@ -6119,6 +6420,7 @@ const AgentSettings = () => {
     );
     setWorkflowSavedScenarioError('');
     setWorkflowSavedScenarioStatus(`已导出批量回归报告：${filename}`);
+    setWorkflowSavedScenarioDeleteReceipt(null);
   };
 
   const handleDeleteWorkflowSavedScenario = async () => {
@@ -6129,12 +6431,20 @@ const AgentSettings = () => {
       (item) => item.id !== scenario.id,
     );
     const persistedScenarios = await persistWorkflowSavedScenarios(nextScenarios);
-    setWorkflowSavedScenarioSelectedId(persistedScenarios[0]?.id || '');
+    const nextSelectedScenario = persistedScenarios[0] || null;
+    setWorkflowSavedScenarioSelectedId(nextSelectedScenario?.id || '');
     setWorkflowSavedScenarioError('');
     setWorkflowSavedRegressionSummary(null);
     setWorkflowBaselineWritebackReceipt(null);
     setWorkflowRunEvidenceCopyReceipt(null);
-    setWorkflowSavedScenarioStatus('已删除保存样例');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedScenarioDeleteReceipt(
+      buildAgentWorkflowSavedScenarioDeleteReceipt({
+        scenario,
+        remainingCount: persistedScenarios.length,
+        nextScenarioLabel: nextSelectedScenario?.label,
+      }),
+    );
   };
 
   // 添加新Agent
@@ -6227,6 +6537,10 @@ const AgentSettings = () => {
     !agents.some((agent) => agent.id === sanitizedNewAgentId);
   const workflowExecutionBusy =
     workflowTestRunning || workflowSavedRegressionRunning;
+  const workflowRunEvidenceCopyPending =
+    workflowRunEvidenceCopyReceipt?.status === 'pending';
+  const workflowControlLocked =
+    workflowExecutionBusy || workflowRunEvidenceCopyPending;
   const workflowTestMessageReady = workflowTestInput.content.trim().length > 0;
   const workflowCurrentConfigSnapshot =
     buildAgentWorkflowAgentConfigSnapshot(agents);
@@ -6394,10 +6708,27 @@ const AgentSettings = () => {
   const selectedWorkflowReplaySample = workflowReplaySamples.find(
     (sample) => sample.id === workflowReplaySelectedId,
   );
+  const workflowCurrentInputKey =
+    buildWorkflowTestInputComparisonKey(workflowTestInput);
+  const workflowSameInputSavedScenario = workflowSavedScenarios.find(
+    (scenario) =>
+      buildWorkflowTestInputComparisonKey(scenario.input) ===
+      workflowCurrentInputKey,
+  );
+  const workflowEvictedSavedScenario =
+    !workflowSameInputSavedScenario &&
+    workflowSavedScenarios.length >= AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT
+      ? workflowSavedScenarios[AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT - 1]
+      : null;
   const workflowScenarioSourceReceipt =
     buildAgentWorkflowScenarioSourceReceipt(selectedWorkflowScenario);
   const workflowReplaySourceReceipt = buildAgentWorkflowReplaySourceReceipt(
     selectedWorkflowReplaySample,
+    {
+      loading: workflowReplayLoading,
+      error: workflowReplayError,
+      sampleCount: workflowReplaySamples.length,
+    },
   );
   const workflowCurrentInputMatchesSavedScenario = Boolean(
     selectedWorkflowSavedScenario &&
@@ -6431,6 +6762,14 @@ const AgentSettings = () => {
       currentAgentConfigLabel: formatAgentWorkflowAgentConfigSnapshot(
         workflowCurrentConfigSnapshot,
       ),
+    });
+  const workflowSavedScenarioCapacityReceipt =
+    buildAgentWorkflowSavedScenarioCapacityReceipt({
+      savedScenarioCount: workflowSavedScenarios.length,
+      limit: AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
+      inputHasContent: workflowTestMessageReady,
+      replacesExisting: Boolean(workflowSameInputSavedScenario),
+      evictedScenarioLabel: workflowEvictedSavedScenario?.label,
     });
   const workflowSavedRegressionScopeReceipt =
     buildAgentWorkflowSavedRegressionScopeReceipt({
@@ -6600,13 +6939,129 @@ const AgentSettings = () => {
       qualification: workflowRunEvidenceQualification,
     },
   );
+  const workflowRecommendedActionNoEffectBoundary =
+    '下一步动作只是本地排障指引；不会自动重跑测试，不会写入 Memory Service，不会发送通知，不会执行规则自动化，不会确认复核候选，不会接入外部 adapter，不会覆盖基线，不会导出报告，也不会复制原始消息正文。';
+  const formatWorkflowRecommendedActionBoundary = (
+    item: (typeof workflowRecommendedActions)[number],
+  ) =>
+    [
+      `下一步动作 ${workflowRecommendedActionStatusLabels[item.status] || item.status}：${item.title}。`,
+      item.summary,
+      item.detail,
+      workflowRecommendedActionNoEffectBoundary,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+  const workflowLocalRunNoEffectBoundary =
+    '本地测试不会写入 Memory Service、发送通知、执行规则自动化、标记原消息已读或覆盖保存基线。';
+  const workflowFormOnlyBoundary =
+    '只改写本页测试表单、清空旧结果和本地回执；不会运行 Agent Workflow、写入 Memory Service、发送通知、执行规则自动化、标记原消息已读或覆盖基线。';
+  const workflowRunTestControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowRunButtonLabel}：${
+      workflowTestRunning
+        ? '正在本页重跑当前表单，输入和来源选择暂时锁定'
+        : workflowSavedRegressionRunning
+          ? '批量回归正在逐条运行本地保存样例，本按钮等待当前批次结束'
+          : !workflowTestMessageReady
+            ? '先填写测试消息后才能运行'
+            : workflowResultIsStale
+              ? '重跑当前表单和当前 Agent 配置，刷新下方旧结果'
+              : '只重跑当前表单和当前 Agent 配置，刷新下方诊断'
+    }。`,
+    workflowLocalRunNoEffectBoundary,
+  );
+  const workflowScenarioLoadControlBoundary =
+    '填入样例：只把所选内置样例复制到本页测试表单。' +
+    workflowFormOnlyBoundary;
+  const workflowScenarioRunControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowExecutionBusy ? '测试中' : '运行样例'}：先填入所选内置样例，再在 Options 本地测试面板重跑。`,
+    workflowLocalRunNoEffectBoundary,
+  );
+  const workflowReplayLoadControlBoundary =
+    '填入最近消息：只把所选 Memory Service time 召回样本复制到本页测试表单。' +
+    workflowFormOnlyBoundary;
+  const workflowReplayRunControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowExecutionBusy ? '测试中' : '回放测试'}：先填入所选最近消息样本，再在 Options 本地测试面板重跑。`,
+    workflowLocalRunNoEffectBoundary,
+  );
+  const workflowReplayRefreshControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowReplayLoading ? '刷新中' : '刷新最近消息'}：只重新读取 Memory Service time 通道的最近可回放样本。`,
+    '不会运行 Agent Workflow、不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读、不会覆盖基线，也不会证明线上没有相关消息。',
+  );
+  const workflowSaveScenarioControlBoundary = joinAgentWorkflowControlBoundary(
+    '保存当前用例：把当前测试输入写入 chrome.storage.local 的本地保存样例；若当前结果未过期，会一起记录本地基线。',
+    workflowSameInputSavedScenario
+      ? '同输入只更新这一条保存样例。'
+      : workflowEvictedSavedScenario
+        ? `已达上限时会移出最旧样例：${workflowEvictedSavedScenario.label}。`
+        : '当前还有容量，不会挤掉其他保存样例。',
+    '不会写入 Memory Service、发送通知、执行规则自动化、标记原消息已读、导出报告或复制原始消息正文。',
+  );
+  const workflowSavedLoadControlBoundary =
+    '填入保存样例：只把所选本地保存样例复制到本页测试表单。' +
+    workflowFormOnlyBoundary;
+  const workflowSavedRunControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowExecutionBusy ? '测试中' : '运行保存样例'}：先填入所选本地保存样例，再用当前 Agent 配置重跑并刷新基线对比。`,
+    workflowLocalRunNoEffectBoundary,
+  );
+  const workflowSavedRegressionControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowSavedRegressionRunning ? '批量运行中' : '批量回归'}：逐条重跑 chrome.storage.local 中的本地保存样例，并生成本页回归摘要。`,
+    '不会覆盖基线、写入 Memory Service、发送通知、执行规则自动化、标记原消息已读、导出报告或复制原始消息正文；接受基线和导出报告需要单独点击。',
+  );
+  const workflowSavedDeleteControlBoundary = joinAgentWorkflowControlBoundary(
+    '删除保存样例：只移除所选 chrome.storage.local 本地保存样例及其本地基线。',
+    '不会删除 Memory Service 记忆、移除真实消息、发送通知、执行规则自动化、撤销已导出的报告或改写当前测试输入。',
+  );
+  const workflowUpdateBaselineControlBoundary = joinAgentWorkflowControlBoundary(
+    `${workflowSavedBaselineActionLabel}：只更新所选保存样例在 chrome.storage.local 的本地基线。`,
+    selectedWorkflowSavedScenario?.expectedResult
+      ? '会覆盖这条样例的原基线。'
+      : '会建立后续单条对比和批量回归使用的本地基线。',
+    '不会写入 Memory Service、发送通知、执行规则自动化、导出报告、覆盖测试输入或导出原始消息正文。',
+  );
+  const workflowExportRegressionReportControlBoundary = joinAgentWorkflowControlBoundary(
+    '导出报告：只把当前批量回归摘要下载为本机 JSON 文件。',
+    workflowSavedRegressionSummary
+      ? `当前摘要为总数 ${workflowSavedRegressionSummary.total}、变化 ${workflowSavedRegressionSummary.changed}、无基线 ${workflowSavedRegressionSummary.noBaseline}、失败 ${workflowSavedRegressionSummary.failed}。`
+      : '需要先完成一次批量回归。',
+    '不会接受基线、写入 Memory Service、发送通知、执行规则自动化、覆盖保存样例或复制原始消息正文。',
+  );
+  const workflowAcceptRegressionBaselinesControlBoundary = joinAgentWorkflowControlBoundary(
+    `接受 ${workflowSavedRegressionAcceptableCount} 个结果为基线：只把变化或无基线样例的本次结果写回 chrome.storage.local 本地基线。`,
+    `失败 ${workflowSavedRegressionSummary?.failed || 0} 个不会被覆盖。`,
+    '不会写入 Memory Service、发送通知、执行规则自动化、导出报告、标记原消息已读或复制原始消息正文。',
+  );
+  const workflowCopyEvidenceControlBoundary = joinAgentWorkflowControlBoundary(
+    workflowRunEvidenceCopyReceipt?.status === 'pending'
+      ? '复制中：正在写入本机剪贴板，测试输入和来源选择暂时锁定。'
+      : '复制证据包：只把当前单次运行的脱敏诊断证据写入本机剪贴板。',
+    workflowRunEvidencePacket
+      ? `证据资格：${workflowRunEvidencePacket.qualification.title}。`
+      : '',
+    '不会写入 Memory Service、发送通知、执行规则自动化、覆盖基线、导出报告，也不会包含原始消息正文或工具参数。',
+  );
 
   const handleCopyWorkflowRunEvidencePacket = async () => {
     if (!workflowRunEvidencePacket) return;
 
+    setWorkflowRunEvidenceCopyReceipt({
+      status: 'pending',
+      copiedAt: new Date().toISOString(),
+      title: '证据包复制中',
+      summary:
+        '正在写入本机剪贴板；还没有确认复制成功，测试输入暂时锁定。',
+      boundary:
+        '等待期间会暂时锁定测试输入、来源选择和基线动作，避免复制中的旧证据被误认为新的当前结果；不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会覆盖基线，也不会导出报告。',
+      stale: workflowResultIsStale,
+      qualification: workflowRunEvidencePacket.qualification.title,
+    });
+    setWorkflowSavedScenarioError('');
+
     try {
       await navigator.clipboard.writeText(workflowRunEvidencePacket.text);
       setWorkflowRunEvidenceCopyReceipt({
+        status: 'success',
         copiedAt: new Date().toISOString(),
         title: workflowRunEvidencePacket.title,
         summary: workflowRunEvidencePacket.summary,
@@ -6617,9 +7072,20 @@ const AgentSettings = () => {
       setWorkflowSavedScenarioError('');
     } catch (error) {
       console.error('复制 Agent Workflow 证据包失败:', error);
-      setWorkflowSavedScenarioError(
-        error instanceof Error ? error.message : '复制证据包失败',
-      );
+      const errorMessage =
+        error instanceof Error ? error.message : '复制证据包失败';
+      setWorkflowRunEvidenceCopyReceipt({
+        status: 'error',
+        copiedAt: new Date().toISOString(),
+        title: '复制证据包失败',
+        summary: '剪贴板写入未完成；证据包仍停留在本页。',
+        boundary:
+          '本次失败不会写入剪贴板、不会导出报告、不会覆盖基线、不会写入 Memory Service、不会发送通知，也不会执行规则自动化。',
+        stale: workflowResultIsStale,
+        qualification: workflowRunEvidencePacket.qualification.title,
+        error: errorMessage,
+      });
+      setWorkflowSavedScenarioError('');
     }
   };
 
@@ -6792,7 +7258,7 @@ const AgentSettings = () => {
 
       <div
         className="agent-workflow-test-panel"
-        aria-busy={workflowExecutionBusy}
+        aria-busy={workflowControlLocked}
       >
         <div className="agent-workflow-test-header">
           <div>
@@ -6800,7 +7266,9 @@ const AgentSettings = () => {
           </div>
           <button
             onClick={handleRunWorkflowTest}
-            disabled={workflowExecutionBusy || !workflowTestMessageReady}
+            disabled={workflowControlLocked || !workflowTestMessageReady}
+            title={workflowRunTestControlBoundary}
+            aria-label={workflowRunTestControlBoundary}
           >
             {workflowRunButtonLabel}
           </button>
@@ -6813,7 +7281,7 @@ const AgentSettings = () => {
               id="workflowScenario"
               value={workflowScenarioSelectedId}
               onChange={handleWorkflowScenarioChange}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
             >
               {AGENT_WORKFLOW_TEST_SCENARIOS.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>
@@ -6826,14 +7294,18 @@ const AgentSettings = () => {
             <button
               type="button"
               onClick={handleLoadWorkflowScenario}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
+              title={workflowScenarioLoadControlBoundary}
+              aria-label={workflowScenarioLoadControlBoundary}
             >
               填入样例
             </button>
             <button
               type="button"
               onClick={handleRunWorkflowScenario}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
+              title={workflowScenarioRunControlBoundary}
+              aria-label={workflowScenarioRunControlBoundary}
             >
               {workflowExecutionBusy ? '测试中...' : '运行样例'}
             </button>
@@ -6850,8 +7322,7 @@ const AgentSettings = () => {
                 setWorkflowReplaySelectedId(event.target.value)
               }
               disabled={
-                workflowTestRunning ||
-                workflowSavedRegressionRunning ||
+                workflowControlLocked ||
                 workflowReplayLoading ||
                 workflowReplaySamples.length === 0
               }
@@ -6874,11 +7345,12 @@ const AgentSettings = () => {
               type="button"
               onClick={handleLoadWorkflowReplaySample}
               disabled={
-                workflowTestRunning ||
-                workflowSavedRegressionRunning ||
+                workflowControlLocked ||
                 workflowReplayLoading ||
                 workflowReplaySamples.length === 0
               }
+              title={workflowReplayLoadControlBoundary}
+              aria-label={workflowReplayLoadControlBoundary}
             >
               填入
             </button>
@@ -6887,17 +7359,20 @@ const AgentSettings = () => {
               onClick={handleRunWorkflowReplaySample}
               disabled={
                 workflowReplayLoading ||
-                workflowTestRunning ||
-                workflowSavedRegressionRunning ||
+                workflowControlLocked ||
                 workflowReplaySamples.length === 0
               }
+              title={workflowReplayRunControlBoundary}
+              aria-label={workflowReplayRunControlBoundary}
             >
               {workflowExecutionBusy ? '测试中...' : '回放测试'}
             </button>
             <button
               type="button"
               onClick={loadWorkflowReplaySamples}
-              disabled={workflowExecutionBusy || workflowReplayLoading}
+              disabled={workflowControlLocked || workflowReplayLoading}
+              title={workflowReplayRefreshControlBoundary}
+              aria-label={workflowReplayRefreshControlBoundary}
             >
               {workflowReplayLoading ? '刷新中...' : '刷新'}
             </button>
@@ -6916,9 +7391,10 @@ const AgentSettings = () => {
                 setWorkflowSavedScenarioStatus('');
                 setWorkflowSavedRegressionSummary(null);
                 setWorkflowBaselineWritebackReceipt(null);
+                setWorkflowSavedScenarioDeleteReceipt(null);
               }}
               disabled={
-                workflowExecutionBusy || workflowSavedScenarios.length === 0
+                workflowControlLocked || workflowSavedScenarios.length === 0
               }
             >
               {workflowSavedScenarios.length === 0 ? (
@@ -6936,7 +7412,9 @@ const AgentSettings = () => {
             <button
               type="button"
               onClick={handleSaveWorkflowScenario}
-              disabled={workflowExecutionBusy || !workflowTestMessageReady}
+              disabled={workflowControlLocked || !workflowTestMessageReady}
+              title={workflowSaveScenarioControlBoundary}
+              aria-label={workflowSaveScenarioControlBoundary}
             >
               保存当前用例
             </button>
@@ -6944,8 +7422,10 @@ const AgentSettings = () => {
               type="button"
               onClick={handleLoadWorkflowSavedScenario}
               disabled={
-                workflowExecutionBusy || workflowSavedScenarios.length === 0
+                workflowControlLocked || workflowSavedScenarios.length === 0
               }
+              title={workflowSavedLoadControlBoundary}
+              aria-label={workflowSavedLoadControlBoundary}
             >
               填入
             </button>
@@ -6953,8 +7433,10 @@ const AgentSettings = () => {
               type="button"
               onClick={handleRunWorkflowSavedScenario}
               disabled={
-                workflowExecutionBusy || workflowSavedScenarios.length === 0
+                workflowControlLocked || workflowSavedScenarios.length === 0
               }
+              title={workflowSavedRunControlBoundary}
+              aria-label={workflowSavedRunControlBoundary}
             >
               {workflowExecutionBusy ? '测试中...' : '运行保存样例'}
             </button>
@@ -6962,8 +7444,10 @@ const AgentSettings = () => {
               type="button"
               onClick={handleRunWorkflowSavedRegression}
               disabled={
-                workflowExecutionBusy || workflowSavedScenarios.length === 0
+                workflowControlLocked || workflowSavedScenarios.length === 0
               }
+              title={workflowSavedRegressionControlBoundary}
+              aria-label={workflowSavedRegressionControlBoundary}
             >
               {workflowSavedRegressionRunning ? '批量运行中...' : '批量回归'}
             </button>
@@ -6971,13 +7455,18 @@ const AgentSettings = () => {
               type="button"
               onClick={handleDeleteWorkflowSavedScenario}
               disabled={
-                workflowExecutionBusy || workflowSavedScenarios.length === 0
+                workflowControlLocked || workflowSavedScenarios.length === 0
               }
+              title={workflowSavedDeleteControlBoundary}
+              aria-label={workflowSavedDeleteControlBoundary}
             >
               删除
             </button>
           </div>
         </div>
+        {renderWorkflowTestSourceReceipt(workflowSavedScenarioCapacityReceipt)}
+        {workflowSavedScenarioDeleteReceipt &&
+          renderWorkflowTestSourceReceipt(workflowSavedScenarioDeleteReceipt)}
         {renderWorkflowTestSourceReceipt(workflowSavedScenarioSourceReceipt)}
         {renderWorkflowTestSourceReceipt(workflowSavedRegressionCoverageReceipt)}
         {renderWorkflowTestSourceReceipt(workflowSavedRegressionScopeReceipt)}
@@ -7031,7 +7520,9 @@ const AgentSettings = () => {
                 <button
                   type="button"
                   onClick={handleExportWorkflowRegressionReport}
-                  disabled={workflowExecutionBusy}
+                  disabled={workflowControlLocked}
+                  title={workflowExportRegressionReportControlBoundary}
+                  aria-label={workflowExportRegressionReportControlBoundary}
                 >
                   导出报告
                 </button>
@@ -7039,7 +7530,9 @@ const AgentSettings = () => {
                   <button
                     type="button"
                     onClick={handleAcceptWorkflowRegressionBaselines}
-                    disabled={workflowExecutionBusy}
+                    disabled={workflowControlLocked}
+                    title={workflowAcceptRegressionBaselinesControlBoundary}
+                    aria-label={workflowAcceptRegressionBaselinesControlBoundary}
                   >
                     接受 {workflowSavedRegressionAcceptableCount} 个结果为基线
                   </button>
@@ -7098,7 +7591,7 @@ const AgentSettings = () => {
               name="sender"
               value={workflowTestInput.sender}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
             />
           </div>
           <div className="form-group">
@@ -7109,7 +7602,7 @@ const AgentSettings = () => {
               name="teamName"
               value={workflowTestInput.teamName}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
             />
           </div>
           <div className="form-group">
@@ -7121,7 +7614,7 @@ const AgentSettings = () => {
               value={workflowTestInput.teamId}
               onChange={handleWorkflowTestInputChange}
               placeholder="可选，用于范围匹配"
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
             />
           </div>
           <div className="form-group">
@@ -7133,7 +7626,7 @@ const AgentSettings = () => {
               step="1"
               value={workflowTestInput.datetime}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowExecutionBusy}
+              disabled={workflowControlLocked}
             />
           </div>
         </div>
@@ -7145,7 +7638,7 @@ const AgentSettings = () => {
             value={workflowTestInput.content}
             onChange={handleWorkflowTestInputChange}
             placeholder="消息内容"
-            disabled={workflowExecutionBusy}
+            disabled={workflowControlLocked}
           />
         </div>
         {workflowTestError && (
@@ -7195,6 +7688,8 @@ const AgentSettings = () => {
                     disabled={
                       workflowExecutionBusy || !workflowCanUpdateSavedBaseline
                     }
+                    title={workflowUpdateBaselineControlBoundary}
+                    aria-label={workflowUpdateBaselineControlBoundary}
                   >
                     {workflowSavedBaselineActionLabel}
                   </button>
@@ -7232,7 +7727,9 @@ const AgentSettings = () => {
                     <button
                       type="button"
                       onClick={handleUpdateWorkflowSavedBaseline}
-                      disabled={workflowExecutionBusy}
+                      disabled={workflowControlLocked}
+                      title={workflowUpdateBaselineControlBoundary}
+                      aria-label={workflowUpdateBaselineControlBoundary}
                     >
                       {workflowSavedBaselineActionLabel}
                     </button>
@@ -7327,15 +7824,32 @@ const AgentSettings = () => {
                   <em>{workflowRunEvidencePacket.detail}</em>
                   <em>{workflowRunEvidencePacket.boundary}</em>
                   {workflowRunEvidenceCopyReceipt && (
-                    <em className="agent-workflow-evidence-copy-receipt">
-                      已复制到本机剪贴板 ·{' '}
-                      {workflowRunEvidenceCopyReceipt.stale
-                        ? '旧快照'
-                        : '当前结果'}{' '}
-                      · {workflowRunEvidenceCopyReceipt.qualification} ·{' '}
+                    <em
+                      className={`agent-workflow-evidence-copy-receipt ${workflowRunEvidenceCopyReceipt.status}`}
+                    >
+                      {workflowRunEvidenceCopyReceipt.status === 'pending'
+                        ? '证据包复制中'
+                        : workflowRunEvidenceCopyReceipt.status === 'success'
+                          ? '已复制到本机剪贴板'
+                          : '复制证据包失败'}
+                      {' · '}
+                      {workflowRunEvidenceCopyReceipt.stale ? '旧快照' : '当前结果'}
+                      {' · '}
+                      {workflowRunEvidenceCopyReceipt.qualification}
+                      {' · '}
                       {new Date(
                         workflowRunEvidenceCopyReceipt.copiedAt,
                       ).toLocaleString()}
+                      {workflowRunEvidenceCopyReceipt.status === 'pending'
+                        ? ` · ${workflowRunEvidenceCopyReceipt.summary} · ${workflowRunEvidenceCopyReceipt.boundary}`
+                        : ''}
+                      {workflowRunEvidenceCopyReceipt.status === 'error'
+                        ? ` · ${workflowRunEvidenceCopyReceipt.summary} · ${workflowRunEvidenceCopyReceipt.boundary}${
+                            workflowRunEvidenceCopyReceipt.error
+                              ? ` · ${workflowRunEvidenceCopyReceipt.error}`
+                              : ''
+                          }`
+                        : ''}
                     </em>
                   )}
                   <div className="agent-workflow-evidence-chips">
@@ -7347,9 +7861,16 @@ const AgentSettings = () => {
                 <button
                   type="button"
                   onClick={handleCopyWorkflowRunEvidencePacket}
-                  disabled={workflowExecutionBusy}
+                  disabled={
+                    workflowExecutionBusy ||
+                    workflowRunEvidenceCopyReceipt?.status === 'pending'
+                  }
+                  title={workflowCopyEvidenceControlBoundary}
+                  aria-label={workflowCopyEvidenceControlBoundary}
                 >
-                  复制证据包
+                  {workflowRunEvidenceCopyReceipt?.status === 'pending'
+                    ? '复制中'
+                    : '复制证据包'}
                 </button>
               </div>
             )}
@@ -7401,11 +7922,20 @@ const AgentSettings = () => {
                 aria-label="Agent Workflow 下一步动作"
               >
                 <div className="agent-test-section-title">下一步</div>
+                <div
+                  className="agent-workflow-next-action-boundary"
+                  aria-label="Agent Workflow 下一步动作边界"
+                >
+                  <strong>下一步动作边界</strong>
+                  <small>{workflowRecommendedActionNoEffectBoundary}</small>
+                </div>
                 <div className="agent-workflow-next-action-list">
                   {workflowRecommendedActions.map((item) => (
                     <div
                       key={item.id}
                       className={`agent-workflow-next-action ${item.status}`}
+                      title={formatWorkflowRecommendedActionBoundary(item)}
+                      aria-label={formatWorkflowRecommendedActionBoundary(item)}
                     >
                       <span>
                         {workflowRecommendedActionStatusLabels[item.status] ||
@@ -7632,7 +8162,10 @@ const AgentSettings = () => {
         <span>{selectedToolLabels || '未选择工具'}</span>
       </div>
 
-      <button onClick={handleAddAgent} disabled={!canAddAgent}>
+      <button
+        onClick={handleAddAgent}
+        disabled={!canAddAgent || workflowControlLocked}
+      >
         添加 Agent
       </button>
     </div>
@@ -7885,7 +8418,7 @@ const IntelligentAgentSettings = () => {
       ]);
 
       // 设置最终结果
-      await wait(1000);
+      await wait(1600);
       if (!isDemoRunActive()) return;
       setDemoResult({
         isImportant: true,

@@ -147,10 +147,37 @@ describe('Stats user isolation metadata', () => {
       identitySource: 'header',
       storageKey: 'data/users/owner.alpha/memory.db',
       fallbackToDefault: false,
+      writeBoundary: {
+        mode: 'explicit_read_write',
+        canRead: true,
+        canWrite: true,
+        blockedOperations: [],
+        reason: 'explicit_x_user_id',
+        recoveryAction: 'none',
+      },
     });
     expect(
       fs.existsSync(path.join(dataDir, 'users', 'owner.alpha', 'memory.db')),
     ).toBe(true);
+  });
+
+  it('POST write without identity fails before creating default user storage', async () => {
+    const defaultUserDir = path.join(dataDir, 'users', 'default');
+    expect(fs.existsSync(defaultUserDir)).toBe(false);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      payload: {
+        content: 'missing identity write must not initialize default storage',
+        sourceType: 'manual',
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain('X-User-Id header is required');
+    expect(fs.existsSync(defaultUserDir)).toBe(false);
+    expect(userContextManager.getRegisteredUserIds()).not.toContain('default');
   });
 
   it('GET /api/v1/stats marks missing identity as default fallback', async () => {
@@ -166,6 +193,14 @@ describe('Stats user isolation metadata', () => {
       identitySource: 'default_fallback',
       storageKey: 'data/users/default/memory.db',
       fallbackToDefault: true,
+      writeBoundary: {
+        mode: 'default_read_only_fallback',
+        canRead: true,
+        canWrite: false,
+        blockedOperations: ['write', 'import', 'restore', 'profile_update'],
+        reason: 'missing_or_blank_x_user_id',
+        recoveryAction: 'restore_userinfo_username_or_set_user_id',
+      },
     });
   });
 

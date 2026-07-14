@@ -18,6 +18,8 @@
               { active: selectedRangeKey === option.key },
             ]"
             :aria-pressed="selectedRangeKey === option.key"
+            :title="getTimelineRangeControlBoundary(option)"
+            :aria-label="getTimelineRangeControlBoundary(option)"
             type="button"
             @click="selectRange(option.key)"
           >
@@ -30,6 +32,8 @@
             :key="option.key"
             :class="['control-tab', { active: selectedScope === option.key }]"
             :aria-pressed="selectedScope === option.key"
+            :title="getTimelineScopeControlBoundary(option)"
+            :aria-label="getTimelineScopeControlBoundary(option)"
             type="button"
             @click="selectScope(option.key)"
           >
@@ -40,12 +44,14 @@
           v-if="timelineSourceOptions.length > 1"
           class="source-filter"
           for="timeline-source-filter"
+          :title="timelineSourceSelectBoundary"
         >
           <span>来源</span>
           <select
             id="timeline-source-filter"
             v-model="selectedSourceFilterKey"
-            aria-label="按来源筛选时间轴"
+            :title="timelineSourceSelectBoundary"
+            :aria-label="timelineSourceSelectBoundary"
           >
             <option :value="ALL_TIMELINE_SOURCE_FILTER_KEY">
               全部来源
@@ -59,7 +65,13 @@
             </option>
           </select>
         </label>
-        <button class="refresh-btn" type="button" @click="loadTimeline">
+        <button
+          class="refresh-btn"
+          type="button"
+          :title="timelineRefreshControlBoundary"
+          :aria-label="timelineRefreshControlBoundary"
+          @click="loadTimeline"
+        >
           刷新
         </button>
       </div>
@@ -121,6 +133,23 @@
       </ul>
     </section>
 
+    <section
+      v-if="feedbackReceipt"
+      :class="[
+        'timeline-feedback-receipt',
+        `timeline-feedback-receipt-${feedbackReceipt.tone}`,
+      ]"
+      aria-live="polite"
+      aria-label="时间轴反馈回执"
+    >
+      <div class="receipt-title">{{ feedbackReceipt.title }}</div>
+      <ul>
+        <li v-for="item in feedbackReceipt.items" :key="item">
+          {{ item }}
+        </li>
+      </ul>
+    </section>
+
     <section class="timeline-boundary-receipt" aria-label="时间轴回执">
       <div class="receipt-title">{{ timelineBoundaryReceipt.title }}</div>
       <ul>
@@ -158,6 +187,8 @@
             },
           ]"
           :aria-pressed="source.isActive"
+          :title="getTimelineSourceChipBoundary(source)"
+          :aria-label="getTimelineSourceChipBoundary(source)"
           @click="selectSourceFilter(source.key)"
         >
           <span>{{ source.label }}</span>
@@ -286,6 +317,8 @@
                   ]"
                   :aria-pressed="isFeedbackActive(event, 'positive')"
                   :disabled="isFeedbackPending(event)"
+                  :title="getTimelineFeedbackButtonBoundary(event, 'positive')"
+                  :aria-label="getTimelineFeedbackButtonBoundary(event, 'positive')"
                   @click.stop="submitEventFeedback(event, 'positive')"
                 >
                   有用
@@ -299,6 +332,8 @@
                   ]"
                   :aria-pressed="isFeedbackActive(event, 'negative')"
                   :disabled="isFeedbackPending(event)"
+                  :title="getTimelineFeedbackButtonBoundary(event, 'negative')"
+                  :aria-label="getTimelineFeedbackButtonBoundary(event, 'negative')"
                   @click.stop="submitEventFeedback(event, 'negative')"
                 >
                   不相关
@@ -308,6 +343,8 @@
                   type="button"
                   class="feedback-btn clear-feedback-btn"
                   :disabled="isFeedbackPending(event)"
+                  :title="getTimelineFeedbackButtonBoundary(event, 'clear')"
+                  :aria-label="getTimelineFeedbackButtonBoundary(event, 'clear')"
                   @click.stop="submitEventFeedback(event, 'clear')"
                 >
                   撤销反馈
@@ -315,6 +352,8 @@
                 <button
                   v-if="getLinkSafetyState(event).exploreRoute"
                   type="button"
+                  :title="getTimelineMemoryRouteButtonBoundary(event)"
+                  :aria-label="getTimelineMemoryRouteButtonBoundary(event)"
                   @click.stop="openExploreLink(event)"
                 >
                   在记忆中查看
@@ -331,6 +370,8 @@
                 <button
                   v-if="shouldShowLinkRecoveryDiagnostic(event)"
                   type="button"
+                  :title="getTimelineRecoveryDiagnosticButtonBoundary(event)"
+                  :aria-label="getTimelineRecoveryDiagnosticButtonBoundary(event)"
                   @click.stop="copyLinkRecoveryDiagnostic(event)"
                 >
                   复制安全诊断
@@ -365,6 +406,8 @@
         <button
           v-if="selectedSourceFilterKey !== ALL_TIMELINE_SOURCE_FILTER_KEY"
           type="button"
+          :title="timelineResetSourceBoundary"
+          :aria-label="timelineResetSourceBoundary"
           @click="selectedSourceFilterKey = ALL_TIMELINE_SOURCE_FILTER_KEY"
         >
           查看全部来源
@@ -372,6 +415,8 @@
         <button
           v-if="selectedRangeKey === 'today'"
           type="button"
+          :title="timelineSevenDayRecoveryBoundary"
+          :aria-label="timelineSevenDayRecoveryBoundary"
           @click="selectRange('7d')"
         >
           查看近7天
@@ -379,6 +424,8 @@
         <button
           v-if="selectedScope !== 'all'"
           type="button"
+          :title="timelineAllScopeRecoveryBoundary"
+          :aria-label="timelineAllScopeRecoveryBoundary"
           @click="selectScope('all')"
         >
           切到全部
@@ -410,14 +457,19 @@ import {
   groupTimelineEventsByDay,
   parseTimelineFocus,
   ALL_TIMELINE_SOURCE_FILTER_KEY,
+  buildTimelineRangeControlBoundary,
   buildTimelineLinkRecoveryCopiedReceipt,
   buildTimelineLinkRecoveryCopyFailureReceipt,
   buildTimelineLinkRecoveryDiagnostic,
   buildTimelineBoundaryReceipt,
   buildTimelineEmptyReceipt,
+  buildTimelineFeedbackReceipt,
   buildTimelineNavigationReceipt,
   buildTimelineRefreshFailureReceipt,
   buildTimelineRefreshingSnapshotReceipt,
+  buildTimelineRefreshControlBoundary,
+  buildTimelineScopeControlBoundary,
+  buildTimelineSourceControlBoundary,
   buildTimelineSourceFilterOptions,
   filterTimelineEventsBySource,
   getTimelineSourceFilterKey,
@@ -470,6 +522,9 @@ const refreshFailureMessage = ref('');
 const navigationReceipt = ref<ReturnType<
   typeof buildTimelineNavigationReceipt
 > | null>(null);
+const feedbackReceipt = ref<ReturnType<typeof buildTimelineFeedbackReceipt> | null>(
+  null,
+);
 const loadedTimelineRequestKey = ref('');
 const isLoading = computed(() => store.isLoading);
 const isRefreshingSameSnapshot = computed(
@@ -626,6 +681,117 @@ const timelineRefreshingSnapshotReceipt = computed(() => {
     visibleEventCount: filteredTimelineEvents.value.length,
   });
 });
+const timelineSourceSelectBoundary = computed(
+  () =>
+    `按来源筛选时间轴；${buildTimelineSourceControlBoundary({
+      sourceFilterLabel: selectedSourceFilterLabel.value,
+      sourceCount: filteredTimelineEvents.value.length,
+      totalEventCount: timelineEvents.value.length,
+      isAllSources:
+        selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY,
+      isActive: true,
+    })}`,
+);
+const timelineRefreshControlBoundary = computed(() =>
+  buildTimelineRefreshControlBoundary({
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+  }),
+);
+const timelineResetSourceBoundary = computed(
+  () =>
+    `查看全部来源；${buildTimelineSourceControlBoundary({
+      sourceFilterLabel: '全部来源',
+      sourceCount: timelineEvents.value.length,
+      totalEventCount: timelineEvents.value.length,
+      isAllSources: true,
+      isActive:
+        selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY,
+    })}`,
+);
+const timelineSevenDayRecoveryBoundary = computed(
+  () =>
+    `查看近7天；${buildTimelineRangeControlBoundary({
+      rangeLabel: '近7天',
+      scope: selectedScope.value,
+      isActive: selectedRangeKey.value === '7d',
+    })}`,
+);
+const timelineAllScopeRecoveryBoundary = computed(
+  () =>
+    `切到全部；${buildTimelineScopeControlBoundary({
+      scope: 'all',
+      isActive: selectedScope.value === 'all',
+    })}`,
+);
+
+function getTimelineRangeControlBoundary(option: TimelineRangeOption): string {
+  return buildTimelineRangeControlBoundary({
+    rangeLabel: option.label,
+    scope: selectedScope.value,
+    isActive: selectedRangeKey.value === option.key,
+  });
+}
+
+function getTimelineScopeControlBoundary(option: {
+  key: RecallScope;
+  label: string;
+}): string {
+  return buildTimelineScopeControlBoundary({
+    scope: option.key,
+    isActive: selectedScope.value === option.key,
+  });
+}
+
+function getTimelineSourceChipBoundary(source: {
+  key: string;
+  label: string;
+  count: number;
+  isActive: boolean;
+  isHiddenByCurrentFilter?: boolean;
+}): string {
+  const boundary = buildTimelineSourceControlBoundary({
+    sourceFilterLabel: source.label,
+    sourceCount: source.count,
+    totalEventCount: timelineEvents.value.length,
+    isAllSources: source.key === ALL_TIMELINE_SOURCE_FILTER_KEY,
+    isActive: source.isActive,
+  });
+  if (!source.isHiddenByCurrentFilter) return boundary;
+  return boundary.replace(
+    `${source.label} ${source.count}`,
+    `${source.label} ${source.count} 已隐藏`,
+  );
+}
+
+function getTimelineFeedbackButtonBoundary(
+  event: MemoryTimelineEvent,
+  action: MemoryFeedbackAction,
+): string {
+  const title = event.title || '当前时间轴记忆';
+  const actionLabel =
+    action === 'positive'
+      ? '有用'
+      : action === 'negative'
+      ? '不相关'
+      : '撤销反馈';
+  const target = `${event.type}:${event.id}`;
+  if (isFeedbackPending(event)) {
+    return `${actionLabel}：${title}；这条时间轴反馈正在提交，暂不重复发送 /feedback；不会删除、隐藏、外发、写画像或立即重排本页列表。`;
+  }
+  if (action !== 'clear' && isFeedbackActive(event, action)) {
+    return `${actionLabel}：${title}；当前已记录为“${actionLabel}”，再次点击不会重复写入 /feedback；不会删除、隐藏、外发、写画像或立即重排本页列表。`;
+  }
+  if (action === 'clear') {
+    return `撤销反馈：${title}；只撤销 ${target} 的 recall_quality 反馈，不删除记忆、不重新读取来源、不外发内容、不写画像，也不会立即重排本页列表。`;
+  }
+  return `${actionLabel}：${title}；向 /feedback 写入 ${target} 的 recall_quality=${action}，当前范围是 ${getScopeLabel(
+    selectedScope.value,
+  )} · ${selectedRangeOption.value.label} · ${
+    selectedSourceFilterLabel.value
+  }；不会删除、隐藏、外发、写画像或立即重排本页列表。`;
+}
 
 function firstQueryValue(value: unknown): string {
   if (Array.isArray(value)) return String(value[0] || '');
@@ -755,6 +921,7 @@ const loadTimeline = async () => {
   errorMessage.value = '';
   focusNotice.value = '';
   refreshFailureMessage.value = '';
+  feedbackReceipt.value = null;
   const rangeOption = selectedRangeOption.value;
   const requestKey = getTimelineRequestKey();
   try {
@@ -810,6 +977,7 @@ const selectRange = (rangeKey: TimelineRangeKey) => {
   if (selectedRangeKey.value === rangeKey) return;
   selectedRangeKey.value = rangeKey;
   navigationReceipt.value = null;
+  feedbackReceipt.value = null;
   syncRouteSelection();
   void loadTimeline();
 };
@@ -818,6 +986,7 @@ const selectScope = (scope: RecallScope) => {
   if (selectedScope.value === scope) return;
   selectedScope.value = scope;
   navigationReceipt.value = null;
+  feedbackReceipt.value = null;
   syncRouteSelection();
   void loadTimeline();
 };
@@ -825,6 +994,7 @@ const selectScope = (scope: RecallScope) => {
 const selectSourceFilter = (sourceKey: string) => {
   selectedSourceFilterKey.value = sourceKey || ALL_TIMELINE_SOURCE_FILTER_KEY;
   navigationReceipt.value = null;
+  feedbackReceipt.value = null;
 };
 
 const getLinkSafetyState = (event: MemoryTimelineEvent) =>
@@ -837,8 +1007,25 @@ const getLinkSafetyStatus = (event: MemoryTimelineEvent) =>
   formatMemoryLinkSafetyStatus(getLinkSafetyState(event));
 
 const getSourceButtonTitle = (event: MemoryTimelineEvent) => {
-  const host = getLinkSafetyState(event).sourceHost;
-  return host ? `打开来源：${host}` : '打开来源';
+  const host = getLinkSafetyState(event).sourceHost || '安全 http/https 来源';
+  return `打开来源：${host}；在新标签页打开已净化来源，使用 noopener/noreferrer；不会重新读取、同步或确认来源内容。`;
+};
+
+const getTimelineMemoryRouteButtonBoundary = (event: MemoryTimelineEvent) => {
+  const title = event.title || '当前时间轴记忆';
+  const route = getLinkSafetyState(event).exploreRoute || '记忆内路由';
+  return `在记忆中查看：${title}；只切换 Memory Exploring 内部视图 ${route}，不会打开外部网页、改写记忆、写反馈或同步来源。`;
+};
+
+const getTimelineRecoveryDiagnosticButtonBoundary = (
+  event: MemoryTimelineEvent,
+) => {
+  const title = event.title || '当前时间轴记忆';
+  const blockedCount = getLinkSafetyState(event).blockedLabels.length;
+  const status = blockedCount > 0
+    ? `${blockedCount} 项拦截原因`
+    : '没有安全内链或 http/https 来源';
+  return `复制安全诊断：${title}；只复制标题、时间、来源标签、记忆 key 和${status}，不复制被拦截原始 URL，也不会写入、同步、确认或重新读取来源。`;
 };
 
 const hasSafeNavigationTarget = (event: MemoryTimelineEvent): boolean => {
@@ -879,10 +1066,10 @@ const getTimelineClickAffordance = (
   if (safetyState.sourceUrl) {
     return {
       tone: 'ready',
-      label: '卡片点击：打开安全来源',
-      detail: `将在新标签打开 ${
+      label: '卡片点击：显示打开边界',
+      detail: `这条记忆可通过“打开来源”按钮打开 ${
         safetyState.sourceHost || 'http/https 来源'
-      }；不代表重新同步、读取或确认来源内容。`,
+      }；卡片点击不会直接打开外部标签页。`,
     };
   }
   if (safetyState.blockedLabels.length > 0) {
@@ -982,10 +1169,21 @@ const openSourceUrl = (event: MemoryTimelineEvent) => {
   return true;
 };
 
+const previewSourceUrlBoundary = (event: MemoryTimelineEvent) => {
+  const safetyState = getLinkSafetyState(event);
+  if (!safetyState.sourceUrl) return false;
+  navigationReceipt.value = buildTimelineNavigationReceipt({
+    action: 'source_url_ready',
+    eventTitle: event.title,
+    sourceHost: safetyState.sourceHost,
+  });
+  return true;
+};
+
 const handleEventClick = (event: MemoryTimelineEvent) => {
   const safetyState = getLinkSafetyState(event);
   if (safetyState.exploreRoute && openExploreLink(event)) return;
-  if (safetyState.sourceUrl && openSourceUrl(event)) return;
+  if (safetyState.sourceUrl && previewSourceUrlBoundary(event)) return;
   setBlockedNavigationReceipt(event);
 };
 
@@ -1140,6 +1338,16 @@ async function submitEventFeedback(
   if (previousState === 'pending' || previousState === action) return;
 
   setFeedbackState(event.resultKey, 'pending');
+  feedbackReceipt.value = buildTimelineFeedbackReceipt({
+    status: 'pending',
+    action: action as 'positive' | 'negative' | 'clear',
+    eventTitle: event.title,
+    targetType: event.type,
+    targetId: event.id,
+    scope: selectedScope.value,
+    rangeLabel: selectedRangeOption.value.label,
+    sourceFilterLabel: selectedSourceFilterLabel.value,
+  });
   try {
     const response = (await chromeAPI.sendMessage({
       type: 'SUBMIT_MEMORY_FEEDBACK',
@@ -1156,6 +1364,16 @@ async function submitEventFeedback(
 
     errorMessage.value = '';
     setFeedbackState(event.resultKey, action === 'clear' ? 'cleared' : action);
+    feedbackReceipt.value = buildTimelineFeedbackReceipt({
+      status: action === 'clear' ? 'cleared' : 'success',
+      action: action as 'positive' | 'negative' | 'clear',
+      eventTitle: event.title,
+      targetType: event.type,
+      targetId: event.id,
+      scope: selectedScope.value,
+      rangeLabel: selectedRangeOption.value.label,
+      sourceFilterLabel: selectedSourceFilterLabel.value,
+    });
   } catch (error: any) {
     setFeedbackState(
       event.resultKey,
@@ -1165,7 +1383,17 @@ async function submitEventFeedback(
         ? previousState
         : undefined,
     );
-    errorMessage.value = error?.message || '反馈暂时无法提交，请稍后再试。';
+    feedbackReceipt.value = buildTimelineFeedbackReceipt({
+      status: 'failure',
+      action: action as 'positive' | 'negative' | 'clear',
+      eventTitle: event.title,
+      targetType: event.type,
+      targetId: event.id,
+      scope: selectedScope.value,
+      rangeLabel: selectedRangeOption.value.label,
+      sourceFilterLabel: selectedSourceFilterLabel.value,
+      errorMessage: error?.message || '反馈暂时无法提交，请稍后再试。',
+    });
   }
 }
 
@@ -1331,7 +1559,8 @@ onMounted(() => {
 
 .timeline-navigation-receipt,
 .timeline-refresh-failure-receipt,
-.timeline-refreshing-snapshot-receipt {
+.timeline-refreshing-snapshot-receipt,
+.timeline-feedback-receipt {
   display: grid;
   gap: 0.55rem;
   margin-bottom: 1rem;
@@ -1351,6 +1580,16 @@ onMounted(() => {
   background: rgba(8, 47, 73, 0.3);
 }
 
+.timeline-feedback-receipt-success {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(22, 101, 52, 0.2);
+}
+
+.timeline-feedback-receipt-warning {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(120, 53, 15, 0.18);
+}
+
 .timeline-navigation-receipt-warning {
   border-color: rgba(251, 191, 36, 0.32);
   background: rgba(120, 53, 15, 0.18);
@@ -1358,7 +1597,8 @@ onMounted(() => {
 
 .timeline-navigation-receipt ul,
 .timeline-refresh-failure-receipt ul,
-.timeline-refreshing-snapshot-receipt ul {
+.timeline-refreshing-snapshot-receipt ul,
+.timeline-feedback-receipt ul {
   display: grid;
   gap: 0.35rem;
   margin: 0;
@@ -1370,7 +1610,8 @@ onMounted(() => {
 
 .timeline-navigation-receipt li,
 .timeline-refresh-failure-receipt li,
-.timeline-refreshing-snapshot-receipt li {
+.timeline-refreshing-snapshot-receipt li,
+.timeline-feedback-receipt li {
   overflow-wrap: anywhere;
 }
 

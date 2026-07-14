@@ -73,8 +73,42 @@
         </div>
       </div>
 
+      <div
+        v-if="dreams.length > 0"
+        class="dream-review-filter"
+        aria-label="梦境复核视图筛选"
+      >
+        <div class="filter-head">
+          <div>
+            <span class="filter-label">复核视图</span>
+            <strong>{{ dreamReviewFilterReceipt.title }}</strong>
+          </div>
+          <span>{{ dreamReviewFilterReceipt.summary }}</span>
+        </div>
+        <div class="filter-options" role="group" aria-label="选择梦境复核视图">
+          <button
+            v-for="option in dreamReviewFilterOptions"
+            :key="option.value"
+            class="filter-option"
+            :class="{ active: activeDreamReviewFilter === option.value }"
+            :aria-pressed="activeDreamReviewFilter === option.value"
+            :title="dreamReviewFilterButtonBoundary(option)"
+            :aria-label="dreamReviewFilterButtonBoundary(option)"
+            @click="setDreamReviewFilter(option.value)"
+          >
+            <span>{{ option.label }}</span>
+            <strong>{{ option.count }}</strong>
+          </button>
+        </div>
+        <div class="filter-boundary">{{ dreamReviewFilterReceipt.boundary }}</div>
+      </div>
+
       <div v-if="requestedFileMissing" class="partial-warning targeted-warning">
         通知指向的梦境文件 {{ requestedFilename }} 暂时无法读取；已先展示最近可用内容。
+      </div>
+
+      <div v-if="invalidRequestedFileParam" class="partial-warning targeted-warning">
+        深链已忽略：通知文件参数无效；只接受 dreams/文件名.md 或 文件名.md，不能包含子目录、路径穿越、反斜杠或非 Markdown 文件。页面没有读取该参数，已按最近可用 dream 展示；这不会重跑 Dream Replay、更新 digest、确认内容或写回记忆。
       </div>
 
       <div v-if="skippedFiles.length > 0" class="partial-warning">
@@ -90,9 +124,27 @@
         <p class="empty-hint">下一次长期记忆回放完成后会出现在这里。</p>
       </div>
 
-      <div v-else-if="dreams.length > 0" class="dream-list">
+      <div
+        v-else-if="filteredDreams.length === 0"
+        class="empty-state filtered-empty"
+      >
+        <div class="empty-title">当前复核视图没有梦境</div>
+        <p class="empty-hint">
+          本地筛选未命中；不会重跑 Dream Replay、更新 digest 或写回记忆。
+        </p>
+        <button
+          class="filter-reset"
+          title="恢复显示全部梦境；只改变本页可见筛选，不读取新 dream、不确认内容或写回记忆。"
+          aria-label="恢复显示全部梦境；只改变本页可见筛选，不读取新 dream、不确认内容或写回记忆。"
+          @click="setDreamReviewFilter('all')"
+        >
+          显示全部
+        </button>
+      </div>
+
+      <div v-else-if="filteredDreams.length > 0" class="dream-list">
         <article
-          v-for="dream in dreams"
+          v-for="dream in filteredDreams"
           :key="dream.filename"
           class="dream-card"
           :class="{
@@ -205,6 +257,20 @@
             </div>
             <p>{{ dreamTriage(dream).summary }}</p>
             <div class="triage-boundary">{{ dreamTriage(dream).boundary }}</div>
+          </div>
+
+          <div class="dream-visible-handoff" aria-label="梦境可见复核入口">
+            <div class="visible-handoff-copy">
+              <span>复核入口</span>
+              <strong>{{ dreamVisibleHandoffLabel(dream) }}</strong>
+              <p>{{ dreamReviewHandoffReceipt(dream).boundary }}</p>
+            </div>
+            <router-link
+              class="dream-visible-handoff-link"
+              :to="reflectionReviewRoute(dream)"
+            >
+              打开反思筛选
+            </router-link>
           </div>
 
           <div class="dream-brief" v-if="!dream.expanded">
@@ -343,14 +409,39 @@ interface DreamFreshnessReceipt {
   boundary: string;
 }
 
+type DreamReviewFilter = 'all' | 'priority' | 'ready' | 'missing';
+
+interface DreamReviewFilterOption {
+  value: DreamReviewFilter;
+  label: string;
+  count: number;
+  description: string;
+}
+
+interface DreamReviewFilterReceipt {
+  title: string;
+  summary: string;
+  boundary: string;
+}
+
 const loading = ref(true);
 const loadError = ref('');
 const dreams = ref<DreamItem[]>([]);
 const skippedFiles = ref<string[]>([]);
+const activeDreamReviewFilter = ref<DreamReviewFilter>('all');
 const route = useRoute();
 
+const hasRequestedFileParam = computed(
+  () => typeof route.query.file !== 'undefined',
+);
+const rawRequestedFileParam = computed(() =>
+  (firstQueryValue(route.query.file) ?? '').trim(),
+);
 const requestedFilename = computed(() =>
-  normalizeDreamFilename(firstQueryValue(route.query.file)),
+  normalizeDreamFilename(rawRequestedFileParam.value),
+);
+const invalidRequestedFileParam = computed(
+  () => hasRequestedFileParam.value && !requestedFilename.value,
 );
 
 const totalInsights = computed(() =>
@@ -371,6 +462,54 @@ const reviewReadyDreamCount = computed(
 const ungroundedDreamCount = computed(
   () => dreams.value.filter(needsGroundingReview).length,
 );
+const filteredDreams = computed(() =>
+  dreams.value.filter((dream) =>
+    dreamMatchesReviewFilter(dream, activeDreamReviewFilter.value),
+  ),
+);
+const dreamReviewFilterOptions = computed<DreamReviewFilterOption[]>(() => [
+  {
+    value: 'all',
+    label: '全部',
+    count: dreams.value.length,
+    description: '按深链命中和生成日期展示当前读取窗口内的所有梦境',
+  },
+  {
+    value: 'priority',
+    label: '优先复核',
+    count: priorityReviewDreamCount.value,
+    description: '只看有证据且包含风险或新关系的梦境',
+  },
+  {
+    value: 'ready',
+    label: '可带证据',
+    count: reviewReadyDreamCount.value,
+    description: '只看已经带原始证据回执、适合进入 Reflection 复核的梦境',
+  },
+  {
+    value: 'missing',
+    label: '缺证据',
+    count: ungroundedDreamCount.value,
+    description: '只看缺少证据回执或召回结果为 0 的梦境',
+  },
+]);
+const activeDreamReviewFilterOption = computed(
+  () =>
+    dreamReviewFilterOptions.value.find(
+      (option) => option.value === activeDreamReviewFilter.value,
+    ) ?? dreamReviewFilterOptions.value[0],
+);
+const dreamReviewFilterReceipt = computed<DreamReviewFilterReceipt>(() => {
+  const option = activeDreamReviewFilterOption.value;
+  const visibleCount = filteredDreams.value.length;
+  const totalCount = dreams.value.length;
+  return {
+    title: `复核视图：${option.label}`,
+    summary: `当前显示 ${visibleCount}/${totalCount} 个梦境；${option.description}。`,
+    boundary:
+      '本地筛选只改变本页可见列表，不重跑 Dream Replay、不重新读取 digest、不确认梦境内容、不写用户画像、记忆、Rehearsal、通知或外部系统。',
+  };
+});
 const requestedFileLoaded = computed(
   () =>
     Boolean(requestedFilename.value) &&
@@ -392,6 +531,9 @@ const dreamScopeEvidenceLine = computed(
     `证据状态：${reviewReadyDreamCount.value} 个可带证据复核，${ungroundedDreamCount.value} 个缺证据，${skippedFiles.value.length} 个读取失败。`,
 );
 const dreamScopeDeepLinkLine = computed(() => {
+  if (invalidRequestedFileParam.value) {
+    return '深链状态：已忽略无效 dream 文件参数；只接受 dreams/文件名.md 或 文件名.md。';
+  }
   if (!requestedFilename.value) {
     return '深链状态：未指定通知文件，按最近生成日期展示。';
   }
@@ -643,6 +785,26 @@ function isPriorityReviewDream(dream: DreamItem): boolean {
   );
 }
 
+function dreamMatchesReviewFilter(
+  dream: DreamItem,
+  filter: DreamReviewFilter,
+): boolean {
+  if (filter === 'priority') return isPriorityReviewDream(dream);
+  if (filter === 'ready') return isDreamReviewReady(dream);
+  if (filter === 'missing') return needsGroundingReview(dream);
+  return true;
+}
+
+function setDreamReviewFilter(filter: DreamReviewFilter) {
+  activeDreamReviewFilter.value = filter;
+}
+
+function dreamReviewFilterButtonBoundary(
+  option: DreamReviewFilterOption,
+): string {
+  return `${option.label}：显示 ${option.count} 个梦境，${option.description}；只改变本页可见筛选，不重跑 Dream Replay、不更新 digest、不确认内容或写回记忆。`;
+}
+
 function isRequestedDream(dream: DreamItem): boolean {
   return Boolean(requestedFilename.value) && dream.filename === requestedFilename.value;
 }
@@ -724,6 +886,14 @@ function dreamReviewHandoffReceipt(dream: DreamItem): DreamReviewHandoffReceipt 
     boundary:
       '跳转只携带筛选条件，不确认 dream 结论，不新增记忆或画像，不创建 Rehearsal、通知、动作或外部写回。',
   };
+}
+
+function dreamVisibleHandoffLabel(dream: DreamItem): string {
+  if (dream.risks.length > 0) return '带风险线索去 Reflection 核证';
+  if (dream.relationships.length > 0) return '带新关系线索去 Reflection 核证';
+  if (needsGroundingReview(dream)) return '先带主题去 Reflection 找证据';
+  if (dream.insights.length > 0) return '带洞察线索去 Reflection 整理';
+  return '带主题去 Reflection 只读查看';
 }
 
 function dreamNotificationHandoffReceipt(
@@ -1070,6 +1240,90 @@ watch(
   color: #fcd34d;
 }
 
+.dream-review-filter {
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.filter-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.filter-head strong {
+  display: block;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+.filter-label {
+  color: #bfdbfe;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.filter-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.filter-option,
+.filter-reset {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.72);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.55rem;
+}
+
+.filter-option strong {
+  color: #e5e7eb;
+  font-size: 0.9rem;
+}
+
+.filter-option:hover,
+.filter-option.active,
+.filter-reset:hover {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+}
+
+.filter-boundary {
+  margin-top: 0.65rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 0.55rem;
+  color: #fde68a;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 .partial-warning {
   border: 1px solid rgba(251, 191, 36, 0.26);
   border-radius: 8px;
@@ -1117,6 +1371,18 @@ watch(
   font-size: 0.875rem;
   color: #64748b;
   margin-top: 0.5rem;
+}
+
+.filtered-empty {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+  margin-bottom: 1rem;
+}
+
+.filter-reset {
+  margin-top: 1rem;
+  padding: 0.55rem 0.85rem;
 }
 
 .dream-list {
@@ -1469,6 +1735,61 @@ watch(
   color: #94a3b8;
 }
 
+.dream-visible-handoff {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0 1.35rem 0.9rem;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.32);
+  color: #cbd5e1;
+  padding: 0.68rem 0.78rem;
+}
+
+.visible-handoff-copy {
+  min-width: 0;
+}
+
+.visible-handoff-copy span {
+  display: inline-block;
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-right: 0.45rem;
+}
+
+.visible-handoff-copy strong {
+  color: #e5e7eb;
+  font-size: 0.82rem;
+}
+
+.visible-handoff-copy p {
+  margin: 0.28rem 0 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.dream-visible-handoff-link {
+  flex-shrink: 0;
+  border: 1px solid rgba(45, 212, 191, 0.26);
+  border-radius: 8px;
+  background: rgba(20, 83, 45, 0.16);
+  color: #99f6e4;
+  padding: 0.46rem 0.68rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.dream-visible-handoff-link:hover {
+  border-color: rgba(45, 212, 191, 0.5);
+  color: #ccfbf1;
+}
+
 .brief-block {
   border-left: 3px solid rgba(96, 165, 250, 0.5);
   background: rgba(15, 23, 42, 0.38);
@@ -1721,8 +2042,25 @@ watch(
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .filter-head {
+    flex-direction: column;
+  }
+
+  .filter-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .scope-receipt-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dream-visible-handoff {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dream-visible-handoff-link {
+    text-align: center;
   }
 }
 </style>

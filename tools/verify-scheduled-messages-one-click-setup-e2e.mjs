@@ -64,6 +64,19 @@ function collectPageErrors(page) {
   };
 }
 
+async function assertButtonBoundary(button, phrases) {
+  const title = await button.getAttribute('title');
+  const ariaLabel = await button.getAttribute('aria-label');
+
+  for (const phrase of phrases) {
+    assert.ok(title?.includes(phrase), `Button title should include "${phrase}", got: ${title}`);
+    assert.ok(
+      ariaLabel?.includes(phrase),
+      `Button aria-label should include "${phrase}", got: ${ariaLabel}`,
+    );
+  }
+}
+
 async function installInitializedRoutes(page) {
   await page.addInitScript(() => {
     if (globalThis.chrome?.identity) {
@@ -189,6 +202,165 @@ async function installSetupRequestRoutes(page) {
   return () => releaseSpreadsheetCreate();
 }
 
+async function installApiRequiredRoutes(page) {
+  await page.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
+    }
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v2/userinfo', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        email: 'esone.qiu@example.com',
+        name: 'Esone Qiu',
+        given_name: 'Esone',
+        family_name: 'Qiu',
+        hd: 'example.com',
+      }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/v4/spreadsheets', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        spreadsheetId: 'api-required-sheet-123',
+        spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/api-required-sheet-123/edit',
+        sheets: [
+          { properties: { title: 'Messages', sheetId: 101 } },
+          { properties: { title: 'Config', sheetId: 102 } },
+          { properties: { title: 'Logs', sheetId: 103 } },
+        ],
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/drive/v3/files/api-required-sheet-123/permissions', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/v4/spreadsheets/api-required-sheet-123:batchUpdate', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ replies: [] }),
+    });
+  });
+
+  await page.route('https://script.googleapis.com/v1/projects', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: {
+          message: 'Apps Script API has not been used in project before or it is disabled. Visit https://script.google.com/home/usersettings to enable it.',
+        },
+      }),
+    });
+  });
+}
+
+async function installAuthorizationPromptRoutes(page) {
+  await page.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
+    }
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v2/userinfo', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        email: 'esone.qiu@example.com',
+        name: 'Esone Qiu',
+        given_name: 'Esone',
+        family_name: 'Qiu',
+        hd: 'example.com',
+      }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/v4/spreadsheets', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        spreadsheetId: 'auth-sheet-123',
+        spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/auth-sheet-123/edit',
+        sheets: [
+          { properties: { title: 'Messages', sheetId: 201 } },
+          { properties: { title: 'Config', sheetId: 202 } },
+          { properties: { title: 'Logs', sheetId: 203 } },
+        ],
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/drive/v3/files/auth-sheet-123/permissions', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/v4/spreadsheets/auth-sheet-123:batchUpdate', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ replies: [] }),
+    });
+  });
+
+  await page.route('**/app-script-template.gs', async (route) => {
+    await route.fulfill({
+      contentType: 'text/plain',
+      body: 'function minuteTrigger() { return true; }',
+    });
+  });
+
+  await page.route('https://script.googleapis.com/v1/projects', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ scriptId: 'auth-script-123' }),
+    });
+  });
+
+  await page.route('https://script.googleapis.com/v1/projects/auth-script-123/content', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    });
+  });
+
+  await page.route('https://script.googleapis.com/v1/projects/auth-script-123/versions', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ versionNumber: 1 }),
+    });
+  });
+
+  await page.route('https://script.googleapis.com/v1/projects/auth-script-123/deployments', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        deploymentId: 'auth-deployment-123',
+        entryPoints: [
+          {
+            entryPointType: 'WEB_APP',
+            webApp: {
+              url: 'https://script.google.com/macros/s/auth-deployment-123/exec',
+            },
+          },
+        ],
+      }),
+    });
+  });
+}
+
 let launched;
 try {
   launched = await launchExtensionContext();
@@ -208,9 +380,15 @@ try {
   await page.locator('h1', { hasText: '开始使用定时消息管理' }).waitFor({
     timeout: 15000,
   });
-  await page.locator('button', { hasText: '一键生成维护表' }).waitFor({
+  const setupStartButton = page.locator('button', { hasText: '一键生成维护表' });
+  await setupStartButton.waitFor({
     timeout: 15000,
   });
+  await assertButtonBoundary(setupStartButton, [
+    '创建维护表、Apps Script 项目和 Web App',
+    '不会设置触发器、写测试消息、保存最终 Config 或发送消息',
+    '失败会停在可恢复状态',
+  ]);
   await page.locator('text=维护表默认不会开放为“知道链接的任何人可编辑”').waitFor({
     timeout: 15000,
   });
@@ -235,7 +413,12 @@ try {
     timeout: 15000,
   });
 
-  await setupRequestPage.locator('button', { hasText: '一键生成维护表' }).click();
+  const setupRequestStartButton = setupRequestPage.locator('button', { hasText: '一键生成维护表' });
+  await assertButtonBoundary(setupRequestStartButton, [
+    '创建维护表、Apps Script 项目和 Web App',
+    '不会设置触发器、写测试消息、保存最终 Config 或发送消息',
+  ]);
+  await setupRequestStartButton.click();
   await setupRequestPage.locator('text=初始化请求已提交').waitFor({
     timeout: 15000,
   });
@@ -249,6 +432,68 @@ try {
   releaseSetupRequest();
   await setupRequestPage.close();
   assertNoSetupRequestPageErrors();
+
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.clear();
+  });
+
+  const apiRequiredPage = await context.newPage();
+  const assertNoApiRequiredPageErrors = collectPageErrors(apiRequiredPage);
+  await installApiRequiredRoutes(apiRequiredPage);
+
+  await apiRequiredPage.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+
+  await apiRequiredPage.locator('button', { hasText: '一键生成维护表' }).click();
+  await apiRequiredPage.locator('text=需要开启 AppScript API').waitFor({
+    timeout: 15000,
+  });
+  await assertButtonBoundary(apiRequiredPage.locator('button', { hasText: '打开 AppScript 设置页面' }), [
+    '只打开外部设置',
+    '不创建维护表、不写 Sheet/Script/Config',
+    '不发送消息',
+  ]);
+  await assertButtonBoundary(apiRequiredPage.locator('button', { hasText: '我已开启 API，重新初始化' }), [
+    '重新发起第一阶段初始化',
+    '重新创建维护表/App Script/Web App',
+    '不会直接设置触发器或发送消息',
+  ]);
+
+  await apiRequiredPage.close();
+  assertNoApiRequiredPageErrors();
+
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.clear();
+  });
+
+  const authorizationPromptPage = await context.newPage();
+  const assertNoAuthorizationPromptPageErrors = collectPageErrors(authorizationPromptPage);
+  await installAuthorizationPromptRoutes(authorizationPromptPage);
+
+  await authorizationPromptPage.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+
+  await authorizationPromptPage.locator('button', { hasText: '一键生成维护表' }).click();
+  await authorizationPromptPage.locator('text=需要授权').waitFor({
+    timeout: 15000,
+  });
+  await assertButtonBoundary(authorizationPromptPage.locator('button', { hasText: '打开授权页面' }), [
+    '打开已创建 Web App 的授权页面',
+    '不会在当前页继续初始化、创建触发器、写测试消息或发送消息',
+  ]);
+  await assertButtonBoundary(authorizationPromptPage.locator('button', { hasText: '我已完成授权，继续初始化' }), [
+    '继续第二阶段',
+    '沿用已创建的维护表、Script 和 deployment',
+    '设置触发器、写测试消息并保存 Config',
+    '不会立即发送正式消息',
+  ]);
+
+  await authorizationPromptPage.close();
+  assertNoAuthorizationPromptPageErrors();
 
   await serviceWorker.evaluate(async ({ sheetId, receiptKey }) => {
     await chrome.storage.local.clear();

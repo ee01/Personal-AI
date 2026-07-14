@@ -71,6 +71,11 @@ import {
   normalizeMeetingTranscribeApiStyle,
   probeMeetingTranscribeProvider,
 } from './asrProvider';
+import {
+  buildMeetingTranscriptionReadiness,
+  describeLocalASRPreflightStatus,
+  type LocalASRStatusPayload,
+} from './asr/localReadinessPresentation';
 import { sanitizeASRTranscriptText } from './asr/transcriptFilter';
 import {
   buildMeetingPilotSpeechSuggestion,
@@ -587,55 +592,26 @@ async function evaluateMeetingReadiness(
 
     const desktopAsrStatus = await (async () => {
       try {
-        const data = await sendWhisperBridgeRequest<{
-          ok?: boolean;
-          ready?: boolean;
-          liveReady?: boolean;
-          finalReady?: boolean;
-        }>({
+        const data = await sendWhisperBridgeRequest<LocalASRStatusPayload>({
           method: 'GET',
           path: '/asr/status',
         });
-        return {
-          available: Boolean(data?.finalReady ?? data?.ready),
-          liveReady: Boolean(data?.liveReady),
-        };
+        return describeLocalASRPreflightStatus(data);
       } catch {
-        return { available: false, liveReady: false };
+        return describeLocalASRPreflightStatus(null);
       }
     })();
-    const desktopAvailable = desktopAsrStatus.available;
 
     const transcription = (() => {
-      if (transcriptionMode === 'cloud-only') {
-        return cloudTranscription;
-      }
-      if (transcriptionMode === 'local-only') {
-        if (desktopAvailable) {
-          return createDependencyReadiness(
-            'ready',
-            desktopAsrStatus.liveReady
-              ? 'Local ASR is available.'
-              : 'Local ASR final transcription is available; live partial captions may be delayed until speech ends.',
-            checkedAt,
-          );
-        }
-        return createDependencyReadiness(
-          'degraded',
-          'Local ASR is unavailable. Capture will still probe Chrome on-device speech recognition; install the Personal AI desktop app for the more stable local path.',
-          checkedAt,
-        );
-      }
-      if (desktopAvailable || cloudTranscription.status === 'ready') {
-        return createDependencyReadiness(
-          'ready',
-          'Transcription is available.',
-          checkedAt,
-        );
-      }
+      const result = buildMeetingTranscriptionReadiness({
+        mode: transcriptionMode,
+        local: desktopAsrStatus,
+        cloudStatus: cloudTranscription.status,
+        cloudMessage: cloudTranscription.message,
+      });
       return createDependencyReadiness(
-        'degraded',
-        'No transcription available. Configure a cloud API key in settings, or install the Personal AI desktop app for local transcription.',
+        result.status,
+        result.message,
         checkedAt,
       );
     })();

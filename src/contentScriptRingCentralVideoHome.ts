@@ -654,6 +654,9 @@ class RingCentralVideoHomePrep {
         ? this.getStorylineDismissReceipt(prep, event)
         : null;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
+    const refreshButtonBoundary = buildMeetingPrepRefreshButtonBoundary(
+      this.state.loading,
+    );
     this.shadow.innerHTML = `
       <style>${styles()}</style>
       <div class="pai-card">
@@ -664,7 +667,11 @@ class RingCentralVideoHomePrep {
             )}" alt="" />
             <span>Today Pilot 会前准备</span>
           </div>
-          <button class="pai-icon" data-action="sync" title="刷新会前准备">↻</button>
+          <button class="pai-icon" data-action="sync" title="${escapeHtmlAttribute(
+            refreshButtonBoundary,
+          )}" aria-label="${escapeHtmlAttribute(
+            refreshButtonBoundary,
+          )}" ${this.state.loading ? 'disabled' : ''}>↻</button>
         </div>
         <div class="pai-sub">${escapeHtml(
           getMeetingPrepSubtitle(
@@ -1511,12 +1518,16 @@ function escapeHtmlAttribute(value: string): string {
 function renderEvidenceLinks(
   item: ContextAssistResponse['evidence'][number],
 ): string {
-  const links: Array<{ label: string; url: string }> = [];
+  const links: Array<{ label: string; url: string; boundary: string }> = [];
   const seen = new Set<string>();
-  const addLink = (label: string, url: string | null): void => {
+  const addLink = (
+    label: string,
+    url: string | null,
+    boundary: string,
+  ): void => {
     if (!url || seen.has(url)) return;
     seen.add(url);
-    links.push({ label, url });
+    links.push({ label, url, boundary });
   };
 
   const safeExploreRoute = sanitizeExploreRoute(item.exploreLink);
@@ -1524,19 +1535,24 @@ function renderEvidenceLinks(
     addLink(
       '在记忆中查看',
       chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`),
+      buildMeetingPrepEvidenceLinkBoundary('在记忆中查看', 'memory'),
     );
   }
 
   for (const link of item.links ?? []) {
+    const label = link.label || '打开来源';
     addLink(
-      link.label || '打开来源',
+      label,
       sanitizeContextExternalUrl(link.url, window.location.href),
+      buildMeetingPrepEvidenceLinkBoundary(label, 'source'),
     );
   }
 
+  const sourceLabel = '打开来源';
   addLink(
-    '打开来源',
+    sourceLabel,
     sanitizeContextExternalUrl(item.sourceUrl, window.location.href),
+    buildMeetingPrepEvidenceLinkBoundary(sourceLabel, 'source'),
   );
 
   if (links.length === 0) return '';
@@ -1545,11 +1561,32 @@ function renderEvidenceLinks(
       (link) =>
         `<a href="${escapeHtmlAttribute(
           link.url,
-        )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+        )}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(
+          link.boundary,
+        )}" aria-label="${escapeHtmlAttribute(
+          link.boundary,
+        )}">${escapeHtml(
           link.label,
         )}</a>`,
     )
     .join('')}</div>`;
+}
+
+function buildMeetingPrepRefreshButtonBoundary(loading: boolean): string {
+  if (loading) {
+    return '正在读取或刷新 Today Pilot 会前准备；当前不会重复触发 backfill、重新写入 handoff、加入会议、录音、发消息、创建任务、审批或写回日历/外部系统。';
+  }
+  return '刷新会前准备：重新读取本机会议列表，请求 Today Pilot 为当天会议补齐预生成准备，再读取缓存并更新本机 Meeting Pilot handoff；不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统。';
+}
+
+function buildMeetingPrepEvidenceLinkBoundary(
+  label: string,
+  kind: 'memory' | 'source',
+): string {
+  if (kind === 'memory') {
+    return '在记忆中查看这条会前准备证据：只打开 Memory Exploring 只读复核页；不会另行生成会前准备、更新 Meeting Pilot handoff、加入会议、录音、发送消息、创建任务、审批或写回日历/外部系统。';
+  }
+  return `打开会前准备来源「${label}」做人工复核：只在新标签导航，不会另行生成会前准备、更新 Meeting Pilot handoff、加入会议、录音、发送消息、创建任务、审批或写回来源系统。`;
 }
 
 function getDisplayEvidence(

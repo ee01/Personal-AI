@@ -49,6 +49,34 @@ async function expectNotVisible(page, text) {
   }
 }
 
+async function expectButtonBoundary(button, patterns, label) {
+  const title = await button.getAttribute('title');
+  const ariaLabel = await button.getAttribute('aria-label');
+  assert.ok(title, `${label} should expose a title boundary`);
+  assert.equal(
+    ariaLabel,
+    title,
+    `${label} boundary should be mirrored to aria-label`,
+  );
+  for (const pattern of patterns) {
+    assert.match(title, pattern, `${label} boundary should include ${pattern}`);
+  }
+}
+
+async function expectControlBoundary(locator, patterns, label) {
+  const title = await locator.getAttribute('title');
+  const ariaLabel = await locator.getAttribute('aria-label');
+  assert.ok(title, `${label} should expose a title boundary`);
+  assert.equal(
+    ariaLabel,
+    title,
+    `${label} boundary should be mirrored to aria-label`,
+  );
+  for (const pattern of patterns) {
+    assert.match(title, pattern, `${label} boundary should include ${pattern}`);
+  }
+}
+
 const person = {
   id: 'person-alice-radar',
   name: 'Alice Radar',
@@ -424,6 +452,17 @@ const assistantDraftResponse = {
   ],
 };
 
+function buildAssistantDraftResponseForGoal(goal) {
+  const normalizedGoal = typeof goal === 'string' && goal.trim()
+    ? goal.trim()
+    : '确认关系雷达 demo 的 owner';
+  return {
+    ...assistantDraftResponse,
+    draftText:
+      `Alice Radar，\n我想跟进一下：${normalizedGoal}\n我看到上次还留下一个点：Confirm owner before the next demo.\n你方便确认一下当前状态、下一步 owner 和预计时间吗？\n谢谢。`,
+  };
+}
+
 let reviewItems = [
   {
     id: 'relationship:person-alice-radar:relationship_context',
@@ -610,7 +649,7 @@ try {
         delayNextAssistantDraft = false;
         await new Promise((resolve) => setTimeout(resolve, 700));
       }
-      await route.fulfill(jsonResponse(assistantDraftResponse));
+      await route.fulfill(jsonResponse(buildAssistantDraftResponseForGoal(payload.userGoal)));
       return;
     }
 
@@ -921,14 +960,62 @@ try {
   await spotlightActionReceipt
     .getByText('这里不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统')
     .waitFor({ timeout: 15000 });
+  const searchInput = page.getByPlaceholder('搜索人物、别名或描述');
+  await expectControlBoundary(
+    searchInput,
+    [/按 Enter/, /只重新读取 Relationship Radar 人物列表/, /不会运行后台整理/, /画像写入只来自 Review Queue/],
+    'relationship radar search input',
+  );
+  await expectButtonBoundary(
+    page.locator('.top-actions .ghost-btn'),
+    [/重新读取人物列表/, /Review Queue/, /关系图谱/, /不运行后台整理/, /不会确认关系事实/],
+    'relationship radar refresh button',
+  );
+  await expectButtonBoundary(
+    page.locator('.top-actions .pill-btn.primary'),
+    [/后台整理/, /高频人物/, /关系雷达投影/, /上下文卡/, /不会确认候选事实/],
+    'relationship radar consolidation button',
+  );
+  const peopleFilterToolbar = page.locator('.section .section-tools').first();
+  await expectButtonBoundary(
+    peopleFilterToolbar.locator('button').filter({ hasText: '核心' }).first(),
+    [/筛选状态：核心/, /\/relationships\/people/, /重新读取当前人物列表/, /不会更新后台投影/],
+    'relationship radar state filter button',
+  );
+  await expectButtonBoundary(
+    peopleFilterToolbar.locator('button').last(),
+    [/查看低频候选/, /本页读取范围/, /不会把候选升级为确认关系/],
+    'relationship radar candidate toggle button',
+  );
+  const spotlightButtons = page.locator('.spotlight-actions button');
+  await expectButtonBoundary(
+    spotlightButtons.nth(0),
+    [/查看 Alice Radar 的完整 brief/, /只把此人设为当前人物/, /不会确认关系事实/],
+    'spotlight brief button',
+  );
+  await expectButtonBoundary(
+    spotlightButtons.nth(1),
+    [/强制刷新 Alice Radar/, /更新此人的关系雷达投影和上下文卡/, /不会确认候选事实/],
+    'spotlight refresh button',
+  );
+  await expectButtonBoundary(
+    spotlightButtons.nth(2),
+    [/复制给 AI/, /Alice Radar/, /contextMd/, /本机剪贴板/, /不会发送消息/],
+    'spotlight copy button',
+  );
+  await expectButtonBoundary(
+    page.locator('.person-card').filter({ hasText: 'Alice Radar' }).first(),
+    [/Alice Radar 的沟通前 brief/, /只切换本页当前人物/, /清空上一位人物的会议简报/, /待确认 1/],
+    'relationship radar person card',
+  );
   const initialSpotlightTitle = await page.locator('.spotlight h2').innerText();
   assert.match(
     initialSpotlightTitle,
     /Alice/,
     'spotlight should be a fixed priority recommendation, not an empty or selected-person title',
   );
-  await page.getByPlaceholder('搜索人物、别名或描述').fill('bobby@example.com');
-  await page.getByPlaceholder('搜索人物、别名或描述').press('Enter');
+  await searchInput.fill('bobby@example.com');
+  await searchInput.press('Enter');
   await page.getByText('搜索：bobby@example.com', { exact: true }).waitFor({
     timeout: 15000,
   });
@@ -942,7 +1029,7 @@ try {
     timeout: 15000,
   });
   await expectNotVisible(page, 'Alice Radar · 后台整理');
-  await page.getByRole('button', { name: '清空筛选' }).click();
+  await page.locator('.filter-actions .tiny-btn.primary').filter({ hasText: '清空筛选' }).click();
   await page.locator('.person-card').filter({ hasText: 'Alice Radar' }).waitFor({
     timeout: 15000,
   });
@@ -987,7 +1074,57 @@ try {
   await page.getByLabel('隐藏敏感上下文类型').getByText('检索 2').waitFor({
     timeout: 15000,
   });
-  await page.getByRole('button', { name: '临时包含敏感上下文' }).click();
+  const contextCopyButton = page.locator('.copy-context-action');
+  await expectButtonBoundary(
+    contextCopyButton,
+    [
+      /复制当前上下文/,
+      /Alice Radar/,
+      /contextMd/,
+      /默认隐藏敏感上下文/,
+      /默认隐藏的 6 条敏感上下文不会进入剪贴板/,
+      /不会发送消息/,
+    ],
+    'relationship context copy button',
+  );
+  const includeSensitiveButton = page.getByRole('button', {
+    name: /临时包含敏感上下文/,
+  });
+  await expectButtonBoundary(
+    includeSensitiveButton,
+    [
+      /临时包含敏感上下文/,
+      /重新请求 Alice Radar/,
+      /含敏感上下文版本/,
+      /返回前仍显示当前默认隐藏敏感上下文快照/,
+      /复制保持禁用/,
+      /默认隐藏的 6 条敏感上下文/,
+    ],
+    'relationship context include-sensitive button',
+  );
+  await expectButtonBoundary(
+    page.locator('.action-card').getByRole('button', { name: /查看依据/ }).first(),
+    [
+      /查看依据/,
+      /消息证据/,
+      /Radar Team/,
+      /只用于复核来源/,
+      /不会确认关系事实/,
+    ],
+    'relationship context suggestion evidence button',
+  );
+  await expectButtonBoundary(
+    page.locator('.timeline-item').filter({ hasText: 'Follow up owner' }).first(),
+    [
+      /查看 open loop 证据/,
+      /消息证据/,
+      /Radar Team/,
+      /只用于复核来源/,
+      /不会确认关系事实/,
+    ],
+    'relationship context open-loop evidence button',
+  );
+  await includeSensitiveButton.click();
   const contextRequestReceipt = page.getByLabel('上下文卡请求回执');
   await contextRequestReceipt.getByText('上下文卡请求回执').waitFor({
     timeout: 15000,
@@ -1012,9 +1149,20 @@ try {
     .getByText('等待 Memory Service 返回新卡')
     .waitFor({ timeout: 15000 });
   assert.equal(
-    await page.getByRole('button', { name: '请求中' }).isDisabled(),
+    await page.getByRole('button', { name: /请求中/ }).isDisabled(),
     true,
     'context copy should stay disabled while a new privacy scope is pending',
+  );
+  await expectButtonBoundary(
+    page.getByRole('button', { name: /请求中/ }),
+    [
+      /请求中/,
+      /Alice Radar/,
+      /含敏感上下文/,
+      /复制按钮会保持禁用/,
+      /不会复制旧快照/,
+    ],
+    'relationship context pending copy button',
   );
   await page.getByText('6 条可能敏感的人物上下文默认未纳入').waitFor({
     timeout: 15000,
@@ -1042,12 +1190,65 @@ try {
   await contextRefreshReceipt.getByText('含敏感上下文', { exact: true }).waitFor({
     timeout: 15000,
   });
+  await expectButtonBoundary(
+    contextRefreshReceipt.getByRole('button', { name: /重试刷新/ }),
+    [
+      /重试刷新/,
+      /Alice Radar 的上下文刷新失败/,
+      /按含敏感上下文重新请求 Context Card/,
+      /仍保留上次成功快照/,
+      /不会写入人物画像/,
+    ],
+    'relationship context retry refresh button',
+  );
   await expectNotVisible(page, 'private_email');
-  await page.getByRole('button', { name: '临时包含敏感上下文' }).waitFor({
+  await page.getByRole('button', { name: /临时包含敏感上下文/ }).waitFor({
     timeout: 15000,
   });
-  await page.getByRole('button', { name: '复制当前上下文' }).click();
+  await expectButtonBoundary(
+    page.getByRole('button', { name: /复制当前上下文/ }),
+    [
+      /复制当前上下文/,
+      /上次成功 contextMd/,
+      /上次快照 · 默认隐藏敏感上下文/,
+      /当前显示来自刷新失败后保留的上次快照/,
+      /默认隐藏的 6 条敏感上下文不会进入剪贴板/,
+    ],
+    'relationship context stale copy button',
+  );
+  await page.getByRole('button', { name: /复制当前上下文/ }).click();
   await page.getByText('已复制上次上下文快照，外发前请复核').waitFor({
+    timeout: 15000,
+  });
+  const contextCopyReceipt = page.getByLabel('上下文复制回执');
+  await contextCopyReceipt.getByText('上下文复制回执').waitFor({
+    timeout: 15000,
+  });
+  await contextCopyReceipt
+    .getByText('Alice Radar 的上次默认隐藏敏感上下文已复制')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt
+    .getByText('剪贴板只写入 Alice Radar 的 contextMd。')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt
+    .getByText('本次复制不会发送消息、写入人物画像、创建跟进、刷新其他场景或同步外部系统。')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt
+    .getByText('默认隐藏的 6 条敏感上下文没有进入剪贴板，也没有被临时包含。')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt
+    .getByText('复制的是刷新失败后保留的上次成功快照，不代表本次刷新已经完成。')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt.getByText('上次快照 · 默认隐藏敏感上下文').waitFor({
+    timeout: 15000,
+  });
+  await contextCopyReceipt
+    .getByText('证据 1 · 事实 1 · 跟进 1 · 建议 1')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt.getByText('仍隐藏 6 条敏感上下文').waitFor({
+    timeout: 15000,
+  });
+  await contextCopyReceipt.getByText('未发送 · 未写回 · 未建任务').waitFor({
     timeout: 15000,
   });
   assert.deepEqual(
@@ -1055,17 +1256,55 @@ try {
     contextCard.contextMd,
     'failed include-sensitive refresh should preserve and copy the last redacted context snapshot',
   );
-  await page.getByRole('button', { name: '临时包含敏感上下文' }).click();
+  await page.getByRole('button', { name: /临时包含敏感上下文/ }).click();
   await page.locator('.privacy-strip').getByText('已临时包含敏感上下文').waitFor({
     timeout: 15000,
   });
   await expectNotVisible(page, '上下文卡刷新失败回执');
   await contextReceipt.getByText('已显式包含敏感上下文').waitFor({ timeout: 15000 });
   await page.getByText('private_email').waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: '复制含敏感上下文' }).click();
+  await expectButtonBoundary(
+    page.getByRole('button', { name: /复制含敏感上下文/ }),
+    [
+      /复制含敏感上下文/,
+      /Alice Radar/,
+      /contextMd/,
+      /含敏感上下文/,
+      /必须先复核人物身份、事实和敏感范围/,
+    ],
+    'relationship context sensitive copy button',
+  );
+  await expectButtonBoundary(
+    page.getByRole('button', { name: /恢复默认隐藏/ }),
+    [
+      /恢复默认隐藏/,
+      /重新请求 Alice Radar/,
+      /默认隐藏敏感上下文版本/,
+      /返回前仍显示当前含敏感上下文快照/,
+      /复制保持禁用/,
+    ],
+    'relationship context restore-redacted button',
+  );
+  await page.getByRole('button', { name: /复制含敏感上下文/ }).click();
   await page.getByText('已复制含敏感上下文，外发前请复核').waitFor({
     timeout: 15000,
   });
+  await contextCopyReceipt
+    .getByText('Alice Radar 的含敏感上下文已复制')
+    .waitFor({ timeout: 15000 });
+  await contextCopyReceipt.getByText('当前卡片 · 含敏感上下文').waitFor({
+    timeout: 15000,
+  });
+  await contextCopyReceipt.getByText('已包含敏感上下文').waitFor({
+    timeout: 15000,
+  });
+  await contextCopyReceipt
+    .getByText('这份剪贴板内容包含显式放开的敏感上下文，外发给其他 AI 或聊天前必须先复核人物身份、事实和敏感范围。')
+    .waitFor({ timeout: 15000 });
+  await expectNotVisible(
+    page,
+    '复制的是刷新失败后保留的上次成功快照，不代表本次刷新已经完成。',
+  );
   assert.deepEqual(
     await page.evaluate(() => window.__relationshipRadarClipboardWrites.at(-1)),
     sensitiveContextCard.contextMd,
@@ -1076,7 +1315,7 @@ try {
     /## 上下文卡回执[\s\S]*隐私范围: 已临时包含敏感上下文/,
     'copied context card should preserve the context receipt',
   );
-  await page.getByRole('button', { name: '恢复默认隐藏' }).click();
+  await page.getByRole('button', { name: /恢复默认隐藏/ }).click();
   await page.locator('.privacy-strip').getByText('已隐藏敏感上下文').waitFor({
     timeout: 15000,
   });
@@ -1088,7 +1327,18 @@ try {
   await page
     .getByPlaceholder('例如：礼貌跟进上次评审中未确认的 owner 和 deadline')
     .fill('确认关系雷达 demo 的 owner');
-  await page.getByRole('button', { name: '生成关系感知回复' }).click();
+  const generateDraftButton = page.getByRole('button', {
+    name: /生成关系感知回复/,
+  });
+  const generateDraftTitle = await generateDraftButton.getAttribute('title');
+  assert.match(generateDraftTitle || '', /默认隐藏敏感上下文/);
+  assert.match(generateDraftTitle || '', /不发送消息、不写入人物画像、不创建跟进/);
+  assert.equal(
+    await generateDraftButton.getAttribute('aria-label'),
+    generateDraftTitle,
+    'assistant draft generate boundary should be available to screen readers',
+  );
+  await generateDraftButton.click();
   const draftRequestReceipt = page.locator('.draft-request-receipt');
   await draftRequestReceipt.getByText('草稿生成请求回执').waitFor({
     timeout: 15000,
@@ -1106,7 +1356,7 @@ try {
     .getByText('不会写入人物画像、发送消息、创建跟进')
     .waitFor({ timeout: 15000 });
   assert.equal(
-    await page.getByRole('button', { name: '生成中' }).isDisabled(),
+    await page.getByRole('button', { name: /生成中/ }).isDisabled(),
     true,
     'assistant draft request should lock the generate button while pending',
   );
@@ -1140,7 +1390,71 @@ try {
   await page.getByText('Alice Radar 有 1 条关系事实待人工确认。').waitFor({
     timeout: 15000,
   });
-  await page.getByRole('button', { name: '复制草稿' }).click();
+  const assistantClipboardCountBeforeGoalChange = await page.evaluate(
+    () => window.__relationshipRadarClipboardWrites.length,
+  );
+  await page
+    .getByPlaceholder('例如：礼貌跟进上次评审中未确认的 owner 和 deadline')
+    .fill('改成只确认发布时间');
+  const staleGoalReceipt = page.getByLabel('草稿目标变更回执');
+  await staleGoalReceipt.getByText('当前输入已不是这版草稿的目标').waitFor({
+    timeout: 15000,
+  });
+  await staleGoalReceipt.getByText('当前输入', { exact: true }).waitFor({
+    timeout: 15000,
+  });
+  await staleGoalReceipt.getByText('改成只确认发布时间').waitFor({ timeout: 15000 });
+  await staleGoalReceipt.getByText('草稿依据').waitFor({ timeout: 15000 });
+  await staleGoalReceipt.getByText('确认关系雷达 demo 的 owner').waitFor({
+    timeout: 15000,
+  });
+  await staleGoalReceipt.getByText('已锁定旧草稿').waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.getByRole('button', { name: /先重新生成/ }).isDisabled(),
+    true,
+    'assistant draft copy should be locked after the user changes the goal input',
+  );
+  const staleCopyButton = page.getByRole('button', { name: /先重新生成/ });
+  const staleCopyTitle = await staleCopyButton.getAttribute('title');
+  assert.match(staleCopyTitle || '', /当前目标已不同/);
+  assert.match(staleCopyTitle || '', /复制保持锁定/);
+  assert.match(staleCopyTitle || '', /不会复制旧草稿、发送消息、写入画像、创建跟进/);
+  assert.equal(
+    await page.evaluate(() => window.__relationshipRadarClipboardWrites.length),
+    assistantClipboardCountBeforeGoalChange,
+    'stale assistant draft should not be copied while goal mismatch receipt is visible',
+  );
+  await page.getByRole('button', { name: /生成关系感知回复/ }).click();
+  const secondDraftRequestReceipt = page.locator('.draft-request-receipt');
+  await secondDraftRequestReceipt.getByText('草稿生成请求回执').waitFor({
+    timeout: 15000,
+  });
+  await secondDraftRequestReceipt
+    .getByText('仍显示上次草稿：Alice Radar')
+    .waitFor({ timeout: 15000 });
+  await secondDraftRequestReceipt
+    .getByText('改成只确认发布时间')
+    .waitFor({ timeout: 15000 });
+  await expectNotVisible(page, '草稿目标变更回执');
+  await page
+    .locator('.draft-box')
+    .getByText('改成只确认发布时间')
+    .waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.getByRole('button', { name: /复制草稿/ }).isDisabled(),
+    false,
+    'assistant draft copy should unlock after regenerating for the current goal',
+  );
+  const copyDraftButton = page.getByRole('button', { name: /复制草稿/ });
+  const copyDraftTitle = await copyDraftButton.getAttribute('title');
+  assert.match(copyDraftTitle || '', /本机剪贴板/);
+  assert.match(copyDraftTitle || '', /不会发送消息、写入人物画像或创建跟进任务/);
+  assert.equal(
+    await copyDraftButton.getAttribute('aria-label'),
+    copyDraftTitle,
+    'assistant draft copy boundary should be available to screen readers',
+  );
+  await copyDraftButton.click();
   await page.getByText('已复制回复草稿').waitFor({ timeout: 15000 });
   await page.getByText('草稿复制回执').waitFor({ timeout: 15000 });
   await page
@@ -1157,7 +1471,7 @@ try {
     .waitFor({ timeout: 15000 });
   assert.deepEqual(
     await page.evaluate(() => window.__relationshipRadarClipboardWrites.at(-1)),
-    assistantDraftResponse.draftText,
+    buildAssistantDraftResponseForGoal('改成只确认发布时间').draftText,
     'assistant draft copy should copy only the generated draft text',
   );
   await page.getByPlaceholder('搜索人物、别名或描述').fill('bobby@example.com');
@@ -1170,7 +1484,7 @@ try {
     .waitFor({ timeout: 15000 });
   await expectNotVisible(page, 'Alice Radar，');
   await expectNotVisible(page, '草稿复制回执');
-  await page.getByRole('button', { name: '清空筛选' }).click();
+  await page.locator('.filter-actions .tiny-btn.primary').filter({ hasText: '清空筛选' }).click();
   await page.locator('.person-card').filter({ hasText: 'Alice Radar' }).waitFor({
     timeout: 15000,
   });
@@ -1181,7 +1495,34 @@ try {
   await page
     .getByText('侧栏只显示候选摘要；确认写入前先进入完整复核卡查看证据、字段和可编辑内容。')
     .waitFor({ timeout: 15000 });
-  await sideReview.getByRole('button', { name: '进入复核' }).click();
+  const sideQuickSnoozeReceipt = sideReview.getByLabel('快速稍后回执');
+  await sideQuickSnoozeReceipt.getByText('快速稍后回执').waitFor({ timeout: 15000 });
+  await sideQuickSnoozeReceipt
+    .getByText('只会把这条候选移出待确认，约 7 天后回到队列')
+    .waitFor({ timeout: 15000 });
+  await sideQuickSnoozeReceipt
+    .getByText('不会确认、驳回、写入人物画像、删除证据、发送消息或创建跟进')
+    .waitFor({ timeout: 15000 });
+  await sideQuickSnoozeReceipt
+    .getByText('需要改写入内容或补复核备注时，先进入复核')
+    .waitFor({ timeout: 15000 });
+  const sideEnterReviewButton = sideReview.getByRole('button', {
+    name: /进入 Alice Radar 的完整复核卡/,
+  });
+  await expectButtonBoundary(
+    sideEnterReviewButton,
+    [/完整复核卡/, /2 条证据/, /不会写入人物画像/, /不会.*稍后/],
+    'side enter-review button',
+  );
+  const sideQuickSnoozeButton = sideReview.getByRole('button', {
+    name: /侧栏快速稍后 Alice Radar 的 relationship_context/,
+  });
+  await expectButtonBoundary(
+    sideQuickSnoozeButton,
+    [/侧栏快速稍后/, /约 7 天后回到待确认/, /沿用当前候选原文和已有备注/, /补备注/, /先进入完整复核卡/, /不会写入人物画像/],
+    'side quick snooze button',
+  );
+  await sideEnterReviewButton.click();
   await page.getByText('校准影响预览').waitFor({ timeout: 15000 });
   await page.getByText('确认会把当前写入内容保存到 Alice Radar 的 relationship_context').waitFor({
     timeout: 15000,
@@ -1209,7 +1550,34 @@ try {
     timeout: 15000,
   });
   await page.getByText('尚未写入 Memory Service').waitFor({ timeout: 15000 });
-  await page.locator('.review-card').getByRole('button', { name: '确认' }).click();
+  const reviewCard = page.locator('.review-card').filter({
+    hasText: 'Alice Radar · relationship_context',
+  });
+  const confirmReviewButton = reviewCard.getByRole('button', {
+    name: /确认写入 Alice Radar 的 relationship_context/,
+  });
+  const snoozeReviewButton = reviewCard.getByRole('button', {
+    name: /稍后复核 Alice Radar 的 relationship_context/,
+  });
+  const rejectReviewButton = reviewCard.getByRole('button', {
+    name: /驳回 Alice Radar 的 relationship_context/,
+  });
+  await expectButtonBoundary(
+    confirmReviewButton,
+    [/确认写入/, /本页已改写入内容、备注/, /保存到人物画像/, /上下文卡、会议简报和回复草稿/, /保留 2 条证据/, /不会发送消息/],
+    'full review confirm button',
+  );
+  await expectButtonBoundary(
+    snoozeReviewButton,
+    [/稍后复核/, /约 7 天后回到待确认/, /编辑后的写入内容和备注会保留/, /保留 2 条证据/, /不会写入人物画像/],
+    'full review snooze button',
+  );
+  await expectButtonBoundary(
+    rejectReviewButton,
+    [/驳回/, /只把候选标为已驳回/, /保留 2 条证据/, /不会写入人物画像/, /不会删除原始证据/],
+    'full review reject button',
+  );
+  await confirmReviewButton.click();
   const reviewFailureReceipt = page.locator('.detail-main .review-receipt.danger');
   await reviewFailureReceipt.getByText('校准失败回执').waitFor({ timeout: 15000 });
   await reviewFailureReceipt.getByText('确认未完成，人物画像未写入').waitFor({ timeout: 15000 });
@@ -1228,7 +1596,7 @@ try {
     'pending',
     'failed confirm should leave the review item pending in the mocked backend state',
   );
-  await page.locator('.review-card').getByRole('button', { name: '关系边' }).click();
+  await reviewCard.getByRole('button', { name: '关系边' }).click();
   await page
     .getByText('证据链接不可打开或已被安全策略拦截')
     .waitFor({ timeout: 15000 });
@@ -1237,7 +1605,7 @@ try {
     [],
     'unsafe evidence source URLs should not open a new window',
   );
-  await page.locator('.review-card').getByRole('button', { name: '稍后 7 天' }).click();
+  await snoozeReviewButton.click();
   await page.getByText('校准回执').waitFor({ timeout: 15000 });
   await page.getByText('已排到稍后复核').first().waitFor({ timeout: 15000 });
   await page.getByText('证据 2').first().waitFor({ timeout: 15000 });
@@ -1310,7 +1678,7 @@ try {
     );
     return Boolean(button && !button.disabled);
   });
-  await page.getByRole('button', { name: '复制当前上下文' }).click();
+  await page.getByRole('button', { name: /复制当前上下文/ }).click();
   assert.deepEqual(
     await page.evaluate(() => window.__relationshipRadarClipboardWrites.at(-1)),
     secondContextCard.contextMd,
@@ -1417,6 +1785,46 @@ try {
   await page.getByText('没有找到与 external@example.com').waitFor({ timeout: 15000 });
   await expectNotVisible(page, '证据 message');
   await expectNotVisible(page, 'Confirm owner before the next demo.');
+
+  await page
+    .getByLabel('参会人（每行一个）')
+    .fill(
+      'Alice Radar <alice@example.com>\nExternal Reviewer <external@example.com>\nLate Observer <late@example.com>\nNew Observer <new@example.com>',
+    );
+  const inputChangeReceipt = page.getByLabel('简报输入变更回执');
+  await inputChangeReceipt
+    .getByText('当前输入已不是这版会议简报的依据')
+    .waitFor({ timeout: 15000 });
+  await inputChangeReceipt
+    .getByText('页面仍保留上一版简报供对照，但复制已锁定')
+    .waitFor({ timeout: 15000 });
+  await inputChangeReceipt.getByText('当前输入', { exact: true }).waitFor({ timeout: 15000 });
+  await inputChangeReceipt.getByText('4 位参会人').waitFor({ timeout: 15000 });
+  await inputChangeReceipt.getByText('简报依据', { exact: true }).waitFor({ timeout: 15000 });
+  await inputChangeReceipt.getByText('3 位参会人').waitFor({ timeout: 15000 });
+  await inputChangeReceipt.getByText('已锁定旧简报').waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.getByRole('button', { name: '先重新生成' }).isDisabled(),
+    true,
+    'meeting brief copy should lock after the meeting input changes',
+  );
+
+  await page.getByRole('button', { name: '生成会议人物简报' }).click();
+  const secondMeetingRequestReceipt = page.getByLabel('会议简报请求回执');
+  await secondMeetingRequestReceipt
+    .getByText('正在基于「Relationship Radar review」和 4 位参会人重新生成')
+    .waitFor({ timeout: 15000 });
+  await secondMeetingRequestReceipt.getByText('4 位参会人', { exact: true }).waitFor({
+    timeout: 15000,
+  });
+  await page.waitForFunction(() => {
+    const receipt = document.querySelector('[aria-label="简报输入变更回执"]');
+    const button = [...document.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === '复制简报',
+    );
+    return !receipt && Boolean(button && !button.disabled);
+  });
+
   await page.getByRole('button', { name: '复制简报' }).click();
   const copiedMeetingBrief = await page.evaluate(
     () => window.__relationshipRadarClipboardWrites.at(-1),
@@ -1451,22 +1859,33 @@ try {
     'copied meeting brief should not include weak-match open loops before identity is confirmed',
   );
 
-  assert.equal(meetingBriefRequests.length, 1);
+  assert.equal(meetingBriefRequests.length, 2);
   assert.equal(
     contextCardRequests.some((payload) => payload.includeSensitive === true),
     true,
     'sensitive context card should require an explicit request',
   );
-  assert.equal(assistantDraftRequests.length, 1);
+  assert.equal(assistantDraftRequests.length, 2);
   assert.deepEqual(assistantDraftRequests[0], {
     personId: person.id,
     scenario: 'follow_up_message',
     userGoal: '确认关系雷达 demo 的 owner',
   });
+  assert.deepEqual(assistantDraftRequests[1], {
+    personId: person.id,
+    scenario: 'follow_up_message',
+    userGoal: '改成只确认发布时间',
+  });
   assert.deepEqual(meetingBriefRequests[0].attendees, [
     { name: 'Alice Radar', email: 'alice@example.com' },
     { name: 'External Reviewer', email: 'external@example.com' },
     { name: 'Late Observer', email: 'late@example.com' },
+  ]);
+  assert.deepEqual(meetingBriefRequests[1].attendees, [
+    { name: 'Alice Radar', email: 'alice@example.com' },
+    { name: 'External Reviewer', email: 'external@example.com' },
+    { name: 'Late Observer', email: 'late@example.com' },
+    { name: 'New Observer', email: 'new@example.com' },
   ]);
   assert.equal(reviewActionRequests.length, 2);
   assert.equal(reviewActionRequests[0].action, 'confirm');

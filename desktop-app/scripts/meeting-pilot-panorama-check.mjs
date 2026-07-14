@@ -93,6 +93,40 @@ try {
       ),
     };
   });
+  const controlBoundaries = await page.evaluate(() => {
+    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+    const attrs = (node) => ({
+      title: normalize(node?.getAttribute('title') || ''),
+      aria: normalize(node?.getAttribute('aria-label') || ''),
+      text: normalize(node?.textContent || ''),
+    });
+    const findButton = (pattern) =>
+      Array.from(document.querySelectorAll('button')).find((node) =>
+        pattern.test(node.textContent || ''),
+      );
+    const findDigestLink = (pattern, root = document) =>
+      Array.from(root.querySelectorAll('.digest-link')).find((node) =>
+        pattern.test(node.textContent || ''),
+      );
+    const pdfSection = document.querySelector('#pdfPreviewSection');
+    return {
+      pdfSection: attrs(findButton(/会议纪要 PDF/)),
+      pageLink: attrs(findButton(/复制页面链接/)),
+      jsonExport: attrs(findButton(/导出/)),
+      recordingReplay: attrs(findButton(/回放录制/)),
+      followupCopy: attrs(document.querySelector('.followup-copy')),
+      feedbackAccurate: attrs(document.querySelector('.feedback-btn.confirm')),
+      feedbackNeedsCorrection: attrs(document.querySelector('.feedback-btn.reject')),
+      pdfOpen: attrs(findDigestLink(/新窗口打开|在线预览/, pdfSection || document)),
+      pdfDownload: attrs(findDigestLink(/下载 PDF/, pdfSection || document)),
+      pdfCopy: attrs(findDigestLink(/^复制链接$/, pdfSection || document)),
+      recordingCopy: attrs(
+        Array.from(document.querySelectorAll('.digest-item')).find((node) =>
+          /录制与原始素材/.test(node.textContent || ''),
+        )?.querySelector('.digest-link:nth-child(2)'),
+      ),
+    };
+  });
 
   assert.match(state.outputReceipt, /输出范围回执/);
   assert.match(state.outputReceipt, /Markdown 跟进清单 4 项/);
@@ -104,6 +138,24 @@ try {
   assert.match(state.followupText, /复制跟进清单/);
   assert.match(state.actionStat, /3\s*待复核\s*·\s*0\s*已确认\s*·\s*1\s*已完成/);
   assert.equal(state.actionCount, 4);
+  assert.match(controlBoundaries.pdfSection.title, /只滚动到本页 PDF 状态/);
+  assert.match(controlBoundaries.pdfSection.aria, /不会打开外部链接/);
+  assert.match(controlBoundaries.pageLink.title, /只把当前 extension 页面 URL 写入本机剪贴板/);
+  assert.match(controlBoundaries.pageLink.aria, /不会发送纪要/);
+  assert.match(controlBoundaries.jsonExport.title, /只把当前页面已有会议结构化快照下载到本机/);
+  assert.match(controlBoundaries.jsonExport.aria, /不会上传、同步或外发/);
+  assert.match(controlBoundaries.recordingReplay.title, /只在新标签打开已通过安全检查的录制 http\(s\) 链接/);
+  assert.match(controlBoundaries.recordingReplay.aria, /不会下载、发送纪要/);
+  assert.match(controlBoundaries.followupCopy.title, /4 个未驳回行动项/);
+  assert.match(controlBoundaries.followupCopy.aria, /不会发送给团队/);
+  assert.match(controlBoundaries.feedbackAccurate.title, /反馈未写入/);
+  assert.match(controlBoundaries.feedbackAccurate.aria, /不会写入校准/);
+  assert.match(controlBoundaries.feedbackNeedsCorrection.title, /不会重跑会议分析/);
+  assert.match(controlBoundaries.feedbackNeedsCorrection.aria, /不会.*发送纪要/);
+  assert.match(controlBoundaries.pdfOpen.title, /只在新标签打开已通过安全检查的 http\(s\) PDF 链接/);
+  assert.match(controlBoundaries.pdfDownload.title, /只请求浏览器把已通过安全检查的 PDF 链接保存到本机/);
+  assert.match(controlBoundaries.pdfCopy.title, /只把已通过安全检查的 PDF http\(s\) 链接写入本机剪贴板/);
+  assert.match(controlBoundaries.recordingCopy.title, /只把已通过安全检查的录制 http\(s\) 链接写入本机剪贴板/);
 
   log('验证页面链接复制反馈');
   await page.locator('.header-btn', { hasText: '复制页面链接' }).click();
@@ -257,6 +309,10 @@ try {
     date: String(Date.now()),
     digestStatus: 'completed',
     participants: JSON.stringify(['Esone', 'Morgan']),
+    summary: '列表卡片显示：这场会确认了 fallback owner 和材料范围。',
+    topicCount: '2',
+    actionItemCount: '4',
+    decisionCount: '1',
   });
   await fallbackPage.goto(
     `chrome-extension://${extensionId}/meeting-panorama.html?${fallbackParams.toString()}`,
@@ -273,8 +329,18 @@ try {
   );
   assert.match(fallbackReceipt, /归档来源回执/);
   assert.match(fallbackReceipt, /基础历史视图/);
+  assert.match(fallbackReceipt, /列表快照带入/);
+  assert.match(fallbackReceipt, /fallback owner 和材料范围/);
+  assert.match(fallbackReceipt, /卡片结构数量：话题 2、行动项 4、决议 1/);
   assert.match(fallbackReceipt, /不等于会议没有这些内容/);
   assert.match(fallbackReceipt, /不会自动重新生成 PDF/);
+  const fallbackOutputReceipt = await fallbackPage.evaluate(() =>
+    (document.querySelector('[data-panorama-output-receipt="true"]')?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
+  assert.match(fallbackOutputReceipt, /卡片快照/);
+  assert.match(fallbackOutputReceipt, /完整明细未载入/);
   await fallbackPage.close();
 
   log('验证历史归档会从 memory-service detail API 补齐行动项元数据');

@@ -1,12 +1,43 @@
 <template>
   <div class="reflection-detail-page">
     <div class="page-head">
-      <button class="back-btn" @click="router.push('/reflection-threads')">← 返回线程列表</button>
+      <button
+        class="back-btn"
+        :title="backToListBoundary"
+        :aria-label="backToListBoundary"
+        @click="router.push('/reflection-threads')"
+      >← 返回线程列表</button>
       <div class="action-bar">
-        <button class="primary-btn" :disabled="busy" @click="revisitThread">立即自我反思</button>
-        <button v-if="detail?.thread.status === 'active'" class="ghost-btn" :disabled="busy" @click="pauseThread">暂停</button>
-        <button v-if="detail?.thread.status !== 'active'" class="ghost-btn" :disabled="busy" @click="resumeThread">恢复</button>
-        <button class="danger-btn" :disabled="busy" @click="closeThread">关闭</button>
+        <button
+          class="primary-btn"
+          :disabled="busy"
+          :title="manualRevisitButtonBoundary"
+          :aria-label="manualRevisitButtonBoundary"
+          @click="revisitThread"
+        >立即自我反思</button>
+        <button
+          v-if="detail?.thread.status === 'active'"
+          class="ghost-btn"
+          :disabled="busy"
+          :title="pauseThreadButtonBoundary"
+          :aria-label="pauseThreadButtonBoundary"
+          @click="pauseThread"
+        >暂停</button>
+        <button
+          v-if="detail?.thread.status !== 'active'"
+          class="ghost-btn"
+          :disabled="busy"
+          :title="resumeThreadButtonBoundary"
+          :aria-label="resumeThreadButtonBoundary"
+          @click="resumeThread"
+        >恢复</button>
+        <button
+          class="danger-btn"
+          :disabled="busy"
+          :title="closeThreadButtonBoundary"
+          :aria-label="closeThreadButtonBoundary"
+          @click="closeThread"
+        >关闭</button>
       </div>
     </div>
 
@@ -198,16 +229,22 @@
               <button
                 v-if="action.queueStatus === 'queued' || action.queueStatus === 'failed'"
                 class="tiny-btn"
+                :title="actionExecutionBoundary(action, 'execute')"
+                :aria-label="actionExecutionBoundary(action, 'execute')"
                 @click="executeAction(action.id)"
               >执行</button>
               <button
                 v-if="action.queueStatus === 'failed'"
                 class="tiny-btn"
+                :title="actionExecutionBoundary(action, 'retry')"
+                :aria-label="actionExecutionBoundary(action, 'retry')"
                 @click="retryAction(action.id)"
               >重试</button>
               <button
                 v-if="action.queueStatus === 'queued'"
                 class="tiny-btn danger"
+                :title="actionExecutionBoundary(action, 'cancel')"
+                :aria-label="actionExecutionBoundary(action, 'cancel')"
                 @click="cancelAction(action.id)"
               >取消</button>
             </div>
@@ -241,7 +278,12 @@
               <span>{{ outreachOriginLabel(session.originKind) }}</span>
               <span>{{ outreachTargetTypeLabel(session.targetType) }} / {{ session.targetRef }}</span>
               <span>追问 {{ session.followupCount }}/{{ session.maxFollowup }}</span>
-              <router-link :to="`/outreach/${session.id}`" class="thread-link">查看会话</router-link>
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="thread-link"
+                :title="outreachSessionLinkBoundary(session)"
+                :aria-label="outreachSessionLinkBoundary(session)"
+              >查看会话</router-link>
             </div>
           </div>
         </div>
@@ -272,6 +314,8 @@
                 <div class="sub-title">Transcript</div>
                 <button
                   class="tiny-btn"
+                  :title="transcriptToggleBoundary(result)"
+                  :aria-label="transcriptToggleBoundary(result)"
                   @click="toggleTranscript(result.id, result.transcriptPath)"
                 >{{ transcriptVisible[result.id] ? '收起' : '展开' }}</button>
               </div>
@@ -375,12 +419,57 @@
             失败 {{ researchSummary.failed }}
           </span>
         </div>
+        <div
+          v-if="researchEvidenceReceipt"
+          class="research-evidence-receipt"
+          :class="researchEvidenceReceipt.tone"
+        >
+          <div class="research-evidence-main">
+            <div class="box-title">研究证据采用回执</div>
+            <h3>{{ researchEvidenceReceipt.title }}</h3>
+            <p>{{ researchEvidenceReceipt.summary }}</p>
+          </div>
+          <div class="research-evidence-grid">
+            <div>
+              <span>采用证据</span>
+              <strong>{{ researchEvidenceReceipt.evidenceLine }}</strong>
+            </div>
+            <div>
+              <span>来源口径</span>
+              <strong>{{ researchEvidenceReceipt.sourceLine }}</strong>
+            </div>
+            <div>
+              <span>使用方式</span>
+              <strong>{{ researchEvidenceReceipt.usage }}</strong>
+            </div>
+            <div>
+              <span>边界</span>
+              <strong>{{ researchEvidenceReceipt.boundary }}</strong>
+            </div>
+          </div>
+          <div class="research-evidence-footer">
+            <span>{{ researchEvidenceReceipt.recovery }}</span>
+          </div>
+          <div class="research-evidence-chips">
+            <span
+              v-for="chip in researchEvidenceReceipt.chips"
+              :key="chip"
+              class="research-evidence-chip"
+            >
+              {{ chip }}
+            </span>
+          </div>
+        </div>
         <div v-if="researchAttempts.length > 0" class="research-trace-list">
           <div
             v-for="attempt in researchAttempts"
             :key="attempt.id"
             class="research-trace-card"
             :class="[attempt.status, { degraded: Boolean(attempt.errorMessage && attempt.status !== 'failed') }]"
+            :title="researchTraceCardBoundary(attempt)"
+            :aria-label="researchTraceCardBoundary(attempt)"
+            role="group"
+            tabindex="0"
           >
             <div class="inline-head">
               <span>{{ attempt.purpose || '本地研究查询' }}</span>
@@ -490,8 +579,11 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type ActionResultRecord,
   type OutreachSession,
+  type ReflectionResearchAttempt,
   type ReflectionThreadDetailResponse,
+  type RuntimeAction,
 } from '../../services/MemoryServiceClient';
 import {
   buildReflectionHandoffReceipt,
@@ -508,6 +600,8 @@ const operationError = ref('');
 const operationReceipt = ref<ReflectionOperationResultReceipt | null>(null);
 const detail = ref<ReflectionThreadDetailResponse | null>(null);
 const manualRevisitPending = ref(false);
+const backToListBoundary =
+  '返回自我反思线程列表：只切换本地 Memory Exploring 视图，不运行反思、不刷新研究、不发送消息、不确认决策、不执行动作，也不写记忆。';
 const researchEvidence = computed(
   () => detail.value?.links.filter(link => link.role === 'research') ?? [],
 );
@@ -644,6 +738,72 @@ const researchScopeReceipt = computed(() => {
     ].filter((chip): chip is string => Boolean(chip)),
   };
 });
+const researchEvidenceReceipt = computed(() => {
+  const attempts = researchAttempts.value;
+  if (attempts.length === 0) return null;
+
+  const summary = researchSummary.value;
+  const evidenceRefs = uniqList(
+    attempts.flatMap(attempt => attempt.evidenceRefs),
+  );
+  const adoptedAttempts = attempts.filter(
+    attempt => attempt.evidenceRefs.length > 0,
+  );
+  const sourceTypes = uniqList(
+    adoptedAttempts.length > 0
+      ? adoptedAttempts.flatMap(attempt => attempt.sourceTypes)
+      : attempts.flatMap(attempt => attempt.sourceTypes),
+  );
+  const linkCount = researchEvidence.value.length;
+  const hasEvidence = evidenceRefs.length > 0;
+  const tone =
+    summary.failed > 0
+      ? 'attention'
+      : hasEvidence
+        ? 'ready'
+        : summary.degraded > 0
+          ? 'waiting'
+          : 'empty';
+
+  return {
+    tone,
+    title: hasEvidence
+      ? '本轮研究证据已进入反思'
+      : summary.failed > 0
+        ? '本轮没有可采用研究证据，且有失败 trace'
+        : '本轮没有新增研究证据',
+    summary: hasEvidence
+      ? `本轮本地研究产生的 ${evidenceRefs.length} 个 evidence refs 已作为这次 reflection run 的输入；下方研究 link 是可复核摘要。`
+      : summary.failed > 0
+        ? '本轮研究没有生成可采用 evidence refs；失败 trace 保留在下方，不能把空证据误读成已经查清。'
+        : '本轮没有新增 evidence refs；反思继续使用线程已有证据或规划器判断无需额外补查。',
+    evidenceLine: hasEvidence
+      ? `采用 ${evidenceRefs.length} 个 evidence refs · 下方展示 ${linkCount} 条研究 link`
+      : `采用 0 个 evidence refs · 下方展示 ${linkCount} 条研究 link`,
+    sourceLine:
+      sourceTypes.length > 0
+        ? compactList(sourceTypes)
+        : '未记录可采用来源',
+    usage: hasEvidence
+      ? '进入同一轮 ReflectionWorker 输入，用于生成总结、开放问题和候选动作。'
+      : '没有新增研究证据进入本轮输入；继续依赖线程已有证据和运行历史。',
+    boundary:
+      '这是本地证据采用说明，不联网搜索、不外发、不确认事实、不写 confirmed profile，也不单独执行动作。',
+    recovery: hasEvidence
+      ? '需要核对时看下方研究命中证据；如果证据不足，补充开放问题后重新反思。'
+      : summary.failed > 0
+        ? '先修复失败的召回通道或调整问题，再点击立即自我反思重新补查。'
+        : '如果需要更多本地证据，补充开放问题或调整主题后重新反思。',
+    chips: [
+      `研究 trace ${attempts.length}`,
+      hasEvidence ? `采用证据 ${evidenceRefs.length}` : '无新增证据',
+      `研究 link ${linkCount}`,
+      sourceTypes.length > 0 ? `来源 ${sourceTypes.length}` : '',
+      summary.failed > 0 ? `失败 ${summary.failed}` : '',
+      summary.skipped > 0 ? `未补查 ${summary.skipped}` : '',
+    ].filter((chip): chip is string => Boolean(chip)),
+  };
+});
 const researchPendingReceipt = computed(() => {
   if (!manualRevisitPending.value || !detail.value) return null;
   const previousAttempts = researchAttempts.value.length;
@@ -672,6 +832,42 @@ const researchPendingReceipt = computed(() => {
       '本地只读',
     ],
   };
+});
+const manualRevisitButtonBoundary = computed(() => {
+  const thread = detail.value?.thread;
+  if (!thread) {
+    return '立即自我反思：等待线程详情加载后才可提交；不会在未知线程上运行研究、写入 run 或执行动作。';
+  }
+  const title = displayThreadTitle(thread.title);
+  const traceCount = researchAttempts.value.length;
+  if (manualRevisitPending.value) {
+    return `立即自我反思提交中：${title} 正在规划并读取本地可见证据；下方 ${traceCount} 条研究 trace 仍是旧快照，尚未被本次结果替换。不会重复提交、联网搜索、发送消息、确认决策、执行 OpenClaw、写 confirmed profile 或删除原始证据。`;
+  }
+  if (busy.value) {
+    return `立即自我反思暂不可用：${title} 当前已有线程操作在提交；这不会重复创建 manual_revisit、研究 trace 或候选动作。`;
+  }
+  return `立即自我反思：为 ${title} 提交一次 manual_revisit，读取本地可见证据，并可能写入一条 run、研究 trace 和候选动作；提交期间当前 ${traceCount} 条研究 trace 仍是旧快照。不会联网搜索、发送消息、确认决策、执行 OpenClaw、写 confirmed profile 或删除原始证据。`;
+});
+const pauseThreadButtonBoundary = computed(() => {
+  const title = detail.value ? displayThreadTitle(detail.value.thread.title) : '当前线程';
+  if (busy.value) {
+    return `暂停自我反思提交中：正在等待 ${title} 的状态写入结果；不会重复提交暂停请求或清空历史证据。`;
+  }
+  return `暂停自我反思：只把 ${title} 设为 paused 并停止后续自动推进；不会删除历史证据、清空研究 trace、取消已排队动作、撤回主动询问、重跑 OpenClaw 或写 confirmed profile。`;
+});
+const resumeThreadButtonBoundary = computed(() => {
+  const title = detail.value ? displayThreadTitle(detail.value.thread.title) : '当前线程';
+  if (busy.value) {
+    return `恢复自我反思提交中：正在等待 ${title} 的状态写入结果；不会重复提交恢复请求或立即补查研究。`;
+  }
+  return `恢复自我反思：只把 ${title} 设回 active 并排到当前时间等待推进；不会立刻运行 manual_revisit、补齐外部回复、确认决策、执行动作或把旧结论升格为 confirmed profile。`;
+});
+const closeThreadButtonBoundary = computed(() => {
+  const title = detail.value ? displayThreadTitle(detail.value.thread.title) : '当前线程';
+  if (busy.value) {
+    return `关闭自我反思提交中：正在等待 ${title} 的状态写入结果；不会重复提交关闭请求或删除证据。`;
+  }
+  return `关闭自我反思：会先要求确认；确认后只停止 ${title} 的后续推进，不删除证据、撤销已发生外部副作用、取消其它队列动作、清空研究 trace 或写 confirmed profile。`;
 });
 const transcriptVisible = ref<Record<string, boolean>>({});
 const transcriptLoading = ref<Record<string, boolean>>({});
@@ -974,12 +1170,78 @@ function outreachTargetTypeLabel(targetType?: string) {
   return targetType || '未知目标';
 }
 
+function actionExecutionBoundary(
+  action: RuntimeAction,
+  kind: 'execute' | 'retry' | 'cancel',
+) {
+  const actionLabel = displayActionType(action.actionType);
+  const title = action.title || actionLabel;
+  if (kind === 'execute') {
+    return `执行动作：提交 ${title}（${actionLabel}）到 Memory Service；如果这是主动询问、OpenClaw 委派或外部工具动作，可能触发对应外部流程。不会直接改写反思总结、研究 trace、confirmed profile 或删除证据，结果以服务端动作状态和操作回执为准。`;
+  }
+  if (kind === 'retry') {
+    return `重试动作：只重新提交失败的 ${title}（${actionLabel}）；可能再次触发对应外部流程。不会把上次失败伪装成成功、不会改写反思总结、confirmed profile 或删除证据，结果以新的服务端状态为准。`;
+  }
+  return `取消动作：只请求取消仍在队列中的 ${title}（${actionLabel}）；不会撤销已经发生的外部副作用、不会关闭反思线程、不会删除研究 trace 或 confirmed profile。`;
+}
+
+function transcriptToggleBoundary(result: ActionResultRecord) {
+  const filename = result.transcriptPath
+    ? transcriptFilename(result.transcriptPath)
+    : null;
+  const verb = transcriptVisible.value[result.id] ? '收起' : '展开';
+  if (!filename) {
+    return `${verb} transcript：当前 transcript 路径不在 delegations/ 目录下，页面只会显示不可读取提示；不会读取任意本机路径、重跑 OpenClaw、外发内容或写入反思证据。`;
+  }
+  return `${verb} transcript：只读取或隐藏本机 delegations/${filename} 的委派日志快照；不会重跑 OpenClaw、重新发送消息、确认结论、写入研究证据、写 confirmed profile 或执行动作。`;
+}
+
+function outreachSessionLinkBoundary(session: OutreachSession) {
+  const status = outreachStatusLabel(session.status);
+  const target = `${outreachTargetTypeLabel(session.targetType)} / ${session.targetRef}`;
+  return `查看关联主动询问会话：只打开 ${target} 的 ${status} 详情页，查看审批、发送、回复和跟进状态；不会批准发送、重试、取消、补发追问、运行反思或写 confirmed profile。`;
+}
+
 function waitingReasonLabel(reason?: string) {
   if (reason === 'waiting_for_delegation') return '等待外部委派结果回流';
   if (reason === 'waiting_for_confirm_request') return '等待用户在决策中心确认';
   if (reason === 'waiting_for_outreach') return '等待关联主动询问回复';
   if (reason === 'waiting_for_manual_action') return '等待用户处理手动动作';
   return reason || '等待下一轮自我反思';
+}
+
+function researchTraceCardBoundary(attempt: ReflectionResearchAttempt) {
+  const purpose = attempt.purpose || attempt.query || '本地研究查询';
+  const sourceTypes = attempt.sourceTypes ?? [];
+  const rejectedSourceTypes = attempt.rejectedSourceTypes ?? [];
+  const evidenceRefs = attempt.evidenceRefs ?? [];
+  const sourceLine =
+    attempt.status === 'skipped' || sourceTypes.length === 0
+      ? '未读取额外来源'
+      : `读取来源 ${compactList(sourceTypes)}`;
+  const rejectedLine =
+    rejectedSourceTypes.length > 0
+      ? `；已裁剪 ${compactList(rejectedSourceTypes)}`
+      : '';
+  const evidenceLine =
+    evidenceRefs.length > 0
+      ? `采用 evidence refs ${evidenceRefs.length} 个`
+      : attempt.status === 'hit'
+        ? '命中候选但未记录 adopted evidence refs'
+        : '未采用新增 evidence refs';
+  const resultLine =
+    attempt.status === 'skipped'
+      ? '本轮未执行额外 recall，继续使用线程已有证据'
+      : attempt.status === 'failed'
+        ? '查询失败，没有把这条查询作为已查清结论'
+        : attempt.status === 'empty'
+          ? '查询完成但本地没有找到可加入本轮反思的证据'
+          : `命中 ${attempt.resultCount} 条候选，${evidenceLine}`;
+  const issueLine = attempt.errorMessage
+    ? `；故障或降级：${attempt.errorMessage}`
+    : '';
+
+  return `本地研究 trace：${purpose}。状态 ${researchStatusLabel(attempt.status)}；${resultLine}；${sourceLine}${rejectedLine}${issueLine}。查看这条 trace 只复核本轮本地研究过程，不会重新查询、联网搜索、发送消息、确认事实、写 confirmed profile、创建动作或执行 OpenClaw。`;
 }
 
 function researchStatusLabel(status: string) {
@@ -1436,7 +1698,44 @@ function errorMessage(error: unknown) {
   border-left-color: rgba(148, 163, 184, 0.72);
 }
 
+.research-evidence-receipt {
+  background: rgba(8, 47, 73, 0.34);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-left: 3px solid rgba(56, 189, 248, 0.74);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.research-evidence-receipt.ready {
+  border-left-color: rgba(34, 197, 94, 0.78);
+}
+
+.research-evidence-receipt.waiting {
+  background: rgba(69, 26, 3, 0.3);
+  border-color: rgba(251, 191, 36, 0.24);
+  border-left-color: rgba(251, 191, 36, 0.82);
+}
+
+.research-evidence-receipt.attention {
+  background: rgba(69, 10, 10, 0.32);
+  border-color: rgba(248, 113, 113, 0.28);
+  border-left-color: rgba(248, 113, 113, 0.86);
+}
+
+.research-evidence-receipt.empty {
+  background: rgba(30, 41, 59, 0.5);
+  border-color: rgba(148, 163, 184, 0.16);
+  border-left-color: rgba(148, 163, 184, 0.72);
+}
+
 .research-run-scope-main h3 {
+  color: #e2e8f0;
+  font-size: 1rem;
+  margin: 0 0 0.35rem;
+}
+
+.research-evidence-main h3 {
   color: #e2e8f0;
   font-size: 1rem;
   margin: 0 0 0.35rem;
@@ -1449,6 +1748,13 @@ function errorMessage(error: unknown) {
 }
 
 .research-run-scope-main p {
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.research-evidence-main p {
   color: #cbd5e1;
   font-size: 0.86rem;
   line-height: 1.55;
@@ -1469,6 +1775,13 @@ function errorMessage(error: unknown) {
   margin-top: 0.85rem;
 }
 
+.research-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
 .research-pending-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1477,6 +1790,13 @@ function errorMessage(error: unknown) {
 }
 
 .research-run-scope-grid div {
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 8px;
+  padding: 0.72rem;
+}
+
+.research-evidence-grid div {
   background: rgba(15, 23, 42, 0.5);
   border: 1px solid rgba(148, 163, 184, 0.1);
   border-radius: 8px;
@@ -1497,6 +1817,13 @@ function errorMessage(error: unknown) {
   margin-bottom: 0.32rem;
 }
 
+.research-evidence-grid span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  margin-bottom: 0.32rem;
+}
+
 .research-pending-grid span {
   display: block;
   color: #94a3b8;
@@ -1510,6 +1837,16 @@ function errorMessage(error: unknown) {
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.research-evidence-grid strong {
+  color: #e2e8f0;
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .research-pending-grid strong {
@@ -1518,9 +1855,24 @@ function errorMessage(error: unknown) {
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .research-run-scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin-top: 0.78rem;
+}
+
+.research-evidence-footer {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin-top: 0.72rem;
+}
+
+.research-evidence-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.42rem;
@@ -1535,6 +1887,15 @@ function errorMessage(error: unknown) {
 }
 
 .research-run-scope-chip {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+}
+
+.research-evidence-chip {
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.58);
   color: #cbd5e1;
@@ -1598,6 +1959,11 @@ function errorMessage(error: unknown) {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 0.8rem;
   padding: 1rem;
+}
+
+.research-trace-card:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.72);
+  outline-offset: 3px;
 }
 
 .research-trace-card.failed {
@@ -1885,6 +2251,10 @@ function errorMessage(error: unknown) {
   }
 
   .research-run-scope-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .research-evidence-grid {
     grid-template-columns: 1fr;
   }
 

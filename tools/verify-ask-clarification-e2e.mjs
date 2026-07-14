@@ -72,6 +72,61 @@ try {
       const payload = request.postDataJSON();
       askRequests.push(payload);
 
+      if (payload.query === '那个 API status 呢？') {
+        await route.fulfill(
+          jsonResponse({
+            answer:
+              'AI Notes API status 仍在等待 backend owner 复核，当前证据显示还没有 ready。',
+            contextMatch: {
+              state: 'locked',
+              selectedTopic: {
+                label: 'AI Notes',
+                reasons: ['当前会话锚点', '近期高频'],
+                anchors: ['ai-notes-api-checks'],
+                roleTerms: ['backend', 'api'],
+                sourceIds: ['ai-notes-thread', 'ai-notes-status-message'],
+              },
+            },
+            answerMemory: {
+              state: 'observed',
+              receipt: {
+                label: '活答案观察中',
+                detail:
+                  '首次命中这个持续状态问题，只记录 observation；不会立刻写活答案 thread。',
+                tone: 'info',
+                currentEvidenceCount: 1,
+                priorEvidenceCount: 0,
+              },
+            },
+            evidence: [
+              {
+                id: 'ask-direct-lock-ai-notes',
+                type: 'message',
+                content:
+                  'AI Notes API status is still waiting for backend owner review and is not ready.',
+                displayTitle: 'AI Notes API status',
+                displayText:
+                  'AI Notes API status is still waiting for backend owner review and is not ready.',
+                score: 0.94,
+                source: 'glip',
+                sourceTitle: 'AI Notes',
+                channels: ['fts'],
+                timestamp: nowSeconds,
+                scope: 'work',
+                metadata: {
+                  channels: ['fts'],
+                  contextAnchorReason: 'locked_memory_context_match',
+                },
+              },
+            ],
+            resolutionState: 'complete',
+            queryTimeMs: 8,
+            blocks: [],
+          }),
+        );
+        return;
+      }
+
       if (payload.query === '2') {
         await route.fulfill(
           jsonResponse({
@@ -85,13 +140,37 @@ try {
               },
             },
             answerMemory: {
-              state: 'observed',
+              state: 'priorHit',
               receipt: {
-                label: '已记录活答案候选',
+                label: '活答案已复核',
                 detail:
-                  '本轮用当前证据复核；候选选择只是检索锚点，不是事实确认。',
+                  '命中过往活答案，但旧答案只用于聚焦召回；本轮用 1 条当前证据复核。',
                 tone: 'info',
                 currentEvidenceCount: 1,
+                priorEvidenceCount: 1,
+                lastVerifiedAt: nowSeconds - 86400,
+                staleAfter: nowSeconds + 86400 * 29,
+              },
+              authority: {
+                decision: 'same_meaning_no_change',
+                summary:
+                  '同一组权威证据下答案语义没有变化，只记录本轮复核，不写新版本。',
+                evidenceRoles: [
+                  {
+                    role: 'authority',
+                    count: 1,
+                    reason: '当前消息证据。',
+                  },
+                  {
+                    role: 'prior',
+                    count: 1,
+                    reason: '旧活答案只用于对比。',
+                  },
+                ],
+                currentStance: 'negative_or_pending',
+                priorStance: 'negative_or_pending',
+                sameEvidence: true,
+                suppressedUpdate: true,
               },
             },
             evidence: [
@@ -106,6 +185,7 @@ try {
                 score: 0.92,
                 source: 'glip',
                 sourceTitle: 'AI Notes',
+                channels: ['fts'],
                 timestamp: nowSeconds,
                 scope: 'work',
                 metadata: { channels: ['fts'] },
@@ -124,6 +204,22 @@ try {
                 sourceRefId: 'ask-clarification-ai-notes',
               },
             ],
+            evidenceWatch: {
+              contractId: 'watch-ai-notes-api-checks',
+              state: 'active',
+              label: '证据守望已建立',
+              detail:
+                '已命中证据守望契约，并复用队列中的外部查证；本轮没有创建重复动作。',
+              subjectKey: 'ai-notes::api-checks',
+              nextCheckAt: nowSeconds + 86400,
+              confirmRequestId: 'confirm-ai-notes-api-checks',
+              duplicateSuppressedCount: 2,
+              runId: 'watch-run-ai-notes-api-checks',
+              lastRunState: 'skipped_duplicate',
+              lastRunSummary:
+                'Ask 已复用现有 delegate_openclaw 动作，未重复创建外部查证。',
+              created: false,
+            },
             queryTimeMs: 9,
             blocks: [],
           }),
@@ -219,8 +315,18 @@ try {
   const statusRail = page.getByLabel('Ask 本轮状态');
   await statusRail.getByText('状态 部分回答').waitFor({ timeout: 10000 });
   await statusRail
-    .getByText('不会自动确认结论、代表你发消息、执行外部写入')
+    .getByText('同一组当前权威证据下答案语义未变化')
     .waitFor({ timeout: 10000 });
+  await statusRail
+    .getByText('不写新版本')
+    .waitFor({ timeout: 10000 });
+  await statusRail.getByText('上次复核').waitFor({ timeout: 10000 });
+  await statusRail.getByText('下次复核').waitFor({ timeout: 10000 });
+  await statusRail
+    .getByText('不会自动确认结论、代表你发消息或执行外部写入')
+    .waitFor({ timeout: 10000 });
+  await statusRail.getByText('守望复用队列').waitFor({ timeout: 10000 });
+  await statusRail.getByText('守望确认项').waitFor({ timeout: 10000 });
   const continuationReceipt = page.getByLabel('Ask 承接候选回执');
   await continuationReceipt
     .getByText('承接上一轮短问句“那个 BE ready 了吗？”')
@@ -235,15 +341,97 @@ try {
   await continuationReceipt
     .getByText('仍按本轮证据回答')
     .waitFor({ timeout: 10000 });
-  await page.getByText('已记录活答案候选').waitFor({ timeout: 10000 });
+  const evidenceWatchReceipt = page.getByLabel('Ask 证据守望回执');
+  await evidenceWatchReceipt
+    .getByText('证据守望已建立')
+    .waitFor({ timeout: 10000 });
+  await evidenceWatchReceipt
+    .getByText('不会自动确认事实、代表你发消息、执行外部写入')
+    .waitFor({ timeout: 10000 });
+  await evidenceWatchReceipt.getByText('命中已有守望').waitFor({
+    timeout: 10000,
+  });
+  await evidenceWatchReceipt.getByText('本轮未复核来源').waitFor({
+    timeout: 10000,
+  });
+  await evidenceWatchReceipt.getByText('run 复用队列').waitFor({
+    timeout: 10000,
+  });
+  await evidenceWatchReceipt
+    .getByText('没有重新触达权威来源')
+    .waitFor({ timeout: 10000 });
+  await evidenceWatchReceipt.getByText('有确认项').waitFor({
+    timeout: 10000,
+  });
+  await evidenceWatchReceipt.getByText('已抑制重复 2').waitFor({
+    timeout: 10000,
+  });
+  const evidenceBasisReceipt = page.getByLabel('Ask 证据来源回执');
+  await evidenceBasisReceipt
+    .getByText('Ask 证据来源回执')
+    .waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt.getByText('证据 1').waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt.getByText('类型 1').waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt.getByText('来源 1').waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt.getByText('通道 1').waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt
+    .getByText('Top 来源 AI Notes', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt
+    .getByText('Top 通道 关键词', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await evidenceBasisReceipt
+    .getByText('不代表全库或全部连接器覆盖')
+    .waitFor({ timeout: 10000 });
+  await page.getByText('活答案已复核').waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('活答案权威证据门控')
+    .getByText('同证据同义复核')
+    .waitFor({ timeout: 10000 });
+  const activeAnswerMemoryReceipt = page.getByLabel(
+    /活答案回执：活答案已复核/,
+  );
+  await activeAnswerMemoryReceipt.waitFor({ timeout: 10000 });
+  const activeAnswerMemoryTitle =
+    (await activeAnswerMemoryReceipt.getAttribute('title')) || '';
+  assert.match(
+    activeAnswerMemoryTitle,
+    /旧 prior 1/,
+    'active answer receipt title should expose prior evidence count',
+  );
+  assert.match(
+    activeAnswerMemoryTitle,
+    /下次复核/,
+    'active answer receipt title should expose review time basis',
+  );
+  assert.match(
+    activeAnswerMemoryTitle,
+    /门控 同证据同义复核/,
+    'active answer receipt title should expose AuthorityGate result',
+  );
+  assert.match(
+    activeAnswerMemoryTitle,
+    /不会重新确认当前事实、再次写新版本、创建外部查证动作、代表你发消息或执行外部写入/,
+    'active answer receipt title should state non-effects',
+  );
+  await activeAnswerMemoryReceipt
+    .getByText('上次复核')
+    .waitFor({ timeout: 10000 });
+  await activeAnswerMemoryReceipt
+    .getByText('下次复核')
+    .waitFor({ timeout: 10000 });
   const statusBox = await statusRail.boundingBox();
   const continuationBox = await continuationReceipt.boundingBox();
+  const evidenceWatchBox = await evidenceWatchReceipt.boundingBox();
+  const evidenceBasisBox = await evidenceBasisReceipt.boundingBox();
   const answerBox = await page
     .getByText('AI Notes 的 BE 还没有 ready')
     .first()
     .boundingBox();
   assert.ok(statusBox, 'Ask status rail should be visible');
   assert.ok(continuationBox, 'Ask continuation receipt should be visible');
+  assert.ok(evidenceWatchBox, 'Ask evidence watch receipt should be visible');
+  assert.ok(evidenceBasisBox, 'Ask evidence basis receipt should be visible');
   assert.ok(answerBox, 'Ask answer text should be visible');
   assert.ok(
     statusBox.y < answerBox.y,
@@ -253,8 +441,20 @@ try {
     statusBox.y < continuationBox.y && continuationBox.y < answerBox.y,
     'Ask continuation receipt should render between status rail and answer body',
   );
+  assert.ok(
+    continuationBox.y < evidenceWatchBox.y && evidenceWatchBox.y < answerBox.y,
+    'Ask evidence watch receipt should render before the answer body',
+  );
+  assert.ok(
+    evidenceWatchBox.y < evidenceBasisBox.y && evidenceBasisBox.y < answerBox.y,
+    'Ask evidence source receipt should render after watch receipt and before the answer body',
+  );
 
-  assert.equal(askRequests.length, 2, 'candidate click should issue one follow-up Ask');
+  assert.equal(
+    askRequests.length,
+    2,
+    'candidate click should issue one follow-up Ask',
+  );
   assert.equal(askRequests[0].query, '那个 BE ready 了吗？');
   assert.equal(askRequests[0].scope, 'work');
   assert.equal(askRequests[1].query, '2');
@@ -274,6 +474,77 @@ try {
     0,
     'clarification panel should disappear after the topic is locked',
   );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/search?q=${encodeURIComponent(
+      '那个 API status 呢？',
+    )}&scope=work`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page.getByText('AI Notes API status 仍在等待 backend owner').waitFor({
+    timeout: 10000,
+  });
+  const topicLockReceipt = page.getByLabel('Ask 话题锁定回执');
+  await topicLockReceipt.getByText('Ask 话题锁定回执').waitFor({
+    timeout: 10000,
+  });
+  await topicLockReceipt
+    .getByText('锁定到“AI Notes”')
+    .waitFor({ timeout: 10000 });
+  await topicLockReceipt
+    .getByText('这只是检索锚点补全，不确认事实、不写活答案')
+    .waitFor({ timeout: 10000 });
+  await topicLockReceipt.getByText('依据 当前会话锚点').waitFor({
+    timeout: 10000,
+  });
+  await topicLockReceipt.getByText('锚点 ai-notes-api-checks').waitFor({
+    timeout: 10000,
+  });
+  await topicLockReceipt.getByText('角色词 backend/api').waitFor({
+    timeout: 10000,
+  });
+  await topicLockReceipt.getByText('来源 2').waitFor({ timeout: 10000 });
+  const directEvidenceBasisReceipt = page.getByLabel('Ask 证据来源回执');
+  await directEvidenceBasisReceipt
+    .getByText('Top 来源 AI Notes', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await directEvidenceBasisReceipt
+    .getByText('Top 通道 关键词', { exact: true })
+    .waitFor({ timeout: 10000 });
+  const directStatusBox = await page.getByLabel('Ask 本轮状态').boundingBox();
+  const topicLockBox = await topicLockReceipt.boundingBox();
+  const directEvidenceBasisBox =
+    await directEvidenceBasisReceipt.boundingBox();
+  const directAnswerBox = await page
+    .getByText('AI Notes API status 仍在等待 backend owner')
+    .first()
+    .boundingBox();
+  assert.ok(
+    directStatusBox,
+    'direct locked Ask status rail should be visible',
+  );
+  assert.ok(topicLockBox, 'direct locked Ask topic receipt should be visible');
+  assert.ok(
+    directEvidenceBasisBox,
+    'direct locked Ask evidence basis receipt should be visible',
+  );
+  assert.ok(directAnswerBox, 'direct locked Ask answer should be visible');
+  assert.ok(
+    directStatusBox.y < topicLockBox.y && topicLockBox.y < directAnswerBox.y,
+    'Ask topic lock receipt should render between status rail and answer body',
+  );
+  assert.ok(
+    topicLockBox.y < directEvidenceBasisBox.y &&
+      directEvidenceBasisBox.y < directAnswerBox.y,
+    'Ask evidence source receipt should render between topic lock and answer body',
+  );
+  assert.equal(
+    askRequests.length,
+    3,
+    'direct locked Ask should issue one more request',
+  );
+  assert.equal(askRequests[2].query, '那个 API status 呢？');
+  assert.equal(askRequests[2].scope, 'work');
 
   console.log('verify-ask-clarification-e2e: ok');
 } finally {

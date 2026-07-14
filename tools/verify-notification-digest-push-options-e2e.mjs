@@ -292,14 +292,13 @@ try {
     })
     .waitFor({ timeout: 10000 });
 
-  const weeklySection = page.locator('.form-section', {
-    has: page.locator('#WEEKLY_REPORT_CRON'),
+  await page.locator('#WEEKLY_REPORT_PUSH_TARGET').selectOption('group');
+  await page.locator('#WEEKLY_REPORT_PUSH_GROUP_ID').waitFor({
+    timeout: 10000,
   });
-  await weeklySection.locator('#WEEKLY_REPORT_PUSH_GROUP_ID').fill('');
-  await weeklySection
-    .locator('button', { hasText: '立即推送周报' })
-    .click();
-  const weeklyBlockedReceipt = weeklySection.locator('.digest-push-receipt', {
+  await page.locator('#WEEKLY_REPORT_PUSH_GROUP_ID').fill('');
+  await page.locator('button', { hasText: '立即推送周报' }).click();
+  const weeklyBlockedReceipt = page.locator('.digest-push-receipt', {
     hasText: '周报手动门禁',
   });
   await weeklyBlockedReceipt.waitFor({ timeout: 10000 });
@@ -308,17 +307,17 @@ try {
     'blocked',
     'Weekly report should use the current cleared group id instead of a saved fallback',
   );
-  await weeklySection
+  await page
     .locator('.digest-push-receipt', {
       hasText: '自定义群组（未填写 ID）',
     })
     .waitFor({ timeout: 10000 });
-  await weeklySection
+  await page
     .locator('.digest-push-receipt', {
       hasText: '后端未收到周报生成请求',
     })
     .waitFor({ timeout: 10000 });
-  await weeklySection
+  await page
     .locator('.digest-push-receipt', {
       hasText: '不会请求后端生成周报',
     })
@@ -329,12 +328,12 @@ try {
     'blocked weekly report request should not reuse the previous saved group id',
   );
 
-  await weeklySection
-    .locator('#WEEKLY_REPORT_PUSH_GROUP_ID')
-    .fill('team-weekly-1');
-  await weeklySection
-    .locator('button', { hasText: '立即推送周报' })
-    .click();
+  await page.locator('#WEEKLY_REPORT_PUSH_TARGET').selectOption('group');
+  await page.locator('#WEEKLY_REPORT_PUSH_GROUP_ID').waitFor({
+    timeout: 10000,
+  });
+  await page.locator('#WEEKLY_REPORT_PUSH_GROUP_ID').fill('team-weekly-1');
+  await page.locator('button', { hasText: '立即推送周报' }).click();
   const weeklyPendingReceipt = page.locator('.digest-push-receipt', {
     hasText: '周报手动请求',
   });
@@ -393,6 +392,22 @@ try {
   await page
     .locator('.digest-push-receipt', {
       hasText: '不会自动点击、忽略或完成通知',
+    })
+    .waitFor({ timeout: 10000 });
+  await page.locator('#WEEKLY_REPORT_PUSH_TARGET').selectOption('none');
+  await weeklyReceipt
+    .locator('div', {
+      hasText: '当前设置',
+    })
+    .waitFor({ timeout: 10000 });
+  await weeklyReceipt
+    .locator('dd', {
+      hasText: '已改为 不推送',
+    })
+    .waitFor({ timeout: 10000 });
+  await weeklyReceipt
+    .locator('dd', {
+      hasText: '本回执仍是提交时快照',
     })
     .waitFor({ timeout: 10000 });
 

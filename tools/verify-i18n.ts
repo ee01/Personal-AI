@@ -85,6 +85,7 @@ assert.equal(
   translateStaticText('到点由 Bot 推送，并在原消息显示稍后标注', 'en-US'),
   'Bot sends it when due, and the original message shows a Remind marker',
 );
+assert.equal(translateStaticText('改期预览', 'en-US'), 'Reschedule preview');
 assert.equal(translateStaticText('本次点击', 'en-US'), 'This pick');
 assert.equal(
   translateStaticText('会改期这条同源 Snooze，不新增第二条', 'en-US'),

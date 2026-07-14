@@ -98,6 +98,16 @@ const noteBodySchema = {
   additionalProperties: false,
 };
 
+function buildValidationErrorResponse(error: SourceMemoryCaptureValidationError): {
+  error: string;
+  noWriteReceipt?: SourceMemoryCaptureValidationError['noWriteReceipt'];
+} {
+  return {
+    error: error.message,
+    ...(error.noWriteReceipt ? { noWriteReceipt: error.noWriteReceipt } : {}),
+  };
+}
+
 export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: SourceMemoryCandidateInput }>(
     '/source-memory/candidates/score',
@@ -151,7 +161,7 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ capsule });
       } catch (error) {
         if (error instanceof SourceMemoryCaptureValidationError) {
-          return reply.status(error.statusCode).send({ error: error.message });
+          return reply.status(error.statusCode).send(buildValidationErrorResponse(error));
         }
         throw error;
       }
@@ -167,7 +177,7 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ capsule: service.getCapsule(request.params.id) });
       } catch (error) {
         if (error instanceof SourceMemoryCaptureValidationError) {
-          return reply.status(error.statusCode).send({ error: error.message });
+          return reply.status(error.statusCode).send(buildValidationErrorResponse(error));
         }
         throw error;
       }
@@ -190,7 +200,7 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
           .send({ capsule: service.updateCapsuleNote(request.params.id, request.body?.note) });
       } catch (error) {
         if (error instanceof SourceMemoryCaptureValidationError) {
-          return reply.status(error.statusCode).send({ error: error.message });
+          return reply.status(error.statusCode).send(buildValidationErrorResponse(error));
         }
         throw error;
       }
@@ -213,7 +223,7 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
           .send({ capsule: service.dismissCapsule(request.params.id, request.body?.reason) });
       } catch (error) {
         if (error instanceof SourceMemoryCaptureValidationError) {
-          return reply.status(error.statusCode).send({ error: error.message });
+          return reply.status(error.statusCode).send(buildValidationErrorResponse(error));
         }
         throw error;
       }

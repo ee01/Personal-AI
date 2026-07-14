@@ -47,6 +47,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       reply.header('Cache-Control', 'no-store');
       reply.header('X-Personal-AI-Backup-User-Id', manifest.userId);
       reply.header('X-Personal-AI-Backup-Exported-At', manifest.exportedAt);
+      reply.header('X-Personal-AI-Backup-Archive-SHA256', result.archiveSha256);
       reply.header(
         'X-Personal-AI-Backup-Format-Version',
         String(manifest.formatVersion),

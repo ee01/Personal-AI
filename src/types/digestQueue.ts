@@ -171,6 +171,7 @@ export interface DigestQueueStatusSummary {
   totalItems: number;
   dueItems: number;
   nextReleaseAt?: string;
+  checkedAt?: string;
   tasks: DigestQueueTaskSnapshot[];
 }
 

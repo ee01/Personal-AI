@@ -66,6 +66,21 @@ async function assertNoClass(locator, className, message) {
   assert.doesNotMatch(classes, new RegExp(`\\b${className}\\b`), message);
 }
 
+async function assertBoundaryAttribute(locator, expectedParts, message) {
+  const title = (await locator.getAttribute('title')) || '';
+  const ariaLabel = (await locator.getAttribute('aria-label')) || '';
+  for (const part of expectedParts) {
+    assert.ok(
+      title.includes(part),
+      `${message}: title should include "${part}", got "${title}"`,
+    );
+    assert.ok(
+      ariaLabel.includes(part),
+      `${message}: aria-label should include "${part}", got "${ariaLabel}"`,
+    );
+  }
+}
+
 function jsonResponse(body) {
   return {
     status: 200,
@@ -363,6 +378,32 @@ try {
     timeout: 10000,
   });
   await priorPage.getByText('活答案未复核').waitFor({ timeout: 10000 });
+  const unverifiedPriorReceipt = priorPage.getByLabel(
+    /活答案回执：活答案未复核/,
+  );
+  await unverifiedPriorReceipt.waitFor({ timeout: 10000 });
+  const unverifiedPriorReceiptTitle =
+    (await unverifiedPriorReceipt.getAttribute('title')) || '';
+  assert.match(
+    unverifiedPriorReceiptTitle,
+    /本轮证据 0/,
+    'unverified prior receipt title should expose zero current evidence',
+  );
+  assert.match(
+    unverifiedPriorReceiptTitle,
+    /旧 prior 2/,
+    'unverified prior receipt title should expose prior evidence count',
+  );
+  assert.match(
+    unverifiedPriorReceiptTitle,
+    /旧 prior 如有仅作召回和对比提示/,
+    'unverified prior receipt title should preserve prior-only boundary',
+  );
+  assert.match(
+    unverifiedPriorReceiptTitle,
+    /不会重新确认当前事实、再次写新版本、创建外部查证动作、代表你发消息或执行外部写入/,
+    'unverified prior receipt title should state non-effects',
+  );
   await priorPage.close();
 
   const resultCard = page.locator('.search-result-card', {
@@ -383,7 +424,7 @@ try {
     })
     .waitFor({ timeout: 10000 });
   assert.equal(
-    await resultCard.getByRole('button', { name: '打开来源' }).count(),
+    await resultCard.getByRole('button', { name: /打开来源/ }).count(),
     0,
     'unsafe search result source should not expose an open-source button',
   );
@@ -392,6 +433,24 @@ try {
     0,
     'unsupported search result route should not expose an internal jump button',
   );
+  const openResultButton = resultCard.getByRole('button', {
+    name: /打开结果：Search feedback memory；显示链接安全拦截回执/,
+  });
+  await openResultButton.focus();
+  await openResultButton.press('Enter');
+  const blockedOpenReceipt = page.locator('.search-navigation-receipt-warning');
+  await blockedOpenReceipt.getByText('打开动作回执').waitFor({
+    timeout: 10000,
+  });
+  await blockedOpenReceipt
+    .getByText('来源链接已隐藏：仅支持 http/https')
+    .waitFor({ timeout: 10000 });
+  await blockedOpenReceipt
+    .getByText('记忆内跳转已隐藏：不支持的目标')
+    .waitFor({ timeout: 10000 });
+  await blockedOpenReceipt
+    .getByText('等待上游写入安全 http/https 来源或安全记忆内路由')
+    .waitFor({ timeout: 10000 });
   await page.evaluate(() => {
     window.__searchCopiedDiagnostic = '';
     const clipboard = {
@@ -408,7 +467,18 @@ try {
       navigator.clipboard = clipboard;
     }
   });
-  await resultCard.getByRole('button', { name: '复制安全诊断' }).click();
+  const copyDiagnosticButton = resultCard.getByRole('button', {
+    name: /复制安全诊断/,
+  });
+  const copyDiagnosticTitle =
+    (await copyDiagnosticButton.getAttribute('title')) || '';
+  assert.ok(
+    copyDiagnosticTitle.includes('2 项拦截原因') &&
+      copyDiagnosticTitle.includes('不复制被拦截原始 URL') &&
+      copyDiagnosticTitle.includes('不会写入、同步、确认或重新读取来源'),
+    'search diagnostic copy button should expose block reasons and no-raw-url boundary before click',
+  );
+  await copyDiagnosticButton.click();
   await page
     .locator('.search-navigation-receipt-info')
     .getByText('安全诊断复制回执')
@@ -457,8 +527,36 @@ try {
     'feedback-status-negative',
     'restored negative feedback status should use negative tone',
   );
-  const usefulButton = resultCard.getByRole('button', { name: '有用' });
-  const negativeButton = resultCard.getByRole('button', { name: '不相关' });
+  const usefulButton = resultCard.getByRole('button', {
+    name: /有用反馈：把「Search feedback memory」/,
+  });
+  const negativeButton = resultCard.getByRole('button', {
+    name: /不相关反馈：把「Search feedback memory」/,
+  });
+  await assertBoundaryAttribute(
+    usefulButton,
+    [
+      '有用反馈',
+      'Search feedback memory',
+      '本次查询：“feedback query”，第 1/1 条',
+      '后续相近召回会提高优先级',
+      '不会确认答案',
+      '不会删除记忆',
+    ],
+    'useful feedback button should expose pre-click boundary',
+  );
+  await assertBoundaryAttribute(
+    negativeButton,
+    [
+      '不相关反馈',
+      'Search feedback memory',
+      '本次查询：“feedback query”，第 1/1 条',
+      '不做全局排除',
+      '不会删除或隐藏当前记忆',
+      '不会同步来源系统',
+    ],
+    'negative feedback button should expose pre-click boundary',
+  );
   await assertClass(
     negativeButton,
     'feedback-btn-negative',
@@ -488,9 +586,20 @@ try {
     .getByText('当前页不会即时重排；重新取证会用同一 query 和范围重新请求 Memory Service。')
     .waitFor({ timeout: 10000 });
   const refreshEvidenceButton = resultCard.getByRole('button', {
-    name: '用同一条件重新取证',
+    name: /用同一条件重新取证：重新请求 Memory Service/,
   });
   await refreshEvidenceButton.waitFor({ timeout: 10000 });
+  await assertBoundaryAttribute(
+    refreshEvidenceButton,
+    [
+      '用同一条件重新取证',
+      'query 为「feedback query」',
+      '范围为工作记忆',
+      '不会再写一条反馈',
+      '不会确认答案',
+    ],
+    'feedback refresh button should expose rerun boundary',
+  );
   await assertClass(
     resultCard.locator('.feedback-status'),
     'feedback-status-positive',
@@ -533,6 +642,54 @@ try {
       source_url_included: 'false',
       source_url_boundary: 'hidden_non_http_source',
     },
+  );
+
+  const conditionChangeResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/ask') &&
+      response.request().method() === 'POST',
+  );
+  await page.evaluate(() => {
+    window.location.hash =
+      '#/search?q=changed%20feedback%20query&scope=personal';
+  });
+  await conditionChangeResponse;
+  await resultCard.getByText('Search feedback memory').waitFor({
+    timeout: 10000,
+  });
+  assert.equal(
+    askRequests.at(-1)?.query,
+    'changed feedback query',
+    'route change should first rerun the page with the changed query',
+  );
+  assert.equal(
+    askRequests.at(-1)?.scope,
+    'personal',
+    'route change should first rerun the page with the changed scope',
+  );
+  await resultCard
+    .getByText('反馈时条件；当前页条件已变化')
+    .waitFor({ timeout: 10000 });
+  await resultCard
+    .getByText('当前条件已变化，重新取证仍会按反馈时 query 和范围重新请求 Memory Service。')
+    .waitFor({ timeout: 10000 });
+  await assertBoundaryAttribute(
+    negativeButton,
+    [
+      '不相关反馈',
+      '本次查询：“changed feedback query”，第 1/1 条',
+      '不做全局排除',
+    ],
+    'feedback button should describe the current click conditions after route changes',
+  );
+  await assertBoundaryAttribute(
+    refreshEvidenceButton,
+    [
+      '用同一条件重新取证',
+      'query 为「feedback query」',
+      '范围为工作记忆',
+    ],
+    'feedback refresh button should keep the feedback-time rerun conditions',
   );
 
   const askCountBeforeRefresh = askRequests.length;
@@ -603,7 +760,21 @@ try {
     },
   );
 
-  await resultCard.getByRole('button', { name: '撤销' }).click();
+  const clearFeedbackButton = resultCard.getByRole('button', {
+    name: /撤销反馈：移除「Search feedback memory」/,
+  });
+  await assertBoundaryAttribute(
+    clearFeedbackButton,
+    [
+      '撤销反馈',
+      'Search feedback memory',
+      '普通召回信号',
+      '不会删除记忆',
+      '不会确认答案',
+    ],
+    'clear feedback button should expose undo boundary',
+  );
+  await clearFeedbackButton.click();
   await resultCard
     .locator('.feedback-status', { hasText: '已撤销反馈' })
     .waitFor({ timeout: 10000 });
@@ -638,7 +809,11 @@ try {
     },
   );
   assert.equal(
-    await resultCard.getByRole('button', { name: '撤销' }).count(),
+    await resultCard
+      .getByRole('button', {
+        name: /撤销反馈：移除「Search feedback memory」/,
+      })
+      .count(),
     0,
     'clear action should return the search result to a neutral feedback state',
   );
@@ -661,6 +836,16 @@ try {
   await resultCard
     .getByText('反馈不会外发、同步来源系统或确认答案；写错后可用“撤销”移除这次修正。')
     .waitFor({ timeout: 10000 });
+  await assertBoundaryAttribute(
+    negativeButton,
+    [
+      '不相关反馈',
+      '本次查询：“feedback query”，第 1/1 条',
+      '不做全局排除',
+      '不会删除或隐藏当前记忆',
+    ],
+    'neutral negative feedback button should expose failure-safe pre-click boundary',
+  );
 
   failNextFeedback = true;
   await negativeButton.click();
@@ -676,7 +861,9 @@ try {
     .waitFor({ timeout: 10000 });
   assert.equal(
     await resultCard
-      .getByRole('button', { name: '用同一条件重新取证' })
+      .getByRole('button', {
+        name: /用同一条件重新取证：重新请求 Memory Service/,
+      })
       .count(),
     0,
     'failed feedback should not show the post-feedback refresh action',

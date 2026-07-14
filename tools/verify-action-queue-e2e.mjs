@@ -19,6 +19,7 @@ const userDataDir = await fs.mkdtemp(
 const nowSeconds = Math.floor(Date.now() / 1000);
 let approvalExecuteRequest = null;
 let failNextActionListRequest = false;
+let simulateDeepLinkedActionOutsideFirstPage = false;
 let resolveApprovalExecuteStarted = () => {};
 let resolveApprovalExecuteRelease = () => {};
 const approvalExecuteStarted = new Promise((resolve) => {
@@ -111,6 +112,31 @@ const fixtureActions = [
     retryCount: 0,
     sourceKind: 'reflection_thread',
     sourceRefId: 'thread-drive',
+    queueStatus: 'queued',
+  },
+  {
+    id: 'action-openclaw-auto-queued',
+    type: 'delegate_openclaw',
+    actionType: 'delegate_openclaw',
+    title: '自动查询部署窗口',
+    description: '后台调度会自动让 OpenClaw 读取部署窗口。',
+    params: {
+      mode: 'read',
+      targetSystem: 'deployment',
+      task: '请查询今晚部署窗口是否仍开放。',
+    },
+    riskLevel: 'low',
+    confidence: 0.77,
+    evidenceRefs: ['thread:deployment-window'],
+    requiresApproval: false,
+    state: 'pending',
+    createdAt: nowSeconds - 780,
+    executionMode: 'auto',
+    priority: 6,
+    dependsOn: [],
+    retryCount: 0,
+    sourceKind: 'reflection_thread',
+    sourceRefId: 'thread-deployment-window',
     queueStatus: 'queued',
   },
   {
@@ -377,16 +403,31 @@ const fixtureActions = [
 ];
 
 function actionsForRequest(parsed) {
+  const actionId = parsed.searchParams.get('actionId');
   const queueStatus = parsed.searchParams.get('queueStatus');
   const executionMode = parsed.searchParams.get('executionMode');
+  const limit = Number.parseInt(parsed.searchParams.get('limit') || '50', 10);
+  const offset = Number.parseInt(parsed.searchParams.get('offset') || '0', 10);
   let items = fixtureActions;
+  if (actionId) {
+    items = items.filter((action) => action.id === actionId);
+  } else if (simulateDeepLinkedActionOutsideFirstPage) {
+    items = items.filter((action) => action.id !== 'action-openclaw-recovery-confirm');
+  }
   if (queueStatus && queueStatus !== 'all') {
     items = items.filter((action) => action.queueStatus === queueStatus);
   }
   if (executionMode) {
     items = items.filter((action) => action.executionMode === executionMode);
   }
-  return { items, total: items.length, limit: 50, offset: 0 };
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+  const safeOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
+  return {
+    items: items.slice(safeOffset, safeOffset + safeLimit),
+    total: items.length,
+    limit: safeLimit,
+    offset: safeOffset,
+  };
 }
 
 function apiFallback(url) {
@@ -506,7 +547,7 @@ try {
 
   await page.getByText('动作队列').first().waitFor({ timeout: 10000 });
   await page.locator('[aria-label="动作队列健康摘要"]').waitFor({ timeout: 10000 });
-  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '11' }).waitFor();
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '12' }).waitFor();
   await page.locator('.queue-stat', { hasText: '需要处理' }).locator('strong', { hasText: '5' }).waitFor();
   await page.locator('.queue-stat', { hasText: '执行中' }).locator('strong', { hasText: '1' }).waitFor();
   await page.locator('.queue-stat', { hasText: '失败/死信' }).locator('strong', { hasText: '3' }).waitFor();
@@ -532,19 +573,46 @@ try {
   await page.getByText('当前显示上次成功快照').waitFor({ timeout: 10000 });
   await page.getByText('当前服务状态未确认').waitFor({ timeout: 10000 });
   await page.getByText('刷新动作队列失败，已保留上次快照').waitFor({ timeout: 10000 });
-  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '11' }).waitFor();
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '12' }).waitFor();
   await attentionReceipt.getByText('上次成功快照的处理构成').waitFor({ timeout: 10000 });
   await attentionReceipt.getByText('快照：上次成功读取').waitFor({ timeout: 10000 });
+  const autoOpenClawCard = page.locator('.action-card', { hasText: '自动查询部署窗口' });
+  await autoOpenClawCard.getByText('等待自动调度委派').waitFor({ timeout: 10000 });
+  await autoOpenClawCard
+    .getByText('未设置具体时间；下一次调度扫描会执行')
+    .waitFor({ timeout: 10000 });
+  await autoOpenClawCard.getByText('当前页面只是读取队列快照').waitFor({ timeout: 10000 });
+  await autoOpenClawCard
+    .getByText(/下一次 Memory Service 调度扫描才会把/)
+    .waitFor({ timeout: 10000 });
+  await autoOpenClawCard
+    .getByText('查看这张卡、刷新列表或展开 transcript 都不会提前执行')
+    .waitFor({ timeout: 10000 });
+  await autoOpenClawCard
+    .getByText('触发：后台调度，不由本页点击')
+    .waitFor({ timeout: 10000 });
+  await autoOpenClawCard.getByText('触发：下一次调度扫描').waitFor({
+    timeout: 10000,
+  });
+  await autoOpenClawCard.getByText('审批：无需审批').waitFor({ timeout: 10000 });
   const executeFailureCard = page.locator('.action-card', { hasText: '提交失败的外部写操作' });
   await executeFailureCard.getByText('外部写操作将由 OpenClaw 接管').waitFor({ timeout: 10000 });
   await executeFailureCard.getByText('范围：drive').waitFor({ timeout: 10000 });
+  const executeFailureButton = executeFailureCard.getByRole('button', {
+    name: /执行：把 OpenClaw 写操作提交给 Memory Service/,
+  });
+  await executeFailureButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await executeFailureButton.getAttribute('title')) || '',
+    /不会立即证明 Jira、Drive 或部署系统已完成/,
+  );
   const failedExecuteResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith('/actions/action-execute-request-fails/execute') &&
       response.request().method() === 'POST' &&
       response.status() === 503,
   );
-  await executeFailureCard.getByRole('button', { name: '执行' }).click();
+  await executeFailureButton.click();
   await failedExecuteResponse;
   await executeFailureCard.getByText('OpenClaw 写操作执行请求失败').waitFor({ timeout: 10000 });
   await executeFailureCard.getByText('Memory Service 没有确认接收这次执行请求').waitFor({ timeout: 10000 });
@@ -564,15 +632,28 @@ try {
   await approvalCard.getByText('目标：deployment').waitFor({ timeout: 10000 });
   await approvalCard.getByText('结果证明：artifact / transcript / 队列状态').waitFor({ timeout: 10000 });
   await approvalCard.getByText('批准：点击后才写入').waitFor({ timeout: 10000 });
+  const approveExecuteButton = approvalCard.getByRole('button', {
+    name: /确认并执行：先写入批准并提交执行请求/,
+  });
+  await approveExecuteButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await approveExecuteButton.getAttribute('title')) || '',
+    /结果以队列状态、artifact 或 transcript 为准/,
+  );
+  const approvalCancelButton = approvalCard.getByRole('button', {
+    name: /取消：只取消未完成队列项/,
+  });
+  await approvalCancelButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await approvalCancelButton.getAttribute('title')) || '',
+    /不会撤销可能已经发生的外部副作用/,
+  );
   const executeResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith('/actions/action-approval-high/execute') &&
       response.request().method() === 'POST',
   );
-  await page
-    .locator('.action-card', { hasText: '更新生产部署状态' })
-    .getByRole('button', { name: '确认并执行' })
-    .click();
+  await approveExecuteButton.click();
   await approvalExecuteStarted;
   await approvalCard.getByText('操作提交中').waitFor({ timeout: 10000 });
   await approvalCard.getByText('确认与执行请求正在提交').waitFor({
@@ -644,13 +725,29 @@ try {
   await page.getByText('对象 ORB-123').waitFor({ timeout: 10000 });
   await page.getByText('字段 status, assignee').waitFor({ timeout: 10000 });
   await page.getByText('"jiraKey": "ORB-123"').waitFor({ timeout: 10000 });
-  await page
-    .locator('.transcript-panel', {
-      hasText: 'thread-release-action-delegation-succeeded-1770000000.json',
-    })
-    .getByRole('button', { name: '展开' })
-    .click();
+  const delegationTranscriptPanel = page.locator('.transcript-panel', {
+    hasText: 'thread-release-action-delegation-succeeded-1770000000.json',
+  });
+  const delegationTranscriptButton = delegationTranscriptPanel.locator('button.tiny-btn');
+  await delegationTranscriptButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await delegationTranscriptButton.getAttribute('aria-label')) || '',
+    /展开 OpenClaw transcript/,
+  );
+  const transcriptBoundary = (await delegationTranscriptButton.getAttribute('title')) || '';
+  assert.match(transcriptBoundary, /只读取本地 delegations 审计文件/);
+  assert.match(transcriptBoundary, /不会重跑 OpenClaw、批准、重试、取消/);
+  assert.match(transcriptBoundary, /不会.*确认外部事实/);
+  assert.match(transcriptBoundary, /模式 只读查询，目标 jira/);
+  await delegationTranscriptButton.click();
   await page.getByText('"model": "openclaw:main"').waitFor({ timeout: 10000 });
+  assert.match(
+    (await delegationTranscriptButton.getAttribute('aria-label')) || '',
+    /收起 transcript/,
+  );
+  const collapseBoundary = (await delegationTranscriptButton.getAttribute('title')) || '';
+  assert.match(collapseBoundary, /收起 transcript/);
+  assert.match(collapseBoundary, /不会删除 .*重跑 OpenClaw/);
 
   await page.locator('select.filter-select').first().selectOption('failed');
   await page.getByText('优先处理失败动作').waitFor({ timeout: 10000 });
@@ -667,16 +764,108 @@ try {
     .waitFor({ timeout: 10000 });
   await failedOutreachCard.getByText('类型：主动询问').waitFor({ timeout: 10000 });
   await failedOutreachCard.getByText('重试：只重新入队').waitFor({ timeout: 10000 });
+  const failedOutreachRetryButton = failedOutreachCard.getByRole('button', {
+    name: /重试入队：只把动作重新排队/,
+  });
+  await failedOutreachRetryButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await failedOutreachRetryButton.getAttribute('title')) || '',
+    /不抹掉旧错误/,
+  );
   await page.getByText('OpenClaw 返回缺少可验证 artifact').waitFor({ timeout: 10000 });
 
   await page.locator('select.filter-select').first().selectOption('cancelled');
-  await page.getByText('当前筛选没有动作').waitFor({ timeout: 10000 });
+  await page
+    .locator('.queue-guidance')
+    .getByText('当前筛选没有动作')
+    .waitFor({ timeout: 10000 });
   await page.getByText('当前来源、动作 ID、状态或执行模式没有命中').waitFor({
     timeout: 10000,
   });
+  const emptyFilterReceipt = page.locator('[aria-label="动作队列空筛选回执"]');
+  await emptyFilterReceipt.getByText('当前状态/模式筛选没有动作').waitFor({
+    timeout: 10000,
+  });
+  await emptyFilterReceipt.getByText('状态：cancelled').waitFor({
+    timeout: 10000,
+  });
+  await emptyFilterReceipt.getByText('结果：0 条').waitFor({ timeout: 10000 });
+  await emptyFilterReceipt
+    .getByText('边界：只读筛选，不执行 / 不批准 / 不重试 / 不取消')
+    .waitFor({ timeout: 10000 });
+  await emptyFilterReceipt
+    .getByText('恢复：清除状态/模式筛选')
+    .waitFor({ timeout: 10000 });
   await page.getByRole('button', { name: '清除状态/模式筛选' }).click();
   await page.getByText('有动作运行时间过长').waitFor({ timeout: 10000 });
-  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '11' }).waitFor();
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '12' }).waitFor();
+
+  const missingActionLookupResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/actions') &&
+      response.url().includes('actionId=action-missing-deep-link') &&
+      response.request().method() === 'GET' &&
+      response.status() === 200,
+  );
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/actions?actionId=action-missing-deep-link`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await missingActionLookupResponse;
+  const missingLocatorReceipt = page.locator('[aria-label="动作定位请求回执"]');
+  await missingLocatorReceipt.getByText('未找到这条动作').waitFor({
+    timeout: 10000,
+  });
+  await emptyFilterReceipt.getByText('当前深链筛选没有返回动作').waitFor({
+    timeout: 10000,
+  });
+  await emptyFilterReceipt.getByText('动作 ID：action-missing-deep-link').waitFor({
+    timeout: 10000,
+  });
+  await emptyFilterReceipt.getByText('恢复：查看全部动作').waitFor({
+    timeout: 10000,
+  });
+  await page.getByRole('link', { name: '查看全部动作' }).click();
+  await page.getByText('有动作运行时间过长').waitFor({ timeout: 10000 });
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '12' }).waitFor();
+
+  simulateDeepLinkedActionOutsideFirstPage = true;
+  const actionIdLookupResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/actions') &&
+      response.url().includes('actionId=action-openclaw-recovery-confirm') &&
+      response.request().method() === 'GET' &&
+      response.status() === 200,
+  );
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/actions?actionId=action-openclaw-recovery-confirm`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await actionIdLookupResponse;
+  const locatorReceipt = page.locator('[aria-label="动作定位请求回执"]');
+  await locatorReceipt.getByText('已按动作 ID 定位').waitFor({
+    timeout: 10000,
+  });
+  await locatorReceipt
+    .getByText('不是从当前第一页列表里猜测出来的可见切片')
+    .waitFor({ timeout: 10000 });
+  await locatorReceipt.getByText('定位：服务端 actionId 查询').waitFor({
+    timeout: 10000,
+  });
+  await locatorReceipt.getByText('命中：succeeded').waitFor({
+    timeout: 10000,
+  });
+  await locatorReceipt.getByText('边界：只读定位，不执行动作').waitFor({
+    timeout: 10000,
+  });
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '1' }).waitFor();
+  await page.getByText('需要处理 OpenClaw 配置后重试: 查询外部 Jira 能力').waitFor({
+    timeout: 10000,
+  });
+  assert.equal(
+    await page.locator('.action-card', { hasText: '更新生产部署状态' }).count(),
+    0,
+  );
 
   console.log('verify-action-queue-e2e: ok');
 } finally {

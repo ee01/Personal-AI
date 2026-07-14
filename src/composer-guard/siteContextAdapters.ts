@@ -1914,14 +1914,22 @@ export interface ComposerTextSnapshot {
   selectionEnd?: number;
 }
 
+export interface ComposerSelectionSnapshot {
+  kind: ComposerTarget['kind'];
+  selectionStart?: number;
+  selectionEnd?: number;
+  range?: Range;
+}
+
 function isNodeInsideElement(node: Node, element: HTMLElement): boolean {
   return node === element || element.contains(node);
 }
 
 function getSelectionRangeInside(
   element: HTMLElement,
+  ownerDocument: Document = element.ownerDocument,
 ): Range | null {
-  const selection = document.getSelection();
+  const selection = ownerDocument.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
   const range = selection.getRangeAt(0);
   if (
@@ -1931,6 +1939,17 @@ function getSelectionRangeInside(
     return range;
   }
   return null;
+}
+
+function cloneSelectionRangeInside(
+  element: HTMLElement,
+  ownerDocument: Document = element.ownerDocument,
+): Range | null {
+  try {
+    return getSelectionRangeInside(element, ownerDocument)?.cloneRange() || null;
+  } catch {
+    return null;
+  }
 }
 
 function collapseRangeToEnd(element: HTMLElement): Range {
@@ -1958,11 +1977,82 @@ function getTextAroundRange(
   };
 }
 
-function setSelectionRange(range: Range): void {
-  const selection = document.getSelection();
+function setSelectionRange(
+  range: Range,
+  ownerDocument: Document = range.startContainer.ownerDocument,
+): void {
+  const selection = ownerDocument.getSelection();
   if (!selection) return;
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+export function captureComposerSelectionSnapshot(
+  target: ComposerTarget,
+): ComposerSelectionSnapshot | null {
+  const element = target.element as HTMLTextAreaElement | HTMLInputElement;
+  if (target.kind === 'textarea' || target.kind === 'input') {
+    return {
+      kind: target.kind,
+      selectionStart: element.selectionStart ?? element.value.length,
+      selectionEnd: element.selectionEnd ?? element.value.length,
+    };
+  }
+
+  if (target.kind === 'richiframe') {
+    const body = getRichTextFrameBody(target.element);
+    if (!body) return null;
+    const range = cloneSelectionRangeInside(body, body.ownerDocument);
+    return range ? { kind: target.kind, range } : null;
+  }
+
+  const range = cloneSelectionRangeInside(target.element);
+  return range ? { kind: target.kind, range } : null;
+}
+
+export function restoreComposerSelectionSnapshot(
+  target: ComposerTarget,
+  snapshot: ComposerSelectionSnapshot | null | undefined,
+): boolean {
+  if (!snapshot || snapshot.kind !== target.kind) return false;
+  const element = target.element as HTMLTextAreaElement | HTMLInputElement;
+
+  if (target.kind === 'textarea' || target.kind === 'input') {
+    const valueLength = element.value.length;
+    const selectionStart = Math.min(
+      snapshot.selectionStart ?? valueLength,
+      valueLength,
+    );
+    const selectionEnd = Math.min(
+      snapshot.selectionEnd ?? selectionStart,
+      valueLength,
+    );
+    target.element.focus({ preventScroll: true });
+    element.setSelectionRange(selectionStart, selectionEnd);
+    return true;
+  }
+
+  if (!snapshot.range) return false;
+
+  const selectionRoot =
+    target.kind === 'richiframe'
+      ? getRichTextFrameBody(target.element)
+      : target.element;
+  if (!selectionRoot) return false;
+
+  try {
+    if (
+      !isNodeInsideElement(snapshot.range.startContainer, selectionRoot) ||
+      !isNodeInsideElement(snapshot.range.endContainer, selectionRoot)
+    ) {
+      return false;
+    }
+    selectionRoot.focus({ preventScroll: true });
+    setSelectionRange(snapshot.range, selectionRoot.ownerDocument);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function captureComposerTextSnapshot(

@@ -152,6 +152,25 @@ export interface EvidenceChannelOverlapReceiptView {
   metrics: string[];
 }
 
+export interface SearchResultBatchReceiptInput {
+  query?: unknown;
+  scope?: unknown;
+  mode?: unknown;
+  entityTypeLabel?: unknown;
+  selectedTypeFilter?: unknown;
+  selectedTypeLabel?: unknown;
+  visibleCount?: unknown;
+  totalCount?: unknown;
+  channelDiagnostics?: unknown;
+}
+
+export interface SearchResultBatchReceiptView {
+  title: string;
+  detail: string;
+  tone: 'info' | 'warning';
+  metrics: string[];
+}
+
 export interface TypeFilterReceiptInput {
   selectedTypeFilter?: unknown;
   selectedTypeLabel?: unknown;
@@ -598,7 +617,7 @@ export function formatEvidenceChannelOverlapReceipt(
     (result): result is MemorySearchResultLike =>
       Boolean(result && typeof result === 'object'),
   );
-  if (visibleResults.length <= 1) return null;
+  if (visibleResults.length === 0) return null;
 
   let singleChannelCount = 0;
   let multiChannelCount = 0;
@@ -638,10 +657,16 @@ export function formatEvidenceChannelOverlapReceipt(
 
   const missingSummary =
     missingChannelCount > 0 ? `，${missingChannelCount} 条未标明通道` : '';
-  const summary =
+  let summary =
     multiChannelCount > 0
       ? `当前 ${visibleResults.length} 条可见结果中，${multiChannelCount} 条由多个召回通道共同命中，${singleChannelCount} 条为单通道${missingSummary}。${comboSummary}`
       : `当前 ${visibleResults.length} 条可见结果中，${singleChannelCount} 条为单通道${missingSummary}。${comboSummary}`;
+  if (visibleResults.length === 1) {
+    summary =
+      multiChannelCount > 0
+        ? `当前 1 条可见结果由多个召回通道共同命中。${comboSummary}`
+        : '当前 1 条可见结果为单通道证据，尚无通道交叉支持。';
+  }
   const metrics = [
     `多通道 ${multiChannelCount}`,
     `单通道 ${singleChannelCount}`,
@@ -672,6 +697,65 @@ function normalizeTypeFilterKey(value: unknown): string {
 
 function normalizeTypeFilterName(value: unknown, key: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : key;
+}
+
+function getSearchModeLabel(input: {
+  mode?: unknown;
+  entityTypeLabel?: unknown;
+}): string {
+  if (input.mode === 'overview') return 'Ask 智能搜索';
+  const entityTypeLabel =
+    typeof input.entityTypeLabel === 'string' && input.entityTypeLabel.trim()
+      ? input.entityTypeLabel.trim()
+      : '';
+  return entityTypeLabel ? `实体搜索 ${entityTypeLabel}` : '记忆搜索';
+}
+
+export function formatSearchResultBatchReceipt(
+  input: SearchResultBatchReceiptInput,
+): SearchResultBatchReceiptView | null {
+  const totalCount = normalizeResultCount(input.totalCount);
+  const visibleCount = Math.min(normalizeResultCount(input.visibleCount), totalCount);
+  if (totalCount <= 0 || visibleCount <= 0) return null;
+
+  const query = compactEmptySearchText(input.query, 64);
+  if (!query) return null;
+
+  const selectedFilter = normalizeTypeFilterKey(input.selectedTypeFilter);
+  const selectedLabel =
+    selectedFilter === 'all'
+      ? '全部类型'
+      : normalizeTypeFilterName(input.selectedTypeLabel, selectedFilter);
+  const isFiltered = selectedFilter !== 'all' && visibleCount < totalCount;
+  const diagnostics = formatRecallChannelDiagnostics(input.channelDiagnostics);
+  const hitCount = diagnostics.filter(
+    (diagnostic) => diagnostic.status === 'hit',
+  ).length;
+  const failedOrSkippedCount = diagnostics.filter(
+    (diagnostic) =>
+      diagnostic.status === 'failed' || diagnostic.status === 'skipped',
+  ).length;
+  const modeLabel = getSearchModeLabel(input);
+  const scopeLabel = getScopeLabel(input.scope);
+  const basis = isFiltered
+    ? `当前${selectedLabel}可见 ${visibleCount}/${totalCount} 条`
+    : `当前 ${totalCount} 条`;
+
+  return {
+    title: '结果批次回执',
+    detail: `${basis}卡片绑定查询“${query}”、${scopeLabel}和${modeLabel}；这是 Memory Service 已返回结果的页面批次基准，类型筛选只收窄这批结果，不会重新召回、重排、同步外部来源或确认事实。反馈按钮仍按卡片上的反馈范围单独写入。`,
+    tone: failedOrSkippedCount > 0 || isFiltered ? 'warning' : 'info',
+    metrics: [
+      `查询 ${query}`,
+      `范围 ${scopeLabel}`,
+      modeLabel,
+      isFiltered ? `可见 ${visibleCount}/${totalCount}` : `结果 ${totalCount}`,
+      diagnostics.length > 0
+        ? `通道 ${hitCount}/${diagnostics.length} 命中`
+        : '通道未返回',
+      '批次只读',
+    ],
+  };
 }
 
 export function formatTypeFilterChipHint(

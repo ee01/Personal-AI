@@ -76,7 +76,9 @@
     <section
       v-if="archiveLoadReceipt"
       class="meeting-archive-receipt"
+      :class="{ 'is-failed': archiveLoadReceipt.tone === 'failed' }"
       data-meeting-archive-receipt="true"
+      :data-meeting-archive-receipt-state="archiveLoadReceipt.tone"
       aria-label="会议归档读取回执"
     >
       <div class="meeting-archive-receipt-head">
@@ -330,6 +332,8 @@
           <div class="meeting-card-footer">
             <button
               class="meeting-primary-action"
+              :title="getPanoramaButtonBoundary(meeting)"
+              :aria-label="getPanoramaButtonBoundary(meeting)"
               @click="openPanorama(meeting)"
             >
               打开 Panorama
@@ -337,6 +341,8 @@
             <button
               class="meeting-secondary-action"
               :disabled="!getSafePdfUrl(meeting.pdfUrl)"
+              :title="getPdfButtonBoundary(meeting)"
+              :aria-label="getPdfButtonBoundary(meeting)"
               @click="openPdf(meeting.pdfUrl, meeting)"
             >
               打开 PDF
@@ -392,6 +398,7 @@ type ArchiveLoadTrigger =
   | 'load-more';
 
 interface MeetingArchiveLoadReceipt {
+  tone: 'ok' | 'failed';
   title: string;
   source: string;
   scope: string;
@@ -579,12 +586,18 @@ async function loadMeetings(trigger: ArchiveLoadTrigger = 'refresh') {
       response.source,
     );
   } catch (directError) {
-    error.value =
+    const message =
       directError instanceof Error
         ? directError.message
         : '暂时无法连接会议记录服务';
+    error.value = message;
     meetings.value = [];
     meetingTotal.value = 0;
+    archiveLoadReceipt.value = buildArchiveLoadFailureReceipt(
+      trigger,
+      message,
+      false,
+    );
   } finally {
     loading.value = false;
   }
@@ -616,10 +629,16 @@ async function loadMoreMeetings() {
       response.source,
     );
   } catch (loadError) {
-    pageError.value =
+    const message =
       loadError instanceof Error
         ? loadError.message
         : '暂时无法加载更早的会议记录';
+    pageError.value = message;
+    archiveLoadReceipt.value = buildArchiveLoadFailureReceipt(
+      'load-more',
+      message,
+      true,
+    );
   } finally {
     loadingMore.value = false;
   }
@@ -673,15 +692,6 @@ function buildArchiveLoadReceipt(
   trigger: ArchiveLoadTrigger,
   source: string,
 ): MeetingArchiveLoadReceipt {
-  const query = appliedSearch.value.trim();
-  const statusLabel = statusFilterOptions.find(
-    (option) => option.value === statusFilter.value,
-  )?.label;
-  const filters: string[] = [];
-  if (query) filters.push(`关键词“${query}”`);
-  if (statusFilter.value !== 'all' && statusLabel) {
-    filters.push(`状态 ${statusLabel}`);
-  }
   const titleByTrigger: Record<ArchiveLoadTrigger, string> = {
     initial: '已读取最新会议归档',
     refresh: '已刷新会议归档列表',
@@ -691,17 +701,15 @@ function buildArchiveLoadReceipt(
   };
   const total = meetingTotal.value || meetings.value.length;
   const loaded = `已显示 ${meetings.value.length} / ${total} 条`;
-  const scope = filters.length
-    ? `${filters.join('，')}；服务端筛选后分页`
-    : '全部会议；按最近会议时间分页';
 
   return {
+    tone: 'ok',
     title: titleByTrigger[trigger],
     source:
       source === 'memory-service direct'
         ? 'memory-service 直接读取'
         : 'extension background 读取',
-    scope,
+    scope: getArchiveScopeText(),
     loaded,
     boundary:
       '只读取会议归档列表和状态；没有重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。',
@@ -710,6 +718,59 @@ function buildArchiveLoadReceipt(
       : '当前筛选范围已加载完；要复核结构化内容或排查 PDF/Digest 时打开 Panorama。',
     receivedAt: formatReceiptTime(Date.now()),
   };
+}
+
+function buildArchiveLoadFailureReceipt(
+  trigger: ArchiveLoadTrigger,
+  errorMessage: string,
+  keepCurrentSnapshot: boolean,
+): MeetingArchiveLoadReceipt {
+  const titleByTrigger: Record<ArchiveLoadTrigger, string> = {
+    initial: '会议归档读取失败',
+    refresh: '刷新会议归档失败',
+    filter: '筛选会议归档失败',
+    clear: '清除筛选读取失败',
+    'load-more': '加载更早会议失败',
+  };
+  const total = meetingTotal.value || meetings.value.length;
+  const loaded = keepCurrentSnapshot
+    ? `本次未更新；仍显示 ${meetings.value.length} / ${total} 条`
+    : '本次未显示会议';
+  const safeMessage = errorMessage.trim().slice(0, 140);
+
+  return {
+    tone: 'failed',
+    title: titleByTrigger[trigger],
+    source: '本次读取未确认',
+    scope: getArchiveScopeText(),
+    loaded,
+    boundary:
+      '失败只影响本次读取；没有重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。',
+    nextStep: keepCurrentSnapshot
+      ? `当前列表仍是上次成功读取的只读快照；可以重试加载更早会议或刷新列表。失败原因：${safeMessage}`
+      : `当前没有可确认的新会议列表；可以重试、清除筛选或稍后再打开会议归档。失败原因：${safeMessage}`,
+    receivedAt: formatReceiptTime(Date.now()),
+  };
+}
+
+function getArchiveScopeText() {
+  const filters = getArchiveFilterParts();
+  return filters.length
+    ? `${filters.join('，')}；服务端筛选后分页`
+    : '全部会议；按最近会议时间分页';
+}
+
+function getArchiveFilterParts() {
+  const query = appliedSearch.value.trim();
+  const statusLabel = statusFilterOptions.find(
+    (option) => option.value === statusFilter.value,
+  )?.label;
+  const filters: string[] = [];
+  if (query) filters.push(`关键词“${query}”`);
+  if (statusFilter.value !== 'all' && statusLabel) {
+    filters.push(`状态 ${statusLabel}`);
+  }
+  return filters;
 }
 
 function mergeMeetingPages(
@@ -901,6 +962,40 @@ function getOpenScopeDetail(meeting: MeetingRecord) {
   return '当前只有基础会议归档；打开 Panorama 只回看已有结构，不会生成 PDF、重新分析会议或外发纪要。';
 }
 
+function getPanoramaButtonBoundary(meeting: MeetingRecord) {
+  const title = meeting.title || '未命名会议';
+  const counts = `卡片快照：话题 ${meeting.topicCount || 0}、行动项 ${
+    meeting.actionItemCount || 0
+  }、决议 ${meeting.decisionCount || 0}`;
+  return `打开 Panorama：只在新标签打开“${title}”的现有结构化归档复盘，并带入${counts}；不会重新分析会议、生成 PDF、发送纪要、写入 Memory Service、修改行动项或创建外部任务。`;
+}
+
+function getPdfButtonBoundary(meeting: MeetingRecord) {
+  const title = meeting.title || '未命名会议';
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.safeUrl) {
+    return `打开 PDF：只把“${title}”已通过安全检查的 http(s) PDF 链接交给浏览器；不会分享、发送纪要、下载到归档、重跑 Minutes API、写回会议记录或修改行动项。`;
+  }
+  if (pdfSafety.blocked) {
+    return `PDF 不可打开：“${title}”的 PDF 链接未通过安全检查，按钮保持禁用；不会打开不安全链接、带入 Panorama、重新生成 PDF、发送纪要或写回归档。`;
+  }
+  if (digestState === 'failed') {
+    return `PDF 不可打开：“${title}”的 Digest/PDF 生成失败，按钮保持禁用；不会重试 Minutes API、生成 PDF、发送纪要、写回会议记录或修改行动项。`;
+  }
+  if (digestState === 'completed') {
+    return `PDF 不可打开：“${title}”的 Digest 已完成但没有安全 PDF 链接，按钮保持禁用；不会补发 PDF、写回 URL、发送纪要或修改行动项。`;
+  }
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
+    return `PDF 不可打开：“${title}”的 Digest/PDF 仍在生成，按钮保持禁用；不会催跑、重试、写入 Memory Service、发送纪要或修改行动项。`;
+  }
+  return `PDF 不可打开：“${title}”当前只有基础会议归档，按钮保持禁用；不会生成 PDF、重新分析会议、发送纪要、写回会议记录或修改行动项。`;
+}
+
 function displayParticipants(participants: string[] = []) {
   return participants.slice(0, 5);
 }
@@ -970,6 +1065,11 @@ function openPanorama(meeting: MeetingRecord) {
     participants: JSON.stringify(meeting.participants || []),
   });
 
+  setOptionalSnapshotParam(params, 'summary', meeting.summary);
+  setOptionalCountParam(params, 'topicCount', meeting.topicCount);
+  setOptionalCountParam(params, 'actionItemCount', meeting.actionItemCount);
+  setOptionalCountParam(params, 'decisionCount', meeting.decisionCount);
+
   const safePdfUrl = getSafePdfUrl(meeting.pdfUrl);
   if (safePdfUrl) params.set('pdfUrl', safePdfUrl);
   if (meeting.digestId) params.set('digestId', meeting.digestId);
@@ -991,6 +1091,27 @@ function openPanorama(meeting: MeetingRecord) {
     boundary:
       '本次点击只打开现有归档页面；没有重新分析会议、生成 PDF、发送纪要、写入 Memory Service 或修改行动项。',
   });
+}
+
+function setOptionalSnapshotParam(
+  params: URLSearchParams,
+  key: string,
+  value?: string,
+) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return;
+  params.set(key, trimmed.slice(0, 500));
+}
+
+function setOptionalCountParam(
+  params: URLSearchParams,
+  key: string,
+  value?: number,
+) {
+  if (value === undefined || value === null) return;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return;
+  params.set(key, String(Math.floor(parsed)));
 }
 
 function openPdf(pdfUrl: string | undefined, meeting?: MeetingRecord) {
@@ -1291,6 +1412,28 @@ function setOpenReceipt(
   background: rgba(14, 116, 144, 0.18);
   border: 1px solid rgba(34, 211, 238, 0.22);
   color: #dbeafe;
+}
+
+.meeting-archive-receipt.is-failed {
+  background: rgba(127, 29, 29, 0.2);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fee2e2;
+}
+
+.meeting-archive-receipt.is-failed .receipt-label,
+.meeting-archive-receipt.is-failed .meeting-archive-receipt-head > span,
+.meeting-archive-receipt.is-failed .meeting-archive-receipt-grid span,
+.meeting-archive-receipt.is-failed p {
+  color: #fecaca;
+}
+
+.meeting-archive-receipt.is-failed .meeting-archive-receipt-grid div {
+  background: rgba(69, 10, 10, 0.34);
+  border-color: rgba(248, 113, 113, 0.16);
+}
+
+.meeting-archive-receipt.is-failed .meeting-archive-receipt-grid strong {
+  color: #fff7ed;
 }
 
 .meeting-archive-receipt-head {

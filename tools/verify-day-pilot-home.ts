@@ -13,6 +13,10 @@ const popupSource = readFileSync(
   new URL('../src/popup.tsx', import.meta.url),
   'utf8',
 );
+const i18nSource = readFileSync(
+  new URL('../src/i18n/index.ts', import.meta.url),
+  'utf8',
+);
 const clientSource = readFileSync(
   new URL('../src/services/MemoryServiceClient.ts', import.meta.url),
   'utf8',
@@ -71,6 +75,26 @@ function verifyDayPilotStructure() {
   );
   assertContains(
     overviewSource,
+    /contextPackPendingReceipt/,
+    'context pack pending receipt builder',
+  );
+  assertContains(
+    overviewSource,
+    /contextPackFailureReceipt/,
+    'context pack failure receipt builder',
+  );
+  assertContains(
+    overviewSource,
+    /当前没有可复制的 \$\{currentProviderLabel\.value\} 正文/,
+    'context pack failure no-body boundary',
+  );
+  assertNotContains(
+    overviewSource,
+    /currentContextPack\(card\)\?\.bodyMd \|\| card\.pack/,
+    'context pack generated body fallback to preview',
+  );
+  assertContains(
+    overviewSource,
     /card\.executionChannel === 'openclaw'/,
     'OpenClaw execution channel branch',
   );
@@ -121,8 +145,108 @@ function verifyDayPilotStructure() {
   );
   assertContains(
     overviewSource,
+    /todayPilotSnapshotBasisNote/,
+    'homepage Today Pilot snapshot-basis note builder',
+  );
+  assertContains(
+    overviewSource,
+    /首页快照基准/,
+    'homepage Today Pilot snapshot-basis copy',
+  );
+  assertContains(
+    overviewSource,
+    /不会重新扫描来源、写反馈、发送消息或执行动作/,
+    'homepage Today Pilot snapshot-basis no side effect boundary',
+  );
+  assertContains(
+    overviewSource,
+    /todayPilotRefreshBoundary/,
+    'homepage Today Pilot refresh button boundary helper',
+  );
+  assertContains(
+    overviewSource,
+    /刷新 Today Pilot 快照：读取当前用户的今日派生 brief/,
+    'homepage Today Pilot refresh button read/regenerate scope',
+  );
+  assertContains(
+    overviewSource,
+    /不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作/,
+    'homepage Today Pilot refresh button no source-side-effect boundary',
+  );
+  assertContains(
+    overviewSource,
+    /服务端新生成（旧 brief 已过新鲜窗口）/,
+    'homepage stale-previous regenerated brief label',
+  );
+  assertContains(
+    overviewSource,
     /不代表来源任务完成、消息已读、排程变更或外部系统已同步/,
     'post-feedback snapshot non-source-mutation boundary',
+  );
+  assertContains(
+    overviewSource,
+    /missionActionScopeReceipt/,
+    'mission action pre-click receipt builder',
+  );
+  assertContains(
+    overviewSource,
+    /missionActionButtonBoundary/,
+    'mission action button hover and reader boundary helper',
+  );
+  assertContains(
+    overviewSource,
+    /:title="missionActionButtonBoundary\(card, 'done'\)"/,
+    'mission done button title boundary binding',
+  );
+  assertContains(
+    overviewSource,
+    /:aria-label="missionActionButtonBoundary\(card, 'done'\)"/,
+    'mission done button reader boundary binding',
+  );
+  assertContains(
+    overviewSource,
+    /:title="missionActionButtonBoundary\(card, 'copy_context'\)"/,
+    'mission context copy button title boundary binding',
+  );
+  assertContains(
+    overviewSource,
+    /:aria-label="missionActionButtonBoundary\(card, 'open_detail'\)"/,
+    'mission detail button reader boundary binding',
+  );
+  assertContains(
+    overviewSource,
+    /从首页移除：只写 Today Pilot 展示反馈；不会批准、拒绝、重试或执行 OpenClaw/,
+    'OpenClaw remove button boundary',
+  );
+  assertContains(
+    overviewSource,
+    /完成：只写 Today Pilot 展示反馈并从今日首页隐藏；不会完成来源任务、标记消息已读、改日历\/排程或同步外部系统/,
+    'normal done button boundary',
+  );
+  assertContains(
+    overviewSource,
+    /稍后 6h：只让 Today Pilot 在 6 小时内不展示这张 mission；不会修改来源排程、日历或动作执行时间/,
+    'later button boundary',
+  );
+  assertContains(
+    overviewSource,
+    /复制上下文包：只生成\/复制这张 mission 的上下文到本机剪贴板；不会发送给外部 AI、批准\/执行或写回来源系统/,
+    'context pack copy button boundary',
+  );
+  assertContains(
+    overviewSource,
+    /Mission 操作前回执/,
+    'mission action pre-click receipt label',
+  );
+  assertContains(
+    overviewSource,
+    /不会完成来源任务、标记消息已读、改日历\/排程、删除证据、发送或执行外部动作/,
+    'normal mission action pre-click boundary',
+  );
+  assertContains(
+    overviewSource,
+    /不会批准、拒绝、重试或执行 OpenClaw/,
+    'OpenClaw mission action pre-click boundary',
   );
   assertContains(
     overviewSource,
@@ -163,6 +287,26 @@ function verifyDayPilotStructure() {
     overviewSource,
     /不重复当成第二条待办/,
     'catch-up duplicate task boundary',
+  );
+  assertContains(
+    overviewSource,
+    /catchUpItemReviewBoundary/,
+    'catch-up item review boundary helper',
+  );
+  assertContains(
+    overviewSource,
+    /打开补课来源复核/,
+    'catch-up item review handoff label',
+  );
+  assertContains(
+    overviewSource,
+    /点击只打开记忆搜索，不会标已读、代回复、完成任务、改排序或写回来源系统/,
+    'catch-up item click no-side-effect boundary',
+  );
+  assertContains(
+    overviewSource,
+    /source=today_pilot_catch_up/,
+    'catch-up search route source marker',
   );
 }
 
@@ -500,6 +644,31 @@ function verifyMissionCardsAreConcreteItems() {
   );
   assertContains(
     overviewSource,
+    /sourceBreakdownReceipt/,
+    'homepage source-bucket breakdown receipt',
+  );
+  assertContains(
+    overviewSource,
+    /今日领航来源分布回执/,
+    'homepage source-bucket breakdown accessibility label',
+  );
+  assertContains(
+    overviewSource,
+    /原始 \$\{item\.total\}/,
+    'homepage source-bucket raw count',
+  );
+  assertContains(
+    overviewSource,
+    /前置降噪 \$\{item\.noise\}/,
+    'homepage source-bucket denoise count',
+  );
+  assertContains(
+    overviewSource,
+    /不会重新排序、展开隐藏内容、写反馈、标记提醒、发送消息或执行动作/,
+    'homepage source-bucket read-only boundary',
+  );
+  assertContains(
+    overviewSource,
     /displaySourceStats/,
     'display-visible source stats',
   );
@@ -530,8 +699,18 @@ function verifyMissionCardsAreConcreteItems() {
   );
   assertContains(
     overviewSource,
-    /条证据进入首页 mission/,
+    /条证据进入当前可见 mission/,
     'visible final selected-evidence count',
+  );
+  assertContains(
+    overviewSource,
+    /本页已隐藏入选/,
+    'post-feedback hidden selected evidence receipt',
+  );
+  assertContains(
+    overviewSource,
+    /不代表来源任务完成、证据删除或外部系统已同步/,
+    'hidden selected evidence non-source-mutation boundary',
   );
   assertContains(
     overviewSource,
@@ -770,8 +949,63 @@ function verifyPopupTopThree() {
   );
   assertContains(
     popupSource,
+    /html\s*\{\s*width:\s*328px;/,
+    'popup shell width clamp',
+  );
+  assertContains(
+    popupSource,
+    /#popup-root,\s*\n\s*\.popup-container/,
+    'popup root width clamp',
+  );
+  assertContains(
+    popupSource,
+    /\.today-pilot-card-actions button\s*\{[\s\S]*?width:\s*auto;/,
+    'popup Today Pilot action buttons reset global width',
+  );
+  assertContains(
+    popupSource,
     /这里只是 Top 3 快照，不会自动执行/,
     'popup Top 3 execution boundary copy',
+  );
+  assertContains(
+    popupSource,
+    /aria-label=\{t\('popup\.today\.refreshTitle'\)\}/,
+    'popup Today Pilot refresh button aria label',
+  );
+  assertContains(
+    i18nSource,
+    /刷新 Today Pilot Top 3 快照：只读取或重新生成当前用户今日派生 brief/,
+    'popup Today Pilot refresh button Chinese scope copy',
+  );
+  assertContains(
+    i18nSource,
+    /does not mark messages read, complete source tasks, write feedback, send messages, approve, or execute external actions/,
+    'popup Today Pilot refresh button English no-side-effect copy',
+  );
+  assertContains(
+    popupSource,
+    /overflowActionLabel/,
+    'popup Top 3 overflow action label',
+  );
+  assertContains(
+    popupSource,
+    /查看全部 \$\{visibleCards\.length\}/,
+    'popup Top 3 overflow view-all action',
+  );
+  assertContains(
+    popupSource,
+    /Top 3 之外还有 \$\{hiddenByTopThree\} 张 mission/,
+    'popup Top 3 overflow hidden-count boundary',
+  );
+  assertContains(
+    popupSource,
+    /打开 Today Pilot 首页只查看完整可见 brief，不会刷新、写反馈、发送消息或执行动作/,
+    'popup Top 3 overflow no-side-effect boundary',
+  );
+  assertContains(
+    popupSource,
+    /today-pilot-scope-handoff/,
+    'popup Top 3 overflow handoff UI',
   );
   assertContains(
     popupSource,

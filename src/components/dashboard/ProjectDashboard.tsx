@@ -6,9 +6,14 @@ import {
   buildMilestoneMarkerText,
   buildProjectDashboardDecisionBrief,
   buildProjectDashboardSearchSummary,
+  buildProjectDashboardSearchViewReceipt,
   buildProjectDashboardViewFilterCounts,
   buildProjectDashboardViewReason,
+  buildProjectChartMarkerBoundary,
+  buildProjectChartPanelBoundary,
+  buildProjectChartProgressBoundary,
   buildProjectDataQualitySummary,
+  buildProjectEvidenceRepairButtonBoundary,
   buildProjectDecisionSummary,
   buildProjectEvidenceGapSummary,
   buildProjectFocusSummary,
@@ -30,6 +35,7 @@ import {
   sortProjectTimelineTasks,
   type ProjectDashboardViewFilter,
   type ProjectDashboardLaunchContext,
+  type ProjectEvidenceGapItem,
   type ProjectEvidenceGapType,
   type ProjectEvidenceRepairTarget,
   type ProjectSyncLocalEvidenceRepairAction,
@@ -152,6 +158,10 @@ const ALL_PLATFORM_KEYS: PlatformKey[] = ['sdk', 'ios', 'android', 'qa', 'dev'];
 const DEFAULT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
 const PLATFORM_STATUS_OPTIONS = ['pending', 'todo', 'progress', 'testing', 'blocked', 'done', 'rollout'];
 const JIRA_KEY_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
+const PROJECT_DATA_SOURCE_SYNC_BUTTON_BOUNDARY =
+  '只读取 Memory Service active watched projects，并按当前浏览器本地工作台计算 ETA / 来源覆盖；Jira、GitHub、Confluence 本轮只显示未接入诊断，不读取或写回；新增/匹配项目只更新本地工作台，不反写 Memory Service、外部项目源或发送通知。';
+const PROJECT_DATA_SOURCE_PANEL_CLOSE_BOUNDARY =
+  '收起数据源检查结果：只隐藏当前面板，保留本轮新增/匹配项目、本地证据回执和页面状态；不会取消正在进行的同步、清空检查结果、删除本地项目、重新读取或写回 Memory Service、Jira、GitHub、Confluence，也不会发送通知。';
 
 const isPlatformKey = (value: string): value is PlatformKey => ALL_PLATFORM_KEYS.includes(value as PlatformKey);
 
@@ -366,6 +376,9 @@ const ProjectDashboard: React.FC = () => {
   });
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const dataSourceSyncButtonBoundary = isSyncing
+    ? `同步中：${PROJECT_DATA_SOURCE_SYNC_BUTTON_BOUNDARY}`
+    : `同步/检查数据源：${PROJECT_DATA_SOURCE_SYNC_BUTTON_BOUNDARY}`;
   
   // 里程碑配置
   const [milestones, setMilestones] = useState<Array<{label: string; date: string}>>([
@@ -583,9 +596,93 @@ const ProjectDashboard: React.FC = () => {
     () => filterProjectsByDashboardView(searchFilteredProjects, projectFilter, dashboardNow),
     [searchFilteredProjects, projectFilter, dashboardNow],
   );
-  const hiddenSearchResultCount = projectSearchSummary
-    ? Math.max(0, projectSearchSummary.matchedProjects - visibleProjects.length)
-    : 0;
+  const projectSearchViewReceipt = useMemo(
+    () => buildProjectDashboardSearchViewReceipt(
+      projectSearchSummary,
+      projectFilter,
+      visibleProjects.length,
+    ),
+    [projectSearchSummary, projectFilter, visibleProjects.length],
+  );
+  const hiddenSearchResultCount = projectSearchViewReceipt?.hiddenByView || 0;
+  const projectFilterLabel = PROJECT_DASHBOARD_VIEW_FILTER_LABELS[projectFilter];
+  const projectSearchHasQuery = projectSearchQuery.trim().length > 0;
+  const projectSearchHasMatches = Boolean(projectSearchSummary?.matchedProjects);
+  const projectLocalSearchInputBoundary = `在当前浏览器本地项目快照中查找项目、任务、Jira、负责人或里程碑；多个关键词会同时命中同一项目，并继续受“${projectFilterLabel}”项目视图限制。不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence。`;
+  const projectSearchClearBoundary = `清除本页查找词，保留“${projectFilterLabel}”项目视图和现有本地项目数据；不会清空项目、读取外部系统或写回 Memory Service、Jira、GitHub、Confluence。`;
+  const projectSearchViewAllBoundary = projectSearchSummary?.matchedProjects
+    ? `切到“全部”项目视图查看 ${projectSearchSummary.matchedProjects} 个本地查找命中；只改变本页视图筛选，保留查找词，不读取、同步或写回 Memory Service、Jira、GitHub、Confluence。`
+    : '切到“全部”项目视图查看当前浏览器本地项目快照；只改变本页视图筛选，不读取、同步或写回 Memory Service、Jira、GitHub、Confluence。';
+  const projectSearchEmptyPrimaryBoundary = projectSearchHasQuery && !projectSearchHasMatches
+    ? '清除本页无命中的查找词并切到“全部”项目视图；只恢复当前浏览器本地快照列表，不读取、同步或写回 Memory Service、Jira、GitHub、Confluence。'
+    : projectSearchViewAllBoundary;
+
+  const getProjectTaskForBoundary = (projectId?: string, taskId?: string) => {
+    const project = projectId ? projects.find(item => item.id === projectId) : undefined;
+    const task = taskId ? project?.tasks.find(item => item.id === taskId) : undefined;
+    return { project, task };
+  };
+
+  const getEvidenceRepairBoundary = (
+    source: Parameters<typeof buildProjectEvidenceRepairButtonBoundary>[0]['source'],
+    options: {
+      target?: ProjectEvidenceRepairTarget | 'plan-project';
+      projectId?: string;
+      taskId?: string;
+      projectName?: string;
+      taskTitle?: string;
+    },
+  ) => {
+    const { project, task } = getProjectTaskForBoundary(options.projectId, options.taskId);
+    return buildProjectEvidenceRepairButtonBoundary({
+      source,
+      target: options.target,
+      projectName: options.projectName || project?.name,
+      taskTitle: options.taskTitle || task?.title,
+    });
+  };
+
+  const decisionBriefActionBoundary = (() => {
+    const action = decisionBrief.primaryAction;
+    if (action.type !== 'open-task') return undefined;
+    return getEvidenceRepairBoundary('decision-brief', {
+      target: action.evidenceFocus,
+      projectId: action.projectId,
+      taskId: action.taskId,
+    });
+  })();
+
+  const handleShowAllSearchMatches = () => {
+    setProjectFilter('all');
+    showActionStatus(
+      'success',
+      '已切到全部项目查看本地查找命中；没有读取、同步或写回外部系统',
+    );
+  };
+
+  const handleClearProjectSearch = () => {
+    setProjectSearchQuery('');
+  };
+
+  const handleProjectSearchEmptyPrimaryAction = () => {
+    setProjectFilter('all');
+
+    if (projectSearchHasQuery && !projectSearchHasMatches) {
+      setProjectSearchQuery('');
+      showActionStatus(
+        'success',
+        '已清除无命中的本地查找并切到全部项目；没有读取、同步或写回外部系统',
+      );
+      return;
+    }
+
+    if (projectSearchHasQuery && projectSearchHasMatches) {
+      showActionStatus(
+        'success',
+        '已切到全部项目查看本地查找命中；没有读取、同步或写回外部系统',
+      );
+    }
+  };
 
   const runDecisionBriefAction = () => {
     const action = decisionBrief.primaryAction;
@@ -820,6 +917,25 @@ const ProjectDashboard: React.FC = () => {
       openDetail(action.projectId, action.taskId, action.evidenceFocus, repairReceipt);
       showActionStatus('success', `已打开本地${focusLabel}补齐位置；未写回外部系统`);
     }
+  };
+
+  const openEvidenceGapQueueItem = (item: ProjectEvidenceGapItem, visibleIndex: number) => {
+    const evidenceFocus = getEvidenceGapFocusTarget(item.gapType);
+    const focusLabel = evidenceFocus === 'source' ? '来源' : 'ETA';
+    const hiddenNote = evidenceGapQueue.hiddenItems > 0
+      ? `；还有 ${evidenceGapQueue.hiddenItems} 项未在当前折叠视图展示`
+      : '';
+    const repairReceipt: LocalRepairReceipt = {
+      scope: 'task-detail',
+      projectId: item.projectId,
+      taskId: item.taskId,
+      badge: '证据队列入口',
+      headline: `已打开 ${item.taskTitle} 的 ${focusLabel} 补齐位置`,
+      detail: `来自证据补全队列第 ${visibleIndex + 1}/${evidenceGapQueue.totalItems} 项；当前队列构成：${evidenceGapQueue.breakdownLabel}${hiddenNote}；排序只使用本地任务缺口、风险分和 ETA。`,
+      boundary: '这只是当前浏览器本地工作台的修复入口；不会读取或写回 Memory Service、Jira/GitHub/Confluence，也不会创建外部任务或确认项目状态。',
+    };
+
+    openDetail(item.projectId, item.taskId, evidenceFocus, repairReceipt);
   };
 
   useEffect(() => {
@@ -1681,7 +1797,13 @@ const ProjectDashboard: React.FC = () => {
           >
             🔄 {isLoading ? '刷新中...' : '刷新数据'}
           </button>
-          <button className="control-button secondary" onClick={handleSyncData} disabled={isSyncing}>
+          <button
+            className="control-button secondary"
+            onClick={handleSyncData}
+            disabled={isSyncing}
+            title={dataSourceSyncButtonBoundary}
+            aria-label={dataSourceSyncButtonBoundary}
+          >
             ⚡ {isSyncing ? '同步中...' : '同步/检查数据源'}
           </button>
           <button className="control-button warning" onClick={handleOpenImportReport} disabled={isImporting}>
@@ -1720,7 +1842,14 @@ const ProjectDashboard: React.FC = () => {
             <span>可从 Memory Service 关注项目补齐本地工作台；Jira、GitHub、Confluence 自动同步尚未接入。</span>
           </div>
         </div>
-        <button className="data-source-action" type="button" onClick={handleSyncData} disabled={isSyncing}>
+        <button
+          className="data-source-action"
+          type="button"
+          onClick={handleSyncData}
+          disabled={isSyncing}
+          title={dataSourceSyncButtonBoundary}
+          aria-label={dataSourceSyncButtonBoundary}
+        >
           {isSyncing ? '同步中...' : '同步/检查数据源'}
         </button>
       </div>
@@ -1794,7 +1923,13 @@ const ProjectDashboard: React.FC = () => {
                 {syncReadiness.checkedAt ? ` · ${new Date(syncReadiness.checkedAt).toLocaleTimeString()}` : ''}
               </span>
             </div>
-            <button className="data-source-close" type="button" onClick={() => setSyncPanelOpen(false)}>
+            <button
+              className="data-source-close"
+              type="button"
+              onClick={() => setSyncPanelOpen(false)}
+              title={PROJECT_DATA_SOURCE_PANEL_CLOSE_BOUNDARY}
+              aria-label={PROJECT_DATA_SOURCE_PANEL_CLOSE_BOUNDARY}
+            >
               收起
             </button>
           </div>
@@ -1840,7 +1975,20 @@ const ProjectDashboard: React.FC = () => {
                     key={`${action.type}-${action.projectId || 'project'}-${action.taskId || action.projectName || action.label}`}
                     type="button"
                     className={`data-source-evidence-action ${action.type}`}
-                    title={action.detail}
+                    title={getEvidenceRepairBoundary('data-source', {
+                      target: action.type === 'plan-project' ? 'plan-project' : action.evidenceFocus,
+                      projectId: action.projectId,
+                      taskId: action.taskId,
+                      projectName: action.projectName,
+                      taskTitle: action.taskTitle,
+                    })}
+                    aria-label={getEvidenceRepairBoundary('data-source', {
+                      target: action.type === 'plan-project' ? 'plan-project' : action.evidenceFocus,
+                      projectId: action.projectId,
+                      taskId: action.taskId,
+                      projectName: action.projectName,
+                      taskTitle: action.taskTitle,
+                    })}
                     onClick={() => runLocalEvidenceRepairAction(action)}
                   >
                     {action.label}
@@ -1932,7 +2080,13 @@ const ProjectDashboard: React.FC = () => {
                 <span key={signal}>{signal}</span>
               ))}
             </div>
-            <button type="button" className="decision-brief-action" onClick={runDecisionBriefAction}>
+            <button
+              type="button"
+              className="decision-brief-action"
+              onClick={runDecisionBriefAction}
+              title={decisionBriefActionBoundary}
+              aria-label={decisionBriefActionBoundary}
+            >
               {decisionBrief.primaryAction.label}
             </button>
           </div>
@@ -2016,13 +2170,22 @@ const ProjectDashboard: React.FC = () => {
                 )}
               </div>
               <div className="evidence-gap-list">
-                {evidenceGapQueue.visibleItems.map(item => (
+                {evidenceGapQueue.visibleItems.map((item, index) => (
                   <button
                     key={`${item.projectId}-${item.taskId}-${item.gapType}`}
                     type="button"
                     className={`evidence-gap-item ${item.gapType}`}
-                    onClick={() => openDetail(item.projectId, item.taskId, getEvidenceGapFocusTarget(item.gapType))}
-                    title={`${item.projectName} · ${item.taskTitle}`}
+                    onClick={() => openEvidenceGapQueueItem(item, index)}
+                    title={getEvidenceRepairBoundary('evidence-queue', {
+                      target: getEvidenceGapFocusTarget(item.gapType),
+                      projectName: item.projectName,
+                      taskTitle: item.taskTitle,
+                    })}
+                    aria-label={getEvidenceRepairBoundary('evidence-queue', {
+                      target: getEvidenceGapFocusTarget(item.gapType),
+                      projectName: item.projectName,
+                      taskTitle: item.taskTitle,
+                    })}
                   >
                     <span className="evidence-gap-label">{item.label}</span>
                     <span className="evidence-gap-main">
@@ -2126,14 +2289,16 @@ const ProjectDashboard: React.FC = () => {
               value={projectSearchQuery}
               onChange={event => setProjectSearchQuery(event.target.value)}
               placeholder="项目、任务、Jira、负责人，可多词"
-              aria-label="在当前本地项目快照中查找"
+              title={projectLocalSearchInputBoundary}
+              aria-label={projectLocalSearchInputBoundary}
             />
-            {projectSearchQuery.trim() && (
+            {projectSearchHasQuery && (
               <button
                 type="button"
                 className="project-local-search-clear"
-                onClick={() => setProjectSearchQuery('')}
-                aria-label="清除项目查找"
+                onClick={handleClearProjectSearch}
+                title={projectSearchClearBoundary}
+                aria-label={projectSearchClearBoundary}
               >
                 清除
               </button>
@@ -2143,8 +2308,13 @@ const ProjectDashboard: React.FC = () => {
             <div className="project-search-receipt" role="status" aria-live="polite">
               <strong>{projectSearchSummary.matchedProjects}/{projectSearchSummary.totalProjects} 命中</strong>
               <span>
-                当前视图显示 {visibleProjects.length} 个；查找 “{projectSearchSummary.query}”
+                {projectSearchViewReceipt?.headline || `当前视图显示 ${visibleProjects.length} 个`}；查找 “{projectSearchSummary.query}”
               </span>
+              {projectSearchViewReceipt && (
+                <small className="project-search-view-basis">
+                  {projectSearchViewReceipt.boundary}
+                </small>
+              )}
               {projectSearchSummary.matchHints.length > 0 && (
                 <div className="project-search-hints" aria-label="本地查找命中线索">
                   {projectSearchSummary.matchHints.map((hint) => (
@@ -2158,9 +2328,20 @@ const ProjectDashboard: React.FC = () => {
                 </small>
               )}
               {hiddenSearchResultCount > 0 && (
-                <small>
-                  当前“{PROJECT_DASHBOARD_VIEW_FILTER_LABELS[projectFilter]}”视图隐藏 {hiddenSearchResultCount} 个本地命中；切到“全部”可查看所有查找结果。
-                </small>
+                <div className="project-search-hidden-recovery">
+                  <small>
+                    {projectSearchViewReceipt?.recovery || `当前“${PROJECT_DASHBOARD_VIEW_FILTER_LABELS[projectFilter]}”视图隐藏 ${hiddenSearchResultCount} 个本地命中；切到“全部”可查看所有查找结果。`}
+                  </small>
+                  <button
+                    type="button"
+                    className="project-search-view-all"
+                    onClick={handleShowAllSearchMatches}
+                    title={projectSearchViewAllBoundary}
+                    aria-label={projectSearchViewAllBoundary}
+                  >
+                    查看全部命中
+                  </button>
+                </div>
               )}
               <em>{projectSearchSummary.boundary}</em>
             </div>
@@ -2190,13 +2371,25 @@ const ProjectDashboard: React.FC = () => {
                   : '切换到全部项目，或在项目里补充任务 ETA 和阻塞状态后再筛选。'}
               </p>
               <div className="empty-actions">
-                {projectSearchQuery.trim() && (
-                  <button className="control-button secondary" onClick={() => setProjectSearchQuery('')}>
+                {projectSearchHasQuery && (
+                  <button
+                    className="control-button secondary"
+                    onClick={handleClearProjectSearch}
+                    title={projectSearchClearBoundary}
+                    aria-label={projectSearchClearBoundary}
+                  >
                     清除查找
                   </button>
                 )}
-                <button className="control-button primary" onClick={() => setProjectFilter('all')}>
-                  查看全部项目
+                <button
+                  className="control-button primary"
+                  onClick={handleProjectSearchEmptyPrimaryAction}
+                  title={projectSearchEmptyPrimaryBoundary}
+                  aria-label={projectSearchEmptyPrimaryBoundary}
+                >
+                  {projectSearchHasQuery && projectSearchHasMatches
+                    ? '查看全部命中'
+                    : '查看全部项目'}
                 </button>
               </div>
             </div>
@@ -2349,13 +2542,22 @@ const ProjectDashboard: React.FC = () => {
                   </div>
                   <div className="chart-insight-grid">
                     {chartSummary.panels.map(panel => (
-                      <section className={`chart-insight-card ${panel.state}`} key={panel.id}>
+                      <section
+                        className={`chart-insight-card ${panel.state}`}
+                        key={panel.id}
+                        title={buildProjectChartPanelBoundary(project.name, panel)}
+                        aria-label={buildProjectChartPanelBoundary(project.name, panel)}
+                      >
                         <div className="chart-insight-card-top">
                           <span>{panel.label}</span>
                           <strong>{panel.headline}</strong>
                         </div>
                         {typeof panel.progressPercent === 'number' && (
-                          <div className="chart-progress" aria-label={`${panel.label} 进度 ${panel.progressPercent}%`}>
+                          <div
+                            className="chart-progress"
+                            title={buildProjectChartProgressBoundary(project.name, panel)}
+                            aria-label={buildProjectChartProgressBoundary(project.name, panel)}
+                          >
                             <span style={{ width: `${panel.progressPercent}%` }} />
                           </div>
                         )}
@@ -2366,8 +2568,8 @@ const ProjectDashboard: React.FC = () => {
                                 key={marker.id}
                                 className={`chart-marker ${marker.tone}`}
                                 style={{ left: `${marker.position}%` }}
-                                title={`${marker.label} · ${marker.detail}`}
-                                aria-label={`${marker.label}，${marker.detail}`}
+                                title={buildProjectChartMarkerBoundary(project.name, panel, marker)}
+                                aria-label={buildProjectChartMarkerBoundary(project.name, panel, marker)}
                               />
                             ))}
                           </div>
@@ -2387,6 +2589,18 @@ const ProjectDashboard: React.FC = () => {
                                 className={`chart-driver-item ${driver.tone}`}
                                 onClick={() => driver.action && openDetail(project.id, driver.action.taskId, driver.action.evidenceFocus)}
                                 disabled={!driver.action}
+                                title={driver.action ? getEvidenceRepairBoundary('chart-driver', {
+                                  target: driver.action.evidenceFocus,
+                                  projectId: project.id,
+                                  taskId: driver.action.taskId,
+                                  taskTitle: driver.title,
+                                }) : undefined}
+                                aria-label={driver.action ? getEvidenceRepairBoundary('chart-driver', {
+                                  target: driver.action.evidenceFocus,
+                                  projectId: project.id,
+                                  taskId: driver.action.taskId,
+                                  taskTitle: driver.title,
+                                }) : undefined}
                               >
                                 <span>{driver.label}</span>
                                 <strong>{driver.title}</strong>
@@ -2404,6 +2618,16 @@ const ProjectDashboard: React.FC = () => {
                             type="button"
                             className="chart-insight-action"
                             onClick={() => openDetail(project.id, panel.action!.taskId, panel.action!.evidenceFocus)}
+                            title={getEvidenceRepairBoundary('chart-panel', {
+                              target: panel.action.evidenceFocus,
+                              projectId: project.id,
+                              taskId: panel.action.taskId,
+                            })}
+                            aria-label={getEvidenceRepairBoundary('chart-panel', {
+                              target: panel.action.evidenceFocus,
+                              projectId: project.id,
+                              taskId: panel.action.taskId,
+                            })}
                           >
                             {panel.action.label}
                           </button>
@@ -2792,6 +3016,16 @@ const ProjectDashboard: React.FC = () => {
                           type="button"
                           className="evidence-repair-card-action"
                           onClick={() => focusEvidenceRepairTarget('eta')}
+                          title={getEvidenceRepairBoundary('task-detail', {
+                            target: 'eta',
+                            projectId: selectedTask.project.id,
+                            taskId: selectedTask.task.id,
+                          })}
+                          aria-label={getEvidenceRepairBoundary('task-detail', {
+                            target: 'eta',
+                            projectId: selectedTask.project.id,
+                            taskId: selectedTask.task.id,
+                          })}
                         >
                           补 ETA
                         </button>
@@ -2810,6 +3044,16 @@ const ProjectDashboard: React.FC = () => {
                           type="button"
                           className="evidence-repair-card-action"
                           onClick={() => focusEvidenceRepairTarget('source')}
+                          title={getEvidenceRepairBoundary('task-detail', {
+                            target: 'source',
+                            projectId: selectedTask.project.id,
+                            taskId: selectedTask.task.id,
+                          })}
+                          aria-label={getEvidenceRepairBoundary('task-detail', {
+                            target: 'source',
+                            projectId: selectedTask.project.id,
+                            taskId: selectedTask.task.id,
+                          })}
                         >
                           补来源
                         </button>
@@ -3388,6 +3632,10 @@ const ProjectDashboard: React.FC = () => {
         .project-search-receipt em { grid-column: 2; color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
         .project-search-hints { grid-column: 2; display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
         .project-search-hints span { border: 1px solid var(--border); border-radius: 999px; background: var(--card); padding: 2px 7px; color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .project-search-hidden-recovery { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+        .project-search-hidden-recovery small { grid-column: auto; }
+        .project-search-view-all { border: 1px solid #f59e0b; border-radius: 6px; background: #fffbeb; color: #92400e; padding: 4px 8px; font-size: 12px; font-weight: 800; cursor: pointer; }
+        .project-search-view-all:hover { background: #fef3c7; border-color: #d97706; }
 
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
@@ -3853,6 +4101,7 @@ const ProjectDashboard: React.FC = () => {
           .project-search-receipt { grid-template-columns: 1fr; }
           .project-search-receipt small,
           .project-search-receipt em,
+          .project-search-hidden-recovery,
           .project-search-hints { grid-column: auto; }
           .decision-brief { grid-template-columns: 1fr; }
           .decision-brief-main { grid-template-columns: 1fr; }

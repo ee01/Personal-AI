@@ -40,6 +40,7 @@ export function hasConfiguredAiEndpoint(endpoint?: string | null): boolean {
 export function isExecutorDrivenSchedule(message: ExecutorScheduleLike): boolean {
   return message.Push_Method === 'Bot' ||
     message.Push_Method === 'AI' ||
+    message.Push_Method === 'AgentTask' ||
     (message.Push_Method === 'JiraAutomation' && hasConfiguredAiEndpoint(message.AI_Endpoint));
 }
 

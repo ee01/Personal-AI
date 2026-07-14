@@ -528,9 +528,9 @@ export function getScheduleCompensationWindowReceipt(
     headline: '补偿窗口回执',
     summary: `已迟到 ${elapsedMinutes} 分钟，补偿窗口剩余 ${remainingMinutes} 分钟`,
     detail:
-      '下一轮 Jira Automation 执行器仍会按过去 2-30 分钟补偿窗口查找这条明确时间消息；不会提前发送。',
+      '当前分钟已经错过；执行器会先查当前分钟，再查过去 2-30 分钟补偿窗口，只有没有显式时间候选时才进入 08:00 后队列。',
     boundary:
-      '这是领取资格，不代表已发送；最终发送或失败仍以 Last_Exec / Logs、发送回调和 Jira/API 运行记录为准。',
+      '这是领取资格，不代表已发送或已写 Logs；Last_Exec / Exec_Log / Execution_Key 仍会跳过当天已成功或失败的执行，最终结果看发送回调和 Jira/API 运行记录。',
     elapsedMinutes,
     remainingMinutes,
   };
@@ -539,7 +539,7 @@ export function getScheduleCompensationWindowReceipt(
 export function formatScheduleCompensationWindowReceipt(
   receipt: ScheduleCompensationWindowReceipt,
 ): string {
-  return `${receipt.headline}: ${receipt.summary}`;
+  return `${receipt.headline}: ${receipt.summary} · 下一轮仍可补偿领取（未发送）`;
 }
 
 export function formatScheduleCompensationWindowReceiptDetail(

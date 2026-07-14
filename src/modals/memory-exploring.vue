@@ -52,6 +52,12 @@
                 {{ memoryUserIdentityBoundary }}
               </div>
               <div
+                v-if="memoryUserIdentityWriteBoundary"
+                class="memory-user-write-boundary"
+              >
+                {{ memoryUserIdentityWriteBoundary }}
+              </div>
+              <div
                 v-if="memoryUserIdentity?.fallbackToDefault"
                 class="memory-user-hint"
               >
@@ -68,6 +74,8 @@
                   type="button"
                   class="memory-user-action"
                   :disabled="memoryUserIdentityRefreshing"
+                  :title="memoryUserIdentityRefreshBoundary"
+                  :aria-label="memoryUserIdentityRefreshBoundary"
                   @click="refreshMemoryUserIdentity"
                 >
                   {{
@@ -79,6 +87,8 @@
                 <button
                   type="button"
                   class="memory-user-action"
+                  :title="memoryUserIdentitySettingsBoundary"
+                  :aria-label="memoryUserIdentitySettingsBoundary"
                   @click="openMemoryIdentitySettings"
                 >
                   {{ t('memoryExplorer.identityAction.openSettings') }}
@@ -437,6 +447,14 @@ const memoryUserIdentity = ref<{
   identitySource?: 'header' | 'default_fallback' | 'local_inferred';
   storageKey?: string;
   fallbackToDefault: boolean;
+  writeBoundary?: {
+    mode?: 'explicit_read_write' | 'default_read_only_fallback';
+    canRead: boolean;
+    canWrite: boolean;
+    blockedOperations: string[];
+    reason?: 'explicit_x_user_id' | 'missing_or_blank_x_user_id';
+    recoveryAction?: 'none' | 'restore_userinfo_username_or_set_user_id';
+  };
 } | null>(null);
 const memoryUserIdentityError = ref('');
 const memoryUserIdentityCheckedAt = ref<number | null>(null);
@@ -542,10 +560,115 @@ const memoryUserIdentitySourceLabel = computed(() => {
 });
 
 const memoryUserIdentityBoundary = computed(() => {
-  if (memoryUserIdentity.value?.fallbackToDefault) {
+  const writeBoundary = memoryUserIdentity.value?.writeBoundary;
+  if (
+    memoryUserIdentity.value?.fallbackToDefault ||
+    writeBoundary?.mode === 'default_read_only_fallback' ||
+    writeBoundary?.canWrite === false
+  ) {
     return t('memoryExplorer.identityBoundary.defaultFallback');
   }
   return t('memoryExplorer.identityBoundary.explicit');
+});
+
+function formatMemoryUserBlockedOperations(values?: string[]): string {
+  const labels: Record<string, string> = {
+    write: t('memoryExplorer.identityBlockedOperation.write'),
+    import: t('memoryExplorer.identityBlockedOperation.import'),
+    restore: t('memoryExplorer.identityBlockedOperation.restore'),
+    profile_update: t('memoryExplorer.identityBlockedOperation.profileUpdate'),
+  };
+  const normalized = values?.length
+    ? values
+    : ['write', 'import', 'restore'];
+  const rendered = Array.from(
+    new Set(normalized.map((value) => labels[value] || value)),
+  );
+  return rendered.join(t('memoryExplorer.identityBlockedOperation.separator'));
+}
+
+const memoryUserIdentityWriteBoundary = computed(() => {
+  const identity = memoryUserIdentity.value;
+  if (!identity) return '';
+
+  const writeBoundary = identity.writeBoundary;
+  const writeBlocked =
+    identity.fallbackToDefault ||
+    writeBoundary?.mode === 'default_read_only_fallback' ||
+    writeBoundary?.canWrite === false;
+
+  if (writeBlocked) {
+    return t('memoryExplorer.identityWriteBoundary.defaultFallback', {
+      operations: formatMemoryUserBlockedOperations(
+        writeBoundary?.blockedOperations,
+      ),
+    });
+  }
+
+  if (writeBoundary?.canWrite === true || identity.identitySource === 'header') {
+    return t('memoryExplorer.identityWriteBoundary.explicit', {
+      userId: identity.id,
+    });
+  }
+
+  return '';
+});
+
+const memoryUserIdentityActionUserId = computed(
+  () => memoryUserIdentity.value?.id || t('memoryExplorer.unconfirmed'),
+);
+
+const memoryUserIdentityActionState = computed<
+  'explicit' | 'defaultFallback' | 'localInferred'
+>(() => {
+  const identity = memoryUserIdentity.value;
+  const writeBoundary = identity?.writeBoundary;
+  const writeBlocked =
+    identity?.fallbackToDefault ||
+    writeBoundary?.mode === 'default_read_only_fallback' ||
+    writeBoundary?.canWrite === false;
+
+  if (writeBlocked) return 'defaultFallback';
+  if (identity?.identitySource === 'local_inferred' || memoryUserIdentityError.value) {
+    return 'localInferred';
+  }
+  return 'explicit';
+});
+
+const memoryUserIdentityRefreshBoundary = computed(() => {
+  const userId = memoryUserIdentityActionUserId.value;
+  const actionState = memoryUserIdentityActionState.value;
+  if (actionState === 'defaultFallback') {
+    return t('memoryExplorer.identityAction.refreshBoundary.defaultFallback', {
+      userId,
+    });
+  }
+  if (actionState === 'localInferred') {
+    return t('memoryExplorer.identityAction.refreshBoundary.localInferred', {
+      userId,
+    });
+  }
+  return t('memoryExplorer.identityAction.refreshBoundary.explicit', {
+    userId,
+  });
+});
+
+const memoryUserIdentitySettingsBoundary = computed(() => {
+  const userId = memoryUserIdentityActionUserId.value;
+  const actionState = memoryUserIdentityActionState.value;
+  if (actionState === 'defaultFallback') {
+    return t('memoryExplorer.identityAction.settingsBoundary.defaultFallback', {
+      userId,
+    });
+  }
+  if (actionState === 'localInferred') {
+    return t('memoryExplorer.identityAction.settingsBoundary.localInferred', {
+      userId,
+    });
+  }
+  return t('memoryExplorer.identityAction.settingsBoundary.explicit', {
+    userId,
+  });
 });
 
 const memoryUserIdentitySnapshotLabel = computed(() => {
@@ -703,6 +826,7 @@ async function loadMemoryUserIdentity() {
       storageKey: identity?.storageKey,
       fallbackToDefault:
         identity?.fallbackToDefault ?? fallbackId === 'default',
+      writeBoundary: identity?.writeBoundary,
     };
     memoryUserIdentityError.value = '';
   } catch (error) {
@@ -715,6 +839,23 @@ async function loadMemoryUserIdentity() {
       identitySource: 'local_inferred',
       storageKey: `data/users/${userId}/memory.db`,
       fallbackToDefault: userId === 'default',
+      writeBoundary: userId === 'default'
+        ? {
+            mode: 'default_read_only_fallback',
+            canRead: true,
+            canWrite: false,
+            blockedOperations: ['write', 'import', 'restore'],
+            reason: 'missing_or_blank_x_user_id',
+            recoveryAction: 'restore_userinfo_username_or_set_user_id',
+          }
+        : {
+            mode: 'explicit_read_write',
+            canRead: true,
+            canWrite: true,
+            blockedOperations: [],
+            reason: 'explicit_x_user_id',
+            recoveryAction: 'none',
+          },
     };
     memoryUserIdentityError.value = describeMemoryUserIdentityError(error);
   } finally {
@@ -1146,6 +1287,13 @@ html,
   line-height: 1.4;
 }
 
+.memory-user-write-boundary {
+  margin-top: 0.35rem;
+  color: #dbeafe;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
 .memory-user-hint {
   margin-top: 0.35rem;
   color: #fbbf24;
@@ -1193,6 +1341,10 @@ html,
 
 .memory-user-status.warning .memory-user-boundary {
   color: #fcd34d;
+}
+
+.memory-user-status.warning .memory-user-write-boundary {
+  color: #fde68a;
 }
 
 .memory-user-status.warning .memory-user-source {

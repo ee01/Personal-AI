@@ -32,9 +32,10 @@ type InitializationSetupMetadata = Pick<
  * - v2.6: 改为 Content 保存提问原文，新增 Outreach_Result 保存结果摘要（已废弃）
  * - v2.7: Outreach 模板改为只复用 Content / Glip_User_Name / Glip_Team_ID / Target_Type，运行态和上下文下沉到 memory-service
  * - v2.8: Glip 发送结果元数据下沉到 Logs，Messages 只保存计划定义
+ * - v2.9: 添加 AgentTask / 帮我做字段，Sheet 只保存重复任务计划和 Jira Rule 扫描入口
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.8',
+  version: '2.9',
   columns: [
     'ID',
     'Topic',
@@ -58,6 +59,16 @@ export const MESSAGES_SCHEMA = {
     'AI_Body',
     'Category',
     'Automation_Link',
+    'Agent_Task_ID',
+    'Agent_Executor',
+    'Agent_Task_Prompt',
+    'Agent_Notify_Template',
+    'Agent_Trigger_Source',
+    'Agent_AR_Binding_ID',
+    'Agent_Last_Run_At',
+    'Agent_Last_Status',
+    'Agent_Last_Result',
+    'Agent_Last_Error',
     'Status',
     'Last_Exec',
     'Next_Exec',

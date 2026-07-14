@@ -293,20 +293,41 @@ export class SalienceScorer {
    * block storage). Returns 0 on any error / missing table.
    */
   computeEntityAffinityBoost(entityNames: string[]): number {
-    if (entityNames.length === 0) return 0;
+    const candidates = [
+      ...new Set(
+        entityNames
+          .map((name) => name.trim().toLowerCase())
+          .filter((name) => name.length > 0),
+      ),
+    ];
+    if (candidates.length === 0) return 0;
     try {
-      const placeholders = entityNames.map(() => '?').join(', ');
-      const lowered = entityNames.map((n) => n.toLowerCase());
+      const placeholders = candidates.map(() => '(?)').join(', ');
       const row = this.db
         .prepare(
-          `SELECT MAX(ba.affinity) AS aff
+          `WITH candidate(value) AS (VALUES ${placeholders})
+           SELECT MAX(ba.affinity) AS aff
              FROM entities e
              JOIN behavior_affinity ba
                ON ba.subject_type = 'entity' AND ba.subject_key = e.id
             WHERE e.status = 'active'
-              AND LOWER(e.name) IN (${placeholders})`,
+              AND (
+                LOWER(TRIM(e.name)) IN (SELECT value FROM candidate)
+                OR EXISTS (
+                  SELECT 1
+                    FROM json_each(
+                      CASE
+                        WHEN json_valid(e.aliases_json) THEN e.aliases_json
+                        ELSE '[]'
+                      END
+                    ) AS alias
+                   WHERE LOWER(TRIM(CAST(alias.value AS TEXT))) IN (
+                     SELECT value FROM candidate
+                   )
+                )
+              )`,
         )
-        .get(...lowered) as { aff: number | null } | undefined;
+        .get(...candidates) as { aff: number | null } | undefined;
       const aff = row?.aff;
       return typeof aff === 'number' && aff > 0 ? aff : 0;
     } catch {

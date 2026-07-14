@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>执行就绪契约 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #637083;
+      --line: #dfe4ea;
+      --blue: #2f6fed;
+      --green: #15845b;
+      --amber: #b46a00;
+      --red: #c0392b;
+      --violet: #6d5bd0;
+      --shadow: 0 14px 36px rgba(31, 45, 61, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 236px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #101820;
+      color: #eef3f8;
+      padding: 22px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      font-size: 16px;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #2f6fed;
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: #cfd8e3;
+      padding: 10px 12px;
+      border-radius: 7px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: #243241;
+      color: #fff;
+    }
+
+    .side-note {
+      margin-top: auto;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      color: #c9d3df;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 24px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      line-height: 1.16;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      max-width: 780px;
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      border: 1px solid #f3cf98;
+      background: #fff7ea;
+      color: #8a4f00;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(120px, 0.45fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .summary-main,
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .summary-main {
+      padding: 18px;
+      border-left: 5px solid var(--amber);
+    }
+
+    .summary-title {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 760;
+    }
+
+    .summary-copy {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.62;
+      font-size: 14px;
+    }
+
+    .metric {
+      padding: 16px;
+      display: grid;
+      align-content: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .metric strong {
+      font-size: 25px;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .content {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(300px, 0.95fr) minmax(0, 1.35fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .panel-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 760;
+    }
+
+    .panel-sub {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 7px 11px;
+      cursor: pointer;
+      color: #344052;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      border-color: var(--blue);
+      background: #edf3ff;
+      color: #164db7;
+      font-weight: 700;
+    }
+
+    .contract-list {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .contract {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      cursor: pointer;
+      background: #fff;
+    }
+
+    .contract.active {
+      border-color: var(--blue);
+      box-shadow: inset 0 0 0 1px var(--blue);
+    }
+
+    .contract-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .contract h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .badge.blocked {
+      color: #8f210f;
+      background: #ffece7;
+    }
+
+    .badge.ready {
+      color: #0d6847;
+      background: #e7f7ef;
+    }
+
+    .badge.unknown {
+      color: #6a4a00;
+      background: #fff4ce;
+    }
+
+    .badge.degraded {
+      color: #593db8;
+      background: #f0edff;
+    }
+
+    .contract p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .detail-body {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .receipt {
+      border: 1px solid #f1cf99;
+      background: #fff9ef;
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .receipt h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+
+    .receipt p {
+      margin: 0;
+      color: #6f4a12;
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .info-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      min-width: 0;
+    }
+
+    .info-box h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #2c3542;
+    }
+
+    .info-box ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 7px;
+      padding: 9px 12px;
+      cursor: pointer;
+      color: #263241;
+      font-weight: 680;
+    }
+
+    .btn.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .btn.warning {
+      border-color: #f1cf99;
+      background: #fff7ea;
+      color: #7b4a08;
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
+    }
+
+    .affected {
+      display: grid;
+      gap: 9px;
+    }
+
+    .action-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .action-card h4 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .action-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-size: 12px;
+      padding-top: 2px;
+    }
+
+    .event div {
+      border-left: 3px solid var(--line);
+      padding-left: 12px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      max-width: min(440px, calc(100vw - 40px));
+      background: #17202a;
+      color: #fff;
+      padding: 12px 14px;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      line-height: 1.45;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: 160ms ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 960px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        padding: 14px;
+      }
+
+      .nav {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .side-note {
+        display: none;
+      }
+
+      .summary-strip,
+      .content,
+      .grid-two {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        flex-direction: column;
+      }
+
+      .status-chip {
+        white-space: normal;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .main {
+        padding: 14px;
+      }
+
+      h1 {
+        font-size: 23px;
+      }
+
+      .nav {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .panel-head,
+      .contract-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .event {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">PA</div>
+        <div>Personal AI</div>
+      </div>
+      <nav class="nav" aria-label="Demo surfaces">
+        <button class="active" type="button">Action Queue</button>
+        <button type="button">Decision Center</button>
+        <button type="button">Message Rule</button>
+        <button type="button">Reflection</button>
+        <button type="button">Coverage Map</button>
+      </nav>
+      <div class="side-note">
+        Demo 只模拟现有入口中的集成效果，不代表新增独立页面。所有按钮都是本地预览，不会调用 OpenClaw、Jira、Drive 或 Memory Service。
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="topbar">
+        <div>
+          <h1>执行就绪契约</h1>
+          <p class="subtitle">在动作真正交给 OpenClaw / Jira / Drive / RingCentral 前，先检查能力、凭据、目标、输入、审批和结果证明要求。就绪只表示可以继续执行，不表示外部事实已经确认。</p>
+        </div>
+        <div class="status-chip" id="globalStatus">OpenClaw auth blocked · 98 actions affected</div>
+      </section>
+
+      <section class="summary-strip" aria-label="Readiness summary">
+        <div class="summary-main">
+          <p class="summary-title" id="stripTitle">OpenClaw 鉴权未通过，已阻断同类委派</p>
+          <p class="summary-copy" id="stripCopy">当前页面只是队列快照。本次阻断没有下载附件、上传 Drive、写 Jira、发送 RingCentral 消息，也没有确认任何外部事实。</p>
+        </div>
+        <div class="metric">
+          <strong id="blockedCount">98</strong>
+          <span>受影响 OpenClaw 委派</span>
+        </div>
+        <div class="metric">
+          <strong id="confirmCount">1</strong>
+          <span>聚合后的修复确认项</span>
+        </div>
+        <div class="metric">
+          <strong id="writeCount">0</strong>
+          <span>已确认外部写操作</span>
+        </div>
+      </section>
+
+      <section class="content">
+        <section class="panel" aria-label="Readiness contracts">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">契约列表</h2>
+              <p class="panel-sub">同一个根因只保留一个 contract，动作和规则挂到它下面。</p>
+            </div>
+            <div class="tabs" role="tablist">
+              <button class="tab active" type="button" data-filter="all">全部</button>
+              <button class="tab" type="button" data-filter="blocked">阻断</button>
+              <button class="tab" type="button" data-filter="ready">就绪</button>
+            </div>
+          </div>
+          <div class="contract-list" id="contractList"></div>
+        </section>
+
+        <section class="panel" aria-label="Contract detail">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title" id="detailTitle">OpenClaw 全局连接</h2>
+              <p class="panel-sub" id="detailSub">scope: openclaw:global</p>
+            </div>
+            <span class="badge blocked" id="detailBadge">blocked_auth</span>
+          </div>
+          <div class="detail-body">
+            <div class="receipt">
+              <h2 id="receiptTitle">执行已拦住</h2>
+              <p id="receiptCopy">OpenClaw 返回鉴权失败。系统没有把这些动作交给 OpenClaw，也没有创建重复恢复动作。修复后应先重测就绪，而不是直接重试原写操作。</p>
+            </div>
+
+            <div class="grid-two">
+              <div class="info-box">
+                <h3>缺口</h3>
+                <ul id="gapList"></ul>
+              </div>
+              <div class="info-box">
+                <h3>证明要求</h3>
+                <ul id="proofList"></ul>
+              </div>
+            </div>
+
+            <div class="actions">
+              <button class="btn primary" type="button" id="probeBtn">修复后重测就绪</button>
+              <button class="btn warning" type="button" id="unlockBtn">只解锁只读动作</button>
+              <button class="btn" type="button" id="copyBtn">复制诊断包</button>
+            </div>
+
+            <div class="info-box">
+              <h3>受影响动作</h3>
+              <div class="affected" id="affectedList"></div>
+            </div>
+
+            <div class="info-box">
+              <h3>执行时间线</h3>
+              <div class="timeline" id="timeline"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const contracts = [
+      {
+        id: "openclaw-global",
+        title: "OpenClaw 全局连接",
+        scope: "openclaw:global",
+        status: "blocked_auth",
+        badge: "blocked",
+        summary: "鉴权失败后阻断所有同源 OpenClaw 委派，避免继续堆积失败动作。",
+        receiptTitle: "执行已拦住",
+        receiptCopy: "OpenClaw 返回鉴权失败。系统没有把这些动作交给 OpenClaw，也没有创建重复恢复动作。修复后应先重测就绪，而不是直接重试原写操作。",
+        blocked: 98,
+        confirms: 1,
+        writes: 0,
+        gaps: ["OpenClaw API key 或授权状态不可用", "上次 probe 返回 401/403", "同 scope 动作已挂到同一 contract"],
+        proofs: ["probe 只证明连接和权限", "不证明 Jira / Drive / RingCentral 已执行", "写操作仍需重新审批"],
+        affected: [
+          ["继续外部核实: impactful Engineering projects · backlog_requirement", "google_workspace · read · reflection_worker"],
+          ["继续外部核实: task-estimate skill · browser_fallback_policy", "jira · read · reflection_worker"],
+          ["委派 OpenClaw 执行联动操作", "google_drive · write · message_rule n8h8kfybn"]
+        ],
+        events: [
+          ["08:05", "ActionExecutor 收到 auth_error outcome。"],
+          ["08:05", "openclaw:global 更新为 blocked_auth。"],
+          ["08:06", "后续 98 条委派挂到同一 contract，不增加 retryCount。"]
+        ]
+      },
+      {
+        id: "drive-upload-rule",
+        title: "视频上传到 Drive 规则",
+        scope: "message_rule:n8h8kfybn:video_upload",
+        status: "blocked_input",
+        badge: "blocked",
+        summary: "规则已命中视频附件，但缺少可证明的上传前置条件和 OpenClaw 就绪。",
+        receiptTitle: "规则命中，但没有执行上传",
+        receiptCopy: "本次没有下载视频、上传 Drive 或发送链接。规则只保留命中记录，等待 OpenClaw auth 和 Drive write readiness 通过。",
+        blocked: 1,
+        confirms: 1,
+        writes: 0,
+        gaps: ["OpenClaw auth blocked", "Drive folder permission 尚未 probe", "需要 source attachment id 和 filename suffix"],
+        proofs: ["uploaded file URL", "target folder id", "source message id", "operation=upload"],
+        affected: [
+          ["发出了 PoC 或 Demo 的视频文件", "source message · attachment · RingCentral"],
+          ["Drive 上传动作", "google_drive · write · blocked before queue"]
+        ],
+        events: [
+          ["09:12", "消息规则命中视频附件。"],
+          ["09:12", "Readiness gate 返回 block。"],
+          ["09:12", "页面显示未下载、未上传、未发送的边界回执。"]
+        ]
+      },
+      {
+        id: "jira-read",
+        title: "Jira 只读查证",
+        scope: "openclaw:jira:read",
+        status: "unknown",
+        badge: "unknown",
+        summary: "没有近期 Jira read probe。只读动作可以先 probe，写操作仍不能自动跑。",
+        receiptTitle: "需要先重测",
+        receiptCopy: "Jira read readiness 没有近期证明。系统可以先执行轻量 probe；probe 不会修改 Jira，也不会确认目标事实。",
+        blocked: 34,
+        confirms: 0,
+        writes: 0,
+        gaps: ["Jira REST / MCP adapter 状态未知", "目标 issue key 可解析但权限未验证"],
+        proofs: ["http status / adapter status", "issue key readable", "observed fields from read probe"],
+        affected: [
+          ["MTR-145975 story_points_new", "jira · read"],
+          ["NOVA-13680 title", "jira · read"]
+        ],
+        events: [
+          ["10:20", "Reflection 生成 Jira 查证候选。"],
+          ["10:20", "readiness=unknown，降级为 probe_first。"],
+          ["10:21", "等待 probe，不创建批量自动执行。"]
+        ]
+      },
+      {
+        id: "proof-schema",
+        title: "可验证 artifact 证明",
+        scope: "openclaw:any:proof",
+        status: "ready",
+        badge: "ready",
+        summary: "最近一次委派返回了 sourceSystem / entityKey / verification / observedFields，可写 action_result。",
+        receiptTitle: "证明要求已满足",
+        receiptCopy: "这只说明返回结果可以进入 action_results。它仍不代表相邻未验证 action 成功，也不覆盖其它 target system。",
+        blocked: 0,
+        confirms: 0,
+        writes: 0,
+        gaps: ["无当前阻断"],
+        proofs: ["metadata.sourceSystem", "metadata.entityKey", "metadata.verification", "metadata.observedFields 或 changedFields"],
+        affected: [
+          ["Personal AI AR scalar payload", "personal_ai_ar · read · verified"],
+          ["Jira field read sample", "jira · read · verified"]
+        ],
+        events: [
+          ["11:00", "OpenClaw 返回结构化 JSON。"],
+          ["11:00", "artifact validation passed。"],
+          ["11:00", "contract 刷新为 ready，有效期 24 小时。"]
+        ]
+      }
+    ];
+
+    let activeId = contracts[0].id;
+    let filter = "all";
+
+    const list = document.getElementById("contractList");
+    const toast = document.getElementById("toast");
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 3200);
+    }
+
+    function renderList() {
+      const visible = contracts.filter((contract) => {
+        if (filter === "all") return true;
+        if (filter === "blocked") return contract.badge === "blocked";
+        return contract.badge === "ready";
+      });
+      list.innerHTML = visible.map((contract) => `
+        <article class="contract ${contract.id === activeId ? "active" : ""}" data-id="${contract.id}" tabindex="0">
+          <div class="contract-row">
+            <h3>${contract.title}</h3>
+            <span class="badge ${contract.badge}">${contract.status}</span>
+          </div>
+          <p>${contract.summary}</p>
+        </article>
+      `).join("");
+      list.querySelectorAll(".contract").forEach((node) => {
+        node.addEventListener("click", () => {
+          activeId = node.dataset.id;
+          render();
+        });
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activeId = node.dataset.id;
+            render();
+          }
+        });
+      });
+    }
+
+    function renderDetail() {
+      const contract = contracts.find((item) => item.id === activeId) || contracts[0];
+      document.getElementById("detailTitle").textContent = contract.title;
+      document.getElementById("detailSub").textContent = `scope: ${contract.scope}`;
+      const badge = document.getElementById("detailBadge");
+      badge.textContent = contract.status;
+      badge.className = `badge ${contract.badge}`;
+      document.getElementById("receiptTitle").textContent = contract.receiptTitle;
+      document.getElementById("receiptCopy").textContent = contract.receiptCopy;
+      document.getElementById("gapList").innerHTML = contract.gaps.map((item) => `<li>${item}</li>`).join("");
+      document.getElementById("proofList").innerHTML = contract.proofs.map((item) => `<li>${item}</li>`).join("");
+      document.getElementById("affectedList").innerHTML = contract.affected.map(([title, meta]) => `
+        <article class="action-card">
+          <h4>${title}</h4>
+          <p>${meta}</p>
+        </article>
+      `).join("");
+      document.getElementById("timeline").innerHTML = contract.events.map(([time, text]) => `
+        <div class="event">
+          <time>${time}</time>
+          <div>${text}</div>
+        </div>
+      `).join("");
+      document.getElementById("blockedCount").textContent = String(contract.blocked);
+      document.getElementById("confirmCount").textContent = String(contract.confirms);
+      document.getElementById("writeCount").textContent = String(contract.writes);
+      document.getElementById("globalStatus").textContent = `${contract.status} · ${contract.blocked} actions affected`;
+      document.getElementById("stripTitle").textContent =
+        contract.badge === "ready" ? "当前契约就绪，但仍不是执行完成" : `${contract.title}：${contract.status}`;
+      document.getElementById("stripCopy").textContent =
+        contract.badge === "ready"
+          ? "就绪证明只覆盖该 scope 和有效期。写操作仍需审批，外部事实仍要等 action_result 回流。"
+          : contract.receiptCopy;
+      document.getElementById("unlockBtn").disabled = contract.badge === "ready";
+    }
+
+    function render() {
+      renderList();
+      renderDetail();
+    }
+
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
+        tab.classList.add("active");
+        filter = tab.dataset.filter;
+        renderList();
+      });
+    });
+
+    document.getElementById("probeBtn").addEventListener("click", () => {
+      showToast("已创建 readiness probe 预览：只检查连接、权限和 proof schema，不执行原动作。");
+    });
+
+    document.getElementById("unlockBtn").addEventListener("click", () => {
+      showToast("只读动作会在 probe 通过后解锁；写操作仍保留人工审批。");
+    });
+
+    document.getElementById("copyBtn").addEventListener("click", async () => {
+      const contract = contracts.find((item) => item.id === activeId) || contracts[0];
+      const text = [
+        `Readiness contract: ${contract.scope}`,
+        `status: ${contract.status}`,
+        `blocked actions: ${contract.blocked}`,
+        `boundary: no external write or fact confirmation happened in this demo`
+      ].join("\n");
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("诊断包已复制到本机剪贴板；未写入 Memory Service，也未调用外部工具。");
+      } catch {
+        showToast("剪贴板不可用；诊断仍停留在本页，没有写入或外发。");
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

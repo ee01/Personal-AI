@@ -9,6 +9,8 @@ import {
   buildAgentWorkflowRunScopeReceipt,
   buildAgentWorkflowSavedRegressionCoverageReceipt,
   buildAgentWorkflowSavedRegressionScopeReceipt,
+  buildAgentWorkflowSavedScenarioCapacityReceipt,
+  buildAgentWorkflowSavedScenarioDeleteReceipt,
   buildAgentWorkflowSavedScenarioSourceReceipt,
   buildAgentWorkflowSavedScenario,
   buildAgentWorkflowScenarioInput,
@@ -273,6 +275,34 @@ assert.match(notificationOnlyCoverageReceipt.summary, /通知 1 \/ 复核 0 \/ �
 assert.match(notificationOnlyCoverageReceipt.detail, /补充 低置信复核、存储-only 样例/);
 assert.ok(notificationOnlyCoverageReceipt.chips.includes('Trace需复核 1'));
 
+const deleteReceiptWithBaseline = buildAgentWorkflowSavedScenarioDeleteReceipt({
+  scenario: savedScenario,
+  remainingCount: 2,
+  nextScenarioLabel: 'Next local regression sample',
+});
+assert.equal(deleteReceiptWithBaseline.title, '保存样例删除回执');
+assert.equal(deleteReceiptWithBaseline.tone, 'ready');
+assert.match(deleteReceiptWithBaseline.summary, /Morgan Chen @ Architecture/);
+assert.match(deleteReceiptWithBaseline.summary, /剩余 2 个/);
+assert.match(deleteReceiptWithBaseline.summary, /本地结果基线也已移出/);
+assert.match(deleteReceiptWithBaseline.detail, /Next local regression sample/);
+assert.match(deleteReceiptWithBaseline.detail, /chrome.storage.local/);
+assert.match(deleteReceiptWithBaseline.detail, /不会删除 Memory Service 记忆/);
+assert.match(deleteReceiptWithBaseline.detail, /不会移除真实消息/);
+assert.match(deleteReceiptWithBaseline.detail, /不会撤销已导出的报告/);
+assert.ok(deleteReceiptWithBaseline.chips.includes('本地基线已移出'));
+assert.ok(deleteReceiptWithBaseline.chips.includes('无真实副作用'));
+
+const deleteReceiptWithoutBaseline = buildAgentWorkflowSavedScenarioDeleteReceipt({
+  scenario: { ...savedScenario, expectedResult: undefined },
+  remainingCount: 0,
+});
+assert.equal(deleteReceiptWithoutBaseline.tone, 'review');
+assert.match(deleteReceiptWithoutBaseline.summary, /剩余 0 个/);
+assert.match(deleteReceiptWithoutBaseline.summary, /没有结果基线/);
+assert.match(deleteReceiptWithoutBaseline.detail, /批量回归和基线对比会等待新样例/);
+assert.ok(deleteReceiptWithoutBaseline.chips.includes('无基线'));
+
 const reviewScenario = buildAgentWorkflowSavedScenario(
   {
     sender: 'Avery Wong',
@@ -335,13 +365,51 @@ assert.ok(scenarioReceipt.chips.includes('低置信度复核'));
 const replayReceipt = buildAgentWorkflowReplaySourceReceipt(directMessage);
 assert.equal(replayReceipt.title, '最近消息回放范围');
 assert.match(replayReceipt.summary, /Morgan Chen @ Architecture/);
-assert.match(replayReceipt.detail, /不会发送通知或执行规则自动化/);
+assert.match(replayReceipt.detail, /只读快照/);
+assert.match(replayReceipt.detail, /不代表当前聊天页仍有同一条 live 消息/);
+assert.match(replayReceipt.detail, /不会写入 Memory Service/);
+assert.match(replayReceipt.detail, /不会发送通知/);
+assert.match(replayReceipt.detail, /不会执行规则自动化/);
+assert.match(replayReceipt.detail, /不会标记原消息已读/);
 assert.ok(replayReceipt.chips.includes('glip'));
 assert.ok(replayReceipt.chips.includes('相似度 91%'));
+assert.ok(replayReceipt.chips.includes('只读快照'));
 
 const emptyReplayReceipt = buildAgentWorkflowReplaySourceReceipt(null);
 assert.match(emptyReplayReceipt.summary, /尚未选中可回放消息/);
 assert.ok(emptyReplayReceipt.chips.includes('time 召回'));
+
+const loadingReplayReceipt = buildAgentWorkflowReplaySourceReceipt(null, {
+  loading: true,
+  sampleCount: 0,
+});
+assert.equal(loadingReplayReceipt.title, '最近消息刷新中');
+assert.equal(loadingReplayReceipt.tone, 'review');
+assert.match(loadingReplayReceipt.summary, /正在读取 Memory Service time 召回快照/);
+assert.match(loadingReplayReceipt.detail, /只读召回请求/);
+assert.match(loadingReplayReceipt.detail, /不会写入 Memory Service/);
+assert.ok(loadingReplayReceipt.chips.includes('读取中'));
+
+const emptySnapshotReplayReceipt = buildAgentWorkflowReplaySourceReceipt(null, {
+  sampleCount: 0,
+});
+assert.equal(emptySnapshotReplayReceipt.title, '最近消息范围');
+assert.equal(emptySnapshotReplayReceipt.tone, 'review');
+assert.match(emptySnapshotReplayReceipt.summary, /本次刷新没有可回放/);
+assert.match(emptySnapshotReplayReceipt.detail, /不证明没有相关线上消息/);
+assert.match(emptySnapshotReplayReceipt.detail, /不会覆盖保存基线/);
+assert.ok(emptySnapshotReplayReceipt.chips.includes('样本 0'));
+
+const failedReplayReceipt = buildAgentWorkflowReplaySourceReceipt(null, {
+  error: 'HTTP 500',
+  sampleCount: 0,
+});
+assert.equal(failedReplayReceipt.title, '最近消息读取失败');
+assert.equal(failedReplayReceipt.tone, 'review');
+assert.match(failedReplayReceipt.summary, /HTTP 500/);
+assert.match(failedReplayReceipt.detail, /未形成最近消息候选/);
+assert.match(failedReplayReceipt.detail, /不会标记原消息已读/);
+assert.ok(failedReplayReceipt.chips.includes('读取失败'));
 
 const savedScenarioReceipt =
   buildAgentWorkflowSavedScenarioSourceReceipt(savedScenario);
@@ -570,6 +638,56 @@ assert.match(emptyRunScopeReceipt.summary, /缺少测试消息/);
 assert.ok(emptyRunScopeReceipt.chips.includes('等待测试消息'));
 assert.ok(emptyRunScopeReceipt.chips.includes('门禁待输入'));
 assert.ok(emptyRunScopeReceipt.chips.includes('上次结果需重跑'));
+
+const missingInputCapacityReceipt = buildAgentWorkflowSavedScenarioCapacityReceipt({
+  savedScenarioCount: 3,
+  inputHasContent: false,
+});
+assert.equal(missingInputCapacityReceipt.title, '保存样例容量');
+assert.equal(missingInputCapacityReceipt.tone, 'review');
+assert.match(missingInputCapacityReceipt.summary, /3\/12/);
+assert.match(missingInputCapacityReceipt.summary, /先补测试消息/);
+assert.match(missingInputCapacityReceipt.detail, /不会运行 Agent Workflow/);
+assert.ok(missingInputCapacityReceipt.chips.includes('等待测试消息'));
+
+const availableCapacityReceipt = buildAgentWorkflowSavedScenarioCapacityReceipt({
+  savedScenarioCount: 10,
+  inputHasContent: true,
+});
+assert.equal(availableCapacityReceipt.tone, 'ready');
+assert.match(availableCapacityReceipt.summary, /还可新增 2 个/);
+assert.match(availableCapacityReceipt.detail, /chrome\.storage\.local 样例集/);
+assert.ok(availableCapacityReceipt.chips.includes('剩余 2'));
+
+const finalSlotCapacityReceipt = buildAgentWorkflowSavedScenarioCapacityReceipt({
+  savedScenarioCount: 11,
+  inputHasContent: true,
+});
+assert.equal(finalSlotCapacityReceipt.tone, 'review');
+assert.match(finalSlotCapacityReceipt.summary, /再保存一个新输入后将达到上限/);
+assert.ok(finalSlotCapacityReceipt.chips.includes('最后 1 个空位'));
+
+const replaceCapacityReceipt = buildAgentWorkflowSavedScenarioCapacityReceipt({
+  savedScenarioCount: 12,
+  inputHasContent: true,
+  replacesExisting: true,
+});
+assert.equal(replaceCapacityReceipt.tone, 'ready');
+assert.match(replaceCapacityReceipt.summary, /更新同一条本地样例/);
+assert.match(replaceCapacityReceipt.detail, /不会挤掉其他保存样例/);
+assert.ok(replaceCapacityReceipt.chips.includes('更新同输入'));
+
+const fullCapacityReceipt = buildAgentWorkflowSavedScenarioCapacityReceipt({
+  savedScenarioCount: 12,
+  inputHasContent: true,
+  evictedScenarioLabel: 'Old saved case',
+});
+assert.equal(fullCapacityReceipt.tone, 'review');
+assert.match(fullCapacityReceipt.summary, /已达到本地上限 12/);
+assert.match(fullCapacityReceipt.summary, /Old saved case/);
+assert.match(fullCapacityReceipt.detail, /不再参与批量回归/);
+assert.match(fullCapacityReceipt.detail, /不会删除 Memory Service 记忆/);
+assert.ok(fullCapacityReceipt.chips.includes('将移出最旧'));
 
 const emptyRegressionScopeReceipt = buildAgentWorkflowSavedRegressionScopeReceipt({
   savedScenarioCount: 0,

@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.8.6';
-var APP_SCRIPT_LAST_UPDATED = '2026-06-08';
+var APP_SCRIPT_VERSION = '2.9.1';
+var APP_SCRIPT_LAST_UPDATED = '2026-07-03';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -278,6 +278,15 @@ function parseConfigBoolean(value) {
   return ['true', '1', 'yes', 'y', 'on'].indexOf((value || '').toString().trim().toLowerCase()) >= 0;
 }
 
+function getAgentTaskWebhookConfigFromSheet() {
+  const config = readConfigSheetMap();
+  return {
+    webhookUrl: (config.agent_task_webhook_url || config.memory_service_agent_task_webhook_url || '').toString().trim(),
+    authToken: (config.agent_task_webhook_token || config.memory_service_agent_task_token || '').toString().trim(),
+    userId: (config.agent_task_user_id || config.memory_service_user_id || '').toString().trim()
+  };
+}
+
 function getRingCentralSenderConfigFromSheet() {
   const config = readConfigSheetMap();
   return {
@@ -328,6 +337,7 @@ function isExecutorDefaultSchedule(rowData) {
   const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
   return rowData.Push_Method === 'Bot' ||
     rowData.Push_Method === 'AI' ||
+    rowData.Push_Method === 'AgentTask' ||
     (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint);
 }
 
@@ -425,6 +435,7 @@ function isNoTimeExecutorQueueMessage(rowData) {
   const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
   return rowData.Push_Method === 'Bot' ||
     rowData.Push_Method === 'AI' ||
+    rowData.Push_Method === 'AgentTask' ||
     (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint);
 }
 
@@ -860,6 +871,9 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   const nextExecCol = getColumnIndex(headers, 'Next_Exec');
   const execLogCol = getColumnIndex(headers, 'Exec_Log');
   const statusCol = getColumnIndex(headers, 'Status');
+  const agentLastRunAtCol = getColumnIndex(headers, 'Agent_Last_Run_At');
+  const agentLastStatusCol = getColumnIndex(headers, 'Agent_Last_Status');
+  const agentLastErrorCol = getColumnIndex(headers, 'Agent_Last_Error');
   
   // 更新列
   if (lastExecCol > 0) {
@@ -877,10 +891,25 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   }
   
   if (execLogCol > 0) {
-    let logMessage = success ?
-      '✅ 推送成功' :
+    let logMessage = rowData.Push_Method === 'AgentTask'
+      ? (success ? '✅ AgentTask 已触发 memory-service' : '❌ AgentTask 触发失败' + (errorMsg ? ': ' + errorMsg : ''))
+      : success ?
+        '✅ 推送成功' :
       ('❌ 推送失败' + (errorMsg ? ': ' + errorMsg : ''));
     sheet.getRange(rowIndex, execLogCol).setValue(logMessage);
+  }
+
+  if (rowData.Push_Method === 'AgentTask') {
+    const runAtText = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+    if (agentLastRunAtCol > 0) {
+      sheet.getRange(rowIndex, agentLastRunAtCol).setValue(runAtText);
+    }
+    if (agentLastStatusCol > 0) {
+      sheet.getRange(rowIndex, agentLastStatusCol).setValue(success ? 'triggered' : 'trigger_failed');
+    }
+    if (agentLastErrorCol > 0) {
+      sheet.getRange(rowIndex, agentLastErrorCol).setValue(success ? '' : (errorMsg || 'trigger failed'));
+    }
   }
 
   // 检查是否应该标记为 Done（统一使用 shouldMarkAsDone 逻辑）
@@ -1104,6 +1133,7 @@ function shouldAutoMarkMessageOnFetch(mode, message) {
   if (mode === 'api') {
     return message.targetType === 'api' ||
       message.Push_Method === 'AI' ||
+      message.Push_Method === 'AgentTask' ||
       (message.Push_Method === 'JiraAutomation' && String(message.AI_Endpoint || '').trim() !== '');
   }
 
@@ -2369,6 +2399,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
     const isValidPushMethod = rowData.Push_Method === 'Bot' || 
                               rowData.Push_Method === 'AI' || 
+                              rowData.Push_Method === 'AgentTask' ||
                               (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint) ||
                               (ringCentralSenderEnabled === true && rowData.Push_Method === 'AsMe');
     if (rowData.Status !== 'Active' || !isValidPushMethod) {
@@ -2492,6 +2523,16 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         AI_Endpoint: rowData.AI_Endpoint || '',
         AI_Headers: rowData.AI_Headers || '',
         AI_Body: aiBody,
+        Agent_Task_ID: rowData.Agent_Task_ID || '',
+        Agent_Executor: rowData.Agent_Executor || '',
+        Agent_Task_Prompt: rowData.Agent_Task_Prompt || '',
+        Agent_Notify_Template: rowData.Agent_Notify_Template || '',
+        Agent_Trigger_Source: rowData.Agent_Trigger_Source || '',
+        Agent_AR_Binding_ID: rowData.Agent_AR_Binding_ID || '',
+        Agent_Last_Run_At: rowData.Agent_Last_Run_At || '',
+        Agent_Last_Status: rowData.Agent_Last_Status || '',
+        Agent_Last_Result: rowData.Agent_Last_Result || '',
+        Agent_Last_Error: rowData.Agent_Last_Error || '',
         targetType: targetType,
         chatId: chatId,
         rowIndex: i + 1,
@@ -2640,14 +2681,14 @@ function parseTimeToMinutes(timeStr) {
 }
 
 /**
- * 解析 AI_Endpoint：提取 method、host 和 URI 路径
+ * 解析 AI_Endpoint：提取 method、protocol、host 和 URI 路径
  * 格式：\"POST https://example.com/api\" 或 \"GET https://example.com/api\" 或 \"https://example.com/api\"
  * @param {string} endpointStr - 原始 endpoint 字符串
- * @returns {object} {method: 'GET'|'POST', host: string, endpoint: string (URI路径), url: string}
+ * @returns {object} {method: 'GET'|'POST', protocol: 'http'|'https', host: string, endpoint: string (URI路径), url: string}
  */
 function parseAIEndpoint(endpointStr) {
   if (!endpointStr || !endpointStr.toString().trim()) {
-    return { method: 'GET', host: '', endpoint: '', url: '' };
+    return { method: 'GET', protocol: 'https', host: '', endpoint: '', url: '' };
   }
   
   const str = endpointStr.toString().trim();
@@ -2666,6 +2707,7 @@ function parseAIEndpoint(endpointStr) {
   }
   
   // 解析 URL：分离 host 和 URI 路径
+  let protocol = 'https';
   let host = '';
   let uri = '';
   
@@ -2673,6 +2715,9 @@ function parseAIEndpoint(endpointStr) {
     // 移除协议部分（http:// 或 https://）
     const protocolMatch = url.match(/^(https?:\/\/)?(.+)/i);
     if (protocolMatch) {
+      protocol = protocolMatch[1] && protocolMatch[1].toLowerCase().startsWith('http://')
+        ? 'http'
+        : 'https';
       const withoutProtocol = protocolMatch[2];
       
       // 找到第一个 / 的位置
@@ -2694,7 +2739,7 @@ function parseAIEndpoint(endpointStr) {
     uri = url;
   }
   
-  return { method: method, host: host, uri: uri, url: url };
+  return { method: method, protocol: protocol, host: host, uri: uri, url: url };
 }
 
 /**
@@ -2713,6 +2758,7 @@ function parseAIHeaders(headersStr) {
     XAPIKey: '',
     UserAgent: 'PersonalAI-ScheduledMessages/1.0',  // 默认 User-Agent
     XRequestID: '',
+    XUserID: '',
     XCustomHeader: ''
   };
   
@@ -2747,6 +2793,8 @@ function parseAIHeaders(headersStr) {
       result.UserAgent = value;
     } else if (name === 'X-Request-ID') {
       result.XRequestID = value;
+    } else if (name === 'X-User-Id' || name === 'X-User-ID') {
+      result.XUserID = value;
     } else if (name === 'X-Custom-Header') {
       result.XCustomHeader = value;
     }
@@ -2782,6 +2830,155 @@ function replaceAIBodyVariables(bodyStr, topic, content, teamId) {
   result = result.replace(/\{TeamID\}/g, escapeJsonString(teamId || ''));
   
   return result;
+}
+
+function normalizeAgentTaskEndpointUrl(endpointValue) {
+  const raw = (endpointValue || '').toString().trim();
+  if (!raw) {
+    return '';
+  }
+
+  const upper = raw.toUpperCase();
+  if (upper.startsWith('POST ') || upper.startsWith('GET ')) {
+    return raw;
+  }
+
+  return 'POST ' + raw;
+}
+
+function buildAgentTaskHeaders(rowHeaders, webhookConfig, executionKey) {
+  const parts = [];
+  const existing = (rowHeaders || '').toString().trim();
+  if (existing) {
+    parts.push(existing);
+  }
+
+  const token = webhookConfig && webhookConfig.authToken ? webhookConfig.authToken : '';
+  if (token) {
+    parts.push(/^Bearer\s+/i.test(token) ? 'Authorization: ' + token : 'Authorization: Bearer ' + token);
+  }
+
+  if (executionKey) {
+    parts.push('X-Request-ID: ' + executionKey);
+  }
+
+  if (webhookConfig && webhookConfig.userId) {
+    parts.push('X-User-Id: ' + webhookConfig.userId);
+  }
+
+  return parts.join('\n');
+}
+
+function buildAgentTaskScheduleSpec(message, executionKey) {
+  return {
+    scheduleDate: message.Schedule_Date || '',
+    scheduleTime: message.Schedule_Time || '',
+    endDate: message.End_Date || '',
+    repeatEvery: message.Repeat_Every || '',
+    repeatUnit: message.Repeat_Unit || '',
+    repeatCount: message.Repeat_Count || '',
+    repeatDays: message.Repeat_Days || '',
+    nextRunAt: message.Next_Exec || '',
+    execCount: message.Exec_Count || '',
+    idempotencyKey: executionKey || ''
+  };
+}
+
+function normalizeAgentTaskGlipUser(value) {
+  const raw = (value || '').toString().trim();
+  if (!raw) {
+    return '';
+  }
+
+  const firstUser = raw.split(/[+,]/)[0].trim();
+  if (!firstUser) {
+    return '';
+  }
+
+  const localPart = firstUser.indexOf('@') >= 0
+    ? firstUser.split('@')[0].trim()
+    : firstUser;
+  return localPart.toLowerCase().replace(/\s+/g, '.');
+}
+
+function buildAgentTaskNotifyTarget(message) {
+  const groupId = (message.Glip_Team_ID || '').toString().trim();
+  if (groupId) {
+    return {
+      type: 'group',
+      targetGroupId: groupId,
+      glipTeamId: groupId
+    };
+  }
+
+  const glipUserName = (message.Glip_User_Name || '').toString().trim();
+  const targetUserId = normalizeAgentTaskGlipUser(glipUserName);
+  if (targetUserId) {
+    return {
+      type: 'private',
+      targetUserId: targetUserId,
+      glipUserName: glipUserName,
+      glipUser: glipUserName
+    };
+  }
+
+  return null;
+}
+
+function buildAgentTaskApiPayload(message, messageId, executionKey) {
+  const webhookConfig = getAgentTaskWebhookConfigFromSheet();
+  const endpointRaw = normalizeAgentTaskEndpointUrl(
+    message.AI_Endpoint || (webhookConfig && webhookConfig.webhookUrl)
+  );
+
+  if (!endpointRaw) {
+    return {
+      success: false,
+      error: 'AgentTask webhook is not configured. Set Config!agent_task_webhook_url or row AI_Endpoint.'
+    };
+  }
+
+  const endpointInfo = parseAIEndpoint(endpointRaw);
+  if (!endpointInfo.host || !endpointInfo.uri) {
+    return {
+      success: false,
+      error: 'AgentTask webhook URL must include host and path, for example POST https://memory-service.example/api/v1/agent-tasks/execute'
+    };
+  }
+
+  const agentTaskId = message.Agent_Task_ID || ('agent_task_' + messageId);
+  const payload = {
+    taskId: agentTaskId,
+    sheetMessageId: messageId,
+    rowIndex: message.rowIndex,
+    title: message.Topic || agentTaskId,
+    task: message.Agent_Task_Prompt || message.Content || '',
+    executor: message.Agent_Executor || 'openclaw',
+    notifyTemplate: message.Agent_Notify_Template || '',
+    triggerSource: message.Agent_Trigger_Source || 'jira_rule',
+    arBindingId: message.Agent_AR_Binding_ID || '',
+    idempotencyKey: executionKey || '',
+    source: {
+      system: 'scheduled_messages',
+      sheet: 'Messages',
+      pushMethod: 'AgentTask',
+      messageId: messageId,
+      rowIndex: message.rowIndex
+    },
+    scheduleSpec: buildAgentTaskScheduleSpec(message, executionKey),
+    userId: webhookConfig && webhookConfig.userId ? webhookConfig.userId : ''
+  };
+  const notifyTarget = buildAgentTaskNotifyTarget(message);
+  if (notifyTarget) {
+    payload.notifyTarget = notifyTarget;
+  }
+
+  return {
+    success: true,
+    endpointInfo: endpointInfo,
+    headers: parseAIHeaders(buildAgentTaskHeaders(message.AI_Headers || '', webhookConfig, executionKey)),
+    body: JSON.stringify(payload)
+  };
 }
 
 /**
@@ -2898,6 +3095,23 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     
     Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
     const executionKey = buildMessageExecutionKey(message, messageId, now);
+    let agentTaskApiPayload = null;
+    if (message.Push_Method === 'AgentTask') {
+      agentTaskApiPayload = buildAgentTaskApiPayload(message, messageId, executionKey);
+      if (!agentTaskApiPayload.success) {
+        Logger.log(`AgentTask 配置异常，未领取: ${messageId} - ${agentTaskApiPayload.error}`);
+        return {
+          executed: false,
+          error: agentTaskApiPayload.error,
+          messageId: messageId,
+          rowIndex: message.rowIndex,
+          executionKey: executionKey,
+          pushMethod: 'AgentTask',
+          timestamp: new Date().toISOString()
+        };
+      }
+    }
+
     const autoMarkOnFetchResult = markMessageOnFetchIfRequested(
       message,
       messageId,
@@ -2913,6 +3127,28 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         messageId: messageId,
         rowIndex: message.rowIndex,
         executionKey: executionKey,
+        autoMarkOnFetch: autoMarkOnFetchResult,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    if (message.Push_Method === 'AgentTask' && agentTaskApiPayload && agentTaskApiPayload.success) {
+      Logger.log(`处理 AgentTask 消息: ${messageId}`);
+      return {
+        executed: true,
+        messageId: messageId,
+        targetType: 'api',
+        aiEndpoint: agentTaskApiPayload.endpointInfo.url,
+        aiProtocol: agentTaskApiPayload.endpointInfo.protocol,
+        aiHost: agentTaskApiPayload.endpointInfo.host,
+        aiUri: agentTaskApiPayload.endpointInfo.uri,
+        aiMethod: agentTaskApiPayload.endpointInfo.method,
+        aiHeaders: agentTaskApiPayload.headers,
+        aiBody: agentTaskApiPayload.body,
+        rowIndex: message.rowIndex,
+        executionKey: executionKey,
+        pushMethod: 'AgentTask',
+        requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
         autoMarkOnFetch: autoMarkOnFetchResult,
         timestamp: new Date().toISOString()
       };
@@ -2940,6 +3176,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         messageId: messageId,
         targetType: 'api',
         aiEndpoint: endpointInfo.url,
+        aiProtocol: endpointInfo.protocol,
         aiHost: endpointInfo.host,
         aiUri: endpointInfo.uri,
         aiMethod: endpointInfo.method,

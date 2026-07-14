@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Change Memory Ledger Demo</title>
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --paper: #fffdfa;
+      --ink: #242321;
+      --muted: #6d6760;
+      --line: #ded7cc;
+      --field: #f0ebe2;
+      --accent: #176f65;
+      --accent-2: #9b4c24;
+      --warn: #b57614;
+      --bad: #9c2f2f;
+      --good: #2f7657;
+      --shadow: 0 18px 50px rgba(36, 35, 33, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #26231f;
+      color: #f6f1e7;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: #f4e4c0;
+      color: #26231f;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .brand b {
+      font-size: 14px;
+    }
+
+    .brand span {
+      display: block;
+      font-size: 11px;
+      color: rgba(246, 241, 231, 0.68);
+      margin-top: 2px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 5px;
+    }
+
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: rgba(246, 241, 231, 0.75);
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .topbar {
+      height: 58px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 253, 250, 0.86);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      backdrop-filter: blur(14px);
+    }
+
+    .crumb {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .crumb strong {
+      color: var(--ink);
+    }
+
+    .search {
+      width: min(330px, 38vw);
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 6px;
+      padding: 9px 11px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .workspace {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 410px;
+      gap: 22px;
+      padding: 22px;
+      align-items: start;
+    }
+
+    .issue {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .issue-head {
+      padding: 20px 22px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .issue-key {
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 12px;
+      font-size: clamp(22px, 3vw, 33px);
+      line-height: 1.15;
+      max-width: 920px;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: var(--field);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .issue-body {
+      padding: 18px 22px 24px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 800;
+      margin-bottom: 9px;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbf8f1;
+      min-height: 78px;
+      padding: 11px;
+    }
+
+    .field span {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .field b {
+      font-size: 20px;
+    }
+
+    .activity {
+      display: grid;
+      gap: 10px;
+    }
+
+    .activity-row {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 12px;
+      padding: 11px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .time {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .activity-row p {
+      margin: 0;
+      color: #3d3934;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .memory-panel {
+      position: sticky;
+      top: 80px;
+      background: #1f2523;
+      color: #eef6ef;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      box-shadow: 0 22px 70px rgba(31, 37, 35, 0.28);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 17px 18px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      display: grid;
+      gap: 8px;
+    }
+
+    .panel-eyebrow {
+      font-size: 12px;
+      color: #97c7bd;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.2;
+    }
+
+    .receipt {
+      font-size: 12px;
+      color: #c8d7d1;
+      line-height: 1.45;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .tabs button {
+      border: 0;
+      color: #b5c7c0;
+      background: transparent;
+      padding: 12px 7px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .tabs button.active {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: inset 0 -2px 0 #98d6c4;
+    }
+
+    .panel-body {
+      padding: 16px 18px 18px;
+      min-height: 510px;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .ledger-summary {
+      display: grid;
+      gap: 12px;
+    }
+
+    .chain-card {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 13px;
+      background: rgba(255, 255, 255, 0.055);
+    }
+
+    .chain-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .chain-title b {
+      font-size: 14px;
+    }
+
+    .status {
+      font-size: 11px;
+      color: #ffe1a6;
+      border: 1px solid rgba(255, 225, 166, 0.42);
+      border-radius: 999px;
+      padding: 4px 7px;
+      white-space: nowrap;
+    }
+
+    .status.ok {
+      color: #b9ead9;
+      border-color: rgba(185, 234, 217, 0.44);
+    }
+
+    .value-chain {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      align-items: stretch;
+      margin: 12px 0;
+    }
+
+    .value {
+      min-height: 54px;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 8px;
+      font-weight: 800;
+      font-size: 19px;
+      position: relative;
+    }
+
+    .value:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -8px;
+      top: 50%;
+      width: 8px;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.36);
+    }
+
+    .value small {
+      display: block;
+      font-weight: 500;
+      font-size: 10px;
+      color: #b9c9c3;
+      margin-top: 2px;
+    }
+
+    .line-note {
+      color: #cadbd5;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .event-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 13px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .dot {
+      margin-top: 4px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #98d6c4;
+      box-shadow: 0 0 0 4px rgba(152, 214, 196, 0.14);
+    }
+
+    .event b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .event span {
+      display: block;
+      color: #bdccc6;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .ask-box {
+      display: grid;
+      gap: 12px;
+    }
+
+    .question {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 12px;
+      color: #eff7f1;
+      line-height: 1.45;
+    }
+
+    .answer {
+      background: #f7f2e9;
+      color: #242321;
+      border-radius: 8px;
+      padding: 13px;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .answer b {
+      color: var(--accent);
+    }
+
+    .compose-preview {
+      display: grid;
+      gap: 12px;
+    }
+
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      line-height: 1.45;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .action {
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 7px;
+      color: #eef6ef;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 10px;
+      cursor: pointer;
+      min-height: 42px;
+    }
+
+    .action.primary {
+      border-color: transparent;
+      background: #98d6c4;
+      color: #17211f;
+      font-weight: 800;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      max-width: min(420px, calc(100vw - 44px));
+      background: #242321;
+      color: #fff;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      transform: translateY(20px);
+      opacity: 0;
+      pointer-events: none;
+      transition: 180ms ease;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 1040px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .memory-panel {
+        position: static;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        height: auto;
+        padding: 12px;
+        align-items: flex-start;
+        gap: 10px;
+        flex-direction: column;
+      }
+
+      .search {
+        width: 100%;
+      }
+
+      .workspace {
+        padding: 12px;
+        gap: 12px;
+      }
+
+      .issue-head,
+      .issue-body {
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .field-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .activity-row {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+
+      .panel-body {
+        min-height: 0;
+      }
+
+      .value-chain {
+        grid-template-columns: 1fr;
+      }
+
+      .value:not(:last-child)::after {
+        display: none;
+      }
+
+      .actions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">PA</div>
+        <div>
+          <b>Personal AI</b>
+          <span>Jira Memory Surface</span>
+        </div>
+      </div>
+      <div class="nav" aria-label="Jira navigation">
+        <button class="active">当前 Issue</button>
+        <button>项目字段</button>
+        <button>源记忆</button>
+        <button>Evidence Watch</button>
+        <button>Ask</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumb">
+          <span>Projects</span>
+          <span>/</span>
+          <strong>mThor</strong>
+          <span>/</span>
+          <strong>MTR-147866</strong>
+        </div>
+        <div class="search">搜索 issue、字段或记忆</div>
+      </header>
+
+      <section class="workspace">
+        <article class="issue">
+          <div class="issue-head">
+            <div class="issue-key">MTR-147866</div>
+            <h1>mThor: Smart Participant Invite - post GA improvements</h1>
+            <div class="meta-row">
+              <span class="pill">Status: In Progress</span>
+              <span class="pill">Team: RCV Meeting</span>
+              <span class="pill">Fix Version: 26.3.120</span>
+              <span class="pill">Personal AI: 5 source capsules</span>
+            </div>
+          </div>
+
+          <div class="issue-body">
+            <section>
+              <div class="section-title">Jira Fields</div>
+              <div class="field-grid">
+                <div class="field"><span>DEV Estimate</span><b>0.2</b></div>
+                <div class="field"><span>QA Estimate</span><b>0</b></div>
+                <div class="field"><span>Story Points</span><b>2</b></div>
+                <div class="field"><span>Assignee</span><b>Esone</b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="section-title">Activity</div>
+              <div class="activity">
+                <div class="activity-row">
+                  <div class="time">06/30 16:15</div>
+                  <p>Esone's AI: I've set the Target end from the fixVersion set by the user. Personal AI 已保存这条 owner-authored comment。</p>
+                </div>
+                <div class="activity-row">
+                  <div class="time">06/30 15:44</div>
+                  <p>DEV Estimate Original: 0.1 New: 0.2</p>
+                </div>
+                <div class="activity-row">
+                  <div class="time">06/30 15:37</div>
+                  <p>DEV Estimate Original: 0.2 New: 0.1</p>
+                </div>
+                <div class="activity-row">
+                  <div class="time">05/19 14:03</div>
+                  <p>Collapse comment: Esone Qiu added a comment - Restricted to Managers ...</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </article>
+
+        <aside class="memory-panel" aria-label="Personal AI change memory ledger">
+          <div class="panel-head">
+            <div class="panel-eyebrow">Memory Lens</div>
+            <h2>变更记忆账本</h2>
+            <div class="receipt" id="panelReceipt">已把 5 条 source capsule 折成 2 条字段链；过滤 2 条 UI 壳文本。当前值来自保存片段，未复核 Jira 字段。</div>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button class="active" data-view="ledger">字段链</button>
+            <button data-view="ask">Ask</button>
+            <button data-view="compose">写回复</button>
+          </div>
+
+          <div class="panel-body">
+            <div class="view active" id="ledger">
+              <div class="ledger-summary">
+                <div class="chain-card">
+                  <div class="chain-title">
+                    <b>DEV Estimate</b>
+                    <span class="status">需权威复核</span>
+                  </div>
+                  <div class="value-chain" aria-label="DEV Estimate chain">
+                    <div class="value">0.2<small>保存前</small></div>
+                    <div class="value">0.1<small>短暂变更</small></div>
+                    <div class="value">0.2<small>最后观测</small></div>
+                  </div>
+                  <p class="line-note">识别到 1 次反转：0.2 -> 0.1 -> 0.2。由于来源是 comment capsule，不是 Jira field API，当前值只能作为“保存链最后观测”。</p>
+                  <div class="event-list">
+                    <div class="event">
+                      <div class="dot"></div>
+                      <div><b>event: update</b><span>DEV Estimate Original: 0.2 New: 0.1 · source capsule #cc68895f</span></div>
+                    </div>
+                    <div class="event">
+                      <div class="dot"></div>
+                      <div><b>event: revert</b><span>DEV Estimate Original: 0.1 New: 0.2 · source capsule #008aecce</span></div>
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="action primary" data-action="copy">复制谨慎口径</button>
+                    <button class="action" data-action="verify">查当前权威值</button>
+                  </div>
+                </div>
+
+                <div class="chain-card">
+                  <div class="chain-title">
+                    <b>Target end</b>
+                    <span class="status ok">历史节点</span>
+                  </div>
+                  <p class="line-note">保存到一条 owner-authored comment：Target end 来自 fixVersion。没有 old/new 字段，因此只作为历史来源，不写 current truth。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="view" id="ask">
+              <div class="ask-box">
+                <div class="question">用户：MTR-147866 的 DEV Estimate 现在到底是多少？最初是多少？</div>
+                <div class="answer">
+                  <b>变更链回答：</b><br />
+                  保存的变更链显示 DEV Estimate 曾从 0.2 改到 0.1，之后又回到 0.2。<br /><br />
+                  因为这些证据来自 Jira comment capsule，而不是 Jira 字段 API，Personal AI 只能说“最后保存片段观测到 0.2”。如果要对外承诺或写回，请先查当前 Jira 字段。
+                </div>
+                <div class="actions">
+                  <button class="action primary" data-action="answer">插入 Ask 回答</button>
+                  <button class="action" data-action="source">打开来源链</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="view" id="compose">
+              <div class="compose-preview">
+                <textarea id="draft">Esone's AI: I will update the estimate based on the latest discussion.</textarea>
+                <div class="answer">
+                  <b>change_context_patch</b><br />
+                  建议补一句：保存的变更链显示 DEV Estimate 曾从 0.2 改到 0.1，后又回到 0.2；当前值请以 Jira 字段为准。
+                </div>
+                <div class="actions">
+                  <button class="action primary" data-action="patch">插入口径</button>
+                  <button class="action" data-action="hide">隐藏本次建议</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const tabButtons = Array.from(document.querySelectorAll(".tabs button"));
+    const views = Array.from(document.querySelectorAll(".view"));
+    const toast = document.getElementById("toast");
+    const draft = document.getElementById("draft");
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2600);
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const view = button.dataset.view;
+        tabButtons.forEach((item) => item.classList.toggle("active", item === button));
+        views.forEach((item) => item.classList.toggle("active", item.id === view));
+      });
+    });
+
+    document.querySelectorAll("[data-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.action;
+        if (action === "copy") {
+          showToast("已复制谨慎口径：保存链最后观测 0.2，但当前 Jira 字段未复核。");
+        } else if (action === "verify") {
+          showToast("已模拟复用 Evidence Watch：只查 MTR-147866 / DEV Estimate 当前权威值。");
+        } else if (action === "answer") {
+          showToast("已模拟把变更链回答送回 Ask，不写入事实、不外发。");
+        } else if (action === "source") {
+          showToast("已模拟打开 source-memory 详情：显示 2 个 change events 和 2 条噪声过滤。");
+        } else if (action === "patch") {
+          const patch = " 保存的变更链显示 DEV Estimate 曾从 0.2 改到 0.1，后又回到 0.2；当前值请以 Jira 字段为准。";
+          if (!draft.value.includes("保存的变更链显示")) {
+            draft.value = `${draft.value.trim()}${patch}`;
+          }
+          showToast("已插入 change_context_patch；仍未发送、未写回 Jira。");
+        } else if (action === "hide") {
+          showToast("已隐藏本次建议；仅记录低副作用反馈，不改变字段事实。");
+        }
+      });
+    });
+  </script>
+</body>
+</html>

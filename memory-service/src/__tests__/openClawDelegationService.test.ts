@@ -409,6 +409,207 @@ describe('OpenClawDelegationService', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('synthesizes a verifiable artifact from a single scalar AR result', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 600000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: '0',
+            artifacts: [],
+            payload: { total: 0 },
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '查找 JQL 数据并输出 issue 总数。',
+      mode: 'read',
+      targetSystem: 'personal_ai_ar',
+      metadata: {
+        candidateArtifacts: [
+          {
+            kind: 'ar_binding',
+            title: 'AR 数据：0',
+            entityKey: 'ar_123',
+          },
+        ],
+      },
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toBe('0');
+    expect(outcome.artifacts).toHaveLength(1);
+    expect(outcome.artifacts[0].metadata?.sourceSystem).toBe('personal_ai_ar');
+    expect(outcome.artifacts[0].metadata?.entityKey).toBe('ar_123');
+    expect(outcome.artifacts[0].metadata?.observedFields).toEqual(
+      expect.arrayContaining(['total']),
+    );
+    expect(outcome.artifacts[0].content).toContain('total=0');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('recovers an AR scalar payload when OpenClaw reports missing artifacts as error', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 600000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'error',
+            summary: 'Cannot return success with an empty artifacts array.',
+            artifacts: [],
+            payload: {
+              requested: {
+                status: 'success',
+                summary: '0',
+                artifacts: [],
+                payload: { total: 0 },
+              },
+            },
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '查找 JQL 数据并输出 issue 总数。',
+      mode: 'read',
+      targetSystem: 'personal_ai_ar',
+      metadata: {
+        candidateArtifacts: [
+          {
+            kind: 'ar_binding',
+            title: 'AR 数据：0',
+            entityKey: 'ar_123',
+          },
+        ],
+      },
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toBe('0');
+    expect(outcome.payload?.recoveredFrom).toBe('personal_ai_ar_scalar_payload');
+    expect(outcome.artifacts[0].metadata?.observedFields).toEqual(
+      expect.arrayContaining(['total']),
+    );
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('recovers Jira JQL count scalar payloads for AR bindings without changing the target system', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 600000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'error',
+            summary: 'Cannot return success with an empty artifacts array.',
+            artifacts: [],
+            payload: { issueTotal: 0 },
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '使用 exact JQL 查询 Jira，并把 issue 总数填入 AR 数据。',
+      mode: 'read',
+      targetSystem: 'jira',
+      metadata: {
+        taskKind: 'jira_jql_count',
+        executionHints: {
+          exactJql: 'project = RCV AND issuetype = Epic',
+          expectedOutput: 'single_number',
+        },
+        candidateArtifacts: [
+          {
+            kind: 'ar_binding',
+            title: 'AR 数据：0',
+            entityKey: 'ar_123',
+            sourceSystem: 'jira',
+          },
+        ],
+      },
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toBe('0');
+    expect(outcome.payload?.recoveredFrom).toBe('personal_ai_ar_scalar_payload');
+    expect(outcome.artifacts[0].metadata?.sourceSystem).toBe('jira');
+    expect(outcome.artifacts[0].metadata?.entityKey).toBe('ar_123');
+    expect(outcome.artifacts[0].metadata?.observedFields).toEqual(
+      expect.arrayContaining(['issueTotal']),
+    );
+    expect(outcome.artifacts[0].content).toContain('issueTotal=0');
+
+    const lastFetchCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+    const requestBody = JSON.parse(String((lastFetchCall?.[1] as RequestInit).body));
+    expect(requestBody.input[0].content[0].text).toContain('Target system: jira');
+    expect(requestBody.input[1].content[0].text).toContain('"taskKind":"jira_jql_count"');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('honors a shorter per-request timeout for synchronous delegation', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', fetchMock);

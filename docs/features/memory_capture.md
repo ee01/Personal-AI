@@ -1,6 +1,6 @@
 # Memory Capture / 记忆捕捉
 
-_最后更新: 2026-07-02_
+_最后更新: 2026-07-14_
 
 ## 是什么
 
@@ -10,24 +10,34 @@ Memory Capture 是 Personal AI 的低打扰资料入库层。它负责把用户�
 
 > 重要内容自动记住；不确定但可能重要的内容给一个很小的 `+`；用户主动选中内容时可以一键记住。
 
+### `记住` 按钮视觉契约（长期约束）
+
+网页右侧的 `记住` 按钮，包括选中文字、整页资料和视觉证据入口，可见内容与顺序固定为：**前置 `+` icon + `记住` + 末尾 Personal AI icon**。
+
+- 默认、hover 和 focus 状态都不得在按钮内新增、替换或展开其他说明文字；不要把 `未写入 · 先复核`、候选原因、资料类型、页面快照、触发依据、保存范围或写入回执塞进按钮。
+- 视觉证据可以用轻微的颜色或样式差异表达，但不能改变上述三个可见元素，也不能追加“视觉证据”等文案。
+- 无障碍名称可以准确说明这是 `记住` 操作，但不能改变按钮的可见组成；不要用 hover tooltip 承载长篇信任说明。
+- 这个视觉契约不改变各入口原有的点击行为：选区与整页入口仍先打开复核面板、确认前不写入，视觉证据仍沿用既有的保存与预览链路。保存对象、触发依据、写入范围和未写入边界等详细说明统一放在复核面板及后续 toast / 详情回执中，不依靠加长按钮表达。
+- 这是该入口的稳定 UI contract；后续实现、重构和验证都应守住这三个可见元素，不以增加“信任说明”为理由把按钮改成长文案 chip。
+
 当前 P0 已落地的是 **选中文字保存**、**整页资料保存**、**Jira owner comment 自动捕捉** 和 **source memory 召回**：
 
 - 用户在非敏感网页选中文字。
 - 内容脚本先用现有 Selection Memory Search 查关联记忆，同时调用 Memory Capture 候选评分。Memory Capture 有独立的选区信息量判断，不再被 Memory Lens 的只读展示门槛拦掉。
-- 如果选区有足够信息量且不含 secret/token/password 等风险，页面最右侧、与选区同高度吸附显示一个半露出的 `+`；多行选区以最后一行的高度为准。入口在 title、读屏文案和 hover / focus 展开态先显示 `未写入 · 先复核`，说明点击只打开复核面板，不会直接保存、外发或同步；展开后仍显示 `+ 记住` 和 Personal AI logo。这个记忆入口和整页 / 视觉入库共用同一套右侧半露出样式。
+- 如果选区有足够信息量且不含 secret/token/password 等风险，页面最右侧、与选区同高度吸附显示一个半露出的 `记住` 按钮；多行选区以最后一行的高度为准。按钮始终按“前置 `+` icon、`记住`、末尾 Personal AI icon”显示，hover / focus 不展开额外文字。点击只打开复核面板，不会直接保存、外发或同步；这个记忆入口和整页 / 视觉入库共用同一套右侧半露出样式。
 - 划词关联记忆的 Personal AI icon 仍跟随选区旁，只负责打开 Memory Lens 结果；记住入口是独立挂在页面右侧边缘的元素，与它分离，避免两个能力挤进同一个 button bar 互相抢注意力。
-- 点击 `+ 记住` 后打开页内复核面板，显示选中文本预览、保存范围回执、候选原因和可选备注；保存范围会说明这是选区资料、来源 host、写入的记忆范围，以及会落到资料记忆和 `web` 检索信号。确认后保存为 `source_memory_capsule`。如果在复核面板按取消，不会保存，入口会保留。保存成功、发现重复保存或重复保存时刷新了备注，toast 都提供 `查看`，直接进入该 capsule 的详情页。
-- 页面有复制、深度滚动或足够停留等用户意图信号时，页面接近右上角显示同样的右侧半露出 `+ 记住`。普通整页建议入口在 hover / focus 和读屏文案里先显示 `未写入 · 先复核`，说明当前页面资料尚未写入，点击只会打开复核面板，不会直接保存、外发或同步。点击后面板展示页面标题、正文预览、候选原因、保存范围回执和可选备注；保存范围会说明这是当前页面资料、来源 host、写入的记忆范围，以及会落到资料记忆和 `web` 检索信号。确认后保存整页正文为 `webpage` capsule，取消则不保存且入口保留。如果同一资料已经入库但用户在本次复核里补了备注，系统会更新原 capsule 的 summary、metadata 和关联 `web` 检索信号，而不是丢弃这条备注。
-- 页面中识别到图表、表格、canvas、SVG、figure 或高信息量 DOM 区域时，不新增独立“视觉记忆”入口，仍复用当前网页右侧 `+ 记住` 入口（视觉证据用轻微不同的样式区分）；hover / focus 时会标明是视觉证据。点击后先保存为 `sourceKind='visual_memory'` 的 source-memory capsule，再在成功提示里提供 `预览`；用户打开预览后可以在同一右侧窗体查看已入库信息并补备注。表格会在 `metadata.visualMemory.table` 中保存 headers、rows、rowCount、columnCount 和 truncated 状态；SVG 会在安全净化后保存 `metadata.visualMemory.svg.markup` 作为图形快照；source-memory 详情页负责按结构化表格或 SVG 预览展示。
-- 当整页候选达到更高置信度时会自动入库：例如复制页面内容且阅读到较深位置、浏览时间较久且阅读较深、或浏览时间非常久。自动入库不弹确认框，只在右上角显示 5 秒轻提示；默认只显示 Personal AI logo 和 `已存入记忆`，hover / focus 后展开显示原因、保存范围、`查看` 和 `撤销` 按钮，长回执会换行展示而不是被截断。`查看` 会打开 source-memory 详情页，让用户先核对系统保存了什么；`撤销` 成功后会展示资料召回已关闭的 `writeReceipt`，说明关联 `web` 检索信号已移除，后续 Ask、Memory Lens 和时间轴不再使用这条资料。用户 hover / focus 在提示上时暂停消失计时，移开或失焦后重新开始 5 秒倒计时。如果自动写入失败，系统会显示 `页面资料未写入` 回执，明确没有创建资料记忆或网页检索信号，右侧入口仍可重试。
+- 点击 `+ 记住` 后打开页内复核面板，显示选中文本预览、保存范围回执、选区快照回执、候选原因和可选备注；保存范围会说明这是选区资料、来源 host、写入的记忆范围，以及会落到资料记忆和 `web` 检索信号。选区快照回执会说明保存的是面板打开时预览里的那段文字，备注只补充保存原因，不会重新抓取页面或改成新的选区；如果页面或选区已变化，需要取消后重新选择。确认后保存为 `source_memory_capsule`。如果在复核面板按取消，不会保存，入口会保留。保存成功、发现重复保存或重复保存时刷新了备注，toast 都提供 `查看`，直接进入该 capsule 的详情页。
+- 页面有复制、深度滚动或足够停留等用户意图信号时，页面接近右上角显示同样的右侧半露出 `记住` 按钮。按钮只显示前置 `+` icon、`记住` 和末尾 Personal AI icon，hover / focus 不增加说明文字。点击只打开复核面板，不会直接保存、外发或同步；复核面板会显示页面快照基准和触发依据：保存的是当前提取的页面正文快照，触发来自本机复制、停留、滚动和候选评分信号，不代表系统确认页面事实。面板还会展示页面标题、正文预览、候选原因、保存范围回执和可选备注；保存范围会说明这是当前页面资料、来源 host、写入的记忆范围，以及会落到资料记忆和 `web` 检索信号。确认后保存整页正文为 `webpage` capsule，取消则不保存且入口保留。如果同一资料已经入库但用户在本次复核里补了备注，系统会更新原 capsule 的 summary、metadata 和关联 `web` 检索信号，而不是丢弃这条备注。
+- 页面中识别到图表、表格、canvas、SVG、figure 或高信息量 DOM 区域时，不新增独立“视觉记忆”入口，仍复用当前网页右侧 `记住` 按钮；视觉证据可以用轻微不同的样式区分，但按钮仍只显示前置 `+` icon、`记住` 和末尾 Personal AI icon，不在 hover / focus 时追加“视觉证据”等文字。点击后先保存为 `sourceKind='visual_memory'` 的 source-memory capsule，再在成功提示里提供 `预览`；用户打开预览后可以在同一右侧窗体查看已入库信息并补备注。表格会在 `metadata.visualMemory.table` 中保存 headers、rows、rowCount、columnCount 和 truncated 状态；SVG 会在安全净化后保存 `metadata.visualMemory.svg.markup` 作为图形快照；source-memory 详情页负责按结构化表格或 SVG 预览展示。
+- 当整页候选达到更高置信度时会自动入库：例如复制页面内容且阅读到较深位置、浏览时间较久且阅读较深、或浏览时间非常久。自动入库不弹确认框；保存请求发出后先显示 `页面资料入库提交中`，说明本机请求尚未确认创建 capsule 或写入 `web` 检索信号，并带上本次页面快照与自动触发依据。成功后右上角显示 5 秒轻提示，默认只显示 Personal AI logo 和 `已存入记忆`，hover / focus 后展开显示原因、页面快照、保存范围、`查看` 和 `撤销` 按钮，长回执会换行展示而不是被截断。`查看` 会打开 source-memory 详情页，让用户先核对系统保存了什么；`撤销` 成功后会展示资料召回已关闭的 `writeReceipt`，说明关联 `web` 检索信号已移除，后续 Ask、Memory Lens 和时间轴不再使用这条资料。用户 hover / focus 在提示上时暂停消失计时，移开或失焦后重新开始 5 秒倒计时。如果自动写入失败，系统会显示带页面快照的 `页面资料未写入` 回执，明确没有创建资料记忆或网页检索信号，右侧入口仍可重试。
 - 选区、整页或视觉证据的手动保存如果失败，包括保存前页面 / 选区上下文已经变化，面板 / toast 会明确说本次没有创建资料记忆，也没有写入 `web` 或视觉证据检索信号；原入口仍保留，用户可以重新选择、直接重试或稍后再保存。
-- 保存、详情、备注和撤销 API 都会随 capsule 返回 `writeReceipt`。它明确区分：资料 capsule 已写入且关联 `web` / 视觉检索信号已启用；资料仍保存但关联检索信号缺失；或资料已撤销、关联信号已移除且不会再进入 Ask、Memory Lens 或时间轴召回。前端成功 toast 优先展示这份回执，而不是只说“已保存”。capsule 还会返回 `actionReceipt`，从最近一次用户可感知事件生成，说明本次是新保存、重复命中、重复保存刷新备注、补备注、撤销，还是撤销后重新保存；详情页会显示这条 `最近操作回执`，避免用户离开 toast 后不知道最后一次动作到底有没有新建或更新资料。
+- 保存、详情、备注和撤销 API 都会随 capsule 返回 `writeReceipt`。它明确区分：资料 capsule 已写入且关联 `web` / 视觉检索信号已启用；资料仍保存但关联检索信号缺失；或资料已撤销、关联信号已移除且不会再进入 Ask、Memory Lens 或时间轴召回。前端成功 toast 优先展示这份回执，而不是只说“已保存”。capsule 还会返回 `actionReceipt`，从最近一次用户可感知事件生成，说明本次是新保存、重复命中、重复保存刷新备注、补备注、撤销，还是撤销后重新保存；详情页会显示这条 `最近操作回执`，避免用户离开 toast 后不知道最后一次动作到底有没有新建或更新资料。创建保存被阻断或校验失败时，API 返回 `noWriteReceipt`，说明没有创建 source-memory capsule、没有写入 `web` / 视觉检索信号，也没有外发、插入或同步。
 - 候选评分和保存 API 会先阻断带凭据的来源 URL，包括 userinfo、`token` / `session` / `password` / `passcode`、OAuth code、signed URL signature 等 query 或 hash 参数；这类输入不会创建 source-memory capsule、不会写 `web` 检索信号，也不会把原始 URL 写入 daily/source markdown snapshot。详情页和召回卡仍保留来源链接安全隐藏逻辑，用来防御历史数据或外部返回的敏感来源链接。
 - 资料详情读取失败时，详情页会显示 `详情读取失败回执`：本次只是详情读取失败，不代表创建、撤销、更新备注、写入 `web` 检索信号或同步外部系统；失败态只保留重试和返回入口，不显示打开来源、查看关联记忆或撤销按钮。
-- 保存、重复保存刷新备注、补备注后，后端会在同一个 source-memory capsule 上生成 P0 蒸馏层：`metadata.distillation` 包含 `status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt` 和 `inputHash`；已有 draft takeaways 会升级为 ready / partial / blocked，trigger matcher 会补 scene anchors、展示预算和 suppress rules，`source_memory_links` 会写 source host / entity hint 的低副作用连接，`source_memory_events` 会记录 `distillation_started` 与 `distillation_ready|partial|blocked`。这一步只整理资料证据，不自动写 confirmed profile、创建任务、创建 skill 或同步外部系统。
+- 保存、重复保存刷新备注、补备注后，后端会在同一个 source-memory capsule 上生成 P0 蒸馏层：`metadata.distillation` 包含 `status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt` 和 `inputHash`；已有 draft takeaways 会升级为 ready / partial / blocked，trigger matcher 会补 scene anchors、展示预算和 suppress rules，`source_memory_links` 会写 source host / entity hint 的低副作用连接，`source_memory_events` 会记录 `distillation_started` 与 `distillation_ready|partial|blocked`。资料详情页可直接补备注并刷新这份 source pack；提交中会先显示备注、关联 `web` 检索信号和蒸馏尚未确认的回执。这一步只整理资料证据，不自动写 confirmed profile、创建任务、创建 skill 或同步外部系统。
 - 已有 Jira owner-authored learning 信号会继续写入原 ingest，同时自动生成 `jira_comment` capsule，作为用户对外输入的资料记忆。
 - 后端同时写入 `messages_raw.source_type='web'` 和 `chunks.source_type='web'`，让 Coverage Map、搜索和后续召回能看见这条网页记忆信号。
-- `/context-recall` 支持 `sourceTypes: ['source_memory']`，返回专门的 `source_memory` 资料记忆卡。卡片会先说明这是用户已保存的资料证据，并展示资料类型（整页、选区、视觉证据等）和保存方式（主动、建议、自动）；如果 capsule 有 ready distillation，卡片优先展示 `oneLineCue` 和“蒸馏提示”，否则退回命中的关键词或来源标题。点击 `在记忆中查看` 进入 Memory Exploring 的 capsule 详情页查看保存原因、证据锚点、蒸馏要点、未来触发线索和关联 web 记忆信号。卡片和资料详情页只渲染安全的 `http(s)` 来源链接；如果保存来源带账号密码、OAuth code、token、session 等敏感 URL 参数，原始来源会显示为已隐藏，不提供 `打开来源`，但仍保留资料详情复核入口。资料详情页会展示召回边界：saved capsule 有真实 linked `web` 记忆信号时才显示 `查看关联记忆`；dismissed capsule 会说明关联 `web` 信号已移除，后续 Ask、Memory Lens 和时间轴召回不再使用这条资料。
+- `/context-recall` 支持 `sourceTypes: ['source_memory']`，返回专门的 `source_memory` 资料记忆卡。卡片会先说明这是用户已保存的资料证据，并展示资料类型（整页、选区、视觉证据等）和保存方式（主动、建议、自动）；如果 capsule 有 ready distillation，卡片优先展示 `oneLineCue` 和“蒸馏提示”，否则退回命中的关键词或来源标题。Expanded Card 会显示 `资料回执`，集中说明资料类型 / 保存方式、当前蒸馏状态、资料详情复核入口、原始来源是否安全可打开，以及本卡只读、不新增或撤销资料记忆、不写画像 / 任务、不插入或发送的边界。点击 `在记忆中查看` 进入 Memory Exploring 的 capsule 详情页查看保存原因、证据锚点、蒸馏要点、未来触发线索和关联 web 记忆信号；这个详情按钮和安全原始来源链接的 hover / 读屏文案都会重复说明本次点击只是新标签复核，不会新增/撤销资料记忆、写画像/任务、插入输入框、发送内容或确认事实。卡片和资料详情页只渲染安全的 `http(s)` 来源链接；如果保存来源带账号密码、OAuth code、token、session 等敏感 URL 参数，原始来源会显示为已隐藏，不提供 `打开来源`，但仍保留资料详情复核入口。资料详情页会展示召回边界：saved capsule 有真实 linked `web` 记忆信号时才显示 `查看关联记忆`；dismissed capsule 会说明关联 `web` 信号已移除，后续 Ask、Memory Lens 和时间轴召回不再使用这条资料。
 
 ## 产品边界
 
@@ -98,7 +108,7 @@ Memory Capture 不负责：
 是否必须点 `+`：
 
 - 选中文本：当前必须点选区同高度、最右侧吸附的右侧半露出 `+ 记住`（多行选区以最后一行为准），不会因为划词自动写入。
-- 整页网页：不一定必须点 `+`。普通强信号只显示右侧半露出 `+ 记住`，入口本身会标明 `未写入 · 先复核`；点击只打开复核面板，确认前不写入。达到自动阈值时直接保存，并在右上角显示 compact 轻提示。默认态只显示 logo + `已存入记忆`；hover / focus 后展开“因为 xxx，本网页信息已自动存入记忆库”、保存范围、`查看` 和 `撤销`。`查看` 打开这条 source-memory 详情页；撤销会把 capsule 标记为 dismissed，并显示关联检索信号已关闭的回执。提示在 hover / focus 期间不会消失，移开后再等 5 秒消失。
+- 整页网页：不一定必须点 `+`。普通强信号只显示右侧半露出的 `记住` 按钮，其可见内容固定为前置 `+` icon、`记住` 和末尾 Personal AI icon；点击只打开复核面板，由面板说明 `未写入 · 先复核`，确认前不写入。达到自动阈值时直接保存，并在右上角显示 compact 轻提示。默认态只显示 logo + `已存入记忆`；hover / focus 后展开“因为 xxx，本网页信息已自动存入记忆库”、保存范围、`查看` 和 `撤销`。`查看` 打开这条 source-memory 详情页；撤销会把 capsule 标记为 dismissed，并显示关联检索信号已关闭的回执。提示在 hover / focus 期间不会消失，移开后再等 5 秒消失。
 - Jira owner comment：已有 owner-authored learning 信号会自动写入 `jira_comment` capsule，不需要点 `+`。
 - 后端评分已经能返回 `auto_save`、`suggest`、`ignore`、`blocked`。P0 前端对选区仍采用“强信号才提示、用户确认才保存”；整页网页只有达到更高置信度时才自动保存，避免把普通浏览史或误选文本静默入库。
 
@@ -111,7 +121,7 @@ Memory Capture 不负责：
 
 后端 `auto_save` 只表示候选评分高，不会单独触发整页自动入库；前端仍必须满足上面的正文长度、停留时间和阅读深度门槛。这样保留“无打扰保存”的能力，但把普通浏览、快速复制、浅滚动这类信号降为右侧 `+ 记住` 建议或完全安静。
 
-候选评分 API 会返回 `policyReceipt`：把 `suggest` / `auto_save` / `ignore` / `blocked` 统一翻译成可展示的状态、证据和下一步。前端展示 `+ 记住` 或复核面板时优先使用这个回执；被忽略或阻断时也能记录清楚原因，不把“没有出现入口”误读成系统失效。
+候选评分 API 会返回 `policyReceipt`：把 `suggest` / `auto_save` / `ignore` / `blocked` 统一翻译成可展示的状态、证据和下一步。前端用它决定是否显示 `记住` 入口，并在复核面板中展示对应回执；不能把回执正文塞进 `记住` 按钮。被忽略或阻断时也能记录清楚原因，不把“没有出现入口”误读成系统失效。
 
 存储层区分主动和自动：
 
@@ -136,7 +146,7 @@ Memory Capture 不负责：
 
 Source Memory Distiller 是 Memory Capture 的入库后 source-specific distillation 层。它回答的是“这份已保存资料以后应该怎样被 Personal AI 消费”，而不是“这份资料要不要入库”。入库时仍先写 capsule、anchor、summary、draft takeaways、draft trigger 和 linked `web` signal；蒸馏层只在 capsule 已保存后，把同一份资料整理成可预算、可复核、带来源的 context unit。
 
-当前 P0 使用 deterministic distillation：保存、重复保存刷新备注、补备注后，后端会基于 capsule 原文、摘要、备注、证据锚点和 entity hints 生成 `oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability` 和 `downstreamUse`，并用 `inputHash` 避免同一输入重复蒸馏。后续真正的后台 worker、LLM 深蒸馏、open questions、skill candidate 和跨 capsule 聚合仍属于下一阶段。
+当前 P0 使用 deterministic distillation：保存、重复保存刷新备注、补备注后，后端会基于 capsule 原文、摘要、备注、证据锚点和 entity hints 生成 `oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability` 和 `downstreamUse`，并用 `inputHash` 避免同一输入重复蒸馏。source-memory 详情页的补备注入口会复用同一 API，提交中先说明当前页面仍是旧快照，成功后用后端 `actionReceipt` 和刷新后的蒸馏状态替换，失败时说明没有确认更新备注、刷新检索信号或重新生成蒸馏。后续真正的后台 worker、LLM 深蒸馏、open questions、skill candidate 和跨 capsule 聚合仍属于下一阶段。
 
 与其他记忆整理层的边界：
 
@@ -173,7 +183,7 @@ DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 | `POST /api/v1/source-memory/capsules/:id/note`    | 保存后补充或更新备注，并刷新关联 `web` 记忆信号   |
 | `POST /api/v1/source-memory/capsules/:id/dismiss` | 标记资料记忆为 dismissed                          |
 
-`capsule.writeReceipt` 是前端展示保存结果的统一回执：`saved_with_recall_signal` 表示 capsule 和关联检索/召回信号都可用；`saved_without_recall_signal` 表示 capsule 仍在但 linked `messages_raw` 信号缺失，后续召回不会依赖这条缺失信号；`dismissed_no_recall` 表示撤销后只保留复核记录，关联 `web` 检索信号已移除。回执还会带资料类型、保存方式、范围和检索信号状态，并声明不会自动外发、插入输入框或同步到其他平台。`capsule.actionReceipt` 则只描述最近一次用户可感知操作，跳过 `distillation_*` 这类内部事件；它用于解释“这次是否新建、是否只是重复命中、是否刷新备注、是否撤销/重存”。撤销 API 是幂等的：如果 capsule 已经是 dismissed，再次撤销只返回当前已关闭召回状态，不追加第二条撤销事件、不刷新 `updated_at`，也不会把重试误报成新的资料变更。`capsule.metadata.distillation.policyReceipt` 说明本条资料的蒸馏状态和下游边界。
+`capsule.writeReceipt` 是前端展示保存结果的统一回执：`saved_with_recall_signal` 表示 capsule 和关联检索/召回信号都可用；`saved_without_recall_signal` 表示 capsule 仍在但 linked `messages_raw` 信号缺失，后续召回不会依赖这条缺失信号；`dismissed_no_recall` 表示撤销后只保留复核记录，关联 `web` 检索信号已移除。回执还会带资料类型、保存方式、范围和检索信号状态，并声明不会自动外发、插入输入框或同步到其他平台。`capsule.actionReceipt` 则只描述最近一次用户可感知操作，跳过 `distillation_*` 这类内部事件；它用于解释“这次是否新建、是否只是重复命中、是否刷新备注、是否撤销/重存”。撤销 API 是幂等的：如果 capsule 已经是 dismissed，再次撤销只返回当前已关闭召回状态，不追加第二条撤销事件、不刷新 `updated_at`，也不会把重试误报成新的资料变更。`capsule.metadata.distillation.policyReceipt` 说明本条资料的蒸馏状态和下游边界。`POST /source-memory/capsules` 如果因为敏感来源、签名 URL、低信息量文本等原因拒绝保存，会在错误响应里带 `noWriteReceipt`：`blocked_no_write` 表示安全门禁阻断，`invalid_no_write` 表示没有达到创建门槛；两者都明确 capsule 未创建、关联检索信号未写入、不会外发 / 插入 / 同步。
 
 ## 代码入口
 
@@ -198,6 +208,7 @@ DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 
 - [Notion Web Clipper](https://www.notion.com/en-US/web-clipper)、[Readwise Reader extension](https://docs.readwise.io/reader/docs/saving-content)、[Obsidian Web Clipper](https://obsidian.md/help/web-clipper)、[Raindrop Highlights](https://help.raindrop.io/highlights/)、[Zotero Connector](https://www.zotero.org/support/adding_items_to_zotero) 和 [Hypothesis](https://web.hypothes.is/) 都把网页保存、划词高亮/注释做成明确的用户动作，并保留来源、快照、备注或私有/群组语境；Memory Capture 的 `+` 应保持同样的“确认才写入”语义，自动入库只用于强意图、低风险场景。
 - PIM 研究（[Keeping Found Things Found on the Web](https://www.microsoft.com/en-us/research/publication/keeping-found-things-found-web/)、[Personal Information Management](https://arxiv.org/abs/2107.03291)）强调用户保存网页资料时通常需要保留“当时为什么重要”的上下文。备注是这个上下文的一部分，所以取消复核面板应被视为取消保存，而不是静默保存空备注。
+- 2026-07-04 复查 [NotebookLM sources](https://support.google.com/notebooklm/answer/16215270)、[Readwise web highlight capture](https://docs.readwise.io/readwise/docs/importing-highlights/other-sources)、[IBM CHI 2025 RAG trust/transparency](https://research.ibm.com/publications/exploring-trust-and-transparency-in-retrieval-augmented-generation-for-domain-experts) 和 [RAG trustworthiness survey](https://arxiv.org/html/2409.10102v1) 后，Memory Capture API 的失败态也要保持 source / control / traceability 可见：保存拒绝不能只返回裸错误字符串，而要明确“没有写入什么”和“下一步如何重试”。
 - 2026-05-26 检查结果：本机 Reminders 没有 `Personal AI` 列表，本轮没有 Reminder 条目可合并或完成。
 - 2026-05-28 检查结果：Context Recall 的 `source_memory` 卡片已改为优先进入 `#/source-memory/:id`，详情页保留来源链接、保存/更新时间、撤销入口和关联 timeline 记忆信号。这个路径对齐 Web Clipper / Reader / Hypothesis 的产品心智：保存不是终点，用户之后还要能重新查看“当时为什么保存”和原始证据。
 - 2026-05-29 检查结果：手动保存或重复保存后的轻提示已补 `查看` 动作；撤销后重新保存同一 capsule 会同步刷新详情和检索信号，避免用户按新备注保存后仍看到旧上下文。
@@ -225,6 +236,13 @@ DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 - 2026-07-01 检查结果：选区右侧 `+ 记住` 入口补上和整页建议入口一致的 `未写入 · 先复核` 前置回执。点击前不会创建 source-memory capsule 或 `web` 检索信号；点击只打开页内复核面板，取消、失败和确认保存仍沿用既有写入回执。
 - 2026-07-02 检查结果：撤销资料记忆 API 补上幂等边界。已经 dismissed 的 capsule 再次收到撤销请求时直接返回当前 `dismissed_no_recall` 状态，不追加新的 `dismissed` 事件、不刷新 `updated_at`、不删除额外数据；这样网络重试、双击或旧 toast 重放不会被用户误读成又发生了一次资料变更。
 - 2026-07-03 检查结果：Memory Capture API 补上敏感来源 URL 写入门禁。候选评分和保存前会阻断带 `token`、session、passcode、OAuth code、signed URL signature 或 userinfo 的来源 URL，避免 source-memory capsule、关联 `web` 检索信号和 markdown snapshot 保存原始凭据；历史数据或召回结果仍由详情页 / 卡片的来源链接安全隐藏兜底。
+- 2026-07-04 检查结果：Memory Capture 创建 API 补上保存失败 `noWriteReceipt`。当创建请求被敏感来源门禁或低信号校验拦截时，错误响应会带 `blocked_no_write` / `invalid_no_write` 回执，列出资料类型、保存方式、范围、来源、未创建 capsule、未写入检索信号，并说明本次不会外发、插入、同步或写入长期记忆。
+- 2026-07-06 检查结果：source-memory 详情页新增补备注并刷新蒸馏入口。提交后先显示 `备注刷新提交中`，说明当前仍是上一次资料详情快照，备注、关联 `web` 检索信号和资料蒸馏回执尚未确认刷新；成功后展示后端 `最近操作：备注已更新` 与 refreshed distillation 状态，失败时保留 `备注刷新未确认`，避免把失败请求误读成 source pack 已更新。
+- 2026-07-07 检查结果：整页自动入库发起保存请求时新增 `页面资料入库提交中` 轻提示，明确这只是本机请求已提交，尚未确认创建 source-memory capsule 或写入 `web` 检索信号；成功/失败仍由最终回执替换，提交中不会外发、插入输入框、同步其他平台、写 confirmed profile 或创建任务。
+- 2026-07-09 检查结果：选中文字保存复核面板新增 `选区快照` 回执。它明确保存对象是面板打开时预览里的那段选中文字，备注只补充保存原因，不会重新抓取页面或改成当前新的选区；如果页面或选区已变化，用户需要取消后重新选择再点 `+ 记住`。这只是保存前的可见边界，不改变候选评分、保存 API、写入权重或后续召回链路。
+- 2026-07-11 检查结果：`source_memory` 召回卡片的 `在记忆中查看` 与安全原始来源链接补上按钮级 hover / 读屏边界。详情按钮说明点击只是打开资料详情复核，不会新增或撤销资料记忆、不写画像/任务、不插入或发送；原始来源链接说明只打开新标签核对，不写记忆、不插入输入框、不发送内容、不确认事实。来源链接隐藏时仍只保留资料详情复核入口。
+- 2026-07-14 检查结果：整页资料保存补上页面快照和触发依据回执。普通建议点击后的复核面板、自动入库提交中 / 成功 / 失败回执都会说明保存的是当前提取的页面正文快照，触发来自本机复制、停留、滚动和候选评分信号；这只是保存基准和本地行为依据，不确认页面事实，也不自动写画像、任务或外部系统。
+- 2026-07-14 二次检查结果：`记住` 按钮的可见结构固定为前置 `+` icon、`记住` 和末尾 Personal AI icon。选区、整页与视觉证据入口在默认、hover、focus 状态都不再增加 `未写入 · 先复核`、候选原因、资料类型、页面快照、触发依据或其他长说明；这些内容统一放到点击后的复核面板及后续回执。历史记录里曾把部分边界放进 hover / focus，不再代表当前按钮视觉契约。
 
 ## 验证建议
 

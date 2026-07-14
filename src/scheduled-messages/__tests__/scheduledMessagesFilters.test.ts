@@ -215,6 +215,31 @@ test('scheduled messages filter receipt reports overlapping filter conditions', 
   ]);
 });
 
+test('scheduled messages filter receipt marks counts as provisional while background enrichment runs', () => {
+  const receipt = buildScheduledMessagesFilterReceipt(
+    [
+      makeMessage({ ID: 'pending-snooze', Status: 'PendingReview', Category: 'Snooze', Glip_User_Name: 'john.doe' }),
+      makeMessage({ ID: 'active-snooze', Status: 'Active', Category: 'Snooze', Glip_User_Name: 'john.doe' }),
+    ],
+    {
+      selectedCategories: ['Snooze'],
+      filterPendingReview: true,
+      filterSelfOnly: false,
+    },
+    { isBackgroundLoading: true },
+  );
+
+  assert.ok(receipt);
+  assert.equal(receipt.title, '列表筛选回执：后台补齐中');
+  assert.equal(receipt.summary, '当前显示 1/2 条，1 条暂时隐藏。');
+  assert.ok(receipt.details.includes(
+    '快照: 当前计数基于已读取的 Messages 行；Jira / Outreach / Done 回填仍在后台补齐，完成后筛选结果会自动刷新',
+  ));
+  assert.ok(receipt.details.includes(
+    '边界: 筛选只改变当前列表，不会暂停、删除、改期或同步 Sheet',
+  ));
+});
+
 test('scheduled messages filter receipt warns when self-only filter lacks identity', () => {
   const receipt = buildScheduledMessagesFilterReceipt(
     [

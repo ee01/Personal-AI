@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import {
   SNOOZE_CUSTOM_OPTION_LABEL,
   SNOOZE_MANAGE_OPTION_LABEL,
+  buildSnoozeCustomOptionControlLabel,
+  buildSnoozeManageOptionControlLabel,
   buildSnoozeQuickMenuReceipt,
+  buildSnoozeQuickMenuOptionControlLabel,
   buildSnoozeQuickMenuOptionView,
   buildSnoozeQuickMenuOptions,
   escapeSnoozeMenuText,
@@ -70,61 +73,65 @@ test('defines custom and management Snooze menu entries', () => {
   assert.equal(SNOOZE_MANAGE_OPTION_LABEL, '管理稍后处理');
 });
 
-test('builds a Snooze quick menu receipt with writeback and recovery scope', () => {
-  assert.deepEqual(buildSnoozeQuickMenuReceipt(), {
-    title: '提醒路径',
-    lines: [
-      {
-        label: '去向',
-        value: '写入 Scheduled Messages 的 Snooze 队列',
-      },
-      {
-        label: '回到消息',
-        value: '到点由 Bot 推送，并在原消息显示稍后标注',
-      },
-      {
-        label: '恢复',
-        value: '选错可撤销，或从管理稍后处理改期',
-      },
-      {
-        label: '时间口径',
-        value: '预计时间会在悬停、聚焦和点击前刷新',
-      },
-    ],
-    ariaLabel:
-      '提醒路径；去向：写入 Scheduled Messages 的 Snooze 队列；回到消息：到点由 Bot 推送，并在原消息显示稍后标注；恢复：选错可撤销，或从管理稍后处理改期；时间口径：预计时间会在悬停、聚焦和点击前刷新',
-  });
+test('builds the Snooze quick menu timing receipt for a new reminder pick', () => {
+  assert.deepEqual(
+    buildSnoozeQuickMenuReceipt(undefined, '：', {
+      targetTimeLabel: '15 分钟后 (09:15)',
+    }),
+    {
+      title: '提醒时间口径',
+      lines: [
+        {
+          label: '本次点击',
+          value: '会创建提醒到 15 分钟后 (09:15)',
+          key: 'create-target',
+        },
+        {
+          label: '写入边界',
+          value:
+            '点击具体时间后才写入 Scheduled Messages；不会发送消息、标记已读或完成原消息',
+        },
+        {
+          label: '页面标注',
+          value: '成功后原消息标注仍等后台同步；当前页面可能短暂仍显示旧快照',
+        },
+      ],
+      ariaLabel:
+        '提醒时间口径；本次点击：会创建提醒到 15 分钟后 (09:15)；写入边界：点击具体时间后才写入 Scheduled Messages；不会发送消息、标记已读或完成原消息；页面标注：成功后原消息标注仍等后台同步；当前页面可能短暂仍显示旧快照',
+    },
+  );
 });
 
-test('localizes the Snooze quick menu receipt for English UI', () => {
+test('localizes the Snooze quick menu timing receipt for a new reminder pick', () => {
   const receipt = buildSnoozeQuickMenuReceipt(
     (value) => translateStaticText(value, 'en-US'),
     ': ',
+    {
+      targetTimeLabel: 'In 15 minutes (9:15 AM)',
+    },
   );
 
   assert.deepEqual(receipt, {
-    title: 'Reminder path',
+    title: 'Reminder timing basis',
     lines: [
       {
-        label: 'Queue',
-        value: 'Creates or updates the Scheduled Messages Remind queue',
+        label: 'This pick',
+        value: 'Will create a reminder for In 15 minutes (9:15 AM)',
+        key: 'create-target',
       },
       {
-        label: 'Writeback',
+        label: 'Write boundary',
         value:
-          'Bot sends it when due, and the original message shows a Remind marker',
+          'Writes to Scheduled Messages only after you pick a time; does not send a message, mark read, or complete the original message',
       },
       {
-        label: 'Recovery',
-        value: 'Undo a wrong pick, or reschedule from Manage Remind',
-      },
-      {
-        label: 'Timing',
-        value: 'Preview refreshes on hover, focus, and click',
+        label: 'Message marker',
+        value:
+          'After success, the original message marker still waits for background sync; this page may briefly show the old snapshot',
       },
     ],
     ariaLabel:
-      'Reminder path；Queue: Creates or updates the Scheduled Messages Remind queue；Writeback: Bot sends it when due, and the original message shows a Remind marker；Recovery: Undo a wrong pick, or reschedule from Manage Remind；Timing: Preview refreshes on hover, focus, and click',
+      'Reminder timing basis；This pick: Will create a reminder for In 15 minutes (9:15 AM)；Write boundary: Writes to Scheduled Messages only after you pick a time; does not send a message, mark read, or complete the original message；Message marker: After success, the original message marker still waits for background sync; this page may briefly show the old snapshot',
   });
 });
 
@@ -132,9 +139,10 @@ test('builds a Snooze quick menu receipt for rescheduling an existing marker', (
   assert.deepEqual(
     buildSnoozeQuickMenuReceipt(undefined, '：', {
       existingSnooze: { label: '稍后 5/18 09:00' },
+      targetTimeLabel: '15 分钟后 (09:15)',
     }),
     {
-      title: '提醒路径',
+      title: '改期预览',
       lines: [
         {
           label: '当前',
@@ -142,22 +150,45 @@ test('builds a Snooze quick menu receipt for rescheduling an existing marker', (
         },
         {
           label: '本次点击',
-          value: '会改期这条同源 Snooze，不新增第二条',
-        },
-        {
-          label: '恢复',
-          value: '选错可从成功 Toast 或管理稍后处理确认',
+          value: '会改到 15 分钟后 (09:15)；仍是同源 Snooze，不新增第二条',
+          key: 'reschedule-target',
         },
         {
           label: '缓存口径',
           value:
-            '来自本地 marker 快照；以 Scheduled Messages 管理页和后台同步为准',
+            '来自本地 marker 快照，不是实时远端查询；以 Scheduled Messages 管理页和后台同步为准',
         },
       ],
       ariaLabel:
-        '提醒路径；当前：已在本地标注为 稍后 5/18 09:00；本次点击：会改期这条同源 Snooze，不新增第二条；恢复：选错可从成功 Toast 或管理稍后处理确认；缓存口径：来自本地 marker 快照；以 Scheduled Messages 管理页和后台同步为准',
+        '改期预览；当前：已在本地标注为 稍后 5/18 09:00；本次点击：会改到 15 分钟后 (09:15)；仍是同源 Snooze，不新增第二条；缓存口径：来自本地 marker 快照，不是实时远端查询；以 Scheduled Messages 管理页和后台同步为准',
     },
   );
+});
+
+test('builds stale and unrefreshed cache basis receipts for existing Snooze markers', () => {
+  const staleReceipt = buildSnoozeQuickMenuReceipt(undefined, '：', {
+    existingSnooze: { label: '稍后 5/18 09:00', cacheState: 'stale' },
+    targetTimeLabel: '15 分钟后 (09:15)',
+  });
+  assert.ok(staleReceipt);
+
+  assert.equal(
+    staleReceipt.lines.find((line) => line.label === '缓存口径')?.value,
+    '来自本地 marker 快照，可能过旧；刷新会话或等待后台同步后再确认',
+  );
+  assert.match(staleReceipt.ariaLabel, /可能过旧/);
+
+  const unrefreshedReceipt = buildSnoozeQuickMenuReceipt(undefined, '：', {
+    existingSnooze: { label: '稍后 5/18 09:00', cacheState: 'unrefreshed' },
+    targetTimeLabel: '15 分钟后 (09:15)',
+  });
+  assert.ok(unrefreshedReceipt);
+
+  assert.equal(
+    unrefreshedReceipt.lines.find((line) => line.label === '缓存口径')?.value,
+    '来自本地 marker 快照，尚未刷新远端状态；以 Scheduled Messages 管理页和后台同步为准',
+  );
+  assert.match(unrefreshedReceipt.ariaLabel, /尚未刷新远端状态/);
 });
 
 test('localizes the existing Snooze receipt boundary for English UI', () => {
@@ -171,11 +202,12 @@ test('localizes the existing Snooze receipt boundary for English UI', () => {
           'en-US',
         ),
       },
+      targetTimeLabel: 'In 15 minutes (9:15 AM)',
     },
   );
 
   assert.deepEqual(receipt, {
-    title: 'Reminder path',
+    title: 'Reschedule preview',
     lines: [
       {
         label: 'Current',
@@ -184,20 +216,17 @@ test('localizes the existing Snooze receipt boundary for English UI', () => {
       {
         label: 'This pick',
         value:
-          'Reschedules this same-source Remind item instead of adding another one',
-      },
-      {
-        label: 'Recovery',
-        value: 'Use the success toast or Manage Remind to confirm a wrong pick',
+          'Will reschedule to In 15 minutes (9:15 AM); same-source Remind; no second reminder is added',
+        key: 'reschedule-target',
       },
       {
         label: 'Cache basis',
         value:
-          'Based on the local marker snapshot; Scheduled Messages and background sync remain authoritative',
+          'Based on the local marker snapshot, not a live remote status check; Scheduled Messages and background sync remain authoritative',
       },
     ],
     ariaLabel:
-      'Reminder path；Current: Already marked locally as Remind 5/18 09:00；This pick: Reschedules this same-source Remind item instead of adding another one；Recovery: Use the success toast or Manage Remind to confirm a wrong pick；Cache basis: Based on the local marker snapshot; Scheduled Messages and background sync remain authoritative',
+      'Reschedule preview；Current: Already marked locally as Remind 5/18 09:00；This pick: Will reschedule to In 15 minutes (9:15 AM); same-source Remind; no second reminder is added；Cache basis: Based on the local marker snapshot, not a live remote status check; Scheduled Messages and background sync remain authoritative',
   });
 });
 
@@ -240,6 +269,47 @@ test('builds a Snooze option view from the current computed reminder time', () =
     timeLabel: 'Today 10:20 AM',
     ariaLabel: 'In 15 minutes, Today 10:20 AM',
   });
+});
+
+test('builds control-level Snooze quick option boundary labels', () => {
+  const option = buildSnoozeQuickMenuOptionView(
+    {
+      label: '2 小时后',
+      icon: '⏳',
+      getTime: () => new Date('2026-05-07T11:00:00+08:00'),
+    },
+    3,
+    () => '今天 11:00',
+  );
+  const receipt = buildSnoozeQuickMenuReceipt(undefined, '：', {
+    targetTimeLabel: option.timeLabel,
+  });
+
+  assert.equal(
+    buildSnoozeQuickMenuOptionControlLabel(option, receipt),
+    '2 小时后，今天 11:00；提醒时间口径；本次点击：会创建提醒到 今天 11:00；写入边界：点击具体时间后才写入 Scheduled Messages；不会发送消息、标记已读或完成原消息；页面标注：成功后原消息标注仍等后台同步；当前页面可能短暂仍显示旧快照',
+  );
+});
+
+test('builds localized control-level labels for custom and manage Snooze entries', () => {
+  assert.equal(
+    buildSnoozeCustomOptionControlLabel(),
+    '自定义时间：打开自定义时间选择器；不会写入 Scheduled Messages，只有确认未来时间后才创建或改期 Snooze；不会发送消息、标记已读或完成原消息',
+  );
+  assert.equal(
+    buildSnoozeManageOptionControlLabel(),
+    '管理稍后处理：只打开 Scheduled Messages 的 Snooze 视图；不会创建、改期、完成或删除提醒，不会发送消息或写记忆',
+  );
+
+  const translate = (value: string) => translateStaticText(value, 'en-US');
+  assert.equal(
+    buildSnoozeCustomOptionControlLabel(translate, ': '),
+    'Custom time: Opens the custom reminder time picker; only confirming a future time creates or reschedules Remind in Scheduled Messages, and this does not send a message, mark read, or complete the original message',
+  );
+  assert.equal(
+    buildSnoozeManageOptionControlLabel(translate, ': '),
+    'Manage Remind: Only opens the Scheduled Messages Remind view; it does not create, reschedule, complete, or delete reminders, send a message, or write memory',
+  );
 });
 
 test('escapes Snooze menu text before injecting menu HTML', () => {

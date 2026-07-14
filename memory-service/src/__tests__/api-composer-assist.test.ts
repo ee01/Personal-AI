@@ -36,6 +36,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
+import { ContextAssistService } from '../core/ContextAssistService.js';
 
 describe('Composer Assist API (POST /composer/assist)', () => {
   let app: FastifyInstance;
@@ -353,7 +354,66 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).toContain('Historical Story Points benchmark');
     expect(body.insertText).toContain('missing reason / low confidence reason');
     expect(body.insertText).toContain('不要自动写回 Jira');
+    expect(body.insertText).not.toContain('参考来源');
     expect(body.debug.promptPatch.intentKind).toBe('jira_estimate_analysis');
+  });
+
+  it('uses locked context-expansion evidence for Jira estimate prompt patches', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [],
+      topMatch: null,
+      queryTimeMs: 7,
+      debug: {
+        normalizedQuery: 'Jira estimate prompt patch',
+        channelsHit: [],
+        contextExpansion: {
+          contextMatch: {
+            state: 'locked',
+            selectedTopic: {
+              id: 'jira:task-estimate-workflow',
+              label: 'Task Estimate workflow',
+              aliases: [
+                'Task Estimate workflow evaluates Jira ticket estimates from Jira team field, Summary, Description, Issue type, and Historical Story Points benchmark. AI Service should dry-run or write Google Sheet only, not Jira, and must include missing reason / low confidence reason.',
+              ],
+            },
+            candidates: [],
+            expandedQuery:
+              'Task Estimate workflow Jira ticket estimate Historical Story Points benchmark Google Sheet missing reason low confidence reason',
+            userFacingSummary:
+              'Locked to Task Estimate workflow from current Jira estimate prompt.',
+          },
+        },
+      },
+    });
+    Object.defineProperty(service, 'recallService', {
+      value: { recall },
+    });
+
+    const body = await service.assistComposer({
+      surface: 'chatgpt',
+      contextType: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
+      title: 'ChatGPT - Jira estimate analysis',
+      draftText:
+        '帮我分析这些 Jira ticket 的 estimate，看看能不能自动生成 Dev/QA 估算。',
+      primaryText:
+        'User is asking an external AI for Jira ticket estimate analysis.',
+      identifiers: { provider: 'chatgpt' },
+      sourceTypes: ['jira', 'glip', 'manual', 'source_memory'],
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.confidence).toBe(0.82);
+    expect(body.insertText).toContain('Historical Story Points benchmark');
+    expect(body.insertText).toContain('missing reason / low confidence reason');
+    expect(body.insertText).toContain('不要自动写回 Jira');
+    expect(body.insertText).not.toContain('参考来源');
+    expect(body.evidence[0].metadata?.fallbackReason).toBe(
+      'locked_context_expansion',
+    );
   });
 
   it('keeps Jira status prompts source-aware when composing to another AI', async () => {

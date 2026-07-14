@@ -18,9 +18,11 @@ import {
 import {
   buildFollowThreadConfigLaunchReceipt,
   buildFollowThreadCancelReceipt,
+  buildFollowThreadCancelConfirmReceipt,
   buildFollowThreadDraftBoundaryReceipt,
   buildFollowThreadExtendedReceipt,
   buildFollowThreadHitStatusText,
+  buildFollowThreadListSnapshotReceipt,
   buildFollowThreadManagementStatusReceipt,
   formatFollowThreadExpiry,
   buildFollowThreadSaveResultReceipt,
@@ -255,6 +257,30 @@ test('follow-thread save receipt reports original-message index readiness', () =
   assert.match(degradedReceipt, /监听期限：手动结束/);
 });
 
+test('follow-thread list snapshot receipt explains local read scope and hidden system watches', () => {
+  const receipt = buildFollowThreadListSnapshotReceipt({
+    totalManualRules: 3,
+    visibleRules: 1,
+    hiddenSystemRules: 2,
+    statusFilter: 'expired',
+    sortBy: 'related',
+    loadedAt: '2026-06-24T07:55:00Z',
+  });
+
+  assert.equal(receipt.title, '列表快照回执');
+  assert.match(receipt.sourceText, /chrome\.storage\.local\.concernedItems/);
+  assert.match(receipt.sourceText, /本次读取时间/);
+  assert.match(receipt.visibilityText, /当前可见 1 条/);
+  assert.match(receipt.visibilityText, /手动 Watch 规则总数 3 条/);
+  assert.match(receipt.visibilityText, /系统 \/ Outreach 内部 Watch 隐藏 2 条/);
+  assert.match(receipt.filterText, /当前筛选：已过期/);
+  assert.match(receipt.filterText, /排序：关联数/);
+  assert.match(receipt.filterText, /只改变本页展示/);
+  assert.match(receipt.boundaryText, /不会取消、延长、补发通知/);
+  assert.match(receipt.boundaryText, /重新索引原消息/);
+  assert.match(receipt.boundaryText, /写入长期记忆或发送消息/);
+});
+
 test('follow-thread management helpers treat manual end as active and explain local-only operations', () => {
   const now = Date.parse('2026-06-24T08:00:00Z');
   const fiveDaysLater = now + 5 * 24 * 60 * 60 * 1000;
@@ -294,6 +320,19 @@ test('follow-thread management helpers treat manual end as active and explain lo
   assert.match(cancelReceipt.body, /已删除本地手动规则/);
   assert.match(cancelReceipt.body, /不会删除原消息/);
   assert.match(cancelReceipt.body, /不会立刻清理已写入 Memory Service 的历史索引/);
+
+  const cancelConfirmReceipt = buildFollowThreadCancelConfirmReceipt({
+    ruleName: 'Release owner check',
+  });
+  assert.equal(cancelConfirmReceipt.title, '取消关注待确认');
+  assert.match(cancelConfirmReceipt.scopeText, /删除本机手动 Watch 规则/);
+  assert.match(cancelConfirmReceipt.scopeText, /停止后续新消息匹配/);
+  assert.match(cancelConfirmReceipt.boundaryText, /确认前不会修改本地列表/);
+  assert.match(cancelConfirmReceipt.boundaryText, /不会删除 RingCentral 原消息/);
+  assert.match(cancelConfirmReceipt.boundaryText, /不会补发或撤回通知/);
+  assert.match(cancelConfirmReceipt.boundaryText, /不会立刻清理已写入 Memory Service 的历史索引/);
+  assert.match(cancelConfirmReceipt.nextText, /确认取消/);
+  assert.match(cancelConfirmReceipt.nextText, /返回/);
 });
 
 test('follow-thread management status receipt explains hits, delivery, and read-only boundaries', () => {

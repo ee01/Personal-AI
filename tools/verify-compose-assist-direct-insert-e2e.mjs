@@ -290,6 +290,11 @@ async function main() {
       reviewNoteText:
         document.querySelector('.pai-composer-guard-review-note')?.textContent ||
         '',
+      previewText:
+        document
+          .querySelector('.pai-composer-guard-text')
+          ?.textContent?.replace(/\s+/g, ' ')
+          .trim() || '',
       provenanceBlocks: document.querySelectorAll(
         '.pai-composer-guard-provenance',
       ).length,
@@ -318,19 +323,17 @@ async function main() {
       dismissButtons: 0,
       confirmInsertButtons: 0,
       labelText: 'Jira / 项目上下文',
-      cueLabels: 1,
-      cueText:
-        '预演提醒 · 命中线索：会话 factory-ai-room / 主题 Factory AI rollout',
-      reviewNoteText:
-        '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。',
+      cueLabels: 0,
+      cueText: '',
+      reviewNoteText: '',
+      previewText:
+        '请结合下面上下文回答： 目标：Factory AI rollout status 相关记忆： 1. Factory AI passed security approval, but production still needs RingCentral email login. [M1]',
       provenanceBlocks: 0,
       reviewEvidenceBlocks: 0,
-      sourceRouteBlocks: 1,
-      sourceRouteText:
-        '来源路由 场景路由 chatgpt prompt 当前上下文 当前 prompt + 可见 AI turns 允许召回 15 类：AI 对话 / Agent 会话 / 聊天 / Jira / 会议 / 日历 +9 路由边界 当前 AI 自身历史已排除；只插 context pack，不提交 刷新口径 prompt 或 AI turns 变化会重算；拒绝只影响当前 prompt',
-      draftReceiptBlocks: 1,
-      draftReceiptText:
-        '草稿回执 插入对象 外部 AI context pack 动作边界 先锁定预览，确认后只插入草稿 复核边界 预演提醒，需确认未来场景仍适合 建议依据 1 条 · 预演提醒',
+      sourceRouteBlocks: 0,
+      sourceRouteText: '',
+      draftReceiptBlocks: 0,
+      draftReceiptText: '',
     });
     assert.equal(
       await page.evaluate(() => window.__paiContextRecallFeedbacks.length),
@@ -344,49 +347,25 @@ async function main() {
       state: 'visible',
       timeout: 3000,
     });
+    assert.equal(await page.locator('.pai-composer-guard-review-note').count(), 0);
+    assert.equal(await page.locator('[aria-label="预演复核"]').count(), 0);
     assert.equal(
-      await page.locator('.pai-composer-guard-review-note').innerText(),
-      '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。',
+      await page.locator('.pai-composer-guard-review-evidence').count(),
+      0,
     );
-    const rehearsalReviewText = await page
-      .locator('[aria-label="预演复核"]')
+    assert.equal(
+      await page.locator('.pai-composer-guard-source-route-receipt').count(),
+      0,
+    );
+    assert.equal(await page.locator('[aria-label="草稿回执"]').count(), 0);
+    const lockedPreviewText = await page
+      .locator('.pai-composer-guard-text')
       .innerText();
-    assert.match(rehearsalReviewText, /预演复核/);
-    assert.match(
-      rehearsalReviewText,
-      /命中线索\s+会话 factory-ai-room \/ 主题 Factory AI rollout/,
-    );
-    assert.match(
-      rehearsalReviewText,
-      /提示资格\s+弱提示 · stale · 已过期，仅弱提示 · 有效期已过 · 插入前先确认仍适合/,
-    );
-    assert.match(
-      rehearsalReviewText,
-      /预演脚本\s+下次讨论 Factory AI rollout 时，先提醒安全已通过/,
-    );
-    assert.match(
-      rehearsalReviewText,
-      /插入边界\s+确认后只写入当前草稿，不发送\/提交/,
-    );
-    assert.match(
-      rehearsalReviewText,
-      /反馈路径\s+不适合点拇指向下，写入成功后同场景降权/,
-    );
-    const reviewEvidenceText = await page
-      .locator('.pai-composer-guard-review-evidence')
-      .innerText();
-    assert.match(reviewEvidenceText, /建议依据/);
-    assert.match(reviewEvidenceText, /M1 · 预演提醒/);
-    assert.match(reviewEvidenceText, /Factory AI rollout rehearsal/);
-    assert.match(reviewEvidenceText, /90%/);
-    assert.match(
-      reviewEvidenceText,
-      /命中线索：会话 factory-ai-room \/ 主题 Factory AI rollout/,
-    );
-    assert.match(
-      reviewEvidenceText,
-      /预演内容：下次讨论 Factory AI rollout 时，先提醒安全已通过/,
-    );
+    assert.match(lockedPreviewText, /请结合下面上下文回答/);
+    assert.match(lockedPreviewText, /Factory AI passed security approval/);
+    assert.doesNotMatch(lockedPreviewText, /来源路由/);
+    assert.doesNotMatch(lockedPreviewText, /草稿回执/);
+    assert.doesNotMatch(lockedPreviewText, /建议依据/);
     const composerTextBeforeConfirm = await page
       .locator('#prompt-textarea')
       .innerText();
@@ -415,6 +394,7 @@ async function main() {
       undoReceiptText,
       /撤销窗口结束后才记录 accepted 和脱敏校准信号/,
     );
+    assert.match(undoReceiptText, /约 10 秒内可撤销/);
     assert.match(undoReceiptText, /撤销/);
     await page.waitForFunction(
       () =>
@@ -485,32 +465,23 @@ async function main() {
       0,
       'non-Rehearsal high-risk review must not show a Rehearsal receipt',
     );
-    const highRiskReviewEvidenceText = await page
-      .locator('.pai-composer-guard-review-evidence')
+    assert.equal(
+      await page.locator('.pai-composer-guard-review-evidence').count(),
+      0,
+      'high-risk review must not expose evidence details in Compose Assist',
+    );
+    assert.equal(
+      await page.locator('[aria-label="草稿回执"]').count(),
+      0,
+      'high-risk review must not show the old draft receipt panel',
+    );
+    const highRiskPreviewText = await page
+      .locator('.pai-composer-guard-text')
       .innerText();
-    const highRiskDraftReceiptText = await page
-      .locator('[aria-label="草稿回执"]')
-      .innerText();
-    assert.match(highRiskDraftReceiptText, /草稿回执/);
-    assert.match(highRiskDraftReceiptText, /插入对象\s+外部 AI context pack/);
-    assert.match(
-      highRiskDraftReceiptText,
-      /动作边界\s+先锁定预览，确认后只插入草稿/,
-    );
-    assert.match(
-      highRiskDraftReceiptText,
-      /复核边界\s+高风险，需核对事实\/语气\/敏感信息/,
-    );
-    assert.match(highRiskDraftReceiptText, /建议依据\s+1 条 · 消息记忆/);
-    assert.match(highRiskReviewEvidenceText, /M1 · 消息记忆/);
-    assert.match(highRiskReviewEvidenceText, /来源细节已隐藏/);
-    assert.match(highRiskReviewEvidenceText, /86%/);
-    assert.doesNotMatch(highRiskReviewEvidenceText, /Private DM with Alice/);
-    assert.doesNotMatch(highRiskReviewEvidenceText, /Alice salary planning/);
-    assert.doesNotMatch(
-      highRiskReviewEvidenceText,
-      /private compensation context/i,
-    );
+    assert.match(highRiskPreviewText, /请先内部核对后再外发这段敏感上下文/);
+    assert.doesNotMatch(highRiskPreviewText, /Private DM with Alice/);
+    assert.doesNotMatch(highRiskPreviewText, /Alice salary planning/);
+    assert.doesNotMatch(highRiskPreviewText, /private compensation context/i);
     const highRiskComposerTextBeforeConfirm = await page
       .locator('#prompt-textarea')
       .innerText();
@@ -560,6 +531,84 @@ async function main() {
       (await page.locator('#prompt-textarea').innerText()).trim(),
       'High risk source prompt',
       'Escape from review must not write or hide the suggestion',
+    );
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').click();
+    await page
+      .locator('#prompt-textarea')
+      .fill('High risk source before replace this after');
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) =>
+            request.draftText ===
+            'High risk source before replace this after',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.locator('.pai-composer-guard-icon-button').waitFor({
+      state: 'visible',
+      timeout: 6000,
+    });
+    await page.locator('#prompt-textarea').evaluate((element) => {
+      element.focus();
+      const textNode = element.firstChild;
+      if (!textNode) throw new Error('missing composer text node');
+      const text = textNode.textContent || '';
+      const start = text.indexOf('replace this');
+      if (start < 0) throw new Error('missing selection marker');
+      const range = document.createRange();
+      range.setStart(textNode, start);
+      range.setEnd(textNode, start + 'replace this'.length);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.locator('[data-action="confirm-insert"]').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+    await page.locator('[data-action="confirm-insert"]').evaluate((button) => {
+      button.focus();
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await page
+      .locator('[data-action="confirm-insert"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    const restoredSelectionInsertText = await page
+      .locator('#prompt-textarea')
+      .innerText();
+    assert.doesNotMatch(restoredSelectionInsertText, /replace this/);
+    assert.match(restoredSelectionInsertText, /High risk source before/);
+    assert.match(restoredSelectionInsertText, /请先内部核对后再外发这段敏感上下文/);
+    assert.match(restoredSelectionInsertText, /after/);
+    assert.ok(
+      restoredSelectionInsertText.indexOf('High risk source before') <
+        restoredSelectionInsertText.indexOf('请先内部核对后再外发这段敏感上下文'),
+      'restored review selection should keep the inserted text at the original selected range',
+    );
+    assert.ok(
+      restoredSelectionInsertText.indexOf('请先内部核对后再外发这段敏感上下文') <
+        restoredSelectionInsertText.indexOf('after'),
+      'restored review selection should preserve text after the selected range',
+    );
+    await page.locator('.pai-composer-guard-undo-button').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#prompt-textarea')?.textContent ===
+        'High risk source before replace this after',
+      null,
+      { timeout: 3000 },
     );
 
     await page.goto(fixtureUrl);
@@ -774,6 +823,10 @@ async function main() {
     );
     assert.match(feedbackReceiptText, /ChatGPT 场景也会更谨慎/);
     assert.match(feedbackReceiptText, /换个 prompt 仍会重新判断/);
+    assert.match(feedbackReceiptText, /本次点击只隐藏当前建议/);
+    assert.match(feedbackReceiptText, /不会发送\/提交草稿/);
+    assert.match(feedbackReceiptText, /不会.*关闭其他输入框建议/);
+    assert.match(feedbackReceiptText, /预演降权等后台写入以下方回执为准/);
     await page.waitForFunction(
       () =>
         window.__paiContextRecallFeedbacks?.some(

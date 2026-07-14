@@ -208,6 +208,10 @@ async function main() {
       mixedStatusPage.locator('.status-card-composition').first(),
       '不会批准、重试、发送、取消、归档或写入',
     );
+    await assertTextIncludes(
+      mixedStatusPage.locator('.status-item-count-basis').first(),
+      '本行：1 个同步异常 · 来源：本机同步流水',
+    );
     await mixedStatusPage.locator('.status-card-refresh').first().click();
     await assertText(
       mixedStatusPage.locator('.status-empty').first(),
@@ -221,6 +225,9 @@ async function main() {
     const statusPill = page.locator('#status-pill');
     await statusPill.waitFor({ state: 'visible' });
     await assertText(statusPill, '外部询问待批准发送');
+    await assertAttributeIncludes(statusPill, 'title', '点击只展开 Quick Ask 状态卡');
+    await assertAttributeIncludes(statusPill, 'title', '不打开设置');
+    await assertAttributeIncludes(statusPill, 'aria-label', '不会批准、重试、发送、取消、归档或写入');
 
     await statusPill.click();
     const statusItem = page.locator('.status-item').first();
@@ -232,6 +239,10 @@ async function main() {
     );
     await assertText(page.locator('.status-item-source').first(), 'Outreach 运行态');
     await assertText(page.locator('.status-item-freshness').first(), '2 分钟前读取');
+    await assertText(
+      page.locator('.status-item-count-basis').first(),
+      '本行：2 个外部询问 · 来源：Outreach 运行态 · 当前快照只读，不会执行、批准、重试、发送、取消、归档或写入。',
+    );
     await assertText(page.locator('.status-item-title').first(), '外部询问待批准发送');
     await assertText(page.locator('.status-item-summary').first(), '是否向 Chris 追问发布窗口？');
     await assertText(
@@ -248,14 +259,45 @@ async function main() {
       page.locator('.status-item-action-boundary').first(),
       '不会发送 outreach',
     );
+    const refreshButton = page.locator('.status-card-refresh').first();
+    await assertAttributeIncludes(refreshButton, 'title', '重新读取当前运行态快照');
+    await assertAttributeIncludes(refreshButton, 'aria-label', '只刷新状态卡和状态胶囊');
+    await assertAttributeIncludes(refreshButton, 'aria-label', '不会批准、重试、发送、取消、归档、写入或改配置');
 
-    await page.locator('.status-card-refresh').first().click();
+    await refreshButton.click();
     await assertText(page.locator('.status-refresh-note').first(), '已重新读取状态快照。');
     await assertText(page.locator('.status-card-meta').first(), '快照：刚刚刷新 · 1 项状态');
     await assertText(page.locator('.status-item-source').first(), 'Memory Service 确认请求');
     await assertText(page.locator('.status-item-freshness').first(), '刚刚读取');
     await assertText(page.locator('.status-item-title').first(), '待你确认');
     await assertText(page.locator('.status-item-summary').first(), '是否记录新的回复偏好？');
+
+    const slowRefreshPage = await setupQuickAskPage(browser, url, runtimeSummary, {
+      now: Date.parse('2026-05-21T00:02:00.000Z'),
+      runtimeSequence: [runtimeSummary, refreshedRuntimeSummary],
+      runtimeSummaryDelayMs: 250,
+    });
+    await slowRefreshPage.locator('#status-pill').click();
+    const slowRefreshButton = slowRefreshPage.locator('.status-card-refresh').first();
+    await slowRefreshButton.click();
+    await slowRefreshPage.waitForFunction(() => {
+      const button = document.querySelector('.status-card-refresh');
+      return Boolean(button?.disabled);
+    });
+    await assertAttributeIncludes(
+      slowRefreshButton,
+      'title',
+      '正在重新读取运行态快照',
+    );
+    await assertAttributeIncludes(
+      slowRefreshButton,
+      'aria-label',
+      '刷新中会阻止重复点击',
+    );
+    await assertText(slowRefreshPage.locator('.status-refresh-note').first(), '正在重新读取运行态...');
+    await slowRefreshPage.waitForFunction(
+      () => document.querySelector('.status-card-refresh')?.textContent?.includes('重新读取'),
+    );
 
     await statusPill.click();
     await assertText(page.locator('.status-item-title').first(), '待你确认');
@@ -275,6 +317,10 @@ async function main() {
     assert.match(draft, /是否记录新的回复偏好/);
     assert.match(draft, /来自用户画像确认请求/);
     assert.match(draft, /继续追问这条状态/);
+    assert.match(
+      draft,
+      /数量口径：本行：1 个待确认 · 来源：Memory Service 确认请求/,
+    );
     assert.match(draft, /这条状态来自刚刚读取的快照/);
     assert.match(draft, /显示原因：需要你确认：不会自动写入或发送。/);
     assert.match(draft, /处理入口：只把待确认项带入追问草稿/);
@@ -325,6 +371,10 @@ async function main() {
     );
     await staleRuntimePage.locator('.status-item').first().click();
     const staleDraft = await staleRuntimePage.locator('#composer').inputValue();
+    assert.match(
+      staleDraft,
+      /数量口径：本行：2 个外部询问 · 来源：Outreach 运行态/,
+    );
     assert.match(staleDraft, /31 分钟前的旧快照/);
     assert.match(staleDraft, /先点重新读取确认它是否仍然存在/);
 
@@ -632,6 +682,16 @@ async function main() {
     );
     await mobileSyncButton.waitFor({ state: 'visible' });
     await assertText(mobileSyncButton, '发到豆包手机对话');
+    await assertAttributeIncludes(
+      mobileSyncButton,
+      'title',
+      '发送 query_answer_card（本轮答案 + 1 条证据摘要）到 mobile_context_thread',
+    );
+    await assertAttributeIncludes(
+      mobileSyncButton,
+      'aria-label',
+      '不写长期记忆、不确认答案、不改绑定、不标记待办完成',
+    );
     await assertTextIncludes(
       sessionPage.locator('.message-action-status').first(),
       'query_answer_card（本轮答案 + 1 条证据摘要）-> mobile_context_thread',
@@ -641,7 +701,24 @@ async function main() {
       '不写长期记忆、不确认答案、不改绑定、不标记待办完成',
     );
 
+    await sessionPage.evaluate(() => {
+      window.__holdInjectQuery = true;
+    });
     await mobileSyncButton.click();
+    await sessionPage.waitForFunction(
+      () => window.__injectQueryWaiting === true,
+    );
+    await assertAttributeIncludes(
+      mobileSyncButton,
+      'title',
+      '请求已提交，尚未确认 query_answer_card（本轮答案 + 1 条证据摘要）已写入 mobile_context_thread',
+    );
+    await assertAttributeIncludes(
+      mobileSyncButton,
+      'aria-label',
+      '等待结果时不会重复发送',
+    );
+    await sessionPage.evaluate(() => window.__releaseInjectQuery?.());
     await sessionPage.waitForFunction(
       () => window.__lastInjectPayload?.answer === '第一轮答案',
     );
@@ -672,6 +749,41 @@ async function main() {
     await assertTextIncludes(
       sessionPage.locator('.message-action-status').first(),
       '回退原因：No existing doubao.com tab found in Chrome',
+    );
+    await assertAttributeIncludes(
+      mobileSyncButton,
+      'title',
+      '已完成一次发送，按钮保留本次结果且不会再次发送',
+    );
+
+    await sessionPage.evaluate(() => {
+      window.__injectResultOverride = {
+        accepted: false,
+        error: 'mobile_context_not_bound',
+      };
+    });
+    await sessionPage.locator('#composer').fill('第二件事是什么');
+    await sessionPage.keyboard.press('Enter');
+    await sessionPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '第二件事是什么',
+    );
+    const failedMobileSyncButton = sessionPage
+      .locator('.quick-ask-sync-mobile')
+      .last();
+    await failedMobileSyncButton.click();
+    await assertTextIncludes(
+      sessionPage.locator('.message-action-status').last(),
+      '手机对话未绑定，请先打开设置重新绑定。',
+    );
+    await assertAttributeIncludes(
+      failedMobileSyncButton,
+      'title',
+      '上次失败没有确认写入 mobile_context_thread',
+    );
+    await assertAttributeIncludes(
+      failedMobileSyncButton,
+      'aria-label',
+      '重试仍只发送本轮 query_answer_card',
     );
 
     await sessionPage.evaluate(() => {
@@ -864,6 +976,9 @@ async function main() {
       '本机语音识别',
     );
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '不会自动发送');
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'title', '停止监听');
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'aria-label', '不会发送');
+    await assertAttributeIncludes(voicePage.locator('#voice-send'), 'title', '不可发送');
     await voicePage.locator('#voice-orb').click();
     await voicePage.evaluate(() => {
       window.__quickAskHandlers.voice?.({
@@ -885,6 +1000,9 @@ async function main() {
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '保存音频');
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '发起 Ask');
     assert.equal(await voicePage.locator('#voice-send').isDisabled(), true);
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'title', '继续说话');
+    await assertAttributeIncludes(voicePage.locator('#voice-send'), 'aria-label', '没有可发送语音草稿');
+    await assertAttributeIncludes(voicePage.locator('#voice-cancel'), 'title', '没有语音内容');
     await voicePage.locator('#voice-orb').click();
     await voicePage.waitForFunction(
       () =>
@@ -906,6 +1024,9 @@ async function main() {
     await assertText(voicePage.locator('#voice-recovery'), '打开语音识别设置');
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '语音未发送');
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '草稿已保留');
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'title', '重试语音输入');
+    await assertAttributeIncludes(voicePage.locator('#voice-recovery'), 'title', '打开语音识别设置');
+    await assertAttributeIncludes(voicePage.locator('#voice-recovery'), 'aria-label', '不会发送语音草稿');
     await voicePage.locator('#voice-recovery').click();
     await voicePage.waitForFunction(() => window.__openedSpeechSettings === 1);
 
@@ -923,6 +1044,82 @@ async function main() {
       'Speech helper is not running',
     );
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '语音未发送');
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'aria-label', '重试语音输入');
+
+    const voiceInterruptedPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    });
+    await voiceInterruptedPage.locator('#voice-button').click();
+    await voiceInterruptedPage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-listening',
+    );
+    await voiceInterruptedPage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'transcript',
+        text: '请总结今天的重点',
+        isFinal: false,
+      });
+      window.__quickAskHandlers.voice?.({
+        type: 'error',
+        code: 'speech_error_1101',
+        message: 'Speech recognition interrupted',
+      });
+      window.__quickAskHandlers.voice?.({
+        type: 'stopped',
+        text: '请总结今天的重点',
+        reason: 'error',
+      });
+    });
+    await voiceInterruptedPage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-ready',
+    );
+    await assertText(
+      voiceInterruptedPage.locator('#voice-transcript'),
+      '请总结今天的重点',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '识别中断',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '未确认语音草稿',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '没有发送',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '保存音频',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '发起 Ask',
+    );
+    await assertTextIncludes(
+      voiceInterruptedPage.locator('#voice-receipt'),
+      '先核对人名/项目词',
+    );
+    assert.equal(
+      await voiceInterruptedPage.locator('#voice-send').isDisabled(),
+      false,
+    );
+    await assertAttributeIncludes(voiceInterruptedPage.locator('#voice-orb'), 'title', '重试语音输入');
+    await assertAttributeIncludes(voiceInterruptedPage.locator('#voice-send'), 'title', '发送语音草稿');
+    await assertAttributeIncludes(voiceInterruptedPage.locator('#voice-send'), 'aria-label', '工作范围');
+    await assertAttributeIncludes(voiceInterruptedPage.locator('#voice-cancel'), 'title', '带回输入框');
+    await voiceInterruptedPage.locator('#voice-cancel').click();
+    assert.equal(
+      await voiceInterruptedPage.locator('#composer').inputValue(),
+      '请总结今天的重点',
+    );
 
     await voicePage.evaluate(() => {
       window.__voiceStartError = '';
@@ -942,6 +1139,7 @@ async function main() {
     });
     await assertText(voicePage.locator('#voice-transcript'), '请总结今天的重点');
     await assertTextIncludes(voicePage.locator('#voice-receipt'), '正在听写');
+    await assertAttributeIncludes(voicePage.locator('#voice-orb'), 'title', '保留当前语音草稿');
     await voicePage.locator('#voice-orb').click();
     await voicePage.evaluate(() => {
       window.__quickAskHandlers.voice?.({
@@ -960,6 +1158,8 @@ async function main() {
       voicePage.locator('#voice-receipt'),
       '点箭头才会发送转写文本',
     );
+    await assertAttributeIncludes(voicePage.locator('#voice-send'), 'title', '发送语音草稿');
+    await assertAttributeIncludes(voicePage.locator('#voice-send'), 'aria-label', '不发送或保存原始音频');
     await voicePage.locator('#voice-cancel').click();
     assert.equal(await voicePage.locator('#composer').inputValue(), '请总结今天的重点');
 
@@ -972,6 +1172,7 @@ async function main() {
         isFinal: true,
       });
     });
+    await assertAttributeIncludes(voicePage.locator('#voice-send'), 'title', '发送语音草稿');
     await voicePage.locator('#voice-send').click();
     await voicePage.waitForFunction(
       () => window.__lastAskPayload?.query === '帮我查一下今天的重点',
@@ -1085,12 +1286,31 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
       },
       injectQuery: async (payload) => {
         window.__lastInjectPayload = payload;
-        return testOptions.injectResult || { accepted: true };
+        if (window.__holdInjectQuery) {
+          window.__injectQueryWaiting = true;
+          await new Promise((resolve) => {
+            window.__releaseInjectQuery = () => {
+              window.__holdInjectQuery = false;
+              window.__injectQueryWaiting = false;
+              window.__releaseInjectQuery = null;
+              resolve();
+            };
+          });
+        }
+        return (
+          window.__injectResultOverride ||
+          testOptions.injectResult || { accepted: true }
+        );
       },
       remember: async () => ({ items: [] }),
       getRuntimeSummary: async () => {
         const callIndex = window.__runtimeSummaryCalls;
         window.__runtimeSummaryCalls += 1;
+        if (testOptions.runtimeSummaryDelayMs) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, testOptions.runtimeSummaryDelayMs),
+          );
+        }
         if (
           Array.isArray(testOptions.runtimeSummaryErrorAtCalls) &&
           testOptions.runtimeSummaryErrorAtCalls.includes(callIndex)
@@ -1206,6 +1426,14 @@ async function assertTextIncludes(locator, expected) {
   assert.ok(
     text.includes(expected),
     `${JSON.stringify(text)} should include ${JSON.stringify(expected)}`,
+  );
+}
+
+async function assertAttributeIncludes(locator, attribute, expected) {
+  const value = (await locator.getAttribute(attribute)) || '';
+  assert.ok(
+    value.includes(expected),
+    `${attribute} ${JSON.stringify(value)} should include ${JSON.stringify(expected)}`,
   );
 }
 

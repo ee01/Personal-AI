@@ -216,6 +216,7 @@ export class DigestQueueService {
       totalItems: tasks.reduce((sum, task) => sum + task.totalItems, 0),
       dueItems: tasks.reduce((sum, task) => sum + task.dueItems, 0),
       nextReleaseAt,
+      checkedAt: now.toISOString(),
       tasks,
     };
   }

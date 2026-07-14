@@ -10,3 +10,5 @@
 - Pain pattern: saved Jira comments include many old/new field snippets; duplicate ticket titles have contradictory changes such as MTR-148115 Story Points 0->14 and 14->0, MTR-147866 DEV Estimate 0.2->0.1 and 0.1->0.2.
 - Pain pattern: source summaries include UI noise like `Press Enter` and `Collapse comment`; 68 saved capsules matched simple UI-noise markers, 31 matched simple change-like markers.
 - Existing related primitives: Source Memory Distiller takeaways/triggers/events exist; Evidence Watch contracts/runs exist; Outcome events table exists but empty; recall patches only 3.
+- External references checked: OpenAI Memory FAQ, ChatGPT Atlas browser memories, ChatGPT Pulse retirement note, Mem0 memory algorithm/evaluation docs, Zep temporal KG paper, LongMemEval, STALE, Linear collapsed issue history.
+- Selected concept: Change Memory Ledger / 变更记忆账本. It extracts captured old/new field changes into event chains and projections, distinct from Freshness Radar and Evidence Watch.

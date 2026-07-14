@@ -80,7 +80,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.meetingPilot.processing': '处理中...',
     'popup.meetingPilot.openOptions': '打开配置',
     'popup.today.openTitle': '打开今天首页',
-    'popup.today.refreshTitle': '刷新今天',
+    'popup.today.refreshTitle':
+      '刷新 Today Pilot Top 3 快照：只读取或重新生成当前用户今日派生 brief；不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。',
     'popup.today.loading': '正在读取今日 mission',
     'popup.today.unavailable': '今天暂不可用',
     'popup.today.empty': '暂时没有需要处理的事项',
@@ -114,6 +115,15 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       '读写、备份与恢复只作用于这个 per-user SQLite 空间。',
     'memoryExplorer.identityBoundary.defaultFallback':
       '仅只读兼容回退；写入、导入、恢复会被拦截，直到身份恢复。',
+    'memoryExplorer.identityWriteBoundary.explicit':
+      '写入边界: 读写、备份与恢复只限 {userId}；不会落到 default 或其他用户空间。',
+    'memoryExplorer.identityWriteBoundary.defaultFallback':
+      '写入边界: {operations} 已拦截；恢复 userinfo.username 或在设置里配置 userId 后再试。',
+    'memoryExplorer.identityBlockedOperation.write': '写入',
+    'memoryExplorer.identityBlockedOperation.import': '导入',
+    'memoryExplorer.identityBlockedOperation.restore': '恢复',
+    'memoryExplorer.identityBlockedOperation.profileUpdate': '画像更新',
+    'memoryExplorer.identityBlockedOperation.separator': '、',
     'memoryExplorer.identitySnapshot.pending':
       '身份快照待刷新；不会写入、导入或恢复记忆。',
     'memoryExplorer.identitySnapshot.loading':
@@ -122,6 +132,18 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       '身份快照 {time} 来自只读 /stats；刷新只重新检查身份边界。',
     'memoryExplorer.identityAction.refresh': '刷新身份快照',
     'memoryExplorer.identityAction.openSettings': '打开设置',
+    'memoryExplorer.identityAction.refreshBoundary.explicit':
+      '刷新身份快照：只重新读取 {userId} 的只读 /stats 身份快照；不会写入、导入、恢复、迁移记忆，也不会切换到 default 或其他用户空间。',
+    'memoryExplorer.identityAction.refreshBoundary.defaultFallback':
+      '刷新身份快照：只重新检查 {userId} 的 default fallback 是否仍被拦截；不会写入、导入、恢复、迁移记忆、确认 default 数据归属或重试失败写入。',
+    'memoryExplorer.identityAction.refreshBoundary.localInferred':
+      '刷新身份快照：只重新请求 /stats 校验本机推断的 {userId}；不会写入、导入、恢复、迁移记忆或把本机推断当作服务端确认。',
+    'memoryExplorer.identityAction.settingsBoundary.explicit':
+      '打开设置：只打开 Options 查看或调整 Memory Service 身份配置；不会迁移 {userId} 数据、切换当前结果、写入、导入、恢复或落到 default。',
+    'memoryExplorer.identityAction.settingsBoundary.defaultFallback':
+      '打开设置：只打开 Options 以恢复登录、userinfo.username 或 userId 配置；不会直接修复 default fallback、迁移 default 数据、导入、恢复或重试写入。',
+    'memoryExplorer.identityAction.settingsBoundary.localInferred':
+      '打开设置：只打开 Options 复核本机推断的 {userId}；不会把推断身份写入服务端、迁移记忆、导入、恢复或重试写入。',
     'memoryExplorer.nav.today': '今天',
     'memoryExplorer.nav.timeline': '时间轴',
     'memoryExplorer.nav.meetings': '会议记录',
@@ -286,7 +308,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.meetingPilot.processing': 'Processing...',
     'popup.meetingPilot.openOptions': 'Open Settings',
     'popup.today.openTitle': 'Open Today Pilot',
-    'popup.today.refreshTitle': 'Refresh Today Pilot',
+    'popup.today.refreshTitle':
+      "Refresh the Today Pilot Top 3 snapshot: only reads or regenerates this user's derived today brief; it does not mark messages read, complete source tasks, write feedback, send messages, approve, or execute external actions.",
     'popup.today.loading': 'Reading today missions',
     'popup.today.unavailable': 'Today Pilot is unavailable',
     'popup.today.empty': 'Nothing needs attention right now',
@@ -320,6 +343,15 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       'Reads, writes, backups, and restores apply only to this per-user SQLite space.',
     'memoryExplorer.identityBoundary.defaultFallback':
       'Read-only compatibility fallback; writes, imports, and restores are blocked until identity recovers.',
+    'memoryExplorer.identityWriteBoundary.explicit':
+      'Write boundary: reads, writes, backups, and restores stay within {userId}; they will not fall back to default or another user space.',
+    'memoryExplorer.identityWriteBoundary.defaultFallback':
+      'Write boundary: {operations} are blocked. Restore userinfo.username or configure userId in settings before retrying.',
+    'memoryExplorer.identityBlockedOperation.write': 'writes',
+    'memoryExplorer.identityBlockedOperation.import': 'imports',
+    'memoryExplorer.identityBlockedOperation.restore': 'restores',
+    'memoryExplorer.identityBlockedOperation.profileUpdate': 'profile updates',
+    'memoryExplorer.identityBlockedOperation.separator': ', ',
     'memoryExplorer.identitySnapshot.pending':
       'Identity snapshot has not refreshed yet; no memory writes, imports, or restores happen here.',
     'memoryExplorer.identitySnapshot.loading':
@@ -328,6 +360,18 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       'Identity snapshot at {time} came from read-only /stats; refresh only checks the identity boundary again.',
     'memoryExplorer.identityAction.refresh': 'Refresh identity',
     'memoryExplorer.identityAction.openSettings': 'Open settings',
+    'memoryExplorer.identityAction.refreshBoundary.explicit':
+      'Refresh identity snapshot: only rereads the read-only /stats identity snapshot for {userId}; it will not write, import, restore, migrate memories, or switch to default or another user space.',
+    'memoryExplorer.identityAction.refreshBoundary.defaultFallback':
+      'Refresh identity snapshot: only checks whether the {userId} default fallback is still blocked; it will not write, import, restore, migrate memories, confirm default ownership, or retry failed writes.',
+    'memoryExplorer.identityAction.refreshBoundary.localInferred':
+      'Refresh identity snapshot: only requests /stats again to verify the locally inferred {userId}; it will not write, import, restore, migrate memories, or treat local inference as service confirmation.',
+    'memoryExplorer.identityAction.settingsBoundary.explicit':
+      'Open settings: only opens Options to view or adjust Memory Service identity configuration; it will not migrate {userId} data, switch current results, write, import, restore, or fall back to default.',
+    'memoryExplorer.identityAction.settingsBoundary.defaultFallback':
+      'Open settings: only opens Options to recover login, userinfo.username, or userId configuration; it will not directly fix default fallback, migrate default data, import, restore, or retry writes.',
+    'memoryExplorer.identityAction.settingsBoundary.localInferred':
+      'Open settings: only opens Options to review the locally inferred {userId}; it will not write inferred identity to the service, migrate memories, import, restore, or retry writes.',
     'memoryExplorer.nav.today': 'Today Pilot',
     'memoryExplorer.nav.timeline': 'Timeline',
     'memoryExplorer.nav.meetings': 'Meetings',

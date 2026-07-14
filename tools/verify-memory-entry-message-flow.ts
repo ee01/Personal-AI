@@ -179,6 +179,36 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('missing sender context regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'No Sender Room',
+                  team_id: 'no-sender-room',
+                  sender: '',
+                  message_content:
+                    'missing sender context regression should not satisfy a sender-scoped rule',
+                  summary:
+                    '模型返回了 sender-scoped ruleRef，但消息没有发送人上下文',
+                  datetime: '2026-04-15T01:15:00.000Z',
+                  post_id: 'post-missing-sender-context-1',
+                  matched_rule:
+                    '[RULE_REF:manual:sender-scoped] Sender scoped memory',
+                  matched_rule_refs: ['manual:sender-scoped'],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       if (prompt.includes('multi delivery regression')) {
         return new Response(
           JSON.stringify({
@@ -561,6 +591,60 @@ async function main() {
   assert.match(diagnostics[0].reason, /群组不在范围/);
   assert.match(diagnostics[0].reason, /Release Chat/);
   assert.match(diagnostics[0].reason, /Daily Standup/);
+
+  storage.concernedItems = [
+    {
+      id: 'sender-scoped',
+      text: 'Sender scoped memory',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      filterGroup: 'No Sender Room',
+      filterSender: 'Morgan Lee',
+    },
+  ];
+  storage[MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY] = [];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'No Sender Room',
+        groupId: 'no-sender-room',
+        standalone: [
+          {
+            time: '2026-04-15T01:15:00.000Z',
+            id: 'post-missing-sender-context-1',
+            text: 'missing sender context regression should not satisfy a sender-scoped rule',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(
+    ingests.length,
+    0,
+    'sender-scoped rule refs must not ingest when sender context is missing',
+  );
+  assert.equal(
+    botMessages.length,
+    0,
+    'sender-scoped rule refs must not notify when sender context is missing',
+  );
+  const missingSenderDiagnostics =
+    storage[MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY] || [];
+  assert.equal(
+    missingSenderDiagnostics.length,
+    1,
+    'missing sender context should leave a local rule diagnostic',
+  );
+  assert.equal(missingSenderDiagnostics[0].ruleRef, 'manual:sender-scoped');
+  assert.match(missingSenderDiagnostics[0].reason, /发送人上下文缺失/);
+  assert.match(missingSenderDiagnostics[0].reason, /Morgan Lee/);
 
   storage.concernedItems = [
     {

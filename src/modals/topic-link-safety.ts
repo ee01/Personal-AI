@@ -131,13 +131,15 @@ export const getFirstSafeExternalLinkPresentation = (
     const label = candidate.label || fallbackLabel;
     const titleLabel = candidate.titleLabel || label || fallbackTitleLabel;
 
+    const title = safety.hostname
+      ? `打开${titleLabel}：${safety.hostname}`
+      : `打开${titleLabel}`;
+
     return {
       url: safety.safeUrl,
       label,
       host: safety.hostname || '',
-      title: safety.hostname
-        ? `打开${titleLabel}：${safety.hostname}`
-        : `打开${titleLabel}`,
+      title: `${title}；只请求外部标签页；不会重新读取来源内容、同步 Memory Service、标记已读、确认结论或写回原始平台。`,
     };
   }
 

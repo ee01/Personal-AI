@@ -8,7 +8,7 @@ import type { TimelineProject } from './timelineProjects';
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
 // 推送方式
-export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation' | 'Outreach';
+export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation' | 'Outreach' | 'AgentTask';
 
 // 消息状态
 // PendingReview: 待审核状态，用于自动答复的审核模式，需手动确认后才会执行
@@ -81,6 +81,17 @@ export interface ScheduledMessage {
   Timeline_Project?: TimelineProject;  // 项目名称
   Timeline_Milestone?: TimelineMilestone;  // Milestone 名称
   Timeline_Offset?: number;  // 偏移天数（负数=之前，0=当天，正数=之后）
+  // 帮我做 / Agent Task 字段
+  Agent_Task_ID?: string;
+  Agent_Executor?: 'openclaw' | string;
+  Agent_Task_Prompt?: string;
+  Agent_Notify_Template?: string;
+  Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
+  Agent_AR_Binding_ID?: string;
+  Agent_Last_Run_At?: string;
+  Agent_Last_Status?: string;
+  Agent_Last_Result?: string;
+  Agent_Last_Error?: string;
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -121,6 +132,17 @@ export interface CreateMessageFormData {
   Timeline_Project?: TimelineProject;
   Timeline_Milestone?: TimelineMilestone;
   Timeline_Offset?: number;
+  // 帮我做 / Agent Task 字段
+  Agent_Task_ID?: string;
+  Agent_Executor?: 'openclaw' | string;
+  Agent_Task_Prompt?: string;
+  Agent_Notify_Template?: string;
+  Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
+  Agent_AR_Binding_ID?: string;
+  Agent_Last_Run_At?: string;
+  Agent_Last_Status?: string;
+  Agent_Last_Result?: string;
+  Agent_Last_Error?: string;
   // 分类标签
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
   // Jira Automation 链接
@@ -151,6 +173,13 @@ export interface RingCentralSenderConfig {
   updatedAt?: string;
 }
 
+export interface AgentTaskWebhookConfig {
+  webhookUrl?: string;
+  authToken?: string;
+  userId?: string;
+  updatedAt?: string;
+}
+
 // Sheet 配置接口
 export interface SheetConfig {
   sheetId: string;
@@ -176,6 +205,8 @@ export interface SheetConfig {
   botExecutor?: BotAutomationRule;
   // AsMe RingCentral sender：配置后由 Jira rule 调内网 Dify workflow 发送
   ringCentralSender?: RingCentralSenderConfig;
+  // AgentTask webhook：Jira rule 到期后调用 memory-service 执行帮我做任务
+  agentTaskWebhook?: AgentTaskWebhookConfig;
 }
 
 // 初始化结果

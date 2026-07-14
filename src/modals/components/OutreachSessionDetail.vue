@@ -1,7 +1,12 @@
 <template>
   <div class="outreach-detail-page">
     <div class="page-head">
-      <button class="back-btn" @click="goBackToList">
+      <button
+        class="back-btn"
+        :title="backToListButtonBoundary()"
+        :aria-label="backToListButtonAriaLabel()"
+        @click="goBackToList"
+      >
         ← 返回主动询问列表
       </button>
       <div class="action-bar">
@@ -9,6 +14,8 @@
           v-if="detail?.status === 'pending_approval'"
           class="primary-btn"
           :disabled="busy || editing || !canApprove(detail)"
+          :title="detailActionButtonTitle('approve', detail)"
+          :aria-label="detailActionButtonAriaLabel('approve', detail)"
           @click="approveSession"
         >
           {{ canApprove(detail) ? '批准发送' : '目标未确认，暂不能批准' }}
@@ -17,6 +24,8 @@
           v-if="detail && canEdit(detail.status) && !editing"
           class="ghost-btn"
           :disabled="busy"
+          :title="detailActionButtonTitle('edit', detail)"
+          :aria-label="detailActionButtonAriaLabel('edit', detail)"
           @click="startEdit"
         >
           编辑目标与时间
@@ -25,6 +34,8 @@
           v-if="detail && canRetry(detail.status)"
           class="ghost-btn"
           :disabled="busy || editing"
+          :title="detailActionButtonTitle('retry', detail)"
+          :aria-label="detailActionButtonAriaLabel('retry', detail)"
           @click="retrySession"
         >
           重试
@@ -33,6 +44,8 @@
           v-if="detail && canCancel(detail.status)"
           class="danger-btn"
           :disabled="busy || editing"
+          :title="detailActionButtonTitle('cancel', detail)"
+          :aria-label="detailActionButtonAriaLabel('cancel', detail)"
           @click="cancelSession"
         >
           取消
@@ -45,11 +58,58 @@
       <p>加载主动询问详情中...</p>
     </div>
 
+    <div
+      v-else-if="loadError"
+      class="detail-load-error"
+      role="alert"
+      aria-label="主动询问详情加载失败回执"
+    >
+      <div class="detail-load-title">主动询问详情加载失败</div>
+      <p>{{ loadError }}</p>
+      <p>
+        页面没有把这次读取失败当成会话不存在，也没有批准、发送、追问、重试、取消或写回
+        RingCentral。请重试详情读取，或返回列表核对当前队列快照。
+      </p>
+      <div class="detail-load-actions">
+        <button
+          class="ghost-btn"
+          :title="retryDetailLoadButtonBoundary()"
+          :aria-label="retryDetailLoadButtonAriaLabel()"
+          @click="loadDetail"
+        >
+          重试详情
+        </button>
+        <button
+          class="back-btn"
+          :title="backToListButtonBoundary()"
+          :aria-label="backToListButtonAriaLabel()"
+          @click="goBackToList"
+        >
+          返回列表核对
+        </button>
+      </div>
+    </div>
+
     <div v-else-if="!detail" class="empty-state">
       <p>未找到该会话。</p>
     </div>
 
     <div v-else class="detail-layout">
+      <div
+        v-if="detailLoadWarning"
+        class="detail-load-warning"
+        role="status"
+        aria-label="主动询问详情降级回执"
+      >
+        <div class="detail-load-title">详情已加载，辅助状态读取失败</div>
+        <p>{{ detailLoadWarning }}</p>
+        <p>
+          主会话详情仍按当前快照展示；编辑目标时如需最新 RingCentral
+          目录，请在发送前调整区刷新目录。这个降级提示不会保存草稿、批准、发送、追问或写回
+          RingCentral。
+        </p>
+      </div>
+
       <section class="hero-card">
         <div class="hero-top">
           <div>
@@ -91,18 +151,24 @@
             v-if="detail.threadId"
             :to="`/reflection-threads/${detail.threadId}`"
             class="page-link"
+            :title="detailThreadLinkBoundary(detail)"
+            :aria-label="detailThreadLinkAriaLabel(detail)"
             >查看线程</router-link
           >
           <router-link
             v-if="detail.actionId"
             :to="`/actions?actionId=${encodeURIComponent(detail.actionId)}`"
             class="page-link"
+            :title="detailActionLinkBoundary(detail)"
+            :aria-label="detailActionLinkAriaLabel(detail)"
             >查看动作</router-link
           >
           <router-link
             v-if="detail.templateId"
             :to="`/outreach?templateId=${encodeURIComponent(detail.templateId)}`"
             class="page-link"
+            :title="detailTemplateLinkBoundary(detail)"
+            :aria-label="detailTemplateLinkAriaLabel(detail)"
             >查看模板会话</router-link
           >
           <a
@@ -111,6 +177,8 @@
             class="page-link"
             target="_blank"
             rel="noopener noreferrer"
+            :title="detailSourceMessageLinkBoundary(detail)"
+            :aria-label="detailSourceMessageLinkAriaLabel(detail)"
             >打开原消息</a
           >
         </div>
@@ -240,6 +308,8 @@
                 <button
                   class="ghost-btn"
                   :disabled="busy || syncingDirectory"
+                  :title="directoryRefreshButtonBoundary()"
+                  :aria-label="directoryRefreshButtonAriaLabel()"
                   @click="refreshDirectory"
                 >
                   {{ syncingDirectory ? '刷新目录中...' : '刷新目录' }}
@@ -247,6 +317,8 @@
                 <button
                   class="ghost-btn"
                   :disabled="busy || searchingTargets"
+                  :title="targetSearchButtonBoundary()"
+                  :aria-label="targetSearchButtonAriaLabel()"
                   @click="searchTargets(true)"
                 >
                   重新检索
@@ -266,6 +338,8 @@
                 :key="`${candidate.kind}:${candidate.entityId}`"
                 class="candidate-btn"
                 type="button"
+                :title="targetCandidateButtonBoundary(candidate)"
+                :aria-label="targetCandidateButtonAriaLabel(candidate)"
                 @click="selectTargetCandidate(candidate)"
               >
                 <strong>{{ candidate.label }}</strong>
@@ -312,10 +386,22 @@
             </p>
           </div>
           <div class="edit-actions full-span">
-            <button class="primary-btn" :disabled="busy" @click="saveDraft">
+            <button
+              class="primary-btn"
+              :disabled="busy"
+              :title="draftActionButtonTitle('save')"
+              :aria-label="draftActionButtonAriaLabel('save')"
+              @click="saveDraft"
+            >
               保存调整
             </button>
-            <button class="ghost-btn" :disabled="busy" @click="cancelEdit">
+            <button
+              class="ghost-btn"
+              :disabled="busy"
+              :title="draftActionButtonTitle('cancel')"
+              :aria-label="draftActionButtonAriaLabel('cancel')"
+              @click="cancelEdit"
+            >
               取消编辑
             </button>
           </div>
@@ -556,6 +642,8 @@ const editing = ref(false);
 const searchingTargets = ref(false);
 const syncingDirectory = ref(false);
 const searchError = ref('');
+const loadError = ref('');
+const detailLoadWarning = ref('');
 const directoryStatus = ref<OutreachDirectoryStatus[]>([]);
 const detail = ref<OutreachSession | null>(null);
 const operationResult = ref<OperationResultReceipt | null>(null);
@@ -651,21 +739,36 @@ async function loadDetail(
   const id = route.params.id as string;
   if (!id) return;
   loading.value = true;
+  loadError.value = '';
+  detailLoadWarning.value = '';
   if (!options.preserveOperationResult) {
     operationResult.value = null;
   }
   try {
-    const [session, directory] = await Promise.all([
+    const [sessionResult, directoryResult] = await Promise.allSettled([
       client.getOutreachSession(id),
       client.getOutreachDirectoryStatus(),
     ]);
+    if (sessionResult.status !== 'fulfilled') {
+      throw sessionResult.reason;
+    }
+    const session = sessionResult.value;
     detail.value = session;
-    directoryStatus.value = Array.isArray(directory?.items)
-      ? directory.items
-      : [];
+    if (directoryResult.status === 'fulfilled') {
+      directoryStatus.value = Array.isArray(directoryResult.value?.items)
+        ? directoryResult.value.items
+        : [];
+    } else {
+      directoryStatus.value = [];
+      detailLoadWarning.value = formatDetailLoadFailure(
+        '目标目录状态',
+        directoryResult.reason,
+      );
+    }
     resetDraft(detail.value);
   } catch (error) {
     console.error('Failed to load outreach session detail:', error);
+    loadError.value = formatDetailLoadFailure('会话详情', error);
     detail.value = null;
     directoryStatus.value = [];
     resetDraft(null);
@@ -710,7 +813,7 @@ function handleTargetTypeChange() {
 
 async function approveSession() {
   if (!detail.value) return;
-  operationResult.value = null;
+  operationResult.value = buildOperationPendingReceipt('approve', detail.value);
   busy.value = true;
   try {
     const response = await client.approveOutreachSession(detail.value.id);
@@ -729,7 +832,7 @@ async function approveSession() {
 async function cancelSession() {
   if (!detail.value) return;
   if (!window.confirm('确认取消这个主动询问会话吗？')) return;
-  operationResult.value = null;
+  operationResult.value = buildOperationPendingReceipt('cancel', detail.value);
   busy.value = true;
   try {
     const response = await client.cancelOutreachSession(
@@ -750,7 +853,7 @@ async function cancelSession() {
 
 async function retrySession() {
   if (!detail.value) return;
-  operationResult.value = null;
+  operationResult.value = buildOperationPendingReceipt('retry', detail.value);
   busy.value = true;
   try {
     const response = await client.retryOutreachSession(detail.value.id);
@@ -796,7 +899,7 @@ async function saveDraft() {
     return;
   }
 
-  operationResult.value = null;
+  operationResult.value = buildOperationPendingReceipt('save', detail.value);
   busy.value = true;
   try {
     const response = await client.updateOutreachSessionDraft(detail.value.id, {
@@ -862,6 +965,139 @@ function canEdit(status: OutreachSessionStatus) {
 
 function canApprove(session: OutreachSession) {
   return session.targetResolutionStatus === 'resolved';
+}
+
+function detailActionButtonLabel(
+  action: 'approve' | 'edit' | 'retry' | 'cancel',
+  session: OutreachSession,
+) {
+  if (action === 'approve') {
+    return canApprove(session) ? '批准发送' : '目标未确认，暂不能批准';
+  }
+  if (action === 'edit') return '编辑目标与时间';
+  if (action === 'retry') return '重试';
+  return '取消';
+}
+
+function backToListButtonBoundary() {
+  return '返回主动询问列表；如果本页有未保存编辑草稿，会先询问是否丢弃。点击本按钮不会保存草稿、批准、发送、追问、重试、取消或写回 RingCentral。';
+}
+
+function backToListButtonAriaLabel() {
+  return `返回主动询问列表：${backToListButtonBoundary()}`;
+}
+
+function retryDetailLoadButtonBoundary() {
+  return '重新读取当前 Outreach 会话详情和目标目录状态；不会批准、发送、追问、重试、取消、保存草稿或写回 RingCentral。';
+}
+
+function retryDetailLoadButtonAriaLabel() {
+  return `重试详情：${retryDetailLoadButtonBoundary()}`;
+}
+
+function formatDetailLoadFailure(label: string, error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  const message = raw.replace(/^MemoryService\s+\d+:\s*/i, '').trim();
+  return `${label}：${message || 'unknown error'}`;
+}
+
+function detailThreadLinkBoundary(session: OutreachSession) {
+  return `打开关联自我反思线程 ${session.threadId}，用于核对这条主动询问的来源和阻塞原因；这是只读导航，不会推进反思、批准/取消 Outreach、发送消息、追问或写回 RingCentral。`;
+}
+
+function detailThreadLinkAriaLabel(session: OutreachSession) {
+  return `查看线程：${detailThreadLinkBoundary(session)}`;
+}
+
+function detailActionLinkBoundary(session: OutreachSession) {
+  return `打开关联动作 ${session.actionId} 的动作队列视图，只用于核对动作状态和来源；不会执行动作、批准/取消 Outreach、发送消息、追问或写回 RingCentral。`;
+}
+
+function detailActionLinkAriaLabel(session: OutreachSession) {
+  return `查看动作：${detailActionLinkBoundary(session)}`;
+}
+
+function detailTemplateLinkBoundary(session: OutreachSession) {
+  return `回到主动询问列表并按模板 ${session.templateId} 筛选会话；只更新列表 URL 和读取状态，不会创建新会话、批准、发送、追问、取消或写回 RingCentral。`;
+}
+
+function detailTemplateLinkAriaLabel(session: OutreachSession) {
+  return `查看模板会话：${detailTemplateLinkBoundary(session)}`;
+}
+
+function detailSourceMessageLinkBoundary(session: OutreachSession) {
+  return `在新标签页打开这条消息跟进的原消息，用于核对线程上下文；不会发送新追问、标记已回复、更新 Outreach 状态、保存草稿、写用户画像或写回 RingCentral。当前状态：${statusLabel(session.status)}。`;
+}
+
+function detailSourceMessageLinkAriaLabel(session: OutreachSession) {
+  return `打开原消息：${detailSourceMessageLinkBoundary(session)}`;
+}
+
+function directoryRefreshButtonBoundary() {
+  return '刷新 RingCentral 目标目录缓存，并在当前目标文本足够长时重新读取候选；不会保存本页草稿、批准、发送、追问、取消当前会话或写回 RingCentral 消息。';
+}
+
+function directoryRefreshButtonAriaLabel() {
+  const label = syncingDirectory.value ? '刷新目录中' : '刷新目录';
+  return `${label}：${directoryRefreshButtonBoundary()}`;
+}
+
+function targetSearchButtonBoundary() {
+  const query = draft.targetRef.trim();
+  const scope = draft.targetType === 'group' ? '群组' : '联系人或私聊';
+  return `按当前目标文本${query ? `「${truncateReviewText(query)}」` : ''}重新检索 ${scope} 候选；只更新本页候选列表，不会保存草稿、批准、发送、追问或写回 RingCentral。`;
+}
+
+function targetSearchButtonAriaLabel() {
+  return `重新检索：${targetSearchButtonBoundary()}`;
+}
+
+function targetCandidateButtonBoundary(candidate: OutreachTargetCandidate) {
+  return `选择候选「${candidate.label}」只会把本页编辑草稿的目标标成已确认；保存调整前不会写入 Memory Service，也不会批准、发送、追问或写回 RingCentral。`;
+}
+
+function targetCandidateButtonAriaLabel(candidate: OutreachTargetCandidate) {
+  return `选择候选 ${candidate.label}：${targetCandidateButtonBoundary(candidate)}`;
+}
+
+function detailActionButtonTitle(
+  action: 'approve' | 'edit' | 'retry' | 'cancel',
+  session: OutreachSession,
+) {
+  const targetText = receiptTargetLabel(session);
+  if (action === 'approve') {
+    if (!canApprove(session)) {
+      return '目标未确认；先编辑并选择唯一 RingCentral 用户或群组，按钮不会外发消息。';
+    }
+    return `批准后才会把当前问题交给 Outreach 引擎处理，目标：${targetText}；是否已发出仍以 dispatched 事件、sentPostId 和等待回复状态为准。`;
+  }
+  if (action === 'edit') {
+    return '只打开本页发送前草稿；保存前不会更新 Memory Service、审批、发送、追问或写回 RingCentral。';
+  }
+  if (action === 'retry') {
+    const nextStatus = session.requiresApproval ? '待审批' : '已排程';
+    return `重试会请求 Memory Service 将这个终态会话重置为「${nextStatus}」并写入 retried 审计；不会直接发送、确认回复或清除旧错误。`;
+  }
+  return '取消会请求 Memory Service 停止这个会话后续发送、检查和追问；不会撤回已发 RingCentral 消息、删除来源证据或写用户画像。';
+}
+
+function detailActionButtonAriaLabel(
+  action: 'approve' | 'edit' | 'retry' | 'cancel',
+  session: OutreachSession,
+) {
+  return `${detailActionButtonLabel(action, session)}：${detailActionButtonTitle(action, session)}`;
+}
+
+function draftActionButtonTitle(action: 'save' | 'cancel') {
+  if (action === 'save') {
+    return '保存调整只更新目标、问题、完成标准和计划发送时间；不会批准、发送、追问或写回 RingCentral。';
+  }
+  return '取消编辑只丢弃本页未保存草稿，恢复为 Memory Service 上次确认内容；不会提交、审批或外发。';
+}
+
+function draftActionButtonAriaLabel(action: 'save' | 'cancel') {
+  const label = action === 'save' ? '保存调整' : '取消编辑';
+  return `${label}：${draftActionButtonTitle(action)}`;
 }
 
 function relativeTime(ts: number) {
@@ -1006,6 +1242,39 @@ function buildDiscardDraftReceipt(hadChanges: boolean): OperationResultReceipt {
         ? '已恢复为 Memory Service 上次确认的会话内容。'
         : '本页没有检测到未保存字段。',
       '没有保存目标、问题、完成标准或计划时间，也没有批准、发送、追问或写回 RingCentral。',
+    ],
+  };
+}
+
+function buildOperationPendingReceipt(
+  action: 'approve' | 'cancel' | 'retry' | 'save',
+  session: OutreachSession,
+): OperationResultReceipt {
+  const targetText = receiptTargetLabel(session);
+  const actionText =
+    action === 'approve'
+      ? '批准发送'
+      : action === 'cancel'
+        ? '取消主动询问'
+        : action === 'retry'
+          ? '重试主动询问'
+          : '保存发送前调整';
+  const nextTruth =
+    action === 'approve'
+      ? '审批、排程、dispatched 事件、sentPostId 和等待回复状态'
+      : action === 'cancel'
+        ? '取消状态、后续检查停止和事件时间线'
+        : action === 'retry'
+          ? '重置后的状态、retried 审计事件和下一轮排程'
+          : 'Memory Service 返回的目标、问题、完成标准和计划时间';
+
+  return {
+    title: `操作提交中回执：${actionText}请求已提交`,
+    tone: 'queued',
+    items: [
+      `本页已向 Memory Service 提交请求；当前仍显示上次成功读取的状态 ${statusLabel(session.status)}，目标：${targetText}。`,
+      `按钮已临时锁定，避免重复提交；${nextTruth}要等 Memory Service 返回后才能确认。`,
+      '提交中回执不代表 RingCentral 已发送、对方已回复、用户画像已写入、外部平台已同步或来源证据已删除。',
     ],
   };
 }
@@ -1785,6 +2054,40 @@ function followUpActionStatusLabel(action: RuntimeAction) {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.detail-load-error,
+.detail-load-warning {
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 0.95rem;
+  padding: 1rem;
+  background: rgba(69, 10, 10, 0.28);
+  color: #fecaca;
+}
+
+.detail-load-warning {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(69, 26, 3, 0.28);
+  color: #fed7aa;
+}
+
+.detail-load-title {
+  font-weight: 700;
+  color: #f8fafc;
+  margin-bottom: 0.45rem;
+}
+
+.detail-load-error p,
+.detail-load-warning p {
+  margin: 0.45rem 0 0;
+  line-height: 1.6;
+}
+
+.detail-load-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
 }
 
 .hero-card,

@@ -130,6 +130,31 @@ function verifyVideoHomeUsesTodayPilot() {
   );
   assertContains(
     videoHomeSource,
+    /buildMeetingPrepRefreshButtonBoundary/,
+    'Video Home refresh button pre-click boundary helper',
+  );
+  assertContains(
+    videoHomeSource,
+    /aria-label="\$\{escapeHtmlAttribute\(\s*refreshButtonBoundary/,
+    'Video Home refresh button aria boundary',
+  );
+  assertContains(
+    videoHomeSource,
+    /this\.state\.loading \? 'disabled' : ''/,
+    'Video Home refresh button disables duplicate refresh while loading',
+  );
+  assertContains(
+    videoHomeSource,
+    /请求 Today Pilot 为当天会议补齐预生成准备/,
+    'Video Home refresh button backfill scope',
+  );
+  assertContains(
+    videoHomeSource,
+    /不会加入会议、开启录音、发送消息、创建任务、审批或写回日历\/外部系统/,
+    'Video Home refresh button no external side effect boundary',
+  );
+  assertContains(
+    videoHomeSource,
     /buildPendingRefreshReceipt/,
     'Video Home pending refresh receipt builder',
   );
@@ -162,6 +187,36 @@ function verifyVideoHomeUsesTodayPilot() {
     videoHomeSource,
     /autoGenerate: false/,
     'Video Home reads pre-generated prep without on-page generation',
+  );
+  assertContains(
+    videoHomeSource,
+    /buildMeetingPrepEvidenceLinkBoundary/,
+    'Video Home evidence source link boundary helper',
+  );
+  assertContains(
+    videoHomeSource,
+    /title="\$\{escapeHtmlAttribute\(\s*link\.boundary/,
+    'Video Home evidence link title boundary',
+  );
+  assertContains(
+    videoHomeSource,
+    /aria-label="\$\{escapeHtmlAttribute\(\s*link\.boundary/,
+    'Video Home evidence link aria boundary',
+  );
+  assertContains(
+    videoHomeSource,
+    /只打开 Memory Exploring 只读复核页/,
+    'Video Home memory evidence read-only navigation boundary',
+  );
+  assertContains(
+    videoHomeSource,
+    /只在新标签导航/,
+    'Video Home external evidence link navigation boundary',
+  );
+  assertContains(
+    videoHomeSource,
+    /不会另行生成会前准备/,
+    'Video Home evidence link no generation boundary',
   );
   assertNotContains(
     videoHomeSource,

@@ -104,8 +104,25 @@ export interface NotificationFeedResult {
     limit: number;
     returned: number;
     hasMore: boolean;
+    limitReceipt: NotificationFeedLimitReceipt;
+    snapshotReceipt: NotificationFeedSnapshotReceipt;
     emptyReceipt?: NotificationFeedEmptyReceipt;
   };
+}
+
+export interface NotificationFeedLimitReceipt {
+  label: string;
+  requestedLimit?: number;
+  appliedLimit: number;
+  detail: string;
+  boundary: string;
+}
+
+export interface NotificationFeedSnapshotReceipt {
+  label: string;
+  generatedAt: number;
+  detail: string;
+  boundary: string;
 }
 
 export interface NotificationFeedEmptyReceipt {
@@ -608,6 +625,14 @@ function buildFeedHasMoreDigestReceipt(
   )}；未展示条目仍留在 Notification Center feed，不会写入本次渠道送达回执。`;
 }
 
+function buildFeedSnapshotDigestReceipt(
+  feedResult: NotificationFeedResult,
+): string | undefined {
+  if (feedResult.meta.returned === 0) return undefined;
+  const receipt = feedResult.meta.snapshotReceipt;
+  return `> ${receipt.label}：${receipt.detail}；${receipt.boundary}`;
+}
+
 function buildFeedEmptyReceipt(input: {
   channel: DeliveryChannel;
   lanes: DeliveryLane[];
@@ -622,6 +647,71 @@ function buildFeedEmptyReceipt(input: {
     )}范围的可投递条目。`,
     boundary:
       '这是成功但为空的快照；不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+  };
+}
+
+function normalizeFeedLimit(raw: number | undefined): {
+  requestedLimit?: number;
+  appliedLimit: number;
+} {
+  if (raw === undefined || !Number.isFinite(raw)) {
+    return { appliedLimit: 20 };
+  }
+  const requestedLimit = Math.floor(raw);
+  return {
+    requestedLimit,
+    appliedLimit: Math.max(1, Math.min(requestedLimit, 100)),
+  };
+}
+
+function buildFeedLimitReceipt(input: {
+  requestedLimit?: number;
+  appliedLimit: number;
+}): NotificationFeedLimitReceipt {
+  let detail: string;
+  if (input.requestedLimit === undefined) {
+    detail = `未传 limit；本次使用默认 limit=${input.appliedLimit}。`;
+  } else if (input.requestedLimit < 1) {
+    detail = `请求 limit=${input.requestedLimit}；已按服务端下限应用 limit=${input.appliedLimit}。`;
+  } else if (input.requestedLimit > 100) {
+    detail = `请求 limit=${input.requestedLimit}；已按服务端上限应用 limit=${input.appliedLimit}。`;
+  } else if (input.requestedLimit !== input.appliedLimit) {
+    detail = `请求 limit=${input.requestedLimit}；已取整应用 limit=${input.appliedLimit}。`;
+  } else {
+    detail = `请求 limit=${input.requestedLimit}；本次按该值应用。`;
+  }
+  return {
+    label: 'Feed limit 应用回执',
+    requestedLimit: input.requestedLimit,
+    appliedLimit: input.appliedLimit,
+    detail,
+    boundary:
+      '只说明本次读取最多返回多少条；不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
+  };
+}
+
+function buildFeedSnapshotReceipt(input: {
+  channel: DeliveryChannel;
+  lanes: DeliveryLane[];
+  deliveryMode: NotificationFeedDeliveryMode;
+  limit: number;
+  returned: number;
+  hasMore: boolean;
+  generatedAt: number;
+}): NotificationFeedSnapshotReceipt {
+  const moreDetail = input.hasMore
+    ? '还有更多未返回条目'
+    : '当前页未发现更多条目';
+  return {
+    label: 'Feed 快照口径回执',
+    generatedAt: input.generatedAt,
+    detail: `${formatChannelLabel(input.channel)} ${formatFeedLimitModeLabel(
+      input.deliveryMode,
+    )}在 ${formatDateTime(input.generatedAt)} 读取；本次按${formatFeedLimitLaneLabel(
+      input.lanes,
+    )}范围和 limit=${input.limit} 返回 ${input.returned} 条，${moreDetail}。`,
+    boundary:
+      '这是本次读取时的只读队列快照；不代表之后没有新通知，不会确认、忽略、重发通知，不会写渠道送达回执，也不会改变全局处理状态。',
   };
 }
 
@@ -789,13 +879,24 @@ export class NotificationCenterService {
       (lane): lane is DeliveryLane => lane === 'todo' || lane === 'notice',
     );
 
-    const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
+    const limitBasis = normalizeFeedLimit(input.limit);
+    const limit = limitBasis.appliedLimit;
+    const limitReceipt = buildFeedLimitReceipt(limitBasis);
     const deliveryMode = input.deliveryMode ?? 'retry_after_cooldown';
     if (lanes.length === 0) {
       const emptyReceipt = buildFeedEmptyReceipt({
         channel: input.channel,
         lanes,
         deliveryMode,
+      });
+      const snapshotReceipt = buildFeedSnapshotReceipt({
+        channel: input.channel,
+        lanes,
+        deliveryMode,
+        limit,
+        returned: 0,
+        hasMore: false,
+        generatedAt: now(),
       });
       return {
         items: [],
@@ -806,6 +907,8 @@ export class NotificationCenterService {
           limit,
           returned: 0,
           hasMore: false,
+          limitReceipt,
+          snapshotReceipt,
           emptyReceipt,
         },
       };
@@ -1053,6 +1156,15 @@ export class NotificationCenterService {
             deliveryMode,
           })
         : undefined;
+    const snapshotReceipt = buildFeedSnapshotReceipt({
+      channel: input.channel,
+      lanes,
+      deliveryMode,
+      limit,
+      returned: items.length,
+      hasMore,
+      generatedAt: currentTime,
+    });
     return {
       items,
       meta: {
@@ -1062,6 +1174,8 @@ export class NotificationCenterService {
         limit,
         returned: items.length,
         hasMore,
+        limitReceipt,
+        snapshotReceipt,
         emptyReceipt,
       },
     };
@@ -1265,7 +1379,10 @@ export class NotificationCenterService {
       itemBlocks,
       emptyLine: buildFeedEmptyDigestLine(feedResult, '暂无待处理事项'),
       tokenBudget,
-      footerLines: [buildFeedHasMoreDigestReceipt(feedResult)].filter(
+      footerLines: [
+        buildFeedSnapshotDigestReceipt(feedResult),
+        buildFeedHasMoreDigestReceipt(feedResult),
+      ].filter(
         (line): line is string => Boolean(line),
       ),
     });
@@ -1320,7 +1437,10 @@ export class NotificationCenterService {
       itemBlocks,
       emptyLine: buildFeedEmptyDigestLine(feedResult, '暂无新通知'),
       tokenBudget,
-      footerLines: [buildFeedHasMoreDigestReceipt(feedResult)].filter(
+      footerLines: [
+        buildFeedSnapshotDigestReceipt(feedResult),
+        buildFeedHasMoreDigestReceipt(feedResult),
+      ].filter(
         (line): line is string => Boolean(line),
       ),
     });

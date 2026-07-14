@@ -7,7 +7,13 @@
 
 import { SheetConfig } from './types';
 import { LOGS_SCHEMA, MESSAGES_SCHEMA } from './SheetInitializer';
-import { normalizeSheetConfig } from './botAutomationConfig';
+import {
+  getAgentTaskWebhookConfig,
+  normalizeSheetConfig,
+  withAgentTaskWebhook,
+} from './botAutomationConfig';
+import { resolveAgentTaskWebhookConfig } from './agentTaskWebhookConfig';
+import { getEnvConfig, getUserInfo } from '../utils';
 
 const OBSOLETE_OUTREACH_COLUMNS = [
   'Outreach_Target_Type',
@@ -36,6 +42,7 @@ export interface SchemaUpdateResult {
   updated: boolean;
   addedColumns: string[];
   error?: string;
+  updatedConfig?: SheetConfig;
 }
 
 export class SheetSchemaUpdater {
@@ -56,6 +63,7 @@ export class SheetSchemaUpdater {
       
       // 0. 主动验证并刷新 messagesSheetId（修复老用户的配置）
       await this.refreshSheetIds();
+      const agentTaskWebhookConfigUpdated = await this.ensureAgentTaskWebhookConfig();
       
       // 1. 获取当前 Messages 表的表头
       const currentHeaders = await this.getMessagesHeaders();
@@ -88,8 +96,9 @@ export class SheetSchemaUpdater {
         console.log('✅ Sheet 表结构已是最新');
         return {
           success: true,
-          updated: false,
-          addedColumns: []
+          updated: agentTaskWebhookConfigUpdated,
+          addedColumns: [],
+          updatedConfig: this.config,
         };
       }
       
@@ -114,8 +123,9 @@ export class SheetSchemaUpdater {
       
       return {
         success: true,
-        updated: missingColumns.length > 0 || obsoleteColumns.length > 0 || missingLogColumns.length > 0,
-        addedColumns: missingColumns.concat(missingLogColumns.map((column) => `Logs.${column}`))
+        updated: true,
+        addedColumns: missingColumns.concat(missingLogColumns.map((column) => `Logs.${column}`)),
+        updatedConfig: this.config,
       };
       
     } catch (error) {
@@ -126,6 +136,49 @@ export class SheetSchemaUpdater {
         addedColumns: [],
         error: error instanceof Error ? error.message : String(error)
       };
+    }
+  }
+
+  /**
+   * 旧表升级时补齐 AgentTask 执行入口 Config。
+   *
+   * 这不是 Messages/Logs schema 的列升级，但 Jira Rule 领取 AgentTask 时
+   * 需要 Config!agent_task_webhook_url 才能把任务交给 memory-service。
+   */
+  private async ensureAgentTaskWebhookConfig(): Promise<boolean> {
+    try {
+      const existingWebhook = getAgentTaskWebhookConfig(this.config);
+      const envConfig = await getEnvConfig();
+      const userInfo = await getUserInfo().catch(() => null);
+      const resolvedWebhook = resolveAgentTaskWebhookConfig({
+        existingWebhook,
+        memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
+        memoryServiceApiKey: envConfig.MEMORY_SERVICE_API_KEY,
+        userIdCandidates: [userInfo?.username, userInfo?.email],
+        requireUserId: false,
+      });
+
+      if (!resolvedWebhook.webhook) {
+        console.warn('跳过 AgentTask webhook Config 补齐:', resolvedWebhook.missingReason);
+        return false;
+      }
+
+      if (!resolvedWebhook.changed) {
+        return false;
+      }
+
+      const { ConfigSyncService } = await import('./ConfigSyncService');
+      const syncService = new ConfigSyncService(this.token);
+      const syncedConfig = await syncService.syncConfig(
+        withAgentTaskWebhook(this.config, resolvedWebhook.webhook),
+        { syncAction: 'agent_task_webhook_auto_config' },
+      );
+      this.config = normalizeSheetConfig(syncedConfig);
+      console.log('✅ AgentTask webhook Config 已补齐');
+      return true;
+    } catch (error) {
+      console.warn('AgentTask webhook Config 补齐失败，继续执行表结构升级:', error);
+      return false;
     }
   }
 
@@ -484,7 +537,7 @@ export class SheetSchemaUpdater {
     // 使用 ConfigSyncService 同步配置
     const { ConfigSyncService } = await import('./ConfigSyncService');
     const syncService = new ConfigSyncService(this.token);
-    await syncService.syncConfig(updatedConfig, { syncAction: 'sheet_schema_update' });
+    this.config = await syncService.syncConfig(updatedConfig, { syncAction: 'sheet_schema_update' });
   }
   
   /**
@@ -516,16 +569,18 @@ export class SheetSchemaUpdater {
         return { success: true, updated: false, addedColumns: [] };
       }
       
-      // 检查是否需要更新
-      if (config.sheet_version === MESSAGES_SCHEMA.version) {
-        console.log(`Sheet Schema 版本已是最新: ${MESSAGES_SCHEMA.version}`);
-        return { success: true, updated: false, addedColumns: [] };
-      }
-      
-      console.log(`Sheet Schema 需要更新: ${config.sheet_version || 'unknown'} -> ${MESSAGES_SCHEMA.version}`);
-      
       // 获取 token
       const token = await getAuthToken();
+      if (!token) {
+        console.log('未取得 Google 授权，跳过 Sheet Schema / AgentTask Config 自动检查');
+        return { success: true, updated: false, addedColumns: [] };
+      }
+
+      if (config.sheet_version === MESSAGES_SCHEMA.version) {
+        console.log(`Sheet Schema 版本已是最新: ${MESSAGES_SCHEMA.version}，继续检查 AgentTask Config`);
+      } else {
+        console.log(`Sheet Schema 需要更新: ${config.sheet_version || 'unknown'} -> ${MESSAGES_SCHEMA.version}`);
+      }
       
       // 执行更新
       const updater = new SheetSchemaUpdater(token, config);
@@ -536,8 +591,12 @@ export class SheetSchemaUpdater {
         chrome.notifications?.create({
           type: 'basic',
           iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: 'Sheet 表结构已更新',
-          message: `已添加新列: ${updateResult.addedColumns.join(', ')}`
+          title: updateResult.addedColumns.length > 0
+            ? 'Sheet 表结构已更新'
+            : 'Sheet Config 已更新',
+          message: updateResult.addedColumns.length > 0
+            ? `已添加新列: ${updateResult.addedColumns.join(', ')}`
+            : '已补齐 AgentTask 执行入口'
         });
       }
       

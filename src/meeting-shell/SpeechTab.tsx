@@ -137,11 +137,55 @@ interface LocalASRProbeIssue {
   tone: ASRChainReceiptRow['tone'];
 }
 
+interface LocalASRStreamWarningDetail {
+  statusLabel: string;
+  currentLayerLabel: string;
+  receiptLine: string;
+  nextStep: string;
+  tone: ASRChainReceiptRow['tone'];
+}
+
 function humanizeLocalASRReason(value: string | undefined): string {
   return String(value || '')
     .replace(/_/g, ' ')
     .replace(/\+/g, ' / ')
     .trim();
+}
+
+function getLocalASRStreamWarningDetail(
+  reason: string | undefined,
+): LocalASRStreamWarningDetail | null {
+  const value = String(reason || '').trim();
+  const warningMatch = /^Local ASR stream warning \((\d+)\/(\d+)\):\s*(.+)$/i.exec(
+    value,
+  );
+  if (!warningMatch) return null;
+
+  const attempt = Math.max(0, Number(warningMatch[1]) || 0);
+  const maxAttempts = Math.max(0, Number(warningMatch[2]) || 0);
+  const remainingAttempts = Math.max(0, maxAttempts - attempt);
+  const reasonText = truncateUiText(warningMatch[3], 90);
+  const retryBoundary = remainingAttempts
+    ? `距离 fatal fallback 还剩 ${remainingAttempts} 次失败`
+    : '已达到 fatal fallback 门槛';
+  const fallbackBoundary = remainingAttempts
+    ? '继续失败才会按当前模式切到下一层'
+    : '下一层会按当前模式接管';
+  const receiptLine =
+    `chunk stream 重试 ${attempt}/${maxAttempts}；${retryBoundary}。` +
+    `live partial preview 可能暂停，已收到的 final / 历史 transcript 会保留；` +
+    `当前音频仍只发给本机 Desktop App，${fallbackBoundary}。原因：${reasonText}`;
+
+  return {
+    statusLabel: `本地 ASR 流暂不稳定（${attempt}/${maxAttempts}）`,
+    currentLayerLabel: `本地 ASR · 流暂不稳定（${attempt}/${maxAttempts}）`,
+    receiptLine,
+    nextStep:
+      `本地 chunk stream 正在重试；${retryBoundary}。` +
+      `实时 partial preview 可能短暂停住，已收到的 final / 历史 transcript 会保留；` +
+      `当前音频仍只发给本机 Desktop App，${fallbackBoundary}。原因：${reasonText}`,
+    tone: 'warning',
+  };
 }
 
 function getLocalASRProbeIssue(
@@ -320,18 +364,13 @@ function getLocalASRReceiptDetail(
     };
   }
 
-  const warningMatch = /^Local ASR stream warning \((\d+)\/(\d+)\):\s*(.+)$/i.exec(
-    value,
-  );
-  if (warningMatch) {
+  const streamWarning = getLocalASRStreamWarningDetail(value);
+  if (streamWarning) {
     return {
-      statusLabel: `本地 ASR 流暂不稳定（${warningMatch[1]}/${warningMatch[2]}）`,
-      currentLayerLabel: `本地 ASR · 流暂不稳定（${warningMatch[1]}/${warningMatch[2]}）`,
-      nextStep: `本地 chunk stream 正在重试，实时 partial preview 可能短暂停住；已收到的 final / 历史 transcript 会保留，当前音频仍只发给本机 Desktop App，继续失败才会按当前模式切到下一层。原因：${truncateUiText(
-        warningMatch[3],
-        90,
-      )}`,
-      tone: 'warning',
+      statusLabel: streamWarning.statusLabel,
+      currentLayerLabel: streamWarning.currentLayerLabel,
+      nextStep: streamWarning.nextStep,
+      tone: streamWarning.tone,
     };
   }
 
@@ -692,6 +731,46 @@ function getLocalASRIssueRow(
   };
 }
 
+function getLocalASRStreamWarningRow(
+  session: MeetingPilotSessionSnapshot,
+): ASRChainReceiptRow | null {
+  const activeTier = session.tier?.activeTier || null;
+  const badge = session.tier?.badge;
+  if (
+    activeTier !== 'desktop_whisper' &&
+    badge !== 'Local ASR' &&
+    badge !== 'Local Whisper'
+  ) {
+    return null;
+  }
+  const warning = getLocalASRStreamWarningDetail(
+    session.tier?.lastStatusDetail || session.tier?.lastTransitionReason,
+  );
+  if (!warning) return null;
+  return {
+    label: '本地流状态',
+    value: warning.receiptLine,
+    tone: warning.tone,
+  };
+}
+
+function getRingCentralTranscriptBoundaryRow(
+  session: MeetingPilotSessionSnapshot,
+): ASRChainReceiptRow | null {
+  const activeTier = session.tier?.activeTier || null;
+  const badge = session.tier?.badge;
+  if (activeTier !== 'ringcentral_transcript' && badge !== 'RC Transcript') {
+    return null;
+  }
+  return {
+    label: '平台转写',
+    value:
+      '只读取当前会议页已经显示的 RingCentral caption/transcript；Local / Cloud ASR 已跳过。' +
+      '已读文本会进入本场实时摘要、行动项、时间线和归档草稿，但不会请求 RingCentral 保存/下载完整 transcript、发送通知、开启录制或额外上传音频。',
+    tone: 'info',
+  };
+}
+
 function getASRNextStep(session: MeetingPilotSessionSnapshot): string {
   const badge = session.tier?.badge;
   const mode = session.tier?.mode || 'auto';
@@ -997,6 +1076,9 @@ function buildASRChainReceipt(
   const realtimeStateRow = getASRRealtimeStateRow(session, status, now);
   const probeTrailRow = getASRProbeTrailRow(session);
   const localASRIssueRow = getLocalASRIssueRow(session);
+  const localASRStreamWarningRow = getLocalASRStreamWarningRow(session);
+  const ringCentralTranscriptBoundaryRow =
+    getRingCentralTranscriptBoundaryRow(session);
 
   const rows: ASRChainReceiptRow[] = [
     {
@@ -1019,6 +1101,7 @@ function buildASRChainReceipt(
             ? 'success'
             : 'info',
     },
+    ...(localASRStreamWarningRow ? [localASRStreamWarningRow] : []),
     ...(probeTrailRow ? [probeTrailRow] : []),
     ...(localASRIssueRow ? [localASRIssueRow] : []),
     {
@@ -1026,6 +1109,9 @@ function buildASRChainReceipt(
       value: uploadBoundary.value,
       tone: uploadBoundary.tone,
     },
+    ...(ringCentralTranscriptBoundaryRow
+      ? [ringCentralTranscriptBoundaryRow]
+      : []),
     realtimeStateRow,
     {
       label: latestSource ? '最近结果' : '转写结果',
@@ -1068,6 +1154,40 @@ function buildASRChainReceipt(
   }
 
   return rows;
+}
+
+function getASRReceiptRowValue(
+  rows: ASRChainReceiptRow[],
+  label: string,
+): string | undefined {
+  return rows.find((row) => row.label === label)?.value;
+}
+
+function buildASRReceiptBoundaryLabel(
+  rows: ASRChainReceiptRow[],
+): string {
+  const currentLayer = getASRReceiptRowValue(rows, '当前层');
+  const uploadBoundary = getASRReceiptRowValue(rows, '上传边界');
+  const latestResult =
+    getASRReceiptRowValue(rows, '最近结果') ||
+    getASRReceiptRowValue(rows, '转写结果');
+  const freshness = getASRReceiptRowValue(rows, '新鲜度');
+  const nextStep =
+    getASRReceiptRowValue(rows, '恢复动作') ||
+    getASRReceiptRowValue(rows, '切层说明');
+  const summaryParts = [
+    currentLayer ? `当前层：${truncateUiText(currentLayer, 90)}` : undefined,
+    uploadBoundary
+      ? `上传边界：${truncateUiText(uploadBoundary, 120)}`
+      : undefined,
+    latestResult ? `结果：${truncateUiText(latestResult, 90)}` : undefined,
+    freshness ? `新鲜度：${truncateUiText(freshness, 120)}` : undefined,
+    nextStep ? `下一步：${truncateUiText(nextStep, 120)}` : undefined,
+  ].filter(Boolean);
+  return (
+    `ASR 链路回执：${summaryParts.join('；')}。` +
+    '这只是当前会议 session 的转写状态快照；查看它不会开始/停止 Capture、不会切换 ASR 模式、不会额外上传音频、不会请求 RingCentral 保存/下载完整 transcript、不会发送会议纪要或创建外部任务。'
+  );
 }
 
 function truncateUiText(value: string, maxLength: number): string {
@@ -1484,6 +1604,8 @@ export function SpeechTab(props: SpeechTabProps) {
 
   const status = asrStatus(session);
   const asrReceiptRows = buildASRChainReceipt(session, status, now);
+  const asrReceiptBoundaryLabel =
+    buildASRReceiptBoundaryLabel(asrReceiptRows);
   const statusSummaryLine = getASRStatusSummaryLine(session, status, now);
 
   const sendRename = async (participantId: string, newName: string) => {
@@ -1535,7 +1657,12 @@ export function SpeechTab(props: SpeechTabProps) {
         {status.lastError ? (
           <div className="speech-error">最近错误: {status.lastError}</div>
         ) : null}
-        <div className="speech-asr-receipt" aria-label="ASR 链路回执">
+        <div
+          className="speech-asr-receipt"
+          role="group"
+          title={asrReceiptBoundaryLabel}
+          aria-label={asrReceiptBoundaryLabel}
+        >
           <div className="speech-asr-receipt-title">ASR 链路回执</div>
           {asrReceiptRows.map((row) => (
             <div

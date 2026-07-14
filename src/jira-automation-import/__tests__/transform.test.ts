@@ -5,6 +5,7 @@ import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH,
   JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER,
+  buildJiraAutomationImportSecretReentryQueueGroups,
   buildJiraAutomationImportCredentialRestoreGateSummary,
   buildJiraAutomationImportEnablementPlan,
   buildJiraAutomationImportedRuleName,
@@ -18,6 +19,7 @@ import {
   buildJiraAutomationUniqueImportedRuleName,
   collectJiraAutomationImportSecretReentrySlots,
   collectJiraAutomationImportReviewSignals,
+  formatJiraAutomationImportSecretReentryQueue,
   formatJiraAutomationImportSecretReentrySummary,
   formatJiraAutomationImportSourceFormat,
   isJiraAutomationImportFileSizeAllowed,
@@ -544,6 +546,8 @@ test('collectJiraAutomationImportReviewSignals gives hidden secrets safe re-entr
   const warnings = buildJiraAutomationImportWarnings(rule);
   const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(rule);
   const secretReentrySummary = formatJiraAutomationImportSecretReentrySummary(secretReentrySlots);
+  const credentialQueue = formatJiraAutomationImportSecretReentryQueue(secretReentrySlots);
+  const credentialQueueGroups = buildJiraAutomationImportSecretReentryQueueGroups(secretReentrySlots);
   const packet = buildJiraAutomationImportReviewPacket(rule, {
     projectId: '22222',
     projectKey: 'TGT',
@@ -560,10 +564,15 @@ test('collectJiraAutomationImportReviewSignals gives hidden secrets safe re-entr
   assert.ok(warnings.some((warning) => warning.includes('Secret re-entry map')));
   assert.ok(secretReentrySummary.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
   assert.ok(secretReentrySummary.includes('components[0].value.secretSlot (secretSlot: hidden secret value)'));
+  assert.deepEqual(credentialQueueGroups.map((group) => group.id), ['hidden-jira-secrets']);
+  assert.ok(credentialQueue.includes('Credential re-entry queue: 1 group(s) from 2 redacted slot(s).'));
+  assert.ok(credentialQueue.includes('Hidden Jira secrets (2): components[0].value.headers[0].value'));
+  assert.ok(credentialQueue.includes('Re-enter or recreate the masked Jira secret fields in the imported rule.'));
   assert.ok(buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots).includes('Credential restore gate: open before enablement'));
   assert.ok(buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots).includes('PERSONAL_AI_REENTER_SECRET or REDACTED placeholders'));
   assert.ok(packet.includes('Authorization: hidden secret value'));
   assert.ok(packet.includes('Credential restore gate: open before enablement'));
+  assert.ok(packet.includes('Credential re-entry queue: 1 group(s) from 2 redacted slot(s).'));
   assert.ok(packet.includes('## Secret re-entry map'));
   assert.ok(packet.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
   assert.ok(packet.includes('components[0].value.secretSlot (secretSlot: hidden secret value)'));
@@ -712,6 +721,81 @@ test('free-text import fields redact inline secrets across display, notes, label
   assert.doesNotMatch(payloadText, /desc-client-secret-456|desc-bearer-secret-789|descSecretPath1234567890ABCD|desc-api-token-123/);
 });
 
+test('provider API keys and JWT-style credentials are redacted across preview artifacts and payload', () => {
+  const googleApiKey = 'AIzaSyDexampleProviderKey1234567890ABCD';
+  const jwtValue = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6OTk5OTk5OTk5OX0.c2lnbmF0dXJlLXZhbHVlMTIz456';
+  const clientAssertion = 'client.assertion.secret.abcdefghijklmnopqrstuvwxyz1234567890';
+  const openAiKey = 'sk-proj-exampleProviderSecret1234567890abcdef';
+  const anthropicKey = 'sk-ant-api03-exampleProviderSecret1234567890abcdef';
+  const rule = {
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    components: [
+      {
+        id: 'source-component-1',
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: `https://api.example.com/run?key=${googleApiKey}&id_token=${jwtValue}&project=SRC`,
+          clientAssertion,
+          customBody: JSON.stringify({
+            openaiApiKey: openAiKey,
+            anthropicKey,
+            jwt: jwtValue,
+            project: 'SRC',
+          }),
+          headers: [
+            {
+              name: 'X-API-Key',
+              value: googleApiKey,
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(rule);
+  const secretReentrySummary = formatJiraAutomationImportSecretReentrySummary(secretReentrySlots);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+    now: 1777600000950,
+  });
+  const payloadText = JSON.stringify(importRule);
+
+  assert.deepEqual(reviewSignals.hardcodedUrls, [
+    'https://api.example.com/run?key=REDACTED&id_token=REDACTED&project=SRC',
+  ]);
+  assert.ok(reviewSignals.sensitiveReferences.includes('URL query key: sensitive value present'));
+  assert.ok(reviewSignals.sensitiveReferences.includes('URL query id_token: sensitive value present'));
+  assert.ok(secretReentrySummary.includes('components[0].value.url (url)'));
+  assert.ok(secretReentrySummary.includes('components[0].value.clientAssertion (clientAssertion)'));
+  assert.ok(secretReentrySummary.includes('components[0].value.customBody (customBody)'));
+  assert.ok(secretReentrySummary.includes('components[0].value.headers[0].value (X-API-Key)'));
+  assert.equal(
+    importRule.components[0].value.url,
+    'https://api.example.com/run?key=REDACTED&id_token=REDACTED&project=SRC',
+  );
+  assert.equal(importRule.components[0].value.clientAssertion, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER);
+  assert.equal(importRule.components[0].value.headers[0].value, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER);
+  assert.match(importRule.components[0].value.customBody, new RegExp(`"openaiApiKey":"${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}"`));
+  assert.match(importRule.components[0].value.customBody, new RegExp(`"anthropicKey":"${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}"`));
+  assert.match(importRule.components[0].value.customBody, new RegExp(`"jwt":"${JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER}"`));
+  assert.doesNotMatch(note, new RegExp(`${googleApiKey}|${jwtValue}|${clientAssertion}|${openAiKey}|${anthropicKey}`));
+  assert.doesNotMatch(packet, new RegExp(`${googleApiKey}|${jwtValue}|${clientAssertion}|${openAiKey}|${anthropicKey}`));
+  assert.doesNotMatch(payloadText, new RegExp(`${googleApiKey}|${jwtValue}|${clientAssertion}|${openAiKey}|${anthropicKey}`));
+});
+
 test('buildJiraAutomationImportReviewPacket creates a sanitized enablement handoff', () => {
   const packet = buildJiraAutomationImportReviewPacket(
     {
@@ -768,6 +852,10 @@ test('buildJiraAutomationImportReviewPacket creates a sanitized enablement hando
   assert.ok(packet.includes('[HIGH] Secrets (2): release-webhook-token | Authorization: hidden secret value'));
   assert.ok(packet.includes('/SRC/release/REDACTED?apiToken=REDACTED'));
   assert.ok(packet.includes('## Secret re-entry map'));
+  assert.ok(packet.includes('- Credential re-entry queue: 3 group(s) from 3 redacted slot(s).'));
+  assert.ok(packet.includes('Hidden Jira secrets (1): components[0].value.headers[0].value'));
+  assert.ok(packet.includes('URL and signed-query credentials (1): components[0].value.url (url)'));
+  assert.ok(packet.includes('Inline secret-like text (1): components[0].value.usedSecretsKeys[0] (usedSecretsKeys)'));
   assert.ok(packet.includes('components[0].value.url (url): URL credential, sensitive query, fragment, or token-like path was redacted'));
   assert.ok(packet.includes('components[0].value.headers[0].value (Authorization: hidden secret value)'));
   assert.ok(packet.includes('## Activation plan'));

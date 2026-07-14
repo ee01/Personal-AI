@@ -11,6 +11,8 @@ interface NotificationRow {
   title: string;
   body: string | null;
   payload_json: string | null;
+  evidence_refs_json: string | null;
+  weave_json: string | null;
   topic_id: string | null;
   related_entity_id: string | null;
   utility_score: number | null;
@@ -204,8 +206,8 @@ export class NotificationRepository {
     this.db
       .prepare(
         `INSERT INTO notification_records
-          (id, channel, type, title, body, payload_json, topic_id, related_entity_id, utility_score, sent_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, channel, type, title, body, payload_json, evidence_refs_json, weave_json, topic_id, related_entity_id, utility_score, sent_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         newId,
@@ -214,6 +216,8 @@ export class NotificationRepository {
         existing.title,
         existing.body,
         snoozedPayload,
+        existing.evidence_refs_json,
+        existing.weave_json,
         existing.topic_id,
         existing.related_entity_id,
         existing.utility_score,

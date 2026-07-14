@@ -201,7 +201,7 @@ async function installChromeMock(page) {
           sourceLabel: 'glip',
           sourceUrl: 'https://internal.example.com/context-assist/rooms',
           sourceTitle: 'Rooms dependency thread',
-          exploreLink: '?chunkId=memory-1',
+          exploreLink: '#/timeline?focus=memory-1',
           links: [
             {
               label: '打开来源',
@@ -336,6 +336,18 @@ async function shadowText(page, selector) {
   }, selector);
 }
 
+async function shadowAttribute(page, selector, attribute) {
+  return page.evaluate(
+    ({ innerSelector, attr }) => {
+      const host = document.querySelector('#pai-meeting-prep-host');
+      return (
+        host?.shadowRoot?.querySelector(innerSelector)?.getAttribute(attr) || ''
+      );
+    },
+    { innerSelector: selector, attr: attribute },
+  );
+}
+
 async function waitForShadowSelector(page, selector) {
   await page.waitForFunction((innerSelector) => {
     const host = document.querySelector('#pai-meeting-prep-host');
@@ -419,6 +431,44 @@ async function main() {
     assert(
       preparedText.includes('建议带进会议的问题'),
       'Question cue should be visible in meeting prep output',
+    );
+    const refreshBoundary = await shadowAttribute(
+      page,
+      'button[data-action="sync"]',
+      'aria-label',
+    );
+    assert(
+      refreshBoundary.includes('请求 Today Pilot 为当天会议补齐预生成准备') &&
+        refreshBoundary.includes('更新本机 Meeting Pilot handoff') &&
+        refreshBoundary.includes('不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统'),
+      'Refresh button should expose the backfill/cache/handoff boundary before click',
+    );
+    assert(
+      (await shadowAttribute(page, 'button[data-action="sync"]', 'title')) ===
+        refreshBoundary,
+      'Refresh button title and aria boundary should stay aligned',
+    );
+    const memoryLinkBoundary = await shadowAttribute(
+      page,
+      '.pai-source-actions a[href*="memory-exploring.html"]',
+      'aria-label',
+    );
+    assert(
+      memoryLinkBoundary.includes('只打开 Memory Exploring 只读复核页') &&
+        memoryLinkBoundary.includes('不会另行生成会前准备') &&
+        memoryLinkBoundary.includes('不会另行生成会前准备、更新 Meeting Pilot handoff'),
+      'Memory evidence link should expose read-only review and no-handoff-write boundary',
+    );
+    const sourceLinkBoundary = await shadowAttribute(
+      page,
+      '.pai-source-actions a[href^="https://internal.example.com"]',
+      'aria-label',
+    );
+    assert(
+      sourceLinkBoundary.includes('只在新标签导航') &&
+        sourceLinkBoundary.includes('不会另行生成会前准备') &&
+        sourceLinkBoundary.includes('写回来源系统'),
+      'External evidence link should expose navigation-only source review boundary',
     );
 
     const requests = await page.evaluate(() => window.__paiTodayPilotRequests);

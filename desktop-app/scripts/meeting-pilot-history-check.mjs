@@ -87,150 +87,152 @@ try {
       actionItemCount: 0,
       decisionCount: 0,
     }));
-    await chrome.runtime.sendMessage({
-      type: 'SET_TEST_MEETINGS_FIXTURE',
-      fixture: {
-        items: [
-          {
-            meetingId: 'meeting-archive-001',
-            title: 'Q2 Planning Review',
-            date: 1712505600000,
-            lastEventAt: 1712509200000,
-            participants: [
-              'Alex Chen',
-              'Esone Qiu',
-              'Sarah Wang',
-              'Morgan Lee',
-              'Priya Nair',
-              'Jordan Kim',
-            ],
-            pdfUrl: 'https://memory.example.test/files/q2-planning.pdf',
-            digestId: 'digest-q2-planning',
-            digestStatus: 'completed',
-            summary: '确认了 Q2 预算、技术评审 owner 与下一步行动。',
-            archiveSearchText:
-              'Transcript-only note: Morgan flagged procurement blockers.',
-            topicCount: 3,
-            actionItemCount: 2,
-            decisionCount: 2,
-          },
-          {
-            meetingId: 'meeting-archive-failed',
-            title: 'Incident Review',
-            date: 1712419200000,
-            lastEventAt: 1712422800000,
-            participants: ['Alex Chen', 'Esone Qiu'],
-            pdfUrl: 'javascript:alert(1)',
-            digestId: 'digest-incident',
-            digestStatus: 'failed',
-            digestErrorCode: 'minutes_api_timeout',
-            summary: '事故复盘结构化记录已保留，但 PDF 生成失败。',
-            topicCount: 2,
-            actionItemCount: 1,
-            decisionCount: 1,
-          },
-          {
-            meetingId: 'meeting-archive-unsafe-pdf',
-            title: 'Security Review',
-            date: 1712415600000,
-            lastEventAt: 1712417400000,
-            participants: ['Jordan Kim', 'Esone Qiu'],
-            pdfUrl: 'javascript:alert(2)',
-            digestId: 'digest-security',
-            summary:
-              '结构化会议记录可用，但 PDF URL 使用了不安全协议。',
-            topicCount: 1,
-            actionItemCount: 1,
-            decisionCount: 0,
-          },
-          {
-            meetingId: 'meeting-archive-processing',
-            title: 'Roadmap Sync',
-            date: 1712412000000,
-            lastEventAt: 1712413800000,
-            participants: ['Alex Chen', 'Esone Qiu'],
-            digestId: 'digest-roadmap-sync',
-            digestStatus: 'processing',
-            summary: '结构化归档已写入，PDF 仍在生成。',
-            topicCount: 2,
-            actionItemCount: 1,
-            decisionCount: 0,
-          },
-          {
-            meetingId: 'meeting-archive-basic-only',
-            title: 'Coffee Chat',
-            date: 1712408400000,
-            lastEventAt: 1712410200000,
-            participants: ['Esone Qiu'],
-            summary: '只保留基础归档记录，尚无 Digest/PDF。',
-            topicCount: 0,
-            actionItemCount: 0,
-            decisionCount: 0,
-          },
-          ...olderMeetings,
-        ],
-        total: 55,
-        limit: 50,
-        offset: 0,
-        detail: {
+    const fixture = {
+      items: [
+        {
           meetingId: 'meeting-archive-001',
           title: 'Q2 Planning Review',
           date: 1712505600000,
           lastEventAt: 1712509200000,
-          participants: ['Alex Chen', 'Esone Qiu', 'Sarah Wang'],
+          participants: [
+            'Alex Chen',
+            'Esone Qiu',
+            'Sarah Wang',
+            'Morgan Lee',
+            'Priya Nair',
+            'Jordan Kim',
+          ],
           pdfUrl: 'https://memory.example.test/files/q2-planning.pdf',
           digestId: 'digest-q2-planning',
+          digestStatus: 'completed',
           summary: '确认了 Q2 预算、技术评审 owner 与下一步行动。',
-          latestObservationText: '共享画面显示预算表和 Sprint 甘特图。',
+          archiveSearchText:
+            'Transcript-only note: Morgan flagged procurement blockers.',
           topicCount: 3,
           actionItemCount: 2,
           decisionCount: 2,
-          chapters: [
-            {
-              id: 'chapter-1',
-              title: 'Q2 预算讨论',
-              summary: '预算与 owner 被确认。',
-              startLabel: '10:05',
-              actionCount: 1,
-              decisionCount: 1,
-            },
-          ],
-          actionItems: [
-            {
-              id: 'action-1',
-              title: '准备技术评审文档',
-              owner: 'Esone',
-              deadline: '04-08',
-              status: 'pending',
-            },
-          ],
-          decisions: [
-            {
-              id: 'decision-1',
-              text: 'Q2 预算确认为 200 万。',
-              timestamp: '10:15',
-            },
-          ],
-          timelineEvents: [
-            {
-              id: 'timeline-1',
-              type: 'decision',
-              title: 'Q2 预算确认为 200 万',
-              description: '云服务 40%，人力 45%，弹性 15%。',
-              timestamp: '10:15',
-            },
-          ],
-          participantStances: [
-            {
-              participant: 'Sarah Wang',
-              topic: 'Q2 预算',
-              stance: '支持',
-              keyQuote: '预算分配合理，建议保留弹性预算。',
-              timeRange: '10:12',
-            },
-          ],
         },
+        {
+          meetingId: 'meeting-archive-failed',
+          title: 'Incident Review',
+          date: 1712419200000,
+          lastEventAt: 1712422800000,
+          participants: ['Alex Chen', 'Esone Qiu'],
+          pdfUrl: 'javascript:alert(1)',
+          digestId: 'digest-incident',
+          digestStatus: 'failed',
+          digestErrorCode: 'minutes_api_timeout',
+          summary: '事故复盘结构化记录已保留，但 PDF 生成失败。',
+          topicCount: 2,
+          actionItemCount: 1,
+          decisionCount: 1,
+        },
+        {
+          meetingId: 'meeting-archive-unsafe-pdf',
+          title: 'Security Review',
+          date: 1712415600000,
+          lastEventAt: 1712417400000,
+          participants: ['Jordan Kim', 'Esone Qiu'],
+          pdfUrl: 'javascript:alert(2)',
+          digestId: 'digest-security',
+          summary:
+            '结构化会议记录可用，但 PDF URL 使用了不安全协议。',
+          topicCount: 1,
+          actionItemCount: 1,
+          decisionCount: 0,
+        },
+        {
+          meetingId: 'meeting-archive-processing',
+          title: 'Roadmap Sync',
+          date: 1712412000000,
+          lastEventAt: 1712413800000,
+          participants: ['Alex Chen', 'Esone Qiu'],
+          digestId: 'digest-roadmap-sync',
+          digestStatus: 'processing',
+          summary: '结构化归档已写入，PDF 仍在生成。',
+          topicCount: 2,
+          actionItemCount: 1,
+          decisionCount: 0,
+        },
+        {
+          meetingId: 'meeting-archive-basic-only',
+          title: 'Coffee Chat',
+          date: 1712408400000,
+          lastEventAt: 1712410200000,
+          participants: ['Esone Qiu'],
+          summary: '只保留基础归档记录，尚无 Digest/PDF。',
+          topicCount: 0,
+          actionItemCount: 0,
+          decisionCount: 0,
+        },
+        ...olderMeetings,
+      ],
+      total: 55,
+      limit: 50,
+      offset: 0,
+      detail: {
+        meetingId: 'meeting-archive-001',
+        title: 'Q2 Planning Review',
+        date: 1712505600000,
+        lastEventAt: 1712509200000,
+        participants: ['Alex Chen', 'Esone Qiu', 'Sarah Wang'],
+        pdfUrl: 'https://memory.example.test/files/q2-planning.pdf',
+        digestId: 'digest-q2-planning',
+        summary: '确认了 Q2 预算、技术评审 owner 与下一步行动。',
+        latestObservationText: '共享画面显示预算表和 Sprint 甘特图。',
+        topicCount: 3,
+        actionItemCount: 2,
+        decisionCount: 2,
+        chapters: [
+          {
+            id: 'chapter-1',
+            title: 'Q2 预算讨论',
+            summary: '预算与 owner 被确认。',
+            startLabel: '10:05',
+            actionCount: 1,
+            decisionCount: 1,
+          },
+        ],
+        actionItems: [
+          {
+            id: 'action-1',
+            title: '准备技术评审文档',
+            owner: 'Esone',
+            deadline: '04-08',
+            status: 'pending',
+          },
+        ],
+        decisions: [
+          {
+            id: 'decision-1',
+            text: 'Q2 预算确认为 200 万。',
+            timestamp: '10:15',
+          },
+        ],
+        timelineEvents: [
+          {
+            id: 'timeline-1',
+            type: 'decision',
+            title: 'Q2 预算确认为 200 万',
+            description: '云服务 40%，人力 45%，弹性 15%。',
+            timestamp: '10:15',
+          },
+        ],
+        participantStances: [
+          {
+            participant: 'Sarah Wang',
+            topic: 'Q2 预算',
+            stance: '支持',
+            keyQuote: '预算分配合理，建议保留弹性预算。',
+            timeRange: '10:12',
+          },
+        ],
       },
+    };
+    window.__meetingHistoryFixture = fixture;
+    await chrome.runtime.sendMessage({
+      type: 'SET_TEST_MEETINGS_FIXTURE',
+      fixture,
     });
   });
 
@@ -313,6 +315,50 @@ try {
     failedCardText || '',
     /PDF 链接未通过安全检查，按钮保持禁用/,
   );
+  const actionButtonBoundaries = await page.evaluate(() => {
+    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+    const cardSelector = (title) =>
+      Array.from(document.querySelectorAll('.meeting-card')).find((node) =>
+        (node.textContent || '').includes(title),
+      );
+    const cardAttrs = (title, actionSelector) => {
+      const node = cardSelector(title)?.querySelector(actionSelector);
+      return {
+        title: normalize(node?.getAttribute('title') || ''),
+        aria: normalize(node?.getAttribute('aria-label') || ''),
+      };
+    };
+    return {
+      q2Panorama: cardAttrs('Q2 Planning Review', '.meeting-primary-action'),
+      q2Pdf: cardAttrs('Q2 Planning Review', '.meeting-secondary-action'),
+      failedPanorama: cardAttrs('Incident Review', '.meeting-primary-action'),
+      failedPdf: cardAttrs('Incident Review', '.meeting-secondary-action'),
+    };
+  });
+  assert.equal(
+    actionButtonBoundaries.q2Panorama.title,
+    actionButtonBoundaries.q2Panorama.aria,
+  );
+  assert.match(actionButtonBoundaries.q2Panorama.title, /打开 Panorama/);
+  assert.match(actionButtonBoundaries.q2Panorama.title, /话题 3、行动项 2、决议 2/);
+  assert.match(actionButtonBoundaries.q2Panorama.title, /不会重新分析会议、生成 PDF、发送纪要/);
+  assert.equal(actionButtonBoundaries.q2Pdf.title, actionButtonBoundaries.q2Pdf.aria);
+  assert.match(actionButtonBoundaries.q2Pdf.title, /打开 PDF/);
+  assert.match(actionButtonBoundaries.q2Pdf.title, /已通过安全检查的 http\(s\) PDF 链接/);
+  assert.match(actionButtonBoundaries.q2Pdf.title, /不会分享、发送纪要/);
+  assert.equal(
+    actionButtonBoundaries.failedPanorama.title,
+    actionButtonBoundaries.failedPanorama.aria,
+  );
+  assert.match(actionButtonBoundaries.failedPanorama.title, /打开 Panorama/);
+  assert.match(actionButtonBoundaries.failedPanorama.title, /只在新标签打开/);
+  assert.equal(
+    actionButtonBoundaries.failedPdf.title,
+    actionButtonBoundaries.failedPdf.aria,
+  );
+  assert.match(actionButtonBoundaries.failedPdf.title, /PDF 不可打开/);
+  assert.match(actionButtonBoundaries.failedPdf.title, /未通过安全检查/);
+  assert.match(actionButtonBoundaries.failedPdf.title, /不会打开不安全链接/);
   await saveScreenshot(page, 'history-list.png');
 
   log('验证会议归档搜索与状态筛选');
@@ -456,6 +502,50 @@ try {
   );
 
   log('验证加载更早会议');
+  await context.route(`${memoryBaseUrl}/**`, (route) => route.abort('failed'));
+  await page.evaluate(async () => {
+    await chrome.runtime.sendMessage({
+      type: 'SET_TEST_MEETINGS_FIXTURE',
+      fixture: {
+        ...window.__meetingHistoryFixture,
+        failOffsets: [50],
+        failMessage: 'simulated older archive page timeout',
+      },
+    });
+  });
+  await page.getByRole('button', { name: '加载更早会议' }).click();
+  await page
+    .locator('[data-meeting-archive-receipt-state="failed"]')
+    .waitFor({ timeout: 15000 });
+  const failedLoadMoreReceipt = await page
+    .locator('[data-meeting-archive-receipt-state="failed"]')
+    .textContent();
+  assert.match(failedLoadMoreReceipt || '', /加载更早会议失败/);
+  assert.match(
+    failedLoadMoreReceipt || '',
+    /本次未更新；仍显示 50 \/ 55 条/,
+  );
+  assert.match(failedLoadMoreReceipt || '', /上次成功读取的只读快照/);
+  assert.match(failedLoadMoreReceipt || '', /没有重新分析会议、生成 PDF/);
+  assert.doesNotMatch(failedLoadMoreReceipt || '', /已追加更早会议/);
+  assert.match(
+    await page.locator('.meeting-feedback-card.is-inline').textContent(),
+    /加载更多失败/,
+  );
+  assert.equal(
+    await page
+      .locator('.meeting-card', { hasText: 'Older Retrospective 50' })
+      .count(),
+    0,
+  );
+  await page.evaluate(async () => {
+    await chrome.runtime.sendMessage({
+      type: 'SET_TEST_MEETINGS_FIXTURE',
+      fixture: window.__meetingHistoryFixture,
+    });
+  });
+  await context.unroute(`${memoryBaseUrl}/**`);
+
   await page.getByRole('button', { name: '加载更早会议' }).click();
   await page.waitForFunction(
     () => {
@@ -549,6 +639,18 @@ try {
     ),
     `打开 Panorama 未请求预期 URL: ${JSON.stringify(openedUrls)}`,
   );
+  const q2PanoramaUrl = openedUrls.find((url) =>
+    /meeting-panorama\.html\?.*meetingId=meeting-archive-001/.test(url),
+  );
+  assert.ok(q2PanoramaUrl, '应能找到 Q2 Planning Review 的 Panorama URL');
+  const q2PanoramaParams = new URL(q2PanoramaUrl).searchParams;
+  assert.equal(
+    q2PanoramaParams.get('summary'),
+    '确认了 Q2 预算、技术评审 owner 与下一步行动。',
+  );
+  assert.equal(q2PanoramaParams.get('topicCount'), '3');
+  assert.equal(q2PanoramaParams.get('actionItemCount'), '2');
+  assert.equal(q2PanoramaParams.get('decisionCount'), '2');
   assert.ok(
     openedUrls.includes('https://memory.example.test/files/q2-planning.pdf'),
     `打开 PDF 未请求预期 URL: ${JSON.stringify(openedUrls)}`,

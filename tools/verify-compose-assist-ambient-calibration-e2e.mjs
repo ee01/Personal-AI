@@ -339,6 +339,20 @@ async function main() {
     await page.evaluate(() => {
       window.__paiAmbientCalibrationTraces = [];
     });
+    const rejectButton = page.locator('[data-action="reject"]');
+    const rejectBoundary = await rejectButton.getAttribute('title');
+    assert.match(rejectBoundary, /只隐藏当前建议/);
+    assert.match(rejectBoundary, /ChatGPT 场景后续更谨慎/);
+    assert.match(rejectBoundary, /脱敏 wrong 校准信号/);
+    assert.match(rejectBoundary, /预演降权是否写入以后续回执为准/);
+    assert.match(rejectBoundary, /不会发送\/提交草稿/);
+    assert.match(rejectBoundary, /删除来源记忆/);
+    assert.match(rejectBoundary, /静默其他输入框/);
+    assert.equal(
+      await rejectButton.getAttribute('aria-label'),
+      rejectBoundary,
+      'thumb-down boundary should be available to screen readers before click',
+    );
     await page
       .locator('#pai-composer-guard-root')
       .dispatchEvent('pointerover', { bubbles: true, cancelable: true });
@@ -437,6 +451,24 @@ async function main() {
     assert.equal(hoverTrace.surface, 'compose_assist');
     assert.equal(hoverTrace.redactedDiff.interaction, 'hover_no_insert');
     assert.equal(hoverTrace.evidenceRefs[0].role, 'ignored');
+    await page
+      .locator('.pai-composer-guard-feedback-toast', {
+        hasText: '已记录未插入校准',
+      })
+      .waitFor({ state: 'visible', timeout: 3000 });
+    await page
+      .locator('.pai-composer-guard-feedback-detail', {
+        hasText: '已记录 sent_without_insert 校准信号',
+      })
+      .waitFor({ state: 'visible', timeout: 3000 });
+    const passiveSendReceiptText = await page
+      .locator('.pai-composer-guard-feedback-toast')
+      .innerText();
+    assert.match(passiveSendReceiptText, /看过建议后自行发送/);
+    assert.match(passiveSendReceiptText, /sent_without_insert/);
+    assert.match(passiveSendReceiptText, /不会被全局静默/);
+    assert.match(passiveSendReceiptText, /不会发送\/提交额外内容/);
+    assert.match(passiveSendReceiptText, /只保存脱敏摘要/);
 
     await loadFixture(page);
     await page.evaluate(() => {

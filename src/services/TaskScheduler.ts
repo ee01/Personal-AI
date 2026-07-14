@@ -110,12 +110,25 @@ export interface TaskSchedulerStatusRefreshReceipt {
   disabledAlarmsCleared: number;
   failedRepairs: number;
   queueStatusUnavailableCount: number;
+  alarmCalibrations: TaskSchedulerAlarmCalibration[];
   refreshOnly: true;
 }
 
 export interface TaskSchedulerStatusFreshResult {
   tasks: Array<ScheduledTaskStatus>;
   refreshReceipt: TaskSchedulerStatusRefreshReceipt;
+}
+
+export interface TaskSchedulerAlarmCalibration {
+  taskId: string;
+  taskName: string;
+  action:
+    | 'created'
+    | 'updated'
+    | 'disabled_cleared'
+    | 'orphaned_cleared'
+    | 'failed';
+  detail?: string;
 }
 
 export interface TaskExecutionResult {
@@ -158,6 +171,7 @@ interface AlarmRefreshSummary {
   orphanedAlarmsCleared: number;
   disabledAlarmsCleared: number;
   failedRepairs: number;
+  alarmCalibrations: TaskSchedulerAlarmCalibration[];
 }
 
 const TASK_RUN_HISTORY_LIMIT = 5;
@@ -617,6 +631,7 @@ function createAlarmRefreshSummary(
     orphanedAlarmsCleared: 0,
     disabledAlarmsCleared: 0,
     failedRepairs: 0,
+    alarmCalibrations: [],
   };
 }
 
@@ -644,6 +659,7 @@ function buildTaskStatusRefreshReceipt(
     queueStatusUnavailableCount: tasks.filter((task) =>
       Boolean(task.currentQueueStatusError),
     ).length,
+    alarmCalibrations: refreshSummary.alarmCalibrations,
     refreshOnly: true,
   };
 }
@@ -976,9 +992,10 @@ export class TaskScheduler {
     console.log('🔍 检查并确保所有任务的定时器已创建...');
     const summary = createAlarmRefreshSummary(true);
 
-    const orphanedAlarmsCleared = await this.clearOrphanedTaskAlarms();
-    summary.orphanedAlarmsCleared = orphanedAlarmsCleared;
-    summary.clearedAlarms += orphanedAlarmsCleared;
+    const orphanedAlarmCalibrations = await this.clearOrphanedTaskAlarms();
+    summary.orphanedAlarmsCleared = orphanedAlarmCalibrations.length;
+    summary.clearedAlarms += orphanedAlarmCalibrations.length;
+    summary.alarmCalibrations.push(...orphanedAlarmCalibrations);
 
     for (const [taskId, task] of Array.from(this.tasks.entries())) {
       const alarmName = `scheduled_task_${taskId}`;
@@ -991,6 +1008,11 @@ export class TaskScheduler {
           await this.clearAlarm(alarmName);
           summary.disabledAlarmsCleared += 1;
           summary.clearedAlarms += 1;
+          summary.alarmCalibrations.push({
+            taskId,
+            taskName: task.name,
+            action: 'disabled_cleared',
+          });
         }
         task.nextRun = undefined;
         this.scheduleRepairErrors.delete(taskId);
@@ -1005,6 +1027,11 @@ export class TaskScheduler {
           // alarm 不存在，创建新的
           await this.createTaskAlarm(task);
           summary.createdAlarms += 1;
+          summary.alarmCalibrations.push({
+            taskId,
+            taskName: task.name,
+            action: 'created',
+          });
         } else if (existingAlarm.periodInMinutes !== task.intervalMinutes) {
           // alarm 存在但配置不一致，直接同名替换。不要先 clear，避免创建失败时丢掉旧排程。
           console.log(
@@ -1012,6 +1039,14 @@ export class TaskScheduler {
           );
           await this.createTaskAlarm(task);
           summary.updatedAlarms += 1;
+          summary.alarmCalibrations.push({
+            taskId,
+            taskName: task.name,
+            action: 'updated',
+            detail: `${existingAlarm.periodInMinutes ?? '一次性'} -> ${
+              task.intervalMinutes
+            } min`,
+          });
         } else {
           // alarm 存在且配置正确
           task.nextRun = existingAlarm.scheduledTime;
@@ -1022,6 +1057,12 @@ export class TaskScheduler {
         const errorMessage = getTaskErrorMessage(error);
         this.scheduleRepairErrors.set(taskId, errorMessage);
         summary.failedRepairs += 1;
+        summary.alarmCalibrations.push({
+          taskId,
+          taskName: task.name,
+          action: 'failed',
+          detail: errorMessage,
+        });
         await this.refreshTaskNextRun(task);
         console.error(`❌ 修复任务 ${task.name} 的定时器失败:`, error);
         if (throwOnError) {
@@ -1034,10 +1075,10 @@ export class TaskScheduler {
     return summary;
   }
 
-  private async clearOrphanedTaskAlarms(): Promise<number> {
+  private async clearOrphanedTaskAlarms(): Promise<TaskSchedulerAlarmCalibration[]> {
     const knownTaskIds = new Set(this.tasks.keys());
     const existingAlarms = await this.getExistingAlarms();
-    let clearedCount = 0;
+    const cleared: TaskSchedulerAlarmCalibration[] = [];
 
     for (const alarm of existingAlarms) {
       const taskId = alarm.name.replace('scheduled_task_', '');
@@ -1047,10 +1088,14 @@ export class TaskScheduler {
 
       console.warn(`🧹 清理未知任务的残留定时器: ${alarm.name}`);
       await this.clearAlarm(alarm.name);
-      clearedCount += 1;
+      cleared.push({
+        taskId,
+        taskName: alarm.name,
+        action: 'orphaned_cleared',
+      });
     }
 
-    return clearedCount;
+    return cleared;
   }
 
   /**

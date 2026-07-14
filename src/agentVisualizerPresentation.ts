@@ -60,6 +60,23 @@ export interface AgentApprovalPreflightReceipt {
   nextStep: string;
 }
 
+export interface AgentApprovalQueueReceipt {
+  title: string;
+  traceScope: string;
+  pendingScope: string;
+  persistenceBoundary: string;
+  copyBoundary: string;
+  nextStep: string;
+  stepNumbers: number[];
+}
+
+export type AgentApprovalCopyTarget = 'key' | 'payload' | 'retry';
+
+export interface AgentApprovalCopyButtonBoundary {
+  title: string;
+  ariaLabel: string;
+}
+
 export interface AgentPendingApprovalAction {
   stepIndex: number;
   toolId: string;
@@ -136,6 +153,7 @@ export interface AgentRunDiagnosticPacket {
     retryConfigAvailable: boolean;
     reviewBoundary: AgentApprovalReviewBoundary;
   }>;
+  approvalQueueReceipt?: AgentApprovalQueueReceipt;
   flowSteps: Array<{
     type: AgentFlowStepType;
     name: string;
@@ -148,6 +166,7 @@ export interface AgentRunDiagnosticPacket {
   navigationReceipt: AgentTraceNavigationReceipt;
   traceSpans: AgentDiagnosticTraceSpan[];
   traceSpanComposition: AgentTraceSpanComposition;
+  resultHandoffReceipt?: AgentResultHandoffReceipt;
   schemaBoundary: AgentDiagnosticSchemaBoundary;
   snapshotBoundary: AgentDiagnosticSnapshotBoundary;
   privacyNote: string;
@@ -168,6 +187,16 @@ export interface AgentRunSnapshot {
   detail: string;
   primaryAction: string;
   chips: AgentRunSnapshotChip[];
+}
+
+export interface AgentResultHandoffReceipt {
+  title: string;
+  traceState: string;
+  resultState: string;
+  unresolvedIssueSummary: string;
+  inspectionRoute: string;
+  boundary: string;
+  terminalStepNumber?: number;
 }
 
 export interface AgentDiagnosticCopyScope {
@@ -201,6 +230,11 @@ export interface AgentDiagnosticCopiedSnapshot {
   traceSpanCount: number;
 }
 
+export interface AgentTraceStepRoute {
+  stepNumber: number;
+  reason: string;
+}
+
 export interface AgentTraceReviewLaneItem {
   key: 'status' | 'approval' | 'tool_issues' | 'diagnostics';
   label: string;
@@ -208,6 +242,7 @@ export interface AgentTraceReviewLaneItem {
   detail: string;
   tone: AgentRunSnapshotChipTone;
   stepIndexes?: number[];
+  stepRoutes?: AgentTraceStepRoute[];
 }
 
 export interface AgentTraceReviewLane {
@@ -223,6 +258,7 @@ export interface AgentTraceNavigationReceipt {
   stepScope: string;
   noEffectBoundary: string;
   stepNumbers: number[];
+  stepRoutes: AgentTraceStepRoute[];
 }
 
 export interface AgentTraceSpanCompositionItem {
@@ -231,6 +267,7 @@ export interface AgentTraceSpanCompositionItem {
   value: string;
   detail: string;
   tone: AgentRunSnapshotChipTone;
+  stepNumbers?: number[];
 }
 
 export interface AgentTraceSpanComposition {
@@ -553,6 +590,54 @@ const buildApprovalRetryConfigPatch = (approvalKey: string) =>
     approvedToolActionKeys: approvalKey ? [approvalKey] : [],
   });
 
+const APPROVAL_COPY_TARGET_BOUNDARY: Record<
+  AgentApprovalCopyTarget,
+  {
+    label: string;
+    copyScope: string;
+    missingScope: string;
+  }
+> = {
+  key: {
+    label: '批准 key',
+    copyScope: '只复制当前本地 trace 里的临时批准 key',
+    missingScope: '当前动作没有可复制的批准 key',
+  },
+  payload: {
+    label: '审核包',
+    copyScope:
+      '只复制当前待确认动作的工具、参数、审批边界和重跑提示',
+    missingScope: '当前动作没有可复制的审核包',
+  },
+  retry: {
+    label: '重跑配置',
+    copyScope:
+      '只复制 approvedToolActionKeys patch，不复制工具参数、原始结果、通知正文或外部执行凭据',
+    missingScope: '当前动作没有可复制的重跑配置',
+  },
+};
+
+export const buildAgentApprovalCopyButtonBoundary = (input: {
+  toolId: string;
+  target: AgentApprovalCopyTarget;
+  available: boolean;
+}): AgentApprovalCopyButtonBoundary => {
+  const targetBoundary = APPROVAL_COPY_TARGET_BOUNDARY[input.target];
+  const prefix = input.available
+    ? `复制 ${input.toolId} 的${targetBoundary.label}`
+    : `无法复制 ${input.toolId} 的${targetBoundary.label}`;
+  const copyScope = input.available
+    ? targetBoundary.copyScope
+    : targetBoundary.missingScope;
+  const sharedBoundary =
+    '复制只产生本地文本，不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作；参数、上下文、工具策略或 trace 变化后需要重新生成。';
+
+  return {
+    title: `${prefix}：${copyScope}；${sharedBoundary}`,
+    ariaLabel: `${prefix}。${copyScope}；${sharedBoundary}`,
+  };
+};
+
 const buildApprovalRetryReceipt = (
   toolId: string,
   approvalValue: any,
@@ -815,6 +900,41 @@ export function buildPendingApprovalActions(
         }),
     );
   });
+}
+
+export function buildAgentApprovalQueueReceipt(input: {
+  traceIdentity: AgentDiagnosticTraceIdentity;
+  pendingApprovals: AgentRunDiagnosticPacket['pendingApprovals'];
+}): AgentApprovalQueueReceipt | null {
+  if (input.pendingApprovals.length === 0) return null;
+
+  const stepNumbers = Array.from(
+    new Set(input.pendingApprovals.map((approval) => approval.stepNumber)),
+  ).sort((a, b) => a - b);
+  const toolLabels = Array.from(
+    new Set(input.pendingApprovals.map((approval) => approval.toolId)),
+  )
+    .slice(0, 3)
+    .join('、');
+  const overflowCount = Math.max(
+    0,
+    new Set(input.pendingApprovals.map((approval) => approval.toolId)).size - 3,
+  );
+  const toolSummary = `${toolLabels}${overflowCount > 0 ? ` 等 ${overflowCount + 3} 个工具` : ''}`;
+  const stepSummary = stepNumbers.map((stepNumber) => `#${stepNumber}`).join('、');
+
+  return {
+    title: '待确认队列口径',
+    traceScope: `当前页面 trace ${input.traceIdentity.traceId} 汇总 ${input.pendingApprovals.length} 个待确认动作，来自步骤 ${stepSummary}。`,
+    pendingScope: `队列只汇总本轮已被执行前阻断的人审工具动作；${toolSummary} 还没有执行。`,
+    persistenceBoundary:
+      '这不是持久审批队列，也不会让本轮 Agent run 在后台继续暂停等待；刷新、重跑、工具策略或参数变化后需重新生成。',
+    copyBoundary:
+      '复制 key、审核包或重跑配置只复制文本，不会批准、恢复 run、发送通知、写入、删除或执行外部动作。',
+    nextStep:
+      '逐条复核参数、接收方和安全说明；批准时复制对应重跑配置并用同一工具和同一参数重新运行，拒绝或修改时不要复用旧 key。',
+    stepNumbers,
+  };
 }
 
 export const getStepKind = (step: ThoughtStep) => {
@@ -1720,6 +1840,16 @@ export function buildAgentRunDiagnosticPacket(
   const traceSpanComposition = buildAgentTraceSpanComposition(
     diagnosticTraceSpans,
   );
+  const approvalQueueReceipt = buildAgentApprovalQueueReceipt({
+    traceIdentity,
+    pendingApprovals: diagnosticPendingApprovals,
+  });
+  const resultHandoffReceipt = buildAgentResultHandoffReceipt({
+    status,
+    summary,
+    snapshotBoundary,
+    isProcessing: options.isProcessing,
+  });
 
   return {
     type: 'agent_thinking_run_diagnostics',
@@ -1731,14 +1861,16 @@ export function buildAgentRunDiagnosticPacket(
     summary,
     reviewItems: diagnosticReviewItems,
     pendingApprovals: diagnosticPendingApprovals,
+    approvalQueueReceipt: approvalQueueReceipt || undefined,
     flowSteps: diagnosticFlowSteps,
     navigationReceipt,
     traceSpans: diagnosticTraceSpans,
     traceSpanComposition,
+    resultHandoffReceipt: resultHandoffReceipt || undefined,
     schemaBoundary,
     snapshotBoundary,
     privacyNote:
-      'This packet omits raw tool results, approval keys, and tool parameters. traceSpans are structured for diagnostics/evals, not a full OpenTelemetry export. traceSpanComposition summarizes the local span shape without adding standard exporter semantics. traceIdentity is a local checksum for matching this sanitized snapshot only. schemaBoundary records the local-only export contract. snapshotBoundary records that this is a point-in-time page snapshot. Use the approval review packet for action-specific approval context.',
+      'This packet omits raw tool results, approval keys, and tool parameters. traceSpans are structured for diagnostics/evals, not a full OpenTelemetry export. navigationReceipt.stepRoutes records first-screen route reasons for prioritized local step inspection. traceSpanComposition summarizes the local span shape without adding standard exporter semantics. approvalQueueReceipt summarizes current-page pending approvals only, not a durable checkpoint. resultHandoffReceipt appears only when a terminal trace is still waiting for the result card. traceIdentity is a local checksum for matching this sanitized snapshot only. schemaBoundary records the local-only export contract. snapshotBoundary records that this is a point-in-time page snapshot. Use the approval review packet for action-specific approval context.',
   };
 }
 
@@ -1756,6 +1888,61 @@ const AGENT_RUN_TERMINAL_ACTION_LABELS: Record<string, string> = {
   max_actions_reached: '预算耗尽',
   stopped: '已停止',
 };
+
+export function buildAgentResultHandoffReceipt(input: {
+  status: AgentRunDiagnosticStatus;
+  summary: AgentRunDiagnosticPacket['summary'];
+  snapshotBoundary: AgentDiagnosticSnapshotBoundary;
+  isProcessing?: boolean;
+}): AgentResultHandoffReceipt | null {
+  if (
+    !input.isProcessing ||
+    !input.summary.terminalAction ||
+    input.status === 'running' ||
+    input.status === 'missing_terminal' ||
+    input.status === 'empty'
+  ) {
+    return null;
+  }
+
+  const terminalLabel =
+    AGENT_RUN_TERMINAL_ACTION_LABELS[input.summary.terminalAction] ||
+    input.summary.terminalAction;
+  const terminalStep = input.summary.terminalStepNumber
+    ? `步骤 #${input.summary.terminalStepNumber}`
+    : '终止步骤';
+  const issueParts: string[] = [];
+  if (input.summary.pendingApprovalCount > 0) {
+    issueParts.push(`${input.summary.pendingApprovalCount} 个待确认动作`);
+  }
+  if (input.summary.toolErrorCount > 0) {
+    issueParts.push(`${input.summary.toolErrorCount} 个工具失败步骤`);
+  }
+  if (input.summary.blockedCount > 0) {
+    issueParts.push(`${input.summary.blockedCount} 个已阻断工具步骤`);
+  }
+  if (input.summary.emptyEvidenceCount > 0) {
+    issueParts.push(`${input.summary.emptyEvidenceCount} 个证据不足步骤`);
+  }
+  const unresolvedIssueSummary =
+    issueParts.length > 0
+      ? `整理前仍有 ${issueParts.join('、')}，需要按运行检查复核。`
+      : '当前 trace 没有待确认、工具失败、阻断或证据不足步骤；等待结果摘要卡片完成渲染。';
+
+  return {
+    title: '结果整理中',
+    traceState: `Trace 已到达 ${terminalStep}（${terminalLabel}），状态快照为 ${input.snapshotBoundary.statusLabel}，生成于 ${input.snapshotBoundary.generatedAt}。`,
+    resultState:
+      '结果摘要卡片仍在生成；在它出现前，不要把当前页面解读成最终已交付结果。',
+    unresolvedIssueSummary,
+    inspectionRoute: input.summary.terminalStepNumber
+      ? `可先定位终止步骤 #${input.summary.terminalStepNumber}，只展开当前页面时间线里的这个步骤。`
+      : '当前没有可定位的终止步骤按钮；继续使用运行检查里的步骤链接复核。',
+    boundary:
+      '这个整理状态不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作；待确认和工具问题仍按运行检查处理。',
+    terminalStepNumber: input.summary.terminalStepNumber,
+  };
+}
 
 const appendCountChip = (
   chips: AgentRunSnapshotChip[],
@@ -1841,7 +2028,9 @@ export function buildAgentRunSnapshot(
   };
 }
 
-const buildAgentTraceStatusDetail = (packet: AgentRunDiagnosticPacket) => {
+const buildAgentTraceStatusDetail = (
+  packet: Pick<AgentRunDiagnosticPacket, 'status'>,
+) => {
   if (packet.status === 'finished') {
     return '已到达最终决策；仍可按工具证据和审批边界复核。';
   }
@@ -1860,16 +2049,6 @@ const buildAgentTraceStatusDetail = (packet: AgentRunDiagnosticPacket) => {
   return '没有可复核的 trace 步骤。';
 };
 
-const stepNumbersToIndexes = (...stepNumberGroups: number[][]) =>
-  Array.from(
-    new Set(
-      stepNumberGroups
-        .flat()
-        .filter((stepNumber) => Number.isInteger(stepNumber) && stepNumber > 0)
-        .map((stepNumber) => stepNumber - 1),
-    ),
-  ).sort((a, b) => a - b);
-
 type AgentTraceNavigationReceiptSource = Pick<
   AgentRunDiagnosticPacket,
   | 'traceIdentity'
@@ -1881,21 +2060,95 @@ type AgentTraceNavigationReceiptSource = Pick<
   | 'snapshotBoundary'
 >;
 
+const stepNumbersToIndexes = (...stepNumberGroups: number[][]) =>
+  Array.from(
+    new Set(
+      stepNumberGroups
+        .flat()
+        .filter((stepNumber) => Number.isInteger(stepNumber) && stepNumber > 0)
+        .map((stepNumber) => stepNumber - 1),
+    ),
+  ).sort((a, b) => a - b);
+
+const mergeStepRoutes = (
+  ...routeGroups: AgentTraceStepRoute[][]
+): AgentTraceStepRoute[] => {
+  const reasonsByStep = new Map<number, string[]>();
+
+  routeGroups.flat().forEach((route) => {
+    if (!Number.isInteger(route.stepNumber) || route.stepNumber <= 0) return;
+    const reason = route.reason.trim();
+    const existingReasons = reasonsByStep.get(route.stepNumber) || [];
+    if (reason && !existingReasons.includes(reason)) {
+      existingReasons.push(reason);
+    }
+    reasonsByStep.set(route.stepNumber, existingReasons);
+  });
+
+  return Array.from(reasonsByStep.entries())
+    .sort(([leftStep], [rightStep]) => leftStep - rightStep)
+    .map(([stepNumber, reasons]) => ({
+      stepNumber,
+      reason: reasons.join('；'),
+    }));
+};
+
+const stepRoutesToIndexes = (routes: AgentTraceStepRoute[]) =>
+  stepNumbersToIndexes(routes.map((route) => route.stepNumber));
+
+const buildReviewItemStepRoutes = (
+  reviewItems: AgentTraceNavigationReceiptSource['reviewItems'],
+  titles: string[],
+) =>
+  mergeStepRoutes(
+    ...reviewItems
+      .filter((item) => titles.includes(item.title))
+      .map((item) =>
+        item.stepNumbers.map((stepNumber) => ({
+          stepNumber,
+          reason: `${item.title}：${item.action}`,
+        })),
+      ),
+  );
+
+const buildTerminalStepRoutes = (
+  packet: Pick<AgentTraceNavigationReceiptSource, 'summary' | 'status'>,
+): AgentTraceStepRoute[] =>
+  packet.summary.terminalStepNumber
+    ? [
+        {
+          stepNumber: packet.summary.terminalStepNumber,
+          reason: `运行状态：${buildAgentTraceStatusDetail(packet)}`,
+        },
+      ]
+    : [];
+
+const buildApprovalStepRoutes = (
+  pendingApprovals: AgentTraceNavigationReceiptSource['pendingApprovals'],
+): AgentTraceStepRoute[] =>
+  pendingApprovals.map((approval) => ({
+    stepNumber: approval.stepNumber,
+    reason: `审批上下文：${approval.toolId} 尚未执行，需使用单个动作审核包或重跑配置复核。`,
+  }));
+
 export function buildAgentTraceNavigationReceipt(
   packet: AgentTraceNavigationReceiptSource,
 ): AgentTraceNavigationReceipt {
-  const issueStepNumbers = Array.from(
-    new Set(
+  const issueStepRoutes = mergeStepRoutes(
+    buildTerminalStepRoutes(packet),
+    buildApprovalStepRoutes(packet.pendingApprovals),
+    buildReviewItemStepRoutes(
+      packet.reviewItems,
       [
-        packet.summary.terminalStepNumber,
-        ...packet.pendingApprovals.map((approval) => approval.stepNumber),
-        ...packet.reviewItems.flatMap((item) => item.stepNumbers),
-      ].filter(
-        (stepNumber): stepNumber is number =>
-          Number.isInteger(stepNumber) && stepNumber > 0,
-      ),
+        '工具调用失败',
+        '需要人工确认',
+        '工具被阻断',
+        '工具证据不足',
+        '行动次数用完',
+      ],
     ),
-  ).sort((a, b) => a - b);
+  );
+  const issueStepNumbers = issueStepRoutes.map((route) => route.stepNumber);
   const statusLabel = AGENT_RUN_STATUS_LABELS[packet.status];
   const toolIssueParts = [
     packet.summary.toolErrorCount > 0
@@ -1927,6 +2180,7 @@ export function buildAgentTraceNavigationReceipt(
     noEffectBoundary:
       '点击步骤定位只展开当前页面时间线，不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作。',
     stepNumbers: issueStepNumbers,
+    stepRoutes: issueStepRoutes,
   };
 }
 
@@ -1942,6 +2196,17 @@ export function buildAgentTraceSpanComposition(
   const issueSpanCount = traceSpans.filter((span) =>
     TRACE_ISSUE_STATUSES.includes(span.status.code),
   ).length;
+  const issueStepNumbers = Array.from(
+    new Set(
+      traceSpans
+        .filter((span) => TRACE_ISSUE_STATUSES.includes(span.status.code))
+        .map((span) => span.stepNumber)
+        .filter(
+          (stepNumber): stepNumber is number =>
+            Number.isInteger(stepNumber) && stepNumber > 0,
+        ),
+    ),
+  ).sort((a, b) => a - b);
   const issueTone: AgentRunSnapshotChipTone = traceSpans.some(
     (span) => span.status.code === 'error',
   )
@@ -1986,8 +2251,12 @@ export function buildAgentTraceSpanComposition(
         key: 'issues',
         label: '问题 span',
         value: `${issueSpanCount}`,
-        detail: '只统计失败、待确认、阻断和缺证 span；不把 root、跳过或普通 OK span 当成待处理问题。',
+        detail:
+          issueStepNumbers.length > 0
+            ? `只统计失败、待确认、阻断和缺证 span；对应步骤 ${issueStepNumbers.map((stepNumber) => `#${stepNumber}`).join('、')}。`
+            : '只统计失败、待确认、阻断和缺证 span；不把 root、跳过或普通 OK span 当成待处理问题。',
         tone: issueTone,
+        stepNumbers: issueStepNumbers,
       },
     ],
     boundary:
@@ -1999,18 +2268,19 @@ export function buildAgentTraceReviewLane(
   packet: AgentRunDiagnosticPacket,
 ): AgentTraceReviewLane {
   const statusLabel = AGENT_RUN_STATUS_LABELS[packet.status];
-  const terminalStepIndexes = stepNumbersToIndexes(
-    packet.summary.terminalStepNumber ? [packet.summary.terminalStepNumber] : [],
+  const terminalStepRoutes = buildTerminalStepRoutes(packet);
+  const approvalStepRoutes = buildApprovalStepRoutes(packet.pendingApprovals);
+  const toolIssueStepRoutes = buildReviewItemStepRoutes(
+    packet.reviewItems,
+    ['工具调用失败', '工具被阻断', '工具证据不足'],
   );
-  const approvalStepIndexes = stepNumbersToIndexes(
-    packet.pendingApprovals.map((approval) => approval.stepNumber),
-  );
-  const toolIssueStepIndexes = stepNumbersToIndexes(
-    ...packet.reviewItems
-      .filter((item) =>
-        ['工具调用失败', '工具被阻断', '工具证据不足'].includes(item.title),
-      )
-      .map((item) => item.stepNumbers),
+  const terminalStepIndexes = stepRoutesToIndexes(terminalStepRoutes);
+  const approvalStepIndexes = stepRoutesToIndexes(approvalStepRoutes);
+  const toolIssueStepIndexes = stepRoutesToIndexes(toolIssueStepRoutes);
+  const allNavigationStepRoutes = mergeStepRoutes(
+    terminalStepRoutes,
+    approvalStepRoutes,
+    toolIssueStepRoutes,
   );
   const openToolIssueCount =
     packet.summary.toolErrorCount +
@@ -2040,6 +2310,7 @@ export function buildAgentTraceReviewLane(
         detail: buildAgentTraceStatusDetail(packet),
         tone: packet.severity,
         stepIndexes: terminalStepIndexes,
+        stepRoutes: terminalStepRoutes,
       },
       {
         key: 'approval',
@@ -2054,6 +2325,7 @@ export function buildAgentTraceReviewLane(
             : '没有待确认动作；诊断包也不会生成审批或执行凭据。',
         tone: packet.summary.pendingApprovalCount > 0 ? 'warning' : 'ok',
         stepIndexes: approvalStepIndexes,
+        stepRoutes: approvalStepRoutes,
       },
       {
         key: 'tool_issues',
@@ -2073,13 +2345,16 @@ export function buildAgentTraceReviewLane(
               ? 'warning'
               : 'ok',
         stepIndexes: toolIssueStepIndexes,
+        stepRoutes: toolIssueStepRoutes,
       },
       {
         key: 'diagnostics',
         label: '诊断包',
         value: `${packet.traceSpans.length} spans`,
         detail:
-          '仅是当前页面本地快照；不复制原始工具结果、工具参数或批准 key。',
+          allNavigationStepRoutes.length > 0
+            ? `仅是当前页面本地快照；会保留 ${allNavigationStepRoutes.length} 个优先步骤的复核理由，但不复制原始工具结果、工具参数或批准 key。`
+            : '仅是当前页面本地快照；不复制原始工具结果、工具参数或批准 key。',
         tone: 'neutral',
       },
     ],

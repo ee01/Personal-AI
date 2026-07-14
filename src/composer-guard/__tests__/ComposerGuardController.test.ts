@@ -169,7 +169,7 @@ test('buildComposerAssistInsertionReceipt: explains post-insert target and side-
   assert.equal(webAi.title, '已插入草稿');
   assert.equal(
     webAi.detail,
-    '写入目标：外部 AI context pack；没有提交 prompt、没有发送给外部 AI；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
+    '写入目标：外部 AI context pack；没有提交 prompt、没有发送给外部 AI；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
   );
 
   const promptPatch = buildComposerAssistInsertionReceipt({
@@ -180,7 +180,7 @@ test('buildComposerAssistInsertionReceipt: explains post-insert target and side-
 
   assert.equal(
     promptPatch.detail,
-    '写入目标：外部 AI prompt 补丁；没有提交 prompt、没有发送给外部 AI；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
+    '写入目标：外部 AI prompt 补丁；没有提交 prompt、没有发送给外部 AI；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
   );
 
   const ringCentral = buildComposerAssistInsertionReceipt({
@@ -191,7 +191,7 @@ test('buildComposerAssistInsertionReceipt: explains post-insert target and side-
 
   assert.equal(
     ringCentral.detail,
-    '写入目标：RingCentral thread 回复草稿；没有发送 RingCentral 消息；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
+    '写入目标：RingCentral thread 回复草稿；没有发送 RingCentral 消息；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
   );
 });
 

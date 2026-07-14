@@ -1,6 +1,6 @@
 # RingCentral Native Join
 
-_最后更新: 2026-07-01_
+_最后更新: 2026-07-12_
 
 ## 是什么
 
@@ -8,11 +8,15 @@ _最后更新: 2026-07-01_
 
 当用户点击可识别的 `https://v.ringcentral.com/join/...`、`https://v.ringcentral.com/launcher/...` 或 `https://v.ringcentral.com/conf/on/...` 入口时，扩展会转换为 `rcvdt://join/...`，交给 macOS 上已安装的 RingCentral native client 处理。Google / Outlook Safe Links 这类 redirect-wrapper 如果在 `q`、`url`、`target`、`redirectUrl` 等常见参数里包着 RingCentral Video 链接，也会先保守解包，再走同一套可信 host 和 meetingId 校验。
 
-打开 native client 时，页面会显示一个 `Opening RingCentral app...` 兜底浮层，并带有 `Handoff receipt`：它说明如果 Chrome 弹出外部 app 提示，应选择打开 RingCentral；这次点击会把已校验的完整会议链接交给 RingCentral app（包含 passcode/附加参数，如果原链接存在），但网页无法确认 app 是否真的接管或用户是否已经入会，所以浏览器恢复入口会保留；浮层里展示的链接会隐藏 passcode/附加参数，但恢复动作仍使用完整链接；默认加会路径还没有被改变。5 秒后如果原网页已经隐藏或失焦，系统认为用户已交给本机 app 加会并自动收起浮层；如果页面仍可见且聚焦，浮层会保留，并把标题切到 `RingCentral app did not take over`，回执也会切到“当前 tab 没检测到接管，但这不证明 app 失败或用户没有在别处入会”的恢复口径，继续提供 `Join in browser`、复制链接和可复制 `Meeting ID`，同时出现 `Try app again` 让用户显式重试同一个已规范化的 app handoff。`Meeting ID` 区块会先说明它只是手动 app 输入材料；如果原链接带常见 passcode 参数，浮层会额外显示 `Meeting passcode` 的隐藏值行，只能通过 `Copy passcode` 显式复制，不会默认把口令渲染到屏幕上。`Copy ID` 只复制会议 ID；`Copy passcode` 只复制手动 app 输入用的 passcode；两者都不代表已入会、不复制完整 URL，也不改变默认加会路径。完整参数仍只在 `Join in browser`、`Copy link` 或显式 `Show full link` 中保留。用户也可以点右上角 `x` 手动关闭；关闭后会留下一个短暂的 `RingCentral handoff hidden` 恢复条，说明没有确认已入会、默认路径未变，并提供 `Restore recovery`。恢复只重建浏览器恢复/复制/重试控件，不会重新触发 native app、打开浏览器、复制链接或改默认设置；用户仍需显式点 `Try app again` 才会重试 app。兜底浮层会限制在当前视窗内并允许内部滚动，保证浏览器加入、复制、Meeting ID、passcode 和默认路径切换在矮窗口或浏览器缩放时仍可到达。一旦用户选择浏览器加入、复制浏览器会议链接、复制 Meeting ID、复制 passcode、显式展开完整链接，或切换默认加会路径，浮层会进入手动恢复状态并取消自动消失，避免恢复操作进行中被收走。连续点击不同会议入口时，新浮层会先清理上一个浮层的计时器和临时 native launch link，避免旧 handoff 的异步清理影响当前恢复入口。`Join in browser` 会先打开新的浏览器窗口、断开 opener，再跳到 Web 会场；如果浏览器拦截了新窗口，会自动改为在当前 tab 打开。浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
+打开 native client 时，页面会显示一个 `Opening RingCentral app...` 兜底浮层，并带有 `Handoff receipt`：它说明如果 Chrome 弹出外部 app 提示，应选择打开 RingCentral；这次点击会把已校验的完整会议链接交给 RingCentral app（包含 passcode/附加参数，如果原链接存在），但网页无法确认 app 是否真的接管或用户是否已经入会，所以浏览器恢复入口会保留；浮层里展示的链接会隐藏 passcode/附加参数，但恢复动作仍使用完整链接；默认加会路径还没有被改变。5 秒后如果原网页已经隐藏或失焦，系统认为用户已交给本机 app 加会并自动收起浮层；如果页面仍可见且聚焦，浮层会保留，并把标题切到 `RingCentral app did not take over`，回执也会切到“当前 tab 没检测到接管，但这不证明 app 失败或用户没有在别处入会”的恢复口径，继续提供 `Join in browser`、复制链接和可复制 `Meeting ID`，同时出现 `Try app again` 让用户显式重试同一个已规范化的 app handoff。`Meeting ID` 区块会先说明它只是手动 app 输入材料；如果原链接带常见 passcode 参数，浮层会额外显示 `Meeting passcode` 的隐藏值行，只能通过 `Copy passcode` 显式复制，不会默认把口令渲染到屏幕上。`Copy ID` 只复制会议 ID；`Copy passcode` 只复制手动 app 输入用的 passcode；两者都不代表已入会、不复制完整 URL，也不改变默认加会路径。完整参数仍只在 `Join in browser`、`Copy link` 或显式 `Show full link` 中保留。用户也可以点右上角 `x` 手动关闭；关闭后会留下一个短暂的 `RingCentral handoff hidden` 恢复条，说明没有确认已入会、默认路径未变，并提供 `Restore recovery`。恢复只重建浏览器恢复/复制/重试控件，不会重新触发 native app、打开浏览器、复制链接或改默认设置；用户仍需显式点 `Try app again` 才会重试 app。兜底浮层会限制在当前视窗内并允许内部滚动，保证浏览器加入、复制、Meeting ID、passcode 和默认路径切换在矮窗口或浏览器缩放时仍可到达。一旦用户选择浏览器加入、复制浏览器会议链接、复制 Meeting ID、复制 passcode、显式展开完整链接，或切换默认加会路径，浮层会进入手动恢复状态并取消自动消失，避免恢复操作进行中被收走。连续点击不同会议入口时，新浮层会先清理上一个浮层的计时器和临时 native launch link，避免旧 handoff 的异步清理影响当前恢复入口。`Join in browser` 会先打开新的浏览器窗口、断开 opener，再跳到 Web 会场；如果新窗口已打开，原页会留下短暂的 `Browser join requested` 回执，说明只是发起浏览器加会窗口、仍未确认用户已入会、没有重试 app 或改变默认路径，并可恢复 recovery 控件；从这个回执恢复时，面板会明确写成“从浏览器请求恢复”，并说明没有再次打开浏览器窗口、没有重试 app、旧浏览器请求仍未确认；如果浏览器拦截了新窗口，会自动改为在当前 tab 打开。浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
 
 兜底浮层默认只展示去掉 query/hash 的安全浏览器会场地址，避免在共享屏幕上直接暴露 `passcode` 等会议参数；`Join in browser` 和 `Copy link` 仍使用完整链接。`Copy link` 成功后会明确回执：复制的是完整 browser meeting link（包含隐藏的 passcode/details，如果原链接存在），但这不会加入会议、不会重试 app、也不会改变默认加会路径。如果用户确实需要手动检查或选择完整 URL，可以点 `Show full link` 显示，再点 `Hide full link` 收起。如果浏览器或权限导致 `Copy link` 写入剪贴板失败，浮层会自动展开完整 browser link，并提示这是手动复制状态，避免用户只复制到去掉 passcode 的展示链接。
 
-浮层里的默认路径切换是可撤销的：点 `Use browser by default` 后会写入同一个 Native Join 开关，并立刻切换成 `Use app by default`，误点时不需要离开当前页面去 Options 找回。Glip rich invite 这类运行在页面上下文的入口会通过 content script 桥接写入 extension storage，避免按钮看似保存但实际没有改变默认路径。如果保存默认路径失败，回执会明确说明默认设置没有改变，本次点击没有加入会议、重试 app、打开浏览器会议或复制会议材料，当前恢复控件仍可继续使用。
+2026-07-10 补充：`Join in browser`、`Copy link` 和恢复态的 `Try app again` 按钮自身也有 hover / 读屏边界。它们分别说明会打开新的浏览器窗口、复制完整但默认隐藏细节的恢复链接，或重试已校验的 app handoff；这些按钮都不确认用户已入会、不隐式复制额外材料、不改变默认加会路径。
+
+2026-07-12 补充：手动恢复控件也补齐同级按钮边界。`Copy ID`、`Copy passcode`、`Show full link` / `Hide full link`、右上角关闭、紧凑恢复条的 `Restore recovery`，以及 `Use browser by default` / `Use app by default` 都在 hover / 读屏里说明当前点击只复制指定材料、只本地显示/隐藏完整链接、只恢复控件，或只保存未来偏好；它们不会确认已入会、不会隐式重试 app、不会打开浏览器、不会复制额外会议材料，也不会改变当前会议的恢复事实。
+
+浮层里的默认路径切换是可撤销的：点 `Use browser by default` 后会写入同一个 Native Join 开关，并立刻切换成 `Use app by default`，误点时不需要离开当前页面去 Options 找回。保存 app-first / browser-first 默认路径或保存失败时，面板会单独显示 `Default path receipt`：它把这次操作绑定为“未来 RingCentral 加会偏好写入”，同时说明本次点击没有加入当前会议、没有重试 app、没有打开浏览器窗口、没有复制会议材料，也没有移除当前恢复控件。Glip rich invite 这类运行在页面上下文的入口会通过 content script 桥接写入 extension storage，避免按钮看似保存但实际没有改变默认路径。如果保存默认路径失败，回执会明确说明默认设置没有改变，本次点击没有加入会议、重试 app、打开浏览器会议或复制会议材料，当前恢复控件仍可继续使用。
 
 ## 大白话运行逻辑
 
@@ -25,14 +29,16 @@ _最后更新: 2026-07-01_
 3. meetingId 是否安全：异常 scheme、异常 path、过长或不安全 meeting id 不会透传给 native scheme。
 4. 浏览器外部协议策略：Chrome 可能要求用户确认打开 `rcvdt://`，扩展无法绕过。
 5. 兜底路径可用性：native 是否安装无法可靠探测，所以 5 秒后会结合 `document.visibilityState` / `document.hasFocus()` 判断是否像是已经离开浏览器；仍停在原页面时必须继续保留 Web fallback；一旦用户进入恢复操作，浮层必须取消自动消失。
-6. App 重试：只有进入“未检测到接管”的恢复态后才显示 `Try app again`；点击只重放当前已校验的 `rcvdt://` 链接、重启 handoff 检测，不改变默认路径，也不移除浏览器恢复。
+6. App 重试：只有进入“未检测到接管”的恢复态后才显示 `Try app again`；点击只重放当前已校验的 `rcvdt://` 链接、重启 handoff 检测，不打开浏览器兜底、不复制材料、不改变默认路径，也不移除浏览器恢复。
 7. 交接回执：浮层要把“Chrome 提示该选什么 / 已尝试打开 app / native handoff 使用完整会议链接 / 无法验证 app 接管或实际入会 / 浏览器恢复仍可用 / 默认路径未自动改变”放在同一个可见位置，避免用户把 external-protocol 提示取消误读成已经失败或已经改设置。
 8. 链接隐私：完整浏览器链接可能带有 passcode 或其他 query/hash，默认不在浮层正文里展示，但恢复按钮和复制动作必须保留这些参数。
 9. 手动恢复：`Copy link` 成功时必须说明复制的是完整恢复链接且不代表已入会或改默认路径；如果剪贴板写入失败，当前操作已经越过“默认隐藏完整链接”的安全展示层，系统会临时展开完整链接并提醒复制后再隐藏，保证恢复链接仍可用。
 10. 外层跳转包装：只解包常见 redirect 参数；外层域名本身不被当作可信会议来源，解出的目标仍必须是 `v.ringcentral.com` 的安全会议路径。
 11. 手动 App 加会：兜底浮层会展示并可复制已校验的 Meeting ID；如果完整链接里有常见 passcode 参数，也会显示隐藏值的 `Copy passcode`。两者都只是手动输入材料，不会自动加入会议，不会复制完整 URL，也不会改默认路径。原链接带隐藏参数时，完整恢复材料仍走 `Join in browser` / `Copy link` / `Show full link`。
 12. 视窗可达性：恢复面板内容多于可视高度时只让面板内部滚动，不把 `Join in browser`、`Copy link`、`Copy ID` 或默认路径切换挤出屏幕。
-13. 误关恢复：关闭浮层只隐藏完整恢复面板，不证明 app 已接管；短暂恢复条保留 `Restore recovery`，恢复时不会自动重试 app 或改变默认路径。
+13. 误关恢复：关闭浮层只隐藏完整恢复面板，不证明 app 已接管；短暂恢复条保留 `Restore recovery`，关闭和恢复按钮本身会说明不会自动重试 app、打开浏览器、复制材料、确认入会或改变默认路径。
+14. 浏览器兜底请求：`Join in browser` 成功打开新窗口后，原页只显示短暂请求回执；按钮 hover / 读屏文案会在点击前说明这是新的浏览器窗口请求，不等于确认已进入会议，也不会重试 app、复制链接或改变默认路径。用户从该回执恢复 recovery 面板时，面板要保留“浏览器请求仍未确认”的来源口径，而不是复用“隐藏后恢复”的文案。
+15. 默认路径回执：保存 `Use browser by default` / `Use app by default` 或保存失败时，界面要把这次操作明确成未来偏好写入；它不改变当前会议的 handoff 事实，也不自动触发入会、app retry、浏览器窗口、复制或恢复控件移除。
 
 ## 开关
 
@@ -75,8 +81,10 @@ _最后更新: 2026-07-01_
 - 如果 Chrome 第一次打开 `rcvdt://`，可能会显示外部协议确认，这是浏览器安全策略。
 - 浏览器和扩展无法可靠判断 native client 是否真的安装或成功打开，因此不会做安装探测，只提供 Web 兜底入口。
 - `Try app again` 不重新解析页面链接，也不会放宽 host / meetingId 校验；它只重放本次点击已经生成的 native URL。
-- `Restore recovery` 只恢复本页控件，不重新打开 app、不打开浏览器、不写剪贴板、不改变默认加会路径，也不确认用户已经入会。
-- `Copy ID` 不等于加入会议，也不复制 passcode、query/hash、浏览器链接或外部执行凭据；`Copy passcode` 只在完整链接含常见 passcode 参数时出现，只复制 passcode 本身，不复制完整 URL、不重试 app、不改变默认路径；需要完整邀请参数时仍用 `Join in browser`、`Copy link` 或显式 `Show full link`。
+- `Restore recovery` 只恢复本页控件，不重新打开 app、不打开浏览器、不写剪贴板、不改变默认加会路径，也不确认用户已经入会；如果恢复来源是 `Browser join requested`，还要说明此前浏览器窗口请求仍未被 Personal AI 确认。
+- `Browser join requested` 只说明浏览器会场窗口已请求打开；它不证明新窗口加载成功、不确认用户已入会，也不会自动重试 app、复制链接或保存默认路径。
+- `Use browser by default` / `Use app by default` 只保存未来 RingCentral 加会偏好；当前会议的恢复面板、浏览器链接、Meeting ID/passcode 和 app retry 仍按用户显式动作执行。
+- `Copy ID` 不等于加入会议，也不复制 passcode、query/hash、浏览器链接或外部执行凭据；`Copy passcode` 只在完整链接含常见 passcode 参数时出现，只复制 passcode 本身，不复制完整 URL、不重试 app、不改变默认路径；需要完整邀请参数时仍用 `Join in browser`、`Copy link` 或显式 `Show full link`。这些手动恢复按钮的 hover / 读屏文案会重复说明上述边界。
 - 为了减少共享屏幕时泄露会议参数，兜底浮层默认隐藏完整 URL 的 query/hash；但用户点 `Show full link` 后仍可能看到完整链接，需要自行判断当前屏幕环境。
 - 窄屏或矮窗口里，恢复浮层会在视窗内滚动；这只改变恢复控件可达性，不改变 native handoff、浏览器加入、复制或默认路径保存语义。
 - 扩展只能拦截 Web 页面 DOM / React 里的入口；如果 RingCentral native app 或系统级弹窗本身不是 Web 页面，Chrome extension 无法注入拦截。

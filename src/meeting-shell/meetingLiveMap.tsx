@@ -4,6 +4,10 @@ import { useMemo } from 'react';
 import { buildMeetingPilotAlertReceipt } from './alertPresentation';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  buildMeetingPilotLiveFeedReceipt,
+  getSurfacedMeetingPilotAlerts,
+} from './liveFeedPresentation';
+import {
   MeetingPilotActionItem,
   MeetingPilotAlert,
   MeetingPilotSessionSnapshot,
@@ -101,6 +105,25 @@ const liveStyle = `
   th { color: #dbeafe; font-weight: 600; }
   .evidence-cell { max-width: 260px; white-space: normal; color: #cbd5e1; }
   .alert-stack, .meta-list { display: grid; gap: 12px; }
+  .alert-scope-receipt {
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: rgba(96, 165, 250, 0.08);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .alert-scope-receipt strong {
+    display: block;
+    color: #bfdbfe;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .alert-scope-boundary { color: rgba(221, 232, 245, 0.6); }
   .alert { border-radius: 18px; padding: 14px 15px; border: 1px solid rgba(148, 163, 184, 0.18); background: rgba(148, 163, 184, 0.08); transition: all 0.2s; }
   .alert.p0 { background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.34); }
   .alert.p1 { background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.3); }
@@ -251,7 +274,14 @@ function MeetingLiveMap() {
           title: 'Meeting Pilot',
         }));
   const chapter = useMemo(() => getCurrentChapter(session), [session]);
-  const activeAlerts = session.alerts.filter((alert) => !alert.resolved);
+  const activeAlerts = useMemo(
+    () => getSurfacedMeetingPilotAlerts(session),
+    [session],
+  );
+  const alertVisibilityReceipt = useMemo(
+    () => buildMeetingPilotLiveFeedReceipt(session, []),
+    [session],
+  );
   const activeActionItems = session.actionItems.filter(isActiveActionItem);
   const chapterEvents = session.timelineEvents.filter(
     (event) => !chapter || event.chapterId === chapter.id,
@@ -416,6 +446,16 @@ function MeetingLiveMap() {
         <aside className="panel">
           <div className="section-title">Alerts and Context</div>
           <div className="alert-stack">
+            <div
+              className="alert-scope-receipt"
+              aria-label="Live Map 提醒可见口径回执"
+            >
+              <strong>Visible alert scope</strong>
+              <span>{alertVisibilityReceipt.summary}</span>
+              <span className="alert-scope-boundary">
+                {alertVisibilityReceipt.boundary}
+              </span>
+            </div>
             {activeAlerts.length ? (
               activeAlerts.slice(0, 3).map((alert) => (
                 <div

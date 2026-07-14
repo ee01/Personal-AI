@@ -9,6 +9,7 @@ import {
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportEnablementPlan,
   buildJiraAutomationImportCredentialRestoreGateSummary,
+  buildJiraAutomationImportSecretReentryQueueGroups,
   buildJiraAutomationImportRule,
   buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
@@ -19,6 +20,7 @@ import {
   buildJiraAutomationUniqueImportedRuleName,
   collectJiraAutomationImportReviewSignals,
   formatJiraAutomationImportSourceFormat,
+  formatJiraAutomationImportSecretReentryQueue,
   formatJiraAutomationImportSecretReentrySummary,
   isJiraAutomationImportFileSizeAllowed,
   parseJiraAutomationExport,
@@ -61,18 +63,22 @@ function jiraImportText(en: string, zh: string): string {
   return isJiraAutomationImportEnglish() ? en : zh;
 }
 
+function buildJiraImportEntryButtonBoundary(projectKey: string): string {
+  const targetProject = projectKey || jiraImportText('the current Jira project', '当前 Jira 项目');
+  return jiraImportText(
+    `Opens a local JSON picker and prepares a disabled-copy preview for ${targetProject}; this click does not create, edit, enable, run Jira automation, activate schedules, or restore secrets.`,
+    `只打开本机 JSON 选择器，并为 ${targetProject} 准备禁用副本预览；本次点击不会创建、编辑、启用、运行 Jira automation、激活 schedule 或恢复 secret。`,
+  );
+}
+
 function refreshJiraImportButtonLanguage(doc: Document): void {
   const buttons = doc.querySelectorAll<HTMLButtonElement>('#import-rule-button');
   buttons.forEach((button) => {
     const projectKey = button.getAttribute('data-project-key') || '';
+    const entryBoundary = buildJiraImportEntryButtonBoundary(projectKey);
     button.textContent = jiraImportText('Import rule', '导入规则');
-    button.setAttribute(
-      'aria-label',
-      jiraImportText(
-        `Import a disabled Jira Automation rule into ${projectKey}`,
-        `将 Jira Automation 规则作为禁用副本导入到 ${projectKey}`,
-      ),
-    );
+    button.title = entryBoundary;
+    button.setAttribute('aria-label', entryBoundary);
   });
 }
 
@@ -137,6 +143,48 @@ function formatJiraImportCredentialRestoreGateSummary(
   return [
     `凭据恢复门控：启用前仍未完成；${formatJiraImportSecretSummary(slots, 3)}。`,
     '禁用副本只带 PERSONAL_AI_REENTER_SECRET 或 REDACTED 占位，启用前请在 Jira 里重新录入或明确留空。',
+  ].join(' ');
+}
+
+function formatJiraImportSecretReentryQueue(
+  slots: JiraAutomationImportSecretReentrySlot[],
+  maxSlotsPerGroup = 3,
+): string {
+  if (isJiraAutomationImportEnglish()) {
+    return formatJiraAutomationImportSecretReentryQueue(slots, maxSlotsPerGroup);
+  }
+
+  if (slots.length === 0) {
+    return '凭据重录队列：本次禁用副本没有检测到被脱敏的凭据位置。';
+  }
+
+  const groupLabels: Record<string, string> = {
+    'hidden-jira-secrets': '隐藏 Jira secret',
+    'url-credentials': 'URL 与签名 query 凭据',
+    'inline-secret-text': '内嵌 secret 文本',
+    'named-credential-fields': '命名凭据字段',
+    'other-redacted-fields': '其它脱敏字段',
+  };
+  const groupActions: Record<string, string> = {
+    'hidden-jira-secrets': '在导入后的规则里重新录入或重建这些 masked Jira secret 字段。',
+    'url-credentials': '为目标环境重新生成 signed URL、webhook token、function key 或 API gateway query 凭据。',
+    'inline-secret-text': '确认这段文本是否仍需要凭据；只恢复目标环境安全值，或保留占位。',
+    'named-credential-fields': '在目标 Jira 里重新录入 API key、JWT/client assertion、Authorization header 或 password/token 字段。',
+    'other-redacted-fields': '启用前在 Jira 里复核这些占位字段。',
+  };
+  const groups = buildJiraAutomationImportSecretReentryQueueGroups(slots);
+  const groupText = groups.map((group) => {
+    const visibleSlots = group.slots.slice(0, maxSlotsPerGroup).map((slot) => (
+      `${slot.path}${slot.label ? ` (${slot.label})` : ''}`
+    ));
+    const hiddenCount = Math.max(0, group.slots.length - visibleSlots.length);
+    return `${groupLabels[group.id] || group.label} (${group.slots.length})：${visibleSlots.join(' | ')}${hiddenCount > 0 ? `，另有 ${hiddenCount} 个` : ''}。${groupActions[group.id] || group.action}`;
+  });
+
+  return [
+    `凭据重录队列：${groups.length} 组，共 ${slots.length} 个脱敏位置。`,
+    ...groupText,
+    '创建禁用副本可以继续；但在 Jira 启用前，只重建、重录或明确留空真正需要的目标字段，占位符不是可工作的凭据。',
   ].join(' ');
 }
 
@@ -656,8 +704,187 @@ function showSuccessMessage(message: string): void {
   }, 5000);
 }
 
-function showInfoMessage(message: string): void {
+function navigateToImportedJiraAutomationRule(ruleUrl: string): void {
+  console.log('Storing navigation URL and refreshing iframe:', ruleUrl);
+
+  if (window.top) {
+    try {
+      (window.top as any).__PERSONAL_AI_PENDING_NAVIGATION__ = ruleUrl;
+      console.log('Stored navigation URL in parent window:', ruleUrl);
+    } catch (error) {
+      console.error('Failed to store navigation URL in parent window:', error);
+    }
+  }
+
+  window.location.reload();
+}
+
+function getJiraAutomationImportMessageDocuments(doc: Document = document): Document[] {
+  const docs = new Set<Document>([doc, document]);
+  [window.parent, window.top].forEach((targetWindow) => {
+    try {
+      if (targetWindow?.document) {
+        docs.add(targetWindow.document);
+      }
+    } catch {
+      // Cross-origin parent windows cannot be inspected; local Jira frames normally share origin.
+    }
+  });
+  return Array.from(docs);
+}
+
+function clearJiraAutomationImportTransientMessages(doc: Document = document): void {
+  getJiraAutomationImportMessageDocuments(doc).forEach((targetDoc) => {
+    targetDoc
+      .querySelectorAll('[data-personal-ai-jira-import-error="true"]')
+      .forEach((element) => element.parentElement?.removeChild(element));
+  });
+}
+
+function showJiraAutomationImportSuccessReceipt(
+  doc: Document,
+  message: string,
+  options: {
+    ruleUrl?: string;
+    fallbackReload?: boolean;
+    delayMs?: number;
+  } = {},
+): void {
+  clearJiraAutomationImportTransientMessages(doc);
+  const previousReceipt = doc.querySelector('[data-personal-ai-jira-import-success-receipt="true"]');
+  previousReceipt?.parentElement?.removeChild(previousReceipt);
+
+  const hostWindow = doc.defaultView || window;
+  const delayMs = options.delayMs ?? JIRA_AUTOMATION_IMPORT_POST_SUCCESS_NAVIGATION_DELAY_MS;
+  let navigationTimer: number | undefined;
+  let navigationStarted = false;
+
+  const receipt = doc.createElement('div');
+  receipt.setAttribute('role', 'status');
+  receipt.setAttribute('aria-live', 'polite');
+  receipt.setAttribute('data-personal-ai-jira-import-success-receipt', 'true');
+  receipt.style.cssText = `
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    width: min(560px, calc(100vw - 36px));
+    max-height: calc(100vh - 36px);
+    overflow: auto;
+    padding: 14px 16px;
+    border-radius: 6px;
+    border: 1px solid #BAF3DB;
+    background: #E3FCEF;
+    color: #172B4D;
+    box-shadow: 0 6px 18px rgba(9, 30, 66, 0.2);
+    z-index: 10002;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    box-sizing: border-box;
+  `;
+
+  const title = doc.createElement('div');
+  title.textContent = jiraImportText('Post-import navigation receipt', '导入后跳转回执');
+  title.style.cssText = 'font-weight: 700; font-size: 13px; line-height: 1.35; margin-bottom: 5px;';
+
+  const body = doc.createElement('div');
+  body.textContent = message;
+  body.style.cssText = 'font-size: 12px; line-height: 1.45; color: #172B4D; word-break: break-word;';
+
+  receipt.appendChild(title);
+  receipt.appendChild(body);
+
+  const runNavigation = () => {
+    if (navigationStarted) {
+      return;
+    }
+    navigationStarted = true;
+    if (navigationTimer !== undefined) {
+      hostWindow.clearTimeout(navigationTimer);
+      navigationTimer = undefined;
+    }
+
+    if (options.ruleUrl) {
+      navigateToImportedJiraAutomationRule(options.ruleUrl);
+      return;
+    }
+
+    if (options.fallbackReload) {
+      hostWindow.location.reload();
+    }
+  };
+
+  if (options.ruleUrl || options.fallbackReload) {
+    const navigationStatus = doc.createElement('div');
+    navigationStatus.style.cssText = 'margin-top: 8px; font-size: 12px; line-height: 1.45; color: #44546F;';
+    navigationStatus.textContent = options.ruleUrl
+      ? jiraImportText(
+        'Auto navigation will open the imported rule details shortly. Staying here only cancels navigation; it does not undo the disabled copy, enable the rule, run automation, or complete Jira-side review.',
+        '稍后会自动打开导入后的规则详情。留在当前页只会取消跳转；不会撤销禁用副本、启用规则、运行自动化或完成 Jira 侧复核。',
+      )
+      : jiraImportText(
+        'Jira did not return a rule id, so Personal AI will refresh this page shortly. Staying here only cancels refresh; it does not undo the disabled copy or confirm enablement review.',
+        'Jira 没有返回规则 id，稍后只会刷新当前页。留在当前页只会取消刷新；不会撤销禁用副本或确认启用复核。',
+      );
+
+    const actions = doc.createElement('div');
+    actions.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px;';
+
+    const primaryAction = createDialogButton(
+      doc,
+      options.ruleUrl
+        ? jiraImportText('Open rule details now', '现在打开规则详情')
+        : jiraImportText('Refresh now', '现在刷新'),
+      'primary',
+    );
+    primaryAction.style.padding = '6px 10px';
+    primaryAction.style.fontSize = '12px';
+    primaryAction.addEventListener('click', runNavigation);
+
+    const stayAction = createDialogButton(
+      doc,
+      jiraImportText('Stay here', '留在当前页'),
+      'secondary',
+    );
+    stayAction.style.padding = '6px 10px';
+    stayAction.style.fontSize = '12px';
+    stayAction.addEventListener('click', () => {
+      if (navigationTimer !== undefined) {
+        hostWindow.clearTimeout(navigationTimer);
+        navigationTimer = undefined;
+      }
+      navigationStatus.textContent = jiraImportText(
+        'Auto navigation canceled. The disabled copy still exists; finish the Activation plan in Jira before enabling it.',
+        '已取消自动跳转。禁用副本仍已创建；启用前仍要在 Jira 里完成 Activation plan。',
+      );
+      setDialogButtonDisabled(stayAction, true);
+    });
+
+    actions.appendChild(primaryAction);
+    actions.appendChild(stayAction);
+    receipt.appendChild(navigationStatus);
+    receipt.appendChild(actions);
+    navigationTimer = hostWindow.setTimeout(runNavigation, delayMs);
+  } else {
+    hostWindow.setTimeout(() => {
+      if (doc.body.contains(receipt)) {
+        doc.body.removeChild(receipt);
+      }
+    }, 7000);
+  }
+
+  doc.body.appendChild(receipt);
+}
+
+function showInfoMessage(
+  message: string,
+  options: {
+    durationMs?: number;
+    dataAttribute?: string;
+  } = {},
+): () => void {
   const infoDiv = document.createElement('div');
+  if (options.dataAttribute) {
+    infoDiv.setAttribute(options.dataAttribute, 'true');
+  }
   infoDiv.style.cssText = `
     position: fixed;
     top: 50%;
@@ -676,11 +903,23 @@ function showInfoMessage(message: string): void {
   infoDiv.textContent = message;
   document.body.appendChild(infoDiv);
 
-  setTimeout(() => {
+  let timeoutId: number | undefined;
+  if (options.durationMs !== 0) {
+    timeoutId = window.setTimeout(() => {
+      if (document.body.contains(infoDiv)) {
+        document.body.removeChild(infoDiv);
+      }
+    }, options.durationMs ?? 5000);
+  }
+
+  return () => {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
     if (document.body.contains(infoDiv)) {
       document.body.removeChild(infoDiv);
     }
-  }, 5000);
+  };
 }
 
 function showImportPreflightReceipt(
@@ -731,8 +970,18 @@ function showImportPreflightReceipt(
 }
 
 // 显示错误消息
-function showErrorMessage(message: string): void {
-  const errorDiv = document.createElement('div');
+function showErrorMessage(
+  message: string,
+  options: {
+    dataAttribute?: string;
+    doc?: Document;
+  } = {},
+): void {
+  const targetDoc = options.doc || document;
+  const errorDiv = targetDoc.createElement('div');
+  if (options.dataAttribute) {
+    errorDiv.setAttribute(options.dataAttribute, 'true');
+  }
   errorDiv.style.cssText = `
     position: fixed;
     top: 50%;
@@ -750,11 +999,11 @@ function showErrorMessage(message: string): void {
     word-wrap: break-word;
   `;
   errorDiv.textContent = message;
-  document.body.appendChild(errorDiv);
+  targetDoc.body.appendChild(errorDiv);
   
   setTimeout(() => {
-    if (document.body.contains(errorDiv)) {
-      document.body.removeChild(errorDiv);
+    if (targetDoc.body.contains(errorDiv)) {
+      targetDoc.body.removeChild(errorDiv);
     }
   }, 10000);
 }
@@ -1311,6 +1560,10 @@ function renderImportBoundaryReceipt(
       value: formatJiraImportCredentialRestoreGateSummary(secretReentrySlots),
     },
     {
+      label: jiraImportText('Re-entry queue', '凭据重录队列'),
+      value: formatJiraImportSecretReentryQueue(secretReentrySlots, 2),
+    },
+    {
       label: jiraImportText('Carries over', '会带入'),
       value: jiraImportText(
         'Sanitized review note and Activation plan stay in the Jira description.',
@@ -1350,6 +1603,9 @@ function buildPostImportSuccessReceipt(
     const credentialGateText = secretReentrySlots.length > 0
       ? ' 凭据恢复门控仍未完成；这些字段需要在 Jira 中重新录入或明确留空后再启用。'
       : '';
+    const credentialQueueText = secretReentrySlots.length > 0
+      ? ` ${formatJiraImportSecretReentryQueue(secretReentrySlots, 2)}`
+      : '';
 
     return [
       `已导入禁用副本："${importedRuleName}"，目标项目 ${projectContext.projectKey}。`,
@@ -1363,6 +1619,7 @@ function buildPostImportSuccessReceipt(
       nextAction,
       secretMapText,
       credentialGateText,
+      credentialQueueText,
       '已清洗的复核备注和启用计划已写入 Jira 描述。',
       `${firstCheckText}正在跳转到导入规则。`,
     ].filter(Boolean).join(' ');
@@ -1378,6 +1635,9 @@ function buildPostImportSuccessReceipt(
   const credentialGateText = secretReentrySlots.length > 0
     ? ' Credential restore gate remains open until those fields are re-entered or intentionally left blank in Jira.'
     : '';
+  const credentialQueueText = secretReentrySlots.length > 0
+    ? ` ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots, 2)}`
+    : '';
 
   return [
     `Imported disabled copy: "${importedRuleName}" in ${projectContext.projectKey}.`,
@@ -1391,6 +1651,7 @@ function buildPostImportSuccessReceipt(
     nextAction,
     secretMapText,
     credentialGateText,
+    credentialQueueText,
     'Sanitized review note and Activation plan are in the Jira description.',
     `${firstCheckText}Redirecting to the imported rule.`,
   ].filter(Boolean).join(' ');
@@ -1416,6 +1677,7 @@ function buildCreateRequestPendingReceipt(
       `创建请求处理中：正在为 ${projectContext.projectKey} 发送一个已清洗的 POST，用来创建 "${importedRuleName}"。`,
       `Payload 状态是 ${ruleData.state || 'DISABLED'}；Jira 尚未确认创建成功。`,
       chainingText,
+      '这条等待回执会保留到 Jira 返回成功或失败；关闭或刷新页面不会撤销已经发送的 create request。',
       '没有自动启用、运行、激活 schedule 或恢复 secret。',
     ].join(' ');
   }
@@ -1424,6 +1686,7 @@ function buildCreateRequestPendingReceipt(
     `Create request pending: sending one sanitized POST for "${importedRuleName}" in ${projectContext.projectKey}.`,
     `Payload state is ${ruleData.state || 'DISABLED'}; Jira has not confirmed creation yet.`,
     chainingText,
+    'This pending receipt stays until Jira returns success or failure; closing or refreshing the page does not undo an already-sent create request.',
     'No auto-enable, run, schedule activation, or secret restoration is happening.',
   ].join(' ');
 }
@@ -1798,6 +2061,17 @@ function showImportPreviewDialog(
     chainedTriggerLabel.appendChild(chainedTriggerCheckbox);
     chainedTriggerLabel.appendChild(chainedTriggerText);
     safeguardBox.appendChild(chainedTriggerLabel);
+
+    const chainedTriggerReceipt = doc.createElement('div');
+    chainedTriggerReceipt.setAttribute('role', 'status');
+    chainedTriggerReceipt.setAttribute('aria-live', 'polite');
+    chainedTriggerReceipt.setAttribute('data-personal-ai-jira-import-chaining-choice-receipt', 'true');
+    chainedTriggerReceipt.style.cssText = `
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #EBECF0;
+    `;
+    safeguardBox.appendChild(chainedTriggerReceipt);
     dialog.appendChild(safeguardBox);
 
     const highRiskReviewBox = doc.createElement('div');
@@ -1953,6 +2227,26 @@ function showImportPreviewDialog(
           'The source rule does not allow other automation rules to trigger it.',
           '源规则不允许其它 automation rule 触发它。',
         );
+      chainedTriggerReceipt.textContent = '';
+      appendInfoRow(
+        doc,
+        chainedTriggerReceipt,
+        jiraImportText('Rule chaining choice', '规则链式触发选择'),
+        sourceAllowsChainedTrigger
+          ? (preventChainedTrigger
+            ? jiraImportText(
+              'Current preview will block rule chaining in the imported DISABLED copy. Toggling only recalculates the preview, review packet, and create payload; no Jira create request is sent until Import disabled copy.',
+              '当前预览会在导入的 DISABLED 副本中阻止链式触发。切换只会重算预览、复核包和 create payload；点击导入禁用副本前不会发送 Jira create request。',
+            )
+            : jiraImportText(
+              'Current preview preserves source rule chaining; after you later enable this disabled copy in Jira, other automation rules may trigger it. Toggling only recalculates the preview, review packet, and create payload.',
+              '当前预览会保留源规则链式触发；以后你在 Jira 中启用这个禁用副本后，其它 automation rule 可能触发它。切换只会重算预览、复核包和 create payload。',
+            ))
+          : jiraImportText(
+            'Source rule chaining is disabled. The imported copy keeps it disabled; no Jira create request is sent until Import disabled copy.',
+            '源规则未开启链式触发；导入副本也会保持禁用。点击导入禁用副本前不会发送 Jira create request。',
+          ),
+      );
       highRiskReviewBox.style.display = highRiskCount > 0 ? 'block' : 'none';
       highRiskAcknowledgementText.textContent = highRiskCount > 0
         ? formatHighRiskReviewDetail(reviewChecklist, enablementPlan)
@@ -2025,6 +2319,7 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, jiraImportText('Secrets', 'Secrets'), formatReviewSignalValue(summary.secretReferenceCount, reviewSignals.secretReferences));
       appendInfoRow(doc, details, jiraImportText('Secret re-entry map', 'Secret 重录图'), formatJiraImportSecretSummary(secretReentrySlots));
       appendInfoRow(doc, details, jiraImportText('Credential restore gate', '凭据恢复门控'), formatJiraImportCredentialRestoreGateSummary(secretReentrySlots));
+      appendInfoRow(doc, details, jiraImportText('Credential re-entry queue', '凭据重录队列'), formatJiraImportSecretReentryQueue(secretReentrySlots, 2));
       appendInfoRow(doc, details, 'JQL / filters', formatReviewSignalValue(summary.jqlReferenceCount, reviewSignals.jqlReferences));
       appendInfoRow(doc, details, jiraImportText('Hard-coded URLs', '硬编码 URL'), formatReviewSignalValue(summary.hardcodedUrlCount, reviewSignals.hardcodedUrls));
       appendInfoRow(doc, details, jiraImportText('Custom fields', 'Custom field'), formatReviewSignalValue(summary.customFieldReferenceCount, reviewSignals.customFieldReferences));
@@ -2182,11 +2477,13 @@ function showImportPreviewDialog(
 
 // 处理文件导入
 function handleFileImport(file: File, projectContext: JiraAutomationProjectContext, doc: Document): void {
+  clearJiraAutomationImportTransientMessages(doc);
+
   if (!isJiraAutomationImportFileSizeAllowed(file.size)) {
     showErrorMessage(jiraImportText(
       `Import failed: JSON file must be ${JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES / 1024 / 1024}MB or smaller`,
       `导入失败：JSON 文件必须小于等于 ${JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES / 1024 / 1024}MB`,
-    ));
+    ), { doc });
     return;
   }
 
@@ -2194,6 +2491,7 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
   const reader = new FileReader();
   
   reader.onload = async (e) => {
+    let clearPendingCreateReceipt: (() => void) | null = null;
     try {
       const content = e.target?.result as string;
       const exportedData = parseJiraAutomationExport(JSON.parse(content));
@@ -2235,63 +2533,71 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
         state: convertedRule.state,
         canOtherRuleTrigger: convertedRule.canOtherRuleTrigger,
       });
-      showInfoMessage(buildCreateRequestPendingReceipt(convertedRule.name, projectContext, convertedRule));
+      clearPendingCreateReceipt = showInfoMessage(
+        buildCreateRequestPendingReceipt(convertedRule.name, projectContext, convertedRule),
+        {
+          durationMs: 0,
+          dataAttribute: 'data-personal-ai-jira-import-pending-receipt',
+        },
+      );
 
       // 调用API创建rule
       const result = await createAutomationRule(convertedRule, projectContext.projectId);
       console.log('Rule created successfully:', result);
-      
-      showSuccessMessage(buildPostImportSuccessReceipt(
-        convertedRule.name,
-        projectContext,
-        exportedData.cloud,
-        importSummary,
-        importSecretReentrySlots,
-        importEnablementPlan,
-        nameCheck,
-      ));
+      clearPendingCreateReceipt?.();
+      clearPendingCreateReceipt = null;
       
       // 跳转到导入后的automation脚本页面
       if (result && result.id) {
         const ruleUrl = `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${encodeURIComponent(projectContext.projectKey)}#/rule/${encodeURIComponent(String(result.id))}`;
         console.log('Navigating to rule page:', ruleUrl);
-        
-        setTimeout(() => {
-          console.log('Storing navigation URL and refreshing iframe:', ruleUrl);
-          
-          // 将跳转URL存储到父窗口的属性中
-          if (window.top) {
-            try {
-              (window.top as any).__PERSONAL_AI_PENDING_NAVIGATION__ = ruleUrl;
-              console.log('Stored navigation URL in parent window:', ruleUrl);
-            } catch (error) {
-              console.error('Failed to store navigation URL in parent window:', error);
-            }
-          }
-          
-          // 刷新当前iframe页面
-          window.location.reload();
-        }, JIRA_AUTOMATION_IMPORT_POST_SUCCESS_NAVIGATION_DELAY_MS);
+        showJiraAutomationImportSuccessReceipt(
+          doc,
+          buildPostImportSuccessReceipt(
+            convertedRule.name,
+            projectContext,
+            exportedData.cloud,
+            importSummary,
+            importSecretReentrySlots,
+            importEnablementPlan,
+            nameCheck,
+          ),
+          { ruleUrl },
+        );
       } else {
         console.warn('Rule ID not found in response, falling back to page refresh');
-        setTimeout(() => {
-          window.location.reload();
-        }, JIRA_AUTOMATION_IMPORT_POST_SUCCESS_NAVIGATION_DELAY_MS);
+        showJiraAutomationImportSuccessReceipt(
+          doc,
+          buildPostImportSuccessReceipt(
+            convertedRule.name,
+            projectContext,
+            exportedData.cloud,
+            importSummary,
+            importSecretReentrySlots,
+            importEnablementPlan,
+            nameCheck,
+          ),
+          { fallbackReload: true },
+        );
       }
       
     } catch (error) {
       clearPreflightReceipt();
+      clearPendingCreateReceipt?.();
       const errorMessage = redactJiraAutomationImportErrorText(
         error instanceof Error ? error.message : 'Unknown error occurred',
       );
       console.error('Error importing rule:', errorMessage);
-      showErrorMessage(buildImportFailureReceipt(errorMessage));
+      showErrorMessage(
+        buildImportFailureReceipt(errorMessage),
+        { dataAttribute: 'data-personal-ai-jira-import-error', doc },
+      );
     }
   };
   
   reader.onerror = () => {
     clearPreflightReceipt();
-    showErrorMessage(jiraImportText('Error reading file', '读取文件失败'));
+    showErrorMessage(jiraImportText('Error reading file', '读取文件失败'), { doc });
   };
   
   reader.readAsText(file);
@@ -2411,13 +2717,9 @@ function createImportButtonElement(projectContext: JiraAutomationProjectContext,
   importButton.textContent = jiraImportText('Import rule', '导入规则');
   importButton.id = 'import-rule-button';
   importButton.setAttribute('data-project-key', projectContext.projectKey);
-  importButton.setAttribute(
-    'aria-label',
-    jiraImportText(
-      `Import a disabled Jira Automation rule into ${projectContext.projectKey}`,
-      `将 Jira Automation 规则作为禁用副本导入到 ${projectContext.projectKey}`,
-    ),
-  );
+  const entryBoundary = buildJiraImportEntryButtonBoundary(projectContext.projectKey);
+  importButton.title = entryBoundary;
+  importButton.setAttribute('aria-label', entryBoundary);
   importButton.style.cssText = `
     margin-left: 8px;
     padding: 8px 16px;

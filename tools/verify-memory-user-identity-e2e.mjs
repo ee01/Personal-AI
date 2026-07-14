@@ -23,6 +23,14 @@ let currentIdentity = {
   identitySource: 'header',
   storageKey: 'data/users/owner.alpha/memory.db',
   fallbackToDefault: false,
+  writeBoundary: {
+    mode: 'explicit_read_write',
+    canRead: true,
+    canWrite: true,
+    blockedOperations: [],
+    reason: 'explicit_x_user_id',
+    recoveryAction: 'none',
+  },
 };
 const statsUserHeaders = [];
 
@@ -45,6 +53,19 @@ async function waitForCondition(predicate, message, timeoutMs = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.fail(message);
+}
+
+async function assertControlBoundary(locator, expectedPieces, label) {
+  const title = await locator.getAttribute('title');
+  const ariaLabel = await locator.getAttribute('aria-label');
+  assert.ok(title, `${label} should expose a title boundary`);
+  assert.equal(ariaLabel, title, `${label} aria-label should match title`);
+  for (const piece of expectedPieces) {
+    assert.ok(
+      title.includes(piece),
+      `${label} boundary should include "${piece}", got: ${title}`,
+    );
+  }
 }
 
 function statsFixture() {
@@ -143,6 +164,12 @@ try {
     .getByText('读写、备份与恢复只作用于这个 per-user SQLite 空间。')
     .waitFor({ timeout: 10000 });
   await page
+    .locator('.memory-user-write-boundary', {
+      hasText:
+        '写入边界: 读写、备份与恢复只限 owner.alpha；不会落到 default 或其他用户空间。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page
     .getByText(/身份快照 .* 来自只读 \/stats；刷新只重新检查身份边界。/)
     .waitFor({ timeout: 10000 });
   await page
@@ -158,6 +185,12 @@ try {
       'Today Mission 和顶部统计只读取这个 per-user SQLite 空间；不会迁移、导入、恢复或写回其他用户空间。',
     )
     .waitFor({ timeout: 10000 });
+  await page
+    .locator('.stats-identity-write-boundary', {
+      hasText:
+        '写入边界: 读写、备份与恢复只限 owner.alpha；不会落到 default 或其他用户空间。',
+    })
+    .waitFor({ timeout: 10000 });
   assert.equal(
     await page.locator('.memory-user-status.warning').count(),
     0,
@@ -167,8 +200,32 @@ try {
     statsUserHeaders.includes('owner.alpha'),
     'explicit identity should send X-User-Id to stats',
   );
+  const explicitRefreshButton = page
+    .locator('.memory-user-actions .memory-user-action')
+    .filter({ hasText: '刷新身份快照' });
+  await assertControlBoundary(
+    explicitRefreshButton,
+    [
+      '只重新读取 owner.alpha 的只读 /stats 身份快照',
+      '不会写入、导入、恢复、迁移记忆',
+      '不会切换到 default 或其他用户空间',
+    ],
+    'explicit refresh identity button',
+  );
+  const explicitSettingsButton = page
+    .locator('.memory-user-actions .memory-user-action')
+    .filter({ hasText: '打开设置' });
+  await assertControlBoundary(
+    explicitSettingsButton,
+    [
+      '只打开 Options 查看或调整 Memory Service 身份配置',
+      '不会迁移 owner.alpha 数据',
+      '写入、导入、恢复或落到 default',
+    ],
+    'explicit open settings button',
+  );
   const explicitStatsCount = statsUserHeaders.length;
-  await page.getByRole('button', { name: '刷新身份快照' }).click();
+  await explicitRefreshButton.click();
   await waitForCondition(
     () => statsUserHeaders.length > explicitStatsCount,
     'refreshing explicit identity should request stats again',
@@ -183,6 +240,14 @@ try {
     identitySource: 'default_fallback',
     storageKey: 'data/users/default/memory.db',
     fallbackToDefault: true,
+    writeBoundary: {
+      mode: 'default_read_only_fallback',
+      canRead: true,
+      canWrite: false,
+      blockedOperations: ['write', 'import', 'restore', 'profile_update'],
+      reason: 'missing_or_blank_x_user_id',
+      recoveryAction: 'restore_userinfo_username_or_set_user_id',
+    },
   };
 
   await worker.evaluate(async () => {
@@ -211,6 +276,12 @@ try {
     .getByText('仅只读兼容回退；写入、导入、恢复会被拦截，直到身份恢复。')
     .waitFor({ timeout: 10000 });
   await page
+    .locator('.memory-user-write-boundary', {
+      hasText:
+        '写入边界: 写入、导入、恢复、画像更新 已拦截；恢复 userinfo.username 或在设置里配置 userId 后再试。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page
     .getByText('未解析到个人身份，正在使用 default 空间；写入会被拦截，直到身份恢复。')
     .waitFor({ timeout: 10000 });
   await page
@@ -227,6 +298,12 @@ try {
   await page
     .getByText('这是只读兼容快照；写入、导入和恢复仍会被拦截，直到身份恢复。')
     .waitFor({ timeout: 10000 });
+  await page
+    .locator('.stats-identity-write-boundary', {
+      hasText:
+        '写入边界: 写入、导入、恢复、画像更新已拦截；恢复 userinfo.username 或在设置里配置 userId 后再试。',
+    })
+    .waitFor({ timeout: 10000 });
   assert.equal(
     await page.locator('.memory-user-status.warning').count(),
     1,
@@ -236,8 +313,32 @@ try {
     statsUserHeaders.includes(null),
     'unresolved default identity should omit X-User-Id from stats',
   );
+  const fallbackRefreshButton = page
+    .locator('.memory-user-actions .memory-user-action')
+    .filter({ hasText: '刷新身份快照' });
+  await assertControlBoundary(
+    fallbackRefreshButton,
+    [
+      '只重新检查 default 的 default fallback 是否仍被拦截',
+      '不会写入、导入、恢复、迁移记忆',
+      '确认 default 数据归属或重试失败写入',
+    ],
+    'fallback refresh identity button',
+  );
+  const fallbackSettingsButton = page
+    .locator('.memory-user-actions .memory-user-action')
+    .filter({ hasText: '打开设置' });
+  await assertControlBoundary(
+    fallbackSettingsButton,
+    [
+      '只打开 Options 以恢复登录、userinfo.username 或 userId 配置',
+      '不会直接修复 default fallback',
+      '迁移 default 数据、导入、恢复或重试写入',
+    ],
+    'fallback open settings button',
+  );
   const fallbackStatsCount = statsUserHeaders.length;
-  await page.getByRole('button', { name: '刷新身份快照' }).click();
+  await fallbackRefreshButton.click();
   await waitForCondition(
     () => statsUserHeaders.length > fallbackStatsCount,
     'refreshing fallback identity should request stats again without X-User-Id',
@@ -249,7 +350,7 @@ try {
   );
 
   const settingsPagePromise = context.waitForEvent('page');
-  await page.getByRole('button', { name: '打开设置' }).click();
+  await fallbackSettingsButton.click();
   const settingsPage = await settingsPagePromise;
   await settingsPage.waitForLoadState('domcontentloaded');
   assert.ok(

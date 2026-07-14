@@ -2580,6 +2580,8 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                       followUpActionCount: { type: 'number' },
                       missingInfoCount: { type: 'number' },
                       stale: { type: 'boolean' },
+                      lastVerifiedAt: { type: 'number' },
+                      staleAfter: { type: 'number' },
                     },
                   },
                   authority: {

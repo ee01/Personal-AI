@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-06-29_
+_最后更新: 2026-07-13_
 
 ## 是什么
 
@@ -112,6 +112,8 @@ Video Home 写入 Meeting Pilot handoff 时，回执还要说明这是本机上�
 
 用户点击刷新会前准备后，Video Home 会显示 `刷新会前准备回执`：它说明本次本机会议同步、Today Pilot backfill 的准备/跳过/失败数量，以及最终是读取预生成缓存、生成新准备、使用规则 fallback 还是暂无可用准备。这个回执只代表本地展示和 Meeting Pilot handoff 缓存更新，不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统。
 
+刷新按钮本身也要在 hover / 读屏里说明：点击会重新读取本机会议列表、请求 Today Pilot 为当天会议补齐预生成准备，再读取缓存并更新本机 Meeting Pilot handoff；读取或刷新中不会重复触发。证据来源链接点击前说明只打开 Memory Exploring 只读复核页或新标签来源复核，不会另行生成会前准备、更新 handoff、加入会议、录音、发送消息、创建任务、审批或写回来源系统。
+
 #### 2.1 Storyline 生成提示
 
 部分会议不是只需要会前摘要，而是可能需要用户准备一段可讲述材料，例如分享、汇报、复盘、培训、workshop、项目 review 或对外解释。Today Pilot 在生成 meeting prep 的同一轮 LLM 判断里附带产出 typed `storylineOpportunity`，用于决定是否在会前准备卡片里展示 `生成故事线草稿` 按钮。
@@ -144,7 +146,7 @@ Handoff 是低打扰的本地缓存，不是全局状态覆盖。Video Home 会�
 
 写入 handoff 时，Today Pilot 会从会前准备里的 action cue、建议问题、摘要或 brief cue 中提炼一条短的 `本场关注`。这条不是用户新输入的目标，也不是自动授权；它只是把“这场会最该确认什么 / 成功条件是什么”随 evidence 和 cue cards 一起带进 Meeting Pilot，避免会中面板只展示资料列表却没有会议意图。
 
-Meeting Pilot 读到 handoff 后会显示 `Handoff 匹配回执`，说明本次是 Meeting ID 精确命中、标题 + 时间窗口兜底，还是标题关键词弱兜底，并展示本机缓存年龄和剩余有效期。这个回执只解释本机 handoff 如何被选中，不会加入会议、开启录音、发消息、创建或完成行动项，也不会写回日历或外部系统。
+Meeting Pilot 读到 handoff 后会显示 `Handoff 匹配回执`，说明本次是 Meeting ID 精确命中、标题 + 时间窗口兜底，还是标题关键词弱兜底，并展示本机缓存年龄和剩余有效期。已经打开的 Meeting Pilot side panel 会同时监听单条 handoff 和候选集合刷新；如果 Video Home 刚刷新了同一会议的会前准备，side panel 会重新选择最新匹配项，而不是继续展示旧候选。这个回执只解释本机 handoff 如何被选中，不会加入会议、开启录音、发消息、创建或完成行动项，也不会写回日历或外部系统。
 
 ### 3.1 Rehearsal 预演提示
 
@@ -171,10 +173,11 @@ Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示
 - popup 折叠态同样展示 `你要做` 和 `为什么出现` 两条信息，避免只看到标题或优先级。
 - popup 折叠态还展示简短证据数和信心值，帮助用户判断是否值得打开详情。
 - popup 标题下方展示 `筛选口径`：本次显示几张 / 总共几张 mission、扫描信号数、候选数、入选证据数、候选未入选数、前置降噪数、提醒预算使用量，以及“Top 3 快照，不会自动执行”的边界。这个回执还展示 `快照基准`：本次是服务端新生成还是读取已有 brief、brief 生成时间/相对年龄和 ready/stale/draft 状态，并说明 popup 只读取 Today Pilot brief，不会重新扫描来源、写反馈、发送消息或执行动作。这样用户不用打开首页也能知道 popup 不是所有同步内容、不是执行授权，也不是没有新鲜度边界的实时流。
+- 当 Top 3 之外还有可见 mission，popup 在筛选回执旁展示 `查看全部 N`，只打开 Today Pilot 首页查看完整可见 brief；不会刷新、写反馈、发送消息或执行动作。
 - popup 可直接把 card 标记完成、稍后 6 小时或复制 context pack；提交 `完成` / `稍后` 后先显示 `正在提交反馈` 回执，原 card 保持可见并锁住反馈按钮，等 Memory Service 确认后才刷新 Top 3。成功回执必须说明这只更新 Today Pilot 展示/排序，不代表来源任务完成、消息已读、排程变更或外部系统同步；即使最后一张 card 被移除后列表变空，成功回执也要保留可见。反馈失败时原卡仍显示，并说明尚未写入 Today Pilot、也没有修改来源系统。
 - 初次 API 不可用时显示 degraded empty state，不回退假数据；如果用户在已有 Top 3 后手动刷新失败，popup 会保留上次快照并把首屏回执改成 `刷新失败 · 仍显示上次 Top 3 快照`，说明还没确认当前 Memory Service 最新状态，也没有写反馈、发送消息或执行动作。
 
-首页顶部会展示一条轻量 `筛选口径`：原始信号总量、进入候选池的数量、当前可见首页 mission 的证据数量、进入候选池但没入选首页的数量、以及前置规则直接降噪的数量。前置降噪会附带来源拆分，例如 `消息 2、预演 1`，让用户能判断今天主要是消息噪声、会议噪声、系统提醒还是预演提示被挡掉，而不是只看到一个不可解释的总数。这个口径会跟随 `完成`、`稍后 6 小时`、`不再提醒同类`、动作源完成和本机隐藏卡片一起更新；用户不用展开每张卡，也能知道 Today Pilot 现在还剩多少真实可见事项，并区分是候选排序没选上，还是低行动/重复/旧信号一开始就没进候选池。只要本轮写入过 Today Pilot 展示/排序反馈，筛选摘要旁会直接标明这是 `反馈后的可见快照`：顶部数量只代表仍可见 mission，不代表来源任务完成、消息已读、排程变更或外部系统已同步。
+首页顶部会展示一条轻量 `筛选口径`：原始信号总量、进入候选池的数量、当前可见首页 mission 的证据数量、进入候选池但没入选首页的数量、以及前置规则直接降噪的数量。前置降噪会附带来源拆分，例如 `消息 2、预演 1`，让用户能判断今天主要是消息噪声、会议噪声、系统提醒还是预演提示被挡掉，而不是只看到一个不可解释的总数。筛选摘要下方还有 `来源分布` 回执，按消息、日历、通知、动作、反思、预演、技能、关系等来源桶展示原始、候选、当前可见入选、候选未进入当前可见和前置降噪数量；如果用户刚在本页把卡片标记 `完成`、`稍后 6 小时` 或 `不再提醒同类`，回执还会显示本页已隐藏入选证据，说明这是点击快照，不代表来源任务完成、证据删除或外部系统已同步。它只解释当前可见 brief，不会重新排序、展开隐藏内容、写反馈、标记提醒、发送消息或执行动作。这个口径会跟随 `完成`、`稍后 6 小时`、`不再提醒同类`、动作源完成和本机隐藏卡片一起更新；用户不用展开每张卡，也能知道 Today Pilot 现在还剩多少真实可见事项，并区分是候选排序没选上、刚被本页反馈隐藏，还是低行动/重复/旧信号一开始就没进候选池。筛选摘要还会显示 `首页快照基准`：本次是读取已有 brief 还是服务端新生成、生成时间/相对年龄、ready/stale/draft/archived 状态，以及这里只解释当前可见 Today Pilot brief，不会重新扫描来源、写反馈、发送消息或执行动作；如果服务端因为旧 brief 过期而重生成，会把“旧 brief 已过新鲜窗口”和当前已刷新状态分开说清。首页和 popup 的刷新按钮 hover / 读屏文案也会说明：刷新只读取或重新生成当前用户的派生 brief、排序、来源分布、前置降噪和补课/统计快照，不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。只要本轮写入过 Today Pilot 展示/排序反馈，筛选摘要旁会直接标明这是 `反馈后的可见快照`：顶部数量只代表仍可见 mission，不代表来源任务完成、消息已读、排程变更或外部系统已同步。
 
 首页 API 不可用时必须显示 degraded 状态和重试入口，不能把请求失败展示成“今天没有高优先级事项”；Today Pilot 派生的处理计数也要清零，避免旧 brief 让用户误以为仍有当前待办。
 
@@ -188,7 +191,7 @@ P0/P1 阶段 context pack 只基于真实证据 deterministic 拼装，不自动
 
 Context Pack 是“给外部 AI 阅读的上下文”，不是执行授权。涉及 `delegate_openclaw` / `openclaw_delegation` 或 OpenClaw action 证据的执行确认卡，首页和 popup 都不显示 context pack 目标平台选择器，也不提供一键复制 context pack；popup 只给出进入处理页的动作，避免用户误以为 Codex / ChatGPT / Claude / 豆包会接手外部系统操作。
 
-如果 context pack 生成失败，首页不会把卡片摘要伪装成完整上下文包并提示复制成功；用户会看到失败提示并可以稍后重试。
+如果 context pack 生成失败，首页不会把卡片摘要或上一目标 AI 的旧正文伪装成完整上下文包并提示复制成功；展开区会留下 `上下文包未生成` 回执，说明没有可复制正文、没有写入剪贴板、没有外发/批准/执行/写回，用户可以稍后重试或打开详情核对证据。
 
 复制成功时，首页和 popup 会给出一条简短 receipt，说明目标 AI、证据条数、是否默认脱敏，以及正文是否因 token 预算被截断。被截断的 context pack 仍可复制，但 UI 和 API 都必须明确提示用户它不是完整证据全文。
 
@@ -204,7 +207,7 @@ Context Pack 正文必须明确写出交接边界：它是给外部 AI 阅读的
 
 - **预计算（Anticipation）** `core/AnticipationService.ts`（夜间巩固 Phase 6.5）：从**确定性信号**（未来 36h 的日历事件 + 未闭环 reflection thread 的主题，不猜意图）选出明天可能被问到的主题，每晚 ≤8 条，LLM 预答存 `anticipation_briefs` 表（migration `044`，`valid_until` 次日过期、`consumed_at` 消费一次）。**它是缓存不是事实层**——过期即作废。
 - **/ask prior 消费**：`/ask` 组装上下文时用 `parsedIntent` 的实体/项目名 + cleanedQuery 调 `AnticipationService.findPrior()`，命中就把预答注入 memory context（短路全链路检索+综合），并 mark consumed。无命中是零成本 no-op。
-- **高压后补课（Catch-up）** `core/CatchUpService.ts` + `GET /day-pilot/catch-up?sinceTs=|awayMinutes=`：对「离开窗口」内新摄入的记忆按 importance+salience 排序，返回 highPriority + waiting（含 `?`/`@`/「等你回」等待信号）的**只读** brief。Today Pilot 首页在 Mission 下方读取最近 90 分钟快照，只在读取中、失败或确实有新增信号时展示 `刚才错过了什么` 区块；回执必须说明它不会标已读、代回复、改排序或写回来源系统。若同一条新信号同时属于 `高优变化` 和 `等你回`，首页只展示一次，并在补课回执里说明重叠数量，避免用户把同一来源误读成两条待办。读取失败只显示补课不可用，不能被解释成“最近没有新事项”。forgotten/archive_only 记忆被排除。
+- **高压后补课（Catch-up）** `core/CatchUpService.ts` + `GET /day-pilot/catch-up?sinceTs=|awayMinutes=`：对「离开窗口」内新摄入的记忆按 importance+salience 排序，返回 highPriority + waiting（含 `?`/`@`/「等你回」等待信号）的**只读** brief。Today Pilot 首页在 Mission 下方读取最近 90 分钟快照，只在读取中、失败或确实有新增信号时展示 `刚才错过了什么` 区块；回执必须说明它不会标已读、代回复、改排序或写回来源系统。若同一条新信号同时属于 `高优变化` 和 `等你回`，首页只展示一次，并在补课回执里说明重叠数量，避免用户把同一来源误读成两条待办。每条补课 item 的 hover / 读屏文案说明点击只是打开记忆搜索做来源复核，不会完成任务、回复消息、标已读或写回来源系统；搜索路由带 `source=today_pilot_catch_up` 作为本轮复核上下文。读取失败只显示补课不可用，不能被解释成“最近没有新事项”。forgotten/archive_only 记忆被排除。
 - **验证**：`anticipation.test.ts`（3：确定性主题收集、生成+findPrior 消费一次、过期不返回+清理）、`catchUp.test.ts`（2：窗口排序+等待识别、排除归档）。
 - **仍在推进**：晚间收尾（Day Close）brief 的 cron 档与 Today Pilot 收尾区块、guardrail 失败复盘蒸馏（Phase 6.6）、quick-ask 桌面卡片前端。
 
@@ -247,7 +250,7 @@ P0/P1 生成逻辑以 deterministic rules 为主，不依赖 LLM 聚类。当前
 3. 过滤低可操作性信号：heartbeat/fact follow-up 噪音、过期普通通知、无 follow-up 语义的关系雷达、被动 AI 工具新闻/发布说明、无法生成具体动作的聚类；stale Rehearsal 只有精确命中今天的人、会议、issue 或项目时才保留为弱提示。
 4. 对 mission 打分：urgency、open-loop pressure、user relevance、source importance、source diversity、evidence confidence、novelty、recurring noise、feedback fatigue、privacy risk、staleness。问号本身只是语言形态，不是 open-loop pressure；必须和具体行动词或阻塞语义一起出现。
 5. 生成 3-7 张首页 card。
-6. 把 sourceStats 和 attentionBudget 展示成可扫描的筛选摘要，区分原始总量、候选池、当前可见 mission 的证据、候选未入选和前置降噪；前置降噪按来源展示 top breakdown，首页和 popup 使用同一套 sourceStats 口径。反馈、snooze、mute、源 action 完成或本机隐藏后，selected 计数以当前返回/可见卡片重新计算，并在发生过本轮反馈后显示 `反馈后的可见快照` 边界，避免把可见数量变化误读成来源系统已处理。
+6. 把 sourceStats 和 attentionBudget 展示成可扫描的筛选摘要，区分原始总量、候选池、当前可见 mission 的证据、候选未进入当前可见和前置降噪；前置降噪按来源展示 top breakdown，首页和 popup 使用同一套 sourceStats 口径。首页额外展开最多 4 个有信号来源桶，展示每个来源的原始、候选、当前可见入选、候选未进入当前可见和前置降噪数量，折叠低信号来源并标明只读边界。首页还会把 API 返回的 `generated` / `stale`、brief `generatedAt` 和 `status` 合成 `首页快照基准`，说明当前数字来自新生成、已有 brief、旧 brief 过期后重生成或陈旧 brief，不把缓存切片伪装成实时全量扫描。刷新控件本身也标明这是派生快照读取/再生成，不是来源系统处理或外部执行。反馈、snooze、mute、源 action 完成或本机隐藏后，selected 计数以当前返回/可见卡片重新计算；本页刚隐藏的 selected evidence 会作为点击快照单独显示，并在发生过本轮反馈后显示 `反馈后的可见快照` 边界，避免把可见数量变化误读成来源系统已处理。
 7. 每张 card 展示自己的 `排序回执`，解释 attention lane、分数、证据/置信/隐私风险，以及为什么会打断、只留在首页或保持静默。
 8. 每张 card 提供 context pack，但只从真实证据 deterministic 拼装。
 
@@ -257,6 +260,8 @@ P0/P1 生成逻辑以 deterministic rules 为主，不依赖 LLM 聚类。当前
 - `later`：snooze 到期前不再显示；当前首页和 popup 按钮使用 6 小时稍后。后端会为缺少 `snoozeUntil` 的 `later` 请求补默认 6 小时，避免旧客户端让“稍后”立即失效。
 - `mute`：同类 source hash 静默。
 - `wrong/useful`：影响后续 rank penalty/boost。
+
+Mission 展开态的按钮区先显示 `操作前回执`：它说明 `完成` / `稍后 6 小时` / `不再提醒同类` 只会等待 Memory Service 写入 Today Pilot 展示/排序反馈，不会完成来源任务、标记消息已读、改日历或排程、删除证据、发送或执行外部动作；`有用` / `不准确` 只校准后续排序；`复制上下文包` 只写本机剪贴板；`打开详情` 只是导航。每个实际按钮也带 hover / 读屏边界，直接说明该按钮会写什么或只导航到哪里，避免用户离开回执区后把 `完成`、`稍后`、`不再提醒`、`复制上下文包` 或 OpenClaw 卡的 `从首页移除` 误读成来源系统操作。OpenClaw 外部执行卡还会单独说明 `从首页移除` 不是批准、拒绝、重试或执行。
 
 用户在首页点击 `完成`、`稍后 6 小时`、`不再提醒同类`、`有用` 或 `不准确` 后，页面会先留下 `正在提交反馈` 回执：Memory Service 确认前 mission 仍保留当前状态，反馈按钮临时锁定，避免把待写入误读成已经完成、静默或排序成功。确认成功后才显示 `Mission 反馈回执` 并移除/更新卡片。回执必须说明这次只写入 Today Pilot 的今日展示/排序反馈：`完成` 不等于来源任务、动作队列、决策、消息或外部系统已完成；`稍后` 不改来源排程、日历或动作执行时间；`不再提醒同类` 不删除原始记忆、证据或来源消息。反馈写入失败时卡片保持可见，并说明没有修改来源系统。
 

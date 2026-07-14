@@ -44,6 +44,25 @@
     </div>
 
     <div
+      v-if="!loading && actionLocatorReceipt"
+      class="queue-locator-receipt"
+      :class="actionLocatorReceipt.tone"
+      aria-label="动作定位请求回执"
+    >
+      <div>
+        <span class="panel-kicker">定位请求回执</span>
+        <strong>{{ actionLocatorReceipt.title }}</strong>
+      </div>
+      <p>{{ actionLocatorReceipt.body }}</p>
+      <div class="locator-facts">
+        <span
+          v-for="fact in actionLocatorReceipt.facts"
+          :key="fact"
+        >{{ fact }}</span>
+      </div>
+    </div>
+
+    <div
       v-if="!loading && attentionBreakdownReceipt"
       class="queue-attention-receipt"
       :class="attentionBreakdownReceipt.tone"
@@ -88,11 +107,38 @@
     <div v-else-if="actions.length === 0" class="empty-state">
       <p>{{ emptyStateTitle }}</p>
       <p class="empty-detail">{{ emptyStateDetail }}</p>
-      <button
-        v-if="hasUiFilters"
-        class="tiny-btn"
-        @click="resetFilters"
-      >清除状态/模式筛选</button>
+      <div
+        v-if="emptyFilterReceipt"
+        class="empty-filter-receipt"
+        aria-label="动作队列空筛选回执"
+      >
+        <div>
+          <span class="panel-kicker">筛选空结果回执</span>
+          <strong>{{ emptyFilterReceipt.title }}</strong>
+        </div>
+        <p>{{ emptyFilterReceipt.body }}</p>
+        <div class="empty-filter-facts">
+          <span
+            v-for="fact in emptyFilterReceipt.facts"
+            :key="fact"
+          >{{ fact }}</span>
+        </div>
+      </div>
+      <div
+        v-if="hasUiFilters || hasRouteFilters"
+        class="empty-actions"
+      >
+        <button
+          v-if="hasUiFilters"
+          class="tiny-btn"
+          @click="resetFilters"
+        >清除状态/模式筛选</button>
+        <router-link
+          v-if="hasRouteFilters"
+          class="tiny-btn"
+          to="/actions"
+        >查看全部动作</router-link>
+      </div>
     </div>
 
     <div v-else class="action-list">
@@ -299,6 +345,8 @@
             <span>transcript: {{ actionResultTranscriptPath(action) }}</span>
             <button
               class="tiny-btn"
+              :title="transcriptToggleBoundaryLabel(action)"
+              :aria-label="transcriptToggleBoundaryLabel(action)"
               @click="toggleActionTranscript(action)"
             >{{ transcriptVisible[action.id] ? '收起' : '展开' }}</button>
           </div>
@@ -363,6 +411,8 @@
             class="tiny-btn"
             :class="{ loading: isActionOperation(action.id, 'execute') }"
             :disabled="isActionBusy(action.id)"
+            :title="actionButtonBoundaryLabel(action, 'execute')"
+            :aria-label="actionButtonBoundaryLabel(action, 'execute')"
             @click="executeAction(action)"
           >{{ actionButtonLabel(action.id, 'execute', executeButtonLabel(action)) }}</button>
           <button
@@ -370,6 +420,8 @@
             class="tiny-btn"
             :class="{ loading: isActionOperation(action.id, 'retry') }"
             :disabled="isActionBusy(action.id)"
+            :title="actionButtonBoundaryLabel(action, 'retry')"
+            :aria-label="actionButtonBoundaryLabel(action, 'retry')"
             @click="retryAction(action)"
           >{{ actionButtonLabel(action.id, 'retry', '重试入队') }}</button>
           <button
@@ -377,6 +429,8 @@
             class="tiny-btn danger"
             :class="{ loading: isActionOperation(action.id, 'cancel') }"
             :disabled="isActionBusy(action.id)"
+            :title="actionButtonBoundaryLabel(action, 'cancel')"
+            :aria-label="actionButtonBoundaryLabel(action, 'cancel')"
             @click="cancelAction(action)"
           >{{ actionButtonLabel(action.id, 'cancel', '取消') }}</button>
         </div>
@@ -417,6 +471,12 @@ interface QueueGuidance {
   body: string;
   tone: QueueGuidanceTone;
 }
+interface ActionLocatorReceipt {
+  tone: QueueGuidanceTone;
+  title: string;
+  body: string;
+  facts: string[];
+}
 interface AttentionBreakdownRow {
   key: string;
   label: string;
@@ -429,6 +489,11 @@ interface AttentionBreakdownReceipt {
   body: string;
   tone: QueueGuidanceTone;
   rows: AttentionBreakdownRow[];
+  facts: string[];
+}
+interface EmptyFilterReceipt {
+  title: string;
+  body: string;
   facts: string[];
 }
 interface DelegationArtifactView {
@@ -650,6 +715,76 @@ const queueGuidance = computed<QueueGuidance | null>(() => {
     tone: 'success',
   };
 });
+const actionLocatorReceipt = computed<ActionLocatorReceipt | null>(() => {
+  const actionId = routeActionIdFilter.value;
+  if (!actionId) return null;
+
+  const compactId = compactReceiptText(actionId, 72);
+  const exactMatch = actions.value.find((action) => action.id === actionId);
+  const filterFacts = [
+    queueStatus.value !== 'all' ? `状态筛选：${queueStatus.value}` : '',
+    executionMode.value ? `模式筛选：${executionMode.value}` : '',
+    sourceKindFilter.value ? `来源类型：${sourceKindFilter.value}` : '',
+    sourceRefIdFilter.value ? `来源 ID：${compactReceiptText(sourceRefIdFilter.value, 48)}` : '',
+  ].filter(Boolean);
+
+  if (isShowingStaleSnapshot.value) {
+    return {
+      tone: 'warning',
+      title: exactMatch ? '定位结果来自上次成功快照' : '定位刷新失败，未确认当前结果',
+      body: exactMatch
+        ? `动作 ${compactId} 出现在上次成功读取的定位结果中；最近一次刷新失败，不能证明当前队列状态仍然一致。`
+        : `这次按动作 ID ${compactId} 定位时刷新失败；页面不会把读取失败解释成动作不存在或已经完成。`,
+      facts: [
+        '定位：服务端 actionId 查询',
+        '快照：上次成功读取',
+        '当前状态：未确认',
+        ...filterFacts,
+        '边界：不执行 / 不批准 / 不重试 / 不取消',
+      ],
+    };
+  }
+
+  if (loadError.value) {
+    return {
+      tone: 'danger',
+      title: '动作定位暂时无法读取',
+      body: `Memory Service 没有返回动作 ${compactId} 的定位结果；这不是动作不存在、已完成或已取消的确认。`,
+      facts: [
+        '定位：服务端 actionId 查询',
+        '结果：读取失败',
+        ...filterFacts,
+        '边界：只读失败回执',
+      ],
+    };
+  }
+
+  if (exactMatch) {
+    return {
+      tone: 'info',
+      title: '已按动作 ID 定位',
+      body: `Memory Service 已按动作 ID ${compactId} 返回目标动作；这不是从当前第一页列表里猜测出来的可见切片。`,
+      facts: [
+        '定位：服务端 actionId 查询',
+        `命中：${exactMatch.queueStatus}`,
+        ...filterFacts,
+        '边界：只读定位，不执行动作',
+      ],
+    };
+  }
+
+  return {
+    tone: 'warning',
+    title: '未找到这条动作',
+    body: `Memory Service 未返回动作 ${compactId}；可能已被其它筛选条件排除、已清理，或该链接不属于当前用户数据。`,
+    facts: [
+      '定位：服务端 actionId 查询',
+      '结果：0 条',
+      ...filterFacts,
+      '边界：不确认外部副作用',
+    ],
+  };
+});
 const attentionBreakdownReceipt = computed<AttentionBreakdownReceipt | null>(() => {
   if (actions.value.length === 0 || attentionActionCount.value === 0) return null;
 
@@ -699,12 +834,50 @@ const attentionBreakdownReceipt = computed<AttentionBreakdownReceipt | null>(() 
     ],
   };
 });
+const emptyFilterReceipt = computed<EmptyFilterReceipt | null>(() => {
+  if (loadError.value || actions.value.length > 0) return null;
+  if (!hasRouteFilters.value && !hasUiFilters.value) return null;
+
+  const facts = [
+    routeActionIdFilter.value
+      ? `动作 ID：${compactReceiptText(routeActionIdFilter.value, 56)}`
+      : '',
+    sourceKindFilter.value ? `来源类型：${sourceKindFilter.value}` : '',
+    sourceRefIdFilter.value
+      ? `来源 ID：${compactReceiptText(sourceRefIdFilter.value, 48)}`
+      : '',
+    queueStatus.value !== 'all' ? `状态：${queueStatus.value}` : '',
+    executionMode.value ? `模式：${executionMode.value}` : '',
+    '结果：0 条',
+    '边界：只读筛选，不执行 / 不批准 / 不重试 / 不取消',
+  ].filter(Boolean);
+
+  return {
+    title: hasRouteFilters.value
+      ? '当前深链筛选没有返回动作'
+      : '当前状态/模式筛选没有动作',
+    body: hasRouteFilters.value
+      ? '这只说明当前 actionId、来源、状态或模式切片没有命中；不能据此判断动作已完成、已取消、外部副作用已发生或整个队列已清空。'
+      : '这只说明当前状态或模式切片没有命中；清除筛选后才能确认其它队列记录是否仍需要处理。',
+    facts: [
+      ...facts,
+      hasRouteFilters.value ? '恢复：查看全部动作' : '恢复：清除状态/模式筛选',
+    ],
+  };
+});
 const emptyStateTitle = computed(() =>
-  loadError.value ? '动作队列暂时无法读取' : '没有动作记录',
+  loadError.value
+    ? '动作队列暂时无法读取'
+    : hasRouteFilters.value || hasUiFilters.value
+    ? '当前筛选没有动作'
+    : '没有动作记录',
 );
 const emptyStateDetail = computed(() => {
   if (loadError.value) {
     return '请确认 Memory Service 可用后重试；页面不会把读取失败误当成队列已清空。';
+  }
+  if (hasRouteFilters.value) {
+    return '当前深链、来源、状态或执行模式没有命中。查看全部动作可以确认队列里是否还有其他记录。';
   }
   if (hasRouteFilters.value || hasUiFilters.value) {
     return '当前来源、动作 ID、状态或执行模式没有命中。清除筛选后可以确认队列里是否还有其他动作。';
@@ -742,6 +915,7 @@ async function loadActions(options: { silent?: boolean } = {}) {
   }
   try {
     const response = await client.getActions({
+      actionId: routeActionIdFilter.value || undefined,
       queueStatus: queueStatus.value,
       executionMode: executionMode.value || undefined,
       sourceKind: sourceKindFilter.value || undefined,
@@ -1019,6 +1193,66 @@ function actionButtonLabel(id: string, operation: ActionOperation, fallback: str
   if (operation === 'execute') return '执行中...';
   if (operation === 'retry') return '入队中...';
   return '取消中...';
+}
+
+function actionButtonBoundaryLabel(action: RuntimeAction, operation: ActionOperation): string {
+  if (isActionOperation(action.id, operation)) {
+    return pendingActionButtonBoundaryLabel(action, operation);
+  }
+  if (operation === 'execute') return executeButtonBoundaryLabel(action);
+  if (operation === 'retry') return retryButtonBoundaryLabel(action);
+  return cancelButtonBoundaryLabel(action);
+}
+
+function pendingActionButtonBoundaryLabel(action: RuntimeAction, operation: ActionOperation): string {
+  if (operation === 'execute') {
+    return action.requiresApproval && !action.approvedAt
+      ? '确认并执行正在提交：等待 Memory Service 确认批准和执行；当前卡片仍是上次队列快照。'
+      : '执行请求正在提交：等待 Memory Service 确认；当前卡片仍是上次队列快照，不代表动作已完成。';
+  }
+  if (operation === 'retry') {
+    return '重试入队正在提交：等待 Memory Service 确认；旧错误和队列状态尚未被新结果替换。';
+  }
+  return '取消正在提交：等待 Memory Service 确认；当前卡片仍是上次队列快照，不代表队列项已取消。';
+}
+
+function executeButtonBoundaryLabel(action: RuntimeAction): string {
+  if (action.requiresApproval && !action.approvedAt) {
+    return '确认并执行：先写入批准并提交执行请求；不会证明外部系统已完成，结果以队列状态、artifact 或 transcript 为准。';
+  }
+  if (isOpenClawDelegationAction(action)) {
+    return openClawDelegationMode(action) === 'write'
+      ? '执行：把 OpenClaw 写操作提交给 Memory Service；不会立即证明 Jira、Drive 或部署系统已完成。'
+      : '执行：把 OpenClaw 只读查询提交给 Memory Service；不会立即确认外部事实。';
+  }
+  switch (action.actionType) {
+    case 'notify_user':
+      return '执行：提交通知动作；送达仍以 Notification Center 或 provider 回执为准。';
+    case 'ask_external_user':
+      return '执行：交给 Outreach 引擎；不在本页确认消息已发送或外部人员已回复。';
+    case 'create_confirm_request':
+      return '执行：创建或更新决策中心请求；不替用户选择答案，也不执行后续外部动作。';
+    case 'update_truth_property':
+      return '执行：提交本地真值或画像写入；不外发、不跨平台同步、不删除原始证据。';
+    default:
+      return '执行：提交 Memory Service action runtime；完成、外部副作用和写入结果以后续队列状态或结果回执为准。';
+  }
+}
+
+function retryButtonBoundaryLabel(action: RuntimeAction): string {
+  if (isOpenClawDelegationAction(action)) {
+    return openClawDelegationMode(action) === 'write'
+      ? '重试入队：只把 OpenClaw 写操作重新放回队列；重试前请确认外部副作用是否已经发生。'
+      : '重试入队：只把 OpenClaw 只读查询重新放回队列；不代表外部事实已确认。';
+  }
+  return '重试入队：只把动作重新排队；不抹掉旧错误，也不代表通知、询问或本地写入已经重新执行。';
+}
+
+function cancelButtonBoundaryLabel(action: RuntimeAction): string {
+  if (isOpenClawDelegationAction(action)) {
+    return '取消：只取消未完成队列项；不会撤销可能已经发生的外部副作用，也不会删除反思证据或历史结果。';
+  }
+  return '取消：只取消未完成队列项；不会删除来源记忆、反思证据或已经产生的历史结果。';
 }
 
 function buildActionOperationError(
@@ -1471,6 +1705,11 @@ function openClawPreflightTitle(action: RuntimeAction): string {
       : '失败后先看错误和 transcript';
   }
   if (isActionRunning(action)) return '正在等待 OpenClaw 最终结果';
+  if (isAutoExecutable(action)) {
+    return mode === 'write'
+      ? '自动调度会委派外部写操作'
+      : '等待自动调度委派';
+  }
   if (mode === 'write') {
     return action.requiresApproval && !action.approvedAt
       ? '写操作会先停在人工确认'
@@ -1492,6 +1731,12 @@ function openClawPreflightDetail(action: RuntimeAction): string {
   if (isActionRunning(action)) {
     return '执行中会自动刷新；超过 OpenClaw 超时加 60 秒仍未回流时会转入 dead_letter，避免重复触发外部操作。';
   }
+  if (isAutoExecutable(action)) {
+    const trigger = action.scheduledAt
+      ? '到达预计时间后的下一次 Memory Service 调度扫描'
+      : '下一次 Memory Service 调度扫描';
+    return `当前页面只是读取队列快照；${trigger}才会把「${openClawTaskPreview(action)}」发送给 OpenClaw。查看这张卡、刷新列表或展开 transcript 都不会提前执行、批准写操作或确认外部系统已开始。`;
+  }
   return `将把「${openClawTaskPreview(action)}」发送给 OpenClaw；Memory Service 只消费最终 JSON 结果，中间步骤不写入反思证据链。`;
 }
 
@@ -1510,9 +1755,26 @@ function openClawRecoveryFact(action: RuntimeAction): string {
       ? '恢复：先查外部结果再重试'
       : '恢复：查看错误后可重试入队';
   }
+  if (isAutoExecutable(action)) {
+    return action.scheduledAt
+      ? '触发：到期后等调度扫描'
+      : '触发：下一次调度扫描';
+  }
   return action.executionMode === 'auto'
     ? '恢复：失败会派生通知或确认请求'
     : '恢复：手动执行后保留结果回执';
+}
+
+function openClawTriggerFact(action: RuntimeAction): string {
+  if (isAutoExecutable(action)) {
+    return action.scheduledAt
+      ? '触发：到期后的后台调度'
+      : '触发：后台调度，不由本页点击';
+  }
+  if (action.queueStatus !== 'queued') return '';
+  if (action.requiresApproval && !action.approvedAt) return '触发：先人工确认';
+  if (action.executionMode === 'manual') return '触发：手动执行按钮';
+  return '';
 }
 
 function openClawFollowUpFact(action: RuntimeAction): string {
@@ -1653,6 +1915,7 @@ function openClawPreflightFacts(action: RuntimeAction): string[] {
   return [
     `范围：${openClawTargetSystem(action) || '由 OpenClaw 根据任务判断'}`,
     `模式：${openClawDelegationMode(action) === 'write' ? '写操作' : '只读查询'}`,
+    openClawTriggerFact(action),
     openClawApprovalFact(action),
     openClawRecoveryFact(action),
     openClawFollowUpFact(action),
@@ -1789,6 +2052,28 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   return action.result && typeof action.result.transcriptPath === 'string'
     ? action.result.transcriptPath
     : '';
+}
+
+function transcriptToggleBoundaryLabel(action: RuntimeAction): string {
+  const transcriptPath = actionResultTranscriptPath(action);
+  const pathLabel = transcriptPath
+    ? compactReceiptText(transcriptPath, 72)
+    : '未记录 transcript 路径';
+  const isExpanded = Boolean(transcriptVisible.value[action.id]);
+
+  if (isExpanded) {
+    return `收起 transcript：只隐藏当前已读取的审计文本；不会删除 ${pathLabel}、重跑 OpenClaw、批准、重试、取消、写 action_result 或确认外部事实。`;
+  }
+
+  if (isOpenClawDelegationAction(action)) {
+    const modeLabel = openClawDelegationMode(action) === 'write'
+      ? '写操作'
+      : '只读查询';
+    const targetLabel = openClawTargetSystem(action) || '由 OpenClaw 判断';
+    return `展开 OpenClaw transcript：只读取本地 delegations 审计文件 ${pathLabel}；模式 ${modeLabel}，目标 ${targetLabel}；不会重跑 OpenClaw、批准、重试、取消、写 action_result、确认外部事实或改动 Jira/Drive/部署。`;
+  }
+
+  return `展开 transcript：只读取本地审计文件 ${pathLabel}；不会执行、批准、重试、取消、写入结果或触发外部系统。`;
 }
 
 function isOpenClawDelegationAction(action: RuntimeAction): boolean {
@@ -2171,6 +2456,53 @@ function transcriptFilename(transcriptPath: string): string | null {
 .queue-guidance.danger {
   border-color: rgba(248, 113, 113, 0.32);
   color: #fecaca;
+}
+
+.queue-locator-receipt {
+  margin-bottom: 1rem;
+  padding: 0.86rem 0.96rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.22);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  color: #dbeafe;
+  line-height: 1.5;
+}
+
+.queue-locator-receipt.warning {
+  background: rgba(120, 53, 15, 0.16);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fde68a;
+}
+
+.queue-locator-receipt.danger {
+  background: rgba(127, 29, 29, 0.18);
+  border-color: rgba(248, 113, 113, 0.32);
+  color: #fecaca;
+}
+
+.queue-locator-receipt strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.queue-locator-receipt p {
+  margin: 0.45rem 0 0;
+}
+
+.locator-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.locator-facts span {
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+  background: rgba(15, 23, 42, 0.52);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+  font-size: 0.72rem;
 }
 
 .queue-attention-receipt {
@@ -3014,6 +3346,54 @@ function transcriptFilename(transcriptPath: string): string | null {
   margin: 0.45rem auto 1rem;
   color: #cbd5e1;
   line-height: 1.6;
+}
+
+.empty-filter-receipt {
+  max-width: 42rem;
+  margin: 1rem auto;
+  padding: 0.85rem 0.95rem;
+  text-align: left;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dbeafe;
+  line-height: 1.5;
+}
+
+.empty-filter-receipt strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.empty-filter-receipt p {
+  margin: 0.45rem 0 0;
+}
+
+.empty-filter-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.empty-filter-facts span {
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+  background: rgba(2, 6, 23, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.65rem;
+}
+
+.empty-actions .tiny-btn {
+  text-decoration: none;
 }
 
 .loading-spinner {

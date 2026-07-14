@@ -6,20 +6,27 @@ import {
   type EvidenceWatchRunState,
 } from '../core/EvidenceWatchContractService.js';
 
-function normalizeState(value?: string): EvidenceWatchState | 'all' | undefined {
-  if (!value || value === 'all') return value === 'all' ? 'all' : undefined;
+const EVIDENCE_WATCH_STATES: EvidenceWatchState[] = [
+  'active',
+  'quiet_no_change',
+  'due',
+  'authority_changed',
+  'source_blocked',
+  'paused',
+  'archived',
+];
+
+function normalizeState(value?: string): {
+  state: EvidenceWatchState | 'all';
+  invalidState?: string;
+} {
+  if (!value || value === 'all') return { state: 'all' };
   if (
-    value === 'active' ||
-    value === 'quiet_no_change' ||
-    value === 'due' ||
-    value === 'authority_changed' ||
-    value === 'source_blocked' ||
-    value === 'paused' ||
-    value === 'archived'
+    EVIDENCE_WATCH_STATES.includes(value as EvidenceWatchState)
   ) {
-    return value;
+    return { state: value as EvidenceWatchState };
   }
-  return undefined;
+  return { state: 'all', invalidState: value };
 }
 
 function normalizeRunState(value?: string): EvidenceWatchRunState | undefined {
@@ -37,6 +44,12 @@ function normalizeRunState(value?: string): EvidenceWatchRunState | undefined {
   return undefined;
 }
 
+function parseBoundedLimit(value?: string): number {
+  const parsed = Number.parseInt(value ?? '20', 10);
+  if (!Number.isFinite(parsed)) return 20;
+  return Math.max(1, Math.min(parsed, 100));
+}
+
 export async function evidenceWatchContractRoutes(
   app: FastifyInstance,
 ): Promise<void> {
@@ -49,7 +62,21 @@ export async function evidenceWatchContractRoutes(
     };
   }>('/evidence-watch-contracts', async (request, reply) => {
     const service = new EvidenceWatchContractService(request.userContext.db);
-    const state = normalizeState(request.query.state) ?? 'all';
+    const { state, invalidState } = normalizeState(request.query.state);
+    if (invalidState) {
+      return reply.status(400).send({
+        error: 'Invalid evidence watch state filter',
+        receipt: {
+          label: '证据守望筛选已阻断',
+          detail:
+            `state=${invalidState} 不是支持的证据守望状态；` +
+            '本次未读取列表、未复核权威来源、未创建 action，也未修改 contract 状态。',
+          invalidState,
+          allowedStates: ['all', ...EVIDENCE_WATCH_STATES],
+          readOnly: true,
+        },
+      });
+    }
     const result = service.list({
       state,
       subjectKey: request.query.subjectKey,
@@ -70,6 +97,7 @@ export async function evidenceWatchContractRoutes(
     return reply.status(200).send({
       contract,
       receipt: service.toUiReceipt(contract),
+      readReceipt: service.buildDetailReadReceipt(contract),
     });
   });
 
@@ -82,12 +110,17 @@ export async function evidenceWatchContractRoutes(
     if (!contract) {
       return reply.status(404).send({ error: 'Evidence watch contract not found' });
     }
+    const limit = parseBoundedLimit(request.query.limit);
+    const items = service.listRuns(contract.id, limit);
     return reply.status(200).send({
       contractId: contract.id,
-      items: service.listRuns(
-        contract.id,
-        parseInt(request.query.limit ?? '20', 10) || 20,
-      ),
+      items,
+      limit,
+      receipt: service.buildRunHistoryReadReceipt({
+        contract,
+        returnedCount: items.length,
+        limit,
+      }),
     });
   });
 

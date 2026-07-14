@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-07-03
+最后更新: 2026-07-13
 
 ## 功能定位
 
@@ -267,6 +267,49 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 复制出来的本地诊断包同步携带 `traceSpanComposition`，用于排障或 eval 交接时快速判断这次 trace 是工具调用重、缺终止状态，还是有待确认/阻断/缺证问题。
 - 这个构成仍只是 Personal AI 本地 span 摘要；不是标准 OpenTelemetry / LangSmith / Langfuse 拓扑，也不会批准、恢复、重跑、发送通知、写入、删除或执行外部动作。
 
+2026-07-04 状态:
+
+- 待确认动作复制批准 key、审核包或重跑配置后，会保留 `当前审批复制回执`，说明剪贴板里是哪类本地文本、对应哪个本地 trace，以及复制不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作。
+- 如果页面 trace 变化，回执会转为 `旧审批复制回执`，提示重新复制后再用于审批；这仍不是持久 checkpoint，也不会自动恢复同一轮 run。
+
+2026-07-06 状态:
+
+- `Trace span 构成` 的 `问题 span` 项现在直接显示对应时间线步骤，并提供同页步骤定位按钮。
+- 复制出来的本地诊断包同步携带这些 `stepNumbers`，离开 Options 页面后也能知道问题 span 来自哪些步骤。
+- 点击问题 span 步骤只展开并聚焦当前页面时间线；不会批准、复制诊断包、恢复 run、重跑、发送通知、写入、删除或执行外部动作。
+
+2026-07-07 状态:
+
+- Options 演示 trace 已到达 `finish` / `stopped` / `max_actions_reached` 但结果摘要卡片尚未出现时，标题不再继续显示普通 `处理中...`；改为显示 `结果整理中...`。
+- 运行检查区新增 `结果整理中` 回执，说明终止步骤和状态快照已经出现、结果卡片仍在生成，以及这个整理状态不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作。
+- 本地诊断包在这一短暂状态下会携带 `resultHandoffReceipt`；运行仍未终止时不会生成该字段，结果卡片出现后该回执消失。
+
+2026-07-08 状态:
+
+- 待确认动作队列新增 `待确认队列口径` 回执，先说明当前 trace 有多少待审动作、来自哪些步骤、哪些工具还没有执行。
+- 该回执明确当前队列只是本页 trace 的临时审批快照，不是持久 checkpoint，也不会让本轮 Agent run 在后台继续暂停等待。
+- 复制 key、审核包或重跑配置仍只复制文本；批准需要用同一工具和同一参数重新运行，拒绝或修改参数时不能复用旧 key。
+- 本地诊断包同步携带 `approvalQueueReceipt`，离开 Options 页面后也能保留队列级别的非持久、无副作用审批口径。
+
+2026-07-09 状态:
+
+- `结果整理中` 回执现在会列出整理前仍未处理的待确认、工具失败、阻断和证据不足数量，避免用户把“等待结果卡片”误读成所有问题都已解决。
+- 同一回执新增 `终止步骤 #N` 定位按钮，点击后只展开并聚焦当前页面时间线里的终止步骤；不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作。
+- 本地诊断包同步保留 `resultHandoffReceipt.terminalStepNumber`、`unresolvedIssueSummary` 和 `inspectionRoute`，用于离开页面后的排障或 eval handoff。
+
+2026-07-10 状态:
+
+- `当前 trace 导航` 和 `Trace 复核路线` 的优先步骤按钮现在会直接显示复核理由，例如终止状态、待确认动作或工具证据问题，而不是只给步骤号。
+- 复制出的本地诊断包在 `navigationReceipt.stepRoutes` 中保留同一组步骤理由，便于页面外排障或 eval 知道为什么先看这些步骤。
+- 这仍只是本页 trace 的定位辅助；点击或复制不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作，也不是 OpenTelemetry / LangSmith / Langfuse 标准 trace route。
+
+2026-07-13 状态:
+
+- 待确认动作里的 `复制 key`、`复制审核包`、`复制重跑配置` 按钮现在都有按钮级 hover / 读屏边界，直接说明只复制本地文本，不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作。
+- 三个按钮的边界区分复制对象: 批准 key 是临时 key，审核包是当前待确认动作的工具/参数/审批上下文，重跑配置只包含 `approvedToolActionKeys` patch。
+- 行为保持轻量审批语义: 参数、上下文、工具策略或 trace 变化后仍需重新生成，当前 UI 仍不是持久 checkpoint 或自动恢复队列。
+- `当前 trace 导航` 与 `Trace 复核路线` 的步骤定位按钮现在在 hover / 读屏里同步展示复核理由和无副作用边界；点击仍只展开并聚焦本页时间线，不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -293,8 +336,12 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 复制诊断包的回执会继续跟随当前页面 trace 身份变化：旧剪贴板内容不会被静默当成当前 trace，用于排障或 eval 前需要重新复制当前诊断包。
 - 复制诊断包前会先显示 `诊断包复制预检`，让用户在点击按钮前确认这是本地快照、允许用途、不可导入标准平台和不会产生审批/恢复/外部副作用。
 - 诊断包已自带 `traceSpanComposition`，用于说明 root run、Agent steps、Tool calls、Terminal 和问题 span 的数量；它只是本地排障摘要，不是标准追踪拓扑或 exporter。
+- `Trace span 构成` 的问题项会携带问题步骤编号并支持同页定位；这只是定位辅助，不等于标准 trace viewer、checkpoint 或审批恢复能力。
+- `结果整理中` 只覆盖终止步骤已出现、结果摘要卡片仍未渲染的短窗口；它会显示终止步骤定位和未处理问题摘要，但不是继续执行中的 Agent，也不会改变待确认动作、诊断包、审批 key 或外部副作用状态。
+- `当前 trace 导航` / `Trace 复核路线` 的 `stepRoutes` 只说明为什么优先定位某个本页步骤；它不复制原始工具结果、工具参数或批准 key，也不是标准 trace viewer 的导航结构。
 - 待确认动作卡片已有审批前确认回执，但它仍只是本轮页面和审核包里的说明，不会真正持久暂停 run 或替用户做 approve/edit/reject。
 - 待确认动作卡片已有审批决策导览，但批准/拒绝/修改仍需要调用方在下一轮运行中处理；当前 UI 不会持久化暂停状态，也不会替用户执行决策。
+- 待确认队列口径只汇总当前页面 trace 里的待审动作；它不代表后台有一个可跨刷新、跨 service worker 生命周期恢复的审批队列。
 
 ## 建设性改进方向
 
@@ -321,10 +368,12 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 参考 LangSmith / Langfuse 的单次 trace/container 模型和 AgentTrace 的 runtime accountability 思路，复制诊断包时应继续保留快照时间、状态和非实时边界，避免把本地 JSON 误当成持续更新的 live trace。
 - 参考 2026 年 AgentTrace 和 AgentOps 论文，运行级 UI 应优先展示可处理的 accountability 路线：终止状态、审批悬而未决、工具证据缺口和本地诊断范围。
 - 参考 LangGraph / OpenAI Agents SDK / LangChain HITL 的可恢复审批模型，轻量审批 UI 在实现持久 checkpoint 之前，应把每个待确认动作的 pending 状态、未执行边界和复制非效果放在按钮前。
+- 参考 OpenAI Agents SDK / LangGraph / LangChain HITL 的 interrupt 和 RunState/checkpoint 模型，在真正可恢复审批能力落地前，队列级 UI 应持续标明当前待审列表只是本页 trace 快照，不是后台持久暂停队列。
 - 参考 LangSmith / Langfuse 的 trace 调试体验和 AgentTrace 的 accountability 思路，首屏复核路线应该直接给到问题步骤定位，减少用户从摘要到长时间线之间的二次查找成本。
 - 参考 LangSmith trace/run/span、Langfuse request lifecycle tracing、OpenTelemetry GenAI tool/agent 语义和 AGDebugger 的长流程历史点调试思路，诊断包复制后应持续暴露 trace 身份和快照新鲜度，而不是只显示瞬时“已复制”。
 - 参考 LangSmith / Langfuse 的 trace 容器模型、OpenTelemetry 的 agent/tool 语义和 AgentTrace 的 accountability 目标，复制前也应说明本地诊断包的用途和不支持用途，避免用户先复制后才发现它不是标准 exporter、审批凭据或可恢复 checkpoint。
 - 参考 OpenAI Agents SDK tracing、LangSmith / Langfuse 的层级 trace 和 AgentOps 对 agent artifacts 的分类，用户在复制前应先看到 trace span 构成，而不是靠手动数 JSON 判断 root/step/tool/decision 和问题 span 比例。
+- 参考 LangSmith / OpenAI Agents SDK tracing / AgentTrace 的问题定位导向，首屏步骤按钮应持续保留“为什么先看这一步”的 route reason；后续如果接标准 exporter，应把这些原因升级为结构化 event/span annotation，而不是只留中文 UI 文案。
 
 ## 外部参考
 
@@ -340,6 +389,9 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - [OpenTelemetry GenAI Agent Spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/): 将 agent、workflow 和 tool execution 作为 span 建模，可作为后续结构化 trace 字段参考。
 - [OpenTelemetry GenAI Attributes](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/): `execute_tool`、`invoke_agent` 等 operation 名称提醒本地字段要保留可计算的运行/工具语义，但敏感内容仍需过滤或截断。
 - [LangChain Human-in-the-loop middleware](https://docs.langchain.com/oss/python/langchain/human-in-the-loop): 支持按工具风险配置 interrupt/review 策略，并将待审 action request、review config 和 approve/edit/reject/respond 决策一起建模，适合作为审核包与后续恢复流参考。
+- [OpenAI Agents SDK Human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/): 把待审批工具调用作为 interruptions，配合 `RunState` 序列化、approve/reject 和 resume，适合作为后续持久审批恢复流参考。
+- [AI SDK Human-in-the-loop](https://ai-sdk.dev/cookbook/next/human-in-the-loop): 用 `needsApproval` 在工具调用和执行之间加审批闸口，适合作为按钮级审批边界和条件审批策略参考。
+- [Microsoft Agent Framework HITL](https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop): 把审批型工具建模为执行前的请求/暂停事件，适合作为“待确认”和“结果未落地”状态分层参考。
 - [AgentTrace](https://arxiv.org/abs/2602.10133): 讨论 agent observability 应覆盖运行、认知和上下文三类结构化 telemetry。
 - [AgentOps](https://arxiv.org/abs/2411.05285): 从 AgentOps 生命周期角度整理 observability 应追踪的工件和数据。
 - [AgentTrace Causal Graph](https://arxiv.org/abs/2603.14688): 用执行日志重建因果图来定位多 Agent 失败根因，提示 trace 应保留可计算的故障信号。
@@ -400,6 +452,12 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 
 2026-07-03 本轮 AppleScript 仍未列出 `Personal AI`，EventKit fallback 找到 `Personal AI` 列表和 4 个已完成历史条目；这些条目都与 Doubao / digest / test 反馈相关，和 Agent Thinking trace span 构成无关，因此没有开放 Reminder 项目需要纳入或标记完成。
 
+2026-07-07 本轮 AppleScript 仍未列出 `Personal AI`，EventKit fallback 找到 `Personal AI` 列表和 4 个已完成历史条目，0 个未完成项目；因此没有可纳入 Agent Thinking 分析编排或结果整理状态的开放 Reminder，也没有 Reminder 项目需要标记完成。
+
+2026-07-08 本轮 AppleScript 仍未列出 `Personal AI`，EventKit fallback 找到 `Personal AI` 列表和 4 个已完成历史条目，0 个未完成项目；因此没有可纳入 Agent Thinking 工具审批队列口径的开放 Reminder，也没有 Reminder 项目需要标记完成。
+
+2026-07-13 本轮 AppleScript 仍未列出 `Personal AI`，EventKit fallback 找到 `Personal AI` 列表和 4 个已完成历史条目，0 个未完成项目；因此没有可纳入 Agent Thinking 工具审批按钮边界的开放 Reminder，也没有 Reminder 项目需要标记完成。
+
 ## 验证
 
 相关回归脚本:
@@ -424,6 +482,8 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - 诊断包会携带 `snapshotBoundary`，说明生成时间、运行状态、当前页面快照来源和非实时复制边界。
 - 诊断包会携带 `traceIdentity`，说明本地 trace id、checksum、匹配用途和不能用于标准追踪/恢复/审批的边界。
 - 诊断包会携带 `traceSpanComposition`，说明 root run、Agent steps、Tool calls、Terminal 和问题 span 的构成，避免用户复制后才手动数 span。
+- 诊断包只会在终止步骤已出现但结果摘要卡片仍未渲染时携带 `resultHandoffReceipt`；普通运行中 trace 和已显示结果卡片的 trace 不显示该回执。
+- `resultHandoffReceipt` 会携带终止步骤编号、未处理问题摘要和定位口径；定位只展开当前页面时间线，不代表恢复或执行 run。
 - 运行摘要会从诊断包派生状态、步骤、trace span、问题计数和第一条优先处理动作，避免用户先复制 JSON 才知道本轮发生了什么和该先处理什么。
 - 待确认动作会展示“重跑配置回执”，并在审核包 JSON 内保留 `retryReceipt`，避免把批准 key 补丁误读为完整 run checkpoint。
 - 诊断包复制成功回执会复述当前页面快照、隐私省略和审批上下文边界；复制失败仍给出同一个诊断包的手动复制框。
@@ -433,6 +493,8 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - 复制诊断包后会显示当前/旧快照回执；当 trace 继续追加步骤或重新运行时，旧剪贴板内容会被标成 `旧诊断包回执`，复制按钮会提示重新复制当前诊断包。
 - 待确认动作会在复制按钮前显示 `审批前确认`，审核包 JSON 会携带同一份 `preflightReceipt`，避免用户先复制再发现动作其实未执行、未恢复或未批准。
 - 待确认动作会在复制按钮前显示 `审批决策导览`，审核包 JSON 会携带同一份 `decisionGuide`，让批准、拒绝、修改三条路径的状态和边界在离开页面后仍可复核。
+- 待确认动作队列会显示 `待确认队列口径`，并在诊断包 JSON 内保留 `approvalQueueReceipt`，避免把本页临时审批快照误读成持久后台审批队列。
+- 待确认动作的复制 key、审核包和重跑配置按钮会在 `title` / `aria-label` 里说明复制对象、无批准/无恢复/无执行边界和重新生成条件。
 - Options 演示页能在扩展环境中显示工具目录、流程图状态标签，并支持键盘展开被阻断步骤。
 
 本轮额外验证:

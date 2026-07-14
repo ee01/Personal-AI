@@ -26,6 +26,7 @@ Report requirements:
 - Show what composer/context sample was evaluated without leaking raw sensitive text.
 - Show expected behavior next to actual output behavior.
 - For context-pack / prompt-patch cases, show the chat/context text, draft, source types, generated compose text, evidence snippets, debug summary, score, and concrete improvement suggestions.
+- For prompt-patch cases that depend on the browser extension surface, include manual verification steps for compose icon visibility, hover/preview copy, insertion behavior, and the no-submit boundary.
 - For Lens routing contract cases, show the synthetic composer response, expected route, actual route, and the source-code contract checks.
 - For ambient calibration, show trace action, polarity, privacy class, evidence refs, redacted diff fields, and whether raw text was stored.
 - Show the user-facing verdict and improvement suggestions, not only status and raw scores.

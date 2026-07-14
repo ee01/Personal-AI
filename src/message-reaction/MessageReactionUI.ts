@@ -58,13 +58,16 @@ import {
   uiPhrase as ui,
 } from '../i18n/contentScript.js';
 import {
-  SNOOZE_CUSTOM_OPTION_LABEL,
   SNOOZE_MANAGE_OPTION_LABEL,
+  buildSnoozeCustomOptionControlLabel,
+  buildSnoozeManageOptionControlLabel,
   buildSnoozeQuickMenuReceipt,
+  buildSnoozeQuickMenuOptionControlLabel,
   buildSnoozeQuickMenuOptionView,
   buildSnoozeQuickMenuOptions,
   escapeSnoozeMenuText,
   formatSnoozeQuickMenuExistingSnoozeLabel,
+  type SnoozeQuickMenuMarkerCacheState,
 } from './snoozeQuickMenuPresentation';
 import { shouldRenderSnoozeQuickMenuRequest } from './snoozeMenuRequest.js';
 import {
@@ -80,6 +83,7 @@ import { buildAutoReplyConfigLaunchReceipt } from './autoReplyPresentation';
 import { buildFollowThreadConfigLaunchReceipt } from './followThreadPresentation';
 import {
   buildFollowupAskRunSummary,
+  buildFollowupAskSubmitBoundary,
   buildFollowupAskSubmittingMessage,
   buildFollowupAskToastMessage,
 } from './followupAskPresentation';
@@ -87,6 +91,8 @@ import { buildLinkedActionConfigLaunchReceipt } from './linkedActionEntry';
 
 const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
 const GLIP_MESSAGE_MARKERS_STORAGE_KEY = 'glipMessageMarkers';
+const GLIP_MESSAGE_MARKER_CACHE_STALE_MS = 30 * 60 * 1000;
+const GLIP_MESSAGE_MARKER_CACHE_SECONDS_THRESHOLD = 10_000_000_000;
 const FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS = 24;
 const FOLLOWUP_ASK_MAX_INTERVAL_HOURS = 720;
 const FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP = 1;
@@ -98,6 +104,7 @@ interface SnoozeQuickMenuMarkerRecord {
 }
 
 interface SnoozeQuickMenuMarkerCache {
+  updatedAt?: number;
   markersByChatId?: Record<string, Record<string, SnoozeQuickMenuMarkerRecord[]>>;
 }
 
@@ -166,12 +173,55 @@ function getActionLabelTextInlineStyle(
     : `width:${expandedWidth};`;
 }
 
+function getToolbarActionBoundaryLabel(
+  action: MessageReactionActionDefinition,
+): string {
+  if (action.key === 'followThread') {
+    if (getContentScriptUiLanguage() === 'en-US') {
+      return `${action.label}: opens a Watch configuration draft for this message; it does not start monitoring, save a rule, scan past messages, index the original message, send notifications, or create Reply/Openclaw actions yet.`;
+    }
+    return `${action.label}：只为这条消息打开 Watch 配置草稿；此点击不会开始监听、保存规则、回扫历史消息、索引原消息、发送通知、创建自动答复或联动操作。`;
+  }
+  if (action.key !== 'linkedAction') return action.label;
+  if (getContentScriptUiLanguage() === 'en-US') {
+    return `${action.label}: opens an Openclaw configuration draft for this message; it does not create a RuntimeAction, call OpenClaw, scan past messages, save a rule, or send anything yet.`;
+  }
+  return `${action.label}：只为这条消息打开 Openclaw 配置草稿；此点击不会创建 RuntimeAction、调用 OpenClaw、回扫历史消息、保存规则或发送任何内容。`;
+}
+
 function formatSnoozeDisplayTime(date: Date, now = new Date()): string {
   return formatRemindTime(date, now, getContentScriptUiLanguage());
 }
 
 function getLocalizedSeparator(): string {
   return getContentScriptUiLanguage() === 'en-US' ? ': ' : '：';
+}
+
+function formatLocalizedList(items: string[]): string {
+  return items.join(getContentScriptUiLanguage() === 'en-US' ? ', ' : '、');
+}
+
+function getReactionSettingsPreviewLabels(
+  config: MessageReactionConfig,
+): string[] {
+  const labels: string[] = [];
+  if (config.enableSnooze) labels.push(ui('稍后处理'));
+  if (config.enableFollowThread) labels.push(ui('关注后续'));
+  if (config.enableAutoReply) labels.push(ui('自动答复 / 跟进追问'));
+  if (config.enableLinkedAction) labels.push(ui('联动操作'));
+  return labels;
+}
+
+function buildReactionSettingsSavePreview(
+  config: MessageReactionConfig,
+): string {
+  const labels = getReactionSettingsPreviewLabels(config);
+  if (labels.length === 0) {
+    return ui('将隐藏本地消息工具栏；已创建事项仍不受影响');
+  }
+  return `${ui('将显示')}${getLocalizedSeparator()}${formatLocalizedList(
+    labels,
+  )}`;
 }
 
 function getSnoozeMarkerLookupTarget(
@@ -200,9 +250,39 @@ function getSnoozeMarkerLookupTarget(
   return { chatId, postId };
 }
 
+function normalizeSnoozeMarkerCacheUpdatedAt(
+  updatedAt?: number,
+): number | undefined {
+  const timestamp = Number(updatedAt);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return undefined;
+  }
+  const timestampMs =
+    timestamp < GLIP_MESSAGE_MARKER_CACHE_SECONDS_THRESHOLD
+      ? timestamp * 1000
+      : timestamp;
+  const date = new Date(timestampMs);
+  return Number.isNaN(date.getTime()) ? undefined : timestampMs;
+}
+
+function getSnoozeQuickMenuMarkerCacheState(
+  updatedAt?: number,
+): SnoozeQuickMenuMarkerCacheState {
+  const timestampMs = normalizeSnoozeMarkerCacheUpdatedAt(updatedAt);
+  if (!timestampMs) {
+    return 'unrefreshed';
+  }
+  return Date.now() - timestampMs > GLIP_MESSAGE_MARKER_CACHE_STALE_MS
+    ? 'stale'
+    : 'fresh';
+}
+
 async function getExistingSnoozeMarkerForQuickMenu(
   messageInfo: MessageInfo,
-): Promise<{ label: string } | null> {
+): Promise<{
+  label: string;
+  cacheState: SnoozeQuickMenuMarkerCacheState;
+} | null> {
   const target = getSnoozeMarkerLookupTarget(messageInfo);
   if (!target) return null;
 
@@ -219,7 +299,12 @@ async function getExistingSnoozeMarkerForQuickMenu(
       (item) => item?.type === 'snooze_pending' && item.label?.trim(),
     );
     const label = marker?.label?.trim();
-    return label ? { label } : null;
+    return label
+      ? {
+          label,
+          cacheState: getSnoozeQuickMenuMarkerCacheState(cache?.updatedAt),
+        }
+      : null;
   } catch (error) {
     console.warn('💬 MessageReaction: 读取 Snooze marker 快照失败', error);
     return null;
@@ -1932,6 +2017,17 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
         0,
         FOLLOWUP_ASK_MAX_FOLLOWUP,
       );
+    const refreshSubmitBoundary = (submitting = false) => {
+      const boundary = buildFollowupAskSubmitBoundary({
+        targetLabel: defaultTarget,
+        messageCreatedAt: parseMessageTimestampSeconds(messageInfo),
+        intervalHours: getCurrentIntervalHours(),
+        maxFollowup: getCurrentMaxFollowup(),
+        submitting,
+      });
+      submitBtn.title = boundary;
+      submitBtn.setAttribute('aria-label', boundary);
+    };
 
     const setSubmitting = (submitting: boolean) => {
       overlay.dataset.submitting = submitting ? 'true' : 'false';
@@ -1939,6 +2035,7 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
       cancelBtn.disabled = submitting;
       closeBtn.disabled = submitting;
       submitBtn.textContent = submitting ? '创建中...' : '创建跟进';
+      refreshSubmitBoundary(submitting);
       if (runSummaryEl) {
         runSummaryEl.textContent = submitting
           ? buildFollowupAskSubmittingMessage({
@@ -1953,14 +2050,17 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
     };
 
     const refreshRunSummary = () => {
-      if (!runSummaryEl) return;
-      runSummaryEl.textContent = buildFollowupRunSummary(
-        messageInfo,
-        getCurrentIntervalHours(),
-        getCurrentMaxFollowup(),
-      );
+      if (runSummaryEl) {
+        runSummaryEl.textContent = buildFollowupRunSummary(
+          messageInfo,
+          getCurrentIntervalHours(),
+          getCurrentMaxFollowup(),
+        );
+      }
+      refreshSubmitBoundary();
     };
 
+    refreshSubmitBoundary();
     intervalInput?.addEventListener('input', refreshRunSummary);
     maxFollowupInput?.addEventListener('input', refreshRunSummary);
 
@@ -2444,7 +2544,9 @@ function hideSettingsPopup() {
   }
 }
 
-function renderReactionSettingsScopeReceipt(): string {
+function renderReactionSettingsScopeReceipt(
+  config: MessageReactionConfig,
+): string {
   const rows = [
     {
       label: ui('作用'),
@@ -2458,16 +2560,26 @@ function renderReactionSettingsScopeReceipt(): string {
       label: ui('继续处理'),
       value: ui('已排队或已保存的任务仍从各自管理页处理'),
     },
+    {
+      label: ui('保存后'),
+      value: buildReactionSettingsSavePreview(config),
+      preview: true,
+    },
   ];
 
   const rowsHtml = rows
     .map(
-      (row) => `
+      (row) => {
+        const previewAttributes = row.preview
+          ? ' data-settings-preview-value aria-live="polite"'
+          : '';
+        return `
         <div class="reaction-settings-scope-row">
           <span class="reaction-settings-scope-label">${escapeSnoozeMenuText(row.label)}</span>
-          <span class="reaction-settings-scope-value">${escapeSnoozeMenuText(row.value)}</span>
+          <span class="reaction-settings-scope-value"${previewAttributes}>${escapeSnoozeMenuText(row.value)}</span>
         </div>
-      `,
+      `;
+      },
     )
     .join('');
 
@@ -2501,7 +2613,7 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     <div class="reaction-settings-header">${escapeSnoozeMenuText(
       ui('消息交互功能设置'),
     )}</div>
-    ${renderReactionSettingsScopeReceipt()}
+    ${renderReactionSettingsScopeReceipt(config)}
     <div class="reaction-settings-body">
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="snooze" ${
@@ -2564,17 +2676,13 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     top = anchorRect.top - popupRect.height - 4;
   }
 
+  left = Math.max(10, left);
+  top = Math.max(10, Math.min(top, window.innerHeight - popupRect.height - 10));
+
   popup.style.left = `${left}px`;
   popup.style.top = `${top}px`;
 
-  // 绑定保存事件
-  const saveButton = popup.querySelector(
-    '.snooze-btn-confirm',
-  ) as HTMLButtonElement;
-  saveButton.addEventListener('click', async () => {
-    saveButton.disabled = true;
-    saveButton.textContent = ui('保存中...');
-
+  const getPopupConfig = (): MessageReactionConfig => {
     const snoozeCheckbox = popup.querySelector(
       '[data-feature="snooze"]',
     ) as HTMLInputElement;
@@ -2588,12 +2696,38 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
       '[data-feature="linkedAction"]',
     ) as HTMLInputElement;
 
-    const newConfig: MessageReactionConfig = {
+    return {
       enableSnooze: snoozeCheckbox.checked,
       enableFollowThread: followThreadCheckbox.checked,
       enableAutoReply: autoReplyCheckbox.checked,
       enableLinkedAction: linkedActionCheckbox.checked,
     };
+  };
+
+  const updateSettingsPreview = () => {
+    const preview = popup.querySelector<HTMLElement>(
+      '[data-settings-preview-value]',
+    );
+    if (preview) {
+      preview.textContent = buildReactionSettingsSavePreview(getPopupConfig());
+    }
+  };
+
+  popup
+    .querySelectorAll<HTMLInputElement>('.reaction-settings-checkbox')
+    .forEach((checkbox) => {
+      checkbox.addEventListener('change', updateSettingsPreview);
+    });
+
+  // 绑定保存事件
+  const saveButton = popup.querySelector(
+    '.snooze-btn-confirm',
+  ) as HTMLButtonElement;
+  saveButton.addEventListener('click', async () => {
+    saveButton.disabled = true;
+    saveButton.textContent = ui('保存中...');
+
+    const newConfig = getPopupConfig();
 
     const saved = await saveReactionConfig(newConfig);
     if (!saved) {
@@ -2703,19 +2837,26 @@ async function showSnoozeQuickMenu(
           existingSnooze.label,
           language,
         ),
+        cacheState: existingSnooze.cacheState,
       }
     : null;
-
-  const quickMenuReceipt = buildSnoozeQuickMenuReceipt(
+  const buildQuickMenuReceipt = (targetTimeLabel?: string | null) =>
+    buildSnoozeQuickMenuReceipt(ui, getLocalizedSeparator(), {
+      existingSnooze: existingSnoozeForReceipt,
+      targetTimeLabel,
+    });
+  const quickMenuReceipt = buildQuickMenuReceipt(quickOptionViews[0]?.timeLabel);
+  const manageOptionLabel = ui(SNOOZE_MANAGE_OPTION_LABEL);
+  const customOptionControlLabel = buildSnoozeCustomOptionControlLabel(
     ui,
     getLocalizedSeparator(),
-    { existingSnooze: existingSnoozeForReceipt },
   );
-  const customOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_CUSTOM_OPTION_LABEL));
-  const manageOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_MANAGE_OPTION_LABEL));
-
-  // 精简的菜单，不包含消息预览
-  menu.innerHTML = `
+  const manageOptionControlLabel = buildSnoozeManageOptionControlLabel(
+    ui,
+    getLocalizedSeparator(),
+  );
+  const quickMenuReceiptHtml = quickMenuReceipt
+    ? `
     <div class="snooze-menu-receipt" role="note" aria-label="${escapeSnoozeMenuText(
       quickMenuReceipt.ariaLabel,
     )}">
@@ -2725,7 +2866,7 @@ async function showSnoozeQuickMenu(
       ${quickMenuReceipt.lines
         .map(
           (line) => `
-        <div class="snooze-menu-receipt-line">
+        <div class="snooze-menu-receipt-line"${line.key ? ` data-snooze-receipt-line="${line.key}"` : ''}>
           <span class="snooze-menu-receipt-label">${escapeSnoozeMenuText(
             line.label,
           )}</span>
@@ -2737,12 +2878,24 @@ async function showSnoozeQuickMenu(
         )
         .join('')}
     </div>
+  `
+    : '';
+
+  // 精简的菜单，不包含消息预览
+  menu.innerHTML = `
+    ${quickMenuReceiptHtml}
     ${quickOptionViews
       .map((opt) => {
+        const optionControlLabel = buildSnoozeQuickMenuOptionControlLabel(
+          opt,
+          buildQuickMenuReceipt(opt.timeLabel),
+        );
         return `
         <button type="button" class="snooze-quick-option" role="menuitem" tabindex="-1" data-option-index="${
           opt.index
-        }" aria-label="${escapeSnoozeMenuText(opt.ariaLabel)}">
+        }" aria-label="${escapeSnoozeMenuText(optionControlLabel)}" title="${escapeSnoozeMenuText(
+          optionControlLabel,
+        )}">
           <span class="snooze-quick-option-icon" aria-hidden="true">${escapeSnoozeMenuText(
             opt.icon,
           )}</span>
@@ -2759,13 +2912,19 @@ async function showSnoozeQuickMenu(
       })
       .join('')}
     <div class="snooze-divider"></div>
-    <button type="button" class="snooze-custom-option" role="menuitem" tabindex="-1" aria-label="${customOptionLabel}">
+    <button type="button" class="snooze-custom-option" role="menuitem" tabindex="-1" aria-label="${escapeSnoozeMenuText(
+      customOptionControlLabel,
+    )}" title="${escapeSnoozeMenuText(customOptionControlLabel)}">
       <span class="snooze-quick-option-icon" aria-hidden="true">📅</span>
       <span>${escapeSnoozeMenuText(ui('自定义...'))}</span>
     </button>
-    <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${manageOptionLabel}">
+    <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${escapeSnoozeMenuText(
+      manageOptionControlLabel,
+    )}" title="${escapeSnoozeMenuText(manageOptionControlLabel)}">
       <span class="snooze-quick-option-icon" aria-hidden="true">↗</span>
-      <span class="snooze-manage-option-label">${manageOptionLabel}</span>
+      <span class="snooze-manage-option-label">${escapeSnoozeMenuText(
+        manageOptionLabel,
+      )}</span>
     </button>
   `;
 
@@ -2813,6 +2972,23 @@ async function showSnoozeQuickMenu(
       });
   };
 
+  const updateSnoozeReceiptTarget = (remindAt: Date | null) => {
+    if (!remindAt) return;
+    const receipt = buildQuickMenuReceipt(formatSnoozeDisplayTime(remindAt));
+    const targetLine = receipt.lines.find(
+      (line) => line.key === 'reschedule-target' || line.key === 'create-target',
+    );
+    const targetValueElement = menu.querySelector<HTMLElement>(
+      '[data-snooze-receipt-line="reschedule-target"] .snooze-menu-receipt-value, [data-snooze-receipt-line="create-target"] .snooze-menu-receipt-value',
+    );
+    if (targetLine && targetValueElement) {
+      targetValueElement.textContent = targetLine.value;
+    }
+    menu
+      .querySelector<HTMLElement>('.snooze-menu-receipt')
+      ?.setAttribute('aria-label', receipt.ariaLabel);
+  };
+
   const refreshQuickOptionPreviews = (
     activeIndex?: number,
   ): Date | null => {
@@ -2837,19 +3013,29 @@ async function showSnoozeQuickMenu(
         '.snooze-quick-option-time',
       );
       if (!button || !timeLabel) return;
-      button.setAttribute('aria-label', view.ariaLabel);
+      const optionControlLabel = buildSnoozeQuickMenuOptionControlLabel(
+        view,
+        buildQuickMenuReceipt(view.timeLabel),
+      );
+      button.setAttribute('aria-label', optionControlLabel);
+      button.setAttribute('title', optionControlLabel);
       timeLabel.textContent = view.timeLabel;
     });
+    updateSnoozeReceiptTarget(activeRemindAt);
     return activeRemindAt;
   };
 
   // 绑定快速选项点击
   menu.querySelectorAll('.snooze-quick-option').forEach((opt) => {
     opt.addEventListener('mouseenter', () => {
-      refreshQuickOptionPreviews();
+      refreshQuickOptionPreviews(
+        Number((opt as HTMLElement).dataset.optionIndex),
+      );
     });
     opt.addEventListener('focus', () => {
-      refreshQuickOptionPreviews();
+      refreshQuickOptionPreviews(
+        Number((opt as HTMLElement).dataset.optionIndex),
+      );
     });
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -3107,6 +3293,9 @@ function processMessageElement(messageElement: HTMLElement) {
 
     enabledButtons.forEach((action, index) => {
       const actionLabel = escapeSnoozeMenuText(action.label);
+      const actionBoundaryLabel = escapeSnoozeMenuText(
+        getToolbarActionBoundaryLabel(action),
+      );
       const actionCompactLabel = escapeSnoozeMenuText(action.compactLabel);
       const actionStyle = getActionLabelWidthStyle(action);
       const actionFixedWidthStyle = getActionFixedWidthStyle(action);
@@ -3134,8 +3323,8 @@ function processMessageElement(messageElement: HTMLElement) {
             type="button"
             class="${action.className}"
             style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
-            title="${actionLabel}"
-            aria-label="${actionLabel}"
+            title="${actionBoundaryLabel}"
+            aria-label="${actionBoundaryLabel}"
             data-compact-label="${actionCompactLabel}"
             ${menuAttributes}
           >
@@ -3150,8 +3339,8 @@ function processMessageElement(messageElement: HTMLElement) {
           type="button"
           class="${action.className}"
           style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
-          title="${actionLabel}"
-          aria-label="${actionLabel}"
+          title="${actionBoundaryLabel}"
+          aria-label="${actionBoundaryLabel}"
           data-compact-label="${actionCompactLabel}"
           data-compact-align="${action.compactAlign || 'start'}"
           ${menuAttributes}

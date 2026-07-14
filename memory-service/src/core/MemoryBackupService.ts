@@ -100,12 +100,21 @@ export interface MemoryBackupExportResult {
   fileName: string;
   buffer: Buffer;
   manifest: MemoryBackupManifest;
+  archiveSha256: string;
 }
 
 export interface MemoryImportResult {
   mode: 'merge' | 'replace';
   importedAt: string;
   restoredLayers: Array<'A' | 'B'>;
+  backup: {
+    userId: string;
+    targetUserId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    archiveSha256: string;
+  };
   database: {
     action: 'merged' | 'replaced';
     changedRows?: number;
@@ -139,9 +148,10 @@ export interface MemoryImportPreviewResult {
     targetUserId: string;
     exportedAt: string;
     formatVersion: number;
-    includeCount: number;
-    layers: {
-      A: number;
+      includeCount: number;
+      archiveSha256: string;
+      layers: {
+        A: number;
       B: number;
       C: {
         generated: number;
@@ -359,6 +369,7 @@ export async function exportMemoryBackupZip(
       fileName: `personal-ai-memory-${userContext.userId}-${formatFileTimestamp(manifest.exportedAt)}.zip`,
       buffer: zipBuffer,
       manifest,
+      archiveSha256: sha256(zipBuffer),
     };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -376,6 +387,7 @@ export async function importMemoryBackupZip(
   const warnings: string[] = [];
 
   try {
+    const archiveSha256 = await sha256File(zipFilePath);
     const inspection = await inspectMemoryBackupImport(
       userContext,
       zipFilePath,
@@ -442,6 +454,14 @@ export async function importMemoryBackupZip(
       mode,
       importedAt: new Date().toISOString(),
       restoredLayers: ['A', 'B'],
+      backup: {
+        userId: inspection.extracted.manifest.userId,
+        targetUserId: userContext.userId,
+        exportedAt: inspection.extracted.manifest.exportedAt,
+        formatVersion: inspection.extracted.manifest.formatVersion,
+        includeCount: inspection.extracted.manifest.includes.length,
+        archiveSha256,
+      },
       database:
         mode === 'merge'
           ? {
@@ -479,6 +499,7 @@ export async function previewMemoryBackupImportZip(
   const warnings: string[] = [];
 
   try {
+    const archiveSha256 = await sha256File(zipFilePath);
     const inspection = await inspectMemoryBackupImport(
       userContext,
       zipFilePath,
@@ -499,6 +520,7 @@ export async function previewMemoryBackupImportZip(
         exportedAt: manifest.exportedAt,
         formatVersion: manifest.formatVersion,
         includeCount: manifest.includes.length,
+        archiveSha256,
         layers: {
           A: manifest.layers.A.paths.length,
           B: manifest.layers.B.paths.length,
@@ -1672,4 +1694,8 @@ async function pathExists(targetPath: string): Promise<boolean> {
 
 function sha256(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return sha256(await fs.readFile(filePath));
 }

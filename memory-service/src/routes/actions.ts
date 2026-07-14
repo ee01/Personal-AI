@@ -11,6 +11,7 @@ import { ActionRepository } from '../repositories/ActionRepository.js';
 export async function actionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
     Querystring: {
+      actionId?: string;
       queueStatus?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all';
       executionMode?: 'manual' | 'auto';
       threadId?: string;
@@ -31,6 +32,7 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
     });
     const result = repo.list({
+      actionId: request.query.actionId,
       queueStatus: request.query.queueStatus ?? 'all',
       executionMode: request.query.executionMode,
       threadId: request.query.threadId,

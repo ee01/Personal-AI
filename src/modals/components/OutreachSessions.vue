@@ -32,7 +32,12 @@
         <div class="setup-title">{{ setupBannerTitle }}</div>
         <p class="setup-text">{{ setupBannerText }}</p>
       </div>
-      <button class="setup-btn" @click="openOptionsPage">
+      <button
+        class="setup-btn"
+        :title="setupConfigButtonBoundary()"
+        :aria-label="setupConfigButtonAriaLabel()"
+        @click="openOptionsPage"
+      >
         前往主动询问配置
       </button>
     </div>
@@ -89,6 +94,8 @@
           v-if="focusLane.route"
           :to="focusLane.route"
           class="focus-action"
+          :title="focusActionBoundary(focusLane)"
+          :aria-label="focusActionAriaLabel(focusLane)"
         >
           {{ focusLane.actionLabel }}
         </router-link>
@@ -130,7 +137,28 @@
         placeholder="threadId"
         @keydown.enter="applyFilters"
       />
-      <button class="refresh-btn" @click="loadData">刷新</button>
+      <button
+        class="refresh-btn"
+        :title="listRefreshButtonBoundary()"
+        :aria-label="listRefreshButtonAriaLabel()"
+        @click="loadData"
+      >
+        刷新
+      </button>
+    </div>
+
+    <div
+      class="handoff-receipt filter-scope-receipt"
+      :class="filterScopeReceipt.tone"
+      role="status"
+      aria-label="主动询问筛选范围回执"
+    >
+      <div class="handoff-title">{{ filterScopeReceipt.title }}</div>
+      <ul>
+        <li v-for="item in filterScopeReceipt.items" :key="item">
+          {{ item }}
+        </li>
+      </ul>
     </div>
 
     <div v-if="loadError && !loading" class="load-error-banner" role="alert">
@@ -178,7 +206,12 @@
             {{ item }}
           </li>
         </ul>
-        <button class="clear-filter-btn" @click="clearFilters">
+        <button
+          class="clear-filter-btn"
+          :title="clearFiltersButtonBoundary()"
+          :aria-label="clearFiltersButtonAriaLabel()"
+          @click="clearFilters"
+        >
           清除筛选
         </button>
       </div>
@@ -204,7 +237,12 @@
             <div class="card-head">
               <div>
                 <h3>
-                  <router-link :to="templateListRoute(item)" class="title-link">
+                  <router-link
+                    :to="templateListRoute(item)"
+                    class="title-link"
+                    :title="templateListLinkBoundary(item)"
+                    :aria-label="templateListLinkAriaLabel(item)"
+                  >
                     {{
                       item.template.questionTemplate ||
                       item.template.title ||
@@ -283,6 +321,8 @@
                 v-if="item.latestSession?.id"
                 :to="`/outreach/${item.latestSession.id}`"
                 class="session-link"
+                :title="latestSessionLinkBoundary(item)"
+                :aria-label="latestSessionLinkAriaLabel(item)"
                 >查看上次执行</router-link
               >
             </div>
@@ -310,6 +350,8 @@
                   <router-link
                     :to="`/outreach/${session.id}`"
                     class="title-link"
+                    :title="sessionDetailLinkBoundary(session, '打开待审批详情')"
+                    :aria-label="sessionDetailLinkAriaLabel(session, '打开待审批详情')"
                   >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
@@ -414,6 +456,26 @@
               </ul>
             </div>
 
+            <div
+              v-if="listOperationReceipt(session.id)"
+              class="handoff-receipt list-operation-receipt"
+              :class="listOperationReceipt(session.id)?.tone"
+              role="status"
+              aria-label="主动询问列表操作回执"
+            >
+              <div class="handoff-title">
+                {{ listOperationReceipt(session.id)?.title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in listOperationReceipt(session.id)?.items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
             <div class="card-meta">
               <span
                 >将发送给
@@ -431,6 +493,8 @@
                 v-if="session.threadId"
                 :to="`/reflection-threads/${session.threadId}`"
                 class="session-link"
+                :title="threadLinkBoundary(session)"
+                :aria-label="threadLinkAriaLabel(session)"
                 >查看线程</router-link
               >
               <a
@@ -439,9 +503,15 @@
                 class="session-link"
                 target="_blank"
                 rel="noopener noreferrer"
+                :title="sourceMessageLinkBoundary(session)"
+                :aria-label="sourceMessageLinkAriaLabel(session)"
                 >打开原消息</a
               >
-              <router-link :to="`/outreach/${session.id}`" class="session-link"
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="session-link"
+                :title="sessionDetailLinkBoundary(session, '查看详情')"
+                :aria-label="sessionDetailLinkAriaLabel(session, '查看详情')"
                 >查看详情</router-link
               >
             </div>
@@ -455,6 +525,7 @@
                   shouldForceDetailReviewBeforeApprove(session)
                 "
                 :title="approveButtonTitle(session)"
+                :aria-label="approveButtonAriaLabel(session)"
                 @click="approveSession(session.id)"
               >
                 {{ approveButtonLabel(session) }}
@@ -462,11 +533,31 @@
               <button
                 class="inline-btn ghost"
                 :disabled="Boolean(busyById[session.id])"
+                :title="listActionButtonTitle('cancel', session)"
+                :aria-label="listActionButtonAriaLabel('cancel', session)"
                 @click="cancelSession(session.id)"
               >
                 取消
               </button>
-              <router-link :to="`/outreach/${session.id}`" class="inline-link"
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="inline-link"
+                :title="
+                  sessionDetailLinkBoundary(
+                    session,
+                    shouldForceDetailReviewBeforeApprove(session)
+                      ? '进入详情复核'
+                      : '进入详情编辑',
+                  )
+                "
+                :aria-label="
+                  sessionDetailLinkAriaLabel(
+                    session,
+                    shouldForceDetailReviewBeforeApprove(session)
+                      ? '进入详情复核'
+                      : '进入详情编辑',
+                  )
+                "
                 >{{
                   shouldForceDetailReviewBeforeApprove(session)
                     ? '进入详情复核'
@@ -498,6 +589,8 @@
                   <router-link
                     :to="`/outreach/${session.id}`"
                     class="title-link"
+                    :title="sessionDetailLinkBoundary(session, '打开已排程详情')"
+                    :aria-label="sessionDetailLinkAriaLabel(session, '打开已排程详情')"
                   >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
@@ -583,6 +676,26 @@
               </p>
             </div>
 
+            <div
+              v-if="listOperationReceipt(session.id)"
+              class="handoff-receipt list-operation-receipt"
+              :class="listOperationReceipt(session.id)?.tone"
+              role="status"
+              aria-label="主动询问列表操作回执"
+            >
+              <div class="handoff-title">
+                {{ listOperationReceipt(session.id)?.title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in listOperationReceipt(session.id)?.items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
             <div class="card-meta">
               <span
                 >将发送给
@@ -598,6 +711,8 @@
                 v-if="session.threadId"
                 :to="`/reflection-threads/${session.threadId}`"
                 class="session-link"
+                :title="threadLinkBoundary(session)"
+                :aria-label="threadLinkAriaLabel(session)"
                 >查看线程</router-link
               >
               <a
@@ -606,9 +721,15 @@
                 class="session-link"
                 target="_blank"
                 rel="noopener noreferrer"
+                :title="sourceMessageLinkBoundary(session)"
+                :aria-label="sourceMessageLinkAriaLabel(session)"
                 >打开原消息</a
               >
-              <router-link :to="`/outreach/${session.id}`" class="session-link"
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="session-link"
+                :title="sessionDetailLinkBoundary(session, '查看详情/修改')"
+                :aria-label="sessionDetailLinkAriaLabel(session, '查看详情/修改')"
                 >查看详情/修改</router-link
               >
             </div>
@@ -636,6 +757,8 @@
                   <router-link
                     :to="`/outreach/${session.id}`"
                     class="title-link"
+                    :title="sessionDetailLinkBoundary(session, '打开等待回复详情')"
+                    :aria-label="sessionDetailLinkAriaLabel(session, '打开等待回复详情')"
                   >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
@@ -743,6 +866,8 @@
                 v-if="session.threadId"
                 :to="`/reflection-threads/${session.threadId}`"
                 class="session-link"
+                :title="threadLinkBoundary(session)"
+                :aria-label="threadLinkAriaLabel(session)"
                 >查看线程</router-link
               >
               <a
@@ -751,9 +876,15 @@
                 class="session-link"
                 target="_blank"
                 rel="noopener noreferrer"
+                :title="sourceMessageLinkBoundary(session)"
+                :aria-label="sourceMessageLinkAriaLabel(session)"
                 >打开原消息</a
               >
-              <router-link :to="`/outreach/${session.id}`" class="session-link"
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="session-link"
+                :title="sessionDetailLinkBoundary(session, '查看详情')"
+                :aria-label="sessionDetailLinkAriaLabel(session, '查看详情')"
                 >查看详情</router-link
               >
             </div>
@@ -784,6 +915,8 @@
                   <router-link
                     :to="`/outreach/${session.id}`"
                     class="title-link"
+                    :title="sessionDetailLinkBoundary(session, '打开历史详情')"
+                    :aria-label="sessionDetailLinkAriaLabel(session, '打开历史详情')"
                   >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
@@ -884,6 +1017,8 @@
                 v-if="session.threadId"
                 :to="`/reflection-threads/${session.threadId}`"
                 class="session-link"
+                :title="threadLinkBoundary(session)"
+                :aria-label="threadLinkAriaLabel(session)"
                 >查看线程</router-link
               >
               <a
@@ -892,9 +1027,15 @@
                 class="session-link"
                 target="_blank"
                 rel="noopener noreferrer"
+                :title="sourceMessageLinkBoundary(session)"
+                :aria-label="sourceMessageLinkAriaLabel(session)"
                 >打开原消息</a
               >
-              <router-link :to="`/outreach/${session.id}`" class="session-link"
+              <router-link
+                :to="`/outreach/${session.id}`"
+                class="session-link"
+                :title="sessionDetailLinkBoundary(session, '查看详情')"
+                :aria-label="sessionDetailLinkAriaLabel(session, '查看详情')"
                 >查看详情</router-link
               >
             </div>
@@ -916,10 +1057,32 @@
               <button
                 class="inline-btn primary"
                 :disabled="Boolean(busyById[session.id])"
+                :title="listActionButtonTitle('retry', session)"
+                :aria-label="listActionButtonAriaLabel('retry', session)"
                 @click="retrySession(session.id)"
               >
                 重试
               </button>
+            </div>
+
+            <div
+              v-if="listOperationReceipt(session.id)"
+              class="handoff-receipt list-operation-receipt"
+              :class="listOperationReceipt(session.id)?.tone"
+              role="status"
+              aria-label="主动询问列表操作回执"
+            >
+              <div class="handoff-title">
+                {{ listOperationReceipt(session.id)?.title }}
+              </div>
+              <ul>
+                <li
+                  v-for="item in listOperationReceipt(session.id)?.items"
+                  :key="item"
+                >
+                  {{ item }}
+                </li>
+              </ul>
             </div>
           </div>
         </div>
@@ -961,6 +1124,7 @@ const summary = ref<OutreachSummary>({
 });
 const runtimeConfig = ref<RuntimeConfigResponse | null>(null);
 const busyById = reactive<Record<string, boolean>>({});
+const listOperationReceipts = reactive<Record<string, HandoffReceipt | undefined>>({});
 const loadError = ref('');
 const hasLoadedData = ref(false);
 const TERMINAL_OUTREACH_STATUSES = new Set([
@@ -1053,6 +1217,9 @@ const pageTriageReceipt = computed<HandoffReceipt>(() =>
   buildPageTriageReceipt(),
 );
 const focusLane = computed<FocusLane | null>(() => buildFocusLane());
+const filterScopeReceipt = computed<HandoffReceipt>(() =>
+  buildFilterScopeReceipt(),
+);
 
 const status = ref<OutreachSessionStatus | 'all'>('all');
 const originKind = ref('');
@@ -1488,6 +1655,50 @@ function triageFilterLabel() {
     .join(' / ');
 }
 
+function buildFilterScopeReceipt(): HandoffReceipt {
+  const items = [`当前筛选：${triageFilterLabel()}。`];
+
+  if (loading.value) {
+    items.push(
+      '正在按当前筛选重新读取 Memory Service；返回前，下方卡片仍可能是上次成功读取的列表快照，不应当作本次筛选结果。',
+    );
+  } else {
+    items.push(
+      `本次可见 ${sessions.value.length} 条会话、${visibleTemplates.value.length} 个待触发计划。`,
+    );
+  }
+
+  if (hasActiveFilters.value) {
+    if (loading.value) {
+      items.push(
+        '有筛选时会额外读取未筛选快照，用来说明哪些会话或计划被当前筛选隐藏。',
+      );
+    } else if (allSessionsSnapshotLoaded.value) {
+      items.push(
+        `隐藏依据：未筛选快照里有 ${hiddenSessionCount.value} 条会话和 ${hiddenTemplateCount.value} 个待触发计划被当前筛选隐藏。`,
+      );
+    } else {
+      items.push(
+        '隐藏依据：未筛选快照暂不可用；清除筛选或刷新后再判断全量队列。',
+      );
+    }
+  } else {
+    items.push(
+      '当前是全部状态与全部来源视图；计划 ID 和 threadId 未限制列表范围。',
+    );
+  }
+
+  items.push(
+    '边界：筛选、清除筛选或刷新只同步 URL 并读取状态，不会批准、取消、发送、追问、重试、写用户画像或写回 RingCentral。',
+  );
+
+  return {
+    title: loading.value ? '筛选请求中' : '筛选范围回执',
+    tone: loading.value ? 'warn' : hasActiveFilters.value ? 'default' : 'success',
+    items,
+  };
+}
+
 function buildFilteredEmptyReceipt() {
   const items = [
     `当前筛选：${triageFilterLabel()}。`,
@@ -1515,13 +1726,27 @@ function clearFilters() {
 }
 
 async function approveSession(id: string) {
+  const session = findSessionById(id);
+  if (session) {
+    listOperationReceipts[id] = buildListOperationPendingReceipt(
+      'approve',
+      session,
+    );
+  }
   busyById[id] = true;
   try {
-    await client.approveOutreachSession(id);
+    const response = await client.approveOutreachSession(id);
     await loadData();
+    listOperationReceipts[id] = buildListOperationSuccessReceipt(
+      'approve',
+      findSessionById(id) || response.session || session,
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    window.alert(message || '批准发送失败。');
+    listOperationReceipts[id] = buildListOperationFailureReceipt(
+      '批准发送',
+      error,
+      session,
+    );
   } finally {
     busyById[id] = false;
   }
@@ -1529,29 +1754,225 @@ async function approveSession(id: string) {
 
 async function cancelSession(id: string) {
   if (!window.confirm('确认取消这个主动询问会话吗？')) return;
+  const session = findSessionById(id);
+  if (session) {
+    listOperationReceipts[id] = buildListOperationPendingReceipt(
+      'cancel',
+      session,
+    );
+  }
   busyById[id] = true;
   try {
-    await client.cancelOutreachSession(id, 'Cancelled from outreach list UI');
+    const response = await client.cancelOutreachSession(
+      id,
+      'Cancelled from outreach list UI',
+    );
     await loadData();
+    listOperationReceipts[id] = buildListOperationSuccessReceipt(
+      'cancel',
+      findSessionById(id) || response.session || session,
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    window.alert(message || '取消主动询问失败。');
+    listOperationReceipts[id] = buildListOperationFailureReceipt(
+      '取消主动询问',
+      error,
+      session,
+    );
   } finally {
     busyById[id] = false;
   }
 }
 
 async function retrySession(id: string) {
+  const session = findSessionById(id);
+  if (session) {
+    listOperationReceipts[id] = buildListOperationPendingReceipt(
+      'retry',
+      session,
+    );
+  }
   busyById[id] = true;
   try {
-    await client.retryOutreachSession(id);
+    const response = await client.retryOutreachSession(id);
     await loadData();
+    listOperationReceipts[id] = buildListOperationSuccessReceipt(
+      'retry',
+      findSessionById(id) || response.session || session,
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    window.alert(message || '重试主动询问失败。');
+    listOperationReceipts[id] = buildListOperationFailureReceipt(
+      '重试主动询问',
+      error,
+      session,
+    );
   } finally {
     busyById[id] = false;
   }
+}
+
+function findSessionById(id: string) {
+  return sessions.value.find((session) => session.id === id) || null;
+}
+
+function listOperationReceipt(id: string) {
+  return listOperationReceipts[id] || null;
+}
+
+function buildListOperationPendingReceipt(
+  action: 'approve' | 'cancel' | 'retry',
+  session: OutreachSession,
+): HandoffReceipt {
+  const actionText = listOperationActionText(action);
+  const pendingTruth =
+    action === 'approve'
+      ? '审批结果、排程状态、dispatched 事件、sentPostId 和等待回复状态'
+      : action === 'cancel'
+        ? '取消状态、后续检查是否停止和事件时间线'
+        : '重置后的状态、retried 审计事件和下一轮排程';
+  return {
+    title: `列表操作提交中：${actionText}请求已提交`,
+    tone: 'warn',
+    items: [
+      `当前卡片仍是上次成功读取的状态：${statusLabel(session.status)}；目标：${formatTarget(session.targetType, session.targetRef)}。`,
+      `${pendingTruth}要等 Memory Service 返回并刷新列表后才能确认；按钮临时锁定只是防止重复提交。`,
+      '这条提交中回执不代表 RingCentral 已发送、对方已回复、会话已取消、会话已重试、用户画像已写入或来源证据已删除。',
+    ],
+  };
+}
+
+function buildListOperationSuccessReceipt(
+  action: 'approve' | 'cancel' | 'retry',
+  session: OutreachSession | null | undefined,
+): HandoffReceipt {
+  const actionText = listOperationActionText(action);
+  const statusText = session ? statusLabel(session.status) : '等待刷新确认';
+  const targetText = session
+    ? formatTarget(session.targetType, session.targetRef)
+    : '本轮列表未返回该会话';
+  const resultLine =
+    action === 'approve'
+      ? '这只确认批准请求已被 Memory Service 处理；是否已经真正外发仍以 dispatched 事件、sentPostId 和等待回复状态为准。'
+      : action === 'cancel'
+        ? '这只确认取消请求已被 Memory Service 处理；不会撤回已经发出的 RingCentral 消息，也不会删除来源证据。'
+        : '这只确认重试请求已被 Memory Service 处理；新的外发、等待回复或失败状态仍以刷新后的会话事件为准。';
+  return {
+    title: `列表操作回执：${actionText}已处理`,
+    tone: 'success',
+    items: [
+      `刷新后状态：${statusText}；目标：${targetText}。`,
+      resultLine,
+      '这次列表操作不会写用户画像、不确认答案、不向其它外部系统同步，也不会清除原始证据。',
+    ],
+  };
+}
+
+function buildListOperationFailureReceipt(
+  actionText: string,
+  error: unknown,
+  session: OutreachSession | null,
+): HandoffReceipt {
+  const message = formatActionError(error);
+  return {
+    title: `列表操作失败：${actionText}未确认`,
+    tone: 'danger',
+    items: [
+      message ? `失败原因：${message}` : '失败原因：unknown error。',
+      session
+        ? `页面继续保留上次成功读取的状态：${statusLabel(session.status)}；目标：${formatTarget(session.targetType, session.targetRef)}。`
+        : '页面没有找到这条会话的上次快照；请刷新列表后再判断当前状态。',
+      '这次失败不会被当成已批准、已发送、已取消、已重试、已拿到回复或已写回 RingCentral。',
+    ],
+  };
+}
+
+function listOperationActionText(action: 'approve' | 'cancel' | 'retry') {
+  if (action === 'approve') return '批准发送';
+  if (action === 'cancel') return '取消主动询问';
+  return '重试主动询问';
+}
+
+function formatActionError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  return raw.replace(/^MemoryService\s+\d+:\s*/i, '').trim();
+}
+
+function setupConfigButtonBoundary() {
+  return '打开 Options 的主动询问配置页，用于查看或补齐本机 Outreach / RingCentral 设置；点击本按钮不会启用引擎、批准会话、发送消息、追问、重试、取消或写回 RingCentral。';
+}
+
+function setupConfigButtonAriaLabel() {
+  return `前往主动询问配置：${setupConfigButtonBoundary()}`;
+}
+
+function listRefreshButtonBoundary() {
+  return '重新读取主动询问运行配置、统计摘要、待触发计划和当前筛选会话；不会批准、取消、发送、追问、重试、写用户画像或写回 RingCentral。';
+}
+
+function listRefreshButtonAriaLabel() {
+  return `刷新：${listRefreshButtonBoundary()}`;
+}
+
+function clearFiltersButtonBoundary() {
+  return '清除状态、来源、计划和线程筛选，并回到主动询问全部视图；只更新本页 URL 和重新读取列表，不会批准、发送、追问、重试、取消或写回 RingCentral。';
+}
+
+function clearFiltersButtonAriaLabel() {
+  return `清除筛选：${clearFiltersButtonBoundary()}`;
+}
+
+function focusActionBoundary(lane: FocusLane) {
+  return `${lane.actionLabel}只打开本轮处理对象对应页面，帮助核对状态、证据和下一步；不会执行卡片建议、批准、取消、发送、追问、重试、创建会话或写回 RingCentral。`;
+}
+
+function focusActionAriaLabel(lane: FocusLane) {
+  return `${lane.actionLabel}：${focusActionBoundary(lane)}`;
+}
+
+function templateListLinkBoundary(item: OutreachTemplateRuntimeStatusItem) {
+  const subject =
+    item.template.questionTemplate || item.template.title || '(空问题)';
+  return `按计划 ${item.template.id} 筛选主动询问列表，查看「${truncateInlineText(subject, 42)}」的待触发和历史会话；只更新 URL 和读取状态，不会立即生成会话、审批、发送、追问或写回 RingCentral。`;
+}
+
+function templateListLinkAriaLabel(item: OutreachTemplateRuntimeStatusItem) {
+  return `查看计划会话：${templateListLinkBoundary(item)}`;
+}
+
+function latestSessionLinkBoundary(item: OutreachTemplateRuntimeStatusItem) {
+  const latest = item.latestSession;
+  if (!latest) {
+    return '查看上次执行入口当前没有会话；不会生成新会话、发送消息或写回 RingCentral。';
+  }
+  return `打开这条计划的上次 Outreach 会话详情；当前上次状态是「${statusLabel(latest.status)}」，只读取时间线和证据，不会重试、重新发送、取消、确认答案或写回 RingCentral。`;
+}
+
+function latestSessionLinkAriaLabel(item: OutreachTemplateRuntimeStatusItem) {
+  return `查看上次执行：${latestSessionLinkBoundary(item)}`;
+}
+
+function sessionDetailLinkBoundary(session: OutreachSession, label: string) {
+  return `${label}只打开 Outreach 会话详情，读取当前状态、时间线、目标、证据和可用操作；不会批准、取消、发送、追问、重试、保存草稿、确认答案、写用户画像或写回 RingCentral。当前状态：${statusLabel(session.status)}。`;
+}
+
+function sessionDetailLinkAriaLabel(session: OutreachSession, label: string) {
+  return `${label}：${sessionDetailLinkBoundary(session, label)}`;
+}
+
+function threadLinkBoundary(session: OutreachSession) {
+  const thread = session.threadId || '关联线程';
+  return `打开自我反思线程 ${thread}，用于核对这条主动询问的来源和阻塞原因；这是只读导航，不会推进反思、批准/取消 Outreach、发送消息、追问或写回 RingCentral。`;
+}
+
+function threadLinkAriaLabel(session: OutreachSession) {
+  return `查看线程：${threadLinkBoundary(session)}`;
+}
+
+function sourceMessageLinkBoundary(session: OutreachSession) {
+  return `在新标签页打开这条消息跟进的原消息链接，用于核对原始上下文；不会发送新追问、标记已回复、更新 Outreach 状态、写用户画像或写回 RingCentral。当前状态：${statusLabel(session.status)}。`;
+}
+
+function sourceMessageLinkAriaLabel(session: OutreachSession) {
+  return `打开原消息：${sourceMessageLinkBoundary(session)}`;
 }
 
 function openOptionsPage() {
@@ -1780,6 +2201,29 @@ function approveButtonTitle(session: OutreachSession) {
     return '这条会话已有证据或回复线索，请先进详情复核后再决定是否批准发送。';
   }
   return '批准后才会交给 Outreach 引擎处理；是否已发出仍以事件和等待回复状态为准。';
+}
+
+function approveButtonAriaLabel(session: OutreachSession) {
+  return `${approveButtonLabel(session)}：${approveButtonTitle(session)}`;
+}
+
+function listActionButtonTitle(
+  action: 'cancel' | 'retry',
+  session: OutreachSession,
+) {
+  if (action === 'cancel') {
+    return '取消会请求 Memory Service 停止这条主动询问后续发送、检查和追问；不会撤回已发 RingCentral 消息、删除来源证据或写用户画像。';
+  }
+  const nextStatus = session.requiresApproval ? '待审批' : '已排程';
+  return `重试会请求 Memory Service 将这个终态会话重置为「${nextStatus}」并写入 retried 审计；不会直接发送、确认回复或清除旧错误。`;
+}
+
+function listActionButtonAriaLabel(
+  action: 'cancel' | 'retry',
+  session: OutreachSession,
+) {
+  const label = action === 'cancel' ? '取消' : '重试';
+  return `${label}：${listActionButtonTitle(action, session)}`;
 }
 
 function truncateInlineText(value: string, maxLength = 96) {
@@ -2418,7 +2862,7 @@ function evidenceMentionLabels(
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.35rem;
 }
 
 .filter-select,
@@ -2439,6 +2883,10 @@ function evidenceMentionLabels(
 .refresh-btn {
   cursor: pointer;
   background: rgba(30, 41, 59, 0.84);
+}
+
+.filter-scope-receipt {
+  margin-bottom: 1rem;
 }
 
 .load-error-banner {

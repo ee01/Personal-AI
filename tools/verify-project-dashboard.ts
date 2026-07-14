@@ -7,8 +7,12 @@ import {
   buildProjectDashboardLaunchPath,
   buildProjectDashboardViewFilterCounts,
   buildProjectDashboardViewReason,
+  buildProjectChartMarkerBoundary,
+  buildProjectChartPanelBoundary,
+  buildProjectChartProgressBoundary,
   buildProjectDataQualitySummary,
   buildProjectDecisionSummary,
+  buildProjectEvidenceRepairButtonBoundary,
   buildProjectEvidenceGapSummary,
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
@@ -26,6 +30,7 @@ import {
   buildProjectVisualizationSummary,
   compareProjectsByDashboardPriority,
   buildProjectDashboardSearchSummary,
+  buildProjectDashboardSearchViewReceipt,
   filterProjectsByDashboardSearch,
   filterProjectsByDashboardView,
   getProjectDashboardViewFilter,
@@ -600,6 +605,19 @@ function verifyProjectDashboardLocalSearch() {
     milestones: 1,
   });
   assert.deepEqual(milestoneSummary?.matchHints, ['里程碑 1']);
+
+  const allViewReceipt = buildProjectDashboardSearchViewReceipt(jiraSummary, 'all', 1);
+  assert.equal(allViewReceipt?.headline, '当前“全部”视图显示 1/1 个本地命中');
+  assert.equal(allViewReceipt?.hiddenByView, 0);
+  assert.equal(allViewReceipt?.recovery, '当前项目视图没有隐藏本地命中。');
+  assert.match(allViewReceipt?.boundary || '', /不会读取外部系统/);
+
+  const hiddenViewReceipt = buildProjectDashboardSearchViewReceipt(jiraSummary, 'needs-action', 0);
+  assert.equal(hiddenViewReceipt?.filterLabel, '需处理');
+  assert.equal(hiddenViewReceipt?.headline, '当前“需处理”视图显示 0/1 个本地命中');
+  assert.equal(hiddenViewReceipt?.hiddenByView, 1);
+  assert.match(hiddenViewReceipt?.recovery || '', /切到“全部”可查看所有本地命中/);
+  assert.match(hiddenViewReceipt?.boundary || '', /本地查找命中还会受“需处理”视图限制/);
 }
 
 function verifyProjectDecisionSummary() {
@@ -992,7 +1010,7 @@ function verifyProjectVisualizationSummary() {
         id: 'api-contract',
         type: 'task',
         title: 'Publish API contract',
-        status: 'progress',
+        status: 'closed',
         eta: '2026-05-08',
         jira: [{ key: 'VIS-4', title: 'Publish API contract' }],
       },
@@ -1012,14 +1030,17 @@ function verifyProjectVisualizationSummary() {
   assert.match(linkedDependency?.headline || '', /1 个依赖可跟踪，最长链 2 项/);
   assert.equal(linkedDependency?.metrics.includes('2/2 依赖目标有效'), true);
   assert.equal(linkedDependency?.metrics.includes('最长链 2 个任务'), true);
+  assert.equal(linkedDependency?.metrics.includes('链上已完成 1'), true);
   assert.match(linkedDependency?.detail || '', /关键链候选只来自本地 dependencies/);
+  assert.match(linkedDependency?.detail || '', /链上 1 项已完成只作历史前置/);
   assert.match(linkedDependency?.nextStep || '', /复核最长依赖链/);
   assert.equal(
     linkedDependency?.drivers?.some((driver) =>
       driver.title === 'Hook up project chart' &&
       driver.label === '关键链候选' &&
       /Publish API contract -> Hook up project chart/.test(driver.detail) &&
-      /不是完整关键路径计算/.test(driver.detail),
+      /不是完整关键路径计算/.test(driver.detail) &&
+      /链上 1 项已完成，只作历史前置/.test(driver.detail),
     ),
     true,
   );
@@ -1061,6 +1082,62 @@ function verifyProjectVisualizationSummary() {
     ),
     true,
   );
+}
+
+function verifyProjectChartControlBoundaries() {
+  const now = new Date('2026-05-01T12:00:00+08:00');
+  const summary = buildProjectVisualizationSummary({
+    id: 'chart-boundary-project',
+    name: 'Chart Boundary Project',
+    milestones: [{ id: 'ga', label: 'GA', date: '2026-05-30' }],
+    tasks: [
+      {
+        id: 'api-contract',
+        type: 'task',
+        title: 'Publish API contract',
+        status: 'closed',
+        eta: '2026-05-08',
+        jira: [{ key: 'VIS-4', title: 'Publish API contract' }],
+      },
+      {
+        id: 'frontend-hookup',
+        type: 'task',
+        title: 'Hook up project chart',
+        status: 'progress',
+        eta: '2026-05-12',
+        dependencies: ['api-contract', 'ga'],
+        jira: [{ key: 'VIS-5', title: 'Hook up project chart' }],
+      },
+    ],
+  } as any, { now });
+
+  const gantt = summary.panels.find((panel) => panel.id === 'gantt');
+  const dependency = summary.panels.find((panel) => panel.id === 'dependencies');
+  const burndown = summary.panels.find((panel) => panel.id === 'burndown');
+
+  assert.ok(gantt);
+  assert.ok(dependency);
+  assert.ok(burndown);
+
+  const ganttBoundary = buildProjectChartPanelBoundary('Chart Boundary Project', gantt);
+  assert.match(ganttBoundary, /甘特就绪度只读取本地任务 ETA、里程碑日期和已完成 ETA 历史锚点/);
+  assert.match(ganttBoundary, /不会确认项目状态、发送通知、预测完成时间或自动改期/);
+
+  const dependencyBoundary = buildProjectChartPanelBoundary('Chart Boundary Project', dependency);
+  assert.match(dependencyBoundary, /依赖图只读取本地 dep 任务和 dependencies 链接/);
+  assert.match(dependencyBoundary, /关键链候选不是完整关键路径计算/);
+
+  const progressBoundary = buildProjectChartProgressBoundary('Chart Boundary Project', burndown);
+  assert.match(progressBoundary, /进度 50%/);
+  assert.match(progressBoundary, /只表示本地任务数完成率/);
+  assert.match(progressBoundary, /不含工时、故事点、范围变化或 velocity/);
+
+  const marker = gantt.markers?.[0];
+  assert.ok(marker);
+  const markerBoundary = buildProjectChartMarkerBoundary('Chart Boundary Project', gantt, marker);
+  assert.match(markerBoundary, /时间点：Hook up project chart/);
+  assert.match(markerBoundary, /点位来自本地 ETA、里程碑日期或已完成 ETA 历史锚点/);
+  assert.match(markerBoundary, /不代表 Jira\/GitHub\/Confluence 权威同步/);
 }
 
 function verifyProjectReportPreservesTaskDependencies() {
@@ -1138,6 +1215,50 @@ function verifyProjectEvidenceGapSummary() {
     summary.visibleItems.map((item) => item.nextStep),
     ['补 ETA 后关联 Jira 或平台状态', '补上可复核 ETA'],
   );
+}
+
+function verifyProjectEvidenceRepairButtonBoundary() {
+  const etaBoundary = buildProjectEvidenceRepairButtonBoundary({
+    source: 'task-detail',
+    target: 'eta',
+    projectName: 'Risk Demo Project',
+    taskTitle: 'Add ETA to rollout notes',
+  });
+  assert.match(etaBoundary, /任务详情证据修复按钮/);
+  assert.match(etaBoundary, /Risk Demo Project · Add ETA to rollout notes/);
+  assert.match(etaBoundary, /本地 ETA 修复位置/);
+  assert.match(etaBoundary, /预计完成时间输入/);
+  assert.match(etaBoundary, /不读取或写回 Memory Service、Jira、GitHub、Confluence/);
+  assert.match(etaBoundary, /保存前只是本页草稿/);
+
+  const sourceBoundary = buildProjectEvidenceRepairButtonBoundary({
+    source: 'chart-driver',
+    target: 'source',
+    projectName: 'Risk Demo Project',
+    taskTitle: 'Resolve release blocker',
+  });
+  assert.match(sourceBoundary, /图表关键任务入口/);
+  assert.match(sourceBoundary, /本地来源修复位置/);
+  assert.match(sourceBoundary, /Jira key、平台状态、负责人或平台 Jira/);
+  assert.match(sourceBoundary, /不会确认项目状态或发送通知/);
+
+  const planBoundary = buildProjectEvidenceRepairButtonBoundary({
+    source: 'data-source',
+    target: 'plan-project',
+    projectName: 'Memory Service Project',
+  });
+  assert.match(planBoundary, /本地首个任务填写入口/);
+  assert.match(planBoundary, /不会创建 Jira\/GitHub\/Confluence 任务/);
+  assert.match(planBoundary, /反写 Memory Service/);
+
+  const generalBoundary = buildProjectEvidenceRepairButtonBoundary({
+    source: 'chart-panel',
+    projectName: 'Dependency Project',
+    taskTitle: 'Check dependency target',
+  });
+  assert.match(generalBoundary, /图表下一步入口/);
+  assert.match(generalBoundary, /本地任务详情/);
+  assert.doesNotMatch(generalBoundary, /本地 ETA 修复位置/);
 }
 
 function verifyProjectDashboardDecisionBrief() {
@@ -1616,6 +1737,7 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
     const actionStatus = buildProjectSyncActionStatus(result);
     assert.equal(actionStatus.type, 'warning');
     assert.match(actionStatus.text, /已从 Memory Service 关注项目新增 2 个本地工作台/);
+    assert.match(actionStatus.text, /Memory Service 项目：新增：Memory Service Project、Memory Followup Project；已匹配：Existing Local/);
     assert.match(actionStatus.text, /本地证据待补：2 个项目待规划/);
     assert.match(result.sources[1].diagnostics?.join('\n') || '', /1\/3 个活动任务有 Jira key/);
     assert.match(result.sources[1].diagnostics?.join('\n') || '', /缺来源任务：Needs Jira source、Needs both/);
@@ -1832,8 +1954,10 @@ async function main() {
   verifyProjectTaskRiskSummary();
   verifyProjectDataQualitySummary();
   verifyProjectVisualizationSummary();
+  verifyProjectChartControlBoundaries();
   verifyProjectReportPreservesTaskDependencies();
   verifyProjectEvidenceGapSummary();
+  verifyProjectEvidenceRepairButtonBoundary();
   verifyProjectDashboardDecisionBrief();
   verifyProjectFreshnessSummary();
   verifyProjectReviewSummary();

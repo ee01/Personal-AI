@@ -75,6 +75,37 @@ async function expectDisabledButton(page, text) {
   assert.equal(await button.isDisabled(), true, `${text} button should be disabled`);
 }
 
+async function expectManualSyncButtonBoundary(page, { syncing = false } = {}) {
+  const button = page.locator('button', { hasText: syncing ? '同步中' : '同步' }).first();
+  await button.waitFor({
+    timeout: 15000,
+  });
+
+  const title = await button.getAttribute('title');
+  const ariaLabel = await button.getAttribute('aria-label');
+  const expectedFragments = syncing
+    ? [
+      'Config 同步正在进行中',
+      '不会启动第二个 Config 读取',
+      'Messages 刷新',
+      'Config 写回',
+      '消息发送或队列执行',
+    ]
+    : [
+      '手动同步 Config 与 Messages',
+      '读取 Sheet Config',
+      '只有 Sheet 明确更新时才刷新本机缓存',
+      '只有缺少子表定位时才写回 Config Sheet',
+      '读取 Messages / Logs',
+      '不会发送消息、执行队列、改 Logs、批准或删除计划',
+    ];
+
+  for (const fragment of expectedFragments) {
+    assert.ok(title?.includes(fragment), `sync button title should include ${fragment}`);
+    assert.ok(ariaLabel?.includes(fragment), `sync button aria-label should include ${fragment}`);
+  }
+}
+
 function installAuthStub(page) {
   return page.addInitScript(() => {
     if (globalThis.chrome?.identity) {
@@ -474,6 +505,7 @@ await withLaunchedExtension(async (launched) => {
   await page.locator('span[title="Config refresh proof"]').waitFor({
     timeout: 15000,
   });
+  await expectManualSyncButtonBoundary(page);
 
   await page.locator('button', { hasText: '同步' }).evaluate((button) => {
     button.click();
@@ -636,6 +668,7 @@ await withLaunchedExtension(async (launched) => {
   });
 
   const syncButton = page.locator('button', { hasText: '同步' });
+  await expectManualSyncButtonBoundary(page);
   await syncButton.click();
   await page.locator('text=正在读取 Sheet Config；只有确认 Sheet 更新时才写本机缓存').waitFor({
     timeout: 15000,
@@ -646,6 +679,7 @@ await withLaunchedExtension(async (launched) => {
   await page.locator('text=下一步: 等待读取完成后查看采用配置、写入边界和恢复建议').waitFor({
     timeout: 15000,
   });
+  await expectManualSyncButtonBoundary(page, { syncing: true });
   assert.equal(await syncButton.isDisabled(), true, 'sync button should stay disabled during Config read');
 
   configReadGate.resolve();
@@ -970,6 +1004,128 @@ await withLaunchedExtension(async (launched) => {
 
   assert.equal(configReadCount, 1);
   assert.equal(messagesReadCount, 2);
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  let configReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T09:30:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local-agent-task/exec',
+        scriptId: 'local-agent-task-script',
+        deploymentId: 'local-agent-task-deployment',
+        appScriptVersion: '2.8.4',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: 'Config should not be read on page open' } }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'agent-task-row-1',
+              'AgentTask webhook proof',
+              'Run OpenClaw report for AI VBG',
+              '2026-05-12',
+              '14:30',
+              'AgentTask',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 14:30',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected agent-task page Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="AgentTask webhook proof"]').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=帮我做执行入口待确认').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=当前列表有 1 条帮我做计划').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=页面打开只检查本机缓存和当前 Messages 快照；未读取/写入 Sheet Config，未领取任务').waitFor({
+    timeout: 15000,
+  });
+
+  const storageAfterOpen = await serviceWorker.evaluate(async () => {
+    return chrome.storage.local.get(['scheduledMessagesConfig']);
+  });
+  assert.equal(configReadCount, 0);
+  assert.equal(storageAfterOpen.scheduledMessagesConfig.agentTaskWebhook, undefined);
   assertNoPageErrors();
 });
 

@@ -355,10 +355,31 @@ const updateAvailableBannerSource = managerSource.slice(
   updateAvailableBannerEnd,
 );
 assert.ok(
-  updateAvailableBannerSource.includes('清理 Project History 后重新读取版本额度') &&
+  updateAvailableBannerSource.includes('appScriptRecheckActionBoundary') &&
+    updateAvailableBannerSource.includes('aria-label={appScriptRecheckActionBoundary}') &&
     updateAvailableBannerSource.includes('重新检查') &&
     updateAvailableBannerSource.includes('isCheckingUpdates || isUpdating'),
   'Scheduled Messages update banner should let users re-check after cleaning Project History without reloading',
+);
+assert.ok(
+  managerSource.includes('buildAppScriptUpdateActionBoundary') &&
+    managerSource.includes('只读取版本端点、deployment 和 Project History，不写 Sheet、Script 或 Jira Rule') &&
+    managerSource.includes('只有 Web App 版本端点确认目标版本后才标记 Sheet/Storage 为最新') &&
+    managerSource.includes('点击只打开恢复页面，不重新提交升级、不写 Sheet/Script/Jira Rule'),
+  'Scheduled Messages should build button-level App Script update action boundaries',
+);
+assert.ok(
+  managerSource.includes('title={appScriptCheckActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptCheckActionBoundary}') &&
+    managerSource.includes('title={appScriptUpgradeActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptUpgradeActionBoundary}') &&
+    managerSource.includes('title={appScriptProjectHistoryActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptProjectHistoryActionBoundary}') &&
+    managerSource.includes('title={appScriptVersionProbeActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptVersionProbeActionBoundary}') &&
+    managerSource.includes('title={appScriptRecoveryActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptRecoveryActionBoundary}'),
+  'App Script update controls should expose hover and screen-reader action boundaries',
 );
 assert.ok(
   managerSource.includes('buildAppScriptUpgradeNotice') &&
@@ -768,7 +789,7 @@ async function verifyVersionMetadataUsesSheetFirstConfigSync(): Promise<void> {
       lastUpdated: '2026-05-09',
     });
 
-    assert.deepEqual(events, ['sheet-read', 'sheet-write', 'storage']);
+    assert.deepEqual(events, ['sheet-read', 'sheet-read', 'sheet-write', 'storage']);
     assert.ok(sheetLastSyncTime);
     assert.equal(storedConfig.appScriptVersion, '2.7.0');
     assert.equal(storedConfig.appScriptLastUpdated, '2026-05-09');

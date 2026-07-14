@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildFollowupAskRunSummary,
+  buildFollowupAskSubmitBoundary,
   buildFollowupAskSubmittingMessage,
   buildFollowupAskToastMessage,
 } from '../followupAskPresentation.js';
@@ -50,6 +51,43 @@ test('buildFollowupAskRunSummary updates max followup semantics', () => {
   });
 
   assert.match(boundedMessage, /最多自动追问 2 次/);
+});
+
+test('buildFollowupAskSubmitBoundary keeps the activation control honest', () => {
+  const message = buildFollowupAskSubmitBoundary({
+    targetLabel: 'Release Team（提及 Jordan Lee）',
+    messageCreatedAt: 1_700_000_000,
+    intervalHours: 24,
+    maxFollowup: 2,
+    nowSeconds: 1_700_000_000,
+    timeZone: 'UTC',
+  });
+
+  assert.match(message, /创建跟进/);
+  assert.match(message, /锚定 Release Team（提及 Jordan Lee）和这条原消息/);
+  assert.match(message, /预计/);
+  assert.match(message, /最多自动追问 2 次/);
+  assert.match(message, /创建或复用 message reaction Outreach session/);
+  assert.match(message, /不会立刻发送新消息/);
+  assert.match(message, /不写 Google Sheet/);
+  assert.match(message, /不创建可复用 Outreach template/);
+  assert.match(message, /复用旧 session/);
+});
+
+test('buildFollowupAskSubmitBoundary mirrors zero automatic followup mode', () => {
+  const message = buildFollowupAskSubmitBoundary({
+    targetLabel: 'Release Team',
+    messageCreatedAt: 1_700_000_000,
+    intervalHours: 24,
+    maxFollowup: 0,
+    nowSeconds: 1_700_000_000,
+    timeZone: 'UTC',
+  });
+
+  assert.match(message, /最多追问次数为 0/);
+  assert.match(message, /只检查完成标准|不自动发送 AI 追问/);
+  assert.match(message, /不会立刻发送新消息/);
+  assert.doesNotMatch(message, /后追问/);
 });
 
 test('buildFollowupAskToastMessage explains new message followup boundaries', () => {

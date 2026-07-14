@@ -54,9 +54,14 @@ const SLIDES_ANALYZER_BUTTON_LABELS: Record<SlidesAnalyzerRunState, string> = {
 };
 
 const SLIDES_ANALYZER_BUTTON_TITLES: Record<SlidesAnalyzerRunState, string> = {
-  idle: '分析当前 Google Slides 项目信息',
-  requesting: '正在获取授权并启动分析，请稍候',
-  analyzing: '正在分析当前 Google Slides 项目信息，请稍候'
+  idle: '分析当前 Google Slides 项目信息：只生成审阅快照和可写字段建议；不会立即写回 Slides，也不会反写 Jira 或 Memory Service。',
+  requesting: '正在获取授权并启动分析：仅请求当前 Slides 分析快照，重复点击不会再次授权、不会打开多份结果页，也不会写回 Slides 或反写 Jira / Memory Service。',
+  analyzing: '正在分析当前 Google Slides 项目信息：请等待结果页；重复点击只提示等待，不会重复跑分析、不会写回 Slides 或反写 Jira / Memory Service。'
+};
+
+const SLIDES_ANALYZER_BUSY_TOASTS: Record<Exclude<SlidesAnalyzerRunState, 'idle'>, string> = {
+  requesting: 'Slides 分析正在获取授权，请等待当前请求完成；重复点击不会再次授权、不会打开多份结果页，也不会写回 Slides 或反写 Jira / Memory Service。',
+  analyzing: 'Slides 分析正在进行，请等待当前结果页打开后再重试；重复点击不会重复跑分析、不会写回 Slides 或反写 Jira / Memory Service。'
 };
 
 function hasSuggestedWritebackField(suggestion: ProjectUpdateSuggestion): boolean {
@@ -116,6 +121,13 @@ function setSlidesAnalyzerRunState(state: SlidesAnalyzerRunState) {
 
 function isSlidesAnalyzerBusy(): boolean {
   return getSlidesAnalyzerRunState() !== 'idle';
+}
+
+function getSlidesAnalyzerBusyToastMessage(): string {
+  const state = getSlidesAnalyzerRunState();
+  return state === 'idle'
+    ? 'Slides 分析尚未启动；点击入口只会生成审阅快照，不会直接写回 Slides。'
+    : SLIDES_ANALYZER_BUSY_TOASTS[state];
 }
 
 // 分析结果接口
@@ -278,7 +290,7 @@ function addAnalysisButton(): boolean {
 
   const requestAnalysis = () => {
     if (isSlidesAnalyzerBusy()) {
-      showToast('Slides 分析正在进行，请等待当前结果页打开后再重试', 'warning');
+      showToast(getSlidesAnalyzerBusyToastMessage(), 'warning');
       return;
     }
 
@@ -290,7 +302,10 @@ function addAnalysisButton(): boolean {
       }
 
       setSlidesAnalyzerRunState('idle');
-      showToast('分析启动超时，请确认扩展仍在运行后重试', 'warning');
+      showToast(
+        '分析启动超时，请确认扩展仍在运行后重试；本次没有打开结果页、没有写回 Slides，也没有反写 Jira 或 Memory Service。',
+        'warning',
+      );
     }, SLIDES_ANALYZER_REQUEST_TIMEOUT_MS);
 
     // 通知background脚本或popup我们需要token

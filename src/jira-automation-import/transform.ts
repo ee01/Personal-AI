@@ -134,6 +134,20 @@ export interface JiraAutomationImportSecretReentrySlot {
   reason: string;
 }
 
+export type JiraAutomationImportSecretReentryQueueGroupId =
+  | 'hidden-jira-secrets'
+  | 'url-credentials'
+  | 'inline-secret-text'
+  | 'named-credential-fields'
+  | 'other-redacted-fields';
+
+export interface JiraAutomationImportSecretReentryQueueGroup {
+  id: JiraAutomationImportSecretReentryQueueGroupId;
+  label: string;
+  action: string;
+  slots: JiraAutomationImportSecretReentrySlot[];
+}
+
 export type JiraAutomationImportNameCheckStatus = 'confirmed' | 'unconfirmed';
 
 export interface JiraAutomationImportNameCheck {
@@ -205,6 +219,27 @@ function isLikelySensitiveUrlPathSegment(rawSegment: string, hostname: string): 
   return isUuid || isLongHex || isLongToken || isWebhookPathToken;
 }
 
+function isLikelySecretTokenValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'REDACTED' || isMaskedSensitiveValue(trimmed)) {
+    return isMaskedSensitiveValue(trimmed);
+  }
+
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(trimmed)) {
+    return true;
+  }
+
+  if (/^(gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA|AIza)[A-Za-z0-9._-]{8,}/.test(trimmed)) {
+    return true;
+  }
+
+  const compact = trimmed.replace(/[^A-Za-z0-9_-]/g, '');
+  const hasLetter = /[A-Za-z]/.test(compact);
+  const hasDigit = /\d/.test(compact);
+  const hasMixedCase = /[A-Z]/.test(compact) && /[a-z]/.test(compact);
+  return compact.length >= 32 && hasLetter && (hasDigit || hasMixedCase);
+}
+
 function redactSensitiveUrlPathname(pathname: string, hostname: string): { pathname: string; redacted: boolean } {
   let redacted = false;
   const nextPathname = pathname
@@ -233,7 +268,11 @@ function redactSensitiveUrl(rawUrl: string): string {
     }
 
     parsedUrl.searchParams.forEach((value, key) => {
-      if (isLikelySensitiveUrlQueryKey(key) || isMaskedSensitiveValue(value)) {
+      if (
+        isLikelySensitiveUrlQueryKey(key) ||
+        isMaskedSensitiveValue(value) ||
+        isLikelySecretTokenValue(value)
+      ) {
         parsedUrl.searchParams.set(key, 'REDACTED');
       }
     });
@@ -250,7 +289,7 @@ function redactSensitiveUrl(rawUrl: string): string {
     return parsedUrl.toString();
   } catch {
     return rawUrl.replace(
-      /([?&][^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*=)[^&#]*/gi,
+      /([?&][^=&#]*(?:authorization|bearer|password|secret|token|jwt|assertion|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|session[-_ ]?token|oauth[-_ ]?token|client[-_ ]?assertion|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*=)[^&#]*/gi,
       '$1REDACTED',
     );
   }
@@ -264,7 +303,11 @@ function addSensitiveUrlReferences(rawUrl: string, values: Set<string>): void {
     }
 
     parsedUrl.searchParams.forEach((value, key) => {
-      if (isLikelySensitiveUrlQueryKey(key) || isMaskedSensitiveValue(value)) {
+      if (
+        isLikelySensitiveUrlQueryKey(key) ||
+        isMaskedSensitiveValue(value) ||
+        isLikelySecretTokenValue(value)
+      ) {
         addSensitiveReference(values, `URL query ${key}`, isMaskedSensitiveValue(value));
       }
     });
@@ -277,7 +320,7 @@ function addSensitiveUrlReferences(rawUrl: string, values: Set<string>): void {
       addSensitiveReference(values, 'URL fragment', false);
     }
   } catch {
-    const matches = rawUrl.match(/[?&]([^=&#]*(?:authorization|bearer|password|secret|token|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*)=/gi) || [];
+    const matches = rawUrl.match(/[?&]([^=&#]*(?:authorization|bearer|password|secret|token|jwt|assertion|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|session[-_ ]?token|oauth[-_ ]?token|client[-_ ]?assertion|code|function[-_ ]?key|subscription[-_ ]?key|ocp[-_ ]?apim[-_ ]?subscription[-_ ]?key|sas[-_ ]?token|shared[-_ ]?access[-_ ]?key)[^=&#]*)=/gi) || [];
     matches.forEach((match) => {
       const key = match.replace(/^[?&]/, '').replace(/=$/, '');
       addSensitiveReference(values, `URL query ${key}`, false);
@@ -317,7 +360,7 @@ function redactInlineSecretText(text: string, replacement = 'REDACTED'): string 
     redactSensitiveUrlsInText(text)
       .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, (_match, scheme) => `${scheme} ${replacement}`)
       .replace(
-        /((?:"|')?(?:authorizationHeader|apiToken|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|client[-_ ]?secret|private[-_ ]?key|keyOrValue|rawValue|secretValue|password|passwd|secret|token)(?:"|')?\s*[:=]\s*(?:"|')?)([^"',\s}\]<&#]+)/gi,
+        /((?:"|')?(?:authorizationHeader|apiToken|api[-_ ]?key|x[-_ ]?api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|session[-_ ]?token|oauth[-_ ]?token|client[-_ ]?secret|client[-_ ]?assertion|private[-_ ]?key|keyOrValue|rawValue|secretValue|password|passwd|secret|token|jwt|assertion)(?:"|')?\s*[:=]\s*(?:"|')?)([^"',\s}\]<&#]+)/gi,
         (match, prefix, secretValue) => (secretValue === 'REDACTED' ? match : `${prefix}${replacement}`),
       ),
     replacement,
@@ -622,6 +665,105 @@ function formatSecretReentrySlot(slot: JiraAutomationImportSecretReentrySlot): s
   return `${slot.path}${slot.label ? ` (${slot.label})` : ''}: ${slot.reason}`;
 }
 
+const SECRET_REENTRY_QUEUE_GROUPS: Array<{
+  id: JiraAutomationImportSecretReentryQueueGroupId;
+  label: string;
+  action: string;
+}> = [
+  {
+    id: 'hidden-jira-secrets',
+    label: 'Hidden Jira secrets',
+    action: 'Re-enter or recreate the masked Jira secret fields in the imported rule.',
+  },
+  {
+    id: 'url-credentials',
+    label: 'URL and signed-query credentials',
+    action: 'Regenerate signed URLs, webhook tokens, function keys, or API gateway query credentials for the target environment.',
+  },
+  {
+    id: 'inline-secret-text',
+    label: 'Inline secret-like text',
+    action: 'Check whether the text still needs a credential; restore only the target-safe value or leave the placeholder.',
+  },
+  {
+    id: 'named-credential-fields',
+    label: 'Named credential fields',
+    action: 'Re-enter target API keys, JWT/client assertions, Authorization headers, or password/token fields.',
+  },
+  {
+    id: 'other-redacted-fields',
+    label: 'Other redacted fields',
+    action: 'Review these placeholders in Jira before enabling.',
+  },
+];
+
+function classifySecretReentrySlot(
+  slot: JiraAutomationImportSecretReentrySlot,
+): JiraAutomationImportSecretReentryQueueGroupId {
+  if (/Hidden Jira secret container/i.test(slot.reason)) {
+    return 'hidden-jira-secrets';
+  }
+
+  if (/URL credential|sensitive query|fragment|token-like path/i.test(slot.reason)) {
+    return 'url-credentials';
+  }
+
+  if (/Inline secret-like text/i.test(slot.reason)) {
+    return 'inline-secret-text';
+  }
+
+  if (/Credential field/i.test(slot.reason)) {
+    return 'named-credential-fields';
+  }
+
+  return 'other-redacted-fields';
+}
+
+export function buildJiraAutomationImportSecretReentryQueueGroups(
+  slots: JiraAutomationImportSecretReentrySlot[],
+): JiraAutomationImportSecretReentryQueueGroup[] {
+  const groupedSlots = new Map<JiraAutomationImportSecretReentryQueueGroupId, JiraAutomationImportSecretReentrySlot[]>();
+
+  slots.forEach((slot) => {
+    const groupId = classifySecretReentrySlot(slot);
+    const groupSlots = groupedSlots.get(groupId) || [];
+    groupSlots.push(slot);
+    groupedSlots.set(groupId, groupSlots);
+  });
+
+  return SECRET_REENTRY_QUEUE_GROUPS
+    .map((group) => ({
+      ...group,
+      slots: groupedSlots.get(group.id) || [],
+    }))
+    .filter((group) => group.slots.length > 0);
+}
+
+export function formatJiraAutomationImportSecretReentryQueue(
+  slots: JiraAutomationImportSecretReentrySlot[],
+  maxSlotsPerGroup = 3,
+): string {
+  if (slots.length === 0) {
+    return 'Credential re-entry queue: no redacted credential slots were detected for this disabled copy.';
+  }
+
+  const groups = buildJiraAutomationImportSecretReentryQueueGroups(slots);
+  const groupText = groups.map((group) => {
+    const visibleSlots = group.slots.slice(0, maxSlotsPerGroup).map((slot) => (
+      `${slot.path}${slot.label ? ` (${slot.label})` : ''}`
+    ));
+    const hiddenCount = Math.max(0, group.slots.length - visibleSlots.length);
+    const suffix = hiddenCount > 0 ? `, ${hiddenCount} more` : '';
+    return `${group.label} (${group.slots.length}): ${visibleSlots.join(' | ')}${suffix}. ${group.action}`;
+  });
+
+  return [
+    `Credential re-entry queue: ${groups.length} group(s) from ${slots.length} redacted slot(s).`,
+    ...groupText,
+    'Create can continue, but before enabling in Jira rebuild, re-enter, or intentionally leave blank only the required target fields; placeholders are not working credentials.',
+  ].join(' ');
+}
+
 export function formatJiraAutomationImportSecretReentrySummary(
   slots: JiraAutomationImportSecretReentrySlot[],
   maxSlots = 4,
@@ -721,10 +863,13 @@ export function buildJiraAutomationImportEnablementPlan(
       : hiddenSecretReferences.length > 0
         ? `Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. `
       : '';
+    const credentialQueueDetail = secretReentrySlots.length > 0
+      ? `${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots, 2)} `
+      : '';
     steps.push({
       id: 'reconnect-external-effects',
       label: 'Reconnect external effects and credentials',
-      detail: `${hiddenSecretDetail}${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
+      detail: `${hiddenSecretDetail}${credentialQueueDetail}${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
       severity: 'high',
     });
   }
@@ -795,6 +940,7 @@ export function buildJiraAutomationImportReviewPacket(
     `- Rule chaining: ${ruleChaining}`,
     `- High-risk gate: ${formatHighRiskGateSummary(checklist)}`,
     `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
+    `- ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)}`,
     `- Checklist summary: ${formatChecklistSeveritySummary(checklist)}`,
     '',
     '## Review before enabling',
@@ -859,6 +1005,7 @@ export function buildJiraAutomationImportReviewNote(
     `- High-risk gate: ${formatHighRiskGateSummary(checklist)}.`,
     `- Create-stage acknowledgement: ${formatCreateStageAcknowledgementSummary(checklist, context)}.`,
     `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
+    `- ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)}.`,
     `- Detected bindings: ${formatDetectedReferenceSummary(summary)}.`,
     `- Top detected bindings: ${formatReviewFindingsForNote(buildJiraAutomationImportReviewFindings(exportedRule))}.`,
     `- Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}.`,
@@ -1054,7 +1201,8 @@ function isLikelySensitiveKey(key: string): boolean {
     token === 'passwd' ||
     token === 'secret' ||
     token === 'secrets' ||
-    token === 'token'
+    token === 'token' ||
+    token === 'jwt'
   ))) {
     return true;
   }
@@ -1062,7 +1210,11 @@ function isLikelySensitiveKey(key: string): boolean {
   return hasAdjacentTokens(tokens, 'api', 'key') ||
     hasAdjacentTokens(tokens, 'access', 'token') ||
     hasAdjacentTokens(tokens, 'refresh', 'token') ||
+    hasAdjacentTokens(tokens, 'id', 'token') ||
+    hasAdjacentTokens(tokens, 'session', 'token') ||
+    hasAdjacentTokens(tokens, 'oauth', 'token') ||
     hasAdjacentTokens(tokens, 'client', 'secret') ||
+    hasAdjacentTokens(tokens, 'client', 'assertion') ||
     hasAdjacentTokens(tokens, 'private', 'key');
 }
 
@@ -1071,6 +1223,11 @@ function isLikelySensitiveUrlQueryKey(key: string): boolean {
   if (
     compactKey === 'code' ||
     compactKey === 'functionkey' ||
+    compactKey === 'jwt' ||
+    compactKey === 'idtoken' ||
+    compactKey === 'clientassertion' ||
+    compactKey === 'assertion' ||
+    compactKey === 'oauthtoken' ||
     compactKey === 'subscriptionkey' ||
     compactKey === 'ocpapimsubscriptionkey' ||
     compactKey === 'sastoken' ||
@@ -1122,7 +1279,7 @@ function isUnsafeSecretDisplayLabel(value: string): boolean {
     return true;
   }
 
-  if (/^(gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA)[A-Za-z0-9_-]{8,}/.test(trimmed)) {
+  if (/^(gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA|AIza)[A-Za-z0-9._-]{8,}/.test(trimmed)) {
     return true;
   }
 
@@ -1692,7 +1849,8 @@ function isLikelySensitiveImportKey(key: string): boolean {
     token === 'bearer' ||
     token === 'password' ||
     token === 'passwd' ||
-    token === 'token'
+    token === 'token' ||
+    token === 'jwt'
   ))) {
     return true;
   }
@@ -1707,7 +1865,11 @@ function isLikelySensitiveImportKey(key: string): boolean {
   return hasAdjacentTokens(tokens, 'api', 'key') ||
     hasAdjacentTokens(tokens, 'access', 'token') ||
     hasAdjacentTokens(tokens, 'refresh', 'token') ||
+    hasAdjacentTokens(tokens, 'id', 'token') ||
+    hasAdjacentTokens(tokens, 'session', 'token') ||
+    hasAdjacentTokens(tokens, 'oauth', 'token') ||
     hasAdjacentTokens(tokens, 'client', 'secret') ||
+    hasAdjacentTokens(tokens, 'client', 'assertion') ||
     hasAdjacentTokens(tokens, 'private', 'key');
 }
 
@@ -2086,6 +2248,7 @@ export function buildJiraAutomationImportWarnings(
 
   if (secretReentrySlots.length > 0) {
     warnings.push(`Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. Placeholder or REDACTED values are not working credentials; rebuild only the required target fields in Jira before enabling.`);
+    warnings.push(formatJiraAutomationImportSecretReentryQueue(secretReentrySlots));
   }
 
   if (summary.sourceProjectReferenceCount > 0) {
@@ -2212,11 +2375,14 @@ export function buildJiraAutomationImportReviewChecklist(
       : hiddenSecretReferences.length > 0
         ? ` Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}.`
       : '';
+    const credentialQueueDetail = secretReentrySlots.length > 0
+      ? ` ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots, 2)}`
+      : '';
 
     items.push({
       id: 'external-effects',
       label: 'External effects and credentials',
-      detail: `${parts.join(', ')} need endpoint, credential, and recipient review.${hiddenSecretDetail}`,
+      detail: `${parts.join(', ')} need endpoint, credential, and recipient review.${hiddenSecretDetail}${credentialQueueDetail}`,
       severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.secretReferenceCount > 0 || summary.connectionReferenceCount > 0 || summary.sensitiveReferenceCount > 0
         ? 'high'
         : 'medium',

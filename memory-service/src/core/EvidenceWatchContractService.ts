@@ -158,7 +158,38 @@ export interface EvidenceWatchUiReceipt {
   confirmRequestId?: string;
   duplicateSuppressedCount: number;
   runId?: string;
+  lastRunState?: EvidenceWatchRunState;
+  lastRunSummary?: string;
   created?: boolean;
+}
+
+export interface EvidenceWatchListReceipt {
+  label: string;
+  detail: string;
+  state: EvidenceWatchState | 'all';
+  subjectKey?: string;
+  limit: number;
+  offset: number;
+  returnedCount: number;
+  total: number;
+  readAt: number;
+  readOnly: true;
+}
+
+export interface EvidenceWatchReadReceipt {
+  label: string;
+  detail: string;
+  contractId: string;
+  state: EvidenceWatchState;
+  subjectKey: string;
+  lastRunState?: EvidenceWatchRunState;
+  lastCheckedAt?: number;
+  nextCheckAt?: number;
+  nextCheckDue: boolean;
+  returnedCount?: number;
+  limit?: number;
+  readAt: number;
+  readOnly: true;
 }
 
 interface EvidenceWatchContractRow {
@@ -500,14 +531,16 @@ export class EvidenceWatchContractService {
     total: number;
     limit: number;
     offset: number;
+    receipt: EvidenceWatchListReceipt;
   } {
+    const state = filters.state ?? 'all';
     const limit = Math.max(1, Math.min(filters.limit ?? 20, 100));
     const offset = Math.max(0, filters.offset ?? 0);
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (filters.state && filters.state !== 'all') {
+    if (state !== 'all') {
       conditions.push('state = ?');
-      params.push(filters.state);
+      params.push(state);
     }
     if (filters.subjectKey) {
       conditions.push('subject_key = ?');
@@ -545,6 +578,14 @@ export class EvidenceWatchContractService {
       total,
       limit,
       offset,
+      receipt: this.buildListReceipt({
+        state,
+        subjectKey: filters.subjectKey,
+        limit,
+        offset,
+        returnedCount: rows.length,
+        total,
+      }),
     };
   }
 
@@ -559,6 +600,60 @@ export class EvidenceWatchContractService {
       )
       .all(contractId, Math.max(1, Math.min(limit, 100))) as EvidenceWatchRunRow[];
     return rows.map((row) => this.rowToRun(row));
+  }
+
+  buildDetailReadReceipt(contract: EvidenceWatchContract): EvidenceWatchReadReceipt {
+    const lastRun = contract.lastReceiptId
+      ? this.getRunReceiptById(contract.id, contract.lastReceiptId)
+      : null;
+    const readAt = now();
+    const timeBasis = this.buildReadTimeBasis(contract, readAt);
+    const lastRunPart = lastRun ? `，lastRun=${lastRun.runState}` : '';
+    return {
+      label: '证据守望详情快照',
+      detail:
+        `已读取 ${contract.title} 的证据守望详情；当前 state=${contract.state}${lastRunPart}；${timeBasis.detail}。` +
+        '本次只读详情不会复核权威来源、追加 run、创建或复用外部查证动作、确认事实变化、发送通知，也不会修改 contract 状态。',
+      contractId: contract.id,
+      state: contract.state,
+      subjectKey: contract.subjectKey,
+      lastRunState: lastRun?.runState,
+      lastCheckedAt: contract.lastCheckedAt,
+      nextCheckAt: contract.nextCheckAt,
+      nextCheckDue: timeBasis.nextCheckDue,
+      readAt,
+      readOnly: true,
+    };
+  }
+
+  buildRunHistoryReadReceipt(input: {
+    contract: EvidenceWatchContract;
+    returnedCount: number;
+    limit: number;
+  }): EvidenceWatchReadReceipt {
+    const lastRun = input.contract.lastReceiptId
+      ? this.getRunReceiptById(input.contract.id, input.contract.lastReceiptId)
+      : null;
+    const readAt = now();
+    const timeBasis = this.buildReadTimeBasis(input.contract, readAt);
+    return {
+      label: '证据守望运行快照',
+      detail:
+        `已读取 ${input.contract.title} 的 run 历史；返回 ${input.returnedCount} 条，limit=${input.limit}。` +
+        `${timeBasis.detail}。这些 run 是历史收据，不代表本轮重新触达过权威来源。` +
+        '本次只读历史不会复核权威来源、追加 run、创建或复用外部查证动作、确认事实变化、发送通知，也不会修改 contract 状态。',
+      contractId: input.contract.id,
+      state: input.contract.state,
+      subjectKey: input.contract.subjectKey,
+      lastRunState: lastRun?.runState,
+      lastCheckedAt: input.contract.lastCheckedAt,
+      nextCheckAt: input.contract.nextCheckAt,
+      nextCheckDue: timeBasis.nextCheckDue,
+      returnedCount: input.returnedCount,
+      limit: input.limit,
+      readAt,
+      readOnly: true,
+    };
   }
 
   createOrReuse(
@@ -1003,8 +1098,12 @@ export class EvidenceWatchContractService {
       created?: boolean;
       runId?: string;
       detail?: string;
+      lastRunState?: EvidenceWatchRunState;
+      lastRunSummary?: string;
     } = {},
   ): EvidenceWatchUiReceipt {
+    const runId = overrides.runId ?? contract.lastReceiptId;
+    const runReceipt = runId ? this.getRunReceiptById(contract.id, runId) : null;
     return {
       contractId: contract.id,
       state: contract.state,
@@ -1017,7 +1116,9 @@ export class EvidenceWatchContractService {
       nextCheckAt: contract.nextCheckAt,
       confirmRequestId: contract.confirmRequestId,
       duplicateSuppressedCount: this.countDuplicateSuppressions(contract.id),
-      runId: overrides.runId ?? contract.lastReceiptId,
+      runId,
+      lastRunState: overrides.lastRunState ?? runReceipt?.runState,
+      lastRunSummary: overrides.lastRunSummary ?? runReceipt?.summary,
       created: overrides.created,
     };
   }
@@ -1254,6 +1355,22 @@ export class EvidenceWatchContractService {
     return row.count;
   }
 
+  private getRunReceiptById(
+    contractId: string,
+    runId: string,
+  ): EvidenceWatchRunReceipt | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM evidence_watch_runs
+         WHERE contract_id = ?
+           AND id = ?
+         LIMIT 1`,
+      )
+      .get(contractId, runId) as EvidenceWatchRunRow | undefined;
+    return row ? this.rowToRun(row) : null;
+  }
+
   private buildUiReceiptDetail(contract: EvidenceWatchContract): string {
     const duplicateCount = this.countDuplicateSuppressions(contract.id);
     const duplicateSuffix =
@@ -1280,6 +1397,56 @@ export class EvidenceWatchContractService {
       return `${contract.title} 的证据守望已归档；旧结论仅作为历史记录引用。${duplicateSuffix}`;
     }
     return `${contract.title} 已进入证据守望，将在${cadence}；当前回执只代表契约已建立，不代表权威来源已完成复核。${duplicateSuffix}`;
+  }
+
+  private buildListReceipt(input: {
+    state: EvidenceWatchState | 'all';
+    subjectKey?: string;
+    limit: number;
+    offset: number;
+    returnedCount: number;
+    total: number;
+  }): EvidenceWatchListReceipt {
+    const statePart =
+      input.state === 'all' ? '全部状态' : `state=${input.state}`;
+    const subjectPart = input.subjectKey
+      ? `，subjectKey=${input.subjectKey}`
+      : '';
+    return {
+      label: '证据守望列表快照',
+      detail:
+        `已读取 ${statePart}${subjectPart} 的证据守望列表快照；` +
+        `返回 ${input.returnedCount}/${input.total} 条，分页 offset=${input.offset} limit=${input.limit}。` +
+        '本次只读列表不会复核权威来源、创建或复用外部查证动作、确认事实变化、发送通知，也不会修改 contract 状态。',
+      state: input.state,
+      subjectKey: input.subjectKey,
+      limit: input.limit,
+      offset: input.offset,
+      returnedCount: input.returnedCount,
+      total: input.total,
+      readAt: now(),
+      readOnly: true,
+    };
+  }
+
+  private buildReadTimeBasis(
+    contract: EvidenceWatchContract,
+    readAt: number,
+  ): { detail: string; nextCheckDue: boolean } {
+    const lastChecked =
+      typeof contract.lastCheckedAt === 'number'
+        ? `lastCheckedAt=${contract.lastCheckedAt}`
+        : 'lastCheckedAt=none';
+    const nextCheckDue =
+      typeof contract.nextCheckAt === 'number' && contract.nextCheckAt <= readAt;
+    const nextCheck =
+      typeof contract.nextCheckAt === 'number'
+        ? `nextCheckAt=${contract.nextCheckAt}${nextCheckDue ? '，已到期' : '，未到期'}`
+        : 'nextCheckAt=none';
+    return {
+      detail: `复核时间基准：${lastChecked}，${nextCheck}`,
+      nextCheckDue,
+    };
   }
 }
 

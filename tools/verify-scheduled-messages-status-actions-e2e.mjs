@@ -477,12 +477,32 @@ try {
   );
   await pendingRow
     .locator('small', {
-      hasText: '批准会把这行改为 Active，并排到下一分钟按 Bot 发送当前正文',
+      hasText: '批准前请复核当前正文快照',
+    })
+    .waitFor({ timeout: 5000 });
+  await pendingRow
+    .locator('small', {
+      hasText: '正文快照: content',
+    })
+    .waitFor({ timeout: 5000 });
+  await pendingRow
+    .locator('small', {
+      hasText: '原排期: 2026-05-20 11:30；执行方式: Bot',
+    })
+    .waitFor({ timeout: 5000 });
+  await pendingRow
+    .locator('small', {
+      hasText: '这是当前表格快照',
     })
     .waitFor({ timeout: 5000 });
   await pendingRejectRow
     .locator('small', {
       hasText: '自动答复审核',
+    })
+    .waitFor({ timeout: 5000 });
+  await pendingRejectRow
+    .locator('small', {
+      hasText: '正文快照: reject content',
     })
     .waitFor({ timeout: 5000 });
   assert.equal(
@@ -526,6 +546,11 @@ try {
     .filter({ hasText: '已批准自动答复' })
     .getByText('只批准当前待审核行')
     .waitFor({ timeout: 5000 });
+  await page
+    .getByRole('status')
+    .filter({ hasText: '已批准自动答复' })
+    .getByText('正文快照: content')
+    .waitFor({ timeout: 5000 });
 
   page.once('dialog', async (dialog) => {
     assert.match(dialog.message(), /确定要拒绝此自动答复/);
@@ -541,6 +566,11 @@ try {
     .getByRole('status')
     .filter({ hasText: '已拒绝自动答复' })
     .getByText('不删除触发规则')
+    .waitFor({ timeout: 5000 });
+  await page
+    .getByRole('status')
+    .filter({ hasText: '已拒绝自动答复' })
+    .getByText('正文快照: reject content')
     .waitFor({ timeout: 5000 });
 
   assertNoPageErrors();

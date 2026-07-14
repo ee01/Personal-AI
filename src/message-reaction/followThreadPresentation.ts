@@ -39,6 +39,30 @@ export interface FollowThreadManagementReceipt {
   body: string;
 }
 
+export interface FollowThreadCancelConfirmReceipt {
+  title: string;
+  scopeText: string;
+  boundaryText: string;
+  nextText: string;
+}
+
+export interface FollowThreadListSnapshotContext {
+  totalManualRules: number;
+  visibleRules: number;
+  hiddenSystemRules: number;
+  statusFilter?: string;
+  sortBy?: string;
+  loadedAt?: unknown;
+}
+
+export interface FollowThreadListSnapshotReceipt {
+  title: string;
+  sourceText: string;
+  visibilityText: string;
+  filterText: string;
+  boundaryText: string;
+}
+
 export interface FollowThreadManagementStatusReceipt {
   title: string;
   stateText: string;
@@ -75,6 +99,13 @@ function normalizeExpiryTimestamp(value: unknown): number | null {
   if (!text) return null;
   const timestamp = Number(text);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+}
+
+function normalizeCount(value: unknown): number {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0
+    ? Math.floor(numberValue)
+    : 0;
 }
 
 function getExpiryLabel(value: unknown): string {
@@ -219,6 +250,42 @@ export function getFollowThreadNotifyMethodText(method: unknown): string {
   return getNotifyMethodLabel(text);
 }
 
+function getStatusFilterLabel(value: unknown): string {
+  const text = normalizeText(value);
+  if (text === 'active') return '进行中';
+  if (text === 'expired') return '已过期';
+  return '全部';
+}
+
+function getSortLabel(value: unknown): string {
+  const text = normalizeText(value);
+  if (text === 'expires') return '到期时间';
+  if (text === 'related') return '关联数';
+  return '创建时间';
+}
+
+export function buildFollowThreadListSnapshotReceipt(
+  context: FollowThreadListSnapshotContext,
+): FollowThreadListSnapshotReceipt {
+  const loadedAt = formatTimestamp(context.loadedAt) || '刚刚';
+  const totalManualRules = normalizeCount(context.totalManualRules);
+  const visibleRules = normalizeCount(context.visibleRules);
+  const hiddenSystemRules = normalizeCount(context.hiddenSystemRules);
+
+  return {
+    title: '列表快照回执',
+    sourceText: `读取来源：chrome.storage.local.concernedItems；本次读取时间：${loadedAt}。`,
+    visibilityText: `当前可见 ${visibleRules} 条，手动 Watch 规则总数 ${totalManualRules} 条；系统 / Outreach 内部 Watch 隐藏 ${hiddenSystemRules} 条，不计入本页手动规则统计。`,
+    filterText: `当前筛选：${getStatusFilterLabel(
+      context.statusFilter,
+    )}；排序：${getSortLabel(
+      context.sortBy,
+    )}。筛选和排序只改变本页展示，不改变监听或通知设置。`,
+    boundaryText:
+      '本次列表读取不会取消、延长、补发通知、回扫历史消息、重新索引原消息、写入长期记忆或发送消息。',
+  };
+}
+
 export function buildFollowThreadManagementStatusReceipt(
   context: FollowThreadManagementStatusContext,
 ): FollowThreadManagementStatusReceipt {
@@ -284,5 +351,18 @@ export function buildFollowThreadCancelReceipt(context: {
     body: `已删除本地手动规则「${formatRuleName(
       context.ruleName,
     )}」；不会删除原消息、不会立刻清理已写入 Memory Service 的历史索引，后端仍按遗忘策略处理旧资料。`,
+  };
+}
+
+export function buildFollowThreadCancelConfirmReceipt(context: {
+  ruleName?: string;
+}): FollowThreadCancelConfirmReceipt {
+  const ruleName = formatRuleName(context.ruleName);
+  return {
+    title: '取消关注待确认',
+    scopeText: `将删除本机手动 Watch 规则「${ruleName}」，停止后续新消息匹配和新的 Watch 通知。`,
+    boundaryText:
+      '确认前不会修改本地列表；确认后也不会删除 RingCentral 原消息、不会补发或撤回通知、不会立刻清理已写入 Memory Service 的历史索引。',
+    nextText: '点「确认取消」才会写入本机存储；点「返回」会保留当前 Watch 规则。',
   };
 }

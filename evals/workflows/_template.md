@@ -33,6 +33,7 @@ Describe what user experience this suite evaluates. Write this as a product-faci
 - State what the run proved and what it did not prove.
 - For each case, provide `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `conclusion`, and `nextSteps`.
 - Show the generated/returned AI content, or the explicit error/hide decision, as a concise actual summary.
+- If a case declares `manualVerification`, render it as reviewer setup, steps, expected results, cleanup, and evidence guidance.
 - Keep raw request/response/judge/debug payloads in artifacts and link to them from the report.
 - Surface concrete limitations or `notProved` boundaries when the eval is synthetic, local-only, partial, or blocked by external state.
 

@@ -24,6 +24,8 @@
             type="button"
             class="refresh-btn"
             :disabled="loading"
+            :title="todayPilotRefreshBoundary"
+            :aria-label="todayPilotRefreshBoundary"
             @click="loadDayPilot()"
           >
             {{ loading ? '刷新中' : '刷新' }}
@@ -59,6 +61,36 @@
       </div>
 
       <div
+        v-if="visibleSourceBreakdownItems.length > 0"
+        class="source-breakdown-receipt"
+        role="status"
+        aria-live="polite"
+        aria-label="今日领航来源分布回执"
+      >
+        <div class="source-breakdown-heading">
+          <span>来源分布</span>
+          <p>{{ sourceBreakdownReceipt }}</p>
+        </div>
+        <div class="source-breakdown-grid">
+          <div
+            v-for="item in visibleSourceBreakdownItems"
+            :key="item.key"
+            :class="['source-breakdown-item', item.tone]"
+          >
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.summary }}</span>
+          </div>
+          <div
+            v-if="sourceBreakdownOverflowCount > 0"
+            class="source-breakdown-item quiet"
+          >
+            <strong>其他</strong>
+            <span>还有 {{ sourceBreakdownOverflowCount }} 个来源桶只在总数里折叠显示。</span>
+          </div>
+        </div>
+      </div>
+
+      <div
         v-if="statsIdentityReceipt"
         :class="['stats-identity-receipt', statsIdentityReceipt.tone]"
         role="status"
@@ -75,6 +107,9 @@
           </span>
         </div>
         <p>{{ statsIdentityReceipt.boundary }}</p>
+        <p class="stats-identity-write-boundary">
+          {{ statsIdentityReceipt.writeBoundary }}
+        </p>
       </div>
     </section>
 
@@ -352,7 +387,15 @@
                     v-if="isContextPackLoading(card.id)"
                     class="context-status"
                   >
-                    正在生成 {{ currentProviderLabel }}...
+                    {{ contextPackPendingReceipt(card) }}
+                  </div>
+                  <div
+                    v-else-if="contextPackFailureReceipt(card)"
+                    class="context-status context-status-failed"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {{ contextPackFailureReceipt(card) }}
                   </div>
                   <div
                     v-if="currentContextPack(card)"
@@ -383,8 +426,17 @@
                       {{ item }}
                     </div>
                   </div>
-                  <pre>{{ currentPackText(card) }}</pre>
+                  <pre v-if="currentContextPack(card)">{{ currentPackText(card) }}</pre>
                 </div>
+              </div>
+
+              <div
+                class="mission-action-scope-receipt"
+                role="note"
+                aria-label="Mission 操作前回执"
+              >
+                <span>操作前回执</span>
+                <p>{{ missionActionScopeReceipt(card) }}</p>
               </div>
 
               <div
@@ -401,6 +453,8 @@
                   type="button"
                   class="card-action primary"
                   :disabled="isMissionFeedbackPending(card.id)"
+                  :title="missionActionButtonBoundary(card, 'done')"
+                  :aria-label="missionActionButtonBoundary(card, 'done')"
                   @click.stop="hideCardForToday(card, 'done')"
                 >
                   {{ card.executionChannel ? '从首页移除' : '完成' }}
@@ -409,6 +463,8 @@
                   type="button"
                   class="card-action secondary"
                   :disabled="isMissionFeedbackPending(card.id)"
+                  :title="missionActionButtonBoundary(card, 'later')"
+                  :aria-label="missionActionButtonBoundary(card, 'later')"
                   @click.stop="hideCardForToday(card, 'later')"
                 >
                   稍后 6h
@@ -417,6 +473,8 @@
                   type="button"
                   class="card-action secondary"
                   :disabled="isMissionFeedbackPending(card.id)"
+                  :title="missionActionButtonBoundary(card, 'useful')"
+                  :aria-label="missionActionButtonBoundary(card, 'useful')"
                   @click.stop="sendCardSignal(card, 'useful')"
                 >
                   有用
@@ -425,6 +483,8 @@
                   type="button"
                   class="card-action ghost"
                   :disabled="isMissionFeedbackPending(card.id)"
+                  :title="missionActionButtonBoundary(card, 'wrong')"
+                  :aria-label="missionActionButtonBoundary(card, 'wrong')"
                   @click.stop="sendCardSignal(card, 'wrong')"
                 >
                   不准确
@@ -433,6 +493,8 @@
                   v-if="!card.executionChannel"
                   type="button"
                   class="card-action secondary"
+                  :title="missionActionButtonBoundary(card, 'copy_context')"
+                  :aria-label="missionActionButtonBoundary(card, 'copy_context')"
                   @click.stop="copyContextPack(card)"
                 >
                   复制上下文包
@@ -440,6 +502,8 @@
                 <button
                   type="button"
                   class="card-action ghost"
+                  :title="missionActionButtonBoundary(card, 'open_detail')"
+                  :aria-label="missionActionButtonBoundary(card, 'open_detail')"
                   @click.stop="navigateTo(card.route)"
                 >
                   打开详情
@@ -448,6 +512,8 @@
                   type="button"
                   class="card-action ghost"
                   :disabled="isMissionFeedbackPending(card.id)"
+                  :title="missionActionButtonBoundary(card, 'mute')"
+                  :aria-label="missionActionButtonBoundary(card, 'mute')"
                   @click.stop="hideCardForToday(card, 'mute')"
                 >
                   不再提醒同类
@@ -484,6 +550,8 @@
               :key="`high:${item.messageId}`"
               type="button"
               class="catch-up-item"
+              :title="catchUpItemReviewBoundary(item)"
+              :aria-label="catchUpItemReviewBoundary(item)"
               @click="navigateToCatchUpItem(item)"
             >
               <span class="catch-up-item-meta">
@@ -510,6 +578,8 @@
               :key="`waiting:${item.messageId}`"
               type="button"
               class="catch-up-item waiting"
+              :title="catchUpItemReviewBoundary(item)"
+              :aria-label="catchUpItemReviewBoundary(item)"
               @click="navigateToCatchUpItem(item)"
             >
               <span class="catch-up-item-meta">
@@ -646,6 +716,9 @@ import {
   countTodayPilotSelectedEvidence,
   getTodayPilotSourceStatItems,
   summarizeTodayPilotNoiseBreakdown,
+  todayPilotSourceStatsKeyForEvidence,
+  type TodayPilotSourceStatsKey,
+  type TodayPilotSourceStatItem,
 } from '../../todayPilotSourceStats';
 
 type MissionPriority = 'critical' | 'high' | 'medium' | 'low';
@@ -669,6 +742,7 @@ interface MissionCard {
   id: string;
   missionId?: string;
   sourceHash?: string;
+  sourceEvidenceRefs?: Array<{ sourceKind: string; sourceId: string }>;
   cardType?: string;
   executionChannel?: 'openclaw';
   executionNote?: string;
@@ -704,6 +778,30 @@ interface RankingSummaryItem {
   tone: 'normal' | 'quiet' | 'warn';
 }
 
+interface SourceBreakdownItem {
+  key: TodayPilotSourceStatItem['key'];
+  label: string;
+  total: number;
+  candidate: number;
+  selected: number;
+  hiddenSelected: number;
+  noise: number;
+  notSelected: number;
+  summary: string;
+  tone: 'normal' | 'quiet' | 'warn';
+}
+
+interface HiddenSelectedEvidenceRef {
+  sourceKind: string;
+  sourceId: string;
+}
+
+interface DayPilotSnapshotBasis {
+  generated: boolean;
+  stale: boolean;
+  loadedAt: number;
+}
+
 interface MissionFeedbackReceipt {
   title: string;
   detail: string;
@@ -718,6 +816,7 @@ const client = getMemoryServiceClient();
 const loading = ref(false);
 const loadError = ref('');
 const dayBrief = ref<DayPilotBrief | null>(null);
+const dayBriefSnapshotBasis = ref<DayPilotSnapshotBasis | null>(null);
 const catchUpBrief = ref<DayPilotCatchUpBrief | null>(null);
 const catchUpLoading = ref(false);
 const catchUpLoadError = ref('');
@@ -754,9 +853,11 @@ const contextProvider = ref<DayPilotProviderTarget>('codex');
 const includeSensitiveContext = ref(false);
 const contextPackCache = ref<Record<string, DayPilotContextPackResponse>>({});
 const contextPackLoadingIds = ref(new Set<string>());
+const contextPackFailures = ref<Record<string, string>>({});
 const missionFeedbackReceipt = ref<MissionFeedbackReceipt | null>(null);
 const missionFeedbackPendingCardIds = ref(new Set<string>());
 const processedMissionFeedbackCount = ref(0);
+const hiddenSelectedEvidenceRefs = ref<HiddenSelectedEvidenceRef[]>([]);
 const toastMessage = ref('');
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -847,6 +948,21 @@ const sourceTags = computed(() => {
   ];
 });
 
+function formatStatsBlockedOperations(values?: string[]): string {
+  const labels: Record<string, string> = {
+    write: '写入',
+    import: '导入',
+    restore: '恢复',
+    profile_update: '画像更新',
+  };
+  const normalized = values?.length
+    ? values
+    : ['write', 'import', 'restore'];
+  return Array.from(
+    new Set(normalized.map((value) => labels[value] || value)),
+  ).join('、');
+}
+
 const statsIdentityReceipt = computed(() => {
   const identity = stats.value?.user;
   if (!identity) return null;
@@ -854,6 +970,11 @@ const statsIdentityReceipt = computed(() => {
   const isDefaultFallback =
     identity.fallbackToDefault || identity.identitySource === 'default_fallback';
   const id = identity.id || 'default';
+  const writeBoundary = identity.writeBoundary;
+  const writeBlocked =
+    isDefaultFallback ||
+    writeBoundary?.mode === 'default_read_only_fallback' ||
+    writeBoundary?.canWrite === false;
   return {
     tone: isDefaultFallback ? 'warning' : 'ok',
     title: isDefaultFallback
@@ -866,6 +987,11 @@ const statsIdentityReceipt = computed(() => {
     boundary: isDefaultFallback
       ? '这是只读兼容快照；写入、导入和恢复仍会被拦截，直到身份恢复。'
       : 'Today Mission 和顶部统计只读取这个 per-user SQLite 空间；不会迁移、导入、恢复或写回其他用户空间。',
+    writeBoundary: writeBlocked
+      ? `写入边界: ${formatStatsBlockedOperations(
+          writeBoundary?.blockedOperations,
+        )}已拦截；恢复 userinfo.username 或在设置里配置 userId 后再试。`
+      : `写入边界: 读写、备份与恢复只限 ${id}；不会落到 default 或其他用户空间。`,
   };
 });
 
@@ -957,6 +1083,27 @@ function contextPackPreActionReceipt(card: MissionCard) {
   return `当前目标 ${providerShortLabel(
     contextProvider.value,
   )}；生成只读取这张 mission 的 ${evidenceCount} 条证据，${sensitiveMode}；复制只写入本机剪贴板，不会发送给外部 AI、批准/执行或写回来源系统。`;
+}
+
+function contextPackPendingReceipt(card: MissionCard) {
+  const evidenceCount = Math.max(0, card.evidence?.length || 0);
+  return `正在生成 ${currentProviderLabel.value} 上下文包；等待 Memory Service 返回当前目标和敏感设置下的 ${evidenceCount} 条证据正文。尚未写入剪贴板、发送给外部 AI、批准/执行或写回来源系统。`;
+}
+
+function setContextPackFailure(cardId: string, message?: string) {
+  const next = { ...contextPackFailures.value };
+  if (message) {
+    next[cardId] = message;
+  } else {
+    delete next[cardId];
+  }
+  contextPackFailures.value = next;
+}
+
+function contextPackFailureReceipt(card: MissionCard) {
+  const reason = contextPackFailures.value[card.id];
+  if (!reason || currentContextPack(card)) return '';
+  return `上下文包未生成：${reason}。当前没有可复制的 ${currentProviderLabel.value} 正文；没有写入剪贴板、发送给外部 AI、批准/执行或写回来源系统。请稍后重试或打开详情核对证据。`;
 }
 
 function contextPackCopyReceipt(pack: DayPilotContextPackResponse) {
@@ -1083,6 +1230,74 @@ const budgetPercent = computed(() => {
   return `${Math.min(100, Math.max(0, percent))}%`;
 });
 
+function normalizeTodayPilotSnapshotTimestamp(
+  value: number | undefined,
+): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return value > 1_000_000_000_000 ? value : value * 1000;
+}
+
+function formatTodayPilotSnapshotTime(value: number | undefined) {
+  const timestampMs = normalizeTodayPilotSnapshotTimestamp(value);
+  if (!timestampMs) return '生成时间未返回';
+  return new Date(timestampMs).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatTodayPilotSnapshotAge(
+  value: number | undefined,
+  nowMs = Date.now(),
+) {
+  const timestampMs = normalizeTodayPilotSnapshotTimestamp(value);
+  if (!timestampMs) return '无法判断新鲜度';
+  const diffSeconds = Math.floor((nowMs - timestampMs) / 1000);
+  if (diffSeconds < -60) return '服务端时间在当前时间之后';
+  const ageSeconds = Math.max(0, diffSeconds);
+  if (ageSeconds < 60) return '刚刚生成';
+  const ageMinutes = Math.round(ageSeconds / 60);
+  if (ageMinutes < 60) return `约 ${ageMinutes} 分钟前`;
+  const ageHours = Math.round(ageMinutes / 60);
+  if (ageHours < 24) return `约 ${ageHours} 小时前`;
+  const ageDays = Math.round(ageHours / 24);
+  return `约 ${ageDays} 天前`;
+}
+
+function todayPilotSnapshotModeLabel(context: DayPilotSnapshotBasis) {
+  if (context.generated && context.stale) {
+    return '服务端新生成（旧 brief 已过新鲜窗口）';
+  }
+  return context.generated ? '服务端新生成' : '读取已有 brief';
+}
+
+function todayPilotBriefStatusLabel(
+  brief: DayPilotBrief,
+  context: DayPilotSnapshotBasis,
+) {
+  if (context.generated && context.stale) return '已刷新 brief';
+  if (context.stale || brief.status === 'stale') return '陈旧 brief';
+  if (brief.status === 'ready') return '可用 brief';
+  if (brief.status === 'draft') return '草稿 brief';
+  if (brief.status === 'archived') return '已归档 brief';
+  return '未知状态 brief';
+}
+
+const todayPilotSnapshotBasisNote = computed(() => {
+  const brief = dayBrief.value;
+  const context = dayBriefSnapshotBasis.value;
+  if (!brief || !context) return '';
+  const mode = todayPilotSnapshotModeLabel(context);
+  const generatedAt = formatTodayPilotSnapshotTime(brief.generatedAt);
+  const age = formatTodayPilotSnapshotAge(brief.generatedAt, context.loadedAt);
+  const status = todayPilotBriefStatusLabel(brief, context);
+  return `首页快照基准：${mode} · ${generatedAt} · ${age} · ${status}；这里只解释当前可见 Today Pilot brief，不会重新扫描来源、写反馈、发送消息或执行动作。`;
+});
+
 const rankingSummary = computed<RankingSummaryItem[]>(() => {
   const sourceItems = displaySourceStatItems.value;
   if (sourceItems.length === 0) return [];
@@ -1109,7 +1324,7 @@ const rankingSummary = computed<RankingSummaryItem[]>(() => {
     {
       key: 'selected',
       value: String(selected),
-      label: '条证据进入首页 mission',
+      label: '条证据进入当前可见 mission',
       tone: selected > 0 ? 'normal' : 'quiet',
     },
     {
@@ -1137,16 +1352,26 @@ const rankingSummary = computed<RankingSummaryItem[]>(() => {
 
 const rankingNote = computed(() => {
   if (!dayBrief.value) return '';
+  const snapshotNote = todayPilotSnapshotBasisNote.value;
   if (processedMissionFeedbackCount.value > 0) {
-    return `当前是反馈后的可见快照：本轮已写入 ${processedMissionFeedbackCount.value} 条 Today Pilot 展示/排序反馈；顶部数量只代表仍可见 mission，不代表来源任务完成、消息已读、排程变更或外部系统已同步。`;
+    const feedbackNote = `当前是反馈后的可见快照：本轮已写入 ${processedMissionFeedbackCount.value} 条 Today Pilot 展示/排序反馈；顶部数量只代表仍可见 mission，不代表来源任务完成、消息已读、排程变更或外部系统已同步。`;
+    return snapshotNote ? `${feedbackNote} ${snapshotNote}` : feedbackNote;
   }
+  const suffix = snapshotNote ? ` ${snapshotNote}` : '';
   if (visibleMissionCards.value.length === 0) {
-    return '没有足够强的今日动作信号，低价值同步和旧提醒不会抬高优先级。';
+    return `没有足够强的今日动作信号，低价值同步和旧提醒不会抬高优先级。${suffix}`;
   }
   if (attentionBudget.value.used > 0) {
-    return '只有 Now/高优先级且低隐私风险的 mission 会占用提醒预算。';
+    return `只有 Now/高优先级且低隐私风险的 mission 会占用提醒预算。${suffix}`;
   }
-  return '当前 mission 仅在首页展示，waiting、低优先级或高隐私风险保持静默。';
+  return `当前 mission 仅在首页展示，waiting、低优先级或高隐私风险保持静默。${suffix}`;
+});
+
+const todayPilotRefreshBoundary = computed(() => {
+  if (loading.value) {
+    return '正在刷新 Today Pilot 快照：本轮只读取或生成今日派生 brief、补课和记忆统计快照；不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。';
+  }
+  return '刷新 Today Pilot 快照：读取当前用户的今日派生 brief；旧 brief 过期时可能重新生成排序、来源分布、前置降噪和补课/统计快照，但不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。';
 });
 
 const missionEmptyMessage = computed(() => {
@@ -1184,6 +1409,161 @@ const displaySourceStatItems = computed(() => {
     },
     visibleDayPilotCards.value,
   );
+});
+
+function emptyTodayPilotSourceCounts(): Record<TodayPilotSourceStatsKey, number> {
+  return {
+    messages: 0,
+    calendar: 0,
+    notifications: 0,
+    actions: 0,
+    reflections: 0,
+    rehearsals: 0,
+    skills: 0,
+    relationships: 0,
+  };
+}
+
+function dayPilotSelectedEvidenceRefs(
+  card: DayPilotCard,
+): HiddenSelectedEvidenceRef[] {
+  const seen = new Set<string>();
+  const refs: HiddenSelectedEvidenceRef[] = [];
+  for (const ref of card.evidenceRefs || []) {
+    const sourceKind = ref.sourceKind || 'message';
+    const sourceId =
+      ref.sourceId ||
+      `${sourceKind}:${ref.title || 'untitled'}:${ref.timestamp || 0}`;
+    const key = `${sourceKind}:${sourceId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ sourceKind, sourceId });
+  }
+  return refs;
+}
+
+const visibleSelectedEvidenceRefKeys = computed(() => {
+  const keys = new Set<string>();
+  for (const card of visibleDayPilotCards.value) {
+    for (const ref of dayPilotSelectedEvidenceRefs(card)) {
+      keys.add(`${ref.sourceKind}:${ref.sourceId}`);
+    }
+  }
+  return keys;
+});
+
+const hiddenSelectedSourceCounts = computed(() => {
+  const counts = emptyTodayPilotSourceCounts();
+  const visibleKeys = visibleSelectedEvidenceRefKeys.value;
+  const counted = new Set<string>();
+  for (const ref of hiddenSelectedEvidenceRefs.value) {
+    const key = `${ref.sourceKind}:${ref.sourceId}`;
+    if (visibleKeys.has(key) || counted.has(key)) continue;
+    counted.add(key);
+    counts[todayPilotSourceStatsKeyForEvidence(ref.sourceKind)] += 1;
+  }
+  return counts;
+});
+
+const hiddenSelectedEvidenceCount = computed(() =>
+  Object.values(hiddenSelectedSourceCounts.value).reduce(
+    (sum, count) => sum + count,
+    0,
+  ),
+);
+
+function sourceBreakdownSummary(
+  item: TodayPilotSourceStatItem & { hiddenSelected?: number },
+) {
+  const notSelected = Math.max(0, item.candidate - item.selected);
+  const parts = [
+    `原始 ${item.total}`,
+    `候选 ${item.candidate}`,
+    `当前可见入选 ${item.selected}`,
+  ];
+  if ((item.hiddenSelected || 0) > 0) {
+    parts.push(`本页已隐藏入选 ${item.hiddenSelected}`);
+  }
+  if (notSelected > 0) parts.push(`未进入当前可见 ${notSelected}`);
+  if (item.noise > 0) parts.push(`前置降噪 ${item.noise}`);
+  return parts.join(' · ');
+}
+
+const sourceBreakdownItems = computed<SourceBreakdownItem[]>(() => {
+  const hiddenCounts = hiddenSelectedSourceCounts.value;
+  return displaySourceStatItems.value
+    .filter(
+      (item) =>
+        item.total > 0 ||
+        item.candidate > 0 ||
+        item.selected > 0 ||
+        hiddenCounts[item.key] > 0 ||
+        item.noise > 0,
+    )
+    .map((item) => {
+      const notSelected = Math.max(0, item.candidate - item.selected);
+      const hiddenSelected = hiddenCounts[item.key] || 0;
+      const summaryItem = { ...item, hiddenSelected };
+      return {
+        ...summaryItem,
+        notSelected,
+        summary: sourceBreakdownSummary(summaryItem),
+        tone:
+          item.selected > 0
+            ? 'normal'
+            : hiddenSelected > 0 || item.noise > 0 || notSelected > 0
+            ? 'quiet'
+            : 'normal',
+      };
+    })
+    .sort((left, right) => {
+      const selectedDelta = right.selected - left.selected;
+      if (selectedDelta !== 0) return selectedDelta;
+      const candidateDelta = right.candidate - left.candidate;
+      if (candidateDelta !== 0) return candidateDelta;
+      const noiseDelta = right.noise - left.noise;
+      if (noiseDelta !== 0) return noiseDelta;
+      return right.total - left.total;
+    });
+});
+
+const visibleSourceBreakdownItems = computed(() =>
+  sourceBreakdownItems.value.slice(0, 4),
+);
+
+const sourceBreakdownOverflowCount = computed(() =>
+  Math.max(
+    0,
+    sourceBreakdownItems.value.length - visibleSourceBreakdownItems.value.length,
+  ),
+);
+
+const sourceBreakdownReceipt = computed(() => {
+  const total = sourceBreakdownItems.value.length;
+  if (total === 0) return '';
+  const selectedSources = sourceBreakdownItems.value.filter(
+    (item) => item.selected > 0,
+  ).length;
+  const hiddenSelectedSources = sourceBreakdownItems.value.filter(
+    (item) => item.hiddenSelected > 0,
+  ).length;
+  const noisySources = sourceBreakdownItems.value.filter(
+    (item) => item.noise > 0,
+  ).length;
+  const hiddenSelectedEvidence = hiddenSelectedEvidenceCount.value;
+  const hiddenLabel =
+    sourceBreakdownOverflowCount.value > 0
+      ? `，另有 ${sourceBreakdownOverflowCount.value} 个来源桶折叠`
+      : '';
+  const justHiddenLabel =
+    hiddenSelectedEvidence > 0
+      ? `，${hiddenSelectedSources} 个来源有 ${hiddenSelectedEvidence} 条本页已隐藏入选证据`
+      : '';
+  const justHiddenBoundary =
+    hiddenSelectedEvidence > 0
+      ? ' 本页已隐藏入选只来自刚确认的完成/稍后/静默点击快照，不代表来源任务完成、证据删除或外部系统已同步。'
+      : '';
+  return `当前 brief 展开 ${visibleSourceBreakdownItems.value.length}/${total} 个有信号来源桶：${selectedSources} 个有证据进入当前可见首页，${noisySources} 个有前置降噪${justHiddenLabel}${hiddenLabel}。这里只解释当前可见 brief，不会重新排序、展开隐藏内容、写反馈、标记提醒、发送消息或执行动作。${justHiddenBoundary}`;
 });
 
 function isDayPilotCardDisplayable(card: DayPilotCard) {
@@ -1280,6 +1660,20 @@ const catchUpReceipt = computed(() => {
   )}；${brief.total} 条新信号，高优 ${high} 条，等你回 ${waiting} 条。${overlapNote}这里只读排序，不会标已读、代回复、改排序或写回来源系统。`;
 });
 
+function catchUpItemReviewBoundary(item: DayPilotCatchUpItem) {
+  const source = sourceKindLabel(item.source);
+  const windowLabel = catchUpBrief.value
+    ? formatCatchUpWindow(catchUpBrief.value)
+    : '最近 90 分钟';
+  const waitingNote = item.waiting
+    ? '；这条含等待回复信号，但仍需你复核来源后再处理'
+    : '';
+  return `打开补课来源复核：${source} · ${limitText(
+    item.title || item.preview || item.messageId,
+    48,
+  )}；基于 ${windowLabel} 只读补课快照${waitingNote}。点击只打开记忆搜索，不会标已读、代回复、完成任务、改排序或写回来源系统。`;
+}
+
 const attentionItems = computed<AttentionItem[]>(() => [
   {
     id: 'decisions',
@@ -1344,8 +1738,14 @@ async function loadDayPilot() {
       autoGenerate: true,
     });
     dayBrief.value = result.brief;
+    dayBriefSnapshotBasis.value = {
+      generated: Boolean(result.generated),
+      stale: Boolean(result.stale),
+      loadedAt: Date.now(),
+    };
     missionFeedbackReceipt.value = null;
     processedMissionFeedbackCount.value = 0;
+    hiddenSelectedEvidenceRefs.value = [];
     decisionTotal.value = countCards('decision_check');
     queuedActionTotal.value = dayBrief.value.sourceStats.actions.queued;
     pendingTemplateCount.value = 0;
@@ -1360,6 +1760,8 @@ async function loadDayPilot() {
   } catch (error) {
     console.error('加载今日领航失败:', error);
     dayBrief.value = null;
+    dayBriefSnapshotBasis.value = null;
+    hiddenSelectedEvidenceRefs.value = [];
     resetDayPilotDerivedCounts();
     loadError.value =
       '今日领航后端暂时不可用，无法从原始记忆生成今日 mission。请稍后刷新。';
@@ -1430,6 +1832,7 @@ function mapDayPilotCard(card: DayPilotCard): MissionCard {
     id: card.id,
     missionId: card.missionId,
     sourceHash: card.sourceHash,
+    sourceEvidenceRefs: dayPilotSelectedEvidenceRefs(card),
     cardType: card.cardType,
     executionChannel,
     executionNote:
@@ -1702,6 +2105,44 @@ function nextActionDesc(card: DayPilotCard) {
   return '展开卡片查看证据和上下文包，再决定完成、稍后或静默。';
 }
 
+function missionActionScopeReceipt(card: MissionCard) {
+  if (card.executionChannel === 'openclaw') {
+    return '下方按钮只影响 Today Pilot 首页显示：从首页移除、稍后 6h 或不再提醒同类会等待 Memory Service 写入展示/排序反馈；不会批准、拒绝、重试或执行 OpenClaw，也不会完成动作队列或决策中心事项。打开详情只导航到处理页；有用/不准确只校准后续排序。';
+  }
+  return '下方按钮只影响这张 Today Mission：完成、稍后 6h 或不再提醒同类会等待 Memory Service 写入展示/排序反馈；不会完成来源任务、标记消息已读、改日历/排程、删除证据、发送或执行外部动作。有用/不准确只校准后续排序；复制上下文包只写本机剪贴板，打开详情只导航。';
+}
+
+function missionActionButtonBoundary(
+  card: MissionCard,
+  action: MissionFeedbackAction | 'copy_context' | 'open_detail',
+) {
+  const isOpenClaw = card.executionChannel === 'openclaw';
+  if (action === 'done') {
+    return isOpenClaw
+      ? '从首页移除：只写 Today Pilot 展示反馈；不会批准、拒绝、重试或执行 OpenClaw，也不会完成动作队列或决策中心事项。'
+      : '完成：只写 Today Pilot 展示反馈并从今日首页隐藏；不会完成来源任务、标记消息已读、改日历/排程或同步外部系统。';
+  }
+  if (action === 'later') {
+    return '稍后 6h：只让 Today Pilot 在 6 小时内不展示这张 mission；不会修改来源排程、日历或动作执行时间。';
+  }
+  if (action === 'mute') {
+    return '不再提醒同类：只让同类 Today Pilot source hash 后续降噪或隐藏；不会删除原始记忆、证据或来源消息。';
+  }
+  if (action === 'useful') {
+    return '有用：只记录 Today Pilot 排序学习信号；不会批准、发送、执行、创建任务或写入新的长期事实。';
+  }
+  if (action === 'wrong') {
+    return '不准确：只记录 Today Pilot 去噪反馈；不会删除原始证据或改写长期记忆。';
+  }
+  if (action === 'copy_context') {
+    return '复制上下文包：只生成/复制这张 mission 的上下文到本机剪贴板；不会发送给外部 AI、批准/执行或写回来源系统。';
+  }
+  if (isOpenClaw) {
+    return '打开详情：只导航到处理页；审批、拒绝、重试或执行 OpenClaw 仍要在动作队列或决策中心完成。';
+  }
+  return '打开详情：只导航到来源或处理页；不会写反馈、完成任务、标记消息已读、发送或执行外部动作。';
+}
+
 function _isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
   const template = item.template;
   const nextDispatchAt = resolveTemplateNextDispatchAt(item);
@@ -1770,6 +2211,14 @@ function setMissionFeedbackPending(cardId: string, pending: boolean) {
   missionFeedbackPendingCardIds.value = next;
 }
 
+function recordHiddenSelectedEvidence(card: MissionCard) {
+  if (!card.sourceEvidenceRefs?.length) return;
+  hiddenSelectedEvidenceRefs.value = [
+    ...hiddenSelectedEvidenceRefs.value,
+    ...card.sourceEvidenceRefs,
+  ];
+}
+
 function contextPackKey(card: MissionCard) {
   return `${card.id}:${contextProvider.value}:${
     includeSensitiveContext.value ? 'sensitive' : 'redacted'
@@ -1781,7 +2230,7 @@ function currentContextPack(card: MissionCard) {
 }
 
 function currentPackText(card: MissionCard) {
-  return currentContextPack(card)?.bodyMd || card.pack;
+  return currentContextPack(card)?.bodyMd || '';
 }
 
 function currentRedactionPreview(card: MissionCard) {
@@ -1814,11 +2263,15 @@ function setIncludeSensitiveContext(event: Event, card: MissionCard) {
 async function loadContextPack(card: MissionCard, force = false) {
   if (!card.missionId) return false;
   const key = contextPackKey(card);
-  if (!force && contextPackCache.value[key]) return true;
+  if (!force && contextPackCache.value[key]) {
+    setContextPackFailure(card.id);
+    return true;
+  }
 
   const loading = new Set(contextPackLoadingIds.value);
   loading.add(card.id);
   contextPackLoadingIds.value = loading;
+  setContextPackFailure(card.id);
   let loaded = false;
   try {
     const pack = await client.renderTodayPilotContextPack(card.missionId, {
@@ -1833,6 +2286,11 @@ async function loadContextPack(card: MissionCard, force = false) {
     loaded = true;
   } catch (error) {
     console.error('生成 Day Pilot context pack 失败:', error);
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : 'Memory Service 没有返回上下文包正文';
+    setContextPackFailure(card.id, message);
     showToast('上下文包生成失败，请稍后重试。');
   } finally {
     const next = new Set(contextPackLoadingIds.value);
@@ -1852,6 +2310,11 @@ async function sendCardSignal(card: MissionCard, action: 'useful' | 'wrong') {
       muteKey: card.sourceHash,
     });
     dayBrief.value = feedback.brief;
+    dayBriefSnapshotBasis.value = {
+      generated: Boolean(feedback.generated),
+      stale: Boolean(feedback.stale),
+      loadedAt: Date.now(),
+    };
     processedMissionFeedbackCount.value += 1;
     missionFeedbackReceipt.value = buildMissionFeedbackReceipt(card, action);
     showToast(
@@ -1883,10 +2346,16 @@ async function hideCardForToday(
       muteKey: reason === 'mute' ? card.sourceHash : undefined,
     });
     dayBrief.value = feedback.brief;
+    dayBriefSnapshotBasis.value = {
+      generated: Boolean(feedback.generated),
+      stale: Boolean(feedback.stale),
+      loadedAt: Date.now(),
+    };
     hiddenDayPilotCardIds.value = new Set([
       ...Array.from(hiddenDayPilotCardIds.value),
       card.id,
     ]);
+    recordHiddenSelectedEvidence(card);
     processedMissionFeedbackCount.value += 1;
   } catch (error) {
     console.error('写入 Day Pilot feedback 失败:', error);
@@ -2016,7 +2485,9 @@ function navigateTo(path: string) {
 
 function navigateToCatchUpItem(item: DayPilotCatchUpItem) {
   const query = item.title || item.preview || item.messageId;
-  router.push(`/search?q=${encodeURIComponent(query)}`);
+  router.push(
+    `/search?q=${encodeURIComponent(query)}&source=today_pilot_catch_up`,
+  );
 }
 
 function showToast(message: string) {
@@ -2842,6 +3313,76 @@ onMounted(() => {
   flex: 1 1 260px;
   min-width: 0;
   color: #94a3b8;
+}
+
+.source-breakdown-receipt {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.source-breakdown-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.source-breakdown-heading span {
+  color: #86efac;
+  font-size: 0.74rem;
+  font-weight: 850;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.source-breakdown-heading p {
+  flex: 1 1 320px;
+  min-width: 0;
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.source-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.45rem;
+}
+
+.source-breakdown-item {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.52rem 0.62rem;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.source-breakdown-item strong {
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.source-breakdown-item span {
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.source-breakdown-item.quiet strong {
+  color: #86efac;
+}
+
+.source-breakdown-item.warn strong {
+  color: #fbbf24;
 }
 
 .stats-identity-receipt {
@@ -3731,6 +4272,11 @@ onMounted(() => {
   background: rgba(59, 130, 246, 0.1);
 }
 
+.context-status-failed {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+}
+
 .source-coverage-note {
   color: #a7f3d0;
   background: rgba(16, 185, 129, 0.1);
@@ -3758,6 +4304,30 @@ onMounted(() => {
   color: #bfdbfe;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.mission-action-scope-receipt {
+  margin-top: 1rem;
+  padding: 0.72rem 0.82rem;
+  border: 1px solid rgba(20, 184, 166, 0.22);
+  border-radius: 0.62rem;
+  background: rgba(20, 184, 166, 0.08);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.mission-action-scope-receipt span {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: #5eead4;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.mission-action-scope-receipt p {
+  margin: 0;
 }
 
 .card-actions {

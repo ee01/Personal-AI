@@ -38,10 +38,15 @@ function hasConfiguredAiEndpoint(endpoint?: string): boolean {
 function isManagedExecutorRoute(message: ExecutionRouteInput): boolean {
   return message.Push_Method === 'Bot' ||
     message.Push_Method === 'AI' ||
+    message.Push_Method === 'AgentTask' ||
     (message.Push_Method === 'JiraAutomation' && hasConfiguredAiEndpoint(message.AI_Endpoint));
 }
 
 function getExecutorWritebackBoundary(message: ExecutionRouteInput): string {
+  if (message.Push_Method === 'AgentTask') {
+    return '领取后由 Jira Rule 调 memory-service 发起 Agent run；Sheet 只记录计划/领取，执行账本、结果和通知以 memory-service 为准。';
+  }
+
   if (
     message.Push_Method === 'AI' ||
     (message.Push_Method === 'JiraAutomation' && hasConfiguredAiEndpoint(message.AI_Endpoint))
@@ -90,6 +95,15 @@ export function getScheduledMessageExecutionRoute(
         detail: context.botConfigured
           ? '按三段顺序领取一条 AI Report/API 消息；领取时即写入 Last_Exec / Logs 防重复，endpoint 结果需看 Jira/API 运行记录。'
           : 'AI Report 依赖 Bot executor，需先配置 Bot 推送后才能执行。',
+        state: context.botConfigured ? 'ready' : 'needs_setup',
+      };
+
+    case 'AgentTask':
+      return {
+        engine: 'Jira Automation · memory-service AgentTask',
+        detail: context.botConfigured
+          ? '按当前分钟 / 30 分钟补偿 / 08:00 后队列领取一条帮我做任务；到期才调用 memory-service，memory-service 负责 OpenClaw 执行、run 账本和 Bot 私发通知。'
+          : '帮我做依赖 Bot executor rule 作为 Jira 侧入口，需先配置 Bot 推送后才能执行。',
         state: context.botConfigured ? 'ready' : 'needs_setup',
       };
 
@@ -163,6 +177,8 @@ export function getScheduledMessageExecutionLaneReceipt(
       return {
         headline: message.Push_Method === 'Bot'
           ? '明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回'
+          : message.Push_Method === 'AgentTask'
+            ? '明确时间槽 · 当前分钟/30分钟补偿 · 到期触发 Agent run'
           : '明确时间槽 · 当前分钟/30分钟补偿 · 领取时先写回',
         detail: '执行器先检查准点或最多迟到 1 分钟的当前分钟；错过后再查过去 2-30 分钟补偿窗口，支持跨午夜，不会提前发送。',
         boundary: getExecutorWritebackBoundary(message),
@@ -173,6 +189,8 @@ export function getScheduledMessageExecutionLaneReceipt(
     return {
       headline: message.Push_Method === 'Bot'
         ? '08:00 后队列 · 表格顺序每分钟一条 · 发送后回调写回'
+        : message.Push_Method === 'AgentTask'
+          ? '08:00 后队列 · 表格顺序每分钟一条 · 到期触发 Agent run'
         : '08:00 后队列 · 表格顺序每分钟一条 · 领取时先写回',
       detail: '未填写 Schedule_Time 时，执行日 08:00 后才进入 executor 兜底队列；同一天按 Messages 表格行顺序每分钟领取一条。',
       boundary: `${getExecutorWritebackBoundary(message)} 这不是明确 08:00 准点消息。`,

@@ -82,6 +82,57 @@ let messageRows = [
     '2026-05-04 10:05',
     'Snooze',
   ],
+  [
+    'outreach-1',
+    'Outreach Topic',
+    'Ask Jane for status',
+    '2026-05-04',
+    '10:10',
+    'Outreach',
+    'private',
+    'jane.doe',
+    '',
+    'Active',
+    '0',
+    '等待主动询问',
+    '',
+    '2026-05-04 10:10',
+    'Outreach',
+  ],
+  [
+    'queue-1',
+    'Queue First',
+    'Queued content',
+    '2026-05-04',
+    '09:30',
+    'Bot',
+    'group',
+    '',
+    '987654',
+    'Active',
+    '0',
+    '待执行',
+    '',
+    '2026-05-04 09:30',
+    'General',
+  ],
+  [
+    'queue-2',
+    'Queue Second',
+    'Queued content',
+    '2026-05-04',
+    '09:30',
+    'Bot',
+    'group',
+    '',
+    '987654',
+    'Active',
+    '0',
+    '待执行',
+    '',
+    '2026-05-04 09:30',
+    'General',
+  ],
 ];
 const appendedRows = [];
 const updatedRows = [];
@@ -177,6 +228,14 @@ async function installRoutes(page) {
         ringCentralClientSecretConfigured: false,
         ringCentralJwtConfigured: false,
       }),
+    });
+  });
+
+  await page.route('http://localhost:3210/api/v1/outreach/templates/runtime-status**', async (route) => {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
     });
   });
 
@@ -297,13 +356,21 @@ try {
     timeout: 15000,
   });
   await page.getByText('Existing Topic').waitFor({ timeout: 15000 });
+  await page.getByText('执行器队列正在排队').waitFor({ timeout: 15000 });
+  await page.getByText('2 条消息正在排队，1 个时间槽有拥挤，最大同槽 2 条，最大预计延后 1 分钟；暂无执行窗口风险').waitFor({ timeout: 15000 });
+  await page.getByRole('button', { name: '查看执行器队列详情' }).click();
+  await page.locator('[role="status"]', { hasText: '队列详情展开回执' }).waitFor({ timeout: 15000 });
+  await page.getByText('基于已读取 Messages 快照和本机时间 2026-05-04 08:00 计算').waitFor({ timeout: 15000 });
+  await page.getByText('当前展示全部 1 个拥挤槽位').waitFor({ timeout: 15000 });
+  await page.getByText('展开详情只显示本地队列诊断，不会同步 Sheet、刷新 Jira Automation、改期、发送消息、改 Logs 或跳过前序').waitFor({ timeout: 15000 });
 
   await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html?category=Snooze&filterPendingReview=true&filterSelfOnly=1`, {
     waitUntil: 'load',
     timeout: 15000,
   });
-  await page.locator('[role="status"]', { hasText: '列表筛选回执' }).waitFor({ timeout: 15000 });
-  await page.getByText('当前显示 1/3 条，2 条暂时隐藏。').waitFor({ timeout: 15000 });
+  await page.locator('[role="status"]', { hasText: '列表筛选回执：后台补齐中' }).waitFor({ timeout: 15000 });
+  await page.getByText('当前显示 1/6 条，5 条暂时隐藏。').waitFor({ timeout: 15000 });
+  await page.getByText('快照: 当前计数基于已读取的 Messages 行；Jira / Outreach / Done 回填仍在后台补齐，完成后筛选结果会自动刷新').waitFor({ timeout: 15000 });
   await page.getByText('个人提醒条件: 1 条仅发给 esone.qiu 的消息不满足当前筛选').waitFor({ timeout: 15000 });
   await page.getByText('个人提醒识别: 按 esone.qiu / Esone Qiu / 邮箱本地名 归一匹配；多人或群组消息不会被隐藏').waitFor({ timeout: 15000 });
   await page.getByText('边界: 筛选只改变当前列表，不会暂停、删除、改期或同步 Sheet').waitFor({ timeout: 15000 });
@@ -339,6 +406,46 @@ try {
 
   await page.getByRole('button', { name: /新增/ }).click();
   await page.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
+
+  await page.getByRole('tab', { name: /AI Report/ }).click();
+  const addCustomOutputButton = page.getByRole('button', { name: /添加本地自定义版块草稿/ });
+  const addCustomOutputBoundary = await addCustomOutputButton.getAttribute('title');
+  assert.match(addCustomOutputBoundary ?? '', /添加本地自定义版块草稿/);
+  assert.match(addCustomOutputBoundary ?? '', /不会写 Messages、保存 AI_Body、发送消息、改 Logs 或创建计划/);
+  await addCustomOutputButton.click();
+  await page.getByRole('heading', { name: /添加自定义版块/ }).waitFor({ timeout: 15000 });
+  await page.getByPlaceholder('例如：风险分析（可留空）').fill('风险复核');
+  await page.getByPlaceholder('例如：分析这些 tickets 中可能存在的风险点，并给出建议').fill('列出排程风险和下一步');
+  const addSectionButton = page.getByRole('button', { name: /添加本地自定义版块草稿「风险复核」/ });
+  assert.match((await addSectionButton.getAttribute('title')) ?? '', /只更新当前定时消息表单里的草稿/);
+  await addSectionButton.click();
+  await page.locator('[role="status"]', { hasText: '自定义版块草稿已添加' }).waitFor({ timeout: 15000 });
+  await page.getByText('「风险复核」只添加到当前表单草稿。').waitFor({ timeout: 15000 });
+  await page.getByText('尚未写入 Messages / AI_Body；不会发送消息、改 Logs 或创建计划。').waitFor({ timeout: 15000 });
+
+  const editCustomOutputButton = page.locator('button[title*="编辑本地自定义版块草稿"][title*="风险复核"]');
+  assert.match((await editCustomOutputButton.getAttribute('aria-label')) ?? '', /不会写 Messages、保存 AI_Body、发送消息、改 Logs 或删除已保存计划/);
+  await editCustomOutputButton.click();
+  await page.getByRole('heading', { name: /编辑自定义版块/ }).waitFor({ timeout: 15000 });
+  await page.getByPlaceholder('例如：风险分析（可留空）').fill('风险复核更新');
+  const saveSectionButton = page.getByRole('button', { name: /保存修改到本地自定义版块草稿「风险复核更新」/ });
+  assert.match((await saveSectionButton.getAttribute('title')) ?? '', /尚未写 Messages、保存 AI_Body、发送消息或改 Logs/);
+  await saveSectionButton.click();
+  await page.locator('[role="status"]', { hasText: '自定义版块草稿已更新' }).waitFor({ timeout: 15000 });
+  await page.getByText('「风险复核更新」只更新当前表单草稿。').waitFor({ timeout: 15000 });
+
+  const deleteCustomOutputButton = page.locator('button[title*="删除本地自定义版块草稿"][title*="风险复核更新"]');
+  const deleteCustomOutputBoundary = await deleteCustomOutputButton.getAttribute('title');
+  assert.match(deleteCustomOutputBoundary ?? '', /只从当前表单草稿移除/);
+  assert.match(deleteCustomOutputBoundary ?? '', /不会删除已保存的定时消息、历史发送记录或外部系统内容/);
+  await deleteCustomOutputButton.click();
+  await page.locator('[role="status"]', { hasText: '自定义版块草稿已移除' }).waitFor({ timeout: 15000 });
+  await page.getByText('已从当前表单草稿移除「风险复核更新」。').waitFor({ timeout: 15000 });
+  assert.equal(appendedRows.length, 0, 'custom output draft changes should not append a Messages row');
+  assert.equal(updatedRows.length, 0, 'custom output draft changes should not update a Messages row');
+  assert.equal(deletedRows.length, 0, 'custom output draft changes should not delete a Messages row');
+
+  await page.getByRole('tab', { name: /AsMe/ }).click();
   await page.getByPlaceholder('输入消息内容').fill('Created content');
   await page.getByPlaceholder('输入消息主题').fill('Created Topic');
   await page.locator('input[type="date"]').fill('2026-05-04');
@@ -372,7 +479,13 @@ try {
 
   await page.getByRole('button', { name: '返回完整列表' }).click();
   await page.locator(`tr[data-message-id="existing-1"]`).waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: '编辑 Existing Topic' }).click();
+  const editExistingButton = page.getByRole('button', { name: /编辑 Existing Topic/ });
+  const editBoundary = await editExistingButton.getAttribute('title');
+  assert.match(editBoundary ?? '', /点击只打开本地编辑草稿/);
+  assert.match(editBoundary ?? '', /不会立刻写 Messages、改期、发送、删除、改 Logs 或同步 Sheet/);
+  assert.match(editBoundary ?? '', /保存后才写回 Messages 行 existing-1/);
+  assert.match(editBoundary ?? '', /当前: ID existing-1，状态 Active，下次执行 2026-05-04 09:15/);
+  await editExistingButton.click();
   await page.getByRole('heading', { name: /编辑定时消息/ }).waitFor({ timeout: 15000 });
   await page.getByPlaceholder('输入消息主题').fill('Existing Topic Edited');
 
@@ -386,8 +499,14 @@ try {
   await page.waitForURL(/messageId=existing-1/, { timeout: 15000 });
   await page.locator(`tr[data-message-id="existing-1"]`).getByText('Existing Topic Edited').waitFor({ timeout: 15000 });
 
+  const deleteEditedButton = page.getByRole('button', { name: /删除 Existing Topic Edited/ });
+  const deleteBoundary = await deleteEditedButton.getAttribute('title');
+  assert.match(deleteBoundary ?? '', /点击先显示删除确认，确认前不会写 Sheet/);
+  assert.match(deleteBoundary ?? '', /确认后只删除 Messages 行 existing-1/);
+  assert.match(deleteBoundary ?? '', /不会撤回已发消息或历史 Logs/);
+  assert.match(deleteBoundary ?? '', /当前: ID existing-1，状态 Active，下次执行 2026-05-04 09:15/);
   const confirmPromise = page.waitForEvent('dialog', { timeout: 15000 });
-  const deleteClickPromise = page.getByRole('button', { name: '删除 Existing Topic Edited' }).click();
+  const deleteClickPromise = deleteEditedButton.click();
   const confirmDialog = await confirmPromise;
   assert.match(confirmDialog.message(), /确定要删除消息 "Existing Topic Edited"/);
   assert.match(confirmDialog.message(), /ID: existing-1/);

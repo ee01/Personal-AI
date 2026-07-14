@@ -21,8 +21,14 @@ const listStatuses = [];
 const detailRequests = [];
 const pauseRequests = [];
 const reactivationRequests = [];
+const cueUpdateRequests = [];
+const feedbackRequests = [];
 const missingDetailRequests = [];
 const missingRehearsalId = 'missing-rehearsal';
+let releasePauseResponse = () => {};
+const pauseResponseGate = new Promise((resolve) => {
+  releasePauseResponse = resolve;
+});
 
 const activeRehearsal = {
   id: 'active-rehearsal',
@@ -73,6 +79,29 @@ const staleRehearsal = {
   updatedAt: nowSeconds - 600,
 };
 
+const pausedRehearsal = {
+  id: 'paused-rehearsal',
+  title: 'Paused handoff check',
+  scenarioType: 'meeting_prep',
+  status: 'paused',
+  summary: 'Keep the handoff script paused until the next planning cycle.',
+  content: 'When planning resumes, confirm whether the handoff owner is still correct.',
+  activationCues: {
+    projects: ['Handoff Planning'],
+    issueKeys: ['PAI-77'],
+  },
+  evidenceRefs: ['manual:paused-handoff'],
+  sourceKind: 'manual',
+  sourceRefId: 'paused-handoff',
+  confidence: 0.74,
+  priority: 5,
+  activationCount: 1,
+  usedCount: 0,
+  dismissedCount: 0,
+  createdAt: nowSeconds - 86400 * 8,
+  updatedAt: nowSeconds - 240,
+};
+
 const cueLessRehearsal = {
   id: 'cue-less-rehearsal',
   title: 'Legacy script without cue',
@@ -115,6 +144,36 @@ const weakCueRehearsal = {
   createdAt: nowSeconds - 86400 * 12,
   updatedAt: nowSeconds - 900,
 };
+
+const extraActiveRehearsals = Array.from({ length: 79 }, (_, index) => ({
+  id: `active-extra-${index + 1}`,
+  title: `Loaded slice rehearsal ${index + 1}`,
+  scenarioType: 'meeting_prep',
+  status: 'active',
+  summary: `Additional active rehearsal ${index + 1} for list pagination.`,
+  content: `Review pagination rehearsal ${index + 1} before the next planning meeting.`,
+  activationCues: {
+    projects: [`Pagination Project ${index + 1}`],
+  },
+  evidenceRefs: [`message:extra-${index + 1}`],
+  sourceKind: 'reflection',
+  sourceRefId: `reflection-extra-${index + 1}`,
+  confidence: 0.62,
+  priority: 2,
+  activationCount: 0,
+  usedCount: 0,
+  dismissedCount: 0,
+  createdAt: nowSeconds - 86400 - index,
+  updatedAt: nowSeconds - 2400 - index,
+}));
+
+const activeRehearsalRows = [
+  activeRehearsal,
+  weakCueRehearsal,
+  cueLessRehearsal,
+  ...extraActiveRehearsals,
+];
+const allRehearsalRows = [staleRehearsal, ...activeRehearsalRows];
 
 const staleActivation = {
   id: 'activation-stale',
@@ -207,20 +266,33 @@ try {
 
     if (pathname.endsWith('/rehearsals')) {
       const status = url.searchParams.get('status') || 'active';
+      const search = (url.searchParams.get('search') || '').trim().toLowerCase();
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const limit = Number(url.searchParams.get('limit') || 50);
       listStatuses.push(status);
-      const items = status === 'all'
-        ? [staleRehearsal, activeRehearsal, weakCueRehearsal, cueLessRehearsal]
+      let sourceItems = status === 'all'
+        ? allRehearsalRows
         : status === 'active'
-          ? [activeRehearsal, weakCueRehearsal, cueLessRehearsal]
+          ? activeRehearsalRows
           : status === 'stale'
             ? [staleRehearsal]
-            : [];
+            : status === 'paused'
+              ? [pausedRehearsal]
+              : [];
+      if (search) {
+        sourceItems = sourceItems.filter((item) =>
+          [item.title, item.summary || '', item.content || ''].some((value) =>
+            String(value).toLowerCase().includes(search),
+          ),
+        );
+      }
+      const items = sourceItems.slice(offset, offset + limit);
       await route.fulfill(
         jsonResponse({
           items,
-          total: items.length,
-          limit: Number(url.searchParams.get('limit') || 50),
-          offset: 0,
+          total: sourceItems.length,
+          limit,
+          offset,
         }),
       );
       return;
@@ -247,6 +319,7 @@ try {
       if (request.method() === 'PATCH') {
         const payload = request.postDataJSON();
         pauseRequests.push(payload);
+        await pauseResponseGate;
         await route.fulfill(
           jsonResponse(
             { error: 'Memory Service unavailable during pause' },
@@ -265,7 +338,48 @@ try {
       return;
     }
 
+    if (pathname.endsWith(`/rehearsals/${activeRehearsal.id}/feedback`)) {
+      const payload = request.postDataJSON();
+      feedbackRequests.push(payload);
+      await route.fulfill(
+        jsonResponse({
+          rehearsal: {
+            ...activeRehearsal,
+            status: 'dismissed',
+            dismissedCount: 1,
+            updatedAt: nowSeconds,
+          },
+        }),
+      );
+      return;
+    }
+
+    if (pathname.endsWith(`/rehearsals/${pausedRehearsal.id}`)) {
+      detailRequests.push(pausedRehearsal.id);
+      await route.fulfill(
+        jsonResponse({
+          rehearsal: pausedRehearsal,
+          activations: [],
+        }),
+      );
+      return;
+    }
+
     if (pathname.endsWith(`/rehearsals/${cueLessRehearsal.id}`)) {
+      if (request.method() === 'PATCH') {
+        const payload = request.postDataJSON();
+        cueUpdateRequests.push(payload);
+        await route.fulfill(
+          jsonResponse({
+            rehearsal: {
+              ...cueLessRehearsal,
+              activationCues: payload.activationCues,
+              updatedAt: nowSeconds,
+            },
+          }),
+        );
+        return;
+      }
       detailRequests.push(cueLessRehearsal.id);
       await route.fulfill(
         jsonResponse({
@@ -327,6 +441,39 @@ try {
       { exact: true },
     )
     .waitFor({ timeout: 10000 });
+  const filterSelect = page.locator('.filter-select');
+  const searchInput = page.locator('.rehearsal-hero .search-input');
+  const refreshButton = page.locator('.refresh-btn');
+  assert.match(
+    (await filterSelect.getAttribute('title')) || '',
+    /切换只重新读取列表并同步当前详情/,
+    'status filter should expose its read-only range boundary before change',
+  );
+  assert.match(
+    (await filterSelect.getAttribute('aria-label')) || '',
+    /不会激活、暂停、归档、标记反馈、保存触发线索/,
+    'status filter should expose no state/action writes to screen readers',
+  );
+  assert.match(
+    (await searchInput.getAttribute('title')) || '',
+    /输入只更新本地搜索草稿/,
+    'search input should expose local-draft semantics before Enter/refresh',
+  );
+  assert.match(
+    (await searchInput.getAttribute('aria-label')) || '',
+    /不会改状态、写入 Memory Service、写外部系统或执行预演脚本/,
+    'search input should expose its no-write/no-execution boundary',
+  );
+  assert.match(
+    (await refreshButton.getAttribute('title')) || '',
+    /只重新读取列表、详情和命中历史快照/,
+    'refresh button should expose read-only snapshot refresh semantics before click',
+  );
+  assert.match(
+    (await refreshButton.getAttribute('aria-label')) || '',
+    /不会激活、暂停、归档、标记反馈、保存触发线索/,
+    'refresh button should expose no state/action writes to screen readers',
+  );
   await detailPanel.getByText('降权原因').waitFor({ timeout: 10000 });
   await detailPanel.getByText('validity_expired').waitFor({ timeout: 10000 });
   await detailPanel.getByText('来源证据').waitFor({ timeout: 10000 });
@@ -375,7 +522,14 @@ try {
     .waitFor({ timeout: 10000 });
   const listScopeReceipt = page.getByLabel('列表范围回执');
   await listScopeReceipt.getByText('列表范围回执').waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('Active · 4 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('Active · 可见 81 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('82 条', { exact: true }).waitFor({
+    timeout: 10000,
+  });
+  await listScopeReceipt.getByText('80 / 82 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt
+    .getByText('81 条（含置顶 1）')
+    .waitFor({ timeout: 10000 });
   await listScopeReceipt.getByText('1 条仅审计').waitFor({ timeout: 10000 });
   await listScopeReceipt.getByText('1 条需补锚点').waitFor({ timeout: 10000 });
   await listScopeReceipt
@@ -383,6 +537,12 @@ try {
     .waitFor({ timeout: 10000 });
   await listScopeReceipt
     .getByText('当前按「Active」读取列表')
+    .waitFor({ timeout: 10000 });
+  await listScopeReceipt
+    .getByText('当前只加载匹配结果的 80/82 条')
+    .waitFor({ timeout: 10000 });
+  await listScopeReceipt
+    .getByText('未加载 2 条不纳入缺少 future cue 或仅弱线索统计')
     .waitFor({ timeout: 10000 });
   await listScopeReceipt
     .getByText('临时置顶 Stale Rehearsal')
@@ -394,8 +554,43 @@ try {
     .getByText('只有关键词/主题/surface 弱线索')
     .waitFor({ timeout: 10000 });
   await listScopeReceipt
+    .getByText('加载更多或深链定位只读取和置顶本页列表')
+    .waitFor({ timeout: 10000 });
+  await listScopeReceipt
     .getByText('不会激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本')
     .waitFor({ timeout: 10000 });
+  const paginationReceipt = page.getByLabel('列表分页回执');
+  await paginationReceipt.getByText('列表分页回执').waitFor({ timeout: 10000 });
+  await paginationReceipt.getByText('已加载 80 / 82 条，仍有 2 条未读取。').waitFor({
+    timeout: 10000,
+  });
+  await paginationReceipt
+    .getByText('加载更多只读取当前筛选的下一页')
+    .waitFor({ timeout: 10000 });
+  await paginationReceipt
+    .getByText('不会触发任何状态写入或预演动作')
+    .waitFor({ timeout: 10000 });
+  const loadMoreButton = paginationReceipt.getByRole('button', { name: /加载更多/ });
+  assert.match(
+    (await loadMoreButton.getAttribute('title')) || '',
+    /只读取当前筛选的下一页并追加到列表/,
+    'load more should expose append-only list-read semantics before click',
+  );
+  assert.match(
+    (await loadMoreButton.getAttribute('aria-label')) || '',
+    /不会改变筛选、选中详情、现场提示资格、反馈状态、外部系统或预演脚本/,
+    'load more should expose no state/write/execution boundary',
+  );
+  await loadMoreButton.click();
+  await page.getByText('Loaded slice rehearsal 79').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('Active · 可见 83 条').waitFor({
+    timeout: 10000,
+  });
+  await listScopeReceipt.getByText('82 / 82 条').waitFor({ timeout: 10000 });
+  await page.locator('.list-pagination-receipt').waitFor({
+    state: 'detached',
+    timeout: 10000,
+  });
 
   const firstCardText = await page.locator('.rehearsal-card').first().innerText();
   assert.ok(
@@ -406,6 +601,19 @@ try {
     .locator('.rehearsal-card')
     .filter({ hasText: 'Stale Colin follow-up' })
     .locator('.card-readiness');
+  const staleCard = page
+    .locator('.rehearsal-card')
+    .filter({ hasText: 'Stale Colin follow-up' });
+  assert.match(
+    (await staleCard.getAttribute('title')) || '',
+    /点击只会重新聚焦详情/,
+    'selected stale rehearsal card should expose that selection only refocuses detail',
+  );
+  assert.match(
+    (await staleCard.getAttribute('aria-label')) || '',
+    /不会激活、暂停、归档、标记反馈、保存触发线索、写入外部系统或执行预演脚本/,
+    'stale rehearsal card should expose the no-write/no-execution boundary',
+  );
   await staleListReadiness
     .getByText('降权保留，只做弱提示')
     .waitFor({ timeout: 10000 });
@@ -421,9 +629,23 @@ try {
     'deep-linked rehearsal detail should be fetched directly',
   );
 
-  await page.getByRole('button', { name: '查看全部' }).click();
+  const focusShowAllButton = page
+    .locator('.focus-notice')
+    .getByRole('button', { name: /查看全部/ });
+  assert.match(
+    (await focusShowAllButton.getAttribute('title')) || '',
+    /只把状态筛选切到 All、清空搜索并重新读取列表/,
+    'focus notice show-all button should expose filter-only recovery semantics',
+  );
+  assert.match(
+    (await focusShowAllButton.getAttribute('aria-label')) || '',
+    /不会恢复、激活、暂停、归档、标记反馈、保存触发线索或执行预演脚本/,
+    'focus notice show-all button should expose no mutation boundary',
+  );
+  await focusShowAllButton.click();
   await page.getByText('Active launch prep').waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('All · 4 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('All · 可见 80 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('80 / 83 条').waitFor({ timeout: 10000 });
   await listScopeReceipt
     .getByText('当前按「All」读取列表')
     .waitFor({ timeout: 10000 });
@@ -443,17 +665,35 @@ try {
     0,
     'notice should disappear once the selected rehearsal is inside the current filter',
   );
-  assert.deepEqual(listStatuses.slice(0, 2), ['active', 'all']);
+  assert.deepEqual(listStatuses.slice(0, 3), ['active', 'active', 'all']);
 
   await page.getByRole('button', { name: /Active launch prep/ }).click();
   await detailPanel
     .getByRole('heading', { name: 'Active launch prep' })
     .waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('All · 4 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('All · 可见 80 条').waitFor({ timeout: 10000 });
   const activeListReadiness = page
     .locator('.rehearsal-card')
     .filter({ hasText: 'Active launch prep' })
     .locator('.card-readiness');
+  const activeCard = page
+    .locator('.rehearsal-card')
+    .filter({ hasText: 'Active launch prep' });
+  assert.match(
+    (await activeCard.getAttribute('title')) || '',
+    /状态 Active/,
+    'active rehearsal card should include current status in hover boundary',
+  );
+  assert.match(
+    (await activeCard.getAttribute('aria-label')) || '',
+    /提示资格 会参与现场匹配/,
+    'active rehearsal card should include prompt eligibility in its screen-reader boundary',
+  );
+  assert.match(
+    (await activeCard.getAttribute('aria-label')) || '',
+    /触发线索 项目 \/ 关键词 · 2 个值 · 有锚定线索/,
+    'active rehearsal card should include cue strength before selection',
+  );
   await activeListReadiness
     .getByText('会参与现场匹配')
     .waitFor({ timeout: 10000 });
@@ -475,7 +715,42 @@ try {
   await activeReadinessPanel
     .getByText('这条预演具备未来线索且处于 Active；继续复核线索是否过宽、脚本是否仍适合当前场景。')
     .waitFor({ timeout: 10000 });
-  await detailPanel.getByRole('button', { name: '暂停' }).click();
+  const pauseButton = detailPanel.getByRole('button', { name: /暂停/ });
+  assert.match(
+    (await pauseButton.getAttribute('title')) || '',
+    /只暂停后续现场提示/,
+    'pause button should expose its pre-click action boundary in hover text',
+  );
+  assert.match(
+    (await pauseButton.getAttribute('aria-label')) || '',
+    /Memory Service 确认前仍按旧状态显示/,
+    'pause button should expose the unconfirmed-write boundary to screen readers',
+  );
+  await pauseButton.click();
+  await detailPanel
+    .getByText('正在提交暂停请求；Memory Service 返回前，当前状态仍以 Active 为准。')
+    .waitFor({ timeout: 10000 });
+  const pendingActionReceipt = detailPanel.getByLabel('处理回执');
+  await pendingActionReceipt.getByText('处理请求回执').waitFor({ timeout: 10000 });
+  await pendingActionReceipt.getByText('暂停回执 请求中').waitFor({ timeout: 10000 });
+  await pendingActionReceipt.getByText('请求中，未确认写入').waitFor({
+    timeout: 10000,
+  });
+  await pendingActionReceipt.getByText('临时禁用，防重复提交').waitFor({
+    timeout: 10000,
+  });
+  await pendingActionReceipt
+    .getByText('仍以 Active 作为真实状态')
+    .waitFor({ timeout: 10000 });
+  await pendingActionReceipt
+    .getByText('不会提前激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await pauseButton.isDisabled(),
+    true,
+    'pending pause should disable the action button before Memory Service confirms',
+  );
+  releasePauseResponse();
   await detailPanel
     .getByText('处理失败：Memory Service 未确认写入，当前状态保持不变。')
     .waitFor({ timeout: 10000 });
@@ -501,6 +776,37 @@ try {
   await detailPanel.getByText('当前会进入场景触发；如果近期不想看到它，可以暂停或标记不相关。').waitFor({
     timeout: 10000,
   });
+  const irrelevantButton = detailPanel.getByRole('button', { name: /不相关/ });
+  assert.match(
+    (await irrelevantButton.getAttribute('title')) || '',
+    /不是物理删除/,
+    'irrelevant button should expose that feedback is not physical deletion',
+  );
+  await irrelevantButton.click();
+  await detailPanel
+    .getByText('已标记不相关，这条预演会退出场景提示。')
+    .waitFor({ timeout: 10000 });
+  const feedbackActionReceipt = detailPanel.getByLabel('处理回执');
+  await feedbackActionReceipt.getByText('不相关回执').waitFor({ timeout: 10000 });
+  await feedbackActionReceipt.getByText('Active -> Dismissed').waitFor({
+    timeout: 10000,
+  });
+  await feedbackActionReceipt.getByText('详情刷新').waitFor({ timeout: 10000 });
+  await feedbackActionReceipt
+    .getByText('已刷新命中历史；确认状态保留')
+    .waitFor({ timeout: 10000 });
+  await detailPanel
+    .locator('.detail-header .status-badge')
+    .getByText('Dismissed', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await detailPanel
+    .getByText('当前被标记为不相关；恢复后会重新参与场景观察。')
+    .waitFor({ timeout: 10000 });
+  assert.deepEqual(
+    feedbackRequests[0],
+    { outcome: 'irrelevant' },
+    'marking irrelevant should submit one feedback request',
+  );
 
   await page.getByRole('button', { name: /Legacy script without cue/ }).click();
   await detailPanel
@@ -510,6 +816,19 @@ try {
     .locator('.rehearsal-card')
     .filter({ hasText: 'Legacy script without cue' })
     .locator('.card-readiness');
+  const cueLessCard = page
+    .locator('.rehearsal-card')
+    .filter({ hasText: 'Legacy script without cue' });
+  assert.match(
+    (await cueLessCard.getAttribute('aria-label')) || '',
+    /提示资格 缺少线索，不应现场提示/,
+    'cue-less rehearsal card should expose missing-cue prompt eligibility before selection',
+  );
+  assert.match(
+    (await cueLessCard.getAttribute('title')) || '',
+    /触发线索 缺少结构化线索/,
+    'cue-less rehearsal card should expose missing structured cue before selection',
+  );
   await cueLessListReadiness
     .getByText('缺少线索，不应现场提示')
     .waitFor({ timeout: 10000 });
@@ -548,6 +867,96 @@ try {
   await legacyDiagnosticPanel
     .getByText('这条预演缺少未来场景边界；先补充人物、项目、issue、URL、主题或 surface，再恢复现场提示。')
     .waitFor({ timeout: 10000 });
+  const cueEditor = detailPanel.getByLabel('触发线索编辑');
+  await cueEditor.getByText('修正触发线索').waitFor({ timeout: 10000 });
+  await cueEditor
+    .getByText('草稿还没有可保存的 future cue')
+    .waitFor({ timeout: 10000 });
+  const cueSaveButton = cueEditor.getByRole('button', { name: /保存触发线索/ });
+  const cueResetButton = cueEditor.getByRole('button', { name: /重置/ });
+  assert.equal(
+    await cueSaveButton.isDisabled(),
+    true,
+    'cue save should stay disabled until the local draft contains a future cue',
+  );
+  assert.match(
+    (await cueSaveButton.getAttribute('title')) || '',
+    /草稿与当前记录一致/,
+    'disabled cue save should explain that no PATCH is needed when the draft is unchanged',
+  );
+  assert.match(
+    (await cueResetButton.getAttribute('aria-label')) || '',
+    /重置不会改变列表、详情、Memory Service 或外部系统/,
+    'disabled cue reset should expose that it has no write effect while unchanged',
+  );
+  await cueEditor.getByLabel('人物触发线索').fill('Mina Chen');
+  await cueEditor.getByLabel('工单触发线索').fill('PAI-42');
+  await cueEditor
+    .getByLabel('页面触发线索')
+    .fill('https://jira.example/browse/PAI-42');
+  const cueDraftReceipt = detailPanel.getByLabel('触发线索草稿回执');
+  await cueDraftReceipt
+    .getByText('触发线索草稿待保存')
+    .waitFor({ timeout: 10000 });
+  await cueDraftReceipt
+    .getByText('草稿已有稳定现场锚点')
+    .waitFor({ timeout: 10000 });
+  await cueDraftReceipt
+    .getByText('本地草稿，未确认写入')
+    .waitFor({ timeout: 10000 });
+  await cueDraftReceipt
+    .getByText('保存只 PATCH 当前 Rehearsal 的 activationCues')
+    .waitFor({ timeout: 10000 });
+  assert.match(
+    (await cueSaveButton.getAttribute('title')) || '',
+    /保存只 PATCH 当前 Rehearsal 的 activationCues/,
+    'enabled cue save should expose its PATCH-only boundary before click',
+  );
+  assert.match(
+    (await cueSaveButton.getAttribute('aria-label')) || '',
+    /不会改写脚本正文、创建任务或执行预演动作/,
+    'enabled cue save should expose no script/task/execution boundary',
+  );
+  assert.match(
+    (await cueResetButton.getAttribute('title')) || '',
+    /只把本地输入恢复为当前记录/,
+    'cue reset should expose local-draft-only behavior before click',
+  );
+  await cueSaveButton.click();
+  await detailPanel
+    .getByText('已保存触发线索；现场提示资格会按新的 future cue 重新呈现。')
+    .waitFor({ timeout: 10000 });
+  const cueActionReceipt = detailPanel.getByLabel('处理回执');
+  await cueActionReceipt.getByText('触发线索回执').waitFor({ timeout: 10000 });
+  await cueActionReceipt.getByText('Active -> Active').waitFor({ timeout: 10000 });
+  await cueActionReceipt.getByText('会参与现场匹配').waitFor({ timeout: 10000 });
+  await cueActionReceipt
+    .getByText('保存触发线索只更新这条 Rehearsal 的 future cue')
+    .waitFor({ timeout: 10000 });
+  await detailPanel
+    .locator('.fact-grid')
+    .getByText('会参与现场匹配', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await detailPanel
+    .getByLabel('场景资格总览')
+    .getByText('人物 / 工单 / 页面 · 3 个值 · 有锚定线索')
+    .waitFor({ timeout: 10000 });
+  assert.deepEqual(
+    cueUpdateRequests[0],
+    {
+      activationCues: {
+        people: ['Mina Chen'],
+        issueKeys: ['PAI-42'],
+        urls: ['https://jira.example/browse/PAI-42'],
+      },
+    },
+    'cue editor should PATCH only the normalized activationCues payload',
+  );
+  assert.equal(
+    await cueSaveButton.isDisabled(),
+    true,
+    'cue save should disable again after confirmed cue update resets the draft baseline',
+  );
   await page.getByRole('button', { name: /Broad handoff keyword reminder/ }).click();
   await detailPanel
     .getByRole('heading', { name: 'Broad handoff keyword reminder' })
@@ -556,6 +965,19 @@ try {
     .locator('.rehearsal-card')
     .filter({ hasText: 'Broad handoff keyword reminder' })
     .locator('.card-readiness');
+  const weakCueCard = page
+    .locator('.rehearsal-card')
+    .filter({ hasText: 'Broad handoff keyword reminder' });
+  assert.match(
+    (await weakCueCard.getAttribute('aria-label')) || '',
+    /提示资格 会参与，但只有弱线索/,
+    'weak-cue rehearsal card should expose weak prompt eligibility before selection',
+  );
+  assert.match(
+    (await weakCueCard.getAttribute('title')) || '',
+    /仅弱泛化线索/,
+    'weak-cue rehearsal card should expose weak cue strength before selection',
+  );
   await weakCueListReadiness
     .getByText('会参与，但只有弱线索')
     .waitFor({ timeout: 10000 });
@@ -589,7 +1011,7 @@ try {
   await detailPanel
     .getByRole('heading', { name: 'Stale Colin follow-up' })
     .waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('Stale · 1 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('Stale · 可见 1 条').waitFor({ timeout: 10000 });
   const staleScopeText = await listScopeReceipt.innerText();
   assert.match(
     staleScopeText,
@@ -622,7 +1044,13 @@ try {
     'user-applied filters should update the focused rehearsal id in the route',
   );
 
-  await detailPanel.getByRole('button', { name: '重新激活' }).click();
+  const reactivateButton = detailPanel.getByRole('button', { name: /重新激活/ });
+  assert.match(
+    (await reactivateButton.getAttribute('aria-label')) || '',
+    /不会发送消息、写入外部系统或执行脚本/,
+    'reactivate button should expose the no-external-action boundary before click',
+  );
+  await reactivateButton.click();
   await detailPanel.getByText('已清除过期时间并恢复为 Active。').waitFor({
     timeout: 10000,
   });
@@ -655,7 +1083,7 @@ try {
   await detailPanel
     .getByRole('heading', { name: 'Active launch prep' })
     .waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('Stale · 2 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('Stale · 可见 2 条').waitFor({ timeout: 10000 });
   await listScopeReceipt
     .getByText('Active · 临时置顶')
     .waitFor({ timeout: 10000 });
@@ -668,7 +1096,7 @@ try {
     activeDetailRequestCount + 1,
     'same-page rehearsalId route changes should refetch and focus the requested rehearsal',
   );
-  assert.deepEqual(listStatuses.slice(0, 3), ['active', 'all', 'stale']);
+  assert.deepEqual(listStatuses.slice(0, 4), ['active', 'active', 'all', 'stale']);
 
   const missingDetailRequestCount = missingDetailRequests.length;
   await page.evaluate((id) => {
@@ -683,14 +1111,31 @@ try {
   await focusReceipt
     .getByText('改状态前先确认目标标题、脚本和触发线索都对应正确')
     .waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('Stale · 1 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('Stale · 可见 1 条').waitFor({ timeout: 10000 });
   assert.equal(
     missingDetailRequests.length,
     missingDetailRequestCount + 1,
     'missing deep-link target should be fetched directly before falling back to the list',
   );
 
-  await focusReceipt.getByRole('button', { name: '重试目标' }).click();
+  const retryFocusButton = focusReceipt.getByRole('button', { name: /重试目标/ });
+  const focusFailureShowAllButton = focusReceipt.getByRole('button', { name: /查看 All/ });
+  assert.match(
+    (await retryFocusButton.getAttribute('title')) || '',
+    /只重新请求目标详情和命中历史/,
+    'focus retry should expose detail-read-only semantics before click',
+  );
+  assert.match(
+    (await retryFocusButton.getAttribute('aria-label')) || '',
+    /不会改状态、写外部系统或执行预演脚本/,
+    'focus retry should expose no mutation boundary',
+  );
+  assert.match(
+    (await focusFailureShowAllButton.getAttribute('title')) || '',
+    /只清空失败的深链目标、切到 All 并重新读取列表/,
+    'focus failure show-all should expose route/filter recovery semantics',
+  );
+  await retryFocusButton.click();
   await focusReceipt.getByText('深链目标未确认').waitFor({ timeout: 10000 });
   await waitForCondition(
     () => missingDetailRequests.length === missingDetailRequestCount + 2,
@@ -702,9 +1147,9 @@ try {
     'retry should request the same missing target again without mutating status',
   );
 
-  await focusReceipt.getByRole('button', { name: '查看 All' }).click();
+  await focusFailureShowAllButton.click();
   await page.getByText('Active launch prep').waitFor({ timeout: 10000 });
-  await listScopeReceipt.getByText('All · 4 条').waitFor({ timeout: 10000 });
+  await listScopeReceipt.getByText('All · 可见 80 条').waitFor({ timeout: 10000 });
   assert.equal(
     await page.locator('.filter-select').inputValue(),
     'all',
@@ -735,6 +1180,23 @@ try {
   await emptyFilterReceipt
     .getByText('查看 All 或刷新')
     .waitFor({ timeout: 10000 });
+  const emptyShowAllButton = emptyFilterReceipt.getByRole('button', { name: /查看 All/ });
+  const emptyRefreshButton = emptyFilterReceipt.getByRole('button', { name: /刷新/ });
+  assert.match(
+    (await emptyShowAllButton.getAttribute('title')) || '',
+    /只清空当前筛选\/搜索并重新读取列表/,
+    'empty-state show-all should expose range-only recovery semantics',
+  );
+  assert.match(
+    (await emptyShowAllButton.getAttribute('aria-label')) || '',
+    /不会恢复、激活、暂停、归档、标记反馈、保存触发线索/,
+    'empty-state show-all should expose no mutation boundary',
+  );
+  assert.match(
+    (await emptyRefreshButton.getAttribute('title')) || '',
+    /只重新读取列表、详情和命中历史快照/,
+    'empty-state refresh should reuse the read-only refresh boundary',
+  );
   assert.equal(
     await page.getByLabel('场景预演详情').count(),
     0,
@@ -746,9 +1208,28 @@ try {
     'empty candidate filter should still issue a read request',
   );
 
-  await emptyFilterReceipt.getByRole('button', { name: '查看 All' }).click();
+  await searchInput.fill('missing rehearsal query');
+  await searchInput.press('Enter');
+  await emptyFilterReceipt
+    .getByText('Candidate / 搜索 missing rehearsal query · 0 条')
+    .waitFor({ timeout: 10000 });
+  const clearSearchButton = emptyFilterReceipt.getByRole('button', { name: /清空搜索/ });
+  assert.match(
+    (await clearSearchButton.getAttribute('title')) || '',
+    /只删除本页搜索草稿并按当前状态重新读取列表/,
+    'empty-state clear-search should expose local-search recovery semantics',
+  );
+  assert.match(
+    (await clearSearchButton.getAttribute('aria-label')) || '',
+    /不会改 Rehearsal 状态、保存触发线索、写外部系统或执行预演脚本/,
+    'empty-state clear-search should expose no mutation boundary',
+  );
+  await clearSearchButton.click();
+  await emptyFilterReceipt.getByText('Candidate · 0 条').waitFor({ timeout: 10000 });
+
+  await emptyShowAllButton.click();
   await page.getByText('Active launch prep').waitFor({ timeout: 10000 });
-  await page.getByLabel('列表范围回执').getByText('All · 4 条').waitFor({
+  await page.getByLabel('列表范围回执').getByText('All · 可见 80 条').waitFor({
     timeout: 10000,
   });
   assert.equal(
@@ -760,6 +1241,28 @@ try {
     await page.locator('.empty-filter-receipt').count(),
     0,
     'empty filter receipt should clear after showing all rehearsals',
+  );
+
+  await page.locator('.filter-select').selectOption('paused');
+  await detailPanel
+    .getByRole('heading', { name: 'Paused handoff check' })
+    .waitFor({ timeout: 10000 });
+  const restoreButtons = detailPanel.getByRole('button', { name: /恢复/ });
+  assert.equal(
+    await restoreButtons.count(),
+    1,
+    'paused rehearsals should render one restore button, not duplicate restore/reactivate actions',
+  );
+  const restoreButton = restoreButtons.first();
+  assert.match(
+    (await restoreButton.getAttribute('title')) || '',
+    /只恢复场景匹配资格/,
+    'restore button should expose the pre-click matching-only boundary',
+  );
+  assert.match(
+    (await restoreButton.getAttribute('aria-label')) || '',
+    /不会发送消息、创建任务或执行脚本/,
+    'restore button should expose the no-send/no-task/no-execution boundary',
   );
 
   console.log('verify-rehearsals-page-e2e: ok');

@@ -11,6 +11,7 @@ import {
     CONTEXT_SITE_MUTE_STORAGE_KEY,
     buildContextRecallCompactMetaItems,
     buildContextRecallPeekFooterItems,
+    buildSourceMemoryRecallReceiptItems,
     formatContextRecallDisplayPriorityLabel,
     formatContextRecallEvidenceRole,
     formatContextRecallReasonType,
@@ -109,6 +110,15 @@ interface ContextMatchPayload {
     };
     sourceTypes?: string[];
     ownerAuthoredLearningPayloads?: OwnerAuthoredLearningPayload[];
+}
+
+interface ContextBubbleRecallContext {
+    surface?: ContextMatchPayload['surface'];
+    contextType?: ContextMatchPayload['contextType'];
+    title?: string;
+    url?: string;
+    sourceContext?: ContextMatchPayload['sourceContext'];
+    currentContext?: ContextMatchPayload['currentContext'];
 }
 
 interface SelectedTextContextPayload extends ContextMatchPayload {
@@ -334,6 +344,8 @@ interface ContextBubbleOptions {
     mode?: ContextBubbleMode;
     selectedText?: string;
     autopilot?: ContextRecallAutopilotDecision | null;
+    recallBasis?: string;
+    recallContext?: ContextBubbleRecallContext;
 }
 
 interface MemoryCaptureCandidateResult {
@@ -554,7 +566,93 @@ function formatMemoryCapturePreReviewReceipt(
                 : '当前页面资料';
     const candidateReceipt = candidate ? formatMemoryCaptureCandidateReceipt(candidate, 1) : '';
     const base = `${sourceKindLabel}尚未写入；点击后先复核，不会因点击直接保存、外发或同步。`;
-    return candidateReceipt ? `${base}候选依据：${candidateReceipt}` : base;
+    const pageReceipts =
+        sourceKind === 'webpage'
+            ? `${formatMemoryCapturePageSnapshotReceipt(request)} ${formatMemoryCapturePageTriggerReceipt(request, candidate)}`
+            : '';
+    return [base, pageReceipts, candidateReceipt ? `候选依据：${candidateReceipt}` : '']
+        .filter(Boolean)
+        .join('');
+}
+
+function formatMemoryCaptureSelectionSnapshotReceipt(
+    request: Record<string, unknown>,
+): string {
+    const selectedText = normalizeText(
+        typeof request.selectedText === 'string' ? request.selectedText : '',
+    );
+    const charCount = selectedText.length;
+    const countText = charCount > 0 ? `约 ${charCount} 字` : '当前预览';
+    return `选区快照：将保存下方${countText}的选中文字；备注只补充保存原因，不会重新抓取页面或改成当前新的选区。若页面或选区已变化，请取消后重新选择再点 + 记住。`;
+}
+
+function clipMemoryCaptureReceiptValue(text: string, maxLength = 46): string {
+    const value = normalizeText(text);
+    if (value.length <= maxLength) return value;
+    return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function formatMemoryCaptureDuration(ms: number): string {
+    const totalSeconds = Math.max(0, Math.round(ms / 1000));
+    if (totalSeconds < 60) return `${totalSeconds} 秒`;
+    const minutes = Math.round(totalSeconds / 60);
+    if (minutes < 60) return `${minutes} 分钟`;
+    const hours = Math.floor(minutes / 60);
+    const restMinutes = minutes % 60;
+    return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分钟` : `${hours} 小时`;
+}
+
+function formatMemoryCapturePageSnapshotReceipt(
+    request?: Record<string, unknown>,
+): string {
+    const metadata = asPlainObject(request?.metadata);
+    const sourceTitle = clipMemoryCaptureReceiptValue(
+        typeof request?.sourceTitle === 'string' ? request.sourceTitle : '当前页面',
+        42,
+    ) || '当前页面';
+    const sourceUrl = normalizeText(typeof request?.sourceUrl === 'string' ? request.sourceUrl : '');
+    let sourceHost = '';
+    if (sourceUrl) {
+        try {
+            sourceHost = new URL(sourceUrl).host;
+        } catch {
+            sourceHost = '';
+        }
+    }
+    const wordCount = Number(metadata?.wordCount || 0);
+    const wordText = Number.isFinite(wordCount) && wordCount > 0 ? `，约 ${Math.round(wordCount)} 词` : '';
+    const hostText = sourceHost ? `（${sourceHost}）` : '';
+    return `页面快照：将保存「${sourceTitle}」${hostText}当前提取的正文快照${wordText}；备注只补充保存原因，不会重新抓取页面或改成之后滚动、跳转后的内容。若页面内容已变化，请取消后重新触发 + 记住。`;
+}
+
+function formatMemoryCapturePageTriggerReceipt(
+    request?: Record<string, unknown>,
+    candidate?: MemoryCaptureCandidateResult | null,
+    autoReason?: string,
+): string {
+    const interactions = asPlainObject(request?.interactions);
+    const evidence: string[] = [];
+    const reason = normalizeText(autoReason);
+    if (reason) {
+        evidence.push(`自动触发：${reason}`);
+    }
+    if (interactions?.copiedText) {
+        evidence.push('复制过页面内容');
+    }
+    const dwellMs = Number(interactions?.dwellMs || interactions?.activeMs || 0);
+    if (Number.isFinite(dwellMs) && dwellMs > 0) {
+        evidence.push(`停留约 ${formatMemoryCaptureDuration(dwellMs)}`);
+    }
+    const scrollDepth = Number(interactions?.scrollDepth || 0);
+    if (Number.isFinite(scrollDepth) && scrollDepth > 0) {
+        evidence.push(`阅读深度 ${Math.round(Math.min(1, Math.max(0, scrollDepth)) * 100)}%`);
+    }
+    const candidateReceipt = candidate ? formatMemoryCaptureCandidateReceipt(candidate, 1) : '';
+    if (candidateReceipt) {
+        evidence.push(`候选评分：${candidateReceipt}`);
+    }
+    const basis = evidence.length > 0 ? evidence.join(' · ') : '当前页面有本机阅读/复制信号';
+    return `触发依据：${basis}。这是当前浏览器本地行为信号，不代表系统确认页面事实，也不会单独写画像、任务或外部系统。`;
 }
 
 function getMemoryCaptureWriteSignalLabel(request?: Record<string, unknown>): string {
@@ -580,7 +678,48 @@ function formatMemoryCaptureSaveFailureReceipt(
     request?: Record<string, unknown>,
 ): string {
     const reason = normalizeText(message) || '保存请求未完成';
-    return `${targetLabel}未写入：${reason}。没有创建资料记忆或${getMemoryCaptureWriteSignalLabel(request)}；入口仍保留，可重试或稍后再保存。`;
+    const snapshotReceipt =
+        targetLabel === '页面资料' && request?.sourceKind !== 'visual_memory'
+            ? `${formatMemoryCapturePageSnapshotReceipt(request)} `
+            : '';
+    return `${targetLabel}未写入：${reason}。${snapshotReceipt}没有创建资料记忆或${getMemoryCaptureWriteSignalLabel(request)}；入口仍保留，可重试或稍后再保存。`;
+}
+
+function formatMemoryCaptureAutoSavePendingReceipt(
+    request?: Record<string, unknown>,
+    autoReason?: string,
+): string {
+    const sourceKind = normalizeText(
+        typeof request?.sourceKind === 'string' ? request.sourceKind : 'webpage',
+    );
+    const sourceKindLabel =
+        sourceKind === 'visual_memory'
+            ? '当前页面视觉证据'
+            : sourceKind === 'selection'
+                ? '选区资料'
+                : '当前页面资料';
+    const scope = normalizeText(typeof request?.scope === 'string' ? request.scope : 'work');
+    const scopeLabel =
+        scope === 'personal'
+            ? '个人记忆'
+            : scope === 'all'
+                ? '全部范围'
+                : '工作记忆';
+    const sourceUrl = normalizeText(typeof request?.sourceUrl === 'string' ? request.sourceUrl : '');
+    let sourceHost = '';
+    if (sourceUrl) {
+        try {
+            sourceHost = new URL(sourceUrl).host;
+        } catch {
+            sourceHost = '';
+        }
+    }
+    const scopeParts = [sourceKindLabel, scopeLabel, sourceHost ? `来源 ${sourceHost}` : ''].filter(Boolean);
+    const pageReceipts =
+        sourceKind === 'webpage'
+            ? `${formatMemoryCapturePageTriggerReceipt(request, null, autoReason)} ${formatMemoryCapturePageSnapshotReceipt(request)} `
+            : '';
+    return `${scopeParts.join(' · ')}：${pageReceipts}本机自动入库请求已提交，尚未确认创建 source-memory capsule 或写入${getMemoryCaptureWriteSignalLabel(request)}；成功或失败会用最终回执替换。提交中不会外发、插入输入框、同步其他平台、写 confirmed profile 或创建任务。`;
 }
 
 function asPlainObject(value: unknown): Record<string, unknown> | null {
@@ -1347,6 +1486,129 @@ function buildContextAutopilotCompactSummaryText(
     return visibleParts.slice(0, 2).join('，');
 }
 
+function formatContextRecallCacheAgeLabel(ageMs: number): string {
+    const safeAgeMs = Math.max(0, ageMs);
+    if (safeAgeMs < 15_000) return '刚刚';
+    if (safeAgeMs < 60_000) {
+        return `${Math.max(1, Math.floor(safeAgeMs / 1000))} 秒前`;
+    }
+    return `${Math.max(1, Math.floor(safeAgeMs / 60_000))} 分钟前`;
+}
+
+function buildContextRecallCurrentBasisReceipt(): string {
+    return '本轮召回 · 页面稳定后重新请求';
+}
+
+function buildContextRecallCachedBasisReceipt(cachedAtMs: number, now = Date.now()): string {
+    return `本地缓存 · ${formatContextRecallCacheAgeLabel(now - cachedAtMs)}召回；未重新请求`;
+}
+
+function buildContextBubbleRecallContext(
+    payload: ContextMatchPayload,
+): ContextBubbleRecallContext {
+    return {
+        surface: payload.surface,
+        contextType: payload.contextType,
+        title: payload.title,
+        url: payload.url,
+        sourceContext: payload.sourceContext,
+        currentContext: payload.currentContext,
+    };
+}
+
+function formatContextBubbleRecallSceneLabel(
+    contextType?: ContextMatchPayload['contextType'],
+    surface?: ContextMatchPayload['surface'],
+): string {
+    switch (contextType) {
+        case 'jira_issue':
+            return 'Jira issue 被动提示';
+        case 'message_thread':
+            return '消息会话被动提示';
+        case 'document':
+            return '文档被动提示';
+        case 'selected_text':
+            return '划词主动检索';
+        case 'webpage':
+            return surface === 'meeting_passive'
+                ? '会议页面被动提示'
+                : '网页被动提示';
+        default:
+            return '页面被动提示';
+    }
+}
+
+function extractContextBubbleRecallHost(
+    context?: ContextBubbleRecallContext,
+): string {
+    const explicitHost = normalizeText(context?.sourceContext?.host);
+    if (explicitHost) return explicitHost;
+
+    const rawUrl = normalizeText(context?.url || context?.sourceContext?.url || context?.currentContext?.url);
+    if (!rawUrl) return '';
+    try {
+        return new URL(rawUrl).hostname;
+    } catch (_error) {
+        return '';
+    }
+}
+
+function buildContextBubbleRecallAnchorLabel(
+    context?: ContextBubbleRecallContext,
+): string {
+    const sourceContext = context?.sourceContext || {};
+    const currentContext = context?.currentContext || {};
+    const anchors = [
+        sourceContext.issueKey || currentContext.issueKey,
+        sourceContext.groupId || currentContext.groupId,
+        sourceContext.conversationId || currentContext.conversationId,
+    ]
+        .map((item) => clipContextFeedbackDetailValue(normalizeText(item), 48))
+        .filter(Boolean);
+
+    if (!anchors.length) return '';
+    return anchors.slice(0, 3).join(' · ');
+}
+
+function buildContextBubblePageRecallReceiptItems(
+    context: ContextBubbleRecallContext | undefined,
+    recallBasis: string,
+): Array<[string, string]> {
+    const title = clipContextFeedbackDetailValue(
+        normalizeText(
+            context?.title ||
+            context?.sourceContext?.title ||
+            context?.currentContext?.title ||
+            document.title,
+        ),
+        72,
+    );
+    const host = clipContextFeedbackDetailValue(
+        extractContextBubbleRecallHost(context) || window.location.hostname,
+        48,
+    );
+    const pageSignal = [title, host].filter(Boolean).join(' · ') || '当前页面';
+    const anchorLabel = buildContextBubbleRecallAnchorLabel(context);
+    const items: Array<[string, string]> = [
+        [
+            '场景',
+            formatContextBubbleRecallSceneLabel(context?.contextType, context?.surface),
+        ],
+        ['页面信号', pageSignal],
+    ];
+
+    if (anchorLabel) {
+        items.push(['锚点', anchorLabel]);
+    }
+
+    items.push(
+        ['召回口径', recallBasis],
+        ['边界', '只读关联记忆；不保存网页、不插入输入框、不发送内容'],
+    );
+
+    return items;
+}
+
 function hasContextWhyRelevant(match: ContextRecallMatch): boolean {
     return Array.isArray(match.whyRelevant) && match.whyRelevant.some((item) => normalizeText(item));
 }
@@ -1579,6 +1841,23 @@ function buildSelectionSearchWhyChips(
     return chips.slice(0, 3);
 }
 
+function buildSelectionSearchOpenReceipt(
+    match: ContextRecallMatch,
+    selectedText: string,
+    matchCount: number,
+    currentIndex: number,
+): Array<[string, string]> {
+    const safeCount = Math.max(1, matchCount);
+    const matchedTerm = getSelectionSearchMatchedTerm(match, selectedText);
+    const currentLabel = safeCount > 1
+        ? `本轮 ${safeCount} 条强相关候选；当前第 ${currentIndex + 1} 条`
+        : '本轮 1 条强相关候选';
+    return [
+        ['打开', '点击只打开已命中的本轮划词结果；不二次召回、不保存、不插入、不发送、不调用外部 AI'],
+        ['候选', matchedTerm ? `${currentLabel}，选中文本锚点：${matchedTerm}` : currentLabel],
+    ];
+}
+
 function buildContextRecallSourceLinks(
     match: ContextRecallMatch,
     baseUrl: string,
@@ -1628,7 +1907,7 @@ function buildContextRecallSourceReceipts(
 
     if (!sourceLinks.length && rawSourceUrls.length) {
         receipts.push('原始来源已隐藏');
-    } else if (!sourceLinks.length && !exploreUrl) {
+    } else if (!sourceLinks.length) {
         receipts.push('原始来源缺失');
     }
 
@@ -1699,7 +1978,12 @@ function buildContextRecallSourceStatusReceipts(
             if (samePage) {
                 receipts.push('当前页面来源可复核');
             } else if (sourceUrl.hostname === pageUrl.hostname) {
-                receipts.push('同站来源可复核');
+                if (match.type === 'source_memory') {
+                    receipts.push('已保存资料来源可复核');
+                    receipts.push(`同站 ${sourceUrl.hostname}`);
+                } else {
+                    receipts.push('同站来源可复核');
+                }
             } else if (match.type === 'source_memory') {
                 receipts.push('已保存资料来源可复核');
             } else {
@@ -3105,7 +3389,11 @@ class WebIntelligenceContentScript {
                     payload.contextKey,
                     shouldAnimateCachedMatch,
                     false,
-                    { autopilot: cached.autopilot },
+                    {
+                        autopilot: cached.autopilot,
+                        recallBasis: buildContextRecallCachedBasisReceipt(cached.ts, now),
+                        recallContext: buildContextBubbleRecallContext(payload),
+                    },
                 );
             } else {
                 this.clearContextBubble();
@@ -3201,7 +3489,11 @@ class WebIntelligenceContentScript {
                     payload.contextKey,
                     match.displayPriority === 'p1',
                     false,
-                    { autopilot },
+                    {
+                        autopilot,
+                        recallBasis: buildContextRecallCurrentBasisReceipt(),
+                        recallContext: buildContextBubbleRecallContext(payload),
+                    },
                 );
             } else {
                 this.clearContextBubble();
@@ -3773,6 +4065,7 @@ class WebIntelligenceContentScript {
         trigger.style.top = `${Math.round(top)}px`;
         const triggerCenter = left + size / 2;
         const tooltipHalfWidth = 116;
+        trigger.dataset.tooltipPlacement = top < 58 ? 'bottom' : 'top';
         trigger.dataset.tooltipSide =
             triggerCenter < tooltipHalfWidth + 12
                 ? 'left'
@@ -3897,6 +4190,13 @@ class WebIntelligenceContentScript {
             this.buildMemoryCaptureSelectionRequest(payload),
         );
         panel.appendChild(boundaryReceipt);
+
+        const snapshotReceipt = document.createElement('div');
+        snapshotReceipt.className = 'pai-memory-capture-selection-snapshot';
+        snapshotReceipt.textContent = formatMemoryCaptureSelectionSnapshotReceipt(
+            this.buildMemoryCaptureSelectionRequest(payload),
+        );
+        panel.appendChild(snapshotReceipt);
 
         const preview = document.createElement('div');
         preview.className = 'pai-memory-capture-note-preview';
@@ -4654,6 +4954,16 @@ class WebIntelligenceContentScript {
         boundaryReceipt.textContent = formatMemoryCaptureSourceBoundaryReceipt(payload.request);
         panel.appendChild(boundaryReceipt);
 
+        const snapshotReceipt = document.createElement('div');
+        snapshotReceipt.className = 'pai-memory-capture-page-snapshot';
+        snapshotReceipt.textContent = formatMemoryCapturePageSnapshotReceipt(payload.request);
+        panel.appendChild(snapshotReceipt);
+
+        const triggerReceipt = document.createElement('div');
+        triggerReceipt.className = 'pai-memory-capture-page-trigger';
+        triggerReceipt.textContent = formatMemoryCapturePageTriggerReceipt(payload.request, candidate);
+        panel.appendChild(triggerReceipt);
+
         const preview = document.createElement('div');
         preview.className = 'pai-memory-capture-note-preview';
         preview.textContent = previewText || sourceTitle;
@@ -4726,6 +5036,12 @@ class WebIntelligenceContentScript {
             return;
         }
 
+        this.showContextToast('页面资料入库提交中', undefined, {
+            durationMs: 10_000,
+            variant: 'memory-capture-auto',
+            detailMessage: formatMemoryCaptureAutoSavePendingReceipt(payload.request, reason),
+        });
+
         chrome.runtime.sendMessage({
             type: 'MEMORY_CAPTURE_SAVE_PAGE',
             request: {
@@ -4772,7 +5088,11 @@ class WebIntelligenceContentScript {
                 {
                     durationMs: 5000,
                     variant: 'memory-capture-auto',
-                    detailMessage: `因为${reason}，${formatMemoryCaptureWriteReceipt(
+                    detailMessage: `${formatMemoryCapturePageTriggerReceipt(
+                        payload.request,
+                        null,
+                        reason,
+                    )} ${formatMemoryCapturePageSnapshotReceipt(payload.request)} ${formatMemoryCaptureWriteReceipt(
                         capsule,
                         formatMemoryCaptureSourceBoundaryReceipt(payload.request),
                     )}`,
@@ -5202,7 +5522,7 @@ class WebIntelligenceContentScript {
                     durationMs: 6500,
                     detailMessage: duplicate
                         ? formatMemoryCaptureDuplicateWriteReceipt(capsule, updatedDuplicateNote)
-                        : formatMemoryCaptureWriteReceipt(capsule),
+                        : `${formatMemoryCapturePageSnapshotReceipt(payload.request)} ${formatMemoryCaptureWriteReceipt(capsule)}`,
                 },
             );
         });
@@ -5827,6 +6147,73 @@ class WebIntelligenceContentScript {
             this.isCurrentPageBlocked() ||
             this.isCurrentSiteOutsideAllowlist()
         );
+    }
+
+    private countCurrentHostControlConflicts(map: Map<string, number>): number {
+        const host = this.getCurrentSiteMuteHost();
+        if (!host) return 0;
+
+        return removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(map),
+        ).removedHosts.length;
+    }
+
+    private buildCurrentSiteControlStatusText(): string {
+        const host = this.getCurrentSiteMuteHost() || '当前网站';
+        if (this.isCurrentPageBlocked()) {
+            return `页面路径已屏蔽：${host}`;
+        }
+        if (this.isCurrentSiteBlocked()) {
+            return `站点已永久屏蔽：${host}`;
+        }
+        if (this.isCurrentSiteMuted()) {
+            return `站点临时静默中：${host}`;
+        }
+        if (this.siteAllowlistMode) {
+            return this.isCurrentSiteAllowed()
+                ? `白名单已包含此站点：${host}`
+                : `白名单未包含此站点：${host}`;
+        }
+
+        return '当前未被静默/屏蔽；被动提示可继续评估';
+    }
+
+    private buildSiteAllowActionDiagnostic(): string {
+        if (this.siteAllowlistMode && this.isCurrentSiteAllowed()) {
+            return '此站点已经允许；不会重复改写规则';
+        }
+
+        const conflictCount =
+            this.countCurrentHostControlConflicts(this.blockedSiteHosts) +
+            this.countCurrentHostControlConflicts(this.mutedSiteHosts);
+        const action = this.siteAllowlistMode
+            ? '会允许此站点进入白名单'
+            : '会开启白名单并允许此站点';
+        return conflictCount > 0
+            ? `${action}；将移除 ${conflictCount} 条覆盖此站点的静默/屏蔽规则`
+            : `${action}；只影响被动网页处理`;
+    }
+
+    private buildSiteMuteActionDiagnostic(): string {
+        return '会保存 24 小时临时静默；只暂停被动 Lens、页面召回和被动入库候选';
+    }
+
+    private buildPageBlockActionDiagnostic(): string {
+        const prefix = normalizeContextPageBlockPrefix(window.location.href);
+        return prefix
+            ? `会保存当前路径屏蔽：${clipContextFeedbackDetailValue(prefix, 72)}`
+            : '当前 URL 不能保存为页面路径屏蔽';
+    }
+
+    private buildSiteBlockActionDiagnostic(): string {
+        const conflictCount =
+            this.countCurrentHostControlConflicts(this.blockedSiteHosts) +
+            this.countCurrentHostControlConflicts(this.mutedSiteHosts) +
+            this.countCurrentHostControlConflicts(this.allowedSiteHosts);
+        return conflictCount > 0
+            ? `会保存当前站点屏蔽设置，并移除 ${conflictCount} 条允许/静默/旧屏蔽覆盖规则`
+            : '会保存当前站点屏蔽设置；只停止被动网页处理';
     }
 
     private suppressSiteControlSyncReceipt(): void {
@@ -6532,6 +6919,22 @@ class WebIntelligenceContentScript {
                 white-space: nowrap;
             }
 
+            .pai-context-peek-slice {
+                margin-top: 5px;
+                font-size: 10.5px;
+                font-weight: 650;
+                color: #526070;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-peek-basis {
+                margin-top: 5px;
+                font-size: 10.5px;
+                font-weight: 650;
+                color: #5f5a50;
+                overflow-wrap: anywhere;
+            }
+
             .pai-context-peek-boundary {
                 margin-top: 4px;
                 font-size: 10.5px;
@@ -6669,6 +7072,26 @@ class WebIntelligenceContentScript {
             .pai-context-selection-trigger[data-tooltip-side='right'] .pai-context-selection-tooltip::after {
                 left: auto;
                 right: 12px;
+            }
+
+            .pai-context-selection-trigger[data-tooltip-placement='bottom'] .pai-context-selection-tooltip {
+                top: calc(100% + 8px);
+                bottom: auto;
+                transform: translate(-50%, -4px);
+            }
+
+            .pai-context-selection-trigger[data-tooltip-placement='bottom'] .pai-context-selection-tooltip::after {
+                top: -5px;
+                bottom: auto;
+                border-top: 1px solid rgba(15, 23, 42, 0.18);
+                border-left: 1px solid rgba(15, 23, 42, 0.18);
+                border-right: 0;
+                border-bottom: 0;
+            }
+
+            .pai-context-selection-trigger[data-tooltip-placement='bottom'][data-tooltip-side='left'] .pai-context-selection-tooltip,
+            .pai-context-selection-trigger[data-tooltip-placement='bottom'][data-tooltip-side='right'] .pai-context-selection-tooltip {
+                transform: translate(0, -4px);
             }
 
             .pai-context-selection-trigger:hover .pai-context-selection-tooltip,
@@ -6849,6 +7272,7 @@ class WebIntelligenceContentScript {
                 position: fixed;
                 right: max(14px, env(safe-area-inset-right));
                 width: min(340px, calc(100vw - 28px));
+                max-height: min(560px, calc(100vh - 32px));
                 box-sizing: border-box;
                 z-index: 2147483646;
                 display: flex;
@@ -6862,6 +7286,7 @@ class WebIntelligenceContentScript {
                 color: #172033;
                 font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 letter-spacing: 0;
+                overflow-y: auto;
                 backdrop-filter: blur(12px);
             }
 
@@ -6924,6 +7349,36 @@ class WebIntelligenceContentScript {
                 border: 1px solid rgba(37, 99, 235, 0.16);
                 background: #eff6ff;
                 color: #1e3a8a;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+
+            .pai-memory-capture-selection-snapshot {
+                padding: 7px 8px;
+                border-radius: 8px;
+                border: 1px solid rgba(99, 102, 241, 0.16);
+                background: #eef2ff;
+                color: #3730a3;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+
+            .pai-memory-capture-page-snapshot {
+                padding: 7px 8px;
+                border-radius: 8px;
+                border: 1px solid rgba(59, 130, 246, 0.16);
+                background: #eef6ff;
+                color: #1e3a8a;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+
+            .pai-memory-capture-page-trigger {
+                padding: 7px 8px;
+                border-radius: 8px;
+                border: 1px solid rgba(20, 184, 166, 0.18);
+                background: #ecfdf5;
+                color: #065f46;
                 font-size: 12px;
                 line-height: 1.4;
             }
@@ -7097,6 +7552,42 @@ class WebIntelligenceContentScript {
                 align-items: center;
                 justify-content: flex-end;
                 gap: 6px;
+            }
+
+            .pai-context-page-recall-receipt {
+                margin: 8px 0 10px;
+                border: 1px solid rgba(45, 112, 100, 0.2);
+                border-radius: 8px;
+                background: rgba(240, 253, 250, 0.78);
+                color: #134e4a;
+                padding: 8px 9px;
+                font-size: 11px;
+                line-height: 1.4;
+                display: grid;
+                gap: 4px;
+            }
+
+            .pai-context-page-recall-title {
+                color: #0f766e;
+                font-weight: 760;
+            }
+
+            .pai-context-page-recall-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 6px;
+                min-width: 0;
+            }
+
+            .pai-context-page-recall-label {
+                flex: 0 0 auto;
+                color: #0f766e;
+                font-weight: 720;
+            }
+
+            .pai-context-page-recall-value {
+                min-width: 0;
+                overflow-wrap: anywhere;
             }
 
             .pai-context-icon-button,
@@ -7280,6 +7771,45 @@ class WebIntelligenceContentScript {
             }
 
             .pai-context-rehearsal-receipt-value {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-source-memory-receipt {
+                margin-top: 8px;
+                border: 1px solid rgba(14, 116, 144, 0.18);
+                border-left: 2px solid rgba(14, 116, 144, 0.56);
+                border-radius: 8px;
+                background: rgba(236, 254, 255, 0.72);
+                color: #164e63;
+                padding: 7px 9px;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                font-size: 11.5px;
+                line-height: 1.4;
+            }
+
+            .pai-context-source-memory-receipt-title {
+                color: #155e75;
+                font-size: 11px;
+                font-weight: 780;
+            }
+
+            .pai-context-source-memory-receipt-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 7px;
+                min-width: 0;
+            }
+
+            .pai-context-source-memory-receipt-label {
+                flex: 0 0 auto;
+                color: #0e7490;
+                font-weight: 760;
+            }
+
+            .pai-context-source-memory-receipt-value {
                 min-width: 0;
                 overflow-wrap: anywhere;
             }
@@ -7727,7 +8257,8 @@ class WebIntelligenceContentScript {
                 position: absolute;
                 right: 0;
                 top: 34px;
-                width: 208px;
+                width: 256px;
+                max-width: calc(100vw - 32px);
                 padding: 6px;
                 border-radius: 12px;
                 border: 1px solid rgba(222, 204, 178, 0.95);
@@ -8214,6 +8745,9 @@ class WebIntelligenceContentScript {
         }
 
         const brandLabel = isSelectionSearch ? '划词记忆检索' : 'Memory Lens';
+        const recallBasis = isSelectionSearch
+            ? ''
+            : normalizeText(options.recallBasis) || buildContextRecallCurrentBasisReceipt();
         const cardAriaLabel = isSelectionSearch
             ? 'Selection Memory Search 划词记忆检索结果'
             : 'Memory Lens 相关记忆详情';
@@ -8230,7 +8764,12 @@ class WebIntelligenceContentScript {
             : [
                 ['当前站点', currentSiteHost || '当前网页'],
                 ['当前模式', this.siteAllowlistMode ? '白名单模式：只允许列表内站点被动提示' : '默认模式：未屏蔽站点可被动提示'],
+                ['当前状态', this.buildCurrentSiteControlStatusText()],
                 ['控制范围', '只影响右下角 Lens、页面召回、整页/视觉入库候选'],
+                ['允许操作', this.buildSiteAllowActionDiagnostic()],
+                ['今天不提示', this.buildSiteMuteActionDiagnostic()],
+                ['页面屏蔽', this.buildPageBlockActionDiagnostic()],
+                ['屏蔽操作', this.buildSiteBlockActionDiagnostic()],
                 ['仍可使用', '主动划词检索仍可用；敏感页和密钥选区继续拦截'],
                 ['不会执行', '不删除、不同步、不外发已有记忆'],
             ];
@@ -8242,6 +8781,22 @@ class WebIntelligenceContentScript {
                         <div class="pai-context-site-control-row">
                             <span class="pai-context-site-control-label">${escapeHtml(label)}</span>
                             <span class="pai-context-site-control-value">${escapeHtml(value)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `
+            : '';
+        const pageRecallReceiptItems = isSelectionSearch
+            ? []
+            : buildContextBubblePageRecallReceiptItems(options.recallContext, recallBasis);
+        const pageRecallReceiptHtml = pageRecallReceiptItems.length
+            ? `
+                <div class="pai-context-page-recall-receipt" aria-label="页面召回回执">
+                    <div class="pai-context-page-recall-title">页面召回回执</div>
+                    ${pageRecallReceiptItems.map(([label, value]) => `
+                        <div class="pai-context-page-recall-row">
+                            <span class="pai-context-page-recall-label">${escapeHtml(label)}</span>
+                            <span class="pai-context-page-recall-value">${escapeHtml(value)}</span>
                         </div>
                     `).join('')}
                 </div>
@@ -8369,6 +8924,13 @@ class WebIntelligenceContentScript {
             positionAnchoredPanel(card);
         };
 
+        const buildPassivePeekSliceReceipt = (): string => {
+            if (isSelectionSearch || matches.length <= 1) {
+                return '';
+            }
+            return `当前预览第 ${currentIndex + 1}/${matches.length} 条；点击后可翻页查看本轮其他候选`;
+        };
+
         const setDraggedBubblePosition = (left: number, top: number): void => {
             const bubbleWidth = bubble.offsetWidth || 44;
             const bubbleHeight = bubble.offsetHeight || 44;
@@ -8461,6 +9023,10 @@ class WebIntelligenceContentScript {
                 exploreUrl,
                 window.location.href,
             );
+            const sourceMemoryReceiptItems = buildSourceMemoryRecallReceiptItems(match, {
+                sourceLinks,
+                exploreUrl,
+            });
             const rehearsalReceiptItems = buildContextRehearsalReceiptItems(
                 match,
                 exploreUrl,
@@ -8483,7 +9049,9 @@ class WebIntelligenceContentScript {
                 sourceLinks,
                 sourceReceipts,
                 sourceStatusReceipts,
+                sourceMemoryReceiptItems,
                 rehearsalReceiptItems,
+                recallBasis,
             };
         };
 
@@ -8502,6 +9070,8 @@ class WebIntelligenceContentScript {
                 view.strengthLabel,
                 reason,
                 title,
+                buildPassivePeekSliceReceipt(),
+                view.recallBasis,
                 '只读提示，不写入/插入/发送',
             ].filter(Boolean);
             return clipContextFeedbackDetailValue(parts.join('。'), 180) || brandLabel;
@@ -8515,6 +9085,36 @@ class WebIntelligenceContentScript {
             const receipt = buildContextBubbleRestReceipt(match, view);
             bubble.title = receipt;
             bubble.setAttribute('aria-label', `打开相关记忆提示：${receipt}`);
+        };
+
+        const getSourceMemoryActionTargetLabel = (label?: string | null): string => {
+            return clipContextFeedbackDetailValue(label, 80) || '已保存资料';
+        };
+
+        const getContextSourceLinkHost = (url?: string | null): string => {
+            try {
+                return url ? new URL(url).hostname : '';
+            } catch (_error) {
+                return '';
+            }
+        };
+
+        const buildSourceMemoryOriginalSourceActionLabel = (
+            link: { label: string; url: string },
+        ): string => {
+            const targetLabel = getSourceMemoryActionTargetLabel(link.label);
+            const host = getContextSourceLinkHost(link.url);
+            const target = host ? `${targetLabel}（${host}）` : targetLabel;
+            return `打开已保存资料的原始来源：${target}。只打开新标签核对，不写入记忆、不插入输入框、不发送内容、不确认事实。`;
+        };
+
+        const buildMemoryDetailActionLabel = (
+            match: ContextRecallMatch,
+            view: ReturnType<typeof buildMatchView>,
+        ): string => {
+            if (match.type !== 'source_memory') return '在记忆中查看';
+            const targetLabel = getSourceMemoryActionTargetLabel(view.titleText || match.sourceTitle);
+            return `打开资料详情复核：${targetLabel}。本次点击只打开新标签；不会新增或撤销资料记忆，不写画像或任务，不插入或发送内容。`;
         };
 
         const renderWhyChips = (match: ContextRecallMatch): string => {
@@ -8700,6 +9300,7 @@ class WebIntelligenceContentScript {
             const match = matches[currentIndex];
             const view = buildMatchView(match);
             const peekBoundaryText = '只读提示 · 点击查看详情，不写入/插入/发送';
+            const peekSliceReceipt = buildPassivePeekSliceReceipt();
             peek.innerHTML = `
                 <div class="pai-context-peek-header">
                     <span>${escapeHtml(brandLabel)}</span>
@@ -8709,6 +9310,8 @@ class WebIntelligenceContentScript {
                 <div class="pai-context-peek-title">${escapeHtml(view.titleText)}</div>
                 <div class="pai-context-peek-summary">${escapeHtml(view.summaryText)}</div>
                 ${view.peekFooter ? `<div class="pai-context-peek-footer">${escapeHtml(view.peekFooter)}</div>` : ''}
+                ${peekSliceReceipt ? `<div class="pai-context-peek-slice">${escapeHtml(peekSliceReceipt)}</div>` : ''}
+                ${view.recallBasis ? `<div class="pai-context-peek-basis">${escapeHtml(view.recallBasis)}</div>` : ''}
                 <div class="pai-context-peek-boundary">${escapeHtml(peekBoundaryText)}</div>
             `;
             updateBubbleRestReceipt(match, view);
@@ -8734,11 +9337,20 @@ class WebIntelligenceContentScript {
                     : positiveFeedbackReceipt?.status === 'confirmed'
                         ? '已标记有用'
                         : '这条有用';
+            const memoryDetailActionLabel = buildMemoryDetailActionLabel(match, view);
             const metaHtml = view.compactMetaItems
                 .map((item) => `<span class="pai-context-meta-item">${escapeHtml(item)}</span>`)
                 .join('');
             const sourceLinksHtml = view.sourceLinks
-                .map((link) => `<a class="pai-context-source-link" href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`)
+                .map((link) => {
+                    const sourceActionLabel = match.type === 'source_memory'
+                        ? buildSourceMemoryOriginalSourceActionLabel(link)
+                        : '';
+                    const sourceActionAttributes = sourceActionLabel
+                        ? ` aria-label="${escapeHtmlAttribute(sourceActionLabel)}" title="${escapeHtmlAttribute(sourceActionLabel)}"`
+                        : '';
+                    return `<a class="pai-context-source-link" href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener"${sourceActionAttributes}>${escapeHtml(link.label)}</a>`;
+                })
                 .join('');
             const sourceStatusHtml = view.sourceStatusReceipts
                 .map((item) => `<span class="pai-context-meta-item pai-context-source-status">${escapeHtml(item)}</span>`)
@@ -8784,6 +9396,19 @@ class WebIntelligenceContentScript {
                     </div>
                 `
                 : '';
+            const sourceMemoryReceiptHtml = view.sourceMemoryReceiptItems.length
+                ? `
+                    <div class="pai-context-source-memory-receipt" aria-label="资料回执">
+                        <div class="pai-context-source-memory-receipt-title">资料回执</div>
+                        ${view.sourceMemoryReceiptItems.map(([label, value]) => `
+                            <div class="pai-context-source-memory-receipt-row">
+                                <span class="pai-context-source-memory-receipt-label">${escapeHtml(label)}</span>
+                                <span class="pai-context-source-memory-receipt-value">${escapeHtml(value)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `
+                : '';
             const weaveLabel = computeLensWeaveLabel(matches);
             const weaveChipHtml = weaveLabel
                 ? `<span class="pai-context-meta-item pai-context-weave-chip" title="跨来源缝合证据">${escapeHtml(weaveLabel)}</span>`
@@ -8799,6 +9424,12 @@ class WebIntelligenceContentScript {
                 : '';
             const selectionReceiptItems = isSelectionSearch
                 ? [
+                    ...buildSelectionSearchOpenReceipt(
+                        match,
+                        selectedText,
+                        matches.length,
+                        currentIndex,
+                    ),
                     ['查询', '只用选中文字作为主检索文本'],
                     [
                         '背景',
@@ -8907,7 +9538,7 @@ class WebIntelligenceContentScript {
                         </div>
                         <div class="pai-context-head-actions">
                             <span class="pai-context-relevance pai-context-relevance--${escapeHtmlAttribute(view.strengthClass)}">${escapeHtml(view.strengthLabel)}</span>
-                            ${view.exploreUrl ? `<a class="pai-context-icon-button pai-context-open-memory" href="${escapeHtmlAttribute(view.exploreUrl)}" target="_blank" rel="noopener" aria-label="在记忆中查看" title="在记忆中查看">↗<span class="pai-sr-only">在记忆中查看</span></a>` : ''}
+                            ${view.exploreUrl ? `<a class="pai-context-icon-button pai-context-open-memory" href="${escapeHtmlAttribute(view.exploreUrl)}" target="_blank" rel="noopener" aria-label="${escapeHtmlAttribute(memoryDetailActionLabel)}" title="${escapeHtmlAttribute(memoryDetailActionLabel)}">↗<span class="pai-sr-only">在记忆中查看</span></a>` : ''}
                             <div class="pai-context-more-wrap">
                                 <button type="button" class="pai-context-icon-button pai-context-more" aria-label="更多控制" title="更多控制" aria-haspopup="menu" aria-expanded="${String(moreMenuOpen)}">⋯</button>
                                 <div class="pai-context-more-menu" role="menu" ${moreMenuOpen ? '' : 'hidden'}>
@@ -8917,6 +9548,7 @@ class WebIntelligenceContentScript {
                         </div>
                     </div>
 
+                    ${pageRecallReceiptHtml}
                     ${selectedTextHtml}
                     <div class="pai-context-section-label">${escapeHtml(view.copy.whySectionLabel)}</div>
                     ${renderWhyChips(match)}
@@ -8931,6 +9563,7 @@ class WebIntelligenceContentScript {
                         </div>
                     ` : ''}
                     ${rehearsalReceiptHtml}
+                    ${sourceMemoryReceiptHtml}
 
                     <div class="pai-context-meta-row" aria-label="记忆来源摘要">
                         ${weaveChipHtml}
@@ -9594,8 +10227,1344 @@ function isBlockedVisualMemorySvgStyleProperty(property: string): boolean {
     );
 }
 
+const PERSONAL_AI_AR_BINDINGS_KEY = 'personalAiArBindings';
+const PERSONAL_AI_AR_SESSION_DISABLED_KEY = 'personalAiArDisabledForPage';
+const PERSONAL_AI_AR_SESSION_HIDDEN_BINDING_KEY = 'personalAiArHiddenBindingForPage';
+const PERSONAL_AI_AR_TOGGLE_DEFAULT_RIGHT = 100;
+const PERSONAL_AI_AR_TOGGLE_EDGE_MARGIN = 8;
+const PERSONAL_AI_AR_RUNTIME_VERSION = 'ar-execute-v1';
+const PERSONAL_AI_AR_TRANSIENT_CLASS_NAMES = new Set([
+    'active',
+    'expanded',
+    'focus',
+    'focused',
+    'hover',
+    'hovered',
+    'open',
+    'selected',
+    'show',
+    'shown',
+    'visible',
+]);
+
+interface PersonalAiArBinding {
+    id: string;
+    urlPattern: string;
+    selector: string;
+    tagName: string;
+    sectionLabel: string;
+    nearbyText: string;
+    oldValue: string;
+    displayMode: 'dom_text' | 'visual_overlay';
+    linkedAgentTaskId?: string;
+    lastResult?: {
+        text: string;
+        updatedAt: string;
+    };
+    lastRunStatus?: string;
+    lastRunError?: string;
+    lastRunAt?: string;
+    agentTaskPrompt?: string;
+    notifyTemplate?: string;
+}
+
+interface PersonalAiArAppliedBinding {
+    element: Element;
+    originalText: string;
+    badge: HTMLDivElement;
+    overlay?: HTMLDivElement;
+    displayMode: PersonalAiArBinding['displayMode'];
+    binding: PersonalAiArBinding;
+}
+
+let personalAiArContextTarget: Element | null = null;
+let personalAiArToggle: HTMLButtonElement | null = null;
+let personalAiArToggleLeftPx: number | null = null;
+let personalAiArToggleDragging = false;
+let personalAiArToggleMoved = false;
+let personalAiArToggleDragStartX = 0;
+let personalAiArToggleDragStartLeft = 0;
+const PERSONAL_AI_AR_TOGGLE_DRAG_THRESHOLD = 6;
+let personalAiArApplyScheduled = false;
+let personalAiArPageBindingLogged = false;
+const personalAiArAppliedBindings = new Map<string, PersonalAiArAppliedBinding>();
+const personalAiArLoadingBindingIds = new Set<string>();
+const personalAiArAutoRefreshRequestedIds = new Set<string>();
+
+function normalizePersonalAiArUrl(value: string): string {
+    try {
+        const url = new URL(value);
+        url.hash = '';
+        url.search = '';
+        return url.href;
+    } catch {
+        return value.split(/[?#]/)[0];
+    }
+}
+
+function getPersonalAiArPageKey(): string {
+    return normalizePersonalAiArUrl(window.location.href);
+}
+
+function isPersonalAiArEnabledForPage(): boolean {
+    return sessionStorage.getItem(`${PERSONAL_AI_AR_SESSION_DISABLED_KEY}:${getPersonalAiArPageKey()}`) !== 'true';
+}
+
+function setPersonalAiArEnabledForPage(enabled: boolean): void {
+    const key = `${PERSONAL_AI_AR_SESSION_DISABLED_KEY}:${getPersonalAiArPageKey()}`;
+    if (enabled) {
+        sessionStorage.removeItem(key);
+    } else {
+        sessionStorage.setItem(key, 'true');
+    }
+}
+
+function getPersonalAiArSessionHiddenBindingKey(bindingId: string): string {
+    return `${PERSONAL_AI_AR_SESSION_HIDDEN_BINDING_KEY}:${getPersonalAiArPageKey()}:${bindingId}`;
+}
+
+function isPersonalAiArBindingHiddenForPage(binding: PersonalAiArBinding): boolean {
+    return sessionStorage.getItem(getPersonalAiArSessionHiddenBindingKey(binding.id)) === 'true';
+}
+
+function setPersonalAiArBindingHiddenForPage(bindingId: string, hidden: boolean): void {
+    const key = getPersonalAiArSessionHiddenBindingKey(bindingId);
+    if (hidden) {
+        sessionStorage.setItem(key, 'true');
+    } else {
+        sessionStorage.removeItem(key);
+    }
+}
+
+function escapePersonalAiArSelectorPart(value: string): string {
+    const cssEscape = window.CSS?.escape;
+    return cssEscape ? cssEscape(value) : value.replace(/([^\w-])/g, '\\$1');
+}
+
+function isPersonalAiArTransientClassName(className: string): boolean {
+    return PERSONAL_AI_AR_TRANSIENT_CLASS_NAMES.has(className.toLowerCase());
+}
+
+function stripPersonalAiArTransientSelectorClasses(selector: string): string {
+    let normalized = selector;
+    PERSONAL_AI_AR_TRANSIENT_CLASS_NAMES.forEach((className) => {
+        const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        normalized = normalized.replace(
+            new RegExp(`\\.${escaped}(?=\\.|#|:|\\[|\\s|>|\\+|~|$)`, 'g'),
+            '',
+        );
+    });
+    return normalized.replace(/\s+/g, ' ').trim();
+}
+
+function getPersonalAiArBindingTargetKey(binding: PersonalAiArBinding): string {
+    return `${normalizePersonalAiArUrl(binding.urlPattern)}::${stripPersonalAiArTransientSelectorClasses(binding.selector)}`;
+}
+
+function getPersonalAiArBindingUpdatedAtMs(binding: PersonalAiArBinding, fallback: number): number {
+    const parsed = Date.parse(binding.lastResult?.updatedAt || '');
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getPersonalAiArLocalDateKey(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function isPersonalAiArResultFromToday(binding: PersonalAiArBinding): boolean {
+    const timestamp = Date.parse(binding.lastResult?.updatedAt || '');
+    if (!Number.isFinite(timestamp)) {
+        return false;
+    }
+    return getPersonalAiArLocalDateKey(new Date(timestamp)) === getPersonalAiArLocalDateKey(new Date());
+}
+
+type PersonalAiArResultState = 'current' | 'stale' | 'loading' | 'failed';
+
+function clipPersonalAiArStatusText(value: string, maxLength = 72): string {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1).trim()}...`;
+}
+
+function getPersonalAiArResultState(binding: PersonalAiArBinding): PersonalAiArResultState {
+    if (personalAiArLoadingBindingIds.has(binding.id)) {
+        return 'loading';
+    }
+    if (binding.lastRunStatus === 'failed') {
+        return 'failed';
+    }
+    return isPersonalAiArResultFromToday(binding) ? 'current' : 'stale';
+}
+
+function buildPersonalAiArStatusChipLabel(binding: PersonalAiArBinding): string {
+    const state = getPersonalAiArResultState(binding);
+    if (state === 'loading') return '刷新中';
+    if (state === 'failed') return '失败';
+    if (state === 'stale') return '旧';
+    return '';
+}
+
+function buildPersonalAiArResultBasisText(binding: PersonalAiArBinding): string {
+    const state = getPersonalAiArResultState(binding);
+    if (state === 'loading') {
+        return '历史结果 · 正在刷新；完成前不是当前事实';
+    }
+    if (state === 'failed') {
+        const reason = clipPersonalAiArStatusText(binding.lastRunError || '未返回可替换文本');
+        return `刷新失败 · 仍显示历史结果：${reason}`;
+    }
+    if (state === 'stale') {
+        return '历史结果 · 今日未确认；不是当前页面事实';
+    }
+    return '今日结果 · 只替换本页展示，不写回原网页';
+}
+
+function buildPersonalAiArToggleBoundaryLabel(enabled: boolean): string {
+    return enabled
+        ? 'AR ON：点击只关闭本页 AR 展示并还原当前 DOM；不删除 binding、不暂停重复 AgentTask、不清历史结果。拖动只改变按钮横向位置。'
+        : 'AR OFF：点击只重新应用本页 AR binding；不创建新 binding、不刷新 AgentTask、不写回原网页。拖动只改变按钮横向位置。';
+}
+
+function buildPersonalAiArEditBoundaryLabel(binding: PersonalAiArBinding): string {
+    const repeatDetail = binding.linkedAgentTaskId
+        ? `；当前绑定 AgentTask ${binding.linkedAgentTaskId}，只有保存编辑器里的取消重复才会暂停它`
+        : '；当前没有绑定重复 AgentTask';
+    return `编辑 AR 数据：只打开当前 binding 的编辑器，不会立即保存、刷新、删除、暂停任务或改写原网页${repeatDetail}。`;
+}
+
+function buildPersonalAiArRefreshBoundaryLabel(binding: PersonalAiArBinding): string {
+    if (!binding.agentTaskPrompt?.trim()) {
+        return '刷新 AR 数据不可用：当前 binding 没有 Agent 任务描述；点击不会发送请求、删除 binding 或改写原网页。';
+    }
+    return '刷新 AR 数据：请求 Memory Service / OpenClaw 更新这个 binding；完成前继续显示历史结果，不删除 binding、不暂停重复 AgentTask、不写回原网页。';
+}
+
+function buildPersonalAiArHideBoundaryLabel(binding: PersonalAiArBinding): string {
+    const repeatDetail = binding.linkedAgentTaskId
+        ? `，也不会暂停 AgentTask ${binding.linkedAgentTaskId}`
+        : '';
+    return `隐藏本页 AR 展示：只恢复当前页面会话并保留 binding、历史结果${repeatDetail}；要取消重复执行请打开编辑器并保存取消重复。`;
+}
+
+function getPersonalAiArStatusChipStyle(binding: PersonalAiArBinding): string {
+    const state = getPersonalAiArResultState(binding);
+    const palette = state === 'loading'
+        ? { bg: '#f59e0b', color: '#422006' }
+        : state === 'failed'
+            ? { bg: '#dc2626', color: '#ffffff' }
+            : { bg: '#facc15', color: '#422006' };
+    return [
+        'display:inline-flex',
+        'align-items:center',
+        'height:14px',
+        'border-radius:999px',
+        'padding:0 4px',
+        `background:${palette.bg}`,
+        `color:${palette.color}`,
+        'font-size:9px',
+        'font-weight:800',
+        'letter-spacing:0',
+        'white-space:nowrap',
+    ].join(';');
+}
+
+function updatePersonalAiArBadgeStatus(badge: HTMLDivElement, binding: PersonalAiArBinding): void {
+    const chip = badge.querySelector<HTMLElement>('[data-pai-ar-status-chip="true"]');
+    if (!chip) return;
+
+    const label = buildPersonalAiArStatusChipLabel(binding);
+    chip.textContent = label;
+    chip.title = buildPersonalAiArResultBasisText(binding);
+    chip.style.cssText = label ? getPersonalAiArStatusChipStyle(binding) : 'display:none';
+}
+
+function updatePersonalAiArVisualOverlayBasis(overlay: HTMLDivElement, binding: PersonalAiArBinding): void {
+    const basis = overlay.querySelector<HTMLElement>('[data-pai-ar-result-basis="true"]');
+    if (basis) {
+        basis.textContent = buildPersonalAiArResultBasisText(binding);
+    }
+    updatePersonalAiArVisualOverlayAccessibility(overlay, binding);
+}
+
+function updatePersonalAiArVisualOverlayAccessibility(overlay: HTMLDivElement, binding: PersonalAiArBinding): void {
+    const value = binding.lastResult?.text?.trim() || '无展示结果';
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute(
+        'aria-label',
+        `Personal AI AR 视觉叠加：${value}。${buildPersonalAiArResultBasisText(binding)}。不改写原页面媒体。`,
+    );
+}
+
+function updatePersonalAiArAppliedPresentation(bindingId: string): void {
+    const applied = personalAiArAppliedBindings.get(bindingId);
+    if (!applied) return;
+
+    updatePersonalAiArBadgeStatus(applied.badge, applied.binding);
+    if (applied.overlay) {
+        updatePersonalAiArVisualOverlayBasis(applied.overlay, applied.binding);
+    }
+}
+
+function dedupePersonalAiArBindings(bindings: PersonalAiArBinding[]): PersonalAiArBinding[] {
+    const byTarget = new Map<string, { binding: PersonalAiArBinding; index: number; updatedAt: number }>();
+    bindings.forEach((binding, index) => {
+        if (!binding || !binding.id || !binding.urlPattern || !binding.selector) {
+            return;
+        }
+        const key = getPersonalAiArBindingTargetKey(binding);
+        const updatedAt = getPersonalAiArBindingUpdatedAtMs(binding, index);
+        const existing = byTarget.get(key);
+        if (!existing || updatedAt >= existing.updatedAt || index > existing.index) {
+            byTarget.set(key, { binding, index, updatedAt });
+        }
+    });
+    return Array.from(byTarget.values())
+        .sort((a, b) => a.index - b.index)
+        .map(item => item.binding);
+}
+
+function buildPersonalAiArSelector(element: Element): string {
+    if (element.id) {
+        return `#${escapePersonalAiArSelectorPart(element.id)}`;
+    }
+
+    const parts: string[] = [];
+    let current: Element | null = element;
+    while (current && current !== document.body && parts.length < 6) {
+        const tag = current.tagName.toLowerCase();
+        const stableAttr =
+            current.getAttribute('data-testid') ||
+            current.getAttribute('data-id') ||
+            current.getAttribute('aria-label');
+        if (stableAttr) {
+            parts.unshift(`${tag}[${stableAttr === current.getAttribute('aria-label') ? 'aria-label' : stableAttr === current.getAttribute('data-id') ? 'data-id' : 'data-testid'}="${stableAttr.replace(/"/g, '\\"')}"]`);
+            break;
+        }
+
+        const parent = current.parentElement;
+        if (!parent) {
+            parts.unshift(tag);
+            break;
+        }
+
+        const sameTagSiblings = Array.from(parent.children).filter(child => child.tagName === current!.tagName);
+        const nth = sameTagSiblings.length > 1
+            ? `:nth-of-type(${sameTagSiblings.indexOf(current) + 1})`
+            : '';
+        const stableClasses = Array.from(current.classList)
+            .filter(className => !isPersonalAiArTransientClassName(className))
+            .slice(0, 2);
+        const className = stableClasses.length > 0
+            ? `.${stableClasses.map(escapePersonalAiArSelectorPart).join('.')}`
+            : '';
+        parts.unshift(`${tag}${className}${nth}`);
+        current = parent;
+    }
+
+    return parts.join(' > ');
+}
+
+function getPersonalAiArElementText(element: Element): string {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        return element.value.trim();
+    }
+    return (element.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function getPersonalAiArNearbyText(element: Element): string {
+    const parts: string[] = [];
+    let current: Element | null = element;
+    for (let depth = 0; current && depth < 3; depth += 1) {
+        const text = getPersonalAiArElementText(current);
+        if (text) parts.push(text);
+        current = current.parentElement;
+    }
+    return Array.from(new Set(parts)).join(' | ').slice(0, 500);
+}
+
+function isPersonalAiArDomTextReplaceable(element: Element): boolean {
+    const tag = element.tagName.toLowerCase();
+    if (['img', 'canvas', 'video', 'svg', 'picture'].includes(tag)) {
+        return false;
+    }
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        return true;
+    }
+    return getPersonalAiArElementText(element).length <= 500;
+}
+
+async function readPersonalAiArBindings(): Promise<PersonalAiArBinding[]> {
+    const stored = await chrome.storage.local.get([PERSONAL_AI_AR_BINDINGS_KEY]);
+    const raw = stored[PERSONAL_AI_AR_BINDINGS_KEY];
+    return Array.isArray(raw) ? raw : [];
+}
+
+async function writePersonalAiArBindings(bindings: PersonalAiArBinding[]): Promise<void> {
+    await chrome.storage.local.set({ [PERSONAL_AI_AR_BINDINGS_KEY]: dedupePersonalAiArBindings(bindings) });
+}
+
+interface PersonalAiArExecutionRequestOptions {
+    triggerSource?: 'ar_manual' | 'ar_auto_page_open';
+    autoRefreshDate?: string;
+}
+
+function updatePersonalAiArBadgeLoading(bindingId: string): void {
+    const applied = personalAiArAppliedBindings.get(bindingId);
+    const badge = applied?.badge;
+    if (!badge) return;
+
+    const loading = badge.querySelector<HTMLElement>('[data-pai-ar-loading="true"]');
+    if (!loading) return;
+
+    loading.style.display = personalAiArLoadingBindingIds.has(bindingId) ? 'inline-block' : 'none';
+}
+
+function setPersonalAiArBindingLoading(bindingId: string, loading: boolean): void {
+    if (loading) {
+        personalAiArLoadingBindingIds.add(bindingId);
+    } else {
+        personalAiArLoadingBindingIds.delete(bindingId);
+    }
+    updatePersonalAiArBadgeLoading(bindingId);
+    updatePersonalAiArAppliedPresentation(bindingId);
+}
+
+function requestPersonalAiArExecution(
+    binding: PersonalAiArBinding,
+    options: PersonalAiArExecutionRequestOptions = {},
+): void {
+    if (!binding.agentTaskPrompt?.trim()) {
+        return;
+    }
+
+    const triggerSource = options.triggerSource || 'ar_manual';
+    setPersonalAiArBindingLoading(binding.id, true);
+    console.info('[Personal AI AR] request execution', {
+        id: binding.id,
+        urlPattern: binding.urlPattern,
+        selector: binding.selector,
+        triggerSource,
+    });
+
+    void chrome.runtime.sendMessage({
+        type: 'EXECUTE_PERSONAL_AI_AR_BINDING',
+        data: {
+            arBindingId: binding.id,
+            title: binding.sectionLabel || binding.oldValue || 'AR 数据更新',
+            agentTaskPrompt: binding.agentTaskPrompt,
+            notifyTemplate: binding.notifyTemplate || '',
+            urlPattern: binding.urlPattern,
+            selector: binding.selector,
+            oldValue: binding.oldValue,
+            nearbyText: binding.nearbyText,
+            sectionLabel: binding.sectionLabel,
+            lastResultText: binding.lastResult?.text || '',
+            triggerSource,
+            autoRefreshDate: options.autoRefreshDate,
+        },
+    }).then((response) => {
+        if (response?.success === true) {
+            console.info('[Personal AI AR] execution completed', {
+                id: binding.id,
+                replacementText: response.replacementText,
+                queueStatus: response.response?.queueStatus,
+            });
+            if (response.replacementText && isPersonalAiArEnabledForPage()) {
+                applyPersonalAiArBinding({
+                    ...binding,
+                    lastResult: {
+                        text: response.replacementText,
+                        updatedAt: new Date().toISOString(),
+                    },
+                    lastRunStatus: response.response?.queueStatus || 'succeeded',
+                });
+            }
+            return;
+        }
+        if (response && response.success === false) {
+            console.warn('AR 数据执行失败:', response.error || response);
+        }
+    }).catch((error) => {
+        console.warn('AR 数据执行请求失败:', error);
+    }).finally(() => {
+        setPersonalAiArBindingLoading(binding.id, false);
+    });
+}
+
+function matchesPersonalAiArBindingCurrentPage(binding: PersonalAiArBinding): boolean {
+    const currentPageKey = getPersonalAiArPageKey();
+    const bindingPageKey = normalizePersonalAiArUrl(binding.urlPattern);
+    if (!bindingPageKey) {
+        return false;
+    }
+    return bindingPageKey === currentPageKey || currentPageKey.startsWith(bindingPageKey);
+}
+
+function queryPersonalAiArSelector(selector: string): Element | null {
+    if (!selector) return null;
+    try {
+        return document.querySelector(selector);
+    } catch {
+        return null;
+    }
+}
+
+function findPersonalAiArBindingElement(binding: PersonalAiArBinding): Element | null {
+    return queryPersonalAiArSelector(binding.selector) ||
+        queryPersonalAiArSelector(stripPersonalAiArTransientSelectorClasses(binding.selector));
+}
+
+function restorePersonalAiArBinding(bindingId: string): void {
+    const applied = personalAiArAppliedBindings.get(bindingId);
+    if (!applied) return;
+
+    if (applied.displayMode === 'dom_text') {
+        if (applied.element instanceof HTMLInputElement || applied.element instanceof HTMLTextAreaElement) {
+            applied.element.value = applied.originalText;
+        } else {
+            applied.element.textContent = applied.originalText;
+        }
+    }
+    applied.overlay?.remove();
+    applied.badge.remove();
+    personalAiArAppliedBindings.delete(bindingId);
+}
+
+function restoreAllPersonalAiArBindings(): void {
+    Array.from(personalAiArAppliedBindings.keys()).forEach(restorePersonalAiArBinding);
+}
+
+function removePersonalAiArToggle(): void {
+    personalAiArToggle?.remove();
+    personalAiArToggle = null;
+}
+
+function clampPersonalAiArToggleLeft(left: number): number {
+    const width = personalAiArToggle?.offsetWidth || 90;
+    const maxLeft = Math.max(
+        PERSONAL_AI_AR_TOGGLE_EDGE_MARGIN,
+        window.innerWidth - width - PERSONAL_AI_AR_TOGGLE_EDGE_MARGIN,
+    );
+    return Math.min(Math.max(PERSONAL_AI_AR_TOGGLE_EDGE_MARGIN, left), maxLeft);
+}
+
+function positionPersonalAiArToggle(): void {
+    if (!personalAiArToggle) return;
+
+    if (personalAiArToggleLeftPx === null) {
+        personalAiArToggleLeftPx = window.innerWidth
+            - personalAiArToggle.offsetWidth
+            - PERSONAL_AI_AR_TOGGLE_DEFAULT_RIGHT;
+    }
+    personalAiArToggleLeftPx = clampPersonalAiArToggleLeft(personalAiArToggleLeftPx);
+    personalAiArToggle.style.left = `${personalAiArToggleLeftPx}px`;
+}
+
+function togglePersonalAiArForPage(): void {
+    const nextEnabled = !isPersonalAiArEnabledForPage();
+    setPersonalAiArEnabledForPage(nextEnabled);
+    createOrUpdatePersonalAiArToggle();
+    if (nextEnabled) {
+        void applyPersonalAiArBindings();
+    } else {
+        restoreAllPersonalAiArBindings();
+    }
+}
+
+function positionPersonalAiArBadge(badge: HTMLDivElement, element: Element): void {
+    const rect = element.getBoundingClientRect();
+    badge.style.top = `${Math.max(8, rect.top + window.scrollY - 10)}px`;
+    badge.style.left = `${Math.max(8, rect.right + window.scrollX - 18)}px`;
+}
+
+function positionPersonalAiArVisualOverlay(overlay: HTMLDivElement, element: Element): void {
+    const rect = element.getBoundingClientRect();
+    const minWidth = 140;
+    const maxWidth = Math.min(360, Math.max(minWidth, window.innerWidth - 16));
+    const targetWidth = Math.max(minWidth, Math.min(maxWidth, rect.width - 12 || minWidth));
+    const left = Math.min(
+        Math.max(8, rect.left + window.scrollX + 8),
+        Math.max(8, window.scrollX + window.innerWidth - targetWidth - 8),
+    );
+    const top = Math.max(8, rect.top + window.scrollY + 8);
+    overlay.style.width = `${targetWidth}px`;
+    overlay.style.left = `${left}px`;
+    overlay.style.top = `${top}px`;
+}
+
+function updatePersonalAiArVisualOverlayText(overlay: HTMLDivElement, replacementText: string): void {
+    const value = overlay.querySelector<HTMLElement>('[data-pai-ar-visual-value="true"]');
+    if (value) {
+        value.textContent = replacementText;
+    }
+}
+
+function createPersonalAiArVisualOverlay(
+    binding: PersonalAiArBinding,
+    element: Element,
+    replacementText: string,
+): HTMLDivElement {
+    const overlay = document.createElement('div');
+    overlay.className = 'pai-ar-data-visual-overlay';
+    overlay.dataset.paiArVisualOverlay = 'true';
+    overlay.dataset.paiArBindingId = binding.id;
+    overlay.style.cssText = [
+        'position:absolute',
+        'z-index:2147483645',
+        'box-sizing:border-box',
+        'display:flex',
+        'flex-direction:column',
+        'gap:3px',
+        'padding:7px 9px',
+        'border:1px solid rgba(34,197,94,0.55)',
+        'border-radius:6px',
+        'background:rgba(240,253,244,0.96)',
+        'box-shadow:0 8px 24px rgba(15,23,42,0.16)',
+        'color:#14532d',
+        'font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+        'letter-spacing:0',
+        'pointer-events:none',
+        'overflow-wrap:anywhere',
+    ].join(';');
+
+    const label = document.createElement('div');
+    label.textContent = 'Personal AI AR';
+    label.style.cssText = [
+        'font-size:10px',
+        'font-weight:800',
+        'text-transform:uppercase',
+        'color:#166534',
+        'opacity:0.82',
+    ].join(';');
+    overlay.appendChild(label);
+
+    const value = document.createElement('div');
+    value.dataset.paiArVisualValue = 'true';
+    value.textContent = replacementText;
+    value.style.cssText = 'font-size:13px;font-weight:750;color:#052e16';
+    overlay.appendChild(value);
+
+    const boundary = document.createElement('div');
+    boundary.textContent = '视觉叠加，不改写原页面媒体';
+    boundary.style.cssText = 'font-size:10.5px;color:#3f6212';
+
+    const basis = document.createElement('div');
+    basis.dataset.paiArResultBasis = 'true';
+    basis.textContent = buildPersonalAiArResultBasisText(binding);
+    basis.style.cssText = 'font-size:10.5px;color:#166534;font-weight:650';
+    overlay.appendChild(basis);
+
+    overlay.appendChild(boundary);
+
+    document.body.appendChild(overlay);
+    updatePersonalAiArVisualOverlayAccessibility(overlay, binding);
+    positionPersonalAiArVisualOverlay(overlay, element);
+    return overlay;
+}
+
+function createPersonalAiArBadge(binding: PersonalAiArBinding, element: Element): HTMLDivElement {
+    const badge = document.createElement('div');
+    badge.className = 'pai-ar-data-badge';
+    badge.dataset.paiArBindingId = binding.id;
+    badge.style.cssText = [
+        'position:absolute',
+        'z-index:2147483646',
+        'display:flex',
+        'align-items:center',
+        'gap:4px',
+        'padding:2px',
+        'border-radius:999px',
+        'background:rgba(17,24,39,0.92)',
+        'box-shadow:0 4px 12px rgba(0,0,0,0.18)',
+        'color:white',
+        'font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+    ].join(';');
+
+    const icon = document.createElement('img');
+    icon.src = chrome.runtime.getURL('icons/icon32.png');
+    icon.alt = 'Personal AI';
+    icon.style.cssText = 'width:18px;height:18px;display:block;cursor:pointer';
+    icon.title = buildPersonalAiArEditBoundaryLabel(binding);
+    icon.setAttribute('role', 'button');
+    icon.setAttribute('tabindex', '0');
+    icon.setAttribute('aria-label', buildPersonalAiArEditBoundaryLabel(binding));
+    const openEditor = (event: Event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void showPersonalAiArEditor(element, binding);
+    };
+    icon.addEventListener('click', openEditor);
+    icon.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            openEditor(event);
+        }
+    });
+    badge.appendChild(icon);
+
+    const loading = document.createElement('span');
+    loading.dataset.paiArLoading = 'true';
+    loading.title = 'AR 数据刷新中';
+    loading.style.cssText = [
+        'display:none',
+        'width:10px',
+        'height:10px',
+        'border:2px solid rgba(255,255,255,0.35)',
+        'border-top-color:#fff',
+        'border-radius:999px',
+        'animation:pai-ar-spin 0.8s linear infinite',
+    ].join(';');
+    badge.appendChild(loading);
+
+    const statusChip = document.createElement('span');
+    statusChip.dataset.paiArStatusChip = 'true';
+    badge.appendChild(statusChip);
+
+    const actions = document.createElement('span');
+    actions.style.cssText = 'display:none;align-items:center;gap:2px';
+
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.textContent = '↻';
+    refresh.title = buildPersonalAiArRefreshBoundaryLabel(binding);
+    refresh.setAttribute('aria-label', buildPersonalAiArRefreshBoundaryLabel(binding));
+    refresh.style.cssText = 'border:0;background:transparent;color:white;cursor:pointer;font-size:12px;padding:1px 3px';
+    refresh.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestPersonalAiArExecution(binding);
+    });
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.title = buildPersonalAiArHideBoundaryLabel(binding);
+    remove.setAttribute('aria-label', buildPersonalAiArHideBoundaryLabel(binding));
+    remove.style.cssText = 'border:0;background:transparent;color:white;cursor:pointer;font-size:14px;padding:0 4px';
+    remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setPersonalAiArBindingHiddenForPage(binding.id, true);
+        restorePersonalAiArBinding(binding.id);
+    });
+
+    actions.appendChild(refresh);
+    actions.appendChild(remove);
+    badge.appendChild(actions);
+    const showActions = () => {
+        actions.style.display = 'inline-flex';
+    };
+    const hideActions = () => {
+        if (!badge.matches(':focus-within')) {
+            actions.style.display = 'none';
+        }
+    };
+    badge.addEventListener('mouseenter', showActions);
+    badge.addEventListener('mouseleave', () => {
+        hideActions();
+    });
+    badge.addEventListener('focusin', showActions);
+    badge.addEventListener('focusout', () => {
+        window.setTimeout(hideActions, 0);
+    });
+
+    document.body.appendChild(badge);
+    if (!document.getElementById('pai-ar-spin-style')) {
+        const style = document.createElement('style');
+        style.id = 'pai-ar-spin-style';
+        style.textContent = '@keyframes pai-ar-spin{to{transform:rotate(360deg)}}';
+        document.documentElement.appendChild(style);
+    }
+    positionPersonalAiArBadge(badge, element);
+    updatePersonalAiArBadgeLoading(binding.id);
+    updatePersonalAiArBadgeStatus(badge, binding);
+    return badge;
+}
+
+function applyPersonalAiArBinding(binding: PersonalAiArBinding): void {
+    const element = findPersonalAiArBindingElement(binding);
+    if (!element) {
+        return;
+    }
+
+    const replacementText = binding.lastResult?.text?.trim();
+    if (!replacementText) {
+        return;
+    }
+
+    const existing = personalAiArAppliedBindings.get(binding.id);
+    if (existing) {
+        existing.binding = binding;
+        if (existing.displayMode === 'dom_text') {
+            if (existing.element instanceof HTMLInputElement || existing.element instanceof HTMLTextAreaElement) {
+                existing.element.value = replacementText;
+            } else {
+                existing.element.textContent = replacementText;
+            }
+        } else if (existing.overlay) {
+            updatePersonalAiArVisualOverlayText(existing.overlay, replacementText);
+            positionPersonalAiArVisualOverlay(existing.overlay, existing.element);
+            updatePersonalAiArVisualOverlayBasis(existing.overlay, binding);
+        }
+        positionPersonalAiArBadge(existing.badge, existing.element);
+        updatePersonalAiArBadgeLoading(binding.id);
+        updatePersonalAiArBadgeStatus(existing.badge, binding);
+        return;
+    }
+
+    const displayMode = binding.displayMode === 'dom_text' && isPersonalAiArDomTextReplaceable(element)
+        ? 'dom_text'
+        : 'visual_overlay';
+    const originalText = getPersonalAiArElementText(element);
+
+    if (displayMode === 'dom_text') {
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+            element.value = replacementText;
+        } else {
+            element.textContent = replacementText;
+        }
+    }
+
+    const overlay = displayMode === 'visual_overlay'
+        ? createPersonalAiArVisualOverlay(binding, element, replacementText)
+        : undefined;
+    const badge = createPersonalAiArBadge(binding, element);
+    personalAiArAppliedBindings.set(binding.id, {
+        element,
+        originalText,
+        badge,
+        overlay,
+        displayMode,
+        binding,
+    });
+}
+
+function triggerPersonalAiArAutoRefreshes(bindings: PersonalAiArBinding[]): void {
+    if (!isPersonalAiArEnabledForPage()) {
+        return;
+    }
+
+    const todayKey = getPersonalAiArLocalDateKey(new Date());
+    bindings.forEach((binding) => {
+        if (!binding.agentTaskPrompt?.trim()) {
+            return;
+        }
+        if (isPersonalAiArResultFromToday(binding)) {
+            return;
+        }
+        const requestKey = `${binding.id}:${todayKey}`;
+        if (personalAiArAutoRefreshRequestedIds.has(requestKey)) {
+            return;
+        }
+        personalAiArAutoRefreshRequestedIds.add(requestKey);
+        requestPersonalAiArExecution(binding, {
+            triggerSource: 'ar_auto_page_open',
+            autoRefreshDate: todayKey,
+        });
+    });
+}
+
+async function applyPersonalAiArBindings(): Promise<void> {
+    const bindings = dedupePersonalAiArBindings(await readPersonalAiArBindings())
+        .filter(matchesPersonalAiArBindingCurrentPage)
+        .filter(binding => !isPersonalAiArBindingHiddenForPage(binding));
+    if (bindings.length === 0) {
+        restoreAllPersonalAiArBindings();
+        removePersonalAiArToggle();
+        return;
+    }
+
+    if (!personalAiArPageBindingLogged) {
+        personalAiArPageBindingLogged = true;
+        console.info('[Personal AI AR] page bindings loaded', {
+            version: PERSONAL_AI_AR_RUNTIME_VERSION,
+            count: bindings.length,
+            pageKey: getPersonalAiArPageKey(),
+        });
+    }
+
+    const pageBindings = bindings.filter(binding => Boolean(findPersonalAiArBindingElement(binding)));
+    if (pageBindings.length === 0) {
+        restoreAllPersonalAiArBindings();
+        removePersonalAiArToggle();
+        return;
+    }
+
+    createOrUpdatePersonalAiArToggle();
+    if (!isPersonalAiArEnabledForPage()) {
+        restoreAllPersonalAiArBindings();
+        return;
+    }
+
+    pageBindings.forEach(applyPersonalAiArBinding);
+    triggerPersonalAiArAutoRefreshes(pageBindings);
+}
+
+function schedulePersonalAiArBindingsApply(): void {
+    if (personalAiArApplyScheduled) {
+        return;
+    }
+    personalAiArApplyScheduled = true;
+    window.setTimeout(() => {
+        personalAiArApplyScheduled = false;
+        void applyPersonalAiArBindings();
+    }, 120);
+}
+
+function createOrUpdatePersonalAiArToggle(): void {
+    const enabled = isPersonalAiArEnabledForPage();
+    if (!personalAiArToggle) {
+        personalAiArToggle = document.createElement('button');
+        personalAiArToggle.type = 'button';
+        personalAiArToggle.style.cssText = [
+            'position:fixed',
+            'top:0',
+            'right:auto',
+            'z-index:2147483647',
+            'display:flex',
+            'align-items:center',
+            'border:0',
+            'border-radius:0 0 4px 4px',
+            'padding:0',
+            'overflow:hidden',
+            'background:#f8fafc',
+            'box-shadow:0 5px 14px rgba(15,23,42,0.16)',
+            'font:10px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+            'font-weight:700',
+            'cursor:pointer',
+            'user-select:none',
+            'height:18px',
+            'letter-spacing:0',
+        ].join(';');
+        personalAiArToggle.addEventListener('pointerdown', (event) => {
+            if (!personalAiArToggle) return;
+            event.preventDefault();
+            event.stopPropagation();
+            personalAiArToggleDragging = true;
+            personalAiArToggleMoved = false;
+            personalAiArToggleDragStartX = event.clientX;
+            personalAiArToggleDragStartLeft = personalAiArToggle.getBoundingClientRect().left;
+            try {
+                personalAiArToggle.setPointerCapture(event.pointerId);
+            } catch {
+                // Ignore capture failures; pointerup still handles the click path.
+            }
+        });
+        personalAiArToggle.addEventListener('pointermove', (event) => {
+            if (!personalAiArToggleDragging || !personalAiArToggle) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const dx = event.clientX - personalAiArToggleDragStartX;
+            if (Math.abs(dx) >= PERSONAL_AI_AR_TOGGLE_DRAG_THRESHOLD) {
+                personalAiArToggleMoved = true;
+                personalAiArToggleLeftPx = clampPersonalAiArToggleLeft(personalAiArToggleDragStartLeft + dx);
+                personalAiArToggle.style.left = `${personalAiArToggleLeftPx}px`;
+            }
+        });
+        personalAiArToggle.addEventListener('pointerup', (event) => {
+            if (!personalAiArToggle) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const dx = event.clientX - personalAiArToggleDragStartX;
+            const wasDrag = personalAiArToggleMoved || Math.abs(dx) >= PERSONAL_AI_AR_TOGGLE_DRAG_THRESHOLD;
+            personalAiArToggleDragging = false;
+            try {
+                personalAiArToggle.releasePointerCapture(event.pointerId);
+            } catch {
+                // Pointer capture can be absent if the browser already released it.
+            }
+            personalAiArToggleMoved = false;
+            if (!wasDrag) {
+                togglePersonalAiArForPage();
+            }
+        });
+        personalAiArToggle.addEventListener('pointercancel', () => {
+            personalAiArToggleDragging = false;
+            personalAiArToggleMoved = false;
+        });
+        personalAiArToggle.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                togglePersonalAiArForPage();
+            }
+        });
+        document.documentElement.appendChild(personalAiArToggle);
+    }
+
+    personalAiArToggle.setAttribute('aria-label', buildPersonalAiArToggleBoundaryLabel(enabled));
+    personalAiArToggle.title = buildPersonalAiArToggleBoundaryLabel(enabled);
+    personalAiArToggle.innerHTML = '';
+    const label = document.createElement('span');
+    label.style.cssText = 'display:flex;align-items:center;gap:3px;height:18px;padding:0 5px 0 4px;color:#111827;background:#f8fafc';
+    const icon = document.createElement('img');
+    icon.src = chrome.runtime.getURL('icons/icon48.png');
+    icon.alt = 'Personal AI';
+    icon.style.cssText = 'width:12px;height:12px;display:block;flex:none';
+    const labelText = document.createElement('span');
+    labelText.textContent = 'AR';
+    label.appendChild(icon);
+    label.appendChild(labelText);
+    const state = document.createElement('span');
+    state.textContent = enabled ? 'ON' : 'OFF';
+    state.style.cssText = [
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
+        'height:18px',
+        'min-width:24px',
+        'padding:0 5px',
+        'color:#fff',
+        `background:${enabled ? '#16a34a' : '#64748b'}`,
+    ].join(';');
+    personalAiArToggle.appendChild(label);
+    personalAiArToggle.appendChild(state);
+    positionPersonalAiArToggle();
+}
+
+function createPersonalAiArField(labelText: string, child: HTMLElement, hint?: string): HTMLDivElement {
+    const group = document.createElement('div');
+    group.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-bottom:12px';
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    label.style.cssText = 'font-weight:600;color:#111827;font-size:13px';
+    group.appendChild(label);
+    group.appendChild(child);
+    if (hint) {
+        const hintElement = document.createElement('small');
+        hintElement.textContent = hint;
+        hintElement.style.cssText = 'color:#6b7280;line-height:1.4';
+        group.appendChild(hintElement);
+    }
+    return group;
+}
+
+function updatePersonalAiArRepeatReceipt(
+    receipt: HTMLElement,
+    repeatCheckbox: HTMLInputElement,
+    repeatSelect: HTMLSelectElement,
+    existingBinding?: PersonalAiArBinding,
+): void {
+    const linkedAgentTaskId = existingBinding?.linkedAgentTaskId?.trim();
+    repeatSelect.disabled = !repeatCheckbox.checked;
+    repeatSelect.style.opacity = repeatCheckbox.checked ? '1' : '0.55';
+
+    if (linkedAgentTaskId && repeatCheckbox.checked) {
+        receipt.textContent = `重复执行回执：保存会更新 AgentTask ${linkedAgentTaskId} 的任务描述、通知模板和周期；不会立即删除历史结果。`;
+        receipt.style.color = '#166534';
+        return;
+    }
+    if (linkedAgentTaskId && !repeatCheckbox.checked) {
+        receipt.textContent = `取消重复回执：保存会先暂停 AgentTask ${linkedAgentTaskId}，并清空该行的 AR binding id；成功前不会只改本地 binding。`;
+        receipt.style.color = '#92400e';
+        return;
+    }
+    if (repeatCheckbox.checked) {
+        receipt.textContent = '重复执行回执：保存会创建 Scheduled Messages AgentTask 行，并把它绑定到这个 AR 位置。';
+        receipt.style.color = '#166534';
+        return;
+    }
+    receipt.textContent = '本地展示回执：保存为当前网页 AR binding；不写入 Scheduled Messages，不创建重复任务。';
+    receipt.style.color = '#4b5563';
+}
+
+async function showPersonalAiArEditor(target: Element, existingBinding?: PersonalAiArBinding): Promise<void> {
+    const oldValue = existingBinding?.oldValue || getPersonalAiArElementText(target);
+    const nearbyText = existingBinding?.nearbyText || getPersonalAiArNearbyText(target);
+    const selector = existingBinding?.selector || buildPersonalAiArSelector(target);
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(17,24,39,0.38);display:flex;align-items:center;justify-content:center;padding:24px';
+
+    const panel = document.createElement('div');
+    panel.style.cssText = 'width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto;background:white;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,0.28);padding:18px;color:#111827;font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+    modal.appendChild(panel);
+
+    const title = document.createElement('h2');
+    title.textContent = 'AR 数据';
+    title.style.cssText = 'margin:0 0 12px;font-size:18px;line-height:1.3';
+    panel.appendChild(title);
+
+    const preview = document.createElement('div');
+    preview.style.cssText = 'padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;margin-bottom:12px;color:#374151';
+    preview.textContent = oldValue ? `已选择: ${oldValue}` : `已选择 ${target.tagName.toLowerCase()} 元素；没有稳定文本，将以追加/overlay 模式保存。`;
+    panel.appendChild(preview);
+
+    const resultInput = document.createElement('input');
+    resultInput.type = 'text';
+    resultInput.value = existingBinding?.lastResult?.text || oldValue || 'AR 数据待执行';
+    resultInput.placeholder = '这里填写当前先展示的占位结果';
+    resultInput.style.cssText = 'box-sizing:border-box;width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font:inherit';
+    panel.appendChild(createPersonalAiArField('当前展示内容', resultInput, '页面打开时先显示这份历史/占位结果；不会因当天重复打开自动刷新。'));
+
+    const taskInput = document.createElement('textarea');
+    taskInput.value = existingBinding?.agentTaskPrompt || `查找「${oldValue || nearbyText || '此处'}」相关数据，并输出适合替换到这个页面位置的简短结果。`;
+    taskInput.rows = 4;
+    taskInput.style.cssText = 'box-sizing:border-box;width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font:inherit;resize:vertical';
+    panel.appendChild(createPersonalAiArField('需要展示的内容 / Agent 任务', taskInput, '例如：查找 xxx JQL 数据并输出 issues 总数到这里。'));
+
+    const notifyInput = document.createElement('textarea');
+    notifyInput.value = existingBinding?.notifyTemplate || '';
+    notifyInput.rows = 2;
+    notifyInput.placeholder = '可选：用 3 行告诉我结果、风险和下一步';
+    notifyInput.style.cssText = 'box-sizing:border-box;width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font:inherit;resize:vertical';
+    panel.appendChild(createPersonalAiArField('结果按如下模板通知我（可选）', notifyInput));
+
+    const repeatRow = document.createElement('div');
+    repeatRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin:8px 0 14px';
+    const repeatLabel = document.createElement('label');
+    repeatLabel.style.cssText = 'display:flex;align-items:center;gap:6px;font-weight:600';
+    const repeatCheckbox = document.createElement('input');
+    repeatCheckbox.type = 'checkbox';
+    repeatCheckbox.checked = Boolean(existingBinding?.linkedAgentTaskId);
+    repeatLabel.appendChild(repeatCheckbox);
+    repeatLabel.appendChild(document.createTextNode('重复执行'));
+    const repeatSelect = document.createElement('select');
+    repeatSelect.style.cssText = 'border:1px solid #d1d5db;border-radius:6px;padding:7px 9px;font:inherit';
+    [
+        ['week', '每周一次'],
+        ['month', '每月一次'],
+        ['quarter', '每个季度一次'],
+    ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        repeatSelect.appendChild(option);
+    });
+    repeatRow.appendChild(repeatLabel);
+    repeatRow.appendChild(repeatSelect);
+    panel.appendChild(repeatRow);
+
+    const repeatReceipt = document.createElement('div');
+    repeatReceipt.dataset.paiArRepeatReceipt = 'true';
+    repeatReceipt.style.cssText = 'margin:-6px 0 12px;font-size:12px;line-height:1.45';
+    panel.appendChild(repeatReceipt);
+    const refreshRepeatReceipt = () => {
+        updatePersonalAiArRepeatReceipt(repeatReceipt, repeatCheckbox, repeatSelect, existingBinding);
+    };
+    repeatCheckbox.addEventListener('change', refreshRepeatReceipt);
+    refreshRepeatReceipt();
+
+    const status = document.createElement('div');
+    status.style.cssText = 'min-height:18px;color:#6b7280;font-size:12px;margin-bottom:10px';
+    panel.appendChild(status);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.textContent = '取消';
+    cancelButton.style.cssText = 'border:1px solid #d1d5db;background:white;border-radius:6px;padding:8px 12px;cursor:pointer';
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.textContent = '保存';
+    saveButton.style.cssText = 'border:0;background:#111827;color:white;border-radius:6px;padding:8px 14px;cursor:pointer;font-weight:600';
+    actions.appendChild(cancelButton);
+    actions.appendChild(saveButton);
+    panel.appendChild(actions);
+
+    const close = () => modal.remove();
+    cancelButton.addEventListener('click', close);
+
+    saveButton.addEventListener('click', async () => {
+        const bindings = await readPersonalAiArBindings();
+        const pageKey = getPersonalAiArPageKey();
+        const targetKey = `${pageKey}::${stripPersonalAiArTransientSelectorClasses(selector)}`;
+        const sameTargetBinding = existingBinding
+            ? undefined
+            : bindings.find(item => getPersonalAiArBindingTargetKey(item) === targetKey);
+        const bindingId = existingBinding?.id ||
+            sameTargetBinding?.id ||
+            `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const displayMode: PersonalAiArBinding['displayMode'] = isPersonalAiArDomTextReplaceable(target)
+            ? 'dom_text'
+            : 'visual_overlay';
+        let linkedAgentTaskId = existingBinding?.linkedAgentTaskId || sameTargetBinding?.linkedAgentTaskId;
+        saveButton.disabled = true;
+        status.style.color = '#6b7280';
+        status.textContent = repeatCheckbox.checked
+            ? '正在同步重复任务...'
+            : '正在保存本机 AR binding...';
+        const linkedAgentTaskIdToDetach = !repeatCheckbox.checked
+            ? (existingBinding?.linkedAgentTaskId || sameTargetBinding?.linkedAgentTaskId || '')
+            : '';
+
+        if (repeatCheckbox.checked) {
+            const repeatValue = repeatSelect.value;
+            const repeatEvery = repeatValue === 'quarter' ? 3 : 1;
+            const repeatUnit = repeatValue === 'week' ? 'Week' : 'Month';
+            const response = await chrome.runtime.sendMessage({
+                type: 'UPSERT_AGENT_TASK_FROM_AR_BINDING',
+                data: {
+                    arBindingId: bindingId,
+                    agentTaskId: `agent_task_${bindingId}`,
+                    messageId: linkedAgentTaskId,
+                    title: `AR 数据：${oldValue || target.tagName.toLowerCase()}`,
+                    taskPrompt: taskInput.value.trim(),
+                    notifyTemplate: notifyInput.value.trim(),
+                    repeatEvery,
+                    repeatUnit,
+                },
+            });
+            if (!response?.success) {
+                saveButton.disabled = false;
+                status.textContent = response?.error || '重复任务创建失败，AR binding 未保存。';
+                return;
+            }
+            linkedAgentTaskId = response.message?.ID || linkedAgentTaskId;
+        } else if (linkedAgentTaskIdToDetach) {
+            status.textContent = '正在暂停原重复任务...';
+            let response: any;
+            try {
+                response = await chrome.runtime.sendMessage({
+                    type: 'DETACH_AGENT_TASK_FROM_AR_BINDING',
+                    data: {
+                        messageId: linkedAgentTaskIdToDetach,
+                        arBindingId: bindingId,
+                    },
+                });
+            } catch (error) {
+                response = {
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                };
+            }
+            if (!response?.success) {
+                saveButton.disabled = false;
+                status.style.color = '#b91c1c';
+                status.textContent = response?.error || '重复任务暂停失败，AR binding 未改成本地-only。';
+                return;
+            }
+            linkedAgentTaskId = undefined;
+        } else {
+            linkedAgentTaskId = undefined;
+        }
+
+        const previousResult = existingBinding?.lastResult || sameTargetBinding?.lastResult;
+        const displayText =
+            resultInput.value.trim() ||
+            previousResult?.text ||
+            oldValue ||
+            'AR 数据待执行';
+        const nextBinding: PersonalAiArBinding = {
+            id: bindingId,
+            urlPattern: pageKey,
+            selector,
+            tagName: target.tagName.toLowerCase(),
+            sectionLabel: oldValue || target.getAttribute('aria-label') || target.tagName.toLowerCase(),
+            nearbyText,
+            oldValue,
+            displayMode,
+            linkedAgentTaskId,
+            lastResult: {
+                text: displayText,
+                updatedAt: previousResult?.updatedAt || '1970-01-01T00:00:00.000Z',
+            },
+            agentTaskPrompt: taskInput.value.trim(),
+            notifyTemplate: notifyInput.value.trim(),
+        };
+
+        const nextBindings = bindings
+            .filter(item => item.id !== bindingId && getPersonalAiArBindingTargetKey(item) !== targetKey)
+            .concat(nextBinding);
+        await writePersonalAiArBindings(nextBindings);
+        setPersonalAiArBindingHiddenForPage(bindingId, false);
+        restorePersonalAiArBinding(bindingId);
+        close();
+        personalAiArAutoRefreshRequestedIds.add(`${bindingId}:${getPersonalAiArLocalDateKey(new Date())}`);
+        await applyPersonalAiArBindings();
+        requestPersonalAiArExecution(nextBinding);
+    });
+
+    document.documentElement.appendChild(modal);
+    resultInput.focus();
+}
+
+function initPersonalAiArRuntime(): void {
+    (window as any).__personalAiArRuntimeVersion = PERSONAL_AI_AR_RUNTIME_VERSION;
+    document.documentElement.dataset.personalAiArRuntimeVersion = PERSONAL_AI_AR_RUNTIME_VERSION;
+
+    document.addEventListener('contextmenu', (event) => {
+        personalAiArContextTarget = event.target instanceof Element ? event.target : null;
+    }, true);
+
+    chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+        if (request.type !== 'PERSONAL_AI_AR_CONTEXT_MENU') {
+            return false;
+        }
+
+        const selected = window.getSelection()?.toString().trim();
+        let target = personalAiArContextTarget;
+        if (!target && selected) {
+            target = window.getSelection()?.anchorNode?.parentElement || null;
+        }
+        if (!target) {
+            sendResponse({ success: false, error: '未找到可绑定的 DOM 元素' });
+            return false;
+        }
+
+        void showPersonalAiArEditor(target)
+            .then(() => sendResponse({ success: true }))
+            .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        return true;
+    });
+
+    window.addEventListener('scroll', () => {
+        personalAiArAppliedBindings.forEach((applied) => {
+            positionPersonalAiArBadge(applied.badge, applied.element);
+            if (applied.overlay) {
+                positionPersonalAiArVisualOverlay(applied.overlay, applied.element);
+            }
+        });
+    }, { passive: true });
+    window.addEventListener('resize', () => {
+        personalAiArAppliedBindings.forEach((applied) => {
+            positionPersonalAiArBadge(applied.badge, applied.element);
+            if (applied.overlay) {
+                positionPersonalAiArVisualOverlay(applied.overlay, applied.element);
+            }
+        });
+        positionPersonalAiArToggle();
+    });
+
+    if (chrome.storage?.onChanged?.addListener) {
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName === 'local' && changes[PERSONAL_AI_AR_BINDINGS_KEY]) {
+                schedulePersonalAiArBindingsApply();
+            }
+        });
+    }
+
+    const observerRoot = document.body || document.documentElement;
+    if (observerRoot) {
+        const observer = new MutationObserver((mutations) => {
+            const shouldReapply = mutations.some((mutation) => {
+                const target = mutation.target;
+                if (!(target instanceof Element)) {
+                    return true;
+                }
+                return !target.closest('.pai-ar-data-badge') &&
+                    !target.closest('.pai-ar-data-visual-overlay') &&
+                    target !== personalAiArToggle;
+            });
+            if (shouldReapply) {
+                schedulePersonalAiArBindingsApply();
+            }
+        });
+        observer.observe(observerRoot, {
+            attributes: true,
+            attributeFilter: ['class', 'id', 'style', 'aria-label', 'data-id', 'data-testid'],
+            childList: true,
+            subtree: true,
+        });
+    }
+
+    void applyPersonalAiArBindings();
+}
+
 try {
     new WebIntelligenceContentScript();
+    initPersonalAiArRuntime();
 } catch (error) {
     console.error('智能网页分析启动失败:', error);
 }

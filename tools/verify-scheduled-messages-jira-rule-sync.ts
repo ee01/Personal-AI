@@ -19,6 +19,10 @@ assert.ok(
   'JiraRuleUpdater should allow callers to suppress intermediate Sheet writes',
 );
 assert.ok(
+  updaterSource.includes('googleAuthToken?: string | null'),
+  'JiraRuleUpdater should accept the interactive Google token from manual upgrade flows',
+);
+assert.ok(
   updaterSource.includes('updatedConfig?: SheetConfig'),
   'JiraRuleUpdater should return the updated config metadata to callers',
 );
@@ -33,6 +37,19 @@ assert.ok(
 assert.ok(
   updaterSource.includes('const shouldSyncConfigToSheet = options.syncConfigToSheet ?? true'),
   'JiraRuleUpdater should keep Sheet persistence enabled by default',
+);
+assert.ok(
+  updaterSource.includes('await this.syncConfigToSheet(options.googleAuthToken)'),
+  'JiraRuleUpdater should wait for Sheet Config sync after updating rules',
+);
+assert.equal(
+  updaterSource.includes('this.syncConfigToSheet().catch'),
+  false,
+  'JiraRuleUpdater should not hide Jira Rule Config sync failures in a fire-and-forget write',
+);
+assert.ok(
+  updaterSource.includes('const sheetConfig = await syncService.readConfigFromSheet(currentConfig.sheetId)'),
+  'JiraRuleUpdater should merge with the latest Sheet Config before writing rule metadata',
 );
 assert.ok(
   updaterSource.includes('updatedConfig: this.config ? normalizeSheetConfig(this.config) : undefined'),

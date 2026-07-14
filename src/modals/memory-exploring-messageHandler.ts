@@ -429,6 +429,21 @@ const messageHandlers: Record<string, MessageHandler> = {
     if (testMeetingsFixture) {
       const limit = Math.min(Math.max(Number(request.limit ?? 50), 1), 200);
       const offset = Math.max(Number(request.offset ?? 0), 0);
+      const failOffsets = Array.isArray(testMeetingsFixture.failOffsets)
+        ? testMeetingsFixture.failOffsets.map((value: unknown) =>
+            Number(value),
+          )
+        : [];
+      if (failOffsets.includes(offset)) {
+        return {
+          success: false,
+          error:
+            testMeetingsFixture.failMessage ||
+            '测试夹具模拟会议归档读取失败',
+          data: { items: [], total: 0, limit, offset },
+          total: 0,
+        };
+      }
       const sourceItems = Array.isArray(testMeetingsFixture.items)
         ? filterMeetingFixtureItems(testMeetingsFixture.items, query, status)
         : [];

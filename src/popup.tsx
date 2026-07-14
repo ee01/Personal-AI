@@ -107,6 +107,7 @@ interface DigestQueueStatusSummary {
   totalItems: number;
   dueItems: number;
   nextReleaseAt?: string;
+  checkedAt?: string;
   tasks?: DigestQueueTaskSnapshot[];
 }
 
@@ -139,6 +140,7 @@ interface DigestQueueStatusUi {
   totalLine: string;
   dueLine: string;
   nextLine?: string;
+  snapshotLine?: string;
   dueReceiptLine?: string;
   taskLines: string[];
   boundaryLine: string;
@@ -179,7 +181,20 @@ interface TaskSchedulerStatusRefreshReceipt {
   disabledAlarmsCleared: number;
   failedRepairs: number;
   queueStatusUnavailableCount?: number;
+  alarmCalibrations?: TaskSchedulerAlarmCalibration[];
   refreshOnly: true;
+}
+
+interface TaskSchedulerAlarmCalibration {
+  taskId: string;
+  taskName: string;
+  action:
+    | 'created'
+    | 'updated'
+    | 'disabled_cleared'
+    | 'orphaned_cleared'
+    | 'failed';
+  detail?: string;
 }
 
 interface TaskSchedulerRunRecord {
@@ -222,6 +237,12 @@ interface TaskSchedulerPendingActionReceipt {
   nextAction: string;
 }
 
+interface TaskSchedulerHeaderPendingReceipt {
+  label: string;
+  detail: string;
+  boundary: string;
+}
+
 type TaskSchedulerPendingAction =
   | 'toggle-enable'
   | 'toggle-disable'
@@ -233,6 +254,9 @@ type MeetingPilotNotice = {
   message: string;
   action?: 'options';
 };
+
+const MEETING_PILOT_LOCAL_CAPTURE_BOUNDARY =
+  '这是本机 Chrome tab capture 授权请求；提交中尚未确认录制开始，也不会通知参会者、发送会议内容、创建纪要、写入外部任务，或代表你取得录制同意。';
 
 const TASK_CATEGORY_LABELS: Record<UiLanguage, Record<string, string>> = {
   'zh-CN': {
@@ -286,6 +310,7 @@ const TASK_ENGLISH_DISPLAY_TEXT: Record<
   },
 };
 const TASK_ATTENTION_SUMMARY_LIMIT = 3;
+const TASK_COLLAPSED_ATTENTION_PREVIEW_LIMIT = 2;
 
 function isEnglishUi(language: UiLanguage): boolean {
   return language === 'en-US';
@@ -425,7 +450,55 @@ function buildDigestQueueStatusUi(
     };
   }
 
-  if (!summary || summary.totalItems <= 0) {
+  if (summary && summary.totalItems <= 0) {
+    const fallback = fallbackSummary?.trim();
+    const heading = isEnglish ? 'Local digest queue' : '本地摘要队列';
+    const totalLine = isEnglish
+      ? 'Current local queue is empty'
+      : '当前本地队列为空';
+    const dueLine = isEnglish ? 'No items due now' : '没有到期条目';
+    const snapshotLine = summary.checkedAt
+      ? isEnglish
+        ? `Queue snapshot ${formatTaskTime(
+            new Date(summary.checkedAt).getTime(),
+            language,
+          )}; separate from the latest background run result.`
+        : `队列快照 ${formatTaskTime(
+            new Date(summary.checkedAt).getTime(),
+            language,
+          )}；独立于最近一次后台运行结果。`
+      : undefined;
+    const taskLines = fallback
+      ? [
+          isEnglish
+            ? `Latest run record: ${fallback}`
+            : `最近运行记录：${fallback}`,
+        ]
+      : [];
+    const boundaryLine = isEnglish
+      ? 'Current snapshot only: there are no local delayed digest items queued; viewing or refreshing does not send now, write to Memory Service, or confirm notifications.'
+      : '当前快照：本机没有等待释放的本地摘要；查看或刷新不立即发送、不写入 Memory Service、不确认通知。';
+    const titleParts = [
+      heading,
+      totalLine,
+      dueLine,
+      snapshotLine,
+      ...taskLines,
+      boundaryLine,
+    ].filter(Boolean);
+
+    return {
+      heading,
+      totalLine,
+      dueLine,
+      snapshotLine,
+      taskLines,
+      boundaryLine,
+      title: titleParts.join(' · '),
+    };
+  }
+
+  if (!summary) {
     const fallback = fallbackSummary?.trim();
     return fallback
       ? {
@@ -465,6 +538,17 @@ function buildDigestQueueStatusUi(
           language,
         )}`
     : undefined;
+  const snapshotLine = summary.checkedAt
+    ? isEnglish
+      ? `Queue snapshot ${formatTaskTime(
+          new Date(summary.checkedAt).getTime(),
+          language,
+        )}; separate from the latest background run result.`
+      : `队列快照 ${formatTaskTime(
+          new Date(summary.checkedAt).getTime(),
+          language,
+        )}；独立于最近一次后台运行结果。`
+    : undefined;
   const taskLines = (summary.tasks || [])
     .map((task) => formatDigestQueueTaskSummaryForUi(task, language))
     .filter(Boolean);
@@ -489,6 +573,7 @@ function buildDigestQueueStatusUi(
     totalLine,
     dueLine,
     nextLine,
+    snapshotLine,
     ...taskLines,
     dueReceiptLine,
     boundaryLine,
@@ -499,11 +584,67 @@ function buildDigestQueueStatusUi(
     totalLine,
     dueLine,
     nextLine,
+    snapshotLine,
     dueReceiptLine,
     taskLines,
     boundaryLine,
     title: titleParts.join(isEnglish ? ' · ' : ' · '),
   };
+}
+
+function isDigestQueueProcessTask(task: TaskSchedulerTask): boolean {
+  return task.id === 'digest_queue_process';
+}
+
+function formatDigestQueueRunBoundary(
+  task: TaskSchedulerTask,
+  isBusy: boolean,
+  language: UiLanguage = 'zh-CN',
+): string | null {
+  if (!isDigestQueueProcessTask(task)) {
+    return null;
+  }
+
+  const isEnglish = isEnglishUi(language);
+  const statusError = task.currentQueueStatusError?.trim();
+  const summary = task.currentQueueStatus;
+
+  if (isBusy || task.isExecuting) {
+    return isEnglish
+      ? 'Local digest queue run is already in progress; another click is recorded as skipped, not as a second digest release.'
+      : '本地摘要队列正在执行；重复点击只会记录为跳过，不会启动第二次摘要释放。';
+  }
+
+  if (statusError) {
+    return isEnglish
+      ? `Local digest status is not confirmed (${statusError}); Run now will re-read the local queue and try to release due digest items once. Send, retain, or failure outcome is only confirmed by this run receipt; it does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule.`
+      : `本地摘要状态未确认（${statusError}）；立即执行会重新读取本机队列并尝试释放到期摘要一次。是否发送、保留或失败只以本次运行回执为准；不会写入 Memory Service、确认通知、清空历史或改变自动排程。`;
+  }
+
+  if (!summary) {
+    return isEnglish
+      ? 'Local digest snapshot is unavailable; Run now will initialize the local queue and process due digest items once. The run receipt is the source of truth; it does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule.'
+      : '当前没有本地摘要快照；立即执行会初始化本机队列并处理到期摘要一次。结果以运行回执为准；不会写入 Memory Service、确认通知、清空历史或改变自动排程。';
+  }
+
+  const totalItems = Math.max(0, summary.totalItems || 0);
+  const dueItems = Math.max(0, summary.dueItems || 0);
+
+  if (totalItems <= 0) {
+    return isEnglish
+      ? 'Current local digest queue is empty; Run now only checks the queue and does not send an empty digest. It does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule.'
+      : '当前本地摘要队列为空；立即执行只检查队列，不会发送空摘要。不会写入 Memory Service、确认通知、清空历史或改变自动排程。';
+  }
+
+  if (dueItems > 0) {
+    return isEnglish
+      ? `Current snapshot has ${totalItems} local digest item(s), ${dueItems} in the release window; Run now processes due digest items once and may send them through the configured channel. Future items remain queued locally. It does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule.`
+      : `当前快照有 ${totalItems} 条本地摘要，${dueItems} 条已到释放窗口；立即执行会处理到期摘要一次，并可能发送到配置渠道。未到期条目继续留在本机队列；不会写入 Memory Service、确认通知、清空历史或改变自动排程。`;
+  }
+
+  return isEnglish
+    ? `Current snapshot has ${totalItems} local digest item(s), none due yet; Run now only checks the queue and will not send future digest items early. Items remain queued locally. It does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule.`
+    : `当前快照有 ${totalItems} 条本地摘要，暂无到期条目；立即执行只检查队列，不会提前发送未到期摘要。条目继续留在本机队列；不会写入 Memory Service、确认通知、清空历史或改变自动排程。`;
 }
 
 function formatDigestQueueTaskSummaryForUi(
@@ -781,6 +922,44 @@ function buildTaskSchedulerPendingActionReceipt(
   };
 }
 
+function buildTaskSchedulerHeaderTogglePendingReceipt({
+  action,
+  task,
+  language,
+}: {
+  action: 'toggle-enable' | 'toggle-disable';
+  task?: TaskSchedulerTask;
+  language: UiLanguage;
+}): TaskSchedulerHeaderPendingReceipt {
+  const isEnglish = isEnglishUi(language);
+  const isEnable = action === 'toggle-enable';
+  const displayName = task
+    ? getTaskDisplayName(task, language)
+    : isEnglish
+    ? 'Background message analysis'
+    : '静默消息分析';
+
+  return {
+    label: isEnglish
+      ? isEnable
+        ? 'Schedule enable pending'
+        : 'Schedule pause pending'
+      : isEnable
+      ? '排程启用提交中'
+      : '排程停用提交中',
+    detail: isEnglish
+      ? `${displayName} still reflects the last confirmed state; the background has not confirmed ${
+          isEnable ? 'the enabled state or next run time' : 'the paused state'
+        } yet.`
+      : `${displayName} 仍显示上次确认状态；后台尚未确认${
+          isEnable ? '启用和下一次执行时间' : '停用'
+        }。`,
+    boundary: isEnglish
+      ? 'It has not run the task, confirmed a Chrome alarm, updated the next run time, or cleared run history.'
+      : '尚未立即执行任务、确认 Chrome alarm、更新下一次执行时间或清空运行历史。',
+  };
+}
+
 function formatTaskSchedulerRefreshReceipt(
   receipt: TaskSchedulerStatusRefreshReceipt | null,
   language: UiLanguage,
@@ -839,10 +1018,69 @@ function formatTaskSchedulerRefreshReceipt(
         ? ` ${queueStatusUnavailableCount} queue detail not confirmed; see task rows.`
         : ` ${queueStatusUnavailableCount} 个队列明细未确认，详见任务行。`
       : '';
+  const calibrationDetail = formatTaskSchedulerAlarmCalibrations(
+    receipt,
+    language,
+  );
 
   return isEnglish
-    ? `Refresh receipt: checked ${receipt.checkedTaskCount} tasks, ${receipt.enabledTaskCount} enabled schedules. ${repairDetail}${failureDetail}${queueStatusDetail} Refresh only reads status and calibrates alarms; it did not run tasks, enable or pause tasks, or clear run history.`
-    : `刷新回执：已核对 ${receipt.checkedTaskCount} 个任务，${receipt.enabledTaskCount} 个启用排程。${repairDetail}${failureDetail}${queueStatusDetail} 刷新只读取状态并校准排程，没有立即执行任务、启用或停用任务，也没有清空运行历史。`;
+    ? `Refresh receipt: checked ${receipt.checkedTaskCount} tasks, ${receipt.enabledTaskCount} enabled schedules. ${repairDetail}${failureDetail}${queueStatusDetail}${calibrationDetail} Refresh only reads status and calibrates alarms; it did not run tasks, enable or pause tasks, or clear run history.`
+    : `刷新回执：已核对 ${receipt.checkedTaskCount} 个任务，${receipt.enabledTaskCount} 个启用排程。${repairDetail}${failureDetail}${queueStatusDetail}${calibrationDetail} 刷新只读取状态并校准排程，没有立即执行任务、启用或停用任务，也没有清空运行历史。`;
+}
+
+function formatTaskSchedulerAlarmCalibrations(
+  receipt: TaskSchedulerStatusRefreshReceipt,
+  language: UiLanguage,
+): string {
+  const calibrations = Array.isArray(receipt.alarmCalibrations)
+    ? receipt.alarmCalibrations
+    : [];
+  if (calibrations.length === 0) {
+    return '';
+  }
+
+  const isEnglish = isEnglishUi(language);
+  const visible = calibrations.slice(0, 3).map((item) => {
+    const actionLabel = formatTaskSchedulerAlarmCalibrationAction(
+      item.action,
+      language,
+    );
+    const detail = item.detail ? ` (${item.detail})` : '';
+    return isEnglish
+      ? `${actionLabel} ${item.taskName}${detail}`
+      : `${actionLabel}${item.taskName}${detail}`;
+  });
+  const hiddenCount = calibrations.length - visible.length;
+  const more =
+    hiddenCount > 0
+      ? isEnglish
+        ? `, ${hiddenCount} more`
+        : `，另 ${hiddenCount} 项`
+      : '';
+
+  return isEnglish
+    ? ` Calibrated this refresh: ${visible.join('; ')}${more}.`
+    : ` 本次校准：${visible.join('；')}${more}。`;
+}
+
+function formatTaskSchedulerAlarmCalibrationAction(
+  action: TaskSchedulerAlarmCalibration['action'],
+  language: UiLanguage,
+): string {
+  const isEnglish = isEnglishUi(language);
+  if (action === 'created') {
+    return isEnglish ? 'created alarm for' : '补齐 ';
+  }
+  if (action === 'updated') {
+    return isEnglish ? 'rescheduled' : '重排 ';
+  }
+  if (action === 'disabled_cleared') {
+    return isEnglish ? 'cleared disabled alarm for' : '清理已停用 ';
+  }
+  if (action === 'orphaned_cleared') {
+    return isEnglish ? 'cleared leftover alarm' : '清理残留 ';
+  }
+  return isEnglish ? 'repair failed for' : '修复失败 ';
 }
 
 function formatTaskResult(
@@ -1442,6 +1680,17 @@ function formatTaskActionBoundary(
       : '操作范围：等待当前执行；重复触发会记录为跳过，不会当作新失败。';
   }
 
+  const digestQueueBoundary = formatDigestQueueRunBoundary(
+    task,
+    false,
+    language,
+  );
+  if (digestQueueBoundary) {
+    return isEnglish
+      ? `Action scope: ${digestQueueBoundary} The switch only changes future scheduling.`
+      : `操作范围：${digestQueueBoundary} 开关只改变后续排程。`;
+  }
+
   if (hasTaskScheduleWarning(task)) {
     if (task.scheduleHealth === 'overdue') {
       return isEnglish
@@ -1492,23 +1741,108 @@ function getTaskRunButtonTitle(
   isBusy: boolean,
   language: UiLanguage = 'zh-CN',
 ): string {
+  const digestQueueBoundary = formatDigestQueueRunBoundary(
+    task,
+    isBusy,
+    language,
+  );
+  if (digestQueueBoundary) {
+    return digestQueueBoundary;
+  }
+
+  const taskName = getTaskDisplayName(task, language);
   if (isBusy || task.isExecuting) {
-    return isEnglishUi(language) ? 'Running' : '正在执行';
+    return isEnglishUi(language)
+      ? `${taskName} is already running; wait for it to finish. Another trigger would be recorded as skipped, not as a new failure.`
+      : `${taskName} 正在执行，等待完成后再触发；重复触发只会记录为跳过，不会当作新失败。`;
   }
   if (hasTaskScheduleWarning(task)) {
     return isEnglishUi(language)
-      ? 'Run once now without repairing the schedule'
-      : '立即执行一次，不会修复排程';
+      ? `Run ${taskName} once now. This does not repair the Chrome schedule, clear the schedule issue, or clear run history.`
+      : `立即执行 ${taskName} 一次；不会修复 Chrome 排程、清除排程异常或清空运行历史。`;
   }
   if (task.lastSuccess === false) {
-    return isEnglishUi(language) ? 'Retry now' : '立即重试';
+    return isEnglishUi(language)
+      ? `Retry ${taskName} once now. This does not clear failure history or change the automatic schedule.`
+      : `立即重试 ${taskName} 一次；不会清空失败历史或改变自动排程。`;
   }
   if (!task.enabled) {
     return isEnglishUi(language)
-      ? 'Run once manually without enabling the schedule'
-      : '手动执行一次，不启用排程';
+      ? `Run ${taskName} once manually. The task stays disabled afterward.`
+      : `手动执行 ${taskName} 一次；完成后任务仍保持停用。`;
   }
-  return isEnglishUi(language) ? 'Run now' : '立即执行';
+  return isEnglishUi(language)
+    ? `Run ${taskName} once now. The automatic schedule stays enabled and run history is kept.`
+    : `立即执行 ${taskName} 一次；自动排程仍保持启用，运行历史会保留。`;
+}
+
+function getTaskRunButtonAriaLabel(
+  task: TaskSchedulerTask,
+  isBusy: boolean,
+  language: UiLanguage = 'zh-CN',
+): string {
+  return getTaskRunButtonTitle(task, isBusy, language);
+}
+
+function getTaskToggleButtonTitle(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  const taskName = getTaskDisplayName(task, language);
+  if (task.enabled) {
+    return isEnglishUi(language)
+      ? `Pause ${taskName} schedule. This stops future automatic Chrome alarms, keeps run history, and does not run the task.`
+      : `停用 ${taskName} 排程；只停止后续自动 Chrome alarm，保留运行历史，不会立即执行任务。`;
+  }
+  return isEnglishUi(language)
+    ? `Enable ${taskName} schedule. This restores future automatic Chrome alarms, but does not run the task now or clear history.`
+    : `启用 ${taskName} 排程；只恢复后续自动 Chrome alarm，不会立即执行任务或清空历史。`;
+}
+
+function getTaskToggleButtonAriaLabel(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  return getTaskToggleButtonTitle(task, language);
+}
+
+function getTaskRepairButtonTitle(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  const taskName = getTaskDisplayName(task, language);
+  if (task.scheduleHealth === 'repair_failed') {
+    return isEnglishUi(language)
+      ? `Retry repairing ${taskName} schedule. This only recreates the Chrome alarm; it does not run the task or clear past failures.`
+      : `重试修复 ${taskName} 排程；只重建 Chrome alarm，不会立即执行任务或清除历史失败。`;
+  }
+  return isEnglishUi(language)
+    ? `Repair ${taskName} schedule. This only recreates or calibrates the Chrome alarm; Run now is a separate one-time action.`
+    : `修复 ${taskName} 排程；只重建或校准 Chrome alarm，立即执行是另一项一次性操作。`;
+}
+
+function getTaskRepairButtonAriaLabel(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  return getTaskRepairButtonTitle(task, language);
+}
+
+function getTaskPauseButtonTitle(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  const taskName = getTaskDisplayName(task, language);
+  return isEnglishUi(language)
+    ? `Pause ${taskName} schedule after repeated failures. This keeps run history and leaves one-time manual run available.`
+    : `因连续失败暂停 ${taskName} 排程；保留运行历史，仍可手动执行一次。`;
+}
+
+function getTaskPauseButtonAriaLabel(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  return getTaskPauseButtonTitle(task, language);
 }
 
 function formatTaskListEmptyState(
@@ -1531,11 +1865,13 @@ function formatTaskSchedulerNextStep(
 ): {
   tone: 'executing' | 'warning' | 'failed' | 'skipped';
   message: string;
+  boundary: string;
 } | null {
   if (!task) {
     return null;
   }
 
+  const boundary = formatTaskSchedulerNextStepBoundary(task, language);
   const receipt = formatTaskStatusReceipt(task, language);
   if (
     receipt &&
@@ -1550,6 +1886,7 @@ function formatTaskSchedulerNextStep(
       message: isEnglishUi(language)
         ? `${taskName} ${receipt.label}: ${receipt.nextAction}.`
         : `${taskName} ${receipt.label}：${receipt.nextAction}。`,
+      boundary,
     };
   }
 
@@ -1561,6 +1898,7 @@ function formatTaskSchedulerNextStep(
       message: isEnglishUi(language)
         ? `${taskName} is running. Wait for it to finish before starting another action.`
         : `${taskName} 正在执行，等待完成后再触发新操作。`,
+      boundary,
     };
   }
   if (statusKind === 'warning') {
@@ -1570,6 +1908,7 @@ function formatTaskSchedulerNextStep(
         message: isEnglishUi(language)
           ? `${taskName} is overdue. Run it once now, then reschedule the next run.`
           : `${taskName} 排程逾期，先立即执行一次，再重排下一次。`,
+        boundary,
       };
     }
     if (task.scheduleHealth === 'repair_failed') {
@@ -1578,6 +1917,7 @@ function formatTaskSchedulerNextStep(
         message: isEnglishUi(language)
           ? `${taskName} schedule repair failed. Keep the old schedule and retry later.`
           : `${taskName} 排程修复失败，保留旧排程并稍后重试。`,
+        boundary,
       };
     }
     return {
@@ -1585,6 +1925,7 @@ function formatTaskSchedulerNextStep(
       message: isEnglishUi(language)
         ? `${taskName} has a schedule issue. Reschedule the Chrome alarm first.`
         : `${taskName} 排程异常，优先点击重排恢复 Chrome alarm。`,
+      boundary,
     };
   }
   if (statusKind === 'failed') {
@@ -1595,6 +1936,7 @@ function formatTaskSchedulerNextStep(
         message: isEnglishUi(language)
           ? `${taskName} failed ${failureStreak} times in a row. Check service config or network before retrying.`
           : `${taskName} 连续失败 ${failureStreak} 次，先检查服务配置或网络，再重试。`,
+        boundary,
       };
     }
     return {
@@ -1602,6 +1944,7 @@ function formatTaskSchedulerNextStep(
       message: isEnglishUi(language)
         ? `${taskName} failed last time. Retry once; check service status if it fails again.`
         : `${taskName} 上次失败，可重试一次；重复失败先查服务状态。`,
+      boundary,
     };
   }
   if (statusKind === 'skipped') {
@@ -1610,9 +1953,100 @@ function formatTaskSchedulerNextStep(
       message: isEnglishUi(language)
         ? `${taskName} was skipped recently. Retry after the current run finishes.`
         : `${taskName} 最近被跳过，等待当前执行完成后再重试。`,
+      boundary,
     };
   }
   return null;
+}
+
+function formatTaskSchedulerNextStepBoundary(
+  task: TaskSchedulerTask,
+  language: UiLanguage = 'zh-CN',
+): string {
+  const isEnglish = isEnglishUi(language);
+  const statusKind = getTaskStatusKind(task);
+
+  if (statusKind === 'executing') {
+    return isEnglish
+      ? 'This next-step hint only explains the current run; it does not start another task, cancel the run, change the schedule, or clear history.'
+      : '这条下一步提示只解释当前执行；不会开始新任务、取消当前任务、改变排程或清空运行历史。';
+  }
+
+  if (statusKind === 'warning') {
+    if (task.scheduleHealth === 'overdue') {
+      return isEnglish
+        ? 'This hint does not run or reschedule the task automatically; use the row buttons separately and wait for background confirmation.'
+        : '这条提示不会自动立即执行或重排；需要在任务行分别点击立即执行或重排，并等待后台确认。';
+    }
+    if (task.scheduleHealth === 'repair_failed') {
+      return isEnglish
+        ? 'This hint does not clear the repair failure or old schedule; retrying repair only rebuilds the Chrome alarm, not the task run or history.'
+        : '这条提示不会清除修复失败或旧排程；重试重排只会重建 Chrome alarm，不会执行任务或清空历史。';
+    }
+    return isEnglish
+      ? 'This hint does not repair Chrome alarms automatically; use the row repair button and wait for the refreshed status.'
+      : '这条提示不会自动修复 Chrome alarm；需要在任务行点击重排并等待刷新确认。';
+  }
+
+  if (statusKind === 'failed') {
+    if (shouldRecommendTaskPause(task)) {
+      return isEnglish
+        ? 'This hint does not pause or retry automatically; pause and one-time run still require row actions, and run history is kept.'
+        : '这条提示不会自动暂停或重试；暂停和立即执行仍需在任务行触发，运行历史会保留。';
+    }
+    return isEnglish
+      ? 'This hint does not retry the task or clear the failure; use Run once to retry while keeping schedule and history intact.'
+      : '这条提示不会自动重试或清除失败；需要点击立即执行重试，排程和历史都会保留。';
+  }
+
+  if (statusKind === 'skipped') {
+    return isEnglish
+      ? 'This hint does not rerun the task automatically; the skip keeps the last success intact until conditions recover.'
+      : '这条提示不会自动重跑；跳过不会覆盖最近成功，需等条件恢复后再手动执行。';
+  }
+
+  return isEnglish
+    ? 'This hint only explains current status; task changes still require an explicit row action.'
+    : '这条提示只解释当前状态；真正的任务变更仍需要点击任务行操作。';
+}
+
+function formatTaskSchedulerCollapsedAttentionPreview(
+  tasks: TaskSchedulerTask[],
+  language: UiLanguage = 'zh-CN',
+): string {
+  const attentionTasks = tasks
+    .filter(taskNeedsAttention)
+    .map((task, index) => ({ task, index }))
+    .sort(
+      (left, right) =>
+        getTaskPrimaryAttentionRank(left.task) -
+          getTaskPrimaryAttentionRank(right.task) || left.index - right.index,
+    )
+    .map(({ task }) => task);
+
+  if (attentionTasks.length === 0) {
+    return '';
+  }
+
+  const isEnglish = isEnglishUi(language);
+  const visible = attentionTasks
+    .slice(0, TASK_COLLAPSED_ATTENTION_PREVIEW_LIMIT)
+    .map((task) => {
+      const name = getTaskDisplayName(task, language);
+      const status = formatTaskAttentionStatusLabel(task, language);
+      return `${name} · ${status}`;
+    });
+  const hiddenCount = attentionTasks.length - visible.length;
+  const more =
+    hiddenCount > 0
+      ? isEnglish
+        ? `, ${hiddenCount} more`
+        : `，另 ${hiddenCount} 项`
+      : '';
+
+  return isEnglish
+    ? `Needs action: ${visible.join('; ')}${more}`
+    : `需处理：${visible.join('；')}${more}`;
 }
 
 function formatTaskAttentionStatusLabel(
@@ -1754,7 +2188,7 @@ function buildMeetingPilotStartNotice(
       tone: 'warning',
       message: `已有会议正在录制：${
         response.activeRecording.title || response.activeRecording.meetingId
-      }。请先停止那场会议，或切换到正在录制的 tab。`,
+      }。请先停止那场会议，或切换到正在录制的 tab。本次点击没有开始新的本机 Capture，也没有通知参会者。`,
     };
   }
 
@@ -1766,7 +2200,7 @@ function buildMeetingPilotStartNotice(
       tone: 'error',
       message: `${
         session.readiness.summary || 'Meeting Pilot 当前配置阻止开始 Capture'
-      }。${detail} 请打开 Meeting Pilot 配置页修复后重试。`,
+      }。${detail} 请打开 Meeting Pilot 配置页修复后重试。本次没有开始录制，也没有通知参会者。`,
       action: 'options',
     };
   }
@@ -1776,20 +2210,28 @@ function buildMeetingPilotStartNotice(
       tone: 'error',
       message: `${formatMeetingPilotCaptureError(
         session.capture.lastError,
-      )}。请确认原会议 tab 仍打开，再点击“开启会议全貌”重新授权。`,
+      )}。请确认原会议 tab 仍打开，再点击“开启会议全貌”重新授权；本次失败没有通知参会者、创建纪要或写入外部任务。`,
     };
   }
 
   if (response?.panelError) {
     return {
       tone: 'warning',
-      message: `Capture 已尝试启动，但会议面板没有打开：${response.panelError}。请从会议页右下角入口或 popup 再打开面板。`,
+      message: `Capture 已尝试启动，但会议面板没有打开：${response.panelError}。请从会议页右下角入口或 popup 再打开面板；参会者通知和录制同意仍需要你在会议中自行处理。`,
     };
   }
 
   return {
     tone: 'warning',
-    message: 'Capture 没有成功开始。请确认当前 tab 是 RingCentral 会议页，再重试。',
+    message:
+      'Capture 没有成功开始。请确认当前 tab 是 RingCentral 会议页，再重试；本次没有通知参会者或发送会议内容。',
+  };
+}
+
+function buildMeetingPilotStartPendingNotice(): MeetingPilotNotice {
+  return {
+    tone: 'info',
+    message: `正在提交 Meeting Pilot Capture 启动请求。${MEETING_PILOT_LOCAL_CAPTURE_BOUNDARY}`,
   };
 }
 
@@ -1831,6 +2273,9 @@ function formatTodayPilotEvidenceMeta(card: DayPilotCard): string {
 interface TodayPilotPopupScopeReceipt {
   main: string;
   detail: string;
+  overflowCount: number;
+  overflowActionLabel: string;
+  overflowBoundary: string;
 }
 
 type TodayPilotPopupScopeContext = Partial<Pick<
@@ -1935,6 +2380,13 @@ function buildTodayPilotPopupScopeReceipt(
       brief,
       context,
     )}`,
+    overflowCount: hiddenByTopThree,
+    overflowActionLabel:
+      hiddenByTopThree > 0 ? `查看全部 ${visibleCards.length}` : '',
+    overflowBoundary:
+      hiddenByTopThree > 0
+        ? `Top 3 之外还有 ${hiddenByTopThree} 张 mission；打开 Today Pilot 首页只查看完整可见 brief，不会刷新、写反馈、发送消息或执行动作。`
+        : '',
   };
 }
 
@@ -1957,6 +2409,9 @@ function buildTodayPilotPopupRefreshFailureReceipt(
     detail: `${previousSummary}；尚未确认当前 Memory Service 最新状态，也没有写入反馈、发送消息或执行动作。错误：${compactTodayPilotErrorMessage(
       errorMessage,
     )}`,
+    overflowCount: previousReceipt?.overflowCount ?? 0,
+    overflowActionLabel: previousReceipt?.overflowActionLabel || '',
+    overflowBoundary: previousReceipt?.overflowBoundary || '',
   };
 }
 
@@ -2203,6 +2658,18 @@ const Popup = () => {
     useState('');
   const [todayPilotFeedbackingCardId, setTodayPilotFeedbackingCardId] =
     useState('');
+  const headerSchedulePendingAction =
+    pendingTaskActions.message_analysis === 'toggle-enable' ||
+    pendingTaskActions.message_analysis === 'toggle-disable'
+      ? pendingTaskActions.message_analysis
+      : null;
+  const headerSchedulePendingReceipt = headerSchedulePendingAction
+    ? buildTaskSchedulerHeaderTogglePendingReceipt({
+        action: headerSchedulePendingAction,
+        task: taskSchedulerTasks.find((task) => task.id === 'message_analysis'),
+        language: uiLanguage,
+      })
+    : null;
 
   const loadTaskSchedulerStatus = async (
     showLoading = false,
@@ -2734,7 +3201,7 @@ const Popup = () => {
     }
 
     setIsMeetingPilotBusy(true);
-    setMeetingPilotNotice(null);
+    setMeetingPilotNotice(buildMeetingPilotStartPendingNotice());
     try {
       if (isMeetingPilotCaptureActive(meetingPilotSession)) {
         await pushMeetingPilotSnapshotToTab(meetingPilotSession);
@@ -3107,6 +3574,8 @@ const Popup = () => {
       ? `${recentSkippedTaskCount} skipped · ${enabledStatusSummary}`
       : `${recentSkippedTaskCount} 跳过 · ${enabledStatusSummary}`
     : enabledStatusSummary;
+  const taskCollapsedAttentionPreview =
+    formatTaskSchedulerCollapsedAttentionPreview(taskSchedulerTasks, uiLanguage);
   const visibleTaskSchedulerTasks = taskSchedulerTasks
     .map((task, index) => ({ task, index }))
     .sort(
@@ -3357,6 +3826,24 @@ const Popup = () => {
           </button>
         </div>
       </div>
+      {headerSchedulePendingReceipt && (
+        <div
+          className="task-header-pending-receipt"
+          role="status"
+          aria-live="polite"
+          title={`${headerSchedulePendingReceipt.detail} · ${headerSchedulePendingReceipt.boundary}`}
+        >
+          <div className="task-header-pending-title">
+            {headerSchedulePendingReceipt.label}
+          </div>
+          <div className="task-header-pending-detail">
+            {headerSchedulePendingReceipt.detail}
+          </div>
+          <div className="task-header-pending-boundary">
+            {headerSchedulePendingReceipt.boundary}
+          </div>
+        </div>
+      )}
 
       <details
         className="task-status-panel"
@@ -3370,7 +3857,23 @@ const Popup = () => {
       >
         <summary>
           <span>{t('popup.backgroundTasks')}</span>
-          <span className="task-summary">{taskStatusSummary}</span>
+          <span
+            className={`task-summary ${
+              taskCollapsedAttentionPreview ? 'has-attention-preview' : ''
+            }`}
+            title={
+              taskCollapsedAttentionPreview
+                ? `${taskStatusSummary} · ${taskCollapsedAttentionPreview}`
+                : taskStatusSummary
+            }
+          >
+            <span className="task-summary-status">{taskStatusSummary}</span>
+            {taskCollapsedAttentionPreview && (
+              <span className="task-summary-attention-preview">
+                {taskCollapsedAttentionPreview}
+              </span>
+            )}
+          </span>
         </summary>
         <div className="task-status-toolbar">
           <span className="task-refresh-meta">
@@ -3450,6 +3953,8 @@ const Popup = () => {
           <div
             className={`task-next-step ${taskSchedulerNextStep.tone}`}
             role="status"
+            title={`${taskSchedulerNextStep.message} · ${taskSchedulerNextStep.boundary}`}
+            aria-label={`${taskSchedulerNextStep.message} ${taskSchedulerNextStep.boundary}`}
           >
             {taskSchedulerNextStep.message}
           </div>
@@ -3717,6 +4222,11 @@ const Popup = () => {
                           ))}
                         </div>
                       )}
+                      {queueSummary.snapshotLine && (
+                        <div className="task-queue-summary-boundary">
+                          {queueSummary.snapshotLine}
+                        </div>
+                      )}
                       {queueSummary.dueReceiptLine && (
                         <div className="task-queue-summary-boundary">
                           {queueSummary.dueReceiptLine}
@@ -3768,25 +4278,16 @@ const Popup = () => {
                 <div className="task-actions">
                   <label
                     className="task-mini-switch"
-                    title={
-                      isEnglishUi(uiLanguage)
-                        ? 'Enable or disable'
-                        : '启用或停用'
-                    }
+                    title={getTaskToggleButtonTitle(task, uiLanguage)}
                   >
                     <input
                       type="checkbox"
                       checked={task.enabled}
                       disabled={isBusy}
-                      aria-label={`${
-                        isEnglishUi(uiLanguage)
-                          ? task.enabled
-                            ? 'Disable'
-                            : 'Enable'
-                          : task.enabled
-                          ? '停用'
-                          : '启用'
-                      }${taskDisplayName}`}
+                      aria-label={getTaskToggleButtonAriaLabel(
+                        task,
+                        uiLanguage,
+                      )}
                       onChange={(event) =>
                         void updateTaskEnabled(
                           task,
@@ -3801,16 +4302,11 @@ const Popup = () => {
                       className="task-repair-btn"
                       onClick={() => void repairTaskSchedule(task)}
                       disabled={isBusy}
-                      title={
-                        isEnglishUi(uiLanguage)
-                          ? 'Retry creating this Chrome schedule'
-                          : '重试创建此任务的 Chrome 排程'
-                      }
-                      aria-label={
-                        isEnglishUi(uiLanguage)
-                          ? `Repair ${taskDisplayName} schedule`
-                          : `修复${taskDisplayName}排程`
-                      }
+                      title={getTaskRepairButtonTitle(task, uiLanguage)}
+                      aria-label={getTaskRepairButtonAriaLabel(
+                        task,
+                        uiLanguage,
+                      )}
                     >
                       ↻
                     </button>
@@ -3820,16 +4316,11 @@ const Popup = () => {
                       className="task-pause-btn"
                       onClick={() => void updateTaskEnabled(task, false)}
                       disabled={isBusy}
-                      title={
-                        isEnglishUi(uiLanguage)
-                          ? 'Pause the schedule and keep manual run available'
-                          : '暂停排程，保留手动执行入口'
-                      }
-                      aria-label={
-                        isEnglishUi(uiLanguage)
-                          ? `Pause ${taskDisplayName} schedule`
-                          : `暂停${taskDisplayName}排程`
-                      }
+                      title={getTaskPauseButtonTitle(task, uiLanguage)}
+                      aria-label={getTaskPauseButtonAriaLabel(
+                        task,
+                        uiLanguage,
+                      )}
                     >
                       {isEnglishUi(uiLanguage) ? 'Pause' : '暂停'}
                     </button>
@@ -3839,11 +4330,11 @@ const Popup = () => {
                     onClick={() => void runTaskNow(task)}
                     disabled={isBusy || task.isExecuting}
                     title={getTaskRunButtonTitle(task, isBusy, uiLanguage)}
-                    aria-label={
-                      isEnglishUi(uiLanguage)
-                        ? `Run ${taskDisplayName} now`
-                        : `立即执行${taskDisplayName}`
-                    }
+                    aria-label={getTaskRunButtonAriaLabel(
+                      task,
+                      isBusy,
+                      uiLanguage,
+                    )}
                   >
                     {isBusy || task.isExecuting ? '...' : '▶'}
                   </button>
@@ -3965,6 +4456,18 @@ const Popup = () => {
           <div className="today-pilot-scope-receipt">
             <strong>{todayPilotScopeReceipt.main}</strong>
             <span>{todayPilotScopeReceipt.detail}</span>
+            {todayPilotScopeReceipt.overflowCount > 0 ? (
+              <div className="today-pilot-scope-handoff">
+                <button
+                  type="button"
+                  onClick={openTodayPilotHome}
+                  title={todayPilotScopeReceipt.overflowBoundary}
+                >
+                  {todayPilotScopeReceipt.overflowActionLabel}
+                </button>
+                <span>{todayPilotScopeReceipt.overflowBoundary}</span>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="today-pilot-list">
@@ -4087,9 +4590,29 @@ const Popup = () => {
             </button> */}
 
       <style>{`
+                html {
+                    width: 328px;
+                    max-width: 328px;
+                    overflow-x: hidden;
+                }
+
+                body {
+                    width: 300px;
+                    max-width: 300px;
+                    overflow-x: hidden;
+                }
+
+                #popup-root,
+                .popup-container {
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 0;
+                    box-sizing: border-box;
+                    overflow-x: hidden;
+                }
+
                 .popup-container {
                     padding-bottom: 8px; /* Add padding at the bottom */
-                    min-width: 300px;
                 }
                 
                 /* 顶部工具栏样式 */
@@ -4109,12 +4632,18 @@ const Popup = () => {
                 }
 
                 .today-pilot-panel {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                    overflow-x: hidden;
                     padding: 8px;
                     border-top: 1px solid #eeeeee;
                     margin-top: 4px;
                 }
 
                 .today-pilot-head {
+                    min-width: 0;
+                    max-width: 100%;
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
@@ -4122,6 +4651,10 @@ const Popup = () => {
                 }
 
                 .today-pilot-title {
+                    width: auto;
+                    min-width: 0;
+                    max-width: calc(100% - 32px);
+                    box-sizing: border-box;
                     border: 0;
                     background: transparent;
                     padding: 0;
@@ -4146,12 +4679,19 @@ const Popup = () => {
                 }
 
                 .today-pilot-list {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     display: flex;
                     flex-direction: column;
                     gap: 6px;
                 }
 
                 .today-pilot-scope-receipt {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                    overflow-wrap: anywhere;
                     border: 1px solid #e2e8f0;
                     border-radius: 6px;
                     background: #f8fafc;
@@ -4171,6 +4711,39 @@ const Popup = () => {
                     font-weight: 700;
                 }
 
+                .today-pilot-scope-handoff {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding-top: 2px;
+                }
+
+                .today-pilot-scope-handoff button {
+                    flex: 0 0 auto;
+                    width: auto;
+                    min-width: 0;
+                    min-height: 24px;
+                    margin: 0;
+                    padding: 3px 6px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    background: #ffffff;
+                    color: #1d4ed8;
+                    font-size: 10.5px;
+                    font-weight: 700;
+                }
+
+                .today-pilot-scope-handoff span {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                    color: #64748b;
+                    overflow-wrap: anywhere;
+                }
+
                 .today-pilot-empty {
                     color: #64748b;
                     font-size: 12px;
@@ -4179,6 +4752,9 @@ const Popup = () => {
                 }
 
                 .today-pilot-card {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     border: 1px solid #e5e7eb;
                     border-radius: 6px;
                     background: #ffffff;
@@ -4187,6 +4763,9 @@ const Popup = () => {
 
                 .today-pilot-card-main {
                     width: 100%;
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     min-height: 72px;
                     border: 0;
                     background: transparent;
@@ -4224,6 +4803,8 @@ const Popup = () => {
 
                 .today-pilot-card-text {
                     min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     display: flex;
                     flex-direction: column;
                     gap: 2px;
@@ -4233,12 +4814,16 @@ const Popup = () => {
                 .today-pilot-card-sub,
                 .today-pilot-card-why,
                 .today-pilot-card-meta {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
                 }
 
                 .today-pilot-card-title {
+                    display: block;
                     color: #111827;
                     font-size: 12px;
                     font-weight: 700;
@@ -4268,19 +4853,28 @@ const Popup = () => {
                 }
 
                 .today-pilot-card-meta {
+                    display: block;
                     color: #475569;
                     font-size: 10px;
                 }
 
                 .today-pilot-card-sub span,
                 .today-pilot-card-why span {
+                    display: block;
+                    flex: 1 1 0;
+                    width: 0;
                     min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
                 }
 
                 .today-pilot-card-actions {
+                    min-width: 0;
+                    max-width: 100%;
+                    box-sizing: border-box;
                     border-top: 1px solid #f1f5f9;
                     display: flex;
                     gap: 6px;
@@ -4289,8 +4883,11 @@ const Popup = () => {
 
                 .today-pilot-card-actions button {
                     flex: 1;
+                    width: auto;
                     min-height: 26px;
                     min-width: 0;
+                    margin: 0;
+                    padding: 4px 6px;
                     border: 1px solid #d4d4d8;
                     border-radius: 4px;
                     background: #f8fafc;
@@ -4339,8 +4936,33 @@ const Popup = () => {
 
                 .task-summary {
                     margin-left: auto;
+                    min-width: 0;
+                    max-width: 70%;
                     color: #64748b;
                     font-weight: 500;
+                    text-align: right;
+                }
+
+                .task-summary.has-attention-preview {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: flex-end;
+                    gap: 1px;
+                    line-height: 1.25;
+                }
+
+                .task-summary-status,
+                .task-summary-attention-preview {
+                    max-width: 100%;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+
+                .task-summary-attention-preview {
+                    color: #b45309;
+                    font-size: 10px;
+                    font-weight: 700;
                 }
 
                 .task-status-toolbar {
@@ -5162,6 +5784,41 @@ const Popup = () => {
                 .toggle-label {
                     margin-right: 10px;
                     font-size: 12px; /* Adjusted font size */
+                }
+
+                .task-header-pending-receipt {
+                    margin: -3px 8px 6px;
+                    padding: 7px 8px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    background: #f8fafc;
+                    color: #334155;
+                    font-size: 10px;
+                    line-height: 1.35;
+                }
+
+                .task-header-pending-title {
+                    font-weight: 800;
+                }
+
+                .task-header-pending-detail {
+                    margin-top: 3px;
+                    color: #1f2937;
+                    font-weight: 700;
+                }
+
+                .task-header-pending-boundary {
+                    margin-top: 1px;
+                    color: #475569;
+                }
+
+                .task-header-pending-title,
+                .task-header-pending-detail,
+                .task-header-pending-boundary {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
                 }
 
                 .toggle-switch {

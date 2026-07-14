@@ -1,4 +1,10 @@
-import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types';
+import {
+  AgentTaskWebhookConfig,
+  BotAutomationConfig,
+  BotAutomationRule,
+  RingCentralSenderConfig,
+  SheetConfig,
+} from './types';
 
 const RINGCENTRAL_SENDER_EXECUTOR_RULE_VERSION = '1.4.0';
 
@@ -72,6 +78,35 @@ export function normalizeRingCentralSenderConfig(
     Boolean(normalized.clientId || normalized.clientSecret || normalized.jwt || normalized.updatedAt);
 
   return hasAnyValue ? normalized : undefined;
+}
+
+export function normalizeAgentTaskWebhookConfig(
+  config?: Partial<AgentTaskWebhookConfig> | null
+): AgentTaskWebhookConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+
+  const normalized: AgentTaskWebhookConfig = {
+    webhookUrl: trimOptional(config.webhookUrl),
+    authToken: trimOptional(config.authToken),
+    userId: trimOptional(config.userId),
+    updatedAt: trimOptional(config.updatedAt),
+  };
+
+  return normalized.webhookUrl || normalized.authToken || normalized.userId || normalized.updatedAt
+    ? normalized
+    : undefined;
+}
+
+export function getAgentTaskWebhookConfig(
+  config?: Partial<SheetConfig> | null
+): AgentTaskWebhookConfig | undefined {
+  return normalizeAgentTaskWebhookConfig(config?.agentTaskWebhook);
+}
+
+export function hasAgentTaskWebhookConfig(config?: Partial<SheetConfig> | null): boolean {
+  return Boolean(getAgentTaskWebhookConfig(config)?.webhookUrl);
 }
 
 export function getRingCentralSenderConfig(
@@ -163,6 +198,7 @@ export function normalizeSheetConfig<T extends Partial<SheetConfig> | null | und
     ...config,
     botAutomation,
     ringCentralSender: normalizeRingCentralSenderConfig(config.ringCentralSender),
+    agentTaskWebhook: normalizeAgentTaskWebhookConfig(config.agentTaskWebhook),
   };
   delete (nextConfig as Partial<SheetConfig>).botExecutor;
 
@@ -186,6 +222,16 @@ export function withRingCentralSender(
   return normalizeSheetConfig({
     ...config,
     ringCentralSender,
+  }) as SheetConfig;
+}
+
+export function withAgentTaskWebhook(
+  config: SheetConfig,
+  agentTaskWebhook: AgentTaskWebhookConfig | undefined
+): SheetConfig {
+  return normalizeSheetConfig({
+    ...config,
+    agentTaskWebhook,
   }) as SheetConfig;
 }
 

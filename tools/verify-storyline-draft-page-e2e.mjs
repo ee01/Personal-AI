@@ -57,6 +57,12 @@ async function installMocks(page) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         const targetArtifact = body.targetArtifact || 'speaker_notes';
         window.__storylineDraftRequests.push(targetArtifact);
+        if (body.prepId === 'prep-refresh') {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+        }
+        if (body.prepId === 'prep-pending') {
+          await new Promise((resolve) => setTimeout(resolve, 320));
+        }
         if (body.prepId === 'prep-empty') {
           return new Response(
             JSON.stringify({
@@ -288,7 +294,30 @@ async function main() {
     const url = `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-storyline&target=speaker_notes`;
     await page.goto(url);
     await page.waitForSelector('.storyline-page');
-    await page.locator('.target-segmented button', { hasText: 'Slides' }).click();
+    const slidesTargetButton = page.locator('.target-segmented button', {
+      hasText: 'Slides',
+    });
+    const slidesTargetBoundary = await slidesTargetButton.getAttribute('title');
+    assert(
+      slidesTargetBoundary?.includes('切换到 Slides 提纲') &&
+        slidesTargetBoundary.includes('为 Prep prep-storyline 从本页缓存读取或请求 Storyline Draft API') &&
+        slidesTargetBoundary.includes('切换后会重置复核确认') &&
+        slidesTargetBoundary.includes('会清除当前复制状态') &&
+        slidesTargetBoundary.includes('不会写回 Slides / Docs / RingCentral') &&
+        slidesTargetBoundary.includes('不会更新 Memory Service 证据状态'),
+      'header target switch boundary missing before switching target',
+    );
+    assert.equal(
+      await slidesTargetButton.getAttribute('aria-label'),
+      slidesTargetBoundary,
+      'header target switch aria-label should mirror title boundary',
+    );
+    assert.equal(
+      await slidesTargetButton.getAttribute('aria-pressed'),
+      'false',
+      'inactive header target switch should expose aria-pressed=false',
+    );
+    await slidesTargetButton.click();
     await page.waitForFunction(() =>
       document.body.textContent?.includes('Workshop 复盘故事线'),
     );
@@ -317,6 +346,16 @@ async function main() {
     assert(
       bodyText?.includes('不写回 Slides / Docs / RingCentral'),
       'generation receipt boundary missing',
+    );
+    assert(
+      bodyText?.includes('输出目标回执') &&
+        bodyText.includes('Slides 提纲交接稿') &&
+        bodyText.includes('受众 项目组') &&
+        bodyText.includes('手动复制到 Slides / PPT') &&
+        bodyText.includes('当前目标只决定本页生成格式：页结构 + speaker notes') &&
+        bodyText.includes('切换目标会重置复核 / 复制') &&
+        bodyText.includes('不会自动写回 Slides / Docs / RingCentral'),
+      'target handoff receipt missing for Slides draft',
     );
     assert(
       bodyText?.includes('已引用 3 refs · 返回 4 详情'),
@@ -393,6 +432,28 @@ async function main() {
         bodyText.includes('边界提醒 1') &&
         bodyText.includes('SEG 03 · 单条证据'),
       'pre-copy review checklist missing actionable items',
+    );
+    const ringcentralArtifactButton = page.locator('.artifact', {
+      hasText: 'RingCentral post',
+    });
+    const ringcentralArtifactBoundary = await ringcentralArtifactButton.getAttribute(
+      'title',
+    );
+    assert(
+      ringcentralArtifactBoundary?.includes('切换到 RingCentral 分享帖') &&
+        ringcentralArtifactBoundary.includes('短 TL;DR + next step') &&
+        ringcentralArtifactBoundary.includes(
+          '切换后会重置对 1 个待确认、1 条边界提醒和 3 段证据边界 的复核确认',
+        ) &&
+        ringcentralArtifactBoundary.includes('会清除当前复制状态') &&
+        ringcentralArtifactBoundary.includes('来源打开回执会回到当前草稿上下文') &&
+        ringcentralArtifactBoundary.includes('不会发送消息'),
+      'inspector artifact target switch boundary missing before copy',
+    );
+    assert.equal(
+      await ringcentralArtifactButton.getAttribute('aria-label'),
+      ringcentralArtifactBoundary,
+      'inspector artifact target switch aria-label should mirror title boundary',
     );
     await page.locator('.review-checklist-item', { hasText: 'SEG 03' }).click();
     await page.waitForFunction(() =>
@@ -492,7 +553,20 @@ async function main() {
         copyReceiptText.includes('没有更新 Memory Service 证据状态'),
       'copy receipt no-write boundary missing',
     );
-    await page.locator('.target-segmented button', { hasText: '分享帖' }).click();
+    const sharePostTargetButton = page.locator('.target-segmented button', {
+      hasText: '分享帖',
+    });
+    const sharePostBoundaryAfterCopy = await sharePostTargetButton.getAttribute(
+      'title',
+    );
+    assert(
+      sharePostBoundaryAfterCopy?.includes('切换到 RingCentral 分享帖') &&
+        sharePostBoundaryAfterCopy.includes('已有剪贴板回执会变成旧复制回执') &&
+        sharePostBoundaryAfterCopy.includes('交付前需要重新复制') &&
+        sharePostBoundaryAfterCopy.includes('不会写回 Slides / Docs / RingCentral'),
+      'header target switch should warn about stale clipboard after copy',
+    );
+    await sharePostTargetButton.click();
     await page.waitForFunction(() =>
       document.body.textContent?.includes('旧复制回执'),
     );
@@ -519,6 +593,17 @@ async function main() {
       document.body.textContent?.includes(
         '先复核 1 个待确认、1 条边界提醒和 3 段证据边界',
       ),
+    );
+    const ringcentralTargetReceiptText = await page
+      .locator('.target-handoff-receipt')
+      .textContent();
+    assert(
+      ringcentralTargetReceiptText?.includes('RingCentral 分享帖交接稿') &&
+        ringcentralTargetReceiptText.includes('手动复制到 RingCentral') &&
+        ringcentralTargetReceiptText.includes('短 TL;DR + next step') &&
+        ringcentralTargetReceiptText.includes('切换目标会重置复核 / 复制') &&
+        ringcentralTargetReceiptText.includes('不会发送消息'),
+      'target handoff receipt should update after switching to RingCentral post',
     );
     assert.equal(
       await page.locator('.header-actions .btn.primary').isDisabled(),
@@ -613,6 +698,110 @@ async function main() {
       fallbackText?.includes('这份输出仍绑定 Evidence key') &&
         fallbackText.includes('复制前重点复核事实和外发边界'),
       'llm failure fallback warning should be specific',
+    );
+
+    await page.evaluate(() => {
+      window.__storylineDraftRequests = [];
+    });
+    await page.goto(
+      `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-pending&target=slides_outline`,
+    );
+    const draftRequestReceipt = page.locator('.draft-request-receipt');
+    await draftRequestReceipt.waitFor({ state: 'visible', timeout: 5000 });
+    const draftRequestReceiptText = await draftRequestReceipt.textContent();
+    assert(
+      draftRequestReceiptText?.includes('草稿生成请求回执') &&
+        draftRequestReceiptText.includes('正在请求 Storyline Draft API'),
+      'draft request receipt title missing while initial load is pending',
+    );
+    assert(
+      draftRequestReceiptText?.includes('请求一份 Slides 提纲草稿') &&
+        draftRequestReceiptText.includes('还没有收到草稿') &&
+        draftRequestReceiptText.includes('Evidence key') &&
+        draftRequestReceiptText.includes('不会写回 Slides / Docs / RingCentral') &&
+        draftRequestReceiptText.includes('不会发送消息') &&
+        draftRequestReceiptText.includes('不会保存长期 Storyline 历史'),
+      'draft request receipt boundary missing while initial load is pending',
+    );
+    assert(
+      draftRequestReceiptText?.includes('Prep prep-pending') &&
+        draftRequestReceiptText.includes('等待服务端证据回执'),
+      'draft request receipt metrics missing while initial load is pending',
+    );
+    const pendingRegenerateButton = page.locator('.header-actions .btn.ghost', {
+      hasText: '重新生成',
+    });
+    assert.equal(
+      await pendingRegenerateButton.isDisabled(),
+      true,
+      'regenerate should be disabled while the initial draft request is pending',
+    );
+    assert.equal(
+      await pendingRegenerateButton.getAttribute('title'),
+      '正在等待当前 Draft API 回执，避免重复重新生成请求',
+      'pending regenerate button should explain the duplicate-request boundary',
+    );
+    await page.waitForFunction(() =>
+      !document.body.textContent?.includes('草稿生成请求回执') &&
+      document.body.textContent?.includes('Workshop 复盘故事线'),
+    );
+    const requestsAfterPendingReceipt = await page.evaluate(
+      () => window.__storylineDraftRequests,
+    );
+    assert.deepEqual(
+      requestsAfterPendingReceipt,
+      ['slides_outline'],
+      'initial pending receipt should still make exactly one draft request',
+    );
+
+    await page.evaluate(() => {
+      window.__storylineDraftRequests = [];
+    });
+    await page.goto(
+      `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-refresh&target=slides_outline`,
+    );
+    await page.waitForFunction(() =>
+      document.body.textContent?.includes('Workshop 复盘故事线'),
+    );
+    await page.locator('.header-actions .btn.ghost', { hasText: '重新生成' }).click();
+    const regenerateReceipt = page.locator('.regenerate-request-receipt');
+    await regenerateReceipt.waitFor({ state: 'visible', timeout: 5000 });
+    const regenerateReceiptText = await regenerateReceipt.textContent();
+    assert(
+      regenerateReceiptText?.includes('重新生成请求回执') &&
+        regenerateReceiptText.includes('已清除本页缓存，正在重新生成'),
+      'regenerate request receipt title missing while reload is pending',
+    );
+    assert(
+      regenerateReceiptText?.includes('重新请求 Draft API') &&
+        regenerateReceiptText.includes('不会写回 Slides / Docs / RingCentral') &&
+        regenerateReceiptText.includes('不会发送消息') &&
+        regenerateReceiptText.includes('不会保存长期 Storyline 历史') &&
+        regenerateReceiptText.includes('不会沿用上一轮复核确认或复制回执'),
+      'regenerate request receipt boundary missing while reload is pending',
+    );
+    assert(
+      regenerateReceiptText?.includes('Slides 提纲') &&
+        regenerateReceiptText.includes('复核确认已重置'),
+      'regenerate request receipt metrics missing',
+    );
+    await page.waitForFunction(() =>
+      !document.body.textContent?.includes('重新生成请求回执') &&
+      document.body.textContent?.includes('Workshop 复盘故事线'),
+    );
+    const regeneratedText = await page.textContent('body');
+    assert(
+      !regeneratedText?.includes('旧复制回执') &&
+        !regeneratedText?.includes('剪贴板仍是上一份 Storyline 输出'),
+      'regenerate should clear previous copy receipts instead of carrying them forward',
+    );
+    const requestsAfterRegenerate = await page.evaluate(
+      () => window.__storylineDraftRequests,
+    );
+    assert.deepEqual(
+      requestsAfterRegenerate,
+      ['slides_outline', 'slides_outline'],
+      'regenerate should request the same target once after the initial load',
     );
 
     await page.evaluate(() => {

@@ -47,7 +47,7 @@ export interface UserRuntimeConfig {
   botTargetEmail: string;
 }
 
-const MIN_OPENCLAW_TIMEOUT_MS = 5 * 60 * 1000;
+const MIN_OPENCLAW_TIMEOUT_MS = 10 * 60 * 1000;
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;

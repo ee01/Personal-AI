@@ -19,6 +19,7 @@ const userDataDir = await fs.mkdtemp(
 const askRequests = [];
 const recallRequests = [];
 const nowSeconds = Math.floor(Date.now() / 1000);
+let delayNextAllScopeAsk = false;
 
 function jsonResponse(body) {
   return {
@@ -124,6 +125,10 @@ try {
       const payload = request.postDataJSON();
       const scope = payload.scope || 'work';
       askRequests.push(payload);
+      if (scope === 'all' && delayNextAllScopeAsk) {
+        delayNextAllScopeAsk = false;
+        await new Promise((resolve) => setTimeout(resolve, 850));
+      }
       const evidence =
         scope === 'all'
           ? [
@@ -293,6 +298,22 @@ try {
     .getByText('本次主动召回仅检索工作记忆，个人记忆未进入候选。')
     .waitFor({ timeout: 10000 });
   assert.equal(await page.getByText('已包含 1 条个人记忆').count(), 0);
+  const initialBatchReceipt = page.getByLabel('结果批次回执');
+  await initialBatchReceipt.getByText('结果批次回执').waitFor({
+    timeout: 10000,
+  });
+  await initialBatchReceipt
+    .getByText('当前 1 条卡片绑定查询“scope query”、工作记忆和Ask 智能搜索')
+    .waitFor({ timeout: 10000 });
+  await initialBatchReceipt
+    .getByText('不会重新召回、重排、同步外部来源或确认事实')
+    .waitFor({ timeout: 10000 });
+  await initialBatchReceipt.getByText('通道 1/4 命中').waitFor({
+    timeout: 10000,
+  });
+  await initialBatchReceipt.getByText('批次只读').waitFor({
+    timeout: 10000,
+  });
   await page.getByText('语义 未运行').waitFor({ timeout: 10000 });
   await page.getByText('关键词 命中 1').waitFor({ timeout: 10000 });
   await page.getByText('图谱 无命中').waitFor({ timeout: 10000 });
@@ -312,9 +333,50 @@ try {
   await recallChannelReceipt
     .getByText('不会写入、删除、同步外部来源或确认答案')
     .waitFor({ timeout: 10000 });
+  const initialEvidenceChannelOverlapReceipt = page.getByLabel(
+    '证据通道交叉回执',
+  );
+  await initialEvidenceChannelOverlapReceipt
+    .getByText('证据通道交叉回执')
+    .waitFor({ timeout: 10000 });
+  await initialEvidenceChannelOverlapReceipt
+    .getByText('当前 1 条可见结果为单通道证据，尚无通道交叉支持。')
+    .waitFor({ timeout: 10000 });
+  await initialEvidenceChannelOverlapReceipt.getByText('多通道 0').waitFor({
+    timeout: 10000,
+  });
+  await initialEvidenceChannelOverlapReceipt.getByText('单通道 1').waitFor({
+    timeout: 10000,
+  });
+  await initialEvidenceChannelOverlapReceipt
+    .getByText('不等于事实已确认，也不会重新召回、重排、写反馈或写入记忆')
+    .waitFor({ timeout: 10000 });
   const initialSearchResultCard = page.locator('.search-result-card', {
     hasText: 'Scoped memory result work',
   });
+  const initialOpenResultButton = initialSearchResultCard.getByRole('button', {
+    name: /打开结果：Scoped memory result work/,
+  });
+  const initialOpenResultTitle =
+    (await initialOpenResultButton.getAttribute('title')) || '';
+  assert.ok(
+    initialOpenResultTitle.includes('noopener/noreferrer') &&
+      initialOpenResultTitle.includes('不会写入记忆、反馈或来源系统') &&
+      initialOpenResultTitle.includes('不会重新读取、同步或确认来源内容'),
+    'search primary open button should expose external-open and no-write boundaries before click',
+  );
+  const initialSourceButton = initialSearchResultCard.getByRole('button', {
+    name: /打开来源/,
+  });
+  const initialSourceButtonTitle =
+    (await initialSourceButton.getAttribute('title')) || '';
+  assert.ok(
+    initialSourceButtonTitle.includes('example.com') &&
+      initialSourceButtonTitle.includes('新标签页') &&
+      initialSourceButtonTitle.includes('noopener/noreferrer') &&
+      initialSourceButtonTitle.includes('不会重新读取、同步或确认来源内容'),
+    'search source button should expose sanitized host and opener/referrer boundary before click',
+  );
   await page.evaluate(() => {
     window.__searchOpenedSources = [];
     window.open = (...args) => {
@@ -322,7 +384,7 @@ try {
       return null;
     };
   });
-  await initialSearchResultCard.getByRole('button', { name: /打开来源/ }).click();
+  await initialSourceButton.click();
   await page
     .locator('.search-navigation-receipt-info')
     .getByText('来源：已请求浏览器打开 example.com。')
@@ -350,7 +412,27 @@ try {
     'search source click should keep opener/referrer isolation',
   );
 
+  delayNextAllScopeAsk = true;
   await page.getByRole('button', { name: '搜索全部记忆' }).click();
+  const loadingScopeReceipt = page.getByLabel('搜索范围请求中');
+  await loadingScopeReceipt.getByText('搜索范围请求中').waitFor({
+    timeout: 10000,
+  });
+  await loadingScopeReceipt
+    .getByText('正在按全部记忆请求 Memory Service')
+    .waitFor({ timeout: 10000 });
+  await loadingScopeReceipt
+    .getByText('上一次可见快照 1 条已暂时隐藏')
+    .waitFor({ timeout: 10000 });
+  await loadingScopeReceipt.getByText('范围 全部记忆').waitFor({
+    timeout: 10000,
+  });
+  await loadingScopeReceipt.getByText('旧快照 1').waitFor({
+    timeout: 10000,
+  });
+  await loadingScopeReceipt.getByText('只读请求').waitFor({
+    timeout: 10000,
+  });
   await page.getByText('Scoped memory result all').waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'all');
   assert.ok(page.url().includes('scope=all'));
@@ -361,6 +443,14 @@ try {
   });
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
   await page.getByText('命中范围: 工作 1 · 个人 1').waitFor({ timeout: 10000 });
+  const allScopeBatchReceipt = page.getByLabel('结果批次回执');
+  await allScopeBatchReceipt
+    .getByText('当前 2 条卡片绑定查询“scope query”、全部记忆和Ask 智能搜索')
+    .waitFor({ timeout: 10000 });
+  await allScopeBatchReceipt.getByText('结果 2').waitFor({ timeout: 10000 });
+  await allScopeBatchReceipt.getByText('通道 2/4 命中').waitFor({
+    timeout: 10000,
+  });
   await page
     .getByRole('button', {
       name: /全部类型筛选：当前显示 2 条/,
@@ -435,6 +525,15 @@ try {
     .getByText('不会重新召回、重排、写反馈或隐藏服务端结果')
     .waitFor({ timeout: 10000 });
   await typeFilterReceipt.getByText('已隐藏 1').waitFor({ timeout: 10000 });
+  const filteredBatchReceipt = page.getByLabel('结果批次回执');
+  await filteredBatchReceipt
+    .getByText('当前片段可见 1/2 条卡片绑定查询“scope query”、全部记忆和Ask 智能搜索')
+    .waitFor({ timeout: 10000 });
+  await filteredBatchReceipt
+    .getByText('可见 1/2', { exact: true })
+    .waitFor({
+      timeout: 10000,
+    });
   await sourceCoverageReceipt
     .getByText('当前片段可见 1/2 条结果都来自 Personal source')
     .waitFor({ timeout: 10000 });

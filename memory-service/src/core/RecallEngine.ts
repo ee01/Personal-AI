@@ -458,6 +458,18 @@ function getChunkMessageRefCandidates(chunk: ChunkRow): string[] {
   return Array.from(candidates);
 }
 
+function getChunkSourceMemoryCapsuleId(chunk: ChunkRow): string | null {
+  const sourceMatch = chunk.source
+    ?.trim()
+    .match(/^source-memory:([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/i);
+  if (sourceMatch?.[1]) return sourceMatch[1];
+
+  const pathMatch = chunk.file_path
+    .trim()
+    .match(/^source-memory\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.(?:md|txt|json)$/i);
+  return pathMatch?.[1] ?? null;
+}
+
 function stripKnownChunkPathExtension(value: string): string {
   return value.replace(/\.(md|txt|json)$/i, '');
 }
@@ -1046,50 +1058,96 @@ export class RecallEngine {
     metadata?: Record<string, any>;
   } {
     const messageIds = getChunkMessageRefCandidates(chunk);
-    if (messageIds.length === 0) return {};
-
-    try {
-      const placeholders = messageIds.map(() => '?').join(', ');
-      const rows = this.db
-        .prepare(
-          `SELECT id, source_url, source_title, group_id, group_name, metadata_json
-           FROM messages_raw
-           WHERE id IN (${placeholders})`,
-        )
-        .all(...messageIds) as Array<{
-        id: string;
-        source_url: string | null;
-        source_title: string | null;
-        group_id: string | null;
-        group_name: string | null;
-        metadata_json: string | null;
-      }>;
-      const byId = new Map(rows.map((row) => [row.id, row]));
-      for (const id of messageIds) {
-        const row = byId.get(id);
-        if (!row) continue;
-        const metadata = row.metadata_json
-          ? (safeJsonParse<Record<string, any>>(row.metadata_json) ?? {})
-          : {};
-        if (row.group_id) {
-          metadata.groupId = metadata.groupId ?? row.group_id;
-          metadata.group_id = metadata.group_id ?? row.group_id;
+    let messageSourceRef: {
+      sourceUrl?: string;
+      sourceTitle?: string;
+      metadata?: Record<string, any>;
+    } | null = null;
+    if (messageIds.length > 0) {
+      try {
+        const placeholders = messageIds.map(() => '?').join(', ');
+        const rows = this.db
+          .prepare(
+            `SELECT id, source_url, source_title, group_id, group_name, metadata_json
+             FROM messages_raw
+             WHERE id IN (${placeholders})`,
+          )
+          .all(...messageIds) as Array<{
+          id: string;
+          source_url: string | null;
+          source_title: string | null;
+          group_id: string | null;
+          group_name: string | null;
+          metadata_json: string | null;
+        }>;
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        for (const id of messageIds) {
+          const row = byId.get(id);
+          if (!row) continue;
+          const metadata = row.metadata_json
+            ? (safeJsonParse<Record<string, any>>(row.metadata_json) ?? {})
+            : {};
+          if (row.group_id) {
+            metadata.groupId = metadata.groupId ?? row.group_id;
+            metadata.group_id = metadata.group_id ?? row.group_id;
+          }
+          if (row.group_name) {
+            metadata.groupName = metadata.groupName ?? row.group_name;
+            metadata.group_name = metadata.group_name ?? row.group_name;
+          }
+          messageSourceRef = {
+            sourceUrl: row.source_url ?? undefined,
+            sourceTitle: row.source_title ?? undefined,
+            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+          };
+          break;
         }
-        if (row.group_name) {
-          metadata.groupName = metadata.groupName ?? row.group_name;
-          metadata.group_name = metadata.group_name ?? row.group_name;
-        }
-        return {
-          sourceUrl: row.source_url ?? undefined,
-          sourceTitle: row.source_title ?? undefined,
-          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-        };
+      } catch {
+        // Legacy Source Memory chunks can outlive their linked message row.
+        // Fall through to the capsule lookup below instead of dropping provenance.
       }
-    } catch {
-      return {};
     }
 
-    return {};
+    const sourceMemoryCapsuleId = getChunkSourceMemoryCapsuleId(chunk);
+    if (!sourceMemoryCapsuleId) return messageSourceRef ?? {};
+
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT source_url, source_title, source_kind, capture_mode
+           FROM source_memory_capsules
+           WHERE id = ? AND status = 'saved'
+           LIMIT 1`,
+        )
+        .get(sourceMemoryCapsuleId) as
+        | {
+            source_url: string | null;
+            source_title: string | null;
+            source_kind: string | null;
+            capture_mode: string | null;
+          }
+        | undefined;
+      if (!row) return messageSourceRef ?? {};
+
+      const metadata = {
+        ...(messageSourceRef?.metadata ?? {}),
+      };
+      metadata.sourceMemoryCapsuleId = sourceMemoryCapsuleId;
+      if (row.source_kind) {
+        metadata.sourceKind = metadata.sourceKind ?? row.source_kind;
+      }
+      if (row.capture_mode) {
+        metadata.captureMode = metadata.captureMode ?? row.capture_mode;
+      }
+      return {
+        sourceUrl: messageSourceRef?.sourceUrl ?? row.source_url ?? undefined,
+        sourceTitle:
+          messageSourceRef?.sourceTitle ?? row.source_title ?? undefined,
+        metadata,
+      };
+    } catch {
+      return messageSourceRef ?? {};
+    }
   }
 
   // =========================================================================

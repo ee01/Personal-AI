@@ -57,6 +57,8 @@
               v-else-if="currentTopicDeferredState"
               type="button"
               class="topic-detail-action-btn topic-detail-defer-restore"
+              :title="getDetailDeferRestoreBoundary()"
+              :aria-label="getDetailDeferRestoreBoundary()"
               @click.stop="handleRestoreDeferFromDetail"
             >
               ↩ 恢复未读
@@ -69,6 +71,8 @@
               <button
                 type="button"
                 class="topic-detail-action-btn"
+                :title="getDetailDeferMenuButtonBoundary()"
+                :aria-label="getDetailDeferMenuButtonBoundary()"
                 :aria-expanded="detailDeferMenuOpen"
                 @click.stop="toggleDetailDeferMenu"
               >
@@ -96,6 +100,8 @@
                   type="button"
                   class="topic-detail-defer-option"
                   role="menuitem"
+                  :title="getDetailDeferOptionBoundary(option)"
+                  :aria-label="getDetailDeferOptionBoundary(option)"
                   @click.stop="handleDeferTopicFromDetail(option.until)"
                 >
                   <span>{{ option.label }}</span>
@@ -195,7 +201,14 @@
         已将「{{ detailDeferredUndo.topicName }}」稍后到
         {{ formatDeferredUntil(detailDeferredUndo.until) }}
       </span>
-      <button type="button" @click="handleUndoDetailDefer">恢复</button>
+      <button
+        type="button"
+        :title="getDetailDeferRestoreBoundary(detailDeferredUndo)"
+        :aria-label="getDetailDeferRestoreBoundary(detailDeferredUndo)"
+        @click="handleUndoDetailDefer"
+      >
+        恢复
+      </button>
     </div>
 
     <div
@@ -209,6 +222,27 @@
         }}{{ formatMutedUntil(detailMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
       <button type="button" @click="handleUndoDetailMute">取消静音</button>
+    </div>
+
+    <div
+      v-if="detailTriageRestoreReceipt"
+      :class="[
+        'topic-undo-toast',
+        'topic-triage-restore-receipt',
+        detailTriageRestoreReceipt.kind,
+      ]"
+      role="status"
+    >
+      <div class="topic-triage-restore-copy">
+        <strong>{{ detailTriageRestoreReceipt.title }}</strong>
+        <span>{{ detailTriageRestoreReceipt.summary }}</span>
+        <small
+          v-for="detail in detailTriageRestoreReceipt.details"
+          :key="detail"
+        >
+          {{ detail }}
+        </small>
+      </div>
     </div>
 
     <div
@@ -429,7 +463,8 @@
               type="button"
               class="mark-all-read-btn"
               @click="handleMarkAllAsRead"
-              title="标记所有消息为已读"
+              :title="markAllReadBoundary"
+              :aria-label="markAllReadBoundary"
               :disabled="topicUnreadCount === 0"
             >
               ✓ 全部已阅
@@ -635,6 +670,8 @@
               type="button"
               class="context-indicator"
               :class="{ expanded: isConversationExpanded(conv, index) }"
+              :title="getConversationContextBoundary(conv, index)"
+              :aria-label="getConversationContextBoundary(conv, index)"
               @click="toggleConversationExpand(conv, index)"
             >
               <span class="indicator-text">
@@ -819,6 +856,7 @@ import {
   getTopicMuteReasonLabel,
   getTopicMuteReasonOptions,
   useMemoryStore,
+  type TopicDeferPresetOption,
   type TopicMuteReasonKey,
 } from '../memory-store';
 import {
@@ -902,6 +940,58 @@ const topicResources = computed(() => topicRecentData.value.resources);
 const topicTickets = computed(() => topicRecentData.value.jiraTickets);
 
 const convSearchQuery = ref('');
+const MESSAGE_FOCUS_ROUTE_QUERY_KEYS = [
+  'messageId',
+  'message_id',
+  'conversationId',
+  'conversation_id',
+  'sourceMessageId',
+  'source_message_id',
+  'externalMessageId',
+  'external_message_id',
+  'id',
+  'msg',
+  'ts',
+  'thread_ts',
+] as const;
+type MessageFocusRouteQueryKey = (typeof MESSAGE_FOCUS_ROUTE_QUERY_KEYS)[number];
+type MessageFocusRouteQuery = {
+  key: MessageFocusRouteQueryKey | null;
+  value: unknown;
+  hasQueryKey: boolean;
+};
+const getMessageFocusRouteQuery = (
+  query: Record<string, unknown>,
+): MessageFocusRouteQuery => {
+  for (const key of MESSAGE_FOCUS_ROUTE_QUERY_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(query, key)) {
+      return {
+        key,
+        value: query[key],
+        hasQueryKey: true,
+      };
+    }
+  }
+
+  return {
+    key: null,
+    value: undefined,
+    hasQueryKey: false,
+  };
+};
+const getMessageFocusAliasDetail = (
+  queryKey: MessageFocusRouteQueryKey | null,
+): string | null => {
+  if (!queryKey || queryKey === 'messageId') return null;
+  return `本次读取 ${queryKey} 查询参数；这是 messageId 深链的兼容别名，已按同一套消息身份规则归一化。`;
+};
+const withMessageFocusAliasDetail = (
+  details: string[],
+  queryKey: MessageFocusRouteQueryKey | null,
+): string[] => {
+  const aliasDetail = getMessageFocusAliasDetail(queryKey);
+  return aliasDetail ? [aliasDetail, ...details] : details;
+};
 const normalizeReadFilterValue = (
   value: unknown,
 ): TopicConversationReadFilter => {
@@ -986,6 +1076,17 @@ const detailMuteUndo = ref<{
   reason?: TopicMuteReasonKey;
 } | null>(null);
 let detailMuteUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
+type DetailTriageRestoreReceipt = {
+  kind: 'defer' | 'mute';
+  title: string;
+  summary: string;
+  details: string[];
+};
+const detailTriageRestoreReceipt =
+  ref<DetailTriageRestoreReceipt | null>(null);
+let detailTriageRestoreReceiptTimer:
+  | ReturnType<typeof window.setTimeout>
+  | null = null;
 
 const tabs = [
   { key: 'conversations', label: '💬 聊天记录' },
@@ -994,6 +1095,39 @@ const tabs = [
   { key: 'tickets', label: '🎯 相关Tickets' },
   { key: 'webpages', label: '🌐 网页记录' },
 ];
+
+const getDetailTopicBoundaryName = (
+  override?: { topicName?: string } | null,
+): string =>
+  String(
+    override?.topicName || topicData.value?.name || topicId.value || '当前主题',
+  );
+
+const getDetailDeferMenuButtonBoundary = (): string => {
+  const topicName = getDetailTopicBoundaryName();
+  return `稍后处理边界：点击只打开或收起「${topicName}」的本机稍后时间菜单；选择时间前不会写入本机稍后状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getDetailDeferOptionBoundary = (
+  optionOrUntil?: TopicDeferPresetOption | number,
+): string => {
+  const topicName = getDetailTopicBoundaryName();
+  const option =
+    typeof optionOrUntil === 'object' && optionOrUntil !== null
+      ? optionOrUntil
+      : null;
+  const until = option ? option.until : optionOrUntil;
+  const optionLabel = option?.label ? `${option.label}：` : '';
+  const deferTime = formatDeferredUntil(until) || '所选时间';
+  return `${optionLabel}稍后处理到 ${deferTime}：只把「${topicName}」写入本机浏览器稍后状态并暂时移出未读队列；不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。到期或恢复后回到未读流。`;
+};
+
+const getDetailDeferRestoreBoundary = (
+  override?: { topicName?: string } | null,
+): string => {
+  const topicName = getDetailTopicBoundaryName(override);
+  return `恢复未读回执：点击只删除「${topicName}」的本机稍后处理状态；未读信号保留，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。`;
+};
 
 const conversationUnreadCount = computed(() =>
   getTopicConversationUnreadCount(topicConversations.value),
@@ -1181,6 +1315,19 @@ const conversationReadBatchReceipt = computed<ConversationReadBatchReceipt>(
     };
   },
 );
+
+const markAllReadBoundary = computed(() => {
+  const topicName = String(topicData.value?.name || topicId.value || '当前主题');
+  const visibleCount = filteredConversations.value.length;
+  const totalCount = conversationTotalCount.value;
+  const unreadSignalCount = topicUnreadCount.value;
+
+  if (unreadSignalCount <= 0) {
+    return `全部已阅不可用：当前主题「${topicName}」没有明确未读信号；不会写入已读状态、发送、删除、补拉历史消息或改写原始聊天平台。`;
+  }
+
+  return `全部已阅回执：将当前主题「${topicName}」的 ${unreadSignalCount} 个已知未读信号标记为已读；当前阅读批次 ${visibleCount}/${totalCount}；走当前实体缓存路径，可短时间撤销；不会发送、删除、补拉历史消息、同步外部系统或改写原始聊天平台。`;
+});
 
 const conversationEmptyRecoveryReceipt =
   computed<ConversationEmptyRecoveryReceipt | null>(() => {
@@ -1398,6 +1545,48 @@ const showDetailMuteUndo = (
   detailMuteUndoTimer = window.setTimeout(clearDetailMuteUndo, 10_000);
 };
 
+const clearDetailTriageRestoreReceipt = () => {
+  detailTriageRestoreReceipt.value = null;
+  if (detailTriageRestoreReceiptTimer !== null) {
+    window.clearTimeout(detailTriageRestoreReceiptTimer);
+    detailTriageRestoreReceiptTimer = null;
+  }
+};
+
+const showDetailTriageRestoreReceipt = (
+  kind: DetailTriageRestoreReceipt['kind'],
+  topicName: string,
+) => {
+  clearDetailTriageRestoreReceipt();
+  const displayName = topicName || '当前主题';
+  detailTriageRestoreReceipt.value =
+    kind === 'defer'
+      ? {
+          kind,
+          title: '恢复未读回执',
+          summary: `已把「${displayName}」移回未读流（本机）。`,
+          details: [
+            '只删除本机稍后处理状态；未读信号保留，不会标记已读。',
+            '没有同步 Memory Service、发送、删除或改写原始聊天平台。',
+            '如果这个主题仍有未读，它会重新出现在未读队列；如果没有未读，只是移除本机过滤。',
+          ],
+        }
+      : {
+          kind,
+          title: '取消静音回执',
+          summary: `已取消「${displayName}」的本机静音。`,
+          details: [
+            '只删除本机静音过滤；未读信号保留，不会标记已读。',
+            '没有同步 Memory Service、发送、删除或改写原始聊天平台。',
+            '未来未读会按普通主题进入未读流，不再被本机静音规则隐藏。',
+          ],
+        };
+  detailTriageRestoreReceiptTimer = window.setTimeout(
+    clearDetailTriageRestoreReceipt,
+    10_000,
+  );
+};
+
 const toggleDetailDeferMenu = () => {
   if (detailDeferMenuOpen.value) {
     detailDeferMenuOpen.value = false;
@@ -1426,6 +1615,7 @@ const handleDeferTopicFromDetail = async (until?: number) => {
   if (!topicId.value) return;
 
   detailDeferMenuOpen.value = false;
+  clearDetailTriageRestoreReceipt();
   await store.deferTopicForLater(topicId.value, until);
   const deferredState = store.getTopicDeferredState(topicId.value) as {
     until: number;
@@ -1443,14 +1633,17 @@ const handleUndoDetailDefer = () => {
 
   store.restoreDeferredTopic(undoState.topicId);
   clearDetailDeferredUndo();
+  showDetailTriageRestoreReceipt('defer', undoState.topicName);
 };
 
 const handleRestoreDeferFromDetail = () => {
   if (!topicId.value) return;
+  const topicName = String(topicData.value?.name || topicId.value);
   store.restoreDeferredTopic(topicId.value);
   if (detailDeferredUndo.value?.topicId === topicId.value) {
     clearDetailDeferredUndo();
   }
+  showDetailTriageRestoreReceipt('defer', topicName);
 };
 
 const handleMuteTopicFromDetail = async (
@@ -1460,6 +1653,7 @@ const handleMuteTopicFromDetail = async (
   if (!topicId.value) return;
 
   detailMuteMenuOpen.value = false;
+  clearDetailTriageRestoreReceipt();
   await store.muteTopic(topicId.value, until, reason);
   const mutedState = store.getTopicMutedState(topicId.value) as {
     until: number | null;
@@ -1475,10 +1669,12 @@ const handleMuteTopicFromDetail = async (
 
 const handleRestoreMuteFromDetail = () => {
   if (!topicId.value) return;
+  const topicName = String(topicData.value?.name || topicId.value);
   store.restoreMutedTopic(topicId.value);
   if (detailMuteUndo.value?.topicId === topicId.value) {
     clearDetailMuteUndo();
   }
+  showDetailTriageRestoreReceipt('mute', topicName);
 };
 
 const handleUndoDetailMute = () => {
@@ -1487,6 +1683,7 @@ const handleUndoDetailMute = () => {
 
   store.restoreMutedTopic(undoState.topicId);
   clearDetailMuteUndo();
+  showDetailTriageRestoreReceipt('mute', undoState.topicName);
 };
 
 const doesConversationContextMatch = (conversation: any): boolean => {
@@ -1502,6 +1699,25 @@ const getConversationContextLabel = (conversation: any): string => {
   const unreadCount = getTopicConversationUnreadMessageCount(conversation);
   const unreadSuffix = unreadCount > 0 ? ` · ${unreadCount} 未读` : '';
   return `🔍 查看上下文 (${contextCount} 条相关消息${unreadSuffix})`;
+};
+
+const getConversationContextBoundary = (
+  conversation: any,
+  index = 0,
+): string => {
+  const contextCount = conversation?.contextMessages?.length || 0;
+  const unreadCount = getTopicConversationUnreadMessageCount(conversation);
+  const conversationId = getConversationRenderId(conversation, index);
+
+  if (expandedConversations.value.has(conversationId)) {
+    return `收起上下文回执：只收起当前讨论的 ${contextCount} 条上下文，并移除未读视图暂留；不会写入已读、同步外部系统或改写原始聊天平台。`;
+  }
+
+  if (isConversationUnread(conversation) || unreadCount > 0) {
+    return `查看上下文回执：展开这条讨论的 ${contextCount} 条上下文；其中 ${unreadCount} 个明确未读项会走当前实体缓存路径标记已读，并在仅未读视图短暂保留当前讨论；可短时间撤销；不会改写原始聊天平台、发送、删除或补拉历史消息。`;
+  }
+
+  return `查看上下文回执：展开这条讨论的 ${contextCount} 条上下文；当前没有明确未读项，不会标记已读、补拉历史消息、发送、删除或改写原始聊天平台。`;
 };
 
 const isContextMessageUnread = (contextMessage: any): boolean => {
@@ -1645,6 +1861,7 @@ const buildMessageFocusSuccessNotice = (
   didSyncReadState: boolean,
   messageId: string,
   targetMessage: any,
+  queryKey: MessageFocusRouteQueryKey | null,
 ): MessageFocusNotice => ({
   type: 'info',
   title: '消息定位回执',
@@ -1652,15 +1869,18 @@ const buildMessageFocusSuccessNotice = (
   summary: didSyncReadState
     ? `已定位到链接里的${targetLabel}，并同步为已读。`
     : `已定位到链接里的${targetLabel}；当前没有明确未读状态需要同步。`,
-  details: [
-    getMessageFocusMatchBasisDetail(messageId, targetMessage),
-    '已临时切到聊天记录，并清空搜索、状态和群组筛选。',
-    '定位会匹配 messageId、来源 permalink、URL 参数/路径别名和 Slack timestamp 口径。',
-    '已展开父讨论并高亮链接目标；高亮约 6 秒后自动淡出，定位回执会保留到收起或打开新的深链。',
-    didSyncReadState
-      ? '已读同步走当前实体缓存路径，不代表原始聊天平台已被改写。'
-      : '未改写已读计数，也不会影响原始聊天平台状态。',
-  ],
+  details: withMessageFocusAliasDetail(
+    [
+      getMessageFocusMatchBasisDetail(messageId, targetMessage),
+      '已临时切到聊天记录，并清空搜索、状态和群组筛选。',
+      '定位会匹配 messageId、来源 permalink、URL 参数/路径别名和 Slack timestamp 口径。',
+      '已展开父讨论并高亮链接目标；高亮约 6 秒后自动淡出，定位回执会保留到收起或打开新的深链。',
+      didSyncReadState
+        ? '已读同步走当前实体缓存路径，不代表原始聊天平台已被改写。'
+        : '未改写已读计数，也不会影响原始聊天平台状态。',
+    ],
+    queryKey,
+  ),
   actions: didSyncReadState
     ? [
         {
@@ -1680,15 +1900,48 @@ const buildMessageFocusSuccessNotice = (
       ],
 });
 
-const buildMessageFocusMissingNotice = (): MessageFocusNotice => ({
+const buildMessageFocusInvalidNotice = (
+  queryKey: MessageFocusRouteQueryKey | null,
+): MessageFocusNotice => ({
+  type: 'warning',
+  title: '消息定位请求无效',
+  summary: '链接里的 messageId 为空，已保留当前阅读视图。',
+  details: withMessageFocusAliasDetail(
+    [
+      '定位请求：空值或空白参数。',
+      '没有标记任何消息已读，也没有改写未读计数。',
+      '没有补拉历史消息、同步 Memory Service、发送、删除或改写原始聊天平台。',
+      '需要继续查找时，请使用后端搜索或回到原始来源链接。',
+    ],
+    queryKey,
+  ),
+  actions: [
+    {
+      kind: 'showAllConversations',
+      label: '查看全部聊天记录',
+    },
+  ],
+});
+
+const buildMessageFocusMissingNotice = (
+  messageId: string,
+  queryKey: MessageFocusRouteQueryKey | null,
+): MessageFocusNotice => ({
   type: 'warning',
   title: '消息定位未完成',
   summary: '当前主题详情没有返回链接里的消息，已显示全部聊天记录。',
-  details: [
-    '可能是后端详情只返回了最近片段，或这个 messageId 来自未加载的历史消息。',
-    '没有标记任何消息已读，也没有改写未读计数。',
-    '需要跨全部记忆查找时，请使用后端搜索或回到原始来源链接。',
-  ],
+  details: withMessageFocusAliasDetail(
+    [
+      `定位请求：${formatMessageFocusIdentity(
+        messageId,
+      )}；当前详情返回的聊天记录、上下文、permalink 和 Slack 别名都未命中。`,
+      '可能是后端详情只返回了最近片段，或这个 messageId 来自未加载的历史消息。',
+      '没有标记任何消息已读，也没有改写未读计数。',
+      '没有额外补拉历史消息、同步 Memory Service、发送、删除或改写原始聊天平台。',
+      '需要跨全部记忆查找时，请使用后端搜索或回到原始来源链接。',
+    ],
+    queryKey,
+  ),
   actions: [
     {
       kind: 'showAllConversations',
@@ -1728,12 +1981,16 @@ const handleMessageFocusNoticeAction = async (
   }
 };
 
-const focusConversationFromQuery = async (messageIdValue: unknown) => {
-  const messageId = normalizeQueryValue(messageIdValue);
+const focusConversationFromQuery = async (
+  focusQuery: MessageFocusRouteQuery,
+) => {
+  const messageId = normalizeQueryValue(focusQuery.value);
   if (!messageId) {
     highlightedConversationId.value = null;
     highlightedMessageId.value = null;
-    messageFocusNotice.value = null;
+    messageFocusNotice.value = focusQuery.hasQueryKey
+      ? buildMessageFocusInvalidNotice(focusQuery.key)
+      : null;
     return;
   }
   if (!topicId.value || !topicData.value) return;
@@ -1750,7 +2007,10 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     convSearchQuery.value = '';
     highlightedConversationId.value = null;
     highlightedMessageId.value = null;
-    messageFocusNotice.value = buildMessageFocusMissingNotice();
+    messageFocusNotice.value = buildMessageFocusMissingNotice(
+      messageId,
+      focusQuery.key,
+    );
     return;
   }
 
@@ -1777,6 +2037,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     didSyncReadState,
     messageId,
     targetMessage,
+    focusQuery.key,
   );
   await nextTick();
 
@@ -2099,29 +2360,32 @@ watch(
   async (newId) => {
     if (newId) {
       clearStickyUnreadConversations();
-      if (!normalizeQueryValue(route.query.messageId)) {
+      const focusQuery = getMessageFocusRouteQuery(route.query);
+      if (!normalizeQueryValue(focusQuery.value)) {
         convReadFilter.value = normalizeReadFilterValue(
           route.query.readFilter,
         );
       }
       await store.loadTopicDetail(newId);
-      await focusConversationFromQuery(route.query.messageId);
+      await focusConversationFromQuery(focusQuery);
     }
   },
   { immediate: true },
 );
 
 watch(
-  () => route.query.messageId,
-  (messageId) => {
-    focusConversationFromQuery(messageId);
+  MESSAGE_FOCUS_ROUTE_QUERY_KEYS.map((key) => () => route.query[key]),
+  () => {
+    focusConversationFromQuery(getMessageFocusRouteQuery(route.query));
   },
 );
 
 watch(
   () => route.query.readFilter,
   (readFilter) => {
-    if (normalizeQueryValue(route.query.messageId)) return;
+    if (normalizeQueryValue(getMessageFocusRouteQuery(route.query).value)) {
+      return;
+    }
     convReadFilter.value = normalizeReadFilterValue(readFilter);
   },
 );
@@ -2135,6 +2399,7 @@ watch(convReadFilter, (readFilter) => {
 onBeforeUnmount(() => {
   clearDetailDeferredUndo();
   clearDetailMuteUndo();
+  clearDetailTriageRestoreReceipt();
   clearSourceOpenReceiptTimer();
 });
 </script>
@@ -2189,6 +2454,40 @@ onBeforeUnmount(() => {
   border-color: rgba(148, 163, 184, 0.3);
   background: rgba(51, 65, 85, 0.42);
   color: #cbd5e1;
+}
+
+.topic-triage-restore-receipt {
+  align-items: flex-start;
+  justify-content: flex-start;
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(22, 163, 74, 0.1);
+  color: #bbf7d0;
+}
+
+.topic-triage-restore-receipt.mute {
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(51, 65, 85, 0.34);
+  color: #d1d5db;
+}
+
+.topic-triage-restore-copy {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.topic-triage-restore-copy strong {
+  color: #dcfce7;
+}
+
+.topic-triage-restore-receipt.mute .topic-triage-restore-copy strong {
+  color: #f8fafc;
+}
+
+.topic-triage-restore-copy small {
+  color: inherit;
+  opacity: 0.9;
 }
 
 .topic-detail-actions {

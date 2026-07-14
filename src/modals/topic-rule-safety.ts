@@ -169,7 +169,7 @@ export function getRuleScopeExecutionReceipt(input: {
     filterText:
       'LLM 前先做确定性 sender / group 候选筛选；多个候选在同一维度内按 OR，群组和发送人同时设置时必须两者都命中。',
     finalCheckText:
-      'LLM 返回后，写入记忆、通知、摘要、自动答复、关注后续和 RuntimeAction 前会再次按发送人、群组、时间和系统观察上下文校验。',
+      'LLM 返回后，写入记忆、通知、摘要、自动答复、关注后续和 RuntimeAction 前会再次按发送人、群组、时间和系统观察上下文校验；规则限定的发送人或群组如果在消息上下文里缺失，会按未确认范围拦截。',
     boundaryText:
       '保存或编辑只更新本机手动规则；不会分析历史消息、导入系统观察、发送通知或创建外部动作。',
   };
@@ -332,7 +332,7 @@ export function getRuleEffectBoundaryReceipt(
     tone,
     label,
     items: [
-      '入库：只有通过最终范围校验的命中才写入记忆；最近拦截会显示在规则卡片上。',
+      '入库：只有通过最终范围校验的命中才写入记忆；如果规则限定发送人或群组但消息缺少对应上下文，会按未确认范围拦截；最近拦截会显示在规则卡片上。',
       `打扰：${delivery.detail}`,
       getAutoReplyBoundaryText(input),
       getAutomationBoundaryText(input),
@@ -377,7 +377,7 @@ export function getRuleRunPreviewReceipt(
     title,
     triggerText,
     matchText:
-      '匹配：先按发送人 / 群组做确定性候选筛选，再让 LLM 判断规则语义是否真正命中。',
+      '匹配：先按发送人 / 群组做确定性候选筛选，再让 LLM 判断规则语义是否真正命中；最终确认时缺少被限定的发送人或群组上下文会被拦截。',
     outcomeText: `命中：通过最终发送人、群组和时间校验后才写入记忆；${delivery.detail}`,
     boundaryText:
       '保存本身不会回扫历史消息、发送通知、写入记忆、创建 RuntimeAction 或执行外部动作；系统观察规则也不会被导入、导出或改写。',

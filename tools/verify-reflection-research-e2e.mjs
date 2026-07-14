@@ -95,8 +95,42 @@ function threadDetailFixture() {
         createdAt: nowSeconds - 120,
       },
     ],
-    actions: [],
-    actionResults: [],
+    actions: [
+      {
+        id: 'action-openclaw-1',
+        type: 'runtime_action',
+        actionType: 'delegate_openclaw',
+        title: '请 OpenClaw 核对 Orbit 风险',
+        description: '检查 Orbit 发布风险是否已有外部执行结果。',
+        params: { target: 'orbit-risk' },
+        riskLevel: 'medium',
+        confidence: 0.74,
+        evidenceRefs: ['message:msg-2'],
+        requiresApproval: false,
+        state: 'queued',
+        createdAt: nowSeconds - 70,
+        threadId: 'thread-1',
+        runId: 'run-1',
+        executionMode: 'manual',
+        priority: 7,
+        dependsOn: [],
+        retryCount: 0,
+        queueStatus: 'queued',
+      },
+    ],
+    actionResults: [
+      {
+        id: 'result-openclaw-1',
+        actionId: 'action-openclaw-1',
+        threadId: 'thread-1',
+        runId: 'run-1',
+        resultType: 'delegate_openclaw',
+        summary: 'OpenClaw 返回了 Orbit 本地审计 transcript。',
+        payload: { status: 'checked', risk: 'needs_followup' },
+        transcriptPath: 'delegations/openclaw-orbit-risk.jsonl',
+        createdAt: nowSeconds - 50,
+      },
+    ],
     researchAttempts: [
       {
         id: 'research-hit',
@@ -233,6 +267,26 @@ function threadListFixture() {
   };
 }
 
+function outreachSessionFixture() {
+  return {
+    id: 'outreach-orbit-1',
+    originKind: 'reflection_action',
+    threadId: 'thread-1',
+    runId: 'run-1',
+    actionId: 'action-openclaw-1',
+    channel: 'glip',
+    targetType: 'group',
+    targetRef: 'Launch',
+    renderedQuestion: '请确认 Orbit owner 是否仍是 Platform Team。',
+    status: 'waiting_reply',
+    requiresApproval: false,
+    followupCount: 1,
+    maxFollowup: 3,
+    createdAt: nowSeconds - 180,
+    updatedAt: nowSeconds - 120,
+  };
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -245,6 +299,8 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 
 try {
   let failReflectionList = false;
+  let emptyReflectionList = false;
+  let failOutreachSessions = true;
 
   await context.route('http://localhost:3210/api/v1/**', async (route) => {
     const requestUrl = route.request().url();
@@ -302,13 +358,26 @@ try {
     }
 
     if (pathname.endsWith('/reflection-threads')) {
-      await route.fulfill(jsonResponse(threadListFixture()));
+      await route.fulfill(
+        jsonResponse(
+          emptyReflectionList
+            ? { items: [], total: 0, limit: 50, offset: 0 }
+            : threadListFixture(),
+        ),
+      );
       return;
     }
 
     if (pathname.endsWith('/outreach/sessions')) {
       await route.fulfill(
-        jsonResponse({ error: 'outreach service unavailable' }, 503),
+        failOutreachSessions
+          ? jsonResponse({ error: 'outreach service unavailable' }, 503)
+          : jsonResponse({
+              items: [outreachSessionFixture()],
+              total: 1,
+              limit: 50,
+              offset: 0,
+            }),
       );
       return;
     }
@@ -354,6 +423,39 @@ try {
   await operationScopeBox
     .getByText(/暂停会停止自动推进；关闭会停止后续推进/)
     .waitFor({ timeout: 10000 });
+  const backButtonBoundary = await page.locator('button.back-btn').getAttribute('title');
+  assert.match(backButtonBoundary, /返回自我反思线程列表/);
+  assert.match(backButtonBoundary, /不运行反思、不刷新研究/);
+  assert.equal(
+    await page.locator('button.back-btn').getAttribute('aria-label'),
+    backButtonBoundary,
+  );
+  const revisitButton = page.locator('button.primary-btn', {
+    hasText: '立即自我反思',
+  });
+  const revisitButtonBoundary = await revisitButton.getAttribute('title');
+  assert.match(revisitButtonBoundary, /为 项目反思: Orbit 提交一次 manual_revisit/);
+  assert.match(revisitButtonBoundary, /提交期间当前 5 条研究 trace 仍是旧快照/);
+  assert.match(
+    revisitButtonBoundary,
+    /不会联网搜索、发送消息、确认决策、执行 OpenClaw、写 confirmed profile 或删除原始证据/,
+  );
+  assert.equal(await revisitButton.getAttribute('aria-label'), revisitButtonBoundary);
+  const pauseButton = page.locator('button.ghost-btn', { hasText: /^暂停$/ });
+  const pauseButtonBoundary = await pauseButton.getAttribute('title');
+  assert.match(pauseButtonBoundary, /暂停自我反思/);
+  assert.match(pauseButtonBoundary, /只把 项目反思: Orbit 设为 paused/);
+  assert.match(
+    pauseButtonBoundary,
+    /不会删除历史证据、清空研究 trace、取消已排队动作/,
+  );
+  assert.equal(await pauseButton.getAttribute('aria-label'), pauseButtonBoundary);
+  const closeButton = page.locator('button.danger-btn', { hasText: /^关闭$/ });
+  const closeButtonBoundary = await closeButton.getAttribute('title');
+  assert.match(closeButtonBoundary, /关闭自我反思/);
+  assert.match(closeButtonBoundary, /会先要求确认/);
+  assert.match(closeButtonBoundary, /不删除证据、撤销已发生外部副作用/);
+  assert.equal(await closeButton.getAttribute('aria-label'), closeButtonBoundary);
   await page.getByText('反思推进回执').waitFor({ timeout: 10000 });
   await page.getByText('推进需要修复').waitFor({ timeout: 10000 });
   await page
@@ -368,7 +470,56 @@ try {
   await page
     .getByText(/关联主动询问加载失败：.*outreach service unavailable/)
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '立即自我反思' }).click();
+  const actionCard = page.locator('.action-card', {
+    hasText: '请 OpenClaw 核对 Orbit 风险',
+  });
+  await actionCard.getByText('OpenClaw 委派').waitFor({
+    timeout: 10000,
+  });
+  const executeActionButton = actionCard.locator('button.tiny-btn', {
+    hasText: /^执行$/,
+  });
+  const executeActionBoundary = await executeActionButton.getAttribute('title');
+  assert.match(executeActionBoundary, /执行动作/);
+  assert.match(executeActionBoundary, /请 OpenClaw 核对 Orbit 风险/);
+  assert.match(executeActionBoundary, /可能触发对应外部流程/);
+  assert.match(
+    executeActionBoundary,
+    /不会直接改写反思总结、研究 trace、confirmed profile 或删除证据/,
+  );
+  assert.equal(
+    await executeActionButton.getAttribute('aria-label'),
+    executeActionBoundary,
+  );
+  const cancelActionButton = actionCard.locator('button.tiny-btn.danger', {
+    hasText: /^取消$/,
+  });
+  const cancelActionBoundary = await cancelActionButton.getAttribute('title');
+  assert.match(cancelActionBoundary, /取消动作/);
+  assert.match(cancelActionBoundary, /只请求取消仍在队列中的/);
+  assert.match(cancelActionBoundary, /不会撤销已经发生的外部副作用/);
+  assert.equal(
+    await cancelActionButton.getAttribute('aria-label'),
+    cancelActionBoundary,
+  );
+  const transcriptButton = page
+    .locator('.run-card', { hasText: 'OpenClaw 返回了 Orbit 本地审计 transcript。' })
+    .locator('button.tiny-btn', { hasText: /^展开$/ });
+  const transcriptBoundary = await transcriptButton.getAttribute('title');
+  assert.match(transcriptBoundary, /展开 transcript/);
+  assert.match(transcriptBoundary, /只读取或隐藏本机 delegations\/openclaw-orbit-risk\.jsonl/);
+  assert.match(transcriptBoundary, /不会重跑 OpenClaw、重新发送消息、确认结论/);
+  assert.equal(await transcriptButton.getAttribute('aria-label'), transcriptBoundary);
+  failOutreachSessions = false;
+  await page.locator('.sub-error button.tiny-btn', { hasText: /^重试$/ }).click();
+  const outreachLink = page.locator('.thread-link', { hasText: '查看会话' });
+  await outreachLink.waitFor({ timeout: 10000 });
+  const outreachLinkBoundary = await outreachLink.getAttribute('title');
+  assert.match(outreachLinkBoundary, /查看关联主动询问会话/);
+  assert.match(outreachLinkBoundary, /群组 \/ Launch 的 等待回复 详情页/);
+  assert.match(outreachLinkBoundary, /不会批准发送、重试、取消、补发追问/);
+  assert.equal(await outreachLink.getAttribute('aria-label'), outreachLinkBoundary);
+  await revisitButton.click();
   const pendingResearchReceipt = page.locator('.research-pending-receipt');
   await pendingResearchReceipt
     .getByText('新一轮本地研究提交中')
@@ -392,7 +543,7 @@ try {
   await operationReceipt
     .getByText(/不代表已发送消息、确认决策、执行 OpenClaw/)
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '暂停' }).click();
+  await page.locator('button.ghost-btn', { hasText: /^暂停$/ }).click();
   await operationReceipt
     .getByText('反思线程已暂停')
     .waitFor({ timeout: 10000 });
@@ -402,7 +553,13 @@ try {
   await page.locator('.hero-metrics').getByText('状态 已暂停').waitFor({
     timeout: 10000,
   });
-  await page.getByRole('button', { name: '恢复' }).click();
+  const resumeButton = page.locator('button.ghost-btn', { hasText: /^恢复$/ });
+  const resumeButtonBoundary = await resumeButton.getAttribute('title');
+  assert.match(resumeButtonBoundary, /恢复自我反思/);
+  assert.match(resumeButtonBoundary, /只把 项目反思: Orbit 设回 active/);
+  assert.match(resumeButtonBoundary, /不会立刻运行 manual_revisit/);
+  assert.equal(await resumeButton.getAttribute('aria-label'), resumeButtonBoundary);
+  await resumeButton.click();
   await operationReceipt
     .getByText('反思线程已恢复')
     .waitFor({ timeout: 10000 });
@@ -461,7 +618,35 @@ try {
     .getByText('未补查 1', { exact: true })
     .waitFor({ timeout: 10000 });
   await researchTracePanel
+    .locator('.research-summary-pill.failed')
     .getByText('失败 1', { exact: true })
+    .waitFor({ timeout: 10000 });
+  const researchEvidenceReceipt = researchTracePanel.locator(
+    '.research-evidence-receipt',
+  );
+  await researchEvidenceReceipt
+    .getByText('研究证据采用回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText('本轮研究证据已进入反思')
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText(/3 个 evidence refs 已作为这次 reflection run 的输入/)
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText('采用 3 个 evidence refs · 下方展示 1 条研究 link')
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText('glip / manual / jira', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText('进入同一轮 ReflectionWorker 输入，用于生成总结、开放问题和候选动作。')
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText(/不联网搜索、不外发、不确认事实、不写 confirmed profile/)
+    .waitFor({ timeout: 10000 });
+  await researchEvidenceReceipt
+    .getByText('需要核对时看下方研究命中证据；如果证据不足，补充开放问题后重新反思。')
     .waitFor({ timeout: 10000 });
   await page.getByText('确认 Orbit owner 是否已有本地证据').waitFor({
     timeout: 10000,
@@ -487,6 +672,27 @@ try {
     .waitFor({
       timeout: 10000,
     });
+  const ownerTraceBoundary = await ownerResearchCard.getAttribute('title');
+  assert.match(
+    ownerTraceBoundary,
+    /本地研究 trace：确认 Orbit owner 是否已有本地证据/,
+  );
+  assert.match(ownerTraceBoundary, /状态 已命中/);
+  assert.match(
+    ownerTraceBoundary,
+    /命中 2 条候选，采用 evidence refs 2 个/,
+  );
+  assert.match(
+    ownerTraceBoundary,
+    /读取来源 glip \/ manual；已裁剪 unsupported_slack/,
+  );
+  assert.match(
+    ownerTraceBoundary,
+    /不会重新查询、联网搜索、发送消息、确认事实、写 confirmed profile、创建动作或执行 OpenClaw/,
+  );
+  assert.equal(await ownerResearchCard.getAttribute('aria-label'), ownerTraceBoundary);
+  assert.equal(await ownerResearchCard.getAttribute('role'), 'group');
+  assert.equal(await ownerResearchCard.getAttribute('tabindex'), '0');
   const emptyResearchCard = page.locator('.research-trace-card', {
     hasText: '确认是否已有 BE signoff 证据',
   });
@@ -518,6 +724,22 @@ try {
   await skippedResearchCard
     .getByText(/这不是读取失败，也没有联网搜索、发送消息/)
     .waitFor({ timeout: 10000 });
+  const skippedTraceBoundary = await skippedResearchCard.getAttribute('title');
+  assert.match(
+    skippedTraceBoundary,
+    /本地研究 trace：规划器未返回可执行的本地研究查询/,
+  );
+  assert.match(skippedTraceBoundary, /状态 未补查/);
+  assert.match(
+    skippedTraceBoundary,
+    /本轮未执行额外 recall，继续使用线程已有证据/,
+  );
+  assert.match(skippedTraceBoundary, /未读取额外来源/);
+  assert.match(
+    skippedTraceBoundary,
+    /不会重新查询、联网搜索、发送消息、确认事实、写 confirmed profile、创建动作或执行 OpenClaw/,
+  );
+  assert.equal(await skippedResearchCard.getAttribute('aria-label'), skippedTraceBoundary);
   const degradedResearchCard = page.locator('.research-trace-card', {
     hasText: '确认 PM 决策是否已有本地证据',
   });
@@ -536,8 +758,24 @@ try {
   await failedResearchCard
     .getByText('recall index temporarily unavailable')
     .waitFor({ timeout: 10000 });
+  const failedTraceBoundary = await failedResearchCard.getAttribute('title');
+  assert.match(
+    failedTraceBoundary,
+    /本地研究 trace：确认发布风险是否已有本地证据/,
+  );
+  assert.match(failedTraceBoundary, /状态 查询失败/);
+  assert.match(
+    failedTraceBoundary,
+    /查询失败，没有把这条查询作为已查清结论/,
+  );
+  assert.match(failedTraceBoundary, /读取来源 web/);
+  assert.match(
+    failedTraceBoundary,
+    /故障或降级：recall index temporarily unavailable/,
+  );
+  assert.equal(await failedResearchCard.getAttribute('aria-label'), failedTraceBoundary);
   const researchEvidencePanel = page.locator('.panel', {
-    hasText: '研究命中证据',
+    has: page.locator('.panel-title', { hasText: /^研究命中证据$/ }),
   });
   await researchEvidencePanel.waitFor({ timeout: 10000 });
   await researchEvidencePanel
@@ -606,6 +844,39 @@ try {
     .getByText('本次刷新没有拿到新的 Reflection 列表；下方仍是上次成功读取的线程快照。')
     .waitFor({ timeout: 10000 });
   await listCard.getByText('等待主动询问回复').waitFor({ timeout: 10000 });
+
+  failReflectionList = false;
+  emptyReflectionList = true;
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/reflection-threads?source=dream&search=Project%20Cedar`,
+    { waitUntil: 'domcontentloaded' },
+  );
+
+  const emptyReceipt = page.locator('.empty-filter-receipt');
+  await emptyReceipt
+    .getByText('筛选未命中回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText('梦境复核未匹配反思线程')
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText('Memory Service 已按梦境复核请求查找“Project Cedar”，但当前 Reflection thread 索引没有匹配项。')
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText('source=dream · search=Project Cedar · 状态 进行中')
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText('服务返回 0 / 总计 0')
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText(/不会新建反思线程、运行 manual_revisit、写记忆、确认决策、发送消息或执行动作/)
+    .waitFor({ timeout: 10000 });
+  await emptyReceipt
+    .getByText('清除筛选后查看全部线程；必要时回到梦境页换一个主题复核。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('没有找到与“Project Cedar”对应的自我反思线程')
+    .waitFor({ timeout: 10000 });
 
   console.log('verify-reflection-research-e2e: ok');
 } finally {

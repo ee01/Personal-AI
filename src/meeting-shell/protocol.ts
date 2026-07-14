@@ -1079,6 +1079,14 @@ export function createDemoMeetingSnapshot(
         source: 'memory',
         createdAt: Date.now() - 60000,
       },
+      {
+        id: 'alert-demo-context-refresh',
+        level: 'P2',
+        title: 'Current speaker updated',
+        body: 'Alex is speaking now and the meeting context refreshed.',
+        source: 'summary',
+        createdAt: Date.now() - 30000,
+      },
     ],
     chapters:
       overrides.chapters || chapterSeed.map((chapter) => ({ ...chapter })),

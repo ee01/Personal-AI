@@ -146,7 +146,7 @@ Notification Center 不会把“已经发给某个渠道”直接视为“用户
 - `hasSuccessfulDelivery`: 是否曾经有过送达、点击或忽略类成功回执
 - `firstDeliveredAt` / `lastDeliveredAt` / `updatedAt`: 按回执事件时间记录，而不是按服务端收到请求的时间猜测；`POST /notification-center/delivery` 可以带 `recordedAt`
 - `channelReceipts`: feed item 上的跨渠道回执摘要，按 Chrome / Doubao / Glip 分别说明未尝试、已送达、已查看、已忽略或发送失败；Chrome 通知和 Provider digest 会把“其他渠道已送达/失败”的关键信息露出来，便于用户和排障时区分“这个渠道第一次提醒”和“别的渠道已经试过”。Provider / Doubao markdown 摘要在其他渠道最近失败时还会带失败原因；如果该渠道此前已经送达、查看或忽略，摘要会说明有效状态没有被最近失败回滚。
-- Chrome 系统通知的第一行 context label 也会带当前渠道上次失败原因，以及其他渠道的失败原因和有效状态边界，例如“Glip发送失败（bot_not_configured，未送达）”或“豆包已查看，最近失败（provider_retry_failed，已查看不回滚）”。这只是解释投递回执，不会自动确认、忽略、重发或改全局处理状态。
+- Chrome 系统通知的第一行 context label 也会带当前渠道上次失败原因，以及其他渠道的失败原因和有效状态边界；如果其他渠道已有回执而 Chrome 还是第一次展示，会标成“本渠道首次提醒”，避免把它误读成全局新通知。例如“Glip发送失败（bot_not_configured，未送达）”或“豆包已查看，最近失败（provider_retry_failed，已查看不回滚）”。这只是解释投递回执，不会自动确认、忽略、重发或改全局处理状态。
 - 如果 feed item 带 `evidenceReceipt`，Chrome 系统通知 context label 会同时显示“依据 N 条记忆”；Provider / Doubao digest 会显示 `[依据 N 条记忆；只读依据]`。这条证据线和渠道回执一样只读，帮助用户判断为什么被提醒，不代表该通知已处理或证据已重新核验。
 
 这避免了一个常见误读：例如 Doubao 或 Chrome 曾经成功展示过通知，但后面一次网络重试写入了 `failed`。此时 `status=failed` 说明最后一次尝试失败，`effectiveStatus=delivered` 才说明这条 source 对该渠道已经有过可用送达。
@@ -177,8 +177,10 @@ Notification Center 对外主要暴露两个接口：
 - 如果某个待办曾经成功送达、后来又发生投递失败，等它重新进入 feed 时会优先显示“上次发送失败”，而不是只显示普通“再次提醒”；这样用户能区分“冷却后重复提醒”和“渠道最近确实失败过”
 - `feed` 可以通过 `deliveryMode` 选择打扰策略：`retry_after_cooldown` 是默认实时提醒，`incremental` 只返回从未成功送达的新待办，`daily_digest` 返回仍未完成的待办用于低打扰汇总。`daily_digest` 只放宽 `todo` 的已投递过滤，`notice` 仍然保持送达后不重复进入 feed
 - `daily_digest` 放宽的是“已送达但仍未完成”的待办，不会把该 channel 已经 `clicked` / `dismissed` 的待办重新拉回摘要；摘要排序也会把新待办和失败重试放在“已提醒过，仍待处理”的旧待办前面
-- Provider / Doubao 摘要会按 token budget 只保留完整条目；如果放不下全部，会追加“已截断，还有 N 条未放入本次摘要”的回执，并且只把真正展示出来的 sourceRef 写入渠道送达回执。未展示的通知或待办会继续留在后续 feed，不会因为一次截断摘要被误判成已经送达。若不是 token budget，而是 digest 只取了 feed 前 N 条，正文会显示“Feed 还有更多”，说明本次摘要只是一个受限视图，剩余条目仍留在 Notification Center feed。
+- Provider / Doubao 摘要会按 token budget 只保留完整条目；如果放不下全部，会追加“已截断，还有 N 条未放入本次摘要”的回执，并且只把真正展示出来的 sourceRef 写入渠道送达回执。未展示的通知或待办会继续留在后续 feed，不会因为一次截断摘要被误判成已经送达。若不是 token budget，而是 digest 只取了 feed 前 N 条，正文会显示“Feed 还有更多”，说明本次摘要只是一个受限视图，剩余条目仍留在 Notification Center feed。非空摘要也会显示 `Feed 快照口径回执`，把本次 channel、lane、deliveryMode、limit、返回条数、是否还有更多和只读边界直接放进摘要正文。
 - `feed` 响应会带 `meta`，记录本次实际 channel、lanes、deliveryMode、limit、returned 和 `hasMore`。`total` 仍表示本次返回条数；如果 `hasMore=true`，说明这次 response 被 limit 截断，并不代表当前 feed 已经全部展示完。
+- `meta.limitReceipt` 会显示 `Feed limit 应用回执`：说明调用方是否没有传 `limit`、是否被服务端下限/上限 clamp，以及本次实际应用的 `limit`。它只解释本次读取最多返回多少条，不会确认、忽略、重发通知、写渠道送达回执或改变全局处理状态。
+- `meta.snapshotReceipt` 会显示 `Feed 快照口径回执`：说明这次读取的时间、channel、lane、delivery mode、limit、返回条数和是否还有更多。它只解释本次只读队列快照；不代表之后不会有新通知，也不会确认、忽略、重发通知、写渠道送达回执或改变全局处理状态。
 - 当 `feed` 成功读取但返回 0 条时，`meta.emptyReceipt` 会显示 `Feed 空结果回执`：说明本次检查的 channel、lane 和 delivery mode，以及“成功但为空”的边界。这不代表读取失败，也不会确认、忽略、重发通知，不会写渠道送达回执或改变全局处理状态；Provider / Doubao digest 的空态也会展示同一语义，避免把“暂无”误读成失败或已处理。
 
 `delivery` 的语义是：
@@ -266,7 +268,7 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 - 如果 `weekly_report` 通知指向的 `reports/*.md` 已被清理、移动或暂时不可读，Reports 页面会显示“周报通知目标暂时不可读”回执，并先展示最近可用周报；这个兜底只读取已生成 Markdown，不会重新生成周报、写入通知中心、发送 Bot/Chrome/Doubao，或改变通知处理状态
 - 带 `payload.confirmRequestId` 的 `truth_conflict` / `notify_user` 等通知会打开决策中心的具体确认项，页面会置顶并高亮该卡片；如果确认项已处理或不在当前队列，会显示明确落空说明
 - Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
-- 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
+- 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。snooze 创建的未来提醒会继承原通知的证据引用和 weave 上下文，到点后 `snoozeReceipt` 与 `evidenceReceipt` 会一起进入 Chrome context / Provider digest。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
 - Chrome 二级按钮会先把后端全局动作提交成功，再写 `dismissed` / `delivered` 这类渠道回执；如果 snooze 或 dismiss API 失败，不会先把原通知从 Chrome feed 里终止隐藏，避免用户以为“稍后提醒”已设置但未来提醒丢失
 
 对应实现：
@@ -345,13 +347,15 @@ DigestQueueService 的处理流程是：
 
 如果任一内置 digest 推送失败，队列条目会保留，`digest_queue_process` 后台任务会被标成失败，并在 popup 的后台任务面板同时显示失败原因、“队列已保留 N 条”和保留明细。保留明细会复用当前队列快照，说明哪些关注项和释放节奏还在本地等待；这样用户不会看到“后台任务成功”但摘要实际没有发出去的假状态，也不会只看到网络错误却不知道摘要是否还在队列里。
 
-popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送队列处理` 行显示本地摘要队列的实时状态：总共等待多少条、其中多少条已经到释放窗口、最早下一次释放时间、对应的摘要任务/关注项和释放节奏是什么。这样“上次成功 / 无到期摘要”不会掩盖其实还有摘要正在等待用户设定的时间，也不会让英文界面显示固定中文队列文案。
+popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送队列处理` 行显示本地摘要队列的实时状态：总共等待多少条、其中多少条已经到释放窗口、最早下一次释放时间、对应的摘要任务/关注项和释放节奏是什么。队列块会显示本次读取时间，并说明它独立于最近一次后台运行结果；这样“上次成功 / 无到期摘要”不会掩盖其实还有摘要正在等待用户设定的时间，也不会让英文界面显示固定中文队列文案。
 
 当后台任务刚跑完但没有到期摘要时，运行记录也会带“等待明细”，避免用户只看到“等待 N 条”却不知道这些条目是否来自关注项规则、每日摘要还是每周摘要。
 
 当队列里已经有条目到达释放窗口时，后台任务行和 tooltip 会显示 `释放窗口回执`：这些摘要已经具备发送资格，等待下一次 `digest_queue_process` 后台任务尝试推送；查看或刷新状态只是读本地队列，不会替它们立即发送、不会写入 Memory Service，也不会确认任何通知。
 
 同一行现在还会直接显示本地延迟边界：这是 extension 本地队列，只有到释放窗口后由后台任务推送，通常 15 分钟内检查；查看或刷新状态不会立刻发送摘要、不会写入 Memory Service，也不会确认任何通知处理状态。
+
+`汇总推送队列处理` 的 `立即执行` 按钮和可见操作边界会按当前队列快照改写：已到期时说明会处理到期摘要并可能发送到配置渠道，未到期时说明只检查队列、不提前发送，空队列时说明不会发送空摘要；如果队列状态未确认，则说明本次运行会重新读取并尝试处理到期摘要，最终以运行回执为准。这个按钮不会写入 Memory Service、确认通知、清空历史或改变自动排程；未到期条目仍留在本机队列。
 
 本地 digest 不是某一条 RingCentral 原消息，所以 Bot 文案不会再生成空群组 mention 或 `app.ringcentral.com/messages/` 这类无效原消息链接；摘要正文会作为可读内容直接展示。
 
@@ -408,6 +412,7 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 业内产品普遍把通知拆成可扫读 feed、可操作入口和用户可控的提醒强度。Android 通知设计强调明确通知目的、给出直接 action、设置类别/渠道，并清理过期通知；Teams Activity Feed 则把 unread、mention、reply 等类型做成可过滤队列；Slack 新 Activity 也把通知、提醒、过滤视图和清理动作放在一个可处理队列里。
 - 通知研究也支持“不要把所有通知都立即打断用户”：Intelligent Notification Systems survey 把核心挑战归纳为根据用户上下文和偏好选择合适时机；Yahoo! JAPAN 的大规模 adaptive scheduling 研究显示，延迟到更可打断的时机能改善响应速度；DOIG 研究提示要记录用户实际响应层级，而不是只看是否触达。
 - 对 Personal AI 来说，待办通知的“稍后提醒/暂不提醒”不能和 notice 的“不再提示”混成同一种操作，也不能固定延后 24 小时。当前实现会保留 notice 的低干扰关闭路径，让带截止时间的待办在截止前回到用户面前；即使只是展示成功、暂不提醒或直接关闭但没有真正处理，`todo` 也会在 6 小时冷却后重新进入 feed。
+- 本轮补齐 snooze 未来提醒的证据链：用户选择“稍后提醒”后，新 `notification_records` 会继承原通知的 evidence / weave 字段。回提醒到点时，Chrome 和 digest 既显示“第 N 次稍后提醒、仍未处理”，也继续显示依据记忆数量，避免低打扰延后把来源解释丢掉。
 
 本轮对“渠道投递回执”补了状态可解释性：
 
@@ -420,7 +425,8 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 本轮继续补齐回执事件时间：状态回调和设备确认类系统经常异步、延迟或乱序到达，所以 `recordedAt` 必须代表渠道事件发生时间；旧事件可以补足首次/末次送达证据，但不能把较新的失败或处理状态倒回去。
 - 本轮把这些回执从“当前 channel 的过滤依据”扩展成 feed item 的 `channelReceipts`：用户在 Chrome 里看到一条通知时，如果 Doubao 已经送达或 Glip 失败，context label 会显示“其他渠道”；Provider digest 里也会带同样的短回执。这样不改变去重、冷却或全局处理状态，只让跨渠道分发结果更可解释。
 - 本轮继续收紧 `channelReceipts` 的展示文案：如果某渠道已经 `clicked` / `dismissed`，之后又收到一次失败回执，短标签会保留“已查看，最近失败”或“已忽略，最近失败”，而不是退成“已送达，最近失败”。这样用户能同时看见“这个渠道曾经被处理过”和“最近一次 provider 回调仍需要排障”。
-- 本轮把同样的失败细节推进到 Chrome 系统通知 context label：当前渠道上次失败会显示失败原因和“曾已送达/未送达”等有效状态，其他渠道也会在短摘要里带失败原因。用户第一眼就能判断是“这个渠道从未送达”还是“已查看/已送达后最近 provider 回调失败”，不会把排障事件误读成事项已完成或通知完全丢失。
+- 本轮把同样的失败细节推进到 Chrome 系统通知 context label：当前渠道上次失败会显示失败原因和“曾已送达但不等于已处理/未送达”等有效状态，其他渠道也会在短摘要里带失败原因。用户第一眼就能判断是“这个渠道从未送达”还是“已查看/已送达后最近 provider 回调失败”，不会把排障事件误读成事项已完成或通知完全丢失。
+- 本轮继续补齐 Chrome 第一眼语义：当当前渠道还是首次展示、但其他渠道已有送达或失败回执时，context label 会额外显示“本渠道首次提醒”。这说明“Chrome 第一次提醒你”，不是“这件事在整个 Notification Center 里第一次出现”，也不会确认、忽略、重发或改变全局处理状态。
 - 本轮进一步让 Provider / Doubao 摘要里的“其他渠道”失败回执带上失败原因，并在已有有效送达/查看/忽略时写明“有效状态仍按原状态”。这样跨渠道摘要不只告诉用户“失败了”，也能解释失败是否覆盖了先前的有效回执。
 
 本轮对通知点击落点补了确认项深链：
@@ -439,6 +445,7 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 本轮继续把 popup 的本地队列状态从一段后端中文文案改成结构化状态：后台任务行现在按当前界面语言分行展示本地待释放总量、已到期数量、最早后续释放时间、摘要任务、关注项和每日/每周节奏；旧 `currentQueueSummary` 仍保留为兜底，避免旧调用方断掉。
 - 本轮把 popup 本地队列状态的第一眼边界补清楚：这是 extension 本地延迟摘要队列；查看/刷新只是读状态，不会立即发送、不会写入 Memory Service、不会确认通知。这样用户看到“2 条、暂无到期”时能同时知道它们还在本地等待释放，而不是已经进入服务端 Notification Center 或已经被处理。
 - 本轮继续补齐到期态：当已有条目进入释放窗口，状态摘要会显示 `释放窗口回执`，说明这些条目只是具备发送资格，仍要等后台任务推送；刷新状态不会把它们当场发出，也不会写 Memory Service 或确认通知。
+- 本轮补清了空队列快照：如果当前 `digestQueues` 已经没有等待释放的本地摘要，popup 会直接显示“当前本地队列为空 / 没有到期条目”，并把旧的后台运行摘要降级为“最近运行记录”。这样不会把上一次“等待/保留 N 条”的历史结果误读成当前仍有摘要待释放。
 - 本轮把本地摘要释放从小时级检查收紧到 15 分钟检查窗口：`digest_queue_process` 每 15 分钟检查一次，Concerned Items digest 的内部 gate 也同步为 15 分钟。发送资格仍由条目自己的每日/每周释放时间决定；更频繁的检查只是减少“刚过释放时间却要等近一小时”的等待，不会让查看/刷新触发发送，也不会增加未到期摘要的打扰。
 - 本轮对 Notification Center feed 的 `daily_digest` 语义做了边界收紧：每日摘要可以重新列出已提醒但仍未完成的 `todo`，并用 `already_delivered_unfinished` 标明它不是新待办；但已送达的 `notice` 不会因为调用 daily digest 又重复出现。这样符合“摘要用于处理未完成事项、notice 用于一次性同步”的用户心智。
 - 本轮继续补齐 `daily_digest` 的“未完成”边界：channel 已经 `clicked` / `dismissed` 的 todo 不再回到每日摘要；新待办、上次发送失败的待办会排在“已提醒过，仍待处理”的旧待办前面，避免摘要第一屏被重复提醒占住。
@@ -446,6 +453,9 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 本轮把 migration `045` 留下的通知证据字段接到 feed / digest / Chrome context：有 `evidence_refs_json` 的通知会显示“依据 N 条记忆”的只读证据回执，最多露出前三个紧凑来源标签，并明确这不会确认、忽略、重发或改变渠道投递状态。FCM 把 accepted / delivered 这类投递日志用于诊断，Teams read receipt 也区分通知看到和真正读到；Personal AI 这里同样把“为何提醒”和“渠道是否送达/用户是否处理”拆开。
 - 本轮给 feed API 本身补了 `meta.hasMore` 回执：当调用方请求 `limit=20` 只拿到 20 条时，`total=20` 不再被误解成“全部只有 20 条”。这和 Slack / Teams Activity feed 的筛选心智一致：用户或渠道消费者需要知道当前看到的是哪种视图、是否还有后续项，而不是只能从返回数组长度猜。
 - 本轮继续把 `meta.hasMore` 接到 Provider / Doubao digest：如果摘要只是 feed 前 N 条，正文会追加“Feed 还有更多”，并明确未展示条目还在 feed、不会写入本次渠道送达回执。这样用户能区分“内容太长被预算截断”和“当前摘要本来就是受限页”，同时保持送达写回只覆盖实际可见条目。
+- 本轮给 feed API 增加 `meta.snapshotReceipt`：每次读取都会标出读取时间、channel、lane、delivery mode、limit、返回条数和 `hasMore` 口径，并说明这是只读快照，不代表未来无新通知，也不会确认、忽略、重发或写渠道送达回执。这样空结果、非空列表和 daily digest 都有同一套“当前可见 slice”解释。
+- 本轮把 `Feed 快照口径回执` 接入非空 Provider / Doubao digest：即使摘要没有被 token budget 截断、也没有 `hasMore`，正文仍会说明本次读取的是哪个 channel / lane / delivery mode 的只读 feed 快照，以及 sourceRefs 写回只覆盖实际展示条目。
+- 本轮补齐 `Feed limit 应用回执`：`GET /notification-center/feed` 会在 meta 里说明没有传 limit 时使用默认 20、超过上限时应用 100、低于下限时应用 1。这样 API 消费者和排障时不用从返回条数反推服务端是否截断或保护性修正，且该回执只解释读取窗口，不改变投递/处理状态。
 
 本轮对周报 / Dream Digest 的投递目标做了语义对齐：
 
@@ -456,6 +466,7 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 本轮补齐周报通知目标缺失时的兜底体验：如果通知里的 `reportPath` 指向旧文件，页面不再把缺失文件塞成一条假列表项并停在读取错误，而是显示缺失目标回执并打开最新可用周报。这样符合摘要通知的心智：通知负责带路和说明状态，报告正文仍来自 `reports/` 里真实存在的已生成文件。
 - 本轮把 Options 里的“立即推送”结果从短 toast 升级成配置区内的结构化回执：用户能看到 `none` 是否真的没有写通知、群组 Bot 失败时周报 notice 是否仍已写入、Dream Digest 纳入了几个 dream 和最新落点；当内容已生成但 Bot 或 notice 未完整确认时，状态会显示“已生成，投递部分失败”，不再用纯成功样式掩盖部分失败。这对应 Apple Scheduled Summary 的“选择并确认摘要范围”、Viva Insights 的个人 digest opt-out、Slack Activity 的可过滤队列心智：摘要必须暴露目标和状态，不能只给一句“已推送”。
 - 本轮继续把手动触发的提交中状态也纳入同一个回执：点击后立即显示本次使用的当前可见目标，`none` 目标说明不请求通知写入或 Bot 投递，`me/group` 目标说明正在等待 notice 写入和 Bot 投递确认；旧结果不会在新请求等待期间继续占位，避免用户误以为刚切换后的请求仍沿用上一轮目标。
+- 本轮补齐手动结果的提交快照边界：如果用户在周报 / Dream Digest 手动结果出现后又改了当前推送目标或群组 ID，旧结果会显示“当前设置已改为 ...；本回执仍是提交时快照”。这只解释屏幕上旧结果和当前控件的关系，不会保存新配置、重新生成、补发 Bot/Chrome/Doubao、写 Notification Center，或改变通知处理状态。
 
 参考：
 

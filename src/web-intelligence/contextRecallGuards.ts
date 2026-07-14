@@ -176,6 +176,7 @@ export interface ContextRecallMetaCandidate {
   uiSummary?: string | null;
   sourceLabel?: string | null;
   sourceTitle?: string | null;
+  exploreLink?: string | null;
   timestamp?: number | null;
   whyMatched?: string | null;
   whyRelevant?: string[] | null;
@@ -740,6 +741,68 @@ function getSourceMemoryCaptureModeLabel(
       SOURCE_MEMORY_CAPTURE_MODE_LABELS,
     )
   );
+}
+
+function getSourceMemoryDistillationLabel(
+  status?: string | null,
+  cue?: string | null,
+): string {
+  const normalized = normalizeContextRecallInfo(status).toLowerCase();
+  const cueText = clipContextRecallMetaValue(cue);
+  const statusLabel =
+    {
+      ready: '已生成蒸馏提示',
+      partial: '已有部分蒸馏提示',
+      blocked: '蒸馏被阻断',
+      draft: '仍是草稿提示',
+      pending: '蒸馏待确认',
+    }[normalized] || '未返回蒸馏状态';
+  return cueText ? `${statusLabel}：${cueText}` : statusLabel;
+}
+
+export function buildSourceMemoryRecallReceiptItems(
+  match: ContextRecallMetaCandidate,
+  options: {
+    sourceLinks?: Array<{ label: string; url: string }>;
+    exploreUrl?: string | null;
+  } = {},
+): Array<[string, string]> {
+  if (!isSourceMemoryMetaCandidate(match)) return [];
+
+  const sourceMemoryKind = getSourceMemoryKindLabel(match);
+  const sourceMemoryCaptureMode = getSourceMemoryCaptureModeLabel(match);
+  const provenance =
+    [sourceMemoryKind || '资料证据', sourceMemoryCaptureMode || '保存方式未知']
+      .filter(Boolean)
+      .join(' / ');
+  const distillationStatus = getContextRecallMetadataText(
+    match,
+    'sourceMemoryDistillationStatus',
+  );
+  const distillationCue = getContextRecallMetadataText(match, 'sourceMemoryCue');
+  const hasSourceLink = Boolean(options.sourceLinks?.length);
+  const hasExploreLink = Boolean(options.exploreUrl || match.exploreLink);
+
+  return [
+    ['资料', `已保存的 ${provenance}`],
+    ['蒸馏', getSourceMemoryDistillationLabel(distillationStatus, distillationCue)],
+    [
+      '复核',
+      hasExploreLink
+        ? '打开资料详情可核对保存原因、证据锚点、补备注或撤销'
+        : '本次没有可打开的资料详情链接，只能先看当前卡片摘要',
+    ],
+    [
+      '来源',
+      hasSourceLink
+        ? '原始来源已安全展示；点击只打开新标签核对'
+        : '原始来源未展示或已隐藏；仍保留资料详情复核入口',
+    ],
+    [
+      '边界',
+      '本卡只读，不新增/撤销资料记忆，不写画像/任务，不插入或发送',
+    ],
+  ];
 }
 
 export function formatContextRecallDisplayPriorityLabel(

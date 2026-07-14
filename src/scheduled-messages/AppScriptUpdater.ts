@@ -35,6 +35,7 @@ export interface UpdateResult {
   errorCode?: string;
   helpUrl?: string;
   helpMessage?: string;
+  updatedConfig?: SheetConfig;
 }
 
 export interface AppScriptVersionInfo {
@@ -524,7 +525,8 @@ export class AppScriptUpdater {
             currentVersion: deployedVersion,
             latestVersion,
             newVersion: deployedVersion,
-            skipped: true
+            skipped: true,
+            updatedConfig: this.config ? normalizeSheetConfig(this.config) : undefined,
           };
         }
       }
@@ -593,7 +595,8 @@ export class AppScriptUpdater {
         message: `App Script 已更新到版本 ${persistedVersionInfo.version}`,
         currentVersion: persistedVersionInfo.version,
         latestVersion,
-        newVersion: persistedVersionInfo.version
+        newVersion: persistedVersionInfo.version,
+        updatedConfig: this.config ? normalizeSheetConfig(this.config) : undefined,
       };
       
     } catch (error) {
@@ -1193,7 +1196,23 @@ export class AppScriptUpdater {
     }
 
     const syncService = new ConfigSyncService(this.token);
-    this.config = await syncService.syncConfig(this.config, {
+    let configToSync = this.config;
+    try {
+      const sheetConfig = await syncService.readConfigFromSheet(this.config.sheetId);
+      configToSync = normalizeSheetConfig({
+        ...this.config,
+        ...sheetConfig,
+        // Keep the metadata that this updater just observed or deployed, but
+        // adopt schema/Jira/webhook fields from the latest Sheet snapshot.
+        deploymentId: this.config.deploymentId || sheetConfig.deploymentId,
+        appScriptVersion: this.config.appScriptVersion,
+        appScriptLastUpdated: this.config.appScriptLastUpdated,
+      }) as SheetConfig;
+    } catch (error) {
+      console.warn('读取最新 Sheet Config 失败，使用当前 App Script 配置继续写回:', error);
+    }
+
+    this.config = await syncService.syncConfig(configToSync, {
       syncAction: 'app_script_metadata_update',
     });
   }

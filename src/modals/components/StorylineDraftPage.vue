@@ -25,12 +25,23 @@
             :key="option.id"
             type="button"
             :class="{ active: activeTarget === option.id }"
+            :aria-pressed="activeTarget === option.id ? 'true' : 'false'"
+            :title="targetSwitchButtonBoundary(option.id)"
+            :aria-label="targetSwitchButtonBoundary(option.id)"
             @click="setTarget(option.id)"
           >
             {{ option.shortLabel }}
           </button>
         </div>
-        <button v-if="canRequestDraft" class="btn ghost" type="button" @click="reloadDraft">
+        <button
+          v-if="canRequestDraft"
+          class="btn ghost"
+          type="button"
+          :disabled="!canReloadDraft"
+          :title="reloadButtonTitle"
+          :aria-label="reloadButtonTitle"
+          @click="reloadDraft"
+        >
           重新生成
         </button>
         <button
@@ -61,6 +72,40 @@
     <section v-else-if="loading" class="state-panel">
       <div class="loading-spinner"></div>
       <p>正在根据会前准备生成 Storyline draft...</p>
+      <section
+        v-if="draftRequestReceipt && !regenerateRequestReceipt"
+        class="draft-request-receipt"
+        aria-label="Storyline 草稿生成请求回执"
+      >
+        <div class="receipt-copy">
+          <div class="label">草稿生成请求回执</div>
+          <h2>正在请求 Storyline Draft API</h2>
+          <p>{{ draftRequestReceiptBoundary }}</p>
+        </div>
+        <div class="receipt-metrics" aria-label="Storyline draft request receipt">
+          <span>请求 {{ draftRequestReceipt.requestedAtLabel }}</span>
+          <span>{{ artifactLabel(draftRequestReceipt.targetArtifact) }}</span>
+          <span>Prep {{ draftRequestReceipt.prepShortId }}</span>
+          <span>等待服务端证据回执</span>
+        </div>
+      </section>
+      <section
+        v-if="regenerateRequestReceipt"
+        class="regenerate-request-receipt"
+        aria-label="Storyline 重新生成请求回执"
+      >
+        <div class="receipt-copy">
+          <div class="label">重新生成请求回执</div>
+          <h2>已清除本页缓存，正在重新生成</h2>
+          <p>{{ regenerateRequestReceiptBoundary }}</p>
+        </div>
+        <div class="receipt-metrics" aria-label="Storyline regenerate request receipt">
+          <span>请求 {{ regenerateRequestReceipt.requestedAtLabel }}</span>
+          <span>{{ artifactLabel(regenerateRequestReceipt.targetArtifact) }}</span>
+          <span>Prep {{ regenerateRequestReceipt.prepShortId }}</span>
+          <span>复核确认已重置</span>
+        </div>
+      </section>
     </section>
 
     <section v-else-if="draft" class="storyline-workbench">
@@ -107,6 +152,24 @@
           <span>{{ artifactLabel(sessionCacheReceipt.targetArtifact) }}</span>
           <span>草稿引用 {{ evidenceCount }} refs</span>
           <span>返回详情 {{ returnedEvidenceDetailCount }} 条</span>
+        </div>
+      </section>
+
+      <section
+        v-if="targetHandoffReceipt"
+        class="target-handoff-receipt"
+        aria-label="Storyline 输出目标回执"
+      >
+        <div class="receipt-copy">
+          <div class="label">输出目标回执</div>
+          <h2>{{ targetHandoffReceipt.title }}</h2>
+          <p>{{ targetHandoffReceipt.boundary }}</p>
+        </div>
+        <div class="receipt-metrics" aria-label="Storyline target handoff receipt">
+          <span>受众 {{ targetHandoffReceipt.audience }}</span>
+          <span>{{ targetHandoffReceipt.handoff }}</span>
+          <span>{{ targetHandoffReceipt.format }}</span>
+          <span>切换目标会重置复核 / 复制</span>
         </div>
       </section>
 
@@ -355,6 +418,9 @@
                 :key="option.id"
                 :class="['artifact', { active: activeTarget === option.id }]"
                 type="button"
+                :aria-pressed="activeTarget === option.id ? 'true' : 'false'"
+                :title="targetSwitchButtonBoundary(option.id)"
+                :aria-label="targetSwitchButtonBoundary(option.id)"
                 @click="setTarget(option.id)"
               >
                 <div class="row">
@@ -581,6 +647,26 @@ interface SessionCacheReceipt {
   targetArtifact: StorylineSuggestedArtifact;
 }
 
+interface DraftRequestReceipt {
+  requestedAtLabel: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  prepShortId: string;
+}
+
+interface RegenerateRequestReceipt {
+  requestedAtLabel: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  prepShortId: string;
+}
+
+interface TargetHandoffReceipt {
+  title: string;
+  audience: string;
+  handoff: string;
+  format: string;
+  boundary: string;
+}
+
 const loading = ref(false);
 const loadError = ref('');
 const draft = ref<StorylineDraftResponse | null>(null);
@@ -591,6 +677,8 @@ const selectedIndex = ref(0);
 const sourceOpenReceipt = ref<SourceOpenReceipt | null>(null);
 const copyReceipt = ref<CopyReceipt | null>(null);
 const cacheHit = ref<{ cachedAt?: string } | null>(null);
+const draftRequestReceipt = ref<DraftRequestReceipt | null>(null);
+const regenerateRequestReceipt = ref<RegenerateRequestReceipt | null>(null);
 let draftLoadToken = 0;
 
 const pagePath = computed(() =>
@@ -610,6 +698,7 @@ const activeTarget = computed(
 const canRequestDraft = computed(
   () => Boolean(prepId.value) && isSupportedStorylineSourceKind(sourceKind.value),
 );
+const canReloadDraft = computed(() => canRequestDraft.value && !loading.value);
 const cacheKey = computed(() =>
   [
     'pai.storylineDraft',
@@ -810,6 +899,40 @@ const sessionCacheReceiptBoundary = computed(() => {
     '如会议资料、证据或目标格式刚变化，请点重新生成后再复制',
   ].join('；');
 });
+const targetHandoffReceipt = computed<TargetHandoffReceipt | null>(() => {
+  if (!draft.value) return null;
+  const copy = targetHandoffCopy(draft.value.targetArtifact);
+  const audience = firstNonEmptyString(
+    draft.value.audience,
+    generationReceipt.value?.audience,
+    audienceHint.value,
+    '待确认受众',
+  );
+  return {
+    ...copy,
+    audience,
+    boundary: [
+      `当前目标只决定本页生成格式：${copy.format}`,
+      `面向 ${audience} 人工复核后交接`,
+      '不会自动写回 Slides / Docs / RingCentral，不会发送消息，不会保存长期 Storyline 历史，也不会更新 Memory Service 证据状态',
+    ].join('；'),
+  };
+});
+const draftRequestReceiptBoundary = computed(() => {
+  if (!draftRequestReceipt.value) return '';
+  return [
+    `这次只是从 ${sourceLabel.value} 请求一份 ${artifactLabel(draftRequestReceipt.value.targetArtifact)}草稿`,
+    '还没有收到草稿、Evidence key、复制快照或外发确认',
+    '不会写回 Slides / Docs / RingCentral，不会发送消息，也不会保存长期 Storyline 历史',
+  ].join('；');
+});
+const regenerateRequestReceiptBoundary = computed(() => {
+  if (!regenerateRequestReceipt.value) return '';
+  return [
+    '这次只清除本页 session 缓存并重新请求 Draft API',
+    '不会写回 Slides / Docs / RingCentral，不会发送消息，不会保存长期 Storyline 历史，也不会沿用上一轮复核确认或复制回执',
+  ].join('；');
+});
 const sendableScore = computed(() => {
   const gaps = draft.value?.gaps.length ?? 0;
   const risks = draft.value?.riskNotes.length ?? 0;
@@ -852,6 +975,11 @@ const copyGateReason = computed(() => {
 const copyButtonTitle = computed(() =>
   copyGateReason.value || '复制当前 Storyline 输出',
 );
+const reloadButtonTitle = computed(() =>
+  loading.value
+    ? '正在等待当前 Draft API 回执，避免重复重新生成请求'
+    : '清除本页 Storyline 缓存并重新请求 Draft API',
+);
 const copyReceiptIsStale = computed(() => {
   const receipt = copyReceipt.value;
   if (!receipt || !draft.value) return false;
@@ -890,6 +1018,67 @@ function artifactLabel(target: StorylineSuggestedArtifact): string {
     docs_brief: 'Docs 简报',
   };
   return labels[target];
+}
+
+function targetHandoffCopy(
+  target: StorylineSuggestedArtifact,
+): Omit<TargetHandoffReceipt, 'audience' | 'boundary'> {
+  const copy: Record<
+    StorylineSuggestedArtifact,
+    Omit<TargetHandoffReceipt, 'audience' | 'boundary'>
+  > = {
+    speaker_notes: {
+      title: 'Speaker Notes 手动练习稿',
+      handoff: '手动带到讲稿 / 备注',
+      format: '段落讲稿 + Evidence key',
+    },
+    slides_outline: {
+      title: 'Slides 提纲交接稿',
+      handoff: '手动复制到 Slides / PPT',
+      format: '页结构 + speaker notes',
+    },
+    ringcentral_post: {
+      title: 'RingCentral 分享帖交接稿',
+      handoff: '手动复制到 RingCentral',
+      format: '短 TL;DR + next step',
+    },
+    docs_brief: {
+      title: 'Docs 简报交接稿',
+      handoff: '手动复制到 Docs / 文档',
+      format: '一页 brief + Evidence key',
+    },
+  };
+  return copy[target];
+}
+
+function targetSwitchButtonBoundary(target: StorylineSuggestedArtifact): string {
+  const label = artifactLabel(target);
+  const handoff = targetHandoffCopy(target);
+  const prep = prepShortId.value || '当前 prep';
+  const noWriteBoundary =
+    '不会写回 Slides / Docs / RingCentral，不会发送消息，不会保存长期 Storyline 历史，也不会更新 Memory Service 证据状态';
+
+  if (target === targetArtifact.value) {
+    if (loading.value) {
+      return `当前正在生成 ${label}；等待服务端证据回执期间不会重复请求、复制旧草稿或写回外部平台。${noWriteBoundary}。`;
+    }
+    return `当前已选择 ${label}（${handoff.format}）；点击不会重新请求 Draft API。输出目标只影响本页草稿和复制文本；${noWriteBoundary}。`;
+  }
+
+  const reviewReset = requiresReviewBeforeCopy.value
+    ? `切换后会重置对 ${reviewAcknowledgementLabel.value} 的复核确认`
+    : '切换后会重置复核确认';
+  const copyReset = copyReceipt.value
+    ? '已有剪贴板回执会变成旧复制回执，交付前需要重新复制'
+    : '会清除当前复制状态';
+
+  return [
+    `切换到 ${label}（${handoff.format}），为 Prep ${prep} 从本页缓存读取或请求 Storyline Draft API`,
+    reviewReset,
+    copyReset,
+    '来源打开回执会回到当前草稿上下文',
+    noWriteBoundary,
+  ].join('；');
 }
 
 function shortEvidenceId(value: string | undefined): string {
@@ -1185,6 +1374,26 @@ function formatCacheTimestamp(value: string | undefined): string {
   });
 }
 
+function formatReceiptTime(): string {
+  return new Date().toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function buildDraftRequestReceipt(
+  target: StorylineSuggestedArtifact,
+  rawPrepId: string,
+): DraftRequestReceipt {
+  return {
+    requestedAtLabel: formatReceiptTime(),
+    targetArtifact: target,
+    prepShortId: shortEvidenceId(rawPrepId) || 'unknown',
+  };
+}
+
 function readCachedDraft(): CachedDraftReadResult | null {
   try {
     const raw = sessionStorage.getItem(cacheKey.value);
@@ -1238,7 +1447,13 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     loading.value = false;
     sourceOpenReceipt.value = null;
     cacheHit.value = null;
+    draftRequestReceipt.value = null;
+    regenerateRequestReceipt.value = null;
     return;
+  }
+  if (!options.force) {
+    draftRequestReceipt.value = null;
+    regenerateRequestReceipt.value = null;
   }
   const requestedSourceKind = sourceKind.value;
   if (!isSupportedStorylineSourceKind(requestedSourceKind)) {
@@ -1251,6 +1466,8 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     reviewAcknowledged.value = false;
     sourceOpenReceipt.value = null;
     cacheHit.value = null;
+    draftRequestReceipt.value = null;
+    regenerateRequestReceipt.value = null;
     return;
   }
   if (!options.force) {
@@ -1265,6 +1482,8 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
       reviewAcknowledged.value = false;
       sourceOpenReceipt.value = null;
       cacheHit.value = { cachedAt: cached.cachedAt };
+      draftRequestReceipt.value = null;
+      regenerateRequestReceipt.value = null;
       return;
     }
   }
@@ -1272,6 +1491,9 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   const requestedPrepId = prepId.value;
   const requestedTarget = targetArtifact.value;
   const requestedAudience = audienceHint.value || undefined;
+  draftRequestReceipt.value = options.force
+    ? null
+    : buildDraftRequestReceipt(requestedTarget, requestedPrepId);
   loading.value = true;
   loadError.value = '';
   copied.value = false;
@@ -1295,6 +1517,8 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     reviewAcknowledged.value = false;
     cacheHit.value = null;
     writeCachedDraft(result, requestCacheKey);
+    draftRequestReceipt.value = null;
+    regenerateRequestReceipt.value = null;
   } catch (error) {
     if (loadToken !== draftLoadToken) return;
     console.error('生成 Storyline draft 失败:', error);
@@ -1302,6 +1526,8 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
       error instanceof Error && error.message === 'storyline_target_mismatch'
         ? '服务端返回的输出格式与当前选择不一致，请重新生成。'
         : formatDraftError(error);
+    draftRequestReceipt.value = null;
+    regenerateRequestReceipt.value = null;
   } finally {
     if (loadToken === draftLoadToken) {
       loading.value = false;
@@ -1325,7 +1551,15 @@ function formatDraftError(error: unknown): string {
 }
 
 function reloadDraft(): void {
+  if (!canReloadDraft.value) return;
   sessionStorage.removeItem(cacheKey.value);
+  copyReceipt.value = null;
+  draftRequestReceipt.value = null;
+  regenerateRequestReceipt.value = {
+    requestedAtLabel: formatReceiptTime(),
+    targetArtifact: targetArtifact.value,
+    prepShortId: prepShortId.value || 'unknown',
+  };
   void loadDraft({ force: true });
 }
 
@@ -1629,7 +1863,10 @@ watch(selectedIndex, () => {
 }
 
 .generation-receipt,
-.session-cache-receipt {
+.draft-request-receipt,
+.session-cache-receipt,
+.target-handoff-receipt,
+.regenerate-request-receipt {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
@@ -1640,14 +1877,41 @@ watch(selectedIndex, () => {
   padding: 12px 14px;
 }
 
+.draft-request-receipt {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .session-cache-receipt {
   border-color: rgba(251, 191, 36, 0.32);
   background: rgba(74, 54, 14, 0.34);
 }
 
+.target-handoff-receipt {
+  border-color: rgba(45, 212, 191, 0.28);
+  background: rgba(19, 78, 74, 0.28);
+}
+
+.regenerate-request-receipt {
+  width: 100%;
+  box-sizing: border-box;
+  border-color: rgba(167, 139, 250, 0.34);
+  background: rgba(46, 16, 101, 0.28);
+}
+
 .session-cache-receipt .label,
 .session-cache-receipt h2 {
   color: #fde68a;
+}
+
+.target-handoff-receipt .label,
+.target-handoff-receipt h2 {
+  color: #99f6e4;
+}
+
+.regenerate-request-receipt .label,
+.regenerate-request-receipt h2 {
+  color: #ddd6fe;
 }
 
 .receipt-copy h2 {
@@ -2553,7 +2817,10 @@ watch(selectedIndex, () => {
   .page-header,
   .workspace,
   .generation-receipt,
-  .session-cache-receipt {
+  .draft-request-receipt,
+  .session-cache-receipt,
+  .target-handoff-receipt,
+  .regenerate-request-receipt {
     grid-template-columns: 1fr;
     display: grid;
   }

@@ -192,7 +192,7 @@ test('builds concise context labels with todo due time', () => {
         },
       ],
     ),
-    '通知 · 高优先级 · 其他渠道 豆包已送达，Glip发送失败（bot_not_configured，未送达）',
+    '通知 · 高优先级 · 本渠道首次提醒 · 其他渠道 豆包已送达，Glip发送失败（bot_not_configured，未送达）',
   );
   assert.equal(
     buildBackendNotificationContextMessage(
@@ -219,7 +219,7 @@ test('builds concise context labels with todo due time', () => {
         },
       ],
     ),
-    '通知 · 高优先级 · 其他渠道 豆包已查看，最近失败（provider_retry_failed，已查看不回滚）',
+    '通知 · 高优先级 · 本渠道首次提醒 · 其他渠道 豆包已查看，最近失败（provider_retry_failed，已查看不回滚）',
   );
   assert.equal(
     buildBackendNotificationContextMessage(
@@ -235,7 +235,7 @@ test('builds concise context labels with todo due time', () => {
         lastError: 'chrome_api_unavailable',
       },
     ),
-    '通知 · 高优先级 · 上次发送失败（chrome_api_unavailable，曾已送达）',
+    '通知 · 高优先级 · 上次发送失败（chrome_api_unavailable，曾已送达，不等于已处理）',
   );
 });
 
@@ -257,7 +257,7 @@ test('labels snoozed backend notification reminders', () => {
         },
       },
     ),
-    /^待处理 · 高优先级 · 稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时$/,
+    /^待处理 · 高优先级 · 稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 仍未处理$/,
   );
   assert.match(
     buildBackendNotificationContextMessage(
@@ -279,7 +279,7 @@ test('labels snoozed backend notification reminders', () => {
         },
       },
     ),
-    /^待处理 · 高优先级 · 第2次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 再次提醒$/,
+    /^待处理 · 高优先级 · 第2次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 仍未处理 · 再次提醒$/,
   );
   assert.match(
     buildBackendNotificationContextMessage(
@@ -306,7 +306,29 @@ test('labels snoozed backend notification reminders', () => {
         count: 3,
       },
     ),
-    /^待处理 · 高优先级 · 第3次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 再次提醒$/,
+    /^待处理 · 高优先级 · 第3次稍后提醒 · 原定 \d+\/\d+ \d\d:\d\d · 延后1小时 · 仍未处理 · 再次提醒$/,
+  );
+  assert.doesNotMatch(
+    buildBackendNotificationContextMessage(
+      'todo',
+      'high',
+      undefined,
+      {
+        reason: 'already_delivered_unfinished',
+        lastStatus: 'delivered',
+      },
+      undefined,
+      undefined,
+      undefined,
+      {
+        label: '稍后提醒',
+        detail: '来源通知 notif-4',
+        boundary:
+          '这是稍后提醒到点的上下文；不会确认事项、发送消息、同步外部平台、执行动作或修改原始证据。',
+        count: 1,
+      },
+    ),
+    /仍未处理 · 仍待处理/,
   );
 });
 

@@ -1240,7 +1240,13 @@ describe('Ask API', () => {
       label: '活答案已复核',
       currentEvidenceCount: 2,
       priorEvidenceCount: 2,
+      lastVerifiedAt: expect.any(Number),
+      staleAfter: expect.any(Number),
     });
+    expect(thirdBody.answerMemory?.receipt?.lastVerifiedAt).toBeGreaterThan(0);
+    expect(thirdBody.answerMemory?.receipt?.staleAfter).toBeGreaterThan(
+      thirdBody.answerMemory?.receipt?.lastVerifiedAt ?? 0,
+    );
     expect(thirdBody.answerMemory?.authority).toMatchObject({
       decision: 'same_meaning_no_change',
       suppressedUpdate: false,

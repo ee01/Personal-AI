@@ -254,10 +254,11 @@ function collectStructuredObservations(
   value: unknown,
   path = 'payload',
   sink: StructuredObservation[] = [],
+  minScalarFields = 2,
 ): StructuredObservation[] {
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      collectStructuredObservations(item, `${path}[${index}]`, sink);
+      collectStructuredObservations(item, `${path}[${index}]`, sink, minScalarFields);
     });
     return sink;
   }
@@ -267,7 +268,7 @@ function collectStructuredObservations(
 
   const record = value as Record<string, unknown>;
   const scalarEntries = Object.entries(record).filter(([, entryValue]) => isScalarObservationValue(entryValue));
-  if (scalarEntries.length >= 2) {
+  if (scalarEntries.length >= minScalarFields) {
     sink.push({
       path,
       values: Object.fromEntries(
@@ -278,7 +279,7 @@ function collectStructuredObservations(
 
   for (const [key, entryValue] of Object.entries(record)) {
     if (entryValue && typeof entryValue === 'object') {
-      collectStructuredObservations(entryValue, `${path}.${key}`, sink);
+      collectStructuredObservations(entryValue, `${path}.${key}`, sink, minScalarFields);
     }
   }
   return sink;
@@ -316,6 +317,13 @@ function getMetadataCandidateArtifacts(metadata: Record<string, unknown> | undef
   const raw = metadata.candidateArtifacts;
   if (!Array.isArray(raw)) return [];
   return raw.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+}
+
+function hasPersonalAiArCandidateArtifact(input: DelegationRequest): boolean {
+  return getMetadataCandidateArtifacts(input.metadata).some((artifact) => {
+    const kind = typeof artifact.kind === 'string' ? artifact.kind.trim() : '';
+    return kind === 'ar_binding';
+  }) || (typeof input.metadata?.arBindingId === 'string' && input.metadata.arBindingId.trim().length > 0);
 }
 
 function inferDelegationEntityRef(
@@ -375,6 +383,40 @@ function summarizeObservation(observation: StructuredObservation): string {
     .join(' | ');
 }
 
+function getPersonalAiArScalarSummary(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const preferredKeys = [
+    'replacementText',
+    'displayText',
+    'text',
+    'issueTotal',
+    'issueCount',
+    'issuesTotal',
+    'total',
+    'count',
+    'value',
+  ];
+  for (const key of preferredKeys) {
+    const value = payload[key];
+    if (isScalarObservationValue(value)) {
+      return String(value);
+    }
+  }
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = getPersonalAiArScalarSummary(value as Record<string, unknown>);
+      if (nested !== undefined) {
+        return nested;
+      }
+    }
+  }
+  const scalarEntries = Object.entries(payload).filter(([, value]) => isScalarObservationValue(value));
+  if (scalarEntries.length === 1) {
+    return String(scalarEntries[0][1]);
+  }
+  return undefined;
+}
+
 function enrichArtifactsWithDelegationContext(
   artifacts: DelegationArtifact[],
   input: DelegationRequest,
@@ -382,7 +424,14 @@ function enrichArtifactsWithDelegationContext(
   outputText: string,
   summary: string | undefined,
 ): DelegationArtifact[] {
-  const observations = collectStructuredObservations(payload);
+  const allowSingleScalarObservation =
+    input.targetSystem === 'personal_ai_ar' || hasPersonalAiArCandidateArtifact(input);
+  const observations = collectStructuredObservations(
+    payload,
+    'payload',
+    [],
+    allowSingleScalarObservation ? 1 : 2,
+  );
   const sourceSystem = inferDelegationSourceSystem(input, payload, artifacts);
   const entityRef = inferDelegationEntityRef(input, artifacts, payload);
   const observedFields = Array.from(
@@ -657,6 +706,30 @@ export class OpenClawDelegationService {
             artifactValidation: 'missing_verifiable_artifact',
           },
         };
+      }
+      if (normalizedStatus === 'error' && hasPersonalAiArCandidateArtifact(input)) {
+        const arArtifacts = enrichArtifactsWithDelegationContext(
+          coerceArtifacts(envelope.artifacts),
+          input,
+          envelope.payload,
+          outputText,
+          envelope.summary,
+        );
+        const arSummary = getPersonalAiArScalarSummary(envelope.payload);
+        if (arSummary && hasVerifiableArtifact(arArtifacts, input)) {
+          return {
+            status: 'success',
+            summary: arSummary,
+            artifacts: arArtifacts,
+            rawResponse: parsed,
+            outputText,
+            transcriptPath,
+            payload: {
+              ...(envelope.payload ?? {}),
+              recoveredFrom: 'personal_ai_ar_scalar_payload',
+            },
+          };
+        }
       }
 
       return {

@@ -90,6 +90,14 @@ export interface SourceMemoryCaptureActionReceipt {
   occurredAt: number;
 }
 
+export interface SourceMemoryCaptureNoWriteReceipt {
+  state: 'blocked_no_write' | 'invalid_no_write';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+}
+
 export interface SourceMemoryCreateInput extends SourceMemoryCandidateInput {
   captureMode?: SourceMemoryCaptureMode;
   captureReason?: string;
@@ -250,6 +258,7 @@ export class SourceMemoryCaptureValidationError extends Error {
   constructor(
     message: string,
     readonly statusCode = 400,
+    readonly noWriteReceipt?: SourceMemoryCaptureNoWriteReceipt,
   ) {
     super(message);
     this.name = 'SourceMemoryCaptureValidationError';
@@ -415,12 +424,24 @@ export class SourceMemoryCaptureService {
       },
     });
     if (candidate.blockedReason) {
-      throw new SourceMemoryCaptureValidationError(candidate.blockedReason);
+      throw new SourceMemoryCaptureValidationError(
+        candidate.blockedReason,
+        400,
+        buildNoWriteReceipt(input, candidate.blockedReason, 'blocked_no_write'),
+      );
     }
 
     const text = clipText(this.getSignalText(input), MAX_CAPTURE_TEXT_CHARS);
     if (!hasEnoughSignal(text)) {
-      throw new SourceMemoryCaptureValidationError('Capture text is too short or low signal.');
+      throw new SourceMemoryCaptureValidationError(
+        'Capture text is too short or low signal.',
+        400,
+        buildNoWriteReceipt(
+          input,
+          '资料文本信息量不足，未达到创建 source-memory capsule 的门槛。',
+          'invalid_no_write',
+        ),
+      );
     }
 
     const ts = now();
@@ -1779,6 +1800,42 @@ function buildWriteReceipt(input: {
     detail: `已创建或更新 source-memory capsule，并写入关联 ${signalLabel}；后续 Ask、Memory Lens 和时间轴可按证据召回。`,
     evidence,
     nextStep: '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+  };
+}
+
+function buildNoWriteReceipt(
+  input: SourceMemoryCreateInput,
+  detail: string,
+  state: SourceMemoryCaptureNoWriteReceipt['state'],
+): SourceMemoryCaptureNoWriteReceipt {
+  const sourceKind = input.sourceKind ?? (input.selectedText ? 'selection' : 'webpage');
+  const captureMode = input.captureMode ?? 'suggested';
+  const scope = input.scope ?? 'work';
+  const sourceUrl = normalizeUrl(input.sourceUrl);
+  const rawSourceTitle = normalizeText(input.sourceTitle).slice(0, 120);
+  const sourceHost = sourceUrl ? getHost(sourceUrl) : '';
+  const signalLabel = sourceKind === 'visual_memory'
+    ? '视觉证据检索信号'
+    : '网页检索信号';
+  const sourceLabel = sourceHost || rawSourceTitle || '未提供可保存来源';
+  const evidence = [
+    `资料类型：${getSourceMemorySourceKindLabel(sourceKind)}`,
+    `保存方式：${getSourceMemoryCaptureModeLabel(captureMode)}`,
+    `范围：${getSourceMemoryScopeLabel(scope)}`,
+    `来源：${sourceLabel}`,
+    'source-memory capsule：未创建',
+    `${signalLabel}：未写入`,
+  ];
+  const isBlocked = state === 'blocked_no_write';
+
+  return {
+    state,
+    label: isBlocked ? '保存已阻断' : '保存未执行',
+    detail,
+    evidence,
+    nextStep: isBlocked
+      ? '移除敏感内容或换成普通资料来源后再保存；本次不会外发、插入、同步或写入长期记忆。'
+      : '请选择更完整的资料段落后重试；本次不会外发、插入、同步或写入长期记忆。',
   };
 }
 

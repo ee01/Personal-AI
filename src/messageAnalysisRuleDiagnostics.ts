@@ -114,6 +114,7 @@ export async function recordRejectedManualRuleDiagnostics(params: {
       const reasons = getWatchRuleEligibilityIssues(
         rule,
         params.messageContext,
+        { rejectMissingScopeValues: true },
       );
       return {
         id: `${rule.ruleRef}:${params.postId || 'unknown'}:${capturedAt}`,

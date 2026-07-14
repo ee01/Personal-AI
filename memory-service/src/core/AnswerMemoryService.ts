@@ -44,6 +44,8 @@ export interface AnswerMemoryReceipt {
   followUpActionCount?: number;
   missingInfoCount?: number;
   stale?: boolean;
+  lastVerifiedAt?: number;
+  staleAfter?: number;
 }
 
 export type AnswerMemoryEvidenceRole =
@@ -242,11 +244,17 @@ function buildAnswerMemoryReceipt(params: {
   followUpActionCount?: number;
   missingInfoCount?: number;
   stale?: boolean;
+  lastVerifiedAt?: number;
+  staleAfter?: number;
 }): AnswerMemoryReceipt {
   const currentEvidenceCount = params.currentEvidenceCount ?? 0;
   const priorEvidenceCount = params.priorEvidenceCount ?? 0;
   const followUpActionCount = params.followUpActionCount ?? 0;
   const missingInfoCount = params.missingInfoCount ?? 0;
+  const reviewTimeBasis = {
+    lastVerifiedAt: params.lastVerifiedAt,
+    staleAfter: params.staleAfter,
+  };
 
   if (params.state === 'observed') {
     return {
@@ -256,6 +264,7 @@ function buildAnswerMemoryReceipt(params: {
       currentEvidenceCount,
       followUpActionCount,
       missingInfoCount,
+      ...reviewTimeBasis,
     };
   }
 
@@ -267,6 +276,7 @@ function buildAnswerMemoryReceipt(params: {
       currentEvidenceCount,
       followUpActionCount,
       missingInfoCount,
+      ...reviewTimeBasis,
     };
   }
 
@@ -280,6 +290,7 @@ function buildAnswerMemoryReceipt(params: {
       followUpActionCount,
       missingInfoCount,
       stale: params.stale,
+      ...reviewTimeBasis,
     };
   }
 
@@ -295,6 +306,7 @@ function buildAnswerMemoryReceipt(params: {
       followUpActionCount,
       missingInfoCount,
       stale: params.stale,
+      ...reviewTimeBasis,
     };
   }
 
@@ -305,6 +317,7 @@ function buildAnswerMemoryReceipt(params: {
       tone: 'warning',
       currentEvidenceCount,
       priorEvidenceCount,
+      ...reviewTimeBasis,
     };
   }
 
@@ -317,6 +330,7 @@ function buildAnswerMemoryReceipt(params: {
       tone: 'warning',
       currentEvidenceCount,
       priorEvidenceCount,
+      ...reviewTimeBasis,
     };
   }
 
@@ -328,6 +342,7 @@ function buildAnswerMemoryReceipt(params: {
     tone: 'muted',
     currentEvidenceCount,
     priorEvidenceCount,
+    ...reviewTimeBasis,
   };
 }
 
@@ -662,6 +677,8 @@ export class AnswerMemoryService {
           state: 'priorHit',
           priorEvidenceCount: version.evidenceRefs.length,
           stale,
+          lastVerifiedAt: thread.lastVerifiedAt,
+          staleAfter: thread.staleAfter,
         }),
       },
     };
@@ -818,6 +835,8 @@ export class AnswerMemoryService {
         currentEvidenceCount: evidenceRefs.length,
         followUpActionCount: countPresent(input.followUpActions),
         missingInfoCount: countPresent(input.missingInfo),
+        lastVerifiedAt: currentTime,
+        staleAfter: thread.staleAfter,
       }),
     };
   }
@@ -920,11 +939,14 @@ export class AnswerMemoryService {
           priorEvidenceCount,
           missingInfoCount: countPresent(input.missingInfo),
           stale,
+          lastVerifiedAt: input.thread.lastVerifiedAt,
+          staleAfter: input.thread.staleAfter,
         }),
       };
     }
 
     const unknowns = extractUnknowns(input.answer, input.missingInfo);
+    const nextStaleAfter = staleAfterForIntent(input.canonical.intent, input.askedAt);
     const version = this.repo.createVersion({
       threadId: input.thread.id,
       answerMd: input.answer,
@@ -947,7 +969,7 @@ export class AnswerMemoryService {
       changeConditions: defaultChangeConditions(input.canonical.intent),
       lastAskedAt: input.askedAt,
       lastVerifiedAt: input.askedAt,
-      staleAfter: staleAfterForIntent(input.canonical.intent, input.askedAt),
+      staleAfter: nextStaleAfter,
       updatedAt: input.askedAt,
     });
     return {
@@ -961,6 +983,8 @@ export class AnswerMemoryService {
         priorEvidenceCount,
         missingInfoCount: countPresent(input.missingInfo),
         stale,
+        lastVerifiedAt: input.askedAt,
+        staleAfter: nextStaleAfter,
       }),
     };
   }

@@ -295,6 +295,11 @@ describe('NotificationCenterService', () => {
     expect(renderedDailyDigest.bodyMd).toContain('# 每日待办摘要');
     expect(renderedDailyDigest.bodyMd).toContain('## 未完成待办');
     expect(renderedDailyDigest.bodyMd).toContain('已提醒过，仍待处理');
+    expect(renderedDailyDigest.bodyMd).toContain('Feed 快照口径回执');
+    expect(renderedDailyDigest.bodyMd).toContain('豆包 每日摘要');
+    expect(renderedDailyDigest.bodyMd).toContain('limit=50 返回 2 条');
+    expect(renderedDailyDigest.bodyMd).toContain('当前页未发现更多条目');
+    expect(renderedDailyDigest.bodyMd).toContain('本次读取时的只读队列快照');
   });
 
   it('keeps successful delivery receipts sticky after a later failure', () => {
@@ -976,6 +981,9 @@ describe('NotificationCenterService', () => {
     expect(rendered.feedLimit).toBe(2);
     expect(rendered.itemCount).toBe(2);
     expect(rendered.omittedItemCount).toBe(0);
+    expect(rendered.bodyMd).toContain('Feed 快照口径回执');
+    expect(rendered.bodyMd).toContain('豆包 新条目同步');
+    expect(rendered.bodyMd).toContain('limit=2 返回 2 条');
     expect(rendered.bodyMd).toContain('Feed 还有更多');
     expect(rendered.bodyMd).toContain('本次新条目同步只纳入前 2 条待办');
     expect(rendered.bodyMd).toContain(
@@ -1084,6 +1092,9 @@ describe('NotificationCenterService', () => {
     expect(rendered.feedLimit).toBe(8);
     expect(rendered.itemCount).toBe(8);
     expect(rendered.omittedItemCount).toBe(0);
+    expect(rendered.bodyMd).toContain('Feed 快照口径回执');
+    expect(rendered.bodyMd).toContain('豆包 滚动同步');
+    expect(rendered.bodyMd).toContain('limit=8 返回 8 条');
     expect(rendered.bodyMd).toContain('Feed 还有更多');
     expect(rendered.bodyMd).toContain('本次滚动同步只纳入前 8 条通知');
     expect(rendered.bodyMd).toContain(
@@ -1271,6 +1282,21 @@ describe('NotificationCenterService', () => {
     expect(feedAfterDelivery.statusCode).toBe(200);
     const emptyFeedBody = feedAfterDelivery.json();
     expect(emptyFeedBody.total).toBe(0);
+    expect(emptyFeedBody.meta.snapshotReceipt).toMatchObject({
+      label: 'Feed 快照口径回执',
+    });
+    expect(
+      emptyFeedBody.meta.snapshotReceipt.generatedAt,
+    ).toBeGreaterThanOrEqual(now);
+    expect(emptyFeedBody.meta.snapshotReceipt.detail).toContain(
+      'Chrome 滚动同步',
+    );
+    expect(emptyFeedBody.meta.snapshotReceipt.detail).toContain(
+      'limit=20 返回 0 条',
+    );
+    expect(emptyFeedBody.meta.snapshotReceipt.boundary).toContain(
+      '本次读取时的只读队列快照',
+    );
     expect(emptyFeedBody.meta.emptyReceipt).toMatchObject({
       label: 'Feed 空结果回执',
       detail:
@@ -1309,13 +1335,80 @@ describe('NotificationCenterService', () => {
       'notification:notif-feed-meta-0',
       'notification:notif-feed-meta-1',
     ]);
-    expect(feedBody.meta).toEqual({
+    expect(feedBody.meta).toMatchObject({
       channel: 'chrome',
       lanes: ['notice'],
       deliveryMode: 'retry_after_cooldown',
       limit: 2,
       returned: 2,
       hasMore: true,
+    });
+    expect(feedBody.meta.snapshotReceipt).toMatchObject({
+      label: 'Feed 快照口径回执',
+      generatedAt: expect.any(Number),
+      detail: expect.stringContaining(
+        'limit=2 返回 2 条，还有更多未返回条目',
+      ),
+      boundary: expect.stringContaining('不会写渠道送达回执'),
+    });
+    expect(feedBody.meta.limitReceipt).toMatchObject({
+      label: 'Feed limit 应用回执',
+      requestedLimit: 2,
+      appliedLimit: 2,
+      detail: '请求 limit=2；本次按该值应用。',
+      boundary: expect.stringContaining('不会写渠道送达回执'),
+    });
+  });
+
+  it('explains defaulted and clamped feed limits', async () => {
+    const defaultLimitRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=chrome&lanes=notice',
+    });
+    expect(defaultLimitRes.statusCode).toBe(200);
+    expect(defaultLimitRes.json().meta.limitReceipt).toMatchObject({
+      label: 'Feed limit 应用回执',
+      appliedLimit: 20,
+      detail: '未传 limit；本次使用默认 limit=20。',
+    });
+
+    const clampedLimitRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=chrome&lanes=notice&limit=500',
+    });
+    expect(clampedLimitRes.statusCode).toBe(200);
+    expect(clampedLimitRes.json().meta).toMatchObject({
+      limit: 100,
+      limitReceipt: {
+        label: 'Feed limit 应用回执',
+        requestedLimit: 500,
+        appliedLimit: 100,
+        detail: '请求 limit=500；已按服务端上限应用 limit=100。',
+      },
+    });
+
+    const service = new NotificationCenterService(db);
+    expect(
+      service.listFeedResult({
+        channel: 'chrome',
+        lanes: ['notice'],
+        limit: 0,
+      }).meta.limitReceipt,
+    ).toMatchObject({
+      requestedLimit: 0,
+      appliedLimit: 1,
+      detail: '请求 limit=0；已按服务端下限应用 limit=1。',
+    });
+    expect(
+      service.listFeedResult({
+        channel: 'chrome',
+        lanes: ['notice'],
+        limit: Number.NaN,
+      }).meta.limitReceipt,
+    ).toMatchObject({
+      requestedLimit: undefined,
+      appliedLimit: 20,
+      detail: '未传 limit；本次使用默认 limit=20。',
     });
   });
 
@@ -1402,6 +1495,11 @@ describe('NotificationCenterService', () => {
     expect(feedRes.statusCode).toBe(200);
     const feedBody = feedRes.json();
     expect(feedBody.total).toBe(0);
+    expect(feedBody.meta.snapshotReceipt).toMatchObject({
+      label: 'Feed 快照口径回执',
+      detail: expect.stringContaining('豆包 每日摘要'),
+      boundary: expect.stringContaining('不代表之后没有新通知'),
+    });
     expect(feedBody.meta.emptyReceipt).toMatchObject({
       label: 'Feed 空结果回执',
       detail:
@@ -1432,13 +1530,15 @@ describe('NotificationCenterService', () => {
 
     db.prepare(
       `INSERT INTO notification_records
-        (id, channel, type, title, body, payload_json, sent_at, created_at)
-       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?)`,
+        (id, channel, type, title, body, payload_json, evidence_refs_json, weave_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       'notif-deadline-snooze',
       'Deadline needs attention',
       'This should come back before the deadline',
       JSON.stringify({ details: 'Original context should be preserved' }),
+      JSON.stringify(['message:deadline:source', 'memory:project-risk']),
+      JSON.stringify({ weaveId: 'deadline-weave-1' }),
       now,
       now,
     );
@@ -1472,12 +1572,24 @@ describe('NotificationCenterService', () => {
 
     const created = db
       .prepare(
-        'SELECT sent_at, payload_json FROM notification_records WHERE id = ?',
+        'SELECT sent_at, payload_json, evidence_refs_json, weave_json FROM notification_records WHERE id = ?',
       )
       .get(snoozeBody.newNotificationId) as
-      | { sent_at: number; payload_json: string }
+      | {
+          sent_at: number;
+          payload_json: string;
+          evidence_refs_json: string;
+          weave_json: string;
+        }
       | undefined;
     expect(created?.sent_at).toBe(snoozeBody.scheduledAt);
+    expect(JSON.parse(created?.evidence_refs_json ?? '[]')).toEqual([
+      'message:deadline:source',
+      'memory:project-risk',
+    ]);
+    expect(JSON.parse(created?.weave_json ?? '{}')).toMatchObject({
+      weaveId: 'deadline-weave-1',
+    });
     const createdPayload = JSON.parse(created?.payload_json ?? '{}');
     expect(createdPayload.details).toBe('Original context should be preserved');
     expect(createdPayload.snooze).toMatchObject({
@@ -1544,8 +1656,8 @@ describe('NotificationCenterService', () => {
 
     db.prepare(
       `INSERT INTO notification_records
-        (id, channel, type, title, body, payload_json, sent_at, created_at)
-       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?)`,
+        (id, channel, type, title, body, payload_json, evidence_refs_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?, ?)`,
     ).run(
       'notif-snoozed-due',
       'Deadline needs attention',
@@ -1561,6 +1673,7 @@ describe('NotificationCenterService', () => {
           count: 2,
         },
       }),
+      JSON.stringify(['message:deadline:source', 'memory:project-risk']),
       now,
       now - 90 * 60,
     );
@@ -1589,12 +1702,21 @@ describe('NotificationCenterService', () => {
     expect(feedItem.snoozeReceipt.detail).toContain('来源通知 notif-snoozed-source');
     expect(feedItem.snoozeReceipt.detail).toContain('根通知 notif-snoozed-root');
     expect(feedItem.snoozeReceipt.detail).toContain('上次延后 90分钟');
+    expect(feedItem?.evidenceReceipt).toMatchObject({
+      evidenceCount: 2,
+      label: '依据 2 条记忆',
+      sampleRefs: ['message:deadline:source', 'memory:project-risk'],
+      boundary:
+        '只说明生成这条通知时引用过的记忆证据；不会确认、忽略、重发通知，或改变任何渠道投递状态。',
+    });
 
     const service = new NotificationCenterService(db);
     const digest = service.formatTodoDigest('chrome', 500);
 
     expect(digest.bodyMd).toContain('第2次稍后提醒');
     expect(digest.bodyMd).toContain('来源通知 notif-snoozed-source');
+    expect(digest.bodyMd).toContain('依据 2 条记忆');
+    expect(digest.bodyMd).toContain('只读依据');
     expect(digest.bodyMd).toContain('仍未处理');
   });
 

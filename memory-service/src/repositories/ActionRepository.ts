@@ -140,6 +140,7 @@ export interface CreateQueuedActionInput {
 }
 
 export interface ActionListFilters {
+  actionId?: string;
   queueStatus?: ActionQueueStatus | 'all';
   executionMode?: 'manual' | 'auto';
   threadId?: string;
@@ -256,7 +257,7 @@ export class ActionRepository {
         `SELECT *
          FROM proposed_actions
          WHERE idempotency_key = ?
-           AND queue_status IN ('queued', 'running', 'failed')
+           AND queue_status IN ('queued', 'running', 'failed', 'succeeded', 'dead_letter')
          ORDER BY created_at DESC
          LIMIT 1`,
       )
@@ -294,6 +295,10 @@ export class ActionRepository {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
+    if (filters.actionId) {
+      conditions.push('id = ?');
+      params.push(filters.actionId);
+    }
     if (filters.queueStatus && filters.queueStatus !== 'all') {
       conditions.push('queue_status = ?');
       params.push(filters.queueStatus);

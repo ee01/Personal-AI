@@ -142,6 +142,139 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('restores a saved Source Memory link when an orphaned chunk is recalled', async () => {
+    const capsuleId = 'source-memory-orphan-link';
+    const sourceUrl =
+      'https://docs.google.com/document/d/source-memory-link-test/edit?tab=t.0';
+    const sourceTitle = 'Story Points estimation by AI Service - Google Docs';
+    const content =
+      'Story Points estimation by AI Service team planning guide and task estimate workflow.';
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare('DELETE FROM source_memory_capsules WHERE id = ?').run(capsuleId);
+    db.prepare(
+      `INSERT INTO source_memory_capsules (
+         id, source_kind, source_url, source_title, source_host,
+         source_fingerprint, capture_mode, capture_reason, status, scope,
+         privacy_level, summary, content_preview, metadata_json,
+         created_at, updated_at, saved_at
+       ) VALUES (?, 'webpage', ?, ?, 'docs.google.com', ?, 'auto', ?, 'saved',
+         'work', 'work', ?, ?, '{}', ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      sourceUrl,
+      sourceTitle,
+      `source-memory-fingerprint-${capsuleId}`,
+      'auto_capture',
+      sourceTitle,
+      content,
+      now,
+      now,
+      now,
+    );
+    db.prepare(
+      `INSERT INTO chunks (
+         chunk_id, file_path, line_start, line_end, content, content_hash,
+         scope, source, source_type, related_entity_id, created_at
+       ) VALUES (?, ?, 1, 1, ?, ?, 'work', ?, 'web', ?, ?)`,
+    ).run(
+      9010,
+      `source-memory/${capsuleId}.md`,
+      content,
+      `source-memory-hash-${capsuleId}`,
+      `source-memory:${capsuleId}`,
+      'missing-source-memory-message',
+      now,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9010,
+      content,
+    );
+
+    const previousFastMode = process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+    const previousFastSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+    process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = 'true';
+    process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = 'true';
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/context-recall',
+        payload: {
+          surface: 'web_passive',
+          contextType: 'webpage',
+          title: 'RCVSDK team stretch goal - Google Sheets',
+          primaryText:
+            'Story Points estimation AI Service team planning task estimate workflow',
+          sourceTypes: ['web'],
+          limit: 5,
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.debug?.channelsHit).toContain('fts');
+      const match = body.matches.find(
+        (item: { id: string }) => item.id === `source-memory:${capsuleId}`,
+      );
+      expect(match).toMatchObject({
+        type: 'source_memory',
+        sourceLabel: 'source_memory',
+        sourceUrl,
+        sourceTitle,
+        exploreLink: `#/source-memory/${capsuleId}`,
+        sourceClusterKey: `source-memory:${capsuleId}`,
+        links: [{ label: '打开来源', url: sourceUrl }],
+        metadata: {
+          sourceMemoryCapsuleId: capsuleId,
+          sourceKind: 'webpage',
+          captureMode: 'auto',
+        },
+      });
+
+      const activeRecallRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/recall',
+        payload: {
+          query:
+            'Story Points estimation AI Service team planning task estimate workflow',
+          topK: 5,
+          channels: ['fts'],
+          sourceTypes: ['web'],
+          includeMetadata: true,
+        },
+      });
+      expect(activeRecallRes.statusCode).toBe(200);
+      const recallItem = activeRecallRes
+        .json()
+        .items.find((item: { id: string }) => item.id === '9010');
+      expect(recallItem).toMatchObject({
+        type: 'chunk',
+        sourceUrl,
+        sourceTitle,
+        metadata: {
+          sourceMemoryCapsuleId: capsuleId,
+          sourceKind: 'webpage',
+          captureMode: 'auto',
+        },
+      });
+    } finally {
+      if (previousFastMode === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = previousFastMode;
+      }
+      if (previousFastSearch === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = previousFastSearch;
+      }
+      db.prepare('DELETE FROM chunks_fts WHERE rowid = ?').run(9010);
+      db.prepare('DELETE FROM chunks WHERE chunk_id = ?').run(9010);
+      db.prepare('DELETE FROM source_memory_capsules WHERE id = ?').run(capsuleId);
+    }
+  });
+
   it('short-circuits passive recall at the route when passive search is disabled', async () => {
     const previousGuard =
       process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;

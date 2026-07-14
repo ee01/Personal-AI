@@ -2688,6 +2688,7 @@ export const useMemoryStore = defineStore('memory', () => {
         missingInfo: result.missingInfo || [],
         followUpActions: result.followUpActions || [],
         externalEvidence: result.externalEvidence || [],
+        evidenceWatch: result.evidenceWatch,
         blocks: result.blocks || [],
         channelDiagnostics,
         evidence,

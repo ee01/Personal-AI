@@ -94,6 +94,155 @@ function parseFeedbackDetail(detail) {
   }
 }
 
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function sourceMemoryKindLabel(sourceKind) {
+  if (sourceKind === 'selection') return '选区资料';
+  if (sourceKind === 'visual_memory') return '视觉证据';
+  return '整页资料';
+}
+
+function buildHarnessDistillation(capsule, note) {
+  const ts = nowSeconds();
+  const summary = note || capsule.summary || capsule.contentPreview;
+  return {
+    status: 'ready',
+    schemaVersion: 1,
+    oneLineCue: `已保存资料 · ${capsule.sourceTitle}：${summary}`,
+    compactMemo: `摘要：${summary}\n- ${capsule.contentPreview}`,
+    policyReceipt: {
+      state: 'ready',
+      label: '资料蒸馏已就绪',
+      detail:
+        '已生成一行提示、compact memo、ready takeaways 和安静触发 matcher；只作为证据提示，不自动写用户画像、创建任务或外部写入。',
+      evidence: ['证据锚点：1', '要点：1', '触发线索：1', '低副作用链接：1'],
+      nextStep:
+        '后续 Ask、Memory Lens、Reflection 和 Dream 可把它作为带来源的上下文单元引用。',
+    },
+    sourceReliability: {
+      level: 'source_grounded',
+      reason: '来源来自用户保存的网页或选区，需要按外部资料证据处理。',
+    },
+    downstreamUse: {
+      allowed: [
+        'source_memory_detail',
+        'context_recall_source_card',
+        'reflection_seed',
+        'dream_seed',
+      ],
+      blocked: [
+        'auto_profile_write',
+        'auto_task_creation',
+        'external_write_or_sync',
+      ],
+    },
+    generatedAt: ts,
+    sourceAsOf: ts,
+    inputHash: `harness-${capsule.id}-${summary.length}`,
+    evidenceAnchorIds: [`${capsule.id}-anchor`],
+    takeawayCount: 1,
+    triggerCount: 1,
+  };
+}
+
+function buildHarnessSourceMemoryCapsule(body, requestIndex) {
+  const duplicateSourceMemory = String(body.sourceUrl || '').includes('duplicate-page-capture');
+  const id = duplicateSourceMemory
+    ? 'source-memory-capsule-existing'
+    : `source-memory-capsule-${requestIndex}`;
+  const sourceKind = body.sourceKind || (body.selectedText ? 'selection' : 'webpage');
+  const preview = String(body.selectedText || body.text || '').slice(0, 240);
+  const ts = nowSeconds();
+  const note = String(body.note || '').trim();
+  const capsule = {
+    id,
+    sourceKind,
+    sourceUrl: body.sourceUrl,
+    sourceTitle: body.sourceTitle || 'Source memory',
+    sourceHost: '127.0.0.1',
+    captureMode: body.captureMode || 'manual',
+    captureReason: body.captureReason || '用户点击选区旁的 + 记住',
+    status: 'saved',
+    scope: body.scope || 'work',
+    privacyLevel: body.privacyLevel || 'work',
+    summary: note || preview,
+    contentPreview: preview,
+    messageId: `source-memory-message-${requestIndex}`,
+    metadata: {
+      userNote: note || undefined,
+    },
+    writeReceipt: {
+      state: 'saved_with_recall_signal',
+      label: '资料记忆已写入',
+      detail:
+        sourceKind === 'visual_memory'
+          ? '已创建或更新 source-memory capsule，并写入关联视觉证据检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。'
+          : '已创建或更新 source-memory capsule，并写入关联网页检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。',
+      evidence: [
+        `资料类型：${sourceMemoryKindLabel(sourceKind)}`,
+        `保存方式：${body.captureMode === 'auto' ? '自动保存' : '主动保存'}`,
+        '范围：工作记忆',
+        '检索信号：已启用',
+      ],
+      nextStep:
+        '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
+    },
+    actionReceipt: {
+      state: duplicateSourceMemory ? 'duplicate_no_change' : 'saved',
+      label: duplicateSourceMemory
+        ? '最近操作：已有资料保持可用'
+        : '最近操作：资料已保存',
+      detail: duplicateSourceMemory
+        ? '这次命中已有 source-memory capsule，没有新建第二条 capsule，也没有更新备注或正文。'
+        : '这次创建了 source-memory capsule，并写入关联网页检索信号。',
+      evidence: [
+        `资料类型：${sourceMemoryKindLabel(sourceKind)}`,
+        `保存方式：${body.captureMode === 'auto' ? '自动保存' : '主动保存'}`,
+      ],
+      nextStep: '可在资料详情复核、补备注或撤销。',
+      occurredAt: ts,
+    },
+    createdAt: ts,
+    updatedAt: ts,
+    savedAt: ts,
+    duplicate: duplicateSourceMemory,
+    anchors: [
+      {
+        id: `${id}-anchor`,
+        anchorKind: sourceKind === 'selection' ? 'text_selection' : 'page_excerpt',
+        locator: body.sourceUrl,
+        quoteOrPreview: preview,
+        sensitivity: 'normal',
+        confidence: 0.78,
+      },
+    ],
+    takeaways: [
+      {
+        id: `${id}-takeaway`,
+        kind: 'source_note',
+        title: (note || preview).slice(0, 64),
+        body: note || preview,
+        evidenceAnchorIds: [`${id}-anchor`],
+        confidence: 0.62,
+        status: 'ready',
+      },
+    ],
+    triggers: [
+      {
+        id: `${id}-trigger`,
+        triggerKind: 'source',
+        description: '再次遇到 127.0.0.1 相关资料时安静匹配',
+        matcher: { host: '127.0.0.1' },
+        defaultBehavior: 'quiet_match',
+      },
+    ],
+  };
+  capsule.metadata.distillation = buildHarnessDistillation(capsule, note);
+  return capsule;
+}
+
 async function openContextMoreMenu(page) {
   await page.locator('.pai-context-more').click();
   await page.waitForSelector('.pai-context-more-menu:not([hidden])', {
@@ -199,6 +348,7 @@ async function startHarnessServer() {
   const ambientCalibrationRequests = [];
   const sourceMemoryCandidateRequests = [];
   const sourceMemoryCreateRequests = [];
+  const sourceMemoryCapsules = new Map();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -435,6 +585,8 @@ async function startHarnessServer() {
               sourceMemoryCapsuleId: 'web-memory-source-url-only',
               sourceKind: 'webpage',
               captureMode: 'manual',
+              sourceMemoryDistillationStatus: 'ready',
+              sourceMemoryCue: 'Falcon source-only handoff note should be checked before launch.',
               groupId: 'source-memory-feedback-group',
               sender: 'Source Memory Owner',
             },
@@ -480,6 +632,8 @@ async function startHarnessServer() {
               sourceMemoryCapsuleId: 'web-memory-source-url-sensitive',
               sourceKind: 'webpage',
               captureMode: 'manual',
+              sourceMemoryDistillationStatus: 'ready',
+              sourceMemoryCue: 'Falcon sensitive source note is available only through capsule detail.',
             },
             timestamp: Math.floor(Date.now() / 1000),
           };
@@ -910,64 +1064,76 @@ async function startHarnessServer() {
           return;
         }
         sourceMemoryCreateRequests.push(body);
-        const duplicateSourceMemory = String(body.sourceUrl || '').includes('duplicate-page-capture');
-        const id = duplicateSourceMemory
-          ? 'source-memory-capsule-existing'
-          : `source-memory-capsule-${sourceMemoryCreateRequests.length}`;
-        const sourceKind = body.sourceKind || (body.selectedText ? 'selection' : 'webpage');
-        const preview = String(body.selectedText || body.text || '').slice(0, 240);
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            capsule: {
-              id,
-              sourceKind,
-              sourceUrl: body.sourceUrl,
-              sourceTitle: body.sourceTitle || 'Source memory',
-              sourceHost: '127.0.0.1',
-              captureMode: body.captureMode || 'manual',
-              captureReason: body.captureReason || '用户点击选区旁的 + 记住',
-              status: 'saved',
-              scope: body.scope || 'work',
-              privacyLevel: body.privacyLevel || 'work',
-              summary: body.note || preview,
-              contentPreview: preview,
-              messageId: `source-memory-message-${sourceMemoryCreateRequests.length}`,
-              writeReceipt: {
-                state: 'saved_with_recall_signal',
-                label: '资料记忆已写入',
-                detail:
-                  sourceKind === 'visual_memory'
-                    ? '已创建或更新 source-memory capsule，并写入关联视觉证据检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。'
-                    : '已创建或更新 source-memory capsule，并写入关联网页检索信号；后续 Ask、Memory Lens 和时间轴可按证据召回。',
-                evidence: [
-                  `资料类型：${sourceKind === 'selection' ? '选区资料' : sourceKind === 'visual_memory' ? '视觉证据' : '整页资料'}`,
-                  `保存方式：${body.captureMode === 'auto' ? '自动保存' : '主动保存'}`,
-                  '范围：工作记忆',
-                  '检索信号：已启用',
-                ],
-                nextStep:
-                  '可在资料详情复核、补备注或撤销；不会自动外发、插入输入框或同步到其他平台。',
-              },
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-              savedAt: Date.now(),
-              duplicate: duplicateSourceMemory,
-              anchors: [
-                {
-                  id: `${id}-anchor`,
-                  anchorKind: sourceKind === 'selection' ? 'text_selection' : 'page_excerpt',
-                  locator: body.sourceUrl,
-                  quoteOrPreview: preview,
-                  sensitivity: 'normal',
-                  confidence: 0.78,
-                },
-              ],
-              takeaways: [],
-              triggers: [],
-            },
-          }),
+        const capsule = buildHarnessSourceMemoryCapsule(
+          body,
+          sourceMemoryCreateRequests.length,
         );
+        sourceMemoryCapsules.set(capsule.id, capsule);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ capsule }));
+        return;
+      }
+
+      const sourceMemoryNoteMatch = req.url?.match(
+        /^\/api\/v1\/source-memory\/capsules\/([^/]+)\/note$/,
+      );
+      if (req.method === 'POST' && sourceMemoryNoteMatch) {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const id = decodeURIComponent(sourceMemoryNoteMatch[1]);
+        const existing = sourceMemoryCapsules.get(id);
+        if (!existing) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Source memory capsule not found.' }));
+          return;
+        }
+        await delay(350);
+        if (String(body.note || '').includes('触发失败')) {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Memory Service 暂时不可用' }));
+          return;
+        }
+        const note = String(body.note || '').trim();
+        const ts = nowSeconds();
+        const capsule = {
+          ...existing,
+          summary: note || existing.contentPreview,
+          updatedAt: ts,
+          metadata: {
+            ...(existing.metadata || {}),
+            userNote: note || undefined,
+          },
+          actionReceipt: {
+            state: 'note_updated',
+            label: '最近操作：备注已更新',
+            detail:
+              '这次更新了资料备注、summary、关联 web 检索信号和资料蒸馏回执；没有新建第二条 capsule。',
+            evidence: ['资料类型：选区资料', '检索信号：已刷新'],
+            nextStep:
+              '继续在详情页复核蒸馏提示；这不会自动写用户画像、创建任务或同步外部系统。',
+            occurredAt: ts,
+          },
+        };
+        capsule.metadata.distillation = buildHarnessDistillation(capsule, note);
+        sourceMemoryCapsules.set(id, capsule);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ capsule }));
+        return;
+      }
+
+      const sourceMemoryDetailMatch = req.url?.match(
+        /^\/api\/v1\/source-memory\/capsules\/([^/?#]+)$/,
+      );
+      if (req.method === 'GET' && sourceMemoryDetailMatch) {
+        const id = decodeURIComponent(sourceMemoryDetailMatch[1]);
+        const capsule = sourceMemoryCapsules.get(id);
+        if (!capsule) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Source memory capsule not found.' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ capsule }));
         return;
       }
 
@@ -1749,6 +1915,11 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     /只读提示，不写入\/插入\/发送/,
     'Rest icon tooltip should state the no-write/no-insert/no-send boundary',
   );
+  assert.match(
+    bubbleTitle || '',
+    /本轮召回 · 页面稳定后重新请求/,
+    'Rest icon tooltip should disclose that this hint came from the current recall request',
+  );
   assert.doesNotMatch(
     bubbleTitle || '',
     /\b\d{1,3}%\b/,
@@ -1771,6 +1942,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.match(peekText, /Falcon launch readiness is linked to the owner handoff checklist\./);
   assert.match(peekText, /工作记忆/);
   assert.match(peekText, /关键词匹配/);
+  assert.match(peekText, /本轮召回 · 页面稳定后重新请求/);
   assert.match(peekText, /只读提示/);
   assert.match(peekText, /不写入\/插入\/发送/);
   assert.doesNotMatch(peekText, /\b\d{1,3}%\b/);
@@ -1825,6 +1997,16 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   const cardText = await page.locator('.pai-context-card').innerText();
   assert.match(cardText, /Memory Lens/);
+  assert.match(
+    cardText,
+    /页面召回回执/,
+    'Expanded Card should keep the passive page recall basis visible for direct-open users',
+  );
+  assert.match(cardText, /网页被动提示/);
+  assert.match(cardText, /Falcon readiness notes/);
+  assert.match(cardText, /127\.0\.0\.1/);
+  assert.match(cardText, /本轮召回 · 页面稳定后重新请求/);
+  assert.match(cardText, /只读关联记忆；不保存网页、不插入输入框、不发送内容/);
   assert.match(cardText, /2 条强相关，3 条静默/);
   assert.doesNotMatch(
     cardText,
@@ -1942,8 +2124,18 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   const menuText = await page.locator('.pai-context-more-menu:not([hidden])').innerText();
   assert.match(menuText, /站点控制回执/);
   assert.match(menuText, /当前站点/);
+  assert.match(menuText, /当前状态/);
+  assert.match(menuText, /当前未被静默\/屏蔽；被动提示可继续评估/);
   assert.match(menuText, /控制范围/);
   assert.match(menuText, /只影响右下角 Lens、页面召回、整页\/视觉入库候选/);
+  assert.match(menuText, /允许操作/);
+  assert.match(menuText, /会开启白名单并允许此站点；只影响被动网页处理/);
+  assert.match(menuText, /今天不提示/);
+  assert.match(menuText, /会保存 24 小时临时静默/);
+  assert.match(menuText, /页面屏蔽/);
+  assert.match(menuText, /会保存当前路径屏蔽/);
+  assert.match(menuText, /屏蔽操作/);
+  assert.match(menuText, /会保存当前站点屏蔽设置；只停止被动网页处理/);
   assert.match(menuText, /主动划词(?:检索)?仍可用/);
   assert.match(menuText, /不删除、不同步、不外发已有记忆/);
   assert.match(menuText, /开启白名单并允许此站点/);
@@ -2179,7 +2371,16 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     { timeout: 5000 },
   );
   await optionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
-  await optionsPage.getByRole('button', { name: '恢复', exact: true }).click();
+  const unmuteButton = optionsPage.getByRole('button', {
+    name: /恢复 127\.0\.0\.1 的 24 小时临时静默/,
+  });
+  const unmuteBoundary = await unmuteButton.getAttribute('title');
+  assert.match(
+    unmuteBoundary || '',
+    /只移除临时静默规则/,
+    '临时静默恢复按钮 title 应说明只移除临时规则',
+  );
+  await unmuteButton.click();
   await optionsPage.waitForSelector('text=当前没有被临时静默的网站', {
     timeout: 5000,
   });
@@ -2270,7 +2471,16 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   });
   await blockedOptionsPage.waitForSelector('text=永久屏蔽', { timeout: 5000 });
   await blockedOptionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
-  await blockedOptionsPage.getByRole('button', { name: '恢复', exact: true }).click();
+  const unblockSiteButton = blockedOptionsPage.getByRole('button', {
+    name: /移除 127\.0\.0\.1 的永久屏蔽/,
+  });
+  const unblockSiteBoundary = await unblockSiteButton.getAttribute('title');
+  assert.match(
+    unblockSiteBoundary || '',
+    /只移除整站屏蔽规则/,
+    '永久屏蔽恢复按钮 title 应说明只移除整站规则',
+  );
+  await unblockSiteButton.click();
   await blockedOptionsPage.waitForSelector('text=当前没有被永久屏蔽的网站', {
     timeout: 5000,
   });
@@ -2461,6 +2671,17 @@ async function verifyPossibleHoverPeek(server, context) {
     false,
     '缓存恢复的 p2 可能相关不应升级成强相关 fresh 动效',
   );
+  const cachedBubble = page.locator('.pai-context-bubble');
+  await cachedBubble.hover();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const cachedPeekText = await page.locator('.pai-context-peek').innerText();
+  assert.match(
+    cachedPeekText,
+    /本地缓存 · .*召回；未重新请求/,
+    '缓存恢复的 Hover Peek 应说明本次复用本地缓存而不是重新请求召回',
+  );
   await page.close();
 
   const noWhyPage = await context.newPage();
@@ -2630,28 +2851,74 @@ async function verifySourceUrlOnlyProvenance(server, context) {
     /资料详情可复核/,
     'source memory card should state that the capsule detail is checkable',
   );
+  assert.match(
+    cardText || '',
+    /资料回执[\s\S]*已保存的 整页资料 \/ 主动保存/,
+    'source memory card should expose a dedicated source-memory receipt',
+  );
+  assert.match(
+    cardText || '',
+    /蒸馏[\s\S]*已生成蒸馏提示/,
+    'source memory receipt should expose distillation state',
+  );
+  assert.match(
+    cardText || '',
+    /复核[\s\S]*打开资料详情可核对保存原因、证据锚点、补备注或撤销/,
+    'source memory receipt should explain the detail review path before action',
+  );
+  assert.match(
+    cardText || '',
+    /边界[\s\S]*本卡只读，不新增\/撤销资料记忆/,
+    'source memory receipt should keep the no-write boundary visible',
+  );
 
   const exploreHref = await page
     .locator('.pai-context-open-memory')
     .getAttribute('href');
+  const exploreTitle = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('title');
+  const exploreAriaLabel = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('aria-label');
   assert.ok(
     exploreHref?.includes('memory-exploring.html#/source-memory/web-memory-source-url-only'),
     `source memory explore link should open capsule detail: ${exploreHref}`,
+  );
+  assert.match(
+    exploreTitle || '',
+    /打开资料详情复核[\s\S]*不会新增或撤销资料记忆/,
+    'source memory detail action should expose the no-write review boundary in title',
+  );
+  assert.equal(
+    exploreAriaLabel,
+    exploreTitle,
+    'source memory detail action should expose the same review boundary to screen readers',
   );
 
   const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
     anchors.map((anchor) => ({
       text: anchor.textContent || '',
       href: anchor.href,
+      title: anchor.getAttribute('title') || '',
+      ariaLabel: anchor.getAttribute('aria-label') || '',
     })),
   );
-  assert.ok(
-    visibleLinks.some(
-      (link) =>
-        link.text.includes('Falcon source-only evidence') &&
-        link.href === 'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
-    ),
-    `sourceUrl 应在 Expanded Card 中作为可点击来源展示: ${JSON.stringify(visibleLinks)}`,
+  const sourceOnlyLink = visibleLinks.find(
+    (link) =>
+      link.text.includes('Falcon source-only evidence') &&
+      link.href === 'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
+  );
+  assert.ok(sourceOnlyLink, `sourceUrl 应在 Expanded Card 中作为可点击来源展示: ${JSON.stringify(visibleLinks)}`);
+  assert.match(
+    sourceOnlyLink.title,
+    /打开已保存资料的原始来源[\s\S]*source-only\.example\.com[\s\S]*不确认事实/,
+    'source memory original-source link should expose click consequences in title',
+  );
+  assert.equal(
+    sourceOnlyLink.ariaLabel,
+    sourceOnlyLink.title,
+    'source memory original-source link should expose the same boundary to screen readers',
   );
   assert.equal(
     visibleLinks.filter((link) => link.href.includes('source-only.example.com')).length,
@@ -2812,6 +3079,16 @@ async function verifySourceMemorySensitiveSourceHidden(server, context) {
     /资料详情可复核/,
     'source memory card should keep the capsule detail receipt when the raw source URL is hidden',
   );
+  assert.match(
+    cardText || '',
+    /资料回执[\s\S]*原始来源未展示或已隐藏；仍保留资料详情复核入口/,
+    'source memory receipt should explain hidden source while keeping detail review',
+  );
+  assert.match(
+    cardText || '',
+    /本卡只读，不新增\/撤销资料记忆/,
+    'sensitive source memory receipt should retain the no-write boundary',
+  );
   assert.doesNotMatch(
     cardText || '',
     /已保存资料来源可复核/,
@@ -2821,15 +3098,33 @@ async function verifySourceMemorySensitiveSourceHidden(server, context) {
   const exploreHref = await page
     .locator('.pai-context-open-memory')
     .getAttribute('href');
+  const exploreTitle = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('title');
+  const exploreAriaLabel = await page
+    .locator('.pai-context-open-memory')
+    .getAttribute('aria-label');
   assert.ok(
     exploreHref?.includes('memory-exploring.html#/source-memory/web-memory-source-url-sensitive'),
     `sensitive source memory explore link should still open capsule detail: ${exploreHref}`,
+  );
+  assert.match(
+    exploreTitle || '',
+    /打开资料详情复核[\s\S]*不会新增或撤销资料记忆/,
+    'hidden-source source memory detail action should still expose the no-write review boundary',
+  );
+  assert.equal(
+    exploreAriaLabel,
+    exploreTitle,
+    'hidden-source source memory detail action should expose the same boundary to screen readers',
   );
 
   const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
     anchors.map((anchor) => ({
       text: anchor.textContent || '',
       href: anchor.href,
+      title: anchor.getAttribute('title') || '',
+      ariaLabel: anchor.getAttribute('aria-label') || '',
     })),
   );
   assert.equal(
@@ -3031,11 +3326,37 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
   );
   assert.match(emptyAllowlistStatus, /主动划词检索仍可用/);
   assert.match(emptyAllowlistStatus, /不删除、不同步、不外发已有记忆，也不反写当前网站/);
+  const allowlistToggleBoundary = await optionsPage
+    .getByRole('checkbox', { name: /关闭白名单模式，恢复默认站点规则/ })
+    .getAttribute('title');
+  assert.match(
+    allowlistToggleBoundary || '',
+    /主动划词仍可用；不会写入、删除、同步或外发已有记忆/,
+    '白名单开关 hover 边界应说明主动划词和无写入外发',
+  );
   await optionsPage.getByLabel('添加允许站点').fill('127.0.0.1');
-  await optionsPage.getByRole('button', { name: '允许', exact: true }).click();
+  const allowButton = optionsPage.getByRole('button', {
+    name: /把 127\.0\.0\.1 加入允许站点列表/,
+  });
+  const allowButtonBoundary = await allowButton.getAttribute('title');
+  assert.match(
+    allowButtonBoundary || '',
+    /移除覆盖它的静默\/屏蔽冲突/,
+    '允许站点按钮 title 应在点击前说明冲突清理',
+  );
+  assert.match(
+    allowButtonBoundary || '',
+    /主动划词仍可用；不会写入、删除、同步或外发已有记忆/,
+    '允许站点按钮 title 应在点击前说明主动划词和无写入外发',
+  );
+  await allowButton.click();
   await optionsPage.waitForSelector('text=已允许 127.0.0.1 显示网页记忆提示', {
     timeout: 5000,
   });
+  await optionsPage.waitForSelector(
+    'text=此站点在允许列表内，已打开页面会实时重新评估右下角 Lens、页面召回和被动入库候选',
+    { timeout: 5000 },
+  );
   await optionsPage.waitForSelector('text=允许站点 · 添加于', {
     timeout: 5000,
   });
@@ -3068,11 +3389,43 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
     '白名单模式下已允许站点应触发被动召回',
   );
   await allowedPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await allowedPage.locator('.pai-context-bubble').click();
+  await allowedPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await openContextMoreMenu(allowedPage);
+  const allowedMenuText = await allowedPage
+    .locator('.pai-context-more-menu:not([hidden])')
+    .innerText();
+  assert.match(allowedMenuText, /白名单已包含此站点：127\.0\.0\.1/);
+  assert.match(allowedMenuText, /此站点已经允许；不会重复改写规则/);
+  assert.match(
+    allowedMenuText,
+    /会保存当前站点屏蔽设置，并移除 1 条允许\/静默\/旧屏蔽覆盖规则/,
+  );
   await allowedPage.close();
 
-  await optionsPage
-    .getByRole('button', { name: '移除允许站点 127.0.0.1' })
-    .click();
+  const removeAllowedButton = optionsPage.getByRole('button', {
+    name: /从允许站点列表移除 127\.0\.0\.1/,
+  });
+  const removeAllowedBoundary = await removeAllowedButton.getAttribute('title');
+  assert.match(
+    removeAllowedBoundary || '',
+    /白名单模式会让此站点被动提示保持静默/,
+    '移除允许站点按钮 title 应说明白名单模式下的后果',
+  );
+  await removeAllowedButton.click();
+  await optionsPage.waitForSelector(
+    'text=白名单模式仍会让此站点的被动提示保持静默，除非重新加入允许列表',
+    { timeout: 5000 },
+  );
+  await optionsPage.waitForSelector('text=主动划词仍可用', {
+    timeout: 5000,
+  });
+  await optionsPage.waitForSelector('text=不会写入、删除、同步或外发已有记忆', {
+    timeout: 5000,
+  });
   await optionsPage.waitForSelector('text=当前没有允许站点', {
     timeout: 5000,
   });
@@ -3141,7 +3494,9 @@ async function verifyAllowSiteClearsCoveredControls(
   });
   await optionsPage.waitForSelector('text=lvh.me', { timeout: 5000 });
   await optionsPage.getByLabel('添加允许站点').fill('docs.lvh.me');
-  await optionsPage.getByRole('button', { name: '允许', exact: true }).click();
+  await optionsPage
+    .getByRole('button', { name: /把 docs\.lvh\.me 加入允许站点列表/ })
+    .click();
   await optionsPage.waitForSelector(
     'text=已允许 docs.lvh.me 显示网页记忆提示，并移除 2 条覆盖它的静默/屏蔽规则',
     { timeout: 5000 },
@@ -3508,10 +3863,18 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
     timeout: 5000,
   });
   await optionsPage.waitForSelector(`text=${blockedPrefix}`, { timeout: 5000 });
-  await optionsPage
-    .getByRole('button', { name: `恢复页面路径 ${blockedPrefix}` })
-    .click();
-  await optionsPage.waitForSelector('text=不会写入、删除或外发记忆', {
+  const escapedBlockedPrefix = blockedPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const restorePathButton = optionsPage.getByRole('button', {
+    name: new RegExp(`移除 ${escapedBlockedPrefix} 的页面路径屏蔽`),
+  });
+  const restorePathBoundary = await restorePathButton.getAttribute('title');
+  assert.match(
+    restorePathBoundary || '',
+    /只恢复该路径被动候选资格/,
+    '页面路径恢复按钮 title 应说明只恢复路径被动候选资格',
+  );
+  await restorePathButton.click();
+  await optionsPage.waitForSelector('text=不会写入、删除、同步或外发已有记忆', {
     timeout: 5000,
   });
   await optionsPage.waitForSelector('text=当前没有被永久屏蔽的页面路径', {
@@ -3978,6 +4341,23 @@ async function verifySelectedTextTrigger(server, context) {
     /不保存、不插入、不发送、不调用外部 AI/,
     '划词查记忆 hover tooltip 应说明它不是保存、插入、发送或外部 AI 调用',
   );
+  assert.equal(
+    await page.locator('.pai-context-selection-trigger').getAttribute('data-tooltip-placement'),
+    'bottom',
+    '靠近视口顶部的划词 icon 应把 tooltip 放到下方，避免边界说明被裁切',
+  );
+  const selectionTriggerBox = await page.locator('.pai-context-selection-trigger').boundingBox();
+  const selectionTooltipBox = await page.locator('.pai-context-selection-tooltip').boundingBox();
+  assert.ok(selectionTriggerBox, '应能读取划词 icon 位置');
+  assert.ok(selectionTooltipBox, '应能读取划词 tooltip 位置');
+  assert.ok(
+    selectionTooltipBox.y >= 0,
+    '划词 tooltip 不应被视口顶部裁切',
+  );
+  assert.ok(
+    selectionTooltipBox.y >= selectionTriggerBox.y + selectionTriggerBox.height - 1,
+    '顶部选区的划词 tooltip 应显示在 icon 下方',
+  );
   const captureDockGeom = await page
     .locator('.pai-memory-capture-selection-dock')
     .evaluate((el) => {
@@ -4107,6 +4487,28 @@ async function verifySelectedTextTrigger(server, context) {
     '划词检索卡片不应继续使用页面级 Memory Lens 文案',
   );
   assert.match(selectionCardText, /选中的内容/);
+  assert.match(selectionCardText, /打开/);
+  assert.match(
+    selectionCardText,
+    /点击只打开已命中的本轮划词结果/,
+    '划词卡片应说明点击 icon 只是打开已命中的结果',
+  );
+  assert.match(
+    selectionCardText,
+    /不二次召回、不保存、不插入、不发送、不调用外部 AI/,
+    '划词卡片应说明打开不会重新召回或产生写入/外发副作用',
+  );
+  assert.match(selectionCardText, /候选/);
+  assert.match(
+    selectionCardText,
+    /本轮 \d+ 条强相关候选；当前第 \d+ 条/,
+    '划词卡片应说明本轮已命中候选数量',
+  );
+  assert.match(
+    selectionCardText,
+    /选中文本锚点：falcon/i,
+    '划词卡片应显示当前候选回到选中文字的锚点',
+  );
   assert.match(selectionCardText, /查询/);
   assert.match(selectionCardText, /只用选中文字作为主检索文本/);
   assert.match(selectionCardText, /背景/);
@@ -4242,6 +4644,26 @@ async function verifySelectedTextTrigger(server, context) {
     /资料记忆和网页检索信号/,
     '选区入库复核面板应说明会写入资料记忆和网页检索信号',
   );
+  assert.match(
+    selectionReviewText,
+    /选区快照/,
+    '选区入库复核面板应命名将被保存的选区快照',
+  );
+  assert.match(
+    selectionReviewText,
+    /将保存下方约 \d+ 字的选中文字/,
+    '选区入库复核面板应说明正文预览就是将写入的选中文字快照',
+  );
+  assert.match(
+    selectionReviewText,
+    /备注只补充保存原因，不会重新抓取页面或改成当前新的选区/,
+    '选区入库复核面板应说明备注不会重扫页面或改用新选区',
+  );
+  assert.match(
+    selectionReviewText,
+    /若页面或选区已变化，请取消后重新选择再点 \+ 记住/,
+    '选区入库复核面板应给出选区变化后的恢复路径',
+  );
   await emptyPage.getByRole('button', { name: '取消' }).click();
   await emptyPage.waitForSelector('.pai-memory-capture-note-panel', {
     state: 'detached',
@@ -4342,6 +4764,87 @@ async function verifySelectedTextTrigger(server, context) {
     detailPage.url(),
     /memory-exploring\.html#\/source-memory\/source-memory-capsule-\d+/,
     '保存成功 toast 应能直接打开资料记忆详情页',
+  );
+  await detailPage.waitForSelector('.source-memory-detail-note-panel', {
+    timeout: 5000,
+  });
+  const sourceMemoryNotePanel = detailPage.locator('.source-memory-detail-note-panel');
+  const sourceMemoryNotePanelText = await sourceMemoryNotePanel.innerText();
+  assert.match(
+    sourceMemoryNotePanelText,
+    /补备注并刷新蒸馏/,
+    'source-memory 详情页应提供补备注并刷新蒸馏入口',
+  );
+  assert.match(
+    sourceMemoryNotePanelText,
+    /不会自动写画像、创建任务或同步外部系统/,
+    '补备注入口应说明不会自动升级为画像、任务或外部同步',
+  );
+  await sourceMemoryNotePanel
+    .locator('.source-memory-detail-note-input')
+    .fill('用于后续整理 source pack 复核');
+  await sourceMemoryNotePanel.locator('.primary-action').click();
+  await sourceMemoryNotePanel
+    .locator('.note-update-receipt.pending')
+    .waitFor({ timeout: 5000 });
+  const pendingNoteReceipt = await sourceMemoryNotePanel
+    .locator('.note-update-receipt.pending')
+    .innerText();
+  assert.match(
+    pendingNoteReceipt,
+    /备注刷新提交中/,
+    '提交后应先显示备注刷新 pending 回执',
+  );
+  assert.match(
+    pendingNoteReceipt,
+    /尚未确认刷新/,
+    'pending 回执应说明备注、web 信号和蒸馏尚未确认',
+  );
+  assert.match(
+    pendingNoteReceipt,
+    /不会自动写用户画像、创建任务、确认新事实或同步外部系统/,
+    'pending 回执应保留非画像/非任务/非外部同步边界',
+  );
+  await sourceMemoryNotePanel
+    .locator('.note-update-receipt.success')
+    .waitFor({ timeout: 5000 });
+  const successNoteReceipt = await sourceMemoryNotePanel
+    .locator('.note-update-receipt.success')
+    .innerText();
+  assert.match(
+    successNoteReceipt,
+    /最近操作：备注已更新/,
+    '成功后应展示后端 actionReceipt 的备注更新状态',
+  );
+  assert.match(
+    successNoteReceipt,
+    /资料蒸馏：Ready/,
+    '成功后应展示刷新后的资料蒸馏状态',
+  );
+  assert.match(
+    await detailPage.locator('.distillation-panel').innerText(),
+    /用于后续整理 source pack 复核/,
+    '备注更新成功后首屏资料蒸馏回执应刷新一行提示',
+  );
+  await sourceMemoryNotePanel
+    .locator('.source-memory-detail-note-input')
+    .fill('触发失败');
+  await sourceMemoryNotePanel.locator('.primary-action').click();
+  await sourceMemoryNotePanel
+    .locator('.note-update-receipt.error')
+    .waitFor({ timeout: 5000 });
+  const failedNoteReceipt = await sourceMemoryNotePanel
+    .locator('.note-update-receipt.error')
+    .innerText();
+  assert.match(
+    failedNoteReceipt,
+    /备注刷新未确认/,
+    '备注刷新失败时应显示未确认回执',
+  );
+  assert.match(
+    failedNoteReceipt,
+    /没有确认更新备注、刷新 web 检索信号或重新生成资料蒸馏/,
+    '失败回执应说明没有确认任何资料或蒸馏刷新',
   );
   await detailPage.close();
   if (emptyDiagnostics.some((entry) => entry.includes('pageerror'))) {
@@ -4597,6 +5100,16 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     /当前页面资料尚未写入[\s\S]*不会因点击直接保存、外发或同步/,
     '整页入库建议入口 hover title 应说明点击前没有写入和外发',
   );
+  assert.match(
+    await pageCaptureChip.getAttribute('title'),
+    /页面快照：将保存[\s\S]*Falcon page capture review packet/,
+    '整页入库建议入口 hover title 应说明将保存哪一个页面快照',
+  );
+  assert.match(
+    await pageCaptureChip.getAttribute('title'),
+    /触发依据：[\s\S]*复制过页面内容[\s\S]*阅读深度/,
+    '整页入库建议入口 hover title 应说明本机触发依据',
+  );
   assert.equal(
     server.sourceMemoryCreateRequests.length,
     createStartCount,
@@ -4639,6 +5152,21 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     reviewText,
     /资料记忆和网页检索信号/,
     '整页入库复核面板应说明会写入资料记忆和网页检索信号',
+  );
+  assert.match(
+    reviewText,
+    /页面快照：将保存[\s\S]*Falcon page capture review packet/,
+    '整页入库复核面板应显示保存使用的页面快照基准',
+  );
+  assert.match(
+    reviewText,
+    /不会重新抓取页面或改成之后滚动、跳转后的内容/,
+    '整页入库复核面板应说明备注不会把保存目标改成后续页面状态',
+  );
+  assert.match(
+    reviewText,
+    /触发依据：[\s\S]*当前浏览器本地行为信号[\s\S]*不代表系统确认页面事实/,
+    '整页入库复核面板应说明触发依据来自本地行为信号且不确认页面事实',
   );
   assert.match(
     await page.locator('.pai-memory-capture-note-preview').innerText(),
@@ -4730,6 +5258,11 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     /入口仍保留，可重试/,
     '整页保存失败应给出可恢复路径',
   );
+  assert.match(
+    pageFailureText,
+    /页面快照：将保存[\s\S]*Falcon page capture review packet/,
+    '整页保存失败回执应保留本次未写入所对应的页面快照',
+  );
   assert.equal(
     server.sourceMemoryCreateRequests.length,
     createStartCount,
@@ -4765,6 +5298,11 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     await page.locator('.pai-context-toast').innerText(),
     /资料记忆已写入[\s\S]*网页检索信号[\s\S]*不会自动外发/,
     '整页保存成功后应展示后端写入回执和网页检索信号边界',
+  );
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /页面快照：将保存[\s\S]*Falcon page capture review packet/,
+    '整页保存成功 toast 应保留这次保存的页面快照基准',
   );
   const viewSavedSourceMemory = page.getByRole('button', {
     name: '查看资料记忆详情',

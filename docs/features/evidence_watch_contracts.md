@@ -1,6 +1,6 @@
 # Evidence Watch Contracts
 
-_最后更新: 2026-06-29_
+_最后更新: 2026-07-12_
 
 Evidence Watch Contracts / 证据守望契约用于处理“这条事实可能会变、需要持续复核、旧答案不能冒充当前事实”的场景。它不是新的用户待办页，而是 Ask、Reflection、Action Queue 和 confirm request 之间的后台契约层。
 
@@ -52,6 +52,8 @@ API：
 - `GET /api/v1/evidence-watch-contracts/:id/runs`
 - `POST /api/v1/evidence-watch-contracts/:id/runs`
 
+列表读取会额外返回 `receipt`，说明本次只是按 `state` / `subjectKey` / 分页读取的只读快照；它不会复核权威来源、创建或复用外部查证动作、确认事实变化、发送通知，也不会修改 contract 状态。详情读取保留原有 Evidence Watch 状态 `receipt`，并额外返回 `readReceipt` 说明详情页只是当前 contract 快照；`readReceipt` 带 `lastCheckedAt`、`nextCheckAt` 和 `nextCheckDue`，把“最近复核 / 下次复核 / 是否到期”作为快照时间基准呈现。run history 读取也返回 `证据守望运行快照`，明确历史 run 不代表本轮重新触达过权威来源，并保留同一组复核时间基准。`state` 参数如果不是 `all` / `active` / `quiet_no_change` / `due` / `authority_changed` / `source_blocked` / `paused` / `archived`，API 会直接返回 `400` 的 `证据守望筛选已阻断`，避免拼错筛选时静默退回全量列表。
+
 Ask response 可选字段：
 
 ```ts
@@ -66,6 +68,8 @@ evidenceWatch?: {
   confirmRequestId?: string;
   duplicateSuppressedCount: number;
   runId?: string;
+  lastRunState?: 'created' | 'checked_no_change' | 'checked_changed' | 'blocked' | 'skipped_budget' | 'skipped_duplicate' | 'needs_user_decision';
+  lastRunSummary?: string;
   created?: boolean;
 }
 ```
@@ -79,8 +83,10 @@ evidenceWatch?: {
 
 ## 收据边界
 
+- `证据守望列表快照`: 只说明列表读取的筛选、分页、返回数量和读取时间；不代表本轮触达过权威来源，也不代表没有新的变化。
+- `证据守望详情快照` / `证据守望运行快照`: 只说明 contract 详情或历史 run 被读取；会带上 `lastCheckedAt`、`nextCheckAt`、`nextCheckDue` 作为时间基准，但不会追加 run、复核来源、创建 action、确认变化、发送通知或修改状态。
 - `created`: 只说明守望契约已建立，后续相同事实缺口会复用；不代表权威来源已复核。
-- `skipped_duplicate`: 只说明已有外部查证动作被复用；不更新 `lastCheckedAt`，也不把状态改成 `quiet_no_change`。
+- `skipped_duplicate`: 只说明已有外部查证动作被复用；Ask 回执会把本轮 run 标成“复用队列 / 本轮未复核来源”；不更新 `lastCheckedAt`，也不把状态改成 `quiet_no_change`。
 - `checked_no_change` / `checked_changed` / `blocked`: 才代表本轮实际触达或尝试触达权威来源，并更新最近复核状态。
 
 ## 验证

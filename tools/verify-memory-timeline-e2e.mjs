@@ -25,6 +25,8 @@ const feedbackRequests = [];
 let failNextRecallWith = '';
 let delayNextRecallMs = 0;
 let emptyNextRecall = false;
+let failNextFeedbackWith = '';
+let delayNextFeedbackMs = 0;
 
 function assertFeedbackRequest(index, expected, expectedDetail = {}) {
   const request = feedbackRequests[index];
@@ -140,6 +142,21 @@ try {
             metadata: { channels: ['time'] },
           },
           {
+            id: `source-only-${payload.scope}`,
+            type: 'message',
+            content: 'Safe external source without an internal memory route.',
+            displayTitle: 'Source-only timeline memory',
+            displayText:
+              'This row should require the explicit open-source button instead of opening from the whole card.',
+            score: 0.7,
+            source: 'web',
+            sourceUrl: 'https://example.org/source-only-memory',
+            sourceTitle: 'External source only',
+            timestamp: nowSeconds - 90,
+            scope: 'work',
+            metadata: { channels: ['time'] },
+          },
+          {
             id: `readonly-${payload.scope}`,
             type: 'chunk',
             content: 'Readonly timeline row without a route or source URL.',
@@ -218,6 +235,21 @@ try {
     'http://localhost:3210/api/v1/feedback',
     async (route) => {
       feedbackRequests.push(route.request().postDataJSON());
+      if (delayNextFeedbackMs > 0) {
+        const delayMs = delayNextFeedbackMs;
+        delayNextFeedbackMs = 0;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      if (failNextFeedbackWith) {
+        const error = failNextFeedbackWith;
+        failNextFeedbackWith = '';
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -269,11 +301,64 @@ try {
   );
   assert.equal(
     await page
-      .locator('.timeline-controls')
-      .getByRole('button', { name: '全部' })
+      .locator('.control-tabs[aria-label="记忆范围"]')
+      .getByRole('button', { name: /全部/ })
       .getAttribute('aria-pressed'),
     'true',
     'timeline scope control should expose the active all scope',
+  );
+  const activeRangeTitle =
+    (await page
+      .locator('.range-tabs')
+      .getByRole('button', { name: /今天/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    activeRangeTitle.includes('当前时间范围已选中') &&
+      activeRangeTitle.includes('再次点击不会重新请求') &&
+      activeRangeTitle.includes('不会写入、删除、写反馈、同步来源或确认事实'),
+    'active timeline range button should expose no-op/no-write boundary',
+  );
+  const sevenDayRangeTitle =
+    (await page
+      .locator('.range-tabs')
+      .getByRole('button', { name: /近7天/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    sevenDayRangeTitle.includes('通过 time 通道重新读取全部记忆的近7天窗口') &&
+      sevenDayRangeTitle.includes('失败不会把旧范围当成空结果'),
+    'inactive timeline range button should expose reread and failure boundary',
+  );
+  const activeScopeTitle =
+    (await page
+      .locator('.control-tabs[aria-label="记忆范围"]')
+      .getByRole('button', { name: /全部/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    activeScopeTitle.includes('当前记忆范围已选中') &&
+      activeScopeTitle.includes('再次点击不会重新请求'),
+    'active timeline scope button should expose no-op boundary',
+  );
+  const workScopeTitle =
+    (await page
+      .locator('.control-tabs[aria-label="记忆范围"]')
+      .getByRole('button', { name: /工作/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    workScopeTitle.includes('只更新本页时间轴 scope/query') &&
+      workScopeTitle.includes('重新读取工作记忆') &&
+      workScopeTitle.includes('不会改变全局偏好'),
+    'inactive timeline scope button should expose page-scope reread boundary',
+  );
+  const refreshButtonTitle =
+    (await page
+      .locator('.timeline-controls .refresh-btn')
+      .getAttribute('title')) || '';
+  assert.ok(
+    refreshButtonTitle.includes('重新读取 全部 · 今天 时间轴') &&
+      refreshButtonTitle.includes('同范围刷新中保留上次快照') &&
+      refreshButtonTitle.includes('失败不会当作空结果') &&
+      refreshButtonTitle.includes('不会写入、删除、写反馈、同步来源或确认事实'),
+    'timeline refresh button should expose snapshot/failure/no-write boundary',
   );
   await page
     .getByText('Focused memory outside range')
@@ -284,11 +369,14 @@ try {
   await page.getByText('Safe timeline memory all').waitFor({ timeout: 10000 });
   await page.getByText('Unsafe source memory').waitFor({ timeout: 10000 });
   await page
+    .getByText('Source-only timeline memory')
+    .waitFor({ timeout: 10000 });
+  await page
     .getByText('Readonly memory without target')
     .waitFor({ timeout: 10000 });
   const sourceOverview = page.getByLabel('时间轴来源覆盖');
   await sourceOverview.getByText('来源覆盖').waitFor({ timeout: 10000 });
-  await sourceOverview.getByText('4 条已加载').waitFor({ timeout: 10000 });
+  await sourceOverview.getByText('5 条已加载').waitFor({ timeout: 10000 });
   await sourceOverview
     .getByText(
       '当前展示全部来源；点击来源只会收窄这批已加载结果，不会扩大检索范围。',
@@ -304,8 +392,29 @@ try {
     .getByRole('button', { name: /Unsafe source\s*1/ })
     .waitFor({ timeout: 10000 });
   await sourceOverview
+    .getByRole('button', { name: /External source only\s*1/ })
+    .waitFor({ timeout: 10000 });
+  await sourceOverview
     .getByRole('button', { name: /来源未知\s*1/ })
     .waitFor({ timeout: 10000 });
+  const initialSourceSelectTitle =
+    (await page.getByLabel('按来源筛选时间轴').getAttribute('title')) || '';
+  assert.ok(
+    initialSourceSelectTitle.includes('当前显示全部 5 条已加载时间轴记忆') &&
+      initialSourceSelectTitle.includes('不重新请求 Memory Service') &&
+      initialSourceSelectTitle.includes('不会写入、删除、写反馈、同步来源或确认事实'),
+    'timeline source select should expose local-only filter boundary',
+  );
+  const unsafeSourceChipTitle =
+    (await sourceOverview
+      .getByRole('button', { name: /Unsafe source\s*1/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    unsafeSourceChipTitle.includes('Unsafe source 1') &&
+      unsafeSourceChipTitle.includes('本批已加载 5 条中的 1 条') &&
+      unsafeSourceChipTitle.includes('不重新请求 Memory Service'),
+    'source overview chip should expose visible slice and no-reread boundary before click',
+  );
   const dayHeaderTexts = await page
     .locator('.timeline-day-header')
     .allInnerTexts();
@@ -318,9 +427,10 @@ try {
   assert.ok(
     dayHeaderTexts.some(
       (text) =>
-        text.includes('3 条记忆') &&
+        text.includes('4 条记忆') &&
         text.includes('Timeline source') &&
-        text.includes('Unsafe source'),
+        text.includes('Unsafe source') &&
+        text.includes('External source only'),
     ),
     'timeline should group same-day recall rows with a source summary even when one row has no source',
   );
@@ -342,11 +452,11 @@ try {
   assert.ok(recallRequests[0]?.timeRange?.end);
 
   const openSourceButtons = await page
-    .getByRole('button', { name: '打开来源' })
+    .getByRole('button', { name: /打开来源/ })
     .count();
   assert.equal(
     openSourceButtons,
-    2,
+    3,
     'only http/https source URLs should render',
   );
   const unsafeTimelineCard = page.locator('article', {
@@ -383,7 +493,7 @@ try {
     .getByText('2 项目标被隐藏，不会打开外部网页')
     .waitFor({ timeout: 10000 });
   assert.equal(
-    await unsafeTimelineCard.getByRole('button', { name: '打开来源' }).count(),
+    await unsafeTimelineCard.getByRole('button', { name: /打开来源/ }).count(),
     0,
     'unsafe source URL should not expose an open-source button',
   );
@@ -408,7 +518,7 @@ try {
     .getByText('没有安全内链或 http/https 来源')
     .waitFor({ timeout: 10000 });
   assert.equal(
-    await readonlyTimelineCard.getByRole('button', { name: '打开来源' }).count(),
+    await readonlyTimelineCard.getByRole('button', { name: /打开来源/ }).count(),
     0,
     'read-only timeline rows should not expose a source button',
   );
@@ -433,8 +543,19 @@ try {
       navigator.clipboard = clipboard;
     }
   });
+  const timelineDiagnosticButton = unsafeTimelineCard.getByRole('button', {
+    name: /复制安全诊断/,
+  });
+  const timelineDiagnosticTitle =
+    (await timelineDiagnosticButton.getAttribute('title')) || '';
+  assert.ok(
+    timelineDiagnosticTitle.includes('2 项拦截原因') &&
+      timelineDiagnosticTitle.includes('不复制被拦截原始 URL') &&
+      timelineDiagnosticTitle.includes('不会写入、同步、确认或重新读取来源'),
+    'timeline diagnostic copy button should expose block reasons and no-raw-url boundary before click',
+  );
   await unsafeTimelineCard
-    .getByRole('button', { name: '复制安全诊断' })
+    .getByRole('button', { name: /复制安全诊断/ })
     .click();
   await page
     .locator('.timeline-navigation-receipt-info')
@@ -492,9 +613,17 @@ try {
     .waitFor({ timeout: 10000 });
   await page
     .getByText(
-      '来源：当前只显示 Timeline source 的 1 条，隐藏 3 条其他来源；切回全部来源可恢复。',
+      '来源：当前只显示 Timeline source 的 1 条，隐藏 4 条其他来源；切回全部来源可恢复。',
     )
     .waitFor({ timeout: 10000 });
+  const selectedSourceSelectTitle =
+    (await sourceFilter.getAttribute('title')) || '';
+  assert.ok(
+    selectedSourceSelectTitle.includes('Timeline source 1') &&
+      selectedSourceSelectTitle.includes('当前只显示本批已加载结果中的这个来源') &&
+      selectedSourceSelectTitle.includes('重新请求 Memory Service'),
+    'selected timeline source filter should expose current local slice boundary',
+  );
   await sourceOverview
     .getByText(
       '当前只显示 Timeline source；其余来源被临时隐藏，点击 chip 可在本批结果内切换。',
@@ -526,6 +655,13 @@ try {
       .count(),
     0,
     'selected source should hide unknown-source timeline rows',
+  );
+  assert.equal(
+    await page
+      .locator('article', { hasText: 'Source-only timeline memory' })
+      .count(),
+    0,
+    'selected source should hide other safe-source timeline rows',
   );
   await sourceOverview
     .getByRole('button', { name: /Unsafe source\s*1\s*已隐藏/ })
@@ -579,6 +715,27 @@ try {
   const safeTimelineCard = page.locator('article', {
     hasText: 'Safe timeline memory all',
   });
+  const safePositiveFeedbackButton = safeTimelineCard.getByRole('button', {
+    name: /有用/,
+  });
+  const safePositiveFeedbackTitle =
+    (await safePositiveFeedbackButton.getAttribute('title')) || '';
+  assert.ok(
+    safePositiveFeedbackTitle.includes('/feedback') &&
+      safePositiveFeedbackTitle.includes('recall_quality=positive') &&
+      safePositiveFeedbackTitle.includes('不会删除、隐藏、外发、写画像或立即重排本页列表'),
+    'timeline positive feedback button should expose feedback-write boundary before click',
+  );
+  const safeNegativeFeedbackTitle =
+    (await safeTimelineCard
+      .getByRole('button', { name: /不相关/ })
+      .getAttribute('title')) || '';
+  assert.ok(
+    safeNegativeFeedbackTitle.includes('当前已记录为“不相关”') &&
+      safeNegativeFeedbackTitle.includes('不会重复写入 /feedback') &&
+      safeNegativeFeedbackTitle.includes('不会删除、隐藏、外发、写画像或立即重排本页列表'),
+    'timeline active negative feedback button should expose already-recorded no-repeat boundary before click',
+  );
   const safeLinkStatus = safeTimelineCard.locator(
     '.memory-link-safety-status-ready',
   );
@@ -596,6 +753,37 @@ try {
     .getByLabel('时间轴卡片点击行为')
     .getByText('打开外部来源需点“打开来源”')
     .waitFor({ timeout: 10000 });
+  const safeMemoryRouteButton = safeTimelineCard.getByRole('button', {
+    name: /在记忆中查看/,
+  });
+  const safeMemoryRouteTitle =
+    (await safeMemoryRouteButton.getAttribute('title')) || '';
+  assert.ok(
+    safeMemoryRouteTitle.includes('Memory Exploring 内部视图') &&
+      safeMemoryRouteTitle.includes('不会打开外部网页') &&
+      safeMemoryRouteTitle.includes('不会打开外部网页、改写记忆、写反馈或同步来源'),
+    'timeline internal route button should expose internal-only no-write boundary before click',
+  );
+  const sourceOnlyTimelineCard = page.locator('article', {
+    hasText: 'Source-only timeline memory',
+  });
+  const sourceOnlyLinkStatus = sourceOnlyTimelineCard.locator(
+    '.memory-link-safety-status-ready',
+  );
+  await sourceOnlyLinkStatus
+    .getByText('可打开安全来源')
+    .waitFor({ timeout: 10000 });
+  await sourceOnlyLinkStatus
+    .getByText('来源 host：example.org')
+    .waitFor({ timeout: 10000 });
+  await sourceOnlyTimelineCard
+    .getByLabel('时间轴卡片点击行为')
+    .getByText('卡片点击：显示打开边界')
+    .waitFor({ timeout: 10000 });
+  await sourceOnlyTimelineCard
+    .getByLabel('时间轴卡片点击行为')
+    .getByText('卡片点击不会直接打开外部标签页')
+    .waitFor({ timeout: 10000 });
   await page.evaluate(() => {
     window.__timelineOpenedSources = [];
     window.open = (...args) => {
@@ -603,6 +791,53 @@ try {
       return null;
     };
   });
+  await sourceOnlyTimelineCard.locator('.timeline-card h3').click();
+  await page
+    .locator('.timeline-navigation-receipt-info')
+    .getByText('外部来源确认回执')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.timeline-navigation-receipt-info')
+    .getByText('请使用卡片里的“打开来源”按钮继续')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.timeline-navigation-receipt-info')
+    .getByText('卡片点击只展示打开边界，不会打开外部标签页')
+    .waitFor({ timeout: 10000 });
+  let openedSources = await page.evaluate(() => window.__timelineOpenedSources);
+  assert.equal(
+    openedSources.length,
+    0,
+    'source-only card click should not directly open an external page',
+  );
+  const sourceOnlyOpenSourceButton = sourceOnlyTimelineCard.getByRole('button', {
+    name: /打开来源/,
+  });
+  const sourceOnlyOpenSourceTitle =
+    (await sourceOnlyOpenSourceButton.getAttribute('title')) || '';
+  assert.ok(
+    sourceOnlyOpenSourceTitle.includes('example.org') &&
+      sourceOnlyOpenSourceTitle.includes('新标签页') &&
+      sourceOnlyOpenSourceTitle.includes('noopener/noreferrer') &&
+      sourceOnlyOpenSourceTitle.includes('不会重新读取、同步或确认来源内容'),
+    'timeline source-only button should expose sanitized host and opener/referrer boundary before click',
+  );
+  await sourceOnlyOpenSourceButton.click();
+  await page
+    .locator('.timeline-navigation-receipt-info')
+    .getByText('来源：已请求浏览器打开 example.org。')
+    .waitFor({ timeout: 10000 });
+  openedSources = await page.evaluate(() => window.__timelineOpenedSources);
+  assert.equal(
+    openedSources.length,
+    1,
+    'source-only explicit button should open one external page',
+  );
+  assert.equal(
+    openedSources[0][0],
+    'https://example.org/source-only-memory',
+    'source-only button should open the sanitized http/https source URL',
+  );
   await safeTimelineCard.getByRole('button', { name: /打开来源/ }).click();
   await page
     .locator('.timeline-navigation-receipt-info')
@@ -612,15 +847,15 @@ try {
     .locator('.timeline-navigation-receipt-info')
     .getByText('不代表 Memory Service 重新读取、同步或确认了来源内容')
     .waitFor({ timeout: 10000 });
-  const openedSources = await page.evaluate(() => window.__timelineOpenedSources);
-  assert.equal(openedSources.length, 1, 'source click should request one open');
+  openedSources = await page.evaluate(() => window.__timelineOpenedSources);
+  assert.equal(openedSources.length, 2, 'source clicks should request two opens');
   assert.equal(
-    openedSources[0][0],
+    openedSources[1][0],
     'https://example.com/timeline-safe',
     'source click should open the sanitized http/https source URL',
   );
   assert.equal(
-    openedSources[0][2],
+    openedSources[1][2],
     'noopener,noreferrer',
     'source click should keep opener/referrer isolation',
   );
@@ -657,8 +892,37 @@ try {
     'active',
     'restored negative feedback button should be active',
   );
+  delayNextFeedbackMs = 500;
   await usefulButton.click();
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('反馈提交中回执')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('操作：正在把这条时间轴记忆标记为“有用”。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('目标：Safe timeline memory all（message:safe-all）。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('不会删除、隐藏或确认当前记忆')
+    .waitFor({ timeout: 10000 });
   await safeTimelineCard.getByText('已记录为有用').waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('反馈已记录回执')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('已确认把这条时间轴记忆标记为“有用”')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('metadata 会恢复按钮状态')
+    .waitFor({ timeout: 10000 });
   await assertClass(
     safeTimelineCard.locator('.feedback-status'),
     'feedback-status-positive',
@@ -699,6 +963,10 @@ try {
   await safeTimelineCard
     .getByText('已记录为不相关')
     .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('已确认把这条时间轴记忆标记为“不相关”')
+    .waitFor({ timeout: 10000 });
   await assertClass(
     safeTimelineCard.locator('.feedback-status'),
     'feedback-status-negative',
@@ -728,6 +996,14 @@ try {
   );
   await safeTimelineCard.getByRole('button', { name: '撤销反馈' }).click();
   await safeTimelineCard.getByText('已撤销反馈').waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('反馈撤销回执')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('已确认撤销这条时间轴记忆的召回质量反馈')
+    .waitFor({ timeout: 10000 });
   await assertClass(
     safeTimelineCard.locator('.feedback-status'),
     'feedback-status-cleared',
@@ -759,14 +1035,48 @@ try {
     0,
     'clear action should return the card to a neutral feedback state',
   );
+  failNextFeedbackWith = 'feedback write temporarily failed';
+  await negativeButton.click();
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('反馈未确认回执')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('结果：反馈“不相关”未确认写入，上一反馈状态已保留。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByLabel('时间轴反馈回执')
+    .getByText('feedback write temporarily failed')
+    .waitFor({ timeout: 10000 });
+  await safeTimelineCard.getByText('已撤销反馈').waitFor({ timeout: 10000 });
+  assert.equal(
+    await negativeButton.getAttribute('aria-pressed'),
+    'false',
+    'failed negative feedback should preserve the previous cleared state',
+  );
+  assertFeedbackRequest(
+    3,
+    {
+      type: 'recall_quality',
+      targetId: 'safe-all',
+      targetType: 'message',
+      action: 'negative',
+    },
+    {
+      interaction: 'memory_relevance_trainer',
+      surface: 'memory_timeline',
+      action: 'negative',
+      feedback_reason: 'timeline_context_mismatch',
+      auto_applied: 'true',
+      target_type: 'message',
+    },
+  );
 
   const recallCountBeforeFailedRefresh = recallRequests.length;
   failNextRecallWith = 'timeline refresh temporarily failed';
   delayNextRecallMs = 500;
-  await page
-    .locator('.timeline-controls')
-    .getByRole('button', { name: '刷新', exact: true })
-    .click();
+  await page.locator('.timeline-controls .refresh-btn').click();
   await page
     .getByText('刷新中 · 上次快照')
     .waitFor({ timeout: 10000 });
@@ -814,8 +1124,8 @@ try {
 
   failNextRecallWith = 'personal timeline unavailable';
   await page
-    .locator('.timeline-controls')
-    .getByRole('button', { name: '个人' })
+    .locator('.control-tabs[aria-label="记忆范围"]')
+    .getByRole('button', { name: /个人/ })
     .click();
   await page
     .getByText('personal timeline unavailable')
@@ -833,8 +1143,8 @@ try {
   assert.equal(recallRequests.at(-1)?.scope, 'personal');
 
   await page
-    .locator('.timeline-controls')
-    .getByRole('button', { name: '工作' })
+    .locator('.control-tabs[aria-label="记忆范围"]')
+    .getByRole('button', { name: /工作/ })
     .click();
   await page.getByText('Safe timeline memory work').waitFor({ timeout: 10000 });
   await page
@@ -843,8 +1153,8 @@ try {
   assert.equal(recallRequests.at(-1)?.scope, 'work');
 
   await page
-    .locator('.timeline-controls')
-    .getByRole('button', { name: '近7天' })
+    .locator('.range-tabs')
+    .getByRole('button', { name: /近7天/ })
     .click();
   await page.getByText('近 7 天记忆时间轴').waitFor({ timeout: 10000 });
   await page.getByText('Safe timeline memory work').waitFor({ timeout: 10000 });

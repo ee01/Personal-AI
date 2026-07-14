@@ -50,6 +50,30 @@
         </div>
 
         <div
+          v-if="askTopicLockReceipt"
+          class="ask-topic-lock-receipt"
+          role="note"
+          aria-label="Ask 话题锁定回执"
+        >
+          <div class="ask-topic-lock-receipt-main">
+            <span class="ask-topic-lock-receipt-label">
+              {{ askTopicLockReceipt.label }}
+            </span>
+            <span class="ask-topic-lock-receipt-detail">
+              {{ askTopicLockReceipt.detail }}
+            </span>
+          </div>
+          <div class="ask-topic-lock-receipt-metrics">
+            <span
+              v-for="metric in askTopicLockReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
           v-if="askContinuationReceipt"
           class="ask-continuation-receipt"
           role="note"
@@ -66,6 +90,66 @@
           <div class="ask-continuation-receipt-metrics">
             <span
               v-for="metric in askContinuationReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="askEvidenceWatchReceipt"
+          :class="[
+            'answer-memory-receipt',
+            `answer-memory-receipt-${askEvidenceWatchReceipt.tone}`,
+          ]"
+          role="note"
+          aria-label="Ask 证据守望回执"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">
+              {{ askEvidenceWatchReceipt.label }}
+            </span>
+            <span class="answer-memory-receipt-detail">
+              {{ askEvidenceWatchReceipt.detail }}
+            </span>
+          </div>
+          <div
+            v-if="askEvidenceWatchReceipt.metrics.length"
+            class="answer-memory-receipt-metrics"
+          >
+            <span
+              v-for="metric in askEvidenceWatchReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="askEvidenceBasisReceipt"
+          :class="[
+            'answer-memory-receipt',
+            `answer-memory-receipt-${askEvidenceBasisReceipt.tone}`,
+          ]"
+          role="note"
+          aria-label="Ask 证据来源回执"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">
+              {{ askEvidenceBasisReceipt.label }}
+            </span>
+            <span class="answer-memory-receipt-detail">
+              {{ askEvidenceBasisReceipt.detail }}
+            </span>
+          </div>
+          <div
+            v-if="askEvidenceBasisReceipt.metrics.length"
+            class="answer-memory-receipt-metrics"
+          >
+            <span
+              v-for="metric in askEvidenceBasisReceipt.metrics"
               :key="metric"
             >
               {{ metric }}
@@ -188,6 +272,8 @@
             `answer-memory-receipt-${answerMemoryReceipt.tone || 'info'}`,
           ]"
           role="note"
+          :aria-label="answerMemoryReceiptBoundary"
+          :title="answerMemoryReceiptBoundary"
         >
           <div class="answer-memory-receipt-main">
             <span class="answer-memory-receipt-label">
@@ -234,6 +320,12 @@
             </span>
             <span v-if="answerMemoryReceipt.followUpActionCount">
               查证 {{ answerMemoryReceipt.followUpActionCount }}
+            </span>
+            <span
+              v-for="metric in answerMemoryReviewMetrics"
+              :key="metric"
+            >
+              {{ metric }}
             </span>
           </div>
         </div>
@@ -409,6 +501,23 @@
     <div v-if="isLoading" class="loading-container">
       <div class="loading-spinner"></div>
       <span>正在搜索...</span>
+      <div
+        v-if="loadingScopeReceipt"
+        class="loading-scope-receipt"
+        role="note"
+        aria-label="搜索范围请求中"
+      >
+        <strong>{{ loadingScopeReceipt.title }}</strong>
+        <span>{{ loadingScopeReceipt.detail }}</span>
+        <div class="loading-scope-receipt-metrics">
+          <span
+            v-for="metric in loadingScopeReceipt.metrics"
+            :key="metric"
+          >
+            {{ metric }}
+          </span>
+        </div>
+      </div>
     </div>
     
     <div v-else-if="entities.length > 0" class="search-results">
@@ -440,6 +549,28 @@
           >
             搜索全部记忆
           </button>
+          <div
+            v-if="searchResultBatchReceipt"
+            :class="[
+              'search-result-batch-receipt',
+              `search-result-batch-receipt-${searchResultBatchReceipt.tone}`,
+            ]"
+            role="note"
+            aria-label="结果批次回执"
+          >
+            <div class="search-result-batch-receipt-main">
+              <strong>{{ searchResultBatchReceipt.title }}</strong>
+              <span>{{ searchResultBatchReceipt.detail }}</span>
+            </div>
+            <div class="search-result-batch-receipt-metrics">
+              <span
+                v-for="metric in searchResultBatchReceipt.metrics"
+                :key="metric"
+              >
+                {{ metric }}
+              </span>
+            </div>
+          </div>
           <div
             v-if="sourceCoverageReceipt"
             :class="[
@@ -778,7 +909,9 @@
                 v-if="shouldShowFeedbackRefreshAction(entity)"
                 type="button"
                 class="feedback-refresh-btn"
-                @click.stop="rerunSearchAfterFeedback"
+                :title="getFeedbackRefreshBoundary(entity)"
+                :aria-label="getFeedbackRefreshBoundary(entity)"
+                @click.stop="rerunSearchAfterFeedback(entity)"
               >
                 用同一条件重新取证
               </button>
@@ -792,6 +925,8 @@
               ]"
               :aria-pressed="isFeedbackActive(entity, 'positive')"
               :disabled="isFeedbackPending(entity)"
+              :title="getFeedbackButtonBoundary(entity, 'positive')"
+              :aria-label="getFeedbackButtonBoundary(entity, 'positive')"
               @click.stop="submitResultFeedback(entity, 'positive')"
             >
               有用
@@ -805,6 +940,8 @@
               ]"
               :aria-pressed="isFeedbackActive(entity, 'negative')"
               :disabled="isFeedbackPending(entity)"
+              :title="getFeedbackButtonBoundary(entity, 'negative')"
+              :aria-label="getFeedbackButtonBoundary(entity, 'negative')"
               @click.stop="submitResultFeedback(entity, 'negative')"
             >
               不相关
@@ -814,6 +951,8 @@
               type="button"
               class="feedback-btn clear-feedback-btn"
               :disabled="isFeedbackPending(entity)"
+              :title="getFeedbackButtonBoundary(entity, 'clear')"
+              :aria-label="getFeedbackButtonBoundary(entity, 'clear')"
               @click.stop="submitResultFeedback(entity, 'clear')"
             >
               撤销
@@ -822,14 +961,27 @@
           
           <div class="result-actions">
             <button
+              type="button"
+              class="action-btn primary result-open-btn"
+              :title="getSearchResultOpenActionLabel(entity)"
+              :aria-label="getSearchResultOpenActionLabel(entity)"
+              @click.stop="handleResultClick(entity)"
+            >
+              打开结果
+            </button>
+            <button
               v-if="getLinkSafetyState(entity).exploreRoute"
+              type="button"
               class="action-btn primary"
+              :title="getSearchResultMemoryRouteButtonBoundary(entity)"
+              :aria-label="getSearchResultMemoryRouteButtonBoundary(entity)"
               @click.stop="openExploreLink(entity)"
             >
               在记忆中查看
             </button>
             <button
               v-if="getLinkSafetyState(entity).sourceUrl"
+              type="button"
               class="action-btn secondary"
               :title="getSourceButtonTitle(entity)"
               :aria-label="getSourceButtonTitle(entity)"
@@ -839,14 +991,20 @@
             </button>
             <button
               v-if="shouldShowDetailsFallback(entity)"
+              type="button"
               class="action-btn primary"
+              :title="getSearchResultDetailsButtonBoundary(entity)"
+              :aria-label="getSearchResultDetailsButtonBoundary(entity)"
               @click.stop="openDetailsFallback(entity)"
             >
               查看详情
             </button>
             <button
               v-if="shouldShowLinkRecoveryDiagnostic(entity)"
+              type="button"
               class="action-btn secondary"
+              :title="getSearchResultRecoveryDiagnosticButtonBoundary(entity)"
+              :aria-label="getSearchResultRecoveryDiagnosticButtonBoundary(entity)"
               @click.stop="copyLinkRecoveryDiagnostic(entity)"
             >
               复制安全诊断
@@ -1015,6 +1173,7 @@ import {
   formatEvidenceChannelOverlapReceipt,
   formatRecallChannelDiagnostics,
   formatRecallChannelReceipt,
+  formatSearchResultBatchReceipt,
   getRecallChannelLabel,
   getResultChannels,
   getResultMeta,
@@ -1071,6 +1230,21 @@ interface SearchFeedbackResponseEffect {
   clearedPatchCount?: number;
 }
 
+interface SearchFeedbackConditionSnapshot {
+  query: string;
+  scope: RecallScope;
+  scopeLabel: string;
+  mode: string;
+  entityType?: string;
+  selectedTypeFilter: string;
+  selectedTypeFilterLabel?: string;
+  resultPosition?: number;
+  visibleCount: number;
+  totalCount: number;
+  surfaceLabel: string;
+  contextLine: string;
+}
+
 interface SearchFeedbackFailure {
   action: MemoryFeedbackAction;
   message: string;
@@ -1100,6 +1274,25 @@ interface AskFollowUpReceiptView {
   metrics: string[];
 }
 
+type AskEvidenceWatchReceiptTone = 'info' | 'success' | 'warning' | 'muted';
+
+interface AskEvidenceWatchReceiptView {
+  label: string;
+  detail: string;
+  tone: AskEvidenceWatchReceiptTone;
+  statusMetric: string;
+  metrics: string[];
+}
+
+type AskEvidenceBasisReceiptTone = 'info' | 'warning' | 'muted';
+
+interface AskEvidenceBasisReceiptView {
+  label: string;
+  detail: string;
+  tone: AskEvidenceBasisReceiptTone;
+  metrics: string[];
+}
+
 type AskAnswerStatusRailTone = 'info' | 'success' | 'warning' | 'muted';
 
 interface AskAnswerStatusRailView {
@@ -1107,6 +1300,12 @@ interface AskAnswerStatusRailView {
   detail: string;
   tone: AskAnswerStatusRailTone;
   metrics: string[];
+}
+
+interface AskAnswerMemoryGateStatus {
+  detail: string;
+  tone: AskAnswerStatusRailTone;
+  metric: string;
 }
 
 interface AskClarificationCandidateView {
@@ -1131,9 +1330,24 @@ interface AskContinuationReceiptView {
   metrics: string[];
 }
 
+interface AskTopicLockReceiptView {
+  label: string;
+  detail: string;
+  metrics: string[];
+}
+
+interface LoadingScopeReceiptView {
+  title: string;
+  detail: string;
+  metrics: string[];
+}
+
 const feedbackByResultKey = ref<Record<string, SearchFeedbackState>>({});
 const feedbackEffectByResultKey = ref<
   Record<string, SearchFeedbackResponseEffect>
+>({});
+const feedbackConditionByResultKey = ref<
+  Record<string, SearchFeedbackConditionSnapshot>
 >({});
 const feedbackFailureByResultKey = ref<Record<string, SearchFeedbackFailure>>(
   {},
@@ -1147,6 +1361,10 @@ const renderedAnswer = computed(() => {
 
 const answerMemoryReceipt = computed(() =>
   searchContext.value.askResult?.answerMemory?.receipt,
+);
+
+const answerMemoryReviewMetrics = computed(() =>
+  formatAnswerMemoryReviewMetrics(answerMemoryReceipt.value),
 );
 
 const askScopeReceipt = computed(() => searchContext.value.askResult?.scopeReceipt);
@@ -1183,8 +1401,24 @@ const answerMemoryAuthority = computed(() =>
   ),
 );
 
+const answerMemoryReceiptBoundary = computed(() =>
+  formatAnswerMemoryReceiptBoundary(
+    answerMemoryReceipt.value,
+    answerMemoryAuthority.value,
+    answerMemoryReviewMetrics.value,
+  ),
+);
+
 const askFollowUpReceipt = computed(() =>
   formatAskFollowUpReceipt(searchContext.value.askResult),
+);
+
+const askEvidenceWatchReceipt = computed(() =>
+  formatAskEvidenceWatchReceipt(searchContext.value.askResult?.evidenceWatch),
+);
+
+const askEvidenceBasisReceipt = computed(() =>
+  formatAskEvidenceBasisReceipt(searchContext.value.askResult),
 );
 
 const askAnswerStatusRail = computed(() =>
@@ -1192,7 +1426,12 @@ const askAnswerStatusRail = computed(() =>
     searchContext.value.askResult,
     answerMemoryAuthority.value,
     askFollowUpReceipt.value,
+    askEvidenceWatchReceipt.value,
   ),
+);
+
+const askTopicLockReceipt = computed(() =>
+  formatAskTopicLockReceipt(searchContext.value.askResult),
 );
 
 const askClarification = computed(() =>
@@ -1336,6 +1575,269 @@ function compactAskReceiptText(value: unknown, maxLength = 88): string {
   return `${text.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
+function formatAskWatchTime(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return '';
+  }
+  const milliseconds = value > 1_000_000_000_000 ? value : value * 1000;
+  const date = new Date(milliseconds);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatAnswerMemoryReviewMetrics(receipt: any): string[] {
+  if (!receipt || typeof receipt !== 'object') return [];
+  const lastVerified = formatAskWatchTime(receipt.lastVerifiedAt);
+  const staleAfter = formatAskWatchTime(receipt.staleAfter);
+  return [
+    lastVerified ? `上次复核 ${lastVerified}` : '',
+    staleAfter
+      ? receipt.stale
+        ? `复核已到期 ${staleAfter}`
+        : `下次复核 ${staleAfter}`
+      : '',
+  ].filter(Boolean);
+}
+
+function formatAnswerMemoryReceiptBoundary(
+  receipt: any,
+  authority: AnswerMemoryAuthorityView | null,
+  reviewMetrics: string[],
+): string {
+  if (!receipt || typeof receipt !== 'object') return '活答案回执';
+  const label = compactAskReceiptText(receipt.label, 44) || '活答案回执';
+  const detail = compactAskReceiptText(receipt.detail, 124);
+  const currentEvidenceCount = readFiniteCount(receipt.currentEvidenceCount);
+  const priorEvidenceCount = readFiniteCount(receipt.priorEvidenceCount);
+  const followUpActionCount = readFiniteCount(receipt.followUpActionCount);
+  const missingInfoCount = readFiniteCount(receipt.missingInfoCount);
+  const metrics = [
+    currentEvidenceCount != null ? `本轮证据 ${currentEvidenceCount}` : '',
+    priorEvidenceCount != null ? `旧 prior ${priorEvidenceCount}` : '',
+    followUpActionCount ? `查证动作 ${followUpActionCount}` : '',
+    missingInfoCount ? `缺口 ${missingInfoCount}` : '',
+    ...reviewMetrics,
+    authority?.label ? `门控 ${authority.label}` : '',
+    ...(authority?.metrics || []),
+  ].filter(Boolean);
+  const metricText = metrics.length ? metrics.slice(0, 10).join('；') : '';
+  const boundary =
+    '这是活答案回执：旧 prior 如有仅作召回和对比提示；查看这张卡不会重新确认当前事实、再次写新版本、创建外部查证动作、代表你发消息或执行外部写入。';
+  return [`活答案回执：${label}`, detail, metricText, boundary]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function formatAskEvidenceWatchRunState(value: string): string {
+  if (value === 'created') return '已建立';
+  if (value === 'checked_no_change') return '已复核无变化';
+  if (value === 'checked_changed') return '已发现变化';
+  if (value === 'blocked') return '来源阻塞';
+  if (value === 'skipped_budget') return '预算跳过';
+  if (value === 'skipped_duplicate') return '复用队列';
+  if (value === 'needs_user_decision') return '需用户决策';
+  return '';
+}
+
+function formatAskEvidenceWatchReceipt(
+  receipt: any,
+): AskEvidenceWatchReceiptView | null {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const label =
+    compactAskReceiptText(receipt.label, 42) || '证据守望回执';
+  const serviceDetail = compactAskReceiptText(receipt.detail, 120);
+  const subjectKey = compactAskReceiptText(receipt.subjectKey, 54);
+  const state = typeof receipt.state === 'string' ? receipt.state : '';
+  const duplicateSuppressedCount =
+    readFiniteCount(receipt.duplicateSuppressedCount) ?? 0;
+  const nextCheck = formatAskWatchTime(receipt.nextCheckAt);
+  const lastChecked = formatAskWatchTime(receipt.lastCheckedAt);
+  const lastRunState =
+    typeof receipt.lastRunState === 'string' ? receipt.lastRunState : '';
+  const lastRunLabel = formatAskEvidenceWatchRunState(lastRunState);
+  const duplicateSuppressionRun = lastRunState === 'skipped_duplicate';
+  const hasConfirmRequest =
+    typeof receipt.confirmRequestId === 'string' &&
+    receipt.confirmRequestId.trim().length > 0;
+
+  const tone: AskEvidenceWatchReceiptTone =
+    duplicateSuppressionRun
+      ? 'warning'
+      : state === 'authority_changed'
+      ? 'success'
+      : state === 'source_blocked' || state === 'due' || state === 'paused'
+        ? 'warning'
+        : state === 'archived'
+          ? 'muted'
+          : 'info';
+  const statusMetric =
+    duplicateSuppressionRun
+      ? '守望复用队列'
+      : state === 'authority_changed'
+      ? '守望发现变化'
+      : state === 'source_blocked'
+        ? '守望来源阻塞'
+        : state === 'due'
+          ? '守望待复核'
+          : state === 'quiet_no_change'
+            ? '守望无变化'
+            : state === 'paused'
+              ? '守望已暂停'
+              : state === 'archived'
+                ? '守望已归档'
+                : '证据守望';
+  const duplicateSuppressionDetail = duplicateSuppressionRun
+    ? ' 本轮 run 是重复查证抑制：只复用已有队列动作，没有重新触达权威来源，也不会更新最近复核时间。'
+    : '';
+
+  return {
+    label,
+    detail: `${serviceDetail || '本轮 Ask 已建立或命中证据守望契约。'}${duplicateSuppressionDetail} 这只是后续复核/去重状态，不会自动确认事实、代表你发消息、执行外部写入，或把旧答案写成当前事实。`,
+    tone,
+    statusMetric,
+    metrics: [
+      receipt.created === true ? '本轮新建' : '命中已有守望',
+      subjectKey ? `对象 ${subjectKey}` : '',
+      duplicateSuppressionRun ? '本轮未复核来源' : '',
+      lastRunLabel ? `run ${lastRunLabel}` : '',
+      hasConfirmRequest ? '有确认项' : '',
+      duplicateSuppressedCount > 0
+        ? `已抑制重复 ${duplicateSuppressedCount}`
+        : '',
+      nextCheck ? `下次 ${nextCheck}` : '',
+      lastChecked ? `上次 ${lastChecked}` : '',
+      !lastRunLabel && typeof receipt.runId === 'string' && receipt.runId.trim()
+        ? '有本轮 run'
+        : '',
+    ].filter(Boolean),
+  };
+}
+
+function getAskEvidenceTypeLabel(evidence: any): string {
+  const type = typeof evidence?.type === 'string' ? evidence.type.trim() : '';
+  if (!type) return '未标明类型';
+  return MEMORY_RESULT_TYPE_CONFIG[type]?.name || compactAskReceiptText(type, 24);
+}
+
+function getAskEvidenceSourceLabel(evidence: any): string {
+  const sourceTitle =
+    typeof evidence?.sourceTitle === 'string' ? evidence.sourceTitle.trim() : '';
+  if (sourceTitle) return compactAskReceiptText(sourceTitle, 42);
+
+  const source =
+    typeof evidence?.source === 'string' ? evidence.source.trim() : '';
+  if (source) return compactAskReceiptText(source, 42);
+
+  const sourceUrl =
+    typeof evidence?.sourceUrl === 'string' ? evidence.sourceUrl.trim() : '';
+  if (sourceUrl) {
+    try {
+      return compactAskReceiptText(new URL(sourceUrl).host, 42);
+    } catch (_error) {
+      // Keep the explicit unknown bucket for unsupported source URL strings.
+    }
+  }
+
+  return '未标明来源';
+}
+
+function getAskEvidenceChannels(evidence: any): string[] {
+  const channels = new Set<string>();
+  for (const channel of getResultChannels(evidence)) {
+    const normalized = channel.trim();
+    if (normalized) channels.add(normalized);
+  }
+
+  const metadataChannels = evidence?.metadata?.channels;
+  if (Array.isArray(metadataChannels)) {
+    for (const channel of metadataChannels) {
+      if (typeof channel !== 'string') continue;
+      const normalized = channel.trim();
+      if (normalized) channels.add(normalized);
+    }
+  }
+
+  return Array.from(channels);
+}
+
+function countAskEvidenceValues(
+  evidenceItems: any[],
+  getValue: (evidence: any) => string,
+): { label: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const evidence of evidenceItems) {
+    const label = getValue(evidence);
+    if (!label) continue;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([label, count]) => ({ label, count }))
+    .sort((left, right) => {
+      if (right.count !== left.count) return right.count - left.count;
+      return left.label.localeCompare(right.label, 'zh-Hans-CN');
+    });
+}
+
+function formatAskEvidenceBasisReceipt(
+  result: any,
+): AskEvidenceBasisReceiptView | null {
+  const evidenceItems = Array.isArray(result?.evidence)
+    ? result.evidence.filter(
+        (evidence: any) => evidence && typeof evidence === 'object',
+      )
+    : [];
+  if (evidenceItems.length === 0) return null;
+
+  const typeCounts = countAskEvidenceValues(
+    evidenceItems,
+    getAskEvidenceTypeLabel,
+  );
+  const sourceCounts = countAskEvidenceValues(
+    evidenceItems,
+    getAskEvidenceSourceLabel,
+  );
+  const channelCounts = countAskEvidenceValues(evidenceItems, (evidence) => {
+    const channels = getAskEvidenceChannels(evidence);
+    return channels.map(getRecallChannelLabel).join('+');
+  }).filter((item) => item.label);
+  const topType = typeCounts[0];
+  const topSource = sourceCounts[0];
+  const topChannel = channelCounts[0];
+  const sourceSummary = topSource
+    ? `Top 来源 ${topSource.label} ${topSource.count} 条`
+    : '未标明来源';
+  const typeSummary = topType
+    ? `Top 类型 ${topType.label} ${topType.count} 条`
+    : '未标明类型';
+  const channelSummary = topChannel
+    ? `Top 通道 ${topChannel.label} ${topChannel.count} 条`
+    : '未标明召回通道';
+  const singleSource =
+    evidenceItems.length > 1 && sourceCounts.length === 1 && Boolean(topSource);
+
+  return {
+    label: 'Ask 证据来源回执',
+    detail:
+      `本轮答案前先汇总当前 Ask response 返回的 ${evidenceItems.length} 条 evidence：${typeSummary}，${sourceSummary}，${channelSummary}。` +
+      '这只是当前可见证据切片，不代表全库或全部连接器覆盖，不确认事实、不写活答案，也不创建或执行外部动作。',
+    tone: singleSource ? 'warning' : 'info',
+    metrics: [
+      `证据 ${evidenceItems.length}`,
+      `类型 ${typeCounts.length}`,
+      `来源 ${sourceCounts.length}`,
+      channelCounts.length > 0 ? `通道 ${channelCounts.length}` : '',
+      topSource ? `Top 来源 ${topSource.label}` : '',
+      topChannel ? `Top 通道 ${topChannel.label}` : '',
+      '当前返回切片',
+    ].filter(Boolean),
+  };
+}
+
 function normalizeAskActionStatus(action: any): string {
   return typeof action?.queueStatus === 'string'
     ? action.queueStatus.toLowerCase()
@@ -1447,10 +1949,93 @@ function getAskResultArrayLength(result: any, key: string): number {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function readAnswerMemoryState(result: any): string {
+  return typeof result?.answerMemory?.state === 'string'
+    ? result.answerMemory.state
+    : '';
+}
+
+function readAnswerMemorySkipReason(result: any): string {
+  return typeof result?.answerMemory?.skipReason === 'string'
+    ? result.answerMemory.skipReason
+    : '';
+}
+
+function readAnswerMemoryAuthorityDecision(result: any): string {
+  return typeof result?.answerMemory?.authority?.decision === 'string'
+    ? result.answerMemory.authority.decision
+    : '';
+}
+
+function formatAskAnswerMemoryGateStatus(
+  result: any,
+): AskAnswerMemoryGateStatus | null {
+  if (!result || typeof result !== 'object') return null;
+  const state = readAnswerMemoryState(result);
+  const decision = readAnswerMemoryAuthorityDecision(result);
+
+  if (state === 'updated') {
+    return {
+      detail:
+        '本轮当前权威证据已通过门控并写入活答案新版本；旧 prior 只作对比，不代表外部发送或写入。',
+      tone: 'success',
+      metric: '活答案已写新版本',
+    };
+  }
+
+  if (state === 'promoted') {
+    return {
+      detail:
+        '重复问题已合并为活答案 thread；本轮答案仍按当前证据展示，不代表外部发送或写入。',
+      tone: 'success',
+      metric: '已建立活答案',
+    };
+  }
+
+  if (decision === 'same_meaning_no_change') {
+    return {
+      detail:
+        '同一组当前权威证据下答案语义未变化；本轮只记录复核，不写新版本，旧 prior 仍只是召回提示。',
+      tone: 'info',
+      metric: '未写新版本',
+    };
+  }
+
+  if (decision === 'supporting_only') {
+    return {
+      detail:
+        '本轮只有辅助或派生证据，不能改写长期答案；旧 prior 只作召回提示，等待当前权威证据。',
+      tone: 'warning',
+      metric: '仅辅助证据',
+    };
+  }
+
+  if (decision === 'wait_for_authority_source') {
+    return {
+      detail:
+        '本轮等待新的权威证据，不能用旧 prior 或一次生成结果改写长期答案。',
+      tone: 'warning',
+      metric: '等待权威证据',
+    };
+  }
+
+  if (decision === 'authorized_change') {
+    return {
+      detail:
+        '本轮包含当前权威证据，允许创建、提升或更新活答案；是否已写版本以活答案回执为准。',
+      tone: 'success',
+      metric: '权威证据通过',
+    };
+  }
+
+  return null;
+}
+
 function formatAskAnswerStatusRail(
   result: any,
   authority: AnswerMemoryAuthorityView | null,
   followUpReceipt: AskFollowUpReceiptView | null,
+  evidenceWatchReceipt: AskEvidenceWatchReceiptView | null,
 ): AskAnswerStatusRailView | null {
   if (!result || typeof result !== 'object') return null;
 
@@ -1472,14 +2057,8 @@ function formatAskAnswerStatusRail(
     readFiniteCount(receipt?.missingInfoCount) ??
     getAskResultArrayLength(result, 'missingInfo');
   const ambiguous = result.contextMatch?.state === 'ambiguous';
-  const answerMemoryState =
-    typeof result.answerMemory?.state === 'string'
-      ? result.answerMemory.state
-      : '';
-  const answerMemorySkipReason =
-    typeof result.answerMemory?.skipReason === 'string'
-      ? result.answerMemory.skipReason
-      : '';
+  const answerMemoryState = readAnswerMemoryState(result);
+  const answerMemorySkipReason = readAnswerMemorySkipReason(result);
   const unverifiedPrior =
     answerMemoryState === 'skipped' &&
     answerMemorySkipReason === 'no_evidence' &&
@@ -1488,13 +2067,11 @@ function formatAskAnswerStatusRail(
     resolutionState === 'partial' ||
     resolutionState === 'insufficient' ||
     resolutionState === 'deferred';
-  const authorityDecision =
-    typeof result.answerMemory?.authority?.decision === 'string'
-      ? result.answerMemory.authority.decision
-      : '';
+  const authorityDecision = readAnswerMemoryAuthorityDecision(result);
   const warningAuthority =
     authorityDecision === 'supporting_only' ||
     authorityDecision === 'wait_for_authority_source';
+  const gateStatus = formatAskAnswerMemoryGateStatus(result);
 
   const metrics = [
     resolutionLabel ? `状态 ${resolutionLabel}` : '',
@@ -1507,6 +2084,10 @@ function formatAskAnswerStatusRail(
     externalEvidenceCount > 0 ? `外部证据 ${externalEvidenceCount}` : '',
     missingInfoCount > 0 ? `缺口 ${missingInfoCount}` : '',
     authority?.label || '',
+    gateStatus?.metric || '',
+    ...formatAnswerMemoryReviewMetrics(receipt),
+    evidenceWatchReceipt?.statusMetric || '',
+    evidenceWatchReceipt?.metrics.includes('有确认项') ? '守望确认项' : '',
   ].filter(Boolean);
 
   if (ambiguous) {
@@ -1532,9 +2113,31 @@ function formatAskAnswerStatusRail(
   if (incomplete || followUpReceipt || warningAuthority) {
     return {
       label: 'Ask 本轮状态',
+      detail: gateStatus
+        ? `${gateStatus.detail} 回答仍按本轮证据和查证状态展示；不会自动确认结论、代表你发消息或执行外部写入。`
+        : evidenceWatchReceipt
+          ? '回答先按本轮证据、查证状态和证据守望契约展示；守望只表示后续复核/去重状态，不会自动确认事实、代表你发消息、执行外部写入，或把缺口写成长期事实。'
+          : '回答先按本轮证据和查证状态展示；不会自动确认结论、代表你发消息、执行外部写入，或把缺口写成长期事实。',
+      tone: warningAuthority ? 'warning' : gateStatus?.tone || 'warning',
+      metrics,
+    };
+  }
+
+  if (evidenceWatchReceipt) {
+    return {
+      label: 'Ask 本轮状态',
       detail:
-        '回答先按本轮证据和查证状态展示；不会自动确认结论、代表你发消息、执行外部写入，或把缺口写成长期事实。',
-      tone: 'warning',
+        '回答基于本轮召回证据，同时命中证据守望；守望只表示后续复核/去重状态，不会自动确认事实、代表你发消息或执行外部写入。',
+      tone: evidenceWatchReceipt.tone,
+      metrics,
+    };
+  }
+
+  if (gateStatus) {
+    return {
+      label: 'Ask 本轮状态',
+      detail: gateStatus.detail,
+      tone: gateStatus.tone,
       metrics,
     };
   }
@@ -1600,6 +2203,51 @@ function formatAskClarification(result: any): AskClarificationView | null {
   };
 }
 
+function formatAskTopicLockReceipt(
+  result: any,
+): AskTopicLockReceiptView | null {
+  const contextMatch = result?.contextMatch;
+  const selectedTopic = contextMatch?.selectedTopic;
+  if (contextMatch?.state !== 'locked' || !selectedTopic) return null;
+
+  const label = compactAskClarificationText(selectedTopic.label, 80);
+  if (!label) return null;
+  const reasons = Array.isArray(selectedTopic.reasons)
+    ? selectedTopic.reasons
+        .map((reason: unknown) => compactAskClarificationText(reason, 42))
+        .filter(Boolean)
+    : [];
+  const anchors = Array.isArray(selectedTopic.anchors)
+    ? selectedTopic.anchors
+        .map((anchor: unknown) => compactAskClarificationText(anchor, 36))
+        .filter(Boolean)
+    : [];
+  const roleTerms = Array.isArray(selectedTopic.roleTerms)
+    ? selectedTopic.roleTerms
+        .map((term: unknown) => compactAskClarificationText(term, 28))
+        .filter(Boolean)
+    : [];
+  const sourceIdCount = Array.isArray(selectedTopic.sourceIds)
+    ? selectedTopic.sourceIds.length
+    : 0;
+  const reasonText = reasons.slice(0, 2).join('、') || '近期记忆匹配度最高';
+
+  return {
+    label: 'Ask 话题锁定回执',
+    detail:
+      `Memory Service 已先把这个短问句锁定到“${label}”（${reasonText}）。` +
+      '这只是检索锚点补全，不确认事实、不写活答案、不创建外部查证动作，也不代表你发消息或执行外部写入；答案仍必须按本轮证据展示。',
+    metrics: [
+      `锁定 ${label}`,
+      ...reasons.slice(0, 2).map((reason) => `依据 ${reason}`),
+      anchors.length > 0 ? `锚点 ${anchors[0]}` : '',
+      roleTerms.length > 0 ? `角色词 ${roleTerms.slice(0, 2).join('/')}` : '',
+      sourceIdCount > 0 ? `来源 ${sourceIdCount}` : '',
+      '只补检索锚点',
+    ].filter(Boolean),
+  };
+}
+
 function formatAskContinuationReceipt(
   receipt: AskContinuationReceipt | undefined,
 ): AskContinuationReceiptView | null {
@@ -1638,6 +2286,44 @@ const currentScopeValue = computed(() =>
 const currentScopeLabel = computed(() =>
   getScopeLabel(currentScopeValue.value),
 );
+
+function compactLoadingScopeQuery(value: unknown): string {
+  const text =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return '';
+  return text.length > 72 ? `${text.slice(0, 71).trimEnd()}...` : text;
+}
+
+const loadingScopeReceipt = computed<LoadingScopeReceiptView | null>(() => {
+  if (!isLoading.value) return null;
+  const query = compactLoadingScopeQuery(
+    searchContext.value.query || searchQuery.value,
+  );
+  const modeLabel =
+    searchContext.value.mode === 'overview'
+      ? 'Ask 智能搜索'
+      : searchContext.value.entityType
+      ? `实体搜索 ${getEntityTypeName(searchContext.value.entityType)}`
+      : '记忆搜索';
+  const previousCount = entities.value.length;
+  const previousSnapshotLine =
+    previousCount > 0
+      ? `上一次可见快照 ${previousCount} 条已暂时隐藏，返回前不会把它当成本轮证据。`
+      : '当前没有可保留的上一次结果快照。';
+
+  return {
+    title: '搜索范围请求中',
+    detail: `正在按${currentScopeLabel.value}请求 Memory Service${
+      query ? `：“${query}”` : ''
+    }；${previousSnapshotLine}这次只读取当前范围，不会写入、删除、同步外部来源、写反馈或确认事实。`,
+    metrics: [
+      `范围 ${currentScopeLabel.value}`,
+      modeLabel,
+      previousCount > 0 ? `旧快照 ${previousCount}` : '无旧快照',
+      '只读请求',
+    ],
+  };
+});
 
 const searchFailureModeLabel = computed(() => {
   const receipt = searchFailureReceipt.value;
@@ -1847,6 +2533,22 @@ const typeFilterReceipt = computed(() =>
   }),
 );
 
+const searchResultBatchReceipt = computed(() =>
+  formatSearchResultBatchReceipt({
+    query: searchContext.value.query || searchQuery.value,
+    scope: currentScopeValue.value,
+    mode: searchContext.value.mode,
+    entityTypeLabel: searchContext.value.entityType
+      ? getEntityTypeName(searchContext.value.entityType)
+      : undefined,
+    selectedTypeFilter: selectedTypeFilter.value,
+    selectedTypeLabel: selectedTypeFilterLabel.value,
+    visibleCount: filteredResults.value.length,
+    totalCount: entities.value.length,
+    channelDiagnostics: searchContext.value.askResult?.channelDiagnostics,
+  }),
+);
+
 const sourceCoverageReceipt = computed(() =>
   formatSourceCoverageReceipt({
     visibleResults: filteredResults.value,
@@ -1919,6 +2621,11 @@ function compactFeedbackDetailValue(
     : normalized;
 }
 
+function getCurrentFeedbackQuery(): string {
+  const value = searchQuery.value || searchContext.value.query;
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
 function getFeedbackResultPosition(entity: any): {
   position?: number;
   visibleCount: number;
@@ -1936,26 +2643,47 @@ function getFeedbackResultPosition(entity: any): {
   };
 }
 
-function getFeedbackQueryContextLine(entity: any): string {
-  const query = compactFeedbackDetailValue(
-    searchQuery.value || searchContext.value.query,
-    80,
-  );
-  const resultPosition = getFeedbackResultPosition(entity);
+function buildFeedbackContextLine(input: {
+  query?: string;
+  selectedTypeFilter?: string;
+  selectedTypeFilterLabel?: string;
+  resultPosition?: number;
+  visibleCount: number;
+}): string {
   const filterLabel =
-    selectedTypeFilter.value !== 'all'
-      ? `，筛选 ${getEntityTypeName(selectedTypeFilter.value)}`
+    input.selectedTypeFilter && input.selectedTypeFilter !== 'all'
+      ? `，筛选 ${
+          input.selectedTypeFilterLabel ||
+          getEntityTypeName(input.selectedTypeFilter)
+        }`
       : '';
   const positionLabel =
-    resultPosition.position && resultPosition.visibleCount
-      ? `，第 ${resultPosition.position}/${resultPosition.visibleCount} 条`
+    input.resultPosition && input.visibleCount
+      ? `，第 ${input.resultPosition}/${input.visibleCount} 条`
       : '';
 
-  if (query) return `本次查询：“${query}”${filterLabel}${positionLabel}`;
+  if (input.query) {
+    return `本次查询：“${input.query}”${filterLabel}${positionLabel}`;
+  }
   if (filterLabel || positionLabel) {
     return `当前结果${filterLabel}${positionLabel}`;
   }
   return '';
+}
+
+function getFeedbackQueryContextLine(entity: any): string {
+  const query = compactFeedbackDetailValue(getCurrentFeedbackQuery(), 80);
+  const resultPosition = getFeedbackResultPosition(entity);
+  return buildFeedbackContextLine({
+    query,
+    selectedTypeFilter: selectedTypeFilter.value,
+    selectedTypeFilterLabel:
+      selectedTypeFilter.value !== 'all'
+        ? getEntityTypeName(selectedTypeFilter.value)
+        : undefined,
+    resultPosition: resultPosition.position,
+    visibleCount: resultPosition.visibleCount,
+  });
 }
 
 function buildSearchResultFeedbackDetail(
@@ -2086,6 +2814,20 @@ function setFeedbackEffect(
   feedbackEffectByResultKey.value = next;
 }
 
+function setFeedbackConditionSnapshot(
+  entity: any,
+  snapshot: SearchFeedbackConditionSnapshot | undefined,
+) {
+  const key = getFeedbackKey(entity);
+  const next = { ...feedbackConditionByResultKey.value };
+  if (snapshot) {
+    next[key] = snapshot;
+  } else {
+    delete next[key];
+  }
+  feedbackConditionByResultKey.value = next;
+}
+
 function setFeedbackFailure(
   entity: any,
   failure: SearchFeedbackFailure | undefined,
@@ -2115,6 +2857,12 @@ function hydrateFeedbackStateFromResults(results: any[]) {
       delete nextEffects[key];
     }
   }
+  const nextConditions = { ...feedbackConditionByResultKey.value };
+  for (const key of Object.keys(nextConditions)) {
+    if (!visibleKeys.has(key)) {
+      delete nextConditions[key];
+    }
+  }
   const nextFailures = { ...feedbackFailureByResultKey.value };
   for (const key of Object.keys(nextFailures)) {
     if (!visibleKeys.has(key)) {
@@ -2131,11 +2879,13 @@ function hydrateFeedbackStateFromResults(results: any[]) {
     } else if (next[key] !== 'pending') {
       delete next[key];
       delete nextEffects[key];
+      delete nextConditions[key];
     }
   }
 
   feedbackByResultKey.value = next;
   feedbackEffectByResultKey.value = nextEffects;
+  feedbackConditionByResultKey.value = nextConditions;
   feedbackFailureByResultKey.value = nextFailures;
 }
 
@@ -2225,8 +2975,82 @@ function normalizeFeedbackResponseEffect(
   return undefined;
 }
 
+function getFeedbackConditionSnapshot(
+  entity: any,
+): SearchFeedbackConditionSnapshot | undefined {
+  return feedbackConditionByResultKey.value[getFeedbackKey(entity)];
+}
+
+function captureFeedbackConditionSnapshot(
+  entity: any,
+): SearchFeedbackConditionSnapshot {
+  const query = getCurrentFeedbackQuery();
+  const displayQuery = compactFeedbackDetailValue(query, 80);
+  const resultPosition = getFeedbackResultPosition(entity);
+  const scope = currentScopeValue.value as RecallScope;
+  const mode = searchContext.value.mode || 'overview';
+  const entityType =
+    typeof searchContext.value.entityType === 'string'
+      ? searchContext.value.entityType
+      : undefined;
+  const selectedFilter = selectedTypeFilter.value;
+  const selectedFilterLabel =
+    selectedFilter !== 'all' ? getEntityTypeName(selectedFilter) : undefined;
+  const contextLine = buildFeedbackContextLine({
+    query: displayQuery,
+    selectedTypeFilter: selectedFilter,
+    selectedTypeFilterLabel: selectedFilterLabel,
+    resultPosition: resultPosition.position,
+    visibleCount: resultPosition.visibleCount,
+  });
+
+  return {
+    query,
+    scope,
+    scopeLabel: currentScopeLabel.value,
+    mode,
+    entityType,
+    selectedTypeFilter: selectedFilter,
+    selectedTypeFilterLabel: selectedFilterLabel,
+    resultPosition: resultPosition.position,
+    visibleCount: resultPosition.visibleCount,
+    totalCount: resultPosition.totalCount,
+    surfaceLabel: getFeedbackSurfaceLabel(),
+    contextLine,
+  };
+}
+
+function isFeedbackConditionSnapshotCurrent(
+  snapshot: SearchFeedbackConditionSnapshot | undefined,
+): boolean {
+  if (!snapshot) return true;
+  const currentQuery =
+    getCurrentFeedbackQuery();
+  const currentEntityType =
+    typeof searchContext.value.entityType === 'string'
+      ? searchContext.value.entityType
+      : undefined;
+  return (
+    snapshot.query === currentQuery &&
+    snapshot.scope === currentScopeValue.value &&
+    snapshot.mode === searchContext.value.mode &&
+    snapshot.entityType === currentEntityType &&
+    snapshot.selectedTypeFilter === selectedTypeFilter.value
+  );
+}
+
+function getFeedbackReceiptContext(entity: any): string {
+  const snapshot = getFeedbackConditionSnapshot(entity);
+  const line = snapshot?.contextLine || getFeedbackQueryContextLine(entity);
+  if (snapshot && line && !isFeedbackConditionSnapshotCurrent(snapshot)) {
+    return `${line}（反馈时条件；当前页条件已变化）`;
+  }
+  return line;
+}
+
 function getFeedbackEffectLines(entity: any): string[] {
   const effect = feedbackEffectByResultKey.value[getFeedbackKey(entity)];
+  const snapshot = getFeedbackConditionSnapshot(entity);
   const lines: string[] = [];
 
   if (effect?.relevancePatchStatus === 'patched') {
@@ -2264,12 +3088,17 @@ function getFeedbackEffectLines(entity: any): string[] {
   }
 
   lines.push(
-    '当前页不会即时重排；重新取证会用同一 query 和范围重新请求 Memory Service。',
+    snapshot && !isFeedbackConditionSnapshotCurrent(snapshot)
+      ? '当前页不会即时重排；当前条件已变化，重新取证仍会按反馈时 query 和范围重新请求 Memory Service。'
+      : '当前页不会即时重排；重新取证会用同一 query 和范围重新请求 Memory Service。',
   );
   return lines;
 }
 
-function getFeedbackSurfaceLabel(): string {
+function getFeedbackSurfaceLabel(
+  snapshot?: SearchFeedbackConditionSnapshot,
+): string {
+  if (snapshot?.surfaceLabel) return snapshot.surfaceLabel;
   return searchContext.value.mode === 'overview' ? 'Ask 证据' : '记忆搜索';
 }
 
@@ -2278,9 +3107,10 @@ function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
   if (!state || state === 'pending') return undefined;
 
   const targetType = getFeedbackTargetType(entity);
-  const scopePart = currentScopeLabel.value;
+  const snapshot = getFeedbackConditionSnapshot(entity);
+  const scopePart = snapshot?.scopeLabel || currentScopeLabel.value;
   const targetPart = getFeedbackTargetTypeLabel(targetType);
-  const surfacePart = getFeedbackSurfaceLabel();
+  const surfacePart = getFeedbackSurfaceLabel(snapshot);
   const detailPrefix = `${surfacePart} / ${scopePart} / ${targetPart}`;
 
   if (state === 'negative') {
@@ -2288,7 +3118,7 @@ function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
       tone: 'negative',
       label: '不相关修正范围',
       detail: `${detailPrefix}；只降低相近场景排序，不删除这条记忆。`,
-      context: getFeedbackQueryContextLine(entity),
+      context: getFeedbackReceiptContext(entity),
       nextStep:
         '点“撤销”会移除这次修正；原记忆仍可从搜索、时间轴或来源打开。',
       effects: getFeedbackEffectLines(entity),
@@ -2300,7 +3130,7 @@ function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
       tone: 'positive',
       label: '有用信号范围',
       detail: `${detailPrefix}；会提高这条证据在相近召回里的优先级。`,
-      context: getFeedbackQueryContextLine(entity),
+      context: getFeedbackReceiptContext(entity),
       nextStep:
         '这不会把它固定成唯一答案，后续仍会和当前证据一起复核。',
       effects: getFeedbackEffectLines(entity),
@@ -2311,7 +3141,7 @@ function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
     tone: 'cleared',
     label: '反馈已撤销',
     detail: `${detailPrefix}；已移除这条结果的正负标记和相近场景修正。`,
-    context: getFeedbackQueryContextLine(entity),
+    context: getFeedbackReceiptContext(entity),
     nextStep:
       '后续排序回到向量、全文、图谱和时间等召回信号。',
     effects: getFeedbackEffectLines(entity),
@@ -2345,6 +3175,56 @@ function getFeedbackPreflightReceipt(
   };
 }
 
+function getFeedbackActionScopeLine(entity: any): string {
+  const targetType = getFeedbackTargetType(entity);
+  const scopePart = currentScopeLabel.value;
+  const targetPart = getFeedbackTargetTypeLabel(targetType);
+  const surfacePart = getFeedbackSurfaceLabel();
+  const context = getFeedbackQueryContextLine(entity);
+  return `${surfacePart} / ${scopePart} / ${targetPart}${context ? `；${context}` : ''}`;
+}
+
+function getFeedbackButtonBoundary(
+  entity: any,
+  action: MemoryFeedbackAction,
+): string {
+  const title = compactFeedbackDetailValue(
+    getSearchResultOpenTitle(entity),
+    80,
+  ) || '当前结果';
+  const actionScope = getFeedbackActionScopeLine(entity);
+
+  if (isFeedbackPending(entity)) {
+    return `反馈提交中：正在按当前反馈条件写入 Memory Service 召回质量信号；按钮暂时锁定，避免重复提交。对象：${title}。不会删除记忆、外发内容、同步来源系统、确认答案或立即重排当前页。`;
+  }
+
+  if (action === 'positive') {
+    return `有用反馈：把「${title}」标记为本次 ${actionScope} 的有用证据，写入 Memory Service recall_quality；后续相近召回会提高优先级。不会确认答案、不会固定唯一结果、不会立即重排当前页、不会外发、不会同步来源系统、不会删除记忆。`;
+  }
+
+  if (action === 'negative') {
+    return `不相关反馈：把「${title}」标记为本次 ${actionScope} 的不相关证据，写入 Memory Service recall_quality；可能创建相近场景修正，只降低同类场景排序，不做全局排除。不会删除或隐藏当前记忆、不会确认答案、不会立即重排当前页、不会外发、不会同步来源系统。`;
+  }
+
+  return `撤销反馈：移除「${title}」这次正负反馈和相近场景修正，让后续排序回到普通召回信号。对象：${actionScope}。不会删除记忆、不会恢复外部来源、不会重新召回、不会外发、不会同步来源系统、不会确认答案。`;
+}
+
+function getFeedbackRefreshBoundary(entity: any): string {
+  const snapshot = getFeedbackConditionSnapshot(entity);
+  const query = compactFeedbackDetailValue(
+    snapshot?.query || getCurrentFeedbackQuery(),
+    80,
+  ) || '当前查询';
+  const scope = snapshot?.scopeLabel || currentScopeLabel.value;
+  const mode = getFeedbackSurfaceLabel(snapshot);
+  const title = compactFeedbackDetailValue(
+    getSearchResultOpenTitle(entity),
+    80,
+  ) || '当前结果';
+
+  return `用同一条件重新取证：重新请求 Memory Service 的 ${mode}，query 为「${query}」，范围为${scope}，用于复核「${title}」反馈后的结果。不会再写一条反馈、不会删除记忆、不会同步来源系统、不会外发、不会确认答案。`;
+}
+
 function getFeedbackActionLabel(action: MemoryFeedbackAction): string {
   if (action === 'positive') return '有用反馈';
   if (action === 'negative') return '不相关反馈';
@@ -2370,7 +3250,7 @@ function getFeedbackFailureReceipt(
     tone: 'error',
     label: '反馈未提交',
     detail: `${getFeedbackActionLabel(failure.action)}没有写入服务端；${getFeedbackRestoredStateLabel(failure.previousState)}。`,
-    context: getFeedbackQueryContextLine(entity),
+    context: getFeedbackReceiptContext(entity),
     effects: [
       '没有创建相近场景修正、没有改变显著性，也没有删除这条记忆。',
       `错误：${compactFeedbackDetailValue(failure.message, 120) || 'feedback_request_failed'}`,
@@ -2401,17 +3281,20 @@ function shouldShowFeedbackRefreshAction(entity: any): boolean {
   return state === 'positive' || state === 'negative' || state === 'cleared';
 }
 
-function rerunSearchAfterFeedback() {
-  const query = (searchContext.value.query || searchQuery.value).trim();
+function rerunSearchAfterFeedback(entity: any) {
+  const snapshot = getFeedbackConditionSnapshot(entity);
+  const query = (
+    snapshot?.query ||
+    searchContext.value.query ||
+    searchQuery.value
+  ).trim();
   if (!query) return;
 
-  const scope = currentScopeValue.value as RecallScope;
-  if (searchContext.value.mode === 'entity') {
-    store.performEntityVectorSearch(
-      query,
-      searchContext.value.entityType,
-      scope,
-    );
+  const scope = snapshot?.scope || (currentScopeValue.value as RecallScope);
+  const mode = snapshot?.mode || searchContext.value.mode;
+  const entityType = snapshot?.entityType || searchContext.value.entityType;
+  if (mode === 'entity' && entityType) {
+    store.performEntityVectorSearch(query, entityType, scope);
   } else {
     store.performAskSearch(query, scope);
   }
@@ -2444,7 +3327,9 @@ async function submitResultFeedback(
 
   const previousEffect =
     feedbackEffectByResultKey.value[getFeedbackKey(entity)];
+  const conditionSnapshot = captureFeedbackConditionSnapshot(entity);
   setFeedbackState(entity, 'pending');
+  setFeedbackConditionSnapshot(entity, conditionSnapshot);
   setFeedbackFailure(entity, undefined);
   try {
     const response = (await chromeAPI.sendMessage({
@@ -2477,6 +3362,9 @@ async function submitResultFeedback(
         : undefined,
     );
     setFeedbackEffect(entity, previousEffect);
+    if (!previousEffect && !previousState) {
+      setFeedbackConditionSnapshot(entity, conditionSnapshot);
+    }
     setFeedbackFailure(entity, {
       action,
       message: error?.message || 'feedback_request_failed',
@@ -2509,8 +3397,8 @@ const getLinkSafetyStatus = (target: any) =>
   formatMemoryLinkSafetyStatus(getLinkSafetyState(target));
 
 const getSourceButtonTitle = (target: any) => {
-  const host = getLinkSafetyState(target).sourceHost;
-  return host ? `打开来源：${host}` : '打开来源';
+  const host = getLinkSafetyState(target).sourceHost || '安全 http/https 来源';
+  return `打开来源：${host}；在新标签页打开已净化来源，使用 noopener/noreferrer；不会重新读取、同步或确认来源内容。`;
 };
 
 const getSearchResultOpenTitle = (entity: any): string => {
@@ -2525,6 +3413,45 @@ const getSearchResultOpenTitle = (entity: any): string => {
     (candidate) => typeof candidate === 'string' && candidate.trim(),
   );
   return typeof title === 'string' ? title : '当前结果';
+};
+
+const getSearchResultOpenActionLabel = (entity: any): string => {
+  const title = getSearchResultOpenTitle(entity);
+  const linkState = getLinkSafetyState(entity);
+  let routeLabel = '显示暂无可打开目标回执';
+  if (linkState.exploreRoute) {
+    routeLabel = `进入记忆内定位 ${linkState.exploreRoute}，不打开外部网页`;
+  } else if (linkState.sourceUrl) {
+    routeLabel = `在新标签页打开安全来源 ${linkState.sourceHost || 'http/https 来源'}，使用 noopener/noreferrer`;
+  } else if (shouldShowDetailsFallback(entity)) {
+    routeLabel = '查看 Memory Exploring 详情页 fallback';
+  } else if (linkState.blockedLabels.length > 0) {
+    routeLabel = `显示链接安全拦截回执（${linkState.blockedLabels.length} 项原因）`;
+  }
+  return `打开结果：${title}；${routeLabel}；不会写入记忆、反馈或来源系统，也不会重新读取、同步或确认来源内容`;
+};
+
+const getSearchResultMemoryRouteButtonBoundary = (entity: any): string => {
+  const title = getSearchResultOpenTitle(entity);
+  const route = getLinkSafetyState(entity).exploreRoute || '记忆内路由';
+  return `在记忆中查看：${title}；只切换 Memory Exploring 内部视图 ${route}，不会打开外部网页、写入反馈、同步来源或确认事实。`;
+};
+
+const getSearchResultDetailsButtonBoundary = (entity: any): string => {
+  const title = getSearchResultOpenTitle(entity);
+  const route = getDetailsFallbackRoute(entity) || '详情页';
+  return `查看详情：${title}；只打开 Memory Exploring ${route} fallback，不会打开外部网页、写入记忆、写反馈、同步来源或确认事实。`;
+};
+
+const getSearchResultRecoveryDiagnosticButtonBoundary = (
+  entity: any,
+): string => {
+  const title = getSearchResultOpenTitle(entity);
+  const linkState = getLinkSafetyState(entity);
+  const status = linkState.blockedLabels.length > 0
+    ? `${linkState.blockedLabels.length} 项拦截原因`
+    : '没有安全内链、详情页或 http/https 来源';
+  return `复制安全诊断：${title}；只复制标题、搜索条件、范围、结果 key、来源标签和${status}，不复制被拦截原始 URL，也不会写入、同步、确认或重新读取来源。`;
 };
 
 const getDetailsFallbackRoute = (entity: any): string | null => {
@@ -2926,6 +3853,57 @@ const handleResultClick = (entity: any) => {
   border-radius: 0.375rem;
   background: rgba(15, 23, 42, 0.45);
   border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.ask-topic-lock-receipt {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  margin: -0.35rem 0 1.25rem;
+  padding: 0.82rem 0.95rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  background: rgba(13, 148, 136, 0.1);
+}
+
+.ask-topic-lock-receipt-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.ask-topic-lock-receipt-label {
+  color: #ccfbf1;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.ask-topic-lock-receipt-detail {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ask-topic-lock-receipt-metrics {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: 0.35rem;
+  max-width: 320px;
+}
+
+.ask-topic-lock-receipt-metrics span {
+  white-space: nowrap;
+  color: #ccfbf1;
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 0.18rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.22);
+  border: 1px solid rgba(45, 212, 191, 0.2);
 }
 
 .ask-continuation-receipt {
@@ -3510,6 +4488,59 @@ const handleResultClick = (entity: any) => {
   font-size: 0.9rem;
 }
 
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 3rem;
+  color: #94a3b8;
+}
+
+.loading-spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid rgba(59, 130, 246, 0.3);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.loading-scope-receipt {
+  display: grid;
+  gap: 0.45rem;
+  width: min(100%, 48rem);
+  padding: 0.82rem 0.95rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.48);
+  color: #dbeafe;
+  text-align: left;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.loading-scope-receipt strong {
+  color: #f8fafc;
+  font-size: 0.86rem;
+}
+
+.loading-scope-receipt-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.loading-scope-receipt-metrics span {
+  padding: 0.2rem 0.46rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.42rem;
+  background: rgba(30, 41, 59, 0.62);
+  color: #bfdbfe;
+  font-size: 0.76rem;
+}
+
 .results-summary {
   display: flex;
   justify-content: space-between;
@@ -3575,6 +4606,48 @@ const handleResultClick = (entity: any) => {
   border-color: rgba(147, 197, 253, 0.58);
   background: rgba(37, 99, 235, 0.28);
   outline: none;
+}
+
+.search-result-batch-receipt {
+  display: grid;
+  gap: 0.45rem;
+  max-width: min(100%, 48rem);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(8, 47, 73, 0.2);
+  color: #bae6fd;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.search-result-batch-receipt-warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(120, 53, 15, 0.2);
+  color: #fed7aa;
+}
+
+.search-result-batch-receipt-main {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.search-result-batch-receipt-main strong {
+  color: inherit;
+}
+
+.search-result-batch-receipt-metrics {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.search-result-batch-receipt-metrics span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.34);
+  color: inherit;
+  font-size: 0.74rem;
 }
 
 .source-coverage-receipt {
@@ -3964,6 +5037,11 @@ const handleResultClick = (entity: any) => {
   box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
 }
 
+.search-result-card:focus-within {
+  border-color: rgba(96, 165, 250, 0.45);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
 .result-header {
   display: flex;
   justify-content: space-between;
@@ -4156,6 +5234,10 @@ const handleResultClick = (entity: any) => {
   justify-content: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.result-open-btn {
+  margin-right: auto;
 }
 
 .link-safety-note {
@@ -4355,6 +5437,11 @@ const handleResultClick = (entity: any) => {
   border-color: rgba(59, 130, 246, 0.5);
 }
 
+.action-btn:focus-visible {
+  outline: 2px solid rgba(147, 197, 253, 0.82);
+  outline-offset: 2px;
+}
+
 .empty-search-state {
   display: flex;
   flex-direction: column;
@@ -4551,6 +5638,15 @@ const handleResultClick = (entity: any) => {
   }
 
   .ask-status-rail-metrics {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .ask-topic-lock-receipt {
+    flex-direction: column;
+  }
+
+  .ask-topic-lock-receipt-metrics {
     justify-content: flex-start;
     max-width: none;
   }

@@ -586,8 +586,81 @@ function parseHistoryDigestStatus(
   return 'idle';
 }
 
+interface ArchivedListSnapshot {
+  summary?: string;
+  topicCount?: number;
+  actionItemCount?: number;
+  decisionCount?: number;
+}
+
+type ArchivedHistorySessionSnapshot = MeetingPilotSessionSnapshot & {
+  archiveListSnapshot?: ArchivedListSnapshot;
+};
+
+function parseHistoryCountParam(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.floor(parsed);
+}
+
+function getArchivedListSnapshot(
+  session: MeetingPilotSessionSnapshot,
+): ArchivedListSnapshot | undefined {
+  return (session as ArchivedHistorySessionSnapshot).archiveListSnapshot;
+}
+
+function getArchiveListSnapshotFromQuery(
+  params: URLSearchParams,
+): ArchivedListSnapshot | undefined {
+  const summary = (params.get('summary') || '').trim() || undefined;
+  const topicCount = parseHistoryCountParam(params.get('topicCount'));
+  const actionItemCount = parseHistoryCountParam(
+    params.get('actionItemCount'),
+  );
+  const decisionCount = parseHistoryCountParam(params.get('decisionCount'));
+  if (
+    !summary &&
+    topicCount === undefined &&
+    actionItemCount === undefined &&
+    decisionCount === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    summary,
+    topicCount,
+    actionItemCount,
+    decisionCount,
+  };
+}
+
+function formatArchivedListSnapshotCounts(
+  snapshot?: ArchivedListSnapshot,
+): string {
+  if (!snapshot) return '';
+  const parts = [
+    snapshot.topicCount !== undefined ? `话题 ${snapshot.topicCount}` : '',
+    snapshot.actionItemCount !== undefined
+      ? `行动项 ${snapshot.actionItemCount}`
+      : '',
+    snapshot.decisionCount !== undefined
+      ? `决议 ${snapshot.decisionCount}`
+      : '',
+  ].filter(Boolean);
+  return parts.join('、');
+}
+
+function formatArchivedListSnapshotSummary(
+  snapshot?: ArchivedListSnapshot,
+): string {
+  const summary = snapshot?.summary?.trim();
+  if (!summary) return '';
+  return summary.length > 140 ? `${summary.slice(0, 140)}...` : summary;
+}
+
 function getArchivedSessionFromQuery():
-  | MeetingPilotSessionSnapshot
+  | ArchivedHistorySessionSnapshot
   | undefined {
   const params = new URLSearchParams(window.location.search);
   if (params.get('history') !== '1') {
@@ -611,6 +684,8 @@ function getArchivedSessionFromQuery():
     pdfUrl,
     digestId,
   );
+  const archiveListSnapshot = getArchiveListSnapshotFromQuery(params);
+  const fallbackSummary = archiveListSnapshot?.summary?.trim();
   const digestErrorCode =
     (params.get('digestErrorCode') || '').trim() || undefined;
   const base = createMeetingPilotSessionSnapshot({
@@ -657,13 +732,15 @@ function getArchivedSessionFromQuery():
     },
     currentTopic: '会议结果已归档',
     summary:
-      participants.length > 0
+      fallbackSummary ||
+      (participants.length > 0
         ? `这是一条从“会议记录”入口打开的归档会议，参会者包括：${participants.join(
             '、',
           )}。`
-        : '这是一条从“会议记录”入口打开的归档会议。',
+        : '这是一条从“会议记录”入口打开的归档会议。'),
     updatedAt: lastEventAt,
     endedAt: lastEventAt,
+    archiveListSnapshot,
   };
 }
 
@@ -689,10 +766,17 @@ interface PanoramaOutputReceipt {
   nextStep: string;
 }
 
+const PANORAMA_OUTPUT_NO_SIDE_EFFECTS =
+  '不会发送纪要、创建外部任务、确认行动项、重跑分析、写回 Memory Service，或修改 Calendar/Jira/RingCentral。';
+
 function buildArchiveSourceReceipt(
   status: ArchivedDetailStatus,
   session: MeetingPilotSessionSnapshot,
 ): ArchiveSourceReceipt {
+  const listSnapshot = getArchivedListSnapshot(session);
+  const listSnapshotSummary = formatArchivedListSnapshotSummary(listSnapshot);
+  const listSnapshotCounts = formatArchivedListSnapshotCounts(listSnapshot);
+
   if (status === 'loaded') {
     return {
       tone: 'loaded',
@@ -710,9 +794,14 @@ function buildArchiveSourceReceipt(
     return {
       tone: 'fallback',
       title: '完整归档未载入，当前是基础历史视图',
-      source: '会议记录列表带入的 URL 参数：标题、时间、参会者和 Digest/PDF 状态。',
-      coverage:
-        '行动项、决议、时间线和立场可能暂时为空；这不等于会议没有这些内容。',
+      source: listSnapshot
+        ? '会议记录列表带入的 URL 参数：标题、时间、参会者、Digest/PDF 状态，以及列表卡片摘要/结构化数量。'
+        : '会议记录列表带入的 URL 参数：标题、时间、参会者和 Digest/PDF 状态。',
+      coverage: listSnapshot
+        ? `列表快照带入${listSnapshotSummary ? `：${listSnapshotSummary}` : ''}${
+            listSnapshotCounts ? `；卡片结构数量：${listSnapshotCounts}` : ''
+          }。完整行动项正文、决议正文、时间线和立场仍未载入；这不等于会议没有这些内容。`
+        : '行动项、决议、时间线和立场可能暂时为空；这不等于会议没有这些内容。',
       boundary:
         '不会自动重新生成 PDF、不会修改归档，也不会把缺失结构化内容写回 Memory Service。',
       nextStep:
@@ -727,8 +816,11 @@ function buildArchiveSourceReceipt(
         ? '正在读取完整归档'
         : '准备读取完整归档',
     source: '会议记录列表先带入基础信息，随后向 memory-service 请求完整明细。',
-    coverage:
-      '完整归档返回前，页面可能只显示标题、时间、参会者和 Digest/PDF 状态。',
+    coverage: listSnapshot
+      ? `完整归档返回前，页面先显示列表卡片快照${
+          listSnapshotCounts ? `（${listSnapshotCounts}）` : ''
+        }；完整行动项、时间线和立场仍等待详情接口。`
+      : '完整归档返回前，页面可能只显示标题、时间、参会者和 Digest/PDF 状态。',
     boundary:
       '加载过程只读；不会开始录制、补发 PDF、发送纪要或修改行动项状态。',
     nextStep:
@@ -739,6 +831,7 @@ function buildArchiveSourceReceipt(
 function getPanoramaSourceLabel(
   isArchivedHistoryMode: boolean,
   archivedDetailStatus: ArchivedDetailStatus,
+  session?: MeetingPilotSessionSnapshot,
 ): string {
   if (!isArchivedHistoryMode) {
     return '当前浏览器 Meeting Pilot session；停止 capture 后的结构化会议结果。';
@@ -747,7 +840,9 @@ function getPanoramaSourceLabel(
     return 'memory-service 完整归档；优先于活跃 session 缓存。';
   }
   if (archivedDetailStatus === 'fallback') {
-    return '会议记录列表带入的基础归档参数；完整明细未载入。';
+    return session && getArchivedListSnapshot(session)
+      ? '会议记录列表带入的基础归档参数和卡片快照；完整明细未载入。'
+      : '会议记录列表带入的基础归档参数；完整明细未载入。';
   }
   return '会议记录列表基础信息；正在尝试读取 memory-service 完整归档。';
 }
@@ -844,7 +939,11 @@ function buildPanoramaOutputReceipt(args: {
       : hasExternalAsset
       ? '可输出材料已就绪'
       : '仅有结构化页面可输出',
-    source: getPanoramaSourceLabel(isArchivedHistoryMode, archivedDetailStatus),
+    source: getPanoramaSourceLabel(
+      isArchivedHistoryMode,
+      archivedDetailStatus,
+      session,
+    ),
     outputs: outputParts.join('；'),
     boundary:
       blockedAssetCount > 0
@@ -856,6 +955,92 @@ function buildPanoramaOutputReceipt(args: {
       ? '先返回会议记录或检查 Minutes / 录制素材 URL，确认只保留无凭据的 http(s) 链接后再分享。'
       : '确认材料范围后，再手动选择复制、下载或外发到目标系统。',
   };
+}
+
+function buildPanoramaPdfSectionBoundary(
+  session: MeetingPilotSessionSnapshot,
+  assets: PanoramaAssetSafety,
+): string {
+  return `查看会议纪要 PDF 区块：只滚动到本页 PDF 状态、预览、下载和复制入口；当前状态：${getPanoramaPdfLabel(
+    session,
+    assets,
+  )}。不会打开外部链接、生成 PDF、发送纪要、修改行动项或写回 Memory Service。`;
+}
+
+function buildPanoramaPageLinkBoundary(): string {
+  return `复制 Panorama 页面链接：只把当前 extension 页面 URL 写入本机剪贴板；${PANORAMA_OUTPUT_NO_SIDE_EFFECTS}`;
+}
+
+function buildPanoramaJsonExportBoundary(): string {
+  return `导出 Panorama JSON：只把当前页面已有会议结构化快照下载到本机；不会上传、同步或外发。${PANORAMA_OUTPUT_NO_SIDE_EFFECTS}`;
+}
+
+function buildPanoramaRecordingBoundary(
+  assets: PanoramaAssetSafety,
+): string {
+  if (assets.videoUrl) {
+    return `回放录制：只在新标签打开已通过安全检查的录制 http(s) 链接；不会下载、发送纪要、创建外部任务、确认行动项或重跑分析。`;
+  }
+  return assets.videoBlockedLabel
+    ? `${assets.videoBlockedLabel}；不会打开、下载或复制。`
+    : '当前会议没有可回放的录制素材；请查看 PDF 或会议记录。';
+}
+
+function buildFollowUpCopyBoundary(
+  activeActionCount: number,
+  suggestedCount: number,
+  gapCount: number,
+): string {
+  if (!activeActionCount) {
+    return '复制跟进清单不可用：当前没有未驳回行动项；不会发送纪要、创建外部任务、确认行动项或写回 Memory Service。';
+  }
+  if (suggestedCount > 0 || gapCount > 0) {
+    return `复制跟进清单：只把 ${activeActionCount} 个未驳回行动项按 Markdown 写入本机剪贴板，其中 ${suggestedCount} 个待复核、${gapCount} 个需补信息；不会发送给团队、创建外部任务、确认行动项或写回 Memory Service。`;
+  }
+  return `复制跟进清单：只把 ${activeActionCount} 个已复核行动项按 Markdown 写入本机剪贴板；不会发送给团队、创建外部任务、确认行动项或写回 Memory Service。`;
+}
+
+function buildPanoramaFeedbackBoundary(
+  kind: 'accurate' | 'needs_correction',
+): string {
+  return kind === 'accurate'
+    ? '内容准确：当前只在本页显示反馈未写入回执；不会写入校准、训练或 Memory Service，也不会确认行动项或发送纪要。'
+    : '需要修正：当前只在本页显示反馈未写入回执；不会重跑会议分析、创建修正任务、改写行动项或发送纪要。';
+}
+
+function buildPdfOpenBoundary(assets: PanoramaAssetSafety): string {
+  if (!assets.pdfUrl) {
+    return `${
+      assets.pdfBlockedLabel || 'PDF 当前不可打开'
+    }；不会打开、下载或复制。`;
+  }
+  return '打开会议纪要 PDF：只在新标签打开已通过安全检查的 http(s) PDF 链接；不会发送纪要、生成 PDF、确认行动项或写回 Memory Service。';
+}
+
+function buildPdfDownloadBoundary(assets: PanoramaAssetSafety): string {
+  if (!assets.pdfUrl) {
+    return `${
+      assets.pdfBlockedLabel || 'PDF 当前不可下载'
+    }；不会打开、下载或复制。`;
+  }
+  return '下载会议纪要 PDF：只请求浏览器把已通过安全检查的 PDF 链接保存到本机；不会发送纪要、生成 PDF、确认行动项或写回 Memory Service。';
+}
+
+function buildPdfCopyBoundary(assets: PanoramaAssetSafety): string {
+  if (!assets.pdfUrl) {
+    return `${
+      assets.pdfBlockedLabel || 'PDF 当前没有可复制链接'
+    }；不会打开、下载或复制。`;
+  }
+  return '复制 PDF 链接：只把已通过安全检查的 PDF http(s) 链接写入本机剪贴板；不会分享、发送纪要、生成 PDF、确认行动项或写回 Memory Service。';
+}
+
+function buildPanoramaConfigBoundary(): string {
+  return '打开 Meeting Pilot 配置：只打开本机 Options 配置页；不会为当前历史会议补发 PDF、重跑分析、发送纪要或写回 Memory Service。';
+}
+
+function buildPanoramaRefreshBoundary(): string {
+  return '刷新 PDF 状态：只重新加载当前 Panorama 页面读取现有状态；不会补发 PDF、重跑分析、发送纪要或修改行动项。';
 }
 
 function normalizeArchivedActionSource(
@@ -1521,6 +1706,26 @@ function PanoramaPage() {
     isArchivedHistoryMode,
     archivedDetailStatus,
   });
+  const pdfSectionBoundary = buildPanoramaPdfSectionBoundary(
+    session,
+    assetSafety,
+  );
+  const pageLinkBoundary = buildPanoramaPageLinkBoundary();
+  const jsonExportBoundary = buildPanoramaJsonExportBoundary();
+  const recordingBoundary = buildPanoramaRecordingBoundary(assetSafety);
+  const followUpCopyBoundary = buildFollowUpCopyBoundary(
+    activeActionItems.length,
+    suggestedActions.length,
+    actionsWithReadinessGaps.length,
+  );
+  const feedbackAccurateBoundary = buildPanoramaFeedbackBoundary('accurate');
+  const feedbackNeedsCorrectionBoundary =
+    buildPanoramaFeedbackBoundary('needs_correction');
+  const pdfOpenBoundary = buildPdfOpenBoundary(assetSafety);
+  const pdfDownloadBoundary = buildPdfDownloadBoundary(assetSafety);
+  const pdfCopyBoundary = buildPdfCopyBoundary(assetSafety);
+  const configBoundary = buildPanoramaConfigBoundary();
+  const refreshBoundary = buildPanoramaRefreshBoundary();
 
   const toggleParticipantStance = (participantId: string) => {
     setExpandedStanceParticipants((current) =>
@@ -1730,6 +1935,8 @@ function PanoramaPage() {
         <div className="header-actions">
           <button
             className="header-btn"
+            title={pdfSectionBoundary}
+            aria-label={pdfSectionBoundary}
             onClick={() =>
               document
                 .getElementById('pdfPreviewSection')
@@ -1740,6 +1947,8 @@ function PanoramaPage() {
           </button>
           <button
             className="header-btn"
+            title={pageLinkBoundary}
+            aria-label={pageLinkBoundary}
             onClick={() => void copyLink(window.location.href, '页面链接已复制')}
           >
             🔗 复制页面链接
@@ -1747,20 +1956,20 @@ function PanoramaPage() {
           <span className="header-copy-state" aria-live="polite">
             {linkCopyState}
           </span>
-          <button className="header-btn" onClick={exportSession}>
+          <button
+            className="header-btn"
+            title={jsonExportBoundary}
+            aria-label={jsonExportBoundary}
+            onClick={exportSession}
+          >
             📋 导出
           </button>
           <button
             className="header-btn primary"
             onClick={replayRecording}
             disabled={!videoUrl}
-            title={
-              videoUrl
-                ? '打开会议录制素材'
-                : videoBlockedLabel
-                ? `${videoBlockedLabel}；不会打开或复制`
-                : '当前会议没有可回放的录制素材，请查看 PDF 或会议记录'
-            }
+            title={recordingBoundary}
+            aria-label={recordingBoundary}
           >
             ▶️ 回放录制
           </button>
@@ -2258,6 +2467,8 @@ function PanoramaPage() {
                 <button
                   className="followup-copy"
                   disabled={!activeActionItems.length}
+                  title={followUpCopyBoundary}
+                  aria-label={followUpCopyBoundary}
                   onClick={() => void copyFollowUpChecklist()}
                 >
                   复制跟进清单
@@ -2433,6 +2644,8 @@ function PanoramaPage() {
                       <a
                         className="digest-link"
                         href={pdfUrl || '#'}
+                        title={pdfOpenBoundary}
+                        aria-label={pdfOpenBoundary}
                         onClick={(event) => {
                           if (!pdfUrl) {
                             event.preventDefault();
@@ -2450,6 +2663,8 @@ function PanoramaPage() {
                       <a
                         className="digest-link"
                         href={pdfUrl || '#'}
+                        title={pdfDownloadBoundary}
+                        aria-label={pdfDownloadBoundary}
                         onClick={(event) => {
                           if (!pdfUrl) {
                             event.preventDefault();
@@ -2506,11 +2721,18 @@ function PanoramaPage() {
                           <>
                             <button
                               className="pdf-digest-action primary"
+                              title="返回会议记录：只打开本机会议记录列表复核 Digest/PDF 状态；不会重跑分析、补发 PDF、发送纪要或写回 Memory Service。"
+                              aria-label="返回会议记录：只打开本机会议记录列表复核 Digest/PDF 状态；不会重跑分析、补发 PDF、发送纪要或写回 Memory Service。"
                               onClick={openMeetingArchive}
                             >
                               ↩️ 返回会议记录
                             </button>
-                            <button className="pdf-digest-action" disabled>
+                            <button
+                              className="pdf-digest-action"
+                              disabled
+                              title={pdfOpenBoundary}
+                              aria-label={pdfOpenBoundary}
+                            >
                               不可打开/下载
                             </button>
                           </>
@@ -2518,11 +2740,18 @@ function PanoramaPage() {
                           <>
                             <button
                               className="pdf-digest-action primary"
+                              title={configBoundary}
+                              aria-label={configBoundary}
                               onClick={openMeetingOptions}
                             >
                               ⚙️ 配置 Minutes API
                             </button>
-                            <button className="pdf-digest-action" disabled>
+                            <button
+                              className="pdf-digest-action"
+                              disabled
+                              title="当前会议只显示历史归档状态；此按钮不会补发 PDF、重跑分析、发送纪要或写回 Memory Service。"
+                              aria-label="当前会议只显示历史归档状态；此按钮不会补发 PDF、重跑分析、发送纪要或写回 Memory Service。"
+                            >
                               {missingMinutesAsset
                                 ? '当前无法补发'
                                 : '补发能力未实现'}
@@ -2532,11 +2761,18 @@ function PanoramaPage() {
                           <>
                             <button
                               className="pdf-digest-action primary"
+                              title={refreshBoundary}
+                              aria-label={refreshBoundary}
                               onClick={() => window.location.reload()}
                             >
                               🔄 刷新状态
                             </button>
-                            <button className="pdf-digest-action" disabled>
+                            <button
+                              className="pdf-digest-action"
+                              disabled
+                              title={pdfOpenBoundary}
+                              aria-label={pdfOpenBoundary}
+                            >
                               📄 预览 PDF
                             </button>
                           </>
@@ -2553,12 +2789,16 @@ function PanoramaPage() {
                         href={pdfUrl}
                         target="_blank"
                         rel="noreferrer"
+                        title={pdfOpenBoundary}
+                        aria-label={pdfOpenBoundary}
                       >
                         在线预览
                       </a>
                       <a
                         className="digest-link"
                         href={pdfUrl}
+                        title={pdfDownloadBoundary}
+                        aria-label={pdfDownloadBoundary}
                         onClick={(event) => {
                           event.preventDefault();
                           void chrome.downloads?.download({
@@ -2573,12 +2813,14 @@ function PanoramaPage() {
                       <a
                         className="digest-link"
                         href={pdfUrl}
+                        title={pdfCopyBoundary}
+                        aria-label={pdfCopyBoundary}
                         onClick={(event) => {
                           event.preventDefault();
                           void copyLink(pdfUrl, 'PDF 链接已复制');
                         }}
                       >
-                        分享链接
+                        复制链接
                       </a>
                     </>
                   ) : pdfBlockedLabel ? (
@@ -2588,6 +2830,8 @@ function PanoramaPage() {
                       <a
                         className="digest-link"
                         href="#"
+                        title={configBoundary}
+                        aria-label={configBoundary}
                         onClick={(event) => {
                           event.preventDefault();
                           openMeetingOptions();
@@ -2619,6 +2863,8 @@ function PanoramaPage() {
                   <a
                     className="digest-link"
                     href={videoUrl || '#'}
+                    title={recordingBoundary}
+                    aria-label={recordingBoundary}
                     onClick={(event) => {
                       if (!videoUrl) {
                         event.preventDefault();
@@ -2639,6 +2885,16 @@ function PanoramaPage() {
                   <a
                     className="digest-link"
                     href={videoUrl || '#'}
+                    title={
+                      videoUrl
+                        ? '复制录制链接：只把已通过安全检查的录制 http(s) 链接写入本机剪贴板；不会分享、下载、发送纪要、创建外部任务或写回 Memory Service。'
+                        : recordingBoundary
+                    }
+                    aria-label={
+                      videoUrl
+                        ? '复制录制链接：只把已通过安全检查的录制 http(s) 链接写入本机剪贴板；不会分享、下载、发送纪要、创建外部任务或写回 Memory Service。'
+                        : recordingBoundary
+                    }
                     onClick={(event) => {
                       if (!videoUrl) {
                         event.preventDefault();
@@ -2673,12 +2929,16 @@ function PanoramaPage() {
         <div className="feedback-btns">
           <button
             className="feedback-btn confirm"
+            title={feedbackAccurateBoundary}
+            aria-label={feedbackAccurateBoundary}
             onClick={() => handlePanoramaFeedback('accurate')}
           >
             ✅ 内容准确
           </button>
           <button
             className="feedback-btn reject"
+            title={feedbackNeedsCorrectionBoundary}
+            aria-label={feedbackNeedsCorrectionBoundary}
             onClick={() => handlePanoramaFeedback('needs_correction')}
           >
             ❌ 需要修正

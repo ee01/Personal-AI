@@ -206,7 +206,8 @@ function contextPackCard() {
     state: 'prepare',
     score: 76,
     dueAt: now + 7200,
-    whyNow: '两条近期记忆都指向链接检查优先使用 webpage-mcp。',
+    whyNow:
+      '两条近期记忆都指向链接检查优先使用 webpage-mcp。 https://example.test/skills/capdev-monthly-data%40v0.1?token=this-is-an-intentionally-long-unbroken-popup-width-regression-fixture',
     nextBestAction: '复制上下文包给 Codex，整理团队可复用说明。',
     people: [{ name: 'Fred Gu' }],
     projects: [{ name: 'Personal AI' }],
@@ -239,9 +240,60 @@ function contextPackCard() {
   };
 }
 
+function overflowMessageCard(id, title) {
+  return {
+    id,
+    missionId: `mission-${id}`,
+    sourceHash: id,
+    cardType: 'memory_quality',
+    title,
+    priority: 'medium',
+    state: 'prepare',
+    score: 72,
+    dueAt: now + 5400,
+    whyNow: '近期消息仍在同一个今日工作窗口内。',
+    nextBestAction: '打开 Today Pilot 首页查看完整证据后再处理。',
+    people: [{ name: 'Esone' }],
+    projects: [{ name: 'Personal AI' }],
+    evidenceRefs: [
+      {
+        sourceKind: 'message',
+        sourceId: `msg-${id}`,
+        title,
+        snippet: '这条 mission 用来验证 popup Top 3 之外仍有完整入口。',
+        timestamp: now - 1200,
+      },
+    ],
+    openQuestions: [],
+    trust: {
+      confidence: 0.77,
+      riskLevel: 'low',
+      staleEvidenceCount: 0,
+      sensitiveEvidenceCount: 0,
+    },
+    contextPack: {
+      preview: `Mission: ${title}`,
+      attention: {
+        delivery: 'board',
+        reason: 'Visible in Day Pilot without a push interruption.',
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 const hiddenRehearsal = rehearsalCard();
 const visibleDecision = decisionCard();
 const copyableContextCard = contextPackCard();
+const overflowVisibleCard = overflowMessageCard(
+  'card-popup-overflow-visible',
+  '复核 Today Pilot popup 隐藏入口',
+);
+const overflowHiddenCard = overflowMessageCard(
+  'card-popup-overflow-hidden',
+  '补齐本周状态快照',
+);
 let currentCatchUpBrief = {
   sinceTs: now - 90 * 60,
   nowTs: now,
@@ -337,6 +389,80 @@ function collectPageErrors(page) {
   };
 }
 
+async function assertPopupLayoutWidth(page) {
+  const layout = await page.evaluate(() => {
+    const bodyRect = document.body.getBoundingClientRect();
+    const root = document.getElementById('popup-root');
+    const container = document.querySelector('.popup-container');
+    const todayPilotPanel = document.querySelector('.today-pilot-panel');
+    const overflowingElement =
+      Array.from(document.querySelectorAll('.popup-container *'))
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            tag: element.tagName.toLowerCase(),
+            className: String(element.className || ''),
+            left: rect.left,
+            right: rect.right,
+            width: rect.width,
+            text: (element.textContent || '').replace(/\s+/g, ' ').slice(0, 80),
+          };
+        })
+        .find(
+          (item) =>
+            item.width > 0 &&
+            (item.left < bodyRect.left - 0.5 || item.right > bodyRect.right + 0.5),
+        ) || null;
+
+    return {
+      htmlOffsetWidth: document.documentElement.offsetWidth,
+      htmlRectWidth: document.documentElement.getBoundingClientRect().width,
+      bodyOffsetWidth: document.body.offsetWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      rootWidth: root?.getBoundingClientRect().width || 0,
+      containerWidth: container?.getBoundingClientRect().width || 0,
+      todayPilotPanelWidth: todayPilotPanel?.getBoundingClientRect().width || 0,
+      overflowingElement,
+    };
+  });
+
+  assert.ok(
+    layout.htmlOffsetWidth <= 328,
+    `popup html width should stay bounded, got ${layout.htmlOffsetWidth}`,
+  );
+  assert.ok(
+    layout.htmlRectWidth <= 328,
+    `popup html box should stay bounded, got ${layout.htmlRectWidth}`,
+  );
+  assert.ok(
+    layout.bodyOffsetWidth <= 320,
+    `popup body width should stay bounded, got ${layout.bodyOffsetWidth}`,
+  );
+  assert.ok(
+    layout.bodyScrollWidth <= 320,
+    `popup body scroll width should stay bounded, got ${layout.bodyScrollWidth}`,
+  );
+  assert.ok(
+    layout.rootWidth <= 300,
+    `popup root width should stay inside the body content box, got ${layout.rootWidth}`,
+  );
+  assert.ok(
+    layout.containerWidth <= 300,
+    `popup container width should stay inside the body content box, got ${layout.containerWidth}`,
+  );
+  assert.ok(
+    layout.todayPilotPanelWidth <= 300,
+    `Today Pilot panel should stay inside the popup content box, got ${layout.todayPilotPanelWidth}`,
+  );
+  assert.equal(
+    layout.overflowingElement,
+    null,
+    `popup content should not overflow horizontally: ${JSON.stringify(
+      layout.overflowingElement,
+    )}`,
+  );
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -395,6 +521,17 @@ try {
     if (pathname.endsWith('/context-pack')) {
       const payload = request.postDataJSON();
       const targetProvider = payload?.targetProvider || 'codex';
+      if (targetProvider === 'claude') {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: 'Simulated context pack renderer outage',
+            },
+            503,
+          ),
+        );
+        return;
+      }
       const style =
         targetProvider === 'codex'
           ? 'implementation'
@@ -519,6 +656,17 @@ try {
     .getByText('尚不能判断今天是否没有高优先级事项')
     .waitFor({ timeout: 15000 });
   await page.getByText('记忆统计暂不可用').waitFor({ timeout: 15000 });
+  const homeRefreshButton = page.locator('.refresh-btn');
+  assert.match(
+    (await homeRefreshButton.getAttribute('title')) || '',
+    /刷新 Today Pilot 快照/,
+    'homepage refresh button should expose the Today Pilot snapshot refresh scope before click',
+  );
+  assert.match(
+    (await homeRefreshButton.getAttribute('aria-label')) || '',
+    /不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作/,
+    'homepage refresh button should expose the no-source-side-effect boundary to assistive tech',
+  );
   await page.getByRole('button', { name: '重试生成' }).waitFor({
     timeout: 15000,
   });
@@ -621,9 +769,33 @@ try {
   await decisionMission
     .getByRole('button', { name: '打开动作队列' })
     .waitFor({ timeout: 15000 });
+  const openClawRemoveButton = decisionMission.locator('button.card-action.primary', {
+    hasText: '从首页移除',
+  });
   await decisionMission
-    .getByRole('button', { name: '从首页移除' })
+    .locator('.mission-action-scope-receipt', {
+      hasText: '从首页移除、稍后 6h 或不再提醒同类会等待 Memory Service 写入展示/排序反馈',
+    })
     .waitFor({ timeout: 15000 });
+  await decisionMission
+    .locator('.mission-action-scope-receipt', {
+      hasText: '不会批准、拒绝、重试或执行 OpenClaw',
+    })
+    .waitFor({ timeout: 15000 });
+  await decisionMission
+    .locator('.mission-action-scope-receipt', {
+      hasText: '打开详情只导航到处理页',
+    })
+    .waitFor({ timeout: 15000 });
+  await openClawRemoveButton.waitFor({ timeout: 15000 });
+  assert.match(
+    (await openClawRemoveButton.getAttribute('title')) || '',
+    /从首页移除：只写 Today Pilot 展示反馈；不会批准、拒绝、重试或执行 OpenClaw/,
+  );
+  assert.match(
+    (await openClawRemoveButton.getAttribute('aria-label')) || '',
+    /不会完成动作队列或决策中心事项/,
+  );
   await assert.rejects(
     decisionMission.locator('.provider-segment').waitFor({ timeout: 600 }),
   );
@@ -666,6 +838,45 @@ try {
     timeout: 15000,
   });
   await page
+    .locator('.ranking-note', {
+      hasText: '首页快照基准：读取已有 brief',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.ranking-note', {
+      hasText: '不会重新扫描来源、写反馈、发送消息或执行动作',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-receipt', {
+      hasText: '来源分布',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-receipt', {
+      hasText: '当前 brief 展开 2/2 个有信号来源桶',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-receipt', {
+      hasText: '这里只解释当前可见 brief，不会重新排序、展开隐藏内容、写反馈、标记提醒、发送消息或执行动作',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-item', {
+      hasText: '动作',
+    })
+    .getByText('原始 1 · 候选 1 · 当前可见入选 1')
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-item', {
+      hasText: '消息',
+    })
+    .getByText(
+      '原始 3 · 候选 1 · 当前可见入选 0 · 未进入当前可见 1 · 前置降噪 2',
+    )
+    .waitFor({ timeout: 15000 });
+  await page
     .locator('.catch-up-receipt', {
       hasText: '3 条新信号，高优 2 条，等你回 2 条',
     })
@@ -683,6 +894,19 @@ try {
   await page
     .locator('.catch-up-item', { hasText: '客户导出需求变更' })
     .waitFor({ timeout: 15000 });
+  const highCatchUpItem = page.locator('.catch-up-item', {
+    hasText: '客户导出需求变更',
+  });
+  assert.match(
+    (await highCatchUpItem.getAttribute('title')) || '',
+    /打开补课来源复核/,
+    'high-priority catch-up item should expose the review handoff boundary',
+  );
+  assert.match(
+    (await highCatchUpItem.getAttribute('aria-label')) || '',
+    /点击只打开记忆搜索，不会标已读、代回复、完成任务、改排序或写回来源系统/,
+    'high-priority catch-up item should expose the no-side-effect boundary to assistive tech',
+  );
   await page
     .locator('.catch-up-item', { hasText: 'Harpreet 等你确认 MTR-148115' })
     .waitFor({ timeout: 15000 });
@@ -694,6 +918,14 @@ try {
   await page
     .locator('.catch-up-item.waiting', { hasText: 'Maya 等你确认回归窗口' })
     .waitFor({ timeout: 15000 });
+  const waitingCatchUpItem = page.locator('.catch-up-item.waiting', {
+    hasText: 'Maya 等你确认回归窗口',
+  });
+  assert.match(
+    (await waitingCatchUpItem.getAttribute('aria-label')) || '',
+    /这条含等待回复信号，但仍需你复核来源后再处理/,
+    'waiting catch-up item should not imply an automatic reply',
+  );
   assert.equal(
     await page
       .locator('.catch-up-item.waiting', {
@@ -709,9 +941,7 @@ try {
     }),
   );
   delayFeedbackCardId = visibleDecision.id;
-  await decisionMission
-    .getByRole('button', { name: '从首页移除' })
-    .click();
+  await openClawRemoveButton.click();
   await page
     .locator('.mission-feedback-receipt', {
       hasText: '正在提交反馈：移出首页',
@@ -729,7 +959,7 @@ try {
     })
     .waitFor({ timeout: 15000 });
   assert.equal(
-    await decisionMission.getByRole('button', { name: '从首页移除' }).isDisabled(),
+    await openClawRemoveButton.isDisabled(),
     true,
     'feedback button should stay disabled while Memory Service has not confirmed',
   );
@@ -752,7 +982,7 @@ try {
     timeout: 15000,
   });
   await page
-    .locator('.ranking-chip', { hasText: '0 条证据进入首页 mission' })
+    .locator('.ranking-chip', { hasText: '0 条证据进入当前可见 mission' })
     .waitFor({
       timeout: 15000,
     });
@@ -770,6 +1000,32 @@ try {
     .waitFor({
       timeout: 15000,
     });
+  await page
+    .locator('.source-breakdown-item', {
+      hasText: '动作',
+    })
+    .getByText(
+      '原始 1 · 候选 1 · 当前可见入选 0 · 本页已隐藏入选 1 · 未进入当前可见 1',
+    )
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-item', {
+      hasText: '消息',
+    })
+    .getByText(
+      '原始 3 · 候选 1 · 当前可见入选 0 · 未进入当前可见 1 · 前置降噪 2',
+    )
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-receipt', {
+      hasText: '1 个来源有 1 条本页已隐藏入选证据',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.source-breakdown-receipt', {
+      hasText: '不代表来源任务完成、证据删除或外部系统已同步',
+    })
+    .waitFor({ timeout: 15000 });
   await page
     .locator('.ranking-note', {
       hasText: '当前是反馈后的可见快照',
@@ -891,6 +1147,70 @@ try {
     .locator('.card-ranking-receipt', { hasText: '中隐私风险' })
     .waitFor({ timeout: 15000 });
   await copyableMission
+    .locator('.mission-action-scope-receipt', {
+      hasText: '完成、稍后 6h 或不再提醒同类会等待 Memory Service 写入展示/排序反馈',
+    })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
+    .locator('.mission-action-scope-receipt', {
+      hasText: '不会完成来源任务、标记消息已读、改日历/排程、删除证据、发送或执行外部动作',
+    })
+    .waitFor({ timeout: 15000 });
+  await copyableMission
+    .locator('.mission-action-scope-receipt', {
+      hasText: '复制上下文包只写本机剪贴板，打开详情只导航',
+    })
+    .waitFor({ timeout: 15000 });
+  const doneButton = copyableMission.locator('button.card-action.primary', {
+    hasText: '完成',
+  });
+  const laterButton = copyableMission.locator('button.card-action.secondary', {
+    hasText: '稍后 6h',
+  });
+  const usefulButton = copyableMission.locator('button.card-action.secondary', {
+    hasText: '有用',
+  });
+  const wrongButton = copyableMission.locator('button.card-action.ghost', {
+    hasText: '不准确',
+  });
+  const copyButton = copyableMission.locator('button.card-action.secondary', {
+    hasText: '复制上下文包',
+  });
+  const detailButton = copyableMission.locator('button.card-action.ghost', {
+    hasText: '打开详情',
+  });
+  const muteButton = copyableMission.locator('button.card-action.ghost', {
+    hasText: '不再提醒同类',
+  });
+  assert.match(
+    (await doneButton.getAttribute('aria-label')) || '',
+    /完成：只写 Today Pilot 展示反馈并从今日首页隐藏；不会完成来源任务/,
+  );
+  assert.match(
+    (await laterButton.getAttribute('title')) || '',
+    /稍后 6h：只让 Today Pilot 在 6 小时内不展示这张 mission；不会修改来源排程/,
+  );
+  assert.match(
+    (await usefulButton.getAttribute('aria-label')) || '',
+    /有用：只记录 Today Pilot 排序学习信号；不会批准、发送、执行/,
+  );
+  assert.match(
+    (await wrongButton.getAttribute('title')) || '',
+    /不准确：只记录 Today Pilot 去噪反馈；不会删除原始证据/,
+  );
+  assert.match(
+    (await copyButton.getAttribute('aria-label')) || '',
+    /复制上下文包：只生成\/复制这张 mission 的上下文到本机剪贴板；不会发送给外部 AI/,
+  );
+  assert.match(
+    (await detailButton.getAttribute('title')) || '',
+    /打开详情：只导航到来源或处理页；不会写反馈、完成任务/,
+  );
+  assert.match(
+    (await muteButton.getAttribute('aria-label')) || '',
+    /不再提醒同类：只让同类 Today Pilot source hash 后续降噪或隐藏；不会删除原始记忆/,
+  );
+  await copyableMission
     .locator('.context-preflight-receipt', {
       hasText:
         '当前目标 Codex；生成只读取这张 mission 的 1 条证据，默认脱敏',
@@ -901,9 +1221,7 @@ try {
       hasText: '不会发送给外部 AI、批准/执行或写回来源系统',
     })
     .waitFor({ timeout: 15000 });
-  await copyableMission
-    .getByRole('button', { name: '复制上下文包', exact: true })
-    .click();
+  await copyButton.click();
   await page
     .getByText('已复制 Codex 上下文包（复制正文 1/1 条证据，已脱敏）。')
     .waitFor({ timeout: 15000 });
@@ -931,6 +1249,101 @@ try {
     ),
     'ambient trace should not store raw context pack body',
   );
+
+  await copyableMission
+    .getByRole('button', { name: '生成上下文包', exact: true })
+    .click();
+  await copyableMission
+    .locator('.context-pack pre', { hasText: 'Codex Brief' })
+    .waitFor({ timeout: 15000 });
+  await copyableMission.getByRole('button', { name: 'Claude' }).click();
+  await copyableMission
+    .locator('.context-status-failed', {
+      hasText: '当前没有可复制的 Claude 正文',
+    })
+    .waitFor({ timeout: 15000 });
+  const failedContextPanelText = await copyableMission
+    .locator('.context-pack')
+    .innerText();
+  assert.ok(
+    !failedContextPanelText.includes('Mission: document webpage-mcp link checks'),
+    'failed context pack state should not render the card preview as generated body',
+  );
+  assert.ok(
+    !failedContextPanelText.includes('Codex Brief'),
+    'failed context pack state should not keep showing the previous provider body',
+  );
+
+  currentBrief = baseBrief({
+    id: 'brief-popup-overflow-handoff',
+    attentionBudget: {
+      maxInterruptions: 3,
+      usedInterruptions: 1,
+      plannedInterruptions: [
+        { cardId: visibleDecision.id, reason: 'high priority decision' },
+      ],
+      boardOnlyCardIds: [],
+      quietWindows: [],
+    },
+    sourceStats: {
+      messages: { scanned: 3, totalRecent: 5 },
+      calendar: { scanned: 0, upcoming: 0 },
+      notifications: { scanned: 0, pending: 0 },
+      actions: { scanned: 1, queued: 1 },
+      reflections: { scanned: 0, active: 0 },
+      rehearsals: { scanned: 0, active: 0 },
+      skills: { scanned: 0, suggestions: 0 },
+      relationships: { scanned: 0, highFrequencyPeople: 0 },
+    },
+    cards: [
+      visibleDecision,
+      copyableContextCard,
+      overflowVisibleCard,
+      overflowHiddenCard,
+    ],
+  });
+
+  const overflowPopupPage = await context.newPage();
+  await overflowPopupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await overflowPopupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '筛选口径：显示 3/4 张 mission · 扫描 6 条信号',
+    })
+    .waitFor({ timeout: 15000 });
+  await overflowPopupPage
+    .locator('.today-pilot-scope-receipt', {
+      hasText: '另有 1 张需进首页查看',
+    })
+    .waitFor({ timeout: 15000 });
+  await overflowPopupPage
+    .locator('.today-pilot-scope-handoff', {
+      hasText: '查看全部 4',
+    })
+    .waitFor({ timeout: 15000 });
+  await overflowPopupPage
+    .locator('.today-pilot-scope-handoff', {
+      hasText:
+        'Top 3 之外还有 1 张 mission；打开 Today Pilot 首页只查看完整可见 brief，不会刷新、写反馈、发送消息或执行动作。',
+    })
+    .waitFor({ timeout: 15000 });
+  await assertPopupLayoutWidth(overflowPopupPage);
+  await overflowPopupPage
+    .locator('.today-pilot-card', { hasText: '补齐本周状态快照' })
+    .waitFor({ state: 'detached', timeout: 15000 });
+  const fullBriefPagePromise = context.waitForEvent('page');
+  await overflowPopupPage.getByRole('button', { name: '查看全部 4' }).click();
+  const fullBriefPage = await fullBriefPagePromise;
+  await fullBriefPage.waitForURL(/memory-exploring\.html#\//, {
+    timeout: 15000,
+  });
+  assert.ok(
+    fullBriefPage.url().includes('memory-exploring.html#/'),
+    `overflow handoff should open Today Pilot home, got ${fullBriefPage.url()}`,
+  );
+  await fullBriefPage.close();
+  await overflowPopupPage.close();
 
   currentBrief = baseBrief({
     id: 'brief-popup-external-execution',
@@ -996,6 +1409,18 @@ try {
       hasText: '不会重新扫描来源、写反馈、发送消息或执行动作',
     })
     .waitFor({ timeout: 15000 });
+  const popupRefreshButton = popupPage.locator('.today-pilot-refresh');
+  assert.match(
+    (await popupRefreshButton.getAttribute('title')) || '',
+    /Today Pilot Top 3 (快照|snapshot)/,
+    'popup refresh button should expose the Top 3 snapshot scope before click',
+  );
+  assert.match(
+    (await popupRefreshButton.getAttribute('aria-label')) || '',
+    /不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作|does not mark messages read, complete source tasks, write feedback, send messages, approve, or execute external actions/,
+    'popup refresh button should expose the no-source-side-effect boundary to assistive tech',
+  );
+  await assertPopupLayoutWidth(popupPage);
   await popupDecisionCard
     .getByRole('button', { name: /去处理|Review/ })
     .waitFor({ timeout: 15000 });

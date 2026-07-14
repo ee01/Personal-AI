@@ -4,19 +4,21 @@ import {
 } from '../web-intelligence/contextRecallGuards.js';
 import {
   buildInteractionSceneSnapshot,
+  captureComposerSelectionSnapshot,
   captureComposerTextSnapshot,
   findActiveComposerContext,
   insertTextIntoComposer,
   isComposerElement,
   readComposerText,
+  restoreComposerSelectionSnapshot,
   restoreComposerTextSnapshot,
+  type ComposerSelectionSnapshot,
   type ComposerTextSnapshot,
 } from './siteContextAdapters.js';
 import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
-  buildComposerAssistDraftReceipt,
+  COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS,
   buildComposerAssistInsertionReceipt,
-  buildComposerAssistSourceRouteReceipt,
   buildComposerRehearsalCueScopeLabel,
   getComposerAssistThresholdForSurface,
   getComposerAssistPreviewText,
@@ -25,7 +27,6 @@ import {
   normalizeComposerAssistSurfaceThresholds,
   sanitizeComposerAssistInsertText,
   type ComposerAssistSurfaceThresholds,
-  type ComposerAssistDraftReceipt,
 } from './assistPreviewPolicy.js';
 import {
   CONFIDENCE_THRESHOLD_CONFIG_KEY,
@@ -44,7 +45,7 @@ const ROOT_ID = 'pai-composer-guard-root';
 const STYLE_ID = 'pai-composer-guard-styles';
 const REQUEST_DEBOUNCE_MS = 700;
 const DISMISS_TTL_MS = 30 * 60 * 1000;
-const INSERT_UNDO_TTL_MS = 10 * 1000;
+const INSERT_UNDO_TTL_MS = COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS * 1000;
 const FEEDBACK_RECEIPT_TTL_MS = 4 * 1000;
 const FEEDBACK_EVENTS_KEY = 'composerGuardFeedbackEvents';
 const MAX_FEEDBACK_EVENTS = 100;
@@ -70,6 +71,13 @@ interface ActiveComposerSession {
   contextKey: string;
   draftText: string;
   draftRevision: number;
+}
+
+interface ReviewInsertionSelection {
+  target: ComposerTarget;
+  contextKey: string;
+  draftRevision: number;
+  snapshot: ComposerSelectionSnapshot;
 }
 
 interface ComposerAssistInFlightRequest {
@@ -143,7 +151,7 @@ interface ComposerGuardFeedbackReceipt {
   target: ComposerTarget;
   contextKey?: string;
   snapshot?: SiteContextSnapshot;
-  variant?: 'rejected' | 'inserted';
+  variant?: 'rejected' | 'inserted' | 'preview_send';
   hasRehearsalFeedback?: boolean;
   rehearsalCueScope?: string;
   title?: string;
@@ -160,17 +168,6 @@ interface ComposerGuardFeedbackReceipt {
   structuredFeedbackState?: ComposerGuardStructuredFeedbackState;
   structuredFeedbackError?: string;
   structuredFeedbackTargetCount?: number;
-}
-
-interface ComposerGuardRehearsalReviewReceiptRow {
-  label: string;
-  value: string;
-  tone: 'ok' | 'warn' | 'muted';
-}
-
-interface ComposerGuardRehearsalReviewReceipt {
-  title: string;
-  rows: ComposerGuardRehearsalReviewReceiptRow[];
 }
 
 type ComposerGuardCalibrationState =
@@ -302,16 +299,6 @@ function looksLikeSendableComposerText(text?: string): boolean {
   return true;
 }
 
-function getRehearsalCueLabel(assist: ComposerAssistResponse): string | null {
-  const rehearsal = assist.evidence.find((item) => item.type === 'rehearsal');
-  if (!rehearsal) return null;
-  const cueScope = getComposerRehearsalCueScope(rehearsal);
-  const reasons = rehearsal.whyRelevant?.filter(Boolean).slice(0, 2) ?? [];
-  const fallbackScope = reasons.length ? reasons.join(' / ') : '';
-  const suffix = cueScope || fallbackScope ? ` · 命中线索：${cueScope || fallbackScope}` : '';
-  return `预演提醒${suffix}`;
-}
-
 function getComposerGuardAssistLabel(
   assist: ComposerAssistResponse,
   snapshot: SiteContextSnapshot,
@@ -382,19 +369,6 @@ function hasRehearsalEvidence(assist: ComposerAssistResponse): boolean {
   return assist.evidence.some((item) => item.type === 'rehearsal');
 }
 
-function getComposerGuardReviewNote(assist: ComposerAssistResponse): string {
-  if (assist.suggestionType === 'prompt_patch') {
-    return '提问补丁：确认目标、来源和写回边界适合后，再插入当前 prompt 草稿。';
-  }
-  if (assist.riskLevel === 'high') {
-    return '高风险建议：插入前请先核对事实、语气和敏感信息。';
-  }
-  if (hasRehearsalEvidence(assist)) {
-    return '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。';
-  }
-  return '建议先预览：确认上下文适合后再插入草稿。';
-}
-
 function getComposerFeedbackSurfaceLabel(
   surface?: SiteContextSnapshot['surface'],
 ): string {
@@ -418,34 +392,15 @@ function getComposerFeedbackSurfaceLabel(
   }
 }
 
-function getComposerEvidenceTypeLabel(
-  item: ComposerAssistResponse['evidence'][number],
+function buildComposerAssistRejectBoundary(
+  assist: ComposerAssistResponse | null,
+  snapshot?: SiteContextSnapshot,
 ): string {
-  if (item.type === 'rehearsal') return '预演提醒';
-  if (item.type === 'source_memory') return '资料记忆';
-  if (item.type === 'message') return '消息记忆';
-  if (item.type === 'entity') return '人物/实体';
-  return '记忆片段';
-}
-
-function clipReviewEvidencePart(value?: string, maxLength = 54): string {
-  const normalized = (value || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) return '';
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength).trimEnd()}...`;
-}
-
-function getRehearsalReviewScript(
-  item: ComposerAssistResponse['evidence'][number],
-): string {
-  if (item.type !== 'rehearsal') return '';
-  const rehearsal = asPlainObject(item.metadata?.rehearsal);
-  const content =
-    typeof rehearsal?.content === 'string' ? rehearsal.content : '';
-  const summary =
-    typeof rehearsal?.summary === 'string' ? rehearsal.summary : '';
-  const script = content || summary || item.snippet || '';
-  return clipReviewEvidencePart(script, 92);
+  const surfaceLabel = getComposerFeedbackSurfaceLabel(snapshot?.surface);
+  const rehearsalClause = hasRehearsalFeedbackTarget(assist)
+    ? '；预演降权是否写入以后续回执为准'
+    : '';
+  return `减少这类建议：只隐藏当前建议，让${surfaceLabel}后续更谨慎，并尝试提交脱敏 wrong 校准信号${rehearsalClause}；不会发送/提交草稿、删除来源记忆或静默其他输入框。`;
 }
 
 function getComposerRehearsalCueScope(
@@ -458,203 +413,12 @@ function getComposerRehearsalCueScope(
   });
 }
 
-function getRehearsalStatusLabel(status?: string): string {
-  switch (status) {
-    case 'active':
-      return 'active';
-    case 'candidate':
-      return 'candidate';
-    case 'stale':
-      return 'stale';
-    case 'paused':
-      return 'paused';
-    case 'used':
-      return 'used';
-    case 'dismissed':
-      return 'dismissed';
-    case 'archived':
-      return 'archived';
-    default:
-      return '';
-  }
-}
-
-function getFiniteTimestampSeconds(value: unknown): number | null {
-  const timestamp =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string' && value.trim()
-        ? Number(value)
-        : NaN;
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
-  return timestamp > 1_000_000_000_000 ? timestamp / 1000 : timestamp;
-}
-
-function getRehearsalReviewReadiness(
-  item: ComposerAssistResponse['evidence'][number],
-): ComposerGuardRehearsalReviewReceiptRow {
-  const rehearsalMeta = asPlainObject(item.metadata?.rehearsal);
-  const status =
-    typeof rehearsalMeta?.status === 'string'
-      ? rehearsalMeta.status.trim()
-      : '';
-  const statusLabel = getRehearsalStatusLabel(status);
-  const staleReason =
-    item.whyRelevant?.find((reason) =>
-      /过期|降权|长期未命中|近期未命中|弱提示/.test(reason),
-    ) || '';
-  const validUntil = getFiniteTimestampSeconds(rehearsalMeta?.validUntil);
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const validityLabel =
-    validUntil && validUntil < nowSeconds
-      ? '有效期已过'
-      : validUntil && validUntil - nowSeconds <= 3 * 86400
-        ? '即将过期'
-        : '';
-  const priorityLabel =
-    item.displayPriority === 'p1'
-      ? '强提示'
-      : item.displayPriority === 'p2'
-        ? '弱提示'
-        : item.displayPriority === 'hidden'
-          ? '已隐藏'
-          : '提示资格未返回';
-  const caution =
-    item.displayPriority === 'p1' && status === 'active' && !staleReason
-      ? '线索足够，仍需确认'
-      : '插入前先确认仍适合';
-  const value = [
-    priorityLabel,
-    statusLabel,
-    staleReason,
-    validityLabel,
-    caution,
-  ].filter(Boolean);
-
-  return {
-    label: '提示资格',
-    value: value.join(' · '),
-    tone:
-      item.displayPriority === 'p1' &&
-      status === 'active' &&
-      !staleReason &&
-      !validityLabel
-        ? 'ok'
-        : 'warn',
-  };
-}
-
 function getComposerFeedbackRehearsalCueScope(
   assist: ComposerAssistResponse | null,
 ): string {
   const rehearsal = assist?.evidence.find((item) => item.type === 'rehearsal');
   if (!rehearsal) return '';
   return getComposerRehearsalCueScope(rehearsal);
-}
-
-function getComposerGuardReviewEvidenceLines(
-  assist: ComposerAssistResponse,
-): string[] {
-  return assist.evidence.slice(0, 3).map((item, index) => {
-    const sourceLabel =
-      assist.riskLevel === 'high'
-        ? ''
-        : clipReviewEvidencePart(
-            item.sourceLabel ||
-              String(item.metadata?.sourceType || item.metadata?.source_type || ''),
-            32,
-          );
-    const title =
-      assist.riskLevel === 'high'
-        ? ''
-        : clipReviewEvidencePart(item.sourceTitle || item.title, 54);
-    const reason =
-      assist.riskLevel === 'high'
-        ? ''
-        : clipReviewEvidencePart(
-            item.whyRelevant?.[0] || item.whyMatched || '',
-            64,
-          );
-    const rehearsalScript =
-      assist.riskLevel === 'high' ? '' : getRehearsalReviewScript(item);
-    const cueScope =
-      assist.riskLevel === 'high' ? '' : getComposerRehearsalCueScope(item);
-    const redactionNotice =
-      assist.riskLevel === 'high' ? '来源细节已隐藏' : '';
-    const score =
-      typeof item.score === 'number' && Number.isFinite(item.score)
-        ? `${Math.round(item.score * 100)}%`
-        : '';
-    const parts = [
-      `M${index + 1}`,
-      getComposerEvidenceTypeLabel(item),
-      redactionNotice,
-      sourceLabel,
-      title,
-      score,
-      reason,
-      cueScope ? `命中线索：${cueScope}` : '',
-      rehearsalScript ? `预演内容：${rehearsalScript}` : '',
-    ].filter(Boolean);
-    return parts.join(' · ');
-  });
-}
-
-function getComposerGuardRehearsalReviewReceipt(
-  assist: ComposerAssistResponse,
-): ComposerGuardRehearsalReviewReceipt | null {
-  const rehearsal = assist.evidence.find((item) => item.type === 'rehearsal');
-  if (!rehearsal) return null;
-
-  const cueScope = getComposerRehearsalCueScope(rehearsal);
-  const script =
-    getRehearsalReviewScript(rehearsal) ||
-    clipReviewEvidencePart(rehearsal.snippet, 92) ||
-    '未返回预演脚本，插入前先核对建议正文。';
-
-  return {
-    title: '预演复核',
-    rows: [
-      {
-        label: '命中线索',
-        value: cueScope || '仅有原因短语，按预演建议保守复核',
-        tone: cueScope ? 'ok' : 'warn',
-      },
-      getRehearsalReviewReadiness(rehearsal),
-      {
-        label: '预演脚本',
-        value: script,
-        tone: 'warn',
-      },
-      {
-        label: '插入边界',
-        value: '确认后只写入当前草稿，不发送/提交',
-        tone: 'ok',
-      },
-      {
-        label: '反馈路径',
-        value: '不适合点拇指向下，写入成功后同场景降权',
-        tone: 'muted',
-      },
-    ],
-  };
-}
-
-function getComposerGuardDraftReceipt(
-  assist: ComposerAssistResponse,
-  snapshot: SiteContextSnapshot,
-  reviewRequired: boolean,
-): ComposerAssistDraftReceipt {
-  return buildComposerAssistDraftReceipt({
-    contextType: snapshot.contextType,
-    surface: snapshot.surface,
-    suggestionType: assist.suggestionType,
-    riskLevel: assist.riskLevel,
-    previewRequired: assist.previewRequired,
-    reviewRequired,
-    evidenceTypes: assist.evidence.map((item) => item.type),
-    evidenceCount: assist.evidence.length,
-  });
 }
 
 function asDomElement(value: unknown): Element | null {
@@ -1264,6 +1028,7 @@ export class ComposerGuardController {
   private unhelpfulAssistRetryAtByContext = new Map<string, number>();
   private restoringSnapshot = false;
   private reviewMode = false;
+  private reviewInsertionSelection: ReviewInsertionSelection | null = null;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -1968,31 +1733,13 @@ export class ComposerGuardController {
     root.dataset.state = popoverOpen ? 'review' : state;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     const preview = this.buildSuggestionPreview(assist, popoverOpen);
-    const cueLabel = getRehearsalCueLabel(assist);
     const assistLabel = getComposerGuardAssistLabel(
       assist,
       this.activeSession.snapshot,
     );
-    const reviewEvidenceLines = reviewOpen
-      ? getComposerGuardReviewEvidenceLines(assist)
-      : [];
-    const rehearsalReviewReceipt = reviewOpen
-      ? getComposerGuardRehearsalReviewReceipt(assist)
-      : null;
-    const sourceRouteReceipt = buildComposerAssistSourceRouteReceipt({
-      contextType: this.activeSession.snapshot.contextType,
-      surface: this.activeSession.snapshot.surface,
-      scenario: this.activeSession.snapshot.scenario,
-      suggestionType: assist.suggestionType,
-      provider:
-        this.activeSession.snapshot.provider ||
-        this.activeSession.snapshot.identifiers?.provider,
-      sourceTypes: this.activeSession.snapshot.sourceTypes,
-    });
-    const draftReceipt = getComposerGuardDraftReceipt(
+    const rejectBoundary = buildComposerAssistRejectBoundary(
       assist,
       this.activeSession.snapshot,
-      reviewRequired,
     );
 
     root.innerHTML = `
@@ -2008,98 +1755,21 @@ export class ComposerGuardController {
           <div class="pai-composer-guard-label">${escapeHtml(
             assistLabel.label,
           )}</div>
-          <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="减少这类建议" aria-label="减少这类建议">
+          <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="${escapeHtml(
+            rejectBoundary,
+          )}" aria-label="${escapeHtml(rejectBoundary)}">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M10 15.5v3.1c0 .8.7 1.4 1.5 1.4.5 0 .9-.2 1.2-.6l4.2-5.4c.4-.5.6-1.1.6-1.8V5.6c0-1-.8-1.8-1.8-1.8H7.1c-.7 0-1.4.4-1.7 1L2.7 11c-.5 1.2.4 2.5 1.7 2.5H10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
               <path d="M19 4v10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
           </button>
         </div>
-        ${
-          cueLabel
-            ? `<div class="pai-composer-guard-cue">${escapeHtml(cueLabel)}</div>`
-            : ''
-        }
-        ${
-          reviewRequired
-            ? `<div class="pai-composer-guard-review-note">${escapeHtml(
-                getComposerGuardReviewNote(assist),
-              )}</div>`
-            : ''
-        }
-        ${
-          rehearsalReviewReceipt
-            ? `<div class="pai-composer-guard-draft-receipt pai-composer-guard-rehearsal-review-receipt" aria-label="预演复核">
-                <div class="pai-composer-guard-draft-receipt-title">${escapeHtml(
-                  rehearsalReviewReceipt.title,
-                )}</div>
-                <div class="pai-composer-guard-draft-receipt-rows">
-                  ${rehearsalReviewReceipt.rows
-                    .map(
-                      (row) => `<div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--${escapeHtml(
-                        row.tone,
-                      )}">
-                          <span>${escapeHtml(row.label)}</span>
-                          <strong>${escapeHtml(row.value)}</strong>
-                        </div>`,
-                    )
-                    .join('')}
-                </div>
-              </div>`
-            : ''
-        }
-        <div class="pai-composer-guard-draft-receipt pai-composer-guard-source-route-receipt" aria-label="来源路由">
-                <div class="pai-composer-guard-draft-receipt-title">${escapeHtml(
-                  sourceRouteReceipt.title,
-                )}</div>
-                <div class="pai-composer-guard-draft-receipt-rows">
-                  ${sourceRouteReceipt.rows
-                    .map(
-                      (row) => `<div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--${escapeHtml(
-                        row.tone,
-                      )}">
-                          <span>${escapeHtml(row.label)}</span>
-                          <strong>${escapeHtml(row.value)}</strong>
-                        </div>`,
-                    )
-                    .join('')}
-                </div>
-              </div>
-        <div class="pai-composer-guard-draft-receipt" aria-label="草稿回执">
-          <div class="pai-composer-guard-draft-receipt-title">${escapeHtml(
-            draftReceipt.title,
-          )}</div>
-          <div class="pai-composer-guard-draft-receipt-rows">
-            ${draftReceipt.rows
-              .map(
-                (row) => `<div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--${escapeHtml(
-                  row.tone,
-                )}">
-                    <span>${escapeHtml(row.label)}</span>
-                    <strong>${escapeHtml(row.value)}</strong>
-                  </div>`,
-              )
-              .join('')}
-          </div>
-        </div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
-        ${
-          reviewEvidenceLines.length
-            ? `<div class="pai-composer-guard-review-evidence" aria-label="建议依据">
-                <div class="pai-composer-guard-review-evidence-title">建议依据</div>
-                <ul>
-                  ${reviewEvidenceLines
-                    .map((line) => `<li>${escapeHtml(line)}</li>`)
-                    .join('')}
-                </ul>
-              </div>`
-            : ''
-        }
         ${
           reviewOpen
             ? `<div class="pai-composer-guard-actions">
                 <button class="pai-composer-guard-secondary-action" data-action="close-review" type="button">取消</button>
-                <button class="pai-composer-guard-primary-action" data-action="confirm-insert" type="button">插入</button>
+                <button class="pai-composer-guard-primary-action" data-action="confirm-insert" type="button">插入草稿</button>
               </div>`
             : ''
         }
@@ -2148,13 +1818,13 @@ export class ComposerGuardController {
     confirmInsertButton?.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.insertLatestAssist();
+      this.insertLatestAssist(this.getRestorableReviewInsertionSelection());
     });
     confirmInsertButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       if ((event as MouseEvent).detail === 0) {
-        this.insertLatestAssist();
+        this.insertLatestAssist(this.getRestorableReviewInsertionSelection());
       }
     });
     const closeReviewButton = root.querySelector('[data-action="close-review"]');
@@ -2207,16 +1877,49 @@ export class ComposerGuardController {
     if (!this.hasInsertableAssist(this.latestAssist)) {
       return;
     }
+    const insertionSelection = this.captureReviewInsertionSelection();
     if (
       shouldReviewComposerAssistBeforeInsert(this.latestAssist) &&
       !this.reviewMode
     ) {
       this.reviewMode = true;
+      this.reviewInsertionSelection = insertionSelection;
       this.rememberPreviewedAssist();
       this.render('ready');
       return;
     }
-    this.insertLatestAssist();
+    this.insertLatestAssist(insertionSelection?.snapshot ?? null);
+  }
+
+  private captureReviewInsertionSelection(): ReviewInsertionSelection | null {
+    if (!this.activeSession) return null;
+    const snapshot = captureComposerSelectionSnapshot(this.activeSession.target);
+    if (!snapshot) return null;
+    return {
+      target: this.activeSession.target,
+      contextKey: this.activeSession.contextKey,
+      draftRevision: this.activeSession.draftRevision,
+      snapshot,
+    };
+  }
+
+  private getRestorableReviewInsertionSelection():
+    | ComposerSelectionSnapshot
+    | null {
+    if (!this.activeSession || !this.reviewInsertionSelection) return null;
+    const saved = this.reviewInsertionSelection;
+    if (
+      saved.target.element !== this.activeSession.target.element ||
+      saved.contextKey !== this.activeSession.contextKey ||
+      saved.draftRevision !== this.activeSession.draftRevision
+    ) {
+      return null;
+    }
+    return saved.snapshot;
+  }
+
+  private clearReviewInsertionSelection(): void {
+    this.reviewInsertionSelection = null;
   }
 
   private isLatestAssistCurrentForInsertion(): boolean {
@@ -2245,6 +1948,7 @@ export class ComposerGuardController {
 
   private clearLatestAssistForStaleDraft(): void {
     this.reviewMode = false;
+    this.clearReviewInsertionSelection();
     this.latestAssist = null;
     this.latestAssistContextKey = null;
     this.latestAssistDraftRevision = null;
@@ -2273,6 +1977,7 @@ export class ComposerGuardController {
   private closeReviewMode(): void {
     if (!this.reviewMode) return;
     this.reviewMode = false;
+    this.clearReviewInsertionSelection();
     if (this.hasUsefulAssist()) {
       this.render('ready');
       return;
@@ -2297,6 +2002,7 @@ export class ComposerGuardController {
     const calibrationTrace = this.recordAmbientWrongTrace();
     this.clearPreviewedAssistDraft(contextKey);
     this.reviewMode = false;
+    this.clearReviewInsertionSelection();
     this.clearInsertionUndo(true);
     this.setTargetGlow(false);
     this.activeSession = null;
@@ -2365,7 +2071,9 @@ export class ComposerGuardController {
     }
   }
 
-  private insertLatestAssist(): void {
+  private insertLatestAssist(
+    selectionSnapshot: ComposerSelectionSnapshot | null = null,
+  ): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
     const target = this.activeSession.target;
     const contextKey = this.activeSession.contextKey;
@@ -2380,6 +2088,7 @@ export class ComposerGuardController {
       this.latestAssist.insertText,
     );
     if (!insertText) return;
+    restoreComposerSelectionSnapshot(target, selectionSnapshot);
     this.restoringSnapshot = true;
     let inserted = false;
     try {
@@ -2391,6 +2100,7 @@ export class ComposerGuardController {
     }
     if (!inserted) {
       this.reviewMode = false;
+      this.clearReviewInsertionSelection();
       this.setTargetGlow(false);
       this.activeSession = null;
       this.latestAssist = null;
@@ -2407,6 +2117,7 @@ export class ComposerGuardController {
       });
       return;
     }
+    this.clearReviewInsertionSelection();
     this.clear();
     this.showInsertionUndo({
       target,
@@ -2874,9 +2585,10 @@ export class ComposerGuardController {
       finalText,
       'without_insert',
     );
-    void this.submitAmbientCalibrationTrace(
+    const calibrationTrace = this.submitAmbientCalibrationTrace(
       this.buildAmbientTracePayload(preview, summary, trigger),
     );
+    this.showPreviewSendCalibrationReceipt(preview, calibrationTrace);
     preview.sendTraceRecorded = true;
     this.previewedAssistDraft = null;
     this.previewObservationCandidate = null;
@@ -3119,6 +2831,7 @@ export class ComposerGuardController {
       this.requestTimer = null;
     }
     this.reviewMode = false;
+    this.clearReviewInsertionSelection();
     this.cancelPreviewObservation();
     this.clearFeedbackReceipt(false);
     this.clearInsertionUndo(true);
@@ -3132,6 +2845,7 @@ export class ComposerGuardController {
 
   private removeAffordance(): void {
     this.reviewMode = false;
+    this.clearReviewInsertionSelection();
     this.cancelPreviewObservation();
     this.clearFeedbackReceipt(false);
     this.clearInsertionUndo(true);
@@ -3250,6 +2964,9 @@ export class ComposerGuardController {
     if (receipt.variant === 'inserted') {
       return this.getInsertionCommitReceiptDetail(receipt);
     }
+    if (receipt.variant === 'preview_send') {
+      return this.getPreviewSendReceiptDetail(receipt);
+    }
     if (receipt.detail) return receipt.detail;
     const surfaceLabel = getComposerFeedbackSurfaceLabel(
       receipt.snapshot?.surface,
@@ -3260,6 +2977,9 @@ export class ComposerGuardController {
     const baseDetail = receipt.hasRehearsalFeedback
       ? `${rehearsalScope}${surfaceLabel}也会更谨慎；换个 prompt 仍会重新判断。`
       : `${surfaceLabel}会更谨慎；换个 prompt 仍会重新判断。`;
+    const boundaryDetail = receipt.hasRehearsalFeedback
+      ? '本次点击只隐藏当前建议；不会发送/提交草稿、删除来源记忆或关闭其他输入框建议，预演降权等后台写入以下方回执为准。'
+      : '本次点击只隐藏当前建议；不会发送/提交草稿、删除来源记忆或关闭其他输入框建议。';
     const thresholdDetail = this.getFeedbackThresholdDetail(receipt);
     const structuredFeedbackDetail = this.getStructuredFeedbackDetail(receipt);
     let calibrationDetail = '只保存脱敏校准信号。';
@@ -3283,10 +3003,46 @@ export class ComposerGuardController {
 
     return [
       baseDetail,
+      boundaryDetail,
       thresholdDetail,
       structuredFeedbackDetail,
       calibrationDetail,
     ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private getPreviewSendReceiptDetail(
+    receipt: ComposerGuardFeedbackReceipt,
+  ): string {
+    const surfaceLabel = getComposerFeedbackSurfaceLabel(
+      receipt.snapshot?.surface,
+    );
+    const baseDetail =
+      '你看过建议后自行发送了回复；这只作为建议时机/措辞校准，不代表你拒绝所有建议。';
+    const boundaryDetail = `${surfaceLabel}不会被全局静默；不会发送/提交额外内容、删除来源记忆或写入完整草稿。`;
+    let calibrationDetail = '';
+
+    if (receipt.calibrationState === 'pending') {
+      calibrationDetail =
+        'sent_without_insert 脱敏校准信号正在提交，只包含 hash、长度、tag 和证据引用。';
+    } else if (receipt.calibrationState === 'stored') {
+      calibrationDetail =
+        '已记录 sent_without_insert 校准信号，只保存脱敏摘要。';
+    } else if (receipt.calibrationState === 'duplicate') {
+      calibrationDetail =
+        'sent_without_insert 校准回执重复，未新增写入；仍只保存脱敏摘要。';
+    } else if (receipt.calibrationState === 'failed') {
+      const error = clipCalibrationError(receipt.calibrationError);
+      calibrationDetail = `未插入校准未写入${
+        error ? `：${error}` : ''
+      }；你的回复仍只由原页面发送。`;
+    } else if (receipt.calibrationState === 'unavailable') {
+      calibrationDetail =
+        '当前页面无法连接校准通道，未写入学习信号；你的回复仍只由原页面发送。';
+    }
+
+    return [baseDetail, boundaryDetail, calibrationDetail]
       .filter(Boolean)
       .join(' ');
   }
@@ -3472,6 +3228,28 @@ export class ComposerGuardController {
                 : 'context_recall_feedback_failed',
           });
         });
+    }
+  }
+
+  private showPreviewSendCalibrationReceipt(
+    draft: AmbientAssistDraft,
+    calibrationTrace: Promise<ComposerGuardAmbientTraceSubmitResult> | null,
+  ): void {
+    this.showFeedbackReceipt({
+      target: draft.target,
+      contextKey: draft.contextKey,
+      snapshot: draft.feedbackContext.snapshot,
+      variant: 'preview_send',
+      title: '已记录未插入校准',
+      calibrationState: calibrationTrace ? 'pending' : 'unavailable',
+      calibrationError: calibrationTrace
+        ? undefined
+        : 'ambient_calibration_trace_unavailable',
+    });
+    if (calibrationTrace) {
+      void calibrationTrace.then((result) => {
+        this.updateFeedbackReceiptCalibrationState(draft.contextKey, result);
+      });
     }
   }
 

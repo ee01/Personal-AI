@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildMeetingPilotLiveFeedReceipt,
   buildMeetingPilotLiveFeedItems,
   getVisibleMeetingMemoryCueRefs,
   normalizeMeetingFeedTimestamp,
@@ -95,11 +96,22 @@ test('buildMeetingPilotLiveFeedItems omits promoted and hidden memories', () => 
   });
 
   const items = buildMeetingPilotLiveFeedItems(session, [promoted]);
+  const receipt = buildMeetingPilotLiveFeedReceipt(session, [promoted]);
 
   assert.deepEqual(
     items.map((item) => `${item.kind}:${item.id}`),
     ['memory:overflow-memory', 'alert:alert-1'],
   );
+  assert.equal(receipt.surfacedAlertCount, 1);
+  assert.equal(receipt.filteredContextAlertCount, 1);
+  assert.equal(receipt.promotedMemoryCount, 1);
+  assert.equal(receipt.feedMemoryCount, 1);
+  assert.equal(receipt.hiddenMemoryCount, 1);
+  assert.match(receipt.summary, /显示 1 条可操作会中提醒/);
+  assert.match(receipt.summary, /降噪 1 条纯上下文刷新/);
+  assert.match(receipt.summary, /顶部已提升 1 条关联记忆/);
+  assert.match(receipt.boundary, /当前页面可见切片/);
+  assert.match(receipt.boundary, /不会标记提醒已处理/);
 });
 
 test('normalizeMeetingFeedTimestamp accepts seconds and milliseconds', () => {

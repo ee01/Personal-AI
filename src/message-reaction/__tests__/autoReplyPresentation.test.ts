@@ -6,6 +6,7 @@ import {
   buildAutoReplyContentReadinessReceipt,
   buildAutoReplyModeReceipt,
   buildAutoReplyRuleScopeReceipt,
+  buildAutoReplySaveButtonBoundary,
   buildAutoReplyTopic,
   normalizeAutoReplyContent,
   normalizeAutoReplyDelayHours,
@@ -213,4 +214,37 @@ test('buildAutoReplyRuleScopeReceipt carries explicit scope and manual approval 
   assert.match(receipt.queueText, /PendingReview 行/);
   assert.match(receipt.queueText, /批准某一行后/);
   assert.match(receipt.queueText, /拒绝只关闭该行/);
+});
+
+test('buildAutoReplySaveButtonBoundary mirrors scope, runtime, and readiness at the save control', () => {
+  const receipt = buildAutoReplySaveButtonBoundary({
+    action: 'create',
+    filterGroup: 'Support Handoff',
+    reviewMode: 'manual',
+    useAIGenerate: false,
+    replyContent: '',
+    isSilentAnalysisEnabled: false,
+  });
+
+  assert.match(receipt, /确认添加自动答复规则/);
+  assert.match(receipt, /群组 Support Handoff/);
+  assert.match(receipt, /后台静默消息分析未启用时只保存本机规则/);
+  assert.match(receipt, /PendingReview 行/);
+  assert.match(receipt, /固定回复未就绪/);
+  assert.match(receipt, /跳过，不创建空回复队列行/);
+  assert.match(receipt, /不会立即发送当前消息/);
+
+  const directReceipt = buildAutoReplySaveButtonBoundary({
+    action: 'edit',
+    reviewMode: 'immediate',
+    useAIGenerate: true,
+    replyContent: 'Thanks, I will check.',
+    isSilentAnalysisEnabled: true,
+  });
+
+  assert.match(directReceipt, /保存自动答复规则修改/);
+  assert.match(directReceipt, /未限定发送人或群组/);
+  assert.match(directReceipt, /后续分析的新消息/);
+  assert.match(directReceipt, /下一分钟发送/);
+  assert.match(directReceipt, /AI 生成 \+ 固定 fallback 就绪/);
 });

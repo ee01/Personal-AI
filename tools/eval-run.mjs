@@ -124,7 +124,7 @@ async function runSuite(selection) {
   const caseResults = [];
   for (const caseItem of cases) {
     const caseResult = await runCase({ suite, caseItem, runDir });
-    caseResults.push(caseResult);
+    caseResults.push(attachCaseMetadataToResult(caseResult, caseItem));
   }
 
   const reportContract = applyReportContract(caseResults);
@@ -148,6 +148,17 @@ async function runSuite(selection) {
   };
   await writeSummary(runDir, summary, caseResults);
   return { ...summary, reportPath };
+}
+
+function attachCaseMetadataToResult(caseResult, caseItem) {
+  return {
+    ...caseResult,
+    manualVerification:
+      caseResult.manualVerification ||
+      caseItem.manualVerification ||
+      caseItem.expectedBehavior?.manualVerification ||
+      null,
+  };
 }
 
 async function runCase({ suite, caseItem, runDir }) {
@@ -3018,7 +3029,7 @@ ${failures.map((item) => `- ${item.caseId}: ${item.why || item.error || item.ver
 Instructions:
 - Inspect the run artifacts before editing.
 - Keep changes scoped to allowed paths.
-- Preserve the Eval Report Reader Contract: every runnable case must normalize into caseGoal, inputSummary, expectedSummary, actualSummary, proofChecks, conclusion, nextSteps, and debug artifact links.
+- Preserve the Eval Report Reader Contract: every runnable case must normalize into caseGoal, inputSummary, expectedSummary, actualSummary, proofChecks, conclusion, nextSteps, optional manualVerification, and debug artifact links.
 - Do not commit or deploy.
 - After editing, run the listed validation commands if practical.
 - Leave a concise final summary of changed files and validation results.
@@ -3222,6 +3233,7 @@ function buildReaderCase(item, index) {
       outcomeSignals: buildReaderOutcomeSignalsFromProof(proof),
       conclusion: item.userConclusion || item.why || '-',
       nextSteps: item.improvementSuggestions || [],
+      manualVerification: normalizeManualVerification(item.manualVerification),
       debugLinks: buildReaderDebugLinks(),
       scores: item.scores || {},
       reportContract: item.reportContract,
@@ -3242,10 +3254,42 @@ function buildReaderCase(item, index) {
     outcomeSignals: buildReaderOutcomeSignals(item),
     conclusion: item.userConclusion || item.why || item.reason || '-',
     nextSteps: item.improvementSuggestions || [],
+    manualVerification: normalizeManualVerification(item.manualVerification),
     debugLinks: buildReaderDebugLinks(),
     scores: item.scores || {},
     reportContract: item.reportContract,
   };
+}
+
+function normalizeManualVerification(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    return { title: '手动体验验证', steps: [value] };
+  }
+  if (Array.isArray(value)) {
+    return { title: '手动体验验证', steps: normalizeArray(value) };
+  }
+  if (typeof value !== 'object') return null;
+
+  const normalized = {
+    title: value.title || '手动体验验证',
+    summary: value.summary || value.applicability || value.description || '',
+    prerequisites: normalizeArray(value.prerequisites || value.setup),
+    steps: normalizeArray(value.steps),
+    expected: normalizeArray(value.expected || value.expectedResults),
+    cleanup: normalizeArray(value.cleanup || value.teardown),
+    evidence: normalizeArray(value.evidence || value.evidenceToKeep),
+  };
+
+  const hasContent = [
+    normalized.summary,
+    ...normalized.prerequisites,
+    ...normalized.steps,
+    ...normalized.expected,
+    ...normalized.cleanup,
+    ...normalized.evidence,
+  ].some(Boolean);
+  return hasContent ? normalized : null;
 }
 
 function readableCaseKind(item) {
@@ -3559,6 +3603,8 @@ function renderReaderCaseCard(item, index) {
       </div>
     </div>
 
+    ${renderManualVerification(item.manualVerification)}
+
     <div class="debug-links">
       <h4>完整 debug 在这里</h4>
       ${renderReaderDebugLinks(item.debugLinks || [])}
@@ -3567,6 +3613,36 @@ function renderReaderCaseCard(item, index) {
     ${renderCaseReportContract(item)}
     <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
   </article>`;
+}
+
+function renderManualVerification(manualVerification) {
+  const manual = normalizeManualVerification(manualVerification);
+  if (!manual) return '';
+  const sections = [
+    ['准备', manual.prerequisites],
+    ['操作步骤', manual.steps],
+    ['预期结果', manual.expected],
+    ['清理', manual.cleanup],
+    ['保留证据', manual.evidence],
+  ].filter(([, items]) => items?.length);
+
+  return `<div class="manual-verification">
+    <div class="manual-verification-head">
+      <div>
+        <h4>${escapeHtml(manual.title || '手动体验验证')}</h4>
+        ${manual.summary ? `<p>${escapeHtml(manual.summary)}</p>` : ''}
+      </div>
+      <span>不计入自动判分</span>
+    </div>
+    ${sections.length ? `<div class="manual-verification-grid">
+      ${sections.map(([label, items]) => `<div>
+        <strong>${escapeHtml(label)}</strong>
+        ${label === '操作步骤'
+          ? `<ol>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ol>`
+          : `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`}
+      </div>`).join('')}
+    </div>` : ''}
+  </div>`;
 }
 
 function renderReaderOutcomeSignals(signals) {
@@ -5348,6 +5424,48 @@ function buildHtmlShell({ title, body }) {
     .proof-callout p { margin: 0; font-weight: 650; color: #243047; }
     .proof-callout-good { border-color: #b6ded4; background: #f3fbf8; }
     .proof-callout-neutral { border-color: #d0d5dd; background: #f8fafc; }
+    .manual-verification {
+      margin-top: 16px;
+      border: 1px solid #b9d5e8;
+      border-radius: 8px;
+      padding: 14px;
+      background: #f5fbff;
+    }
+    .manual-verification-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .manual-verification-head h4 { margin-bottom: 4px; color: #175cd3; }
+    .manual-verification-head p { margin: 0; color: #475467; }
+    .manual-verification-head span {
+      flex: 0 0 auto;
+      border: 1px solid #b9d5e8;
+      border-radius: 999px;
+      padding: 3px 9px;
+      background: #fff;
+      color: #175cd3;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .manual-verification-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .manual-verification-grid div {
+      min-width: 0;
+      border: 1px solid #d6eaf8;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .manual-verification-grid strong { display: block; color: #243047; font-size: 13px; }
+    .manual-verification-grid ol,
+    .manual-verification-grid ul { margin: 8px 0 0; padding-left: 18px; }
+    .manual-verification-grid li { margin: 5px 0; overflow-wrap: anywhere; }
     .cue-quote {
       margin: 0 0 12px;
       padding: 12px 14px;

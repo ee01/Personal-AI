@@ -381,7 +381,7 @@ function formatEffectiveStatusBoundary(
     case 'dismissed':
       return '已忽略不回滚';
     case 'delivered':
-      return '曾已送达';
+      return '曾已送达，不等于已处理';
     case 'failed':
       return '未送达';
     default:
@@ -484,14 +484,19 @@ export function buildBackendNotificationContextMessage(
   const snoozeLabel =
     getSnoozeReceiptContextLabel(snoozeReceipt) ||
     getSnoozeReminderContextLabel(payload);
+  const hasSnoozeContext = Boolean(snoozeLabel);
   if (snoozeLabel) {
     parts.push(snoozeLabel);
+    parts.push('仍未处理');
   }
   if (deliveryContext?.reason === 'retry_after_cooldown') {
     parts.push('再次提醒');
   } else if (deliveryContext?.reason === 'previous_delivery_failed') {
     parts.push(formatDeliveryFailureContext(deliveryContext));
-  } else if (deliveryContext?.reason === 'already_delivered_unfinished') {
+  } else if (
+    deliveryContext?.reason === 'already_delivered_unfinished' &&
+    !hasSnoozeContext
+  ) {
     parts.push('仍待处理');
   }
   const channelReceiptSummary = formatChannelReceiptSummary(
@@ -499,6 +504,9 @@ export function buildBackendNotificationContextMessage(
     deliveryContext?.channel,
   );
   if (channelReceiptSummary) {
+    if (deliveryContext?.reason === 'new') {
+      parts.push('本渠道首次提醒');
+    }
     parts.push(`其他渠道 ${channelReceiptSummary}`);
   }
   const snoozeActionHint = buildBackendNotificationSnoozeActionHint(

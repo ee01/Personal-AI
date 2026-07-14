@@ -59,6 +59,16 @@ function jsonResponse(body, status = 200) {
   };
 }
 
+async function assertControlBoundary(locator, expectedPatterns) {
+  const title = (await locator.getAttribute('title')) || '';
+  const ariaLabel = (await locator.getAttribute('aria-label')) || '';
+  assert.ok(title, 'control should expose title boundary');
+  assert.equal(ariaLabel, title, 'aria-label should mirror title boundary');
+  for (const pattern of expectedPatterns) {
+    assert.match(title, pattern);
+  }
+}
+
 function emptyList() {
   return { items: [], total: 0, limit: 50 };
 }
@@ -441,9 +451,14 @@ try {
   );
   await deepLinkTargetCard.waitFor({ timeout: 10000 });
   delayNextRiskAnswer = true;
-  const approveClick = deepLinkTargetCard
-    .getByRole('button', { name: '批准执行' })
-    .click();
+  const deepLinkApproveButton = deepLinkTargetCard.getByRole('button', {
+    name: '批准执行',
+  });
+  await assertControlBoundary(deepLinkApproveButton, [
+    /提交「批准执行」到 Memory Service/,
+    /普通审批文案不会直接续跑 OpenClaw/,
+  ]);
+  const approveClick = deepLinkApproveButton.click();
   await deepLinkTargetCard
     .getByText('正在提交决策')
     .waitFor({ timeout: 10000 });
@@ -523,6 +538,11 @@ try {
 
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   await page.getByText('审核上下文').waitFor({ timeout: 10000 });
+  const refreshButton = page.getByRole('button', { name: /刷新决策中心/ });
+  await assertControlBoundary(refreshButton, [
+    /重新读取需你拍板、稍后决策、待观察和待观察（稍后）队列/,
+    /不会批准、恢复、结束追踪、创建动作、发送消息/,
+  ]);
   await page.getByText('处理选项：批准执行 / 拒绝执行 / 需要更多上下文').waitFor({
     timeout: 10000,
   });
@@ -537,7 +557,7 @@ try {
     .waitFor({ timeout: 10000 });
 
   failWatchRequests = true;
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await refreshButton.click();
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   await page.getByText('部分队列刷新失败').waitFor({ timeout: 10000 });
   await page.getByText(/失败队列：待观察/).waitFor({ timeout: 10000 });
@@ -546,11 +566,21 @@ try {
   });
 
   failWatchRequests = false;
-  await page.getByRole('button', { name: '重试全部' }).click();
+  const retryAllButton = page.getByRole('button', { name: '重试全部' });
+  await assertControlBoundary(retryAllButton, [
+    /重试全部队列/,
+    /只刷新 Memory Service 队列快照/,
+  ]);
+  await retryAllButton.click();
   await page
     .getByText('部分队列刷新失败')
     .waitFor({ state: 'detached', timeout: 10000 });
-  await page.locator('.watch-section .watch-toggle').click();
+  const watchToggle = page.locator('.watch-section .watch-toggle');
+  await assertControlBoundary(watchToggle, [
+    /展开待观察/,
+    /只改变本页待观察池的可见状态/,
+  ]);
+  await watchToggle.click();
   await page
     .getByText('立即查证只会排入或复用一条只读 OpenClaw 查证动作')
     .waitFor({ timeout: 10000 });
@@ -560,8 +590,21 @@ try {
   await page
     .getByText('继续观察只延后 72 小时')
     .waitFor({ timeout: 10000 });
+  const verifyButton = page.getByRole('button', { name: /^立即查证：/ });
+  await assertControlBoundary(verifyButton, [
+    /创建或复用只读 OpenClaw 查证动作/,
+    /不会立刻确认事实、替你拍板、提交答案/,
+  ]);
+  await assertControlBoundary(page.getByRole('button', { name: /^继续观察：/ }), [
+    /只把观察项延后约 72 小时/,
+    /不会创建新的外部动作/,
+  ]);
+  await assertControlBoundary(page.getByRole('button', { name: /^结束追踪：/ }), [
+    /设为 expired/,
+    /不会删除原始证据/,
+  ]);
   delayNextWatchState = true;
-  const verifyClick = page.getByRole('button', { name: '立即查证' }).click();
+  const verifyClick = verifyButton.click();
   await page.getByText('正在排入只读查证').waitFor({ timeout: 10000 });
   await page
     .getByText(/返回前还没有动作 ID 或排队结果/)
@@ -585,22 +628,61 @@ try {
   });
   await page.getByText('另有 1 条').waitFor({ timeout: 10000 });
 
-  await page.getByRole('button', { name: '复制审核包' }).click();
-  await page.getByText('已复制审核包').waitFor({ timeout: 10000 });
+  const copyReviewButton = page.getByRole('button', { name: '复制审核包' });
+  await assertControlBoundary(copyReviewButton, [
+    /复制当前决策快照/,
+    /5 条证据引用，含本页折叠的 1 条/,
+    /不会提交答案、更新规则、续跑 OpenClaw/,
+  ]);
+  await copyReviewButton.click();
+  await page.getByText('审核包复制回执').waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      '已复制当前决策快照：3 个处理选项、5 条证据引用（含本页折叠的 1 条）',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('这只是本机剪贴板 handoff，不会提交答案')
+    .waitFor({ timeout: 10000 });
   const copiedText = await page.evaluate(
     () => window.__decisionCenterCopiedText,
   );
   assert.match(copiedText, /OpenClaw 继续查询生产部署状态/);
   assert.match(copiedText, /处理选项: 批准执行 \/ 拒绝执行 \/ 需要更多上下文/);
   assert.match(copiedText, /action:action-risky-deploy-approval-1/);
+  assert.match(copiedText, /处理边界:/);
+  assert.match(copiedText, /普通审批文案不会直接续跑 OpenClaw/);
 
-  await page.getByRole('button', { name: '稍后再决定' }).click();
+  const noteToggle = page.getByRole('button', { name: '添加备注' });
+  await assertControlBoundary(noteToggle, [
+    /只展开或收起本卡的可选备注草稿/,
+    /不会单独写入、提交答案、改变队列状态/,
+  ]);
+  await noteToggle.click();
+  await page.getByPlaceholder('可选：补充说明...').waitFor({
+    timeout: 10000,
+  });
+  const closeNoteToggle = page.getByRole('button', { name: '收起备注' });
+  await assertControlBoundary(closeNoteToggle, [/收起备注/, /备注只有随答案提交时才会保存/]);
+  await closeNoteToggle.click();
+
+  const snoozeButton = page.getByRole('button', { name: '稍后再决定' });
+  await assertControlBoundary(snoozeButton, [
+    /写为 snoozed 并收起约 24 小时/,
+    /不会提交答案、创建外部动作/,
+  ]);
+  await snoozeButton.click();
   await page.getByText('已移到稍后决策').waitFor({ timeout: 10000 });
   await page
     .getByText('没有提交答案，也没有创建外部动作')
     .waitFor({ timeout: 10000 });
   await page.getByText('决策中心 (0)').waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: /稍后决策/ }).click();
+  const deferredToggle = page.getByRole('button', { name: /展开稍后决策/ });
+  await assertControlBoundary(deferredToggle, [
+    /只改变本页稍后决策列表的可见状态/,
+    /不会恢复到主队列、提交答案/,
+  ]);
+  await deferredToggle.click();
   await page.getByText('稍后处理上下文').waitFor({ timeout: 10000 });
   await page
     .getByText('现在处理只恢复到主队列')
@@ -612,24 +694,42 @@ try {
     .locator('.deferred-card .meta-row')
     .getByText(/回到主队列/)
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '现在处理' }).click();
+  const restoreButton = page.getByRole('button', { name: '现在处理' });
+  await assertControlBoundary(restoreButton, [
+    /只把稍后决策恢复到主队列/,
+    /不会替你选择答案、恢复外部动作/,
+  ]);
+  await restoreButton.click();
   await page.getByText('已恢复到需你拍板').waitFor({ timeout: 10000 });
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   assert.deepEqual(stateRequests, [{ state: 'snoozed' }, { state: 'pending' }]);
 
-  await page.getByRole('button', { name: '批准执行' }).click();
+  const approveButton = page.getByRole('button', { name: '批准执行' });
+  await assertControlBoundary(approveButton, [
+    /提交「批准执行」到 Memory Service/,
+    /普通审批文案不会直接续跑 OpenClaw/,
+  ]);
+  await approveButton.click();
   await page.getByText('决策已提交').waitFor({ timeout: 10000 });
   await page.getByText('已提交「批准执行」').waitFor({ timeout: 10000 });
   await page.getByText('决策中心 (0)').waitFor({ timeout: 10000 });
   assert.deepEqual(answerRequests, [{ answer: 'approve' }]);
 
   retryDecisionState = 'pending';
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('button', { name: /刷新决策中心/ }).click();
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   await page
     .getByText('只有 retry / skip_once / stop 这类明确选项会续跑、跳过或停止绑定动作')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '配置好了，请重试' }).click();
+  const retryActionButton = page.getByRole('button', {
+    name: '配置好了，请重试',
+  });
+  await assertControlBoundary(retryActionButton, [
+    /提交「配置好了，请重试」到 Memory Service/,
+    /会请求续跑绑定动作/,
+    /真实执行结果以服务端回执和动作队列为准/,
+  ]);
+  await retryActionButton.click();
   await page.getByText('已提交并续跑动作').waitFor({ timeout: 10000 });
   await page.getByText(/动作 action-openclaw-retry-1/).waitFor({
     timeout: 10000,
@@ -643,7 +743,7 @@ try {
   assert.deepEqual(answerRequests, [{ answer: 'approve' }, { answer: 'retry' }]);
 
   ruleImprovementState = 'pending';
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('button', { name: /刷新决策中心/ }).click();
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   await page.getByText('补充 Glip 状态写入前的只读查证边界').waitFor({
     timeout: 10000,
@@ -657,18 +757,32 @@ try {
   await page
     .getByText('在规则页保存后才会更新本机手动规则')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '打开并预填建议' }).waitFor({
+  const openRuleButton = page.getByRole('button', { name: '打开并预填建议' });
+  await openRuleButton.waitFor({
     timeout: 10000,
   });
+  await assertControlBoundary(openRuleButton, [
+    /只把规则改进建议暂存到本机/,
+    /保存前不会更新原规则/,
+  ]);
   await page.getByRole('button', { name: '复制审核包' }).click();
-  await page.getByText('已复制审核包').waitFor({ timeout: 10000 });
+  await page.getByText('审核包复制回执').waitFor({ timeout: 10000 });
+  await page
+    .getByText('已复制当前决策快照：2 个处理选项、2 条证据引用')
+    .waitFor({ timeout: 10000 });
   const copiedRuleText = await page.evaluate(
     () => window.__decisionCenterCopiedText,
   );
   assert.match(copiedRuleText, /处理选项: 打开并预填建议 \/ 忽略建议/);
-  assert.match(copiedRuleText, /保存前不会更新原规则或标记确认项/);
+  assert.match(copiedRuleText, /处理边界:/);
+  assert.match(copiedRuleText, /保存前不会更新原规则，也不会把确认项标记为已应用/);
   assert.match(copiedRuleText, /message_rule:manual:pto-rule/);
-  await page.getByRole('button', { name: '忽略' }).click();
+  const dismissRuleButton = page.getByRole('button', { name: '忽略建议' });
+  await assertControlBoundary(dismissRuleButton, [
+    /提交 dismissed 并移出主队列/,
+    /不会修改规则、创建外部动作/,
+  ]);
+  await dismissRuleButton.click();
   await page.getByText('已提交「忽略建议」').waitFor({ timeout: 10000 });
   assert.deepEqual(answerRequests, [
     { answer: 'approve' },

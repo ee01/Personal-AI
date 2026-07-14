@@ -149,6 +149,26 @@ export interface AgentWorkflowSavedRegressionCoverageReceiptContext {
   scenarios?: AgentWorkflowSavedScenario[];
 }
 
+export interface AgentWorkflowSavedScenarioCapacityReceiptContext {
+  savedScenarioCount?: number;
+  limit?: number;
+  inputHasContent?: boolean;
+  replacesExisting?: boolean;
+  evictedScenarioLabel?: string;
+}
+
+export interface AgentWorkflowSavedScenarioDeleteReceiptContext {
+  scenario?: AgentWorkflowSavedScenario | null;
+  remainingCount?: number;
+  nextScenarioLabel?: string;
+}
+
+export interface AgentWorkflowReplaySourceReceiptContext {
+  loading?: boolean;
+  error?: string;
+  sampleCount?: number;
+}
+
 const UNKNOWN_SENDER = 'Unknown Sender';
 const UNKNOWN_GROUP = 'Unknown Group';
 export const AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT = 12;
@@ -864,6 +884,104 @@ function normalizeCount(value: any): number {
   return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
 }
 
+export function buildAgentWorkflowSavedScenarioCapacityReceipt(
+  context: AgentWorkflowSavedScenarioCapacityReceiptContext = {},
+): AgentWorkflowTestSourceReceipt {
+  const limit = Math.max(
+    1,
+    normalizeCount(context.limit || AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT),
+  );
+  const savedScenarioCount = normalizeCount(context.savedScenarioCount);
+  const displayCount = Math.min(savedScenarioCount, limit);
+  const remaining = Math.max(0, limit - savedScenarioCount);
+  const countChip = `保存样例 ${displayCount}/${limit}`;
+  const evictedScenarioLabel = normalizeText(context.evictedScenarioLabel);
+
+  if (context.inputHasContent === false) {
+    return {
+      title: '保存样例容量',
+      summary: `当前本地保存样例 ${displayCount}/${limit}；先补测试消息后才能保存。`,
+      detail:
+        '保存样例只会改写 chrome.storage.local 的本地回归样本，不会运行 Agent Workflow、写入 Memory Service、发送通知或执行规则自动化。',
+      tone: 'review',
+      chips: [countChip, '等待测试消息', '本地 storage'],
+    };
+  }
+
+  if (context.replacesExisting) {
+    return {
+      title: '保存样例容量',
+      summary: `当前输入已存在于保存样例；保存会更新同一条本地样例，数量仍为 ${displayCount}/${limit}。`,
+      detail:
+        '同输入保存会把新快照移动到列表顶部并刷新基线；不会挤掉其他保存样例，不会写入 Memory Service、发送通知或执行规则自动化。',
+      tone: 'ready',
+      chips: [countChip, '更新同输入', '本地 storage'],
+    };
+  }
+
+  if (savedScenarioCount >= limit) {
+    return {
+      title: '保存样例容量',
+      summary: `已达到本地上限 ${limit}；保存新输入会保留最新 ${limit} 个，并移出最旧样例${evictedScenarioLabel ? `：${evictedScenarioLabel}` : ''}。`,
+      detail:
+        '被移出的样例将不再参与批量回归、基线对比或导出报告；这只影响本地 chrome.storage.local 样例集，不会删除 Memory Service 记忆、发送通知或执行规则自动化。',
+      tone: 'review',
+      chips: [countChip, '将移出最旧', '本地 storage'],
+    };
+  }
+
+  if (remaining === 1) {
+    return {
+      title: '保存样例容量',
+      summary: `当前本地保存样例 ${displayCount}/${limit}；再保存一个新输入后将达到上限。`,
+      detail:
+        '保存只新增本地回归样例，不会立即运行批量回归、覆盖既有基线、写入 Memory Service、发送通知或执行规则自动化。',
+      tone: 'review',
+      chips: [countChip, '最后 1 个空位', '本地 storage'],
+    };
+  }
+
+  return {
+    title: '保存样例容量',
+    summary: `当前本地保存样例 ${displayCount}/${limit}；还可新增 ${remaining} 个新输入。`,
+    detail:
+      '保存当前用例只更新本地 chrome.storage.local 样例集；是否作为发布前证据仍取决于后续运行、基线和 Agent 配置一致性。',
+    tone: 'ready',
+    chips: [countChip, `剩余 ${remaining}`, '本地 storage'],
+  };
+}
+
+export function buildAgentWorkflowSavedScenarioDeleteReceipt(
+  context: AgentWorkflowSavedScenarioDeleteReceiptContext = {},
+): AgentWorkflowTestSourceReceipt {
+  const scenario = context.scenario || null;
+  const label = normalizeText(scenario?.label) || '未命名保存样例';
+  const remainingCount = normalizeCount(context.remainingCount);
+  const nextScenarioLabel = normalizeText(context.nextScenarioLabel);
+  const hadBaseline = Boolean(scenario?.expectedResult);
+  const baselineText = hadBaseline
+    ? '这条样例的本地结果基线也已移出。'
+    : '这条样例没有结果基线，因此只移出了测试输入。';
+  const nextText =
+    remainingCount > 0
+      ? `下一个选中的保存样例是${nextScenarioLabel ? `：${nextScenarioLabel}` : '当前列表第一条'}。`
+      : '本地保存样例已清空；批量回归和基线对比会等待新样例。';
+
+  return {
+    title: '保存样例删除回执',
+    summary: `已删除本地保存样例：${label}；剩余 ${remainingCount} 个。${baselineText}`,
+    detail:
+      `${nextText} 删除只改写 chrome.storage.local 的 agentWorkflowSavedScenarios；不会删除 Memory Service 记忆、不会移除真实消息、不会发送通知、不会执行规则自动化、不会撤销已导出的报告，也不会改写当前测试输入。`,
+    tone: remainingCount > 0 ? 'ready' : 'review',
+    chips: [
+      `剩余 ${remainingCount}`,
+      hadBaseline ? '本地基线已移出' : '无基线',
+      '本地 storage',
+      '无真实副作用',
+    ],
+  };
+}
+
 export function buildAgentWorkflowSavedRegressionScopeReceipt(
   context: AgentWorkflowSavedRegressionScopeReceiptContext = {},
 ): AgentWorkflowTestSourceReceipt {
@@ -1074,15 +1192,62 @@ export function buildAgentWorkflowScenarioSourceReceipt(
 
 export function buildAgentWorkflowReplaySourceReceipt(
   message?: AgentWorkflowReplayMessage | null,
+  context: AgentWorkflowReplaySourceReceiptContext = {},
 ): AgentWorkflowTestSourceReceipt {
+  const sampleCount: number | null =
+    typeof context.sampleCount === 'number' && Number.isFinite(context.sampleCount)
+      ? Math.max(0, Math.floor(context.sampleCount))
+      : message
+        ? 1
+        : null;
+  const error = normalizeText(context.error);
+
+  if (context.loading) {
+    return {
+      title: '最近消息刷新中',
+      summary: '正在读取 Memory Service time 召回快照，尚未确认可回放样本。',
+      detail:
+        '刷新只发起只读召回请求；等待期间不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读，也不会覆盖保存基线。',
+      tone: 'review',
+      chips: ['读取中', 'Memory Service', 'time 召回', '只读快照'],
+    };
+  }
+
+  if (error) {
+    return {
+      title: '最近消息读取失败',
+      summary: `本次没有拿到可回放样本：${error}`,
+      detail:
+        '读取失败只说明这次 time 召回未形成最近消息候选，不证明没有相关线上消息，也不代表当前聊天页已覆盖。失败不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读，也不会覆盖保存基线。',
+      tone: 'review',
+      chips: ['读取失败', 'Memory Service', '只读快照'],
+    };
+  }
+
+  if (!message && sampleCount === 0) {
+    return {
+      title: '最近消息范围',
+      summary: '本次刷新没有可回放的最近消息样本。',
+      detail:
+        '空结果只是当前 Memory Service time 召回快照没有可用消息候选，不证明没有相关线上消息，也不代表当前聊天页、所有群组或时间窗口已覆盖。刷新不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读，也不会覆盖保存基线。',
+      tone: 'review',
+      chips: ['样本 0', 'Memory Service', 'time 召回', '只读快照'],
+    };
+  }
+
   if (!message) {
     return {
       title: '最近消息范围',
       summary: '尚未选中可回放消息。',
       detail:
-        '最近消息来自 Memory Service 的 time 召回样本；刷新后再选择一条记忆回放。',
+        '最近消息来自 Memory Service 的 time 召回只读快照；选择一条后才会填入或回放测试。未选择时不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读，也不会覆盖保存基线。',
       tone: 'info',
-      chips: ['Memory Service', 'time 召回'],
+      chips: [
+        sampleCount === null ? '' : `样本 ${sampleCount}`,
+        'Memory Service',
+        'time 召回',
+        '只读快照',
+      ].filter(Boolean),
     };
   }
 
@@ -1103,12 +1268,14 @@ export function buildAgentWorkflowReplaySourceReceipt(
     title: '最近消息回放范围',
     summary: `使用 ${message.sender} @ ${message.teamName} 的记忆样本重跑当前配置。`,
     detail:
-      '这条输入来自 Memory Service 最近记忆，不代表当前聊天页仍有同一条 live 消息；回放不会发送通知或执行规则自动化。',
+      '这条输入来自 Memory Service 最近记忆的只读快照，不代表当前聊天页仍有同一条 live 消息，也不代表所有线上关注项、群组或时间窗口已覆盖。回放不会写入 Memory Service、不会发送通知、不会执行规则自动化、不会标记原消息已读，也不会覆盖保存基线。',
     tone: 'info',
     chips: [
+      `样本 ${sampleCount ?? 1}`,
       sourceLabel || 'Memory Service',
       formatReceiptTimestamp(message.datetime) || '时间未知',
       scoreChip,
+      '只读快照',
     ].filter(Boolean),
   };
 }

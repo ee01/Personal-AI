@@ -69,9 +69,10 @@ The canonical contract lives in `evals/report-contract.md`. Every runnable suite
 - What did this run not prove?
 - Which cases passed, failed, or need attention?
 - For each case, what was the input, expected behavior, actual output, proof basis, conclusion, and next step?
+- If a case needs real product inspection, what manual experience steps should a reviewer run?
 - Where can a reviewer inspect complete debug artifacts?
 
-Runner results should include `caseTitle`, `sampleSummary` or redacted `sampleDetails`, `expectedBehavior`, a structured `actualOutput` or `topMatch`, `scores`, `userConclusion`, and `improvementSuggestions`. If a suite needs domain-specific interpretation, add an adapter that maps its output to `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `outcomeSignals`, `conclusion`, `nextSteps`, and `debugLinks`.
+Runner results should include `caseTitle`, `sampleSummary` or redacted `sampleDetails`, `expectedBehavior`, a structured `actualOutput` or `topMatch`, `scores`, `userConclusion`, and `improvementSuggestions`. Cases can also include optional `manualVerification` with reviewer setup, steps, expected results, cleanup, and evidence notes; the shared report renders it when present and does not count it as automated scoring. If a suite needs domain-specific interpretation, add an adapter that maps its output to `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `outcomeSignals`, `conclusion`, `nextSteps`, `manualVerification`, and `debugLinks`.
 
 Run `npm run eval:validate` after adding a suite or case. The validator checks that each suite has a Chinese description, workflow, cases file, and `Report requirements` section, and that cases include enough input/expected-output fields to produce a readable report. `npm run eval:run` also records report-contract warnings when a case cannot be normalized into a readable Reader Contract card.
 

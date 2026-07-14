@@ -18,6 +18,7 @@ import {
   buildContextRecallCompactMetaItems,
   buildContextRecallMetaItems,
   buildContextRecallPeekFooterItems,
+  buildSourceMemoryRecallReceiptItems,
   formatContextRecallDisplayPriorityLabel,
   formatContextRecallEvidenceRole,
   formatContextRecallMemoryType,
@@ -259,6 +260,73 @@ assert.ok(
 assert.ok(
   sourceMemoryCompactMetaItems.includes('选区资料'),
   '资料记忆紧凑元信息应保留资料类型',
+);
+const sourceMemoryRecallReceiptItems = buildSourceMemoryRecallReceiptItems(
+  {
+    type: 'source_memory',
+    sourceLabel: 'source_memory',
+    sourceTitle: 'Falcon source packet',
+    exploreLink: '#/source-memory/falcon-source-packet',
+    metadata: {
+      sourceKind: 'selection',
+      captureMode: 'manual',
+      sourceMemoryDistillationStatus: 'ready',
+      sourceMemoryCue: 'Falcon handoff source packet should be checked before launch.',
+    },
+  },
+  {
+    sourceLinks: [
+      {
+        label: 'Falcon source packet',
+        url: 'https://example.com/falcon/source',
+      },
+    ],
+  },
+);
+assert.deepEqual(
+  sourceMemoryRecallReceiptItems.map(([label]) => label),
+  ['资料', '蒸馏', '复核', '来源', '边界'],
+  '资料记忆回执应稳定展示资料、蒸馏、复核、来源和边界',
+);
+assert.ok(
+  sourceMemoryRecallReceiptItems.some(([, value]) =>
+    /已保存的 选区资料 \/ 主动保存/.test(value),
+  ),
+  '资料记忆回执应集中展示资料类型和保存方式',
+);
+assert.ok(
+  sourceMemoryRecallReceiptItems.some(([, value]) =>
+    /已生成蒸馏提示/.test(value),
+  ),
+  '资料记忆回执应展示蒸馏状态',
+);
+assert.ok(
+  sourceMemoryRecallReceiptItems.some(([, value]) =>
+    /打开资料详情/.test(value),
+  ),
+  '资料记忆回执应说明资料详情复核入口',
+);
+assert.ok(
+  sourceMemoryRecallReceiptItems.some(([, value]) =>
+    /本卡只读/.test(value),
+  ),
+  '资料记忆回执应保留只读边界',
+);
+const hiddenSourceMemoryReceiptItems = buildSourceMemoryRecallReceiptItems({
+  type: 'source_memory',
+  sourceLabel: 'source_memory',
+  exploreLink: '#/source-memory/hidden-source-packet',
+  metadata: {
+    sourceKindLabel: '整页资料',
+    captureModeLabel: '自动保存',
+    sourceMemoryDistillationStatus: 'blocked',
+  },
+});
+assert.ok(
+  hiddenSourceMemoryReceiptItems.some(([, value]) =>
+    /原始来源未展示或已隐藏/.test(value),
+  ),
+  '资料记忆回执应说明敏感或缺失原始来源不影响详情复核',
 );
 assert.equal(
   isDisplayableContextRecallMatch({
@@ -614,6 +682,16 @@ assert.match(
 );
 assert.match(
   contentScriptSource,
+  /else if \(!sourceLinks\.length\) \{\s*receipts\.push\('原始来源缺失'\)/,
+  'Expanded Card should disclose a missing original source even when memory detail remains available',
+);
+assert.match(
+  contentScriptSource,
+  /receipts\.push\('已保存资料来源可复核'\);\s*receipts\.push\(`同站 \$\{sourceUrl\.hostname\}`\)/,
+  'Source Memory links on the same host should preserve both saved-source provenance and host topology',
+);
+assert.match(
+  contentScriptSource,
   /buildContextRecallSourceStatusReceipts/,
   'Expanded Card should render source status receipts for available provenance',
 );
@@ -621,6 +699,51 @@ assert.match(
   contentScriptSource,
   /const peekFooter = buildContextRecallPeekFooterItems\(match\)\.join\(' · '\)/,
   'Hover Peek footer should use the shared provenance helper',
+);
+assert.match(
+  contentScriptSource,
+  /recallBasis\?: string/,
+  'Memory Lens bubble options should carry a visible recall-basis receipt',
+);
+assert.match(
+  contentScriptSource,
+  /buildContextRecallCurrentBasisReceipt/,
+  'Fresh Memory Lens recall should label the current request basis',
+);
+assert.match(
+  contentScriptSource,
+  /buildContextRecallCachedBasisReceipt\(cached\.ts, now\)/,
+  'Cached Memory Lens recall should label cache age and avoid implying a new request',
+);
+assert.match(
+  contentScriptSource,
+  /pai-context-peek-basis/,
+  'Hover Peek should render the current-vs-cached recall basis before the action boundary',
+);
+assert.match(
+  contentScriptSource,
+  /pai-context-peek-slice/,
+  'Hover Peek should render a visible slice receipt when multiple candidates exist',
+);
+assert.match(
+  contentScriptSource,
+  /当前预览第 \$\{currentIndex \+ 1\}\/\$\{matches\.length\} 条；点击后可翻页查看本轮其他候选/,
+  'Hover Peek slice receipt should name the current candidate and available paging',
+);
+assert.match(
+  contentScriptSource,
+  /本轮召回 · 页面稳定后重新请求/,
+  'Hover Peek should state when the visible hint came from this page-stable recall',
+);
+assert.match(
+  contentScriptSource,
+  /本地缓存 · \$\{formatContextRecallCacheAgeLabel\(now - cachedAtMs\)\}召回；未重新请求/,
+  'Hover Peek should state when the visible hint reused local cache',
+);
+assert.match(
+  contentScriptSource,
+  /buildPassivePeekSliceReceipt\(\),[\s\S]{0,180}view\.recallBasis,[\s\S]{0,140}'只读提示，不写入\/插入\/发送'/,
+  'Rest icon tooltip should include visible slice, recall basis, and no-write boundary',
 );
 assert.match(
   contentScriptSource,
@@ -789,6 +912,26 @@ assert.match(
 );
 assert.match(
   contentScriptSource,
+  /formatMemoryCaptureAutoSavePendingReceipt/,
+  'Automatic whole-page Memory Capture should expose a pending receipt while the save request is in flight',
+);
+assert.match(
+  contentScriptSource,
+  /页面资料入库提交中/,
+  'Automatic whole-page Memory Capture pending toast should be visibly distinct from a confirmed save',
+);
+assert.match(
+  contentScriptSource,
+  /尚未确认创建 source-memory capsule 或写入/,
+  'Automatic whole-page Memory Capture pending receipt should say no capsule or recall signal has been confirmed yet',
+);
+assert.match(
+  contentScriptSource,
+  /写 confirmed profile 或创建任务/,
+  'Automatic whole-page Memory Capture pending receipt should keep downstream profile/task side effects out of scope',
+);
+assert.match(
+  contentScriptSource,
   /pai-context-toast--memory-capture-auto:hover[\s\S]*flex-wrap: wrap/,
   'Automatic Memory Capture toast should expand into a readable multi-line receipt on hover',
 );
@@ -839,6 +982,51 @@ assert.match(
 );
 assert.match(
   contentScriptSource,
+  /formatMemoryCaptureSelectionSnapshotReceipt/,
+  'Selected-text Memory Capture review should expose the selected-text snapshot that will be saved',
+);
+assert.match(
+  contentScriptSource,
+  /formatMemoryCapturePageSnapshotReceipt/,
+  'Whole-page Memory Capture should expose the exact page snapshot basis that will be saved',
+);
+assert.match(
+  contentScriptSource,
+  /formatMemoryCapturePageTriggerReceipt/,
+  'Whole-page Memory Capture should expose the local trigger basis for suggestion and auto-save',
+);
+assert.match(
+  contentScriptSource,
+  /页面快照：将保存/,
+  'Whole-page Memory Capture page snapshot receipt should be visible to the user',
+);
+assert.match(
+  contentScriptSource,
+  /不会重新抓取页面或改成之后滚动、跳转后的内容/,
+  'Whole-page Memory Capture page snapshot receipt should clarify notes do not retarget a later page state',
+);
+assert.match(
+  contentScriptSource,
+  /这是当前浏览器本地行为信号，不代表系统确认页面事实/,
+  'Whole-page Memory Capture trigger receipt should avoid overclaiming page truth',
+);
+assert.match(
+  contentScriptSource,
+  /pai-memory-capture-page-snapshot/,
+  'Whole-page Memory Capture review panel should render page snapshot receipt as a distinct visible row',
+);
+assert.match(
+  contentScriptSource,
+  /pai-memory-capture-page-trigger/,
+  'Whole-page Memory Capture review panel should render trigger basis receipt as a distinct visible row',
+);
+assert.match(
+  contentScriptSource,
+  /不会重新抓取页面或改成当前新的选区/,
+  'Selected-text snapshot receipt should disclose that notes do not rescan or retarget the page selection',
+);
+assert.match(
+  contentScriptSource,
   /没有创建资料记忆或\$\{getMemoryCaptureWriteSignalLabel\(request\)\}/,
   'Memory Capture failure receipt should state that no capsule or search signal was written',
 );
@@ -876,6 +1064,26 @@ assert.match(
   contentScriptSource,
   /只影响右下角 Lens、页面召回和被动入库候选|只影响右下角 Lens、页面召回、整页\/视觉入库候选/,
   'Memory Lens site-control receipt should name passive processing scope',
+);
+assert.match(
+  contentScriptSource,
+  /当前状态/,
+  'Memory Lens site-control receipt should show the current host control status',
+);
+assert.match(
+  contentScriptSource,
+  /会开启白名单并允许此站点[\s\S]{0,160}只影响被动网页处理/,
+  'Memory Lens site-control receipt should explain the allow action before users click it',
+);
+assert.match(
+  contentScriptSource,
+  /将移除 \$\{conflictCount\} 条覆盖此站点的静默\/屏蔽规则/,
+  'Memory Lens allow action should disclose covered mute/block conflict cleanup',
+);
+assert.match(
+  contentScriptSource,
+  /会保存当前站点屏蔽设置[\s\S]{0,180}允许\/静默\/旧屏蔽覆盖规则/,
+  'Memory Lens block action should disclose allow/mute conflict cleanup',
 );
 assert.match(
   contentScriptSource,
@@ -944,18 +1152,88 @@ assert.match(
 );
 assert.match(
   optionsSource,
-  /已永久关闭 \$\{prefix\} 下的被动网页处理；主动划词仍可用，不删除\/同步\/外发已有记忆/,
+  /formatSiteControlActionReceipt\(\s*`已永久关闭 \$\{prefix\} 下的被动网页处理`/,
   'Options page-path block result should not sound like deletion or full active-search disablement',
 );
 assert.match(
   optionsSource,
-  /已恢复 \$\{prefix\} 下的被动网页提示；不会写入、删除或外发记忆/,
+  /formatSiteControlActionReceipt\(\s*`已移除 \$\{prefix\} 下的页面路径屏蔽`/,
   'Options page-path restore result should state the passive-only recovery boundary',
+);
+assert.match(
+  optionsSource,
+  /白名单模式仍会让此站点的被动提示保持静默，除非重新加入允许列表/,
+  'Options site-control action receipt should distinguish removing a rule from restoring passive prompts under allowlist mode',
+);
+assert.match(
+  optionsSource,
+  /已打开页面会实时重新评估右下角 Lens、页面召回和被动入库候选/,
+  'Options site-control action receipt should explain the live-page re-evaluation effect',
+);
+assert.match(
+  optionsSource,
+  /主动划词仍可用；不会写入、删除、同步或外发已有记忆/,
+  'Options site-control action receipt should keep active selection and no-write/no-egress boundaries visible',
+);
+assert.match(
+  optionsSource,
+  /formatSiteControlButtonBoundary/,
+  'Options should centralize Memory Lens site-control button boundary copy',
+);
+assert.match(
+  optionsSource,
+  /刷新只重读本机 extension storage 的站点控制快照，不新增、恢复或删除规则/,
+  'Options refresh control should disclose read-only local snapshot scope before click',
+);
+assert.match(
+  optionsSource,
+  /开启白名单模式：仅允许列表内站点被动提示/,
+  'Options allowlist toggle should disclose the passive prompt scope before click',
+);
+assert.match(
+  optionsSource,
+  /默认模式下只是保存允许候选；开启白名单后才限制为允许列表/,
+  'Options allow-site button should distinguish saved allow candidates from active allowlist mode',
+);
+assert.match(
+  optionsSource,
+  /title=\{allowSiteBoundary\}[\s\S]{0,120}aria-label=\{allowSiteBoundary\}/,
+  'Options allow-site button should expose the boundary through title and aria-label',
+);
+assert.match(
+  optionsSource,
+  /title=\{blockSiteBoundary\}[\s\S]{0,120}aria-label=\{blockSiteBoundary\}/,
+  'Options block-site button should expose the boundary through title and aria-label',
+);
+assert.match(
+  optionsSource,
+  /title=\{buildUnblockPageBoundary\(page\.prefix\)\}[\s\S]{0,140}aria-label=\{buildUnblockPageBoundary\(page\.prefix\)\}/,
+  'Options page-path restore button should expose the boundary through title and aria-label',
 );
 assert.match(
   contentScriptSource,
   /资料记忆和网页检索信号/,
   'Whole-page Memory Capture review should explain the source-memory plus web search write path',
+);
+assert.match(
+  contentScriptSource,
+  /点击只打开已命中的本轮划词结果；不二次召回、不保存、不插入、不发送、不调用外部 AI/,
+  'Selection Memory Search card should disclose that opening uses already matched candidates without recall or side effects',
+);
+assert.match(
+  contentScriptSource,
+  /trigger\.dataset\.tooltipPlacement\s*=\s*top < 58 \? 'bottom' : 'top'/,
+  'Selection Memory Search trigger should flip its tooltip below the icon near the top viewport edge',
+);
+assert.match(
+  contentScriptSource,
+  /pai-context-selection-trigger\[data-tooltip-placement='bottom'\] \.pai-context-selection-tooltip/,
+  'Selection Memory Search tooltip CSS should support below-icon placement',
+);
+assert.match(
+  contentScriptSource,
+  /本轮 \$\{safeCount\} 条强相关候选；当前第 \$\{currentIndex \+ 1\} 条/,
+  'Selection Memory Search card should show candidate count and current candidate position',
 );
 assert.match(
   sourceMemoryServiceSource,

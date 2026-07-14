@@ -143,12 +143,82 @@ describe('Memory Capture source memory API', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/Sensitive source URL carries credentials/);
+    expect(res.json().noWriteReceipt).toMatchObject({
+      state: 'blocked_no_write',
+      label: '保存已阻断',
+      detail: expect.stringMatching(/Sensitive source URL carries credentials/),
+      nextStep:
+        '移除敏感内容或换成普通资料来源后再保存；本次不会外发、插入、同步或写入长期记忆。',
+    });
+    expect(res.json().noWriteReceipt.evidence).toEqual(
+      expect.arrayContaining([
+        '资料类型：整页资料',
+        '保存方式：主动保存',
+        '范围：工作记忆',
+        'source-memory capsule：未创建',
+        '网页检索信号：未写入',
+      ]),
+    );
     expect(
       (
         db
           .prepare(
             `SELECT COUNT(*) AS count FROM source_memory_capsules`,
           )
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS count FROM messages_raw WHERE source_type = 'web'`)
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+  });
+
+  it('returns a structured no-write receipt when capsule save text is too weak', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'selection',
+        sourceUrl: 'https://example.com/short-note',
+        sourceTitle: 'Short note',
+        selectedText: 'tiny phrase',
+        captureMode: 'manual',
+        captureReason: '用户点击选区旁的 + 记住',
+        interactions: {
+          selectedText: true,
+          manualClick: true,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toMatch(/too short or low signal/);
+    expect(body.noWriteReceipt).toMatchObject({
+      state: 'invalid_no_write',
+      label: '保存未执行',
+      detail: '资料文本信息量不足，未达到创建 source-memory capsule 的门槛。',
+      nextStep:
+        '请选择更完整的资料段落后重试；本次不会外发、插入、同步或写入长期记忆。',
+    });
+    expect(body.noWriteReceipt.evidence).toEqual(
+      expect.arrayContaining([
+        '资料类型：选区资料',
+        '保存方式：主动保存',
+        '范围：工作记忆',
+        '来源：example.com',
+        'source-memory capsule：未创建',
+        '网页检索信号：未写入',
+      ]),
+    );
+    expect(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS count FROM source_memory_capsules`)
           .get() as { count: number }
       ).count,
     ).toBe(0);

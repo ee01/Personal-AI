@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>桌面选区记忆胶囊 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5d6b78;
+      --line: #d9e1e7;
+      --soft: #f3f6f8;
+      --panel: #ffffff;
+      --canvas: #edf2f4;
+      --accent: #0f766e;
+      --accent-strong: #0b5f59;
+      --amber: #9a5b00;
+      --amber-soft: #fff4db;
+      --blue: #275f9d;
+      --blue-soft: #eaf3ff;
+      --rose: #a53647;
+      --rose-soft: #ffecef;
+      --shadow: 0 24px 70px rgba(27, 42, 58, .18);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--canvas);
+      color: var(--ink);
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .page {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px clamp(16px, 4vw, 44px);
+      background: rgba(255, 255, 255, .9);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #13252f;
+      color: #e8fffb;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      letter-spacing: 0;
+      flex: none;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .hotkey {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 8px;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .hotkey kbd {
+      min-width: 28px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      border: 1px solid #cbd5dc;
+      background: #f8fafb;
+      color: var(--ink);
+      text-align: center;
+      box-shadow: inset 0 -1px 0 rgba(0,0,0,.08);
+    }
+
+    .workspace {
+      padding: clamp(16px, 4vw, 44px);
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr);
+      gap: clamp(16px, 3vw, 32px);
+      align-items: start;
+    }
+
+    .desktop {
+      min-width: 0;
+      display: grid;
+      gap: 14px;
+    }
+
+    .scenario-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .scenario-button,
+    .ghost-button,
+    .primary-button,
+    .danger-button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+
+    .scenario-button:hover,
+    .ghost-button:hover,
+    .primary-button:hover,
+    .danger-button:hover {
+      transform: translateY(-1px);
+    }
+
+    .scenario-button[aria-pressed="true"] {
+      background: #dff5f1;
+      border-color: #8bd3c8;
+      color: var(--accent-strong);
+      font-weight: 700;
+    }
+
+    .primary-button {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      font-weight: 700;
+    }
+
+    .danger-button {
+      background: var(--rose-soft);
+      border-color: #f4b7c0;
+      color: var(--rose);
+      font-weight: 700;
+    }
+
+    .ghost-button {
+      color: var(--muted);
+    }
+
+    .app-window {
+      overflow: hidden;
+      background: #0e1720;
+      border: 1px solid #283745;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+
+    .window-chrome {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-bottom: 1px solid #263647;
+      color: #d8e3ec;
+      background: #111d28;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #ff6b65;
+      flex: none;
+    }
+
+    .dot:nth-child(2) {
+      background: #ffc24b;
+    }
+
+    .dot:nth-child(3) {
+      background: #38cf79;
+    }
+
+    .window-title {
+      margin-left: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      color: #b8c7d4;
+    }
+
+    .file-tabs {
+      display: flex;
+      gap: 1px;
+      background: #142232;
+      border-bottom: 1px solid #263647;
+      overflow-x: auto;
+    }
+
+    .file-tab {
+      padding: 10px 14px;
+      color: #9fb0bf;
+      background: #192a3b;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .file-tab.active {
+      background: #0e1720;
+      color: #eef6fb;
+    }
+
+    .editor {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      min-height: 0;
+      color: #dbe8ef;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .line-numbers {
+      padding: 18px 12px;
+      text-align: right;
+      color: #5f7486;
+      background: #0b131b;
+      user-select: none;
+    }
+
+    .line-numbers span,
+    .code span {
+      display: block;
+      min-height: 22px;
+    }
+
+    .code {
+      padding: 18px 18px 28px;
+      overflow: auto;
+    }
+
+    .comment {
+      color: #7fb29c;
+    }
+
+    .key {
+      color: #8ab6ff;
+    }
+
+    .str {
+      color: #f4c77a;
+    }
+
+    .selected {
+      display: inline;
+      padding: 2px 3px;
+      border-radius: 4px;
+      background: #f7d66b;
+      color: #1c232b;
+      box-shadow: 0 0 0 2px rgba(247, 214, 107, .28);
+    }
+
+    .overlay-column {
+      position: sticky;
+      top: 88px;
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .capsule {
+      background: rgba(255,255,255,.96);
+      border: 1px solid rgba(214, 225, 232, .95);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .capsule-head {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .receipt {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--accent-strong);
+      border-color: #9adbd1;
+      background: #e8fbf8;
+    }
+
+    .pill.warn {
+      color: var(--amber);
+      border-color: #efce83;
+      background: var(--amber-soft);
+    }
+
+    .pill.block {
+      color: var(--rose);
+      border-color: #f0b8c0;
+      background: var(--rose-soft);
+    }
+
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .title-row h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .title-row p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    .close-button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      flex: none;
+    }
+
+    .selection-box {
+      border: 1px solid #cfe2e0;
+      background: #f4fbfa;
+      border-radius: 8px;
+      padding: 11px 12px;
+      color: #243642;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .selection-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent-strong);
+      font-size: 12px;
+    }
+
+    .tabbar {
+      display: flex;
+      gap: 6px;
+      padding: 12px 14px 0;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+
+    .tab {
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      padding: 9px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .tab[aria-selected="true"] {
+      color: var(--accent-strong);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+
+    .panel {
+      padding: 15px 16px 18px;
+      display: grid;
+      gap: 12px;
+      min-height: 250px;
+    }
+
+    .memory-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .memory-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      background: var(--panel);
+    }
+
+    .memory-top {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .check {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--accent);
+      margin-top: 1px;
+    }
+
+    .memory-card h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .memory-card p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .score {
+      font-size: 12px;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border: 1px solid #b8d7f6;
+      border-radius: 999px;
+      padding: 3px 7px;
+      white-space: nowrap;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .prompt-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101820;
+      color: #dce8ef;
+      padding: 13px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .save-panel {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .field textarea {
+      min-height: 76px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+      color: var(--ink);
+      background: #fbfcfd;
+    }
+
+    .boundary-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .boundary-list li {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfd;
+      color: #243642;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-top: 2px;
+    }
+
+    .status-strip {
+      border: 1px solid #c9dce0;
+      background: #f4fafb;
+      border-radius: 10px;
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .status-strip strong {
+      font-size: 13px;
+    }
+
+    .status-strip span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .toast {
+      display: none;
+      border: 1px solid #9adbd1;
+      background: #e8fbf8;
+      color: var(--accent-strong);
+      border-radius: 10px;
+      padding: 11px 12px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    .mini-guide {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.8);
+      border-radius: 10px;
+      padding: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .mini-guide strong {
+      color: var(--ink);
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .overlay-column {
+        position: static;
+      }
+
+      .app-window {
+        min-height: 420px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .hotkey {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .workspace {
+        padding: 12px;
+      }
+
+      .editor {
+        grid-template-columns: 42px 1fr;
+        font-size: 12px;
+      }
+
+      .line-numbers {
+        padding-inline: 8px;
+      }
+
+      .code {
+        padding-inline: 12px;
+      }
+
+      .memory-top {
+        grid-template-columns: auto 1fr;
+      }
+
+      .score {
+        grid-column: 2;
+        justify-self: start;
+      }
+
+      .title-row h2 {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">PA</div>
+        <div>
+          <h1>桌面选区记忆胶囊</h1>
+          <p>模拟在任意桌面 App 选中文字后，用 Personal AI 召回相关记忆。</p>
+        </div>
+      </div>
+      <div class="hotkey" aria-label="快捷键">
+        <span>模拟热键</span>
+        <kbd>⌘</kbd><kbd>⇧</kbd><kbd>M</kbd>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <div class="desktop">
+        <div class="scenario-bar" role="group" aria-label="选择演示场景">
+          <button class="scenario-button" type="button" data-scenario="codex" aria-pressed="true">Codex / 终端报错</button>
+          <button class="scenario-button" type="button" data-scenario="ai" aria-pressed="false">外部 AI prompt</button>
+          <button class="scenario-button" type="button" data-scenario="secret" aria-pressed="false">Secret 阻断</button>
+          <button class="primary-button" type="button" id="triggerButton">触发胶囊</button>
+        </div>
+
+        <div class="app-window" aria-label="模拟桌面应用窗口">
+          <div class="window-chrome">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="window-title" id="windowTitle">Codex Terminal - personal-ai</span>
+          </div>
+          <div class="file-tabs" id="fileTabs">
+            <div class="file-tab active">terminal</div>
+            <div class="file-tab">memory-service</div>
+            <div class="file-tab">docs/progressing</div>
+          </div>
+          <div class="editor">
+            <div class="line-numbers" aria-hidden="true">
+              <span>41</span><span>42</span><span>43</span><span>44</span><span>45</span><span>46</span><span>47</span><span>48</span><span>49</span><span>50</span><span>51</span><span>52</span><span>53</span><span>54</span><span>55</span><span>56</span>
+            </div>
+            <pre class="code" id="codeBlock"></pre>
+          </div>
+        </div>
+      </div>
+
+      <aside class="overlay-column" aria-label="Personal AI 胶囊浮层">
+        <section class="capsule" id="capsule">
+          <div class="capsule-head">
+            <div class="receipt" id="receiptRow"></div>
+            <div class="title-row">
+              <div>
+                <h2 id="capsuleTitle">选区胶囊</h2>
+                <p id="capsuleSubtitle">Personal AI 只读取这次用户选中的文字。</p>
+              </div>
+              <button class="close-button" type="button" id="closeButton" aria-label="隐藏胶囊">×</button>
+            </div>
+            <div class="selection-box">
+              <strong>当前选区</strong>
+              <span id="selectionText"></span>
+            </div>
+          </div>
+
+          <div class="tabbar" role="tablist" aria-label="胶囊内容">
+            <button class="tab" type="button" role="tab" aria-selected="true" data-tab="recall">关联记忆</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="patch">上下文包</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="save">保存复核</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="boundary">边界</button>
+          </div>
+
+          <div class="panel" id="panelRecall" data-panel="recall">
+            <div class="memory-list" id="memoryList"></div>
+            <div class="actions">
+              <button class="primary-button" type="button" data-action="copy">复制上下文包</button>
+              <button class="ghost-button" type="button" data-action="ask">Ask 一下</button>
+              <button class="ghost-button" type="button" data-action="hide">隐藏这条</button>
+            </div>
+          </div>
+
+          <div class="panel" id="panelPatch" data-panel="patch" hidden>
+            <div class="prompt-box" id="promptBox"></div>
+            <div class="actions">
+              <button class="primary-button" type="button" data-action="copy">复制上下文包</button>
+              <button class="ghost-button" type="button" data-action="toggle">只带已勾选记忆</button>
+            </div>
+          </div>
+
+          <div class="panel" id="panelSave" data-panel="save" hidden>
+            <div class="save-panel">
+              <div class="status-strip">
+                <strong id="saveTitle">保存前复核</strong>
+                <span id="saveReceipt">当前只打开复核面板，还没有创建 source-memory capsule，也没有写入检索信号。</span>
+              </div>
+              <div class="field">
+                <label for="note">备注，说明以后什么场景应该想起这段选区</label>
+                <textarea id="note">以后在处理 NOVA / Target end / Jira writeback 时，用这段选区作为触发线索。</textarea>
+              </div>
+              <div class="actions">
+                <button class="primary-button" type="button" data-action="save">确认保存为资料记忆</button>
+                <button class="ghost-button" type="button" data-action="cancel-save">取消，不写入</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel" id="panelBoundary" data-panel="boundary" hidden>
+            <ul class="boundary-list" id="boundaryList"></ul>
+          </div>
+        </section>
+
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+        <div class="mini-guide">
+          <strong>Demo 说明：</strong> 这是计划页配套的交互模拟。真实实现里胶囊会由 macOS 全局热键、Services 或手动粘贴触发；P0 不做后台截图、不周期读取剪贴板。
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const scenarios = {
+      codex: {
+        windowTitle: 'Codex Terminal - personal-ai',
+        tabs: ['terminal', 'memory-service', 'docs/progressing'],
+        title: 'Codex 选区胶囊',
+        subtitle: '只读召回和这段终端选区有关的 Personal AI 记忆。',
+        selection: 'webhook overwrite detection should not reuse stale Target end when NOVA-14516 is missing from the Roadmaps source JQL',
+        code: [
+          '<span class="comment">$ npm run verify:jira-roadmaps</span>',
+          '<span class="key">check</span> source jql: project in (NOVA, MTR) AND fixVersion = 26.3.120',
+          '<span class="key">warn</span> Target end snapshot is older than sheet row update',
+          '<span class="key">error</span> <span class="selected">webhook overwrite detection should not reuse stale Target end when NOVA-14516 is missing from the Roadmaps source JQL</span>',
+          '',
+          '<span class="comment"># user selects the error line and triggers Personal AI</span>',
+          'captureMethod: accessibility_selection',
+          'surface: desktop_selection_capsule',
+          'writeState: not_written',
+          'externalState: not_sent'
+        ],
+        receipt: [
+          ['ok', '只读预览'],
+          ['ok', '未写入'],
+          ['warn', 'Codex Terminal 选区'],
+          ['ok', '未外发']
+        ],
+        memories: [
+          {
+            title: 'Jira Roadmaps 缺 issue 先查 source JQL',
+            cue: '过去排查 NOVA-14630 时，缺失 issue 的根因优先落在 Roadmaps plan source JQL，而不是 UI 状态。',
+            meta: ['timeline', '2026-07-09', 'why: issue key + Roadmaps + source JQL'],
+            score: '0.86'
+          },
+          {
+            title: 'Target start / Target end 只能从当前表格写回',
+            cue: '批量写 Jira 日期时，边界是 sheet -> Jira 的显式字段更新，不用旧 snapshot 反推新的 Target end。',
+            meta: ['source_memory', 'Downloads Jira writeback', 'why: Target end + overwrite'],
+            score: '0.82'
+          },
+          {
+            title: 'Openclaw 委托失败不要伪装成已执行',
+            cue: '相关自动化里有多次 delegate_openclaw failed / queued，按钮和回复需要保留 pending 与失败回执。',
+            meta: ['reflection_thread', 'live memory', 'why: webhook + external action'],
+            score: '0.68'
+          }
+        ],
+        prompt: `Personal AI desktop selection context
+Generated: 2026-07-13 11:12 CST
+Source: user-selected text in Codex Terminal
+Boundary: read-only recall; not saved; not sent.
+
+Selected text:
+"webhook overwrite detection should not reuse stale Target end when NOVA-14516 is missing from the Roadmaps source JQL"
+
+Useful memory:
+1. For Jira Roadmaps missing issues, first inspect the plan source JQL before assuming a UI state problem.
+2. Target start / Target end writeback should use the current sheet row as authority, not stale Jira snapshots.
+3. Keep pending/failed receipts visible when webhook or external delegation has not confirmed execution.`,
+        boundary: [
+          '这次只读取用户选中的终端文本和前台 App 信息。',
+          '复制按钮只把上下文包放入剪贴板，不会贴回 Codex，也不会发送。',
+          '保存按钮先进入复核面板，确认前不会创建 source-memory capsule。',
+          '召回到的 Jira / Roadmaps 记忆仍需用户核对，不会直接修改代码或 Jira。'
+        ]
+      },
+      ai: {
+        windowTitle: 'ChatGPT Desktop - prompt draft',
+        tabs: ['external AI prompt', 'draft.md', 'context patch'],
+        title: '外部 AI prompt 胶囊',
+        subtitle: '为当前 prompt 生成最小必要的 Personal AI 上下文补丁。',
+        selection: '帮我评估这些 Jira tickets 哪些应该进 26.3.120，并说明 Target start / Target end 应该怎么填。',
+        code: [
+          '<span class="comment">ChatGPT Desktop</span>',
+          '',
+          '<span class="key">User draft:</span>',
+          '<span class="selected">帮我评估这些 Jira tickets 哪些应该进 26.3.120，并说明 Target start / Target end 应该怎么填。</span>',
+          '',
+          '<span class="comment">Personal AI sees only this selected prompt after hotkey.</span>',
+          'externalTarget: chatgpt_desktop',
+          'copySafe: needs_review',
+          'selectedMatches: 2',
+          'autoSubmit: false'
+        ],
+        receipt: [
+          ['ok', '只读预览'],
+          ['warn', '外部 AI prompt'],
+          ['ok', '未插入'],
+          ['ok', '未发送']
+        ],
+        memories: [
+          {
+            title: '26.3.120 版本评估口径',
+            cue: '评估时先看 release target 与当前 sheet 里的 Target start / Target end，再看 Jira fixVersion 是否已经同步。',
+            meta: ['source_memory', 'release planning', 'why: 26.3.120'],
+            score: '0.88'
+          },
+          {
+            title: '字段写回需要说明 authority',
+            cue: '给外部 AI 的 prompt 应明确“以当前 sheet 行为准”，避免 AI 根据旧 Jira 页面补日期。',
+            meta: ['compose_assist', 'prompt boundary', 'why: Target dates'],
+            score: '0.79'
+          },
+          {
+            title: '敏感人物上下文默认不带出',
+            cue: 'Relationship / people context 只在用户显式包含时复制；这个 prompt 不需要人物关系记忆。',
+            meta: ['projection contract', '0 sensitive included', 'why: external AI'],
+            score: '0.61'
+          }
+        ],
+        prompt: `Personal AI desktop selection context
+Generated: 2026-07-13 11:12 CST
+Source: user-selected prompt in ChatGPT Desktop
+Boundary: copy-only patch; Personal AI did not insert or send anything.
+
+Patch to add:
+- Evaluate 26.3.120 candidates using the current spreadsheet row as the authority for Target start / Target end.
+- Treat Jira fixVersion and Roadmaps visibility as evidence to verify, not as the sole source of truth.
+- Do not infer dates from stale Jira snapshots. Ask for missing source rows when Target fields are absent.
+
+Privacy:
+0 people-sensitive memories included. 0 secrets detected.`,
+        boundary: [
+          'Personal AI 不会自动把内容贴进 ChatGPT、Claude、豆包或其他外部 AI。',
+          '复制内容默认只包含已勾选记忆，并带来源与边界 header。',
+          '当前外部 AI prompt 不会被写入用户画像，也不会被当成事实确认。',
+          '如果需要更完整交接包，应升级到 AI Context Passport，而不是扩大胶囊内容。'
+        ]
+      },
+      secret: {
+        windowTitle: 'Notes - deployment scratchpad',
+        tabs: ['scratchpad', 'deploy notes', 'private'],
+        title: 'Secret 阻断胶囊',
+        subtitle: '检测到疑似密钥后，本地阻断，不调用远端召回。',
+        selection: 'OPENAI_API_KEY=sk-proj-example-redacted-token should be pasted into the deployment env',
+        code: [
+          '<span class="comment">Private scratchpad</span>',
+          'DEPLOY_TARGET=production',
+          '<span class="selected">OPENAI_API_KEY=sk-proj-example-redacted-token should be pasted into the deployment env</span>',
+          'NEXT_STEP=verify health check',
+          '',
+          '<span class="comment">Personal AI blocks this before recall.</span>',
+          'secretScan: blocked',
+          'remoteRecall: skipped',
+          'copyPatch: disabled',
+          'writeState: not_written'
+        ],
+        receipt: [
+          ['block', '疑似 secret'],
+          ['ok', '未调用召回'],
+          ['ok', '未写入'],
+          ['ok', '未复制']
+        ],
+        memories: [],
+        prompt: '已阻断：这段选区包含疑似 secret。Personal AI 未调用远端记忆召回、未生成可复制上下文包、未创建资料记忆。',
+        boundary: [
+          '疑似 API key、token、password、private key、验证码或银行卡号时，先本地阻断。',
+          '阻断态不调用 /context-recall，不把 secret 发送到 memory service。',
+          '保存和复制按钮禁用，用户只能关闭或重新选择非敏感文本。',
+          '阻断事件可以记录为本地安全计数，但不保存 secret 明文。'
+        ]
+      }
+    };
+
+    const state = {
+      scenario: 'codex',
+      tab: 'recall',
+      hidden: false
+    };
+
+    const codeBlock = document.getElementById('codeBlock');
+    const windowTitle = document.getElementById('windowTitle');
+    const fileTabs = document.getElementById('fileTabs');
+    const receiptRow = document.getElementById('receiptRow');
+    const capsuleTitle = document.getElementById('capsuleTitle');
+    const capsuleSubtitle = document.getElementById('capsuleSubtitle');
+    const selectionText = document.getElementById('selectionText');
+    const memoryList = document.getElementById('memoryList');
+    const promptBox = document.getElementById('promptBox');
+    const boundaryList = document.getElementById('boundaryList');
+    const toast = document.getElementById('toast');
+    const capsule = document.getElementById('capsule');
+    const saveTitle = document.getElementById('saveTitle');
+    const saveReceipt = document.getElementById('saveReceipt');
+
+    function render() {
+      const scenario = scenarios[state.scenario];
+      windowTitle.textContent = scenario.windowTitle;
+      fileTabs.innerHTML = scenario.tabs.map((tab, index) =>
+        `<div class="file-tab ${index === 0 ? 'active' : ''}">${tab}</div>`
+      ).join('');
+      codeBlock.innerHTML = scenario.code.map(line => `<span>${line}</span>`).join('');
+      capsuleTitle.textContent = scenario.title;
+      capsuleSubtitle.textContent = scenario.subtitle;
+      selectionText.textContent = scenario.selection;
+      receiptRow.innerHTML = scenario.receipt.map(([tone, text]) =>
+        `<span class="pill ${tone}">${text}</span>`
+      ).join('');
+      renderMemories(scenario);
+      promptBox.textContent = scenario.prompt;
+      boundaryList.innerHTML = scenario.boundary.map(item => `<li>${item}</li>`).join('');
+      saveTitle.textContent = state.scenario === 'secret' ? '保存已禁用' : '保存前复核';
+      saveReceipt.textContent = state.scenario === 'secret'
+        ? '当前选区疑似包含 secret，不允许保存，也不会创建 source-memory capsule。'
+        : '当前只打开复核面板，还没有创建 source-memory capsule，也没有写入检索信号。';
+      capsule.hidden = state.hidden;
+      document.querySelectorAll('.scenario-button').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.scenario === state.scenario));
+      });
+    }
+
+    function renderMemories(scenario) {
+      if (scenario.memories.length === 0) {
+        memoryList.innerHTML = `
+          <div class="status-strip">
+            <strong>已本地阻断</strong>
+            <span>Personal AI 没有调用远端记忆召回，因此这里不会显示历史记忆。</span>
+          </div>
+        `;
+        return;
+      }
+      memoryList.innerHTML = scenario.memories.map((memory, index) => `
+        <article class="memory-card">
+          <div class="memory-top">
+            <input class="check" type="checkbox" ${index < 2 ? 'checked' : ''} aria-label="选择 ${memory.title}">
+            <div>
+              <h3>${memory.title}</h3>
+              <p>${memory.cue}</p>
+            </div>
+            <span class="score">${memory.score}</span>
+          </div>
+          <div class="meta">
+            ${memory.meta.map(item => `<span class="pill">${item}</span>`).join('')}
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function showTab(tabName) {
+      state.tab = tabName;
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.setAttribute('aria-selected', String(tab.dataset.tab === tabName));
+      });
+      document.querySelectorAll('[data-panel]').forEach(panel => {
+        panel.hidden = panel.dataset.panel !== tabName;
+      });
+    }
+
+    function showToast(message, tone = 'ok') {
+      toast.textContent = message;
+      toast.className = 'toast show';
+      if (tone === 'block') {
+        toast.style.borderColor = '#f0b8c0';
+        toast.style.background = '#ffecef';
+        toast.style.color = '#a53647';
+      } else {
+        toast.style.borderColor = '#9adbd1';
+        toast.style.background = '#e8fbf8';
+        toast.style.color = '#0b5f59';
+      }
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => {
+        toast.className = 'toast';
+      }, 4200);
+    }
+
+    document.querySelectorAll('.scenario-button').forEach(button => {
+      button.addEventListener('click', () => {
+        state.scenario = button.dataset.scenario;
+        state.hidden = false;
+        showTab('recall');
+        render();
+        showToast('已切换场景，胶囊仍保持只读预览。');
+      });
+    });
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => showTab(tab.dataset.tab));
+    });
+
+    document.getElementById('triggerButton').addEventListener('click', () => {
+      state.hidden = false;
+      render();
+      showToast('已模拟热键触发：只读取当前选区，没有写入或外发。');
+    });
+
+    document.getElementById('closeButton').addEventListener('click', () => {
+      state.hidden = true;
+      render();
+      showToast('胶囊已隐藏。本次选区没有写入长期记忆。');
+    });
+
+    document.addEventListener('click', event => {
+      const action = event.target && event.target.dataset ? event.target.dataset.action : null;
+      if (!action) return;
+      const isSecret = state.scenario === 'secret';
+      if (action === 'copy') {
+        showToast(isSecret ? '已阻断复制：选区疑似包含 secret。' : '已复制上下文包：只进剪贴板，不自动粘贴或发送。', isSecret ? 'block' : 'ok');
+      }
+      if (action === 'ask') {
+        showToast(isSecret ? '已阻断 Ask：不会把 secret 发给远端召回。' : '已准备 Ask：在 Personal AI 内追问，不外发到其他 AI。', isSecret ? 'block' : 'ok');
+      }
+      if (action === 'hide') {
+        showToast('已隐藏这条候选：只记录本地负反馈，不删除原始记忆。');
+      }
+      if (action === 'toggle') {
+        showToast('上下文包已按已勾选记忆重新生成。');
+      }
+      if (action === 'save') {
+        showToast(isSecret ? '已阻断保存：没有创建 source-memory capsule。' : '保存已进入确认态：示例中模拟写入完成，并保留 writeReceipt。', isSecret ? 'block' : 'ok');
+        if (!isSecret) {
+          saveReceipt.textContent = '模拟结果：已保存为 desktop_selection source-memory capsule；未外发，未创建任务。';
+        }
+      }
+      if (action === 'cancel-save') {
+        showToast('已取消保存：没有创建资料记忆，也没有写入检索信号。');
+      }
+    });
+
+    render();
+    showTab('recall');
+  </script>
+</body>
+</html>

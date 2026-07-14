@@ -26,7 +26,13 @@ await fs.writeFile(ordinaryArchivePath, Buffer.from('ordinary archive fixture'))
 await fs.writeFile(externalAiArchivePath, Buffer.from('external ai archive fixture'));
 await fs.writeFile(backupArchivePath, Buffer.from('backup archive fixture'));
 const backupExportFileName = 'personal-ai-memory-verify-user-20260610T120000Z.zip';
+const backupArchiveSha256 =
+  '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 const nowSeconds = Math.floor(Date.now() / 1000);
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function jsonResponse(body, status = 200) {
   return {
@@ -38,6 +44,23 @@ function jsonResponse(body, status = 200) {
 
 function emptyList() {
   return { items: [], total: 0, limit: 50, offset: 0 };
+}
+
+async function expectControlBoundary(locator, fragments) {
+  const title = await locator.getAttribute('title');
+  const ariaLabel = await locator.getAttribute('aria-label');
+  assert.ok(title, 'expected control title boundary');
+  assert.equal(
+    ariaLabel,
+    title,
+    'expected title and aria-label to share one boundary string',
+  );
+  for (const fragment of fragments) {
+    assert.ok(
+      title.includes(fragment),
+      `expected control boundary to include "${fragment}", got "${title}"`,
+    );
+  }
 }
 
 function coverageMapReceipt(fixture) {
@@ -250,6 +273,149 @@ function coverageMapFixture() {
   return fixture;
 }
 
+function coverageSliceResponse({ slice, source, summary, note, payload }) {
+  return {
+    generatedAt: nowSeconds,
+    staleAfterDays: 7,
+    receipt: {
+      slice,
+      generatedAt: nowSeconds,
+      staleAfterDays: 7,
+      source,
+      summary,
+      boundary:
+        '只读覆盖诊断切片；不会写入记忆、重跑 provider sync、修复配置、标记已读或外发到任何平台。',
+      note,
+    },
+    ...payload,
+  };
+}
+
+function messagesBySourceSliceFixture() {
+  return coverageSliceResponse({
+    slice: 'messages-by-source',
+    source: "messages_raw GROUP BY source_type",
+    summary: {
+      itemCount: 2,
+      totalCount: 128,
+      recentCount: 43,
+      latestAt: nowSeconds - 60,
+      windowLabel: '全量 source_type 聚合 + 近 7 天新鲜度',
+      emptyState:
+        '已读取 source_type 聚合；空 source_type 会归为 unknown。',
+    },
+    note:
+      '按 source_type 聚合消息覆盖和近 7 天新鲜度；不读取消息正文、不补写 missing source，也不触发召回。',
+    payload: {
+      items: [
+        { sourceType: 'glip', count: 100, recentCount: 25, latestAt: nowSeconds },
+        { sourceType: 'web', count: 28, recentCount: 18, latestAt: nowSeconds - 300 },
+      ],
+    },
+  });
+}
+
+function pressureSliceFixture() {
+  return coverageSliceResponse({
+    slice: 'pressure',
+    source:
+      'notification_records + proposed_actions + confirm_requests + reflection_threads',
+    summary: {
+      itemCount: 5,
+      totalCount: 3,
+      windowLabel: '当前未完成压力队列快照',
+      emptyState:
+        '已读取当前待处理压力；这些数字不是执行结果，也不会自动清队列。',
+    },
+    note:
+      '只统计待通知、动作队列、待确认决策和 active 反思压力；不发送通知、不执行动作、不确认决策，也不关闭反思线程。',
+    payload: {
+      notificationsPending: 1,
+      actionsQueued: 1,
+      actionsRunning: 0,
+      confirmRequestsPending: 1,
+      reflectionThreadsActive: 0,
+      totalPressureItems: 3,
+    },
+  });
+}
+
+function providerJobsSliceFixture() {
+  return coverageSliceResponse({
+    slice: 'provider-jobs-recent',
+    source: 'provider_sync_jobs from the last 30 days',
+    summary: {
+      itemCount: 1,
+      totalCount: 1,
+      failureCount: 1,
+      latestAt: nowSeconds - 120,
+      windowLabel: '最近 30 天 provider_sync_jobs 聚合',
+      emptyState:
+        '已按 provider/scenario 汇总最近任务；latestStatus 只描述该组合的最新一条任务。',
+    },
+    note:
+      '展示 provider job 最近状态、失败数和最新错误；不重跑 provider sync、不清空错误，也不修改同步设置。',
+    payload: {
+      items: [
+        {
+          provider: 'doubao',
+          scenario: 'stable_memory',
+          total: 1,
+          succeeded: 0,
+          failed: 1,
+          skipped: 0,
+          latestAt: nowSeconds - 120,
+          latestStatus: 'failed',
+          latestError: 'fixture failure',
+        },
+      ],
+    },
+  });
+}
+
+function skillsSyncSliceFixture() {
+  return coverageSliceResponse({
+    slice: 'skills-sync',
+    source: 'skill_platform_sync_settings + skill_platform_bindings',
+    summary: {
+      itemCount: 2,
+      totalCount: 3,
+      enabledCount: 1,
+      failureCount: 1,
+      latestAt: nowSeconds - 180,
+      windowLabel: '当前技能同步设置 + 最近探测状态',
+      emptyState:
+        '已读取技能平台设置和绑定计数；未启用平台仍只是规划项。',
+    },
+    note:
+      '展示技能平台同步设置、探测状态和绑定状态计数；不启用平台、不拉取外部技能，也不写入 active skill truth。',
+    payload: {
+      items: [
+        {
+          platform: 'openclaw',
+          enabled: true,
+          capability: 'api',
+          mode: 'auto',
+          lastProbeAt: nowSeconds - 180,
+          lastProbeAgeDays: 0,
+          lastError: null,
+          bindingsByState: { active: 2 },
+        },
+        {
+          platform: 'claude_code',
+          enabled: false,
+          capability: 'fs_via_desktop_app',
+          mode: 'manual',
+          lastProbeAt: null,
+          lastProbeAgeDays: null,
+          lastError: 'fixture probe failed',
+          bindingsByState: { blocked: 1 },
+        },
+      ],
+    },
+  });
+}
+
 function coverageInfoOnlyFixture() {
   return {
     generatedAt: nowSeconds,
@@ -393,6 +559,42 @@ function coverageNoTimelineFixture() {
     ...coverageInfoOnlyFixture(),
     timeline: [],
   };
+  fixture.receipt = coverageMapReceipt(fixture);
+  return fixture;
+}
+
+function coverageCappedTimelineFixture() {
+  const fixture = coverageInfoOnlyFixture();
+  fixture.timeline = Array.from({ length: 8 }, (_, index) => ({
+    id: `latest:web:${index + 1}`,
+    platformId: 'web',
+    at: nowSeconds - 60 * (index + 1),
+    title: `网页记忆 最近一次覆盖信号 ${index + 1}`,
+    state: 'healthy',
+    source: "messages_raw.source_type='web'",
+  }));
+  fixture.receipt = coverageMapReceipt(fixture);
+  return fixture;
+}
+
+function coverageStaleSnapshotFixture() {
+  const fixture = coverageInfoOnlyFixture();
+  const staleGeneratedAt = nowSeconds - 9 * 86400;
+  fixture.generatedAt = staleGeneratedAt;
+  fixture.platforms = fixture.platforms.map((platform) => ({
+    ...platform,
+    lastSeenAt: platform.lastSeenAt ? staleGeneratedAt - 300 : null,
+  }));
+  fixture.timeline = [
+    {
+      id: 'latest:web',
+      platformId: 'web',
+      at: staleGeneratedAt - 300,
+      title: '网页记忆 最近一次覆盖信号',
+      state: 'healthy',
+      source: "messages_raw.source_type='web'",
+    },
+  ];
   fixture.receipt = coverageMapReceipt(fixture);
   return fixture;
 }
@@ -628,6 +830,7 @@ function backupPreviewFixture(mode = 'merge') {
       exportedAt: '2026-05-24T15:45:00.000Z',
       formatVersion: 1,
       includeCount: 12,
+      archiveSha256: backupArchiveSha256,
       layers: {
         A: 2,
         B: 6,
@@ -668,6 +871,14 @@ function backupImportFixture(mode = 'merge') {
     mode,
     importedAt: '2026-05-24T16:35:00.000Z',
     restoredLayers: ['A', 'B'],
+    backup: {
+      userId: 'backup-user',
+      targetUserId: 'verify-user',
+      exportedAt: '2026-05-24T15:45:00.000Z',
+      formatVersion: 1,
+      includeCount: 12,
+      archiveSha256: backupArchiveSha256,
+    },
     database: {
       action: mode === 'replace' ? 'replaced' : 'merged',
       changedRows: 42,
@@ -698,9 +909,25 @@ function apiFallback(url) {
   if (pathname.endsWith('/coverage/map')) {
     return coverageFixtureMode === 'no-timeline'
       ? coverageNoTimelineFixture()
+      : coverageFixtureMode === 'capped-timeline'
+      ? coverageCappedTimelineFixture()
       : coverageFixtureMode === 'info-only'
       ? coverageInfoOnlyFixture()
+      : coverageFixtureMode === 'stale-snapshot'
+      ? coverageStaleSnapshotFixture()
       : coverageMapFixture();
+  }
+  if (pathname.endsWith('/coverage/messages-by-source')) {
+    return messagesBySourceSliceFixture();
+  }
+  if (pathname.endsWith('/coverage/pressure')) {
+    return pressureSliceFixture();
+  }
+  if (pathname.endsWith('/coverage/provider-jobs/recent')) {
+    return providerJobsSliceFixture();
+  }
+  if (pathname.endsWith('/coverage/skills-sync')) {
+    return skillsSyncSliceFixture();
   }
   if (pathname.endsWith('/stats')) {
     return {
@@ -730,8 +957,10 @@ let backupPreviewCount = 0;
 let backupImportCount = 0;
 let backupImportFailureCount = 0;
 let smartImportInspectMode = 'high-risk';
+let smartImportCommitDelayMs = 0;
 let coverageFixtureMode = 'default';
 let failNextBackupExport = false;
+let backupExportDelayMs = 0;
 let failNextCoverageRefresh = false;
 let failNextBackupImport = false;
 
@@ -767,6 +996,11 @@ try {
       return;
     }
     if (pathname.endsWith('/export')) {
+      const exportDelayMs = backupExportDelayMs;
+      backupExportDelayMs = 0;
+      if (exportDelayMs > 0) {
+        await delay(exportDelayMs);
+      }
       if (failNextBackupExport) {
         failNextBackupExport = false;
         backupExportFailureCount += 1;
@@ -789,6 +1023,7 @@ try {
           'cache-control': 'no-store',
           'x-personal-ai-backup-user-id': 'verify-user',
           'x-personal-ai-backup-exported-at': '2026-05-24T15:45:00.000Z',
+          'x-personal-ai-backup-archive-sha256': backupArchiveSha256,
           'x-personal-ai-backup-format-version': '1',
           'x-personal-ai-backup-include-count': '12',
           'x-personal-ai-backup-layer-a-count': '2',
@@ -816,6 +1051,11 @@ try {
       return;
     }
     if (pathname.endsWith('/import/commit')) {
+      const commitDelayMs = smartImportCommitDelayMs;
+      smartImportCommitDelayMs = 0;
+      if (commitDelayMs > 0) {
+        await delay(commitDelayMs);
+      }
       if (smartImportCommitCount === 0) {
         assert.match(
           request.postData() || '',
@@ -824,6 +1064,20 @@ try {
         );
       }
       smartImportCommitCount += 1;
+      if (smartImportInspectMode === 'external-ai') {
+        await route.fulfill(
+          jsonResponse({
+            status: 'committed',
+            batchId: 'fixture-external-ai-batch',
+            detectedKind: 'external_ai_history',
+            importedMessages: 85,
+            importedChunks: 5,
+            skippedEntries: 12,
+            warnings: ['External AI import kept fixture omissions visible.'],
+          }),
+        );
+        return;
+      }
       await route.fulfill(
         jsonResponse({
           status: 'committed',
@@ -898,6 +1152,61 @@ try {
   await snapshotReceipt
     .getByText('本轮聚合 2 个 active / derived 平台、1 个覆盖缺口、0 个可选规划项')
     .waitFor({ timeout: 10000 });
+  const coverageDiagnostics = page.locator('[aria-label="P0 只读诊断切片"]');
+  await coverageDiagnostics
+    .getByText('P0 只读诊断切片', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('切片已读取', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('已读取 4 个 P0 诊断切片')
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('不会写入记忆、重跑 provider sync、修复配置、标记已读或外发')
+    .first()
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('消息来源', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('2 行 · 128 总量 · 43 近 7 天', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText("messages_raw GROUP BY source_type")
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('压力队列', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('5 行 · 3 总量', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('Provider jobs', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('1 行 · 1 总量 · 1 失败', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('技能同步', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await coverageDiagnostics
+    .getByText('2 行 · 3 总量 · 1 失败 · 1 启用', { exact: true })
+    .waitFor({ timeout: 10000 });
+  const refreshSlicesButton = coverageDiagnostics.getByRole('button', {
+    name: /刷新切片/,
+  });
+  await expectControlBoundary(refreshSlicesButton, [
+    '刷新切片',
+    '四个 P0 诊断切片',
+    '不会重扫 /coverage/map',
+    '替换质量分',
+    '不会重跑 provider sync',
+  ]);
+  await refreshSlicesButton.click();
+  await coverageDiagnostics
+    .getByText('切片已读取', { exact: true })
+    .waitFor({ timeout: 10000 });
   const backupPreActionReceipt = page.locator('[aria-label="备份操作前回执"]');
   await backupPreActionReceipt
     .getByText('备份操作前回执', { exact: true })
@@ -911,16 +1220,71 @@ try {
   await backupPreActionReceipt
     .getByText('先 dry-run，再按 merge/replace 影响预览确认')
     .waitFor({ timeout: 10000 });
+  const backupDownloadButton = page.getByRole('button', { name: /记忆备份/ });
+  assert.match(
+    (await backupDownloadButton.getAttribute('title')) || '',
+    /只会向当前 Memory Service 请求 backup zip/,
+    'backup download button should expose export-only boundary in title',
+  );
+  assert.match(
+    (await backupDownloadButton.getAttribute('aria-label')) || '',
+    /不会恢复、删除、替换、同步或外发任何记忆/,
+    'backup download button should expose no-restore boundary to screen readers',
+  );
   const timelineReceipt = page.locator('[aria-label="最近覆盖信号回执"]');
   await timelineReceipt.getByText('1 条平台信号').waitFor({ timeout: 10000 });
   await timelineReceipt
     .getByText('所有展示事件都在 7 天新鲜度窗口内')
     .waitFor({ timeout: 10000 });
-  await timelineReceipt
-    .getByText('不是同步日志，也不会触发同步、写库、标记已读或外发')
+  const timelineSliceReceipt = timelineReceipt.locator(
+    '[aria-label="最近覆盖信号切片说明"]',
+  );
+  await timelineSliceReceipt
+    .getByText('可见切片', { exact: true })
     .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('当前显示 1 条按 lastSeenAt 排序的平台事件')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('Coverage API 最多返回 8 条')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('未达到 8 条上限，但仍只是当前返回的可见切片')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('不能证明', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('权限 / ACL 已校验')
+    .waitFor({ timeout: 10000 });
+  await timelineReceipt
+    .getByText('不会重跑 provider sync、写库、标记已读、修复配置或外发')
+    .waitFor({ timeout: 10000 });
+  const backupDownloadPendingReceipt = page.locator(
+    '[aria-label="备份下载提交中回执"]',
+  );
   failNextBackupExport = true;
-  await page.getByRole('button', { name: '记忆备份' }).click();
+  backupExportDelayMs = 1000;
+  const failedExportClick = backupDownloadButton.click();
+  await backupDownloadPendingReceipt
+    .getByText('备份下载提交中回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('正在请求 backup zip', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('已向当前 Memory Service 发起 POST /export')
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('完成前还没有新文件名、大小或 manifest 摘要')
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('等待导出期间不会恢复、删除、替换、同步或外发任何记忆')
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('恢复仍需从「录入 > 备份 zip」重新 dry-run')
+    .waitFor({ timeout: 10000 });
+  await failedExportClick;
   const backupDownloadFailureReceipt = page.locator(
     '[aria-label="备份下载失败回执"]',
   );
@@ -953,7 +1317,12 @@ try {
   assert.equal(backupExportCount, 0);
 
   const backupDownloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '记忆备份' }).click();
+  backupExportDelayMs = 1000;
+  const successfulExportClick = backupDownloadButton.click();
+  await backupDownloadPendingReceipt
+    .getByText('下方失败回执仍然只是上一次错误；本次请求还没有返回成功或失败')
+    .waitFor({ timeout: 10000 });
+  await successfulExportClick;
   const backupDownload = await backupDownloadPromise;
   assert.equal(
     backupDownload.suggestedFilename(),
@@ -971,7 +1340,7 @@ try {
     .getByText('Personal AI backup zip')
     .waitFor({ timeout: 10000 });
   await backupDownloadReceipt
-    .getByText('Manifest 摘要已随响应头返回：12 个清单路径，用户空间 verify-user')
+    .getByText('Manifest 摘要已随响应头返回：12 个清单路径，用户空间 verify-user，指纹 sha256:1234567890ab')
     .waitFor({ timeout: 10000 });
   await backupDownloadReceipt
     .getByText('备份用户', { exact: true })
@@ -981,6 +1350,12 @@ try {
     .waitFor({ timeout: 10000 });
   await backupDownloadReceipt
     .getByText('备份清单', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await backupDownloadReceipt
+    .getByText('备份指纹', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await backupDownloadReceipt
+    .getByText('sha256:1234567890ab', { exact: true })
     .waitFor({ timeout: 10000 });
   await backupDownloadReceipt
     .getByText('12 个路径 · format v1')
@@ -1005,9 +1380,22 @@ try {
     'successful backup export should keep the concrete download receipt instead of the pre-action receipt',
   );
   assert.equal(backupExportCount, 1);
+  assert.match(
+    (await backupDownloadButton.getAttribute('title')) || '',
+    /只是上一次下载结果/,
+    'backup download button should explain a prior success is not the next backup',
+  );
 
   failNextBackupExport = true;
-  await page.getByRole('button', { name: '记忆备份' }).click();
+  backupExportDelayMs = 1000;
+  const failedExportAfterSuccessClick = backupDownloadButton.click();
+  await backupDownloadPendingReceipt
+    .getByText(`下方旧下载回执仍然只是 ${backupExportFileName} 的上一次结果`)
+    .waitFor({ timeout: 10000 });
+  await backupDownloadPendingReceipt
+    .getByText('不代表本次已经保存新 zip')
+    .waitFor({ timeout: 10000 });
+  await failedExportAfterSuccessClick;
   await backupDownloadFailureReceipt
     .getByText('备份下载失败回执', { exact: true })
     .waitFor({ timeout: 10000 });
@@ -1030,13 +1418,53 @@ try {
     .first()
     .getByText('网页记忆')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '低分优先' }).click();
+  const lowScoreSortButton = page.getByRole('button', { name: /低分优先/ });
+  await expectControlBoundary(lowScoreSortButton, [
+    '低分优先',
+    '当前前端快照',
+    'qualityScore',
+    '不参与低分故障排序',
+    '不会重扫 Coverage API',
+  ]);
+  await lowScoreSortButton.click();
   await activeSection
     .locator('.platform-card')
     .first()
     .getByText('RingCentral')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '默认' }).click();
+  const lowScoreSortReceipt = page.locator('[aria-label="质量分排序回执"]');
+  await lowScoreSortReceipt.getByText('质量分排序回执').waitFor({
+    timeout: 10000,
+  });
+  await lowScoreSortReceipt.getByText('排序范围').waitFor({ timeout: 10000 });
+  await lowScoreSortReceipt
+    .getByText('2 个已激活 / 派生平台在各自分组内按质量分升序排列')
+    .waitFor({ timeout: 10000 });
+  await lowScoreSortReceipt
+    .getByText('0 个未启用通道 / 系统入口保持原分组口径')
+    .waitFor({ timeout: 10000 });
+  await lowScoreSortReceipt
+    .getByText('info 规划项不算当前覆盖故障')
+    .waitFor({ timeout: 10000 });
+  await lowScoreSortReceipt
+    .getByText('不判断内容事实正确性或是否足够进入回复/画像')
+    .waitFor({ timeout: 10000 });
+  await lowScoreSortReceipt
+    .getByText('不重扫 Coverage API、不重跑 provider sync、不写库、不标记已读，也不外发')
+    .waitFor({ timeout: 10000 });
+  const defaultSortButton = page.getByRole('button', { name: /默认排序/ });
+  await expectControlBoundary(defaultSortButton, [
+    '默认排序',
+    '恢复为 Coverage API 返回顺序',
+    '不会重扫 Coverage API',
+    '重算质量分',
+  ]);
+  await defaultSortButton.click();
+  await page.waitForFunction(
+    () => !document.querySelector('[aria-label="质量分排序回执"]'),
+    null,
+    { timeout: 10000 },
+  );
   const qualityFocus = page.locator('[aria-label="质量分焦点"]');
   await qualityFocus.getByText('优先处理').waitFor({ timeout: 10000 });
   await qualityFocus.getByText('RingCentral · 58/100').waitFor({
@@ -1062,7 +1490,17 @@ try {
   await qualityFocusReceipt
     .getByText('不会重跑同步、改配置、写入记忆、标记已读或外发')
     .waitFor({ timeout: 10000 });
-  await qualityFocus.getByRole('button', { name: '查看平台' }).click();
+  const qualityFocusButton = qualityFocus.getByRole('button', {
+    name: /查看平台/,
+  });
+  await expectControlBoundary(qualityFocusButton, [
+    '查看平台',
+    'RingCentral',
+    '服务端 priorityFocus',
+    '刷新诊断切片',
+    '不会重扫 Coverage API',
+  ]);
+  await qualityFocusButton.click();
   const ringCentralCard = page.locator('.platform-card', {
     hasText: 'RingCentral',
   });
@@ -1077,10 +1515,28 @@ try {
   await scorePanel.waitFor({ timeout: 10000 });
   await scorePanel.getByText('58/100').waitFor({ timeout: 10000 });
   await scorePanel.getByText('状态基准 partial').waitFor({ timeout: 10000 });
-  await scorePanel.getByText('近 7 天信号占比 25%').waitFor({ timeout: 10000 });
+  await scorePanel.getByText('近 7 天信号占比 25%：+2 分').waitFor({
+    timeout: 10000,
+  });
   await scorePanel.getByText('存在失败贡献项：-10 分').waitFor({
     timeout: 10000,
   });
+  const scoreSnapshotReceipt = scorePanel.locator('[aria-label="质量分快照口径"]');
+  await scoreSnapshotReceipt.getByText('质量分快照口径').waitFor({
+    timeout: 10000,
+  });
+  await scoreSnapshotReceipt.getByText('当前 Coverage 快照').waitFor({
+    timeout: 10000,
+  });
+  await scoreSnapshotReceipt
+    .getByText('近 7 天信号占比 25%')
+    .waitFor({ timeout: 10000 });
+  await scoreSnapshotReceipt
+    .getByText('切换平台、排序或查看修复路线只读当前快照')
+    .waitFor({ timeout: 10000 });
+  await scoreSnapshotReceipt
+    .getByText('新的 /coverage/map 响应后')
+    .waitFor({ timeout: 10000 });
   const scoreBoundary = scorePanel.locator('[aria-label="质量分边界"]');
   await scoreBoundary.getByText('衡量范围').waitFor({ timeout: 10000 });
   await scoreBoundary
@@ -1146,8 +1602,17 @@ try {
     .locator('.repair-panel', { hasText: '检查 RingCentral 日历同步' })
     .waitFor({ timeout: 10000 });
 
+  const refreshCoverageButton = page.getByRole('button', { name: /重扫覆盖/ });
+  await expectControlBoundary(refreshCoverageButton, [
+    '重扫覆盖',
+    '只重新读取 /coverage/map',
+    '成功后才替换平台卡片',
+    '质量分焦点',
+    '不会重跑 provider sync',
+  ]);
+
   failNextCoverageRefresh = true;
-  await page.getByRole('button', { name: '重扫覆盖' }).click();
+  await refreshCoverageButton.click();
   await page
     .locator('.status-box.error')
     .getByText('fixture coverage refresh failed')
@@ -1175,7 +1640,7 @@ try {
   await ringCentralCard.getByText('58/100').waitFor({ timeout: 10000 });
 
   coverageFixtureMode = 'info-only';
-  await page.getByRole('button', { name: '重扫覆盖' }).click();
+  await refreshCoverageButton.click();
   await snapshotReceipt.getByText('当前快照可用').waitFor({ timeout: 10000 });
   await manualRefreshReceipt
     .getByText('重扫完成，平台卡片已更新')
@@ -1211,8 +1676,23 @@ try {
     .locator('.repair-panel', { hasText: '按需启用 Codex 技能同步' })
     .waitFor({ timeout: 10000 });
 
+  coverageFixtureMode = 'capped-timeline';
+  await refreshCoverageButton.click();
+  await timelineReceipt
+    .getByText('8 条平台信号')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('当前显示 8 条按 lastSeenAt 排序的平台事件')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('已达到 8 条上限，后面可能还有更早的平台事件未显示')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('这不是完整同步日志')
+    .waitFor({ timeout: 10000 });
+
   coverageFixtureMode = 'no-timeline';
-  await page.getByRole('button', { name: '重扫覆盖' }).click();
+  await refreshCoverageButton.click();
   await timelineReceipt
     .getByText('没有可显示的 lastSeenAt')
     .waitFor({ timeout: 10000 });
@@ -1220,7 +1700,13 @@ try {
     .getByText('当前快照没有可排序事件，不代表来源全部健康或全部失联')
     .waitFor({ timeout: 10000 });
   await timelineReceipt
-    .getByText('重扫只读取 Coverage API，不会触发同步、写库、标记已读或外发')
+    .getByText('下方回执说明空切片边界')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('当前显示 0 条按 lastSeenAt 排序的平台事件')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('没有事件可与 7 天窗口比较')
     .waitFor({ timeout: 10000 });
   const timelineEmptyState = page.locator('[aria-label="最近覆盖信号空态"]');
   await timelineEmptyState
@@ -1230,11 +1716,40 @@ try {
     .getByText('不能据此判断所有来源健康')
     .waitFor({ timeout: 10000 });
 
+  coverageFixtureMode = 'stale-snapshot';
+  await refreshCoverageButton.click();
+  await snapshotReceipt
+    .getByText('覆盖快照已过期')
+    .waitFor({ timeout: 10000 });
+  await snapshotReceipt
+    .getByText('快照年龄约 9 天')
+    .waitFor({ timeout: 10000 });
+  await snapshotReceipt
+    .getByText('质量分和平台卡片仍来自旧快照')
+    .waitFor({ timeout: 10000 });
+  await snapshotReceipt
+    .getByText('先点击重扫覆盖确认当前状态')
+    .waitFor({ timeout: 10000 });
+  await timelineSliceReceipt
+    .getByText('新鲜度按服务端快照 generatedAt 和 7 天窗口判断')
+    .waitFor({ timeout: 10000 });
+
   await page.getByRole('button', { name: '录入' }).click();
+  const primaryImportButton = page.locator('.drawer-footer .btn.primary');
   const smartImportScopeReceipt = page.locator('[aria-label="智能录入范围回执"]');
   await smartImportScopeReceipt
     .getByText('智能录入范围回执', { exact: true })
     .waitFor({ timeout: 10000 });
+  assert.match(
+    (await primaryImportButton.getAttribute('title')) || '',
+    /查看 dry-run：只读取当前粘贴文本/,
+    'smart import primary button should expose inspect boundary before dry-run',
+  );
+  assert.match(
+    (await primaryImportButton.getAttribute('aria-label')) || '',
+    /不会创建 import batch、messages、chunks/,
+    'smart import primary button should expose no-write inspect boundary to screen readers',
+  );
   await smartImportScopeReceipt
     .getByText('尚未 dry-run')
     .waitFor({ timeout: 10000 });
@@ -1245,13 +1760,18 @@ try {
     .getByText('只有 dry-run ready 且你点击「提交录入」后，才写入 manual shadow memory')
     .waitFor({ timeout: 10000 });
   await page.locator('textarea.paste-box').fill('api_key=secret token=abc');
-  await page.getByRole('button', { name: '查看 dry-run' }).click();
+  await primaryImportButton.click();
   await page.getByText('预检提醒').waitFor({ timeout: 10000 });
   await page.getByText('发现 2 个高风险词').waitFor({ timeout: 10000 });
   await smartImportScopeReceipt
     .getByText('当前 dry-run 状态是 ready')
     .waitFor({ timeout: 10000 });
-  const submitImport = page.getByRole('button', { name: '提交录入' });
+  const submitImport = primaryImportButton;
+  assert.match(
+    (await submitImport.getAttribute('title')) || '',
+    /必须先勾选确认/,
+    'high-risk smart import submit button should explain why it is disabled',
+  );
   assert.equal(
     await submitImport.isDisabled(),
     true,
@@ -1259,7 +1779,80 @@ try {
   );
   await page.getByLabel('确认仍以低权重 shadow memory 导入').check();
   assert.equal(await submitImport.isDisabled(), false);
+  assert.match(
+    (await submitImport.getAttribute('aria-label')) || '',
+    /写入 work manual shadow memory/,
+    'confirmed smart import submit button should expose target write scope',
+  );
+  smartImportCommitDelayMs = 1000;
   await submitImport.click();
+  const smartImportPendingReceipt = page.locator(
+    '[aria-label="资料写入提交中回执"]',
+  );
+  await smartImportPendingReceipt
+    .getByText('资料写入提交中回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await smartImportPendingReceipt
+    .getByText('已提交 1 个粘贴来源、约 1 个 chunks 到 work 范围')
+    .waitFor({ timeout: 10000 });
+  await smartImportPendingReceipt
+    .getByText('提交中不代表已经写入成功')
+    .waitFor({ timeout: 10000 });
+  await smartImportPendingReceipt
+    .getByText('本次包含 2 个高风险词，提交请求已带上用户确认')
+    .waitFor({ timeout: 10000 });
+  await smartImportPendingReceipt
+    .getByText('不会自动同步外部平台、覆盖旧 batch、确认画像/skill/项目事实、发送消息或外发导入内容')
+    .waitFor({ timeout: 10000 });
+  const pasteBox = page.locator('textarea.paste-box');
+  const scopeSelect = page.locator('.scope-row select');
+  const documentSourceChip = page.locator('.source-chip', { hasText: '文档' });
+  const chooseFileButton = page.locator('.compact-dropzone .button-row .btn').first();
+  assert.equal(
+    await pasteBox.isDisabled(),
+    true,
+    'paste text should be locked while smart import commit is pending',
+  );
+  assert.match(
+    (await pasteBox.getAttribute('title')) || '',
+    /当前录入请求处理中/,
+    'paste box should explain the in-flight input lock',
+  );
+  assert.equal(
+    await scopeSelect.isDisabled(),
+    true,
+    'scope selector should be locked while smart import commit is pending',
+  );
+  assert.match(
+    (await scopeSelect.getAttribute('aria-label')) || '',
+    /本次请求仍使用点击时的 work 范围/,
+    'scope selector should expose the committed scope boundary',
+  );
+  assert.equal(
+    await documentSourceChip.isDisabled(),
+    true,
+    'source switching should be locked while smart import commit is pending',
+  );
+  assert.match(
+    (await documentSourceChip.getAttribute('title')) || '',
+    /完成前不能切换来源/,
+    'source chip should expose the source-switch lock boundary',
+  );
+  assert.equal(
+    await chooseFileButton.isDisabled(),
+    true,
+    'file picker should be locked while smart import commit is pending',
+  );
+  assert.match(
+    (await chooseFileButton.getAttribute('aria-label')) || '',
+    /完成前不能选择新文件/,
+    'file picker should expose the file-selection lock boundary',
+  );
+  assert.match(
+    (await submitImport.getAttribute('aria-label')) || '',
+    /正在提交 1 个粘贴来源/,
+    'busy smart import button should expose in-flight commit boundary',
+  );
   await page
     .locator('.import-status', {
       hasText: '录入完成：1 条记忆，1 个 chunks。',
@@ -1275,6 +1868,11 @@ try {
   await smartImportReceipt
     .getByText('work · manual shadow memory · low salience / temporary consolidation')
     .waitFor({ timeout: 10000 });
+  assert.equal(
+    await pasteBox.isDisabled(),
+    false,
+    'paste text should unlock after smart import commit finishes',
+  );
   await smartImportReceipt
     .getByText('source import:fixture-batch')
     .waitFor({ timeout: 10000 });
@@ -1289,11 +1887,16 @@ try {
     0,
     'completed smart import should replace the pre-action scope receipt',
   );
+  assert.equal(
+    await smartImportPendingReceipt.count(),
+    0,
+    'ordinary smart import pending receipt should be replaced by the committed receipt',
+  );
   assert.equal(smartImportCommitCount, 1);
 
   smartImportInspectMode = 'duplicate';
   await page.locator('textarea.paste-box').fill('api_key=secret token=abc');
-  await page.getByRole('button', { name: '查看 dry-run' }).click();
+  await primaryImportButton.click();
   await page
     .locator('.import-status', {
       hasText: '这份资料已经录入过，本次不会重复写入；请查看重复录入回执。',
@@ -1318,11 +1921,16 @@ try {
   await duplicateImportReceipt
     .getByText('重复命中不会改变既有记录的范围、权重或审计路径')
     .waitFor({ timeout: 10000 });
-  const duplicateImportButton = page.getByRole('button', { name: '已录入过' });
+  const duplicateImportButton = primaryImportButton;
   assert.equal(
     await duplicateImportButton.isDisabled(),
     true,
     'duplicate smart import should remain read-only after dry-run receipt',
+  );
+  assert.match(
+    (await duplicateImportButton.getAttribute('title')) || '',
+    /本次不会提交、覆盖、删除、降权、重新同步或写回外部平台/,
+    'duplicate smart import primary button should expose duplicate no-write boundary',
   );
   assert.equal(
     smartImportCommitCount,
@@ -1331,9 +1939,28 @@ try {
   );
 
   smartImportInspectMode = 'ordinary';
-  const ordinaryChooserPromise = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: '备份 zip' }).click();
-  const ordinaryChooser = await ordinaryChooserPromise;
+  const backupZipModeButton = page.locator('.source-toggle .source-chip', {
+    hasText: '备份 zip',
+  });
+  assert.match(
+    (await backupZipModeButton.getAttribute('title')) || '',
+    /切换到备份恢复文件选择/,
+    'backup zip mode button should expose restore-file-selection boundary before click',
+  );
+  assert.match(
+    (await backupZipModeButton.getAttribute('aria-label')) || '',
+    /不会直接恢复或写入/,
+    'backup zip mode button should expose no-write boundary to screen readers',
+  );
+  assert.equal(
+    await backupZipModeButton.isDisabled(),
+    false,
+    'backup zip mode button should be available after duplicate dry-run finishes',
+  );
+  const [ordinaryChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    backupZipModeButton.click(),
+  ]);
   await ordinaryChooser.setFiles(ordinaryArchivePath);
   await page
     .locator('.import-status', {
@@ -1384,12 +2011,21 @@ try {
     0,
     'ordinary zip selected from backup mode should not show restore controls',
   );
-  await page.getByRole('button', { name: '提交录入' }).waitFor({ timeout: 10000 });
+  await primaryImportButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await primaryImportButton.getAttribute('aria-label')) || '',
+    /会把 2 个资料条目、约 3 个 chunks 写入 work manual shadow memory/,
+    'ordinary archive submit button should expose inspected write slice',
+  );
 
   smartImportInspectMode = 'external-ai';
-  const externalAiChooserPromise = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: '外部 AI' }).click();
-  const externalAiChooser = await externalAiChooserPromise;
+  const externalAiModeButton = page.locator('.source-toggle .source-chip', {
+    hasText: '外部 AI',
+  });
+  const [externalAiChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    externalAiModeButton.click(),
+  ]);
   await externalAiChooser.setFiles(externalAiArchivePath);
   await page
     .locator('.import-status', {
@@ -1454,15 +2090,97 @@ try {
     .getByText('只读取用户上传 zip 里的 exports/conversations.json')
     .waitFor({ timeout: 10000 });
   await externalAiDecisionReceipt
+    .getByText('旧 assistant 回答不等于事实确认')
+    .waitFor({ timeout: 10000 });
+  await externalAiDecisionReceipt
+    .getByText('Ask / Profile / Skill / Project 仍需后续证据门控')
+    .waitFor({ timeout: 10000 });
+  await externalAiDecisionReceipt
     .getByText('source hash 去重')
     .waitFor({ timeout: 10000 });
+  smartImportCommitDelayMs = 1000;
+  const externalAiSubmit = primaryImportButton;
+  assert.equal(await externalAiSubmit.isDisabled(), false);
+  assert.match(
+    (await externalAiSubmit.getAttribute('title')) || '',
+    /2 个会话、85\/90 条文本消息写入 work manual shadow memory/,
+    'external AI submit button should expose conversation and message scope',
+  );
+  await externalAiSubmit.click();
+  const externalAiPendingReceipt = page.locator(
+    '[aria-label="外部 AI 写入提交中回执"]',
+  );
+  await externalAiPendingReceipt
+    .getByText('外部 AI 写入提交中回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('2 个会话、85/90 条文本消息到 work 范围')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('服务端尚未返回写入确认')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('12 个截断/非文本/非对话归档项仍不会写入')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('提交中不代表已经写入成功')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('不会继续抓取 ChatGPT / Claude / Gemini')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('旧 assistant 回答不会在服务端确认后直接变成事实')
+    .waitFor({ timeout: 10000 });
+  await externalAiPendingReceipt
+    .getByText('不会直接升级为 confirmed 画像、skill、项目事实')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.import-status', {
+      hasText: '外部 AI 历史录入完成：85 条记忆，5 个 chunks。',
+    })
+    .waitFor({ timeout: 10000 });
+  const externalAiCompleteReceipt = page.locator('[aria-label="录入完成回执"]');
+  await externalAiCompleteReceipt
+    .getByText('录入完成回执 · 外部 AI 历史')
+    .waitFor({ timeout: 10000 });
+  await externalAiCompleteReceipt
+    .getByText('85 条记忆 / 5 个 chunks；跳过 12 个条目。')
+    .waitFor({ timeout: 10000 });
+  await externalAiCompleteReceipt
+    .getByText('只读取用户上传归档里的 exports/conversations.json')
+    .waitFor({ timeout: 10000 });
+  await externalAiCompleteReceipt
+    .getByText('用户原话和旧 assistant 回答仍只是可追溯对话证据')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await externalAiPendingReceipt.count(),
+    0,
+    'external AI pending receipt should be replaced by the committed receipt',
+  );
+  assert.equal(smartImportCommitCount, 2);
 
   smartImportInspectMode = 'backup';
-  const backupChooserPromise = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: '备份 zip' }).click();
-  const backupChooser = await backupChooserPromise;
+  assert.match(
+    (await backupZipModeButton.getAttribute('title')) || '',
+    /切换到备份恢复文件选择|打开文件选择器/,
+    'backup zip mode button should keep a file-picker boundary after other import modes',
+  );
+  const [backupChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    backupZipModeButton.click(),
+  ]);
   await backupChooser.setFiles(backupArchivePath);
   await page.getByText('检测到 Personal AI 备份 zip').waitFor({ timeout: 10000 });
+  assert.match(
+    (await backupZipModeButton.getAttribute('title')) || '',
+    /已识别 personal-ai-memory\.zip 为 Personal AI 备份/,
+    'backup zip mode button should expose recognized backup boundary after selection',
+  );
+  assert.match(
+    (await backupZipModeButton.getAttribute('aria-label')) || '',
+    /选择后仍先做 schema 识别和 restore dry-run/,
+    'backup zip mode button should expose dry-run-before-write boundary after selection',
+  );
   assert.equal(
     await page.locator('.scope-row', { hasText: '写入范围' }).count(),
     0,
@@ -1496,6 +2214,9 @@ try {
     .getByText('点击「继续恢复」只会按 merge 请求 restore dry-run')
     .waitFor({ timeout: 10000 });
   await backupRestorePreviewGate
+    .getByText('读取 manifest、archive 指纹、DB 行数和文件影响')
+    .waitFor({ timeout: 10000 });
+  await backupRestorePreviewGate
     .getByText('不会写入 Memory Service')
     .waitFor({ timeout: 10000 });
   await backupRestorePreviewGate
@@ -1511,7 +2232,7 @@ try {
   await backupRestorePreviewGate
     .getByText('replace 只是当前预览模式')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '继续恢复' }).click();
+  await primaryImportButton.click();
   assert.equal(
     unexpectedDialogMessage,
     '',
@@ -1527,6 +2248,11 @@ try {
   await page
     .locator('.preview-box')
     .getByText('backup-user', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await page.getByText('备份指纹').waitFor({ timeout: 10000 });
+  await page
+    .locator('.preview-box')
+    .getByText('sha256:1234567890ab', { exact: true })
     .waitFor({ timeout: 10000 });
   await backupRestoreTargetReceipt
     .getByText('恢复目标是当前 Memory Service 用户空间 verify-user')
@@ -1552,7 +2278,12 @@ try {
     .waitFor({ timeout: 10000 });
   assert.equal(backupPreviewCount, 1);
 
-  const confirmRestore = page.getByRole('button', { name: '确认恢复' });
+  const confirmRestore = primaryImportButton;
+  assert.match(
+    (await confirmRestore.getAttribute('title')) || '',
+    /按已复核的 replace 预览请求备份恢复写入/,
+    'backup restore primary button should expose write boundary after preview',
+  );
   assert.equal(
     await confirmRestore.isDisabled(),
     true,
@@ -1587,6 +2318,9 @@ try {
     .getByText('保留本次 dry-run 预览：12 个备份条目')
     .waitFor({ timeout: 10000 });
   await restoreFailureReceipt
+    .getByText('指纹 sha256:1234567890ab')
+    .waitFor({ timeout: 10000 });
+  await restoreFailureReceipt
     .getByText('fixture restore write failed')
     .waitFor({ timeout: 10000 });
   await restoreFailureReceipt
@@ -1607,6 +2341,10 @@ try {
     `retry replace commit should not use a browser dialog: ${unexpectedDialogMessage}`,
   );
   await page.getByText('恢复已写入').waitFor({ timeout: 10000 });
+  await page.getByText('备份快照').waitFor({ timeout: 10000 });
+  await page.getByText('backup-user -> verify-user · sha256:1234567890ab').waitFor({
+    timeout: 10000,
+  });
   await page.getByText('replaced · 42 行').waitFor({ timeout: 10000 });
   assert.equal(
     await page.locator('[aria-label="恢复失败回执"]').count(),
@@ -1619,6 +2357,9 @@ try {
     .waitFor({ timeout: 10000 });
   await restoreNextStepReceipt
     .getByText('已按 replace 写入 Layer A/B')
+    .waitFor({ timeout: 10000 });
+  await restoreNextStepReceipt
+    .getByText('本次写入备份指纹 sha256:1234567890ab')
     .waitFor({ timeout: 10000 });
   await restoreNextStepReceipt
     .getByText('恢复写入已确认，但自动刷新 Coverage Map 失败')
@@ -1638,7 +2379,12 @@ try {
   await snapshotReceipt
     .getByText('显示上次成功快照')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '已恢复' }).waitFor({ timeout: 10000 });
+  await primaryImportButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await primaryImportButton.getAttribute('title')) || '',
+    /本次备份恢复已完成，按钮保持禁用/,
+    'completed restore primary button should expose disabled repeat boundary',
+  );
   assert.equal(backupImportCount, 1);
 
   console.log('verify-memory-coverage-e2e: ok');

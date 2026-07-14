@@ -470,6 +470,94 @@ function shortThreadId(value) {
   return text.length > 18 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
 }
 
+function collectThreadIdentityTokens(value) {
+  const text = String(value || '').trim();
+  if (!text) return [];
+
+  const tokens = new Set([text]);
+  try {
+    const url = new URL(text);
+    tokens.add(url.href);
+    const parts = url.pathname.split('/').filter(Boolean);
+    for (const part of parts) {
+      tokens.add(part);
+    }
+  } catch {
+    // Plain thread ids are expected; URL parsing is only an extra matcher.
+  }
+
+  return Array.from(tokens)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function collectBoundThreadIdentityTokens(thread) {
+  const candidates = [
+    thread?.threadId,
+    thread?.id,
+    thread?.url,
+    thread?.binding?.threadId,
+    thread?.binding?.threadUrl,
+    thread?.record?.id,
+    thread?.record?.url,
+  ];
+  return new Set(candidates.flatMap(collectThreadIdentityTokens));
+}
+
+function buildThreadTargetReceipt(thread, attempt, kindLabel) {
+  if (!attempt) return null;
+
+  const boundLabel = shortThreadId(thread?.threadId) || '未记录绑定 id';
+  const attemptTarget = String(attempt.externalThreadId || '').trim();
+  const attemptLabel = shortThreadId(attemptTarget) || '未记录目标线程';
+  const noSendStatus = attempt.status === 'skipped';
+
+  if (!attemptTarget) {
+    return {
+      state: noSendStatus ? 'skipped_missing' : 'missing',
+      title: '投递目标回执',
+      badge: noSendStatus ? '未发送' : '目标缺失',
+      lines: noSendStatus
+        ? [
+            `最近 ${kindLabel} 流水是跳过状态，未记录目标线程；通常表示本轮没有真实内容发送。`,
+            `当前绑定 memory_sync_thread：${boundLabel}。绑定没有因此变更，后续有内容时仍应写入这条长期线程。`,
+            '边界：跳过不代表 persona 已同步，也不代表 mobile_context_thread 写入或待办处理完成。',
+          ]
+        : [
+            `最近 ${kindLabel} 流水没有 externalThreadId，不能从本页证明它写入当前绑定的 memory_sync_thread（${boundLabel}）。`,
+            '请查看最近流水 / 日志，或在确认配置后重新推送 persona，让下一条流水带上目标线程审计。',
+            '边界：这只是本机审计缺口提示，不会重新发送、改绑定、写 Memory Service 或删除豆包内容。',
+          ],
+    };
+  }
+
+  const boundTokens = collectBoundThreadIdentityTokens(thread);
+  const attemptTokens = collectThreadIdentityTokens(attemptTarget);
+  const matches = attemptTokens.some((token) => boundTokens.has(token));
+  if (matches) {
+    return {
+      state: 'matched',
+      title: '投递目标回执',
+      badge: '目标一致',
+      lines: [
+        `最近 ${kindLabel} 流水目标 ${attemptLabel} 与当前绑定 memory_sync_thread ${boundLabel} 一致。`,
+        '这只证明本机流水记录的目标一致；内容条目、来源引用、页面可见性和状态回写仍以后续审计字段为准。',
+      ],
+    };
+  }
+
+  return {
+    state: 'mismatched',
+    title: '投递目标回执',
+    badge: '目标不一致',
+    lines: [
+      `最近 ${kindLabel} 流水目标 ${attemptLabel}，但当前绑定 memory_sync_thread 是 ${boundLabel}。`,
+      '请先修复长期记忆线程或查看日志，不要把这条流水当成当前长期线程已送达证明。',
+      '边界：本提示只核对本机状态与最近流水，不会重发 persona、改 mobile_context_thread、删除豆包消息或写 Memory Service。',
+    ],
+  };
+}
+
 function formatInterval(value) {
   const ms = Number(value);
   if (!Number.isFinite(ms) || ms <= 0) return '';
@@ -594,6 +682,15 @@ function setManualRunResultMessage(
   );
 }
 
+function setManualRunFailureMessage(element, error, { kind, fallback }) {
+  const errorText =
+    error instanceof Error
+      ? formatBridgeIssueMessage(error.message)
+      : fallback || '手动推送失败';
+  const receipt = formatManualRunFailureReceipt(kind);
+  setMessage(element, [errorText, receipt].filter(Boolean).join(' '), 'error');
+}
+
 function setManualRunPendingMessage(element, kind) {
   setMessage(element, formatManualRunPendingReceipt(kind), 'warn');
 }
@@ -641,6 +738,25 @@ function formatManualRunResultReceipt(kind, skipped) {
   }
 
   return `${prefix}：${common}。`;
+}
+
+function formatManualRunFailureReceipt(kind) {
+  const common =
+    '后台没有返回本次可审计结果，最近同步流水可能仍是上一次快照；请按错误原因修复后再重试。';
+
+  if (kind === 'stable_memory') {
+    return `失败回执：本次未确认写入长期记忆线程，也没有进入 mobile_context_thread；不会把 persona_core / voice_mode 当作已同步。${common}`;
+  }
+
+  if (kind === 'mobile_briefing') {
+    return `失败回执：本次未确认写入 mobile_context_thread，也不会混入长期 persona / voice 线程；不会把近期重点标记为已送达。${common}`;
+  }
+
+  if (kind === 'reminder_sync') {
+    return `失败回执：本次未确认写入 mobile_context_thread，没有把待办标记完成，也不会发送空占位文本或把通知当作已同步。${common}`;
+  }
+
+  return `失败回执：本次未确认写入目标线程，也没有标记送达。${common}`;
 }
 
 function formatManualRunSkippedMessage(message, fallback) {
@@ -854,7 +970,11 @@ function formatExplorerManualRunReceipt(
 
 function formatExplorerRunRequestReceipt(
   source,
-  { willSavePendingSettings = false, pendingSettingsSaved = false } = {},
+  {
+    willSavePendingSettings = false,
+    pendingSettingsSaved = false,
+    failed = false,
+  } = {},
 ) {
   const draft = getSourceDraftSettings(source);
   const sourceLabel = sourceDisplayName(source);
@@ -875,12 +995,22 @@ function formatExplorerRunRequestReceipt(
         : '，不限制对话数'
       : '';
   const settingsState = pendingSettingsSaved
-    ? '已先保存待生效设置，正在按当前表单执行'
+    ? failed
+      ? '已先保存待生效设置，本次失败发生在抓取执行或结果确认阶段'
+      : '已先保存待生效设置，正在按当前表单执行'
     : willSavePendingSettings
-      ? '将先保存待生效设置，再按当前表单执行'
-      : '使用已保存设置执行';
+      ? failed
+        ? '原计划先保存待生效设置再按当前表单执行；如果保存失败，后台仍按旧设置'
+        : '将先保存待生效设置，再按当前表单执行'
+      : failed
+        ? '使用已保存设置发起，本次失败没有确认任何新结果'
+        : '使用已保存设置执行';
+  const prefix = failed ? '抓取失败回执' : '抓取请求回执';
+  const tail = failed
+    ? `本次失败尚未确认新的 Memory Service artifact、尚未刷新本机 cache / cursor，也不会删除远端聊天或向 ${sourceLabel} 写回内容；请按错误原因修复后重新抓取。`
+    : `当前只是提交请求，尚未确认新的 Memory Service artifact、尚未刷新本机 cache / cursor，也不会删除远端聊天或向 ${sourceLabel} 写回内容；完成后会用实际传输、fallback 和提炼数量替换本回执。`;
 
-  return `抓取请求回执：${settingsState}；准备按 ${formatAskScope(
+  return `${prefix}：${settingsState}；准备按 ${formatAskScope(
     scope,
   )} 范围读取${formatExplorerLookbackWindow(
     lookbackDays,
@@ -889,7 +1019,7 @@ function formatExplorerRunRequestReceipt(
     draft.transport,
   )}，自动轮询间隔 ${formatMessageCount(
     intervalMinutes,
-  )} 分钟。当前只是提交请求，尚未确认新的 Memory Service artifact、尚未刷新本机 cache / cursor，也不会删除远端聊天或向 ${sourceLabel} 写回内容；完成后会用实际传输、fallback 和提炼数量替换本回执。`;
+  )} 分钟。${tail}`;
 }
 
 function setExplorerRunRequestMessage(source, options = {}) {
@@ -899,6 +1029,19 @@ function setExplorerRunRequestMessage(source, options = {}) {
     formatExplorerRunRequestReceipt(source, options),
     'warn',
   );
+}
+
+function formatExplorerRunFailureMessage(source, error, options = {}) {
+  const fallback =
+    source === 'doubao' ? '豆包对话抓取失败' : 'ChatGPT 输入抓取失败';
+  const errorText =
+    error instanceof Error ? formatBridgeIssueMessage(error.message) : fallback;
+  return `${sourceDisplayName(
+    source,
+  )} 抓取失败：${errorText} ${formatExplorerRunRequestReceipt(source, {
+    ...options,
+    failed: true,
+  })}`;
 }
 
 function sourceTransportPreferenceLabel(source, transport) {
@@ -1131,6 +1274,27 @@ function getRevokeResultTone(result) {
   return result?.revokeAuditState === 'remote_and_local' ? 'success' : 'warn';
 }
 
+function formatRevokeClickSnapshot(snapshot) {
+  const sourceLabel = snapshot?.sourceLabel || '当前来源';
+  const scope = normalizeInputScope(snapshot?.scope, 'work');
+  const localArtifacts = Number(snapshot?.localArtifacts ?? 0);
+  const legacyArtifacts = Number(snapshot?.legacyArtifacts ?? 0);
+  const localText =
+    localArtifacts > 0
+      ? `确认时本地可撤回 artifact ${formatMessageCount(localArtifacts)} 条`
+      : '确认时本地没有可撤回 artifact';
+  const legacyText =
+    legacyArtifacts > 0
+      ? `，旧版无 scope 审计 ${formatMessageCount(
+          legacyArtifacts,
+        )} 条会按本次范围补标记`
+      : '，无旧版无 scope 审计';
+
+  return `点击快照：本次按确认时保存的 ${sourceLabel} / ${formatAskScope(
+    scope,
+  )} 执行；${localText}${legacyText}。这不是刷新后的 Explorer 统计，也不会删除原始对话、预览、缓存或 cursor。`;
+}
+
 function formatRevokeRequestMessage(
   sourceLabel,
   scope,
@@ -1148,7 +1312,14 @@ function formatRevokeRequestMessage(
 
   return `撤回请求回执：已提交 ${sourceLabel} / ${formatAskScope(
     scope,
-  )} 撤回请求，正在等待 Memory Service 删除和本地 Explorer 审计标记返回。当前还不能证明消息、chunk 或 artifact 已撤回；预览、缓存、cursor 和 ${sourceLabel} 原始对话也尚未刷新或删除。${localText}${legacyText}；另一个范围不会受影响。`;
+  )} 撤回请求，正在等待 Memory Service 删除和本地 Explorer 审计标记返回。当前还不能证明消息、chunk 或 artifact 已撤回；预览、缓存、cursor 和 ${sourceLabel} 原始对话也尚未刷新或删除。${localText}${legacyText}；另一个范围不会受影响。${formatRevokeClickSnapshot(
+    {
+      sourceLabel,
+      scope,
+      localArtifacts,
+      legacyArtifacts,
+    },
+  )}`;
 }
 
 function buildRevokeBoundaryReceipt(source, sourceStatus, memoryConnected) {
@@ -1232,7 +1403,7 @@ function renderRevokeBoundaryStatus(element, source, sourceStatus, memoryConnect
   }`;
 }
 
-function formatRevokeResultMessage(sourceLabel, scope, result) {
+function formatRevokeResultMessage(sourceLabel, scope, result, clickSnapshot) {
   const deletedMessages = Number(result?.deletedMessages ?? 0);
   const deletedChunks = Number(result?.deletedChunks ?? 0);
   const localArtifactsRevoked = Number(result?.localArtifactsRevoked ?? 0);
@@ -1250,11 +1421,18 @@ function formatRevokeResultMessage(sourceLabel, scope, result) {
     localLegacyArtifactsRevoked > 0
       ? `，其中旧审计 ${localLegacyArtifactsRevoked} 条`
       : '';
+  const snapshot =
+    clickSnapshot || {
+      sourceLabel,
+      scope,
+      localArtifacts: localActiveArtifactsBefore,
+      legacyArtifacts: localLegacyArtifactsRevoked,
+    };
   return `已撤回 ${sourceLabel} / ${formatAskScope(
     scope,
   )}：Memory Service 删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块；本地 artifact ${localActiveArtifactsBefore} -> ${localActiveArtifactsAfter}，本轮标记 ${localArtifactsRevoked} 条${legacyResult}。${formatRevokeAuditNotice(
     result,
-  )}`;
+  )} ${formatRevokeClickSnapshot(snapshot)}`;
 }
 
 function createPreviewListItem(title, body, meta) {
@@ -1731,6 +1909,68 @@ function getAttemptRecoveryActions(attempt) {
   }
 
   return actions.slice(0, 4);
+}
+
+function setButtonBoundary(button, copy) {
+  if (!button || !copy) return;
+  button.title = copy;
+  button.setAttribute('aria-label', copy);
+}
+
+function buildMemoryThreadButtonBoundary(status) {
+  const checklist = status?.setupChecklist || {};
+  const ready = Boolean(checklist.memorySyncBound);
+  const loggedIn = Boolean(checklist.doubaoConnected);
+  const thread = resolveBoundThread(status, 'memory_sync');
+  const target = thread.title || thread.threadId || '长期记忆线程';
+  let prefix = '创建 / 修复长期记忆线程：需要先完成豆包登录';
+  if (loggedIn && ready) {
+    prefix = `创建 / 修复长期记忆线程：复用或修复已绑定的 ${target}`;
+  } else if (loggedIn) {
+    prefix = '创建 / 修复长期记忆线程：创建并绑定专用 memory_sync_thread';
+  }
+  return `${prefix}；只处理 memory_sync_thread 绑定或建线 seed，不同步 persona_core / voice_mode，不写 mobile_context_thread；真实投递仍以后续 stable_memory 流水为准。`;
+}
+
+function buildStableMemoryRunButtonBoundary(status) {
+  const checklist = status?.setupChecklist || {};
+  if (!checklist.memoryServiceConfigured) {
+    return '现在推一次 persona：需要先连接 Memory Service；不会在未连接时渲染或发送长期记忆。';
+  }
+  if (!checklist.doubaoConnected) {
+    return '现在推一次 persona：需要先完成豆包登录；不会在未登录时写入长期记忆线程。';
+  }
+  if (!checklist.memorySyncBound) {
+    return '现在推一次 persona：需要先绑定长期记忆线程；不会写入当前活动页或手机上下文通道。';
+  }
+  const thread = resolveBoundThread(status, 'memory_sync');
+  const target = thread.title || thread.threadId || '已绑定长期记忆线程';
+  return `现在推一次 persona：先保存待生效广播方式，再渲染 persona_core / voice_mode package 并尝试写入 ${target}；没有真实稳定画像更新时只记 skipped，不发送空占位，也不写 mobile_context_thread。`;
+}
+
+function buildThreadRecoveryActionBoundary(action, kind) {
+  if (action === 'bind_memory') {
+    return '修复长期记忆线程：只复用、恢复或重新绑定 memory_sync_thread；不推送 persona_core / voice_mode，不写 mobile_context_thread，后续是否送达仍看 stable_memory 流水。';
+  }
+  if (action === 'retry' && kind === 'stable_memory') {
+    return '重试长期记忆：重新运行 stable_memory 同步，可能写入 persona_core / voice_mode 到长期记忆线程；结果会先显示待确认回执，再由最近同步流水证明送达、跳过或失败。';
+  }
+  if (action === 'test_memory') {
+    return '测试 Memory Service：只检查本机配置的 Memory Service 连通性；不读取豆包、不写记忆线程、不改变同步流水。';
+  }
+  if (action === 'open_log') {
+    return '查看日志：只打开本机运行日志用于排查；不重试同步、不修改线程绑定、不写 Memory Service 或豆包。';
+  }
+  if (action === 'open_doubao') {
+    return '打开豆包检查：只打开登录/验证路径供你处理安全验证或页面状态；不代表长期记忆已经投递。';
+  }
+  if (action === 'bind_mobile') {
+    return '重新绑定手机对话：只修复 mobile_context_thread；不会写入长期 persona / voice 线程。';
+  }
+  if (action === 'retry') {
+    return `重试${formatSyncKind(kind)}：重新运行该同步链路；结果以后续待确认回执和最近同步流水为准。`;
+  }
+  return '';
 }
 
 function triggerButtonOrExplain(button, messageElement, blockedMessage) {
@@ -2388,11 +2628,22 @@ function renderMemoryThreadDetail(status) {
     (attempt) => attempt.kind === 'stable_memory',
   );
   const thread = resolveBoundThread(status, 'memory_sync');
+  const stableTargetReceipt = buildThreadTargetReceipt(
+    thread,
+    stableAttempt,
+    'stable_memory',
+  );
   const hasFailure = stableAttempt?.status === 'failed';
+  const hasTargetMismatch = stableTargetReceipt?.state === 'mismatched';
+  const hasTargetAuditGap =
+    stableTargetReceipt?.state === 'missing' && !hasFailure;
+  const hasTargetIssue = hasTargetMismatch || hasTargetAuditGap;
   const hasTelemetryIssue = Boolean(stableAttempt?.telemetryError);
   const awaitingFirstStableSync = ready && !stableAttempt;
   const tone = hasFailure
     ? 'error'
+    : hasTargetIssue
+    ? 'pending'
     : hasTelemetryIssue
     ? 'pending'
     : ready
@@ -2406,6 +2657,10 @@ function renderMemoryThreadDetail(status) {
   title.textContent = ready
     ? hasFailure
       ? '长期记忆线程需要检查'
+      : hasTargetMismatch
+      ? '长期记忆线程目标不一致'
+      : hasTargetAuditGap
+      ? '长期记忆线程目标待核对'
       : hasTelemetryIssue
       ? '长期记忆线程回写需检查'
       : awaitingFirstStableSync
@@ -2417,6 +2672,10 @@ function renderMemoryThreadDetail(status) {
   badge.textContent = ready
     ? awaitingFirstStableSync
       ? '未投递'
+      : hasTargetMismatch
+      ? '目标不一致'
+      : hasTargetAuditGap
+      ? '目标缺失'
       : hasTelemetryIssue
       ? '回写异常'
       : '可审计'
@@ -2484,6 +2743,10 @@ function renderMemoryThreadDetail(status) {
   );
   panel.appendChild(meta);
 
+  if (stableTargetReceipt) {
+    appendThreadActionReceipt(panel, stableTargetReceipt);
+  }
+
   if (awaitingFirstStableSync) {
     const canPushNow = Boolean(
       checklist.memoryServiceConfigured && checklist.doubaoConnected,
@@ -2514,6 +2777,16 @@ function renderMemoryThreadDetail(status) {
   });
 
   const recoveryActions = getAttemptRecoveryActions(stableAttempt);
+  if (hasTargetIssue) {
+    pushUniqueRecoveryAction(recoveryActions, {
+      action: 'bind_memory',
+      label: '修复长期记忆线程',
+    });
+    pushUniqueRecoveryAction(recoveryActions, {
+      action: 'open_log',
+      label: '查看日志',
+    });
+  }
   if (recoveryActions.length > 0) {
     const actionRow = document.createElement('div');
     actionRow.className = 'thread-detail-actions';
@@ -2526,6 +2799,13 @@ function renderMemoryThreadDetail(status) {
         button.dataset.threadKind = recoveryAction.kind;
       }
       button.textContent = recoveryAction.label;
+      setButtonBoundary(
+        button,
+        buildThreadRecoveryActionBoundary(
+          recoveryAction.action,
+          recoveryAction.kind,
+        ),
+      );
       actionRow.appendChild(button);
     }
     panel.appendChild(actionRow);
@@ -3076,6 +3356,14 @@ function applyButtonAvailability(status, explorerStatus) {
     loggedIn &&
     mobileBound
   );
+  setButtonBoundary(
+    elements.memoryThreadButton,
+    buildMemoryThreadButtonBoundary(status),
+  );
+  setButtonBoundary(
+    elements.runStableButton,
+    buildStableMemoryRunButtonBoundary(status),
+  );
 
   elements.doubaoSourceSaveButton.disabled =
     !latestSettingsPayload || !explorerSourceDirty.has('doubao');
@@ -3478,11 +3766,19 @@ async function revokeIngestedMemoryForSource(source) {
     legacyArtifacts > 0
       ? `\n其中 ${legacyArtifacts} 条来自旧版本地审计记录，缺少历史 scope；本次会按已保存范围一起标记为已撤回。`
       : '';
+  const clickSnapshot = {
+    sourceLabel,
+    scope,
+    localArtifacts,
+    legacyArtifacts,
+  };
 
   const ok = window.confirm(
     `确定按已保存默认范围撤回 ${sourceLabel} 来源写入「${formatAskScope(
       scope,
-    )}」范围的已入库记忆吗？\n\n本地可审计 artifact 约 ${localArtifacts} 条。${legacyNote}\n这是删除 Memory Service 记忆的操作；不会删除原始聊天，也不会清理本地审计缓存。成功后本地 artifact 会标记为已撤回，避免继续显示成活跃记忆。`,
+    )}」范围的已入库记忆吗？\n\n本地可审计 artifact 约 ${localArtifacts} 条。${legacyNote}\n${formatRevokeClickSnapshot(
+      clickSnapshot,
+    )}\n\n这是删除 Memory Service 记忆的操作；不会删除原始聊天，也不会清理本地审计缓存。成功后本地 artifact 会标记为已撤回，避免继续显示成活跃记忆。`,
   );
   if (!ok) return;
 
@@ -3501,7 +3797,7 @@ async function revokeIngestedMemoryForSource(source) {
       const result = await explorerApi.revokeIngestedMemory(source, scope);
       setMessage(
         messageElement,
-        formatRevokeResultMessage(sourceLabel, scope, result),
+        formatRevokeResultMessage(sourceLabel, scope, result, clickSnapshot),
         getRevokeResultTone(result),
       );
       await refreshStatus();
@@ -3908,13 +4204,10 @@ elements.runStableButton.addEventListener('click', () => {
       });
       await refreshStatus();
     } catch (error) {
-      setMessage(
-        elements.memoryThreadMessage,
-        error instanceof Error
-          ? formatBridgeIssueMessage(error.message)
-          : '手动推送失败',
-        'error',
-      );
+      setManualRunFailureMessage(elements.memoryThreadMessage, error, {
+        kind: 'stable_memory',
+        fallback: '手动推送 persona 失败',
+      });
       await refreshStatus().catch(() => undefined);
     }
   });
@@ -3937,13 +4230,10 @@ elements.runBriefingButton.addEventListener('click', () => {
       });
       await refreshStatus();
     } catch (error) {
-      setMessage(
-        elements.mobileThreadMessage,
-        error instanceof Error
-          ? formatBridgeIssueMessage(error.message)
-          : '手动推送失败',
-        'error',
-      );
+      setManualRunFailureMessage(elements.mobileThreadMessage, error, {
+        kind: 'mobile_briefing',
+        fallback: '手动推送近期记忆重点失败',
+      });
       await refreshStatus().catch(() => undefined);
     }
   });
@@ -3962,13 +4252,10 @@ elements.runReminderButton.addEventListener('click', () => {
       });
       await refreshStatus();
     } catch (error) {
-      setMessage(
-        elements.mobileThreadMessage,
-        error instanceof Error
-          ? formatBridgeIssueMessage(error.message)
-          : '手动推送失败',
-        'error',
-      );
+      setManualRunFailureMessage(elements.mobileThreadMessage, error, {
+        kind: 'reminder_sync',
+        fallback: '手动推送待办 / 通知失败',
+      });
       await refreshStatus().catch(() => undefined);
     }
   });
@@ -4056,11 +4343,12 @@ elements.chatgptSourceLoginButton.addEventListener('click', () => {
 
 elements.doubaoSourceRunButton.addEventListener('click', () => {
   void withAction(elements.doubaoSourceRunButton, '抓取中...', async () => {
+    let willSavePendingSettings = false;
+    let savedPendingSettings = false;
     try {
-      const willSavePendingSettings = explorerSourceDirty.has('doubao');
+      willSavePendingSettings = explorerSourceDirty.has('doubao');
       setExplorerRunRequestMessage('doubao', { willSavePendingSettings });
-      const savedPendingSettings =
-        await savePendingExplorerSourceSettings('doubao');
+      savedPendingSettings = await savePendingExplorerSourceSettings('doubao');
       setExplorerRunRequestMessage('doubao', {
         pendingSettingsSaved: savedPendingSettings,
       });
@@ -4076,7 +4364,10 @@ elements.doubaoSourceRunButton.addEventListener('click', () => {
     } catch (error) {
       setMessage(
         elements.doubaoSourceMessage,
-        error instanceof Error ? error.message : '豆包对话抓取失败',
+        formatExplorerRunFailureMessage('doubao', error, {
+          willSavePendingSettings,
+          pendingSettingsSaved: savedPendingSettings,
+        }),
         'error',
       );
     }
@@ -4085,10 +4376,12 @@ elements.doubaoSourceRunButton.addEventListener('click', () => {
 
 elements.chatgptSourceRunButton.addEventListener('click', () => {
   void withAction(elements.chatgptSourceRunButton, '抓取中...', async () => {
+    let willSavePendingSettings = false;
+    let savedPendingSettings = false;
     try {
-      const willSavePendingSettings = explorerSourceDirty.has('chatgpt');
+      willSavePendingSettings = explorerSourceDirty.has('chatgpt');
       setExplorerRunRequestMessage('chatgpt', { willSavePendingSettings });
-      const savedPendingSettings =
+      savedPendingSettings =
         await savePendingExplorerSourceSettings('chatgpt');
       setExplorerRunRequestMessage('chatgpt', {
         pendingSettingsSaved: savedPendingSettings,
@@ -4108,7 +4401,10 @@ elements.chatgptSourceRunButton.addEventListener('click', () => {
     } catch (error) {
       setMessage(
         elements.chatgptSourceMessage,
-        error instanceof Error ? error.message : 'ChatGPT 输入抓取失败',
+        formatExplorerRunFailureMessage('chatgpt', error, {
+          willSavePendingSettings,
+          pendingSettingsSaved: savedPendingSettings,
+        }),
         'error',
       );
     }

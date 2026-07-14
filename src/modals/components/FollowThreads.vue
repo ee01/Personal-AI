@@ -47,6 +47,21 @@
       <span class="summary-pill info">关联消息 {{ relatedHitCount }}</span>
     </div>
 
+    <div
+      v-if="!loading"
+      class="watch-list-snapshot-receipt"
+      role="note"
+      :aria-label="listSnapshotReceipt.title"
+    >
+      <div class="watch-list-snapshot-title">
+        {{ listSnapshotReceipt.title }}
+      </div>
+      <p>{{ listSnapshotReceipt.sourceText }}</p>
+      <p>{{ listSnapshotReceipt.visibilityText }}</p>
+      <p>{{ listSnapshotReceipt.filterText }}</p>
+      <p>{{ listSnapshotReceipt.boundaryText }}</p>
+    </div>
+
     <div v-if="loading" class="loading">
       <div class="spinner"></div>
       <p>加载中...</p>
@@ -107,7 +122,8 @@
             <button
               @click="cancelFollow(item)"
               class="btn-danger"
-              title="取消关注"
+              :aria-label="`取消关注 ${item.text}`"
+              title="打开取消关注确认"
             >
               ❌ 取消
             </button>
@@ -147,6 +163,39 @@
           <p>{{ getManagementStatusReceipt(item).hitText }}</p>
           <p>{{ getManagementStatusReceipt(item).deliveryText }}</p>
           <p>{{ getManagementStatusReceipt(item).boundaryText }}</p>
+        </div>
+
+        <div
+          v-if="pendingCancelId === item.id"
+          class="watch-cancel-confirm-receipt"
+          role="alert"
+          aria-live="polite"
+          :aria-label="getCancelConfirmReceipt(item).title"
+        >
+          <div class="watch-cancel-confirm-title">
+            {{ getCancelConfirmReceipt(item).title }}
+          </div>
+          <p>{{ getCancelConfirmReceipt(item).scopeText }}</p>
+          <p>{{ getCancelConfirmReceipt(item).boundaryText }}</p>
+          <p>{{ getCancelConfirmReceipt(item).nextText }}</p>
+          <div class="watch-cancel-confirm-actions">
+            <button
+              type="button"
+              class="btn-danger"
+              :aria-label="`确认取消关注 ${item.text}`"
+              @click="confirmCancelFollow(item)"
+            >
+              确认取消
+            </button>
+            <button
+              type="button"
+              class="btn-secondary"
+              :aria-label="`返回并保留关注 ${item.text}`"
+              @click="dismissCancelFollow"
+            >
+              返回
+            </button>
+          </div>
         </div>
 
         <div class="original-message">
@@ -217,13 +266,17 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import {
   buildFollowThreadCancelReceipt,
+  buildFollowThreadCancelConfirmReceipt,
   buildFollowThreadExtendedReceipt,
   buildFollowThreadHitStatusText,
+  buildFollowThreadListSnapshotReceipt,
   buildFollowThreadManagementStatusReceipt,
   formatFollowThreadExpiry,
   getFollowThreadExtendedExpiry,
   getFollowThreadNotifyMethodText,
   isFollowThreadRuleExpired,
+  type FollowThreadCancelConfirmReceipt,
+  type FollowThreadListSnapshotReceipt,
   type FollowThreadManagementReceipt,
   type FollowThreadManagementStatusReceipt,
 } from '../../message-reaction/followThreadPresentation';
@@ -276,6 +329,9 @@ const statusFilter = ref('all');
 const sortBy = ref('created');
 const expandedItems = ref(new Set<string>());
 const actionReceipt = ref<FollowThreadManagementReceipt | null>(null);
+const hiddenSystemWatchCount = ref(0);
+const snapshotLoadedAt = ref<string | null>(null);
+const pendingCancelId = ref<string | null>(null);
 
 onMounted(async () => {
   await loadFollowThreads();
@@ -291,7 +347,17 @@ async function loadFollowThreads() {
   try {
     loading.value = true;
     const result = await chrome.storage.local.get('concernedItems');
-    const allItems = (result.concernedItems || []).filter((item: any) => {
+    const rawItems = Array.isArray(result.concernedItems)
+      ? result.concernedItems
+      : [];
+    hiddenSystemWatchCount.value = rawItems.filter((item: any) => {
+      if (!item?.followThread) return false;
+      if (item?.source && item.source !== 'manual') return true;
+      return typeof item?.id === 'string' && item.id.startsWith('outreach:');
+    }).length;
+    snapshotLoadedAt.value = new Date().toISOString();
+
+    const allItems = rawItems.filter((item: any) => {
       if (item?.source && item.source !== 'manual') return false;
       if (typeof item?.id === 'string' && item.id.startsWith('outreach:')) {
         return false;
@@ -303,6 +369,12 @@ async function loadFollowThreads() {
     items.value = allItems.filter(
       (item: any) => item.followThread && item.followConfig,
     );
+    if (
+      pendingCancelId.value &&
+      !items.value.some((item) => item.id === pendingCancelId.value)
+    ) {
+      pendingCancelId.value = null;
+    }
   } catch (error) {
     console.error('❌ 加载关注项失败:', error);
   } finally {
@@ -370,6 +442,17 @@ const relatedHitCount = computed(() =>
     (total, item) => total + item.followConfig.relatedMessages.length,
     0,
   ),
+);
+
+const listSnapshotReceipt = computed<FollowThreadListSnapshotReceipt>(() =>
+  buildFollowThreadListSnapshotReceipt({
+    totalManualRules: items.value.length,
+    visibleRules: filteredItems.value.length,
+    hiddenSystemRules: hiddenSystemWatchCount.value,
+    statusFilter: statusFilter.value,
+    sortBy: sortBy.value,
+    loadedAt: snapshotLoadedAt.value,
+  }),
 );
 
 const showFilteredEmptyBoundary = computed(
@@ -490,6 +573,14 @@ function getRelationTypeText(type: string): string {
   return map[type] || type;
 }
 
+function getCancelConfirmReceipt(
+  item: FollowThreadItem,
+): FollowThreadCancelConfirmReceipt {
+  return buildFollowThreadCancelConfirmReceipt({
+    ruleName: item.text,
+  });
+}
+
 function toggleTimeline(itemId: string) {
   if (expandedItems.value.has(itemId)) {
     expandedItems.value.delete(itemId);
@@ -500,6 +591,7 @@ function toggleTimeline(itemId: string) {
 
 async function extendFollow(item: FollowThreadItem) {
   try {
+    if (pendingCancelId.value === item.id) pendingCancelId.value = null;
     const result = await chrome.storage.local.get('concernedItems');
     const allItems = result.concernedItems || [];
     const index = allItems.findIndex((i: any) => i.id === item.id);
@@ -527,17 +619,23 @@ async function extendFollow(item: FollowThreadItem) {
   }
 }
 
-async function cancelFollow(item: FollowThreadItem) {
-  if (!confirm(`确定要取消关注"${item.text}"吗？`)) {
-    return;
-  }
+function cancelFollow(item: FollowThreadItem) {
+  pendingCancelId.value = item.id;
+  actionReceipt.value = null;
+}
 
+function dismissCancelFollow() {
+  pendingCancelId.value = null;
+}
+
+async function confirmCancelFollow(item: FollowThreadItem) {
   try {
     const result = await chrome.storage.local.get('concernedItems');
     const allItems = result.concernedItems || [];
     const updatedItems = allItems.filter((i: any) => i.id !== item.id);
 
     await chrome.storage.local.set({ concernedItems: updatedItems });
+    pendingCancelId.value = null;
     await loadFollowThreads();
     actionReceipt.value = buildFollowThreadCancelReceipt({
       ruleName: item.text,
@@ -621,6 +719,26 @@ async function cancelFollow(item: FollowThreadItem) {
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 20px;
+}
+
+.watch-list-snapshot-receipt {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 8px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #dbeafe;
+  line-height: 1.5;
+}
+
+.watch-list-snapshot-title {
+  margin-bottom: 6px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.watch-list-snapshot-receipt p {
+  margin: 4px 0;
 }
 
 .follow-action-receipt {
@@ -877,6 +995,33 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .watch-status-receipt p {
   margin: 4px 0;
+}
+
+.watch-cancel-confirm-receipt {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  line-height: 1.5;
+}
+
+.watch-cancel-confirm-title {
+  margin-bottom: 6px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.watch-cancel-confirm-receipt p {
+  margin: 4px 0;
+}
+
+.watch-cancel-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .original-message {

@@ -292,6 +292,21 @@ export interface ProjectDashboardViewReason {
 
 export type ProjectEvidenceRepairTarget = 'eta' | 'source';
 
+export type ProjectEvidenceRepairBoundarySource =
+  | 'data-source'
+  | 'decision-brief'
+  | 'evidence-queue'
+  | 'chart-driver'
+  | 'chart-panel'
+  | 'task-detail';
+
+export interface ProjectEvidenceRepairButtonBoundaryOptions {
+  target?: ProjectEvidenceRepairTarget | 'plan-project';
+  projectName?: string;
+  taskTitle?: string;
+  source?: ProjectEvidenceRepairBoundarySource;
+}
+
 export type ProjectDashboardDecisionBriefAction =
   | {
       type: 'open-task';
@@ -543,6 +558,16 @@ export interface ProjectDashboardSearchSummary {
   boundary: string;
 }
 
+export interface ProjectDashboardSearchViewReceipt {
+  filter: ProjectDashboardViewFilter;
+  filterLabel: string;
+  visibleProjects: number;
+  hiddenByView: number;
+  headline: string;
+  recovery: string;
+  boundary: string;
+}
+
 const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
 
 const PROJECT_HEALTH_PRIORITY: Record<ProjectHealthState, number> = {
@@ -585,6 +610,84 @@ const PROJECT_STATUS_REVIEW_OVERDUE_DAYS = 14;
 const DEFAULT_PROJECT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
 const PROJECT_SYNC_MAX_PLAN_REPAIR_ACTIONS = 3;
 const PROJECT_SYNC_MAX_TASK_REPAIR_ACTIONS = 4;
+
+const PROJECT_EVIDENCE_REPAIR_SOURCE_LABELS: Record<ProjectEvidenceRepairBoundarySource, string> = {
+  'data-source': '数据源检查修复入口',
+  'decision-brief': '首屏决策摘要入口',
+  'evidence-queue': '证据补全队列入口',
+  'chart-driver': '图表关键任务入口',
+  'chart-panel': '图表下一步入口',
+  'task-detail': '任务详情证据修复按钮',
+};
+
+export function buildProjectEvidenceRepairButtonBoundary(
+  options: ProjectEvidenceRepairButtonBoundaryOptions,
+): string {
+  const source = PROJECT_EVIDENCE_REPAIR_SOURCE_LABELS[options.source || 'task-detail'];
+  const projectName = String(options.projectName || '').trim();
+  const taskTitle = String(options.taskTitle || '').trim();
+  const taskScope = [projectName, taskTitle].filter(Boolean).join(' · ') || '当前任务';
+
+  if (options.target === 'plan-project') {
+    const projectScope = projectName || '该项目';
+    return `${source}：打开 ${projectScope} 的本地首个任务填写入口；只在当前浏览器工作台补任务、ETA 和来源，不会创建 Jira/GitHub/Confluence 任务、反写 Memory Service 或发送通知，保存前仍是本页草稿。`;
+  }
+
+  if (options.target === 'source') {
+    return `${source}：打开 ${taskScope} 的本地来源修复位置；可补 Jira key、平台状态、负责人或平台 Jira，只更新当前浏览器工作台，不读取或写回 Memory Service、Jira、GitHub、Confluence，也不会确认项目状态或发送通知。`;
+  }
+
+  if (!options.target) {
+    return `${source}：打开 ${taskScope} 的本地任务详情；只查看或编辑当前浏览器工作台里的任务证据，不读取或写回 Memory Service、Jira、GitHub、Confluence，也不会确认项目状态或发送通知。`;
+  }
+
+  return `${source}：打开 ${taskScope} 的本地 ETA 修复位置；只聚焦当前浏览器工作台里的预计完成时间输入，不读取或写回 Memory Service、Jira、GitHub、Confluence，也不会确认项目状态或发送通知，保存前只是本页草稿。`;
+}
+
+const PROJECT_CHART_LOCAL_NON_EFFECT_BOUNDARY =
+  '这是当前浏览器本地工作台的轻量图表，不代表 Jira/GitHub/Confluence 权威同步，不会确认项目状态、发送通知、预测完成时间或自动改期。';
+
+function getProjectChartPanelBasis(panelId: ProjectVisualizationPanelId): string {
+  if (panelId === 'gantt') {
+    return '甘特就绪度只读取本地任务 ETA、里程碑日期和已完成 ETA 历史锚点。';
+  }
+
+  if (panelId === 'dependencies') {
+    return '依赖图只读取本地 dep 任务和 dependencies 链接，关键链候选不是完整关键路径计算。';
+  }
+
+  return '燃尽/完成只按本地任务数、完成/阻塞状态和 ETA 汇总，不含工时、故事点、范围变化或 velocity。';
+}
+
+export function buildProjectChartPanelBoundary(
+  projectName: string | undefined,
+  panel: Pick<ProjectVisualizationPanel, 'id' | 'label' | 'headline'>,
+): string {
+  const projectScope = String(projectName || '当前项目').trim() || '当前项目';
+  return `${projectScope} · ${panel.label}：${panel.headline}；${getProjectChartPanelBasis(panel.id)}${PROJECT_CHART_LOCAL_NON_EFFECT_BOUNDARY}`;
+}
+
+export function buildProjectChartProgressBoundary(
+  projectName: string | undefined,
+  panel: Pick<ProjectVisualizationPanel, 'id' | 'label' | 'progressPercent'>,
+): string {
+  const projectScope = String(projectName || '当前项目').trim() || '当前项目';
+  const progress = Number.isFinite(panel.progressPercent)
+    ? `${Math.round(panel.progressPercent || 0)}%`
+    : '未知';
+
+  return `${projectScope} · ${panel.label} 进度 ${progress}：只表示本地任务数完成率；不含工时、故事点、范围变化或 velocity。${PROJECT_CHART_LOCAL_NON_EFFECT_BOUNDARY}`;
+}
+
+export function buildProjectChartMarkerBoundary(
+  projectName: string | undefined,
+  panel: Pick<ProjectVisualizationPanel, 'id' | 'label'>,
+  marker: Pick<ProjectVisualizationMarker, 'label' | 'detail'>,
+): string {
+  const projectScope = String(projectName || '当前项目').trim() || '当前项目';
+
+  return `${projectScope} · ${panel.label} 时间点：${marker.label}，${marker.detail}；点位来自本地 ETA、里程碑日期或已完成 ETA 历史锚点。${PROJECT_CHART_LOCAL_NON_EFFECT_BOUNDARY}`;
+}
 
 function getProjectTimelineTaskSortKey(task: Pick<FishboneTask, 'eta' | 'id' | 'title'>): string {
   return String(task.eta || task.id || task.title || '').trim();
@@ -1160,8 +1263,17 @@ export function buildProjectSyncActionStatus(
 
   const sourceNeedsAttention = result.sourceScope?.state !== 'ready';
   const localEvidenceNeedsAttention = result.localEvidence?.state !== 'ready';
+  const memorySourceHighlights = result.sources
+    ?.find((source) => source.source === 'memory')
+    ?.highlights
+    ?.map((highlight) => String(highlight || '').trim())
+    .filter(Boolean);
+  const memoryProjectReceipt = memorySourceHighlights?.length
+    ? `Memory Service 项目：${memorySourceHighlights.join('；')}`
+    : '';
   const textParts = [
     result.summary || '数据源已同步/检查',
+    memoryProjectReceipt,
     sourceNeedsAttention ? result.sourceScope?.headline : '',
     localEvidenceNeedsAttention ? result.localEvidence?.headline : '',
   ]
@@ -1952,6 +2064,35 @@ export function buildProjectDashboardSearchSummary(
     matchBreakdown,
     matchHints: buildProjectDashboardSearchHints(matchBreakdown),
     boundary: '只在当前浏览器本地项目快照内查找；不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence。',
+  };
+}
+
+export function buildProjectDashboardSearchViewReceipt(
+  summary: ProjectDashboardSearchSummary | null | undefined,
+  filter: ProjectDashboardViewFilter,
+  visibleProjectCount: number,
+): ProjectDashboardSearchViewReceipt | null {
+  if (!summary) return null;
+
+  const safeVisibleCount = Math.max(
+    0,
+    Math.min(summary.matchedProjects, Number.isFinite(visibleProjectCount) ? Math.floor(visibleProjectCount) : 0),
+  );
+  const hiddenByView = Math.max(0, summary.matchedProjects - safeVisibleCount);
+  const filterLabel = PROJECT_DASHBOARD_VIEW_FILTER_LABELS[filter] || PROJECT_DASHBOARD_VIEW_FILTER_LABELS.all;
+
+  return {
+    filter,
+    filterLabel,
+    visibleProjects: safeVisibleCount,
+    hiddenByView,
+    headline: `当前“${filterLabel}”视图显示 ${safeVisibleCount}/${summary.matchedProjects} 个本地命中`,
+    recovery: hiddenByView > 0
+      ? `还有 ${hiddenByView} 个命中被项目视图筛选隐藏；切到“全部”可查看所有本地命中。`
+      : '当前项目视图没有隐藏本地命中。',
+    boundary: filter === 'all'
+      ? '这是当前本地快照的全部项目视图；不会读取外部系统补结果。'
+      : `项目视图筛选仍在生效；本地查找命中还会受“${filterLabel}”视图限制。`,
   };
 }
 
@@ -2921,6 +3062,7 @@ interface DependencyChainCandidate {
   taskIds: string[];
   taskTitles: string[];
   leafTask: FishboneTask;
+  completedCount: number;
   blockedCount: number;
   missingSourceCount: number;
 }
@@ -2984,6 +3126,7 @@ function buildLongestDependencyChainCandidate(project: FishboneProject): Depende
     taskIds: longestChain,
     taskTitles: chainTasks.map((task) => task.title || task.id),
     leafTask,
+    completedCount: chainTasks.filter((task) => isCompletedStatus(task.status)).length,
     blockedCount: chainTasks.filter((task) => isBlockedStatus(task.status)).length,
     missingSourceCount: chainTasks.filter((task) => !hasTaskSourceEvidence(task)).length,
   };
@@ -3001,6 +3144,9 @@ function buildDependencyChainDriver(candidate: DependencyChainCandidate): Projec
     : candidate.missingSourceCount > 0
       ? 'warning'
       : 'neutral';
+  const completionDetail = candidate.completedCount > 0
+    ? `；链上 ${candidate.completedCount} 项已完成，只作历史前置`
+    : '';
   const sourceDetail = candidate.missingSourceCount > 0
     ? `；${candidate.missingSourceCount} 项缺来源，先补证据`
     : '';
@@ -3008,7 +3154,7 @@ function buildDependencyChainDriver(candidate: DependencyChainCandidate): Projec
   return buildVisualizationTaskDriver(
     candidate.leafTask,
     '关键链候选',
-    `本地链路 ${formatDependencyChainCandidate(candidate)}；只表示当前工作台 dependencies，不是完整关键路径计算${sourceDetail}`,
+    `本地链路 ${formatDependencyChainCandidate(candidate)}；只表示当前工作台 dependencies，不是完整关键路径计算${completionDetail}${sourceDetail}`,
     tone,
     {
       label: '查看关键链',
@@ -3055,6 +3201,9 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
   }
   if (chainCandidate) {
     baseMetrics.push(`最长链 ${chainCandidate.taskIds.length} 个任务`);
+    if (chainCandidate.completedCount > 0) {
+      baseMetrics.push(`链上已完成 ${chainCandidate.completedCount}`);
+    }
   }
   const blockedDrivers = blockedDependencies.slice(0, 3).map((task) => buildVisualizationTaskDriver(
     task,
@@ -3167,7 +3316,7 @@ function buildDependencyReadinessPanel(project: FishboneProject): ProjectVisuali
       ? `${activeDependencyTasks.length} 个依赖可跟踪，最长链 ${chainCandidate.taskIds.length} 项`
       : `${activeDependencyTasks.length} 个依赖可跟踪`,
     detail: dependencyLinkCount > 0
-      ? `${dependencyLinkCount} 条任务依赖链都能匹配当前项目任务或里程碑，且活动依赖都有来源；关键链候选只来自本地 dependencies。`
+      ? `${dependencyLinkCount} 条任务依赖链都能匹配当前项目任务或里程碑，且活动依赖都有来源；关键链候选只来自本地 dependencies${chainCandidate?.completedCount ? `，链上 ${chainCandidate.completedCount} 项已完成只作历史前置` : ''}。`
       : '活动依赖都有来源，当前适合用状态和 ETA 扫描阻塞风险。',
     metrics: baseMetrics,
     nextStep: chainCandidate

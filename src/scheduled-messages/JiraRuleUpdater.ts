@@ -39,6 +39,7 @@ export interface JiraRuleUpdateResult {
 export interface JiraRuleUpdateOptions {
   saveConfigToStorage?: boolean;
   syncConfigToSheet?: boolean;
+  googleAuthToken?: string | null;
 }
 
 type ManagedRuleKind = 'executor' | 'timelineSync';
@@ -295,6 +296,8 @@ export class JiraRuleUpdater {
         managedRules.push({ kind: 'timelineSync', ruleConfig: timelineSyncRule });
       }
 
+      const shouldSyncConfigToSheet = options.syncConfigToSheet ?? true;
+
       for (const { kind, ruleConfig } of managedRules) {
         const existingRule = await this.jiraService.getRuleById(jiraConfig, ruleConfig.ruleId);
 
@@ -322,8 +325,15 @@ export class JiraRuleUpdater {
           kind,
           kind === 'timelineSync' ? JIRA_TIMELINE_SYNC_RULE_VERSION : latestVersion,
           updatedRule.name,
-          options
+          {
+            ...options,
+            syncConfigToSheet: false,
+          }
         );
+      }
+
+      if (shouldSyncConfigToSheet) {
+        await this.syncConfigToSheet(options.googleAuthToken);
       }
       
       console.log('✅ Jira Automation Rule 更新成功！');
@@ -425,18 +435,8 @@ export class JiraRuleUpdater {
     this.config = normalizeSheetConfig(this.config);
 
     const shouldSaveConfigToStorage = options.saveConfigToStorage ?? true;
-    const shouldSyncConfigToSheet = options.syncConfigToSheet ?? true;
-
     if (shouldSaveConfigToStorage) {
       await this.saveConfigToStorage();
-    }
-
-    if (shouldSyncConfigToSheet) {
-      // 独立升级入口继续尽力写回 Sheet；Bot 配置主流程会禁用这里，
-      // 等最终 ConfigSyncService.syncConfig 完成 Sheet-first 写入。
-      this.syncConfigToSheet().catch(err => {
-        console.warn('同步配置到 Sheet 失败（不影响功能）:', err);
-      });
     }
   }
   
@@ -456,22 +456,44 @@ export class JiraRuleUpdater {
   /**
    * 同步配置到 Google Sheet
    */
-  private async syncConfigToSheet(): Promise<void> {
+  private async syncConfigToSheet(tokenOverride?: string | null): Promise<void> {
     try {
       // 获取 Google token（静默方式，不弹窗）
-      const token = await getGoogleAuthTokenSilently({ caller: 'JiraRuleUpdater.syncConfigToSheet' });
+      const token = tokenOverride || await getGoogleAuthTokenSilently({ caller: 'JiraRuleUpdater.syncConfigToSheet' });
       
       if (!token) {
         throw new Error('No token');
       }
       
       const syncService = new ConfigSyncService(token);
-      await syncService.saveConfigToSheet(this.config!, undefined, {
+      const currentConfig = normalizeSheetConfig(this.config!) as SheetConfig;
+      let configToSync = currentConfig;
+      try {
+        const sheetConfig = await syncService.readConfigFromSheet(currentConfig.sheetId);
+        configToSync = normalizeSheetConfig({
+          ...currentConfig,
+          ...sheetConfig,
+          // Keep freshly updated Jira rule metadata, while adopting the latest
+          // Sheet-owned schema/script/webhook values from Config.
+          botAutomation: {
+            ...(sheetConfig.botAutomation || {}),
+            ...(currentConfig.botAutomation || {}),
+          },
+          botExecutor: currentConfig.botExecutor || sheetConfig.botExecutor,
+          ringCentralSender: currentConfig.ringCentralSender || sheetConfig.ringCentralSender,
+          agentTaskWebhook: currentConfig.agentTaskWebhook || sheetConfig.agentTaskWebhook,
+        }) as SheetConfig;
+      } catch (error) {
+        console.warn('读取最新 Sheet Config 失败，使用当前 Jira Rule 配置继续写回:', error);
+      }
+
+      this.config = await syncService.syncConfig(configToSync, {
         syncAction: 'jira_rule_update',
       });
       console.log('✅ 配置已同步到 Google Sheet');
     } catch (error) {
-      console.warn('同步配置到 Sheet 失败:', error);
+      console.error('同步配置到 Sheet 失败:', error);
+      throw error;
     }
   }
   
@@ -551,7 +573,8 @@ export class JiraRuleUpdater {
       console.log('🚀 开始自动更新 Jira Rule...');
       
       // 执行更新
-      const updateResult = await updater.updateJiraRule();
+      const token = getToken ? await getToken() : null;
+      const updateResult = await updater.updateJiraRule({ googleAuthToken: token });
       
       if (updateResult.success) {
         console.log(`✅ ${updateResult.message}`);

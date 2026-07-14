@@ -25,6 +25,10 @@ export interface ScheduledMessagesFilterReceipt {
   hiddenCount: number;
 }
 
+export interface ScheduledMessagesFilterReceiptOptions {
+  isBackgroundLoading?: boolean;
+}
+
 export interface ScheduledMessagesTargetReceipt {
   title: string;
   summary: string;
@@ -367,6 +371,7 @@ export function buildScheduledMessagesTargetReceipt(input: {
 export function buildScheduledMessagesFilterReceipt(
   messages: ScheduledMessage[],
   filters: ScheduledMessagesViewFilters,
+  options: ScheduledMessagesFilterReceiptOptions = {},
 ): ScheduledMessagesFilterReceipt | null {
   if (!hasScheduledMessagesViewFilters(filters)) {
     return null;
@@ -376,10 +381,14 @@ export function buildScheduledMessagesFilterReceipt(
   const hiddenCount = Math.max(0, messages.length - visibleMessages.length);
   const conditionCounts = getScheduledMessagesFilterConditionCounts(messages, filters);
   const currentUsername = filters.currentUsername?.trim();
+  const needsIdentity = Boolean(filters.filterSelfOnly && !currentUsername);
   const selectedCategories = filters.selectedCategories.map((value) => value.trim()).filter(Boolean);
   const activeScopes = getFilterScopeLabels(filters);
   const details = [
     `范围: ${activeScopes.join(' / ') || '全部消息'}`,
+    options.isBackgroundLoading
+      ? '快照: 当前计数基于已读取的 Messages 行；Jira / Outreach / Done 回填仍在后台补齐，完成后筛选结果会自动刷新'
+      : '',
     filters.filterPendingReview
       ? `待审核条件: ${conditionCounts.notPendingReview} 条非待审核消息不满足当前筛选`
       : '',
@@ -400,14 +409,17 @@ export function buildScheduledMessagesFilterReceipt(
       : '',
     '边界: 筛选只改变当前列表，不会暂停、删除、改期或同步 Sheet',
   ].filter(Boolean);
+  const title = needsIdentity
+    ? '列表筛选回执：需要账号信息'
+    : options.isBackgroundLoading
+      ? '列表筛选回执：后台补齐中'
+      : '列表筛选回执';
 
   return {
-    title: filters.filterSelfOnly && !currentUsername
-      ? '列表筛选回执：需要账号信息'
-      : '列表筛选回执',
+    title,
     summary: `当前显示 ${visibleMessages.length}/${messages.length} 条，${hiddenCount} 条暂时隐藏。`,
     details,
-    tone: filters.filterSelfOnly && !currentUsername ? 'warning' : 'info',
+    tone: needsIdentity ? 'warning' : 'info',
     totalCount: messages.length,
     visibleCount: visibleMessages.length,
     hiddenCount,

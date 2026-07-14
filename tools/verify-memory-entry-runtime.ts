@@ -168,6 +168,20 @@ function main() {
     'multi-scope rule still requires both configured dimensions to match',
   );
 
+  const aiResearchMissingSenderPrefilter = filterWatchRulesForMessageContext(
+    runtimeRules,
+    {
+      groupName: 'AI Research',
+      groupId: 'ai-research',
+    },
+  );
+  assert.ok(
+    aiResearchMissingSenderPrefilter.some(
+      (rule) => rule.ruleRef === 'manual:manual-auto-reply-scope',
+    ),
+    'prefilter should keep sender-scoped rules when a group batch lacks per-message sender context',
+  );
+
   const sdkRules = filterWatchRulesForMessageContext(runtimeRules, {
     groupName: 'sdk-updates',
     groupId: 'sdk-updates',
@@ -292,6 +306,35 @@ function main() {
     }),
     ['群组不在范围：期望 Release Chat，实际 random-chat / Random Chat'],
     'manual rule diagnostics should explain deterministic scope rejection',
+  );
+
+  const missingSenderFinalMatch = resolveMatchedWatchRules({
+    watchRules: runtimeRules,
+    matchedRuleRefs: ['manual:manual-auto-reply-scope'],
+    messageContext: {
+      groupName: 'AI Research',
+      groupId: 'ai-research',
+    },
+  });
+  assert.deepEqual(
+    missingSenderFinalMatch.watchRules,
+    [],
+    'final rule resolution must fail closed when a sender-scoped rule lacks sender context',
+  );
+  const senderScopedRule = runtimeRules.find(
+    (rule) => rule.ruleRef === 'manual:manual-auto-reply-scope',
+  )!;
+  assert.deepEqual(
+    getWatchRuleEligibilityIssues(
+      senderScopedRule,
+      {
+        groupName: 'AI Research',
+        groupId: 'ai-research',
+      },
+      { rejectMissingScopeValues: true },
+    ),
+    ['发送人上下文缺失：规则限定 Morgan Lee，本条消息未提供发送人'],
+    'missing context diagnostics should explain why a scoped rule did not fire',
   );
 
   const shortScopeFalsePositiveMatch = resolveMatchedWatchRules({

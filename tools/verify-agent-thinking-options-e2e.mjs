@@ -96,6 +96,32 @@ try {
   }).first().waitFor({ timeout: 15000 });
 
   await page.locator('button', { hasText: '启动演示' }).click();
+  await page.evaluate(() => {
+    window.__agentThinkingSawFinalizing = false;
+    window.__agentThinkingFinalizingReceiptText = '';
+    window.__agentThinkingFinalizingObserver?.disconnect?.();
+
+    const captureFinalizingState = () => {
+      const indicator = document.querySelector('.processing-indicator.finalizing');
+      const receipt = document.querySelector('.agent-result-handoff-receipt');
+      if (!indicator && !receipt) return;
+      window.__agentThinkingSawFinalizing = true;
+      window.__agentThinkingFinalizingReceiptText = [
+        indicator?.textContent || '',
+        receipt?.textContent || '',
+      ].join('\n');
+    };
+
+    const observer = new MutationObserver(captureFinalizingState);
+    observer.observe(document.body, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    window.__agentThinkingFinalizingObserver = observer;
+    captureFinalizingState();
+  });
 
   await page.locator('.node-result.skipped', { hasText: '跳过' }).waitFor({
     timeout: 12000,
@@ -109,6 +135,11 @@ try {
   await page.locator('.flow-node.tool.approval .node-step-index', {
     hasText: '#6',
   }).waitFor({ timeout: 12000 });
+  assert.equal(
+    await page.locator('.processing-indicator', { hasText: '处理中' }).count(),
+    1,
+    '终止步骤出现前应显示普通处理中状态',
+  );
   assert.equal(
     await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
     0,
@@ -159,6 +190,36 @@ try {
   await page.locator('.agent-trace-navigation-receipt', {
     hasText: '不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-navigation-route', {
+    hasText: /步骤 #6[\s\S]*审批上下文：messageNotification 尚未执行/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-navigation-route', {
+    hasText: /步骤 #7[\s\S]*运行状态：预算已用完/,
+  }).waitFor({ timeout: 12000 });
+  const traceNavigationStepButton = page
+    .locator('.agent-trace-navigation-route', {
+      hasText: /步骤 #6[\s\S]*审批上下文：messageNotification 尚未执行/,
+    })
+    .locator('button', { hasText: '步骤 #6' });
+  const traceNavigationStepTitle =
+    (await traceNavigationStepButton.getAttribute('title')) || '';
+  const traceNavigationStepAria =
+    (await traceNavigationStepButton.getAttribute('aria-label')) || '';
+  assert.match(traceNavigationStepTitle, /从当前 trace 导航跳到步骤 6/);
+  assert.match(
+    traceNavigationStepTitle,
+    /复核理由：审批上下文：messageNotification 尚未执行/,
+  );
+  assert.match(traceNavigationStepTitle, /点击步骤定位只展开当前页面时间线/);
+  assert.match(traceNavigationStepAria, /从当前 trace 导航跳到步骤 6/);
+  assert.match(
+    traceNavigationStepAria,
+    /复核理由：审批上下文：messageNotification 尚未执行/,
+  );
+  assert.match(
+    traceNavigationStepAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
   await page.locator('.agent-trace-span-composition', {
     hasText: 'Trace span 构成',
   }).waitFor({ timeout: 12000 });
@@ -171,9 +232,23 @@ try {
   await page.locator('.agent-trace-span-composition', {
     hasText: '问题 span',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-span-composition-item.warning', {
+    hasText: /对应步骤 #/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-span-composition-steps button', {
+    hasText: '步骤 #6',
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-span-composition', {
     hasText: '不是标准 OpenTelemetry / LangSmith / Langfuse 拓扑',
   }).waitFor({ timeout: 12000 });
+  await page
+    .locator('.agent-trace-span-composition-steps button', {
+      hasText: '步骤 #6',
+    })
+    .click();
+  await page.locator('.thought-step.expanded', {
+    hasText: 'messageNotification',
+  }).waitFor({ timeout: 3000 });
   await page
     .locator('.agent-trace-navigation-receipt button', {
       hasText: '步骤 #6',
@@ -221,11 +296,18 @@ try {
   assert.match(copiedDiagnosticPacket, /"traceIdentity": \{/);
   assert.match(copiedDiagnosticPacket, /"navigationReceipt": \{/);
   assert.match(copiedDiagnosticPacket, /"title": "当前 trace 导航"/);
+  assert.match(copiedDiagnosticPacket, /"stepRoutes": \[/);
+  assert.match(copiedDiagnosticPacket, /"reason": "审批上下文：messageNotification 尚未执行/);
+  assert.match(copiedDiagnosticPacket, /"reason": "运行状态：预算已用完/);
   assert.match(copiedDiagnosticPacket, /"noEffectBoundary": "点击步骤定位只展开当前页面时间线/);
   assert.match(copiedDiagnosticPacket, /"traceSpanComposition": \{/);
   assert.match(copiedDiagnosticPacket, /"title": "Trace span 构成"/);
   assert.match(copiedDiagnosticPacket, /"label": "Tool calls"/);
   assert.match(copiedDiagnosticPacket, /"label": "问题 span"/);
+  assert.match(copiedDiagnosticPacket, /"stepNumbers": \[/);
+  assert.match(copiedDiagnosticPacket, /"approvalQueueReceipt": \{/);
+  assert.match(copiedDiagnosticPacket, /"title": "待确认队列口径"/);
+  assert.match(copiedDiagnosticPacket, /"persistenceBoundary": "这不是持久审批队列/);
   assert.match(copiedDiagnosticPacket, /"checksumAlgorithm": "fnv1a32-local"/);
   assert.match(copiedDiagnosticPacket, /"source": "sanitized_diagnostic_snapshot"/);
   assert.doesNotMatch(copiedDiagnosticPacket, /approval-tail-token-visible-in-ui/);
@@ -266,7 +348,10 @@ try {
   assert.match(diagnosticPacketText, /"schemaBoundary": \{/);
   assert.match(diagnosticPacketText, /"snapshotBoundary": \{/);
   assert.match(diagnosticPacketText, /"navigationReceipt": \{/);
+  assert.match(diagnosticPacketText, /"stepRoutes": \[/);
+  assert.match(diagnosticPacketText, /审批上下文：messageNotification 尚未执行/);
   assert.match(diagnosticPacketText, /"traceSpanComposition": \{/);
+  assert.match(diagnosticPacketText, /"approvalQueueReceipt": \{/);
   assert.match(diagnosticPacketText, /"stepNumbers": \[/);
   assert.match(diagnosticPacketText, /"traceIdentity": \{/);
   assert.match(diagnosticPacketText, /"traceId": "pai-agent-trace-[0-9a-f]{8}"/);
@@ -323,9 +408,42 @@ try {
   await page.locator('.agent-approval-queue', {
     hasText: '待确认动作',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: '待确认队列口径',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: /当前页面 trace pai-agent-trace-[0-9a-f]{8} 汇总 1 个待确认动作/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: '队列只汇总本轮已被执行前阻断的人审工具动作；messageNotification 还没有执行。',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: '这不是持久审批队列，也不会让本轮 Agent run 在后台继续暂停等待',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: '复制 key、审核包或重跑配置只复制文本',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue-receipt', {
+    hasText: '批准时复制对应重跑配置并用同一工具和同一参数重新运行',
+  }).waitFor({ timeout: 12000 });
+  await page
+    .locator('.agent-approval-queue-steps button', {
+      hasText: '步骤 #6',
+    })
+    .click();
+  await page.locator('#agent-step-5.thought-step.expanded', {
+    hasText: 'messageNotification',
+  }).waitFor({ timeout: 3000 });
+  await page.waitForFunction(
+    () => document.activeElement?.id === 'agent-step-header-5',
+    { timeout: 3000 },
+  );
   await page.locator('.agent-approval-item', {
     hasText: 'messageNotification',
   }).waitFor({ timeout: 12000 });
+  const approvalItem = page.locator('.agent-approval-item', {
+    hasText: 'messageNotification',
+  });
   await page.locator('.agent-approval-item', {
     hasText: 'approval-tail-token-visible-in-ui',
   }).waitFor({ timeout: 12000 });
@@ -338,6 +456,48 @@ try {
   await page.locator('.agent-approval-copy', {
     hasText: '复制重跑配置',
   }).waitFor({ timeout: 12000 });
+  const approvalKeyCopyButton = approvalItem.locator(
+    'button.agent-approval-copy',
+    {
+      hasText: '复制 key',
+    },
+  );
+  const approvalReviewCopyButton = approvalItem.locator(
+    'button.agent-approval-copy',
+    {
+      hasText: '复制审核包',
+    },
+  );
+  const approvalRetryCopyButton = approvalItem.locator(
+    'button.agent-approval-copy',
+    {
+      hasText: '复制重跑配置',
+    },
+  );
+  assert.match(
+    (await approvalKeyCopyButton.getAttribute('title')) || '',
+    /只复制当前本地 trace 里的临时批准 key/,
+  );
+  assert.match(
+    (await approvalKeyCopyButton.getAttribute('aria-label')) || '',
+    /不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作/,
+  );
+  assert.match(
+    (await approvalReviewCopyButton.getAttribute('title')) || '',
+    /只复制当前待确认动作的工具、参数、审批边界和重跑提示/,
+  );
+  assert.match(
+    (await approvalReviewCopyButton.getAttribute('aria-label')) || '',
+    /参数、上下文、工具策略或 trace 变化后需要重新生成/,
+  );
+  assert.match(
+    (await approvalRetryCopyButton.getAttribute('title')) || '',
+    /只复制 approvedToolActionKeys patch，不复制工具参数、原始结果、通知正文或外部执行凭据/,
+  );
+  assert.match(
+    (await approvalRetryCopyButton.getAttribute('aria-label')) || '',
+    /复制只产生本地文本/,
+  );
   await page.locator('.agent-approval-retry-config', {
     hasText: 'approvedToolActionKeys',
   }).waitFor({ timeout: 12000 });
@@ -435,27 +595,41 @@ try {
       },
     });
   });
-  await page
-    .locator('button[aria-label="复制 messageNotification 的批准 key"]')
-    .click();
+  await approvalKeyCopyButton.click();
   await page.locator('.agent-approval-copy-status', {
     hasText: '已复制批准 key：',
   }).waitFor({ timeout: 3000 });
   await page.locator('.agent-approval-copy-status', {
     hasText: '工具动作还没有执行',
   }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: /审批复制回执/,
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: /剪贴板里是 messageNotification 的批准 key/,
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: /来自本地 trace pai-agent-trace-[0-9a-f]{8}/,
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: '复制只产生本地文本',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: '不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作',
+  }).waitFor({ timeout: 3000 });
   assert.match(
     await page.evaluate(() => window.__agentThinkingApprovalCopiedText),
     /approval-tail-token-visible-in-ui/,
   );
-  await page
-    .locator('button[aria-label="复制 messageNotification 的审核包"]')
-    .click();
+  await approvalReviewCopyButton.click();
   await page.locator('.agent-approval-copy-status', {
     hasText: '已复制审核包：',
   }).waitFor({ timeout: 3000 });
   await page.locator('.agent-approval-copy-status', {
     hasText: '不会执行通知、写入或外部动作',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: /剪贴板里是 messageNotification 的审核包/,
   }).waitFor({ timeout: 3000 });
   const copiedApprovalReviewPacket = await page.evaluate(
     () => window.__agentThinkingApprovalCopiedText,
@@ -468,14 +642,15 @@ try {
   assert.match(copiedApprovalReviewPacket, /"label": "修改参数后再审"/);
   assert.match(copiedApprovalReviewPacket, /"reviewBoundary": \{/);
   assert.match(copiedApprovalReviewPacket, /"retryReceipt": \{/);
-  await page
-    .locator('button[aria-label="复制 messageNotification 的重跑配置"]')
-    .click();
+  await approvalRetryCopyButton.click();
   await page.locator('.agent-approval-copy-status', {
     hasText: '已复制重跑配置：',
   }).waitFor({ timeout: 3000 });
   await page.locator('.agent-approval-copy-status', {
     hasText: '只包含 approvedToolActionKeys',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy-receipt', {
+    hasText: /剪贴板里是 messageNotification 的重跑配置/,
   }).waitFor({ timeout: 3000 });
   const copiedApprovalRetryConfig = await page.evaluate(
     () => window.__agentThinkingApprovalCopiedText,
@@ -493,9 +668,7 @@ try {
     });
     document.execCommand = () => false;
   });
-  await page
-    .locator('button[aria-label="复制 messageNotification 的审核包"]')
-    .click();
+  await approvalReviewCopyButton.click();
   await page.locator('.agent-approval-copy-status', {
     hasText: '复制失败，请手动选择审核包',
   }).waitFor({ timeout: 3000 });
@@ -614,9 +787,60 @@ try {
     hasText: '批准 key: messageNotification',
   }).waitFor({ timeout: 3000 });
 
+  await page.locator('.flow-node.decision', {
+    hasText: '预算耗尽',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.decision .node-step-index', {
+    hasText: '#7',
+  }).waitFor({ timeout: 12000 });
+  await page.waitForFunction(
+    () => window.__agentThinkingSawFinalizing === true,
+    { timeout: 12000 },
+  );
+  const finalizingReceiptText = await page.evaluate(
+    () => window.__agentThinkingFinalizingReceiptText || '',
+  );
+  assert.match(finalizingReceiptText, /结果整理中/);
+  assert.match(
+    finalizingReceiptText,
+    /Trace 已到达 步骤 #7（预算耗尽）/,
+  );
+  assert.match(finalizingReceiptText, /结果摘要卡片仍在生成/);
+  assert.match(
+    finalizingReceiptText,
+    /整理前仍有 1 个待确认动作、1 个已阻断工具步骤、1 个证据不足步骤/,
+  );
+  assert.match(finalizingReceiptText, /可先定位终止步骤 #7/);
+  assert.match(
+    finalizingReceiptText,
+    /不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作/,
+  );
+  assert.equal(
+    await page.locator('.processing-indicator', { hasText: '处理中' }).count(),
+    0,
+    '终止步骤出现后不应继续显示普通处理中状态',
+  );
+  await page
+    .locator('.agent-trace-navigation-route', {
+      hasText: /步骤 #7[\s\S]*运行状态：预算已用完/,
+    })
+    .locator('button', { hasText: '步骤 #7' })
+    .click();
+  await page.locator('#agent-step-6.thought-step.expanded', {
+    hasText: '最大行动次数',
+  }).waitFor({ timeout: 3000 });
+  await page.waitForFunction(
+    () => document.activeElement?.id === 'agent-step-header-6',
+    { timeout: 3000 },
+  );
   await page.locator('.agent-result-summary', { hasText: '处理结果' }).waitFor({
     timeout: 12000,
   });
+  assert.equal(
+    await page.locator('.agent-result-handoff-receipt').count(),
+    0,
+    '结果卡片出现后不应继续显示结果整理回执',
+  );
   await page.locator('.agent-run-review-item.warning', {
     hasText: '行动次数用完',
   }).waitFor({ timeout: 12000 });
@@ -647,23 +871,56 @@ try {
   await page.locator('.agent-trace-review-lane-item.warning', {
     hasText: /运行状态[\s\S]*预算耗尽[\s\S]*步骤 #7/,
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-review-lane-step-route', {
+    hasText: /步骤 #7[\s\S]*运行状态：预算已用完/,
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-review-lane-item.warning', {
     hasText: /审批上下文[\s\S]*1 个待确认/,
   }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-review-lane-item.warning', {
     hasText: /审批上下文[\s\S]*1 个待确认[\s\S]*步骤 #6/,
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-review-lane-step-route', {
+    hasText: /步骤 #6[\s\S]*审批上下文：messageNotification 尚未执行/,
+  }).waitFor({ timeout: 12000 });
+  const traceReviewApprovalStepButton = page
+    .locator('.agent-trace-review-lane-step-route', {
+      hasText: /步骤 #6[\s\S]*审批上下文：messageNotification 尚未执行/,
+    })
+    .locator('button', { hasText: '步骤 #6' });
+  const traceReviewApprovalTitle =
+    (await traceReviewApprovalStepButton.getAttribute('title')) || '';
+  const traceReviewApprovalAria =
+    (await traceReviewApprovalStepButton.getAttribute('aria-label')) || '';
+  assert.match(traceReviewApprovalTitle, /从审批上下文跳到步骤 6/);
+  assert.match(
+    traceReviewApprovalTitle,
+    /复核理由：审批上下文：messageNotification 尚未执行/,
+  );
+  assert.match(traceReviewApprovalTitle, /只展开并聚焦当前页面时间线/);
+  assert.match(traceReviewApprovalAria, /从审批上下文跳到步骤 6/);
+  assert.match(
+    traceReviewApprovalAria,
+    /复核理由：审批上下文：messageNotification 尚未执行/,
+  );
+  assert.match(
+    traceReviewApprovalAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
   await page.locator('.agent-trace-review-lane-item.warning', {
     hasText: /工具证据[\s\S]*阻断 1 \/ 缺证 1/,
   }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-review-lane-item.warning', {
     hasText: /工具证据[\s\S]*阻断 1 \/ 缺证 1[\s\S]*步骤 #3[\s\S]*步骤 #5/,
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-trace-review-lane-step-route', {
+    hasText: /步骤 #3[\s\S]*工具证据不足：调整查询参数/,
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-review-lane-item', {
     hasText: /诊断包[\s\S]*spans/,
   }).waitFor({ timeout: 12000 });
   await page.locator('.agent-trace-review-lane-item', {
-    hasText: '不复制原始工具结果、工具参数或批准 key',
+    hasText: '优先步骤的复核理由',
   }).waitFor({ timeout: 12000 });
   await page
     .locator('.agent-trace-review-lane-item', {

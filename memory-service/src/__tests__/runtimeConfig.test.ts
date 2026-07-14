@@ -55,7 +55,7 @@ describe('getUserRuntimeConfig', () => {
     expect(config.openClawEnabled).toBe(true);
     expect(config.openClawBaseUrl).toBe('https://openclaw.example.com');
     expect(config.openClawApiKey).toBe('test-openclaw-key');
-    expect(config.openClawTimeoutMs).toBe(300000);
+    expect(config.openClawTimeoutMs).toBe(600000);
     expect(config.botApiBaseUrl).toBe('https://bot.example/v2');
     expect(config.botToken).toBe('test-bot-token');
     expect(config.botId).toBe('test-bot-id');

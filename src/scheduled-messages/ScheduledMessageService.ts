@@ -72,6 +72,20 @@ const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Question',
 ]);
 
+function normalizePushMethodAlias(value: unknown): unknown {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return value;
+  }
+
+  const compactValue = rawValue.toLowerCase().replace(/[\s_-]+/g, '');
+  if (compactValue === 'agenttask') {
+    return 'AgentTask';
+  }
+
+  return rawValue;
+}
+
 function normalizeExecutorTargetType(message: Partial<ScheduledMessage>): void {
   if (
     message.Push_Method === 'AI' ||
@@ -168,6 +182,9 @@ export class ScheduledMessageService {
       
       for (let i = 1; i < data.length; i++) {
         const row = data[i];
+        let rowNeedsUpdate = false;
+        const pushMethodColumnIndex = headers.indexOf('Push_Method');
+        const rawPushMethod = pushMethodColumnIndex >= 0 ? row[pushMethodColumnIndex] || '' : '';
         const message = this.parseRowToMessage(row, headers);
         
           if (message) {
@@ -175,7 +192,18 @@ export class ScheduledMessageService {
             if (!message.ID) {
               message.ID = `msg_${Date.now()}_${i}`;
               hasUpdates = true;
+              rowNeedsUpdate = true;
               console.log(`自动生成 ID: ${message.ID} (行 ${i + 1})`);
+            }
+
+            if (
+              rawPushMethod &&
+              message.Push_Method &&
+              String(rawPushMethod).trim() !== String(message.Push_Method).trim()
+            ) {
+              hasUpdates = true;
+              rowNeedsUpdate = true;
+              console.log(`规范化 Push_Method: ${rawPushMethod} -> ${message.Push_Method} (行 ${i + 1})`);
             }
             
             // 自动判断消息类型（如果没有 Type 字段）
@@ -184,7 +212,7 @@ export class ScheduledMessageService {
             }
             
             // 如果有更新，写回 Sheet
-            if (hasUpdates) {
+            if (rowNeedsUpdate) {
               const row = await this.messageToRow(message, headers);
               await this.updateRow(i + 1, row, headers);
             }
@@ -272,6 +300,7 @@ export class ScheduledMessageService {
       Exec_Count: 0,
       Exec_Log: '待执行'
     };
+    message.Push_Method = normalizePushMethodAlias(message.Push_Method) as ScheduledMessage['Push_Method'];
     normalizeExecutorTargetType(message);
     
     // 自动判断类型
@@ -301,6 +330,7 @@ export class ScheduledMessageService {
     
     const previousMessage = messages[index];
     const updatedMessage = { ...previousMessage, ...updates };
+    updatedMessage.Push_Method = normalizePushMethodAlias(updatedMessage.Push_Method) as ScheduledMessage['Push_Method'];
     normalizeExecutorTargetType(updatedMessage);
 
     if (
@@ -475,6 +505,7 @@ export class ScheduledMessageService {
     headers.forEach((header, index) => {
       message[header] = row[index] || '';
     });
+    message.Push_Method = normalizePushMethodAlias(message.Push_Method);
 
     const numericFields = [
       'Repeat_Every',
@@ -532,6 +563,10 @@ export class ScheduledMessageService {
    */
   private async messageToRow(message: ScheduledMessage, headers?: string[]): Promise<any[]> {
     const resolvedHeaders = headers || await this.getHeaders();
+    const normalizedMessage = {
+      ...message,
+      Push_Method: normalizePushMethodAlias(message.Push_Method),
+    };
     const row: any[] = [];
     
     // 根据 header 顺序构建行数据
@@ -541,7 +576,7 @@ export class ScheduledMessageService {
         continue;
       }
 
-      const value = (message as any)[header];
+      const value = (normalizedMessage as any)[header];
       
       // 处理不同类型的字段
       if (value === undefined || value === null) {

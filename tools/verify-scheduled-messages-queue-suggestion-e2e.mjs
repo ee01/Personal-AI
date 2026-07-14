@@ -349,6 +349,16 @@ try {
   ).waitFor({
     timeout: 15000,
   });
+  await page.getByRole('button', {
+    name: '定位最晚：Risk 32，2026-05-04 09:30 第 32/32 个；只定位当前列表行，不写 Sheet、不改期、不发送、不跳过前序消息',
+  }).waitFor({
+    timeout: 15000,
+  });
+  await page.getByRole('button', {
+    name: '编辑队列建议目标：Risk 32，2026-05-04 09:30 第 32/32 个；只打开编辑草稿，不写 Sheet、不改期、不发送、不跳过前序消息',
+  }).waitFor({
+    timeout: 15000,
+  });
 
   await page.locator('button[title="新增消息"]').click();
   await page.getByRole('tab', { name: /Bot/ }).click();
@@ -410,6 +420,9 @@ try {
   });
   await explicitReceipt
     .getByText('写入后: 领取口径：明确时间槽 · 当前分钟/30分钟补偿 · 发送后回调写回')
+    .waitFor({ timeout: 15000 });
+  await explicitReceipt
+    .getByText('确认口径: 本回执只确认新计划已写入；尚未确认执行器已领取/发送，也未确认 Last_Exec / Logs 或 AgentTask run 已更新。')
     .waitFor({ timeout: 15000 });
   await explicitReceipt.getByText(
     '原因: 同执行时间第 32/32 个，前面 31 条会先执行，可能超过 30 分钟补偿窗口',
@@ -509,6 +522,16 @@ try {
   await noTimePage.locator(
     'text=建议依据：08:00 后队列；目标第 9/9 个；前面 8 条会先执行，已展示 3 条前序样例，另 5 条未展开；建议写入 2026-05-05 08:00 后队列，保留空时间队列语义；不会自动处理前序或发送消息',
   ).waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.getByRole('button', {
+    name: '定位最晚：Late 9，2026-05-04 08:00 后队列 第 9/9 个；只定位当前列表行，不写 Sheet、不改期、不发送、不跳过前序消息',
+  }).waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.getByRole('button', {
+    name: '编辑队列建议目标：Late 9，2026-05-04 08:00 后队列 第 9/9 个；只打开编辑草稿，不写 Sheet、不改期、不发送、不跳过前序消息',
+  }).waitFor({
     timeout: 15000,
   });
 

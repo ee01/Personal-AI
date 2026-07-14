@@ -1412,6 +1412,9 @@ function toContextMatch(
   req: ContextRecallRequest,
 ): ContextRecallMatch | null {
   const isSourceMemory = isSourceMemoryRecallItem(item);
+  const sourceMemoryCapsuleId = isSourceMemory
+    ? String(item.metadata?.sourceMemoryCapsuleId)
+    : '';
   const presentation = buildRecallPresentation({
     content: item.displayText || item.content || '',
     query: req.title || req.primaryText || '',
@@ -1421,17 +1424,18 @@ function toContextMatch(
     previewMaxLength: PREVIEW_MAX,
   });
 
-  const exploreLink =
-    item.exploreLink ||
-    buildExploreLink({
-      type: item.type,
-      id: item.id,
-      conversationId:
-        (item.metadata?.conversationId as string | undefined) ||
-        (item.metadata?.conversation_id as string | undefined),
-      entityType: item.entity?.type,
-      entity: item.entity,
-    });
+  const exploreLink = sourceMemoryCapsuleId
+    ? `#/source-memory/${encodeURIComponent(sourceMemoryCapsuleId)}`
+    : item.exploreLink ||
+      buildExploreLink({
+        type: item.type,
+        id: item.id,
+        conversationId:
+          (item.metadata?.conversationId as string | undefined) ||
+          (item.metadata?.conversation_id as string | undefined),
+        entityType: item.entity?.type,
+        entity: item.entity,
+      });
 
   if (!presentation.previewText && !item.displayTitle) {
     return null;
@@ -1457,7 +1461,7 @@ function toContextMatch(
 
   return {
     id: isSourceMemory
-      ? `source-memory:${String(item.metadata?.sourceMemoryCapsuleId)}`
+      ? `source-memory:${sourceMemoryCapsuleId}`
       : item.id,
     type: isSourceMemory ? 'source_memory' : item.type,
     score: item.score,
@@ -1475,7 +1479,9 @@ function toContextMatch(
     evidenceRole: getEvidenceRole(item),
     displayPriority: getDisplayPriority(item),
     metadata: item.metadata,
-    sourceClusterKey: getSourceClusterKey(item),
+    sourceClusterKey: sourceMemoryCapsuleId
+      ? `source-memory:${sourceMemoryCapsuleId}`
+      : getSourceClusterKey(item),
     timestamp: item.timestamp,
   };
 }

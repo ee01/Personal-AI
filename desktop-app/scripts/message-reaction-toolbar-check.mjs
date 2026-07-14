@@ -13,6 +13,14 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
 const extensionPath = path.join(repoRoot, 'dist');
 const SELF_EXTENSION_ID = '20367368195';
+const WATCH_BOUNDARY_LABEL =
+  '关注后续：只为这条消息打开 Watch 配置草稿；此点击不会开始监听、保存规则、回扫历史消息、索引原消息、发送通知、创建自动答复或联动操作。';
+const EN_WATCH_BOUNDARY_LABEL =
+  'Watch: opens a Watch configuration draft for this message; it does not start monitoring, save a rule, scan past messages, index the original message, send notifications, or create Reply/Openclaw actions yet.';
+const LINKED_ACTION_BOUNDARY_LABEL =
+  '联动操作：只为这条消息打开 Openclaw 配置草稿；此点击不会创建 RuntimeAction、调用 OpenClaw、回扫历史消息、保存规则或发送任何内容。';
+const EN_LINKED_ACTION_BOUNDARY_LABEL =
+  'Openclaw: opens an Openclaw configuration draft for this message; it does not create a RuntimeAction, call OpenClaw, scan past messages, save a rule, or send anything yet.';
 const markerFixtureItems = [
   {
     id: 'outreach:session-from-message:12345:msg-1',
@@ -541,11 +549,17 @@ async function main() {
       countText: badge
         .querySelector('.glip-ai-marker-count')
         ?.textContent?.trim(),
+      cacheFlagText: badge
+        .querySelector('.glip-ai-marker-cache-flag')
+        ?.textContent?.trim(),
+      className: badge.className,
     }));
     assert.equal(markerBadgeState.tagName, 'BUTTON');
     assert.equal(markerBadgeState.text, '跟进中+1');
     assert.equal(markerBadgeState.tabIndex, 0);
     assert.equal(markerBadgeState.countText, '+1');
+    assert.equal(markerBadgeState.cacheFlagText, undefined);
+    assert.match(markerBadgeState.className, /cache-fresh/);
     assert.match(
       markerBadgeState.ariaLabel || '',
       /AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5\/18 09:00：提醒时间：2026-05-18 09:00/,
@@ -595,6 +609,52 @@ async function main() {
     assert.match(markerTooltipText || '', /缓存刷新：/);
     assert.doesNotMatch(markerTooltipText || '', /1970|可能过旧|尚未刷新/);
     assert.match(markerTooltipText || '', /稍后 5\/18 09:00/);
+
+    await serviceWorker.evaluate(async () => {
+      const staleUpdatedAt = Math.floor((Date.now() - 31 * 60 * 1000) / 1000);
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: staleUpdatedAt,
+        },
+      });
+    });
+    await page.waitForFunction(
+      () => {
+        const badgeElement = document.querySelector(
+          '.conversation-card-wrapper[data-id="msg-1"] .glip-ai-marker-badge',
+        );
+        return (
+          badgeElement?.textContent?.includes('旧') &&
+          badgeElement?.className.includes('cache-stale')
+        );
+      },
+      null,
+      { timeout: 3_000 },
+    );
+    const staleMarkerBadgeState = await markerBadge.evaluate((badge) => ({
+      text: badge.textContent?.replace(/\s+/g, '').trim(),
+      ariaLabel: badge.getAttribute('aria-label'),
+      cacheFlagText: badge
+        .querySelector('.glip-ai-marker-cache-flag')
+        ?.textContent?.trim(),
+      className: badge.className,
+    }));
+    assert.equal(staleMarkerBadgeState.text, '跟进中+1旧');
+    assert.equal(staleMarkerBadgeState.cacheFlagText, '旧');
+    assert.match(staleMarkerBadgeState.className, /cache-stale/);
+    assert.match(
+      staleMarkerBadgeState.ariaLabel || '',
+      /状态边界：本地标注快照可能过旧/,
+    );
+    const staleMarkerTooltipText = await message
+      .locator('.glip-ai-marker-tooltip')
+      .textContent();
+    assert.match(staleMarkerTooltipText || '', /状态边界：本地标注快照可能过旧/);
 
     await serviceWorker.evaluate(async () => {
       const result = await chrome.storage.local.get(['glipMessageMarkers']);
@@ -856,7 +916,12 @@ async function main() {
 
     assert.deepEqual(
       actions.map((action) => action.label),
-      ['稍后处理', '关注后续', '自动答复', '联动操作'],
+      [
+        '稍后处理',
+        WATCH_BOUNDARY_LABEL,
+        '自动答复',
+        LINKED_ACTION_BOUNDARY_LABEL,
+      ],
     );
     assert.deepEqual(
       actions.map((action) => action.compactLabel),
@@ -875,9 +940,21 @@ async function main() {
       true,
     );
     assert.equal(
-      actions.every((action) => action.title === action.label),
+      [actions[0], actions[2]].every((action) => action?.title === action?.label),
       true,
     );
+    assert.equal(actions[1]?.title, WATCH_BOUNDARY_LABEL);
+    assert.match(actions[1]?.title || '', /打开 Watch 配置草稿/);
+    assert.match(actions[1]?.title || '', /不会开始监听/);
+    assert.match(actions[1]?.title || '', /保存规则/);
+    assert.match(actions[1]?.title || '', /索引原消息/);
+    assert.match(actions[1]?.title || '', /发送通知/);
+    assert.match(actions[1]?.title || '', /自动答复或联动操作/);
+    assert.match(actions[3]?.title || '', /打开 Openclaw 配置草稿/);
+    assert.match(actions[3]?.title || '', /不会创建 RuntimeAction/);
+    assert.match(actions[3]?.title || '', /调用 OpenClaw/);
+    assert.match(actions[3]?.title || '', /回扫历史消息/);
+    assert.match(actions[3]?.title || '', /保存规则或发送任何内容/);
     const actionRadii = await page.$$eval(
       '.message-reaction-toolbar .message-reaction-action-btn',
       (buttons) =>
@@ -1411,9 +1488,9 @@ async function main() {
       );
     assert.deepEqual(ownActions, [
       '稍后处理',
-      '关注后续',
+      WATCH_BOUNDARY_LABEL,
       '跟进追问',
-      '联动操作',
+      LINKED_ACTION_BOUNDARY_LABEL,
     ]);
 
     await ownMessage.locator('.followup-ask-btn').click();
@@ -1434,6 +1511,22 @@ async function main() {
       (await page.locator('.followup-ask-submit').textContent())?.trim(),
       '创建跟进',
     );
+    const initialFollowupSubmitTitle =
+      (await page.locator('.followup-ask-submit').getAttribute('title')) || '';
+    const initialFollowupSubmitAria =
+      (await page.locator('.followup-ask-submit').getAttribute('aria-label')) ||
+      '';
+    assert.match(initialFollowupSubmitTitle, /创建跟进/);
+    assert.match(
+      initialFollowupSubmitTitle,
+      /锚定 Release Team（提及 Jordan Lee）和这条原消息/,
+    );
+    assert.match(initialFollowupSubmitTitle, /先检查|立即检查/);
+    assert.match(initialFollowupSubmitTitle, /最多自动追问 1 次/);
+    assert.match(initialFollowupSubmitTitle, /不会立刻发送新消息/);
+    assert.match(initialFollowupSubmitTitle, /不写 Google Sheet/);
+    assert.match(initialFollowupSubmitTitle, /不创建可复用 Outreach template/);
+    assert.equal(initialFollowupSubmitAria, initialFollowupSubmitTitle);
     const followupBoundaryReceipt = page.locator('.followup-ask-boundary');
     await followupBoundaryReceipt.waitFor({ state: 'visible', timeout: 3_000 });
     const followupBoundaryText =
@@ -1478,6 +1571,14 @@ async function main() {
     assert.match(zeroFollowupSummary, /最多追问次数为 0/);
     assert.match(zeroFollowupSummary, /不自动发送 AI 追问/);
     assert.doesNotMatch(zeroFollowupSummary, /后追问/);
+    const zeroFollowupSubmitBoundary =
+      (await page.locator('.followup-ask-submit').getAttribute('aria-label')) ||
+      '';
+    assert.match(zeroFollowupSubmitBoundary, /原消息已超过 720 小时/);
+    assert.match(zeroFollowupSubmitBoundary, /最多追问次数为 0/);
+    assert.match(zeroFollowupSubmitBoundary, /不自动发送 AI 追问/);
+    assert.match(zeroFollowupSubmitBoundary, /不会立刻发送新消息/);
+    assert.doesNotMatch(zeroFollowupSubmitBoundary, /后追问/);
     await page.locator('.followup-ask-submit').click();
     await page.waitForFunction(
       () =>
@@ -1661,6 +1762,26 @@ async function main() {
     assert.match(settingsScopeText, /只改变此浏览器消息旁工具栏按钮显示/);
     assert.match(settingsScopeText, /不会取消已创建提醒、关注、追问、自动答复规则或联动操作/);
     assert.match(settingsScopeText, /已排队或已保存的任务仍从各自管理页处理/);
+    assert.match(settingsScopeText, /保存后/);
+    assert.match(
+      settingsScopeText,
+      /将显示：稍后处理、关注后续、自动答复 \/ 跟进追问、联动操作/,
+    );
+    await page.locator('.reaction-settings-checkbox[data-feature="snooze"]').uncheck();
+    await page.locator('.reaction-settings-checkbox[data-feature="followThread"]').uncheck();
+    await page.locator('.reaction-settings-checkbox[data-feature="autoReply"]').uncheck();
+    await page.locator('.reaction-settings-checkbox[data-feature="linkedAction"]').uncheck();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-settings-preview-value]')
+          ?.textContent?.includes('将隐藏本地消息工具栏'),
+      null,
+      { timeout: 2_000 },
+    );
+    const hiddenSettingsPreview =
+      (await page.locator('[data-settings-preview-value]').textContent()) || '';
+    assert.match(hiddenSettingsPreview, /已创建事项仍不受影响/);
     assert.equal(
       (
         (await page
@@ -1682,6 +1803,120 @@ async function main() {
     assert.equal(await snoozeButton.getAttribute('aria-haspopup'), 'menu');
     assert.equal(await snoozeButton.getAttribute('aria-expanded'), 'false');
 
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+          markersByChatId: {},
+        },
+      });
+    });
+    await snoozeButton.click();
+    await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    const newSnoozeReceiptText =
+      (await page.locator('.snooze-menu-receipt').textContent()) || '';
+    assert.doesNotMatch(newSnoozeReceiptText, /提醒路径/);
+    assert.match(newSnoozeReceiptText, /提醒时间口径/);
+    assert.match(newSnoozeReceiptText, /会创建提醒到/);
+    assert.match(newSnoozeReceiptText, /15 分钟后/);
+    assert.match(newSnoozeReceiptText, /点击具体时间后才写入 Scheduled Messages/);
+    assert.match(newSnoozeReceiptText, /不会发送消息、标记已读或完成原消息/);
+    assert.match(newSnoozeReceiptText, /成功后原消息标注仍等后台同步/);
+    const newFirstOption = page.locator('.snooze-quick-option').first();
+    const newFirstOptionAria = (await newFirstOption.getAttribute('aria-label')) || '';
+    const newFirstOptionTitle = (await newFirstOption.getAttribute('title')) || '';
+    assert.match(newFirstOptionAria, /提醒时间口径/);
+    assert.match(newFirstOptionAria, /会创建提醒到/);
+    assert.match(newFirstOptionAria, /点击具体时间后才写入 Scheduled Messages/);
+    assert.match(newFirstOptionAria, /不会发送消息、标记已读或完成原消息/);
+    assert.equal(
+      newFirstOptionTitle,
+      newFirstOptionAria,
+      'Snooze quick option title should mirror the control boundary aria label',
+    );
+    await page.mouse.click(5, 5);
+    await page.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+          markersByChatId: {
+            12345: {
+              'msg-1': [
+                {
+                  id: 'snooze-pending:snooze-row-1:12345:msg-1',
+                  type: 'snooze_pending',
+                  label: '稍后 5/18 09:00',
+                  chatId: '12345',
+                  postId: 'msg-1',
+                  source: 'sheet',
+                  sourceId: 'snooze-row-1',
+                  updatedAt: 1778840900,
+                  tooltip: '提醒时间：2026-05-18 09:00',
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+
+    await serviceWorker.evaluate(async () => {
+      const staleUpdatedAt = Math.floor((Date.now() - 31 * 60 * 1000) / 1000);
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: staleUpdatedAt,
+        },
+      });
+    });
+    await snoozeButton.click();
+    await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    const staleSnoozeReceiptText =
+      (await page.locator('.snooze-menu-receipt').textContent()) || '';
+    assert.match(staleSnoozeReceiptText, /已在本地标注为 稍后 5\/18 09:00/);
+    assert.match(staleSnoozeReceiptText, /会改到/);
+    assert.match(staleSnoozeReceiptText, /可能过旧/);
+    assert.match(staleSnoozeReceiptText, /刷新会话或等待后台同步后再确认/);
+    await page.mouse.click(5, 5);
+    await page.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+        },
+      });
+    });
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+
     await snoozeButton.click();
     await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
     assert.equal(
@@ -1691,14 +1926,23 @@ async function main() {
     );
     const snoozeReceiptText =
       (await page.locator('.snooze-menu-receipt').textContent()) || '';
-    assert.match(snoozeReceiptText, /提醒路径/);
+    assert.doesNotMatch(snoozeReceiptText, /提醒路径/);
+    assert.match(snoozeReceiptText, /改期预览/);
     assert.match(
       snoozeReceiptText,
       /已在本地标注为 稍后 5\/18 09:00/,
     );
-    assert.match(snoozeReceiptText, /会改期这条同源 Snooze，不新增第二条/);
-    assert.match(snoozeReceiptText, /成功 Toast 或管理稍后处理确认/);
+    assert.match(snoozeReceiptText, /会改到/);
+    assert.match(snoozeReceiptText, /15 分钟后/);
+    assert.match(snoozeReceiptText, /仍是同源 Snooze，不新增第二条/);
     assert.match(snoozeReceiptText, /来自本地 marker 快照/);
+    assert.match(snoozeReceiptText, /不是实时远端查询/);
+    const rescheduleFirstOptionAria =
+      (await page.locator('.snooze-quick-option').first().getAttribute('aria-label')) || '';
+    assert.match(rescheduleFirstOptionAria, /改期预览/);
+    assert.match(rescheduleFirstOptionAria, /会改到/);
+    assert.match(rescheduleFirstOptionAria, /仍是同源 Snooze，不新增第二条/);
+    assert.match(rescheduleFirstOptionAria, /来自本地 marker 快照/);
     await page.mouse.click(5, 5);
     await page.waitForSelector('.snooze-menu', {
       state: 'detached',
@@ -1796,6 +2040,14 @@ async function main() {
     assert.equal(quickTimes.length, quickLabels.length);
     assert.equal(quickTimes.every(Boolean), true);
     assert.equal(new Set(quickTimes).size, quickTimes.length);
+    const customOptionAria =
+      (await page.locator('.snooze-custom-option').getAttribute('aria-label')) || '';
+    const manageOptionAria =
+      (await page.locator('.snooze-manage-option').getAttribute('aria-label')) || '';
+    assert.match(customOptionAria, /打开自定义时间选择器/);
+    assert.match(customOptionAria, /只有确认未来时间后才创建或改期 Snooze/);
+    assert.match(manageOptionAria, /只打开 Scheduled Messages 的 Snooze 视图/);
+    assert.match(manageOptionAria, /不会创建、改期、完成或删除提醒/);
 
     const snoozeManagePagePromise = context.waitForEvent('page', {
       timeout: 10_000,
@@ -2063,7 +2315,7 @@ async function main() {
       );
     assert.deepEqual(
       englishActions.map((action) => action.label),
-      ['Remind', 'Watch', 'Reply', 'Openclaw'],
+      ['Remind', EN_WATCH_BOUNDARY_LABEL, 'Reply', EN_LINKED_ACTION_BOUNDARY_LABEL],
     );
     assert.deepEqual(
       englishActions.map((action) => action.compactLabel),
@@ -2074,7 +2326,7 @@ async function main() {
       ['Remind', 'Watch', 'Reply', 'Openclaw'],
     );
     assert.equal(
-      englishActions.every(
+      [englishActions[0], englishActions[2]].every(
         (action) =>
           action.title === action.label &&
           action.labelWidth >= action.labelScrollWidth - 1,
@@ -2082,6 +2334,30 @@ async function main() {
       true,
       `English toolbar labels should be visible without clipping: ${JSON.stringify(
         englishActions,
+      )}`,
+    );
+    assert.equal(englishActions[1]?.title, EN_WATCH_BOUNDARY_LABEL);
+    assert.match(englishActions[1]?.title || '', /opens a Watch configuration draft/);
+    assert.match(englishActions[1]?.title || '', /does not start monitoring/);
+    assert.match(englishActions[1]?.title || '', /save a rule/);
+    assert.match(englishActions[1]?.title || '', /index the original message/);
+    assert.match(englishActions[1]?.title || '', /send notifications/);
+    assert.match(englishActions[1]?.title || '', /Reply\/Openclaw actions/);
+    assert.equal(
+      (englishActions[1]?.labelWidth || 0) >=
+        (englishActions[1]?.labelScrollWidth || 0) - 1,
+      true,
+      `English Watch visible text should stay unclipped: ${JSON.stringify(
+        englishActions[1],
+      )}`,
+    );
+    assert.equal(englishActions[3]?.title, EN_LINKED_ACTION_BOUNDARY_LABEL);
+    assert.equal(
+      (englishActions[3]?.labelWidth || 0) >=
+        (englishActions[3]?.labelScrollWidth || 0) - 1,
+      true,
+      `English Openclaw visible text should stay unclipped: ${JSON.stringify(
+        englishActions[3],
       )}`,
     );
 
@@ -2131,6 +2407,35 @@ async function main() {
       englishSettingsScopeText,
       /Queued or saved items still stay in their own management pages/,
     );
+    assert.match(englishSettingsScopeText, /After save/);
+    assert.match(
+      englishSettingsScopeText,
+      /Will show: Remind, Watch, Reply \/ Followup, Openclaw/,
+    );
+    await englishPage
+      .locator('.reaction-settings-checkbox[data-feature="snooze"]')
+      .uncheck();
+    await englishPage
+      .locator('.reaction-settings-checkbox[data-feature="followThread"]')
+      .uncheck();
+    await englishPage
+      .locator('.reaction-settings-checkbox[data-feature="autoReply"]')
+      .uncheck();
+    await englishPage
+      .locator('.reaction-settings-checkbox[data-feature="linkedAction"]')
+      .uncheck();
+    await englishPage.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-settings-preview-value]')
+          ?.textContent?.includes('Will hide the local message toolbar'),
+      null,
+      { timeout: 2_000 },
+    );
+    const englishHiddenSettingsPreview =
+      (await englishPage.locator('[data-settings-preview-value]').textContent()) ||
+      '';
+    assert.match(englishHiddenSettingsPreview, /existing items are not affected/);
     assert.equal(
       (
         (await englishPage
@@ -2157,17 +2462,103 @@ async function main() {
     );
     const englishSnoozeReceiptText =
       (await englishPage.locator('.snooze-menu-receipt').textContent()) || '';
-    assert.match(englishSnoozeReceiptText, /Reminder path/);
+    assert.doesNotMatch(englishSnoozeReceiptText, /Reminder path/);
+    assert.match(englishSnoozeReceiptText, /Reschedule preview/);
     assert.match(
       englishSnoozeReceiptText,
       /Already marked locally as Remind 5\/18 09:00/,
     );
     assert.match(
       englishSnoozeReceiptText,
-      /Reschedules this same-source Remind item instead of adding another one/,
+      /Will reschedule to/,
     );
-    assert.match(englishSnoozeReceiptText, /success toast or Manage Remind/);
+    assert.match(englishSnoozeReceiptText, /In 15 minutes/);
+    assert.match(
+      englishSnoozeReceiptText,
+      /same-source Remind; no second reminder is added/,
+    );
     assert.match(englishSnoozeReceiptText, /local marker snapshot/);
+    assert.match(englishSnoozeReceiptText, /not a live remote status check/);
+
+    await englishPage.mouse.click(5, 5);
+    await englishPage.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+          markersByChatId: {},
+        },
+      });
+    });
+    await englishMessage.hover();
+    await englishToolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    await englishToolbar.locator('.snooze-icon-btn').click();
+    await englishPage.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    const englishNewSnoozeReceiptText =
+      (await englishPage.locator('.snooze-menu-receipt').textContent()) || '';
+    assert.doesNotMatch(englishNewSnoozeReceiptText, /Reminder path/);
+    assert.match(englishNewSnoozeReceiptText, /Reminder timing basis/);
+    assert.match(englishNewSnoozeReceiptText, /Will create a reminder for/);
+    assert.match(englishNewSnoozeReceiptText, /In 15 minutes/);
+    assert.match(
+      englishNewSnoozeReceiptText,
+      /Writes to Scheduled Messages only after you pick a time/,
+    );
+    assert.match(englishNewSnoozeReceiptText, /does not send a message/);
+    assert.match(englishNewSnoozeReceiptText, /Message marker/);
+    const englishNewFirstOptionAria =
+      (await englishPage.locator('.snooze-quick-option').first().getAttribute('aria-label')) || '';
+    assert.match(englishNewFirstOptionAria, /Reminder timing basis/);
+    assert.match(englishNewFirstOptionAria, /Will create a reminder for/);
+    assert.match(englishNewFirstOptionAria, /Writes to Scheduled Messages only after you pick a time/);
+
+    await englishPage.mouse.click(5, 5);
+    await englishPage.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+          markersByChatId: {
+            12345: {
+              'msg-1': [
+                {
+                  id: 'snooze-pending:snooze-row-1:12345:msg-1',
+                  type: 'snooze_pending',
+                  label: '稍后 5/18 09:00',
+                  chatId: '12345',
+                  postId: 'msg-1',
+                  source: 'sheet',
+                  sourceId: 'snooze-row-1',
+                  updatedAt: 1778840900,
+                  tooltip: '提醒时间：2026-05-18 09:00',
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+    await englishMessage.hover();
+    await englishToolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    await englishToolbar.locator('.snooze-icon-btn').click();
+    await englishPage.waitForSelector('.snooze-menu', { timeout: 3_000 });
+
     const englishSnoozeReceiptRows = await englishPage.$$eval(
       '.snooze-menu-receipt-line',
       (rows) =>
@@ -2239,12 +2630,20 @@ async function main() {
         .trim(),
       '📅Custom...',
     );
+    const englishCustomOptionAria =
+      (await englishPage.locator('.snooze-custom-option').getAttribute('aria-label')) || '';
+    assert.match(englishCustomOptionAria, /Custom time: Opens the custom reminder time picker/);
+    assert.match(englishCustomOptionAria, /only confirming a future time creates or reschedules Remind/);
     assert.equal(
       ((await englishPage.locator('.snooze-manage-option').textContent()) || '')
         .replace(/\s+/g, ' ')
         .trim(),
       '↗ Manage Remind',
     );
+    const englishManageOptionAria =
+      (await englishPage.locator('.snooze-manage-option').getAttribute('aria-label')) || '';
+    assert.match(englishManageOptionAria, /Manage Remind: Only opens the Scheduled Messages Remind view/);
+    assert.match(englishManageOptionAria, /does not create, reschedule, complete, or delete reminders/);
 
     await englishPage.locator('.snooze-custom-option').click();
     await englishPage.waitForSelector('.snooze-picker', { timeout: 3_000 });
@@ -2365,9 +2764,9 @@ async function main() {
       );
     assert.deepEqual(englishOwnActions, [
       'Remind',
-      'Watch',
+      EN_WATCH_BOUNDARY_LABEL,
       'Followup',
-      'Openclaw',
+      EN_LINKED_ACTION_BOUNDARY_LABEL,
     ]);
     await englishPage.close();
 

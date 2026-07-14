@@ -1031,12 +1031,36 @@
   font-weight: 700;
 }
 
+.agent-workflow-evidence-copy-receipt.pending {
+  color: #0969da;
+}
+
+.agent-workflow-evidence-copy-receipt.error {
+  color: #cf222e;
+}
+
 .agent-workflow-evidence-packet.stale .agent-workflow-evidence-copy-receipt {
   color: #9a6700;
 }
 
+.agent-workflow-evidence-packet.stale .agent-workflow-evidence-copy-receipt.pending {
+  color: #0969da;
+}
+
+.agent-workflow-evidence-packet.stale .agent-workflow-evidence-copy-receipt.error {
+  color: #cf222e;
+}
+
 .agent-workflow-evidence-packet.review .agent-workflow-evidence-copy-receipt {
   color: #9a6700;
+}
+
+.agent-workflow-evidence-packet.review .agent-workflow-evidence-copy-receipt.pending {
+  color: #0969da;
+}
+
+.agent-workflow-evidence-packet.review .agent-workflow-evidence-copy-receipt.error {
+  color: #cf222e;
 }
 
 .agent-workflow-evidence-chips {
@@ -1240,6 +1264,29 @@
 .agent-workflow-next-action-list {
   display: grid;
   gap: 7px;
+}
+
+.agent-workflow-next-action-boundary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  background: #f6f8fa;
+  padding: 8px 9px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-next-action-boundary strong {
+  color: #24292f;
+  font-size: 12px;
+}
+
+.agent-workflow-next-action-boundary small {
+  color: #57606a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .agent-workflow-next-action {

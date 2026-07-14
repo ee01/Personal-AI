@@ -169,6 +169,21 @@ try {
   await page.locator('.data-source-action', {
     hasText: '同步/检查数据源',
   }).waitFor({ timeout: 15000 });
+  const syncButtons = page.locator('button', {
+    hasText: '同步/检查数据源',
+  });
+  assert.equal(await syncButtons.count(), 2);
+  for (let index = 0; index < 2; index += 1) {
+    const button = syncButtons.nth(index);
+    assert.match(
+      await button.getAttribute('title') || '',
+      /只读取 Memory Service active watched projects/,
+    );
+    assert.match(
+      await button.getAttribute('aria-label') || '',
+      /不反写 Memory Service、外部项目源或发送通知/,
+    );
+  }
   await page.locator('.snapshot-receipt.fresh', {
     hasText: '已读取 4 个项目',
   }).waitFor({ timeout: 15000 });
@@ -178,6 +193,16 @@ try {
   await page.locator('.snapshot-receipt.fresh', {
     hasText: '不会同步、清空、覆盖或写回 Memory Service、Jira、GitHub、Confluence',
   }).waitFor({ timeout: 15000 });
+  const decisionBriefAction = page.locator('.decision-brief-action').first();
+  await decisionBriefAction.waitFor({ timeout: 15000 });
+  assert.match(
+    await decisionBriefAction.getAttribute('title') || '',
+    /首屏决策摘要入口：打开 Risk Demo Project · Resolve release blocker 的本地任务详情/,
+  );
+  assert.match(
+    await decisionBriefAction.getAttribute('aria-label') || '',
+    /不读取或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
   await page.evaluate(() => {
     globalThis.__projectDashboardOriginalSendMessage =
       globalThis.__projectDashboardOriginalSendMessage || chrome.runtime.sendMessage.bind(chrome.runtime);
@@ -281,9 +306,18 @@ try {
   await dataSourceCard(page, 'Jira').filter({
     hasText: '缺来源任务：Resolve release blocker、Clarify launch readiness',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-evidence-action.fix-source', {
+  const dataSourceFixSourceButton = page.locator('.data-source-evidence-action.fix-source', {
     hasText: '补来源：Resolve release blocker',
-  }).click();
+  });
+  assert.match(
+    await dataSourceFixSourceButton.getAttribute('title') || '',
+    /数据源检查修复入口：打开 Risk Demo Project · Resolve release blocker 的本地来源修复位置/,
+  );
+  assert.match(
+    await dataSourceFixSourceButton.getAttribute('aria-label') || '',
+    /不读取或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
+  await dataSourceFixSourceButton.click();
   await page.locator('.zoom-title', {
     hasText: 'Resolve release blocker',
   }).waitFor({ timeout: 15000 });
@@ -299,6 +333,53 @@ try {
   await page.locator('.zoom-overlay.active .close-btn').click();
   await page.locator('.zoom-title', {
     hasText: 'Resolve release blocker',
+  }).waitFor({ state: 'detached', timeout: 15000 });
+
+  const launchReadinessGap = page.locator('.evidence-gap-item', {
+    hasText: 'Clarify launch readiness',
+  }).first();
+  await launchReadinessGap.waitFor({ timeout: 15000 });
+  assert.match(
+    await launchReadinessGap.getAttribute('title') || '',
+    /证据补全队列入口：打开 Evidence Gap Project · Clarify launch readiness 的本地 ETA 修复位置/,
+  );
+  assert.match(
+    await launchReadinessGap.getAttribute('aria-label') || '',
+    /保存前只是本页草稿/,
+  );
+  await launchReadinessGap.click();
+  await page.locator('.zoom-title', {
+    hasText: 'Clarify launch readiness',
+  }).waitFor({ timeout: 15000 });
+  const etaRepairButton = page.locator('.evidence-repair-card', {
+    hasText: 'ETA',
+  }).locator('.evidence-repair-card-action', {
+    hasText: '补 ETA',
+  });
+  assert.match(
+    await etaRepairButton.getAttribute('title') || '',
+    /任务详情证据修复按钮：打开 Evidence Gap Project · Clarify launch readiness 的本地 ETA 修复位置/,
+  );
+  assert.match(
+    await etaRepairButton.getAttribute('aria-label') || '',
+    /预计完成时间输入/,
+  );
+  const sourceRepairButton = page.locator('.evidence-repair-card', {
+    hasText: '来源',
+  }).locator('.evidence-repair-card-action', {
+    hasText: '补来源',
+  });
+  assert.match(
+    await sourceRepairButton.getAttribute('title') || '',
+    /任务详情证据修复按钮：打开 Evidence Gap Project · Clarify launch readiness 的本地来源修复位置/,
+  );
+  assert.match(
+    await sourceRepairButton.getAttribute('aria-label') || '',
+    /Jira key、平台状态、负责人或平台 Jira/,
+  );
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Clarify launch readiness',
   }).waitFor({ state: 'detached', timeout: 15000 });
 
   const exportDownloadPromise = page.waitForEvent('download', { timeout: 15000 });
@@ -360,7 +441,20 @@ try {
   await page.locator('.project-filter-button', {
     hasText: '正常',
   }).locator('strong', { hasText: '1' }).waitFor({ timeout: 15000 });
-  await page.locator('.project-local-search input').fill('FRESH Future');
+  const projectSearchInput = page.locator('.project-local-search input');
+  assert.match(
+    await projectSearchInput.getAttribute('title') || '',
+    /当前浏览器本地项目快照/,
+  );
+  assert.match(
+    await projectSearchInput.getAttribute('aria-label') || '',
+    /继续受“全部”项目视图限制/,
+  );
+  assert.match(
+    await projectSearchInput.getAttribute('aria-label') || '',
+    /不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
+  await projectSearchInput.fill('FRESH Future');
   await page.locator('.project-search-receipt', {
     hasText: '1/4 命中',
   }).locator('.project-search-mode', {
@@ -372,11 +466,23 @@ try {
   await page.locator('.project-card', {
     hasText: 'Fresh Demo Project',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.project-local-search input').fill('FRESH-1');
+  const projectSearchClear = page.locator('.project-local-search-clear', { hasText: '清除' });
+  assert.match(
+    await projectSearchClear.getAttribute('title') || '',
+    /清除本页查找词，保留“全部”项目视图/,
+  );
+  assert.match(
+    await projectSearchClear.getAttribute('aria-label') || '',
+    /不会清空项目、读取外部系统或写回/,
+  );
+  await projectSearchInput.fill('FRESH-1');
   await page.locator('.project-search-receipt', {
     hasText: '1/4 命中',
   }).locator('em', {
     hasText: '不会读取、同步或写回 Memory Service、Jira、GitHub、Confluence',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-search-receipt .project-search-view-basis', {
+    hasText: '这是当前本地快照的全部项目视图',
   }).waitFor({ timeout: 15000 });
   await page.locator('.project-search-hints span', {
     hasText: 'Jira 1',
@@ -388,19 +494,82 @@ try {
   await page.locator('.project-filter-button', {
     hasText: '需处理',
   }).click();
-  await page.locator('.project-search-receipt small', {
-    hasText: '隐藏 1 个本地命中',
+  assert.match(
+    await projectSearchInput.getAttribute('title') || '',
+    /继续受“需处理”项目视图限制/,
+  );
+  await page.locator('.project-search-receipt', {
+    hasText: '当前“需处理”视图显示 0/1 个本地命中',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.project-search-receipt .project-search-view-basis', {
+    hasText: '本地查找命中还会受“需处理”视图限制',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-search-receipt small', {
+    hasText: '还有 1 个命中被项目视图筛选隐藏',
+  }).waitFor({ timeout: 15000 });
+  const receiptViewAllMatches = page.locator('.project-search-receipt .project-search-view-all', {
+    hasText: '查看全部命中',
+  });
+  assert.match(
+    await receiptViewAllMatches.getAttribute('title') || '',
+    /切到“全部”项目视图查看 1 个本地查找命中/,
+  );
+  assert.match(
+    await receiptViewAllMatches.getAttribute('aria-label') || '',
+    /只改变本页视图筛选，保留查找词/,
+  );
+  await receiptViewAllMatches.click();
+  await page.locator('.dashboard-status.success', {
+    hasText: '已切到全部项目查看本地查找命中',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Fresh Demo Project',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-filter-button', {
+    hasText: '需处理',
+  }).click();
   await page.locator('.empty-projects.filter-empty', {
     hasText: '本地快照有 1 个命中',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.empty-projects.filter-empty .control-button.primary', {
-    hasText: '查看全部项目',
-  }).click();
+  const emptyViewAllMatches = page.locator('.empty-projects.filter-empty .control-button.primary', {
+    hasText: '查看全部命中',
+  });
+  assert.match(
+    await emptyViewAllMatches.getAttribute('title') || '',
+    /切到“全部”项目视图查看 1 个本地查找命中/,
+  );
+  assert.match(
+    await emptyViewAllMatches.getAttribute('aria-label') || '',
+    /不读取、同步或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
+  await emptyViewAllMatches.click();
   await page.locator('.project-card', {
     hasText: 'Fresh Demo Project',
   }).waitFor({ timeout: 15000 });
   await page.locator('.project-local-search-clear', { hasText: '清除' }).click();
+  await page.locator('.project-card', {
+    hasText: 'Risk Demo Project',
+  }).waitFor({ timeout: 15000 });
+  await projectSearchInput.fill('NO-SUCH-LOCAL-PROJECT');
+  await page.locator('.empty-projects.filter-empty', {
+    hasText: '当前浏览器本地项目快照没有命中',
+  }).waitFor({ timeout: 15000 });
+  const emptyViewAllProjects = page.locator('.empty-projects.filter-empty .control-button.primary', {
+    hasText: '查看全部项目',
+  });
+  assert.match(
+    await emptyViewAllProjects.getAttribute('title') || '',
+    /清除本页无命中的查找词并切到“全部”项目视图/,
+  );
+  assert.match(
+    await emptyViewAllProjects.getAttribute('aria-label') || '',
+    /只恢复当前浏览器本地快照列表/,
+  );
+  await emptyViewAllProjects.click();
+  await page.locator('.dashboard-status.success', {
+    hasText: '已清除无命中的本地查找并切到全部项目',
+  }).waitFor({ timeout: 15000 });
+  assert.equal(await projectSearchInput.inputValue(), '');
   await page.locator('.project-card', {
     hasText: 'Risk Demo Project',
   }).waitFor({ timeout: 15000 });
@@ -443,6 +612,20 @@ try {
   }).click();
   await page.locator('.zoom-title', {
     hasText: 'Clarify launch readiness',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '证据队列入口',
+  }).locator('strong', {
+    hasText: '已打开 Clarify launch readiness 的 ETA 补齐位置',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '来自证据补全队列第 1/2 项',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '排序只使用本地任务缺口、风险分和 ETA',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.local-repair-receipt', {
+    hasText: '不会读取或写回 Memory Service、Jira/GitHub/Confluence',
   }).waitFor({ timeout: 15000 });
   await page.waitForFunction(() => document.activeElement?.getAttribute('data-evidence-field') === 'eta');
   await page.locator('.evidence-repair-section', {
@@ -519,11 +702,33 @@ try {
   }).locator('em', {
     hasText: '缺 Jira 或平台来源',
   }).waitFor({ timeout: 15000 });
-  await riskCard.locator('.chart-insight-card.attention', {
+  const dependencyPanelAction = riskCard.locator('.chart-insight-card.attention', {
+    hasText: '依赖图',
+  }).locator('.chart-insight-action', {
+    hasText: '打开阻塞依赖',
+  });
+  assert.match(
+    await dependencyPanelAction.getAttribute('title') || '',
+    /图表下一步入口：打开 Risk Demo Project · Resolve release blocker 的本地来源修复位置/,
+  );
+  assert.match(
+    await dependencyPanelAction.getAttribute('aria-label') || '',
+    /不会确认项目状态或发送通知/,
+  );
+  const dependencyRepairDriver = riskCard.locator('.chart-insight-card.attention', {
     hasText: '依赖图',
   }).locator('.chart-driver-item.critical', {
     hasText: 'Resolve release blocker',
-  }).click();
+  });
+  assert.match(
+    await dependencyRepairDriver.getAttribute('title') || '',
+    /图表关键任务入口：打开 Risk Demo Project · Resolve release blocker 的本地来源修复位置/,
+  );
+  assert.match(
+    await dependencyRepairDriver.getAttribute('aria-label') || '',
+    /Jira key、平台状态、负责人或平台 Jira/,
+  );
+  await dependencyRepairDriver.click();
   await page.locator('.zoom-title', {
     hasText: 'Resolve release blocker',
   }).waitFor({ timeout: 15000 });
@@ -533,6 +738,15 @@ try {
   await page.locator('.jira-source-boundary', {
     hasText: '不会读取或写回 Jira',
   }).waitFor({ timeout: 15000 });
+  const chartSourceRepairButton = page.locator('.evidence-repair-card', {
+    hasText: '来源',
+  }).locator('.evidence-repair-card-action', {
+    hasText: '补来源',
+  });
+  assert.match(
+    await chartSourceRepairButton.getAttribute('title') || '',
+    /任务详情证据修复按钮：打开 Risk Demo Project · Resolve release blocker 的本地来源修复位置/,
+  );
   await page.locator('.zoom-overlay.active .close-btn').click();
   await page.locator('.zoom-title', {
     hasText: 'Resolve release blocker',
@@ -587,9 +801,27 @@ try {
   }).locator('span', {
     hasText: '完成 ETA 2024-01-10',
   }).waitFor({ timeout: 15000 });
-  await staleCard.locator('.chart-insight-card.ready', {
+  const staleGanttChart = staleCard.locator('.chart-insight-card.ready', {
     hasText: '甘特就绪度',
-  }).locator('p', {
+  });
+  assert.match(
+    await staleGanttChart.getAttribute('title') || '',
+    /甘特就绪度只读取本地任务 ETA、里程碑日期和已完成 ETA 历史锚点/,
+  );
+  assert.match(
+    await staleGanttChart.getAttribute('aria-label') || '',
+    /不会确认项目状态、发送通知、预测完成时间或自动改期/,
+  );
+  const staleHistoricalMarker = staleGanttChart.locator('.chart-marker.complete').first();
+  assert.match(
+    await staleHistoricalMarker.getAttribute('title') || '',
+    /点位来自本地 ETA、里程碑日期或已完成 ETA 历史锚点/,
+  );
+  assert.match(
+    await staleHistoricalMarker.getAttribute('aria-label') || '',
+    /不代表 Jira\/GitHub\/Confluence 权威同步/,
+  );
+  await staleGanttChart.locator('p', {
     hasText: '历史范围 2024-01-10 至 2024-01-15',
   }).waitFor({ timeout: 15000 });
 
@@ -608,38 +840,55 @@ try {
   await freshCard.waitFor({
     timeout: 15000,
   });
-  await freshCard.locator('.chart-insight-card.ready', {
+  const freshDependencyChart = freshCard.locator('.chart-insight-card.ready', {
     hasText: '依赖图',
-  }).locator('.chart-insight-metrics', {
+  });
+  assert.match(
+    await freshDependencyChart.getAttribute('title') || '',
+    /依赖图只读取本地 dep 任务和 dependencies 链接/,
+  );
+  assert.match(
+    await freshDependencyChart.getAttribute('aria-label') || '',
+    /关键链候选不是完整关键路径计算/,
+  );
+  await freshDependencyChart.locator('.chart-insight-metrics', {
     hasText: '2/2 依赖目标有效',
   }).waitFor({ timeout: 15000 });
-  await freshCard.locator('.chart-insight-card.ready', {
-    hasText: '依赖图',
-  }).locator('.chart-insight-metrics', {
+  await freshDependencyChart.locator('.chart-insight-metrics', {
     hasText: '最长链 2 个任务',
   }).waitFor({ timeout: 15000 });
-  await freshCard.locator('.chart-insight-card.ready', {
-    hasText: '依赖图',
-  }).locator('.chart-driver-item.neutral', {
+  await freshDependencyChart.locator('.chart-insight-metrics', {
+    hasText: '链上已完成 1',
+  }).waitFor({ timeout: 15000 });
+  await freshDependencyChart.locator('p', {
+    hasText: '链上 1 项已完成只作历史前置',
+  }).waitFor({ timeout: 15000 });
+  await freshDependencyChart.locator('.chart-driver-item.neutral', {
     hasText: '关键链候选',
   }).locator('em', {
     hasText: 'Foundation work -> Future work',
   }).waitFor({ timeout: 15000 });
-  await freshCard.locator('.chart-insight-card.ready', {
-    hasText: '依赖图',
-  }).locator('.chart-driver-item.neutral', {
+  await freshDependencyChart.locator('.chart-driver-item.neutral', {
     hasText: 'Future work',
   }).locator('em', {
     hasText: '依赖 foundation-task、ga',
   }).waitFor({ timeout: 15000 });
-  await freshCard.locator('.chart-insight-card.ready', {
+  const freshBurndownChart = freshCard.locator('.chart-insight-card.ready', {
     hasText: '燃尽/完成',
-  }).locator('.chart-insight-metrics', {
+  });
+  const freshBurndownProgress = freshBurndownChart.locator('.chart-progress');
+  assert.match(
+    await freshBurndownProgress.getAttribute('title') || '',
+    /只表示本地任务数完成率/,
+  );
+  assert.match(
+    await freshBurndownProgress.getAttribute('aria-label') || '',
+    /不含工时、故事点、范围变化或 velocity/,
+  );
+  await freshBurndownChart.locator('.chart-insight-metrics', {
     hasText: '任务数口径',
   }).waitFor({ timeout: 15000 });
-  await freshCard.locator('.chart-insight-card.ready', {
-    hasText: '燃尽/完成',
-  }).locator('p', {
+  await freshBurndownChart.locator('p', {
     hasText: '不是 effort/velocity 预测',
   }).waitFor({ timeout: 15000 });
   assert.equal(await page.locator('.project-card', { hasText: 'Stale Demo Project' }).count(), 0);
@@ -997,6 +1246,9 @@ try {
     hasText: '已从 Memory Service 关注项目新增 2 个本地工作台',
   }).waitFor({ timeout: 15000 });
   await page.locator('.dashboard-status.warning', {
+    hasText: 'Memory Service 项目：新增：Memory Import Project、Memory Import Followup；已匹配：Decision Review Only',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.dashboard-status.warning', {
     hasText: '本地证据待补：2 个项目待规划',
   }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-panel', {
@@ -1054,9 +1306,29 @@ try {
   await page.locator('.data-source-evidence-action.plan-project', {
     hasText: '规划 Memory Import Followup',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.data-source-evidence-action.plan-project', {
+  const dataSourceCloseButton = page.locator('.data-source-close', {
+    hasText: '收起',
+  });
+  assert.match(
+    await dataSourceCloseButton.getAttribute('title') || '',
+    /只隐藏当前面板，保留本轮新增\/匹配项目、本地证据回执和页面状态/,
+  );
+  assert.match(
+    await dataSourceCloseButton.getAttribute('aria-label') || '',
+    /不会取消正在进行的同步、清空检查结果、删除本地项目、重新读取或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
+  const planProjectButton = page.locator('.data-source-evidence-action.plan-project', {
     hasText: '规划 Memory Import Project',
-  }).click();
+  });
+  assert.match(
+    await planProjectButton.getAttribute('title') || '',
+    /数据源检查修复入口：打开 Memory Import Project 的本地首个任务填写入口/,
+  );
+  assert.match(
+    await planProjectButton.getAttribute('aria-label') || '',
+    /不会创建 Jira\/GitHub\/Confluence 任务、反写 Memory Service 或发送通知/,
+  );
+  await planProjectButton.click();
   await page.locator('.zoom-overlay.active .zoom-title', {
     hasText: '添加新任务',
   }).waitFor({ timeout: 15000 });
@@ -1073,6 +1345,11 @@ try {
   await page.locator('.zoom-overlay.active .zoom-title', {
     hasText: '添加新任务',
   }).waitFor({ state: 'detached', timeout: 15000 });
+  await dataSourceCloseButton.click();
+  await page.locator('.data-source-panel').waitFor({ state: 'detached', timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Memory Import Project',
+  }).waitFor({ timeout: 15000 });
 
   assertNoPageErrors();
   await context.close();

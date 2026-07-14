@@ -891,6 +891,20 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       retryAppButton,
       'active page recovery should expose an explicit app retry action',
     );
+    assert.ok(
+      retryAppButton?.getAttribute('aria-label')?.includes(
+        'validated RingCentral app link again',
+      ) &&
+        retryAppButton?.getAttribute('aria-label')?.includes(
+          'does not open the browser fallback',
+        ) &&
+        retryAppButton?.getAttribute('aria-label')?.includes(
+          'cannot confirm whether you joined',
+        ) &&
+        retryAppButton?.getAttribute('title') ===
+          retryAppButton?.getAttribute('aria-label'),
+      'app retry button should expose its action boundary at focus and hover time',
+    );
     await retryAppButton?.dispatchTestEvent('click');
     assert.equal(
       title?.textContent,
@@ -964,6 +978,41 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       fallbackHost,
       'data-pai-ringcentral-native-join-copy-link',
     );
+    const browserButton = findElementByAttribute(
+      fallbackHost,
+      'data-pai-ringcentral-native-join-fallback-link',
+    );
+    assert.ok(
+      browserButton?.getAttribute('aria-label')?.includes(
+        'new browser window',
+      ) &&
+        browserButton?.getAttribute('aria-label')?.includes(
+          'including hidden passcode/details',
+        ) &&
+        browserButton?.getAttribute('aria-label')?.includes(
+          'cannot confirm the new window joined',
+        ) &&
+        browserButton?.getAttribute('aria-label')?.includes(
+          'does not retry the app',
+        ) &&
+        browserButton?.getAttribute('title') ===
+          browserButton?.getAttribute('aria-label'),
+      'Join in browser should expose a button-level recovery boundary',
+    );
+    assert.ok(
+      copyLinkButton?.getAttribute('aria-label')?.includes(
+        'full RingCentral browser meeting link',
+      ) &&
+        copyLinkButton?.getAttribute('aria-label')?.includes(
+          'including hidden passcode/details',
+        ) &&
+        copyLinkButton?.getAttribute('aria-label')?.includes(
+          'does not join the meeting',
+        ) &&
+        copyLinkButton?.getAttribute('title') ===
+          copyLinkButton?.getAttribute('aria-label'),
+      'Copy link should expose a button-level copy boundary',
+    );
     await copyLinkButton?.dispatchTestEvent('click');
     assert.equal(
       copiedText,
@@ -979,6 +1028,14 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
     const defaultPreferenceButton = findElementByAttribute(
       fallbackHost,
       'data-pai-ringcentral-native-join-prefer-browser',
+    );
+    const defaultPreferenceReceipt = findElementByAttribute(
+      fallbackHost,
+      'data-pai-ringcentral-native-join-default-receipt',
+    );
+    assert.ok(
+      defaultPreferenceReceipt?.style.cssText.includes('display:none'),
+      'default path receipt should stay hidden until the user changes the preference',
     );
     await defaultPreferenceButton?.dispatchTestEvent('click');
     assert.equal(
@@ -1012,6 +1069,35 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
           'browser recovery controls remain available',
         ),
       'failed default save should keep a durable no-effect receipt in the panel',
+    );
+    assert.ok(
+      collectElementText(defaultPreferenceReceipt).includes(
+        'Default path receipt',
+      ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'Default path was not saved',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'Future RingCentral joins keep the previous preference',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'did not join this meeting',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'retry the app',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'open a browser window',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'copy meeting material',
+        ) &&
+        collectElementText(defaultPreferenceReceipt).includes(
+          'current recovery controls',
+        ) &&
+        defaultPreferenceReceipt?.style.display === 'block' &&
+        (defaultPreferenceReceipt?.style as any).background === '#fef2f2',
+      'failed default save should show a separate default-path receipt with previous-preference and no-effect scope',
     );
 
     await closeButton?.dispatchTestEvent('click');

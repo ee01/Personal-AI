@@ -65,6 +65,7 @@
     "verify:task-scheduler-popup-filters:e2e": "node tools/verify-task-scheduler-popup-filters-e2e.mjs",
     "verify:webpage-memory-detection": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-webpage-memory-detection.ts",
     "verify:webpage-memory-detection:e2e": "node desktop-app/scripts/webpage-memory-detection-check.mjs",
+    "verify:ar-data-overlay:e2e": "node tools/verify-ar-data-overlay-e2e.mjs",
     "verify:quick-ask:e2e": "npm --prefix desktop-app run test:quick-ask-status-card",
     "verify:context-assist-meeting-prep": "node tools/verify-context-assist-meeting-prep.mjs",
     "verify:ringcentral-native-join:e2e": "node tools/verify-ringcentral-native-join-e2e.mjs",

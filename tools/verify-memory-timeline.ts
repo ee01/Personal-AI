@@ -9,12 +9,17 @@ import {
   UNKNOWN_TIMELINE_SOURCE_FILTER_KEY,
   buildTimelineBoundaryReceipt,
   buildTimelineEmptyReceipt,
+  buildTimelineFeedbackReceipt,
   buildTimelineLinkRecoveryCopiedReceipt,
   buildTimelineLinkRecoveryCopyFailureReceipt,
   buildTimelineLinkRecoveryDiagnostic,
   buildTimelineNavigationReceipt,
   buildTimelineRefreshFailureReceipt,
   buildTimelineRefreshingSnapshotReceipt,
+  buildTimelineRangeControlBoundary,
+  buildTimelineRefreshControlBoundary,
+  buildTimelineScopeControlBoundary,
+  buildTimelineSourceControlBoundary,
   buildTimelineSourceFilterOptions,
   filterTimelineEventsBySource,
   formatTimelineClockTime,
@@ -147,6 +152,56 @@ assert.deepEqual(
   filterTimelineEventsBySource(events, 'Source title').map((event) => event.id),
   ['newer'],
 );
+
+const activeRangeControlBoundary = buildTimelineRangeControlBoundary({
+  rangeLabel: '今天',
+  scope: 'all',
+  isActive: true,
+});
+assert.ok(activeRangeControlBoundary.includes('当前时间范围已选中'));
+assert.ok(activeRangeControlBoundary.includes('再次点击不会重新请求'));
+assert.ok(activeRangeControlBoundary.includes('不会写入、删除、写反馈、同步来源或确认事实'));
+
+const inactiveRangeControlBoundary = buildTimelineRangeControlBoundary({
+  rangeLabel: '近7天',
+  scope: 'work',
+});
+assert.ok(inactiveRangeControlBoundary.includes('重新读取工作记忆的近7天窗口'));
+assert.ok(inactiveRangeControlBoundary.includes('失败不会把旧范围当成空结果'));
+
+const inactiveScopeControlBoundary = buildTimelineScopeControlBoundary({
+  scope: 'personal',
+});
+assert.ok(inactiveScopeControlBoundary.includes('只更新本页时间轴 scope/query'));
+assert.ok(inactiveScopeControlBoundary.includes('重新读取个人记忆'));
+assert.ok(inactiveScopeControlBoundary.includes('不会改变全局偏好'));
+
+const sourceControlBoundary = buildTimelineSourceControlBoundary({
+  sourceFilterLabel: 'Source title',
+  sourceCount: 1,
+  totalEventCount: 4,
+});
+assert.ok(sourceControlBoundary.includes('本批已加载 4 条中的 1 条'));
+assert.ok(sourceControlBoundary.includes('不重新请求 Memory Service'));
+
+const allSourceControlBoundary = buildTimelineSourceControlBoundary({
+  sourceFilterLabel: '全部来源',
+  sourceCount: 4,
+  totalEventCount: 4,
+  isAllSources: true,
+  isActive: false,
+});
+assert.ok(allSourceControlBoundary.includes('切回全部 4 条已加载时间轴记忆'));
+assert.ok(allSourceControlBoundary.includes('只恢复本地隐藏项'));
+
+const refreshControlBoundary = buildTimelineRefreshControlBoundary({
+  scope: 'all',
+  rangeLabel: '今天',
+  sourceFilterLabel: '全部来源',
+});
+assert.ok(refreshControlBoundary.includes('重新读取 全部 · 今天 时间轴'));
+assert.ok(refreshControlBoundary.includes('同范围刷新中保留上次快照'));
+assert.ok(refreshControlBoundary.includes('失败不会当作空结果'));
 
 const allTimelineReceipt = buildTimelineBoundaryReceipt({
   scope: 'all',
@@ -295,6 +350,24 @@ assert.ok(
   ),
 );
 
+const sourceUrlReadyReceipt = buildTimelineNavigationReceipt({
+  action: 'source_url_ready',
+  eventTitle: 'Source-only timeline memory',
+  sourceHost: 'example.org',
+});
+assert.equal(sourceUrlReadyReceipt.title, '外部来源确认回执');
+assert.equal(sourceUrlReadyReceipt.tone, 'info');
+assert.ok(
+  sourceUrlReadyReceipt.items.some((item) =>
+    item.includes('请使用卡片里的“打开来源”按钮继续'),
+  ),
+);
+assert.ok(
+  sourceUrlReadyReceipt.items.some((item) =>
+    item.includes('卡片点击只展示打开边界，不会打开外部标签页'),
+  ),
+);
+
 const blockedNavigationReceipt = buildTimelineNavigationReceipt({
   action: 'blocked',
   eventTitle: 'Unsafe source memory',
@@ -436,6 +509,104 @@ assert.ok(
 assert.ok(
   refreshFailureReceipt.items.some((item) =>
     item.includes('memory service unavailable'),
+  ),
+);
+
+const pendingFeedbackReceipt = buildTimelineFeedbackReceipt({
+  status: 'pending',
+  action: 'negative',
+  eventTitle: 'Timeline feedback target',
+  targetType: 'message',
+  targetId: 'feedback-1',
+  scope: 'work',
+  rangeLabel: '近7天',
+  sourceFilterLabel: 'Timeline source',
+});
+assert.equal(pendingFeedbackReceipt.title, '反馈提交中回执');
+assert.equal(pendingFeedbackReceipt.tone, 'info');
+assert.ok(
+  pendingFeedbackReceipt.items.some((item) =>
+    item.includes('标记为“不相关”'),
+  ),
+);
+assert.ok(
+  pendingFeedbackReceipt.items.some((item) =>
+    item.includes('Timeline feedback target（message:feedback-1）'),
+  ),
+);
+assert.ok(
+  pendingFeedbackReceipt.items.some((item) =>
+    item.includes('工作 · 近7天 · Timeline source'),
+  ),
+);
+assert.ok(
+  pendingFeedbackReceipt.items.some((item) =>
+    item.includes('不会删除、隐藏或确认当前记忆'),
+  ),
+);
+
+const successFeedbackReceipt = buildTimelineFeedbackReceipt({
+  status: 'success',
+  action: 'positive',
+  eventTitle: 'Timeline feedback target',
+  targetType: 'message',
+  targetId: 'feedback-1',
+  scope: 'all',
+  rangeLabel: '今天',
+  sourceFilterLabel: '全部来源',
+});
+assert.equal(successFeedbackReceipt.title, '反馈已记录回执');
+assert.equal(successFeedbackReceipt.tone, 'success');
+assert.ok(
+  successFeedbackReceipt.items.some((item) =>
+    item.includes('已确认把这条时间轴记忆标记为“有用”'),
+  ),
+);
+assert.ok(
+  successFeedbackReceipt.items.some((item) =>
+    item.includes('metadata 会恢复按钮状态'),
+  ),
+);
+
+const clearedFeedbackReceipt = buildTimelineFeedbackReceipt({
+  status: 'cleared',
+  action: 'clear',
+  eventTitle: 'Timeline feedback target',
+  targetType: 'message',
+  targetId: 'feedback-1',
+  scope: 'all',
+  rangeLabel: '今天',
+  sourceFilterLabel: '全部来源',
+});
+assert.equal(clearedFeedbackReceipt.title, '反馈撤销回执');
+assert.equal(clearedFeedbackReceipt.tone, 'success');
+assert.ok(
+  clearedFeedbackReceipt.items.some((item) =>
+    item.includes('已确认撤销这条时间轴记忆的召回质量反馈'),
+  ),
+);
+
+const failedFeedbackReceipt = buildTimelineFeedbackReceipt({
+  status: 'failure',
+  action: 'negative',
+  eventTitle: 'Timeline feedback target',
+  targetType: 'message',
+  targetId: 'feedback-1',
+  scope: 'personal',
+  rangeLabel: '近30天',
+  sourceFilterLabel: '全部来源',
+  errorMessage: 'feedback service unavailable',
+});
+assert.equal(failedFeedbackReceipt.title, '反馈未确认回执');
+assert.equal(failedFeedbackReceipt.tone, 'warning');
+assert.ok(
+  failedFeedbackReceipt.items.some((item) =>
+    item.includes('上一反馈状态已保留'),
+  ),
+);
+assert.ok(
+  failedFeedbackReceipt.items.some((item) =>
+    item.includes('feedback service unavailable'),
   ),
 );
 

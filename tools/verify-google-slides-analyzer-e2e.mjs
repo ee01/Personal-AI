@@ -68,7 +68,7 @@ const analysisResult = {
             summary: 'Leadership summary owner follow-up',
             assignee: 'Cara',
             updated: '2026-05-24T18:20:00.000+0000',
-            url: 'https://jira.ringcentral.com/browse/AIT2-11063',
+            url: 'https://jira.ringcentral.com/browse/AIT2-11063?access_token=secret-from-provider',
           },
         ],
       },
@@ -239,6 +239,15 @@ async function launchExtensionContext() {
   };
 }
 
+async function assertControlBoundary(locator, patterns) {
+  const ariaLabel = await locator.getAttribute('aria-label');
+  assert.ok(ariaLabel, 'expected control to expose an aria-label boundary');
+  assert.equal(await locator.getAttribute('title'), ariaLabel);
+  for (const pattern of patterns) {
+    assert.match(ariaLabel, pattern);
+  }
+}
+
 const { context, extensionId } = await launchExtensionContext();
 await context.addInitScript(() => {
   Object.defineProperty(window, '__slidesAnalyzerCopiedTexts', {
@@ -365,8 +374,20 @@ try {
     /分析当前 Google Slides 项目信息/,
   );
   assert.match(
+    await toolbarButton.getAttribute('aria-label'),
+    /只生成审阅快照和可写字段建议/,
+  );
+  assert.match(
+    await toolbarButton.getAttribute('aria-label'),
+    /不会立即写回 Slides/,
+  );
+  assert.match(
+    await toolbarButton.getAttribute('aria-label'),
+    /不会反写 Jira 或 Memory Service/,
+  );
+  assert.match(
     await toolbarButton.getAttribute('title'),
-    /分析当前 Google Slides 项目信息/,
+    /只生成审阅快照和可写字段建议/,
   );
   const toolbarBusySnapshot = await opener.evaluate(() => {
     const button = document.querySelector('#analyze-projects-button');
@@ -375,6 +396,7 @@ try {
       text: button.textContent || '',
       ariaDisabled: button.getAttribute('aria-disabled'),
       ariaBusy: button.getAttribute('aria-busy'),
+      ariaLabel: button.getAttribute('aria-label') || '',
       title: button.getAttribute('title') || '',
       cursor: button.style.cursor,
     };
@@ -382,7 +404,10 @@ try {
   assert.match(toolbarBusySnapshot.text, /获取授权|正在分析/);
   assert.equal(toolbarBusySnapshot.ariaDisabled, 'true');
   assert.equal(toolbarBusySnapshot.ariaBusy, 'true');
-  assert.match(toolbarBusySnapshot.title, /正在/);
+  assert.match(toolbarBusySnapshot.ariaLabel, /正在获取授权|正在分析/);
+  assert.match(toolbarBusySnapshot.ariaLabel, /重复点击/);
+  assert.match(toolbarBusySnapshot.ariaLabel, /不会写回 Slides/);
+  assert.match(toolbarBusySnapshot.title, /不会写回 Slides/);
   assert.equal(toolbarBusySnapshot.cursor, 'wait');
 
   const duplicateToolbarClickSnapshot = await opener.evaluate(() => {
@@ -397,7 +422,10 @@ try {
   });
   assert.match(duplicateToolbarClickSnapshot.text, /获取授权|正在分析/);
   assert.equal(duplicateToolbarClickSnapshot.ariaDisabled, 'true');
-  assert.match(duplicateToolbarClickSnapshot.toastText, /Slides 分析正在进行/);
+  assert.match(duplicateToolbarClickSnapshot.toastText, /Slides 分析正在/);
+  assert.match(duplicateToolbarClickSnapshot.toastText, /重复点击不会(?:重复跑分析|再次授权)/);
+  assert.match(duplicateToolbarClickSnapshot.toastText, /不会写回 Slides/);
+  assert.match(duplicateToolbarClickSnapshot.toastText, /反写 Jira \/ Memory Service/);
 
   await opener.evaluate(() => {
     document.querySelector('.goog-toolbar-horizontal')?.remove();
@@ -495,20 +523,100 @@ try {
   assert.match(pageText, /Core -> Growth/);
   assert.match(pageText, /当前视图 6 \/ 6 个建议/);
   assert.equal(await analysisPage.locator('a.jira-issue-key-link', { hasText: 'MTR-123407' }).count(), 1);
+  assert.equal(await analysisPage.locator('a.jira-issue-key-link', { hasText: 'AIT2-11063' }).count(), 0);
+  assert.equal(await analysisPage.locator('.jira-issue-key-text', { hasText: 'AIT2-11063' }).count(), 1);
+  assert.match(pageText, /链接已隐藏：来源 URL 含凭据或不安全/);
   assert.equal(await analysisPage.locator('a.jira-issue-key-link', { hasText: 'RISK-ONLY-1' }).count(), 0);
   assert.equal(await analysisPage.locator('.jira-issue-key-text', { hasText: 'RISK-ONLY-1' }).count(), 1);
+  await assertControlBoundary(analysisPage.locator('#review-filter-all'), [
+    /全部筛选控制/,
+    /当前已在此视图/,
+    /本页会显示 6 \/ 6 张建议卡/,
+    /全部已选 2 个字段/,
+    /筛选只改变结果页可见范围/,
+    /不会重新分析 deck/,
+    /不会写回 Slides、Jira 或 Memory Service/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#review-filter-review'), [
+    /需复核筛选控制/,
+    /点击只切换到「需复核」审阅视图/,
+    /本页会显示 2 \/ 6 张建议卡/,
+    /不会写回 Slides/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#restore-high-confidence-fields'), [
+    /恢复高可信默认选择/,
+    /2 个来源充分字段/,
+    /当前已选 2 个字段/,
+    /只更新结果页本地选择/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#clear-selected-fields'), [
+    /清空当前选择/,
+    /移除 2 个已选字段/,
+    /不会重新分析 deck/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#queue-filter-review'), [
+    /字段复核队列筛选/,
+    /只看需复核字段/,
+    /当前队列有 2 个需复核字段/,
+    /不会勾选字段/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#queue-filter-blocked'), [
+    /字段复核队列筛选/,
+    /只看无法写回字段/,
+    /当前队列有 1 个无法写回字段/,
+    /不会提交写回/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#review-filter-risk-inline'), [
+    /风险筛选控制/,
+    /本页会显示 4 \/ 6 张建议卡/,
+    /筛选只改变结果页可见范围/,
+  ]);
 
   assert.equal(await analysisPage.locator('#update-status-0').isChecked(), true);
-  assert.equal(await analysisPage.locator('#update-status-0').getAttribute('aria-label'), 'MTR-123407 状态 写回选择');
+  const statusControlLabel = await analysisPage.locator('#update-status-0').getAttribute('aria-label');
+  assert.match(statusControlLabel, /MTR-123407 状态 写回选择/);
+  assert.match(statusControlLabel, /At risk -> On track/);
+  assert.match(statusControlLabel, /写入目标: slide-1 \/ table-1 \/ 表格第 2 行 \/ 状态第 2 列/);
+  assert.match(statusControlLabel, /默认选中字段，来源充分/);
+  assert.match(statusControlLabel, /只改变结果页本地提交范围/);
+  assert.match(statusControlLabel, /不会立即写回 Slides、重新分析 deck 或反写 Jira \/ Memory Service/);
+  assert.equal(await analysisPage.locator('#update-status-0').getAttribute('title'), statusControlLabel);
   assert.equal(await analysisPage.locator('#update-track-0').isChecked(), true);
-  assert.equal(await analysisPage.locator('#update-track-0').getAttribute('aria-label'), 'MTR-123407 赛道 写回选择');
+  const trackControlLabel = await analysisPage.locator('#update-track-0').getAttribute('aria-label');
+  assert.match(trackControlLabel, /MTR-123407 赛道 写回选择/);
+  assert.match(trackControlLabel, /Core -> Growth/);
+  assert.match(trackControlLabel, /写入目标: slide-1 \/ table-1 \/ 表格第 2 行 \/ 赛道第 5 列/);
+  assert.match(trackControlLabel, /默认选中字段，来源充分/);
   assert.equal(await analysisPage.locator('#update-comments-0').isChecked(), false);
-  assert.equal(await analysisPage.locator('#update-comments-0').getAttribute('aria-label'), 'MTR-123407 备注 写回选择');
+  const commentsControlLabel = await analysisPage.locator('#update-comments-0').getAttribute('aria-label');
+  assert.match(commentsControlLabel, /MTR-123407 备注 写回选择/);
+  assert.match(commentsControlLabel, /追加备注: Release notes are ready/);
+  assert.match(commentsControlLabel, /需人工复核字段/);
+  assert.match(commentsControlLabel, /只改变结果页本地提交范围/);
   assert.equal(await analysisPage.locator('#review-queue-toggle-0-comments').isChecked(), false);
+  assert.match(
+    await analysisPage.locator('#review-queue-toggle-0-comments').getAttribute('aria-label'),
+    /MTR-123407 备注 写回选择.*追加备注: Release notes are ready.*需人工复核字段/s,
+  );
   assert.equal(await analysisPage.locator('#review-queue-toggle-1-owner').isChecked(), false);
+  const ownerQueueLabel = await analysisPage.locator('#review-queue-toggle-1-owner').getAttribute('aria-label');
+  assert.match(ownerQueueLabel, /AIT2-11063 负责人 写回选择/);
+  assert.match(ownerQueueLabel, /Ben -> Cara/);
+  assert.match(ownerQueueLabel, /写入目标: slide-1 \/ table-1 \/ 表格第 3 行 \/ 负责人第 3 列/);
+  assert.match(ownerQueueLabel, /需人工复核字段/);
   assert.equal(await analysisPage.locator('#update-owner-1').isChecked(), false);
-  assert.equal(await analysisPage.locator('#update-owner-1').getAttribute('aria-label'), 'AIT2-11063 负责人 写回选择');
+  assert.equal(await analysisPage.locator('#update-owner-1').getAttribute('aria-label'), ownerQueueLabel);
+  const projectSelectAllLabel = await analysisPage.locator('#select-all-0').getAttribute('aria-label');
+  assert.match(projectSelectAllLabel, /MTR-123407 全选写回字段/);
+  assert.match(projectSelectAllLabel, /将切换 3 个可写字段: 状态、备注、赛道/);
+  assert.match(projectSelectAllLabel, /其中 2 个来源充分，1 个需人工复核/);
+  assert.match(projectSelectAllLabel, /全选只改变结果页本地提交范围/);
+  assert.equal(await analysisPage.locator('#select-all-0').getAttribute('title'), projectSelectAllLabel);
   assert.equal(await analysisPage.locator('#select-all-2').isDisabled(), true);
+  assert.match(
+    await analysisPage.locator('#select-all-2').getAttribute('aria-label'),
+    /NO-COLUMN-1 全选写回字段.*无可写字段/s,
+  );
   assert.equal(await analysisPage.locator('#select-all-3').isDisabled(), true);
   assert.equal(await analysisPage.locator('#update-status-3').count(), 0);
   assert.equal(await analysisPage.locator('#update-owner-3').count(), 0);
@@ -547,6 +655,18 @@ try {
   assert.match(blockedText, /At risk -> On track/);
   assert.match(blockedText, /状态缺少直接来源，不会默认写回/);
   assert.match(blockedText, /当前筛选隐藏了 2 个已选字段/);
+  await assertControlBoundary(analysisPage.locator('#show-selected-fields'), [
+    /查看已选字段/,
+    /当前筛选隐藏了 2 个已选字段/,
+    /只切到已选视图/,
+    /不会改变选择/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#keep-visible-selected-fields'), [
+    /仅保留当前视图字段/,
+    /移除 2 个当前筛选外的隐藏选择/,
+    /保留 0 个当前可见已选字段/,
+    /不会应用写回/,
+  ]);
 
   await analysisPage.locator('#clear-selected-fields').click();
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
@@ -625,6 +745,23 @@ try {
   assert.match(selectedPreviewText, /一次原子批量写回: 3 个字段 \/ 2 个项目，约 6 个 Slides 子请求/);
   assert.match(selectedPreviewText, /本地预检跳过项不会进入这批请求/);
   assert.equal(await analysisPage.locator('#copy-selected-writeback-review').count(), 1);
+  await assertControlBoundary(analysisPage.locator('#copy-selected-writeback-review'), [
+    /复制当前写回复核清单: 3 个字段 \/ 2 个项目/,
+    /presentation presentation-1/,
+    /字段目标/,
+    /原子批次边界/,
+    /1 个人工纳入字段/,
+    /只写入本机剪贴板/,
+    /不会应用写回/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#apply-updates-button'), [
+    /应用写回: 将提交 3 个字段 \/ 2 个项目/,
+    /presentation presentation-1/,
+    /当前视图 3 个，隐藏 0 个/,
+    /1 个由你手动纳入/,
+    /Google Slides batchUpdate 任一子请求无效时，整批不会写入/,
+    /不会反写 Jira 或 Memory Service/,
+  ]);
   await analysisPage.locator('#copy-selected-writeback-review').click();
   await analysisPage.waitForFunction(() => window.__slidesAnalyzerCopiedTexts.length > 0);
   const copiedReviewPacket = await analysisPage.evaluate(() => {
@@ -699,6 +836,10 @@ try {
   assert.equal(await analysisPage.locator('#review-filter-selected').isDisabled(), true);
   assert.equal(await analysisPage.locator('#queue-filter-review').isDisabled(), true);
   assert.equal(await analysisPage.locator('#review-filter-risk-inline').isDisabled(), true);
+  const applyingButtonLabel = await analysisPage.locator('#apply-updates-button').getAttribute('aria-label');
+  assert.match(applyingButtonLabel, /正在更新/);
+  assert.match(applyingButtonLabel, /等待 Google Slides API 回包/);
+  assert.match(applyingButtonLabel, /不会追加新字段/);
 
   const appliedUpdates = await opener.evaluate(() => window.appliedUpdates);
   assert.equal(appliedUpdates[0].suggestedStatus, 'On track');
@@ -725,8 +866,20 @@ try {
   assert.match(failureText, /失败接管清单/);
   assert.match(failureText, /整批没有确认写入/);
   assert.match(failureText, /不要把这批字段当成已写入/);
+  assert.match(failureText, /整批未确认/);
   assert.equal(await analysisPage.locator('.apply-failure-handoff-item').count(), 3);
+  assert.equal(
+    await analysisPage.locator('.apply-failure-handoff-status-badge', { hasText: '整批未确认' }).count(),
+    3,
+  );
   assert.equal(await analysisPage.locator('#copy-apply-failure-handoff').count(), 1);
+  await assertControlBoundary(analysisPage.locator('#copy-apply-failure-handoff'), [
+    /复制失败字段接管清单: 3 个未完成字段/,
+    /presentation presentation-1/,
+    /整批没有字段级写入确认/,
+    /只写入本机剪贴板/,
+    /不会重新提交失败批次/,
+  ]);
   const copiedCountAfterReview = await analysisPage.evaluate(() => window.__slidesAnalyzerCopiedTexts.length);
   await analysisPage.locator('#copy-apply-failure-handoff').click();
   await analysisPage.waitForFunction((previousCount) => (
@@ -741,8 +894,17 @@ try {
   assert.match(copiedFailurePacket, /Google Slides API错误: batchUpdate rejected because one subrequest was invalid/);
   assert.match(copiedFailurePacket, /MTR-123407 · Quarterly status deck · 状态/);
   assert.match(copiedFailurePacket, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(copiedFailurePacket, /写回状态: 整批未确认 - 复制只保留本次未完成字段，不能当作已写入/);
   assert.match(copiedFailurePacket, /目标: slide-1 \/ table-1 \/ 表格第 3 行 \/ 负责人第 3 列/);
   assert.match(copiedFailurePacket, /下一步: 先按本次字段目标核对 slide、表格、行列和权限/);
+  const failureCopyReceiptText = await analysisPage.locator('[aria-label="失败清单复制回执"]').innerText();
+  assert.match(failureCopyReceiptText, /失败清单复制回执/);
+  assert.match(failureCopyReceiptText, /已复制 3 个未完成字段；presentation presentation-1/);
+  assert.match(failureCopyReceiptText, /本次 3 个提交字段没有字段级写入确认/);
+  assert.match(failureCopyReceiptText, /只写入本机剪贴板/);
+  assert.match(failureCopyReceiptText, /不会重新提交失败批次/);
+  assert.match(failureCopyReceiptText, /不会写回 Slides/);
+  assert.match(failureCopyReceiptText, /不会反写 Jira 或 Memory Service/);
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), false);
 
   await analysisPage.locator('#apply-updates-button').click();
@@ -780,7 +942,17 @@ try {
   });
   assert.match(copiedAmbiguousSkippedPacket, /Confirmed batch: Google Slides 已确认写回 2 个字段，但 1 个跳过或缺失原因未能匹配到具体字段；已隐藏字段级确认列表/);
   assert.match(copiedAmbiguousSkippedPacket, /未匹配到提交字段 · 跳过项/);
+  assert.match(copiedAmbiguousSkippedPacket, /接管方式: 人工核对 - 未唯一匹配提交字段/);
   assert.match(copiedAmbiguousSkippedPacket, /跳过原因: Skipped one submitted field because the target table was protected during precheck/);
+  const ambiguousSkippedCopyReceiptText = await analysisPage.locator('[aria-label="跳过清单复制回执"]').innerText();
+  assert.match(ambiguousSkippedCopyReceiptText, /跳过清单复制回执/);
+  assert.match(ambiguousSkippedCopyReceiptText, /已复制 1 个接管项；presentation presentation-1/);
+  assert.match(ambiguousSkippedCopyReceiptText, /Google Slides 已确认写回 2 个字段/);
+  assert.match(ambiguousSkippedCopyReceiptText, /0 个跳过项可重选，1 个仍只能人工核对/);
+  assert.match(ambiguousSkippedCopyReceiptText, /不会重选字段/);
+  assert.match(ambiguousSkippedCopyReceiptText, /不会自动重试/);
+  assert.match(ambiguousSkippedCopyReceiptText, /不会写回 Slides/);
+  assert.match(ambiguousSkippedCopyReceiptText, /不会反写 Jira 或 Memory Service/);
 
   await analysisPage.locator('#restore-high-confidence-fields').click();
   await analysisPage.locator('#review-filter-all').click();
@@ -884,14 +1056,34 @@ try {
   assert.match(copiedSkippedPacket, /Boundary: Google Slides 已确认已发送批次整体完成；下列跳过或未解释项没有字段级写入确认/);
   assert.match(copiedSkippedPacket, /Non-effects: 未选、无法写回、仅风险关注项不会写入，也不会反写 Jira 或 Memory Service/);
   assert.match(copiedSkippedPacket, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(copiedSkippedPacket, /接管方式: 可重选 - 可用页面「重选跳过字段」恢复本地提交范围/);
   assert.match(copiedSkippedPacket, /Ben -> Cara/);
   assert.match(copiedSkippedPacket, /目标: slide-1 \/ table-1 \/ 表格第 3 行 \/ 负责人第 3 列/);
   assert.match(copiedSkippedPacket, /跳过原因: Skipped AIT2-11063 Leadership summary at slide-1 \/ table-1 \/ row 3 \/ column 3: invalid cell location/);
   assert.match(copiedSkippedPacket, /下一步: 回到原 slide 确认项目行仍存在，再重新触发分析。/);
+  const matchedSkippedCopyReceiptText = await analysisPage.locator('[aria-label="跳过清单复制回执"]').innerText();
+  assert.match(matchedSkippedCopyReceiptText, /跳过清单复制回执/);
+  assert.match(matchedSkippedCopyReceiptText, /已复制 1 个接管项；presentation presentation-1/);
+  assert.match(matchedSkippedCopyReceiptText, /1 个跳过项可重选，0 个仍只能人工核对/);
+  assert.match(matchedSkippedCopyReceiptText, /复制只写入本机剪贴板/);
+  assert.match(matchedSkippedCopyReceiptText, /不会自动重试/);
   const skippedReselectBoundaryText = await analysisPage.locator('.apply-skipped-reselect-boundary').innerText();
   assert.match(skippedReselectBoundaryText, /已匹配 1 个可重选字段/);
   assert.match(skippedReselectBoundaryText, /重选只改变本页选择，不会自动重试或写回/);
   assert.equal(await analysisPage.locator('#reselect-apply-skipped-fields').isDisabled(), false);
+  await assertControlBoundary(analysisPage.locator('#reselect-apply-skipped-fields'), [
+    /重选跳过字段/,
+    /可恢复 1 个已唯一匹配的跳过字段/,
+    /重选只改变本页选择/,
+    /不会自动重试/,
+  ]);
+  await assertControlBoundary(analysisPage.locator('#copy-apply-skipped-handoff'), [
+    /复制跳过字段接管清单: 1 个接管项/,
+    /presentation presentation-1/,
+    /1 个可重选，0 个只能人工核对/,
+    /不会重选字段/,
+    /不会自动重试/,
+  ]);
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
   assert.match(await analysisPage.locator('#apply-updates-button').innerText(), /应用 0 个字段到 Slides/);
   await analysisPage.locator('#reselect-apply-skipped-fields').click();
@@ -905,6 +1097,14 @@ try {
   assert.match(reselectReceiptText, /不会立即重试/);
   assert.match(reselectReceiptText, /不会写回 Slides/);
   assert.match(reselectReceiptText, /不会反写 Jira 或 Memory Service/);
+  assert.match(await analysisPage.locator('.success-message h3').innerText(), /上一批更新完成/);
+  const postApplyReselectReceiptText = await analysisPage.locator('[aria-label="上一批回执后的接管选择回执"]').innerText();
+  assert.match(postApplyReselectReceiptText, /接管中回执/);
+  assert.match(postApplyReselectReceiptText, /上一批 3 个提交字段/);
+  assert.match(postApplyReselectReceiptText, /当前本页又选中 1 个字段，尚未重新提交/);
+  assert.match(postApplyReselectReceiptText, /当前视图 1 个，隐藏 0 个，需人工复核 1 个/);
+  assert.match(postApplyReselectReceiptText, /重选或勾选不会自动重试/);
+  assert.match(postApplyReselectReceiptText, /需要再次点击应用/);
   const reselectedPreviewText = await analysisPage.locator('.selected-writeback-preview').innerText();
   assert.match(reselectedPreviewText, /AIT2-11063 · Leadership summary · 负责人/);
   assert.match(reselectedPreviewText, /Ben -> Cara/);

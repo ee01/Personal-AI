@@ -18,7 +18,10 @@ const userDataDir = await fs.mkdtemp(
 );
 const nowSeconds = Math.floor(Date.now() / 1000);
 let failSessionList = true;
+let failDetailLoad = false;
+let failDirectoryStatus = false;
 let retryRequestCount = 0;
+let retryShouldFail = true;
 let approvalShouldFail = true;
 let approveRequestCount = 0;
 let targetSearchCount = 0;
@@ -33,6 +36,10 @@ function jsonResponse(body, status = 200) {
 
 function emptyList(limit = 50) {
   return { items: [], total: 0, limit, offset: 0 };
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const outreachSession = {
@@ -293,6 +300,13 @@ try {
       request.method() === 'POST'
     ) {
       retryRequestCount += 1;
+      await delay(300);
+      if (retryShouldFail) {
+        await route.fulfill(
+          jsonResponse({ error: 'RingCentral retry gateway down' }, 503),
+        );
+        return;
+      }
       retriableSession.status = 'scheduled';
       retriableSession.followupCount = 0;
       retriableSession.nextCheckAt = nowSeconds + 60;
@@ -308,6 +322,7 @@ try {
       request.method() === 'POST'
     ) {
       approveRequestCount += 1;
+      await delay(300);
       if (approvalShouldFail) {
         await route.fulfill(
           jsonResponse({ error: 'RingCentral approval gateway down' }, 503),
@@ -335,7 +350,44 @@ try {
       pathname.endsWith('/outreach/sessions/outreach-approval-needed') &&
       request.method() === 'GET'
     ) {
+      if (failDetailLoad) {
+        await route.fulfill(
+          jsonResponse({ error: 'Outreach detail store unavailable' }, 503),
+        );
+        return;
+      }
       await route.fulfill(jsonResponse(pendingApprovalSession));
+      return;
+    }
+
+    if (
+      pathname.endsWith('/outreach/directory/status') &&
+      request.method() === 'GET'
+    ) {
+      if (failDirectoryStatus) {
+        await route.fulfill(
+          jsonResponse({ error: 'Outreach directory cache unavailable' }, 503),
+        );
+        return;
+      }
+      await route.fulfill(
+        jsonResponse({
+          items: [
+            {
+              scope: 'teams',
+              status: 'ready',
+              recordCount: 12,
+              stale: false,
+            },
+            {
+              scope: 'users',
+              status: 'ready',
+              recordCount: 24,
+              stale: false,
+            },
+          ],
+        }),
+      );
       return;
     }
 
@@ -414,6 +466,22 @@ try {
     .locator('.session-card', { hasText: outreachSession.renderedQuestion })
     .waitFor({ timeout: 10000 });
   await page.getByText('本页优先级').waitFor({ timeout: 10000 });
+  const filterScopeReceipt = page.getByLabel('主动询问筛选范围回执');
+  await filterScopeReceipt
+    .getByText('筛选范围回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('当前筛选：全部状态 / 全部来源。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('本次可见 3 条会话、1 个待触发计划。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('当前是全部状态与全部来源视图；计划 ID 和 threadId 未限制列表范围。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('筛选、清除筛选或刷新只同步 URL 并读取状态')
+    .waitFor({ timeout: 10000 });
   await page
     .getByText('先处理 1 个失败、无回复或已升级终态')
     .waitFor({ timeout: 10000 });
@@ -432,9 +500,15 @@ try {
   await focusLane
     .getByText('本卡只定位会话；不会调用重试、重新发送、写入 RingCentral 或修改 Memory Service')
     .waitFor({ timeout: 10000 });
-  await focusLane
-    .getByRole('link', { name: '打开重试详情' })
-    .waitFor({ timeout: 10000 });
+  const focusActionLink = focusLane.getByRole('link', {
+    name: /^打开重试详情：/,
+  });
+  await focusActionLink.waitFor({ timeout: 10000 });
+  assert.match(
+    (await focusActionLink.getAttribute('title')) || '',
+    /不会执行卡片建议、批准、取消、发送、追问、重试/,
+    'Focus action link should expose its navigation-only boundary before click',
+  );
   const templateCard = page.locator('.template-card', {
     hasText: futureTemplate.template.questionTemplate,
   });
@@ -445,6 +519,24 @@ try {
   await templateCard
     .getByText('可查看上次执行（已拿到结果）或回到定时消息计划调整目标、问题和时间')
     .waitFor({ timeout: 10000 });
+  const templateTitleLink = templateCard.getByRole('link', {
+    name: /^查看计划会话：/,
+  });
+  await templateTitleLink.waitFor({ timeout: 10000 });
+  assert.match(
+    (await templateTitleLink.getAttribute('title')) || '',
+    /只更新 URL 和读取状态，不会立即生成会话、审批、发送、追问/,
+    'Template title link should explain that it only filters the list',
+  );
+  const latestSessionLink = templateCard.getByRole('link', {
+    name: /^查看上次执行：/,
+  });
+  await latestSessionLink.waitFor({ timeout: 10000 });
+  assert.match(
+    (await latestSessionLink.getAttribute('title')) || '',
+    /只读取时间线和证据，不会重试、重新发送、取消/,
+    'Latest-session link should expose its read-only session boundary',
+  );
   const waitingCard = page.locator('.session-card', {
     hasText: outreachSession.renderedQuestion,
   });
@@ -458,10 +550,61 @@ try {
   await retryCard.getByText('旧失败原因：RingCentral 503').waitFor({
     timeout: 10000,
   });
-  await retryCard.getByRole('button', { name: '重试' }).click();
+  const retryButton = retryCard.getByRole('button', { name: /重试/ });
+  await retryButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await retryButton.getAttribute('title')) || '',
+    /重置为「已排程」/,
+    'Terminal retry button should explain the reset boundary before click',
+  );
+  assert.match(
+    (await retryButton.getAttribute('aria-label')) || '',
+    /^重试：/,
+    'Terminal retry button should expose an accessible action boundary',
+  );
+  await retryButton.click();
+  const retryOperationReceipt = retryCard.getByLabel('主动询问列表操作回执');
+  await retryOperationReceipt
+    .getByText('列表操作提交中：重试主动询问请求已提交', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('当前卡片仍是上次成功读取的状态：失败；目标：ops-team。')
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('重置后的状态、retried 审计事件和下一轮排程要等 Memory Service 返回并刷新列表后才能确认')
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('这条提交中回执不代表 RingCentral 已发送、对方已回复、会话已取消、会话已重试')
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('列表操作失败：重试主动询问未确认', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('失败原因：RingCentral retry gateway down')
+    .waitFor({ timeout: 10000 });
+  await retryOperationReceipt
+    .getByText('这次失败不会被当成已批准、已发送、已取消、已重试、已拿到回复或已写回 RingCentral。')
+    .waitFor({ timeout: 10000 });
+  retryShouldFail = false;
+  await retryButton.click();
+  await retryOperationReceipt
+    .getByText('列表操作提交中：重试主动询问请求已提交', { exact: true })
+    .waitFor({ timeout: 10000 });
   await page
     .locator('.session-card', { hasText: retriableSession.renderedQuestion })
     .locator('.badge', { hasText: '已排程' })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.session-card', { hasText: retriableSession.renderedQuestion })
+    .getByText('列表操作回执：重试主动询问已处理', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.session-card', { hasText: retriableSession.renderedQuestion })
+    .getByText('刷新后状态：已排程；目标：ops-team。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.session-card', { hasText: retriableSession.renderedQuestion })
+    .getByText('这只确认重试请求已被 Memory Service 处理；新的外发、等待回复或失败状态仍以刷新后的会话事件为准。')
     .waitFor({ timeout: 10000 });
   await page
     .locator('.session-card', { hasText: retriableSession.renderedQuestion })
@@ -481,13 +624,24 @@ try {
     .waitFor({ timeout: 10000 });
   assert.equal(
     retryRequestCount,
-    1,
+    2,
     'Terminal outreach cards should call the retry endpoint from the list page',
   );
   assert.equal(await page.getByRole('alert').count(), 0);
 
+  const refreshButton = page.getByRole('button', { name: /^刷新：/ });
+  assert.match(
+    (await refreshButton.getAttribute('title')) || '',
+    /重新读取主动询问运行配置、统计摘要、待触发计划和当前筛选会话/,
+    'Outreach refresh button should describe its read-only refresh scope',
+  );
+  assert.match(
+    (await refreshButton.getAttribute('aria-label')) || '',
+    /不会批准、取消、发送、追问、重试/,
+    'Outreach refresh button should expose that it does not mutate sessions',
+  );
   failSessionList = true;
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await refreshButton.click();
   await page.getByRole('alert').waitFor({ timeout: 10000 });
   await page.getByText('当前继续展示上次成功加载的数据').waitFor({
     timeout: 10000,
@@ -513,6 +667,15 @@ try {
   await page
     .getByText('当前重点是等待 1 个已发出会话的回复')
     .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('当前筛选：全部状态 / 来源 消息跟进。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('本次可见 1 条会话、0 个待触发计划。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('隐藏依据：未筛选快照里有 2 条会话和 1 个待触发计划被当前筛选隐藏。')
+    .waitFor({ timeout: 10000 });
   await focusLane.getByText('先核对原消息线程').waitFor({
     timeout: 10000,
   });
@@ -537,12 +700,19 @@ try {
   await messageReactionCard
     .getByText('先检查原消息线程是否已有满足目标的回复')
     .waitFor({ timeout: 10000 });
-  const originalMessageLink = page.getByRole('link', { name: '打开原消息' });
+  const originalMessageLink = page.getByRole('link', {
+    name: /^打开原消息：/,
+  });
   await originalMessageLink.waitFor({ timeout: 10000 });
   assert.equal(
     await originalMessageLink.getAttribute('href'),
     messageReactionSession.outcome.messageUrl,
     'Message reaction cards should link back to the original message',
+  );
+  assert.match(
+    (await originalMessageLink.getAttribute('title')) || '',
+    /不会发送新追问、标记已回复、更新 Outreach 状态/,
+    'Original-message link should explain that it only opens context',
   );
 
   await page.goto(
@@ -552,6 +722,15 @@ try {
   const filteredEmptyReceipt = page.getByLabel('主动询问筛选空结果回执');
   await filteredEmptyReceipt
     .getByText('筛选空结果回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('当前筛选：全部状态 / 来源 自我反思。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('本次可见 0 条会话、0 个待触发计划。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('隐藏依据：未筛选快照里有 3 条会话和 1 个待触发计划被当前筛选隐藏。')
     .waitFor({ timeout: 10000 });
   await filteredEmptyReceipt
     .getByText('当前筛选没有匹配的主动询问会话或待触发计划。')
@@ -566,7 +745,15 @@ try {
     .getByText('清除筛选或刷新只会重新读取 Memory Service')
     .waitFor({ timeout: 10000 });
   assert.equal(await page.getByText('暂无主动询问会话。').count(), 0);
-  await filteredEmptyReceipt.getByRole('button', { name: '清除筛选' }).click();
+  const clearFilterButton = filteredEmptyReceipt.getByRole('button', {
+    name: /^清除筛选：/,
+  });
+  assert.match(
+    (await clearFilterButton.getAttribute('title')) || '',
+    /只更新本页 URL 和重新读取列表/,
+    'Clear-filter button should explain that it only resets the list scope',
+  );
+  await clearFilterButton.click();
   await page
     .locator('.session-card', { hasText: outreachSession.renderedQuestion })
     .waitFor({ timeout: 10000 });
@@ -590,6 +777,15 @@ try {
   await approvalListReview
     .getByText('列表发送前复核', { exact: true })
     .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('当前筛选：状态 待审批 / 全部来源。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('本次可见 1 条会话、0 个待触发计划。')
+    .waitFor({ timeout: 10000 });
+  await filterScopeReceipt
+    .getByText('隐藏依据：未筛选快照里有 2 条会话和 1 个待触发计划被当前筛选隐藏。')
+    .waitFor({ timeout: 10000 });
   await approvalListReview
     .getByText(/已有证据\/回复线索：Release Approvers 已回复：M2 灰度可以继续，但需要先确认回滚 owner。/)
     .waitFor({ timeout: 10000 });
@@ -603,21 +799,104 @@ try {
     name: '先到详情复核',
   });
   await guardedApproveButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await guardedApproveButton.getAttribute('title')) || '',
+    /已有证据或回复线索/,
+    'Guarded approve button should explain why detail review is required',
+  );
+  assert.match(
+    (await guardedApproveButton.getAttribute('aria-label')) || '',
+    /^先到详情复核：/,
+    'Guarded approve button should expose an accessible review boundary',
+  );
   assert.equal(
     await guardedApproveButton.isDisabled(),
     true,
     'Pending approval rows with pre-dispatch evidence should require detail review before approving',
   );
-  await approvalListCard
-    .getByRole('link', { name: '进入详情复核' })
+  const approvalListCancelButton = approvalListCard.getByRole('button', {
+    name: /取消/,
+  });
+  assert.match(
+    (await approvalListCancelButton.getAttribute('title')) || '',
+    /停止这条主动询问后续发送、检查和追问/,
+    'List cancel button should explain that it stops follow-up without revoking sent messages',
+  );
+  const approvalReviewLink = approvalListCard.getByRole('link', {
+    name: /^进入详情复核：/,
+  });
+  await approvalReviewLink.waitFor({ timeout: 10000 });
+  assert.match(
+    (await approvalReviewLink.getAttribute('title')) || '',
+    /只打开 Outreach 会话详情.*不会批准、取消、发送、追问、重试/,
+    'Approval review link should explain that it only opens the detail page',
+  );
+
+  failDetailLoad = true;
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/outreach/${pendingApprovalSession.id}`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  const detailLoadError = page.getByLabel('主动询问详情加载失败回执');
+  await detailLoadError
+    .getByText('主动询问详情加载失败', { exact: true })
     .waitFor({ timeout: 10000 });
+  await detailLoadError
+    .getByText('会话详情：Outreach detail store unavailable')
+    .waitFor({ timeout: 10000 });
+  await detailLoadError
+    .getByText('页面没有把这次读取失败当成会话不存在')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.getByText('未找到该会话。').count(),
+    0,
+    'Detail load failures should not be presented as a missing session',
+  );
+  const retryDetailButton = detailLoadError.getByRole('button', {
+    name: /^重试详情：/,
+  });
+  assert.match(
+    (await retryDetailButton.getAttribute('title')) || '',
+    /重新读取当前 Outreach 会话详情和目标目录状态/,
+    'Detail retry button should explain the reload scope',
+  );
+  assert.match(
+    (await retryDetailButton.getAttribute('aria-label')) || '',
+    /不会批准、发送、追问、重试、取消、保存草稿或写回 RingCentral/,
+    'Detail retry button should expose its no-mutation boundary',
+  );
+  failDetailLoad = false;
+  failDirectoryStatus = true;
+  await retryDetailButton.click();
+  await page
+    .getByText(pendingApprovalSession.renderedQuestion)
+    .waitFor({ timeout: 10000 });
+  const detailLoadWarning = page.getByLabel('主动询问详情降级回执');
+  await detailLoadWarning
+    .getByText('详情已加载，辅助状态读取失败', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await detailLoadWarning
+    .getByText('目标目录状态：Outreach directory cache unavailable')
+    .waitFor({ timeout: 10000 });
+  await detailLoadWarning
+    .getByText('主会话详情仍按当前快照展示')
+    .waitFor({ timeout: 10000 });
+  failDirectoryStatus = false;
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/outreach?originKind=message_reaction`,
     { waitUntil: 'domcontentloaded' },
   );
   await messageReactionCard.waitFor({ timeout: 10000 });
-  await messageReactionCard.getByRole('link', { name: '查看详情' }).click();
+  const listDetailLink = messageReactionCard.getByRole('link', {
+    name: /^查看详情：/,
+  });
+  assert.match(
+    (await listDetailLink.getAttribute('title')) || '',
+    /只打开 Outreach 会话详情.*不会批准、取消、发送、追问/,
+    'List detail link should expose its navigation-only boundary',
+  );
+  await listDetailLink.click();
   await page.locator('.outreach-detail-page').waitFor({ timeout: 10000 });
   await page.getByText('状态 等待回复').waitFor({ timeout: 10000 });
   await page
@@ -640,10 +919,18 @@ try {
   await page
     .getByText('这条跟进来自原始消息。系统正在检查当前会话是否已有满足完成标准的回复')
     .waitFor({ timeout: 10000 });
+  const detailOriginalMessageLink = page.getByRole('link', {
+    name: /^打开原消息：/,
+  });
   assert.equal(
-    await page.getByRole('link', { name: '打开原消息' }).getAttribute('href'),
+    await detailOriginalMessageLink.getAttribute('href'),
     messageReactionSession.outcome.messageUrl,
     'Message reaction detail should link back to the original message',
+  );
+  assert.match(
+    (await detailOriginalMessageLink.getAttribute('title')) || '',
+    /不会发送新追问、标记已回复、更新 Outreach 状态、保存草稿/,
+    'Detail source-message link should expose its no-write boundary',
   );
 
   await page.goto(
@@ -672,7 +959,29 @@ try {
   await preDispatchReview
     .getByText('复核回执只读取当前详情页快照，不会自动刷新 RingCentral、发送消息、确认答案或写用户画像。')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '编辑目标与时间' }).click();
+  const editButton = page.getByRole('button', { name: /编辑目标与时间/ });
+  assert.match(
+    (await editButton.getAttribute('title')) || '',
+    /只打开本页发送前草稿/,
+    'Detail edit button should explain that opening edit mode is local draft-only',
+  );
+  await editButton.click();
+  const directoryRefreshButton = page.getByRole('button', {
+    name: /^刷新目录：/,
+  });
+  assert.match(
+    (await directoryRefreshButton.getAttribute('title')) || '',
+    /刷新 RingCentral 目标目录缓存.*不会保存本页草稿、批准、发送/,
+    'Directory refresh button should distinguish cache refresh from session writes',
+  );
+  const targetSearchButton = page.getByRole('button', {
+    name: /^重新检索：/,
+  });
+  assert.match(
+    (await targetSearchButton.getAttribute('aria-label')) || '',
+    /只更新本页候选列表，不会保存草稿、批准、发送/,
+    'Target search button should expose that search is draft-local',
+  );
   const draftReceipt = page.getByLabel('主动询问未保存草稿回执');
   await draftReceipt
     .getByText('未保存草稿回执', { exact: true })
@@ -700,13 +1009,27 @@ try {
     backDialogMessage = dialog.message();
     await dialog.dismiss();
   });
-  await page.getByRole('button', { name: /返回主动询问列表/ }).click();
+  const backToListButton = page.getByRole('button', {
+    name: /返回主动询问列表/,
+  });
+  assert.match(
+    (await backToListButton.getAttribute('title')) || '',
+    /有未保存编辑草稿，会先询问是否丢弃/,
+    'Back button should explain the unsaved-draft boundary before navigation',
+  );
+  await backToListButton.click();
   assert.match(backDialogMessage, /编辑草稿尚未保存/);
   await page.locator('.outreach-detail-page').waitFor({ timeout: 10000 });
   await draftReceipt.getByText('未保存字段：问题。').waitFor({
     timeout: 10000,
   });
-  await page.getByRole('button', { name: '取消编辑' }).click();
+  const cancelEditButton = page.getByRole('button', { name: /取消编辑/ });
+  assert.match(
+    (await cancelEditButton.getAttribute('aria-label')) || '',
+    /^取消编辑：/,
+    'Cancel edit button should expose that it discards only local draft state',
+  );
+  await cancelEditButton.click();
   const discardReceipt = page.getByLabel('主动询问操作回执');
   await discardReceipt
     .getByText('操作回执：未保存草稿已丢弃')
@@ -725,8 +1048,26 @@ try {
     0,
     'Draft receipt should disappear after cancelling edit mode',
   );
-  await page.getByRole('button', { name: '批准发送' }).click();
+  const detailApproveButton = page.getByRole('button', { name: /批准发送/ });
+  assert.match(
+    (await detailApproveButton.getAttribute('title')) || '',
+    /交给 Outreach 引擎处理/,
+    'Detail approve button should explain the external-dispatch boundary before click',
+  );
+  await detailApproveButton.click();
   const operationReceipt = page.getByLabel('主动询问操作回执');
+  await operationReceipt
+    .getByText('操作提交中回执：批准发送请求已提交')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText(/当前仍显示上次成功读取的状态 待审批，目标：群组「Release Approvers」。/)
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('按钮已临时锁定，避免重复提交；审批、排程、dispatched 事件、sentPostId 和等待回复状态要等 Memory Service 返回后才能确认。')
+    .waitFor({ timeout: 10000 });
+  await operationReceipt
+    .getByText('提交中回执不代表 RingCentral 已发送、对方已回复、用户画像已写入、外部平台已同步或来源证据已删除。')
+    .waitFor({ timeout: 10000 });
   await operationReceipt
     .getByText('操作失败回执：批准发送未确认')
     .waitFor({ timeout: 10000 });
@@ -743,7 +1084,10 @@ try {
   );
 
   approvalShouldFail = false;
-  await page.getByRole('button', { name: '批准发送' }).click();
+  await detailApproveButton.click();
+  await operationReceipt
+    .getByText('操作提交中回执：批准发送请求已提交')
+    .waitFor({ timeout: 10000 });
   await operationReceipt
     .getByText('操作回执：批准请求已由 Memory Service 处理')
     .waitFor({ timeout: 10000 });

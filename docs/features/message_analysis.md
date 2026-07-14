@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-07-02_
+_最后更新: 2026-07-14_
 
 > 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -307,7 +307,8 @@ Popup 中的入口名称已改为：
 - 用户手动创建的记忆入口规则
 - 每条规则的作用范围
 - 命中后能力标签
-- 新建 / 编辑时的保存前运行路径，说明保存、后台捕获、立即分析、未来命中和外部动作之间的边界
+- 新建 / 编辑 / 已保存规则的运行路径回执，说明保存、后台捕获、立即分析、未来命中和外部动作之间的边界；后台记忆采集关闭时，单条规则会显示当前只是本机保存，不会自动捕获后续新消息
+- 后台记忆采集关闭时，`立即启用` 会显示提交中 / 已确认 / 未确认回执；确认前不把规则显示成已经自动运行，确认后仍说明只影响后续新消息，历史消息需要手动点 `立即分析最近`
 - 联动操作状态
 - 对应 RuntimeAction 状态摘要
 
@@ -375,6 +376,27 @@ Popup 中的入口名称已改为：
 - 更多外部系统动作模板
 - 更通用的自然语言到 RuntimeAction 规划
 - 更多系统规则来源
+
+## 2026-07-07 更新：静默采集关闭时的单条规则回执
+
+本轮 UX 检查发现，页面顶部已经提示后台记忆采集未开启，但用户滚动到某条规则或正在新建/编辑规则时，仍可能只看到命中后的通知、摘要、自动答复或联动操作配置，误以为保存后规则已经自动运行。
+
+当前规则页已补齐同一套运行路径回执：
+
+- 新建和编辑表单会展示保存前运行路径；如果后台静默消息分析未启用，回执明确说明保存只更新本机手动规则，不会自动捕获后续新消息。
+- 已保存规则在采集暂停或规则已过期时会显示已保存运行状态，避免“长期有效 / 即时通知 / 联动操作”等标签被误读为正在自动执行。
+- 这些回执只改变展示，不会回扫历史消息、写入记忆、发送通知、创建 RuntimeAction、执行 OpenClaw 动作或改变系统观察规则。
+
+## 2026-07-10 更新：后台采集开启提交回执
+
+本轮复查发现，规则页顶部的 `立即启用` 会直接把本地状态切成“后台记忆采集运行中”，但用户看不到 Task Scheduler 是否真的确认了开启。如果后台控制失败，手动规则可能被误读为已经会自动观察后续消息。
+
+当前规则页已补齐：
+
+- 点击 `立即启用` 后先显示 `后台采集开启回执 · 提交中`，说明确认前这些手动规则仍不能当作自动运行。
+- Task Scheduler 返回成功并重新读取到 `message_analysis` 已开启后，回执切到 `已确认`，状态条再显示后台记忆采集运行中。
+- 如果开启失败或状态未确认，回执保留失败原因，并继续以状态条为准，不把规则夸大成已运行。
+- 成功回执仍说明只影响后续新消息；不会回扫历史消息、发送通知、写入记忆、创建 RuntimeAction 或执行 OpenClaw。历史消息仍需要用户手动点 `立即分析最近`。
 
 ## 2026-05-05 更新：范围匹配与误触发控制
 
@@ -977,6 +999,136 @@ Popup 中的入口名称已改为：
 - 保存边界不变：保存不会回扫历史、发送通知、写入记忆、创建 RuntimeAction、执行外部动作，也不会导入、导出或改写系统观察规则。
 
 产品依据继续沿用 trigger-action 产品的显式路径：Slack 和 Gmail 都把条件与后续处理分开呈现；Zapier Filters / Paths 强调条件满足后才继续后续步骤。Trigger-Action Programming 研究也指出用户容易混淆保存配置、触发时机和动作执行，因此保存前应直接展示这条运行路径。
+
+## 2026-07-06 更新：系统观察规则运行时回执
+
+本轮复查聚焦 `systemWatchRules` 的用户心智。系统观察规则来自 Outreach / 自我反思等运行时状态，不写入本机 `concernedItems`，也不应该被用户当作手动规则编辑、排序、导入或导出。此前规则页虽然在导入、导出、排序回执里提到系统观察规则，但首屏没有展示当前运行时到底有没有系统观察在线，用户容易把“我的规则列表里没有”误读成“系统没有在观察”。
+
+当前规则页已补齐 `系统观察规则回执`：
+
+- 首屏读取 Memory Service 的 Outreach template runtime status，显示运行时观察数、启用模板数、等待回复会话数、同步异常数、来源类型和最多 3 个观察目标。
+- 读取失败或 Memory Service 未配置时，回执显示 `读取未确认` / `未连接`，而不是静默消失。
+- 回执明确这是只读运行时状态；不会把 Outreach 会话、自我反思临时观察导入手动规则，也不会参与拖拽排序、导入或导出。
+- 点击刷新只重新读取运行时状态，不会回扫历史消息、写入记忆、发送通知、生成自动答复、创建 RuntimeAction 或执行外部动作。
+- 手动规则仍只显示本机可编辑规则；系统观察证据的详情仍去主动询问 / 反思等专用页面复核。
+- 刷新按钮本身也带 hover / 读屏边界：它只重新读取 Outreach runtime status，不导入、排序或覆盖手动规则，不回扫历史消息、写入记忆、发送通知、生成自动答复、创建 RuntimeAction 或执行 OpenClaw。
+
+产品依据：Webex Real-time Assist 这类实时辅助产品会把“正在理解当前会话、给出建议和推荐动作”放在交互上下文里，同时提醒用户复核建议；AI transparency 研究强调透明度要服务具体用户理解，而不是只暴露内部模型细节；trigger-action debugging 研究说明用户需要知道自动化规则为什么会运行、未运行或产生副作用。因此 Message Analysis 规则页应该把运行时系统观察作为只读状态展示，而不是让它混在用户可编辑规则列表里。
+
+参考资料：
+
+- [Webex：Respond with confidence using Real-time assist](https://help.webex.com/en-us/article/fa6ath/Respond-with-confidence-using-Real-time-assist)
+- [AI Transparency in the Age of LLMs: A Human-Centered Research Roadmap](https://hdsr.mitpress.mit.edu/pub/aelql9qy)
+- [Empowering End Users in Debugging Trigger-Action Rules](https://dl.acm.org/doi/fullHtml/10.1145/3290605.3300618)
+
+## 2026-07-14 更新：普通手动规则保存按钮边界
+
+本轮复查聚焦“手动关注项规则”的保存控件。规则页已经有保存前运行路径、范围执行、分发路径和副作用边界，但普通手动规则的新建 / 编辑按钮此前只有在开启自动答复时才有专门的 hover / 读屏文案。键盘或读屏用户聚焦普通 `确认` / `保存` 按钮时，仍需要先读周边回执才能确认保存本身不会立即运行规则。
+
+当前规则页已补齐：
+
+- 新建普通手动规则的 `确认` 按钮和编辑普通手动规则的 `保存` 按钮都会带动态 `title` / `aria-label`。
+- 按钮文案复用同一套保存前运行路径口径：说明保存只更新本机手动规则；后台采集关闭时不会自动捕获后续新消息，后台采集开启时也只观察后续新消息。
+- 按钮点击前会说明保存不会回扫历史消息、发送通知、写入记忆、创建 RuntimeAction、执行 OpenClaw，也不会导入、导出或改写系统观察规则。
+- 自动答复规则继续使用自动答复专用保存按钮边界，避免把直接发送、延迟可拦截和手动审核口径折叠成普通保存说明。
+
+产品依据继续沿用显式 trigger / condition / action 心智：Slack keyword workflow 要先指定 channel 和 keyword conditions，Zapier / Power Automate 会把条件作为流程是否启动或继续的 gate；trigger-action debugging 研究也说明用户需要在控件层面理解保存配置、触发运行和动作副作用之间的差异。
+
+## 2026-07-13 更新：系统观察刷新失败保留上次快照
+
+本轮复查发现，文档已经要求“刷新失败保留上次快照”，但规则页实际失败分支会清空 `items`，只留下读取失败状态。用户在排查 Outreach / 自我反思等内部观察时，容易把这次网络失败误读成“系统观察已经停止”。
+
+当前规则页已对齐：
+
+- 如果已经成功读取过系统观察摘要，后续刷新失败会保留上次的观察数量、启用模板数、等待回复数、同步异常数、来源和最多 3 个观察目标。
+- 失败态把这些指标标成“上次”，并显示 `当前状态未确认`，同时给出上次读取时间、本次失败时间和错误原因。
+- 如果上次成功读取结果为空，刷新失败会显示 `刷新失败 · 上次空状态`，说明这只是上次空快照，不是当前停止观察的证明。
+- 刷新按钮 hover / 读屏边界会说明上次快照只用于排障，不证明系统观察仍在运行或已经停止。
+- 这仍然只是只读 runtime status 检查；不会导入、排序或覆盖手动规则，不会回扫历史消息、写入记忆、发送通知、生成自动答复、创建 RuntimeAction 或执行 OpenClaw。
+
+产品依据继续沿用显式条件与运行状态可解释的方向：Slack keyword workflow 要先声明 channel 与 keyword conditions；Zapier Filter / Paths 把条件作为后续动作是否继续的 gate；trigger-action debugging 研究强调用户需要知道自动化规则为什么运行、没有运行或状态未知。因此刷新失败应该保留最后可审计快照，但明确它不是当前事实。
+
+## 2026-07-05 更新：手动规则排序回执
+
+本轮复查聚焦手动规则拖拽排序。规则顺序不仅是展示顺序，也会影响后续提示词里的规则顺序，以及同一条消息命中多条手动规则时的优先分发口径。此前拖拽后只静默保存到本机，用户看不到排序是否已经写入，也容易把拖拽误解成已经回扫历史消息或触发后端动作。
+
+当前规则页已补齐 `规则排序回执`：
+
+- 拖拽保存成功后显示被移动规则、原位置、新位置、手动规则总数和保存时间。
+- 回执说明排序只改写本机手动记忆入口规则列表；系统观察规则、Outreach 会话和自我反思临时观察不参与排序，也不会被覆盖。
+- 回执说明新顺序只影响后续分析的提示顺序和多规则命中时的优先分发口径。
+- 拖拽本身不会回扫历史消息、立即写入记忆、发送通知、创建 RuntimeAction 或执行 OpenClaw。
+- Memory Service snapshot 同步仍沿用现有机制；排序动作本身不直接同步、删除或恢复后端记忆。
+
+产品依据继续沿用显式 trigger / condition / action 心智：Slack keyword workflow 要限定 channel 和 keyword conditions，Zapier Filters 把条件作为是否继续后续动作的 gate；IFTTT 风险研究说明上下文提示能帮助用户识别自动化副作用，trigger-action debugging 研究也强调用户需要看懂规则为什么会运行或不运行。因此排序这种会影响后续匹配优先级的本机配置动作，也应给出明确的保存与无副作用边界。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Add conditions to Zap workflows with filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zap-workflows-with-filters)
+- [If This Context Then That Concern](https://arxiv.org/abs/2012.12518)
+- [Supporting end-user debugging of trigger-action rules](https://openportal.isti.cnr.it/doc?id=people______%3A%3Aa5e3db2c0020a773b72f987f72da45c6)
+
+## 2026-07-03 更新：缺失范围上下文的最终拦截
+
+本轮复查聚焦“规则范围校验”的最后一道防线。LLM 前的群组批次候选筛选仍保持宽松：如果批次上下文只有群组、还没有单条消息发送人，发送人限定规则不会在提示词构建前被提前删掉。真正分发、入库和联动前的 `resolveMatchedWatchRules(...)` 则改为严格确认。
+
+当前规则范围边界补齐：
+
+- 手动规则如果限定了 `filterSender`，最终单条消息上下文必须能提供发送人并匹配该范围；缺少发送人时按未确认范围拦截。
+- 手动规则如果限定了 `filterGroup`，最终单条消息上下文必须能提供群组 ID / 群组名并匹配该范围；缺少群组时按未确认范围拦截。
+- 被拦截的模型命中不会写入记忆、发送通知、进入摘要、生成自动答复、关注后续或创建 RuntimeAction。
+- 本地 `messageAnalysisRuleDiagnostics` 会区分“实际值不匹配”和“发送人 / 群组上下文缺失”，规则页的最近拦截仍只展示轻量原因、群组 / 发送人 / 消息 ID，不保存消息正文。
+- 新建 / 编辑规则的副作用边界说明了缺少对应上下文会被当作未确认范围拦截，避免用户把“规则已保存”误解成“未来任何不完整消息都能越过范围限制”。
+
+产品依据继续沿用显式条件 gate：Slack keyword workflow 需要指定 channel 和 keyword conditions；Zapier Filter / Paths 把条件作为后续动作是否继续的 gate；Trigger-Action Programming 调试研究也强调用户需要知道规则为什么没有触发。因此 Message Analysis 的最终范围校验应 fail closed，而不是在缺少关键上下文字段时把模型返回的 ruleRef 当作已确认命中。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Use conditional logic to filter and split your Zap workflows](https://help.zapier.com/hc/en-us/articles/34372501750285-Use-conditional-logic-to-filter-and-split-your-Zap-workflows)
+- [Empowering End Users in Debugging Trigger-Action Rules](https://doi.org/10.1145/3290605.3300618)
+
+## 2026-07-08 更新：范围门禁聚合回执
+
+本轮复查聚焦“本轮分发统计”里的范围拦截口径。运行时已经会 fail closed：LLM 返回手动规则命中后，仍必须通过最终发送人 / 群组范围校验，失败则不写入记忆、不通知、不进摘要 / 自动答复 / 关注后续 / 联动规划。但旧 UI 只显示 `范围拦截 N`，用户不容易知道这是安全门禁、局部失败还是下游错误。
+
+当前规则页已补齐：
+
+- 当 `messageAnalysisDeliveryReceipt.counters.scopeRejected > 0` 时，本轮分发统计下方会显示 `范围门禁` 回执。
+- 回执说明这些拦截来自“LLM 已返回规则命中，但最终发送人 / 群组范围未通过”，并把它和下游失败区分开。
+- 回执显示本机最近保留的范围诊断数量和最新诊断上下文；具体原因仍在对应规则卡片的 `最近拦截` 中查看。
+- 回执明确被拦截消息不会写入记忆、发送通知、进入摘要 / 自动答复 / 关注后续 / 联动规划，也不会执行外部动作。
+- 下一步只引导用户展开带 `最近拦截` 的规则并核对发送人 / 群组范围，不新增审批队列或强制复核。
+
+产品依据继续沿用显式 condition gate 心智：Zapier Filters 会测试样例是否继续，Power Automate Trigger conditions 会在触发前减少无效运行，Slack Workflow Builder branch 用可视规则和 fallback 帮非程序员理解路径；Trigger-Action Programming 研究也说明自动化规则需要可调试的失败解释。因此范围拦截不仅要 fail closed，还要在聚合统计层说清楚“为什么没有继续”。
+
+参考资料：
+
+- [Zapier：Add conditions to Zap workflows with filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zap-workflows-with-filters)
+
+## 2026-07-14 更新：范围拦截折叠行定位
+
+本轮复查聚焦“范围门禁”到具体规则卡片的定位路径。聚合回执已经会提示 `展开带「最近拦截」的规则`，但折叠列表此前没有直接标出哪条规则带最近拦截；用户需要逐条展开查找。
+
+当前规则页已补齐：
+
+- 带最新 `scope_rejected` 诊断的折叠规则行直接显示 `最近拦截` 角标。
+- 折叠行 hover / 读屏文案包含最新拦截原因、群组 / 发送人 / 消息 ID 上下文和拦截时间。
+- 文案明确点击展开只是查看这条规则的范围诊断，不会重新分析历史消息、写入记忆、发送通知或执行外部动作。
+- 展开后的 `最近拦截` 详情仍保留轻量原因与上下文，不保存消息正文。
+
+产品依据继续沿用显式条件 gate 和可调试自动化心智：Slack keyword workflow 与 Zapier Filters 都把条件作为是否继续后续动作的前置判断；Trigger-Action Programming 调试研究强调用户需要知道规则为什么没有触发或被阻止。因此范围门禁不仅要 fail closed，还要在规则列表里直接指向需要复核的规则。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Add conditions to Zap workflows with filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zap-workflows-with-filters)
+- [Helping Users Debug Trigger-Action Programs](https://people.cs.uchicago.edu/~shanlu/paper/UbiComp23.pdf)
+- [Microsoft Power Automate：Customize your triggers with conditions](https://learn.microsoft.com/en-us/power-automate/customize-triggers)
+- [Slack：Introducing Conditional Branching in Workflow Builder](https://slack.dev/introducing-conditional-branching-in-workflow-builder/)
+- [Towards Usable Security Analysis Tools for Trigger-Action Programming](https://www.usenix.org/conference/soups2023/presentation/mccall)
+- [Practical Trigger-Action Programming in the Smart Home](https://www.blaseur.com/papers/TriggerActionCHI14.pdf)
 
 ## 2026-07-02 更新：关注后续通知安全摘要
 

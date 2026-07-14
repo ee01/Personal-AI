@@ -6,6 +6,7 @@ import { analyzeMessages } from '../messageDealing';
 import {
   getMemoryServiceClient,
   type MessageRuleAutomationPreviewResponse,
+  type OutreachTemplateRuntimeStatusItem,
   type RuntimeAction,
 } from '../services/MemoryServiceClient';
 import {
@@ -25,6 +26,7 @@ import {
   buildAutoReplyContentReadinessReceipt,
   buildAutoReplyModeReceipt,
   buildAutoReplyRuleScopeReceipt,
+  buildAutoReplySaveButtonBoundary,
   normalizeAutoReplyDelayHours,
 } from '../message-reaction/autoReplyPresentation';
 import {
@@ -62,6 +64,7 @@ import {
   getRuleActionSummaryItems,
   getRuleDeliveryReceipt,
   getRuleEffectBoundaryReceipt,
+  getRuleRunPreviewReceipt,
   getRuleSafetySummary,
 } from './topic-rule-safety';
 import {
@@ -82,6 +85,15 @@ interface AutoReplyConfig {
   reviewMode: 'immediate' | 'delayed' | 'manual'; // 审核模式
   delayHours?: number; // 延迟小时数（仅 delayed 模式使用）
 }
+
+interface PendingAutoReplyConfig {
+  sender?: string;
+  groupName?: string;
+  content?: string;
+  timestamp?: number;
+}
+
+type AutoReplyPrefillStatus = 'idle' | 'loading' | 'ready' | 'failed';
 
 // reviewMode 说明：
 // - 'immediate': 直接发送（不审核，立即执行）
@@ -357,6 +369,40 @@ interface AutomationActionSummary {
   loadError?: boolean;
 }
 
+interface SystemObservationRuntimeState {
+  status: 'loading' | 'ready' | 'failed' | 'unconfigured';
+  items: OutreachTemplateRuntimeStatusItem[];
+  loadedAt?: number;
+  failedAt?: number;
+  error?: string;
+}
+
+const getSystemObservationRefreshBoundary = (
+  runtime: SystemObservationRuntimeState,
+): string => {
+  const prefix =
+    runtime.status === 'loading'
+      ? '正在重新读取系统观察运行时状态'
+      : runtime.status === 'unconfigured'
+        ? 'Memory Service 未配置，无法读取系统观察运行时状态'
+        : runtime.status === 'failed'
+          ? runtime.loadedAt
+            ? runtime.items.length > 0
+              ? `重新读取系统观察运行时状态；当前未确认，保留上次 ${runtime.items.length} 条快照`
+              : '重新读取系统观察运行时状态；当前未确认，保留上次空快照'
+            : '重新读取系统观察运行时状态；上次读取未确认'
+          : runtime.items.length > 0
+            ? `重新读取 ${runtime.items.length} 条系统观察运行时状态`
+            : '重新读取系统观察运行时状态；上次快照为空';
+
+  const staleBoundary =
+    runtime.status === 'failed' && runtime.loadedAt
+      ? '上次快照只用于排障，不证明系统观察仍在运行或已经停止；'
+      : '';
+
+  return `${prefix}；${staleBoundary}只请求 Outreach runtime status，不导入、排序或覆盖手动规则，不回扫历史消息、不写入记忆、不发送通知、不生成自动答复、不创建 RuntimeAction、不执行 OpenClaw。`;
+};
+
 const DIGEST_WEEKDAY_OPTIONS = [
   { value: 1, label: '周一' },
   { value: 2, label: '周二' },
@@ -460,6 +506,23 @@ interface RuleExportReceipt extends RuleTransferMetrics {
   fileName: string;
   exportedCount: number;
   exportedAt: number;
+}
+
+interface RuleOrderReceipt {
+  movedRuleName: string;
+  fromPosition: number;
+  toPosition: number;
+  totalCount: number;
+  orderedAt: number;
+}
+
+interface SilentAnalysisControlReceipt {
+  status: 'pending' | 'succeeded' | 'failed';
+  source: 'warning' | 'after-save';
+  requestedAt: number;
+  confirmedAt?: number;
+  error?: string;
+  message?: string;
 }
 
 interface PendingMessageRuleImprovement {
@@ -571,6 +634,8 @@ const TopicModal = () => {
     useState<RuleImportReceipt | null>(null);
   const [ruleExportReceipt, setRuleExportReceipt] =
     useState<RuleExportReceipt | null>(null);
+  const [ruleOrderReceipt, setRuleOrderReceipt] =
+    useState<RuleOrderReceipt | null>(null);
   const [envConfig, setEnvConfig] = useState<EnvConfigType | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<{
     total: number;
@@ -580,6 +645,10 @@ const TopicModal = () => {
   const [deliveryReceipt, setDeliveryReceipt] =
     useState<MessageAnalysisDeliveryReceipt | null>(null);
   const [isSilentAnalysisEnabled, setIsSilentAnalysisEnabled] = useState(false);
+  const [
+    silentAnalysisControlReceipt,
+    setSilentAnalysisControlReceipt,
+  ] = useState<SilentAnalysisControlReceipt | null>(null);
   const [
     automationActionSummaryByRuleRef,
     setAutomationActionSummaryByRuleRef,
@@ -591,6 +660,12 @@ const TopicModal = () => {
   const [newRuleSource, setNewRuleSource] = useState<
     'manual' | 'autoReply' | 'followThread' | 'linkedAction'
   >('manual');
+  const autoReplyPrefillRequestIdRef = useRef(0);
+  const [pendingAutoReplyConfig, setPendingAutoReplyConfig] =
+    useState<PendingAutoReplyConfig | null>(null);
+  const [autoReplyPrefillStatus, setAutoReplyPrefillStatus] =
+    useState<AutoReplyPrefillStatus>('idle');
+  const [autoReplyPrefillError, setAutoReplyPrefillError] = useState('');
   const [pendingLinkedActionConfig, setPendingLinkedActionConfig] =
     useState<PendingLinkedActionConfig | null>(null);
   const linkedActionSuggestionRequestIdRef = useRef(0);
@@ -616,6 +691,11 @@ const TopicModal = () => {
   const [ruleDiagnostics, setRuleDiagnostics] = useState<
     MessageAnalysisRuleDiagnostic[]
   >([]);
+  const [systemObservationRuntime, setSystemObservationRuntime] =
+    useState<SystemObservationRuntimeState>({
+      status: 'loading',
+      items: [],
+    });
 
   const linkedActionConfigSignals = {
     openClawEnabled: Boolean(
@@ -648,6 +728,7 @@ const TopicModal = () => {
   const checkSilentAnalysisStatus = async () => {
     const isEnabled = await getTaskEnabled('message_analysis');
     setIsSilentAnalysisEnabled(isEnabled);
+    return isEnabled;
   };
 
   useEffect(() => {
@@ -661,6 +742,10 @@ const TopicModal = () => {
     source: 'manual' | 'autoReply' | 'followThread' | 'linkedAction' = 'manual',
   ) => {
     setNewRuleSource(source);
+    autoReplyPrefillRequestIdRef.current += 1;
+    setPendingAutoReplyConfig(null);
+    setAutoReplyPrefillStatus('idle');
+    setAutoReplyPrefillError('');
     setPendingLinkedActionConfig(null);
     setLinkedActionSuggestionStatus('idle');
     setLinkedActionSuggestionSource('');
@@ -790,14 +875,61 @@ const TopicModal = () => {
     }
   };
 
+  const requestAutoReplyPrefillDraft = async (
+    config: PendingAutoReplyConfig,
+  ) => {
+    const requestId = autoReplyPrefillRequestIdRef.current + 1;
+    autoReplyPrefillRequestIdRef.current = requestId;
+    setPendingAutoReplyConfig(config);
+    setAutoReplyPrefillStatus('loading');
+    setAutoReplyPrefillError('');
+
+    try {
+      const reply = await generateAutoReply({
+        messageContent: config.content || '发送的消息',
+        sender: config.sender || '未知发送者',
+        groupName: config.groupName || '未知群组',
+        summary: config.content
+          ? `原始消息：${config.content}`
+          : '从消息工具栏打开的自动答复配置',
+      });
+      if (autoReplyPrefillRequestIdRef.current !== requestId) {
+        return;
+      }
+      setNewAutoReplyConfig((prev) => ({
+        ...prev,
+        replyContent: reply,
+      }));
+      setAutoReplyPrefillStatus('ready');
+      setAutoReplyPrefillError('');
+    } catch (error) {
+      if (autoReplyPrefillRequestIdRef.current !== requestId) {
+        return;
+      }
+      console.error('自动生成答复失败:', error);
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : '未知错误';
+      setAutoReplyPrefillStatus('failed');
+      setAutoReplyPrefillError(message);
+    }
+  };
+
+  const clearAutoReplyPrefillReceipt = () => {
+    autoReplyPrefillRequestIdRef.current += 1;
+    setAutoReplyPrefillStatus('idle');
+    setAutoReplyPrefillError('');
+  };
+
   // 检查是否有从消息悬浮菜单传来的自动答复配置请求
   useEffect(() => {
     (async () => {
       const result = await chrome.storage.local.get('pendingAutoReplyConfig');
       if (result.pendingAutoReplyConfig) {
-        const config = result.pendingAutoReplyConfig;
+        const config: PendingAutoReplyConfig = result.pendingAutoReplyConfig;
         // 检查是否是最近5分钟内的请求
-        if (Date.now() - config.timestamp < 5 * 60 * 1000) {
+        if (!config.timestamp || Date.now() - config.timestamp < 5 * 60 * 1000) {
           console.log('🤖 检测到自动答复配置请求:', config);
           resetNewRuleForm('autoReply');
 
@@ -819,22 +951,7 @@ const TopicModal = () => {
             delayHours: 1,
           });
           setShowAddForm(true);
-
-          // 尝试自动生成答复建议
-          try {
-            const reply = await generateAutoReply({
-              messageContent: config.content,
-              sender: config.sender,
-              groupName: config.groupName,
-              summary: `原始消息：${config.content}`,
-            });
-            setNewAutoReplyConfig((prev) => ({
-              ...prev,
-              replyContent: reply,
-            }));
-          } catch (error) {
-            console.error('自动生成答复失败:', error);
-          }
+          void requestAutoReplyPrefillDraft(config);
         }
 
         // 清除 pending 配置
@@ -1165,6 +1282,7 @@ const TopicModal = () => {
     try {
       await saveTopics(newTopics);
       setRuleImportReceipt(null);
+      setRuleOrderReceipt(null);
       showOperationToast({
         type: 'success',
         message: `已删除规则「${formatRuleToastName(topicToDelete)}」`,
@@ -1294,6 +1412,7 @@ const TopicModal = () => {
 
       await saveTopics([...topics, newTopicItem]);
       setRuleImportReceipt(null);
+      setRuleOrderReceipt(null);
 
       let followThreadOriginalIndexed = false;
 
@@ -1382,21 +1501,46 @@ const TopicModal = () => {
       return;
     }
 
+    const fromPosition = draggedItem + 1;
+    const toPosition = dragOverItem + 1;
+
     // 创建新的排序后的列表
     const newTopicList = [...topics];
     const draggedTopic = newTopicList[draggedItem];
+    if (!draggedTopic) {
+      setDraggedItem(null);
+      setDragOverItem(null);
+      return;
+    }
 
     // 从原位置删除
     newTopicList.splice(draggedItem, 1);
     // 在新位置插入
     newTopicList.splice(dragOverItem, 0, draggedTopic);
 
-    // 保存新排序
-    await saveTopics(newTopicList);
-
-    // 重置拖拽状态
-    setDraggedItem(null);
-    setDragOverItem(null);
+    try {
+      // 保存新排序
+      await saveTopics(newTopicList);
+      setRuleImportReceipt(null);
+      setRuleExportReceipt(null);
+      setRuleOrderReceipt({
+        movedRuleName: formatRuleToastName(draggedTopic),
+        fromPosition,
+        toPosition,
+        totalCount: newTopicList.length,
+        orderedAt: Date.now(),
+      });
+    } catch (error) {
+      console.error('保存记忆入口规则排序失败:', error);
+      showOperationToast({
+        type: 'error',
+        message: '规则排序未保存，请稍后重试。',
+      });
+    } finally {
+      // 重置拖拽状态
+      setDraggedItem(null);
+      setDragOverItem(null);
+    }
   };
 
   const isTopicExpanded = (topicId: string) => expandedTopicIds.has(topicId);
@@ -1639,6 +1783,7 @@ const TopicModal = () => {
         const replacedManualCount = topics.length;
         await saveTopics(importedTopics);
         setRuleExportReceipt(null);
+        setRuleOrderReceipt(null);
         setRuleImportReceipt(
           buildRuleImportReceipt(
             importedTopics,
@@ -1769,6 +1914,7 @@ const TopicModal = () => {
       alert('请先输入规则条件');
       return;
     }
+    clearAutoReplyPrefillReceipt();
     setIsGeneratingReply(true);
     try {
       const reply = await generateAutoReply({
@@ -1818,14 +1964,73 @@ const TopicModal = () => {
   };
 
   // 启用静默消息分析
-  const enableSilentAnalysis = () => {
-    chrome.runtime.sendMessage({
-      type: 'CONTROL_TASK',
-      taskId: 'message_analysis',
-      action: 'toggle',
-      enabled: true,
+  const enableSilentAnalysis = async (
+    source: SilentAnalysisControlReceipt['source'] = 'warning',
+  ) => {
+    if (silentAnalysisControlReceipt?.status === 'pending') return;
+
+    const requestedAt = Date.now();
+    setSilentAnalysisControlReceipt({
+      status: 'pending',
+      source,
+      requestedAt,
     });
-    setIsSilentAnalysisEnabled(true);
+
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'CONTROL_TASK',
+        taskId: 'message_analysis',
+        action: 'toggle',
+        enabled: true,
+      })) as
+        | { success?: boolean; error?: string; message?: string }
+        | undefined;
+
+      if (!response?.success) {
+        throw new Error(response?.error || response?.message || '任务控制失败');
+      }
+
+      const confirmedEnabled = await checkSilentAnalysisStatus();
+      if (!confirmedEnabled) {
+        throw new Error('任务控制返回成功，但本机状态尚未确认开启');
+      }
+
+      setSilentAnalysisControlReceipt({
+        status: 'succeeded',
+        source,
+        requestedAt,
+        confirmedAt: Date.now(),
+        message: response.message,
+      });
+      showOperationToast(
+        {
+          type: 'success',
+          message:
+            '后台记忆采集已确认开启；后续新消息会按当前规则观察。',
+        },
+        8000,
+      );
+    } catch (error) {
+      await checkSilentAnalysisStatus();
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '任务控制失败';
+      setSilentAnalysisControlReceipt({
+        status: 'failed',
+        source,
+        requestedAt,
+        confirmedAt: Date.now(),
+        error: message,
+      });
+      showOperationToast(
+        {
+          type: 'error',
+          message: `后台记忆采集未确认开启：${message}`,
+        },
+        8000,
+      );
+    }
   };
 
   const promptEnableSilentAnalysisAfterRuleSave = (ruleLabel: string) => {
@@ -1835,7 +2040,7 @@ const TopicModal = () => {
       `✅ 保存成功！\n\n⚠️ 检测到您尚未开启"静默消息分析"功能。\n\n如果不开启，${ruleLabel}只能保存在列表里，无法自动捕获新消息、写入记忆，或触发通知、摘要、自动答复、关注后续和联动操作。\n\n是否立即开启静默消息分析？`,
     );
     if (shouldEnable) {
-      enableSilentAnalysis();
+      void enableSilentAnalysis('after-save');
     }
   };
 
@@ -1853,6 +2058,54 @@ const TopicModal = () => {
   const manualAnalysisIntervalHours = (
     manualAnalysisWindowMinutes / 60
   ).toFixed(1);
+
+  const loadSystemObservationRuntime = async () => {
+    if (!memoryServiceConfigured) {
+      setSystemObservationRuntime({
+        status: 'unconfigured',
+        items: [],
+      });
+      return;
+    }
+
+    setSystemObservationRuntime((current) => ({
+      status: 'loading',
+      items: current.items,
+      loadedAt: current.loadedAt,
+      failedAt: undefined,
+    }));
+
+    try {
+      const response =
+        await getMemoryServiceClient().getOutreachTemplateRuntimeStatus(
+          undefined,
+          100,
+        );
+      setSystemObservationRuntime({
+        status: 'ready',
+        items: Array.isArray(response.items) ? response.items : [],
+        loadedAt: Date.now(),
+        failedAt: undefined,
+      });
+    } catch (error) {
+      console.warn('加载系统观察规则运行时状态失败:', error);
+      const failedAt = Date.now();
+      setSystemObservationRuntime((current) => ({
+        status: 'failed',
+        items: current.loadedAt ? current.items : [],
+        loadedAt: current.loadedAt,
+        failedAt,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : '未知错误',
+      }));
+    }
+  };
+
+  useEffect(() => {
+    void loadSystemObservationRuntime();
+  }, [memoryServiceConfigured]);
 
   const buildRuleTransferMetrics = (
     ruleTopics: TopicItem[],
@@ -2110,6 +2363,51 @@ const TopicModal = () => {
     return '尚未记录分析时间';
   };
 
+  const renderSilentAnalysisControlReceipt = () => {
+    if (!silentAnalysisControlReceipt) return null;
+
+    const receipt = silentAnalysisControlReceipt;
+    const sourceText =
+      receipt.source === 'after-save'
+        ? '规则保存后的开启建议'
+        : '页面顶部立即启用';
+    const title =
+      receipt.status === 'pending'
+        ? '后台采集开启回执 · 提交中'
+        : receipt.status === 'succeeded'
+          ? '后台采集开启回执 · 已确认'
+          : '后台采集开启回执 · 未确认';
+    const resultText =
+      receipt.status === 'pending'
+        ? '正在提交到 Task Scheduler；状态确认前，不把这批手动规则当作已经自动运行。'
+        : receipt.status === 'succeeded'
+          ? `Task Scheduler 已确认开启${receipt.message ? `：${receipt.message}` : ''}。`
+          : `开启失败或未确认：${receipt.error || '任务控制失败'}。当前仍以状态条为准。`;
+    const boundaryText =
+      receipt.status === 'succeeded'
+        ? '边界：只影响后续新消息的后台观察；不会回扫历史消息、发送通知、写入记忆、创建 RuntimeAction 或执行 OpenClaw。历史消息仍需手动点「立即分析最近」。'
+        : '边界：本次只是切换后台采集任务；不会回扫历史消息、发送通知、写入记忆、创建 RuntimeAction 或执行 OpenClaw。';
+
+    return (
+      <div
+        className={`silent-analysis-control-receipt ${receipt.status}`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="silent-analysis-control-title">{title}</div>
+        <div className="silent-analysis-control-grid">
+          <span>来源：{sourceText}</span>
+          <span>提交：{formatDateTime(receipt.requestedAt)}</span>
+          {receipt.confirmedAt ? (
+            <span>确认：{formatDateTime(receipt.confirmedAt)}</span>
+          ) : null}
+          <span>{resultText}</span>
+          <span>{boundaryText}</span>
+        </div>
+      </div>
+    );
+  };
+
   const getDeliveryRunModeLabel = (
     receipt: MessageAnalysisDeliveryReceipt,
   ) => {
@@ -2130,6 +2428,10 @@ const TopicModal = () => {
     if (!deliveryReceipt) return null;
 
     const counters = deliveryReceipt.counters;
+    const scopeRejectedDiagnostics = ruleDiagnostics
+      .filter((item) => item.status === 'scope_rejected')
+      .sort((a, b) => b.capturedAt - a.capturedAt);
+    const latestScopeRejectedDiagnostic = scopeRejectedDiagnostics[0];
     const autoReplyHandled = counters.autoReplyHandled || 0;
     const autoReplySkipped = counters.autoReplySkipped || 0;
     const failedCount =
@@ -2169,6 +2471,199 @@ const TopicModal = () => {
           <span>联动规划 {counters.automationPlanRequests}</span>
           <span>范围拦截 {counters.scopeRejected}</span>
           <span>下游失败 {failedCount}</span>
+        </div>
+        {counters.scopeRejected > 0 && (
+          <div
+            className="message-analysis-scope-gate-receipt"
+            role="note"
+            aria-label="本轮范围门禁回执"
+          >
+            <div className="message-analysis-scope-gate-title">
+              范围门禁 · 已拦截 {counters.scopeRejected} 条
+            </div>
+            <div className="message-analysis-scope-gate-list">
+              <span>
+                含义：LLM 返回了规则命中，但最终发送人 / 群组范围未通过。
+              </span>
+              <span>
+                依据：本机最近保留 {scopeRejectedDiagnostics.length}{' '}
+                条范围诊断
+                {latestScopeRejectedDiagnostic
+                  ? `；最新为 ${formatRuleDiagnosticContext(
+                      latestScopeRejectedDiagnostic,
+                    )}`
+                  : '；当前还没有可展开的最近拦截证据'}
+                。
+              </span>
+              <span>
+                边界：被拦截消息没有写入记忆、发送通知、进入摘要 / 自动答复 /
+                关注后续 / 联动规划，也没有执行外部动作。
+              </span>
+              <span>
+                下一步：展开带「最近拦截」的规则，核对发送人 / 群组范围或调整规则。
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSystemObservationRuntimeReceipt = () => {
+    const items = systemObservationRuntime.items || [];
+    const activeStatuses = new Set([
+      'pending_approval',
+      'scheduled',
+      'waiting_reply',
+      'deferred',
+    ]);
+    const activeSessionCount = items.filter((item) =>
+      activeStatuses.has(item.latestSession?.status || ''),
+    ).length;
+    const waitingReplyCount = items.filter(
+      (item) => item.latestSession?.status === 'waiting_reply',
+    ).length;
+    const enabledTemplateCount = items.filter(
+      (item) => item.template.enabled !== false,
+    ).length;
+    const syncIssueCount = items.filter(
+      (item) =>
+        Boolean(item.template.lastSyncError) ||
+        item.template.syncState === 'failed',
+    ).length;
+    const sourceKinds = Array.from(
+      new Set(
+        items
+          .map((item) => item.template.sourceKind || 'runtime')
+          .filter(Boolean),
+      ),
+    );
+    const sampleTargets = items
+      .map(
+        (item) =>
+          item.latestSession?.targetResolvedLabel ||
+          item.template.targetRef ||
+          item.template.title,
+      )
+      .filter(Boolean)
+      .slice(0, 3);
+    const isReady = systemObservationRuntime.status === 'ready';
+    const hasLastSnapshot =
+      systemObservationRuntime.status === 'failed' &&
+      typeof systemObservationRuntime.loadedAt === 'number';
+    const hasMetricSnapshot = isReady || hasLastSnapshot;
+    const metricSuffix = hasLastSnapshot ? '（上次）' : '';
+    const title =
+      systemObservationRuntime.status === 'unconfigured'
+        ? '系统观察规则回执 · 未连接'
+        : systemObservationRuntime.status === 'failed'
+          ? hasLastSnapshot
+            ? items.length > 0
+              ? '系统观察规则回执 · 刷新失败 · 上次快照'
+              : '系统观察规则回执 · 刷新失败 · 上次空状态'
+            : '系统观察规则回执 · 读取未确认'
+          : systemObservationRuntime.status === 'loading'
+            ? '系统观察规则回执 · 正在读取'
+            : items.length > 0
+              ? '系统观察规则回执 · 运行时只读'
+              : '系统观察规则回执 · 当前为空';
+    const subtitle =
+      systemObservationRuntime.status === 'unconfigured'
+        ? 'Memory Service 未配置，无法读取 Outreach / 自我反思等运行时观察状态。'
+        : systemObservationRuntime.status === 'failed'
+          ? hasLastSnapshot
+            ? `本次没有确认系统观察状态：${systemObservationRuntime.error || '读取失败'}。保留 ${formatDateTime(
+                systemObservationRuntime.loadedAt,
+              )} 的上次${
+                items.length > 0 ? `快照 ${items.length} 条` : '空状态'
+              }；它不证明当前仍在运行或已经停止。`
+            : `本次没有确认系统观察状态：${systemObservationRuntime.error || '读取失败'}。`
+          : systemObservationRuntime.status === 'loading'
+            ? '正在从 Memory Service 读取 Outreach 模板与会话观察状态。'
+            : items.length > 0
+              ? `读取到 ${items.length} 条 Outreach 模板观察，${activeSessionCount} 条有进行中的系统观察会话。`
+              : '当前没有可展示的 Outreach 系统观察模板；手动规则列表仍按本机配置运行。';
+    const refreshBoundary = getSystemObservationRefreshBoundary(
+      systemObservationRuntime,
+    );
+
+    return (
+      <div
+        className={`system-observation-receipt ${systemObservationRuntime.status}${hasLastSnapshot ? ' snapshot-stale' : ''}`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="system-observation-head">
+          <div>
+            <div className="system-observation-title">{title}</div>
+            <div className="system-observation-subtitle">{subtitle}</div>
+          </div>
+          <button
+            type="button"
+            className="system-observation-refresh"
+            onClick={() => void loadSystemObservationRuntime()}
+            disabled={systemObservationRuntime.status === 'loading'}
+            title={refreshBoundary}
+            aria-label={refreshBoundary}
+          >
+            刷新
+          </button>
+        </div>
+        <div className="system-observation-grid">
+          <span>手动规则 {topics.length}</span>
+          <span>
+            运行时观察{' '}
+            {hasMetricSnapshot ? `${items.length}${metricSuffix}` : '未确认'}
+          </span>
+          <span>
+            启用模板{' '}
+            {hasMetricSnapshot
+              ? `${enabledTemplateCount}${metricSuffix}`
+              : '未确认'}
+          </span>
+          <span>
+            等待回复{' '}
+            {hasMetricSnapshot
+              ? `${waitingReplyCount}${metricSuffix}`
+              : '未确认'}
+          </span>
+          <span>
+            同步异常{' '}
+            {hasMetricSnapshot
+              ? `${syncIssueCount}${metricSuffix}`
+              : '未确认'}
+          </span>
+          <span>
+            来源{' '}
+            {hasMetricSnapshot && sourceKinds.length > 0
+              ? `${sourceKinds.join(' / ')}${metricSuffix}`
+              : '未确认'}
+          </span>
+        </div>
+        {hasLastSnapshot && (
+          <div className="system-observation-stale">
+            当前状态未确认：上次读取{' '}
+            {formatDateTime(systemObservationRuntime.loadedAt)}，本次失败{' '}
+            {formatDateTime(systemObservationRuntime.failedAt)}；上次快照只用于排障。
+          </div>
+        )}
+        {sampleTargets.length > 0 && (
+          <div className="system-observation-targets">
+            观察目标：{sampleTargets.join(' / ')}
+          </div>
+        )}
+        <div className="system-observation-boundary">
+          <span>
+            这只是读取运行时系统观察状态；不会把 Outreach 会话、自我反思临时观察导入手动规则，也不会参与拖拽排序、导入或导出。
+          </span>
+          <span>
+            查看或刷新不会回扫历史消息、写入记忆、发送通知、生成自动答复、创建 RuntimeAction 或执行外部动作。
+          </span>
+          {hasLastSnapshot && (
+            <span>
+              上次快照不作为当前运行状态证明；它不代表系统观察仍在运行，也不代表已经停止。
+            </span>
+          )}
         </div>
       </div>
     );
@@ -2287,6 +2782,67 @@ const TopicModal = () => {
       openClawConfigured,
     });
 
+  const getTopicRunPreviewReceipt = (topic: TopicItem) =>
+    getRuleRunPreviewReceipt({
+      notifyMethod: topic.notifyMethod || '',
+      mentionMe: Boolean(topic.mentionMe),
+      digestEnabled: Boolean(topic.digestConfig?.enabled) && !topic.followThread,
+      digestFrequency: topic.digestConfig?.frequency || 'daily',
+      followThread: Boolean(topic.followThread),
+      autoReply: Boolean(topic.autoReply),
+      autoReplyMode: topic.autoReplyConfig?.reviewMode || 'delayed',
+      automationPrompt: topic.automationPrompt,
+      automationRequiresApproval: topic.automationRequiresApproval === true,
+      openClawConfigured,
+      isSilentAnalysisEnabled,
+      inactive: Boolean(topic.expiredAt && topic.expiredAt <= Date.now()),
+    });
+
+  const getTopicAutoReplySaveButtonBoundary = (
+    topic: TopicItem,
+    action: 'create' | 'edit',
+  ) =>
+    topic.autoReply && topic.autoReplyConfig
+      ? buildAutoReplySaveButtonBoundary({
+          ...topic.autoReplyConfig,
+          action,
+          filterSender: topic.filterSender,
+          filterGroup: topic.filterGroup,
+          isSilentAnalysisEnabled,
+        })
+      : undefined;
+
+  const buildManualRuleSaveButtonBoundary = (
+    receipt: ReturnType<typeof getRuleRunPreviewReceipt>,
+    action: 'create' | 'edit',
+    ruleText: string,
+  ) => {
+    const normalizedRuleText = normalizeOptionalRuleText(ruleText);
+    const actionText =
+      action === 'create'
+        ? normalizedRuleText
+          ? `确认保存「${normalizedRuleText}」手动记忆入口规则`
+          : '确认保存新的手动记忆入口规则'
+        : `保存「${normalizedRuleText || '这条'}」手动记忆入口规则的编辑`;
+
+    return `${actionText}：${receipt.triggerText} ${receipt.matchText} ${receipt.outcomeText} ${receipt.boundaryText}`;
+  };
+
+  const getTopicSaveButtonBoundary = (
+    topic: TopicItem,
+    action: 'create' | 'edit',
+  ) =>
+    getTopicAutoReplySaveButtonBoundary(topic, action) ||
+    buildManualRuleSaveButtonBoundary(
+      getTopicRunPreviewReceipt(topic),
+      action,
+      topic.text,
+    );
+
+  const shouldShowSavedRunPreview = (topic: TopicItem) =>
+    !isSilentAnalysisEnabled ||
+    Boolean(topic.expiredAt && topic.expiredAt <= Date.now());
+
   const renderDeliveryReceipt = (
     receipt: ReturnType<typeof getRuleDeliveryReceipt>,
   ) => (
@@ -2316,6 +2872,31 @@ const TopicModal = () => {
       </div>
     </div>
   );
+
+  const renderRuleRunPreviewReceipt = (
+    receipt: ReturnType<typeof getRuleRunPreviewReceipt>,
+    mode: 'draft' | 'saved' = 'draft',
+  ) => {
+    const title =
+      mode === 'saved'
+        ? receipt.title.replace('保存前运行路径', '已保存运行状态')
+        : receipt.title;
+
+    return (
+      <div
+        className={`rule-run-preview ${receipt.tone}`}
+        aria-label={mode === 'saved' ? '已保存规则运行状态' : '规则保存前运行路径'}
+      >
+        <div className="rule-run-preview-title">{title}</div>
+        <div className="rule-run-preview-grid">
+          <span>{receipt.triggerText}</span>
+          <span>{receipt.matchText}</span>
+          <span>{receipt.outcomeText}</span>
+          <span>{receipt.boundaryText}</span>
+        </div>
+      </div>
+    );
+  };
 
   // 分发路径 + 副作用边界统一以"弱化脚注"形式呈现（create/edit/list 一致）。
   // effect 传 null 时只显示分发路径（列表视图不展示副作用边界）。
@@ -2667,6 +3248,59 @@ const TopicModal = () => {
     );
   };
 
+  const renderRuleOrderReceipt = () => {
+    if (!ruleOrderReceipt) return null;
+
+    return (
+      <div
+        className="rule-transfer-receipt rule-order-receipt"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="rule-transfer-receipt-head">
+          <div>
+            <div className="rule-transfer-receipt-title">规则排序回执</div>
+            <div className="rule-transfer-receipt-subtitle">
+              已保存「{ruleOrderReceipt.movedRuleName}」从第{' '}
+              {ruleOrderReceipt.fromPosition} 位到第{' '}
+              {ruleOrderReceipt.toPosition} 位 ·{' '}
+              {formatDateTime(ruleOrderReceipt.orderedAt)}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rule-transfer-clear"
+            onClick={() => setRuleOrderReceipt(null)}
+            aria-label="清除规则排序回执"
+          >
+            清除
+          </button>
+        </div>
+        <div className="rule-transfer-metrics">
+          <span>手动规则 {ruleOrderReceipt.totalCount}</span>
+          <span>新位置 第 {ruleOrderReceipt.toPosition} 位</span>
+          <span>本机排序已保存</span>
+        </div>
+        <div className="rule-transfer-boundaries">
+          <span>
+            排序只改写本机手动记忆入口规则列表；系统观察规则、Outreach
+            会话和自我反思临时观察不参与排序，也不会被覆盖。
+          </span>
+          <span>
+            新顺序只影响后续分析的提示顺序，以及同一消息命中多条规则时的优先分发口径。
+          </span>
+          <span>
+            本次拖拽不会回扫历史消息、立即写入记忆、发送通知、创建 RuntimeAction
+            或执行 OpenClaw。
+          </span>
+          <span>
+            Memory Service snapshot 同步仍沿用现有机制；这次排序本身不直接同步、删除或恢复后端记忆。
+          </span>
+        </div>
+      </div>
+    );
+  };
+
   const getLatestDiagnosticForTopic = (topic: TopicItem) =>
     getLatestRuleDiagnostic(ruleDiagnostics, getRuleRef(topic));
 
@@ -2703,6 +3337,24 @@ const TopicModal = () => {
         </div>
       </div>
     );
+  };
+
+  const getRuleDiagnosticSummaryBoundary = (topic: TopicItem) => {
+    const diagnostic = getLatestDiagnosticForTopic(topic);
+    if (!diagnostic) return undefined;
+
+    return `最近范围拦截：${diagnostic.reason}；${formatRuleDiagnosticContext(
+      diagnostic,
+    )}；${formatRuleDiagnosticTime(
+      diagnostic,
+    )}。点击展开只查看这条规则的范围诊断，不会重新分析历史消息、写入记忆、发送通知或执行外部动作。`;
+  };
+
+  const getTopicSummaryAriaLabel = (topic: TopicItem) => {
+    const diagnosticBoundary = getRuleDiagnosticSummaryBoundary(topic);
+    return diagnosticBoundary
+      ? `展开规则：${topic.text}。${diagnosticBoundary}`
+      : `展开规则：${topic.text}`;
   };
 
   const renderRuleInactiveReceipt = (topic: TopicItem) => {
@@ -3198,6 +3850,19 @@ const TopicModal = () => {
     automationRequiresApproval: newAutomationRequiresApproval,
     openClawConfigured,
   });
+  const newRuleRunPreviewReceipt = getRuleRunPreviewReceipt({
+    notifyMethod: newNotifyMethod || '',
+    mentionMe: newMentionMe,
+    digestEnabled: newDigestEnabled && !newFollowThread,
+    digestFrequency: newDigestFrequency,
+    autoReply: newAutoReply,
+    autoReplyMode: newAutoReplyConfig.reviewMode,
+    followThread: newFollowThread,
+    automationPrompt: newAutomationPrompt,
+    automationRequiresApproval: newAutomationRequiresApproval,
+    openClawConfigured,
+    isSilentAnalysisEnabled,
+  });
   const newRuleSafetySummary = getRuleSafetySummary({
     filterSender: newFilterSender,
     filterGroup: newFilterGroup,
@@ -3207,6 +3872,22 @@ const TopicModal = () => {
     automationPrompt: newAutomationPrompt,
     automationRequiresApproval: newAutomationRequiresApproval,
   });
+  const newAutoReplySaveButtonBoundary = newAutoReply
+    ? buildAutoReplySaveButtonBoundary({
+        ...newAutoReplyConfig,
+        action: 'create',
+        filterSender: newFilterSender,
+        filterGroup: newFilterGroup,
+        isSilentAnalysisEnabled,
+      })
+    : undefined;
+  const newManualRuleSaveButtonBoundary = buildManualRuleSaveButtonBoundary(
+    newRuleRunPreviewReceipt,
+    'create',
+    newTopic,
+  );
+  const newRuleSaveButtonBoundary =
+    newAutoReplySaveButtonBoundary || newManualRuleSaveButtonBoundary;
   const newFollowThreadBoundaryReceipt =
     newFollowThread && newFollowConfig
       ? buildFollowThreadDraftBoundaryReceipt({
@@ -3218,6 +3899,73 @@ const TopicModal = () => {
           notifyFrequency: newNotifyFrequency,
         })
       : null;
+  const renderAutoReplyPrefillReceipt = () => {
+    if (
+      newRuleSource !== 'autoReply' ||
+      !pendingAutoReplyConfig ||
+      autoReplyPrefillStatus === 'idle'
+    ) {
+      return null;
+    }
+
+    const sender = pendingAutoReplyConfig.sender?.trim() || '未知发送者';
+    const group = pendingAutoReplyConfig.groupName?.trim() || '未知会话';
+    const baseBoundary =
+      '这里只是在准备一条可编辑规则草稿；尚未保存规则、不会插入 RingCentral 输入框、不会发送消息，也不会创建定时消息队列行。';
+
+    if (autoReplyPrefillStatus === 'loading') {
+      return (
+        <div className="auto-reply-prefill-receipt loading" aria-live="polite">
+          <div className="auto-reply-prefill-title">正在准备自动答复草稿</div>
+          <div className="auto-reply-prefill-body">
+            <span>
+              来源：{group} / {sender} 的消息入口。
+            </span>
+            <span>{baseBoundary}</span>
+            <span>AI 建议返回前，回复内容为空不代表规则已经可发送。</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (autoReplyPrefillStatus === 'failed') {
+      return (
+        <div className="auto-reply-prefill-receipt failed" aria-live="polite">
+          <div className="auto-reply-prefill-title">草稿建议未生成</div>
+          <div className="auto-reply-prefill-body">
+            <span>{baseBoundary}</span>
+            <span>
+              你可以手动填写固定回复，或重试 AI 建议；保存前不会影响后续消息。
+            </span>
+            {autoReplyPrefillError ? (
+              <span>失败原因：{autoReplyPrefillError}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="secondary-btn auto-reply-prefill-retry"
+            onClick={() =>
+              void requestAutoReplyPrefillDraft(pendingAutoReplyConfig)
+            }
+          >
+            重试生成草稿
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="auto-reply-prefill-receipt ready" aria-live="polite">
+        <div className="auto-reply-prefill-title">草稿建议已填入</div>
+        <div className="auto-reply-prefill-body">
+          <span>
+            来源：{group} / {sender} 的消息入口；请先复核文本和发送口径。
+          </span>
+          <span>{baseBoundary}</span>
+        </div>
+      </div>
+    );
+  };
   return (
     <div className="topic-modal">
       <div className="page-header">
@@ -3288,13 +4036,28 @@ const TopicModal = () => {
             </span>
             <button
               className="warning-action-btn"
-              onClick={enableSilentAnalysis}
+              onClick={() => void enableSilentAnalysis('warning')}
+              disabled={silentAnalysisControlReceipt?.status === 'pending'}
+              title={
+                silentAnalysisControlReceipt?.status === 'pending'
+                  ? '正在提交开启请求；等待 Task Scheduler 确认'
+                  : '开启后台记忆采集；只影响后续新消息'
+              }
+              aria-label={
+                silentAnalysisControlReceipt?.status === 'pending'
+                  ? '正在提交开启后台记忆采集请求'
+                  : '立即启用后台记忆采集'
+              }
             >
-              立即启用
+              {silentAnalysisControlReceipt?.status === 'pending'
+                ? '启用中'
+                : '立即启用'}
             </button>
           </div>
         </div>
       )}
+
+      {renderSilentAnalysisControlReceipt()}
 
       <div className="toolbar">
         <button
@@ -3323,8 +4086,10 @@ const TopicModal = () => {
         </button>
       </div>
 
+      {renderSystemObservationRuntimeReceipt()}
       {renderRuleExportReceipt()}
       {renderRuleImportReceipt()}
+      {renderRuleOrderReceipt()}
       {renderMessageAnalysisDeliveryReceipt()}
 
       <div className="section-head">
@@ -4164,6 +4929,9 @@ const TopicModal = () => {
                       {getTopicSafetySummary(editingTopic).reasons.join(' / ')}
                     </span>
                   </div>
+                  {renderRuleRunPreviewReceipt(
+                    getTopicRunPreviewReceipt(editingTopic),
+                  )}
                 </div>
 
                 {/* 分发路径 + 副作用边界 · 弱化脚注 */}
@@ -4173,7 +4941,16 @@ const TopicModal = () => {
                 )}
 
                 <div className="form-buttons">
-                  <button onClick={handleSaveEdit}>保存</button>
+                  <button
+                    onClick={handleSaveEdit}
+                    title={getTopicSaveButtonBoundary(editingTopic, 'edit')}
+                    aria-label={getTopicSaveButtonBoundary(
+                      editingTopic,
+                      'edit',
+                    )}
+                  >
+                    保存
+                  </button>
                   <button
                     onClick={() => {
                       setEditingTopic(null);
@@ -4198,7 +4975,8 @@ const TopicModal = () => {
                     role="button"
                     tabIndex={0}
                     aria-expanded="false"
-                    aria-label={`展开规则：${topic.text}`}
+                    aria-label={getTopicSummaryAriaLabel(topic)}
+                    title={getRuleDiagnosticSummaryBoundary(topic)}
                     onClick={() => toggleTopicExpanded(topic.id)}
                     onKeyDown={(event) =>
                       handleTopicSummaryKeyDown(event, topic.id)
@@ -4220,6 +4998,14 @@ const TopicModal = () => {
                           {chip}
                         </span>
                       ))}
+                      {getRuleDiagnosticSummaryBoundary(topic) && (
+                        <span
+                          className="rule-badge safety-warn topic-summary-diagnostic"
+                          title={getRuleDiagnosticSummaryBoundary(topic)}
+                        >
+                          最近拦截
+                        </span>
+                      )}
                     </span>
                     <span className="topic-summary-chevron" aria-hidden="true">
                       ›
@@ -4298,6 +5084,11 @@ const TopicModal = () => {
                       getTopicDeliveryReceipt(topic),
                       null,
                     )}
+                    {shouldShowSavedRunPreview(topic) &&
+                      renderRuleRunPreviewReceipt(
+                        getTopicRunPreviewReceipt(topic),
+                        'saved',
+                      )}
                     {topic.followThread && topic.followConfig && (
                       <div className="supporting-panel">
                         <div className="supporting-title">关注后续上下文</div>
@@ -4622,6 +5413,7 @@ const TopicModal = () => {
               </span>
             </div>
             {renderNewAutomationConfig()}
+            {renderRuleRunPreviewReceipt(newRuleRunPreviewReceipt)}
           </div>
 
 		          {/* 摘要配置区域（非关注后续模式时显示） */}
@@ -4732,14 +5524,16 @@ const TopicModal = () => {
                   className="reply-content-input"
                   placeholder="输入回复内容模板，或点击AI生成"
                   value={newAutoReplyConfig.replyContent}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    clearAutoReplyPrefillReceipt();
                     setNewAutoReplyConfig({
                       ...newAutoReplyConfig,
                       replyContent: e.target.value,
-                    })
-                  }
+                    });
+                  }}
                   rows={3}
                 />
+                {renderAutoReplyPrefillReceipt()}
                 <div className="reply-options">
                   <button
                     type="button"
@@ -4858,6 +5652,8 @@ const TopicModal = () => {
             <button
               onClick={handleAdd}
               disabled={isAddingTopic || !newTopic.trim()}
+              title={newRuleSaveButtonBoundary}
+              aria-label={newRuleSaveButtonBoundary}
             >
               {isAddingTopic ? (
                 <>
@@ -5221,6 +6017,46 @@ const TopicModal = () => {
 
                 .auto-reply-content-readiness.safe {
                     border-left-color: #2f855a;
+                }
+
+                .auto-reply-prefill-receipt {
+                    margin-top: 8px;
+                    padding: 10px 12px;
+                    border: 1px solid #d9e2ec;
+                    border-left-width: 4px;
+                    border-radius: 4px;
+                    background-color: #ffffff;
+                    color: #334e68;
+                }
+
+                .auto-reply-prefill-receipt.loading {
+                    border-left-color: #2b6cb0;
+                }
+
+                .auto-reply-prefill-receipt.ready {
+                    border-left-color: #2f855a;
+                }
+
+                .auto-reply-prefill-receipt.failed {
+                    border-left-color: #d73a49;
+                }
+
+                .auto-reply-prefill-title {
+                    margin-bottom: 6px;
+                    color: #243b53;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                .auto-reply-prefill-body {
+                    display: grid;
+                    gap: 4px;
+                    font-size: 12px;
+                    line-height: 1.5;
+                }
+
+                .auto-reply-prefill-retry {
+                    margin-top: 8px;
                 }
 
                 .auto-reply-content-readiness-title {
@@ -5983,6 +6819,120 @@ const TopicModal = () => {
                     box-shadow: none;
                 }
 
+                .system-observation-receipt {
+                    display: grid;
+                    gap: 9px;
+                    margin: -6px 0 14px;
+                    padding: 11px 12px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(45, 212, 191, 0.24);
+                    background: rgba(20, 184, 166, 0.07);
+                    color: #ccfbf1;
+                }
+
+                .system-observation-receipt.failed,
+                .system-observation-receipt.unconfigured {
+                    border-color: rgba(245, 158, 11, 0.26);
+                    background: rgba(245, 158, 11, 0.07);
+                    color: #fde68a;
+                }
+
+                .system-observation-receipt.snapshot-stale {
+                    border-color: rgba(251, 191, 36, 0.32);
+                    background: rgba(251, 191, 36, 0.08);
+                }
+
+                .system-observation-receipt.loading {
+                    border-color: rgba(96, 165, 250, 0.24);
+                    background: rgba(37, 99, 235, 0.07);
+                    color: #dbeafe;
+                }
+
+                .system-observation-head {
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: space-between;
+                    gap: 12px;
+                    min-width: 0;
+                }
+
+                .system-observation-head > div {
+                    min-width: 0;
+                }
+
+                .system-observation-title {
+                    color: #f0fdfa;
+                    font-size: 13px;
+                    font-weight: 800;
+                    line-height: 1.35;
+                }
+
+                .system-observation-receipt.failed .system-observation-title,
+                .system-observation-receipt.unconfigured .system-observation-title {
+                    color: #fef3c7;
+                }
+
+                .system-observation-receipt.loading .system-observation-title {
+                    color: #eff6ff;
+                }
+
+                .system-observation-subtitle,
+                .system-observation-targets,
+                .system-observation-stale,
+                .system-observation-boundary {
+                    color: currentColor;
+                    font-size: 12px;
+                    line-height: 1.45;
+                    overflow-wrap: anywhere;
+                }
+
+                .system-observation-stale {
+                    padding: 7px 8px;
+                    border-radius: 7px;
+                    background: rgba(15, 23, 42, 0.22);
+                    border: 1px solid rgba(251, 191, 36, 0.18);
+                }
+
+                .system-observation-refresh {
+                    flex: 0 0 auto;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                    border: 1px solid rgba(45, 212, 191, 0.32);
+                    background: rgba(15, 23, 42, 0.46);
+                    color: currentColor;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                }
+
+                .system-observation-refresh:disabled {
+                    cursor: wait;
+                    opacity: 0.68;
+                }
+
+                .system-observation-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+                    gap: 6px;
+                }
+
+                .system-observation-grid span {
+                    min-width: 0;
+                    padding: 5px 7px;
+                    border-radius: 7px;
+                    background: rgba(15, 23, 42, 0.26);
+                    color: currentColor;
+                    font-size: 11px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                    overflow-wrap: anywhere;
+                }
+
+                .system-observation-boundary {
+                    display: grid;
+                    gap: 4px;
+                }
+
                 .message-analysis-delivery-receipt {
                     display: grid;
                     gap: 8px;
@@ -6071,6 +7021,33 @@ const TopicModal = () => {
                     color: #fde68a;
                 }
 
+                .message-analysis-scope-gate-receipt {
+                    display: grid;
+                    gap: 6px;
+                    padding-top: 8px;
+                    border-top: 1px solid rgba(245, 158, 11, 0.18);
+                    color: #fde68a;
+                    font-size: 11px;
+                    line-height: 1.45;
+                }
+
+                .message-analysis-scope-gate-title {
+                    color: #fef3c7;
+                    font-size: 12px;
+                    font-weight: 800;
+                    line-height: 1.35;
+                }
+
+                .message-analysis-scope-gate-list {
+                    display: grid;
+                    gap: 4px;
+                }
+
+                .message-analysis-scope-gate-list span {
+                    min-width: 0;
+                    overflow-wrap: anywhere;
+                }
+
                 .toolbar {
                     display: flex;
                     flex-wrap: wrap;
@@ -6125,6 +7102,12 @@ const TopicModal = () => {
                     color: #dbeafe;
                 }
 
+                .rule-order-receipt {
+                    border-color: rgba(168, 85, 247, 0.3);
+                    background: rgba(88, 28, 135, 0.18);
+                    color: #ede9fe;
+                }
+
                 .rule-transfer-receipt-head {
                     display: flex;
                     align-items: flex-start;
@@ -6150,10 +7133,19 @@ const TopicModal = () => {
                     color: #eff6ff;
                 }
 
+                .rule-order-receipt .rule-transfer-receipt-title {
+                    color: #f5f3ff;
+                }
+
                 .rule-export-receipt .rule-transfer-receipt-subtitle,
                 .rule-export-receipt .rule-transfer-file,
                 .rule-export-receipt .rule-transfer-boundaries {
                     color: #bfdbfe;
+                }
+
+                .rule-order-receipt .rule-transfer-receipt-subtitle,
+                .rule-order-receipt .rule-transfer-boundaries {
+                    color: #ddd6fe;
                 }
 
                 .rule-transfer-file {
@@ -6178,6 +7170,11 @@ const TopicModal = () => {
                     color: #dbeafe;
                 }
 
+                .rule-order-receipt .rule-transfer-clear {
+                    border-color: rgba(196, 181, 253, 0.38);
+                    color: #ede9fe;
+                }
+
                 .rule-transfer-metrics {
                     display: flex;
                     flex-wrap: wrap;
@@ -6198,6 +7195,10 @@ const TopicModal = () => {
 
                 .rule-export-receipt .rule-transfer-metrics span {
                     color: #dbeafe;
+                }
+
+                .rule-order-receipt .rule-transfer-metrics span {
+                    color: #ede9fe;
                 }
 
                 .rule-transfer-boundaries {
@@ -6368,6 +7369,13 @@ const TopicModal = () => {
                     flex: 0 0 auto;
                     padding: 3px 8px;
                     font-size: 11px;
+                    white-space: nowrap;
+                }
+
+                .topic-summary-diagnostic {
+                    flex: 0 0 auto;
+                    border: 1px solid rgba(245, 158, 11, 0.36);
+                    background: rgba(245, 158, 11, 0.14);
                     white-space: nowrap;
                 }
 
@@ -6760,6 +7768,110 @@ const TopicModal = () => {
                     border-color: rgba(244, 63, 94, 0.28);
                     background: rgba(244, 63, 94, 0.08);
                     color: #fecdd3;
+                }
+
+                .rule-run-preview {
+                    display: grid;
+                    gap: 8px;
+                    margin-top: 10px;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(148, 163, 184, 0.16);
+                    background: rgba(15, 23, 42, 0.48);
+                    color: #cbd5e1;
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
+                .new-rule-receipt .rule-run-preview {
+                    margin-top: 8px;
+                }
+
+                .rule-run-preview-title {
+                    color: #f8fbff;
+                    font-weight: 800;
+                }
+
+                .rule-run-preview-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                    gap: 6px 12px;
+                }
+
+                .rule-run-preview-grid span {
+                    min-width: 0;
+                    overflow-wrap: anywhere;
+                }
+
+                .rule-run-preview.ready {
+                    border-color: rgba(34, 197, 94, 0.24);
+                    background: rgba(22, 163, 74, 0.08);
+                    color: #bbf7d0;
+                }
+
+                .rule-run-preview.paused {
+                    border-color: rgba(245, 158, 11, 0.26);
+                    background: rgba(245, 158, 11, 0.08);
+                    color: #fde68a;
+                }
+
+                .rule-run-preview.review {
+                    border-color: rgba(59, 130, 246, 0.24);
+                    background: rgba(37, 99, 235, 0.08);
+                    color: #bfdbfe;
+                }
+
+                .rule-run-preview.danger {
+                    border-color: rgba(244, 63, 94, 0.28);
+                    background: rgba(244, 63, 94, 0.08);
+                    color: #fecdd3;
+                }
+
+                .silent-analysis-control-receipt {
+                    display: grid;
+                    gap: 8px;
+                    margin: 12px 0 18px;
+                    padding: 12px 14px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(148, 163, 184, 0.18);
+                    background: rgba(15, 23, 42, 0.58);
+                    color: #dbeafe;
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
+                .silent-analysis-control-receipt.pending {
+                    border-color: rgba(59, 130, 246, 0.26);
+                    background: rgba(37, 99, 235, 0.1);
+                    color: #bfdbfe;
+                }
+
+                .silent-analysis-control-receipt.succeeded {
+                    border-color: rgba(34, 197, 94, 0.24);
+                    background: rgba(22, 163, 74, 0.08);
+                    color: #bbf7d0;
+                }
+
+                .silent-analysis-control-receipt.failed {
+                    border-color: rgba(244, 63, 94, 0.3);
+                    background: rgba(244, 63, 94, 0.08);
+                    color: #fecdd3;
+                }
+
+                .silent-analysis-control-title {
+                    color: #f8fbff;
+                    font-weight: 800;
+                }
+
+                .silent-analysis-control-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                    gap: 6px 12px;
+                }
+
+                .silent-analysis-control-grid span {
+                    min-width: 0;
+                    overflow-wrap: anywhere;
                 }
 
                 .rule-path-step {

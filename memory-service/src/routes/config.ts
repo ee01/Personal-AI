@@ -12,7 +12,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { getConfig } from '../config.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 
-const MIN_OPENCLAW_TIMEOUT_MS = 5 * 60 * 1000;
+const MIN_OPENCLAW_TIMEOUT_INPUT_MS = 5 * 60 * 1000;
+const MIN_OPENCLAW_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -194,7 +195,7 @@ const updateConfigBodySchema = {
     openClawEnabled: { type: 'boolean' as const },
     openClawBaseUrl: { type: 'string' as const },
     openClawApiKey: { type: 'string' as const },
-    openClawTimeoutMs: { type: 'number' as const, minimum: MIN_OPENCLAW_TIMEOUT_MS },
+    openClawTimeoutMs: { type: 'number' as const, minimum: MIN_OPENCLAW_TIMEOUT_INPUT_MS },
     clearOpenClawApiKey: { type: 'boolean' as const },
     outreachEnabled: { type: 'boolean' as const },
     outreachIntervalMs: { type: 'number' as const, minimum: 1000 },

@@ -32,6 +32,27 @@ async function saveScreenshot(page, filename) {
   return fullPath;
 }
 
+async function assertButtonBoundary(locator, patterns, label) {
+  await locator.waitFor({ state: 'attached', timeout: 15000 });
+  const title = (await locator.getAttribute('title')) || '';
+  const ariaLabel = (await locator.getAttribute('aria-label')) || '';
+  assert.ok(title, `${label} 缺少 title 边界`);
+  assert.equal(ariaLabel, title, `${label} aria-label 应镜像 title`);
+  for (const pattern of patterns) {
+    assert.match(title, pattern, `${label} 边界缺少 ${pattern}: ${title}`);
+  }
+}
+
+function collectPageErrors(page) {
+  const errors = [];
+  page.on('pageerror', (error) => {
+    errors.push(error instanceof Error ? error.message : String(error));
+  });
+  return () => {
+    assert.deepEqual(errors, [], `页面脚本异常: ${errors.join('; ')}`);
+  };
+}
+
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'meeting-pilot-scene2-browser-'),
@@ -216,6 +237,137 @@ try {
       enabled: true,
     });
   });
+
+  log('验证 popup Capture 启动提交中回执');
+  const popupPage = await context.newPage();
+  const assertNoPopupErrors = collectPageErrors(popupPage);
+  await popupPage.route('https://memory.local/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({ brief: { cards: [] } }),
+    });
+  });
+  await popupPage.addInitScript(
+    ({ meetingTabId, meetingUrl, meetingTitle }) => {
+      const originalTabsQuery = chrome.tabs.query.bind(chrome.tabs);
+      const originalSendMessage = chrome.runtime.sendMessage.bind(
+        chrome.runtime,
+      );
+      const meetingId = meetingUrl.split('/').pop();
+      const queryOverride = (queryInfo, callback) => {
+        if (queryInfo?.active && queryInfo?.currentWindow) {
+          const tabs = [
+            { id: meetingTabId, url: meetingUrl, title: meetingTitle },
+          ];
+          if (typeof callback === 'function') {
+            callback(tabs);
+            return undefined;
+          }
+          return Promise.resolve(tabs);
+        }
+        return originalTabsQuery(queryInfo, callback);
+      };
+      const sendMessageOverride = (message, ...args) => {
+        if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+          return Promise.resolve({
+            success: true,
+            tasks: [],
+            refreshReceipt: {
+              checkedAt: Date.now(),
+              checkedTaskCount: 0,
+              enabledTaskCount: 0,
+              scheduleAttentionCount: 0,
+              autoRepairAttempted: false,
+              createdAlarms: 0,
+              updatedAlarms: 0,
+              clearedAlarms: 0,
+              orphanedAlarmsCleared: 0,
+              disabledAlarmsCleared: 0,
+              failedRepairs: 0,
+              refreshOnly: true,
+            },
+          });
+        }
+        if (message?.type === 'MEETING_PILOT_GET_STATE') {
+          return Promise.resolve({
+            activeMeetingId: meetingId,
+            sessions: [],
+            activeSession: null,
+          });
+        }
+        if (message?.type === 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL') {
+          return new Promise((resolve) => {
+            window.__resolveMeetingPilotPopupStart = () =>
+              resolve({
+                success: false,
+                session: {
+                  tabId: meetingTabId,
+                  meetingId,
+                  url: meetingUrl,
+                  title: meetingTitle,
+                  capture: {
+                    kind: 'error',
+                    chunkCount: 0,
+                    lastError: 'tabCapture_stream_unavailable',
+                  },
+                  readiness: {
+                    status: 'ready',
+                    summary: 'Ready for local capture.',
+                    canStartCapture: true,
+                    checkedAt: Date.now(),
+                    blockers: [],
+                    degradations: [],
+                    dependencies: {},
+                  },
+                  transcript: [],
+                  participants: [],
+                },
+              });
+          });
+        }
+        return originalSendMessage(message, ...args);
+      };
+      Object.defineProperty(chrome.tabs, 'query', {
+        configurable: true,
+        value: queryOverride,
+      });
+      Object.defineProperty(chrome.runtime, 'sendMessage', {
+        configurable: true,
+        value: sendMessageOverride,
+      });
+    },
+    { meetingTabId, meetingUrl, meetingTitle },
+  );
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await popupPage
+    .locator('.radar-button', { hasText: '开启会议全貌' })
+    .waitFor({ timeout: 15000 });
+  await popupPage.locator('.radar-button', { hasText: '开启会议全貌' }).click();
+  await popupPage
+    .locator('.meeting-pilot-notice.info', {
+      hasText: '正在提交 Meeting Pilot Capture 启动请求',
+    })
+    .waitFor({ timeout: 15000 });
+  const pendingPopupNotice =
+    (await popupPage.locator('.meeting-pilot-notice.info').innerText()) || '';
+  assert.match(pendingPopupNotice, /尚未确认录制开始/);
+  assert.match(pendingPopupNotice, /不会通知参会者/);
+  assert.match(pendingPopupNotice, /录制同意/);
+  await popupPage.evaluate(() => window.__resolveMeetingPilotPopupStart?.());
+  await popupPage
+    .locator('.meeting-pilot-notice.error', {
+      hasText: '没有通知参会者',
+    })
+    .waitFor({ timeout: 15000 });
+  const failedPopupNotice =
+    (await popupPage.locator('.meeting-pilot-notice.error').innerText()) || '';
+  assert.match(failedPopupNotice, /创建纪要/);
+  assert.match(failedPopupNotice, /写入外部任务/);
+  assertNoPopupErrors();
+  await popupPage.close();
 
   log('通过真实 START_CAPTURE + panel open path 启动 Capture');
   const startResult = await panelPage.evaluate(
@@ -780,6 +932,21 @@ try {
     /no live/,
     `Local ASR 回执不应暴露 raw engine 状态: ${localAsrReceiptText}`,
   );
+  await assertButtonBoundary(
+    panelPage.locator('.speech-asr-receipt'),
+    [
+      /ASR 链路回执/,
+      /当前层：本地 ASR · 无实时预览 → Whisper final/,
+      /上传边界：音频片段只发给本机 Desktop App/,
+      /这只是当前会议 session 的转写状态快照/,
+      /不会开始\/停止 Capture/,
+      /不会切换 ASR 模式/,
+      /不会.*额外上传音频/,
+      /不会.*RingCentral 保存\/下载完整 transcript/,
+      /不会.*创建外部任务/,
+    ],
+    'Local ASR 回执卡总边界',
+  );
 
   await panelPage.evaluate(
     async ({ tabId }) => {
@@ -810,6 +977,16 @@ try {
   );
   assert.match(
     localWarningReceiptText,
+    /本地流状态[\s\S]*chunk stream 重试 2\/3/,
+    `Local ASR warning 回执未把 stream 重试拆成结构化行: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
+    /距离 fatal fallback 还剩 1 次失败/,
+    `Local ASR warning 回执未展示剩余 fatal fallback 容忍次数: ${localWarningReceiptText}`,
+  );
+  assert.match(
+    localWarningReceiptText,
     /实时 partial preview 可能短暂停住/,
     `Local ASR warning 回执未说明实时预览暂停边界: ${localWarningReceiptText}`,
   );
@@ -834,6 +1011,84 @@ try {
     `Local ASR warning 回执未说明切层条件: ${localWarningReceiptText}`,
   );
 
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+        tabId,
+        transcriptChunk: {
+          id: 'scene2-rc-transcript',
+          speaker: 'Alex Chen',
+          text: 'RingCentral transcript 已经在会议页显示。',
+          ts: Date.now() - 1000,
+          source: 'ringcentral_transcript',
+        },
+      });
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+        tabId,
+        tierStatus: {
+          activeTier: 'ringcentral_transcript',
+          badge: 'RC Transcript',
+          mode: 'auto',
+          lastTransitionAt: Date.now() - 1500,
+          lastTransitionReason:
+            'RingCentral web transcript became active; local/cloud ASR stopped.',
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForTimeout(800);
+  const ringCentralTranscriptReceiptText = await panelPage
+    .locator('.speech-asr-receipt')
+    .innerText();
+  assert.match(
+    ringCentralTranscriptReceiptText,
+    /平台转写[\s\S]*只读取当前会议页已经显示的 RingCentral caption\/transcript/,
+    `RC Transcript 回执未说明平台转写读取范围: ${ringCentralTranscriptReceiptText}`,
+  );
+  assert.match(
+    ringCentralTranscriptReceiptText,
+    /Local \/ Cloud ASR 已跳过/,
+    `RC Transcript 回执未说明本地和云端 ASR 已跳过: ${ringCentralTranscriptReceiptText}`,
+  );
+  assert.match(
+    ringCentralTranscriptReceiptText,
+    /已读文本会进入本场实时摘要、行动项、时间线和归档草稿/,
+    `RC Transcript 回执未说明已读文本仍参与本场产物: ${ringCentralTranscriptReceiptText}`,
+  );
+  assert.match(
+    ringCentralTranscriptReceiptText,
+    /不会请求 RingCentral 保存\/下载完整 transcript、发送通知、开启录制或额外上传音频/,
+    `RC Transcript 回执未说明平台保存和上传边界: ${ringCentralTranscriptReceiptText}`,
+  );
+  assert.match(
+    ringCentralTranscriptReceiptText,
+    /上传边界[\s\S]*读取会议页已有转写，不额外上传音频/,
+    `RC Transcript 回执未保留无额外上传边界: ${ringCentralTranscriptReceiptText}`,
+  );
+  await assertButtonBoundary(
+    panelPage.locator('.speech-asr-receipt'),
+    [
+      /ASR 链路回执/,
+      /当前层：RC 转写/,
+      /上传边界：读取会议页已有转写，不额外上传音频/,
+      /这只是当前会议 session 的转写状态快照/,
+      /不会开始\/停止 Capture/,
+      /不会切换 ASR 模式/,
+      /不会.*额外上传音频/,
+      /不会.*RingCentral 保存\/下载完整 transcript/,
+      /不会.*发送会议纪要/,
+    ],
+    'RC Transcript 回执卡总边界',
+  );
+  await assertButtonBoundary(
+    panelPage.locator('.panel-status-action'),
+    [/停止当前 Meeting Pilot Capture/, /归档链路/, /不会发送纪要/, /通知参会者/],
+    '运行态侧栏底部停止 Capture 按钮',
+  );
+
   await panelPage.locator('.panel-tab', { hasText: '时间线' }).click();
   await panelPage.waitForFunction(
     () => {
@@ -842,6 +1097,11 @@ try {
     { timeout: 15000 },
   );
   await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await assertButtonBoundary(
+    panelPage.locator('.panel-tab', { hasText: '行动项' }),
+    [/查看当前会议 session 的行动项/, /不会开始\/停止 Capture/, /不会.*外部任务/],
+    '运行态行动项 tab',
+  );
   await panelPage.waitForFunction(
     () => {
       return Array.from(document.querySelectorAll('.action-card')).length >= 1;
@@ -905,6 +1165,32 @@ try {
     /确认例外/,
     `信息完整行动项不应显示例外确认文案: ${JSON.stringify(confirmableAction)}`,
   );
+  await assertButtonBoundary(
+    panelPage
+      .locator(`[data-action-id="${blockedAction.id}"]`)
+      .locator('button', { hasText: /^确认例外$/ }),
+    [/确认例外/, /标为已确认/, /不会标记完成/, /Calendar\/Jira\/RingCentral/],
+    '缺信息行动项确认例外按钮',
+  );
+  await assertButtonBoundary(
+    panelPage
+      .locator(`[data-action-id="${blockedAction.id}"]`)
+      .locator('button', { hasText: /^确认例外并完成$/ }),
+    [/确认例外并完成/, /只更新当前会议 session/, /不会创建\/关闭外部任务/],
+    '缺信息行动项确认并完成按钮',
+  );
+  await assertButtonBoundary(
+    panelPage
+      .locator(`[data-action-id="${blockedAction.id}"]`)
+      .locator('button', { hasText: '忽略' }),
+    [/标为已忽略/, /不会删除 transcript/, /不会.*纪要/],
+    '行动项忽略按钮',
+  );
+  await assertButtonBoundary(
+    panelPage.locator('[data-action-filter="needs-info"]'),
+    [/只改变本侧栏可见列表/, /不会确认/, /不会.*外部任务/],
+    '需补信息筛选按钮',
+  );
   await panelPage.locator('[data-action-filter="needs-info"]').click();
   await panelPage.waitForFunction(
     (actionId) => {
@@ -918,6 +1204,11 @@ try {
   const firstActionId = confirmableAction.id;
   assert.ok(firstActionId, '行动项卡片缺少稳定 data-action-id');
   log('批量确认当前筛选里信息完整的待复核行动项');
+  await assertButtonBoundary(
+    panelPage.locator('.action-bulk-confirm', { hasText: '确认可用项' }),
+    [/批量确认当前筛选/, /缺信息项仍跳过/, /不会标记完成/],
+    '行动项批量确认按钮',
+  );
   await panelPage
     .locator('.action-bulk-confirm', { hasText: '确认可用项' })
     .click();
@@ -950,6 +1241,14 @@ try {
   );
   await panelPage
     .locator('.action-copy-followup', { hasText: '复制跟进清单' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    panelPage.locator('.action-copy-followup', { hasText: '复制跟进清单' }),
+    [/只复制 \d+ 个已确认/, /本机剪贴板/, /不会改变复核\/完成状态/],
+    '复制跟进清单按钮',
+  );
+  await panelPage
+    .locator('.action-copy-followup', { hasText: '复制跟进清单' })
     .click();
   await panelPage.waitForFunction(
     () => {
@@ -962,6 +1261,14 @@ try {
   );
   await panelPage
     .locator('.action-copy-all', { hasText: '复制当前筛选' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    panelPage.locator('.action-copy-all', { hasText: '复制当前筛选' }),
+    [/只复制当前/, /本机剪贴板/, /不会改变复核\/完成\/忽略状态/],
+    '复制当前筛选按钮',
+  );
+  await panelPage
+    .locator('.action-copy-all', { hasText: '复制当前筛选' })
     .click();
   await panelPage.waitForFunction(
     () => {
@@ -971,6 +1278,17 @@ try {
     },
     undefined,
     { timeout: 10000 },
+  );
+  await panelPage
+    .locator(`[data-action-id="${firstActionId}"]`)
+    .locator('button', { hasText: '复制' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    panelPage
+      .locator(`[data-action-id="${firstActionId}"]`)
+      .locator('button', { hasText: '复制' }),
+    [/只复制/, /本机剪贴板/, /不会确认/],
+    '单条行动项复制按钮',
   );
   await panelPage
     .locator(`[data-action-id="${firstActionId}"]`)
@@ -991,6 +1309,17 @@ try {
   await panelPage
     .locator(`[data-action-id="${firstActionId}"]`)
     .locator('button', { hasText: '编辑' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    panelPage
+      .locator(`[data-action-id="${firstActionId}"]`)
+      .locator('button', { hasText: '编辑' }),
+    [/本地校正表单/, /保存前不会改写行动项/, /外部任务/],
+    '行动项编辑按钮',
+  );
+  await panelPage
+    .locator(`[data-action-id="${firstActionId}"]`)
+    .locator('button', { hasText: '编辑' })
     .click();
   const actionCard = panelPage.locator(`[data-action-id="${firstActionId}"]`);
   await actionCard.locator('label', { hasText: '行动项' }).locator('input').fill(
@@ -1004,6 +1333,11 @@ try {
     .locator('label', { hasText: '截止' })
     .locator('input')
     .fill('下周四');
+  await assertButtonBoundary(
+    actionCard.locator('button', { hasText: '保存校正' }),
+    [/保存.*标题、负责人和截止校正/, /标为已确认/, /不会修改原始 transcript/],
+    '行动项保存校正按钮',
+  );
   await actionCard.locator('button', { hasText: '保存校正' }).click();
   await panelPage.waitForFunction(
     (actionId) => {

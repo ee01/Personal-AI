@@ -71,8 +71,30 @@ const MESSAGES = {
       '已停止监听 · 未听到可发送内容；没有发送、保存音频或发起 Ask，可继续说话或点叉号回到文本输入',
     'desktop.quickAsk.voiceReceipt.error':
       '语音未发送 · 当前草稿已保留，修复权限后可继续或点叉号编辑',
+    'desktop.quickAsk.voiceReceipt.errorWithDraft':
+      '识别中断：{reason} · 已保留未确认语音草稿 · {scope}范围；没有发送、保存音频或发起 Ask。点箭头会发送当前转写文本，建议先核对人名/项目词，点叉号可回到文本框编辑',
     'desktop.quickAsk.voiceSubmitReceipt':
       '语音草稿已确认发送 · {scope}范围 · 只提交转写文本，不发送或保存原始音频；是否写记忆仍按文本意图和现有回执判断',
+    'desktop.quickAsk.voiceControl.start':
+      '开始语音输入：使用本机语音识别，结果先进入草稿，不会自动发送。',
+    'desktop.quickAsk.voiceControl.stopEmpty':
+      '停止监听：如果仍没有可发送内容，只会停在本机语音草稿页；不会发送、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.stopWithDraft':
+      '停止监听：保留当前语音草稿，先复核再决定是否发送；不会自动发送、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.restart':
+      '继续说话：重新启动本机语音识别，当前草稿仍留在本机；不会发送、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.retry':
+      '重试语音输入：重新启动本机语音识别；不会发送当前草稿、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.cancelEmpty':
+      '返回文本输入：关闭语音面板；没有语音内容会被发送、保存或写入记忆。',
+    'desktop.quickAsk.voiceControl.cancelWithDraft':
+      '返回文本输入：把当前语音草稿带回输入框继续编辑；不会发送、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.sendEmpty':
+      '不可发送：当前没有可发送语音草稿；不会发送、保存音频或发起 Ask。',
+    'desktop.quickAsk.voiceControl.sendWithDraft':
+      '发送语音草稿：按{scope}范围提交当前转写文本；不发送或保存原始音频，记忆写入仍按文本意图判断。',
+    'desktop.quickAsk.voiceControl.recovery':
+      '{label}：只打开系统恢复入口；不会发送语音草稿、保存音频或发起 Ask。',
     'desktop.memoryList.titleTag': '记忆列表 · Personal AI',
     'desktop.memoryList.eyebrow': '记忆探索 · 已入库',
     'desktop.memoryList.title': '记忆列表',
@@ -180,8 +202,30 @@ const MESSAGES = {
       'Listening stopped · no sendable content heard; nothing was sent, no audio was stored, and Ask was not started',
     'desktop.quickAsk.voiceReceipt.error':
       'Voice was not sent · current draft is preserved; fix permission or return to text input',
+    'desktop.quickAsk.voiceReceipt.errorWithDraft':
+      'Recognition was interrupted: {reason} · unconfirmed voice draft was preserved · {scope} scope; nothing was sent, no audio was stored, and Ask was not started. Arrow sends the current transcript; review names or project terms first, or use X to edit in text input',
     'desktop.quickAsk.voiceSubmitReceipt':
       'Voice draft sent · {scope} scope · only the transcript text was submitted; raw audio is not sent or stored, and memory writes still depend on text intent and existing receipts',
+    'desktop.quickAsk.voiceControl.start':
+      'Start voice input: uses native speech recognition; transcript becomes a draft first and is not sent automatically.',
+    'desktop.quickAsk.voiceControl.stopEmpty':
+      'Stop listening: if there is still no sendable content, this only stays on the local voice draft sheet; nothing is sent, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.stopWithDraft':
+      'Stop listening: preserve the current voice draft for review before sending; nothing is sent automatically, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.restart':
+      'Keep speaking: restart native speech recognition with the current draft still local; nothing is sent, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.retry':
+      'Retry voice input: restart native speech recognition; the current draft is not sent, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.cancelEmpty':
+      'Return to text input: close the voice sheet; no voice content is sent, stored, or written to memory.',
+    'desktop.quickAsk.voiceControl.cancelWithDraft':
+      'Return to text input: move the current voice draft back to the text box for editing; nothing is sent, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.sendEmpty':
+      'Unavailable: there is no sendable voice draft; nothing is sent, no audio is stored, and Ask is not started.',
+    'desktop.quickAsk.voiceControl.sendWithDraft':
+      'Send voice draft: submit the current transcript text with {scope} scope; raw audio is not sent or stored, and memory writes still depend on text intent.',
+    'desktop.quickAsk.voiceControl.recovery':
+      '{label}: only opens the system recovery entry; it does not send the voice draft, store audio, or start Ask.',
     'desktop.memoryList.titleTag': 'Memory List · Personal AI',
     'desktop.memoryList.eyebrow': 'Memory Explore · Stored',
     'desktop.memoryList.title': 'Memory List',

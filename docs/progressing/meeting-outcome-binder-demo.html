@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meeting Outcome Binder Demo</title>
+  <style>
+    :root {
+      --bg: #f6f7f4;
+      --panel: #ffffff;
+      --ink: #1c2328;
+      --muted: #64707a;
+      --line: #dbe0d8;
+      --green: #247a5a;
+      --green-soft: #e4f3eb;
+      --blue: #2d5f9a;
+      --blue-soft: #e6eef8;
+      --amber: #9a6b18;
+      --amber-soft: #f7edcf;
+      --red: #a33a35;
+      --red-soft: #f5dedb;
+      --shadow: 0 16px 44px rgba(31, 45, 38, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      padding: 24px 18px;
+      border-right: 1px solid var(--line);
+      background: #eef1ed;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+      font-weight: 700;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: linear-gradient(135deg, #247a5a, #2d5f9a);
+      font-weight: 800;
+    }
+
+    .nav {
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav button {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: var(--panel);
+      border-color: var(--line);
+      color: var(--ink);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .topbar p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .receipt {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 520px;
+    }
+
+    .workspace {
+      padding: 24px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .pane,
+    .card,
+    .meeting-shell {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .pane {
+      overflow: hidden;
+    }
+
+    .pane-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .pane-header h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .pane-header span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px 0;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: #f8faf7;
+      color: var(--muted);
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      color: var(--ink);
+      background: var(--blue-soft);
+      border-color: #bdd1e7;
+    }
+
+    .view {
+      display: none;
+      padding: 16px;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .meeting-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .meeting-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfa;
+    }
+
+    .meeting-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 10px;
+    }
+
+    .meeting-title strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .meeting-title small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .pill.green {
+      color: var(--green);
+      border-color: #b9ddce;
+      background: var(--green-soft);
+    }
+
+    .pill.amber {
+      color: var(--amber);
+      border-color: #ead69e;
+      background: var(--amber-soft);
+    }
+
+    .binder-strip {
+      border: 1px solid #c6d7ea;
+      background: var(--blue-soft);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .strip-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .strip-head strong {
+      font-size: 14px;
+    }
+
+    .slot-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .slot {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .slot-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .slot strong {
+      font-size: 14px;
+    }
+
+    .slot p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .source-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .btn.primary {
+      background: var(--ink);
+      color: #fff;
+      border-color: var(--ink);
+    }
+
+    .btn:focus-visible,
+    .tab:focus-visible,
+    .nav button:focus-visible {
+      outline: 3px solid rgba(45, 95, 154, 0.25);
+      outline-offset: 2px;
+    }
+
+    .meeting-shell {
+      overflow: hidden;
+    }
+
+    .shell-stage {
+      height: 260px;
+      background:
+        linear-gradient(rgba(28, 35, 40, 0.5), rgba(28, 35, 40, 0.2)),
+        radial-gradient(circle at 20% 25%, #405c6c, transparent 26%),
+        radial-gradient(circle at 70% 40%, #31556d, transparent 28%),
+        linear-gradient(135deg, #263b46, #1d292f);
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 18px;
+      color: #fff;
+    }
+
+    .person {
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.12);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      min-height: 82px;
+    }
+
+    .side-panel {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfa;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 18px;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .ask-box {
+      border: 1px solid var(--line);
+      background: #fbfcfa;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .answer {
+      border-left: 4px solid var(--green);
+      background: var(--green-soft);
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .event strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .event p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      min-width: 260px;
+      max-width: min(420px, calc(100vw - 36px));
+      background: var(--ink);
+      color: #fff;
+      padding: 12px 14px;
+      border-radius: 8px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+      transform: translateY(20px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .nav {
+        display: flex;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .nav button {
+        white-space: nowrap;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .receipt {
+        max-width: none;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .workspace,
+      .topbar {
+        padding: 14px;
+      }
+
+      .meeting-title,
+      .strip-head,
+      .slot-top,
+      .pane-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .status-grid,
+      .shell-stage {
+        grid-template-columns: 1fr;
+      }
+
+      .shell-stage {
+        height: auto;
+      }
+
+      .event {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">PA</div>
+        <div>
+          <div>Personal AI</div>
+          <small>会议结果装订器</small>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Demo views">
+        <button class="nav-btn active" data-view="prep">会前</button>
+        <button class="nav-btn" data-view="live">会中</button>
+        <button class="nav-btn" data-view="after">会后</button>
+        <button class="nav-btn" data-view="ask">Ask</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>Meeting Outcome Binder / 会议结果装订器</h1>
+          <p>把日历议程、会议证据和下一次 carry-over 装订成同一个可复用记忆对象。</p>
+        </div>
+        <div class="receipt">
+          Demo 口径：集成在 RingCentral / Meeting Pilot / Ask 里；所有按钮只模拟本机复制、只读打开或本地 handoff，不写 Jira、Calendar、RingCentral。
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="pane" aria-label="Main demo panel">
+          <div class="pane-header">
+            <div>
+              <h2 id="view-title">RingCentral Video Home · 今日会议</h2>
+              <span id="view-subtitle">会前只显示一行本场要闭环，不要求用户进入 review queue。</span>
+            </div>
+            <span class="pill green">只读预览</span>
+          </div>
+
+          <div class="view active" data-panel="prep">
+            <div class="meeting-list">
+              <article class="meeting-card">
+                <div class="meeting-title">
+                  <div>
+                    <strong>2026 Q3 planning for video mobile</strong>
+                    <small>今天 15:00-15:50 · Barry Li, Gary Chevsky, Esone Qiu</small>
+                  </div>
+                  <span class="pill">Calendar + 近期记忆</span>
+                </div>
+                <div class="binder-strip">
+                  <div class="strip-head">
+                    <strong>本场要闭环 3 件事</strong>
+                    <span class="pill amber">来自日历 agenda</span>
+                  </div>
+                  <div class="slot-list">
+                    <div class="slot">
+                      <div class="slot-top">
+                        <strong>Dev/QA estimate 是否已填齐</strong>
+                        <span class="pill">agenda</span>
+                      </div>
+                      <p>来源：日历 description 提到 review all user stories，确保 Plans board 上 Dev/QA estimate 已填写。</p>
+                    </div>
+                    <div class="slot">
+                      <div class="slot-top">
+                        <strong>估算总量是否超过 team capacity</strong>
+                        <span class="pill">agenda</span>
+                      </div>
+                      <p>来源：日历描述 + 近期 Q3 planning 消息。需要在会中确认容量口径。</p>
+                    </div>
+                    <div class="slot">
+                      <div class="slot-top">
+                        <strong>risk / issue 是否需要今天抛出</strong>
+                        <span class="pill">agenda</span>
+                      </div>
+                      <p>来源：internal weekly agenda 要求有 risk/issue 及时抛出。</p>
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="btn primary" data-toast="已写入本机 Meeting Pilot handoff cache；没有启动 capture，也没有写 Calendar/Jira/RingCentral。">带入会议侧栏</button>
+                    <button class="btn" data-toast="打开来源只读预览；不会刷新日历、同步消息或写入记忆。">查看来源</button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="meeting-card">
+                <div class="meeting-title">
+                  <div>
+                    <strong>Daily team sync</strong>
+                    <small>今天 16:30-17:00 · recurring</small>
+                  </div>
+                  <span class="pill">无明确闭环目标</span>
+                </div>
+                <p style="margin:0;color:var(--muted);font-size:13px;line-height:1.45;">
+                  仅包含普通 recurring 信息和会议链接，P0 不生成结果装订，避免每天制造噪声。
+                </p>
+              </article>
+            </div>
+          </div>
+
+          <div class="view" data-panel="live">
+            <div class="meeting-shell">
+              <div class="shell-stage" aria-label="Video meeting mock">
+                <div class="person">Barry Li</div>
+                <div class="person">Gary Chevsky</div>
+                <div class="person">Esone Qiu</div>
+                <div class="person">Zora Zheng</div>
+              </div>
+              <div class="side-panel">
+                <div class="status-grid">
+                  <div class="stat"><b>2/3</b><span>已提到</span></div>
+                  <div class="stat"><b>1</b><span>可能已闭环</span></div>
+                  <div class="stat"><b>0</b><span>外部写入</span></div>
+                </div>
+                <div class="slot-list">
+                  <div class="slot">
+                    <div class="slot-top">
+                      <strong>Dev/QA estimate 是否已填齐</strong>
+                      <span class="pill amber">已提到，不等于已解决</span>
+                    </div>
+                    <p>Gary 提到先填 ballpark estimate；还缺 Plans board 复查证据。</p>
+                    <div class="actions">
+                      <button class="btn" data-toast="跳到 transcript 命中句；不会确认事实，也不会写行动项。">跳到证据</button>
+                    </div>
+                  </div>
+                  <div class="slot">
+                    <div class="slot-top">
+                      <strong>估算总量是否超过 team capacity</strong>
+                      <span class="pill">未确认</span>
+                    </div>
+                    <p>当前只捕捉到 scope review，没有 capacity 结论。</p>
+                  </div>
+                </div>
+                <div class="receipt">
+                  会中状态源回执：当前基于本场 transcript 和会前 agenda；提到不代表解决，copy/open 动作不会发送或写外部任务。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="view" data-panel="after">
+            <div class="tabs" role="tablist" aria-label="Outcome sections">
+              <button class="tab active" data-tab="outcome">结果</button>
+              <button class="tab" data-tab="evidence">证据</button>
+              <button class="tab" data-tab="carry">带到下次</button>
+            </div>
+
+            <div class="view active" data-inner="outcome">
+              <div class="status-grid" style="margin-bottom:14px;">
+                <div class="stat"><b>2</b><span>已闭环</span></div>
+                <div class="stat"><b>1</b><span>带到下一次</span></div>
+                <div class="stat"><b>0</b><span>已外部写入</span></div>
+              </div>
+              <div class="slot-list">
+                <div class="slot">
+                  <div class="slot-top">
+                    <strong>Dev/QA estimate 先填 ballpark 口径</strong>
+                    <span class="pill green">resolved</span>
+                  </div>
+                  <p>结果：会中确认先填 ballpark estimate；仍需复查 Plans board 是否已补齐。</p>
+                  <div class="source-row">
+                    <span class="pill">Transcript 15:18</span>
+                    <span class="pill">Glip planning message</span>
+                  </div>
+                </div>
+                <div class="slot">
+                  <div class="slot-top">
+                    <strong>team capacity 是否超标</strong>
+                    <span class="pill amber">carried over</span>
+                  </div>
+                  <p>结果：会议讨论了范围，但没有容量结论。建议下次 planning 继续确认。</p>
+                  <div class="actions">
+                    <button class="btn primary" data-toast="已复制跟进草稿到本机剪贴板；没有发送群消息。">复制跟进草稿</button>
+                    <button class="btn" data-toast="已标记为下次会前提示；不会修改 Calendar agenda。">带到下次</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="view" data-inner="evidence">
+              <div class="timeline">
+                <div class="event">
+                  <time>Calendar</time>
+                  <div>
+                    <strong>会议 agenda</strong>
+                    <p>Review all user stories to ensure Dev/QA estimate has been filled on Plans board.</p>
+                  </div>
+                </div>
+                <div class="event">
+                  <time>15:18</time>
+                  <div>
+                    <strong>Transcript evidence</strong>
+                    <p>Gary: a ballpark estimate should be entered first, then review capacity risk.</p>
+                  </div>
+                </div>
+                <div class="event">
+                  <time>Jira</time>
+                  <div>
+                    <strong>待补证据</strong>
+                    <p>尚未确认 Plans board 是否所有 INIT 都补齐 Dev/QA estimate。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="view" data-inner="carry">
+              <div class="slot">
+                <div class="slot-top">
+                  <strong>下次会议优先确认 capacity 口径</strong>
+                  <span class="pill amber">next meeting prep</span>
+                </div>
+                <p>触发条件：同一 recurring meeting、同一 Q3 planning 参与者，或 Ask/Today 命中 Q3 planning。</p>
+                <div class="actions">
+                  <button class="btn" data-toast="已打开 Ask 草稿；不会自动提交问题。">Ask 追问</button>
+                  <button class="btn" data-toast="已忽略本条 carry-over；原始会议记录仍保留。">不再带入</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="view" data-panel="ask">
+            <div class="ask-box">
+              <label for="ask-input">Quick Ask</label>
+              <input id="ask-input" value="昨天 Q3 planning 估时口径定了吗？">
+              <button class="btn primary" data-toast="已基于结果装订器生成回答；没有发送到外部 AI，也没有写 Jira。">生成回答</button>
+              <div class="answer">
+                结论：会议里确认了先填 ballpark estimate 的口径，但还没有足够证据证明所有 INIT 的 Dev/QA estimate 都已补齐。<br>
+                未闭环：team capacity 是否超标，建议带到下一次 planning 或复查 Plans board。
+              </div>
+              <div class="receipt">
+                结果装订回执：答案基于 2026 Q3 planning 的 Meeting Outcome Binder。已闭环 2 项，未闭环 1 项；当前回答不代表 Jira / Calendar 已更新。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="card" style="padding:16px;">
+          <div class="pane-header" style="padding:0 0 12px;border-bottom:1px solid var(--line);margin-bottom:14px;">
+            <div>
+              <h2>设计重点</h2>
+              <span>不是会议摘要，而是 outcome closure。</span>
+            </div>
+          </div>
+          <div class="slot-list">
+            <div class="slot">
+              <div class="slot-top">
+                <strong>Agenda-aware</strong>
+                <span class="pill">会前</span>
+              </div>
+              <p>先知道这场会原本要解决什么，而不是事后从 transcript 猜重点。</p>
+            </div>
+            <div class="slot">
+              <div class="slot-top">
+                <strong>Mention 不等于 Resolved</strong>
+                <span class="pill amber">会中</span>
+              </div>
+              <p>会中只显示提及状态；会后才根据证据装订为 resolved / partial / carry-over。</p>
+            </div>
+            <div class="slot">
+              <div class="slot-top">
+                <strong>只读优先</strong>
+                <span class="pill green">信任边界</span>
+              </div>
+              <p>复制、打开、带到下次都不会自动写 Calendar、Jira、RingCentral 或外部 AI。</p>
+            </div>
+            <div class="slot">
+              <div class="slot-top">
+                <strong>下一次继续</strong>
+                <span class="pill">记忆复用</span>
+              </div>
+              <p>未闭环项进入下一次会前准备和 Ask source card，不变成新的 review queue。</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const titles = {
+      prep: ['RingCentral Video Home · 今日会议', '会前只显示一行本场要闭环，不要求用户进入 review queue。'],
+      live: ['Meeting Pilot · 会中侧栏', '提到不等于解决；会中只显示当前可见证据口径。'],
+      after: ['Meeting Pilot Panorama · 会后结果装订', '把 agenda slot 和会议证据装订成 resolved / partial / carry-over。'],
+      ask: ['Quick Ask · 基于结果装订回答', 'Ask 优先使用 binder source card，而不是只读 raw transcript。']
+    };
+
+    const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
+    const panels = Array.from(document.querySelectorAll('[data-panel]'));
+    const title = document.querySelector('#view-title');
+    const subtitle = document.querySelector('#view-subtitle');
+    const toast = document.querySelector('#toast');
+    let toastTimer = null;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    navButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const view = button.dataset.view;
+        navButtons.forEach((item) => item.classList.toggle('active', item === button));
+        panels.forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === view));
+        title.textContent = titles[view][0];
+        subtitle.textContent = titles[view][1];
+      });
+    });
+
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const innerViews = Array.from(document.querySelectorAll('[data-inner]'));
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.tab;
+        tabs.forEach((item) => item.classList.toggle('active', item === tab));
+        innerViews.forEach((view) => view.classList.toggle('active', view.dataset.inner === target));
+      });
+    });
+
+    document.querySelectorAll('[data-toast]').forEach((button) => {
+      button.addEventListener('click', () => showToast(button.dataset.toast));
+    });
+  </script>
+</body>
+</html>

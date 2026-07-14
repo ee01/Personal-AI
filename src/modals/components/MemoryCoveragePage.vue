@@ -22,6 +22,8 @@
             class="btn primary"
             type="button"
             :disabled="exportingBackup"
+            :title="backupExportActionBoundary"
+            :aria-label="backupExportActionBoundary"
             @click="exportBackup"
           >
             {{ exportingBackup ? '下载中...' : '记忆备份' }}
@@ -30,6 +32,8 @@
             class="btn primary"
             type="button"
             :disabled="loading"
+            :title="manualCoverageRefreshActionBoundary"
+            :aria-label="manualCoverageRefreshActionBoundary"
             @click="refreshCoverageManually"
           >
             {{ loading ? '刷新中...' : '重扫覆盖' }}
@@ -48,6 +52,25 @@
         <strong>下载前先确认边界</strong>
       </div>
       <p>{{ backupPreActionReceiptText }}</p>
+    </section>
+    <section
+      v-if="showBackupDownloadPendingReceipt"
+      class="backup-download-pending-receipt"
+      aria-label="备份下载提交中回执"
+    >
+      <div>
+        <span>备份下载提交中回执</span>
+        <strong>正在请求 backup zip</strong>
+      </div>
+      <dl>
+        <div
+          v-for="item in backupDownloadPendingReceiptItems"
+          :key="item.label"
+        >
+          <dt>{{ item.label }}</dt>
+          <dd>{{ item.value }}</dd>
+        </div>
+      </dl>
     </section>
 
     <div v-if="errorMessage" class="status-box error">
@@ -95,7 +118,7 @@
     <template v-if="coverage">
       <section
         class="snapshot-receipt"
-        :class="{ warn: Boolean(errorMessage), loading }"
+        :class="{ warn: Boolean(errorMessage) || coverageSnapshotIsStale, loading }"
         aria-label="覆盖快照回执"
       >
         <div>
@@ -124,6 +147,65 @@
             <dd>{{ item.value }}</dd>
           </div>
         </dl>
+      </section>
+
+      <section
+        class="coverage-diagnostics"
+        :class="{
+          loading: coverageDiagnosticsLoading,
+          error: Boolean(coverageDiagnosticsError),
+        }"
+        aria-label="P0 只读诊断切片"
+      >
+        <header class="coverage-diagnostics-head">
+          <div>
+            <span>P0 只读诊断切片</span>
+            <strong>{{ coverageDiagnosticsTitle }}</strong>
+          </div>
+          <button
+            class="inline-action"
+            type="button"
+            :disabled="coverageDiagnosticsLoading"
+            :title="coverageDiagnosticsRefreshActionBoundary"
+            :aria-label="coverageDiagnosticsRefreshActionBoundary"
+            @click="refreshCoverageDiagnostics"
+          >
+            {{ coverageDiagnosticsLoading ? '读取中...' : '刷新切片' }}
+          </button>
+        </header>
+        <p>{{ coverageDiagnosticsText }}</p>
+        <div
+          v-if="coverageDiagnostics.length > 0"
+          class="coverage-diagnostics-grid"
+        >
+          <article
+            v-for="slice in coverageDiagnostics"
+            :key="slice.receipt.slice"
+            class="coverage-diagnostic-card"
+          >
+            <div>
+              <span>{{ diagnosticSliceLabel(slice.receipt.slice) }}</span>
+              <strong>{{ diagnosticSlicePrimaryText(slice) }}</strong>
+            </div>
+            <dl>
+              <div
+                v-for="item in diagnosticSliceReceiptItems(slice)"
+                :key="item.label"
+              >
+                <dt>{{ item.label }}</dt>
+                <dd>{{ item.value }}</dd>
+              </div>
+            </dl>
+            <p>{{ slice.receipt.boundary }}</p>
+          </article>
+        </div>
+        <div
+          v-else
+          class="coverage-diagnostics-empty"
+          aria-label="P0 只读诊断切片空态"
+        >
+          {{ coverageDiagnosticsEmptyText }}
+        </div>
       </section>
 
       <section class="summary-strip" aria-label="覆盖总览">
@@ -185,7 +267,13 @@
             </div>
           </dl>
         </div>
-        <button class="inline-action" type="button" @click="focusQualityPlatform">
+        <button
+          class="inline-action"
+          type="button"
+          :title="qualityFocusActionBoundary"
+          :aria-label="qualityFocusActionBoundary"
+          @click="focusQualityPlatform"
+        >
           查看平台
         </button>
       </section>
@@ -205,6 +293,8 @@
           <button
             type="button"
             :class="{ active: platformSortMode === 'default' }"
+            :title="defaultSortActionBoundary"
+            :aria-label="defaultSortActionBoundary"
             @click="platformSortMode = 'default'"
           >
             默认
@@ -212,11 +302,30 @@
           <button
             type="button"
             :class="{ active: platformSortMode === 'lowScore' }"
+            :title="lowScoreSortActionBoundary"
+            :aria-label="lowScoreSortActionBoundary"
             @click="platformSortMode = 'lowScore'"
           >
             低分优先
           </button>
         </div>
+      </section>
+
+      <section
+        v-if="platformSortMode === 'lowScore'"
+        class="sort-receipt"
+        aria-label="质量分排序回执"
+      >
+        <span>质量分排序回执</span>
+        <dl>
+          <div
+            v-for="item in lowScoreSortReceiptItems"
+            :key="item.label"
+          >
+            <dt>{{ item.label }}</dt>
+            <dd>{{ item.value }}</dd>
+          </div>
+        </dl>
       </section>
 
       <section
@@ -337,6 +446,22 @@
                   <span>失败惩罚</span>
                   <strong>-{{ selectedPlatform.qualityScoreBreakdown.failingPenalty }}</strong>
                 </div>
+              </div>
+              <div
+                v-if="scoreSnapshotReceiptItems.length"
+                class="score-snapshot-receipt"
+                aria-label="质量分快照口径"
+              >
+                <span>质量分快照口径</span>
+                <dl>
+                  <div
+                    v-for="item in scoreSnapshotReceiptItems"
+                    :key="item.label"
+                  >
+                    <dt>{{ item.label }}</dt>
+                    <dd>{{ item.value }}</dd>
+                  </div>
+                </dl>
               </div>
               <div
                 v-if="scoreBoundaryItems.length"
@@ -483,6 +608,19 @@
         >
           <strong>{{ timelineReceiptTitle }}</strong>
           <p>{{ timelineReceiptText }}</p>
+          <dl
+            v-if="timelineReceiptItems.length"
+            class="timeline-receipt-grid"
+            aria-label="最近覆盖信号切片说明"
+          >
+            <div
+              v-for="item in timelineReceiptItems"
+              :key="item.label"
+            >
+              <dt>{{ item.label }}</dt>
+              <dd>{{ item.value }}</dd>
+            </div>
+          </dl>
         </div>
         <div v-if="coverage.timeline.length > 0" class="timeline-list">
           <div
@@ -544,6 +682,9 @@
             type="button"
             class="source-chip"
             :class="{ active: importMode === 'paste' }"
+            :disabled="importBusy"
+            :title="importSourceControlBoundary('粘贴文本')"
+            :aria-label="importSourceControlBoundary('粘贴文本')"
             @click="switchToPaste"
           >
             粘贴文本
@@ -552,6 +693,9 @@
             type="button"
             class="source-chip"
             :class="{ active: importMode === 'file' && detectedImportLabel === '文档' }"
+            :disabled="importBusy"
+            :title="importSourceControlBoundary('文档')"
+            :aria-label="importSourceControlBoundary('文档')"
             @click="openImportFilePicker('file')"
           >
             文档
@@ -560,6 +704,9 @@
             type="button"
             class="source-chip"
             :class="{ active: importMode === 'file' && detectedImportLabel === '普通 zip' }"
+            :disabled="importBusy"
+            :title="importSourceControlBoundary('普通 zip')"
+            :aria-label="importSourceControlBoundary('普通 zip')"
             @click="openImportFilePicker('file')"
           >
             普通 zip
@@ -568,6 +715,9 @@
             type="button"
             class="source-chip"
             :class="{ active: importMode === 'file' && detectedImportLabel === '外部 AI 历史' }"
+            :disabled="importBusy"
+            :title="importSourceControlBoundary('外部 AI')"
+            :aria-label="importSourceControlBoundary('外部 AI')"
             @click="openImportFilePicker('file')"
           >
             外部 AI
@@ -576,6 +726,9 @@
             type="button"
             class="source-chip"
             :class="{ active: importMode === 'backup' || isBackupRestoreCandidate }"
+            :disabled="importBusy"
+            :title="backupZipModeButtonBoundary"
+            :aria-label="backupZipModeButtonBoundary"
             @click="openImportFilePicker('backup')"
           >
             备份 zip
@@ -603,10 +756,24 @@
             <p>{{ importHintText }}</p>
           </div>
           <div class="button-row">
-            <button class="btn" type="button" @click="openImportFilePicker('file')">
+            <button
+              class="btn"
+              type="button"
+              :disabled="importBusy"
+              :title="importFilePickerBoundary"
+              :aria-label="importFilePickerBoundary"
+              @click="openImportFilePicker('file')"
+            >
               选择文件
             </button>
-            <button class="btn" type="button" @click="switchToPaste">
+            <button
+              class="btn"
+              type="button"
+              :disabled="importBusy"
+              :title="importSourceControlBoundary('粘贴文本')"
+              :aria-label="importSourceControlBoundary('粘贴文本')"
+              @click="switchToPaste"
+            >
               粘贴文本
             </button>
           </div>
@@ -614,7 +781,12 @@
 
         <label v-if="showImportScopeSelector" class="scope-row">
           <span>写入范围</span>
-          <select v-model="importScope">
+          <select
+            v-model="importScope"
+            :disabled="importBusy"
+            :title="importScopeSelectorBoundary"
+            :aria-label="importScopeSelectorBoundary"
+          >
             <option value="work">work</option>
             <option value="personal">personal</option>
           </select>
@@ -640,6 +812,9 @@
           v-model="importText"
           class="paste-box"
           placeholder="粘贴会议纪要、项目资料、偏好、AI 对话片段或 skill 草稿..."
+          :disabled="importBusy"
+          :title="importTextInputBoundary"
+          :aria-label="importTextInputBoundary"
           @input="resetImportInspection"
         ></textarea>
 
@@ -740,6 +915,36 @@
           <strong>提交前会发生什么</strong>
           <div
             v-for="item in externalAiDecisionReceiptItems"
+            :key="item.label"
+          >
+            <span>{{ item.label }}</span>
+            <p>{{ item.value }}</p>
+          </div>
+        </div>
+
+        <div
+          v-if="showExternalAiCommitPendingReceipt"
+          class="external-ai-pending-box"
+          aria-label="外部 AI 写入提交中回执"
+        >
+          <strong>外部 AI 写入提交中回执</strong>
+          <div
+            v-for="item in externalAiCommitPendingReceiptItems"
+            :key="item.label"
+          >
+            <span>{{ item.label }}</span>
+            <p>{{ item.value }}</p>
+          </div>
+        </div>
+
+        <div
+          v-if="showSmartImportCommitPendingReceipt"
+          class="smart-import-receipt smart-import-pending-receipt"
+          aria-label="资料写入提交中回执"
+        >
+          <strong>资料写入提交中回执</strong>
+          <div
+            v-for="item in smartImportCommitPendingReceiptItems"
             :key="item.label"
           >
             <span>{{ item.label }}</span>
@@ -950,6 +1155,8 @@
           class="btn primary"
           type="button"
           :disabled="primaryImportDisabled"
+          :title="primaryImportActionBoundary"
+          :aria-label="primaryImportActionBoundary"
           @click="handlePrimaryImportAction"
         >
           {{ primaryImportLabel }}
@@ -969,12 +1176,14 @@ import {
   type MemoryBackupImportResponse,
   type MemoryBackupImportPreviewResponse,
   type MemoryCoverageContribution,
+  type MemoryCoverageDiagnosticSliceResponse,
   type MemoryCoverageDirection,
   type MemoryCoverageMapResponse,
   type MemoryCoveragePlatform,
   type MemoryCoveragePlatformGroup,
   type MemoryCoveragePriorityFocus,
   type MemoryCoverageRepairAction,
+  type MemoryCoverageSliceName,
   type MemoryCoverageState,
   type SmartMemoryImportCommitResponse,
   type SmartMemoryImportInspectResponse,
@@ -1004,6 +1213,7 @@ interface BackupRestoreFailureReceipt {
   backupUserId?: string;
   targetUserId?: string;
   includeCount?: number;
+  archiveSha256?: string;
 }
 
 interface BackupRestoreCoverageRefreshReceipt {
@@ -1031,10 +1241,15 @@ const coverageReadAt = ref<number | null>(null);
 const coverageRefreshFailedAt = ref<number | null>(null);
 const manualCoverageRefreshReceipt =
   ref<ManualCoverageRefreshReceipt | null>(null);
+const coverageDiagnostics = ref<MemoryCoverageDiagnosticSliceResponse[]>([]);
+const coverageDiagnosticsLoading = ref(false);
+const coverageDiagnosticsError = ref('');
+const coverageDiagnosticsReadAt = ref<number | null>(null);
 const selectedPlatformId = ref('');
 const repairScope = ref<'selected' | 'all'>('selected');
 const platformSortMode = ref<'default' | 'lowScore'>('default');
 const exportingBackup = ref(false);
+const backupExportRequestedAt = ref<number | null>(null);
 const backupDownloadReceipt = ref<BackupDownloadReceipt | null>(null);
 const backupDownloadFailureReceipt = ref<BackupDownloadFailureReceipt | null>(null);
 const toastText = ref('');
@@ -1049,6 +1264,7 @@ const importInspect = ref<SmartMemoryImportInspectResponse | null>(null);
 const importBusy = ref(false);
 const importStatus = ref('');
 const importError = ref('');
+const smartImportCommitPending = ref(false);
 const replaceExisting = ref(false);
 const backupPreview = ref<MemoryBackupImportPreviewResponse | null>(null);
 const backupRestoreReceipt = ref<MemoryBackupImportResponse | null>(null);
@@ -1078,6 +1294,7 @@ const scorePriorityRank: Record<MemoryCoverageState, number> = {
   partial: 7,
   healthy: 99,
 };
+const TIMELINE_VISIBLE_LIMIT = 8;
 
 const platformGroups = computed(() => {
   const platforms = coverage.value?.platforms ?? [];
@@ -1139,6 +1356,61 @@ const globalPlanningActionCount = computed(
     coverage.value?.repairActions.filter((action) => action.severity === 'info')
       .length ?? 0,
 );
+
+const lowScoreSortedPlatformCount = computed(
+  () =>
+    coverage.value?.platforms.filter(
+      (platform) => platform.group === 'active' || platform.group === 'derived',
+    ).length ?? 0,
+);
+
+const lowScoreExcludedPlatformCount = computed(
+  () =>
+    coverage.value?.platforms.filter(
+      (platform) => platform.group === 'inactive' || platform.group === 'system',
+    ).length ?? 0,
+);
+
+const lowScoreSortReceiptItems = computed(() => [
+  {
+    label: '排序范围',
+    value: `当前快照中 ${formatCount(
+      lowScoreSortedPlatformCount.value,
+    )} 个已激活 / 派生平台在各自分组内按质量分升序排列。`,
+  },
+  {
+    label: '排除项',
+    value: `${formatCount(
+      lowScoreExcludedPlatformCount.value,
+    )} 个未启用通道 / 系统入口保持原分组口径；info 规划项不算当前覆盖故障。`,
+  },
+  {
+    label: '分数口径',
+    value:
+      '质量分只衡量可读覆盖状态、贡献项健康、新鲜度和失败/积压惩罚，不判断内容事实正确性或是否足够进入回复/画像。',
+  },
+  {
+    label: '无副作用',
+    value:
+      '切换排序只重排当前前端快照，不重扫 Coverage API、不重跑 provider sync、不写库、不标记已读，也不外发。',
+  },
+]);
+
+const defaultSortActionBoundary = computed(() => {
+  if (platformSortMode.value === 'default') {
+    return '默认排序：当前已经按 Coverage API 返回顺序和平台分组展示；再次点击不会重扫 Coverage API、重算质量分、重跑 provider sync、写库、标记已读或外发。';
+  }
+  return '默认排序：只把当前前端快照恢复为 Coverage API 返回顺序和平台分组；不会重扫 Coverage API、重算质量分、重跑 provider sync、写库、标记已读或外发。';
+});
+
+const lowScoreSortActionBoundary = computed(() => {
+  const sortedCount = formatCount(lowScoreSortedPlatformCount.value);
+  const excludedCount = formatCount(lowScoreExcludedPlatformCount.value);
+  if (platformSortMode.value === 'lowScore') {
+    return `低分优先：当前已把 ${sortedCount} 个已激活 / 派生平台按当前 qualityScore 升序排列，${excludedCount} 个未启用通道 / 系统入口仍按原分组展示；再次点击不会重扫 Coverage API、重算质量分、重跑 provider sync、写库、标记已读或外发。`;
+  }
+  return `低分优先：只把当前前端快照里的 ${sortedCount} 个已激活 / 派生平台按当前 qualityScore 升序重排，${excludedCount} 个未启用通道 / 系统入口不参与低分故障排序；不会重扫 Coverage API、重算质量分、重跑 provider sync、写库、标记已读或外发。`;
+});
 
 const visibleRepairActions = computed<MemoryCoverageRepairAction[]>(() => {
   if (!coverage.value) return [];
@@ -1212,9 +1484,27 @@ const serviceStatusText = computed(() => {
   )} chunks · ${formatCount(coverage.value.summary.totalEntities)} entities`;
 });
 
+const coverageSnapshotAgeSeconds = computed(() => {
+  const generatedAt = coverage.value?.generatedAt;
+  if (!generatedAt) return null;
+  return Math.max(0, Math.floor(Date.now() / 1000) - generatedAt);
+});
+
+const coverageSnapshotAgeText = computed(() =>
+  formatDuration(coverageSnapshotAgeSeconds.value),
+);
+
+const coverageSnapshotIsStale = computed(() => {
+  const currentCoverage = coverage.value;
+  const ageSeconds = coverageSnapshotAgeSeconds.value;
+  if (!currentCoverage || ageSeconds === null) return false;
+  return ageSeconds > currentCoverage.staleAfterDays * 86400;
+});
+
 const coverageSnapshotReceiptTitle = computed(() => {
   if (errorMessage.value && coverage.value) return '显示上次成功快照';
   if (loading.value && coverage.value) return '正在重扫，先保留当前快照';
+  if (coverageSnapshotIsStale.value) return '覆盖快照已过期';
   return '当前快照可用';
 });
 
@@ -1224,6 +1514,11 @@ const coverageSnapshotReceiptText = computed(() => {
   const mapReceipt = coverage.value?.receipt;
   const generatedText = formatTime(generatedAt);
   const readText = formatTime(readAt);
+  const ageText = coverageSnapshotAgeText.value;
+  const staleWindowDays = coverage.value?.staleAfterDays ?? 7;
+  const ageBoundaryText = coverageSnapshotIsStale.value
+    ? `快照年龄${ageText}，已超过 ${staleWindowDays} 天新鲜度窗口；质量分和平台卡片仍来自旧快照，先点击重扫覆盖确认当前状态。`
+    : `快照年龄${ageText}，仍在 ${staleWindowDays} 天新鲜度窗口内。`;
   const receiptSummaryText = mapReceipt
     ? `本轮聚合 ${formatCount(
         mapReceipt.summary.activeDerivedPlatformCount,
@@ -1235,15 +1530,15 @@ const coverageSnapshotReceiptText = computed(() => {
     : '';
   if (errorMessage.value && coverage.value) {
     const failedText = formatTime(coverageRefreshFailedAt.value);
-    return `重扫失败于 ${failedText}；当前仍显示服务端 ${generatedText} 生成、本机 ${readText} 读取的上次成功快照，不会用失败结果覆盖平台卡片。`;
+    return `重扫失败于 ${failedText}；当前仍显示服务端 ${generatedText} 生成、本机 ${readText} 读取的上次成功快照。${ageBoundaryText}不会用失败结果覆盖平台卡片。`;
   }
   if (loading.value && coverage.value) {
-    return `正在重新读取 Coverage API；重扫完成前，平台卡片仍来自服务端 ${generatedText} 生成、本机 ${readText} 读取的快照。`;
+    return `正在重新读取 Coverage API；重扫完成前，平台卡片仍来自服务端 ${generatedText} 生成、本机 ${readText} 读取的快照。${ageBoundaryText}`;
   }
   if (mapReceipt) {
-    return `本页显示 Coverage API 聚合快照：服务端生成于 ${generatedText}，本机读取于 ${readText}；${mapReceipt.boundary} 重扫只刷新覆盖状态，不会自动改同步设置或写入外部平台。${receiptSummaryText}`;
+    return `本页显示 Coverage API 聚合快照：服务端生成于 ${generatedText}，本机读取于 ${readText}；${ageBoundaryText}${mapReceipt.boundary} 重扫只刷新覆盖状态，不会自动改同步设置或写入外部平台。${receiptSummaryText}`;
   }
-  return `本页显示 Coverage API 聚合快照：服务端生成于 ${generatedText}，本机读取于 ${readText}；重扫只刷新覆盖状态，不会自动改同步设置或写入外部平台。`;
+  return `本页显示 Coverage API 聚合快照：服务端生成于 ${generatedText}，本机读取于 ${readText}；${ageBoundaryText}重扫只刷新覆盖状态，不会自动改同步设置或写入外部平台。`;
 });
 
 const manualCoverageRefreshReceiptTitle = computed(() => {
@@ -1303,6 +1598,90 @@ const manualCoverageRefreshReceiptItems = computed(() => {
         '重扫只重新读取 /coverage/map；没有重跑 provider sync、没有写库、没有标记已读，也没有同步或外发到任何平台。',
     },
   ];
+});
+
+const manualCoverageRefreshActionBoundary = computed(() => {
+  if (loading.value && coverage.value) {
+    return '重扫覆盖：正在重新读取 /coverage/map；完成前继续显示旧平台卡片、质量分焦点、修复队列和时间线，不会重跑 provider sync、写库、标记已读、改配置或外发。';
+  }
+  if (loading.value) {
+    return '重扫覆盖：正在读取 /coverage/map；成功前不会把加载中当作当前质量分，也不会重跑 provider sync、写库、标记已读、改配置或外发。';
+  }
+  if (coverage.value) {
+    return '重扫覆盖：只重新读取 /coverage/map；成功后才替换平台卡片、质量分焦点、修复队列和时间线，不会重跑 provider sync、写库、标记已读、改配置或外发。';
+  }
+  return '重扫覆盖：只读取 /coverage/map 生成覆盖快照和质量分；不会重跑 provider sync、写库、标记已读、改配置或外发。';
+});
+
+const coverageDiagnosticsTitle = computed(() => {
+  if (coverageDiagnosticsLoading.value && coverageDiagnostics.value.length === 0) {
+    return '正在读取四个 P0 切片';
+  }
+  if (coverageDiagnosticsLoading.value) {
+    return '正在刷新，先保留上次切片';
+  }
+  if (coverageDiagnosticsError.value && coverageDiagnostics.value.length === 0) {
+    return '切片读取失败';
+  }
+  if (coverageDiagnosticsError.value) {
+    return '显示上次成功切片';
+  }
+  if (coverageDiagnostics.value.length > 0) {
+    return '切片已读取';
+  }
+  return '等待主快照后读取';
+});
+
+const coverageDiagnosticsText = computed(() => {
+  const sliceCount = coverageDiagnostics.value.length;
+  const latestGeneratedAt = latestDiagnosticGeneratedAt();
+  const generatedText = latestGeneratedAt
+    ? `服务端最新生成于 ${formatTime(latestGeneratedAt)}`
+    : '尚未取得服务端生成时间';
+  const readText = coverageDiagnosticsReadAt.value
+    ? `本机读取于 ${formatTime(coverageDiagnosticsReadAt.value)}`
+    : '本机尚未读取成功';
+  const boundary =
+    '这里只读取 messages、provider jobs、压力队列和技能同步四个诊断切片；不会写入记忆、重跑 provider sync、修复配置、标记已读或外发。';
+
+  if (coverageDiagnosticsLoading.value && sliceCount > 0) {
+    return `正在重新读取 P0 诊断切片；完成前保留 ${formatCount(sliceCount)} 个上次成功切片。${boundary}`;
+  }
+  if (coverageDiagnosticsError.value && sliceCount > 0) {
+    return `切片读取失败，主覆盖地图不受影响；当前仍显示 ${generatedText}、${readText} 的上次成功只读切片。失败原因：${coverageDiagnosticsError.value}。${boundary}`;
+  }
+  if (coverageDiagnosticsError.value) {
+    return `P0 诊断切片读取失败，主覆盖地图不受影响；失败原因：${coverageDiagnosticsError.value}。${boundary}`;
+  }
+  if (sliceCount > 0) {
+    return `已读取 ${formatCount(sliceCount)} 个 P0 诊断切片，${generatedText}，${readText}。${boundary}`;
+  }
+  return `主覆盖快照加载后会读取 P0 诊断切片；${boundary}`;
+});
+
+const coverageDiagnosticsRefreshActionBoundary = computed(() => {
+  if (coverageDiagnosticsLoading.value && coverageDiagnostics.value.length > 0) {
+    return `刷新切片：正在重新读取四个 P0 诊断切片；完成前保留 ${formatCount(
+      coverageDiagnostics.value.length,
+    )} 个上次成功切片，不会重扫 /coverage/map、不会替换质量分、不会重跑 provider sync、不会写库、不会修复配置、不会标记已读或外发。`;
+  }
+  if (coverageDiagnosticsLoading.value) {
+    return '刷新切片：正在读取 messages、provider jobs、压力队列和技能同步四个 P0 诊断切片；不会重扫 /coverage/map、不会替换质量分、不会重跑 provider sync、不会写库、不会修复配置、不会标记已读或外发。';
+  }
+  if (coverageDiagnosticsError.value && coverageDiagnostics.value.length > 0) {
+    return '刷新切片：只重试四个 P0 诊断切片并继续保留上次成功切片；不会重扫 /coverage/map、不会替换质量分、不会重跑 provider sync、不会写库、不会修复配置、不会标记已读或外发。';
+  }
+  return '刷新切片：只重新读取 messages、provider jobs、压力队列和技能同步四个 P0 诊断切片；不会重扫 /coverage/map、不会替换质量分、不会重跑 provider sync、不会写库、不会修复配置、不会标记已读或外发。';
+});
+
+const coverageDiagnosticsEmptyText = computed(() => {
+  if (coverageDiagnosticsLoading.value) {
+    return '正在读取只读诊断切片；这一步不会替你重扫外部平台或写入 Memory Service。';
+  }
+  if (coverageDiagnosticsError.value) {
+    return '切片读取失败；主覆盖快照仍可继续使用，修复服务连接后可点「刷新切片」重试。';
+  }
+  return '尚未返回诊断切片；等待主快照读取完成。';
 });
 
 const selectedFileName = computed(() => importFile.value?.name ?? '');
@@ -1399,6 +1778,34 @@ const smartImportScopeReceiptItems = computed(() => {
       value: omissionBoundary,
     },
   ];
+});
+
+function importSourceControlBoundary(label: string): string {
+  if (importBusy.value) {
+    return `${label}：当前录入请求处理中；本次请求仍使用点击时的输入/文件和 ${importScope.value} 范围，完成前不能切换来源，避免把旧 dry-run 或写入结果挂到新来源。`;
+  }
+  return `${label}：切换来源会清空本次 dry-run、提交中和完成回执；选择后需要重新 dry-run，不会自动写入、恢复、同步或外发。`;
+}
+
+const importFilePickerBoundary = computed(() => {
+  if (importBusy.value) {
+    return `选择文件：当前录入请求处理中；本次请求仍使用点击时的输入/文件和 ${importScope.value} 范围，完成前不能选择新文件，避免把旧 dry-run 或写入结果挂到新文件。`;
+  }
+  return '选择文件：只打开本机文件选择器；选中文档、普通 zip、外部 AI 历史或备份 zip 后仍会先 dry-run，不会自动写入、恢复、同步或外发。';
+});
+
+const importScopeSelectorBoundary = computed(() => {
+  if (importBusy.value) {
+    return `写入范围：当前录入请求处理中；本次请求仍使用点击时的 ${importScope.value} 范围，完成前不能切换 work/personal，避免旧结果挂到新范围。`;
+  }
+  return '写入范围：切换 work/personal 会清空本次 dry-run、提交中和完成回执；新范围必须重新 dry-run 后才可能提交。';
+});
+
+const importTextInputBoundary = computed(() => {
+  if (importBusy.value) {
+    return `粘贴文本：当前录入请求处理中；本次请求仍使用点击时的文本快照和 ${importScope.value} 范围，完成前不能编辑，避免旧结果挂到新文本。`;
+  }
+  return '粘贴文本：修改内容会清空本次 dry-run、提交中和完成回执；新文本必须重新 dry-run，不会自动写入或外发。';
 });
 
 const smartImportReceiptTitle = computed(() => {
@@ -1507,6 +1914,15 @@ const smartImportReceiptDetails = computed(() => {
         warningCount > 0 ? ` 保留 ${formatCount(warningCount)} 条提交提醒。` : ''
       }`,
     },
+    ...(receipt.detectedKind === 'external_ai_history'
+      ? [
+          {
+            label: '事实边界',
+            value:
+              '已写入的用户原话和旧 assistant 回答仍只是可追溯对话证据；后续召回、画像、skill 或项目事实需要各自证据门控。',
+          },
+        ]
+      : []),
   ];
 });
 
@@ -1707,9 +2123,142 @@ const externalAiDecisionReceiptItems = computed(() => {
       value: `只读取用户上传 zip 里的 ${sourcePath}；不会自动抓取 ChatGPT / Claude / Gemini，也不会把内容外发回原平台。`,
     },
     {
+      label: '事实边界',
+      value:
+        '历史对话只作为来源证据：用户原话不等于当前偏好永久确认，旧 assistant 回答不等于事实确认；Ask / Profile / Skill / Project 仍需后续证据门控。',
+    },
+    {
       label: '恢复与去重',
       value:
         '同一归档会按 source hash 去重；需要移除或复查时按 import batch / source 路径审计，不靠重复导入自动覆盖删除。',
+    },
+  ];
+});
+
+const showExternalAiCommitPendingReceipt = computed(
+  () =>
+    smartImportCommitPending.value &&
+    isExternalAiImport.value &&
+    !smartImportReceipt.value,
+);
+
+const externalAiCommitPendingReceiptItems = computed(() => {
+  const inspect = importInspect.value;
+  const summary = inspect?.summary;
+  if (!inspect || !summary || !isExternalAiImport.value) return [];
+  const conversations = summary.externalAiConversations ?? summary.readyFiles;
+  const importedMessages = summary.externalAiImportedMessages ?? 0;
+  const totalMessages = summary.externalAiTotalMessages ?? importedMessages;
+  const omittedParts =
+    (summary.externalAiTruncatedMessages ?? 0) +
+    (summary.externalAiSkippedParts ?? 0) +
+    (summary.externalAiIgnoredFiles ?? 0);
+  const omittedText =
+    omittedParts > 0
+      ? `；${formatCount(omittedParts)} 个截断/非文本/非对话归档项仍不会写入`
+      : '';
+  return [
+    {
+      label: '当前请求',
+      value: `已提交 ${formatCount(conversations)} 个会话、${formatCount(
+        importedMessages,
+      )}/${formatCount(totalMessages)} 条文本消息到 ${importScope.value} 范围；服务端尚未返回写入确认${omittedText}。`,
+    },
+    {
+      label: '等待边界',
+      value:
+        '提交中不代表已经写入成功；完成前不会生成新的 batch id，也不会把旧 dry-run 当作成功回执。',
+    },
+    {
+      label: '来源边界',
+      value: `本次仍只使用上传 zip 里的 ${
+        summary.externalAiSourcePath || 'conversations.json'
+      }；不会继续抓取 ChatGPT / Claude / Gemini，也不会把内容外发回原平台。`,
+    },
+    {
+      label: '事实边界',
+      value:
+        '提交中仍只是把历史对话作为来源证据；旧 assistant 回答不会在服务端确认后直接变成事实、画像、skill 或项目事实。',
+    },
+    {
+      label: '写入边界',
+      value:
+        '如果服务端确认成功，也只是 manual shadow memory；不会直接升级为 confirmed 画像、skill、项目事实或外部同步结果。',
+    },
+  ];
+});
+
+const showSmartImportCommitPendingReceipt = computed(
+  () =>
+    smartImportCommitPending.value &&
+    !isExternalAiImport.value &&
+    !isBackupRestoreCandidate.value &&
+    !smartImportReceipt.value,
+);
+
+const smartImportReadyObjectText = computed(() => {
+  const inspect = importInspect.value;
+  if (!inspect) return '当前 ready 条目';
+  const readyFiles = inspect.summary.readyFiles ?? 0;
+  const unit = inspect.detectedKind === 'text' ? '个粘贴来源' : '个资料条目';
+  return `${formatCount(readyFiles)} ${unit}`;
+});
+
+const smartImportOmissionBoundaryText = computed(() => {
+  const inspect = importInspect.value;
+  if (!inspect) return '未预检、阻塞、空内容或重复来源不会写入。';
+  const blockedFiles = inspect.summary.unsupported ?? 0;
+  const skippedFiles = inspect.summary.zipSkippedFiles ?? 0;
+  const omissions: string[] = [];
+  if (blockedFiles > 0) {
+    omissions.push(`${formatCount(blockedFiles)} 个阻塞/不支持条目`);
+  }
+  if (skippedFiles > 0) {
+    omissions.push(`${formatCount(skippedFiles)} 个 zip 内未预检文件`);
+  }
+  if (omissions.length === 0) {
+    return '本次只会写入当前 dry-run 标记为 ready 的条目；空内容、重复来源或之后切换输入不会自动补写。';
+  }
+  return `${omissions.join('、')}不会在本次提交里写入，也不会被后台自动补扫。`;
+});
+
+const smartImportCommitPendingReceiptItems = computed(() => {
+  const inspect = importInspect.value;
+  if (!inspect) return [];
+  const chunks = inspect.summary.chunks ?? 0;
+  const highRisk = inspect.summary.highRisk ?? 0;
+  return [
+    {
+      label: '当前请求',
+      value: `已提交 ${smartImportReadyObjectText.value}、约 ${formatCount(
+        chunks,
+      )} 个 chunks 到 ${importScope.value} 范围；服务端尚未返回写入确认。`,
+    },
+    {
+      label: '等待边界',
+      value:
+        '提交中不代表已经写入成功；完成前不会生成新的 batch id，也不会把旧 dry-run 当作成功回执。',
+    },
+    {
+      label: '写入范围',
+      value:
+        '如果服务端确认成功，也只会写入 manual shadow memory，低 salience、temporary consolidation；不会直接升级为 confirmed 画像、skill 或项目事实。',
+    },
+    {
+      label: '遗漏边界',
+      value: smartImportOmissionBoundaryText.value,
+    },
+    {
+      label: '高风险确认',
+      value:
+        highRisk > 0
+          ? `本次包含 ${formatCount(highRisk)} 个高风险词，提交请求已带上用户确认；服务端仍会重新校验。`
+          : '本次 dry-run 没有高风险词；服务端仍会按提交内容重新校验风险。',
+    },
+    {
+      label: '无副作用',
+      value:
+        '不会自动同步外部平台、覆盖旧 batch、确认画像/skill/项目事实、发送消息或外发导入内容。',
     },
   ];
 });
@@ -1761,6 +2310,59 @@ const primaryImportDisabled = computed(() => {
   if (importMode.value !== 'paste' && !importFile.value) return true;
   if (hasHighRiskImport.value && !highRiskImportConfirmed.value) return true;
   return false;
+});
+
+const primaryImportActionBoundary = computed(() => {
+  const label = primaryImportLabel.value;
+  if (importBusy.value && smartImportCommitPending.value) {
+    return `${label}：正在提交 ${smartImportReadyObjectText.value} 到 ${importScope.value} manual shadow memory；服务端确认前不会生成 batch id、不会把旧 dry-run 当作成功，也不会同步外部平台或确认画像/skill/项目事实。`;
+  }
+  if (importBusy.value) {
+    return `${label}：正在处理当前请求；完成前不会把等待状态当作成功回执，也不会自动同步外部平台、写入未确认结果或外发内容。`;
+  }
+  if (backupRestoreReceipt.value) {
+    return `${label}：本次备份恢复已完成，按钮保持禁用；再次恢复必须重新选择备份 zip 并重新 dry-run。`;
+  }
+  if (importMode.value === 'backup' && !isBackupRestoreCandidate.value) {
+    return `${label}：请先选择 Personal AI 备份 zip；这一步不会恢复、删除、替换、同步或外发任何记忆。`;
+  }
+  if (isBackupRestoreCandidate.value) {
+    const mode = replaceExisting.value ? 'replace' : 'merge';
+    if (!backupPreview.value) {
+      return `${label}：只会按 ${mode} 请求备份恢复 dry-run，读取 manifest、archive 指纹、DB 行数和文件影响；不会写入 Memory Service、删除文件、同步外部平台或外发。`;
+    }
+    return `${label}：会按已复核的 ${mode} 预览请求备份恢复写入；不会自动启用未配置通道、同步外部平台或替用户发送内容。`;
+  }
+  if (!importInspect.value) {
+    return `${label}：只读取当前${
+      importMode.value === 'paste' ? '粘贴文本' : '选择文件'
+    }并返回类型、ready 条目、风险词和遗漏统计；不会创建 import batch、messages、chunks，也不会恢复、同步或外发。`;
+  }
+  if (importInspect.value.status === 'duplicate') {
+    return `${label}：source hash 已匹配既有 batch，本次不会提交、覆盖、删除、降权、重新同步或写回外部平台。`;
+  }
+  if (importInspect.value.status === 'blocked') {
+    return `${label}：当前 dry-run 没有 ready 条目，按钮禁用；不会创建 import batch、messages 或 chunks。`;
+  }
+  if (hasHighRiskImport.value && !highRiskImportConfirmed.value) {
+    return `${label}：当前 dry-run ready，但包含 ${formatCount(
+      importInspect.value.summary.highRisk ?? 0,
+    )} 个高风险词；必须先勾选确认，才会提交为低权重 manual shadow memory。`;
+  }
+  if (isExternalAiImport.value) {
+    const summary = importInspect.value.summary;
+    const conversations = summary.externalAiConversations ?? summary.readyFiles;
+    const importedMessages = summary.externalAiImportedMessages ?? 0;
+    const totalMessages = summary.externalAiTotalMessages ?? importedMessages;
+    return `${label}：会把 ${formatCount(conversations)} 个会话、${formatCount(
+      importedMessages,
+    )}/${formatCount(
+      totalMessages,
+    )} 条文本消息写入 ${importScope.value} manual shadow memory；不会继续抓取原平台、外发回原平台或直接确认画像/skill/项目事实。`;
+  }
+  return `${label}：会把 ${smartImportReadyObjectText.value}、约 ${formatCount(
+    importInspect.value.summary.chunks ?? 0,
+  )} 个 chunks 写入 ${importScope.value} manual shadow memory；${smartImportOmissionBoundaryText.value}不会自动同步外部平台、覆盖旧 batch、确认画像/skill/项目事实或外发导入内容。`;
 });
 
 const importReadySummaryText = computed(() => {
@@ -1897,6 +2499,22 @@ const qualityFocusReceiptItems = computed(() => {
   return items;
 });
 
+const qualityFocusActionBoundary = computed(() => {
+  const platform = qualityFocusPlatform.value;
+  if (!platform) {
+    return '查看平台：等待 Coverage 快照选择质量分焦点；点击不会重扫 Coverage API、刷新诊断切片、重跑 provider sync、写库、标记已读或外发。';
+  }
+  const source =
+    servicePriorityFocus.value?.platform.id === platform.id
+      ? '服务端 priorityFocus'
+      : '本地低分回退';
+  const contribution = qualityFocusContribution.value;
+  const contributionText = contribution
+    ? `，焦点贡献项是「${contribution.label}」`
+    : '';
+  return `查看平台：只把 ${platform.name} 定位为当前 Coverage 快照里的选中平台和修复队列${contributionText}；焦点来自 ${source}，不会重扫 Coverage API、刷新诊断切片、重跑 provider sync、改配置、写库、标记已读或外发。`;
+});
+
 watch(importScope, () => resetImportInspection());
 watch(replaceExisting, () => {
   if (backupRestoreReceipt.value) return;
@@ -1922,6 +2540,10 @@ const backupPreviewDetails = computed(() => {
     {
       label: '导出时间',
       value: formatDateTimeString(preview.backup.exportedAt),
+    },
+    {
+      label: '备份指纹',
+      value: formatArchiveFingerprint(preview.backup.archiveSha256),
     },
     {
       label: 'DB 行数',
@@ -1951,6 +2573,14 @@ const backupReceiptDetails = computed(() => {
       : '';
   return [
     {
+      label: '备份快照',
+      value: receipt.backup
+        ? `${receipt.backup.userId} -> ${receipt.backup.targetUserId} · ${formatArchiveFingerprint(
+            receipt.backup.archiveSha256,
+          )}`
+        : '服务端未返回备份快照身份；请以本次恢复结果和 dry-run 预览为准。',
+    },
+    {
       label: '数据库',
       value: `${receipt.database.action}${changedRows}`,
     },
@@ -1976,7 +2606,9 @@ const backupRestoreFailureItems = computed(() => {
     receipt.hadPreview && receipt.includeCount !== undefined
       ? `保留本次 dry-run 预览：${formatCount(receipt.includeCount)} 个备份条目，备份用户 ${
           receipt.backupUserId || '未知'
-        }，目标 ${receipt.targetUserId || '当前用户'}。`
+        }，目标 ${receipt.targetUserId || '当前用户'}，指纹 ${formatArchiveFingerprint(
+          receipt.archiveSha256,
+        )}。`
       : 'dry-run 阶段失败；没有进入真实写入，也没有覆盖当前记忆。';
   return [
     {
@@ -2007,7 +2639,9 @@ const backupDownloadReceiptText = computed(() => {
   const manifestText = receipt.manifest
     ? `Manifest 摘要已随响应头返回：${formatCount(
         receipt.manifest.includeCount,
-      )} 个清单路径，用户空间 ${receipt.manifest.userId}。`
+      )} 个清单路径，用户空间 ${receipt.manifest.userId}，指纹 ${formatArchiveFingerprint(
+        receipt.manifest.archiveSha256,
+      )}。`
     : 'Memory Service 未返回 manifest 摘要头；本页只确认文件名、大小和下载边界，恢复前仍会重新 dry-run 校验 manifest。';
   return `下载于 ${formatDateTimeString(
     new Date(receipt.downloadedAt * 1000).toISOString(),
@@ -2037,6 +2671,10 @@ const backupDownloadManifestItems = computed(() => {
       value: formatDateTimeString(manifest.exportedAt),
     },
     {
+      label: '备份指纹',
+      value: formatArchiveFingerprint(manifest.archiveSha256),
+    },
+    {
       label: '备份清单',
       value: `${formatCount(manifest.includeCount)} 个路径 · format v${
         manifest.formatVersion
@@ -2053,13 +2691,81 @@ const backupDownloadManifestItems = computed(() => {
   ];
 });
 
+const backupExportActionBoundary = computed(() => {
+  if (exportingBackup.value) {
+    return '记忆备份：正在向当前 Memory Service 发起 POST /export；完成前还没有新 zip、manifest 摘要或 archive 指纹，不会恢复、删除、替换、同步或外发任何记忆。';
+  }
+  if (backupDownloadReceipt.value) {
+    return `记忆备份：再次点击会请求新的 backup zip；下方 ${backupDownloadReceipt.value.fileName} 只是上一次下载结果，新请求成功前不会代表新备份，也不会恢复、删除、替换、同步或外发任何记忆。`;
+  }
+  if (backupDownloadFailureReceipt.value) {
+    return `记忆备份：上次下载失败于 ${formatTime(
+      backupDownloadFailureReceipt.value.failedAt,
+    )}；再次点击只会重试 POST /export，不会恢复、删除、替换、同步或外发任何记忆。`;
+  }
+  return '记忆备份：只会向当前 Memory Service 请求 backup zip 并保存到本机；不会恢复、删除、替换、同步或外发任何记忆，恢复仍需在录入里选择备份 zip 并先 dry-run。';
+});
+
 const showBackupPreActionReceipt = computed(
-  () => !backupDownloadReceipt.value && !backupDownloadFailureReceipt.value,
+  () =>
+    !exportingBackup.value &&
+    !backupDownloadReceipt.value &&
+    !backupDownloadFailureReceipt.value,
 );
 
 const backupPreActionReceiptText = computed(
   () =>
     '点击「记忆备份」只会向当前 Memory Service 请求 backup zip 并保存到本机；不会恢复、删除、替换、同步或外发任何记忆。恢复必须从「录入 > 备份 zip」重新选择文件，先 dry-run，再按 merge/replace 影响预览确认。',
+);
+
+const showBackupDownloadPendingReceipt = computed(() => exportingBackup.value);
+
+const backupDownloadPendingReceiptItems = computed(() => {
+  const requestedText = backupExportRequestedAt.value
+    ? formatTime(backupExportRequestedAt.value)
+    : '刚刚';
+  const previousState = backupDownloadReceipt.value
+    ? `下方旧下载回执仍然只是 ${backupDownloadReceipt.value.fileName} 的上一次结果，不代表本次已经保存新 zip。`
+    : backupDownloadFailureReceipt.value
+      ? `下方失败回执仍然只是上一次错误；本次请求还没有返回成功或失败。`
+      : '页面已隐藏下载前回执，改为展示本次请求的等待状态。';
+  return [
+    {
+      label: '请求状态',
+      value: `${requestedText} 已向当前 Memory Service 发起 POST /export；完成前还没有新文件名、大小或 manifest 摘要。`,
+    },
+    {
+      label: '当前屏幕',
+      value: previousState,
+    },
+    {
+      label: '无副作用',
+      value:
+        '等待导出期间不会恢复、删除、替换、同步或外发任何记忆；失败也不会覆盖当前 Memory Service 数据。',
+    },
+    {
+      label: '下一步',
+      value:
+        '请求成功后浏览器才保存新的 backup zip 并显示下载回执；失败则显示下载失败回执。恢复仍需从「录入 > 备份 zip」重新 dry-run。',
+    },
+  ];
+});
+
+const backupZipModeActionBoundary = computed(() => {
+  const fileName = selectedFileName.value;
+  if (isBackupRestoreCandidate.value) {
+    return `备份 zip：已识别 ${
+      fileName || '当前文件'
+    } 为 Personal AI 备份；点击只会重新选择备份 zip，选择后仍先做 schema 识别和 restore dry-run，不会直接恢复、删除、替换、同步或外发。`;
+  }
+  if (importMode.value === 'backup') {
+    return '备份 zip：打开文件选择器并把所选 zip 当作 Personal AI 备份候选检查；选择文件本身不会恢复、删除、替换、同步或外发任何记忆。';
+  }
+  return '备份 zip：切换到备份恢复文件选择；只检查 Personal AI backup schema，不使用普通资料 work/personal 范围，也不会直接恢复或写入。';
+});
+
+const backupZipModeButtonBoundary = computed(() =>
+  importBusy.value ? importSourceControlBoundary('备份 zip') : backupZipModeActionBoundary.value,
 );
 
 const backupRestoreNextStepItems = computed(() => {
@@ -2082,7 +2788,11 @@ const backupRestoreNextStepItems = computed(() => {
   return [
     {
       label: '恢复范围',
-      value: `已按 ${receipt.mode} 写入 ${layerText}；derived 快照不会作为运行数据恢复，后续仍以当前 Memory Service 重扫结果为准。`,
+      value: `已按 ${receipt.mode} 写入 ${layerText}；${
+        receipt.backup?.archiveSha256
+          ? `本次写入备份指纹 ${formatArchiveFingerprint(receipt.backup.archiveSha256)}；`
+          : ''
+      }derived 快照不会作为运行数据恢复，后续仍以当前 Memory Service 重扫结果为准。`,
     },
     {
       label: '覆盖刷新',
@@ -2143,7 +2853,7 @@ const backupRestorePreviewGateItems = computed(() => {
     },
     {
       label: '下一步',
-      value: `点击「继续恢复」只会按 ${mode} 请求 restore dry-run，读取 manifest、DB 行数和文件影响；不会写入 Memory Service。`,
+      value: `点击「继续恢复」只会按 ${mode} 请求 restore dry-run，读取 manifest、archive 指纹、DB 行数和文件影响；不会写入 Memory Service。`,
     },
     {
       label: '模式边界',
@@ -2236,6 +2946,37 @@ const scorePriorityHint = computed(() => {
     latestText: `最近 ${formatTime(contribution.latestAt)}`,
     evidence: contribution.evidence,
   };
+});
+
+const scoreSnapshotReceiptItems = computed(() => {
+  const currentCoverage = coverage.value;
+  const platform = selectedPlatform.value;
+  const breakdown = platform?.qualityScoreBreakdown;
+  if (!currentCoverage || !platform || !breakdown) return [];
+  const recentRatioText = `${Math.round(breakdown.recentRatio * 100)}%`;
+  const snapshotAgeText = coverageSnapshotAgeText.value;
+  const staleText = coverageSnapshotIsStale.value
+    ? `已超过 ${currentCoverage.staleAfterDays} 天新鲜度窗口`
+    : `仍在 ${currentCoverage.staleAfterDays} 天新鲜度窗口内`;
+  return [
+    {
+      label: '快照来源',
+      value: `分数来自服务端 ${formatTime(
+        currentCoverage.generatedAt,
+      )} 生成、本机 ${formatTime(coverageReadAt.value)} 读取的当前 Coverage 快照。`,
+    },
+    {
+      label: '新鲜度基准',
+      value: `当前快照年龄${snapshotAgeText}，${staleText}；${platform.name} 最近信号 ${formatTime(
+        platform.lastSeenAt,
+      )}，近 ${currentCoverage.staleAfterDays} 天信号占比 ${recentRatioText}。`,
+    },
+    {
+      label: '重新计算',
+      value:
+        '切换平台、排序或查看修复路线只读当前快照；只有重扫覆盖取得新的 /coverage/map 响应后，质量分、平台卡片和优先处理才会替换。',
+    },
+  ];
 });
 
 const scoreBoundaryItems = computed(() => {
@@ -2362,14 +3103,66 @@ const timelineReceiptText = computed(() => {
     return '等待 Coverage API 返回平台事件；本区不会触发同步、写库、标记已读或外发。';
   }
   if (currentCoverage.timeline.length === 0) {
-    return `最近覆盖信号只展示带 lastSeenAt 的平台事件；当前快照没有可排序事件，不代表来源全部健康或全部失联。重扫只读取 Coverage API，不会触发同步、写库、标记已读或外发。`;
+    return `最近覆盖信号只展示带 lastSeenAt 的平台事件；当前快照没有可排序事件，不代表来源全部健康或全部失联。下方回执说明空切片边界。`;
   }
   const staleCount = timelineStaleEventCount.value;
   const staleText =
     staleCount > 0
       ? `其中 ${formatCount(staleCount)} 条已超过 ${currentCoverage.staleAfterDays} 天新鲜度窗口。`
       : `所有展示事件都在 ${currentCoverage.staleAfterDays} 天新鲜度窗口内。`;
-  return `只展示当前快照中最多 8 条带 lastSeenAt 的平台信号，用来辅助判断地图新鲜度；${staleText}这里不是同步日志，也不会触发同步、写库、标记已读或外发。`;
+  return `最近覆盖信号是 Coverage API 返回的可见切片，用来辅助判断地图新鲜度；${staleText}下方回执说明切片上限、证明范围和无副作用边界。`;
+});
+
+const timelineReceiptItems = computed(() => {
+  const currentCoverage = coverage.value;
+  if (!currentCoverage) {
+    return [
+      {
+        label: '读取状态',
+        value:
+          '等待 /coverage/map 返回 timeline；当前没有可用切片，也没有执行同步或写入。',
+      },
+      {
+        label: '无副作用',
+        value: '本区不会触发同步、写库、标记已读或外发。',
+      },
+    ];
+  }
+  const visibleCount = currentCoverage.timeline.length;
+  const cappedText =
+    visibleCount >= TIMELINE_VISIBLE_LIMIT
+      ? `已达到 ${TIMELINE_VISIBLE_LIMIT} 条上限，后面可能还有更早的平台事件未显示。`
+      : `未达到 ${TIMELINE_VISIBLE_LIMIT} 条上限，但仍只是当前返回的可见切片。`;
+  const latestText = timelineLatestAt.value
+    ? `最新可见事件 ${formatTime(timelineLatestAt.value)}。`
+    : '当前没有可见事件。';
+  const staleText =
+    visibleCount > 0
+      ? `${formatCount(timelineStaleEventCount.value)} 条超过 ${currentCoverage.staleAfterDays} 天窗口。`
+      : `没有事件可与 ${currentCoverage.staleAfterDays} 天窗口比较。`;
+
+  return [
+    {
+      label: '可见切片',
+      value: `当前显示 ${formatCount(
+        visibleCount,
+      )} 条按 lastSeenAt 排序的平台事件；Coverage API 最多返回 ${TIMELINE_VISIBLE_LIMIT} 条。${cappedText}`,
+    },
+    {
+      label: '新鲜度基准',
+      value: `${latestText}新鲜度按服务端快照 generatedAt 和 ${currentCoverage.staleAfterDays} 天窗口判断；${staleText}`,
+    },
+    {
+      label: '不能证明',
+      value:
+        '这不是完整同步日志，不能证明所有平台已重扫、权限 / ACL 已校验、错误日志完整或内容事实正确。',
+    },
+    {
+      label: '无副作用',
+      value:
+        '这里只读取当前覆盖快照；不会重跑 provider sync、写库、标记已读、修复配置或外发。',
+    },
+  ];
 });
 
 function formatCount(value: number | undefined | null): string {
@@ -2385,6 +3178,100 @@ function formatTime(value: number | undefined | null): string {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function latestDiagnosticGeneratedAt(): number | null {
+  const timestamps = coverageDiagnostics.value
+    .map((slice) => slice.generatedAt)
+    .filter((value): value is number => typeof value === 'number' && value > 0);
+  return timestamps.length > 0 ? Math.max(...timestamps) : null;
+}
+
+function diagnosticSliceLabel(slice: MemoryCoverageSliceName): string {
+  const labels: Record<MemoryCoverageSliceName, string> = {
+    'messages-by-source': '消息来源',
+    pressure: '压力队列',
+    'provider-jobs-recent': 'Provider jobs',
+    'skills-sync': '技能同步',
+  };
+  return labels[slice] ?? slice;
+}
+
+function diagnosticSlicePrimaryText(
+  slice: MemoryCoverageDiagnosticSliceResponse,
+): string {
+  const summary = slice.receipt.summary;
+  const parts = [`${formatCount(summary.itemCount)} 行`];
+  if (typeof summary.totalCount === 'number') {
+    parts.push(`${formatCount(summary.totalCount)} 总量`);
+  }
+  if (typeof summary.recentCount === 'number') {
+    parts.push(`${formatCount(summary.recentCount)} 近 7 天`);
+  }
+  if (typeof summary.failureCount === 'number') {
+    parts.push(`${formatCount(summary.failureCount)} 失败`);
+  }
+  if (typeof summary.enabledCount === 'number') {
+    parts.push(`${formatCount(summary.enabledCount)} 启用`);
+  }
+  return parts.join(' · ');
+}
+
+function diagnosticSliceReceiptItems(
+  slice: MemoryCoverageDiagnosticSliceResponse,
+) {
+  const summary = slice.receipt.summary;
+  const latestText = summary.latestAt
+    ? formatTime(summary.latestAt)
+    : '本切片没有可排序最新时间';
+  const countParts = [
+    `行数 ${formatCount(summary.itemCount)}`,
+    typeof summary.totalCount === 'number'
+      ? `总量 ${formatCount(summary.totalCount)}`
+      : '',
+    typeof summary.recentCount === 'number'
+      ? `近 7 天 ${formatCount(summary.recentCount)}`
+      : '',
+    typeof summary.failureCount === 'number'
+      ? `失败 ${formatCount(summary.failureCount)}`
+      : '',
+    typeof summary.enabledCount === 'number'
+      ? `启用 ${formatCount(summary.enabledCount)}`
+      : '',
+  ].filter(Boolean);
+
+  return [
+    {
+      label: '来源',
+      value: slice.receipt.source,
+    },
+    {
+      label: '窗口',
+      value: `${summary.windowLabel}；最新时间 ${latestText}。`,
+    },
+    {
+      label: '读数',
+      value: countParts.join('；'),
+    },
+    {
+      label: '空态解释',
+      value: summary.emptyState,
+    },
+    {
+      label: '诊断说明',
+      value: slice.receipt.note,
+    },
+  ];
+}
+
+function formatDuration(value: number | undefined | null): string {
+  if (typeof value !== 'number') return '未知';
+  if (value < 60) return '不到 1 分钟';
+  const minutes = Math.floor(value / 60);
+  if (minutes < 60) return `约 ${formatCount(minutes)} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `约 ${formatCount(hours)} 小时`;
+  return `约 ${formatCount(Math.floor(hours / 24))} 天`;
 }
 
 function formatDateTimeString(value: string | undefined | null): string {
@@ -2409,6 +3296,10 @@ function formatCoverageScore(value: number | undefined | null): string {
 function shortId(value: string | undefined | null): string {
   if (!value) return '未知';
   return value.length > 12 ? value.slice(0, 12) : value;
+}
+
+function formatArchiveFingerprint(value: string | undefined | null): string {
+  return value ? `sha256:${shortId(value)}` : '未返回';
 }
 
 function scoreTone(score: number | undefined | null): string {
@@ -2538,6 +3429,26 @@ function showToast(message: string) {
   }, 3600);
 }
 
+async function loadCoverageDiagnostics(): Promise<void> {
+  coverageDiagnosticsLoading.value = true;
+  coverageDiagnosticsError.value = '';
+  try {
+    const client = getMemoryServiceClient();
+    coverageDiagnostics.value = await client.getMemoryCoverageDiagnosticSlices();
+    coverageDiagnosticsReadAt.value = Math.floor(Date.now() / 1000);
+  } catch (error) {
+    console.error('加载 Coverage P0 诊断切片失败:', error);
+    coverageDiagnosticsError.value =
+      error instanceof Error ? error.message : '加载 Coverage P0 诊断切片失败';
+  } finally {
+    coverageDiagnosticsLoading.value = false;
+  }
+}
+
+async function refreshCoverageDiagnostics(): Promise<void> {
+  await loadCoverageDiagnostics();
+}
+
 async function loadCoverage(
   options: { manual?: boolean } = {},
 ): Promise<boolean> {
@@ -2582,6 +3493,7 @@ async function loadCoverage(
         result.platforms[0]?.id ??
         '';
     }
+    await loadCoverageDiagnostics();
     return true;
   } catch (error) {
     console.error('加载记忆覆盖地图失败:', error);
@@ -2612,6 +3524,7 @@ async function refreshCoverageManually(): Promise<void> {
 
 async function exportBackup() {
   exportingBackup.value = true;
+  backupExportRequestedAt.value = Math.floor(Date.now() / 1000);
   try {
     const result = await getMemoryServiceClient().exportMemory();
     const url = URL.createObjectURL(result.blob);
@@ -2640,6 +3553,7 @@ async function exportBackup() {
     showToast(message);
   } finally {
     exportingBackup.value = false;
+    backupExportRequestedAt.value = null;
   }
 }
 
@@ -2661,6 +3575,7 @@ function resetImportInspection() {
   backupRestoreCoverageRefresh.value = null;
   smartImportReceipt.value = null;
   importError.value = '';
+  smartImportCommitPending.value = false;
   importStatus.value = '';
   backupRestoreReviewed.value = false;
   replaceRestoreConfirmed.value = false;
@@ -2668,12 +3583,14 @@ function resetImportInspection() {
 }
 
 function switchToPaste() {
+  if (importBusy.value) return;
   importMode.value = 'paste';
   importFile.value = null;
   resetImportInspection();
 }
 
 function openImportFilePicker(mode: ImportMode = 'file') {
+  if (importBusy.value) return;
   importMode.value = mode;
   importFileInput.value?.click();
 }
@@ -2682,6 +3599,7 @@ async function handleImportFileSelected(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0] ?? null;
   input.value = '';
+  if (importBusy.value) return;
   if (!file) return;
 
   if (importMode.value !== 'backup') {
@@ -2696,6 +3614,7 @@ async function inspectImport() {
   importBusy.value = true;
   importError.value = '';
   importStatus.value = '正在分析来源类型和可录入内容...';
+  smartImportCommitPending.value = false;
   backupPreview.value = null;
   backupRestoreFailureReceipt.value = null;
   backupRestoreReviewed.value = false;
@@ -2772,6 +3691,7 @@ async function commitSmartImport() {
   importBusy.value = true;
   importError.value = '';
   importStatus.value = '正在写入 shadow memory...';
+  smartImportCommitPending.value = true;
   try {
     const client = getMemoryServiceClient();
     const result =
@@ -2807,6 +3727,7 @@ async function commitSmartImport() {
     importError.value =
       error instanceof Error ? error.message : '智能记忆录入失败';
   } finally {
+    smartImportCommitPending.value = false;
     importBusy.value = false;
   }
 }
@@ -2878,6 +3799,7 @@ async function continueBackupRestore() {
       backupUserId: backupPreview.value?.backup.userId,
       targetUserId: backupPreview.value?.backup.targetUserId,
       includeCount: backupPreview.value?.backup.includeCount,
+      archiveSha256: backupPreview.value?.backup.archiveSha256,
     };
   } finally {
     importBusy.value = false;
@@ -2916,11 +3838,14 @@ onMounted(() => {
 .summary-card,
 .snapshot-receipt,
 .manual-refresh-receipt,
+.coverage-diagnostics,
 .backup-preaction-receipt,
+.backup-download-pending-receipt,
 .backup-download-receipt,
 .backup-download-failure-receipt,
 .quality-focus,
-.legend-bar {
+.legend-bar,
+.sort-receipt {
   background: rgba(15, 23, 42, 0.62);
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 8px;
@@ -3192,7 +4117,111 @@ code {
   line-height: 1.45;
 }
 
+.coverage-diagnostics {
+  padding: 1rem;
+}
+
+.coverage-diagnostics.loading {
+  border-color: rgba(96, 165, 250, 0.34);
+}
+
+.coverage-diagnostics.error {
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.coverage-diagnostics-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.coverage-diagnostics-head > div {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.coverage-diagnostics-head span,
+.coverage-diagnostic-card span {
+  color: #38bdf8;
+  font-size: 0.73rem;
+  font-weight: 800;
+}
+
+.coverage-diagnostics.error .coverage-diagnostics-head span {
+  color: #fca5a5;
+}
+
+.coverage-diagnostics-head strong {
+  color: #f8fafc;
+  font-size: 0.95rem;
+}
+
+.coverage-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.72rem;
+  margin-top: 0.85rem;
+}
+
+.coverage-diagnostic-card {
+  display: grid;
+  align-content: start;
+  gap: 0.72rem;
+  min-width: 0;
+  padding: 0.82rem;
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.coverage-diagnostic-card > div {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.coverage-diagnostic-card strong {
+  color: #f8fafc;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.coverage-diagnostic-card dl {
+  display: grid;
+  gap: 0.52rem;
+  margin: 0;
+}
+
+.coverage-diagnostic-card dt {
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.coverage-diagnostic-card dd {
+  margin: 0.16rem 0 0;
+  color: #e2e8f0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.coverage-diagnostic-card p,
+.coverage-diagnostics-empty {
+  color: #bfdbfe;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.coverage-diagnostics-empty {
+  margin-top: 0.75rem;
+  padding: 0.78rem;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+}
+
 .backup-preaction-receipt,
+.backup-download-pending-receipt,
 .backup-download-receipt,
 .backup-download-failure-receipt {
   display: grid;
@@ -3209,6 +4238,11 @@ code {
   background: rgba(13, 148, 136, 0.12);
 }
 
+.backup-download-pending-receipt {
+  border-color: rgba(125, 211, 252, 0.3);
+  background: rgba(8, 47, 73, 0.18);
+}
+
 .backup-download-failure-receipt {
   border-color: rgba(248, 113, 113, 0.34);
   background: rgba(127, 29, 29, 0.18);
@@ -3216,6 +4250,8 @@ code {
 
 .backup-preaction-receipt span,
 .backup-preaction-receipt strong,
+.backup-download-pending-receipt span,
+.backup-download-pending-receipt strong,
 .backup-download-receipt span,
 .backup-download-receipt strong,
 .backup-download-failure-receipt span,
@@ -3224,6 +4260,7 @@ code {
 }
 
 .backup-preaction-receipt span,
+.backup-download-pending-receipt span,
 .backup-download-receipt span,
 .backup-download-failure-receipt span {
   color: #93c5fd;
@@ -3235,11 +4272,16 @@ code {
   color: #5eead4;
 }
 
+.backup-download-pending-receipt span {
+  color: #7dd3fc;
+}
+
 .backup-download-failure-receipt span {
   color: #fca5a5;
 }
 
 .backup-preaction-receipt strong,
+.backup-download-pending-receipt strong,
 .backup-download-receipt strong,
 .backup-download-failure-receipt strong {
   margin-top: 0.2rem;
@@ -3254,6 +4296,27 @@ code {
   margin: 0;
   color: #cbd5e1;
   text-align: right;
+}
+
+.backup-download-pending-receipt dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.52rem;
+  margin: 0;
+}
+
+.backup-download-pending-receipt dt {
+  color: #bae6fd;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.backup-download-pending-receipt dd {
+  margin: 0.18rem 0 0;
+  color: #dbeafe;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .backup-receipt-body {
@@ -3430,6 +4493,49 @@ code {
   padding: 0.65rem 0.85rem;
   color: #94a3b8;
   font-size: 0.76rem;
+}
+
+.sort-receipt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: start;
+  padding: 0.72rem 0.85rem;
+  border-color: rgba(125, 211, 252, 0.22);
+  background: rgba(8, 47, 73, 0.14);
+}
+
+.sort-receipt > span {
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sort-receipt dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.52rem;
+  margin: 0;
+}
+
+.sort-receipt div {
+  min-width: 0;
+}
+
+.sort-receipt dt {
+  color: #bae6fd;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.sort-receipt dd {
+  margin: 0.18rem 0 0;
+  color: #dbeafe;
+  font-size: 0.72rem;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
 }
 
 .platform-sort-control {
@@ -3713,6 +4819,34 @@ code {
   line-height: 1.48;
 }
 
+.timeline-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0.68rem 0 0;
+}
+
+.timeline-receipt-grid div {
+  min-width: 0;
+  padding: 0.58rem 0.62rem;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.timeline-receipt-grid dt {
+  color: #7dd3fc;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.timeline-receipt-grid dd {
+  margin: 0.22rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
 .timeline-empty-state {
   border-color: rgba(251, 191, 36, 0.28);
   background: rgba(120, 53, 15, 0.14);
@@ -3742,6 +4876,7 @@ code {
 .document-import-review-box,
 .external-ai-review-box,
 .external-ai-decision-box,
+.external-ai-pending-box,
 .backup-restore-target-receipt,
 .backup-restore-preview-gate,
 .smart-import-receipt,
@@ -3872,6 +5007,7 @@ code {
   background: rgba(127, 29, 29, 0.18);
 }
 
+.score-snapshot-receipt,
 .score-boundary-receipt,
 .score-route-receipt {
   margin: 0.68rem 0;
@@ -3881,11 +5017,17 @@ code {
   background: rgba(8, 47, 73, 0.16);
 }
 
+.score-snapshot-receipt {
+  border-color: rgba(45, 212, 191, 0.24);
+  background: rgba(20, 83, 45, 0.14);
+}
+
 .score-route-receipt {
   border-color: rgba(167, 139, 250, 0.24);
   background: rgba(46, 16, 101, 0.16);
 }
 
+.score-snapshot-receipt > span,
 .score-boundary-receipt > span,
 .score-route-receipt > span {
   display: block;
@@ -3894,10 +5036,15 @@ code {
   font-weight: 800;
 }
 
+.score-snapshot-receipt > span {
+  color: #99f6e4;
+}
+
 .score-route-receipt > span {
   color: #ddd6fe;
 }
 
+.score-snapshot-receipt dl,
 .score-boundary-receipt dl,
 .score-route-receipt dl {
   display: grid;
@@ -3905,6 +5052,7 @@ code {
   margin: 0.45rem 0 0;
 }
 
+.score-snapshot-receipt div,
 .score-boundary-receipt div,
 .score-route-receipt div {
   display: grid;
@@ -3912,6 +5060,7 @@ code {
   gap: 0.5rem;
 }
 
+.score-snapshot-receipt dt,
 .score-boundary-receipt dt,
 .score-route-receipt dt {
   color: #7dd3fc;
@@ -3919,10 +5068,15 @@ code {
   font-weight: 800;
 }
 
+.score-snapshot-receipt dt {
+  color: #5eead4;
+}
+
 .score-route-receipt dt {
   color: #c4b5fd;
 }
 
+.score-snapshot-receipt dd,
 .score-boundary-receipt dd,
 .score-route-receipt dd {
   margin: 0;
@@ -4157,6 +5311,11 @@ code {
   background: #5eead4;
 }
 
+.source-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .compact-dropzone {
   display: flex;
   justify-content: space-between;
@@ -4187,6 +5346,12 @@ code {
   background: rgba(15, 23, 42, 0.72);
   color: #f8fafc;
   padding: 0.42rem 0.55rem;
+}
+
+.scope-row select:disabled,
+.paste-box:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .paste-box {
@@ -4234,6 +5399,7 @@ code {
 .document-import-review-box,
 .external-ai-review-box,
 .external-ai-decision-box,
+.external-ai-pending-box,
 .backup-restore-target-receipt,
 .backup-restore-preview-gate,
 .smart-import-scope-receipt,
@@ -4265,6 +5431,7 @@ code {
 .document-import-review-box strong,
 .external-ai-review-box strong,
 .external-ai-decision-box strong,
+.external-ai-pending-box strong,
 .backup-restore-target-receipt strong,
 .backup-restore-preview-gate strong,
 .smart-import-scope-receipt strong,
@@ -4328,6 +5495,13 @@ code {
   background: rgba(13, 148, 136, 0.1);
 }
 
+.external-ai-pending-box {
+  display: grid;
+  gap: 0.55rem;
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(120, 53, 15, 0.16);
+}
+
 .smart-import-scope-receipt {
   display: grid;
   gap: 0.55rem;
@@ -4358,6 +5532,7 @@ code {
 }
 
 .external-ai-decision-box div,
+.external-ai-pending-box div,
 .backup-restore-target-receipt div,
 .backup-restore-preview-gate div,
 .smart-import-scope-receipt div,
@@ -4369,6 +5544,7 @@ code {
 }
 
 .external-ai-decision-box span,
+.external-ai-pending-box span,
 .backup-restore-target-receipt span,
 .backup-restore-preview-gate span,
 .smart-import-scope-receipt span,
@@ -4382,7 +5558,12 @@ code {
   color: #fcd34d;
 }
 
+.external-ai-pending-box span {
+  color: #fcd34d;
+}
+
 .external-ai-decision-box p,
+.external-ai-pending-box p,
 .backup-restore-target-receipt p,
 .backup-restore-preview-gate p,
 .smart-import-scope-receipt p,
@@ -4661,6 +5842,10 @@ code {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .coverage-diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -4671,6 +5856,7 @@ code {
   .panel-head,
   .compact-dropzone,
   .snapshot-receipt,
+  .coverage-diagnostics-head,
   .quality-focus {
     flex-direction: column;
     align-items: flex-start;
@@ -4678,12 +5864,18 @@ code {
 
   .backup-preaction-receipt,
   .manual-refresh-receipt,
+  .backup-download-pending-receipt,
   .backup-download-receipt,
   .backup-download-failure-receipt {
     grid-template-columns: 1fr;
   }
 
   .manual-refresh-receipt dl {
+    grid-template-columns: 1fr;
+  }
+
+  .sort-receipt,
+  .sort-receipt dl {
     grid-template-columns: 1fr;
   }
 
@@ -4694,7 +5886,8 @@ code {
   .snapshot-receipt p,
   .backup-preaction-receipt p,
   .backup-download-receipt p,
-  .backup-download-failure-receipt p {
+  .backup-download-failure-receipt p,
+  .backup-download-pending-receipt dd {
     text-align: left;
   }
 
@@ -4715,7 +5908,9 @@ code {
   .metric-row,
   .score-factor-grid,
   .analysis-summary,
-  .preview-box {
+  .preview-box,
+  .coverage-diagnostics-grid,
+  .timeline-receipt-grid {
     grid-template-columns: 1fr;
   }
 

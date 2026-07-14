@@ -238,6 +238,81 @@ try {
     timeout: 15000,
   });
 
+  await page
+    .locator('.toggle-label', {
+      hasText: '静默消息分析',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.evaluate(() => {
+    const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__restoreTaskSchedulerHeaderToggleSendMessage = () => {
+      chrome.runtime.sendMessage = previousSendMessage;
+    };
+    window.__releaseTaskSchedulerHeaderToggle = null;
+
+    chrome.runtime.sendMessage = (message, ...args) => {
+      if (
+        message?.type === 'CONTROL_TASK' &&
+        message.action === 'toggle' &&
+        message.taskId === 'message_analysis'
+      ) {
+        return new Promise((resolve) => {
+          window.__releaseTaskSchedulerHeaderToggle = () => {
+            resolve({
+              success: false,
+              error: 'mock header toggle rejected',
+            });
+          };
+        });
+      }
+      return previousSendMessage(message, ...args);
+    };
+  });
+  await page.locator('.header-toolbar .toggle-switch').click();
+  await page
+    .locator('.task-header-pending-receipt', {
+      hasText: '排程启用提交中',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-header-pending-receipt', {
+      hasText: '仍显示上次确认状态',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-header-pending-receipt', {
+      hasText: '尚未立即执行任务、确认 Chrome alarm、更新下一次执行时间或清空运行历史',
+    })
+    .waitFor({ timeout: 15000 });
+  assert.equal(
+    await page
+      .locator('.task-action-receipt-panel.success', {
+        hasText: '排程已启用',
+      })
+      .count(),
+    0,
+    'header toggle should not show enabled success before the background response returns',
+  );
+  await page.evaluate(() => window.__releaseTaskSchedulerHeaderToggle());
+  await page.locator('.task-header-pending-receipt').waitFor({
+    state: 'detached',
+    timeout: 15000,
+  });
+  await page.evaluate(() =>
+    window.__restoreTaskSchedulerHeaderToggleSendMessage(),
+  );
+
+  await page
+    .locator('.task-status-panel:not([open]) .task-summary-attention-preview', {
+      hasText: '需处理：系统健康监控 · 失败；记忆系统同步 · 跳过',
+    })
+    .waitFor({ timeout: 15000 });
+  assert.match(
+    (await page.locator('.task-status-panel summary').textContent()) || '',
+    /1 失败 · 7\/8 启用.*系统健康监控 · 失败.*记忆系统同步 · 跳过/,
+    'collapsed task scheduler summary should name the visible tasks that need action',
+  );
+
   await page.locator('.task-status-panel summary').click();
   const refreshMeta = page.locator('.task-refresh-meta');
   await refreshMeta.waitFor({ timeout: 15000 });
@@ -259,8 +334,11 @@ try {
   await waitForTaskRefreshReady(page);
   await page.evaluate(() => {
     const originalSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    let delayNextTaskStatusRequest = true;
+    let delayNextTaskStatusRequest = false;
     window.__releaseTaskSchedulerRefresh = null;
+    window.__armTaskSchedulerRefreshDelay = () => {
+      delayNextTaskStatusRequest = true;
+    };
     chrome.runtime.sendMessage = (message, ...args) => {
       if (
         delayNextTaskStatusRequest &&
@@ -280,7 +358,15 @@ try {
       return originalSendMessage(message, ...args);
     };
   });
-  await page.locator('.task-refresh-btn').click();
+  await waitForTaskRefreshReady(page);
+  await page.evaluate(() => {
+    const button = document.querySelector('.task-refresh-btn');
+    if (!button || button.disabled) {
+      throw new Error('task refresh button is not ready to click');
+    }
+    window.__armTaskSchedulerRefreshDelay();
+    button.click();
+  });
   await page
     .locator('.task-refresh-receipt.pending', {
       hasText: '正在核对',
@@ -334,11 +420,58 @@ try {
     ['系统健康监控', '记忆系统同步'],
     'attention tasks should remain sorted to the top without filters',
   );
+  const initialSystemMonitoringRow = page.locator('.task-row', {
+    hasText: '系统健康监控',
+  });
+  assert.match(
+    (await initialSystemMonitoringRow
+      .locator('.task-pause-btn')
+      .getAttribute('title')) || '',
+    /因连续失败暂停 系统健康监控 排程.*保留运行历史.*仍可手动执行一次/,
+    'pause button title should expose the schedule-only boundary',
+  );
+  assert.match(
+    (await initialSystemMonitoringRow
+      .locator('.task-pause-btn')
+      .getAttribute('aria-label')) || '',
+    /保留运行历史.*仍可手动执行一次/,
+    'pause button aria-label should include the no-history-loss boundary',
+  );
+  assert.match(
+    (await initialSystemMonitoringRow
+      .locator('.task-run-btn')
+      .getAttribute('title')) || '',
+    /立即重试 系统健康监控 一次.*不会清空失败历史或改变自动排程/,
+    'run button title should explain retry is one-time and keeps schedule history',
+  );
+  const initialMemorySyncRow = page.locator('.task-row', {
+    hasText: '记忆系统同步',
+  });
+  assert.match(
+    (await initialMemorySyncRow
+      .locator('.task-mini-switch')
+      .getAttribute('title')) || '',
+    /停用 记忆系统同步 排程.*只停止后续自动 Chrome alarm.*不会立即执行任务/,
+    'toggle title should explain pause changes only future automatic schedule',
+  );
   await page
     .locator('.task-next-step.failed', {
       hasText: '系统健康监控 连续失败 3 次',
     })
     .waitFor({ timeout: 15000 });
+  const failedNextStep = page.locator('.task-next-step.failed', {
+    hasText: '系统健康监控 连续失败 3 次',
+  });
+  assert.match(
+    (await failedNextStep.getAttribute('title')) || '',
+    /不会自动暂停或重试.*任务行触发.*运行历史会保留/,
+    'top next-step title should expose advisory-only and history-preserving boundaries',
+  );
+  assert.match(
+    (await failedNextStep.getAttribute('aria-label')) || '',
+    /不会自动暂停或重试.*任务行触发.*运行历史会保留/,
+    'top next-step aria-label should expose advisory-only and history-preserving boundaries',
+  );
   await page
     .locator('.task-attention-summary', {
       hasText: '需处理总览',
@@ -846,6 +979,19 @@ try {
       hasText: 'Chrome alarm 已超过预期触发时间 12 分钟',
     })
     .waitFor({ timeout: 15000 });
+  assert.match(
+    (await vectorQualityRow.locator('.task-repair-btn').getAttribute('title')) ||
+      '',
+    /修复 向量质量检查 排程.*只重建或校准 Chrome alarm.*立即执行是另一项一次性操作/,
+    'repair button title should not imply the task has run',
+  );
+  assert.match(
+    (await vectorQualityRow
+      .locator('.task-repair-btn')
+      .getAttribute('aria-label')) || '',
+    /只重建或校准 Chrome alarm/,
+    'repair button aria-label should include the alarm-only boundary',
+  );
   await vectorQualityRow.locator('.task-repair-btn').click();
   await vectorQualityRow
     .locator('.task-status-receipt.pending', {
@@ -1182,6 +1328,18 @@ try {
   await page
     .locator('.task-row', { hasText: '汇总推送队列处理' })
     .locator('.task-queue-summary-boundary', {
+      hasText: '队列快照',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-queue-summary-boundary', {
+      hasText: '独立于最近一次后台运行结果',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-queue-summary-boundary', {
       hasText: '释放窗口回执',
     })
     .waitFor({ timeout: 15000 });
@@ -1218,9 +1376,121 @@ try {
   await page
     .locator('.task-row', { hasText: '汇总推送队列处理' })
     .locator('.task-action-boundary.running', {
-      hasText: '开关只改变排程；立即执行只跑一次，并保留运行历史',
+      hasText: '当前快照有 2 条本地摘要，1 条已到释放窗口',
     })
     .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-action-boundary.running', {
+      hasText: '未到期条目继续留在本机队列',
+    })
+    .waitFor({ timeout: 15000 });
+  const dueDigestRunButton = page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-run-btn');
+  const dueDigestRunTitle = (await dueDigestRunButton.getAttribute('title')) || '';
+  assert.match(
+    dueDigestRunTitle,
+    /立即执行会处理到期摘要一次/,
+    'digest run button should say due items may be released before click',
+  );
+  assert.match(
+    dueDigestRunTitle,
+    /不会写入 Memory Service、确认通知、清空历史或改变自动排程/,
+    'digest run button should keep no-write/no-confirm/schedule boundary',
+  );
+  assert.match(
+    (await dueDigestRunButton.getAttribute('aria-label')) || '',
+    /1 条已到释放窗口/,
+    'digest run button aria label should include the current due count',
+  );
+
+  await page.evaluate(() => {
+    const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__restoreTaskSchedulerEmptyQueueSendMessage = () => {
+      chrome.runtime.sendMessage = previousSendMessage;
+    };
+
+    chrome.runtime.sendMessage = async (message, ...args) => {
+      if (message?.type !== 'GET_TASK_SCHEDULER_STATUS') {
+        return previousSendMessage(message, ...args);
+      }
+
+      const baseResponse = await previousSendMessage(message, ...args);
+      if (!baseResponse?.success || !Array.isArray(baseResponse.tasks)) {
+        return baseResponse;
+      }
+
+      const tasks = baseResponse.tasks.map((task) =>
+        task.id === 'digest_queue_process'
+          ? {
+              ...task,
+              currentQueueStatus: {
+                totalItems: 0,
+                dueItems: 0,
+                checkedAt: new Date().toISOString(),
+                tasks: [],
+              },
+              currentQueueSummary:
+                '本地摘要队列 2 条，1 条已到期；Release risks 2 条；本地延迟摘要',
+            }
+          : task,
+      );
+
+      return {
+        ...baseResponse,
+        tasks,
+      };
+    };
+  });
+  await page.locator('.task-refresh-btn').click();
+  const emptyDigestQueueRow = page.locator('.task-row', {
+    hasText: '汇总推送队列处理',
+  });
+  await emptyDigestQueueRow
+    .locator('.task-queue-summary-grid', {
+      hasText: '当前本地队列为空',
+    })
+    .waitFor({ timeout: 15000 });
+  await emptyDigestQueueRow
+    .locator('.task-queue-summary-grid', {
+      hasText: '没有到期条目',
+    })
+    .waitFor({ timeout: 15000 });
+  await emptyDigestQueueRow
+    .locator('.task-queue-summary-details', {
+      hasText: '最近运行记录：本地摘要队列 2 条',
+    })
+    .waitFor({ timeout: 15000 });
+  await emptyDigestQueueRow
+    .locator('.task-queue-summary-boundary', {
+      hasText: '当前快照：本机没有等待释放的本地摘要',
+    })
+    .waitFor({ timeout: 15000 });
+  await emptyDigestQueueRow
+    .locator('.task-action-boundary', {
+      hasText: '当前本地摘要队列为空',
+    })
+    .waitFor({ timeout: 15000 });
+  const emptyDigestRunTitle =
+    (await emptyDigestQueueRow.locator('.task-run-btn').getAttribute('title')) ||
+    '';
+  assert.match(
+    emptyDigestRunTitle,
+    /不会发送空摘要/,
+    'empty digest queue run button should not imply an empty digest send',
+  );
+  const emptyDigestQueueText =
+    (await emptyDigestQueueRow.locator('.task-queue-summary').textContent()) ||
+    '';
+  assert.doesNotMatch(
+    emptyDigestQueueText,
+    /待释放\s*2 条|2 条本地待释放/,
+    'empty current queue should not present stale run counts as live pending items',
+  );
+  await page.evaluate(() =>
+    window.__restoreTaskSchedulerEmptyQueueSendMessage(),
+  );
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
@@ -1290,8 +1560,88 @@ try {
       hasText: '本次刷新没有立即发送摘要、不写入 Memory Service、不确认通知',
     })
     .waitFor({ timeout: 15000 });
+  const unavailableDigestQueueRow = page.locator('.task-row', {
+    hasText: '汇总推送队列处理',
+  });
+  await unavailableDigestQueueRow
+    .locator('.task-action-boundary', {
+      hasText: '本地摘要状态未确认（digest queue index unavailable）',
+    })
+    .waitFor({ timeout: 15000 });
+  const unavailableDigestRunTitle =
+    (await unavailableDigestQueueRow
+      .locator('.task-run-btn')
+      .getAttribute('title')) || '';
+  assert.match(
+    unavailableDigestRunTitle,
+    /尝试释放到期摘要一次/,
+    'unavailable digest status run button should say run outcome is not just a refresh',
+  );
+  assert.match(
+    (await unavailableDigestQueueRow
+      .locator('.task-run-btn')
+      .getAttribute('aria-label')) || '',
+    /只以本次运行回执为准/,
+    'unavailable digest status aria label should defer truth to the run receipt',
+  );
   await page.evaluate(() =>
     window.__restoreTaskSchedulerQueueUnavailableSendMessage(),
+  );
+  await page.locator('.task-refresh-btn').click();
+
+  await page.evaluate(() => {
+    const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__restoreTaskSchedulerCalibrationSendMessage = () => {
+      chrome.runtime.sendMessage = previousSendMessage;
+    };
+
+    chrome.runtime.sendMessage = async (message, ...args) => {
+      const baseResponse = await previousSendMessage(message, ...args);
+      if (
+        message?.type !== 'GET_TASK_SCHEDULER_STATUS' ||
+        !baseResponse?.success
+      ) {
+        return baseResponse;
+      }
+
+      return {
+        ...baseResponse,
+        refreshReceipt: {
+          ...baseResponse.refreshReceipt,
+          createdAlarms: 1,
+          updatedAlarms: 1,
+          failedRepairs: 1,
+          alarmCalibrations: [
+            {
+              taskId: 'system_monitoring',
+              taskName: '系统健康监控',
+              action: 'created',
+            },
+            {
+              taskId: 'vector_quality_check',
+              taskName: '向量质量检查',
+              action: 'updated',
+              detail: '30 -> 60 min',
+            },
+            {
+              taskId: 'digest_queue_process',
+              taskName: '汇总推送队列处理',
+              action: 'failed',
+              detail: 'maximum number of alarms reached',
+            },
+          ],
+        },
+      };
+    };
+  });
+  await page.locator('.task-refresh-btn').click();
+  await page
+    .locator('.task-refresh-receipt.warning', {
+      hasText: '本次校准：补齐 系统健康监控；重排 向量质量检查 (30 -> 60 min)；修复失败 汇总推送队列处理 (maximum number of alarms reached)',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.evaluate(() =>
+    window.__restoreTaskSchedulerCalibrationSendMessage(),
   );
   await page.locator('.task-refresh-btn').click();
 
@@ -1363,6 +1713,23 @@ try {
     .locator('.task-row', { hasText: 'Analyze msg in background' })
     .locator('.task-state-badge', { hasText: 'Disabled' })
     .waitFor({ timeout: 15000 });
+  const englishMessageAnalysisRow = englishPage.locator('.task-row', {
+    hasText: 'Analyze msg in background',
+  });
+  assert.match(
+    (await englishMessageAnalysisRow
+      .locator('.task-mini-switch')
+      .getAttribute('title')) || '',
+    /Enable Analyze msg in background schedule.*does not run the task now or clear history/,
+    'English enable button title should expose the schedule-only boundary',
+  );
+  assert.match(
+    (await englishMessageAnalysisRow
+      .locator('.task-run-btn')
+      .getAttribute('aria-label')) || '',
+    /Run Analyze msg in background once manually.*stays disabled afterward/,
+    'English run button aria-label should explain disabled tasks stay disabled',
+  );
   await englishPage
     .locator('.task-row', { hasText: 'Digest queue' })
     .locator('.task-queue-summary', {
@@ -1402,6 +1769,18 @@ try {
   await englishPage
     .locator('.task-row', { hasText: 'Digest queue' })
     .locator('.task-queue-summary-boundary', {
+      hasText: 'Queue snapshot',
+    })
+    .waitFor({ timeout: 15000 });
+  await englishPage
+    .locator('.task-row', { hasText: 'Digest queue' })
+    .locator('.task-queue-summary-boundary', {
+      hasText: 'separate from the latest background run result',
+    })
+    .waitFor({ timeout: 15000 });
+  await englishPage
+    .locator('.task-row', { hasText: 'Digest queue' })
+    .locator('.task-queue-summary-boundary', {
       hasText: 'Release-window receipt',
     })
     .waitFor({ timeout: 15000 });
@@ -1429,9 +1808,28 @@ try {
     .locator('.task-row', { hasText: 'Digest queue' })
     .locator('.task-action-boundary.running', {
       hasText:
-        'Action scope: the switch only changes the schedule; Run now is one-time and keeps history.',
+        'Current snapshot has 2 local digest item(s), 1 in the release window',
     })
     .waitFor({ timeout: 15000 });
+  await englishPage
+    .locator('.task-row', { hasText: 'Digest queue' })
+    .locator('.task-action-boundary.running', {
+      hasText: 'Future items remain queued locally',
+    })
+    .waitFor({ timeout: 15000 });
+  const englishDigestRunButton = englishPage
+    .locator('.task-row', { hasText: 'Digest queue' })
+    .locator('.task-run-btn');
+  assert.match(
+    (await englishDigestRunButton.getAttribute('title')) || '',
+    /Run now processes due digest items once/,
+    'English digest run button title should expose release semantics',
+  );
+  assert.match(
+    (await englishDigestRunButton.getAttribute('aria-label')) || '',
+    /does not write to Memory Service, confirm notifications, clear history, or change the automatic schedule/,
+    'English digest run button aria label should keep no-write/no-confirm boundary',
+  );
   const englishQueueSummary =
     (await englishPage
       .locator('.task-row', { hasText: 'Digest queue' })

@@ -1642,19 +1642,23 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
   const getMessageWebhooks: any[] = [];
-  const apiWebhooks: any[] = [];
+  const apiWebhooks: Array<{ node: any; url: string; conditions: any[] }> = [];
 
-  const collectRuleNodes = (node: any) => {
+  const collectRuleNodes = (node: any, parentConditions: any[] = []) => {
     if (!node || typeof node !== 'object') {
       return;
     }
+    const nodeConditions = Array.isArray(node.conditions) ? node.conditions : [];
+    const inheritedConditions = nodeConditions.length > 0
+      ? parentConditions.concat(nodeConditions)
+      : parentConditions;
     if (node.type === 'jira.issue.outgoing.webhook') {
       const url = String(node.value?.url || '');
       if (url.includes('action=getBotMessageCurrentTime')) {
         getMessageWebhooks.push(node);
       }
-      if (url.includes('webhookResponse.body.aiHost')) {
-        apiWebhooks.push(node);
+      if (url.includes('://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}')) {
+        apiWebhooks.push({ node, url, conditions: inheritedConditions });
       }
       assert.equal(
         url.includes('action=markBotMessageExecuted') && url.includes('sentPayload='),
@@ -1664,9 +1668,9 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
     }
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) {
-        value.forEach(collectRuleNodes);
+        value.forEach(child => collectRuleNodes(child, inheritedConditions));
       } else if (value && typeof value === 'object') {
-        collectRuleNodes(value);
+        collectRuleNodes(value, inheritedConditions);
       }
     }
   };
@@ -1678,7 +1682,28 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
     getMessageWebhooks[0].value.url,
     '{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api',
   );
-  assert.equal(apiWebhooks.length, 2);
+  assert.equal(apiWebhooks.length, 4);
+  assert.deepEqual(
+    apiWebhooks.map(item => item.url).sort(),
+    [
+      'http://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}',
+      'http://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}',
+      'https://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}',
+      'https://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}',
+    ],
+  );
+  assert.equal(
+    apiWebhooks.every(item => item.conditions.some((condition: any) =>
+      condition.value?.first === '{{webhookResponse.body.aiProtocol}}'
+    )),
+    true,
+    'AI/API forwarding branches should choose http vs https via aiProtocol',
+  );
+  assert.equal(
+    JSON.stringify(template).includes('"url":"{{webhookResponse.body.aiEndpoint}}"'),
+    false,
+    'Jira URL fields should keep a literal http/https prefix instead of using only a smart-value variable',
+  );
 });
 
 test('Executor rule keeps Bot API token hidden and redacted from diagnostic logs', () => {
@@ -1829,7 +1854,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.8\.6';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.9\.1';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1860,6 +1885,52 @@ normalizedAgain = normalizeExecutionKey(result);`,
   assert.match(context.result, /^ek_/);
   assert.doesNotMatch(context.result, /[\s/%]/);
   assert.equal(context.normalizedAgain, context.result);
+});
+
+test('Apps Script forwards AgentTask notification target to memory-service payload', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = createMarkExecutedVmContext(
+    [['ID'], ['dummy']],
+    [],
+    [],
+    {},
+    [
+      ['Key', 'Value'],
+      ['agent_task_webhook_url', 'POST http://memory.example/api/v1/agent-tasks/execute'],
+      ['agent_task_user_id', 'esone.qiu'],
+    ],
+  );
+
+  vm.runInNewContext(
+    `${appScript}
+first = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Daily Jira hygiene',
+  Content: 'Summarize due tickets',
+  Agent_Task_ID: 'agent-task-1',
+  Agent_Task_Prompt: 'Summarize due tickets',
+  Glip_User_Name: 'Esone Qiu',
+  Glip_Team_ID: '',
+  rowIndex: 2
+}, 'MSG-1', 'exec-1').body);
+second = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Default notification target',
+  Content: 'Run without explicit Glip target',
+  Agent_Task_ID: 'agent-task-2',
+  Agent_Task_Prompt: 'Run without explicit Glip target',
+  Glip_User_Name: '',
+  Glip_Team_ID: '',
+  rowIndex: 3
+}, 'MSG-2', 'exec-2').body);`,
+    context,
+  );
+
+  assert.equal(context.first.notifyTarget.type, 'private');
+  assert.equal(context.first.notifyTarget.targetUserId, 'esone.qiu');
+  assert.equal(context.first.notifyTarget.glipUserName, 'Esone Qiu');
+  assert.equal(context.first.notifyTarget.glipUser, 'Esone Qiu');
+  assert.equal(context.first.userId, 'esone.qiu');
+  assert.equal(context.second.notifyTarget, undefined);
+  assert.equal(context.second.userId, 'esone.qiu');
 });
 
 test('Apps Script mark-executed accepts the last data row index without ID fallback', () => {

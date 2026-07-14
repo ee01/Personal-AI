@@ -1,6 +1,6 @@
 # Memory Storyline Builder
 
-*最后更新: 2026-06-28*
+*最后更新: 2026-07-08*
 
 Memory Storyline Builder 把用户已经沉淀在 Personal AI 里的会议、消息、Jira、资料记忆、AI 对话和 skill 证据，编排成一份可人工复核、可复制到其他工具的故事线草稿。它不是 PPT 生成器，也不是自动发布器；它的价值是把“我真实经历过、讨论过、做过的事”整理成给别人讲得清楚的结构。
 
@@ -128,7 +128,9 @@ P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep�
 页面结构遵循 `docs/progressing/memory-storyline-builder-demo.html`：
 
 - 顶部：`memory-exploring · /storylines/draft`、标题、来源 chip、输出格式 segmented control、重新生成和复制按钮。
+- 草稿生成请求回执：首次打开或切换输出格式导致 Draft API 请求等待时，先显示当前 target、prep 和“等待服务端证据回执”，并说明此刻还没有草稿、Evidence key、复制快照或外发确认，也不会写回 Slides / Docs / RingCentral、发送消息或保存长期 Storyline 历史。
 - 生成范围回执：在 coverage strip 前展示服务端 `generationReceipt`，先告诉用户这次是 LLM 草稿还是 fallback 草稿、用了多少 refs、有没有缺失证据详情，以及页面只生成可复制草稿，不写回 Slides / Docs / RingCentral、不保存长期 Storyline 历史、不发送消息。
+- 输出目标回执：生成后在首屏固定显示当前 artifact target、受众、手动交接路径和生成格式，说明 `Slides` / `RingCentral post` 等选项只改变本页草稿与复制文本；顶部 segmented control 和 Inspector 的 artifact 按钮也通过 hover / 读屏文案说明切换会从本页缓存读取或请求 Draft API、重置复核确认与复制状态、把已有剪贴板回执标成旧复制回执，但不会写回 Slides / Docs / RingCentral、发送消息、保存长期 Storyline 历史或更新 Memory Service 证据状态。
 - Coverage strip：展示当前草稿实际引用的 refs、返回给页面的证据详情数、story segments、gaps 和粗略 sendable score；避免把“返回过但没有被段落引用”的证据误读成已支撑生成稿。
 - Draft tab：P0 只展示当前草稿；未来有持久化后再展示多草稿列表。
 - Storyline canvas：按段落展示叙事顺序、证据 ref、shareable/internal/needs-redaction 边界。
@@ -136,7 +138,7 @@ P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep�
 - 来源打开回执：用户点击安全的外部来源后，Inspector 会显示 `来源打开回执`，说明这只是在新标签打开该来源；不会重新读取会前准备、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也不会满足复制前复核。
 - Artifact output：展示可复制文本，不自动写回外部平台；输出会保留每段 `Evidence refs` 和末尾 `Evidence key`，让复制到 Slides、Docs 或 RingCentral 后仍能追溯来源。若草稿仍有待确认项、风险提醒或段落证据边界，需要先勾选复核确认再复制，顶部复制按钮同步显示被阻止的复核原因；复制前复核区会列出具体清单，包含 gaps、risk notes 和可点击定位的段落证据边界，避免用户只看到数量却不知道要复核哪里。这次复核确认只绑定当前草稿，切换输出格式、重新生成、加载中或生成失败时都不能沿用旧确认复制隐藏的旧草稿。复制成功后页面显示 `复制回执`，记录本机剪贴板快照的输出格式、标题、引用 refs、返回证据详情和复核项，并说明没有写回 Slides / Docs / RingCentral、没有发送消息、没有保存长期 Storyline 历史、没有更新 Memory Service 证据状态；如果用户切换输出格式或重新生成，回执会变成 `旧复制回执`，提醒剪贴板仍是上一份输出，交付前需要重新复制。复制按钮优先用浏览器剪贴板，失败时回退到临时 textarea 复制，仍失败才提示用户手动选择文本。
 
-同一 `prepId/source/target/audience` 的生成结果用 `sessionStorage` 缓存，避免刷新反复打 LLM。命中缓存时页面显示 `会话缓存回执`，说明这次没有重新调用 Draft API、重新读取会前准备、刷新证据详情、同步 Memory Service 或确认外发状态；会议资料或证据刚变化时应点 `重新生成`。缓存必须同时匹配来源和输出格式；用户快速切换输出格式时，旧请求晚返回不能覆盖当前选择。点击 `重新生成` 会清除当前缓存并重新请求。不支持的 `source` 深链不会展示生成、重新生成或复制控件，避免用户在错误来源上继续操作。
+同一 `prepId/source/target/audience` 的生成结果用 `sessionStorage` 缓存，避免刷新反复打 LLM。命中缓存时页面显示 `会话缓存回执`，说明这次没有重新调用 Draft API、重新读取会前准备、刷新证据详情、同步 Memory Service 或确认外发状态；会议资料或证据刚变化时应点 `重新生成`。缓存必须同时匹配来源和输出格式；用户快速切换输出格式时，旧请求晚返回不能覆盖当前选择。点击 `重新生成` 会先显示 `重新生成请求回执`，说明本次只清除本页 session 缓存并重新请求 Draft API，不会写回 Slides / Docs / RingCentral、发送消息、保存长期 Storyline 历史，也不会沿用上一轮复核确认或复制回执。当前 Draft API 请求仍在等待服务端证据回执时，`重新生成` 会锁定并说明这是为了避免重复请求；用户可以等当前回执落地后再重新生成。不支持的 `source` 深链不会展示生成、重新生成或复制控件，避免用户在错误来源上继续操作。
 
 ## 与其他能力的边界
 

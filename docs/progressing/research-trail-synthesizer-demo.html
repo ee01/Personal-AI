@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research Trail Synthesizer Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-2: #f1f5f9;
+      --ink: #17202a;
+      --muted: #65758b;
+      --line: #d6dde6;
+      --blue: #2563eb;
+      --green: #147d64;
+      --red: #b42318;
+      --amber: #a15c07;
+      --violet: #6d28d9;
+      --shadow: 0 16px 44px rgba(15, 23, 42, 0.12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #162033;
+      color: #e7edf7;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 40px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #5eead4, #60a5fa 55%, #f59e0b);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .brand span {
+      color: #a8b4c7;
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      width: 100%;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #b9c5d8;
+      text-align: left;
+      padding: 9px 10px;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+
+    .side-note {
+      margin-top: auto;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      padding: 12px;
+      color: #cbd5e1;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .title p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 9px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .pill.strong {
+      color: var(--green);
+      border-color: rgba(20, 125, 100, 0.28);
+      background: #ecfdf5;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(290px, 0.82fr) minmax(360px, 1.18fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .browser {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .browser-top {
+      min-height: 44px;
+      border-bottom: 1px solid var(--line);
+      background: #eef2f7;
+      padding: 9px 12px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #94a3b8;
+    }
+
+    .address {
+      flex: 1;
+      min-width: 0;
+      background: #fff;
+      border: 1px solid #dbe3ee;
+      border-radius: 5px;
+      padding: 6px 9px;
+      color: #64748b;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .browser-body {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      position: relative;
+      min-height: 620px;
+      background:
+        linear-gradient(180deg, rgba(240, 249, 255, 0.65), rgba(255, 255, 255, 0) 180px),
+        #fff;
+    }
+
+    .article-kicker {
+      color: var(--blue);
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .article-title {
+      margin: 0;
+      font-size: 25px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .article-copy {
+      color: #475569;
+      line-height: 1.66;
+      font-size: 14px;
+      margin: 0;
+    }
+
+    .article-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      min-height: 96px;
+    }
+
+    .mini-card strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 7px;
+    }
+
+    .mini-card span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .trail-chip {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      width: min(330px, calc(100% - 32px));
+      border: 1px solid rgba(37, 99, 235, 0.28);
+      background: #fff;
+      box-shadow: 0 12px 30px rgba(37, 99, 235, 0.18);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .chip-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+    }
+
+    .chip-icon {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: #dbeafe;
+      color: var(--blue);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .chip-title {
+      font-size: 13px;
+      font-weight: 800;
+      margin: 0 0 3px;
+    }
+
+    .chip-copy {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0;
+    }
+
+    .chip-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      min-height: 32px;
+    }
+
+    .btn.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .btn.ghost {
+      background: transparent;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      background: #fff;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .panel-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+      overflow-x: auto;
+    }
+
+    .tab {
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: var(--muted);
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+
+    .tab.active {
+      background: #fff;
+      border-color: var(--line);
+      color: var(--ink);
+      font-weight: 800;
+    }
+
+    .content {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 14px;
+      overflow: auto;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 86px;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .section h3 {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      letter-spacing: 0;
+      background: #f8fafc;
+    }
+
+    .section-body {
+      padding: 13px 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .source-row strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .source-row small {
+      color: var(--muted);
+      line-height: 1.45;
+      display: block;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+
+    .badge.green {
+      color: var(--green);
+      background: #ecfdf5;
+      border-color: rgba(20, 125, 100, 0.24);
+    }
+
+    .badge.amber {
+      color: var(--amber);
+      background: #fff7ed;
+      border-color: rgba(161, 92, 7, 0.25);
+    }
+
+    .badge.red {
+      color: var(--red);
+      background: #fff1f2;
+      border-color: rgba(180, 35, 24, 0.22);
+    }
+
+    .badge.violet {
+      color: var(--violet);
+      background: #f5f3ff;
+      border-color: rgba(109, 40, 217, 0.24);
+    }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      table-layout: fixed;
+    }
+
+    .matrix th,
+    .matrix td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 10px;
+      vertical-align: top;
+      text-align: left;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .matrix th {
+      color: #334155;
+      background: #f8fafc;
+      font-weight: 800;
+    }
+
+    .matrix tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .question {
+      display: grid;
+      gap: 5px;
+      padding: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+    }
+
+    .question strong {
+      font-size: 13px;
+    }
+
+    .question span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .receipt {
+      border-left: 4px solid var(--blue);
+      background: #eff6ff;
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: #1e3a8a;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .toast {
+      min-height: 34px;
+      color: var(--green);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 1080px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .browser-body {
+        min-height: 520px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .main {
+        padding: 14px;
+      }
+
+      .topbar,
+      .panel-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .status-row {
+        justify-content: flex-start;
+      }
+
+      .summary-grid,
+      .article-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .article-title {
+        font-size: 21px;
+      }
+
+      .browser-body {
+        padding: 14px;
+        min-height: 620px;
+      }
+
+      .trail-chip {
+        right: 12px;
+        bottom: 12px;
+        width: calc(100% - 24px);
+      }
+
+      .content {
+        padding: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <strong>Personal AI</strong>
+          <span>Memory Exploring</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Memory navigation">
+        <button>今天</button>
+        <button>记忆搜索</button>
+        <button>资料记忆</button>
+        <button class="active">研究足迹</button>
+        <button>技能库</button>
+        <button>决策中心</button>
+      </nav>
+      <div class="side-note">
+        本 demo 只模拟研究足迹的只读预览与插入回执，不保存资料、不外发、不创建真实任务。
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title">
+          <h1>研究足迹合成器</h1>
+          <p>把一次研究里的网页、AI 对话、Jira/文档和资料记忆合成可继续的判断状态。</p>
+        </div>
+        <div class="status-row">
+          <span class="pill strong">active research</span>
+          <span class="pill">8 个来源</span>
+          <span class="pill">3 个缺口</span>
+          <span class="pill">local-only</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="Research trail demo workspace">
+        <div class="browser" aria-label="Simulated browser page">
+          <div class="browser-top">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <div class="address">https://openai.com/index/introducing-deep-research/</div>
+          </div>
+          <div class="browser-body">
+            <div class="article-kicker">Research page</div>
+            <h2 class="article-title">Deep research and source-grounded work</h2>
+            <p class="article-copy">
+              用户正在研究：ChatGPT 可用性、Codex trial、Cursor 成本、NotebookLM / Glean 的 source-grounded research，以及团队如何把这些资料转成可执行建议。
+            </p>
+            <div class="article-grid">
+              <div class="mini-card">
+                <strong>OpenAI Deep Research</strong>
+                <span>多步浏览、分析、带引用报告；适合复杂问题和工程研究。</span>
+              </div>
+              <div class="mini-card">
+                <strong>NotebookLM Sources</strong>
+                <span>用户选择 sources，Drive source 可同步，报告可导入 notebook。</span>
+              </div>
+              <div class="mini-card">
+                <strong>Glean Deep Research</strong>
+                <span>内部企业数据 + Web sources，生成 citation-rich report。</span>
+              </div>
+            </div>
+            <p class="article-copy">
+              当前页面不是孤立资料。Personal AI 识别到它和近期的 AI Tools policy、Codex trial、ChatGPT availability、Task Estimate 方案讨论属于同一个研究任务。
+            </p>
+
+            <aside class="trail-chip" aria-label="Research trail chip">
+              <div class="chip-head">
+                <div class="chip-icon" aria-hidden="true">R</div>
+                <div>
+                  <p class="chip-title">命中研究足迹：AI 工具可用性与团队选型</p>
+                  <p class="chip-copy">当前停在：缺最新 license policy、团队使用反馈和外部 AI 可用性复核。</p>
+                </div>
+              </div>
+              <div class="chip-actions">
+                <button class="btn primary" data-action="openTrail">打开足迹</button>
+                <button class="btn" data-action="addPage">本页加入候选</button>
+                <button class="btn ghost" data-action="hideChip">本页不提示</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="panel" aria-label="Research trail detail">
+          <div class="panel-head">
+            <div>
+              <h2>AI 工具可用性与团队选型</h2>
+              <p>研究问题：ChatGPT 不稳定、Codex trial、Cursor 成本变化下，团队如何选择和使用 AI 工具？</p>
+            </div>
+            <span class="badge green">partial conclusion</span>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="overview" role="tab">概览</button>
+            <button class="tab" data-tab="sources" role="tab">来源</button>
+            <button class="tab" data-tab="matrix" role="tab">对比</button>
+            <button class="tab" data-tab="questions" role="tab">缺口</button>
+          </div>
+
+          <div class="content">
+            <section class="tab-view" data-view="overview">
+              <div class="summary-grid">
+                <div class="metric">
+                  <b>8</b>
+                  <span>已关联来源，含网页、内部消息、AI 对话和 source memory</span>
+                </div>
+                <div class="metric">
+                  <b>5</b>
+                  <span>已采用来源，3 条仍需复核或只作背景</span>
+                </div>
+                <div class="metric">
+                  <b>3</b>
+                  <span>未决问题，可转成下一步 prompt 或 Evidence Watch</span>
+                </div>
+                <div class="metric">
+                  <b>0</b>
+                  <span>自动外发次数；当前所有内容仍是 local-only</span>
+                </div>
+              </div>
+              <div class="section">
+                <h3>当前结论</h3>
+                <div class="section-body">
+                  <p class="article-copy">
+                    Codex 更适合 repo / coding / deployment 类任务；ChatGPT 可用性需要继续守望；Cursor 成本和 license reclaim 需要确认；NotebookLM / Glean 说明 source-grounded research 已成为主流，但 Personal AI 的优势是把私人消息、会议、网页、AI 对话和操作记忆合成同一条研究状态。
+                  </p>
+                  <div class="receipt">
+                    只读研究状态：这不是 confirmed profile，也没有自动写入外部 AI。导出前会隐藏内部消息原文和私有 Jira 细节。
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="tab-view hidden" data-view="sources">
+              <div class="section">
+                <h3>来源状态</h3>
+                <div class="section-body">
+                  <div class="source-row">
+                    <div>
+                      <strong>ChatGPT availability reflection</strong>
+                      <small>原始片段：Chatgpt is unavailable here, while Codex is the recommended tool there</small>
+                    </div>
+                    <span class="badge amber">possibly stale</span>
+                  </div>
+                  <div class="source-row">
+                    <div>
+                      <strong>AI Tools: Codex, Cursor, Cost Management</strong>
+                      <small>内部消息摘要；用于理解团队许可、成本和投票背景。</small>
+                    </div>
+                    <span class="badge green">adopted</span>
+                  </div>
+                  <div class="source-row">
+                    <div>
+                      <strong>OpenAI Deep Research</strong>
+                      <small>外部产品资料；用于判断多步研究体验和引用要求。</small>
+                    </div>
+                    <span class="badge green">adopted</span>
+                  </div>
+                  <div class="source-row">
+                    <div>
+                      <strong>NotebookLM / Glean source-grounded research</strong>
+                      <small>外部竞品资料；用于对比 source repository 与 personal memory。</small>
+                    </div>
+                    <span class="badge green">adopted</span>
+                  </div>
+                  <div class="source-row">
+                    <div>
+                      <strong>Cursor license reclaim policy</strong>
+                      <small>只有群聊转述，缺少最新权威公告。</small>
+                    </div>
+                    <span class="badge red">authority needed</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="tab-view hidden" data-view="matrix">
+              <div class="section">
+                <h3>研究对比表</h3>
+                <div class="section-body">
+                  <table class="matrix">
+                    <thead>
+                      <tr>
+                        <th>候选</th>
+                        <th>适合</th>
+                        <th>风险</th>
+                        <th>当前判断</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Codex</td>
+                        <td>代码仓库、Sites demo、自动化修复、可验证实现</td>
+                        <td>需要 repo/context；非代码资料研究不一定最省心</td>
+                        <td>作为工程任务默认候选</td>
+                      </tr>
+                      <tr>
+                        <td>ChatGPT</td>
+                        <td>通用研究、资料综合、deep research 报告</td>
+                        <td>企业可用性和权限变化需要守望</td>
+                        <td>可用性不确定时不作为唯一入口</td>
+                      </tr>
+                      <tr>
+                        <td>NotebookLM</td>
+                        <td>用户明确选择 source 后做 source-grounded Q&A</td>
+                        <td>需要维护 notebook source 集合</td>
+                        <td>适合作为竞品参考，不替代 Personal AI</td>
+                      </tr>
+                      <tr>
+                        <td>Glean</td>
+                        <td>企业内部知识 + Web 的 citation-rich report</td>
+                        <td>企业平台边界，不覆盖私人操作/AI 对话记忆</td>
+                        <td>说明内部+外部研究是明确趋势</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section class="tab-view hidden" data-view="questions">
+              <div class="section">
+                <h3>下一步缺口</h3>
+                <div class="section-body">
+                  <div class="question">
+                    <strong>Cursor license reclaim policy 是否已经正式更新？</strong>
+                    <span>建议：创建 Evidence Watch 或让用户手动补权威公告链接。</span>
+                  </div>
+                  <div class="question">
+                    <strong>团队真实使用反馈在哪里？</strong>
+                    <span>建议：Ask 汇总最近 Codex / Claude / Cursor 使用片段，排除无关闲聊。</span>
+                  </div>
+                  <div class="question">
+                    <strong>哪些内容可外发给 ChatGPT/Claude？</strong>
+                    <span>建议：导出 research patch 时只保留 redacted summary，不带内部消息原文。</span>
+                  </div>
+                  <button class="btn primary" data-action="copyPrompt">复制下一步 prompt</button>
+                </div>
+              </div>
+            </section>
+            <div class="toast" id="toast" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const views = Array.from(document.querySelectorAll('.tab-view'));
+    const toast = document.getElementById('toast');
+    const chip = document.querySelector('.trail-chip');
+
+    function showTab(name) {
+      tabs.forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.tab === name);
+      });
+      views.forEach((view) => {
+        view.classList.toggle('hidden', view.dataset.view !== name);
+      });
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => {
+        toast.textContent = '';
+      }, 5200);
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => showTab(tab.dataset.tab));
+    });
+
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      if (action === 'openTrail') {
+        showTab('overview');
+        showToast('已打开研究足迹：只读预览，不保存当前网页，也不外发。');
+      }
+      if (action === 'addPage') {
+        showTab('sources');
+        showToast('本页已加入候选来源：尚未创建 source-memory capsule，需走资料记忆复核。');
+      }
+      if (action === 'hideChip') {
+        chip.style.display = 'none';
+      }
+      if (action === 'copyPrompt') {
+        showToast('下一步 prompt 已模拟复制：包含当前结论、证据缺口和外发脱敏边界。');
+      }
+    });
+  </script>
+</body>
+</html>

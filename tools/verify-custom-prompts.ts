@@ -727,6 +727,40 @@ function verifyPreviewAndHistoryHelpers() {
   );
   assert.equal(pausedContextSectionReceipt.status, 'paused');
   assert.match(pausedContextSectionReceipt.detail, /用户上下文来源已暂停/);
+  const draftPausedContextSectionReceipt = buildUserContextSectionReceipt(
+    {
+      ...storage,
+      preferenceInjection: {
+        ...storage.preferenceInjection,
+        enabled: false,
+      },
+    },
+    'team',
+    { draftInjectionStateDiffersFromBaseline: true },
+  );
+  assert.equal(draftPausedContextSectionReceipt.status, 'paused');
+  assert.match(
+    draftPausedContextSectionReceipt.detail,
+    /当前页面预览因全局偏好注入已暂停不会读取/,
+  );
+  assert.match(
+    draftPausedContextSectionReceipt.detail,
+    /保存前真实分析仍读取已生效基线/,
+  );
+  const draftIncludedContextSectionReceipt = buildUserContextSectionReceipt(
+    storage,
+    'personal',
+    { previewScope: 'message', draftInjectionStateDiffersFromBaseline: true },
+  );
+  assert.equal(draftIncludedContextSectionReceipt.status, 'included');
+  assert.match(
+    draftIncludedContextSectionReceipt.detail,
+    /当前页面预览按未保存草稿开关重算/,
+  );
+  assert.match(
+    draftIncludedContextSectionReceipt.detail,
+    /保存前真实分析仍读取已生效基线/,
+  );
   const messageScopedReceipt = buildPreferenceInjectionReceipt(storage, {
     userContextScope: 'message',
   });
@@ -1534,6 +1568,12 @@ function verifyPromptConfigSurface() {
   assert.match(source, /消息提示词/);
   assert.match(source, /项目提示词/);
   assert.match(source, /用户上下文/);
+  assert.match(source, /isUserContextRuntimeInjectionEnabled/);
+  assert.match(source, /偏好注入暂停待保存/);
+  assert.match(source, /当前页面预览会暂停自定义提示词和用户上下文/);
+  assert.match(source, /保存前真实分析仍读取上方已生效基线/);
+  assert.match(previewSource, /draftInjectionStateDiffersFromBaseline/);
+  assert.match(previewSource, /当前页面预览按未保存草稿开关重算/);
   assert.match(source, /source-toggle/);
   assert.match(source, /scope-toggle/);
   assert.match(source, /injection-control-row/);
@@ -1578,6 +1618,14 @@ function verifyPromptConfigSurface() {
   assert.match(source, /safetyBlockReceipt/);
   assert.match(source, /showSafetyBlockReceipt/);
   assert.match(source, /safety-block-receipt/);
+  assert.match(source, /pendingOperation/);
+  assert.match(source, /waitForPendingOperationPaint/);
+  assert.match(source, /operation-pending-receipt/);
+  assert.match(source, /保存进行中/);
+  assert.match(source, /融合进行中/);
+  assert.match(source, /等待融合完成/);
+  assert.match(source, /融合中\.\.\./);
+  assert.match(source, /完成前不代表用户画像已更新/);
   assert.match(source, /保存'}已拦截/);
   assert.match(source, /安全提示未确认/);
   assert.match(source, /用户上下文疑似凭据未确认/);
@@ -1600,6 +1648,10 @@ function verifyPromptConfigSurface() {
   assert.match(source, /history-restore-receipt/);
   assert.match(source, /changeSummary/);
   assert.match(source, /history-change/);
+  assert.match(source, /getHistoryRestoreImpactSummary/);
+  assert.match(source, /history-restore-impact/);
+  assert.match(source, /恢复前影响：如果恢复后保存/);
+  assert.match(source, /点击恢复只会先载入页面草稿/);
   assert.match(source, /USER_CONFIG_HISTORY_KEY/);
   assert.match(source, /版本历史/);
   assert.match(source, /生效预览/);
@@ -1609,6 +1661,11 @@ function verifyPromptConfigSurface() {
   assert.match(source, /context-scope-overview/);
   assert.match(source, /context-scope-actions/);
   assert.match(source, /renderPreviewScopeSwitch/);
+  assert.match(source, /buildPreviewScopeSwitchBoundary/);
+  assert.match(source, /title=\{boundary\}/);
+  assert.match(source, /aria-label=\{boundary\}/);
+  assert.match(source, /点击只会把\$\{locationLabel\}切到\$\{targetReceipt\.scopeLabel\}范围/);
+  assert.match(source, /不会保存配置、触发真实分析、融合画像、写入本机配置或备份到记忆服务/);
   assert.match(source, /用户上下文预览范围/);
   assert.match(source, /用户上下文本轮范围/);
   assert.match(source, /不会保存配置、触发真实分析、融合画像或写入记忆服务/);
@@ -1630,7 +1687,7 @@ function verifyPromptConfigSurface() {
   assert.match(i18nSource, /options\.promptConfig\.description/);
   assert.match(optionsCss, /prompt-config-entry-section/);
   assert.match(source, /当前有未保存修改，重新加载会丢弃这些修改/);
-  assert.match(source, /hasUnsavedChanges[\s\S]+persistConfiguration\(\)/);
+  assert.match(source, /hasUnsavedChanges[\s\S]+persistConfiguration\(\{ skipValidation: true \}\)/);
   assert.match(previewSource, new RegExp(USER_CONFIG_HISTORY_KEY));
   assert.match(previewSource, /estimatePreferenceTokenCount/);
   assert.match(previewSource, /UserContextPreferenceScope/);

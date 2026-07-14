@@ -7,7 +7,14 @@
           仅统计真正待拍板的 decision 项，观察项收纳在下方待观察池。
         </p>
       </div>
-      <button class="refresh-btn" :disabled="loading" @click="loadQueues()">
+      <button
+        class="refresh-btn"
+        type="button"
+        :disabled="loading"
+        :title="queueRefreshButtonBoundary('header')"
+        :aria-label="queueRefreshButtonBoundary('header')"
+        @click="loadQueues()"
+      >
         刷新
       </button>
     </div>
@@ -23,7 +30,15 @@
           <div class="load-error-title">决策中心暂时不可用</div>
           <p>{{ loadError }}</p>
         </div>
-        <button class="load-error-retry" @click="loadQueues()">重试</button>
+        <button
+          class="load-error-retry"
+          type="button"
+          :title="queueRefreshButtonBoundary('load-error')"
+          :aria-label="queueRefreshButtonBoundary('load-error')"
+          @click="loadQueues()"
+        >
+          重试
+        </button>
       </div>
 
       <div v-if="queueWarningText && !loadError" class="partial-load-warning">
@@ -31,7 +46,15 @@
           <div class="partial-load-warning-title">部分队列刷新失败</div>
           <p>{{ queueWarningText }}</p>
         </div>
-        <button class="partial-load-retry" @click="loadQueues()">重试全部</button>
+        <button
+          class="partial-load-retry"
+          type="button"
+          :title="queueRefreshButtonBoundary('partial')"
+          :aria-label="queueRefreshButtonBoundary('partial')"
+          @click="loadQueues()"
+        >
+          重试全部
+        </button>
       </div>
 
       <div v-if="targetNotice" class="target-notice" :class="targetNotice.kind">
@@ -63,7 +86,8 @@
         <button
           class="transition-receipt-close"
           type="button"
-          aria-label="关闭操作回执"
+          :title="closeTransitionReceiptBoundary()"
+          :aria-label="closeTransitionReceiptBoundary()"
           @click="transitionReceipt = null"
         >
           关闭
@@ -137,7 +161,10 @@
                 <span>审核上下文</span>
                 <button
                   class="copy-review-btn"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="copyReviewButtonBoundary(req)"
+                  :aria-label="copyReviewButtonBoundary(req)"
                   @click="copyDecisionReview(req)"
                 >
                   复制审核包
@@ -165,8 +192,15 @@
               <div class="option-preview">
                 处理选项：{{ decisionActionPreview(req) }}
               </div>
-              <div v-if="copyStatus[req.id]" class="copy-status">
-                {{ copyStatus[req.id] }}
+              <div
+                v-if="copyStatus[req.id]"
+                class="copy-status"
+                role="status"
+              >
+                <div class="copy-status-title">
+                  {{ copyStatus[req.id].title }}
+                </div>
+                <p>{{ copyStatus[req.id].body }}</p>
               </div>
             </div>
 
@@ -204,9 +238,15 @@
               {{ cardErrors[req.id] }}
             </div>
 
-            <div class="detail-toggle" @click="toggleDetail(req.id)">
+            <button
+              class="detail-toggle"
+              type="button"
+              :title="detailToggleBoundary(req)"
+              :aria-label="detailToggleBoundary(req)"
+              @click="toggleDetail(req.id)"
+            >
               {{ showDetail[req.id] ? '收起备注 ▲' : '添加备注 ▼' }}
-            </div>
+            </button>
             <textarea
               v-if="showDetail[req.id]"
               v-model="detailTexts[req.id]"
@@ -219,14 +259,20 @@
               <template v-if="isMessageRuleImprovement(req)">
                 <button
                   class="option-btn yes"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="messageRuleImprovementButtonBoundary(req, 'open')"
+                  :aria-label="messageRuleImprovementButtonBoundary(req, 'open')"
                   @click="openMessageRuleImprovement(req)"
                 >
                   {{ submitting[req.id] ? '打开中...' : '打开并预填建议' }}
                 </button>
                 <button
                   class="option-btn quiet"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="messageRuleImprovementButtonBoundary(req, 'dismiss')"
+                  :aria-label="messageRuleImprovementButtonBoundary(req, 'dismiss')"
                   @click="submitAnswer(req, 'dismissed')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '忽略' }}
@@ -237,7 +283,10 @@
                   v-for="opt in req.options"
                   :key="opt.value"
                   class="option-btn"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="decisionAnswerButtonBoundary(req, opt.value)"
+                  :aria-label="decisionAnswerButtonBoundary(req, opt.value)"
                   @click="submitAnswer(req, opt.value)"
                 >
                   {{ submitting[req.id] ? '提交中...' : opt.label }}
@@ -246,14 +295,20 @@
               <template v-else>
                 <button
                   class="option-btn yes"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="decisionAnswerButtonBoundary(req, 'yes')"
+                  :aria-label="decisionAnswerButtonBoundary(req, 'yes')"
                   @click="submitAnswer(req, 'yes')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '是' }}
                 </button>
                 <button
                   class="option-btn no"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="decisionAnswerButtonBoundary(req, 'no')"
+                  :aria-label="decisionAnswerButtonBoundary(req, 'no')"
                   @click="submitAnswer(req, 'no')"
                 >
                   {{ submitting[req.id] ? '提交中...' : '否' }}
@@ -261,7 +316,10 @@
               </template>
               <button
                 class="option-btn quiet"
+                type="button"
                 :disabled="submitting[req.id]"
+                :title="decisionStateButtonBoundary(req, 'snoozed')"
+                :aria-label="decisionStateButtonBoundary(req, 'snoozed')"
                 @click="transitionDecisionRequest(req.id, 'snoozed')"
               >
                 {{ submitting[req.id] ? '处理中...' : '稍后再决定' }}
@@ -274,6 +332,9 @@
       <section class="lane-section deferred-section">
         <button
           class="watch-toggle"
+          type="button"
+          :title="laneToggleBoundary('deferred')"
+          :aria-label="laneToggleBoundary('deferred')"
           @click="deferredCollapsed = !deferredCollapsed"
         >
           <div>
@@ -339,7 +400,10 @@
                   <span>稍后处理上下文</span>
                   <button
                     class="copy-review-btn"
+                    type="button"
                     :disabled="submitting[req.id]"
+                    :title="copyReviewButtonBoundary(req)"
+                    :aria-label="copyReviewButtonBoundary(req)"
                     @click="copyDecisionReview(req)"
                   >
                     复制审核包
@@ -367,8 +431,15 @@
                 <div class="option-preview">
                   原处理选项：{{ decisionActionPreview(req) }}
                 </div>
-                <div v-if="copyStatus[req.id]" class="copy-status">
-                  {{ copyStatus[req.id] }}
+                <div
+                  v-if="copyStatus[req.id]"
+                  class="copy-status"
+                  role="status"
+                >
+                  <div class="copy-status-title">
+                    {{ copyStatus[req.id].title }}
+                  </div>
+                  <p>{{ copyStatus[req.id].body }}</p>
                 </div>
               </div>
 
@@ -412,14 +483,20 @@
               <div class="action-buttons">
                 <button
                   class="option-btn yes"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="decisionStateButtonBoundary(req, 'pending')"
+                  :aria-label="decisionStateButtonBoundary(req, 'pending')"
                   @click="transitionDecisionRequest(req.id, 'pending')"
                 >
                   {{ submitting[req.id] ? '处理中...' : '现在处理' }}
                 </button>
                 <button
                   class="option-btn no"
+                  type="button"
                   :disabled="submitting[req.id]"
+                  :title="decisionStateButtonBoundary(req, 'expired')"
+                  :aria-label="decisionStateButtonBoundary(req, 'expired')"
                   @click="transitionDecisionRequest(req.id, 'expired')"
                 >
                   {{ submitting[req.id] ? '处理中...' : '不再追踪' }}
@@ -431,7 +508,13 @@
       </section>
 
       <section class="lane-section watch-section">
-        <button class="watch-toggle" @click="watchCollapsed = !watchCollapsed">
+        <button
+          class="watch-toggle"
+          type="button"
+          :title="laneToggleBoundary('watch')"
+          :aria-label="laneToggleBoundary('watch')"
+          @click="watchCollapsed = !watchCollapsed"
+        >
           <div>
             <h3 class="lane-title">待观察</h3>
             <p class="lane-note">queue=watch 的观察项，不计入主标题数字。</p>
@@ -471,6 +554,9 @@
                 <button
                   v-if="group.items.length > 1"
                   class="group-toggle"
+                  type="button"
+                  :title="watchGroupToggleBoundary(group)"
+                  :aria-label="watchGroupToggleBoundary(group)"
                   @click="toggleWatchGroup(group.key)"
                 >
                   {{ expandedWatchGroups[group.key] ? '收起' : '展开' }}
@@ -549,21 +635,30 @@
                   <div class="action-buttons">
                     <button
                       class="option-btn"
+                      type="button"
                       :disabled="submitting[req.id]"
+                      :title="watchStateButtonBoundary(req, 'pending')"
+                      :aria-label="watchStateButtonBoundary(req, 'pending')"
                       @click="transitionWatchRequest(req.id, 'pending')"
                     >
                       立即查证
                     </button>
                     <button
                       class="option-btn quiet"
+                      type="button"
                       :disabled="submitting[req.id]"
+                      :title="watchStateButtonBoundary(req, 'snoozed')"
+                      :aria-label="watchStateButtonBoundary(req, 'snoozed')"
                       @click="transitionWatchRequest(req.id, 'snoozed')"
                     >
                       继续观察
                     </button>
                     <button
                       class="option-btn no"
+                      type="button"
                       :disabled="submitting[req.id]"
+                      :title="watchStateButtonBoundary(req, 'expired')"
+                      :aria-label="watchStateButtonBoundary(req, 'expired')"
                       @click="transitionWatchRequest(req.id, 'expired')"
                     >
                       结束追踪
@@ -608,7 +703,7 @@ const showDetail = reactive<Record<string, boolean>>({});
 const detailTexts = reactive<Record<string, string>>({});
 const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
-const copyStatus = reactive<Record<string, string>>({});
+const copyStatus = reactive<Record<string, CopyReviewReceipt>>({});
 const loadError = ref<string | null>(null);
 type TransitionReceiptKind = 'success' | 'info' | 'warning';
 interface TransitionReceipt {
@@ -619,6 +714,10 @@ interface TransitionReceipt {
   linkLabel?: string;
 }
 interface PendingActionReceipt {
+  title: string;
+  body: string;
+}
+interface CopyReviewReceipt {
   title: string;
   body: string;
 }
@@ -1102,6 +1201,168 @@ function decisionActionPreview(req: ConfirmRequest) {
 }
 
 type ActionBoundaryMode = 'decision' | 'deferred' | 'watch';
+type QueueRefreshBoundaryMode = 'header' | 'load-error' | 'partial';
+type MessageRuleImprovementAction = 'open' | 'dismiss';
+
+function buttonBoundary(label: string, boundary: string) {
+  return `${label}：${boundary}`;
+}
+
+function queueRefreshButtonBoundary(mode: QueueRefreshBoundaryMode) {
+  const prefix =
+    mode === 'load-error'
+      ? '重试读取决策中心'
+      : mode === 'partial'
+      ? '重试全部队列'
+      : '刷新决策中心';
+  return buttonBoundary(
+    prefix,
+    '重新读取需你拍板、稍后决策、待观察和待观察（稍后）队列；只刷新 Memory Service 队列快照，不会批准、恢复、结束追踪、创建动作、发送消息或清空已加载卡片。',
+  );
+}
+
+function closeTransitionReceiptBoundary() {
+  return buttonBoundary(
+    '关闭操作回执',
+    '只隐藏本页这条操作结果提示；不会撤销答案、恢复队列状态、取消查证动作或发送外部消息。',
+  );
+}
+
+function laneToggleBoundary(lane: 'deferred' | 'watch') {
+  if (lane === 'deferred') {
+    return buttonBoundary(
+      deferredCollapsed.value ? '展开稍后决策' : '收起稍后决策',
+      '只改变本页稍后决策列表的可见状态；不会恢复到主队列、提交答案、结束追踪、创建动作或发送消息。',
+    );
+  }
+  return buttonBoundary(
+    watchCollapsed.value ? '展开待观察' : '收起待观察',
+    '只改变本页待观察池的可见状态；不会立即查证、继续观察、结束追踪、创建动作或发送消息。',
+  );
+}
+
+function watchGroupToggleBoundary(group: {
+  title: string;
+  items: ConfirmRequest[];
+}) {
+  const first = group.items[0];
+  const expanded = first ? expandedWatchGroups[watchGroupKey(first)] : false;
+  return buttonBoundary(
+    expanded ? `收起 ${group.title}` : `展开 ${group.title}`,
+    `只显示或隐藏同一来源下的 ${group.items.length} 个观察项；不会排入查证、关闭观察项、提交答案或发送外部消息。`,
+  );
+}
+
+function detailToggleBoundary(req: ConfirmRequest) {
+  const label = showDetail[req.id] ? '收起备注' : '添加备注';
+  return buttonBoundary(
+    label,
+    '只展开或收起本卡的可选备注草稿；备注只有随答案提交时才会保存，不会单独写入、提交答案、改变队列状态或发送消息。',
+  );
+}
+
+function copyReviewButtonBoundary(req: ConfirmRequest) {
+  const evidenceCount = req.evidenceRefs?.length ?? 0;
+  const hiddenCount = hiddenEvidenceCount(req);
+  const snapshotLabel =
+    copyReviewMode(req) === 'deferred' ? '稍后决策快照' : '当前决策快照';
+  const evidenceText =
+    hiddenCount > 0
+      ? `${evidenceCount} 条证据引用，含本页折叠的 ${hiddenCount} 条`
+      : `${evidenceCount} 条证据引用`;
+  return buttonBoundary(
+    '复制审核包',
+    `复制${snapshotLabel}、${copyReviewOptionCount(
+      req,
+    )} 个处理选项、${evidenceText}和页面同款处理边界到本机剪贴板；不会提交答案、更新规则、续跑 OpenClaw、创建只读查证动作、发送外部消息或移出队列。`,
+  );
+}
+
+function messageRuleImprovementButtonBoundary(
+  req: ConfirmRequest,
+  action: MessageRuleImprovementAction,
+) {
+  if (action === 'open') {
+    return buttonBoundary(
+      '打开并预填建议',
+      '只把规则改进建议暂存到本机并打开记忆入口规则编辑器；保存前不会更新原规则、不会把确认项标记为 applied、不会创建外部动作或发送消息。',
+    );
+  }
+  return buttonBoundary(
+    submitting[req.id] ? '提交中' : '忽略建议',
+    '提交 dismissed 并移出主队列；不会修改规则、创建外部动作、续跑 OpenClaw、发送消息或删除原始证据。',
+  );
+}
+
+function decisionAnswerButtonBoundary(req: ConfirmRequest, answer: string) {
+  const label = answerLabel(req, answer);
+  const base = `提交「${label}」到 Memory Service；成功后写入该确认项、保存可选备注并移出主队列。`;
+  if (isOpenClawActionControlAnswer(req, answer)) {
+    const actionText =
+      answer === 'retry'
+        ? '会请求续跑绑定动作'
+        : answer === 'skip_once'
+        ? '会请求暂不重试绑定动作'
+        : '会请求停止绑定动作';
+    return buttonBoundary(
+      label,
+      `${base}${actionText}，真实执行结果以服务端回执和动作队列为准；不会直接发送外部消息或改动其它确认项。`,
+    );
+  }
+  const openClawBoundary =
+    req.category === 'openclaw_delegation'
+      ? '普通审批文案不会直接续跑 OpenClaw；后续动作以服务端返回和审核包证据为准。'
+      : '不会直接发送外部消息、创建主动询问、续跑 OpenClaw 或改动其它确认项。';
+  return buttonBoundary(label, `${base}${openClawBoundary}`);
+}
+
+function decisionStateButtonBoundary(
+  req: ConfirmRequest,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  if (state === 'snoozed') {
+    return buttonBoundary(
+      '稍后再决定',
+      '只把这条确认项写为 snoozed 并收起约 24 小时；不会提交答案、创建外部动作、续跑 OpenClaw、发送消息或删除证据。',
+    );
+  }
+  if (state === 'pending') {
+    return buttonBoundary(
+      '现在处理',
+      '只把稍后决策恢复到主队列；不会替你选择答案、恢复外部动作、续跑 OpenClaw 或发送消息。',
+    );
+  }
+  return buttonBoundary(
+    '不再追踪',
+    `把确认项 ${req.id} 设为 expired；不会删除原始证据、撤销已存在动作、同步来源系统或发送外部消息。`,
+  );
+}
+
+function watchStateButtonBoundary(
+  req: ConfirmRequest,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  if (state === 'pending') {
+    return buttonBoundary(
+      '立即查证',
+      `为观察项 ${req.id} 创建或复用只读 OpenClaw 查证动作；不会立刻确认事实、替你拍板、提交答案、续跑已有动作或发送外部消息。`,
+    );
+  }
+  if (state === 'snoozed') {
+    return buttonBoundary(
+      '继续观察',
+      '只把观察项延后约 72 小时；不会创建新的外部动作、提交答案、确认事实或发送消息。',
+    );
+  }
+  return buttonBoundary(
+    '结束追踪',
+    `把观察项 ${req.id} 设为 expired；不会删除原始证据、取消已存在动作记录、确认事实或发送外部消息。`,
+  );
+}
+
+function copyReviewMode(req: ConfirmRequest): ActionBoundaryMode {
+  return req.state === 'snoozed' ? 'deferred' : 'decision';
+}
 
 function actionBoundaryLines(
   req: ConfirmRequest,
@@ -1175,15 +1436,36 @@ function buildDecisionReviewText(req: ConfirmRequest) {
   if (req.evidenceRefs?.length) {
     lines.push('', '证据引用:', ...req.evidenceRefs.map((ref) => `- ${ref}`));
   }
-  if (improvement) {
-    lines.push(
-      '',
-      '处理边界:',
-      '- 打开并预填建议只会打开规则编辑器；保存前不会更新原规则或标记确认项。',
-      '- 忽略建议只提交 dismissed；不会改规则、创建外部动作或发送消息。',
-    );
-  }
+  lines.push(
+    '',
+    '处理边界:',
+    ...actionBoundaryLines(req, copyReviewMode(req)).map((line) => `- ${line}`),
+  );
   return lines.join('\n');
+}
+
+function copyReviewOptionCount(req: ConfirmRequest) {
+  if (isMessageRuleImprovement(req)) return 2;
+  return req.options?.length || 2;
+}
+
+function buildCopyReviewReceipt(req: ConfirmRequest): CopyReviewReceipt {
+  const evidenceCount = req.evidenceRefs?.length ?? 0;
+  const hiddenCount = hiddenEvidenceCount(req);
+  const evidenceText =
+    evidenceCount > 0
+      ? `${evidenceCount} 条证据引用${
+          hiddenCount > 0 ? `（含本页折叠的 ${hiddenCount} 条）` : ''
+        }`
+      : '0 条证据引用';
+  const snapshotLabel =
+    copyReviewMode(req) === 'deferred' ? '稍后决策快照' : '当前决策快照';
+  return {
+    title: '审核包复制回执',
+    body: `已复制${snapshotLabel}：${copyReviewOptionCount(
+      req,
+    )} 个处理选项、${evidenceText}和页面同款处理边界；这只是本机剪贴板 handoff，不会提交答案、更新规则、续跑 OpenClaw、创建只读查证动作、发送外部消息或移出队列。`,
+  };
 }
 
 async function writeClipboardText(text: string) {
@@ -1206,9 +1488,12 @@ async function copyDecisionReview(req: ConfirmRequest) {
   delete copyStatus[req.id];
   try {
     await writeClipboardText(buildDecisionReviewText(req));
-    copyStatus[req.id] = '已复制审核包';
+    copyStatus[req.id] = buildCopyReviewReceipt(req);
   } catch {
-    copyStatus[req.id] = '复制失败，请手动选择问题、上下文和证据';
+    copyStatus[req.id] = {
+      title: '审核包复制失败',
+      body: '请手动选择问题、上下文、处理选项和证据；复制失败不会提交答案、更新规则、续跑 OpenClaw、创建只读查证动作或发送外部消息。',
+    };
   }
 }
 
@@ -2052,8 +2337,7 @@ function futureTime(ts: number) {
 }
 
 .evidence-empty,
-.option-preview,
-.copy-status {
+.option-preview {
   color: #94a3b8;
   font-size: 0.78rem;
   line-height: 1.45;
@@ -2065,7 +2349,23 @@ function futureTime(ts: number) {
 
 .copy-status {
   margin-top: 0.35rem;
-  color: #86efac;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  border-radius: 0.55rem;
+  background: rgba(6, 78, 59, 0.14);
+  color: #bbf7d0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.copy-status-title {
+  color: #dcfce7;
+  font-weight: 700;
+  margin-bottom: 0.16rem;
+}
+
+.copy-status p {
+  margin: 0;
 }
 
 .meta-row {
@@ -2151,14 +2451,22 @@ function futureTime(ts: number) {
 }
 
 .detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  padding: 0;
   color: #60a5fa;
   font-size: 0.8rem;
+  font: inherit;
   cursor: pointer;
   margin-bottom: 0.5rem;
   user-select: none;
+  text-align: left;
 }
 
-.detail-toggle:hover {
+.detail-toggle:hover,
+.detail-toggle:focus-visible {
   color: #93c5fd;
 }
 

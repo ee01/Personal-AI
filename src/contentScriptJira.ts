@@ -34,13 +34,21 @@ import {
   getDesignDisplayStatusTone,
   getDesignSourceSummary,
   getDesignSourceTooltip,
+  getDesignScanBasisReceipt,
   getDesignStatusTone,
   getDesignStatusActionHint,
   getDesignSourceLabel,
   getDesignUpdateReviewScope,
+  getIgnoredDesignFieldLinkCount,
+  getIgnoredDesignFieldLinkSummary,
+  getIgnoredDesignFieldLinkTooltip,
   getRecoveredUXTicketCandidateCount,
+  getUXTicketRecoveryFilterSummary,
+  getUXTicketRecoveryIgnoredCandidateCount,
+  getUXTicketRecoveryIgnoredSourceSummary,
   getUXTicketRecoverySourceSummary,
   getIgnoredDesignLinkSummary,
+  getIgnoredDesignLinkReasonSummary,
   getIgnoredDesignLinkSourceSummary,
   getIgnoredDesignLinkTooltip,
   getUXTicketKeyRecoveryBoundaryHint,
@@ -621,7 +629,14 @@ function toLinkedIssueCandidates(
   return keys.map(key => ({ key, keySource }));
 }
 
-function getLinkedIssueReference(linkElement: Element, projectPrefix?: string): { key: string; url: string; keySource: UXTicketKeySource } | null {
+function getLinkedIssueReference(linkElement: Element, projectPrefix?: string): {
+  key: string;
+  url: string;
+  keySource: UXTicketKeySource;
+  keyRecoveryCandidateCount?: number;
+  keyRecoveryIgnoredCandidateCount?: number;
+  keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
+} | null {
   const href = getLinkedIssueHref(linkElement).trim();
   const hrefCandidates = parseJiraIssueKeyCandidatesFromUrl(href);
   const hrefPathKey = hrefCandidates.find(candidate => candidate.keySource === 'jira_path')?.key;
@@ -643,26 +658,57 @@ function getLinkedIssueReference(linkElement: Element, projectPrefix?: string): 
     : uniqueCandidates[0];
   if (!selectedCandidate) return null;
 
+  const ignoredCandidates = projectPrefix
+    ? uniqueCandidates.filter(candidate => !matchesProjectPattern(candidate.key, projectPrefix))
+    : [];
+  const ignoredSourceCounts = ignoredCandidates.reduce<Partial<Record<UXTicketKeySource, number>>>((counts, candidate) => {
+    counts[candidate.keySource] = (counts[candidate.keySource] || 0) + 1;
+    return counts;
+  }, {});
+  const recoveryMeta = {
+    keyRecoveryCandidateCount: uniqueCandidates.length || undefined,
+    keyRecoveryIgnoredCandidateCount: ignoredCandidates.length || undefined,
+    keyRecoveryIgnoredSourceCounts: ignoredCandidates.length > 0 ? ignoredSourceCounts : undefined,
+  };
+
   const fallbackUrl = `/browse/${selectedCandidate.key}`;
   if (!href || hrefPathKey !== selectedCandidate.key) {
-    return { key: selectedCandidate.key, url: fallbackUrl, keySource: selectedCandidate.keySource };
+    return { key: selectedCandidate.key, url: fallbackUrl, keySource: selectedCandidate.keySource, ...recoveryMeta };
   }
 
   try {
     const parsedHref = new URL(href, window.location.origin);
     if (parsedHref.protocol === 'http:' || parsedHref.protocol === 'https:') {
-      return { key: selectedCandidate.key, url: href, keySource: selectedCandidate.keySource };
+      return { key: selectedCandidate.key, url: href, keySource: selectedCandidate.keySource, ...recoveryMeta };
     }
   } catch {
     // Fall through to the synthesized Jira issue URL.
   }
 
-  return { key: selectedCandidate.key, url: fallbackUrl, keySource: selectedCandidate.keySource };
+  return { key: selectedCandidate.key, url: fallbackUrl, keySource: selectedCandidate.keySource, ...recoveryMeta };
 }
 
 // 从DOM中查找linked issues中的UX tickets
-function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url: string; summary: string; source: 'linked_issues'; keySource: UXTicketKeySource }[] {
-  const uxTickets: { key: string; url: string; summary: string; source: 'linked_issues'; keySource: UXTicketKeySource }[] = [];
+function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): Array<{
+  key: string;
+  url: string;
+  summary: string;
+  source: 'linked_issues';
+  keySource: UXTicketKeySource;
+  keyRecoveryCandidateCount?: number;
+  keyRecoveryIgnoredCandidateCount?: number;
+  keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
+}> {
+  const uxTickets: Array<{
+    key: string;
+    url: string;
+    summary: string;
+    source: 'linked_issues';
+    keySource: UXTicketKeySource;
+    keyRecoveryCandidateCount?: number;
+    keyRecoveryIgnoredCandidateCount?: number;
+    keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
+  }> = [];
   
   // 查找Issue Links部分
   const issueLinkSections = document.querySelectorAll('.links-list .links-section');
@@ -682,7 +728,10 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url
           url: reference.url,
           summary: summary,
           source: 'linked_issues',
-          keySource: reference.keySource
+          keySource: reference.keySource,
+          keyRecoveryCandidateCount: reference.keyRecoveryCandidateCount,
+          keyRecoveryIgnoredCandidateCount: reference.keyRecoveryIgnoredCandidateCount,
+          keyRecoveryIgnoredSourceCounts: reference.keyRecoveryIgnoredSourceCounts
         });
       }
     });
@@ -1033,6 +1082,9 @@ async function appendUXDesignItems(
         summary: uxTicket.summary || designContext.summary,
         uxTicketKey: uxTicket.key,
         uxTicketKeySource: uxTicket.keySource,
+        keyRecoveryCandidateCount: uxTicket.keyRecoveryCandidateCount,
+        keyRecoveryIgnoredCandidateCount: uxTicket.keyRecoveryIgnoredCandidateCount,
+        keyRecoveryIgnoredSourceCounts: uxTicket.keyRecoveryIgnoredSourceCounts,
         source: baseSource,
         linkProvided: false,
         uxEpicKey: designContext.uxEpicKey,
@@ -1052,6 +1104,9 @@ async function appendUXDesignItems(
         designLabel: candidateDisplayLabel,
         uxTicketKey: uxTicket.key,
         uxTicketKeySource: uxTicket.keySource,
+        keyRecoveryCandidateCount: uxTicket.keyRecoveryCandidateCount,
+        keyRecoveryIgnoredCandidateCount: uxTicket.keyRecoveryIgnoredCandidateCount,
+        keyRecoveryIgnoredSourceCounts: uxTicket.keyRecoveryIgnoredSourceCounts,
         source: mergeDesignSources(baseSource, candidate.source || 'design_field'),
         linkProvided: true,
         designStatus: candidate.status,
@@ -1119,6 +1174,19 @@ function bindDesignLinksDynamicHeight(container: HTMLElement): void {
 
 type DesignOpenKind = 'design' | 'ux-ticket' | 'ux-epic';
 
+type DesignOpenOptions = {
+  kind: DesignOpenKind;
+  label: string;
+  targetLabel?: string;
+  sourceLabel?: string;
+  updatedDateLabel?: string;
+  updatedBasisLabel?: string;
+  missingUpdatedDate?: boolean;
+  recoveredKeySourceLabel?: string;
+  recoveredKeySourceHint?: string;
+  recoveredBoundaryHint?: string;
+};
+
 function getDesignOpenKindLabel(kind?: string | null): string {
   switch (kind) {
     case 'ux-ticket':
@@ -1143,17 +1211,48 @@ function getDesignOpenTargetLabel(url: string, fallback: string): string {
   return fallback;
 }
 
-function getDesignOpenAttributes(options: {
-  kind: DesignOpenKind;
-  label: string;
-  targetLabel?: string;
-  sourceLabel?: string;
-}): string {
+function getDesignOpenBoundaryLabel(options: DesignOpenOptions): string {
+  const kindLabel = getDesignOpenKindLabel(options.kind);
+  const targetLabel = options.targetLabel || options.label;
+  const hasUpdateContext = Boolean(options.updatedDateLabel || options.updatedBasisLabel || options.missingUpdatedDate);
+  const hasRecoveryContext = Boolean(options.recoveredKeySourceLabel || options.recoveredBoundaryHint);
+  const openBoundary = ui('点击只打开来源页面；不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。');
+  const updateBoundary = hasUpdateContext
+    ? ui('打开后仍需复查设计；本页不会把点击标记为已核对最新更新。')
+    : '';
+  const recoveryBoundary = hasRecoveryContext
+    ? ui(options.recoveredBoundaryHint || '这次打开的是恢复出的 UX ticket 候选；它不证明 Jira 已存在正式关联。')
+    : '';
+
   return [
+    `${ui('打开')} ${kindLabel}：${options.label || targetLabel}。`,
+    `${ui('目标')}：${targetLabel}。`,
+    options.sourceLabel ? `${ui('来源')}：${options.sourceLabel}。` : '',
+    options.updatedDateLabel ? `${ui('待复查')} ${options.updatedDateLabel}。` : '',
+    options.updatedBasisLabel ? `${ui('更新时间来源')}：${ui(options.updatedBasisLabel)}。` : '',
+    options.missingUpdatedDate ? ui('更新时间缺失；打开后仍需复查设计。') : '',
+    options.recoveredKeySourceLabel ? `${ui('恢复来源')}：${options.recoveredKeySourceLabel}。` : '',
+    recoveryBoundary,
+    updateBoundary,
+    openBoundary,
+  ].filter(Boolean).join(' ');
+}
+
+function getDesignOpenAttributes(options: DesignOpenOptions): string {
+  const boundaryLabel = getDesignOpenBoundaryLabel(options);
+  return [
+    `title="${escapeAttribute(boundaryLabel)}"`,
+    `aria-label="${escapeAttribute(boundaryLabel)}"`,
     `data-design-open-kind="${escapeAttribute(options.kind)}"`,
     `data-design-open-label="${escapeAttribute(options.label)}"`,
     `data-design-open-target="${escapeAttribute(options.targetLabel || options.label)}"`,
     options.sourceLabel ? `data-design-open-source="${escapeAttribute(options.sourceLabel)}"` : '',
+    options.updatedDateLabel ? `data-design-open-updated-date="${escapeAttribute(options.updatedDateLabel)}"` : '',
+    options.updatedBasisLabel ? `data-design-open-updated-basis="${escapeAttribute(options.updatedBasisLabel)}"` : '',
+    options.missingUpdatedDate ? 'data-design-open-updated-missing="true"' : '',
+    options.recoveredKeySourceLabel ? `data-design-open-recovered-key-source="${escapeAttribute(options.recoveredKeySourceLabel)}"` : '',
+    options.recoveredKeySourceHint ? `data-design-open-recovered-key-source-hint="${escapeAttribute(options.recoveredKeySourceHint)}"` : '',
+    options.recoveredBoundaryHint ? `data-design-open-recovered-boundary="${escapeAttribute(options.recoveredBoundaryHint)}"` : '',
   ].filter(Boolean).join(' ');
 }
 
@@ -1173,8 +1272,28 @@ function bindDesignOpenReceipts(container: HTMLElement, iconUrl: string): void {
     const label = (link.dataset.designOpenLabel || link.textContent || '').replace(/\s+/g, ' ').trim();
     const targetLabel = getDesignOpenTargetLabel(link.href || link.getAttribute('href') || '', link.dataset.designOpenTarget || label);
     const sourceLabel = link.dataset.designOpenSource;
+    const updatedDateLabel = link.dataset.designOpenUpdatedDate;
+    const updatedBasisLabel = link.dataset.designOpenUpdatedBasis;
+    const missingUpdatedDate = link.dataset.designOpenUpdatedMissing === 'true';
+    const recoveredKeySourceLabel = link.dataset.designOpenRecoveredKeySource;
+    const recoveredKeySourceHint = link.dataset.designOpenRecoveredKeySourceHint;
+    const recoveredBoundary = link.dataset.designOpenRecoveredBoundary;
+    const hasUpdateContext = Boolean(updatedDateLabel || updatedBasisLabel || missingUpdatedDate);
+    const hasRecoveryContext = Boolean(recoveredKeySourceLabel || recoveredBoundary);
     const boundary = ui('本次点击只打开来源页面；不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。');
-    const ariaLabel = `${ui('来源打开回执')}：${kindLabel} ${label || targetLabel}。${boundary}`;
+    const updateBoundary = hasUpdateContext
+      ? ui('打开后仍需复查设计；本页不会把这次点击标记为已核对最新更新。')
+      : '';
+    const recoveryBoundary = hasRecoveryContext
+      ? ui(recoveredBoundary || '这次打开的是恢复出的 UX ticket 候选；它不证明 Jira 已存在正式关联。')
+      : '';
+    const ariaLabel = [
+      `${ui('来源打开回执')}：${kindLabel} ${label || targetLabel}。`,
+      updateBoundary,
+      recoveredKeySourceLabel ? `${ui('恢复来源')}：${recoveredKeySourceLabel}。` : '',
+      recoveryBoundary,
+      boundary,
+    ].filter(Boolean).join(' ');
 
     receipt.hidden = false;
     receipt.setAttribute('aria-label', ariaLabel);
@@ -1184,6 +1303,13 @@ function bindDesignOpenReceipts(container: HTMLElement, iconUrl: string): void {
       <span class="design-open-receipt-text">${escapeHtml(ui('已打开'))} ${escapeHtml(kindLabel)}：<strong>${escapeHtml(label || targetLabel)}</strong></span>
       <span class="design-open-target-tag">${escapeHtml(ui('目标'))} ${escapeHtml(targetLabel)}</span>
       ${sourceLabel ? `<span class="source-tag" title="${escapeAttribute(`Source: ${sourceLabel}`)}">${escapeHtml(sourceLabel)}</span>` : ''}
+      ${recoveredKeySourceLabel ? `<span class="ux-key-source-tag" title="${escapeAttribute(ui(recoveredKeySourceHint || recoveredKeySourceLabel))}" aria-label="${escapeAttribute(ui(recoveredKeySourceHint || recoveredKeySourceLabel))}">${escapeHtml(recoveredKeySourceLabel)}</span>` : ''}
+      ${hasRecoveryContext ? `<span class="ux-key-recovery-tag" title="${escapeAttribute(recoveryBoundary || boundary)}" aria-label="${escapeAttribute(recoveryBoundary || boundary)}">${escapeHtml(ui('恢复候选打开'))}</span>` : ''}
+      ${updatedDateLabel ? `<span class="design-update-review-latest-tag" title="${escapeAttribute(updateBoundary || boundary)}">${escapeHtml(ui('待复查'))} ${escapeHtml(updatedDateLabel)}</span>` : ''}
+      ${updatedBasisLabel ? `<span class="design-update-review-source-tag" title="${escapeAttribute(updateBoundary || boundary)}">${escapeHtml(ui('更新时间来源'))} ${escapeHtml(ui(updatedBasisLabel))}</span>` : ''}
+      ${missingUpdatedDate ? `<span class="design-updated-missing-tag" title="${escapeAttribute(updateBoundary || boundary)}">${escapeHtml(ui('更新时间缺失'))}</span>` : ''}
+      ${hasUpdateContext ? `<span class="design-open-update-boundary">${escapeHtml(updateBoundary)}</span>` : ''}
+      ${hasRecoveryContext ? `<span class="design-open-recovery-boundary">${escapeHtml(recoveryBoundary)}</span>` : ''}
       <span class="design-scan-boundary-tag" title="${escapeAttribute(boundary)}" aria-label="${escapeAttribute(boundary)}">${escapeHtml(ui('只读打开'))}</span>
       <span class="design-open-boundary">${escapeHtml(boundary)}</span>
     `;
@@ -1204,27 +1330,38 @@ function displayDesignLinks(
   const ignoredSummary = getIgnoredDesignLinkSummary(ignoredDesignLikeLinks);
   if (designData.length === 0 && !ignoredSummary) return;
   const ignoredSourceSummary = getIgnoredDesignLinkSourceSummary(ignoredDesignLikeLinks);
+  const ignoredReasonSummary = getIgnoredDesignLinkReasonSummary(ignoredDesignLikeLinks);
+  const ignoredDesignFieldLinkCount = getIgnoredDesignFieldLinkCount(ignoredDesignLikeLinks);
+  const ignoredDesignFieldSummary = getIgnoredDesignFieldLinkSummary(ignoredDesignLikeLinks);
+  const ignoredDesignFieldTooltip = getIgnoredDesignFieldLinkTooltip(ignoredDesignLikeLinks);
   const ignoredAccessibleSummary = [
-    ignoredSummary,
     ignoredSourceSummary ? `filtered sources ${ignoredSourceSummary}` : '',
+    ignoredReasonSummary ? `filtered reasons ${ignoredReasonSummary}` : '',
+    ignoredDesignFieldSummary,
   ].filter(Boolean).join('; ');
 
   const designLinksContainer = document.createElement('div');
   const sourceSummary = designData.length > 0
     ? getDesignSourceSummary(designData)
     : ui('0 handoff entries');
+  const scanBasisReceipt = getDesignScanBasisReceipt(designData, ignoredDesignLikeLinks);
   const ignoredTooltip = getIgnoredDesignLinkTooltip(ignoredDesignLikeLinks);
   const recoveredUXTicketCandidateCount = getRecoveredUXTicketCandidateCount(designData);
   const recoveredUXTicketSummary = getUXTicketRecoveryScopeSummary(recoveredUXTicketCandidateCount);
   const recoveredUXTicketSourceSummary = getUXTicketRecoverySourceSummary(designData);
+  const recoveryIgnoredCandidateCount = getUXTicketRecoveryIgnoredCandidateCount(designData);
+  const recoveryFilterSummary = getUXTicketRecoveryFilterSummary(recoveryIgnoredCandidateCount);
+  const recoveryIgnoredSourceSummary = getUXTicketRecoveryIgnoredSourceSummary(designData);
   const recoveredUXTicketAccessibleSummary = recoveredUXTicketSummary
     ? [
       recoveredUXTicketSummary,
       recoveredUXTicketSourceSummary ? `sources ${recoveredUXTicketSourceSummary}` : '',
+      recoveryFilterSummary,
+      recoveryIgnoredSourceSummary ? `filtered candidate sources ${recoveryIgnoredSourceSummary}` : '',
     ].filter(Boolean).join('; ')
     : undefined;
   const updateReviewScope = getDesignUpdateReviewScope(designData);
-  const accessibleSummary = [sourceSummary, updateReviewScope?.summary, ignoredAccessibleSummary, recoveredUXTicketAccessibleSummary]
+  const accessibleSummary = [scanBasisReceipt.summary, updateReviewScope?.summary, ignoredAccessibleSummary, recoveredUXTicketAccessibleSummary]
     .filter(Boolean)
     .join('; ');
   
@@ -1234,11 +1371,39 @@ function displayDesignLinks(
   const noHandoffTooltip = ui('只发现文档、社区、营销、个人页或设置页等设计工具链接；未展示为开发交付入口。');
   const readonlyBoundary = ui('只读扫描，不创建或编辑 Jira 设计链接、issue link 或关联关系。');
   const filteredSourceBoundary = ignoredSourceSummary ? `过滤来源：${ignoredSourceSummary}。` : '';
-  const filterScopeTooltip = ui(`过滤范围：只展示可开发交付入口；文档、社区、营销、个人页或设置页不会显示成设计入口，也不会创建或编辑 Jira。${filteredSourceBoundary}`);
-  const recoveryScopeTooltip = ui(`恢复范围：实际来源 ${recoveredUXTicketSourceSummary || '非标准页面证据'}。Personal AI 只保留匹配设计项目配置的 UX ticket key，并且只展示只读候选，不创建或编辑 Jira issue links、设计字段或关联关系，也不证明这是正式 Jira 关联。`);
+  const filteredReasonBoundary = ignoredReasonSummary ? `过滤原因：${ignoredReasonSummary}。` : '';
+  const filteredDesignFieldBoundary = ignoredDesignFieldLinkCount > 0
+    ? `其中 ${ignoredDesignFieldLinkCount} 个来自 UX ticket 设计字段；设计字段已扫描但只包含非交付链接时，仍保留 Missing link，不视为有效设计稿。`
+    : '';
+  const filterScopeTooltip = ui(`过滤范围：只展示可开发交付入口；文档、社区、营销、个人页或设置页不会显示成设计入口，也不会创建或编辑 Jira。${filteredSourceBoundary}${filteredReasonBoundary}${filteredDesignFieldBoundary}`);
+  const scanBasisTooltip = ui(scanBasisReceipt.tooltip);
+  const scanBasisIgnoredTagHtml = scanBasisReceipt.ignoredSummary
+    ? `<span class="filtered-design-tag" title="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(scanBasisReceipt.ignoredSummary)}</span>`
+    : '';
+  const scanBasisSourceTagHtml = `<span class="design-source-basis-tag" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(scanBasisReceipt.sourceSummary)}</span>`;
+  const filteredReasonTagHtml = ignoredReasonSummary
+    ? `<span class="filtered-design-reason-tag" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`原因 ${ignoredReasonSummary}`)}</span>`
+    : '';
+  const filteredDesignFieldTagHtml = ignoredDesignFieldLinkCount > 0
+    ? `<span class="filtered-design-field-tag" title="${escapeAttribute(ui(ignoredDesignFieldTooltip || filterScopeTooltip))}" aria-label="${escapeAttribute(ui(ignoredDesignFieldTooltip || filterScopeTooltip))}">${escapeHtml(`${ui('设计字段被过滤')} ${ignoredDesignFieldLinkCount}`)}</span>`
+    : '';
+  const recoveryFilterTooltipPart = recoveryFilterSummary
+    ? `已过滤 ${recoveryFilterSummary}${recoveryIgnoredSourceSummary ? `，过滤来源 ${recoveryIgnoredSourceSummary}` : ''}；这些候选不匹配当前设计项目配置。`
+    : '';
+  const recoveryScopeTooltip = ui(`恢复范围：实际来源 ${recoveredUXTicketSourceSummary || '非标准页面证据'}。${recoveryFilterTooltipPart}Personal AI 只保留匹配设计项目配置的 UX ticket key，并且只展示只读候选，不创建或编辑 Jira issue links、设计字段或关联关系，也不证明这是正式 Jira 关联。`);
   const shouldShowFilterScopeReceipt = designData.length > 0 && Boolean(ignoredSummary);
   const shouldShowRecoveryScopeReceipt = Boolean(recoveredUXTicketSummary);
   const shouldShowUpdateReviewScopeReceipt = Boolean(updateReviewScope);
+  const scanBasisReceiptHtml = `
+    <div class="design-scan-basis-row" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">
+      <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
+      <span class="design-link-label">${escapeHtml(ui('扫描口径'))}</span>
+      <span class="design-scan-basis-text">${escapeHtml(ui('本次只展示 Jira 可见交付入口'))}</span>
+      ${scanBasisSourceTagHtml}
+      ${scanBasisIgnoredTagHtml}
+      <span class="design-scan-boundary-tag" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(ui('只读批次'))}</span>
+    </div>
+  `;
 
   designLinksContainer.className = 'design-links-container';
   designLinksContainer.setAttribute('role', 'region');
@@ -1256,6 +1421,8 @@ function displayDesignLinks(
         ${ignoredSourceSummary
           ? `<span class="filtered-design-source-tag" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`来源 ${ignoredSourceSummary}`)}</span>`
           : ''}
+        ${filteredReasonTagHtml}
+        ${filteredDesignFieldTagHtml}
         <span class="design-scan-boundary-tag" title="${escapeAttribute(readonlyBoundary)}" aria-label="${escapeAttribute(readonlyBoundary)}">${escapeHtml(ui('只读扫描'))}</span>
       </div>
     `;
@@ -1271,6 +1438,8 @@ function displayDesignLinks(
         ${ignoredSourceSummary
           ? `<span class="filtered-design-source-tag" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`来源 ${ignoredSourceSummary}`)}</span>`
           : ''}
+        ${filteredReasonTagHtml}
+        ${filteredDesignFieldTagHtml}
         <span class="design-scan-boundary-tag" title="${escapeAttribute(readonlyBoundary)}" aria-label="${escapeAttribute(readonlyBoundary)}">${escapeHtml(ui('只读扫描'))}</span>
       </div>
     `
@@ -1284,6 +1453,9 @@ function displayDesignLinks(
         <span class="ux-key-source-tag" title="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(recoveredUXTicketSummary || '')}</span>
         ${recoveredUXTicketSourceSummary
           ? `<span class="ux-key-source-breakdown-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(`来源 ${recoveredUXTicketSourceSummary}`)}</span>`
+          : ''}
+        ${recoveryFilterSummary
+          ? `<span class="ux-key-recovery-filter-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(recoveryFilterSummary)}</span>`
           : ''}
         <span class="ux-key-recovery-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(ui('只读候选'))}</span>
       </div>
@@ -1316,12 +1488,6 @@ function displayDesignLinks(
     if (design.type === 'figma' || design.type === 'design_link') {
       const linkLabel = getDesignDisplayLabel(design);
       const safeUrl = escapeAttribute(design.url);
-      const designOpenAttributes = getDesignOpenAttributes({
-        kind: 'design',
-        label: linkLabel,
-        targetLabel: getDesignOpenTargetLabel(design.url, linkLabel),
-        sourceLabel: getDesignSourceLabel(design.source),
-      });
       const designStatusLabel = formatDesignStatusLabel(design.status);
       const designStatusHint = getDesignStatusActionHint(design.status);
       const statusTag = designStatusLabel
@@ -1332,20 +1498,30 @@ function displayDesignLinks(
       const updatedDateAccessibleLabel = updatedDateTooltip || design.updatedAt || updatedDateLabel;
       const updatedBasisLabel = getDesignUpdatedAtBasisLabel(design.updatedAtSource, design.updatedAt);
       const updatedBasisTooltip = formatDesignUpdatedBasisTooltip(design.updatedAtSource, design.updatedAt) || updatedBasisLabel;
+      const missingUpdatedDate = isDesignUpdatedDateMissing(design);
+      const designOpenAttributes = getDesignOpenAttributes({
+        kind: 'design',
+        label: linkLabel,
+        targetLabel: getDesignOpenTargetLabel(design.url, linkLabel),
+        sourceLabel: getDesignSourceLabel(design.source),
+        updatedDateLabel,
+        updatedBasisLabel,
+        missingUpdatedDate,
+      });
       const updatedTag = updatedDateLabel
         ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateAccessibleLabel)}" aria-label="${escapeAttribute(updatedDateAccessibleLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
       const updatedBasisTag = updatedDateLabel && updatedBasisLabel
         ? `<span class="design-updated-basis-tag" title="${escapeAttribute(updatedBasisTooltip || updatedBasisLabel)}" aria-label="${escapeAttribute(updatedBasisTooltip || updatedBasisLabel)}">${escapeHtml(ui(updatedBasisLabel))}</span>`
         : '';
-      const missingUpdatedDateTag = isDesignUpdatedDateMissing(design)
+      const missingUpdatedDateTag = missingUpdatedDate
         ? `<span class="design-updated-missing-tag" title="${escapeAttribute(missingUpdatedDateTooltip)}" aria-label="${escapeAttribute(missingUpdatedDateTooltip)}">${escapeHtml(ui('更新时间缺失'))}</span>`
         : '';
       linksHtml += `
         <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
           <span class="design-link-label">${escapeHtml(ui('设计'))}</span>
-          <a href="${safeUrl}" title="${safeUrl}" target="_blank" rel="noopener noreferrer" class="design-link" ${designOpenAttributes}>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="design-link" ${designOpenAttributes}>
             ${escapeHtml(linkLabel)} <span class="external-link-icon">↗</span>
           </a>
           ${statusTag}
@@ -1374,19 +1550,14 @@ function displayDesignLinks(
         : '';
       const designLabel = design.designLabel || design.summary || design.uxTicketKey;
       const designSourceLabel = getDesignSourceLabel(design.source);
-      const designOpenAttributes = design.url
-        ? getDesignOpenAttributes({
-          kind: 'design',
-          label: designLabel,
-          targetLabel: getDesignOpenTargetLabel(design.url, designLabel),
-          sourceLabel: designSourceLabel,
-        })
-        : '';
       const uxTicketOpenAttributes = getDesignOpenAttributes({
         kind: 'ux-ticket',
         label: design.uxTicketKey,
         targetLabel: design.uxTicketKey,
         sourceLabel: designSourceLabel,
+        recoveredKeySourceLabel: keySourceLabel,
+        recoveredKeySourceHint: keySourceHint,
+        recoveredBoundaryHint: recoveryBoundaryHint,
       });
       const uxEpicOpenAttributes = getDesignOpenAttributes({
         kind: 'ux-epic',
@@ -1394,15 +1565,32 @@ function displayDesignLinks(
         targetLabel: uxEpicDisplayKey,
         sourceLabel: designSourceLabel,
       });
+      const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
+      const updatedDateTooltip = formatDesignUpdatedTooltip(design.designUpdatedAt, design.designUpdatedAtSource);
+      const updatedDateAccessibleLabel = updatedDateTooltip || design.designUpdatedAt || updatedDateLabel;
+      const updatedBasisLabel = getDesignUpdatedAtBasisLabel(design.designUpdatedAtSource, design.designUpdatedAt);
+      const updatedBasisTooltip = formatDesignUpdatedBasisTooltip(design.designUpdatedAtSource, design.designUpdatedAt) || updatedBasisLabel;
+      const missingUpdatedDate = isDesignUpdatedDateMissing(design);
+      const designOpenAttributes = design.url
+        ? getDesignOpenAttributes({
+          kind: 'design',
+          label: designLabel,
+          targetLabel: getDesignOpenTargetLabel(design.url, designLabel),
+          sourceLabel: designSourceLabel,
+          updatedDateLabel,
+          updatedBasisLabel,
+          missingUpdatedDate,
+        })
+        : '';
       const designContent = design.linkProvided && design.url
         ? `
-          <a href="${escapeAttribute(design.url)}" title="${escapeAttribute(design.url)}" target="_blank" rel="noopener noreferrer" class="design-link" ${designOpenAttributes}>
+          <a href="${escapeAttribute(design.url)}" target="_blank" rel="noopener noreferrer" class="design-link" ${designOpenAttributes}>
             ${escapeHtml(designLabel)} <span class="external-link-icon">↗</span>
           </a>
           <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>${escapeHtml(design.uxTicketKey)}</a>
         `
         : `
-          <a href="${escapeAttribute(uxTicketUrl)}" title="${escapeAttribute(design.uxTicketKey)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>
+          <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
         `;
@@ -1427,18 +1615,13 @@ function displayDesignLinks(
       const etaTag = design.uxEta
         ? `<span class="ux-eta-tag" title="${escapeAttribute(design.uxEtaSource === 'duedate' ? ui('截止日期') : ui('修复版本'))}">ETA: ${escapeHtml(design.uxEta)}</span>`
         : '';
-      const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
-      const updatedDateTooltip = formatDesignUpdatedTooltip(design.designUpdatedAt, design.designUpdatedAtSource);
-      const updatedDateAccessibleLabel = updatedDateTooltip || design.designUpdatedAt || updatedDateLabel;
-      const updatedBasisLabel = getDesignUpdatedAtBasisLabel(design.designUpdatedAtSource, design.designUpdatedAt);
-      const updatedBasisTooltip = formatDesignUpdatedBasisTooltip(design.designUpdatedAtSource, design.designUpdatedAt) || updatedBasisLabel;
       const updatedTag = updatedDateLabel
         ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateAccessibleLabel)}" aria-label="${escapeAttribute(updatedDateAccessibleLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
       const updatedBasisTag = updatedDateLabel && updatedBasisLabel
         ? `<span class="design-updated-basis-tag" title="${escapeAttribute(updatedBasisTooltip || updatedBasisLabel)}" aria-label="${escapeAttribute(updatedBasisTooltip || updatedBasisLabel)}">${escapeHtml(ui(updatedBasisLabel))}</span>`
         : '';
-      const missingUpdatedDateTag = isDesignUpdatedDateMissing(design)
+      const missingUpdatedDateTag = missingUpdatedDate
         ? `<span class="design-updated-missing-tag" title="${escapeAttribute(missingUpdatedDateTooltip)}" aria-label="${escapeAttribute(missingUpdatedDateTooltip)}">${escapeHtml(ui('更新时间缺失'))}</span>`
         : '';
 
@@ -1463,6 +1646,7 @@ function displayDesignLinks(
   
   designLinksContainer.innerHTML = `
     <div class="design-links-content">
+      ${scanBasisReceiptHtml}
       ${updateReviewScopeReceiptHtml}
       ${recoveryScopeReceiptHtml}
       ${filterScopeReceiptHtml}
@@ -1478,6 +1662,8 @@ function displayDesignLinks(
         ${ignoredSourceSummary
           ? `<span class="filtered-design-source-tag" title="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`来源 ${ignoredSourceSummary}`)}</span>`
           : ''}
+        ${filteredReasonTagHtml}
+        ${filteredDesignFieldTagHtml}
       </span>
       <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank" rel="noopener noreferrer">Esone</a></span>
     </div>
@@ -1489,9 +1675,11 @@ function displayDesignLinks(
   bindDesignLinksDynamicHeight(designLinksContainer);
   
   // 添加样式
+  const renderedDesignItemCount = designData.length > 0 ? designData.length : (ignoredSummary ? 1 : 0);
   const visibleRowCount = Math.max(
     1,
-    designData.length
+    renderedDesignItemCount
+      + 1
       + (shouldShowUpdateReviewScopeReceipt ? 1 : 0)
       + (shouldShowFilterScopeReceipt ? 1 : 0)
       + (shouldShowRecoveryScopeReceipt ? 1 : 0),
@@ -1575,6 +1763,7 @@ function displayDesignLinks(
       display: none;
     }
 	    .design-filter-scope-row,
+      .design-scan-basis-row,
       .design-update-review-scope-row,
 	    .design-recovery-scope-row,
       .design-open-receipt {
@@ -1595,6 +1784,10 @@ function displayDesignLinks(
 	      border-left-color: #8590a2;
 	      background-color: #f7f8f9;
 	    }
+      .design-scan-basis-row {
+        border-left-color: #0c66e4;
+        background-color: #f4f8ff;
+      }
 	    .design-recovery-scope-row {
 	      border-left-color: #f5a524;
 	      background-color: #fff7d6;
@@ -1613,6 +1806,12 @@ function displayDesignLinks(
 	      font-weight: 600;
 	      white-space: nowrap;
 	    }
+      .design-scan-basis-text {
+        color: #0747a6;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
 	    .design-recovery-scope-text {
 	      color: #6f4e00;
 	      font-size: 11px;
@@ -1654,6 +1853,18 @@ function displayDesignLinks(
         color: #6b5aa8;
         font-size: 10px;
         font-weight: 600;
+        white-space: nowrap;
+      }
+      .design-open-update-boundary {
+        color: #0747a6;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .design-open-recovery-boundary {
+        color: #6f4e00;
+        font-size: 10px;
+        font-weight: 700;
         white-space: nowrap;
       }
 	    .design-links-footer {
@@ -1708,7 +1919,10 @@ function displayDesignLinks(
       background-color: #f7f8f9;
       white-space: nowrap;
     }
-    .filtered-design-source-tag {
+    .filtered-design-source-tag,
+    .design-source-basis-tag,
+    .filtered-design-field-tag,
+    .filtered-design-reason-tag {
       display: inline-flex;
       align-items: center;
       padding: 2px 8px;
@@ -1719,6 +1933,21 @@ function displayDesignLinks(
       color: #44546f;
       background-color: #ffffff;
       white-space: nowrap;
+    }
+    .filtered-design-reason-tag {
+      max-width: min(520px, 100%);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .design-source-basis-tag {
+      border-color: #b3d4ff;
+      color: #0747a6;
+      background-color: #ffffff;
+    }
+    .filtered-design-field-tag {
+      border-color: #f5a524;
+      color: #6f4e00;
+      background-color: #fff7d6;
     }
     .author-text {
       font-size: 11px;
@@ -1814,6 +2043,19 @@ function displayDesignLinks(
       line-height: 1.5;
       color: #974f0c;
       background-color: #fff7d6;
+      white-space: nowrap;
+    }
+    .ux-key-recovery-filter-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border: 1px dashed #8590a2;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.5;
+      color: #44546f;
+      background-color: #f7f8f9;
       white-space: nowrap;
     }
     .external-link-icon {

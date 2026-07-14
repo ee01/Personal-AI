@@ -53,6 +53,7 @@ import { dreamDigestRoutes } from './routes/dreamDigest.js';
 import { weeklyReportRoutes } from './routes/weeklyReport.js';
 import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
 import { actionRoutes } from './routes/actions.js';
+import { agentTaskRoutes } from './routes/agentTasks.js';
 import { concernedItemsRoutes } from './routes/concernedItems.js';
 import { followThreadHitRoutes } from './routes/followThreadHits.js';
 import { messageRuleRoutes } from './routes/messageRules.js';
@@ -175,8 +176,9 @@ export async function buildApp(
       };
     });
   } else {
-    app.addHook('onRequest', createAuthMiddleware(userContextManager));
+    // Reject fallback writes before auth can lazily create a default user context.
     app.addHook('onRequest', writeGuardMiddleware);
+    app.addHook('onRequest', createAuthMiddleware(userContextManager));
   }
 
   // ---- Routes ----
@@ -213,6 +215,7 @@ export async function buildApp(
       await instance.register(weeklyReportRoutes);
       await instance.register(reflectionThreadRoutes);
       await instance.register(actionRoutes);
+      await instance.register(agentTaskRoutes);
       await instance.register(messageRuleRoutes);
       await instance.register(outreachRoutes);
       await instance.register(concernedItemsRoutes);

@@ -178,6 +178,45 @@ const localAgentListItem = {
   ],
 };
 
+const validatedLocalAgentListItem = {
+  ...localAgentListItem,
+  id: 'validated-local-agent-import',
+  slug: 'validated-local-agent-import',
+  title: 'Validated Local Agent Import',
+  summary: 'A Codex CLI skill discovered with a local test artifact.',
+  reviewReasons: [
+    '外部 agent 平台导入的技能需要先确认来源内容',
+    '技能包包含可执行脚本文件，需要确认命令和权限',
+    '技能说明包含安装、下载或 MCP 连接指令，需要确认外部依赖',
+    '技能包包含额外脚本或资源文件',
+  ],
+  bindings: [
+    {
+      id: 'validated-local-agent-import:codex',
+      skillId: 'validated-local-agent-import',
+      platform: 'codex',
+      state: 'installed',
+      installedVersion: 'v0.3',
+      installedSha256: 'validated-local-agent-sha',
+      remoteMtime: 1778235100,
+      metadata: {
+        source: 'desktop_app_fs',
+        sourceRoot: '/Users/skill-user/.codex/skills',
+        sourceDirectory:
+          '/Users/skill-user/.codex/skills/validated-local-agent-import',
+        skillMdPath:
+          '/Users/skill-user/.codex/skills/validated-local-agent-import/SKILL.md',
+        fileCount: 2,
+        totalByteSize: 2048,
+        validationFileCount: 1,
+        validationFilePaths: ['tests/helper.test.js'],
+      },
+      createdAt: 1778235100,
+      updatedAt: 1778235100,
+    },
+  ],
+};
+
 const syncSettings = [
   {
     platform: 'personal_ai',
@@ -240,6 +279,7 @@ const syncSettings = [
 ];
 
 let activeShareToken = 'test-token';
+let activeShareBlocked = false;
 
 function detailFor(item) {
   const version = {
@@ -363,6 +403,7 @@ let desktopSyncGate = null;
 let releaseDesktopSyncGate = null;
 let openClawToggleGate = null;
 let releaseOpenClawToggleGate = null;
+let desktopHealthOk = true;
 
 try {
   launched = await launchExtensionContext();
@@ -428,9 +469,11 @@ try {
                 : []),
             ]
           : suggestionScenario === 'empty'
-            ? []
+          ? []
           : suggestionScenario === 'local-only'
             ? [localAgentListItem]
+            : suggestionScenario === 'local-validation'
+              ? [validatedLocalAgentListItem]
             : [
                 externalChangeListItem,
                 ...(localAgentPromoted ? [] : [localAgentListItem]),
@@ -505,7 +548,12 @@ try {
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/active-skill') {
-      return jsonResponse(route, { skill: detailFor(activeListItem) });
+      const skill = detailFor(activeListItem);
+      if (activeShareBlocked) {
+        delete skill.share;
+        skill.shareError = 'secret pattern scan blocked test credential';
+      }
+      return jsonResponse(route, { skill });
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/snooze-candidate') {
@@ -540,6 +588,15 @@ try {
           ...localAgentListItem,
           status: localAgentPromoted ? 'active' : 'suggestion',
         }),
+      });
+    }
+
+    if (
+      request.method() === 'GET' &&
+      endpoint === '/skills/validated-local-agent-import'
+    ) {
+      return jsonResponse(route, {
+        skill: detailFor(validatedLocalAgentListItem),
       });
     }
 
@@ -631,6 +688,13 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     if (request.method() === 'GET' && url.pathname === '/health') {
+      if (!desktopHealthOk) {
+        return jsonResponse(
+          route,
+          { error: 'Desktop App is not running' },
+          503,
+        );
+      }
       return jsonResponse(route, {
         ok: true,
         status: 'running',
@@ -663,6 +727,14 @@ try {
       { error: `Unexpected desktop ${request.method()} ${url.pathname}` },
       500,
     );
+  });
+
+  await context.route('http://mock-memory/skills/**', async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><title>Mock Skill Preview</title><main>Read-only skill preview</main>',
+    });
   });
 
   const setupPage = await context.newPage();
@@ -730,6 +802,17 @@ try {
     .waitFor({
       timeout: 15000,
     });
+  const activeSkillCard = page.locator('.skill-card', {
+    hasText: 'Active Skill',
+  });
+  assert.match(
+    (await activeSkillCard.getAttribute('title')) || '',
+    /查看在用 Active Skill：只会打开技能详情/,
+  );
+  assert.match(
+    (await activeSkillCard.getAttribute('aria-label')) || '',
+    /不会改变状态、生成或复制分享 token、触发平台同步、写外部平台或执行 skill/,
+  );
   const healthReceipt = page.locator('.skill-health-receipt');
   await healthReceipt
     .locator('.skill-health-head', { hasText: '质量门控降级' })
@@ -781,7 +864,27 @@ try {
       hasText: '旧 token 继续有效直到后台 revoke',
     })
     .waitFor({ timeout: 15000 });
-  await page.locator('button', { hasText: '复制可访问 URL' }).click();
+  const enabledCopyUrlButton = page.locator('button', {
+    hasText: '复制可访问 URL',
+  });
+  assert.match(
+    (await enabledCopyUrlButton.getAttribute('title')) || '',
+    /Active Skill · v1 · sha256 active-skill · token \.\.\.test-token/,
+  );
+  assert.match(
+    (await enabledCopyUrlButton.getAttribute('aria-label')) || '',
+    /只写本机剪贴板，不会打开链接、安装 skill、触发平台同步或执行脚本/,
+  );
+  const enabledPreviewButton = page.locator('button', { hasText: '打开预览' });
+  assert.match(
+    (await enabledPreviewButton.getAttribute('title')) || '',
+    /打开带 token 的只读预览：Active Skill · v1 · sha256 active-skill · token \.\.\.test-token/,
+  );
+  assert.match(
+    (await enabledPreviewButton.getAttribute('aria-label')) || '',
+    /不会复制剪贴板、安装 skill、触发平台同步、写外部平台或执行脚本/,
+  );
+  await enabledCopyUrlButton.click();
   assert.equal(
     await page.evaluate(() => navigator.clipboard.readText()),
     'http://mock-memory/skills/active-skill%40v1?token=test-token',
@@ -807,6 +910,114 @@ try {
       hasText: '这次复制只写本机剪贴板，不会打开链接、安装 skill、触发平台同步',
     })
     .waitFor({ timeout: 15000 });
+  const previewPagePromise = context.waitForEvent('page', { timeout: 15000 });
+  await page.locator('button', { hasText: '打开预览' }).click();
+  const previewPage = await previewPagePromise;
+  await previewPage.waitForURL(
+    'http://mock-memory/skills/active-skill%40v1?token=test-token',
+    { timeout: 15000 },
+  );
+  await previewPage
+    .waitForLoadState('domcontentloaded', { timeout: 15000 })
+    .catch(() => {});
+  assert.equal(
+    previewPage.url(),
+    'http://mock-memory/skills/active-skill%40v1?token=test-token',
+    'Preview should open the full tokenized skill URL, not the display URL',
+  );
+  await previewPage.close();
+  await shareCopyReceipt
+    .locator('.share-copy-head', {
+      hasText: '已打开只读预览',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareCopyReceipt
+    .locator('.share-copy-row', {
+      hasText: '新标签页使用完整 token URL，只读拉取 HTML 预览',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareCopyReceipt
+    .locator('.share-copy-row', {
+      hasText: '不复制剪贴板、不安装 skill、不触发平台同步',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.evaluate(() => {
+    window.__skillFoundryOriginalOpen = window.open;
+    window.open = () => null;
+  });
+  await page.locator('button', { hasText: '打开预览' }).click();
+  await shareCopyReceipt
+    .locator('.share-copy-head', {
+      hasText: '预览未打开',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareCopyReceipt
+    .locator('.share-copy-row', {
+      hasText: '浏览器没有返回新标签页；本页没有确认访问 token URL',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareCopyReceipt
+    .locator('.share-copy-row', {
+      hasText: '不会复制剪贴板、安装 skill、触发平台同步、写外部平台或执行脚本',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.evaluate(() => {
+    if (window.__skillFoundryOriginalOpen) {
+      window.open = window.__skillFoundryOriginalOpen;
+      delete window.__skillFoundryOriginalOpen;
+    }
+  });
+  activeShareBlocked = true;
+  await page.locator('.skill-card', { hasText: 'Active Skill' }).click();
+  await shareReceipt
+    .locator('.share-receipt-head', {
+      hasText: '已阻止生成可访问 URL',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareReceipt
+    .locator('.share-receipt-row', {
+      hasText: 'secret pattern scan blocked test credential',
+    })
+    .waitFor({ timeout: 15000 });
+  await shareReceipt
+    .locator('.share-receipt-row', {
+      hasText: '复制可访问 URL、打开预览和平台安装指令保持不可用',
+    })
+    .waitFor({ timeout: 15000 });
+  const copyUrlButton = page.locator('button', { hasText: '复制可访问 URL' });
+  assert.equal(await copyUrlButton.isDisabled(), true);
+  assert.match(
+    (await copyUrlButton.getAttribute('title')) || '',
+    /分享已被安全扫描阻断/,
+  );
+  assert.match(
+    (await copyUrlButton.getAttribute('aria-label')) || '',
+    /不会复制短链、打开无 token 地址/,
+  );
+  const previewButton = page.locator('button', { hasText: '打开预览' });
+  assert.equal(await previewButton.isDisabled(), true);
+  assert.match(
+    (await previewButton.getAttribute('title')) || '',
+    /打开预览不可用/,
+  );
+  const blockedChatGptBinding = page.locator('.binding-card', {
+    hasText: 'ChatGPT / GPTs',
+  });
+  const blockedInstallButton = blockedChatGptBinding.locator(
+    '.binding-instruction button',
+  );
+  assert.equal(await blockedInstallButton.isDisabled(), true);
+  assert.match(
+    (await blockedInstallButton.getAttribute('title')) || '',
+    /复制 ChatGPT \/ GPTs 安装指令不可用/,
+  );
+  activeShareBlocked = false;
+  await page.locator('.skill-card', { hasText: 'Active Skill' }).click();
+  await shareReceipt
+    .locator('.share-receipt-head', {
+      hasText: '带 token 的只读安装入口',
+    })
+    .waitFor({ timeout: 15000 });
   const chatGptBinding = page.locator('.binding-card', {
     hasText: 'ChatGPT / GPTs',
   });
@@ -825,7 +1036,18 @@ try {
       hasText: '暂不能由 Personal AI 自动写入或探测安装状态',
     })
     .waitFor({ timeout: 15000 });
-  await chatGptBinding.locator('.binding-instruction button').click();
+  const enabledInstallButton = chatGptBinding.locator(
+    '.binding-instruction button',
+  );
+  assert.match(
+    (await enabledInstallButton.getAttribute('title')) || '',
+    /复制 ChatGPT \/ GPTs 安装指令：Active Skill · v1 · sha256 active-skill · token \.\.\.test-token/,
+  );
+  assert.match(
+    (await enabledInstallButton.getAttribute('aria-label')) || '',
+    /只写本机剪贴板，不会打开链接、安装 skill、触发平台同步或执行脚本/,
+  );
+  await enabledInstallButton.click();
   assert.equal(
     await page.evaluate(() => navigator.clipboard.readText()),
     '请按这份 SKILL spec 工作（按需 fetch 资源）：http://mock-memory/skills/active-skill%40v1?token=test-token',
@@ -858,9 +1080,29 @@ try {
     .waitFor({
       timeout: 15000,
     });
-  await page
-    .locator('.section-head button', { hasText: '平台级自动同步' })
-    .click();
+  const syncDialogEntryButton = page.locator('.section-head button', {
+    hasText: '平台级自动同步',
+  });
+  assert.match(
+    (await syncDialogEntryButton.getAttribute('title')) || '',
+    /打开平台级自动同步设置/,
+  );
+  assert.match(
+    (await syncDialogEntryButton.getAttribute('aria-label')) || '',
+    /不会保存开关、立即同步、扫描或写入本机目录/,
+  );
+  await syncDialogEntryButton.click();
+  const syncCloseButton = page.locator('.sync-dialog .dialog-actions button', {
+    hasText: '关闭',
+  });
+  assert.match(
+    (await syncCloseButton.getAttribute('title')) || '',
+    /关闭平台级自动同步弹窗/,
+  );
+  assert.match(
+    (await syncCloseButton.getAttribute('aria-label')) || '',
+    /不会取消已发出的保存或同步请求/,
+  );
   const syncOverview = page.locator('.sync-scope-overview');
   await syncOverview
     .locator('.sync-result-head', {
@@ -908,10 +1150,29 @@ try {
     .waitFor({
       timeout: 15000,
     });
+  const openClawSyncButton = openClawSyncRow.locator('button.sync-now-btn');
+  assert.equal(await openClawSyncButton.isDisabled(), true);
+  assert.match(
+    (await openClawSyncButton.getAttribute('title')) || '',
+    /平台级开关未开启/,
+  );
+  assert.match(
+    (await openClawSyncButton.getAttribute('aria-label')) || '',
+    /当前不会调用远端 API/,
+  );
+  const openClawSwitch = openClawSyncRow.locator('label.switch input');
+  assert.match(
+    (await openClawSwitch.getAttribute('title')) || '',
+    /OpenClaw remote 开启自动同步/,
+  );
+  assert.match(
+    (await openClawSwitch.getAttribute('aria-label')) || '',
+    /只保存平台级 enabled=true/,
+  );
   openClawToggleGate = new Promise((resolve) => {
     releaseOpenClawToggleGate = resolve;
   });
-  await openClawSyncRow.locator('label.switch input').check({ force: true });
+  await openClawSwitch.check({ force: true });
   const syncReceipt = page.locator('.sync-result-receipt');
   await syncReceipt
     .locator('.sync-result-head', {
@@ -943,9 +1204,10 @@ try {
     .waitFor({
       timeout: 15000,
     });
-  assert.equal(
-    await openClawSyncRow.locator('label.switch input').isDisabled(),
-    true,
+  assert.equal(await openClawSwitch.isDisabled(), true);
+  assert.match(
+    (await openClawSwitch.getAttribute('aria-label')) || '',
+    /OpenClaw remote 开关保存中/,
   );
   assert.equal(
     await page
@@ -990,7 +1252,11 @@ try {
   await openClawSyncRow.locator('.switch span', { hasText: '已开启' }).waitFor({
     timeout: 15000,
   });
-  await openClawSyncRow.locator('label.switch input').uncheck({ force: true });
+  assert.match(
+    (await openClawSwitch.getAttribute('title')) || '',
+    /OpenClaw remote 关闭自动同步/,
+  );
+  await openClawSwitch.uncheck({ force: true });
   await syncReceipt
     .locator('.sync-result-head', {
       hasText: 'OpenClaw remote 已关闭',
@@ -1054,6 +1320,15 @@ try {
   await chatGptSyncRow.locator('.switch span', { hasText: '仅手动' }).waitFor({
     timeout: 15000,
   });
+  const chatGptSwitch = chatGptSyncRow.locator('label.switch input');
+  assert.match(
+    (await chatGptSwitch.getAttribute('title')) || '',
+    /仅支持手动安装指引/,
+  );
+  assert.match(
+    (await chatGptSwitch.getAttribute('aria-label')) || '',
+    /自动同步开关不可用/,
+  );
   const codexSyncRow = page.locator('.sync-row', { hasText: 'Codex CLI' });
   await codexSyncRow.locator('.switch span', { hasText: '已开启' }).waitFor({
     timeout: 15000,
@@ -1069,7 +1344,16 @@ try {
     releaseDesktopSyncGate = resolve;
   });
   activeShareToken = 'rotated-token';
-  await codexSyncRow.locator('button[aria-label="立即同步 Codex CLI"]').click();
+  const codexSyncButton = codexSyncRow.locator('button.sync-now-btn');
+  assert.match(
+    (await codexSyncButton.getAttribute('title')) || '',
+    /立即同步 Codex CLI/,
+  );
+  assert.match(
+    (await codexSyncButton.getAttribute('aria-label')) || '',
+    /请求 Desktop App 扫描\/写回/,
+  );
+  await codexSyncButton.click();
   await syncReceipt
     .locator('.sync-result-head', {
       hasText: '同步处理中',
@@ -1171,6 +1455,11 @@ try {
       hasText: 'OpenClaw remote 变更会覆盖 active-skill',
     })
     .waitFor({ timeout: 15000 });
+  await priorityStrip
+    .locator(
+      'button[aria-label*="查看变更 Active Skill (openclaw change)"][title*="不会覆盖 active 真源"]',
+    )
+    .waitFor({ timeout: 15000 });
   await page
     .locator('.suggestion-group')
     .first()
@@ -1185,6 +1474,14 @@ try {
   const suggestionCard = page.locator('.suggestion-card', {
     hasText: 'Snooze Candidate',
   });
+  assert.match(
+    (await suggestionCard.getAttribute('title')) || '',
+    /查看建议 Snooze Candidate：只会在右侧打开详情并显示证据\/风险/,
+  );
+  assert.match(
+    (await suggestionCard.getAttribute('aria-label')) || '',
+    /不会使用、丢弃、稍后审、覆盖 active 真源、触发同步或执行 skill/,
+  );
   await suggestionCard.locator('.review-chip', { hasText: '需审核' }).waitFor({
     timeout: 15000,
   });
@@ -1203,6 +1500,44 @@ try {
     .waitFor({
       timeout: 15000,
     });
+  const suggestionCardReceipt = suggestionCard.locator(
+    '.suggestion-card-receipt',
+  );
+  await suggestionCardReceipt
+    .locator('.suggestion-card-receipt-head', {
+      hasText: '先看证据风险',
+    })
+    .waitFor({ timeout: 15000 });
+  await suggestionCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '主按钮只会进入证据/风险页，不会直接入库或覆盖',
+    })
+    .waitFor({ timeout: 15000 });
+  await suggestionCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '不会即时触发 OpenClaw',
+    })
+    .waitFor({ timeout: 15000 });
+  await suggestionCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '只有使用/确认、丢弃、稍后审会写 suggestion 状态',
+    })
+    .waitFor({ timeout: 15000 });
+  await suggestionCard
+    .locator(
+      'button[aria-label*="查看风险 Snooze Candidate"][title*="不会入库"]',
+    )
+    .waitFor({ timeout: 15000 });
+  await suggestionCard
+    .locator(
+      'button[aria-label*="丢弃 Snooze Candidate"][title*="不会删除 active 技能"]',
+    )
+    .waitFor({ timeout: 15000 });
+  await suggestionCard
+    .locator(
+      'button[aria-label*="稍后审 Snooze Candidate"][title*="仍是 suggestion"]',
+    )
+    .waitFor({ timeout: 15000 });
   const externalChangeCard = page.locator('.suggestion-card', {
     hasText: 'Active Skill (openclaw change)',
   });
@@ -1213,6 +1548,48 @@ try {
     });
   await externalChangeCard
     .locator('.review-preview', { hasText: '覆盖 active-skill' })
+    .waitFor({ timeout: 15000 });
+  const externalChangeCardReceipt = externalChangeCard.locator(
+    '.suggestion-card-receipt',
+  );
+  await externalChangeCardReceipt
+    .locator('.suggestion-card-receipt-head', {
+      hasText: '先看变更证据',
+    })
+    .waitFor({ timeout: 15000 });
+  await externalChangeCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '确认后覆盖 active-skill 的 active 真源',
+    })
+    .waitFor({ timeout: 15000 });
+  await externalChangeCard
+    .locator(
+      'button[aria-label*="查看变更 Active Skill (openclaw change)"][title*="不会覆盖 active 真源"]',
+    )
+    .waitFor({ timeout: 15000 });
+  const quickUseReceiptCard = page.locator('.suggestion-card', {
+    hasText: 'Quick Promote Candidate',
+  });
+  const quickUseCardReceipt = quickUseReceiptCard.locator(
+    '.suggestion-card-receipt',
+  );
+  await quickUseCardReceipt
+    .locator('.suggestion-card-receipt-head', { hasText: '可直接入库' })
+    .waitFor({ timeout: 15000 });
+  await quickUseCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '确认后才提升为 active 真源',
+    })
+    .waitFor({ timeout: 15000 });
+  await quickUseCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '无需强审核',
+    })
+    .waitFor({ timeout: 15000 });
+  await quickUseReceiptCard
+    .locator(
+      'button[aria-label*="确认使用 Quick Promote Candidate"][title*="提升为 active 真源"]',
+    )
     .waitFor({ timeout: 15000 });
   await priorityStrip.locator('button', { hasText: '查看变更' }).click();
   await page
@@ -1297,6 +1674,39 @@ try {
       hasText: '资源文件包含安装、下载或 MCP',
     })
     .waitFor({ timeout: 15000 });
+  const localAgentCardReceipt = localAgentCard.locator(
+    '.suggestion-card-receipt',
+  );
+  await localAgentCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '本机目录 ~/.codex/skills/local-agent-import',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '已忽略 1 个越界文件：../outside.js',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '来自 Desktop App 扫描快照；本页不会重新读取本机目录',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '未发现测试/eval/fixture/verify 线索；确认后仍不会被当成已验证',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '不会运行包内脚本、安装依赖、连接 MCP 或执行 skill',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCard
+    .locator(
+      'button[aria-label*="查看风险 Local Agent Import"][title*="不会入库"]',
+    )
+    .waitFor({ timeout: 15000 });
   await localAgentCard.click();
   await page
     .locator('.workspace-title h2', { hasText: 'Local Agent Import' })
@@ -1304,7 +1714,10 @@ try {
       timeout: 15000,
     });
   await page
-    .locator('.workspace-actions button', { hasText: '查看风险' })
+    .locator(
+      '.workspace-actions button[aria-label*="查看风险 Local Agent Import"][title*="不会入库"]',
+      { hasText: '查看风险' },
+    )
     .click();
   await page
     .locator('.review-audit-summary', {
@@ -1382,7 +1795,10 @@ try {
     })
     .waitFor({ timeout: 15000 });
   await page
-    .locator('.workspace-actions button', { hasText: '确认使用' })
+    .locator(
+      '.workspace-actions button[aria-label*="确认使用 Local Agent Import"][title*="提升为 active 真源"]',
+      { hasText: '确认使用' },
+    )
     .click();
   await page
     .locator('.workspace-title h2', { hasText: 'Local Agent Import' })
@@ -1391,6 +1807,16 @@ try {
   await localActionReceipt
     .locator('.sync-result-head', {
       hasText: '已入库 Local Agent Import',
+    })
+    .waitFor({ timeout: 15000 });
+  await localActionReceipt
+    .locator('.sync-result-row', {
+      hasText: '点击目标 Local Agent Import',
+    })
+    .waitFor({ timeout: 15000 });
+  await localActionReceipt
+    .locator('.sync-result-row', {
+      hasText: '本机导入 ~/.codex/skills/local-agent-import',
     })
     .waitFor({ timeout: 15000 });
   await localActionReceipt
@@ -1421,7 +1847,10 @@ try {
       timeout: 15000,
     });
   await page
-    .locator('.workspace-actions button', { hasText: '查看风险' })
+    .locator(
+      '.workspace-actions button[aria-label*="查看风险 Snooze Candidate"][title*="不会入库"]',
+      { hasText: '查看风险' },
+    )
     .click();
   await page.locator('.review-gate', { hasText: '使用前需要审核' }).waitFor({
     timeout: 15000,
@@ -1470,6 +1899,16 @@ try {
     .waitFor({ timeout: 15000 });
   await actionReceipt
     .locator('.sync-result-row', {
+      hasText: '点击目标 Quick Promote Candidate',
+    })
+    .waitFor({ timeout: 15000 });
+  await actionReceipt
+    .locator('.sync-result-row', {
+      hasText: '原状态 suggestion / 当前 Inbox',
+    })
+    .waitFor({ timeout: 15000 });
+  await actionReceipt
+    .locator('.sync-result-row', {
       hasText: '本页不会重复发送使用、丢弃、稍后审或现在审请求',
     })
     .waitFor({ timeout: 15000 });
@@ -1494,6 +1933,11 @@ try {
   await actionReceipt
     .locator('.sync-result-head', {
       hasText: '已入库 Quick Promote Candidate',
+    })
+    .waitFor({ timeout: 15000 });
+  await actionReceipt
+    .locator('.sync-result-row', {
+      hasText: '点击目标 Quick Promote Candidate',
     })
     .waitFor({ timeout: 15000 });
   await actionReceipt
@@ -1542,7 +1986,10 @@ try {
 
   await page
     .locator('.suggestion-card', { hasText: 'Snooze Candidate' })
-    .locator('button', { hasText: '稍后审' })
+    .locator(
+      'button[aria-label*="稍后审 Snooze Candidate"][title*="移出当前 Inbox"]',
+      { hasText: '稍后审' },
+    )
     .click();
 
   await page
@@ -1553,6 +2000,16 @@ try {
   await page
     .locator('.skill-action-receipt', {
       hasText: '已暂缓 Snooze Candidate',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.skill-action-receipt', {
+      hasText: '点击目标 Snooze Candidate',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.skill-action-receipt', {
+      hasText: '审核 gate 已满足',
     })
     .waitFor({ timeout: 15000 });
   await page
@@ -1590,6 +2047,14 @@ try {
   const snoozedCard = page.locator('.snoozed-suggestion-card', {
     hasText: 'Snooze Candidate',
   });
+  assert.match(
+    (await snoozedCard.getAttribute('title')) || '',
+    /查看稍后建议 Snooze Candidate：只会打开稍后详情和恢复路径/,
+  );
+  assert.match(
+    (await snoozedCard.getAttribute('aria-label')) || '',
+    /不会现在审、丢弃、使用、覆盖 active 真源、触发同步或执行 skill/,
+  );
   await page.locator('.snoozed-inbox', { hasText: '稍后建议' }).waitFor({
     timeout: 15000,
   });
@@ -1598,6 +2063,18 @@ try {
     .waitFor({
       timeout: 15000,
     });
+  await snoozedCard
+    .locator(
+      'button[aria-label*="现在审 Snooze Candidate"][title*="恢复到 Inbox"]',
+      { hasText: '现在审' },
+    )
+    .waitFor({ timeout: 15000 });
+  await snoozedCard
+    .locator(
+      'button[aria-label*="丢弃 Snooze Candidate"][title*="不会删除 active 技能"]',
+      { hasText: '丢弃' },
+    )
+    .waitFor({ timeout: 15000 });
   await snoozedCard.click();
   await page
     .locator('.workspace-eyebrow', { hasText: '稍后审' })
@@ -1616,11 +2093,19 @@ try {
     'Snoozed suggestions should not be confirmable before restore',
   );
   await page
-    .locator('.workspace-actions button', { hasText: '现在审' })
+    .locator(
+      '.workspace-actions button[aria-label*="现在审 Snooze Candidate"][title*="恢复到 Inbox"]',
+      { hasText: '现在审' },
+    )
     .click();
   await page
     .locator('.skill-action-receipt', {
       hasText: '恢复审阅回执',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.skill-action-receipt', {
+      hasText: '原状态 suggestion / 稍后建议',
     })
     .waitFor({ timeout: 15000 });
   await page
@@ -1654,7 +2139,10 @@ try {
 
   await page
     .locator('.suggestion-card', { hasText: 'Snooze Candidate' })
-    .locator('button', { hasText: '丢弃' })
+    .locator(
+      'button[aria-label*="丢弃 Snooze Candidate"][title*="不会删除 active 技能"]',
+      { hasText: '丢弃' },
+    )
     .click();
   await page
     .locator('.skill-action-receipt', {
@@ -1664,6 +2152,11 @@ try {
   await page
     .locator('.skill-action-receipt', {
       hasText: '已丢弃 Snooze Candidate',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.skill-action-receipt', {
+      hasText: '点击目标 Snooze Candidate',
     })
     .waitFor({ timeout: 15000 });
   await page
@@ -1733,6 +2226,86 @@ try {
   await page
     .locator('.suggestion-card', { hasText: 'Local Agent Import' })
     .waitFor({ timeout: 15000 });
+
+  suggestionScenario = 'local-validation';
+  await page.reload({ waitUntil: 'load', timeout: 15000 });
+  await page.locator('h1', { hasText: '个人技能炼金台' }).waitFor({
+    timeout: 15000,
+  });
+  const validatedLocalCard = page.locator('.suggestion-card', {
+    hasText: 'Validated Local Agent Import',
+  });
+  await validatedLocalCard.waitFor({ timeout: 15000 });
+  const validatedLocalCardReceipt = validatedLocalCard.locator(
+    '.suggestion-card-receipt',
+  );
+  await validatedLocalCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '本机目录 ~/.codex/skills/validated-local-agent-import',
+    })
+    .waitFor({ timeout: 15000 });
+  await validatedLocalCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '验证线索 1 个：tests/helper.test.js；只是包内线索，卡片不会运行验证',
+    })
+    .waitFor({ timeout: 15000 });
+  await validatedLocalCardReceipt
+    .locator('.suggestion-card-receipt-row', {
+      hasText: '不会运行包内脚本、安装依赖、连接 MCP 或执行 skill',
+    })
+    .waitFor({ timeout: 15000 });
+
+  desktopHealthOk = false;
+  suggestionScenario = 'empty';
+  quickUsePromoted = false;
+  localAgentPromoted = false;
+  await page.reload({ waitUntil: 'load', timeout: 15000 });
+  await page.locator('h1', { hasText: '个人技能炼金台' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.header-actions button', { hasText: '平台级自动同步' })
+    .click();
+  const blockedSyncOverview = page.locator('.sync-scope-overview');
+  await blockedSyncOverview
+    .locator('.sync-result-head', {
+      hasText: '1 条 active · 0 个可同步平台 · 1 个等待 Desktop App · 1 个有失败',
+    })
+    .waitFor({ timeout: 15000 });
+  await blockedSyncOverview
+    .locator('.sync-result-row', {
+      hasText:
+        'Codex CLI 已开启但 Desktop App 未运行；页面不会直接读写本机目录',
+    })
+    .waitFor({ timeout: 15000 });
+  const blockedCodexSyncRow = page.locator('.sync-row', {
+    hasText: 'Codex CLI',
+  });
+  await blockedCodexSyncRow
+    .locator('.sync-diagnostic.blocked', {
+      hasText: 'Desktop App 未运行，无法读写本机目录',
+    })
+    .waitFor({ timeout: 15000 });
+  await blockedCodexSyncRow
+    .locator('.switch span', { hasText: '需 Desktop App' })
+    .waitFor({ timeout: 15000 });
+  const blockedCodexSyncButton =
+    blockedCodexSyncRow.locator('button.sync-now-btn');
+  assert.equal(
+    await blockedCodexSyncButton.isDisabled(),
+    true,
+    'Desktop App-gated sync button should stay disabled while local bridge is unavailable',
+  );
+  assert.match(
+    (await blockedCodexSyncButton.getAttribute('title')) || '',
+    /Desktop App 未运行/,
+  );
+  assert.match(
+    (await blockedCodexSyncButton.getAttribute('aria-label')) || '',
+    /Chrome 页面不会直接读写本机 skill 目录/,
+  );
+  await page.locator('.secondary-btn', { hasText: '关闭' }).click();
+  desktopHealthOk = true;
 
   suggestionScenario = 'empty';
   suggestionVisible = false;

@@ -65,7 +65,12 @@ export interface TimelineEmptyReceipt {
 export type TimelineNavigationReceiptTone = 'info' | 'warning';
 
 export interface TimelineNavigationReceiptInput {
-  action: 'memory_route' | 'source_url' | 'blocked' | 'unavailable';
+  action:
+    | 'memory_route'
+    | 'source_url_ready'
+    | 'source_url'
+    | 'blocked'
+    | 'unavailable';
   eventTitle?: string;
   exploreRoute?: string;
   sourceHost?: string;
@@ -111,6 +116,59 @@ export interface TimelineRefreshingSnapshotReceiptInput {
 export interface TimelineRefreshingSnapshotReceipt {
   title: string;
   items: string[];
+}
+
+export type TimelineFeedbackReceiptStatus =
+  | 'pending'
+  | 'success'
+  | 'cleared'
+  | 'failure';
+
+export type TimelineFeedbackReceiptAction = 'positive' | 'negative' | 'clear';
+
+export type TimelineFeedbackReceiptTone = 'info' | 'success' | 'warning';
+
+export interface TimelineFeedbackReceiptInput {
+  status: TimelineFeedbackReceiptStatus;
+  action: TimelineFeedbackReceiptAction;
+  eventTitle?: string;
+  targetType?: string;
+  targetId?: string;
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterLabel: string;
+  errorMessage?: string;
+}
+
+export interface TimelineFeedbackReceipt {
+  title: string;
+  tone: TimelineFeedbackReceiptTone;
+  items: string[];
+}
+
+export interface TimelineRangeControlBoundaryInput {
+  rangeLabel: string;
+  scope: RecallScope;
+  isActive?: boolean;
+}
+
+export interface TimelineScopeControlBoundaryInput {
+  scope: RecallScope;
+  isActive?: boolean;
+}
+
+export interface TimelineSourceControlBoundaryInput {
+  sourceFilterLabel: string;
+  sourceCount?: number;
+  totalEventCount: number;
+  isAllSources?: boolean;
+  isActive?: boolean;
+}
+
+export interface TimelineRefreshControlBoundaryInput {
+  scope: RecallScope;
+  rangeLabel: string;
+  sourceFilterLabel: string;
 }
 
 export interface ParsedTimelineFocus {
@@ -353,6 +411,68 @@ function getTimelineReceiptScopeLabel(scope: RecallScope): string {
   return '全部';
 }
 
+const TIMELINE_CONTROL_NO_SIDE_EFFECTS =
+  '不会写入、删除、写反馈、同步来源或确认事实。';
+
+function getTimelineReceiptScopeReadLabel(scope: RecallScope): string {
+  if (scope === 'work') return '工作记忆';
+  if (scope === 'personal') return '个人记忆';
+  return '全部记忆';
+}
+
+function normalizeTimelineCount(value: unknown): number {
+  return Math.max(0, Number.isFinite(Number(value)) ? Number(value) : 0);
+}
+
+export function buildTimelineRangeControlBoundary(
+  input: TimelineRangeControlBoundaryInput,
+): string {
+  const scopeReadLabel = getTimelineReceiptScopeReadLabel(input.scope);
+  if (input.isActive) {
+    return `${input.rangeLabel}；当前时间范围已选中，再次点击不会重新请求；切换其他时间范围才会通过 time 通道重新读取${scopeReadLabel}。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+  }
+  return `${input.rangeLabel}；切换后会通过 time 通道重新读取${scopeReadLabel}的${input.rangeLabel}窗口并替换当前列表；失败不会把旧范围当成空结果，也${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+}
+
+export function buildTimelineScopeControlBoundary(
+  input: TimelineScopeControlBoundaryInput,
+): string {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const scopeReadLabel = getTimelineReceiptScopeReadLabel(input.scope);
+  if (input.isActive) {
+    return `${scopeLabel}；当前记忆范围已选中，再次点击不会重新请求；切换其他范围才会更新本页时间轴 scope/query 并重新读取。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+  }
+  return `${scopeLabel}；切换后只更新本页时间轴 scope/query，并通过 time 通道重新读取${scopeReadLabel}；不会改变全局偏好，也${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+}
+
+export function buildTimelineSourceControlBoundary(
+  input: TimelineSourceControlBoundaryInput,
+): string {
+  const totalCount = normalizeTimelineCount(input.totalEventCount);
+  const sourceCount = normalizeTimelineCount(input.sourceCount);
+  const sourceLabel = input.sourceFilterLabel || '当前来源';
+
+  if (input.isAllSources) {
+    if (input.isActive) {
+      return `全部来源；当前显示全部 ${totalCount} 条已加载时间轴记忆，再次选择只保持本批结果，不重新请求 Memory Service。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+    }
+    return `全部来源；切回全部 ${totalCount} 条已加载时间轴记忆，只恢复本地隐藏项，不重新请求 Memory Service。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+  }
+
+  if (input.isActive) {
+    return `${sourceLabel} ${sourceCount}；当前只显示本批已加载结果中的这个来源，再次选择不会重新请求 Memory Service。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+  }
+
+  return `${sourceLabel} ${sourceCount}；切换后只显示本批已加载 ${totalCount} 条中的 ${sourceCount} 条，并临时隐藏其他来源；不重新请求 Memory Service。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+}
+
+export function buildTimelineRefreshControlBoundary(
+  input: TimelineRefreshControlBoundaryInput,
+): string {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  return `刷新；重新读取 ${scopeLabel} · ${input.rangeLabel} 时间轴，当前来源筛选 ${input.sourceFilterLabel} 会应用到新结果；同范围刷新中保留上次快照，失败不会当作空结果。${TIMELINE_CONTROL_NO_SIDE_EFFECTS}`;
+}
+
 export function buildTimelineBoundaryReceipt(
   input: TimelineBoundaryReceiptInput,
 ): TimelineBoundaryReceipt {
@@ -472,6 +592,18 @@ export function buildTimelineNavigationReceipt(
         `目标：${targetTitle}。`,
         `来源：已请求浏览器打开 ${input.sourceHost || '安全 http/https 来源'}。`,
         '边界：来源页在新标签打开，不代表 Memory Service 重新读取、同步或确认了来源内容。',
+      ],
+    };
+  }
+
+  if (input.action === 'source_url_ready') {
+    return {
+      title: '外部来源确认回执',
+      tone: 'info',
+      items: [
+        `目标：${targetTitle}。`,
+        `来源：这条记忆有可打开的 ${input.sourceHost || '安全 http/https 来源'}；请使用卡片里的“打开来源”按钮继续。`,
+        '边界：卡片点击只展示打开边界，不会打开外部标签页、重新读取来源、同步外部系统、写入反馈或确认内容。',
       ],
     };
   }
@@ -601,6 +733,90 @@ export function buildTimelineRefreshingSnapshotReceipt(
       `正在重新读取 ${scopeLabel} · ${input.rangeLabel} · ${input.sourceFilterLabel}；下面暂时仍是上次成功快照。`,
       `当前可见 ${visibleCount} / ${totalCount} 条旧快照记忆；刷新成功后会整体替换为 Memory Service 新结果。`,
       '边界：刷新中不代表 Memory Service 已确认最新状态，也不会写入、删除、同步来源或重排反馈。',
+    ],
+  };
+}
+
+function getTimelineFeedbackActionLabel(
+  action: TimelineFeedbackReceiptAction,
+): string {
+  if (action === 'positive') return '有用';
+  if (action === 'negative') return '不相关';
+  return '撤销反馈';
+}
+
+export function buildTimelineFeedbackReceipt(
+  input: TimelineFeedbackReceiptInput,
+): TimelineFeedbackReceipt {
+  const scopeLabel = getTimelineReceiptScopeLabel(input.scope);
+  const targetTitle = compactNavigationTargetTitle(input.eventTitle);
+  const actionLabel = getTimelineFeedbackActionLabel(input.action);
+  const targetKey = [input.targetType, input.targetId]
+    .map((part) =>
+      typeof part === 'string' ? part.replace(/\s+/g, ' ').trim() : '',
+    )
+    .filter(Boolean)
+    .join(':');
+  const contextLine = `上下文：${scopeLabel} · ${input.rangeLabel} · ${input.sourceFilterLabel}。`;
+  const targetLine = targetKey
+    ? `目标：${targetTitle}（${targetKey}）。`
+    : `目标：${targetTitle}。`;
+  const boundaryLine =
+    '边界：这只写 recall_quality 反馈信号，不会删除、隐藏或确认当前记忆，不会重新读取来源、外发内容、写画像或立即重排本页列表。';
+
+  if (input.status === 'pending') {
+    return {
+      title: '反馈提交中回执',
+      tone: 'info',
+      items: [
+        `操作：正在把这条时间轴记忆标记为“${actionLabel}”。`,
+        targetLine,
+        contextLine,
+        boundaryLine,
+      ],
+    };
+  }
+
+  if (input.status === 'failure') {
+    const errorText = compactNavigationTargetTitle(input.errorMessage || '');
+    const items = [
+      `结果：反馈“${actionLabel}”未确认写入，上一反馈状态已保留。`,
+      targetLine,
+      contextLine,
+      boundaryLine,
+    ];
+    if (errorText !== '这条记忆') {
+      items.push(`错误：${errorText}。`);
+    }
+    return {
+      title: '反馈未确认回执',
+      tone: 'warning',
+      items,
+    };
+  }
+
+  if (input.status === 'cleared') {
+    return {
+      title: '反馈撤销回执',
+      tone: 'success',
+      items: [
+        '结果：已确认撤销这条时间轴记忆的召回质量反馈。',
+        targetLine,
+        contextLine,
+        boundaryLine,
+      ],
+    };
+  }
+
+  return {
+    title: '反馈已记录回执',
+    tone: 'success',
+    items: [
+      `结果：已确认把这条时间轴记忆标记为“${actionLabel}”。`,
+      targetLine,
+      contextLine,
+      '后续：刷新或从搜索结果定位回来时，服务端返回的 metadata 会恢复按钮状态。',
+      boundaryLine,
     ],
   };
 }

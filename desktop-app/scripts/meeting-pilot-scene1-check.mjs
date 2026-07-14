@@ -154,6 +154,17 @@ async function saveScreenshot(page, filename) {
   return fullPath;
 }
 
+async function assertButtonBoundary(locator, patterns, label) {
+  await locator.waitFor({ state: 'attached', timeout: 15000 });
+  const title = (await locator.getAttribute('title')) || '';
+  const ariaLabel = (await locator.getAttribute('aria-label')) || '';
+  assert.ok(title, `${label} 缺少 title 边界`);
+  assert.equal(ariaLabel, title, `${label} aria-label 应镜像 title`);
+  for (const pattern of patterns) {
+    assert.match(title, pattern, `${label} 边界缺少 ${pattern}: ${title}`);
+  }
+}
+
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'meeting-pilot-scene1-browser-'),
@@ -725,33 +736,143 @@ try {
     )}`,
   );
 
-  log('附加校验: 会前准备 cue 可直接转成行动项');
+  log('附加校验: handoff 集合刷新会更新已打开 side panel');
+  await serviceWorker.evaluate(
+    ({ meetingUrl, meetingTitle }) => {
+      const now = Date.now();
+      const refreshedHandoff = {
+        createdAt: now + 1000,
+        expiresAt: now + 12 * 60 * 60 * 1000,
+        event: {
+          externalId: 'scene1-context-assist-event-refreshed',
+          title: meetingTitle,
+          startTime: now + 20 * 60 * 1000,
+          endTime: now + 50 * 60 * 1000,
+          joinUrl: meetingUrl,
+          sourceUrl: meetingUrl,
+          organizer: { name: 'Alex Chen' },
+          attendees: [{ name: 'Esone Qiu' }, { name: 'Sarah Wang' }],
+        },
+        goal: '复核刷新后的预算 owner 和下周三截止风险',
+        text: 'Personal AI refreshed meeting prep for Fixture RingCentral Meeting:\n- Confirm the refreshed budget owner.\n- Confirm Wednesday deadline risk.',
+        source: 'today_pilot',
+        generatedMode: 'fresh_generated',
+        cueCards: [
+          {
+            id: 'refreshed-brief',
+            kind: 'brief',
+            title: '刷新后的会前准备',
+            body: '这条会前准备来自集合刷新，不依赖单条 handoff key 改动。',
+          },
+          {
+            id: 'refreshed-action',
+            kind: 'action',
+            title: '刷新后的行动焦点',
+            body: '请确认刷新后的预算 owner 和下周三截止风险。',
+          },
+        ],
+        evidence: [
+          {
+            id: 'scene1-refreshed-memory',
+            type: 'chunk',
+            title: 'Refreshed budget note',
+            snippet: 'Refreshed budget owner and Wednesday deadline risk.',
+            sourceLabel: 'today_pilot',
+            sourceUrl: 'https://internal.example.com/scene1-refreshed-risk',
+            sourceTitle: 'Refreshed budget risk',
+            whyMatched: '刷新后的会前准备',
+            score: 0.91,
+          },
+        ],
+      };
+      return chrome.storage.local.set({
+        meetingPrepHandoffs: {
+          'scene1-refreshed': refreshedHandoff,
+        },
+      });
+    },
+    { meetingUrl, meetingTitle },
+  );
   await panelPage
-    .locator('.meeting-prep-cue.question .meeting-prep-action-btn', {
+    .locator('[data-meeting-prep-handoff="true"]', {
+      hasText: '复核刷新后的预算 owner 和下周三截止风险',
+    })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  const refreshedMeetingPrepState = await panelPage.evaluate(() => {
+    const card = document.querySelector('[data-meeting-prep-handoff="true"]');
+    const receipt = card?.querySelector('.meeting-prep-match-receipt');
+    return {
+      text: card?.textContent || '',
+      receiptText: receipt?.textContent || '',
+      links: Array.from(card?.querySelectorAll('a') || []).map((link) => ({
+        label: link.textContent || '',
+        href: link.href,
+      })),
+    };
+  });
+  assert.match(refreshedMeetingPrepState.text, /刷新后的会前准备/);
+  assert.match(refreshedMeetingPrepState.text, /刷新后的预算 owner/);
+  assert.match(refreshedMeetingPrepState.receiptText, /Meeting ID 精确命中/);
+  assert.match(refreshedMeetingPrepState.receiptText, /新生成准备/);
+  assert.doesNotMatch(
+    refreshedMeetingPrepState.text,
+    /确认预算风险、技术评审 owner 和下一步/,
+  );
+  assert.ok(
+    refreshedMeetingPrepState.links.some((link) =>
+      link.href.startsWith('https://internal.example.com/scene1-refreshed-risk'),
+    ),
+    `刷新后的 handoff 缺少新来源链接: ${JSON.stringify(
+      refreshedMeetingPrepState.links,
+    )}`,
+  );
+
+  log('附加校验: 会前准备 cue 可直接转成行动项');
+  await assertButtonBoundary(
+    panelPage.locator('.meeting-prep-cue.action .meeting-prep-action-btn', {
+      hasText: '加入行动项',
+    }),
+    [/当前 Meeting Pilot session/, /不会发送消息/, /创建外部任务/],
+    '会前 cue 加入行动项按钮',
+  );
+  await panelPage
+    .locator('.meeting-prep-cue.action .meeting-prep-action-btn', {
       hasText: '加入行动项',
     })
     .click();
   await panelPage
-    .locator('.meeting-prep-cue.question .meeting-prep-action-btn', {
+    .locator('.meeting-prep-cue.action .meeting-prep-action-btn', {
       hasText: '已加入行动项',
     })
     .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    panelPage.locator('.meeting-prep-cue.action .meeting-prep-action-btn', {
+      hasText: '已加入行动项',
+    }),
+    [/已存在于当前会议行动项/, /不会重复写入/, /写回外部系统/],
+    '会前 cue 已加入按钮',
+  );
   await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await assertButtonBoundary(
+    panelPage.locator('.panel-tab', { hasText: '行动项' }),
+    [/查看当前会议 session 的行动项/, /不会开始\/停止 Capture/, /不会.*外部任务/],
+    '行动项 tab',
+  );
   await panelPage.waitForFunction(() => {
     const cardText =
       Array.from(document.querySelectorAll('.action-card'))
         .map((card) => card.textContent || '')
-        .find((text) => text.includes('确认：预算风险现在卡在哪里')) || '';
+        .find((text) => text.includes('请确认刷新后的预算 owner')) || '';
     return (
       /已确认/.test(cardText) &&
       /本次会议/.test(cardText) &&
-      /Budget risk should be confirmed/.test(cardText)
+      /Refreshed budget owner/.test(cardText)
     );
   });
   const prepActionState = await panelPage.evaluate(() => {
     const card =
       Array.from(document.querySelectorAll('.action-card')).find((item) =>
-        (item.textContent || '').includes('确认：预算风险现在卡在哪里'),
+        (item.textContent || '').includes('请确认刷新后的预算 owner'),
       ) || null;
     return {
       text: card?.textContent || '',
@@ -792,6 +913,8 @@ try {
   assert.match(captureReceiptState.text, /范围/);
   assert.match(captureReceiptState.text, /下一步/);
   assert.match(captureReceiptState.text, /popup/);
+  assert.match(captureReceiptState.text, /不会静默录制/);
+  assert.match(captureReceiptState.text, /录制同意/);
 
   log('附加校验: side panel 可直接打开 Capture 授权步骤');
   await panelPage
@@ -863,6 +986,11 @@ try {
 
   log('附加校验: side panel 可手动补充漏掉的行动项并回跳时间线');
   await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await assertButtonBoundary(
+    panelPage.locator('.action-add', { hasText: '添加行动项' }),
+    [/打开人工补录表单/, /点击保存前不会写入当前会议 session/, /不会.*外部任务/],
+    '人工补录入口按钮',
+  );
   await panelPage.locator('.action-add', { hasText: '添加行动项' }).click();
   await panelPage
     .locator('.manual-action-card input[name="manual-action-title"]')
@@ -876,6 +1004,11 @@ try {
   await panelPage
     .locator('.manual-action-card textarea[name="manual-action-evidence"]')
     .fill('Alex asked for a written recap before Friday.');
+  await assertButtonBoundary(
+    panelPage.locator('.manual-action-card button', { hasText: '保存行动项' }),
+    [/保存人工补录/, /当前会议 session/, /不会创建外部任务/],
+    '人工补录保存按钮',
+  );
   await panelPage
     .locator('.manual-action-card button', { hasText: '保存行动项' })
     .click();
@@ -1021,6 +1154,18 @@ try {
     focusRailState.actionButtons.some((label) => /复核/.test(label)),
     `会中重点栏缺少行动项复核入口: ${JSON.stringify(focusRailState)}`,
   );
+  await assertButtonBoundary(
+    actionJumpPage.locator('.panel-status-action'),
+    [/真实会议标签页/, /不会开始录制/, /发送纪要/, /外部系统/],
+    '侧栏底部 Capture 开启步骤按钮',
+  );
+  await assertButtonBoundary(
+    actionJumpPage.locator('[data-meeting-focus-rail="true"] .focus-rail-action', {
+      hasText: '复核',
+    }),
+    [/只切到本侧栏行动项页/, /不会确认/, /不会.*外部任务/],
+    '会中重点行动项入口',
+  );
   await actionJumpPage
     .locator('[data-meeting-focus-rail="true"] .focus-rail-action', {
       hasText: '复核',
@@ -1053,6 +1198,13 @@ try {
   await actionJumpPage
     .locator('.action-card[data-action-id="action-1"] .ac-evidence')
     .waitFor({ state: 'attached', timeout: 15000 });
+  await assertButtonBoundary(
+    actionJumpPage.locator('.action-card[data-action-id="action-1"] button', {
+      hasText: '时间线',
+    }),
+    [/证据锚点/, /只改变本侧栏视图/, /不会确认\/完成行动项/],
+    '行动项时间线按钮',
+  );
   await actionJumpPage
     .locator('.action-card[data-action-id="action-1"] button', {
       hasText: '时间线',
@@ -1365,11 +1517,15 @@ try {
       Array.from(document.querySelectorAll('.alert-card')).find((item) =>
         /你被点名/.test(item.textContent || ''),
       ) || null;
+    const visibilityReceipt = document.querySelector(
+      '[aria-label="会中提醒可见口径回执"]',
+    );
     return {
       text: card?.textContent || '',
       receiptRows:
         card?.querySelectorAll('.alert-reason-receipt .alert-reason-row')
           .length || 0,
+      visibilityText: visibilityReceipt?.textContent || '',
     };
   });
   assert.equal(
@@ -1383,6 +1539,9 @@ try {
   assert.match(panelAlertReceiptState.text, /下一步/);
   assert.match(panelAlertReceiptState.text, /边界/);
   assert.match(panelAlertReceiptState.text, /信号/);
+  assert.match(panelAlertReceiptState.visibilityText, /提醒可见口径/);
+  assert.match(panelAlertReceiptState.visibilityText, /显示 \d+ 条可操作会中提醒/);
+  assert.match(panelAlertReceiptState.visibilityText, /当前页面可见切片/);
   assert.match(panelAlertReceiptState.text, /新近信号|较旧信号|信号时间未知/);
   assert.match(panelAlertReceiptState.text, /不会替你发言/);
   assert.match(panelAlertReceiptState.text, /外部任务/);

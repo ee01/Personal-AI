@@ -822,6 +822,11 @@ assert.equal(
   1,
   'status refresh receipt should count schedule-attention tasks',
 );
+assert.deepEqual(
+  missingAlarmStatusResult.refreshReceipt.alarmCalibrations,
+  [],
+  'status refresh receipt should not list alarm calibrations when repair is disabled',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -862,6 +867,21 @@ assert.equal(
   0,
   'failed automatic repair should not be counted as a created alarm',
 );
+assert.equal(
+  failedRepairStatusResult.refreshReceipt.alarmCalibrations[0]?.taskId,
+  'system_monitoring',
+  'failed automatic repair receipt should identify the affected task',
+);
+assert.equal(
+  failedRepairStatusResult.refreshReceipt.alarmCalibrations[0]?.action,
+  'failed',
+  'failed automatic repair receipt should expose the calibration action',
+);
+assert.match(
+  failedRepairStatusResult.refreshReceipt.alarmCalibrations[0]?.detail || '',
+  /maximum number of alarms reached/,
+  'failed automatic repair receipt should carry the Chrome alarm error',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -897,6 +917,16 @@ assert.equal(
   0,
   'successful alarm recreation should clear failed repair count for this refresh',
 );
+assert.equal(
+  repairedMissingAlarmStatusResult.refreshReceipt.alarmCalibrations[0]?.taskId,
+  'system_monitoring',
+  'successful alarm recreation receipt should identify the affected task',
+);
+assert.equal(
+  repairedMissingAlarmStatusResult.refreshReceipt.alarmCalibrations[0]?.action,
+  'created',
+  'successful alarm recreation receipt should expose the calibration action',
+);
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.scheduleHealth,
@@ -925,6 +955,22 @@ assert.equal(
   failedMismatchRepairStatusResult.refreshReceipt.updatedAlarms,
   0,
   'failed period-mismatch repair should not be counted as an updated alarm',
+);
+assert.equal(
+  failedMismatchRepairStatusResult.refreshReceipt.alarmCalibrations[0]?.taskId,
+  'system_monitoring',
+  'failed period-mismatch repair receipt should identify the affected task',
+);
+assert.equal(
+  failedMismatchRepairStatusResult.refreshReceipt.alarmCalibrations[0]?.action,
+  'failed',
+  'failed period-mismatch repair receipt should expose the calibration action',
+);
+assert.match(
+  failedMismatchRepairStatusResult.refreshReceipt.alarmCalibrations[0]
+    ?.detail || '',
+  /temporary alarm replacement failure/,
+  'failed period-mismatch repair receipt should carry the Chrome alarm error',
 );
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
@@ -955,6 +1001,22 @@ assert.equal(
   repairedMismatchStatusResult.refreshReceipt.updatedAlarms,
   1,
   'status refresh receipt should count successful period-mismatch repair',
+);
+assert.equal(
+  repairedMismatchStatusResult.refreshReceipt.alarmCalibrations[0]?.taskId,
+  'system_monitoring',
+  'successful period-mismatch repair receipt should identify the affected task',
+);
+assert.equal(
+  repairedMismatchStatusResult.refreshReceipt.alarmCalibrations[0]?.action,
+  'updated',
+  'successful period-mismatch repair receipt should expose the calibration action',
+);
+assert.match(
+  repairedMismatchStatusResult.refreshReceipt.alarmCalibrations[0]?.detail ||
+    '',
+  /30 -> 60 min/,
+  'successful period-mismatch repair receipt should include the old and new interval',
 );
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(

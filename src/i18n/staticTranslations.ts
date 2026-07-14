@@ -114,6 +114,10 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
     'Does not cancel existing reminders, watches, followups, reply rules, or Openclaw actions',
   '已排队或已保存的任务仍从各自管理页处理':
     'Queued or saved items still stay in their own management pages',
+  '保存后': 'After save',
+  '将显示': 'Will show',
+  '将隐藏本地消息工具栏；已创建事项仍不受影响':
+    'Will hide the local message toolbar; existing items are not affected',
   '关闭后，对应按钮将不再显示':
     'Turning a switch off hides that entry from this local toolbar.',
   '设置保存失败，请稍后重试':
@@ -128,6 +132,10 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '自定义时间': 'Custom time',
   '自定义...': 'Custom...',
   '管理稍后处理': 'Manage Remind',
+  '打开自定义时间选择器；不会写入 Scheduled Messages，只有确认未来时间后才创建或改期 Snooze；不会发送消息、标记已读或完成原消息':
+    'Opens the custom reminder time picker; only confirming a future time creates or reschedules Remind in Scheduled Messages, and this does not send a message, mark read, or complete the original message',
+  '只打开 Scheduled Messages 的 Snooze 视图；不会创建、改期、完成或删除提醒，不会发送消息或写记忆':
+    'Only opens the Scheduled Messages Remind view; it does not create, reschedule, complete, or delete reminders, send a message, or write memory',
   '选择日期和时间': 'Choose date and time',
   '将在以下时间提醒您：': 'Reminder time:',
   '请选择未来时间': 'Choose a future time',
@@ -144,16 +152,35 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '恢复': 'Recovery',
   '选错可撤销，或从管理稍后处理改期':
     'Undo a wrong pick, or reschedule from Manage Remind',
+  '改期预览': 'Reschedule preview',
   '当前': 'Current',
   '本次点击': 'This pick',
   '已在本地标注为': 'Already marked locally as',
+  '会改到': 'Will reschedule to',
+  '仍是同源 Snooze，不新增第二条':
+    'same-source Remind; no second reminder is added',
   '会改期这条同源 Snooze，不新增第二条':
     'Reschedules this same-source Remind item instead of adding another one',
   '选错可从成功 Toast 或管理稍后处理确认':
     'Use the success toast or Manage Remind to confirm a wrong pick',
+  '提醒时间口径': 'Reminder timing basis',
+  '会创建提醒到': 'Will create a reminder for',
+  '会按所选时间创建 Snooze': 'Creates a Remind item for the selected time',
+  '写入边界': 'Write boundary',
+  '点击具体时间后才写入 Scheduled Messages；不会发送消息、标记已读或完成原消息':
+    'Writes to Scheduled Messages only after you pick a time; does not send a message, mark read, or complete the original message',
+  '页面标注': 'Message marker',
+  '成功后原消息标注仍等后台同步；当前页面可能短暂仍显示旧快照':
+    'After success, the original message marker still waits for background sync; this page may briefly show the old snapshot',
   '缓存口径': 'Cache basis',
   '来自本地 marker 快照；以 Scheduled Messages 管理页和后台同步为准':
     'Based on the local marker snapshot; Scheduled Messages and background sync remain authoritative',
+  '来自本地 marker 快照，不是实时远端查询；以 Scheduled Messages 管理页和后台同步为准':
+    'Based on the local marker snapshot, not a live remote status check; Scheduled Messages and background sync remain authoritative',
+  '来自本地 marker 快照，可能过旧；刷新会话或等待后台同步后再确认':
+    'Based on the local marker snapshot, which may be stale; refresh the conversation or wait for background sync before relying on it',
+  '来自本地 marker 快照，尚未刷新远端状态；以 Scheduled Messages 管理页和后台同步为准':
+    'Based on the local marker snapshot; remote status has not refreshed yet, so Scheduled Messages and background sync remain authoritative',
   '时间口径': 'Timing',
   '预计时间会在悬停、聚焦和点击前刷新':
     'Preview refreshes on hover, focus, and click',

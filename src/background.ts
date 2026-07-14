@@ -52,17 +52,33 @@ import {
   sendMessageWithRetry,
 } from './utils/tabHelpers';
 import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
+import { ConfigSyncService } from './scheduled-messages/ConfigSyncService';
 import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
-import { hasRingCentralSenderCredentials } from './scheduled-messages/botAutomationConfig';
+import {
+  getAgentTaskWebhookConfig,
+  hasRingCentralSenderCredentials,
+  normalizeSheetConfig,
+  withAgentTaskWebhook,
+} from './scheduled-messages/botAutomationConfig';
 import {
   formatLocalScheduleDateTime,
   normalizeLocalScheduleTime,
 } from './scheduled-messages/scheduleDateTime';
+import {
+  buildAgentTaskWebhookUrlFromMemoryBase,
+  normalizeAgentTaskUserId,
+  resolveAgentTaskWebhookConfig,
+} from './scheduled-messages/agentTaskWebhookConfig';
 import { calculateScheduledMessageNextExecution } from './scheduled-messages/scheduleNextExecution';
-import type { CreateMessageFormData, PushLog, ScheduledMessage } from './scheduled-messages/types';
+import type {
+  CreateMessageFormData,
+  PushLog,
+  ScheduledMessage,
+  SheetConfig,
+} from './scheduled-messages/types';
 import {
   getCurrentUser,
   getProjectByKey,
@@ -115,10 +131,17 @@ import {
 import { isComposerAssistEnabledFromConfig } from './composer-guard/assistConfig';
 
 console.log('Background script loaded');
+const PERSONAL_AI_AR_CONTEXT_MENU_ID = 'personal-ai-ar-data';
+const PERSONAL_AI_AR_BINDINGS_KEY = 'personalAiArBindings';
+const personalAiArExecutionInFlight = new Map<string, Promise<{
+  replacementText: string;
+  response: Record<string, any>;
+}>>();
 void initMeetingPilotBackgroundRuntime().catch((error) => {
   console.error('Meeting Pilot runtime failed to initialize:', error);
 });
 void concernedItemsSyncService.initialize();
+registerPersonalAiArContextMenu();
 
 // Map to track backend notification metadata for click handling
 const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
@@ -141,8 +164,420 @@ function buildComposerAssistDisabledResponse(debug = false) {
   };
 }
 
+async function ensureAgentTaskWebhookConfigForBackground(token: string): Promise<void> {
+  const storage = await chrome.storage.local.get(['scheduledMessagesConfig', 'userinfo']);
+  const config = storage.scheduledMessagesConfig
+    ? normalizeSheetConfig(storage.scheduledMessagesConfig) as SheetConfig
+    : null;
+  if (!config?.sheetId) {
+    throw new Error('缺少 Scheduled Messages 配置，无法写入 AgentTask webhook');
+  }
+
+  const existingWebhook = getAgentTaskWebhookConfig(config);
+  const envConfig = await getEnvConfig();
+  const resolvedWebhook = resolveAgentTaskWebhookConfig({
+    existingWebhook,
+    memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
+    memoryServiceApiKey: envConfig.MEMORY_SERVICE_API_KEY,
+    userIdCandidates: [storage.userinfo?.username, storage.userinfo?.email],
+    requireUserId: true,
+  });
+  if (!resolvedWebhook.webhook) {
+    if (resolvedWebhook.missingReason === '缺少 memory-service 用户身份') {
+      throw new Error('缺少 memory-service 用户身份，无法创建重复 AR AgentTask');
+    }
+    throw new Error('缺少 memory-service webhook，无法创建重复 AR AgentTask');
+  }
+
+  if (!resolvedWebhook.changed) {
+    return;
+  }
+
+  const syncService = new ConfigSyncService(token);
+  await syncService.syncConfig(withAgentTaskWebhook(config, resolvedWebhook.webhook), {
+    syncAction: 'agent_task_webhook_auto_config',
+  });
+}
+
+function nonEmptyArString(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text || undefined;
+}
+
+function arScalarToText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return text || undefined;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'boolean') {
+    return String(value);
+  }
+  return undefined;
+}
+
+function compactArText(value: unknown, maxLength = 400): string {
+  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return '';
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3).trim()}...`;
+}
+
+function extractPersonalAiArJql(userPrompt: string): string | undefined {
+  const normalized = userPrompt.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return undefined;
+
+  const fenced = normalized.match(/```(?:jql)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]?.trim()) {
+    return fenced[1].trim();
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const firstJqlLine = lines.findIndex((line) =>
+    /(issueFunction\s+in|portfolioChildrenOf\s*\(|issuetype\s*=|project\s*=|status\s+(?:not\s+)?in\s*\(|filter\s*=|ORDER\s+BY)/i.test(line),
+  );
+  if (firstJqlLine >= 0) {
+    return lines.slice(firstJqlLine).join('\n').trim();
+  }
+
+  const markerMatch = normalized.match(/\bJQL\b[^\n]*\n([\s\S]+)/i);
+  return markerMatch?.[1]?.trim() || undefined;
+}
+
+function inferPersonalAiArExecutionHints(data: Record<string, any>): {
+  taskKind: string;
+  targetSystem: string;
+  exactJql?: string;
+  expectedOutput?: string;
+} {
+  const userPrompt = String(data.agentTaskPrompt || data.taskPrompt || '').trim();
+  const exactJql = extractPersonalAiArJql(userPrompt);
+  const asksForCount = /(总数|数量|issue\s*total|issues?\s*total|\bcount\b)/i.test(userPrompt);
+  if (exactJql && asksForCount) {
+    return {
+      taskKind: 'jira_jql_count',
+      targetSystem: 'jira',
+      exactJql,
+      expectedOutput: 'single_number',
+    };
+  }
+  if (exactJql) {
+    return {
+      taskKind: 'jira_jql',
+      targetSystem: 'jira',
+      exactJql,
+    };
+  }
+  return {
+    taskKind: 'ar_dom_replacement',
+    targetSystem: 'personal_ai_ar',
+  };
+}
+
+function buildPersonalAiArExecutionTask(
+  data: Record<string, any>,
+  hints: ReturnType<typeof inferPersonalAiArExecutionHints>,
+): string {
+  const userPrompt = String(data.agentTaskPrompt || data.taskPrompt || '').trim();
+  const oldValue = compactArText(data.oldValue, 200);
+  const sectionLabel = compactArText(data.sectionLabel, 200);
+  const nearbyText = compactArText(data.nearbyText, 600);
+
+  return [
+    '你正在为 Personal AI AR 数据生成网页 DOM 替换文本。',
+    '请执行用户给出的任务，最终返回 OpenClaw JSON envelope。',
+    hints.taskKind === 'jira_jql_count'
+      ? [
+          '',
+          '这是 Jira JQL count 类型的 AR 数据任务。',
+          '必须使用下方 Exact JQL 原文执行 Jira search/count，结果只取 issue 总数。',
+          '不要使用页面旧值、附近文本、历史 HTML 报表、缓存结果或相似脚本推断结果。',
+          '如果通过辅助脚本查询，必须确认该脚本实际执行的 JQL 与 Exact JQL 等价；不能确认则返回 capability_missing 或 error。',
+          '成功时 envelope.summary 只能是 issue 总数的数字字符串；payload.issueTotal 必须是 number。',
+          '成功 artifact 的 metadata.sourceSystem 必须是 jira，并写入 metadata.exactJql、metadata.verification、metadata.observedFields。',
+          '',
+          'Exact JQL:',
+          '```jql',
+          hints.exactJql,
+          '```',
+        ].filter(Boolean).join('\n')
+      : undefined,
+    '重要输出规则：',
+    '- envelope.status 成功时使用 success。',
+    '- envelope.summary 只能放“应该替换到 DOM 里的最终短文本”，不要解释过程。',
+    '- 如果用户任务只是明确说“替换为 xxx”，summary 直接返回 xxx。',
+    '- artifacts 至少包含一个 note artifact，并带 metadata.sourceSystem、metadata.entityKey、metadata.verification、metadata.observedFields，说明结果来源。',
+    '- 如果无法查询外部系统、缺权限或缺能力，请按 OpenClaw 协议返回 capability_missing/auth_error/error，不要编造结果。',
+    '',
+    `页面 URL: ${String(data.urlPattern || '')}`,
+    `目标 selector: ${String(data.selector || '')}`,
+    sectionLabel ? `目标语义: ${sectionLabel}` : undefined,
+    oldValue ? `原始文本: ${oldValue}` : undefined,
+    nearbyText ? `附近文本: ${nearbyText}` : undefined,
+    '',
+    '用户任务:',
+    userPrompt,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractPersonalAiArReplacementText(response: Record<string, any>): string {
+  const result = response?.result && typeof response.result === 'object'
+    ? response.result as Record<string, any>
+    : {};
+  const payload = result.payload && typeof result.payload === 'object'
+    ? result.payload as Record<string, any>
+    : {};
+  const candidates = [
+    payload.arReplacementText,
+    payload.replacementText,
+    payload.displayText,
+    payload.issueTotal,
+    payload.issueCount,
+    payload.issuesTotal,
+    payload.total,
+    payload.count,
+    payload.value,
+    result.summary,
+  ];
+
+  for (const candidate of candidates) {
+    const text = arScalarToText(candidate);
+    if (text) return text;
+  }
+
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  for (const artifact of artifacts) {
+    if (!artifact || typeof artifact !== 'object') continue;
+    const text = nonEmptyArString((artifact as Record<string, unknown>).content);
+    if (text) return text;
+  }
+
+  return '';
+}
+
+async function updatePersonalAiArBindingLastResult(input: {
+  bindingId: string;
+  text: string;
+  status?: string;
+  error?: string;
+  updateResult?: boolean;
+}): Promise<void> {
+  const storage = await chrome.storage.local.get([PERSONAL_AI_AR_BINDINGS_KEY]);
+  const rawBindings = storage[PERSONAL_AI_AR_BINDINGS_KEY];
+  if (!Array.isArray(rawBindings)) {
+    return;
+  }
+
+  let changed = false;
+  const nextBindings = rawBindings.map((binding) => {
+    if (!binding || typeof binding !== 'object' || binding.id !== input.bindingId) {
+      return binding;
+    }
+    changed = true;
+    const lastResult = input.updateResult === false
+      ? binding.lastResult
+      : {
+          text: input.text,
+          updatedAt: new Date().toISOString(),
+        };
+    return {
+      ...binding,
+      lastResult,
+      lastRunStatus: input.status,
+      lastRunError: input.error,
+      lastRunAt: new Date().toISOString(),
+    };
+  });
+
+  if (changed) {
+    await chrome.storage.local.set({ [PERSONAL_AI_AR_BINDINGS_KEY]: nextBindings });
+  }
+}
+
+async function executePersonalAiArBinding(data: Record<string, any>): Promise<{
+  replacementText: string;
+  response: Record<string, any>;
+}> {
+  const arBindingId = String(data.arBindingId || data.id || '').trim();
+  const taskPrompt = String(data.agentTaskPrompt || data.taskPrompt || '').trim();
+  if (!arBindingId) {
+    throw new Error('缺少 AR binding id');
+  }
+  if (!taskPrompt) {
+    throw new Error('缺少 AR Agent task prompt');
+  }
+
+  const envConfig = await getEnvConfig();
+  const executeUrl = buildAgentTaskWebhookUrlFromMemoryBase(envConfig.MEMORY_SERVICE_BASE_URL);
+  if (!executeUrl) {
+    throw new Error('缺少 memory-service 配置，无法执行 AR 数据');
+  }
+
+  const storage = await chrome.storage.local.get(['userinfo']);
+  const userinfo = storage.userinfo || {};
+  const userId = [
+    userinfo.username,
+    userinfo.userEmail,
+    userinfo.email,
+    userinfo.name,
+    userinfo.displayName,
+    userinfo.fullName,
+  ]
+    .map(normalizeAgentTaskUserId)
+    .find(Boolean);
+  if (!userId) {
+    throw new Error('缺少 memory-service 用户身份，无法执行 AR 数据');
+  }
+  const title = String(data.title || data.sectionLabel || data.oldValue || 'AR 数据更新').trim();
+  const executionHints = inferPersonalAiArExecutionHints(data);
+  const body = {
+    taskId: `ar:${arBindingId}`,
+    title: `AR 数据：${title}`,
+    task: buildPersonalAiArExecutionTask(data, executionHints),
+    executor: 'openclaw',
+    taskKind: executionHints.taskKind,
+    targetSystem: executionHints.targetSystem,
+    executionHints,
+    notifyTemplate: String(data.notifyTemplate || '').trim(),
+    triggerSource: data.triggerSource || 'ar_manual',
+    arBindingId,
+    idempotencyKey: data.idempotencyKey || `${data.triggerSource || 'ar_manual'}:${arBindingId}:${Date.now()}`,
+    userId,
+    notify: false,
+    source: {
+      urlPattern: data.urlPattern,
+      selector: data.selector,
+      oldValue: data.oldValue,
+      nearbyText: data.nearbyText,
+      sectionLabel: data.sectionLabel,
+    },
+    scheduleSpec: {
+      type: data.triggerSource === 'ar_auto_page_open' ? 'auto_ar_refresh' : 'manual_ar_refresh',
+      autoRefreshDate: data.autoRefreshDate,
+    },
+  };
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+  if (envConfig.MEMORY_SERVICE_API_KEY) {
+    headers.Authorization = `Bearer ${envConfig.MEMORY_SERVICE_API_KEY}`;
+  }
+  headers['X-User-Id'] = userId;
+
+  console.info('[Personal AI AR] execute via memory-service', {
+    arBindingId,
+    executeUrl,
+    triggerSource: body.triggerSource,
+    userId,
+  });
+
+  const response = await fetch(executeUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(responseBody?.error || responseBody?.message || `AR 数据执行失败（HTTP ${response.status}）`);
+  }
+
+  const replacementText = extractPersonalAiArReplacementText(responseBody);
+  if (!replacementText || responseBody.queueStatus !== 'succeeded') {
+    const error = responseBody?.error ||
+      responseBody?.result?.summary ||
+      responseBody?.queueStatus ||
+      'AR 数据执行未返回可替换文本';
+    throw new Error(error);
+  }
+
+  await updatePersonalAiArBindingLastResult({
+    bindingId: arBindingId,
+    text: replacementText,
+    status: responseBody.queueStatus,
+    updateResult: true,
+  });
+  return { replacementText, response: responseBody };
+}
+
+function getPersonalAiArExecutionInFlightKey(data: Record<string, any>): string {
+  const arBindingId = String(data.arBindingId || data.id || '').trim();
+  const taskPrompt = String(data.agentTaskPrompt || data.taskPrompt || '').trim();
+  return `${arBindingId}:${taskPrompt}`;
+}
+
+function executePersonalAiArBindingDeduped(data: Record<string, any>): Promise<{
+  replacementText: string;
+  response: Record<string, any>;
+}> {
+  const key = getPersonalAiArExecutionInFlightKey(data);
+  const existing = personalAiArExecutionInFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const task = executePersonalAiArBinding(data).finally(() => {
+    personalAiArExecutionInFlight.delete(key);
+  });
+  personalAiArExecutionInFlight.set(key, task);
+  return task;
+}
+
+async function detachPersonalAiArAgentTask(data: Record<string, any>): Promise<ScheduledMessage> {
+  const messageId = String(data.messageId || '').trim();
+  const arBindingId = String(data.arBindingId || '').trim();
+  if (!messageId) {
+    throw new Error('缺少要暂停的 AgentTask 行 ID');
+  }
+
+  const token = await getGoogleAuthTokenSilently({
+    caller: 'background.detachAgentTaskFromArBinding',
+  });
+  if (!token) {
+    throw new Error('缺少 Google 授权，无法暂停重复 AR AgentTask');
+  }
+
+  const messageService = new ScheduledMessageService(token);
+  const updates: Partial<ScheduledMessage> = {
+    Status: 'Paused',
+    Agent_AR_Binding_ID: '',
+    Agent_Last_Status: 'ar_detached',
+    Agent_Last_Result: arBindingId
+      ? `AR binding ${arBindingId} 已取消重复执行`
+      : 'AR binding 已取消重复执行',
+    Exec_Log: 'AR binding 已取消重复执行；任务已暂停，历史记录保留。',
+  };
+  return messageService.updateMessage(messageId, updates);
+}
+
 function waitForDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function registerPersonalAiArContextMenu(): void {
+  if (!chrome.contextMenus) {
+    return;
+  }
+
+  chrome.contextMenus.remove(PERSONAL_AI_AR_CONTEXT_MENU_ID, () => {
+    chrome.contextMenus.create({
+      id: PERSONAL_AI_AR_CONTEXT_MENU_ID,
+      title: 'AR 数据',
+      contexts: ['page', 'selection', 'link', 'image', 'editable'],
+      documentUrlPatterns: ['http://*/*', 'https://*/*', 'file://*/*'],
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('AR 数据右键菜单创建失败:', chrome.runtime.lastError.message);
+      }
+    });
+  });
 }
 
 function ensureBackgroundAlarm(
@@ -657,6 +1092,7 @@ void syncStoredUserIdentityToMemory().catch((error) => {
 // 浏览器启动时恢复任务调度器
 chrome.runtime.onStartup.addListener(async () => {
   try {
+    registerPersonalAiArContextMenu();
     setTimeout(async () => {
       console.log('🔄 浏览器启动，恢复任务调度器...');
       await taskScheduler.startAllTasks();
@@ -670,6 +1106,7 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.runtime.onInstalled.addListener(async (details) => {
   try {
     console.log('Extension event:', details.reason); // 可能的值: install, update, chrome_update, shared_module_update
+    registerPersonalAiArContextMenu();
 
     // 记录生命周期事件
     const manifest = chrome.runtime.getManifest();
@@ -933,6 +1370,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 console.log('✅ Alarm 监听器已设置（顶层同步）');
 
+if (chrome.contextMenus?.onClicked) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== PERSONAL_AI_AR_CONTEXT_MENU_ID || !tab?.id) {
+      return;
+    }
+
+    chrome.tabs.sendMessage(tab.id, {
+      type: 'PERSONAL_AI_AR_CONTEXT_MENU',
+      data: {
+        selectionText: info.selectionText || '',
+        srcUrl: info.srcUrl || '',
+        linkUrl: info.linkUrl || '',
+      },
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('AR 数据右键菜单消息发送失败:', chrome.runtime.lastError.message);
+      }
+    });
+  });
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 全局日志：记录所有收到的消息
   // console.log(
@@ -941,6 +1399,118 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   //   '来自:',
   //   sender.tab?.url || sender.url || 'unknown',
   // );
+
+  if (request.type === 'EXECUTE_PERSONAL_AI_AR_BINDING') {
+    (async () => {
+      try {
+        const result = await executePersonalAiArBindingDeduped(request.data || {});
+        sendResponse({
+          success: true,
+          replacementText: result.replacementText,
+          response: result.response,
+        });
+      } catch (error: any) {
+        const bindingId = String(request.data?.arBindingId || request.data?.id || '').trim();
+        if (bindingId) {
+          await updatePersonalAiArBindingLastResult({
+            bindingId,
+            text: String(request.data?.lastResultText || request.data?.oldValue || '').trim(),
+            status: 'failed',
+            error: error?.message || 'ar_execute_failed',
+            updateResult: false,
+          });
+        }
+        sendResponse({
+          success: false,
+          error: error?.message || 'ar_execute_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (
+    request.type === 'CREATE_AGENT_TASK_FROM_AR_BINDING' ||
+    request.type === 'UPSERT_AGENT_TASK_FROM_AR_BINDING'
+  ) {
+    (async () => {
+      try {
+        const data = request.data || {};
+        const token = await getGoogleAuthTokenSilently({
+          caller: 'background.createAgentTaskFromArBinding',
+        });
+        if (!token) {
+          throw new Error('缺少 Google 授权，无法写入 Scheduled Messages');
+        }
+        await ensureAgentTaskWebhookConfigForBackground(token);
+
+        const messageService = new ScheduledMessageService(token);
+        const today = formatLocalScheduleDateTime(new Date()).dateStr;
+        const repeatUnit = data.repeatUnit === 'Month' ? 'Month' : 'Week';
+        const repeatEvery = data.repeatEvery === 3 ? 3 : 1;
+        const taskPrompt = String(data.taskPrompt || '').trim();
+        if (!taskPrompt) {
+          throw new Error('缺少 Agent task 描述');
+        }
+
+        const formData: CreateMessageFormData = {
+          Topic: String(data.title || 'AR 数据更新').trim() || 'AR 数据更新',
+          Content: taskPrompt,
+          Schedule_Date: today,
+          Schedule_Time: '',
+          Repeat_Every: repeatEvery,
+          Repeat_Unit: repeatUnit,
+          Push_Method: 'AgentTask',
+          Target_Type: 'private',
+          Category: 'AR 数据,帮我做',
+          Agent_Task_ID: String(data.agentTaskId || `agent_task_${Date.now()}`),
+          Agent_Executor: 'openclaw',
+          Agent_Task_Prompt: taskPrompt,
+          Agent_Notify_Template: String(data.notifyTemplate || '').trim(),
+          Agent_Trigger_Source: 'jira_rule',
+          Agent_AR_Binding_ID: String(data.arBindingId || '').trim(),
+        };
+
+        let saved: ScheduledMessage;
+        const messageId = String(data.messageId || '').trim();
+        if (messageId) {
+          try {
+            saved = await messageService.updateMessage(messageId, formData);
+          } catch (error: any) {
+            if (!String(error?.message || '').includes('未找到消息')) {
+              throw error;
+            }
+            saved = await messageService.createMessage(formData);
+          }
+        } else {
+          saved = await messageService.createMessage(formData);
+        }
+
+        sendResponse({ success: true, message: saved });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'create_agent_task_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'DETACH_AGENT_TASK_FROM_AR_BINDING') {
+    (async () => {
+      try {
+        const message = await detachPersonalAiArAgentTask(request.data || {});
+        sendResponse({ success: true, message });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'detach_agent_task_failed',
+        });
+      }
+    })();
+    return true;
+  }
 
   if (request.type === 'SYNC_OUTREACH_TEMPLATE_MIRROR') {
     (async () => {

@@ -1,6 +1,6 @@
 # Rehearsal（场景预演）
 
-_最后更新: 2026-07-01_
+_最后更新: 2026-07-10_
 
 ## 定位
 
@@ -211,11 +211,12 @@ Rehearsal 没有独立的“系统启用”开关。它作为记忆层默认存�
 `memory-exploring.html#/rehearsals` 是轻量管理页，不是主要使用入口：
 
 - 列表：active、candidate、paused、stale、used、dismissed、archived、all。
-- 列表顶部显示 `列表范围回执`：当前 status/search 读取范围、可见结果数、缺少 future cue 的仅审计条目数、是否有深链临时置顶，以及“筛选/搜索/查看 All/深链定位只读取和置顶，不激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本”的边界。
-- 列表卡片会先显示提示资格、future cue 摘要和不自动执行边界，用户不用点进详情就能看出 Active、Stale、Candidate、Paused、Archived 或缺少 cue 的历史记录是否会进入现场提示。
+- 列表顶部显示 `列表范围回执`：当前 status/search 读取范围、匹配总数、已加载切片、可见结果数、缺少 future cue 的仅审计条目数、是否有深链临时置顶，以及“筛选/搜索/查看 All/加载更多/深链定位只读取和置顶，不激活、暂停、归档、标记反馈、写入外部系统或执行预演脚本”的边界。筛选、搜索、刷新、加载更多、深链恢复和空结果恢复控件也会在 hover / 读屏标签中提前说明只读、切范围、清搜索或重试详情的边界。若匹配结果超过当前已加载切片，页面会显示 `列表分页回执` 和 `加载更多`，说明未加载条目不应被当作不存在、已处理、无弱线索或无缺失线索。
+- 列表卡片会先显示提示资格、future cue 摘要和不自动执行边界，用户不用点进详情就能看出 Active、Stale、Candidate、Paused、Archived 或缺少 cue 的历史记录是否会进入现场提示；卡片本身的 hover / 读屏标签也说明点击只会选中详情，不会激活、暂停、归档、标记反馈、保存触发线索、写外部系统或执行预演脚本。
 - 详情：触发线索、建议内容、来源证据、激活历史、反馈、有效期、降权原因。
 - 操作：暂停、恢复、归档、标记已使用、标记不相关。
 - 详情页顶部先显示 `场景资格总览`：未来线索覆盖、现场提示资格、来源/触发审计保留和动作边界，帮助用户先判断“这条脚本会不会真的触发”，再看命中诊断或处理按钮。
+- 详情页可以直接修正触发线索：用户可在人物、项目、群组、会话、会议、日历、issue、URL、主题、关键词和 surface 字段中补 cue；保存前显示 `触发线索草稿回执`，说明草稿只是本地、是否已有稳定锚点，以及保存只会 PATCH 当前 Rehearsal 的 `activationCues`，不会改写脚本、创建任务、写外部系统或执行预演动作。
 - 详情页会按状态给出下一步处理建议：active 可暂停或标记不相关，candidate 可激活，stale 可重新激活，dismissed 可恢复观察，used / archived 更偏审计。
 - 从 Today Pilot、Memory Lens 或 cue card 深链进入时，如果目标 Rehearsal 不在当前筛选/搜索结果中，管理页会直接拉取详情并临时置顶，避免用户落到无关的第一条结果。
 - 如果深链目标不存在、详情请求失败，或当前筛选里没有目标且直取详情也失败，管理页会显示 `深链目标未确认` 回执：说明这不等于目标已删除、归档或标记不相关，当前列表只是继续显示可用结果；用户可以重试目标或切到 All 重新浏览，改状态前必须先确认目标标题、脚本和触发线索。
@@ -228,7 +229,10 @@ Rehearsal 没有独立的“系统启用”开关。它作为记忆层默认存�
 - 管理页还会把 future cue 拆成“有锚定线索”和“仅弱泛化线索”：人物、项目、群组、会话、会议、日历、issue、URL 属于更可靠的现场锚点；只有 topic / keyword / surface 的条目即使是 Active，也会用 warning 态显示“会参与，但只有弱线索”，提示先补人物、项目、会话、会议、issue 或 URL，避免宽泛关键词在相似文本里误提示。
 - 激活历史需要显示 outcome、分数、surface/context 和本次命中的线索摘要，方便判断这条预演是该恢复、更新、标记已使用还是降权。
 - 详情页顶部会把激活历史压缩成“命中诊断”：最近触发、最高分、正/负反馈、主要入口和建议动作。这样用户从 Memory Lens、Today Pilot 或 cue card 深链进来时，不需要扫完整日志也能判断这条预演是该恢复、暂停、标记不相关还是继续观察。
+- 详情页的暂停、恢复、重新激活、标记已使用、不相关和归档按钮会在点击前通过 hover / 读屏标签说明本次动作只影响当前 Rehearsal 的现场匹配资格、反馈或审计状态，不会发送消息、创建任务、写外部系统或执行脚本；暂停态只保留一个恢复入口，避免用户误以为两条恢复路径语义不同。
 - 用户点击暂停、恢复、重新激活、标记已使用、不相关或归档后，详情页会显示“处理回执”：新状态、是否还会进入现场提示、来源证据和触发历史是否保留，以及下一步恢复或复核路径。这样管理页不会只用一句成功提示掩盖现场提示资格的变化。
+- 用户点击暂停、恢复、重新激活、标记已使用、不相关或归档且请求还在进行中时，详情页先显示“处理请求回执”：请求动作、当前仍以旧状态为准、写入尚未确认、按钮临时禁用，以及未提前激活/暂停/归档/标记反馈/写外部/执行脚本的边界。
+- `标记已使用` / `不相关` 这类 feedback 动作成功后，管理页以 mutation response 作为确认事实源；后续详情刷新只补命中历史和审计信息，如果刷新暂时返回旧状态，不能把刚确认的 Used / Dismissed 状态倒回 Active。处理回执会显示 `详情刷新` 行，说明刷新只是审计补齐，确认状态仍保留。
 - 如果这些处理动作的写入请求失败，详情页会显示“写入失败回执”：明确本次 `未确认写入`、当前状态仍以旧状态为准、现场提示资格和审计证据未变，并提示用户检查 Memory Service 后重试。同一请求进行中会禁用动作按钮，避免连续点击制造重复写入或误以为已经处理完成。
 
 ## 业内参考与启发
@@ -252,6 +256,9 @@ Rehearsal 没有独立的“系统启用”开关。它作为记忆层默认存�
 - 2026-06-23 复查 Apple Reminders 的时间/地点/消息对象触发、ChatGPT Tasks 的监控/暂停状态、context-aware reminder authoring 和 implementation-intention 资料后，结论是 Rehearsal 列表页也要露出 cue-action 绑定质量；否则用户会把一个缺少 cue、已降权或不会执行的脚本误读成可立即触发的提醒。
 - 2026-06-28 复查 [Microsoft To Do Planned/reminders](https://support.microsoft.com/en-us/todo/add-due-dates-and-reminders-in-microsoft-to-do)、[Todoist filters](https://www.todoist.com/help/articles/introduction-to-filters-V98wIH)、[Todoist location reminders](https://www.todoist.com/help/articles/use-location-reminders-in-todoist-uGcwH2AJ6)、[digital reminder systems](https://cs.stanford.edu/~merrie/papers/memory_imwut2017.pdf) 和 [TriggerBench prospective memory for LLMs](https://arxiv.org/html/2606.23459v1) 后，结论是列表/过滤视图本身也要解释“为什么可见”和“可见不等于会执行”；因此 Rehearsal 管理页需要在列表顶部显示范围、缺少 cue、深链置顶和无副作用边界。
 - 2026-07-01 复查 [ChatGPT Scheduled Tasks](https://help.openai.com/en/articles/10291617-tasks-in-chatgpt)、[Apple Reminders](https://support.apple.com/en-us/102484)、[context-aware reminder authoring](https://arxiv.org/html/2605.23085v1)、[digital reminder systems](https://cs.stanford.edu/~merrie/papers/memory_imwut2017.pdf) 和 [TriggerBench](https://arxiv.org/html/2606.23459v1) 后，结论是管理页不只要说明“有没有 cue”，还要说明 cue 是否足够锚定；弱 topic / keyword / surface 线索需要作为可复核风险显示，避免用户把宽泛匹配误读成稳定现场触发。
+- 2026-07-04 复查 [ChatGPT Scheduled Tasks](https://help.openai.com/en/articles/10291617-tasks-in-chatgpt)、[Apple Reminders](https://support.apple.com/en-us/102484)、[context-aware reminder authoring](https://arxiv.org/html/2605.23085v1) 和 [implementation intentions](https://link.springer.com/article/10.3758/s13421-011-0126-8) 后，结论是管理页动作也要把“请求中”和“已确认”拆开；暂停/恢复/归档类操作在服务返回前只能算待确认请求，不能让用户误以为现场提示资格已经改变。
+- 2026-07-07 复查 Apple Reminders、ChatGPT Scheduled Tasks、context-aware reminder authoring、TriggerBench prospective memory 和 implementation-intention 研究后，结论是用户反馈本身也是 cue-action 绑定的一部分：点了 `不相关` 或 `已使用` 后，确认结果必须保持可见，详情刷新只能补审计信息，不能用旧详情把用户刚做出的反馈反向覆盖。
+- 2026-07-09 复查管理页长列表体验后，结论是列表范围本身也有事实边界：API 支持 `limit/offset`，所以首屏最多只是当前已加载切片；缺少 future cue、仅弱线索和空结果判断都只能基于已加载范围，未加载条目必须通过 `加载更多` 继续读取，不能被用户误读成“全量没有问题”。
 
 ## 验证
 
@@ -280,16 +287,21 @@ node tools/verify-rehearsals-page-e2e.mjs
 - 过期或 stale Rehearsal 不删除；即使精确命中多个强 cue，也只能作为 `p2` 弱提示，并在 `whyRelevant` 里解释降权原因。
 - 创建/更新无结构化未来 cue 的 Rehearsal 会返回 `REHEARSAL_FUTURE_CUE_REQUIRED`；只带 topic / keyword / surface 的弱 cue 可以保存为 candidate，但不会因为高 confidence 自动 active。
 - Memory Exploring 可以筛选、暂停、恢复、归档和查看 activation history。
-- Rehearsal 管理页列表顶部需要显示 `列表范围回执`，覆盖当前筛选/搜索、可见结果、缺少 future cue 的仅审计数量、深链临时置顶状态和筛选无写入/无执行边界。
-- Rehearsal 管理页列表卡片需要显示提示资格、future cue 摘要和不自动执行边界，覆盖 Active、Stale 和缺少 cue 的历史记录。
+- Rehearsal 管理页列表顶部需要显示 `列表范围回执`，覆盖当前筛选/搜索、匹配总数、已加载切片、可见结果、缺少 future cue 的仅审计数量、深链临时置顶状态和筛选无写入/无执行边界；筛选、搜索、刷新、加载更多、查看 All、清空搜索和重试目标控件本身也需要在 hover / 读屏标签里说明点击前边界。
+- Rehearsal 管理页在匹配总数超过当前已加载切片时，需要显示 `列表分页回执` 和 `加载更多`；加载更多只读下一页，不改变状态、不标记反馈、不执行脚本，且未加载条目不能被当作不存在或已处理。
+- Rehearsal 管理页列表卡片需要显示提示资格、future cue 摘要和不自动执行边界，覆盖 Active、Stale 和缺少 cue 的历史记录；卡片按钮 hover / 读屏标签必须说明点击只是打开详情，不会改变现场提示资格或执行脚本。
 - Rehearsal 管理页需要在详情页第一屏显示 `场景资格总览`：future cue 摘要、现场提示资格、来源/触发审计保留，以及“只提示脚本、不自动发送/写入/执行”的边界。
 - Rehearsal 管理页需要在列表范围、列表卡和 `场景资格总览` 中显示 future cue 强度；仅 topic / keyword / surface 的 Active 条目应显示为弱线索 warning，而不是和人物/会议/issue/URL 等锚定线索一样呈现。
 - Rehearsal 管理页需要显示命中诊断摘要：最近触发、最高分、反馈分布、主要入口和恢复/降权建议。
 - Rehearsal 管理页需要对历史无 cue 数据显示“缺少未来场景边界”诊断，而不是只显示空触发条件。
 - Rehearsal 管理页的现场提示资格需要同时依赖状态和 future cue；无 cue 的 Active 旧记录不能显示成可可靠触发。
+- Rehearsal 管理页需要能从无 cue 或弱 cue 条目的详情页直接补充触发线索；保存前显示本地草稿/未确认写入边界，保存后显示 `触发线索回执` 并重新呈现场景资格。
 - Rehearsal 管理页从 `?rehearsalId=` 深链进入时，如果目标直取失败，需要显示 `深链目标未确认` 回执，不能静默选中当前列表第一条并让用户误以为已经定位到目标。
 - Rehearsal 管理页筛选或搜索返回空列表时，需要显示 `空筛选回执`，把成功空结果和服务失败/删除/归档区分开，并提供查看 All、清空搜索或刷新恢复路径。
 - Rehearsal 管理页操作后需要显示处理回执，明确本次动作是否影响现场提示、是否保留审计证据，以及如何恢复或继续复核。
+- Rehearsal 管理页动作按钮需要有 hover / 读屏边界；暂停态只能出现一个恢复按钮，避免重复入口。
+- Rehearsal 管理页操作提交后、服务确认前，需要先显示处理请求回执，明确旧状态仍是事实源、写入未确认、按钮禁用只是防重复提交。
+- Rehearsal 管理页 feedback 操作确认后，即使随后的详情刷新短暂返回旧状态，也必须保留 mutation response 中的 Used / Dismissed 状态，并在回执中显示详情刷新只补命中历史和审计信息。
 - Rehearsal 管理页操作失败时需要显示写入失败回执，说明状态没有被确认修改、仍可重试，并防止重复点击造成多次写入请求。
 - Today Pilot 预演卡需要显示 `预演回执`，让用户在首页就能看到命中线索、脚本和不自动执行边界。
 - Compose Assist Rehearsal 建议的 hover、锁定预览、`预演复核` 回执和 thumb-down 回执都需要显示结构化命中线索；`预演复核` 还要显示提示资格、状态/降权/过期线索和插入前核对边界。如果后端只返回 `whyRelevant`，前端可以退回到原因短语，但不能把预演建议伪装成普通背景记忆。

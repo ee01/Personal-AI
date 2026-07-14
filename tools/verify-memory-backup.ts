@@ -41,6 +41,14 @@ interface ImportResult {
   mode: 'merge' | 'replace';
   importedAt: string;
   restoredLayers: Array<'A' | 'B'>;
+  backup: {
+    userId: string;
+    targetUserId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    archiveSha256: string;
+  };
   database: {
     action: 'merged' | 'replaced';
     changedRows?: number;
@@ -65,6 +73,7 @@ interface ImportPreviewResult {
     exportedAt: string;
     formatVersion: number;
     includeCount: number;
+    archiveSha256: string;
     layers: {
       A: number;
       B: number;
@@ -377,6 +386,11 @@ async function main(): Promise<void> {
     await fs.writeFile(exportFilePath, exportBuffer);
 
     const exportHashBeforeImport = sha256(exportBuffer);
+    assert(
+      exportResponse.headers.get('x-personal-ai-backup-archive-sha256') ===
+        exportHashBeforeImport,
+      'Backup archive SHA-256 header should match downloaded zip',
+    );
 
     await unzipArchive(exportFilePath, extractedDir);
 
@@ -517,6 +531,10 @@ async function main(): Promise<void> {
     assert(dryRunMergeResult.mode === 'merge', 'Merge dry-run mode mismatch');
     assert(dryRunMergeResult.database.action === 'would_merge', 'Merge dry-run database action mismatch');
     assert(dryRunMergeResult.backup.userId === userId, 'Merge dry-run should report backup user');
+    assert(
+      dryRunMergeResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Merge dry-run should report backup archive SHA-256',
+    );
     assert(dryRunMergeResult.backup.includeCount === manifest.includes.length, 'Merge dry-run include count mismatch');
     assert(
       dryRunMergeResult.files.overwrittenPaths.includes('projects/project-alpha.md'),
@@ -671,6 +689,10 @@ async function main(): Promise<void> {
 
     assert(crossUserDryRunResult.backup.userId === userId, 'Cross-user dry-run should report backup user');
     assert(
+      crossUserDryRunResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Cross-user dry-run should report backup archive SHA-256',
+    );
+    assert(
       crossUserDryRunResult.backup.targetUserId === crossUserId,
       'Cross-user dry-run should report target user',
     );
@@ -724,6 +746,10 @@ async function main(): Promise<void> {
 
     assert(crossUserConfirmedResult.mode === 'merge', 'Confirmed cross-user response mode mismatch');
     assert(
+      crossUserConfirmedResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Confirmed cross-user import should preserve backup archive SHA-256',
+    );
+    assert(
       crossUserConfirmedResult.warnings.some((warning) => warning.includes(`import target is ${crossUserId}`)),
       'Confirmed cross-user import should preserve mismatch warning in the receipt',
     );
@@ -761,6 +787,10 @@ async function main(): Promise<void> {
     const mergeContext = userContextManager.getContext(userId);
 
     assert(mergeResult.mode === 'merge', 'Merge response mode mismatch');
+    assert(
+      mergeResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Merge import should preserve backup archive SHA-256',
+    );
     assert(
       mergeContext.userDataManager
         .readFile('projects/project-alpha.md')
@@ -853,6 +883,10 @@ async function main(): Promise<void> {
     const dryRunReplaceResult = (await dryRunReplaceResponse.json()) as ImportPreviewResult;
 
     assert(dryRunReplaceResult.mode === 'replace', 'Replace dry-run mode mismatch');
+    assert(
+      dryRunReplaceResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Replace dry-run should report backup archive SHA-256',
+    );
     assert(dryRunReplaceResult.database.action === 'would_replace', 'Replace dry-run database action mismatch');
     assert(
       dryRunReplaceResult.files.deletedPaths.includes('reports/local-only.md'),
@@ -896,6 +930,10 @@ async function main(): Promise<void> {
     const replaceContext = userContextManager.getContext(userId);
 
     assert(replaceResult.mode === 'replace', 'Replace response mode mismatch');
+    assert(
+      replaceResult.backup.archiveSha256 === exportHashBeforeImport,
+      'Replace import should preserve backup archive SHA-256',
+    );
     assert(
       replaceContext.userDataManager.readFile('reports/local-only.md') === null,
       'Replace should delete files not present in the backup',
@@ -965,6 +1003,7 @@ async function main(): Promise<void> {
         includeCount: manifest.includes.length,
         derivedGenerated: manifest.layers.C.generated.length,
         derivedFailed: manifest.layers.C.failed.length,
+        archiveSha256: exportHashAfterImport,
       },
       dryRunMerge: {
         overwrittenFiles: dryRunMergeResult.files.overwritten,

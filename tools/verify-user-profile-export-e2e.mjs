@@ -96,6 +96,11 @@ function sha256Hex(value) {
   return createHash('sha256').update(payload).digest('hex');
 }
 
+async function assertAttributeMatches(locator, attribute, pattern, message) {
+  const value = await locator.getAttribute(attribute);
+  assert.match(value || '', pattern, message);
+}
+
 function sendJson(res, body) {
   res.writeHead(200, {
     'content-type': 'application/json',
@@ -139,14 +144,33 @@ async function startMemoryFixtureServer() {
 
     const url = new URL(req.url || '/', memoryBaseUrl);
     if (url.pathname === '/api/v1/profile/items' && req.method === 'GET') {
-      if (phase === 'export-failure') {
-        sendError(res, 503, { error: 'fixture profile export unavailable' });
-        return;
-      }
       const limit = Number(url.searchParams.get('limit') || '50');
       const offset = Number(url.searchParams.get('offset') || '0');
       const statusFilter = url.searchParams.get('status');
+      const requestRecord = { phase, limit, offset, status: statusFilter || undefined };
+      if (phase === 'export-failure') {
+        profileItemRequests.push(requestRecord);
+        sendError(res, 503, { error: 'fixture profile export unavailable' });
+        return;
+      }
+      if (phase === 'retracted-list-failure' && statusFilter === 'retracted') {
+        profileItemRequests.push(requestRecord);
+        sendError(res, 503, { error: 'fixture retracted profile unavailable' });
+        return;
+      }
+      if (phase === 'load-all-failure' && !statusFilter) {
+        profileItemRequests.push(requestRecord);
+        await delay(400);
+        sendError(res, 503, { error: 'fixture load-all profile unavailable' });
+        return;
+      }
+      if (phase === 'load-all' && offset === 0) {
+        await delay(400);
+      }
       if (phase === 'export' && offset === 0) {
+        await delay(400);
+      }
+      if (phase === 'retracted-list' && statusFilter === 'retracted' && offset === 0) {
         await delay(400);
       }
       const visibleProfileItems = statusFilter === 'all'
@@ -156,7 +180,7 @@ async function startMemoryFixtureServer() {
         : allProfileItems.filter((item) =>
           item.status === 'active' || item.status === 'pending_confirm'
         );
-      profileItemRequests.push({ phase, limit, offset, status: statusFilter || undefined });
+      profileItemRequests.push(requestRecord);
       sendJson(res, {
         items: visibleProfileItems.slice(offset, offset + limit),
         total: visibleProfileItems.length,
@@ -205,6 +229,7 @@ async function startMemoryFixtureServer() {
       if (
         (phase === 'overview-star-confirm' && id === 'profile-export-2') ||
         (phase === 'calibration-pending-success' && id === 'profile-export-999') ||
+        (phase === 'influence-undo' && id === 'profile-export-999') ||
         (phase === 'influence-update-failure' && id === 'profile-export-997')
       ) {
         await delay(400);
@@ -435,7 +460,161 @@ try {
   await page.locator('.profile-items-scope-receipt', {
     hasText: '本区只读，不确认、排除或写入画像',
   }).waitFor({ timeout: 10000 });
+  const exportButton = page.locator('button.export-btn');
+  const profileSearchInput = page.getByPlaceholder('名称、键、来源、状态或证据');
+  const statusFilterSelect = page.locator('.profile-filter-control select').first();
+  const sortSelect = page.locator('.profile-filter-control select').nth(1);
+  const clearFiltersButton = page.locator('button.tertiary-action-btn');
+  const loadAllButton = page.locator('button.load-all-items-btn');
+  const retractedToggleButton = page.locator('button.retracted-items-toggle-btn');
+  const explicitProfileSubmitButton = page.locator('.owner-profile-form button.primary-action-btn');
+
+  await assertAttributeMatches(
+    exportButton,
+    'aria-label',
+    /导出画像会重新分页请求全部状态与已排除审计/,
+    'export button should expose full-status export boundary',
+  );
+  await assertAttributeMatches(
+    exportButton,
+    'title',
+    /不限 当前页 1000\/1250 条/,
+    'export button hover should distinguish visible slice from export scope',
+  );
+  await assertAttributeMatches(
+    profileSearchInput,
+    'aria-label',
+    /当前列表只加载 1000\/1250 条画像/,
+    'profile search input should expose loaded-slice scope',
+  );
+  await assertAttributeMatches(
+    profileSearchInput,
+    'title',
+    /加载全部前不能证明全库不存在更多匹配/,
+    'profile search hover should warn against whole-store inference before load-all',
+  );
+  await assertAttributeMatches(
+    statusFilterSelect,
+    'aria-label',
+    /状态筛选只改变本地列表显示/,
+    'status filter should expose local-only display boundary',
+  );
+  await assertAttributeMatches(
+    sortSelect,
+    'aria-label',
+    /排序只重排本地已加载画像/,
+    'sort control should expose local ordering boundary',
+  );
+  await assertAttributeMatches(
+    clearFiltersButton,
+    'aria-label',
+    /当前没有搜索、状态筛选或排序可清除/,
+    'clear filters button should explain disabled no-op state',
+  );
+  await assertAttributeMatches(
+    loadAllButton,
+    'aria-label',
+    /只读请求 Memory Service 加载全部当前画像条目/,
+    'load-all button should expose read-only pagination boundary',
+  );
+  await assertAttributeMatches(
+    retractedToggleButton,
+    'aria-label',
+    /只读加载 status=retracted 已排除画像审计快照/,
+    'retracted toggle should expose read-only audit boundary',
+  );
+  await assertAttributeMatches(
+    explicitProfileSubmitButton,
+    'aria-label',
+    /先填写画像内容/,
+    'explicit profile submit should explain disabled missing-content state',
+  );
   assert.equal(await page.locator('.profile-item-row').count(), 50);
+
+  const entryMutationCount = profileMutations.length;
+  await page.locator('.review-summary-card', {
+    hasText: '待确认推断',
+  }).getByRole('button', { name: '处理' }).click();
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '已定位待确认推断',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '筛选：待确认',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '当前已加载 1000/1250 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '只导航和调整本地筛选，不确认、降权、排除、写入 USER_CORE、刷新证据、导出或调用外部 provider',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '确认前不使用',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.review-filter-btn.active', {
+    hasText: '待确认',
+  }).waitFor({ timeout: 10000 });
+  const predictionLowerButton = page.locator('.prediction-item', {
+    hasText: 'Zzz Boost Pending Project',
+  }).locator('button.influence-action-btn', { hasText: '降低影响' });
+  await assertAttributeMatches(
+    predictionLowerButton,
+    'aria-label',
+    /降低影响 Zzz Boost Pending Project：当前影响力 80%，目标影响力 25%。这是待确认推断队列中的快速校准。只写入新的 confidence\/salience，不会自动确认；确认前不会进入 USER_CORE、召回或 provider context/,
+    'prediction lower button should expose no-auto-confirm boundary',
+  );
+  await assertAttributeMatches(
+    predictionLowerButton,
+    'title',
+    /服务确认前不能证明已写入或进入个性化；不会改旧回答、刷新或删除证据、排除\/恢复画像、外发、跨平台同步、导出或发送内容/,
+    'prediction lower hover should expose service-confirmation and non-effect boundary',
+  );
+  assert.equal(
+    profileMutations.length,
+    entryMutationCount,
+    'review summary entry should not write profile mutations',
+  );
+
+  await page.locator('.review-summary-card', {
+    hasText: '证据覆盖',
+  }).getByRole('button', { name: '核对' }).click();
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '已定位缺证据画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '列表筛选：缺证据',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '只读核对',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 0/0 条匹配结果（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(
+    profileMutations.length,
+    entryMutationCount,
+    'evidence review entry should not write profile mutations',
+  );
+
+  await page.locator('.review-summary-card', {
+    hasText: '确认率',
+  }).getByRole('button', { name: '查看' }).click();
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '已定位画像条目',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '列表筛选：全部',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-review-entry-receipt', {
+    hasText: '本地导航',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1000 条（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(
+    profileMutations.length,
+    entryMutationCount,
+    'profile item review entry should not write profile mutations',
+  );
 
   const firstProfileRow = page.locator('.profile-item-row').first();
   const firstEvidenceButton = firstProfileRow.locator('button.evidence-toggle-btn');
@@ -548,6 +727,12 @@ try {
     hasText: '当前已加载条目中没有匹配结果，可先加载全部画像后再搜索',
   }).waitFor({ timeout: 10000 });
 
+  await assertAttributeMatches(
+    clearFiltersButton,
+    'aria-label',
+    /清除只恢复本地搜索、状态筛选和排序/,
+    'clear filters button should expose local reset boundary when filters are active',
+  );
   await page.locator('button.tertiary-action-btn').click();
   await page.locator('.profile-items-summary', {
     hasText: '显示 50/1000 条（已加载 1000/1250 条）',
@@ -598,15 +783,75 @@ try {
     hasText: '只下载本地副本，不恢复、删除、同步或发送画像',
   }).waitFor({ timeout: 10000 });
 
+  phase = 'load-all-failure';
+  await page.locator('button.load-all-items-btn').click();
+  await page.locator('.profile-items-load-receipt.receipt-info', {
+    hasText: '正在加载全部画像条目',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '当前切片 1000/1250 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '只读重新分页',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '不会确认、排除、恢复、写入 USER_CORE、刷新证据、导出或调用外部 provider',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.status-message.error', {
+    hasText: 'fixture load-all profile unavailable',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt.receipt-warning', {
+    hasText: '加载全部画像未完成',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '保留旧切片 1000/1250 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '不能证明全库没有更多画像或匹配结果',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '不证明全库',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1000 条（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+
   phase = 'load-all';
   await page.locator('button.load-all-items-btn').click();
+  await page.locator('.profile-items-load-receipt.receipt-info', {
+    hasText: '正在加载全部画像条目',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '等待服务确认',
+  }).waitFor({ timeout: 10000 });
   await page.locator('.status-message.success', {
     hasText: '已加载全部画像条目',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt.receipt-success', {
+    hasText: '已加载全部画像条目',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '当前搜索和筛选覆盖这次已拉取的完整条目集',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '加载全部只扩大本页审计范围',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: 'active + confirmed 才个性化',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-items-load-receipt', {
+    hasText: '快照 1250/1250 条',
   }).waitFor({ timeout: 10000 });
   assert.equal((await page.locator('.items-count').textContent())?.trim(), '1250 条');
   await page.locator('.profile-items-summary', {
     hasText: '显示 50/1250 条（共 1250 条）',
   }).waitFor({ timeout: 10000 });
+  await assertAttributeMatches(
+    profileSearchInput,
+    'aria-label',
+    /当前列表已加载全部 1250 条画像/,
+    'profile search input should update boundary after load-all succeeds',
+  );
 
   await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Export Project 1200');
   await page.locator('.profile-items-summary', {
@@ -622,6 +867,12 @@ try {
     hasText: 'Export Project 1200',
   }).waitFor({ timeout: 10000 });
 
+  await assertAttributeMatches(
+    clearFiltersButton,
+    'aria-label',
+    /当前列表已加载全部 1250 条画像/,
+    'clear filters boundary should update to full-list scope after load-all',
+  );
   await page.locator('button.tertiary-action-btn').click();
   await page.locator('.profile-items-summary', {
     hasText: '显示 50/1250 条（共 1250 条）',
@@ -631,6 +882,18 @@ try {
   await page.locator('.profile-items-summary', {
     hasText: '显示 50/625 条匹配结果（共 1250 条）',
   }).waitFor({ timeout: 10000 });
+  await assertAttributeMatches(
+    statusFilterSelect,
+    'aria-label',
+    /当前列表已加载全部 1250 条画像/,
+    'status filter should update boundary after load-all succeeds',
+  );
+  await assertAttributeMatches(
+    sortSelect,
+    'aria-label',
+    /不会改变 confidence、salience、确认状态、证据或导出范围/,
+    'sort control should explain it does not rewrite ranking fields',
+  );
   await page.locator('.profile-items-scope-receipt', {
     hasText: '当前搜索/筛选已覆盖本页全部 1250 条画像',
   }).waitFor({ timeout: 10000 });
@@ -648,6 +911,12 @@ try {
   }).waitFor({ timeout: 10000 });
   assert.equal(await page.locator('.profile-item-row').count(), 50);
 
+  await assertAttributeMatches(
+    page.locator('.load-more-row button'),
+    'aria-label',
+    /显示当前筛选下后续 575 条已加载画像/,
+    'load-more button should expose local-visible-list boundary',
+  );
   await page.locator('.load-more-row button').click();
   await page.locator('.profile-items-summary', {
     hasText: '显示 100/625 条匹配结果（共 1250 条）',
@@ -668,6 +937,27 @@ try {
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt', {
     hasText: '请求 status=all',
+  }).waitFor({ timeout: 10000 });
+  await assertAttributeMatches(
+    exportButton,
+    'aria-label',
+    /同一轮画像导出进行中/,
+    'export button should expose in-flight singleflight boundary',
+  );
+  await assertAttributeMatches(
+    exportButton,
+    'title',
+    /重复点击不会启动第二次分页/,
+    'export button hover should explain duplicate export clicks are ignored',
+  );
+  await page.locator('.profile-export-receipt', {
+    hasText: '重复点击不会启动第二次 status=all 分页',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '生成第二个 manifest 或请求第二次下载',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '单飞中：忽略重复点击',
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt', {
     hasText: '不会恢复、删除、同步或发送画像',
@@ -764,7 +1054,7 @@ try {
   });
 
   await page.locator('.status-message.success', {
-    hasText: '画像已导出',
+    hasText: '画像导出文件已生成',
   }).waitFor({ timeout: 10000 });
   await page.locator('.status-message.success', {
     hasText: '1251/1251 条',
@@ -780,6 +1070,18 @@ try {
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt', {
     hasText: '本地 JSON 不会恢复、删除、同步或发送画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '文件已生成并交给浏览器下载',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '页面不能确认浏览器是否保存到磁盘',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '浏览器下载已请求',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '磁盘保存未校验',
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt', {
     hasText: 'active + confirmed',
@@ -838,7 +1140,7 @@ try {
     hasText: '2 个诊断项未同步',
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt.receipt-info', {
-    hasText: '画像已导出，诊断部分缺失',
+    hasText: '画像导出文件已生成，诊断部分缺失',
   }).waitFor({ timeout: 10000 });
   await page.locator('.profile-export-receipt', {
     hasText: '画像条目已写入本地导出 JSON',
@@ -858,10 +1160,24 @@ try {
   await page.locator('.status-message.error', {
     hasText: 'fixture profile export unavailable',
   }).waitFor({ timeout: 10000 });
-  await page.locator('.profile-export-receipt').waitFor({
-    state: 'detached',
-    timeout: 10000,
-  });
+  await page.locator('.profile-export-receipt.receipt-warning', {
+    hasText: '画像导出未完成',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: 'fixture profile export unavailable',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '没有生成新的本地 JSON、manifest ID 或浏览器下载请求',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '旧的成功回执或旧文件不能证明本次导出完成',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '不会恢复、删除、同步、发送画像，也不会改写 Memory Service',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-export-receipt', {
+    hasText: '未请求下载',
+  }).waitFor({ timeout: 10000 });
 
   phase = 'overview-star-confirm';
   await page.locator('.profile-filter-control select').first().selectOption('all');
@@ -935,11 +1251,23 @@ try {
   await page.locator('.explicit-profile-entry-receipt', {
     hasText: '将创建 偏好 · project.personal_ai.priority，来源标记为用户手动录入',
   }).waitFor({ timeout: 10000 });
+  await assertAttributeMatches(
+    explicitProfileSubmitButton,
+    'aria-label',
+    /提交会创建 active \+ confirmed 手动画像：偏好 · project\.personal_ai\.priority/,
+    'explicit profile submit should expose write boundary before submit',
+  );
   phase = 'create-pending-receipt';
   await page.locator('.owner-profile-form button.primary-action-btn').click();
   await page.locator('.status-message', {
     hasText: '正在添加主人表达画像',
   }).waitFor({ timeout: 10000 });
+  await assertAttributeMatches(
+    explicitProfileSubmitButton,
+    'aria-label',
+    /正在提交 偏好 · project\.personal_ai\.priority 到 Memory Service/,
+    'explicit profile submit should expose service-confirmation pending boundary',
+  );
   await page.locator('.profile-calibration-receipt.receipt-info', {
     hasText: '正在添加显式画像：project.personal_ai.priority',
   }).waitFor({ timeout: 10000 });
@@ -1026,7 +1354,22 @@ try {
   await boostFailureRow.locator('.profile-action-impact-receipt', {
     hasText: '设为重点会同时确认；降低影响只改权重并保持待确认',
   }).waitFor({ timeout: 10000 });
-  await boostFailureRow.locator('button.influence-action-btn', { hasText: '设为重点' }).click();
+  const boostFailureButton = boostFailureRow.locator('button.influence-action-btn', {
+    hasText: '设为重点',
+  });
+  await assertAttributeMatches(
+    boostFailureButton,
+    'aria-label',
+    /设为重点 Export Project 996：当前影响力 80%，目标影响力 95%。这是画像条目列表中的快速校准。会先写入新的 confidence\/salience，再尝试确认成 active \+ confirmed/,
+    'boost button should expose confirm-after-update boundary',
+  );
+  await assertAttributeMatches(
+    boostFailureButton,
+    'title',
+    /服务确认前不能证明已写入或进入个性化；不会改旧回答、刷新或删除证据、排除\/恢复画像、外发、跨平台同步、导出或发送内容/,
+    'boost hover should expose service-confirmation and non-effect boundary',
+  );
+  await boostFailureButton.click();
   await page.locator('.status-message.info', {
     hasText: '影响力已更新，确认未完成',
   }).waitFor({ timeout: 10000 });
@@ -1063,7 +1406,16 @@ try {
   await updateFailureRow.locator('.profile-action-impact-receipt', {
     hasText: '该条已确认，本次只改影响力',
   }).waitFor({ timeout: 10000 });
-  await updateFailureRow.locator('button.influence-action-btn', { hasText: '降低影响' }).click();
+  const updateFailureLowerButton = updateFailureRow.locator('button.influence-action-btn', {
+    hasText: '降低影响',
+  });
+  await assertAttributeMatches(
+    updateFailureLowerButton,
+    'aria-label',
+    /降低影响 Export Project 997：当前影响力 80%，目标影响力 25%。这是画像条目列表中的快速校准。只写入新的 confidence\/salience；该条已确认，后续仍按场景选择是否使用/,
+    'lower button for confirmed item should expose influence-only boundary',
+  );
+  await updateFailureLowerButton.click();
   await page.locator('.profile-calibration-receipt.receipt-info', {
     hasText: '正在降低影响：Export Project 997',
   }).waitFor({ timeout: 10000 });
@@ -1101,7 +1453,16 @@ try {
   await confirmFailureRow.locator('.profile-action-impact-receipt', {
     hasText: '降低影响只改权重并保持待确认',
   }).waitFor({ timeout: 10000 });
-  await confirmFailureRow.locator('button.influence-action-btn', { hasText: '降低影响' }).click();
+  const lowerWithoutConfirmButton = confirmFailureRow.locator('button.influence-action-btn', {
+    hasText: '降低影响',
+  });
+  await assertAttributeMatches(
+    lowerWithoutConfirmButton,
+    'aria-label',
+    /降低影响 Export Project 998：当前影响力 80%，目标影响力 25%。这是画像条目列表中的快速校准。只写入新的 confidence\/salience，不会自动确认；确认前不会进入 USER_CORE、召回或 provider context/,
+    'lower button for unconfirmed item should expose no-auto-confirm boundary',
+  );
+  await lowerWithoutConfirmButton.click();
   await page.locator('.status-message.info', {
     hasText: '已降低画像影响',
   }).waitFor({ timeout: 10000 });
@@ -1154,7 +1515,16 @@ try {
   await undoTargetRow.locator('.profile-action-impact-receipt', {
     hasText: 'active + confirmed 才进入个性化',
   }).waitFor({ timeout: 10000 });
-  await undoTargetRow.locator('button.influence-action-btn', { hasText: '降低影响' }).click();
+  const undoTargetLowerButton = undoTargetRow.locator('button.influence-action-btn', {
+    hasText: '降低影响',
+  });
+  await assertAttributeMatches(
+    undoTargetLowerButton,
+    'title',
+    /降低影响 Export Project 999：当前影响力 80%，目标影响力 25%。这是画像条目列表中的快速校准。只写入新的 confidence\/salience；该条已确认/,
+    'lower button hover should include target and confirmed-only write boundary',
+  );
+  await undoTargetLowerButton.click();
   await page.locator('.profile-calibration-receipt.receipt-info', {
     hasText: '正在降低影响：Export Project 999',
   }).waitFor({ timeout: 10000 });
@@ -1188,6 +1558,59 @@ try {
     false,
     'lowering influence on an already-confirmed item should not make a redundant confirm request',
   );
+
+  phase = 'influence-undo';
+  await page.locator('.profile-calibration-receipt-actions', {
+    hasText: '恢复到 80%',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt-actions', {
+    hasText: '只恢复影响力，不撤销确认、证据、旧回答或外部同步',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('button.compact-action-btn', {
+    hasText: '撤销影响力调整',
+  }).waitFor({ timeout: 10000 });
+  const undoInfluenceButton = page.locator('button.compact-action-btn', {
+    hasText: '撤销影响力调整',
+  });
+  await assertAttributeMatches(
+    undoInfluenceButton,
+    'aria-label',
+    /撤销影响力调整：将 Export Project 999 的 confidence\/salience 从 25% 恢复到 80%。只恢复影响力，不撤销确认状态、证据、旧回答、排除、恢复、外部同步、导出或发送内容；服务确认前不能证明已恢复/,
+    'undo influence button should expose reversible-scope boundary',
+  );
+  await undoInfluenceButton.click();
+  await page.locator('.status-message.info', {
+    hasText: '正在撤销画像影响力调整',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt.receipt-info', {
+    hasText: '正在撤销影响力调整：Export Project 999',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt', {
+    hasText: '只恢复影响力，不撤销确认状态、不排除画像、不刷新证据',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.status-message.success', {
+    hasText: '已撤销画像影响力调整',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt', {
+    hasText: '已撤销影响力调整：Export Project 999',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt', {
+    hasText: '影响力 80%',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-calibration-receipt', {
+    hasText: '仅撤销权重',
+  }).waitFor({ timeout: 10000 });
+  await undoTargetRow.locator('.profile-action-impact-receipt', {
+    hasText: '当前影响力 80%',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'update',
+    id: 'profile-export-999',
+    body: {
+      confidence: 0.8,
+      salienceScore: 0.8,
+    },
+  });
 
   phase = 'retract-pending-receipt';
   await undoTargetRow.locator('button.danger-action-btn').click();
@@ -1252,12 +1675,64 @@ try {
     hasText: 'Export Project 999',
   }).waitFor({ timeout: 10000 });
 
+  phase = 'retracted-list-failure';
+  await page.locator('button.retracted-items-toggle-btn', {
+    hasText: '查看已排除',
+  }).click();
+  await page.locator('.profile-retracted-audit-receipt.receipt-warning', {
+    hasText: '已排除画像读取失败',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: 'fixture retracted profile unavailable',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '不能证明没有已排除画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '未恢复画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.retracted-profile-section .inline-empty.warning-empty', {
+    hasText: '当前没有可验证快照',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator('.retracted-profile-section .inline-empty', {
+      hasText: '暂无已排除画像条目',
+    }).count(),
+    0,
+    'failed retracted audit should not render as an empty confirmed snapshot',
+  );
+
+  await page.locator('button.retracted-items-toggle-btn', {
+    hasText: '收起已排除',
+  }).click();
+
   phase = 'retracted-list';
   await page.locator('button.retracted-items-toggle-btn', {
     hasText: '查看已排除',
   }).click();
+  await page.locator('.profile-retracted-audit-receipt.receipt-info', {
+    hasText: '正在读取已排除画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '请求 status=retracted',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '不能证明没有已排除画像',
+  }).waitFor({ timeout: 10000 });
   await page.locator('.retracted-profile-section', {
     hasText: 'Archived Project Alpha',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt.receipt-success', {
+    hasText: '已读取已排除画像',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '快照 1/1 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: 'status=retracted',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '只有单独点击“恢复”才会提交恢复请求',
   }).waitFor({ timeout: 10000 });
   await page.locator('.retracted-profile-section', {
     hasText: '已排除，不参与个性化',
@@ -1302,6 +1777,15 @@ try {
     id: 'profile-retracted-1',
     status: 'active',
   });
+  await page.locator('.profile-retracted-audit-receipt.receipt-info', {
+    hasText: '已排除画像快照为空',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '快照 0/0 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-retracted-audit-receipt', {
+    hasText: '需要重新确认全库时，可收起后再次打开重新读取',
+  }).waitFor({ timeout: 10000 });
   await page.locator('.retracted-profile-section', {
     hasText: '暂无已排除画像条目',
   }).waitFor({ timeout: 10000 });

@@ -95,12 +95,51 @@
       <p>加载自我反思线程中...</p>
     </div>
 
-    <div v-else-if="threads.length === 0" class="empty-state">
+    <section
+      v-if="emptyFilterReceipt"
+      class="empty-filter-receipt"
+      :class="emptyFilterReceipt.tone"
+    >
+      <div class="empty-filter-main">
+        <div class="empty-filter-title">筛选未命中回执</div>
+        <h3>{{ emptyFilterReceipt.title }}</h3>
+        <p>{{ emptyFilterReceipt.summary }}</p>
+      </div>
+      <div class="empty-filter-grid">
+        <div>
+          <span>请求</span>
+          <strong>{{ emptyFilterReceipt.requestLine }}</strong>
+        </div>
+        <div>
+          <span>读取结果</span>
+          <strong>{{ emptyFilterReceipt.resultLine }}</strong>
+        </div>
+        <div>
+          <span>边界</span>
+          <strong>{{ emptyFilterReceipt.boundary }}</strong>
+        </div>
+        <div>
+          <span>恢复路径</span>
+          <strong>{{ emptyFilterReceipt.recovery }}</strong>
+        </div>
+      </div>
+      <div class="empty-filter-chips">
+        <span
+          v-for="chip in emptyFilterReceipt.chips"
+          :key="chip"
+          class="empty-filter-chip"
+        >
+          {{ chip }}
+        </span>
+      </div>
+    </section>
+
+    <div v-if="!loading && threads.length === 0" class="empty-state">
       <div class="empty-icon">🧠</div>
       <p>{{ emptyMessage }}</p>
     </div>
 
-    <div v-else class="thread-grid">
+    <div v-if="threads.length > 0" class="thread-grid">
       <router-link
         v-for="thread in threads"
         :key="thread.id"
@@ -223,6 +262,53 @@ const listScopeReceipt = computed(() => {
       query ? '标题/topic key' : '无搜索词',
       fromDream ? '梦境复核' : '',
       `可见 ${visible}`,
+    ].filter((chip): chip is string => Boolean(chip)),
+  };
+});
+const emptyFilterReceipt = computed(() => {
+  if (
+    loading.value ||
+    loadError.value ||
+    threads.value.length > 0
+  ) {
+    return null;
+  }
+
+  const query = searchText.value.trim();
+  const fromDream = handoffSource.value === 'dream' && query.length > 0;
+  const hasQuery = query.length > 0;
+  const status = statusLabel(statusFilter.value);
+  const total = totalThreads.value || 0;
+
+  return {
+    tone: fromDream ? 'handoff' : hasQuery ? 'attention' : 'ready',
+    title: fromDream
+      ? '梦境复核未匹配反思线程'
+      : hasQuery
+        ? '筛选未匹配反思线程'
+        : '当前筛选没有反思线程',
+    summary: fromDream
+      ? `Memory Service 已按梦境复核请求查找“${query}”，但当前 Reflection thread 索引没有匹配项。`
+      : hasQuery
+        ? `Memory Service 已按标题或 topic key 查找“${query}”，当前没有匹配线程。`
+        : `Memory Service 已读取 ${status} 线程列表，当前没有可展示线程。`,
+    requestLine: hasQuery
+      ? `${fromDream ? 'source=dream · ' : ''}search=${query} · 状态 ${status}`
+      : `无搜索词 · 状态 ${status}`,
+    resultLine: `服务返回 0 / 总计 ${total}`,
+    boundary:
+      '这是一次成功的列表读取，不会新建反思线程、运行 manual_revisit、写记忆、确认决策、发送消息或执行动作。',
+    recovery: fromDream
+      ? '清除筛选后查看全部线程；必要时回到梦境页换一个主题复核。'
+      : hasQuery
+        ? '修改搜索词或清除筛选；也可以切换状态查看暂停/关闭线程。'
+        : '切换到全部状态或稍后刷新；没有空结果需要人工确认。',
+    chips: [
+      '成功空结果',
+      fromDream ? '梦境 handoff' : '',
+      hasQuery ? '标题/topic key' : '无搜索词',
+      `状态 ${status}`,
+      '无副作用',
     ].filter((chip): chip is string => Boolean(chip)),
   };
 });
@@ -509,6 +595,100 @@ function relativeTime(ts?: number) {
   line-height: 1.5;
 }
 
+.empty-filter-receipt {
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-left: 3px solid rgba(56, 189, 248, 0.75);
+  border-radius: 8px;
+  background: rgba(8, 47, 73, 0.32);
+  color: #cbd5e1;
+  padding: 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.empty-filter-receipt.handoff {
+  border-color: rgba(45, 212, 191, 0.24);
+  border-left-color: rgba(20, 184, 166, 0.86);
+}
+
+.empty-filter-receipt.attention {
+  border-color: rgba(251, 191, 36, 0.28);
+  border-left-color: rgba(251, 191, 36, 0.82);
+}
+
+.empty-filter-title {
+  color: #bae6fd;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.empty-filter-receipt.handoff .empty-filter-title {
+  color: #99f6e4;
+}
+
+.empty-filter-receipt.attention .empty-filter-title {
+  color: #fde68a;
+}
+
+.empty-filter-receipt h3 {
+  color: #e2e8f0;
+  font-size: 0.96rem;
+  margin: 0 0 0.3rem;
+}
+
+.empty-filter-receipt p {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.empty-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.empty-filter-grid div {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.5);
+  padding: 0.62rem;
+  min-width: 0;
+}
+
+.empty-filter-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 0.72rem;
+  margin-bottom: 0.26rem;
+}
+
+.empty-filter-grid strong {
+  display: block;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.empty-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.72rem;
+}
+
+.empty-filter-chip {
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.82);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.48rem;
+}
+
 .load-error-title {
   color: #fecaca;
   font-weight: 700;
@@ -755,6 +935,10 @@ function relativeTime(ts?: number) {
   }
 
   .list-scope-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .empty-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

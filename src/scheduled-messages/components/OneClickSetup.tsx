@@ -30,6 +30,12 @@ interface OneClickSetupProps {
 }
 
 type SetupRequestPhase = 'initial' | 'authorization';
+type OneClickSetupButtonBoundary =
+  | 'start_setup'
+  | 'open_api_settings'
+  | 'retry_after_api_enabled'
+  | 'open_authorization'
+  | 'complete_authorization';
 
 function formatSheetIdForDisplay(sheetId: string): string {
   if (sheetId.length <= 20) {
@@ -37,6 +43,23 @@ function formatSheetIdForDisplay(sheetId: string): string {
   }
 
   return `${sheetId.slice(0, 10)}...${sheetId.slice(-6)}`;
+}
+
+function buildOneClickSetupButtonBoundary(
+  boundary: OneClickSetupButtonBoundary,
+): string {
+  switch (boundary) {
+    case 'start_setup':
+      return '开始创建维护表、Apps Script 项目和 Web App；本阶段不会设置触发器、写测试消息、保存最终 Config 或发送消息，失败会停在可恢复状态。';
+    case 'open_api_settings':
+      return '打开 Google Apps Script API 设置页；这只打开外部设置，不创建维护表、不写 Sheet/Script/Config，也不发送消息。';
+    case 'retry_after_api_enabled':
+      return '确认已开启 Apps Script API 后重新发起第一阶段初始化；会重新创建维护表/App Script/Web App，不会直接设置触发器或发送消息。';
+    case 'open_authorization':
+      return '打开已创建 Web App 的授权页面；这只进入 Google 授权，不会在当前页继续初始化、创建触发器、写测试消息或发送消息。';
+    case 'complete_authorization':
+      return '确认授权完成后继续第二阶段；沿用已创建的维护表、Script 和 deployment，设置触发器、写测试消息并保存 Config，但不会立即发送正式消息。';
+  }
 }
 
 export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
@@ -454,6 +477,11 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const hiddenManualBindDiffCount = showAllManualBindDiffs
     ? 0
     : Math.max(0, manualBindDiffItems.length - visibleManualBindDiffItems.length);
+  const setupStartButtonBoundary = buildOneClickSetupButtonBoundary('start_setup');
+  const apiSettingsButtonBoundary = buildOneClickSetupButtonBoundary('open_api_settings');
+  const apiRetryButtonBoundary = buildOneClickSetupButtonBoundary('retry_after_api_enabled');
+  const openAuthButtonBoundary = buildOneClickSetupButtonBoundary('open_authorization');
+  const completeAuthButtonBoundary = buildOneClickSetupButtonBoundary('complete_authorization');
 
   const renderManualBindDiffList = () => {
     if (manualBindDiffItems.length === 0) {
@@ -581,6 +609,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <button 
               style={styles.primaryButton}
+              title={apiSettingsButtonBoundary}
+              aria-label={apiSettingsButtonBoundary}
               onClick={() => window.open(appScriptAPIUrl, '_blank')}
               onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
               onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
@@ -598,6 +628,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <button 
               style={styles.completeButton}
+              title={apiRetryButtonBoundary}
+              aria-label={apiRetryButtonBoundary}
               onClick={() => {
                 setNeedsAppScriptAPI(false);
                 setError('');
@@ -647,6 +679,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                 
                 <button 
                   style={styles.primaryButton}
+                  title={openAuthButtonBoundary}
+                  aria-label={openAuthButtonBoundary}
                   onClick={() => window.open(authUrl, '_blank')}
                   onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
                   onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
@@ -664,6 +698,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                 
                 <button 
                   style={styles.completeButton}
+                  title={completeAuthButtonBoundary}
+                  aria-label={completeAuthButtonBoundary}
                   onClick={handleCompleteAuth}
                   onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#218838'}
                   onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
@@ -718,6 +754,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <button 
               style={styles.primaryButton}
+              title={setupStartButtonBoundary}
+              aria-label={setupStartButtonBoundary}
               disabled={isInitializing}
               onClick={handleOneClickSetup}
               onMouseOver={(e) => {

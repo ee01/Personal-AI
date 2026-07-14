@@ -53,6 +53,14 @@ function jsonResponse(body, status = 200) {
   };
 }
 
+async function expectNotVisible(page, text) {
+  const locator = page.getByText(text);
+  const count = await locator.count();
+  for (let index = 0; index < count; index += 1) {
+    assert.equal(await locator.nth(index).isVisible(), false, `${text} should be hidden`);
+  }
+}
+
 function apiFallback(url) {
   const pathname = new URL(url).pathname;
   if (pathname.endsWith('/stats')) {
@@ -178,9 +186,65 @@ try {
   await page.getByText('洞察线索').waitFor({ timeout: 10000 });
   await page.getByText('待复核风险').waitFor({ timeout: 10000 });
   await page.getByText('新关系', { exact: true }).waitFor({ timeout: 10000 });
-  await page.getByText('优先复核', { exact: true }).waitFor({ timeout: 10000 });
-  await page.getByText('可带证据复核', { exact: true }).waitFor({ timeout: 10000 });
-  await page.getByText('缺证据', { exact: true }).waitFor({ timeout: 10000 });
+  await page
+    .locator('.overview-metric.priority')
+    .getByText('优先复核', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.overview-metric.ready')
+    .getByText('可带证据复核', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.overview-metric.warning')
+    .getByText('缺证据', { exact: true })
+    .waitFor({ timeout: 10000 });
+  const filterRegion = page.getByLabel('梦境复核视图筛选');
+  await filterRegion.getByText('复核视图：全部').waitFor({ timeout: 10000 });
+  await filterRegion
+    .getByText(
+      '当前显示 2/2 个梦境；按深链命中和生成日期展示当前读取窗口内的所有梦境。',
+    )
+    .waitFor({ timeout: 10000 });
+  await filterRegion
+    .getByText('本地筛选只改变本页可见列表，不重跑 Dream Replay')
+    .waitFor({ timeout: 10000 });
+  const priorityFilter = filterRegion.getByRole('button', {
+    name: /优先复核：显示 1 个梦境/,
+  });
+  assert.equal(
+    await priorityFilter.getAttribute('title'),
+    await priorityFilter.getAttribute('aria-label'),
+    'priority review filter should mirror title to aria-label',
+  );
+  await priorityFilter.click();
+  await filterRegion
+    .getByText('复核视图：优先复核')
+    .waitFor({ timeout: 10000 });
+  await filterRegion
+    .getByText(
+      '当前显示 1/2 个梦境；只看有证据且包含风险或新关系的梦境。',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.dream-card', { hasText: 'Project Orbit' })
+    .waitFor({ timeout: 10000 });
+  await expectNotVisible(page, 'Newer Focus');
+  const missingFilter = filterRegion.getByRole('button', {
+    name: /缺证据：显示 1 个梦境/,
+  });
+  await missingFilter.click();
+  await filterRegion
+    .getByText('复核视图：缺证据')
+    .waitFor({ timeout: 10000 });
+  await filterRegion
+    .getByText('当前显示 1/2 个梦境；只看缺少证据回执或召回结果为 0 的梦境。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.dream-card', { hasText: 'Newer Focus' })
+    .waitFor({ timeout: 10000 });
+  await expectNotVisible(page, 'Project Orbit');
+  await filterRegion.getByRole('button', { name: /全部：显示 2 个梦境/ }).click();
+  await filterRegion.getByText('复核视图：全部').waitFor({ timeout: 10000 });
   await page
     .getByText('1 个梦境文件暂时无法读取')
     .waitFor({ timeout: 10000 });
@@ -254,20 +318,46 @@ try {
   await projectCard
     .getByText('不会自动通知、派发任务、写外部系统或确认事实')
     .waitFor({ timeout: 10000 });
-  await projectCard.getByText('复核交接回执').waitFor({ timeout: 10000 });
-  await projectCard
+  const visibleHandoff = projectCard.getByLabel('梦境可见复核入口');
+  await visibleHandoff.getByText('复核入口').waitFor({ timeout: 10000 });
+  await visibleHandoff
+    .getByText('带风险线索去 Reflection 核证')
+    .waitFor({ timeout: 10000 });
+  await visibleHandoff
+    .getByText('跳转只携带筛选条件，不确认 dream 结论，不新增记忆或画像')
+    .waitFor({ timeout: 10000 });
+  const visibleReviewLink = visibleHandoff.getByRole('link', {
+    name: '打开反思筛选',
+  });
+  const visibleReviewHref = await visibleReviewLink.getAttribute('href');
+  assert.ok(
+    visibleReviewHref?.includes('#/reflection-threads'),
+    'visible dream review handoff should link to reflection threads',
+  );
+  assert.ok(
+    visibleReviewHref?.includes('source=dream'),
+    'visible dream review handoff should preserve dream source',
+  );
+  assert.ok(
+    visibleReviewHref?.includes('search=Project+Orbit') ||
+      visibleReviewHref?.includes('search=Project%20Orbit'),
+    'visible dream review handoff should preserve topic search',
+  );
+  const reviewReceipt = projectCard.getByLabel('梦境复核交接回执');
+  await reviewReceipt.getByText('复核交接回执').waitFor({ timeout: 10000 });
+  await reviewReceipt
     .getByText('只打开复核筛选')
     .waitFor({ timeout: 10000 });
-  await projectCard
+  await reviewReceipt
     .getByText('目标：Reflection 以“Project Orbit”筛选，来源标记为 dream。')
     .waitFor({ timeout: 10000 });
-  await projectCard
+  await reviewReceipt
     .getByText('来源：dreams/project-orbit-2026-05-20.md；风险 1 条，新关系 1 条。')
     .waitFor({ timeout: 10000 });
-  await projectCard
+  await reviewReceipt
     .getByText('证据：原始证据 2 条；可带证据复核。')
     .waitFor({ timeout: 10000 });
-  await projectCard
+  await reviewReceipt
     .getByText('跳转只携带筛选条件，不确认 dream 结论，不新增记忆或画像')
     .waitFor({ timeout: 10000 });
   await projectCard
@@ -308,6 +398,14 @@ try {
   await newerCard
     .getByText('不会写用户画像、创建 Rehearsal、确认新关系')
     .waitFor({ timeout: 10000 });
+  const newerVisibleHandoff = newerCard.getByLabel('梦境可见复核入口');
+  await newerVisibleHandoff.getByText('复核入口').waitFor({ timeout: 10000 });
+  await newerVisibleHandoff
+    .getByText('先带主题去 Reflection 找证据')
+    .waitFor({ timeout: 10000 });
+  await newerVisibleHandoff
+    .getByRole('link', { name: '打开反思筛选' })
+    .waitFor({ timeout: 10000 });
   await newerCard
     .locator('.dream-content')
     .waitFor({ state: 'hidden', timeout: 10000 });
@@ -343,6 +441,28 @@ try {
   });
   await page
     .getByText('没有找到与“Project Orbit”对应的自我反思线程')
+    .waitFor({ timeout: 10000 });
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/dreams?file=${encodeURIComponent('../secret.md')}`,
+    {
+      waitUntil: 'domcontentloaded',
+    },
+  );
+  await page.getByText('梦境重放').first().waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      '深链状态：已忽略无效 dream 文件参数；只接受 dreams/文件名.md 或 文件名.md。',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('深链已忽略：通知文件参数无效')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('页面没有读取该参数，已按最近可用 dream 展示')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('不会重跑 Dream Replay、更新 digest、确认内容或写回记忆')
     .waitFor({ timeout: 10000 });
 
   console.log('verify-memory-dreams-e2e: ok');

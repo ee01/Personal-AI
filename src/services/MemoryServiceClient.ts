@@ -1510,6 +1510,35 @@ export interface AskResponse {
     content?: string;
     metadata?: Record<string, any>;
   }>;
+  evidenceWatch?: {
+    contractId: string;
+    state:
+      | 'active'
+      | 'quiet_no_change'
+      | 'due'
+      | 'authority_changed'
+      | 'source_blocked'
+      | 'paused'
+      | 'archived';
+    label: string;
+    detail: string;
+    subjectKey: string;
+    lastCheckedAt?: number;
+    nextCheckAt?: number;
+    confirmRequestId?: string;
+    duplicateSuppressedCount: number;
+    runId?: string;
+    lastRunState?:
+      | 'created'
+      | 'checked_no_change'
+      | 'checked_changed'
+      | 'blocked'
+      | 'skipped_budget'
+      | 'skipped_duplicate'
+      | 'needs_user_decision';
+    lastRunSummary?: string;
+    created?: boolean;
+  };
   structuredAnswer?: {
     timeline?: Array<{ date: string; event: string }>;
     keyFindings?: string[];
@@ -2111,6 +2140,19 @@ export interface NotificationCenterFeedResponse {
     limit: number;
     returned: number;
     hasMore: boolean;
+    limitReceipt?: {
+      label: string;
+      requestedLimit?: number;
+      appliedLimit: number;
+      detail: string;
+      boundary: string;
+    };
+    snapshotReceipt?: {
+      label: string;
+      generatedAt: number;
+      detail: string;
+      boundary: string;
+    };
     emptyReceipt?: {
       label: string;
       detail: string;
@@ -2965,6 +3007,14 @@ export interface StatsResponse {
     identitySource?: 'header' | 'default_fallback';
     storageKey: string;
     fallbackToDefault: boolean;
+    writeBoundary?: {
+      mode?: 'explicit_read_write' | 'default_read_only_fallback';
+      canRead: boolean;
+      canWrite: boolean;
+      blockedOperations: string[];
+      reason?: 'explicit_x_user_id' | 'missing_or_blank_x_user_id';
+      recoveryAction?: 'none' | 'restore_userinfo_username_or_set_user_id';
+    };
   };
   messages: {
     total: number;
@@ -3133,6 +3183,100 @@ export interface MemoryCoverageMapResponse {
   priorityFocus?: MemoryCoveragePriorityFocus | null;
   timeline: MemoryCoverageTimelineEvent[];
 }
+
+export type MemoryCoverageSliceName =
+  | 'messages-by-source'
+  | 'provider-jobs-recent'
+  | 'pressure'
+  | 'skills-sync';
+
+export interface MemoryCoverageSliceReceiptSummary {
+  itemCount: number;
+  totalCount?: number;
+  recentCount?: number;
+  failureCount?: number;
+  enabledCount?: number;
+  latestAt?: number | null;
+  windowLabel: string;
+  emptyState: string;
+}
+
+export interface MemoryCoverageSliceReceipt {
+  slice: MemoryCoverageSliceName;
+  generatedAt: number;
+  staleAfterDays: number;
+  source: string;
+  summary: MemoryCoverageSliceReceiptSummary;
+  boundary: string;
+  note: string;
+}
+
+export interface MemoryCoverageSliceResponseBase {
+  generatedAt: number;
+  staleAfterDays: number;
+  receipt: MemoryCoverageSliceReceipt;
+}
+
+export interface MemoryCoverageMessageSourceRow {
+  sourceType: string;
+  count: number;
+  latestAt: number | null;
+  recentCount: number;
+}
+
+export interface MemoryCoverageProviderJobRow {
+  provider: string;
+  scenario: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  latestAt: number | null;
+  latestStatus: string | null;
+  latestError: string | null;
+}
+
+export interface MemoryCoveragePressureResponse
+  extends MemoryCoverageSliceResponseBase {
+  notificationsPending: number;
+  actionsQueued: number;
+  actionsRunning: number;
+  confirmRequestsPending: number;
+  reflectionThreadsActive: number;
+  totalPressureItems: number;
+}
+
+export interface MemoryCoverageSkillSyncRow {
+  platform: string;
+  enabled: boolean;
+  capability: string;
+  mode: string;
+  lastProbeAt: number | null;
+  lastProbeAgeDays: number | null;
+  lastError: string | null;
+  bindingsByState: Record<string, number>;
+}
+
+export interface MemoryCoverageMessagesBySourceResponse
+  extends MemoryCoverageSliceResponseBase {
+  items: MemoryCoverageMessageSourceRow[];
+}
+
+export interface MemoryCoverageProviderJobsRecentResponse
+  extends MemoryCoverageSliceResponseBase {
+  items: MemoryCoverageProviderJobRow[];
+}
+
+export interface MemoryCoverageSkillsSyncResponse
+  extends MemoryCoverageSliceResponseBase {
+  items: MemoryCoverageSkillSyncRow[];
+}
+
+export type MemoryCoverageDiagnosticSliceResponse =
+  | MemoryCoverageMessagesBySourceResponse
+  | MemoryCoverageProviderJobsRecentResponse
+  | MemoryCoveragePressureResponse
+  | MemoryCoverageSkillsSyncResponse;
 
 export type SourceMemorySourceKind =
   | 'webpage'
@@ -3543,6 +3687,7 @@ export interface MemoryBackupDownloadResponse {
 export interface MemoryBackupDownloadManifestSummary {
   userId: string;
   exportedAt: string;
+  archiveSha256?: string;
   formatVersion: number;
   includeCount: number;
   layers: {
@@ -3560,6 +3705,14 @@ export interface MemoryBackupImportResponse {
   mode: 'merge' | 'replace';
   importedAt: string;
   restoredLayers: Array<'A' | 'B'>;
+  backup?: {
+    userId: string;
+    targetUserId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    archiveSha256?: string;
+  };
   database: {
     action: 'merged' | 'replaced';
     changedRows?: number;
@@ -3590,6 +3743,7 @@ export interface MemoryBackupImportPreviewResponse {
     exportedAt: string;
     formatVersion: number;
     includeCount: number;
+    archiveSha256?: string;
     layers: {
       A: number;
       B: number;
@@ -3873,6 +4027,7 @@ function parseBackupManifestHeaders(
 ): MemoryBackupDownloadManifestSummary | undefined {
   const userId = headers.get('x-personal-ai-backup-user-id');
   const exportedAt = headers.get('x-personal-ai-backup-exported-at');
+  const archiveSha256 = headers.get('x-personal-ai-backup-archive-sha256');
   const formatVersion = parseNumericHeader(
     headers,
     'x-personal-ai-backup-format-version',
@@ -3919,6 +4074,7 @@ function parseBackupManifestHeaders(
   return {
     userId,
     exportedAt,
+    archiveSha256: archiveSha256 ?? undefined,
     formatVersion,
     includeCount,
     layers: {
@@ -5360,6 +5516,7 @@ export class MemoryServiceClient {
   // --------------------------------------------------------------------------
 
   async getActions(filters?: {
+    actionId?: string;
     queueStatus?:
       | 'queued'
       | 'running'
@@ -5377,6 +5534,7 @@ export class MemoryServiceClient {
     offset?: number;
   }): Promise<RuntimeActionListResponse> {
     const params = new URLSearchParams();
+    if (filters?.actionId) params.set('actionId', filters.actionId);
     if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
     if (filters?.executionMode)
       params.set('executionMode', filters.executionMode);
@@ -6022,6 +6180,40 @@ export class MemoryServiceClient {
 
   async getMemoryCoverageMap(): Promise<MemoryCoverageMapResponse> {
     return this.request<MemoryCoverageMapResponse>('GET', '/coverage/map');
+  }
+
+  async getMemoryCoverageMessagesBySource(): Promise<MemoryCoverageMessagesBySourceResponse> {
+    return this.request<MemoryCoverageMessagesBySourceResponse>(
+      'GET',
+      '/coverage/messages-by-source',
+    );
+  }
+
+  async getMemoryCoveragePressure(): Promise<MemoryCoveragePressureResponse> {
+    return this.request<MemoryCoveragePressureResponse>('GET', '/coverage/pressure');
+  }
+
+  async getMemoryCoverageProviderJobsRecent(): Promise<MemoryCoverageProviderJobsRecentResponse> {
+    return this.request<MemoryCoverageProviderJobsRecentResponse>(
+      'GET',
+      '/coverage/provider-jobs/recent',
+    );
+  }
+
+  async getMemoryCoverageSkillsSync(): Promise<MemoryCoverageSkillsSyncResponse> {
+    return this.request<MemoryCoverageSkillsSyncResponse>(
+      'GET',
+      '/coverage/skills-sync',
+    );
+  }
+
+  async getMemoryCoverageDiagnosticSlices(): Promise<MemoryCoverageDiagnosticSliceResponse[]> {
+    return Promise.all([
+      this.getMemoryCoverageMessagesBySource(),
+      this.getMemoryCoveragePressure(),
+      this.getMemoryCoverageProviderJobsRecent(),
+      this.getMemoryCoverageSkillsSync(),
+    ]);
   }
 
   async scoreSourceMemoryCandidate(

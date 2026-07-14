@@ -25,6 +25,7 @@ import {
 import { buildMeetingPilotAlertReceipt } from './alertPresentation';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  buildMeetingPilotLiveFeedReceipt,
   buildMeetingPilotLiveFeedItems,
   getVisibleMeetingMemoryCueRefs,
 } from './liveFeedPresentation';
@@ -387,6 +388,195 @@ function getActionFilterLabel(filter: ActionReviewFilter): string {
   if (filter === 'done') return '已完成';
   if (filter === 'dismissed') return '已忽略';
   return '全部';
+}
+
+function getPanelTabLabel(tab: TabId): string {
+  if (tab === 'live') return '实时';
+  if (tab === 'speech') return '发言';
+  if (tab === 'timeline') return '时间线';
+  if (tab === 'actions') return '行动项';
+  if (tab === 'settings') return '设置';
+  return CAPTURE_LOG_TAB_LABEL;
+}
+
+function buildPanelTabBoundary(tab: TabId, active: boolean): string {
+  const label = getPanelTabLabel(tab);
+  const verb = active ? '当前已在' : '切到';
+  const detail =
+    tab === 'actions'
+      ? '查看当前会议 session 的行动项、复核状态、复制和人工补录入口'
+      : tab === 'timeline'
+      ? '查看当前会议的章节、决议、提及和行动项证据锚点'
+      : tab === 'speech'
+      ? '查看当前转写/ASR 链路和发言文本'
+      : tab === 'settings'
+      ? '查看本侧栏会中体验设置和 Options 配置入口'
+      : tab === 'live'
+      ? '查看当前重点、提醒、会前 handoff 和关联记忆'
+      : '查看本场 Capture 调试日志';
+  return `${verb}「${label}」：${detail}；只切换本侧栏视图并恢复该 tab 的滚动位置，不会开始/停止 Capture、确认/完成行动项、复制内容、发消息、创建外部任务、重跑分析或写回会议纪要。`;
+}
+
+function buildFocusRailActionBoundary(
+  kind: 'capture' | 'action-review',
+  label: string,
+): string {
+  if (kind === 'capture') {
+    return `${label}：只在原会议页打开 Capture 授权/配置引导；不会直接开始录制、通知参会者、发送会议内容、创建纪要或代表你取得录制同意。`;
+  }
+  return `${label}：只切到本侧栏行动项页并定位到需要复核的本场行动项；不会确认、完成、忽略、复制、发送或创建外部任务。`;
+}
+
+function formatActionItemControlTarget(item: MeetingPilotActionItem): string {
+  const title = String(item.title || '').replace(/\s+/g, ' ').trim();
+  if (!title) return '这条行动项';
+  return title.length <= 36 ? `「${title}」` : `「${title.slice(0, 35)}…」`;
+}
+
+function buildActionFilterBoundary(
+  filter: ActionReviewFilter,
+  count: number,
+  total: number,
+  active: boolean,
+): string {
+  const label = getActionFilterLabel(filter);
+  const verb = active ? '当前正在查看' : '切换到';
+  return `${verb}「${label}」筛选：显示 ${count}/${total} 个本场行动项；只改变本侧栏可见列表和滚动位置，不会确认、完成、忽略、复制行动项，不会创建外部任务、发送纪要、写回 Calendar/Jira/RingCentral 或重跑会议分析。`;
+}
+
+function buildActionToolbarBoundary(
+  kind: 'add' | 'bulk-confirm' | 'copy-followup' | 'copy-visible',
+  details: {
+    addingActionItem?: boolean;
+    confirmableCount?: number;
+    blockedCount?: number;
+    visibleCount?: number;
+    confirmedCount?: number;
+    feedback?: BulkActionReviewFeedback | null;
+    filter?: ActionReviewFilter;
+  } = {},
+): string {
+  if (kind === 'add') {
+    return details.addingActionItem
+      ? '正在打开人工补录表单：还没有保存新行动项；取消会丢弃草稿，不会创建外部任务、发送纪要、写日历或重跑分析。'
+      : '打开人工补录表单：先在本侧栏填写行动项、负责人、截止和依据；点击保存前不会写入当前会议 session、创建外部任务、发送纪要或写回外部系统。';
+  }
+  if (kind === 'bulk-confirm') {
+    const confirmable = details.confirmableCount || 0;
+    const blocked = details.blockedCount || 0;
+    if (details.feedback?.status === 'updating') {
+      return `批量确认写入中：正在把 ${details.feedback.completed}/${details.feedback.total} 个信息完整的待复核项标为已确认；缺信息项仍跳过，不会完成任务、复制内容、创建外部任务或发送纪要。`;
+    }
+    if (!confirmable) {
+      return blocked
+        ? `当前筛选有 ${blocked} 个待复核项缺负责人、截止或依据；此按钮不会批量确认，先补信息或单条明确确认例外。`
+        : '当前筛选没有可批量确认的待复核项；点击不会写入行动项、复制内容、创建外部任务或发送纪要。';
+    }
+    return `批量确认当前筛选中 ${confirmable} 个信息完整的待复核项；会写入当前会议 session 的复核状态，缺信息项仍跳过，不会标记完成、复制跟进清单、创建外部任务、发送纪要或写 Calendar/Jira/RingCentral。`;
+  }
+  if (kind === 'copy-followup') {
+    const count = details.confirmedCount || 0;
+    return count
+      ? `只复制 ${count} 个已确认且未完成的行动项为 Markdown 跟进清单到本机剪贴板；不会改变复核/完成状态、创建外部任务、发送纪要、写回会议记录或重跑分析。`
+      : '当前没有已确认且未完成的行动项可复制；不会创建外部任务、发送纪要或改变行动项状态。';
+  }
+  const visibleCount = details.visibleCount || 0;
+  const filterLabel = getActionFilterLabel(details.filter || 'all');
+  return visibleCount
+    ? `只复制当前「${filterLabel}」筛选下 ${visibleCount} 个行动项到本机剪贴板；不会改变复核/完成/忽略状态、创建外部任务、发送纪要、写回会议记录或重跑分析。`
+    : `当前「${filterLabel}」筛选没有可复制行动项；不会创建外部任务、发送纪要或改变行动项状态。`;
+}
+
+function buildMeetingPrepCueActionBoundary(
+  card: ContextAssistCueCard,
+  status: MeetingPrepActionFeedbackState | undefined,
+  draft: MeetingPrepActionDraft | null,
+): string {
+  const cueLabel = card.kind === 'question' ? '问题 cue' : '目标 cue';
+  if (status === 'adding') {
+    return `正在把这条${cueLabel}写入当前会议行动项；不会重复写入、发送消息、创建外部任务、写日历或确认会前准备事实。`;
+  }
+  if (status === 'added') {
+    return `这条${cueLabel}已存在于当前会议行动项；再次点击不会重复写入、发送消息、创建外部任务或写回外部系统。`;
+  }
+  if (!draft) {
+    return `这条${cueLabel}缺少可写入的行动项标题；点击不会写入当前会议 session、创建外部任务或发送纪要。`;
+  }
+  const owner = draft.owner ? `负责人 ${draft.owner}` : '负责人待分配';
+  return `把这条${cueLabel}写入当前 Meeting Pilot session 的行动项和时间线锚点，默认 ${owner}、截止 ${draft.deadline || '待补'}；不会发送消息、创建外部任务、写 Calendar/Jira/RingCentral、确认事实或开始 Capture。`;
+}
+
+function buildManualActionButtonBoundary(
+  action: 'save' | 'cancel',
+  draft: ManualActionDraft,
+): string {
+  if (action === 'cancel') {
+    return '取消人工补录草稿：只关闭本侧栏表单并丢弃未保存输入，不会删除已有行动项、创建外部任务、发送纪要或写回外部系统。';
+  }
+  const title = String(draft.title || '').trim();
+  return title
+    ? `保存人工补录「${title.length > 36 ? `${title.slice(0, 35)}…` : title}」到当前会议 session，并建立本场时间线锚点；不会创建外部任务、发送纪要、写 Calendar/Jira/RingCentral 或重跑分析。`
+    : '保存人工补录：需要先填写行动项标题；负责人和截止可留空并标记待补，不会创建外部任务、发送纪要或写回外部系统。';
+}
+
+function buildActionItemButtonBoundary(
+  item: MeetingPilotActionItem,
+  action:
+    | 'copy'
+    | 'timeline'
+    | 'edit'
+    | 'restore'
+    | 'confirm'
+    | 'toggle-done'
+    | 'dismiss'
+    | 'save-edit'
+    | 'cancel-edit',
+  options: {
+    timelineTarget?: MeetingPilotTimelineEvent;
+    exceptionHint?: string;
+  } = {},
+): string {
+  const target = formatActionItemControlTarget(item);
+  if (action === 'copy') {
+    return `只复制${target}的标题、负责人、截止、状态和依据到本机剪贴板；不会确认、完成、忽略、编辑、创建外部任务、发送纪要或写回会议记录。`;
+  }
+  if (action === 'timeline') {
+    const time = options.timelineTarget?.timestamp
+      ? ` ${options.timelineTarget.timestamp}`
+      : '';
+    return `切到时间线并展开${time}附近的证据锚点来复核${target}；只改变本侧栏视图，不会确认/完成行动项、复制内容、重跑分析或写外部系统。`;
+  }
+  if (action === 'edit') {
+    return `打开${target}的本地校正表单；保存前不会改写行动项、确认状态、完成状态、外部任务或会议纪要。`;
+  }
+  if (action === 'restore') {
+    return `把${target}从已忽略恢复为待复核，并保留在当前会议 session；不会标记完成、复制内容、创建外部任务、发送纪要或重跑分析。`;
+  }
+  if (action === 'confirm') {
+    const prefix = options.exceptionHint
+      ? `确认例外：${options.exceptionHint}；`
+      : '';
+    return `${prefix}把${target}标为已确认，表示你接受这条 AI/手动行动项进入会后跟进候选；不会标记完成、创建外部任务、发送纪要、写 Calendar/Jira/RingCentral 或修改原始 transcript。`;
+  }
+  if (action === 'toggle-done') {
+    if (item.status === 'done') {
+      return `撤回${target}的已完成状态，回到已确认待跟进；不会重新打开外部任务、发送通知、改写 transcript 或重跑分析。`;
+    }
+    const prefix =
+      getActionReviewState(item) === 'suggested' && options.exceptionHint
+        ? `确认例外并完成：${options.exceptionHint}；`
+        : getActionReviewState(item) === 'suggested'
+        ? '先确认再完成；'
+        : '';
+    return `${prefix}把${target}标为已确认且已完成，只更新当前会议 session 的复核状态；不会创建/关闭外部任务、发送纪要、写 Calendar/Jira/RingCentral 或修改原始 transcript。`;
+  }
+  if (action === 'dismiss') {
+    return `把${target}标为已忽略；它不会进入会议 recap 的主行动项列表，但仍保留在本场完整结构化数据中供排查，不会删除 transcript、创建外部任务或发送纪要。`;
+  }
+  if (action === 'save-edit') {
+    return `保存${target}的标题、负责人和截止校正，并把它标为已确认；不会修改原始 transcript、创建外部任务、发送纪要、写 Calendar/Jira/RingCentral 或重跑分析。`;
+  }
+  return `取消${target}的本地校正草稿；不会保存输入、改变行动项状态、创建外部任务、发送纪要或写回外部系统。`;
 }
 
 function buildActionEditDraft(item: MeetingPilotActionItem): ActionEditDraft {
@@ -2102,6 +2292,35 @@ const shellStyle = `
     gap: 8px;
   }
 
+  .alert-visibility-receipt {
+    display: grid;
+    gap: 5px;
+    margin: 10px 0 12px;
+    padding: 9px 11px;
+    border-radius: 9px;
+    border: 1px solid rgba(116,185,255,0.18);
+    background: rgba(116,185,255,0.07);
+  }
+
+  .alert-visibility-title {
+    color: var(--accent-light);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+  }
+
+  .alert-visibility-summary,
+  .alert-visibility-boundary {
+    color: var(--text);
+    font-size: 10.5px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .alert-visibility-boundary {
+    color: var(--text-dim);
+  }
+
   .alert-reason-receipt {
     display: flex;
     flex-direction: column;
@@ -3237,7 +3456,8 @@ function buildCaptureHandoffReceipt(
     return {
       tone: 'ready',
       status: 'Capture 运行中',
-      scope: '本场会议已授权 Capture；会中总结、时间线和行动项会继续刷新。',
+      scope:
+        '本场会议已授权本机 Capture；会中总结、时间线和行动项会继续刷新。它不会自动通知参会者、外发会议内容或代表你取得录制同意。',
       nextStep: '优先看提醒、行动项和当前话题；停止后会进入归档链路。',
     };
   }
@@ -3301,9 +3521,11 @@ function buildCaptureHandoffReceipt(
       tone: 'low',
       status: '可开启，部分降级',
       scope:
-        readiness.summary ||
-        readiness.degradations[0] ||
-        '授权后部分智能能力可能降级。',
+        `${
+          readiness.summary ||
+          readiness.degradations[0] ||
+          '授权后部分智能能力可能降级。'
+        } 不会静默录制；参会者通知和录制同意需要你在会议中自行处理。`,
       nextStep: '从 popup 授权后，降级项会在会中继续刷新。',
     };
   }
@@ -3311,9 +3533,41 @@ function buildCaptureHandoffReceipt(
   return {
     tone: 'ready',
     status: '等待授权',
-    scope: '不会静默录制；授权后才开始录制、实时总结和会后分析。',
+    scope:
+      '不会静默录制；授权后才开始本机录制、实时总结和会后分析。参会者通知和录制同意需要你在会议中自行处理。',
     nextStep: '点击扩展 icon，在 popup 第一项开启会议全貌。',
   };
+}
+
+function buildPanelCaptureControlBoundary(
+  session: MeetingPilotSessionSnapshot,
+  isTranscriptPilotActive: boolean,
+): string {
+  if (session.capture.kind === 'recording') {
+    return '停止当前 Meeting Pilot Capture：只向当前绑定的会议 tab/session 提交停止请求并进入归档链路；不会发送纪要、创建或关闭外部任务、确认行动项、通知参会者或代表你取得录制同意。';
+  }
+
+  if (!session.readiness.canStartCapture) {
+    return '打开 Meeting Pilot 配置：只打开本机 Options 修复配置；不会开始 Capture、停止录制、上传音频/画面、发送纪要、创建外部任务或写回 Calendar/Jira/RingCentral。';
+  }
+
+  if (session.tabId <= 0) {
+    return '当前侧栏没有绑定真实会议标签页，不能从这里显示 Capture 开启步骤；不会开始录制、读取其他会议、上传音频/画面、发送纪要或写外部系统。请回到会议页或 popup 重试。';
+  }
+
+  if (isTranscriptPilotActive) {
+    return '显示画面理解与纪要的授权步骤：只在原会议页引导你从 popup 开启增强 Capture；点击本身不会开始录制、上传音频/画面、通知参会者、发送纪要或创建外部任务。';
+  }
+
+  if (session.capture.kind === 'error') {
+    return '显示 Capture 重试步骤：只引导你回到 popup 重新授权；点击本身不会开始录制、上传音频/画面、发送纪要、创建外部任务或清除上次失败原因。';
+  }
+
+  if (session.capture.kind === 'stopped') {
+    return '显示重新开启 Capture 的步骤：只引导你回到 popup 重新授权；不会恢复旧录制、自动开始新录制、发送纪要、创建外部任务或修改已归档行动项。';
+  }
+
+  return '显示 Capture 开启步骤：只在原会议页引导你从 popup 授权开始；点击本身不会开始录制、上传音频/画面、通知参会者、发送纪要、创建外部任务或写回外部系统。';
 }
 
 function getPanelCaptureChip(session: MeetingPilotSessionSnapshot): string {
@@ -3586,6 +3840,10 @@ function MeetingSidePanel() {
     session.memoryRefs,
   );
   const liveFeedItems = buildMeetingPilotLiveFeedItems(
+    session,
+    meetingMemoryCueRefs,
+  );
+  const liveFeedReceipt = buildMeetingPilotLiveFeedReceipt(
     session,
     meetingMemoryCueRefs,
   );
@@ -4109,7 +4367,11 @@ function MeetingSidePanel() {
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
     ) => {
-      if (areaName === 'local' && changes[MEETING_PREP_HANDOFF_STORAGE_KEY]) {
+      if (
+        areaName === 'local' &&
+        (changes[MEETING_PREP_HANDOFF_STORAGE_KEY] ||
+          changes[MEETING_PREP_HANDOFFS_STORAGE_KEY])
+      ) {
         void syncMeetingPrepHandoff();
       }
     };
@@ -4604,12 +4866,12 @@ function MeetingSidePanel() {
     session,
     isTranscriptPilotActive,
   );
-  const visibleAlertCount = liveFeedItems.filter(
-    (item) => item.kind === 'alert',
-  ).length;
-  const p0AlertCount = session.alerts.filter(
-    (alert) => !alert.resolved && alert.level === 'P0',
-  ).length;
+  const captureControlBoundary = buildPanelCaptureControlBoundary(
+    session,
+    isTranscriptPilotActive,
+  );
+  const visibleAlertCount = liveFeedReceipt.surfacedAlertCount;
+  const p0AlertCount = liveFeedReceipt.surfacedP0AlertCount;
   const alertFocusTone = p0AlertCount
     ? 'urgent'
     : visibleAlertCount
@@ -4686,6 +4948,12 @@ function MeetingSidePanel() {
     __DEV__ && showDebugTab ? (
       <button
         className={`panel-tab ${activeTab === 'capture-log' ? 'active' : ''}`}
+        type="button"
+        title={buildPanelTabBoundary('capture-log', activeTab === 'capture-log')}
+        aria-label={buildPanelTabBoundary(
+          'capture-log',
+          activeTab === 'capture-log',
+        )}
         onClick={() => handlePanelTabChange('capture-log')}
       >
         {CAPTURE_LOG_TAB_LABEL}
@@ -4728,6 +4996,27 @@ function MeetingSidePanel() {
     useDemoSession,
     state,
   );
+  const actionAddButtonBoundary = buildActionToolbarBoundary('add', {
+    addingActionItem,
+  });
+  const actionBulkConfirmBoundary = buildActionToolbarBoundary(
+    'bulk-confirm',
+    {
+      confirmableCount: visibleConfirmableReviewActions.length,
+      blockedCount: visibleBlockedReviewActions.length,
+      feedback: bulkActionReviewFeedback,
+    },
+  );
+  const actionCopyFollowupBoundary = buildActionToolbarBoundary(
+    'copy-followup',
+    {
+      confirmedCount: confirmedActions.length,
+    },
+  );
+  const actionCopyVisibleBoundary = buildActionToolbarBoundary('copy-visible', {
+    visibleCount: visibleActionItems.length,
+    filter: actionFilter,
+  });
 
   return (
     <div
@@ -4777,6 +5066,7 @@ function MeetingSidePanel() {
           <button
             className="panel-close"
             type="button"
+            title="关闭 Meeting Pilot：只关闭当前侧栏/页内面板，不会停止 Capture、确认行动项、发送纪要或创建外部任务。"
             aria-label="关闭 Meeting Pilot"
             onClick={closeMeetingPanel}
           >
@@ -4815,17 +5105,12 @@ function MeetingSidePanel() {
             <button
               key={tab}
               className={`panel-tab ${activeTab === tab ? 'active' : ''}`}
+              type="button"
+              title={buildPanelTabBoundary(tab, activeTab === tab)}
+              aria-label={buildPanelTabBoundary(tab, activeTab === tab)}
               onClick={() => handlePanelTabChange(tab)}
             >
-              {tab === 'live'
-                ? '实时'
-                : tab === 'speech'
-                ? '发言'
-                : tab === 'timeline'
-                ? '时间线'
-                : tab === 'actions'
-                ? '行动项'
-                : '设置'}
+              {getPanelTabLabel(tab)}
               {tab === 'live' &&
               unresolvedAlerts.some((alert) => alert.level === 'P0') ? (
                 <div className="badge" />
@@ -4867,6 +5152,14 @@ function MeetingSidePanel() {
                     <button
                       className="focus-rail-action"
                       type="button"
+                      title={buildFocusRailActionBoundary(
+                        'capture',
+                        captureFocusCta,
+                      )}
+                      aria-label={buildFocusRailActionBoundary(
+                        'capture',
+                        captureFocusCta,
+                      )}
                       onClick={
                         session.readiness.canStartCapture
                           ? showCaptureAuthorizationGuide
@@ -4890,6 +5183,14 @@ function MeetingSidePanel() {
                     <button
                       className="focus-rail-action"
                       type="button"
+                      title={buildFocusRailActionBoundary(
+                        'action-review',
+                        actionFocusCta,
+                      )}
+                      aria-label={buildFocusRailActionBoundary(
+                        'action-review',
+                        actionFocusCta,
+                      )}
                       onClick={openActionReviewQueue}
                     >
                       {actionFocusCta}
@@ -4903,6 +5204,19 @@ function MeetingSidePanel() {
                     {topicFocusDetail || '等待新的会议上下文。'}
                   </div>
                 </div>
+              </div>
+            </section>
+
+            <section
+              className="alert-visibility-receipt"
+              aria-label="会中提醒可见口径回执"
+            >
+              <div className="alert-visibility-title">提醒可见口径</div>
+              <div className="alert-visibility-summary">
+                {liveFeedReceipt.summary}
+              </div>
+              <div className="alert-visibility-boundary">
+                {liveFeedReceipt.boundary}
               </div>
             </section>
 
@@ -4942,6 +5256,9 @@ function MeetingSidePanel() {
                   <div className="capture-start-actions">
                     <button
                       className="capture-start-primary"
+                      type="button"
+                      title={captureControlBoundary}
+                      aria-label={captureControlBoundary}
                       onClick={openMeetingOptionsPage}
                     >
                       ⚙️ 去配置 Meeting Pilot
@@ -4951,6 +5268,9 @@ function MeetingSidePanel() {
                   <div className="capture-start-actions">
                     <button
                       className="capture-start-primary"
+                      type="button"
+                      title={captureControlBoundary}
+                      aria-label={captureControlBoundary}
                       onClick={() => void showCaptureAuthorizationGuide()}
                     >
                       启用画面理解与纪要
@@ -4960,6 +5280,9 @@ function MeetingSidePanel() {
                   <div className="capture-start-actions">
                     <button
                       className="capture-start-primary"
+                      type="button"
+                      title={captureControlBoundary}
+                      aria-label={captureControlBoundary}
                       onClick={() => void showCaptureAuthorizationGuide()}
                     >
                       {captureGuideButtonLabel}
@@ -5032,12 +5355,25 @@ function MeetingSidePanel() {
                               )
                                 ? 'added'
                                 : meetingPrepActionFeedback[card.id];
+                              const draft = buildMeetingPrepCueActionDraft(
+                                card,
+                                meetingPrepHandoff,
+                                session.selfName,
+                              );
+                              const buttonBoundary =
+                                buildMeetingPrepCueActionBoundary(
+                                  card,
+                                  status,
+                                  draft,
+                                );
                               return (
                                 <button
                                   className={`meeting-prep-action-btn ${
                                     status === 'added' ? 'added' : ''
                                   } ${status === 'failed' ? 'failed' : ''}`}
                                   type="button"
+                                  title={buttonBoundary}
+                                  aria-label={buttonBoundary}
                                   disabled={
                                     status === 'adding' || status === 'added'
                                   }
@@ -5225,6 +5561,22 @@ function MeetingSidePanel() {
                   <button
                     className="settings-link-btn"
                     type="button"
+                    title={buildFocusRailActionBoundary(
+                      'action-review',
+                      needsInfoActions.length
+                        ? '补齐信息'
+                        : reviewQueueActions.length
+                        ? '复核行动项'
+                        : '查看行动项',
+                    )}
+                    aria-label={buildFocusRailActionBoundary(
+                      'action-review',
+                      needsInfoActions.length
+                        ? '补齐信息'
+                        : reviewQueueActions.length
+                        ? '复核行动项'
+                        : '查看行动项',
+                    )}
                     onClick={openActionReviewQueue}
                   >
                     {needsInfoActions.length
@@ -5462,6 +5814,8 @@ function MeetingSidePanel() {
                   className="action-add"
                   type="button"
                   disabled={addingActionItem}
+                  title={actionAddButtonBoundary}
+                  aria-label={actionAddButtonBoundary}
                   onClick={startManualActionItemAdd}
                 >
                   {addingActionItem ? '正在添加' : '添加行动项'}
@@ -5475,6 +5829,8 @@ function MeetingSidePanel() {
                     !visibleConfirmableReviewActions.length ||
                     bulkActionReviewFeedback?.status === 'updating'
                   }
+                  title={actionBulkConfirmBoundary}
+                  aria-label={actionBulkConfirmBoundary}
                   onClick={() => void confirmVisibleReviewActions()}
                 >
                   {bulkConfirmButtonLabel}
@@ -5489,7 +5845,8 @@ function MeetingSidePanel() {
                   }`}
                   type="button"
                   disabled={!confirmedActions.length}
-                  title="只复制已确认且未完成的行动项，避免待复核 AI 建议直接流入外部任务系统"
+                  title={actionCopyFollowupBoundary}
+                  aria-label={actionCopyFollowupBoundary}
                   onClick={() => void copyFollowUpActionItems()}
                 >
                   {actionCopyFeedback?.id === FOLLOW_UP_ACTION_COPY_ID
@@ -5508,6 +5865,8 @@ function MeetingSidePanel() {
                   }`}
                   type="button"
                   disabled={!visibleActionItems.length}
+                  title={actionCopyVisibleBoundary}
+                  aria-label={actionCopyVisibleBoundary}
                   onClick={() => void copyVisibleActionItems()}
                 >
                   {actionCopyFeedback?.id === BULK_ACTION_COPY_ID
@@ -5536,6 +5895,18 @@ function MeetingSidePanel() {
                       data-action-filter={option.key}
                       type="button"
                       aria-pressed={actionFilter === option.key}
+                      title={buildActionFilterBoundary(
+                        option.key,
+                        option.count,
+                        session.actionItems.length,
+                        actionFilter === option.key,
+                      )}
+                      aria-label={buildActionFilterBoundary(
+                        option.key,
+                        option.count,
+                        session.actionItems.length,
+                        actionFilter === option.key,
+                      )}
                       key={option.key}
                       onClick={() => setActionFilter(option.key)}
                     >
@@ -5615,6 +5986,14 @@ function MeetingSidePanel() {
                     <button
                       className="ac-button primary"
                       type="button"
+                      title={buildManualActionButtonBoundary(
+                        'save',
+                        manualActionDraft,
+                      )}
+                      aria-label={buildManualActionButtonBoundary(
+                        'save',
+                        manualActionDraft,
+                      )}
                       onClick={() => void saveManualActionItem()}
                     >
                       保存行动项
@@ -5622,6 +6001,14 @@ function MeetingSidePanel() {
                     <button
                       className="ac-button"
                       type="button"
+                      title={buildManualActionButtonBoundary(
+                        'cancel',
+                        manualActionDraft,
+                      )}
+                      aria-label={buildManualActionButtonBoundary(
+                        'cancel',
+                        manualActionDraft,
+                      )}
                       onClick={cancelManualActionItemAdd}
                     >
                       取消
@@ -5746,6 +6133,14 @@ function MeetingSidePanel() {
                           <button
                             className="ac-button primary"
                             type="button"
+                            title={buildActionItemButtonBoundary(
+                              item,
+                              'save-edit',
+                            )}
+                            aria-label={buildActionItemButtonBoundary(
+                              item,
+                              'save-edit',
+                            )}
                             onClick={() => void saveActionItemEdit(item)}
                           >
                             保存校正
@@ -5753,6 +6148,14 @@ function MeetingSidePanel() {
                           <button
                             className="ac-button"
                             type="button"
+                            title={buildActionItemButtonBoundary(
+                              item,
+                              'cancel-edit',
+                            )}
+                            aria-label={buildActionItemButtonBoundary(
+                              item,
+                              'cancel-edit',
+                            )}
                             onClick={cancelActionItemEdit}
                           >
                             取消
@@ -5768,6 +6171,11 @@ function MeetingSidePanel() {
                                 : ''
                             }`}
                             type="button"
+                            title={buildActionItemButtonBoundary(item, 'copy')}
+                            aria-label={buildActionItemButtonBoundary(
+                              item,
+                              'copy',
+                            )}
                             onClick={() => void copyActionItem(item)}
                           >
                             {actionCopyFeedback?.id === item.id
@@ -5780,11 +6188,16 @@ function MeetingSidePanel() {
                             <button
                               className="ac-button"
                               type="button"
-                              title={
-                                timelineTarget.timestamp
-                                  ? `定位到 ${timelineTarget.timestamp} 的时间线`
-                                  : '定位到对应时间线'
-                              }
+                              title={buildActionItemButtonBoundary(
+                                item,
+                                'timeline',
+                                { timelineTarget },
+                              )}
+                              aria-label={buildActionItemButtonBoundary(
+                                item,
+                                'timeline',
+                                { timelineTarget },
+                              )}
                               onClick={() => focusTimelineForAction(item)}
                             >
                               时间线
@@ -5793,6 +6206,11 @@ function MeetingSidePanel() {
                           <button
                             className="ac-button"
                             type="button"
+                            title={buildActionItemButtonBoundary(item, 'edit')}
+                            aria-label={buildActionItemButtonBoundary(
+                              item,
+                              'edit',
+                            )}
                             onClick={() => startActionItemEdit(item)}
                           >
                             编辑
@@ -5801,6 +6219,14 @@ function MeetingSidePanel() {
                             <button
                               className="ac-button"
                               type="button"
+                              title={buildActionItemButtonBoundary(
+                                item,
+                                'restore',
+                              )}
+                              aria-label={buildActionItemButtonBoundary(
+                                item,
+                                'restore',
+                              )}
                               onClick={() =>
                                 void updateActionItemReview(item, {
                                   status: 'pending',
@@ -5816,7 +6242,16 @@ function MeetingSidePanel() {
                                 <button
                                   className="ac-button primary"
                                   type="button"
-                                  title={itemReviewExceptionHint}
+                                  title={buildActionItemButtonBoundary(
+                                    item,
+                                    'confirm',
+                                    { exceptionHint: itemReviewExceptionHint },
+                                  )}
+                                  aria-label={buildActionItemButtonBoundary(
+                                    item,
+                                    'confirm',
+                                    { exceptionHint: itemReviewExceptionHint },
+                                  )}
                                   onClick={() =>
                                     void updateActionItemReview(item, {
                                       reviewState: 'confirmed',
@@ -5831,11 +6266,16 @@ function MeetingSidePanel() {
                               <button
                                 className="ac-button"
                                 type="button"
-                                title={
-                                  itemReviewState === 'suggested'
-                                    ? itemReviewExceptionHint
-                                    : undefined
-                                }
+                                title={buildActionItemButtonBoundary(
+                                  item,
+                                  'toggle-done',
+                                  { exceptionHint: itemReviewExceptionHint },
+                                )}
+                                aria-label={buildActionItemButtonBoundary(
+                                  item,
+                                  'toggle-done',
+                                  { exceptionHint: itemReviewExceptionHint },
+                                )}
                                 onClick={() =>
                                   void updateActionItemReview(item, {
                                     status:
@@ -5857,6 +6297,14 @@ function MeetingSidePanel() {
                               <button
                                 className="ac-button danger"
                                 type="button"
+                                title={buildActionItemButtonBoundary(
+                                  item,
+                                  'dismiss',
+                                )}
+                                aria-label={buildActionItemButtonBoundary(
+                                  item,
+                                  'dismiss',
+                                )}
                                 onClick={() =>
                                   void updateActionItemReview(item, {
                                     status: 'pending',
@@ -6100,6 +6548,9 @@ function MeetingSidePanel() {
         </span>
         <button
           className="panel-status-action"
+          type="button"
+          title={captureControlBoundary}
+          aria-label={captureControlBoundary}
           onClick={
             session.capture.kind === 'recording'
               ? toggleCaptureFromFooter

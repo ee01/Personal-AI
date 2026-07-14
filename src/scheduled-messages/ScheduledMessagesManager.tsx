@@ -22,6 +22,7 @@ import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 import { jiraFetch } from '../jira';
 import { getGoogleAuthToken, getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import { getEnvConfig, getUserInfo } from '../utils';
 import {
   DEFAULT_TIMELINE_PROJECT,
   TIMELINE_PROJECT_OPTIONS,
@@ -33,6 +34,7 @@ import {
 import {
   BotConfigDialogMode,
   BotConfigValidityStatus,
+  getAgentTaskWebhookConfig,
   getBotDialogModeForStatus,
   getBotAutomationConfig,
   getExecutorRule,
@@ -44,6 +46,7 @@ import {
   hasTimelineSyncRule,
   normalizeSheetConfig,
   shouldRecreateExecutorRuleForRingCentralSenderUpgrade,
+  withAgentTaskWebhook,
   withBotAutomation,
   withRingCentralSender,
 } from './botAutomationConfig';
@@ -80,6 +83,7 @@ import {
 } from './timelineCacheStatus';
 import {
   getMemoryServiceClient,
+  type RuntimeConfigResponse,
   type OutreachTemplateRuntimeStatusItem,
 } from '../services/MemoryServiceClient';
 import {
@@ -102,6 +106,7 @@ import {
   formatScheduleQueueBlockReason,
   formatScheduleQueuePressure,
   formatScheduleQueueCompactSummary,
+  formatScheduleQueueDetailsReceipt,
   formatScheduleQueueSuggestion,
   formatScheduleQueueSlotDecisionBasis,
   formatScheduleQueueSlotSummary,
@@ -152,6 +157,10 @@ import {
   formatConfigSyncTimestamp,
 } from './configSyncFreshness';
 import { ConfigSyncService } from './ConfigSyncService';
+import {
+  normalizeAgentTaskUserId,
+  resolveAgentTaskWebhookConfig,
+} from './agentTaskWebhookConfig';
 import {
   getManualBindConfigDiff,
   type ManualBindConfigDiffItem,
@@ -231,6 +240,30 @@ interface ScheduleQueueDraftSuggestionReceipt {
   executionLaneSummary?: string;
 }
 
+interface ScheduleHealthPendingReceipt {
+  messageId: string;
+  topic: string;
+  label: string;
+  clearsScheduleTime?: boolean;
+  executionLaneSummary?: string;
+}
+
+async function resolveAgentTaskWebhookUserId(currentUsername: string): Promise<string | undefined> {
+  const fromCurrentUser = normalizeAgentTaskUserId(currentUsername);
+  if (fromCurrentUser) {
+    return fromCurrentUser;
+  }
+
+  try {
+    const userinfo = await getUserInfo();
+    return normalizeAgentTaskUserId(userinfo?.username) ||
+      normalizeAgentTaskUserId(userinfo?.email);
+  } catch (error) {
+    console.warn('读取 AgentTask 用户身份失败:', error);
+    return undefined;
+  }
+}
+
 function formatAppScriptUpdateCheckedAt(isoValue: string): string {
   if (!isoValue) {
     return '';
@@ -260,6 +293,7 @@ function formatConfigSyncActionForDisplay(value?: string): string {
     app_script_metadata_update: 'App Script 元数据更新',
     sheet_schema_update: 'Sheet schema 更新',
     bot_config_update: 'Bot / Timeline 配置更新',
+    agent_task_webhook_auto_config: '帮我做执行入口自动补齐',
     jira_rule_update: 'Jira Rule 更新',
     partial_update: '局部配置更新',
     config_sync: '配置同步',
@@ -300,6 +334,30 @@ function buildManualConfigSyncRunningNotice(
       nextStep: duplicateClick
         ? '等待当前同步完成后查看最终采用来源和写入结果'
         : '等待读取完成后查看采用配置、写入边界和恢复建议',
+    }),
+  };
+}
+
+function buildManualConfigSyncActionBoundary(isSyncing: boolean): string {
+  if (isSyncing) {
+    return 'Config 同步正在进行中；当前任务仍在读取 Sheet Config 或刷新 Messages / Logs，完成前不会启动第二个 Config 读取、Messages 刷新、Config 写回、消息发送或队列执行。';
+  }
+
+  return '手动同步 Config 与 Messages；会读取 Sheet Config，只有 Sheet 明确更新时才刷新本机缓存，只有缺少子表定位时才写回 Config Sheet，随后读取 Messages / Logs；不会发送消息、执行队列、改 Logs、批准或删除计划。';
+}
+
+function buildAgentTaskWebhookReadOnlyNotice(
+  config: Partial<SheetConfig>,
+  agentTaskCount: number
+): ConfigSyncNotice {
+  return {
+    tone: 'warning',
+    title: '帮我做执行入口待确认',
+    description: `当前列表有 ${agentTaskCount} 条帮我做计划，但本机 Config 没有 agent_task_webhook_url。页面打开没有自动读取或写回 Sheet Config，也没有触发 Jira Rule；到期前请同步刷新或保存任一帮我做任务补齐执行入口。`,
+    details: formatConfigSyncNoticeDetails(config, {
+      adoptedSource: '本机缓存',
+      boundary: '页面打开只检查本机缓存和当前 Messages 快照；未读取/写入 Sheet Config，未领取任务',
+      nextStep: '点击同步刷新 Config，或创建/保存帮我做时补齐执行入口',
     }),
   };
 }
@@ -390,6 +448,7 @@ function buildRescheduleNotice(input: RescheduleNoticeInput): ConfigSyncNotice {
       `写入: Messages 行 ${input.message.ID}`,
       `边界: ${queueBoundary}`,
       input.executionLaneSummary ? `写入后: ${input.executionLaneSummary}` : '',
+      '确认口径: 本回执只确认新计划已写入；尚未确认执行器已领取/发送，也未确认 Last_Exec / Logs 或 AgentTask run 已更新。',
       input.reason ? `原因: ${input.reason}` : '',
       '下一步: 查看目标行或同步刷新确认队列健康',
     ].filter(Boolean),
@@ -412,6 +471,17 @@ function buildRescheduleFailureNotice(input: RescheduleFailureNoticeInput): Conf
       `下一步: ${input.nextStep || '同步刷新 Messages 后重试，或打开目标行手动编辑'}`,
     ].filter(Boolean),
   };
+}
+
+function formatScheduleHealthPendingReceipt(input: ScheduleHealthPendingReceipt): string {
+  const writeScope = input.clearsScheduleTime
+    ? '写入 Schedule_Date 并清空 Schedule_Time'
+    : '写入 Schedule_Date / Schedule_Time';
+  const laneText = input.executionLaneSummary
+    ? `；写入后${input.executionLaneSummary}`
+    : '';
+
+  return `改期写入中：来源健康告警；目标 Messages 行 ${input.messageId}；点击快照 ${input.label}；本次只处理「${input.topic}」，${writeScope}，其他健康告警未改；尚未确认发送、Logs 或 Jira 领取${laneText}。`;
 }
 
 function buildAppScriptUpgradeNotice(input: {
@@ -466,22 +536,95 @@ function buildAppScriptUpgradePendingNotice(input: {
   };
 }
 
+function buildAppScriptUpdateActionBoundary(input: {
+  action: 'check' | 'recheck' | 'upgrade' | 'project-history' | 'version-probe' | 'project' | 'recovery';
+  currentVersion?: string;
+  latestVersion?: string;
+  versionUsageText: string;
+  checkedAtText?: string;
+  limitReached?: boolean;
+  cleanupSuggested?: boolean;
+  busy?: boolean;
+}): string {
+  const versionText = `当前 App Script ${input.currentVersion || '未知'}，最新 ${input.latestVersion || '未知'}`;
+  const checkedText = input.checkedAtText
+    ? `上次检查于 ${input.checkedAtText}`
+    : '尚未完成本轮手动检查';
+  const stateText = `${versionText}；${input.versionUsageText}${checkedText ? `；${checkedText}` : ''}`;
+  const noRuntimeEffects = '不会发送定时消息、不会触发 Bot/Chrome/Doubao，也不会确认通知';
+  const readOnlyCheck = '只读取版本端点、deployment 和 Project History，不写 Sheet、Script 或 Jira Rule';
+
+  if (input.busy) {
+    return `App Script 操作进行中；当前按钮暂不可重复提交。${stateText}；${noRuntimeEffects}`;
+  }
+
+  switch (input.action) {
+    case 'check':
+      return `手动检查 App Script 版本；需要授权时会显示 Google 授权窗口。${readOnlyCheck}；${noRuntimeEffects}。${stateText}`;
+    case 'recheck':
+      return `重新读取 App Script 版本和 Project History 额度；适合清理旧版本后刷新判断。${readOnlyCheck}；不会升级 deployment 或标记配置为最新。${stateText}`;
+    case 'upgrade':
+      if (input.limitReached) {
+        return `打开 App Script Project History 清理旧版本；当前版本历史已满，点击不会升级 deployment、写 Sheet 或改 Jira Rule。${stateText}`;
+      }
+      return `升级调度系统；确认后依次检查 Sheet、App Script deployment 和 Jira Automation。只有 Web App 版本端点确认目标版本后才标记 Sheet/Storage 为最新；已是最新时不会重复创建脚本版本，失败项保留现有版本，deployment 生效失败会尝试回退。${stateText}`;
+    case 'project-history':
+      return `打开 App Script Project History；用于查看或清理脚本版本额度。点击只打开检查页面，不升级 deployment、不写 Sheet、不改 Jira Rule。${stateText}`;
+    case 'version-probe':
+      return `打开 App Script getVersion 版本端点；只查看当前 Web App 返回的 version/lastUpdated，不触发检查、升级、Sheet 写入或消息发送。${stateText}`;
+    case 'project':
+      return `打开 Apps Script 项目；用于检查代码、权限或 Manage deployments。点击只打开项目页面，不从当前页写入脚本、Sheet 或 Jira Rule。${stateText}`;
+    case 'recovery':
+      return `打开 App Script 升级检查页面；用于处理 Project History、deployment 或版本端点问题。点击只打开恢复页面，不重新提交升级、不写 Sheet/Script/Jira Rule，也不发送消息。${stateText}`;
+    default:
+      return `App Script 更新操作；${stateText}`;
+  }
+}
+
 function isAutoReplyScheduledMessage(message: Pick<ScheduledMessage, 'Category' | 'Status'>): boolean {
   const categories = getScheduledMessageCategories(message.Category);
   return categories.some((category) => /^(自动答复|AutoReply)$/i.test(category));
 }
 
-function buildAutoReplyReviewReceipt(message: ScheduledMessage): { label: string; detail: string } | null {
+function formatAutoReplyReviewContentPreview(content: string | undefined, maxLength = 64): string {
+  const normalized = content?.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '当前正文为空；批准前应先编辑补齐，避免发送空内容。';
+  }
+
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}...`
+    : normalized;
+}
+
+function formatAutoReplyReviewScheduleSnapshot(message: ScheduledMessage): string {
+  const scheduleDate = message.Schedule_Date?.trim();
+  const scheduleTime = message.Schedule_Time?.trim();
+  if (scheduleDate && scheduleTime) {
+    return `${scheduleDate} ${scheduleTime}`;
+  }
+  return scheduleDate || scheduleTime || '未设置原排期';
+}
+
+function buildAutoReplyReviewReceipt(message: ScheduledMessage): { label: string; detail: string; details: string[] } | null {
   if (message.Status !== 'PendingReview') {
     return null;
   }
 
   const categoryLabel = isAutoReplyScheduledMessage(message) ? '自动答复审核' : '待审核消息';
   const routeLabel = message.Push_Method || '当前执行方式';
+  const contentPreview = formatAutoReplyReviewContentPreview(message.Content);
+  const scheduleSnapshot = formatAutoReplyReviewScheduleSnapshot(message);
 
   return {
     label: categoryLabel,
-    detail: `批准会把这行改为 Active，并排到下一分钟按 ${routeLabel} 发送当前正文；拒绝只把这行标为 Done，不删除触发规则，也不改原消息。`,
+    detail: `批准前请复核当前正文快照；批准会把这行改为 Active，并排到下一分钟按 ${routeLabel} 发送当前正文。`,
+    details: [
+      `正文快照: ${contentPreview}`,
+      `原排期: ${scheduleSnapshot}；执行方式: ${routeLabel}`,
+      '拒绝只把这行标为 Done，不删除触发规则，也不改原消息。',
+      '边界: 这是当前表格快照；如果正文、目标或规则刚被改过，先刷新再批准。',
+    ],
   };
 }
 
@@ -533,14 +676,17 @@ function getConfigSyncNoticeStyle(tone: ConfigSyncNoticeTone): React.CSSProperti
 interface OutreachRuntimeState {
   enabled: boolean;
   ringCentralReady: boolean;
+  openClawReady: boolean;
+  openClawMissingReason?: string;
 }
 
 const OUTREACH_OPTIONS_HASH = 'outreach-config';
+const OPENCLAW_OPTIONS_HASH = 'openclaw-config';
 const DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT = 3;
 const DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT = 4;
 const RINGCENTRAL_SENDER_REQUIRED_PERMISSIONS = ['ReadAccounts', 'ReadMessages', 'EditMessages'];
 
-type AddDialogMode = 'default' | 'reminder' | 'outreach';
+type AddDialogMode = 'default' | 'reminder' | 'outreach' | 'agent-task';
 
 const PROJECT_VARIABLE_KEYS = [
   '{currentRelease}',
@@ -684,12 +830,20 @@ function isTimelineTriggeredMessage(message: ScheduledMessage): boolean {
   return Boolean(message.Timeline_Milestone && !message.Schedule_Date);
 }
 
+function isAgentTaskPushMethod(pushMethod: unknown): boolean {
+  return String(pushMethod || '').trim().toLowerCase().replace(/[\s_-]+/g, '') === 'agenttask';
+}
+
 function requiresBotAutomation(message: ScheduledMessage): boolean {
-  return message.Push_Method === 'Bot' || message.Push_Method === 'AI';
+  return message.Push_Method === 'Bot' || message.Push_Method === 'AI' || isAgentTaskPushMethod(message.Push_Method);
 }
 
 function isOutreachMessage(message: ScheduledMessage): boolean {
   return message.Push_Method === 'Outreach';
+}
+
+function isAgentTaskMessage(message: ScheduledMessage): boolean {
+  return isAgentTaskPushMethod(message.Push_Method);
 }
 
 function buildOutreachSessionsUrl(templateId?: string, sessionId?: string): string {
@@ -873,6 +1027,16 @@ function formatQueueSlotActionLabel(slot: ScheduleQueueSlotSummary): string {
     : '';
 }
 
+function formatQueueSlotFocusActionLabel(slot: ScheduleQueueSlotSummary): string {
+  const target = slot.actionTopic || slot.actionMessageId || '最晚消息';
+  return `定位最晚：${target}，${formatQueueSlotLaneLabel(slot)} 第 ${slot.actionPosition}/${slot.slotSize} 个；只定位当前列表行，不写 Sheet、不改期、不发送、不跳过前序消息`;
+}
+
+function formatQueueSlotEditActionLabel(slot: ScheduleQueueSlotSummary): string {
+  const target = slot.actionTopic || slot.actionMessageId || '最晚消息';
+  return `编辑队列建议目标：${target}，${formatQueueSlotLaneLabel(slot)} 第 ${slot.actionPosition}/${slot.slotSize} 个；只打开编辑草稿，不写 Sheet、不改期、不发送、不跳过前序消息`;
+}
+
 function formatQueueSlotBlockingLabel(slot: ScheduleQueueSlotSummary): string {
   return slot.blockingCount > 0
     ? `前面 ${slot.blockingCount} 条会先执行`
@@ -979,6 +1143,19 @@ function formatOutreachRuntimeStatus(value?: string): string {
   if (value === 'cancelled') return '已取消';
   if (value === 'failed') return '失败';
   return value || '未知';
+}
+
+function getOpenClawMissingReason(runtime: RuntimeConfigResponse): string {
+  if (runtime.openClawEnabled !== true) {
+    return 'OpenClaw 尚未启用，帮我做任务到期后无法委派执行。';
+  }
+  if (!runtime.openClawBaseUrl?.trim()) {
+    return 'OpenClaw Base URL 尚未配置，memory-service 无法连接执行器。';
+  }
+  if (runtime.openClawApiKeyConfigured !== true) {
+    return 'OpenClaw API Key 尚未配置，memory-service 无法通过 OpenAI-compatible API 调用执行器。';
+  }
+  return '';
 }
 
 function formatOutreachReplyClassification(value?: string): string {
@@ -1191,6 +1368,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [outreachRuntime, setOutreachRuntime] = useState<OutreachRuntimeState>({
     enabled: false,
     ringCentralReady: false,
+    openClawReady: false,
   });
   const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
   const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
@@ -1202,6 +1380,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const syncConfigInFlightRef = useRef(false);
   const lastLoadMessagesErrorRef = useRef<string | null>(null);
   const [rescheduleNotice, setRescheduleNotice] = useState<ConfigSyncNotice | null>(null);
+  const [scheduleHealthPendingReceipt, setScheduleHealthPendingReceipt] = useState<ScheduleHealthPendingReceipt | null>(null);
   const [appScriptUpgradeNotice, setAppScriptUpgradeNotice] = useState<AppScriptUpgradeNotice | null>(null);
   const timelineSyncRuleUrl = useMemo(
     () => getJiraAutomationRuleUrl(getTimelineSyncRule(config)),
@@ -1280,7 +1459,10 @@ const ScheduledMessagesManager: React.FC = () => {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
           const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
-          await consumePendingSetupReceipt(savedConfig);
+          const didConsumeSetupReceipt = await consumePendingSetupReceipt(savedConfig);
+          if (!didConsumeSetupReceipt) {
+            maybeShowAgentTaskWebhookReadinessNotice(savedConfig, initialMessages);
+          }
 
           // 基础数据到位后先展示页面，其余校验延后到后台
           setIsLoading(false);
@@ -1297,50 +1479,99 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
 
-  const consumePendingSetupReceipt = async (currentConfig: SheetConfig) => {
+  const consumePendingSetupReceipt = async (currentConfig: SheetConfig): Promise<boolean> => {
     try {
       if (!chrome?.storage?.local) {
-        return;
+        return false;
       }
 
       const storage = await chrome.storage.local.get([SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY]);
       const receipt = storage[SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY] as ScheduledMessagesSetupReceipt | undefined;
 
       if (!receipt?.sheetId) {
-        return;
+        return false;
       }
 
       await chrome.storage.local.remove(SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY);
       const receiptNotice = buildScheduledMessagesSetupReceiptNotice(receipt, currentConfig);
       setConfigSyncNotice(receiptNotice);
+      return true;
     } catch (error) {
       console.warn('读取定时消息初始化收据失败:', error);
+      return false;
     }
   };
 
+  const maybeShowAgentTaskWebhookReadinessNotice = (
+    currentConfig: SheetConfig,
+    currentMessages: ScheduledMessage[]
+  ): void => {
+    if (getAgentTaskWebhookConfig(currentConfig)?.webhookUrl) {
+      return;
+    }
+
+    const agentTaskCount = currentMessages.filter(isAgentTaskMessage).length;
+    if (agentTaskCount === 0) {
+      return;
+    }
+
+    setConfigSyncNotice(buildAgentTaskWebhookReadOnlyNotice(currentConfig, agentTaskCount));
+  };
+
   const loadOutreachRuntime = async () => {
+    let runtimeBaseUrl = '';
     try {
-      const client = getMemoryServiceClient();
+      const envConfig = await getEnvConfig();
+      runtimeBaseUrl = envConfig.MEMORY_SERVICE_BASE_URL || '';
+      if (!runtimeBaseUrl.trim()) {
+        throw new Error('MEMORY_SERVICE_BASE_URL is empty');
+      }
+
+      const userinfo = await getUserInfo().catch(() => null);
+      const runtimeUserId =
+        normalizeAgentTaskUserId(currentUsername) ||
+        normalizeAgentTaskUserId(userinfo?.username) ||
+        normalizeAgentTaskUserId(userinfo?.email);
+      const client = getMemoryServiceClient({
+        baseUrl: runtimeBaseUrl,
+        apiKey: envConfig.MEMORY_SERVICE_API_KEY || undefined,
+        timeout: Number(envConfig.MEMORY_SERVICE_TIMEOUT) || undefined,
+        userId: runtimeUserId,
+      });
       const runtime = await client.getRuntimeConfig();
       const ringCentralReady =
         Boolean(runtime.ringCentralServerUrl?.trim()) &&
         Boolean(runtime.ringCentralClientId?.trim()) &&
         Boolean(runtime.ringCentralClientSecretConfigured) &&
         Boolean(runtime.ringCentralJwtConfigured);
+      const openClawMissingReason = getOpenClawMissingReason(runtime);
       setOutreachRuntime({
         enabled: Boolean(runtime.outreachEnabled),
         ringCentralReady,
+        openClawReady: !openClawMissingReason,
+        openClawMissingReason,
       });
     } catch (error) {
       console.info('加载 Outreach runtime 配置失败，按未配置处理:', error);
       setOutreachRuntime({
         enabled: false,
         ringCentralReady: false,
+        openClawReady: false,
+        openClawMissingReason: runtimeBaseUrl
+          ? `无法读取 memory-service runtime 配置（${runtimeBaseUrl}），请确认 Memory Service 可访问后再创建帮我做任务。`
+          : '无法读取 memory-service runtime 配置：MEMORY_SERVICE_BASE_URL 为空，请先在 Options 配置 Memory Service 地址。',
       });
     } finally {
       setOutreachRuntimeLoaded(true);
     }
   };
+
+  useEffect(() => {
+    if (showAddDialog && addDialogMode === 'agent-task') {
+      setOutreachRuntimeLoaded(false);
+      void loadOutreachRuntime();
+    }
+  }, [showAddDialog, addDialogMode]);
 
   const openOptionsPage = () => {
     if (chrome?.runtime?.openOptionsPage) {
@@ -1352,6 +1583,13 @@ const ScheduledMessagesManager: React.FC = () => {
     const url = chrome?.runtime?.getURL
       ? chrome.runtime.getURL(`options.html#${OUTREACH_OPTIONS_HASH}`)
       : `options.html#${OUTREACH_OPTIONS_HASH}`;
+    window.open(url, '_blank');
+  };
+
+  const openOpenClawOptionsPage = () => {
+    const url = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL(`options.html#${OPENCLAW_OPTIONS_HASH}`)
+      : `options.html#${OPENCLAW_OPTIONS_HASH}`;
     window.open(url, '_blank');
   };
   
@@ -1968,15 +2206,26 @@ const ScheduledMessagesManager: React.FC = () => {
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
+      let upgradeConfig = normalizeSheetConfig(config) as SheetConfig;
       
       // 1. 升级 Sheet Schema
       console.log('🔄 开始升级 Sheet Schema...');
       try {
-        const schemaUpdater = new SheetSchemaUpdater(token, config);
+        const schemaUpdater = new SheetSchemaUpdater(token, upgradeConfig);
         const schemaResult = await schemaUpdater.checkAndUpdate();
         
-        if (schemaResult.updated) {
-          updateResults.push(`✅ Sheet 表结构已升级\n   新增列: ${schemaResult.addedColumns.join(', ')}`);
+        if (!schemaResult.success) {
+          updateResults.push(`⚠️ Sheet 表结构升级失败: ${schemaResult.error || '未知原因'}`);
+        } else if (schemaResult.updated) {
+          if (schemaResult.updatedConfig) {
+            upgradeConfig = normalizeSheetConfig(schemaResult.updatedConfig) as SheetConfig;
+            setConfig(upgradeConfig);
+          }
+          updateResults.push(
+            schemaResult.addedColumns.length > 0
+              ? `✅ Sheet 表结构已升级\n   新增列: ${schemaResult.addedColumns.join(', ')}`
+              : '✅ Sheet Config 已补齐 AgentTask 执行入口'
+          );
         } else {
           updateResults.push('✓ Sheet 表结构已是最新');
         }
@@ -1989,10 +2238,14 @@ const ScheduledMessagesManager: React.FC = () => {
       await new Promise(resolve => setTimeout(resolve, 3000));
       console.log('🔄 开始升级 App Script...');
       try {
-        const appScriptUpdater = new AppScriptUpdater(token, config);
+        const appScriptUpdater = new AppScriptUpdater(token, upgradeConfig);
         const appScriptResult = await appScriptUpdater.updateAppScript();
         
         if (appScriptResult.success) {
+          if (appScriptResult.updatedConfig) {
+            upgradeConfig = normalizeSheetConfig(appScriptResult.updatedConfig) as SheetConfig;
+            setConfig(upgradeConfig);
+          }
           const reportedVersion = appScriptResult.currentVersion || appScriptResult.newVersion || '';
           updateResults.push(
             appScriptResult.skipped
@@ -2031,12 +2284,16 @@ const ScheduledMessagesManager: React.FC = () => {
       await new Promise(resolve => setTimeout(resolve, 5000));
       console.log('🔄 开始升级 Jira Automation Rule...');
       try {
-        const jiraUpdater = new JiraRuleUpdater(config);
+        const jiraUpdater = new JiraRuleUpdater(upgradeConfig);
         const checkResult = await jiraUpdater.checkForUpdates();
         
         if (checkResult.needsUpdate) {
-          const jiraResult = await jiraUpdater.updateJiraRule();
+          const jiraResult = await jiraUpdater.updateJiraRule({ googleAuthToken: token });
           if (jiraResult.success) {
+            if (jiraResult.updatedConfig) {
+              upgradeConfig = normalizeSheetConfig(jiraResult.updatedConfig) as SheetConfig;
+              setConfig(upgradeConfig);
+            }
             updateResults.push(`✅ Jira Automation 规则已升级到 ${jiraResult.newVersion}`);
           } else {
             throw new Error(jiraResult.error || '更新失败');
@@ -2127,6 +2384,65 @@ const ScheduledMessagesManager: React.FC = () => {
   const appScriptProjectUrl = config?.scriptId
     ? buildAppScriptProjectUrl(config.scriptId)
     : '';
+  const appScriptCheckActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'check',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isCheckingUpdates || isUpdating,
+  });
+  const appScriptRecheckActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'recheck',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isCheckingUpdates || isUpdating,
+  });
+  const appScriptUpgradeActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'upgrade',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    limitReached: isAppScriptVersionLimitReached,
+    cleanupSuggested: shouldSuggestAppScriptVersionCleanup,
+    busy: isUpdating,
+  });
+  const appScriptProjectHistoryActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'project-history',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isUpdating,
+  });
+  const appScriptVersionProbeActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'version-probe',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isCheckingUpdates || isUpdating,
+  });
+  const appScriptProjectActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'project',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isCheckingUpdates || isUpdating,
+  });
+  const appScriptRecoveryActionBoundary = buildAppScriptUpdateActionBoundary({
+    action: 'recovery',
+    currentVersion: appScriptVersion || undefined,
+    latestVersion: latestAppScriptVersion || undefined,
+    versionUsageText: appScriptVersionUsageText,
+    checkedAtText: appScriptUpdateCheckedAtText,
+    busy: isCheckingUpdates || isUpdating,
+  });
+  const manualConfigSyncActionBoundary = buildManualConfigSyncActionBoundary(isSyncingConfig);
 
   const handleOpenAppScriptProjectHistory = () => {
     const projectHistoryUrl = appScriptVersionUsage?.projectHistoryUrl
@@ -2304,6 +2620,12 @@ const ScheduledMessagesManager: React.FC = () => {
     setEditingMessage(null);
     setShowAddDialog(true);
   };
+
+  const handleAddAgentTask = () => {
+    setAddDialogMode('agent-task');
+    setEditingMessage(null);
+    setShowAddDialog(true);
+  };
   
   // 托管确认弹窗状态
   const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
@@ -2314,11 +2636,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const handleEditMessage = async (message: ScheduledMessage) => {
     // 检查是否是需要托管确认的 JiraAutomation 消息
     // 条件：Push_Method 是 JiraAutomation，有 Schedule_Date，但没有 AI_Endpoint
-    const needsTakeoverConfirmation = 
-      message.Push_Method === 'JiraAutomation' && 
-      message.Schedule_Date && 
-      !message.AI_Endpoint &&
-      message.Automation_Link;
+    const needsTakeoverConfirmation = isJiraAutomationTakeoverCandidate(message);
     
     if (needsTakeoverConfirmation) {
       // 显示托管确认弹窗
@@ -2329,7 +2647,7 @@ const ScheduledMessagesManager: React.FC = () => {
     }
     
     // 正常编辑流程
-    setAddDialogMode(isOutreachMessage(message) ? 'outreach' : 'default');
+    setAddDialogMode(isOutreachMessage(message) ? 'outreach' : isAgentTaskMessage(message) ? 'agent-task' : 'default');
     setEditingMessage(message);
     setShowAddDialog(true);
   };
@@ -2595,6 +2913,7 @@ const ScheduledMessagesManager: React.FC = () => {
         details: [
           `写入: Messages 行 ${message.ID} -> Active`,
           `发送时间: ${scheduleDate} ${scheduleTime}`,
+          `正文快照: ${formatAutoReplyReviewContentPreview(message.Content)}`,
           '边界: 只批准当前待审核行；不删除触发规则，也不修改原消息。',
           '恢复: 发送前仍可在本页暂停或删除这行。',
         ],
@@ -2630,6 +2949,7 @@ const ScheduledMessagesManager: React.FC = () => {
         description: `「${message.Topic || message.ID}」已标记为 Done，不会发送当前待审核正文。`,
         details: [
           `写入: Messages 行 ${message.ID} -> Done`,
+          `正文快照: ${formatAutoReplyReviewContentPreview(message.Content)}`,
           '边界: 只拒绝当前待审核行；不删除触发规则，也不修改原消息。',
           '下一步: 如果不想再触发，请回到记忆入口规则里停用或修改自动答复规则。',
         ],
@@ -2827,6 +3147,19 @@ const ScheduledMessagesManager: React.FC = () => {
       return null;
     }
   };
+
+  const buildAgentTaskLedgerUrl = (message: ScheduledMessage): string => {
+    const params = new URLSearchParams({
+      sourceKind: 'agent_task',
+      sourceRefId: message.ID,
+    });
+    return `memory-exploring.html#/actions?${params.toString()}`;
+  };
+
+  const openTopicLink = (event: React.MouseEvent, url: string) => {
+    event.stopPropagation();
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
   
   // 获取项目 ID（从项目 key，使用统一的 jiraFetch）
   const getProjectIdFromKey = async (jiraUrl: string, projectKey: string): Promise<string | null> => {
@@ -2942,6 +3275,9 @@ const ScheduledMessagesManager: React.FC = () => {
     submitMessageInFlightRef.current = true;
     setIsSubmitting(true);
     try {
+      const agentTaskWebhookDetail = formData.Push_Method === 'AgentTask'
+        ? (await ensureAgentTaskWebhookConfigForSave()).detail
+        : '';
       const outreachMirrorOverrides = formData.Push_Method === 'Outreach'
         ? {
             targetType: formData.Outreach_Target_Type || 'private',
@@ -2988,7 +3324,12 @@ const ScheduledMessagesManager: React.FC = () => {
         setShowAddDialog(false);
         setEditingMessage(null);
         focusMessageById(savedMessage.ID);
-        setConfigSyncNotice(buildMessageSaveNotice(savedMessage, 'updated', outreachSyncError));
+        setConfigSyncNotice(buildMessageSaveNotice(
+          savedMessage,
+          'updated',
+          outreachSyncError,
+          agentTaskWebhookDetail,
+        ));
       } else {
         // 新建模式：创建消息
         const savedMessage = await service.createMessage(formData);
@@ -3003,7 +3344,12 @@ const ScheduledMessagesManager: React.FC = () => {
         await loadMessages(service, true);
         setShowAddDialog(false);
         focusMessageById(savedMessage.ID);
-        setConfigSyncNotice(buildMessageSaveNotice(savedMessage, 'created', outreachSyncError));
+        setConfigSyncNotice(buildMessageSaveNotice(
+          savedMessage,
+          'created',
+          outreachSyncError,
+          agentTaskWebhookDetail,
+        ));
       }
     } catch (error) {
       console.error(editingMessage ? '更新消息失败:' : '创建消息失败:', error);
@@ -3172,6 +3518,58 @@ const ScheduledMessagesManager: React.FC = () => {
   
   // Google Auth Token 已迁移到 utils/googleAuth.ts
   // 使用 getGoogleAuthToken（会弹窗）和 getGoogleAuthTokenSilently（静默）
+
+  const ensureAgentTaskWebhookConfigForSave = async (): Promise<{
+    config: SheetConfig;
+    detail: string;
+  }> => {
+    if (!config) {
+      throw new Error('帮我做缺少 Scheduled Messages 配置，无法写入 memory-service webhook');
+    }
+
+    const existingWebhook = getAgentTaskWebhookConfig(config);
+    const envConfig = await getEnvConfig();
+    const userId = existingWebhook?.userId || await resolveAgentTaskWebhookUserId(currentUsername);
+    const resolvedWebhook = resolveAgentTaskWebhookConfig({
+      existingWebhook,
+      memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
+      memoryServiceApiKey: envConfig.MEMORY_SERVICE_API_KEY,
+      userIdCandidates: [userId],
+      requireUserId: true,
+    });
+
+    if (!resolvedWebhook.webhook) {
+      if (resolvedWebhook.missingReason === '缺少 memory-service 用户身份') {
+        throw new Error('帮我做缺少可用于 memory-service 的用户身份。请先登录/刷新用户信息，或在 Config 表设置 agent_task_user_id。');
+      }
+      throw new Error('帮我做缺少 memory-service webhook。请先在 Options 配置 MEMORY_SERVICE_BASE_URL，或在 Config 表设置 agent_task_webhook_url。');
+    }
+
+    const nextWebhook = resolvedWebhook.webhook;
+    if (!resolvedWebhook.changed) {
+      return {
+        config,
+        detail: `执行入口: Config 已配置 ${nextWebhook.webhookUrl}；Jira Rule 到期时会带 X-User-Id=${nextWebhook.userId} 调用 memory-service`,
+      };
+    }
+
+    const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.ensureAgentTaskWebhook' });
+    if (!token) {
+      throw new Error('帮我做需要 Google 授权才能把 memory-service webhook 写入 Sheet Config。');
+    }
+
+    const syncService = new ConfigSyncService(token);
+    const nextConfig = withAgentTaskWebhook(config, nextWebhook);
+    const syncedConfig = await syncService.syncConfig(nextConfig, {
+      syncAction: 'agent_task_webhook_auto_config',
+    });
+    setConfig(syncedConfig);
+
+    return {
+      config: syncedConfig,
+      detail: `执行入口: 本次已补齐 Config ${nextWebhook.webhookUrl}；Jira Rule 到期时会带 X-User-Id=${nextWebhook.userId} 调用 memory-service`,
+    };
+  };
   
   const getCurrentUserName = async () => {
     try {
@@ -3215,6 +3613,20 @@ const ScheduledMessagesManager: React.FC = () => {
   const isExecutorDrivenMessage = (message: ScheduledMessage): boolean => {
     return isExecutorDrivenSchedule(message);
   };
+
+  const isJiraAutomationTakeoverCandidate = (message: ScheduledMessage): boolean => Boolean(
+    message.Push_Method === 'JiraAutomation' &&
+    message.Schedule_Date &&
+    !message.AI_Endpoint &&
+    message.Automation_Link
+  );
+
+  const isManagedJiraAutomationMessage = (message: ScheduledMessage): boolean => Boolean(
+    message.Push_Method === 'JiraAutomation' &&
+    message.Schedule_Date &&
+    message.AI_Endpoint &&
+    message.Automation_Link
+  );
   
   // 频率格式化函数
   const formatFrequency = (message: ScheduledMessage): string => {
@@ -3282,6 +3694,10 @@ const ScheduledMessagesManager: React.FC = () => {
     if (message.Glip_User_Name === 'sync.service') {
       return '系统消息';
     }
+
+    if (isAgentTaskMessage(message)) {
+      return 'Agent 任务';
+    }
     
     switch (message.Push_Method) {
       case 'AI':
@@ -3303,6 +3719,12 @@ const ScheduledMessagesManager: React.FC = () => {
   const formatRecipient = (message: ScheduledMessage): string => {
     if (message.Push_Method === 'Outreach') {
       return formatOutreachTarget(message);
+    }
+
+    if (message.Push_Method === 'AgentTask') {
+      return message.Agent_Executor
+        ? `memory-service / ${message.Agent_Executor}`
+        : 'memory-service / OpenClaw';
     }
     
     // 优先显示用户名
@@ -3331,6 +3753,7 @@ const ScheduledMessagesManager: React.FC = () => {
     message: ScheduledMessage,
     action: 'created' | 'updated',
     outreachSyncError?: Error | null,
+    agentTaskWebhookDetail?: string,
   ): ConfigSyncNotice => {
     const topic = message.Topic || message.ID;
     const actionLabel = action === 'created' ? '创建' : '更新';
@@ -3339,10 +3762,13 @@ const ScheduledMessagesManager: React.FC = () => {
       : message.Push_Method === 'Outreach'
         ? '主动询问同步: 已同步到 memory-service runtime'
         : '';
+    const agentTaskDetail = message.Push_Method === 'AgentTask'
+      ? '帮我做: 已写入 AgentTask 计划行；Jira Rule 只在到期时调用 memory-service，执行账本和通知以后端为准'
+      : '';
 
     return {
       tone: outreachSyncError ? 'warning' : 'success',
-      title: `定时消息${actionLabel}回执`,
+      title: message.Push_Method === 'AgentTask' ? `帮我做${actionLabel}回执` : `定时消息${actionLabel}回执`,
       description: `「${topic}」已写入 Messages 并定位到列表。`,
       details: [
         `写入: Messages 行 ${message.ID}`,
@@ -3350,6 +3776,8 @@ const ScheduledMessagesManager: React.FC = () => {
         `频率: ${formatFrequency(message)}`,
         `发给: ${formatRecipient(message)}`,
         outreachSyncDetail,
+        agentTaskDetail,
+        message.Push_Method === 'AgentTask' ? agentTaskWebhookDetail : '',
         '边界: 已保存计划但没有立即发送；定位只改变当前列表视图',
         '恢复: 返回完整列表可清除定位；发送前仍可继续编辑、暂停或删除',
       ].filter(Boolean),
@@ -3416,9 +3844,66 @@ const ScheduledMessagesManager: React.FC = () => {
     };
   };
 
-  const openOutreachSessionsPage = (message: ScheduledMessage) => {
-    const url = buildOutreachSessionsUrl(message.ID, message.Outreach_Last_Session_ID);
-    window.open(url, '_blank');
+  const buildMessageActionSnapshot = (message: ScheduledMessage): string => [
+    `ID ${message.ID || '未知'}`,
+    `状态 ${message.Status || '未知'}`,
+    `下次执行 ${formatNextExec(message)}`,
+    `频率 ${formatFrequency(message)}`,
+    `发给 ${formatRecipient(message)}`,
+  ].join('，');
+
+  const buildMessageEditActionBoundary = (message: ScheduledMessage, displayTitle: string): string => {
+    const topic = displayTitle || message.Topic || message.ID || '这条消息';
+    const snapshot = buildMessageActionSnapshot(message);
+
+    if (isJiraAutomationTakeoverCandidate(message)) {
+      return [
+        `托管并编辑 ${topic}。`,
+        '点击只打开托管确认，不会立刻写 Messages、改 Jira Rule、发送或删除。',
+        '确认托管成功后才会写入 AI_Endpoint 并进入编辑草稿。',
+        `当前: ${snapshot}。`,
+      ].join('');
+    }
+
+    return [
+      `编辑 ${topic}。`,
+      '点击只打开本地编辑草稿，不会立刻写 Messages、改期、发送、删除、改 Logs 或同步 Sheet。',
+      `保存后才写回 Messages 行 ${message.ID || '未知'}。`,
+      `当前: ${snapshot}。`,
+    ].join('');
+  };
+
+  const buildMessageDeleteActionBoundary = (message: ScheduledMessage, displayTitle: string): string => {
+    const topic = displayTitle || message.Topic || message.ID || '这条消息';
+    const snapshot = buildMessageActionSnapshot(message);
+
+    if (isManagedJiraAutomationMessage(message)) {
+      return [
+        `删除 ${topic}。`,
+        '点击先显示删除确认，确认前不会写 Sheet。',
+        `确认后会先尝试把 Jira Rule 恢复为 Scheduled trigger，成功后才删除 Messages 行 ${message.ID || '未知'}。`,
+        '不会撤回已发消息或历史 Logs。',
+        `当前: ${snapshot}。`,
+      ].join('');
+    }
+
+    if (isOutreachMessage(message)) {
+      return [
+        `删除 ${topic}。`,
+        '点击先显示删除确认，确认前不会写 Sheet。',
+        `确认后删除 Messages 行 ${message.ID || '未知'} 并取消对应 Outreach 模板镜像。`,
+        '不会撤回已发消息、历史会话或 Logs。',
+        `当前: ${snapshot}。`,
+      ].join('');
+    }
+
+    return [
+      `删除 ${topic}。`,
+      '点击先显示删除确认，确认前不会写 Sheet。',
+      `确认后只删除 Messages 行 ${message.ID || '未知'}。`,
+      '不会撤回已发消息或历史 Logs。',
+      `当前: ${snapshot}。`,
+    ].join('');
   };
 
   const selectedCategoryValues = useMemo(
@@ -3469,8 +3954,10 @@ const ScheduledMessagesManager: React.FC = () => {
         filterPendingReview,
         filterSelfOnly,
         currentUsername,
+      }, {
+        isBackgroundLoading,
       }),
-    [currentUsername, filterPendingReview, filterSelfOnly, messages, selectedCategoryValues, targetMessageId],
+    [currentUsername, filterPendingReview, filterSelfOnly, isBackgroundLoading, messages, selectedCategoryValues, targetMessageId],
   );
   const targetMessageReceipt = useMemo(
     () => buildScheduledMessagesTargetReceipt({
@@ -3639,9 +4126,16 @@ const ScheduledMessagesManager: React.FC = () => {
       return;
     }
 
+    const executionLaneSummary = getRescheduleSuggestionLaneSummary(message, suggestion);
+    setScheduleHealthPendingReceipt({
+      messageId,
+      topic: message.Topic || message.ID,
+      label: suggestion.label,
+      clearsScheduleTime: suggestion.clearsScheduleTime,
+      executionLaneSummary,
+    });
     setIsSubmitting(true);
     try {
-      const executionLaneSummary = getRescheduleSuggestionLaneSummary(message, suggestion);
       await service.updateMessage(messageId, {
         Schedule_Date: suggestion.dateStr,
         Schedule_Time: suggestion.timeStr,
@@ -3667,6 +4161,7 @@ const ScheduledMessagesManager: React.FC = () => {
       }));
     } finally {
       setIsSubmitting(false);
+      setScheduleHealthPendingReceipt(null);
     }
   };
   const clearMessageFilters = () => {
@@ -3724,7 +4219,10 @@ const ScheduledMessagesManager: React.FC = () => {
           setService(messageService);
           const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
           if (config) {
-            await consumePendingSetupReceipt(config);
+            const didConsumeSetupReceipt = await consumePendingSetupReceipt(config);
+            if (!didConsumeSetupReceipt) {
+              maybeShowAgentTaskWebhookReadinessNotice(config, initialMessages);
+            }
           }
           if (config) {
             void checkBotConfigValidity(config, initialMessages);
@@ -3773,6 +4271,23 @@ const ScheduledMessagesManager: React.FC = () => {
           <button
             style={{
               ...styles.reminderButton,
+              background: botConfigured
+                ? 'linear-gradient(135deg, #111827, #374151)'
+                : '#94a3b8',
+              opacity: botConfigured ? 1 : 0.72,
+              cursor: botConfigured ? 'pointer' : 'not-allowed',
+            }}
+            onClick={handleAddAgentTask}
+            title={botConfigured
+              ? '创建一次性或重复 Agent task，由 Jira Rule 到期触发 memory-service'
+              : '请先配置 Bot executor rule，Jira Rule 才能到期触发 memory-service'}
+            disabled={!botConfigured}
+          >
+            🧠 帮我做
+          </button>
+          <button
+            style={{
+              ...styles.reminderButton,
               background: outreachRuntime.enabled && outreachRuntime.ringCentralReady
                 ? 'linear-gradient(135deg, #0ea5e9, #2563eb)'
                 : '#94a3b8',
@@ -3797,9 +4312,8 @@ const ScheduledMessagesManager: React.FC = () => {
               cursor: isSyncingConfig ? 'not-allowed' : 'pointer',
             }}
             onClick={handleSync}
-            title={isSyncingConfig
-              ? '正在同步 Config 和 Messages；采用来源尚未确认，当前同步完成前不会启动第二个同步任务'
-              : '同步数据'}
+            title={manualConfigSyncActionBoundary}
+            aria-label={manualConfigSyncActionBoundary}
             disabled={isSyncingConfig}
           >
             {isSyncingConfig ? '⏳ 同步中...' : '🔄 同步'}
@@ -3809,7 +4323,8 @@ const ScheduledMessagesManager: React.FC = () => {
               style={styles.checkUpdateButton}
               onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
               disabled={isCheckingUpdates || isUpdating}
-              title="手动检查 App Script 版本；需要授权时会显示 Google 授权窗口"
+              title={appScriptCheckActionBoundary}
+              aria-label={appScriptCheckActionBoundary}
             >
               {isCheckingUpdates ? '⏳ 检查中...' : '🔎 检查脚本'}
             </button>
@@ -3819,9 +4334,8 @@ const ScheduledMessagesManager: React.FC = () => {
               style={styles.updateButton} 
               onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
               disabled={isUpdating}
-              title={isAppScriptVersionLimitReached
-                ? `${appScriptVersionUsageText}请先清理旧版本后再升级。`
-                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本并校验 deployment 的 Web App URL 匹配，提交后确认 Web App URL 已返回新版本，确认失败会尝试回退旧 deployment，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}${shouldSuggestAppScriptVersionCleanup ? ' 版本额度接近上限，建议先清理旧版本。' : ''}`}
+              title={appScriptUpgradeActionBoundary}
+              aria-label={appScriptUpgradeActionBoundary}
             >
               {isUpdating
                 ? '⏳ 升级中...'
@@ -3910,6 +4424,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 type="button"
                 style={styles.secondaryUpdateBannerButton}
                 onClick={() => window.open(appScriptUpgradeNotice.recoveryUrl, '_blank')}
+                title={appScriptRecoveryActionBoundary}
+                aria-label={appScriptRecoveryActionBoundary}
               >
                 打开检查页面
               </button>
@@ -3941,6 +4457,8 @@ const ScheduledMessagesManager: React.FC = () => {
             style={styles.warningButton}
             onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
             disabled={isCheckingUpdates || isUpdating}
+            title={appScriptCheckActionBoundary}
+            aria-label={appScriptCheckActionBoundary}
           >
             {isCheckingUpdates ? '检查中...' : '检查脚本'}
           </button>
@@ -3964,6 +4482,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 style={styles.secondaryUpdateErrorButton}
                 onClick={handleOpenAppScriptVersionProbe}
                 disabled={isCheckingUpdates || isUpdating}
+                title={appScriptVersionProbeActionBoundary}
+                aria-label={appScriptVersionProbeActionBoundary}
               >
                 打开版本端点
               </button>
@@ -3973,6 +4493,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 style={styles.secondaryUpdateErrorButton}
                 onClick={handleOpenAppScriptProject}
                 disabled={isCheckingUpdates || isUpdating}
+                title={appScriptProjectActionBoundary}
+                aria-label={appScriptProjectActionBoundary}
               >
                 打开 Apps Script
               </button>
@@ -3981,6 +4503,8 @@ const ScheduledMessagesManager: React.FC = () => {
               style={styles.updateErrorButton}
               onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
               disabled={isCheckingUpdates || isUpdating}
+              title={appScriptRecheckActionBoundary}
+              aria-label={appScriptRecheckActionBoundary}
             >
               {isCheckingUpdates ? '检查中...' : '重试检查'}
             </button>
@@ -4024,6 +4548,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 style={styles.secondaryUpdateBannerButton}
                 onClick={handleOpenAppScriptProjectHistory}
                 disabled={isUpdating}
+                title={appScriptProjectHistoryActionBoundary}
+                aria-label={appScriptProjectHistoryActionBoundary}
               >
                 打开 Project History
               </button>
@@ -4033,7 +4559,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 style={styles.secondaryUpdateBannerButton}
                 onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
                 disabled={isCheckingUpdates || isUpdating}
-                title="清理 Project History 后重新读取版本额度"
+                title={appScriptRecheckActionBoundary}
+                aria-label={appScriptRecheckActionBoundary}
               >
                 {isCheckingUpdates ? '检查中...' : '重新检查'}
               </button>
@@ -4042,6 +4569,12 @@ const ScheduledMessagesManager: React.FC = () => {
               style={styles.updateBannerButton}
               onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
               disabled={isCheckingUpdates || isUpdating}
+              title={isAppScriptVersionLimitReached
+                ? appScriptProjectHistoryActionBoundary
+                : appScriptUpgradeActionBoundary}
+              aria-label={isAppScriptVersionLimitReached
+                ? appScriptProjectHistoryActionBoundary
+                : appScriptUpgradeActionBoundary}
             >
               {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '打开 Project History' : '升级调度系统'}
             </button>
@@ -4131,6 +4664,9 @@ const ScheduledMessagesManager: React.FC = () => {
                   const recoveryLaneSummary = message && recoverySuggestion
                     ? getRescheduleSuggestionLaneSummary(message, recoverySuggestion)
                     : '';
+                  const pendingReceipt = scheduleHealthPendingReceipt?.messageId === issue.messageId
+                    ? scheduleHealthPendingReceipt
+                    : null;
 
                   return (
                     <div
@@ -4151,6 +4687,15 @@ const ScheduledMessagesManager: React.FC = () => {
                         {recoveryLaneSummary && (
                           <small style={styles.queueIssueSuggestionText}>
                             写入后{recoveryLaneSummary}
+                          </small>
+                        )}
+                        {pendingReceipt && (
+                          <small
+                            style={styles.queueIssuePendingReceipt}
+                            aria-label="健康告警改期写入中"
+                            aria-live="polite"
+                          >
+                            {formatScheduleHealthPendingReceipt(pendingReceipt)}
                           </small>
                         )}
                       </span>
@@ -4182,10 +4727,14 @@ const ScheduledMessagesManager: React.FC = () => {
                             }}
                             onClick={() => handleApplyScheduleHealthSuggestion(issue.messageId)}
                             disabled={isSubmitting}
-                            aria-label={`将${issue.topic || issue.messageId}改到${recoverySuggestion.label}`}
-                            title={recoverySuggestion.reason}
+                            aria-label={pendingReceipt
+                              ? `正在将${issue.topic || issue.messageId}改到${recoverySuggestion.label}`
+                              : `将${issue.topic || issue.messageId}改到${recoverySuggestion.label}`}
+                            title={pendingReceipt
+                              ? '正在写入这条健康告警的建议时间，其他告警尚未改动'
+                              : recoverySuggestion.reason}
                           >
-                            一键改期
+                            {pendingReceipt ? '写入中' : '一键改期'}
                           </button>
                         )}
                       </div>
@@ -4240,6 +4789,13 @@ const ScheduledMessagesManager: React.FC = () => {
               </p>
               {showQueueDetails && (
                 <>
+                  <div
+                    style={styles.queueDetailsReceipt}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {formatScheduleQueueDetailsReceipt(scheduleQueueSummary, queueSummaryNow)}
+                  </div>
                   <p style={styles.queueBoundaryDescription}>
                     操作边界：改到建议只写回最晚消息的 Schedule_Date / Schedule_Time，不会立即发送、不会跳过前序消息；写入后需同步刷新确认新队列健康。
                   </p>
@@ -4330,6 +4886,8 @@ const ScheduledMessagesManager: React.FC = () => {
                                 type="button"
                                 style={styles.queueIssueButton}
                                 onClick={() => focusMessageById(slot.actionMessageId)}
+                                aria-label={formatQueueSlotFocusActionLabel(slot)}
+                                title={formatQueueSlotFocusActionLabel(slot)}
                               >
                                 定位最晚
                               </button>
@@ -4342,6 +4900,8 @@ const ScheduledMessagesManager: React.FC = () => {
                                     void handleEditMessage(message);
                                   }
                                 }}
+                                aria-label={formatQueueSlotEditActionLabel(slot)}
+                                title={formatQueueSlotEditActionLabel(slot)}
                               >
                                 编辑
                               </button>
@@ -4622,7 +5182,15 @@ const ScheduledMessagesManager: React.FC = () => {
                     const compensationWindowReceipt = getScheduleCompensationWindowReceipt(message, queueSummaryNow);
                     const nextExecText = formatNextExec(message);
                     const statusToggleAction = getScheduledMessageStatusToggleAction(message.Status);
+                    const editActionBoundary = buildMessageEditActionBoundary(message, displayTitle);
+                    const deleteActionBoundary = buildMessageDeleteActionBoundary(message, displayTitle);
                     const autoReplyReviewReceipt = buildAutoReplyReviewReceipt(message);
+                    const agentTaskLedgerUrl = isAgentTaskMessage(message)
+                      ? buildAgentTaskLedgerUrl(message)
+                      : '';
+                    const outreachSessionsUrl = message.Push_Method === 'Outreach'
+                      ? buildOutreachSessionsUrl(message.ID, message.Outreach_Last_Session_ID)
+                      : '';
                     return (
                       <tr 
                         key={message.ID} 
@@ -4650,16 +5218,54 @@ const ScheduledMessagesManager: React.FC = () => {
                         </td>
                         <td style={styles.td}>
                           <div style={styles.topicStack}>
-                            <span style={styles.topicText} title={displayTitle}>
-                              {isAutoReplyScheduledMessage(message) && (
-                                <span title="自动答复消息" style={{ marginRight: '4px' }}>🤖</span>
+                            <div style={styles.topicTitleRow}>
+                              <span style={styles.topicText} title={displayTitle}>
+                                {isAutoReplyScheduledMessage(message) && (
+                                  <span title="自动答复消息" style={{ marginRight: '4px' }}>🤖</span>
+                                )}
+                                {displayTitle}
+                              </span>
+                              {message.Automation_Link && (
+                                <button
+                                  type="button"
+                                  style={styles.topicInlineLinkButton}
+                                  onClick={(event) => openTopicLink(event, message.Automation_Link!)}
+                                  aria-label={`打开 Jira Automation Rule: ${displayTitle}`}
+                                  title="打开 Jira Automation Rule"
+                                >
+                                  🔗
+                                </button>
                               )}
-                              {displayTitle}
-                            </span>
+                              {agentTaskLedgerUrl && (
+                                <button
+                                  type="button"
+                                  style={styles.topicInlineLinkButton}
+                                  onClick={(event) => openTopicLink(event, agentTaskLedgerUrl)}
+                                  aria-label={`查看帮我做执行账本: ${displayTitle}`}
+                                  title="查看帮我做执行账本"
+                                >
+                                  🔗
+                                </button>
+                              )}
+                              {outreachSessionsUrl && (
+                                <button
+                                  type="button"
+                                  style={styles.topicInlineLinkButton}
+                                  onClick={(event) => openTopicLink(event, outreachSessionsUrl)}
+                                  aria-label={`打开主动询问会话: ${displayTitle}`}
+                                  title="打开主动询问会话页面"
+                                >
+                                  💬
+                                </button>
+                              )}
+                            </div>
                             {autoReplyReviewReceipt && (
                               <small style={styles.autoReplyReviewReceipt}>
                                 <strong>{autoReplyReviewReceipt.label}</strong>
                                 <span>{autoReplyReviewReceipt.detail}</span>
+                                {autoReplyReviewReceipt.details.map((detail) => (
+                                  <span key={detail}>{detail}</span>
+                                ))}
                               </small>
                             )}
                           </div>
@@ -4683,6 +5289,15 @@ const ScheduledMessagesManager: React.FC = () => {
                                 {formatOutreachSummary(message)}
                               </small>
                             )}
+                            {isAgentTaskMessage(message) && (
+                              <small style={{ color: '#6c757d', lineHeight: 1.4 }}>
+                                {[
+                                  message.Agent_Last_Status ? `状态:${message.Agent_Last_Status}` : '',
+                                  message.Agent_Last_Run_At ? `最近:${message.Agent_Last_Run_At}` : '',
+                                  message.Agent_AR_Binding_ID ? 'AR 绑定' : '',
+                                ].filter(Boolean).join(' · ') || '结果以 memory-service run / Bot 通知为准'}
+                              </small>
+                            )}
                           </div>
                         </td>
                         <td style={{ ...styles.td, ...styles.frequencyCell }}>
@@ -4704,6 +5319,7 @@ const ScheduledMessagesManager: React.FC = () => {
                               <small
                                 style={styles.schedulePolicyWarningText}
                                 title={formatScheduleCompensationWindowReceiptDetail(compensationWindowReceipt)}
+                                aria-label={formatScheduleCompensationWindowReceiptDetail(compensationWindowReceipt)}
                               >
                                 {formatScheduleCompensationWindowReceipt(compensationWindowReceipt)}
                               </small>
@@ -4767,28 +5383,6 @@ const ScheduledMessagesManager: React.FC = () => {
                                 </button>
                               </>
                             )}
-                            {message.Automation_Link && (
-                              <button 
-                                style={styles.jiraLinkButton}
-                                onClick={() => window.open(message.Automation_Link, '_blank')}
-                                title="打开 Jira Automation Rule"
-                              >
-                                🔗
-                              </button>
-                            )}
-                            {message.Push_Method === 'Outreach' && (
-                              <button
-                                style={{
-                                  ...styles.jiraLinkButton,
-                                  color: '#0b7285',
-                                  borderColor: '#0b7285',
-                                }}
-                                onClick={() => openOutreachSessionsPage(message)}
-                                title="打开主动询问会话页面"
-                              >
-                                💬 会话
-                              </button>
-                            )}
                             {statusToggleAction.canToggle && (
                               <button
                                 type="button"
@@ -4814,15 +5408,8 @@ const ScheduledMessagesManager: React.FC = () => {
                                     : 'none'
                                 }}
                                 onClick={() => handleEditMessage(message)}
-                                aria-label={`编辑 ${displayTitle}`}
-                                title={
-                                  message.Push_Method === 'JiraAutomation' && 
-                                  message.Automation_Link && 
-                                  message.Schedule_Date && 
-                                  !message.AI_Endpoint
-                                    ? '点击托管此规则'
-                                    : '编辑消息'
-                                }
+                                aria-label={editActionBoundary}
+                                title={editActionBoundary}
                               >
                                 ✏️
                               </button>
@@ -4830,8 +5417,8 @@ const ScheduledMessagesManager: React.FC = () => {
                             <button 
                               style={styles.deleteButton}
                               onClick={() => handleDeleteMessage(message, displayTitle)}
-                              aria-label={`删除 ${displayTitle}`}
-                              title="删除消息"
+                              aria-label={deleteActionBoundary}
+                              title={deleteActionBoundary}
                             >
                               🗑️
                             </button>
@@ -4867,10 +5454,14 @@ const ScheduledMessagesManager: React.FC = () => {
            timelineSyncRuleUrl={timelineSyncRuleUrl}
            outreachEnabled={outreachRuntime.enabled}
            outreachConfigured={outreachRuntime.enabled && outreachRuntime.ringCentralReady}
+           agentTaskOpenClawConfigured={outreachRuntime.openClawReady}
+           agentTaskOpenClawCheckLoaded={outreachRuntimeLoaded}
+           agentTaskOpenClawMissingReason={outreachRuntime.openClawMissingReason}
            ringCentralSenderConfigured={hasRingCentralSenderCredentials(config)}
            onConfigureBot={(mode) => openBotConfigDialog(mode)}
            onConfigureRingCentralSender={openRingCentralSenderConfigDialog}
            onConfigureOutreach={openOptionsPage}
+           onConfigureOpenClaw={openOpenClawOptionsPage}
            dialogMode={addDialogMode}
            currentUsername={currentUsername}
            availableCategories={availableCategories}
@@ -5756,10 +6347,14 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl?: string;
   outreachEnabled: boolean;
   outreachConfigured: boolean;
+  agentTaskOpenClawConfigured: boolean;
+  agentTaskOpenClawCheckLoaded: boolean;
+  agentTaskOpenClawMissingReason?: string;
   ringCentralSenderConfigured: boolean;
   onConfigureBot: (mode?: BotConfigDialogMode) => void;
   onConfigureRingCentralSender: () => void;
   onConfigureOutreach: () => void;
+  onConfigureOpenClaw: () => void;
   dialogMode?: AddDialogMode;
   currentUsername?: string;
   availableCategories: SelectOption[];
@@ -5775,10 +6370,14 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl,
   outreachEnabled,
   outreachConfigured,
+  agentTaskOpenClawConfigured,
+  agentTaskOpenClawCheckLoaded,
+  agentTaskOpenClawMissingReason,
   ringCentralSenderConfigured,
   onConfigureBot,
   onConfigureRingCentralSender,
   onConfigureOutreach,
+  onConfigureOpenClaw,
   dialogMode = 'default',
   currentUsername = '',
   availableCategories,
@@ -5788,6 +6387,7 @@ const AddMessageDialog: React.FC<{
   const isEditMode = !!editingMessage;
   const isReminderMode = dialogMode === 'reminder';
   const isOutreachMode = dialogMode === 'outreach';
+  const isAgentTaskMode = dialogMode === 'agent-task';
   const [scheduleNow, setScheduleNow] = React.useState(() => new Date());
 
   React.useEffect(() => {
@@ -5806,7 +6406,7 @@ const AddMessageDialog: React.FC<{
       const outreachTargetType = editingMessage.Target_Type || editingMessage.Outreach_Target_Type || (editingMessage.Glip_Team_ID ? 'group' : 'private');
       return {
         Topic: editingMessage.Topic || '',
-        Content: editingMessage.Content || (editingMessage as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question || '',
+        Content: editingMessage.Content || editingMessage.Agent_Task_Prompt || (editingMessage as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question || '',
         Schedule_Date: editingMessage.Schedule_Date || '',
         Schedule_Time: formatTimeToHHMM(editingMessage.Schedule_Time),
         Push_Method: editingMessage.Push_Method || 'AsMe',
@@ -5839,6 +6439,16 @@ const AddMessageDialog: React.FC<{
         Timeline_Project: editingMessage.Timeline_Project,
         Timeline_Milestone: editingMessage.Timeline_Milestone,
         Timeline_Offset: editingMessage.Timeline_Offset,
+        Agent_Task_ID: editingMessage.Agent_Task_ID,
+        Agent_Executor: editingMessage.Agent_Executor || 'openclaw',
+        Agent_Task_Prompt: editingMessage.Agent_Task_Prompt,
+        Agent_Notify_Template: editingMessage.Agent_Notify_Template,
+        Agent_Trigger_Source: editingMessage.Agent_Trigger_Source || 'jira_rule',
+        Agent_AR_Binding_ID: editingMessage.Agent_AR_Binding_ID,
+        Agent_Last_Run_At: editingMessage.Agent_Last_Run_At,
+        Agent_Last_Status: editingMessage.Agent_Last_Status,
+        Agent_Last_Result: editingMessage.Agent_Last_Result,
+        Agent_Last_Error: editingMessage.Agent_Last_Error,
         Category: editingMessage.Category,
       };
     }
@@ -5847,7 +6457,7 @@ const AddMessageDialog: React.FC<{
       Content: '',
       Schedule_Date: getTodayLocalScheduleDate(),
       Schedule_Time: '',
-      Push_Method: isOutreachMode ? 'Outreach' : 'AsMe',
+      Push_Method: isOutreachMode ? 'Outreach' : isAgentTaskMode ? 'AgentTask' : 'AsMe',
       Target_Type: 'private',
       Glip_User_Name: '',
       Glip_Team_ID: '',
@@ -5856,7 +6466,9 @@ const AddMessageDialog: React.FC<{
       Outreach_Result: '',
       Outreach_Context: '',
       Outreach_Max_Followup: 2,
-      Outreach_Followup_Interval_Hours: 24
+      Outreach_Followup_Interval_Hours: 24,
+      Agent_Executor: 'openclaw',
+      Agent_Trigger_Source: 'jira_rule',
     };
   };
   
@@ -5999,6 +6611,11 @@ const AddMessageDialog: React.FC<{
   const [editingCustomOutputIndex, setEditingCustomOutputIndex] = useState<number | null>(null);
   const [customOutputName, setCustomOutputName] = useState('');
   const [customOutputPrompt, setCustomOutputPrompt] = useState('');
+  const [customOutputDraftReceipt, setCustomOutputDraftReceipt] = useState<{
+    title: string;
+    detail: string;
+    boundary: string;
+  } | null>(null);
   const [aiReportTeamId, setAiReportTeamId] = useState(initialAiReportData.teamId);
   const [aiReportMentionList, setAiReportMentionList] = useState<string[]>(initialAiReportData.mentionList);
   const [aiReportExtraText, setAiReportExtraText] = useState(initialAiReportData.extraText);
@@ -6035,6 +6652,35 @@ const AddMessageDialog: React.FC<{
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
   const jqlTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const getCustomOutputDraftLabel = (
+    output: { name?: string; prompt?: string },
+    index: number,
+  ): string => output.name?.trim() || `自定义版块 ${index + 1}`;
+
+  const buildCustomOutputEditDraftBoundary = (
+    output: { name?: string; prompt?: string },
+    index: number,
+  ): string => [
+    `编辑本地自定义版块草稿「${getCustomOutputDraftLabel(output, index)}」。`,
+    '点击只打开当前弹窗里的版块草稿，不会写 Messages、保存 AI_Body、发送消息、改 Logs 或删除已保存计划。',
+    '只有保存整个定时消息后才会写入 Sheet。',
+  ].join('');
+
+  const buildCustomOutputDeleteDraftBoundary = (
+    output: { name?: string; prompt?: string },
+    index: number,
+  ): string => [
+    `删除本地自定义版块草稿「${getCustomOutputDraftLabel(output, index)}」。`,
+    '点击只从当前表单草稿移除，尚未写 Messages、保存 AI_Body、发送消息或改 Logs。',
+    '不会删除已保存的定时消息、历史发送记录或外部系统内容。',
+  ].join('');
+
+  const addCustomOutputDraftBoundary = [
+    '添加本地自定义版块草稿。',
+    '点击只打开版块编辑弹窗，不会写 Messages、保存 AI_Body、发送消息、改 Logs 或创建计划。',
+    '只有保存整个定时消息后才会写入 Sheet。',
+  ].join('');
   
   // 提醒模式：展开高级选项的状态
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
@@ -6222,6 +6868,18 @@ ${content}
       }
     }
   }, [isOutreachMode, isEditMode]);
+
+  React.useEffect(() => {
+    if (isAgentTaskMode && !isEditMode) {
+      handleChange('Push_Method', 'AgentTask');
+      handleChange('Target_Type', 'private');
+      handleChange('Agent_Executor', 'openclaw');
+      handleChange('Agent_Trigger_Source', 'jira_rule');
+      if (currentUsername) {
+        setUserTags([formatUserName.toDisplayFormat(currentUsername)]);
+      }
+    }
+  }, [isAgentTaskMode, isEditMode, currentUsername]);
   
   // 四个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
@@ -6603,6 +7261,11 @@ ${content}
       alert(`${executionRouteBlockReason}\n\n请先完成发送配置后再保存。`);
       return;
     }
+
+    if (agentTaskOpenClawBlockReason) {
+      alert(`${agentTaskOpenClawBlockReason}\n\n请先完成 OpenClaw 配置后再保存。`);
+      return;
+    }
     
     // 验证触发方式
     if (isTimelineTrigger) {
@@ -6674,7 +7337,18 @@ ${content}
     }
     
     // 验证推送目标
-    if (formData.Push_Method === 'Outreach') {
+    if (formData.Push_Method === 'AgentTask') {
+      if (!botConfigured) {
+        alert('帮我做依赖 Jira executor rule 到期触发 memory-service，请先配置 Bot 推送规则。');
+        return;
+      }
+
+      if (!formData.Agent_Task_Prompt?.trim() && !formData.Content?.trim()) {
+        alert('请填写希望 AI 帮你执行的任务描述');
+        return;
+      }
+
+    } else if (formData.Push_Method === 'Outreach') {
       if (!outreachEnabled) {
         alert('主动询问引擎尚未开启，请先到 Options 页面启用后再创建主动询问计划。');
         return;
@@ -6807,6 +7481,12 @@ ${content}
       outreachTargetRefValue,
       outreachQuestion,
     );
+    const agentTaskRecipientTagsForSave = formData.Push_Method === 'AgentTask' &&
+      formData.Target_Type !== 'group' &&
+      userTags.length === 0 &&
+      currentUsername
+      ? [formatUserName.toDisplayFormat(currentUsername)]
+      : userTags;
     const repeatFields = buildRepeatSubmissionFields({
       isRepeating,
       repeatEvery: formData.Repeat_Every,
@@ -6821,6 +7501,8 @@ ${content}
       Topic: formData.Push_Method === 'Outreach' ? outreachTitle : formData.Topic,
       Content: formData.Push_Method === 'Outreach'
         ? (formData.Content || '')
+        : formData.Push_Method === 'AgentTask'
+          ? (formData.Agent_Task_Prompt || formData.Content || '').trim()
         : formData.Content,
       Target_Type: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Target_Type || 'private'
@@ -6831,6 +7513,12 @@ ${content}
               ? undefined
               : formatUserName.joinForStorage(userTags.slice(0, 1))
           )
+        : formData.Push_Method === 'AgentTask'
+          ? (
+              formData.Target_Type === 'group'
+                ? undefined
+                : formatUserName.joinForStorage(agentTaskRecipientTagsForSave)
+            )
         : formData.Push_Method === 'AI'
           ? undefined
         : formatUserName.joinForStorage(userTags),
@@ -6840,6 +7528,12 @@ ${content}
               ? formData.Outreach_Target_Ref?.trim()
               : undefined
           )
+        : formData.Push_Method === 'AgentTask'
+          ? (
+              formData.Target_Type === 'group'
+                ? formData.Glip_Team_ID?.trim()
+                : undefined
+            )
         : glipTeamId,
       Outreach_Target_Type: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Target_Type || 'private'
@@ -6871,6 +7565,24 @@ ${content}
       Timeline_Milestone: isTimelineTrigger ? formData.Timeline_Milestone : undefined,
       Timeline_Offset: isTimelineTrigger ? normalizedTimelineOffset : undefined,
       Category: categoryTags.length > 0 ? categoryTags.map(t => t.value).join(',') : undefined,
+      Agent_Task_ID: formData.Push_Method === 'AgentTask'
+        ? formData.Agent_Task_ID || `agent_task_${Date.now()}`
+        : undefined,
+      Agent_Executor: formData.Push_Method === 'AgentTask'
+        ? formData.Agent_Executor || 'openclaw'
+        : undefined,
+      Agent_Task_Prompt: formData.Push_Method === 'AgentTask'
+        ? (formData.Agent_Task_Prompt || formData.Content || '').trim()
+        : undefined,
+      Agent_Notify_Template: formData.Push_Method === 'AgentTask'
+        ? formData.Agent_Notify_Template?.trim()
+        : undefined,
+      Agent_Trigger_Source: formData.Push_Method === 'AgentTask'
+        ? 'jira_rule'
+        : undefined,
+      Agent_AR_Binding_ID: formData.Push_Method === 'AgentTask'
+        ? formData.Agent_AR_Binding_ID
+        : undefined,
     };
     
     onSubmit(finalFormData);
@@ -7228,6 +7940,7 @@ ${content}
     if (
       formData.Push_Method === 'Bot' ||
       formData.Push_Method === 'AI' ||
+      formData.Push_Method === 'AgentTask' ||
       formData.Push_Method === 'JiraAutomation' ||
       (formData.Push_Method === 'AsMe' && ringCentralSenderConfigured)
     ) {
@@ -7256,12 +7969,22 @@ ${content}
   const executionRouteBlockReason = executionRoute.state === 'needs_setup'
     ? `发送配置未完成：${executionRoute.detail}`
     : '';
+  const agentTaskOpenClawBlockReason = isAgentTaskMode
+    ? agentTaskOpenClawCheckLoaded
+      ? (agentTaskOpenClawConfigured
+          ? ''
+          : agentTaskOpenClawMissingReason || 'OpenClaw 尚未配置，帮我做任务到期后无法执行。')
+      : '正在检查 OpenClaw 配置，请稍候。'
+    : '';
   const shouldShowExecutionSetupWarning = Boolean(executionRouteBlockReason);
   const isSubmitBlockedByExecutionRoute = Boolean(executionRouteBlockReason);
+  const isSubmitBlockedByAgentTaskOpenClaw = Boolean(agentTaskOpenClawBlockReason);
   const isSubmitBlockedBySchedule = Boolean(scheduleTimeError || scheduleBlockReason || scheduleQueueBlockReason);
-  const isSubmitBlocked = isSubmitBlockedBySchedule || isSubmitBlockedByExecutionRoute;
+  const isSubmitBlocked = isSubmitBlockedBySchedule || isSubmitBlockedByExecutionRoute || isSubmitBlockedByAgentTaskOpenClaw;
   const submitBlockedTitle = isSubmitBlockedByExecutionRoute
     ? executionRouteBlockReason
+    : isSubmitBlockedByAgentTaskOpenClaw
+      ? agentTaskOpenClawBlockReason
     : isSubmitBlockedBySchedule
       ? '请先修正执行时间或队列风险'
       : undefined;
@@ -7273,6 +7996,23 @@ ${content}
   const outreachTargetRefValue = formData.Outreach_Target_Type === 'group'
     ? (formData.Outreach_Target_Ref || '')
     : formatUserName.joinForStorage(userTags.slice(0, 1));
+  const customOutputDialogLabel = customOutputName.trim() || (
+    editingCustomOutputIndex !== null
+      ? getCustomOutputDraftLabel(
+          customOutputs[editingCustomOutputIndex] || {},
+          editingCustomOutputIndex,
+        )
+      : `自定义版块 ${customOutputs.length + 1}`
+  );
+  const customOutputDialogCancelBoundary = [
+    `取消编辑本地自定义版块草稿「${customOutputDialogLabel}」。`,
+    '只关闭当前小弹窗，不会写 Messages、保存 AI_Body、发送消息、改 Logs 或删除已保存计划。',
+  ].join('');
+  const customOutputDialogSaveBoundary = [
+    `${editingCustomOutputIndex !== null ? '保存修改到' : '添加'}本地自定义版块草稿「${customOutputDialogLabel}」。`,
+    '只更新当前定时消息表单里的草稿，尚未写 Messages、保存 AI_Body、发送消息或改 Logs。',
+    '保存整个定时消息后才会写入 Sheet。',
+  ].join('');
   
   return (
     <div style={dialogStyles.overlay}>
@@ -7280,18 +8020,48 @@ ${content}
         <div style={dialogStyles.header}>
           <h2 style={dialogStyles.title}>
             {isEditMode
-              ? (isOutreachMode ? '✏️ 编辑主动询问计划' : '✏️ 编辑定时消息')
+              ? (isOutreachMode ? '✏️ 编辑主动询问计划' : isAgentTaskMode ? '✏️ 编辑帮我做任务' : '✏️ 编辑定时消息')
               : isReminderMode
                 ? '⏰ 新增个人提醒'
                 : isOutreachMode
                   ? '💬 新增主动询问'
+                  : isAgentTaskMode
+                    ? '🧠 新增帮我做'
                   : '➕ 新增定时消息'}
           </h2>
           <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
         </div>
         
         <form onSubmit={handleSubmit} style={dialogStyles.form}>
-          {!isReminderMode && !isOutreachMode && (
+          {isAgentTaskMode && agentTaskOpenClawBlockReason && (
+            <div
+              style={dialogStyles.executionRouteWarning}
+              role={agentTaskOpenClawCheckLoaded ? 'alert' : 'status'}
+              aria-live="polite"
+            >
+              <div style={dialogStyles.executionRouteLabel}>OpenClaw 配置</div>
+              <div style={dialogStyles.executionRouteValue}>
+                {agentTaskOpenClawCheckLoaded ? '需要先完成配置' : '正在检查配置'}
+              </div>
+              <div style={dialogStyles.executionRouteHint}>
+                {agentTaskOpenClawBlockReason} 保存前不会写入 Messages，也不会创建可领取的 Agent task。
+              </div>
+              <div style={dialogStyles.executionRouteActionRow}>
+                <span style={dialogStyles.executionRouteBlockText}>
+                  请在 Options 里启用 OpenClaw，并补齐 Base URL 和 API Key。
+                </span>
+                <button
+                  type="button"
+                  style={dialogStyles.executionRouteActionButton}
+                  onClick={onConfigureOpenClaw}
+                >
+                  前往 OpenClaw 配置
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!isReminderMode && !isOutreachMode && !isAgentTaskMode && (
             <div style={dialogStyles.methodTabsSection}>
               {formData.Push_Method === 'JiraAutomation' ? (
                 <div role="tablist" aria-label="推送方式" style={dialogStyles.methodTabs}>
@@ -7438,9 +8208,26 @@ ${content}
               </div>
             </div>
           )}
+
+          {isAgentTaskMode && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#f3f4f6',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              border: '1px solid #d1d5db',
+            }}>
+              <div style={{ fontSize: '14px', color: '#111827', lineHeight: '1.6' }}>
+                <strong>🧠 帮我做</strong>
+                <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
+                  这里保存 Agent task 计划，可一次性执行，也可重复执行。Jira Rule 每分钟先检查 Sheet，只有到期任务才访问 memory-service；OpenClaw 执行结果和通知以 memory-service 为准。
+                </p>
+              </div>
+            </div>
+          )}
           
           {/* 消息内容（提醒模式始终显示；主动询问使用独立的问题输入框） */}
-          {!isOutreachMode && !(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
+          {!isOutreachMode && !isAgentTaskMode && !(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
             <div style={dialogStyles.formGroup}>
               <label style={dialogStyles.label}>消息内容 *</label>
               <textarea 
@@ -7459,6 +8246,66 @@ ${content}
                   excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
                 />
               )}
+            </div>
+          )}
+
+          {isAgentTaskMode && (
+            <div style={{...dialogStyles.section, backgroundColor: '#fafafa', padding: '16px', borderRadius: '8px', border: '1px solid #e5e7eb'}}>
+              <h3 style={{margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#111827'}}>
+                🧠 任务与通知
+              </h3>
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>任务描述 *</label>
+                <textarea
+                  style={dialogStyles.textarea}
+                  value={formData.Agent_Task_Prompt || formData.Content || ''}
+                  onChange={(event) => {
+                    handleChange('Agent_Task_Prompt', event.target.value);
+                    handleChange('Content', event.target.value);
+                  }}
+                  placeholder="例如：查找 RCV Mobile Q2 JQL 数据，整理 issues 总数、异常项和需要跟进的人，并输出简短结论"
+                  rows={5}
+                />
+                <small style={dialogStyles.hint}>
+                  这段内容会作为 OpenClaw 执行任务本身；通知模板不会改变这里的原始任务。
+                </small>
+              </div>
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>结果按如下模板通知我（可选）</label>
+                <textarea
+                  style={dialogStyles.textarea}
+                  value={formData.Agent_Notify_Template || ''}
+                  onChange={(event) => handleChange('Agent_Notify_Template', event.target.value)}
+                  placeholder={'例如：用 3 行告诉我：本次结果、需要我关注的风险、下一步建议。'}
+                  rows={3}
+                />
+                <small style={dialogStyles.hint}>
+                  留空也会在每次成功或失败后 Bot 私发默认摘要；填写后只影响通知文案，不改变 OpenClaw 原始结果和 artifact。
+                </small>
+              </div>
+              <div style={dialogStyles.formRow}>
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>执行器</label>
+                  <input
+                    style={dialogStyles.input}
+                    type="text"
+                    value={formData.Agent_Executor || 'openclaw'}
+                    onChange={(event) => handleChange('Agent_Executor', event.target.value)}
+                    disabled
+                  />
+                  <small style={dialogStyles.hint}>v1 只支持 OpenClaw 自动执行；Codex/Claude Code 暂不作为远程执行后端。</small>
+                </div>
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>触发入口</label>
+                  <input
+                    style={dialogStyles.input}
+                    type="text"
+                    value="jira_rule"
+                    disabled
+                  />
+                  <small style={dialogStyles.hint}>架构兼容未来 memory-service cron / heartbeat 直接触发。</small>
+                </div>
+              </div>
             </div>
           )}
 
@@ -7596,6 +8443,7 @@ ${content}
               </div>
               
               {/* 触发类型选择 */}
+              {!isAgentTaskMode && (
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>触发方式 *</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -7627,6 +8475,7 @@ ${content}
                   </button>
                 </div>
               </div>
+              )}
               
               {/* 是否重复推送（仅时间触发） */}
               {!isTimelineTrigger && (
@@ -7683,6 +8532,7 @@ ${content}
               )}
               
               {/* 触发类型选择 */}
+              {!isAgentTaskMode && (
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>触发方式 *</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -7714,6 +8564,7 @@ ${content}
                   </button>
                 </div>
               </div>
+              )}
             </>
           )}
           
@@ -8084,8 +8935,13 @@ ${content}
                   }}
                   style={{marginRight: '8px'}}
                 />
-                是否重复推送
+                {isAgentTaskMode ? '重复执行' : '是否重复推送'}
               </label>
+              {isAgentTaskMode && (
+                <small style={dialogStyles.hint}>
+                  不勾选时执行一次后标记 Done；勾选后按重复规则继续计算 Next_Exec。非重复 AR 替换仍只保存在 AR binding/result，不进入 Messages 列表。
+                </small>
+              )}
             </div>
           )}
           
@@ -8631,6 +9487,8 @@ ${content}
                           <div style={{display: 'flex', gap: '8px'}}>
                             <button
                               type="button"
+                              title={buildCustomOutputEditDraftBoundary(output, index)}
+                              aria-label={buildCustomOutputEditDraftBoundary(output, index)}
                               onClick={() => {
                                 setEditingCustomOutputIndex(index);
                                 setCustomOutputName(output.name);
@@ -8651,8 +9509,16 @@ ${content}
                             </button>
                             <button
                               type="button"
+                              title={buildCustomOutputDeleteDraftBoundary(output, index)}
+                              aria-label={buildCustomOutputDeleteDraftBoundary(output, index)}
                               onClick={() => {
+                                const draftLabel = getCustomOutputDraftLabel(output, index);
                                 setCustomOutputs(customOutputs.filter((_, i) => i !== index));
+                                setCustomOutputDraftReceipt({
+                                  title: '自定义版块草稿已移除',
+                                  detail: `已从当前表单草稿移除「${draftLabel}」。`,
+                                  boundary: '尚未写入 Messages / AI_Body；不会删除已保存消息、历史 Logs 或外部系统内容。',
+                                });
                               }}
                               style={{
                                 padding: '4px 10px',
@@ -8673,6 +9539,8 @@ ${content}
                       {/* 添加自定义版块按钮 */}
                       <button
                         type="button"
+                        title={addCustomOutputDraftBoundary}
+                        aria-label={addCustomOutputDraftBoundary}
                         onClick={() => {
                           setEditingCustomOutputIndex(null);
                           setCustomOutputName('');
@@ -8697,6 +9565,31 @@ ${content}
                       >
                         ➕ 添加自定义版块
                       </button>
+
+                      {customOutputDraftReceipt && (
+                        <div
+                          role="status"
+                          aria-live="polite"
+                          aria-label={`${customOutputDraftReceipt.title}：${customOutputDraftReceipt.detail}${customOutputDraftReceipt.boundary}`}
+                          style={{
+                            marginTop: '10px',
+                            padding: '10px 12px',
+                            border: '1px solid #bfdbfe',
+                            borderRadius: '6px',
+                            backgroundColor: '#eff6ff',
+                            color: '#1e3a8a',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            fontSize: '13px',
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          <strong>{customOutputDraftReceipt.title}</strong>
+                          <span>{customOutputDraftReceipt.detail}</span>
+                          <small>{customOutputDraftReceipt.boundary}</small>
+                        </div>
+                      )}
                       
                       {/* 自定义版块的 ticket 字段选择器（仅当有自定义版块且未勾选"列出JQL查询结果"时显示） */}
                       {customOutputs.length > 0 && !aiReportOutputs.tickets && (
@@ -8836,6 +9729,8 @@ ${content}
                         <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px'}}>
                           <button
                             type="button"
+                            title={customOutputDialogCancelBoundary}
+                            aria-label={customOutputDialogCancelBoundary}
                             onClick={() => {
                               setShowCustomOutputDialog(false);
                               setEditingCustomOutputIndex(null);
@@ -8856,6 +9751,8 @@ ${content}
                           </button>
                           <button
                             type="button"
+                            title={customOutputDialogSaveBoundary}
+                            aria-label={customOutputDialogSaveBoundary}
                             onClick={() => {
                               if (!customOutputPrompt.trim()) {
                                 alert('请填写 Prompt');
@@ -8872,9 +9769,19 @@ ${content}
                                 const newOutputs = [...customOutputs];
                                 newOutputs[editingCustomOutputIndex] = newOutput;
                                 setCustomOutputs(newOutputs);
+                                setCustomOutputDraftReceipt({
+                                  title: '自定义版块草稿已更新',
+                                  detail: `「${getCustomOutputDraftLabel(newOutput, editingCustomOutputIndex)}」只更新当前表单草稿。`,
+                                  boundary: '尚未写入 Messages / AI_Body；不会发送消息、改 Logs 或删除已保存计划。',
+                                });
                               } else {
                                 // 添加模式
                                 setCustomOutputs([...customOutputs, newOutput]);
+                                setCustomOutputDraftReceipt({
+                                  title: '自定义版块草稿已添加',
+                                  detail: `「${getCustomOutputDraftLabel(newOutput, customOutputs.length)}」只添加到当前表单草稿。`,
+                                  boundary: '尚未写入 Messages / AI_Body；不会发送消息、改 Logs 或创建计划。',
+                                });
                               }
                               
                               setShowCustomOutputDialog(false);
@@ -9029,8 +9936,11 @@ ${content}
             </div>
           )}
           
-          {/* 推送目标（仅 Bot/AsMe 时显示，JiraAutomation / Outreach 不显示） */}
-          {formData.Push_Method !== 'AI' && formData.Push_Method !== 'JiraAutomation' && formData.Push_Method !== 'Outreach' && (
+          {/* 推送目标（AgentTask 新建默认给自己，编辑时允许修改） */}
+          {formData.Push_Method !== 'AI' &&
+            formData.Push_Method !== 'JiraAutomation' &&
+            formData.Push_Method !== 'Outreach' &&
+            !(isAgentTaskMode && !isEditMode) && (
             <>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>推送目标 *</label>
@@ -9063,7 +9973,7 @@ ${content}
                     tags={userTags}
                     onChange={handleUserTagsChange}
                     placeholder="输入人名后按 Enter 或直接移开焦点添加，例如：Esone Qiu 或 esone.qiu"
-                    maxTags={formData.Push_Method === 'Bot' ? 1 : undefined}
+                    maxTags={formData.Push_Method === 'Bot' || formData.Push_Method === 'AgentTask' ? 1 : undefined}
                   />
                   <small style={dialogStyles.hint}>
                     支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 或直接移开焦点即可添加
@@ -9131,6 +10041,8 @@ ${content}
                 ? (isEditMode ? '保存中...' : '创建中...')
                 : isSubmitBlockedByExecutionRoute
                   ? '先完成配置'
+                  : isSubmitBlockedByAgentTaskOpenClaw
+                    ? '先配置 OpenClaw'
                   : isSubmitBlockedBySchedule
                     ? '请先调整时间'
                     : (isEditMode ? '✅ 保存修改' : '✅ 创建消息')}
@@ -9190,6 +10102,10 @@ const getTypeStyle = (pushMethod: string): React.CSSProperties => {
     fontSize: '12px',
     fontWeight: 'bold',
   };
+
+  if (isAgentTaskPushMethod(pushMethod)) {
+    return { ...baseStyle, backgroundColor: '#e5e7eb', color: '#111827' }; // 深灰 - 帮我做
+  }
   
   switch (pushMethod) {
     case 'AI':
@@ -9255,11 +10171,36 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
     maxWidth: '100%',
     display: 'block',
+    flex: '1 1 auto',
+    minWidth: 0,
+  },
+  topicTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    maxWidth: '100%',
+    minWidth: 0,
   },
   topicStack: {
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
+  },
+  topicInlineLinkButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: '0 0 auto',
+    width: '22px',
+    height: '22px',
+    padding: 0,
+    backgroundColor: 'transparent',
+    color: '#0052cc',
+    border: '1px solid transparent',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    lineHeight: 1,
   },
   autoReplyReviewReceipt: {
     display: 'flex',
@@ -9652,6 +10593,18 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#7c2d12',
     lineHeight: 1.45,
   },
+  queueDetailsReceipt: {
+    marginTop: '8px',
+    padding: '7px 9px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(255, 255, 255, 0.78)',
+    border: '1px solid rgba(251, 146, 60, 0.45)',
+    color: '#7c2d12',
+    fontSize: '12px',
+    fontWeight: 600,
+    lineHeight: 1.45,
+    overflowWrap: 'anywhere',
+  },
   queueTriageGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
@@ -9832,6 +10785,17 @@ const styles: { [key: string]: React.CSSProperties } = {
   queueIssueDiagnosticText: {
     color: '#475569',
     fontWeight: 600,
+    overflowWrap: 'anywhere',
+  },
+  queueIssuePendingReceipt: {
+    marginTop: '2px',
+    padding: '5px 7px',
+    borderRadius: '6px',
+    backgroundColor: '#fff7ed',
+    border: '1px solid #fdba74',
+    color: '#7c2d12',
+    fontWeight: 700,
+    lineHeight: 1.4,
     overflowWrap: 'anywhere',
   },
   queueIssueActions: {
@@ -10189,8 +11153,8 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     backgroundColor: '#fff',
     borderRadius: '12px',
     padding: '0',
-    maxWidth: '600px',
-    width: '90%',
+    maxWidth: 'calc(100vw - 48px)',
+    width: '1415px',
     maxHeight: '90vh',
     overflow: 'auto',
     boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)',

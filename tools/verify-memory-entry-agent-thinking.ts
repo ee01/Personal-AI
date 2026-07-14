@@ -501,7 +501,15 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('agent-trace-review-lane'));
   assert.ok(agentVisualizerSource.includes('agent-trace-navigation-receipt'));
   assert.ok(agentVisualizerSource.includes('当前 trace 导航'));
+  assert.ok(agentVisualizerSource.includes('buildAgentTraceStepButtonBoundary'));
+  assert.ok(agentVisualizerSource.includes('复核理由：'));
+  assert.ok(agentVisualizerSource.includes('只展开并聚焦当前页面时间线'));
+  assert.ok(agentVisualizerSource.includes('agent-trace-span-composition-steps'));
   assert.ok(agentVisualizerSource.includes('agent-run-summary-chip'));
+  assert.ok(agentVisualizerSource.includes('agent-result-handoff-receipt'));
+  assert.ok(agentVisualizerSource.includes('agent-result-handoff-steps'));
+  assert.ok(agentVisualizerSource.includes('从结果整理回执跳到终止步骤'));
+  assert.ok(agentVisualizerSource.includes('结果整理中...'));
   assert.ok(agentVisualizerSource.includes('identityBoundary'));
   assert.ok(agentVisualizerSource.includes('freshnessBoundary'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
@@ -510,6 +518,12 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择诊断包'));
   assert.ok(agentVisualizerSource.includes('agent-run-diagnostic-manual-copy'));
   assert.ok(agentVisualizerSource.includes('agent-approval-manual-copy'));
+  assert.ok(agentVisualizerSource.includes('agent-approval-copy-receipt'));
+  assert.ok(agentVisualizerSource.includes('当前审批复制回执'));
+  assert.ok(agentVisualizerSource.includes('旧审批复制回执'));
+  assert.ok(agentVisualizerSource.includes('复制只产生本地文本'));
+  assert.ok(agentVisualizerSource.includes('agent-approval-queue-receipt'));
+  assert.ok(agentVisualizerSource.includes('待确认队列口径'));
   assert.ok(agentVisualizerSource.includes('agent-approval-decision-guide'));
   assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
@@ -526,6 +540,7 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('stepHasToolApprovalRequired'));
   assert.ok(agentVisualizerPresentationSource.includes('需要人工确认'));
   assert.ok(agentVisualizerPresentationSource.includes('buildPendingApprovalActions'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentApprovalQueueReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('buildApprovalReviewHint'));
   assert.ok(agentVisualizerPresentationSource.includes('buildApprovalDecisionGuide'));
   assert.ok(agentVisualizerPresentationSource.includes('retryConfigPatch'));
@@ -536,6 +551,7 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunSnapshot'));
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentTraceReviewLane'));
   assert.ok(agentVisualizerPresentationSource.includes('Trace 复核路线'));
+  assert.ok(agentVisualizerPresentationSource.includes('待确认队列口径'));
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentTraceNavigationReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('当前 trace 导航'));
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentDiagnosticCopyScope'));
@@ -547,6 +563,8 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('fnv1a32-local'));
   assert.ok(agentVisualizerPresentationSource.includes('本地 trace id'));
   assert.ok(agentVisualizerPresentationSource.includes('snapshotBoundary'));
+  assert.ok(agentVisualizerPresentationSource.includes('resultHandoffReceipt'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentResultHandoffReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('navigationReceipt'));
   assert.ok(agentVisualizerPresentationSource.includes('current_page_trace_snapshot'));
   assert.ok(agentVisualizerPresentationSource.includes('gen_ai.operation.name'));
@@ -555,8 +573,12 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
   assert.ok(agentVisualizerCss.includes('.agent-trace-navigation-receipt'));
   assert.ok(agentVisualizerCss.includes('.agent-run-summary-chip'));
+  assert.ok(agentVisualizerCss.includes('.processing-indicator.finalizing'));
+  assert.ok(agentVisualizerCss.includes('.agent-result-handoff-receipt'));
+  assert.ok(agentVisualizerCss.includes('.agent-result-handoff-steps'));
   assert.ok(agentVisualizerCss.includes('.agent-trace-review-lane'));
   assert.ok(agentVisualizerCss.includes('.agent-trace-review-lane-item'));
+  assert.ok(agentVisualizerCss.includes('.agent-trace-span-composition-steps'));
   assert.ok(agentVisualizerCss.includes('.flow-node.jumpable'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-detail'));
@@ -584,6 +606,7 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-scope'));
   assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-manual-copy'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-manual-copy'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-copy-receipt'));
   const optionsCss = readFileSync('static/options.css', 'utf8');
   assert.ok(optionsCss.includes('.tool-safety-badge'));
 
@@ -1252,6 +1275,20 @@ async function main() {
       reviewBoundary: pendingApprovalActions[0].reviewBoundary,
     },
   ]);
+  assert.deepEqual(diagnosticPacket.approvalQueueReceipt, {
+    title: '待确认队列口径',
+    traceScope:
+      '当前页面 trace pai-agent-trace-7105dab9 汇总 1 个待确认动作，来自步骤 #1。',
+    pendingScope:
+      '队列只汇总本轮已被执行前阻断的人审工具动作；approvalWriteTest 还没有执行。',
+    persistenceBoundary:
+      '这不是持久审批队列，也不会让本轮 Agent run 在后台继续暂停等待；刷新、重跑、工具策略或参数变化后需重新生成。',
+    copyBoundary:
+      '复制 key、审核包或重跑配置只复制文本，不会批准、恢复 run、发送通知、写入、删除或执行外部动作。',
+    nextStep:
+      '逐条复核参数、接收方和安全说明；批准时复制对应重跑配置并用同一工具和同一参数重新运行，拒绝或修改时不要复用旧 key。',
+    stepNumbers: [1],
+  });
   assert.equal(diagnosticPacket.traceSpans[0].operationName, 'agent.run');
   assert.equal(diagnosticPacket.traceSpans[0].status.code, 'max_actions_reached');
   assert.equal(diagnosticPacket.traceSpans.length, 8);
@@ -1330,6 +1367,28 @@ async function main() {
     noEffectBoundary:
       '点击步骤定位只展开当前页面时间线，不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作。',
     stepNumbers: [1, 2, 3, 4],
+    stepRoutes: [
+      {
+        stepNumber: 1,
+        reason:
+          '审批上下文：approvalWriteTest 尚未执行，需使用单个动作审核包或重跑配置复核。；需要人工确认：先让用户确认具体工具和参数，再带对应批准 key 重新运行。；行动次数用完：先处理失败、待确认、阻断或缺证问题，再提高 maxActions 或缩小问题范围重新分析。',
+      },
+      {
+        stepNumber: 2,
+        reason:
+          '工具被阻断：改用工具目录里的 ID，或补齐必填参数后重试。；行动次数用完：先处理失败、待确认、阻断或缺证问题，再提高 maxActions 或缩小问题范围重新分析。',
+      },
+      {
+        stepNumber: 3,
+        reason:
+          '工具证据不足：调整查询参数、补充上下文，或在结论中标记证据不足。；行动次数用完：先处理失败、待确认、阻断或缺证问题，再提高 maxActions 或缩小问题范围重新分析。',
+      },
+      {
+        stepNumber: 4,
+        reason:
+          '运行状态：预算已用完；剩余审批、阻断或缺证应先于结论外发处理。；行动次数用完：先处理失败、待确认、阻断或缺证问题，再提高 maxActions 或缩小问题范围重新分析。',
+      },
+    ],
   });
   assert.deepEqual(diagnosticPacket.traceSpanComposition, {
     title: 'Trace span 构成',
@@ -1370,8 +1429,9 @@ async function main() {
         label: '问题 span',
         value: '6',
         detail:
-          '只统计失败、待确认、阻断和缺证 span；不把 root、跳过或普通 OK span 当成待处理问题。',
+          '只统计失败、待确认、阻断和缺证 span；对应步骤 #1、#2、#3。',
         tone: 'warning',
+        stepNumbers: [1, 2, 3],
       },
     ],
     boundary:
@@ -1384,8 +1444,52 @@ async function main() {
   assert.match(diagnosticPacket.privacyNote, /omits raw tool results/);
   assert.match(diagnosticPacket.privacyNote, /traceSpans/);
   assert.match(diagnosticPacket.privacyNote, /traceSpanComposition/);
+  assert.match(diagnosticPacket.privacyNote, /approvalQueueReceipt/);
+  assert.match(diagnosticPacket.privacyNote, /not a durable checkpoint/);
+  assert.match(diagnosticPacket.privacyNote, /resultHandoffReceipt/);
   assert.match(diagnosticPacket.privacyNote, /traceIdentity/);
   assert.match(diagnosticPacket.privacyNote, /schemaBoundary/);
+  assert.equal(diagnosticPacket.resultHandoffReceipt, undefined);
+  const finalizingDiagnosticPacket = buildAgentRunDiagnosticPacket(
+    [
+      approvalStep,
+      blockedStep,
+      emptyEvidenceStep,
+      {
+        timestamp: timestamp + 5300,
+        thought: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        publicSummary: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        action: 'max_actions_reached',
+      },
+    ],
+    {
+      generatedAt: '2026-05-31T00:00:03.000Z',
+      isProcessing: true,
+    },
+  );
+  assert.deepEqual(finalizingDiagnosticPacket.resultHandoffReceipt, {
+    title: '结果整理中',
+    traceState:
+      'Trace 已到达 步骤 #4（预算耗尽），状态快照为 预算耗尽，生成于 2026-05-31T00:00:03.000Z。',
+    resultState:
+      '结果摘要卡片仍在生成；在它出现前，不要把当前页面解读成最终已交付结果。',
+    unresolvedIssueSummary:
+      '整理前仍有 1 个待确认动作、1 个已阻断工具步骤、1 个证据不足步骤，需要按运行检查复核。',
+    inspectionRoute:
+      '可先定位终止步骤 #4，只展开当前页面时间线里的这个步骤。',
+    boundary:
+      '这个整理状态不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作；待确认和工具问题仍按运行检查处理。',
+    terminalStepNumber: 4,
+  });
+  const runningDiagnosticPacket = buildAgentRunDiagnosticPacket(
+    [approvalStep],
+    {
+      generatedAt: '2026-05-31T00:00:01.000Z',
+      isProcessing: true,
+    },
+  );
+  assert.equal(runningDiagnosticPacket.status, 'running');
+  assert.equal(runningDiagnosticPacket.resultHandoffReceipt, undefined);
   const diagnosticCopyScope = buildAgentDiagnosticCopyScope(diagnosticPacket);
   assert.deepEqual(diagnosticCopyScope, {
     title: '诊断包范围',
@@ -1507,12 +1611,46 @@ async function main() {
     [3],
   );
   assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'status')?.stepRoutes,
+    [
+      {
+        stepNumber: 4,
+        reason:
+          '运行状态：预算已用完；剩余审批、阻断或缺证应先于结论外发处理。',
+      },
+    ],
+  );
+  assert.deepEqual(
     traceReviewLane.items.find((item) => item.key === 'approval')?.stepIndexes,
     [0],
   );
   assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'approval')?.stepRoutes,
+    [
+      {
+        stepNumber: 1,
+        reason:
+          '审批上下文：approvalWriteTest 尚未执行，需使用单个动作审核包或重跑配置复核。',
+      },
+    ],
+  );
+  assert.deepEqual(
     traceReviewLane.items.find((item) => item.key === 'tool_issues')?.stepIndexes,
     [1, 2],
+  );
+  assert.deepEqual(
+    traceReviewLane.items.find((item) => item.key === 'tool_issues')?.stepRoutes,
+    [
+      {
+        stepNumber: 2,
+        reason: '工具被阻断：改用工具目录里的 ID，或补齐必填参数后重试。',
+      },
+      {
+        stepNumber: 3,
+        reason:
+          '工具证据不足：调整查询参数、补充上下文，或在结论中标记证据不足。',
+      },
+    ],
   );
   assert.equal(
     traceReviewLane.items.find((item) => item.key === 'diagnostics')?.stepIndexes,
@@ -1520,7 +1658,7 @@ async function main() {
   );
   assert.match(
     traceReviewLane.items.find((item) => item.key === 'diagnostics')?.detail || '',
-    /不复制原始工具结果、工具参数或批准 key/,
+    /优先步骤的复核理由/,
   );
   const diagnosticSnapshot = buildAgentRunSnapshot(diagnosticPacket);
   assert.equal(diagnosticSnapshot.statusLabel, '预算耗尽');

@@ -134,6 +134,7 @@ type PromptScope = keyof CustomPrompts;
 type CurrentUserInfo = { name: string; email: string };
 type ConfigBaselineStatus = 'default' | 'local' | 'memory' | 'backed-up';
 type PreviewCopyReceiptStatus = 'copied' | 'empty' | 'error' | 'stale';
+type PendingOperation = 'save' | 'fusion' | null;
 
 interface ConfigBaselineReceipt {
     sourceLabel: string;
@@ -185,6 +186,13 @@ interface SafetyBlockReceipt {
     blockedAt: number;
 }
 
+interface UserContextSourceDraftReceipt {
+    status: 'enable-pending' | 'pause-pending';
+    statusLabel: string;
+    title: string;
+    detail: string;
+}
+
 const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: string }>> = {
     message: [
         {
@@ -233,6 +241,116 @@ const USER_CONTEXT_SECTION_TAB: Record<UserContextSectionReceiptId, TabType> = {
 const getPreviewScopeLabel = (scope: UserContextPreferenceScope): string => (
     PREVIEW_SCOPE_OPTIONS.find((option) => option.value === scope)?.label || '全部'
 );
+
+const buildPreviewScopeSwitchBoundary = (
+    targetScope: UserContextPreferenceScope,
+    currentScope: UserContextPreferenceScope,
+    locationLabel: string,
+    hasUnsavedChanges: boolean
+): string => {
+    const targetReceipt = buildPreferencePreviewScopeReceipt(targetScope);
+    const selectionBoundary = targetScope === currentScope
+        ? `当前已选中${targetReceipt.scopeLabel}范围`
+        : `点击只会把${locationLabel}切到${targetReceipt.scopeLabel}范围`;
+    const draftBoundary = hasUnsavedChanges
+        ? '页面草稿尚未保存，切换后只按草稿重算当前页面预览；真实分析仍读取已生效基线，直到点击保存'
+        : '当前没有未保存草稿，切换只改变页面查看范围，不改变已生效配置';
+
+    return [
+        selectionBoundary,
+        `${targetReceipt.title}：${targetReceipt.detail}`,
+        draftBoundary,
+        '不会保存配置、触发真实分析、融合画像、写入本机配置或备份到记忆服务'
+    ].join('；');
+};
+
+const isUserContextRuntimeInjectionEnabled = (config: ConfigData | null): boolean => (
+    Boolean(
+        config &&
+        config.preferenceInjection.enabled !== false &&
+        config.preferenceInjection.userContextEnabled !== false
+    )
+);
+
+const buildReloadActionBoundary = (
+    isLoading: boolean,
+    pendingOperation: PendingOperation,
+    hasUnsavedChanges: boolean
+): string => {
+    if (isLoading) {
+        return '正在加载配置，重新加载暂不可用；当前不会保存草稿、触发真实分析、融合画像或写入记忆服务。';
+    }
+    if (pendingOperation === 'save') {
+        return '保存进行中，重新加载暂不可用；请先等待本机写入和记忆服务备份结果，避免把当前草稿状态误读成已丢弃。';
+    }
+    if (pendingOperation === 'fusion') {
+        return '融合进行中，重新加载暂不可用；请先等待用户画像融合结果，重新加载不会取消已经发出的融合请求。';
+    }
+    if (hasUnsavedChanges) {
+        return '重新加载会先要求确认丢弃当前页面草稿；确认后只重新读取本机配置并尝试恢复记忆服务备份，不会保存草稿、触发真实分析、融合画像或写入记忆服务。';
+    }
+    return '重新读取本机配置并尝试恢复记忆服务备份；不会保存配置、触发真实分析、融合画像或写入记忆服务。';
+};
+
+const buildSaveActionBoundary = (
+    pendingOperation: PendingOperation,
+    hasUnsavedChanges: boolean,
+    hasUnacknowledgedSafetyHint: boolean
+): string => {
+    if (pendingOperation === 'save') {
+        return '保存进行中：正在写入本机配置并尝试备份到记忆服务；完成前真实分析仍读取上方已生效基线，不会融合用户画像或触发真实分析。';
+    }
+    if (pendingOperation === 'fusion') {
+        return '融合进行中，保存暂不可用；请先等待融合结果，避免把画像融合等待态误读成普通配置保存。';
+    }
+    if (hasUnacknowledgedSafetyHint) {
+        return '保存会先检查未确认的安全提示；确认前不会保存草稿、不会触发真实分析，也不会写入本机配置或备份到记忆服务。';
+    }
+    if (hasUnsavedChanges) {
+        return '保存当前页面草稿到本机配置，并尝试更新记忆服务恢复备份；保存完成后真实分析才读取新基线，不会融合用户画像或立即触发分析。';
+    }
+    return '重新保存当前已生效配置到本机并尝试更新记忆服务恢复备份；不会融合用户画像、触发真实分析或制造新的分析结果。';
+};
+
+const buildFusionActionBoundary = (
+    pendingOperation: PendingOperation,
+    hasUnsavedChanges: boolean,
+    hasUnacknowledgedSafetyHint: boolean
+): string => {
+    if (pendingOperation === 'fusion') {
+        return '融合进行中：正在请求把用户上下文融合到用户画像；完成前不代表用户画像已更新，也不会触发真实分析。';
+    }
+    if (pendingOperation === 'save') {
+        return '保存进行中，融合暂不可用；请先等待本机配置写入和记忆服务备份结果。';
+    }
+    if (hasUnacknowledgedSafetyHint) {
+        return '融合前必须先确认安全提示只作为低优先级偏好或非凭据引用；确认前不会保存草稿、写入配置、备份记忆服务或融合用户画像。';
+    }
+    if (hasUnsavedChanges) {
+        return '融合会先保存当前页面草稿到本机并尝试备份，然后请求把用户上下文融合到用户画像；完成前不代表画像已更新，也不会触发真实分析。';
+    }
+    return '把当前已保存的用户上下文请求融合到用户画像；不会改写提示词草稿、不会触发真实分析，也不代表融合完成前画像已更新。';
+};
+
+const buildResetActionBoundary = (
+    isLoading: boolean,
+    pendingOperation: PendingOperation,
+    hasUnsavedChanges: boolean
+): string => {
+    if (isLoading) {
+        return '配置加载中，重置默认暂不可用；当前不会保存草稿、写入配置、备份记忆服务或融合画像。';
+    }
+    if (pendingOperation === 'save') {
+        return '保存进行中，重置默认暂不可用；请先等待保存结果，避免覆盖正在写入的页面草稿。';
+    }
+    if (pendingOperation === 'fusion') {
+        return '融合进行中，重置默认暂不可用；重置不会取消已经发出的用户画像融合请求。';
+    }
+    if (hasUnsavedChanges) {
+        return '重置默认会先要求确认覆盖当前页面草稿，并保留姓名和邮箱；保存前不会改写真实分析基线、本机配置、记忆服务备份或用户画像。';
+    }
+    return '把当前页面改成默认配置草稿，并保留姓名和邮箱；保存前不会改写真实分析基线、本机配置、记忆服务备份或用户画像。';
+};
 
 const createDefaultConfig = (): ConfigData => ({
     preferenceInjection: {
@@ -440,13 +558,30 @@ const createEmptyTeamMember = (): TeamMember => ({
     speciality: ''
 });
 
+const waitForPendingOperationPaint = (): Promise<void> => (
+    new Promise(resolve => {
+        if (
+            typeof window === 'undefined' ||
+            typeof window.requestAnimationFrame !== 'function'
+        ) {
+            setTimeout(resolve, 0);
+            return;
+        }
+
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => resolve());
+        });
+    })
+);
+
 const PromptConfig: React.FC = () => {
     const [activeTab, setActiveTab] = useState<TabType>('prompts');
     const [statusMessage, setStatusMessage] = useState('');
     const [statusType, setStatusType] = useState<'success' | 'error' | ''>('');
     const [currentUserInfo, setCurrentUserInfo] = useState({ name: '', email: '' });
     const [isLoading, setIsLoading] = useState(false);
-    const [isSaving, setIsSaving] = useState(false);
+    const [pendingOperation, setPendingOperation] = useState<PendingOperation>(null);
+    const isSaving = pendingOperation !== null;
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [syncSource, setSyncSource] = useState('');
     const [baselineReceipt, setBaselineReceipt] = useState<ConfigBaselineReceipt>(
@@ -488,11 +623,20 @@ const PromptConfig: React.FC = () => {
         () => buildPreferencePreviewScopeReceipt(previewScope),
         [previewScope]
     );
+    const userContextInjectionDraftDiffersFromBaseline = useMemo(() => {
+        if (!hasUnsavedChanges || !lastPersistedConfig) return false;
+        return (
+            isUserContextRuntimeInjectionEnabled(lastPersistedConfig) !==
+            isUserContextRuntimeInjectionEnabled(configData)
+        );
+    }, [configData, hasUnsavedChanges, lastPersistedConfig]);
     const userContextSectionReceipts = useMemo(
         () => buildUserContextSectionReceipts(configData, {
-            previewScope
+            previewScope,
+            draftInjectionStateDiffersFromBaseline:
+                userContextInjectionDraftDiffersFromBaseline
         }),
-        [configData, previewScope]
+        [configData, previewScope, userContextInjectionDraftDiffersFromBaseline]
     );
     const userContextScopeBreakdown = useMemo(
         () => buildUserContextScopeBreakdown(configData.userContextConfig, {
@@ -500,6 +644,65 @@ const PromptConfig: React.FC = () => {
         }),
         [configData.userContextConfig, previewScope]
     );
+    const userContextSourceDraftReceipt = useMemo((): UserContextSourceDraftReceipt | null => {
+        if (!hasUnsavedChanges || !lastPersistedConfig) return null;
+
+        const persistedEnabled = lastPersistedConfig.preferenceInjection.userContextEnabled;
+        const draftEnabled = configData.preferenceInjection.userContextEnabled;
+        const persistedGlobalEnabled = lastPersistedConfig.preferenceInjection.enabled;
+        const draftGlobalEnabled = configData.preferenceInjection.enabled;
+
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+        const signalCount =
+            userContextScopeBreakdown.baseSignalCount +
+            userContextScopeBreakdown.messageSignalCount +
+            userContextScopeBreakdown.projectSignalCount;
+        const signalSummary = signalCount > 0
+            ? `当前配置保留 ${signalCount} 项用户上下文信号，${scopeLabel}预览会按这个草稿开关重算。`
+            : `当前配置没有可读取的用户上下文信号，${scopeLabel}预览仍只反映草稿开关。`;
+        const commonBoundary =
+            `${signalSummary} 保存前真实消息、项目、会议和文档分析仍读取上方已生效基线；本条回执不会保存配置、触发真实分析、融合画像或写入记忆服务。`;
+
+        if (persistedGlobalEnabled !== draftGlobalEnabled) {
+            if (!draftGlobalEnabled) {
+                return {
+                    status: 'pause-pending',
+                    statusLabel: '待保存',
+                    title: '偏好注入暂停待保存',
+                    detail:
+                        `当前页面预览会暂停自定义提示词和用户上下文；${commonBoundary} 点击保存后才会把全局偏好注入暂停写入本机配置，并尝试更新恢复备份。`
+                };
+            }
+
+            return {
+                status: 'enable-pending',
+                statusLabel: '待保存',
+                title: '偏好注入开启待保存',
+                detail:
+                    `当前页面预览会重新允许自定义提示词和用户上下文按各自来源开关参与预览；${commonBoundary} 点击保存后才会重新允许真实分析读取启用的长期偏好，并尝试更新恢复备份。`
+            };
+        }
+
+        if (persistedEnabled === draftEnabled) return null;
+
+        if (!draftEnabled) {
+            return {
+                status: 'pause-pending',
+                statusLabel: '待保存',
+                title: '用户上下文来源暂停待保存',
+                detail:
+                    `${commonBoundary} 点击保存后才会把用户上下文来源暂停写入本机配置，并尝试更新恢复备份。`
+            };
+        }
+
+        return {
+            status: 'enable-pending',
+            statusLabel: '待保存',
+            title: '用户上下文来源开启待保存',
+            detail:
+                `${commonBoundary} 点击保存后才会重新允许真实分析按消息 / 项目范围读取用户上下文，并尝试更新恢复备份。`
+        };
+    }, [configData.preferenceInjection.enabled, configData.preferenceInjection.userContextEnabled, hasUnsavedChanges, lastPersistedConfig, previewScope, userContextScopeBreakdown]);
     const preferenceChangeImpact = useMemo(
         () => hasUnsavedChanges
             ? buildPreferenceChangeImpact(lastPersistedConfig, configData, {
@@ -616,6 +819,58 @@ const PromptConfig: React.FC = () => {
             ? `未保存变更：${pendingChangeDescription.changedLabels.join('、')}`
             : '未保存变更：无实质变化';
     }, [pendingChangeDescription]);
+    const getHistoryRestoreImpactSummary = (entry: ConfigHistoryEntry): string => {
+        const impact = buildPreferenceChangeImpact(lastPersistedConfig, entry.config, {
+            userContextScope: previewScope
+        });
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+        if (!impact.hasChanges) {
+            return `恢复前影响：相对当前已生效基线，${scopeLabel}预览没有实质注入变化；点击恢复只会载入页面草稿，不会保存、触发真实分析或写入记忆服务。`;
+        }
+
+        const changedItems = impact.items
+            .filter(item => item.before !== item.after)
+            .map(item => item.label)
+            .slice(0, 3);
+        const itemSummary = changedItems.length > 0
+            ? ` 主要变化：${changedItems.join('、')}。`
+            : '';
+        return `恢复前影响：如果恢复后保存，${impact.summary}。${itemSummary}点击恢复只会先载入页面草稿，不会保存、触发真实分析或写入记忆服务。`;
+    };
+    const saveButtonLabel = pendingOperation === 'save'
+        ? '保存中...'
+        : pendingOperation === 'fusion'
+            ? '等待融合完成'
+            : hasUnsavedChanges
+                ? '保存配置 *'
+                : '保存配置';
+    const fusionButtonLabel = pendingOperation === 'fusion'
+        ? '融合中...'
+        : pendingOperation === 'save'
+            ? '保存中暂不可融合'
+            : hasUnacknowledgedSafetyHint
+                ? '确认安全提示后融合'
+                : '融合到用户画像';
+    const reloadActionBoundary = buildReloadActionBoundary(
+        isLoading,
+        pendingOperation,
+        hasUnsavedChanges
+    );
+    const saveActionBoundary = buildSaveActionBoundary(
+        pendingOperation,
+        hasUnsavedChanges,
+        hasUnacknowledgedSafetyHint
+    );
+    const fusionActionBoundary = buildFusionActionBoundary(
+        pendingOperation,
+        hasUnsavedChanges,
+        hasUnacknowledgedSafetyHint
+    );
+    const resetActionBoundary = buildResetActionBoundary(
+        isLoading,
+        pendingOperation,
+        hasUnsavedChanges
+    );
 
     useEffect(() => {
         initializeConfigPage();
@@ -884,8 +1139,10 @@ const PromptConfig: React.FC = () => {
 	    return true;
 	};
 
-	const persistConfiguration = async (): Promise<ConfigData | null> => {
-	    if (!validateConfiguration()) return null;
+	const persistConfiguration = async (
+        options: { skipValidation?: boolean } = {}
+    ): Promise<ConfigData | null> => {
+	    if (!options.skipValidation && !validateConfiguration()) return null;
 
         const savedAt = Date.now();
 	        const updatedConfig = sanitizeIndependentUserConfig({
@@ -951,26 +1208,29 @@ const PromptConfig: React.FC = () => {
 	};
 
 	const saveConfiguration = async () => {
-	    setIsSaving(true);
 	    try {
-	        await persistConfiguration();
+            if (!validateConfiguration()) return;
+	        setPendingOperation('save');
+            await waitForPendingOperationPaint();
+	        await persistConfiguration({ skipValidation: true });
 	    } catch (error) {
 	        console.error('保存配置失败:', error);
 	        showStatusMessage('保存配置失败: ' + error.message, 'error');
 	    } finally {
-	        setIsSaving(false);
+	        setPendingOperation(null);
 	    }
 	};
 
     // 🆕 触发数据融合到用户画像
 	const triggerDataFusion = async () => {
-	    setIsSaving(true);
 	    try {
             if (!validateConfiguration('fusion')) return;
+	        setPendingOperation('fusion');
+            await waitForPendingOperationPaint();
 
 	        let configForFusion = configData;
 	        if (hasUnsavedChanges) {
-	            const savedConfig = await persistConfiguration();
+	            const savedConfig = await persistConfiguration({ skipValidation: true });
 	            if (!savedConfig) return;
 	            configForFusion = savedConfig;
 	        }
@@ -1011,7 +1271,7 @@ const PromptConfig: React.FC = () => {
 	        console.error('数据融合失败:', error);
 	        showStatusMessage('数据融合失败: ' + error.message, 'error');
 	    } finally {
-	        setIsSaving(false);
+	        setPendingOperation(null);
 	    }
 	};
 
@@ -1225,6 +1485,31 @@ const PromptConfig: React.FC = () => {
         );
     };
 
+    const renderOperationPendingReceipt = () => {
+        if (!pendingOperation) return null;
+        const isFusionPending = pendingOperation === 'fusion';
+
+        return (
+            <div
+                className={`operation-pending-receipt ${pendingOperation}`}
+                role="status"
+                aria-live="polite"
+            >
+                <span>{isFusionPending ? '融合进行中' : '保存进行中'}</span>
+                <strong>
+                    {isFusionPending
+                        ? '正在请求把用户上下文融合到用户画像'
+                        : '正在写入本机配置并尝试备份到记忆服务'}
+                </strong>
+                <small>
+                    {isFusionPending
+                        ? '如果页面有未保存草稿，会先完成保存流程再发起融合。完成前不代表用户画像已更新，也不会触发真实分析；请等待融合结果回执。'
+                        : '完成前真实分析仍读取上方已生效基线，本次不会融合到用户画像；请等待保存结果回执。'}
+                </small>
+            </div>
+        );
+    };
+
     const renderConfigSummary = () => (
         <div
             className={`config-summary-strip ${configSummary.riskHintCount > 0 ? 'has-warning' : ''}`}
@@ -1266,63 +1551,76 @@ const PromptConfig: React.FC = () => {
     );
 
     const renderInjectionControl = () => (
-        <div className={`injection-control-row ${configSummary.preferenceInjectionEnabled ? '' : 'paused'}`}>
-            <div className="injection-main-control">
-                <label className="injection-toggle">
-                    <input
-                        type="checkbox"
-                        checked={configData.preferenceInjection.enabled}
-                        onChange={(e) => updateValue('preferenceInjection.enabled', e.target.checked)}
-                    />
-                    <span>参与分析注入</span>
-                </label>
-                <strong>{configSummary.preferenceInjectionEnabled ? '开启' : '暂停'}</strong>
+        <>
+            <div className={`injection-control-row ${configSummary.preferenceInjectionEnabled ? '' : 'paused'}`}>
+                <div className="injection-main-control">
+                    <label className="injection-toggle">
+                        <input
+                            type="checkbox"
+                            checked={configData.preferenceInjection.enabled}
+                            onChange={(e) => updateValue('preferenceInjection.enabled', e.target.checked)}
+                        />
+                        <span>参与分析注入</span>
+                    </label>
+                    <strong>{configSummary.preferenceInjectionEnabled ? '开启' : '暂停'}</strong>
+                </div>
+                <div className="injection-source-controls" aria-label="偏好来源开关">
+                    <label className="source-toggle">
+                        <input
+                            type="checkbox"
+                            checked={configData.preferenceInjection.customPromptsEnabled}
+                            disabled={!configData.preferenceInjection.enabled}
+                            onChange={(e) => updateValue('preferenceInjection.customPromptsEnabled', e.target.checked)}
+                        />
+                        <span>自定义提示词</span>
+                    </label>
+                    <label className="source-toggle scope-toggle">
+                        <input
+                            type="checkbox"
+                            checked={configData.preferenceInjection.messagePromptEnabled}
+                            disabled={
+                                !configData.preferenceInjection.enabled ||
+                                !configData.preferenceInjection.customPromptsEnabled
+                            }
+                            onChange={(e) => updateValue('preferenceInjection.messagePromptEnabled', e.target.checked)}
+                        />
+                        <span>消息提示词</span>
+                    </label>
+                    <label className="source-toggle scope-toggle">
+                        <input
+                            type="checkbox"
+                            checked={configData.preferenceInjection.projectPromptEnabled}
+                            disabled={
+                                !configData.preferenceInjection.enabled ||
+                                !configData.preferenceInjection.customPromptsEnabled
+                            }
+                            onChange={(e) => updateValue('preferenceInjection.projectPromptEnabled', e.target.checked)}
+                        />
+                        <span>项目提示词</span>
+                    </label>
+                    <label className="source-toggle">
+                        <input
+                            type="checkbox"
+                            checked={configData.preferenceInjection.userContextEnabled}
+                            disabled={!configData.preferenceInjection.enabled}
+                            onChange={(e) => updateValue('preferenceInjection.userContextEnabled', e.target.checked)}
+                        />
+                        <span>用户上下文</span>
+                    </label>
+                </div>
             </div>
-            <div className="injection-source-controls" aria-label="偏好来源开关">
-                <label className="source-toggle">
-                    <input
-                        type="checkbox"
-                        checked={configData.preferenceInjection.customPromptsEnabled}
-                        disabled={!configData.preferenceInjection.enabled}
-                        onChange={(e) => updateValue('preferenceInjection.customPromptsEnabled', e.target.checked)}
-                    />
-                    <span>自定义提示词</span>
-                </label>
-                <label className="source-toggle scope-toggle">
-                    <input
-                        type="checkbox"
-                        checked={configData.preferenceInjection.messagePromptEnabled}
-                        disabled={
-                            !configData.preferenceInjection.enabled ||
-                            !configData.preferenceInjection.customPromptsEnabled
-                        }
-                        onChange={(e) => updateValue('preferenceInjection.messagePromptEnabled', e.target.checked)}
-                    />
-                    <span>消息提示词</span>
-                </label>
-                <label className="source-toggle scope-toggle">
-                    <input
-                        type="checkbox"
-                        checked={configData.preferenceInjection.projectPromptEnabled}
-                        disabled={
-                            !configData.preferenceInjection.enabled ||
-                            !configData.preferenceInjection.customPromptsEnabled
-                        }
-                        onChange={(e) => updateValue('preferenceInjection.projectPromptEnabled', e.target.checked)}
-                    />
-                    <span>项目提示词</span>
-                </label>
-                <label className="source-toggle">
-                    <input
-                        type="checkbox"
-                        checked={configData.preferenceInjection.userContextEnabled}
-                        disabled={!configData.preferenceInjection.enabled}
-                        onChange={(e) => updateValue('preferenceInjection.userContextEnabled', e.target.checked)}
-                    />
-                    <span>用户上下文</span>
-                </label>
-            </div>
-        </div>
+            {userContextSourceDraftReceipt && (
+                <div
+                    className={`user-context-source-draft-receipt ${userContextSourceDraftReceipt.status}`}
+                    role="status"
+                    aria-live="polite"
+                >
+                    <span>{userContextSourceDraftReceipt.statusLabel}</span>
+                    <strong>{userContextSourceDraftReceipt.title}</strong>
+                    <small>{userContextSourceDraftReceipt.detail}</small>
+                </div>
+            )}
+        </>
     );
 
     const renderBaselineReceipt = () => (
@@ -1577,22 +1875,34 @@ const PromptConfig: React.FC = () => {
 
     const renderPreviewScopeSwitch = (
         ariaLabel = '预览注入范围',
-        className = ''
+        className = '',
+        locationLabel = '生效预览'
     ) => (
         <div
             className={`preview-scope-switch ${className}`.trim()}
             aria-label={ariaLabel}
         >
-            {PREVIEW_SCOPE_OPTIONS.map((option) => (
-                <button
-                    key={option.value}
-                    type="button"
-                    className={previewScope === option.value ? 'active' : ''}
-                    onClick={() => setPreviewScope(option.value)}
-                >
-                    {option.label}
-                </button>
-            ))}
+            {PREVIEW_SCOPE_OPTIONS.map((option) => {
+                const boundary = buildPreviewScopeSwitchBoundary(
+                    option.value,
+                    previewScope,
+                    locationLabel,
+                    hasUnsavedChanges
+                );
+
+                return (
+                    <button
+                        key={option.value}
+                        type="button"
+                        className={previewScope === option.value ? 'active' : ''}
+                        title={boundary}
+                        aria-label={boundary}
+                        onClick={() => setPreviewScope(option.value)}
+                    >
+                        {option.label}
+                    </button>
+                );
+            })}
         </div>
     );
 
@@ -1840,7 +2150,9 @@ const PromptConfig: React.FC = () => {
             ? '全局偏好注入已暂停'
             : '用户上下文来源已暂停';
         const detail = userContextPaused
-            ? `${userContextScopeBreakdown.baseSignalCount + userContextScopeBreakdown.messageSignalCount + userContextScopeBreakdown.projectSignalCount} 项用户上下文信号会保留在配置里，但${pauseReason}，当前预览和真实分析不会读取。`
+            ? userContextInjectionDraftDiffersFromBaseline
+                ? `${userContextScopeBreakdown.baseSignalCount + userContextScopeBreakdown.messageSignalCount + userContextScopeBreakdown.projectSignalCount} 项用户上下文信号会保留在配置里；当前${scopeLabel}预览因${pauseReason}不会读取。保存前真实分析仍读取上方已生效基线；保存后才会把该注入状态写入本机配置并尝试备份。`
+                : `${userContextScopeBreakdown.baseSignalCount + userContextScopeBreakdown.messageSignalCount + userContextScopeBreakdown.projectSignalCount} 项用户上下文信号会保留在配置里，但${pauseReason}，当前预览和真实分析不会读取。`
             : userContextScopeBreakdown.includedSignalCount > 0
                 ? `当前${scopeLabel}预览会读取 ${userContextScopeBreakdown.includedSignalCount} 项用户上下文信号${includedParts.length > 0 ? `（${includedParts.join(' · ')}）` : ''}；${excludedDetail}。`
                 : `当前${scopeLabel}预览没有会读取的用户上下文信号；${excludedDetail}。`;
@@ -1856,12 +2168,18 @@ const PromptConfig: React.FC = () => {
                 <small>
                     {detail}
                     本条只解释当前页面预览和保存后的注入范围，不会保存配置、触发真实分析、融合画像或写入记忆服务。
-                    {hasUnsavedChanges ? ' 页面草稿未保存时，真实分析仍读取上方已生效基线。' : ''}
+                    {hasUnsavedChanges && !userContextInjectionDraftDiffersFromBaseline
+                        ? ' 页面草稿未保存时，真实分析仍读取上方已生效基线。'
+                        : ''}
                 </small>
                 <small className="context-scope-basis">{previewScopeReceipt.detail}</small>
                 <div className="context-scope-actions">
                     <div className="context-scope-action-label">查看范围</div>
-                    {renderPreviewScopeSwitch('用户上下文预览范围', 'context-scope-switch')}
+                    {renderPreviewScopeSwitch(
+                        '用户上下文预览范围',
+                        'context-scope-switch',
+                        '用户上下文本轮范围'
+                    )}
                 </div>
             </div>
         );
@@ -1885,6 +2203,9 @@ const PromptConfig: React.FC = () => {
                                 {entry.changeSummary && (
                                     <span className="history-change">{entry.changeSummary}</span>
                                 )}
+                                <small className="history-restore-impact">
+                                    {getHistoryRestoreImpactSummary(entry)}
+                                </small>
                             </div>
                             <button
                                 type="button"
@@ -2300,34 +2621,41 @@ const PromptConfig: React.FC = () => {
 		                <h1>自定义提示词与上下文</h1>
 	                <div className="config-actions">
 	                    <button
+                            type="button"
 	                        onClick={reloadFromStorage}
 	                        className="reload-btn"
+                            title={reloadActionBoundary}
+                            aria-label={reloadActionBoundary}
 	                        disabled={isLoading || isSaving}
 	                    >
                         {isLoading ? '加载中...' : '重新加载'}
                     </button>
                     <button
+                        type="button"
                         onClick={saveConfiguration}
                         className="save-btn"
+                        title={saveActionBoundary}
+                        aria-label={saveActionBoundary}
                         disabled={isLoading || isSaving}
                     >
-                        {isSaving ? '保存中...' : hasUnsavedChanges ? '保存配置 *' : '保存配置'}
+                        {saveButtonLabel}
                     </button>
                     <button
+                        type="button"
                         onClick={triggerDataFusion}
 	                        className={`fusion-btn ${hasUnacknowledgedSafetyHint ? 'needs-review' : ''}`}
-                        title={
-                            hasUnacknowledgedSafetyHint
-                                ? '先确认安全提示只作为低优先级偏好或非凭据引用，再融合到用户画像'
-                                : '将当前用户上下文融合到用户画像'
-                        }
+                        title={fusionActionBoundary}
+                        aria-label={fusionActionBoundary}
 	                        disabled={isLoading || isSaving}
 	                    >
-	                        {hasUnacknowledgedSafetyHint ? '确认安全提示后融合' : '融合到用户画像'}
+                        {fusionButtonLabel}
 	                    </button>
                     <button
+                        type="button"
                         onClick={resetToDefaults}
                         className="reset-btn"
+                        title={resetActionBoundary}
+                        aria-label={resetActionBoundary}
                         disabled={isLoading || isSaving}
                     >
                         重置默认
@@ -2356,6 +2684,8 @@ const PromptConfig: React.FC = () => {
                     {statusMessage}
                 </div>
             )}
+
+            {renderOperationPendingReceipt()}
 
             {renderSafetyBlockReceipt()}
 
@@ -2602,8 +2932,61 @@ const PromptConfig: React.FC = () => {
                     outline: none;
                 }
 
-                .baseline-receipt {
+                .operation-pending-receipt {
                     display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 5px 9px;
+                    align-items: start;
+                    margin: -4px 0 16px;
+                    padding: 11px 12px;
+                    border: 1px solid #bfdbfe;
+                    border-left: 4px solid #2563eb;
+                    border-radius: 6px;
+                    background: #eff6ff;
+                    color: #1e40af;
+                    line-height: 1.45;
+                }
+
+                .operation-pending-receipt.fusion {
+                    border-color: #fed7aa;
+                    border-left-color: #d97706;
+                    background: #fff7ed;
+                    color: #9a3412;
+                }
+
+                .operation-pending-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: rgba(37, 99, 235, 0.12);
+                    color: inherit;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .operation-pending-receipt.fusion span {
+                    background: #fef3c7;
+                }
+
+                .operation-pending-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .operation-pending-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+	                .baseline-receipt {
+	                    display: grid;
                     grid-template-columns: auto 1fr;
                     gap: 4px 8px;
                     align-items: start;
@@ -2819,6 +3202,38 @@ const PromptConfig: React.FC = () => {
 
                 .source-toggle:has(input:disabled) {
                     opacity: 0.55;
+                }
+
+                .user-context-source-draft-receipt {
+                    display: grid;
+                    gap: 4px;
+                    margin: -8px 0 16px;
+                    padding: 10px 12px;
+                    border: 1px solid #fde68a;
+                    border-radius: 6px;
+                    background: #fffbeb;
+                    color: #92400e;
+                }
+
+                .user-context-source-draft-receipt.enable-pending {
+                    border-color: #bae6fd;
+                    background: #f0f9ff;
+                    color: #075985;
+                }
+
+                .user-context-source-draft-receipt span {
+                    font-size: 11px;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                }
+
+                .user-context-source-draft-receipt strong {
+                    font-size: 13px;
+                }
+
+                .user-context-source-draft-receipt small {
+                    color: inherit;
+                    line-height: 1.5;
                 }
 
                 .config-summary-strip {
@@ -3708,6 +4123,18 @@ const PromptConfig: React.FC = () => {
                 .history-item .history-change {
                     color: #475569;
                     font-weight: 500;
+                }
+
+                .history-item .history-restore-impact {
+                    display: block;
+                    padding: 6px 8px;
+                    border: 1px solid #dbeafe;
+                    border-radius: 6px;
+                    background: #eff6ff;
+                    color: #1e3a8a;
+                    font-size: 11px;
+                    line-height: 1.45;
+                    overflow-wrap: anywhere;
                 }
 
                 .history-item button {

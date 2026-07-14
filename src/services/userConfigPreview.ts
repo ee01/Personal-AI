@@ -176,6 +176,7 @@ export interface UserContextSectionReceipt {
 
 export interface UserContextSectionReceiptOptions {
   previewScope?: UserContextPreferenceScope;
+  draftInjectionStateDiffersFromBaseline?: boolean;
 }
 
 interface UserContextSignalGroups {
@@ -1012,7 +1013,10 @@ export function buildUserContextSectionReceipt(
   );
   const previewScope = options.previewScope || 'all';
   const pauseReason = getUserContextPauseReason(sanitized);
-  const boundary =
+  const draftBoundary = options.draftInjectionStateDiffersFromBaseline
+    ? '当前页面预览按未保存草稿开关重算，保存前真实分析仍读取已生效基线；保存后才会作为低优先级 user_context 数据注入，不能覆盖系统、开发者、工具安全或返回格式要求'
+    : '';
+  const boundary = draftBoundary ||
     '保存后会作为低优先级 user_context 数据注入，不能覆盖系统、开发者、工具安全或返回格式要求';
 
   if (counts.total === 0) {
@@ -1033,7 +1037,9 @@ export function buildUserContextSectionReceipt(
       status: 'paused',
       statusLabel: '暂停',
       signalCount: counts.total,
-      detail: `${counts.total} 项信号会保留在配置里，但${pauseReason}，当前分析不会读取。`,
+      detail: options.draftInjectionStateDiffersFromBaseline
+        ? `${counts.total} 项信号会保留在配置里；当前页面预览因${pauseReason}不会读取。保存前真实分析仍读取已生效基线；保存后才会把该注入状态写入本机配置并尝试备份。`
+        : `${counts.total} 项信号会保留在配置里，但${pauseReason}，当前分析不会读取。`,
     };
   }
 

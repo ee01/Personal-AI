@@ -339,8 +339,14 @@ async function main() {
       const revealLinkButton = fallback?.querySelector(
         '[data-pai-ringcentral-native-join-reveal-link]',
       );
+      const defaultPreferenceButton = fallback?.querySelector(
+        '[data-pai-ringcentral-native-join-prefer-browser]',
+      );
       const handoffReceipt = fallback?.querySelector(
         '[data-pai-ringcentral-native-join-handoff-receipt]',
+      );
+      const defaultReceipt = fallback?.querySelector(
+        '[data-pai-ringcentral-native-join-default-receipt]',
       );
       const meetingIdValue = fallback?.querySelector(
         '[data-pai-ringcentral-native-join-meeting-id-value]',
@@ -366,19 +372,41 @@ async function main() {
         fallbackLabel: fallback?.getAttribute('aria-label') || '',
         fallbackStyle: fallback?.getAttribute('style') || '',
         browserTag: browserLink?.tagName || '',
+        browserLabel: browserLink?.getAttribute('aria-label') || '',
+        browserTitle: browserLink?.getAttribute('title') || '',
         copyTag: copyButton?.tagName || '',
+        copyLabel: copyButton?.getAttribute('aria-label') || '',
+        copyTitle: copyButton?.getAttribute('title') || '',
         closeTag: closeButton?.tagName || '',
         closeLabel: closeButton?.getAttribute('aria-label') || '',
+        closeTitle: closeButton?.getAttribute('title') || '',
         visibleBrowserUrl: visibleBrowserLink?.textContent || '',
         linkPrivacyText: linkPrivacy?.textContent || '',
         revealLinkButtonText: revealLinkButton?.textContent || '',
+        revealLinkButtonLabel:
+          revealLinkButton?.getAttribute('aria-label') || '',
+        revealLinkButtonTitle: revealLinkButton?.getAttribute('title') || '',
         handoffReceiptText: handoffReceipt?.textContent || '',
+        defaultReceiptText: defaultReceipt?.textContent || '',
+        defaultReceiptDisplay: defaultReceipt
+          ? getComputedStyle(defaultReceipt).display
+          : '',
+        defaultPreferenceLabel:
+          defaultPreferenceButton?.getAttribute('aria-label') || '',
+        defaultPreferenceTitle:
+          defaultPreferenceButton?.getAttribute('title') || '',
         meetingIdText: meetingIdValue?.textContent || '',
         meetingIdNoteText: meetingIdNote?.textContent || '',
         copyMeetingIdButtonText: copyMeetingIdButton?.textContent || '',
+        copyMeetingIdLabel:
+          copyMeetingIdButton?.getAttribute('aria-label') || '',
+        copyMeetingIdTitle: copyMeetingIdButton?.getAttribute('title') || '',
         passcodeValueText: passcodeValue?.textContent || '',
         passcodeNoteText: passcodeNote?.textContent || '',
         copyPasscodeButtonText: copyPasscodeButton?.textContent || '',
+        copyPasscodeLabel:
+          copyPasscodeButton?.getAttribute('aria-label') || '',
+        copyPasscodeTitle: copyPasscodeButton?.getAttribute('title') || '',
         browserUrl:
           browserLink?.getAttribute(
             'data-pai-ringcentral-native-join-browser-url',
@@ -440,13 +468,42 @@ async function main() {
       'Browser fallback action should be a button so it does not open a second default link',
     );
     assert(
+      result.browserLabel.includes('new browser window') &&
+        result.browserLabel.includes('including hidden passcode/details') &&
+        result.browserLabel.includes('cannot confirm the new window joined') &&
+        result.browserLabel.includes('does not retry the app') &&
+        result.browserTitle === result.browserLabel,
+      `Browser fallback button should expose its action boundary for focus and hover users: ${JSON.stringify(
+        result,
+      )}`,
+    );
+    assert(
       result.copyTag === 'BUTTON',
       'Copy fallback action should be a button so it remains an explicit user action',
     );
     assert(
+      result.copyLabel.includes('full RingCentral browser meeting link') &&
+        result.copyLabel.includes('including hidden passcode/details') &&
+        result.copyLabel.includes('does not join the meeting') &&
+        result.copyLabel.includes('change the default join path') &&
+        result.copyTitle === result.copyLabel,
+      `Copy link button should expose its no-join/no-default-change boundary: ${JSON.stringify(
+        result,
+      )}`,
+    );
+    assert(
       result.closeTag === 'BUTTON' &&
-        result.closeLabel === 'Close RingCentral app handoff popup',
-      'Native join fallback should use a top-right close button instead of a bottom Dismiss action',
+        result.closeLabel.includes('Hide this RingCentral recovery panel') &&
+        result.closeLabel.includes('compact Restore recovery strip') &&
+        result.closeLabel.includes('does not confirm joining') &&
+        result.closeLabel.includes('retry the app') &&
+        result.closeLabel.includes('open the browser fallback') &&
+        result.closeLabel.includes('copy meeting material') &&
+        result.closeLabel.includes('default join path') &&
+        result.closeTitle === result.closeLabel,
+      `Native join fallback close control should expose the hidden-only boundary: ${JSON.stringify(
+        result,
+      )}`,
     );
     assert(
       result.browserUrl ===
@@ -461,6 +518,16 @@ async function main() {
     assert(
       result.linkPrivacyText.includes('Passcode and extra URL details') &&
         result.revealLinkButtonText.includes('Show full link') &&
+        result.revealLinkButtonLabel.includes(
+          'Show the full RingCentral browser meeting link',
+        ) &&
+        result.revealLinkButtonLabel.includes(
+          'including hidden passcode/details',
+        ) &&
+        result.revealLinkButtonLabel.includes('does not copy the link') &&
+        result.revealLinkButtonLabel.includes('join the meeting') &&
+        result.revealLinkButtonLabel.includes('default join path') &&
+        result.revealLinkButtonTitle === result.revealLinkButtonLabel &&
         !result.fallbackText.includes('passcode=abc'),
       `Native join fallback should disclose hidden URL details without exposing the passcode by default: ${JSON.stringify(
         result,
@@ -473,15 +540,34 @@ async function main() {
         result.meetingIdNoteText.includes('Join in browser') &&
         result.meetingIdNoteText.includes('Copy link') &&
         result.meetingIdNoteText.includes('Show full link') &&
-        result.copyMeetingIdButtonText.includes('Copy ID'),
+        result.copyMeetingIdButtonText.includes('Copy ID') &&
+        result.copyMeetingIdLabel.includes('Copy only the RingCentral Meeting ID') &&
+        result.copyMeetingIdLabel.includes('manual app entry') &&
+        result.copyMeetingIdLabel.includes('does not join the meeting') &&
+        result.copyMeetingIdLabel.includes('copy passcode/details') &&
+        result.copyMeetingIdLabel.includes('copy the full browser link') &&
+        result.copyMeetingIdLabel.includes('retry the app') &&
+        result.copyMeetingIdLabel.includes('default join path') &&
+        result.copyMeetingIdTitle === result.copyMeetingIdLabel,
       `Native join fallback should expose a copyable meeting ID for manual app join: ${JSON.stringify(
         result,
       )}`,
     );
     assert(
-      result.passcodeValueText === 'Hidden until copied' &&
+        result.passcodeValueText === 'Hidden until copied' &&
         result.passcodeNoteText.includes('manual app entry') &&
         result.copyPasscodeButtonText.includes('Copy passcode') &&
+        result.copyPasscodeLabel.includes(
+          'Copy only the RingCentral meeting passcode',
+        ) &&
+        result.copyPasscodeLabel.includes('manual app entry') &&
+        result.copyPasscodeLabel.includes('value stays hidden') &&
+        result.copyPasscodeLabel.includes('does not join the meeting') &&
+        result.copyPasscodeLabel.includes('retry the app') &&
+        result.copyPasscodeLabel.includes('copy the full browser link') &&
+        result.copyPasscodeLabel.includes('copy the Meeting ID') &&
+        result.copyPasscodeLabel.includes('default join path') &&
+        result.copyPasscodeTitle === result.copyPasscodeLabel &&
         !result.fallbackText.includes('passcode=abc'),
       `Native join fallback should expose passcode recovery without revealing it by default: ${JSON.stringify(
         result,
@@ -501,8 +587,26 @@ async function main() {
 
     assert(
       result.fallbackText.includes('Prefer browser next time?') &&
-        result.fallbackText.includes('Use browser by default'),
-      'Native join fallback should include a subtle browser-default hint',
+        result.fallbackText.includes('Use browser by default') &&
+        result.defaultPreferenceLabel.includes(
+          'Save browser as the future default',
+        ) &&
+        result.defaultPreferenceLabel.includes('does not join the current meeting') &&
+        result.defaultPreferenceLabel.includes('retry the app') &&
+        result.defaultPreferenceLabel.includes('open a browser window') &&
+        result.defaultPreferenceLabel.includes('copy meeting material') &&
+        result.defaultPreferenceLabel.includes('current recovery controls') &&
+        result.defaultPreferenceTitle === result.defaultPreferenceLabel,
+      `Native join fallback should include a future-default control boundary: ${JSON.stringify(
+        result,
+      )}`,
+    );
+    assert(
+      result.defaultReceiptText.includes('Default path receipt') &&
+        result.defaultReceiptDisplay === 'none',
+      `Default path receipt should stay hidden until a preference save is attempted: ${JSON.stringify(
+        result,
+      )}`,
     );
     await page.waitForTimeout(5300);
     const handoffRecoveryState = await page.evaluate(() => ({
@@ -520,6 +624,14 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-handoff-receipt]',
         )?.textContent || '',
+      retryAppLabel:
+        document
+          .querySelector('button[title^="Try opening this validated RingCentral app link again"]')
+          ?.getAttribute('aria-label') || '',
+      retryAppTitle:
+        document
+          .querySelector('button[title^="Try opening this validated RingCentral app link again"]')
+          ?.getAttribute('title') || '',
       launchLinkStillPresent: Boolean(
         document.querySelector('#pai-ringcentral-native-join-launch-link'),
       ),
@@ -554,9 +666,25 @@ async function main() {
         handoffRecoveryState,
       )}`,
     );
+    assert(
+      handoffRecoveryState.retryAppLabel.includes(
+        'validated RingCentral app link again',
+      ) &&
+        handoffRecoveryState.retryAppLabel.includes(
+          'does not open the browser fallback',
+        ) &&
+        handoffRecoveryState.retryAppLabel.includes(
+          'cannot confirm whether you joined',
+        ) &&
+        handoffRecoveryState.retryAppTitle ===
+          handoffRecoveryState.retryAppLabel,
+      `Try app again should expose a retry-only action boundary: ${JSON.stringify(
+        handoffRecoveryState,
+      )}`,
+    );
 
     await page.click(
-      'button[aria-label="Try opening this RingCentral meeting in the app again"]',
+      'button[title^="Try opening this validated RingCentral app link again"]',
     );
     await page.waitForFunction(
       () => (window.__paiNativeLaunches || []).length >= 2,
@@ -678,6 +806,14 @@ async function main() {
       revealButtonText:
         document.querySelector('[data-pai-ringcentral-native-join-reveal-link]')
           ?.textContent || '',
+      revealButtonLabel:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-reveal-link]')
+          ?.getAttribute('aria-label') || '',
+      revealButtonTitle:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-reveal-link]')
+          ?.getAttribute('title') || '',
       status:
         document.querySelector(
           '[data-pai-ringcentral-native-join-status]',
@@ -688,6 +824,16 @@ async function main() {
         'https://v.ringcentral.com/conf/on/123456?passcode=abc' &&
         revealedLinkState.privacyText.includes('Full link is visible') &&
         revealedLinkState.revealButtonText.includes('Hide full link') &&
+        revealedLinkState.revealButtonLabel.includes(
+          'Hide the full RingCentral browser meeting link',
+        ) &&
+        revealedLinkState.revealButtonLabel.includes('safer display URL') &&
+        revealedLinkState.revealButtonLabel.includes('does not delete the link') &&
+        revealedLinkState.revealButtonLabel.includes('copy meeting material') &&
+        revealedLinkState.revealButtonLabel.includes('retry the app') &&
+        revealedLinkState.revealButtonLabel.includes('default join path') &&
+        revealedLinkState.revealButtonTitle ===
+          revealedLinkState.revealButtonLabel &&
         revealedLinkState.status.includes('Full browser link is visible'),
       `Explicit reveal should show the full browser fallback link and warn about screen sharing: ${JSON.stringify(
         revealedLinkState,
@@ -820,6 +966,14 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-prefer-browser]',
         )?.textContent || '',
+      defaultButtonLabel:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('aria-label') || '',
+      defaultButtonTitle:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('title') || '',
       defaultPromptText:
         document
           .querySelector('#pai-ringcentral-native-join-fallback')
@@ -828,6 +982,16 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-handoff-receipt]',
         )?.textContent || '',
+      defaultReceiptText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-default-receipt]',
+        )?.textContent || '',
+      defaultReceiptDisplay:
+        getComputedStyle(
+          document.querySelector(
+            '[data-pai-ringcentral-native-join-default-receipt]',
+          ),
+        )?.display || '',
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
@@ -863,10 +1027,53 @@ async function main() {
       )}`,
     );
     assert(
+      browserDefaultState.defaultReceiptDisplay === 'block' &&
+        browserDefaultState.defaultReceiptText.includes(
+          'Default path receipt',
+        ) &&
+        browserDefaultState.defaultReceiptText.includes(
+          'Saved future default: use the browser first',
+        ) &&
+        browserDefaultState.defaultReceiptText.includes(
+          'did not join this meeting',
+        ) &&
+        browserDefaultState.defaultReceiptText.includes('retry the app') &&
+        browserDefaultState.defaultReceiptText.includes(
+          'open a browser window',
+        ) &&
+        browserDefaultState.defaultReceiptText.includes(
+          'copy meeting material',
+        ) &&
+        browserDefaultState.defaultReceiptText.includes(
+          'current recovery controls',
+        ),
+      `Saving browser default should show a separate future-preference receipt: ${JSON.stringify(
+        browserDefaultState,
+      )}`,
+    );
+    assert(
       browserDefaultState.defaultButtonText.includes('Use app by default') &&
         browserDefaultState.defaultPromptText.includes(
           'Prefer app next time?',
-        ),
+        ) &&
+        browserDefaultState.defaultButtonLabel.includes(
+          'Save the RingCentral app as the future default',
+        ) &&
+        browserDefaultState.defaultButtonLabel.includes(
+          'does not join the current meeting',
+        ) &&
+        browserDefaultState.defaultButtonLabel.includes('retry the app') &&
+        browserDefaultState.defaultButtonLabel.includes(
+          'open a browser window',
+        ) &&
+        browserDefaultState.defaultButtonLabel.includes(
+          'copy meeting material',
+        ) &&
+        browserDefaultState.defaultButtonLabel.includes(
+          'current recovery controls',
+        ) &&
+        browserDefaultState.defaultButtonTitle ===
+          browserDefaultState.defaultButtonLabel,
       `Saving browser default should expose an in-panel app-default undo: ${JSON.stringify(
         browserDefaultState,
       )}`,
@@ -900,6 +1107,14 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-prefer-browser]',
         )?.textContent || '',
+      defaultButtonLabel:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('aria-label') || '',
+      defaultButtonTitle:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('title') || '',
       defaultPromptText:
         document
           .querySelector('#pai-ringcentral-native-join-fallback')
@@ -908,6 +1123,16 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-handoff-receipt]',
         )?.textContent || '',
+      defaultReceiptText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-default-receipt]',
+        )?.textContent || '',
+      defaultReceiptDisplay:
+        getComputedStyle(
+          document.querySelector(
+            '[data-pai-ringcentral-native-join-default-receipt]',
+          ),
+        )?.display || '',
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
@@ -919,7 +1144,21 @@ async function main() {
     assert(
       appDefaultState.status.includes('try the app first') &&
         appDefaultState.defaultButtonText.includes('Use browser by default') &&
-        appDefaultState.defaultPromptText.includes('Prefer browser next time?'),
+        appDefaultState.defaultPromptText.includes('Prefer browser next time?') &&
+        appDefaultState.defaultButtonLabel.includes(
+          'Save browser as the future default',
+        ) &&
+        appDefaultState.defaultButtonLabel.includes(
+          'does not join the current meeting',
+        ) &&
+        appDefaultState.defaultButtonLabel.includes('retry the app') &&
+        appDefaultState.defaultButtonLabel.includes('open a browser window') &&
+        appDefaultState.defaultButtonLabel.includes('copy meeting material') &&
+        appDefaultState.defaultButtonLabel.includes(
+          'current recovery controls',
+        ) &&
+        appDefaultState.defaultButtonTitle ===
+          appDefaultState.defaultButtonLabel,
       `App-default undo should restore the browser-default action: ${JSON.stringify(
         appDefaultState,
       )}`,
@@ -932,9 +1171,28 @@ async function main() {
           'try the RingCentral app first',
         ) &&
         appDefaultState.handoffReceiptText.includes(
-          'This meeting still has the browser recovery link available',
-        ),
+        'This meeting still has the browser recovery link available',
+      ),
       `App-default undo should update the handoff receipt with the restored default: ${JSON.stringify(
+        appDefaultState,
+      )}`,
+    );
+    assert(
+      appDefaultState.defaultReceiptDisplay === 'block' &&
+        appDefaultState.defaultReceiptText.includes(
+          'Saved future default: try the RingCentral app first',
+        ) &&
+        appDefaultState.defaultReceiptText.includes(
+          'did not join this meeting',
+        ) &&
+        appDefaultState.defaultReceiptText.includes('retry the app') &&
+        appDefaultState.defaultReceiptText.includes(
+          'open a browser window',
+        ) &&
+        appDefaultState.defaultReceiptText.includes(
+          'copy meeting material',
+        ),
+      `App-default undo should keep the separate future-preference receipt current: ${JSON.stringify(
         appDefaultState,
       )}`,
     );
@@ -971,10 +1229,34 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-prefer-browser]',
         )?.textContent || '',
+      defaultButtonLabel:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('aria-label') || '',
+      defaultButtonTitle:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-prefer-browser]')
+          ?.getAttribute('title') || '',
       handoffReceiptText:
         document.querySelector(
           '[data-pai-ringcentral-native-join-handoff-receipt]',
         )?.textContent || '',
+      defaultReceiptText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-default-receipt]',
+        )?.textContent || '',
+      defaultReceiptDisplay:
+        getComputedStyle(
+          document.querySelector(
+            '[data-pai-ringcentral-native-join-default-receipt]',
+          ),
+        )?.display || '',
+      defaultReceiptBackground:
+        getComputedStyle(
+          document.querySelector(
+            '[data-pai-ringcentral-native-join-default-receipt]',
+          ),
+        )?.backgroundColor || '',
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
@@ -989,7 +1271,16 @@ async function main() {
       failedDefaultSaveState.fallbackStillVisible &&
         failedDefaultSaveState.defaultButtonText.includes(
           'Use browser by default',
-        ),
+        ) &&
+        failedDefaultSaveState.defaultButtonLabel.includes(
+          'Save browser as the future default',
+        ) &&
+        failedDefaultSaveState.defaultButtonLabel.includes(
+          'does not join the current meeting',
+        ) &&
+        failedDefaultSaveState.defaultButtonLabel.includes('retry the app') &&
+        failedDefaultSaveState.defaultButtonTitle ===
+          failedDefaultSaveState.defaultButtonLabel,
       `Failed default save should keep the current recovery panel and undo action stable: ${JSON.stringify(
         failedDefaultSaveState,
       )}`,
@@ -1018,6 +1309,32 @@ async function main() {
           'browser recovery controls remain available',
         ),
       `Failed default save should expose a durable no-effect receipt: ${JSON.stringify(
+        failedDefaultSaveState,
+      )}`,
+    );
+    assert(
+      failedDefaultSaveState.defaultReceiptDisplay === 'block' &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'Default path was not saved',
+        ) &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'Future RingCentral joins keep the previous preference',
+        ) &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'did not join this meeting',
+        ) &&
+        failedDefaultSaveState.defaultReceiptText.includes('retry the app') &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'open a browser window',
+        ) &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'copy meeting material',
+        ) &&
+        failedDefaultSaveState.defaultReceiptText.includes(
+          'current recovery controls',
+        ) &&
+        failedDefaultSaveState.defaultReceiptBackground === 'rgb(254, 242, 242)',
+      `Failed default save should show a separate failed default-path receipt: ${JSON.stringify(
         failedDefaultSaveState,
       )}`,
     );
@@ -1052,6 +1369,26 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-restore-recovery]',
         )?.textContent || '',
+      restoreButtonLabel:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-restore-recovery]')
+          ?.getAttribute('aria-label') || '',
+      restoreButtonTitle:
+        document
+          .querySelector('[data-pai-ringcentral-native-join-restore-recovery]')
+          ?.getAttribute('title') || '',
+      closeButtonLabel:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-dismissed-recovery [data-pai-ringcentral-native-join-close]',
+          )
+          ?.getAttribute('aria-label') || '',
+      closeButtonTitle:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-dismissed-recovery [data-pai-ringcentral-native-join-close]',
+          )
+          ?.getAttribute('title') || '',
       nativeLaunchCount: (window.__paiNativeLaunches || []).length,
     }));
     assert(
@@ -1064,6 +1401,41 @@ async function main() {
           'default path is unchanged',
         ) &&
         dismissedRecoveryState.restoreButtonText.includes('Restore recovery') &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'Restore browser recovery controls',
+        ) &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'does not retry the app',
+        ) &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'open the browser fallback',
+        ) &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'copy meeting material',
+        ) &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'default join path',
+        ) &&
+        dismissedRecoveryState.restoreButtonLabel.includes(
+          'confirm that you joined',
+        ) &&
+        dismissedRecoveryState.restoreButtonTitle ===
+          dismissedRecoveryState.restoreButtonLabel &&
+        dismissedRecoveryState.closeButtonLabel.includes(
+          'Close this compact RingCentral hidden-handoff strip',
+        ) &&
+        dismissedRecoveryState.closeButtonLabel.includes(
+          'does not confirm joining',
+        ) &&
+        dismissedRecoveryState.closeButtonLabel.includes(
+          'restore the recovery panel',
+        ) &&
+        dismissedRecoveryState.closeButtonLabel.includes('retry the app') &&
+        dismissedRecoveryState.closeButtonLabel.includes(
+          'open the browser fallback',
+        ) &&
+        dismissedRecoveryState.closeButtonTitle ===
+          dismissedRecoveryState.closeButtonLabel &&
         dismissedRecoveryState.nativeLaunchCount === nativeLaunchCountBeforeClose,
       `Closing the handoff panel should leave a compact restore path without launching again: ${JSON.stringify(
         dismissedRecoveryState,
@@ -1148,6 +1520,38 @@ async function main() {
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
+      browserRequestedText:
+        document.querySelector('#pai-ringcentral-native-join-browser-requested')
+          ?.textContent || '',
+      restoreButtonText:
+        document.querySelector(
+          '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-restore-recovery]',
+        )?.textContent || '',
+      restoreButtonLabel:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-restore-recovery]',
+          )
+          ?.getAttribute('aria-label') || '',
+      restoreButtonTitle:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-restore-recovery]',
+          )
+          ?.getAttribute('title') || '',
+      closeButtonLabel:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-close]',
+          )
+          ?.getAttribute('aria-label') || '',
+      closeButtonTitle:
+        document
+          .querySelector(
+            '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-close]',
+          )
+          ?.getAttribute('title') || '',
+      nativeLaunchCount: (window.__paiNativeLaunches || []).length,
     }));
     const observedBrowserUrls = browserFallback.openedUrls.map(
       (item) => item.assignedUrl || item.url,
@@ -1175,6 +1579,100 @@ async function main() {
       !browserFallback.fallbackStillVisible,
       `Join in browser should close the native handoff fallback panel: ${JSON.stringify(
         browserFallback,
+      )}`,
+    );
+    assert(
+      browserFallback.browserRequestedText.includes(
+        'Browser join requested',
+      ) &&
+        browserFallback.browserRequestedText.includes(
+          'cannot confirm you joined',
+        ) &&
+        browserFallback.browserRequestedText.includes('app was not retried') &&
+        browserFallback.browserRequestedText.includes(
+          'default path is unchanged',
+        ) &&
+        browserFallback.restoreButtonText.includes('Restore recovery') &&
+        browserFallback.restoreButtonLabel.includes(
+          'Restore RingCentral recovery after the browser join request',
+        ) &&
+        browserFallback.restoreButtonLabel.includes(
+          'does not open another browser window',
+        ) &&
+        browserFallback.restoreButtonLabel.includes('retry the app') &&
+        browserFallback.restoreButtonLabel.includes('copy meeting material') &&
+        browserFallback.restoreButtonLabel.includes('default join path') &&
+        browserFallback.restoreButtonLabel.includes(
+          'confirm the previous browser join',
+        ) &&
+        browserFallback.restoreButtonTitle ===
+          browserFallback.restoreButtonLabel &&
+        browserFallback.closeButtonLabel.includes(
+          'Close this compact RingCentral browser-request receipt',
+        ) &&
+        browserFallback.closeButtonLabel.includes('does not confirm joining') &&
+        browserFallback.closeButtonLabel.includes('open another browser window') &&
+        browserFallback.closeButtonLabel.includes('copy meeting material') &&
+        browserFallback.closeButtonTitle === browserFallback.closeButtonLabel,
+      `Join in browser should leave a compact no-confirmation receipt on the source page: ${JSON.stringify(
+        browserFallback,
+      )}`,
+    );
+    await page.click(
+      '#pai-ringcentral-native-join-browser-requested [data-pai-ringcentral-native-join-restore-recovery]',
+    );
+    await page.waitForSelector('#pai-ringcentral-native-join-fallback');
+    const browserRequestRestoredState = await page.evaluate(() => ({
+      browserRequestedVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-browser-requested'),
+      ),
+      fallbackText:
+        document.querySelector('#pai-ringcentral-native-join-fallback')
+          ?.textContent || '',
+      title:
+        document.querySelector('[data-pai-ringcentral-native-join-title]')
+          ?.textContent || '',
+      status:
+        document.querySelector('[data-pai-ringcentral-native-join-status]')
+          ?.textContent || '',
+      handoffReceiptText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-handoff-receipt]',
+        )?.textContent || '',
+      openedUrlCount: (window.__paiOpenedUrls || []).length,
+      nativeLaunchCount: (window.__paiNativeLaunches || []).length,
+    }));
+    assert(
+      !browserRequestRestoredState.browserRequestedVisible &&
+        browserRequestRestoredState.title.includes(
+          'RingCentral recovery restored',
+        ) &&
+        browserRequestRestoredState.fallbackText.includes(
+          'No new app attempt or browser window started',
+        ) &&
+        browserRequestRestoredState.fallbackText.includes('Try app again') &&
+        browserRequestRestoredState.status.includes(
+          'Recovery restored after browser request',
+        ) &&
+        browserRequestRestoredState.status.includes('No join was confirmed') &&
+        browserRequestRestoredState.handoffReceiptText.includes(
+          'after a browser join request',
+        ) &&
+        browserRequestRestoredState.handoffReceiptText.includes(
+          'did not open another browser window',
+        ) &&
+        browserRequestRestoredState.handoffReceiptText.includes(
+          'retry the app',
+        ) &&
+        browserRequestRestoredState.handoffReceiptText.includes(
+          'earlier browser window request remains unconfirmed',
+        ) &&
+        browserRequestRestoredState.openedUrlCount ===
+          browserFallback.openedUrls.length &&
+        browserRequestRestoredState.nativeLaunchCount ===
+          browserFallback.nativeLaunchCount,
+      `Restoring after browser join request should keep the source-specific no-effect receipt: ${JSON.stringify(
+        browserRequestRestoredState,
       )}`,
     );
 

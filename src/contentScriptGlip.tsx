@@ -3003,6 +3003,25 @@ function injectFollowThreadStyles() {
       line-height: 1;
     }
 
+    .glip-ai-marker-cache-flag {
+      display: inline-flex;
+      align-items: center;
+      height: 14px;
+      padding: 0 4px;
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.24);
+      color: #fff7ed;
+      font-size: 9px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .glip-ai-marker-badge.cache-stale,
+    .glip-ai-marker-badge.cache-unrefreshed {
+      box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.42), 0 2px 4px rgba(14, 165, 233, 0.3);
+    }
+
     .glip-ai-marker-badge.outreach-initial-ask {
       background: #0ea5e9;
     }
@@ -3534,6 +3553,30 @@ function getGlipAiMarkerNextStepSummary(
   ).join('；');
 }
 
+function getGlipAiMarkerBadgeScopeSummary(
+  markers: GlipMessageMarkerRecord[],
+): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const labels = markers
+    .map((marker) => getGlipAiMarkerDisplayLabel(marker).trim())
+    .filter(Boolean);
+  const primaryLabel = labels[0] || (english ? 'this marker' : '这条标注');
+
+  if (labels.length <= 1) {
+    return english
+      ? `Badge shows ${primaryLabel} only; there are no folded markers.`
+      : `角标只显示 ${primaryLabel}，没有折叠项。`;
+  }
+
+  const foldedLabels = labels.slice(1);
+  const foldedText = foldedLabels.join(english ? ', ' : '、');
+  return english
+    ? `Badge shows ${primaryLabel} first and folds ${foldedLabels.length} other ${
+        foldedLabels.length === 1 ? 'marker' : 'markers'
+      } into +${foldedLabels.length}: ${foldedText}. This is only the local marker display order; folded markers are not complete or dismissed.`
+    : `角标优先显示 ${primaryLabel}，另有 ${foldedLabels.length} 项折叠在 +${foldedLabels.length}：${foldedText}。这只是本地标注展示顺序，不代表折叠项已经完成或被忽略。`;
+}
+
 function getGlipAiMarkerSourceLabel(source: GlipMessageMarkerRecord['source']): string {
   const english = getContentScriptUiLanguage() === 'en-US';
   switch (source) {
@@ -3559,6 +3602,30 @@ function normalizeGlipAiMarkerCacheUpdatedAt(updatedAt?: number): number | undef
       : timestamp;
   const date = new Date(timestampMs);
   return Number.isNaN(date.getTime()) ? undefined : timestampMs;
+}
+
+function getGlipAiMarkerCacheState(
+  updatedAt?: number,
+): 'fresh' | 'stale' | 'unrefreshed' {
+  const timestampMs = normalizeGlipAiMarkerCacheUpdatedAt(updatedAt);
+  if (!timestampMs) {
+    return 'unrefreshed';
+  }
+  return Date.now() - timestampMs > GLIP_AI_MARKER_CACHE_STALE_MS
+    ? 'stale'
+    : 'fresh';
+}
+
+function getGlipAiMarkerCacheFlagLabel(updatedAt?: number): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const state = getGlipAiMarkerCacheState(updatedAt);
+  if (state === 'stale') {
+    return english ? 'old' : '旧';
+  }
+  if (state === 'unrefreshed') {
+    return english ? 'sync?' : '待刷';
+  }
+  return '';
 }
 
 function formatGlipAiMarkerCacheUpdatedAt(updatedAt?: number): string {
@@ -3620,9 +3687,67 @@ function getGlipAiMarkerAriaLabel(
   const cacheBoundaryNotice = getGlipAiMarkerCacheBoundaryNotice(cacheUpdatedAt);
   const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
   const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+  const badgeScopeSummary = getGlipAiMarkerBadgeScopeSummary(markers);
   return english
-    ? `${markerSummary}; Status meaning: ${statusBoundarySummary}; Next step: ${nextStepSummary}; Marker source: ${sourceSummary}; Cache refreshed: ${cacheSummary}; ${cacheBoundaryNotice}`
-    : `${markerSummary}；状态口径：${statusBoundarySummary}；下一步：${nextStepSummary}；标注来源：${sourceSummary}；缓存刷新：${cacheSummary}；${cacheBoundaryNotice}`;
+    ? `${markerSummary}; Badge scope: ${badgeScopeSummary}; Status meaning: ${statusBoundarySummary}; Next step: ${nextStepSummary}; Marker source: ${sourceSummary}; Cache refreshed: ${cacheSummary}; ${cacheBoundaryNotice}`
+    : `${markerSummary}；角标显示：${badgeScopeSummary}；状态口径：${statusBoundarySummary}；下一步：${nextStepSummary}；标注来源：${sourceSummary}；缓存刷新：${cacheSummary}；${cacheBoundaryNotice}`;
+}
+
+function getGlipAiMarkerBoundarySummary(
+  markers: GlipMessageMarkerRecord[],
+  cacheUpdatedAt?: number,
+): string {
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const sourceSummary = getGlipAiMarkerSourceSummary(markers);
+  const cacheSummary = formatGlipAiMarkerCacheUpdatedAt(cacheUpdatedAt);
+  const cacheBoundaryNotice = getGlipAiMarkerCacheBoundaryNotice(cacheUpdatedAt);
+  const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
+  const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+  const badgeScopeSummary = getGlipAiMarkerBadgeScopeSummary(markers);
+  return english
+    ? `Badge scope: ${badgeScopeSummary}; Status meaning: ${statusBoundarySummary}; Next step: ${nextStepSummary}; Marker source: ${sourceSummary}; Cache refreshed: ${cacheSummary}; ${cacheBoundaryNotice}`
+    : `角标显示：${badgeScopeSummary}；状态口径：${statusBoundarySummary}；下一步：${nextStepSummary}；标注来源：${sourceSummary}；缓存刷新：${cacheSummary}；${cacheBoundaryNotice}`;
+}
+
+function appendGlipAiMarkerBoundarySummary(
+  baseLabel: string,
+  markers: GlipMessageMarkerRecord[],
+  cacheUpdatedAt?: number,
+): string {
+  const separator = getContentScriptUiLanguage() === 'en-US' ? '; ' : '；';
+  return `${baseLabel}${separator}${getGlipAiMarkerBoundarySummary(
+    markers,
+    cacheUpdatedAt,
+  )}`;
+}
+
+function renderGlipAiMarkerReceiptHtml(
+  markers: GlipMessageMarkerRecord[],
+  cacheUpdatedAt?: number,
+): string {
+  const sourceSummary = getGlipAiMarkerSourceSummary(markers);
+  const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
+  const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+  const badgeScopeSummary = getGlipAiMarkerBadgeScopeSummary(markers);
+  const cacheUpdatedAtText = formatGlipAiMarkerCacheUpdatedAt(cacheUpdatedAt);
+  const cacheBoundaryNotice = getGlipAiMarkerCacheBoundaryNotice(cacheUpdatedAt);
+  const english = getContentScriptUiLanguage() === 'en-US';
+  const statusLabel = english ? 'Status meaning' : '状态口径';
+  const badgeScopeLabel = english ? 'Badge scope' : '角标显示';
+  const nextStepLabel = english ? 'Next step' : '下一步';
+  const sourceLabel = english ? 'Marker source' : '标注来源';
+  const cacheLabel = english ? 'Cache refreshed' : '缓存刷新';
+  const tooltipSeparator = english ? ': ' : '：';
+  return `
+    <div class="glip-ai-marker-tooltip-receipt follow-thread-marker-receipt">
+      <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-badge-scope">${escapeHtml(badgeScopeLabel)}${tooltipSeparator}${escapeHtml(badgeScopeSummary)}</div>
+      <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-status-boundary">${escapeHtml(statusLabel)}${tooltipSeparator}${escapeHtml(statusBoundarySummary)}</div>
+      <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-next-step">${escapeHtml(nextStepLabel)}${tooltipSeparator}${escapeHtml(nextStepSummary)}</div>
+      <div class="glip-ai-marker-tooltip-meta">${escapeHtml(sourceLabel)}${tooltipSeparator}${escapeHtml(sourceSummary)}</div>
+      <div class="glip-ai-marker-tooltip-meta">${escapeHtml(cacheLabel)}${tooltipSeparator}${escapeHtml(cacheUpdatedAtText)}</div>
+      <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-boundary">${escapeHtml(cacheBoundaryNotice)}</div>
+    </div>
+  `;
 }
 
 function getCurrentGlipChatId(): string {
@@ -4291,10 +4416,15 @@ async function decorateFollowThreadMessages() {
       eyeIcon.type = 'button';
       eyeIcon.className = 'follow-thread-eye-icon';
       eyeIcon.style.right = `${rightOffset}px`;
-      const followAriaLabel = `${ui('正在关注后续')}：${truncateText(
+      const followAriaBase = `${ui('正在关注后续')}：${truncateText(
         primaryMarker.tooltip || '',
         90,
       ) || timeText}`;
+      const followAriaLabel = appendGlipAiMarkerBoundarySummary(
+        followAriaBase,
+        markers,
+        markerCache?.updatedAt,
+      );
       eyeIcon.setAttribute('aria-label', followAriaLabel);
       eyeIcon.title = followAriaLabel;
       eyeIcon.innerHTML = `<span class="eye-emoji">👁</span> ${timeText}`;
@@ -4317,6 +4447,7 @@ async function decorateFollowThreadMessages() {
         <div class="tooltip-section tooltip-related-list">
           <div class="tooltip-section-label">${escapeHtml(ui('关联消息'))} (${relatedCount})</div>
         </div>
+        ${renderGlipAiMarkerReceiptHtml(markers, markerCache?.updatedAt)}
       `;
       card.appendChild(tooltip);
 
@@ -4340,10 +4471,15 @@ async function decorateFollowThreadMessages() {
       badge.style.right = `${rightOffset}px`;
       const relationType = String(primaryMarker.metadata?.relationType || '');
       badge.textContent = `${getRelationTypeIcon(relationType)} ${ui('关联')}`;
-      const relatedAriaLabel = `${ui('关注后续的关联消息')}：${truncateText(
+      const relatedAriaBase = `${ui('关注后续的关联消息')}：${truncateText(
         primaryMarker.tooltip || '',
         90,
       ) || ui('关联')}`;
+      const relatedAriaLabel = appendGlipAiMarkerBoundarySummary(
+        relatedAriaBase,
+        markers,
+        markerCache?.updatedAt,
+      );
       badge.setAttribute('aria-label', relatedAriaLabel);
       badge.title = relatedAriaLabel;
       card.appendChild(badge);
@@ -4363,6 +4499,7 @@ async function decorateFollowThreadMessages() {
           <div class="tooltip-section-label">${escapeHtml(ui('关联摘要'))}</div>
           <div class="tooltip-original-preview">${escapeHtml(truncateText(primaryMarker.tooltip || '', 80))}</div>
         </div>
+        ${renderGlipAiMarkerReceiptHtml(markers, markerCache?.updatedAt)}
       `;
       card.appendChild(tooltip);
 
@@ -4373,9 +4510,11 @@ async function decorateFollowThreadMessages() {
 
     card.classList.add('glip-ai-marker');
     const rightOffset = calculateTimeElementWidth(card);
+    const cacheState = getGlipAiMarkerCacheState(markerCache?.updatedAt);
+    const cacheFlagLabel = getGlipAiMarkerCacheFlagLabel(markerCache?.updatedAt);
     const badge = document.createElement('button');
     badge.type = 'button';
-    badge.className = `glip-ai-marker-badge ${primaryMarker.type.replace(/_/g, '-')}`;
+    badge.className = `glip-ai-marker-badge ${primaryMarker.type.replace(/_/g, '-')} cache-${cacheState}`;
     badge.style.right = `${rightOffset}px`;
     const markerAriaLabel = getGlipAiMarkerAriaLabel(
       markers,
@@ -4394,6 +4533,13 @@ async function decorateFollowThreadMessages() {
       count.textContent = `+${markers.length - 1}`;
       badge.appendChild(count);
     }
+    if (cacheFlagLabel) {
+      const cacheFlag = document.createElement('span');
+      cacheFlag.className = 'glip-ai-marker-cache-flag';
+      cacheFlag.setAttribute('aria-hidden', 'true');
+      cacheFlag.textContent = cacheFlagLabel;
+      badge.appendChild(cacheFlag);
+    }
     card.appendChild(badge);
 
     const tooltip = document.createElement('div');
@@ -4401,6 +4547,7 @@ async function decorateFollowThreadMessages() {
     const sourceSummary = getGlipAiMarkerSourceSummary(markers);
     const statusBoundarySummary = getGlipAiMarkerStatusBoundarySummary(markers);
     const nextStepSummary = getGlipAiMarkerNextStepSummary(markers);
+    const badgeScopeSummary = getGlipAiMarkerBadgeScopeSummary(markers);
     const cacheUpdatedAt = formatGlipAiMarkerCacheUpdatedAt(
       markerCache?.updatedAt,
     );
@@ -4410,6 +4557,7 @@ async function decorateFollowThreadMessages() {
     const english = getContentScriptUiLanguage() === 'en-US';
     const tooltipTitle = getGlipAiMarkerDisplayLabel(primaryMarker);
     const statusLabel = english ? 'Status meaning' : '状态口径';
+    const badgeScopeLabel = english ? 'Badge scope' : '角标显示';
     const nextStepLabel = english ? 'Next step' : '下一步';
     const sourceLabel = english ? 'Marker source' : '标注来源';
     const cacheLabel = english ? 'Cache refreshed' : '缓存刷新';
@@ -4423,6 +4571,7 @@ async function decorateFollowThreadMessages() {
         )
         .join('')}
       <div class="glip-ai-marker-tooltip-receipt">
+        <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-badge-scope">${escapeHtml(badgeScopeLabel)}${tooltipSeparator}${escapeHtml(badgeScopeSummary)}</div>
         <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-status-boundary">${escapeHtml(statusLabel)}${tooltipSeparator}${escapeHtml(statusBoundarySummary)}</div>
         <div class="glip-ai-marker-tooltip-meta glip-ai-marker-tooltip-next-step">${escapeHtml(nextStepLabel)}${tooltipSeparator}${escapeHtml(nextStepSummary)}</div>
         <div class="glip-ai-marker-tooltip-meta">${escapeHtml(sourceLabel)}${tooltipSeparator}${escapeHtml(sourceSummary)}</div>

@@ -14,6 +14,9 @@ export type UXTicketReference = {
   summary: string;
   source: string;
   keySource?: UXTicketKeySource;
+  keyRecoveryCandidateCount?: number;
+  keyRecoveryIgnoredCandidateCount?: number;
+  keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
 };
 
 export type JiraIssueKeyUrlCandidate = {
@@ -80,6 +83,9 @@ export type UXDesignItem = {
   designStatus?: string;
   uxTicketKey: string;
   uxTicketKeySource?: UXTicketKeySource;
+  keyRecoveryCandidateCount?: number;
+  keyRecoveryIgnoredCandidateCount?: number;
+  keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
   source: string;
   linkProvided: boolean;
   uxEpicKey?: string;
@@ -100,6 +106,17 @@ export type DesignUpdateReviewScope = {
   latestUpdatedAtSourceLabel?: string;
   latestUpdatedAtBasisLabel?: string;
   latestUpdatedDateLabel?: string;
+  summary: string;
+  tooltip: string;
+};
+
+export type DesignScanBasisReceipt = {
+  handoffEntryCount: number;
+  filteredNonHandoffCount: number;
+  sourceSummary: string;
+  ignoredSummary?: string;
+  ignoredSourceSummary?: string;
+  ignoredReasonSummary?: string;
   summary: string;
   tooltip: string;
 };
@@ -619,6 +636,18 @@ const recoveredUXTicketKeySourceOrder: UXTicketKeySource[] = [
   'text',
 ];
 
+const ignoredUXTicketKeySourceOrder: UXTicketKeySource[] = [
+  'jira_path',
+  'jira_query_selected_issue',
+  'jira_query_issue_key',
+  'jira_query_jql',
+  'jira_query',
+  'data_issue_key',
+  'aria_label',
+  'text',
+  'api',
+];
+
 export function getRecoveredUXTicketSourceCounts(items: DesignDisplayItem[]): Partial<Record<UXTicketKeySource, number>> {
   const counts: Partial<Record<UXTicketKeySource, number>> = {};
   for (const item of items) {
@@ -644,6 +673,61 @@ export function getUXTicketRecoverySourceSummary(items: DesignDisplayItem[]): st
 export function getUXTicketRecoveryScopeSummary(count: number): string | undefined {
   if (!Number.isFinite(count) || count <= 0) return undefined;
   return `${count} recovered UX ticket ${count === 1 ? 'candidate' : 'candidates'}`;
+}
+
+function mergeMaxUXTicketSourceCounts(
+  current?: Partial<Record<UXTicketKeySource, number>>,
+  next?: Partial<Record<UXTicketKeySource, number>>,
+): Partial<Record<UXTicketKeySource, number>> | undefined {
+  if (!current && !next) return undefined;
+  const merged: Partial<Record<UXTicketKeySource, number>> = { ...(current || {}) };
+  Object.entries(next || {}).forEach(([source, count]) => {
+    const keySource = source as UXTicketKeySource;
+    merged[keySource] = Math.max(merged[keySource] || 0, Number(count) || 0);
+  });
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function getRecoveryIgnoredCandidateItems(items: DesignDisplayItem[]): UXDesignItem[] {
+  return items.filter((item): item is UXDesignItem => (
+    item.type === 'ux_ticket'
+    && shouldShowUXTicketKeySourceReceipt(item.uxTicketKeySource)
+    && Boolean(item.keyRecoveryIgnoredCandidateCount && item.keyRecoveryIgnoredCandidateCount > 0)
+  ));
+}
+
+export function getUXTicketRecoveryIgnoredCandidateCount(items: DesignDisplayItem[]): number {
+  return getRecoveryIgnoredCandidateItems(items).reduce((total, item) => (
+    total + Math.max(0, item.keyRecoveryIgnoredCandidateCount || 0)
+  ), 0);
+}
+
+export function getUXTicketRecoveryIgnoredSourceCounts(items: DesignDisplayItem[]): Partial<Record<UXTicketKeySource, number>> {
+  const counts: Partial<Record<UXTicketKeySource, number>> = {};
+  for (const item of getRecoveryIgnoredCandidateItems(items)) {
+    Object.entries(item.keyRecoveryIgnoredSourceCounts || {}).forEach(([source, count]) => {
+      const keySource = source as UXTicketKeySource;
+      counts[keySource] = (counts[keySource] || 0) + Math.max(0, Number(count) || 0);
+    });
+  }
+  return counts;
+}
+
+export function getUXTicketRecoveryIgnoredSourceSummary(items: DesignDisplayItem[]): string | undefined {
+  const counts = getUXTicketRecoveryIgnoredSourceCounts(items);
+  const parts = ignoredUXTicketKeySourceOrder
+    .map(source => {
+      const count = counts[source] || 0;
+      if (count <= 0) return '';
+      return `${count} ${uxTicketKeySourceLabels[source]}`;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+export function getUXTicketRecoveryFilterSummary(count: number): string | undefined {
+  if (!Number.isFinite(count) || count <= 0) return undefined;
+  return `${count} non-design ${count === 1 ? 'candidate' : 'candidates'} ignored`;
 }
 
 export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDisplayItem[] {
@@ -1046,7 +1130,7 @@ export function classifyDesignUrl(
     return null;
   }
 
-  if (hostname === 'miro.com' || hostname.endsWith('.miro.com')) {
+  if (isMiroHandoffUrl(hostname, pathname)) {
     return {
       url: normalizedUrl,
       tool: 'miro',
@@ -1054,7 +1138,7 @@ export function classifyDesignUrl(
     };
   }
 
-  if (hostname === 'loom.com' || hostname.endsWith('.loom.com')) {
+  if (isLoomHandoffUrl(hostname, pathname)) {
     return {
       url: normalizedUrl,
       tool: 'loom',
@@ -1111,6 +1195,16 @@ export function classifyDesignUrl(
 
 function isFigmaHandoffUrl(pathname: string): boolean {
   return /^\/(?:design|file|proto|board|figjam|slides)\//.test(pathname);
+}
+
+function isMiroHandoffUrl(hostname: string, pathname: string): boolean {
+  if (hostname !== 'miro.com' && !hostname.endsWith('.miro.com')) return false;
+  return /^\/app\/(?:board|live-embed)\//.test(pathname);
+}
+
+function isLoomHandoffUrl(hostname: string, pathname: string): boolean {
+  if (hostname !== 'loom.com' && !hostname.endsWith('.loom.com')) return false;
+  return /^\/(?:share|embed)\//.test(pathname);
 }
 
 function isZeplinHandoffUrl(hostname: string, pathname: string): boolean {
@@ -1288,14 +1382,63 @@ export function getIgnoredDesignLinkSummary(ignoredLinks: IgnoredDesignLikeLink[
   return `${count} filtered non-handoff ${count === 1 ? 'ref' : 'refs'}`;
 }
 
+export function getIgnoredDesignLinkReasonSummary(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  const reasonCounts = new Map<string, { count: number; order: number }>();
+
+  ignoredLinks.forEach(link => {
+    const reason = link.label?.trim();
+    if (!reason) return;
+
+    const existing = reasonCounts.get(reason);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    reasonCounts.set(reason, {
+      count: 1,
+      order: reasonCounts.size,
+    });
+  });
+
+  if (reasonCounts.size === 0) return undefined;
+
+  return Array.from(reasonCounts.entries())
+    .sort(([, metaA], [, metaB]) => metaA.order - metaB.order)
+    .map(([reason, meta]) => `${reason} ${meta.count}`)
+    .join(', ');
+}
+
 export function getIgnoredDesignLinkTooltip(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
   if (ignoredLinks.length === 0) return undefined;
 
   const labels = Array.from(new Set(ignoredLinks.map(link => link.label))).slice(0, 4);
   const overflow = ignoredLinks.length > labels.length ? ` + ${ignoredLinks.length - labels.length} more` : '';
   const sourceSummary = getIgnoredDesignLinkSourceSummary(ignoredLinks);
+  const reasonSummary = getIgnoredDesignLinkReasonSummary(ignoredLinks);
   const sourceSentence = sourceSummary ? ` Sources: ${sourceSummary}.` : '';
-  return `Filtered design-looking URLs that were not shown as handoff rows: ${labels.join(', ')}${overflow}.${sourceSentence}`;
+  const reasonSentence = reasonSummary ? ` Reasons: ${reasonSummary}.` : '';
+  return `Filtered design-looking URLs that were not shown as handoff rows: ${labels.join(', ')}${overflow}.${sourceSentence}${reasonSentence}`;
+}
+
+export function getIgnoredDesignFieldLinkCount(ignoredLinks: IgnoredDesignLikeLink[]): number {
+  return ignoredLinks.filter(link => splitSources(link.source || '').includes('design_field')).length;
+}
+
+export function getIgnoredDesignFieldLinkSummary(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  const count = getIgnoredDesignFieldLinkCount(ignoredLinks);
+  if (count <= 0) return undefined;
+  return `${count} design-field non-handoff ${count === 1 ? 'ref' : 'refs'}`;
+}
+
+export function getIgnoredDesignFieldLinkTooltip(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
+  const designFieldIgnoredLinks = ignoredLinks.filter(link => splitSources(link.source || '').includes('design_field'));
+  const summary = getIgnoredDesignFieldLinkSummary(designFieldIgnoredLinks);
+  if (!summary) return undefined;
+
+  const reasonSummary = getIgnoredDesignLinkReasonSummary(designFieldIgnoredLinks);
+  const reasonSentence = reasonSummary ? ` Reasons: ${reasonSummary}.` : '';
+  return `UX ticket design-field URLs were scanned, but ${summary} were documentation, community, profile, marketing, or settings pages rather than development handoff entries. Personal AI keeps the UX ticket in Missing link state when no valid handoff link remains; it does not edit Jira design fields or create links.${reasonSentence}`;
 }
 
 export function getIgnoredDesignLinkSourceSummary(ignoredLinks: IgnoredDesignLikeLink[]): string | undefined {
@@ -1497,6 +1640,35 @@ export function getDesignSourceSummary(items: DesignDisplayItem[]): string {
   return `${itemCountLabel} · ${visibleLabels}${overflowLabel}`;
 }
 
+export function getDesignScanBasisReceipt(
+  items: DesignDisplayItem[],
+  ignoredLinks: IgnoredDesignLikeLink[] = [],
+): DesignScanBasisReceipt {
+  const sourceSummary = items.length > 0 ? getDesignSourceSummary(items) : '0 handoff entries';
+  const ignoredSummary = getIgnoredDesignLinkSummary(ignoredLinks);
+  const ignoredSourceSummary = getIgnoredDesignLinkSourceSummary(ignoredLinks);
+  const ignoredReasonSummary = getIgnoredDesignLinkReasonSummary(ignoredLinks);
+  const summaryParts = [sourceSummary, ignoredSummary].filter(Boolean);
+  const sourceSentence = items.length > 0
+    ? `Handoff rows are based on Jira-visible sources: ${sourceSummary}.`
+    : 'No handoff rows are shown in this Jira-visible scan batch.';
+  const filteredSentence = ignoredSummary
+    ? ` ${ignoredSummary} were intentionally kept out of handoff rows${ignoredReasonSummary ? `: ${ignoredReasonSummary}` : ''}.`
+    : '';
+  const filteredSourceSentence = ignoredSourceSummary ? ` Filtered sources: ${ignoredSourceSummary}.` : '';
+
+  return {
+    handoffEntryCount: items.length,
+    filteredNonHandoffCount: ignoredLinks.length,
+    sourceSummary,
+    ignoredSummary,
+    ignoredSourceSummary,
+    ignoredReasonSummary,
+    summary: `Jira-visible handoff scan: ${summaryParts.join('; ') || sourceSummary}`,
+    tooltip: `Scan basis: ${sourceSentence}${filteredSentence}${filteredSourceSentence} Personal AI only uses links visible in this Jira page and read-only Jira APIs; it does not refresh Figma or Zeplin, enumerate private design files, create or edit Jira links, or mark design review complete.`,
+  };
+}
+
 export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplayItem[] {
   const consumedDirectUrls = new Set<string>();
   const seenDirect = new Map<string, FigmaDesignItem | ExternalDesignItem>();
@@ -1544,6 +1716,18 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       existing.uxEta = existing.uxEta || item.uxEta;
       existing.uxEtaSource = existing.uxEtaSource || item.uxEtaSource;
       existing.designStatus = existing.designStatus || item.designStatus;
+      existing.keyRecoveryCandidateCount = Math.max(
+        existing.keyRecoveryCandidateCount || 0,
+        item.keyRecoveryCandidateCount || 0,
+      ) || undefined;
+      existing.keyRecoveryIgnoredCandidateCount = Math.max(
+        existing.keyRecoveryIgnoredCandidateCount || 0,
+        item.keyRecoveryIgnoredCandidateCount || 0,
+      ) || undefined;
+      existing.keyRecoveryIgnoredSourceCounts = mergeMaxUXTicketSourceCounts(
+        existing.keyRecoveryIgnoredSourceCounts,
+        item.keyRecoveryIgnoredSourceCounts,
+      );
       const updatedSelection = chooseDesignUpdatedAtWithSource(
         existing.designUpdatedAt,
         existing.designUpdatedAtSource,

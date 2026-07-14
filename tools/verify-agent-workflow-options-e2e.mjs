@@ -175,6 +175,15 @@ function collectPageErrors(page) {
   };
 }
 
+async function assertControlBoundary(locator, patterns) {
+  const title = await locator.getAttribute('title');
+  const ariaLabel = await locator.getAttribute('aria-label');
+  for (const pattern of patterns) {
+    assert.match(title || '', pattern);
+    assert.match(ariaLabel || '', pattern);
+  }
+}
+
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'agent-workflow-options-browser-'),
@@ -215,6 +224,10 @@ try {
       configurable: true,
       value: {
         async writeText(text) {
+          const delayMs = Number(window.__agentWorkflowClipboardDelayMs || 0);
+          if (delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
           window.__agentWorkflowClipboardText = String(text || '');
         },
         async readText() {
@@ -305,15 +318,42 @@ try {
   assert.match(initialSourceReceiptText, /预期观察：通知\/存储/);
   assert.match(initialSourceReceiptText, /不会写入 Memory Service/);
   assert.match(initialSourceReceiptText, /最近消息范围/);
-  assert.match(initialSourceReceiptText, /尚未选中可回放消息/);
+  assert.match(initialSourceReceiptText, /本次刷新没有可回放的最近消息样本/);
+  assert.match(initialSourceReceiptText, /Memory Service time 召回快照/);
+  assert.match(initialSourceReceiptText, /不证明没有相关线上消息/);
+  assert.match(initialSourceReceiptText, /不代表当前聊天页、所有群组或时间窗口已覆盖/);
+  assert.match(initialSourceReceiptText, /不会标记原消息已读/);
+  assert.match(initialSourceReceiptText, /不会覆盖保存基线/);
+  assert.match(initialSourceReceiptText, /只读快照/);
   assert.match(initialSourceReceiptText, /保存样例范围/);
   assert.match(initialSourceReceiptText, /保存当前用例后/);
+  assert.match(initialSourceReceiptText, /保存样例容量/);
+  assert.match(initialSourceReceiptText, /保存样例 0\/12/);
+  assert.match(initialSourceReceiptText, /还可新增 12 个新输入/);
   assert.match(initialSourceReceiptText, /回归样本构成/);
   assert.match(initialSourceReceiptText, /还没有保存样例/);
   assert.match(initialSourceReceiptText, /不读取 Memory Service/);
   assert.match(initialSourceReceiptText, /批量回归范围/);
   assert.match(initialSourceReceiptText, /暂无保存样例/);
   assert.match(initialSourceReceiptText, /不会读取 Memory Service/);
+  await assertControlBoundary(
+    page.locator('.agent-workflow-test-header button', {
+      hasText: '运行测试',
+    }),
+    [/运行测试/, /只重跑当前表单/, /不会写入 Memory Service/],
+  );
+  await assertControlBoundary(
+    page.locator('.agent-workflow-scenario-actions button', {
+      hasText: '填入样例',
+    }),
+    [/填入样例/, /只把所选内置样例/, /不会运行 Agent Workflow/],
+  );
+  await assertControlBoundary(
+    page.locator('.agent-workflow-replay-actions button', {
+      hasText: /刷新|刷新中/,
+    }),
+    [/刷新.*消息|刷新中/, /Memory Service time/, /不会标记原消息已读/],
+  );
 
   await page.locator('#workflowScenario').selectOption('low-confidence-review');
   await page
@@ -506,11 +546,31 @@ try {
   const nextActionText = await page
     .locator('.agent-workflow-next-actions')
     .innerText();
+  assert.match(nextActionText, /下一步动作边界/);
+  assert.match(nextActionText, /本地排障指引/);
+  assert.match(nextActionText, /不会自动重跑测试/);
+  assert.match(nextActionText, /不会写入 Memory Service/);
+  assert.match(nextActionText, /不会发送通知/);
+  assert.match(nextActionText, /不会执行规则自动化/);
+  assert.match(nextActionText, /不会覆盖基线/);
   assert.match(nextActionText, /补齐被跳过工具/);
   assert.match(nextActionText, /接入外部查询适配器/);
   assert.match(nextActionText, /确认记忆审计/);
   assert.match(nextActionText, /确认通知发送/);
   assert.match(nextActionText, /manual:manual-1/);
+  const skippedToolAction = page.locator('.agent-workflow-next-action', {
+    hasText: '补齐被跳过工具',
+  });
+  const skippedToolActionTitle = await skippedToolAction.getAttribute('title');
+  const skippedToolActionLabel =
+    await skippedToolAction.getAttribute('aria-label');
+  assert.match(skippedToolActionTitle || '', /下一步动作 修复：补齐被跳过工具/);
+  assert.match(skippedToolActionTitle || '', /检查自定义 Agent 配置/);
+  assert.match(skippedToolActionTitle || '', /本地排障指引/);
+  assert.match(skippedToolActionTitle || '', /不会自动重跑测试/);
+  assert.match(skippedToolActionLabel || '', /下一步动作 修复：补齐被跳过工具/);
+  assert.match(skippedToolActionLabel || '', /不会写入 Memory Service/);
+  assert.match(skippedToolActionLabel || '', /不会执行规则自动化/);
   const runDiagnosticText = await page
     .locator('.agent-workflow-diagnostic-block.compact')
     .innerText();
@@ -540,16 +600,67 @@ try {
   assert.match(evidencePacketText, /不会发送通知/);
   assert.match(evidencePacketText, /不会执行规则自动化/);
   assert.match(evidencePacketText, /不会包含原始消息正文或工具参数/);
-  await page
-    .locator('.agent-workflow-evidence-packet.review button', {
+  const copyEvidenceButton = page.locator(
+    '.agent-workflow-evidence-packet.review button',
+    {
       hasText: '复制证据包',
-    })
-    .click();
+    },
+  );
+  await assertControlBoundary(copyEvidenceButton, [
+    /复制证据包/,
+    /本机剪贴板/,
+    /单次调试证据/,
+    /不会写入 Memory Service/,
+  ]);
+  await page.evaluate(() => {
+    window.__agentWorkflowClipboardDelayMs = 250;
+  });
+  await copyEvidenceButton.click();
   await page
-    .locator('.agent-workflow-evidence-copy-receipt', {
-      hasText: '当前结果',
+    .locator('.agent-workflow-evidence-copy-receipt.pending', {
+      hasText: '证据包复制中',
     })
     .waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.agent-workflow-test-panel').getAttribute('aria-busy'),
+    'true',
+  );
+  assert.equal(await page.locator('#workflowTestContent').isDisabled(), true);
+  assert.equal(await page.locator('#workflowScenario').isDisabled(), true);
+  assert.equal(
+    await page.locator('.agent-workflow-test-header button').isDisabled(),
+    true,
+  );
+  const pendingCopyReceiptText = await page
+    .locator('.agent-workflow-evidence-copy-receipt.pending')
+    .innerText();
+  assert.match(pendingCopyReceiptText, /测试输入暂时锁定/);
+  assert.match(pendingCopyReceiptText, /暂时锁定测试输入、来源选择和基线动作/);
+  assert.match(pendingCopyReceiptText, /还没有确认复制成功/);
+  assert.match(pendingCopyReceiptText, /不会写入 Memory Service/);
+  assert.match(pendingCopyReceiptText, /不会发送通知/);
+  assert.match(pendingCopyReceiptText, /不会执行规则自动化/);
+  await page
+    .locator('.agent-workflow-evidence-packet.review button', {
+      hasText: '复制中',
+    })
+    .waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(
+    await page
+      .locator('.agent-workflow-evidence-packet.review button', {
+        hasText: '复制中',
+      })
+      .isDisabled(),
+    true,
+  );
+  await page
+    .locator('.agent-workflow-evidence-copy-receipt', {
+      hasText: '已复制到本机剪贴板',
+    })
+    .waitFor({ timeout: 5000 });
+  await page.evaluate(() => {
+    window.__agentWorkflowClipboardDelayMs = 0;
+  });
   const copiedEvidencePacket = await page.evaluate(() =>
     navigator.clipboard.readText(),
   );
@@ -565,12 +676,56 @@ try {
     copiedEvidencePacket,
     /API split has a blocker in the auth adapter\. Please keep this on the radar today\./,
   );
-
+  await page.evaluate(() => {
+    const previousClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText:
+          previousClipboard && previousClipboard.readText
+            ? previousClipboard.readText.bind(previousClipboard)
+            : async () => '',
+        writeText: async () => {
+          throw new Error('mock clipboard denied');
+        },
+      },
+    });
+  });
   await page
-    .locator('.agent-workflow-saved-actions button', {
-      hasText: '保存当前用例',
+    .locator('.agent-workflow-evidence-packet.review button', {
+      hasText: '复制证据包',
     })
     .click();
+  await page
+    .locator('.agent-workflow-evidence-copy-receipt.error', {
+      hasText: '复制证据包失败',
+    })
+    .waitFor({ timeout: 5000 });
+  const failedCopyReceiptText = await page
+    .locator('.agent-workflow-evidence-copy-receipt.error')
+    .innerText();
+  assert.match(failedCopyReceiptText, /剪贴板写入未完成/);
+  assert.match(failedCopyReceiptText, /证据包仍停留在本页/);
+  assert.match(failedCopyReceiptText, /不会写入剪贴板/);
+  assert.match(failedCopyReceiptText, /不会导出报告/);
+  assert.match(failedCopyReceiptText, /不会覆盖基线/);
+  assert.match(failedCopyReceiptText, /不会写入 Memory Service/);
+  assert.match(failedCopyReceiptText, /不会发送通知/);
+  assert.match(failedCopyReceiptText, /不会执行规则自动化/);
+  assert.match(failedCopyReceiptText, /mock clipboard denied/);
+
+  const saveCurrentScenarioButton = page.locator(
+    '.agent-workflow-saved-actions button',
+    {
+      hasText: '保存当前用例',
+    },
+  );
+  await assertControlBoundary(saveCurrentScenarioButton, [
+    /保存当前用例/,
+    /chrome\.storage\.local/,
+    /不会写入 Memory Service/,
+  ]);
+  await saveCurrentScenarioButton.click();
   await page
     .locator('.agent-workflow-saved-status', {
       hasText: '已保存当前用例和结果基线',
@@ -589,6 +744,14 @@ try {
   assert.match(savedSourceReceiptText, /已有结果基线/);
   assert.match(savedSourceReceiptText, /当前结果属于这条保存样例/);
   assert.match(savedSourceReceiptText, /不会投递真实通知或执行规则自动化/);
+  const savedCapacityReceiptText = await page
+    .locator('.agent-workflow-source-receipt.ready', {
+      hasText: '保存样例容量',
+    })
+    .innerText();
+  assert.match(savedCapacityReceiptText, /保存样例 1\/12/);
+  assert.match(savedCapacityReceiptText, /更新同一条本地样例/);
+  assert.match(savedCapacityReceiptText, /不会挤掉其他保存样例/);
   await page
     .locator('.agent-workflow-source-receipt.review', {
       hasText: '回归样本构成',
@@ -686,6 +849,100 @@ try {
     /Agent 6\/7、工具 9\/9/,
   );
 
+  await page
+    .locator('.agent-workflow-saved-actions button', { hasText: '删除' })
+    .click();
+  await page
+    .locator('[aria-label="保存样例删除回执"]')
+    .waitFor({ timeout: 5000 });
+  const deleteReceiptText = await page
+    .locator('[aria-label="保存样例删除回执"]')
+    .innerText();
+  assert.match(deleteReceiptText, /保存样例删除回执/);
+  assert.match(deleteReceiptText, /已删除本地保存样例/);
+  assert.match(deleteReceiptText, /剩余 0 个/);
+  assert.match(deleteReceiptText, /本地结果基线也已移出/);
+  assert.match(deleteReceiptText, /批量回归和基线对比会等待新样例/);
+  assert.match(deleteReceiptText, /chrome.storage.local/);
+  assert.match(deleteReceiptText, /不会删除 Memory Service 记忆/);
+  assert.match(deleteReceiptText, /不会移除真实消息/);
+  assert.match(deleteReceiptText, /不会发送通知/);
+  assert.match(deleteReceiptText, /不会执行规则自动化/);
+  assert.match(deleteReceiptText, /不会撤销已导出的报告/);
+  const deletedScenarioState = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
+    return result.agentWorkflowSavedScenarios;
+  });
+  assert.deepEqual(deletedScenarioState, []);
+
+  const capacityScenarios = Array.from({ length: 12 }, (_, index) => ({
+    ...savedScenarioState[0],
+    id: `capacity-${index}`,
+    label: index === 11 ? 'Oldest capacity sample' : `Capacity sample ${index + 1}`,
+    createdAt: `2026-05-03T17:${String(index).padStart(2, '0')}:00.000Z`,
+    updatedAt: `2026-05-03T17:${String(index).padStart(2, '0')}:00.000Z`,
+    input: {
+      ...savedScenarioState[0].input,
+      sender: `Capacity Sender ${index + 1}`,
+      content: `Capacity seed sample ${index + 1} should stay in local regression coverage.`,
+    },
+  }));
+  await page.evaluate(async (scenarios) => {
+    await chrome.storage.local.set({ agentWorkflowSavedScenarios: scenarios });
+  }, capacityScenarios);
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('#ANALYSIS_TYPE').waitFor({ timeout: 15000 });
+  await page.locator('h3', { hasText: '关注项测试' }).waitFor({
+    timeout: 15000,
+  });
+  const fullCapacityReceiptText = await page
+    .locator('[aria-label="保存样例容量"].agent-workflow-source-receipt.review')
+    .innerText();
+  assert.match(fullCapacityReceiptText, /已达到本地上限 12/);
+  assert.match(fullCapacityReceiptText, /Oldest capacity sample/);
+  assert.match(fullCapacityReceiptText, /将移出最旧/);
+  assert.match(fullCapacityReceiptText, /不再参与批量回归/);
+  assert.match(fullCapacityReceiptText, /不会删除 Memory Service 记忆/);
+  await page.locator('#workflowTestSender').fill('Capacity Tester');
+  await page
+    .locator('#workflowTestContent')
+    .fill('A brand new saved sample should evict the oldest local capacity case.');
+  await page
+    .locator('.agent-workflow-saved-actions button', {
+      hasText: '保存当前用例',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: 'Oldest capacity sample',
+    })
+    .waitFor({ timeout: 5000 });
+  const capacitySaveStatusText = await page
+    .locator('.agent-workflow-saved-status')
+    .innerText();
+  assert.match(capacitySaveStatusText, /本地上限 12/);
+  assert.match(capacitySaveStatusText, /已移出旧样例：Oldest capacity sample/);
+  const capacityAfterSaveState = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
+    return result.agentWorkflowSavedScenarios;
+  });
+  assert.equal(capacityAfterSaveState.length, 12);
+  assert.doesNotMatch(
+    capacityAfterSaveState.map((scenario) => scenario.label).join('\n'),
+    /Oldest capacity sample/,
+  );
+  assert.match(
+    capacityAfterSaveState[0].input.content,
+    /brand new saved sample/,
+  );
+  await page.evaluate(async (scenarios) => {
+    await chrome.storage.local.set({ agentWorkflowSavedScenarios: scenarios });
+  }, savedScenarioState);
+
   await page.evaluate(async () => {
     const result = await chrome.storage.local.get(
       'agentWorkflowSavedScenarios',
@@ -728,11 +985,19 @@ try {
   assert.match(changedBaselineText, /置信度/);
   assert.match(changedBaselineText, /基线 20% \/ 当前 88%/);
   assert.match(changedBaselineText, /基线诊断：结论 需要复核后再执行/);
-  await page
-    .locator('.agent-workflow-baseline-header button', {
+  const acceptCurrentBaselineButton = page.locator(
+    '.agent-workflow-baseline-header button',
+    {
       hasText: '接受当前结果为基线',
-    })
-    .click();
+    },
+  );
+  await assertControlBoundary(acceptCurrentBaselineButton, [
+    /接受当前结果为基线/,
+    /chrome\.storage\.local/,
+    /不会写入 Memory Service/,
+    /导出报告/,
+  ]);
+  await acceptCurrentBaselineButton.click();
   await page
     .locator('.agent-workflow-saved-status', {
       hasText: '已接受当前结果为新基线',
@@ -783,11 +1048,18 @@ try {
     /下一步 补齐被跳过工具/,
   );
 
-  await page
-    .locator('.agent-workflow-saved-actions button', {
+  const runSavedRegressionButton = page.locator(
+    '.agent-workflow-saved-actions button',
+    {
       hasText: '批量回归',
-    })
-    .click();
+    },
+  );
+  await assertControlBoundary(runSavedRegressionButton, [
+    /批量回归/,
+    /逐条重跑/,
+    /不会覆盖基线/,
+  ]);
+  await runSavedRegressionButton.click();
   await page
     .locator('.agent-workflow-saved-status', {
       hasText: /批量回归完成：通过 1 \/ 变化 0 \/ 无基线 0 \/ 失败 0/,
@@ -881,13 +1153,20 @@ try {
   assert.match(regressionWithAcceptText, /原始消息正文/);
   assert.match(regressionWithAcceptText, /变化 1/);
   assert.match(regressionWithAcceptText, /无基线 1/);
+  const exportRegressionReportButton = page.locator(
+    '.agent-workflow-regression-actions button',
+    {
+      hasText: '导出报告',
+    },
+  );
+  await assertControlBoundary(exportRegressionReportButton, [
+    /导出报告/,
+    /本机 JSON/,
+    /不会接受基线/,
+  ]);
   const [regressionDownload] = await Promise.all([
     page.waitForEvent('download'),
-    page
-      .locator('.agent-workflow-regression-actions button', {
-        hasText: '导出报告',
-      })
-      .click(),
+    exportRegressionReportButton.click(),
   ]);
   assert.match(
     regressionDownload.suggestedFilename(),
@@ -969,11 +1248,19 @@ try {
       hasText: /已导出批量回归报告：agent-workflow-regression-.*\.json/,
     })
     .waitFor({ timeout: 5000 });
-  await page
-    .locator('.agent-workflow-regression-header button', {
+  const acceptRegressionBaselinesButton = page.locator(
+    '.agent-workflow-regression-header button',
+    {
       hasText: '接受 2 个结果为基线',
-    })
-    .click();
+    },
+  );
+  await assertControlBoundary(acceptRegressionBaselinesButton, [
+    /接受 2 个结果为基线/,
+    /chrome\.storage\.local/,
+    /失败 0 个不会被覆盖/,
+    /不会写入 Memory Service/,
+  ]);
+  await acceptRegressionBaselinesButton.click();
   await page
     .locator('.agent-workflow-saved-status', {
       hasText: '已接受 2 个批量回归结果为新基线',
@@ -1103,11 +1390,18 @@ try {
       hasText: '单次运行证据包（旧快照）',
     })
     .waitFor({ timeout: 5000 });
-  await page
-    .locator('.agent-workflow-evidence-packet.stale button', {
+  const staleCopyEvidenceButton = page.locator(
+    '.agent-workflow-evidence-packet.stale button',
+    {
       hasText: '复制证据包',
-    })
-    .click();
+    },
+  );
+  await assertControlBoundary(staleCopyEvidenceButton, [
+    /复制证据包/,
+    /证据需重跑/,
+    /不会写入 Memory Service/,
+  ]);
+  await staleCopyEvidenceButton.click();
   await page
     .locator('.agent-workflow-evidence-copy-receipt', {
       hasText: '旧快照',

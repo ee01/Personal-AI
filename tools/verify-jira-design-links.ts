@@ -25,15 +25,24 @@ import {
   getDesignDisplayUpdatedTimestamp,
   getRecoveredUXTicketCandidateCount,
   getIgnoredDesignLinkSummary,
+  getIgnoredDesignFieldLinkCount,
+  getIgnoredDesignFieldLinkSummary,
+  getIgnoredDesignFieldLinkTooltip,
+  getIgnoredDesignLinkReasonSummary,
   getIgnoredDesignLinkSourceSummary,
   getIgnoredDesignLinkTooltip,
   getDesignSourceSummary,
   getDesignSourceTooltip,
+  getDesignScanBasisReceipt,
   getDesignStatusTone,
   getDesignStatusActionHint,
   getRecoveredUXTicketSourceCounts,
   getUXTicketKeyRecoveryBoundaryHint,
   getUXTicketKeyRecoveryBoundaryLabel,
+  getUXTicketRecoveryFilterSummary,
+  getUXTicketRecoveryIgnoredCandidateCount,
+  getUXTicketRecoveryIgnoredSourceCounts,
+  getUXTicketRecoveryIgnoredSourceSummary,
   getUXTicketRecoverySourceSummary,
   getUXTicketRecoveryScopeSummary,
   getUXTicketKeySourceHint,
@@ -100,6 +109,10 @@ function verifyUrlNormalization() {
   assert.equal(classifyDesignUrl('https://zeplin.io/integrations/jira'), null);
   assert.equal(classifyDesignUrl('https://example.com/design'), null);
   assert.equal(classifyDesignUrl('https://example.com/design', true)?.label, 'Design link');
+  assert.equal(classifyDesignUrl('https://miro.com/pricing'), null);
+  assert.equal(classifyDesignUrl('https://help.miro.com/hc/en-us/articles/360017572714'), null);
+  assert.equal(classifyDesignUrl('https://www.loom.com/blog/product-updates'), null);
+  assert.equal(classifyDesignUrl('https://support.loom.com/hc/en-us/articles/360002236078'), null);
   assert.equal(classifyDesignUrl('https://www.figma.com/community/plugin/123-demo', true), null);
   assert.equal(classifyDesignUrl('https://help.figma.com/hc/en-us/articles/360039827834-Jira-and-Figma', true), null);
   assert.equal(classifyDesignUrl('https://www.figma.com/blog/designer-developer-handoff-with-figma-and-jira/', true), null);
@@ -190,6 +203,14 @@ function verifyUrlNormalization() {
     ['Loom walkthrough'],
   );
   assert.deepEqual(
+    extractDesignLinks('See https://www.loom.com/embed/abc123 for the walkthrough.').map(item => item.label),
+    ['Loom walkthrough'],
+  );
+  assert.deepEqual(
+    extractDesignLinks('Ignore https://miro.com/pricing and https://www.loom.com/blog/product-updates.').map(item => item.url),
+    [],
+  );
+  assert.deepEqual(
     extractDesignLinks(
       'See https://www.figma.com/design/abc123/Spec?node-id=89%3A6&t=share and https://www.figma.com/design/abc123/Renamed?node-id=89-6.',
     ).map(item => item.label),
@@ -206,7 +227,11 @@ function verifyUrlNormalization() {
   assert.deepEqual(filteredScan.links.map(item => item.url), ['https://www.figma.com/design/abc123/Spec']);
   assert.equal(filteredScan.ignored.length, 5);
   assert.equal(getIgnoredDesignLinkSummary(filteredScan.ignored), '5 filtered non-handoff refs');
-  assert.match(getIgnoredDesignLinkTooltip(filteredScan.ignored) || '', /Figma Community.*Figma documentation.*Zeplin documentation or marketing page/);
+  assert.equal(
+    getIgnoredDesignLinkReasonSummary(filteredScan.ignored),
+    'Figma Community 1, Figma documentation 1, Zeplin documentation or marketing page 1, Zeplin app non-project page 1, Zeplin non-resource project page 1',
+  );
+  assert.match(getIgnoredDesignLinkTooltip(filteredScan.ignored) || '', /Reasons: Figma Community 1.*Zeplin non-resource project page 1/);
   assert.equal(getIgnoredDesignLinkSourceSummary(filteredScan.ignored), undefined);
   assert.equal(
     getIgnoredDesignLinkSourceSummary([
@@ -215,6 +240,17 @@ function verifyUrlNormalization() {
       { ...filteredScan.ignored[2], source: 'description, design_field' },
     ]),
     'Remote link 1, Design field 1, Description 2',
+  );
+  const ignoredWithDesignFieldSources = [
+    { ...filteredScan.ignored[0], source: 'description' },
+    { ...filteredScan.ignored[1], source: 'design_field' },
+    { ...filteredScan.ignored[2], source: 'description, design_field' },
+  ];
+  assert.equal(getIgnoredDesignFieldLinkCount(ignoredWithDesignFieldSources), 2);
+  assert.equal(getIgnoredDesignFieldLinkSummary(ignoredWithDesignFieldSources), '2 design-field non-handoff refs');
+  assert.match(
+    getIgnoredDesignFieldLinkTooltip(ignoredWithDesignFieldSources) || '',
+    /UX ticket design-field URLs were scanned.*keeps the UX ticket in Missing link state.*does not edit Jira design fields/,
   );
   const fieldFilteredScan = extractDesignLinkScan(
     'UX field https://www.figma.com/community/plugin/123-demo and https://handoff.example.com/spec',
@@ -252,8 +288,24 @@ function verifyUXTicketKeySourceReceipts() {
   const recoveredItems: DesignDisplayItem[] = [
     { type: 'ux_ticket', uxTicketKey: 'UX-1', source: 'linked_issues', linkProvided: false, uxTicketKeySource: 'jira_path' },
     { type: 'ux_ticket', uxTicketKey: 'UX-2', source: 'linked_issues', linkProvided: false, uxTicketKeySource: 'jira_query_selected_issue' },
-    { type: 'ux_ticket', uxTicketKey: 'UX-3', source: 'linked_issues', linkProvided: false, uxTicketKeySource: 'text' },
-    { type: 'ux_ticket', uxTicketKey: 'UX-4', source: 'linked_issues', linkProvided: false, uxTicketKeySource: 'jira_query_jql' },
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'UX-3',
+      source: 'linked_issues',
+      linkProvided: false,
+      uxTicketKeySource: 'text',
+      keyRecoveryIgnoredCandidateCount: 2,
+      keyRecoveryIgnoredSourceCounts: { text: 1, jira_path: 1 },
+    },
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'UX-4',
+      source: 'linked_issues',
+      linkProvided: false,
+      uxTicketKeySource: 'jira_query_jql',
+      keyRecoveryIgnoredCandidateCount: 1,
+      keyRecoveryIgnoredSourceCounts: { jira_path: 1 },
+    },
     { type: 'ux_ticket', uxTicketKey: 'UX-5', source: 'linked_issues', linkProvided: false, uxTicketKeySource: 'jira_query_issue_key' },
     { type: 'figma', url: 'https://www.figma.com/design/abc/demo', source: 'description' },
   ];
@@ -265,6 +317,15 @@ function verifyUXTicketKeySourceReceipts() {
     text: 1,
   });
   assert.equal(getUXTicketRecoverySourceSummary(recoveredItems), '1 selectedIssue query, 1 issueKey query, 1 JQL query, 1 raw text');
+  assert.equal(getUXTicketRecoveryIgnoredCandidateCount(recoveredItems), 3);
+  assert.deepEqual(getUXTicketRecoveryIgnoredSourceCounts(recoveredItems), {
+    jira_path: 2,
+    text: 1,
+  });
+  assert.equal(getUXTicketRecoveryIgnoredSourceSummary(recoveredItems), '2 Jira issue URL, 1 raw text');
+  assert.equal(getUXTicketRecoveryFilterSummary(0), undefined);
+  assert.equal(getUXTicketRecoveryFilterSummary(1), '1 non-design candidate ignored');
+  assert.equal(getUXTicketRecoveryFilterSummary(3), '3 non-design candidates ignored');
 }
 
 function verifyRemoteLinkPayloadExtraction() {
@@ -329,6 +390,10 @@ function verifyRemoteLinkPayloadExtraction() {
   });
   assert.equal(filteredPayload.links.length, 0);
   assert.equal(filteredPayload.ignored.length, 2);
+  assert.equal(
+    getIgnoredDesignLinkReasonSummary(filteredPayload.ignored),
+    'Zeplin non-resource project page 1, Figma documentation 1',
+  );
 }
 
 function verifyEscaping() {
@@ -757,6 +822,61 @@ function verifyDesignUpdateReviewScope() {
   ]), undefined);
 }
 
+function verifyDesignScanBasisReceipt() {
+  const receipt = getDesignScanBasisReceipt([
+    {
+      type: 'figma',
+      url: 'https://www.figma.com/design/abc123/Checkout',
+      source: 'description',
+      label: 'Figma Design',
+    },
+    {
+      type: 'design_link',
+      url: 'https://app.zeplin.io/project/abc/screen/def',
+      source: 'remote_link',
+      tool: 'zeplin',
+      label: 'Zeplin screen',
+    },
+  ], [
+    {
+      url: 'https://www.figma.com/community/plugin/123',
+      tool: 'figma',
+      label: 'Figma Community',
+      source: 'description',
+    },
+    {
+      url: 'https://app.zeplin.io/project/abc/settings',
+      tool: 'zeplin',
+      label: 'Zeplin non-resource project page',
+      source: 'design_field',
+    },
+  ]);
+
+  assert.equal(receipt.handoffEntryCount, 2);
+  assert.equal(receipt.filteredNonHandoffCount, 2);
+  assert.equal(receipt.sourceSummary, '2 entries · Remote link, Description');
+  assert.equal(receipt.ignoredSummary, '2 filtered non-handoff refs');
+  assert.equal(receipt.ignoredSourceSummary, 'Design field 1, Description 1');
+  assert.equal(receipt.ignoredReasonSummary, 'Figma Community 1, Zeplin non-resource project page 1');
+  assert.equal(receipt.summary, 'Jira-visible handoff scan: 2 entries · Remote link, Description; 2 filtered non-handoff refs');
+  assert.match(receipt.tooltip, /only uses links visible in this Jira page and read-only Jira APIs/);
+  assert.match(receipt.tooltip, /does not refresh Figma or Zeplin/);
+  assert.match(receipt.tooltip, /create or edit Jira links/);
+
+  const filteredOnlyReceipt = getDesignScanBasisReceipt([], [
+    {
+      url: 'https://help.figma.com/hc/en-us/articles/360039827834-Jira-and-Figma',
+      tool: 'figma',
+      label: 'Figma documentation',
+      source: 'description',
+    },
+  ]);
+  assert.equal(filteredOnlyReceipt.sourceSummary, '0 handoff entries');
+  assert.equal(filteredOnlyReceipt.summary, 'Jira-visible handoff scan: 0 handoff entries; 1 filtered non-handoff ref');
+  assert.match(filteredOnlyReceipt.tooltip, /No handoff rows are shown/);
+  assert.match(filteredOnlyReceipt.tooltip, /Filtered sources: Description 1/);
+}
+
 verifyProjectPatternMatching();
 verifyUrlNormalization();
 verifyUXTicketKeySourceReceipts();
@@ -771,5 +891,6 @@ verifyDisplayOrdering();
 verifyUpdatedDateOrdering();
 verifyMissingUpdatedDateReceipt();
 verifyDesignUpdateReviewScope();
+verifyDesignScanBasisReceipt();
 
 console.log('Jira design links verification passed');

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   getRuleDeliveryReceipt,
+  getRuleEffectBoundaryReceipt,
   getRuleActionSummaryItems,
   getRuleSafetySummary,
   getRuleScopeExecutionReceipt,
@@ -95,6 +96,7 @@ test('rule scope execution receipt explains OR candidates and final gates', () =
   assert.match(receipt.filterText, /同一维度内按 OR/);
   assert.match(receipt.filterText, /必须两者都命中/);
   assert.match(receipt.finalCheckText, /再次按发送人、群组、时间/);
+  assert.match(receipt.finalCheckText, /缺失.*未确认范围拦截/);
   assert.match(receipt.boundaryText, /不会分析历史消息/);
 });
 
@@ -201,6 +203,16 @@ test('rule delivery receipt gives follow-thread notifications priority', () => {
   assert.match(receipt.detail, /后续相关消息优先按关注后续走 Glip/);
 });
 
+test('rule effect boundary says missing scoped context is rejected before memory writes', () => {
+  const receipt = getRuleEffectBoundaryReceipt({
+    notifyMethod: 'bot',
+  });
+
+  assert.match(receipt.items[0], /只有通过最终范围校验/);
+  assert.match(receipt.items[0], /消息缺少对应上下文/);
+  assert.match(receipt.items[0], /未确认范围拦截/);
+});
+
 test('rule run preview separates saving from automatic background capture', () => {
   const receipt = getRuleRunPreviewReceipt({
     notifyMethod: 'bot',
@@ -228,6 +240,7 @@ test('rule run preview shows future-message trigger and digest outcome', () => {
   assert.match(receipt.triggerText, /只自动观察后续新消息/);
   assert.match(receipt.triggerText, /立即分析最近/);
   assert.match(receipt.matchText, /LLM 判断规则语义/);
+  assert.match(receipt.matchText, /缺少被限定的发送人或群组上下文会被拦截/);
   assert.match(receipt.outcomeText, /进入每周摘要/);
   assert.match(receipt.outcomeText, /替代 Glip \/ Chrome 即时通知/);
 });

@@ -41,6 +41,8 @@ let messageRows = Array.from({ length: 5 }, (_, index) => [
 ]);
 let appliedUpdate = null;
 let failNextUpdate = false;
+let holdNextUpdate = false;
+let releaseHeldUpdate = null;
 
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
@@ -172,6 +174,15 @@ async function installRoutes(page) {
       const id = row[headers.indexOf('ID')];
       const date = row[headers.indexOf('Schedule_Date')];
       const time = row[headers.indexOf('Schedule_Time')];
+
+      if (holdNextUpdate) {
+        holdNextUpdate = false;
+        await new Promise((resolve) => {
+          releaseHeldUpdate = resolve;
+        });
+        releaseHeldUpdate = null;
+      }
+
       appliedUpdate = { id, date, time };
       const rowIndex = messageRows.findIndex(
         (candidate) => candidate[0] === id,
@@ -191,6 +202,16 @@ async function installRoutes(page) {
       body: JSON.stringify({}),
     });
   });
+}
+
+async function waitForHeldUpdateRelease() {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (typeof releaseHeldUpdate === 'function') {
+      return releaseHeldUpdate;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail('held Sheets update was not reached');
 }
 
 let launched;
@@ -306,11 +327,47 @@ try {
       timeout: 15000,
     });
 
+  holdNextUpdate = true;
   await page
     .getByRole('button', {
       name: '将Missed Bot 1改到2026-05-04 10:02',
     })
     .click();
+
+  let releaseUpdate = null;
+  try {
+    const pendingReceipt = page.locator('[aria-label="健康告警改期写入中"]', {
+      hasText: 'missed-1',
+    });
+    await pendingReceipt.getByText('改期写入中：来源健康告警').waitFor({
+      timeout: 15000,
+    });
+    await pendingReceipt.getByText('目标 Messages 行 missed-1').waitFor({
+      timeout: 15000,
+    });
+    await pendingReceipt.getByText('点击快照 2026-05-04 10:02').waitFor({
+      timeout: 15000,
+    });
+    await pendingReceipt.getByText('其他健康告警未改').waitFor({
+      timeout: 15000,
+    });
+    await page
+      .getByRole('button', {
+        name: '正在将Missed Bot 1改到2026-05-04 10:02',
+      })
+      .waitFor({
+        timeout: 15000,
+      });
+
+    releaseUpdate = await waitForHeldUpdateRelease();
+  } finally {
+    holdNextUpdate = false;
+    if (releaseUpdate) {
+      releaseUpdate();
+    } else if (typeof releaseHeldUpdate === 'function') {
+      releaseHeldUpdate();
+    }
+  }
 
   await page.waitForURL(/messageId=missed-1/, { timeout: 15000 });
   const explicitReceipt = page.locator('[role="status"]', {
@@ -386,8 +443,8 @@ try {
     timeout: 15000,
   });
   await compensationPage
-    .locator('small[title*="领取资格，不代表已发送"]', {
-      hasText: '补偿窗口回执: 已迟到 15 分钟，补偿窗口剩余 15 分钟',
+    .locator('small[aria-label*="08:00 后队列"][title*="Execution_Key"]', {
+      hasText: '下一轮仍可补偿领取（未发送）',
     })
     .waitFor({
       timeout: 15000,

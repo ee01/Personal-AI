@@ -16,16 +16,27 @@
             v-model="searchText"
             type="search"
             placeholder="搜索人物、别名或描述"
+            :title="peopleSearchBoundaryText"
+            :aria-label="peopleSearchBoundaryText"
             @keydown.enter.prevent="refreshAll"
           />
         </label>
-        <button class="ghost-btn" type="button" :disabled="isLoading" @click="refreshAll">
+        <button
+          class="ghost-btn"
+          type="button"
+          :disabled="isLoading"
+          :title="refreshAllBoundaryText"
+          :aria-label="refreshAllBoundaryText"
+          @click="refreshAll"
+        >
           {{ isLoading ? '刷新中' : '刷新' }}
         </button>
         <button
           class="pill-btn primary"
           type="button"
           :disabled="isConsolidating"
+          :title="consolidationBoundaryText(false)"
+          :aria-label="consolidationBoundaryText(false)"
           @click="runConsolidation(false)"
         >
           {{ isConsolidating ? '整理中' : '后台整理' }}
@@ -139,6 +150,8 @@
               type="button"
               class="primary"
               :disabled="!spotlightPerson"
+              :title="spotlightBriefBoundaryText"
+              :aria-label="spotlightBriefBoundaryText"
               @click="focusSpotlightBrief"
             >
               查看完整 brief
@@ -146,6 +159,8 @@
             <button
               type="button"
               :disabled="!spotlightPerson || isConsolidating"
+              :title="spotlightRefreshBoundaryText"
+              :aria-label="spotlightRefreshBoundaryText"
               @click="runConsolidation(true, spotlightPerson?.id)"
             >
               强制刷新此人
@@ -153,6 +168,8 @@
             <button
               type="button"
               :disabled="!isSpotlightContextLoaded"
+              :title="spotlightCopyBoundaryText"
+              :aria-label="spotlightCopyBoundaryText"
               @click="copyContextPackage"
             >
               复制给 AI
@@ -211,6 +228,8 @@
             :key="option.value"
             type="button"
             :class="{ active: stateFilter === option.value }"
+            :title="stateFilterBoundaryText(option.value)"
+            :aria-label="stateFilterBoundaryText(option.value)"
             @click="setStateFilter(option.value)"
           >
             {{ option.label }}
@@ -218,6 +237,8 @@
           <button
             type="button"
             :class="{ active: includeBelowThreshold }"
+            :title="candidateToggleBoundaryText"
+            :aria-label="candidateToggleBoundaryText"
             @click="toggleIncludeBelowThreshold"
           >
             候选
@@ -235,11 +256,19 @@
             v-if="!appliedPeopleFilters.includeBelowThreshold"
             type="button"
             class="tiny-btn"
+            :title="showCandidateBoundaryText"
+            :aria-label="showCandidateBoundaryText"
             @click="showCandidatePeople"
           >
             查看候选
           </button>
-          <button type="button" class="tiny-btn primary" @click="clearPeopleFilters">
+          <button
+            type="button"
+            class="tiny-btn primary"
+            :title="clearPeopleFiltersBoundaryText"
+            :aria-label="clearPeopleFiltersBoundaryText"
+            @click="clearPeopleFilters"
+          >
             清空筛选
           </button>
         </div>
@@ -275,11 +304,19 @@
             v-if="!appliedPeopleFilters.includeBelowThreshold"
             type="button"
             class="tiny-btn"
+            :title="showCandidateBoundaryText"
+            :aria-label="showCandidateBoundaryText"
             @click="showCandidatePeople"
           >
             查看候选
           </button>
-          <button type="button" class="tiny-btn primary" @click="clearPeopleFilters">
+          <button
+            type="button"
+            class="tiny-btn primary"
+            :title="clearPeopleFiltersBoundaryText"
+            :aria-label="clearPeopleFiltersBoundaryText"
+            @click="clearPeopleFilters"
+          >
             清空筛选
           </button>
         </div>
@@ -290,6 +327,8 @@
           :key="person.id"
           type="button"
           :class="['person-card', toneForPerson(person), { active: person.id === selectedPersonId }]"
+          :title="personCardBoundaryText(person)"
+          :aria-label="personCardBoundaryText(person)"
           @click="selectPerson(person, { scrollToBrief: true })"
         >
           <div class="person-head">
@@ -335,6 +374,8 @@
             type="button"
             class="copy-context-action"
             :disabled="!contextCard || isContextLoading"
+            :title="contextCopyActionBoundary"
+            :aria-label="contextCopyActionBoundary"
             @click="copyContextPackage"
           >
             {{ contextCopyActionLabel }}
@@ -471,6 +512,8 @@
                   type="button"
                   class="tiny-btn"
                   :disabled="isContextLoading"
+                  :title="contextRetryRefreshBoundary(contextCardLoadFailureReceipt)"
+                  :aria-label="contextRetryRefreshBoundary(contextCardLoadFailureReceipt)"
                   @click="loadContextCard(contextCardLoadFailureReceipt.personId)"
                 >
                   重试刷新
@@ -513,6 +556,32 @@
               </div>
             </div>
 
+            <div
+              v-if="contextCardCopyReceipt && contextCardCopyReceipt.personId === contextCard.person.id"
+              class="context-copy-receipt"
+              role="status"
+              aria-live="polite"
+              aria-label="上下文复制回执"
+            >
+              <div class="context-copy-head">
+                <div>
+                  <span>上下文复制回执</span>
+                  <strong>{{ contextCardCopyReceipt.summary }}</strong>
+                </div>
+              </div>
+              <p>{{ contextCardCopyReceipt.boundary }}</p>
+              <div class="context-copy-grid">
+                <article
+                  v-for="row in contextCardCopyReceipt.rows"
+                  :key="`${row.label}:${row.value}`"
+                  :class="['context-copy-row', row.tone]"
+                >
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.value }}</strong>
+                </article>
+              </div>
+            </div>
+
             <section class="action-suggestions">
               <div class="action-head">
                 <div>
@@ -540,6 +609,8 @@
                       v-if="suggestion.evidenceRef"
                       type="button"
                       class="tiny-btn"
+                      :title="contextEvidenceButtonBoundary(suggestion.evidenceRef, '查看依据')"
+                      :aria-label="contextEvidenceButtonBoundary(suggestion.evidenceRef, '查看依据')"
                       @click="openEvidence(suggestion.evidenceRef)"
                     >
                       查看依据
@@ -571,6 +642,8 @@
                 class="tiny-btn"
                 type="button"
                 :disabled="isContextLoading"
+                :title="contextPrivacyToggleBoundary(true)"
+                :aria-label="contextPrivacyToggleBoundary(true)"
                 @click="setContextSensitiveIncluded(true)"
               >
                 临时包含敏感上下文
@@ -580,6 +653,8 @@
                 class="tiny-btn"
                 type="button"
                 :disabled="isContextLoading"
+                :title="contextPrivacyToggleBoundary(false)"
+                :aria-label="contextPrivacyToggleBoundary(false)"
                 @click="setContextSensitiveIncluded(false)"
               >
                 恢复默认隐藏
@@ -649,6 +724,8 @@
                     :key="loop.id"
                     type="button"
                     class="timeline-item"
+                    :title="contextEvidenceButtonBoundary(loop.evidenceRef, '查看 open loop 证据')"
+                    :aria-label="contextEvidenceButtonBoundary(loop.evidenceRef, '查看 open loop 证据')"
                     @click="openEvidence(loop.evidenceRef)"
                   >
                     <span>{{ formatDate(loop.timestamp) }}</span>
@@ -746,9 +823,40 @@
             <div v-if="meetingBrief" class="panel full">
               <div class="panel-head">
                 <h4><span class="panel-icon">M</span>{{ meetingBrief.title }}</h4>
-                <button class="tiny-btn primary" type="button" @click="copyMeetingBrief">
-                  复制简报
+                <button
+                  class="tiny-btn primary"
+                  type="button"
+                  :disabled="isMeetingLoading || Boolean(meetingBriefInputChangeReceipt)"
+                  @click="copyMeetingBrief"
+                >
+                  {{ meetingBriefInputChangeReceipt ? '先重新生成' : '复制简报' }}
                 </button>
+              </div>
+
+              <div
+                v-if="meetingBriefInputChangeReceipt"
+                class="meeting-input-change-receipt"
+                role="status"
+                aria-live="polite"
+                aria-label="简报输入变更回执"
+              >
+                <div class="meeting-request-head">
+                  <div>
+                    <span>简报输入变更回执</span>
+                    <strong>{{ meetingBriefInputChangeReceipt.summary }}</strong>
+                  </div>
+                  <p>{{ meetingBriefInputChangeReceipt.boundary }}</p>
+                </div>
+                <div class="meeting-request-grid">
+                  <article
+                    v-for="row in meetingBriefInputChangeReceipt.rows"
+                    :key="`meeting-input-change:${row.label}:${row.value}`"
+                    :class="['meeting-request-row', row.tone]"
+                  >
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </article>
+                </div>
               </div>
 
               <div class="brief-coverage">
@@ -981,6 +1089,8 @@
                 class="pill-btn primary"
                 type="button"
                 :disabled="isAssistantLoading"
+                :title="assistantDraftGenerateActionLabel"
+                :aria-label="assistantDraftGenerateActionLabel"
                 @click="generateAssistantDraft"
               >
                 {{ isAssistantLoading ? '生成中' : '生成关系感知回复' }}
@@ -1017,10 +1127,12 @@
                 <button
                   class="tiny-btn primary"
                   type="button"
-                  :disabled="isAssistantLoading"
+                  :disabled="isAssistantLoading || Boolean(assistantDraftGoalChangeReceipt)"
+                  :title="assistantDraftCopyActionLabel"
+                  :aria-label="assistantDraftCopyActionLabel"
                   @click="copyAssistantDraft"
                 >
-                  复制草稿
+                  {{ assistantDraftGoalChangeReceipt ? '先重新生成' : '复制草稿' }}
                 </button>
               </div>
               <div
@@ -1037,6 +1149,29 @@
                   <article
                     v-for="row in assistantDraft.draftReceipt.rows"
                     :key="`generation:${row.label}:${row.value}`"
+                    :class="row.tone"
+                  >
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </article>
+                </div>
+              </div>
+              <div
+                v-if="assistantDraftGoalChangeReceipt"
+                class="draft-goal-change-receipt"
+                role="status"
+                aria-live="polite"
+                aria-label="草稿目标变更回执"
+              >
+                <div class="draft-copy-receipt-head">
+                  <span>草稿目标变更回执</span>
+                  <strong>{{ assistantDraftGoalChangeReceipt.summary }}</strong>
+                </div>
+                <p>{{ assistantDraftGoalChangeReceipt.boundary }}</p>
+                <div class="draft-copy-receipt-grid">
+                  <article
+                    v-for="row in assistantDraftGoalChangeReceipt.rows"
+                    :key="`goal-change:${row.label}:${row.value}`"
                     :class="row.tone"
                   >
                     <span>{{ row.label }}</span>
@@ -1352,6 +1487,8 @@
                   <button
                     class="tiny-btn primary"
                     type="button"
+                    :title="reviewActionBoundaryText(item, 'confirm')"
+                    :aria-label="reviewActionBoundaryText(item, 'confirm')"
                     :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'confirm')"
                   >
@@ -1360,6 +1497,8 @@
                   <button
                     class="tiny-btn"
                     type="button"
+                    :title="reviewActionBoundaryText(item, 'snooze')"
+                    :aria-label="reviewActionBoundaryText(item, 'snooze')"
                     :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'snooze')"
                   >
@@ -1368,6 +1507,8 @@
                   <button
                     class="tiny-btn danger"
                     type="button"
+                    :title="reviewActionBoundaryText(item, 'reject')"
+                    :aria-label="reviewActionBoundaryText(item, 'reject')"
                     :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'reject')"
                   >
@@ -1426,10 +1567,25 @@
               <span>{{ formatConfidence(item.confidence) }}</span>
               <span>{{ item.evidenceRefs.length }} 条证据</span>
             </div>
+            <div
+              class="side-quick-snooze-receipt"
+              role="note"
+              aria-label="快速稍后回执"
+            >
+              <strong>快速稍后回执</strong>
+              <p>
+                侧栏的“稍后 7 天”只会把这条候选移出待确认，约 7 天后回到队列；不会确认、驳回、写入人物画像、删除证据、发送消息或创建跟进。
+              </p>
+              <p>
+                需要改写入内容或补复核备注时，先进入复核；侧栏 quick snooze 会沿用当前候选原文和已有备注。
+              </p>
+            </div>
             <div class="review-actions">
               <button
                 class="tiny-btn primary"
                 type="button"
+                :title="reviewFocusButtonBoundaryText(item)"
+                :aria-label="reviewFocusButtonBoundaryText(item)"
                 @click="focusReviewItem(item)"
               >
                 进入复核
@@ -1437,6 +1593,8 @@
               <button
                 class="tiny-btn"
                 type="button"
+                :title="reviewActionBoundaryText(item, 'snooze', { compact: true })"
+                :aria-label="reviewActionBoundaryText(item, 'snooze', { compact: true })"
                 :disabled="isReviewActionLoading(item.id)"
                 @click="applyReviewAction(item, 'snooze')"
               >
@@ -1541,6 +1699,15 @@ type AssistantDraftRequestReceipt = {
   }>;
   requestedAt: number;
 };
+type AssistantDraftGoalChangeReceipt = {
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+};
 type PersonSwitchReceipt = {
   personId: string;
   summary: string;
@@ -1558,6 +1725,21 @@ type MeetingBriefRequestReceipt = {
     tone: 'ok' | 'warn' | 'muted';
   }>;
   requestedAt: number;
+};
+type MeetingBriefInputSnapshot = {
+  title: string;
+  attendeesKey: string;
+  attendeeCount: number;
+  attendeePreview: string;
+};
+type MeetingBriefInputChangeReceipt = {
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
 };
 type ContextCardLoadFailureReceipt = {
   title: string;
@@ -1582,6 +1764,17 @@ type ContextCardRequestReceipt = {
     tone: 'ok' | 'warn' | 'muted';
   }>;
   requestedAt: number;
+};
+type ContextCardCopyReceipt = {
+  personId: string;
+  summary: string;
+  boundary: string;
+  rows: Array<{
+    label: string;
+    value: string;
+    tone: 'ok' | 'warn' | 'muted';
+  }>;
+  copiedAt: number;
 };
 type ReviewActionFailureReceipt = {
   title: string;
@@ -1672,14 +1865,17 @@ const meetingTitleAutoValue = ref('');
 const meetingAttendeesAutoValue = ref('');
 const meetingBrief = ref<RelationshipMeetingBrief | null>(null);
 const meetingBriefRequestReceipt = ref<MeetingBriefRequestReceipt | null>(null);
+const meetingBriefInputSnapshot = ref<MeetingBriefInputSnapshot | null>(null);
 const assistantGoal = ref('');
 const assistantDraft = ref<RelationshipAssistantDraft | null>(null);
 const assistantDraftCopyReceipt = ref<AssistantDraftCopyReceipt | null>(null);
 const assistantDraftRequestReceipt = ref<AssistantDraftRequestReceipt | null>(null);
+const assistantDraftGoalSnapshot = ref('');
 let assistantDraftRequestSeq = 0;
 const personSwitchReceipt = ref<PersonSwitchReceipt | null>(null);
 const contextCardLoadFailureReceipt = ref<ContextCardLoadFailureReceipt | null>(null);
 const contextCardRequestReceipt = ref<ContextCardRequestReceipt | null>(null);
+const contextCardCopyReceipt = ref<ContextCardCopyReceipt | null>(null);
 const detailBriefRef = ref<HTMLElement | null>(null);
 
 const stateFilterOptions: Array<{ value: RadarStateFilter; label: string }> = [
@@ -1699,8 +1895,173 @@ const reviewStatusOptions: Array<{ value: ReviewStatusFilter; label: string }> =
   { value: 'all', label: '全部' },
 ];
 
+const radarControlNoSideEffects =
+  '不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统。画像写入只来自 Review Queue 的显式确认。';
+
 const people = computed(() => peopleResponse.value?.items || []);
 const isInitialLoading = computed(() => isLoading.value && !peopleResponse.value);
+const meetingBriefInputChangeReceipt = computed<MeetingBriefInputChangeReceipt | null>(() => {
+  if (!meetingBrief.value || isMeetingLoading.value) return null;
+  const generated = meetingBriefInputSnapshot.value;
+  if (!generated) return null;
+  const current = buildMeetingBriefInputSnapshot(
+    meetingTitle.value,
+    parseAttendees(meetingAttendeesText.value),
+  );
+  if (
+    current.title === generated.title &&
+    current.attendeesKey === generated.attendeesKey
+  ) {
+    return null;
+  }
+
+  return {
+    summary: '当前输入已不是这版会议简报的依据',
+    boundary:
+      '页面仍保留上一版简报供对照，但复制已锁定；重新生成前不会把旧参会人覆盖、旧身份匹配或旧 open loop 当作当前会议结果外发。',
+    rows: [
+      {
+        label: '当前输入',
+        value: meetingInputSnapshotLabel(current),
+        tone: 'warn',
+      },
+      {
+        label: '简报依据',
+        value: meetingInputSnapshotLabel(generated),
+        tone: 'muted',
+      },
+      {
+        label: '复制状态',
+        value: '已锁定旧简报',
+        tone: 'warn',
+      },
+      {
+        label: '下一步',
+        value: '重新生成后可复制',
+        tone: 'ok',
+      },
+    ],
+  };
+});
+const assistantDraftGoalChangeReceipt = computed<AssistantDraftGoalChangeReceipt | null>(() => {
+  if (!assistantDraft.value || isAssistantLoading.value) return null;
+  const currentGoal = normalizeAssistantGoalSnapshot(assistantGoal.value);
+  const generatedGoal = assistantDraftGoalSnapshot.value;
+  if (currentGoal === generatedGoal) return null;
+
+  return {
+    summary: '当前输入已不是这版草稿的目标',
+    boundary:
+      '页面仍保留上一版草稿快照供对照，但复制已锁定；重新生成前不会发送消息、写入人物画像、创建跟进、复制旧草稿或临时放开敏感上下文。',
+    rows: [
+      {
+        label: '当前输入',
+        value: compactAssistantGoalLabel(currentGoal),
+        tone: 'warn',
+      },
+      {
+        label: '草稿依据',
+        value: compactAssistantGoalLabel(generatedGoal),
+        tone: generatedGoal ? 'muted' : 'warn',
+      },
+      {
+        label: '复制状态',
+        value: '已锁定旧草稿',
+        tone: 'warn',
+      },
+      {
+        label: '下一步',
+        value: '重新生成后可复制',
+        tone: 'ok',
+      },
+    ],
+  };
+});
+const assistantDraftGenerateActionLabel = computed(() => {
+  const person = selectedPerson.value;
+  const target = person ? `给 ${person.name}` : '给当前人物';
+  if (isAssistantLoading.value) {
+    return `生成中：正在${target}生成关系感知回复；返回前不会替换当前草稿，不会发送消息、写入人物画像、创建跟进、同步外部系统或临时包含敏感上下文。`;
+  }
+  const goal = normalizeAssistantGoalSnapshot(assistantGoal.value);
+  const goalPart = goal
+    ? `当前目标：${compactAssistantGoalLabel(goal)}。`
+    : '未填写目标时会使用人物上下文生成轻量跟进。';
+  const oldDraftPart = assistantDraft.value
+    ? '页面仍可能保留上一版草稿，重新生成前它只是旧快照。'
+    : '页面当前没有可复制的旧草稿。';
+  return `生成关系感知回复：${target}读取默认隐藏敏感上下文的人物关系卡。${goalPart}${oldDraftPart} 这个按钮只发起生成请求，不发送消息、不写入人物画像、不创建跟进、不同步外部系统，也不会临时包含敏感上下文。`;
+});
+const assistantDraftCopyActionLabel = computed(() => {
+  const draft = assistantDraft.value;
+  if (!draft) {
+    return '复制草稿：当前还没有生成的关系感知回复草稿可复制。';
+  }
+  if (isAssistantLoading.value) {
+    return `复制草稿已锁定：给 ${draft.personName} 的新草稿仍在生成中，旧草稿只是上次成功快照；生成结束前不会复制、发送、写入画像、创建跟进或放开敏感上下文。`;
+  }
+  if (assistantDraftGoalChangeReceipt.value) {
+    return `先重新生成：当前目标已不同于给 ${draft.personName} 的这版草稿，复制保持锁定；重新生成前不会复制旧草稿、发送消息、写入画像、创建跟进或放开敏感上下文。`;
+  }
+  const review = draft.safetyReview;
+  return `复制草稿：只把给 ${draft.personName} 的草稿正文写入本机剪贴板；不会发送消息、写入人物画像或创建跟进任务。复核状态 ${assistantReviewLabel(review.status)}，敏感隐藏 ${review.hiddenSensitiveCount}，待确认 ${review.pendingReviewCount}。`;
+});
+const peopleSearchBoundaryText = computed(() => {
+  const query = searchText.value.trim();
+  const queryPart = query
+    ? `当前输入「${compactText(query, 40)}」。`
+    : '当前没有输入关键词。';
+  return `搜索人物、别名或描述：${queryPart}按 Enter 只重新读取 Relationship Radar 人物列表，并刷新当前可见人物的上下文卡；不会运行后台整理，${radarControlNoSideEffects}`;
+});
+const refreshAllBoundaryText = computed(() => {
+  if (isLoading.value) {
+    return `刷新中：正在重新读取人物列表、Review Queue、待确认摘要、关系图谱和当前人物上下文卡；重复点击不会启动第二轮刷新，也不会运行后台整理，${radarControlNoSideEffects}`;
+  }
+  return `刷新关系雷达：重新读取人物列表、Review Queue、待确认摘要、关系图谱和当前人物上下文卡；只更新本页快照，不运行后台整理，${radarControlNoSideEffects}`;
+});
+const candidateToggleBoundaryText = computed(() => {
+  if (includeBelowThreshold.value) {
+    return `关闭低频候选：只重新读取达到高频阈值的人物并更新本页筛选范围；不会删除候选、不会降低关系分，${radarControlNoSideEffects}`;
+  }
+  return `查看低频候选：只把未达高频阈值的人物纳入本页读取范围，用于核对别名、邮箱和新出现人物；不会把候选升级为确认关系，${radarControlNoSideEffects}`;
+});
+const showCandidateBoundaryText = computed(
+  () =>
+    `查看候选：只打开低频人物读取范围并重新读取本页人物列表；不会把候选写入人物画像、不会提升关系分，${radarControlNoSideEffects}`,
+);
+const clearPeopleFiltersBoundaryText = computed(
+  () =>
+    `清空筛选：只清除本页搜索、状态和低频候选筛选，并重新读取全部雷达人物；不会重算后台投影，${radarControlNoSideEffects}`,
+);
+const spotlightBriefBoundaryText = computed(() => {
+  const person = spotlightPerson.value;
+  if (!person) {
+    return `查看完整 brief 暂不可用：当前没有可优先处理的人物；页面只保留读取和筛选动作，${radarControlNoSideEffects}`;
+  }
+  return `查看 ${person.name} 的完整 brief：只把此人设为当前人物、滚动到详情并读取上下文卡；不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统。`;
+});
+const spotlightRefreshBoundaryText = computed(() => {
+  const person = spotlightPerson.value;
+  if (isConsolidating.value) {
+    return `强制刷新中：正在整理关系雷达投影和上下文卡；重复点击不会启动第二轮整理，${radarControlNoSideEffects}`;
+  }
+  if (!person) {
+    return `强制刷新此人暂不可用：当前没有 spotlight 人物；不会运行后台整理，${radarControlNoSideEffects}`;
+  }
+  return `强制刷新 ${person.name}：只请求 Memory Service 更新此人的关系雷达投影和上下文卡，然后重新读取页面；不会确认候选事实、写入人物画像、发送消息、创建跟进或同步外部系统。`;
+});
+const spotlightCopyBoundaryText = computed(() => {
+  const person = spotlightPerson.value;
+  if (!person) {
+    return `复制给 AI 暂不可用：当前没有 spotlight 人物上下文卡；不会写剪贴板，${radarControlNoSideEffects}`;
+  }
+  if (!isSpotlightContextLoaded.value || contextCard.value?.person.id !== person.id) {
+    return `复制给 AI 暂不可用：${person.name} 的上下文卡尚未加载完成；不会复制旧人物上下文、发送消息或写入人物画像。`;
+  }
+  const sensitiveIncluded = contextCard.value.privacySummary.sensitiveIncluded === true;
+  const scope = contextPrivacyScopeLabel(sensitiveIncluded);
+  return `复制给 AI：只把 ${person.name} 的当前 contextMd 写入本机剪贴板（${scope}）；不会发送消息、写入人物画像、创建跟进、刷新其他场景或同步外部系统。`;
+});
 const hasActivePeopleFilters = computed(
   () =>
     Boolean(appliedPeopleFilters.value.search) ||
@@ -2011,14 +2372,7 @@ const reviewEmptyReceipt = computed<ReviewEmptyReceipt>(() => {
 const contextHiddenSensitiveCount = computed(() => {
   const summary = contextCard.value?.privacySummary;
   if (!summary) return 0;
-  return (
-    summary.redactedAliases +
-    summary.redactedFacts +
-    summary.redactedRelationshipHints +
-    summary.redactedEvidenceRefs +
-    summary.redactedOpenLoops +
-    summary.redactedRetrievalHints
-  );
+  return countHiddenSensitiveContext(summary);
 });
 const contextPrivacyTitle = computed(() => {
   const summary = contextCard.value?.privacySummary;
@@ -2053,6 +2407,40 @@ const contextCopyActionLabel = computed(() =>
     ? '复制含敏感上下文'
     : '复制当前上下文',
 );
+const contextCopyActionBoundary = computed(() => {
+  const card = contextCard.value;
+  if (!card) {
+    return '复制当前上下文暂不可用：当前人物的上下文卡还没有加载；不会写剪贴板、发送消息、写入人物画像或创建跟进。';
+  }
+  const requestReceipt = contextCardRequestReceipt.value;
+  if (isContextLoading.value || requestReceipt) {
+    const requestedScope = requestReceipt
+      ? requestReceipt.rows.find((row) => row.label === '请求范围')?.value
+      : contextPrivacyScopeLabel(contextIncludeSensitive.value);
+    return `请求中：正在生成 ${card.person.name} 的${requestedScope || '上下文卡'}版本；复制按钮会保持禁用，不会复制旧快照、发送消息、写入人物画像或创建跟进。`;
+  }
+  const copiedStaleSnapshot =
+    contextCardLoadFailureReceipt.value?.personId === card.person.id;
+  const sensitiveIncluded = card.privacySummary.sensitiveIncluded === true;
+  const scope = contextPrivacyScopeLabel(sensitiveIncluded);
+  const hiddenCount = countHiddenSensitiveContext(card.privacySummary);
+  const actionLabel = sensitiveIncluded ? '复制含敏感上下文' : '复制当前上下文';
+  const parts = [
+    `${actionLabel}：只把 ${card.person.name} 的${copiedStaleSnapshot ? '上次成功' : '当前'} contextMd 写入本机剪贴板（${copiedStaleSnapshot ? `上次快照 · ${scope}` : scope}）。`,
+    '不会发送消息、写入人物画像、创建跟进、刷新其他场景或同步外部系统。',
+  ];
+  if (copiedStaleSnapshot) {
+    parts.push('当前显示来自刷新失败后保留的上次快照，不代表本次刷新已完成。');
+  }
+  if (sensitiveIncluded) {
+    parts.push('已显式包含敏感上下文，外发给其他 AI 或聊天前必须先复核人物身份、事实和敏感范围。');
+  } else if (hiddenCount > 0) {
+    parts.push(`默认隐藏的 ${hiddenCount} 条敏感上下文不会进入剪贴板。`);
+  } else {
+    parts.push('当前没有检测到默认隐藏项，外发前仍需核对事实和来源。');
+  }
+  return parts.join(' ');
+});
 const generatedPeopleCount = computed(
   () => people.value.filter((person) => person.projectionSource !== 'lazy').length,
 );
@@ -2120,6 +2508,7 @@ async function loadPeople() {
       contextCard.value = null;
       contextCardLoadFailureReceipt.value = null;
       contextCardRequestReceipt.value = null;
+      contextCardCopyReceipt.value = null;
     }
   } catch (error: any) {
     errorMessage.value = error?.message || '加载关系雷达失败';
@@ -2136,6 +2525,7 @@ async function loadContextCard(personId: string): Promise<boolean> {
     previousCard?.privacySummary.sensitiveIncluded === true;
   const requestedSensitiveIncluded = contextIncludeSensitive.value;
   contextCardLoadFailureReceipt.value = null;
+  contextCardCopyReceipt.value = null;
   contextCardRequestReceipt.value =
     previousCard && hasReusableSnapshot
       ? buildContextCardRequestReceipt({
@@ -2268,6 +2658,73 @@ function reviewDraftReceiptText(item: RelationshipReviewItem): string {
   return '编辑建议写入内容或复核备注只会先留在本页；点击确认、稍后或驳回前，不会自动保存到 Memory Service，也不会写入人物画像。';
 }
 
+function reviewActionBoundaryText(
+  item: RelationshipReviewItem,
+  action: RelationshipReviewAction,
+  options: { compact?: boolean } = {},
+): string {
+  if (!canActOnReviewItem(item)) {
+    return `${reviewActionLabel(action)}不可用：这条候选已${reviewStatusLabel(item.status)}，这里只能回看写入内容、证据和备注；不会再次改变人物画像或队列状态。`;
+  }
+
+  const evidenceText = `${item.evidenceRefs.length} 条证据`;
+  const dirtyFields = reviewDraftDirtyFields(item);
+  const dirtyFieldText = dirtyFields
+    .map((field) => (field === '复核备注' ? '备注' : field))
+    .join('、');
+  const draftText =
+    dirtyFields.length > 0
+      ? `本页已改${dirtyFieldText}，点击会按当前草稿提交。`
+      : options.compact
+        ? '侧栏会沿用当前候选原文和已有备注。'
+        : '当前使用候选写入内容和已有备注。';
+  const noteText = normalizeReviewDraftText(reviewNoteDraftValue(item))
+    ? '备注会随操作保留。'
+    : '当前未写备注。';
+  const target = `${item.personName} 的 ${item.proposedKey}`;
+
+  if (action === 'confirm') {
+    return `确认写入 ${target}：${draftText}${noteText} 会把当前写入内容保存到人物画像，并让后续上下文卡、会议简报和回复草稿按用户确认事实读取；保留 ${evidenceText}，不会发送消息、创建跟进或同步外部系统。`;
+  }
+  if (action === 'snooze') {
+    const prefix = options.compact ? '侧栏快速稍后' : '稍后复核';
+    const reviewPath = options.compact
+      ? '需要改写入内容或补备注时，先进入完整复核卡。'
+      : '编辑后的写入内容和备注会保留。';
+    return `${prefix} ${target}：约 7 天后回到待确认；${draftText}${noteText} ${reviewPath} 保留 ${evidenceText}，不会写入人物画像、确认或驳回候选、删除证据、发送消息或创建跟进。`;
+  }
+  return `驳回 ${target}：${noteText} 只把候选标为已驳回并保留 ${evidenceText}；不会写入人物画像、不会删除原始证据，也不会发送消息、创建跟进或同步外部系统。`;
+}
+
+function reviewFocusButtonBoundaryText(item: RelationshipReviewItem): string {
+  return `进入 ${item.personName} 的完整复核卡：先查看 ${item.proposedKey}、可编辑写入内容、备注和 ${item.evidenceRefs.length} 条证据；进入复核本身不会写入人物画像、确认、驳回、稍后、发送消息或创建跟进。`;
+}
+
+function consolidationBoundaryText(force: boolean, personId?: string): string {
+  if (isConsolidating.value) {
+    return `整理中：正在更新关系雷达投影和上下文卡；重复点击不会启动第二轮整理，${radarControlNoSideEffects}`;
+  }
+  const targetPerson = personId
+    ? people.value.find((item) => item.id === personId)
+    : selectedPerson.value;
+  if (force && targetPerson) {
+    return `强制刷新 ${targetPerson.name}：只请求 Memory Service 更新此人的关系雷达投影和上下文卡，然后重新读取页面快照；不会确认候选事实、写入人物画像、发送消息、创建跟进或同步外部系统。`;
+  }
+  return `后台整理：请求 Memory Service 整理高频人物的关系雷达投影、上下文卡和事件索引，然后重新读取页面；不会确认候选事实、写入人物画像、发送消息、创建跟进或同步外部系统。`;
+}
+
+function stateFilterBoundaryText(next: RadarStateFilter): string {
+  return `筛选状态：${stateFilterLabel(next)}。点击只用 /relationships/people 重新读取当前人物列表，并按结果保留或切换当前 brief；不会更新后台投影，${radarControlNoSideEffects}`;
+}
+
+function personCardBoundaryText(person: RelationshipPersonSummary): string {
+  const current = person.id === selectedPersonId.value;
+  const prefix = current
+    ? `重新查看 ${person.name} 的沟通前 brief`
+    : `切换到 ${person.name} 的沟通前 brief`;
+  return `${prefix}：只切换本页当前人物、读取此人的上下文卡，并清空上一位人物的会议简报、回复草稿和复制回执；不会确认关系事实、写入人物画像、发送消息、创建跟进或同步外部系统。当前质量 ${qualityLabel(person.dataQuality)}，状态 ${stateLabel(person.radarState)}，待确认 ${person.reviewPendingCount}。`;
+}
+
 async function runConsolidation(force: boolean, personId?: string) {
   isConsolidating.value = true;
   errorMessage.value = '';
@@ -2351,9 +2808,11 @@ function selectPerson(
   assistantDraft.value = null;
   assistantDraftCopyReceipt.value = null;
   assistantDraftRequestReceipt.value = null;
+  assistantDraftGoalSnapshot.value = '';
   meetingBrief.value = null;
   meetingBriefRequestReceipt.value = null;
   contextCardRequestReceipt.value = null;
+  contextCardCopyReceipt.value = null;
   personSwitchReceipt.value = null;
   void loadContextCard(person.id);
   if (options.scrollToBrief) {
@@ -2432,9 +2891,12 @@ function resetPersonScopedArtifacts(person?: RelationshipPersonSummary) {
   );
   meetingBrief.value = null;
   meetingBriefRequestReceipt.value = null;
+  meetingBriefInputSnapshot.value = null;
   assistantDraft.value = null;
   assistantDraftCopyReceipt.value = null;
   assistantDraftRequestReceipt.value = null;
+  assistantDraftGoalSnapshot.value = '';
+  contextCardCopyReceipt.value = null;
   if (!hadGeneratedArtifacts || !person) {
     personSwitchReceipt.value = null;
     return;
@@ -2512,6 +2974,7 @@ async function generateMeetingBrief() {
   const attendees = parseAttendees(meetingAttendeesText.value);
   const titleInput = meetingTitle.value.trim();
   const requestTitle = titleInput || '未命名会议';
+  const requestSnapshot = buildMeetingBriefInputSnapshot(requestTitle, attendees);
   meetingBriefRequestReceipt.value = buildMeetingBriefRequestReceipt({
     title: requestTitle,
     attendees,
@@ -2524,6 +2987,7 @@ async function generateMeetingBrief() {
       title: titleInput || undefined,
       attendees,
     });
+    meetingBriefInputSnapshot.value = requestSnapshot;
     meetingBriefRequestReceipt.value = null;
     personSwitchReceipt.value = null;
   } catch (error: any) {
@@ -2614,6 +3078,7 @@ async function generateAssistantDraft() {
     });
     if (requestSeq !== assistantDraftRequestSeq || selectedPersonId.value !== person.id) return;
     assistantDraft.value = nextDraft;
+    assistantDraftGoalSnapshot.value = normalizeAssistantGoalSnapshot(goal);
     assistantDraftRequestReceipt.value = null;
     personSwitchReceipt.value = null;
   } catch (error: any) {
@@ -2800,20 +3265,31 @@ function escapeAttributeSelector(value: string) {
 
 async function copyContextPackage() {
   if (!contextCard.value) return;
+  const card = contextCard.value;
   const copiedStaleSnapshot =
-    contextCardLoadFailureReceipt.value?.personId === contextCard.value.person.id;
+    contextCardLoadFailureReceipt.value?.personId === card.person.id;
   const message = copiedStaleSnapshot
-    ? contextCard.value.privacySummary.sensitiveIncluded
+    ? card.privacySummary.sensitiveIncluded
       ? '已复制上次含敏感上下文快照，外发前请复核'
       : '已复制上次上下文快照，外发前请复核'
-    : contextCard.value.privacySummary.sensitiveIncluded
+    : card.privacySummary.sensitiveIncluded
       ? '已复制含敏感上下文，外发前请复核'
       : '已复制上下文包';
-  await copyText(contextCard.value.contextMd, message);
+  const copied = await copyText(card.contextMd, message);
+  if (copied) {
+    contextCardCopyReceipt.value = buildContextCardCopyReceipt({
+      card,
+      copiedStaleSnapshot,
+    });
+  }
 }
 
 async function copyAssistantDraft() {
   if (!assistantDraft.value) return;
+  if (assistantDraftGoalChangeReceipt.value) {
+    showToast('当前目标已变更，请重新生成后再复制');
+    return;
+  }
   const copied = await copyText(assistantDraft.value.draftText, '已复制回复草稿');
   if (copied) {
     assistantDraftCopyReceipt.value = buildAssistantDraftCopyReceipt(assistantDraft.value);
@@ -2822,6 +3298,10 @@ async function copyAssistantDraft() {
 
 async function copyMeetingBrief() {
   if (!meetingBrief.value) return;
+  if (meetingBriefInputChangeReceipt.value) {
+    showToast('当前会议输入已变更，请重新生成后再复制');
+    return;
+  }
   const brief = meetingBrief.value;
   const omittedAttendees = brief.omittedAttendees || [];
   const lines = [
@@ -3004,6 +3484,40 @@ function parseAttendees(text: string): Array<{ name: string; email?: string }> {
     });
 }
 
+function buildMeetingBriefInputSnapshot(
+  title: string,
+  attendees: Array<{ name: string; email?: string }>,
+): MeetingBriefInputSnapshot {
+  const normalizedTitle = normalizeMeetingTitleSnapshot(title);
+  const attendeeKeyParts = attendees.map((attendee) => {
+    const name = attendee.name.replace(/\s+/g, ' ').trim();
+    const email = (attendee.email || '').replace(/\s+/g, '').trim().toLowerCase();
+    return `${name.toLowerCase()}<${email}>`;
+  });
+  const attendeePreview = attendees
+    .slice(0, 3)
+    .map((attendee) => attendee.name || attendee.email || '未命名参会人')
+    .join('、');
+  return {
+    title: normalizedTitle,
+    attendeesKey: attendeeKeyParts.join('|'),
+    attendeeCount: attendees.length,
+    attendeePreview,
+  };
+}
+
+function normalizeMeetingTitleSnapshot(value: string | undefined): string {
+  return (value || '').replace(/\s+/g, ' ').trim() || '未命名会议';
+}
+
+function meetingInputSnapshotLabel(snapshot: MeetingBriefInputSnapshot): string {
+  const attendeeText =
+    snapshot.attendeeCount > 0
+      ? `${snapshot.attendeeCount} 位参会人${snapshot.attendeePreview ? `：${compactText(snapshot.attendeePreview, 34)}` : ''}`
+      : '缺少参会人';
+  return `${compactText(snapshot.title, 28)} · ${attendeeText}`;
+}
+
 function formatPercent(value: number | undefined) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
@@ -3162,6 +3676,14 @@ function compactText(text: string | undefined, maxLength = 180) {
   const normalized = (text || '').replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function normalizeAssistantGoalSnapshot(value: string | undefined): string {
+  return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function compactAssistantGoalLabel(value: string): string {
+  return value ? compactText(value, 44) : '未填写目标，轻量跟进';
 }
 
 function shortPersonName(name: string) {
@@ -3434,8 +3956,144 @@ function buildContextCardLoadFailureReceipt(input: {
   };
 }
 
+function buildContextCardCopyReceipt(input: {
+  card: RelationshipContextCard;
+  copiedStaleSnapshot: boolean;
+}): ContextCardCopyReceipt {
+  const card = input.card;
+  const sensitiveIncluded = card.privacySummary.sensitiveIncluded === true;
+  const hiddenCount = countHiddenSensitiveContext(card.privacySummary);
+  const scope = contextPrivacyScopeLabel(sensitiveIncluded);
+  const snapshotLabel = input.copiedStaleSnapshot ? `上次快照 · ${scope}` : `当前卡片 · ${scope}`;
+  const suggestionCount = contextActionSuggestionCount(card);
+  const boundaryParts = [
+    `剪贴板只写入 ${card.person.name} 的 contextMd。`,
+    '本次复制不会发送消息、写入人物画像、创建跟进、刷新其他场景或同步外部系统。',
+  ];
+
+  if (sensitiveIncluded) {
+    boundaryParts.push('这份剪贴板内容包含显式放开的敏感上下文，外发给其他 AI 或聊天前必须先复核人物身份、事实和敏感范围。');
+  } else if (hiddenCount > 0) {
+    boundaryParts.push(`默认隐藏的 ${hiddenCount} 条敏感上下文没有进入剪贴板，也没有被临时包含。`);
+  } else {
+    boundaryParts.push('本次没有检测到默认隐藏的人物敏感上下文，外发前仍需核对事实和来源。');
+  }
+
+  if (input.copiedStaleSnapshot) {
+    boundaryParts.push('复制的是刷新失败后保留的上次成功快照，不代表本次刷新已经完成。');
+  }
+
+  return {
+    personId: card.person.id,
+    summary: `${card.person.name} 的${input.copiedStaleSnapshot ? '上次' : ''}${scope}已复制`,
+    boundary: boundaryParts.join(' '),
+    rows: [
+      {
+        label: '复制范围',
+        value: snapshotLabel,
+        tone: input.copiedStaleSnapshot || sensitiveIncluded ? 'warn' : 'ok',
+      },
+      {
+        label: '可引用内容',
+        value: `证据 ${card.evidenceRefs.length} · 事实 ${card.knownFacts.length} · 跟进 ${card.openLoops.length} · 建议 ${suggestionCount}`,
+        tone: 'ok',
+      },
+      {
+        label: '隐私状态',
+        value: sensitiveIncluded
+          ? '已包含敏感上下文'
+          : hiddenCount > 0
+            ? `仍隐藏 ${hiddenCount} 条敏感上下文`
+            : '无默认隐藏项',
+        tone: sensitiveIncluded ? 'warn' : hiddenCount > 0 ? 'ok' : 'muted',
+      },
+      {
+        label: '外部动作',
+        value: '未发送 · 未写回 · 未建任务',
+        tone: 'ok',
+      },
+    ],
+    copiedAt: Date.now(),
+  };
+}
+
 function contextPrivacyScopeLabel(sensitiveIncluded: boolean) {
   return sensitiveIncluded ? '含敏感上下文' : '默认隐藏敏感上下文';
+}
+
+function countHiddenSensitiveContext(
+  summary: RelationshipContextCard['privacySummary'],
+) {
+  return (
+    summary.redactedAliases +
+    summary.redactedFacts +
+    summary.redactedRelationshipHints +
+    summary.redactedEvidenceRefs +
+    summary.redactedOpenLoops +
+    summary.redactedRetrievalHints
+  );
+}
+
+function contextActionSuggestionCount(card: RelationshipContextCard) {
+  if (card.actionSuggestions && card.actionSuggestions.length > 0) {
+    return card.actionSuggestions.length;
+  }
+  return buildFallbackActionSuggestions(card).length;
+}
+
+function contextPrivacyToggleBoundary(nextSensitiveIncluded: boolean) {
+  const card = contextCard.value;
+  const targetScope = contextPrivacyScopeLabel(nextSensitiveIncluded);
+  if (!card) {
+    return `切换到${targetScope}暂不可用：当前人物的上下文卡还没有加载；不会请求敏感上下文、写入画像、发送消息或创建跟进。`;
+  }
+  const currentScope = contextPrivacyScopeLabel(
+    card.privacySummary.sensitiveIncluded === true,
+  );
+  if (isContextLoading.value) {
+    return `敏感范围切换中：正在请求 ${card.person.name} 的${targetScope}版本；当前仍显示${currentScope}快照，复制保持禁用。`;
+  }
+  const hiddenCount = countHiddenSensitiveContext(card.privacySummary);
+  const parts = [
+    nextSensitiveIncluded
+      ? `临时包含敏感上下文：重新请求 ${card.person.name} 的含敏感上下文版本。`
+      : `恢复默认隐藏：重新请求 ${card.person.name} 的默认隐藏敏感上下文版本。`,
+    `返回前仍显示当前${currentScope}快照，新结果不会提前替换。`,
+    '请求期间复制保持禁用；这一步不会写入人物画像、发送消息、创建跟进、刷新其他场景或同步外部系统。',
+  ];
+  if (nextSensitiveIncluded && hiddenCount > 0) {
+    parts.push(`本次会尝试临时纳入当前默认隐藏的 ${hiddenCount} 条敏感上下文，外发前仍需人工复核。`);
+  }
+  if (!nextSensitiveIncluded && card.privacySummary.sensitiveIncluded) {
+    parts.push('成功后复制按钮会回到默认隐藏版本，避免继续外发含敏感上下文快照。');
+  }
+  return parts.join(' ');
+}
+
+function contextEvidenceButtonBoundary(
+  evidence: RelationshipEvidenceRef | undefined,
+  purpose: string,
+) {
+  if (!evidence) {
+    return `${purpose}暂不可打开：当前没有可追溯证据；不会写入人物画像、发送消息、创建跟进或同步外部系统。`;
+  }
+  const label = evidenceLabel(evidence);
+  const target = evidence.exploreLink
+    ? '记忆系统内部证据页'
+    : evidence.sourceUrl
+      ? '安全外部来源链接'
+      : '当前证据摘要';
+  const title = compactText(evidence.title || evidence.snippet || label, 72);
+  return `${purpose}：打开 ${label}「${title}」的${target}；只用于复核来源，不会确认关系事实、写入人物画像、发送消息、创建跟进、刷新上下文卡或同步外部系统。`;
+}
+
+function contextRetryRefreshBoundary(receipt: ContextCardLoadFailureReceipt | null) {
+  if (!receipt) {
+    return '重试刷新上下文卡：重新请求当前人物的 Context Card；不会写入人物画像、发送消息、创建跟进或同步外部系统。';
+  }
+  const requestedScope =
+    receipt.rows.find((row) => row.label === '请求范围')?.value || '上次请求范围';
+  return `重试刷新 ${receipt.summary}：按${requestedScope}重新请求 Context Card；返回前仍保留上次成功快照，复制范围不会提前改变，不会写入人物画像、发送消息、创建跟进或同步外部系统。`;
 }
 
 function evidenceLabel(evidence: RelationshipEvidenceRef) {
@@ -5228,6 +5886,67 @@ button {
   border-color: rgba(34, 197, 94, 0.26);
 }
 
+.context-copy-receipt {
+  display: grid;
+  gap: 0.72rem;
+  margin: 0.85rem 0.85rem 0;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+  border-radius: 0.72rem;
+  background: rgba(22, 163, 74, 0.09);
+  padding: 0.85rem;
+}
+
+.context-copy-head span,
+.context-copy-row span {
+  display: block;
+  color: #86efac;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.context-copy-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 0.94rem;
+}
+
+.context-copy-receipt p {
+  margin: 0;
+  color: #bbf7d0;
+  line-height: 1.55;
+}
+
+.context-copy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.context-copy-row {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.38);
+  padding: 0.65rem;
+}
+
+.context-copy-row strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.context-copy-row.warn {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.context-copy-row.muted {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
 .brief-source-row.muted {
   border-color: rgba(148, 163, 184, 0.18);
 }
@@ -5252,6 +5971,25 @@ button {
 .meeting-request-receipt.failed {
   border-color: rgba(245, 158, 11, 0.34);
   background: rgba(39, 27, 10, 0.34);
+}
+
+.meeting-input-change-receipt {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0.85rem 0.85rem;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  border-radius: 0.78rem;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 0.85rem;
+}
+
+.meeting-input-change-receipt .meeting-request-head span,
+.meeting-input-change-receipt .meeting-request-row span {
+  color: #fcd34d;
+}
+
+.meeting-input-change-receipt .meeting-request-head p {
+  color: #fde68a;
 }
 
 .meeting-request-head {
@@ -5661,7 +6399,8 @@ button {
 }
 
 .draft-copy-receipt,
-.draft-generation-receipt {
+.draft-generation-receipt,
+.draft-goal-change-receipt {
   margin: 0 0.85rem 0.85rem;
   border: 1px solid rgba(96, 165, 250, 0.28);
   border-radius: 0.75rem;
@@ -5687,6 +6426,16 @@ button {
   color: #fecaca;
 }
 
+.draft-goal-change-receipt {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.draft-goal-change-receipt .draft-copy-receipt-head span {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+}
+
 .draft-copy-receipt-head {
   display: flex;
   gap: 0.65rem;
@@ -5709,7 +6458,9 @@ button {
   line-height: 1.4;
 }
 
-.draft-copy-receipt p {
+.draft-copy-receipt p,
+.draft-request-receipt p,
+.draft-goal-change-receipt p {
   margin: 0.55rem 0 0;
   color: #cbd5e1;
   line-height: 1.5;
@@ -6238,6 +6989,28 @@ button {
 
 .side-review {
   margin: 0.75rem 0.8rem 0;
+}
+
+.side-quick-snooze-receipt {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+  padding: 0.65rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 0.62rem;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.side-quick-snooze-receipt strong {
+  color: #bfdbfe;
+  font-size: 0.75rem;
+}
+
+.side-quick-snooze-receipt p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.73rem;
+  line-height: 1.45;
 }
 
 .side-boundary {

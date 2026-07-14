@@ -10,6 +10,7 @@ import {
   buildAgentDiagnosticCopiedSnapshot,
   buildAgentDiagnosticCopyFreshnessReceipt,
   buildAgentDiagnosticCopySuccessReceipt,
+  buildAgentApprovalCopyButtonBoundary,
   buildAgentTraceReviewLane,
   buildPendingApprovalActions,
   buildAgentRunReviewItems,
@@ -43,6 +44,15 @@ type ApprovalCopyStatus = {
   manualText?: string;
 } | null;
 
+type ApprovalCopyReceipt = {
+  key: string;
+  toolId: string;
+  target: 'key' | 'payload' | 'retry';
+  targetLabel: string;
+  copiedSnapshot: AgentDiagnosticCopiedSnapshot | null;
+  copiedAt: string;
+} | null;
+
 type RunPacketCopyStatus = {
   state: 'copied' | 'failed';
   message: string;
@@ -51,10 +61,41 @@ type RunPacketCopyStatus = {
 } | null;
 
 const AGENT_TRACE_JUMP_EVENT = 'agent-thinking:jump-to-step';
+const AGENT_TRACE_STEP_BUTTON_NO_EFFECT_BOUNDARY =
+  '只展开并聚焦当前页面时间线；不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作。';
+
+const normalizeAgentTraceButtonBoundaryPart = (value?: string) =>
+  value?.trim().replace(/。+$/u, '') || '';
+
+const buildAgentTraceStepButtonBoundary = (
+  sourceLabel: string,
+  stepNumber: number,
+  reason?: string,
+  boundary = AGENT_TRACE_STEP_BUTTON_NO_EFFECT_BOUNDARY,
+) =>
+  [
+    `从${sourceLabel}跳到步骤 ${stepNumber}`,
+    reason ? `复核理由：${reason}` : '',
+    boundary,
+  ]
+    .map(normalizeAgentTraceButtonBoundaryPart)
+    .filter(Boolean)
+    .join('。') + '。';
+
+const approvalCopyTargetLabel: Record<
+  Exclude<ApprovalCopyStatus, null>['target'],
+  string
+> = {
+  key: '批准 key',
+  payload: '审核包',
+  retry: '重跑配置',
+};
 
 const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isProcessing = false }) => {
   const [expandedSteps, setExpandedSteps] = useState<number[]>([]);
   const [approvalCopyStatus, setApprovalCopyStatus] = useState<ApprovalCopyStatus>(null);
+  const [approvalCopyReceipt, setApprovalCopyReceipt] =
+    useState<ApprovalCopyReceipt>(null);
   const [runPacketCopyStatus, setRunPacketCopyStatus] = useState<RunPacketCopyStatus>(null);
   const runReviewItems = buildAgentRunReviewItems(thoughtProcess, {
     isProcessing,
@@ -99,6 +140,8 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     runDiagnosticPacket?.navigationReceipt || null;
   const traceSpanComposition =
     runDiagnosticPacket?.traceSpanComposition || null;
+  const approvalQueueReceipt =
+    runDiagnosticPacket?.approvalQueueReceipt || null;
   const runReviewLabel: Record<typeof runReviewSeverity, string> = {
     ok: '正常',
     info: '提示',
@@ -118,6 +161,13 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
           runDiagnosticPacket,
         )
       : null;
+  const resultHandoffReceipt =
+    runDiagnosticPacket?.resultHandoffReceipt || null;
+  const processingIndicatorText = resultHandoffReceipt
+    ? '结果整理中...'
+    : isProcessing
+      ? '处理中...'
+      : '';
 
   useEffect(() => {
     setExpandedSteps(prevExpanded =>
@@ -208,6 +258,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
   };
 
   const handleCopyApprovalText = async (
+    toolId: string,
     approvalKey: string,
     text: string,
     target: 'key' | 'payload' | 'retry',
@@ -225,6 +276,16 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
         target,
         state: 'copied',
         message: successMessage,
+      });
+      setApprovalCopyReceipt({
+        key: approvalKey,
+        toolId,
+        target,
+        targetLabel: approvalCopyTargetLabel[target],
+        copiedSnapshot: runDiagnosticPacket
+          ? buildAgentDiagnosticCopiedSnapshot(runDiagnosticPacket)
+          : null,
+        copiedAt: new Date().toISOString(),
       });
       window.setTimeout(() => {
         setApprovalCopyStatus(currentStatus =>
@@ -250,8 +311,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     }
   };
 
-  const handleCopyApprovalKey = (approvalKey: string) =>
+  const handleCopyApprovalKey = (toolId: string, approvalKey: string) =>
     handleCopyApprovalText(
+      toolId,
       approvalKey,
       approvalKey,
       'key',
@@ -259,10 +321,12 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     );
 
   const handleCopyApprovalReviewPayload = (
+    toolId: string,
     approvalKey: string,
     reviewPayload: string,
   ) =>
     handleCopyApprovalText(
+      toolId,
       approvalKey,
       reviewPayload,
       'payload',
@@ -270,10 +334,12 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     );
 
   const handleCopyApprovalRetryConfig = (
+    toolId: string,
     approvalKey: string,
     retryConfigPatch: string,
   ) =>
     handleCopyApprovalText(
+      toolId,
       approvalKey,
       retryConfigPatch,
       'retry',
@@ -344,7 +410,18 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
   
   return (
     <div className="agent-visualizer">
-      <h3>智能Agent处理流程 {isProcessing && <span className="processing-indicator">处理中...</span>}</h3>
+      <h3>
+        智能Agent处理流程{' '}
+        {processingIndicatorText && (
+          <span
+            className={`processing-indicator ${
+              resultHandoffReceipt ? 'finalizing' : ''
+            }`}
+          >
+            {processingIndicatorText}
+          </span>
+        )}
+      </h3>
       
       {thoughtProcess.length === 0 ? (
         <div className="empty-state">
@@ -362,6 +439,38 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                 <p>
                   先处理失败、阻断和预算耗尽，再阅读完整时间线。
                 </p>
+                {resultHandoffReceipt && (
+                  <div
+                    className="agent-result-handoff-receipt"
+                    aria-label="结果整理回执"
+                    role="status"
+                  >
+                    <span>{resultHandoffReceipt.title}</span>
+                    <p>{resultHandoffReceipt.traceState}</p>
+                    <p>{resultHandoffReceipt.resultState}</p>
+                    <p>{resultHandoffReceipt.unresolvedIssueSummary}</p>
+                    <p>{resultHandoffReceipt.inspectionRoute}</p>
+                    {resultHandoffReceipt.terminalStepNumber && (
+                      <div
+                        className="agent-result-handoff-steps"
+                        aria-label="结果整理终止步骤"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            jumpToStep(
+                              resultHandoffReceipt.terminalStepNumber! - 1,
+                            )
+                          }
+                          aria-label={`从结果整理回执跳到终止步骤 ${resultHandoffReceipt.terminalStepNumber}`}
+                        >
+                          终止步骤 #{resultHandoffReceipt.terminalStepNumber}
+                        </button>
+                      </div>
+                    )}
+                    <small>{resultHandoffReceipt.boundary}</small>
+                  </div>
+                )}
                 {traceReviewLane && (
                   <div
                     className="agent-trace-review-lane"
@@ -380,20 +489,46 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           <span>{item.label}</span>
                           <strong>{item.value}</strong>
                           <p>{item.detail}</p>
-                          {item.stepIndexes && item.stepIndexes.length > 0 && (
+                          {Boolean(
+                            item.stepRoutes?.length ||
+                              item.stepIndexes?.length,
+                          ) && (
                             <div
                               className="agent-trace-review-lane-steps"
                               aria-label={`${item.label}相关步骤`}
                             >
-                              {item.stepIndexes.map((stepIndex) => (
-                                <button
-                                  key={stepIndex}
-                                  type="button"
-                                  onClick={() => jumpToStep(stepIndex)}
-                                  aria-label={`从${item.label}跳到步骤 ${stepIndex + 1}`}
+                              {(
+                                item.stepRoutes?.length
+                                  ? item.stepRoutes
+                                  : item.stepIndexes!.map((stepIndex) => ({
+                                      stepNumber: stepIndex + 1,
+                                      reason: '',
+                                    }))
+                              ).map((route) => (
+                                <div
+                                  key={route.stepNumber}
+                                  className="agent-trace-review-lane-step-route"
                                 >
-                                  步骤 #{stepIndex + 1}
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      jumpToStep(route.stepNumber - 1)
+                                    }
+                                    title={buildAgentTraceStepButtonBoundary(
+                                      item.label,
+                                      route.stepNumber,
+                                      route.reason,
+                                    )}
+                                    aria-label={buildAgentTraceStepButtonBoundary(
+                                      item.label,
+                                      route.stepNumber,
+                                      route.reason,
+                                    )}
+                                  >
+                                    步骤 #{route.stepNumber}
+                                  </button>
+                                  {route.reason && <span>{route.reason}</span>}
+                                </div>
                               ))}
                             </div>
                           )}
@@ -411,20 +546,36 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     <p>{traceNavigationReceipt.currentTrace}</p>
                     <p>{traceNavigationReceipt.primaryRoute}</p>
                     <p>{traceNavigationReceipt.stepScope}</p>
-                    {traceNavigationReceipt.stepNumbers.length > 0 && (
+                    {traceNavigationReceipt.stepRoutes.length > 0 && (
                       <div
                         className="agent-trace-navigation-steps"
                         aria-label="当前 trace 优先步骤"
                       >
-                        {traceNavigationReceipt.stepNumbers.map((stepNumber) => (
-                          <button
-                            key={stepNumber}
-                            type="button"
-                            onClick={() => jumpToStep(stepNumber - 1)}
-                            aria-label={`从当前 trace 导航跳到步骤 ${stepNumber}`}
+                        {traceNavigationReceipt.stepRoutes.map((route) => (
+                          <div
+                            key={route.stepNumber}
+                            className="agent-trace-navigation-route"
                           >
-                            步骤 #{stepNumber}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => jumpToStep(route.stepNumber - 1)}
+                              title={buildAgentTraceStepButtonBoundary(
+                                '当前 trace 导航',
+                                route.stepNumber,
+                                route.reason,
+                                traceNavigationReceipt.noEffectBoundary,
+                              )}
+                              aria-label={buildAgentTraceStepButtonBoundary(
+                                '当前 trace 导航',
+                                route.stepNumber,
+                                route.reason,
+                                traceNavigationReceipt.noEffectBoundary,
+                              )}
+                            >
+                              步骤 #{route.stepNumber}
+                            </button>
+                            <span>{route.reason}</span>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -473,6 +624,23 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           <span>{item.label}</span>
                           <strong>{item.value}</strong>
                           <p>{item.detail}</p>
+                          {item.stepNumbers && item.stepNumbers.length > 0 && (
+                            <div
+                              className="agent-trace-span-composition-steps"
+                              aria-label={`${item.label}对应步骤`}
+                            >
+                              {item.stepNumbers.map((stepNumber) => (
+                                <button
+                                  key={stepNumber}
+                                  type="button"
+                                  onClick={() => jumpToStep(stepNumber - 1)}
+                                  aria-label={`从${item.label}跳到步骤 ${stepNumber}`}
+                                >
+                                  步骤 #{stepNumber}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </article>
                       ))}
                     </div>
@@ -610,8 +778,60 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                   <p>{pendingApprovalActions.length} 个工具动作等待确认。</p>
                 </div>
               </div>
+              {approvalQueueReceipt && (
+                <div
+                  className="agent-approval-queue-receipt"
+                  aria-label="待确认队列口径"
+                  role="note"
+                >
+                  <span>{approvalQueueReceipt.title}</span>
+                  <p>{approvalQueueReceipt.traceScope}</p>
+                  <p>{approvalQueueReceipt.pendingScope}</p>
+                  <p>{approvalQueueReceipt.persistenceBoundary}</p>
+                  <p>{approvalQueueReceipt.copyBoundary}</p>
+                  <p>{approvalQueueReceipt.nextStep}</p>
+                  {approvalQueueReceipt.stepNumbers.length > 0 && (
+                    <div
+                      className="agent-approval-queue-steps"
+                      aria-label="待确认队列对应步骤"
+                    >
+                      {approvalQueueReceipt.stepNumbers.map((stepNumber) => (
+                        <button
+                          key={stepNumber}
+                          type="button"
+                          onClick={() => jumpToStep(stepNumber - 1)}
+                          aria-label={`从待确认队列跳到步骤 ${stepNumber}`}
+                        >
+                          步骤 #{stepNumber}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="agent-approval-list">
-                {pendingApprovalActions.map((approval, index) => (
+                {pendingApprovalActions.map((approval, index) => {
+                  const keyCopyBoundary = buildAgentApprovalCopyButtonBoundary({
+                    toolId: approval.toolId,
+                    target: 'key',
+                    available: Boolean(approval.approvalKey),
+                  });
+                  const reviewCopyBoundary = buildAgentApprovalCopyButtonBoundary({
+                    toolId: approval.toolId,
+                    target: 'payload',
+                    available: Boolean(
+                      approval.approvalKey && approval.reviewPayload,
+                    ),
+                  });
+                  const retryCopyBoundary = buildAgentApprovalCopyButtonBoundary({
+                    toolId: approval.toolId,
+                    target: 'retry',
+                    available: Boolean(
+                      approval.approvalKey && approval.retryConfigPatch,
+                    ),
+                  });
+
+                  return (
                   <div
                     key={`${approval.toolId}-${approval.approvalKey || index}`}
                     className="agent-approval-item"
@@ -741,8 +961,14 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                         <button
                           type="button"
                           className="agent-approval-copy"
-                          onClick={() => handleCopyApprovalKey(approval.approvalKey)}
-                          aria-label={`复制 ${approval.toolId} 的批准 key`}
+                          onClick={() =>
+                            handleCopyApprovalKey(
+                              approval.toolId,
+                              approval.approvalKey,
+                            )
+                          }
+                          title={keyCopyBoundary.title}
+                          aria-label={keyCopyBoundary.ariaLabel}
                           disabled={!approval.approvalKey}
                         >
                           {approvalCopyStatus?.key === approval.approvalKey &&
@@ -756,11 +982,13 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           className="agent-approval-copy"
                           onClick={() =>
                             handleCopyApprovalReviewPayload(
+                              approval.toolId,
                               approval.approvalKey,
                               approval.reviewPayload,
                             )
                           }
-                          aria-label={`复制 ${approval.toolId} 的审核包`}
+                          title={reviewCopyBoundary.title}
+                          aria-label={reviewCopyBoundary.ariaLabel}
                           disabled={!approval.approvalKey || !approval.reviewPayload}
                         >
                           {approvalCopyStatus?.key === approval.approvalKey &&
@@ -774,11 +1002,13 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           className="agent-approval-copy"
                           onClick={() =>
                             handleCopyApprovalRetryConfig(
+                              approval.toolId,
                               approval.approvalKey,
                               approval.retryConfigPatch,
                             )
                           }
-                          aria-label={`复制 ${approval.toolId} 的重跑配置`}
+                          title={retryCopyBoundary.title}
+                          aria-label={retryCopyBoundary.ariaLabel}
                           disabled={!approval.approvalKey || !approval.retryConfigPatch}
                         >
                           {approvalCopyStatus?.key === approval.approvalKey &&
@@ -840,11 +1070,54 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                               value={approvalCopyStatus.manualText}
                               onFocus={(event) => event.currentTarget.select()}
                             />
-                          )}
+                        )}
                       </>
                     )}
+                    {approvalCopyReceipt?.key === approval.approvalKey && (
+                      <div
+                        className={`agent-approval-copy-receipt ${
+                          runDiagnosticPacket &&
+                          approvalCopyReceipt.copiedSnapshot &&
+                          approvalCopyReceipt.copiedSnapshot.traceId !==
+                            runDiagnosticPacket.traceIdentity.traceId
+                            ? 'stale'
+                            : 'current'
+                        }`}
+                        role="note"
+                      >
+                        <span>
+                          {runDiagnosticPacket &&
+                          approvalCopyReceipt.copiedSnapshot &&
+                          approvalCopyReceipt.copiedSnapshot.traceId !==
+                            runDiagnosticPacket.traceIdentity.traceId
+                            ? '旧审批复制回执'
+                            : '当前审批复制回执'}
+                        </span>
+                        <p>
+                          剪贴板里是 {approvalCopyReceipt.toolId} 的
+                          {approvalCopyReceipt.targetLabel}，复制于{' '}
+                          {approvalCopyReceipt.copiedAt}
+                          {approvalCopyReceipt.copiedSnapshot
+                            ? `，来自本地 trace ${approvalCopyReceipt.copiedSnapshot.traceId}`
+                            : '。'}
+                        </p>
+                        {runDiagnosticPacket &&
+                          approvalCopyReceipt.copiedSnapshot &&
+                          approvalCopyReceipt.copiedSnapshot.traceId !==
+                            runDiagnosticPacket.traceIdentity.traceId && (
+                            <p>
+                              当前页面已经变为{' '}
+                              {runDiagnosticPacket.traceIdentity.traceId}；请重新复制后再用于审批。
+                            </p>
+                          )}
+                        <p>
+                          复制只产生本地文本，不会批准、恢复 run、重跑、发送通知、写入、删除或执行外部动作；参数、上下文、工具策略或 trace 变化后要重新生成并复制。
+                        </p>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}

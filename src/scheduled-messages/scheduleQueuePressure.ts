@@ -1029,3 +1029,25 @@ export function formatScheduleQueueCompactSummary(summary: ScheduleQueueSummary)
     ? `${base}；${summary.riskSlotCount} 个需要调整，展开后可查看建议依据和改期入口`
     : `${base}；暂无执行窗口风险，展开后可查看建议时间和前序样例`;
 }
+
+export function formatScheduleQueueDetailsReceipt(
+  summary: ScheduleQueueSummary,
+  now = new Date(),
+): string {
+  const { dateStr, timeStr } = formatLocalScheduleDateTime(now);
+  const visibleSlotCount = summary.topSlots.length;
+  const displayScope = summary.hiddenSlotCount > 0
+    ? `当前展示 ${visibleSlotCount}/${summary.congestedSlotCount} 个拥挤槽位，另 ${summary.hiddenSlotCount} 个未展开`
+    : `当前展示全部 ${visibleSlotCount} 个拥挤槽位`;
+  const riskScope = summary.riskSlotCount > 0
+    ? `${summary.riskSlotCount} 个槽位存在执行窗口风险`
+    : '暂无执行窗口风险';
+
+  return [
+    `队列详情展开回执：基于已读取 Messages 快照和本机时间 ${dateStr} ${timeStr} 计算`,
+    displayScope,
+    `${summary.queuedMessageCount} 条执行器消息受影响，最大同槽 ${summary.largestSlotSize} 条，最大预计延后 ${summary.maxDelayMinutes} 分钟`,
+    riskScope,
+    '展开详情只显示本地队列诊断，不会同步 Sheet、刷新 Jira Automation、改期、发送消息、改 Logs 或跳过前序',
+  ].join('；');
+}

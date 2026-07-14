@@ -42,6 +42,12 @@ export interface AutoReplyContentReadinessReceipt {
   listSummary: string;
 }
 
+export interface AutoReplySaveButtonBoundaryContext
+  extends AutoReplyRuleScopeContext {
+  action: 'create' | 'edit';
+  isSilentAnalysisEnabled?: boolean;
+}
+
 export function buildAutoReplyConfigLaunchReceipt(): string {
   return '已打开自动答复配置；当前消息未发送、未创建规则，保存规则后才会按发送口径执行。';
 }
@@ -245,4 +251,26 @@ export function buildAutoReplyRuleScopeReceipt(
       '保存规则只影响后续分析的新消息；不会回扫历史消息、不会把当前页面草稿插入 RingCentral，也不会直接向任何人发送。',
     queueText,
   };
+}
+
+export function buildAutoReplySaveButtonBoundary(
+  config: AutoReplySaveButtonBoundaryContext,
+): string {
+  const actionText =
+    config.action === 'edit' ? '保存自动答复规则修改' : '确认添加自动答复规则';
+  const readinessReceipt = buildAutoReplyContentReadinessReceipt(config);
+  const ruleScopeReceipt = buildAutoReplyRuleScopeReceipt(config);
+  const triggerText =
+    config.isSilentAnalysisEnabled === false
+      ? '后台静默消息分析未启用时只保存本机规则，不会自动捕获后续新消息。'
+      : '保存后只影响后续分析的新消息。';
+
+  return [
+    `${actionText}。`,
+    ruleScopeReceipt.scopeText,
+    triggerText,
+    ruleScopeReceipt.queueText,
+    `${readinessReceipt.title}：${readinessReceipt.detailText}`,
+    '点击不会回扫历史消息、不会把当前页面草稿插入 RingCentral，也不会立即发送当前消息。',
+  ].join(' ');
 }

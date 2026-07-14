@@ -1247,6 +1247,10 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
     new URL('../src/modals/components/TopicDetailPage.vue', import.meta.url),
     'utf8',
   );
+  const linkSafetySource = readFileSync(
+    new URL('../src/modals/topic-link-safety.ts', import.meta.url),
+    'utf8',
+  );
 
   assert.match(source, /getFirstSafeExternalUrl/);
   assert.match(source, /getFirstSafeExternalLinkPresentation/);
@@ -1276,6 +1280,7 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
   assert.match(source, /source-open-receipt/);
   assert.match(source, /handleSourceOpen/);
   assert.match(source, /来源打开回执/);
+  assert.match(linkSafetySource, /不会重新读取来源内容/);
   assert.match(source, /不会重新读取原始消息、网页或资源/);
   assert.match(source, /不会同步 Memory Service/);
 }
@@ -1376,7 +1381,8 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
       url: 'https://docs.example.com/runbook',
       label: '查看资源',
       host: 'docs.example.com',
-      title: '打开资源：docs.example.com',
+      title:
+        '打开资源：docs.example.com；只请求外部标签页；不会重新读取来源内容、同步 Memory Service、标记已读、确认结论或写回原始平台。',
     },
   );
   const blockedSourceResults = getBlockedExternalUrlResults(
@@ -1400,6 +1406,12 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   assert.match(source, /sourceOpenReceipt/);
   assert.match(source, /topic-list-source-open-receipt/);
   assert.match(source, /showSourceOpenReceipt/);
+  assert.match(source, /getResourcePreviewSourceNote/);
+  assert.match(source, /getResourcePreviewActionLabel/);
+  assert.match(source, /resource-source-note/);
+  assert.match(source, /来源 \$\{host\} · 仅打开标签页/);
+  assert.match(source, /来源已隐藏 ·/);
+  assert.match(source, /只请求外部标签页，不重新读取、不同步、不标记已读或写回原始平台/);
   assert.match(source, /来源打开回执/);
   assert.match(source, /不会重新读取原始消息、网页或资源/);
   assert.match(source, /不会同步 Memory Service、标记已读/);
@@ -1408,11 +1420,7 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   assert.match(source, /getTopicUnreadPreviewMeta/);
   assert.match(source, /getUnreadDiscussionMessageId/);
   assert.match(source, /noopener,noreferrer/);
-  assert.match(source, /查看主题详情中的资源上下文/);
-  assert.match(
-    source,
-    /getSafeExternalUrl\(resource\.url\) \? '打开' : '详情'/,
-  );
+  assert.match(source, /无可信外链；查看主题详情中的资源上下文/);
 }
 
 function verifyTopicDetailTimeFallbacks() {
@@ -1712,10 +1720,24 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(listSource, /handleMuteTopic/);
   assert.match(listSource, /topicDeferredUndo/);
   assert.match(listSource, /topic-defer-undo-toast/);
+  assert.match(listSource, /handleViewDeferredTopics/);
+  assert.match(listSource, /查看稍后/);
+  assert.match(listSource, /topicDeferRestoreReceipt/);
+  assert.match(listSource, /topic-defer-restore-receipt/);
+  assert.match(listSource, /恢复未读回执/);
+  assert.match(listSource, /只删除本机稍后处理状态；未读信号保留/);
   assert.match(listSource, /topic-defer-boundary-receipt/);
   assert.match(listSource, /稍后处理边界/);
   assert.match(listSource, /主题会暂时离开未读队列/);
   assert.match(listSource, /不会标记已读/);
+  assert.match(listSource, /getTopicDeferMenuButtonBoundary/);
+  assert.match(listSource, /getTopicDeferOptionBoundary/);
+  assert.match(listSource, /getTopicCustomDeferConfirmBoundary/);
+  assert.match(listSource, /getTopicDeferredRestoreBoundary/);
+  assert.match(listSource, /getTopicDeferToastViewBoundary/);
+  assert.match(listSource, /点击只打开或收起/);
+  assert.match(listSource, /选择时间前不会写入本机稍后状态/);
+  assert.match(listSource, /查看稍后：只切换到本页稍后视图/);
   assert.match(listSource, /handleUndoTopicDefer/);
   assert.match(listSource, /scheduleTopicDeferredReleaseRefresh/);
   assert.match(listSource, /store\.refreshDeferredTopics\(\)/);
@@ -1723,6 +1745,8 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(storeSource, /refreshDeferredTopics/);
   assert.match(listSource, /topicMuteUndo/);
   assert.match(listSource, /topic-mute-undo-toast/);
+  assert.match(listSource, /handleViewMutedTopics/);
+  assert.match(listSource, /查看静音/);
   assert.match(listSource, /handleUndoTopicMute/);
   assert.match(listSource, /🔕 静音/);
   assert.match(listSource, /取消静音/);
@@ -1769,6 +1793,14 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /展开上下文才会把对应消息/);
   assert.match(source, /全部已阅只更新当前主题的已知未读信号/);
   assert.match(source, /不会改写原始聊天平台/);
+  assert.match(source, /markAllReadBoundary/);
+  assert.match(source, /全部已阅回执/);
+  assert.match(source, /当前阅读批次/);
+  assert.match(source, /全部已阅不可用/);
+  assert.match(source, /getConversationContextBoundary/);
+  assert.match(source, /查看上下文回执/);
+  assert.match(source, /收起上下文回执/);
+  assert.match(source, /仅未读视图短暂保留当前讨论/);
   assert.match(source, /当前已加载详情/);
   assert.match(source, /getTopicDeferPresetOptions/);
   assert.match(source, /detailDeferMenuOpen/);
@@ -1780,8 +1812,19 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /topic-detail-defer-boundary/);
   assert.match(source, /稍后处理边界/);
   assert.match(source, /不会标记已读/);
+  assert.match(source, /getDetailDeferMenuButtonBoundary/);
+  assert.match(source, /getDetailDeferOptionBoundary/);
+  assert.match(source, /getDetailDeferRestoreBoundary/);
+  assert.match(source, /选择时间前不会写入本机稍后状态/);
+  assert.match(source, /恢复未读回执：点击只删除/);
   assert.match(source, /topic-detail-defer-options/);
   assert.match(source, /topic-defer-undo-toast/);
+  assert.match(source, /detailTriageRestoreReceipt/);
+  assert.match(source, /topic-triage-restore-receipt/);
+  assert.match(source, /showDetailTriageRestoreReceipt/);
+  assert.match(source, /恢复未读回执/);
+  assert.match(source, /只删除本机稍后处理状态；未读信号保留/);
+  assert.match(source, /没有同步 Memory Service、发送、删除或改写原始聊天平台/);
   assert.match(source, /getTopicMutePresetOptions/);
   assert.match(source, /detailMuteMenuOpen/);
   assert.match(source, /detailSelectedMuteReason/);
@@ -1796,6 +1839,9 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /只调整本机注意力过滤/);
   assert.match(source, /topic-mute-undo-toast/);
   assert.match(source, /handleUndoDetailMute/);
+  assert.match(source, /取消静音回执/);
+  assert.match(source, /只删除本机静音过滤；未读信号保留/);
+  assert.match(source, /未来未读会按普通主题进入未读流/);
   assert.match(source, /currentTopicMutedState/);
   assert.match(source, /getTopicDetailUnreadCount/);
   assert.match(source, /getConversationRenderId/);
@@ -1805,6 +1851,17 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /链接定位/);
   assert.match(source, /消息定位回执/);
   assert.match(source, /消息定位未完成/);
+  assert.match(source, /消息定位请求无效/);
+  assert.match(source, /MESSAGE_FOCUS_ROUTE_QUERY_KEYS/);
+  assert.match(source, /getMessageFocusRouteQuery/);
+  assert.match(source, /message_id/);
+  assert.match(source, /sourceMessageId/);
+  assert.match(source, /thread_ts/);
+  assert.match(source, /本次读取/);
+  assert.match(source, /兼容别名/);
+  assert.match(source, /空值或空白参数/);
+  assert.match(source, /当前详情返回的聊天记录、上下文、permalink 和 Slack 别名都未命中/);
+  assert.match(source, /没有额外补拉历史消息、同步 Memory Service/);
   assert.match(source, /message-focus-target-chip/);
   assert.match(source, /message-focus-actions/);
   assert.match(source, /message-focus-action/);

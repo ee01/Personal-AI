@@ -52,6 +52,7 @@ export interface ComposerRehearsalCueScopeInput {
 
 export const DEFAULT_ASSIST_CONFIDENCE_THRESHOLD = 0.78;
 export const DEFAULT_ASSIST_PREVIEW_LIMIT = 520;
+export const COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS = 10;
 const MIN_ADAPTIVE_ASSIST_CONFIDENCE = 0.62;
 const MAX_ADAPTIVE_ASSIST_CONFIDENCE = 0.92;
 const ACCEPT_THRESHOLD_ADJUSTMENT_RATE = 0.12;
@@ -621,6 +622,6 @@ export function buildComposerAssistInsertionReceipt(
 
   return {
     title: '已插入草稿',
-    detail: `写入目标：${target}；${boundary}；撤销窗口结束后才记录 accepted 和脱敏校准信号。`,
+    detail: `写入目标：${target}；${boundary}；约 ${COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS} 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。`,
   };
 }

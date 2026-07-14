@@ -167,6 +167,70 @@
         </p>
       </section>
 
+      <section
+        v-if="capsule.status === 'saved'"
+        class="source-memory-detail-note-panel"
+      >
+        <div class="note-refresh-head">
+          <div>
+            <p class="eyebrow">补备注并刷新蒸馏</p>
+            <h2>补充这份资料以后该怎么用</h2>
+          </div>
+          <span class="note-refresh-badge">刷新 source pack</span>
+        </div>
+        <p class="note-refresh-copy">
+          备注会刷新这条 capsule 的摘要、关联 web 检索信号和资料蒸馏回执；不会自动写画像、创建任务或同步外部系统。
+        </p>
+        <label class="note-refresh-label" for="source-memory-note-input">
+          资料备注
+        </label>
+        <textarea
+          id="source-memory-note-input"
+          v-model="noteDraft"
+          class="source-memory-detail-note-input"
+          :disabled="savingNote"
+          maxlength="800"
+          rows="4"
+          placeholder="例如：后续写 QBR 时优先引用这张留存趋势图"
+        ></textarea>
+        <p class="note-refresh-helper">{{ noteDraftCountLabel }}</p>
+        <div class="note-refresh-actions">
+          <button
+            type="button"
+            class="primary-action"
+            :disabled="!canSubmitNote"
+            @click="submitNoteUpdate"
+          >
+            {{ savingNote ? '提交中...' : noteSubmitLabel }}
+          </button>
+          <button
+            type="button"
+            class="secondary-action"
+            :disabled="savingNote || !noteChanged"
+            @click="resetNoteDraft"
+          >
+            恢复当前备注
+          </button>
+        </div>
+        <div
+          v-if="noteUpdateReceipt"
+          :class="['note-update-receipt', noteUpdateReceiptTone]"
+          role="status"
+        >
+          <strong>{{ noteUpdateReceipt.title }}</strong>
+          <p>{{ noteUpdateReceipt.detail }}</p>
+          <div v-if="noteUpdateReceipt.evidence.length" class="note-update-evidence">
+            <span
+              v-for="item in noteUpdateReceipt.evidence"
+              :key="item"
+            >
+              {{ item }}
+            </span>
+          </div>
+          <p class="note-update-next">{{ noteUpdateReceipt.nextStep }}</p>
+        </div>
+      </section>
+
       <section v-if="isVisualMemory" class="visual-panel">
         <div class="visual-head">
           <div>
@@ -363,7 +427,18 @@ const client = getMemoryServiceClient();
 const capsule = ref<SourceMemoryCapsule | null>(null);
 const loading = ref(false);
 const dismissing = ref(false);
+const savingNote = ref(false);
 const errorMessage = ref('');
+const noteDraft = ref('');
+type NoteUpdateReceiptTone = 'pending' | 'success' | 'error';
+interface NoteUpdateReceipt {
+  tone: NoteUpdateReceiptTone;
+  title: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
+}
+const noteUpdateReceipt = ref<NoteUpdateReceipt | null>(null);
 
 const capsuleId = computed(() => String(route.params.id || '').trim());
 const capsuleMetadata = computed(() => asRecord(capsule.value?.metadata) || {});
@@ -494,6 +569,30 @@ const distillationSourceReliability = computed(() => {
   const reliability = asRecord(distillation.value?.sourceReliability);
   return String(reliability?.reason || '').trim();
 });
+const currentUserNote = computed(() =>
+  String(capsuleMetadata.value.userNote || '').trim(),
+);
+const normalizedNoteDraft = computed(() => noteDraft.value.trim().slice(0, 800));
+const noteChanged = computed(
+  () => normalizedNoteDraft.value !== currentUserNote.value,
+);
+const canSubmitNote = computed(
+  () =>
+    Boolean(capsule.value) &&
+    capsule.value?.status === 'saved' &&
+    !savingNote.value &&
+    noteChanged.value,
+);
+const noteSubmitLabel = computed(() =>
+  currentUserNote.value ? '更新备注并刷新蒸馏' : '保存备注并刷新蒸馏',
+);
+const noteDraftCountLabel = computed(
+  () =>
+    `${noteDraft.value.length}/800；提交后会刷新关联 web 记忆信号和资料蒸馏回执。`,
+);
+const noteUpdateReceiptTone = computed(
+  () => noteUpdateReceipt.value?.tone || '',
+);
 const downstreamUse = computed(() => asRecord(distillation.value?.downstreamUse));
 const downstreamAllowedLabels = computed(() =>
   toStringArray(downstreamUse.value?.allowed)
@@ -564,6 +663,8 @@ async function loadCapsule() {
   try {
     const response = await client.getSourceMemoryCapsule(capsuleId.value);
     capsule.value = response.capsule;
+    syncNoteDraftFromCapsule();
+    noteUpdateReceipt.value = null;
   } catch (error) {
     capsule.value = null;
     errorMessage.value = String((error as Error)?.message || error);
@@ -582,11 +683,102 @@ async function dismissCapsule() {
       '用户在资料记忆详情页撤销',
     );
     capsule.value = response.capsule;
+    syncNoteDraftFromCapsule();
+    noteUpdateReceipt.value = null;
   } catch (error) {
     errorMessage.value = String((error as Error)?.message || error);
   } finally {
     dismissing.value = false;
   }
+}
+
+async function submitNoteUpdate() {
+  if (!capsule.value || !canSubmitNote.value) return;
+
+  const note = normalizedNoteDraft.value;
+  savingNote.value = true;
+  errorMessage.value = '';
+  noteUpdateReceipt.value = buildPendingNoteReceipt(note);
+  try {
+    const response = await client.updateSourceMemoryCapsuleNote(
+      capsule.value.id,
+      note,
+    );
+    capsule.value = response.capsule;
+    syncNoteDraftFromCapsule();
+    noteUpdateReceipt.value = buildConfirmedNoteReceipt(response.capsule);
+  } catch (error) {
+    noteUpdateReceipt.value = buildFailedNoteReceipt(note, error);
+  } finally {
+    savingNote.value = false;
+  }
+}
+
+function resetNoteDraft() {
+  syncNoteDraftFromCapsule();
+}
+
+function syncNoteDraftFromCapsule() {
+  noteDraft.value = currentUserNote.value;
+}
+
+function buildPendingNoteReceipt(note: string): NoteUpdateReceipt {
+  const sourceTitle = capsule.value?.sourceTitle || capsuleId.value || '当前资料';
+  return {
+    tone: 'pending',
+    title: '备注刷新提交中',
+    detail:
+      '当前页面仍是上一次资料详情快照；备注、关联 web 检索信号和资料蒸馏回执尚未确认刷新。',
+    evidence: [
+      `目标：${sourceTitle}`,
+      `当前蒸馏：${distillationStatusLabel.value}`,
+      `请求备注：${note.length} 字`,
+    ],
+    nextStep:
+      '等待 Memory Service 返回；这一步不会自动写用户画像、创建任务、确认新事实或同步外部系统。',
+  };
+}
+
+function buildConfirmedNoteReceipt(updatedCapsule: SourceMemoryCapsule): NoteUpdateReceipt {
+  const metadata = asRecord(updatedCapsule.metadata) || {};
+  const updatedDistillation = asRecord(metadata.distillation) || {};
+  const updatedPolicy = asRecord(updatedDistillation.policyReceipt) || {};
+  const updatedStatus = distillationStatusDisplayLabel(
+    String(updatedDistillation.status || updatedPolicy.state || ''),
+  );
+  const sourceAsOf = formatDistillationTimestamp(updatedDistillation.sourceAsOf);
+  const evidence = toStringArray(updatedCapsule.actionReceipt?.evidence).filter(Boolean);
+  evidence.push(`资料蒸馏：${updatedStatus}`);
+  if (sourceAsOf) {
+    evidence.push(`来源快照：${sourceAsOf}`);
+  }
+  const backendNextStep =
+    updatedCapsule.actionReceipt?.nextStep ||
+    '可继续复核资料蒸馏回执。';
+  return {
+    tone: 'success',
+    title: updatedCapsule.actionReceipt?.label || '备注刷新已确认',
+    detail:
+      `${updatedCapsule.actionReceipt?.detail || 'Memory Service 已返回最新资料详情。'} 资料蒸馏状态：${updatedStatus}。`,
+    evidence,
+    nextStep: `${backendNextStep} 自动画像、任务创建和外部同步仍不会自动发生。`,
+  };
+}
+
+function buildFailedNoteReceipt(note: string, error: unknown): NoteUpdateReceipt {
+  const message = String((error as Error)?.message || error || '未知错误');
+  return {
+    tone: 'error',
+    title: '备注刷新未确认',
+    detail:
+      `Memory Service 返回错误：${message}。本页保留上一次已读取的 capsule 快照；没有确认更新备注、刷新 web 检索信号或重新生成资料蒸馏。`,
+    evidence: [
+      `请求备注：${note.length} 字`,
+      '资料详情：未确认更新',
+      '自动画像 / 任务 / 外部同步：未发生',
+    ],
+    nextStep: '可稍后重试；不要把当前页面当作备注已保存或蒸馏已刷新的证明。',
+  };
 }
 
 function openSource() {
@@ -607,6 +799,11 @@ function formatTimestamp(value?: number) {
   return new Date(value * 1000).toLocaleString('zh-CN', {
     hour12: false,
   });
+}
+
+function formatDistillationTimestamp(value: unknown) {
+  const timestamp = Number(value || 0);
+  return timestamp > 0 ? formatTimestamp(timestamp) : '';
 }
 
 function formatConfidence(value?: number) {
@@ -1283,6 +1480,134 @@ onMounted(() => {
 .distillation-panel.blocked .distillation-downstream strong,
 .distillation-panel.missing .distillation-downstream strong {
   color: #991b1b;
+}
+
+.source-memory-detail-note-panel {
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 16px;
+}
+
+.note-refresh-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.note-refresh-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.note-refresh-badge {
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.note-refresh-copy,
+.note-refresh-helper {
+  margin: 10px 0 0;
+  color: #334155;
+  line-height: 1.6;
+}
+
+.note-refresh-label {
+  display: block;
+  margin: 12px 0 6px;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.source-memory-detail-note-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.source-memory-detail-note-input:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.source-memory-detail-note-input:disabled {
+  cursor: not-allowed;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.note-refresh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.note-refresh-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.note-update-receipt {
+  margin-top: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e3a8a;
+  padding: 12px;
+}
+
+.note-update-receipt.success {
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.note-update-receipt.error {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.note-update-receipt p {
+  margin: 8px 0 0;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.note-update-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.note-update-evidence span {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.note-update-next {
+  font-weight: 700;
 }
 
 .visual-panel {

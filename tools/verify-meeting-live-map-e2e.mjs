@@ -55,6 +55,20 @@ try {
     },
   );
   await page.getByText('Alerts and Context').waitFor({ timeout: 15000 });
+  const scopeReceipt = page.getByLabel('Live Map 提醒可见口径回执');
+  await scopeReceipt.waitFor({ timeout: 15000 });
+  const scopeText =
+    (await scopeReceipt.textContent())?.replace(/\s+/g, ' ') || '';
+  assert.match(scopeText, /Visible alert scope/);
+  assert.match(scopeText, /显示 2 条可操作会中提醒/);
+  assert.match(scopeText, /降噪 1 条纯上下文刷新/);
+  assert.match(scopeText, /当前页面可见切片/);
+  assert.match(scopeText, /不会标记提醒已处理/);
+  assert.equal(
+    await page.locator('.alert', { hasText: 'Current speaker updated' }).count(),
+    0,
+    'Live Map should not surface pure context-refresh alerts as reminders',
+  );
   const receipt = page.getByLabel('Live Map 会中提醒边界回执').first();
   await receipt.waitFor({ timeout: 15000 });
 

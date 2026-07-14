@@ -295,6 +295,32 @@ function formatRuntimeStatusComposition(runtime) {
   ].join('');
 }
 
+function getStatusItemCount(item) {
+  const rawCount = Number(item?.count);
+  return Number.isFinite(rawCount) && rawCount > 0 ? Math.floor(rawCount) : 1;
+}
+
+function formatStatusItemCountBasis(item) {
+  const count = getStatusItemCount(item);
+  const kindLabel = STATUS_COMPOSITION_LABELS[item?.kind] || '运行态';
+  const sourceLabel = getStatusSourceLabel(item?.kind);
+  return `本行：${count} 个${kindLabel} · 来源：${sourceLabel} · 当前快照只读，不会执行、批准、重试、发送、取消、归档或写入。`;
+}
+
+function formatStatusPillBoundary(runtime) {
+  const label = normalizeInlineText(runtime?.topStatus?.label || '当前状态');
+  const itemCount = Array.isArray(runtime?.items) ? runtime.items.length : 0;
+  const countLabel = itemCount > 0 ? `${itemCount} 项运行态` : '当前运行态';
+  return `${label}，${countLabel}。点击只展开 Quick Ask 状态卡，不打开设置、不会批准、重试、发送、取消、归档或写入。`;
+}
+
+function formatStatusRefreshBoundary(message) {
+  if (message?.statusRefreshing) {
+    return '正在重新读取运行态快照；刷新中会阻止重复点击，不会批准、重试、发送、取消、归档、写入或改配置。';
+  }
+  return '重新读取当前运行态快照；只刷新状态卡和状态胶囊，不会批准、重试、发送、取消、归档、写入或改配置。';
+}
+
 function getRuntimeSnapshotAgeMs(runtime) {
   const time = Date.parse(runtime?.fetchedAt || '');
   if (!Number.isFinite(time)) return null;
@@ -593,6 +619,49 @@ function buildVoiceSubmitReceipt() {
     scope: getAskScopeLabel(),
     locale: resolveVoiceLocale(),
   });
+}
+
+function setControlBoundary(element, text) {
+  if (!element) return;
+  element.setAttribute('title', text);
+  element.setAttribute('aria-label', text);
+}
+
+function getVoiceOrbBoundary() {
+  if (state.voicePhase === 'listening') {
+    return state.voiceDraft.trim()
+      ? t('desktop.quickAsk.voiceControl.stopWithDraft')
+      : t('desktop.quickAsk.voiceControl.stopEmpty');
+  }
+
+  if (state.voicePhase === 'ready') {
+    return voiceController.lastErrorMessage
+      ? t('desktop.quickAsk.voiceControl.retry')
+      : t('desktop.quickAsk.voiceControl.restart');
+  }
+
+  return t('desktop.quickAsk.voiceControl.start');
+}
+
+function getVoiceCancelBoundary() {
+  return state.voiceDraft.trim()
+    ? t('desktop.quickAsk.voiceControl.cancelWithDraft')
+    : t('desktop.quickAsk.voiceControl.cancelEmpty');
+}
+
+function getVoiceSendBoundary() {
+  return state.voiceDraft.trim()
+    ? t('desktop.quickAsk.voiceControl.sendWithDraft', {
+        scope: getAskScopeLabel(),
+      })
+    : t('desktop.quickAsk.voiceControl.sendEmpty');
+}
+
+function getVoiceRecoveryBoundary() {
+  const label = voiceController.lastErrorAction?.label;
+  return label
+    ? t('desktop.quickAsk.voiceControl.recovery', { label })
+    : '';
 }
 
 function isExpandedState() {
@@ -1479,12 +1548,41 @@ function formatMobileContextActionReceipt(
   return `发送范围：${scopeCopy}；点击后${boundaryCopy}。`;
 }
 
+function buildMobileContextActionButtonBoundary(message, state = 'idle') {
+  const evidenceCount = Array.isArray(message?.evidence)
+    ? message.evidence.length
+    : 0;
+  const evidenceCopy =
+    evidenceCount > 0 ? `${evidenceCount} 条证据摘要` : '证据摘要';
+  const scopeCopy = `query_answer_card（本轮答案 + ${evidenceCopy}）`;
+  const boundaryCopy =
+    '只写已绑定手机对话，不写长期记忆、不确认答案、不改绑定、不标记待办完成';
+
+  if (state === 'pending') {
+    return `发到豆包手机对话：请求已提交，尚未确认 ${scopeCopy}已写入 mobile_context_thread、正文可见、安全验证或状态回写；等待结果时不会重复发送。${boundaryCopy}。`;
+  }
+
+  if (state === 'succeeded') {
+    return `发到豆包手机对话：本轮 ${scopeCopy}已完成一次发送，按钮保留本次结果且不会再次发送；${boundaryCopy}。`;
+  }
+
+  if (state === 'failed') {
+    return `重试发到豆包手机对话：上次失败没有确认写入 mobile_context_thread；重试仍只发送本轮 ${scopeCopy}，${boundaryCopy}。`;
+  }
+
+  return `发到豆包手机对话：发送 ${scopeCopy}到 mobile_context_thread；${boundaryCopy}。`;
+}
+
 function renderMobileContextAction(message) {
   if (!canInjectToMobileContext(message)) return '';
 
   const sync = message.mobileContextSync;
   const status = sync?.status;
   const label = sync?.message || formatMobileContextActionReceipt(message, status);
+  const buttonBoundary = buildMobileContextActionButtonBoundary(
+    message,
+    status,
+  );
   const tone =
     status === 'succeeded' ? 'success' : status === 'failed' ? 'error' : '';
 
@@ -1494,6 +1592,8 @@ function renderMobileContextAction(message) {
         class="message-action-button quick-ask-sync-mobile"
         type="button"
         data-message-id="${escapeHtml(message.id)}"
+        title="${escapeHtml(buttonBoundary)}"
+        aria-label="${escapeHtml(buttonBoundary)}"
         ${status === 'pending' || status === 'succeeded' ? 'disabled' : ''}
       >
         发到豆包手机对话
@@ -1645,6 +1745,7 @@ function renderStatusItem(item, runtime, refreshFailure = null) {
   const freshness = formatStatusItemFreshness(runtime, refreshFailure);
   const priorityReceipt = getStatusPriorityReceipt(item);
   const action = getStatusActionDescriptor(item);
+  const countBasis = formatStatusItemCountBasis(item);
   return `
     <button
       class="status-item"
@@ -1657,10 +1758,12 @@ function renderStatusItem(item, runtime, refreshFailure = null) {
       data-status-freshness="${escapeHtml(freshness.prompt)}"
       data-status-priority="${escapeHtml(priorityReceipt)}"
       data-status-action-boundary="${escapeHtml(action.prompt)}"
+      data-status-count-basis="${escapeHtml(countBasis)}"
     >
       <span class="status-item-main">
         <span class="status-item-title">${escapeHtml(item.title)}</span>
         <span class="status-item-summary">${escapeHtml(item.summary)}</span>
+        <span class="status-item-count-basis">${escapeHtml(countBasis)}</span>
         <span class="status-item-priority">${escapeHtml(priorityReceipt)}</span>
         ${
           detailLines.length
@@ -1692,6 +1795,7 @@ function renderStatusMessage(message) {
   const runtime = message.runtime || { items: [] };
   const items = Array.isArray(runtime.items) ? runtime.items : [];
   const refreshLabel = message.statusRefreshing ? '读取中...' : '重新读取';
+  const refreshBoundary = formatStatusRefreshBoundary(message);
   const refreshFailure = getStatusRefreshFailure(message);
   const composition = formatRuntimeStatusComposition(runtime);
   const noticeClass = refreshFailure
@@ -1710,6 +1814,8 @@ function renderStatusMessage(message) {
             type="button"
             data-status-refresh="true"
             data-message-id="${escapeHtml(message.id)}"
+            title="${escapeHtml(refreshBoundary)}"
+            aria-label="${escapeHtml(refreshBoundary)}"
             ${message.statusRefreshing ? 'disabled' : ''}
           >
             ${escapeHtml(refreshLabel)}
@@ -1800,6 +1906,8 @@ function setRuntime(runtime) {
   ) {
     elements.statusPill.hidden = true;
     elements.statusPill.textContent = '';
+    elements.statusPill.removeAttribute('title');
+    elements.statusPill.removeAttribute('aria-label');
     return;
   }
 
@@ -1809,6 +1917,7 @@ function setRuntime(runtime) {
     extraCount > 0
       ? `${runtime.topStatus.label} +${extraCount}`
       : runtime.topStatus.label;
+  setControlBoundary(elements.statusPill, formatStatusPillBoundary(runtime));
 }
 
 function buildStatusFollowUpPrompt(
@@ -1817,6 +1926,7 @@ function buildStatusFollowUpPrompt(
   summary,
   details,
   actionHint,
+  countBasis,
   freshness,
   priorityReceipt,
   actionBoundary,
@@ -1826,6 +1936,7 @@ function buildStatusFollowUpPrompt(
   const cleanSummary = String(summary || '').trim();
   const cleanDetails = String(details || '').trim();
   const cleanActionHint = String(actionHint || '').trim();
+  const cleanCountBasis = String(countBasis || '').trim();
   const cleanFreshness = String(freshness || '').trim();
   const cleanPriorityReceipt = String(priorityReceipt || '').trim();
   const cleanActionBoundary = String(actionBoundary || '').trim();
@@ -1835,6 +1946,7 @@ function buildStatusFollowUpPrompt(
   const detail = cleanSummary ? `：${cleanSummary}` : '';
   const detailContext = cleanDetails ? ` 细节：${cleanDetails}。` : '';
   const actionContext = cleanActionHint ? ` 建议动作：${cleanActionHint}。` : '';
+  const countContext = cleanCountBasis ? ` 数量口径：${cleanCountBasis}。` : '';
   const freshnessContext = cleanFreshness ? ` 快照状态：${cleanFreshness}。` : '';
   const priorityContext = cleanPriorityReceipt
     ? ` 显示原因：${cleanPriorityReceipt}。`
@@ -1842,7 +1954,7 @@ function buildStatusFollowUpPrompt(
   const actionBoundaryContext = cleanActionBoundary
     ? ` 处理入口：${cleanActionBoundary}。`
     : '';
-  return `关于「${subject}」${detail}。${detailContext}${actionContext}${freshnessContext}${priorityContext}${actionBoundaryContext}${fallback}`;
+  return `关于「${subject}」${detail}。${detailContext}${actionContext}${countContext}${freshnessContext}${priorityContext}${actionBoundaryContext}${fallback}`;
 }
 
 function buildMobileContextEvidence(evidence) {
@@ -2122,6 +2234,10 @@ class VoiceController {
     this.lastErrorAction = null;
   }
 
+  hasRecognizedDraft() {
+    return Boolean(this.recognizedTranscript.trim());
+  }
+
   describeError(code, payload = null) {
     if (code === 'microphone_denied') {
       return t('desktop.quickAsk.voiceError.microphoneDenied');
@@ -2323,15 +2439,19 @@ class VoiceController {
 
     if (payload.type === 'stopped') {
       this.listening = false;
+      const stoppedAfterError =
+        payload.reason === 'error' && Boolean(this.lastErrorMessage);
       this.recognizedTranscript =
         typeof payload.text === 'string'
           ? payload.text.trim()
           : this.recognizedTranscript;
-      this.lastErrorMessage = '';
-      this.lastErrorAction = null;
+      if (!stoppedAfterError) {
+        this.lastErrorMessage = '';
+        this.lastErrorAction = null;
+      }
       state.voiceDraft = this.composeDraft(this.recognizedTranscript);
       state.voicePhase = 'ready';
-      state.voiceStopReason = 'stopped';
+      state.voiceStopReason = stoppedAfterError ? 'error' : 'stopped';
       if (isVoiceState()) {
         setUiState('voice-ready');
       }
@@ -2382,6 +2502,12 @@ const voiceController = new VoiceController();
 
 function getVoiceReceiptText() {
   if (voiceController.lastErrorMessage) {
+    if (state.voiceDraft.trim() && voiceController.hasRecognizedDraft()) {
+      return t('desktop.quickAsk.voiceReceipt.errorWithDraft', {
+        reason: voiceController.lastErrorMessage,
+        scope: getAskScopeLabel(),
+      });
+    }
     return t('desktop.quickAsk.voiceReceipt.error');
   }
 
@@ -2433,6 +2559,16 @@ function renderVoiceSheet() {
   );
   elements.voiceOrb.classList.toggle('ready', state.voicePhase === 'ready');
   elements.voiceSend.disabled = !state.voiceDraft.trim();
+  setControlBoundary(elements.voiceOrb, getVoiceOrbBoundary());
+  setControlBoundary(elements.voiceCancel, getVoiceCancelBoundary());
+  setControlBoundary(elements.voiceSend, getVoiceSendBoundary());
+  const recoveryBoundary = getVoiceRecoveryBoundary();
+  if (recoveryBoundary) {
+    setControlBoundary(elements.voiceRecovery, recoveryBoundary);
+  } else {
+    elements.voiceRecovery.removeAttribute('title');
+    elements.voiceRecovery.removeAttribute('aria-label');
+  }
 }
 
 async function enterVoiceMode() {
@@ -2880,6 +3016,7 @@ elements.conversationPanel.addEventListener('click', async (event) => {
         statusItem.dataset.statusSummary,
         statusItem.dataset.statusDetails,
         statusItem.dataset.statusAction,
+        statusItem.dataset.statusCountBasis,
         statusItem.dataset.statusFreshness,
         statusItem.dataset.statusPriority,
         statusItem.dataset.statusActionBoundary,

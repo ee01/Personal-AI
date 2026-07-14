@@ -32,6 +32,19 @@ interface RetrievalTierCountRow {
   count: number;
 }
 
+type UserWriteBoundaryMode =
+  | 'explicit_read_write'
+  | 'default_read_only_fallback';
+
+interface UserWriteBoundary {
+  mode: UserWriteBoundaryMode;
+  canRead: boolean;
+  canWrite: boolean;
+  blockedOperations: string[];
+  reason: 'explicit_x_user_id' | 'missing_or_blank_x_user_id';
+  recoveryAction: 'none' | 'restore_userinfo_username_or_set_user_id';
+}
+
 // ---------------------------------------------------------------------------
 // Response type
 // ---------------------------------------------------------------------------
@@ -43,6 +56,7 @@ interface StatsResponse {
     identitySource: 'header' | 'default_fallback';
     storageKey: string;
     fallbackToDefault: boolean;
+    writeBoundary: UserWriteBoundary;
   };
   messages: {
     total: number;
@@ -103,6 +117,20 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
                   identitySource: { type: 'string' },
                   storageKey: { type: 'string' },
                   fallbackToDefault: { type: 'boolean' },
+                  writeBoundary: {
+                    type: 'object',
+                    properties: {
+                      mode: { type: 'string' },
+                      canRead: { type: 'boolean' },
+                      canWrite: { type: 'boolean' },
+                      blockedOperations: {
+                        type: 'array',
+                        items: { type: 'string' },
+                      },
+                      reason: { type: 'string' },
+                      recoveryAction: { type: 'string' },
+                    },
+                  },
                 },
               },
               messages: {
@@ -183,6 +211,29 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
         rawHeaderUserId == null ||
         (typeof rawHeaderUserId === 'string' &&
           rawHeaderUserId.trim() === '');
+      const fallbackToDefault = userId === 'default' && headerMissingOrBlank;
+      const writeBoundary: UserWriteBoundary = fallbackToDefault
+        ? {
+            mode: 'default_read_only_fallback',
+            canRead: true,
+            canWrite: false,
+            blockedOperations: [
+              'write',
+              'import',
+              'restore',
+              'profile_update',
+            ],
+            reason: 'missing_or_blank_x_user_id',
+            recoveryAction: 'restore_userinfo_username_or_set_user_id',
+          }
+        : {
+            mode: 'explicit_read_write',
+            canRead: true,
+            canWrite: true,
+            blockedOperations: [],
+            reason: 'explicit_x_user_id',
+            recoveryAction: 'none',
+          };
       const todayStart = now() - (now() % 86400); // midnight UTC today (epoch seconds)
       const weekStart = daysAgo(7);
       const last90DaysStart = daysAgo(90);
@@ -304,7 +355,8 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
           isolation: 'per_user_sqlite',
           identitySource: headerMissingOrBlank ? 'default_fallback' : 'header',
           storageKey: `data/users/${userId}/memory.db`,
-          fallbackToDefault: userId === 'default' && headerMissingOrBlank,
+          fallbackToDefault,
+          writeBoundary,
         },
         messages: {
           total: messagesTotal,

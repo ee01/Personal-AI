@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-07-02_
+_最后更新: 2026-07-13_
 
 ## 是什么
 
@@ -73,7 +73,8 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 
 - P0 / P1 / P2 分层提醒
 - Side panel 中每条会中提醒都会展示 `为什么 / 下一步 / 边界`：说明它为什么打扰、用户接下来该看哪里，以及它不会自动发言、发送消息、写外部任务或确认决策
-- Live Map 的 `Alerts and Context` 也复用同一套会中提醒边界回执；用户在会议地图里看到 P0/P1/P2 提醒时，同样能判断它只是提示、复核或召回入口，不代表已经发言、写外部任务、确认事实或发送给他人
+- Side panel 和 Live Map 都会显示 `提醒可见口径`：说明当前显示了多少可操作提醒、哪些纯上下文刷新已被降噪、哪些关联记忆已提升或隐藏；这是当前页面可见切片，不是全量会议审计，也不会标记提醒已处理、写行动项或外发纪要
+- Live Map 的 `Alerts and Context` 也复用同一套会中提醒边界回执和过滤口径；用户在会议地图里看到 P0/P1/P2 提醒时，同样能判断它只是提示、复核或召回入口，不代表已经发言、写外部任务、确认事实或发送给他人
 - 记忆关联以 P2 弹幕 + side panel feed 形式出现
 - hover 参会者头像可查看 stance / key quote
 
@@ -85,6 +86,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 - 时间线（支持展开详情）
 - 行动项列表（owner / deadline / transcript 依据）
 - readiness 状态
+- tab、会前 cue、行动项筛选、确认、完成、忽略、复制、编辑和人工补录按钮都会在 hover / 读屏文案里说明当前动作只影响本场侧栏状态、当前会议 session 或本机剪贴板，不会自动创建外部任务、发送纪要或写回 Calendar / Jira / RingCentral。
 
 ### 会后 Panorama
 
@@ -170,13 +172,16 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Side Panel 每条行动项支持一键复制结构化文本（行动项、负责人、截止、识别时间、状态和依据），也支持按当前筛选批量复制；确认后的未完成项还可以一键复制为 Markdown 跟进清单，避免待复核 AI 建议直接流入外部任务系统。
 - Side Panel 每条行动项支持人工校正标题、负责人和截止时间；保存后会自动进入已确认状态，并在后续实时分析刷新时按 AI 原始身份继续继承，避免用户修正被新一轮结构化分析覆盖。
 - Side Panel 行动项页支持手动补充 AI 漏掉的行动项；人工新增项默认已确认，会写入当前会话时间线，并在后续实时分析刷新后优先保留；负责人可先留空并标记为 `待分配`，避免会中只想先记录任务时被分配信息阻塞。
+- Side Panel 行动项路径的真实控制点都有按钮级边界：tab 切换只改本地视图，会前 cue 只写当前 session 的行动项，筛选只改变可见列表，复制只写本机剪贴板，确认/完成/忽略只改本场 review 状态，编辑/人工补录保存也不会直接创建外部任务、发送纪要或写 Calendar / Jira / RingCentral。
 - 人工新增行动项的时间线锚点会在后续实时分析刷新后继续保留；用户修改标题、负责人或截止时间后，回跳时间线仍会定位到同一条人工记录，避免补录任务失去上下文依据。
 - Today Pilot / Context Assist 带入的会前准备问题或目标可以在实时页一键加入行动项；系统会默认归给自己、截止标记为本次会议、保留会前证据，并按当前会议去重，避免用户会中手动抄写准备事项。
 - RingCentral Video Home 的 Today Pilot 卡片初始只读取预生成 meeting prep；用户点击刷新时会先为当前日期 backfill meeting prep，再把缓存结果写入 Meeting Pilot handoff，避免缺少 nightly 预生成缓存时会中面板拿不到准备内容。
-- Meeting Pilot 读取 Today Pilot handoff 时，会优先展示 `本场关注`：它来自会前准备的 action cue、建议问题、摘要或 brief cue。旧缓存如果没有显式目标，side panel 会从 cue cards 兜底提炼，避免用户进入会议后只看到证据和卡片，却看不到本次会议应确认的核心问题。
+- Meeting Pilot 读取 Today Pilot handoff 时，会优先展示 `本场关注`：它来自会前准备的 action cue、建议问题、摘要或 brief cue。旧缓存如果没有显式目标，side panel 会从 cue cards 兜底提炼，避免用户进入会议后只看到证据和卡片，却看不到本次会议应确认的核心问题。已经打开的 side panel 会监听单条 handoff 和候选集合两种本机缓存刷新；Video Home 刷新同一会议准备后，侧栏会重选最新匹配的 handoff，并继续保留匹配方式、缓存年龄、剩余有效期和无外部写入边界。
 - Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - Side Panel 的 Live 卡片和页脚会在 Capture 未开启时提供 `查看开启步骤`，直接在会议页打开扩展 icon / popup 授权 coachmark，避免用户只看到静态说明。
-- Side Panel 的 Capture 起步卡会显示 `当前 / 范围 / 下一步` 回执，区分等待授权、配置阻断、部分降级、启动失败、已停止和 Transcript-only 低配运行，避免用户把“未录制”“低配可用”或“需要从 popup 重新授权”混在一起。
+- Side Panel 的 Capture 起步卡主按钮和底部 sticky Capture / 配置按钮都有 hover / 读屏边界，区分打开 Options、显示 popup 授权步骤、增强 Transcript-only 低配运行、重试/重新开启和停止当前 Capture；点击前会说明不会直接开始录制、上传音视频、通知参会者、发送纪要或创建外部任务。
+- popup 点击 `开启会议全貌` 后会先显示本机 Capture 启动提交回执：提交中不代表录制已开始，也不会通知参会者、发送会议内容、创建纪要、写外部任务或代表用户取得录制同意；失败回执也保留同一非效果边界。
+- Side Panel 的 Capture 起步卡会显示 `当前 / 范围 / 下一步` 回执，区分等待授权、配置阻断、部分降级、启动失败、已停止和 Transcript-only 低配运行，并说明本机 Capture 不会自动通知参会者或代表用户取得录制同意，避免用户把“未录制”“低配可用”或“需要从 popup 重新授权”混在一起。
 - 会议页浮动入口支持当前页面临时隐藏或保存为“永不展示”；保存成功后当前会议页会立即隐藏入口，之后可在 Options 的 Meeting Pilot 配置里重新打开，避免入口关闭像失败一样停留在页面上。
 - 会议页入口请求内嵌面板时，如果目标 tab 无法接收内嵌面板消息，background 会返回 `surface='unavailable'` 和可恢复错误码；页面不再显示“已打开”，而是提示用户保留会议页、从 popup / Chrome 侧边栏重试或去 Options 修复配置。
 - 会议页内嵌面板顶部会显示 `页内面板` 回执，区分加载中、已载入和加载未确认；回执说明当前面板绑定的是本场会议页，打开或关闭面板不会自动开始、停止或外发 Capture，并提供父级关闭按钮。
@@ -192,6 +197,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - 缺负责人、截止或依据的待复核项在单条确认/完成时会显示 `确认例外` / `确认例外并完成`，避免用户把低置信 AI 建议误当成已完整复核的正式任务。
 - Side Panel 实时页会把本轮最重要的关联记忆提升到顶部 `会中关联记忆` 卡片；如果命中 `type='rehearsal'`，文案显示为“预演提醒”，并解释参会人、会议、项目或 issue 等命中线索。只有未来会议场景和预演内容都清楚时才按 Rehearsal 展示；单纯事实、状态或弱联想仍按普通记忆/Reflection/Dream 处理。这些已提升的记忆不会再重复进入下方提醒 feed；会议页记忆弹幕和 side panel feed 都会过滤 `displayPriority: hidden` 或无解释价值的记忆，并且记忆弹幕只暴露安全的记忆库/来源链接，避免同一条 context 在会中主控面重复或不安全地打扰用户。
 - Side Panel 和 Live Map 的 P0/P1/P2 会中提醒卡会显示原因回执：`mention` 提醒说明只提示点名不代发言，`action` 提醒说明需去行动项页复核 owner / deadline / transcript 依据，`memory` 提醒说明只是召回不改写记忆，`share` / `summary` 提醒说明 OCR 或摘要可能延迟且不会确认事实或通知他人。回执还会显示 `信号` 新鲜度：刚刚/几分钟前/较旧/缺时间戳，并按 transcript、会中事件、记忆召回、共享画面/OCR 或摘要变化说明当前提醒的依据口径，避免旧提醒或无时间戳提醒被误认为本轮刚发生的事实。这样用户能在会中判断要不要处理，而不是只看到一个等级标签。
+- Side Panel 和 Live Map 共用同一套会中提醒过滤与可见口径：纯主讲人切换 / context refresh 不再作为可操作提醒展示；顶部回执会把降噪数量、已提升关联记忆和隐藏记忆边界说清楚，避免用户把“无新提醒”理解成会议没有任何后台信号。
 - Side Panel 顶部会显示 `侧栏状态源回执`：区分按 `tabId` 绑定真实会议页、无 `tabId` 时读取当前活跃会议、`demo=1` 本地演示数据，以及请求的旧 `tabId` 已无会议 session 的未绑定状态。带旧 `tabId` 的独立窗口不会再回退展示其他活跃会议，避免用户在旧会议窗口里误改当前会议的行动项。
 - 行动项更新会同时校验 `tabId` 和 `meetingId`；如果会议标签页已经切换到另一场会议，旧 side panel / 独立窗口不能继续改写新会议的行动项。
 - 被忽略的行动项不会进入会议记忆 recap 的主行动项列表，但仍会保留在 session 的完整结构化数据里，方便排查 AI 误判。
@@ -200,20 +206,22 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - LLM 返回的行动项 / 决议会补齐当前 chapterId，避免时间线展开时找不到同章行动项。
 - 实时分析刷新时优先保留当前识别到的行动项；已确认/已忽略的旧项只在容量有余时继续保留，避免旧复核记录挤掉新任务。
 - Local ASR session 启动后如果 desktop app chunk stream 连续失败，provider 会把它升级为 fatal ASR 错误并触发下一层 fallback；TierBadge tooltip / toast 和 capture log 会保留本次降级原因，避免用户看到“本地 ASR 运行中”但一直没有 transcript。
-- Speech 面板会展示 `ASR 链路回执`：把转写模式、当前层级、本轮探测路径、最近转写来源、上传边界和 fallback/恢复动作放在同一块里。Chrome On-Device / Web Speech 启动后会直接显示首条转写 watchdog，说明空 transcript 不等于会议无人发言、超时会按当前模式切层，以及可改用 Desktop App / Cloud ASR。Local ASR 如果只有 Whisper / final engine 可用，会直接说明“无实时预览、final transcript 可能延迟到静音或停止后出现”；本地 chunk stream 警告会显示重试计数、实时 partial preview 可能暂停、已收到 final / 历史 transcript 仍保留、当前音频仍只发给本机 Desktop App，以及继续失败后的切层边界。Local ASR 尚未可用时，回执会把 Desktop App 未连接、模型下载中、模型安装失败、live engine 已就绪但 final/Whisper 兜底未就绪、final engine 未就绪或 Whisper binary 未安装这类准备状态翻译成 `本地准备` 与具体恢复动作，不再只暴露 raw readiness code。Cloud ASR 会显示实际 endpoint 风格（`/v1/audio/transcriptions` 或 `chat/completions + input_audio`）、模型、语言和单片音频上传限制，同时保留“为什么切到云端”和“本轮哪些层已不可用/失败/被选中”的 probe trail。这样用户不用只靠徽章 hover 或 capture log 判断当前是会议页转写、本机 ASR，还是已经切到云端转写。
+- Speech 面板会展示 `ASR 链路回执`：把转写模式、当前层级、本轮探测路径、最近转写来源、上传边界和 fallback/恢复动作放在同一块里；回执卡本身的 hover / 读屏文案也会汇总当前层、上传边界、新鲜度和下一步，并说明它只是当前会议 session 的转写状态快照，查看不会开始/停止 Capture、切换 ASR 模式、额外上传音频、请求 RingCentral 保存/下载完整 transcript、发送纪要或创建外部任务。Chrome On-Device / Web Speech 启动后会直接显示首条转写 watchdog，说明空 transcript 不等于会议无人发言、超时会按当前模式切层，以及可改用 Desktop App / Cloud ASR。Local ASR 如果只有 Whisper / final engine 可用，会直接说明“无实时预览、final transcript 可能延迟到静音或停止后出现”；本地 chunk stream 警告会额外显示 `本地流状态`，把重试计数、距离 fatal fallback 的剩余失败次数、实时 partial preview 暂停、已收到 final / 历史 transcript 保留、当前音频仍只发给本机 Desktop App，以及继续失败后的切层边界拆成可扫的一行。Local ASR 尚未可用时，回执会把 Desktop App 未连接、模型下载中、模型安装失败、live engine 已就绪但 final/Whisper 兜底未就绪、final engine 未就绪或 Whisper binary 未安装这类准备状态翻译成 `本地准备` 与具体恢复动作，不再只暴露 raw readiness code。Cloud ASR 会显示实际 endpoint 风格（`/v1/audio/transcriptions` 或 `chat/completions + input_audio`）、模型、语言和单片音频上传限制，同时保留“为什么切到云端”和“本轮哪些层已不可用/失败/被选中”的 probe trail。这样用户不用只靠徽章 hover 或 capture log 判断当前是会议页转写、本机 ASR，还是已经切到云端转写。
+- Capture 前的 readiness / preflight 也会复用同一套 Local ASR 可恢复口径：如果模型下载中、Whisper binary 缺失、Desktop App 未连接，或只有 live engine ready 但 final transcript 兜底未 ready，入口会直接说明当前本地准备状态、下一步恢复动作，以及 `local-only` 不会调用云端、`auto` 只有实际切到 Cloud 层时才上传音频；不会再把这些状态压成泛化的 “Local ASR unavailable”。
 - 从会议历史归档打开 Panorama 时，会保留行动项的 evidence、timestamp、source、chapterId 和 review 状态。
 - 会议历史归档会透出 Digest 的真实状态和错误码：PDF 生成失败、完成但 URL 缺失、或 PDF 链接不是安全 http(s) 地址时，不再显示成“等待 PDF”，并且不会把不安全链接带入 Panorama 或打开动作。
-- 会议历史归档会显示已加载数量和总数，超过 50 条时提供 `加载更早会议`；加载第二页失败时保留当前列表并显示可重试错误，避免用户误以为历史归档只有第一页。
+- 会议历史归档会显示已加载数量和总数，超过 50 条时提供 `加载更早会议`；加载第二页失败时保留当前列表，并在读取回执里标明本次未更新、仍显示上次成功读取的只读快照，避免用户误以为历史归档只有第一页或已经成功追加。
 - 会议历史归档支持关键词和状态筛选；关键词会覆盖标题、摘要、参会者、会议 ID、错误码以及同一会议下归档的转写/观察文本。`ready` 表示有安全 PDF 或 Digest 完成，`attention` 表示 Digest/PDF 失败、缺失或链接不可安全打开，`processing` 表示 Digest 仍在生成，`archived` 表示只有基础归档记录。任何非 http(s) 或无法解析的 PDF URL 都会进入 `attention`，卡片内显示 `处理建议`，让用户先回 Panorama 复核结构化归档，再排查 Minutes API / PDF URL 写回。
-- 会议历史归档在初始加载、手动刷新、搜索/状态筛选、清除筛选和加载更早会议后都会显示 `会议归档读取回执`，说明本次读取来源、筛选范围、已显示/总数和只读边界：这些操作只读取历史列表，不会重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。
+- 会议历史归档在初始加载、手动刷新、搜索/状态筛选、清除筛选和加载更早会议后都会显示 `会议归档读取回执`，说明本次读取来源、筛选范围、已显示/总数和只读边界；读取失败时同一区域改为 `failed` 回执，明确本次没有更新数据、当前是空状态或旧快照。这些操作只读取历史列表，不会重新分析会议、生成 PDF、写入 Memory Service、发送纪要或修改行动项。
 - 会议历史归档会在列表上方显示 `归档完整度回执`，把当前已显示会议分成完整可交付、需复核、生成中、仅基础归档四类。该回执只统计当前页或当前筛选范围；如果只加载了最新 50 条，会明确标为当前页快照，加载更早会议后再重新计算，避免把未加载历史误当成已审计。
 - 会议历史归档筛选成功但返回 0 条时，会显示 `空结果回执`：说明服务端已按同一关键词/状态读取、关键词覆盖标题/摘要/参会者/会议 ID/错误码/归档转写与观察文本、0 条不代表读取失败或历史被删除，并给出清除筛选、放宽关键词或切换状态的恢复路径。
-- 会议历史归档卡片在打开按钮前显示 `打开范围`：安全 PDF 会明确只打开 http(s) 外部链接；PDF 失败、缺失、生成中或被安全规则拦截时，按钮保持禁用并说明可先用 Panorama 只读复核结构化归档，不会催跑 Minutes API、补发 PDF、发送纪要、写回归档或修改行动项。
-- 会议历史归档点击 `打开 Panorama` 或 `打开 PDF` 后会在当前卡片留下 `打开回执`：Panorama 回执说明只是打开现有结构化归档；PDF 回执说明只把已通过安全检查的 http(s) 链接交给浏览器。二者都不会分享、发送、重跑 Minutes API、写回会议记录或修改行动项。
+- 会议历史归档卡片在打开按钮前显示 `打开范围`：安全 PDF 会明确只打开 http(s) 外部链接；PDF 失败、缺失、生成中或被安全规则拦截时，按钮保持禁用并说明可先用 Panorama 只读复核结构化归档，不会催跑 Minutes API、补发 PDF、发送纪要、写回归档或修改行动项。`打开 Panorama` / `打开 PDF` 按钮本身也带 hover / 读屏边界，说明当前卡片快照、外部 PDF 安全检查和禁用原因，避免只依赖相邻说明。
+- 会议历史归档点击 `打开 Panorama` 或 `打开 PDF` 后会在当前卡片留下 `打开回执`：Panorama 回执说明只是打开现有结构化归档；PDF 回执说明只把已通过安全检查的 http(s) 链接交给浏览器。二者都不会分享、发送、重跑 Minutes API、写回会议记录或修改行动项，也不会创建外部任务。
 - Panorama 会单独展示 `会后跟进状态`：区分可直接跟进、待复核、需补信息和已完成行动项，并支持复制带负责人、截止、状态和依据的 Markdown 跟进清单，避免用户把未复核或缺依据的 AI 行动项直接外发。
 - Panorama 顶部 `回放录制` 只在当前会议有真实且通过安全检查的录制素材 URL 时启用；只有 PDF 的归档会议会继续使用 `会议纪要 PDF` 入口，避免把 PDF 打开误导成录制回放。`复制页面链接`、PDF 链接和录制链接都会走同一套复制 fallback，并给出可见成功/失败反馈。
-- Panorama 首屏会显示 `输出范围回执`：汇总页面链接、JSON 本机导出、Markdown 跟进清单、PDF 和录制素材的可用状态，并说明这些动作只会打开、复制、下载或导出现有材料，不会发送纪要、创建外部任务、确认行动项、重跑分析、写回 Memory Service，或修改 Calendar / Jira / RingCentral。PDF 和录制素材的打开、下载、iframe 预览、复制和回放都只接受无凭据的 `http(s)` 链接；`javascript:`、带账号信息或非 http(s) 的素材会显示 `已隐藏` 原因，并且不会进入外部动作。footer 的内容准确/需要修正按钮也会显示 `反馈未写入` 回执，避免用户误以为已经完成校准或触发重分析。
+- Panorama 首屏会显示 `输出范围回执`：汇总页面链接、JSON 本机导出、Markdown 跟进清单、PDF 和录制素材的可用状态，并说明这些动作只会打开、复制、下载或导出现有材料，不会发送纪要、创建外部任务、确认行动项、重跑分析、写回 Memory Service，或修改 Calendar / Jira / RingCentral。PDF 和录制素材的打开、下载、iframe 预览、复制和回放都只接受无凭据的 `http(s)` 链接；`javascript:`、带账号信息或非 http(s) 的素材会显示 `已隐藏` 原因，并且不会进入外部动作。首屏的 PDF 跳转、页面链接复制、JSON 导出、录制回放、跟进清单复制、PDF/录制素材打开/下载/复制和 footer 反馈按钮都会在 hover / 读屏文案里重复对应边界，避免用户把复制/打开现有材料理解成已经分享纪要、创建任务、确认行动项或触发校准。
 - 从会议历史打开 Panorama 时，会优先展示 memory-service 的完整归档明细，而不是同 meetingId 的活跃 session 缓存；页面顶部会标出完整归档是否已载入，并显示 `归档来源回执`。如果完整归档加载失败，回执会说明当前只来自历史列表带入的基础信息，行动项/决议/时间线为空不等于会议没有这些内容，也不会自动补发 PDF 或重写归档。归档 action item 会继续保留 AI / 规则 / 手动来源、review 状态、缺信息标签、evidence 和时间线锚点，避免会后复核链路退化成只有摘要/PDF。
+- 会议历史打开 Panorama 时，会把列表卡片上的摘要、话题数、行动项数和决议数作为只读快照一起带入。若完整归档详情 API 暂时失败，Panorama 的 `归档来源回执` 会显示这份列表快照，并明确完整行动项正文、决议正文、时间线和立场仍未载入；它不会把这些计数伪造成真实条目，也不会自动重跑分析、补发 PDF、写回 Memory Service 或修改行动项。
 
 ## 行业与论文参考方向
 
@@ -325,13 +333,15 @@ Tier 3: Cloud ASR (Cloud) — 远程 `/v1/audio/transcriptions` 或 `chat/comple
 | 云端 ASR         | 云端 ASR                    |
 | 无转写           | 所有层级不可用              |
 
-Speech 面板还会显示 `ASR 链路回执`：
+Speech 面板还会显示 `ASR 链路回执`；整张回执卡也带动态 hover / 读屏边界，先说明这是当前会议 session 的只读 ASR 快照，不会开始/停止 Capture、切换模式、额外上传音频、请求平台保存/下载 transcript、发送纪要或创建外部任务：
 
 - `模式`：说明当前是自动、本地-only 还是云端-only。
 - `当前层`：说明当前实际使用哪一层，以及最近一次切换时间。
 - `探测路径`：用短链路展示本轮 ASR 已检查的层级，例如 `本地 ASR / Whisper 启动失败 → 云端 ASR 已选中`，让用户知道云端上传是 fallback 结果还是 cloud-only 选择。
 - `上传边界`：说明当前是否会把音频片段发往云端 ASR。
+- `平台转写`：当 RingCentral 页面已有 caption/transcript 并使 Local / Cloud ASR 跳过时，说明 Personal AI 只读取当前页面已经显示的文本；已读文本仍可进入本场实时摘要、行动项、时间线和归档草稿，但不会请求 RingCentral 保存/下载完整 transcript、发送通知、开启录制或额外上传音频。
 - `实时状态`：说明当前是否有 live partial preview、只是在等待 final transcript、正在等首条浏览器转写、还是已经没有可用层级；final-only 本地 ASR 会明确说“没有 live preview 不等于本地 ASR 已坏”。
+- `本地流状态`：只在 Local ASR chunk stream 连续失败但尚未 fatal fallback 时出现，显示重试进度、剩余失败次数、本机处理边界和继续失败后的切层后果。
 - `云端接口`：当当前层级是 Cloud ASR 时，显示实际 endpoint 风格、模型、语言和单片上传限制；这个运行明细不会覆盖切层原因。
 - `本地准备`：当 Local ASR / Whisper 不可用时，把 Desktop App 未连接、模型下载中、模型安装失败、live engine 已就绪但 final/Whisper 兜底未就绪、final engine 未就绪或 Whisper binary 未安装翻译成用户可读状态，并给出留在本地等待、去 Options 检查或临时切到 Auto / Cloud 的恢复路径。
 - `最近结果`：说明最近 transcript 来自哪一层。
@@ -342,7 +352,7 @@ Speech 面板还会显示 `ASR 链路回执`：
 
 1. 安装 Personal AI Desktop App
 2. 首次使用 Auto / Local only 模式时由 Desktop App 准备本地 ASR 模型；live engine 负责低延迟 partial，FunASR 或 Whisper fallback 负责 final transcript
-3. 在 Options → Desktop ASR 面板查看 live / final / Whisper fallback 状态；只要 final engine ready，即使 live engine 缺失也可以在静音或停止后产出转写；如果只有 live engine ready，Speech 面板会说明本地实时引擎已就绪但 session 仍需 final transcript 兜底
+3. 在 Options → Desktop ASR 面板查看 live / final / Whisper fallback 状态；只要 final engine ready，即使 live engine 缺失也可以在静音或停止后产出转写；如果只有 live engine ready，Capture 前 readiness 和 Speech 面板都会说明本地实时引擎已就绪但 session 仍需 final transcript 兜底
 
 **平台支持**：仅 macOS（Windows 用户自动 fallback 到云端）
 

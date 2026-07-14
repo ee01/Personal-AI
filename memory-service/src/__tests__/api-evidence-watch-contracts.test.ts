@@ -82,6 +82,28 @@ describe('Evidence watch contracts API', () => {
     expect(list.statusCode).toBe(200);
     expect(list.json().items).toHaveLength(1);
     expect(list.json().items[0].id).toBe(created.contract.id);
+    expect(list.json().receipt).toMatchObject({
+      label: '证据守望列表快照',
+      state: 'all',
+      returnedCount: 1,
+      total: 1,
+      readOnly: true,
+    });
+    expect(list.json().receipt.detail).toContain(
+      '本次只读列表不会复核权威来源',
+    );
+
+    const invalidStateList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/evidence-watch-contracts?state=quiet',
+    });
+    expect(invalidStateList.statusCode).toBe(400);
+    expect(invalidStateList.json().receipt).toMatchObject({
+      label: '证据守望筛选已阻断',
+      invalidState: 'quiet',
+      readOnly: true,
+    });
+    expect(invalidStateList.json().receipt.detail).toContain('本次未读取列表');
 
     const detail = await app.inject({
       method: 'GET',
@@ -91,10 +113,26 @@ describe('Evidence watch contracts API', () => {
     expect(detail.json().receipt).toMatchObject({
       contractId: created.contract.id,
       label: '证据守望已建立',
+      lastRunState: 'created',
     });
     expect(detail.json().receipt.detail).toContain(
       '不代表权威来源已完成复核',
     );
+    expect(detail.json().readReceipt).toMatchObject({
+      label: '证据守望详情快照',
+      contractId: created.contract.id,
+      state: 'active',
+      lastRunState: 'created',
+      nextCheckAt: created.contract.nextCheckAt,
+      nextCheckDue: false,
+      readOnly: true,
+    });
+    expect(detail.json().readReceipt.lastCheckedAt).toBeUndefined();
+    expect(detail.json().readReceipt.detail).toContain(
+      '本次只读详情不会复核权威来源',
+    );
+    expect(detail.json().readReceipt.detail).toContain('复核时间基准');
+    expect(detail.json().readReceipt.detail).toContain('lastCheckedAt=none');
 
     const receipt = await app.inject({
       method: 'POST',
@@ -113,11 +151,15 @@ describe('Evidence watch contracts API', () => {
     });
     expect(receipt.statusCode).toBe(201);
     expect(receipt.json().contract.state).toBe('source_blocked');
+    expect(receipt.json().contract.lastCheckedAt).toEqual(expect.any(Number));
+    expect(receipt.json().contract.nextCheckAt).toBeUndefined();
     expect(receipt.json().uiReceipt.label).toBe('证据守望来源阻塞');
+    expect(receipt.json().uiReceipt.lastRunState).toBe('blocked');
+    expect(receipt.json().uiReceipt.lastCheckedAt).toEqual(expect.any(Number));
 
     const runs = await app.inject({
       method: 'GET',
-      url: `/api/v1/evidence-watch-contracts/${created.contract.id}/runs`,
+      url: `/api/v1/evidence-watch-contracts/${created.contract.id}/runs?limit=5`,
     });
     expect(runs.statusCode).toBe(200);
     expect(
@@ -125,5 +167,22 @@ describe('Evidence watch contracts API', () => {
         .json()
         .items.map((item: { runState: string }) => item.runState),
     ).toContain('blocked');
+    expect(runs.json().receipt).toMatchObject({
+      label: '证据守望运行快照',
+      contractId: created.contract.id,
+      state: 'source_blocked',
+      lastRunState: 'blocked',
+      lastCheckedAt: receipt.json().contract.lastCheckedAt,
+      nextCheckDue: false,
+      returnedCount: 2,
+      limit: 5,
+      readOnly: true,
+    });
+    expect(runs.json().receipt.nextCheckAt).toBeUndefined();
+    expect(runs.json().receipt.detail).toContain(
+      '本次只读历史不会复核权威来源',
+    );
+    expect(runs.json().receipt.detail).toContain('复核时间基准');
+    expect(runs.json().receipt.detail).toContain('nextCheckAt=none');
   });
 });

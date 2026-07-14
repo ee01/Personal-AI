@@ -24,6 +24,12 @@ export interface FollowupAskRunSummaryOptions {
   timeZone?: string;
 }
 
+export interface FollowupAskSubmitBoundaryOptions
+  extends FollowupAskRunSummaryOptions {
+  targetLabel?: unknown;
+  submitting?: boolean;
+}
+
 interface FollowupAskToastOptions {
   nowSeconds?: number;
   locale?: string;
@@ -49,6 +55,12 @@ function normalizeFollowupGoalForDisplay(value: unknown): string | undefined {
   const normalized = value.replace(/\s+/g, ' ').trim();
   if (!normalized) return undefined;
   return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+}
+
+function normalizeFollowupTargetForDisplay(value: unknown): string {
+  if (typeof value !== 'string') return '当前会话';
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized || '当前会话';
 }
 
 function normalizeEpochSeconds(value: unknown): number | undefined {
@@ -122,6 +134,18 @@ export function buildFollowupAskRunSummary(
     dueAt,
     options,
   )} 后检查回复；如果已有回复满足目标，会自动结束。${maxFollowupReceipt}`;
+}
+
+export function buildFollowupAskSubmitBoundary(
+  options: FollowupAskSubmitBoundaryOptions,
+): string {
+  const target = normalizeFollowupTargetForDisplay(options.targetLabel);
+  const runSummary = options.submitting
+    ? buildFollowupAskSubmittingMessage({
+        maxFollowup: options.maxFollowup,
+      })
+    : buildFollowupAskRunSummary(options);
+  return `创建跟进：锚定 ${target}和这条原消息；${runSummary} 点击只会创建或复用 message reaction Outreach session，不会立刻发送新消息、不写 Google Sheet，也不创建可复用 Outreach template；同一原消息已有跟进时会复用旧 session。`;
 }
 
 function buildFollowupScheduleReceipt(

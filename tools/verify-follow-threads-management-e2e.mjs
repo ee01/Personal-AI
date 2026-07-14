@@ -146,6 +146,22 @@ try {
   await page.getByText('手动规则 1').waitFor({ timeout: 10000 });
   await page.getByText('进行中 1').waitFor({ timeout: 10000 });
   await page.getByText('已过期 0').waitFor({ timeout: 10000 });
+  await page.getByText('列表快照回执').waitFor({ timeout: 10000 });
+  await page
+    .getByText(/chrome\.storage\.local\.concernedItems/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/当前可见 1 条，手动 Watch 规则总数 1 条/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/系统 \/ Outreach 内部 Watch 隐藏 1 条/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/当前筛选：全部；排序：创建时间/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/本次列表读取不会取消、延长、补发通知/)
+    .waitFor({ timeout: 10000 });
   await page
     .locator('.stat-value')
     .filter({ hasText: /^手动结束$/ })
@@ -169,6 +185,12 @@ try {
   );
 
   await page.locator('.filter-select').first().selectOption('expired');
+  await page
+    .getByText(/当前可见 0 条，手动 Watch 规则总数 1 条/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/当前筛选：已过期；排序：创建时间/)
+    .waitFor({ timeout: 10000 });
   await page.getByText('当前筛选没有已过期 Watch').waitFor({
     timeout: 10000,
   });
@@ -213,11 +235,58 @@ try {
     'manual-end follow rule should extend from current time',
   );
 
-  page.once('dialog', async (dialog) => {
-    assert.match(dialog.message(), /确定要取消关注/);
-    await dialog.accept();
+  let nativeDialogSeen = false;
+  page.on('dialog', async (dialog) => {
+    nativeDialogSeen = true;
+    await dialog.dismiss();
   });
-  await page.getByRole('button', { name: /取消/ }).click();
+  await page
+    .getByRole('button', { name: /^取消关注 关于 Release owner 的后续讨论$/ })
+    .click();
+  assert.equal(
+    nativeDialogSeen,
+    false,
+    'cancel should use inline confirmation instead of a native dialog',
+  );
+  await page.getByText('取消关注待确认').waitFor({ timeout: 10000 });
+  await page
+    .getByText(/确认前不会修改本地列表/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/不会删除 RingCentral 原消息/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/不会补发或撤回通知/)
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(/点「确认取消」才会写入本机存储/)
+    .waitFor({ timeout: 10000 });
+
+  const beforeCancelConfirm = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get('concernedItems');
+    return result.concernedItems;
+  });
+  assert.equal(
+    beforeCancelConfirm.some((item) => item.id === 'watch-manual-end'),
+    true,
+    'first cancel click should not remove the local manual follow-thread rule',
+  );
+
+  await page
+    .getByRole('button', { name: /^返回并保留关注 关于 Release owner 的后续讨论$/ })
+    .click();
+  assert.equal(
+    await page.getByText('取消关注待确认').count(),
+    0,
+    'return should hide the inline cancel confirmation',
+  );
+
+  await page
+    .getByRole('button', { name: /^取消关注 关于 Release owner 的后续讨论$/ })
+    .click();
+  await page
+    .getByRole('button', { name: /^确认取消关注 关于 Release owner 的后续讨论$/ })
+    .click();
   await page.getByText('已取消关注后续').waitFor({ timeout: 10000 });
   await page
     .getByText(/不会立刻清理已写入 Memory Service 的历史索引/)
