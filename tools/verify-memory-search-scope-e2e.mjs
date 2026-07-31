@@ -80,6 +80,34 @@ async function expectScopeIntentReceipt(page, { summary, caution, metrics }) {
   }
 }
 
+async function expectScopeButtonBoundary(
+  scopeControls,
+  label,
+  expectedFragments,
+) {
+  const button = getScopeButtonByVisibleLabel(scopeControls, label);
+  const title = (await button.getAttribute('title')) || '';
+  const ariaLabel = (await button.getAttribute('aria-label')) || '';
+  assert.equal(
+    ariaLabel,
+    title,
+    `${label} scope button should keep title and aria-label in sync`,
+  );
+  for (const fragment of expectedFragments) {
+    assert.ok(
+      title.includes(fragment),
+      `${label} scope button boundary should include "${fragment}", got "${title}"`,
+    );
+  }
+}
+
+function getScopeButtonByVisibleLabel(scopeControls, label) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return scopeControls
+    .locator('button.scope-option')
+    .filter({ hasText: new RegExp(`^\\s*${escapedLabel}\\s*$`) });
+}
+
 function apiFallback(url) {
   const pathname = new URL(url).pathname;
   if (pathname.endsWith('/stats')) {
@@ -284,6 +312,17 @@ try {
 
   await page.getByText('Scoped memory result work').waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'work');
+  const scopeControls = page.locator('.search-header .scope-segmented');
+  await expectScopeButtonBoundary(scopeControls, '工作', [
+    '当前已选择工作记忆',
+    '个人记忆不会进入候选',
+    '不会写入、删除、同步外部来源、写反馈、确认答案或外发',
+  ]);
+  await expectScopeButtonBoundary(scopeControls, '全部', [
+    '切到全部记忆会立即用当前 query 重新请求 Memory Service',
+    '上一次结果只作为旧快照',
+    '个人证据带到工作场景前需要确认',
+  ]);
   await expectScopeIntentReceipt(page, {
     summary: '下一次搜索只读取工作记忆。',
     caution: '个人记忆不会进入候选；适合默认工作场景检索。',
@@ -553,13 +592,22 @@ try {
     .locator('.search-result-card', { hasText: 'Scoped memory result all' })
     .waitFor({ timeout: 10000 });
 
-  const scopeControls = page.locator('.search-header .scope-segmented');
-  await scopeControls.getByRole('button', { name: '个人' }).click();
+  await getScopeButtonByVisibleLabel(scopeControls, '个人').click();
   await page
     .getByText('Scoped memory result personal')
     .waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'personal');
   assert.ok(page.url().includes('scope=personal'));
+  await expectScopeButtonBoundary(scopeControls, '个人', [
+    '当前已选择个人记忆',
+    '工作记忆不会进入候选',
+    '不会写入、删除、同步外部来源、写反馈、确认答案或外发',
+  ]);
+  await expectScopeButtonBoundary(scopeControls, '全部', [
+    '切到全部记忆会立即用当前 query 重新请求 Memory Service',
+    '上一次结果只作为旧快照',
+    '个人证据带到工作场景前需要确认',
+  ]);
   await expectScopeIntentReceipt(page, {
     summary: '下一次搜索只读取个人记忆。',
     caution: '工作记忆不会进入候选；适合只查私人生活域。',
@@ -574,10 +622,15 @@ try {
     .getByText('本次主动召回仅检索个人记忆，工作记忆未进入候选。')
     .waitFor({ timeout: 10000 });
 
-  await scopeControls.getByRole('button', { name: '全部' }).click();
+  await getScopeButtonByVisibleLabel(scopeControls, '全部').click();
   await page.getByText('Scoped memory result all').waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'all');
   assert.ok(page.url().includes('scope=all'));
+  await expectScopeButtonBoundary(scopeControls, '全部', [
+    '当前已选择全部记忆',
+    '工作与个人证据都可能进入结果',
+    '不会写入、删除、同步外部来源、写反馈、确认答案或外发',
+  ]);
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
   await page.getByText('命中范围: 工作 1 · 个人 1').waitFor({ timeout: 10000 });
   await page
@@ -592,7 +645,8 @@ try {
   assert.equal(askRequests.at(-1)?.scope, 'all');
   assert.equal(
     await scopeControls
-      .getByRole('button', { name: '全部' })
+      .locator('button.scope-option')
+      .filter({ hasText: /^全部$/ })
       .getAttribute('aria-pressed'),
     'true',
   );

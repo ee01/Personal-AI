@@ -92,6 +92,75 @@ suites:
         - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts
         - npm run eval:run -- --suite scene-memory-autopilot --no-repair
 
+  - id: keystone-memory-briefs
+    title: Keystone Memory Briefs Eval
+    description: 验证后台能否从 Reflection Thread 与多来源工作记忆自动生成关键简报，以及简报是否只在证据与当前场景都足够时进入 Memory Lens 主视图，并在单源、冲突、过期和外发风险下正确降级。
+    enabled: true
+    workflow: evals/workflows/keystone-memory-briefs/experience.md
+    cases: evals/cases/keystone-memory-briefs/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/KeystoneBriefService.ts
+        - memory-service/src/core/KeystoneBriefComposerService.ts
+        - memory-service/src/routes/keystoneBriefs.ts
+        - memory-service/src/routes/contextRecall.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/types/index.ts
+        - memory-service/src/__tests__/keystone-briefs.test.ts
+        - src/contentScriptWebIntelligence.ts
+        - src/services/MemoryServiceClient.ts
+        - src/background.ts
+        - tools/eval-keystone-memory-briefs.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/keystone-briefs.test.ts src/__tests__/keystone-brief-composer.test.ts
+        - npm run verify:webpage-memory-detection
+        - npm run eval:run -- --suite keystone-memory-briefs --no-repair
+
+  - id: change-memory-ledger
+    title: Change Memory Ledger Experience Eval
+    description: 验证“变化脉络”是否只为稳定对象保存带前后值和来源的状态变化，并在回退、冲突、当前页面新值、Ask 与 Compose 中保持正确时间和权威边界。
+    enabled: true
+    workflow: evals/workflows/change-memory-ledger/experience.md
+    cases: evals/cases/change-memory-ledger/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/MemoryChangeLedgerService.ts
+        - memory-service/src/core/SourceMemoryCaptureService.ts
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/core/ContextAssistService.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/types/index.ts
+        - memory-service/src/__tests__/**
+        - src/contentScriptWebIntelligence.ts
+        - src/modals/components/SourceMemoryDetailPage.vue
+        - src/services/MemoryServiceClient.ts
+        - desktop-app/src/memoryServiceClient.ts
+        - tools/eval-change-memory-ledger.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/memoryChangeLedgerService.test.ts
+        - npm run eval:run -- --suite change-memory-ledger --no-repair
+
   - id: estimate-cue-compiler
     title: Estimate Cue Compiler Eval
     description: 验证 Jira estimate 场景能把“人天口径”相关记忆编译成可行动 cue，并让展开、插入、发送和不相关 outcome 触发 cue-level suppress / boost / Skill suggestion。
@@ -162,6 +231,75 @@ suites:
         - npm --prefix memory-service test -- --run src/__tests__/api-ask.test.ts
         - npm run eval:run -- --suite ask-context-gap --no-repair
 
+  - id: ask-conversation-continuity
+    title: Ask Conversation Continuity Eval
+    description: 评估 Quick Ask 本机续聊线索能否自然延续真实话题、强制重新检索证据、返回清晰回执，并在新问题中保持上下文隔离。
+    enabled: true
+    workflow: evals/workflows/ask-conversation-continuity/experience.md
+    cases: evals/cases/ask-conversation-continuity/cases.jsonl
+    runMode: manual
+    readerProof:
+      claims:
+        - id: resume-hint-reretrieves-ai-vbg
+          statement: >-
+            当 Quick Ask 已把本机续聊线索随“先找谁确认”请求发送给真实 /api/v1/ask 时，服务会锁定 AI VBG / MTR-141852，返回“仅作提示且已重新检索”的回执，并提供本轮 evidence。
+          caseIds:
+            - ask-continuity-resume-ai-vbg-owner
+          requiredScores:
+            continuity_contract: 3
+            evidence_refresh: 3
+            topic_selection: 3
+            answer_quality: 3
+        - id: near-expiry-hint-never-becomes-authority
+          statement: >-
+            23 小时旧续聊线索仍只用于定位 AI VBG；系统不会把旧摘要当成当前事实，而会重新检索并以新 evidence 回答。
+          caseIds:
+            - ask-continuity-near-expiry-reretrieval
+          requiredScores:
+            continuity_contract: 3
+            evidence_refresh: 3
+            topic_alignment: 3
+            topic_selection: 3
+        - id: new-question-isolates-previous-topic
+          statement: >-
+            不携带 contextHints 的“新问题”请求不会返回续聊回执，也不会泄漏上一轮 AI VBG / MTR-141852 话题，能够独立回答 Nova Brandy Daily。
+          caseIds:
+            - ask-continuity-new-question-isolation
+          requiredScores:
+            continuity_contract: 3
+            topic_alignment: 3
+            context_isolation: 3
+            answer_quality: 3
+      boundaries:
+        - 本报告验证的是请求进入真实 /api/v1/ask 后的续接、重新检索与隔离行为；不证明 Quick Ask 本机快照的保存、展示、“继续”“新问题”和“清除”按钮交互，这些需要另行运行 verify:quick-ask:e2e 验证。
+        - 本报告只覆盖 0.08 小时和 23 小时线索；不证明超过 24 小时 TTL 后客户端一定自动清除快照。
+        - 本报告只覆盖 AI VBG 与 Nova Brandy Daily 三个真实查询场景，不代表所有话题、代词和数据分布。
+    endpoint:
+      url: http://10.32.56.212:3210/api/v1/ask
+      userId: esone.qiu
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-conversation-continuity.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - desktop-app/app/quick-ask-resume.js
+        - desktop-app/app/quick-ask.js
+        - desktop-app/src/memoryServiceClient.ts
+        - desktop-app/src/server.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/__tests__/api-ask.test.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+        - desktop-app/docs/features/**
+      validate:
+        - npm run verify:quick-ask:e2e
+        - npm --prefix memory-service test -- --run src/__tests__/api-ask.test.ts
+        - npm run eval:run -- --suite ask-conversation-continuity --no-repair
+
   - id: answer-memory-tracker
     title: Ask Answer Memory Tracker Eval
     description: 评估 Ask 是否能在用户重复询问同一 locked topic 时首问记录 observation、二问 promote 活答案、后续命中 prior，同时仍用本次 evidence 回答。
@@ -222,6 +360,193 @@ suites:
       validate:
         - npm --prefix memory-service test -- --run src/__tests__/evidenceWatchContractService.test.ts src/__tests__/api-evidence-watch-contracts.test.ts
         - npm run eval:run -- --suite evidence-watch-contracts --no-repair
+
+  - id: open-question-exit-contracts
+    title: Open Question Exit Contracts Eval
+    description: 评估开放问题是否在无新证据、已有 owner 或新证据恢复时正确退出、交接、恢复，并仅把今天相关的恢复项交给 Today Pilot。
+    enabled: true
+    workflow: evals/workflows/open-question-exit-contracts/experience.md
+    cases: evals/cases/open-question-exit-contracts/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/OpenQuestionExitContractService.ts
+        - memory-service/src/core/ReflectionThreadService.ts
+        - memory-service/src/core/DayPilotService.ts
+        - memory-service/src/repositories/ReflectionThreadRepository.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-open-question-exit-contracts.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/openQuestionExitContractService.test.ts src/__tests__/reflectionThreadService.test.ts src/__tests__/api-day-pilot.test.ts
+        - npm run eval:run -- --suite open-question-exit-contracts --no-repair
+
+  - id: action-readiness-contracts
+    title: Action Readiness Contracts Eval
+    description: 验证 OpenClaw 动作是否在 dispatch 前按鉴权、能力、必填输入与证据要求失败关闭，并确保 probe 不提交原任务、Reflection 不制造阻断队列债务。
+    enabled: true
+    workflow: evals/workflows/action-readiness-contracts/experience.md
+    cases: evals/cases/action-readiness-contracts/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/ActionReadinessService.ts
+        - memory-service/src/core/actions/ActionExecutor.ts
+        - memory-service/src/core/ReflectionThreadService.ts
+        - memory-service/src/repositories/ActionRepository.ts
+        - memory-service/src/routes/actions.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - src/services/MemoryServiceClient.ts
+        - src/modals/components/ActionQueue.vue
+        - tools/eval-action-readiness-contracts.ts
+        - tools/eval-run.mjs
+        - tools/verify-action-queue-e2e.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/actionReadinessService.test.ts src/__tests__/api-actions.test.ts src/__tests__/actionExecutor.test.ts src/__tests__/reflectionThreadService.test.ts
+        - npm run verify:action-queue:e2e
+        - npm run eval:run -- --suite action-readiness-contracts --no-repair
+
+  - id: evidence-cohesion-gate
+    title: Evidence Cohesion Gate Eval
+    description: 验证 Ask、Reflection、Context Recall 与 Context Pack 在消费前能否阻止跨项目串场，并相对 consume-all 基线保持零泄漏和必需证据全保留。
+    enabled: true
+    workflow: evals/workflows/evidence-cohesion-gate/experience.md
+    cases: evals/cases/evidence-cohesion-gate/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/evidence-cohesion-gate.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/EvidenceCohesionGateService.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/core/ReflectionWorker.ts
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/core/ContextAssistService.ts
+        - memory-service/src/__tests__/**
+        - tools/eval-evidence-cohesion-gate.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/evidenceCohesionGateService.test.ts src/__tests__/api-ask.test.ts src/__tests__/reflectionWorker.test.ts
+        - npm run eval:run -- --suite evidence-cohesion-gate --no-repair
+
+  - id: source-memory-distiller
+    title: Source Memory Distiller Experience Eval
+    description: 验证资料保存后的同步 P0 与异步深度蒸馏是否保持证据引用、隐私/注入门控、场景相关召回、来源聚类和零高责任自动写入。
+    enabled: true
+    workflow: evals/workflows/source-memory-distiller/experience.md
+    cases: evals/cases/source-memory-distiller/cases.jsonl
+    runMode: scheduled
+    schedule:
+      enabled: true
+      cron: "15 10 * * 2"
+      every: 7d
+      timezone: Asia/Shanghai
+      action: report
+      repair: suggest
+    readerProof:
+      claims:
+        - id: grounded-artifacts-cite-current-source-spans
+          statement: >-
+            视觉表格会先形成确定性 evidence spans；无效 span 引用会被丢弃，deep 产物不会借机写画像或创建动作。
+          caseIds:
+            - visual-table-rows-become-grounded-spans
+          requiredScores:
+            groundingIntegrity: 3
+            lifecycleFallback: 3
+            sideEffectBoundary: 3
+        - id: unsafe-sources-keep-p0-and-block-deep-model
+          statement: >-
+            含 prompt injection 的资料会在模型调用前阻断 deep，同时保留同步 P0 作为可复核兜底。
+          caseIds:
+            - prompt-injection-blocks-deep-model
+          requiredScores:
+            groundingIntegrity: 3
+            lifecycleFallback: 3
+            sideEffectBoundary: 3
+        - id: related-sources-cluster-without-merging-originals
+          statement: >-
+            指向同一 Jira key 的独立资料会形成来源簇和派生关联，但不会合并、删除或改写各自 capsule 与原始证据。
+          caseIds:
+            - duplicate-jira-sources-stay-independent
+          requiredScores:
+            groundingIntegrity: 3
+            sourceAggregation: 3
+            sideEffectBoundary: 3
+        - id: external-ai-workflow-remains-an-unpublished-seed
+          statement: >-
+            单条外部 AI 对话只能产生 evidence-grounded Skill seed，不会确认画像、创建动作、激活 Skill 或发送通知。
+          caseIds:
+            - external-ai-skill-remains-a-seed
+          requiredScores:
+            groundingIntegrity: 3
+            sideEffectBoundary: 3
+        - id: deep-only-trigger-respects-scene-boundary
+          statement: >-
+            deep-only 关键词只会在 trigger card 匹配的 Ask 场景召回，不会在不匹配的会议场景绕过门控。
+          caseIds:
+            - deep-trigger-only-recalls-in-matching-scene
+          requiredScores:
+            groundingIntegrity: 3
+            sceneRelevance: 3
+            sideEffectBoundary: 3
+      boundaries:
+        - 本 suite 向生产 worker 注入受控 JSON，用于确定性验证证据、生命周期和副作用门控；不证明线上模型对所有真实资料都能生成最佳摘要或候选。
+        - 本报告不替代 heartbeat 长时间运行、真实 esone.qiu 数据或 Source Memory 详情页交互证明；这些分别由 worker 测试、memory-abilities gate 和 Playwright E2E 验证。
+        - 本 suite 断言没有画像、动作或 Skill 激活写入，但不会调用任何真实外部发送、Slides、Docs、Jira 或消息写回 API。
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/source-memory-distiller.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/SourceMemoryCaptureService.ts
+        - memory-service/src/core/SourceMemoryDistillationWorker.ts
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/core/MemoryCoverageService.ts
+        - memory-service/src/core/StorylineDraftService.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/routes/sourceMemory.ts
+        - memory-service/src/routes/storylines.ts
+        - memory-service/src/storage/migrations/055_source_memory_deep_distillation.sql
+        - memory-service/src/__tests__/sourceMemoryDistillationWorker.test.ts
+        - src/modals/components/SourceMemoryDetailPage.vue
+        - src/modals/components/StorylineDraftPage.vue
+        - src/services/MemoryServiceClient.ts
+        - tools/eval-source-memory-distiller.ts
+        - tools/eval-run.mjs
+        - tools/verify-source-memory-capsule-e2e.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/sourceMemoryDistillationWorker.test.ts src/__tests__/api-source-memory.test.ts
+        - node tools/verify-source-memory-capsule-e2e.mjs
+        - npm run eval:run -- --suite source-memory-distiller --no-repair
 
   - id: memory-lifecycle
     title: Memory Lifecycle Experience Eval
@@ -285,9 +610,98 @@ suites:
         - npm run verify:context-assist-meeting-prep
         - npm run test:meeting-pilot-scene1
 
+  - id: meeting-outcome-binder
+    title: Meeting Outcome Binder Experience Eval
+    description: 验证 Today Pilot 会前目标能否在 Meeting Pilot 会后只按匹配证据装订为闭环、部分闭环、未闭环或带到后续，并被 Ask 只读引用。
+    enabled: true
+    workflow: evals/workflows/meeting-outcome-binder/experience.md
+    cases: evals/cases/meeting-outcome-binder/cases.jsonl
+    runMode: scheduled
+    schedule:
+      enabled: true
+      cron: "30 9 * * 1"
+      every: 7d
+      timezone: Asia/Shanghai
+      action: report
+      repair: suggest
+    readerProof:
+      claims:
+        - id: mixed-meeting-results-follow-evidence-strength
+          statement: >-
+            Q3 planning 的决议会闭环，pending capacity 行动项只会部分闭环，只有明确“下次继续”的 transcript 才会带到后续；三种结果可被 Ask 只读引用。
+          caseIds:
+            - q3-planning-mixed-outcomes
+          requiredScores:
+            preview_contract: 3
+            status_guard: 3
+            evidence_grounding: 3
+            persistence: 3
+            ask_read_boundary: 3
+        - id: transcript-mention-never-closes-an-outcome
+          statement: >-
+            Transcript 只有提及时，即使模型返回 resolved，生产证据守卫也会降级为 unresolved，并且不会把模型的“已解决”摘要提供给 Ask。
+          caseIds:
+            - transcript-mention-cannot-resolve
+          requiredScores:
+            status_guard: 3
+            evidence_grounding: 3
+            ask_read_boundary: 3
+        - id: invalid-citations-fail-closed
+          statement: >-
+            模型引用不存在的 evidence ref 时，结果会进入 blocked_by_missing_evidence，不会产生或持久化虚假的预算 owner 结论。
+          caseIds:
+            - invalid-evidence-reference-blocks-closure
+          requiredScores:
+            status_guard: 3
+            evidence_grounding: 3
+            persistence: 3
+        - id: completed-action-can-close-an-outcome
+          statement: >-
+            与目标匹配且状态为 done 的行动项可以把结果标记为 resolved，并保留 action 证据供会后页和 Ask 使用。
+          caseIds:
+            - completed-action-resolves-outcome
+          requiredScores:
+            status_guard: 3
+            evidence_grounding: 3
+            persistence: 3
+      boundaries:
+        - 本报告验证生产 MeetingOutcomeBinderService 的证据守卫、持久化与 Ask 格式化；不证明真实 LLM 对所有议程都能生成最佳目标。
+        - 页面交互由 Today Pilot Video Home、Meeting Pilot side panel/Panorama 和 Quick Ask Playwright E2E 验证，本报告不替代 UI 证明。
+        - 本 suite 不调用 Calendar、Jira、RingCentral、消息或任务写入 API；外部无写回边界需结合路由审查和页面回执理解。
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/meeting-outcome-binder.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/MeetingOutcomeBinderService.ts
+        - memory-service/src/repositories/MeetingOutcomeBinderRepository.ts
+        - memory-service/src/routes/meetingOutcomes.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/types/index.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - src/meeting-shell/**
+        - src/contentScriptRingCentralVideoHome.ts
+        - src/services/MemoryServiceClient.ts
+        - desktop-app/app/quick-ask.js
+        - tools/eval-meeting-outcome-binder.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-meeting-outcomes.test.ts src/__tests__/api-today-pilot-meeting-prep.test.ts src/__tests__/api-meetings.test.ts
+        - npm run verify:context-assist-meeting-prep
+        - npm run test:meeting-pilot-scene1
+        - npm run test:meeting-pilot-panorama
+        - npm run verify:quick-ask:e2e
+        - npm run eval:run -- --suite meeting-outcome-binder --no-repair
+
   - id: compose-assist
     title: Compose Assist Experience Eval
-    description: 评估 Compose Assist 的建议是否可直接发送、是否有正确记忆证据、是否越界替用户生成回复。
+    description: 评估 Compose Assist 的建议模式、插入方式、语言、专业结构、证据治理与不自动提交边界。
     enabled: true
     workflow: evals/workflows/compose-assist/experience.md
     cases: evals/cases/compose-assist/cases.jsonl
@@ -313,7 +727,7 @@ suites:
         - evals/**
         - docs/features/**
       validate:
-        - npm --prefix memory-service test -- api-composer-assist
+        - npm --prefix memory-service test -- --run src/__tests__/api-composer-assist.test.ts
         - npm run eval:run -- --suite compose-assist --no-repair --no-llm
 
   - id: compose-style-memory
@@ -408,3 +822,52 @@ suites:
         - docs/features/**
       validate:
         - npm run verify:custom-prompts
+
+  - id: roadmap-focus-projects
+    title: Roadmap Focus Projects Eval
+    description: 评估重点项目上下文压缩、按团队权威覆盖同步、以及日期漂移抽取是否符合 Personal Roadmap 联动契约。
+    enabled: true
+    workflow: evals/workflows/roadmap-focus-projects/experience.md
+    cases: evals/cases/roadmap-focus-projects/cases.jsonl
+    runMode: manual
+    schedule:
+      enabled: true
+      every: 14d
+      timezone: Asia/Shanghai
+      action: report
+    readerProof:
+      claims:
+        - id: alias-first-row-context
+          statement: >-
+            重点项目注入消息分析时优先使用备注名/displayName，并在多团队预算下为每个团队保留至少一个代表项目。
+          caseIds:
+            - focus-context-row-budget
+        - id: team-scoped-overwrite
+          statement: >-
+            同一团队的 Roadmap 同步是权威快照覆盖：落选项目只归档该 team_ref，其他团队的重点项目不受影响。
+          caseIds:
+            - focus-sync-overwrite
+        - id: date-change-drift-no-notify
+          statement: >-
+            表达目标日期滑动的消息会形成可执行漂移回执（含 toValue），且重点项目规则不会触发 Glip/Chrome 通知。
+          caseIds:
+            - timeline-date-change
+      boundaries:
+        - Does not create Jira issues
+        - Does not auto-edit shared roadmap bars
+        - Does not send Glip notifications for project rules
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/roadmap-focus-projects.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/FocusProjectContextBuilder.ts
+        - memory-service/src/core/FocusProjectSyncService.ts
+        - memory-service/src/core/ProjectTimelineExtractor.ts
+        - memory-service/src/routes/projects.ts
+        - docs/features/personal_roadmap.md
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/focusProjectContextBuilder.test.ts

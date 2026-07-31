@@ -311,6 +311,92 @@ async function main() {
     await page.click('#nav-to-video');
 
     await page.waitForFunction(() => window.__paiCalendarSyncCount >= 1);
+    await page.waitForFunction(() =>
+      Boolean(
+        document
+          .querySelector('[data-test-automation-id="calendar-event-item-join-button"]')
+          ?.getAttribute('data-pai-ringcentral-native-join-button-boundary'),
+      ),
+    );
+    const preClickBoundaryState = await page.evaluate(() => {
+      const listButton = document.querySelector(
+        '[data-test-automation-id="calendar-event-item-join-button"]',
+      );
+      const detailButton = document.querySelector(
+        '[data-test-automation-id="join-meeting-button"]',
+      );
+      return {
+        listBoundary:
+          listButton?.getAttribute(
+            'data-pai-ringcentral-native-join-button-boundary',
+          ) || '',
+        listLabel: listButton?.getAttribute('aria-label') || '',
+        listTitle: listButton?.getAttribute('title') || '',
+        listText: listButton?.textContent || '',
+        detailBoundary:
+          detailButton?.getAttribute(
+            'data-pai-ringcentral-native-join-button-boundary',
+          ) || '',
+        detailLabel: detailButton?.getAttribute('aria-label') || '',
+        detailTitle: detailButton?.getAttribute('title') || '',
+        detailText: detailButton?.textContent || '',
+      };
+    });
+    assert(
+      preClickBoundaryState.listBoundary === 'true' &&
+        preClickBoundaryState.listText.includes('Join') &&
+        preClickBoundaryState.listLabel.includes(
+          'Personal AI will try the RingCentral app first',
+        ) &&
+        preClickBoundaryState.listLabel.includes('meeting 123456') &&
+        preClickBoundaryState.listLabel.includes(
+          'validated full meeting link',
+        ) &&
+        preClickBoundaryState.listLabel.includes(
+          'Chrome may ask you to open RingCentral',
+        ) &&
+        preClickBoundaryState.listLabel.includes(
+          'browser recovery stays available',
+        ) &&
+        preClickBoundaryState.listLabel.includes('Join in browser') &&
+        preClickBoundaryState.listLabel.includes('Copy link') &&
+        preClickBoundaryState.listLabel.includes('Meeting ID') &&
+        preClickBoundaryState.listLabel.includes('passcode when present') &&
+        preClickBoundaryState.listLabel.includes(
+          'Hidden passcode/details stay hidden',
+        ) &&
+        preClickBoundaryState.listLabel.includes(
+          'does not confirm that you joined',
+        ) &&
+        preClickBoundaryState.listLabel.includes('copy meeting material') &&
+        preClickBoundaryState.listLabel.includes(
+          'change the default join path',
+        ) &&
+        preClickBoundaryState.listTitle ===
+          preClickBoundaryState.listLabel,
+      `Calendar Join button should expose the app-first/browser-recovery boundary before click: ${JSON.stringify(
+        preClickBoundaryState,
+      )}`,
+    );
+    assert(
+      preClickBoundaryState.detailBoundary === 'true' &&
+        preClickBoundaryState.detailText.includes('Join') &&
+        preClickBoundaryState.detailLabel.includes(
+          'Personal AI will try the RingCentral app first',
+        ) &&
+        preClickBoundaryState.detailLabel.includes('meeting 123456') &&
+        preClickBoundaryState.detailLabel.includes(
+          'browser recovery stays available',
+        ) &&
+        preClickBoundaryState.detailLabel.includes(
+          'does not confirm that you joined',
+        ) &&
+        preClickBoundaryState.detailTitle ===
+          preClickBoundaryState.detailLabel,
+      `Detail Join button should expose the same Native Join boundary before click: ${JSON.stringify(
+        preClickBoundaryState,
+      )}`,
+    );
     await page.click('[data-test-automation-id="calendar-event-item-join-button"]');
     await page.waitForSelector('#pai-ringcentral-native-join-fallback');
 

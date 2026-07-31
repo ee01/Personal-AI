@@ -1,4 +1,11 @@
 import { setDesktopLanguage, t } from './i18n.js';
+import {
+  clearAskResumeSnapshot,
+  createAskResumeSnapshot,
+  loadAskResumeSnapshot,
+  saveAskResumeSnapshot,
+  toAskResumeContextHints,
+} from './quick-ask-resume.js';
 
 const bridgeApi = window.bridgeApi;
 const explorerApi = window.explorerApi;
@@ -18,6 +25,13 @@ const elements = {
   shell: document.getElementById('quick-ask-shell'),
   frame: document.getElementById('quick-ask-frame'),
   conversationPanel: document.getElementById('conversation-panel'),
+  resumeStrip: document.getElementById('resume-strip'),
+  resumeTitle: document.getElementById('resume-title'),
+  resumeMeta: document.getElementById('resume-meta'),
+  resumeCandidates: document.getElementById('resume-candidates'),
+  resumeContinue: document.getElementById('resume-continue'),
+  resumeNew: document.getElementById('resume-new'),
+  resumeDiscard: document.getElementById('resume-discard'),
   composerPanel: document.getElementById('composer-panel'),
   composer: document.getElementById('composer'),
   utilityButton: document.getElementById('utility-button'),
@@ -81,6 +95,8 @@ const HEIGHTS = {
   /** Keep equal to `ASK_WINDOW_COMPACT_HEIGHT` in `app/main.mjs`. */
   compact: 140,
   compactWithBanner: 188,
+  compactWithResume: 236,
+  compactWithResumeAndBanner: 284,
   voice: 254,
   /** Expanded heights (~+50%) so answer area is less cramped. */
   streaming: 714,
@@ -95,6 +111,7 @@ const AUTO_SCROLL_THRESHOLD_PX = 36;
 const HISTORY_LOAD_THRESHOLD_PX = 18;
 const STREAMING_TAIL_CHARS = 14;
 const DRAFT_STORAGE_KEY = 'desktop-app.quick-ask.draft';
+const DEFAULT_COMPOSER_PLACEHOLDER = '问我任何你此刻需要的事...';
 const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authuser=0&hl=zh-CN';
 
@@ -122,6 +139,10 @@ const state = {
   currentSessionUpdatedAt: 0,
   historySessions: [],
   loadedHistoryCount: 0,
+  resumeSnapshot: null,
+  activeResumeSnapshot: null,
+  resumeSelectedTopic: '',
+  resumeVisible: false,
   draft: '',
   requestActive: false,
   shortcutStatus: null,
@@ -696,6 +717,156 @@ function setDraft(value) {
   }
 }
 
+function formatResumeAge(updatedAt) {
+  const timestamp = Date.parse(updatedAt || '');
+  if (!Number.isFinite(timestamp)) return '刚刚';
+  const diffMinutes = Math.max(1, Math.round((Date.now() - timestamp) / 60000));
+  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  const diffHours = Math.max(1, Math.round(diffMinutes / 60));
+  return `${diffHours} 小时前`;
+}
+
+function getResumeTopicTitle(snapshot = state.resumeSnapshot) {
+  return (
+    normalizeInlineText(snapshot?.topic?.title) ||
+    normalizeInlineText(snapshot?.lastUserMessage?.textPreview) ||
+    '上次 Ask'
+  );
+}
+
+function setResumeComposerPlaceholder(topicTitle = '') {
+  elements.composer.placeholder = topicTitle
+    ? `继续追问「${clipText(topicTitle, 42)}」...`
+    : DEFAULT_COMPOSER_PLACEHOLDER;
+}
+
+function renderResumeStrip() {
+  const snapshot = state.resumeSnapshot;
+  const visible = Boolean(state.resumeVisible && snapshot);
+  elements.resumeStrip.hidden = !visible;
+  if (!visible) {
+    elements.resumeCandidates.innerHTML = '';
+    scheduleLayoutSync();
+    return;
+  }
+
+  const candidates = Array.isArray(snapshot.pendingCandidates)
+    ? snapshot.pendingCandidates.slice(0, 2)
+    : [];
+  const topicTitle = getResumeTopicTitle(snapshot);
+  elements.resumeTitle.textContent = candidates.length
+    ? '上次 Ask 还在等你选择 topic'
+    : `继续上次 Ask：${topicTitle}`;
+  elements.resumeMeta.textContent = [
+    formatResumeAge(snapshot.updatedAt),
+    '本地保存',
+    '未写入长期记忆',
+    snapshot.riskFlags?.includes('sensitive') ? '已脱敏' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  elements.resumeCandidates.innerHTML = candidates
+    .map(
+      (candidate) => `
+        <button
+          class="resume-candidate"
+          type="button"
+          data-resume-candidate="${escapeHtml(candidate.label)}"
+          title="选择 ${escapeHtml(candidate.label)}，把它作为本机续聊线索并重新检索；不会写入长期记忆。"
+          aria-label="选择 ${escapeHtml(candidate.label)}，把它作为本机续聊线索并重新检索；不会写入长期记忆。"
+        >${escapeHtml(candidate.label)}</button>
+      `,
+    )
+    .join('');
+
+  setControlBoundary(
+    elements.resumeContinue,
+    '继续上次 Ask：把本机保存的问题、答案摘要和证据引用作为下一轮检索提示；不会把快照写入长期记忆，发送后会重新检索。',
+  );
+  setControlBoundary(
+    elements.resumeNew,
+    '开始新问题：本轮不使用上次 Ask 快照；本机快照仍保留到过期或丢弃。',
+  );
+  setControlBoundary(
+    elements.resumeDiscard,
+    '丢弃本机 Ask 续聊快照；不会删除 Memory Service 中已有的长期记忆。',
+  );
+  scheduleLayoutSync();
+}
+
+function refreshResumeSnapshot() {
+  state.resumeSnapshot = loadAskResumeSnapshot();
+  state.resumeVisible = Boolean(
+    state.resumeSnapshot &&
+      !state.requestActive &&
+      !hasCurrentSessionMessages(),
+  );
+  if (!state.activeResumeSnapshot) {
+    setResumeComposerPlaceholder();
+  }
+  renderResumeStrip();
+}
+
+function hideResumeForNewQuestion({ showReceipt = false } = {}) {
+  state.activeResumeSnapshot = null;
+  state.resumeSelectedTopic = '';
+  state.resumeVisible = false;
+  setResumeComposerPlaceholder();
+  renderResumeStrip();
+  if (showReceipt) {
+    showNotice('已开始新问题，本轮不会使用上次 Ask 的本机续聊线索。', 4800);
+  }
+}
+
+function activateResumeSnapshot(snapshot, selectedTopicTitle = '') {
+  if (!snapshot) return false;
+  const hints = toAskResumeContextHints(snapshot, selectedTopicTitle);
+  if (!hints) return false;
+  state.activeResumeSnapshot = snapshot;
+  state.resumeSelectedTopic = selectedTopicTitle;
+  state.resumeVisible = false;
+  renderResumeStrip();
+  setResumeComposerPlaceholder(
+    selectedTopicTitle || snapshot.topic?.title || snapshot.lastUserMessage?.textPreview,
+  );
+
+  state.autoScrollPinned = true;
+  setUiState('enriched');
+  pushMessage({
+    id: createId('continuity'),
+    role: 'continuity',
+    title: selectedTopicTitle || getResumeTopicTitle(snapshot),
+    previousQuestion: snapshot.lastUserMessage?.textPreview || '',
+    previousAnswerSummary: snapshot.lastAnswer?.summary || '',
+    meta: `${formatResumeAge(snapshot.updatedAt)} · 本地保存`,
+  });
+  focusComposer();
+  return true;
+}
+
+function persistResumeSnapshot(query, result) {
+  const snapshot = createAskResumeSnapshot({ query, result });
+  if (!snapshot) return null;
+  const saved = saveAskResumeSnapshot(snapshot);
+  if (!saved) return null;
+  state.resumeSnapshot = saved;
+  return saved;
+}
+
+function discardResumeSnapshot() {
+  clearAskResumeSnapshot();
+  state.resumeSnapshot = null;
+  state.activeResumeSnapshot = null;
+  state.resumeSelectedTopic = '';
+  state.resumeVisible = false;
+  setResumeComposerPlaceholder();
+  renderResumeStrip();
+  showNotice(
+    '已丢弃本机 Ask 续聊记录；未删除 Memory Service 中已有的长期记忆。',
+    5400,
+  );
+}
+
 function setUiState(nextState) {
   if (!UI_STATES.has(nextState)) return;
   state.uiState = nextState;
@@ -817,6 +988,11 @@ function desiredHeight() {
     return HEIGHTS.voice;
   }
   if (!isExpandedState()) {
+    if (state.resumeVisible) {
+      return elements.shortcutBanner.hidden
+        ? HEIGHTS.compactWithResume
+        : HEIGHTS.compactWithResumeAndBanner;
+    }
     return elements.shortcutBanner.hidden
       ? HEIGHTS.compact
       : HEIGHTS.compactWithBanner;
@@ -1684,6 +1860,86 @@ function renderAmbiguousContextChoices(message) {
   `;
 }
 
+function renderAskContinuityReceipt(receipt) {
+  if (receipt?.source !== 'local_ask_resume_snapshot') return '';
+  const detail =
+    normalizeInlineText(receipt.detail) ||
+    '已使用本机续聊线索，并重新检索本轮证据；未把续聊快照写入长期记忆。';
+  return `<div class="ask-continuity-receipt">${escapeHtml(detail)}</div>`;
+}
+
+function getMeetingOutcomeStatusLabel(status) {
+  const labels = {
+    planned: '待会议核验',
+    resolved: '已闭环',
+    partially_resolved: '部分闭环',
+    unresolved: '提到但未闭环',
+    carried_over: '带到后续',
+    blocked_by_missing_evidence: '证据不足',
+    discarded_agenda: '已移出议程',
+  };
+  return labels[status] || status || '待核验';
+}
+
+function renderMeetingOutcomeSources(sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return '';
+  const binder = sources[0];
+  const slots = Array.isArray(binder?.slots) ? binder.slots.slice(0, 5) : [];
+  if (!slots.length) return '';
+  const boundary =
+    normalizeInlineText(binder?.receipt?.boundary) ||
+    '这是 Personal AI 的只读派生结果，不会写回 Calendar、Jira、RingCentral 或外部任务。';
+  return `
+    <section class="meeting-outcome-receipt" data-meeting-outcome-receipt="true" aria-label="结果装订回执">
+      <div class="meeting-outcome-receipt-head">
+        <div>
+          <span>Meeting Pilot</span>
+          <strong>结果装订回执</strong>
+        </div>
+        <span>${escapeHtml(binder.eventTitle || '相关会议')}</span>
+      </div>
+      <div class="meeting-outcome-receipt-list">
+        ${slots
+          .map(
+            (slot) => `
+              <div class="meeting-outcome-receipt-slot" data-outcome-slot-status="${escapeHtml(
+                slot.status || '',
+              )}">
+                <strong>${escapeHtml(slot.title || '未命名议题')}</strong>
+                <span>${escapeHtml(
+                  slot.resultSummary || getMeetingOutcomeStatusLabel(slot.status),
+                )}</span>
+                <em>${escapeHtml(getMeetingOutcomeStatusLabel(slot.status))}</em>
+              </div>
+            `,
+          )
+          .join('')}
+      </div>
+      <div class="meeting-outcome-receipt-boundary">${escapeHtml(boundary)}</div>
+    </section>
+  `;
+}
+
+function renderContinuityMessage(message) {
+  return `
+    <div class="message-card continuity-card">
+      <div class="continuity-card-label">本机续聊线索 · ${escapeHtml(message.meta || '本地保存')}</div>
+      <div class="continuity-card-title">${escapeHtml(message.title || '上次 Ask')}</div>
+      ${
+        message.previousQuestion
+          ? `<div class="continuity-card-question">上次问题：${escapeHtml(message.previousQuestion)}</div>`
+          : ''
+      }
+      ${
+        message.previousAnswerSummary
+          ? `<div class="continuity-card-summary">上次回答摘要：${escapeHtml(message.previousAnswerSummary)}</div>`
+          : ''
+      }
+      <div class="continuity-card-boundary">下一条问题会带上这条本机线索，但关键事实仍会重新检索；这条恢复记录不是长期记忆。</div>
+    </div>
+  `;
+}
+
 function renderAssistantMessage(message) {
   if (message.pending && !message.text && !message.statusText) {
     return `
@@ -1716,6 +1972,8 @@ function renderAssistantMessage(message) {
     <div class="message-card assistant-card ${message.htmlReady ? '' : 'streaming-card'}">
       ${renderMemoryBadge(message.memorySaveResult)}
       ${bodyHtml}
+      ${message.htmlReady ? renderAskContinuityReceipt(message.continuityReceipt) : ''}
+      ${message.htmlReady ? renderMeetingOutcomeSources(message.meetingOutcomeSources) : ''}
       ${message.htmlReady ? renderAmbiguousContextChoices(message) : ''}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
       ${message.htmlReady ? renderEvidence(message.evidence, message.queryText) : ''}
@@ -1876,6 +2134,9 @@ function renderMessages(renderOptions = {}) {
         .map((message) => {
           if (message.role === 'user') {
             return `<div class="message-row role-user">${renderUserMessage(message)}</div>`;
+          }
+          if (message.role === 'continuity') {
+            return `<div class="message-row role-continuity">${renderContinuityMessage(message)}</div>`;
           }
           if (message.role === 'status') {
             return `<div class="message-row role-status">${renderStatusMessage(message)}</div>`;
@@ -2228,6 +2489,7 @@ class VoiceController {
   constructor() {
     this.recognizedTranscript = '';
     this.listening = false;
+    this.acceptsEvents = false;
     this.seedDraft = '';
     this.stopResolvers = [];
     this.lastErrorMessage = '';
@@ -2284,6 +2546,7 @@ class VoiceController {
   }
 
   handleStartFailure(error) {
+    if (!this.acceptsEvents || !isVoiceState()) return;
     this.listening = false;
     this.lastErrorMessage =
       error instanceof Error ? error.message : String(error);
@@ -2303,6 +2566,7 @@ class VoiceController {
   async enter(seedDraft = state.draft) {
     this.seedDraft = seedDraft.trim();
     this.recognizedTranscript = '';
+    this.acceptsEvents = true;
     this.lastErrorMessage = '';
     this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
@@ -2321,9 +2585,10 @@ class VoiceController {
   }
 
   async restart() {
-    await this.cancelNativeVoice(false);
+    await this.cancelNativeVoice();
     this.seedDraft = state.voiceDraft.trim();
     this.recognizedTranscript = '';
+    this.acceptsEvents = true;
     this.lastErrorMessage = '';
     this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
@@ -2361,15 +2626,18 @@ class VoiceController {
     await stopPromise;
   }
 
-  async cancelNativeVoice(expectStopped = true) {
-    if (!this.listening) return;
-    const stopPromise = expectStopped ? this.waitForStop() : Promise.resolve();
-    await quickAsk.cancelNativeVoice();
-    await stopPromise;
+  async cancelNativeVoice() {
+    const shouldCancel = this.listening || this.acceptsEvents;
+    this.acceptsEvents = false;
+    this.listening = false;
+    this.resolveStopPromises();
+    if (shouldCancel) {
+      await quickAsk.cancelNativeVoice();
+    }
   }
 
   async cancelToText() {
-    await this.cancelNativeVoice(true);
+    await this.cancelNativeVoice();
     this.seedDraft = '';
     this.lastErrorMessage = '';
     this.lastErrorAction = null;
@@ -2390,6 +2658,7 @@ class VoiceController {
     const transcript = state.voiceDraft.trim();
     if (!transcript) return;
     await this.stopListening();
+    this.acceptsEvents = false;
     this.seedDraft = '';
     this.recognizedTranscript = '';
     this.lastErrorMessage = '';
@@ -2402,6 +2671,7 @@ class VoiceController {
 
   handleNativeEvent(payload) {
     if (!payload || typeof payload !== 'object') return;
+    if (!this.acceptsEvents || !isVoiceState()) return;
 
     if (payload.type === 'started') {
       this.listening = true;
@@ -2487,6 +2757,7 @@ class VoiceController {
     this.seedDraft = '';
     this.recognizedTranscript = '';
     this.listening = false;
+    this.acceptsEvents = false;
     state.voiceDraft = '';
     state.voicePhase = 'idle';
     state.voiceStopReason = 'none';
@@ -2593,9 +2864,16 @@ function resetSession() {
   state.voiceDraft = '';
   state.voicePhase = 'idle';
   state.voiceStopReason = 'none';
+  clearAskResumeSnapshot();
+  state.resumeSnapshot = null;
+  state.activeResumeSnapshot = null;
+  state.resumeSelectedTopic = '';
+  state.resumeVisible = false;
   state.autoScrollPinned = true;
   setDraft('');
+  setResumeComposerPlaceholder();
   setUiState('idle-compact');
+  renderResumeStrip();
   renderShortcutBanner();
   renderVoiceSheet();
   renderMessages();
@@ -2604,8 +2882,11 @@ function resetSession() {
 
 function handleWindowShown(payload = {}) {
   expireCurrentSessionIfNeeded();
+  refreshResumeSnapshot();
 
   if (hasCurrentSessionMessages()) {
+    state.resumeVisible = false;
+    renderResumeStrip();
     const restoreScrollTop = state.autoScrollPinned
       ? null
       : state.savedConversationScrollTop;
@@ -2652,6 +2933,19 @@ async function submitQuery(rawInput, options = {}) {
   const displayText =
     normalizeInlineText(options.displayText || '') || input;
   const inputReceipt = options.fromVoice ? buildVoiceSubmitReceipt() : '';
+  const resumeHints = state.activeResumeSnapshot
+    ? toAskResumeContextHints(
+        state.activeResumeSnapshot,
+        state.resumeSelectedTopic,
+      )
+    : null;
+
+  if (!resumeHints && state.resumeVisible) {
+    hideResumeForNewQuestion();
+  }
+  state.activeResumeSnapshot = null;
+  state.resumeSelectedTopic = '';
+  setResumeComposerPlaceholder();
 
   expireCurrentSessionIfNeeded();
   const rememberRequested = hasExplicitRememberIntent(input);
@@ -2743,6 +3037,7 @@ async function submitQuery(rawInput, options = {}) {
         context: askContext,
         includeEvidence: true,
         scope: state.askScope,
+        ...(resumeHints ? { contextHints: resumeHints } : {}),
       },
       async (event) => {
         if (!event || typeof event !== 'object') return;
@@ -2792,6 +3087,8 @@ async function submitQuery(rawInput, options = {}) {
             structuredAnswer: event.structuredAnswer,
             evidence: event.evidence,
             contextMatch: event.contextMatch,
+            continuityReceipt: event.continuityReceipt,
+            meetingOutcomeSources: event.meetingOutcomeSources,
             runtime: event.runtime,
             queryText: displayText,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
@@ -2801,6 +3098,7 @@ async function submitQuery(rawInput, options = {}) {
             userText: displayText,
             assistantText: event.answer || '',
           });
+          persistResumeSnapshot(displayText, event);
           touchCurrentSession();
           setRuntime(event.runtime || null);
           if (event.runtime?.items?.length) {
@@ -2851,7 +3149,37 @@ async function submitQuery(rawInput, options = {}) {
 }
 
 elements.composer.addEventListener('input', (event) => {
+  if (state.resumeVisible && event.target.value.trim()) {
+    hideResumeForNewQuestion();
+  }
   setDraft(event.target.value);
+});
+
+elements.resumeContinue.addEventListener('click', () => {
+  activateResumeSnapshot(state.resumeSnapshot);
+});
+
+elements.resumeNew.addEventListener('click', () => {
+  hideResumeForNewQuestion({ showReceipt: true });
+  focusComposer();
+});
+
+elements.resumeDiscard.addEventListener('click', () => {
+  discardResumeSnapshot();
+  focusComposer();
+});
+
+elements.resumeCandidates.addEventListener('click', async (event) => {
+  const candidateButton = event.target.closest('[data-resume-candidate]');
+  if (!candidateButton || state.requestActive) return;
+  const candidateLabel = normalizeInlineText(
+    candidateButton.dataset.resumeCandidate,
+  );
+  if (!candidateLabel) return;
+  if (!activateResumeSnapshot(state.resumeSnapshot, candidateLabel)) return;
+  await submitQuery('继续查这个话题', {
+    displayText: `选择话题：${candidateLabel}`,
+  });
 });
 
 elements.composer.addEventListener('keydown', async (event) => {
@@ -3135,6 +3463,7 @@ renderVoiceSheet();
 renderShortcutBanner();
 renderScopeSelector();
 setDraft(initialDraft);
+refreshResumeSnapshot();
 renderMessages();
 void loadPreferences();
 void loadAskScopePreference();

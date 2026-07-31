@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-07-13_
+_最后更新: 2026-07-16_
 
 ## 是什么
 
@@ -76,6 +76,23 @@ Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统�
 
 陈旧信号会降权：没有未来 due time 的 mission 会按最新证据年龄加 penalty，避免 2-3 周前的系统信号压过今天的新消息和会议。
 
+### 1.2 开放问题的新证据恢复
+
+Today Pilot 是 [开放问题退出契约](./memory_system.md#开放问题退出契约) 唯一的主动展示面。它不展示 parked/waiting contract 列表，也不展示“后台退场了多少条”这类治理统计。
+
+受 contract 管理的 reflection thread 只有同时满足以下条件才进入 mission 扫描：
+
+- contract 当前是 `active`；
+- `userImpact = blocking_today`；
+- 存在 `lastResumedAt`，即本轮是 action result、确认答复、新的未见 evidence ref 或 Evidence Watch authority change 触发的恢复，而不是问题首次出现；
+- thread 仍满足 Today Pilot 原有的优先级/到期、行动性、证据和去噪规则。
+
+符合条件时仍使用普通 `thread_followup` mission，不新增特殊页面。折叠态的 `为什么出现` 直接使用退出 contract receipt，例如 `新证据恢复：动作结果让这个问题重新具备处理价值`；`你要做` 使用 receipt 的 `nextStep`。同一 receipt 会放进 card `contextPack.openQuestionExitReceipt`，供展开态或其他现有消费面复核状态、边界和新增证据 refs。
+
+恢复项默认进入 Today Pilot 首页准备态，不因为 `blocking_today` 自动发送消息或执行动作。首次登记、已有 action/confirm/watch、无新证据停放和具有明确答案证据的 answered contract 都不会进入主列表；Worker 仅仅不再输出某问题时按停放处理，不冒充 answered。历史线程在尚未创建任何退出 contract 前保留旧筛选行为，避免迁移后静默清空现有 Today brief；一旦受 contract 管理，就使用上述严格口径。
+
+Quick Ask 不显示默认的退场/等待/恢复聚合。用户明确询问某个问题时仍可正常 Ask，但 Today Pilot 才负责“今天是否值得主动带回来”。
+
 日历信号会同时从 `calendar_events` 和被摄入为 `messages_raw.source_type=calendar` 的 raw memories 进入扫描。两条入口使用同一套清洗和行动性判断：
 
 - `Calendar event:`、`Description:`、会议链接和 dashboard URL 不应进入卡片标题。
@@ -98,9 +115,30 @@ Today Pilot 会提前扫描当天和近期会议，根据日历事件和相关�
 - 建议带进会议的问题。
 - 相关风险或未关闭事项。
 - 证据来源。
+- `本场要闭环`：最多 5 个仍待会议证据核验的 decision / action / open question / fact update 目标。
 - Meeting Pilot 可消费的 context pack。
 
 RingCentral Video Home 只是 Today Pilot 会前准备的消费面：用户打开会议列表时，直接看到已准备内容，不需要输入“本次目标”或点击生成。
+
+Video Home 的会议详情在 RingCentral SPA 中可能同时保留可见实例和隐藏的旧实例。扩展只能把 `#pai-meeting-prep-host` 插入当前可见、具有非零尺寸的 meeting detail / description 容器，并优先放在会议描述之前；不能因为先命中 DOM 中的隐藏副本而让用户在真实详情页看不到卡片。路由或可见详情变化后要重新选择挂载点。
+
+本机日历同步遵守 Memory Service 的单场最多 120 位 attendee 契约。超过上限时保留前 120 位，并在事件 metadata 写入原始人数和 `attendeesTruncated=true`；单个大型会议不能让整批会议以 HTTP 400 失败。批量准备跨越多天时，每份 prep 的 `localDate` 必须按该会议在请求时区中的实际日期计算，不能统一写入 backfill 请求当天，否则未来会议虽然生成成功，详情页仍会返回 `prep_not_found`。
+
+会议邀请中的 meeting id、password、passcode、host key、access code 及对应中文字段只可留在原始日历边界。进入召回证据、LLM prompt、summary、cue card、context pack 或 Meeting Outcome Binder 前必须统一替换为 `[redacted]`；服务端也要清洗模型回传和 deterministic fallback，避免邀请码成为“本场要闭环”目标或可见证据。
+
+#### 本场要闭环（会前部分）
+
+`Meeting Outcome Binder` 不是独立产品或新页面，它是会前准备里的一份共享派生数据。Today Pilot 负责定义“这场会原本要解决什么”，Meeting Pilot 负责后续核验结果。
+
+当前实现逻辑：
+
+1. meeting prep 的同一轮 LLM 可以返回结构化 `outcomeSlots`；如果模型没有返回，服务端会从用户目标、建议问题、action/question cue 和日历描述做保守 fallback。
+2. 每个 slot 初始都是 `status=planned`、`mentionState=not_seen`，并记录它来自哪些日历或记忆证据。此时只代表待核验目标，不代表会议已经讨论或解决。
+3. Memory Service 把它持久化成 `MeetingOutcomeBinder`；Video Home 在现有 Today Pilot 卡片中显示 `本场要闭环`，不增加一级入口。
+4. Video Home 把同一份 binder 连同目标、cue cards 和 evidence 写入本机 Meeting Pilot handoff。Meeting Pilot 仍按 meeting id 优先、标题和时间窗口兜底选择 handoff，避免同名 recurring meeting 串场。
+5. 刷新会前准备会更新本机 handoff，但不会入会、开启录音、发送消息、创建任务、审批或写回 Calendar / Jira / RingCentral。
+
+会前预览的固定边界是：来源仅为日历议程、会前目标和相关记忆；最终 `resolved / partial / carried over` 必须等会议结束后由 Meeting Pilot 用 transcript、决议、章节和行动项证据装订。交互参考可查看 [Meeting Outcome Binder demo](../demo/meeting-outcome-binder.html)。
 
 会前准备注入只允许在 RingCentral `/video/home` 路由生效。RingCentral PWA 从 Video Home 切到 `/messages/...`、聊天 composer、`#` 群组选择列表或其他消息页面时，Today Pilot 必须移除本地 host、清空当前路由态，并且不能继续用聊天标题、群组弹层或历史消息文本匹配会议。这样不会把聊天会话容器刷新成空白会前准备页。
 
@@ -110,7 +148,7 @@ Video Home 会在会议信息下方显示一条 `会前准备回执`，把准备
 
 Video Home 写入 Meeting Pilot handoff 时，回执还要说明这是本机上下文缓存：只带入本场关注、cue cards 和证据背景，不会加入会议、录音、发消息、审批，也不会写回日历或外部系统。
 
-用户点击刷新会前准备后，Video Home 会显示 `刷新会前准备回执`：它说明本次本机会议同步、Today Pilot backfill 的准备/跳过/失败数量，以及最终是读取预生成缓存、生成新准备、使用规则 fallback 还是暂无可用准备。这个回执只代表本地展示和 Meeting Pilot handoff 缓存更新，不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统。
+用户点击刷新会前准备后，Video Home 会显示 `刷新会前准备回执`：它说明本次本机会议同步、Today Pilot backfill 的准备/跳过/失败数量，以及最终是读取预生成缓存、生成新准备、使用规则 fallback 还是暂无可用准备。跨日 backfill 仍按每场会议的实际日期写缓存。这个回执只代表本地展示和 Meeting Pilot handoff 缓存更新，不会加入会议、开启录音、发送消息、创建任务、审批或写回日历/外部系统。
 
 刷新按钮本身也要在 hover / 读屏里说明：点击会重新读取本机会议列表、请求 Today Pilot 为当天会议补齐预生成准备，再读取缓存并更新本机 Meeting Pilot handoff；读取或刷新中不会重复触发。证据来源链接点击前说明只打开 Memory Exploring 只读复核页或新标签来源复核，不会另行生成会前准备、更新 handoff、加入会议、录音、发送消息、创建任务、审批或写回来源系统。
 
@@ -175,6 +213,7 @@ Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示
 - popup 标题下方展示 `筛选口径`：本次显示几张 / 总共几张 mission、扫描信号数、候选数、入选证据数、候选未入选数、前置降噪数、提醒预算使用量，以及“Top 3 快照，不会自动执行”的边界。这个回执还展示 `快照基准`：本次是服务端新生成还是读取已有 brief、brief 生成时间/相对年龄和 ready/stale/draft 状态，并说明 popup 只读取 Today Pilot brief，不会重新扫描来源、写反馈、发送消息或执行动作。这样用户不用打开首页也能知道 popup 不是所有同步内容、不是执行授权，也不是没有新鲜度边界的实时流。
 - 当 Top 3 之外还有可见 mission，popup 在筛选回执旁展示 `查看全部 N`，只打开 Today Pilot 首页查看完整可见 brief；不会刷新、写反馈、发送消息或执行动作。
 - popup 可直接把 card 标记完成、稍后 6 小时或复制 context pack；提交 `完成` / `稍后` 后先显示 `正在提交反馈` 回执，原 card 保持可见并锁住反馈按钮，等 Memory Service 确认后才刷新 Top 3。成功回执必须说明这只更新 Today Pilot 展示/排序，不代表来源任务完成、消息已读、排程变更或外部系统同步；即使最后一张 card 被移除后列表变空，成功回执也要保留可见。反馈失败时原卡仍显示，并说明尚未写入 Today Pilot、也没有修改来源系统。
+- popup 的真实按钮也带 hover / 读屏边界：卡片主体只打开 Today Pilot 首页；`查看全部` 只导航到完整 brief；`完成` / `稍后` 只提交 Today Pilot 展示反馈并等待服务确认；`复制` 只生成 context pack 并写入本机剪贴板；外部执行卡的 `去处理` 只打开处理页，不会在 popup 内批准、重试、执行 OpenClaw、发送消息或写回来源系统。
 - 初次 API 不可用时显示 degraded empty state，不回退假数据；如果用户在已有 Top 3 后手动刷新失败，popup 会保留上次快照并把首屏回执改成 `刷新失败 · 仍显示上次 Top 3 快照`，说明还没确认当前 Memory Service 最新状态，也没有写反馈、发送消息或执行动作。
 
 首页顶部会展示一条轻量 `筛选口径`：原始信号总量、进入候选池的数量、当前可见首页 mission 的证据数量、进入候选池但没入选首页的数量、以及前置规则直接降噪的数量。前置降噪会附带来源拆分，例如 `消息 2、预演 1`，让用户能判断今天主要是消息噪声、会议噪声、系统提醒还是预演提示被挡掉，而不是只看到一个不可解释的总数。筛选摘要下方还有 `来源分布` 回执，按消息、日历、通知、动作、反思、预演、技能、关系等来源桶展示原始、候选、当前可见入选、候选未进入当前可见和前置降噪数量；如果用户刚在本页把卡片标记 `完成`、`稍后 6 小时` 或 `不再提醒同类`，回执还会显示本页已隐藏入选证据，说明这是点击快照，不代表来源任务完成、证据删除或外部系统已同步。它只解释当前可见 brief，不会重新排序、展开隐藏内容、写反馈、标记提醒、发送消息或执行动作。这个口径会跟随 `完成`、`稍后 6 小时`、`不再提醒同类`、动作源完成和本机隐藏卡片一起更新；用户不用展开每张卡，也能知道 Today Pilot 现在还剩多少真实可见事项，并区分是候选排序没选上、刚被本页反馈隐藏，还是低行动/重复/旧信号一开始就没进候选池。筛选摘要还会显示 `首页快照基准`：本次是读取已有 brief 还是服务端新生成、生成时间/相对年龄、ready/stale/draft/archived 状态，以及这里只解释当前可见 Today Pilot brief，不会重新扫描来源、写反馈、发送消息或执行动作；如果服务端因为旧 brief 过期而重生成，会把“旧 brief 已过新鲜窗口”和当前已刷新状态分开说清。首页和 popup 的刷新按钮 hover / 读屏文案也会说明：刷新只读取或重新生成当前用户的派生 brief、排序、来源分布、前置降噪和补课/统计快照，不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。只要本轮写入过 Today Pilot 展示/排序反馈，筛选摘要旁会直接标明这是 `反馈后的可见快照`：顶部数量只代表仍可见 mission，不代表来源任务完成、消息已读、排程变更或外部系统已同步。
@@ -282,6 +321,13 @@ Canonical API：
 - `POST /api/v1/today-pilot/missions/:id/context-pack`
 - `POST /api/v1/today-pilot/meeting-prep/prepare`
 - `POST /api/v1/today-pilot/meeting-prep/resolve`
+
+会前准备的聚焦验证：
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/context-assist/__tests__/outlookCalendar.test.ts`
+- `npm run verify:context-assist-meeting-prep`
+- `npm --prefix memory-service test -- --run src/__tests__/api-today-pilot-meeting-prep.test.ts src/__tests__/api-meeting-outcomes.test.ts`
+- `npm --prefix memory-service run build`
 
 兼容 API：
 

@@ -20,6 +20,8 @@ const nowSeconds = Math.floor(Date.now() / 1000);
 let approvalExecuteRequest = null;
 let failNextActionListRequest = false;
 let simulateDeepLinkedActionOutsideFirstPage = false;
+let readinessProbeFixed = false;
+let readinessProbeRequestBody = undefined;
 let resolveApprovalExecuteStarted = () => {};
 let resolveApprovalExecuteRelease = () => {};
 const approvalExecuteStarted = new Promise((resolve) => {
@@ -73,7 +75,7 @@ const fixtureActions = [
     actionType: 'delegate_openclaw',
     title: '查询 Jira 变更记录',
     description: 'OpenClaw 正在查询 Jira。',
-    params: { mode: 'read', targetSystem: 'jira' },
+    params: { mode: 'read', targetSystem: 'jira_api' },
     riskLevel: 'medium',
     confidence: 0.72,
     evidenceRefs: [],
@@ -402,6 +404,141 @@ const fixtureActions = [
   },
 ];
 
+function readinessReceiptForAction(action) {
+  if (action.actionType !== 'delegate_openclaw') return undefined;
+  const mode = action.params?.mode === 'write' ? 'write' : 'read';
+  const targetSystem = action.params?.targetSystem || 'global';
+  let status = 'unknown';
+  let scopeKey = `openclaw:${targetSystem}:${mode}`;
+  let reason = '还没有近期就绪证明；首次执行结果会建立契约。';
+
+  if (action.id === 'action-delegation-capability-missing') {
+    status = readinessProbeFixed ? 'ready' : 'blocked_capability';
+    scopeKey = readinessProbeFixed ? 'openclaw:jira:read' : 'openclaw:global';
+    reason = readinessProbeFixed
+      ? 'probe 已通过；本次重测没有再次执行原动作。'
+      : 'OpenClaw 未配置，无法执行外部委派。';
+  } else if (action.id === 'action-delegation-unverified') {
+    status = 'blocked_proof';
+    scopeKey = 'openclaw:jira_api:read';
+    reason = '执行器无法返回可验证 artifact，结果不能进入 action_results。';
+  } else if (
+    action.id === 'action-delegation-succeeded' ||
+    action.id === 'action-running-stale'
+  ) {
+    status = 'ready';
+    reason = '最近一次 action 返回了可验证 artifact。';
+  }
+
+  const dispatchState =
+    action.queueStatus === 'running' ||
+    action.queueStatus === 'succeeded' ||
+    action.retryCount > 0 ||
+    Boolean(action.result)
+      ? 'dispatched'
+      : 'not_dispatched';
+
+  return {
+    contractId: `contract:${scopeKey}`,
+    scopeKey,
+    status,
+    checkedAt: nowSeconds - 120,
+    expiresAt: status === 'ready' ? nowSeconds + 3600 : undefined,
+    reason,
+    affectedActionCount: status.startsWith('blocked_') ? 1 : 0,
+    requiredInputs: [],
+    requiredApprovals:
+      mode === 'write' && action.requiresApproval ? ['human_approval'] : [],
+    proofRequirements:
+      mode === 'write'
+        ? [
+            'sourceSystem',
+            'entityKey',
+            'verification',
+            'operation_or_changedFields',
+          ]
+        : [
+            'sourceSystem',
+            'entityKey',
+            'verification',
+            'observedFields',
+          ],
+    dispatchState,
+    doesNotProve:
+      dispatchState === 'dispatched'
+        ? [
+            '不证明历史派发没有产生外部副作用',
+            '不代表外部事实已经确认',
+            '不代表旧失败或潜在副作用已经撤销',
+          ]
+        : [
+            '不代表原动作已经执行',
+            '不代表外部事实已经确认',
+            '不代表旧失败或潜在副作用已经撤销',
+          ],
+  };
+}
+
+function readinessSummaryForActions(items) {
+  const receipts = items
+    .map((action) => action.readinessReceipt)
+    .filter(Boolean);
+  const contracts = Array.from(
+    new Map(receipts.map((receipt) => [receipt.scopeKey, receipt])).values(),
+  );
+  const blocked = contracts.filter((receipt) =>
+    receipt.status.startsWith('blocked_'),
+  );
+  const unknownActionCount = receipts.filter(
+    (receipt) => receipt.status === 'unknown',
+  ).length;
+  const affectedActionCount = receipts.filter((receipt) =>
+    receipt.status.startsWith('blocked_'),
+  ).length;
+
+  if (blocked.length > 0) {
+    return {
+      status: 'blocked',
+      title: 'OpenClaw 执行就绪受阻',
+      detail: `${blocked.length} 个能力契约影响 ${affectedActionCount} 条动作；尚未派发的动作会停在计次前，已有失败记录仍需复核旧 attempt 与潜在外部副作用。`,
+      trackedActionCount: receipts.length,
+      affectedActionCount,
+      blockedContractCount: blocked.length,
+      degradedContractCount: 0,
+      unknownActionCount,
+      contracts,
+      boundary:
+        '重测只检查连接、鉴权和 capability，不会执行原动作，也不会撤销旧失败或潜在外部副作用。',
+      readAt: nowSeconds,
+      readOnly: true,
+    };
+  }
+
+  return {
+    status: unknownActionCount > 0 ? 'attention' : 'ready',
+    title:
+      unknownActionCount > 0
+        ? '部分 OpenClaw 能力需要建立或刷新证明'
+        : receipts.length > 0
+        ? 'OpenClaw 就绪证明有效'
+        : '当前没有 OpenClaw 动作',
+    detail:
+      unknownActionCount > 0
+        ? `0 个契约需要重测，${unknownActionCount} 条动作尚无近期就绪证明；手动动作仍保留独立审批边界。`
+        : '当前可见 OpenClaw 动作没有被 readiness contract 阻断；执行和审批仍按每条 action 的风险边界处理。',
+    trackedActionCount: receipts.length,
+    affectedActionCount: 0,
+    blockedContractCount: 0,
+    degradedContractCount: 0,
+    unknownActionCount,
+    contracts,
+    boundary:
+      'ready 只证明近期 capability 可用，不代表原动作、外部事实或外部写操作已经完成。',
+    readAt: nowSeconds,
+    readOnly: true,
+  };
+}
+
 function actionsForRequest(parsed) {
   const actionId = parsed.searchParams.get('actionId');
   const queueStatus = parsed.searchParams.get('queueStatus');
@@ -422,11 +559,18 @@ function actionsForRequest(parsed) {
   }
   const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
   const safeOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
+  const visibleItems = items
+    .slice(safeOffset, safeOffset + safeLimit)
+    .map((action) => {
+      const readinessReceipt = readinessReceiptForAction(action);
+      return readinessReceipt ? { ...action, readinessReceipt } : action;
+    });
   return {
-    items: items.slice(safeOffset, safeOffset + safeLimit),
+    items: visibleItems,
     total: items.length,
     limit: safeLimit,
     offset: safeOffset,
+    readinessSummary: readinessSummaryForActions(visibleItems),
   };
 }
 
@@ -496,6 +640,36 @@ try {
       return;
     }
 
+    if (
+      pathname.endsWith(
+        '/actions/action-delegation-capability-missing/readiness/probe',
+      ) &&
+      route.request().method() === 'POST'
+    ) {
+      readinessProbeRequestBody = route.request().postData();
+      readinessProbeFixed = true;
+      const action = fixtureActions.find(
+        (item) => item.id === 'action-delegation-capability-missing',
+      );
+      const receipt = readinessReceiptForAction(action);
+      await route.fulfill(
+        jsonResponse({
+          decision: 'allow',
+          receipt,
+          probeReceipt: {
+            probeOnly: true,
+            originalActionExecuted: false,
+            checkedAt: nowSeconds,
+            status: 'ready',
+            summary: 'Jira capability is reachable.',
+            boundary:
+              '本次只重测连接、鉴权和 capability；未提交原动作，不代表 Jira 写操作已经发生。',
+          },
+        }),
+      );
+      return;
+    }
+
     if (pathname.endsWith('/actions') && route.request().method() === 'GET') {
       if (failNextActionListRequest) {
         failNextActionListRequest = false;
@@ -551,6 +725,14 @@ try {
   await page.locator('.queue-stat', { hasText: '需要处理' }).locator('strong', { hasText: '5' }).waitFor();
   await page.locator('.queue-stat', { hasText: '执行中' }).locator('strong', { hasText: '1' }).waitFor();
   await page.locator('.queue-stat', { hasText: '失败/死信' }).locator('strong', { hasText: '3' }).waitFor();
+  const readinessStrip = page.locator('[aria-label="OpenClaw 执行就绪摘要"]');
+  await readinessStrip.getByText('OpenClaw 执行就绪受阻').waitFor({ timeout: 10000 });
+  await readinessStrip.getByText('BLOCKED').waitFor({ timeout: 10000 });
+  await readinessStrip.getByText('阻断契约 2 个').waitFor({ timeout: 10000 });
+  await readinessStrip.getByText('受影响 2 条').waitFor({ timeout: 10000 });
+  await readinessStrip
+    .getByText('重测只检查连接、鉴权和 capability')
+    .waitFor({ timeout: 10000 });
   const attentionReceipt = page.locator('[aria-label="动作队列处理构成"]');
   await attentionReceipt.getByText('当前需要处理的动作已拆分').waitFor({ timeout: 10000 });
   await attentionReceipt.getByText('5 条').waitFor({ timeout: 10000 });
@@ -702,6 +884,20 @@ try {
   await unverifiedCard.getByText('恢复：改写任务或补齐 artifact 后重试').waitFor({ timeout: 10000 });
   await unverifiedCard.getByText('未验证 artifact 1 条').waitFor({ timeout: 10000 });
   const capabilityCard = page.locator('.action-card', { hasText: '查询外部 Jira 能力' });
+  await capabilityCard.getByText('执行就绪', { exact: true }).waitFor({ timeout: 10000 });
+  await capabilityCard.getByText('历史派发后暴露就绪阻断').waitFor({ timeout: 10000 });
+  await capabilityCard.getByText('能力阻断').waitFor({ timeout: 10000 });
+  await capabilityCard.getByText('契约：openclaw:global').waitFor({ timeout: 10000 });
+  await capabilityCard
+    .getByText('这条动作已有历史 dispatch attempt')
+    .waitFor({ timeout: 10000 });
+  await capabilityCard
+    .getByText('历史：原动作已有派发记录')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await capabilityCard.locator('button', { hasText: '重试入队' }).count(),
+    0,
+  );
   await capabilityCard.getByText('恢复路径回执').waitFor({ timeout: 10000 });
   await capabilityCard.getByText('已派生 OpenClaw 配置恢复入口').waitFor({ timeout: 10000 });
   await capabilityCard
@@ -716,6 +912,46 @@ try {
   await confirmRecoveryLink.waitFor({ timeout: 10000 });
   const confirmRecoveryHref = await confirmRecoveryLink.getAttribute('href');
   assert.match(confirmRecoveryHref || '', /actionId=action-openclaw-recovery-confirm/);
+  const readinessProbeButton = capabilityCard.getByRole('button', {
+    name: /修复后重测 openclaw:global/,
+  });
+  await readinessProbeButton.waitFor({ timeout: 10000 });
+  assert.match(
+    (await readinessProbeButton.getAttribute('title')) || '',
+    /不会提交原动作/,
+  );
+  const readinessProbeResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(
+        '/actions/action-delegation-capability-missing/readiness/probe',
+      ) &&
+      response.request().method() === 'POST' &&
+      response.status() === 200,
+  );
+  await readinessProbeButton.click();
+  await readinessProbeResponse;
+  assert.equal(readinessProbeRequestBody, null);
+  await capabilityCard.getByText('执行就绪重测通过').waitFor({ timeout: 10000 });
+  await capabilityCard
+    .getByText('原动作：未由本次重测执行')
+    .waitFor({ timeout: 10000 });
+  await capabilityCard
+    .getByText('外部写入：未由本次重测触发')
+    .waitFor({ timeout: 10000 });
+  await capabilityCard.getByText('近期 capability 证明有效').waitFor({ timeout: 10000 });
+  await capabilityCard
+    .locator('.action-readiness-panel')
+    .getByText('契约：openclaw:jira:read')
+    .waitFor({ timeout: 10000 });
+  await capabilityCard.getByRole('button', {
+    name: /重试入队：只把 OpenClaw 只读查询重新放回队列/,
+  }).waitFor({ timeout: 10000 });
+  assert.equal(
+    await capabilityCard.locator('button', { hasText: '修复后重测' }).count(),
+    0,
+  );
+  await readinessStrip.getByText('阻断契约 1 个').waitFor({ timeout: 10000 });
+  await readinessStrip.getByText('受影响 1 条').waitFor({ timeout: 10000 });
   await page.getByText('确认 Jira 发布状态').waitFor({ timeout: 10000 });
   const succeededDelegationCard = page.locator('.action-card', { hasText: '确认 Jira 发布状态' });
   await succeededDelegationCard.getByText('结果已回流，按 artifact / transcript 审计').waitFor({ timeout: 10000 });
@@ -865,6 +1101,31 @@ try {
   assert.equal(
     await page.locator('.action-card', { hasText: '更新生产部署状态' }).count(),
     0,
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/actions`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  const mobileReadinessStrip = page.locator(
+    '[aria-label="OpenClaw 执行就绪摘要"]',
+  );
+  await mobileReadinessStrip.getByText('阻断契约 1 个').waitFor({
+    timeout: 10000,
+  });
+  await page
+    .locator('[aria-label="动作执行就绪回执"]')
+    .first()
+    .waitFor({ timeout: 10000 });
+  const mobileOverflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  assert.ok(
+    mobileOverflow <= 1,
+    `Action Queue mobile viewport has ${mobileOverflow}px horizontal overflow`,
   );
 
   console.log('verify-action-queue-e2e: ok');

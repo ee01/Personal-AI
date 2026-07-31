@@ -1,6 +1,161 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { getEnvConfig, type EnvConfigType } from './utils';
+import { UsageTracker } from './analytics/UsageTracker';
+import {
+  CAPABILITIES,
+  normalizeCapability,
+  type CapabilityKey,
+} from './analytics/capabilities';
+import {
+  buildSamplingPayload,
+  buildTokenLimitPayload,
+  resolveTemperature,
+  SCENARIO_TEMPERATURE,
+  type LLMScenario,
+} from './modelSampling';
+
+interface LLMHandlerResult {
+  content: string;
+  model: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+  } | null;
+  tokensEstimated?: boolean;
+}
+
+/**
+ * 从 OpenAI/Groq/Ollama/Dify 响应里捕获 token 用量并写入前端打点缓冲。
+ *
+ * 纯副作用：读取 `body.feature` / `body.capability` 作为归类标签，
+ * 绝不影响 `handleLLMRequest` 既有的返回契约（仍返回 string）。
+ * 未标注的调用能力归为 'unknown'，并在开发期 warn。
+ */
+export function recordFrontendUsage(params: {
+  body?: any;
+  model?: string;
+  usage?: any;
+  status?: 'ok' | 'error';
+  errorKind?: string;
+  tokensEstimated?: boolean;
+  capability?: unknown;
+  feature?: string;
+}): void {
+  try {
+    const body = params.body;
+    const capability = normalizeCapability(
+      params.capability ?? body?.capability,
+    );
+    if (
+      capability === 'unknown' &&
+      typeof process !== 'undefined' &&
+      process.env?.NODE_ENV !== 'production'
+    ) {
+      console.warn(
+        '[usage] LLM 调用未标注 capability，将归入 unknown:',
+        body?.feature || body?.type || params.feature || 'unknown',
+      );
+    }
+    void UsageTracker.record({
+      capability,
+      feature: String(
+        params.feature || body?.feature || body?.type || 'unknown',
+      ),
+      model: params.model,
+      promptTokens: params.usage?.prompt_tokens ?? params.usage?.promptTokens,
+      completionTokens:
+        params.usage?.completion_tokens ?? params.usage?.completionTokens,
+      status: params.status || 'ok',
+      errorKind: params.errorKind,
+      tokensEstimated: params.tokensEstimated,
+    });
+  } catch {
+    // 打点失败不影响主流程
+  }
+}
+
+/** 网关未返回 usage 时，按字符长度估算 token。 */
+function estimateUsageFromText(
+  prompt: string,
+  completion: string,
+): { prompt_tokens: number; completion_tokens: number } {
+  return {
+    prompt_tokens: Math.max(1, Math.ceil(String(prompt || '').length / 3)),
+    completion_tokens: Math.max(
+      1,
+      Math.ceil(String(completion || '').length / 3),
+    ),
+  };
+}
+
+/** 把 LLM 调用异常归类为可报表的 errorKind。 */
+export function classifyLlmError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  const statusMatch = message.match(/\b(?:status|http)[^\d]*(\d{3})\b/i);
+  const code = statusMatch?.[1];
+  if (code === '401' || lower.includes('invalid token') || lower.includes('unauthorized')) {
+    return 'http_401';
+  }
+  if (code === '403') return 'http_403';
+  if (code === '404' || lower.includes('model_not_found') || lower.includes('not found')) {
+    return 'http_404';
+  }
+  if (code === '429') return 'http_429';
+  if (code === '503' || lower.includes('no available channel')) return 'http_503';
+  if (code && /^5\d\d$/.test(code)) return `http_${code}`;
+  if (
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('aborted') ||
+    (error as { name?: string })?.name === 'AbortError'
+  ) {
+    return 'timeout';
+  }
+  if (
+    lower.includes('network') ||
+    lower.includes('fetch failed') ||
+    lower.includes('failed to fetch') ||
+    lower.includes('econnrefused') ||
+    lower.includes('enotfound')
+  ) {
+    return 'network';
+  }
+  return 'unknown_error';
+}
+
+/** 历史默认值：受限模型下会连同 temperature 一起被省略。 */
+const DEFAULT_TOP_P = 0.9;
+
+/**
+ * 从请求体里读出采样意图：调用方可传 `scenario`（推荐）或直接给 `temperature`。
+ * 具体取值与模型是否接受采样参数，交给 `modelSampling` 判定。
+ */
+function readSamplingRequest(body: any): {
+  temperature?: number;
+  scenario?: LLMScenario;
+} {
+  return {
+    temperature:
+      typeof body?.temperature === 'number' ? body.temperature : undefined,
+    scenario: body?.scenario as LLMScenario | undefined,
+  };
+}
+
+function resolveDefaultModel(
+  envConfig: EnvConfigType,
+  body: any,
+): string {
+  const t = String(envConfig.LLM_TYPE || 'openai');
+  if (body?.model) return String(body.model);
+  if (t === 'local') return String(envConfig.OLLAMA_MODEL || 'ollama');
+  if (t === 'groq') return String(envConfig.GROQ_MODEL || 'mixtral-8x7b-32768');
+  if (t === 'dify') return String(envConfig.OPENAI_MODEL || 'dify');
+  return String(envConfig.OPENAI_MODEL || '');
+}
 
 // ==================== 辅助函数：模糊匹配（从 vectorStore.ts 迁移）====================
 // 注意: 以下函数暂未使用，保留供将来扩展
@@ -131,7 +286,7 @@ function normalizeLLMRequestBody(body: any): any {
 export async function handleLLMRequest(body: any): Promise<string> {
     const requestBody = normalizeLLMRequestBody(body);
     const envConfig = await getEnvConfig();
-    let handler;
+    let handler: (body: any) => Promise<LLMHandlerResult>;
     switch (envConfig.LLM_TYPE) {
         case 'local':
             handler = handleOllamaRequest;
@@ -150,8 +305,43 @@ export async function handleLLMRequest(body: any): Promise<string> {
             handler = handleOpenAIRequest;
             if (requestBody.type === 'review') requestBody.model = envConfig.OPENAI_REVIEW_MODEL;
     }
-    const response = await handler(requestBody);
-    return response;
+
+    try {
+        const result = await handler(requestBody);
+        let usage = result.usage;
+        let tokensEstimated = Boolean(result.tokensEstimated);
+        if (
+            !usage ||
+            ((usage.prompt_tokens ?? usage.promptTokens ?? 0) === 0 &&
+                (usage.completion_tokens ?? usage.completionTokens ?? 0) === 0)
+        ) {
+            usage = estimateUsageFromText(
+                String(
+                    requestBody.prompt ||
+                        `${requestBody.system_prompt || ''}\n${requestBody.user_prompt || ''}`,
+                ),
+                result.content,
+            );
+            tokensEstimated = true;
+        }
+        recordFrontendUsage({
+            body: requestBody,
+            model: result.model,
+            usage,
+            status: 'ok',
+            tokensEstimated,
+        });
+        return result.content;
+    } catch (error) {
+        recordFrontendUsage({
+            body: requestBody,
+            model: resolveDefaultModel(envConfig, requestBody),
+            usage: { prompt_tokens: 0, completion_tokens: 0 },
+            status: 'error',
+            errorKind: classifyLlmError(error),
+        });
+        throw error;
+    }
 }
 
 /**
@@ -162,12 +352,16 @@ export async function handleLLMRequest(body: any): Promise<string> {
 export async function runMeetingIntelligenceLLM(params: {
   systemPrompt: string;
   userPrompt: string;
+  feature?: string;
+  capability?: CapabilityKey;
 }): Promise<string> {
   const merged = `${params.systemPrompt}\n\n${params.userPrompt}`.trim();
   return handleLLMRequest({
     system_prompt: params.systemPrompt,
     user_prompt: params.userPrompt,
     prompt: merged,
+    capability: params.capability || CAPABILITIES.MEETING_PILOT,
+    feature: params.feature || 'meeting_pilot',
   });
 }
 
@@ -234,19 +428,24 @@ export function isMainLLMConfiguredForMeetingAnalysis(
 }
 
 // 处理 Ollama 请求。Ollama 安装后需要把 launchctl setenv OLLAMA_ORIGINS "*" 加入到 .bashrc 中
-async function handleOllamaRequest(body: any): Promise<string> {
+async function handleOllamaRequest(body: any): Promise<LLMHandlerResult> {
     const envConfig = await getEnvConfig();
+    const model = String(body.model || envConfig.OLLAMA_MODEL || 'ollama');
+    const temperature = resolveTemperature(model, readSamplingRequest(body));
     const response = await fetch(`${envConfig.OLLAMA_BASE_URL}/api/generate`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            model: body.model || envConfig.OLLAMA_MODEL,
+            model,
             prompt: body.prompt,
             stream: false,
-            temperature: 0.3,
-            top_p: 0.9
+            // Ollama 只读 `options` 里的采样参数，顶层同名字段会被忽略
+            options: {
+                ...(temperature === undefined ? {} : { temperature }),
+                top_p: DEFAULT_TOP_P,
+            },
         })
     });
 
@@ -255,11 +454,26 @@ async function handleOllamaRequest(body: any): Promise<string> {
     }
 
     const result = await response.json();
-    return result.response;
+    const content = String(result.response || '');
+    const promptEval = Number(result.prompt_eval_count);
+    const evalCount = Number(result.eval_count);
+    const hasUsage =
+        Number.isFinite(promptEval) || Number.isFinite(evalCount);
+    return {
+        content,
+        model,
+        usage: hasUsage
+            ? {
+                prompt_tokens: Number.isFinite(promptEval) ? promptEval : 0,
+                completion_tokens: Number.isFinite(evalCount) ? evalCount : 0,
+              }
+            : null,
+        tokensEstimated: !hasUsage,
+    };
 }
 
 // 处理 OpenAI 请求
-async function handleOpenAIRequest(body: any): Promise<string> {
+async function handleOpenAIRequest(body: any): Promise<LLMHandlerResult> {
   const envConfig = await getEnvConfig();
   // 初始化 OpenAI 客户端
   const openai = new OpenAI({
@@ -267,46 +481,64 @@ async function handleOpenAIRequest(body: any): Promise<string> {
       baseURL: envConfig.OPENAI_API_BASE_URL,
       dangerouslyAllowBrowser: true
   });
+  const model = String(
+    body.model || envConfig.OPENAI_MODEL || '',
+  );
   const completion = await openai.chat.completions.create({
-      model: envConfig.OPENAI_MODEL,
+      model,
       messages: body.system_prompt ?  [
         { role: "system", content: body.system_prompt },
         { role: "user", content: body.user_prompt },
       ] : [
         { role: "user", content: body.prompt },
       ],
-      temperature: 0.3,
-      top_p: 0.9
+      ...buildSamplingPayload(model, {
+        ...readSamplingRequest(body),
+        topP: DEFAULT_TOP_P,
+      }),
   });
 
-  return completion.choices[0].message.content || '';
+  return {
+    content: completion.choices[0].message.content || '',
+    model,
+    usage: completion.usage || null,
+  };
 }
 
 // 处理 Groq 请求
-async function handleGroqRequest(body: any): Promise<string> {
+async function handleGroqRequest(body: any): Promise<LLMHandlerResult> {
     const envConfig = await getEnvConfig();
     // 初始化 Groq 客户端
     const groq = new Groq({
         apiKey: envConfig.GROQ_API_KEY,
         dangerouslyAllowBrowser: true
     });
+    const groqModel = String(
+      body.model || envConfig.GROQ_MODEL || 'mixtral-8x7b-32768',
+    );
     const completion = await groq.chat.completions.create({
-        model: envConfig.GROQ_MODEL || 'mixtral-8x7b-32768',
+        model: groqModel,
         messages: body.system_prompt ? [
           { role: "system", content: body.system_prompt },
           { role: "user", content: body.user_prompt },
         ] : [
           { role: "user", content: body.prompt },
         ],
-        temperature: 0.3,
-        top_p: 0.9
+        ...buildSamplingPayload(groqModel, {
+          ...readSamplingRequest(body),
+          topP: DEFAULT_TOP_P,
+        }),
     });
 
-    return completion.choices[0].message.content || '';
+    return {
+      content: completion.choices[0].message.content || '',
+      model: groqModel,
+      usage: completion.usage || null,
+    };
 }
 
 // 新增：处理 Dify 请求
-async function handleDifyRequest(body: any): Promise<string> {
+async function handleDifyRequest(body: any): Promise<LLMHandlerResult> {
     const envConfig = await getEnvConfig();
     // 新增：初始化 Dify API 配置
     const difyConfig = {
@@ -332,7 +564,19 @@ async function handleDifyRequest(body: any): Promise<string> {
     }
 
     const result = await response.json();
-    return result.answer || '';
+    const answer = result.answer || '';
+    // Dify often omits usage; estimate so frontend telemetry is not empty for dify users.
+    const rawUsage = result.metadata?.usage || result.usage;
+    const tokensEstimated = !rawUsage;
+    const usage =
+      rawUsage ||
+      estimateUsageFromText(String(body.prompt || ''), answer);
+    return {
+      content: answer,
+      model: envConfig.OPENAI_MODEL || 'dify',
+      usage,
+      tokensEstimated,
+    };
 }
 
 // 新增：从响应文本中提取 JSON 数据
@@ -989,6 +1233,8 @@ interface ChatMessage {
 interface ChatOptions {
   model: string;
   messages: ChatMessage[];
+  /** 任务场景，决定 temperature 档位；显式 temperature 优先。 */
+  scenario?: LLMScenario;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
@@ -1043,7 +1289,12 @@ class OpenAIChat {
   }
 
   async chat(options: ChatOptions) {
-    const { model, messages, temperature = 0.7, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    const { model, messages, temperature, scenario, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    const sampling = buildSamplingPayload(model, {
+      temperature,
+      scenario: scenario || 'conversation',
+    });
+    const tokenLimitField = buildTokenLimitPayload(model, max_tokens);
     
     try {
       // 如果没有会话ID，创建一个新的
@@ -1064,8 +1315,8 @@ class OpenAIChat {
         const stream = await this.openai.chat.completions.create({
           model,
           messages: allMessages,
-          temperature,
-          max_tokens,
+          ...sampling,
+          ...tokenLimitField,
           stream: true
         });
         
@@ -1091,8 +1342,8 @@ class OpenAIChat {
         const completion = await this.openai.chat.completions.create({
           model,
           messages: allMessages,
-          temperature,
-          max_tokens
+          ...sampling,
+          ...tokenLimitField
         });
         
         const content = completion.choices[0].message.content || '';
@@ -1172,7 +1423,8 @@ class DifyChat {
   }
 
   async chat(options: ChatOptions) {
-    const { messages, temperature = 0.7, stream = false, onMessage, onComplete, onError } = options;
+    // Dify 的采样参数在 Dify 应用侧配置，请求体里的 temperature 仅作透传标记。
+    const { messages, temperature = SCENARIO_TEMPERATURE.conversation, stream = false, onMessage, onComplete, onError } = options;
     
     // 提取用户输入（最后一条用户消息）
     const userInput = messages.filter(m => m.role === 'user').pop()?.content || '';
@@ -1310,7 +1562,12 @@ class GroqChat {
   }
 
   async chat(options: ChatOptions) {
-    const { model, messages, temperature = 0.7, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    const { model, messages, temperature, scenario, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    const sampling = buildSamplingPayload(model, {
+      temperature,
+      scenario: scenario || 'conversation',
+    });
+    const tokenLimitField = buildTokenLimitPayload(model, max_tokens);
     
     try {
       // 如果没有会话ID，创建一个新的
@@ -1331,8 +1588,8 @@ class GroqChat {
         const stream = await this.groq.chat.completions.create({
           model,
           messages: allMessages,
-          temperature,
-          max_tokens,
+          ...sampling,
+          ...tokenLimitField,
           stream: true
         });
         
@@ -1358,8 +1615,8 @@ class GroqChat {
         const completion = await this.groq.chat.completions.create({
           model,
           messages: allMessages,
-          temperature,
-          max_tokens
+          ...sampling,
+          ...tokenLimitField
         });
         
         const content = completion.choices[0].message.content || '';
@@ -1446,7 +1703,11 @@ class OllamaChat {
   }
   
   async chat(options: ChatOptions) {
-    const { model, messages, temperature = 0.7, stream = false, onMessage, onComplete, onError } = options;
+    const { model, messages, temperature, scenario, stream = false, onMessage, onComplete, onError } = options;
+    const resolvedTemperature = resolveTemperature(model, {
+      temperature,
+      scenario: scenario || 'conversation',
+    });
     
     try {
       // 如果没有会话ID，创建一个新的
@@ -1472,7 +1733,10 @@ class OllamaChat {
         body: JSON.stringify({
           model,
           messages: allMessages,
-          temperature,
+          // Ollama 只读 `options` 里的采样参数
+          ...(resolvedTemperature === undefined
+            ? {}
+            : { options: { temperature: resolvedTemperature } }),
           stream
         })
       });
@@ -1558,7 +1822,12 @@ export async function generateAutoReply(messageContext: {
     const prompt = buildAutoReplyPrompt(messageContext);
     
     try {
-        const response = await handleLLMRequest({ prompt, type: 'auto_reply' });
+        const response = await handleLLMRequest({
+            prompt,
+            type: 'auto_reply',
+            capability: CAPABILITIES.MESSAGE_REACTION,
+            feature: 'auto_reply',
+        });
         // 清理可能的思考标签
         const cleanedResponse = response
             .replace(/<think>[\s\S]*?<\/think>/g, '')
@@ -1588,6 +1857,8 @@ export async function generateLinkedActionSuggestionText(params: {
     const response = await handleLLMRequest({
       prompt,
       type: 'linked_action',
+      capability: CAPABILITIES.MESSAGE_REACTION,
+      feature: 'linked_action',
     });
     const cleanedResponse = response
       .replace(/<think>[\s\S]*?<\/think>/g, '')
@@ -1621,7 +1892,12 @@ export async function isContentSimilar(
 只返回一个词，不要其他内容。`;
     
     try {
-        const response = await handleLLMRequest({ prompt, type: 'similarity' });
+        const response = await handleLLMRequest({
+            prompt,
+            type: 'similarity',
+            capability: CAPABILITIES.MESSAGE_REACTION,
+            feature: 'similarity',
+        });
         // 清理可能的思考标签
         const cleanedResponse = response
             .replace(/<think>[\s\S]*?<\/think>/g, '')

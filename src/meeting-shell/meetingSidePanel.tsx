@@ -10,6 +10,7 @@ import type {
   CalendarEventSyncItem,
   ComposerAssistEvidence,
   ContextAssistCueCard,
+  MeetingOutcomeBinder,
 } from '../services/MemoryServiceClient';
 import { defaultEnvConfig, EnvConfigType, getEnvConfig } from '../utils';
 import {
@@ -23,6 +24,10 @@ import {
   getActionReviewWarnings,
 } from './actionItemReview';
 import { buildMeetingPilotAlertReceipt } from './alertPresentation';
+import {
+  getMeetingOutcomeLiveSlots,
+  normalizeMeetingOutcomeBinder,
+} from './meetingOutcomeBinder';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
   buildMeetingPilotLiveFeedReceipt,
@@ -158,6 +163,7 @@ type MeetingPrepHandoff = {
   prepId?: string;
   missionId?: string;
   generatedMode?: string;
+  outcomeBinder?: MeetingOutcomeBinder;
 };
 
 function getRequestedSurfaceMode(): PanelSurfaceMode {
@@ -835,6 +841,7 @@ function normalizeMeetingPrepHandoff(
     missionId: typeof raw.missionId === 'string' ? raw.missionId : undefined,
     generatedMode:
       typeof raw.generatedMode === 'string' ? raw.generatedMode : undefined,
+    outcomeBinder: normalizeMeetingOutcomeBinder(raw.outcomeBinder),
   };
 }
 
@@ -1941,6 +1948,137 @@ const shellStyle = `
 
   .meeting-prep-match-boundary {
     margin-top: 7px;
+  }
+
+  .meeting-outcome-live {
+    margin-top: 9px;
+    padding: 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(116,185,255,0.24);
+    background: rgba(12,28,48,0.42);
+  }
+
+  .meeting-outcome-live-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 9px;
+  }
+
+  .meeting-outcome-live-head > div {
+    min-width: 0;
+  }
+
+  .meeting-outcome-live-head span {
+    display: block;
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .meeting-outcome-live-head > div > span {
+    color: #74b9ff;
+    font-weight: 800;
+  }
+
+  .meeting-outcome-live-head strong {
+    display: block;
+    margin-top: 2px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .meeting-outcome-live-list {
+    display: grid;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .meeting-outcome-live-slot {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    gap: 7px;
+    align-items: start;
+    min-width: 0;
+    padding: 7px;
+    border-radius: 7px;
+    border: 1px solid rgba(148,163,184,0.13);
+    background: rgba(15,23,42,0.44);
+  }
+
+  .meeting-outcome-live-slot.mentioned {
+    border-color: rgba(255,212,59,0.26);
+  }
+
+  .meeting-outcome-live-slot.evidence_candidate,
+  .meeting-outcome-live-slot.final {
+    border-color: rgba(105,219,124,0.28);
+  }
+
+  .meeting-outcome-live-index {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(116,185,255,0.14);
+    color: #9fd0ff;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .meeting-outcome-live-slot > div {
+    min-width: 0;
+  }
+
+  .meeting-outcome-live-slot > div strong,
+  .meeting-outcome-live-slot > div span {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-outcome-live-slot > div strong {
+    color: var(--text);
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+
+  .meeting-outcome-live-slot > div span {
+    margin-top: 2px;
+    color: var(--text-dim);
+    font-size: 10.5px;
+    line-height: 1.4;
+  }
+
+  .meeting-outcome-live-status {
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.07);
+    color: #cbd5e1;
+    font-size: 9.5px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .meeting-outcome-live-boundary {
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid rgba(148,163,184,0.12);
+    color: var(--text-dim);
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
+
+  @media (max-width: 360px) {
+    .meeting-outcome-live-slot {
+      grid-template-columns: 20px minmax(0, 1fr);
+    }
+
+    .meeting-outcome-live-status {
+      grid-column: 2;
+      justify-self: start;
+    }
   }
 
   .meeting-prep-goal {
@@ -4989,6 +5127,9 @@ function MeetingSidePanel() {
   const meetingPrepMatchReceipt = meetingPrepHandoff
     ? getMeetingPrepHandoffMatchReceipt(meetingPrepHandoff, session)
     : null;
+  const meetingOutcomeLiveSlots = meetingPrepHandoff?.outcomeBinder
+    ? getMeetingOutcomeLiveSlots(meetingPrepHandoff.outcomeBinder, session)
+    : [];
   const panelStateSourceReceipt = buildPanelStateSourceReceipt(
     session,
     requestedTabId,
@@ -5326,6 +5467,47 @@ function MeetingSidePanel() {
                       {meetingPrepMatchReceipt.boundary}
                     </div>
                   </div>
+                ) : null}
+                {meetingOutcomeLiveSlots.length ? (
+                  <section
+                    className="meeting-outcome-live"
+                    data-meeting-outcome-live="true"
+                    data-meeting-outcome-status={
+                      meetingPrepHandoff?.outcomeBinder?.status || 'planned'
+                    }
+                    aria-label="本场闭环进度"
+                  >
+                    <div className="meeting-outcome-live-head">
+                      <div>
+                        <span>本场要闭环</span>
+                        <strong>{meetingOutcomeLiveSlots.length} 件事</strong>
+                      </div>
+                      <span>会中只跟踪，不提前判定</span>
+                    </div>
+                    <div className="meeting-outcome-live-list">
+                      {meetingOutcomeLiveSlots.map((item, index) => (
+                        <article
+                          className={`meeting-outcome-live-slot ${item.state}`}
+                          data-outcome-state={item.state}
+                          key={item.slot.id}
+                        >
+                          <span className="meeting-outcome-live-index">
+                            {index + 1}
+                          </span>
+                          <div>
+                            <strong>{item.slot.title}</strong>
+                            <span>{item.detail}</span>
+                          </div>
+                          <span className="meeting-outcome-live-status">
+                            {item.label}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="meeting-outcome-live-boundary">
+                      Transcript 提到不等于已解决；Meeting Pilot 会在归档时用决议、行动项和 transcript 证据装订最终结果。
+                    </div>
+                  </section>
                 ) : null}
                 {meetingPrepGoal ? (
                   <div className="meeting-prep-goal">

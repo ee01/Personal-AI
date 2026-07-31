@@ -13,6 +13,7 @@ export type MemoryContextMatchState = 'locked' | 'ambiguous' | 'none';
 
 export interface MemoryContextMatchInput {
   query: string;
+  preferredTopicTitle?: string;
   surface?: string;
   contextType?: string;
   title?: string;
@@ -194,6 +195,17 @@ const GENERIC_CONTEXT_HINT_TOKENS = new Set([
   'jira',
   'ringcentral',
 ]);
+const GENERIC_PREFERRED_TOPIC_TOKENS = new Set([
+  ...GENERIC_QUERY_TOKENS,
+  'and',
+  'for',
+  'from',
+  'mtr',
+  'project',
+  'the',
+  'topic',
+  'use',
+]);
 
 function safeJsonParse<T>(json: string | null | undefined): T | undefined {
   if (!json) return undefined;
@@ -275,6 +287,10 @@ function extractAcronyms(value: string): string[] {
 
 function extractSourceAnchors(value: string): string[] {
   return uniq([...(value.match(ISSUE_KEY_PATTERN) ?? []), ...(value.match(URL_PATTERN) ?? [])]).slice(0, 12);
+}
+
+function extractIssueKeys(value: string): string[] {
+  return uniq(value.toUpperCase().match(ISSUE_KEY_PATTERN) ?? []);
 }
 
 function anchorStrength(anchors: string[]): {
@@ -490,6 +506,66 @@ function candidateDecisionScore(candidate: MemoryContextTopicCandidate): number 
   return candidate.score + directCurrentAnchorBoost + externalContextBoost + roleMatchBoost;
 }
 
+function preferredTopicCompatibility(
+  candidate: MemoryContextTopicCandidate,
+  preferredTopicTitle: string,
+): { matched: boolean; score: number } {
+  const preferredComparable = normalizeComparable(preferredTopicTitle);
+  const labelComparable = normalizeComparable(candidate.label);
+  if (!preferredComparable || !labelComparable) return { matched: false, score: 0 };
+
+  const candidateText = [candidate.label, ...candidate.aliases, ...candidate.anchors].join(' ');
+  const candidateComparable = normalizeComparable(candidateText);
+  const exactLabel = labelComparable === preferredComparable;
+  const containedLabel =
+    Math.min(labelComparable.length, preferredComparable.length) >= 5 &&
+    (labelComparable.includes(preferredComparable) || preferredComparable.includes(labelComparable));
+  const preferredIssueKeys = extractIssueKeys(preferredTopicTitle);
+  const candidateIssueKeys = extractIssueKeys(candidateText);
+  const labelIssueKeys = extractIssueKeys(candidate.label);
+  const sharedIssueKeys = preferredIssueKeys.filter((issueKey) =>
+    candidateIssueKeys.includes(issueKey),
+  );
+  const issueAppearsInLabel = sharedIssueKeys.some((issueKey) =>
+    labelIssueKeys.includes(issueKey),
+  );
+  const preferredTopicTokens = extractTokens(preferredTopicTitle).filter((token) => {
+    const normalized = token.toLowerCase();
+    return (
+      !GENERIC_PREFERRED_TOPIC_TOKENS.has(normalized) &&
+      !preferredIssueKeys.includes(token.toUpperCase())
+    );
+  });
+  const semanticHits = preferredTopicTokens.filter((token) =>
+    candidateComparable.includes(token.toLowerCase()),
+  );
+  const labelTopicTokens = extractTokens(candidate.label).filter((token) => {
+    const normalized = token.toLowerCase();
+    return (
+      !GENERIC_PREFERRED_TOPIC_TOKENS.has(normalized) &&
+      !labelIssueKeys.includes(token.toUpperCase())
+    );
+  });
+  const labelHits = labelTopicTokens.filter((token) =>
+    preferredComparable.includes(token.toLowerCase()),
+  );
+  const labelCoverage = labelTopicTokens.length
+    ? labelHits.length / labelTopicTokens.length
+    : 0;
+  const semanticMatch =
+    semanticHits.length > 0 && (sharedIssueKeys.length > 0 || labelCoverage >= 0.5);
+  const matched = exactLabel || containedLabel || issueAppearsInLabel || semanticMatch;
+  const score =
+    (exactLabel ? 100 : 0) +
+    (containedLabel ? 40 : 0) +
+    sharedIssueKeys.length * 8 +
+    (issueAppearsInLabel ? 3 : 0) +
+    semanticHits.length * 2.5 +
+    labelCoverage * 5;
+
+  return { matched, score };
+}
+
 function shouldClarifyAmbiguousQuery(input: {
   deictic: boolean;
   statusIntent: boolean;
@@ -519,6 +595,7 @@ export class MemoryContextMatchService {
 
   match(input: MemoryContextMatchInput): MemoryContextMatchResult {
     const query = normalizeText(input.query);
+    const preferredTopicTitle = normalizeText(input.preferredTopicTitle);
     const contextText = this.buildContextText(input);
     const externalContextText = this.buildExternalContextText(input);
     const queryRoles = extractRoleTerms(query);
@@ -537,14 +614,31 @@ export class MemoryContextMatchService {
     ])
       .filter((candidate) => candidate.score > 0)
       .sort(
-        (a, b) =>
-          candidateDecisionScore(b) - candidateDecisionScore(a) ||
-          b.score - a.score ||
-          b.confidence - a.confidence,
+        (a, b) => {
+          const preferredA = preferredTopicCompatibility(a, preferredTopicTitle);
+          const preferredB = preferredTopicCompatibility(b, preferredTopicTitle);
+          if (preferredA.matched !== preferredB.matched) {
+            return preferredB.matched ? 1 : -1;
+          }
+          if (preferredA.matched && preferredA.score !== preferredB.score) {
+            return preferredB.score - preferredA.score;
+          }
+          return (
+            candidateDecisionScore(b) - candidateDecisionScore(a) ||
+            b.score - a.score ||
+            b.confidence - a.confidence
+          );
+        },
       )
       .slice(0, 5);
 
     const top = candidates[0];
+    const topPreferredTopicMatch = top
+      ? preferredTopicCompatibility(top, preferredTopicTitle).matched
+      : false;
+    if (top && topPreferredTopicMatch) {
+      addReason(top.reasons, `用户显式续聊 topic 匹配: ${preferredTopicTitle}`);
+    }
     const second = candidates[1];
     const gap = top && second ? candidateDecisionScore(top) - candidateDecisionScore(second) : top ? 1 : 0;
     const topHasExplicitQueryAnchor = Boolean(
@@ -559,6 +653,7 @@ export class MemoryContextMatchService {
       queryTokens,
     });
     const isAmbiguous =
+      !topPreferredTopicMatch &&
       shouldClarifyAmbiguous &&
       top &&
       second &&
@@ -570,8 +665,9 @@ export class MemoryContextMatchService {
     const isLocked =
       top &&
       !isAmbiguous &&
-      top.score >= LOCKED_SCORE_THRESHOLD &&
-      top.confidence >= LOCKED_CONFIDENCE_THRESHOLD;
+      ((topPreferredTopicMatch && top.confidence >= 0.45) ||
+        (top.score >= LOCKED_SCORE_THRESHOLD &&
+          top.confidence >= LOCKED_CONFIDENCE_THRESHOLD));
 
     if (isLocked) {
       return {
@@ -611,6 +707,7 @@ export class MemoryContextMatchService {
         .join(' ') ?? '';
     return [
       input.query,
+      input.preferredTopicTitle,
       input.title,
       input.sourceContext?.title,
       input.sourceContext?.topic,

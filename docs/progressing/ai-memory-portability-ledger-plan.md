@@ -1,8 +1,18 @@
-# 新能力：AI Memory Portability Ledger / AI 记忆迁移账本
+# 新能力：AI Memory Portability Ledger / AI 记忆迁移账本（搁置）
 
 > 生成时间：2026-07-09 CST
-> 建议标题：`新能力：AI 记忆迁移账本`
+> 建议标题：`新能力：AI 记忆迁移账本（搁置）`
 > Demo：[`ai-memory-portability-ledger-demo.html`](./ai-memory-portability-ledger-demo.html)
+
+## 搁置原因
+
+当前暂时不建议推进 **AI Memory Portability Ledger / AI 记忆迁移账本**。
+
+核心原因是使用场景频率偏低。用户确实会接触 ChatGPT、Claude、Gemini、Codex、Cursor、OpenClaw 等多个 AI 工具，但“把某个平台已经沉淀的 memory 正式迁入/迁出另一个平台，并且需要 round-trip 对账”的动作不会高频发生。它更像换平台、试新工具、迁移账户、集中整理外部 AI 历史时才会出现的低频治理场景。
+
+在当前阶段，Personal AI 更应该优先投入高频场景：当前页面 / 聊天 / 会议 / Ask / Compose 中的召回准确性、证据边界、外部 AI 历史基础导入、Coverage Map 可见性，以及已有迁出前的隐私 / 身份边界。`AI 记忆迁移账本` 的价值成立，但不适合作为近期独立能力或 P0 进入实现。
+
+本方案先保留为搁置方向。未来如果用户真实开始频繁使用 Claude / Gemini / ChatGPT 的 memory import / export，或需要把 Personal AI 作为跨 AI memory 真源对外同步，再恢复评估。恢复时仍应优先作为 Coverage Map 的嵌入式迁移 / 对账抽屉，而不是新建日常 review 页面。
 
 ## 真实场景 1：把 ChatGPT 记住的偏好迁到 Claude 前，先由 Personal AI 对账
 
@@ -59,7 +69,7 @@
 已检查 `docs/progressing/to-verify.md`，当前为 `暂无。`。本计划刻意避开最近和相邻方向：
 
 - `Research Trail Synthesizer`：研究问题和资料足迹合成。
-- `Evidence Cohesion Gate`：使用证据前判断是否同场。
+- `Evidence Cohesion Gate（证据对齐）`：使用证据前判断候选是否围绕同一个问题。
 - `Action Readiness Contracts`：外部动作执行前检查能力、凭据、输入和审批。
 - `Change Memory Ledger`：字段旧值/新值事件链。
 - `AI Context Passport`：把当前任务上下文打包给另一个 AI。
@@ -413,7 +423,7 @@ npm run eval:memory-abilities
 
 如果该能力最终成为独立入口，再考虑新建 feature doc；P0 推荐先并入 Coverage Map。
 
-## 推荐 P0 范围
+## 未来若恢复的 P0 范围
 
 做：
 
@@ -435,6 +445,6 @@ npm run eval:memory-abilities
 
 ## 最终建议
 
-值得推进 P0。它贴合 Personal AI 的长期愿景：用户的记忆可以来自任意 AI，也可以去任意 AI，但 Personal AI 应该是用户自己可控的真源，而不是另一个 vendor silo。
+当前不建议推进 P0，先保持搁置。它贴合 Personal AI 的长期愿景：用户的记忆可以来自任意 AI，也可以去任意 AI，但近期真实使用频率不足，不应抢占更高频的召回准确性、场景提示和基础导入体验优先级。
 
-这个功能的亮点不是“迁移更快”，而是“迁移后知道有没有记错”。行业产品正在把 memory import/export 做成切换入口，Personal AI 的机会是把它升级成私人记忆的对账、失真检测和可撤回投影。
+如果未来恢复，这个功能的亮点不是“迁移更快”，而是“迁移后知道有没有记错”。行业产品正在把 memory import/export 做成切换入口，Personal AI 的机会是把它升级成私人记忆的对账、失真检测和可撤回投影。

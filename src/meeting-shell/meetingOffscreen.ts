@@ -6,6 +6,12 @@ import {
   type EnvConfigType,
   type MeetingTranscribeLanguage,
 } from '../utils';
+import {
+  classifyLlmError,
+  recordFrontendUsage,
+} from '../llm';
+import { buildSamplingPayload } from '../modelSampling';
+import { CAPABILITIES } from '../analytics/capabilities';
 import { MEETING_PILOT_OFFSCREEN_PATH } from './protocol';
 import { releaseWhisperTranscodeContext } from './transcodeForWhisper';
 import { ASROrchestrator } from './asr/orchestrator';
@@ -274,6 +280,7 @@ async function captureFrameDataUrl(
 
 async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
   if (!state.tabId) return;
+  let model = '';
   try {
     const envConfig = await getEnvConfig();
     const baseUrl = String(envConfig.MEETING_PROVIDER_BASE_URL || '').replace(
@@ -282,7 +289,7 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
     );
     const apiKey = String(envConfig.MEETING_PROVIDER_API_KEY || '').trim();
     // Vision 仍走 OneAPI/兼容网关；与主配置对齐时用 OPENAI_MODEL 作为多模态名。
-    const model = String(envConfig.OPENAI_MODEL || '').trim();
+    model = String(envConfig.OPENAI_MODEL || '').trim();
     if (!baseUrl || !apiKey || !model) {
       return;
     }
@@ -299,7 +306,7 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.1,
+        ...buildSamplingPayload(model, { scenario: 'extraction' }),
         messages: [
           {
             role: 'system',
@@ -322,16 +329,49 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
         ],
       }),
     });
-    const payload = await response.json();
+    const payload = await response.json().catch(() => ({}));
     const observationText = String(
       payload?.choices?.[0]?.message?.content || '',
     ).trim();
     if (!response.ok || !observationText) {
+      recordFrontendUsage({
+        capability: CAPABILITIES.MEETING_PILOT,
+        feature: 'observation_ocr',
+        model,
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+        status: 'error',
+        errorKind: response.ok
+          ? 'empty_response'
+          : `http_${response.status}`,
+      });
       return;
     }
+    const usage = payload?.usage;
+    const tokensEstimated = !usage;
+    recordFrontendUsage({
+      capability: CAPABILITIES.MEETING_PILOT,
+      feature: 'observation_ocr',
+      model,
+      usage:
+        usage ||
+        {
+          prompt_tokens: Math.max(1, Math.ceil(dataUrl.length / 12)),
+          completion_tokens: Math.max(1, Math.ceil(observationText.length / 3)),
+        },
+      status: 'ok',
+      tokensEstimated,
+    });
     appendCaptureLog('response', 'observation OCR received');
     emitObservation(observationText);
   } catch (error) {
+    recordFrontendUsage({
+      capability: CAPABILITIES.MEETING_PILOT,
+      feature: 'observation_ocr',
+      model,
+      usage: { prompt_tokens: 0, completion_tokens: 0 },
+      status: 'error',
+      errorKind: classifyLlmError(error),
+    });
     appendCaptureLog(
       'error',
       `observation OCR failed: ${String((error as Error)?.message || error || 'unknown_error')}`,

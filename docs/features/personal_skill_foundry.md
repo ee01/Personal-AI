@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-07-14_
+_最后更新: 2026-07-17_
 
 ## 是什么
 
@@ -70,6 +70,7 @@ suggestion -> dismissed
 
 - `OpenClaw 导入`
 - `Flight Recorder 萃取`
+- `Source Memory Distiller`
 - `本地 agent 导入`
 - `其他建议`
 
@@ -125,6 +126,13 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 - Memory Outcome Loop 可以把重复成功的 cue 作为 suggestion 来源。例如 Jira estimate `draft_hint` 多次被插入并发送后，会生成 `Estimate wording helper` suggestion。
 - 这类 suggestion 的 `suggestedFrom` 为 `memory_outcome_loop`，`suggestionClusterKey` 绑定 cue key，避免同一句成功提示反复生成 Inbox 卡片。
 - Outcome Loop 只生成待审建议，不会把它自动提升成 active skill，也不会自动同步到外部 agent 平台。
+
+2026-07-15 状态：
+
+- Source Memory deep worker 可以从已保存网页、文档、会议资料或外部 AI 对话中保留 evidence-grounded `skill_seed`。单条 capsule 永远只保存 seed，不进入 Foundry Inbox。
+- 只有同一 normalized seed key 在至少 2 条独立、仍为 saved 的 source-memory capsule 中重复，且每条置信度至少为 0.82，才调用 `SkillLibraryService.createSuggestion()`。聚合查询还要求 artifact hash 等于该 capsule 当前 deep job hash 且 job 为 `succeeded`；补备注后排队中的旧 seed 不能继续凑数晋升。建议的 `createdFrom` 为 `source_memory_distillation`，`suggestionClusterKey=source-memory:<seedKey>`，evidence/sourceEpisodes 保留每个 capsule 和来源标题。
+- 这类 suggestion 使用 `notify=false`，初始状态仍为 `suggestion`；它不会自动提升 active、执行工作流、生成 share URL 或同步到 OpenClaw / 本机 agent。后续仍复用 Foundry 的查看证据、使用、丢弃、稍后审和 review gate。
+- worker 会把已物化 seed artifact 标为 `materialized_suggestion` 并写入 suggestion id，用于幂等审计；同簇去重继续由 Foundry 负责。
 
 2026-06-12 状态：
 

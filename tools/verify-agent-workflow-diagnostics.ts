@@ -926,6 +926,49 @@ assert.match(
   /关系分析Agent \/ 历史消息搜索工具/,
 );
 
+const toolErrorWithStaleCompleteStorageReview = {
+  shouldStore: false,
+  shouldNotify: false,
+  storageReview: {
+    traceStatus: 'complete',
+  },
+  agentWorkflowTrace: [
+    {
+      agentId: 'relationshipAnalyzer',
+      agentName: '关系分析Agent',
+      status: 'success',
+      durationMs: 120,
+      tools: [
+        {
+          name: 'historySearch',
+          displayName: '历史消息搜索工具',
+          status: 'error',
+          durationMs: 90,
+          error: 'memory service timeout',
+        },
+      ],
+    },
+  ],
+};
+assert.deepEqual(
+  buildAgentWorkflowResultDiagnostics(
+    toolErrorWithStaleCompleteStorageReview,
+  ).map((item) => `${item.id}:${item.message}`),
+  ['partial-trace:工具错误 关系分析Agent / 历史消息搜索工具'],
+);
+assert.deepEqual(
+  buildAgentWorkflowRecommendedActions(
+    toolErrorWithStaleCompleteStorageReview,
+  ).map((item) => item.id),
+  ['fix-tool-errors'],
+);
+assert.match(
+  buildAgentWorkflowRecommendedActions(
+    toolErrorWithStaleCompleteStorageReview,
+  )[0].detail || '',
+  /先修复上述 Agent \/ 工具错误/,
+);
+
 const placeholderCountWithoutTraceLabels = {
   shouldStore: true,
   shouldNotify: false,

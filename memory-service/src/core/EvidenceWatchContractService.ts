@@ -7,6 +7,7 @@ import type {
   EvidenceResolutionReasonCode,
   EvidenceResolutionGapType,
 } from './EvidenceResolutionPlanner.js';
+import { OpenQuestionExitContractService } from './OpenQuestionExitContractService.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { now } from '../utils/time.js';
 
@@ -190,6 +191,26 @@ export interface EvidenceWatchReadReceipt {
   limit?: number;
   readAt: number;
   readOnly: true;
+}
+
+export interface EvidenceWatchRunWriteReceipt {
+  label: string;
+  detail: string;
+  contractId: string;
+  runId: string;
+  runState: EvidenceWatchRunState;
+  previousState: EvidenceWatchState;
+  state: EvidenceWatchState;
+  previousLastCheckedAt?: number;
+  lastCheckedAt?: number;
+  nextCheckAt?: number;
+  countsAsEvidenceCheck: boolean;
+  checkedSourceCount: number;
+  suppressedActionCount: number;
+  createdPatchCount: number;
+  wroteRun: true;
+  readOnly: false;
+  writtenAt: number;
 }
 
 interface EvidenceWatchContractRow {
@@ -656,6 +677,52 @@ export class EvidenceWatchContractService {
     };
   }
 
+  buildRunWriteReceipt(input: {
+    previous: EvidenceWatchContract;
+    current: EvidenceWatchContract;
+    run: EvidenceWatchRunReceipt;
+  }): EvidenceWatchRunWriteReceipt {
+    const countsAsCheck = this.countsAsEvidenceCheck(input.run.runState);
+    const checkedPart = countsAsCheck
+      ? '本次 run 计入真实复核，会按 run state 推进 state / lastCheckedAt / nextCheckAt。'
+      : '本次 run 只是生命周期、预算或去重收据，不计入真实复核，不会推进 lastCheckedAt，也不会把旧结论标成已复核。';
+    const sourcePart =
+      input.run.checkedSources.length > 0
+        ? `记录了 ${input.run.checkedSources.length} 条来源状态。`
+        : '没有记录新的来源触达。';
+    const duplicatePart =
+      input.run.suppressedActionIds.length > 0
+        ? `复用了 ${input.run.suppressedActionIds.length} 个既有动作。`
+        : '没有复用既有动作。';
+    const patchPart =
+      input.run.createdPatchIds.length > 0
+        ? `生成了 ${input.run.createdPatchIds.length} 个补丁线索。`
+        : '没有生成补丁线索。';
+    return {
+      label: '证据守望运行写入回执',
+      detail:
+        `已写入 run=${input.run.runState} 到 ${input.current.title}；` +
+        `state ${input.previous.state} -> ${input.current.state}。` +
+        `${checkedPart}${sourcePart}${duplicatePart}${patchPart}` +
+        '本次写入不会直接执行外部查证、发送通知、确认事实变化、写回权威来源或创建额外 action。',
+      contractId: input.current.id,
+      runId: input.run.id,
+      runState: input.run.runState,
+      previousState: input.previous.state,
+      state: input.current.state,
+      previousLastCheckedAt: input.previous.lastCheckedAt,
+      lastCheckedAt: input.current.lastCheckedAt,
+      nextCheckAt: input.current.nextCheckAt,
+      countsAsEvidenceCheck: countsAsCheck,
+      checkedSourceCount: input.run.checkedSources.length,
+      suppressedActionCount: input.run.suppressedActionIds.length,
+      createdPatchCount: input.run.createdPatchIds.length,
+      wroteRun: true,
+      readOnly: false,
+      writtenAt: input.run.createdAt,
+    };
+  }
+
   createOrReuse(
     input: CreateEvidenceWatchContractInput,
   ): EvidenceWatchCreateOrReuseResult {
@@ -1023,6 +1090,13 @@ export class EvidenceWatchContractService {
         createdAt,
         input.contractId,
       );
+
+    if (input.runState === 'checked_changed') {
+      new OpenQuestionExitContractService(this.db).resumeForEvidenceWatch(
+        input.contractId,
+        createdAt,
+      );
+    }
 
     return {
       id,

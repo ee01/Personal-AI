@@ -1734,7 +1734,20 @@ try {
     .getByText('新鲜度按服务端快照 generatedAt 和 7 天窗口判断')
     .waitFor({ timeout: 10000 });
 
-  await page.getByRole('button', { name: '录入' }).click();
+  const smartImportEntryButton = page.getByRole('button', {
+    name: /录入：只打开本页记忆录入抽屉/,
+  });
+  assert.match(
+    (await smartImportEntryButton.getAttribute('title')) || '',
+    /不会读取本机文件、创建 import batch、messages、chunks/,
+    'smart import entry button should expose drawer-only boundary in title',
+  );
+  assert.match(
+    (await smartImportEntryButton.getAttribute('aria-label')) || '',
+    /确认后才可能写入/,
+    'smart import entry button should expose dry-run-before-write boundary to screen readers',
+  );
+  await smartImportEntryButton.click();
   const primaryImportButton = page.locator('.drawer-footer .btn.primary');
   const smartImportScopeReceipt = page.locator('[aria-label="智能录入范围回执"]');
   await smartImportScopeReceipt
@@ -1784,7 +1797,7 @@ try {
     /写入 work manual shadow memory/,
     'confirmed smart import submit button should expose target write scope',
   );
-  smartImportCommitDelayMs = 1000;
+  smartImportCommitDelayMs = 3000;
   await submitImport.click();
   const smartImportPendingReceipt = page.locator(
     '[aria-label="资料写入提交中回执"]',
@@ -1804,6 +1817,45 @@ try {
   await smartImportPendingReceipt
     .getByText('不会自动同步外部平台、覆盖旧 batch、确认画像/skill/项目事实、发送消息或外发导入内容')
     .waitFor({ timeout: 10000 });
+  const importDrawer = page.locator('.import-drawer');
+  const closeImportButton = page.locator('.drawer-head .icon-btn');
+  const cancelImportButton = page.locator('.drawer-footer .btn', {
+    hasText: '取消',
+  });
+  const importBackdrop = page.locator('.drawer-backdrop');
+  assert.match(
+    (await closeImportButton.getAttribute('aria-label')) || '',
+    /关闭\/取消：当前正在提交录入到 work manual shadow memory/,
+    'close button should expose that pending smart import is not cancelled',
+  );
+  assert.match(
+    (await cancelImportButton.getAttribute('title')) || '',
+    /关闭或取消不会撤回已发出的请求/,
+    'cancel button should expose the in-flight request boundary',
+  );
+  await closeImportButton.click();
+  assert.equal(
+    await importDrawer.isVisible(),
+    true,
+    'close button should keep drawer visible while smart import commit is pending',
+  );
+  await page
+    .locator('.import-status', {
+      hasText: '关闭或取消不会撤回已发出的请求',
+    })
+    .waitFor({ timeout: 10000 });
+  await cancelImportButton.click();
+  assert.equal(
+    await importDrawer.isVisible(),
+    true,
+    'cancel button should keep drawer visible while smart import commit is pending',
+  );
+  await importBackdrop.click({ position: { x: 4, y: 4 } });
+  assert.equal(
+    await importDrawer.isVisible(),
+    true,
+    'backdrop click should keep drawer visible while smart import commit is pending',
+  );
   const pasteBox = page.locator('textarea.paste-box');
   const scopeSelect = page.locator('.scope-row select');
   const documentSourceChip = page.locator('.source-chip', { hasText: '文档' });

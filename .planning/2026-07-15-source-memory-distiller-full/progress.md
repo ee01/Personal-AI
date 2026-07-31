@@ -1,0 +1,72 @@
+# Source Memory Distiller Full Implementation Progress
+
+## 2026-07-15
+
+- Read the repository workflow rules and the prior Source Memory Distiller rollout record.
+- Confirmed the previous implementation intentionally stopped at deterministic save-time P0 and migrated the durable contract to `docs/features/`.
+- Created an isolated planning directory without changing the shared `.planning/.active_plan` pointer.
+- Started Phase 1: inspect current runtime, storage, async processing patterns, tests, eval infrastructure, and canonical docs.
+- Confirmed the canonical P0 contract and that the existing Source Memory tables can likely host the remaining lifecycle without a parallel memory model.
+- Read the concrete P0 implementation: schema-v1 metadata, hash skip, atomic table enrichment, and synchronous save/note call sites.
+- Traced the save/resave/note flows and deterministic builders, including evidence limits, privacy states, and existing downstream seed policy.
+- Located repository-native async and LLM patterns: heartbeat scheduling, ReflectionWorker, injectable `generateJSON`, and retry/timeout support.
+- Read scheduler/heartbeat and LLM JSON contracts; identified the need for per-job persistence and strict post-LLM validation.
+- Located Source Memory migration and route/server wiring; confirmed durable SQLite jobs are needed for restart-safe per-user processing.
+- Reviewed the normalized schema and reserved migration 052 to avoid colliding with another task's untracked migration 051.
+- Recovered the original idea summary from automation memory, including fact candidates and storyline seeds in addition to the canonical deferred items.
+- Recovered the original `DistilledSourcePack` contracts and governance rules from the deleted plan patch.
+- Recovered the original persistence proposal, P1-P3 downstream scope, eval cases, risks, and non-destructive duplicate-consolidation requirement.
+- Inspected the current Source Memory detail panel and client types; confirmed deep artifacts can extend the existing receipt rather than require a new page.
+- Traced Source Memory context recall through scene framing, cue compilation, outcome policy, suppression, and clustering; identified the exact trigger-consumption and canonical-cluster gaps.
+- Checked Compose and Ask consumption: Compose inherits Context Recall evidence, while Ask requires a separate source-pack enrichment path.
+- Traced Ask's ActiveRecall-to-prompt flow and RecallEngine Source Memory reference handling to locate a provenance-preserving enrichment point.
+- Confirmed Ask's L2 renderer currently prefers raw content; selected bounded metadata mirroring plus Source Memory-specific evidence-body selection as the compatible path.
+- Reviewed ReflectionWorker validation/fallback conventions and located the existing SkillLibrary/Storyline integration points.
+- Verified Skill suggestion dedupe/non-notify primitives and the generic Coverage contribution model; identified Storyline's current single-source hard gate.
+- Reviewed Source Memory API fixtures and migration behavior; confirmed injection-block and visual-grounding cases can be tested without new harness infrastructure.
+- Inspected eval registry/dispatch and defined the required custom deterministic Source Memory Distiller runner and weekly suite registration.
+- Completed the repository-rule and dirty-overlap audit; marked additive-only files and the required verification tiers.
+- Confirmed the Source Memory API and Storyline request schema changes needed for new source kinds and source-seed drafts.
+- Completed Phase 1 and began Phase 2 with the concrete queue, grounding, privacy, clustering, Skill, Storyline, and fallback contracts.
+- Confirmed the Skill suggestion workflow/evidence/source-episode contracts and the exact Storyline discriminated-union change.
+- Detected concurrent migrations 052-054 and reserved migration 055 for this capability.
+- Completed Phase 2 and started Phase 3 implementation of the durable async worker and grounded artifact lifecycle.
+- Added migration 055 with restart-safe jobs, evidence spans, normalized artifacts, and deep-origin fields.
+- Implemented the deep worker with leases, bounded retry, privacy/injection gates, evidence-ID validation, candidate persistence, canonical source clusters, bounded recall projection, and repeated-seed Skill suggestions.
+- Enqueued deep work after every deterministic P0 snapshot and integrated bounded processing into the heartbeat without allowing worker errors to abort the cycle.
+- Passed an isolated TypeScript build for the new worker; the subsequent integrated build exposed a concurrent nullable Context Recall error to fix during Phase 4.
+- Added four focused worker tests covering ready output, invalid-span rejection, injection blocking, retry fallback, canonical clustering, and non-notifying repeated Skill suggestions.
+- Passed all 4 worker tests and all 21 existing Source Memory API tests.
+- Completed Phase 3 and started Phase 4 downstream consumption and presentation work.
+- Added scene-aware deep trigger consumption to Context Recall while keeping P0/base matches independent from deep-only terms.
+- Added bounded deep memo consumption to Ask without replacing raw source provenance.
+- Added source-memory Storyline seed drafting with evidence validation and manual-copy/no-writeback semantics.
+- Added canonical source clustering, repeated high-confidence non-notifying Skill suggestions, and Coverage derive-state reporting.
+- Added the deep lifecycle, candidate artifacts, evidence spans, policy boundaries, and polling to Source Memory detail UI.
+- Passed the extension's first `npm start` development compile and the Source Memory detail E2E, including Storyline route parameters.
+- Added seven focused worker/consumer tests; all pass.
+- Added and registered the five-case weekly `source-memory-distiller` deterministic experience eval.
+- Passed `npm run eval:validate` and the full suite; report: `.eval-runs/20260715T051126Z-source-memory-distiller-hk2g8j/report.html`.
+- Completed Phases 4 and 5; started canonical feature-documentation handoff.
+- Updated canonical Memory Capture, memory-system boundary, Ask, Memory Lens, Coverage, Storyline, Skill Foundry, and feature-index documentation.
+- Confirmed no Source Memory Distiller plan or demo remains under `docs/progressing`.
+- Completed Phase 6 and started the final regression/validation phase.
+
+## 2026-07-17
+
+- Re-audited the full non-P0 scope against P1/P2/P3, current `AGENT.md`, runtime consumers, canonical docs, and the dirty worktree.
+- Re-ran the focused backend suite on the current tree: Source Memory worker/API, Context Recall, Coverage, Ask, and Storyline tests passed.
+- Found and fixed a snapshot-refresh bug where a newly queued input hash inherited readable candidates from the prior ready deep pack.
+- Added current-succeeded-job filtering so stale-hash Skill seeds cannot count toward repeated suggestion promotion.
+- Expanded worker coverage to 13 tests: idempotency, all policy blockers, evidence grounding, Storyline, scene gating, Ask memo boundary, bounded retry terminal state, expired-lease recovery, hash refresh, stale-seed exclusion, clustering, and non-notifying Skill suggestion.
+- Added API coverage for `ai_conversation`, `document`, and `meeting_material`, plus a real `source_memory_seed` Storyline route test.
+- Added the eval suite's required `readerProof` claims and boundaries; validation passed and all five declared claims are proved in the generated report.
+- Current backend TypeScript build passed.
+- Current extension `npm start` reached `webpack 5.94.0 compiled successfully`; watch then reported host-level `EMFILE`, after the required first compile, and was stopped.
+- Current Source Memory capsule/Storyline Playwright E2E passed outside the managed sandbox.
+- Current deterministic Source Memory Distiller eval passed 5/5: `.eval-runs/20260717T071829Z-source-memory-distiller-fdv90n/report.html`.
+- The first six-ability rerun was invalid because the current repository snapshot contained 0 messages and 1 chunk. Re-ran the current branch against a fresh copy of the populated isolation source (21 messages, 937 chunks).
+- Valid six-ability result: extraction 1.00, multi-session 1.00, temporal 0.67, knowledge-update 1.00, abstention 1.00, prospective 1.00; overall 0.944. Temporal evidence was exclusively `daily_log` / `reflection_thread`, never Source Memory/deep, and all attempts used local LLM timeout fallback. Report: `.eval-runs/memory-abilities-source-memory-distiller-populated-20260717/mem-abilities-local/reader-report.json`.
+- Updated canonical Memory Capture and Skill Foundry docs with new-hash invalidation and current-job aggregation contracts.
+- Confirmed no Source Memory Distiller plan or demo remains under `docs/progressing`.
+- Completed Phase 7. The feature scope is complete; the unrelated shared temporal benchmark residual remains explicitly non-green.

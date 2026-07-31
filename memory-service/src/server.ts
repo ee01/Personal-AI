@@ -45,6 +45,7 @@ import { profileRoutes } from './routes/profile.js';
 import { agentRoutes } from './routes/agent.js';
 import { migrateRoutes } from './routes/migrate.js';
 import { contextRecallRoutes } from './routes/contextRecall.js';
+import { keystoneBriefRoutes } from './routes/keystoneBriefs.js';
 import { contextAssistRoutes } from './routes/contextAssist.js';
 import { composerAssistRoutes } from './routes/composerAssist.js';
 import { calendarEventRoutes } from './routes/calendarEvents.js';
@@ -62,6 +63,7 @@ import { notificationCenterRoutes } from './routes/notificationCenter.js';
 import { outcomeRoutes } from './routes/outcomes.js';
 import { providerRoutes } from './routes/providers.js';
 import { meetingRoutes } from './routes/meetings.js';
+import { meetingOutcomeRoutes } from './routes/meetingOutcomes.js';
 import { extractorRoutes } from './routes/extractor.js';
 import { publicSkillRoutes, skillRoutes } from './routes/skills.js';
 import { relationshipRoutes } from './routes/relationships.js';
@@ -73,7 +75,18 @@ import { sourceMemoryRoutes } from './routes/sourceMemory.js';
 import { ambientCalibrationRoutes } from './routes/ambientCalibration.js';
 import { recallRelevanceRoutes } from './routes/recallRelevance.js';
 import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js';
+import { usageRoutes } from './routes/usage.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
+import {
+  initAnalyticsStore,
+  getAnalyticsStore,
+  closeAnalyticsStore,
+} from './analytics/AnalyticsStore.js';
+import {
+  capabilityForRoute,
+  normalizeRoutePath,
+} from './analytics/capabilityMap.js';
+import { enterUsageContext } from './analytics/usageContext.js';
 
 // ---------------------------------------------------------------------------
 // App builder (exported for testing)
@@ -96,6 +109,9 @@ export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<{ app: FastifyInstance; userContextManager: UserContextManager }> {
   const config = getConfig();
+
+  // ---- Usage analytics store (standalone central DB) ----
+  initAnalyticsStore(config.dataDir);
 
   // ---- UserContextManager ----
   let userContextManager: UserContextManager;
@@ -181,6 +197,56 @@ export async function buildApp(
     app.addHook('onRequest', createAuthMiddleware(userContextManager));
   }
 
+  // ---- Usage analytics instrumentation ----
+  // Registered AFTER auth so request.userId is resolved. Enters an async usage
+  // context (side:'backend') that LLMClient reads to attribute token usage.
+  app.addHook('onRequest', async (request) => {
+    if (request.method === 'OPTIONS') return;
+    const routePath = normalizeRoutePath(
+      request.routeOptions?.url ?? request.url,
+    );
+    if (!routePath || routePath === '/health' || routePath.startsWith('/docs')) {
+      return;
+    }
+    enterUsageContext({
+      userId: request.userId,
+      capability: capabilityForRoute(routePath),
+      side: 'backend',
+      route: routePath,
+    });
+  });
+
+  // Record every /api/v1/* call into api_call_events (frequency), excluding
+  // health, docs, and the usage endpoints themselves.
+  app.addHook('onResponse', async (request, reply) => {
+    try {
+      const store = getAnalyticsStore();
+      if (!store) return;
+      if (request.method === 'OPTIONS') return;
+      const rawUrl = request.url.split('?')[0];
+      if (!rawUrl.startsWith('/api/v1/')) return;
+      const routePath = normalizeRoutePath(
+        request.routeOptions?.url ?? rawUrl,
+      );
+      if (
+        routePath === '/health' ||
+        routePath.startsWith('/docs') ||
+        routePath.startsWith('/usage')
+      ) {
+        return;
+      }
+      store.recordApiCall({
+        userId: request.userId ?? 'unknown',
+        capability: capabilityForRoute(routePath),
+        route: routePath,
+        method: request.method,
+        status: reply.statusCode,
+      });
+    } catch {
+      // best-effort: analytics must never break the response path
+    }
+  });
+
   // ---- Routes ----
   // Routes now get db from request.userContext.db (set by auth middleware)
   await app.register(
@@ -207,6 +273,7 @@ export async function buildApp(
       await instance.register(agentRoutes);
       await instance.register(migrateRoutes);
       await instance.register(contextRecallRoutes);
+      await instance.register(keystoneBriefRoutes);
       await instance.register(contextAssistRoutes);
       await instance.register(composerAssistRoutes);
       await instance.register(calendarEventRoutes);
@@ -224,6 +291,7 @@ export async function buildApp(
       await instance.register(outcomeRoutes);
       await instance.register(providerRoutes);
       await instance.register(meetingRoutes);
+      await instance.register(meetingOutcomeRoutes);
       await instance.register(extractorRoutes);
       await instance.register(relationshipRoutes);
       await instance.register(skillRoutes);
@@ -235,6 +303,7 @@ export async function buildApp(
       await instance.register(ambientCalibrationRoutes);
       await instance.register(recallRelevanceRoutes);
       await instance.register(evidenceWatchContractRoutes);
+      await instance.register(usageRoutes);
     },
     { prefix: '/api/v1' },
   );
@@ -271,6 +340,7 @@ async function main(): Promise<void> {
     scheduler.stop();
     await app.close();
     userContextManager.closeAll();
+    closeAnalyticsStore();
     console.log('[server] Closed all user contexts and server. Goodbye.');
     process.exit(0);
   };

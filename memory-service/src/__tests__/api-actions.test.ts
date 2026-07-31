@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildApp } from '../server.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { ActionReadinessService } from '../core/ActionReadinessService.js';
 import { getTestDb } from './setup.js';
 
 describe('Action API', () => {
@@ -18,6 +19,8 @@ describe('Action API', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM action_readiness_links').run();
+    db.prepare('DELETE FROM action_readiness_contracts').run();
     db.prepare('DELETE FROM proposed_action_attempts').run();
     db.prepare('DELETE FROM proposed_actions').run();
   });
@@ -71,5 +74,62 @@ describe('Action API', () => {
         },
       ],
     });
+  });
+
+  it('returns readiness receipts and refuses retry while a contract is blocked', async () => {
+    const repo = new ActionRepository(db);
+    const action = repo.create({
+      id: 'action-readiness-blocked',
+      actionType: 'delegate_openclaw',
+      title: '查询 Jira 发布状态',
+      params: {
+        task: '查询 ORB-123。',
+        mode: 'read',
+        targetSystem: 'jira',
+      },
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    new ActionReadinessService(db).recordDelegationOutcome(action, {
+      status: 'auth_error',
+      summary: 'OpenClaw authorization failed.',
+      artifacts: [],
+      payload: { httpStatus: 401 },
+    });
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/actions?actionId=action-readiness-blocked',
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toMatchObject({
+      readinessSummary: {
+        status: 'blocked',
+        blockedContractCount: 1,
+      },
+      items: [
+        {
+          id: 'action-readiness-blocked',
+          readinessReceipt: {
+            status: expect.stringMatching(/^blocked_/),
+            dispatchState: 'dispatched',
+          },
+        },
+      ],
+    });
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/actions/action-readiness-blocked/retry',
+    });
+    expect(retryResponse.statusCode).toBe(409);
+    expect(retryResponse.json()).toMatchObject({
+      code: 'readiness_blocked',
+      readinessReceipt: {
+        status: expect.stringMatching(/^blocked_/),
+      },
+    });
+    expect(repo.getById(action.id)?.queueStatus).toBe('failed');
   });
 });

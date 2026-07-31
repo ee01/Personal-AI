@@ -5,6 +5,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildApp } from '../server.js';
 import { DayPilotService } from '../core/DayPilotService.js';
+import { OpenQuestionExitContractService } from '../core/OpenQuestionExitContractService.js';
 import { getTestDb } from './setup.js';
 
 describe('Day Pilot API', () => {
@@ -24,6 +25,8 @@ describe('Day Pilot API', () => {
 
   beforeEach(() => {
     for (const table of [
+      'open_question_exit_runs',
+      'open_question_exit_contracts',
       'rehearsal_activations',
       'rehearsals',
       'today_meeting_preps',
@@ -335,6 +338,111 @@ describe('Day Pilot API', () => {
     });
     expect(alias.statusCode).toBe(200);
     expect(alias.json().brief.id).toBe(body.brief.id);
+  });
+
+  it('shows only new-evidence-resumed managed questions in Today Pilot', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    const insertThread = db.prepare(
+      `INSERT INTO reflection_threads
+        (id, topic_key, title, status, priority, salience, source_type,
+         current_hypothesis, open_questions_json, latest_summary,
+         next_reflection_at, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', 9, 0.86, 'reflection', ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(
+      'reflection-exit-parked',
+      'release:parked',
+      'Parked release question',
+      '没有新增证据。',
+      JSON.stringify(['今天发布前需要谁确认 owner？']),
+      '相同问题再次出现。',
+      current - 60,
+      current - 3600,
+      current - 60,
+    );
+    insertThread.run(
+      'reflection-exit-resumed',
+      'release:resumed',
+      'Resumed release blocker',
+      '新的动作结果可能解除发布阻塞。',
+      JSON.stringify(['今天发布 blocker 是否已经解除？']),
+      '等待复核新增动作结果。',
+      current - 60,
+      current - 3600,
+      current - 10,
+    );
+
+    const exitService = new OpenQuestionExitContractService(db);
+    exitService.evaluate({
+      sourceKind: 'reflection_thread',
+      sourceRefId: 'reflection-exit-parked',
+      subjectKey: 'release:parked',
+      questions: ['今天发布前需要谁确认 owner？'],
+      evidenceRefs: ['message:parked-v1'],
+      priority: 9,
+      salience: 0.86,
+      currentTime: current - 120,
+    });
+    exitService.evaluate({
+      sourceKind: 'reflection_thread',
+      sourceRefId: 'reflection-exit-parked',
+      subjectKey: 'release:parked',
+      questions: ['今天发布前需要谁确认 owner？'],
+      evidenceRefs: ['message:parked-v1'],
+      priority: 9,
+      salience: 0.86,
+      currentTime: current - 60,
+    });
+    const initialResumed = exitService.evaluate({
+      sourceKind: 'reflection_thread',
+      sourceRefId: 'reflection-exit-resumed',
+      subjectKey: 'release:resumed',
+      questions: ['今天发布 blocker 是否已经解除？'],
+      evidenceRefs: ['message:blocker-v1'],
+      priority: 9,
+      salience: 0.86,
+      currentTime: current - 120,
+    });
+    exitService.linkActionOwner(
+      initialResumed.primaryDecision!.contract.id,
+      'action-release-check',
+    );
+    exitService.resumeForSource({
+      sourceKind: 'reflection_thread',
+      sourceRefId: 'reflection-exit-resumed',
+      reasonCode: 'action_result_available',
+      evidenceRefs: ['action_result:release-check-v2'],
+      currentTime: current - 10,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/day-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const cards = res.json().brief.cards as any[];
+    const resumedCard = cards.find((card) =>
+      card.evidenceRefs.some(
+        (ref: any) => ref.sourceId === 'reflection-exit-resumed',
+      ),
+    );
+    expect(resumedCard).toBeTruthy();
+    expect(resumedCard.whyNow).toContain('新证据恢复');
+    expect(resumedCard.nextBestAction).toContain('复核新增证据');
+    expect(resumedCard.contextPack.openQuestionExitReceipt).toMatchObject({
+      label: '新证据已恢复',
+      state: 'active',
+      userImpact: 'blocking_today',
+    });
+    expect(
+      cards.some((card) =>
+        card.evidenceRefs.some(
+          (ref: any) => ref.sourceId === 'reflection-exit-parked',
+        ),
+      ),
+    ).toBe(false);
   });
 
   it('filters high-importance messages without a concrete today action', async () => {

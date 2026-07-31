@@ -479,6 +479,19 @@ try {
   await detailPanel.getByText('来源证据').waitFor({ timeout: 10000 });
   await detailPanel.getByText('消息', { exact: true }).waitFor({ timeout: 10000 });
   await detailPanel.getByText('colin', { exact: true }).waitFor({ timeout: 10000 });
+  const colinEvidenceRow = detailPanel
+    .locator('.evidence-row')
+    .filter({ hasText: 'colin' });
+  assert.match(
+    (await colinEvidenceRow.getAttribute('title')) || '',
+    /这里只展示当前 Rehearsal 的审计来源线索/,
+    'source evidence row should expose audit-only provenance in hover text',
+  );
+  assert.match(
+    (await colinEvidenceRow.getAttribute('aria-label')) || '',
+    /不会打开来源、重新读取详情、标记反馈、改状态、写外部系统或执行预演脚本/,
+    'source evidence row should expose no-read-no-write boundary to screen readers',
+  );
   await detailPanel
     .getByText('当前因有效期过期而降权；重新激活会清除过期时间并重新参与匹配。')
     .waitFor({ timeout: 10000 });

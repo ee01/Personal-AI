@@ -160,18 +160,18 @@ async function startMemoryFixtureServer() {
       }
       if (phase === 'load-all-failure' && !statusFilter) {
         profileItemRequests.push(requestRecord);
-        await delay(400);
+        await delay(1200);
         sendError(res, 503, { error: 'fixture load-all profile unavailable' });
         return;
       }
       if (phase === 'load-all' && offset === 0) {
-        await delay(400);
+        await delay(1200);
       }
       if (phase === 'export' && offset === 0) {
-        await delay(400);
+        await delay(1200);
       }
       if (phase === 'retracted-list' && statusFilter === 'retracted' && offset === 0) {
-        await delay(400);
+        await delay(1200);
       }
       const visibleProfileItems = statusFilter === 'all'
         ? allProfileItems
@@ -193,7 +193,7 @@ async function startMemoryFixtureServer() {
     if (url.pathname === '/api/v1/profile/items' && req.method === 'POST') {
       const body = await readJsonBody(req);
       if (phase === 'create-pending-receipt') {
-        await delay(400);
+        await delay(1200);
       }
       profileMutations.push({ type: 'create', body });
       const created = {
@@ -232,7 +232,7 @@ async function startMemoryFixtureServer() {
         (phase === 'influence-undo' && id === 'profile-export-999') ||
         (phase === 'influence-update-failure' && id === 'profile-export-997')
       ) {
-        await delay(400);
+        await delay(1200);
       }
       if (phase === 'influence-update-failure' && id === 'profile-export-997') {
         profileMutations.push({ type: 'update-failed', id, body });
@@ -258,7 +258,7 @@ async function startMemoryFixtureServer() {
         return;
       }
       if (phase === 'retract-pending-receipt' && id === 'profile-export-999') {
-        await delay(400);
+        await delay(1200);
       }
       item.status = 'retracted';
       profileMutations.push({ type: 'delete', id });
@@ -276,7 +276,7 @@ async function startMemoryFixtureServer() {
         return;
       }
       if (phase === 'confirm-pending-receipt' && id === 'profile-export-990') {
-        await delay(400);
+        await delay(1200);
       }
       if (phase === 'boost-confirm-failure' && id === 'profile-export-996') {
         profileMutations.push({ type: 'confirm-failed', id });
@@ -300,7 +300,7 @@ async function startMemoryFixtureServer() {
         return;
       }
       if (phase === 'restore-pending-receipt' && id === 'profile-export-999') {
-        await delay(400);
+        await delay(1200);
       }
       item.status = item.userConfirmed ? 'active' : 'pending_confirm';
       profileMutations.push({ type: 'restore', id, status: item.status });
@@ -556,6 +556,24 @@ try {
   const predictionLowerButton = page.locator('.prediction-item', {
     hasText: 'Zzz Boost Pending Project',
   }).locator('button.influence-action-btn', { hasText: '降低影响' });
+  const predictionConfirmButton = page.locator('.prediction-item', {
+    hasText: 'Zzz Boost Pending Project',
+  }).locator('button.secondary-action-btn', { hasText: '确认' });
+  const predictionRetractButton = page.locator('.prediction-item', {
+    hasText: 'Zzz Boost Pending Project',
+  }).locator('button.danger-action-btn', { hasText: '排除' });
+  await assertAttributeMatches(
+    predictionConfirmButton,
+    'aria-label',
+    /确认 Zzz Boost Pending Project：会请求 Memory Service 将这条画像切换为 active \+ confirmed。这是待确认推断队列中的画像状态操作。服务确认后才可能按场景进入 USER_CORE、召回、Compose Assist 和 provider context/,
+    'prediction confirm button should expose active-confirmed write boundary',
+  );
+  await assertAttributeMatches(
+    predictionRetractButton,
+    'title',
+    /排除 Zzz Boost Pending Project：会请求 Memory Service 将这条画像标记为 retracted。这是待确认推断队列中的画像状态操作。服务确认后会离开待确认\/画像列表候选，并继续不进入 USER_CORE、召回或 provider context/,
+    'prediction retract button should expose retracted-state boundary for unconfirmed items',
+  );
   await assertAttributeMatches(
     predictionLowerButton,
     'aria-label',
@@ -1320,7 +1338,20 @@ try {
     hasText: 'Export Project 990',
   });
   await confirmTargetRow.waitFor({ timeout: 10000 });
-  await confirmTargetRow.locator('button.secondary-action-btn', { hasText: '确认' }).click();
+  const confirmTargetButton = confirmTargetRow.locator('button.secondary-action-btn', { hasText: '确认' });
+  await assertAttributeMatches(
+    confirmTargetButton,
+    'aria-label',
+    /确认 Export Project 990：会请求 Memory Service 将这条画像切换为 active \+ confirmed。这是画像条目列表中的画像状态操作。服务确认后才可能按场景进入 USER_CORE、召回、Compose Assist 和 provider context/,
+    'profile row confirm button should expose active-confirmed write boundary',
+  );
+  await assertAttributeMatches(
+    confirmTargetButton,
+    'title',
+    /服务确认后才可能按场景进入 USER_CORE、召回、Compose Assist 和 provider context；2 条证据会保留；不会改旧回答、刷新或删除证据/,
+    'profile row confirm hover should include evidence-retention and non-effect boundary',
+  );
+  await confirmTargetButton.click();
   await page.locator('.status-message', {
     hasText: '正在确认画像条目',
   }).waitFor({ timeout: 10000 });
@@ -1613,7 +1644,20 @@ try {
   });
 
   phase = 'retract-pending-receipt';
-  await undoTargetRow.locator('button.danger-action-btn').click();
+  const undoTargetRetractButton = undoTargetRow.locator('button.danger-action-btn');
+  await assertAttributeMatches(
+    undoTargetRetractButton,
+    'aria-label',
+    /排除 Export Project 999：会请求 Memory Service 将这条画像标记为 retracted。这是画像条目列表中的画像状态操作。服务确认后才会退出 USER_CORE、召回和 provider context 候选/,
+    'profile row retract button should expose retracted-state write boundary',
+  );
+  await assertAttributeMatches(
+    undoTargetRetractButton,
+    'title',
+    /2 条证据会保留用于已排除审计，误排可撤销或稍后恢复；不会改旧回答、刷新或删除证据、确认画像、外发、跨平台同步、导出或发送内容/,
+    'profile row retract hover should include audit recovery and non-effect boundary',
+  );
+  await undoTargetRetractButton.click();
   await page.locator('.status-message', {
     hasText: '正在排除画像条目',
   }).waitFor({ timeout: 10000 });
@@ -1644,7 +1688,14 @@ try {
   });
 
   phase = 'restore-pending-receipt';
-  await page.locator('.status-action-btn', { hasText: '撤销排除' }).click();
+  const undoRetractButton = page.locator('.status-action-btn', { hasText: '撤销排除' });
+  await assertAttributeMatches(
+    undoRetractButton,
+    'aria-label',
+    /恢复 Export Project 999：会请求 Memory Service 按原确认状态恢复为 active 或 pending_confirm。.*只有 active \+ confirmed 才会再次进入 USER_CORE、召回或 provider context/,
+    'undo-retract button should expose restore state and personalization boundary',
+  );
+  await undoRetractButton.click();
   await page.locator('.status-message', {
     hasText: '正在恢复画像条目',
   }).waitFor({ timeout: 10000 });
@@ -1760,9 +1811,16 @@ try {
     },
   ]);
 
-  await page.locator('.retracted-profile-section button.secondary-action-btn', {
+  const retractedRestoreButton = page.locator('.retracted-profile-section button.secondary-action-btn', {
     hasText: '恢复',
-  }).click();
+  });
+  await assertAttributeMatches(
+    retractedRestoreButton,
+    'title',
+    /恢复 Archived Project Alpha：会请求 Memory Service 按原确认状态恢复为 active 或 pending_confirm。这条原本已确认，恢复成功后才可能重新按场景进入个性化。只有 active \+ confirmed 才会再次进入 USER_CORE、召回或 provider context/,
+    'retracted audit restore button should expose restore and active-confirmed boundary',
+  );
+  await retractedRestoreButton.click();
   await page.locator('.status-message.success', {
     hasText: '已恢复“Archived Project Alpha”',
   }).waitFor({ timeout: 10000 });

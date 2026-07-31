@@ -4,6 +4,7 @@
  */
 
 import { callLLMJsonAPI } from './llm';
+import { CAPABILITIES } from './analytics/capabilities';
 import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { getIndependentUserConfig } from './services/UserConfigStore';
 import {
@@ -2509,7 +2510,12 @@ ${context}
 请确保返回有效的JSON格式。`;
 
     try {
-      const response = await callLLMJsonAPI({ prompt, type: 'query' });
+      const response = await callLLMJsonAPI({
+        prompt,
+        type: 'query',
+        capability: CAPABILITIES.AGENT_THINKING,
+        feature: 'webpage_initial_analysis',
+      });
       return response;
     } catch (error) {
       console.error('网页初始分析失败:', error);
@@ -2756,7 +2762,12 @@ ${this.getToolSafetyPromptGuidance()}
 请确保返回有效的JSON。`;
 
     try {
-      return await callLLMJsonAPI({ prompt, type: 'query' });
+      return await callLLMJsonAPI({
+        prompt,
+        type: 'query',
+        capability: CAPABILITIES.AGENT_THINKING,
+        feature: 'webpage_thinking',
+      });
     } catch (error) {
       console.error('网页思考决策失败:', error);
       return {
@@ -3337,6 +3348,8 @@ ${this.getToolSafetyPromptGuidance()}
       const analysis = await callLLMJsonAPI({
         prompt: analysisPrompt,
         type: 'analysis',
+        capability: CAPABILITIES.AGENT_THINKING,
+        feature: 'message_analysis',
       });
 
       return analysis;
@@ -4467,6 +4480,8 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       const thoughtResult = await callLLMJsonAPI({
         prompt: thinkPrompt,
         type: 'think',
+        capability: CAPABILITIES.AGENT_THINKING,
+        feature: 'thinking',
       });
 
       return thoughtResult;

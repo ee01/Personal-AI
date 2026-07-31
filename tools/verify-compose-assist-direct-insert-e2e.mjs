@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import playwright from '../desktop-app/node_modules/playwright/index.js';
 
 const { chromium } = playwright;
+const require = createRequire(import.meta.url);
+const ts = require('typescript');
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -15,6 +18,30 @@ const contentScriptPath = path.join(
   repoRoot,
   'dist/contentScriptWebIntelligence.js',
 );
+const siteContextAdaptersModule = ts.transpileModule(
+  fs.readFileSync(
+    path.join(repoRoot, 'src/composer-guard/siteContextAdapters.ts'),
+    'utf8',
+  ),
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2020,
+      target: ts.ScriptTarget.ES2020,
+    },
+  },
+).outputText;
+const contextRecallGuardsModule = ts.transpileModule(
+  fs.readFileSync(
+    path.join(repoRoot, 'src/web-intelligence/contextRecallGuards.ts'),
+    'utf8',
+  ),
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2020,
+      target: ts.ScriptTarget.ES2020,
+    },
+  },
+).outputText;
 
 if (!fs.existsSync(contentScriptPath)) {
   throw new Error(
@@ -23,6 +50,7 @@ if (!fs.existsSync(contentScriptPath)) {
 }
 
 const fixtureUrl = 'https://chatgpt.com/c/pai-compose-direct-insert';
+const jiraFixtureUrl = 'https://jira.example.test/browse/MTR-148115';
 
 const fixtureHtml = `<!doctype html>
 <html>
@@ -39,13 +67,42 @@ const fixtureHtml = `<!doctype html>
   <body>
     <main>
       <article data-message-author-role="user">Help me ask for the Factory AI rollout status.</article>
+      <button id="outside-focus" type="button">Outside composer</button>
       <div class="composer-shell">
+        <div role="toolbar" aria-label="Formatting toolbar">
+          <button id="format-bold" type="button" aria-label="Format bold">Bold</button>
+        </div>
         <div
           id="prompt-textarea"
           contenteditable="true"
           role="textbox"
           data-testid="composer-textarea"
         ></div>
+        <button id="send-prompt" type="button" aria-label="Send prompt">Send</button>
+      </div>
+    </main>
+  </body>
+</html>`;
+
+const jiraRichFrameFixtureHtml = `<!doctype html>
+<html>
+  <head>
+    <title>MTR-148115 - Rich editor blur</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      iframe { width: 640px; height: 120px; border: 1px solid #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="summary-val">Verify rich iframe Compose Assist blur</h1>
+      <div id="description-val">MTR-148115 needs a concise Jira comment.</div>
+      <button id="outside-focus" type="button">Outside editor</button>
+      <div id="addcomment">
+        <iframe
+          id="mce_1_ifr"
+          srcdoc='<!doctype html><html><body contenteditable="true" style="min-height:90px">Rich iframe original</body></html>'
+        ></iframe>
       </div>
     </main>
   </body>
@@ -103,12 +160,44 @@ function installChromeStub(page) {
             window.__paiComposeAssistRequests.push(message.request);
             const draftText = message.request?.draftText || '';
             const highRiskSourceCase = /High risk source/i.test(draftText);
+            const rewriteCase = /Rewrite complete prompt/i.test(draftText);
+            const invalidRewriteModeCase = /Rewrite missing mode/i.test(
+              draftText,
+            );
             return respond(callback, {
               success: true,
-              result: highRiskSourceCase
+              result: invalidRewriteModeCase
+                ? {
+                    available: true,
+                    suggestionType: 'rewrite_prompt',
+                    title: 'Invalid rewrite mode',
+                    insertText: 'This full rewrite must never be appended.',
+                    evidence: [],
+                    riskLevel: 'medium',
+                    previewRequired: true,
+                    confidence: 0.9,
+                    queryTimeMs: 1,
+                  }
+                : rewriteCase
+                ? {
+                    available: true,
+                    suggestionType: 'rewrite_prompt',
+                    insertMode: 'replace_draft',
+                    title: 'Optimized complete prompt',
+                    summary: 'Reframed the full task.',
+                    insertText:
+                      'Optimized complete prompt\n\nKeep every stated fact, compare the evidence, and separate general findings from the final decision.',
+                    evidence: [],
+                    riskLevel: 'medium',
+                    previewRequired: true,
+                    confidence: 0.9,
+                    queryTimeMs: 1,
+                  }
+                : highRiskSourceCase
                 ? {
                     available: true,
                     suggestionType: 'context_pack',
+                    insertMode: 'append_patch',
                     title: 'Sensitive context pack',
                     summary: 'Found matching private memory.',
                     insertText: '请先内部核对后再外发这段敏感上下文。',
@@ -135,6 +224,7 @@ function installChromeStub(page) {
                 : {
                     available: true,
                     suggestionType: 'context_pack',
+                    insertMode: 'append_patch',
                     title: 'AI context pack',
                     summary: 'Found matching memory.',
                     insertText:
@@ -236,6 +326,259 @@ function installChromeStub(page) {
   });
 }
 
+async function blurComposer(page) {
+  await page.locator('#outside-focus').click();
+}
+
+async function verifyRichIframeBlur(context) {
+  const page = await context.newPage();
+  await page.route(jiraFixtureUrl, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: jiraRichFrameFixtureHtml,
+    }),
+  );
+  await installChromeStub(page);
+  await page.goto(jiraFixtureUrl);
+  await page.addScriptTag({ path: contentScriptPath });
+  const editor = page.frameLocator('#mce_1_ifr').locator('body');
+  await editor.click();
+  await editor.fill('Rich iframe blur prompt');
+  await page.waitForTimeout(900);
+  assert.equal(
+    await page.evaluate(() => window.__paiComposeAssistRequests.length),
+    0,
+    'rich iframe focus/input must not request Compose Assist',
+  );
+  await page.locator('#outside-focus').click();
+  await page.waitForFunction(
+    () => window.__paiComposeAssistRequests.length === 1,
+    null,
+    { timeout: 6000 },
+  );
+  const request = await page.evaluate(() => window.__paiComposeAssistRequests[0]);
+  assert.equal(request.contextType, 'jira_issue');
+  assert.equal(request.draftText, 'Rich iframe blur prompt');
+  await page.close();
+}
+
+async function verifyReplacementTargets(context) {
+  const page = await context.newPage();
+  const fixtureRoot = 'https://compose-targets.test';
+  await page.route(`${fixtureRoot}/**`, (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/composer-guard/siteContextAdapters.js') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/javascript',
+        body: siteContextAdaptersModule,
+      });
+    }
+    if (pathname === '/web-intelligence/contextRecallGuards.js') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/javascript',
+        body: contextRecallGuardsModule,
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `<!doctype html>
+        <html><body>
+          <textarea id="textarea">Textarea original</textarea>
+          <input id="input" type="text" value="Input original" />
+          <div id="editable" contenteditable="true"><strong>Editable</strong> original</div>
+          <div id="comment-editor"><iframe id="mce_1_ifr"></iframe></div>
+        </body></html>`,
+    });
+  });
+  await page.goto(`${fixtureRoot}/index.html`);
+  await page.locator('#mce_1_ifr').evaluate((frame) => {
+    frame.srcdoc =
+      '<!doctype html><html><body contenteditable="true"><em>Frame</em> original</body></html>';
+  });
+  await page.waitForFunction(
+    () =>
+      document.querySelector('#mce_1_ifr')?.contentDocument?.readyState ===
+      'complete',
+  );
+
+  const results = await page.evaluate(async () => {
+    const adapter = await import(
+      '/composer-guard/siteContextAdapters.js'
+    );
+    const replacement = 'Replacement line one\n\nReplacement line two';
+    const setTextSelection = (element, start, end, ownerDocument = document) => {
+      const walker = ownerDocument.createTreeWalker(
+        element,
+        ownerDocument.defaultView.NodeFilter.SHOW_TEXT,
+      );
+      const nodes = [];
+      let current = walker.nextNode();
+      while (current) {
+        nodes.push(current);
+        current = walker.nextNode();
+      }
+      const resolve = (offset) => {
+        let remaining = offset;
+        for (const node of nodes) {
+          if (remaining <= node.data.length) {
+            return { node, offset: remaining };
+          }
+          remaining -= node.data.length;
+        }
+        const last = nodes.at(-1);
+        return last
+          ? { node: last, offset: last.data.length }
+          : { node: element, offset: 0 };
+      };
+      const startBoundary = resolve(start);
+      const endBoundary = resolve(end);
+      const range = ownerDocument.createRange();
+      range.setStart(startBoundary.node, startBoundary.offset);
+      range.setEnd(endBoundary.node, endBoundary.offset);
+      const selection = ownerDocument.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    };
+    const readTextSelection = (element, ownerDocument = document) => {
+      const selection = ownerDocument.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      const beforeStart = ownerDocument.createRange();
+      beforeStart.selectNodeContents(element);
+      beforeStart.setEnd(range.startContainer, range.startOffset);
+      const beforeEnd = ownerDocument.createRange();
+      beforeEnd.selectNodeContents(element);
+      beforeEnd.setEnd(range.endContainer, range.endOffset);
+      return [beforeStart.toString().length, beforeEnd.toString().length];
+    };
+    const verifyTarget = (target, configureSelection, readValue) => {
+      const events = [];
+      const eventElement =
+        target.kind === 'richiframe'
+          ? target.element.contentDocument.body
+          : target.element;
+      eventElement.addEventListener('input', (event) => {
+        events.push(`input:${event.inputType || ''}`);
+      });
+      eventElement.addEventListener('change', () => events.push('change'));
+      configureSelection();
+      const before = adapter.captureComposerTextSnapshot(target);
+      const replaced = adapter.replaceComposerText(target, replacement);
+      const afterReplace = readValue();
+      const replaceSelection =
+        target.kind === 'textarea' || target.kind === 'input'
+          ? [target.element.selectionStart, target.element.selectionEnd]
+          : target.kind === 'richiframe'
+            ? readTextSelection(
+                target.element.contentDocument.body,
+                target.element.contentDocument,
+              )
+            : readTextSelection(target.element);
+      const restored = adapter.restoreComposerTextSnapshot(target, before);
+      const afterRestore = readValue();
+      const restoredSelection =
+        target.kind === 'textarea' || target.kind === 'input'
+          ? [target.element.selectionStart, target.element.selectionEnd]
+          : target.kind === 'richiframe'
+            ? readTextSelection(
+                target.element.contentDocument.body,
+                target.element.contentDocument,
+              )
+            : readTextSelection(target.element);
+      return {
+        replaced,
+        restored,
+        afterReplace,
+        afterRestore,
+        replaceSelection,
+        restoredSelection,
+        events,
+      };
+    };
+
+    const textarea = document.querySelector('#textarea');
+    const input = document.querySelector('#input');
+    const editable = document.querySelector('#editable');
+    const frame = document.querySelector('#mce_1_ifr');
+    const frameBody = frame.contentDocument.body;
+    return {
+      replacement,
+      textarea: verifyTarget(
+        { element: textarea, kind: 'textarea', mode: 'prompt' },
+        () => textarea.setSelectionRange(2, 7),
+        () => textarea.value,
+      ),
+      input: verifyTarget(
+        { element: input, kind: 'input', mode: 'prompt' },
+        () => input.setSelectionRange(1, 5),
+        () => input.value,
+      ),
+      contenteditable: verifyTarget(
+        { element: editable, kind: 'contenteditable', mode: 'prompt' },
+        () => setTextSelection(editable, 2, 8),
+        () => ({ html: editable.innerHTML, text: editable.textContent }),
+      ),
+      richiframe: verifyTarget(
+        { element: frame, kind: 'richiframe', mode: 'comment' },
+        () => setTextSelection(frameBody, 1, 4, frame.contentDocument),
+        () => ({ html: frameBody.innerHTML, text: frameBody.textContent }),
+      ),
+    };
+  });
+
+  for (const key of ['textarea', 'input', 'contenteditable', 'richiframe']) {
+    const result = results[key];
+    const replacedText =
+      typeof result.afterReplace === 'string'
+        ? result.afterReplace
+        : result.afterReplace.text;
+    assert.equal(result.replaced, true, `${key} must accept full replacement`);
+    assert.equal(result.restored, true, `${key} must restore its snapshot`);
+    assert.deepEqual(
+      result.replaceSelection,
+      [replacedText.length, replacedText.length],
+      `${key} replacement cursor must end at the new draft tail`,
+    );
+    assert.ok(
+      result.events.includes('input:insertReplacementText'),
+      `${key} must emit insertReplacementText`,
+    );
+    assert.ok(result.events.includes('change'), `${key} must emit change`);
+  }
+  assert.equal(results.textarea.afterReplace, results.replacement);
+  assert.equal(results.textarea.afterRestore, 'Textarea original');
+  assert.deepEqual(results.textarea.restoredSelection, [2, 7]);
+  assert.equal(
+    results.input.afterReplace,
+    results.replacement.replace(/\n/g, ''),
+  );
+  assert.equal(results.input.afterRestore, 'Input original');
+  assert.deepEqual(results.input.restoredSelection, [1, 5]);
+  assert.deepEqual(results.contenteditable.afterReplace, {
+    html: results.replacement,
+    text: results.replacement,
+  });
+  assert.deepEqual(results.contenteditable.afterRestore, {
+    html: '<strong>Editable</strong> original',
+    text: 'Editable original',
+  });
+  assert.deepEqual(results.contenteditable.restoredSelection, [2, 8]);
+  assert.deepEqual(results.richiframe.afterReplace, {
+    html: results.replacement,
+    text: results.replacement,
+  });
+  assert.deepEqual(results.richiframe.afterRestore, {
+    html: '<em>Frame</em> original',
+    text: 'Frame original',
+  });
+  assert.deepEqual(results.richiframe.restoredSelection, [1, 4]);
+  await page.close();
+}
+
 async function main() {
   const userDataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'pai-compose-direct-insert-'),
@@ -259,6 +602,22 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
 
     await page.locator('#prompt-textarea').click();
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests?.length || 0),
+      0,
+      'focus alone must not request Compose Assist',
+    );
+    await page
+      .locator('#prompt-textarea')
+      .fill('Factory AI rollout status prompt');
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests?.length || 0),
+      0,
+      'input changes must not request Compose Assist before blur',
+    );
+    await blurComposer(page);
     await page.waitForFunction(
       () => window.__paiComposeAssistRequests?.length >= 1,
       null,
@@ -268,13 +627,21 @@ async function main() {
       () => window.__paiComposeAssistRequests,
     );
     assert.equal(requests[0].contextType, 'web_agent_prompt');
+    assert.equal(requests[0].draftText, 'Factory AI rollout status prompt');
     assert.equal(requests[0].sourceTypes.includes('chatgpt'), false);
-    assert.ok(requests[0].sourceTypes.includes('user_core'));
     assert.ok(requests[0].sourceTypes.includes('markdown'));
     assert.ok(requests[0].sourceTypes.includes('reflection'));
     assert.ok(requests[0].sourceTypes.includes('reflection_thread'));
     assert.ok(requests[0].sourceTypes.includes('source_memory'));
     assert.ok(requests[0].sourceTypes.includes('calendar'));
+    await page.locator('#prompt-textarea').click();
+    await blurComposer(page);
+    await page.waitForTimeout(300);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      1,
+      'the same contextKey + draftRevision must only request once',
+    );
 
     const controlsBeforeClick = await page.evaluate(() => ({
       copyButtons: document.querySelectorAll('[data-action="copy"]').length,
@@ -371,7 +738,7 @@ async function main() {
       .innerText();
     assert.equal(
       composerTextBeforeConfirm.trim(),
-      '',
+      'Factory AI rollout status prompt',
       'preview-required suggestions must not mutate the draft on the first click',
     );
     await page
@@ -386,7 +753,7 @@ async function main() {
     const undoReceiptText = await page
       .locator('.pai-composer-guard-undo-toast')
       .innerText();
-    assert.match(undoReceiptText, /已插入草稿/);
+    assert.match(undoReceiptText, /已追加上下文/);
     assert.match(undoReceiptText, /未发送，可继续编辑/);
     assert.match(undoReceiptText, /写入目标：外部 AI context pack/);
     assert.match(undoReceiptText, /没有提交 prompt、没有发送给外部 AI/);
@@ -439,8 +806,134 @@ async function main() {
 
     await page.goto(fixtureUrl);
     await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').fill('Toolbar focus boundary prompt');
+    await page.locator('#format-bold').click();
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      0,
+      'moving focus into the formatting toolbar must not count as blur',
+    );
+    await page.locator('#prompt-textarea').click();
+    await blurComposer(page);
+    await page.waitForFunction(
+      () => window.__paiComposeAssistRequests.length === 1,
+      null,
+      { timeout: 6000 },
+    );
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').fill('Send suppression prompt');
+    await page.locator('#send-prompt').click();
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      0,
+      'pointerdown on Send must suppress the focusout request',
+    );
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    const rewriteOriginal = 'Rewrite complete prompt with original facts';
+    await page.locator('#prompt-textarea').click();
+    await page.locator('#prompt-textarea').fill(rewriteOriginal);
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      0,
+      'rewrite requests must also wait for blur',
+    );
+    await blurComposer(page);
+    await page.locator('.pai-composer-guard-icon-button').waitFor({
+      state: 'visible',
+      timeout: 6000,
+    });
+    assert.equal(
+      await page.locator('.pai-composer-guard-label').innerText(),
+      '优化后的完整提问',
+    );
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    const rewriteConfirm = page.locator('[data-action="confirm-insert"]');
+    await rewriteConfirm.waitFor({ state: 'visible', timeout: 3000 });
+    assert.equal(await rewriteConfirm.innerText(), '替换原 prompt');
+    assert.equal(
+      (await page.locator('#prompt-textarea').innerText()).trim(),
+      rewriteOriginal,
+      'rewrite preview must not change the original draft',
+    );
+    await page.locator('#prompt-textarea').evaluate((element) => {
+      window.__paiReplacementInputTypes = [];
+      window.__paiReplacementChangeCount = 0;
+      element.addEventListener('input', (event) => {
+        window.__paiReplacementInputTypes.push(event.inputType || '');
+      });
+      element.addEventListener('change', () => {
+        window.__paiReplacementChangeCount += 1;
+      });
+    });
+    await rewriteConfirm.dispatchEvent('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+    });
+    const rewrittenComposerText = (
+      await page.locator('#prompt-textarea').innerText()
+    ).trim();
+    assert.equal(
+      rewrittenComposerText,
+      'Optimized complete prompt\n\nKeep every stated fact, compare the evidence, and separate general findings from the final decision.',
+    );
+    assert.doesNotMatch(rewrittenComposerText, /Rewrite complete prompt/);
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        inputTypes: window.__paiReplacementInputTypes,
+        changeCount: window.__paiReplacementChangeCount,
+      })),
+      {
+        inputTypes: ['insertReplacementText'],
+        changeCount: 1,
+      },
+    );
+    const rewriteUndoReceipt = await page
+      .locator('.pai-composer-guard-undo-toast')
+      .innerText();
+    assert.match(rewriteUndoReceipt, /已替换原 prompt/);
+    assert.match(rewriteUndoReceipt, /没有提交 prompt、没有发送给外部 AI/);
+    await page.locator('.pai-composer-guard-undo-button').click();
+    await page.waitForFunction(
+      (original) =>
+        document.querySelector('#prompt-textarea')?.textContent === original,
+      rewriteOriginal,
+      { timeout: 3000 },
+    );
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').fill('Rewrite missing mode prompt');
+    await blurComposer(page);
+    await page.waitForFunction(
+      () => window.__paiComposeAssistRequests.length === 1,
+      null,
+      { timeout: 6000 },
+    );
+    await page.waitForTimeout(300);
+    assert.equal(
+      await page.locator('.pai-composer-guard-icon-button').count(),
+      0,
+      'legacy rewrite responses without replace_draft must fail closed',
+    );
+    assert.equal(
+      (await page.locator('#prompt-textarea').innerText()).trim(),
+      'Rewrite missing mode prompt',
+    );
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#prompt-textarea').click();
     await page.locator('#prompt-textarea').fill('High risk source prompt');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -539,6 +1032,7 @@ async function main() {
     await page
       .locator('#prompt-textarea')
       .fill('High risk source before replace this after');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -615,6 +1109,7 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#prompt-textarea').click();
     await page.locator('#prompt-textarea').fill('Silent stale draft');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -672,6 +1167,7 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#prompt-textarea').click();
     await page.locator('#prompt-textarea').fill('Before replace this after');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -739,6 +1235,7 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#prompt-textarea').click();
     await page.locator('#prompt-textarea').fill('Readonly composer failure');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -793,6 +1290,7 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#prompt-textarea').click();
     await page.locator('#prompt-textarea').fill('First rejected prompt');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -884,6 +1382,7 @@ async function main() {
     await page
       .locator('#prompt-textarea')
       .fill('Second unrelated prompt should still ask for assist');
+    await blurComposer(page);
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -909,6 +1408,8 @@ async function main() {
       })
       .waitFor({ state: 'visible', timeout: 3000 });
 
+    await verifyRichIframeBlur(context);
+    await verifyReplacementTargets(context);
     console.log('Compose Assist direct insert E2E passed.');
   } finally {
     await context.close();

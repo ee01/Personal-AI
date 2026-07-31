@@ -161,6 +161,9 @@ export interface BridgeSyncAttemptLogEntry {
   packageKinds?: string[];
   packageItemCount?: number;
   sourceRefCount?: number;
+  feedHasMore?: boolean;
+  feedLimit?: number;
+  feedSnapshotReceipt?: string;
   transportUsed?: 'dom';
   transportMode?: BridgeTransportMode;
   transportFallbackReason?: string;
@@ -251,11 +254,22 @@ export interface BridgeAssistantRuntimeSummary {
   fetchedAt: string;
 }
 
+export interface AskResumeContextHints {
+  source: 'local_ask_resume_snapshot';
+  localOnly: true;
+  updatedAt: string;
+  topicTitle?: string;
+  previousQuestion: string;
+  previousAnswerSummary?: string;
+  evidenceRefs?: string[];
+}
+
 export interface BridgeAssistantAskRequest {
   query: string;
   context?: string;
   includeEvidence?: boolean;
   scope?: 'work' | 'personal' | 'both';
+  contextHints?: AskResumeContextHints;
 }
 
 export type BridgeRecallBlockType =

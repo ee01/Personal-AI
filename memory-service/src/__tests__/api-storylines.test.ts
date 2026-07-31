@@ -35,6 +35,8 @@ vi.mock('../llm/LLMClient.js', async (importOriginal) => {
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { SourceMemoryCaptureService } from '../core/SourceMemoryCaptureService.js';
+import { SourceMemoryDistillationWorker } from '../core/SourceMemoryDistillationWorker.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -56,6 +58,18 @@ describe('Storyline draft API', () => {
   beforeEach(() => {
     mockGenerateJSON.mockReset();
     for (const table of [
+      'skill_platform_bindings',
+      'skill_versions',
+      'personal_skills',
+      'source_memory_distilled_artifacts',
+      'source_memory_evidence_spans',
+      'source_memory_distillation_jobs',
+      'source_memory_events',
+      'source_memory_links',
+      'source_memory_triggers',
+      'source_memory_takeaways',
+      'source_memory_anchors',
+      'source_memory_capsules',
       'today_meeting_preps',
       'calendar_events',
       'messages_raw',
@@ -148,6 +162,43 @@ describe('Storyline draft API', () => {
       riskNotes: ['复制给外部前去掉内部链接。'],
       artifactText:
         '# Speaker Notes\n\n1. 背景\n2. 风险\n3. Owner 和 deadline',
+    };
+  }
+
+  function buildSourceDeepResponse(prompt: string) {
+    const evidenceId = prompt.match(/\[([^\]]+:S1)\]/)?.[1];
+    if (!evidenceId) throw new Error('missing source-memory evidence span');
+    return {
+      oneLineCue: 'Explain why source evidence stays attached.',
+      compactMemo: 'The source requires every reusable artifact to retain evidence links.',
+      fullMemo: 'Keep source evidence attached and delegate publication to a reviewed draft flow.',
+      takeaways: [
+        {
+          title: 'Evidence remains attached',
+          body: 'Every derived claim keeps a valid source span.',
+          confidence: 0.91,
+          evidenceSpanIds: [evidenceId],
+        },
+      ],
+      triggerCards: [],
+      factCandidates: [],
+      openQuestions: [],
+      skillSeeds: [],
+      storylineSeeds: [
+        {
+          seedKey: 'source-evidence-story',
+          title: 'Why source evidence stays attached',
+          claim: 'Evidence-linked memory artifacts remain reviewable when reused.',
+          audience: 'AI product team',
+          risks: ['Do not imply automatic publication.'],
+          confidence: 0.88,
+          evidenceSpanIds: [evidenceId],
+        },
+      ],
+      sourceReliability: {
+        level: 'high',
+        reason: 'The source states the workflow explicitly.',
+      },
     };
   }
 
@@ -279,6 +330,85 @@ describe('Storyline draft API', () => {
           line.startsWith('- calendar:event-ai-notes:'),
         ),
     ).toHaveLength(1);
+  });
+
+  it('generates a grounded draft from a current Source Memory storyline seed', async () => {
+    const capsule = new SourceMemoryCaptureService(db).createCapsule({
+      sourceKind: 'document',
+      sourceUrl: 'https://example.com/source-memory-storyline',
+      sourceTitle: 'Source evidence design review',
+      text:
+        'The review requires every reusable memory claim to retain a source evidence span, and any outward storyline must remain a manually reviewed draft.',
+      captureMode: 'manual',
+      captureReason: '用户保存设计评审资料',
+      interactions: { manualClick: true },
+    });
+    mockGenerateJSON.mockImplementationOnce(async (prompt: string) =>
+      buildSourceDeepResponse(prompt),
+    );
+    expect(
+      (
+        await new SourceMemoryDistillationWorker(db, {
+          userId: 'default',
+        }).runDueJobs(1)
+      ).ready,
+    ).toBe(1);
+    mockGenerateJSON.mockResolvedValueOnce({
+      title: 'Why source evidence stays attached',
+      audience: 'AI product team',
+      segments: [
+        {
+          title: 'Problem',
+          intent: 'Explain the risk.',
+          narrative: 'Detached claims are difficult to verify later.',
+          evidenceIds: ['E1'],
+        },
+        {
+          title: 'Design',
+          intent: 'Explain the evidence rule.',
+          narrative: 'The source pack keeps every claim attached to its saved span.',
+          evidenceIds: ['E1'],
+        },
+        {
+          title: 'Boundary',
+          intent: 'Explain the publication boundary.',
+          narrative: 'The result remains a manually reviewed draft.',
+          evidenceIds: ['E1'],
+        },
+      ],
+      gaps: [],
+      riskNotes: ['Do not imply automatic publication.'],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'source_memory_seed',
+        capsuleId: capsule.id,
+        seedId: 'source-evidence-story',
+        targetArtifact: 'speaker_notes',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      sourceKind: 'source_memory_seed',
+      sourceId: `${capsule.id}:source-evidence-story`,
+      targetArtifact: 'speaker_notes',
+      generationReceipt: {
+        generationMode: 'llm_grounded',
+        boundary: 'draft_only_manual_copy_no_external_write',
+      },
+    });
+    expect(res.json().evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'source_memory',
+          metadata: expect.objectContaining({ sourceMemoryCapsuleId: capsule.id }),
+        }),
+      ]),
+    );
   });
 
   it('keeps the requested target artifact even when the model suggests another format', async () => {

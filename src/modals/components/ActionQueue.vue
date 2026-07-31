@@ -44,6 +44,33 @@
     </div>
 
     <div
+      v-if="!loading && actionReadinessSummary && actionReadinessSummary.trackedActionCount > 0"
+      class="readiness-strip"
+      :class="actionReadinessSummary.status"
+      aria-label="OpenClaw 执行就绪摘要"
+    >
+      <div class="readiness-strip-head">
+        <div>
+          <span class="panel-kicker">执行就绪契约</span>
+          <strong>{{ actionReadinessSummary.title }}</strong>
+        </div>
+        <span class="readiness-strip-state">{{ readinessSummaryStateLabel }}</span>
+      </div>
+      <p>{{ actionReadinessSummary.detail }}</p>
+      <div class="readiness-strip-facts">
+        <span>跟踪 {{ actionReadinessSummary.trackedActionCount }} 条</span>
+        <span v-if="actionReadinessSummary.blockedContractCount > 0">
+          阻断契约 {{ actionReadinessSummary.blockedContractCount }} 个
+        </span>
+        <span v-if="actionReadinessSummary.affectedActionCount > 0">
+          受影响 {{ actionReadinessSummary.affectedActionCount }} 条
+        </span>
+        <span>只读摘要 · {{ formatActionTime(actionReadinessSummary.readAt) }}</span>
+      </div>
+      <small>{{ actionReadinessSummary.boundary }}</small>
+    </div>
+
+    <div
       v-if="!loading && actionLocatorReceipt"
       class="queue-locator-receipt"
       :class="actionLocatorReceipt.tone"
@@ -193,6 +220,29 @@
             :to="`/reflection-threads/${action.threadId}`"
             class="thread-link"
           >查看线程</router-link>
+        </div>
+
+        <div
+          v-if="action.readinessReceipt"
+          class="action-readiness-panel"
+          :class="actionReadinessTone(action)"
+          aria-label="动作执行就绪回执"
+        >
+          <div class="action-readiness-head">
+            <div>
+              <span class="panel-kicker">执行就绪</span>
+              <strong>{{ actionReadinessTitle(action) }}</strong>
+            </div>
+            <span class="action-readiness-state">{{ actionReadinessStatusLabel(action) }}</span>
+          </div>
+          <p>{{ actionReadinessBody(action) }}</p>
+          <div class="action-readiness-facts">
+            <span
+              v-for="fact in actionReadinessFacts(action)"
+              :key="fact"
+            >{{ fact }}</span>
+          </div>
+          <small>{{ actionReadinessBoundary(action) }}</small>
         </div>
 
         <div
@@ -416,7 +466,7 @@
             @click="executeAction(action)"
           >{{ actionButtonLabel(action.id, 'execute', executeButtonLabel(action)) }}</button>
           <button
-            v-if="action.queueStatus === 'failed'"
+            v-if="canRetryAction(action)"
             class="tiny-btn"
             :class="{ loading: isActionOperation(action.id, 'retry') }"
             :disabled="isActionBusy(action.id)"
@@ -424,6 +474,15 @@
             :aria-label="actionButtonBoundaryLabel(action, 'retry')"
             @click="retryAction(action)"
           >{{ actionButtonLabel(action.id, 'retry', '重试入队') }}</button>
+          <button
+            v-if="canProbeActionReadiness(action)"
+            class="tiny-btn readiness-probe-btn"
+            :class="{ loading: isActionOperation(action.id, 'probe') }"
+            :disabled="isActionBusy(action.id)"
+            :title="actionButtonBoundaryLabel(action, 'probe')"
+            :aria-label="actionButtonBoundaryLabel(action, 'probe')"
+            @click="probeActionReadiness(action)"
+          >{{ actionButtonLabel(action.id, 'probe', readinessProbeButtonLabel(action)) }}</button>
           <button
             v-if="action.queueStatus === 'queued'"
             class="tiny-btn danger"
@@ -444,6 +503,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type ActionReadinessSummary,
   type OutreachSession,
   type RuntimeAction,
 } from '../../services/MemoryServiceClient';
@@ -453,11 +513,12 @@ const route = useRoute();
 const loading = ref(true);
 const loadError = ref('');
 const actions = ref<RuntimeAction[]>([]);
+const actionReadinessSummary = ref<ActionReadinessSummary | null>(null);
 const outreachByActionId = ref<Record<string, OutreachSession>>({});
 const totalActions = ref(0);
 const queueStatus = ref<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all'>('all');
 const executionMode = ref<'manual' | 'auto' | ''>('');
-type ActionOperation = 'execute' | 'retry' | 'cancel';
+type ActionOperation = 'execute' | 'retry' | 'cancel' | 'probe';
 type QueueGuidanceTone = 'success' | 'info' | 'warning' | 'danger';
 interface QueueSummaryCard {
   key: string;
@@ -614,6 +675,11 @@ const visibleCountLabel = computed(() => {
     return `${actions.value.length}/${totalActions.value}`;
   }
   return String(actions.value.length);
+});
+const readinessSummaryStateLabel = computed(() => {
+  if (actionReadinessSummary.value?.status === 'blocked') return 'BLOCKED';
+  if (actionReadinessSummary.value?.status === 'attention') return 'CHECK';
+  return 'READY';
 });
 const queueSummaryCards = computed<QueueSummaryCard[]>(() => [
   {
@@ -942,6 +1008,7 @@ async function loadActions(options: { silent?: boolean } = {}) {
       return true;
     });
     actions.value = filteredItems;
+    actionReadinessSummary.value = response.readinessSummary ?? null;
     totalActions.value = routeActionIdFilter.value
       ? filteredItems.length
       : response.total ?? filteredItems.length;
@@ -958,6 +1025,7 @@ async function loadActions(options: { silent?: boolean } = {}) {
       : `读取动作队列失败：${formatActionError(error)}`;
     if (shouldShowLoading && !canKeepSnapshot) {
       actions.value = [];
+      actionReadinessSummary.value = null;
       outreachByActionId.value = {};
       totalActions.value = 0;
     }
@@ -1073,6 +1141,27 @@ async function retryAction(action: RuntimeAction) {
   }
 }
 
+async function probeActionReadiness(action: RuntimeAction) {
+  const { id } = action;
+  setActionOperation(id, 'probe');
+  try {
+    const response = await client.probeActionReadiness(id);
+    setActionOperationReceipt(
+      id,
+      buildReadinessProbeOperationReceipt(action, response),
+    );
+    await loadActions({ silent: true });
+  } catch (error) {
+    setActionOperationError(
+      id,
+      buildActionOperationError(action, 'probe', error),
+    );
+    await loadActions({ silent: true });
+  } finally {
+    clearActionOperation(id);
+  }
+}
+
 async function cancelAction(action: RuntimeAction) {
   const { id } = action;
   setActionOperation(id, 'cancel');
@@ -1160,6 +1249,19 @@ function actionPendingOperationReceipt(action: RuntimeAction): ActionOperationRe
     };
   }
 
+  if (operation === 'probe') {
+    return {
+      tone: 'info',
+      title: '执行就绪重测正在提交',
+      body: '正在等待 Memory Service 检查 OpenClaw 连接、鉴权和 capability；本次重测不会提交原动作，也不会抹掉历史 attempt 或潜在外部副作用。',
+      facts: [
+        ...facts,
+        '重测：只检查 readiness',
+        '本次重测：不执行原动作',
+      ],
+    };
+  }
+
   return {
     tone,
     title: isOpenClaw ? 'OpenClaw 取消请求正在提交' : '取消请求正在提交',
@@ -1192,6 +1294,7 @@ function actionButtonLabel(id: string, operation: ActionOperation, fallback: str
   if (!isActionOperation(id, operation)) return fallback;
   if (operation === 'execute') return '执行中...';
   if (operation === 'retry') return '入队中...';
+  if (operation === 'probe') return '重测中...';
   return '取消中...';
 }
 
@@ -1201,6 +1304,7 @@ function actionButtonBoundaryLabel(action: RuntimeAction, operation: ActionOpera
   }
   if (operation === 'execute') return executeButtonBoundaryLabel(action);
   if (operation === 'retry') return retryButtonBoundaryLabel(action);
+  if (operation === 'probe') return readinessProbeButtonBoundaryLabel(action);
   return cancelButtonBoundaryLabel(action);
 }
 
@@ -1212,6 +1316,9 @@ function pendingActionButtonBoundaryLabel(action: RuntimeAction, operation: Acti
   }
   if (operation === 'retry') {
     return '重试入队正在提交：等待 Memory Service 确认；旧错误和队列状态尚未被新结果替换。';
+  }
+  if (operation === 'probe') {
+    return '重测正在提交：只检查 OpenClaw 连接、鉴权和 capability；本次重测不会再次执行原动作。';
   }
   return '取消正在提交：等待 Memory Service 确认；当前卡片仍是上次队列快照，不代表队列项已取消。';
 }
@@ -1248,6 +1355,11 @@ function retryButtonBoundaryLabel(action: RuntimeAction): string {
   return '重试入队：只把动作重新排队；不抹掉旧错误，也不代表通知、询问或本地写入已经重新执行。';
 }
 
+function readinessProbeButtonBoundaryLabel(action: RuntimeAction): string {
+  const scope = action.readinessReceipt?.scopeKey || 'openclaw:unknown';
+  return `修复后重测 ${scope}：只检查连接、鉴权和 capability；不会提交原动作，不代表外部事实或写操作已经完成。`;
+}
+
 function cancelButtonBoundaryLabel(action: RuntimeAction): string {
   if (isOpenClawDelegationAction(action)) {
     return '取消：只取消未完成队列项；不会撤销可能已经发生的外部副作用，也不会删除反思证据或历史结果。';
@@ -1268,6 +1380,9 @@ function buildActionOperationError(
   }
 
   const modeLabel = openClawDelegationMode(action) === 'write' ? '写操作' : '只读查询';
+  if (operation === 'probe') {
+    return `OpenClaw ${modeLabel}就绪重测失败：${message}。这次没有提交原动作，也不能证明外部系统已经开始、完成或撤销任何操作。`;
+  }
   if (operation === 'execute') {
     return `OpenClaw ${modeLabel}执行请求失败：${message}。Memory Service 没有确认接收这次执行请求；本页不会把它标成 running，也不证明外部系统已经开始或完成。若这是“确认并执行”，批准是否写入仍以刷新后的队列状态为准。`;
   }
@@ -1365,11 +1480,172 @@ function buildCancelOperationReceipt(
   };
 }
 
+function buildReadinessProbeOperationReceipt(
+  action: RuntimeAction,
+  response: Awaited<ReturnType<typeof client.probeActionReadiness>>,
+): ActionOperationReceipt {
+  const ready = response.receipt.status === 'ready';
+  const blocked = isBlockingReadinessStatus(response.receipt.status);
+  return {
+    tone: ready ? 'success' : blocked ? 'warning' : 'info',
+    title: ready
+      ? '执行就绪重测通过'
+      : blocked
+      ? '执行就绪仍被阻断'
+      : '执行就绪需要人工复核',
+    body: response.probeReceipt.summary,
+    facts: [
+      `契约：${response.receipt.scopeKey}`,
+      `状态：${actionReadinessStatusText(response.receipt.status)}`,
+      '原动作：未由本次重测执行',
+      '外部写入：未由本次重测触发',
+    ],
+  };
+}
+
+function actionReadinessStatusText(status?: string): string {
+  switch (status) {
+    case 'ready':
+      return '可执行';
+    case 'blocked_auth':
+      return '鉴权阻断';
+    case 'blocked_capability':
+      return '能力阻断';
+    case 'blocked_input':
+      return '输入不完整';
+    case 'blocked_proof':
+      return '证明不完整';
+    case 'degraded':
+      return '能力降级';
+    case 'expired':
+      return '证明过期';
+    default:
+      return '尚未证明';
+  }
+}
+
+function isBlockingReadinessStatus(status?: string): boolean {
+  return Boolean(status?.startsWith('blocked_'));
+}
+
+function isActionReadinessBlocked(action: RuntimeAction): boolean {
+  return isBlockingReadinessStatus(action.readinessReceipt?.status);
+}
+
+function actionReadinessStatusLabel(action: RuntimeAction): string {
+  return actionReadinessStatusText(action.readinessReceipt?.status).toUpperCase();
+}
+
+function actionReadinessTone(action: RuntimeAction): QueueGuidanceTone {
+  const status = action.readinessReceipt?.status;
+  if (isBlockingReadinessStatus(status)) return 'danger';
+  if (status === 'degraded' || status === 'expired') return 'warning';
+  if (status === 'ready') return 'success';
+  return 'info';
+}
+
+function actionReadinessTitle(action: RuntimeAction): string {
+  const status = action.readinessReceipt?.status;
+  if (isBlockingReadinessStatus(status)) {
+    return action.readinessReceipt?.dispatchState === 'dispatched'
+      ? '历史派发后暴露就绪阻断'
+      : '原动作已在派发前阻断';
+  }
+  if (status === 'ready') return '近期 capability 证明有效';
+  if (status === 'degraded' || status === 'expired') {
+    return '自动执行前需要重测';
+  }
+  return action.executionMode === 'manual'
+    ? '可手动执行并建立首次证明'
+    : '首次执行将建立就绪证明';
+}
+
+function actionReadinessBody(action: RuntimeAction): string {
+  const receipt = action.readinessReceipt;
+  if (!receipt) return '';
+  const base = receipt.reason || '当前没有更详细的执行就绪说明。';
+  if (isBlockingReadinessStatus(receipt.status)) {
+    return receipt.dispatchState === 'dispatched'
+      ? `${base} 这条动作已有历史 dispatch attempt；不能据此断言外部没有执行或没有副作用，请先复核 result / transcript，再重测。`
+      : `${base} 当前卡片保留在队列中，没有增加重试次数，也没有提交原动作。`;
+  }
+  if (receipt.status === 'ready') {
+    return `${base} 这只证明 capability 近期可用，审批和最终结果仍以本动作回执为准。`;
+  }
+  if (receipt.status === 'degraded' || receipt.status === 'expired') {
+    return `${base} 重测只检查连接、鉴权和 capability，不会执行原动作。`;
+  }
+  return `${base} 未知状态不代表失败，也不代表任何外部操作已经发生。`;
+}
+
+function actionReadinessFacts(action: RuntimeAction): string[] {
+  const receipt = action.readinessReceipt;
+  if (!receipt) return [];
+  return [
+    `契约：${receipt.scopeKey}`,
+    `检查：${formatActionTime(receipt.checkedAt)}`,
+    receipt.expiresAt ? `有效至：${formatActionTime(receipt.expiresAt)}` : '',
+    receipt.affectedActionCount > 0
+      ? `受影响动作：${receipt.affectedActionCount}`
+      : '',
+    receipt.requiredInputs.length > 0
+      ? `必填输入：${receipt.requiredInputs.join(' / ')}`
+      : '',
+    receipt.requiredApprovals.length > 0
+      ? `审批：${receipt.requiredApprovals.join(' / ')}`
+      : '',
+    receipt.proofRequirements.length > 0
+      ? `结果证明：${receipt.proofRequirements.join(' / ')}`
+      : '',
+    receipt.dispatchState === 'dispatched'
+      ? '历史：原动作已有派发记录'
+      : '本次门禁：原动作未派发',
+  ].filter(Boolean);
+}
+
+function actionReadinessBoundary(action: RuntimeAction): string {
+  const boundaries = action.readinessReceipt?.doesNotProve ?? [];
+  return boundaries.length > 0
+    ? boundaries.join('；')
+    : '就绪状态不代表原动作或外部写操作已经完成。';
+}
+
+function canProbeActionReadiness(action: RuntimeAction): boolean {
+  const status = action.readinessReceipt?.status;
+  if (!status) return false;
+  if (
+    action.queueStatus === 'running' ||
+    action.queueStatus === 'succeeded' ||
+    action.queueStatus === 'cancelled'
+  ) {
+    return isActionOperation(action.id, 'probe');
+  }
+  return (
+    isBlockingReadinessStatus(status) ||
+    status === 'degraded' ||
+    status === 'expired' ||
+    isActionOperation(action.id, 'probe')
+  );
+}
+
+function readinessProbeButtonLabel(action: RuntimeAction): string {
+  return isActionReadinessBlocked(action) ? '修复后重测' : '重测就绪';
+}
+
+function canRetryAction(action: RuntimeAction): boolean {
+  return (
+    action.queueStatus === 'failed' &&
+    !canProbeActionReadiness(action)
+  );
+}
+
 function canShowExecuteButton(action: RuntimeAction): boolean {
   return (
-    action.queueStatus === 'queued' ||
-    action.queueStatus === 'failed' ||
-    isActionOperation(action.id, 'execute')
+    isActionOperation(action.id, 'execute') ||
+    (!isActionReadinessBlocked(action) &&
+      action.readinessReceipt?.status !== 'degraded' &&
+      action.readinessReceipt?.status !== 'expired' &&
+      (action.queueStatus === 'queued' || action.queueStatus === 'failed'))
   );
 }
 
@@ -2458,6 +2734,90 @@ function transcriptFilename(transcriptPath: string): string | null {
   color: #fecaca;
 }
 
+.readiness-strip {
+  margin-bottom: 1rem;
+  padding: 0.95rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-left-width: 4px;
+  background: rgba(8, 47, 73, 0.22);
+  color: #dbeafe;
+}
+
+.readiness-strip.blocked {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+}
+
+.readiness-strip.attention {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+}
+
+.readiness-strip.ready {
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(20, 83, 45, 0.14);
+  color: #dcfce7;
+}
+
+.readiness-strip-head,
+.action-readiness-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.readiness-strip-head strong,
+.action-readiness-head strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.readiness-strip-state,
+.action-readiness-state {
+  flex: 0 0 auto;
+  color: currentColor;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.readiness-strip p,
+.action-readiness-panel p {
+  margin: 0.48rem 0 0;
+  line-height: 1.55;
+}
+
+.readiness-strip small,
+.action-readiness-panel small {
+  display: block;
+  margin-top: 0.62rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.readiness-strip-facts,
+.action-readiness-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin-top: 0.65rem;
+}
+
+.readiness-strip-facts span,
+.action-readiness-facts span {
+  max-width: 100%;
+  padding: 0.2rem 0.48rem;
+  border-radius: 0.25rem;
+  background: rgba(15, 23, 42, 0.42);
+  color: #e2e8f0;
+  font-size: 0.73rem;
+  overflow-wrap: anywhere;
+}
+
 .queue-locator-receipt {
   margin-bottom: 1rem;
   padding: 0.86rem 0.96rem;
@@ -2654,6 +3014,12 @@ function transcriptFilename(transcriptPath: string): string | null {
   color: #fca5a5;
 }
 
+.tiny-btn.readiness-probe-btn {
+  background: rgba(13, 148, 136, 0.18);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  color: #99f6e4;
+}
+
 .action-list {
   display: flex;
   flex-direction: column;
@@ -2701,6 +3067,34 @@ function transcriptFilename(transcriptPath: string): string | null {
   margin-top: 0.9rem;
   color: #94a3b8;
   font-size: 0.83rem;
+}
+
+.action-readiness-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-left-width: 4px;
+  background: rgba(8, 47, 73, 0.18);
+  color: #dbeafe;
+}
+
+.action-readiness-panel.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(120, 53, 15, 0.15);
+  color: #fde68a;
+}
+
+.action-readiness-panel.danger {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+}
+
+.action-readiness-panel.success {
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(20, 83, 45, 0.14);
+  color: #dcfce7;
 }
 
 .badge {
@@ -3449,6 +3843,11 @@ function transcriptFilename(transcriptPath: string): string | null {
 }
 
 @media (max-width: 560px) {
+  .readiness-strip-head,
+  .action-readiness-head {
+    flex-direction: column;
+  }
+
   .queue-overview,
   .attention-breakdown-rows {
     grid-template-columns: 1fr;

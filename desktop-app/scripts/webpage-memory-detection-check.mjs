@@ -98,6 +98,210 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+function buildKeystoneHarnessResponse(status = 'ready', language = 'zh-CN') {
+  const ts = nowSeconds();
+  const isPartial = status === 'partial';
+  const isStale = status === 'stale';
+  const english = language === 'en-US';
+  const match = {
+    id: 'keystone-msg-1',
+    type: 'message',
+    score: 0.94,
+    displayPriority: 'p1',
+    title: 'WhatsApp integration thread',
+    uiSummary: '先复用现有 SMS 基础设施，再决定是否新增发送链路。',
+    snippet: 'Research the RingCX WhatsApp and SMS infrastructure before a new design.',
+    sourceLabel: 'glip',
+    sourceTitle: 'RingCX integration room',
+    sourceUrl: 'https://source.example.com/ringcx-whatsapp-thread',
+    exploreLink: '#/timeline?focus=keystone-msg-1',
+    links: [],
+    whyMatched: '当前页面命中 WhatsApp 与 SMS reuse',
+    whyRelevant: ['项目：RingCX', '主题：WhatsApp', '主题：SMS reuse'],
+    matchedAnchors: {
+      projects: ['RingCX'],
+      topics: ['WhatsApp', 'SMS reuse'],
+    },
+    reasonType: 'keyword_overlap',
+    evidenceRole: 'decision',
+    timestamp: ts - 3600,
+  };
+  const sourceAsOf = isStale ? ts - 20 * 86400 : ts - 3600;
+  return {
+    matches: [match],
+    topMatch: match,
+    queryTimeMs: 3,
+    changeProjections: [
+      {
+        chainKey: 'ringcx-whatsapp:delivery-path',
+        subjectKey: 'workflow:ringcx-whatsapp',
+        subjectLabel: 'WhatsApp 集成复用路径',
+        subjectKind: 'workflow',
+        propertyKey: 'delivery_path',
+        propertyLabel: '发送链路',
+        currentValue: {
+          kind: 'text',
+          display: '优先复用 SMS 基础设施',
+          normalized: 'reuse_sms',
+        },
+        previousValue: {
+          kind: 'text',
+          display: '设计独立发送链路',
+          normalized: 'new_path',
+        },
+        status: 'confirmed_current',
+        summary: '发送链路已从独立设计调整为优先复用 SMS 基础设施。',
+        boundary: '只读变化证据，不会修改项目状态。',
+        eventCount: 2,
+        reversalCount: 0,
+        conflictCount: 0,
+        lastObservedAt: ts - 3600,
+        currentEvent: {
+          id: 'change-event-2',
+          previousValue: {
+            kind: 'text',
+            display: '设计独立发送链路',
+            normalized: 'new_path',
+          },
+          nextValue: {
+            kind: 'text',
+            display: '优先复用 SMS 基础设施',
+            normalized: 'reuse_sms',
+          },
+          authorityRole: 'direct_message',
+          sourceRef: {
+            type: 'message',
+            id: 'keystone-msg-1',
+            title: 'WhatsApp integration thread',
+          },
+          reason: '先确认可复用能力',
+          observedAt: ts - 3600,
+          isReversal: false,
+        },
+        history: [],
+      },
+    ],
+    keystoneBrief: {
+      brief: {
+        id: `kb-harness-${status}`,
+        briefKey: `workflow:ringcx-whatsapp-${status}`,
+        title: english ? 'WhatsApp Integration Reuse Path' : 'WhatsApp 集成复用路径',
+        status,
+        summary: english
+          ? 'Research the RingCX WhatsApp and SMS infrastructure before designing a second delivery path.'
+          : '先调研 RingCX WhatsApp 与 SMS 基础设施，避免直接设计第二套发送链路。',
+        externalSummary: '先调研 WhatsApp 与 SMS 基础设施，再决定新增设计。',
+        sourceAsOf,
+        freshness: {
+          state: isStale ? 'stale_risk' : 'fresh',
+          reason: isStale
+            ? '来源有效期已过，需要刷新'
+            : isPartial
+              ? '新消息与旧决策存在冲突'
+              : '最近 7 天有相关消息，未检测到冲突',
+          expiresAt: isStale ? ts - 1 : ts + 7 * 86400,
+        },
+        slots: {
+          whyItMatters: english
+            ? 'The current page discusses the WhatsApp integration approach.'
+            : '当前页面正在讨论 WhatsApp 接入方式。',
+          currentState: english
+            ? 'Reuse the existing SMS infrastructure first, then decide whether a new design is needed.'
+            : '先复用现有 SMS 基础设施，再决定是否新增设计。',
+          stableFacts: [
+            {
+              text: english
+                ? 'RingCX has existing SMS infrastructure that can be evaluated for reuse.'
+                : 'RingCX 已有 SMS 基础设施可供复用调研。',
+              sourceRefs: ['message:keystone-msg-1', 'source_memory:keystone-source-2'],
+              confidence: 'high',
+              authority: 'direct_message',
+              validAsOf: sourceAsOf,
+              staleRisk: isStale ? 'high' : 'low',
+              projection: 'summary_ok',
+            },
+          ],
+          decisions: [],
+          constraints: [
+            {
+              text: english
+                ? 'Do not design a second delivery path before completing the research.'
+                : '不要在调研前直接设计第二套发送链路。',
+              sourceRefs: ['message:keystone-msg-1'],
+              authority: 'direct_message',
+              projection: 'summary_ok',
+            },
+          ],
+          traps: [],
+          nextUseCases: ['RingCentral thread reading'],
+          openQuestions: [english
+            ? 'What is the final capability boundary of the WhatsApp provider?'
+            : 'WhatsApp provider 的最终能力边界是什么？'],
+        },
+        sourceMap: [
+          {
+            ref: 'message:keystone-msg-1',
+            sourceType: 'message',
+            sourceId: 'keystone-msg-1',
+            role: 'authority',
+            title: 'WhatsApp integration thread',
+            url: 'https://source.example.com/ringcx-whatsapp-thread',
+            timestamp: ts - 3600,
+            authority: 'direct_message',
+            projection: 'summary_ok',
+          },
+          {
+            ref: 'source_memory:keystone-source-2',
+            sourceType: 'source_memory',
+            sourceId: 'keystone-source-2',
+            role: 'supporting',
+            title: 'SMS architecture notes',
+            timestamp: ts - 7200,
+            authority: 'source_memory',
+            projection: 'local_only',
+          },
+        ],
+        displayPolicy: {
+          defaultMode: 'chip',
+          maxLines: 6,
+          canCopyToDraft: !isPartial && !isStale,
+          externalSummaryOnly: true,
+          hiddenSourceCount: 1,
+        },
+        writeReceipt: {
+          writesProfile: false,
+          sendsExternal: false,
+          createsTask: false,
+          updatesFacts: false,
+          writesOutcomeEvent: true,
+        },
+        repairState: 'clean',
+        compositionVersion: english
+          ? 'auto-reflection-grounded-v2-en-US'
+          : 'auto-reflection-grounded-v2-zh-CN',
+      },
+      presentationMode: isStale ? 'stale_notice' : isPartial ? 'conflict' : 'primary',
+      whyNow: english
+        ? 'Matches the current RingCX WhatsApp discussion'
+        : '命中当前 RingCX WhatsApp 讨论',
+      evidenceMatchIds: ['keystone-msg-1'],
+      relatedMemoryCount: 1,
+    },
+  };
+}
+
+async function waitForKeystoneEvent(server, eventType, briefId, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = server.keystoneBriefEvents.find(
+      (item) => item.briefId === briefId && item.body.eventType === eventType,
+    );
+    if (event) return event;
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for Keystone event ${eventType} on ${briefId}`);
+}
+
 function sourceMemoryKindLabel(sourceKind) {
   if (sourceKind === 'selection') return '选区资料';
   if (sourceKind === 'visual_memory') return '视觉证据';
@@ -349,6 +553,7 @@ async function startHarnessServer() {
   const sourceMemoryCandidateRequests = [];
   const sourceMemoryCreateRequests = [];
   const sourceMemoryCapsules = new Map();
+  const keystoneBriefEvents = [];
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -376,6 +581,26 @@ async function startHarnessServer() {
               queryTimeMs: 2,
             }),
           );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/keystone-ready')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(buildKeystoneHarnessResponse('ready')));
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/keystone-partial')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(buildKeystoneHarnessResponse('partial')));
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/keystone-stale')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(buildKeystoneHarnessResponse('stale')));
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/keystone-english')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(buildKeystoneHarnessResponse('ready', 'en-US')));
           return;
         }
         if (
@@ -477,6 +702,7 @@ async function startHarnessServer() {
               matches: [rehearsalMatch],
               topMatch: rehearsalMatch,
               queryTimeMs: 3,
+              keystoneBrief: buildKeystoneHarnessResponse('ready').keystoneBrief,
               autopilot: {
                 mode: 'chip',
                 summary: '低打扰提示：3 条可能相关，7 条静默。',
@@ -1007,6 +1233,31 @@ async function startHarnessServer() {
         return;
       }
 
+      const keystoneEventMatch = req.url?.match(
+        /^\/api\/v1\/keystone-briefs\/([^/]+)\/events$/,
+      );
+      if (req.method === 'POST' && keystoneEventMatch) {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const briefId = decodeURIComponent(keystoneEventMatch[1]);
+        keystoneBriefEvents.push({ briefId, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            item: {
+              id: briefId,
+              status:
+                body.eventType === 'hidden'
+                  ? 'hidden'
+                  : body.eventType === 'not_accurate'
+                    ? 'blocked'
+                    : 'ready',
+            },
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'POST' && req.url === '/api/v1/ambient-calibration/traces') {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
@@ -1147,6 +1398,26 @@ async function startHarnessServer() {
                 Falcon customer review prep with Priya Shah covers escalation
                 ownership, launch risk, support handoff, customer confidence,
                 and the next review checkpoint.
+              </main>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/keystone-')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>RingCX WhatsApp SMS integration</title></head>
+            <body>
+              <main>
+                <h1>RingCX WhatsApp integration</h1>
+                <p>
+                  The team is deciding whether WhatsApp should reuse the current SMS
+                  infrastructure before estimating a second delivery path. Review the
+                  provider boundary, current routing constraints, prior decision, and
+                  source evidence before proposing implementation work.
+                </p>
               </main>
             </body>
           </html>`);
@@ -1430,7 +1701,13 @@ async function startHarnessServer() {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
           <html>
-            <head><title>PAI-123 Falcon Jira issue</title></head>
+            <head>
+              <title>PAI-123 Falcon Jira issue</title>
+              <style>
+                #pai-composer-guard-root { position: fixed; right: 24px; bottom: 24px; }
+                .pai-composer-guard-icon-button { display: block; width: 36px; height: 36px; }
+              </style>
+            </head>
             <body>
               <main>
                 <h1 id="summary-val">Falcon launch readiness follow-up</h1>
@@ -1442,6 +1719,9 @@ async function startHarnessServer() {
                   QA verification, and follow-up review material.
                 </section>
               </main>
+              <div id="pai-composer-guard-root" class="pai-composer-guard">
+                <button class="pai-composer-guard-icon-button" type="button">AI</button>
+              </div>
             </body>
           </html>`);
         return;
@@ -1554,6 +1834,7 @@ async function startHarnessServer() {
     ambientCalibrationRequests,
     sourceMemoryCandidateRequests,
     sourceMemoryCreateRequests,
+    keystoneBriefEvents,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -1658,7 +1939,6 @@ async function verifyRehearsalLensPresentation(server, context) {
     }
     throw error;
   }
-
   assert.equal(
     server.contextRecallRequests.length,
     startCount + 1,
@@ -1748,15 +2028,15 @@ async function verifyRehearsalLensPresentation(server, context) {
     /它说了什么/,
     'Rehearsal 卡片不应继续使用普通事实记忆标题',
   );
-  assert.equal(
-    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
-    '标记这条预演提醒有用',
-    'Rehearsal 正向反馈应有专门的可访问名称',
+  assert.match(
+    (await page.locator('.pai-context-recall-positive').getAttribute('aria-label')) || '',
+    /标记这条预演提醒有用[\s\S]*提交 recall-quality 有用反馈[\s\S]*不会插入输入框、发送内容或确认事实/,
+    'Rehearsal 正向反馈应在可访问名称里说明写入和无插入/发送/事实确认边界',
   );
-  assert.equal(
-    await page.locator('.pai-context-recall-negative').getAttribute('aria-label'),
-    '标记这条预演提醒不相关',
-    'Rehearsal 负向反馈应有专门的可访问名称',
+  assert.match(
+    (await page.locator('.pai-context-recall-negative').getAttribute('aria-label')) || '',
+    /标记这条预演提醒不相关[\s\S]*打开原因面板[\s\S]*写入失败时只保留本页 30 分钟隐藏[\s\S]*不会删除原始记忆/,
+    'Rehearsal 负向反馈应在可访问名称里说明原因面板、写入和本页隐藏边界',
   );
 
   const exploreHref = await page.locator('.pai-context-open-memory').getAttribute('href');
@@ -1840,6 +2120,171 @@ async function verifyRehearsalLensPresentation(server, context) {
     throw new Error('Rehearsal Lens 页面出现脚本异常');
   }
   await page.close();
+}
+
+async function verifyKeystoneBriefMemoryLens(server, context) {
+  const readyPage = await context.newPage();
+  const readyDiagnostics = attachPageDiagnostics(readyPage, 'keystone-ready');
+  const readyStartCount = server.contextRecallRequests.length;
+  await readyPage.goto(`${server.origin}/keystone-ready`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await readyPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  assert.equal(
+    server.contextRecallRequests.length,
+    readyStartCount + 1,
+    'ready 简报页面应只触发一次现有 context-recall',
+  );
+  assert.equal(
+    await readyPage.locator('.pai-context-bubble').count(),
+    1,
+    '关键简报应复用唯一 Memory Lens 浮标',
+  );
+  assert.equal(
+    await readyPage.locator('.pai-keystone-bubble, .pai-keystone-floating-icon, .pai-keystone-panel').count(),
+    0,
+    '关键简报不应创建第二个浮标或并列 panel',
+  );
+
+  await readyPage.locator('.pai-context-bubble').hover();
+  await readyPage.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const readyPeekText = await readyPage.locator('.pai-context-peek').innerText();
+  assert.match(readyPeekText, /关键简报/);
+  assert.match(readyPeekText, /WhatsApp 集成复用路径/);
+  assert.match(readyPeekText, /2 条来源/);
+  await waitForKeystoneEvent(server, 'shown', 'kb-harness-ready');
+
+  await readyPage.locator('.pai-context-bubble').click();
+  await readyPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await waitForKeystoneEvent(server, 'opened', 'kb-harness-ready');
+  let readyCardText = await readyPage.locator('.pai-context-card').innerText();
+  assert.match(readyCardText, /关键简报/);
+  assert.match(readyCardText, /先调研 RingCX WhatsApp 与 SMS 基础设施/);
+  assert.match(readyCardText, /约束与边界/);
+  assert.match(readyCardText, /不要在调研前直接设计第二套发送链路/);
+  assert.match(readyCardText, /查看证据与相关记忆/);
+  assert.doesNotMatch(
+    readyCardText,
+    /变化脉络/,
+    '同轮命中简报与变化脉络时，简报必须独占 Lens 首屏',
+  );
+  assert.doesNotMatch(
+    readyCardText,
+    /WhatsApp integration thread/,
+    'ready 首屏不应与原始记忆卡并列展示',
+  );
+  assert.match(readyCardText, /1 条只用于本机/);
+  assert.match(readyCardText, /反馈只写简报事件/);
+
+  await readyPage.locator('.pai-keystone-evidence-toggle').click();
+  await waitForKeystoneEvent(server, 'evidence_opened', 'kb-harness-ready');
+  readyCardText = await readyPage.locator('.pai-context-card').innerText();
+  assert.match(readyCardText, /来源图/);
+  assert.match(readyCardText, /SMS architecture notes/);
+  assert.match(readyCardText, /本轮相关记忆/);
+  assert.match(readyCardText, /WhatsApp 集成复用路径 · 变化脉络/);
+  assert.match(readyCardText, /WhatsApp integration thread/);
+
+  await readyPage.locator('.pai-keystone-evidence-item').first().click();
+  let rawCardText = await readyPage.locator('.pai-context-card').innerText();
+  assert.match(rawCardText, /返回关键简报/);
+  assert.match(rawCardText, /变化脉络/);
+  assert.match(rawCardText, /优先复用 SMS 基础设施/);
+  await readyPage.locator('.pai-keystone-back').click();
+
+  await readyPage.locator('.pai-keystone-evidence-item').nth(1).click();
+  rawCardText = await readyPage.locator('.pai-context-card').innerText();
+  assert.match(rawCardText, /返回关键简报/);
+  assert.match(rawCardText, /WhatsApp integration thread/);
+  assert.match(rawCardText, /为什么相关/);
+  await readyPage.locator('.pai-keystone-back').click();
+  assert.match(
+    await readyPage.locator('.pai-context-card').innerText(),
+    /关键简报/,
+    '复核原始记忆后应返回同一个 Lens 简报主视图',
+  );
+
+  await readyPage.locator('.pai-keystone-useful').click();
+  await waitForKeystoneEvent(server, 'useful', 'kb-harness-ready');
+  await readyPage.waitForFunction(() =>
+    document.querySelector('.pai-context-card')?.textContent?.includes('简报有用反馈已确认写入'),
+  );
+  await openContextMoreMenu(readyPage);
+  await readyPage.locator('.pai-keystone-hide').click();
+  await waitForKeystoneEvent(server, 'hidden', 'kb-harness-ready');
+  const fallbackCardText = await readyPage.locator('.pai-context-card').innerText();
+  assert.match(fallbackCardText, /WhatsApp integration thread/);
+  assert.equal(
+    await readyPage.locator('.pai-keystone-evidence-toggle').count(),
+    0,
+    '隐藏简报后应立即回退普通原始记忆卡',
+  );
+  if (readyDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    throw new Error(readyDiagnostics.join('\n'));
+  }
+  await readyPage.close();
+
+  const partialPage = await context.newPage();
+  const partialDiagnostics = attachPageDiagnostics(partialPage, 'keystone-partial');
+  await partialPage.goto(`${server.origin}/keystone-partial`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await partialPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await partialPage.locator('.pai-context-bubble').click();
+  await partialPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const partialCardText = await partialPage.locator('.pai-context-card').innerText();
+  assert.match(partialCardText, /有证据冲突/);
+  assert.match(partialCardText, /请先查看证据/);
+  assert.equal(
+    await partialPage.locator('.pai-keystone-copy').isDisabled(),
+    true,
+    'partial 简报必须禁用外发摘要复制',
+  );
+  assert.equal(
+    await partialPage.locator('.pai-keystone-evidence-toggle').count(),
+    1,
+    'partial 简报仍应以冲突警告主视图引导证据复核',
+  );
+  if (partialDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    throw new Error(partialDiagnostics.join('\n'));
+  }
+  await partialPage.close();
+
+  const stalePage = await context.newPage();
+  const staleDiagnostics = attachPageDiagnostics(stalePage, 'keystone-stale');
+  await stalePage.goto(`${server.origin}/keystone-stale`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await stalePage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await stalePage.locator('.pai-context-bubble').click();
+  await stalePage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const staleCardText = await stalePage.locator('.pai-context-card').innerText();
+  assert.match(staleCardText, /有旧简报/);
+  assert.match(staleCardText, /当前先展示原始记忆/);
+  assert.match(staleCardText, /WhatsApp integration thread/);
+  assert.equal(
+    await stalePage.locator('.pai-keystone-evidence-toggle').count(),
+    0,
+    'stale 简报不应作为当前简报主视图展示',
+  );
+  if (staleDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    throw new Error(staleDiagnostics.join('\n'));
+  }
+  await stalePage.close();
 }
 
 async function verifyNormalPage(server, context, serviceWorker, extensionId) {
@@ -1997,16 +2442,15 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   const cardText = await page.locator('.pai-context-card').innerText();
   assert.match(cardText, /Memory Lens/);
-  assert.match(
+  assert.doesNotMatch(
     cardText,
     /页面召回回执/,
-    'Expanded Card should keep the passive page recall basis visible for direct-open users',
+    '页面召回口径已在 Rest / Hover Peek 交代，不能再占用 Expanded Card 首屏',
   );
-  assert.match(cardText, /网页被动提示/);
-  assert.match(cardText, /Falcon readiness notes/);
-  assert.match(cardText, /127\.0\.0\.1/);
-  assert.match(cardText, /本轮召回 · 页面稳定后重新请求/);
-  assert.match(cardText, /只读关联记忆；不保存网页、不插入输入框、不发送内容/);
+  assert.doesNotMatch(cardText, /网页被动提示/);
+  assert.doesNotMatch(cardText, /Falcon readiness notes/);
+  assert.doesNotMatch(cardText, /127\.0\.0\.1/);
+  assert.doesNotMatch(cardText, /本轮召回 · 页面稳定后重新请求/);
   assert.match(cardText, /2 条强相关，3 条静默/);
   assert.doesNotMatch(
     cardText,
@@ -2085,10 +2529,10 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     evidenceMetrics.labelToTextGap < 12,
     `证据标题和正文之间不应有大块空白，当前间距 ${evidenceMetrics.labelToTextGap}`,
   );
-  assert.equal(
-    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
-    '标记这条记忆提示有用',
-    '正向反馈应保留为轻量图标按钮并提供可访问名称',
+  assert.match(
+    (await page.locator('.pai-context-recall-positive').getAttribute('aria-label')) || '',
+    /标记这条记忆提示有用[\s\S]*提交 recall-quality 有用反馈[\s\S]*不会插入输入框、发送内容或确认事实/,
+    '正向反馈应保留为轻量图标按钮并提前说明写入边界',
   );
   await page.locator('.pai-context-next').click();
   assert.match(
@@ -2232,10 +2676,10 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     /正在记录有用反馈；确认前不会当作已学习/,
     '正向反馈确认前应在卡片内显示 pending 回执',
   );
-  assert.equal(
-    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
-    '正在记录有用反馈',
-    '正向反馈写入中应更新按钮可访问名称',
+  assert.match(
+    (await page.locator('.pai-context-recall-positive').getAttribute('aria-label')) || '',
+    /正在记录这条记忆提示有用反馈[\s\S]*服务确认前不会当作已学习/,
+    '正向反馈写入中应更新按钮可访问名称并保留确认前边界',
   );
   await waitForRequestCount(
     { contextRecallRequests: server.feedbackRequests },
@@ -2274,10 +2718,10 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.equal(positiveFeedbackDetail.surface, 'web_passive_bubble');
   assert.equal(positiveFeedbackDetail.host, '127.0.0.1');
   assert.equal(positiveFeedbackDetail.target_type, 'message');
-  assert.equal(
-    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
-    '已标记有用',
-    '标记有用后应立即给出按钮状态反馈',
+  assert.match(
+    (await page.locator('.pai-context-recall-positive').getAttribute('aria-label')) || '',
+    /这条记忆提示有用反馈已确认写入[\s\S]*后续类似提示会优先保留/,
+    '标记有用后应立即给出按钮状态反馈并保留服务确认边界',
   );
   assert.equal(
     await page.locator('.pai-context-recall-positive').isDisabled(),
@@ -4199,6 +4643,16 @@ async function verifyJiraIssueContext(server, context) {
     }
     throw error;
   }
+  assert.equal(
+    await page.locator('.pai-composer-guard-icon-button').isVisible(),
+    true,
+    'Jira 阅读态 fixture 应保留可见的 Compose Assist 预渲染图标',
+  );
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.tagName),
+    'BODY',
+    'Jira 阅读态 fixture 不应把焦点放进评论编辑器',
+  );
 
   assert.equal(
     server.contextRecallRequests.length,
@@ -4221,6 +4675,22 @@ async function verifyJiraIssueContext(server, context) {
       (hint) => hint.kind === 'jira_issue_key' && hint.value === 'PAI-123',
     ),
     'Jira issue 页面应透传 issue key entity hint',
+  );
+  await page.evaluate(() => {
+    const lateField = document.createElement('div');
+    lateField.textContent = 'DEV Estimate: 3';
+    document.querySelector('main')?.appendChild(lateField);
+  });
+  await page.waitForTimeout(2200);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'Jira 延迟字段重绘不应把同一 issue 当作新页面再次召回',
+  );
+  assert.equal(
+    await page.locator('.pai-context-bubble').count(),
+    1,
+    'Jira 延迟字段重绘不应移除已有 Lens 图标',
   );
   if (diagnostics.some((entry) => entry.includes('pageerror'))) {
     for (const entry of diagnostics) {
@@ -5910,6 +6380,7 @@ try {
   await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
   await verifyRingCentralLensSuppressedByComposeAssist(server, context);
   await verifyRehearsalLensPresentation(server, context);
+  await verifyKeystoneBriefMemoryLens(server, context);
   await verifyJiraIssueContext(server, context);
   await verifySelectedTextTrigger(server, context);
   await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);

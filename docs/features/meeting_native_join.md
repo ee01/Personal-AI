@@ -1,6 +1,6 @@
 # RingCentral Native Join
 
-_最后更新: 2026-07-12_
+_最后更新: 2026-07-14_
 
 ## 是什么
 
@@ -15,6 +15,8 @@ _最后更新: 2026-07-12_
 2026-07-10 补充：`Join in browser`、`Copy link` 和恢复态的 `Try app again` 按钮自身也有 hover / 读屏边界。它们分别说明会打开新的浏览器窗口、复制完整但默认隐藏细节的恢复链接，或重试已校验的 app handoff；这些按钮都不确认用户已入会、不隐式复制额外材料、不改变默认加会路径。
 
 2026-07-12 补充：手动恢复控件也补齐同级按钮边界。`Copy ID`、`Copy passcode`、`Show full link` / `Hide full link`、右上角关闭、紧凑恢复条的 `Restore recovery`，以及 `Use browser by default` / `Use app by default` 都在 hover / 读屏里说明当前点击只复制指定材料、只本地显示/隐藏完整链接、只恢复控件，或只保存未来偏好；它们不会确认已入会、不会隐式重试 app、不会打开浏览器、不会复制额外会议材料，也不会改变当前会议的恢复事实。
+
+2026-07-14 补充：RingCentral Video Home 里能匹配到已校验会议链接的 `Join` / `Join meeting` 按钮，在点击前也会通过 hover / 读屏说明 Personal AI 会先尝试 RingCentral app、Chrome 可能弹出外部 app 提示、浏览器恢复与 Meeting ID/passcode 路径仍保留、隐藏链接细节不会默认展开，并且这次点击不确认已入会、不复制会议材料、不改变默认加会路径。
 
 浮层里的默认路径切换是可撤销的：点 `Use browser by default` 后会写入同一个 Native Join 开关，并立刻切换成 `Use app by default`，误点时不需要离开当前页面去 Options 找回。保存 app-first / browser-first 默认路径或保存失败时，面板会单独显示 `Default path receipt`：它把这次操作绑定为“未来 RingCentral 加会偏好写入”，同时说明本次点击没有加入当前会议、没有重试 app、没有打开浏览器窗口、没有复制会议材料，也没有移除当前恢复控件。Glip rich invite 这类运行在页面上下文的入口会通过 content script 桥接写入 extension storage，避免按钮看似保存但实际没有改变默认路径。如果保存默认路径失败，回执会明确说明默认设置没有改变，本次点击没有加入会议、重试 app、打开浏览器会议或复制会议材料，当前恢复控件仍可继续使用。
 
@@ -31,6 +33,7 @@ _最后更新: 2026-07-12_
 5. 兜底路径可用性：native 是否安装无法可靠探测，所以 5 秒后会结合 `document.visibilityState` / `document.hasFocus()` 判断是否像是已经离开浏览器；仍停在原页面时必须继续保留 Web fallback；一旦用户进入恢复操作，浮层必须取消自动消失。
 6. App 重试：只有进入“未检测到接管”的恢复态后才显示 `Try app again`；点击只重放当前已校验的 `rcvdt://` 链接、重启 handoff 检测，不打开浏览器兜底、不复制材料、不改变默认路径，也不移除浏览器恢复。
 7. 交接回执：浮层要把“Chrome 提示该选什么 / 已尝试打开 app / native handoff 使用完整会议链接 / 无法验证 app 接管或实际入会 / 浏览器恢复仍可用 / 默认路径未自动改变”放在同一个可见位置，避免用户把 external-protocol 提示取消误读成已经失败或已经改设置。
+   RingCentral Video Home 的原始 `Join` 控件也要在点击前带同一类 hover / 读屏边界，避免用户直到 app handoff 已触发后才知道这是 app-first 路径。
 8. 链接隐私：完整浏览器链接可能带有 passcode 或其他 query/hash，默认不在浮层正文里展示，但恢复按钮和复制动作必须保留这些参数。
 9. 手动恢复：`Copy link` 成功时必须说明复制的是完整恢复链接且不代表已入会或改默认路径；如果剪贴板写入失败，当前操作已经越过“默认隐藏完整链接”的安全展示层，系统会临时展开完整链接并提醒复制后再隐藏，保证恢复链接仍可用。
 10. 外层跳转包装：只解包常见 redirect 参数；外层域名本身不被当作可信会议来源，解出的目标仍必须是 `v.ringcentral.com` 的安全会议路径。

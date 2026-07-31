@@ -28,6 +28,7 @@ import { ActionExecutor } from './actions/ActionExecutor.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { RuntimePushTarget } from '../runtimeConfig.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
+import { SourceMemoryDistillationWorker } from './SourceMemoryDistillationWorker.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -294,7 +295,24 @@ export class HeartbeatLoop {
         );
       }
 
-      // 5c. Execute due auto actions from reflection/action runtime
+      // 5c. Process bounded Source Memory deep-distillation work.
+      try {
+        const distillationResult = await new SourceMemoryDistillationWorker(this.db, {
+          userId: this.userId,
+        }).runDueJobs(2);
+        if (distillationResult.claimed > 0) {
+          actions.push(
+            `source-memory distillation claimed ${distillationResult.claimed}: ready ${distillationResult.ready}, blocked ${distillationResult.blocked}, retrying ${distillationResult.retrying}, failed ${distillationResult.failed}`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          '[HeartbeatLoop] Source Memory distillation skipped:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+
+      // 5d. Execute due auto actions from reflection/action runtime
       const actionExecutor = new ActionExecutor(
         this.db,
         this.userDataManager,

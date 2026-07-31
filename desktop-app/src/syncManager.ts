@@ -34,6 +34,9 @@ export interface SyncAttemptResult {
   packageKinds?: string[];
   packageItemCount?: number;
   sourceRefCount?: number;
+  feedHasMore?: boolean;
+  feedLimit?: number;
+  feedSnapshotReceipt?: string;
   transportUsed?: SyncResult['transportUsed'];
   transportMode?: SyncResult['transportMode'];
   transportFallbackReason?: string;
@@ -184,6 +187,35 @@ function packageHasItems(pkg: ProviderMemoryProduct): boolean {
     return pkg.itemCount > 0;
   }
   return Array.isArray(pkg.sourceRefs) && pkg.sourceRefs.length > 0;
+}
+
+const attemptSourceRefs = new WeakMap<SyncAttemptResult, string[]>();
+
+function collectRenderedSourceRefs(
+  rendered: RenderContextPackageResponse,
+): string[] {
+  return Array.from(
+    new Set(
+      rendered.packages
+        .flatMap((pkg) => pkg.sourceRefs || [])
+        .filter(Boolean),
+    ),
+  );
+}
+
+function withAttemptSourceRefs<T extends SyncAttemptResult>(
+  result: T,
+  rendered: RenderContextPackageResponse,
+): T {
+  const sourceRefs = collectRenderedSourceRefs(rendered);
+  if (sourceRefs.length > 0) {
+    attemptSourceRefs.set(result, sourceRefs);
+  }
+  return result;
+}
+
+function getAttemptSourceRefs(result: SyncAttemptResult): string[] {
+  return attemptSourceRefs.get(result) || [];
 }
 
 function actionablePackages(
@@ -364,6 +396,15 @@ function cleanAttemptMetadata(
   if (typeof metadata.sourceRefCount === 'number') {
     cleaned.sourceRefCount = metadata.sourceRefCount;
   }
+  if (typeof metadata.feedHasMore === 'boolean') {
+    cleaned.feedHasMore = metadata.feedHasMore;
+  }
+  if (typeof metadata.feedLimit === 'number') {
+    cleaned.feedLimit = metadata.feedLimit;
+  }
+  if (metadata.feedSnapshotReceipt) {
+    cleaned.feedSnapshotReceipt = metadata.feedSnapshotReceipt;
+  }
   if (metadata.transportUsed) {
     cleaned.transportUsed = metadata.transportUsed;
   }
@@ -399,7 +440,12 @@ function packageMetadata(
   rendered: RenderContextPackageResponse,
 ): Pick<
   SyncAttemptResult,
-  'packageKinds' | 'packageItemCount' | 'sourceRefCount'
+  | 'packageKinds'
+  | 'packageItemCount'
+  | 'sourceRefCount'
+  | 'feedHasMore'
+  | 'feedLimit'
+  | 'feedSnapshotReceipt'
 > {
   const packageKinds = Array.from(
     new Set(rendered.packages.map((pkg) => pkg.kind).filter(Boolean)),
@@ -407,20 +453,32 @@ function packageMetadata(
   const itemCounts = rendered.packages
     .map((pkg) => pkg.itemCount)
     .filter((value): value is number => typeof value === 'number');
-  const sourceRefCount = new Set(
-    rendered.packages
-      .flatMap((pkg) => pkg.sourceRefs || [])
-      .filter(Boolean),
-  ).size;
+  const sourceRefs = collectRenderedSourceRefs(rendered);
+  const feedPackages = rendered.packages.filter(
+    (pkg) => pkg.kind === 'todo_digest' || pkg.kind === 'notice_digest',
+  );
+  const visibleFeedPackages = feedPackages.filter(packageHasItems);
+  const feedLimits = visibleFeedPackages
+    .map((pkg) => pkg.feedLimit)
+    .filter((value): value is number => typeof value === 'number');
+  const feedSnapshotReceipt = visibleFeedPackages
+    .map((pkg) => pkg.feedSnapshotReceipt)
+    .find((value): value is string => Boolean(value));
 
-  return {
+  return cleanAttemptMetadata({
     packageKinds,
     packageItemCount:
       itemCounts.length > 0
         ? itemCounts.reduce((total, count) => total + count, 0)
         : undefined,
-    sourceRefCount,
-  };
+    sourceRefCount: sourceRefs.length,
+    feedHasMore:
+      visibleFeedPackages.length > 0
+        ? visibleFeedPackages.some((pkg) => pkg.feedHasMore === true)
+        : undefined,
+    feedLimit: feedLimits.length > 0 ? Math.max(...feedLimits) : undefined,
+    feedSnapshotReceipt,
+  });
 }
 
 function mergeAttemptMetadata(
@@ -429,13 +487,25 @@ function mergeAttemptMetadata(
   const packageKinds = Array.from(
     new Set(results.flatMap((result) => result.packageKinds || [])),
   );
-  const sourceRefCount = results.reduce(
-    (total, result) => total + (result.sourceRefCount || 0),
-    0,
+  const sourceRefs = Array.from(
+    new Set(results.flatMap((result) => getAttemptSourceRefs(result))),
   );
+  const sourceRefCount =
+    sourceRefs.length > 0
+      ? sourceRefs.length
+      : results.reduce(
+          (total, result) => total + (result.sourceRefCount || 0),
+          0,
+        );
   const itemCounts = results
     .map((result) => result.packageItemCount)
     .filter((value): value is number => typeof value === 'number');
+  const feedLimits = results
+    .map((result) => result.feedLimit)
+    .filter((value): value is number => typeof value === 'number');
+  const feedSnapshotReceipt = results
+    .map((result) => result.feedSnapshotReceipt)
+    .find((value): value is string => Boolean(value));
   const delivered = results.filter((result) => result.status === 'succeeded');
   const transportUsed =
     delivered.find((result) => result.transportUsed)?.transportUsed ||
@@ -475,6 +545,13 @@ function mergeAttemptMetadata(
         ? itemCounts.reduce((total, count) => total + count, 0)
         : undefined,
     sourceRefCount,
+    feedHasMore: results.some((result) => result.feedHasMore === true)
+      ? true
+      : results.some((result) => result.feedHasMore === false)
+        ? false
+        : undefined,
+    feedLimit: feedLimits.length > 0 ? Math.max(...feedLimits) : undefined,
+    feedSnapshotReceipt,
     externalThreadId,
     transportUsed,
     transportMode,
@@ -668,6 +745,9 @@ export class BridgeSyncManager {
     packageKinds?: string[];
     packageItemCount?: number;
     sourceRefCount?: number;
+    feedHasMore?: boolean;
+    feedLimit?: number;
+    feedSnapshotReceipt?: string;
     transportUsed?: SyncResult['transportUsed'];
     transportMode?: SyncResult['transportMode'];
     transportFallbackReason?: string;
@@ -729,6 +809,9 @@ export class BridgeSyncManager {
         packageKinds: result.packageKinds,
         packageItemCount: result.packageItemCount,
         sourceRefCount: result.sourceRefCount,
+        feedHasMore: result.feedHasMore,
+        feedLimit: result.feedLimit,
+        feedSnapshotReceipt: result.feedSnapshotReceipt,
         transportUsed: result.transportUsed,
         transportMode: result.transportMode,
         transportFallbackReason: result.transportFallbackReason,
@@ -979,9 +1062,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1000,7 +1086,10 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result, { ...metadata, telemetryError });
+    return withAttemptSourceRefs(
+      syncResultToAttempt(result, { ...metadata, telemetryError }),
+      rendered,
+    );
   }
 
   private async syncMobileBriefing(): Promise<SyncAttemptResult> {
@@ -1019,9 +1108,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1035,9 +1127,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1054,7 +1149,10 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result, { ...metadata, telemetryError });
+    return withAttemptSourceRefs(
+      syncResultToAttempt(result, { ...metadata, telemetryError }),
+      rendered,
+    );
   }
 
   private async syncReminders(): Promise<SyncAttemptResult> {
@@ -1069,11 +1167,14 @@ export class BridgeSyncManager {
       .slice(0, 8);
     const metadata = packageMetadata(rendered);
     if (reminders.length === 0) {
-      return {
-        status: 'skipped',
-        errorMessage: 'No reminders to sync',
-        ...metadata,
-      };
+      return withAttemptSourceRefs(
+        {
+          status: 'skipped',
+          errorMessage: 'No reminders to sync',
+          ...metadata,
+        },
+        rendered,
+      );
     }
 
     const result = await this.bridgeService.syncReminders({
@@ -1088,7 +1189,10 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result, { ...metadata, telemetryError });
+    return withAttemptSourceRefs(
+      syncResultToAttempt(result, { ...metadata, telemetryError }),
+      rendered,
+    );
   }
 
   /**
@@ -1111,9 +1215,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1132,7 +1239,10 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result, { ...metadata, telemetryError });
+    return withAttemptSourceRefs(
+      syncResultToAttempt(result, { ...metadata, telemetryError }),
+      rendered,
+    );
   }
 
   private async syncReminderChannels(
@@ -1199,14 +1309,17 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        {
-          status: 'skipped',
-          errorMessage: reason,
-          ...metadata,
-          ...reminderDeliveryMode,
-        },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          {
+            status: 'skipped',
+            errorMessage: reason,
+            ...metadata,
+            ...reminderDeliveryMode,
+          },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1221,14 +1334,17 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        {
-          status: 'skipped',
-          errorMessage: reason,
-          ...metadata,
-          ...reminderDeliveryMode,
-        },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          {
+            status: 'skipped',
+            errorMessage: reason,
+            ...metadata,
+            ...reminderDeliveryMode,
+          },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1255,10 +1371,13 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return withTelemetryError(
-      attempt,
-      deliveryTelemetryError,
-      syncJobTelemetryError,
+    return withAttemptSourceRefs(
+      withTelemetryError(
+        attempt,
+        deliveryTelemetryError,
+        syncJobTelemetryError,
+      ),
+      rendered,
     );
   }
 
@@ -1293,9 +1412,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1307,9 +1429,12 @@ export class BridgeSyncManager {
         startedAt,
         reason,
       );
-      return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
-        telemetryError,
+      return withAttemptSourceRefs(
+        withTelemetryError(
+          { status: 'skipped', errorMessage: reason, ...metadata },
+          telemetryError,
+        ),
+        rendered,
       );
     }
 
@@ -1333,10 +1458,13 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return withTelemetryError(
-      attempt,
-      deliveryTelemetryError,
-      syncJobTelemetryError,
+    return withAttemptSourceRefs(
+      withTelemetryError(
+        attempt,
+        deliveryTelemetryError,
+        syncJobTelemetryError,
+      ),
+      rendered,
     );
   }
 

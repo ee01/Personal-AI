@@ -26,7 +26,8 @@
             `ask-status-rail-${askAnswerStatusRail.tone}`,
           ]"
           role="note"
-          aria-label="Ask 本轮状态"
+          :aria-label="askAnswerStatusRailBoundary"
+          :title="askAnswerStatusRailBoundary"
         >
           <div class="ask-status-rail-main">
             <span class="ask-status-rail-label">
@@ -53,7 +54,8 @@
           v-if="askTopicLockReceipt"
           class="ask-topic-lock-receipt"
           role="note"
-          aria-label="Ask 话题锁定回执"
+          :aria-label="askTopicLockReceiptBoundary"
+          :title="askTopicLockReceiptBoundary"
         >
           <div class="ask-topic-lock-receipt-main">
             <span class="ask-topic-lock-receipt-label">
@@ -77,7 +79,8 @@
           v-if="askContinuationReceipt"
           class="ask-continuation-receipt"
           role="note"
-          aria-label="Ask 承接候选回执"
+          :aria-label="askContinuationReceiptBoundary"
+          :title="askContinuationReceiptBoundary"
         >
           <div class="ask-continuation-receipt-main">
             <span class="ask-continuation-receipt-label">
@@ -104,7 +107,8 @@
             `answer-memory-receipt-${askEvidenceWatchReceipt.tone}`,
           ]"
           role="note"
-          aria-label="Ask 证据守望回执"
+          :aria-label="askEvidenceWatchReceiptBoundary"
+          :title="askEvidenceWatchReceiptBoundary"
         >
           <div class="answer-memory-receipt-main">
             <span class="answer-memory-receipt-label">
@@ -134,7 +138,8 @@
             `answer-memory-receipt-${askEvidenceBasisReceipt.tone}`,
           ]"
           role="note"
-          aria-label="Ask 证据来源回执"
+          :aria-label="askEvidenceBasisReceiptBoundary"
+          :title="askEvidenceBasisReceiptBoundary"
         >
           <div class="answer-memory-receipt-main">
             <span class="answer-memory-receipt-label">
@@ -175,7 +180,8 @@
           <div
             class="ask-clarification-preflight"
             role="note"
-            aria-label="Ask 候选选择回执"
+            :aria-label="askClarificationChoiceReceiptBoundary"
+            :title="askClarificationChoiceReceiptBoundary"
           >
             <div class="ask-clarification-preflight-main">
               <span class="ask-clarification-preflight-label">
@@ -242,7 +248,8 @@
               : 'answer-memory-receipt-info',
           ]"
           role="note"
-          aria-label="Ask 检索范围回执"
+          :aria-label="askScopeReceiptBoundary"
+          :title="askScopeReceiptBoundary"
         >
           <div class="answer-memory-receipt-main">
             <span class="answer-memory-receipt-label">
@@ -337,7 +344,8 @@
             `answer-memory-receipt-${askFollowUpReceipt.tone}`,
           ]"
           role="note"
-          aria-label="Ask 查证与缺口回执"
+          :aria-label="askFollowUpReceiptBoundary"
+          :title="askFollowUpReceiptBoundary"
         >
           <div class="answer-memory-receipt-main">
             <span class="answer-memory-receipt-label">
@@ -1413,12 +1421,49 @@ const askFollowUpReceipt = computed(() =>
   formatAskFollowUpReceipt(searchContext.value.askResult),
 );
 
+const askFollowUpReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askFollowUpReceipt.value
+      ? `Ask 查证与缺口回执：${askFollowUpReceipt.value.label}`
+      : undefined,
+    detail: askFollowUpReceipt.value?.detail,
+    metrics: askFollowUpReceipt.value?.metrics,
+    fallbackLabel: 'Ask 查证与缺口回执',
+    boundary:
+      '这是本轮 Ask 的查证与缺口状态；查看这张卡不会执行队列动作、创建新的查证动作、确认结论、代表你发消息、写活答案或外部写入。',
+  }),
+);
+
 const askEvidenceWatchReceipt = computed(() =>
   formatAskEvidenceWatchReceipt(searchContext.value.askResult?.evidenceWatch),
 );
 
+const askEvidenceWatchReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askEvidenceWatchReceipt.value
+      ? `Ask 证据守望回执：${askEvidenceWatchReceipt.value.label}`
+      : undefined,
+    detail: askEvidenceWatchReceipt.value?.detail,
+    metrics: askEvidenceWatchReceipt.value?.metrics,
+    fallbackLabel: 'Ask 证据守望回执',
+    boundary:
+      '这是本轮 Ask response 返回的证据守望状态；查看这张卡不会新增 run、重新触达权威来源、更新最近复核时间、创建外部动作、确认事实或发送消息。',
+  }),
+);
+
 const askEvidenceBasisReceipt = computed(() =>
   formatAskEvidenceBasisReceipt(searchContext.value.askResult),
+);
+
+const askEvidenceBasisReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askEvidenceBasisReceipt.value?.label,
+    detail: askEvidenceBasisReceipt.value?.detail,
+    metrics: askEvidenceBasisReceipt.value?.metrics,
+    fallbackLabel: 'Ask 证据来源回执',
+    boundary:
+      '这是当前 Ask response 的可见 evidence 切片摘要；查看这张卡不会重新读取全库或连接器、不确认事实、不写活答案、不创建查证动作或外部写入。',
+  }),
 );
 
 const askAnswerStatusRail = computed(() =>
@@ -1430,18 +1475,77 @@ const askAnswerStatusRail = computed(() =>
   ),
 );
 
+const askAnswerStatusRailBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askAnswerStatusRail.value?.label,
+    detail: askAnswerStatusRail.value?.detail,
+    metrics: askAnswerStatusRail.value?.metrics,
+    fallbackLabel: 'Ask 本轮状态',
+    boundary:
+      '这是本轮 Ask 的答案状态快照；查看这张卡不会重新读取记忆、确认事实、写活答案、创建查证动作、代表你发消息或执行外部写入。',
+  }),
+);
+
 const askTopicLockReceipt = computed(() =>
   formatAskTopicLockReceipt(searchContext.value.askResult),
+);
+
+const askTopicLockReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askTopicLockReceipt.value?.label,
+    detail: askTopicLockReceipt.value?.detail,
+    metrics: askTopicLockReceipt.value?.metrics,
+    fallbackLabel: 'Ask 话题锁定回执',
+    boundary:
+      '这是本轮 Ask 的检索锚点解释；查看这张卡不会改变锁定 topic、重跑 Ask、确认事实、写活答案、创建查证动作、代表你发送消息或外部写入。',
+  }),
 );
 
 const askClarification = computed(() =>
   formatAskClarification(searchContext.value.askResult),
 );
 
+const askClarificationChoiceReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askClarification.value
+      ? `Ask ${askClarification.value.choiceReceipt.label}`
+      : undefined,
+    detail: askClarification.value?.choiceReceipt.detail,
+    metrics: askClarification.value?.choiceReceipt.metrics,
+    fallbackLabel: 'Ask 候选选择回执',
+    boundary:
+      '这是候选选择前的点击边界；查看这张卡不会提交候选，点击候选也只是继续 Ask，不会确认事实、写活答案、创建外部查证动作、发送消息或外部写入。',
+  }),
+);
+
 const askContinuationReceipt = computed(() =>
   formatAskContinuationReceipt(
     searchContext.value.askResult?.continuationReceipt,
   ),
+);
+
+const askContinuationReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: askContinuationReceipt.value
+      ? `Ask ${askContinuationReceipt.value.label}`
+      : undefined,
+    detail: askContinuationReceipt.value?.detail,
+    metrics: askContinuationReceipt.value?.metrics,
+    fallbackLabel: 'Ask 承接候选回执',
+    boundary:
+      '这是上一轮候选选择如何进入本轮检索的解释；查看这张卡不会再次提交 Ask、确认事实、写活答案、创建查证动作、代表你发送消息或外部写入。',
+  }),
+);
+
+const askScopeReceiptBoundary = computed(() =>
+  formatAskReceiptCardBoundary({
+    label: 'Ask 检索范围回执',
+    detail: askScopeReceiptNote.value,
+    metrics: askScopeReceiptMetrics.value,
+    fallbackLabel: 'Ask 检索范围回执',
+    boundary:
+      '这是服务端返回的本轮 Ask 范围快照；查看这张卡不会切换范围、重新搜索、同步外部来源、写反馈、写活答案或确认事实。',
+  }),
 );
 
 const decisionEvidenceChainBlock = computed(() =>
@@ -1573,6 +1677,27 @@ function compactAskReceiptText(value: unknown, maxLength = 88): string {
   const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatAskReceiptCardBoundary(input: {
+  label?: unknown;
+  detail?: unknown;
+  metrics?: unknown;
+  fallbackLabel: string;
+  boundary: string;
+}): string {
+  const label =
+    compactAskReceiptText(input.label, 48) || input.fallbackLabel;
+  const detail = compactAskReceiptText(input.detail, 156);
+  const metrics = Array.isArray(input.metrics)
+    ? input.metrics
+        .map((metric) => compactAskReceiptText(metric, 42))
+        .filter(Boolean)
+    : [];
+  const metricText = metrics.length ? metrics.slice(0, 10).join('；') : '';
+  return [label, detail, metricText, input.boundary]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function formatAskWatchTime(value: unknown): string {

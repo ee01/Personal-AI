@@ -20,6 +20,7 @@ import { getEnvConfig } from '../utils';
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { buildTimelineSyncComponentsFragment } from './timelineProjects';
 import { getExecutorRule, getTimelineSyncRule, normalizeSheetConfig } from './botAutomationConfig';
+import { replaceScheduledMessagesDifyJumpboardPlaceholders } from './difyJumpboardConfig';
 
 export interface JiraRuleUpdateCheckResult {
   needsUpdate: boolean;
@@ -398,7 +399,10 @@ export class JiraRuleUpdater {
       .replace(/{{USER_KEY}}/g, existingRule.authorAccountId || '');
 
     const rulePayload = JSON.parse(
-      replaceRingCentralSenderPlaceholders(rulePayloadString, this.config?.ringCentralSender, envConfig)
+      replaceScheduledMessagesDifyJumpboardPlaceholders(
+        replaceRingCentralSenderPlaceholders(rulePayloadString, this.config?.ringCentralSender, envConfig),
+        envConfig,
+      )
     );
     
     // 移除 _metadata 字段（这是模板内部使用的，不应发送到 Jira）

@@ -12,17 +12,28 @@
 
 import type { Config } from '../config.js';
 import { getConfig } from '../config.js';
+import { recordLlmUsage } from '../analytics/UsageRecorder.js';
+import {
+  buildSamplingPayload,
+  buildTokenLimitPayload,
+  resolveTemperature,
+  SCENARIO_TEMPERATURE,
+  type LLMScenario,
+} from './modelSampling.js';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 export interface LLMOptions {
-  temperature?: number;   // default 0.3
+  /** Task shape driving the temperature tier; an explicit temperature wins. */
+  scenario?: LLMScenario;
+  temperature?: number;   // default 0.3 (SCENARIO_TEMPERATURE.summary)
   maxTokens?: number;     // default 2000
   systemPrompt?: string;
   timeoutMs?: number;
   retryCount?: number;
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface LLMResponse {
@@ -36,7 +47,7 @@ export type LLMStreamDeltaHandler = (delta: string) => void | Promise<void>;
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_TEMPERATURE = SCENARIO_TEMPERATURE.summary;
 const DEFAULT_MAX_TOKENS = 2000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 const MIN_REQUEST_TIMEOUT_MS = 1000;
@@ -80,7 +91,52 @@ export class LLMClient {
       }
     };
 
-    return this.withRetry(attempt, options);
+    const response = await this.withRetry(attempt, options);
+    this.recordBackendUsage(response, prompt);
+    return response;
+  }
+
+  /**
+   * Model name for the currently active provider (used for usage attribution).
+   */
+  private getActiveModel(): string {
+    return this.config.llmProvider === 'ollama'
+      ? this.config.ollamaModel
+      : this.config.openaiModel;
+  }
+
+  /**
+   * Best-effort token estimate when the provider omits usage metadata.
+   * Roughly ~4 chars/token for Latin; CJK often denser so we use ~2.
+   */
+  private estimateTokensFromText(text: string): number {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return 0;
+    const cjk = (trimmed.match(/[\u3400-\u9fff]/g) || []).length;
+    const other = Math.max(0, trimmed.length - cjk);
+    return Math.max(1, Math.ceil(cjk / 2 + other / 4));
+  }
+
+  /**
+   * Record backend LLM token usage for analytics (best-effort). Attribution
+   * (user + capability) is read from the current async usage context.
+   * When the provider omits usage, fall back to a content-length estimate so
+   * streaming / incomplete-usage calls still appear in the report.
+   */
+  private recordBackendUsage(response: LLMResponse, prompt?: string): void {
+    let promptTokens = response.usage?.promptTokens ?? 0;
+    let completionTokens = response.usage?.completionTokens ?? 0;
+    if (!response.usage || (promptTokens === 0 && completionTokens === 0)) {
+      promptTokens = this.estimateTokensFromText(prompt ?? '');
+      completionTokens = this.estimateTokensFromText(response.content ?? '');
+      if (promptTokens === 0 && completionTokens === 0) return;
+    }
+    recordLlmUsage({
+      side: 'backend',
+      model: this.getActiveModel(),
+      promptTokens,
+      completionTokens,
+    });
   }
 
   /**
@@ -94,9 +150,10 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const provider = this.config.llmProvider;
 
+    let response: LLMResponse;
     switch (provider) {
       case 'openai':
-        return this.callOpenAICompatibleStream(
+        response = await this.callOpenAICompatibleStream(
           this.getOpenAIChatCompletionsUrl(),
           this.config.openaiApiKey,
           this.config.openaiModel,
@@ -104,8 +161,9 @@ export class LLMClient {
           options,
           onDelta,
         );
+        break;
       case 'groq':
-        return this.callOpenAICompatibleStream(
+        response = await this.callOpenAICompatibleStream(
           GROQ_BASE_URL,
           this.config.groqApiKey,
           this.config.openaiModel,
@@ -113,13 +171,19 @@ export class LLMClient {
           options,
           onDelta,
         );
+        break;
       case 'ollama':
-        return this.callOllamaStream(prompt, options, onDelta);
+        response = await this.callOllamaStream(prompt, options, onDelta);
+        break;
       case 'dify':
-        return this.callDifyStream(prompt, options, onDelta);
+        response = await this.callDifyStream(prompt, options, onDelta);
+        break;
       default:
-        return this.replayBlockingResponse(prompt, options, onDelta);
+        response = await this.replayBlockingResponse(prompt, options, onDelta);
+        break;
     }
+    this.recordBackendUsage(response, prompt);
+    return response;
   }
 
   /**
@@ -163,7 +227,6 @@ export class LLMClient {
     prompt: string,
     options?: LLMOptions,
   ): Promise<LLMResponse> {
-    const temperature = options?.temperature ?? DEFAULT_TEMPERATURE;
     const maxTokens = options?.maxTokens ?? DEFAULT_MAX_TOKENS;
 
     const messages: Array<{ role: string; content: string }> = [];
@@ -182,8 +245,11 @@ export class LLMClient {
         body: JSON.stringify({
           model,
           messages,
-          temperature,
-          max_tokens: maxTokens,
+          ...buildSamplingPayload(model, options),
+          ...buildTokenLimitPayload(model, maxTokens),
+          ...(options?.reasoningEffort && /^gpt-5(?:\.|-|$)/i.test(model)
+            ? { reasoning_effort: options.reasoningEffort }
+            : {}),
         }),
         signal,
       });
@@ -215,7 +281,6 @@ export class LLMClient {
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
   ): Promise<LLMResponse> {
-    const temperature = options?.temperature ?? DEFAULT_TEMPERATURE;
     const maxTokens = options?.maxTokens ?? DEFAULT_MAX_TOKENS;
     const messages = this.buildMessages(prompt, options);
 
@@ -229,8 +294,8 @@ export class LLMClient {
         body: JSON.stringify({
           model,
           messages,
-          temperature,
-          max_tokens: maxTokens,
+          ...buildSamplingPayload(model, options),
+          ...buildTokenLimitPayload(model, maxTokens),
           stream: true,
           stream_options: {
             include_usage: true,
@@ -282,7 +347,7 @@ export class LLMClient {
   private async callOllama(prompt: string, options?: LLMOptions): Promise<LLMResponse> {
     const url = `${this.config.ollamaBaseUrl}/api/chat`;
     const model = this.config.ollamaModel;
-    const temperature = options?.temperature ?? DEFAULT_TEMPERATURE;
+    const temperature = resolveTemperature(model, options) ?? DEFAULT_TEMPERATURE;
 
     const messages: Array<{ role: string; content: string }> = [];
     if (options?.systemPrompt) {
@@ -331,7 +396,7 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const url = `${this.config.ollamaBaseUrl}/api/chat`;
     const model = this.config.ollamaModel;
-    const temperature = options?.temperature ?? DEFAULT_TEMPERATURE;
+    const temperature = resolveTemperature(model, options) ?? DEFAULT_TEMPERATURE;
     const messages = this.buildMessages(prompt, options);
 
     return this.withRequestTimeout(options, async (signal) => {

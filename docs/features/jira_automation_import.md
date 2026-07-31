@@ -67,6 +67,8 @@
 
 2026-07-09 补充：`Secret re-entry map` 会再压成 `Credential re-entry queue` / `凭据重录队列`。队列按 hidden Jira secret、URL / signed query 凭据、inline secret-like text、命名 credential 字段等原因分组，帮助用户知道启用前要在 Jira 里先重建哪类凭据；它只来自已经脱敏的 slot 元数据，不展示 raw value，也不表示 disabled copy 已恢复凭据。
 
+2026-07-15 补充：真正会发送 create request 的两个 `Import disabled copy` 按钮也会带本轮导入边界。按钮 hover / 读屏会说明要创建的 disabled copy、目标项目、高风险复核仍 open、凭据重录组和脱敏位置数量、当前链式触发选择，以及这次点击只发送一个已清洗 POST，不会启用、运行、激活 schedule、恢复 secret、编辑源规则或生成可工作的凭据。
+
 ## 使用方法
 
 1. **访问 Jira 自动化页面**
@@ -101,6 +103,7 @@
    - sticky header 会同步显示当前 create stage 是 ready：按钮只会创建 disabled-copy，不会启用、运行、激活 schedule 或恢复 secret；高风险复核仍然留在 Jira 启用前完成
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留。旁边的链式触发选择回执会说明当前状态会怎样进入 disabled-copy payload；切换这个安全选项只会重算预览、复核包和 create payload，不会发送 Jira create request，也不会要求重新勾选确认
    - 预览首屏会显示 `Create request scope`：当前还没有向 Jira 发送 create request；点击确认后只创建一个脱敏的 disabled copy；源规则不会被编辑、启用或运行；嵌入的环境引用只进入复核，不会被自动重写
+   - 顶部和底部的 `Import disabled copy` / `导入禁用副本` 按钮会在 hover / 读屏里重复本轮 create request 边界：目标副本、目标项目、凭据重录队列数量、链式触发选择、启用计划仍 open，以及不会启用、运行、恢复 secret 或编辑源规则
    - 点击导入后、Jira 返回前，会显示持久 `Create request pending`：说明一个脱敏 POST 正在创建该 disabled copy，Jira 尚未确认成功；这条回执会保留到成功或失败返回，且关闭或刷新页面不会撤销已经发送的 create request；它也会继续说明不会自动启用、运行、激活 schedule 或恢复 secret
 
 3. **导入完成**
@@ -189,7 +192,7 @@
    - 预览中的 `Activation plan` 复用同一套风险扫描结果，给出启用前的下一步顺序；这份计划也会写入复制包和导入副本描述，避免用户离开预览后丢失复核路径
    - 预览中提供 `Copy review packet`，复制内容复用同一套脱敏检查结果，不额外暴露 secret、token 或隐藏 payload，并列出启用前需要在目标 Jira 重录的隐藏 secret 字段
    - `Copy review packet` 区块会直接说明它只是本机剪贴板 handoff，不会创建/编辑/启用 Jira automation，也不会运行 schedule 或恢复 secret
-   - 预览详情和导入边界回执显示 `Secret re-entry map`；用户可以在创建 disabled copy 前看到哪些字段只是占位符，而不是导入后才发现凭据没有恢复
+   - 预览详情、导入边界回执和两个 create 按钮都会显示 `Secret re-entry map` / `Credential re-entry queue` 的压缩口径；用户可以在创建 disabled copy 前看到哪些字段只是占位符，而不是导入后才发现凭据没有恢复
    - 检测到高风险项时，预览会显示 JQL/过滤器、源项目引用、外部效果、环境绑定等高风险类别，以及 Activation plan 的首个高风险步骤；导入按钮不再因为高风险项而禁用
    - sticky header 的导入按钮旁会显示 create-stage ready 回执，说明点击只会创建禁用副本，Jira-side Activation plan review 仍然 open
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要和 `规则链式触发选择` 回执中；每次切换都会重算导入副本预览和复核包，但不再重新锁住导入按钮，也不会在点击导入前写 Jira

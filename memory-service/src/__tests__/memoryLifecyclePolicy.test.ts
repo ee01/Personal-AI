@@ -82,6 +82,6 @@ describe('MemoryLifecyclePolicy', () => {
 
     expect(active.allowed).toBe(false);
     expect(historical.allowed).toBe(true);
-    expect(historical.weight).toBeLessThan(1);
+    expect(historical.weight).toBe(0.55);
   });
 });

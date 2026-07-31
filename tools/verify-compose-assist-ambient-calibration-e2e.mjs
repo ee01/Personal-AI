@@ -39,6 +39,7 @@ const fixtureHtml = `<!doctype html>
   <body>
     <main>
       <article data-message-author-role="user">Help me reply about Factory AI rollout status.</article>
+      <button id="outside-focus" type="button">Outside composer</button>
       <div class="composer-shell">
         <div
           id="prompt-textarea"
@@ -138,6 +139,7 @@ function installChromeStub(page) {
               result: {
                 available: true,
                 suggestionType: 'context_pack',
+                insertMode: 'append_patch',
                 title: 'AI context pack',
                 summary: 'Found matching memory.',
                 insertText:
@@ -200,16 +202,39 @@ function installChromeStub(page) {
 
 async function loadFixture(page, initialText = '') {
   await page.goto(fixtureUrl);
-  if (initialText) {
-    await page.locator('#prompt-textarea').fill(initialText);
-  }
+  await page
+    .locator('#prompt-textarea')
+    .fill(initialText || 'Factory AI rollout status prompt');
+  // Playwright's fill() focuses the contenteditable before the content script
+  // is installed. Move focus out first so the controller observes a real
+  // focusin -> focusout composer session after installation.
+  await page.locator('#outside-focus').click();
+  await page.evaluate(() => {
+    window.localStorage.setItem('__PAI_DEBUG_COMPOSER_GUARD', '1');
+  });
   await page.addScriptTag({ path: contentScriptPath });
+  await page.waitForTimeout(300);
   await page.locator('#prompt-textarea').click();
-  await page.waitForFunction(
-    () => window.__paiComposeAssistRequests?.length >= 1,
-    null,
-    { timeout: 6000 },
-  );
+  await page.locator('#outside-focus').click();
+  try {
+    await page.waitForFunction(
+      () => window.__paiComposeAssistRequests?.length >= 1,
+      null,
+      { timeout: 6000 },
+    );
+  } catch (error) {
+    const debug = await page.evaluate(() => ({
+      activeElement: document.activeElement?.id || document.activeElement?.tagName,
+      requestCount: window.__paiComposeAssistRequests?.length || 0,
+      controller: document.documentElement.getAttribute(
+        'data-pai-composer-guard-debug',
+      ),
+    }));
+    throw new Error(
+      `Compose Assist did not request after blur: ${JSON.stringify(debug)}`,
+      { cause: error },
+    );
+  }
   await page.locator('.pai-composer-guard-icon-button').waitFor({
     state: 'visible',
     timeout: 6000,

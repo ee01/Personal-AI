@@ -74,8 +74,22 @@
         }}{{ formatMutedUntil(topicMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
       <div class="topic-undo-actions">
-        <button type="button" @click="handleViewMutedTopics">查看静音</button>
-        <button type="button" @click="handleUndoTopicMute">取消静音</button>
+        <button
+          type="button"
+          :title="getTopicMuteToastViewBoundary(topicMuteUndo)"
+          :aria-label="getTopicMuteToastViewBoundary(topicMuteUndo)"
+          @click="handleViewMutedTopics"
+        >
+          查看静音
+        </button>
+        <button
+          type="button"
+          :title="getTopicMutedRestoreBoundary(topicMuteUndo)"
+          :aria-label="getTopicMutedRestoreBoundary(topicMuteUndo)"
+          @click="handleUndoTopicMute"
+        >
+          取消静音
+        </button>
       </div>
     </div>
 
@@ -549,7 +563,8 @@
               v-if="isTopicMuted(entity.id)"
               type="button"
               class="topic-action-btn restore mute-restore"
-              :aria-label="`取消 ${entity.name} 的主题静音`"
+              :title="getTopicMutedRestoreBoundary(entity)"
+              :aria-label="getTopicMutedRestoreBoundary(entity)"
               @click.stop="handleRestoreMutedTopic(entity.id)"
             >
               ↩ 取消静音
@@ -649,7 +664,8 @@
                 <button
                   type="button"
                   class="topic-action-btn mute"
-                  :aria-label="`静音 ${entity.name} 以减少未读噪声`"
+                  :title="getTopicMuteMenuButtonBoundary(entity)"
+                  :aria-label="getTopicMuteMenuButtonBoundary(entity)"
                   :aria-expanded="activeMuteTopicId === entity.id"
                   @click.stop="toggleTopicMuteMenu(entity.id)"
                 >
@@ -686,6 +702,8 @@
                           'topic-mute-reason-option',
                           { active: selectedMuteReason === reason.key },
                         ]"
+                        :title="getTopicMuteReasonBoundary(entity, reason)"
+                        :aria-label="getTopicMuteReasonBoundary(entity, reason)"
                         :aria-pressed="selectedMuteReason === reason.key"
                         @click.stop="selectedMuteReason = reason.key"
                       >
@@ -700,6 +718,8 @@
                     type="button"
                     class="topic-defer-option topic-mute-option"
                     role="menuitem"
+                    :title="getTopicMuteOptionBoundary(entity, option)"
+                    :aria-label="getTopicMuteOptionBoundary(entity, option)"
                     @click.stop="
                       handleMuteTopic(
                         entity.id,
@@ -1063,6 +1083,8 @@
             <button
               v-if="topicMutedUnreadCount > 0"
               class="view-toggle-btn"
+              :title="getTopicHiddenMutedViewBoundary()"
+              :aria-label="getTopicHiddenMutedViewBoundary()"
               @click="topicViewMode = 'muted'"
             >
               查看静音 {{ topicMutedUnreadCount }}
@@ -1107,6 +1129,7 @@ import {
   getTopicMuteReasonLabel,
   getTopicMuteReasonOptions,
   type TopicDeferPresetOption,
+  type TopicMutePresetOption,
   type TopicMuteReasonKey,
 } from '../memory-store';
 import {
@@ -1328,6 +1351,42 @@ const getTopicDeferToastViewBoundary = (topic: any): string => {
 
 const getTopicHiddenDeferredViewBoundary = (): string =>
   `查看稍后 ${topicDeferredUnreadCount.value}：只切换到本页稍后视图核对被本机隐藏的未读主题；不会恢复未读、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+
+const getTopicMuteMenuButtonBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `静音边界：点击只打开或收起「${topicName}」的本机静音菜单；选择原因和时长前不会写入本机静音状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getTopicMuteReasonBoundary = (
+  topic: any,
+  reason: { key: TopicMuteReasonKey; label: string; description: string },
+): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `静音原因「${reason.label}」：这里只选择「${topicName}」的本机降噪原因；点击静音时长前不会写入静音状态、标记已读、同步 Memory Service 或改写原始聊天平台。${reason.description}`;
+};
+
+const getTopicMuteOptionBoundary = (
+  topic: any,
+  option: TopicMutePresetOption,
+): string => {
+  const topicName = getTopicBoundaryName(topic);
+  const muteUntil = formatMutedUntil(option.until) || '所选时间';
+  const reasonLabel = getTopicMuteReasonLabel(selectedMuteReason.value);
+  return `${option.label}：把「${topicName}」写入本机浏览器静音状态${muteUntil}，原因「${reasonLabel}」；未读仍保留，只从本机未读流隐藏，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。可在静音视图或本提示取消静音。`;
+};
+
+const getTopicMutedRestoreBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `取消静音回执：点击只删除「${topicName}」的本机静音过滤；未读信号保留，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。`;
+};
+
+const getTopicMuteToastViewBoundary = (topic: any): string => {
+  const topicName = getTopicBoundaryName(topic);
+  return `查看静音：只切换到本页静音视图核对「${topicName}」；不会取消静音、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getTopicHiddenMutedViewBoundary = (): string =>
+  `查看静音 ${topicMutedUnreadCount.value}：只切换到本页静音视图核对被本机隐藏的未读主题；不会取消静音、标记已读、同步 Memory Service 或改写原始聊天平台。`;
 
 const getTopicHiddenUnreadText = () => {
   const hiddenPieces: string[] = [];

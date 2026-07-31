@@ -254,7 +254,13 @@ export interface SiteContextAdapter {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'reflection_thread';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -307,8 +313,10 @@ export interface ComposerAssistResponse {
     | 'none'
     | 'context_pack'
     | 'prompt_patch'
+    | 'rewrite_prompt'
     | 'reply_context'
     | 'issue_context';
+  insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
   insertText?: string;
@@ -317,5 +325,49 @@ export interface ComposerAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  personaProjection?: {
+    version: 1;
+    scene:
+      | 'ringcentral_message'
+      | 'ringcentral_thread'
+      | 'jira_comment'
+      | 'web_ai_context_pack'
+      | 'web_ai_prompt_patch'
+      | 'web_ai_rewrite_prompt';
+    audienceType:
+      | 'peer'
+      | 'manager'
+      | 'direct_report'
+      | 'external'
+      | 'mixed'
+      | 'unknown';
+    audienceSource:
+      | 'confirmed_social_edge'
+      | 'relationship_hint'
+      | 'scene_default'
+      | 'unresolved';
+    audienceConfidence: number;
+    representationMode:
+      | 'draft_only'
+      | 'draft_preview_required'
+      | 'context_pack_copyable'
+      | 'blocked';
+    voiceMode:
+      | 'write_as_user'
+      | 'speak_about_user'
+      | 'never_speak_as_user';
+    usedSlotKinds: Array<
+      | 'work_identity'
+      | 'personal_context'
+      | 'preference'
+      | 'constraint'
+      | 'writing_style'
+    >;
+    usedCount: number;
+    blockedCount: number;
+    reasonCodes: string[];
+    requiresPreview: boolean;
+    degraded?: boolean;
+  };
   debug?: Record<string, unknown>;
 }

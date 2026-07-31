@@ -35,14 +35,19 @@ function renderFixtureHtml() {
     <title>RingCentral Video Home Fixture</title>
     <style>
       body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      main { display: grid; grid-template-columns: 360px minmax(420px, 1fr); min-height: 820px; gap: 24px; padding: 24px; }
+      main { display: grid; grid-template-columns: 520px minmax(420px, 1fr); min-height: 820px; gap: 24px; padding: 24px; }
       aside { border-right: 1px solid #e5e7eb; padding-right: 24px; }
       [data-at="calendar-event-item-wrapper"] { padding: 12px; border: 1px solid #2563eb; border-radius: 8px; }
-      [data-test-automation-id="upcoming-meeting-detail-container"] { min-width: 420px; width: 520px; border: 1px solid #d1d5db; border-radius: 10px; padding: 20px; }
+      .visible-meeting-detail { min-width: 420px; width: 520px; min-height: 520px; border: 1px solid #d1d5db; border-radius: 10px; padding: 20px; }
       button { font: inherit; }
     </style>
   </head>
   <body>
+    <section style="visibility: hidden; position: absolute; left: 600px; top: 100px; width: 520px; min-height: 520px;">
+      <div id="upcoming-meeting-detail-description-box">
+        Hidden stale RingCentral detail copy.
+      </div>
+    </section>
     <main>
       <aside>
         <div
@@ -54,11 +59,11 @@ function renderFixtureHtml() {
           <button data-test-automation-id="calendar-event-item-join-button">Join</button>
         </div>
       </aside>
-      <section data-test-automation-id="upcoming-meeting-detail-container">
+      <section class="visible-meeting-detail">
         <h2>Nova weekly sync</h2>
         <p>Starts in 25 minutes</p>
         <p>Participants accepted: Sophia, Fred, Esone</p>
-        <div id="upcoming-meeting-detail-description-box">
+        <div class="visible-meeting-description">
           Discuss Rooms dependency and lead handoff progress.
         </div>
         <button data-test-automation-id="join-meeting-button">Join meeting</button>
@@ -154,6 +159,41 @@ async function installChromeMock(page) {
     window.__paiPrepareRequests = [];
     window.__paiStorageSets = [];
     const storageState = {};
+
+    const outcomeBinder = {
+      id: 'binder-nova-weekly-sync',
+      userId: 'test-user',
+      prepId: 'prep-nova-weekly-sync',
+      eventExternalId: 'rc-event-context-assist-e2e',
+      eventSeriesKey: 'nova-weekly-sync',
+      eventTitle: 'Nova weekly sync',
+      eventStartAt: Math.floor(Date.now() / 1000) + 25 * 60,
+      status: 'planned',
+      slots: [
+        {
+          id: 'nova-rooms-owner-slot',
+          title: '确认 Rooms 依赖 owner 和下一步',
+          type: 'action',
+          status: 'planned',
+          mentionState: 'not_seen',
+          sourceEvidenceIds: ['memory-1'],
+          evidence: [],
+          confidence: 0.86,
+        },
+      ],
+      sourceEvidence: [],
+      sourceHash: 'nova-weekly-sync-source',
+      generatedAt: Math.floor(Date.now() / 1000),
+      createdAt: Math.floor(Date.now() / 1000),
+      updatedAt: Math.floor(Date.now() / 1000),
+      receipt: {
+        source: 'Today Pilot 会前准备',
+        coverage: '本场要闭环 1 项。',
+        freshness: '刚刚生成',
+        boundary:
+          '会前只生成待核验目标；不会加入会议、录音、发消息、创建任务或写回日历。',
+      },
+    };
 
     const preparedAssist = {
       available: true,
@@ -272,6 +312,7 @@ async function installChromeMock(page) {
                   generatedMode: 'nightly_llm',
                   evidenceRefs: preparedAssist.evidence,
                   storylineOpportunity: null,
+                  outcomeBinder,
                 },
                 generated: false,
                 source: 'cache',
@@ -407,6 +448,23 @@ async function main() {
       return host?.shadowRoot?.textContent?.includes('Rooms dependency');
     });
 
+    const mountState = await page.evaluate(() => {
+      const host = document.querySelector('#pai-meeting-prep-host');
+      return {
+        hostVisibility: host ? getComputedStyle(host).visibility : '',
+        parentVisibility: host?.parentElement
+          ? getComputedStyle(host.parentElement).visibility
+          : '',
+        mountedInVisibleDetail: Boolean(host?.closest('.visible-meeting-detail')),
+      };
+    });
+    assert(
+      mountState.hostVisibility === 'visible' &&
+        mountState.parentVisibility === 'visible' &&
+        mountState.mountedInVisibleDetail,
+      'Today Pilot meeting prep mounted into the hidden RingCentral detail copy',
+    );
+
     const initialText = await shadowText(page, '.pai-card');
     assert(
       initialText.includes('Today Pilot 会前准备') &&
@@ -419,6 +477,10 @@ async function main() {
         initialText.includes('本机会写入 Meeting Pilot handoff') &&
         initialText.includes('不会加入会议、录音、发消息、审批或写回日历/外部系统') &&
         initialText.includes('会中核对 owner / 下一步 / 风险') &&
+        initialText.includes('本场要闭环') &&
+        initialText.includes('确认 Rooms 依赖 owner 和下一步') &&
+        initialText.includes('会前目标') &&
+        initialText.includes('会议结束后由 Meeting Pilot 用 transcript、决议和行动项装订结果') &&
         initialText.includes('Rooms dependency'),
       'Today Pilot meeting prep card did not render expected cached output',
     );
@@ -487,6 +549,8 @@ async function main() {
       handoff?.goal === '围绕用户补充目标准备：确认 Rooms 依赖 owner 和下一步' &&
         handoff?.source === 'today_pilot' &&
         handoff?.prepId === 'prep-nova-weekly-sync' &&
+        handoff?.outcomeBinder?.id === 'binder-nova-weekly-sync' &&
+        handoff?.outcomeBinder?.slots?.[0]?.status === 'planned' &&
         handoff?.text?.includes('Personal AI meeting prep'),
       'Meeting Pilot handoff was not stored with the Today Pilot goal and brief',
     );

@@ -15,7 +15,7 @@
  *   memory-service/node_modules/.bin/tsx tools/eval-memory-abilities.ts \
  *     --endpoint http://10.32.56.212:3210/api/v1/ask --user esone.qiu \
  *     [--cases evals/cases/memory-abilities/cases.jsonl] \
- *     [--out .eval-runs/memory-abilities] [--update-baseline]
+ *     [--out .eval-runs/memory-abilities] [--update-baseline] [--allow-actions]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -75,6 +75,9 @@ const TIMEOUT_MS = Number(args.timeout || 70_000);
 const UPDATE_BASELINE = Boolean(args.updateBaseline);
 const ATTEMPTS = Math.max(1, Number(args.attempts || 2));
 const REGRESSION_DELTA = 0.05;
+// Benchmarks should prove recall and answer quality without creating actions,
+// confirm requests, answer memories, or reflection work on behalf of a case.
+const READ_ONLY_EVALUATION = args.allowActions !== true;
 
 function lc(s: string): string {
   return (s || '').toLowerCase();
@@ -125,6 +128,7 @@ async function ask(c: AbilityCase): Promise<AskResponse> {
         context: c.context,
         scope: c.scope || 'all',
         includeEvidence: true,
+        ...(READ_ONLY_EVALUATION ? { evaluationMode: 'read_only' } : {}),
       }),
       signal: controller.signal,
     });
@@ -326,6 +330,7 @@ async function main(): Promise<void> {
       keyStats: [
         `endpoint=${ENDPOINT}`,
         `user=${USER}`,
+        `evaluationMode=${READ_ONLY_EVALUATION ? 'read_only' : 'interactive'}`,
         `overall=${overall}`,
         ...Object.entries(byAbility).map(([k, v]) => `${k}=${v}`),
       ],

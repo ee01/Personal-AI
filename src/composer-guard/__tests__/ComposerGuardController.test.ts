@@ -18,7 +18,9 @@ import {
 import { isComposerAssistEnabledFromConfig } from '../assistConfig.ts';
 import {
   buildComposerAssistRequestSignature,
+  getComposerAssistProjectionReviewNote,
   getComposerAssistRequestGate,
+  isComposerAssistProjectionBlocked,
 } from '../ComposerGuardController.ts';
 
 test('normalizeComposerAssistThreshold: defaults to 0.78 and clamps bounds', () => {
@@ -94,6 +96,59 @@ test('sanitizeComposerAssistInsertText: strips wrapper copy before preview or in
   assert.equal(insertText, '请结合 Orbit blocker 回复。');
 });
 
+test('persona projection: review notes stay accurate and blocked suggestions are not insertable', () => {
+  const base = {
+    available: true,
+    suggestionType: 'reply_context' as const,
+    insertText: 'Status is on track.',
+    evidence: [],
+    riskLevel: 'low' as const,
+    previewRequired: true,
+    confidence: 0.9,
+    queryTimeMs: 5,
+  };
+  const projection = {
+    version: 1 as const,
+    scene: 'ringcentral_message' as const,
+    audienceType: 'manager' as const,
+    audienceSource: 'confirmed_social_edge' as const,
+    audienceConfidence: 1,
+    representationMode: 'draft_preview_required' as const,
+    voiceMode: 'write_as_user' as const,
+    usedSlotKinds: ['writing_style' as const],
+    usedCount: 1,
+    blockedCount: 2,
+    reasonCodes: ['blocked_sensitive_profile'],
+    requiresPreview: true,
+  };
+
+  assert.equal(
+    getComposerAssistProjectionReviewNote({
+      ...base,
+      personaProjection: projection,
+    }),
+    '已按当前场景省略未确认或敏感身份信息；仅插入草稿，不会发送。',
+  );
+  assert.equal(
+    getComposerAssistProjectionReviewNote({
+      ...base,
+      personaProjection: { ...projection, blockedCount: 0 },
+    }),
+    '当前对象或场景要求先预览；仅插入草稿，不会发送。',
+  );
+  assert.equal(
+    isComposerAssistProjectionBlocked({
+      ...base,
+      personaProjection: {
+        ...projection,
+        representationMode: 'blocked',
+        requiresPreview: false,
+      },
+    }),
+    true,
+  );
+});
+
 test('buildComposerAssistDraftReceipt: explains direct insert versus review boundaries', () => {
   const direct = buildComposerAssistDraftReceipt({
     contextType: 'message_thread',
@@ -157,6 +212,26 @@ test('buildComposerAssistDraftReceipt: explains direct insert versus review boun
       ['建议依据', '1 条 · 资料记忆', 'ok'],
     ],
   );
+
+  const rewrite = buildComposerAssistDraftReceipt({
+    contextType: 'web_agent_prompt',
+    surface: 'chatgpt',
+    suggestionType: 'rewrite_prompt',
+    riskLevel: 'high',
+    previewRequired: true,
+    reviewRequired: true,
+    evidenceCount: 0,
+  });
+
+  assert.deepEqual(
+    rewrite.rows.map((row) => [row.label, row.value, row.tone]),
+    [
+      ['插入对象', '外部 AI 完整 prompt', 'muted'],
+      ['动作边界', '先锁定完整预览，确认后替换原 prompt', 'warn'],
+      ['复核边界', '高风险，需核对事实/语气/敏感信息', 'warn'],
+      ['建议依据', '0 条证据，按当前草稿保守处理', 'muted'],
+    ],
+  );
 });
 
 test('buildComposerAssistInsertionReceipt: explains post-insert target and side-effect boundaries', () => {
@@ -166,7 +241,7 @@ test('buildComposerAssistInsertionReceipt: explains post-insert target and side-
     suggestionType: 'context_pack',
   });
 
-  assert.equal(webAi.title, '已插入草稿');
+  assert.equal(webAi.title, '已追加上下文');
   assert.equal(
     webAi.detail,
     '写入目标：外部 AI context pack；没有提交 prompt、没有发送给外部 AI；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
@@ -178,9 +253,23 @@ test('buildComposerAssistInsertionReceipt: explains post-insert target and side-
     suggestionType: 'prompt_patch',
   });
 
+  assert.equal(promptPatch.title, '已追加 prompt 补丁');
   assert.equal(
     promptPatch.detail,
     '写入目标：外部 AI prompt 补丁；没有提交 prompt、没有发送给外部 AI；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
+  );
+
+  const rewrite = buildComposerAssistInsertionReceipt({
+    contextType: 'web_agent_prompt',
+    surface: 'chatgpt',
+    suggestionType: 'rewrite_prompt',
+    insertMode: 'replace_draft',
+  });
+
+  assert.equal(rewrite.title, '已替换原 prompt');
+  assert.equal(
+    rewrite.detail,
+    '写入目标：外部 AI 完整 prompt；没有提交 prompt、没有发送给外部 AI；约 10 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。',
   );
 
   const ringCentral = buildComposerAssistInsertionReceipt({
@@ -200,7 +289,7 @@ test('buildComposerAssistSourceRouteReceipt: explains source routing by compose 
     contextType: 'message_thread',
     surface: 'ringcentral_thread',
     scenario: 'thread_reply',
-    sourceTypes: ['glip', 'manual', 'source_memory', 'user_core', 'rehearsal'],
+    sourceTypes: ['glip', 'manual', 'source_memory', 'rehearsal'],
   });
 
   assert.deepEqual(
@@ -208,7 +297,7 @@ test('buildComposerAssistSourceRouteReceipt: explains source routing by compose 
     [
       ['场景路由', 'RingCentral thread 回复', 'muted'],
       ['当前上下文', 'thread root + 可见回复', 'muted'],
-      ['允许召回', '5 类：聊天 / 手动 / 资料 / 画像 / 预演', 'ok'],
+      ['允许召回', '4 类：聊天 / 手动 / 资料 / 预演', 'ok'],
       ['路由边界', 'thread 优先，不混主会话；草稿只作语气/去重', 'ok'],
       ['刷新口径', 'thread root 或可见回复变化会重算；不沿用主会话', 'ok'],
     ],
@@ -278,6 +367,20 @@ test('buildComposerAssistSourceRouteReceipt: explains source routing by compose 
       ],
       ['刷新口径', 'prompt 或 AI turns 变化会重算；拒绝只影响当前 prompt', 'ok'],
     ],
+  );
+
+  const rewrite = buildComposerAssistSourceRouteReceipt({
+    contextType: 'web_agent_prompt',
+    surface: 'chatgpt',
+    provider: 'chatgpt',
+    scenario: 'compose_to_ai',
+    suggestionType: 'rewrite_prompt',
+    sourceTypes: ['codex_cli', 'source_memory'],
+  });
+
+  assert.equal(
+    rewrite.rows[3].value,
+    '当前 AI 自身历史已排除；只替换完整 prompt，不提交',
   );
 });
 

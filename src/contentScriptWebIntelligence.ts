@@ -45,6 +45,12 @@ import {
     type OwnerAuthoredLearningPayload,
 } from './composer-guard/siteContextAdapters';
 import type { InteractionSceneSnapshot, SiteContextSnapshot } from './composer-guard/types';
+import {
+    getContentScriptUiLanguage,
+    initContentScriptI18n,
+} from './i18n/contentScript';
+
+initContentScriptI18n();
 
 interface SimplePageContent {
     title: string;
@@ -99,6 +105,13 @@ interface ContextMatchPayload {
         issueKey?: string;
         participants?: string[];
         visibleFields?: Array<{ name: string; value: string; rawText?: string }>;
+        verifiedSourceFields?: Array<{
+            propertyKey: string;
+            name: string;
+            value: string | null;
+            source: 'jira_rest';
+            checkedAt: number;
+        }>;
         sourceAnchorHints?: string[];
     };
     interactionScene?: InteractionSceneSnapshot;
@@ -202,6 +215,122 @@ interface ContextRecallMatch {
         suppressReason?: string;
         presentationId?: string;
     };
+}
+
+interface KeystoneBriefClaim {
+    text: string;
+    sourceRefs: string[];
+    confidence?: 'high' | 'medium' | 'low';
+    authority?: string;
+    validAsOf?: number;
+    staleRisk?: 'low' | 'medium' | 'high';
+    projection?: 'local_only' | 'summary_ok' | 'blocked_external';
+}
+
+interface KeystoneBriefPresentationPayload {
+    brief: {
+        id: string;
+        briefKey: string;
+        title: string;
+        status: 'candidate' | 'ready' | 'partial' | 'blocked' | 'stale' | 'hidden';
+        summary: string;
+        externalSummary?: string;
+        sourceAsOf: number;
+        freshness: {
+            state: 'fresh' | 'watching' | 'stale_risk' | 'blocked_source';
+            reason: string;
+            expiresAt?: number;
+        };
+        slots: {
+            whyItMatters: string;
+            currentState: string;
+            stableFacts: KeystoneBriefClaim[];
+            decisions: KeystoneBriefClaim[];
+            constraints: KeystoneBriefClaim[];
+            traps: KeystoneBriefClaim[];
+            nextUseCases: string[];
+            openQuestions: string[];
+        };
+        sourceMap: Array<{
+            ref: string;
+            sourceType: string;
+            sourceId: string;
+            role: 'authority' | 'supporting' | 'derived' | 'prior';
+            title?: string;
+            url?: string;
+            timestamp?: number;
+            authority?: string;
+            projection: 'local_only' | 'summary_ok' | 'blocked_external';
+            hidden?: boolean;
+            snippet?: string;
+        }>;
+        displayPolicy: {
+            defaultMode: 'silent' | 'chip' | 'card';
+            maxLines: number;
+            canCopyToDraft: boolean;
+            externalSummaryOnly: boolean;
+            hiddenSourceCount: number;
+        };
+        writeReceipt: {
+            writesProfile: false;
+            sendsExternal: false;
+            createsTask: false;
+            updatesFacts: false;
+            writesOutcomeEvent: true;
+        };
+        repairState: 'clean' | 'needs_repair';
+        blockedReason?: string;
+    };
+    presentationMode: 'primary' | 'conflict' | 'stale_notice';
+    whyNow: string;
+    evidenceMatchIds: string[];
+    relatedMemoryCount: number;
+}
+
+interface MemoryChangeValue {
+    kind: 'text' | 'number' | 'date' | 'boolean' | 'status' | 'entity_ref' | 'set';
+    display: string;
+    normalized: string | number | boolean | string[] | null;
+    raw?: string;
+}
+
+interface MemoryChangeEvent {
+    id: string;
+    previousValue?: MemoryChangeValue;
+    nextValue: MemoryChangeValue;
+    authorityRole: string;
+    sourceRef: { type: string; id: string; title?: string; url?: string };
+    reason?: string;
+    observedAt: number;
+    isReversal: boolean;
+}
+
+interface MemoryChangeProjection {
+    chainKey: string;
+    subjectKey: string;
+    subjectLabel: string;
+    subjectKind: string;
+    propertyKey: string;
+    propertyLabel: string;
+    currentValue?: MemoryChangeValue;
+    previousValue?: MemoryChangeValue;
+    visiblePageValue?: MemoryChangeValue;
+    status:
+        | 'confirmed_current'
+        | 'last_observed'
+        | 'conflicted'
+        | 'historical_only'
+        | 'superseded_on_page'
+        | 'superseded_at_source';
+    summary: string;
+    boundary: string;
+    eventCount: number;
+    reversalCount: number;
+    conflictCount: number;
+    firstObservedAt?: number;
+    lastObservedAt?: number;
+    currentEvent?: MemoryChangeEvent;
+    history: MemoryChangeEvent[];
 }
 
 interface ContextToastAction {
@@ -336,6 +465,8 @@ interface ContextRecallResponsePayload {
     matches?: ContextRecallMatch[];
     topMatch?: ContextRecallMatch | null;
     autopilot?: ContextRecallAutopilotDecision | null;
+    changeProjections?: MemoryChangeProjection[];
+    keystoneBrief?: KeystoneBriefPresentationPayload;
 }
 
 type ContextBubbleMode = 'lens' | 'selectionSearch';
@@ -346,6 +477,8 @@ interface ContextBubbleOptions {
     autopilot?: ContextRecallAutopilotDecision | null;
     recallBasis?: string;
     recallContext?: ContextBubbleRecallContext;
+    changeProjections?: MemoryChangeProjection[];
+    keystoneBrief?: KeystoneBriefPresentationPayload;
 }
 
 interface MemoryCaptureCandidateResult {
@@ -430,6 +563,10 @@ interface ContextMatchCacheEntry {
     match: ContextRecallMatch | null;
     matches: ContextRecallMatch[];
     autopilot?: ContextRecallAutopilotDecision | null;
+    changeProjections?: MemoryChangeProjection[];
+    keystoneBrief?: KeystoneBriefPresentationPayload;
+    /** The source-read snapshot used to build this cache entry, when present. */
+    jiraFreshnessCheckedAt?: number;
     ts: number;
 }
 
@@ -486,6 +623,50 @@ function escapeHtmlAttribute(text: string): string {
 
 function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+type KeystoneBriefUiEventType =
+    | 'shown'
+    | 'opened'
+    | 'evidence_opened'
+    | 'copied'
+    | 'useful'
+    | 'hidden'
+    | 'not_accurate';
+
+function submitKeystoneBriefUiEvent(
+    briefId: string,
+    eventType: KeystoneBriefUiEventType,
+    contextKey: string,
+    callback?: (success: boolean, error?: string) => void,
+    reason?: string,
+): void {
+    chrome.runtime.sendMessage(
+        {
+            type: 'KEYSTONE_BRIEF_EVENT',
+            briefId,
+            event: {
+                eventType,
+                surface: 'memory_lens',
+                context: {
+                    contextKey,
+                    pageHost: window.location.hostname,
+                    pageTitle: document.title,
+                },
+                reason,
+            },
+        },
+        (response) => {
+            if (chrome.runtime.lastError) {
+                callback?.(false, chrome.runtime.lastError.message);
+                return;
+            }
+            callback?.(
+                response?.success === true,
+                response?.success === true ? undefined : response?.error,
+            );
+        },
+    );
 }
 
 function formatMemoryCaptureCandidateReceipt(
@@ -1378,6 +1559,170 @@ function selectContextRecallMatches(
     });
 }
 
+function selectMemoryChangeProjections(
+    response: ContextRecallResponsePayload | null | undefined,
+): MemoryChangeProjection[] {
+    if (!Array.isArray(response?.changeProjections)) return [];
+    return response.changeProjections
+        .filter((projection) =>
+            Boolean(
+                normalizeText(projection?.chainKey) &&
+                normalizeText(projection?.subjectLabel) &&
+                normalizeText(projection?.propertyLabel) &&
+                normalizeText(projection?.summary),
+            ),
+        )
+        .slice(0, 3);
+}
+
+function buildChangeProjectionPresentationMatch(
+    projections: MemoryChangeProjection[],
+): ContextRecallMatch | null {
+    const projection = projections[0];
+    if (!projection) return null;
+    const sourceRef = projection.currentEvent?.sourceRef;
+    const sourceUrl = normalizeText(sourceRef?.url);
+    const sourceTitle = normalizeText(sourceRef?.title) || '变化证据';
+    const exploreLink = sourceRef?.type === 'source_memory' && normalizeText(sourceRef.id)
+        ? `#/source-memory/${encodeURIComponent(sourceRef.id)}`
+        : undefined;
+    return {
+        id: `change:${projection.chainKey}`,
+        type: 'source_memory',
+        score: projection.status === 'conflicted' ? 0.97 : 0.93,
+        title: `${projection.subjectLabel} · 变化脉络`,
+        uiSummary: projection.summary,
+        snippet: projection.summary,
+        sourceLabel: '变化脉络',
+        sourceUrl: sourceUrl || undefined,
+        sourceTitle,
+        exploreLink,
+        links: sourceUrl ? [{ label: '核对变化来源', url: sourceUrl }] : [],
+        whyMatched: `当前页面与 ${projection.subjectLabel} 是同一稳定对象`,
+        whyRelevant: [
+            `${projection.propertyLabel} 有 ${projection.eventCount} 条状态变化证据`,
+            projection.boundary,
+        ],
+        matchedAnchors: {
+            topics: [projection.subjectLabel, projection.propertyLabel],
+        },
+        reasonType: 'prior_decision',
+        evidenceRole: 'context',
+        displayPriority: projection.status === 'conflicted' ? 'p1' : 'p2',
+        metadata: {
+            changeLedgerPresentation: true,
+            changeProjectionCount: projections.length,
+        },
+        timestamp: projection.lastObservedAt,
+        lensPresentation: {
+            status: 'ready',
+            informationValue: projection.status === 'conflicted' ? 'high' : 'medium',
+            title: `${projection.subjectLabel} · 变化脉络`,
+            extractedInfo: projection.summary,
+            suggestedAction: projection.status === 'conflicted' ? '先核对当前值' : '展开查看历史',
+            novelty: 'new_to_current_surface',
+            sourceBoundary: 'reviewable_memory',
+        },
+    };
+}
+
+function formatMemoryChangeProjectionStatus(
+    status: MemoryChangeProjection['status'],
+    currentValue?: MemoryChangeValue,
+): string {
+    if (status === 'confirmed_current') return '已确认当前';
+    if (status === 'last_observed') return '最后观测';
+    if (status === 'conflicted') return '存在冲突';
+    if (status === 'historical_only') return '仅历史';
+    if (status === 'superseded_at_source') {
+        return currentValue?.normalized === null ? 'Jira 当前为空' : 'Jira 当前不同';
+    }
+    return '页面已有新值';
+}
+
+function formatMemoryChangeAuthority(role: string): string {
+    if (role === 'authoritative_source') return '权威来源';
+    if (role === 'owner_authored') return '用户本人';
+    if (role === 'team_message') return '团队消息';
+    if (role === 'ai_generated') return 'AI 生成';
+    if (role === 'source_snapshot') return '来源快照';
+    return '推断证据';
+}
+
+function formatMemoryChangeDate(timestamp?: number): string {
+    if (!timestamp || !Number.isFinite(timestamp)) return '时间未记录';
+    try {
+        return new Date(timestamp * 1000).toLocaleDateString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        });
+    } catch (_error) {
+        return '时间未记录';
+    }
+}
+
+function renderMemoryChangeProjectionSection(
+    projections: MemoryChangeProjection[],
+): string {
+    if (!projections.length) return '';
+    const subjectLabel = projections[0]?.subjectLabel || '当前对象';
+    const rows = projections.map((projection) => {
+        const statusLabel = formatMemoryChangeProjectionStatus(projection.status, projection.currentValue);
+        const currentValue = projection.status === 'superseded_on_page' || projection.status === 'superseded_at_source'
+            ? projection.visiblePageValue?.display || projection.currentValue?.display || '未知'
+            : projection.currentValue?.display || '未知';
+        const previousValue = projection.previousValue?.display || '未记录';
+        const history = [...(projection.history || [])]
+            .reverse()
+            .map((event) => {
+                const transition = `${event.previousValue?.display || '未记录'} → ${event.nextValue?.display || '未知'}`;
+                const reason = normalizeText(event.reason) || '未记录原因';
+                const source = normalizeText(event.sourceRef?.title) || normalizeText(event.sourceRef?.type) || '来源未标记';
+                return `
+                    <li class="pai-context-change-event">
+                        <div class="pai-context-change-event-main">
+                            <time>${escapeHtml(formatMemoryChangeDate(event.observedAt))}</time>
+                            <strong>${escapeHtml(transition)}</strong>
+                            ${event.isReversal ? '<span class="pai-context-change-reversal">回退</span>' : ''}
+                        </div>
+                        <div class="pai-context-change-event-meta">${escapeHtml(`${formatMemoryChangeAuthority(event.authorityRole)} · ${source} · 原因：${reason}`)}</div>
+                    </li>
+                `;
+            })
+            .join('');
+        return `
+            <div class="pai-context-change-row">
+                <div class="pai-context-change-current">
+                    <div>
+                        <strong class="pai-context-change-property">${escapeHtml(projection.propertyLabel)}</strong>
+                        <div class="pai-context-change-transition">
+                            <span>${escapeHtml(previousValue)}</span>
+                            <span aria-hidden="true">→</span>
+                            <b>${escapeHtml(currentValue)}</b>
+                        </div>
+                    </div>
+                    <span class="pai-context-change-status pai-context-change-status--${escapeHtmlAttribute(projection.status)}">${escapeHtml(statusLabel)}</span>
+                </div>
+                <div class="pai-context-change-boundary">${escapeHtml(projection.boundary)}</div>
+                <details class="pai-context-change-history">
+                    <summary>查看 ${projection.history.length} 条历史证据${projection.reversalCount ? ` · ${projection.reversalCount} 次回退` : ''}</summary>
+                    <ol>${history}</ol>
+                </details>
+            </div>
+        `;
+    }).join('');
+    return `
+        <section class="pai-context-change-ledger" aria-label="变化脉络">
+            <div class="pai-context-change-head">
+                <span>变化脉络</span>
+                <span>${escapeHtml(subjectLabel)}</span>
+            </div>
+            ${rows}
+        </section>
+    `;
+}
+
 function formatAutopilotModeLabel(mode?: ContextRecallAutopilotDecision['mode']): string {
     switch (mode) {
         case 'card':
@@ -1499,6 +1844,14 @@ function buildContextRecallCurrentBasisReceipt(): string {
     return '本轮召回 · 页面稳定后重新请求';
 }
 
+function getJiraFreshnessCheckedAt(payload: ContextMatchPayload): number | undefined {
+    const checkedAt = payload.currentContext?.verifiedSourceFields
+        ?.map((field) => field.checkedAt)
+        .filter((value) => Number.isFinite(value))
+        .reduce((latest, value) => Math.max(latest, value), 0);
+    return checkedAt && checkedAt > 0 ? checkedAt : undefined;
+}
+
 function buildContextRecallCachedBasisReceipt(cachedAtMs: number, now = Date.now()): string {
     return `本地缓存 · ${formatContextRecallCacheAgeLabel(now - cachedAtMs)}召回；未重新请求`;
 }
@@ -1514,99 +1867,6 @@ function buildContextBubbleRecallContext(
         sourceContext: payload.sourceContext,
         currentContext: payload.currentContext,
     };
-}
-
-function formatContextBubbleRecallSceneLabel(
-    contextType?: ContextMatchPayload['contextType'],
-    surface?: ContextMatchPayload['surface'],
-): string {
-    switch (contextType) {
-        case 'jira_issue':
-            return 'Jira issue 被动提示';
-        case 'message_thread':
-            return '消息会话被动提示';
-        case 'document':
-            return '文档被动提示';
-        case 'selected_text':
-            return '划词主动检索';
-        case 'webpage':
-            return surface === 'meeting_passive'
-                ? '会议页面被动提示'
-                : '网页被动提示';
-        default:
-            return '页面被动提示';
-    }
-}
-
-function extractContextBubbleRecallHost(
-    context?: ContextBubbleRecallContext,
-): string {
-    const explicitHost = normalizeText(context?.sourceContext?.host);
-    if (explicitHost) return explicitHost;
-
-    const rawUrl = normalizeText(context?.url || context?.sourceContext?.url || context?.currentContext?.url);
-    if (!rawUrl) return '';
-    try {
-        return new URL(rawUrl).hostname;
-    } catch (_error) {
-        return '';
-    }
-}
-
-function buildContextBubbleRecallAnchorLabel(
-    context?: ContextBubbleRecallContext,
-): string {
-    const sourceContext = context?.sourceContext || {};
-    const currentContext = context?.currentContext || {};
-    const anchors = [
-        sourceContext.issueKey || currentContext.issueKey,
-        sourceContext.groupId || currentContext.groupId,
-        sourceContext.conversationId || currentContext.conversationId,
-    ]
-        .map((item) => clipContextFeedbackDetailValue(normalizeText(item), 48))
-        .filter(Boolean);
-
-    if (!anchors.length) return '';
-    return anchors.slice(0, 3).join(' · ');
-}
-
-function buildContextBubblePageRecallReceiptItems(
-    context: ContextBubbleRecallContext | undefined,
-    recallBasis: string,
-): Array<[string, string]> {
-    const title = clipContextFeedbackDetailValue(
-        normalizeText(
-            context?.title ||
-            context?.sourceContext?.title ||
-            context?.currentContext?.title ||
-            document.title,
-        ),
-        72,
-    );
-    const host = clipContextFeedbackDetailValue(
-        extractContextBubbleRecallHost(context) || window.location.hostname,
-        48,
-    );
-    const pageSignal = [title, host].filter(Boolean).join(' · ') || '当前页面';
-    const anchorLabel = buildContextBubbleRecallAnchorLabel(context);
-    const items: Array<[string, string]> = [
-        [
-            '场景',
-            formatContextBubbleRecallSceneLabel(context?.contextType, context?.surface),
-        ],
-        ['页面信号', pageSignal],
-    ];
-
-    if (anchorLabel) {
-        items.push(['锚点', anchorLabel]);
-    }
-
-    items.push(
-        ['召回口径', recallBasis],
-        ['边界', '只读关联记忆；不保存网页、不插入输入框、不发送内容'],
-    );
-
-    return items;
 }
 
 function hasContextWhyRelevant(match: ContextRecallMatch): boolean {
@@ -2015,6 +2275,11 @@ function isMeetingPilotPage(): boolean {
 
 const contextMatchCache = new Map<string, ContextMatchCacheEntry>();
 const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const JIRA_MEMORY_FRESHNESS_CACHE_TTL_MS = 60_000;
+const jiraMemoryFreshnessCache = new Map<string, {
+    fields: NonNullable<NonNullable<ContextMatchPayload['currentContext']>['verifiedSourceFields']>;
+    ts: number;
+}>();
 const CONTEXT_MATCH_CACHE_MAX_ENTRIES = 80;
 const DISMISSED_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
@@ -3323,7 +3588,7 @@ class WebIntelligenceContentScript {
         return Array.from(results).slice(0, 10);
     }
 
-    private tryContextMatch(): void {
+    private async tryContextMatch(): Promise<void> {
         if (this.isSensitiveContextPage()) {
             this.clearContextBubble();
             return;
@@ -3371,26 +3636,46 @@ class WebIntelligenceContentScript {
             return;
         }
 
+        const freshnessPayload = await this.enrichJiraMemoryFreshness(payload);
+        const currentPayloadAfterFreshness = this.buildContextMatchPayload();
+        if (!currentPayloadAfterFreshness || currentPayloadAfterFreshness.contextKey !== payload.contextKey) {
+            return;
+        }
+        payload.currentContext = freshnessPayload.currentContext;
+
         this.sendOwnerAuthoredLearningSignals(payload);
 
         const cached = contextMatchCache.get(payload.contextKey);
+        const jiraFreshnessCheckedAt = getJiraFreshnessCheckedAt(payload);
         if (this.isContextDismissed(payload.contextKey)) {
             this.clearContextBubble();
             return;
         }
 
-        if (cached && now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS) {
-            if (cached.match) {
+        if (
+            cached &&
+            now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS &&
+            (!jiraFreshnessCheckedAt || cached.jiraFreshnessCheckedAt === jiraFreshnessCheckedAt)
+        ) {
+            const cachedChangeProjections = cached.changeProjections || [];
+            if (cached.match || cachedChangeProjections.length) {
                 const shouldAnimateCachedMatch =
-                    cached.match.displayPriority === 'p1' &&
+                    cached.match?.displayPriority === 'p1' &&
                     this.activeBubbleContextKey !== payload.contextKey;
+                const cachedMatches = cached.matches.length
+                    ? cached.matches
+                    : cached.match
+                        ? [cached.match]
+                        : [];
                 this.showContextBubble(
-                    cached.matches.length ? cached.matches : [cached.match],
+                    cachedMatches,
                     payload.contextKey,
                     shouldAnimateCachedMatch,
                     false,
                     {
                         autopilot: cached.autopilot,
+                        changeProjections: cachedChangeProjections,
+                        keystoneBrief: cached.keystoneBrief,
                         recallBasis: buildContextRecallCachedBasisReceipt(cached.ts, now),
                         recallContext: buildContextBubbleRecallContext(payload),
                     },
@@ -3473,24 +3758,38 @@ class WebIntelligenceContentScript {
 
             const matches = selectContextRecallMatches(response)
                 .filter(isExplainablePassiveContextMatch);
-            const match = matches[0] || null;
+            const changeProjections = selectMemoryChangeProjections(response);
+            const presentationMatch = buildChangeProjectionPresentationMatch(changeProjections);
+            // A ledger leads ordinary recall, but a ready/partial Keystone
+            // brief still owns the Lens first screen and exposes this slot in
+            // its evidence drill-down.
+            const displayMatches = presentationMatch
+                ? [presentationMatch, ...matches].slice(0, 3)
+                : matches;
+            const match = displayMatches[0] || null;
             const autopilot = response?.autopilot || null;
+            const keystoneBrief = response?.keystoneBrief;
             contextMatchCache.set(payload.contextKey, {
                 match,
-                matches,
+                matches: displayMatches,
                 autopilot,
+                changeProjections,
+                keystoneBrief,
+                jiraFreshnessCheckedAt,
                 ts: Date.now(),
             });
             pruneContextMatchCache();
 
             if (match) {
                 this.showContextBubble(
-                    matches,
+                    displayMatches,
                     payload.contextKey,
                     match.displayPriority === 'p1',
                     false,
                     {
                         autopilot,
+                        changeProjections,
+                        keystoneBrief,
                         recallBasis: buildContextRecallCurrentBasisReceipt(),
                         recallContext: buildContextBubbleRecallContext(payload),
                     },
@@ -3499,6 +3798,51 @@ class WebIntelligenceContentScript {
                 this.clearContextBubble();
             }
         });
+    }
+
+    private async enrichJiraMemoryFreshness(
+        payload: ContextMatchPayload,
+    ): Promise<ContextMatchPayload> {
+        const issueKey = normalizeText(payload.currentContext?.issueKey);
+        if (payload.contextType !== 'jira_issue' || !issueKey) return payload;
+
+        const cacheKey = issueKey.toUpperCase();
+        const now = Date.now();
+        const cached = jiraMemoryFreshnessCache.get(cacheKey);
+        let fields = cached && now - cached.ts < JIRA_MEMORY_FRESHNESS_CACHE_TTL_MS
+            ? cached.fields
+            : undefined;
+        if (!fields) {
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    type: 'FETCH_JIRA_MEMORY_FRESHNESS_FIELDS',
+                    ticketKey: issueKey,
+                });
+                if (response?.success && Array.isArray(response.fields)) {
+                    fields = response.fields
+                        .filter((field: any) =>
+                            field &&
+                            typeof field.propertyKey === 'string' &&
+                            typeof field.name === 'string' &&
+                            (typeof field.value === 'string' || field.value === null) &&
+                            field.source === 'jira_rest' &&
+                            Number.isFinite(field.checkedAt),
+                        )
+                        .slice(0, 12);
+                    jiraMemoryFreshnessCache.set(cacheKey, { fields, ts: now });
+                }
+            } catch (error) {
+                console.warn('Jira memory freshness read failed:', error);
+            }
+        }
+        if (!fields?.length) return payload;
+        return {
+            ...payload,
+            currentContext: {
+                ...payload.currentContext,
+                verifiedSourceFields: fields,
+            },
+        };
     }
 
     private shouldPreserveOpenSelectedTextBubble(
@@ -3519,9 +3863,10 @@ class WebIntelligenceContentScript {
     private buildContextMatchPayload(): ContextMatchPayload | null {
         const snapshot = buildPassiveContextSnapshot(document, window.location);
         if (snapshot) {
+            const lensContextKey = this.getLensContextKey(snapshot);
             return {
-                contextKey: snapshot.contextKey,
-                stabilityKey: snapshot.contextKey,
+                contextKey: lensContextKey,
+                stabilityKey: lensContextKey,
                 surface: this.toPassiveRecallSurface(snapshot),
                 contextType: this.toPassiveRecallContextType(snapshot),
                 title: snapshot.title,
@@ -3544,12 +3889,35 @@ class WebIntelligenceContentScript {
         return null;
     }
 
+    /** Keep Lens state on one Jira issue while its fields finish rendering. */
+    private getLensContextKey(snapshot: SiteContextSnapshot): string {
+        const issueKey = normalizeText(snapshot.identifiers?.issueKey);
+        if (snapshot.contextType === 'jira_issue' && issueKey) {
+            return `jira:${issueKey.toUpperCase()}`;
+        }
+        return snapshot.contextKey;
+    }
+
     private shouldSuppressContextBubbleForComposerAssist(payload?: Pick<ContextMatchPayload, 'contextType'>): boolean {
         if (payload && payload.contextType === 'selected_text') {
             return false;
         }
 
-        return this.hasVisibleComposerAssistAffordance();
+        if (!this.hasVisibleComposerAssistAffordance()) {
+            return false;
+        }
+
+        // Jira keeps an Add comment surface mounted while the issue is read.
+        // A pre-rendered Compose Assist icon must not displace Lens until the
+        // user has actually entered that comment editor.
+        if (payload?.contextType === 'jira_issue') {
+            const activeElement = document.activeElement;
+            return activeElement instanceof HTMLElement && activeElement.matches(
+                'textarea, [contenteditable="true"], iframe',
+            );
+        }
+
+        return true;
     }
 
     private hasVisibleComposerAssistAffordance(): boolean {
@@ -7554,42 +7922,6 @@ class WebIntelligenceContentScript {
                 gap: 6px;
             }
 
-            .pai-context-page-recall-receipt {
-                margin: 8px 0 10px;
-                border: 1px solid rgba(45, 112, 100, 0.2);
-                border-radius: 8px;
-                background: rgba(240, 253, 250, 0.78);
-                color: #134e4a;
-                padding: 8px 9px;
-                font-size: 11px;
-                line-height: 1.4;
-                display: grid;
-                gap: 4px;
-            }
-
-            .pai-context-page-recall-title {
-                color: #0f766e;
-                font-weight: 760;
-            }
-
-            .pai-context-page-recall-row {
-                display: flex;
-                align-items: flex-start;
-                gap: 6px;
-                min-width: 0;
-            }
-
-            .pai-context-page-recall-label {
-                flex: 0 0 auto;
-                color: #0f766e;
-                font-weight: 720;
-            }
-
-            .pai-context-page-recall-value {
-                min-width: 0;
-                overflow-wrap: anywhere;
-            }
-
             .pai-context-icon-button,
             .pai-context-action-button {
                 width: 28px;
@@ -7658,6 +7990,166 @@ class WebIntelligenceContentScript {
                 line-height: 1.55;
                 white-space: pre-wrap;
                 overflow-wrap: anywhere;
+            }
+
+            .pai-keystone-notice {
+                margin-bottom: 10px;
+                border-left: 3px solid #b7791f;
+                border-radius: 6px;
+                background: #fff8e8;
+                color: #744210;
+                padding: 8px 10px;
+                font-size: 11.5px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-keystone-notice--conflict {
+                border-left-color: #c2410c;
+                background: #fff3ed;
+                color: #7c2d12;
+            }
+
+            .pai-keystone-kicker {
+                color: #2d7064;
+                font-size: 11px;
+                font-weight: 760;
+            }
+
+            .pai-keystone-meta {
+                margin-top: 8px;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px 10px;
+                color: #6b6258;
+                font-size: 11px;
+                line-height: 1.4;
+            }
+
+            .pai-keystone-why {
+                margin-top: 8px;
+                color: #255f55;
+                font-size: 12px;
+                line-height: 1.45;
+            }
+
+            .pai-keystone-slot {
+                margin-top: 11px;
+                border-top: 1px solid rgba(177, 153, 125, 0.22);
+                padding-top: 9px;
+            }
+
+            .pai-keystone-slot-title {
+                margin-bottom: 5px;
+                color: #6a5544;
+                font-size: 11px;
+                font-weight: 760;
+            }
+
+            .pai-keystone-list {
+                margin: 0;
+                padding-left: 18px;
+                color: #344357;
+                font-size: 12px;
+                line-height: 1.5;
+            }
+
+            .pai-keystone-list li + li {
+                margin-top: 4px;
+            }
+
+            .pai-keystone-evidence-toggle,
+            .pai-keystone-back,
+            .pai-keystone-action {
+                border: 1px solid rgba(45, 112, 100, 0.26);
+                border-radius: 6px;
+                background: #f6fbf8;
+                color: #255f55;
+                cursor: pointer;
+                font: inherit;
+                font-size: 11.5px;
+                font-weight: 700;
+                line-height: 1.2;
+                padding: 7px 9px;
+            }
+
+            .pai-keystone-evidence-toggle:hover,
+            .pai-keystone-evidence-toggle:focus-visible,
+            .pai-keystone-back:hover,
+            .pai-keystone-back:focus-visible,
+            .pai-keystone-action:hover,
+            .pai-keystone-action:focus-visible {
+                background: #eaf5ef;
+                outline: none;
+            }
+
+            .pai-keystone-evidence {
+                margin-top: 11px;
+            }
+
+            .pai-keystone-evidence-list {
+                margin-top: 7px;
+                display: grid;
+                gap: 6px;
+            }
+
+            .pai-keystone-evidence-item {
+                width: 100%;
+                border: 0;
+                border-top: 1px solid rgba(177, 153, 125, 0.2);
+                background: transparent;
+                color: #344357;
+                cursor: pointer;
+                display: grid;
+                gap: 2px;
+                padding: 7px 2px 3px;
+                text-align: left;
+            }
+
+            .pai-keystone-evidence-item-title {
+                color: #172033;
+                font-size: 12px;
+                font-weight: 720;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-keystone-evidence-item-summary {
+                color: #657287;
+                display: -webkit-box;
+                font-size: 11px;
+                line-height: 1.4;
+                -webkit-box-orient: vertical;
+                -webkit-line-clamp: 2;
+                overflow: hidden;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-keystone-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+
+            .pai-keystone-action--quiet {
+                border-color: rgba(100, 116, 139, 0.24);
+                background: #fff;
+                color: #526070;
+            }
+
+            .pai-keystone-action[disabled] {
+                cursor: not-allowed;
+                opacity: 0.52;
+            }
+
+            .pai-keystone-feedback-receipt {
+                margin-top: 7px;
+                color: #526070;
+                font-size: 11px;
+                line-height: 1.4;
+            }
+
+            .pai-keystone-back-wrap {
+                margin-bottom: 10px;
             }
 
             .pai-context-selected-text {
@@ -7812,6 +8304,166 @@ class WebIntelligenceContentScript {
             .pai-context-source-memory-receipt-value {
                 min-width: 0;
                 overflow-wrap: anywhere;
+            }
+
+            .pai-context-change-ledger {
+                margin-top: 10px;
+                border: 1px solid rgba(13, 148, 136, 0.24);
+                border-radius: 8px;
+                background: rgba(240, 253, 250, 0.84);
+                color: #134e4a;
+                overflow: hidden;
+            }
+
+            .pai-context-change-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                padding: 7px 9px;
+                border-bottom: 1px solid rgba(13, 148, 136, 0.16);
+                color: #115e59;
+                font-size: 11px;
+                font-weight: 780;
+            }
+
+            .pai-context-change-head span:last-child {
+                min-width: 0;
+                color: #475569;
+                font-weight: 650;
+                overflow-wrap: anywhere;
+                text-align: right;
+            }
+
+            .pai-context-change-row {
+                padding: 9px;
+                border-bottom: 1px solid rgba(13, 148, 136, 0.13);
+            }
+
+            .pai-context-change-row:last-child {
+                border-bottom: 0;
+            }
+
+            .pai-context-change-current,
+            .pai-context-change-event-main {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 8px;
+            }
+
+            .pai-context-change-property {
+                display: block;
+                color: #134e4a;
+                font-size: 12px;
+                line-height: 1.35;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-change-transition {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                margin-top: 3px;
+                color: #64748b;
+                font-size: 12px;
+                line-height: 1.35;
+            }
+
+            .pai-context-change-transition b {
+                color: #0f172a;
+            }
+
+            .pai-context-change-status,
+            .pai-context-change-reversal,
+            .pai-context-change-readonly {
+                flex: 0 0 auto;
+                border: 1px solid rgba(13, 148, 136, 0.3);
+                border-radius: 999px;
+                background: rgba(204, 251, 241, 0.9);
+                color: #115e59;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-weight: 780;
+                line-height: 1.35;
+                white-space: nowrap;
+            }
+
+            .pai-context-change-status--conflicted {
+                border-color: rgba(220, 38, 38, 0.28);
+                background: rgba(254, 226, 226, 0.9);
+                color: #991b1b;
+            }
+
+            .pai-context-change-status--historical_only,
+            .pai-context-change-status--superseded_on_page,
+            .pai-context-change-status--superseded_at_source {
+                border-color: rgba(234, 88, 12, 0.28);
+                background: rgba(255, 237, 213, 0.92);
+                color: #9a3412;
+            }
+
+            .pai-context-change-boundary {
+                margin-top: 6px;
+                color: #475569;
+                font-size: 11px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-change-history {
+                margin-top: 7px;
+                color: #334155;
+                font-size: 11px;
+            }
+
+            .pai-context-change-history summary {
+                color: #0f766e;
+                cursor: pointer;
+                font-weight: 760;
+                line-height: 1.4;
+            }
+
+            .pai-context-change-history ol {
+                margin: 7px 0 0;
+                padding: 0;
+                list-style: none;
+            }
+
+            .pai-context-change-event {
+                border-left: 2px solid rgba(45, 212, 191, 0.62);
+                padding: 5px 0 7px 8px;
+            }
+
+            .pai-context-change-event-main {
+                justify-content: flex-start;
+                flex-wrap: wrap;
+                color: #334155;
+            }
+
+            .pai-context-change-event-main time {
+                color: #64748b;
+                font-variant-numeric: tabular-nums;
+            }
+
+            .pai-context-change-event-meta {
+                margin-top: 3px;
+                color: #64748b;
+                line-height: 1.4;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-change-reversal {
+                border-color: rgba(202, 138, 4, 0.32);
+                background: rgba(254, 249, 195, 0.92);
+                color: #854d0e;
+            }
+
+            .pai-context-change-readonly {
+                border-color: rgba(100, 116, 139, 0.25);
+                background: rgba(248, 250, 252, 0.94);
+                color: #475569;
+                padding: 4px 8px;
             }
 
             .pai-context-meta-row {
@@ -8718,7 +9370,47 @@ class WebIntelligenceContentScript {
         const mode = options.mode || 'lens';
         const isSelectionSearch = mode === 'selectionSearch';
         const selectedText = normalizeText(options.selectedText);
-        if (!isSelectionSearch && this.hasVisibleComposerAssistAffordance()) {
+        const keystoneEnglish = getContentScriptUiLanguage() === 'en-US';
+        const keystoneText = {
+            brief: keystoneEnglish ? 'Keystone Brief' : '关键简报',
+            synthesized: keystoneEnglish ? 'Synthesized' : '已综合',
+            conflict: keystoneEnglish ? 'Conflicting evidence' : '有证据冲突',
+            shortConflict: keystoneEnglish ? 'Conflict' : '有冲突',
+            currentState: keystoneEnglish ? 'Current state' : '当前状态',
+            openQuestions: keystoneEnglish ? 'Still to confirm' : '仍待确认',
+            sourceMap: keystoneEnglish ? 'Source map' : '来源图',
+            relatedMemories: keystoneEnglish ? 'Related memories this time' : '本轮相关记忆',
+            collapseEvidence: keystoneEnglish ? 'Hide evidence' : '收起证据',
+            viewEvidence: keystoneEnglish ? 'View evidence and related memories' : '查看证据与相关记忆',
+            constraints: keystoneEnglish ? 'Constraints and boundaries' : '约束与边界',
+            stableFacts: keystoneEnglish ? 'Key facts' : '关键事实',
+            decisions: keystoneEnglish ? 'Existing judgments' : '已有判断',
+            traps: keystoneEnglish ? 'Pitfalls' : '易错点',
+            actions: keystoneEnglish ? 'Actions' : '操作',
+            copySummary: keystoneEnglish ? 'Copy redacted summary' : '复制脱敏摘要',
+            useful: keystoneEnglish ? 'Useful' : '有用',
+            inaccurate: keystoneEnglish ? 'Inaccurate, show original memories' : '不准，改看原始记忆',
+            hideBrief: keystoneEnglish ? 'Hide this Keystone Brief' : '隐藏这份关键简报',
+            whyNow: keystoneEnglish ? 'Relevant now' : '此刻相关',
+            matchedScene: keystoneEnglish ? 'Matches the current context' : '命中当前场景',
+            unknownTime: keystoneEnglish ? 'Unknown time' : '未知时间',
+            originalOnly: keystoneEnglish ? 'Local-only evidence' : '仅本机证据',
+            summaryAllowed: keystoneEnglish ? 'Allowed in external summary' : '可进入外发摘要',
+            viewOriginalCard: keystoneEnglish ? 'View original memory card' : '查看原始记忆卡',
+            backToBrief: keystoneEnglish ? '‹ Back to Keystone Brief' : '‹ 返回关键简报',
+            moreControls: keystoneEnglish ? 'More controls' : '更多控制',
+            sourceAsOf: keystoneEnglish ? 'Sources as of' : '来源截至',
+            localOnly: keystoneEnglish ? 'local-only' : '只用于本机',
+            readOnlyBoundary: keystoneEnglish
+                ? 'Read-only brief · Does not write profile/tasks, insert, or send; feedback only records a brief event'
+                : '只读简报 · 不写画像/任务，不插入或发送；反馈只写简报事件',
+        };
+        const keystoneSourceCount = (count: number): string =>
+            keystoneEnglish ? `${count} source${count === 1 ? '' : 's'}` : `${count} 条来源`;
+        if (
+            !isSelectionSearch &&
+            this.shouldSuppressContextBubbleForComposerAssist(options.recallContext)
+        ) {
             this.clearPassiveContextBubble();
             return;
         }
@@ -8736,6 +9428,34 @@ class WebIntelligenceContentScript {
             this.clearContextBubble();
             return;
         }
+
+        let activeKeystoneBrief =
+            !isSelectionSearch && !isContextRehearsalMatch(matches[0])
+                ? options.keystoneBrief
+                : undefined;
+        let briefEvidenceOpen = false;
+        let briefRawCardOpen = false;
+        let briefShownEventRecorded = false;
+        let briefOpenedEventRecorded = false;
+        let briefFeedbackReceipt: { status: 'pending' | 'confirmed' | 'failed'; message: string } | null = null;
+
+        const hasPrimaryKeystoneBrief = (): boolean => {
+            return Boolean(
+                activeKeystoneBrief &&
+                (activeKeystoneBrief.presentationMode === 'primary' ||
+                    activeKeystoneBrief.presentationMode === 'conflict') &&
+                (activeKeystoneBrief.brief.status === 'ready' ||
+                    activeKeystoneBrief.brief.status === 'partial'),
+            );
+        };
+
+        const hasStaleKeystoneBrief = (): boolean => {
+            return Boolean(
+                activeKeystoneBrief &&
+                (activeKeystoneBrief.presentationMode === 'stale_notice' ||
+                    activeKeystoneBrief.brief.status === 'stale'),
+            );
+        };
 
         this.clearContextBubble();
         this.ensureContextBubbleStyles();
@@ -8786,23 +9506,6 @@ class WebIntelligenceContentScript {
                 </div>
             `
             : '';
-        const pageRecallReceiptItems = isSelectionSearch
-            ? []
-            : buildContextBubblePageRecallReceiptItems(options.recallContext, recallBasis);
-        const pageRecallReceiptHtml = pageRecallReceiptItems.length
-            ? `
-                <div class="pai-context-page-recall-receipt" aria-label="页面召回回执">
-                    <div class="pai-context-page-recall-title">页面召回回执</div>
-                    ${pageRecallReceiptItems.map(([label, value]) => `
-                        <div class="pai-context-page-recall-row">
-                            <span class="pai-context-page-recall-label">${escapeHtml(label)}</span>
-                            <span class="pai-context-page-recall-value">${escapeHtml(value)}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            `
-            : '';
-
         const bubble = document.createElement('div');
         bubble.className = 'pai-context-bubble';
         if (animate) {
@@ -8925,6 +9628,12 @@ class WebIntelligenceContentScript {
         };
 
         const buildPassivePeekSliceReceipt = (): string => {
+            if (hasPrimaryKeystoneBrief() && activeKeystoneBrief) {
+                const sourceCount = activeKeystoneBrief.brief.sourceMap.length;
+                return keystoneEnglish
+                    ? `${keystoneSourceCount(sourceCount)} · ${matches.length} related memor${matches.length === 1 ? 'y' : 'ies'} available for review`
+                    : `${sourceCount} 条来源 · ${matches.length} 条相关记忆可展开复核`;
+            }
             if (isSelectionSearch || matches.length <= 1) {
                 return '';
             }
@@ -9055,10 +9764,240 @@ class WebIntelligenceContentScript {
             };
         };
 
+        const formatKeystoneDate = (timestamp: number): string => {
+            if (!Number.isFinite(timestamp) || timestamp <= 0) return keystoneText.unknownTime;
+            const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+            return new Intl.DateTimeFormat(getContentScriptUiLanguage(), {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+            }).format(new Date(milliseconds));
+        };
+
+        const formatKeystoneAuthority = (authority?: string): string => {
+            const labels: Record<string, string> = {
+                user_owned: keystoneEnglish ? 'User confirmed' : '用户确认',
+                direct_message: keystoneEnglish ? 'Direct message' : '直接消息',
+                source_memory: keystoneEnglish ? 'Source memory' : '资料记忆',
+                jira: 'Jira',
+                meeting: keystoneEnglish ? 'Meeting' : '会议',
+                reflection: keystoneEnglish ? 'Reflection signal' : '反思线索',
+                derived: keystoneEnglish ? 'System inference' : '系统推断',
+            };
+            return authority ? labels[authority] || authority : '';
+        };
+
+        const getSafeKeystoneSourceUrl = (url?: string): string => {
+            if (!url) return '';
+            try {
+                const parsed = new URL(url);
+                return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : '';
+            } catch (_error) {
+                return '';
+            }
+        };
+
+        const renderKeystoneClaimSection = (
+            label: string,
+            claims: KeystoneBriefClaim[] | undefined,
+        ): string => {
+            const items = (claims || []).filter((claim) => normalizeText(claim.text));
+            if (!items.length) return '';
+            return `
+                <section class="pai-keystone-slot">
+                    <div class="pai-keystone-slot-title">${escapeHtml(label)}</div>
+                    <ul class="pai-keystone-list">
+                        ${items.map((claim) => {
+                            const receipt = [
+                                formatKeystoneAuthority(claim.authority),
+                                claim.staleRisk === 'high'
+                                    ? keystoneEnglish ? 'High freshness risk' : '高时效风险'
+                                    : '',
+                            ].filter(Boolean).join(' · ');
+                            return `<li>${escapeHtml(claim.text)}${receipt ? ` <span class="pai-keystone-kicker">${escapeHtml(receipt)}</span>` : ''}</li>`;
+                        }).join('')}
+                    </ul>
+                </section>
+            `;
+        };
+
+        const buildStaleKeystoneNoticeHtml = (): string => {
+            if (!hasStaleKeystoneBrief() || !activeKeystoneBrief) return '';
+            const brief = activeKeystoneBrief.brief;
+            return `
+                <div class="pai-keystone-notice" role="status">
+                    ${keystoneEnglish
+                        ? `An older brief exists, with sources as of ${escapeHtml(formatKeystoneDate(brief.sourceAsOf))}. ${escapeHtml(brief.freshness.reason)} Original memories are shown first; the old summary is not treated as a current fact.`
+                        : `有旧简报，来源截至 ${escapeHtml(formatKeystoneDate(brief.sourceAsOf))}。${escapeHtml(brief.freshness.reason)}；当前先展示原始记忆，不把旧摘要当作当前事实。`}
+                </div>
+            `;
+        };
+
+        const renderKeystoneBriefCard = (): boolean => {
+            if (!hasPrimaryKeystoneBrief() || briefRawCardOpen || !activeKeystoneBrief) {
+                return false;
+            }
+            const presentation = activeKeystoneBrief;
+            const brief = presentation.brief;
+            const isConflict = presentation.presentationMode === 'conflict' || brief.status === 'partial';
+            const statusLabel = isConflict ? keystoneText.conflict : keystoneText.synthesized;
+            const sourceCount = brief.sourceMap.length;
+            const hiddenSourceCount = brief.displayPolicy.hiddenSourceCount;
+            const conflictHtml = isConflict
+                ? `
+                    <div class="pai-keystone-notice pai-keystone-notice--conflict" role="status">
+                        ${keystoneEnglish
+                            ? 'Conflicting sources were detected. Existing conclusions are retained for review and cannot be copied as an external summary; inspect the evidence first.'
+                            : '检测到来源冲突。以下内容保留已有结论供复核，不能复制为外发摘要；请先查看证据。'}
+                    </div>
+                `
+                : '';
+            const currentStateHtml = normalizeText(brief.slots.currentState)
+                ? `
+                    <section class="pai-keystone-slot">
+                        <div class="pai-keystone-slot-title">${keystoneText.currentState}</div>
+                        <div class="pai-context-summary">${escapeHtml(brief.slots.currentState)}</div>
+                    </section>
+                `
+                : '';
+            const openQuestions = brief.slots.openQuestions || [];
+            const openQuestionsHtml = openQuestions.length
+                ? `
+                    <section class="pai-keystone-slot">
+                        <div class="pai-keystone-slot-title">${keystoneText.openQuestions}</div>
+                        <ul class="pai-keystone-list">
+                            ${openQuestions.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+                        </ul>
+                    </section>
+                `
+                : '';
+            const sourceMapHtml = brief.sourceMap.map((source) => {
+                const title = normalizeText(source.title) || `${source.sourceType}:${source.sourceId}`;
+                const sourceMeta = [
+                    formatKeystoneAuthority(source.authority),
+                    source.projection === 'summary_ok' ? keystoneText.summaryAllowed : keystoneText.originalOnly,
+                ].filter(Boolean).join(' · ');
+                const safeUrl = getSafeKeystoneSourceUrl(source.url);
+                const labelHtml = safeUrl
+                    ? `<a href="${escapeHtmlAttribute(safeUrl)}" target="_blank" rel="noopener" title="${escapeHtmlAttribute(keystoneEnglish ? 'Open the original source for review only; does not write or send' : '只打开原始来源复核，不写入或发送')}">${escapeHtml(title)}</a>`
+                    : escapeHtml(title);
+                return `<li>${labelHtml}${sourceMeta ? ` · ${escapeHtml(sourceMeta)}` : ''}</li>`;
+            }).join('');
+            const rawEvidenceHtml = matches.map((match, index) => {
+                const view = buildMatchView(match);
+                return `
+                    <button type="button" class="pai-keystone-evidence-item" data-keystone-evidence-index="${index}" aria-label="${escapeHtmlAttribute(keystoneText.viewOriginalCard)}: ${escapeHtmlAttribute(view.titleText)}">
+                        <span class="pai-keystone-evidence-item-title">${escapeHtml(view.titleText)}</span>
+                        <span class="pai-keystone-evidence-item-summary">${escapeHtml(view.summaryText)}</span>
+                    </button>
+                `;
+            }).join('');
+            const evidenceDetailHtml = briefEvidenceOpen
+                ? `
+                    <div class="pai-keystone-evidence-list">
+                        <div class="pai-keystone-slot-title">${keystoneText.sourceMap}</div>
+                        <ul class="pai-keystone-list">${sourceMapHtml}</ul>
+                        <div class="pai-keystone-slot-title">${keystoneText.relatedMemories}</div>
+                        ${rawEvidenceHtml}
+                    </div>
+                `
+                : '';
+            const copyDisabled = !brief.displayPolicy.canCopyToDraft || isConflict;
+            const copyActionLabel = copyDisabled
+                ? keystoneEnglish
+                    ? 'This brief has a conflict or freshness risk and cannot be copied as an external summary'
+                    : '当前简报存在冲突或时效风险，不能复制外发摘要'
+                : keystoneEnglish
+                    ? `Copy the redacted summary to the clipboard; ${hiddenSourceCount} local-only source${hiddenSourceCount === 1 ? '' : 's'} will be excluded and nothing is sent automatically`
+                    : `复制已脱敏摘要到剪贴板；${hiddenSourceCount} 条仅本机来源不会进入摘要，不会自动发送`;
+            const moreMenuHtml = `
+                ${siteControlReceiptHtml}
+                <button type="button" class="pai-context-menu-item pai-keystone-hide" role="menuitem">${keystoneText.hideBrief}</button>
+                <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
+                <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
+                <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
+                <button type="button" class="pai-context-menu-item pai-context-menu-item--danger pai-context-site-block" role="menuitem">永久不提示此站点</button>
+            `;
+            const feedbackReceiptHtml = briefFeedbackReceipt
+                ? `<div class="pai-keystone-feedback-receipt" role="status">${escapeHtml(briefFeedbackReceipt.message)}</div>`
+                : '';
+
+            card.innerHTML = `
+                <div class="pai-context-card-scroll">
+                    <div class="pai-context-head">
+                        <div class="pai-context-brand">
+                            <span class="pai-context-mark"><img src="${escapeHtmlAttribute(lensIconUrl)}" alt=""></span>
+                            <span>${escapeHtml(brandLabel)}</span>
+                        </div>
+                        <div class="pai-context-head-actions">
+                            <span class="pai-context-relevance pai-context-relevance--${isConflict ? 'maybe' : 'strong'}">${escapeHtml(statusLabel)}</span>
+                            <div class="pai-context-more-wrap">
+                                <button type="button" class="pai-context-icon-button pai-context-more" aria-label="${keystoneText.moreControls}" title="${keystoneText.moreControls}" aria-haspopup="menu" aria-expanded="${String(moreMenuOpen)}">⋯</button>
+                                <div class="pai-context-more-menu" role="menu" ${moreMenuOpen ? '' : 'hidden'}>${moreMenuHtml}</div>
+                            </div>
+                        </div>
+                    </div>
+                    ${conflictHtml}
+                    <div class="pai-keystone-kicker">${keystoneText.brief}</div>
+                    <h3 class="pai-context-title">${escapeHtml(brief.title)}</h3>
+                    <div class="pai-context-summary">${escapeHtml(brief.summary)}</div>
+                    ${normalizeText(presentation.whyNow) || normalizeText(brief.slots.whyItMatters) ? `
+                        <div class="pai-keystone-why">${keystoneText.whyNow}: ${escapeHtml(normalizeText(presentation.whyNow) || normalizeText(brief.slots.whyItMatters))}</div>
+                    ` : ''}
+                    <div class="pai-keystone-meta">
+                        <span>${keystoneSourceCount(sourceCount)}</span>
+                        <span>${keystoneText.sourceAsOf} ${escapeHtml(formatKeystoneDate(brief.sourceAsOf))}</span>
+                        <span>${keystoneEnglish ? `${hiddenSourceCount} ${keystoneText.localOnly}` : `${hiddenSourceCount} 条${keystoneText.localOnly}`}</span>
+                    </div>
+                    ${currentStateHtml}
+                    ${renderKeystoneClaimSection(keystoneText.constraints, brief.slots.constraints)}
+                    ${renderKeystoneClaimSection(keystoneText.stableFacts, brief.slots.stableFacts)}
+                    ${renderKeystoneClaimSection(keystoneText.decisions, brief.slots.decisions)}
+                    ${renderKeystoneClaimSection(keystoneText.traps, brief.slots.traps)}
+                    ${openQuestionsHtml}
+                    <section class="pai-keystone-evidence">
+                        <button type="button" class="pai-keystone-evidence-toggle" aria-expanded="${String(briefEvidenceOpen)}">
+                            ${briefEvidenceOpen ? keystoneText.collapseEvidence : keystoneText.viewEvidence} (${sourceCount})
+                        </button>
+                        ${evidenceDetailHtml}
+                    </section>
+                </div>
+                <div class="pai-context-footer-wrap">
+                    <div class="pai-context-section-label pai-context-section-label--footer">${keystoneText.actions}</div>
+                    <div class="pai-keystone-actions">
+                        <button type="button" class="pai-keystone-action pai-keystone-copy" aria-label="${escapeHtmlAttribute(copyActionLabel)}" title="${escapeHtmlAttribute(copyActionLabel)}" ${copyDisabled ? 'disabled' : ''}>${keystoneText.copySummary}</button>
+                        <button type="button" class="pai-keystone-action pai-keystone-useful">${keystoneText.useful}</button>
+                        <button type="button" class="pai-keystone-action pai-keystone-action--quiet pai-keystone-inaccurate">${keystoneText.inaccurate}</button>
+                    </div>
+                    <div class="pai-context-action-boundary" aria-label="${keystoneEnglish ? 'Action boundary' : '操作边界'}">${keystoneText.readOnlyBoundary}</div>
+                    ${feedbackReceiptHtml}
+                </div>
+            `;
+            updateAnchoredPanels();
+            return true;
+        };
+
         const buildContextBubbleRestReceipt = (
             match: ContextRecallMatch,
             view = buildMatchView(match),
         ): string => {
+            if (hasPrimaryKeystoneBrief() && activeKeystoneBrief) {
+                const brief = activeKeystoneBrief.brief;
+                const status = brief.status === 'partial' ? keystoneText.conflict : keystoneText.synthesized;
+                return clipContextFeedbackDetailValue(
+                    [
+                        brandLabel,
+                        `${keystoneText.brief}: ${status}`,
+                        brief.title,
+                        keystoneSourceCount(brief.sourceMap.length),
+                        recallBasis,
+                        keystoneEnglish
+                            ? 'Read-only cue; does not write, insert, or send'
+                            : '只读提示，不写入/插入/发送',
+                    ].filter(Boolean).join('。'),
+                    180,
+                );
+            }
             const reason = view.whyChips[0]
                 ? `因为${view.whyChips[0]}`
                 : view.peekFooter
@@ -9067,6 +10006,9 @@ class WebIntelligenceContentScript {
             const title = clipContextFeedbackDetailValue(view.titleText, 56);
             const parts = [
                 brandLabel,
+                hasStaleKeystoneBrief()
+                    ? keystoneEnglish ? 'An older brief exists; original memories are shown' : '有旧简报，当前展示原始记忆'
+                    : '',
                 view.strengthLabel,
                 reason,
                 title,
@@ -9108,6 +10050,28 @@ class WebIntelligenceContentScript {
             return `打开已保存资料的原始来源：${target}。只打开新标签核对，不写入记忆、不插入输入框、不发送内容、不确认事实。`;
         };
 
+        const getContextSourceActionTargetLabel = (label?: string | null): string => {
+            return clipContextFeedbackDetailValue(label, 80) || '原始来源';
+        };
+
+        const buildOriginalSourceActionLabel = (
+            link: { label: string; url: string },
+            match: ContextRecallMatch,
+        ): string => {
+            if (match.type === 'source_memory') {
+                return buildSourceMemoryOriginalSourceActionLabel(link);
+            }
+            const targetLabel = getContextSourceActionTargetLabel(link.label);
+            const host = getContextSourceLinkHost(link.url);
+            const target = host ? `${targetLabel}（${host}）` : targetLabel;
+            const targetKind = isSelectionSearch
+                ? '这条划词检索结果'
+                : isContextRehearsalMatch(match)
+                    ? '这条预演提醒'
+                    : '这条记忆提示';
+            return `打开原始来源：${target}。只打开新标签核对${targetKind}摘要；不会重新召回、写入记忆、插入输入框、发送内容或确认事实。`;
+        };
+
         const buildMemoryDetailActionLabel = (
             match: ContextRecallMatch,
             view: ReturnType<typeof buildMatchView>,
@@ -9115,6 +10079,39 @@ class WebIntelligenceContentScript {
             if (match.type !== 'source_memory') return '在记忆中查看';
             const targetLabel = getSourceMemoryActionTargetLabel(view.titleText || match.sourceTitle);
             return `打开资料详情复核：${targetLabel}。本次点击只打开新标签；不会新增或撤销资料记忆，不写画像或任务，不插入或发送内容。`;
+        };
+
+        const getContextFeedbackTargetLabel = (match: ContextRecallMatch): string => {
+            if (isSelectionSearch) return '这条划词检索结果';
+            if (isContextRehearsalMatch(match)) return '这条预演提醒';
+            if (match.type === 'source_memory') return '这条资料记忆提示';
+            return '这条记忆提示';
+        };
+
+        const buildPositiveFeedbackActionLabel = (
+            match: ContextRecallMatch,
+            view: ReturnType<typeof buildMatchView>,
+            receipt?: ContextFeedbackCardReceipt,
+        ): string => {
+            const target = getContextFeedbackTargetLabel(match);
+            if (receipt?.status === 'pending') {
+                return `正在记录${target}有用反馈；服务确认前不会当作已学习，不会插入输入框、发送内容或确认事实。`;
+            }
+            if (receipt?.status === 'confirmed') {
+                return `${target}有用反馈已确认写入；后续类似提示会优先保留，不会插入输入框、发送内容或确认事实。`;
+            }
+            return `${view.copy.positiveAriaLabel}：提交 recall-quality 有用反馈，服务确认后才会影响后续类似提示；不会插入输入框、发送内容或确认事实。`;
+        };
+
+        const buildNegativeFeedbackActionLabel = (
+            match: ContextRecallMatch,
+            view: ReturnType<typeof buildMatchView>,
+        ): string => {
+            const target = getContextFeedbackTargetLabel(match);
+            const boundary = isSelectionSearch
+                ? '不会保存选区、插入输入框、发送内容、调用外部 AI 或确认事实'
+                : '不会删除原始记忆、插入输入框、发送内容或确认事实';
+            return `${view.copy.negativeAriaLabel}：打开原因面板；选择原因后提交 recall-quality 修正并隐藏${target}，写入失败时只保留本页 30 分钟隐藏；${boundary}。`;
         };
 
         const renderWhyChips = (match: ContextRecallMatch): string => {
@@ -9297,6 +10294,34 @@ class WebIntelligenceContentScript {
         };
 
         const renderPeek = (): void => {
+            if (hasPrimaryKeystoneBrief() && activeKeystoneBrief) {
+                const presentation = activeKeystoneBrief;
+                const brief = presentation.brief;
+                const isConflict = brief.status === 'partial';
+                const peekBoundaryText = isConflict
+                    ? keystoneEnglish
+                        ? 'Conflict · Click to inspect evidence; external copy is disabled'
+                        : '存在冲突 · 点击看证据，不能复制外发'
+                    : keystoneEnglish
+                        ? 'Read-only brief · Click to inspect evidence; does not write or send automatically'
+                        : '只读简报 · 点击查看证据，不自动写入或发送';
+                peek.innerHTML = `
+                    <div class="pai-context-peek-header">
+                        <span>${escapeHtml(brandLabel)}</span>
+                        <span class="pai-context-relevance pai-context-relevance--${isConflict ? 'maybe' : 'strong'}">${isConflict ? keystoneText.shortConflict : keystoneText.brief}</span>
+                    </div>
+                    <div class="pai-keystone-kicker">${escapeHtml(normalizeText(presentation.whyNow) || keystoneText.matchedScene)}</div>
+                    <div class="pai-context-peek-title">${escapeHtml(brief.title)}</div>
+                    <div class="pai-context-peek-summary">${escapeHtml(brief.summary)}</div>
+                    <div class="pai-context-peek-footer">${escapeHtml(`${keystoneSourceCount(brief.sourceMap.length)} · ${keystoneText.sourceAsOf} ${formatKeystoneDate(brief.sourceAsOf)}`)}</div>
+                    <div class="pai-context-peek-slice">${escapeHtml(buildPassivePeekSliceReceipt())}</div>
+                    ${recallBasis ? `<div class="pai-context-peek-basis">${escapeHtml(recallBasis)}</div>` : ''}
+                    <div class="pai-context-peek-boundary">${escapeHtml(peekBoundaryText)}</div>
+                `;
+                updateBubbleRestReceipt(matches[currentIndex]);
+                updateAnchoredPanels();
+                return;
+            }
             const match = matches[currentIndex];
             const view = buildMatchView(match);
             const peekBoundaryText = '只读提示 · 点击查看详情，不写入/插入/发送';
@@ -9307,6 +10332,7 @@ class WebIntelligenceContentScript {
                     <span class="pai-context-relevance pai-context-relevance--${escapeHtmlAttribute(view.strengthClass)}">${escapeHtml(view.strengthLabel)}</span>
                 </div>
                 ${renderWhyChips(match)}
+                ${hasStaleKeystoneBrief() ? `<div class="pai-keystone-kicker">${keystoneEnglish ? 'An older brief exists; original memories are shown' : '有旧简报，当前展示原始记忆'}</div>` : ''}
                 <div class="pai-context-peek-title">${escapeHtml(view.titleText)}</div>
                 <div class="pai-context-peek-summary">${escapeHtml(view.summaryText)}</div>
                 ${view.peekFooter ? `<div class="pai-context-peek-footer">${escapeHtml(view.peekFooter)}</div>` : ''}
@@ -9319,36 +10345,40 @@ class WebIntelligenceContentScript {
         };
 
         const renderCard = (): void => {
+            if (renderKeystoneBriefCard()) return;
             const match = matches[currentIndex];
             const view = buildMatchView(match);
+            const briefBackHtml = briefRawCardOpen && hasPrimaryKeystoneBrief()
+                ? `
+                    <div class="pai-keystone-back-wrap">
+                        <button type="button" class="pai-keystone-back">${keystoneText.backToBrief}</button>
+                    </div>
+                `
+                : '';
+            const staleKeystoneNoticeHtml = buildStaleKeystoneNoticeHtml();
+            const isChangePresentation = match.metadata?.changeLedgerPresentation === true;
+            const changeProjectionHtml = isSelectionSearch || !isChangePresentation
+                ? ''
+                : renderMemoryChangeProjectionSection(options.changeProjections || []);
             const positiveFeedbackReceipt = positiveFeedbackReceipts.get(match.id);
             const isPositiveLocked =
                 positiveFeedbackReceipt?.status === 'pending' ||
                 positiveFeedbackReceipt?.status === 'confirmed';
-            const positiveFeedbackAriaLabel =
-                positiveFeedbackReceipt?.status === 'pending'
-                    ? '正在记录有用反馈'
-                    : positiveFeedbackReceipt?.status === 'confirmed'
-                        ? '已标记有用'
-                        : escapeHtmlAttribute(view.copy.positiveAriaLabel);
-            const positiveFeedbackTitle =
-                positiveFeedbackReceipt?.status === 'pending'
-                    ? '正在记录有用反馈'
-                    : positiveFeedbackReceipt?.status === 'confirmed'
-                        ? '已标记有用'
-                        : '这条有用';
+            const positiveFeedbackActionLabel = buildPositiveFeedbackActionLabel(
+                match,
+                view,
+                positiveFeedbackReceipt,
+            );
+            const negativeFeedbackActionLabel = buildNegativeFeedbackActionLabel(match, view);
             const memoryDetailActionLabel = buildMemoryDetailActionLabel(match, view);
             const metaHtml = view.compactMetaItems
                 .map((item) => `<span class="pai-context-meta-item">${escapeHtml(item)}</span>`)
                 .join('');
             const sourceLinksHtml = view.sourceLinks
                 .map((link) => {
-                    const sourceActionLabel = match.type === 'source_memory'
-                        ? buildSourceMemoryOriginalSourceActionLabel(link)
-                        : '';
-                    const sourceActionAttributes = sourceActionLabel
-                        ? ` aria-label="${escapeHtmlAttribute(sourceActionLabel)}" title="${escapeHtmlAttribute(sourceActionLabel)}"`
-                        : '';
+                    const sourceActionLabel = buildOriginalSourceActionLabel(link, match);
+                    const sourceActionAttributes =
+                        ` aria-label="${escapeHtmlAttribute(sourceActionLabel)}" title="${escapeHtmlAttribute(sourceActionLabel)}"`;
                     return `<a class="pai-context-source-link" href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener"${sourceActionAttributes}>${escapeHtml(link.label)}</a>`;
                 })
                 .join('');
@@ -9396,7 +10426,7 @@ class WebIntelligenceContentScript {
                     </div>
                 `
                 : '';
-            const sourceMemoryReceiptHtml = view.sourceMemoryReceiptItems.length
+            const sourceMemoryReceiptHtml = !isChangePresentation && view.sourceMemoryReceiptItems.length
                 ? `
                     <div class="pai-context-source-memory-receipt" aria-label="资料回执">
                         <div class="pai-context-source-memory-receipt-title">资料回执</div>
@@ -9469,7 +10499,7 @@ class WebIntelligenceContentScript {
                 `
                 : `
                     ${siteControlReceiptHtml}
-                    <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
+                    <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">${isChangePresentation ? '隐藏本次变化提示 30 分钟' : '隐藏此条记忆 30 分钟'}</button>
                     <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
                     <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
                     <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
@@ -9477,6 +10507,8 @@ class WebIntelligenceContentScript {
                 `;
             const actionBoundaryBaseText = isSelectionSearch
                 ? '只读检索，不保存/插入/外发'
+                : isChangePresentation
+                    ? '只读变化证据，不确认当前值/写入/插入/发送'
                 : isContextRehearsalMatch(match)
                     ? '只读预演，不生成/插入/发送/执行'
                     : match.type === 'source_memory'
@@ -9528,6 +10560,14 @@ class WebIntelligenceContentScript {
                     </div>
                 `
                 : '';
+            const feedbackHtml = isChangePresentation
+                ? '<div class="pai-context-change-readonly" aria-label="变化脉络只读边界">链级只读</div>'
+                : `
+                    <div class="pai-context-feedback" aria-label="反馈">
+                        <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${escapeHtmlAttribute(positiveFeedbackActionLabel)}" title="${escapeHtmlAttribute(positiveFeedbackActionLabel)}" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_UP_ICON_HTML}<span class="pai-sr-only">这条有用</span></button>
+                        <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(negativeFeedbackActionLabel)}" title="${escapeHtmlAttribute(negativeFeedbackActionLabel)}" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_DOWN_ICON_HTML}<span class="pai-sr-only">不是这个意思</span></button>
+                    </div>
+                `;
 
             card.innerHTML = `
                 <div class="pai-context-card-scroll">
@@ -9548,7 +10588,8 @@ class WebIntelligenceContentScript {
                         </div>
                     </div>
 
-                    ${pageRecallReceiptHtml}
+                    ${briefBackHtml}
+                    ${staleKeystoneNoticeHtml}
                     ${selectedTextHtml}
                     <div class="pai-context-section-label">${escapeHtml(view.copy.whySectionLabel)}</div>
                     ${renderWhyChips(match)}
@@ -9564,6 +10605,7 @@ class WebIntelligenceContentScript {
                     ` : ''}
                     ${rehearsalReceiptHtml}
                     ${sourceMemoryReceiptHtml}
+                    ${changeProjectionHtml}
 
                     <div class="pai-context-meta-row" aria-label="记忆来源摘要">
                         ${weaveChipHtml}
@@ -9578,10 +10620,7 @@ class WebIntelligenceContentScript {
                     <div class="pai-context-section-label pai-context-section-label--footer">${escapeHtml(view.copy.footerSectionLabel)}</div>
                     <div class="pai-context-footer">
                         ${actionBoundaryHtml}
-                        <div class="pai-context-feedback" aria-label="反馈">
-                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${positiveFeedbackAriaLabel}" title="${positiveFeedbackTitle}" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_UP_ICON_HTML}<span class="pai-sr-only">这条有用</span></button>
-                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(view.copy.negativeAriaLabel)}" title="不是这个意思" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_DOWN_ICON_HTML}<span class="pai-sr-only">不是这个意思</span></button>
-                        </div>
+                        ${feedbackHtml}
                         ${pagerHtml}
                     </div>
                     ${positiveFeedbackReceiptHtml}
@@ -9653,6 +10692,62 @@ class WebIntelligenceContentScript {
             }, 0);
         };
 
+        const removeKeystoneBriefFromCurrentCache = (): void => {
+            const cached = contextMatchCache.get(contextKey);
+            if (!cached) return;
+            cached.keystoneBrief = undefined;
+            contextMatchCache.set(contextKey, cached);
+        };
+
+        const fallBackFromKeystoneBrief = (
+            eventType: 'hidden' | 'not_accurate',
+            reason: string,
+        ): void => {
+            const presentation = activeKeystoneBrief;
+            if (!presentation) return;
+            const briefId = presentation.brief.id;
+            activeKeystoneBrief = undefined;
+            briefRawCardOpen = false;
+            briefEvidenceOpen = false;
+            briefFeedbackReceipt = null;
+            moreMenuOpen = false;
+            removeKeystoneBriefFromCurrentCache();
+            renderPeek();
+            renderCard();
+            submitKeystoneBriefUiEvent(
+                briefId,
+                eventType,
+                contextKey,
+                (success, error) => {
+                    if (success) return;
+                    this.showContextToast(
+                        keystoneEnglish
+                            ? 'Switched to original memories, but brief feedback could not be saved'
+                            : '已切换到原始记忆，但简报反馈写入失败',
+                        undefined,
+                        { detailMessage: clipContextFeedbackDetailValue(error || (keystoneEnglish ? 'Try again later' : '请稍后重试'), 100) },
+                    );
+                },
+                reason,
+            );
+        };
+
+        const copyKeystoneSummary = async (text: string): Promise<void> => {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand('copy');
+            textarea.remove();
+            if (!copied) throw new Error('clipboard_unavailable');
+        };
+
         renderPeek();
         renderCard();
 
@@ -9703,6 +10798,8 @@ class WebIntelligenceContentScript {
                 negativeFeedbackMatchId = null;
                 negativeFeedbackNoteExpanded = false;
                 negativeFeedbackNote = '';
+                briefRawCardOpen = false;
+                briefEvidenceOpen = false;
             }
             renderCard();
             setPeekVisible(false);
@@ -9711,8 +10808,20 @@ class WebIntelligenceContentScript {
             bubble.setAttribute('aria-expanded', String(expanded));
             updateAnchoredPanels();
             if (!wasExpanded && expanded) {
+                if (activeKeystoneBrief && !briefOpenedEventRecorded) {
+                    briefOpenedEventRecorded = true;
+                    submitKeystoneBriefUiEvent(
+                        activeKeystoneBrief.brief.id,
+                        'opened',
+                        contextKey,
+                    );
+                }
                 const currentMatch = matches[currentIndex];
-                if (currentMatch && expandedTraceRecordedForMatchId !== currentMatch.id) {
+                if (
+                    currentMatch &&
+                    (!hasPrimaryKeystoneBrief() || briefRawCardOpen) &&
+                    expandedTraceRecordedForMatchId !== currentMatch.id
+                ) {
                     expandedTraceRecordedForMatchId = currentMatch.id;
                     submitContextRecallAmbientTrace(
                         currentMatch,
@@ -9849,6 +10958,130 @@ class WebIntelligenceContentScript {
 
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
+
+            if (target.closest('.pai-keystone-evidence-toggle')) {
+                event.preventDefault();
+                const wasOpen = briefEvidenceOpen;
+                briefEvidenceOpen = !briefEvidenceOpen;
+                moreMenuOpen = false;
+                renderCard();
+                card.querySelector<HTMLButtonElement>('.pai-keystone-evidence-toggle')?.focus();
+                if (!wasOpen && activeKeystoneBrief) {
+                    submitKeystoneBriefUiEvent(
+                        activeKeystoneBrief.brief.id,
+                        'evidence_opened',
+                        contextKey,
+                    );
+                }
+                return;
+            }
+
+            const keystoneEvidenceItem = target.closest<HTMLButtonElement>('.pai-keystone-evidence-item');
+            if (keystoneEvidenceItem) {
+                event.preventDefault();
+                const index = Number.parseInt(
+                    keystoneEvidenceItem.dataset.keystoneEvidenceIndex || '',
+                    10,
+                );
+                if (Number.isFinite(index) && index >= 0 && index < matches.length) {
+                    currentIndex = index;
+                    briefRawCardOpen = true;
+                    moreMenuOpen = false;
+                    renderCard();
+                    card.querySelector<HTMLButtonElement>('.pai-keystone-back')?.focus();
+                }
+                return;
+            }
+
+            if (target.closest('.pai-keystone-back')) {
+                event.preventDefault();
+                briefRawCardOpen = false;
+                moreMenuOpen = false;
+                renderCard();
+                card.querySelector<HTMLButtonElement>('.pai-keystone-evidence-toggle')?.focus();
+                return;
+            }
+
+            if (target.closest('.pai-keystone-copy')) {
+                event.preventDefault();
+                const presentation = activeKeystoneBrief;
+                if (!presentation || !presentation.brief.displayPolicy.canCopyToDraft) return;
+                briefFeedbackReceipt = {
+                    status: 'pending',
+                    message: keystoneEnglish
+                        ? 'Copying the redacted summary; nothing will be sent automatically.'
+                        : '正在复制脱敏摘要；不会自动发送。',
+                };
+                renderCard();
+                void copyKeystoneSummary(
+                    presentation.brief.externalSummary || presentation.brief.summary,
+                ).then(() => {
+                    briefFeedbackReceipt = {
+                        status: 'confirmed',
+                        message: keystoneEnglish
+                            ? `Redacted summary copied; ${presentation.brief.displayPolicy.hiddenSourceCount} local-only source${presentation.brief.displayPolicy.hiddenSourceCount === 1 ? '' : 's'} excluded.`
+                            : `已复制脱敏摘要；${presentation.brief.displayPolicy.hiddenSourceCount} 条仅本机来源未进入摘要。`,
+                    };
+                    submitKeystoneBriefUiEvent(
+                        presentation.brief.id,
+                        'copied',
+                        contextKey,
+                    );
+                    renderCard();
+                }).catch((error) => {
+                    briefFeedbackReceipt = {
+                        status: 'failed',
+                        message: `${keystoneEnglish ? 'Copy failed' : '复制失败'}：${clipContextFeedbackDetailValue(String(error?.message || error), 80)}`,
+                    };
+                    renderCard();
+                });
+                return;
+            }
+
+            if (target.closest('.pai-keystone-useful')) {
+                event.preventDefault();
+                const presentation = activeKeystoneBrief;
+                if (!presentation || briefFeedbackReceipt?.status === 'pending') return;
+                briefFeedbackReceipt = {
+                    status: 'pending',
+                    message: keystoneEnglish
+                        ? 'Recording useful feedback; it is not treated as learned until the service confirms it.'
+                        : '正在记录简报有用反馈；服务确认前不会当作已学习。',
+                };
+                renderCard();
+                submitKeystoneBriefUiEvent(
+                    presentation.brief.id,
+                    'useful',
+                    contextKey,
+                    (success, error) => {
+                        briefFeedbackReceipt = success
+                            ? {
+                                status: 'confirmed',
+                                message: keystoneEnglish
+                                    ? 'Useful feedback confirmed; original memories were not modified.'
+                                    : '简报有用反馈已确认写入；原始记忆未被修改。',
+                            }
+                            : {
+                                status: 'failed',
+                                message: `${keystoneEnglish ? 'Feedback write failed' : '反馈写入失败'}：${clipContextFeedbackDetailValue(error || (keystoneEnglish ? 'Try again later' : '请稍后重试'), 80)}`,
+                            };
+                        renderCard();
+                    },
+                );
+                return;
+            }
+
+            if (target.closest('.pai-keystone-inaccurate')) {
+                event.preventDefault();
+                fallBackFromKeystoneBrief('not_accurate', 'user_reported_inaccurate');
+                return;
+            }
+
+            if (target.closest('.pai-keystone-hide')) {
+                event.preventDefault();
+                fallBackFromKeystoneBrief('hidden', 'user_hidden_from_memory_lens');
+                return;
+            }
 
             if (target.closest('.pai-context-more')) {
                 event.preventDefault();
@@ -10074,6 +11307,15 @@ class WebIntelligenceContentScript {
         this.peekElement = isSelectionSearch ? null : peek;
         this.cardElement = card;
         this.activeBubbleContextKey = contextKey;
+
+        if (activeKeystoneBrief && !briefShownEventRecorded) {
+            briefShownEventRecorded = true;
+            submitKeystoneBriefUiEvent(
+                activeKeystoneBrief.brief.id,
+                'shown',
+                contextKey,
+            );
+        }
 
         if (openOnShow) {
             setExpanded(true);

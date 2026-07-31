@@ -973,6 +973,91 @@ function verifyPopupTopThree() {
     'popup Today Pilot refresh button aria label',
   );
   assertContains(
+    popupSource,
+    /buildTodayPilotPopupCardMainBoundary/,
+    'popup card main button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /Top 3 折叠快照/,
+    'popup card main button snapshot boundary copy',
+  );
+  assertContains(
+    popupSource,
+    /不会刷新 brief、写反馈、复制上下文、发送消息或执行动作/,
+    'popup card main button no-effect copy',
+  );
+  assertContains(
+    popupSource,
+    /buildTodayPilotPopupOverflowBoundary/,
+    'popup overflow handoff button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /buildTodayPilotPopupMeetingBoundary/,
+    'popup meeting Video Home button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /不会加入会议、开始 Capture、写反馈、发送消息或改日历/,
+    'popup meeting Video Home no-side-effect copy',
+  );
+  assertContains(
+    popupSource,
+    /buildTodayPilotPopupFeedbackButtonBoundary/,
+    'popup feedback button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /只写 Today Pilot 展示\/排序反馈，并从今天 Top 3 隐藏/,
+    'popup done button no-source-completion boundary',
+  );
+  assertContains(
+    popupSource,
+    /不会改来源任务排程、日历、动作执行时间/,
+    'popup later button no-source-reschedule boundary',
+  );
+  assertContains(
+    popupSource,
+    /buildTodayPilotPopupCopyBoundary/,
+    'popup copy button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /生成通用 context pack 并写入本机剪贴板/,
+    'popup copy button clipboard-only boundary',
+  );
+  assertContains(
+    popupSource,
+    /buildTodayPilotPopupExternalReviewBoundary/,
+    'popup external review button boundary helper',
+  );
+  assertContains(
+    popupSource,
+    /popup 内不会批准、拒绝、重试或执行 OpenClaw/,
+    'popup external review no-execution boundary',
+  );
+  assertContains(
+    popupSource,
+    /aria-label=\{cardMainBoundary\}/,
+    'popup card main aria binding',
+  );
+  assertContains(
+    popupSource,
+    /aria-label=\{doneBoundary\}/,
+    'popup done button aria binding',
+  );
+  assertContains(
+    popupSource,
+    /aria-label=\{laterBoundary\}/,
+    'popup later button aria binding',
+  );
+  assertContains(
+    popupSource,
+    /aria-label=\{copyOrReviewBoundary\}/,
+    'popup copy or external review aria binding',
+  );
+  assertContains(
     i18nSource,
     /刷新 Today Pilot Top 3 快照：只读取或重新生成当前用户今日派生 brief/,
     'popup Today Pilot refresh button Chinese scope copy',

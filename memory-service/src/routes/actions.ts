@@ -6,6 +6,7 @@ import {
   getOpenClawStaleRunningAfterSeconds,
 } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
+import { ActionReadinessService } from '../core/ActionReadinessService.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 
 export async function actionRoutes(app: FastifyInstance): Promise<void> {
@@ -42,7 +43,16 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       limit: parseInt(request.query.limit ?? '20', 10) || 20,
       offset: parseInt(request.query.offset ?? '0', 10) || 0,
     });
-    return reply.status(200).send(result);
+    const readiness = new ActionReadinessService(
+      db,
+      userDataManager,
+      request.userId,
+    ).enrichActionList(result);
+    return reply.status(200).send({
+      ...result,
+      items: readiness.items,
+      readinessSummary: readiness.readinessSummary,
+    });
   });
 
   app.post<{
@@ -50,15 +60,63 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
   }>('/actions/:id/retry', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
-    const action = repo.retry(request.params.id);
-    if (!action) {
+    const existing = repo.getById(request.params.id);
+    if (!existing) {
       return reply.status(404).send({ error: 'Action not found' });
     }
+    if (existing.actionType === 'delegate_openclaw') {
+      const readiness = new ActionReadinessService(
+        db,
+        userDataManager,
+        request.userId,
+      ).checkAction(existing);
+      if (
+        readiness.decision === 'block' ||
+        readiness.decision === 'probe_first'
+      ) {
+        return reply.status(409).send({
+          code:
+            readiness.decision === 'block'
+              ? 'readiness_blocked'
+              : 'readiness_probe_required',
+          error:
+            readiness.receipt.reason ??
+            'Readiness must be repaired and rechecked before retry',
+          readinessReceipt: readiness.receipt,
+        });
+      }
+    }
+    const action = repo.retry(request.params.id)!;
     if (action.threadId) {
       const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
       threadService.refreshThreadDocument(action.threadId);
     }
     return reply.status(200).send({ action });
+  });
+
+  app.post<{
+    Params: { id: string };
+  }>('/actions/:id/readiness/probe', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const repo = new ActionRepository(db);
+    const action = repo.getById(request.params.id);
+    if (!action) {
+      return reply.status(404).send({ error: 'Action not found' });
+    }
+    if (action.actionType !== 'delegate_openclaw') {
+      return reply.status(400).send({
+        code: 'readiness_not_supported',
+        error: 'Readiness probe is only supported for delegate_openclaw',
+      });
+    }
+
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      request.userId,
+    );
+    const result = await service.probeAction(action);
+    return reply.status(200).send(result);
   });
 
   app.post<{

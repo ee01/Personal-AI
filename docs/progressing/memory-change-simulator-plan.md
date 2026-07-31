@@ -1,11 +1,15 @@
-# 新能力计划：记忆变更沙盒
+# 新能力计划：记忆变更沙盒（搁置）
 
 创建时间：2026-06-23  
 英文名：Memory Change Simulator  
-状态：待决策，仅计划与 demo，不做代码实现  
+状态：搁置；当前先专注核心功能和记忆准确度，不推进沙盒能力
 来源：本机 Reminders 未发现 `Personal AI` 列表；本计划来自线上 memory service 的真实使用信号、`docs/progressing` 排重、行业产品与论文调研。
 
 配套 demo：[memory-change-simulator-demo.html](./memory-change-simulator-demo.html)
+
+## 搁置原因
+
+2026-07-15 决策：先不做沙盒能力。当前 Personal AI 的优先级应放在功能本身和记忆准确度上，包括高价值记忆提取、召回质量、证据 grounding、场景内使用效果、以及已有功能的可靠性。记忆变更沙盒仍可作为后续治理层参考，但不应在当前阶段占用实现优先级。
 
 ## 先看两个真实使用场景
 

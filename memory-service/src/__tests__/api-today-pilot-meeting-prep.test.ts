@@ -59,6 +59,13 @@ describe('Today Pilot meeting prep API', () => {
       contextPackMd:
         '# Today Pilot meeting prep\n\nConfirm owner and next step.',
       redactionPreview: [],
+      outcomeSlots: [
+        {
+          title: '确认 GeneratedNotes retry/ack 的 owner 和处理口径',
+          type: 'decision',
+          evidenceIds: ['E1'],
+        },
+      ],
       storylineOpportunity: {
         available: true,
         confidence: 0.84,
@@ -102,6 +109,7 @@ describe('Today Pilot meeting prep API', () => {
     mockGenerateJSON.mockReset();
     mockGenerateJSON.mockResolvedValue(buildLlmPrepResponse());
     for (const table of [
+      'meeting_outcome_binders',
       'today_meeting_preps',
       'calendar_events',
       'messages_raw',
@@ -167,7 +175,7 @@ describe('Today Pilot meeting prep API', () => {
       current,
     );
     const memoryChunkCount =
-      options.withMemoryChunk === false ? 0 : (options.memoryChunkCount ?? 2);
+      options.withMemoryChunk === false ? 0 : (options.memoryChunkCount ?? 3);
     for (let index = 0; index < memoryChunkCount; index += 1) {
       insertMemoryChunk(current, index);
     }
@@ -179,10 +187,12 @@ describe('Today Pilot meeting prep API', () => {
     const messageId = `msg-ai-notes-prep-${suffix}`;
     const chunkId = 9701 + index;
     const hash = `hash-ai-notes-prep-${suffix}`;
-    const content =
-      index === 0
-        ? 'AI Notes GeneratedNotes message was consumed hundreds of times; retry/ack owner needs confirmation.'
-        : 'AI Notes GeneratedNotes project review should explain the retry impact, owner decision, and rollout risk to stakeholders.';
+    const content = [
+      'AI Notes GeneratedNotes message was consumed hundreds of times; retry/ack owner needs confirmation.',
+      'AI Notes GeneratedNotes project review should explain the retry impact, owner decision, and rollout risk to stakeholders.',
+      'AI Notes mobile rollout still needs Dev/QA estimate alignment and a capacity decision before the stakeholder update.',
+    ][index] ??
+      `AI Notes follow-up evidence ${suffix} covers the owner, estimate, and rollout risk.`;
     db.prepare(
       `INSERT INTO messages_raw
         (id, content, source_type, source, source_url, source_title, sender,
@@ -244,11 +254,26 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.items[0].status).toBe('ready');
     expect(body.items[0].generatedMode).toBe('nightly_llm');
     expect(body.items[0].contextPackMd).toContain('Today Pilot meeting prep');
-    expect(body.items[0].evidenceRefs.length).toBeGreaterThan(0);
-    expect(body.items[0].storylineOpportunity.available).toBe(true);
+    expect(
+      body.items[0].evidenceRefs.length,
+      JSON.stringify(body.items[0].evidenceRefs),
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      body.items[0].storylineOpportunity.available,
+      JSON.stringify(body.items[0].storylineOpportunity),
+    ).toBe(true);
     expect(body.items[0].storylineOpportunity.buttonLabel).toBe(
       '生成项目汇报故事线',
     );
+    expect(body.items[0].outcomeBinder).toMatchObject({
+      status: 'planned',
+      eventExternalId: 'event-ai-notes',
+    });
+    expect(body.items[0].outcomeBinder.slots).toHaveLength(1);
+    expect(body.items[0].outcomeBinder.slots[0]).toMatchObject({
+      status: 'planned',
+      mentionState: 'not_seen',
+    });
   });
 
   it('resolves a pre-generated prep without another LLM call', async () => {
@@ -278,12 +303,59 @@ describe('Today Pilot meeting prep API', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
+    expect(body.prep.outcomeBinder.status).toBe('planned');
+    expect(body.prep.outcomeBinder.slots[0].resultSummary).toBeUndefined();
     expect(body.generated).toBe(false);
     expect(body.source).toBe('cached');
     expect(body.prep.id).toBeTruthy();
     expect(body.assist.debug.prepId).toBe(body.prep.id);
     expect(body.prep.storylineOpportunity.available).toBe(true);
     expect(body.assist.storylineOpportunity.available).toBe(true);
+    expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores future-window prep under the meeting date so detail lookup can resolve it', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const event = seedCalendarEvent({
+      id: 'cal-future-ai-notes',
+      externalId: 'event-future-ai-notes',
+      startAt: current + 48 * 3600,
+      endAt: current + 48 * 3600 + 1800,
+      contentHash: 'hash-future-ai-notes',
+    });
+    const prepareDate = formatLocalDate(current, 'Asia/Shanghai');
+
+    const prepared = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/prepare',
+      payload: {
+        date: prepareDate,
+        timezone: 'Asia/Shanghai',
+        horizonHours: 72,
+        maxMeetings: 5,
+      },
+    });
+    expect(prepared.statusCode).toBe(200);
+    expect(prepared.json().items[0].localDate).toBe(
+      formatLocalDate(Number(event.startAt), 'Asia/Shanghai'),
+    );
+
+    const resolved = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      payload: {
+        event: {
+          externalId: event.externalId,
+          title: event.title,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: false,
+      },
+    });
+
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json().source).toBe('cached');
     expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
   });
 
@@ -488,7 +560,13 @@ describe('Today Pilot meeting prep API', () => {
   });
 
   it('stores deterministic fallback when LLM generation fails', async () => {
-    const event = seedCalendarEvent();
+    const event = seedCalendarEvent({
+      descriptionPreview: [
+        'Review native client rollout readiness.',
+        'Meeting ID: 123 456 789',
+        'Passcode: private-value-123',
+      ].join('\n'),
+    });
     mockGenerateJSON.mockRejectedValueOnce(new Error('llm unavailable'));
 
     const res = await app.inject({
@@ -498,6 +576,7 @@ describe('Today Pilot meeting prep API', () => {
         event: {
           externalId: event.externalId,
           title: event.title,
+          descriptionPreview: event.descriptionPreview,
           startTime: event.startAt,
         },
         timezone: 'Asia/Shanghai',
@@ -515,6 +594,10 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.prep.storylineOpportunity).toBeUndefined();
     expect(body.assist.storylineOpportunity).toBeUndefined();
     expect(body.prep.error).toContain('llm unavailable');
+    const serializedBinder = JSON.stringify(body.prep.outcomeBinder);
+    expect(serializedBinder).not.toContain('123 456 789');
+    expect(serializedBinder).not.toContain('private-value-123');
+    expect(serializedBinder).toContain('[redacted]');
   });
 
   it('skips recurring daily noise without fresh prep signal', async () => {

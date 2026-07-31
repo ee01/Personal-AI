@@ -1,3 +1,5 @@
+import type { MeetingOutcomeBinder } from '../services/MemoryServiceClient';
+
 export const MEETING_PILOT_HOST_PREFIX = 'https://v.ringcentral.com/conf/on/';
 
 export type MeetingPilotASRTier =
@@ -418,6 +420,7 @@ export interface MeetingPilotSessionSnapshot {
   transcript: MeetingPilotTranscriptChunk[];
   transcriptTurns: MeetingPilotTranscriptTurn[];
   memoryRefs: MeetingPilotMemoryRef[];
+  outcomeBinder?: MeetingOutcomeBinder;
   webTranscript?: MeetingPilotWebTranscriptState;
   speechSuggestion?: MeetingPilotSpeechSuggestion;
   speechGuidanceContext?: MeetingPilotSpeechGuidanceContext;
@@ -984,6 +987,7 @@ export function createMeetingPilotSessionSnapshot(
     transcript: input.transcript || [],
     transcriptTurns: input.transcriptTurns || [],
     memoryRefs: input.memoryRefs || [],
+    outcomeBinder: input.outcomeBinder,
     webTranscript: input.webTranscript,
     speechSuggestion: input.speechSuggestion,
     speechGuidanceContext: input.speechGuidanceContext,

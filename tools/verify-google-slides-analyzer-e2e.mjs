@@ -513,6 +513,25 @@ try {
   assert.match(pageText, /应用前不会重新读取 deck、复查当前 slide\/table\/行列或确认协作编辑/);
   assert.match(pageText, /快照年龄: 本页已持有这份分析快照/);
   assert.match(pageText, /若 deck 已切页、表格重排或同事协作编辑，请先回 Slides 重新分析/);
+  await analysisPage.evaluate(() => {
+    window.__slidesAnalyzerOriginalDateNow = Date.now;
+    Date.now = () => window.__slidesAnalyzerOriginalDateNow() + 11 * 60 * 1000;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await analysisPage.waitForFunction(() => (
+    document.body.textContent?.includes('已超过 10 分钟，建议先回 Slides 重新分析再写回。')
+  ));
+  assert.match(
+    await analysisPage.locator('.selected-writeback-preview').innerText(),
+    /已超过 10 分钟，建议先回 Slides 重新分析再写回。/,
+  );
+  await analysisPage.evaluate(() => {
+    Date.now = window.__slidesAnalyzerOriginalDateNow;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await analysisPage.waitForFunction(() => !(
+    document.body.textContent?.includes('已超过 10 分钟，建议先回 Slides 重新分析再写回。')
+  ));
   assert.match(pageText, /复核状态: 2 个字段均有直接来源/);
   assert.match(pageText, /未选、无法写回、仅风险关注项不会写入/);
   assert.match(pageText, /一次原子批量写回: 2 个字段 \/ 1 个项目，约 4 个 Slides 子请求/);

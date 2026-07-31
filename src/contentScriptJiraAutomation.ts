@@ -188,6 +188,94 @@ function formatJiraImportSecretReentryQueue(
   ].join(' ');
 }
 
+function formatJiraImportButtonCredentialQueueSummary(
+  slots: JiraAutomationImportSecretReentrySlot[],
+): string {
+  if (slots.length === 0) {
+    return jiraImportText(
+      'No redacted credential slots were detected in this preview; ordinary Jira review still applies.',
+      '当前预览未检测到被脱敏的凭据位置；仍需按普通 Jira 复核处理。',
+    );
+  }
+
+  const groups = buildJiraAutomationImportSecretReentryQueueGroups(slots);
+  const groupLabels: Record<string, string> = {
+    'hidden-jira-secrets': '隐藏 Jira secret',
+    'url-credentials': 'URL 与签名 query 凭据',
+    'inline-secret-text': '内嵌 secret 文本',
+    'named-credential-fields': '命名凭据字段',
+    'other-redacted-fields': '其它脱敏字段',
+  };
+  const visibleGroups = groups.slice(0, 3).map((group) => {
+    const label = isJiraAutomationImportEnglish()
+      ? group.label
+      : (groupLabels[group.id] || group.label);
+    return `${label} ${group.slots.length}`;
+  });
+  const hiddenGroupCount = Math.max(0, groups.length - visibleGroups.length);
+  const hiddenText = hiddenGroupCount > 0
+    ? jiraImportText(`, ${hiddenGroupCount} more group(s)`, `，另有 ${hiddenGroupCount} 组`)
+    : '';
+
+  return jiraImportText(
+    `${groups.length} credential re-entry group(s), ${slots.length} redacted credential slot(s): ${visibleGroups.join(', ')}${hiddenText}.`,
+    `${groups.length} 个凭据重录组，共 ${slots.length} 个脱敏位置：${visibleGroups.join('、')}${hiddenText}。`,
+  );
+}
+
+function buildJiraImportCreateButtonBoundaryLabel(options: {
+  buttonPrefix: string;
+  importedRuleName: string;
+  projectKey: string;
+  highRiskCount: number;
+  secretReentrySlots: JiraAutomationImportSecretReentrySlot[];
+  sourceAllowsChainedTrigger: boolean;
+  preventChainedTrigger: boolean;
+  disableAfterImport: boolean;
+}): string {
+  const importedRuleName = sanitizeJiraAutomationImportDisplayText(options.importedRuleName);
+  const projectKey = sanitizeJiraAutomationImportDisplayText(options.projectKey);
+  const reviewText = options.highRiskCount > 0
+    ? jiraImportText(
+      `${options.highRiskCount} high-risk review item(s) and the Jira-side Activation plan remain open${options.disableAfterImport ? ' before enablement' : ' even though this import will be enabled'}.`,
+      `${options.highRiskCount} 个高风险复核项和 Jira 侧启用计划仍未完成${options.disableAfterImport ? '，需在启用前处理' : '，但本次导入将直接启用规则'}。`,
+    )
+    : jiraImportText(
+      'Jira-side review still remains open before enablement.',
+      'Jira 侧复核仍需在启用前完成。',
+    );
+  const chainingText = options.sourceAllowsChainedTrigger
+    ? (options.preventChainedTrigger
+      ? jiraImportText(
+        `This preview blocks rule chaining in the ${options.disableAfterImport ? 'disabled' : 'enabled'} copy.`,
+        `当前预览会在${options.disableAfterImport ? '禁用' : '启用'}副本中阻止链式触发。`,
+      )
+      : jiraImportText(
+        'This preview preserves source rule chaining after you later enable the disabled copy.',
+        '当前预览会保留源规则链式触发；以后启用禁用副本后其它规则可能触发它。',
+      ))
+    : jiraImportText(
+      'Rule chaining stays disabled in the imported copy.',
+      '导入副本会保持链式触发禁用。',
+    );
+  const credentialText = formatJiraImportButtonCredentialQueueSummary(options.secretReentrySlots);
+  const importedState = options.disableAfterImport ? 'DISABLED' : 'ENABLED';
+  const noSideEffectText = options.disableAfterImport
+    ? jiraImportText(
+      'Sends one sanitized POST only; does not enable, run, activate schedules, restore secrets, edit the source rule, or create working credentials.',
+      '只发送一个已清洗的 POST；不会启用、运行、激活 schedule、恢复 secret、编辑源规则或创建可工作的凭据。',
+    )
+    : jiraImportText(
+      'Sends one sanitized POST that creates the rule enabled; it does not run the rule immediately, restore secrets, edit the source rule, or create working credentials.',
+      '发送一个已清洗的 POST，并以启用状态创建规则；不会立即运行规则、恢复 secret、编辑源规则或创建可工作的凭据。',
+    );
+
+  return jiraImportText(
+    `${options.buttonPrefix}: create "${importedRuleName}" with ${importedState} state in ${projectKey}. ${reviewText} ${credentialText} ${chainingText} ${noSideEffectText}`,
+    `${options.buttonPrefix}：在 ${projectKey} 中创建 "${importedRuleName}" 的 Jira ${options.disableAfterImport ? '禁用' : '启用'}副本。${reviewText}${credentialText}${chainingText}${noSideEffectText}`,
+  );
+}
+
 function translateJiraImportReviewLabel(item: JiraAutomationImportReviewChecklistItem): string {
   if (isJiraAutomationImportEnglish()) {
     return item.label;
@@ -1428,6 +1516,7 @@ function renderImportOutcomeSummary(
   sourceAllowsChainedTrigger: boolean,
   preventChainedTrigger: boolean,
   nameCheck: JiraAutomationImportNameCheck,
+  disableAfterImport: boolean,
 ): void {
   container.textContent = '';
 
@@ -1437,7 +1526,9 @@ function renderImportOutcomeSummary(
     : 'chained triggers disabled';
 
   const title = doc.createElement('div');
-  title.textContent = jiraImportText('Disabled import preview', '禁用副本导入预览');
+  title.textContent = disableAfterImport
+    ? jiraImportText('Disabled import preview', '禁用副本导入预览')
+    : jiraImportText('Enabled import preview', '启用规则导入预览');
   title.style.cssText = 'font-weight: 700; font-size: 14px; margin-bottom: 4px; color: #172B4D;';
 
   const body = doc.createElement('div');
@@ -1452,8 +1543,8 @@ function renderImportOutcomeSummary(
     )
     : '';
   body.textContent = jiraImportText(
-    `${importedRuleName} will be created disabled in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.${nextActionText}${nameCheckText}`,
-    `${importedRuleName} 将在 ${projectContext.projectKey} 中创建为禁用副本。${formatChecklistSeverityCounts(checklist)}；${highCount} 个高风险项；${chainingState === 'chained triggers blocked' ? '已阻止链式触发' : chainingState === 'chained triggers preserved' ? '将保留链式触发' : '链式触发为禁用状态'}。${nextActionText}${nameCheckText}`,
+    `${importedRuleName} will be created ${disableAfterImport ? 'disabled' : 'enabled'} in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.${nextActionText}${nameCheckText}`,
+    `${importedRuleName} 将在 ${projectContext.projectKey} 中创建为${disableAfterImport ? '禁用' : '启用'}状态。${formatChecklistSeverityCounts(checklist)}；${highCount} 个高风险项；${chainingState === 'chained triggers blocked' ? '已阻止链式触发' : chainingState === 'chained triggers preserved' ? '将保留链式触发' : '链式触发为禁用状态'}。${nextActionText}${nameCheckText}`,
   );
   body.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; word-break: break-word;';
 
@@ -1473,8 +1564,8 @@ function renderImportOutcomeSummary(
     container,
     jiraImportText('Create request', '创建请求'),
     jiraImportText(
-      `On import, Personal AI sends one sanitized POST to create "${importedRuleName}" as DISABLED in ${projectContext.projectKey}; the source rule is not edited, enabled, or run.`,
-      `点击导入后，Personal AI 会发送一个已清洗的 POST，在 ${projectContext.projectKey} 中创建 DISABLED 状态的 "${importedRuleName}"；源规则不会被编辑、启用或运行。`,
+      `On import, Personal AI sends one sanitized POST to create "${importedRuleName}" as ${disableAfterImport ? 'DISABLED' : 'ENABLED'} in ${projectContext.projectKey}; the source rule is not edited or run.`,
+      `点击导入后，Personal AI 会发送一个已清洗的 POST，在 ${projectContext.projectKey} 中创建 ${disableAfterImport ? 'DISABLED' : 'ENABLED'} 状态的 "${importedRuleName}"；源规则不会被编辑或运行。`,
     ),
   );
   appendInfoRow(doc, container, jiraImportText('Reference scope', '引用范围'), formatCreateRequestReferenceScope(summary));
@@ -1493,6 +1584,7 @@ function renderImportBoundaryReceipt(
   sourceAllowsChainedTrigger: boolean,
   preventChainedTrigger: boolean,
   nameCheckReceipt: string,
+  disableAfterImport: boolean,
 ): void {
   container.textContent = '';
 
@@ -1527,8 +1619,8 @@ function renderImportBoundaryReceipt(
     {
       label: jiraImportText('Creates', '创建内容'),
       value: jiraImportText(
-        `"${importedRuleName}" as a disabled copy in ${projectContext.projectKey} (${projectContext.projectId}).`,
-        `在 ${projectContext.projectKey} (${projectContext.projectId}) 中创建 "${importedRuleName}" 禁用副本。`,
+        `"${importedRuleName}" as a ${disableAfterImport ? 'disabled' : 'enabled'} copy in ${projectContext.projectKey} (${projectContext.projectId}).`,
+        `在 ${projectContext.projectKey} (${projectContext.projectId}) 中创建 "${importedRuleName}" ${disableAfterImport ? '禁用' : '启用'}副本。`,
       ),
     },
     {
@@ -1833,7 +1925,7 @@ function showImportPreviewDialog(
   doc: Document,
   existingRuleNames: string[],
   nameCheck: JiraAutomationImportNameCheck,
-): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }> {
+): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean }> {
   return new Promise((resolve) => {
     const previousActiveElement = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
     const overlay = doc.createElement('div');
@@ -1896,8 +1988,8 @@ function showImportPreviewDialog(
 
     const intro = doc.createElement('p');
     intro.textContent = jiraImportText(
-      `Found ${exportedData.rules.length} rule(s) in ${file.name}. Review what the selected rule does, then import a disabled copy into ${projectContext.projectKey}.`,
-      `在 ${file.name} 中找到 ${exportedData.rules.length} 条规则。检查所选规则后，可直接导入到 ${projectContext.projectKey}，导入结果会保持禁用。`,
+      `Found ${exportedData.rules.length} rule(s) in ${file.name}. Review what the selected rule does, then import it into ${projectContext.projectKey}.`,
+      `在 ${file.name} 中找到 ${exportedData.rules.length} 条规则。检查所选规则后，可导入到 ${projectContext.projectKey}。`,
     );
     intro.style.cssText = 'margin: 0 0 16px; color: #44546F; font-size: 13px; line-height: 1.5;';
     dialog.appendChild(intro);
@@ -1925,26 +2017,40 @@ function showImportPreviewDialog(
     let selectedRuleIndex = 0;
     let select: HTMLSelectElement | null = null;
     let preventChainedTrigger = Boolean(exportedData.rules[0]?.canOtherRuleTrigger);
-    let confirmButton: HTMLButtonElement | null = null;
+    let disableAfterImport = true;
     let topConfirmButton: HTMLButtonElement | null = null;
     let currentReviewPacket = '';
     let currentHighRiskCount = 0;
+    let currentImportedRuleName = '';
+    let currentSecretReentrySlots: JiraAutomationImportSecretReentrySlot[] = [];
+    let currentSourceAllowsChainedTrigger = false;
+    let currentPreventChainedTrigger = false;
     let createStageStatus: HTMLSpanElement | null = null;
 
     const updateCreateStageControls = () => {
-      setDialogButtonDisabled(confirmButton, false);
       setDialogButtonDisabled(topConfirmButton, false);
 
-      const buttonTitle = jiraImportText(
-        'Creates a disabled Jira copy only; does not enable, run, activate schedules, or restore secrets.',
-        '只创建一个禁用的 Jira 副本；不会启用、运行、激活 schedule 或恢复 secret。',
+      const headerButtonLabel = buildJiraImportCreateButtonBoundaryLabel(
+        {
+          buttonPrefix: jiraImportText('Import rule', '导入规则'),
+          importedRuleName: currentImportedRuleName,
+          projectKey: projectContext.projectKey,
+          highRiskCount: currentHighRiskCount,
+          secretReentrySlots: currentSecretReentrySlots,
+          sourceAllowsChainedTrigger: currentSourceAllowsChainedTrigger,
+          preventChainedTrigger: currentPreventChainedTrigger,
+          disableAfterImport,
+        },
       );
 
-      [confirmButton, topConfirmButton].forEach((button) => {
+      [
+        { button: topConfirmButton, label: headerButtonLabel },
+      ].forEach(({ button, label }) => {
         if (!button) {
           return;
         }
-        button.title = buttonTitle;
+        button.title = label;
+        button.setAttribute('aria-label', label);
         if (createStageStatus?.id) {
           button.setAttribute('aria-describedby', createStageStatus.id);
         }
@@ -1956,12 +2062,12 @@ function showImportPreviewDialog(
 
       createStageStatus.textContent = currentHighRiskCount > 0
         ? jiraImportText(
-          'Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open before enablement.',
-          '创建阶段就绪：可直接导入；Jira 侧启用计划复核仍需在启用前完成。',
+          `Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open${disableAfterImport ? ' before enablement' : ', and this import will be enabled immediately'}.`,
+          `创建阶段就绪：可直接导入；Jira 侧启用计划复核仍未完成${disableAfterImport ? '，需在启用前处理' : '，本次导入将立即启用规则'}。`,
         )
         : jiraImportText(
-          'Create-stage ready: import still makes a disabled copy only.',
-          '创建阶段就绪：导入仍然只会创建禁用副本。',
+          `Create-stage ready: the imported rule will be ${disableAfterImport ? 'disabled' : 'enabled'}.`,
+          `创建阶段就绪：导入规则将处于${disableAfterImport ? '不启用' : '启用'}状态。`,
         );
       createStageStatus.style.color = '#216E4E';
     };
@@ -2175,6 +2281,7 @@ function showImportPreviewDialog(
         confirmed: true,
         selectedRuleIndex,
         allowOtherRuleTrigger: Boolean(selectedRule.canOtherRuleTrigger) && !preventChainedTrigger,
+        disableAfterImport,
       });
     };
 
@@ -2205,6 +2312,10 @@ function showImportPreviewDialog(
       const accountReferenceCount = summary.emailReferenceCount + summary.accountReferenceCount;
       const sourceAllowsChainedTrigger = Boolean(rule.canOtherRuleTrigger);
       const allowOtherRuleTrigger = sourceAllowsChainedTrigger && !preventChainedTrigger;
+      currentImportedRuleName = importedRuleName;
+      currentSecretReentrySlots = secretReentrySlots;
+      currentSourceAllowsChainedTrigger = sourceAllowsChainedTrigger;
+      currentPreventChainedTrigger = preventChainedTrigger;
       currentReviewPacket = buildJiraAutomationImportReviewPacket(rule, {
         projectId: projectContext.projectId,
         projectKey: projectContext.projectKey,
@@ -2235,16 +2346,16 @@ function showImportPreviewDialog(
         sourceAllowsChainedTrigger
           ? (preventChainedTrigger
             ? jiraImportText(
-              'Current preview will block rule chaining in the imported DISABLED copy. Toggling only recalculates the preview, review packet, and create payload; no Jira create request is sent until Import disabled copy.',
-              '当前预览会在导入的 DISABLED 副本中阻止链式触发。切换只会重算预览、复核包和 create payload；点击导入禁用副本前不会发送 Jira create request。',
+              `Current preview will block rule chaining in the imported ${disableAfterImport ? 'DISABLED' : 'ENABLED'} copy. Toggling only recalculates the preview, review packet, and create payload; no Jira create request is sent until Import rule.`,
+              `当前预览会在导入的 ${disableAfterImport ? 'DISABLED' : 'ENABLED'} 副本中阻止链式触发。切换只会重算预览、复核包和 create payload；点击导入规则前不会发送 Jira create request。`,
             )
             : jiraImportText(
               'Current preview preserves source rule chaining; after you later enable this disabled copy in Jira, other automation rules may trigger it. Toggling only recalculates the preview, review packet, and create payload.',
               '当前预览会保留源规则链式触发；以后你在 Jira 中启用这个禁用副本后，其它 automation rule 可能触发它。切换只会重算预览、复核包和 create payload。',
             ))
           : jiraImportText(
-            'Source rule chaining is disabled. The imported copy keeps it disabled; no Jira create request is sent until Import disabled copy.',
-            '源规则未开启链式触发；导入副本也会保持禁用。点击导入禁用副本前不会发送 Jira create request。',
+            'Source rule chaining is disabled. The imported copy keeps it disabled; no Jira create request is sent until Import rule.',
+            '源规则未开启链式触发；导入副本也会保持禁用。点击导入规则前不会发送 Jira create request。',
           ),
       );
       highRiskReviewBox.style.display = highRiskCount > 0 ? 'block' : 'none';
@@ -2253,8 +2364,12 @@ function showImportPreviewDialog(
         : '';
       highRiskAcknowledgementStatus.textContent = highRiskCount > 0
         ? jiraImportText(
-          'Import is available now; the imported copy will remain disabled until you enable it in Jira.',
-          '现在可以直接导入；导入副本会保持禁用，直到你在 Jira 中手动启用。',
+          disableAfterImport
+            ? 'Import is available now; the imported copy will remain disabled until you enable it in Jira.'
+            : 'Import is available now; this rule will be enabled immediately even though high-risk review remains open.',
+          disableAfterImport
+            ? '现在可以直接导入；导入副本会保持禁用，直到你在 Jira 中手动启用。'
+            : '现在可以直接导入；即使高风险复核尚未完成，本次导入也会立即启用规则。',
         )
         : '';
       updateCreateStageControls();
@@ -2269,6 +2384,7 @@ function showImportPreviewDialog(
         sourceAllowsChainedTrigger,
         preventChainedTrigger,
         nameCheck,
+        disableAfterImport,
       );
       renderImportBoundaryReceipt(
         doc,
@@ -2283,6 +2399,7 @@ function showImportPreviewDialog(
         sourceAllowsChainedTrigger,
         preventChainedTrigger,
         nameCheckReceipt,
+        disableAfterImport,
       );
 
       details.textContent = '';
@@ -2341,7 +2458,7 @@ function showImportPreviewDialog(
           : jiraImportText('Disabled in source', '源规则中禁用'),
       );
       appendInfoRow(doc, details, jiraImportText('Target project', '目标项目'), `${projectContext.projectKey} (${projectContext.projectId})`);
-      appendInfoRow(doc, details, jiraImportText('Imported state', '导入状态'), 'DISABLED');
+      appendInfoRow(doc, details, jiraImportText('Imported state', '导入状态'), disableAfterImport ? 'DISABLED' : 'ENABLED');
       renderReviewFindings(doc, findingsBox, reviewFindings);
       renderReviewChecklist(doc, checklistBox, reviewChecklist);
       renderEnablementPlan(doc, enablementPlanBox, enablementPlan);
@@ -2404,9 +2521,7 @@ function showImportPreviewDialog(
     `;
 
     const cancelButton = createDialogButton(doc, jiraImportText('Cancel', '取消'), 'secondary');
-    confirmButton = createDialogButton(doc, jiraImportText('Import disabled copy', '导入禁用副本'), 'primary');
-    topConfirmButton = createDialogButton(doc, jiraImportText('Import disabled copy', '导入禁用副本'), 'primary');
-    topConfirmButton.setAttribute('aria-label', jiraImportText('Create disabled Jira copy from dialog header', '从弹窗顶部创建 Jira 禁用副本'));
+    topConfirmButton = createDialogButton(doc, jiraImportText('Import rule', '导入规则'), 'primary');
     topConfirmButton.style.padding = '6px 12px';
     topConfirmButton.style.fontSize = '13px';
     const headerActions = doc.createElement('div');
@@ -2430,14 +2545,28 @@ function showImportPreviewDialog(
       text-align: right;
     `;
 
+    const disableAfterImportLabel = doc.createElement('label');
+    disableAfterImportLabel.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; max-width: 260px; font-size: 12px; line-height: 1.35; color: #44546F; cursor: pointer;';
+    const disableAfterImportCheckbox = doc.createElement('input');
+    disableAfterImportCheckbox.type = 'checkbox';
+    disableAfterImportCheckbox.checked = true;
+    disableAfterImportCheckbox.setAttribute('data-personal-ai-jira-import-disable-after-import', 'true');
+    const disableAfterImportText = doc.createElement('span');
+    disableAfterImportText.textContent = jiraImportText(
+      'Set this rule disable after import',
+      '导入后规则设为不启用状态',
+    );
+    disableAfterImportLabel.appendChild(disableAfterImportCheckbox);
+    disableAfterImportLabel.appendChild(disableAfterImportText);
+
     headerActions.appendChild(createStageStatus);
+    headerActions.appendChild(disableAfterImportLabel);
     headerActions.appendChild(topConfirmButton);
     header.appendChild(headerActions);
     footer.appendChild(cancelButton);
-    footer.appendChild(confirmButton);
     dialog.appendChild(footer);
 
-    const close = (result: { confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }) => {
+    const close = (result: { confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean }) => {
       doc.removeEventListener('keydown', onKeyDown);
       if (doc.body.contains(overlay)) {
         doc.body.removeChild(overlay);
@@ -2452,19 +2581,22 @@ function showImportPreviewDialog(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport });
         return;
       }
       trapDialogFocus(event, dialog, doc);
     };
 
     doc.addEventListener('keydown', onKeyDown);
-    cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false }));
-    confirmButton.addEventListener('click', triggerImport);
+    cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport }));
+    disableAfterImportCheckbox.addEventListener('change', () => {
+      disableAfterImport = disableAfterImportCheckbox.checked;
+      renderRuleDetails();
+    });
     topConfirmButton.addEventListener('click', triggerImport);
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) {
-        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport });
       }
     });
 
@@ -2521,12 +2653,13 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
         projectTypeKey: projectContext.projectTypeKey,
         ownerId,
         allowOtherRuleTrigger: previewResult.allowOtherRuleTrigger,
+        disableAfterImport: previewResult.disableAfterImport,
         existingRuleNames,
         nameCheck,
         sourceCloud: exportedData.cloud,
       });
 
-      console.log('Importing disabled Jira Automation copy:', {
+      console.log('Importing Jira Automation rule:', {
         name: convertedRule.name,
         projectId: projectContext.projectId,
         componentCount: convertedRule.components.length,

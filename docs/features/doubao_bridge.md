@@ -118,7 +118,7 @@ app 会在两个线程步骤卡片里提前显示“推送前会发生什么”�
 - 这些回执是点击前的边界说明；真正的送达、跳过、失败、安全验证和状态回写结果仍以后面的最近同步流水为准
 - 点击手动推送后，在后台确认返回前会先显示“推送待确认”回执：说明正在保存待生效广播方式、渲染哪类 package，以及尚未写入长期记忆线程或 `mobile_context_thread`、尚未标记送达；提醒推送还会明确尚未把待办标记完成，也不会发送空占位文本
 - 用户点击手动推送后，成功、跳过和失败文案都会保留同样的边界：本次渲染的 package 类型、目标线程、是否未发送占位、是否不会混入长期 persona / voice、是否不会把待办标记完成，以及真实送达仍以后续同步流水为准；如果后台抛错且没有返回本次审计，失败回执会说明最近同步流水可能仍是上一次快照
-- 手动推送按钮旁的即时回执会直接带上本次审计摘要，包括 package 类型、内容条目数、来源引用数、目标线程、验证 / 传输状态和状态回写异常；用户不用先翻最近同步流水，才能判断这次点击是送达、跳过还是需要复查
+- 手动推送按钮旁的即时回执会直接使用 `/sync/run-now` 返回的本次审计摘要，包括 package 类型、内容条目数、去重后的来源引用数、目标线程、验证 / 传输状态和状态回写异常；用户不用先翻最近同步流水，才能判断这次点击是送达、跳过还是需要复查
 
 其中：
 
@@ -130,7 +130,7 @@ app 会在两个线程步骤卡片里提前显示“推送前会发生什么”�
 - 手动触发同步会区分 `succeeded` 与 `skipped`：如果 Memory Service 当前没有真实可推送内容，app 会提示“本次没有可推送内容”，不会把跳过误展示为已推送
 - 自动同步和手动同步都会过滤 Memory Service 返回的空占位包（例如 `itemCount: 0` 的近期重点、待办、通知或稳定记忆包），并把对应 sync job 标记为 `skipped`；不会把“暂无内容”的占位文本写进豆包线程
 - `mobile_briefing` 还会在发送前二次剔除摘要标题、freshness window、`No recent...` 等元信息 / 空占位行，并按规范化文本去重；如果渲染结果没有真实可读条目，会直接 `skipped`，避免把 concerned items、重复 bullet 或空摘要误当近期重点推送
-- app 会展示最近几次同步流水，区分手动 / 自动、成功 / 跳过 / 失败，并保留可读原因；流水里也会展示 Memory package 类型、内容条目数、来源引用数量、目标线程、页面可见性验证状态，以及待办同步属于“新待办短轮询 / 每日完整摘要 / 手动完整推送”的哪一种模式，方便确认内容有没有真正送达、是否来自真实记忆来源、以及为什么被跳过
+- app 会展示最近几次同步流水，区分手动 / 自动、成功 / 跳过 / 失败，并保留可读原因；流水里也会展示 Memory package 类型、内容条目数、去重后的来源引用数量、目标线程、页面可见性验证状态，以及待办同步属于“新待办短轮询 / 每日完整摘要 / 手动完整推送”的哪一种模式，方便确认内容有没有真正送达、是否来自真实记忆来源、以及为什么被跳过
 - 如果一次 `reminder_sync` 同时包含多个跳过原因，例如“没有待办”和“当前 Memory Service 暂不支持通知同步”，流水会把原因拆开显示，不会合并成一个模糊的“没有可推送内容”。
 - 默认开启“新待办当天不重复推送”：Memory Service 的 provider context package 在 `incremental` 模式下只返回未成功投递过的待办；`daily_digest` 模式才会忽略投递记录，重新列出仍未完成的全部待办
 - 最近同步流水会写入本机 `bridge-state.json`，app 重启后仍可恢复最近记录；这里不保存发送正文，只保存状态、时间、类型、来源计数和投递验证元数据，便于排查但不扩大敏感内容落盘面
@@ -370,7 +370,7 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
 - `提醒` 的自动同步和手动推送，底层会转成随手记待办格式后再发送到 `mobile_context_thread`
 - 用户在 app 里看到的按钮文案仍然是 `现在推一次 persona / 近期重点 / 提醒`，但发送给豆包的内容已经不是旧格式
 - 点击后会先显示待确认回执；后台确认前，按钮忙碌只代表请求已发起，不代表豆包已经可见、Memory Service 已回写或提醒已处理
-- 每次手动点击后的即时回执会复用最近同步流水的审计口径，显示本次 package、条目数、来源引用、线程、验证 / 传输和状态回写异常；如果只是跳过，则明确说明没有内容被写入豆包；如果失败发生在返回审计前，则明确本次未确认写入目标线程、未标记送达，且最近流水可能仍是上一次快照
+- 每次手动点击后的即时回执会复用最近同步流水的审计口径，显示本次 package、条目数、去重后的来源引用、线程、验证 / 传输和状态回写异常；如果只是跳过，则明确说明没有内容被写入豆包；如果失败发生在返回审计前，则明确本次未确认写入目标线程、未标记送达，且最近流水可能仍是上一次快照
 - 手机上下文步骤卡也会保留最近一次 `mobile_briefing` / `reminder_sync` 审计摘要；用户不用跳到完整流水才能确认最近一次近期重点或提醒推送的目标线程、内容计数、来源计数和验证状态
 - 用户可在豆包手机端查看这些同步过去的随手记内容
 
@@ -470,9 +470,26 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
   - 只在窗口存活期间保留
   - 短时间隐藏 / 重新唤起会回到上一段对话和原滚动位置，方便继续追问
   - 如果距离上一轮互动超过 30 分钟，会自动开始新对话，避免新问题误带旧上下文
-  - 历史对话只保存在当前 Quick Ask renderer 内存里，app 重启后不恢复
+  - 完整历史对话仍只保存在当前 Quick Ask renderer 内存里，app 重启后不恢复完整 transcript
 
-Quick Ask 的产品参照是“低打扰快问 + 必要时继续深入”：[Raycast Quick AI](https://manual.raycast.com/ai/chat) 同时支持一问一答、继续追问、超时自动新对话和升级到完整 AI Chat；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把全局快捷键、菜单栏入口、文件 / 截图入口放在轻量 prompt window 里。手机上下文发送还参考了 [ChatGPT Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq)、[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 和 [Gemini Enterprise personalization](https://docs.cloud.google.com/gemini/enterprise/docs/configure-personalization) 的来源 / 记忆控制原则：跨设备或跨线程上下文必须解释来源、目标和删除 / 关闭边界。研究侧的 [just-in-time information access](https://www.scholars.northwestern.edu/en/publications/user-interactions-with-everyday-applications-as-context-for-just-)、[mixed-initiative context](https://arxiv.org/abs/2604.07121) 和 [digital reminder systems](https://cs.stanford.edu/~merrie/papers/memory_imwut2017.pdf) 都指向同一个原则：上下文可以主动利用，但生命周期、未来提醒语义和用户控制必须清楚，所以当前实现把短期会话保留、30 分钟自动新对话和手机对话发送边界放在 Quick Ask 本地层处理。
+### 本机会话续接
+
+每次 Ask 成功完成后，Quick Ask 会额外保存最近一条经过裁剪和脱敏的 `AskResumeSnapshot` 到 desktop app 本机 `localStorage`。快照默认 24 小时过期，只保留一条；它不是长期记忆，也不依赖 Memory Service 才能在打开窗口时显示。
+
+当 app 重启或当前 renderer 已没有活跃会话时，如果快照仍有效，输入框上方显示一条嵌入式续聊条：
+
+- `继续`：恢复上一问、答案摘要和 topic 线索；下一问才会携带 `contextHints.source = local_ask_resume_snapshot`。
+- `新问题`：隐藏续聊条，本轮请求不携带上一轮 hint。
+- `丢弃`：删除本机快照，并说明不会删除 Personal AI 长期记忆。
+- 待选 topic：最多显示 3 个候选，点击候选后以该 topic 作为本轮显式续聊线索继续 Ask。
+
+快照会剔除完整长 transcript，限制问题、答案、topic 和 evidence 数量，并脱敏 secret 字段、bearer token、常见 API key、邮箱、电话及 URL query/hash 凭据。过期或格式损坏的快照在读取时直接清理。直接在续聊条仍显示时输入文本按“新问题”处理，不会静默继承。
+
+Memory Service 仍负责当前事实：收到 hint 后把用户显式选择的 `topicTitle` 作为独立的 preferred topic，优先于仅共享宽泛 anchor 的近期环境 frame，再重新跑 evidence recall；即使最终生成超时，也按已锁定 topic 保留证据。响应返回 `continuityReceipt`，明确这是本机线索、仅作提示、本轮已重新检索且快照未写入长期记忆。详见 [Ask](./ask.md)。
+
+交互 demo： [Ask 会话续接](/Users/Esone/git/personal-ai/docs/demo/ask-conversation-continuity.html)。
+
+Quick Ask 的产品参照是“低打扰快问 + 必要时继续深入”：[Raycast Quick AI](https://manual.raycast.com/ai/chat) 同时支持一问一答、继续追问、超时自动新对话和升级到完整 AI Chat；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把全局快捷键、菜单栏入口、文件 / 截图入口放在轻量 prompt window 里。手机上下文发送还参考了 [ChatGPT Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq)、[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 和 [Gemini Enterprise personalization](https://docs.cloud.google.com/gemini/enterprise/docs/configure-personalization) 的来源 / 记忆控制原则：跨设备或跨线程上下文必须解释来源、目标和删除 / 关闭边界。研究侧的 [just-in-time information access](https://www.scholars.northwestern.edu/en/publications/user-interactions-with-everyday-applications-as-context-for-just-)、[mixed-initiative context](https://arxiv.org/abs/2604.07121) 和 [digital reminder systems](https://cs.stanford.edu/~merrie/papers/memory_imwut2017.pdf) 都指向同一个原则：上下文可以主动利用，但生命周期、未来提醒语义和用户控制必须清楚，所以当前实现把 renderer 内短期会话、24 小时本机恢复线索、显式继续和手机对话发送边界分别处理。
 
 ### 状态胶囊与状态卡
 
@@ -547,6 +564,7 @@ Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天�
 - helper 会按需编译/启动，并把 transcript、音量、权限错误回传给 quick ask
 - transcript 先进入语音草稿，用户仍可确认后再发送
 - voice sheet 会显示 `语音草稿回执`：听写时说明这是本机语音识别且不会自动发送；可发送时说明点箭头才会按当前 Quick Ask 范围发起 Ask，点叉号会把草稿带回文本框继续编辑；出错时说明语音未发送、草稿仍保留
+- 即使用户在 helper 回传“开始监听”前立刻点叉号，Quick Ask 也会立即取消本机语音会话、回到文本输入，并忽略随后迟到的开始或转写回调；不会重新打开 voice sheet、注入草稿或发起 Ask
 - 用户点中间按钮停止监听后，voice sheet 会把 ready 态拆成两种回执：有转写草稿时显示 `已停止监听`、草稿仍留在本机、点箭头才会发送转写文本；没有可发送内容时显示没有发送、没有保存音频、没有发起 Ask，可继续说话或回到文本输入
 - voice sheet 的中间按钮、返回文本、发送和权限恢复入口都会同步动态 hover / 读屏边界：点击前即可知道当前动作是停止监听、重试语音、只把草稿带回文本框、打开系统权限入口，还是按当前 Quick Ask 范围提交转写文本；这些按钮边界也说明不会自动发送、不会保存原始音频，也不会在没有草稿时发起 Ask
 - 点箭头真正提交后，对话里的用户消息会保留 `语音草稿已确认发送` 回执，说明只提交转写文本、不发送或保存原始音频；如果文本本身包含“请记住”等明确意图，仍走现有记忆保存回执

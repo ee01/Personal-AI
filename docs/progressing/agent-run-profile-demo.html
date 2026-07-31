@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Run Profile Demo（搁置）</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172026;
+      --muted: #5b6670;
+      --line: #d8dee4;
+      --panel: #ffffff;
+      --wash: #f5f7fa;
+      --blue: #2563eb;
+      --green: #047857;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --teal: #0f766e;
+      --shadow: 0 18px 60px rgba(23, 32, 38, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #e9eef4;
+      letter-spacing: 0;
+    }
+
+    button,
+    textarea {
+      font: inherit;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr) 390px;
+      gap: 0;
+    }
+
+    .sidebar {
+      background: #172026;
+      color: #f8fafc;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #38bdf8, #34d399);
+      display: grid;
+      place-items: center;
+      color: #07111a;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: #cbd5e1;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .nav button.active {
+      background: #2a3540;
+      color: #ffffff;
+    }
+
+    .sidebar-note {
+      margin-top: auto;
+      padding: 12px;
+      border: 1px solid rgba(203, 213, 225, 0.22);
+      border-radius: 8px;
+      color: #cbd5e1;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .main {
+      padding: 22px;
+      min-width: 0;
+    }
+
+    .workspace {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: calc(100vh - 44px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .topbar h1 {
+      font-size: 17px;
+      margin: 0;
+    }
+
+    .surface-pill {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 18px 0;
+      overflow-x: auto;
+    }
+
+    .tabs button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      padding: 8px 12px;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .tabs button.active {
+      color: var(--ink);
+      border-bottom-color: #fff;
+      font-weight: 700;
+    }
+
+    .composer-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 16px;
+      padding: 18px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .composer {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .context-card,
+    .profile-chip,
+    .draft-card,
+    .receipt,
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .context-card {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .context-title {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .context-text {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .profile-chip {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      border-color: #bfd2ff;
+      background: #f8fbff;
+    }
+
+    .chip-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .chip-title {
+      font-weight: 700;
+      min-width: 0;
+    }
+
+    .chip-meta {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px 10px;
+      cursor: pointer;
+      color: var(--ink);
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .btn.ghost {
+      color: var(--muted);
+    }
+
+    .draft-card {
+      display: flex;
+      flex-direction: column;
+      min-height: 340px;
+      overflow: hidden;
+    }
+
+    .draft-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 310px;
+      resize: vertical;
+      border: 0;
+      padding: 14px;
+      line-height: 1.55;
+      color: var(--ink);
+      outline: none;
+      background: #fff;
+    }
+
+    .receipt {
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--muted);
+      background: #fbfcfe;
+    }
+
+    .receipt strong {
+      color: var(--ink);
+    }
+
+    .side-stack {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      min-width: 0;
+    }
+
+    .mini-card {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .mini-title {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .metric {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag {
+      border: 1px solid var(--line);
+      background: var(--wash);
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 12px;
+      color: #34404a;
+    }
+
+    .drawer {
+      background: #f8fafc;
+      border-left: 1px solid var(--line);
+      padding: 18px;
+      overflow-y: auto;
+      min-width: 0;
+    }
+
+    .drawer h2 {
+      font-size: 18px;
+      margin: 0 0 4px;
+    }
+
+    .drawer-sub {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .section h3 {
+      font-size: 14px;
+      margin: 0 0 10px;
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+    }
+
+    .kv-row {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .kv-key {
+      color: var(--muted);
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      width: fit-content;
+    }
+
+    .status.good {
+      background: #ecfdf5;
+      color: var(--green);
+    }
+
+    .status.warn {
+      background: #fff7ed;
+      color: var(--amber);
+    }
+
+    .status.block {
+      background: #fef2f2;
+      color: var(--red);
+    }
+
+    .evidence {
+      display: grid;
+      gap: 8px;
+    }
+
+    .evidence-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfe;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .evidence-item b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .profile-block {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      background: #f5f7fa;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1100px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .drawer {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 760px) {
+      .main {
+        padding: 10px;
+      }
+
+      .workspace {
+        min-height: auto;
+      }
+
+      .topbar,
+      .composer-wrap {
+        padding: 12px;
+      }
+
+      .composer-wrap {
+        grid-template-columns: 1fr;
+      }
+
+      .chip-row,
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .kv-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">PA</div>
+        <div>Personal AI</div>
+      </div>
+      <nav class="nav" aria-label="Personal AI navigation">
+        <button>Ask</button>
+        <button>Memory Lens</button>
+        <button>Skills</button>
+        <button class="active">Agent Run Profile（搁置）</button>
+        <button>Context Passport</button>
+      </nav>
+      <div class="sidebar-note">
+        搁置的集成式原型：用于记录交互方向，不进入实现排期。
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="workspace" aria-label="AI task composer with run profile">
+        <header class="topbar">
+          <div>
+            <h1>Codex / Web AI 输入框</h1>
+            <div class="surface-pill">当前仅模拟草稿注入，不发送消息，不修改真实模型设置。</div>
+          </div>
+          <div class="surface-pill" id="surfaceLabel">Surface: Codex task composer</div>
+        </header>
+
+        <div class="tabs" role="tablist" aria-label="示例场景">
+          <button class="active" data-scenario="challenge" type="button">AI-Native Challenge</button>
+          <button data-scenario="estimate" type="button">Task Estimate Skill</button>
+          <button data-scenario="openclaw" type="button">OpenClaw 外部写入</button>
+        </div>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <div class="context-card">
+              <div class="context-title">当前任务草稿</div>
+              <div class="context-text" id="taskContext"></div>
+            </div>
+
+            <div class="profile-chip" id="profileChip">
+              <div class="chip-row">
+                <div>
+                  <div class="chip-title" id="chipTitle"></div>
+                  <div class="chip-meta" id="chipMeta"></div>
+                </div>
+                <span class="status good" id="chipStatus">可应用</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary" id="applyBtn" type="button" title="只把运行画像插入当前草稿，不发送，不写外部平台。">应用到草稿</button>
+                <button class="btn" id="evidenceBtn" type="button" title="只查看来源证据，不写入、不发送、不保存。">查看证据</button>
+                <button class="btn ghost" id="skipBtn" type="button" title="本次隐藏建议；不会删除记忆或修改画像。">本次不用</button>
+              </div>
+            </div>
+
+            <div class="draft-card">
+              <div class="draft-head">
+                <span>输入框草稿</span>
+                <span id="draftState">未应用画像</span>
+              </div>
+              <textarea id="draftText" spellcheck="false"></textarea>
+            </div>
+
+            <div class="receipt" id="receipt">
+              <strong>运行边界：</strong>当前建议是只读预览。点击应用只会改本页草稿，不会发送给 AI、不会写入外部平台、不会保存长期画像。
+            </div>
+          </div>
+
+          <aside class="side-stack" aria-label="Profile summary">
+            <div class="mini-card">
+              <div class="mini-title">匹配置信度</div>
+              <div class="metric" id="confidenceMetric">0.86</div>
+              <div class="tag-list" id="anchorTags"></div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-title">应用影响</div>
+              <div class="context-text" id="impactText"></div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-title">不可自动执行</div>
+              <div class="context-text">发送消息、改模型设置、调用 OpenClaw、写 Jira / Drive，都需要后续明确确认。</div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <aside class="drawer" aria-label="Run profile detail">
+      <h2 id="drawerTitle"></h2>
+      <p class="drawer-sub" id="drawerSub"></p>
+
+      <section class="section">
+        <h3>运行设置</h3>
+        <div class="kv" id="settingsRows"></div>
+      </section>
+
+      <section class="section">
+        <h3>输出与验证契约</h3>
+        <div class="kv" id="contractRows"></div>
+      </section>
+
+      <section class="section">
+        <h3>边界回执</h3>
+        <div class="kv" id="boundaryRows"></div>
+      </section>
+
+      <section class="section">
+        <h3>将插入的 profile block</h3>
+        <div class="profile-block" id="profileBlock"></div>
+      </section>
+
+      <section class="section">
+        <h3>来源证据</h3>
+        <div class="evidence" id="evidenceList"></div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const scenarios = {
+      challenge: {
+        surface: "Surface: Codex task composer",
+        task: "帮我做 AI-Native Challenge 的方案评审，最好能给一个 demo，并说明最后怎么验证。",
+        draft: "帮我做 AI-Native Challenge 的方案评审，输出一份可执行 plan 和一个 demo 思路。",
+        title: "AI-Native Challenge · 深度评审画像",
+        meta: "匹配 5 条执行记忆 · 建议高推理、先 plan、demo 后验证",
+        status: "可应用",
+        statusClass: "good",
+        confidence: "0.88",
+        tags: ["AI-Native Challenge", "reasoning", "eval", "demo"],
+        impact: "会在草稿前追加运行画像，提醒 agent 使用高复杂度评审路径；不会直接切换模型。",
+        sub: "适用于高复杂度方案评审、竞赛/挑战类任务、需要 demo 与验证报告的 agent run。",
+        settings: [
+          ["模型/推理", "优先 reasoning model；reasoning effort 建议 high / extra_high。"],
+          ["上下文预算", "evidence_heavy，只带 challenge 相关记忆与验证要求。"],
+          ["工具策略", "先读仓库/文档；需要 demo 时再生成静态预览。"],
+          ["语气", "中文 plan，保留必要原始英文术语。"]
+        ],
+        contracts: [
+          ["输出", "先用户场景，再 plan，再 demo，再验证与风险。"],
+          ["验证", "如实现阶段继续推进，需要新增 eval suite 并跑 report。"],
+          ["停止条件", "缺真实场景或数据时，先从线上 memory service 只读抽样。"]
+        ],
+        boundaries: [
+          ["写入", "只插入当前草稿；不发送、不保存、不改 Codex 设置。"],
+          ["成本", "高推理档位可能增加等待时间和成本，必须让用户可见。"],
+          ["隐私", "不带 personal memory，不带 credential-like 文本。"]
+        ],
+        block: [
+          "Agent Run Profile: AI-Native Challenge 深度评审",
+          "- Use a reasoning-heavy path for planning and critique.",
+          "- Start with concrete user scenarios, then a complete plan.",
+          "- Include demo requirements and validation/eval plan.",
+          "- Do not send or write externally without explicit confirmation.",
+          "- Keep source links and freshness boundaries visible."
+        ],
+        evidence: [
+          ["记忆片段", "AI-Native Challenge · recommended_reasoning_effort = Extra High。"],
+          ["项目规则", "新能力规划应先写 docs/progressing plan 和 demo，不进入实现。"],
+          ["行业依据", "OpenAI model guidance 建议在代表性任务上比较 reasoning effort，而不是默认最高档。"]
+        ]
+      },
+      estimate: {
+        surface: "Surface: Jira / Codex skill task",
+        task: "完善 task-estimate skill，让它读取 Jira 信息、设计图和 MR diff，并说明哪里还需要人工判断。",
+        draft: "请帮我完善 task-estimate skill，重点看 Jira、图片语义和 MR diff 的接入。",
+        title: "Task Estimate · 证据优先画像",
+        meta: "匹配 6 条 skill / Jira 记忆 · 建议 API 优先、browser fallback 受限",
+        status: "可应用",
+        statusClass: "good",
+        confidence: "0.91",
+        tags: ["task-estimate", "Jira API", "MR diff", "image evidence"],
+        impact: "会提醒 agent 不要先开浏览器读 Jira；先走 Jira API/MCP/REST，并把缺失证据写清楚。",
+        sub: "适用于 story point 评估、task-estimate skill 改进、Jira 证据读取和估算口径复核。",
+        settings: [
+          ["模型/推理", "reasoning model，effort high；需要处理多证据和反例。"],
+          ["工具优先级", "Jira API / MCP / REST > GitLab diff > image analysis > browser fallback。"],
+          ["上下文预算", "evidence_heavy，但只带当前 ticket / skill 相关记忆。"],
+          ["输出格式", "分开列：评估依据、缺失证据、建议改动、验证步骤。"]
+        ],
+        contracts: [
+          ["输出", "说明哪些差异来自 ticket 信息不足，哪些才需要改 skill。"],
+          ["验证", "新增或更新 task-estimate eval；比较人工估分差异原因。"],
+          ["停止条件", "API 授权失败时不转为静默浏览器自动化，先显示 fallback 边界。"]
+        ],
+        boundaries: [
+          ["写入", "不改 skill 文件；只改当前草稿。"],
+          ["来源", "Jira / MR / design image 都要显示来源和 missing reason。"],
+          ["隐私", "历史消息里的 token/key 一律不插入 profile block。"]
+        ],
+        block: [
+          "Agent Run Profile: Task Estimate 证据优先",
+          "- Prefer Jira API / MCP / REST for ticket content.",
+          "- Browser UI is only fallback after API/MCP cannot provide required fields.",
+          "- Evaluate team field, summary, description, issue type, historical SP benchmark, labels, components.",
+          "- If improving accuracy, inspect MR diff and design image evidence.",
+          "- Output missing evidence and validation plan explicitly."
+        ],
+        evidence: [
+          ["真实记忆", "Task Estimate currently evaluates based on Jira ticket team field, summary, description, issue type, historical Story Points benchmark, labels, components."],
+          ["skill 规则", "task-estimate skill · jira_access_priority = Jira API / MCP / REST first; browser fallback only when needed."],
+          ["用户场景", "用户曾要求补 design image / MR diff 语义，避免只靠 prompt 调参。"]
+        ]
+      },
+      openclaw: {
+        surface: "Surface: OpenClaw / AgentTask preview",
+        task: "继续让 OpenClaw 把视频下载并上传到 Drive，如果失败就自己修一下。",
+        draft: "让 OpenClaw 下载这个视频并上传到 Drive，失败的话继续重试。",
+        title: "OpenClaw 外部写入 · 鉴权优先画像",
+        meta: "匹配 4 条失败/确认记忆 · 建议先修 capability/auth，不自动外部写入",
+        status: "需确认",
+        statusClass: "warn",
+        confidence: "0.84",
+        tags: ["OpenClaw", "auth", "external write", "Drive"],
+        impact: "会把草稿从“继续重试”改成“先检查授权/能力，再由用户确认是否写 Drive”。",
+        sub: "适用于 OpenClaw、Drive、Jira、RingCentral 等外部写入前的 agent run。",
+        settings: [
+          ["模型/推理", "普通 reasoning 即可；重点不是更聪明，而是先检查 readiness。"],
+          ["工具策略", "先读 capability/auth 状态；禁止在缺授权时继续外部写入。"],
+          ["上下文预算", "normal，只带失败摘要和下一步确认选项。"],
+          ["输出格式", "给出配置修复、跳过一次、停止查询三种用户选择。"]
+        ],
+        contracts: [
+          ["输出", "不要承诺已上传；只说明准备检查什么、等待谁确认。"],
+          ["验证", "OpenClaw auth / capability 恢复后再触发 Action Readiness Contract。"],
+          ["停止条件", "fetch failed / auth failed / capability missing 时停止写入链路。"]
+        ],
+        boundaries: [
+          ["写入", "不调用 OpenClaw，不上传 Drive，不发送消息。"],
+          ["审批", "外部写入必须用户确认，不由 profile 自动授权。"],
+          ["隐私", "Drive 链接、消息附件和 credential-like 参数必须脱敏显示。"]
+        ],
+        block: [
+          "Agent Run Profile: OpenClaw 外部写入鉴权优先",
+          "- Before retrying, check OpenClaw capability and auth readiness.",
+          "- If auth/capability is missing, stop external writes and ask the user.",
+          "- Do not upload to Drive, send messages, or mutate external systems from this draft.",
+          "- Provide options: retry after config, skip once, or stop querying."
+        ],
+        evidence: [
+          ["confirm request", "OpenClaw 鉴权失败。配置或授权修复后，是否重试？"],
+          ["规则改进", "OpenClaw 返回缺少能力、鉴权失败或需要人工判断时，停止外部写入并进入决策中心。"],
+          ["动作样本", "delegate_openclaw 队列中存在 artifact_gap / auth / fetch failure 压力。"]
+        ]
+      }
+    };
+
+    let currentScenario = "challenge";
+    let evidenceExpanded = false;
+
+    const $ = (id) => document.getElementById(id);
+
+    function rows(items) {
+      return items.map(([key, value]) => (
+        `<div class="kv-row"><div class="kv-key">${escapeHtml(key)}</div><div>${escapeHtml(value)}</div></div>`
+      )).join("");
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function render() {
+      const data = scenarios[currentScenario];
+      $("surfaceLabel").textContent = data.surface;
+      $("taskContext").textContent = data.task;
+      $("draftText").value = data.draft;
+      $("chipTitle").textContent = `Agent 运行画像 · ${data.title}`;
+      $("chipMeta").textContent = data.meta;
+      $("chipStatus").textContent = data.status;
+      $("chipStatus").className = `status ${data.statusClass}`;
+      $("confidenceMetric").textContent = data.confidence;
+      $("anchorTags").innerHTML = data.tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
+      $("impactText").textContent = data.impact;
+      $("drawerTitle").textContent = data.title;
+      $("drawerSub").textContent = data.sub;
+      $("settingsRows").innerHTML = rows(data.settings);
+      $("contractRows").innerHTML = rows(data.contracts);
+      $("boundaryRows").innerHTML = rows(data.boundaries);
+      $("profileBlock").textContent = data.block.join("\n");
+      $("evidenceList").innerHTML = data.evidence.map(([label, text]) => (
+        `<div class="evidence-item"><b>${escapeHtml(label)}</b>${escapeHtml(text)}</div>`
+      )).join("");
+      $("draftState").textContent = "未应用画像";
+      $("receipt").innerHTML = "<strong>运行边界：</strong>当前建议是只读预览。点击应用只会改本页草稿，不会发送给 AI、不会写入外部平台、不会保存长期画像。";
+      evidenceExpanded = false;
+    }
+
+    function applyProfile() {
+      const data = scenarios[currentScenario];
+      const block = [
+        "----- Agent Run Profile（可编辑，未发送）-----",
+        ...data.block,
+        "----- End Profile -----",
+        "",
+        data.draft
+      ].join("\n");
+      $("draftText").value = block;
+      $("draftState").textContent = "已应用到本页草稿";
+      $("receipt").innerHTML = "<strong>已应用：</strong>只更新了当前输入框草稿。没有发送消息，没有调用外部工具，没有写入 Memory Service，也没有修改真实模型或 reasoning 设置。";
+    }
+
+    function skipProfile() {
+      $("profileChip").style.display = "none";
+      $("receipt").innerHTML = "<strong>本次隐藏：</strong>只隐藏当前页面建议。不会删除相关记忆，不会降低长期画像权重，也不会写入外部平台。刷新或切换场景后可重新出现。";
+    }
+
+    function showEvidence() {
+      evidenceExpanded = !evidenceExpanded;
+      $("receipt").innerHTML = evidenceExpanded
+        ? "<strong>证据已展开：</strong>右侧显示本次匹配来源。查看证据不会刷新来源、不会确认事实、不会新增记忆、不会插入或发送草稿。"
+        : "<strong>证据已收起：</strong>当前仍是只读预览。";
+    }
+
+    document.querySelectorAll(".tabs button").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentScenario = button.dataset.scenario;
+        document.querySelectorAll(".tabs button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        $("profileChip").style.display = "";
+        render();
+      });
+    });
+
+    $("applyBtn").addEventListener("click", applyProfile);
+    $("skipBtn").addEventListener("click", skipProfile);
+    $("evidenceBtn").addEventListener("click", showEvidence);
+
+    render();
+  </script>
+</body>
+</html>

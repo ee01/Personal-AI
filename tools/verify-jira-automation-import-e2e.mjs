@@ -295,7 +295,7 @@ try {
   assert.match(previewText, /Preview only; no Jira create request has been sent yet/);
   assert.match(previewText, /Create request/);
   assert.match(previewText, /one sanitized POST/);
-  assert.match(previewText, /source rule is not edited, enabled, or run/);
+  assert.match(previewText, /source rule is not edited or run/);
   assert.match(previewText, /Reference scope/);
   assert.match(previewText, /Project scope is remapped to the target Jira project, but embedded/);
   assert.match(previewText, /JQL\/filter.*URL.*custom field.*saved filter.*connection\/credential.*account\/recipient.*source project reference.*smart value.*remain review items/);
@@ -385,40 +385,49 @@ try {
   await frame.getByRole('button', { name: 'Copy review packet' }).click();
   await frame.getByText(/Review packet copied to local clipboard only; no Jira create, enable, run, or secret restore happened/).waitFor({ timeout: 5000 });
 
-  const importDisabledCopyButton = frame.getByRole('button', { name: 'Import disabled copy' });
-  const headerImportButton = frame.getByRole('button', { name: 'Create disabled Jira copy from dialog header' });
+  const importRuleButton = frame.getByRole('button', { name: /^Import rule:/ });
+  const disableAfterImportCheckbox = frame.getByLabel('Set this rule disable after import');
   const chainedTriggerSafeguard = frame.getByLabel(/Prevent other automation rules from triggering this imported copy/);
   const chainedTriggerChoiceReceipt = frame.locator('[data-personal-ai-jira-import-chaining-choice-receipt="true"]');
+  const importRuleTitle = await importRuleButton.getAttribute('title');
+  const importRuleAria = await importRuleButton.getAttribute('aria-label');
+  assert.equal(importRuleAria, importRuleTitle);
+  assert.equal(await disableAfterImportCheckbox.isChecked(), true);
+  assert.equal(await frame.getByRole('button', { name: /^Import rule:/ }).count(), 1);
+  assert.match(importRuleTitle, /Import rule: create "\(Imported by Personal AI\) Notify release owner \(2\)" with DISABLED state in TGT/);
+  assert.match(importRuleTitle, /7 high-risk review item\(s\) and the Jira-side Activation plan remain open before enablement/);
+  assert.match(importRuleTitle, /\d+ credential re-entry group\(s\), \d+ redacted credential slot\(s\):/);
+  assert.match(importRuleTitle, /Hidden Jira secrets \d+/);
+  assert.match(importRuleTitle, /URL and signed-query credentials \d+/);
+  assert.match(importRuleTitle, /This preview blocks rule chaining in the disabled copy/);
+  assert.match(importRuleTitle, /Sends one sanitized POST only; does not enable, run, activate schedules, restore secrets, edit the source rule, or create working credentials/);
+  assert.doesNotMatch(importRuleTitle, /prod-api-token-123|hidden-secret-token|secret-owner@example\.com/);
   let chainedTriggerChoiceText = await chainedTriggerChoiceReceipt.innerText();
   assert.match(chainedTriggerChoiceText, /Rule chaining choice/);
   assert.match(chainedTriggerChoiceText, /Current preview will block rule chaining in the imported DISABLED copy/);
-  assert.match(chainedTriggerChoiceText, /no Jira create request is sent until Import disabled copy/);
-  assert.equal(await importDisabledCopyButton.isDisabled(), false);
-  assert.equal(await headerImportButton.isDisabled(), false);
+  assert.match(chainedTriggerChoiceText, /no Jira create request is sent until Import rule/);
+  assert.equal(await importRuleButton.isDisabled(), false);
 
   await chainedTriggerSafeguard.uncheck();
   await frame.getByText(/Current preview preserves source rule chaining/).waitFor({ timeout: 5000 });
   chainedTriggerChoiceText = await chainedTriggerChoiceReceipt.innerText();
   assert.match(chainedTriggerChoiceText, /after you later enable this disabled copy in Jira, other automation rules may trigger it/);
   assert.match(chainedTriggerChoiceText, /Toggling only recalculates the preview, review packet, and create payload/);
-  assert.equal(await importDisabledCopyButton.isDisabled(), false);
-  assert.equal(await headerImportButton.isDisabled(), false);
+  assert.match(await importRuleButton.getAttribute('title'), /This preview preserves source rule chaining after you later enable the disabled copy/);
+  assert.equal(await importRuleButton.isDisabled(), false);
 
   await chainedTriggerSafeguard.check();
   await frame.getByText(/Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open/).waitFor({ timeout: 5000 });
   await frame.getByText(/Current preview will block rule chaining in the imported DISABLED copy/).waitFor({ timeout: 5000 });
-  assert.equal(await importDisabledCopyButton.isDisabled(), false);
+  assert.equal(await importRuleButton.isDisabled(), false);
 
-  await headerImportButton.focus();
-  await headerImportButton.press('Tab');
-  const focusedAfterTab = await frame.locator(':focus').evaluate(element => ({
-    tagName: element.tagName,
-    type: element.getAttribute('type'),
-    inDialog: Boolean(element.closest('[role="dialog"]')),
-  }));
-  assert.deepEqual(focusedAfterTab, { tagName: 'INPUT', type: 'checkbox', inDialog: true });
+  await disableAfterImportCheckbox.uncheck();
+  await frame.getByText(/Enabled import preview/).waitFor({ timeout: 5000 });
+  assert.match(await importRuleButton.getAttribute('title'), /with ENABLED state/);
+  await disableAfterImportCheckbox.check();
+  await frame.getByText(/Disabled import preview/).waitFor({ timeout: 5000 });
 
-  await importDisabledCopyButton.click();
+  await importRuleButton.click();
   const pendingCreateReceipt = page.locator('[data-personal-ai-jira-import-pending-receipt="true"]');
   await pendingCreateReceipt.waitFor({ state: 'attached', timeout: 5000 });
   let pendingCreateText = await pendingCreateReceipt.innerText();
@@ -478,7 +487,7 @@ try {
   assert.doesNotMatch(unconfirmedPreviewText, signedUrlSecretPattern);
   assert.doesNotMatch(unconfirmedPreviewText, providerCredentialPattern);
   assert.doesNotMatch(unconfirmedPreviewText, /\(Imported by Personal AI\) Notify release owner \(2\)/);
-  await frame.getByRole('button', { name: 'Import disabled copy' }).click();
+  await frame.getByRole('button', { name: /^Import rule:/ }).click();
   await frame.getByText(/Post-import navigation receipt/).waitFor({ timeout: 3000 });
   const postImportText = await frame.locator('[data-personal-ai-jira-import-success-receipt="true"]').innerText();
   assert.match(postImportText, /Post-import navigation receipt/);
@@ -676,6 +685,8 @@ try {
   assert.match(zhPreviewText, /当前预览会在导入的 DISABLED 副本中阻止链式触发/);
   assert.match(zhPreviewText, /创建阶段就绪：可直接导入/);
   assert.match(zhPreviewText, /导入禁用副本/);
+  assert.equal(await zhFrame.getByLabel('导入后规则设为不启用状态').isChecked(), true);
+  assert.equal(await zhFrame.getByRole('button', { name: /^导入规则：/ }).count(), 1);
   assert.doesNotMatch(zhPreviewText, /I understand this only creates a disabled copy/);
   await zhFrame.getByRole('button', { name: '取消' }).click();
 

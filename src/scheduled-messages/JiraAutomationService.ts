@@ -11,6 +11,7 @@ import { buildTimelineSyncComponentsFragment } from './timelineProjects';
 import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig } from './types';
 import { formatLocalScheduleDate } from './scheduleDateTime';
 import { redactJiraRulePayloadForLog, redactJiraRuleTextForLog } from './jiraRulePayloadSafety';
+import { replaceScheduledMessagesDifyJumpboardPlaceholders } from './difyJumpboardConfig';
 
 // Jira Rule 版本信息（从模板的 _metadata 字段读取）
 export const JIRA_EXECUTOR_RULE_VERSION = (executorRuleTemplate as any)._metadata?.version || '1.3.0';
@@ -305,7 +306,10 @@ export class JiraAutomationService {
       .replace(/{{PROJECT_ID}}/g, context.projectId)
       .replace(/{{USER_KEY}}/g, context.userKey);
 
-    return replaceRingCentralSenderPlaceholders(payloadString, config.ringCentralSender, context.envConfig);
+    return replaceScheduledMessagesDifyJumpboardPlaceholders(
+      replaceRingCentralSenderPlaceholders(payloadString, config.ringCentralSender, context.envConfig),
+      context.envConfig,
+    );
   }
 
   private async createRuleFromTemplate(

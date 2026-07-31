@@ -302,6 +302,7 @@ export interface UpdateThreadAfterRunInput {
   latestMarkdownPath?: string;
   currentHypothesis?: string;
   openQuestions?: string[];
+  replaceOpenQuestions?: boolean;
   nextReflectionAt?: number | null;
   lastReflectedAt?: number;
   continueReason?: string;
@@ -588,10 +589,11 @@ export class ReflectionThreadRepository {
     const thread = this.getThreadById(threadId);
     if (!thread) return null;
 
-    const mergedOpenQuestions = uniqStrings([
-      ...thread.openQuestions,
-      ...(input.openQuestions ?? []),
-    ]).slice(0, 12);
+    const mergedOpenQuestions = uniqStrings(
+      input.replaceOpenQuestions
+        ? input.openQuestions ?? []
+        : [...thread.openQuestions, ...(input.openQuestions ?? [])],
+    ).slice(0, 12);
     const currentTime = now();
 
     this.db

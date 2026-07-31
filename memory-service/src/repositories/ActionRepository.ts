@@ -361,10 +361,29 @@ export class ActionRepository {
            AND execution_mode = 'auto'
            AND requires_approval = 0
            AND (scheduled_at IS NULL OR scheduled_at <= ?)
+           AND NOT EXISTS (
+             SELECT 1
+             FROM action_readiness_links readiness_links
+             JOIN action_readiness_contracts readiness_contracts
+               ON readiness_contracts.id = readiness_links.contract_id
+             WHERE readiness_links.source_kind = 'proposed_action'
+               AND readiness_links.source_ref_id = proposed_actions.id
+               AND readiness_links.link_reason = 'blocked_by_readiness'
+               AND readiness_contracts.status IN (
+                 'blocked_auth',
+                 'blocked_capability',
+                 'blocked_input',
+                 'blocked_proof'
+               )
+               AND (
+                 readiness_contracts.expires_at IS NULL
+                 OR readiness_contracts.expires_at > ?
+               )
+           )
          ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC
          LIMIT ?`,
       )
-      .all(currentTime, Math.max(1, limit)) as ActionRow[];
+      .all(currentTime, currentTime, Math.max(1, limit)) as ActionRow[];
 
     return rows.map((row) => this.rowToAction(row));
   }

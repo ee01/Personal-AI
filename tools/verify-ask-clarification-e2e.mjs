@@ -52,6 +52,21 @@ function apiFallback(url) {
   return {};
 }
 
+async function assertReceiptBoundary(locator, fragments, label) {
+  const title = (await locator.getAttribute('title')) || '';
+  const ariaLabel = (await locator.getAttribute('aria-label')) || '';
+  for (const fragment of fragments) {
+    assert.ok(
+      title.includes(fragment),
+      `${label} title should include "${fragment}", got: ${title}`,
+    );
+    assert.ok(
+      ariaLabel.includes(fragment),
+      `${label} aria-label should include "${fragment}", got: ${ariaLabel}`,
+    );
+  }
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -294,6 +309,11 @@ try {
   await candidateReceipt
     .getByText('选择候选只是把本轮短问句绑定到对应话题后继续 Ask')
     .waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    candidateReceipt,
+    ['Ask 候选选择回执', '候选 2', '无外部动作', '不会提交候选'],
+    'candidate selection receipt',
+  );
   await candidateReceipt.getByText('候选 2').waitFor({ timeout: 10000 });
   await candidateReceipt.getByText('无外部动作').waitFor({ timeout: 10000 });
   const candidateReceiptBox = await candidateReceipt.boundingBox();
@@ -327,6 +347,11 @@ try {
     .waitFor({ timeout: 10000 });
   await statusRail.getByText('守望复用队列').waitFor({ timeout: 10000 });
   await statusRail.getByText('守望确认项').waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    statusRail,
+    ['Ask 本轮状态', '不写新版本', '不会重新读取记忆', '执行外部写入'],
+    'Ask status rail',
+  );
   const continuationReceipt = page.getByLabel('Ask 承接候选回执');
   await continuationReceipt
     .getByText('承接上一轮短问句“那个 BE ready 了吗？”')
@@ -341,6 +366,11 @@ try {
   await continuationReceipt
     .getByText('仍按本轮证据回答')
     .waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    continuationReceipt,
+    ['Ask 承接候选回执', '候选 2', '不会再次提交 Ask', '外部写入'],
+    'Ask continuation receipt',
+  );
   const evidenceWatchReceipt = page.getByLabel('Ask 证据守望回执');
   await evidenceWatchReceipt
     .getByText('证据守望已建立')
@@ -366,6 +396,11 @@ try {
   await evidenceWatchReceipt.getByText('已抑制重复 2').waitFor({
     timeout: 10000,
   });
+  await assertReceiptBoundary(
+    evidenceWatchReceipt,
+    ['Ask 证据守望回执', '本轮未复核来源', '不会新增 run', '重新触达权威来源'],
+    'Ask evidence watch receipt',
+  );
   const evidenceBasisReceipt = page.getByLabel('Ask 证据来源回执');
   await evidenceBasisReceipt
     .getByText('Ask 证据来源回执')
@@ -383,6 +418,18 @@ try {
   await evidenceBasisReceipt
     .getByText('不代表全库或全部连接器覆盖')
     .waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    evidenceBasisReceipt,
+    ['Ask 证据来源回执', 'Top 来源 AI Notes', '不会重新读取全库', '不确认事实'],
+    'Ask evidence basis receipt',
+  );
+  const followUpReceipt = page.getByLabel('Ask 查证与缺口回执');
+  await followUpReceipt.getByText('Ask 查证回执').waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    followUpReceipt,
+    ['Ask 查证与缺口回执', '查证动作 1', '缺口 1', '不会执行队列动作'],
+    'Ask follow-up receipt',
+  );
   await page.getByText('活答案已复核').waitFor({ timeout: 10000 });
   await page
     .getByLabel('活答案权威证据门控')
@@ -504,6 +551,11 @@ try {
     timeout: 10000,
   });
   await topicLockReceipt.getByText('来源 2').waitFor({ timeout: 10000 });
+  await assertReceiptBoundary(
+    topicLockReceipt,
+    ['Ask 话题锁定回执', '锁定 AI Notes', '只补检索锚点', '不会改变锁定 topic'],
+    'Ask topic lock receipt',
+  );
   const directEvidenceBasisReceipt = page.getByLabel('Ask 证据来源回执');
   await directEvidenceBasisReceipt
     .getByText('Top 来源 AI Notes', { exact: true })

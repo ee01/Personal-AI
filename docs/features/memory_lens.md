@@ -1,6 +1,6 @@
 # Memory Lens
 
-*最后更新: 2026-07-11（含 Scene Memory Autopilot、Autopilot eval 来源审计、Autopilot 展示前过滤短摘要、InteractionScene 查询契约、Rest 状态原因回执、Hover Peek 来源/新鲜度/缓存口径/候选切片回执、Expanded Card 页面召回回执、Expanded Card 操作边界回执、Expanded Card 来源打开回执、Expanded Card 反馈失败可见化、正向反馈确认回执、站点控制冲突消解、站点控制回执、站点控制当前诊断、Options 站点控制状态/操作结果回执、已打开页面站点控制实时回执、被动入库站点控制、资料记忆反馈闭环、来源链接状态回执、来源可复核状态回执、Rehearsal 预演提醒回执与反馈、浮窗信息层级重设计、右下角入口临时拖拽、划词记忆检索、选区动作条、划词入口边界 tooltip、防裁切 tooltip、划词检索范围回执、划词打开候选回执、划词背景命中门槛、弱相关缓存重显、真实召回质量观察、cue-level Outcome Loop、Compose Assist 全页面互斥、AR 数据边界）*
+*最后更新: 2026-07-31（含 Lens 展示地图、关键简报自动生成、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
 
 ## 概述
 
@@ -17,7 +17,7 @@ Memory Lens 是 Personal AI 的注入式关联记忆提示能力。它不新增�
 
 旧的 `webpage_memory_detection` 是 Memory Lens 的网页/右下角轻量态历史名称。后续以本文作为 source of truth。
 
-交互 demo 可查看 [`docs/demo/memory-lens.html`](../demo/memory-lens.html)。
+基础交互 demo 可查看 [`docs/demo/memory-lens.html`](../demo/memory-lens.html)；关键记忆简报的同入口替换、证据下钻和降级状态可查看 [`docs/demo/keystone-memory-briefs.html`](../demo/keystone-memory-briefs.html)。
 
 ## 大白话运行逻辑
 
@@ -31,6 +31,7 @@ Memory Lens 的逻辑是“当前页面像什么，就去记忆库里找你以�
 4. 敏感页面和输入状态：密码、支付、账号、隐私输入等场景不会显示。
 5. 与 Compose Assist 的互斥：用户正在输入框附近写回复时，Compose Assist 优先，Memory Lens 右下角入口会隐藏。
 6. 精准 cue：少数结构足够明确的场景会把相关记忆编译成一句可行动只读提示，例如用户在 RingCentral 群聊或 Jira comment 中讨论 MTR-148115 估算时提示“上次 original estimate 口径是人天”。这仍然只是展示旧记忆，不插入、不提交；如果同一句 cue 在同类场景被重复标成不相关，Outcome Loop 会让后续同类场景静默。
+7. 关键简报：如果同一工作对象已有至少两条独立来源、非纯派生权威和可回溯的 claim，`/context-recall` 可以在不改变原始召回排序的前提下附带一份 `keystoneBrief`。符合 `ready` 的简报会替换 Expanded Card 首屏的零散记忆；原始记忆不会消失，而是移到“来源与原始记忆”里供复核。
 
 ## 产品边界
 
@@ -38,6 +39,7 @@ Memory Lens 负责：
 
 - 根据当前页面、RingCentral 消息会话、Jira issue、会议上下文或划选文本调用 `/context-recall`。
 - 展示少量高相关记忆或 Rehearsal 预演提醒，按"为什么相关 → 可提取信息 / 预演内容 → 建议动作 / 我能做什么"三层组织卡片内容。
+- 当当前场景命中可信的多来源关键简报时，在同一枚 Rest icon、同一个 Hover Peek 和 Expanded Card 壳内优先展示简报，并保留来源图和原始关联记忆下钻。
 - 提供正/负反馈 icon 和站点/页面级静默控制；控制类操作默认折叠，不占据卡片主体。
 - 在用户选中文本后提供 **划词记忆检索（Selection Memory Search）**：先静默召回，命中强相关才在选区动作条里显示 `icon48.png` 查记忆入口。
 
@@ -46,9 +48,24 @@ Memory Lens 不负责：
 - 不自动保存完整 DOM、网页正文、截图、密码/支付/登录表单或私密输入。
 - 不因为用户打开网页就强化长期记忆的 `access_count`。
 - 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。即使命中 Rehearsal 或 Cue Compiler，Memory Lens 也只展示只读提醒，不生成回复。
+- 不为关键简报新增第二枚悬浮 icon、并列面板或新的日常维护页；简报只是现有被动 Lens 的高信号展示对象。
 - 不做网页 DOM 替换、视觉 overlay 或用户定义的数据回填；这些属于 [Personal AI AR Data](./ar_data_overlay.md)。未来 AR 可以复用 Lens 的场景语义和相似文本匹配能力，但不能混淆 Lens 的只读提示边界。
 - 不在 `v.ringcentral.com/conf/on/*` 上显示通用右下角 bubble；会议页由 Meeting Pilot 接管。
 - 不和输入框旁的 Compose Assist icon 同时占位；当任意页面的 Compose Assist 已显示可插入建议时，Memory Lens 右下角 Rest / Hover Peek / Expanded Card 自动隐藏。主动划词检索不受这个被动互斥影响。
+
+## 展示地图与首屏仲裁
+
+Memory Lens 只有一枚悬浮 icon 和一个 Expanded Card。后端可以在同轮返回普通 `matches`、`keystoneBrief`、`changeProjections`、Context Cue 或 Rehearsal，但前端不会把它们并列堆在首屏，而是按以下规则选择一个主视图：
+
+| 优先级 | 触发条件 | Lens 首屏 | 其他内容去向 |
+|---|---|---|---|
+| 专用交互 | 用户主动划词，或首条结果是 Rehearsal | Selection / Rehearsal 专用视图 | 不让简报或页面级变化链接管 |
+| 1 关键简报 | `keystoneBrief` 为 `ready` 或 `partial` | **简报独占首屏**；`partial` 先显示冲突边界 | 来源图、普通记忆和变化脉络进入证据/原始记忆下钻 |
+| 2 变化脉络 | 没有可展示简报，且 `changeProjections` 非空 | 变化脉络占首个候选槽位 | 普通记忆继续分页 |
+| 3 编译提示 / 普通记忆 | 没有前两类高阶结果 | Context Cue 或最高相关普通记忆 | 其余候选继续分页 |
+| 静默 | 没有通过展示门槛的内容 | 不显示 Lens | 不用空卡或内部候选打扰用户 |
+
+`stale` 简报不占用结论首屏：Peek 说明存在旧简报，Expanded Card 回落变化脉络或普通记忆，并只把旧简报作为时效提醒。`candidate`、`blocked`、`hidden` 或缺失简报对用户不可见。这个仲裁顺序是 UI 契约：**简报 > 变化脉络 > 普通关联记忆**，不是后端返回数组的偶然顺序。
 
 ## 交互形态
 
@@ -81,7 +98,7 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 
 点击 icon 或按 Enter/Space 打开完整卡片。卡片按 **5 层结构**组织，每层占 1-2 行；正文区域在视口内滚动，反馈和分页 footer 固定在卡片底部，窄屏下不越界。任何层在数据缺失时自动折叠：
 
-被动 Lens 的 Expanded Card 会在 Header 下方显示 compact `页面召回回执`：说明本次是网页、消息、Jira 或文档的被动提示，列出当前页面标题/host、关键锚点（如果有）、本轮召回或本地缓存口径，以及只读边界。这样用户直接点击右下角 icon 而没有先看 Hover Peek 时，也能知道这条关联记忆来自当前页信号，不是后台写入、插入或发送动作。Selection Memory Search 使用独立的划词范围回执，不显示这条被动页面回执。
+被动 Lens 的页面信号、候选切片、当前召回/缓存口径和只读边界只放在 Rest 的 `title` / 可访问名称与 Hover Peek 中。Expanded Card 不再重复渲染“页面召回回执”：用户打开卡片后应直接看到“为什么相关”和记忆内容，底部仍保留操作边界。Selection Memory Search 继续使用独立的划词范围回执。
 
 | 层 | 内容 | 实现要点 |
 |---|---|---|
@@ -92,9 +109,9 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 | 5 Meta + Foot | 群名可点链接 / 时间 / 反馈 / 翻页 | Thumb up/down icon + `1/N` 翻页器，始终仅占 1 行 |
 
 控制类操作分级：
-- **正/负反馈**（有用 / 不相关）：底部仍只保留低饱和 thumb icon。正反馈点击后，卡片 footer 先显示“正在记录 / 确认前不会当作已学习”，等 memory-service 确认成功才变成“已确认写入 / 后续类似提示会优先保留”；失败时卡片保留失败回执、按钮解锁并说明本次没有学习成功。负反馈入口显示为 compact thumb-down，点击后在卡片内打开轻量原因面板，而不是把“不是这个意思”做成大按钮。
+- **正/负反馈**（有用 / 不相关）：底部仍只保留低饱和 thumb icon。两个 icon 的 hover / 读屏文案会在点击前说明将提交 `recall_quality` 反馈、服务确认前不会当作已学习、失败时负反馈只保留本页隐藏，以及不会插入、发送、删除原始记忆或确认事实。正反馈点击后，卡片 footer 先显示“正在记录 / 确认前不会当作已学习”，等 memory-service 确认成功才变成“已确认写入 / 后续类似提示会优先保留”；失败时卡片保留失败回执、按钮解锁并说明本次没有学习成功。负反馈入口显示为 compact thumb-down，点击后在卡片内打开轻量原因面板，而不是把“不是这个意思”做成大按钮。
 - **操作边界回执**：Expanded Card footer 常驻显示只读边界。普通卡片说明不写入/插入/发送；划词卡片说明不保存/插入/外发；预演提醒说明不生成/插入/发送/执行，避免用户直接点击 Rest icon 打开卡片时错过 Hover Peek 的边界说明。普通被动 Lens 如果收到 `autopilot` 展示前过滤数据，footer 左侧优先显示低饱和短摘要，例如 `3 条可能相关，7 条静默`；hover、focus 或点击这枚摘要后再展开完整 `展示判断 / 过滤 / 场景锚点 / 边界 / 操作边界`，不再把整块绿色回执放在卡片首屏正文上方。
-- **来源打开回执**：用户点击右上角 `↗` 记忆详情或正文里的原始来源链接后，卡片会留下 `来源打开回执`，说明打开的是资料详情、记忆详情还是原始来源，当前可复核状态，以及这只是新标签复核动作，不会写入记忆、插入输入框、发送内容或确认事实。这个回执复用 `opened_source` outcome，不新增后台写入语义。
+- **来源打开回执**：用户点击右上角 `↗` 记忆详情或正文里的原始来源链接后，卡片会留下 `来源打开回执`，说明打开的是资料详情、记忆详情还是原始来源，当前可复核状态，以及这只是新标签复核动作，不会写入记忆、插入输入框、发送内容或确认事实。原始来源链接本身也在 hover / 读屏文案里提前说明只打开新标签核对当前卡片摘要，不会重新召回、写入记忆、插入、发送或确认事实。这个回执复用 `opened_source` outcome，不新增后台写入语义。
 - **Rehearsal 预演回执**：命中 Rehearsal 时，正文会额外显示 `预演回执`，列出触发线索、提示资格、管理页复核入口、只读预演边界和反馈影响。这个回执不新增操作，只让用户在标记有用/不相关前先确认它是未来场景脚本，而不是普通事实记忆。
 - **负反馈原因面板**：面板只在用户点 thumb-down 后出现，包含“只是主题相似 / 群组或项目不对 / 空页面误触发”三类原因，选择后立即写入；备注 textarea 仅在用户主动展开“补充原因”后出现，不要求提交按钮。点击面板外侧、关闭按钮或 Escape 会收起面板，不改变当前提示。Rehearsal 卡片的面板标题使用“这条预演提醒不适合当前场景”，目标标签使用“误触发的预演提醒”，避免把 future-scene 脚本误称为普通记忆。
 - **反馈失败可见化**：如果有用/不相关反馈没有成功写入 memory-service，卡片不能继续显示成“已学习成功”。正向反馈只有在服务端确认后才显示成功；失败时会解除本次按钮锁定并提示失败。负向反馈仍本地隐藏 30 分钟，但 toast 明确说明只是本页隐藏，并提供“重新显示”恢复刚才的卡片。
@@ -102,6 +119,31 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 - **跳转记忆原文**（在记忆中查看）：右上角 `↗` link-out icon，对应 `exploreLink`。
 
 卡片支持 Escape 收起、Tab 进入操作区、窄屏不越界，并尊重 `prefers-reduced-motion`。
+
+### 关键记忆简报（Keystone Memory Brief）
+
+关键记忆简报复用现有 Rest → Hover Peek → Expanded Card 路径。它不是与零散关联记忆并列的第二入口：当简报达到可展示门槛时，它就是本轮被动 Lens 的首屏对象；零散记忆退到证据层。这样用户先拿到一个可复用结论，需要确认时再查看原始来源，而不是同时扫描两套同级内容。
+
+用户不需要手动生成简报。独立于完整 Proactive Scheduler 的轻量 `KeystoneBriefComposerService` 维护循环会在 memory-service 启动时运行，此后默认每 15 分钟运行一次；它从活跃 Reflection Thread 发现稳定主题，在工作范围的 `messages_raw` 中查找近 180 天证据。至少两条独立来源且有一条非 reflection / derived 权威时，才确定性组成或刷新简报。每轮每位用户最多处理两份，重复来源签名跳过；用户隐藏或标记不准的简报受保护，不会被下一轮自动恢复。页面打开时的 `/context-recall` 只匹配已经准备好的简报，不调用 LLM、不等待生成，也不因浏览页面产生写入。
+
+`/context-recall` 在普通召回和 Evidence Cohesion Gate 完成后，尝试同步、确定性匹配一份简报。匹配失败或 Brief Service 异常必须 fail open：响应继续返回原有 `matches`，Lens 继续走普通卡片，不允许简报故障拖垮被动召回。
+
+| 简报状态 | Rest / Hover Peek | Expanded Card 首屏 | 原始关联记忆 |
+|---|---|---|---|
+| `ready` | 同一枚 icon；Peek 预览简报标题、此刻相关原因、来源数和 `sourceAsOf` | 关键简报替换普通记忆卡，显示约束、事实、已有判断、易错点和来源时效 | 收进“来源与原始记忆”；点任一项进入原有记忆卡，并可“返回关键简报” |
+| `partial` | 同一枚 icon；Peek 标成“有冲突” | 简报仍为首屏，但必须先显示冲突/时效警告；外发复制禁用 | 默认可展开，供用户核对冲突双方 |
+| `stale` | 同一枚 icon；Peek 说明“有旧简报，当前展示原始记忆” | 不把旧摘要当当前事实；显示来源截至时间和过期原因后回落普通卡片 | 普通卡片仍是主内容 |
+| `candidate` / `blocked` / `hidden` / 缺失 | 不泄露内部候选状态 | 完全沿用普通 Lens 卡片 | 不受简报影响 |
+
+首屏简报的固定边界：
+
+- `ready` 才允许“复制脱敏摘要”；复制内容经过 URL、token、邮箱、电话等外发脱敏。`partial` 的复制按钮必须禁用，不能用 warning 文案代替真实门禁。
+- “有用”“不准”“隐藏”写入独立 `keystone_brief_events`，不能把整份简报的反馈冒充成某一条原始记忆的 `recall_quality`。`not_accurate` 会把简报置为待修复/blocked，`hidden` 会隐藏简报；两者点击后都立即清掉当前缓存里的 brief，并在同一个 Expanded Card 壳内回落原始记忆。
+- 查看来源图、打开原始记忆、复制摘要和反馈都不会写入用户画像、创建任务、确认事实、插入输入框或发送到当前网页。来源详情仍沿用原有安全 URL 和只读打开边界。
+- Selection Memory Search 和 Rehearsal 保持各自 variant。`selected_text`、`selection_memory_search` 或首条结果为 Rehearsal 时，Brief Service 不接管首屏，即使响应里误带 brief，renderer 也必须忽略。
+- Brief 的 `shown`、`opened`、`evidence_opened`、`copied`、`useful`、`hidden`、`not_accurate`、`used_in_ask`、`used_by_compiler` 使用专用事件；普通 Lens 的分页、来源打开、Autopilot 和 recall feedback 语义保持不变。
+
+缓存重放必须同时保留 `keystoneBrief` 和原始 `matches`，这样同页恢复时仍能维持首屏层级；隐藏或标记不准后只移除 brief，不删除本轮原始召回结果。关键回归由 `memory-service/src/__tests__/keystone-brief-composer.test.ts`、`tools/verify-webpage-memory-detection.ts`、`desktop-app/scripts/webpage-memory-detection-check.mjs` 和 `keystone-memory-briefs` eval suite 覆盖。其中 E2E 必须构造同轮同时含 `keystoneBrief + changeProjections` 的响应，并断言简报独占首屏。
 
 ### 划词记忆检索（Selection Memory Search）
 
@@ -161,6 +203,8 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 - Cue Compiler 会读取 `MemoryOutcomeLoopService` 的 cue policy。重复负反馈生成的 `suppress` patch 会把同一句 cue 降为 `compileStatus='suppressed'`、`suppressReason='outcome_policy'`，前端不需要新增按钮；重复正向采纳则会以 `boost` policy 提高同类 cue 的排序置信度。
 - Jira issue 页面会额外做“当前页字段 echo”过滤：如果页面已经显示 `DEV Estimate New: 0.4` 这类 estimate 字段值，Lens 不应再弹一条只复述该字段值的提示。这样的记忆更适合在 RingCentral 群聊、thread、Jira comment 草稿等“讨论这张 ticket 估算”的场景里出现；只有页面上看不到的口径、决策背景或风险说明才适合在 Jira 页面提示。
 - 带明确 Jira key 的 RingCentral / Jira 场景会对 `source_memory` 做精确锚点过滤：资料记忆的标题、摘要、片段、来源 URL 或 link 必须包含同一个 issue key，才允许作为强提示展示。`sdk`、`bug`、`release`、`link` 这类泛词重合只能说明可能相关，不能替代票号证据。
+- Source Memory 的异步 deep pack 只在 `status=ready` 且 input hash 与当前 P0 一致时参与召回。查询若只命中 deep cue/memo/trigger 文本，必须再命中当前 `interactionScene` 对应的 trigger card；Ask、会议、Jira、页面阅读、写作和研究场景不能仅凭同一个 deep-only 关键词互相串场。标题、摘要、原始 preview、anchor 或 P0 takeaway 的基础命中仍可独立工作，因此 deep 排队、阻断或失败不会让已保存资料从 Lens 消失。
+- ready deep pack 可提供更合适的显示预算：`one_line`、`compact` 或 `full`。Lens 仍返回 capsule 详情和安全来源链接作为复核路径，fact/open-question/Skill/Storyline candidates 不直接渲染成已确认事实，也不会因为卡片展示而写画像、创建动作、发布 Skill 或写回 Storyline。
 - 当 `sourceTypes` 包含 `rehearsal` 时，`/context-recall` 可以返回 `type='rehearsal'`、`evidenceRole='rehearsal_cue'`、`reasonType='prospective_cue'` 的预演提醒。Lens 需要把它显示成“预演提醒”，解释命中的人物、会议、issue、URL 或 topic，而不是当普通事实记忆渲染。
 - Rehearsal 卡片使用“为什么此刻相关 / 预演内容 / 我能做什么”的文案，`↗` 跳到 `memory-exploring.html#/rehearsals?rehearsalId=...`，有用/不相关反馈写回对应 Rehearsal activation。展开卡正文显示 `预演回执`，把触发线索、状态/提示资格、复核入口、只读边界和反馈范围放在用户执行反馈前。
 - 普通记忆和 `source_memory` 资料记忆反馈会以 `recall_quality` 进入 memory-service；资料记忆负反馈按 capsule id 记录，后续 source memory 召回会排除该 capsule。Rehearsal 负反馈走 `/rehearsals/:id/feedback` 并记录为 `irrelevant`，后续同目标或低质量同源结果会被排除或降权。
@@ -280,6 +324,24 @@ Expanded Card 的更多菜单会先显示 `站点控制回执`：当前 host、�
 - **真正有价值的记忆被压后**：Nova 群当前场景最相关的 `Nova Product & Engineering Leads` 周会要点（Wayne 任务、SMS 时间线）原始 score 仅 1.00 排第 5，被 HR 通告和 meeting-pilot 任务挤到末尾；客户端重排后应置顶。
 - **无强相关时的正确行为**：Colin/Michael 对话的核心主题（Cursor 2.5 / Codex plan / 组织禁用 / RingClaw 合规）在记忆库里暂无 entities 覆盖，正确行为是 Rest icon 不显红点，只在用户主动点击时展示 `可能相关` 的弱命中条目，并清楚标注"非同群"。
 
+
+## 变化脉络
+
+Memory Lens 可消费 `/context-recall.changeProjections`，详见 [Change Memory Ledger / 变化脉络](./change_memory_ledger.md)。账本与普通 `matches` 分离。当同轮没有 `ready` / `partial` 简报时，它作为当前稳定对象的优先证据占用首个候选槽位；有可展示简报时，**简报优先**，变化脉络不与简报并列占首屏，而保留在证据/原始记忆层。没有简报时，分页先显示只读变化脉络，再显示其余普通记忆，并保持本轮最多 3 张卡。
+
+维护约束：
+
+- `conflicted` 的当前值必须显示为未知，候选只出现在历史里。
+- `superseded_on_page` 显示页面当前值，同时保留最后观测历史。
+- `confirmed_current` 只能来自本次页面显式字段或成功的实时来源读取，不能仅因历史事件来自用户本人或权威来源。Jira 对 DEV / QA Estimate 与 Story Points 使用一次带 60 秒短缓存的只读 REST 核对；返回 `null` 明确显示“Jira 当前为空”，请求失败或字段未渲染则保持 `last_observed`。
+- Lens 的普通卡片缓存可以保留 5 分钟，但 Jira 实时字段读取时间是该缓存的组成条件：60 秒后形成新的读取快照时必须重新请求账本，不能拿旧卡覆盖新核对结果。
+- `superseded_at_source` 显示实时来源当前值并保留账本最后观测；页面未显示某字段不得等价为该字段为空。
+- 链级卡 footer 固定为 `链级只读`，操作边界固定说明不确认当前值、不写入、不插入、不发送。
+- Cache 必须连同 `changeProjections` 保存，不能首次出现后在同页稳定缓存命中时消失。
+- 排序先按专用交互和高阶展示对象仲裁，再按 `displayPriority` 与关联分数：Selection / Rehearsal 保持专用视图；`ready` / `partial` 简报优先于变化脉络；变化脉络优先于普通强相关记忆。
+- Jira Lens 的缓存、去重和展示身份使用稳定 `issueKey`，而不是延迟渲染的字段签名。字段继续作为请求上下文传给服务端，但同一 issue 的局部重绘不得清空图标或重复发起 Context Recall。
+- Selection Memory Search 不消费页面级变化链。
+- UI 回归使用 `node tools/verify-change-memory-ledger-e2e.mjs`。
 
 ## 验证
 

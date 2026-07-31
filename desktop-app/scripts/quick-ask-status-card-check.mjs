@@ -8,6 +8,7 @@ import { chromium } from 'playwright';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(__dirname, '../app');
+const askResumeStorageKey = 'desktop-app.quick-ask.resume.v1';
 
 const runtimeSummary = {
   pendingConfirmCount: 0,
@@ -43,6 +44,44 @@ const runtimeSummary = {
   fetchedAt: '2026-05-21T00:00:00.000Z',
 };
 
+function buildResumeSnapshot({
+  now = Date.parse('2026-05-21T00:02:00.000Z'),
+  expiresAt = now + 24 * 60 * 60 * 1000,
+  status = 'answered',
+  pendingCandidates = [],
+} = {}) {
+  return {
+    version: 1,
+    surface: 'quick_ask',
+    createdAt: new Date(now - 5 * 60 * 1000).toISOString(),
+    updatedAt: new Date(now - 5 * 60 * 1000).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
+    localOnly: true,
+    topic: {
+      id: 'topic-ai-vbg',
+      title: 'MTR-141852: AI Custom VBG',
+      confidence: 0.91,
+    },
+    lastUserMessage: {
+      textPreview: '那个 BE ready 了吗？',
+      redacted: false,
+    },
+    lastAnswer: {
+      summary: '上一轮 Ask 判断 backend 仍在等待 design，并引用了 Jira 与聊天证据。',
+      status,
+    },
+    evidenceRefs: [
+      {
+        id: 'jira:MTR-141852',
+        title: 'MTR-141852: AI Custom VBG',
+        sourceType: 'jira',
+      },
+    ],
+    pendingCandidates,
+    riskFlags: [],
+  };
+}
+
 async function main() {
   const { server, url } = await serveQuickAskApp();
   const browser = await chromium.launch({ channel: 'chromium', headless: true });
@@ -76,6 +115,335 @@ async function main() {
       now: Date.parse('2026-05-21T00:02:00.000Z'),
       runtimeSequence: [runtimeSummary, refreshedRuntimeSummary],
     });
+    assert.equal(await page.locator('#resume-strip').isHidden(), true);
+
+    const resumeSourcePage = await setupQuickAskPage(
+      browser,
+      url,
+      { ...runtimeSummary, topStatus: undefined, items: [] },
+      {
+        now: Date.parse('2026-05-21T00:02:00.000Z'),
+        askStreamEvents: [
+          {
+            type: 'result',
+            answer:
+              'AI VBG 的 backend 仍在等待 design 确认，建议先找 Backend Owner。',
+            contextMatch: {
+              state: 'locked',
+              selectedTopic: {
+                id: 'topic-ai-vbg',
+                label: 'MTR-141852: AI Custom VBG',
+                score: 0.91,
+              },
+            },
+            evidence: [
+              {
+                id: 'jira:MTR-141852',
+                type: 'jira',
+                sourceTitle: 'MTR-141852: AI Custom VBG',
+                content: 'Backend design remains pending.',
+              },
+            ],
+            runtime: { items: [] },
+          },
+        ],
+      },
+    );
+    await resumeSourcePage.locator('#composer').fill('那个 BE ready 了吗？');
+    await resumeSourcePage.keyboard.press('Enter');
+    await resumeSourcePage.waitForFunction(
+      () => window.__lastAskPayload?.query === '那个 BE ready 了吗？',
+    );
+    await resumeSourcePage.waitForFunction(() =>
+      document.body.textContent?.includes('建议先找 Backend Owner'),
+    );
+    const persistedResumeSnapshot = await resumeSourcePage.evaluate((key) => {
+      const raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    }, askResumeStorageKey);
+    assert.equal(persistedResumeSnapshot?.version, 1);
+    assert.equal(persistedResumeSnapshot?.localOnly, true);
+    assert.equal(
+      persistedResumeSnapshot?.topic?.title,
+      'MTR-141852: AI Custom VBG',
+    );
+    assert.equal(
+      persistedResumeSnapshot?.evidenceRefs?.[0]?.id,
+      'jira:MTR-141852',
+    );
+
+    const meetingOutcomePage = await setupQuickAskPage(
+      browser,
+      url,
+      { ...runtimeSummary, topStatus: undefined, items: [] },
+      {
+        now: Date.parse('2026-05-21T00:04:00.000Z'),
+        askStreamEvents: [
+          {
+            type: 'result',
+            answer:
+              '昨天 Q3 planning 已统一 Dev / QA 估时口径：QA 按 5 人天进入排期。',
+            meetingOutcomeSources: [
+              {
+                id: 'quick-ask-outcome-binder',
+                userId: 'scene1',
+                prepId: 'quick-ask-meeting-prep',
+                eventExternalId: 'quick-ask-q3-planning',
+                eventTitle: '2026 Q3 planning for video mobile',
+                eventStartAt: 1789920000,
+                meetingId: 'quick-ask-q3-planning',
+                status: 'bound',
+                slots: [
+                  {
+                    id: 'quick-ask-estimate-slot',
+                    title: '确认 Dev / QA estimate 口径',
+                    type: 'decision',
+                    status: 'resolved',
+                    mentionState: 'supported',
+                    sourceEvidenceIds: ['quick-ask-calendar-agenda'],
+                    evidence: [
+                      {
+                        id: 'quick-ask-decision-evidence',
+                        kind: 'decision',
+                        refId: 'quick-ask-decision',
+                        label: '决议',
+                        snippet: 'QA estimate 统一按 5 人天进入 Q3 planning。',
+                      },
+                    ],
+                    resultSummary:
+                      'Dev / QA 估时口径已统一，QA 按 5 人天进入排期。',
+                    confidence: 0.92,
+                  },
+                ],
+                sourceEvidence: [],
+                sourceHash: 'quick-ask-outcome-source',
+                generatedAt: 1789912800,
+                boundAt: 1789923600,
+                createdAt: 1789912800,
+                updatedAt: 1789923600,
+                receipt: {
+                  source: 'Meeting Pilot 会后结果装订',
+                  coverage: '1 项已闭环。',
+                  freshness: '昨天装订',
+                  boundary:
+                    'Ask 只读取 Personal AI 的派生结果；不会写回 Calendar、Jira、RingCentral 或外部任务。',
+                },
+              },
+            ],
+            evidence: [],
+            runtime: { items: [] },
+          },
+        ],
+      },
+    );
+    await meetingOutcomePage.locator('#composer').fill('昨天 planning 估时口径定了吗？');
+    await meetingOutcomePage.keyboard.press('Enter');
+    await meetingOutcomePage
+      .locator('[data-meeting-outcome-receipt="true"]')
+      .waitFor({ state: 'visible' });
+    const meetingOutcomeReceipt = await meetingOutcomePage
+      .locator('[data-meeting-outcome-receipt="true"]')
+      .textContent();
+    assert.match(meetingOutcomeReceipt || '', /结果装订回执/);
+    assert.match(meetingOutcomeReceipt || '', /2026 Q3 planning for video mobile/);
+    assert.match(meetingOutcomeReceipt || '', /QA 按 5 人天进入排期/);
+    assert.match(meetingOutcomeReceipt || '', /已闭环/);
+    assert.match(meetingOutcomeReceipt || '', /不会写回 Calendar/);
+    assert.equal(
+      await meetingOutcomePage
+        .locator('[data-outcome-slot-status="resolved"]')
+        .count(),
+      1,
+    );
+
+    const resumePage = await setupQuickAskPage(
+      browser,
+      url,
+      { ...runtimeSummary, topStatus: undefined, items: [] },
+      {
+        now: Date.parse('2026-05-21T00:07:00.000Z'),
+        resumeSnapshot: persistedResumeSnapshot,
+        askStreamEvents: [
+          {
+            type: 'result',
+            answer: '本轮重新检索后，建议先找 Backend Owner 确认 design。',
+            continuityReceipt: {
+              source: 'local_ask_resume_snapshot',
+              localOnly: true,
+              usedAsHint: true,
+              reRetrieved: true,
+              detail:
+                '已使用本机续聊线索，并重新检索本轮证据；续聊快照未写入长期记忆。',
+            },
+            evidence: [
+              {
+                id: 'jira:MTR-141852',
+                type: 'jira',
+                sourceTitle: 'MTR-141852: AI Custom VBG',
+                content: 'Backend design remains pending.',
+              },
+            ],
+            runtime: { items: [] },
+          },
+        ],
+      },
+    );
+    await resumePage.locator('#resume-strip').waitFor({ state: 'visible' });
+    await assertTextIncludes(
+      resumePage.locator('#resume-title'),
+      '继续上次 Ask：MTR-141852: AI Custom VBG',
+    );
+    await assertTextIncludes(resumePage.locator('#resume-meta'), '5 分钟前');
+    await assertTextIncludes(resumePage.locator('#resume-meta'), '本地保存');
+    await assertTextIncludes(
+      resumePage.locator('#resume-meta'),
+      '未写入长期记忆',
+    );
+    await assertAttributeIncludes(
+      resumePage.locator('#resume-continue'),
+      'aria-label',
+      '发送后会重新检索',
+    );
+    await resumePage.locator('#resume-continue').click();
+    await assertTextIncludes(
+      resumePage.locator('.continuity-card').first(),
+      '本机续聊线索',
+    );
+    await assertTextIncludes(
+      resumePage.locator('.continuity-card').first(),
+      'AI VBG 的 backend 仍在等待 design 确认',
+    );
+    assert.match(
+      await resumePage.locator('#composer').getAttribute('placeholder'),
+      /继续追问/,
+    );
+    await resumePage.locator('#composer').fill('所以我现在应该先找谁确认？');
+    await resumePage.keyboard.press('Enter');
+    await resumePage.waitForFunction(
+      () => window.__lastAskPayload?.query === '所以我现在应该先找谁确认？',
+    );
+    const resumedAskPayload = await resumePage.evaluate(
+      () => window.__lastAskPayload,
+    );
+    assert.deepEqual(resumedAskPayload.contextHints, {
+      source: 'local_ask_resume_snapshot',
+      localOnly: true,
+      updatedAt: '2026-05-21T00:02:00.000Z',
+      topicTitle: 'MTR-141852: AI Custom VBG',
+      previousQuestion: '那个 BE ready 了吗？',
+      previousAnswerSummary:
+        'AI VBG 的 backend 仍在等待 design 确认，建议先找 Backend Owner。',
+      evidenceRefs: ['jira:MTR-141852'],
+    });
+    await assertTextIncludes(
+      resumePage.locator('.ask-continuity-receipt').first(),
+      '重新检索本轮证据',
+    );
+    await assertTextIncludes(
+      resumePage.locator('.ask-continuity-receipt').first(),
+      '未写入长期记忆',
+    );
+
+    const newQuestionPage = await setupQuickAskPage(
+      browser,
+      url,
+      { ...runtimeSummary, topStatus: undefined, items: [] },
+      {
+        now: Date.parse('2026-05-21T00:07:00.000Z'),
+        resumeSnapshot: persistedResumeSnapshot,
+        askStreamEvents: [
+          {
+            type: 'result',
+            answer: '这是一个全新的问题。',
+            evidence: [],
+            runtime: { items: [] },
+          },
+        ],
+      },
+    );
+    await newQuestionPage.locator('#resume-new').click();
+    assert.equal(await newQuestionPage.locator('#resume-strip').isHidden(), true);
+    await assertTextIncludes(
+      newQuestionPage.locator('#shortcut-banner'),
+      '本轮不会使用上次 Ask',
+    );
+    await newQuestionPage.locator('#composer').fill('Nova Brandy Daily 最近有什么？');
+    await newQuestionPage.keyboard.press('Enter');
+    await newQuestionPage.waitForFunction(
+      () => window.__lastAskPayload?.query === 'Nova Brandy Daily 最近有什么？',
+    );
+    const newAskPayload = await newQuestionPage.evaluate(
+      () => window.__lastAskPayload,
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(newAskPayload, 'contextHints'),
+      false,
+    );
+
+    const discardPage = await setupQuickAskPage(
+      browser,
+      url,
+      runtimeSummary,
+      {
+        now: Date.parse('2026-05-21T00:07:00.000Z'),
+        resumeSnapshot: persistedResumeSnapshot,
+      },
+    );
+    await discardPage.locator('#resume-discard').click();
+    assert.equal(
+      await discardPage.evaluate((key) => window.localStorage.getItem(key), askResumeStorageKey),
+      null,
+    );
+    await assertTextIncludes(
+      discardPage.locator('#shortcut-banner'),
+      '未删除 Memory Service 中已有的长期记忆',
+    );
+
+    const expiredAt = Date.parse('2026-05-21T00:07:00.000Z');
+    const expiredPage = await setupQuickAskPage(browser, url, runtimeSummary, {
+      now: expiredAt,
+      resumeSnapshot: buildResumeSnapshot({
+        now: expiredAt - 24 * 60 * 60 * 1000,
+        expiresAt: expiredAt - 1,
+      }),
+    });
+    assert.equal(await expiredPage.locator('#resume-strip').isHidden(), true);
+    assert.equal(
+      await expiredPage.evaluate((key) => window.localStorage.getItem(key), askResumeStorageKey),
+      null,
+    );
+
+    const candidatePage = await setupQuickAskPage(
+      browser,
+      url,
+      { ...runtimeSummary, topStatus: undefined, items: [] },
+      {
+        now: Date.parse('2026-05-21T00:07:00.000Z'),
+        resumeSnapshot: buildResumeSnapshot({
+          status: 'needs_topic',
+          pendingCandidates: [
+            { id: '1', label: 'AI Generated VBG', reason: '近期高频' },
+            { id: '2', label: 'AI Notes', reason: '角色词匹配' },
+          ],
+        }),
+      },
+    );
+    await assertText(
+      candidatePage.locator('#resume-title'),
+      '上次 Ask 还在等你选择 topic',
+    );
+    await candidatePage.locator('.resume-candidate').nth(1).click();
+    await candidatePage.waitForFunction(
+      () => window.__lastAskPayload?.query === '继续查这个话题',
+    );
+    const candidateResumePayload = await candidatePage.evaluate(
+      () => window.__lastAskPayload,
+    );
+    assert.equal(candidateResumePayload.contextHints?.topicTitle, 'AI Notes');
+    await assertText(
+      candidatePage.locator('.role-user').last().locator('p'),
+      '选择话题：AI Notes',
+    );
 
     await page.locator('#scope-personal-button').click();
     await page.waitForFunction(
@@ -1030,6 +1398,58 @@ async function main() {
     await voicePage.locator('#voice-recovery').click();
     await voicePage.waitForFunction(() => window.__openedSpeechSettings === 1);
 
+    const voiceCancelledDuringStartPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    });
+    await voiceCancelledDuringStartPage.locator('#voice-button').click();
+    await voiceCancelledDuringStartPage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-listening',
+    );
+    await voiceCancelledDuringStartPage.locator('#voice-cancel').click();
+    await voiceCancelledDuringStartPage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'idle-compact',
+    );
+    assert.equal(
+      await voiceCancelledDuringStartPage.evaluate(
+        () => window.__voiceCancelCount,
+      ),
+      1,
+    );
+    await voiceCancelledDuringStartPage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({ type: 'started' });
+      window.__quickAskHandlers.voice?.({
+        type: 'transcript',
+        text: '这条迟到转写不能回到语音面板',
+        isFinal: true,
+      });
+      window.__quickAskHandlers.voice?.({
+        type: 'stopped',
+        text: '这条迟到转写不能回到语音面板',
+      });
+    });
+    assert.equal(
+      await voiceCancelledDuringStartPage.locator('#composer').inputValue(),
+      '',
+    );
+    assert.equal(
+      await voiceCancelledDuringStartPage.evaluate(
+        () => document.querySelector('#quick-ask-shell')?.dataset.state,
+      ),
+      'idle-compact',
+    );
+    assert.equal(
+      await voiceCancelledDuringStartPage.evaluate(
+        () => window.__lastAskPayload,
+      ),
+      null,
+    );
+
     await voicePage.evaluate(() => {
       window.__voiceStartError = 'Speech helper is not running';
     });
@@ -1216,6 +1636,17 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
     window.__quickAskHandlers = {};
     window.__activeBrowserContextPending = false;
     window.__resolveActiveBrowserContext = null;
+    try {
+      window.localStorage.removeItem('desktop-app.quick-ask.resume.v1');
+      if (testOptions.resumeSnapshot) {
+        window.localStorage.setItem(
+          'desktop-app.quick-ask.resume.v1',
+          JSON.stringify(testOptions.resumeSnapshot),
+        );
+      }
+    } catch {
+      // The harness still verifies no-snapshot behavior if storage is unavailable.
+    }
     const askStreamEvents = Array.isArray(testOptions.askStreamEvents)
       ? testOptions.askStreamEvents
       : [];
@@ -1341,7 +1772,9 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
         }
       },
       stopNativeVoice: async () => undefined,
-      cancelNativeVoice: async () => undefined,
+      cancelNativeVoice: async () => {
+        window.__voiceCancelCount = (window.__voiceCancelCount || 0) + 1;
+      },
       resolveShortcutGesture: async () => undefined,
       log: async () => undefined,
       onNativeShortcutEvent: (callback) => {

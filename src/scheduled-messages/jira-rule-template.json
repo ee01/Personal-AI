@@ -1,13 +1,15 @@
 {
   "_metadata": {
-    "version": "1.5.2",
-    "lastUpdated": "2026-07-03",
+    "version": "1.6.0",
+    "lastUpdated": "2026-07-31",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
       "The initial getBotMessageCurrentTime call uses autoMarkOnFetch=api so AI Report and custom API endpoint messages write Last_Exec and Logs as soon as Jira claims them; one-time or finished periodic messages still become Done through the normal schedule rules, while Bot and RingCentral sender paths mark after send callbacks.",
       "API branches forward X-User-Id from Apps Script so memory-service write endpoints can keep per-user execution ledgers.",
-      "API forwarding keeps literal http/https prefixes in Jira Rule URLs because Jira Automation rejects URL fields that are only smart-value variables."
+      "API forwarding keeps literal http/https prefixes in Jira Rule URLs because Jira Automation rejects URL fields that are only smart-value variables.",
+      "Bot private/group webhooks go through Dify botman jumpboard (BOTMAN_DIFY_*) because Jira cannot reach botman.int.rclabenv.com.",
+      "AgentTask execute goes through Dify agent-task jumpboard (AGENT_TASK_DIFY_*) because Jira cannot reach memory-service; Chrome AR still calls memory-service directly."
     ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -213,28 +215,28 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{BOT_API_BASE_URL}}/user/message",
+                "url": "{{BOTMAN_DIFY_API_BASE_URL}}/workflows/run",
                 "headers": [
                   {
-                    "id": "_header_auth",
+                    "id": "_header_botman_authorization",
                     "name": "Authorization",
                     "value": {
-                      "keyOrValue": "Bearer {{BOT_TOKEN}}",
+                      "keyOrValue": "Bearer {{BOTMAN_DIFY_API_KEY}}",
                       "secret": false
                     }
                   },
                   {
-                    "id": "_header_bot",
-                    "name": "bot",
+                    "id": "_header_botman_content_type",
+                    "name": "Content-Type",
                     "value": {
-                      "keyOrValue": "{{BOT_ID}}",
+                      "keyOrValue": "application/json",
                       "secret": false
                     }
                   }
                 ],
                 "sendIssue": false,
                 "contentType": "custom",
-                "customBody": "{\n  \"email\": \"{{initiator.emailAddress}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"mentionAutoCorrect\": true,\n  \"mention\": true\n}",
+                "customBody": "{\n  \"inputs\": {\n    \"mode\": \"user\",\n    \"message\": {{webhookResponse.body.content.asJsonString}},\n    \"email\": \"{{initiator.emailAddress}}\",\n    \"mention\": \"true\",\n    \"mentionAutoCorrect\": \"true\"\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
                 "method": "POST",
                 "responseEnabled": true,
                 "usedSecretsKeys": []
@@ -249,7 +251,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.groupId.urlEncode}}&sentChatIdAlt={{webhookResponse.body.data.chatId.urlEncode}}&sentPostId={{webhookResponse.body.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.id.urlEncode}}&sentPostIdAlt={{webhookResponse.body.data.postId.urlEncode}}&sentPostIdExtra={{webhookResponse.body.data.id.urlEncode}}&sentAt={{webhookResponse.body.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.creationTime.urlEncode}}&sentAtAlt={{webhookResponse.body.data.sentAt.urlEncode}}",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -461,28 +463,28 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{BOT_API_BASE_URL}}/team/message",
+                "url": "{{BOTMAN_DIFY_API_BASE_URL}}/workflows/run",
                 "headers": [
                   {
-                    "id": "_header_auth",
+                    "id": "_header_botman_authorization",
                     "name": "Authorization",
                     "value": {
-                      "keyOrValue": "Bearer {{BOT_TOKEN}}",
+                      "keyOrValue": "Bearer {{BOTMAN_DIFY_API_KEY}}",
                       "secret": false
                     }
                   },
                   {
-                    "id": "_header_bot",
-                    "name": "bot",
+                    "id": "_header_botman_content_type",
+                    "name": "Content-Type",
                     "value": {
-                      "keyOrValue": "{{BOT_ID}}",
+                      "keyOrValue": "application/json",
                       "secret": false
                     }
                   }
                 ],
                 "sendIssue": false,
                 "contentType": "custom",
-                "customBody": "{\n  \"mentionList\": [],\n  \"isTeamMention\": false,\n  \"teamId\": \"{{webhookResponse.body.teamId}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"skipMentionCheck\": true\n}",
+                "customBody": "{\n  \"inputs\": {\n    \"mode\": \"team\",\n    \"message\": {{webhookResponse.body.content.asJsonString}},\n    \"teamId\": \"{{webhookResponse.body.teamId}}\",\n    \"skipMentionCheck\": \"true\",\n    \"isTeamMention\": \"false\",\n    \"mentionList_json\": \"[]\"\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
                 "method": "POST",
                 "responseEnabled": true,
                 "usedSecretsKeys": []
@@ -497,7 +499,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.groupId.urlEncode}}&sentChatIdAlt={{webhookResponse.body.data.chatId.urlEncode}}&sentPostId={{webhookResponse.body.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.id.urlEncode}}&sentPostIdAlt={{webhookResponse.body.data.postId.urlEncode}}&sentPostIdExtra={{webhookResponse.body.data.id.urlEncode}}&sentAt={{webhookResponse.body.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.creationTime.urlEncode}}&sentAtAlt={{webhookResponse.body.data.sentAt.urlEncode}}",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -615,6 +617,70 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
+                "url": "{{AGENT_TASK_DIFY_API_BASE_URL}}/workflows/run",
+                "headers": [
+                  {
+                    "id": "_header_agent_task_authorization",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer {{AGENT_TASK_DIFY_API_KEY}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_agent_task_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"inputs\": {\n    \"payload_json\": {{webhookResponse.body.aiBody.asJsonString}}\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{webhookResponse.body.aiHeaders.XUserID}}\"\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.pushMethod}}",
+                "second": "AgentTask",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
                 "url": "https://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}",
                 "headers": [
                   {
@@ -717,6 +783,20 @@
                 "first": "{{webhookResponse.body.aiProtocol}}",
                 "second": "https",
                 "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.pushMethod}}",
+                "second": "AgentTask",
+                "operator": "NOT_EQUALS"
               },
               "children": [],
               "conditions": [],
@@ -842,6 +922,20 @@
                 "first": "{{webhookResponse.body.aiProtocol}}",
                 "second": "http",
                 "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.pushMethod}}",
+                "second": "AgentTask",
+                "operator": "NOT_EQUALS"
               },
               "children": [],
               "conditions": [],
@@ -973,6 +1067,20 @@
               "conditions": [],
               "optimisedIds": [],
               "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.pushMethod}}",
+                "second": "AgentTask",
+                "operator": "NOT_EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
             }
           ],
           "optimisedIds": [],
@@ -1094,6 +1202,20 @@
                 "first": "{{webhookResponse.body.aiProtocol}}",
                 "second": "http",
                 "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.pushMethod}}",
+                "second": "AgentTask",
+                "operator": "NOT_EQUALS"
               },
               "children": [],
               "conditions": [],

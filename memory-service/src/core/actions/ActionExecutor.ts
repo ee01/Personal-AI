@@ -20,6 +20,10 @@ import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
 import { ReflectionThreadService } from '../ReflectionThreadService.js';
 import { OutreachEngine } from '../OutreachEngine.js';
 import { EvidenceWatchContractService } from '../EvidenceWatchContractService.js';
+import {
+  ActionReadinessService,
+  type ActionReadinessReceipt,
+} from '../ActionReadinessService.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
 
 const OPENCLAW_STALE_RUNNING_GRACE_SECONDS = 60;
@@ -30,6 +34,7 @@ export interface ActionExecutionResult {
   queueStatus: string;
   result?: Record<string, unknown>;
   error?: string;
+  readinessReceipt?: ActionReadinessReceipt;
 }
 
 export interface ActionExecutionOptions {
@@ -175,6 +180,7 @@ export class ActionExecutor {
   private readonly openClaw: OpenClawClient;
   private readonly delegationService: OpenClawDelegationService;
   private readonly threadService: ReflectionThreadService;
+  private readonly actionReadinessService: ActionReadinessService;
 
   constructor(
     private readonly db: Database.Database,
@@ -190,6 +196,11 @@ export class ActionExecutor {
       userId,
     );
     this.threadService = new ReflectionThreadService(
+      db,
+      userDataManager,
+      userId,
+    );
+    this.actionReadinessService = new ActionReadinessService(
       db,
       userDataManager,
       userId,
@@ -298,6 +309,26 @@ export class ActionExecutor {
         queueStatus: action.queueStatus,
         result: action.result,
       };
+    }
+
+    if (action.actionType === 'delegate_openclaw') {
+      const readiness =
+        await this.actionReadinessService.prepareActionForDispatch(action);
+      if (readiness.decision === 'block') {
+        return {
+          actionId: action.id,
+          actionType: action.actionType,
+          queueStatus: action.queueStatus,
+          result: {
+            status: 'blocked_by_readiness',
+            readinessReceipt: readiness.receipt,
+          },
+          error:
+            readiness.receipt.reason ??
+            'Action is blocked by its readiness contract',
+          readinessReceipt: readiness.receipt,
+        };
+      }
     }
 
     if (
@@ -654,8 +685,9 @@ export class ActionExecutor {
         typeof params.metadata === 'object' &&
         !Array.isArray(params.metadata)
           ? (params.metadata as Record<string, unknown>)
-          : undefined,
+        : undefined,
     });
+    this.actionReadinessService.recordDelegationOutcome(action, outcome);
 
     if (outcome.status === 'success') {
       await this.recordDelegationSuccess(action, outcome);

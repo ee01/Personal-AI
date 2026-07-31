@@ -142,7 +142,7 @@ test('buildJiraOwnerCommentLearningPayloads: creates jira owner learning payload
 
 test('WEB_AGENT_SOURCE_TYPES: keeps calendar available for Web AI context packs', () => {
   assert.equal(WEB_AGENT_SOURCE_TYPES.includes('calendar'), true);
-  assert.equal(WEB_AGENT_SOURCE_TYPES.includes('user_core'), true);
+  assert.equal(WEB_AGENT_SOURCE_TYPES.includes('user_core'), false);
   assert.equal(WEB_AGENT_SOURCE_TYPES.includes('reflection_thread'), true);
 });
 

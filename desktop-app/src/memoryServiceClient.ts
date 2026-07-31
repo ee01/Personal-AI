@@ -1,4 +1,5 @@
 import type { BridgeRuntimeSettings } from './config.js';
+import type { AskResumeContextHints } from './types.js';
 
 function normalizeBaseUrl(value?: string): string | undefined {
   const normalized = value?.trim().replace(/\/$/, '') || undefined;
@@ -62,6 +63,9 @@ export interface ProviderMemoryProduct {
   kind: string;
   bodyMd: string;
   itemCount?: number;
+  feedHasMore?: boolean;
+  feedLimit?: number;
+  feedSnapshotReceipt?: string;
   sourceRefs: string[];
 }
 
@@ -127,6 +131,13 @@ export interface AskResponse {
     sourceUrl?: string;
   }>;
   queryTimeMs: number;
+  continuityReceipt?: {
+    source: 'local_ask_resume_snapshot';
+    localOnly: true;
+    usedAsHint: true;
+    reRetrieved: true;
+    detail: string;
+  };
   answerMemory?: {
     state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
     threadId?: string;
@@ -181,6 +192,7 @@ export type AskStreamEvent =
       evidence?: AskResponse['evidence'];
       queryTimeMs: number;
       contextMatch?: AskResponse['contextMatch'];
+      continuityReceipt?: AskResponse['continuityReceipt'];
       blocks?: RecallBlock[];
       analysis?: RecallAnalysis;
       structuredAnswer?: AskResponse['structuredAnswer'];
@@ -338,11 +350,70 @@ export interface ContextRecallAutopilotDecision {
   gates: string[];
 }
 
+export interface MemoryChangeValue {
+  kind: 'text' | 'number' | 'date' | 'boolean' | 'status' | 'entity_ref' | 'set';
+  display: string;
+  normalized: string | number | boolean | string[] | null;
+  raw?: string;
+}
+
+export interface MemoryChangeEvent {
+  id: string;
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  previousValue?: MemoryChangeValue;
+  nextValue: MemoryChangeValue;
+  eventKind: 'set' | 'update' | 'clear' | 'revert';
+  authorityRole: string;
+  confidence: number;
+  sourceRef: { type: string; id: string; title?: string; url?: string };
+  actor?: string;
+  reason?: string;
+  evidenceQuote?: string;
+  observedAt: number;
+  capturedAt: number;
+  active: boolean;
+  isReversal: boolean;
+}
+
+export interface MemoryChangeProjection {
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  currentValue?: MemoryChangeValue;
+  previousValue?: MemoryChangeValue;
+  visiblePageValue?: MemoryChangeValue;
+  status:
+    | 'confirmed_current'
+    | 'last_observed'
+    | 'conflicted'
+    | 'historical_only'
+    | 'superseded_on_page'
+    | 'superseded_at_source';
+  summary: string;
+  boundary: string;
+  eventCount: number;
+  reversalCount: number;
+  conflictCount: number;
+  firstObservedAt?: number;
+  lastObservedAt?: number;
+  currentEvent?: MemoryChangeEvent;
+  history: MemoryChangeEvent[];
+}
+
 export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch?: ContextRecallMatch | null;
   queryTimeMs: number;
   autopilot?: ContextRecallAutopilotDecision;
+  changeProjections?: MemoryChangeProjection[];
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
@@ -849,12 +920,14 @@ export class BridgeMemoryServiceClient {
     context?: string,
     includeEvidence?: boolean,
     scope?: 'work' | 'personal' | 'both',
+    contextHints?: AskResumeContextHints,
   ): Promise<AskResponse> {
     return this.request<AskResponse>('POST', '/api/v1/ask', {
       query,
       context,
       includeEvidence,
       scope,
+      contextHints,
     });
   }
 
@@ -864,6 +937,7 @@ export class BridgeMemoryServiceClient {
     includeEvidence: boolean | undefined,
     scope: 'work' | 'personal' | 'both' | undefined,
     onEvent: (event: AskStreamEvent) => void | Promise<void>,
+    contextHints?: AskResumeContextHints,
   ): Promise<void> {
     await this.streamRequest(
       '/api/v1/ask/stream',
@@ -872,6 +946,7 @@ export class BridgeMemoryServiceClient {
         context,
         includeEvidence,
         scope,
+        contextHints,
       },
       onEvent,
     );

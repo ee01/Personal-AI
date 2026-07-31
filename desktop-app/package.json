@@ -13,6 +13,7 @@
     "app:start": "electron app/main.mjs",
     "test": "NODE_ENV=test tsx --test src/**/*.test.ts",
     "test:source-toggle-gating": "node scripts/doubao-source-toggle-gating-check.mjs",
+    "test:quick-ask-resume": "node scripts/quick-ask-resume-check.mjs",
     "test:quick-ask-status-card": "node scripts/quick-ask-status-card-check.mjs",
     "test:meeting-pilot": "node scripts/meeting-pilot-demo-check.mjs",
     "test:meeting-pilot-panorama": "node scripts/meeting-pilot-panorama-check.mjs",

@@ -60,6 +60,7 @@ export interface ImportRuleContext {
   projectTypeKey?: string;
   ownerId?: string;
   allowOtherRuleTrigger?: boolean;
+  disableAfterImport?: boolean;
   existingRuleNames?: string[];
   nameCheck?: JiraAutomationImportNameCheck;
   createStageAcknowledgement?: JiraAutomationImportCreateStageAcknowledgement;
@@ -2181,7 +2182,7 @@ export function buildJiraAutomationImportRule(
   return {
     name: buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames),
     isNewRule: true,
-    state: 'DISABLED',
+    state: context.disableAfterImport === false ? 'ENABLED' : 'DISABLED',
     canOtherRuleTrigger: Boolean(exportedRule.canOtherRuleTrigger) && context.allowOtherRuleTrigger === true,
     notifyOnError: exportedRule.notifyOnError || 'FIRSTERROR',
     authorAccountId: actorAccountId,

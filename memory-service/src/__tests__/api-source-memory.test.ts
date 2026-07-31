@@ -6,6 +6,9 @@ import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
 const TABLES_TO_CLEAR = [
+  'memory_change_events',
+  'memory_change_chains',
+  'memory_change_extractions',
   'source_memory_events',
   'source_memory_links',
   'source_memory_triggers',
@@ -480,6 +483,47 @@ describe('Memory Capture source memory API', () => {
           .get() as { count: number }
       ).count,
     ).toBe(1);
+  });
+
+  it('accepts AI conversation, document, and meeting material source capsules', async () => {
+    const sourceKinds = [
+      'ai_conversation',
+      'document',
+      'meeting_material',
+    ] as const;
+
+    for (const sourceKind of sourceKinds) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/source-memory/capsules',
+        payload: {
+          sourceKind,
+          sourceUrl: `https://example.com/imported/${sourceKind}`,
+          sourceTitle: `Imported ${sourceKind} source`,
+          text: `This ${sourceKind} source preserves enough original evidence to support grounded deep distillation and later source review without confirming a profile fact.`,
+          captureMode: 'manual',
+          captureReason: '用户主动导入资料',
+          interactions: { manualClick: true },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().capsule).toMatchObject({
+        sourceKind,
+        metadata: {
+          distillation: {
+            status: 'ready',
+            deep: { status: 'queued' },
+          },
+        },
+      });
+    }
+
+    expect(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM source_memory_distillation_jobs')
+        .get(),
+    ).toEqual({ count: sourceKinds.length });
   });
 
   it('saves visual evidence as a source memory capsule and supports note-after-save', async () => {

@@ -30,7 +30,9 @@ Describe what user experience this suite evaluates. Write this as a product-faci
 ## Report Requirements
 
 - Render through the shared Reader Contract, not a suite-specific full HTML renderer.
-- State what the run proved and what it did not prove.
+- Declare requirement-specific `readerProof.claims` in `evals/registry.yaml`, mapping every claim to real `caseIds` and optional `requiredScores` thresholds.
+- Declare `readerProof.boundaries` for adjacent behavior this suite does not execute, such as UI interaction, writeback, external delivery, or broader production distributions.
+- State what the run proved and what it did not prove; do not use sample counts or report-field completeness as feature proof.
 - For each case, provide `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `conclusion`, and `nextSteps`.
 - Show the generated/returned AI content, or the explicit error/hide decision, as a concise actual summary.
 - If a case declares `manualVerification`, render it as reviewer setup, steps, expected results, cleanup, and evidence guidance.

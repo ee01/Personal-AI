@@ -1,12 +1,14 @@
 import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from './ContextRecallService.js';
+import { MeetingOutcomeBinderService } from './MeetingOutcomeBinderService.js';
 import { getLLMClient, type LLMClient } from '../llm/LLMClient.js';
 import {
   TodayPilotMeetingPrepRepository,
   type TodayPilotMeetingPrepRecord,
 } from '../repositories/TodayPilotMeetingPrepRepository.js';
 import { contentHash } from '../utils/hashing.js';
+import { redactMeetingCredentials } from '../utils/meetingCredentialRedaction.js';
 import { normalizeStorylineOpportunity } from '../utils/storyline.js';
 import { now } from '../utils/time.js';
 import type {
@@ -17,6 +19,7 @@ import type {
   ContextAssistResponse,
   ContextRecallMatch,
   ContextRecallRequest,
+  MeetingOutcomeCandidateSlot,
   RecallSourceType,
   StorylineOpportunity,
 } from '../types/index.js';
@@ -82,6 +85,7 @@ interface TodayPilotMeetingPrepLlmResponse {
   contextPackMd?: string;
   redactionPreview?: string[];
   storylineOpportunity?: StorylineOpportunity;
+  outcomeSlots?: MeetingOutcomeCandidateSlot[];
   usage?: Record<string, unknown>;
 }
 
@@ -122,7 +126,7 @@ function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
 }
 
 function compactText(value: string, maxLength: number): string {
-  const text = value.replace(/\s+/g, ' ').trim();
+  const text = redactMeetingCredentials(value).replace(/\s+/g, ' ').trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 1).trimEnd()}…`;
 }
@@ -257,6 +261,7 @@ export class TodayPilotMeetingPrepService {
   private readonly repo: TodayPilotMeetingPrepRepository;
   private readonly recallService: ContextRecallService;
   private readonly llmClient: Pick<LLMClient, 'generateJSON'>;
+  private readonly outcomeBinderService: MeetingOutcomeBinderService;
 
   constructor(
     private readonly db: Database.Database,
@@ -266,6 +271,9 @@ export class TodayPilotMeetingPrepService {
     this.repo = new TodayPilotMeetingPrepRepository(db);
     this.recallService = new ContextRecallService(db, userId);
     this.llmClient = options.llmClient ?? getLLMClient();
+    this.outcomeBinderService = new MeetingOutcomeBinderService(db, userId, {
+      llmClient: this.llmClient,
+    });
   }
 
   async prepare(
@@ -311,10 +319,14 @@ export class TodayPilotMeetingPrepService {
         continue;
       }
       try {
+        const eventLocalDate = buildLocalDate(
+          new Date(normalizeTimestamp(event.startTime) * 1000),
+          timezone,
+        );
         const prep = await this.generateForEvent({
           event,
           timezone,
-          localDate,
+          localDate: eventLocalDate,
           userGoal: '',
           mode,
         });
@@ -369,9 +381,10 @@ export class TodayPilotMeetingPrepService {
         goalHash,
       );
     if (cached) {
+      const prep = this.attachOutcomeBinder(cached, event, options.userGoal);
       return {
-        prep: cached,
-        assist: this.toContextAssistResponse(cached, {
+        prep,
+        assist: this.toContextAssistResponse(prep, {
           delegated: true,
           source: 'cached',
         }),
@@ -501,6 +514,7 @@ export class TodayPilotMeetingPrepService {
         missionId: prep.missionId,
         generatedMode: prep.generatedMode,
         status: prep.status,
+        outcomeBinderId: prep.outcomeBinder?.id,
         ...(debug ?? {}),
       },
     };
@@ -552,7 +566,8 @@ export class TodayPilotMeetingPrepService {
         evidence,
         generated,
       );
-      return this.repo.upsert({
+      const { outcomeSlots, ...prepFields } = normalized;
+      const prep = this.repo.upsert({
         userId: this.userId,
         localDate: input.localDate,
         timezone: input.timezone,
@@ -565,15 +580,17 @@ export class TodayPilotMeetingPrepService {
         generatedMode: input.mode,
         sourceHash,
         expiresAt,
-        ...normalized,
+        ...prepFields,
       });
+      return this.attachOutcomeBinder(prep, event, input.userGoal, outcomeSlots);
     } catch (error) {
       const fallback = this.buildDeterministicFallback(
         event,
         input.userGoal,
         evidence,
       );
-      return this.repo.upsert({
+      const { outcomeSlots, ...prepFields } = fallback;
+      const prep = this.repo.upsert({
         userId: this.userId,
         localDate: input.localDate,
         timezone: input.timezone,
@@ -587,8 +604,9 @@ export class TodayPilotMeetingPrepService {
         sourceHash,
         expiresAt,
         error: error instanceof Error ? error.message : String(error),
-        ...fallback,
+        ...prepFields,
       });
+      return this.attachOutcomeBinder(prep, event, input.userGoal, outcomeSlots);
     }
   }
 
@@ -680,7 +698,10 @@ export class TodayPilotMeetingPrepService {
     for (const item of recalled) {
       if (!item.snippet || seen.has(item.id)) continue;
       seen.add(item.id);
-      result.push(item);
+      result.push({
+        ...item,
+        snippet: redactMeetingCredentials(item.snippet),
+      });
       if (result.length >= MAX_LLM_EVIDENCE) break;
     }
     return result;
@@ -708,7 +729,7 @@ export class TodayPilotMeetingPrepService {
       ).toISOString()}`,
       userGoal ? `User goal: ${userGoal}` : 'User goal: default offline prep',
       event.descriptionPreview
-        ? `Calendar description: ${event.descriptionPreview}`
+        ? `Calendar description: ${compactText(event.descriptionPreview, 700)}`
         : '',
       '',
       'Evidence:',
@@ -730,6 +751,14 @@ export class TodayPilotMeetingPrepService {
         risksOrOpenLoops: ['risk or open loop'],
         contextPackMd: 'markdown context pack for Meeting Pilot',
         redactionPreview: ['sensitive detail to review before sharing'],
+        outcomeSlots: [
+          {
+            title: 'a concrete question, decision, or deliverable this meeting should close',
+            type:
+              'decision | action | open_question | fact_update | context_to_carry',
+            evidenceIds: ['E1'],
+          },
+        ],
         storylineOpportunity: {
           available: true,
           confidence: 0.0,
@@ -761,6 +790,12 @@ export class TodayPilotMeetingPrepService {
       '- Do not show it for ordinary daily sync, 1:1, or a single isolated todo unless evidence shows explicit sharing/retro/report intent.',
       '- If private or sensitive evidence dominates, either set available=false with blockedReasons or choose an internal artifact target.',
       '- This field only controls whether a button appears; do not generate the full storyline here.',
+      '',
+      'Outcome slot rules:',
+      '- Return 1-5 concrete outcomeSlots that this meeting is expected to close.',
+      '- Prefer explicit calendar agenda, user goal, decision, owner, estimate, risk, dependency, or open-question language.',
+      '- Do not turn generic background, meeting links, introductions, or broad summaries into slots.',
+      '- A slot is a planned target only; do not claim it is resolved before meeting evidence exists.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -780,11 +815,11 @@ export class TodayPilotMeetingPrepService {
     | 'contextPackMd'
     | 'redaction'
     | 'llmUsage'
-  > {
+  > & { outcomeSlots: MeetingOutcomeCandidateSlot[] } {
     const fallback = this.buildDeterministicFallback(event, userGoal, evidence);
     const questions = Array.isArray(response.suggestedQuestions)
       ? response.suggestedQuestions
-          .map((item) => String(item || '').trim())
+          .map((item) => compactText(String(item || ''), 320))
           .filter(Boolean)
           .slice(0, 6)
       : fallback.questions;
@@ -793,10 +828,10 @@ export class TodayPilotMeetingPrepService {
       questions,
       evidence,
     );
-    const contextPackMd = firstNonEmpty(
+    const contextPackMd = redactMeetingCredentials(firstNonEmpty(
       response.contextPackMd,
       fallback.contextPackMd,
-    );
+    ));
     const storylineOpportunity = normalizeStorylineOpportunity(
       response.storylineOpportunity,
       { evidenceRefs: evidence },
@@ -806,7 +841,9 @@ export class TodayPilotMeetingPrepService {
       llmUsage.storylineOpportunity = storylineOpportunity;
     }
     return {
-      summaryMd: firstNonEmpty(response.summaryMd, fallback.summaryMd),
+      summaryMd: redactMeetingCredentials(
+        firstNonEmpty(response.summaryMd, fallback.summaryMd),
+      ),
       cueCards: cueCards.length ? cueCards : fallback.cueCards,
       questions,
       evidenceRefs: evidence,
@@ -830,7 +867,31 @@ export class TodayPilotMeetingPrepService {
           : [],
       },
       llmUsage,
+      outcomeSlots: this.normalizeOutcomeSlotCandidates(response.outcomeSlots),
     };
+  }
+
+  private normalizeOutcomeSlotCandidates(
+    slots: MeetingOutcomeCandidateSlot[] | undefined,
+  ): MeetingOutcomeCandidateSlot[] {
+    if (!Array.isArray(slots)) return [];
+    const seen = new Set<string>();
+    const result: MeetingOutcomeCandidateSlot[] = [];
+    for (const item of slots) {
+      const title = compactText(String(item?.title || ''), 180);
+      const key = title.toLowerCase();
+      if (!title || title.length < 4 || seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        title,
+        type: item.type,
+        evidenceIds: Array.isArray(item.evidenceIds)
+          ? item.evidenceIds.map(String).slice(0, 5)
+          : [],
+      });
+      if (result.length >= 5) break;
+    }
+    return result;
   }
 
   private normalizeCueCards(
@@ -841,8 +902,8 @@ export class TodayPilotMeetingPrepService {
     const normalized = Array.isArray(cards)
       ? cards
           .map((card, index): ContextAssistCueCard | null => {
-            const title = String(card.title || '').trim();
-            const body = String(card.body || '').trim();
+            const title = compactText(String(card.title || ''), 180);
+            const body = compactText(String(card.body || ''), 700);
             if (!title || !body) return null;
             const kind =
               card.kind === 'memory' ||
@@ -890,7 +951,7 @@ export class TodayPilotMeetingPrepService {
     | 'contextPackMd'
     | 'redaction'
     | 'llmUsage'
-  > {
+  > & { outcomeSlots: MeetingOutcomeCandidateSlot[] } {
     const title = event.title || '当前会议';
     const evidenceLines = evidence
       .slice(0, 5)
@@ -963,7 +1024,31 @@ export class TodayPilotMeetingPrepService {
           .slice(0, 5),
       },
       llmUsage: { fallback: true },
+      outcomeSlots: [],
     };
+  }
+
+  private attachOutcomeBinder(
+    prep: TodayPilotMeetingPrepRecord,
+    event: ContextAssistMeetingEvent,
+    userGoal?: string,
+    candidateSlots?: MeetingOutcomeCandidateSlot[],
+  ): TodayPilotMeetingPrepRecord {
+    const existing = this.outcomeBinderService.getByPrepId(prep.id);
+    const outcomeBinder =
+      existing ||
+      this.outcomeBinderService.previewFromMeetingPrep({
+        prepId: prep.id,
+        event,
+        userGoal,
+        cueCards: prep.cueCards,
+        questions: prep.questions,
+        evidenceRefs: prep.evidenceRefs,
+        candidateSlots,
+        sourceHash: prep.sourceHash,
+        generatedAt: prep.generatedAt,
+      });
+    return { ...prep, outcomeBinder };
   }
 
   private calendarRowToEvent(row: CalendarEventRow): ContextAssistMeetingEvent {

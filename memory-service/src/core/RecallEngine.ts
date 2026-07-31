@@ -195,6 +195,30 @@ const DEFAULT_CHANNELS: RecallChannelName[] = [
 ];
 const DEFAULT_RECALL_EMBEDDING_TIMEOUT_MS = 2500;
 const MAX_GRAPH_SEED_ENTITIES = 64;
+const RAW_MESSAGE_LEXICAL_FETCH_LIMIT = 120;
+const RAW_MESSAGE_LEXICAL_MAX_TERMS = 12;
+const RAW_MESSAGE_LEXICAL_STOP_TERMS = new Set([
+  'about',
+  'current',
+  'detail',
+  'for',
+  'from',
+  'that',
+  'the',
+  'this',
+  'what',
+  'when',
+  'where',
+  'which',
+  'with',
+  '什么',
+  '当前',
+  '大概',
+  '时候',
+  '这个',
+  '结论',
+  '问题',
+]);
 const LOW_SPECIFICITY_GRAPH_TOKENS = new Set([
   'ai',
   'be',
@@ -356,6 +380,68 @@ function sanitizeFtsQuery(query: string): string {
 
   // Join with OR so partial matches still surface results
   return tokens.map((t) => `"${t}"`).join(' OR ');
+}
+
+function rawMessageLexicalTerms(query: string): string[] {
+  const literalTerms = new Set<string>();
+  const chineseTerms = new Set<string>();
+  const chineseGrams = new Set<string>();
+  const matches = query.match(/[a-z0-9][a-z0-9._:-]{1,}|[\u3400-\u9fff]{2,}/giu) ?? [];
+  for (const match of matches) {
+    const normalized = match.toLowerCase();
+    if (RAW_MESSAGE_LEXICAL_STOP_TERMS.has(normalized)) continue;
+
+    if (/^[a-z0-9][a-z0-9._:-]{1,}$/iu.test(match)) {
+      literalTerms.add(normalized);
+      continue;
+    }
+
+    if (match.length === 2) {
+      chineseTerms.add(normalized);
+    }
+    if (/^[\u3400-\u9fff]{3,}$/u.test(match)) {
+      for (let index = 0; index <= match.length - 2; index += 1) {
+        const gram = match.slice(index, index + 2).toLowerCase();
+        if (!RAW_MESSAGE_LEXICAL_STOP_TERMS.has(gram)) chineseGrams.add(gram);
+      }
+    }
+  }
+
+  const semanticTerms = new Set<string>();
+  if (/成本|性价比|价格|费用|贵|cost|price|pricing|expensive|fee/iu.test(query)) {
+    for (const synonym of ['cost', 'price', 'pricing', 'expensive', 'fee']) {
+      semanticTerms.add(synonym);
+    }
+  }
+
+  // Keep literal subject tokens and intent aliases ahead of broad Chinese
+  // n-grams. This lets a raw English source such as "Cursor is 30% more
+  // expensive" compete with later summaries that only happen to say "成本".
+  return [
+    ...literalTerms,
+    ...semanticTerms,
+    ...chineseTerms,
+    ...chineseGrams,
+  ].slice(0, RAW_MESSAGE_LEXICAL_MAX_TERMS);
+}
+
+function hasDirectCostConclusion(query: string, content: string): boolean {
+  if (!/成本|性价比|价格|费用|贵|cost|price|pricing|expensive|fee/iu.test(query)) {
+    return false;
+  }
+
+  const subjects = query.match(/\b[a-z][a-z0-9._-]{2,}\b/giu) ?? [];
+  const normalizedContent = content.toLowerCase();
+  return subjects.some((subject) => {
+    const escapedSubject = subject
+      .toLowerCase()
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const subjectLedComparison = new RegExp(
+      `\\b${escapedSubject}\\b\\s+(?:(?:is|was|are|were|priced?)\\s+(?:\\d+(?:\\.\\d+)?%\\s*)?(?:more expensive|costlier)|costs?\\s+(?:\\d+(?:\\.\\d+)?%\\s*)?more)\\b`,
+      'iu',
+    );
+    return subjectLedComparison.test(normalizedContent);
+  });
 }
 
 /**
@@ -706,7 +792,11 @@ export class RecallEngine {
 
     // MMR reranking (P0-4: nudged by behavioral-intimacy affinity)
     const affinityMap = this.loadAffinityMap();
-    const ranked = this.mmrRerank(filtered, topK, affinityMap);
+    const ranked = this.preserveDirectLexicalClaim(
+      this.mmrRerank(filtered, topK, affinityMap),
+      filtered,
+      topK,
+    );
 
     // Build final RecallItems
     const items: RecallItem[] = ranked.map((c) => {
@@ -972,6 +1062,9 @@ export class RecallEngine {
     const candidates: RecallCandidate[] = [];
     const ftsQuery = sanitizeFtsQuery(queryText);
     if (!ftsQuery) return candidates;
+    const allowRawMessageFallback =
+      query.lifecycleMode !== 'passive_surface' &&
+      query.lifecycleMode !== 'composer_surface';
 
     try {
       const ftsRows = this.db
@@ -984,7 +1077,11 @@ export class RecallEngine {
         )
         .all(ftsQuery, limit) as FtsRow[];
 
-      if (ftsRows.length === 0) return candidates;
+      if (ftsRows.length === 0) {
+        return allowRawMessageFallback
+          ? this.rawMessageLexicalSearch(queryText, limit, query)
+          : candidates;
+      }
 
       const chunkIds = ftsRows.map((r) => r.rowid);
       const ph = chunkIds.map(() => '?').join(', ');
@@ -1047,7 +1144,97 @@ export class RecallEngine {
       console.warn('[RecallEngine] FTS5 search failed:', err);
     }
 
+    // Some historical chat imports predate message chunking. Keep those raw
+    // records recallable without mutating the user's memory or re-indexing on
+    // the request path. This is intentionally capped and only supplements FTS.
+    if (allowRawMessageFallback) {
+      candidates.push(
+        ...this.rawMessageLexicalSearch(queryText, limit, query),
+      );
+    }
+
     return candidates;
+  }
+
+  private rawMessageLexicalSearch(
+    queryText: string,
+    limit: number,
+    query: RecallQuery,
+  ): RecallCandidate[] {
+    const terms = rawMessageLexicalTerms(queryText);
+    if (terms.length === 0) return [];
+
+    const clauses = terms.map(
+      () => `(LOWER(content) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(source_title, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(group_name, '')) LIKE ? ESCAPE '\\')`,
+    );
+    const matchCountExpression = clauses
+      .map((clause) => `CASE WHEN ${clause} THEN 1 ELSE 0 END`)
+      .join(' + ');
+    const matchParams = terms.flatMap((term) => {
+      const pattern = `%${escapeLikePattern(term)}%`;
+      return [pattern, pattern, pattern];
+    });
+    const fetchLimit = Math.min(
+      RAW_MESSAGE_LEXICAL_FETCH_LIMIT,
+      Math.max(limit * 8, limit),
+    );
+
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
+                  source_url, source_title, matched_projects_json, metadata_json, importance, entities_json,
+                  (${matchCountExpression}) AS lexical_match_count
+           FROM messages_raw
+           WHERE ${clauses.join(' OR ')}
+           ORDER BY lexical_match_count DESC, timestamp DESC
+           LIMIT ?`,
+        )
+        .all(...matchParams, ...matchParams, fetchLimit) as Array<
+          MessageRow & { lexical_match_count: number }
+        >;
+
+      return rows
+        .filter((row) => this.passesFilters(row, query))
+        .map((row) => {
+          const text = [row.content, row.source_title, row.group_name]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          const matches = row.lexical_match_count || terms.filter((term) => text.includes(term)).length;
+          const directCostConclusion = hasDirectCostConclusion(
+            queryText,
+            row.content,
+          );
+          return {
+            id: row.id,
+            type: 'message' as const,
+            content: row.content,
+            // A subject-led comparative claim is stronger evidence for a
+            // "what was the cost conclusion" question than a message merely
+            // mentioning that subject as the cheaper alternative.
+            score: Math.min(
+              1.3,
+              0.34 + matches * 0.2 + (directCostConclusion ? 0.35 : 0),
+            ),
+            timestamp: row.timestamp,
+            source: row.source_type,
+            sourceUrl: row.source_url ?? undefined,
+            sourceTitle: row.source_title ?? undefined,
+            channels: ['fts'],
+            metadata: {
+              ...buildMessageMetadata(row),
+              lexicalFallback: true,
+              lexicalDirectClaim: directCostConclusion || undefined,
+            },
+          };
+        })
+        .sort((left, right) => right.score - left.score || (right.timestamp ?? 0) - (left.timestamp ?? 0))
+        .slice(0, limit);
+    } catch (err) {
+      console.warn('[RecallEngine] raw message lexical fallback failed:', err);
+      return [];
+    }
   }
 
   private resolveChunkSourceRef(
@@ -1192,6 +1379,35 @@ export class RecallEngine {
     const seeds = this.findMatchingEntities(queryText, query.entityTypes)
       .map((entity) => ({ entity, evidence: this.getEntityEvidenceMatch(entity.id, query) }))
       .filter(({ evidence }) => evidence.matches);
+
+    // Merge roadmap focus-project entities as additional PPR seeds (HippoRAG-style anchors).
+    try {
+      const { listFocusProjects } = await import('./FocusProjectSyncService.js');
+      const { buildFocusSeedContext } = await import('./FocusProjectContextBuilder.js');
+      const focusSeeds = buildFocusSeedContext(listFocusProjects(this.db), {
+        maxTotal: 3,
+        perTeamFloor: 1,
+      });
+      const existing = new Set(seeds.map(({ entity }) => entity.id));
+      for (const seed of focusSeeds) {
+        if (existing.has(seed.entityId)) continue;
+        const row = this.db
+          .prepare(
+            `SELECT id, type, name, description, importance, last_seen AS lastSeen
+             FROM entities WHERE id = ?`,
+          )
+          .get(seed.entityId) as any;
+        if (!row) continue;
+        seeds.push({
+          entity: row,
+          evidence: { matches: true, metadata: { focusSeed: true } } as any,
+        });
+        existing.add(seed.entityId);
+      }
+    } catch {
+      // ignore focus seed failures
+    }
+
     if (seeds.length === 0) return null;
 
     const seedIds = seeds.map(({ entity }) => entity.id);
@@ -1899,6 +2115,45 @@ export class RecallEngine {
     }
 
     return selected;
+  }
+
+  /**
+   * MMR deliberately diversifies broad result sets, but it can otherwise drop
+   * the only raw message that states the requested comparison directly. Keep
+   * one such result for a historical fact question without changing passive
+   * recall or the ordinary lifecycle filter.
+   */
+  private preserveDirectLexicalClaim(
+    ranked: RecallCandidate[],
+    candidates: RecallCandidate[],
+    topK: number,
+  ): RecallCandidate[] {
+    const directClaims = candidates
+      .filter(
+        (candidate) =>
+          candidate.metadata?.lexicalFallback === true &&
+          candidate.metadata?.lexicalDirectClaim === true,
+      )
+      .sort((left, right) => {
+        const leftStrength = left.score * (left.lifecycleWeight ?? 1);
+        const rightStrength = right.score * (right.lifecycleWeight ?? 1);
+        return rightStrength - leftStrength;
+      });
+    const directClaim = directClaims[0];
+    if (!directClaim) return ranked;
+
+    const directClaimKey = getRecallCandidateKey(directClaim);
+    if (ranked.some((candidate) => getRecallCandidateKey(candidate) === directClaimKey)) {
+      return ranked;
+    }
+
+    // This candidate bypasses MMR selection, so expose a normalized score.
+    directClaim.score = Math.max(
+      0,
+      Math.min(1, directClaim.score * (directClaim.lifecycleWeight ?? 1)),
+    );
+    if (ranked.length < topK) return [...ranked, directClaim];
+    return [...ranked.slice(0, Math.max(0, topK - 1)), directClaim];
   }
 
   // =========================================================================

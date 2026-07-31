@@ -35,6 +35,11 @@ export interface Config {
   // Auth
   apiKey: string;
 
+  // Usage analytics
+  analyticsAdminToken: string;
+  /** HMAC secret for per-user dashboard links. Falls back to admin token. */
+  analyticsTokenSecret: string;
+
   // Bot
   botApiBaseUrl: string;
   botToken: string;
@@ -233,6 +238,13 @@ export function getConfig(): Readonly<Config> {
 
     // Auth
     apiKey: process.env.API_KEY || '',
+
+    // Usage analytics
+    analyticsAdminToken: process.env.ANALYTICS_ADMIN_TOKEN || '',
+    analyticsTokenSecret:
+      process.env.ANALYTICS_TOKEN_SECRET ||
+      process.env.ANALYTICS_ADMIN_TOKEN ||
+      '',
 
     // Bot
     botApiBaseUrl: process.env.BOT_API_BASE_URL || '',

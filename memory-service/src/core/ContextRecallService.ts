@@ -39,10 +39,16 @@ import {
 } from './RecallContextExpansionService.js';
 import { CueCompilerService } from './CueCompilerService.js';
 import {
+  EvidenceCohesionGateService,
+  type EvidenceCohesionCandidate,
+  type EvidenceCohesionResult,
+} from './EvidenceCohesionGateService.js';
+import {
   LensPresentationCompiler,
   matchHasVisibleFieldNovelty,
 } from './LensPresentationCompiler.js';
 import { MemoryCueFactService } from './MemoryCueFactService.js';
+import { MemoryChangeLedgerService } from './MemoryChangeLedgerService.js';
 import { MemoryOutcomeLoopService } from './MemoryOutcomeLoopService.js';
 import { RecallRelevancePatchService } from './RecallRelevancePatchService.js';
 import { RehearsalActivationService } from './RehearsalActivationService.js';
@@ -122,6 +128,26 @@ const GENERIC_CONTEXT_TERMS = new Set([
   'web',
   'webpage',
   'wed',
+]);
+const SOURCE_MEMORY_QUERY_STOP_TERMS = new Set([
+  'after',
+  'and',
+  'before',
+  'for',
+  'from',
+  'how',
+  'into',
+  'that',
+  'the',
+  'this',
+  'under',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'why',
+  'with',
 ]);
 
 const SPECIFIC_CONTEXT_SIGNAL_PATTERN =
@@ -259,7 +285,10 @@ interface AnchorBuckets {
 
 const SOURCE_MEMORY_KIND_LABELS: Record<string, string> = {
   jira_comment: 'Jira 评论',
+  ai_conversation: 'AI 对话',
+  document: '文档资料',
   manual: '手动资料',
+  meeting_material: '会议资料',
   message_reply: '外发回复',
   selection: '选区资料',
   visual_memory: '视觉证据',
@@ -287,6 +316,16 @@ interface SourceMemoryContextRow {
   updated_at: number;
   anchor_preview: string | null;
   takeaway_text: string | null;
+}
+
+interface SourceMemoryRecallTriggerCard {
+  sceneType: string;
+  description: string;
+  showAs: string;
+  budget: string;
+  keywords: string[];
+  confidence: number;
+  evidenceSpanIds: string[];
 }
 
 interface AnchorOverlap {
@@ -397,6 +436,10 @@ const AUTOPILOT_QUIET_REASON_LABELS: Record<string, string> = {
   source_memory_without_distilled_cue: '资料记忆尚未蒸馏成可展示提示',
   off_domain_tool_context: '工具或项目场景不一致',
   source_memory_missing_issue_anchor: '资料记忆缺少当前 Jira 票号锚点',
+  evidence_cohesion_cross_topic: '跨主题候选已静默过滤',
+  evidence_cohesion_split_required: '候选证据属于多个独立问题',
+  evidence_cohesion_insufficient_anchor: '缺少可靠的主题或场景锚点',
+  evidence_cohesion_blocked_cross_scene: '候选证据跨越当前场景边界',
   query_too_short: '当前输入过短',
   source_context_excluded: '当前来源或已排除来源',
   user_relevance_patch: '这类证据已被你标记为不符合当前场景',
@@ -413,6 +456,8 @@ export class ContextRecallService {
   private cueCompiler: CueCompilerService;
   private lensPresentation: LensPresentationCompiler;
   private outcomeLoop: MemoryOutcomeLoopService;
+  private changeLedger: MemoryChangeLedgerService;
+  private cohesionGate: EvidenceCohesionGateService;
 
   constructor(
     private db: Database.Database,
@@ -427,9 +472,24 @@ export class ContextRecallService {
     this.cueCompiler = new CueCompilerService();
     this.lensPresentation = new LensPresentationCompiler();
     this.outcomeLoop = new MemoryOutcomeLoopService(db, userId);
+    this.changeLedger = new MemoryChangeLedgerService(db);
+    this.cohesionGate = new EvidenceCohesionGateService();
   }
 
   async recall(request: ContextRecallRequest): Promise<ContextRecallResponse> {
+    const response = await this.recallBase(request);
+    try {
+      const changeProjections = this.changeLedger.getContextProjections(request);
+      return changeProjections.length ? { ...response, changeProjections } : response;
+    } catch (error) {
+      if (request.debug) {
+        console.warn('[ContextRecallService] Change projection lookup failed:', error);
+      }
+      return response;
+    }
+  }
+
+  private async recallBase(request: ContextRecallRequest): Promise<ContextRecallResponse> {
     const startedAt = Date.now();
     const limit = Math.min(
       Math.max(
@@ -753,29 +813,38 @@ export class ContextRecallService {
       const hiddenCount = rankedMatches.filter(
         (match) => match.displayPriority === 'hidden',
       ).length;
-      const matches = rankedMatches
-        .filter(isDisplayableContextMatch)
-        .slice(0, limit);
+      const cohesion = applyContextRecallCohesion({
+        gate: this.cohesionGate,
+        request: expandedRequest,
+        authorityRequest: request,
+        authorityQuery: preliminaryNormalized.query,
+        matches: rankedMatches.filter(isDisplayableContextMatch),
+      });
+      const matches = cohesion.matches.slice(0, limit);
+      const cohesionQuietReasons = buildCohesionQuietReasons(cohesion.result);
       const autopilot = buildAutopilotDecision({
         request: expandedRequest,
         sceneAnchors,
         matches,
         candidateCount: result.items.length,
-        hiddenCount,
+        hiddenCount: hiddenCount + (cohesion.result?.receipt.excludedCount ?? 0),
         lowInformationCount: lowInformationMatches,
         sourceExcludedCount,
         duplicateMergedCount,
-        quietReasons: buildAutopilotQuietReasons({
-          rankedMatches,
-          lowInformationCount: lowInformationMatches,
-          sourceExcludedCount,
-          duplicateMergedCount,
-          rejectedReason:
-            matches.length === 0 &&
-            (lowInformationMatches > 0 || sourceExcludedCount > 0)
-              ? LOW_INFORMATION_REJECT_REASON
-              : undefined,
-        }),
+        quietReasons: [
+          ...buildAutopilotQuietReasons({
+            rankedMatches,
+            lowInformationCount: lowInformationMatches,
+            sourceExcludedCount,
+            duplicateMergedCount,
+            rejectedReason:
+              matches.length === 0 &&
+              (lowInformationMatches > 0 || sourceExcludedCount > 0)
+                ? LOW_INFORMATION_REJECT_REASON
+                : undefined,
+          }),
+          ...cohesionQuietReasons,
+        ],
       });
       if (debug) {
         debug.autopilot = autopilot;
@@ -790,6 +859,7 @@ export class ContextRecallService {
           matches,
           candidateMatches,
         ),
+        cohesionReceipt: cohesion.result?.receipt,
         autopilot,
         debug,
       };
@@ -841,7 +911,7 @@ export class ContextRecallService {
       ),
     );
     let displayFilteredMatches = 0;
-    const matches = cueCandidateMatches
+    const displayCandidates = cueCandidateMatches
       .filter((match) => {
         if (!isDisplayableContextMatch(match)) {
           displayFilteredMatches += 1;
@@ -849,11 +919,24 @@ export class ContextRecallService {
         }
         return true;
       })
-      .sort(compareContextMatches)
-      .slice(0, limit);
+      .sort(compareContextMatches);
+    const cohesion = applyContextRecallCohesion({
+      gate: this.cohesionGate,
+      request: expandedRequest,
+      authorityRequest: request,
+      authorityQuery: preliminaryNormalized.query,
+      matches: displayCandidates,
+    });
+    const matches = cohesion.matches.slice(0, limit);
+    const cohesionQuietReasons = buildCohesionQuietReasons(cohesion.result);
 
     let rejectedReason: string | undefined;
+    if (cohesion.result && isBlockingCohesionResult(cohesion.result)) {
+      rejectedReason = `evidence_cohesion_${cohesion.result.state}`;
+      if (debug) debug.rejectedReason = rejectedReason;
+    }
     if (
+      !rejectedReason &&
       matches.length === 0 &&
       (lowInformationMatches > 0 ||
         displayFilteredMatches > 0 ||
@@ -889,17 +972,20 @@ export class ContextRecallService {
       matches,
       candidateCount:
         result.items.length + rehearsalMatches.length + sourceMemoryMatches.length,
-      hiddenCount,
+      hiddenCount: hiddenCount + (cohesion.result?.receipt.excludedCount ?? 0),
       lowInformationCount: lowInformationMatches,
       sourceExcludedCount,
       duplicateMergedCount,
-      quietReasons: buildAutopilotQuietReasons({
-        rankedMatches: cueCandidateMatches,
-        lowInformationCount: lowInformationMatches,
-        sourceExcludedCount,
-        duplicateMergedCount,
-        rejectedReason,
-      }),
+      quietReasons: [
+        ...buildAutopilotQuietReasons({
+          rankedMatches: cueCandidateMatches,
+          lowInformationCount: lowInformationMatches,
+          sourceExcludedCount,
+          duplicateMergedCount,
+          rejectedReason,
+        }),
+        ...cohesionQuietReasons,
+      ],
     });
     if (debug) {
       debug.autopilot = autopilot;
@@ -915,10 +1001,281 @@ export class ContextRecallService {
       topMatch: matches[0] ?? null,
       queryTimeMs: Date.now() - startedAt,
       scopeReceipt,
+      cohesionReceipt: cohesion.result?.receipt,
       autopilot,
       debug,
     };
   }
+}
+
+function applyContextRecallCohesion(input: {
+  gate: EvidenceCohesionGateService;
+  request: ContextRecallRequest;
+  authorityRequest: ContextRecallRequest;
+  authorityQuery: string;
+  matches: ContextRecallMatch[];
+}): { matches: ContextRecallMatch[]; result?: EvidenceCohesionResult } {
+  if (input.matches.length === 0) return { matches: [] };
+
+  const selectedTopic = getContextRecallSelectedTopic(input.authorityRequest);
+  const allowedScopes =
+    input.request.scope === 'work' || input.request.scope === 'personal'
+      ? [input.request.scope]
+      : undefined;
+  const candidates = input.matches.map(toContextRecallCohesionCandidate);
+  const result = input.gate.evaluate({
+    entrypoint: 'context_recall',
+    intent: 'answer_question',
+    questionOrTask: input.authorityQuery,
+    selectedTopic,
+    sceneAnchors: getContextRecallCohesionSceneAnchors(
+      input.authorityRequest,
+      selectedTopic?.sourceAnchors,
+      candidates,
+    ),
+    claimSlots: getContextRecallClaimSlots(input.authorityRequest),
+    candidates,
+    policy: {
+      allowBackground: true,
+      allowedScopes,
+      // Passive recall can legitimately span topics. Only explicit or locked
+      // anchors justify deleting a neighboring cluster.
+      unanchoredMultipleClusters: 'preserve',
+    },
+  });
+  if (isBlockingCohesionResult(result)) {
+    return { matches: [], result };
+  }
+
+  const includedRefs = new Set(result.includedEvidenceRefs);
+  return {
+    matches: input.matches.filter((match) => includedRefs.has(match.id)),
+    result,
+  };
+}
+
+function getContextRecallSelectedTopic(
+  request: ContextRecallRequest,
+): {
+  id?: string;
+  label: string;
+  aliases?: string[];
+  sourceAnchors?: string[];
+} | undefined {
+  const issueKey = [
+    request.interactionScene?.issueKey,
+    request.currentContext?.issueKey,
+    request.sourceContext?.issueKey,
+  ].find((value): value is string => Boolean(value));
+  if (issueKey) {
+    return {
+      id: issueKey,
+      label: issueKey,
+      sourceAnchors: [`issue:${issueKey}`, issueKey],
+    };
+  }
+
+  const projectHint = request.entityHints?.find((hint) =>
+    /project|jira|issue/i.test(hint.kind),
+  );
+  if (projectHint) {
+    return {
+      id: projectHint.entityId,
+      label: projectHint.value,
+    };
+  }
+
+  if (request.surface === 'meeting_prep' && request.title?.trim()) {
+    return {
+      label: request.title.trim(),
+      aliases: uniqueStrings(
+        request.entityHints?.map((hint) => hint.value) ?? [],
+      ),
+    };
+  }
+  return undefined;
+}
+
+function getContextRecallCohesionSceneAnchors(
+  request: ContextRecallRequest,
+  selectedTopicAnchors: string[] = [],
+  candidates: EvidenceCohesionCandidate[] = [],
+): string[] {
+  const requestedAnchors = uniqueStrings([
+    ...selectedTopicAnchors,
+    prefixAnchor('group', request.sourceContext?.groupId),
+    prefixAnchor('conversation', request.sourceContext?.conversationId),
+    prefixAnchor('meeting', request.sourceContext?.meetingId),
+    prefixAnchor('issue', request.sourceContext?.issueKey),
+    prefixAnchor('group', request.currentContext?.groupId),
+    prefixAnchor('conversation', request.currentContext?.conversationId),
+    prefixAnchor('meeting', request.currentContext?.meetingId),
+    prefixAnchor('issue', request.currentContext?.issueKey),
+    ...(request.currentContext?.sourceAnchorHints ?? []),
+    prefixAnchor('group', request.interactionScene?.groupId),
+    prefixAnchor('conversation', request.interactionScene?.conversationId),
+    prefixAnchor('meeting', request.interactionScene?.meetingId),
+    prefixAnchor('issue', request.interactionScene?.issueKey),
+    ...(request.interactionScene?.sourceAnchorHints ?? []),
+  ]);
+  const candidateAnchors = uniqueStrings(
+    candidates.flatMap((candidate) => [
+      candidate.sourceAnchor,
+      ...(candidate.sceneAnchors ?? []),
+    ]),
+  );
+  return requestedAnchors.filter((anchor) =>
+    candidateAnchors.some((candidateAnchor) =>
+      contextRecallSceneAnchorsRelated(anchor, candidateAnchor),
+    ),
+  );
+}
+
+function getContextRecallClaimSlots(request: ContextRecallRequest): string[] {
+  return uniqueStrings([
+    ...(request.currentContext?.visibleFields ?? []).map((field) => field.name),
+    ...(request.interactionScene?.visibleFacts ?? [])
+      .map((fact) => fact.name)
+      .filter((value): value is string => Boolean(value)),
+  ]);
+}
+
+function toContextRecallCohesionCandidate(
+  match: ContextRecallMatch,
+): EvidenceCohesionCandidate {
+  const metadata = match.metadata ?? {};
+  const subjectKeys = uniqueStrings([
+    ...(match.matchedAnchors?.projects ?? []),
+    ...(match.matchedAnchors?.topics ?? []),
+    ...getMetadataValues(metadata, [
+      'relatedProject',
+      'related_project',
+      'project',
+      'projectName',
+      'matchedProjects',
+      'issueKey',
+      'issue_key',
+    ]),
+    ...getMetadataValues(metadata.entities, ['projects', 'topics']),
+  ]);
+  const sceneAnchors = uniqueStrings([
+    match.sourceClusterKey,
+    match.sourceUrl,
+    ...(match.matchedAnchors?.source ?? []),
+    ...getMetadataValues(metadata, [
+      'groupId',
+      'group_id',
+      'conversationId',
+      'conversation_id',
+      'meetingId',
+      'meeting_id',
+      'issueKey',
+      'issue_key',
+      'sourceUrl',
+      'source_url',
+    ]),
+  ]);
+  return {
+    evidenceRef: match.id,
+    sourceType: match.type,
+    title: match.title || match.sourceTitle,
+    snippet: match.uiSummary || match.snippet,
+    sourceAnchor: match.sourceClusterKey || match.sourceUrl,
+    subjectKeys,
+    sceneAnchors,
+    scope: match.scope,
+    role: match.evidenceRole === 'context' ? 'background' : 'supporting',
+    score: match.score,
+    timestamp: match.timestamp,
+  };
+}
+
+function getMetadataValues(
+  metadata: unknown,
+  keys: string[],
+): string[] {
+  if (!metadata || typeof metadata !== 'object') return [];
+  const record = metadata as Record<string, unknown>;
+  return keys.flatMap((key) => flattenMetadataValue(record[key]));
+}
+
+function flattenMetadataValue(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(flattenMetadataValue);
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  return [record.name, record.label, record.value, record.id]
+    .filter((item): item is string => typeof item === 'string');
+}
+
+function prefixAnchor(kind: string, value?: string): string | undefined {
+  return value ? `${kind}:${value}` : undefined;
+}
+
+function contextRecallSceneAnchorsRelated(
+  left: string,
+  right: string,
+): boolean {
+  const normalize = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/^(group|conversation|meeting|issue)[:\s]+/, '')
+      .replace(/[^\p{L}\p{N}._/-]+/gu, ' ')
+      .trim();
+  const leftValue = normalize(left);
+  const rightValue = normalize(right);
+  if (!leftValue || !rightValue) return false;
+  return (
+    leftValue === rightValue ||
+    (leftValue.length >= 4 && rightValue.includes(leftValue)) ||
+    (rightValue.length >= 4 && leftValue.includes(rightValue))
+  );
+}
+
+function uniqueStrings(values: Array<string | undefined | null>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+type BlockingContextRecallCohesionResult = EvidenceCohesionResult & {
+  state: 'split_required' | 'insufficient_anchor' | 'blocked_cross_scene';
+};
+
+function isBlockingCohesionResult(
+  result: EvidenceCohesionResult | undefined,
+): result is BlockingContextRecallCohesionResult {
+  return (
+    result?.state === 'split_required' ||
+    result?.state === 'insufficient_anchor' ||
+    result?.state === 'blocked_cross_scene'
+  );
+}
+
+function buildCohesionQuietReasons(
+  result: EvidenceCohesionResult | undefined,
+): AutopilotQuietReasonInput[] {
+  if (!result) return [];
+  if (isBlockingCohesionResult(result)) {
+    return [
+      {
+        reason: `evidence_cohesion_${result.state}`,
+        count: Math.max(1, result.receipt.excludedCount),
+      },
+    ];
+  }
+  return result.receipt.excludedCount > 0
+    ? [
+        {
+          reason: 'evidence_cohesion_cross_topic',
+          count: result.receipt.excludedCount,
+        },
+      ]
+    : [];
 }
 
 function normalizeContextRecallScope(
@@ -1176,6 +1533,7 @@ function getSourceMemoryContextMatches(
            SELECT GROUP_CONCAT(t.title || ' ' || t.body, ' ')
            FROM source_memory_takeaways t
            WHERE t.capsule_id = c.id
+             AND COALESCE(t.origin, 'capture_seed') <> 'deep_distillation'
          ) AS takeaway_text
        FROM source_memory_capsules c
        WHERE c.status = 'saved'
@@ -1207,31 +1565,70 @@ function getSourceMemoryContextMatches(
         return null;
       }
       const readyDistillation = readReadySourceMemoryDistillation(row.metadata_json);
-
-      const haystack = normalizeInformationText(
+      const baseHaystack = normalizeInformationText(
         [
           row.source_title,
           row.summary,
           row.content_preview,
           row.anchor_preview,
           row.takeaway_text,
-          readyDistillation.oneLineCue,
-          readyDistillation.compactMemo,
           sourceUrl,
         ]
           .filter(Boolean)
           .join(' '),
       ).toLowerCase();
+      const deepHaystack = normalizeInformationText(
+        [
+          readyDistillation.oneLineCue,
+          readyDistillation.compactMemo,
+          readyDistillation.fullMemo,
+          ...readyDistillation.triggerCards.flatMap((card) => [
+            card.description,
+            ...card.keywords,
+          ]),
+        ]
+          .filter(Boolean)
+          .join(' '),
+      ).toLowerCase();
+      const haystack = `${baseHaystack} ${deepHaystack}`.trim();
       const matchedTerms = terms.filter((term) =>
         haystack.includes(term.toLowerCase()),
       );
       if (matchedTerms.length === 0) return null;
+      const baseMatchedTerms = terms.filter((term) =>
+        baseHaystack.includes(term.toLowerCase()),
+      );
+      const sceneTrigger = findSourceMemorySceneTrigger(
+        readyDistillation.triggerCards,
+        req,
+        query,
+      );
+      if (
+        readyDistillation.deepStatus === 'ready' &&
+        baseMatchedTerms.length === 0 &&
+        !sceneTrigger
+      ) {
+        return null;
+      }
 
       const overlapScore = Math.min(0.22, matchedTerms.length * 0.07);
       const feedbackBoost = recallFeedback === 'positive' ? 0.08 : 0;
-      const score = Math.min(0.97, 0.58 + overlapScore + feedbackBoost);
+      const sceneBoost = sceneTrigger
+        ? Math.min(0.1, 0.04 + sceneTrigger.confidence * 0.06)
+        : 0;
+      const score = Math.min(
+        0.97,
+        0.58 + overlapScore + feedbackBoost + sceneBoost,
+      );
+      const distilledDisplay = sceneTrigger
+        ? sceneTrigger.budget === 'one_line'
+          ? readyDistillation.oneLineCue
+          : sceneTrigger.budget === 'full'
+            ? readyDistillation.fullMemo || readyDistillation.compactMemo
+            : readyDistillation.compactMemo || readyDistillation.oneLineCue
+        : readyDistillation.oneLineCue;
       const snippet = clipContextText(
-        readyDistillation.oneLineCue ||
+        distilledDisplay ||
           row.summary ||
           row.content_preview ||
           row.anchor_preview ||
@@ -1252,6 +1649,9 @@ function getSourceMemoryContextMatches(
         readyDistillation.oneLineCue
           ? `蒸馏提示：${readyDistillation.oneLineCue}`
           : '',
+        sceneTrigger
+          ? `场景触发：${sceneTrigger.description}`
+          : '',
         matchedTerms.length
           ? `命中资料关键词：${matchedTerms.slice(0, 3).join(' / ')}`
           : '',
@@ -1270,7 +1670,9 @@ function getSourceMemoryContextMatches(
         sourceTitle: row.source_title,
         exploreLink: `#/source-memory/${encodeURIComponent(row.id)}`,
         links: sourceUrl ? [{ label: '打开来源', url: sourceUrl }] : [],
-        whyMatched: '资料记忆与当前上下文有关键词重合',
+        whyMatched: sceneTrigger
+          ? '资料记忆的场景触发卡与当前上下文匹配'
+          : '资料记忆与当前上下文有关键词重合',
         whyRelevant,
         reasonType: 'keyword',
         evidenceRole: 'artifact',
@@ -1285,12 +1687,22 @@ function getSourceMemoryContextMatches(
           ...(readyDistillation.status
             ? {
                 sourceMemoryDistillationStatus: readyDistillation.status,
+                sourceMemoryDeepStatus: readyDistillation.deepStatus,
                 sourceMemoryCue: readyDistillation.oneLineCue,
+                sourceMemoryCompactMemo: readyDistillation.compactMemo,
+                sourceMemoryEvidenceSpanCount:
+                  readyDistillation.evidenceSpanCount,
+                ...(sceneTrigger
+                  ? {
+                      sourceMemoryTriggerCard: sceneTrigger,
+                    }
+                  : {}),
               }
             : {}),
           ...(recallFeedback ? { recallFeedback } : {}),
         },
-        sourceClusterKey: `source-memory:${row.id}`,
+        sourceClusterKey:
+          readyDistillation.clusterKey || `source-memory:${row.id}`,
         timestamp: row.updated_at || row.created_at,
       } as ContextRecallMatch;
     })
@@ -1317,23 +1729,138 @@ function formatSourceMemoryCaptureModeLabel(value?: string | null): string {
 
 function readReadySourceMemoryDistillation(raw?: string | null): {
   status?: string;
+  deepStatus?: string;
   oneLineCue?: string;
   compactMemo?: string;
+  fullMemo?: string;
+  triggerCards: SourceMemoryRecallTriggerCard[];
+  clusterKey?: string;
+  evidenceSpanCount?: number;
 } {
   const metadata = parseContextObject(raw);
   const distillation = asContextObject(metadata.distillation);
   if (distillation.status !== 'ready') {
-    return {};
+    return { triggerCards: [] };
   }
-  const oneLineCue = readContextString(distillation.oneLineCue, 220);
+  const deep = asContextObject(distillation.deep);
+  const deepReady =
+    deep.status === 'ready' &&
+    typeof deep.inputHash === 'string' &&
+    deep.inputHash === distillation.inputHash;
+  const oneLineCue = readContextString(
+    deepReady ? deep.oneLineCue : distillation.oneLineCue,
+    220,
+  ) || readContextString(distillation.oneLineCue, 220);
   if (!oneLineCue) {
-    return {};
+    return { triggerCards: [] };
   }
+  const triggerCards = deepReady
+    ? readSourceMemoryTriggerCards(deep.triggerCards)
+    : [];
+  const cluster = asContextObject(deep.cluster);
+  const evidenceSpans = Array.isArray(deep.evidenceSpans)
+    ? deep.evidenceSpans
+    : [];
   return {
     status: 'ready',
+    deepStatus: readContextString(deep.status, 40),
     oneLineCue,
-    compactMemo: readContextString(distillation.compactMemo, 700),
+    compactMemo:
+      readContextString(deepReady ? deep.compactMemo : undefined, 900) ||
+      readContextString(distillation.compactMemo, 700),
+    fullMemo: readContextString(deepReady ? deep.fullMemo : undefined, 1800),
+    triggerCards,
+    clusterKey: readContextString(cluster.key, 180),
+    evidenceSpanCount: evidenceSpans.length,
   };
+}
+
+function readSourceMemoryTriggerCards(
+  value: unknown,
+): SourceMemoryRecallTriggerCard[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const card = asContextObject(item);
+      const description = readContextString(card.description, 320);
+      if (!description) return null;
+      return {
+        sceneType: readContextString(card.sceneType, 40) || 'general',
+        description,
+        showAs: readContextString(card.showAs, 40) || 'source_card',
+        budget: readContextString(card.budget, 40) || 'compact',
+        keywords: Array.isArray(card.keywords)
+          ? card.keywords
+              .map((keyword) => readContextString(keyword, 80))
+              .filter(Boolean)
+              .slice(0, 12)
+          : [],
+        confidence:
+          typeof card.confidence === 'number' && Number.isFinite(card.confidence)
+            ? Math.min(1, Math.max(0, card.confidence))
+            : 0.65,
+        evidenceSpanIds: Array.isArray(card.evidenceSpanIds)
+          ? card.evidenceSpanIds
+              .map((id) => readContextString(id, 180))
+              .filter(Boolean)
+              .slice(0, 8)
+          : [],
+      };
+    })
+    .filter((card): card is SourceMemoryRecallTriggerCard => card != null)
+    .slice(0, 8);
+}
+
+function findSourceMemorySceneTrigger(
+  cards: SourceMemoryRecallTriggerCard[],
+  req: ContextRecallRequest,
+  query: string,
+): SourceMemoryRecallTriggerCard | undefined {
+  if (cards.length === 0) return undefined;
+  const scenes = getSourceMemorySceneKinds(req);
+  const normalizedQuery = normalizeInformationText(query).toLowerCase();
+  return cards
+    .filter((card) => scenes.has(card.sceneType) || card.sceneType === 'general')
+    .filter(
+      (card) =>
+        card.keywords.length === 0 ||
+        card.keywords.some((keyword) =>
+          normalizedQuery.includes(normalizeInformationText(keyword).toLowerCase()),
+        ),
+    )
+    .sort((a, b) => b.confidence - a.confidence)[0];
+}
+
+function getSourceMemorySceneKinds(req: ContextRecallRequest): Set<string> {
+  const scenes = new Set<string>(['general']);
+  const interaction = req.interactionScene;
+  const sceneType = interaction?.sceneType || '';
+  const url = [req.url, req.sourceContext?.url, interaction?.url]
+    .filter(Boolean)
+    .join(' ');
+  if (req.surface === 'composer_guard' || interaction?.surface === 'compose_assist') {
+    scenes.add('compose');
+  }
+  if (
+    req.surface === 'meeting_passive' ||
+    req.surface === 'meeting_prep' ||
+    sceneType === 'meeting_live'
+  ) {
+    scenes.add('meeting');
+  }
+  if (interaction?.surface === 'ask' || sceneType === 'web_ai_prompt_composing') {
+    scenes.add('ask');
+  }
+  if (sceneType.startsWith('jira_') || /\/browse\/[A-Z][A-Z0-9]+-\d+|jira/i.test(url)) {
+    scenes.add('jira');
+  }
+  if (sceneType === 'web_reading' || req.surface === 'web_passive') {
+    scenes.add('page');
+  }
+  if (/research|论文|调研/i.test([req.title, req.primaryText].filter(Boolean).join(' '))) {
+    scenes.add('research');
+  }
+  return scenes;
 }
 
 function parseContextObject(raw?: string | null): Record<string, unknown> {
@@ -1361,7 +1888,11 @@ function extractSourceMemorySearchTerms(query: string): string[] {
     normalized.toLowerCase().match(/[a-z0-9][a-z0-9_-]{2,}/g) ?? [];
   const cjkTerms = normalized.match(/[\u3400-\u9fff]{2,}/g) ?? [];
   return Array.from(new Set([...latinTerms, ...cjkTerms]))
-    .filter((term) => !GENERIC_CONTEXT_TERMS.has(term))
+    .filter(
+      (term) =>
+        !GENERIC_CONTEXT_TERMS.has(term) &&
+        !SOURCE_MEMORY_QUERY_STOP_TERMS.has(term),
+    )
     .slice(0, 12);
 }
 

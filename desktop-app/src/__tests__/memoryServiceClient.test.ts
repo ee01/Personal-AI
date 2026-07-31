@@ -192,7 +192,7 @@ test('extractFromChat posts chat segments to the extractor endpoint', async () =
   }
 });
 
-test('ask forwards explicit scope to the memory service ask endpoint', async () => {
+test('ask forwards explicit scope and local resume hints to the memory service ask endpoint', async () => {
   const client = createClient();
   const calls: Array<{ url: string; method: string; body: string }> = [];
   const originalFetch = globalThis.fetch;
@@ -224,6 +224,15 @@ test('ask forwards explicit scope to the memory service ask endpoint', async () 
       'recent notes',
       true,
       'both',
+      {
+        source: 'local_ask_resume_snapshot',
+        localOnly: true,
+        updatedAt: '2026-07-15T02:00:00.000Z',
+        topicTitle: 'MTR-141852: AI Custom VBG',
+        previousQuestion: 'Is that BE ready?',
+        previousAnswerSummary: 'Backend design was still pending.',
+        evidenceRefs: ['jira:MTR-141852'],
+      },
     );
     assert.equal(result.answer, 'ok');
     assert.equal(calls.length, 1);
@@ -234,6 +243,15 @@ test('ask forwards explicit scope to the memory service ask endpoint', async () 
       context: 'recent notes',
       includeEvidence: true,
       scope: 'both',
+      contextHints: {
+        source: 'local_ask_resume_snapshot',
+        localOnly: true,
+        updatedAt: '2026-07-15T02:00:00.000Z',
+        topicTitle: 'MTR-141852: AI Custom VBG',
+        previousQuestion: 'Is that BE ready?',
+        previousAnswerSummary: 'Backend design was still pending.',
+        evidenceRefs: ['jira:MTR-141852'],
+      },
     });
   } finally {
     globalThis.fetch = originalFetch;

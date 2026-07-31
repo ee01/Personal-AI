@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-07-14_
+_最后更新: 2026-07-30_
 
 > 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -40,6 +40,29 @@ _最后更新: 2026-07-14_
 - 关注后续消息
 - 每日或每周摘要
 - 联动操作
+
+## 页面入口与表面模式
+
+记忆入口规则只有一个真实页面，但会按“用户是怎么进来的”渲染两种外壳。判断依据是路由参数 `surface`，不是页面在信息架构里的位置。契约定义在 `src/utils/memoryEntryRulesSurface.ts`，URL 由 `src/utils/memoryEntryRulesNavigation.ts` 统一构造。
+
+| 表面 | 入口 | 外壳 |
+| --- | --- | --- |
+| `hub`（默认） | 记忆探索侧边菜单、Popup、Onboarding | 记忆探索侧栏 + 全局搜索头 + 状态条 + 列表管理工具栏 + 完整规则列表 |
+| `task` | 消息交互工具栏的关注后续 / 自动答复 / 联动操作 | 任务头 + 这一条规则的表单；不渲染侧栏、搜索头、状态条、列表工具栏和规则列表 |
+
+`task` 形态的 URL 形如 `memory-exploring.html#/memory-entry-rules?surface=task&intent=follow-thread`，`intent` 决定任务头标题、边界口径和表单标题（`follow-thread` / `auto-reply` / `linked-action`，缺省为 `manual`）。Background 用 760×780 的 popup 打开它——去掉 280px 侧栏和搜索头后，这个尺寸只需要容纳一个表单。
+
+为什么任务态必须隐藏侧栏，而不只是把窗口调宽：预填草稿（`pendingFollowThreadConfig` / `pendingAutoReplyConfig` / `pendingLinkedActionConfig`）在配置页挂载读取后就会从 `chrome.storage.local` 删除。侧栏一旦可见，用户点进任意其他记忆探索页面就会卸载承载表单的 iframe，原消息、群组和时间预填不可恢复，只能回到 RingCentral 重新点一次入口按钮。所以侧栏在任务态里不是“占地方”，而是一条会静默丢数据的岔路。
+
+任务态的出口收敛成三条，都带明确边界口径：
+
+- **在完整记忆探索中打开**：在新标签页打开 `hub` 形态的完整列表；当前窗口草稿不变，也不保存规则
+- **关闭**：只关掉这个配置窗口；不创建规则、通知或动作
+- **保存成功后**：不自动关窗，先显示保存回执（关注后续 / 联动操作的保存回执会保留完整口径），再由用户选「完成并关闭」或「查看全部规则」
+
+窗口的关闭动作由外层 `memory-exploring` 外壳执行，不由 iframe 内的表单执行。表单通过同源 `postMessage`（`personal-ai:memory-entry-rules-task-done`）通知外壳；外壳只在窗口类型是 popup 时整窗关闭，标签页形态只关闭自己那个标签，避免连带关掉用户的其他标签。
+
+验证：`npm run verify:memory-entry-rules-surface:e2e`。
 
 ## 规则分层
 

@@ -46,6 +46,25 @@ import {
 const ACTIVE_OVER_FETCH_FACTOR = 1.5;
 const EVIDENCE_ONLY_DEFAULT_CHANNELS: RecallChannelName[] = ['fts'];
 
+function retainDirectLexicalClaim(
+  items: RecallItem[],
+  candidates: RecallItem[],
+  topK: number,
+): RecallItem[] {
+  const directClaim = candidates.find(
+    (candidate) =>
+      candidate.metadata?.lexicalFallback === true &&
+      candidate.metadata?.lexicalDirectClaim === true,
+  );
+  if (!directClaim || items.some((item) => item.type === directClaim.type && item.id === directClaim.id)) {
+    return items;
+  }
+  // A direct claim answers the requested fact more precisely than the broad
+  // candidates MMR intentionally keeps for diversity, so place it first.
+  if (items.length < topK) return [directClaim, ...items];
+  return [directClaim, ...items.slice(0, Math.max(0, topK - 1))];
+}
+
 const ANALYSIS_SYSTEM_PROMPT = `You are a research assistant analyzing memory snippets.
 
 Return a single JSON object with this shape:
@@ -110,7 +129,13 @@ export class ActiveRecallService {
     };
 
     const baseResult = await this.engine.recall(baseQuery);
-    const items = baseResult.items.slice(0, baseTopK);
+    // The engine may retain a direct raw claim at the end of the over-fetched
+    // set. Preserve it after this service applies its public result cap.
+    const items = retainDirectLexicalClaim(
+      baseResult.items.slice(0, baseTopK),
+      baseResult.items,
+      baseTopK,
+    );
     const scopeReceipt = adjustScopeReceiptForReturnedItems(
       baseResult.scopeReceipt,
       query,

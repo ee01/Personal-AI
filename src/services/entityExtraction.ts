@@ -1,5 +1,6 @@
 // 新文件：实体识别和提取
 import { callLLMJsonAPI } from '../llm';
+import { CAPABILITIES } from '../analytics/capabilities';
 import { buildEntityExtractionPrompt, buildQueryIntentAnalysisPrompt } from '../prompts';
 
 // 使用LLM提取消息中的实体
@@ -13,7 +14,12 @@ export async function extractEntitiesFromMessage(content: string, metadata: any 
       summary: metadata.summary
     });
     
-    const entityData = await callLLMJsonAPI({prompt, type: 'query'});
+    const entityData = await callLLMJsonAPI({
+      prompt,
+      type: 'query',
+      capability: CAPABILITIES.MEMORY_CAPTURE,
+      feature: 'entity_extraction',
+    });
     console.log('提取出的实体信息：', entityData);
     
     if (typeof entityData === 'object') {
@@ -83,7 +89,12 @@ export async function extractEntitiesForQuery(question: string) {
     const analysisPrompt = buildQueryIntentAnalysisPrompt(question);
     
     // 使用LLM分析问题
-    const queryIntent = await callLLMJsonAPI({prompt: analysisPrompt, type: 'query'});
+    const queryIntent = await callLLMJsonAPI({
+      prompt: analysisPrompt,
+      type: 'query',
+      capability: CAPABILITIES.MEMORY_CAPTURE,
+      feature: 'query_intent',
+    });
     return queryIntent;
   } catch (error) {
     console.error('查询意图分析失败:', error);

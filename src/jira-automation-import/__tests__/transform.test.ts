@@ -82,6 +82,16 @@ test('buildJiraAutomationImportRule remaps project and imports disabled copy', (
   assert.ok(importRule.description?.includes('Personal AI import review'));
 });
 
+test('buildJiraAutomationImportRule can import enabled when disable-after-import is cleared', () => {
+  const importRule = buildJiraAutomationImportRule(baseRule, {
+    projectId: '22222',
+    disableAfterImport: false,
+    now: 1777600000030,
+  });
+
+  assert.equal(importRule.state, 'ENABLED');
+});
+
 test('buildJiraAutomationImportRule preserves chained rule triggers only when explicitly allowed', () => {
   const importRule = buildJiraAutomationImportRule(baseRule, {
     projectId: '22222',

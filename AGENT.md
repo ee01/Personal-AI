@@ -119,6 +119,7 @@ When implementing a complete new feature, decide whether ordinary unit/API/E2E c
 For a new eval suite:
 
 - Add cases under `evals/cases/<suite>/`, workflow instructions under `evals/workflows/<suite>/experience.md`, and register the suite in `evals/registry.yaml`
+- In `evals/registry.yaml`, declare `readerProof.claims` that map reader-facing requirement statements to real `caseIds` and optional `requiredScores`, plus `readerProof.boundaries` for behavior the suite does not execute. Report-format completeness is not feature proof.
 - Set a reasonable schedule in `registry.yaml` based on drift risk; weekly is the default for recall/ranking/generation features, while lower-risk deterministic features can be manual or every 14-30 days
 - Use LLM judge only when heuristic checks cannot judge the user-facing quality; otherwise keep the eval deterministic and explain that choice in the workflow
 - Run `npm run eval:validate`
@@ -320,8 +321,9 @@ When modifying `src/scheduled-messages/app-script-template.gs`:
 
 ### Documentation
 - When making a large feature change, user-visible behavior change, or meaningful logic/ranking/data-contract change, check the relevant file under `docs/features/` and update it in the same task when the feature behavior or boundary changed
+- When creating or updating a feature doc under `docs/features/` (or `desktop-app/docs/features/` when that is the canonical surface), also update `docs/features/index.md` in the same task: add or revise the corresponding small-capability row(s), keep `所在文档` pointing at the current source of truth, and refresh the index date when the navigation set changes
 - Keep `docs/features/` for current product feature docs. Do not add rule-only `.mdc`, compatibility-pointer, quick-guide, or implementation-summary docs there; merge durable agent rules into `AGENT.md` and merge valid user-visible behavior into the primary feature `.md`.
-- When a feature described in `docs/progressing/` is implemented, summarize the completed behavior as key feature points in the appropriate `docs/features/` document, then delete the related `docs/progressing/` planning notes. If the feature has an associated HTML demo, move that demo into `docs/demo/`.
+- When a feature described in `docs/progressing/` is implemented and landed into canonical feature docs, summarize the completed behavior as key feature points in the appropriate `docs/features/` document, then update `docs/features/index.md` to reference that landed capability, and delete the related `docs/progressing/` planning notes. Creating or revising a `docs/progressing/` plan alone does not require an index update. If the feature has an associated HTML demo, move that demo into `docs/demo/`.
 - Feature docs under `docs/features/` should explain not only what the feature does, but how it decides what to show or do. For each product feature doc, include near the top a plain-language `大白话运行逻辑` / equivalent section that answers:
   - what the feature is trying to decide for the user
   - what inputs or data sources influence the result

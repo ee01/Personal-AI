@@ -156,6 +156,26 @@ describe('Evidence watch contracts API', () => {
     expect(receipt.json().uiReceipt.label).toBe('证据守望来源阻塞');
     expect(receipt.json().uiReceipt.lastRunState).toBe('blocked');
     expect(receipt.json().uiReceipt.lastCheckedAt).toEqual(expect.any(Number));
+    expect(receipt.json().writeReceipt).toMatchObject({
+      label: '证据守望运行写入回执',
+      contractId: created.contract.id,
+      runState: 'blocked',
+      previousState: 'active',
+      state: 'source_blocked',
+      lastCheckedAt: receipt.json().contract.lastCheckedAt,
+      countsAsEvidenceCheck: true,
+      checkedSourceCount: 1,
+      suppressedActionCount: 0,
+      wroteRun: true,
+      readOnly: false,
+    });
+    expect(receipt.json().writeReceipt.previousLastCheckedAt).toBeUndefined();
+    expect(receipt.json().writeReceipt.detail).toContain(
+      '本次 run 计入真实复核',
+    );
+    expect(receipt.json().writeReceipt.detail).toContain(
+      '不会直接执行外部查证',
+    );
 
     const runs = await app.inject({
       method: 'GET',
@@ -184,5 +204,72 @@ describe('Evidence watch contracts API', () => {
     );
     expect(runs.json().receipt.detail).toContain('复核时间基准');
     expect(runs.json().receipt.detail).toContain('nextCheckAt=none');
+  });
+
+  it('writes duplicate run receipts without advancing evidence-check time', async () => {
+    const service = new EvidenceWatchContractService(db);
+    const created = service.createOrReuse({
+      subjectKey: 'source:jira:mtr-148115|gap:future_monitoring',
+      title: 'MTR-148115 DEV Estimate Original',
+      question: 'MTR-148115 的 DEV Estimate Original 是否变化？',
+      authoritySources: [
+        {
+          sourceId: 'jira:MTR-148115:DEV Estimate Original',
+          sourceKind: 'jira_field',
+          title: 'Jira field',
+          evidenceRole: 'authority',
+          accessPolicy: 'read_only',
+        },
+      ],
+      verifier: {
+        kind: 'openclaw_read',
+        actionType: 'delegate_openclaw',
+        mode: 'read',
+        reasonCode: 'future_monitoring',
+        gapType: 'future_monitoring',
+      },
+      cadence: 'on_revisit',
+      createdFrom: { kind: 'ask', refId: 'ask-148115' },
+    });
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: `/api/v1/evidence-watch-contracts/${created.contract.id}/runs`,
+      payload: {
+        runState: 'skipped_duplicate',
+        summary: '已复用队列中的 delegate_openclaw 动作。',
+        suppressedActionIds: ['action-existing'],
+        userVisible: true,
+      },
+    });
+
+    expect(duplicate.statusCode).toBe(201);
+    expect(duplicate.json().contract.state).toBe('active');
+    expect(duplicate.json().contract.lastCheckedAt).toBeUndefined();
+    expect(duplicate.json().uiReceipt.label).toBe('证据守望已建立');
+    expect(duplicate.json().uiReceipt.lastRunState).toBe('skipped_duplicate');
+    expect(duplicate.json().writeReceipt).toMatchObject({
+      label: '证据守望运行写入回执',
+      contractId: created.contract.id,
+      runState: 'skipped_duplicate',
+      previousState: 'active',
+      state: 'active',
+      countsAsEvidenceCheck: false,
+      checkedSourceCount: 0,
+      suppressedActionCount: 1,
+      wroteRun: true,
+      readOnly: false,
+    });
+    expect(duplicate.json().writeReceipt.previousLastCheckedAt).toBeUndefined();
+    expect(duplicate.json().writeReceipt.lastCheckedAt).toBeUndefined();
+    expect(duplicate.json().writeReceipt.detail).toContain(
+      '不计入真实复核',
+    );
+    expect(duplicate.json().writeReceipt.detail).toContain(
+      '不会推进 lastCheckedAt',
+    );
+    expect(duplicate.json().writeReceipt.detail).toContain(
+      '复用了 1 个既有动作',
+    );
   });
 });

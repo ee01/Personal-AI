@@ -1585,7 +1585,25 @@ try {
     .getByText('没有同步 Memory Service、发送、删除或改写原始聊天平台。')
     .waitFor({ timeout: 10000 });
 
-  await page.locator('.topic-detail-action-btn.mute').click({
+  const detailMuteButton = page.locator('.topic-detail-action-btn.mute');
+  const detailMuteButtonTitle =
+    (await detailMuteButton.getAttribute('title')) || '';
+  assert.match(
+    detailMuteButtonTitle,
+    /点击只打开或收起「Unread Sticky Topic」的本机静音菜单/,
+    'detail mute button should explain menu opening before mutation',
+  );
+  assert.match(
+    detailMuteButtonTitle,
+    /选择原因和时长前不会写入本机静音状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'detail mute button should distinguish menu opening from local mute writes',
+  );
+  assert.equal(
+    await detailMuteButton.getAttribute('aria-label'),
+    detailMuteButtonTitle,
+    'detail mute button should expose the same boundary to screen readers',
+  );
+  await detailMuteButton.click({
     timeout: 10000,
   });
   const detailMuteBoundary = page.locator('.topic-detail-mute-boundary');
@@ -1598,10 +1616,51 @@ try {
   await detailMuteBoundary.getByText('原始聊天平台').waitFor({
     timeout: 10000,
   });
-  await page.getByRole('button', { name: /重复讨论/ }).click({
+  const detailDuplicateReason = page.getByRole('button', { name: /重复讨论/ });
+  const detailDuplicateReasonTitle =
+    (await detailDuplicateReason.getAttribute('title')) || '';
+  assert.match(
+    detailDuplicateReasonTitle,
+    /静音原因「重复讨论」/,
+    'detail mute reason should label the selected local reason',
+  );
+  assert.match(
+    detailDuplicateReasonTitle,
+    /点击静音时长前不会写入静音状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'detail mute reason should remain pre-write until a duration is clicked',
+  );
+  assert.equal(
+    await detailDuplicateReason.getAttribute('aria-label'),
+    detailDuplicateReasonTitle,
+    'detail mute reason should expose the same boundary to screen readers',
+  );
+  await detailDuplicateReason.click({
     timeout: 10000,
   });
-  await page.getByRole('menuitem', { name: /静音1天/ }).click({
+  const detailMuteOneDay = page.getByRole('menuitem', { name: /静音1天/ });
+  const detailMuteOneDayTitle =
+    (await detailMuteOneDay.getAttribute('title')) || '';
+  assert.match(
+    detailMuteOneDayTitle,
+    /把「Unread Sticky Topic」写入本机浏览器静音状态/,
+    'detail mute preset should explain the local mute write',
+  );
+  assert.match(
+    detailMuteOneDayTitle,
+    /原因「重复讨论」/,
+    'detail mute preset should include the selected reason before click',
+  );
+  assert.match(
+    detailMuteOneDayTitle,
+    /不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台/,
+    'detail mute preset should keep no-read/no-sync/no-write visible',
+  );
+  assert.equal(
+    await detailMuteOneDay.getAttribute('aria-label'),
+    detailMuteOneDayTitle,
+    'detail mute preset should expose the same boundary to screen readers',
+  );
+  await detailMuteOneDay.click({
     timeout: 10000,
   });
   const detailMuteUndoToast = page.locator('.topic-mute-undo-toast');
@@ -1627,7 +1686,22 @@ try {
   await page
     .locator('.muted-meta', { hasText: '已静音：重复讨论' })
     .waitFor({ timeout: 10000 });
-  await detailMuteUndoToast.getByRole('button', { name: /取消静音/ }).click({
+  const detailMuteUndoButton = detailMuteUndoToast.getByRole('button', {
+    name: /^取消静音回执/,
+  });
+  const detailMuteUndoTitle =
+    (await detailMuteUndoButton.getAttribute('title')) || '';
+  assert.match(
+    detailMuteUndoTitle,
+    /取消静音回执：点击只删除「Unread Sticky Topic」的本机静音过滤/,
+    'detail mute undo should explain it clears only local muted state',
+  );
+  assert.equal(
+    await detailMuteUndoButton.getAttribute('aria-label'),
+    detailMuteUndoTitle,
+    'detail mute undo should expose the same boundary to screen readers',
+  );
+  await detailMuteUndoButton.click({
     timeout: 10000,
   });
   const detailMutedStateAfterRestore = await page.evaluate(() => {
@@ -2023,7 +2097,25 @@ try {
   await muteReasonCard
     .getByText('Mute Reason Topic')
     .waitFor({ timeout: 10000 });
-  await muteReasonCard.locator('.topic-action-btn.mute').click({
+  const listMuteButton = muteReasonCard.locator('.topic-action-btn.mute');
+  const listMuteButtonTitle =
+    (await listMuteButton.getAttribute('title')) || '';
+  assert.match(
+    listMuteButtonTitle,
+    /点击只打开或收起「Mute Reason Topic」的本机静音菜单/,
+    'list mute button should explain menu opening before mutation',
+  );
+  assert.match(
+    listMuteButtonTitle,
+    /选择原因和时长前不会写入本机静音状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'list mute button should keep local-only/no-read/no-sync visible before click',
+  );
+  assert.equal(
+    await listMuteButton.getAttribute('aria-label'),
+    listMuteButtonTitle,
+    'list mute button should expose the same boundary to screen readers',
+  );
+  await listMuteButton.click({
     timeout: 10000,
   });
   await muteReasonCard
@@ -2034,10 +2126,55 @@ try {
     .locator('.topic-mute-boundary-receipt')
     .getByText('只调整本机未读流和降噪过滤')
     .waitFor({ timeout: 10000 });
-  await muteReasonCard.getByRole('button', { name: /低相关度/ }).click({
+  const listLowRelevanceReason = muteReasonCard.getByRole('button', {
+    name: /低相关度/,
+  });
+  const listLowRelevanceReasonTitle =
+    (await listLowRelevanceReason.getAttribute('title')) || '';
+  assert.match(
+    listLowRelevanceReasonTitle,
+    /静音原因「低相关度」/,
+    'list mute reason should label the selected local reason',
+  );
+  assert.match(
+    listLowRelevanceReasonTitle,
+    /点击静音时长前不会写入静音状态、标记已读、同步 Memory Service 或改写原始聊天平台/,
+    'list mute reason should remain pre-write until a duration is clicked',
+  );
+  assert.equal(
+    await listLowRelevanceReason.getAttribute('aria-label'),
+    listLowRelevanceReasonTitle,
+    'list mute reason should expose the same boundary to screen readers',
+  );
+  await listLowRelevanceReason.click({
     timeout: 10000,
   });
-  await muteReasonCard.getByRole('menuitem', { name: /静音1天/ }).click({
+  const listMuteOneDay = muteReasonCard.getByRole('menuitem', {
+    name: /静音1天/,
+  });
+  const listMuteOneDayTitle =
+    (await listMuteOneDay.getAttribute('title')) || '';
+  assert.match(
+    listMuteOneDayTitle,
+    /把「Mute Reason Topic」写入本机浏览器静音状态/,
+    'list mute preset should explain the local mute write',
+  );
+  assert.match(
+    listMuteOneDayTitle,
+    /原因「低相关度」/,
+    'list mute preset should include the selected reason before click',
+  );
+  assert.match(
+    listMuteOneDayTitle,
+    /不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台/,
+    'list mute preset should keep no-read/no-sync/no-write visible',
+  );
+  assert.equal(
+    await listMuteOneDay.getAttribute('aria-label'),
+    listMuteOneDayTitle,
+    'list mute preset should expose the same boundary to screen readers',
+  );
+  await listMuteOneDay.click({
     timeout: 10000,
   });
   const muteUndoToast = page.locator('.topic-mute-undo-toast');
@@ -2047,7 +2184,22 @@ try {
   await muteUndoToast.getByText('未同步或标记已读').waitFor({
     timeout: 10000,
   });
-  await muteUndoToast.getByRole('button', { name: /查看静音/ }).click({
+  const viewMutedToastButton = muteUndoToast.getByRole('button', {
+    name: /查看静音/,
+  });
+  const viewMutedToastTitle =
+    (await viewMutedToastButton.getAttribute('title')) || '';
+  assert.match(
+    viewMutedToastTitle,
+    /查看静音：只切换到本页静音视图核对「Mute Reason Topic」/,
+    'mute toast view action should be scoped to local view switching',
+  );
+  assert.equal(
+    await viewMutedToastButton.getAttribute('aria-label'),
+    viewMutedToastTitle,
+    'mute toast view action should expose the same boundary to screen readers',
+  );
+  await viewMutedToastButton.click({
     timeout: 10000,
   });
   await page.locator('.view-toggle-btn.active', { hasText: '静音' }).waitFor({
@@ -2058,7 +2210,22 @@ try {
       hasText: '已静音：低相关度',
     })
     .waitFor({ timeout: 10000 });
-  await muteUndoToast.getByRole('button', { name: /取消静音/ }).click({
+  const listMuteUndoButton = muteUndoToast.getByRole('button', {
+    name: /^取消静音回执/,
+  });
+  const listMuteUndoTitle =
+    (await listMuteUndoButton.getAttribute('title')) || '';
+  assert.match(
+    listMuteUndoTitle,
+    /取消静音回执：点击只删除「Mute Reason Topic」的本机静音过滤/,
+    'list mute undo should explain it clears only local muted state',
+  );
+  assert.equal(
+    await listMuteUndoButton.getAttribute('aria-label'),
+    listMuteUndoTitle,
+    'list mute undo should expose the same boundary to screen readers',
+  );
+  await listMuteUndoButton.click({
     timeout: 10000,
   });
   await page.locator('.view-toggle-btn.active', { hasText: '仅未读' }).waitFor({
@@ -2129,9 +2296,22 @@ try {
       hasText: '未同步、未标记已读',
     })
     .waitFor({ timeout: 10000 });
-  await page
-    .locator('[data-topic-id="topic-mute-reason"] .mute-restore')
-    .click({ timeout: 10000 });
+  const mutedViewRestoreButton = page.locator(
+    '[data-topic-id="topic-mute-reason"] .mute-restore',
+  );
+  const mutedViewRestoreTitle =
+    (await mutedViewRestoreButton.getAttribute('title')) || '';
+  assert.match(
+    mutedViewRestoreTitle,
+    /取消静音回执：点击只删除「Mute Reason Topic」的本机静音过滤/,
+    'muted-view restore should explain it clears only local muted state',
+  );
+  assert.equal(
+    await mutedViewRestoreButton.getAttribute('aria-label'),
+    mutedViewRestoreTitle,
+    'muted-view restore should expose the same boundary to screen readers',
+  );
+  await mutedViewRestoreButton.click({ timeout: 10000 });
   const mutedViewRestoreReceipt = page.locator('.topic-mute-restore-receipt');
   await mutedViewRestoreReceipt.getByText('取消静音回执').waitFor({
     timeout: 10000,
@@ -2237,9 +2417,23 @@ try {
     hiddenUnreadViewDeferredTitle,
     'hidden-unread recovery should expose the same boundary to screen readers',
   );
-  await hiddenUnreadEmptyState
-    .getByRole('button', { name: /查看静音 5/ })
-    .waitFor({ timeout: 10000 });
+  const hiddenUnreadViewMutedButton = hiddenUnreadEmptyState.getByRole(
+    'button',
+    { name: /查看静音 5/ },
+  );
+  await hiddenUnreadViewMutedButton.waitFor({ timeout: 10000 });
+  const hiddenUnreadViewMutedTitle =
+    (await hiddenUnreadViewMutedButton.getAttribute('title')) || '';
+  assert.match(
+    hiddenUnreadViewMutedTitle,
+    /只切换到本页静音视图核对被本机隐藏的未读主题/,
+    'hidden-unread recovery should explain that viewing Muted is only a local view switch',
+  );
+  assert.equal(
+    await hiddenUnreadViewMutedButton.getAttribute('aria-label'),
+    hiddenUnreadViewMutedTitle,
+    'hidden-unread muted recovery should expose the same boundary to screen readers',
+  );
   await hiddenUnreadEmptyState
     .getByRole('button', { name: /查看所有主题/ })
     .waitFor({ timeout: 10000 });

@@ -10,6 +10,7 @@ import {
   insertTextIntoComposer,
   isComposerElement,
   readComposerText,
+  replaceComposerText,
   restoreComposerSelectionSnapshot,
   restoreComposerTextSnapshot,
   type ComposerSelectionSnapshot,
@@ -43,13 +44,15 @@ import type {
 
 const ROOT_ID = 'pai-composer-guard-root';
 const STYLE_ID = 'pai-composer-guard-styles';
-const REQUEST_DEBOUNCE_MS = 700;
+const REQUEST_BLUR_SETTLE_MS = 0;
+const SEND_BLUR_SUPPRESSION_MS = 1500;
+const MAX_REQUESTED_ASSIST_SIGNATURES = 120;
+const MIN_WEB_AI_DRAFT_CHARACTERS = 8;
 const DISMISS_TTL_MS = 30 * 60 * 1000;
 const INSERT_UNDO_TTL_MS = COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS * 1000;
 const FEEDBACK_RECEIPT_TTL_MS = 4 * 1000;
 const FEEDBACK_EVENTS_KEY = 'composerGuardFeedbackEvents';
 const MAX_FEEDBACK_EVENTS = 100;
-const UNHELPFUL_ASSIST_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
 const ASSIST_REQUEST_FAILURE_COOLDOWN_MS = 60 * 1000;
 const ICON_SIZE = 24;
 const ICON_IMAGE_SIZE = 22;
@@ -71,6 +74,7 @@ interface ActiveComposerSession {
   contextKey: string;
   draftText: string;
   draftRevision: number;
+  pageHref: string;
 }
 
 interface ReviewInsertionSelection {
@@ -84,6 +88,11 @@ interface ComposerAssistInFlightRequest {
   signature: string;
   requestSeq: number;
   startedAt: number;
+}
+
+interface PostSendComposerSuppression {
+  target: ComposerTarget;
+  until: number;
 }
 
 type ComposerAssistRequestGateReason = 'in_flight' | 'failure_cooldown';
@@ -303,8 +312,14 @@ function getComposerGuardAssistLabel(
   assist: ComposerAssistResponse,
   snapshot: SiteContextSnapshot,
 ): { label: string; title: string } {
+  if (assist.suggestionType === 'rewrite_prompt') {
+    return {
+      label: '优化后的完整提问',
+      title: '替换原 prompt',
+    };
+  }
   if (assist.suggestionType === 'prompt_patch') {
-    return { label: '提问上下文补丁', title: '插入 prompt 补丁' };
+    return { label: '提问补丁', title: '追加 prompt 补丁' };
   }
   if (snapshot.contextType === 'web_agent_prompt') {
     if (hasComposerEvidenceSource(assist, 'agent')) {
@@ -360,9 +375,28 @@ function shouldReviewComposerAssistBeforeInsert(
 ): boolean {
   return (
     assist.previewRequired ||
+    assist.personaProjection?.requiresPreview === true ||
     assist.riskLevel === 'high' ||
     hasRehearsalEvidence(assist)
   );
+}
+
+export function isComposerAssistProjectionBlocked(
+  assist: ComposerAssistResponse,
+): boolean {
+  return assist.personaProjection?.representationMode === 'blocked';
+}
+
+export function getComposerAssistProjectionReviewNote(
+  assist: ComposerAssistResponse,
+): string | null {
+  const projection = assist.personaProjection;
+  if (!projection?.requiresPreview || projection.representationMode === 'blocked') {
+    return null;
+  }
+  return projection.blockedCount > 0
+    ? '已按当前场景省略未确认或敏感身份信息；仅插入草稿，不会发送。'
+    : '当前对象或场景要求先预览；仅插入草稿，不会发送。';
 }
 
 function hasRehearsalEvidence(assist: ComposerAssistResponse): boolean {
@@ -1014,6 +1048,12 @@ export class ComposerGuardController {
   private previewObservationTimer: number | null = null;
   private requestSeq = 0;
   private inFlightAssistRequest: ComposerAssistInFlightRequest | null = null;
+  private scheduledAssistSignature: string | null = null;
+  private requestedAssistSignatures = new Set<string>();
+  private suppressBlurForSendTarget: HTMLElement | null = null;
+  private suppressBlurForSendUntil = 0;
+  private postSendComposerSuppression: PostSendComposerSuppression | null =
+    null;
   private assistRetryBlockedUntilBySignature = new Map<string, number>();
   private dismissedContexts = new Map<string, number>();
   private assistConfidenceThreshold = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD;
@@ -1025,7 +1065,6 @@ export class ComposerGuardController {
   private previewedAssistDraft: AmbientAssistDraft | null = null;
   private previewObservationCandidate: AmbientAssistDraft | null = null;
   private feedbackReceipt: ComposerGuardFeedbackReceipt | null = null;
-  private unhelpfulAssistRetryAtByContext = new Map<string, number>();
   private restoringSnapshot = false;
   private reviewMode = false;
   private reviewInsertionSelection: ReviewInsertionSelection | null = null;
@@ -1036,8 +1075,10 @@ export class ComposerGuardController {
     }
 
     document.addEventListener('focusin', this.handleFocusIn, true);
+    document.addEventListener('focusout', this.handleFocusOut, true);
     document.addEventListener('input', this.handleInput, true);
     document.addEventListener('keydown', this.handleKeyDown, true);
+    document.addEventListener('pointerdown', this.handlePointerDown, true);
     document.addEventListener('click', this.handleDocumentClick, true);
     window.addEventListener('scroll', this.schedulePositionRefresh, true);
     window.addEventListener('resize', this.schedulePositionRefresh);
@@ -1047,7 +1088,10 @@ export class ComposerGuardController {
     void this.loadComposerGuardConfig().then(() => {
       if (!this.composeAssistEnabled) return;
       this.startComposerObservation();
-      this.activateFromElement(document.activeElement, true);
+      const activeElement = asDomElement(document.activeElement);
+      if (activeElement && isComposerElement(activeElement)) {
+        this.activateFromElement(activeElement);
+      }
     });
   }
 
@@ -1068,7 +1112,10 @@ export class ComposerGuardController {
     }
     if (!wasEnabled) {
       this.startComposerObservation();
-      this.activateFromElement(document.activeElement, true);
+      const activeElement = asDomElement(document.activeElement);
+      if (activeElement && isComposerElement(activeElement)) {
+        this.activateFromElement(activeElement);
+      }
       return;
     }
     if (this.feedbackReceipt) {
@@ -1106,7 +1153,17 @@ export class ComposerGuardController {
     this.composerObservationTimer = window.setTimeout(() => {
       this.composerObservationTimer = null;
       this.observeRichTextEditorFrames();
-      this.activateFromElement(document.activeElement, false);
+      if (
+        this.activeSession &&
+        this.activeSession.pageHref !== window.location.href
+      ) {
+        this.clear();
+        return;
+      }
+      const activeElement = asDomElement(document.activeElement);
+      if (activeElement && isComposerElement(activeElement)) {
+        this.activateFromElement(activeElement);
+      }
     }, 120);
   };
 
@@ -1115,6 +1172,13 @@ export class ComposerGuardController {
     if (this.pendingInsertionUndo) return;
     if (this.feedbackReceipt) return;
     this.observeRichTextEditorFrames();
+    if (
+      this.activeSession &&
+      this.activeSession.pageHref !== window.location.href
+    ) {
+      this.clear();
+      return;
+    }
     const activeElement = asDomElement(document.activeElement);
     this.writeDebugState('scan', {
       activeElement: getElementDebugSummary(activeElement),
@@ -1122,7 +1186,7 @@ export class ComposerGuardController {
       hasSession: Boolean(this.activeSession),
     });
     if (activeElement && isComposerElement(activeElement)) {
-      this.activateFromElement(activeElement, !this.activeSession);
+      this.activateFromElement(activeElement);
     }
   };
 
@@ -1148,9 +1212,25 @@ export class ComposerGuardController {
     this.observedRichTextFrames.add(frame);
     const activate = () => {
       if (!this.canRunComposerAssist()) return;
-      const requestImmediately =
-        !this.activeSession || this.activeSession.target.element !== frame;
-      this.activateFromElement(frame, requestImmediately);
+      this.activateFromElement(frame);
+    };
+    const handleInput = () => {
+      if (this.restoringSnapshot || !this.canRunComposerAssist()) return;
+      if (this.shouldIgnorePostSendActivation(frame, true)) return;
+      activate();
+      if (this.activeSession?.target.element === frame) {
+        this.invalidateAssistForDraftChange(true);
+      }
+    };
+    const handleFocusOut = (event: FocusEvent) => {
+      const relatedTarget = event.relatedTarget as Node | null;
+      if (
+        relatedTarget &&
+        body.contains(relatedTarget)
+      ) {
+        return;
+      }
+      this.handleComposerFocusOut(frame, null);
     };
     frame.addEventListener('focus', activate, true);
     frame.addEventListener('load', () => {
@@ -1158,9 +1238,11 @@ export class ComposerGuardController {
       this.scheduleComposerObservation();
     });
     frameDocument.addEventListener('selectionchange', activate);
-    for (const eventName of ['focusin', 'input', 'keyup', 'pointerup']) {
+    for (const eventName of ['focusin', 'keyup', 'pointerup']) {
       body.addEventListener(eventName, activate, true);
     }
+    body.addEventListener('input', handleInput, true);
+    body.addEventListener('focusout', handleFocusOut, true);
     if (document.activeElement === frame || frameDocument.activeElement === body) {
       activate();
     }
@@ -1180,7 +1262,17 @@ export class ComposerGuardController {
     ) {
       return;
     }
-    this.activateFromElement(target, false);
+    if (!target || this.root?.contains(target)) return;
+    if (this.shouldIgnorePostSendActivation(target, false)) return;
+    if (isComposerElement(target)) {
+      this.activateFromElement(target);
+    }
+  };
+
+  private handleFocusOut = (event: FocusEvent): void => {
+    const target = asDomElement(event.target);
+    if (!target || !this.isEventFromActiveTarget(target)) return;
+    this.handleComposerFocusOut(target, asDomElement(event.relatedTarget));
   };
 
   private handleInput = (event: Event): void => {
@@ -1192,6 +1284,7 @@ export class ComposerGuardController {
     this.observeRichTextEditorFrames();
     const target = asDomElement(event.target);
     if (!target || !isComposerElement(target)) return;
+    if (this.shouldIgnorePostSendActivation(target, true)) return;
     if (
       this.pendingInsertionUndo &&
       this.isElementNearComposerTarget(target, this.pendingInsertionUndo.target)
@@ -1199,14 +1292,10 @@ export class ComposerGuardController {
       return;
     }
     if (!this.activeSession || !this.isEventFromActiveTarget(target)) {
-      this.activateFromElement(target, true);
+      this.activateFromElement(target);
       return;
     }
-    if (this.refreshActiveDraft()) {
-      this.latestAssist = null;
-      this.removeAffordance();
-      this.scheduleAssistRequest();
-    }
+    this.invalidateAssistForDraftChange(true);
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
@@ -1227,8 +1316,31 @@ export class ComposerGuardController {
       const target = asDomElement(event.target);
       if (target && isComposerElement(target)) {
         void this.recordAmbientSendTrace(target, 'keyboard_send');
+        this.clearComposerSessionAfterSend();
       }
     }
+  };
+
+  private handlePointerDown = (event: PointerEvent): void => {
+    const target = asDomElement(event.target);
+    if (!target || this.root?.contains(target) || !this.activeSession) return;
+    const sendElement = this.findLikelySendElement(target);
+    if (
+      !sendElement ||
+      !this.isElementNearComposerTarget(
+        sendElement,
+        this.activeSession.target,
+      )
+    ) {
+      return;
+    }
+    this.suppressBlurForSendTarget = this.activeSession.target.element;
+    this.suppressBlurForSendUntil = Date.now() + SEND_BLUR_SUPPRESSION_MS;
+    this.cancelScheduledAssistRequest();
+    this.writeDebugState('blur:suppress_send_pointer', {
+      contextKey: this.activeSession.contextKey,
+      sendElement: getElementDebugSummary(sendElement),
+    });
   };
 
   private handleDocumentClick = (event: MouseEvent): void => {
@@ -1238,12 +1350,10 @@ export class ComposerGuardController {
     const sendElement = this.findLikelySendElement(target);
     if (!sendElement) return;
     void this.recordAmbientSendTrace(sendElement, 'send_click');
+    this.clearComposerSessionAfterSend();
   };
 
-  private activateFromElement(
-    fromElement?: Element | null,
-    requestImmediately = false,
-  ): void {
+  private activateFromElement(fromElement?: Element | null): void {
     if (!this.canRunComposerAssist()) {
       this.clearIfConfigReadyAndDisabled();
       return;
@@ -1251,6 +1361,13 @@ export class ComposerGuardController {
 
     if (hasSensitiveUrlSignal(window.location.href)) {
       this.clear();
+      return;
+    }
+
+    if (
+      fromElement &&
+      this.shouldIgnorePostSendActivation(fromElement, false)
+    ) {
       return;
     }
 
@@ -1306,7 +1423,11 @@ export class ComposerGuardController {
 
     const previousSession = this.activeSession;
     const previousTargetElement = previousSession?.target.element ?? null;
-    const contextChanged = previousSession?.contextKey !== contextKey;
+    const targetChanged = Boolean(
+      previousSession && previousTargetElement !== context.target.element,
+    );
+    const contextChanged =
+      previousSession?.contextKey !== contextKey || targetChanged;
     const draftChangedWithoutInput = Boolean(
       previousSession &&
         !contextChanged &&
@@ -1330,6 +1451,7 @@ export class ComposerGuardController {
       contextKey,
       draftText,
       draftRevision,
+      pageHref: window.location.href,
     };
     this.writeDebugState('activate:session', {
       kind: context.target.kind,
@@ -1342,70 +1464,25 @@ export class ComposerGuardController {
     });
 
     if (contextChanged || draftChangedWithoutInput) {
+      this.cancelScheduledAssistRequest();
+      this.requestSeq += 1;
       this.latestAssist = null;
       this.latestAssistContextKey = null;
       this.latestAssistDraftRevision = null;
       this.reviewMode = false;
       this.clearPreviewedAssistDraft(previousSession?.contextKey);
-      this.unhelpfulAssistRetryAtByContext.delete(contextKey);
       this.removeAffordance();
     } else {
       this.renderIfUseful();
     }
 
     this.positionRoot();
-    const hasPendingRequest = this.requestTimer != null;
-    const hasLatestAssist = Boolean(this.latestAssist);
-    const latestAssistUseful = this.hasUsefulAssist();
-    const now = Date.now();
-    this.pruneAssistRetryCooldowns(now);
-    const requestSignature = buildComposerAssistRequestSignature(
+    this.writeDebugState('activate:no_request_until_blur', {
       contextKey,
       draftRevision,
-    );
-    const requestGate = this.getAssistRequestGate(requestSignature, now);
-    const lastUnhelpfulRetryAt =
-      this.unhelpfulAssistRetryAtByContext.get(contextKey);
-    const shouldRetryUnhelpfulAssist =
-      hasLatestAssist &&
-      !latestAssistUseful &&
-      !hasPendingRequest &&
-      !requestGate.suppress &&
-      lastUnhelpfulRetryAt != null &&
-      (this.latestAssist?.confidence ?? 0) === 0 &&
-      (this.latestAssist?.evidence?.length ?? 0) === 0 &&
-      now - lastUnhelpfulRetryAt >= UNHELPFUL_ASSIST_RETRY_COOLDOWN_MS;
-    const shouldScheduleAssistRequest =
-      !requestGate.suppress &&
-      (requestImmediately ||
-        contextChanged ||
-        draftChangedWithoutInput ||
-        (!this.latestAssist && this.requestTimer == null) ||
-        shouldRetryUnhelpfulAssist);
-    this.writeDebugState('activate:decision', {
-      contextKey,
-      requestImmediately,
       contextChanged,
       draftChangedWithoutInput,
-      hasPendingRequest,
-      hasLatestAssist,
-      latestAssistUseful,
-      latestEvidenceCount: this.latestAssist?.evidence?.length ?? 0,
-      latestConfidence: this.latestAssist?.confidence ?? null,
-      shouldRetryUnhelpfulAssist,
-      requestGateReason: requestGate.reason ?? null,
-      requestGateRetryAfterMs: requestGate.retryAfterMs ?? null,
-      lastUnhelpfulRetryAgeMs: lastUnhelpfulRetryAt != null
-        ? now - lastUnhelpfulRetryAt
-        : null,
-      shouldScheduleAssistRequest,
     });
-    if (shouldScheduleAssistRequest) {
-      if (shouldRetryUnhelpfulAssist) {
-        this.unhelpfulAssistRetryAtByContext.set(contextKey, now);
-      }
-      this.scheduleAssistRequest();
-    }
   }
 
   private isEventFromActiveTarget(target: Element): boolean {
@@ -1418,12 +1495,115 @@ export class ComposerGuardController {
     );
   }
 
+  private shouldIgnorePostSendActivation(
+    element: Element,
+    allowNonEmptyDraft: boolean,
+  ): boolean {
+    const suppression = this.postSendComposerSuppression;
+    if (!suppression) return false;
+    if (Date.now() > suppression.until) {
+      this.postSendComposerSuppression = null;
+      return false;
+    }
+    const suppressedElement = suppression.target.element;
+    const matches =
+      element === suppressedElement ||
+      suppressedElement.contains(element) ||
+      element.contains(suppressedElement);
+    if (!matches) return false;
+    if (
+      allowNonEmptyDraft &&
+      readComposerText(suppression.target).replace(/\s/g, '').length > 0
+    ) {
+      this.postSendComposerSuppression = null;
+      return false;
+    }
+    return true;
+  }
+
+  private isFocusWithinComposerBoundary(
+    element: Element,
+    target: ComposerTarget,
+  ): boolean {
+    const targetElement = target.element;
+    if (
+      element === targetElement ||
+      targetElement.contains(element) ||
+      element.contains(targetElement) ||
+      this.root?.contains(element)
+    ) {
+      return true;
+    }
+
+    const toolbar = element.closest(
+      '[role="toolbar"],.ql-toolbar,.ProseMirror-menubar,[data-testid*="toolbar" i],[data-test-id*="toolbar" i],[aria-label*="format" i],[title*="format" i]',
+    );
+    return Boolean(
+      toolbar && this.isElementNearComposerTarget(toolbar, target),
+    );
+  }
+
+  private handleComposerFocusOut(
+    sourceTarget: Element,
+    relatedTarget: Element | null,
+  ): void {
+    const session = this.activeSession;
+    if (!session || !this.isEventFromActiveTarget(sourceTarget)) return;
+
+    const suppressForSend =
+      this.suppressBlurForSendTarget === session.target.element &&
+      Date.now() <= this.suppressBlurForSendUntil;
+    if (suppressForSend) {
+      this.suppressBlurForSendTarget = null;
+      this.suppressBlurForSendUntil = 0;
+      this.cancelScheduledAssistRequest();
+      this.writeDebugState('blur:suppressed_for_send', {
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
+      });
+      return;
+    }
+
+    if (
+      relatedTarget &&
+      this.isFocusWithinComposerBoundary(relatedTarget, session.target)
+    ) {
+      this.writeDebugState('blur:internal_focus_move', {
+        contextKey: session.contextKey,
+        relatedTarget: getElementDebugSummary(relatedTarget),
+      });
+      return;
+    }
+
+    this.invalidateAssistForDraftChange(false);
+    if (!this.activeSession) return;
+    if (
+      this.activeSession.snapshot.contextType === 'web_agent_prompt' &&
+      this.activeSession.draftText.replace(/\s/g, '').length <
+        MIN_WEB_AI_DRAFT_CHARACTERS
+    ) {
+      this.writeDebugState('blur:short_web_draft', {
+        contextKey: this.activeSession.contextKey,
+        draftRevision: this.activeSession.draftRevision,
+        effectiveDraftLength: this.activeSession.draftText.replace(/\s/g, '')
+          .length,
+      });
+      return;
+    }
+
+    this.scheduleAssistRequest({ ...this.activeSession });
+  }
+
   private findLikelySendElement(target: Element): HTMLElement | null {
     const candidate = target.closest(
       'button,input[type="button"],input[type="submit"],[role="button"],[data-testid],[data-test-id],[data-test-automation-id]',
     );
     if (!(candidate instanceof HTMLElement)) return null;
     if (candidate.closest(`#${ROOT_ID}`)) return null;
+    // Chat composers commonly carry data-testid attributes and their current
+    // draft may literally mention "send" / "发送". The editable target itself
+    // must never be classified as the host's Send control from its text.
+    if (isComposerElement(candidate)) return null;
     if (
       candidate instanceof HTMLButtonElement ||
       candidate instanceof HTMLInputElement
@@ -1478,7 +1658,7 @@ export class ComposerGuardController {
     return false;
   }
 
-  private refreshActiveDraft(): boolean {
+  private refreshActiveDraft(forceRevision = false): boolean {
     if (!this.activeSession) return false;
     const nextDraftText = readComposerText(this.activeSession.target);
     const draftChanged = nextDraftText !== this.activeSession.draftText;
@@ -1489,7 +1669,7 @@ export class ComposerGuardController {
     );
     const contextChanged = nextContextKey !== this.activeSession.contextKey;
     this.activeSession.draftText = nextDraftText;
-    if (draftChanged || contextChanged) {
+    if (draftChanged || contextChanged || forceRevision) {
       this.activeSession.contextKey = nextContextKey;
       this.activeSession.draftRevision += 1;
     }
@@ -1498,33 +1678,150 @@ export class ComposerGuardController {
       this.clear();
       return false;
     }
-    return draftChanged || contextChanged;
+    return draftChanged || contextChanged || forceRevision;
   }
 
-  private scheduleAssistRequest = (): void => {
-    if (!this.canRunComposerAssist()) return;
-    this.writeDebugState('request:scheduled', {
-      replacingTimer: this.requestTimer != null,
-      hasSession: Boolean(this.activeSession),
+  private invalidateAssistForDraftChange(forceRevision: boolean): void {
+    if (!this.refreshActiveDraft(forceRevision)) return;
+    this.cancelScheduledAssistRequest();
+    this.requestSeq += 1;
+    this.latestAssist = null;
+    this.latestAssistContextKey = null;
+    this.latestAssistDraftRevision = null;
+    this.reviewMode = false;
+    this.clearReviewInsertionSelection();
+    // Revoke the visible/stale suggestion immediately, but preserve an
+    // already-dwelled, redacted ambient observation so a later send can still
+    // teach that the user viewed and ignored it. A not-yet-dwelled candidate
+    // is cancelled and records nothing.
+    this.cancelPreviewObservation();
+    this.removeAffordance();
+    this.writeDebugState('input:invalidate_without_request', {
+      contextKey: this.activeSession?.contextKey,
+      draftRevision: this.activeSession?.draftRevision,
     });
+  }
+
+  private cancelScheduledAssistRequest(): void {
     if (this.requestTimer != null) {
       window.clearTimeout(this.requestTimer);
+      this.requestTimer = null;
     }
+    this.scheduledAssistSignature = null;
+  }
+
+  private clearComposerSessionAfterSend(): void {
+    const contextKey = this.activeSession?.contextKey;
+    const sentTarget = this.activeSession?.target;
+    this.cancelScheduledAssistRequest();
+    this.requestSeq += 1;
+    this.suppressBlurForSendTarget = null;
+    this.suppressBlurForSendUntil = 0;
+    this.clearPreviewedAssistDraft(contextKey);
+    this.reviewMode = false;
+    this.clearReviewInsertionSelection();
+    this.setTargetGlow(false);
+    this.activeSession = null;
+    this.latestAssist = null;
+    this.latestAssistContextKey = null;
+    this.latestAssistDraftRevision = null;
+    if (sentTarget) {
+      this.postSendComposerSuppression = {
+        target: sentTarget,
+        until: Date.now() + SEND_BLUR_SUPPRESSION_MS,
+      };
+    }
+    if (
+      this.root &&
+      this.root.dataset.state !== 'undo' &&
+      this.root.dataset.state !== 'feedback'
+    ) {
+      this.root.remove();
+      this.root = null;
+      this.dispatchComposeAssistVisibility(false);
+    }
+    this.writeDebugState('session:cleared_after_send', { contextKey });
+  }
+
+  private scheduleAssistRequest = (session: ActiveComposerSession): void => {
+    if (!this.canRunComposerAssist()) return;
+    this.pruneAssistRetryCooldowns();
+    const requestSignature = buildComposerAssistRequestSignature(
+      session.contextKey,
+      session.draftRevision,
+    );
+    if (
+      this.requestedAssistSignatures.has(requestSignature) ||
+      this.scheduledAssistSignature === requestSignature
+    ) {
+      this.writeDebugState('request:already_requested_for_blur_revision', {
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
+      });
+      return;
+    }
+    const requestGate = this.getAssistRequestGate(requestSignature);
+    if (requestGate.suppress) {
+      this.writeDebugState('request:suppressed_before_schedule', {
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
+        reason: requestGate.reason,
+        retryAfterMs: requestGate.retryAfterMs ?? null,
+      });
+      return;
+    }
+    this.writeDebugState('request:scheduled', {
+      replacingTimer: this.requestTimer != null,
+      contextKey: session.contextKey,
+      draftRevision: session.draftRevision,
+      trigger: 'focusout',
+    });
+    this.cancelScheduledAssistRequest();
+    this.scheduledAssistSignature = requestSignature;
     this.requestTimer = window.setTimeout(() => {
       this.requestTimer = null;
+      this.scheduledAssistSignature = null;
+      if (
+        !this.activeSession ||
+        this.activeSession.contextKey !== session.contextKey ||
+        this.activeSession.draftRevision !== session.draftRevision ||
+        this.activeSession.target.element !== session.target.element ||
+        this.activeSession.pageHref !== session.pageHref ||
+        window.location.href !== session.pageHref
+      ) {
+        this.writeDebugState('request:stale_blur_snapshot', {
+          contextKey: session.contextKey,
+          draftRevision: session.draftRevision,
+        });
+        return;
+      }
+      this.requestedAssistSignatures.add(requestSignature);
+      while (
+        this.requestedAssistSignatures.size > MAX_REQUESTED_ASSIST_SIGNATURES
+      ) {
+        const oldest = this.requestedAssistSignatures.values().next().value;
+        if (typeof oldest !== 'string') break;
+        this.requestedAssistSignatures.delete(oldest);
+      }
       this.writeDebugState('request:timer_fire', {
-        hasSession: Boolean(this.activeSession),
-        contextKey: this.activeSession?.contextKey,
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
       });
-      void this.requestAssist();
-    }, REQUEST_DEBOUNCE_MS);
+      void this.requestAssist(session);
+    }, REQUEST_BLUR_SETTLE_MS);
   };
 
-  private async requestAssist(): Promise<void> {
-    if (!this.activeSession || !this.canRunComposerAssist()) return;
+  private async requestAssist(session: ActiveComposerSession): Promise<void> {
+    if (
+      !this.activeSession ||
+      !this.canRunComposerAssist() ||
+      this.activeSession.contextKey !== session.contextKey ||
+      this.activeSession.draftRevision !== session.draftRevision ||
+      this.activeSession.target.element !== session.target.element
+    ) {
+      return;
+    }
 
-    this.refreshActiveDraft();
-    const session = this.activeSession;
     const draftRevision = session.draftRevision;
     const contextKey = session.contextKey;
     const requestSignature = buildComposerAssistRequestSignature(
@@ -1595,14 +1892,6 @@ export class ComposerGuardController {
       this.latestAssistContextKey = contextKey;
       this.latestAssistDraftRevision = draftRevision;
       this.assistRetryBlockedUntilBySignature.delete(requestSignature);
-      if (
-        (response.confidence ?? 0) === 0 &&
-        (response.evidence?.length ?? 0) === 0
-      ) {
-        this.unhelpfulAssistRetryAtByContext.set(contextKey, Date.now());
-      } else {
-        this.unhelpfulAssistRetryAtByContext.delete(contextKey);
-      }
       this.writeDebugState('request:response', {
         contextKey,
         available: response.available,
@@ -1697,6 +1986,9 @@ export class ComposerGuardController {
     return Boolean(
       assist?.available &&
         assist.insertText &&
+        !isComposerAssistProjectionBlocked(assist) &&
+        (assist.suggestionType !== 'rewrite_prompt' ||
+          assist.insertMode === 'replace_draft') &&
         looksLikeSendableComposerText(assist.insertText) &&
         assist.confidence >= this.getActiveAssistThreshold(),
     );
@@ -1737,10 +2029,19 @@ export class ComposerGuardController {
       assist,
       this.activeSession.snapshot,
     );
+    const primaryActionLabel =
+      assist.suggestionType === 'rewrite_prompt'
+        ? '替换原 prompt'
+        : this.activeSession.snapshot.contextType === 'web_agent_prompt'
+          ? '追加到 prompt'
+          : '插入草稿';
     const rejectBoundary = buildComposerAssistRejectBoundary(
       assist,
       this.activeSession.snapshot,
     );
+    const projectionReviewNote = reviewOpen
+      ? getComposerAssistProjectionReviewNote(assist)
+      : null;
 
     root.innerHTML = `
       <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="${escapeHtml(
@@ -1766,10 +2067,19 @@ export class ComposerGuardController {
         </div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
         ${
+          projectionReviewNote
+            ? `<div class="pai-composer-guard-review-note">${escapeHtml(
+                projectionReviewNote,
+              )}</div>`
+            : ''
+        }
+        ${
           reviewOpen
             ? `<div class="pai-composer-guard-actions">
                 <button class="pai-composer-guard-secondary-action" data-action="close-review" type="button">取消</button>
-                <button class="pai-composer-guard-primary-action" data-action="confirm-insert" type="button">插入草稿</button>
+                <button class="pai-composer-guard-primary-action" data-action="confirm-insert" type="button">${escapeHtml(
+                  primaryActionLabel,
+                )}</button>
               </div>`
             : ''
         }
@@ -2088,11 +2398,18 @@ export class ComposerGuardController {
       this.latestAssist.insertText,
     );
     if (!insertText) return;
-    restoreComposerSelectionSnapshot(target, selectionSnapshot);
+    const replaceDraft =
+      this.latestAssist.suggestionType === 'rewrite_prompt' &&
+      this.latestAssist.insertMode === 'replace_draft';
+    if (!replaceDraft) {
+      restoreComposerSelectionSnapshot(target, selectionSnapshot);
+    }
     this.restoringSnapshot = true;
     let inserted = false;
     try {
-      inserted = insertTextIntoComposer(target, insertText);
+      inserted = replaceDraft
+        ? replaceComposerText(target, insertText)
+        : insertTextIntoComposer(target, insertText);
     } catch (error) {
       console.warn('[ComposerGuard] insert failed:', error);
     } finally {
@@ -2826,10 +3143,10 @@ export class ComposerGuardController {
   }
 
   private clear(): void {
-    if (this.requestTimer != null) {
-      window.clearTimeout(this.requestTimer);
-      this.requestTimer = null;
-    }
+    this.cancelScheduledAssistRequest();
+    this.requestSeq += 1;
+    this.suppressBlurForSendTarget = null;
+    this.suppressBlurForSendUntil = 0;
     this.reviewMode = false;
     this.clearReviewInsertionSelection();
     this.cancelPreviewObservation();
@@ -2838,6 +3155,8 @@ export class ComposerGuardController {
     this.setTargetGlow(false);
     this.activeSession = null;
     this.latestAssist = null;
+    this.latestAssistContextKey = null;
+    this.latestAssistDraftRevision = null;
     this.root?.remove();
     this.root = null;
     this.dispatchComposeAssistVisibility(false);
@@ -3261,6 +3580,7 @@ export class ComposerGuardController {
       contextType: undo.feedbackContext.snapshot?.contextType,
       surface: undo.feedbackContext.snapshot?.surface,
       suggestionType: undo.feedbackContext.assist?.suggestionType,
+      insertMode: undo.feedbackContext.assist?.insertMode,
     });
     const root = this.ensureRoot();
     root.onpointerenter = null;
@@ -3699,7 +4019,7 @@ export class ComposerGuardController {
         font-size: 12px;
       }
       .pai-composer-guard-review-note {
-        margin: 0 0 7px;
+        margin: 7px 0 0;
         padding: 6px 7px;
         border-radius: 6px;
         background: rgba(180, 83, 9, 0.08);

@@ -163,6 +163,30 @@ const PROJECT_DATA_SOURCE_SYNC_BUTTON_BOUNDARY =
 const PROJECT_DATA_SOURCE_PANEL_CLOSE_BOUNDARY =
   '收起数据源检查结果：只隐藏当前面板，保留本轮新增/匹配项目、本地证据回执和页面状态；不会取消正在进行的同步、清空检查结果、删除本地项目、重新读取或写回 Memory Service、Jira、GitHub、Confluence，也不会发送通知。';
 
+const buildProjectTaskEntryBoundary = ({
+  entryLabel,
+  projectName,
+  taskTitle,
+  reasonLabel,
+  reasonDetail,
+  risk,
+}: {
+  entryLabel: string;
+  projectName: string;
+  taskTitle: string;
+  reasonLabel: string;
+  reasonDetail?: string;
+  risk?: { label: string; score: number; drivers?: string[] };
+}) => {
+  const reason = [reasonLabel, reasonDetail].filter(Boolean).join('：');
+  const riskLabel = risk ? `${risk.label} ${risk.score}` : '风险未计算';
+  const riskDrivers = risk?.drivers?.length
+    ? `风险依据：${risk.drivers.slice(0, 3).join('、')}`
+    : '风险依据：当前本地任务状态、ETA 和来源缺口';
+
+  return `${entryLabel}：打开 ${projectName} / ${taskTitle} 的本地任务详情，用来查看或补齐 ETA、Jira key、平台状态、负责人或平台 Jira。当前入口依据：${reason || '本地优先级排序'}；${riskLabel}；${riskDrivers}。这只聚焦当前浏览器工作台快照，不会读取或写回 Memory Service、Jira、GitHub、Confluence，不会确认项目状态、创建外部任务或发送通知。`;
+};
+
 const isPlatformKey = (value: string): value is PlatformKey => ALL_PLATFORM_KEYS.includes(value as PlatformKey);
 
 const clampPercent = (value: number, min = 10, max = 90) => {
@@ -2101,7 +2125,22 @@ const ProjectDashboard: React.FC = () => {
                     type="button"
                     className={`focus-item ${item.level}`}
                     onClick={() => openDetail(item.projectId, item.task.id)}
-                    title={item.task.desc || item.task.title}
+                    title={buildProjectTaskEntryBoundary({
+                      entryLabel: '跨项目优先处理入口',
+                      projectName: item.projectName,
+                      taskTitle: item.task.title,
+                      reasonLabel: item.label,
+                      reasonDetail: item.detail,
+                      risk: item.risk,
+                    })}
+                    aria-label={buildProjectTaskEntryBoundary({
+                      entryLabel: '跨项目优先处理入口',
+                      projectName: item.projectName,
+                      taskTitle: item.task.title,
+                      reasonLabel: item.label,
+                      reasonDetail: item.detail,
+                      risk: item.risk,
+                    })}
                   >
                     <span className="focus-label">{item.label}</span>
                     <span className="focus-main">
@@ -2511,7 +2550,22 @@ const ProjectDashboard: React.FC = () => {
                           type="button"
                           className={`project-alert ${item.level}`}
                           onClick={() => openDetail(project.id, item.task.id)}
-                          title={item.task.desc || item.task.title}
+                          title={buildProjectTaskEntryBoundary({
+                            entryLabel: '项目内优先处理入口',
+                            projectName: project.name,
+                            taskTitle: item.task.title,
+                            reasonLabel: item.label,
+                            reasonDetail: item.detail,
+                            risk: item.risk,
+                          })}
+                          aria-label={buildProjectTaskEntryBoundary({
+                            entryLabel: '项目内优先处理入口',
+                            projectName: project.name,
+                            taskTitle: item.task.title,
+                            reasonLabel: item.label,
+                            reasonDetail: item.detail,
+                            risk: item.risk,
+                          })}
                         >
                           <span className="project-alert-label">{item.label}</span>
                           <span className="project-alert-title">{item.task.title}</span>

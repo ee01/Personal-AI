@@ -10,6 +10,7 @@
 
 import { getEnvConfig } from '../utils';
 import { handleLLMRequest } from '../llm';
+import { CAPABILITIES } from '../analytics/capabilities';
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
 import { sendPlainBotMessage } from '../bot';
@@ -340,7 +341,9 @@ export class NotificationService {
 
       const reviewResult = await handleLLMRequest({
         prompt: reviewPrompt,
-        type: 'review'
+        type: 'review',
+        capability: CAPABILITIES.NOTIFICATION_CENTER,
+        feature: 'llm_review',
       });
 
       const reviewContent = reviewResult?.replace(/<think>[\s\S]*?<\/think>/g, '').trim() || '';

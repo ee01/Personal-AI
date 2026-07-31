@@ -38,6 +38,7 @@ const fixtureHtml = `<!doctype html>
           <span data-name="time">10:01 AM</span>
         </div>
       </section>
+      <button id="outside-focus" type="button">Outside composer</button>
       <div class="composer-shell" data-test-automation-id="message-compose">
         <div
           id="composer"
@@ -250,8 +251,33 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
 
     await page.locator('#composer').click();
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      0,
+      'RingCentral focus alone must not request Compose Assist',
+    );
+    await page.locator('#outside-focus').click();
     await page.waitForFunction(
       () => window.__paiComposeAssistRequests?.length >= 1,
+      null,
+      { timeout: 6000 },
+    );
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests[0].draftText),
+      '',
+      'RingCentral may still request an empty draft from thread context on blur',
+    );
+
+    await page.goto(fixtureUrl);
+    await page.evaluate(() => {
+      window.__paiComposeAssistRequests = [];
+    });
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#composer').fill('First blur draft');
+    await page.locator('#outside-focus').click();
+    await page.waitForFunction(
+      () => window.__paiComposeAssistRequests?.length === 1,
       null,
       { timeout: 6000 },
     );
@@ -263,7 +289,13 @@ async function main() {
       .locator('text=STALE RESPONSE SHOULD NOT RENDER')
       .count();
     assert.equal(staleRendered, 0, 'stale assist response should not render');
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      1,
+      'editing an in-flight draft must invalidate it without requesting again',
+    );
 
+    await page.locator('#outside-focus').click();
     await page.waitForFunction(
       () => window.__paiComposeAssistRequests?.length >= 2,
       null,
@@ -279,14 +311,27 @@ async function main() {
     );
 
     const requests = await page.evaluate(() => window.__paiComposeAssistRequests);
-    assert.equal(requests[0].draftText, '');
+    assert.equal(requests[0].draftText, 'First blur draft');
     assert.equal(requests[1].draftText, 'Please make this concise.');
 
     await page.locator('#composer').evaluate((element) => {
       element.replaceChildren(
         document.createTextNode('Silent DOM mutation without input event'),
       );
+      element.focus();
     });
+    await page.waitForTimeout(900);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      2,
+      'silent mutation and refocus must still wait for the next real blur',
+    );
+    assert.equal(
+      await page.locator('.pai-composer-guard-icon-button').count(),
+      0,
+      'refocusing a silently changed draft must revoke the old preview',
+    );
+    await page.locator('#outside-focus').click();
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(
@@ -335,6 +380,7 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
     await page.locator('#composer').click();
     await page.locator('#composer').fill('Context only memory');
+    await page.locator('#outside-focus').click();
     await page.waitForFunction(
       () =>
         window.__paiComposeAssistRequests?.some(

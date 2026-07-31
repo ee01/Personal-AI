@@ -1164,14 +1164,12 @@ export function buildAgentWorkflowResultDiagnostics(
     });
   }
 
-  if (
-    result.storageReview?.traceStatus === 'partial' &&
-    failedSteps.length === 0 &&
-    (result.storageReview.toolErrorCount || traceIssues.toolErrorCount || 0) > 0
-  ) {
+  const effectiveToolErrorCount =
+    traceIssues.toolErrorCount || result.storageReview?.toolErrorCount || 0;
+  if (failedSteps.length === 0 && effectiveToolErrorCount > 0) {
     const toolErrorSummary = formatToolErrorSummary(
       traceIssues,
-      result.storageReview.toolErrorCount,
+      result.storageReview?.toolErrorCount,
     );
     diagnostics.push({
       id: 'partial-trace',

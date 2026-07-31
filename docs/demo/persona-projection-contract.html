@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>身份投影合约 · Compose Assist v1</title>
+    <!--
+      Assumptions:
+      1. P0 is an embedded Compose Assist behavior, not a persona dashboard.
+      2. Hover previews contain draft text only; projection copy appears only in locked review.
+      3. Host UIs are recognizable simulations, not pixel-perfect brand reproductions.
+      Reasoning: the prototype should make the interaction cost difference visible without
+      exposing profile values or turning a transient contract into a management surface.
+    -->
+    <style>
+      :root {
+        --page: #eef0f3;
+        --panel: #ffffff;
+        --ink: #20242b;
+        --muted: #656d78;
+        --line: #d7dbe1;
+        --soft-line: #e8eaee;
+        --pa: #c62828;
+        --rc: #255cc7;
+        --jira: #1868db;
+        --chatgpt: #0d7c66;
+        --warning-bg: #fff7e8;
+        --warning-ink: #7a4a00;
+        --success-bg: #ecf8f1;
+        --success-ink: #14633b;
+        --shadow: 0 18px 50px rgba(24, 31, 43, 0.16);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          'PingFang SC', 'Microsoft YaHei', sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .demo-shell {
+        min-height: 100vh;
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        overflow-x: hidden;
+      }
+
+      .demo-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        min-height: 68px;
+        padding: 12px 20px;
+        border-bottom: 1px solid #cfd3d9;
+        background: rgba(255, 255, 255, 0.96);
+        position: relative;
+        z-index: 20;
+        min-width: 0;
+        width: 100%;
+      }
+
+      .demo-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 220px;
+        max-width: 100%;
+      }
+
+      .demo-brand img {
+        width: 34px;
+        height: 34px;
+        border-radius: 7px;
+      }
+
+      .demo-brand strong {
+        display: block;
+        font-size: 15px;
+      }
+
+      .demo-brand span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .scene-tabs {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f5f6f8;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .scene-tab {
+        min-height: 34px;
+        border: 0;
+        border-radius: 6px;
+        padding: 6px 11px;
+        color: #5c6470;
+        background: transparent;
+        white-space: nowrap;
+      }
+
+      .scene-tab:hover {
+        color: var(--ink);
+      }
+
+      .scene-tab.active {
+        color: var(--ink);
+        background: #fff;
+        box-shadow: 0 1px 4px rgba(28, 35, 46, 0.12);
+        font-weight: 650;
+      }
+
+      .scene-status {
+        min-width: 210px;
+        text-align: right;
+      }
+
+      .scene-status strong,
+      .scene-status span {
+        display: block;
+      }
+
+      .scene-status strong {
+        font-size: 13px;
+      }
+
+      .scene-status span {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .stage {
+        min-height: 0;
+        min-width: 0;
+        padding: 20px;
+      }
+
+      .browser {
+        width: min(1220px, 100%);
+        height: min(780px, calc(100vh - 108px));
+        min-height: 620px;
+        margin: 0 auto;
+        border: 1px solid #c9cdd4;
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 20px 60px rgba(31, 37, 48, 0.14);
+        overflow: hidden;
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 42px 1fr;
+      }
+
+      .browser-chrome {
+        display: grid;
+        grid-template-columns: 74px minmax(0, 1fr) 74px;
+        align-items: center;
+        gap: 12px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line);
+        background: #f2f3f5;
+      }
+
+      .traffic {
+        display: flex;
+        gap: 6px;
+      }
+
+      .traffic span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #c7cbd1;
+      }
+
+      .traffic span:first-child {
+        background: #ed6a5e;
+      }
+
+      .traffic span:nth-child(2) {
+        background: #f4be4f;
+      }
+
+      .traffic span:nth-child(3) {
+        background: #61c454;
+      }
+
+      .address {
+        min-width: 0;
+        padding: 6px 12px;
+        border: 1px solid #d6d9de;
+        border-radius: 6px;
+        background: #fff;
+        color: #646b75;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .host {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 52px 1fr;
+      }
+
+      .host-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .host-brand {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-weight: 700;
+      }
+
+      .host-mark {
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        color: #fff;
+        background: var(--host-accent);
+        font-size: 12px;
+      }
+
+      .host-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .host-body {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+      }
+
+      .sidebar {
+        min-height: 0;
+        padding: 14px 10px;
+        border-right: 1px solid var(--line);
+        background: #f7f8fa;
+      }
+
+      .sidebar-label {
+        margin: 4px 8px 8px;
+        color: #777e88;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .side-item {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 38px;
+        padding: 7px 9px;
+        border-radius: 6px;
+        color: #4e5662;
+        font-size: 13px;
+      }
+
+      .side-item.active {
+        color: var(--ink);
+        background: #fff;
+        box-shadow: inset 3px 0 0 var(--host-accent);
+        font-weight: 650;
+      }
+
+      .avatar {
+        flex: 0 0 auto;
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #dfe3e9;
+        color: #414852;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .conversation {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+
+      .conversation-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 58px;
+        padding: 10px 18px;
+        border-bottom: 1px solid var(--soft-line);
+      }
+
+      .conversation-head h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .conversation-head p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .audience-badge {
+        padding: 5px 8px;
+        border: 1px solid #d7dbe1;
+        border-radius: 999px;
+        color: #59616c;
+        background: #fafbfc;
+        font-size: 11px;
+      }
+
+      .messages {
+        min-height: 0;
+        overflow: auto;
+        padding: 18px 22px 26px;
+        background: #fff;
+      }
+
+      .message-row {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      .message-row .avatar {
+        width: 34px;
+        height: 34px;
+      }
+
+      .message-author {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        margin-bottom: 4px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .message-author time {
+        color: #8a919a;
+        font-size: 11px;
+        font-weight: 400;
+      }
+
+      .message-text {
+        max-width: 700px;
+        color: #343a43;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .composer-zone {
+        padding: 12px 18px 16px;
+        border-top: 1px solid var(--soft-line);
+        background: #fbfbfc;
+      }
+
+      .composer-frame {
+        position: relative;
+        display: grid;
+        grid-template-rows: 1fr auto;
+        min-height: 112px;
+        border: 1px solid #cfd4dc;
+        border-radius: 7px;
+        background: #fff;
+      }
+
+      .composer-input {
+        width: 100%;
+        min-height: 70px;
+        padding: 12px 48px 8px 12px;
+        border: 0;
+        outline: 0;
+        resize: none;
+        color: var(--ink);
+        background: transparent;
+        line-height: 1.5;
+      }
+
+      .composer-tools {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 34px;
+        padding: 4px 8px;
+        border-top: 1px solid #f0f1f3;
+        color: #7a818b;
+        font-size: 12px;
+      }
+
+      .host-send {
+        min-height: 27px;
+        border: 0;
+        border-radius: 5px;
+        padding: 4px 10px;
+        color: #fff;
+        background: var(--host-accent);
+        opacity: 0.82;
+      }
+
+      .assist {
+        position: absolute;
+        top: 8px;
+        right: 9px;
+        z-index: 10;
+      }
+
+      .assist-icon {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(198, 40, 40, 0.22);
+        border-radius: 7px;
+        padding: 3px;
+        background: #fff;
+        box-shadow: 0 4px 12px rgba(35, 39, 46, 0.14);
+      }
+
+      .assist-icon:hover,
+      .assist.is-review .assist-icon {
+        border-color: rgba(198, 40, 40, 0.52);
+        box-shadow: 0 5px 15px rgba(198, 40, 40, 0.18);
+      }
+
+      .assist-icon img {
+        width: 22px;
+        height: 22px;
+        border-radius: 5px;
+      }
+
+      .assist-popover {
+        position: absolute;
+        right: 38px;
+        bottom: 0;
+        width: min(390px, calc(100vw - 70px));
+        padding: 12px;
+        border: 1px solid #d5d9df;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--shadow);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(6px) scale(0.98);
+        transform-origin: right bottom;
+        transition: opacity 120ms ease, transform 120ms ease;
+      }
+
+      .assist:hover .assist-popover,
+      .assist:focus-within .assist-popover,
+      .assist.is-review .assist-popover {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateX(0) scale(1);
+      }
+
+      .assist-label {
+        margin-bottom: 7px;
+        color: var(--pa);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .assist-draft {
+        color: #313740;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .projection-note {
+        display: none;
+        margin-top: 9px;
+        padding: 7px 8px;
+        border-radius: 6px;
+        color: var(--warning-ink);
+        background: var(--warning-bg);
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 1.45;
+      }
+
+      .review-actions {
+        display: none;
+        justify-content: flex-end;
+        gap: 7px;
+        margin-top: 10px;
+      }
+
+      .assist.is-review .projection-note,
+      .assist.is-review .review-actions {
+        display: flex;
+      }
+
+      .review-button {
+        min-height: 30px;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .review-button.secondary {
+        border: 1px solid var(--line);
+        color: #515966;
+        background: #fff;
+      }
+
+      .review-button.primary {
+        border: 1px solid var(--pa);
+        color: #fff;
+        background: var(--pa);
+      }
+
+      .receipt {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-top: 9px;
+        padding: 8px 10px;
+        border: 1px solid #b8dfc9;
+        border-radius: 6px;
+        color: var(--success-ink);
+        background: var(--success-bg);
+        font-size: 12px;
+      }
+
+      .receipt.visible {
+        display: flex;
+      }
+
+      .undo-button {
+        border: 0;
+        padding: 0;
+        color: #135f39;
+        background: transparent;
+        font-weight: 700;
+      }
+
+      .jira-layout {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+      }
+
+      .jira-main {
+        min-width: 0;
+        overflow: auto;
+        padding: 22px 28px;
+      }
+
+      .breadcrumb {
+        color: #626b77;
+        font-size: 12px;
+      }
+
+      .jira-main h1 {
+        margin: 12px 0 18px;
+        font-size: 23px;
+        font-weight: 650;
+      }
+
+      .jira-copy {
+        max-width: 760px;
+        color: #3a414b;
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .jira-comment-title {
+        margin: 28px 0 9px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .jira-side {
+        padding: 20px 18px;
+        border-left: 1px solid var(--line);
+        background: #fafbfc;
+      }
+
+      .field {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        gap: 8px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--soft-line);
+        font-size: 12px;
+      }
+
+      .field span:first-child {
+        color: var(--muted);
+      }
+
+      .ai-layout {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 230px minmax(0, 1fr);
+        background: #fff;
+      }
+
+      .ai-sidebar {
+        padding: 14px 12px;
+        border-right: 1px solid var(--line);
+        background: #f5f5f4;
+      }
+
+      .new-chat {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid #d2d5d9;
+        border-radius: 7px;
+        color: #33383f;
+        background: #fff;
+      }
+
+      .ai-main {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 1fr auto;
+      }
+
+      .ai-thread {
+        overflow: auto;
+        padding: 38px max(24px, calc((100% - 720px) / 2));
+      }
+
+      .ai-turn {
+        max-width: 720px;
+        margin: 0 auto 20px;
+        padding: 13px 15px;
+        border-radius: 8px;
+        color: #30363d;
+        background: #f4f4f2;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .ai-turn.assistant {
+        padding-left: 0;
+        background: transparent;
+      }
+
+      .ai-composer-wrap {
+        width: min(760px, calc(100% - 34px));
+        margin: 0 auto 22px;
+      }
+
+      .ai-composer-wrap .composer-frame {
+        min-height: 126px;
+        border-radius: 8px;
+        box-shadow: 0 7px 22px rgba(28, 33, 40, 0.1);
+      }
+
+      @media (max-width: 900px) {
+        .demo-bar {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .scene-tabs {
+          order: 3;
+          width: 100%;
+          overflow-x: auto;
+        }
+
+        .scene-status {
+          min-width: 0;
+        }
+
+        .stage {
+          padding: 12px;
+        }
+
+        .browser {
+          height: calc(100vh - 150px);
+          min-height: 590px;
+        }
+
+        .host-body,
+        .ai-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar,
+        .ai-sidebar,
+        .jira-side {
+          display: none;
+        }
+
+        .jira-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .demo-brand span,
+        .scene-status {
+          display: none;
+        }
+
+        .browser {
+          height: calc(100vh - 138px);
+          min-height: 560px;
+        }
+
+        .browser-chrome {
+          grid-template-columns: 62px minmax(0, 1fr);
+        }
+
+        .conversation-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .messages {
+          padding: 14px;
+        }
+
+        .composer-zone {
+          padding: 9px;
+        }
+
+        .assist-popover {
+          position: fixed;
+          left: 12px;
+          right: 12px;
+          bottom: 14px;
+          width: auto;
+          transform-origin: center bottom;
+        }
+
+        .jira-main {
+          padding: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="demo-shell">
+      <header class="demo-bar">
+        <div class="demo-brand">
+          <img src="../../static/icons/icon48.png" alt="Personal AI" />
+          <div>
+            <strong>身份投影合约 · Compose Assist v1</strong>
+            <span>同一记忆，在不同对象和场景中只投影必要部分</span>
+          </div>
+        </div>
+        <nav class="scene-tabs" aria-label="Demo 场景">
+          <button class="scene-tab active" data-scene="peer" type="button">
+            RingCentral · 同事
+          </button>
+          <button class="scene-tab" data-scene="manager" type="button">
+            RingCentral · 老板
+          </button>
+          <button class="scene-tab" data-scene="jira" type="button">
+            Jira comment
+          </button>
+          <button class="scene-tab" data-scene="web" type="button">
+            ChatGPT context
+          </button>
+        </nav>
+        <div class="scene-status" aria-live="polite">
+          <strong id="sceneMode">draft_only</strong>
+          <span id="sceneVoice">peer · write_as_user</span>
+        </div>
+      </header>
+      <main class="stage" id="stage"></main>
+    </div>
+
+    <script>
+      const iconPath = '../../static/icons/icon48.png';
+      const scenes = {
+        peer: {
+          kind: 'ringcentral',
+          accent: 'var(--rc)',
+          address: 'app.ringcentral.com/messages/project-orbit',
+          hostName: 'RingCentral',
+          hostMark: 'RC',
+          title: 'Project Orbit · Delivery',
+          subtitle: '6 members · Ryan 正在查看',
+          audience: '同事 · peer',
+          mode: 'draft_only',
+          voice: 'peer · write_as_user',
+          conversationItems: [
+            'Project Orbit · Delivery',
+            'AI Platform',
+            'Release sync',
+          ],
+          messages: [
+            [
+              'RC',
+              'Ryan Chen',
+              '10:18',
+              'Project Orbit 这周还能按计划发吗？deployment checks 现在稳定了吗？',
+            ],
+            [
+              'ML',
+              'Maya Lee',
+              '10:20',
+              '昨晚最后一轮通过了，我想再看一次今天的结果。',
+            ],
+          ],
+          draft:
+            'deployment checks 这轮已经稳定了。我今天再和 Maya 过一遍 release risk；没新 blocker 的话就按周四窗口继续。',
+          placeholder: 'Reply to Project Orbit · Delivery',
+          assistLabel: '建议回复',
+          requiresReview: false,
+          blockedCount: 1,
+          actionLabel: '插入草稿',
+        },
+        manager: {
+          kind: 'ringcentral',
+          accent: 'var(--rc)',
+          address: 'app.ringcentral.com/messages/morgan-lee',
+          hostName: 'RingCentral',
+          hostMark: 'RC',
+          title: 'Morgan Lee',
+          subtitle: 'Direct message',
+          audience: '老板 · manager',
+          mode: 'draft_preview_required',
+          voice: 'manager · write_as_user',
+          conversationItems: [
+            'Morgan Lee',
+            'Project Orbit · Delivery',
+            'Leadership sync',
+          ],
+          messages: [
+            [
+              'ML',
+              'Morgan Lee',
+              '10:18',
+              'Project Orbit 这周还能按计划发吗？deployment checks 现在稳定了吗？',
+            ],
+            ['EQ', 'Esone Qiu', '昨天', '我今天会补一次完整状态。'],
+          ],
+          draft:
+            '当前状态：deployment checks 已连续通过 3 轮，周四发布窗口不变。\n主要风险：今天仍需确认 Maya 负责的 release check 没有新 blocker。\n下一步：我会在 16:00 前完成复核并同步 go / no-go。',
+          placeholder: 'Message Morgan Lee',
+          assistLabel: '建议回复',
+          requiresReview: true,
+          blockedCount: 1,
+          actionLabel: '插入草稿',
+        },
+        jira: {
+          kind: 'jira',
+          accent: 'var(--jira)',
+          address: 'jira.example.com/browse/ORB-42',
+          hostName: 'Jira',
+          hostMark: 'J',
+          title: 'ORB-42 · Project Orbit rollout ownership',
+          audience: '团队可见 · Jira',
+          mode: 'draft_preview_required',
+          voice: 'jira_comment · write_as_user',
+          draft:
+            '结论：ORB-42 由 AI platform team 跟进。当前 deployment checks 已连续通过 3 轮；下一步是在今天 16:00 前完成 release risk 复核，再更新 go / no-go。',
+          placeholder: 'Add a comment...',
+          assistLabel: '建议 comment',
+          requiresReview: true,
+          blockedCount: 2,
+          actionLabel: '插入草稿',
+        },
+        web: {
+          kind: 'web',
+          accent: 'var(--chatgpt)',
+          address: 'chatgpt.com/c/project-orbit-decision',
+          hostName: 'ChatGPT',
+          hostMark: 'AI',
+          title: 'Project Orbit 发布决策',
+          audience: '外部 AI · external',
+          mode: 'context_pack_copyable',
+          voice: 'external · speak_about_user',
+          draft:
+            '已确认的用户约束（仅用于当前提问，不代表外部事实）：\n- 输出偏好：先总结证据和不确定性，再给出可执行建议。\n- 决策格式：明确 go / no-go 条件和下一步。',
+          placeholder:
+            '请结合我的偏好，分析 Project Orbit 是否应该按周四窗口发布...',
+          assistLabel: '个人约束 context',
+          requiresReview: true,
+          blockedCount: 3,
+          actionLabel: '追加到 prompt',
+        },
+      };
+
+      const stage = document.getElementById('stage');
+      const modeNode = document.getElementById('sceneMode');
+      const voiceNode = document.getElementById('sceneVoice');
+      let activeScene = 'peer';
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function browserChrome(scene) {
+        return `
+          <div class="browser-chrome">
+            <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="address">${escapeHtml(scene.address)}</div>
+            <div></div>
+          </div>`;
+      }
+
+      function hostTopbar(scene) {
+        return `
+          <div class="host-topbar">
+            <div class="host-brand"><span class="host-mark">${scene.hostMark}</span>${scene.hostName}</div>
+            <div class="host-meta">Personal AI extension active</div>
+          </div>`;
+      }
+
+      function assistMarkup(scene) {
+        const note =
+          scene.blockedCount > 0
+            ? '已按当前场景省略未确认或敏感身份信息；仅插入草稿，不会发送。'
+            : '当前对象或场景要求先预览；仅插入草稿，不会发送。';
+        return `
+          <div class="assist" data-review="${
+            scene.requiresReview ? 'true' : 'false'
+          }">
+            <button class="assist-icon" data-action="assist" type="button" title="${
+              scene.requiresReview ? '先预览建议内容' : scene.actionLabel
+            }" aria-label="${
+          scene.requiresReview ? '先预览建议内容' : scene.actionLabel
+        }">
+              <img src="${iconPath}" alt="Personal AI" />
+            </button>
+            <div class="assist-popover" aria-live="polite">
+              <div class="assist-label">${escapeHtml(scene.assistLabel)}</div>
+              <div class="assist-draft">${escapeHtml(scene.draft)}</div>
+              <div class="projection-note">${escapeHtml(note)}</div>
+              <div class="review-actions">
+                <button class="review-button secondary" data-action="cancel" type="button">取消</button>
+                <button class="review-button primary" data-action="confirm" type="button">${escapeHtml(
+                  scene.actionLabel,
+                )}</button>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      function composerMarkup(scene) {
+        return `
+          <div class="composer-frame">
+            <textarea class="composer-input" aria-label="Composer" placeholder="${escapeHtml(
+              scene.placeholder,
+            )}"></textarea>
+            ${assistMarkup(scene)}
+            <div class="composer-tools"><span>B &nbsp; I &nbsp; ···</span><button class="host-send" type="button">${
+              scene.kind === 'jira'
+                ? 'Comment'
+                : scene.kind === 'web'
+                ? 'Send'
+                : 'Reply'
+            }</button></div>
+          </div>
+          <div class="receipt" aria-live="polite"><span>${
+            scene.kind === 'web'
+              ? '已追加到当前 prompt · 未提交'
+              : '已插入当前草稿 · 未发送'
+          }</span><button class="undo-button" data-action="undo" type="button">撤销</button></div>`;
+      }
+
+      function renderRingCentral(scene) {
+        const sideItems = scene.conversationItems
+          .map(
+            (item, index) => `
+          <div class="side-item ${
+            index === 0 ? 'active' : ''
+          }"><span class="avatar">${escapeHtml(
+              item.slice(0, 2),
+            )}</span><span>${escapeHtml(item)}</span></div>`,
+          )
+          .join('');
+        const messages = scene.messages
+          .map(
+            (message) => `
+          <div class="message-row">
+            <span class="avatar">${message[0]}</span>
+            <div><div class="message-author">${escapeHtml(
+              message[1],
+            )}<time>${escapeHtml(
+              message[2],
+            )}</time></div><div class="message-text">${escapeHtml(
+              message[3],
+            )}</div></div>
+          </div>`,
+          )
+          .join('');
+        return `
+          <div class="host-body">
+            <aside class="sidebar"><div class="sidebar-label">Messages</div>${sideItems}</aside>
+            <section class="conversation">
+              <div class="conversation-head"><div><h2>${escapeHtml(
+                scene.title,
+              )}</h2><p>${escapeHtml(
+          scene.subtitle,
+        )}</p></div><span class="audience-badge">${escapeHtml(
+          scene.audience,
+        )}</span></div>
+              <div class="messages">${messages}</div>
+              <div class="composer-zone">${composerMarkup(scene)}</div>
+            </section>
+          </div>`;
+      }
+
+      function renderJira(scene) {
+        return `
+          <div class="jira-layout">
+            <section class="jira-main">
+              <div class="breadcrumb">Projects / Project Orbit / ORB-42</div>
+              <h1>${escapeHtml(scene.title)}</h1>
+              <div class="jira-copy">Release candidate 已准备完成，deployment checks 已连续通过 3 轮。需要在今天确认最终 owner、风险和 go / no-go 条件。</div>
+              <div class="jira-comment-title">Add a comment</div>
+              ${composerMarkup(scene)}
+            </section>
+            <aside class="jira-side">
+              <div class="field"><span>Status</span><strong>In Review</strong></div>
+              <div class="field"><span>Team</span><strong>AI platform team</strong></div>
+              <div class="field"><span>Release</span><strong>Thursday window</strong></div>
+              <div class="field"><span>Assignee</span><strong>Unconfirmed</strong></div>
+            </aside>
+          </div>`;
+      }
+
+      function renderWeb(scene) {
+        return `
+          <div class="ai-layout">
+            <aside class="ai-sidebar"><button class="new-chat" type="button">New chat</button><div class="sidebar-label" style="margin-top:18px">Recent</div><div class="side-item active">${escapeHtml(
+              scene.title,
+            )}</div><div class="side-item">Release evidence review</div></aside>
+            <section class="ai-main">
+              <div class="ai-thread">
+                <div class="ai-turn">请结合我的偏好，分析 Project Orbit 是否应该按周四窗口发布。先看证据和不确定性，再给出决策。</div>
+                <div class="ai-turn assistant">我会先区分已验证证据和内部上下文。若要做个性化建议，请补充允许用于本次判断的偏好或约束。</div>
+              </div>
+              <div class="ai-composer-wrap">${composerMarkup(scene)}</div>
+            </section>
+          </div>`;
+      }
+
+      function renderScene(key) {
+        activeScene = key;
+        const scene = scenes[key];
+        modeNode.textContent = scene.mode;
+        voiceNode.textContent = scene.voice;
+        document.querySelectorAll('.scene-tab').forEach((button) => {
+          button.classList.toggle('active', button.dataset.scene === key);
+        });
+        const body =
+          scene.kind === 'ringcentral'
+            ? renderRingCentral(scene)
+            : scene.kind === 'jira'
+            ? renderJira(scene)
+            : renderWeb(scene);
+        stage.innerHTML = `
+          <section class="browser" style="--host-accent:${scene.accent}">
+            ${browserChrome(scene)}
+            <div class="host">${hostTopbar(scene)}${body}</div>
+          </section>`;
+        bindSceneActions();
+      }
+
+      function insertDraft(scene) {
+        const input = stage.querySelector('.composer-input');
+        const receipt = stage.querySelector('.receipt');
+        const assist = stage.querySelector('.assist');
+        if (!input || !receipt) return;
+        input.dataset.previousValue = input.value;
+        input.value = input.value.trim()
+          ? `${input.value.trim()}\n\n${scene.draft}`
+          : scene.draft;
+        assist?.classList.remove('is-review');
+        receipt.classList.add('visible');
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+
+      function bindSceneActions() {
+        const scene = scenes[activeScene];
+        const assist = stage.querySelector('.assist');
+        const input = stage.querySelector('.composer-input');
+        const receipt = stage.querySelector('.receipt');
+        stage
+          .querySelector('[data-action="assist"]')
+          ?.addEventListener('click', () => {
+            if (
+              scene.requiresReview &&
+              !assist.classList.contains('is-review')
+            ) {
+              assist.classList.add('is-review');
+              return;
+            }
+            insertDraft(scene);
+          });
+        stage
+          .querySelector('[data-action="confirm"]')
+          ?.addEventListener('click', () => insertDraft(scene));
+        stage
+          .querySelector('[data-action="cancel"]')
+          ?.addEventListener('click', () =>
+            assist.classList.remove('is-review'),
+          );
+        stage
+          .querySelector('[data-action="undo"]')
+          ?.addEventListener('click', () => {
+            if (!input || !receipt) return;
+            input.value = input.dataset.previousValue || '';
+            receipt.classList.remove('visible');
+            input.focus();
+          });
+      }
+
+      document.querySelectorAll('.scene-tab').forEach((button) => {
+        button.addEventListener('click', () =>
+          renderScene(button.dataset.scene),
+        );
+      });
+
+      renderScene('peer');
+    </script>
+  </body>
+</html>

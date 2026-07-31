@@ -198,7 +198,9 @@ export function decideMemoryLifecycle(
     weak: mode === 'passive_surface' || mode === 'composer_surface' ? 0 : 0.45,
     historical: mode === 'historical' ? 0.55 : 0.25,
     archive_only:
-      mode === 'historical' || mode === 'explicit_search' ? 0.25 : 0,
+      // A user explicitly tracing when or why something happened needs
+      // archive evidence to compete with newer but less specific records.
+      mode === 'historical' || mode === 'explicit_search' ? 0.55 : 0,
     forgotten: mode === 'audit' ? 0.05 : 0,
   };
 

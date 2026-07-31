@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>关键记忆简报 · Memory Lens 同入口交互 Demo</title>
+  <!--
+    Assumptions:
+    1. 关键简报复用现有 Memory Lens Rest / Hover Peek / Expanded Card，不新增第二入口。
+    2. ready / partial 可以占据首屏；stale / unavailable 使用普通关联记忆卡回落。
+    3. 原始记忆是简报的证据下钻，不与简报并列竞争首屏。
+    Reasoning:
+    - 先展示一个可复用结论，再按需展开来源，降低用户扫描和重新归纳成本。
+    - 状态切换器只属于原型控制台，不是生产页面的一部分。
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #dfe4e7;
+      --host: #f7f8f8;
+      --surface: #ffffff;
+      --surface-subtle: #f3f5f5;
+      --surface-strong: #202728;
+      --ink: #172022;
+      --ink-soft: #475356;
+      --muted: #6e797b;
+      --line: #d8dede;
+      --line-strong: #bcc6c7;
+      --green: #17695d;
+      --green-soft: #e5f1ee;
+      --blue: #315a7d;
+      --blue-soft: #e8eff5;
+      --amber: #8a590c;
+      --amber-soft: #fff2d8;
+      --red: #9a3b34;
+      --red-soft: #f8e9e7;
+      --shadow: 0 18px 48px rgba(25, 35, 37, 0.18), 0 3px 10px rgba(25, 35, 37, 0.08);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+      letter-spacing: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; letter-spacing: 0; }
+    button:focus-visible { outline: 3px solid rgba(49, 90, 125, 0.28); outline-offset: 2px; }
+
+    .prototype-bar {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 10px 22px;
+      background: var(--surface-strong);
+      color: #fff;
+      border-bottom: 1px solid #111718;
+    }
+    .prototype-name { min-width: 220px; }
+    .prototype-name strong { display: block; font-size: 14px; font-weight: 700; }
+    .prototype-name span { display: block; margin-top: 2px; color: #b8c2c4; font-size: 11px; }
+    .state-switcher {
+      display: inline-grid;
+      grid-template-columns: repeat(4, minmax(108px, 1fr));
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid #4d585a;
+      border-radius: 7px;
+      background: #30393b;
+    }
+    .state-button {
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: #cdd4d5;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .state-button:hover { background: #3b4648; color: #fff; }
+    .state-button[aria-pressed="true"] { background: #fff; color: var(--ink); font-weight: 700; }
+    .reset-button {
+      margin-left: auto;
+      width: 36px;
+      height: 36px;
+      border: 1px solid #4d585a;
+      border-radius: 6px;
+      background: transparent;
+      color: #d9e0e1;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .reset-button:hover { background: #3b4648; }
+
+    .stage { padding: 28px; }
+    .host-window {
+      position: relative;
+      width: min(1440px, 100%);
+      height: min(820px, calc(100vh - 120px));
+      min-height: 650px;
+      margin: 0 auto;
+      overflow: hidden;
+      background: var(--host);
+      border: 1px solid #aeb8b9;
+      border-radius: 8px;
+      box-shadow: 0 24px 60px rgba(29, 39, 41, 0.16);
+    }
+    .host-topbar {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      padding: 0 18px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+    .window-dots { display: flex; gap: 7px; margin-right: 20px; }
+    .window-dots i { width: 9px; height: 9px; border-radius: 50%; background: #cbd2d3; }
+    .host-brand { font-weight: 750; font-size: 14px; }
+    .host-search {
+      width: min(430px, 42vw);
+      margin: 0 auto;
+      padding: 7px 12px;
+      background: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .host-avatar {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #dae7ed;
+      color: #23465c;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .workspace {
+      height: calc(100% - 54px);
+      display: grid;
+      grid-template-columns: 70px 290px minmax(0, 1fr);
+    }
+    .rail {
+      padding: 14px 10px;
+      background: #273032;
+      color: #b7c0c2;
+      border-right: 1px solid #161c1d;
+    }
+    .rail-item {
+      width: 48px;
+      min-height: 48px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 8px;
+      border-radius: 7px;
+      color: inherit;
+      font-size: 11px;
+      text-align: center;
+    }
+    .rail-item.active { background: #3c494b; color: #fff; }
+    .conversation-list {
+      overflow: hidden;
+      background: #f1f3f3;
+      border-right: 1px solid var(--line);
+    }
+    .list-head { padding: 20px 18px 12px; font-size: 16px; font-weight: 750; }
+    .conversation {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 68px;
+      padding: 10px 14px;
+      border-top: 1px solid #e3e7e7;
+    }
+    .conversation.active { background: #fff; box-shadow: inset 3px 0 0 var(--green); }
+    .conversation-avatar {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #d7e5e1;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .conversation-title { font-size: 12px; font-weight: 700; }
+    .conversation-preview { margin-top: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .conversation-time { color: #8a9496; font-size: 10px; }
+
+    .thread {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background: #fff;
+    }
+    .thread-head {
+      height: 70px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+    }
+    .thread-title { font-weight: 760; }
+    .thread-subtitle { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .thread-status {
+      margin-left: auto;
+      padding: 4px 8px;
+      border-radius: 5px;
+      background: var(--green-soft);
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .messages {
+      height: calc(100% - 138px);
+      overflow: hidden;
+      padding: 24px clamp(24px, 6vw, 82px);
+      background: #fbfcfc;
+    }
+    .date-line { margin: 3px 0 22px; color: #879193; font-size: 10px; text-align: center; }
+    .message {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 660px);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .message.me { grid-template-columns: minmax(0, 660px) 34px; justify-content: end; }
+    .message.me .bubble-wrap { grid-column: 1; grid-row: 1; text-align: right; }
+    .message.me .message-avatar { grid-column: 2; }
+    .message-avatar {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #e3e8e9;
+      color: #516063;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .message-name { margin-bottom: 4px; color: #596568; font-size: 10px; }
+    .bubble {
+      display: inline-block;
+      max-width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: #2c3739;
+      font-size: 13px;
+      line-height: 1.55;
+      text-align: left;
+    }
+    .message.me .bubble { background: #e9f3f0; border-color: #c9dfda; }
+    .composer {
+      position: absolute;
+      right: 24px;
+      bottom: 14px;
+      left: 24px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 13px;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      color: #8a9496;
+      font-size: 12px;
+    }
+    .composer button {
+      margin-left: auto;
+      border: 0;
+      background: transparent;
+      color: #849092;
+      font-size: 17px;
+    }
+
+    .lens-layer {
+      position: absolute;
+      right: 22px;
+      bottom: 76px;
+      z-index: 20;
+    }
+    .lens-button {
+      position: relative;
+      width: 46px;
+      height: 46px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid rgba(28, 51, 48, 0.22);
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(27, 52, 49, 0.22);
+      cursor: pointer;
+    }
+    .lens-button img { width: 31px; height: 31px; border-radius: 50%; }
+    .lens-dot {
+      position: absolute;
+      top: 1px;
+      right: 0;
+      width: 10px;
+      height: 10px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .lens-dot.conflict { background: #c47c14; }
+    .lens-dot.stale { background: #7d8789; }
+
+    .peek,
+    .lens-card {
+      position: absolute;
+      right: 0;
+      bottom: 58px;
+      width: min(390px, calc(100vw - 48px));
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .peek { width: min(320px, calc(100vw - 48px)); padding: 13px 14px; }
+    .peek-top { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 700; }
+    .peek-badge {
+      margin-left: auto;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--green-soft);
+      color: var(--green);
+    }
+    .peek-badge.conflict { background: var(--amber-soft); color: var(--amber); }
+    .peek-title { margin-top: 9px; font-size: 13px; font-weight: 760; line-height: 1.35; }
+    .peek-reason { margin-top: 5px; color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
+    .peek-meta { margin-top: 9px; color: var(--muted); font-size: 10px; }
+    .peek-boundary { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); color: #7b8587; font-size: 10px; }
+
+    .lens-card { max-height: min(680px, calc(100vh - 155px)); overflow: hidden; }
+    .card-head {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px 8px 13px;
+      border-bottom: 1px solid var(--line);
+    }
+    .card-head img { width: 18px; height: 18px; border-radius: 50%; }
+    .card-brand { min-width: 0; font-size: 11px; font-weight: 760; }
+    .card-context { overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .icon-button {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: #687476;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .icon-button:first-of-type { margin-left: auto; }
+    .icon-button:hover { background: var(--surface-subtle); color: var(--ink); }
+    .card-scroll { max-height: calc(min(680px, 100vh - 155px) - 48px); overflow: auto; }
+    .card-body { padding: 15px; }
+    .brief-heading { display: flex; align-items: center; gap: 8px; }
+    .kicker { color: var(--green); font-size: 10px; font-weight: 800; }
+    .status-pill {
+      margin-left: auto;
+      padding: 3px 7px;
+      border-radius: 4px;
+      background: var(--green-soft);
+      color: var(--green);
+      font-size: 9px;
+      font-weight: 800;
+    }
+    .status-pill.partial { background: var(--amber-soft); color: var(--amber); }
+    .card-title { margin: 8px 0 5px; font-size: 17px; line-height: 1.28; font-weight: 780; text-wrap: pretty; }
+    .card-summary { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
+    .why-now {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border: 1px solid #cfe0dd;
+      border-radius: 6px;
+      background: #f0f7f5;
+      color: #285c54;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .brief-meta { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 10px; }
+    .warning {
+      margin: 0 15px 12px;
+      padding: 9px 10px;
+      border: 1px solid #e6c88f;
+      border-radius: 6px;
+      background: var(--amber-soft);
+      color: #6c470d;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .warning.stale { margin: 0 0 13px; border-color: #d6dcdc; background: #f1f4f4; color: #596567; }
+    .slot { margin-top: 14px; }
+    .slot-title { margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 800; }
+    .slot ul { margin: 0; padding-left: 17px; color: #2c3739; font-size: 12px; line-height: 1.5; }
+    .slot li + li { margin-top: 5px; }
+    .authority { color: var(--blue); font-size: 9px; white-space: nowrap; }
+    .evidence-toggle,
+    .back-button {
+      width: 100%;
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 15px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+      color: var(--ink-soft);
+      cursor: pointer;
+      text-align: left;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .evidence-toggle:hover,
+    .back-button:hover { border-color: var(--line-strong); background: #edf0f0; }
+    .evidence-panel { margin-top: 10px; border-top: 1px solid var(--line); }
+    .evidence-label { padding: 12px 0 6px; color: var(--muted); font-size: 9px; font-weight: 800; }
+    .source-line { display: flex; align-items: flex-start; gap: 9px; padding: 9px 0; border-top: 1px solid #edf0f0; }
+    .source-mark {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      border-radius: 5px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 9px;
+      font-weight: 800;
+    }
+    .source-copy { min-width: 0; }
+    .source-title { font-size: 11px; font-weight: 700; }
+    .source-sub { margin-top: 2px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+    .memory-row {
+      width: 100%;
+      display: block;
+      padding: 10px 0;
+      border: 0;
+      border-top: 1px solid #edf0f0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    .memory-row:hover .memory-title { color: var(--green); }
+    .memory-title { font-size: 11px; font-weight: 730; }
+    .memory-summary { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .raw-type { color: var(--blue); font-family: var(--mono); font-size: 9px; }
+    .raw-quote {
+      margin: 12px 0 0;
+      padding: 10px 11px;
+      border-left: 3px solid #9eb7c8;
+      background: var(--blue-soft);
+      color: #304654;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+    .card-actions { display: flex; gap: 7px; margin-top: 15px; }
+    .action-button {
+      min-height: 34px;
+      padding: 7px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .action-button:hover { border-color: #829092; color: var(--ink); }
+    .action-button.primary { border-color: #b8d7d1; background: var(--green-soft); color: var(--green); }
+    .action-button.quiet { margin-left: auto; border-color: transparent; color: var(--muted); }
+    .action-button:disabled { border-color: var(--line); background: #f2f4f4; color: #9aa3a5; cursor: not-allowed; }
+    .boundary { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: #778284; font-size: 9px; line-height: 1.45; }
+    .menu {
+      position: absolute;
+      top: 42px;
+      right: 40px;
+      z-index: 2;
+      width: 178px;
+      padding: 5px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(25, 35, 37, 0.16);
+    }
+    .menu button { width: 100%; padding: 8px; border: 0; border-radius: 4px; background: transparent; color: var(--red); cursor: pointer; text-align: left; font-size: 11px; }
+    .menu button:hover { background: var(--red-soft); }
+    .toast {
+      position: absolute;
+      left: 50%;
+      bottom: 22px;
+      z-index: 30;
+      max-width: min(440px, calc(100% - 40px));
+      padding: 9px 13px;
+      border-radius: 6px;
+      background: #202728;
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(25, 35, 37, 0.24);
+      font-size: 11px;
+      transform: translateX(-50%);
+    }
+
+    @media (max-width: 980px) {
+      .prototype-bar { align-items: flex-start; flex-wrap: wrap; }
+      .prototype-name { min-width: 180px; }
+      .state-switcher { width: calc(100% - 230px); grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .stage { padding: 14px; }
+      .host-window { height: calc(100vh - 150px); min-height: 620px; }
+      .workspace { grid-template-columns: 62px 220px minmax(0, 1fr); }
+      .conversation-list { display: none; }
+      .workspace { grid-template-columns: 62px minmax(0, 1fr); }
+      .messages { padding-right: 28px; padding-left: 28px; }
+    }
+    @media (max-width: 640px) {
+      .prototype-bar { padding: 10px 12px; }
+      .prototype-name { width: calc(100% - 50px); }
+      .state-switcher { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .state-button { white-space: normal; }
+      .reset-button { position: absolute; top: 10px; right: 12px; }
+      .stage { padding: 0; }
+      .host-window { height: calc(100vh - 142px); min-height: 600px; border: 0; border-radius: 0; }
+      .host-search, .rail { display: none; }
+      .workspace { grid-template-columns: 1fr; }
+      .thread-head { padding: 0 15px; }
+      .messages { padding: 18px 15px; }
+      .composer { right: 12px; left: 12px; }
+      .lens-layer { right: 12px; bottom: 74px; }
+      .lens-card { max-height: calc(100vh - 310px); }
+      .card-scroll { max-height: calc(100vh - 358px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="prototype-bar">
+    <div class="prototype-name">
+      <strong>关键记忆简报 · 同入口方案</strong>
+      <span id="stateDescription">ready：简报替换普通卡首屏，原始记忆进入证据层</span>
+    </div>
+    <div class="state-switcher" role="group" aria-label="切换简报状态">
+      <button class="state-button" data-mode="ready" aria-pressed="true">Ready · 简报首屏</button>
+      <button class="state-button" data-mode="partial" aria-pressed="false">Partial · 冲突首屏</button>
+      <button class="state-button" data-mode="stale" aria-pressed="false">Stale · 原始回落</button>
+      <button class="state-button" data-mode="absent" aria-pressed="false">无可用简报 · 原始回落</button>
+    </div>
+    <button class="reset-button" id="resetDemo" title="重置并收起 Memory Lens" aria-label="重置并收起 Memory Lens">↺</button>
+  </header>
+
+  <main class="stage">
+    <section class="host-window" aria-label="RingCentral 群聊模拟页面">
+      <header class="host-topbar">
+        <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="host-brand">Messages</span>
+        <div class="host-search">搜索消息、项目或联系人</div>
+        <div class="host-avatar">EQ</div>
+      </header>
+
+      <div class="workspace">
+        <nav class="rail" aria-label="主导航">
+          <div class="rail-item active">消息</div>
+          <div class="rail-item">视频</div>
+          <div class="rail-item">任务</div>
+        </nav>
+
+        <aside class="conversation-list" aria-label="会话列表">
+          <div class="list-head">团队消息</div>
+          <div class="conversation active">
+            <div class="conversation-avatar">WA</div>
+            <div><div class="conversation-title">WhatsApp Integration</div><div class="conversation-preview">SMS provider can reuse...</div></div>
+            <div class="conversation-time">10:42</div>
+          </div>
+          <div class="conversation">
+            <div class="conversation-avatar">PL</div>
+            <div><div class="conversation-title">Platform Weekly</div><div class="conversation-preview">DEV estimate migration</div></div>
+            <div class="conversation-time">昨天</div>
+          </div>
+          <div class="conversation">
+            <div class="conversation-avatar">AI</div>
+            <div><div class="conversation-title">AI Notes</div><div class="conversation-preview">Prompt evaluation notes</div></div>
+            <div class="conversation-time">周一</div>
+          </div>
+        </aside>
+
+        <section class="thread" aria-label="WhatsApp Integration 会话">
+          <header class="thread-head">
+            <div class="conversation-avatar">WA</div>
+            <div><div class="thread-title">WhatsApp Integration</div><div class="thread-subtitle">12 位成员 · Messaging Platform</div></div>
+            <span class="thread-status">当前话题稳定</span>
+          </header>
+          <div class="messages">
+            <div class="date-line">今天</div>
+            <article class="message">
+              <div class="message-avatar">JL</div>
+              <div class="bubble-wrap"><div class="message-name">Jason Li · 10:31</div><div class="bubble">WhatsApp provider 的 outbound flow 还需要单独重写吗？尤其是 template validation 和 fallback。</div></div>
+            </article>
+            <article class="message me">
+              <div class="message-avatar">EQ</div>
+              <div class="bubble-wrap"><div class="message-name">你 · 10:36</div><div class="bubble">先确认 SMS / RingCX 现在复用的是哪一层 provider contract，再决定 WhatsApp 只补 channel-specific adapter 还是整条链路。</div></div>
+            </article>
+            <article class="message">
+              <div class="message-avatar">MN</div>
+              <div class="bubble-wrap"><div class="message-name">Mina · 10:42</div><div class="bubble">我记得之前有结论是复用 SMS 的 orchestration，但 provider fallback 不能直接照搬。出处有人记得吗？</div></div>
+            </article>
+          </div>
+          <div class="composer">回复 WhatsApp Integration <button type="button" aria-label="发送" title="发送">↗</button></div>
+        </section>
+      </div>
+
+      <div class="lens-layer" id="lensLayer"></div>
+      <div id="toastRegion" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script>
+    const modeDescriptions = {
+      ready: 'ready：简报替换普通卡首屏，原始记忆进入证据层',
+      partial: 'partial：冲突简报仍占首屏，但复制外发被真实禁用',
+      stale: 'stale：显示过期警告，普通关联记忆恢复为主内容',
+      absent: 'candidate / blocked / hidden / 缺失：完全沿用普通关联记忆'
+    };
+
+    const rawMemories = [
+      {
+        type: 'RingCentral 消息',
+        title: 'SMS provider reuse discussion',
+        summary: 'Outbound orchestration can be shared, but channel-specific validation and provider fallback remain isolated.',
+        quote: 'Reuse orchestration, not the provider-specific fallback policy.',
+        meta: 'Messaging Platform · 2026-06-18 · 工作记忆'
+      },
+      {
+        type: 'Jira',
+        title: 'MSG-2841 · WhatsApp adapter scope',
+        summary: 'The ticket limits P0 to template validation, delivery callback normalization and a separate WhatsApp adapter.',
+        quote: 'Do not fork the whole outbound pipeline for P0.',
+        meta: 'MSG-2841 · 2026-07-02 · 工作记忆'
+      },
+      {
+        type: '会议纪要',
+        title: 'Provider architecture review',
+        summary: 'The review confirmed the shared contract boundary and called out fallback behavior as a channel-owned decision.',
+        quote: 'Shared contract; isolated fallback and compliance rules.',
+        meta: 'Platform Review · 2026-07-08 · 工作记忆'
+      }
+    ];
+
+    const model = {
+      mode: 'ready',
+      open: false,
+      peek: false,
+      evidence: false,
+      rawIndex: null,
+      menu: false,
+      suppressed: false,
+      toastTimer: null
+    };
+
+    const lensLayer = document.getElementById('lensLayer');
+    const toastRegion = document.getElementById('toastRegion');
+    const stateDescription = document.getElementById('stateDescription');
+
+    function effectiveMode() {
+      return model.suppressed ? 'absent' : model.mode;
+    }
+
+    function statusDotClass() {
+      if (effectiveMode() === 'partial') return 'conflict';
+      if (effectiveMode() === 'stale' || effectiveMode() === 'absent') return 'stale';
+      return '';
+    }
+
+    function iconLabel() {
+      const mode = effectiveMode();
+      if (mode === 'ready') return 'Memory Lens，关键简报：WhatsApp 集成复用路径。只读提示，不写入、插入或发送';
+      if (mode === 'partial') return 'Memory Lens，有冲突的关键简报。只读提示，需先复核来源';
+      if (mode === 'stale') return 'Memory Lens，有旧简报，当前展示原始关联记忆';
+      return 'Memory Lens，3 条关联记忆。只读提示，不写入、插入或发送';
+    }
+
+    function renderPeek() {
+      const mode = effectiveMode();
+      if (mode === 'ready') {
+        return `<aside class="peek" role="status" data-testid="lens-peek">
+          <div class="peek-top">Memory Lens <span class="peek-badge">关键简报</span></div>
+          <div class="peek-title">WhatsApp 集成复用路径</div>
+          <div class="peek-reason">此刻相关：命中当前话题，并覆盖本轮 3 条原始记忆</div>
+          <div class="peek-meta">3 条独立来源 · 截至 7 月 8 日</div>
+          <div class="peek-boundary">只读简报 · 点击查看证据，不自动写入或发送</div>
+        </aside>`;
+      }
+      if (mode === 'partial') {
+        return `<aside class="peek" role="status" data-testid="lens-peek">
+          <div class="peek-top">Memory Lens <span class="peek-badge conflict">有冲突</span></div>
+          <div class="peek-title">WhatsApp 集成复用路径</div>
+          <div class="peek-reason">fallback ownership 存在两种口径，需要先核对来源</div>
+          <div class="peek-meta">3 条来源 · 1 个冲突 slot</div>
+          <div class="peek-boundary">冲突简报不可复制外发 · 点击查看证据</div>
+        </aside>`;
+      }
+      return `<aside class="peek" role="status" data-testid="lens-peek">
+        <div class="peek-top">Memory Lens <span class="peek-badge ${mode === 'stale' ? 'conflict' : ''}">${mode === 'stale' ? '旧简报已降级' : '强相关'}</span></div>
+        <div class="peek-title">SMS provider reuse discussion</div>
+        <div class="peek-reason">${mode === 'stale' ? '简报来源已过期，当前先展示原始记忆' : '因为：同一项目 · 同一 provider 话题'}</div>
+        <div class="peek-meta">当前预览第 1/3 条 · RingCentral 消息</div>
+        <div class="peek-boundary">只读提示 · 点击查看详情，不写入、插入或发送</div>
+      </aside>`;
+    }
+
+    function renderSourceMap() {
+      return `<div class="evidence-panel" data-testid="evidence-panel">
+        <div class="evidence-label">来源图</div>
+        <div class="source-line"><span class="source-mark">RC</span><div class="source-copy"><div class="source-title">RingCentral · 架构讨论</div><div class="source-sub">直接证据 · 2026-06-18 · orchestration 可复用</div></div></div>
+        <div class="source-line"><span class="source-mark">JI</span><div class="source-copy"><div class="source-title">Jira MSG-2841 · P0 范围</div><div class="source-sub">任务事实 · 2026-07-02 · 不 fork 全链路</div></div></div>
+        <div class="source-line"><span class="source-mark">MT</span><div class="source-copy"><div class="source-title">Platform Review · 决策纪要</div><div class="source-sub">决策来源 · 2026-07-08 · fallback 归 channel 管</div></div></div>
+        <div class="evidence-label">本轮原始关联记忆</div>
+        ${rawMemories.map((item, index) => `<button class="memory-row" data-raw-index="${index}" type="button"><div class="memory-title">${item.title}</div><div class="memory-summary">${item.type} · ${item.summary}</div></button>`).join('')}
+      </div>`;
+    }
+
+    function renderBriefBody(mode) {
+      const partial = mode === 'partial';
+      return `${partial ? `<div class="warning" role="status">这份简报存在冲突：会议纪要把 fallback 归到 channel adapter，较早消息仍写成 shared provider policy。行动或外发前请先核对双方来源。</div>` : ''}
+        <div class="card-body">
+          <div class="brief-heading"><span class="kicker">关键简报</span><span class="status-pill ${partial ? 'partial' : ''}">${partial ? 'PARTIAL · 有冲突' : 'READY · 可复用'}</span></div>
+          <h2 class="card-title">WhatsApp 集成复用路径</h2>
+          <p class="card-summary">复用 SMS / RingCX 的 outbound orchestration 和公共 contract；WhatsApp 只新增 template validation、callback normalization 与 channel adapter，不复制整条发送链路。</p>
+          <div class="why-now">此刻相关：当前群聊正在确认 WhatsApp provider scope，并覆盖本轮 3 条原始记忆。</div>
+          <div class="brief-meta"><span>3 条独立来源</span><span>来源截至 2026-07-08</span><span>工作记忆</span></div>
+          <section class="slot"><div class="slot-title">约束与边界</div><ul><li>Provider fallback 和 compliance policy 仍由 channel adapter 隔离。 <span class="authority">决策来源</span></li><li>P0 不 fork outbound pipeline，也不改共享 delivery contract。 <span class="authority">Jira 事实</span></li></ul></section>
+          <section class="slot"><div class="slot-title">已有判断</div><ul><li>先复用 orchestration，再补 WhatsApp 特有 validation 与 callback mapping。 <span class="authority">跨来源一致</span></li></ul></section>
+          <section class="slot"><div class="slot-title">易错点</div><ul><li>“复用 SMS”不等于复用 SMS provider fallback。</li></ul></section>
+          <button class="evidence-toggle" type="button" aria-expanded="${String(model.evidence)}" data-testid="evidence-toggle"><span>来源与原始记忆</span><span>${model.evidence ? '收起' : '3 条来源 · 3 条记忆'} ${model.evidence ? '↑' : '↓'}</span></button>
+          ${model.evidence ? renderSourceMap() : ''}
+          <div class="card-actions">
+            <button class="action-button primary" data-action="copy" type="button" ${partial ? 'disabled title="当前简报有冲突，不能复制外发摘要"' : 'title="复制经过敏感字段脱敏的简报摘要"'}>复制脱敏摘要</button>
+            <button class="action-button" data-action="useful" type="button">有用</button>
+            <button class="action-button quiet" data-action="inaccurate" type="button">不准，改看原始记忆</button>
+          </div>
+          <div class="boundary">只读简报 · 不写画像/任务，不插入或发送；反馈只写简报事件</div>
+        </div>`;
+    }
+
+    function renderRawBody(mode) {
+      const item = rawMemories[model.rawIndex ?? 0];
+      const canBack = model.rawIndex !== null && (model.mode === 'ready' || model.mode === 'partial') && !model.suppressed;
+      return `<div class="card-body">
+        ${mode === 'stale' ? `<div class="warning stale" role="status">有旧简报，来源截至 2026-04-03；有效期已过。当前展示原始记忆，不把旧摘要当作当前事实。</div>` : ''}
+        ${canBack ? `<button class="back-button" data-action="back" type="button"><span>‹ 返回关键简报</span><span>证据 ${model.rawIndex + 1}/3</span></button>` : ''}
+        <div class="brief-heading"><span class="kicker">关联记忆</span><span class="status-pill">强相关</span></div>
+        <div class="raw-type">${item.type}</div>
+        <h2 class="card-title">${item.title}</h2>
+        <p class="card-summary">${item.summary}</p>
+        <blockquote class="raw-quote">${item.quote}</blockquote>
+        <div class="brief-meta"><span>${item.meta}</span><span>当前第 ${(model.rawIndex ?? 0) + 1}/3 条</span></div>
+        <section class="slot"><div class="slot-title">为什么相关</div><ul><li>同一项目：WhatsApp Integration</li><li>同一话题：provider orchestration / fallback</li></ul></section>
+        <div class="card-actions"><button class="action-button" type="button" data-action="useful-raw">有用</button><button class="action-button quiet" type="button" data-action="next-raw">下一条 →</button></div>
+        <div class="boundary">普通关联记忆 · 只读展示，不写入网页、不插入输入框、不发送</div>
+      </div>`;
+    }
+
+    function renderCard() {
+      const mode = effectiveMode();
+      const briefPrimary = (mode === 'ready' || mode === 'partial') && model.rawIndex === null;
+      return `<section class="lens-card" role="dialog" aria-label="Memory Lens 详情" data-testid="lens-card">
+        <header class="card-head">
+          <img src="./icon48.png" alt="" />
+          <div class="card-brand">Memory Lens<div class="card-context">WhatsApp Integration · 本轮召回 · 只读</div></div>
+          <button class="icon-button" data-action="menu" type="button" aria-label="更多操作" title="更多操作">⋯</button>
+          <button class="icon-button" data-action="close" type="button" aria-label="收起 Memory Lens" title="收起">×</button>
+        </header>
+        ${model.menu ? `<div class="menu" role="menu"><button type="button" data-action="hide" role="menuitem">隐藏这份关键简报</button></div>` : ''}
+        <div class="card-scroll">${briefPrimary ? renderBriefBody(mode) : renderRawBody(mode)}</div>
+      </section>`;
+    }
+
+    function render() {
+      lensLayer.innerHTML = `${model.peek && !model.open ? renderPeek() : ''}${model.open ? renderCard() : ''}
+        <button class="lens-button" id="lensButton" type="button" aria-expanded="${String(model.open)}" aria-label="${iconLabel()}" title="${iconLabel()}" data-testid="lens-button">
+          <img src="./icon48.png" alt="" /><span class="lens-dot ${statusDotClass()}" aria-hidden="true"></span>
+        </button>`;
+      bindLensEvents();
+    }
+
+    function showToast(message) {
+      clearTimeout(model.toastTimer);
+      toastRegion.innerHTML = `<div class="toast" role="status">${message}</div>`;
+      model.toastTimer = setTimeout(() => { toastRegion.innerHTML = ''; }, 2800);
+    }
+
+    function fallbackToRaw(message) {
+      model.suppressed = true;
+      model.rawIndex = null;
+      model.evidence = false;
+      model.menu = false;
+      model.open = true;
+      render();
+      showToast(message);
+    }
+
+    function setPeekVisible(visible) {
+      model.peek = visible && !model.open;
+      const existing = lensLayer.querySelector('[data-testid="lens-peek"]');
+      if (model.peek && !existing) {
+        lensLayer.insertAdjacentHTML('afterbegin', renderPeek());
+      } else if (!model.peek && existing) {
+        existing.remove();
+      }
+    }
+
+    function bindLensEvents() {
+      const button = document.getElementById('lensButton');
+      button.addEventListener('mouseenter', () => setPeekVisible(true));
+      button.addEventListener('focus', () => setPeekVisible(true));
+      button.addEventListener('mouseleave', () => setPeekVisible(false));
+      button.addEventListener('blur', () => setPeekVisible(false));
+      button.addEventListener('click', () => { model.open = !model.open; model.peek = false; model.menu = false; render(); });
+
+      lensLayer.querySelectorAll('[data-action]').forEach((element) => {
+        element.addEventListener('click', async () => {
+          const action = element.dataset.action;
+          if (action === 'close') { model.open = false; model.menu = false; model.rawIndex = null; render(); }
+          if (action === 'menu') { model.menu = !model.menu; render(); }
+          if (action === 'hide') fallbackToRaw('关键简报已隐藏；同一入口已切换到原始关联记忆。');
+          if (action === 'inaccurate') fallbackToRaw('已标记简报不准并进入待修复；原始记忆未被修改。');
+          if (action === 'back') { model.rawIndex = null; render(); }
+          if (action === 'useful') showToast('简报有用反馈已确认；原始记忆未被修改。');
+          if (action === 'useful-raw') showToast('原始记忆反馈已记录，与简报事件分开。');
+          if (action === 'next-raw') { model.rawIndex = ((model.rawIndex ?? 0) + 1) % rawMemories.length; render(); }
+          if (action === 'copy' && !element.disabled) {
+            const copyText = 'WhatsApp 集成复用路径：复用 outbound orchestration 和公共 contract；WhatsApp 特有 validation、callback 与 fallback 保持 channel 隔离。';
+            try { await navigator.clipboard.writeText(copyText); } catch (error) {
+              const area = document.createElement('textarea');
+              area.value = copyText;
+              document.body.appendChild(area);
+              area.select();
+              document.execCommand('copy');
+              area.remove();
+            }
+            showToast('已复制脱敏摘要；未复制来源 URL、账号或原始消息。');
+          }
+        });
+      });
+
+      const evidenceToggle = lensLayer.querySelector('[data-testid="evidence-toggle"]');
+      if (evidenceToggle) evidenceToggle.addEventListener('click', () => { model.evidence = !model.evidence; render(); });
+      lensLayer.querySelectorAll('[data-raw-index]').forEach((element) => {
+        element.addEventListener('click', () => { model.rawIndex = Number(element.dataset.rawIndex); model.menu = false; render(); });
+      });
+    }
+
+    document.querySelectorAll('[data-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        model.mode = button.dataset.mode;
+        model.open = true;
+        model.peek = false;
+        model.evidence = false;
+        model.rawIndex = null;
+        model.menu = false;
+        model.suppressed = false;
+        stateDescription.textContent = modeDescriptions[model.mode];
+        document.querySelectorAll('[data-mode]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+        render();
+      });
+    });
+
+    document.getElementById('resetDemo').addEventListener('click', () => {
+      model.mode = 'ready';
+      model.open = false;
+      model.peek = false;
+      model.evidence = false;
+      model.rawIndex = null;
+      model.menu = false;
+      model.suppressed = false;
+      stateDescription.textContent = modeDescriptions.ready;
+      document.querySelectorAll('[data-mode]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.mode === 'ready')));
+      render();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && model.open) { model.open = false; model.menu = false; model.rawIndex = null; render(); }
+    });
+
+    render();
+  </script>
+</body>
+</html>

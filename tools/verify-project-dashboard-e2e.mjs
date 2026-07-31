@@ -764,12 +764,32 @@ try {
   }).locator('p', {
     hasText: '不含工时、故事点或范围变化',
   }).waitFor({ timeout: 15000 });
-  await page.locator('.focus-item.blocked', {
+  const crossProjectFocusItem = page.locator('.focus-item.blocked', {
     hasText: 'Resolve release blocker',
-  }).locator('.focus-risk.risk-high', {
+  });
+  await crossProjectFocusItem.locator('.focus-risk.risk-high', {
     hasText: '高风险',
   }).waitFor({ timeout: 15000 });
-  await riskCard.locator('.project-alert-risk.risk-high').waitFor({ timeout: 15000 });
+  assert.match(
+    await crossProjectFocusItem.getAttribute('title') || '',
+    /跨项目优先处理入口：打开 Risk Demo Project \/ Resolve release blocker 的本地任务详情/,
+  );
+  assert.match(
+    await crossProjectFocusItem.getAttribute('aria-label') || '',
+    /不会读取或写回 Memory Service、Jira、GitHub、Confluence/,
+  );
+  const projectPriorityItem = riskCard.locator('.project-alert.blocked', {
+    hasText: 'Resolve release blocker',
+  });
+  await projectPriorityItem.locator('.project-alert-risk.risk-high').waitFor({ timeout: 15000 });
+  assert.match(
+    await projectPriorityItem.getAttribute('title') || '',
+    /项目内优先处理入口：打开 Risk Demo Project \/ Resolve release blocker 的本地任务详情/,
+  );
+  assert.match(
+    await projectPriorityItem.getAttribute('aria-label') || '',
+    /不会确认项目状态、创建外部任务或发送通知/,
+  );
 
   const staleCard = page.locator('.project-card', {
     hasText: 'Stale Demo Project',

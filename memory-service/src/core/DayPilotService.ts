@@ -164,6 +164,24 @@ interface ReflectionCandidateRow {
   latest_summary: string | null;
   next_reflection_at: number | null;
   updated_at: number;
+  exit_contract_id: string | null;
+  exit_question_text: string | null;
+  exit_last_resumed_at: number | null;
+  exit_receipt_json: string | null;
+}
+
+interface DayPilotOpenQuestionExitReceipt {
+  contractId: string;
+  state: string;
+  reasonCode: string;
+  label: string;
+  summary: string;
+  boundary: string;
+  nextStep: string;
+  userImpact: string;
+  newEvidenceRefs: string[];
+  duplicateSuppressedCount: number;
+  resumedAt?: number;
 }
 
 interface RehearsalCandidateRow {
@@ -236,6 +254,7 @@ interface Candidate {
   sourceUrl?: string;
   meetingExternalId?: string;
   rehearsalCueReceipt?: DayPilotRehearsalCueReceipt;
+  openQuestionExitReceipt?: DayPilotOpenQuestionExitReceipt;
 }
 
 interface Cluster {
@@ -1723,13 +1742,39 @@ export class DayPilotService {
     ).count;
     const rows = this.db
       .prepare(
-        `SELECT id, topic_key, title, priority, salience, source_type, source_ref_id,
-                current_hypothesis, open_questions_json, latest_summary,
-                next_reflection_at, updated_at
-         FROM reflection_threads
-         WHERE status = 'active'
-           AND (priority >= 7 OR next_reflection_at IS NULL OR next_reflection_at <= ?)
-         ORDER BY priority DESC, updated_at DESC
+        `SELECT t.id, t.topic_key, t.title, t.priority, t.salience,
+                t.source_type, t.source_ref_id, t.current_hypothesis,
+                t.open_questions_json, t.latest_summary,
+                t.next_reflection_at, t.updated_at,
+                oq.id AS exit_contract_id,
+                oq.question_text AS exit_question_text,
+                oq.last_resumed_at AS exit_last_resumed_at,
+                oq.receipt_json AS exit_receipt_json
+         FROM reflection_threads t
+         LEFT JOIN open_question_exit_contracts oq
+           ON oq.id = (
+             SELECT managed.id
+             FROM open_question_exit_contracts managed
+             WHERE managed.source_kind = 'reflection_thread'
+               AND managed.source_ref_id = t.id
+               AND managed.state = 'active'
+               AND managed.user_impact = 'blocking_today'
+               AND managed.last_resumed_at IS NOT NULL
+             ORDER BY managed.last_resumed_at DESC, managed.updated_at DESC
+             LIMIT 1
+           )
+         WHERE t.status = 'active'
+           AND (t.priority >= 7 OR t.next_reflection_at IS NULL OR t.next_reflection_at <= ?)
+           AND (
+             NOT EXISTS (
+               SELECT 1
+               FROM open_question_exit_contracts managed
+               WHERE managed.source_kind = 'reflection_thread'
+                 AND managed.source_ref_id = t.id
+             )
+             OR oq.id IS NOT NULL
+           )
+         ORDER BY t.priority DESC, COALESCE(oq.last_resumed_at, t.updated_at) DESC
          LIMIT 30`,
       )
       .all(currentTime) as ReflectionCandidateRow[];
@@ -1751,10 +1796,16 @@ export class DayPilotService {
     if (this.isStaleLowValueFactFollowup(text, row.updated_at, currentTime)) {
       return null;
     }
+    const exitReceipt = row.exit_receipt_json
+      ? safeJsonParse<DayPilotOpenQuestionExitReceipt | null>(
+          row.exit_receipt_json,
+          null,
+        )
+      : null;
     const due =
       !row.next_reflection_at || row.next_reflection_at <= currentTime;
     const privacyRisk = this.privacyRisk(text);
-    const urgency = due ? 0.68 : 0.38;
+    const urgency = exitReceipt ? 0.78 : due ? 0.68 : 0.38;
     const score = this.computeScore({
       urgency,
       openLoopPressure: 0.72,
@@ -1762,7 +1813,7 @@ export class DayPilotService {
       sourceImportance: clamp01((row.priority || 5) / 10),
       sourceDiversity: 0.42,
       evidenceConfidence: row.salience ?? 0.55,
-      novelty: 0.5,
+      novelty: exitReceipt ? 0.9 : 0.5,
       recurringNoise: 0,
       feedbackFatigue: 0,
       privacyRisk,
@@ -1776,7 +1827,7 @@ export class DayPilotService {
         row.current_hypothesis || row.latest_summary || row.title,
         260,
       ),
-      timestamp: row.updated_at,
+      timestamp: row.exit_last_resumed_at ?? row.updated_at,
       dueAt: row.next_reflection_at ?? undefined,
       score,
       urgency,
@@ -1786,7 +1837,7 @@ export class DayPilotService {
       privacyRisk,
       recurringNoise: 0,
       cardType: 'thread_followup',
-      state: due ? 'waiting' : 'prepare',
+      state: exitReceipt ? 'prepare' : due ? 'waiting' : 'prepare',
       people: [],
       projects: row.source_type
         ? [{ name: row.source_type, type: 'Source' }]
@@ -1799,12 +1850,12 @@ export class DayPilotService {
           row.current_hypothesis || row.latest_summary || row.title,
           260,
         ),
-        timestamp: row.updated_at,
+        timestamp: row.exit_last_resumed_at ?? row.updated_at,
       },
-      openQuestions: safeJsonParse<string[]>(row.open_questions_json, []).slice(
-        0,
-        3,
-      ),
+      openQuestions: row.exit_question_text
+        ? [row.exit_question_text]
+        : safeJsonParse<string[]>(row.open_questions_json, []).slice(0, 3),
+      openQuestionExitReceipt: exitReceipt ?? undefined,
     };
   }
 
@@ -2167,6 +2218,9 @@ export class DayPilotService {
     const nextAction = this.nextBestAction(cardType, title, cluster.candidates);
     const whyNow = this.whyNow(cluster);
     const rehearsalCueReceipt = this.rehearsalCueReceiptForCluster(cluster);
+    const openQuestionExitReceipt = cluster.candidates.find(
+      (candidate) => candidate.openQuestionExitReceipt,
+    )?.openQuestionExitReceipt;
     const score = this.applyFeedbackSignal(
       this.clusterScore(cluster) -
         this.clusterStalenessPenalty(cluster, generatedAt),
@@ -2251,6 +2305,7 @@ export class DayPilotService {
       contextPack: {
         preview: compactText(`${title}: ${whyNow}`, 260),
         rehearsalCueReceipt,
+        openQuestionExitReceipt,
         prepId:
           cardType === 'meeting_prepare'
             ? this.findDefaultMeetingPrepId(cluster.candidates, localDate)
@@ -2877,6 +2932,9 @@ export class DayPilotService {
       Number.isFinite(latestTimestamp) && now() - latestTimestamp > 7 * 86400
         ? `${Math.floor((now() - latestTimestamp) / 86400)} 天前的`
         : '最近窗口内的';
+    if (top.openQuestionExitReceipt) {
+      return `新证据恢复：${top.openQuestionExitReceipt.summary} ${top.openQuestionExitReceipt.boundary}`;
+    }
     if (top.cardType === 'meeting_prepare' && top.dueAt) {
       return `${formatDateTime(
         top.dueAt,
@@ -2908,6 +2966,10 @@ export class DayPilotService {
     title: string,
     candidates: Candidate[],
   ): string {
+    const exitReceipt = candidates.find(
+      (candidate) => candidate.openQuestionExitReceipt,
+    )?.openQuestionExitReceipt;
+    if (exitReceipt?.nextStep) return exitReceipt.nextStep;
     const text = `${title} ${candidates.map((item) => item.snippet).join(' ')}`;
     if (cardType === 'decision_check')
       return '进入对应处理页确认是否执行或如何拍板';

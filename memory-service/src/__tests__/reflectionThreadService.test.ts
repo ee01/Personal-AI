@@ -8,6 +8,7 @@ import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ReflectionResearcher } from '../core/ReflectionResearcher.js';
 import { RecallEngine } from '../core/RecallEngine.js';
 import { ReflectionWorker } from '../core/ReflectionWorker.js';
+import { ActionReadinessService } from '../core/ActionReadinessService.js';
 import { now } from '../utils/time.js';
 
 describe('ReflectionThreadService', () => {
@@ -17,12 +18,19 @@ describe('ReflectionThreadService', () => {
   const actionRepo = new ActionRepository(db);
 
   beforeEach(() => {
+    db.prepare('DELETE FROM open_question_exit_runs').run();
+    db.prepare('DELETE FROM open_question_exit_contracts').run();
+    db.prepare('DELETE FROM action_readiness_links').run();
+    db.prepare('DELETE FROM action_readiness_contracts').run();
     db.prepare('DELETE FROM rehearsal_activations').run();
     db.prepare('DELETE FROM rehearsals').run();
     db.prepare('DELETE FROM action_results').run();
     db.prepare('DELETE FROM topic_memory_links').run();
     db.prepare('DELETE FROM proposed_action_attempts').run();
     db.prepare('DELETE FROM proposed_actions').run();
+    db.prepare('DELETE FROM evidence_watch_links').run();
+    db.prepare('DELETE FROM evidence_watch_runs').run();
+    db.prepare('DELETE FROM evidence_watch_contracts').run();
     db.prepare('DELETE FROM reflection_research_attempts').run();
     db.prepare('DELETE FROM reflection_runs').run();
     db.prepare('DELETE FROM dream_runs').run();
@@ -83,6 +91,155 @@ describe('ReflectionThreadService', () => {
     );
     expect(actionResultLink?.previewTitle).toBe('外部委派结果');
     expect(actionResultLink?.preview).toContain('外部进展摘要');
+  });
+
+  it('links blocked OpenClaw proposals to readiness instead of adding queue debt', async () => {
+    const thread = repo.upsertThread({
+      topicKey: 'project:readiness',
+      title: '项目反思: Readiness',
+      status: 'active',
+      priority: 8,
+      salience: 0.9,
+      nextReflectionAt: now(),
+    });
+    const seedAction = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: 'Seed blocked gateway contract',
+      params: {
+        task: 'Probe Jira.',
+        mode: 'read',
+        targetSystem: 'jira',
+      },
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    new ActionReadinessService(db).recordDelegationOutcome(seedAction, {
+      status: 'auth_error',
+      summary: 'OpenClaw gateway authorization failed.',
+      artifacts: [],
+      payload: { httpStatus: 401 },
+    });
+    vi.spyOn(ReflectionResearcher.prototype, 'plan').mockResolvedValue([]);
+    vi.spyOn(ReflectionWorker.prototype, 'generate').mockResolvedValue({
+      summary: '需要继续外部核实，但当前执行能力被阻断。',
+      discoveries: [],
+      openQuestions: ['ORB-123 的状态是什么？'],
+      actionProposals: [
+        {
+          actionType: 'delegate_openclaw',
+          title: '继续查询 ORB-123',
+          params: {
+            task: '查询 ORB-123。',
+            mode: 'read',
+            targetSystem: 'jira',
+          },
+          executionMode: 'auto',
+          requiresApproval: false,
+        },
+      ],
+      markdownBody: '# readiness reflection',
+    });
+
+    const result = await new ReflectionThreadService(db).runReflection(
+      thread.id,
+      {
+        runType: 'manual_revisit',
+        triggerType: 'manual',
+        force: true,
+      },
+    );
+
+    expect(result.actions).toEqual([]);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM proposed_actions
+           WHERE source_kind = 'reflection_run'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT source_kind, source_ref_id, link_reason
+           FROM action_readiness_links
+           WHERE source_kind = 'reflection_thread' AND source_ref_id = ?`,
+        )
+        .get(thread.id),
+    ).toMatchObject({
+      source_kind: 'reflection_thread',
+      source_ref_id: thread.id,
+      link_reason: 'blocked_by_readiness',
+    });
+  });
+
+  it('creates one action then suppresses the repeated question until new evidence arrives', async () => {
+    const thread = repo.upsertThread({
+      topicKey: 'project:exit-contract',
+      title: '项目反思: Exit Contract',
+      status: 'active',
+      priority: 9,
+      salience: 0.86,
+      nextReflectionAt: now(),
+    });
+    vi.spyOn(ReflectionResearcher.prototype, 'plan').mockResolvedValue([]);
+    vi.spyOn(ReflectionWorker.prototype, 'generate').mockResolvedValue({
+      summary: '发布前仍需确认 owner。',
+      discoveries: [],
+      openQuestions: ['今天发布前需要谁确认 owner？'],
+      actionProposals: [
+        {
+          actionType: 'create_confirm_request',
+          title: '确认发布 owner',
+          params: { routing: 'decision' },
+          executionMode: 'manual',
+          requiresApproval: false,
+        },
+      ],
+      markdownBody: '# exit contract reflection',
+    });
+
+    const service = new ReflectionThreadService(db);
+    const first = await service.runReflection(thread.id, {
+      runType: 'manual_revisit',
+      triggerType: 'manual',
+      force: true,
+    });
+    const second = await service.runReflection(thread.id, {
+      runType: 'manual_revisit',
+      triggerType: 'manual',
+      force: true,
+    });
+
+    expect(first.actions).toHaveLength(1);
+    expect(first.actions[0].params).toMatchObject({
+      openQuestionExitContractId: expect.any(String),
+      openQuestionExitReceipt: {
+        reasonCode: 'first_seen',
+        boundary: '首次登记不会主动进入 Today Pilot。',
+      },
+    });
+    expect(first.thread.openQuestions).toEqual([]);
+    expect(second.actions).toEqual([]);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM proposed_actions
+           WHERE thread_id = ?`,
+        )
+        .get(thread.id),
+    ).toEqual({ count: 1 });
+
+    const detail = service.getThreadDetail(thread.id);
+    expect(detail?.openQuestionExitContracts).toHaveLength(1);
+    expect(detail?.openQuestionExitContracts[0]).toMatchObject({
+      state: 'waiting_on_existing_action',
+      duplicateSuppressedCount: 1,
+      receipt: { label: '已有动作处理中' },
+    });
+    expect(detail?.thread.openQuestions).toEqual([]);
   });
 
   it('resumes confirm request threads without counting a reflection run', () => {

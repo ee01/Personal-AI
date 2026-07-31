@@ -264,13 +264,13 @@ const formatWritebackSnapshotAge = (receivedAtMs: number, nowMs = Date.now()): s
         : `约 ${ageDays} 天`;
 };
 
-const buildWritebackSnapshotAgeLine = (receivedAtMs: number): string => {
+const buildWritebackSnapshotAgeLine = (receivedAtMs: number, nowMs = Date.now()): string => {
     if (!Number.isFinite(receivedAtMs) || receivedAtMs <= 0) {
         return '快照年龄: 本页没有可靠收到时间；写回前请回 Slides 重新分析，避免基于未知快照覆盖协作编辑。';
     }
 
-    const ageMs = Math.max(0, Date.now() - receivedAtMs);
-    const ageText = formatWritebackSnapshotAge(receivedAtMs);
+    const ageMs = Math.max(0, nowMs - receivedAtMs);
+    const ageText = formatWritebackSnapshotAge(receivedAtMs, nowMs);
     const actionText = ageMs >= WRITEBACK_SNAPSHOT_STALE_WARNING_MS
         ? '已超过 10 分钟，建议先回 Slides 重新分析再写回。'
         : '若 deck 已切页、表格重排或同事协作编辑，请先回 Slides 重新分析。';
@@ -1589,6 +1589,7 @@ const SlidesAnalysis: React.FC = () => {
     const [presentationId, setPresentationId] = useState<string>('');
     const [analysisReceivedAt, setAnalysisReceivedAt] = useState<string>('');
     const [analysisReceivedAtMs, setAnalysisReceivedAtMs] = useState<number>(0);
+    const [snapshotClockMs, setSnapshotClockMs] = useState<number>(() => Date.now());
     const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
     const [isApplying, setIsApplying] = useState(false);
     const [selectedFields, setSelectedFields] = useState<Record<string, boolean>>({});
@@ -1668,6 +1669,30 @@ const SlidesAnalysis: React.FC = () => {
         setReviewPacketCopyReceipt(null);
         setApplyHandoffCopyReceipt(null);
     }, [analysisResult]);
+
+    useEffect(() => {
+        if (!analysisReceivedAtMs) {
+            return;
+        }
+
+        const refreshSnapshotAge = () => setSnapshotClockMs(Date.now());
+        const refreshWhenVisible = () => {
+            if (document.visibilityState !== 'hidden') {
+                refreshSnapshotAge();
+            }
+        };
+
+        refreshSnapshotAge();
+        const intervalId = window.setInterval(refreshSnapshotAge, 60_000);
+        window.addEventListener('focus', refreshSnapshotAge);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+
+        return () => {
+            window.clearInterval(intervalId);
+            window.removeEventListener('focus', refreshSnapshotAge);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [analysisReceivedAtMs]);
 
     const initAnalysisPage = (isRetry = false) => {
         try {
@@ -2006,7 +2031,7 @@ const SlidesAnalysis: React.FC = () => {
         ? buildWritebackSnapshotBasisLine(analysisResult, presentationId, analysisReceivedAt)
         : '';
     const writebackSnapshotAgeLine = analysisResult
-        ? buildWritebackSnapshotAgeLine(analysisReceivedAtMs)
+        ? buildWritebackSnapshotAgeLine(analysisReceivedAtMs, snapshotClockMs)
         : '';
     const selectedWritebackDecisionReceiptLines = buildSelectedWritebackDecisionReceiptLines(
         selectedFieldPreviewItems,

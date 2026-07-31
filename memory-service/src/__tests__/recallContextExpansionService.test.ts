@@ -116,6 +116,39 @@ describe('RecallContextExpansionService', () => {
     expect(expansion.expandedQuery).toContain('AI-Generated VBGs');
   });
 
+  it('does not let a deictic phrase override a directly named subject', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'cursor-cost-workgroup',
+      'glip',
+      'glip',
+      'AI Tools for Engineering - Workgroup',
+      'Cursor licensing and migration updates.',
+      JSON.stringify(['AI Tools for Engineering - Workgroup']),
+      JSON.stringify(['Cursor', 'license management']),
+      JSON.stringify([]),
+      JSON.stringify([]),
+      0.86,
+      currentTime - 60,
+      currentTime - 60,
+    );
+
+    const expansion = service.expand({
+      query: 'Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？',
+    });
+
+    expect(expansion.contextMatch?.state).toBe('none');
+    expect(expansion.expandedQuery).toBe(
+      'Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？',
+    );
+  });
+
   it('treats source anchor matches in context frames as current-source matches', () => {
     const currentTime = Math.floor(Date.now() / 1000);
     db.prepare(

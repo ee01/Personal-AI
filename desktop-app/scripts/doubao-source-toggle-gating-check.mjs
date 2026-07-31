@@ -190,9 +190,9 @@ function createStatus() {
           durationMs: 400,
           errorMessage:
             'No pending todos to sync / Notice sync is not supported by Memory Service',
-          packageKinds: ['todo_digest'],
-          packageItemCount: 0,
-          sourceRefCount: 0,
+          packageKinds: ['todo_digest', 'notice_digest'],
+          packageItemCount: 2,
+          sourceRefCount: 1,
           reminderDeliveryMode: 'manual',
         },
       ],
@@ -1329,8 +1329,20 @@ async function main() {
     await expectText(page, '#sync-audit-list', /重试待办 \/ 通知/);
     await expectText(page, '#sync-audit-list', /内容条目：3/);
     await expectText(page, '#sync-audit-list', /待办模式：每日完整摘要/);
-    await expectText(page, '#sync-audit-list', /内容条目：0/);
-    await expectText(page, '#sync-audit-list', /待办模式：手动完整推送/);
+    const manualSkippedAudit = await page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('.sync-audit-item'));
+      return (
+        items
+          .map((item) => item.textContent || '')
+          .find(
+            (text) =>
+              /包：待办包 \/ 通知包/.test(text) &&
+              /待办模式：手动完整推送/.test(text),
+          ) || ''
+      );
+    });
+    assert.match(manualSkippedAudit, /内容条目：2/);
+    assert.match(manualSkippedAudit, /来源引用：1/);
     await expectText(page, '#sync-audit-list', /本次没有可推送的待办/);
     await expectText(page, '#sync-audit-list', /当前 Memory Service 暂不支持通知同步/);
 

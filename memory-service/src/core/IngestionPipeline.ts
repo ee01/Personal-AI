@@ -504,6 +504,49 @@ export class IngestionPipeline {
       );
     }
 
+    // ---- 7b. Focus project timeline extraction (best-effort, non-blocking) ----
+    if (matchedProjects.length > 0) {
+      try {
+        const { ProjectTimelineExtractor } = await import(
+          './ProjectTimelineExtractor.js'
+        );
+        const { listFocusProjects } = await import(
+          './FocusProjectSyncService.js'
+        );
+        const focus = listFocusProjects(this.db);
+        const matchedIds = focus
+          .filter((project) => {
+            const labels = [
+              project.id,
+              project.name,
+              project.displayName,
+              ...(project.aliases || []),
+              project.externalRef?.jiraKey,
+              project.externalRef?.itemKey,
+            ]
+              .filter(Boolean)
+              .map((v) => String(v).toLowerCase());
+            return matchedProjects.some((name) =>
+              labels.includes(String(name).toLowerCase()),
+            );
+          })
+          .map((project) => project.id);
+        if (matchedIds.length > 0) {
+          const extractor = new ProjectTimelineExtractor(this.db);
+          void extractor.extractFromMessage({
+            messageId: id,
+            content: contentNormalized,
+            matchedProjectIds: matchedIds,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          '[IngestionPipeline] Project timeline extraction failed:',
+          (err as Error).message,
+        );
+      }
+    }
+
     try {
       this.contextExpansion.upsertFrameFromMessage({
         messageId: id,

@@ -51,6 +51,13 @@ import {
   shouldAutoRequestLinkedActionSuggestion,
 } from './linkedActionHelpers';
 import { getSafeExternalUrl } from './topic-link-safety';
+import { buildMemoryEntryRulesUrl } from '../utils/memoryEntryRulesNavigation';
+import {
+  buildMemoryEntryRulesTaskDoneMessage,
+  getMemoryEntryRulesIntentCopy,
+  readMemoryEntryRulesSurfaceParams,
+  type MemoryEntryRulesTaskDoneReason,
+} from '../utils/memoryEntryRulesSurface';
 import {
   getPendingFollowThreadOriginalDatetime,
   isPendingFollowThreadConfigFresh,
@@ -574,6 +581,25 @@ const PlayIcon = () => (
   </svg>
 );
 
+const { surface: SURFACE_MODE, intent: SURFACE_INTENT } =
+  readMemoryEntryRulesSurfaceParams(window.location.search);
+const IS_TASK_SURFACE = SURFACE_MODE === 'task';
+const SURFACE_COPY = getMemoryEntryRulesIntentCopy(SURFACE_INTENT);
+
+/**
+ * Task surface lives in an iframe inside the memory-exploring shell, which owns
+ * the window and performs the actual close.
+ */
+const finishTaskSurface = (reason: MemoryEntryRulesTaskDoneReason) => {
+  if (!IS_TASK_SURFACE) return;
+  const message = buildMemoryEntryRulesTaskDoneMessage(reason);
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(message, window.location.origin);
+    return;
+  }
+  window.close();
+};
+
 const TopicModal = () => {
   const { language: uiLanguage } = useExtensionUiLanguage();
   useStaticDomI18n(uiLanguage);
@@ -581,7 +607,8 @@ const TopicModal = () => {
   const operationToastTimerRef = useRef<number | null>(null);
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const [editingTopic, setEditingTopic] = useState<TopicItem | null>(null);
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(IS_TASK_SURFACE);
+  const [taskSaveReceipt, setTaskSaveReceipt] = useState('');
   const [newTopic, setNewTopic] = useState('');
   const [newExpiry, setNewExpiry] = useState('30');
   const [newMentionMe, setNewMentionMe] = useState(false);
@@ -1452,18 +1479,28 @@ const TopicModal = () => {
             })
           : '';
 
+      const saveMessage =
+        linkedActionSaveReceipt ||
+        followThreadSaveReceipt ||
+        `已添加规则「${formatRuleToastName(newTopicItem)}」`;
+
       // 重置表单
       resetNewRuleForm();
       setShowAddForm(false);
-      showOperationToast({
-        type: 'success',
-        message:
-          linkedActionSaveReceipt ||
-          followThreadSaveReceipt ||
-          `已添加规则「${formatRuleToastName(newTopicItem)}」`,
-      }, linkedActionSaveReceipt || followThreadSaveReceipt ? 9000 : 3600);
+      showOperationToast(
+        {
+          type: 'success',
+          message: saveMessage,
+        },
+        linkedActionSaveReceipt || followThreadSaveReceipt ? 9000 : 3600,
+      );
 
       promptEnableSilentAnalysisAfterRuleSave('这条记忆入口规则');
+
+      // 任务态不自动关窗，先让用户读完保存回执再自己选择出口
+      if (IS_TASK_SURFACE) {
+        setTaskSaveReceipt(saveMessage);
+      }
     } catch (error) {
       console.error('添加记忆入口规则失败:', error);
       showOperationToast({
@@ -2336,6 +2373,8 @@ const TopicModal = () => {
 
   useEffect(() => {
     if (!showAddForm) return;
+    // 任务态里表单就是全部内容，滚动只会把标题和原消息预览推出视口
+    if (IS_TASK_SURFACE) return;
     window.requestAnimationFrame(() => {
       addFormRef.current?.scrollIntoView({
         behavior: 'smooth',
@@ -3475,6 +3514,15 @@ const TopicModal = () => {
     window.open(url, '_blank');
   };
 
+  const openMemoryEntryRulesHub = () => {
+    const url = buildMemoryEntryRulesUrl();
+    if (chrome?.tabs?.create) {
+      void chrome.tabs.create({ url, active: true });
+      return;
+    }
+    window.open(url, '_blank');
+  };
+
   const renderOpenClawDraftNotice = () => {
     if (openClawConfigured) return null;
     return (
@@ -3967,51 +4015,56 @@ const TopicModal = () => {
     );
   };
   return (
-    <div className="topic-modal">
-      <div className="page-header">
-        <div className="page-copy">
-          <div className="page-eyebrow">Manual memory rules</div>
-          <h2>记忆入口规则</h2>
-          <p>
-            配置你希望系统持续观察并写入记忆的消息模式。
-          </p>
+    <div className={`topic-modal${IS_TASK_SURFACE ? ' task-surface' : ''}`}>
+      {/* 任务态的标题、边界口径和出口由外层 memory-exploring 任务头承担 */}
+      {!IS_TASK_SURFACE && (
+        <div className="page-header">
+          <div className="page-copy">
+            <div className="page-eyebrow">Manual memory rules</div>
+            <h2>记忆入口规则</h2>
+            <p>
+              配置你希望系统持续观察并写入记忆的消息模式。
+            </p>
+          </div>
+          <div className="page-actions">
+            <button
+              type="button"
+              className="header-secondary-btn"
+              onClick={openPromptConfigWindow}
+              title="配置自定义提示词和用户上下文"
+            >
+              ⚙️ 自定义提示词与上下文
+            </button>
+          </div>
         </div>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="header-secondary-btn"
-            onClick={openPromptConfigWindow}
-            title="配置自定义提示词和用户上下文"
+      )}
+
+      {!IS_TASK_SURFACE && (
+        <div className="status-strip">
+          <span
+            className={`status-pill ${isSilentAnalysisEnabled ? 'ok' : 'warn'}`}
           >
-            ⚙️ 自定义提示词与上下文
-          </button>
+            {isSilentAnalysisEnabled
+              ? '后台记忆采集运行中'
+              : '后台记忆采集未开启'}
+          </span>
+          <span
+            className={`status-pill ${memoryServiceConfigured ? 'ok' : 'muted'}`}
+          >
+            {memoryServiceConfigured
+              ? 'Memory Service 已连接'
+              : 'Memory Service 未配置'}
+          </span>
+          <span
+            className={`status-pill ${openClawConfigured ? 'info' : 'muted'}`}
+          >
+            {openClawConfigured ? 'OpenClaw 已连接' : 'OpenClaw 待配置'}
+          </span>
+          <span className="status-pill muted">{formatAnalysisStatus()}</span>
         </div>
-      </div>
+      )}
 
-      <div className="status-strip">
-        <span
-          className={`status-pill ${isSilentAnalysisEnabled ? 'ok' : 'warn'}`}
-        >
-          {isSilentAnalysisEnabled
-            ? '后台记忆采集运行中'
-            : '后台记忆采集未开启'}
-        </span>
-        <span
-          className={`status-pill ${memoryServiceConfigured ? 'ok' : 'muted'}`}
-        >
-          {memoryServiceConfigured
-            ? 'Memory Service 已连接'
-            : 'Memory Service 未配置'}
-        </span>
-        <span
-          className={`status-pill ${openClawConfigured ? 'info' : 'muted'}`}
-        >
-          {openClawConfigured ? 'OpenClaw 已连接' : 'OpenClaw 待配置'}
-        </span>
-        <span className="status-pill muted">{formatAnalysisStatus()}</span>
-      </div>
-
-      {hasAutomationRules && !openClawConfigured && (
+      {!IS_TASK_SURFACE && hasAutomationRules && !openClawConfigured && (
         <div className="warning-banner automation-banner">
           <div className="warning-content">
             <span className="warning-icon">⚡</span>
@@ -4059,59 +4112,64 @@ const TopicModal = () => {
 
       {renderSilentAnalysisControlReceipt()}
 
-      <div className="toolbar">
-        <button
-          className="primary-btn"
-          onClick={() => {
-            resetNewRuleForm();
-            setShowAddForm(true);
-          }}
-        >
-          ＋ 添加规则
-        </button>
-        <button onClick={exportToXML}>📤 导出规则</button>
-        <label className="import-button toolbar-button">
-          📥 导入规则
-          <input
-            type="file"
-            accept=".xml"
-            style={{ display: 'none' }}
-            onChange={importFromXML}
-          />
-        </label>
-        <button onClick={handleSendToLLM} disabled={isLoading}>
-          {isLoading
-            ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex || 0) + 1}/${analysisProgress?.total || 1}`
-            : `▶ 立即分析最近 ${getIntervalHours()} 小时消息`}
-        </button>
-      </div>
-
-      {renderSystemObservationRuntimeReceipt()}
-      {renderRuleExportReceipt()}
-      {renderRuleImportReceipt()}
-      {renderRuleOrderReceipt()}
-      {renderMessageAnalysisDeliveryReceipt()}
-
-      <div className="section-head">
-        <div>
-          <h3>我的规则</h3>
-        </div>
-        <span className="section-count">{topics.length}</span>
-      </div>
-
-      {topics.length === 0 && !showAddForm && (
-        <div className="empty-state-card">
-          <div className="empty-state-title">还没有手动记忆入口规则</div>
-          <div className="empty-state-text">
-            从一条你想持续观察的消息模式开始。命中后消息会默认写入记忆，你也可以叠加
-            Glip 推送、摘要、自动答复、关注后续或联动操作。
+      {/* 列表管理动作只属于 hub 形态：任务态里它们既无关，也可能覆盖预填草稿 */}
+      {!IS_TASK_SURFACE && (
+        <>
+          <div className="toolbar">
+            <button
+              className="primary-btn"
+              onClick={() => {
+                resetNewRuleForm();
+                setShowAddForm(true);
+              }}
+            >
+              ＋ 添加规则
+            </button>
+            <button onClick={exportToXML}>📤 导出规则</button>
+            <label className="import-button toolbar-button">
+              📥 导入规则
+              <input
+                type="file"
+                accept=".xml"
+                style={{ display: 'none' }}
+                onChange={importFromXML}
+              />
+            </label>
+            <button onClick={handleSendToLLM} disabled={isLoading}>
+              {isLoading
+                ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex || 0) + 1}/${analysisProgress?.total || 1}`
+                : `▶ 立即分析最近 ${getIntervalHours()} 小时消息`}
+            </button>
           </div>
-        </div>
+
+          {renderSystemObservationRuntimeReceipt()}
+          {renderRuleExportReceipt()}
+          {renderRuleImportReceipt()}
+          {renderRuleOrderReceipt()}
+          {renderMessageAnalysisDeliveryReceipt()}
+
+          <div className="section-head">
+            <div>
+              <h3>我的规则</h3>
+            </div>
+            <span className="section-count">{topics.length}</span>
+          </div>
+
+          {topics.length === 0 && !showAddForm && (
+            <div className="empty-state-card">
+              <div className="empty-state-title">还没有手动记忆入口规则</div>
+              <div className="empty-state-text">
+                从一条你想持续观察的消息模式开始。命中后消息会默认写入记忆，你也可以叠加
+                Glip 推送、摘要、自动答复、关注后续或联动操作。
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <div className="rules-stack">
       <div className="topic-list">
-        {topics.map((topic, index) => (
+        {(IS_TASK_SURFACE ? [] : topics).map((topic, index) => (
           <div
             key={topic.id}
             className={`topic-item ${editingTopic?.id === topic.id ? 'editing' : ''} ${dragOverItem === index ? 'drag-over' : ''}`}
@@ -5209,12 +5267,23 @@ const TopicModal = () => {
         ))}
       </div>
 
-      {showAddForm ? (
+      {IS_TASK_SURFACE && taskSaveReceipt ? (
+        <div className="task-complete-panel" role="status" aria-live="polite">
+          <div className="task-complete-title">已保存</div>
+          <div className="task-complete-text">{taskSaveReceipt}</div>
+          <div className="form-buttons">
+            <button onClick={() => finishTaskSurface('saved')}>
+              完成并关闭
+            </button>
+            <button onClick={openMemoryEntryRulesHub}>查看全部规则</button>
+          </div>
+        </div>
+      ) : showAddForm ? (
         <div className="add-topic-form" ref={addFormRef}>
           <div className="form-title-row">
             <div>
-              <h4>新建记忆入口规则</h4>
-              <p>命中后默认写入记忆，下面勾选的是可叠加的用户动作。</p>
+              <h4>{SURFACE_COPY.formTitle}</h4>
+              <p>{SURFACE_COPY.formHint}</p>
             </div>
           </div>
           <div className="add-text-field">
@@ -5666,9 +5735,15 @@ const TopicModal = () => {
             </button>
             <button
               disabled={isAddingTopic}
+              title={
+                IS_TASK_SURFACE
+                  ? '关闭这个配置窗口；不会创建规则、通知或动作'
+                  : undefined
+              }
               onClick={() => {
                 resetNewRuleForm();
                 setShowAddForm(false);
+                finishTaskSurface('cancelled');
               }}
             >
               取消
@@ -5691,6 +5766,38 @@ const TopicModal = () => {
       <style>{`
                 .topic-modal {
                     padding: 16px;
+                }
+
+                .topic-modal.task-surface {
+                    padding: 14px 16px 18px;
+                }
+
+                .topic-modal.task-surface .add-topic-form {
+                    margin-top: 0;
+                    border-left-width: 1px;
+                    box-shadow: none;
+                }
+
+                .task-complete-panel {
+                    box-sizing: border-box;
+                    padding: 18px;
+                    border-radius: 18px;
+                    border: 1px solid rgba(34, 197, 94, 0.32);
+                    background: rgba(15, 23, 42, 0.78);
+                }
+
+                .task-complete-title {
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: #86efac;
+                    margin-bottom: 8px;
+                }
+
+                .task-complete-text {
+                    font-size: 13px;
+                    line-height: 1.6;
+                    color: #cbd5e1;
+                    margin-bottom: 4px;
                 }
 
                 .warning-banner {

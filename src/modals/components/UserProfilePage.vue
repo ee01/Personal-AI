@@ -46,6 +46,8 @@
           type="button"
           class="status-action-btn"
           :disabled="isRestoringProfileItem"
+          :title="profileRetractedUndoButtonBoundary"
+          :aria-label="profileRetractedUndoButtonBoundary"
           @click="restoreRetractedProfileItem"
         >
           {{ isRestoringProfileItem ? '恢复中...' : '撤销排除' }}
@@ -516,6 +518,8 @@
               <button
                 class="secondary-action-btn"
                 :disabled="isItemPending(prediction.id)"
+                :title="getProfileConfirmActionBoundary(prediction, 'prediction')"
+                :aria-label="getProfileConfirmActionBoundary(prediction, 'prediction')"
                 @click="confirmProfileItem(prediction.id)"
               >
                 {{ isItemPending(prediction.id) ? '处理中' : '确认' }}
@@ -532,6 +536,8 @@
               <button
                 class="danger-action-btn"
                 :disabled="isItemPending(prediction.id)"
+                :title="getProfileRetractActionBoundary(prediction, 'prediction')"
+                :aria-label="getProfileRetractActionBoundary(prediction, 'prediction')"
                 @click="retractProfileItem(prediction.id)"
               >
                 {{ isItemPending(prediction.id) ? '处理中' : '排除' }}
@@ -788,6 +794,8 @@
                 v-if="!item.userConfirmed"
                 class="secondary-action-btn"
                 :disabled="isItemPending(item.id)"
+                :title="getProfileConfirmActionBoundary(item, 'row')"
+                :aria-label="getProfileConfirmActionBoundary(item, 'row')"
                 @click="confirmProfileItem(item.id)"
               >
                 {{ isItemPending(item.id) ? '处理中' : '确认' }}
@@ -795,6 +803,8 @@
               <button
                 class="danger-action-btn"
                 :disabled="isItemPending(item.id)"
+                :title="getProfileRetractActionBoundary(item, 'row')"
+                :aria-label="getProfileRetractActionBoundary(item, 'row')"
                 @click="retractProfileItem(item.id)"
               >
                 {{ isItemPending(item.id) ? '处理中' : '排除' }}
@@ -926,6 +936,8 @@
                 <button
                   class="secondary-action-btn"
                   :disabled="isItemPending(item.id)"
+                  :title="getProfileRestoreActionBoundary(item)"
+                  :aria-label="getProfileRestoreActionBoundary(item)"
                   @click="restoreProfileItemById(item.id, item.name)"
                 >
                   {{ isItemPending(item.id) ? '恢复中' : '恢复' }}
@@ -2649,6 +2661,31 @@ const canLowerProfileItem = (item: UserProfileInterestItem) =>
 
 type ProfileInfluenceAction = 'boost' | 'lower';
 
+type ProfileStatusActionMode = 'prediction' | 'row';
+
+const getProfileActionName = (
+  item?: UserProfileInterestItem | UserProfileReviewQueueItem | null,
+  fallback = '当前画像条目',
+) => item?.name || fallback;
+
+const getProfileActionEvidenceCopy = (
+  item?: UserProfileInterestItem | UserProfileReviewQueueItem | null,
+) => {
+  const evidenceCount = item
+    ? 'evidenceRefs' in item
+      ? item.evidenceRefs.length
+      : item.evidenceCount ?? 0
+    : 0;
+  return evidenceCount > 0
+    ? `${evidenceCount} 条证据会保留`
+    : '暂无证据会继续提示补证';
+};
+
+const getProfileStatusActionScopeCopy = (mode: ProfileStatusActionMode) =>
+  mode === 'prediction'
+    ? '这是待确认推断队列中的画像状态操作。'
+    : '这是画像条目列表中的画像状态操作。';
+
 const getProfileActionImpactReceipt = (
   item: UserProfileInterestItem | UserProfileReviewQueueItem,
   mode: 'row' | 'prediction',
@@ -2725,6 +2762,73 @@ const getProfileInfluenceActionBoundary = (
 
   return `${actionLabel} ${name}：当前影响力 ${formatPercent(score)}，${targetCopy}。${scopeCopy}${confirmationCopy} ${evidenceCopy}。服务确认前不能证明已写入或进入个性化；不会改旧回答、刷新或删除证据、排除/恢复画像、外发、跨平台同步、导出或发送内容。`;
 };
+
+const getProfileConfirmActionBoundary = (
+  item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  mode: ProfileStatusActionMode,
+) => {
+  const fullItem = getProfileItemReceiptTarget(item.id);
+  const targetItem = fullItem ?? item;
+  const name = getProfileActionName(targetItem);
+  const evidenceCopy = getProfileActionEvidenceCopy(targetItem);
+  const scopeCopy = getProfileStatusActionScopeCopy(mode);
+
+  if (isItemPending(item.id)) {
+    return `确认提交中：正在请求 Memory Service 将 ${name} 切换为 active + confirmed；不会重复提交，服务确认前不能证明 USER_CORE、召回、Compose Assist 或 provider context 已更新。`;
+  }
+
+  return `确认 ${name}：会请求 Memory Service 将这条画像切换为 active + confirmed。${scopeCopy}服务确认后才可能按场景进入 USER_CORE、召回、Compose Assist 和 provider context；${evidenceCopy}；不会改旧回答、刷新或删除证据、排除/恢复画像、外发、跨平台同步、导出或发送内容。`;
+};
+
+const getProfileRetractActionBoundary = (
+  item: UserProfileInterestItem | UserProfileReviewQueueItem,
+  mode: ProfileStatusActionMode,
+) => {
+  const fullItem = getProfileItemReceiptTarget(item.id);
+  const targetItem = fullItem ?? item;
+  const name = getProfileActionName(targetItem);
+  const evidenceCopy = getProfileActionEvidenceCopy(targetItem);
+  const scopeCopy = getProfileStatusActionScopeCopy(mode);
+  const status = fullItem?.status ?? item.status;
+  const confirmed = fullItem?.userConfirmed ?? false;
+  const wasUsable = status === 'active' && confirmed;
+  const removalCopy = wasUsable
+    ? '服务确认后才会退出 USER_CORE、召回和 provider context 候选'
+    : '服务确认后会离开待确认/画像列表候选，并继续不进入 USER_CORE、召回或 provider context';
+
+  if (isItemPending(item.id)) {
+    return `排除提交中：正在请求 Memory Service 将 ${name} 标记为 retracted；不会重复提交，服务确认前不能证明画像状态已变更或个性化候选已更新。`;
+  }
+
+  return `排除 ${name}：会请求 Memory Service 将这条画像标记为 retracted。${scopeCopy}${removalCopy}；${evidenceCopy}用于已排除审计，误排可撤销或稍后恢复；不会改旧回答、刷新或删除证据、确认画像、外发、跨平台同步、导出或发送内容。`;
+};
+
+const getProfileRestoreActionBoundary = (
+  item?: UserProfileInterestItem | null,
+  fallbackName = '当前画像条目',
+) => {
+  const name = getProfileActionName(item, fallbackName);
+  const evidenceCopy = getProfileActionEvidenceCopy(item);
+  const confirmedCopy = item?.userConfirmed
+    ? '这条原本已确认，恢复成功后才可能重新按场景进入个性化。'
+    : '这条会按原确认状态恢复；如果仍未确认，确认前不会进入个性化。';
+
+  if (item?.id && isItemPending(item.id)) {
+    return `恢复提交中：正在请求 Memory Service 恢复 ${name}；不会重复提交，服务确认前不能证明这条已恢复或重新进入个性化候选。`;
+  }
+  if (isRestoringProfileItem.value && recentlyRetractedProfileItem.value?.name === name) {
+    return `撤销排除提交中：正在请求 Memory Service 恢复 ${name}；不会重复提交，服务确认前不能证明这条已恢复或重新进入个性化候选。`;
+  }
+
+  return `恢复 ${name}：会请求 Memory Service 按原确认状态恢复为 active 或 pending_confirm。${confirmedCopy}只有 active + confirmed 才会再次进入 USER_CORE、召回或 provider context；${evidenceCopy}；不会改旧回答、刷新或删除证据、确认其他画像、外发、跨平台同步、导出或发送内容。`;
+};
+
+const profileRetractedUndoButtonBoundary = computed(() => {
+  const item = recentlyRetractedProfileItem.value;
+  if (!item) return '当前没有可撤销的画像排除操作。';
+  const targetItem = getProfileItemReceiptTarget(item.id);
+  return getProfileRestoreActionBoundary(targetItem ?? null, item.name);
+});
 
 const profileInfluenceUndoButtonBoundary = computed(() => {
   const undo = profileInfluenceUndo.value;

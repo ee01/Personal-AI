@@ -9,6 +9,10 @@ import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { getEnvConfig } from '../utils';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  getMeetingOutcomeSlotStatusLabel,
+  normalizeMeetingOutcomeBinder,
+} from './meetingOutcomeBinder';
+import {
   MeetingPilotActionItem,
   MeetingPilotSessionSnapshot,
   MeetingPilotParticipantStance,
@@ -114,6 +118,99 @@ const panoramaStyle = `
   .archive-source-receipt-field { min-width: 0; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(11,13,20,0.28); padding: 8px 10px; }
   .archive-source-receipt-label { display: block; margin-bottom: 3px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
   .archive-source-receipt-value { display: block; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+  .meeting-outcome-result {
+    margin: 14px 0;
+    padding: 14px 16px;
+    border: 1px solid rgba(116,185,255,0.22);
+    border-left: 3px solid var(--blue);
+    border-radius: 8px;
+    background: rgba(20,23,32,0.72);
+  }
+  .meeting-outcome-result-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .meeting-outcome-result-kicker {
+    display: block;
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0;
+  }
+  .meeting-outcome-result-title {
+    margin-top: 2px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.4;
+  }
+  .meeting-outcome-result-state {
+    flex: 0 0 auto;
+    border-radius: 6px;
+    padding: 3px 8px;
+    background: rgba(116,185,255,0.12);
+    color: #a7d5ff;
+    font-size: 10px;
+    font-weight: 800;
+  }
+  .meeting-outcome-result-state.bound { background: rgba(105,219,124,0.12); color: #9ff0ad; }
+  .meeting-outcome-result-state.partial { background: rgba(255,212,59,0.12); color: #ffe384; }
+  .meeting-outcome-result-state.blocked { background: rgba(255,107,107,0.12); color: #ffaaaa; }
+  .meeting-outcome-result-source {
+    margin-top: 6px;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .meeting-outcome-result-list {
+    display: grid;
+    gap: 0;
+    margin-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+  }
+  .meeting-outcome-result-slot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: start;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .meeting-outcome-result-slot > div { min-width: 0; }
+  .meeting-outcome-result-slot strong,
+  .meeting-outcome-result-slot span { display: block; overflow-wrap: anywhere; }
+  .meeting-outcome-result-slot strong { color: var(--text); font-size: 12.5px; line-height: 1.45; }
+  .meeting-outcome-result-slot span { margin-top: 3px; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+  .meeting-outcome-result-slot .slot-state {
+    margin: 0;
+    border-radius: 6px;
+    padding: 3px 7px;
+    background: rgba(255,255,255,0.07);
+    color: #cbd5e1;
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .meeting-outcome-result-slot.resolved .slot-state { background: rgba(105,219,124,0.12); color: #9ff0ad; }
+  .meeting-outcome-result-slot.partially_resolved .slot-state,
+  .meeting-outcome-result-slot.carried_over .slot-state { background: rgba(255,212,59,0.12); color: #ffe384; }
+  .meeting-outcome-result-slot.blocked_by_missing_evidence .slot-state { background: rgba(255,107,107,0.12); color: #ffaaaa; }
+  .meeting-outcome-result-evidence { color: #a7b1c7 !important; }
+  .meeting-outcome-result-boundary {
+    margin-top: 10px;
+    color: var(--text-dim);
+    font-size: 10.5px;
+    line-height: 1.5;
+  }
+  .meeting-outcome-result-error {
+    margin-top: 8px;
+    color: #ffaaaa;
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
   .panorama-output-receipt {
     margin: 14px 32px 0;
     padding: 12px 14px;
@@ -513,6 +610,8 @@ const panoramaStyle = `
     .archive-source-receipt-body { grid-template-columns: 1fr; }
     .panorama-output-receipt { grid-template-columns: 1fr; }
     .panorama-output-receipt-body { grid-template-columns: 1fr; }
+    .meeting-outcome-result-slot { grid-template-columns: 1fr; }
+    .meeting-outcome-result-slot .slot-state { justify-self: start; }
   }
 `;
 
@@ -1077,6 +1176,7 @@ function hydrateArchivedSession(
     decisions?: Array<Record<string, unknown>>;
     timelineEvents?: Array<Record<string, unknown>>;
     participantStances?: Array<Record<string, unknown>>;
+    outcomeBinder?: unknown;
   },
 ): MeetingPilotSessionSnapshot {
   const chapters = Array.isArray(detail.chapters)
@@ -1208,7 +1308,22 @@ function hydrateArchivedSession(
     participantCount: participants.length,
     currentTopic:
       chapters[chapters.length - 1]?.title || baseSession.currentTopic,
+    outcomeBinder:
+      normalizeMeetingOutcomeBinder(detail.outcomeBinder) ||
+      baseSession.outcomeBinder,
   };
+}
+
+function getMeetingOutcomeBinderStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    planned: '等待会议证据',
+    in_meeting: '会议进行中',
+    post_meeting_pending: '等待会后装订',
+    bound: '装订完成',
+    partial: '部分闭环',
+    blocked: '装订受阻',
+  };
+  return labels[status] || status;
 }
 
 function formatSessionDate(timestamp?: number) {
@@ -2038,6 +2153,74 @@ function PanoramaPage() {
             ))}
           </div>
         </div>
+      ) : null}
+
+      {session.outcomeBinder ? (
+        <section
+          className="meeting-outcome-result"
+          data-meeting-outcome-result="true"
+          data-outcome-binder-status={session.outcomeBinder.status}
+          aria-label="会后结果装订"
+        >
+          <div className="meeting-outcome-result-head">
+            <div>
+              <span className="meeting-outcome-result-kicker">
+                Meeting Pilot
+              </span>
+              <div className="meeting-outcome-result-title">
+                会后结果装订 · {session.outcomeBinder.slots.length} 项
+              </div>
+            </div>
+            <span
+              className={`meeting-outcome-result-state ${session.outcomeBinder.status}`}
+            >
+              {getMeetingOutcomeBinderStatusLabel(
+                session.outcomeBinder.status,
+              )}
+            </span>
+          </div>
+          <div className="meeting-outcome-result-source">
+            {session.outcomeBinder.receipt.source} {session.outcomeBinder.receipt.coverage}
+          </div>
+          <div className="meeting-outcome-result-list">
+            {session.outcomeBinder.slots.map((slot) => {
+              const evidencePreview = slot.evidence
+                .slice(0, 2)
+                .map((item) => `${item.label || item.kind}：${item.snippet}`)
+                .join('；');
+              return (
+                <article
+                  className={`meeting-outcome-result-slot ${slot.status}`}
+                  data-outcome-slot-status={slot.status}
+                  key={slot.id}
+                >
+                  <div>
+                    <strong>{slot.title}</strong>
+                    <span>
+                      {slot.resultSummary || '当前没有结果摘要。'}
+                    </span>
+                    {evidencePreview ? (
+                      <span className="meeting-outcome-result-evidence">
+                        证据：{evidencePreview}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="slot-state">
+                    {getMeetingOutcomeSlotStatusLabel(slot.status)}
+                  </span>
+                </article>
+              );
+            })}
+          </div>
+          {session.outcomeBinder.bindingError ? (
+            <div className="meeting-outcome-result-error">
+              本次装订未完整完成；会前目标和原始会议归档仍保留，可在服务恢复后重新核验。
+            </div>
+          ) : null}
+          <div className="meeting-outcome-result-boundary">
+            {session.outcomeBinder.receipt.boundary}
+          </div>
+        </section>
       ) : null}
 
       <div className="stats-strip">

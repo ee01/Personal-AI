@@ -1,9 +1,23 @@
-# 新能力：Time Basis Contract / 时间口径合约
+# 新能力：Time Basis Contract / 时间口径合约（搁置）
 
 > 生成时间：2026-07-03 CST  
-> Codex 会话标题：新能力：时间口径合约  
-> 状态：待决策，仅规划与 demo，不做运行时代码实现  
-> Demo：[`time-basis-contract-demo.html`](./time-basis-contract-demo.html)
+> Codex 会话标题：新能力：时间口径合约（搁置）
+> 状态：搁置，仅保留规划与 demo 作为视觉参考，不建议当前推进
+> Demo：[`time-basis-contract-demo.html`](./time-basis-contract-demo.html)（搁置视觉参考）
+
+## 搁置原因
+
+本方案标记为搁置，当前不建议按一个独立新能力推进。
+
+核心原因是：**时间口径合约是一个有价值但很小的执行细节**。它适合被吸收进 Ask、Prompt Context Compiler、Action Queue、Skill Runner、Today Pilot 等现有能力的首屏回执、参数预检或 prompt header 中，而不适合作为一条独立的 `docs/progressing` 新能力主线继续展开。
+
+更合适的处理方式：
+
+- 如果以后某个实现切片已经在改 Ask / Prompt Compiler / Skill Runner，再顺手把 `as-of / simulation date / business window / write boundary` 做成局部 contract。
+- 不单独建立页面、服务、eval suite 或功能入口。
+- 不把它当成和 Freshness Radar、Change Ledger、Evidence Watch 同级的独立能力；它最多是这些消费端的一个输入字段或回执细节。
+
+这份文档和 demo 仅保留为“时间口径显式化”的参考材料，避免后续再把这个小点重新包装成大能力。
 
 ## 真实场景 1：跑 Nova RMI skill 时，先锁住模拟日期
 
@@ -59,13 +73,13 @@ After：每个答案、prompt patch、skill action 都带同一份时间合约�
 
 ## 结论
 
-建议设计新能力：**Time Basis Contract / 时间口径合约**。
+原建议是设计新能力：**Time Basis Contract / 时间口径合约**。基于后续判断，它不应作为独立能力推进。
 
 一句话：
 
 > 当 Personal AI 要回答、编译 prompt、运行 skill 或创建外部 action 时，先把“用哪个时间”变成结构化合约：当前、历史 as-of、模拟日期、季度/冲刺窗口、时区、来源快照、写回边界都必须可见且可传递。
 
-它不是新的 dashboard，也不是普通日期格式化。P0 应作为 Ask、Prompt Context Compiler、Skill Foundry / skill runner、Action Queue、Today Pilot / Meeting Prep 的嵌入式前置合约层。用户日常只看到一个短 chip 和必要时的展开说明，不新增 review 队列。
+它不是新的 dashboard，也不是普通日期格式化。若未来需要，只应作为 Ask、Prompt Context Compiler、Skill Foundry / skill runner、Action Queue、Today Pilot / Meeting Prep 的嵌入式前置细节出现。用户日常只看到一个短 chip 或回执，不新增 review 队列，也不单独立项。
 
 ## Idea 来源
 
@@ -609,22 +623,22 @@ Docs/demo 阶段：
 
 本次 demo 是集成式页面，不是独立产品页：
 
-- 文件：[`time-basis-contract-demo.html`](./time-basis-contract-demo.html)
+- 文件：[`time-basis-contract-demo.html`](./time-basis-contract-demo.html)（搁置视觉参考）
 - 它模拟用户正在 Codex/ChatGPT 式任务输入框里准备运行 Nova RMI sync / Ask / 外部 AI prompt。
 - 右侧 Personal AI 面板展示时间 chip、合约抽屉、冲突检查、prompt header 插入和 action 审批边界。
 - Demo 数据使用本次真实记忆方向改写而来，中文为主，保留 `Target Delivery Quarter`、`2026-Q3`、`nova-capdev-rmi-sync` 等原始业务词。
 
 ## 决策建议
 
-建议把 **Time Basis Contract / 时间口径合约** 作为一个 P0 横切能力推进，但不要做独立页面。
+当前不建议把 **Time Basis Contract / 时间口径合约** 作为一个 P0 横切能力推进。
 
-最小可行切片是：
+如果未来确实要吸收其中的设计，最小可行方式是：
 
 1. 只覆盖 `Ask + Prompt Context Compiler + Action Queue + 一个 skill runner 场景`。
 2. 只解析用户显式日期/季度/模拟指令。
 3. 只在外部写风险或冲突时阻断。
 4. 默认不增加日常操作成本。
 
-它的亮点不是多一个日期选择器，而是把长期记忆系统里最容易被忽视的前提变成可传递的执行合约：
+保留价值在于：它提醒后续实现不要忽略时间前提。这个点不需要成为独立能力，但在具体高风险链路里仍值得作为局部回执或参数字段出现。
 
 > Personal AI 以后不只会说“我记得这件事”，还会先说明“我按哪个时间来记得和执行这件事”。

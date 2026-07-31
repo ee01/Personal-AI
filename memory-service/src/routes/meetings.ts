@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
+import { MeetingOutcomeBinderRepository } from '../repositories/MeetingOutcomeBinderRepository.js';
+import type { MeetingOutcomeBinder } from '../types/index.js';
+
 interface MeetingListItem {
   meetingId: string;
   title: string;
@@ -23,6 +26,7 @@ interface MeetingDetailItem extends MeetingListItem {
   decisions?: Array<Record<string, unknown>>;
   timelineEvents?: Array<Record<string, unknown>>;
   participantStances?: Array<Record<string, unknown>>;
+  outcomeBinder?: MeetingOutcomeBinder;
 }
 
 interface MeetingRow {
@@ -394,7 +398,13 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(404).send({ error: 'meeting not found' });
       }
 
-      return reply.status(200).send(item);
+      const outcomeBinder = new MeetingOutcomeBinderRepository(
+        db,
+      ).findByMeetingId(request.userId, meetingId);
+      return reply.status(200).send({
+        ...item,
+        outcomeBinder: outcomeBinder ?? undefined,
+      });
     },
   );
 }

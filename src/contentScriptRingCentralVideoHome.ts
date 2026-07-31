@@ -1,6 +1,7 @@
 import type {
   CalendarEventSyncItem,
   ContextAssistResponse,
+  MeetingOutcomeBinder,
   StorylineOpportunity,
   StorylineSuggestedArtifact,
   TodayPilotMeetingPrepRecord,
@@ -51,6 +52,24 @@ const SELECTED_EVENT_ITEM_SELECTORS = [
   '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][class*="selected"]',
   '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][class*="active"]',
 ].join(', ');
+const VIDEO_HOME_EXPLICIT_JOIN_BUTTON_SELECTORS = [
+  'button[data-test-automation-id="calendar-event-item-join-button"]',
+  'button[data-test-automation-id="join-meeting-button"]',
+  'button[data-test-automation-id="mini-join-button"]',
+].join(', ');
+const VIDEO_HOME_NATIVE_JOIN_SURFACE_SELECTOR = [
+  '[data-at*="calendar-event" i]',
+  '[data-test-automation-id*="calendar-event" i]',
+  '[data-test-automation-id*="meeting-detail" i]',
+  '[data-test-automation-id="video__leftPanel"]',
+  '[data-test-automation-id="video__rightPanel"]',
+].join(', ');
+const VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR =
+  'data-pai-ringcentral-native-join-button-boundary';
+const VIDEO_HOME_NATIVE_JOIN_ORIGINAL_TITLE_ATTR =
+  'data-pai-ringcentral-native-join-original-title';
+const VIDEO_HOME_NATIVE_JOIN_ORIGINAL_ARIA_LABEL_ATTR =
+  'data-pai-ringcentral-native-join-original-aria-label';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const REFRESH_INTERVAL_MS = 2500;
 
@@ -86,6 +105,7 @@ interface MeetingPrepHandoffStorageItem {
   prepId?: string;
   missionId?: string;
   generatedMode?: string;
+  outcomeBinder?: MeetingOutcomeBinder;
 }
 
 interface StorylineDismissReceipt {
@@ -126,6 +146,7 @@ class RingCentralVideoHomePrep {
     if (this.deactivateForNonVideoHomeRoute()) {
       return;
     }
+    this.refreshNativeJoinButtonBoundaries();
     if (this.state.enabled) {
       this.scheduleRefresh();
     }
@@ -163,6 +184,7 @@ class RingCentralVideoHomePrep {
     if (this.state.enabled) {
       this.render();
     }
+    this.refreshNativeJoinButtonBoundaries();
 
     this.observer = new MutationObserver(() => this.scheduleRefresh());
     this.observer.observe(document.documentElement, {
@@ -226,6 +248,7 @@ class RingCentralVideoHomePrep {
 
     void loadRingCentralNativeJoinEnabled().then((enabled) => {
       this.nativeJoinEnabled = enabled;
+      this.refreshNativeJoinButtonBoundaries();
       if (enabled) {
         void this.syncRingCentralCalendar({ forceRingCentral: true });
       }
@@ -237,6 +260,7 @@ class RingCentralVideoHomePrep {
 
     watchRingCentralNativeJoinEnabled((enabled) => {
       this.nativeJoinEnabled = enabled;
+      this.refreshNativeJoinButtonBoundaries();
       if (enabled) {
         void this.syncRingCentralCalendar({ forceRingCentral: true });
       }
@@ -324,6 +348,43 @@ class RingCentralVideoHomePrep {
       : null;
   }
 
+  private refreshNativeJoinButtonBoundaries(): void {
+    if (!isRingCentralVideoHomeRoute()) {
+      restoreVideoHomeNativeJoinButtonBoundaries();
+      return;
+    }
+
+    const activeButtons = new Set<HTMLElement>();
+    for (const button of findVideoHomeJoinButtonElements()) {
+      activeButtons.add(button);
+      if (!this.nativeJoinEnabled) {
+        restoreVideoHomeNativeJoinButtonBoundary(button);
+        continue;
+      }
+
+      const target = this.findNativeJoinTarget(button);
+      if (!target) {
+        restoreVideoHomeNativeJoinButtonBoundary(button);
+        continue;
+      }
+
+      applyVideoHomeNativeJoinButtonBoundary(
+        button,
+        buildVideoHomeNativeJoinButtonBoundary(target),
+      );
+    }
+
+    document
+      .querySelectorAll<HTMLElement>(
+        `[${VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR}]`,
+      )
+      .forEach((button) => {
+        if (!activeButtons.has(button)) {
+          restoreVideoHomeNativeJoinButtonBoundary(button);
+        }
+      });
+  }
+
   private scheduleRefresh = (): void => {
     if (this.refreshTimer != null) return;
     this.refreshTimer = window.setTimeout(() => {
@@ -337,9 +398,11 @@ class RingCentralVideoHomePrep {
       this.state.prep = null;
       this.state.refreshReceipt = null;
       this.render();
+      this.refreshNativeJoinButtonBoundaries();
       void this.loadMeetingPrep();
       } else {
         this.render();
+        this.refreshNativeJoinButtonBoundaries();
       }
     }, REFRESH_INTERVAL_MS);
   };
@@ -395,6 +458,7 @@ class RingCentralVideoHomePrep {
     } finally {
       if (isRingCentralVideoHomeRoute()) {
         this.render();
+        this.refreshNativeJoinButtonBoundaries();
       } else {
         this.deactivateForNonVideoHomeRoute();
       }
@@ -558,6 +622,7 @@ class RingCentralVideoHomePrep {
       prepId: this.state.prep?.id,
       missionId: this.state.prep?.missionId,
       generatedMode: this.state.prep?.generatedMode,
+      outcomeBinder: this.state.prep?.outcomeBinder,
     };
     const handoffKey = getMeetingPrepHandoffStorageKey(handoff);
     const existing = await chrome.storage.local.get([
@@ -697,6 +762,7 @@ class RingCentralVideoHomePrep {
             : ''
         }
         ${displayAssist && prep ? renderPrepReceipt(prep, displayAssist, evidence.length) : ''}
+        ${displayAssist && prep?.outcomeBinder ? renderMeetingOutcomePreview(prep.outcomeBinder) : ''}
         ${this.state.refreshReceipt ? renderRefreshReceipt(this.state.refreshReceipt) : ''}
         <div class="pai-assist-output" data-role="assist-output">
           ${
@@ -946,6 +1012,7 @@ class RingCentralVideoHomePrep {
     if (isRingCentralVideoHomeRoute()) {
       return false;
     }
+    restoreVideoHomeNativeJoinButtonBoundaries();
     this.clearRouteScopedState();
     this.removeHost();
     return true;
@@ -983,6 +1050,20 @@ function findInjectionTarget(): HTMLElement | null {
 }
 
 function mountHostAfterTarget(host: HTMLElement, target: HTMLElement): void {
+  const visibleDescription = Array.from(
+    target.querySelectorAll<HTMLElement>(DESCRIPTION_BOX_SELECTOR),
+  ).find(isDisplayedElement);
+  if (visibleDescription?.parentElement) {
+    const parent = visibleDescription.parentElement;
+    if (
+      host.parentElement !== parent ||
+      host.nextElementSibling !== visibleDescription
+    ) {
+      parent.insertBefore(host, visibleDescription);
+    }
+    return;
+  }
+
   if (host.parentElement !== target || host.nextElementSibling) {
     target.appendChild(host);
   }
@@ -1015,14 +1096,19 @@ function findMeetingDetailRoot(): HTMLElement | null {
     }
   }
 
-  const descriptionBox = document.querySelector<HTMLElement>(
-    DESCRIPTION_BOX_SELECTOR,
-  );
-  if (descriptionBox) {
+  const descriptionBoxes = Array.from(
+    document.querySelectorAll<HTMLElement>(DESCRIPTION_BOX_SELECTOR),
+  ).filter(isDisplayedElement);
+  for (const descriptionBox of descriptionBoxes) {
     let current = descriptionBox.parentElement;
     while (current && current !== document.body) {
       const rect = current.getBoundingClientRect();
-      if (rect.width >= 320 && rect.left >= window.innerWidth * 0.35) {
+      if (
+        isDisplayedElement(current) &&
+        rect.width >= 320 &&
+        rect.height > 0 &&
+        rect.left >= window.innerWidth * 0.35
+      ) {
         return current;
       }
       current = current.parentElement;
@@ -1034,6 +1120,7 @@ function findMeetingDetailRoot(): HTMLElement | null {
   )
     .map((element) => ({ element, rect: element.getBoundingClientRect() }))
     .filter(({ element, rect }) => {
+      if (!isDisplayedElement(element)) return false;
       if (rect.width < 320 || rect.height < 260) return false;
       if (rect.left < window.innerWidth * 0.42) return false;
       const text = getVisibleText(element);
@@ -1225,7 +1312,11 @@ function isDisplayedElement(
   const style = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
   return (
-    style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0
+    style.display !== 'none' &&
+    style.visibility !== 'hidden' &&
+    style.opacity !== '0' &&
+    rect.width > 0 &&
+    rect.height > 0
   );
 }
 
@@ -1236,14 +1327,36 @@ function findVideoHomeJoinButton(event: MouseEvent): HTMLElement | null {
   }
 
   return (
-    target.closest<HTMLElement>(
-      [
-        'button[data-test-automation-id="calendar-event-item-join-button"]',
-        'button[data-test-automation-id="join-meeting-button"]',
-        'button[data-test-automation-id="mini-join-button"]',
-      ].join(', '),
-    ) || findJoinButtonLikeTarget(target)
+    target.closest<HTMLElement>(VIDEO_HOME_EXPLICIT_JOIN_BUTTON_SELECTORS) ||
+    findJoinButtonLikeTarget(target)
   );
+}
+
+function findVideoHomeJoinButtonElements(): HTMLElement[] {
+  const buttons = new Set<HTMLElement>();
+
+  document
+    .querySelectorAll<HTMLElement>(VIDEO_HOME_EXPLICIT_JOIN_BUTTON_SELECTORS)
+    .forEach((button) => {
+      if (isDisplayedElement(button)) {
+        buttons.add(button);
+      }
+    });
+
+  document
+    .querySelectorAll<HTMLElement>(VIDEO_HOME_NATIVE_JOIN_SURFACE_SELECTOR)
+    .forEach((surface) => {
+      surface
+        .querySelectorAll<HTMLElement>('button, [role="button"]')
+        .forEach((candidate) => {
+          const button = findJoinButtonLikeTarget(candidate);
+          if (button) {
+            buttons.add(button);
+          }
+        });
+    });
+
+  return Array.from(buttons);
 }
 
 function findJoinButtonLikeTarget(target: Element): HTMLElement | null {
@@ -1266,15 +1379,73 @@ function findJoinButtonLikeTarget(target: Element): HTMLElement | null {
   }
 
   const surface = button.closest<HTMLElement>(
-    [
-      '[data-at*="calendar-event" i]',
-      '[data-test-automation-id*="calendar-event" i]',
-      '[data-test-automation-id*="meeting-detail" i]',
-      '[data-test-automation-id="video__leftPanel"]',
-      '[data-test-automation-id="video__rightPanel"]',
-    ].join(', '),
+    VIDEO_HOME_NATIVE_JOIN_SURFACE_SELECTOR,
   );
   return surface ? button : null;
+}
+
+function buildVideoHomeNativeJoinButtonBoundary(
+  target: RingCentralVideoJoinTarget,
+): string {
+  return [
+    `Personal AI will try the RingCentral app first for meeting ${target.meetingId} using the validated full meeting link.`,
+    'Chrome may ask you to open RingCentral; browser recovery stays available after the click with Join in browser, Copy link, Meeting ID, passcode when present, and future default controls.',
+    'Hidden passcode/details stay hidden in the recovery panel until you explicitly copy or show them.',
+    'This click does not confirm that you joined, copy meeting material, or change the default join path.',
+  ].join(' ');
+}
+
+function applyVideoHomeNativeJoinButtonBoundary(
+  button: HTMLElement,
+  boundary: string,
+): void {
+  if (!button.hasAttribute(VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR)) {
+    button.setAttribute(
+      VIDEO_HOME_NATIVE_JOIN_ORIGINAL_TITLE_ATTR,
+      button.getAttribute('title') || '',
+    );
+    button.setAttribute(
+      VIDEO_HOME_NATIVE_JOIN_ORIGINAL_ARIA_LABEL_ATTR,
+      button.getAttribute('aria-label') || '',
+    );
+  }
+  button.setAttribute(VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR, 'true');
+  button.setAttribute('title', boundary);
+  button.setAttribute('aria-label', boundary);
+}
+
+function restoreVideoHomeNativeJoinButtonBoundary(button: HTMLElement): void {
+  if (!button.hasAttribute(VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR)) {
+    return;
+  }
+
+  const originalTitle = button.getAttribute(
+    VIDEO_HOME_NATIVE_JOIN_ORIGINAL_TITLE_ATTR,
+  );
+  const originalAriaLabel = button.getAttribute(
+    VIDEO_HOME_NATIVE_JOIN_ORIGINAL_ARIA_LABEL_ATTR,
+  );
+  if (originalTitle) {
+    button.setAttribute('title', originalTitle);
+  } else {
+    button.removeAttribute('title');
+  }
+  if (originalAriaLabel) {
+    button.setAttribute('aria-label', originalAriaLabel);
+  } else {
+    button.removeAttribute('aria-label');
+  }
+  button.removeAttribute(VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR);
+  button.removeAttribute(VIDEO_HOME_NATIVE_JOIN_ORIGINAL_TITLE_ATTR);
+  button.removeAttribute(VIDEO_HOME_NATIVE_JOIN_ORIGINAL_ARIA_LABEL_ATTR);
+}
+
+function restoreVideoHomeNativeJoinButtonBoundaries(): void {
+  document
+    .querySelectorAll<HTMLElement>(
+      `[${VIDEO_HOME_NATIVE_JOIN_BUTTON_BOUNDARY_ATTR}]`,
+    )
+    .forEach(restoreVideoHomeNativeJoinButtonBoundary);
 }
 
 function shouldPreserveVideoHomeNativeJoinClick(event: MouseEvent): boolean {
@@ -1817,9 +1988,42 @@ function renderPrepReceipt(
         getMeetingPrepBoundaryText(prep, assist, visibleEvidenceCount),
       )}</div>
       <div class="pai-prep-receipt-handoff">
-        本机会写入 Meeting Pilot handoff，只带入本场关注、cue cards 和证据背景；不会加入会议、录音、发消息、审批或写回日历/外部系统。
+        本机会写入 Meeting Pilot handoff，只带入本场关注、待闭环项、cue cards 和证据背景；不会加入会议、录音、发消息、审批或写回日历/外部系统。
       </div>
       <div class="pai-prep-receipt-next">会中核对 owner / 下一步 / 风险</div>
+    </section>
+  `;
+}
+
+function renderMeetingOutcomePreview(binder: MeetingOutcomeBinder): string {
+  const slots = Array.isArray(binder.slots) ? binder.slots.slice(0, 5) : [];
+  if (!slots.length) return '';
+  return `
+    <section class="pai-outcome-preview" data-meeting-outcome-preview="true" aria-label="本场要闭环">
+      <div class="pai-outcome-head">
+        <div>
+          <span class="pai-outcome-kicker">本场要闭环</span>
+          <strong>${slots.length} 件事</strong>
+        </div>
+        <span class="pai-outcome-state">会前目标</span>
+      </div>
+      <div class="pai-outcome-slots">
+        ${slots
+          .map(
+            (slot, index) => `
+              <div class="pai-outcome-slot" data-outcome-slot="${escapeHtmlAttribute(
+                slot.id,
+              )}">
+                <span>${index + 1}</span>
+                <strong>${escapeHtml(slot.title)}</strong>
+              </div>
+            `,
+          )
+          .join('')}
+      </div>
+      <div class="pai-outcome-boundary">
+        来源：日历议程、会前目标和相关记忆。这里只定义待核验目标，不代表已经解决；会议结束后由 Meeting Pilot 用 transcript、决议和行动项装订结果。
+      </div>
     </section>
   `;
 }
@@ -2384,6 +2588,83 @@ function styles(): string {
       color: #334155;
       font-size: 12px;
       font-weight: 800;
+    }
+    .pai-outcome-preview {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #b9d7ea;
+      border-left: 3px solid #0b66b2;
+      border-radius: 6px;
+      background: #f6fbff;
+    }
+    .pai-outcome-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .pai-outcome-head > div {
+      min-width: 0;
+    }
+    .pai-outcome-kicker {
+      display: block;
+      color: #0b66b2;
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+    .pai-outcome-head strong {
+      color: #1e293b;
+      font-size: 14px;
+    }
+    .pai-outcome-state {
+      flex: 0 0 auto;
+      padding: 2px 7px;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      background: #fff;
+      color: #1d4ed8;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .pai-outcome-slots {
+      display: grid;
+      gap: 6px;
+      margin-top: 9px;
+    }
+    .pai-outcome-slot {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      gap: 7px;
+      align-items: start;
+    }
+    .pai-outcome-slot > span {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .pai-outcome-slot strong {
+      min-width: 0;
+      color: #334155;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .pai-outcome-boundary {
+      margin-top: 9px;
+      padding-top: 8px;
+      border-top: 1px solid #dbe7f1;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
     }
     .pai-refresh-receipt {
       margin-top: 10px;

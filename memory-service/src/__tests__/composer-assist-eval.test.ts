@@ -478,7 +478,7 @@ describe('Composer Assist evals', () => {
       ],
     };
 
-    await app.inject({
+    const bossResponse = await app.inject({
       method: 'POST',
       url: '/api/v1/composer/assist',
       payload: {
@@ -492,7 +492,7 @@ describe('Composer Assist evals', () => {
       },
     });
 
-    await app.inject({
+    const peerResponse = await app.inject({
       method: 'POST',
       url: '/api/v1/composer/assist',
       payload: {
@@ -508,9 +508,71 @@ describe('Composer Assist evals', () => {
 
     const bossPrompt = llmGenerateMock.mock.calls[0][0] as string;
     const peerPrompt = llmGenerateMock.mock.calls[1][0] as string;
-    expect(bossPrompt).toContain('manager');
-    expect(peerPrompt).toContain('developer peer group');
+    expect(bossPrompt).toContain(
+      'resolved audience: manager (relationship_hint)',
+    );
+    expect(bossPrompt).toContain('中性正式且责任清晰');
+    expect(peerPrompt).toContain(
+      'resolved audience: peer (relationship_hint)',
+    );
+    expect(peerPrompt).toContain('简短自然的内部协作表达');
+    expect(peerPrompt).not.toContain('developer peer group');
     expect(bossPrompt).not.toEqual(peerPrompt);
+    expect(bossResponse.json().personaProjection).toMatchObject({
+      audienceType: 'manager',
+      audienceSource: 'relationship_hint',
+      representationMode: 'draft_preview_required',
+      requiresPreview: true,
+    });
+    expect(bossResponse.json().previewRequired).toBe(true);
+    expect(peerResponse.json().personaProjection).toMatchObject({
+      audienceType: 'peer',
+      audienceSource: 'relationship_hint',
+      representationMode: 'draft_only',
+      requiresPreview: false,
+    });
+    expect(peerResponse.json().previewRequired).toBe(false);
+  });
+
+  it('never recalls or injects raw USER_CORE into Compose generation', async () => {
+    insertChunk({
+      id: 451,
+      content:
+        'Codex rollout status needs a clear owner, risk, and next action.',
+      sourceType: 'glip',
+    });
+    insertChunk({
+      id: 452,
+      content:
+        'RAW_USER_CORE_NEVER_INJECT owner private profile and password secret.',
+      sourceType: 'user_core',
+    });
+    llmGenerateMock.mockImplementationOnce(async (prompt: string) => {
+      expect(prompt).not.toContain('RAW_USER_CORE_NEVER_INJECT');
+      expect(prompt).not.toContain('USER_CORE');
+      return { content: 'Codex rollout 已明确 owner；下一步核对风险和执行时间。' };
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        title: 'Codex rollout status',
+        primaryText: '请同步 Codex rollout 的 owner、风险和下一步。',
+        sourceTypes: ['glip', 'user_core'],
+        debug: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.available).toBe(true);
+    expect(body.debug.recallRequest.sourceTypes).not.toContain('user_core');
+    expect(body.personaProjection.reasonCodes).toContain(
+      'raw_user_core_excluded',
+    );
   });
 
   it('injects scenario-specific owner style hints into the composer prompt', async () => {
@@ -564,14 +626,15 @@ describe('Composer Assist evals', () => {
     expect(body.available).toBe(true);
     expect(body.insertText).toContain('Codex rollout');
     const prompt = llmGenerateMock.mock.calls[0][0] as string;
-    expect(prompt).toContain('主人表达约束');
+    expect(prompt).toContain('身份投影约束');
+    expect(prompt).toContain('表达控制（只控制写法');
     expect(prompt).toContain('writing_style.ringcentral.reply');
     expect(prompt).toContain('Use concise Chinese, one short paragraph');
     expect(prompt).not.toContain('writing_style.jira.comment');
     expect(prompt).not.toContain('Use formal English with explicit next step');
   });
 
-  it('does not inject unconfirmed facts as facts but allows pending style as a soft hint', async () => {
+  it('excludes unrelated identity facts and allows pending style only as a soft hint', async () => {
     insertChunk({
       id: 601,
       content:
@@ -632,15 +695,19 @@ describe('Composer Assist evals', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     const prompt = llmGenerateMock.mock.calls[0][0] as string;
-    expect(prompt).toContain('已确认事实');
-    expect(prompt).toContain('team: AI platform team');
+    expect(prompt).not.toContain('AI platform team');
     expect(prompt).not.toContain('job_title: Unconfirmed VP of Product');
-    expect(prompt).toContain(
-      'pending inferred，只能作为 soft style hint，不能当事实',
-    );
+    expect(prompt).toContain('柔性表达提示（未确认');
     expect(prompt).toContain('writing_style.ringcentral.thread_reply');
     expect(prompt).toContain(
       'Prefer very brief replies with one concrete next action.',
+    );
+    expect(body.personaProjection.reasonCodes).toEqual(
+      expect.arrayContaining([
+        'blocked_profile_not_relevant',
+        'blocked_unconfirmed_profile',
+        'pending_style_soft_control',
+      ]),
     );
   });
 });

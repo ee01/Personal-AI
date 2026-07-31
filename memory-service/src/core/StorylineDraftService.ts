@@ -12,10 +12,13 @@ import {
 } from '../utils/storyline.js';
 import type {
   ComposerAssistEvidence,
+  ContextAssistCueCard,
   StorylineDraftFallbackReason,
   StorylineDraftRequest,
   StorylineDraftResponse,
   StorylineDraftSegment,
+  StorylineOpportunity,
+  StorylineSourceKind,
   StorylineSuggestedArtifact,
 } from '../types/index.js';
 
@@ -28,6 +31,18 @@ interface StorylineDraftLlmResponse {
   riskNotes?: string[];
   artifactText?: string;
   usage?: Record<string, unknown>;
+}
+
+interface StorylineDraftSource {
+  sourceKind: StorylineSourceKind;
+  sourceId: string;
+  sourceHash: string;
+  title: string;
+  summaryMd: string;
+  contextPackMd: string;
+  evidenceRefs: ComposerAssistEvidence[];
+  cueCards: ContextAssistCueCard[];
+  storylineOpportunity?: StorylineOpportunity;
 }
 
 function compactText(value: unknown, maxLength: number): string {
@@ -54,6 +69,33 @@ function normalizeStringArray(value: unknown, maxItems: number): string[] {
     .slice(0, maxItems);
 }
 
+function safeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function safeObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') return safeRecord(value);
+  try {
+    return safeRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+function safeStringArray(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function appendOnce(items: string[], value: string): string[] {
   return items.includes(value) ? items : [...items, value];
 }
@@ -71,12 +113,12 @@ const LLM_FAILURE_FALLBACK_RISK =
 
 export class StorylineDraftService {
   private readonly repo: TodayPilotMeetingPrepRepository;
-  private readonly llmClient: LLMClient;
+  private readonly llmClient: Pick<LLMClient, 'generateJSON'>;
 
   constructor(
-    db: Database.Database,
+    private readonly db: Database.Database,
     private readonly userId: string,
-    llmClient: LLMClient = getLLMClient(),
+    llmClient: Pick<LLMClient, 'generateJSON'> = getLLMClient(),
   ) {
     this.repo = new TodayPilotMeetingPrepRepository(db);
     this.llmClient = llmClient;
@@ -85,26 +127,26 @@ export class StorylineDraftService {
   async createDraft(
     request: StorylineDraftRequest,
   ): Promise<StorylineDraftResponse> {
-    if (request.sourceKind !== 'today_meeting_prep') {
+    const source = request.sourceKind === 'today_meeting_prep'
+      ? this.loadMeetingPrepSource(request.prepId)
+      : request.sourceKind === 'source_memory_seed'
+        ? this.loadSourceMemorySeed(request.capsuleId, request.seedId)
+        : null;
+    if (!source) {
       throw new Error('unsupported_storyline_source');
     }
-
-    const prep = this.repo.findById(request.prepId);
-    if (!prep || prep.userId !== this.userId) {
-      throw new Error('storyline source prep not found');
-    }
-    if (prep.evidenceRefs.length === 0) {
+    if (source.evidenceRefs.length === 0) {
       throw new Error('storyline_source_has_no_usable_evidence');
     }
 
     const targetArtifact =
       normalizeStorylineArtifactTarget(request.targetArtifact) ||
-      prep.storylineOpportunity?.suggestedArtifact ||
+      source.storylineOpportunity?.suggestedArtifact ||
       'speaker_notes';
     const audience = firstNonEmpty(
       request.audienceHint,
-      prep.storylineOpportunity?.audienceHint,
-      '会议参会人',
+      source.storylineOpportunity?.audienceHint,
+      source.sourceKind === 'today_meeting_prep' ? '会议参会人' : '目标读者',
     );
 
     let generated: StorylineDraftLlmResponse = {};
@@ -112,7 +154,7 @@ export class StorylineDraftService {
     let fallbackRiskNote: string | undefined;
     try {
       generated = await this.llmClient.generateJSON<StorylineDraftLlmResponse>(
-        this.buildPrompt(prep, targetArtifact, audience),
+        this.buildPrompt(source, targetArtifact, audience),
         {
           temperature: 0.25,
           maxTokens: 1800,
@@ -122,11 +164,13 @@ export class StorylineDraftService {
       );
     } catch {
       fallbackReason = 'llm_generation_failed';
-      fallbackRiskNote = LLM_FAILURE_FALLBACK_RISK;
+      fallbackRiskNote = source.sourceKind === 'today_meeting_prep'
+        ? LLM_FAILURE_FALLBACK_RISK
+        : '模型生成失败，已用资料记忆证据生成 fallback 草稿；请按 Evidence key 复核后再使用。';
     }
 
     return this.normalizeDraftResponse(
-      prep,
+      source,
       generated,
       targetArtifact,
       audience,
@@ -134,12 +178,167 @@ export class StorylineDraftService {
     );
   }
 
+  private loadMeetingPrepSource(prepId: string): StorylineDraftSource {
+    const prep = this.repo.findById(prepId);
+    if (!prep || prep.userId !== this.userId) {
+      throw new Error('storyline source prep not found');
+    }
+    return this.toDraftSource(prep);
+  }
+
+  private toDraftSource(prep: TodayPilotMeetingPrepRecord): StorylineDraftSource {
+    return {
+      sourceKind: 'today_meeting_prep',
+      sourceId: prep.id,
+      sourceHash: prep.sourceHash,
+      title: prep.eventTitle,
+      summaryMd: prep.summaryMd,
+      contextPackMd: prep.contextPackMd,
+      evidenceRefs: prep.evidenceRefs,
+      cueCards: prep.cueCards,
+      storylineOpportunity: prep.storylineOpportunity,
+    };
+  }
+
+  private loadSourceMemorySeed(
+    capsuleId: string,
+    seedId: string,
+  ): StorylineDraftSource {
+    const capsule = this.db
+      .prepare(
+        `SELECT id, source_title, source_url, summary, metadata_json
+         FROM source_memory_capsules
+         WHERE id = ? AND status = 'saved'`,
+      )
+      .get(capsuleId) as
+      | {
+          id: string;
+          source_title: string;
+          source_url: string | null;
+          summary: string | null;
+          metadata_json: string;
+        }
+      | undefined;
+    if (!capsule) throw new Error('storyline source memory capsule not found');
+
+    const metadata = safeObject(capsule.metadata_json);
+    const distillation = safeRecord(metadata.distillation);
+    const deep = safeRecord(distillation.deep);
+    if (
+      deep.status !== 'ready' ||
+      typeof deep.inputHash !== 'string' ||
+      deep.inputHash !== distillation.inputHash
+    ) {
+      throw new Error('storyline source memory seed not found');
+    }
+
+    const artifacts = this.db
+      .prepare(
+        `SELECT id, input_hash, title, body, payload_json, evidence_span_ids_json
+         FROM source_memory_distilled_artifacts
+         WHERE capsule_id = ? AND artifact_type = 'storyline_seed'`,
+      )
+      .all(capsuleId) as Array<{
+      id: string;
+      input_hash: string;
+      title: string;
+      body: string;
+      payload_json: string;
+      evidence_span_ids_json: string;
+    }>;
+    const artifact = artifacts.find((item) => {
+      const payload = safeObject(item.payload_json);
+      return item.id === seedId || payload.seedKey === seedId;
+    });
+    if (!artifact || artifact.input_hash !== deep.inputHash) {
+      throw new Error('storyline source memory seed not found');
+    }
+    const payload = safeObject(artifact.payload_json);
+    const evidenceIds = safeStringArray(artifact.evidence_span_ids_json);
+    const spans = this.db
+      .prepare(
+        `SELECT id, span_kind, locator, text, confidence
+         FROM source_memory_evidence_spans
+         WHERE capsule_id = ? AND input_hash = ?
+         ORDER BY span_index ASC`,
+      )
+      .all(capsuleId, artifact.input_hash) as Array<{
+      id: string;
+      span_kind: string;
+      locator: string | null;
+      text: string;
+      confidence: number;
+    }>;
+    const allowed = new Set(evidenceIds);
+    const evidenceRefs: ComposerAssistEvidence[] = spans
+      .filter((span) => allowed.has(span.id))
+      .slice(0, 8)
+      .map((span) => ({
+        id: span.id,
+        type: 'source_memory',
+        title: artifact.title,
+        snippet: compactText(span.text, 700),
+        sourceLabel: 'source_memory',
+        sourceUrl: capsule.source_url || undefined,
+        sourceTitle: capsule.source_title,
+        exploreLink: `#/source-memory/${encodeURIComponent(capsule.id)}`,
+        whyMatched: 'Storyline seed cites this source-memory evidence span',
+        evidenceRole: 'artifact',
+        metadata: {
+          sourceMemoryCapsuleId: capsule.id,
+          spanKind: span.span_kind,
+          locator: span.locator,
+          confidence: span.confidence,
+        },
+      }));
+    if (evidenceRefs.length === 0) {
+      throw new Error('storyline_source_has_no_usable_evidence');
+    }
+
+    const claim = compactText(payload.claim || artifact.body, 900);
+    const risks = Array.isArray(payload.risks)
+      ? normalizeStringArray(payload.risks, 6)
+      : [];
+    return {
+      sourceKind: 'source_memory_seed',
+      sourceId: `${capsule.id}:${seedId}`,
+      sourceHash: artifact.input_hash,
+      title: compactText(payload.title || artifact.title, 160),
+      summaryMd: claim || capsule.summary || artifact.body,
+      contextPackMd: [
+        `Source: ${capsule.source_title}`,
+        claim ? `Claim: ${claim}` : '',
+        ...risks.map((risk) => `Risk: ${risk}`),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      evidenceRefs,
+      cueCards: [
+        {
+          id: artifact.id,
+          kind: 'brief',
+          title: compactText(payload.title || artifact.title, 120),
+          body: claim || artifact.body,
+          evidenceIds: evidenceRefs.map((item) => item.id),
+        },
+      ],
+      storylineOpportunity: {
+        available: true,
+        confidence:
+          typeof payload.confidence === 'number' ? payload.confidence : 0.7,
+        audienceHint: compactText(payload.audience, 160) || undefined,
+        oneLineReason: 'This draft starts from an evidence-grounded Source Memory storyline seed.',
+        suggestedArtifact: 'speaker_notes',
+      },
+    };
+  }
+
   private buildPrompt(
-    prep: TodayPilotMeetingPrepRecord,
+    source: StorylineDraftSource,
     targetArtifact: StorylineSuggestedArtifact,
     audience: string,
   ): string {
-    const evidenceText = prep.evidenceRefs
+    const evidenceText = source.evidenceRefs
       .slice(0, 8)
       .map((item, index) => {
         const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
@@ -154,18 +353,19 @@ export class StorylineDraftService {
     return [
       'Generate a Memory Storyline draft in JSON.',
       '',
-      `Source meeting prep: ${prep.eventTitle}`,
+      `Source kind: ${source.sourceKind}`,
+      `Source: ${source.title}`,
       `Audience: ${audience}`,
       `Target artifact: ${targetArtifact}`,
-      prep.storylineOpportunity?.oneLineReason
-        ? `Opportunity reason: ${prep.storylineOpportunity.oneLineReason}`
+      source.storylineOpportunity?.oneLineReason
+        ? `Opportunity reason: ${source.storylineOpportunity.oneLineReason}`
         : '',
       '',
-      'Meeting prep summary:',
-      compactText(prep.summaryMd, 1200),
+      'Source summary:',
+      compactText(source.summaryMd, 1200),
       '',
       'Context pack:',
-      compactText(prep.contextPackMd, 1600),
+      compactText(source.contextPackMd, 1600),
       '',
       'Evidence ids allowed:',
       evidenceText || 'No external evidence ids are available.',
@@ -200,7 +400,7 @@ export class StorylineDraftService {
   }
 
   private normalizeDraftResponse(
-    prep: TodayPilotMeetingPrepRecord,
+    source: StorylineDraftSource,
     response: StorylineDraftLlmResponse,
     requestedTarget: StorylineSuggestedArtifact,
     requestedAudience: string,
@@ -213,7 +413,7 @@ export class StorylineDraftService {
     const audience = firstNonEmpty(response.audience, requestedAudience);
     const evidenceByAlias = new Map<string, string>();
     const allowedEvidenceIds = new Set<string>();
-    prep.evidenceRefs.slice(0, 8).forEach((item, index) => {
+    source.evidenceRefs.slice(0, 8).forEach((item, index) => {
       allowedEvidenceIds.add(item.id);
       evidenceByAlias.set(`E${index + 1}`, item.id);
       evidenceByAlias.set(`e${index + 1}`, item.id);
@@ -241,28 +441,31 @@ export class StorylineDraftService {
       segments.length < 3 ||
       countDistinctSegmentEvidenceIds(segments) < minimumDistinctEvidence;
     const normalizedSegments = usedFallbackSegments
-      ? this.fallbackSegments(prep)
+      ? this.fallbackSegments(source)
       : segments;
     const gaps = normalizeStringArray(response.gaps, 6);
     const riskNotes = usedFallbackSegments
       ? appendOnce(
           normalizeStringArray(response.riskNotes, 6),
-          options.fallbackRiskNote || FALLBACK_GROUNDING_RISK,
+          options.fallbackRiskNote ||
+            (source.sourceKind === 'today_meeting_prep'
+              ? FALLBACK_GROUNDING_RISK
+              : '原始模型输出缺少足够证据引用，已用资料记忆证据重新生成可复制草稿。'),
         )
       : normalizeStringArray(response.riskNotes, 6);
     const title = usedFallbackSegments
-      ? this.defaultTitle(prep, targetArtifact)
-      : firstNonEmpty(response.title, this.defaultTitle(prep, targetArtifact));
+      ? this.defaultTitle(source, targetArtifact)
+      : firstNonEmpty(response.title, this.defaultTitle(source, targetArtifact));
     const artifactText = this.renderArtifactText(
       title,
       audience,
       targetArtifact,
       normalizedSegments,
-      prep.evidenceRefs,
+      source.evidenceRefs,
       gaps,
       riskNotes,
     );
-    const returnedEvidence = prep.evidenceRefs.slice(0, 8);
+    const returnedEvidence = source.evidenceRefs.slice(0, 8);
     const returnedEvidenceIds = new Set(returnedEvidence.map((item) => item.id));
     const citedEvidenceIds = Array.from(
       new Set(normalizedSegments.flatMap((segment) => segment.evidenceIds)),
@@ -271,15 +474,15 @@ export class StorylineDraftService {
     return {
       id: `storyline-draft-${contentHash(
         JSON.stringify({
-          sourceId: prep.id,
-          sourceHash: prep.sourceHash,
+          sourceId: source.sourceId,
+          sourceHash: source.sourceHash,
           targetArtifact,
           audience,
           segmentTitles: normalizedSegments.map((segment) => segment.title),
         }),
       ).slice(0, 20)}`,
-      sourceKind: 'today_meeting_prep',
-      sourceId: prep.id,
+      sourceKind: source.sourceKind,
+      sourceId: source.sourceId,
       title,
       audience,
       targetArtifact,
@@ -291,11 +494,11 @@ export class StorylineDraftService {
         generationMode: usedFallbackSegments
           ? 'fallback_cue_cards'
           : 'llm_grounded',
-        sourceKind: 'today_meeting_prep',
-        sourceId: prep.id,
+        sourceKind: source.sourceKind,
+        sourceId: source.sourceId,
         targetArtifact,
         audience,
-        sourceEvidenceRefCount: prep.evidenceRefs.length,
+        sourceEvidenceRefCount: source.evidenceRefs.length,
         citedEvidenceRefCount: citedEvidenceIds.length,
         returnedEvidenceDetailCount: returnedEvidence.length,
         missingEvidenceDetailCount: citedEvidenceIds.filter(
@@ -340,19 +543,19 @@ export class StorylineDraftService {
   }
 
   private fallbackSegments(
-    prep: TodayPilotMeetingPrepRecord,
+    source: StorylineDraftSource,
   ): StorylineDraftSegment[] {
-    const fallbackEvidence = prep.evidenceRefs.slice(0, 3);
+    const fallbackEvidence = source.evidenceRefs.slice(0, 3);
     const usedEvidenceIds = new Set<string>();
-    const baseSegments = prep.cueCards
+    const baseSegments = source.cueCards
       .slice(0, 3)
       .map((card, index) => ({
         title: compactText(card.title, 90) || `第 ${index + 1} 段`,
         intent: compactText(card.body, 160) || '把会前准备转成可讲述材料。',
-        narrative: compactText(card.body, 700) || prep.summaryMd,
+        narrative: compactText(card.body, 700) || source.summaryMd,
         evidenceIds: this.resolveFallbackEvidenceIds(
           card.evidenceIds,
-          prep.evidenceRefs,
+          source.evidenceRefs,
           index,
           usedEvidenceIds,
         ),
@@ -370,7 +573,7 @@ export class StorylineDraftService {
       baseSegments.push({
         title: ['背景', '关键证据', '下一步'][baseSegments.length],
         intent: '补齐故事线的基本结构。',
-        narrative: compactText(evidence?.snippet || prep.summaryMd, 700),
+        narrative: compactText(evidence?.snippet || source.summaryMd, 700),
         evidenceIds: evidence ? [evidence.id] : [],
       });
     }
@@ -434,11 +637,11 @@ export class StorylineDraftService {
   }
 
   private defaultTitle(
-    prep: TodayPilotMeetingPrepRecord,
+    source: StorylineDraftSource,
     targetArtifact: StorylineSuggestedArtifact,
   ): string {
     const suffix = defaultStorylineButtonLabel(targetArtifact, undefined);
-    return `${prep.eventTitle} · ${suffix}`;
+    return `${source.title} · ${suffix}`;
   }
 
   private renderArtifactText(

@@ -522,7 +522,9 @@
                 v-for="evidence in selectedEvidenceRows"
                 :key="evidence.raw"
                 class="evidence-row"
-                :title="evidence.raw"
+                role="group"
+                :title="evidenceRowBoundary(evidence)"
+                :aria-label="evidenceRowBoundary(evidence)"
               >
                 <span>{{ evidence.label }}</span>
                 <strong>{{ evidence.value }}</strong>
@@ -660,6 +662,12 @@ interface CueEditorReceipt {
   tone: 'ready' | 'warning' | 'quiet';
   rows: Array<{ label: string; value: string }>;
   boundary: string;
+}
+
+interface EvidenceRow {
+  raw: string;
+  label: string;
+  value: string;
 }
 
 type CueStrength = 'anchored' | 'weak' | 'missing';
@@ -2222,7 +2230,7 @@ function activationRecommendation(
 function evidenceRows(refs: string[]) {
   return refs
     .map((ref) => parseEvidenceRef(ref))
-    .filter((row): row is { raw: string; label: string; value: string } => Boolean(row));
+    .filter((row): row is EvidenceRow => Boolean(row));
 }
 
 function parseEvidenceRef(ref: string) {
@@ -2239,6 +2247,15 @@ function parseEvidenceRef(ref: string) {
     label: evidenceKindLabel(kind),
     value,
   };
+}
+
+function evidenceRowBoundary(evidence: EvidenceRow) {
+  return [
+    `来源证据 ${evidence.label}：${evidence.value}`,
+    `原始引用 ${evidence.raw}`,
+    '这里只展示当前 Rehearsal 的审计来源线索',
+    '查看这一行不会打开来源、重新读取详情、标记反馈、改状态、写外部系统或执行预演脚本',
+  ].join('；');
 }
 
 function evidenceKindLabel(kind: string) {

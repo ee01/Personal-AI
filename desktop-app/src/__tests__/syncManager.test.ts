@@ -56,7 +56,15 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
               title: 'Notice Digest',
               kind: 'notice_digest',
               bodyMd: '- Weekly Report Ready - Your weekly report is ready',
-              sourceRefs: ['notification:notif-notice-1'],
+              itemCount: 1,
+              feedHasMore: false,
+              feedLimit: 8,
+              feedSnapshotReceipt:
+                'Feed 快照口径回执：豆包 滚动同步 limit=8 返回 1 条，当前页未发现更多条目。',
+              sourceRefs: [
+                'notification:notif-notice-1',
+                'shared:source-ref-1',
+              ],
             },
           ],
         };
@@ -69,7 +77,12 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
             title: 'Todo Digest',
             kind: scenario === 'todo_sync' ? 'todo_digest' : 'reminder_digest',
             bodyMd: '- 跟进周报',
-            sourceRefs: ['proposed_action:action-1'],
+            itemCount: 2,
+            feedHasMore: true,
+            feedLimit: 8,
+            feedSnapshotReceipt:
+              'Feed 快照口径回执：豆包 滚动同步 limit=8 返回 2 条，还有更多未返回条目。',
+            sourceRefs: ['proposed_action:action-1', 'shared:source-ref-1'],
           },
         ],
       };
@@ -140,10 +153,21 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
   );
 
   const result = await manager.runNow('reminder_sync');
+  const [attempt] = manager.getSnapshot().recentAttempts;
 
   assert.equal(result.status, 'succeeded');
   assert.deepEqual(result.packageKinds, ['todo_digest', 'notice_digest']);
-  assert.equal(result.sourceRefCount, 2);
+  assert.equal(result.packageItemCount, 3);
+  assert.equal(result.sourceRefCount, 3);
+  assert.equal(result.feedHasMore, true);
+  assert.equal(result.feedLimit, 8);
+  assert.match(result.feedSnapshotReceipt || '', /还有更多未返回条目/);
+  assert.equal(attempt.packageItemCount, 3);
+  assert.equal(attempt.sourceRefCount, 3);
+  assert.equal(attempt.feedHasMore, true);
+  assert.equal(attempt.feedLimit, 8);
+  assert.match(attempt.feedSnapshotReceipt || '', /还有更多未返回条目/);
+  assert.equal('sourceRefs' in attempt, false);
   assert.deepEqual(calls, [
     'render:todo_sync',
     'bridge:todo-memo',
@@ -159,7 +183,21 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
       error: undefined,
     },
     {
+      sourceRef: 'shared:source-ref-1',
+      lane: 'todo',
+      channel: 'doubao',
+      status: 'delivered',
+      error: undefined,
+    },
+    {
       sourceRef: 'notification:notif-notice-1',
+      lane: 'notice',
+      channel: 'doubao',
+      status: 'delivered',
+      error: undefined,
+    },
+    {
+      sourceRef: 'shared:source-ref-1',
       lane: 'notice',
       channel: 'doubao',
       status: 'delivered',

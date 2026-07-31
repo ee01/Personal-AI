@@ -149,6 +149,7 @@ export async function evidenceWatchContractRoutes(
     if (!runState) {
       return reply.status(400).send({ error: 'Invalid evidence watch runState' });
     }
+    const previous = contract;
     const receipt = service.appendRunReceipt({
       contractId: contract.id,
       runState,
@@ -163,6 +164,11 @@ export async function evidenceWatchContractRoutes(
       receipt,
       contract: updated,
       uiReceipt: service.toUiReceipt(updated, { runId: receipt.id }),
+      writeReceipt: service.buildRunWriteReceipt({
+        previous,
+        current: updated,
+        run: receipt,
+      }),
     });
   });
 }

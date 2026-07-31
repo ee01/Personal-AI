@@ -1,10 +1,10 @@
 # Memory Storyline Builder
 
-*最后更新: 2026-07-08*
+*最后更新: 2026-07-15*
 
 Memory Storyline Builder 把用户已经沉淀在 Personal AI 里的会议、消息、Jira、资料记忆、AI 对话和 skill 证据，编排成一份可人工复核、可复制到其他工具的故事线草稿。它不是 PPT 生成器，也不是自动发布器；它的价值是把“我真实经历过、讨论过、做过的事”整理成给别人讲得清楚的结构。
 
-第一版已经从探索计划进入功能文档，因为它同时具备独立后端 route、独立 `memory-exploring` 页面和专用 E2E。Today Pilot 仍是 P0 的触发入口；Storyline 的生成、编辑和复制体验由本文维护。
+第一版已经从探索计划进入功能文档，因为它同时具备独立后端 route、独立 `memory-exploring` 页面和专用 E2E。Today Pilot 会前准备与 Source Memory deep storyline seed 是当前两个 evidence adapter；Storyline 的生成、编辑和复制体验由本文维护。
 
 ## 用户体验
 
@@ -19,7 +19,9 @@ P0 只在 Today Pilot 会前准备里提示，不自动生成，也不要求用�
 5. Storyline Draft 页面调用 `POST /api/v1/storylines/draft`，生成 3-6 段草稿、证据 refs、缺口、风险提醒和可复制 artifact。
 6. 用户在页面内复核段落、证据和风险后，手动复制 speaker notes、Slides outline、RingCentral post 或 Docs brief。
 
-当前不会自动写回 Slides、Docs、RingCentral 或外部 AI，也不会在后台批量生成 Storyline 历史。`memory-exploring.html#/storylines` 只是管理入口占位，用来说明 P0 需要从会前准备深链进入。
+Source Memory 的替代入口位于资料详情的 `Storyline seeds`：用户点击后打开 `#/storylines/draft?source=source_memory_seed&capsuleId=...&seedId=...&target=...`。它不会因为 deep worker 生成 seed 就自动生成草稿；Draft API 仍在点击后重新核对当前 capsule input hash、seed artifact 和 evidence spans。
+
+当前不会自动写回 Slides、Docs、RingCentral 或外部 AI，也不会在后台批量生成 Storyline 历史。`memory-exploring.html#/storylines` 只是管理入口占位；草稿必须从会前准备或 Source Memory seed 的具体证据入口进入。
 
 ## Opportunity 判定
 
@@ -83,6 +85,15 @@ POST /api/v1/storylines/draft
   targetArtifact?: 'speaker_notes' | 'slides_outline' | 'ringcentral_post' | 'docs_brief',
   audienceHint?: string
 }
+
+// 或
+{
+  sourceKind: 'source_memory_seed',
+  capsuleId: string,
+  seedId: string,
+  targetArtifact?: 'speaker_notes' | 'slides_outline' | 'ringcentral_post' | 'docs_brief',
+  audienceHint?: string
+}
 ```
 
 返回：
@@ -90,7 +101,7 @@ POST /api/v1/storylines/draft
 ```ts
 interface StorylineDraftResponse {
   id: string;
-  sourceKind: 'today_meeting_prep';
+  sourceKind: 'today_meeting_prep' | 'source_memory_seed';
   sourceId: string;
   title: string;
   audience: string;
@@ -117,7 +128,7 @@ interface StorylineDraftResponse {
 }
 ```
 
-P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep、evidence refs 和 context pack，不允许编造不存在的来源；如果请求传入其他 `sourceKind`，API schema 会直接拒绝。Draft 页面也会在调用 API 前校验深链里的 `source`，不支持的来源只显示错误说明，不会伪装成 Today Pilot 请求继续生成。
+`today_meeting_prep` adapter 只允许使用已有 prep、evidence refs 和 context pack。`source_memory_seed` adapter 要求 capsule 仍为 saved、P0 与 deep input hash 一致、deep status 为 ready、seedId 对应当前 normalized storyline artifact，并且 artifact 引用的每个 evidence span 都属于当前 capsule/hash；任一条件不成立就阻断，不用旧 seed 或原文猜测补齐。source-memory draft 的 `sourceId` 为 `<capsuleId>:<seedId>`，证据类型保持 `source_memory`。如果请求传入其他 `sourceKind`，API schema 直接拒绝；Draft 页面也会在调用前校验深链，不会伪装成 meeting prep 请求继续生成。
 
 如果来源 prep 没有任何可追溯 evidence refs，Draft API 会直接返回阻塞错误，而不是生成看似完整但无法核查的故事线。用户请求里的 `targetArtifact` 是权威输出格式；LLM 即使返回其他格式建议也不能覆盖用户在页面里选择的口播稿、Slides、分享帖或简报。最终 `artifactText` 由服务端从已通过证据校验的 segments/gaps/risk notes 重新渲染，并追加一个去重后的 `Evidence key`，把复制文本里的 evidence id 映射回来源类型和标题，方便离开页面后继续核查。若 LLM 返回的段落少于 3 个，或虽然有 3 个段落但引用的不同证据明显少于来源可用证据，服务端会回退到会前 cue cards，并在风险提醒里标出“已用会前准备证据重新生成可复制草稿”。如果 LLM 调用本身失败，服务端也会走同一个 cue-card fallback，`generationReceipt.fallbackReason=llm_generation_failed`，并在页面提示这是模型草稿失败后的证据绑定 fallback，而不是外发就绪稿。`generationReceipt` 是这次生成的服务端回执：页面用它展示 LLM / fallback 状态、fallback 原因、来源证据数、实际引用数、返回详情数、缺详情数，以及 `draft_only_manual_copy_no_external_write` 边界。LLM 失败只影响 Storyline draft 的生成方式，不应该破坏会前准备，也不应该让已有证据无法产出可复核草稿。
 
@@ -127,8 +138,8 @@ P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep�
 
 页面结构遵循 `docs/progressing/memory-storyline-builder-demo.html`：
 
-- 顶部：`memory-exploring · /storylines/draft`、标题、来源 chip、输出格式 segmented control、重新生成和复制按钮。
-- 草稿生成请求回执：首次打开或切换输出格式导致 Draft API 请求等待时，先显示当前 target、prep 和“等待服务端证据回执”，并说明此刻还没有草稿、Evidence key、复制快照或外发确认，也不会写回 Slides / Docs / RingCentral、发送消息或保存长期 Storyline 历史。
+- 顶部：`memory-exploring · /storylines/draft`、标题、来源 chip、输出格式 segmented control、重新生成和复制按钮；来源 chip 区分会前准备和资料记忆 seed。
+- 草稿生成请求回执：首次打开或切换输出格式导致 Draft API 请求等待时，先显示当前 target、prep 或 `<capsuleId>:<seedId>` 和“等待服务端证据回执”，并说明此刻还没有草稿、Evidence key、复制快照或外发确认，也不会写回 Slides / Docs / RingCentral、发送消息或保存长期 Storyline 历史。
 - 生成范围回执：在 coverage strip 前展示服务端 `generationReceipt`，先告诉用户这次是 LLM 草稿还是 fallback 草稿、用了多少 refs、有没有缺失证据详情，以及页面只生成可复制草稿，不写回 Slides / Docs / RingCentral、不保存长期 Storyline 历史、不发送消息。
 - 输出目标回执：生成后在首屏固定显示当前 artifact target、受众、手动交接路径和生成格式，说明 `Slides` / `RingCentral post` 等选项只改变本页草稿与复制文本；顶部 segmented control 和 Inspector 的 artifact 按钮也通过 hover / 读屏文案说明切换会从本页缓存读取或请求 Draft API、重置复核确认与复制状态、把已有剪贴板回执标成旧复制回执，但不会写回 Slides / Docs / RingCentral、发送消息、保存长期 Storyline 历史或更新 Memory Service 证据状态。
 - Coverage strip：展示当前草稿实际引用的 refs、返回给页面的证据详情数、story segments、gaps 和粗略 sendable score；避免把“返回过但没有被段落引用”的证据误读成已支撑生成稿。
@@ -144,7 +155,7 @@ P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep�
 
 - Today Pilot：负责判断和提示，不负责生成完整 Storyline。
 - Compose Assist：P0 不接入；未来只有在用户输入明确要求长表达材料时才提示。
-- Memory Lens：P0 不接入；未来可在用户打开 Slides/Docs/AI 写作页面时提示。
+- Memory Lens：不直接生成；Source Memory 详情可以从 deep storyline seed 显式进入 Draft，Lens 卡仍只负责带用户回到可复核资料。
 - Google Slides Analyzer：Storyline 只输出 outline/speaker notes，不批量写回 deck。
 - Personal Skill Foundry：skill 是可执行流程，Storyline 是面向人类受众的讲述结构。
 
@@ -153,6 +164,7 @@ P0 只支持 `today_meeting_prep` source。服务端只允许使用已有 prep�
 关键验证脚本：
 
 - `npm --prefix memory-service test -- --run src/__tests__/api-today-pilot-meeting-prep.test.ts src/__tests__/api-storylines.test.ts`
+- `npm --prefix memory-service test -- --run src/__tests__/sourceMemoryDistillationWorker.test.ts`
 - `npm --prefix memory-service run build`
 - `npm start`，等待第一次 webpack compile 成功后停止
 - `node tools/verify-storyline-video-home-e2e.mjs`

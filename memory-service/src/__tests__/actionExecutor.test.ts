@@ -38,6 +38,8 @@ describe('ActionExecutor', () => {
     fetchMock.mockReset();
 
     db.prepare('DELETE FROM action_results').run();
+    db.prepare('DELETE FROM action_readiness_links').run();
+    db.prepare('DELETE FROM action_readiness_contracts').run();
     db.prepare('DELETE FROM topic_memory_links').run();
     db.prepare('DELETE FROM proposed_action_attempts').run();
     db.prepare('DELETE FROM proposed_actions').run();
@@ -198,7 +200,7 @@ describe('ActionExecutor', () => {
       queueStatus: 'queued',
     });
     actionRepo.markRunning(action.id);
-    const staleStartedAt = Math.floor(Date.now() / 1000) - 400;
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 700;
     db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
       staleStartedAt,
       action.id,

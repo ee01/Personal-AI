@@ -5,13 +5,21 @@ import type { StorylineDraftRequest } from '../types/index.js';
 
 const storylineDraftBodySchema = {
   type: 'object' as const,
-  required: ['sourceKind', 'prepId'],
+  required: ['sourceKind'],
   properties: {
     sourceKind: {
       type: 'string' as const,
-      enum: ['today_meeting_prep'],
+      enum: ['today_meeting_prep', 'source_memory_seed'],
     },
     prepId: {
+      type: 'string' as const,
+      minLength: 1,
+    },
+    capsuleId: {
+      type: 'string' as const,
+      minLength: 1,
+    },
+    seedId: {
       type: 'string' as const,
       minLength: 1,
     },
@@ -24,6 +32,16 @@ const storylineDraftBodySchema = {
       maxLength: 160,
     },
   },
+  oneOf: [
+    {
+      properties: { sourceKind: { const: 'today_meeting_prep' } },
+      required: ['prepId'],
+    },
+    {
+      properties: { sourceKind: { const: 'source_memory_seed' } },
+      required: ['capsuleId', 'seedId'],
+    },
+  ],
   additionalProperties: false,
 };
 
@@ -53,7 +71,7 @@ export async function storylineRoutes(app: FastifyInstance): Promise<void> {
           return reply.status(422).send({
             error: 'storyline_source_has_no_usable_evidence',
             detail:
-              'Storyline draft requires at least one usable evidence ref from the source meeting prep.',
+              'Storyline draft requires at least one usable evidence ref from the selected source.',
           });
         }
         request.log.warn({ err: error }, 'storyline draft generation failed');

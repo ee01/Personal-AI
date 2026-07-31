@@ -1750,6 +1750,15 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(listSource, /handleUndoTopicMute/);
   assert.match(listSource, /🔕 静音/);
   assert.match(listSource, /取消静音/);
+  assert.match(listSource, /getTopicMuteMenuButtonBoundary/);
+  assert.match(listSource, /getTopicMuteReasonBoundary/);
+  assert.match(listSource, /getTopicMuteOptionBoundary/);
+  assert.match(listSource, /getTopicMutedRestoreBoundary/);
+  assert.match(listSource, /getTopicMuteToastViewBoundary/);
+  assert.match(listSource, /getTopicHiddenMutedViewBoundary/);
+  assert.match(listSource, /选择原因和时长前不会写入本机静音状态/);
+  assert.match(listSource, /查看静音：只切换到本页静音视图/);
+  assert.match(listSource, /只删除.*的本机静音过滤/);
   assert.match(listSource, /topic-mute-reasons/);
   assert.match(listSource, /selectedMuteReason/);
   assert.match(listSource, /getTopicMuteReasonLabel/);
@@ -1837,6 +1846,12 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /topic-detail-mute-boundary/);
   assert.match(source, /静音边界/);
   assert.match(source, /只调整本机注意力过滤/);
+  assert.match(source, /getDetailMuteMenuButtonBoundary/);
+  assert.match(source, /getDetailMuteReasonBoundary/);
+  assert.match(source, /getDetailMuteOptionBoundary/);
+  assert.match(source, /getDetailMuteRestoreBoundary/);
+  assert.match(source, /选择原因和时长前不会写入本机静音状态/);
+  assert.match(source, /本机浏览器静音状态/);
   assert.match(source, /topic-mute-undo-toast/);
   assert.match(source, /handleUndoDetailMute/);
   assert.match(source, /取消静音回执/);

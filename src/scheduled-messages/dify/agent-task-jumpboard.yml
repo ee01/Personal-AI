@@ -1,0 +1,664 @@
+# Personal AI · AgentTask Dify 跳板
+# 用途：Jira Automation 不能直连 memory-service 时，经 Dify HTTP 转发到 /api/v1/agent-tasks/execute
+#
+# 导入后请检查：
+# 1. 环境变量 MEMORY_SERVICE_AGENT_TASK_URL（默认已填 memory.xmnup.com）
+# 2. 环境变量 MEMORY_SERVICE_API_KEY（若 memory-service 开了 API_KEY 再填）
+# 3. 发布为 Workflow，复制 API Access 的 URL + API Key，回头给我替换 Config / AppScript 包装体
+#
+# Jira / AppScript 期望调用体（response_mode=blocking）：
+# {
+#   "inputs": {
+#     "payload_json": "<原 agent-tasks/execute JSON 字符串>"
+#   },
+#   "response_mode": "blocking",
+#   "user": "esone.qiu"
+# }
+#
+# 也可直接传扁平字段（payload_json 为空时生效）：taskId / task / title / ...
+
+app:
+  description: Jira Automation → Dify → memory-service /agent-tasks/execute 跳板。只转发请求，不改写 task / artifact。
+  icon: 🛰️
+  icon_background: '#E8F3FF'
+  mode: workflow
+  name: Personal AI AgentTask Jumpboard
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.1.0
+workflow:
+  conversation_variables: []
+  environment_variables:
+    - id: env-memory-agent-task-url
+      name: MEMORY_SERVICE_AGENT_TASK_URL
+      value: http://memory.xmnup.com/api/v1/agent-tasks/execute
+      value_type: string
+      description: memory-service AgentTask execute 完整 URL；导入后可按环境改写
+    - id: env-memory-api-key
+      name: MEMORY_SERVICE_API_KEY
+      value: ''
+      value_type: secret
+      description: 可选。memory-service API_KEY；空则不带 Authorization
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.7
+    edges:
+      - id: start-to-normalize
+        source: '1785472000001'
+        sourceHandle: source
+        target: '1785472000002'
+        targetHandle: target
+        type: custom
+        data:
+          sourceType: start
+          targetType: code
+          isInIteration: false
+          isInLoop: false
+        zIndex: 0
+      - id: normalize-to-http
+        source: '1785472000002'
+        sourceHandle: source
+        target: '1785472000003'
+        targetHandle: target
+        type: custom
+        data:
+          sourceType: code
+          targetType: http-request
+          isInIteration: false
+          isInLoop: false
+        zIndex: 0
+      - id: http-to-parse
+        source: '1785472000003'
+        sourceHandle: source
+        target: '1785472000004'
+        targetHandle: target
+        type: custom
+        data:
+          sourceType: http-request
+          targetType: code
+          isInIteration: false
+          isInLoop: false
+        zIndex: 0
+      - id: parse-to-end
+        source: '1785472000004'
+        sourceHandle: source
+        target: '1785472000005'
+        targetHandle: target
+        type: custom
+        data:
+          sourceType: code
+          targetType: end
+          isInIteration: false
+          isInLoop: false
+        zIndex: 0
+    nodes:
+      - id: '1785472000001'
+        type: custom
+        width: 260
+        height: 220
+        position:
+          x: 40
+          y: 180
+        positionAbsolute:
+          x: 40
+          y: 180
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: start
+          title: Start
+          desc: 接收 Jira / AppScript 转发的 AgentTask payload
+          selected: false
+          variables:
+            - variable: payload_json
+              label: payload_json
+              type: paragraph
+              required: false
+              max_length: 100000
+              options: []
+            - variable: taskId
+              label: taskId
+              type: text-input
+              required: false
+              max_length: 256
+              options: []
+            - variable: sheetMessageId
+              label: sheetMessageId
+              type: text-input
+              required: false
+              max_length: 256
+              options: []
+            - variable: title
+              label: title
+              type: text-input
+              required: false
+              max_length: 512
+              options: []
+            - variable: task
+              label: task
+              type: paragraph
+              required: false
+              max_length: 100000
+              options: []
+            - variable: executor
+              label: executor
+              type: text-input
+              required: false
+              max_length: 64
+              options: []
+            - variable: notifyTemplate
+              label: notifyTemplate
+              type: paragraph
+              required: false
+              max_length: 20000
+              options: []
+            - variable: triggerSource
+              label: triggerSource
+              type: text-input
+              required: false
+              max_length: 128
+              options: []
+            - variable: arBindingId
+              label: arBindingId
+              type: text-input
+              required: false
+              max_length: 256
+              options: []
+            - variable: idempotencyKey
+              label: idempotencyKey
+              type: text-input
+              required: false
+              max_length: 512
+              options: []
+            - variable: userId
+              label: userId
+              type: text-input
+              required: false
+              max_length: 128
+              options: []
+            - variable: notify
+              label: notify
+              type: text-input
+              required: false
+              max_length: 16
+              options: []
+            - variable: source_json
+              label: source_json
+              type: paragraph
+              required: false
+              max_length: 20000
+              options: []
+            - variable: scheduleSpec_json
+              label: scheduleSpec_json
+              type: paragraph
+              required: false
+              max_length: 20000
+              options: []
+            - variable: notifyTarget_json
+              label: notifyTarget_json
+              type: paragraph
+              required: false
+              max_length: 5000
+              options: []
+            - variable: rowIndex
+              label: rowIndex
+              type: text-input
+              required: false
+              max_length: 32
+              options: []
+
+      - id: '1785472000002'
+        type: custom
+        width: 260
+        height: 120
+        position:
+          x: 360
+          y: 200
+        positionAbsolute:
+          x: 360
+          y: 200
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: code
+          title: Normalize Payload
+          desc: 优先使用 payload_json；否则用扁平字段拼装 agent-tasks/execute body
+          selected: false
+          code_language: python3
+          variables:
+            - variable: payload_json
+              value_selector:
+                - '1785472000001'
+                - payload_json
+            - variable: taskId
+              value_selector:
+                - '1785472000001'
+                - taskId
+            - variable: sheetMessageId
+              value_selector:
+                - '1785472000001'
+                - sheetMessageId
+            - variable: title
+              value_selector:
+                - '1785472000001'
+                - title
+            - variable: task
+              value_selector:
+                - '1785472000001'
+                - task
+            - variable: executor
+              value_selector:
+                - '1785472000001'
+                - executor
+            - variable: notifyTemplate
+              value_selector:
+                - '1785472000001'
+                - notifyTemplate
+            - variable: triggerSource
+              value_selector:
+                - '1785472000001'
+                - triggerSource
+            - variable: arBindingId
+              value_selector:
+                - '1785472000001'
+                - arBindingId
+            - variable: idempotencyKey
+              value_selector:
+                - '1785472000001'
+                - idempotencyKey
+            - variable: userId
+              value_selector:
+                - '1785472000001'
+                - userId
+            - variable: notify
+              value_selector:
+                - '1785472000001'
+                - notify
+            - variable: source_json
+              value_selector:
+                - '1785472000001'
+                - source_json
+            - variable: scheduleSpec_json
+              value_selector:
+                - '1785472000001'
+                - scheduleSpec_json
+            - variable: notifyTarget_json
+              value_selector:
+                - '1785472000001'
+                - notifyTarget_json
+            - variable: rowIndex
+              value_selector:
+                - '1785472000001'
+                - rowIndex
+          outputs:
+            request_body:
+              type: string
+              children: null
+            x_user_id:
+              type: string
+              children: null
+            task_id:
+              type: string
+              children: null
+            ok:
+              type: string
+              children: null
+            error:
+              type: string
+              children: null
+          code: |
+            import json
+
+            def _trim(value):
+                if value is None:
+                    return ''
+                return str(value).strip()
+
+            def _parse_json_object(raw, field_name):
+                text = _trim(raw)
+                if not text:
+                    return None
+                try:
+                    data = json.loads(text)
+                except Exception as exc:
+                    raise ValueError(f'{field_name} is not valid JSON: {exc}') from exc
+                if not isinstance(data, dict):
+                    raise ValueError(f'{field_name} must be a JSON object')
+                return data
+
+            def _parse_bool(raw, default=True):
+                text = _trim(raw).lower()
+                if not text:
+                    return default
+                if text in ('1', 'true', 'yes', 'y', 'on'):
+                    return True
+                if text in ('0', 'false', 'no', 'n', 'off'):
+                    return False
+                return default
+
+            def main(
+                payload_json: str = '',
+                taskId: str = '',
+                sheetMessageId: str = '',
+                title: str = '',
+                task: str = '',
+                executor: str = '',
+                notifyTemplate: str = '',
+                triggerSource: str = '',
+                arBindingId: str = '',
+                idempotencyKey: str = '',
+                userId: str = '',
+                notify: str = '',
+                source_json: str = '',
+                scheduleSpec_json: str = '',
+                notifyTarget_json: str = '',
+                rowIndex: str = '',
+            ) -> dict:
+                try:
+                    body = _parse_json_object(payload_json, 'payload_json')
+                    if body is None:
+                        body = {}
+                        if _trim(taskId):
+                            body['taskId'] = _trim(taskId)
+                        if _trim(sheetMessageId):
+                            body['sheetMessageId'] = _trim(sheetMessageId)
+                        if _trim(title):
+                            body['title'] = _trim(title)
+                        if _trim(task):
+                            body['task'] = _trim(task)
+                        if _trim(executor):
+                            body['executor'] = _trim(executor)
+                        if _trim(notifyTemplate):
+                            body['notifyTemplate'] = _trim(notifyTemplate)
+                        if _trim(triggerSource):
+                            body['triggerSource'] = _trim(triggerSource)
+                        if _trim(arBindingId):
+                            body['arBindingId'] = _trim(arBindingId)
+                        if _trim(idempotencyKey):
+                            body['idempotencyKey'] = _trim(idempotencyKey)
+                        if _trim(userId):
+                            body['userId'] = _trim(userId)
+                        if _trim(notify):
+                            body['notify'] = _parse_bool(notify, True)
+                        if _trim(rowIndex):
+                            try:
+                                body['rowIndex'] = int(_trim(rowIndex))
+                            except Exception:
+                                body['rowIndex'] = _trim(rowIndex)
+                        source = _parse_json_object(source_json, 'source_json')
+                        if source is not None:
+                            body['source'] = source
+                        schedule_spec = _parse_json_object(scheduleSpec_json, 'scheduleSpec_json')
+                        if schedule_spec is not None:
+                            body['scheduleSpec'] = schedule_spec
+                        notify_target = _parse_json_object(notifyTarget_json, 'notifyTarget_json')
+                        if notify_target is not None:
+                            body['notifyTarget'] = notify_target
+
+                    resolved_task_id = _trim(body.get('taskId')) or _trim(body.get('sheetMessageId'))
+                    resolved_task = _trim(body.get('task'))
+                    if not resolved_task_id:
+                        raise ValueError('taskId is required')
+                    if not resolved_task:
+                        raise ValueError('task is required')
+
+                    if not _trim(body.get('executor')):
+                        body['executor'] = 'openclaw'
+                    if not _trim(body.get('triggerSource')):
+                        body['triggerSource'] = 'jira_rule'
+
+                    x_user_id = _trim(body.get('userId')) or _trim(userId) or 'default'
+                    if not _trim(body.get('userId')):
+                        body['userId'] = x_user_id
+
+                    return {
+                        'request_body': json.dumps(body, ensure_ascii=False),
+                        'x_user_id': x_user_id,
+                        'task_id': resolved_task_id,
+                        'ok': 'true',
+                        'error': '',
+                    }
+                except Exception as exc:
+                    return {
+                        'request_body': '{}',
+                        'x_user_id': _trim(userId) or 'default',
+                        'task_id': _trim(taskId) or _trim(sheetMessageId),
+                        'ok': 'false',
+                        'error': str(exc),
+                    }
+
+      - id: '1785472000003'
+        type: custom
+        width: 280
+        height: 140
+        position:
+          x: 680
+          y: 200
+        positionAbsolute:
+          x: 680
+          y: 200
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: http-request
+          title: Forward to memory-service
+          desc: POST /api/v1/agent-tasks/execute；read timeout 600s 以覆盖 OpenClaw 同步执行
+          selected: false
+          method: post
+          url: '{{#env.MEMORY_SERVICE_AGENT_TASK_URL#}}'
+          authorization:
+            type: api-key
+            config:
+              type: bearer
+              api_key: '{{#env.MEMORY_SERVICE_API_KEY#}}'
+          headers: "Content-Type: application/json\nAccept: application/json\nX-User-Id: {{#1785472000002.x_user_id#}}\nX-Agent-Task-Jumpboard: dify"
+          params: ''
+          body:
+            type: raw-text
+            data: '{{#1785472000002.request_body#}}'
+          timeout:
+            connect: 20
+            read: 600
+            write: 60
+          ssl_verify: false
+          retry_config:
+            enabled: false
+            max_retries: 0
+            retry_interval: 1000
+            exponential_backoff:
+              enabled: false
+              multiplier: 2
+              max_interval: 10000
+
+      - id: '1785472000004'
+        type: custom
+        width: 260
+        height: 120
+        position:
+          x: 1020
+          y: 200
+        positionAbsolute:
+          x: 1020
+          y: 200
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: code
+          title: Parse Response
+          desc: 把 memory-service 响应压成 Jira / 调试可用的扁平输出
+          selected: false
+          code_language: python3
+          variables:
+            - variable: normalize_ok
+              value_selector:
+                - '1785472000002'
+                - ok
+            - variable: normalize_error
+              value_selector:
+                - '1785472000002'
+                - error
+            - variable: task_id
+              value_selector:
+                - '1785472000002'
+                - task_id
+            - variable: status_code
+              value_selector:
+                - '1785472000003'
+                - status_code
+            - variable: body
+              value_selector:
+                - '1785472000003'
+                - body
+          outputs:
+            accepted:
+              type: string
+              children: null
+            taskId:
+              type: string
+              children: null
+            actionId:
+              type: string
+              children: null
+            queueStatus:
+              type: string
+              children: null
+            error:
+              type: string
+              children: null
+            statusCode:
+              type: string
+              children: null
+            rawBody:
+              type: string
+              children: null
+          code: |
+            import json
+
+            def _trim(value):
+                if value is None:
+                    return ''
+                return str(value).strip()
+
+            def main(
+                normalize_ok: str = 'true',
+                normalize_error: str = '',
+                task_id: str = '',
+                status_code: str = '',
+                body: str = '',
+            ) -> dict:
+                if _trim(normalize_ok).lower() != 'true':
+                    return {
+                        'accepted': 'false',
+                        'taskId': _trim(task_id),
+                        'actionId': '',
+                        'queueStatus': 'failed',
+                        'error': _trim(normalize_error) or 'normalize_failed',
+                        'statusCode': '0',
+                        'rawBody': '',
+                    }
+
+                raw = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+                parsed = {}
+                try:
+                    parsed = json.loads(raw) if _trim(raw) else {}
+                    if not isinstance(parsed, dict):
+                        parsed = {'raw': parsed}
+                except Exception:
+                    parsed = {}
+
+                error = (
+                    _trim(parsed.get('error'))
+                    or _trim(parsed.get('detail'))
+                    or _trim(parsed.get('message'))
+                )
+                queue_status = _trim(parsed.get('queueStatus')) or (
+                    'succeeded' if str(status_code).startswith('2') and not error else 'failed'
+                )
+                accepted = 'true' if str(status_code).startswith('2') and _trim(parsed.get('accepted', 'true')).lower() != 'false' else 'false'
+
+                return {
+                    'accepted': accepted,
+                    'taskId': _trim(parsed.get('taskId')) or _trim(task_id),
+                    'actionId': _trim(parsed.get('actionId')),
+                    'queueStatus': queue_status,
+                    'error': error,
+                    'statusCode': _trim(status_code) or '0',
+                    'rawBody': raw[:8000],
+                }
+
+      - id: '1785472000005'
+        type: custom
+        width: 260
+        height: 160
+        position:
+          x: 1340
+          y: 200
+        positionAbsolute:
+          x: 1340
+          y: 200
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: end
+          title: End
+          desc: 输出给 Dify workflows/run 调用方
+          selected: false
+          outputs:
+            - variable: accepted
+              value_selector:
+                - '1785472000004'
+                - accepted
+              value_type: string
+            - variable: taskId
+              value_selector:
+                - '1785472000004'
+                - taskId
+              value_type: string
+            - variable: actionId
+              value_selector:
+                - '1785472000004'
+                - actionId
+              value_type: string
+            - variable: queueStatus
+              value_selector:
+                - '1785472000004'
+                - queueStatus
+              value_type: string
+            - variable: error
+              value_selector:
+                - '1785472000004'
+                - error
+              value_type: string
+            - variable: statusCode
+              value_selector:
+                - '1785472000004'
+                - statusCode
+              value_type: string
+            - variable: rawBody
+              value_selector:
+                - '1785472000004'
+                - rawBody
+              value_type: string

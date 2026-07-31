@@ -285,6 +285,47 @@ try {
             score: 0.84,
           },
         ],
+        outcomeBinder: {
+          id: 'scene1-outcome-binder',
+          userId: 'scene1',
+          prepId: 'scene1-prep',
+          eventExternalId: 'scene1-context-assist-event',
+          eventSeriesKey: 'fixture-ringcentral-meeting',
+          eventTitle: meetingTitle,
+          eventStartAt: Math.floor((now + 20 * 60 * 1000) / 1000),
+          status: 'planned',
+          slots: [
+            {
+              id: 'scene1-outcome-budget-owner',
+              title: '确认预算风险 owner 和技术评审下一步',
+              type: 'decision',
+              status: 'planned',
+              mentionState: 'not_seen',
+              sourceEvidenceIds: ['scene1-calendar-agenda'],
+              evidence: [],
+              confidence: 0.86,
+            },
+          ],
+          sourceEvidence: [
+            {
+              id: 'scene1-calendar-agenda',
+              kind: 'calendar',
+              refId: 'scene1-context-assist-event',
+              label: 'Calendar 议程',
+              snippet: '确认预算风险 owner 和技术评审下一步',
+            },
+          ],
+          sourceHash: 'scene1-outcome-source-v1',
+          generatedAt: Math.floor(now / 1000),
+          createdAt: Math.floor(now / 1000),
+          updatedAt: Math.floor(now / 1000),
+          receipt: {
+            source: 'Today Pilot 会前准备',
+            coverage: '本场要闭环 1 项。',
+            freshness: '刚刚生成',
+            boundary: '会中只跟踪线索；会议结束后才按证据装订，不写回 Calendar。',
+          },
+        },
       };
       return chrome.storage.local.set({
         envConfig: {
@@ -735,6 +776,19 @@ try {
       meetingPrepState.links,
     )}`,
   );
+  const outcomeLiveState = await panelPage.evaluate(() => {
+    const section = document.querySelector('[data-meeting-outcome-live="true"]');
+    return {
+      status: section?.getAttribute('data-meeting-outcome-status') || '',
+      text: section?.textContent || '',
+    };
+  });
+  assert.equal(outcomeLiveState.status, 'planned');
+  assert.match(outcomeLiveState.text, /本场要闭环/);
+  assert.match(outcomeLiveState.text, /确认预算风险 owner 和技术评审下一步/);
+  assert.match(outcomeLiveState.text, /会中只跟踪/);
+  assert.match(outcomeLiveState.text, /Transcript 提到不等于已解决/);
+  assert.doesNotMatch(outcomeLiveState.text, /已闭环/);
 
   log('附加校验: handoff 集合刷新会更新已打开 side panel');
   await serviceWorker.evaluate(
@@ -784,6 +838,47 @@ try {
             score: 0.91,
           },
         ],
+        outcomeBinder: {
+          id: 'scene1-outcome-binder-refreshed',
+          userId: 'scene1',
+          prepId: 'scene1-prep-refreshed',
+          eventExternalId: 'scene1-context-assist-event-refreshed',
+          eventSeriesKey: 'fixture-ringcentral-meeting',
+          eventTitle: meetingTitle,
+          eventStartAt: Math.floor((now + 20 * 60 * 1000) / 1000),
+          status: 'planned',
+          slots: [
+            {
+              id: 'scene1-outcome-refreshed-owner',
+              title: '确认刷新后的预算 owner 和下周三截止风险',
+              type: 'action',
+              status: 'planned',
+              mentionState: 'not_seen',
+              sourceEvidenceIds: ['scene1-refreshed-calendar-agenda'],
+              evidence: [],
+              confidence: 0.91,
+            },
+          ],
+          sourceEvidence: [
+            {
+              id: 'scene1-refreshed-calendar-agenda',
+              kind: 'calendar',
+              refId: 'scene1-context-assist-event-refreshed',
+              label: 'Calendar 议程',
+              snippet: '确认刷新后的预算 owner 和下周三截止风险',
+            },
+          ],
+          sourceHash: 'scene1-outcome-source-v2',
+          generatedAt: Math.floor(now / 1000),
+          createdAt: Math.floor(now / 1000),
+          updatedAt: Math.floor(now / 1000),
+          receipt: {
+            source: 'Today Pilot 会前准备',
+            coverage: '本场要闭环 1 项。',
+            freshness: '刚刚刷新',
+            boundary: '会中只跟踪线索；会议结束后才按证据装订，不写回 Calendar。',
+          },
+        },
       };
       return chrome.storage.local.set({
         meetingPrepHandoffs: {
@@ -825,6 +920,18 @@ try {
     `刷新后的 handoff 缺少新来源链接: ${JSON.stringify(
       refreshedMeetingPrepState.links,
     )}`,
+  );
+  const refreshedOutcomeLiveState = await panelPage.evaluate(() => {
+    const section = document.querySelector('[data-meeting-outcome-live="true"]');
+    return section?.textContent || '';
+  });
+  assert.match(
+    refreshedOutcomeLiveState,
+    /确认刷新后的预算 owner 和下周三截止风险/,
+  );
+  assert.doesNotMatch(
+    refreshedOutcomeLiveState,
+    /确认预算风险 owner 和技术评审下一步/,
   );
 
   log('附加校验: 会前准备 cue 可直接转成行动项');

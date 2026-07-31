@@ -1,9 +1,22 @@
-# 新能力：Desktop Selection Memory Capsule / 桌面选区记忆胶囊
+# 新能力：Desktop Selection Memory Capsule / 桌面选区记忆胶囊（搁置）
 
-> 状态：候选计划，未实现。  
+> 状态：搁置，未实现；当前不建议推进桌面 App 深入能力。
 > 生成时间：2026-07-13 11:12 CST  
-> Demo：[`desktop-selection-memory-capsule-demo.html`](./desktop-selection-memory-capsule-demo.html)  
-> 建议标题：`新能力：桌面选区记忆胶囊`
+> Demo：[`desktop-selection-memory-capsule-demo.html`](./desktop-selection-memory-capsule-demo.html)（搁置视觉参考）
+> 建议标题：`新能力：桌面选区记忆胶囊（搁置）`
+
+## 搁置原因
+
+本方案先标记为搁置。它仍然符合 Personal AI 的长期方向：让用户在桌面 App、外部 AI、终端、文档和浏览器之间移动时，可以把当前选区变成记忆召回锚点。但当前阶段不建议马上做桌面 App 深入能力。
+
+当前优先级应先收敛在 **Web / Chrome extension**：
+
+- Personal AI 的主工程形态仍是 Chrome Extension，现有 Memory Lens、Memory Capture、Compose Assist、Prompt Context Compiler、网页选区保存、context-recall 都在浏览器里有更成熟的验证路径。
+- 用户现在更需要先证明：网页选区能稳定召回正确记忆、保存边界足够清楚、prompt patch 能真正帮外部 AI 对话、secret / 敏感内容能 fail closed、evals 能用真实场景持续约束效果。
+- 桌面 App 深入会引入 macOS Accessibility、Services、全局快捷键、剪贴板 fallback、本地浮层、权限解释、安装包验证和跨 App 行为差异。它的价值成立，但验证成本和信任成本都比 Web 路线高，不适合作为当前 P0。
+- 如果 Web/Chrome extension 的选区召回、资料保存、外部 AI prompt patch、secret 阻断和相关 eval 都跑通，再恢复评估桌面 App 版本会更稳。届时桌面 App 应复用已经验证过的 recall / save / copy contract，而不是先从全局热键和系统权限开始。
+
+因此，本文件和 demo 仅作为未来恢复时的设计参考。近期不应进入实现排期，也不应新增 `desktop-app` 权限、全局快捷键、Accessibility 适配或安装包验证工作。
 
 ## 真实场景 1：在 Codex / 终端里遇到一个“似曾相识”的问题
 
@@ -35,6 +48,8 @@
 ## 一句话
 
 **桌面选区记忆胶囊**是一个用户主动触发的 OS 级微入口：在任意 macOS App 里选中文字后按热键，Personal AI 用这段选区、前台 App、窗口标题和最小邻近上下文做即时记忆召回，生成可复制的上下文包、可复核的保存候选或一次 Ask 追问，但默认只读、未写入、未外发。
+
+当前结论：这是一条未来桌面延伸路线，不是近期 P0。近期先在 Web/Chrome extension 中验证同类选区锚点和上下文包能力。
 
 ## 为什么值得做
 
@@ -76,7 +91,9 @@ Personal AI 已经能在浏览器、Jira、RingCentral、会议和 Quick Ask 里
 | Working Memory Return Stack（搁置） | 试图根据离开前的隐式意图恢复断点。 | 只在用户明确选中并按热键时工作。 | 不做跨 App 后台意图推断。 |
 | Operation Memory Flight Recorder | 记录跨工具操作 episode，未来可沉淀 skill。 | 捕获的是一段选区和当下可用记忆，不记录操作链。 | 不做屏幕录像、步骤回放或自动 skill 建议。 |
 
-## P0 用户体验
+## 未来恢复时的 P0 用户体验参考
+
+以下内容保留为未来恢复评估时的 P0 参考，不代表当前实现承诺。
 
 ### 入口
 
@@ -257,7 +274,9 @@ Boundary: read-only recall; not saved; not sent; review before sharing externall
 - `保存为资料记忆` 确认后：写 source-memory capsule，并生成 `writeReceipt`。
 - `Ask 一下`：进入 Personal AI Ask thread，并在 ask payload 中带 `sceneCapsuleId`，便于后续 eval 追踪。
 
-## MVP 范围
+## 未来恢复时的 MVP 范围参考
+
+以下分期只在恢复该方向时重新评估。当前阶段不进入桌面 App 实现。
 
 ### P0
 
@@ -348,12 +367,14 @@ npm run eval:run -- --suite desktop-selection-memory-capsule --no-repair
 | 与 Quick Ask 重叠 | Quick Ask 是问题驱动；胶囊是选区驱动，Ask 只是一个后续动作。 |
 | 与已搁置的 Return Stack 重叠 | 本方案不推断离开前意图，只响应用户显式选区和热键。 |
 
-## 推荐推进切片
+## 未来恢复条件
 
-建议先做 **P0 手动粘贴 + macOS Services + 胶囊浮层 + context-recall surface**，不要一开始追求所有 App 的 Accessibility adapter。理由：
+暂不推进本方案。未来如果重新评估，建议先确认以下 Web/Chrome extension 能力已经可用并通过真实场景验证：
 
-- 能最快验证“选区锚点 + 个人记忆召回”是否比打开 Ask 搜索自然。
-- macOS Services 是隐私边界更清楚的入口，适合先拿信任。
-- 真实 value 在召回和 context patch，不在底层取选区技巧。
+- 网页选区的 Memory Lens 召回相关性稳定，能用 eval 证明噪声可控。
+- 网页选区保存到 source-memory 的复核、写入回执、撤销和详情链路稳定。
+- Web AI prompt patch 能在 Chrome extension 内完成复制/插入前复核，并明确不自动发送。
+- Secret / token / password 等敏感选区能本地阻断，且 eval 覆盖漏报风险。
+- 用户真实使用中证明“选区锚点 + 个人记忆召回”比打开 Ask 搜索自然。
 
-如果 P0 的 eval 和使用反馈证明“复制上下文包”是高频动作，再进入 P1 adapter 和 Quick Ask 深度整合。
+如果这些条件成立，再恢复桌面 App 方向。恢复时也应先做 **手动粘贴 / macOS Services / 胶囊浮层** 的窄切片，不要一开始追求所有 App 的 Accessibility adapter 或全局屏幕能力。

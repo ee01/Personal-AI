@@ -314,6 +314,15 @@ assert.ok(
   'Scheduled Messages UI should show the preflight path before upgrade',
 );
 assert.ok(
+  managerSource.includes('appScriptUpgradeProofReceipt') &&
+    managerSource.includes('升级证明回执') &&
+    managerSource.includes('只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新') &&
+    managerSource.includes('未确认时保留旧配置并走回退/检查页面') &&
+    managerSource.includes('aria-label="App Script 升级证明回执"') &&
+    managerSource.includes('title={appScriptUpgradeProofReceipt}'),
+  'Scheduled Messages update banner should expose the post-upgrade proof and recovery boundary before click',
+);
+assert.ok(
   managerSource.includes('提交后确认新版本已生效') &&
     managerSource.includes('不会把配置标记为最新') &&
     managerSource.includes('尝试回退到升级前 deployment 版本'),

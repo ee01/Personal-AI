@@ -18,6 +18,8 @@ import { RecallEngine } from './RecallEngine.js';
 import { ForgettingEngine } from './ForgettingEngine.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
+import { listFocusProjects } from './FocusProjectSyncService.js';
+import { buildFocusSeedContext } from './FocusProjectContextBuilder.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import type { RecallItem } from '../types/index.js';
@@ -189,9 +191,37 @@ export class GenerativeReplay {
       )
       .all(cutoff, TOP_SALIENT_LIMIT) as SalientEntityRow[];
 
-    return rows.filter(
+    const salient = rows.filter(
       (r) => r.entity_name != null && r.entity_name.length > 0,
     );
+
+    // Reserve focus-project entity seeds so dreaming stays anchored to Gantt focus.
+    try {
+      const seeds = buildFocusSeedContext(listFocusProjects(this.db), {
+        maxTotal: Math.min(3, TOP_SALIENT_LIMIT),
+        perTeamFloor: 1,
+      });
+      const byId = new Map(salient.map((row) => [row.target_id, row]));
+      for (const seed of seeds) {
+        if (byId.has(seed.entityId)) continue;
+        const entity = this.db
+          .prepare(`SELECT id, name, type FROM entities WHERE id = ?`)
+          .get(seed.entityId) as
+          | { id: string; name: string; type: string }
+          | undefined;
+        if (!entity?.name) continue;
+        byId.set(seed.entityId, {
+          target_id: entity.id,
+          target_type: 'entity',
+          salience_score: 0.99,
+          entity_name: entity.name,
+          entity_type: entity.type,
+        });
+      }
+      return Array.from(byId.values()).slice(0, TOP_SALIENT_LIMIT);
+    } catch {
+      return salient;
+    }
   }
 
   // =========================================================================

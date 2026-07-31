@@ -5,8 +5,17 @@ import {
   type EvidenceResolutionPlan,
   type EvidenceResolutionPolicy,
 } from './EvidenceResolutionPlanner.js';
+import {
+  EvidenceCohesionGateService,
+  type EvidenceCohesionCandidate,
+  type EvidenceCohesionReceipt,
+  type EvidenceCohesionResult,
+} from './EvidenceCohesionGateService.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { getLLMClient } from '../llm/LLMClient.js';
+import { listFocusProjects } from './FocusProjectSyncService.js';
+import { buildFocusParagraphContext } from './FocusProjectContextBuilder.js';
+import { ProjectTimelineExtractor } from './ProjectTimelineExtractor.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import type { ReflectionThreadRecord } from '../repositories/ReflectionThreadRepository.js';
 import type { RehearsalActivationCues } from '../types/index.js';
@@ -63,6 +72,8 @@ export interface GeneratedReflection {
   openQuestions: string[];
   actionProposals: DraftReflectionAction[];
   rehearsalCandidates?: DraftRehearsalCandidate[];
+  cohesionReceipt?: EvidenceCohesionReceipt;
+  usedEvidenceRefs?: string[];
   markdownBody: string;
 }
 
@@ -146,6 +157,9 @@ function defaultExecutionModeForAction(
 
 export class ReflectionWorker {
   private readonly evidencePlanner = new EvidenceResolutionPlanner();
+  private readonly cohesionGate = new EvidenceCohesionGateService();
+
+  constructor(private readonly db?: import('better-sqlite3').Database) {}
 
   async generate(
     thread: ReflectionThreadRecord,
@@ -153,23 +167,45 @@ export class ReflectionWorker {
     triggerType: string,
     outputLanguage?: ReflectionOutputLanguagePreference,
   ): Promise<GeneratedReflection> {
+    const cohesionResult = this.buildCohesionResult(thread, evidence);
+    const includedEvidenceRefs = new Set(
+      cohesionResult?.includedEvidenceRefs ??
+        evidence.map(toReflectionEvidenceRef),
+    );
+    const cohesiveEvidence = cohesionResult
+      ? evidence.filter((item) =>
+          includedEvidenceRefs.has(toReflectionEvidenceRef(item)),
+        )
+      : evidence;
+
     if (process.env.REFLECTION_FORCE_FALLBACK === 'true') {
-      return this.generateFallback(thread, evidence, triggerType);
+      return this.generateFallback(
+        thread,
+        cohesiveEvidence,
+        triggerType,
+        cohesionResult,
+      );
     }
 
     try {
       return await this.generateWithLlm(
         thread,
-        evidence,
+        cohesiveEvidence,
         triggerType,
         outputLanguage,
+        cohesionResult,
       );
     } catch (err) {
       console.warn(
         '[ReflectionWorker] Falling back to heuristic reflection:',
         err instanceof Error ? err.message : String(err),
       );
-      return this.generateFallback(thread, evidence, triggerType);
+      return this.generateFallback(
+        thread,
+        cohesiveEvidence,
+        triggerType,
+        cohesionResult,
+      );
     }
   }
 
@@ -178,6 +214,7 @@ export class ReflectionWorker {
     evidence: ReflectionEvidenceItem[],
     triggerType: string,
     outputLanguage?: ReflectionOutputLanguagePreference,
+    cohesionResult?: EvidenceCohesionResult,
   ): Promise<GeneratedReflection> {
     const llm = getLLMClient();
     const evidenceText =
@@ -193,6 +230,32 @@ export class ReflectionWorker {
             .join('\n\n')
         : 'No external evidence attached.';
 
+    let focusBrief = '';
+    try {
+      if (this.db) {
+        const focusProjects = listFocusProjects(this.db);
+        const extractor = new ProjectTimelineExtractor(this.db);
+        const enriched = focusProjects.map((project) => {
+          const receipts = extractor.listOpenReceipts(project.id) as Array<{
+            summary?: string;
+            event_type?: string;
+            status?: string;
+          }>;
+          return {
+            ...project,
+            recentEventSummaries: receipts
+              .slice(0, 3)
+              .map((row) => row.summary || row.event_type || '')
+              .filter(Boolean),
+            hasUnresolvedDrift: receipts.some((row) => row.status === 'open'),
+          };
+        });
+        focusBrief = buildFocusParagraphContext(enriched);
+      }
+    } catch {
+      focusBrief = '';
+    }
+
     const prompt = `You are maintaining a continuous reflection thread for a personal AI memory system.
 
 Thread title: ${thread.title}
@@ -201,6 +264,7 @@ Current hypothesis: ${thread.currentHypothesis ?? 'None'}
 Existing open questions: ${thread.openQuestions.length > 0 ? thread.openQuestions.join(' | ') : 'None'}
 Trigger type: ${triggerType}
 
+${focusBrief ? `${focusBrief}\n` : ''}
 Evidence:
 ${evidenceText}
 
@@ -266,6 +330,7 @@ Rules:
       evidence,
       summary,
       openQuestions,
+      cohesionResult,
     );
 
     return {
@@ -276,6 +341,8 @@ Rules:
       openQuestions,
       actionProposals,
       rehearsalCandidates,
+      cohesionReceipt: cohesionResult?.receipt,
+      usedEvidenceRefs: evidence.map(toReflectionEvidenceRef),
       markdownBody: this.renderMarkdown(
         summary,
         discoveries,
@@ -283,6 +350,7 @@ Rules:
         actionProposals,
         rehearsalCandidates,
         evidence,
+        cohesionResult?.receipt,
       ),
     };
   }
@@ -291,6 +359,7 @@ Rules:
     thread: ReflectionThreadRecord,
     evidence: ReflectionEvidenceItem[],
     triggerType: string,
+    cohesionResult?: EvidenceCohesionResult,
   ): GeneratedReflection {
     const evidencePreview = evidence.slice(0, 3);
     const discoveries = evidencePreview.map(
@@ -343,6 +412,8 @@ Rules:
       openQuestions,
       actionProposals,
       rehearsalCandidates: [],
+      cohesionReceipt: cohesionResult?.receipt,
+      usedEvidenceRefs: evidence.map(toReflectionEvidenceRef),
       markdownBody: this.renderMarkdown(
         summary,
         discoveries,
@@ -350,6 +421,7 @@ Rules:
         actionProposals,
         [],
         evidence,
+        cohesionResult?.receipt,
       ),
     };
   }
@@ -359,7 +431,9 @@ Rules:
     evidence: ReflectionEvidenceItem[],
     summary: string,
     openQuestions: string[],
+    cohesionResult?: EvidenceCohesionResult,
   ): Promise<DraftReflectionAction[]> {
+    if (isReflectionCohesionBlocking(cohesionResult)) return [];
     const question =
       openQuestions[0] ??
       thread.continueReason ??
@@ -381,7 +455,54 @@ Rules:
       policy,
     });
     const action = this.buildActionFromResolutionPlan(thread, question, plan);
-    return action ? [action] : [];
+    if (!action) return [];
+    const evidenceRefs = evidence.map(toReflectionEvidenceRef);
+    return [
+      {
+        ...action,
+        evidenceRefs,
+        params: {
+          ...(action.params ?? {}),
+          ...(cohesionResult
+            ? { evidenceCohesion: cohesionResult.receipt }
+            : {}),
+        },
+      },
+    ];
+  }
+
+  private buildCohesionResult(
+    thread: ReflectionThreadRecord,
+    evidence: ReflectionEvidenceItem[],
+  ): EvidenceCohesionResult | undefined {
+    if (evidence.length === 0) return undefined;
+    const topicSuffix = thread.topicKey.includes(':')
+      ? thread.topicKey.slice(thread.topicKey.indexOf(':') + 1)
+      : thread.topicKey;
+    const topicLabel = topicSuffix.replace(/[-_]+/g, ' ').trim() || thread.title;
+    const questionOrTask = [
+      thread.title,
+      thread.topicKey,
+      thread.currentHypothesis,
+      thread.continueReason,
+      ...thread.openQuestions,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    return this.cohesionGate.evaluate({
+      entrypoint: 'reflection_worker',
+      intent: 'reflect_fact',
+      questionOrTask,
+      selectedTopic: {
+        id: thread.topicKey,
+        label: topicLabel,
+        aliases: uniqStrings([thread.title, topicSuffix]),
+        sourceAnchors: [thread.topicKey],
+      },
+      candidates: evidence.map(toReflectionCohesionCandidate),
+      policy: { allowBackground: true },
+    });
   }
 
   private buildResolutionPolicy(
@@ -579,6 +700,7 @@ Rules:
     actions: DraftReflectionAction[],
     rehearsalCandidates: DraftRehearsalCandidate[],
     evidence: ReflectionEvidenceItem[],
+    cohesionReceipt?: EvidenceCohesionReceipt,
   ): string {
     const discoveriesMd =
       discoveries.length > 0
@@ -615,6 +737,9 @@ Rules:
             )
             .join('\n')
         : '- None';
+    const cohesionMd = cohesionReceipt
+      ? `- ${cohesionReceipt.state}: ${cohesionReceipt.summary}`
+      : '- Not evaluated because no candidate evidence was attached.';
 
     return `## Summary
 ${summary}
@@ -633,8 +758,51 @@ ${rehearsalsMd}
 
 ## Evidence
 ${evidenceMd}
+
+## Evidence Cohesion
+${cohesionMd}
 `;
   }
+}
+
+function toReflectionEvidenceRef(item: ReflectionEvidenceItem): string {
+  return `${item.sourceKind}:${item.sourceId}`;
+}
+
+function toReflectionCohesionCandidate(
+  item: ReflectionEvidenceItem,
+): EvidenceCohesionCandidate {
+  const normalizedRole = item.role.toLowerCase();
+  return {
+    evidenceRef: toReflectionEvidenceRef(item),
+    sourceType: item.sourceKind,
+    // Research titles describe the query purpose and are not evidence-owned
+    // subject labels, so use the actual snippet for cohesion in that case.
+    title: normalizedRole === 'research' ? undefined : item.title,
+    snippet: item.snippet,
+    sourceAnchor: `${item.sourceKind}:${item.sourceId}`,
+    subjectKeys:
+      normalizedRole === 'research' || !item.title.trim()
+        ? []
+        : [item.title],
+    role:
+      normalizedRole === 'background' ||
+      normalizedRole === 'dream' ||
+      normalizedRole === 'weak'
+        ? 'background'
+        : 'supporting',
+    timestamp: item.createdAt,
+  };
+}
+
+function isReflectionCohesionBlocking(
+  result: EvidenceCohesionResult | undefined,
+): boolean {
+  return (
+    result?.state === 'split_required' ||
+    result?.state === 'insufficient_anchor' ||
+    result?.state === 'blocked_cross_scene'
+  );
 }
 
 function normalizeRehearsalCandidates(

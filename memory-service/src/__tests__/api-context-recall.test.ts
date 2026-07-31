@@ -22,6 +22,7 @@ import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
+import { RecallEngine } from '../core/RecallEngine.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -410,6 +411,103 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(body.matches.every((match: any) => match.scope !== 'personal')).toBe(
       true,
     );
+  });
+
+  it('silently filters cross-topic evidence before returning Context Recall matches', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'mtr-141852-status',
+            type: 'message',
+            content: 'MTR-141852 current status is In Progress.',
+            displayTitle: 'MTR-141852 status',
+            score: 0.97,
+            source: 'jira',
+            sourceTitle: 'MTR-141852',
+            timestamp: currentTime - 60,
+            metadata: {
+              issueKey: 'MTR-141852',
+              relatedProject: 'MTR',
+            },
+          },
+          {
+            id: 'mtr-141852-estimate',
+            type: 'message',
+            content: 'MTR-141852 Original Estimate is 5 story points.',
+            displayTitle: 'MTR-141852 original estimate',
+            score: 0.95,
+            source: 'jira',
+            sourceTitle: 'MTR-141852',
+            timestamp: currentTime - 120,
+            metadata: {
+              issueKey: 'MTR-141852',
+              relatedProject: 'MTR',
+            },
+          },
+          {
+            id: 'nav-8891-status-noise',
+            type: 'message',
+            content: 'NAV-8891 current status is Ready for QA.',
+            displayTitle: 'NAV-8891 status',
+            score: 0.96,
+            source: 'jira',
+            sourceTitle: 'NAV-8891',
+            timestamp: currentTime - 30,
+            metadata: {
+              issueKey: 'NAV-8891',
+              relatedProject: 'NAV',
+            },
+          },
+        ],
+        totalFound: 3,
+        queryTimeMs: 1,
+        channels: ['fts'],
+      } as any);
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/context-recall',
+        payload: {
+          surface: 'web_passive',
+          contextType: 'jira_issue',
+          title: 'MTR-141852',
+          primaryText:
+            'MTR-141852 current status and Original Estimate story points',
+          currentContext: { issueKey: 'MTR-141852' },
+          entityHints: [{ kind: 'jira_key', value: 'MTR-141852' }],
+          limit: 5,
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.matches.map((match: { id: string }) => match.id).sort()).toEqual(
+        ['mtr-141852-estimate', 'mtr-141852-status'],
+      );
+      expect(body.topMatch?.id).not.toBe('nav-8891-status-noise');
+      expect(body.cohesionReceipt).toMatchObject({
+        policyVersion: 'evidence-cohesion-v1',
+        state: 'cohesive',
+        usedCount: 2,
+        excludedCount: 1,
+        silent: true,
+      });
+      expect(body.autopilot?.quietReasons).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            reason: 'evidence_cohesion_cross_topic',
+            count: 1,
+          }),
+        ]),
+      );
+    } finally {
+      recallSpy.mockRestore();
+    }
   });
 
   it('compiles a Jira estimate cue with 人天口径 for Memory Lens', async () => {

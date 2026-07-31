@@ -1,11 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import type BetterSqlite3 from 'better-sqlite3';
 
-import type { MemoryScope } from '../types/index.js';
+import type { MemoryChangeLedgerReceipt, MemoryScope } from '../types/index.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { classifyTrust, screenForInjection } from './injectionScreen.js';
+import { MemoryChangeLedgerService } from './MemoryChangeLedgerService.js';
+import { SourceMemoryDistillationWorker } from './SourceMemoryDistillationWorker.js';
 import { now, formatDate } from '../utils/time.js';
 
 export type SourceMemorySourceKind =
@@ -15,6 +17,9 @@ export type SourceMemorySourceKind =
   | 'jira_comment'
   | 'message_reply'
   | 'web_ai_prompt'
+  | 'ai_conversation'
+  | 'document'
+  | 'meeting_material'
   | 'manual';
 
 export type SourceMemoryCaptureMode = 'auto' | 'suggested' | 'manual';
@@ -121,6 +126,7 @@ export interface SourceMemoryCapsule {
   contentPreview: string;
   messageId?: string;
   metadata?: Record<string, unknown>;
+  changeLedger: MemoryChangeLedgerReceipt;
   writeReceipt: SourceMemoryCaptureWriteReceipt;
   actionReceipt?: SourceMemoryCaptureActionReceipt;
   createdAt: number;
@@ -290,10 +296,14 @@ const LOW_INFORMATION_PATTERN =
 const SENTENCE_SPLIT_PATTERN = /(?<=[.!?。！？])\s+/;
 
 export class SourceMemoryCaptureService {
+  private readonly changeLedger: MemoryChangeLedgerService;
+
   constructor(
     private readonly db: BetterSqlite3.Database,
     private readonly userDataManager?: UserDataManager | null,
-  ) {}
+  ) {
+    this.changeLedger = new MemoryChangeLedgerService(db);
+  }
 
   scoreCandidate(input: SourceMemoryCandidateInput): SourceMemoryCandidateResult {
     const text = this.getSignalText(input);
@@ -640,6 +650,7 @@ export class SourceMemoryCaptureService {
         }
       }
       this.distillCapsule(existing.id, 'duplicate_save');
+      this.refreshChangeLedger(existing.id);
       return { ...this.getCapsule(existing.id), duplicate: true };
     }
 
@@ -761,6 +772,7 @@ export class SourceMemoryCaptureService {
 
     transaction();
     this.distillCapsule(capsuleId, 'post_save');
+    this.refreshChangeLedger(capsuleId);
     this.writeMarkdownSnapshot(capsuleId, fullContent, ts);
 
     return this.getCapsule(capsuleId);
@@ -837,6 +849,7 @@ export class SourceMemoryCaptureService {
 
     transaction();
     this.distillCapsule(id, 'note_updated');
+    this.refreshChangeLedger(id);
     this.writeMarkdownSnapshot(id, fullContent, ts);
     return this.getCapsule(id);
   }
@@ -848,6 +861,7 @@ export class SourceMemoryCaptureService {
       throw new SourceMemoryCaptureValidationError('Source memory capsule not found.', 404);
     }
     if (existing.status === 'dismissed') {
+      this.changeLedger.setSourceActive('source_memory', id, false);
       return this.getCapsule(id);
     }
 
@@ -866,6 +880,7 @@ export class SourceMemoryCaptureService {
     });
 
     transaction();
+    this.changeLedger.setSourceActive('source_memory', id, false);
     return this.getCapsule(id);
   }
 
@@ -887,7 +902,7 @@ export class SourceMemoryCaptureService {
       .prepare(
         `SELECT id, kind, title, body, evidence_anchor_ids_json, confidence, status
          FROM source_memory_takeaways
-         WHERE capsule_id = ?
+         WHERE capsule_id = ? AND origin != 'deep_distillation'
          ORDER BY created_at ASC`,
       )
       .all(id) as SourceMemoryTakeawayRow[];
@@ -895,7 +910,7 @@ export class SourceMemoryCaptureService {
       .prepare(
         `SELECT id, trigger_kind, description, matcher_json, default_behavior
          FROM source_memory_triggers
-         WHERE capsule_id = ?
+         WHERE capsule_id = ? AND origin != 'deep_distillation'
          ORDER BY created_at ASC`,
       )
       .all(id) as SourceMemoryTriggerRow[];
@@ -922,6 +937,7 @@ export class SourceMemoryCaptureService {
       contentPreview: row.content_preview ?? '',
       messageId: linkedMessageId,
       metadata: parseObject(row.metadata_json ?? '{}'),
+      changeLedger: this.changeLedger.getSourceLedger('source_memory', id),
       writeReceipt: buildWriteReceipt({
         sourceKind: row.source_kind,
         captureMode: row.capture_mode,
@@ -1020,6 +1036,7 @@ export class SourceMemoryCaptureService {
       previousDistillation.inputHash === inputHash &&
       typeof previousDistillation.status === 'string'
     ) {
+      this.enqueueDeepDistillation(id, inputHash, reason);
       return this.getCapsule(id);
     }
 
@@ -1060,7 +1077,7 @@ export class SourceMemoryCaptureService {
         .prepare(
           `UPDATE source_memory_takeaways
            SET status = ?
-           WHERE capsule_id = ?`,
+           WHERE capsule_id = ? AND origin != 'deep_distillation'`,
         )
         .run(distillation.status, id);
 
@@ -1068,7 +1085,7 @@ export class SourceMemoryCaptureService {
         `UPDATE source_memory_triggers
          SET matcher_json = ?,
              default_behavior = ?
-         WHERE id = ?`,
+         WHERE id = ? AND origin != 'deep_distillation'`,
       );
       for (const trigger of triggers) {
         updateTrigger.run(
@@ -1124,7 +1141,48 @@ export class SourceMemoryCaptureService {
     });
 
     transaction();
+    this.enqueueDeepDistillation(id, inputHash, reason);
     return this.getCapsule(id);
+  }
+
+  private enqueueDeepDistillation(
+    capsuleId: string,
+    inputHash: string,
+    reason: string,
+  ): void {
+    try {
+      new SourceMemoryDistillationWorker(this.db).enqueue(capsuleId, inputHash, reason);
+    } catch (error) {
+      console.warn('[SourceMemoryCaptureService] Deep distillation enqueue failed:', error);
+    }
+  }
+
+  private refreshChangeLedger(id: string): void {
+    const row = this.findCapsule(id);
+    if (!row) return;
+    const metadata = parseObject(row.metadata_json ?? '{}');
+    const rawObservedAt = metadata.sourceAsOf ?? metadata.observedAt;
+    const observedAt = typeof rawObservedAt === 'number' && Number.isFinite(rawObservedAt)
+      ? rawObservedAt > 1e12
+        ? Math.floor(rawObservedAt / 1000)
+        : Math.floor(rawObservedAt)
+      : row.saved_at ?? row.updated_at;
+    try {
+      this.changeLedger.syncSource({
+        sourceRefType: 'source_memory',
+        sourceRefId: id,
+        sourceTitle: row.source_title,
+        sourceUrl: row.source_url ?? undefined,
+        sourceKind: row.source_kind,
+        text: this.getEvidenceTextForCapsule(row),
+        metadata,
+        entityHints: normalizeEntityHints(readEntityHints(metadata)),
+        observedAt,
+        active: row.status === 'saved',
+      });
+    } catch (error) {
+      console.warn('[SourceMemoryCaptureService] Change ledger refresh failed:', error);
+    }
   }
 
   private insertMessageAndChunks(input: {

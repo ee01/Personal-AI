@@ -1304,6 +1304,23 @@ export class MemoryCoverageService {
       'updated_at',
       "status = 'saved'",
     );
+    const deepReadyCount = this.countWhere(
+      'source_memory_distillation_jobs',
+      "status = 'succeeded'",
+    );
+    const deepPendingCount = this.countWhere(
+      'source_memory_distillation_jobs',
+      "status IN ('queued', 'running', 'retry_wait')",
+    );
+    const deepBlockedCount = this.countWhere(
+      'source_memory_distillation_jobs',
+      "status IN ('blocked', 'failed')",
+    );
+    const latestDeepUpdate = this.maxColumnWhere(
+      'source_memory_distillation_jobs',
+      'updated_at',
+      '1 = 1',
+    );
     const contributions: MemoryCoverageContribution[] = [
       this.messageContribution('web', '网页捕获', 'ingest', web, 3, true),
       this.messageContribution('manual', '手动收藏 / 导入片段', 'ingest', manual, 3, true),
@@ -1320,6 +1337,23 @@ export class MemoryCoverageService {
         latestAt: latestCapsule,
         detail: `${formatCount(capsuleCount)} 个资料记忆胶囊，近 ${STALE_AFTER_DAYS} 天 ${formatCount(recentCapsuleCount)} 个`,
         evidence: "source_memory_capsules.status='saved'",
+      },
+      {
+        id: 'source-memory:deep-distillation',
+        label: '资料深度蒸馏',
+        direction: 'derive',
+        state:
+          deepBlockedCount > 0 || deepPendingCount > 0
+            ? 'partial'
+            : stateForCount(deepReadyCount, latestDeepUpdate, {
+                sparseBelow: 1,
+                unknownWhenEmpty: true,
+              }),
+        count: deepReadyCount,
+        recentCount: deepPendingCount,
+        latestAt: latestDeepUpdate,
+        detail: `${formatCount(deepReadyCount)} 个已就绪，${formatCount(deepPendingCount)} 个处理中，${formatCount(deepBlockedCount)} 个因策略或重试终止未运行；同步 P0 仍可召回`,
+        evidence: 'source_memory_distillation_jobs.status',
       },
     ];
     const repairActions: MemoryCoverageRepairAction[] =
@@ -1343,7 +1377,7 @@ export class MemoryCoverageService {
       nameEn: 'Chrome Extension',
       icon: 'WB',
       group: 'active',
-      directions: ['ingest'],
+      directions: ['ingest', 'derive'],
       contributions,
       description: '覆盖无法归入 RingCentral/Jira 的普通网页、手动收藏和现场 DOM 上下文。',
       repairActions,

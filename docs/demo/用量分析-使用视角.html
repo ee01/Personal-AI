@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Usage Analytics 使用视角 Demo（静态 mock 数据）</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel-2: #273449;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --frontend: #34d399; --backend: #f472b6; --border: #334155;
+    --gold: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); padding: 24px; max-width: 1280px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .demo-banner {
+    background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.4); color: var(--gold);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; margin-bottom: 16px;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 20px; }
+  .controls label { font-size: 13px; color: var(--muted); margin-right: 4px; }
+  select, button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+  }
+  button.active { border-color: var(--accent); color: var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .v { font-size: 22px; font-weight: 600; margin-top: 6px; }
+  .card .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .panel .hint { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+  .panel h2 .q { font-size: 11px; color: var(--bg); background: var(--accent); border-radius: 5px; padding: 1px 6px; font-weight: 600; }
+  .sortbar { display: inline-flex; gap: 6px; margin-left: auto; }
+  .sortbar button { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  .barcell { width: 22%; }
+  .cap-en { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .split { display: flex; height: 22px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+  .split .fe { background: var(--frontend); }
+  .split .be { background: var(--backend); }
+  .legend { display: flex; gap: 16px; margin-top: 10px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  /* DAU chart */
+  .dau { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 8px; }
+  .dau .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; cursor: default; }
+  .dau .colbar { background: linear-gradient(180deg, var(--accent), #0ea5e9); border-radius: 3px 3px 0 0; min-height: 2px; }
+  .dau .col:hover .colbar { background: var(--gold); }
+  .dau-x { display: flex; gap: 3px; margin-top: 4px; }
+  .dau-x span { flex: 1; font-size: 10px; color: var(--muted); text-align: center; overflow: hidden; }
+  /* matrix */
+  .matrix-wrap { overflow-x: auto; }
+  .matrix td, .matrix th { text-align: center; padding: 5px 6px; }
+  .matrix th.rowh, .matrix td.rowh { text-align: left; position: sticky; left: 0; background: var(--panel); }
+  .matrix td.cell { min-width: 56px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+  .matrix th.colh { font-size: 11px; max-width: 76px; white-space: normal; vertical-align: bottom; }
+  .userlink { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .userlink:hover { text-decoration: underline; }
+  .fav { color: var(--muted); font-size: 12px; }
+  .fav b { color: var(--text); font-weight: 500; }
+  .muted { color: var(--muted); }
+  .section-note { font-size: 12px; color: var(--muted); margin: 24px 0 8px; text-transform: uppercase; letter-spacing: .06em; }
+</style>
+</head>
+<body>
+  <h1>用量与 Token 分析 <span style="font-weight:400;color:var(--muted)">· 使用视角改版</span></h1>
+  <div class="sub">Usage Analytics · Demo 预览 · <span id="status" class="muted"></span></div>
+  <div class="demo-banner">⚠ 这是静态 Demo（docs/demo/用量分析-使用视角.html），全部为 mock 数据，用于预览使用视角报表效果。范围切换、排序切换、点击用户名下钻均可交互。线上真实报表见 memory-service `/api/v1/usage/dashboard`。</div>
+
+  <div class="controls">
+    <span><label>范围</label>
+      <select id="range">
+        <option value="1">最近 24 小时</option>
+        <option value="7" selected>最近 7 天</option>
+        <option value="30">最近 30 天</option>
+      </select>
+    </span>
+    <span><label>用户</label>
+      <select id="user"><option value="all">全体</option></select>
+    </span>
+    <button id="refresh">刷新</button>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <!-- ① 功能总览 -->
+  <div class="panel">
+    <h2><span class="q">Q1 · Q2</span>功能总览
+      <span class="sortbar" id="capSortBar">
+        <button data-sort="usage" class="active">按使用频度</button>
+        <button data-sort="tokens">按 Token</button>
+        <button data-sort="cost">按成本</button>
+      </span>
+    </h2>
+    <p class="hint">使用频度 = LLM 调用 + 后端接口调用。一张表同时回答「哪个功能用得最多」与「哪个功能烧 token 最多」。</p>
+    <div id="capTable"></div>
+  </div>
+
+  <!-- ② 用户活跃度 -->
+  <div class="panel" id="activityPanel">
+    <h2><span class="q">Q3</span>用户活跃度</h2>
+    <p class="hint">按日活跃用户数（UTC 日，LLM 或接口任一有活动即计入）。下方为窗口内用户排行，点击用户名可下钻到单用户视图。</p>
+    <div id="dauChart"></div>
+    <div style="height:14px"></div>
+    <div id="userTable"></div>
+  </div>
+
+  <!-- ③ 用户 × 功能矩阵 -->
+  <div class="panel" id="matrixPanel">
+    <h2><span class="q">Q4</span>用户 × 功能 偏好矩阵</h2>
+    <p class="hint">格子 = 该用户对该功能的使用频度，颜色越深越常用（log 刻度）；hover 可看 token 数。列为窗口内 Top 10 功能。</p>
+    <div class="matrix-wrap" id="matrix"></div>
+  </div>
+
+  <div class="section-note">次要面板（保留现有能力，降位）</div>
+  <div class="grid2">
+    <div class="panel" style="margin-bottom:0">
+      <h2>前端 vs 后端 Token 分布</h2>
+      <div id="split"></div>
+    </div>
+    <div class="panel" style="margin-bottom:0">
+      <h2>按模型 Token 与成本</h2>
+      <div id="byModel"></div>
+    </div>
+    <div class="panel" style="margin-bottom:0">
+      <h2>接口调用明细（Top 路由）</h2>
+      <div id="apiRoutes"></div>
+    </div>
+  </div>
+
+<script>
+/* =====================================================================
+ * Mock 数据生成（seeded，刷新页面结果稳定）
+ * =================================================================== */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    var t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+var rng = mulberry32(20260722);
+
+var CAP_LABELS = {
+  ask: '主动问答', compose_assist: '回复助手', memory_service: '记忆服务',
+  meeting_pilot: '会议助手', today_pilot: '今天', memory_lens: '记忆提示',
+  message_analysis: '消息分析', message_reaction: '消息联动',
+  relationship_radar: '人脉关系', notification_center: '通知中心',
+  doubao_bridge: '豆包互联', memory_capture: '记忆捕捉',
+  skill_foundry: '技能库', scheduled_messages: '定时消息',
+  memory_exploring: '记忆搜索', user_profile: '用户画像', unknown: '未归类'
+};
+var CAPS = Object.keys(CAP_LABELS);
+
+// 每个能力主要走的模型（用于 byModel / 成本估算 mock）
+var CAP_MODEL = {
+  ask: 'gpt-5.5', compose_assist: 'gpt-5.5', memory_service: 'qwen3.6:latest',
+  meeting_pilot: 'gpt-5.5', today_pilot: 'qwen3.6:latest', memory_lens: 'qwen3.6:latest',
+  message_analysis: 'gpt-4o-mini', message_reaction: 'gpt-4o-mini',
+  relationship_radar: 'qwen3.6:latest', notification_center: 'qwen3.6:latest',
+  doubao_bridge: 'deepseek-ai/deepseek-r1', memory_capture: 'qwen3.6:latest',
+  skill_foundry: 'gpt-4o-mini', scheduled_messages: 'gpt-4o-mini',
+  memory_exploring: 'qwen3.6:latest', user_profile: 'qwen3.6:latest', unknown: 'unknown'
+};
+var PRICING = { // USD / 1M tokens [in, out]
+  'gpt-5.5': [1.25, 10], 'qwen3.6:latest': [0.3, 0.6], 'gpt-4o-mini': [0.15, 0.6],
+  'deepseek-ai/deepseek-r1': [0.55, 2.19], 'unknown': [0, 0]
+};
+// 能力前端占比（frontend token share）mock
+var CAP_FE_SHARE = {
+  message_analysis: 0.85, message_reaction: 0.8, memory_lens: 0.3, compose_assist: 0.45,
+  meeting_pilot: 0.5, ask: 0.1, doubao_bridge: 0.6
+};
+
+// 用户画像：weights 决定"谁偏好什么"，scale 决定整体量级
+var USER_PROFILES = [
+  { id: 'esone.qiu', scale: 30, activeProb: 0.97, weights: { ask: 10, compose_assist: 8, memory_service: 6, today_pilot: 4, memory_lens: 3, meeting_pilot: 3, memory_capture: 2, memory_exploring: 2, doubao_bridge: 2, user_profile: 1, notification_center: 1 } },
+  { id: 'jason.mei', scale: 14, activeProb: 0.8, weights: { meeting_pilot: 10, today_pilot: 4, ask: 2, relationship_radar: 3, memory_service: 2, notification_center: 1 } },
+  { id: 'li.na', scale: 12, activeProb: 0.75, weights: { message_analysis: 9, message_reaction: 6, topicless: 0, ask: 2, memory_service: 2, scheduled_messages: 3 } },
+  { id: 'kevin.zhang', scale: 9, activeProb: 0.6, weights: { today_pilot: 7, memory_lens: 6, compose_assist: 3, memory_service: 2, skill_foundry: 2 } },
+  { id: 'wanqi.chen', scale: 7, activeProb: 0.55, weights: { doubao_bridge: 8, ask: 3, memory_capture: 2, memory_service: 1 } },
+  { id: 'harpreet.s', scale: 4, activeProb: 0.35, weights: { ask: 3, memory_exploring: 2, memory_service: 1, unknown: 1 } }
+];
+
+// 生成 30 天 × 用户 × 能力 的每日事件：{llm, api, pt(prompt), ct(completion)}
+var DAYS = 30;
+var DATA = []; // [{day, dayLabel, userId, cap, llm, api, pt, ct}]
+var today = new Date('2026-07-22T00:00:00Z').getTime();
+for (var d = 0; d < DAYS; d++) {
+  var dayTs = today - (DAYS - 1 - d) * 86400000;
+  var dt = new Date(dayTs);
+  var isWeekend = dt.getUTCDay() === 0 || dt.getUTCDay() === 6;
+  var dayLabel = (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
+  USER_PROFILES.forEach(function (u) {
+    var p = u.activeProb * (isWeekend ? 0.25 : 1);
+    if (rng() > p) return; // 当天不活跃
+    Object.keys(u.weights).forEach(function (cap) {
+      if (!CAP_LABELS[cap]) return;
+      var w = u.weights[cap];
+      var llm = Math.round(w * (u.scale / 10) * (0.5 + rng()));
+      if (llm <= 0 && rng() < 0.5) return;
+      var api = Math.round(llm * (2 + rng() * 2.5)) + Math.round(rng() * 4);
+      var pt = llm * Math.round(700 + rng() * 1600);
+      var ct = llm * Math.round(120 + rng() * 420);
+      DATA.push({ day: d, dayLabel: dayLabel, userId: u.id, cap: cap, llm: llm, api: api, pt: pt, ct: ct });
+    });
+  });
+}
+
+/* =====================================================================
+ * 聚合（对应 spec 中 buildReport 的输出形状）
+ * =================================================================== */
+function costOf(cap, pt, ct) {
+  var pr = PRICING[CAP_MODEL[cap]] || [0, 0];
+  return pt * pr[0] / 1e6 + ct * pr[1] / 1e6;
+}
+
+function buildReport(rangeDays, userFilter) {
+  var minDay = DAYS - rangeDays;
+  var rows = DATA.filter(function (r) { return r.day >= minDay && (userFilter === 'all' || r.userId === userFilter); });
+
+  var totals = { llm: 0, api: 0, pt: 0, ct: 0, cost: 0 };
+  var byCap = {}, byUser = {}, matrixMap = {}, byModel = {}, bySide = { fe: 0, be: 0, feCost: 0, beCost: 0 };
+  var capUsers = {};
+
+  rows.forEach(function (r) {
+    var cost = costOf(r.cap, r.pt, r.ct);
+    totals.llm += r.llm; totals.api += r.api; totals.pt += r.pt; totals.ct += r.ct; totals.cost += cost;
+
+    var c = byCap[r.cap] || (byCap[r.cap] = { cap: r.cap, llm: 0, api: 0, pt: 0, ct: 0, cost: 0 });
+    c.llm += r.llm; c.api += r.api; c.pt += r.pt; c.ct += r.ct; c.cost += cost;
+    (capUsers[r.cap] = capUsers[r.cap] || {})[r.userId] = 1;
+
+    var u = byUser[r.userId] || (byUser[r.userId] = { userId: r.userId, llm: 0, api: 0, tokens: 0, cost: 0, lastDay: 0, caps: {} });
+    u.llm += r.llm; u.api += r.api; u.tokens += r.pt + r.ct; u.cost += cost;
+    if (r.day > u.lastDay) u.lastDay = r.day;
+    var uc = u.caps[r.cap] || (u.caps[r.cap] = { usage: 0, tokens: 0 });
+    uc.usage += r.llm + r.api; uc.tokens += r.pt + r.ct;
+
+    var m = byModel[CAP_MODEL[r.cap]] || (byModel[CAP_MODEL[r.cap]] = { model: CAP_MODEL[r.cap], llm: 0, tokens: 0, cost: 0 });
+    m.llm += r.llm; m.tokens += r.pt + r.ct; m.cost += cost;
+
+    var feShare = CAP_FE_SHARE[r.cap] || 0;
+    bySide.fe += Math.round((r.pt + r.ct) * feShare);
+    bySide.be += Math.round((r.pt + r.ct) * (1 - feShare));
+    bySide.feCost += cost * feShare; bySide.beCost += cost * (1 - feShare);
+  });
+
+  var byCapability = Object.keys(byCap).map(function (k) {
+    var c = byCap[k];
+    return {
+      capability: k, label: CAP_LABELS[k] || k,
+      usageCount: c.llm + c.api, llmCallCount: c.llm, apiCallCount: c.api,
+      totalTokens: c.pt + c.ct, promptTokens: c.pt, completionTokens: c.ct,
+      estCostUsd: c.cost, userCount: Object.keys(capUsers[k]).length
+    };
+  });
+
+  var users = Object.keys(byUser).map(function (k) {
+    var u = byUser[k];
+    var top = Object.keys(u.caps).map(function (cap) {
+      return { cap: cap, label: CAP_LABELS[cap] || cap, usage: u.caps[cap].usage };
+    }).sort(function (a, b) { return b.usage - a.usage; }).slice(0, 3);
+    return {
+      userId: u.userId, usageCount: u.llm + u.api, llmCallCount: u.llm, apiCallCount: u.api,
+      totalTokens: u.tokens, estCostUsd: u.cost, topCapabilities: top,
+      lastDayLabel: (function () {
+        var offset = (DAYS - 1) - u.lastDay;
+        return offset === 0 ? '今天' : offset === 1 ? '昨天' : offset + ' 天前';
+      })(),
+      caps: u.caps
+    };
+  }).sort(function (a, b) { return b.usageCount - a.usageCount; });
+
+  // dailyActivity（恒为全体口径，不随 user 过滤 —— 与 spec 一致）
+  var dailyMap = {};
+  DATA.filter(function (r) { return r.day >= minDay; }).forEach(function (r) {
+    var da = dailyMap[r.day] || (dailyMap[r.day] = { day: r.day, label: r.dayLabel, users: {}, llm: 0, api: 0, tokens: 0 });
+    da.users[r.userId] = 1; da.llm += r.llm; da.api += r.api; da.tokens += r.pt + r.ct;
+  });
+  var dailyActivity = [];
+  for (var d2 = minDay; d2 < DAYS; d2++) {
+    var da2 = dailyMap[d2];
+    var dt2 = new Date(today - (DAYS - 1 - d2) * 86400000);
+    dailyActivity.push(da2
+      ? { label: da2.label, activeUsers: Object.keys(da2.users).length, llm: da2.llm, api: da2.api, tokens: da2.tokens }
+      : { label: (dt2.getUTCMonth() + 1) + '/' + dt2.getUTCDate(), activeUsers: 0, llm: 0, api: 0, tokens: 0 });
+  }
+
+  return {
+    totals: totals, byCapability: byCapability, byUser: users,
+    dailyActivity: dailyActivity,
+    byModel: Object.keys(byModel).map(function (k) { return byModel[k]; }).sort(function (a, b) { return b.tokens - a.tokens; }),
+    bySide: bySide
+  };
+}
+
+/* =====================================================================
+ * 渲染
+ * =================================================================== */
+function fmtInt(n) { return (n || 0).toLocaleString('en-US'); }
+function fmtTok(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1) + 'k';
+  return fmtInt(n);
+}
+function fmtCost(n) { return '$' + (n || 0).toFixed(2); }
+function el(tag, attrs, children) {
+  var node = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function (k) {
+    if (k === 'text') node.textContent = attrs[k];
+    else if (k === 'html') node.innerHTML = attrs[k];
+    else node.setAttribute(k, attrs[k]);
+  });
+  (children || []).forEach(function (c) { if (c) node.appendChild(c); });
+  return node;
+}
+
+var capSort = 'usage';
+
+function renderCards(rep, userFilter) {
+  var host = document.getElementById('cards');
+  host.innerHTML = '';
+  var items = [
+    { k: '活跃用户', v: fmtInt(userFilter === 'all' ? rep.byUser.length : 1) },
+    { k: 'LLM 调用', v: fmtInt(rep.totals.llm) },
+    { k: '接口调用', v: fmtInt(rep.totals.api) },
+    { k: '总 Token', v: fmtTok(rep.totals.pt + rep.totals.ct) + ' <small>输入 ' + fmtTok(rep.totals.pt) + ' / 输出 ' + fmtTok(rep.totals.ct) + '</small>' },
+    { k: '预估成本', v: fmtCost(rep.totals.cost) }
+  ];
+  items.forEach(function (it) {
+    host.appendChild(el('div', { class: 'card' }, [
+      el('div', { class: 'k', text: it.k }),
+      el('div', { class: 'v', html: it.v })
+    ]));
+  });
+}
+
+function renderCapTable(rep) {
+  var host = document.getElementById('capTable');
+  host.innerHTML = '';
+  var rows = rep.byCapability.slice();
+  var metric = capSort === 'usage' ? function (r) { return r.usageCount; }
+    : capSort === 'tokens' ? function (r) { return r.totalTokens; }
+    : function (r) { return r.estCostUsd; };
+  rows.sort(function (a, b) { return metric(b) - metric(a); });
+  var max = Math.max.apply(null, rows.map(metric).concat([1]));
+
+  var table = el('table');
+  table.appendChild(el('thead', {}, [el('tr', {}, [
+    el('th', { text: '功能' }),
+    el('th', { class: 'num', text: '使用频度' }),
+    el('th', { class: 'num', text: 'LLM 调用' }),
+    el('th', { class: 'num', text: '接口调用' }),
+    el('th', { class: 'num', text: 'Token' }),
+    el('th', { class: 'num', text: '成本' }),
+    el('th', { class: 'num', text: '使用人数' }),
+    el('th', { class: 'barcell', text: '' })
+  ])]));
+  var tbody = el('tbody');
+  rows.forEach(function (r) {
+    tbody.appendChild(el('tr', {}, [
+      el('td', { html: r.label + '<span class="cap-en">' + r.capability + '</span>' }),
+      el('td', { class: 'num', html: '<b>' + fmtInt(r.usageCount) + '</b>' }),
+      el('td', { class: 'num', text: fmtInt(r.llmCallCount) }),
+      el('td', { class: 'num', text: fmtInt(r.apiCallCount) }),
+      el('td', { class: 'num', text: fmtTok(r.totalTokens) }),
+      el('td', { class: 'num', text: fmtCost(r.estCostUsd) }),
+      el('td', { class: 'num', text: fmtInt(r.userCount) }),
+      el('td', { class: 'barcell' }, [el('div', { class: 'bar', style: 'width:' + (metric(r) / max * 100) + '%' })])
+    ]));
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+}
+
+function renderDau(rep) {
+  var host = document.getElementById('dauChart');
+  host.innerHTML = '';
+  var days = rep.dailyActivity;
+  var max = Math.max.apply(null, days.map(function (d) { return d.activeUsers; }).concat([1]));
+  var chart = el('div', { class: 'dau' });
+  days.forEach(function (d) {
+    var h = d.activeUsers / max * 100;
+    chart.appendChild(el('div', {
+      class: 'col',
+      title: d.label + ' · ' + d.activeUsers + ' 活跃用户 · LLM ' + fmtInt(d.llm) + ' · 接口 ' + fmtInt(d.api) + ' · ' + fmtTok(d.tokens) + ' tok'
+    }, [el('div', { class: 'colbar', style: 'height:' + h + '%' })]));
+  });
+  host.appendChild(chart);
+  var xaxis = el('div', { class: 'dau-x' });
+  var step = days.length > 10 ? Math.ceil(days.length / 10) : 1;
+  days.forEach(function (d, i) {
+    xaxis.appendChild(el('span', { text: (i % step === 0 || i === days.length - 1) ? d.label : '' }));
+  });
+  host.appendChild(xaxis);
+}
+
+function renderUserTable(rep) {
+  var host = document.getElementById('userTable');
+  host.innerHTML = '';
+  var table = el('table');
+  table.appendChild(el('thead', {}, [el('tr', {}, [
+    el('th', { text: '用户' }),
+    el('th', { class: 'num', text: '使用频度' }),
+    el('th', { class: 'num', text: 'Token' }),
+    el('th', { class: 'num', text: '成本' }),
+    el('th', { text: '最常用功能（前 3）' }),
+    el('th', { text: '最近活跃' })
+  ])]));
+  var tbody = el('tbody');
+  rep.byUser.forEach(function (u) {
+    var link = el('a', { class: 'userlink', text: u.userId });
+    link.addEventListener('click', function () {
+      document.getElementById('user').value = u.userId;
+      load();
+    });
+    var favHtml = u.topCapabilities.map(function (t) { return '<b>' + t.label + '</b>×' + fmtInt(t.usage); }).join('，');
+    tbody.appendChild(el('tr', {}, [
+      el('td', {}, [link]),
+      el('td', { class: 'num', text: fmtInt(u.usageCount) }),
+      el('td', { class: 'num', text: fmtTok(u.totalTokens) }),
+      el('td', { class: 'num', text: fmtCost(u.estCostUsd) }),
+      el('td', {}, [el('span', { class: 'fav', html: favHtml })]),
+      el('td', { class: 'muted', text: u.lastDayLabel })
+    ]));
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+}
+
+function renderMatrix(rep) {
+  var host = document.getElementById('matrix');
+  host.innerHTML = '';
+  var topCaps = rep.byCapability.slice()
+    .sort(function (a, b) { return b.usageCount - a.usageCount; }).slice(0, 10);
+  var users = rep.byUser.slice(0, 15);
+  var maxCell = 1;
+  users.forEach(function (u) { topCaps.forEach(function (c) {
+    var v = (u.caps[c.capability] || {}).usage || 0;
+    if (v > maxCell) maxCell = v;
+  }); });
+
+  var table = el('table', { class: 'matrix' });
+  var headRow = el('tr', {}, [el('th', { class: 'rowh', text: '用户 \\ 功能' })]);
+  topCaps.forEach(function (c) { headRow.appendChild(el('th', { class: 'colh', text: c.label })); });
+  table.appendChild(el('thead', {}, [headRow]));
+  var tbody = el('tbody');
+  users.forEach(function (u) {
+    var tr = el('tr', {}, [el('td', { class: 'rowh', text: u.userId })]);
+    topCaps.forEach(function (c) {
+      var cell = u.caps[c.capability];
+      var v = cell ? cell.usage : 0;
+      var alpha = v > 0 ? (Math.log(1 + v) / Math.log(1 + maxCell)) * 0.85 : 0;
+      tr.appendChild(el('td', {
+        class: 'cell',
+        style: 'background: rgba(56,189,248,' + alpha.toFixed(3) + ');' + (alpha > 0.55 ? 'color:#04263a;font-weight:600;' : ''),
+        text: v > 0 ? fmtInt(v) : '',
+        title: v > 0 ? (u.userId + ' · ' + c.label + ' · 频度 ' + fmtInt(v) + ' · ' + fmtTok(cell.tokens) + ' tok') : ''
+      }));
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+  if (rep.byUser.length > 15) {
+    host.appendChild(el('div', { class: 'muted', style: 'font-size:12px;margin-top:8px', text: '另有 ' + (rep.byUser.length - 15) + ' 位用户未显示' }));
+  }
+}
+
+function renderSplit(rep) {
+  var host = document.getElementById('split');
+  host.innerHTML = '';
+  var fe = rep.bySide.fe, be = rep.bySide.be, total = fe + be || 1;
+  var fePct = fe / total * 100, bePct = be / total * 100;
+  host.appendChild(el('div', { class: 'split' }, [
+    el('div', { class: 'fe', style: 'width:' + fePct + '%' }),
+    el('div', { class: 'be', style: 'width:' + bePct + '%' })
+  ]));
+  host.appendChild(el('div', { class: 'legend' }, [
+    el('span', {}, [el('span', { class: 'dot', style: 'background:var(--frontend)' }), el('span', { text: '前端 ' + fmtTok(fe) + ' (' + fePct.toFixed(1) + '%) · ' + fmtCost(rep.bySide.feCost) })]),
+    el('span', {}, [el('span', { class: 'dot', style: 'background:var(--backend)' }), el('span', { text: '后端 ' + fmtTok(be) + ' (' + bePct.toFixed(1) + '%) · ' + fmtCost(rep.bySide.beCost) })])
+  ]));
+}
+
+function renderByModel(rep) {
+  var host = document.getElementById('byModel');
+  host.innerHTML = '';
+  var max = Math.max.apply(null, rep.byModel.map(function (m) { return m.tokens; }).concat([1]));
+  var table = el('table');
+  table.appendChild(el('thead', {}, [el('tr', {}, [
+    el('th', { text: '模型' }), el('th', { class: 'num', text: 'Token' }), el('th', { class: 'num', text: '成本' }), el('th', { text: '' })
+  ])]));
+  var tbody = el('tbody');
+  rep.byModel.forEach(function (m) {
+    tbody.appendChild(el('tr', {}, [
+      el('td', { text: m.model }),
+      el('td', { class: 'num', text: fmtTok(m.tokens) }),
+      el('td', { class: 'num', text: fmtCost(m.cost) }),
+      el('td', { class: 'barcell' }, [el('div', { class: 'bar', style: 'width:' + (m.tokens / max * 100) + '%' })])
+    ]));
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+}
+
+var ROUTE_TEMPLATES = {
+  ask: ['/ask'], compose_assist: ['/composer/assist', '/context-assist'], memory_service: ['/recall', '/context-recall', '/ingest', '/memories/:id'],
+  meeting_pilot: ['/meetings/prep', '/meeting-outcomes'], today_pilot: ['/today-pilot/catch-up', '/day-pilot/feed', '/calendar-events'],
+  memory_lens: ['/context-recall'], message_analysis: ['/message-rules', '/concerned-items'], message_reaction: ['/glip-message-markers'],
+  relationship_radar: ['/relationships/context-card', '/relationships/graph'], notification_center: ['/notification-center/feed'],
+  doubao_bridge: ['/providers/doubao/sync'], memory_capture: ['/source-memory/capsules'], skill_foundry: ['/skills'],
+  scheduled_messages: ['/agent-tasks'], memory_exploring: ['/feedback', '/recall/relevance'], user_profile: ['/profile'], unknown: ['/misc']
+};
+function renderApiRoutes(rep) {
+  var host = document.getElementById('apiRoutes');
+  host.innerHTML = '';
+  var rows = [];
+  rep.byCapability.forEach(function (c) {
+    var tpls = ROUTE_TEMPLATES[c.capability] || ['/' + c.capability];
+    tpls.forEach(function (route, i) {
+      rows.push({ route: route, label: c.label, count: Math.max(1, Math.round(c.apiCallCount * (i === 0 ? 0.7 : 0.3 / (tpls.length - 1 || 1)))) });
+    });
+  });
+  rows.sort(function (a, b) { return b.count - a.count; });
+  rows = rows.slice(0, 12);
+  var max = Math.max.apply(null, rows.map(function (r) { return r.count; }).concat([1]));
+  var table = el('table');
+  table.appendChild(el('thead', {}, [el('tr', {}, [
+    el('th', { text: '路由' }), el('th', { text: '功能' }), el('th', { class: 'num', text: '次数' }), el('th', { text: '' })
+  ])]));
+  var tbody = el('tbody');
+  rows.forEach(function (r) {
+    tbody.appendChild(el('tr', {}, [
+      el('td', {}, [el('code', { text: r.route, style: 'background:var(--panel-2);padding:1px 5px;border-radius:5px;font-size:12px' })]),
+      el('td', { class: 'muted', text: r.label }),
+      el('td', { class: 'num', text: fmtInt(r.count) }),
+      el('td', { class: 'barcell' }, [el('div', { class: 'bar', style: 'width:' + (r.count / max * 100) + '%' })])
+    ]));
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+}
+
+/* =====================================================================
+ * 主流程
+ * =================================================================== */
+function load() {
+  var rangeDays = parseInt(document.getElementById('range').value, 10);
+  var userFilter = document.getElementById('user').value || 'all';
+  var rep = buildReport(rangeDays, userFilter);
+
+  renderCards(rep, userFilter);
+  renderCapTable(rep);
+
+  // 单用户模式：隐藏活跃度与矩阵面板（spec §7.8）
+  var single = userFilter !== 'all';
+  document.getElementById('activityPanel').style.display = single ? 'none' : '';
+  document.getElementById('matrixPanel').style.display = single ? 'none' : '';
+  if (!single) {
+    renderDau(rep);
+    renderUserTable(rep);
+    renderMatrix(rep);
+  }
+
+  renderSplit(rep);
+  renderByModel(rep);
+  renderApiRoutes(rep);
+  document.getElementById('status').textContent =
+    (single ? '用户 ' + userFilter : '全体') + ' · 最近 ' + rangeDays + ' 天 · 更新于 ' + new Date().toLocaleString();
+}
+
+// init user dropdown
+(function () {
+  var sel = document.getElementById('user');
+  USER_PROFILES.forEach(function (u) {
+    sel.appendChild(el('option', { value: u.id, text: u.id }));
+  });
+  sel.addEventListener('change', load);
+  document.getElementById('range').addEventListener('change', load);
+  document.getElementById('refresh').addEventListener('click', load);
+  document.querySelectorAll('#capSortBar button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      capSort = btn.getAttribute('data-sort');
+      document.querySelectorAll('#capSortBar button').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var rangeDays = parseInt(document.getElementById('range').value, 10);
+      renderCapTable(buildReport(rangeDays, document.getElementById('user').value || 'all'));
+    });
+  });
+  load();
+})();
+</script>
+</body>
+</html>

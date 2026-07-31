@@ -156,4 +156,87 @@ describe('LLMClient', () => {
       'https://oneapi.example.com/v1/chat/completions',
     );
   });
+
+  it('passes reasoning effort only to GPT-5 compatible requests', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const gpt5Client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiModel: 'gpt-5.5',
+    }));
+    await gpt5Client.generate('compile prompt', {
+      reasoningEffort: 'none',
+    });
+    const gpt5Body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(gpt5Body.reasoning_effort).toBe('none');
+
+    const gpt4Client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiModel: 'gpt-4o-mini',
+    }));
+    await gpt4Client.generate('compile prompt', {
+      reasoningEffort: 'none',
+    });
+    const gpt4Body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(gpt4Body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('omits sampling params for models that reject them', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiModel: 'o3-mini',
+    }));
+
+    await client.generate('extract fields', { temperature: 0.2 });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    expect(body).not.toHaveProperty('max_tokens');
+    expect(body.max_completion_tokens).toBe(2000);
+  });
+
+  it('keeps sampling params and max_tokens for ordinary models', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiModel: 'gpt-4o-mini',
+    }));
+
+    await client.generate('extract fields', { temperature: 0.2 });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.temperature).toBe(0.2);
+    expect(body.max_tokens).toBe(2000);
+    expect(body).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('resolves temperature from the requested scenario', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(makeConfig({
+      llmProvider: 'openai',
+      openaiModel: 'gpt-4o-mini',
+    }));
+
+    await client.generate('ocr this frame', { scenario: 'extraction' });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.temperature).toBe(0.1);
+  });
 });

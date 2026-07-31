@@ -69,6 +69,9 @@ try {
   await page.waitForSelector('[data-panorama-output-receipt="true"]', {
     timeout: 15000,
   });
+  await page.waitForSelector('[data-meeting-outcome-result="true"]', {
+    timeout: 15000,
+  });
   await page.waitForSelector('.followup-readiness', { timeout: 15000 });
   await page.waitForSelector('.action-list .action-item', { timeout: 15000 });
 
@@ -91,6 +94,16 @@ try {
       outputReceipt: normalize(
         document.querySelector('[data-panorama-output-receipt="true"]')?.textContent,
       ),
+      outcomeStatus:
+        document
+          .querySelector('[data-meeting-outcome-result="true"]')
+          ?.getAttribute('data-outcome-binder-status') || '',
+      outcomeText: normalize(
+        document.querySelector('[data-meeting-outcome-result="true"]')?.textContent,
+      ),
+      outcomeSlotStatuses: Array.from(
+        document.querySelectorAll('[data-outcome-slot-status]'),
+      ).map((node) => node.getAttribute('data-outcome-slot-status') || ''),
     };
   });
   const controlBoundaries = await page.evaluate(() => {
@@ -132,6 +145,18 @@ try {
   assert.match(state.outputReceipt, /Markdown 跟进清单 4 项/);
   assert.match(state.outputReceipt, /不会发送纪要/);
   assert.match(state.outputReceipt, /不会.*写回 Memory Service/);
+  assert.equal(state.outcomeStatus, 'partial');
+  assert.match(state.outcomeText, /会后结果装订/);
+  assert.match(state.outcomeText, /1 项已闭环，2 项仍需继续/);
+  assert.match(state.outcomeText, /Dev \/ QA 估时口径已统一/);
+  assert.match(state.outcomeText, /QA 按 5 人天进入排期/);
+  assert.match(state.outcomeText, /owner 已明确/);
+  assert.match(state.outcomeText, /不会写回 Calendar/);
+  assert.deepEqual(state.outcomeSlotStatuses, [
+    'resolved',
+    'partially_resolved',
+    'carried_over',
+  ]);
   assert.equal(state.followupState, 'needs-review');
   assert.match(state.followupText, /会后跟进状态|跟进清单可交付度/);
   assert.match(state.followupText, /3\s*待复核/);
@@ -356,6 +381,50 @@ try {
         participants: ['Esone', 'Morgan'],
         digestStatus: 'completed',
         summary: '完整归档详情已载入。',
+        outcomeBinder: {
+          id: 'archive-hydrated-outcome-binder',
+          userId: 'scene1',
+          prepId: 'archive-hydrated-prep',
+          eventExternalId: 'archive-hydrated-event',
+          eventTitle: 'Hydrated archive recap',
+          eventStartAt: Math.floor(Date.now() / 1000) - 3600,
+          meetingId: 'archive-hydrated',
+          status: 'bound',
+          slots: [
+            {
+              id: 'archive-hydrated-followup-slot',
+              title: '确认客户 follow-up owner',
+              type: 'action',
+              status: 'resolved',
+              mentionState: 'supported',
+              sourceEvidenceIds: ['archive-hydrated-agenda'],
+              evidence: [
+                {
+                  id: 'archive-hydrated-action-evidence',
+                  kind: 'action',
+                  refId: 'manual-1',
+                  label: '行动项',
+                  snippet: 'Morgan 在周五前整理客户 follow-up。',
+                },
+              ],
+              resultSummary: 'Morgan 已接下客户 follow-up，截止周五。',
+              confidence: 0.94,
+            },
+          ],
+          sourceEvidence: [],
+          sourceHash: 'archive-hydrated-outcome-source',
+          bindingMode: 'deterministic_fallback',
+          generatedAt: Math.floor(Date.now() / 1000) - 7200,
+          boundAt: Math.floor(Date.now() / 1000) - 120,
+          createdAt: Math.floor(Date.now() / 1000) - 7200,
+          updatedAt: Math.floor(Date.now() / 1000) - 120,
+          receipt: {
+            source: 'Meeting Pilot 会后装订',
+            coverage: '1 项已闭环。',
+            freshness: '刚刚装订',
+            boundary: '只读派生结果；不会写回 Calendar 或外部任务。',
+          },
+        },
         chapters: [
           {
             id: 'chapter-1',
@@ -484,6 +553,9 @@ try {
       outputReceipt: normalize(
         document.querySelector('[data-panorama-output-receipt="true"]')?.textContent,
       ),
+      outcomeReceipt: normalize(
+        document.querySelector('[data-meeting-outcome-result="true"]')?.textContent,
+      ),
     };
   });
   assert.equal(hydratedState.archiveStatus, '已载入完整归档');
@@ -501,6 +573,9 @@ try {
   assert.match(hydratedState.aiGaps, /补截止/);
   assert.equal(hydratedState.dismissedReviewState, 'dismissed');
   assert.equal(hydratedState.timelineAnchor, true);
+  assert.match(hydratedState.outcomeReceipt, /会后结果装订/);
+  assert.match(hydratedState.outcomeReceipt, /Morgan 已接下客户 follow-up/);
+  assert.match(hydratedState.outcomeReceipt, /不会写回 Calendar/);
   await hydratedPage.close();
 
   assert.deepEqual(pageErrors, [], `页面脚本异常: ${pageErrors.join('\n\n')}`);

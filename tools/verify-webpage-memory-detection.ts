@@ -625,6 +625,22 @@ const sourceMemoryServiceSource = readFileSync(
   new URL('../memory-service/src/core/SourceMemoryCaptureService.ts', import.meta.url),
   'utf8',
 );
+const backgroundSource = readFileSync(
+  new URL('../src/background.ts', import.meta.url),
+  'utf8',
+);
+const memoryServiceClientSource = readFileSync(
+  new URL('../src/services/MemoryServiceClient.ts', import.meta.url),
+  'utf8',
+);
+const keystoneBriefServiceSource = readFileSync(
+  new URL('../memory-service/src/core/KeystoneBriefService.ts', import.meta.url),
+  'utf8',
+);
+const contextRecallRouteSource = readFileSync(
+  new URL('../memory-service/src/routes/contextRecall.ts', import.meta.url),
+  'utf8',
+);
 assert.match(
   contentScriptSource,
   /CONTEXT_THUMB_DOWN_ICON_HTML/,
@@ -772,6 +788,21 @@ assert.match(
 );
 assert.match(
   contentScriptSource,
+  /提交 recall-quality 有用反馈，服务确认后才会影响后续类似提示/,
+  'Positive feedback button should disclose the pre-click write boundary',
+);
+assert.match(
+  contentScriptSource,
+  /打开原因面板；选择原因后提交 recall-quality 修正并隐藏/,
+  'Negative feedback button should disclose the pre-click reason-panel and write boundary',
+);
+assert.match(
+  contentScriptSource,
+  /写入失败时只保留本页 30 分钟隐藏/,
+  'Negative feedback button should disclose the local-only fallback before click',
+);
+assert.match(
+  contentScriptSource,
   /确认前不会当作已学习/,
   'Positive feedback should show a pending state before service confirmation',
 );
@@ -809,6 +840,21 @@ assert.match(
   contentScriptSource,
   /只读展示前过滤；不写入记忆、不强化访问计数、不外发来源/,
   'Autopilot receipt should disclose that display filtering is not a write, access reinforcement, or external send',
+);
+assert.match(
+  contentScriptSource,
+  /buildOriginalSourceActionLabel/,
+  'Expanded Card should centralize source-link pre-click boundary copy',
+);
+assert.match(
+  contentScriptSource,
+  /打开原始来源：\$\{target\}。只打开新标签核对\$\{targetKind\}摘要；不会重新召回、写入记忆、插入输入框、发送内容或确认事实/,
+  'Ordinary source links should disclose the no-recall/no-write/no-send boundary before click',
+);
+assert.match(
+  contentScriptSource,
+  /aria-label="\$\{escapeHtmlAttribute\(sourceActionLabel\)\}" title="\$\{escapeHtmlAttribute\(sourceActionLabel\)\}"/,
+  'Ordinary source links should expose the source boundary through title and aria-label',
 );
 assert.match(
   contentScriptSource,
@@ -1239,6 +1285,82 @@ assert.match(
   sourceMemoryServiceSource,
   /建议复核入库/,
   'Memory Capture scoring API should expose a user-readable review receipt state',
+);
+
+assert.match(
+  contentScriptSource,
+  /activeKeystoneBrief[\s\S]{0,500}options\.keystoneBrief/,
+  'Memory Lens should consume the optional Keystone brief inside its existing renderer',
+);
+assert.doesNotMatch(
+  contentScriptSource,
+  /pai-keystone-(?:bubble|floating-icon|panel)/,
+  'Keystone briefs must not add a second floating icon or parallel panel',
+);
+assert.match(
+  contentScriptSource,
+  /renderKeystoneBriefCard[\s\S]{0,240}briefRawCardOpen/,
+  'ready and partial briefs should replace the raw first-screen card while preserving evidence mode',
+);
+assert.match(
+  contentScriptSource,
+  /查看证据与相关记忆/,
+  'Keystone primary cards should expose raw recall results as evidence',
+);
+assert.match(
+  contentScriptSource,
+  /有旧简报[\s\S]{0,180}当前先展示原始记忆/,
+  'stale briefs should warn and fall back to ordinary raw-memory cards',
+);
+assert.match(
+  contentScriptSource,
+  /!isSelectionSearch[\s\S]{0,180}options\.keystoneBrief/,
+  'Selection Memory Search should keep its own variant instead of accepting Keystone takeover',
+);
+assert.match(
+  contentScriptSource,
+  /!isContextRehearsalMatch\(matches\[0\]\)/,
+  'Rehearsal cards should keep their own Memory Lens variant',
+);
+assert.match(
+  contentScriptSource,
+  /fallBackFromKeystoneBrief\('not_accurate'[\s\S]{0,120}user_reported_inaccurate/,
+  'inaccurate feedback should immediately switch the same Lens shell back to raw memories',
+);
+assert.match(
+  contentScriptSource,
+  /feedback only writes brief events|反馈只写简报事件/,
+  'Keystone feedback should disclose its dedicated write boundary',
+);
+assert.match(
+  backgroundSource,
+  /keystoneBrief:\s*result\.keystoneBrief/,
+  'background context recall proxy should forward the optional brief',
+);
+assert.match(
+  backgroundSource,
+  /KEYSTONE_BRIEF_EVENT[\s\S]{0,900}recordKeystoneBriefEvent/,
+  'background should proxy dedicated Keystone events separately from raw recall feedback',
+);
+assert.match(
+  memoryServiceClientSource,
+  /recordKeystoneBriefEvent[\s\S]{0,500}\/keystone-briefs\/\$\{encodeURIComponent\(id\)\}\/events/,
+  'extension client should use the dedicated Keystone event endpoint',
+);
+assert.match(
+  contextRecallRouteSource,
+  /KeystoneBriefService\(db\)\.matchContext[\s\S]{0,280}ordinary recall/,
+  'brief matching failures should fail open to ordinary context recall',
+);
+assert.match(
+  keystoneBriefServiceSource,
+  /independentSourceCount < 2/,
+  'ready briefs should require independent source coverage',
+);
+assert.match(
+  keystoneBriefServiceSource,
+  /readiness\.status === 'ready'/,
+  'only ready briefs should allow copying an external-safe summary',
 );
 
 console.log('[verify-webpage-memory-detection] helper checks passed');

@@ -181,6 +181,7 @@ Notification Center 对外主要暴露两个接口：
 - `feed` 响应会带 `meta`，记录本次实际 channel、lanes、deliveryMode、limit、returned 和 `hasMore`。`total` 仍表示本次返回条数；如果 `hasMore=true`，说明这次 response 被 limit 截断，并不代表当前 feed 已经全部展示完。
 - `meta.limitReceipt` 会显示 `Feed limit 应用回执`：说明调用方是否没有传 `limit`、是否被服务端下限/上限 clamp，以及本次实际应用的 `limit`。它只解释本次读取最多返回多少条，不会确认、忽略、重发通知、写渠道送达回执或改变全局处理状态。
 - `meta.snapshotReceipt` 会显示 `Feed 快照口径回执`：说明这次读取的时间、channel、lane、delivery mode、limit、返回条数和是否还有更多。它只解释本次只读队列快照；不代表之后不会有新通知，也不会确认、忽略、重发通知、写渠道送达回执或改变全局处理状态。
+- Provider / Doubao 渲染出来的 `todo_digest` / `notice_digest` package 会保留同一套 feed slice 元信息（是否还有更多、实际 limit、快照回执），Desktop recent sync attempts 和手动 run-now 结果也会带这些字段，避免把“本次只同步了可见 slice”误读成“feed 已全部处理完”。
 - 当 `feed` 成功读取但返回 0 条时，`meta.emptyReceipt` 会显示 `Feed 空结果回执`：说明本次检查的 channel、lane 和 delivery mode，以及“成功但为空”的边界。这不代表读取失败，也不会确认、忽略、重发通知，不会写渠道送达回执或改变全局处理状态；Provider / Doubao digest 的空态也会展示同一语义，避免把“暂无”误读成失败或已处理。
 
 `delivery` 的语义是：
@@ -456,6 +457,7 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 本轮给 feed API 增加 `meta.snapshotReceipt`：每次读取都会标出读取时间、channel、lane、delivery mode、limit、返回条数和 `hasMore` 口径，并说明这是只读快照，不代表未来无新通知，也不会确认、忽略、重发或写渠道送达回执。这样空结果、非空列表和 daily digest 都有同一套“当前可见 slice”解释。
 - 本轮把 `Feed 快照口径回执` 接入非空 Provider / Doubao digest：即使摘要没有被 token budget 截断、也没有 `hasMore`，正文仍会说明本次读取的是哪个 channel / lane / delivery mode 的只读 feed 快照，以及 sourceRefs 写回只覆盖实际展示条目。
 - 本轮补齐 `Feed limit 应用回执`：`GET /notification-center/feed` 会在 meta 里说明没有传 limit 时使用默认 20、超过上限时应用 100、低于下限时应用 1。这样 API 消费者和排障时不用从返回条数反推服务端是否截断或保护性修正，且该回执只解释读取窗口，不改变投递/处理状态。
+- 本轮继续把 feed slice 边界传到 Desktop 同步尝试记录：`todo_digest` / `notice_digest` package 和 recent attempts 会保留 `feedHasMore`、`feedLimit` 和快照回执。这样用户或排障面板看到一次 Doubao 同步成功时，可以分清“送达了这次可见 slice”和“后续 feed 已经没有更多条目”。
 
 本轮对周报 / Dream Digest 的投递目标做了语义对齐：
 

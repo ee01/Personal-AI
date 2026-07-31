@@ -1,6 +1,6 @@
 # Ask
 
-_最后更新: 2026-07-09_
+_最后更新: 2026-07-16_
 
 Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标不是简单搜索关键词，而是先判断用户到底在问哪个话题，再从消息、网页、会议、外部 AI 对话、实体图谱、时间线和外部查证动作里组织证据，最后给出带来源感的答案。
 
@@ -9,14 +9,18 @@ Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标
 用户问 Ask 时，系统会按这个顺序工作：
 
 1. 先尊重用户明确给出的范围，例如工作/个人/全部、时间、发送人、群组、source type、project。
-2. 如果问题很短，比如“那个 BE ready 了吗”，先锁定它最可能指向的近期话题，而不是直接搜“BE ready”。
-3. 如果这个话题以前形成过“活答案”，把上次答案、证据缺口和可能变化条件拿出来作为提示，但不能把旧答案当事实。
-4. 再跑正式召回：vector、FTS、graph、time 四通道一起找证据。
-5. 把当前场景 anchor、高频互动记忆、旧证据 refs 和普通召回结果一起去重、排序、降权或前置。
-6. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；如果缺口是未来可能变化的事实，会进入 [Evidence Watch Contracts](./evidence_watch_contracts.md)，Ask response 返回 `evidenceWatch` 收据，用来说明复核状态、来源阻塞和重复动作合并边界。Search Result 的 Ask 答案区会先展示 `Ask 本轮状态`，再展示自动话题锁定、候选承接、证据守望或查证缺口回执，并在答案前显示当前返回 evidence 的来源/通道摘要，最后才展示答案正文，避免把“已锁定话题 / 已建立守望 / 看到某个来源”误读成“事实已确认或全库已覆盖”。
-7. 生成答案后，异步观察这次 Ask 是否值得写入 observation、promote 成活答案 thread，或经过权威证据门控后更新活答案 version。
+2. 如果用户从 Quick Ask 明确选择“继续”，先读取客户端发来的本机 `contextHints`；它只帮助定位上一轮 topic，不是证据，也不会按 hint 原文写入长期记忆。
+3. 如果问题很短，比如“那个 BE ready 了吗”，先锁定它最可能指向的近期话题，而不是直接搜“BE ready”。
+4. 如果这个话题以前形成过“活答案”，把上次答案、证据缺口和可能变化条件拿出来作为提示，但不能把旧答案当事实。
+5. 再跑正式召回：vector、FTS、graph、time 四通道一起找证据。
+6. 把当前场景 anchor、高频互动记忆、旧证据 refs 和普通召回结果一起去重、排序、降权或前置。
+7. 合并候选后先经过 [Evidence Cohesion Gate（证据对齐）](./evidence_cohesion_gate.md)。它只让围绕同一个问题的证据进入 Evidence Resolution、答案 prompt 和 response；正常通过默认静默，无法安全选出主题时复用现有候选澄清，不改写或重新分类原始记忆。
+8. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；如果缺口是未来可能变化的事实，会进入 [Evidence Watch Contracts](./evidence_watch_contracts.md)，Ask response 返回 `evidenceWatch` 收据，用来说明复核状态、来源阻塞和重复动作合并边界。Search Result 的 Ask 答案区会先展示 `Ask 本轮状态`，再展示自动话题锁定、候选承接、证据守望或查证缺口回执，并在答案前显示当前返回 evidence 的来源/通道摘要，最后才展示答案正文，避免把“已锁定话题 / 已建立守望 / 看到某个来源”误读成“事实已确认或全库已覆盖”。
+9. 生成答案后，异步观察这次 Ask 是否值得写入 observation、promote 成活答案 thread，或经过权威证据门控后更新活答案 version。
 
 这意味着 Ask 的回答仍然由“本次证据”支撑；活答案 prior 只是帮助系统少走弯路。
+
+当问题命中某场会议的标题、会前目标或会后结果时，Ask 还会读取 `MeetingOutcomeBinder`。它是 Meeting Pilot 已经按 transcript、决议和行动项装订好的结构化派生证据，不是旧答案 prior，也不会因为 Ask 被读取而再次装订或写回会议。
 
 ## 与其他召回能力的边界
 
@@ -28,6 +32,18 @@ Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标
 
 Ask 与 Context Recall 共用 `MemoryContextMatchService` 做短问句话题锁定，但 Ask 会继续进入答案生成、证据缺口判断和活答案沉淀；Context Recall 更偏向“不打断地提示线索”。
 
+## 会议结果的只读引用
+
+用户问“昨天 planning 估时口径定了吗”“上次 budget owner 确认了吗”时，Ask 会在当前用户最近的 binder 中按会议标题、slot 标题和结果摘要找相关项，最多带入 3 场会议：
+
+1. binder 会作为结构化 `planner` evidence 进入既有证据对齐和答案 prompt，而不是用一段 raw transcript 代替结论。
+2. prompt 会同时保留会议总状态、每个 slot 的 `resolved / partially_resolved / unresolved / carried_over / blocked` 状态和结果摘要，并固定声明它是只读派生结果。
+3. `/ask` 与 `/ask/stream` 会返回可选 `meetingOutcomeSources`。Quick Ask 在答案下方显示 compact `结果装订回执`：会议标题、最多 5 个结果、状态和只读边界。
+4. Ask 没有 binder 写入权限，也不会调用 bind API。查看回执不会改 Calendar、Jira、RingCentral、行动项或 meeting record；要复核完整证据应回到 Meeting Pilot Panorama。
+5. 查询与任何会议标题或 slot 没有真实词项交集时，不会只因为结果很新就注入 binder，避免最近会议串入无关问题。
+
+这个回执的定位是回答来源，不是第二份会议摘要；会前目标和会后状态的生成规则分别维护在 [Today Pilot](./today_pilot.md) 与 [Meeting Pilot](./meeting_pilot.md)。
+
 Quick Ask 当前 RingCentral chat context 只是可选 hint；真实使用中用户可能只发送一句“BE 现在怎么样了？”，因此 memory service 必须能依赖近期高频、强互动、强锚点记忆先锁定话题。Ask 会从自然语言 context 里识别 `Current chat title:`、`Current page title:`、`Current conversation:`、`Group name:`、`Thread:` 等常见标签，把会话标题、页面标题和 issue key 作为当前场景锚点。客户端即使把 `Current URL:`、`Selected text:`、`Visible page text:` 放在同一行，服务端也会先切出真正的 title，避免把 URL 或选中文本拼进 topic label。锁定后的 topic frame 只负责补齐检索意图，最终事实仍必须来自 `messages_raw` / chunks / episodes 等原始证据。
 
 如果 `contextMatch` 返回 `ambiguous`，Ask 不会继续生成一个貌似确定的答案，也不会写活答案 observation/thread。返回文案会列出候选话题，并提示用户可以直接回复候选序号，或补上项目、群组、issue key；确认后才继续查证状态和证据。Quick Ask 和 Memory Exploring 的 Search Result Ask 答案区都会把这些候选渲染成按钮；Search Result 会在按钮前展示 `候选选择回执`，说明选择候选只会把短问句绑定到对应话题后继续 Ask，不会确认事实、写活答案或创建外部查证动作。界面和后续对话上下文会回显“选择话题：xxx”，避免用户回看时只看到裸数字。服务端也会读取上一轮 Ask context 里的候选列表和原始问题，把 `2` / `选 2` / `第二个` / `candidate 2` / `second one` 这类回复恢复成“原问题 + 已选话题”再召回；候选列表标题可以是中文 `候选话题：`，也可以是英文 `Candidate topics:` / `Topic candidates:`。如果调用方没有带上一轮 context，则仍需要用户补上项目、群组或 issue key。流式 Ask 也走同一边界：`/ask/stream` 会先发“需要先确认你指的是哪个话题...”状态，然后直接返回候选澄清，不再发“正在生成回答...”或 answer delta。
@@ -35,6 +51,33 @@ Quick Ask 当前 RingCentral chat context 只是可选 hint；真实使用中用
 候选确认后的下一轮 Search Result 会在答案正文前显示 `承接候选回执`：它列出原始短问句、用户选择的候选序号/话题、是否带上上一轮候选上下文，并再次说明这只是补检索锚点，不确认事实、不写活答案、不创建外部查证动作。这样用户连续追问时能看懂“这轮答案继承了什么”，而不是只看到一个裸数字或被拼接过的查询词。
 
 候选澄清只用于真正缺锚点的短指代/短状态问题。完整主题问句如果已经明确写出 subject，例如“Cursor 的成本/性价比结论是什么？这个结论大概是什么时候得出的？”，其中的“这个结论”只指代同一句里的 Cursor 结论，不应触发多话题候选澄清；Ask 会继续进入普通召回或 topic lock，并用返回 evidence 回答。
+
+## Quick Ask 本机会话续接
+
+Quick Ask 会在本机 `localStorage` 保存最近一条经过裁剪和脱敏的 `AskResumeSnapshot`，默认 TTL 为 24 小时。它只包含上一问预览、答案摘要、topic、最多 5 条 evidence refs 和最多 3 个待选候选，不保存完整 transcript、token、cookie、密钥、邮箱、电话或 URL 凭据。
+
+重新打开 Quick Ask 且当前 renderer 没有正在进行的会话时，输入框上方会自然出现续聊条，不新增独立页面：
+
+- `继续`：显示“本机恢复、未写入长期记忆”的回执；用户下一问会附带 `contextHints`。
+- `新问题`：本轮不带 `contextHints`，旧快照可留到 TTL 到期，避免一次临时切换就丢失恢复机会。
+- `丢弃`：立即删除本机快照；只清 UI 续聊状态，不删除 Memory Service 的消息、活答案或其他长期记忆。
+- 直接输入：按新问题处理，不静默猜测用户想续接。
+
+服务端不会把 `topicTitle` 拼成用户问句，而是作为独立的 `preferredTopicTitle` 交给 `MemoryContextMatchService`。只有候选标题/别名与该 topic 有语义重合，或候选标题本身带同一 issue key，才获得显式续聊优先级；仅在聚合 anchors 中碰巧包含同一 issue key 的近期 frame 不能覆盖用户选择。其余 `contextHints` 只作为带“可能过时、不得作为 evidence”标记的 disambiguation / retrieval hint；本轮仍要跑正式召回。响应会返回：
+
+```ts
+continuityReceipt?: {
+  source: 'local_ask_resume_snapshot';
+  localOnly: true;
+  usedAsHint: true;
+  reRetrieved: true;
+  detail: string;
+}
+```
+
+Quick Ask 在答案前显示该回执，说明“使用了本机续聊线索，并重新检索本轮证据；续聊快照未写入长期记忆”。原始 resume hint 不交给 `messages_raw` 写入路径；Ask 既有的 answer-memory 观察仍只基于最终问题、答案、context match 和本轮 evidence。
+
+如果最终 LLM 生成超时，确定性 fallback 会用已锁定 topic 的 label、aliases 和 source anchors 过滤本轮 `recalledItems`，而不是拿“所以现在呢”这类泛问句再次过滤并误删证据。相关 eval 的硬门槛直接检查 `contextMatch.selectedTopic.label`；候选列表或其他 evidence 中碰巧出现正确 topic，不足以通过。
 
 ## 短问句与记忆话题锁定
 
@@ -81,7 +124,8 @@ flowchart TD
     I --> J["RecallEngine 并行通道<br/>Vector / FTS / Graph / Time"]
     J --> K["scope + lifecycle 过滤<br/>去重 + MMR + salience / recency"]
     K --> L["合并 context anchors<br/>证据仍参与最终排序"]
-    L --> M["EvidenceResolutionPlanner<br/>判断证据是否足够"]
+    L --> L1["EvidenceCohesionGate<br/>只保留已对齐证据"]
+    L1 --> M["EvidenceResolutionPlanner<br/>判断证据是否足够"]
 
     M -->|本地足够| N["LLM 生成最终 answer"]
     M -->|本地不足且可查外部| O["delegate_openclaw / confirm request<br/>查证动作去重"]
@@ -103,6 +147,12 @@ flowchart TD
 | 排序治理层 | `memory_metadata`、显著性、访问强化、反馈、lifecycle 状态 | 决定哪些候选更靠前，旧记忆是否降权或归档 |
 | 外部查证层 | `proposed_actions`、OpenClaw action result、confirm requests | 本地证据不足时补查外部系统或保留待确认缺口 |
 
+### Source Memory deep 证据
+
+Ask 仍把 source-memory capsule 当外部资料证据，不把 deep memo 当 confirmed fact。linked `messages_raw` 的 `sourceMemoryDistillation` 投影只有在 `deepStatus='ready'` 且对应当前 capsule input hash 时才可用于 prompt：L1/L2 证据组装用有界 `compactMemo` 替代大段原始正文，减少 token 占用，但继续输出来源标题、source kind、URL/内部详情与“不可信来源”边界。原始正文仍保存在数据库和 evidence spans 中，没有被 memo 覆盖或删除。
+
+Context Recall 侧先做场景门控：如果查询只命中 deep 文本，而不是标题、摘要、原始 preview、anchor 或 P0 takeaway，则必须有 scene-compatible trigger card 才能进入 Ask。Ask 专用 trigger 不会因为相同关键词出现在会议场景就跨场召回。`factCandidates` 和 `openQuestions` 只能作为带来源候选进入后续证据判断，不直接写 User Profile、活答案版本或 action。
+
 ## 活答案记忆
 
 活答案记忆是 Ask 的底层准确度增强，不是新的 Ask UI。它解决的是用户反复问同一类持续状态问题时，系统不要每次都从零开始，也不要把旧答案当事实复述。
@@ -117,7 +167,7 @@ flowchart TD
 - 写 `answer_memory_versions` 前先跑 AnswerMemory AuthorityGate。它会把证据分成 `authority`、`supporting`、`derived`、`query`、`prior`：只有本轮召回到的原始消息、chunk、文档、日历等当前 `authority` 证据能驱动长期答案变化；旧 prior、用户问题、LLM 摘要和派生记忆只能辅助召回或解释。
 - 同一组 authority evidence 下，如果新答案只是同一 stance 的同义改写，返回 `priorHit` 并记录本轮复核，不写新 version。这样避免“答案 hash 变了就更新”的写放大。
 - 同一组 authority evidence 下，如果新答案把状态从 pending 翻成 ready，先返回 `wait_for_authority_source`，不让一次生成结果污染长期答案；必须出现新的 authority evidence 后才允许 `updated`。
-- Ask response 的 `answerMemory.receipt` 和 `answerMemory.authority` 会给 UI/排障一个紧凑回执：这轮是 observation、promoted、priorHit、updated 还是 skipped，本轮用了多少当前证据、旧证据只作为多少条 prior 线索、更新是被授权、被同义抑制，还是在等待新的权威来源。Search Result 的 Ask 答案区会把 AuthorityGate 结论先合并进答案前的 `Ask 本轮状态`，再在答案下方保留详细 receipt；用户不用滚动就能看出“同证据同义复核”“等待新的权威证据”“未写新版本”“已写新版本”等边界，避免把旧活答案误看成当前事实。
+- Ask response 的 `answerMemory.receipt` 和 `answerMemory.authority` 会给 UI/排障一个紧凑回执：这轮是 observation、promoted、priorHit、updated 还是 skipped，本轮用了多少当前证据、旧证据只作为多少条 prior 线索、更新是被授权、被同义抑制，还是在等待新的权威来源。Search Result 的 Ask 答案区会把 AuthorityGate 结论先合并进答案前的 `Ask 本轮状态`，再在答案下方保留详细 receipt；用户不用滚动就能看出“同证据同义复核”“等待新的权威证据”“未写新版本”“已写新版本”等边界，避免把旧活答案误看成当前事实。答案前的状态、话题锁定、候选承接、证据守望、证据来源、范围、查证/缺口等回执卡本身也会在 hover / 读屏里重复当前切片、只读和无写入/无外发边界；查看这些卡片不会重跑 Ask、重新触达权威来源、确认事实、写活答案、创建外部动作或代表用户发送消息。
 
 canonical key 不是原始短问句，而是：
 
@@ -150,7 +200,7 @@ flowchart TD
 
 ## API 与诊断字段
 
-`/ask` 保持现有 UI 行为，不新增页面、不弹卡、不改变用户看到的 Ask 展示。底层增强主要通过召回提示、证据锚定和异步活答案观察生效。
+`/ask` 不新增独立页面。Quick Ask 在原小窗内嵌入续聊条和续聊回执；Search Result Ask 保持现有展示。底层增强主要通过召回提示、证据锚定和异步活答案观察生效。
 
 Search Result 的 Ask 答案区会把 `resolutionState`、`answerMemory.receipt`、`answerMemory.authority`、`followUpActions`、`externalEvidence` 和 `missingInfo` 合并成第一行 `Ask 本轮状态`。这行在答案正文之前出现，用来先说明本轮是完整、部分、证据不足还是已转待查，当前证据和旧 prior 各有多少，以及这次展示不会自动确认结论、代表用户发消息、执行外部写入，或把缺口写成长期事实。如果 `contextMatch.state = locked`，答案前还会显示 `Ask 话题锁定回执`，让用户先看到短问句被锁到哪个 topic、依据是什么，以及该锁定只是检索锚点补全。如果命中过往活答案但本轮没有当前证据，状态栏会先显示旧答案未复核，明确旧 prior 只作召回提示，不确认当前事实、不写新版本，也不代表用户执行外部动作。如果 AuthorityGate 返回同证据同义、仅辅助证据、等待新权威证据、已建立 thread 或已写新版本，状态栏会直接说明“未写新版本 / 不能改写长期答案 / 等待权威证据 / 已写新版本”等门控结果；下面的活答案、范围、查证/缺口回执仍保留，用于看更细的证据门控和后续动作状态。
 
@@ -193,6 +243,10 @@ answerMemory?: {
   };
 }
 ```
+
+端到端评测可以显式传入 `evaluationMode: 'read_only'`。该模式仍跑 topic lock、召回、证据对齐、Evidence Resolution 和答案生成，但不会创建/执行 action、Evidence Watch 或 confirm request，不写活答案 observation/version，也不启动 Online Reflection。`npm run eval:memory-abilities` 默认使用此模式；只有显式 `--allow-actions` 才允许交互式行为。
+
+Ask response 还可带 `cohesionReceipt`。`cohesive` / `cohesive_with_background` 默认 `silent=true`，用于 trace 和 eval，不要求 UI 每轮展示；`split_required`、`insufficient_anchor`、`blocked_cross_scene` 会在答案生成前停止，复用已有候选澄清。`conflict_needs_authority` 会保留同一问题内的冲突证据交给 Authority / Evidence Watch，不随机删除其中一方。流式 `/ask/stream` 与普通 `/ask` 使用同一 Gate 和回执。
 
 当本轮问题属于“事实可能变化 / 需要未来复核 / 来源暂不可读”时，Ask response 还会带可选 `evidenceWatch`：
 
@@ -238,6 +292,18 @@ evidenceWatch?: {
 - 2026-07-09 检查补充：Slack AI search answers 和 Notion Enterprise Search 都把 citations/source trace 放在答案附近；IBM CHI 2025 RAG trust/transparency 研究也提示，单独的 confidence 指标不足以建立信任，source transparency 与 user control 更关键。Personal AI 的 Ask 因此在答案前增加 `Ask 证据来源回执`，优先暴露当前 evidence 切片的来源/通道，同时明确它不是全库覆盖或事实确认。
 - 2026-07-12 检查补充：活答案命中或复核时，Search Result 的 `Ask 本轮状态` 和活答案回执会显示上次复核与下次复核/已到期时间基准。旧 prior 仍只作召回提示；时间基准只说明长期答案何时验证过、何时该再复核，不会自动确认事实、写新版本或执行外部动作。2026-07-14 补充：活答案详细回执卡本身也通过 hover / 读屏说明本轮证据、旧 prior、复核时间和 AuthorityGate 结果，并明确查看卡片不会重新确认事实、再次写版本、创建查证动作或外部写入。
 - 2026-07-14 检查补充：OpenAI Memory Sources、Slack AI answers 和 Notion Enterprise Search 都把“哪些来源影响了回答”放在答案附近，Claude chat search 会把历史聊天检索显式成 tool call；STALE 论文也说明长期记忆的关键风险不是检索不到旧信息，而是检索到新证据后仍接受旧状态。Personal AI 的 Ask 因此继续把旧活答案当作召回提示，同时把当前证据、旧 prior、复核时间和写入门控压到答案旁边的可见/可读回执里。
+- 2026-07-15 检查补充：Slack AI / Notion Enterprise Search 的 answers/citations、IBM CHI 2025 RAG trust/transparency 研究，以及 Question Rewriting / CONQRR 这类 conversational retrieval 研究都支持把来源、范围、上下文补全和可控边界放在答案附近。Personal AI 的 Ask 因此不新增管理页，而是让 Search Result 里已有的 Ask 回执卡通过 hover / 读屏直接说明当前 response 切片、候选承接、守望去重、查证缺口和无副作用边界。
+
+## 变化脉络消费
+
+Ask 会在普通召回 context 后附加 [变化脉络](./change_memory_ledger.md) 证据，用来回答“现在、之前、最初、改过、回退、为什么变化”等时间状态问题。
+
+- `confirmed_current` 可作为当前值，但答案仍要保留来源和时间。
+- `last_observed` 只能称为最后观测，不能写成权威系统已确认当前。
+- `conflicted` 固定输出未知当前值，并列出冲突来源；不能按事件写入顺序任选候选。
+- 只有事件自身保存了 `reason` 才能解释原因。
+- 用户前提与事件链冲突时，应抵抗错误前提并引用时间/来源。
+- 修改 Ask 的变化 prompt 时，除 `change-memory-ledger` suite 外还必须运行 `eval:memory-abilities`。
 
 ## 验证重点
 
@@ -248,7 +314,7 @@ Ask 相关改动应优先覆盖这些场景：
 - 第三次再问：prior 命中；如果只是同一组当前证据下的同义改写，应返回 `answerMemory.priorHit` + `authority.decision = same_meaning_no_change`，不新增 version。无论是 `priorHit` 还是 `updated`，recall 仍执行，答案必须包含最新 evidence，不只复述旧答案。
 - 如果同一组当前证据下答案 stance 翻转，例如从“还没有 ready”变成“已经 ready”，应返回 `authority.decision = wait_for_authority_source`，旧长期答案保持不变；只有出现新的 authority evidence 才返回 `updated` 并刷新 version。
 - 活答案 prior / promote / update 回执应携带 `lastVerifiedAt` 和 `staleAfter`；Search Result 首屏应把它们显示成上次复核与下次复核/复核已到期指标，活答案详细回执卡也应通过 hover / 读屏重复这些时间基准和无副作用边界，方便判断旧答案时效。
-- Search Result Ask 答案区应展示 `answerMemory.receipt` 和 `answerMemory.authority`，能看出本轮当前证据数、旧证据数、查证动作数、权威证据门控和是否未写新版本；没有当前证据时应在第一行状态栏和活答案回执里说明“旧答案未复核 / 活答案未复核”，同证据同义复核时也应在答案前状态栏说明“未写新版本”。
+- Search Result Ask 答案区应展示 `answerMemory.receipt` 和 `answerMemory.authority`，能看出本轮当前证据数、旧证据数、查证动作数、权威证据门控和是否未写新版本；没有当前证据时应在第一行状态栏和活答案回执里说明“旧答案未复核 / 活答案未复核”，同证据同义复核时也应在答案前状态栏说明“未写新版本”。答案前各回执卡的 `title` / `aria-label` 应保留稳定卡片名、关键指标和“查看卡片不会重新读取、确认事实、写活答案、创建/执行动作或外发”的边界。
 - Search Result Ask 答案区应先展示 `Ask 本轮状态`，再展示答案正文；当状态是 partial / insufficient / deferred、存在查证动作、缺口或仅辅助证据时，第一行必须说明回答只按本轮证据和查证状态展示，不会自动确认结论、代表用户发消息、执行外部写入或把缺口写成长期事实。
 - Search Result Ask 答案区有返回 evidence 时，应在答案正文前展示 `Ask 证据来源回执`，列出当前返回证据数、来源/标题、类型和召回通道，并说明它只是当前 response 的可见证据切片，不代表全库覆盖、不确认事实、不触发写入或外部动作。
 - `contextMatch.locked`：Search Result Ask 答案区应在答案正文前展示 `Ask 话题锁定回执`，列出锁定 topic、主要原因、锚点/角色词/来源数，并说明这只是补检索锚点，不确认事实、不写活答案、不创建外部查证动作。
@@ -273,4 +339,5 @@ npm --prefix memory-service test -- --run src/__tests__/answerMemoryService.test
 node tools/verify-ask-clarification-e2e.mjs
 npm run eval:run -- --suite ask-context-gap --no-repair
 npm run eval:run -- --suite answer-memory-tracker --no-repair
+npm run eval:run -- --suite evidence-cohesion-gate --no-repair
 ```

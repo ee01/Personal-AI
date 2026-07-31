@@ -15,7 +15,13 @@
         </span>
         <span class="header-meta">{{ generatedAtText }}</span>
         <div class="memory-action-row">
-          <button class="btn" type="button" @click="openImportDrawer">
+          <button
+            class="btn"
+            type="button"
+            :title="smartImportEntryActionBoundary"
+            :aria-label="smartImportEntryActionBoundary"
+            @click="openImportDrawer"
+          >
             录入
           </button>
           <button
@@ -658,7 +664,7 @@
       v-if="importDrawerOpen"
       class="drawer-backdrop"
       aria-hidden="true"
-      @click="closeImportDrawer"
+      @click="handleImportBackdropClick"
     ></div>
     <aside
       v-if="importDrawerOpen"
@@ -671,7 +677,13 @@
           <h2>记忆录入</h2>
           <p>粘贴、上传文档或 zip，先 dry-run 识别类型；Personal AI 备份 zip 会切到恢复模式。</p>
         </div>
-        <button class="icon-btn" type="button" aria-label="关闭" @click="closeImportDrawer">
+        <button
+          class="icon-btn"
+          type="button"
+          :title="importCloseActionBoundary"
+          :aria-label="importCloseActionBoundary"
+          @click="closeImportDrawer"
+        >
           ×
         </button>
       </header>
@@ -1150,7 +1162,15 @@
       </div>
 
       <footer class="drawer-footer">
-        <button class="btn" type="button" @click="closeImportDrawer">取消</button>
+        <button
+          class="btn"
+          type="button"
+          :title="importCloseActionBoundary"
+          :aria-label="importCloseActionBoundary"
+          @click="closeImportDrawer"
+        >
+          取消
+        </button>
         <button
           class="btn primary"
           type="button"
@@ -1741,6 +1761,11 @@ const showBackupRestoreTargetReceipt = computed(
   () => importMode.value === 'backup' || isBackupRestoreCandidate.value,
 );
 
+const smartImportEntryActionBoundary = computed(
+  () =>
+    '录入：只打开本页记忆录入抽屉；不会读取本机文件、创建 import batch、messages、chunks、恢复备份、同步外部平台或外发内容。后续仍需选择来源并先 dry-run，确认后才可能写入。',
+);
+
 const smartImportScopeReceiptItems = computed(() => {
   const sourceLabel =
     importMode.value === 'paste'
@@ -1806,6 +1831,29 @@ const importTextInputBoundary = computed(() => {
     return `粘贴文本：当前录入请求处理中；本次请求仍使用点击时的文本快照和 ${importScope.value} 范围，完成前不能编辑，避免旧结果挂到新文本。`;
   }
   return '粘贴文本：修改内容会清空本次 dry-run、提交中和完成回执；新文本必须重新 dry-run，不会自动写入或外发。';
+});
+
+const busyImportCloseStatusText = computed(() => {
+  if (smartImportCommitPending.value) {
+    return `当前正在提交录入到 ${importScope.value} manual shadow memory；关闭或取消不会撤回已发出的请求。为避免误读为已取消，抽屉会保持打开直到服务端返回结果。`;
+  }
+  if (isBackupRestoreCandidate.value) {
+    return '当前备份恢复 dry-run 或写入请求处理中；关闭或取消不会撤回已发出的请求。为避免误读为已取消，抽屉会保持打开直到服务端返回结果。';
+  }
+  return `当前 dry-run 请求处理中；关闭或取消不会撤回已发出的请求。为避免把等待状态误读成取消，抽屉会保持打开直到服务端返回结果。`;
+});
+
+const importCloseActionBoundary = computed(() => {
+  if (importBusy.value) {
+    return `关闭/取消：${busyImportCloseStatusText.value}`;
+  }
+  if (smartImportReceipt.value) {
+    return '关闭/取消：只关闭本地录入抽屉；不会撤销已写入的 manual shadow memory、删除 import batch、重新同步外部平台或外发内容。';
+  }
+  if (backupRestoreReceipt.value) {
+    return '关闭/取消：只关闭本地录入抽屉；不会撤销已完成的备份恢复，也不会重新恢复、同步外部平台或外发内容。';
+  }
+  return '关闭/取消：只关闭本地录入抽屉并保留 Coverage 主视图；不会提交 dry-run、写入 manual shadow memory、恢复备份、同步外部平台或外发内容。';
 });
 
 const smartImportReceiptTitle = computed(() => {
@@ -3564,7 +3612,15 @@ function openImportDrawer() {
 }
 
 function closeImportDrawer() {
+  if (importBusy.value) {
+    importStatus.value = busyImportCloseStatusText.value;
+    return;
+  }
   importDrawerOpen.value = false;
+}
+
+function handleImportBackdropClick() {
+  closeImportDrawer();
 }
 
 function resetImportInspection() {

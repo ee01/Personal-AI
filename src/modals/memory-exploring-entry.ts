@@ -14,6 +14,7 @@ import RelationshipRadarPage from './components/RelationshipRadarPage.vue';
 import SearchResultPage from './components/SearchResultPage.vue';
 import PlaceholderPage from './components/PlaceholderPage.vue';
 import FollowThreads from './components/FollowThreads.vue';
+import MemoryEntryRulesPage from './components/MemoryEntryRulesPage.vue';
 import DecisionCenter from './components/DecisionCenter.vue';
 import DreamInsights from './components/DreamInsights.vue';
 import ReflectionThreads from './components/ReflectionThreads.vue';
@@ -36,6 +37,11 @@ const routes = [
   { path: '/meetings', name: 'MeetingHistory', component: MeetingHistoryPage },
   { path: '/user-profile', name: 'UserProfile', component: UserProfilePage },
   { path: '/follow-threads', name: 'FollowThreads', component: FollowThreads },
+  {
+    path: '/memory-entry-rules',
+    name: 'MemoryEntryRules',
+    component: MemoryEntryRulesPage,
+  },
   { path: '/decisions', name: 'Decisions', component: DecisionCenter },
   {
     path: '/reflection-threads',

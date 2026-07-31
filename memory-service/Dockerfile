@@ -6,6 +6,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 RUN mkdir -p dist/storage/migrations && cp -R src/storage/migrations/. dist/storage/migrations/
+RUN mkdir -p dist/analytics && cp src/analytics/schema.sql dist/analytics/schema.sql
 RUN npm prune --omit=dev --no-audit --no-fund
 
 FROM node:20-slim

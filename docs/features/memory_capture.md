@@ -1,6 +1,6 @@
 # Memory Capture / 记忆捕捉
 
-_最后更新: 2026-07-14_
+_最后更新: 2026-07-17_
 
 ## 是什么
 
@@ -20,7 +20,7 @@ Memory Capture 是 Personal AI 的低打扰资料入库层。它负责把用户�
 - 这个视觉契约不改变各入口原有的点击行为：选区与整页入口仍先打开复核面板、确认前不写入，视觉证据仍沿用既有的保存与预览链路。保存对象、触发依据、写入范围和未写入边界等详细说明统一放在复核面板及后续 toast / 详情回执中，不依靠加长按钮表达。
 - 这是该入口的稳定 UI contract；后续实现、重构和验证都应守住这三个可见元素，不以增加“信任说明”为理由把按钮改成长文案 chip。
 
-当前 P0 已落地的是 **选中文字保存**、**整页资料保存**、**Jira owner comment 自动捕捉** 和 **source memory 召回**：
+当前已落地的是 **选中文字保存**、**整页资料保存**、**Jira owner comment 自动捕捉**、**双层资料蒸馏** 和 **source memory 召回**：
 
 - 用户在非敏感网页选中文字。
 - 内容脚本先用现有 Selection Memory Search 查关联记忆，同时调用 Memory Capture 候选评分。Memory Capture 有独立的选区信息量判断，不再被 Memory Lens 的只读展示门槛拦掉。
@@ -31,10 +31,10 @@ Memory Capture 是 Personal AI 的低打扰资料入库层。它负责把用户�
 - 页面中识别到图表、表格、canvas、SVG、figure 或高信息量 DOM 区域时，不新增独立“视觉记忆”入口，仍复用当前网页右侧 `记住` 按钮；视觉证据可以用轻微不同的样式区分，但按钮仍只显示前置 `+` icon、`记住` 和末尾 Personal AI icon，不在 hover / focus 时追加“视觉证据”等文字。点击后先保存为 `sourceKind='visual_memory'` 的 source-memory capsule，再在成功提示里提供 `预览`；用户打开预览后可以在同一右侧窗体查看已入库信息并补备注。表格会在 `metadata.visualMemory.table` 中保存 headers、rows、rowCount、columnCount 和 truncated 状态；SVG 会在安全净化后保存 `metadata.visualMemory.svg.markup` 作为图形快照；source-memory 详情页负责按结构化表格或 SVG 预览展示。
 - 当整页候选达到更高置信度时会自动入库：例如复制页面内容且阅读到较深位置、浏览时间较久且阅读较深、或浏览时间非常久。自动入库不弹确认框；保存请求发出后先显示 `页面资料入库提交中`，说明本机请求尚未确认创建 capsule 或写入 `web` 检索信号，并带上本次页面快照与自动触发依据。成功后右上角显示 5 秒轻提示，默认只显示 Personal AI logo 和 `已存入记忆`，hover / focus 后展开显示原因、页面快照、保存范围、`查看` 和 `撤销` 按钮，长回执会换行展示而不是被截断。`查看` 会打开 source-memory 详情页，让用户先核对系统保存了什么；`撤销` 成功后会展示资料召回已关闭的 `writeReceipt`，说明关联 `web` 检索信号已移除，后续 Ask、Memory Lens 和时间轴不再使用这条资料。用户 hover / focus 在提示上时暂停消失计时，移开或失焦后重新开始 5 秒倒计时。如果自动写入失败，系统会显示带页面快照的 `页面资料未写入` 回执，明确没有创建资料记忆或网页检索信号，右侧入口仍可重试。
 - 选区、整页或视觉证据的手动保存如果失败，包括保存前页面 / 选区上下文已经变化，面板 / toast 会明确说本次没有创建资料记忆，也没有写入 `web` 或视觉证据检索信号；原入口仍保留，用户可以重新选择、直接重试或稍后再保存。
-- 保存、详情、备注和撤销 API 都会随 capsule 返回 `writeReceipt`。它明确区分：资料 capsule 已写入且关联 `web` / 视觉检索信号已启用；资料仍保存但关联检索信号缺失；或资料已撤销、关联信号已移除且不会再进入 Ask、Memory Lens 或时间轴召回。前端成功 toast 优先展示这份回执，而不是只说“已保存”。capsule 还会返回 `actionReceipt`，从最近一次用户可感知事件生成，说明本次是新保存、重复命中、重复保存刷新备注、补备注、撤销，还是撤销后重新保存；详情页会显示这条 `最近操作回执`，避免用户离开 toast 后不知道最后一次动作到底有没有新建或更新资料。创建保存被阻断或校验失败时，API 返回 `noWriteReceipt`，说明没有创建 source-memory capsule、没有写入 `web` / 视觉检索信号，也没有外发、插入或同步。
+- 保存、详情、备注和撤销 API 都会随 capsule 返回 `writeReceipt`。它明确区分：资料 capsule 已写入且关联 `web` / 视觉检索信号已启用；资料仍保存但关联检索信号缺失；或资料已撤销、关联信号已移除且不会再进入 Ask、Memory Lens 或时间轴召回。前端成功 toast 优先展示这份回执，而不是只说“已保存”。capsule 还会返回 `actionReceipt`，从最近一次用户可感知事件生成，说明本次是新保存、重复命中、重复保存刷新备注、补备注、撤销，还是撤销后重新保存；详情页会显示这条 `最近操作回执`，避免用户离开 toast 后不知道最后一次动作到底有没有新建或更新资料。详情页的 `打开来源`、`查看关联记忆`、补备注提交 / 恢复和撤销按钮也会在 hover / 读屏前置说明它们只是新标签复核、只读跳转、本机草稿恢复、服务端待确认刷新，或移除关联召回信号；不会自动确认事实、写画像 / 任务、插入输入框、发送内容或同步外部系统。创建保存被阻断或校验失败时，API 返回 `noWriteReceipt`，说明没有创建 source-memory capsule、没有写入 `web` / 视觉检索信号，也没有外发、插入或同步。
 - 候选评分和保存 API 会先阻断带凭据的来源 URL，包括 userinfo、`token` / `session` / `password` / `passcode`、OAuth code、signed URL signature 等 query 或 hash 参数；这类输入不会创建 source-memory capsule、不会写 `web` 检索信号，也不会把原始 URL 写入 daily/source markdown snapshot。详情页和召回卡仍保留来源链接安全隐藏逻辑，用来防御历史数据或外部返回的敏感来源链接。
 - 资料详情读取失败时，详情页会显示 `详情读取失败回执`：本次只是详情读取失败，不代表创建、撤销、更新备注、写入 `web` 检索信号或同步外部系统；失败态只保留重试和返回入口，不显示打开来源、查看关联记忆或撤销按钮。
-- 保存、重复保存刷新备注、补备注后，后端会在同一个 source-memory capsule 上生成 P0 蒸馏层：`metadata.distillation` 包含 `status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt` 和 `inputHash`；已有 draft takeaways 会升级为 ready / partial / blocked，trigger matcher 会补 scene anchors、展示预算和 suppress rules，`source_memory_links` 会写 source host / entity hint 的低副作用连接，`source_memory_events` 会记录 `distillation_started` 与 `distillation_ready|partial|blocked`。资料详情页可直接补备注并刷新这份 source pack；提交中会先显示备注、关联 `web` 检索信号和蒸馏尚未确认的回执。这一步只整理资料证据，不自动写 confirmed profile、创建任务、创建 skill 或同步外部系统。
+- 保存、重复保存刷新备注、补备注后，后端会在同一个 source-memory capsule 上同步生成 P0 蒸馏层并排队异步 deep：P0 的 `metadata.distillation` 包含 `status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt` 和 `inputHash`；deep 再生成 evidence spans、scene cards 和来源候选。资料详情页可直接补备注并刷新这份 source pack；提交中会先显示备注、关联 `web` 检索信号和蒸馏尚未确认的回执。它不自动写 confirmed profile、创建任务、激活/发布 Skill 或同步外部系统；重复高置信 skill seed 最多只生成未激活、无通知的 Foundry suggestion。
 - 已有 Jira owner-authored learning 信号会继续写入原 ingest，同时自动生成 `jira_comment` capsule，作为用户对外输入的资料记忆。
 - 后端同时写入 `messages_raw.source_type='web'` 和 `chunks.source_type='web'`，让 Coverage Map、搜索和后续召回能看见这条网页记忆信号。
 - `/context-recall` 支持 `sourceTypes: ['source_memory']`，返回专门的 `source_memory` 资料记忆卡。卡片会先说明这是用户已保存的资料证据，并展示资料类型（整页、选区、视觉证据等）和保存方式（主动、建议、自动）；如果 capsule 有 ready distillation，卡片优先展示 `oneLineCue` 和“蒸馏提示”，否则退回命中的关键词或来源标题。Expanded Card 会显示 `资料回执`，集中说明资料类型 / 保存方式、当前蒸馏状态、资料详情复核入口、原始来源是否安全可打开，以及本卡只读、不新增或撤销资料记忆、不写画像 / 任务、不插入或发送的边界。点击 `在记忆中查看` 进入 Memory Exploring 的 capsule 详情页查看保存原因、证据锚点、蒸馏要点、未来触发线索和关联 web 记忆信号；这个详情按钮和安全原始来源链接的 hover / 读屏文案都会重复说明本次点击只是新标签复核，不会新增/撤销资料记忆、写画像/任务、插入输入框、发送内容或确认事实。卡片和资料详情页只渲染安全的 `http(s)` 来源链接；如果保存来源带账号密码、OAuth code、token、session 等敏感 URL 参数，原始来源会显示为已隐藏，不提供 `打开来源`，但仍保留资料详情复核入口。资料详情页会展示召回边界：saved capsule 有真实 linked `web` 记忆信号时才显示 `查看关联记忆`；dismissed capsule 会说明关联 `web` 信号已移除，后续 Ask、Memory Lens 和时间轴召回不再使用这条资料。
@@ -146,15 +146,40 @@ Memory Capture 不负责：
 
 Source Memory Distiller 是 Memory Capture 的入库后 source-specific distillation 层。它回答的是“这份已保存资料以后应该怎样被 Personal AI 消费”，而不是“这份资料要不要入库”。入库时仍先写 capsule、anchor、summary、draft takeaways、draft trigger 和 linked `web` signal；蒸馏层只在 capsule 已保存后，把同一份资料整理成可预算、可复核、带来源的 context unit。
 
-当前 P0 使用 deterministic distillation：保存、重复保存刷新备注、补备注后，后端会基于 capsule 原文、摘要、备注、证据锚点和 entity hints 生成 `oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability` 和 `downstreamUse`，并用 `inputHash` 避免同一输入重复蒸馏。source-memory 详情页的补备注入口会复用同一 API，提交中先说明当前页面仍是旧快照，成功后用后端 `actionReceipt` 和刷新后的蒸馏状态替换，失败时说明没有确认更新备注、刷新检索信号或重新生成蒸馏。后续真正的后台 worker、LLM 深蒸馏、open questions、skill candidate 和跨 capsule 聚合仍属于下一阶段。
+当前采用同步 P0 + 异步 deep 两层。保存、重复保存刷新备注、补备注时，后端先基于 capsule 原文、摘要、备注、证据锚点和 entity hints 同步生成 deterministic `oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability` 和 `downstreamUse`，并用 `inputHash` 避免同一输入重复计算。这个 P0 不调用 LLM，保存成功即可召回；deep 排队、重试、阻断或最终失败都不能覆盖或降级它。source-memory 详情页的补备注入口复用同一 API，提交中先说明当前页面仍是旧快照，成功后用后端 `actionReceipt` 和新 input hash 替换，失败时说明没有确认更新备注、刷新检索信号或重新生成蒸馏。
+
+异步 deep 层由 `SourceMemoryDistillationWorker` 处理，队列按 `capsule_id + input_hash` 幂等，状态为 `queued / running / retry_wait / succeeded / blocked / failed`，通过 lease 防止重复领取，最多尝试 3 次并有界退避。Heartbeat 每轮最多处理 2 条，单条 worker 错误不会阻断 Reflection planner 或后续 heartbeat action。`metadata.distillation.deep.status` 使用面向消费方的 `queued / running / retry_wait / ready / blocked / failed`；只有 deep input hash 与当前 P0 input hash 一致时，详情页、Recall 和 Storyline 才把它视为当前产物。
+
+当补备注或重复保存使 P0 `inputHash` 变化时，可读 deep pack 会立即重置为新 hash 的 `queued` 空候选，而不是把上一版 memo、span 或 candidate 伪装成当前结果。规范化旧行即使暂时仍在数据库中，也必须通过当前 job hash 和 `succeeded` 状态门控；Skill seed 聚合和 Storyline adapter 都不能消费 pending/旧 hash 产物。新 deep 失败时继续使用 P0，不回退显示旧 deep。
+
+### Evidence-first 深度产物
+
+worker 先确定性构造最多 18 条 evidence spans，再把这些 span 作为不可信数据交给 LLM。来源包括已有 anchors、视觉表格的逐行 `visual_table_row`（保留表头和行 locator）以及已保存正文段落。模型只能引用给定 span ID；任一 takeaway、trigger、fact/open-question/skill/storyline seed 没有当前 input hash 下的有效引用，就会在落库前被丢弃。source 文本里的指令永远只是数据，不会改变 system prompt 或 worker policy。
+
+deep pack 当前可包含：
+
+- `oneLineCue / compactMemo / fullMemo`，供不同展示预算使用。
+- ready deep takeaways 和带 `sceneType / keywords / showAs / budget` 的 trigger cards。
+- `factCandidates`：只代表来源陈述，authority 为 `source_only` 或 `needs_confirmation`，不写 confirmed profile。
+- `openQuestions`：默认 `none` 或只在相关/阻塞场景升级，不新建每日人工审查队列。
+- `skillSeeds`：单条来源只保留 candidate；同一 seed 在至少 2 条独立 capsule 中重复且置信度至少 0.82 时，才生成 `notify=false`、未激活的 Skill Foundry suggestion。
+- `storylineSeeds`：可打开 `#/storylines/draft?source=source_memory_seed&capsuleId=...&seedId=...`，Draft API 重新校验当前 hash、artifact 和 spans，只生成手动复制草稿，不写回 Slides、Docs、RingCentral 或消息。
+
+### 阻断、聚类与下游消费
+
+`private`、`needs_review`、dismissed/非 saved、缺少证据或 injection flagged 的 capsule 会在模型调用前进入 `blocked`。阻断只影响 deep；资料原文、P0 与复核入口保留。模型/网络错误进入 `retry_wait`，达到上限后为 `failed`，错误摘要、尝试次数和下次重试时间进入 job/metadata，但不把失败原文复制进 Recall projection。
+
+跨 capsule 聚合只使用 canonical URL、明确 Jira key 或显式 entity hint 等强锚点。相同来源族写 `distilled_related_source` 派生链接和 cluster receipt，不合并、不删除、不改写任何 capsule 原文。Context Recall 仍执行当前 URL 排除、Jira issue 精确锚点、Cue Compiler、Outcome Loop 与 Evidence Cohesion Gate；deep-only 关键词只有 scene-compatible trigger card 命中时才可召回，P0/base 命中不依赖 deep。Ask 的 L1/L2 证据组装在 deep 当前且 ready 时使用有界 compact memo，但保留来源标题、URL/内部详情和 untrusted-source provenance，原始消息内容仍在数据库中。
+
+资料详情页在 P0 回执下展示 deep 状态、尝试/重试时间、span 数、来源簇、full memo、trigger/fact/question/skill/storyline candidates 和 evidence spans。`queued / running / retry_wait` 时每 5 秒只读刷新当前 capsule；读取失败保留上一版快照。所有候选旁直接说明不会确认画像、执行动作、自动发布 Skill 或自动写回 Storyline。
 
 与其他记忆整理层的边界：
 
 - **不是入库路径**：它不决定是否保存网页、选区、视觉证据或 owner-authored comment；这些仍由候选评分、用户确认和 Memory Capture 写入链路决定。
-- **不是 Self Reflection**：它只围绕单个 source-memory capsule 生成 source pack，不围绕长期主题推理，不产出动作、确认请求或 OpenClaw delegation。Reflection 可以消费 ready source pack 作为证据，再决定是否形成开放问题或下一步。
+- **不是 Self Reflection**：它围绕单个 source-memory capsule 做 source-local 抽取，并只用强来源锚点建立来源族；不围绕用户长期主题作判断，不产出动作、确认请求或 OpenClaw delegation。Reflection 可以消费 ready source pack、fact candidate 或 open question 作为带来源证据，再通过自己的 authority/action gate 决定是否形成长期解释或下一步。
 - **不是 Dream Replay**：它不做全局联想、不生成低置信关系或梦境洞察。Dream 可以读取更干净的 source evidence，但 dream 结果仍按生成式低置信线索处理。
 - **不是画像写入器**：ready takeaway 仍是 source-local evidence，不等于 confirmed profile、偏好、事实或技能。是否升格到 User Profile、Rehearsal、Skill Foundry 或外部动作，必须经过对应能力自己的 gate。
-- **不是用户审查队列**：`partial` / `blocked` 只是这条资料的蒸馏状态，默认不创建新的 review item；详情页和召回卡只展示边界和复核入口。
+- **不是用户审查队列**：P0 的 `partial / blocked` 和 deep 的 `retry_wait / blocked / failed` 只是该资料的处理状态，默认不创建新的 review item；详情页和召回卡只展示边界和复核入口。
 
 ## 数据模型
 
@@ -162,15 +187,28 @@ Source Memory Distiller 是 Memory Capture 的入库后 source-specific distilla
 | ------------------------- | ----------------------------------------------------------------------- |
 | `source_memory_capsules`  | 资料记忆主对象，保存来源、标题、fingerprint、状态、摘要、capture reason |
 | `source_memory_anchors`   | 原文证据锚点，当前 P0 是 text selection/page excerpt                    |
-| `source_memory_takeaways` | 从证据中提取的 takeaways；保存时先 draft，蒸馏后标为 ready / partial / blocked，不等于 confirmed fact |
-| `source_memory_triggers`  | 未来触发线索，例如 host、实体、标题搜索；蒸馏后 matcher 会补 scene anchors、展示预算和 suppress rules |
-| `source_memory_links`     | 用于连接 source host、entity hint、project/message/meeting/skill 等对象，P0 只写低副作用 `distilled_anchor` |
+| `source_memory_takeaways` | P0 takeaway 与 `origin='deep_distillation'` 的 grounded takeaway；`distillation_input_hash` 绑定来源快照，不等于 confirmed fact |
+| `source_memory_triggers`  | P0 matcher 与 deep scene card；deep matcher 保存 scene、关键词、展示预算、置信度和 evidence span IDs |
+| `source_memory_distillation_jobs` | restart-safe deep 队列、lease、attempt、退避、terminal diagnostics；每个 capsule 只有一个当前 job |
+| `source_memory_evidence_spans` | deep 前确定性切出的 anchor、视觉表格行和正文 span，按 capsule/input hash/index 唯一 |
+| `source_memory_distilled_artifacts` | fact/open-question/skill/storyline candidates，保存 evidence span IDs 与 materialization 状态 |
+| `source_memory_links`     | host/entity 的低副作用 `distilled_anchor`，以及强来源锚点生成的 `distilled_related_source`；不代表合并原文 |
 | `source_memory_events`    | 保存、重复保存、dismiss、distillation_started / ready / partial / blocked 等行为事件，可供无感校准层消费 |
 | `messages_raw` / `chunks` | 兼容现有 Memory Service 的 `web` 来源检索和覆盖信号                     |
 
 DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 
-`source_memory_capsules.metadata_json.distillation` 是蒸馏层真源。P0 字段包括：`status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability`、`downstreamUse`、`generatedAt`、`sourceAsOf`、`inputHash`、`evidenceAnchorIds`、`takeawayCount` 和 `triggerCount`。资料详情页会把这份 `policyReceipt` 作为首屏 `资料蒸馏回执` 展示：用户能看到 ready / partial / blocked 状态、证据数量、一行提示、compact memo、来源可信度、蒸馏生成时间、来源快照时间、短输入指纹、允许作为哪些下游证据，以及不会自动写画像、建任务或外部同步。
+`source_memory_capsules.metadata_json.distillation` 是可读 pack 真源。P0 字段包括：`status`、`schemaVersion`、`oneLineCue`、`compactMemo`、`policyReceipt`、`sourceReliability`、`downstreamUse`、`generatedAt`、`sourceAsOf`、`inputHash`、`evidenceAnchorIds`、`takeawayCount` 和 `triggerCount`。`distillation.deep` 保存当前 job 状态或 ready pack：`inputHash`、memos、takeaways、trigger cards、各类 candidates/seeds、evidence spans、source reliability、policy receipt、attempts、generated/next-attempt time 和 cluster。规范化表是查询/聚合真源；metadata 是详情页和 capsule API 的有界可读投影。linked `messages_raw.metadata_json.sourceMemoryDistillation` 只镜像状态、cue/memo、span/count/cluster 等 Recall 所需摘要，不复制完整模型响应。
+
+## 变化脉络集成
+
+Source Memory 保存、重复保存、补备注或撤销时会同步刷新 [Change Memory Ledger / 变化脉络](./change_memory_ledger.md)。这是资料蒸馏之外的结构化状态层：蒸馏负责 cue/memo/trigger，变化脉络只记录有稳定对象、明确前后值、时间和来源的状态事件。
+
+- `capsule.changeLedger` 始终返回提取状态；没有事件时也区分 `no_change`、`blocked` 和 `not_run`。
+- 保存或更新同一 capsule 会按 source reference 重算，不重复追加同一批事件。
+- 详情页在蒸馏回执之后显示当前投影和可展开历史。
+- 撤销 capsule 后，事件仍供详情审计，但变为 `historical_only`，不再进入 Context Recall 当前投影。
+- 该能力不会把资料里的模糊文字猜成事实，也不会从 Source Memory 自动更新 Jira、Goal 或其他外部对象。
 
 ## API
 
@@ -183,25 +221,39 @@ DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 | `POST /api/v1/source-memory/capsules/:id/note`    | 保存后补充或更新备注，并刷新关联 `web` 记忆信号   |
 | `POST /api/v1/source-memory/capsules/:id/dismiss` | 标记资料记忆为 dismissed                          |
 
-`capsule.writeReceipt` 是前端展示保存结果的统一回执：`saved_with_recall_signal` 表示 capsule 和关联检索/召回信号都可用；`saved_without_recall_signal` 表示 capsule 仍在但 linked `messages_raw` 信号缺失，后续召回不会依赖这条缺失信号；`dismissed_no_recall` 表示撤销后只保留复核记录，关联 `web` 检索信号已移除。回执还会带资料类型、保存方式、范围和检索信号状态，并声明不会自动外发、插入输入框或同步到其他平台。`capsule.actionReceipt` 则只描述最近一次用户可感知操作，跳过 `distillation_*` 这类内部事件；它用于解释“这次是否新建、是否只是重复命中、是否刷新备注、是否撤销/重存”。撤销 API 是幂等的：如果 capsule 已经是 dismissed，再次撤销只返回当前已关闭召回状态，不追加第二条撤销事件、不刷新 `updated_at`，也不会把重试误报成新的资料变更。`capsule.metadata.distillation.policyReceipt` 说明本条资料的蒸馏状态和下游边界。`POST /source-memory/capsules` 如果因为敏感来源、签名 URL、低信息量文本等原因拒绝保存，会在错误响应里带 `noWriteReceipt`：`blocked_no_write` 表示安全门禁阻断，`invalid_no_write` 表示没有达到创建门槛；两者都明确 capsule 未创建、关联检索信号未写入、不会外发 / 插入 / 同步。
+`capsule.writeReceipt` 是前端展示保存结果的统一回执：`saved_with_recall_signal` 表示 capsule 和关联检索/召回信号都可用；`saved_without_recall_signal` 表示 capsule 仍在但 linked `messages_raw` 信号缺失，后续召回不会依赖这条缺失信号；`dismissed_no_recall` 表示撤销后只保留复核记录，关联 `web` 检索信号已移除。回执还会带资料类型、保存方式、范围和检索信号状态，并声明不会自动外发、插入输入框或同步到其他平台。`capsule.actionReceipt` 则只描述最近一次用户可感知操作，跳过 `distillation_*` 这类内部事件；它用于解释“这次是否新建、是否只是重复命中、是否刷新备注、是否撤销/重存”。撤销 API 是幂等的：如果 capsule 已经是 dismissed，再次撤销只返回当前已关闭召回状态，不追加第二条撤销事件、不刷新 `updated_at`，也不会把重试误报成新的资料变更。`capsule.metadata.distillation.policyReceipt` 说明本条资料的蒸馏状态和下游边界。资料详情页的 API-backed 控件把这些语义下沉到按钮本身：打开来源只新标签核对安全来源，查看关联记忆只读跳到已返回的 `web` 信号，补备注提交先进入待确认刷新，恢复备注只改本机输入框，撤销才会移除关联召回信号。`POST /source-memory/capsules` 如果因为敏感来源、签名 URL、低信息量文本等原因拒绝保存，会在错误响应里带 `noWriteReceipt`：`blocked_no_write` 表示安全门禁阻断，`invalid_no_write` 表示没有达到创建门槛；两者都明确 capsule 未创建、关联检索信号未写入、不会外发 / 插入 / 同步。
 
 ## 代码入口
 
 - Backend service: `memory-service/src/core/SourceMemoryCaptureService.ts`
+- Deep worker: `memory-service/src/core/SourceMemoryDistillationWorker.ts`
+- Heartbeat consumer: `memory-service/src/core/HeartbeatLoop.ts`
 - Backend route: `memory-service/src/routes/sourceMemory.ts`
-- Migration: `memory-service/src/storage/migrations/029_memory_capture.sql`
+- Migrations: `memory-service/src/storage/migrations/029_memory_capture.sql`, `055_source_memory_deep_distillation.sql`
 - Extension client: `src/services/MemoryServiceClient.ts`
 - Background bridge: `src/background.ts`
 - Selection UI: `src/contentScriptWebIntelligence.ts`
 - Context Recall source card: `memory-service/src/core/ContextRecallService.ts`
+- Ask bounded evidence assembly: `memory-service/src/routes/ask.ts`
+- Storyline source adapter: `memory-service/src/core/StorylineDraftService.ts`
 - Memory Exploring capsule detail: `memory-exploring.html#/source-memory/:id`
+
+## 验证
+
+- `npm --prefix memory-service test -- --run src/__tests__/sourceMemoryDistillationWorker.test.ts src/__tests__/api-source-memory.test.ts src/__tests__/api-context-recall.test.ts src/__tests__/api-coverage.test.ts src/__tests__/api-ask.test.ts src/__tests__/api-storylines.test.ts`
+- `npm --prefix memory-service run build`
+- `npm start`，等待第一次 webpack compile 成功后停止
+- `node tools/verify-source-memory-capsule-e2e.mjs`
+- `npm run eval:validate`
+- `npm run eval:run -- --suite source-memory-distiller --no-repair`
+- 修改 `/ask` 证据组装后，用当前分支本地服务和隔离数据运行 `npm run eval:memory-abilities -- --endpoint http://127.0.0.1:<port>/api/v1/ask --user esone.qiu --out <run-dir>`；不能用远端旧部署替代当前分支证明。
 
 ## 后续实现顺序
 
 1. 页级自动捕捉：当前已接入停留时间、滚动深度、复制信号和低打扰建议保存；后续再接 active tab、重复访问、白名单来源和设置项控制的强兴趣自动保存。
 2. 用户对外输入自动入库：Jira owner comment 已接入；RingCentral reply、Web AI prompt 等 owner-authored 内容待统一归入 Memory Capture。
 3. Context Recall source memory：基础 source memory card 和 Memory Exploring capsule 深链详情页已实现；后续可补 capsule 列表与批量整理。
-4. 深度蒸馏：P0 已在保存 / 备注更新后生成 deterministic ready distillation，并复用现有 tables；后续再接后台 worker、open questions、skill candidate 和跨 capsule 聚合。
+4. 深度蒸馏：同步 P0、restart-safe worker、evidence spans、open questions、Skill/Storyline candidates、强锚点跨 capsule 聚类与下游消费已实现；后续只扩真实来源样本和模型质量 eval，不扩大自动写入权限。
 5. Coverage Map 增强：展示 capsule 数、自动/主动入库比例、最近保存来源和阻断原因。
 
 ## 参考与产品判断
@@ -243,6 +295,8 @@ DB 是运行时真源；Markdown 只作为 daily/source snapshot。
 - 2026-07-11 检查结果：`source_memory` 召回卡片的 `在记忆中查看` 与安全原始来源链接补上按钮级 hover / 读屏边界。详情按钮说明点击只是打开资料详情复核，不会新增或撤销资料记忆、不写画像/任务、不插入或发送；原始来源链接说明只打开新标签核对，不写记忆、不插入输入框、不发送内容、不确认事实。来源链接隐藏时仍只保留资料详情复核入口。
 - 2026-07-14 检查结果：整页资料保存补上页面快照和触发依据回执。普通建议点击后的复核面板、自动入库提交中 / 成功 / 失败回执都会说明保存的是当前提取的页面正文快照，触发来自本机复制、停留、滚动和候选评分信号；这只是保存基准和本地行为依据，不确认页面事实，也不自动写画像、任务或外部系统。
 - 2026-07-14 二次检查结果：`记住` 按钮的可见结构固定为前置 `+` icon、`记住` 和末尾 Personal AI icon。选区、整页与视觉证据入口在默认、hover、focus 状态都不再增加 `未写入 · 先复核`、候选原因、资料类型、页面快照、触发依据或其他长说明；这些内容统一放到点击后的复核面板及后续回执。历史记录里曾把部分边界放进 hover / focus，不再代表当前按钮视觉契约。
+- 2026-07-15 检查结果：source-memory 详情页的 API-backed 控件补上 hover / 读屏边界。`打开来源`、`查看关联记忆`、补备注提交 / 恢复和 `撤销资料记忆` 会在点击前说明当前动作是新标签复核、只读跳转、本机草稿恢复、服务端待确认刷新，还是移除关联 `web` 检索信号；同时说明不会自动确认事实、写画像 / 任务、插入输入框、发送内容或同步外部系统。
+- 2026-07-17 检查结果：P0 以外的 Source Memory Distiller 已完成 restart-safe worker、证据 span、scene trigger、fact/open-question/Skill/Storyline candidates、强锚点来源簇、Ask/Lens/Meeting Prep/Coverage 消费和详情页状态。补备注形成新 hash 时会先清空可读旧 deep，旧 hash Skill seed 不参与 suggestion 晋升。当前验收覆盖 13 个 worker 用例、三个新增来源类型、Source Memory Storyline API、webpack 首次编译、详情页 E2E 和 5/5 deterministic experience eval；六能力当前分支回归为 5/6，唯一 temporal 下降只命中 `daily_log` / `reflection_thread` 且发生在 LLM timeout fallback，不含 Source Memory deep evidence，作为共享检索残余单独保留。
 
 ## 验证建议
 

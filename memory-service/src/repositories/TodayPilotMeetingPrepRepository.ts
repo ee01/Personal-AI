@@ -5,6 +5,7 @@ import { now } from '../utils/time.js';
 import type {
   ComposerAssistEvidence,
   ContextAssistCueCard,
+  MeetingOutcomeBinder,
   StorylineOpportunity,
 } from '../types/index.js';
 import { normalizeStorylineOpportunity } from '../utils/storyline.js';
@@ -42,6 +43,7 @@ export interface TodayPilotMeetingPrepRecord {
   redaction: Record<string, unknown>;
   llmUsage: Record<string, unknown>;
   storylineOpportunity?: StorylineOpportunity;
+  outcomeBinder?: MeetingOutcomeBinder;
   sourceHash: string;
   generatedAt: number;
   expiresAt: number;

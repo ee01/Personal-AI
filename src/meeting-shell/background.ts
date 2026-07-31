@@ -53,6 +53,7 @@ import {
   resolveSpeakerForChunk,
 } from './speakerResolver';
 import { buildTranscriptTurns } from './transcriptTurns';
+import { selectMeetingOutcomeBinderFromStorage } from './meetingOutcomeBinder';
 import { inferActionItemFromText } from './actionItems';
 import {
   applyAiParticipantResolutions,
@@ -87,6 +88,8 @@ import {
 export { mergeActionItemReviewStates } from './actionItemReview';
 
 const UNASSIGNED_ACTION_OWNER = '待分配';
+const MEETING_PREP_HANDOFF_STORAGE_KEY = 'meetingPrepHandoff';
+const MEETING_PREP_HANDOFFS_STORAGE_KEY = 'meetingPrepHandoffs';
 
 const registry = new MeetingPilotRegistry();
 
@@ -3347,6 +3350,7 @@ ${
           timeRange: stance.timeRange,
         })),
       ),
+      outcomeBinder: session.outcomeBinder || null,
     },
   };
 
@@ -3471,10 +3475,100 @@ async function ingestMeetingSession(
   }
 }
 
+async function bindMeetingOutcomeForArchive(
+  session: MeetingPilotSessionSnapshot,
+): Promise<MeetingPilotSessionSnapshot> {
+  if (
+    session.outcomeBinder?.meetingId === session.meetingId &&
+    ['bound', 'partial', 'blocked'].includes(session.outcomeBinder.status) &&
+    !String(session.outcomeBinder.bindingError || '').startsWith(
+      'binding_failed:',
+    )
+  ) {
+    return session;
+  }
+
+  const payload = await chrome.storage.local
+    .get([
+      MEETING_PREP_HANDOFF_STORAGE_KEY,
+      MEETING_PREP_HANDOFFS_STORAGE_KEY,
+    ])
+    .catch(() => undefined);
+  const binder = selectMeetingOutcomeBinderFromStorage(payload, session);
+  if (!binder) return session;
+
+  try {
+    const outcomeBinder = await getMemoryServiceClient().bindMeetingOutcome({
+      binderId: binder.id,
+      meetingId: session.meetingId,
+      title: session.title,
+      eventExternalId: binder.eventExternalId,
+      transcript: session.transcript.slice(-60).map((chunk) => ({
+        id: chunk.id,
+        text: chunk.text,
+        speaker: chunk.speaker,
+        ts: chunk.ts,
+      })),
+      actionItems: getActiveMeetingActionItems(session.actionItems).map(
+        (item) => ({
+          id: item.id,
+          title: item.title,
+          owner: item.owner,
+          deadline: item.deadline,
+          status: item.status,
+          evidence: item.evidence,
+          timestamp: item.timestamp,
+        }),
+      ),
+      decisions: session.decisions.map((item) => ({
+        id: item.id,
+        text: item.text,
+        timestamp: item.timestamp,
+      })),
+      chapters: session.chapters.map((item) => ({
+        id: item.id,
+        title: item.title,
+        summary: item.summary,
+        startLabel: item.startLabel,
+      })),
+    });
+    const updated = await registry.updateObservation(session.tabId, {
+      outcomeBinder,
+    });
+    if (updated) {
+      await broadcastSessionSnapshot(updated);
+      return updated;
+    }
+    return { ...session, outcomeBinder };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failedBinder = {
+      ...binder,
+      meetingId: session.meetingId,
+      status: 'blocked' as const,
+      bindingError: `binding_failed:${message}`,
+      updatedAt: Math.floor(Date.now() / 1000),
+      receipt: {
+        ...binder.receipt,
+        coverage: '会后结果装订失败；会前目标和会议归档仍已保留。',
+        freshness: `失败于 ${new Date().toISOString()}`,
+        boundary:
+          '当前只记录本地失败回执；不会伪装成已闭环，也不会阻断会议归档或写回外部系统。',
+      },
+    };
+    console.warn('Meeting Pilot outcome binding failed:', error);
+    const updated = await registry.updateObservation(session.tabId, {
+      outcomeBinder: failedBinder,
+    });
+    return updated || { ...session, outcomeBinder: failedBinder };
+  }
+}
+
 async function archiveMeetingSession(
   session: MeetingPilotSessionSnapshot,
 ): Promise<void> {
-  const archiveSession = await prepareMeetingSessionForArchive(session);
+  const outcomeSession = await bindMeetingOutcomeForArchive(session);
+  const archiveSession = await prepareMeetingSessionForArchive(outcomeSession);
   await ingestMeetingSession(archiveSession);
 }
 

@@ -595,6 +595,9 @@
                   v-for="suggestion in contextActionSuggestions"
                   :key="`${suggestion.title}:${suggestion.reason}`"
                   :class="['action-card', suggestion.tone]"
+                  role="group"
+                  :title="contextActionSuggestionBoundary(suggestion)"
+                  :aria-label="contextActionSuggestionBoundary(suggestion)"
                 >
                   <div class="action-card-title">
                     <span :class="['chip', suggestionTone(suggestion.tone)]">
@@ -675,6 +678,9 @@
                     v-for="fact in contextCard.knownFacts"
                     :key="`${fact.key}:${fact.value}`"
                     class="item"
+                    role="group"
+                    :title="contextKnownFactBoundary(fact)"
+                    :aria-label="contextKnownFactBoundary(fact)"
                   >
                     <div class="item-row">
                       <strong>{{ fact.key }}</strong>
@@ -700,6 +706,9 @@
                     v-for="hint in contextCard.relationshipHints"
                     :key="`${hint.targetId}:${hint.relationType}`"
                     class="item relation-item"
+                    role="group"
+                    :title="contextRelationshipHintBoundary(hint)"
+                    :aria-label="contextRelationshipHintBoundary(hint)"
                   >
                     <div>
                       <strong>{{ hint.targetName }}</strong>
@@ -745,6 +754,9 @@
                     v-for="term in contextCard.retrievalHints.boostTerms"
                     :key="term"
                     class="chip blue"
+                    role="group"
+                    :title="contextRetrievalBoostBoundary(term)"
+                    :aria-label="contextRetrievalBoostBoundary(term)"
                   >
                     {{ term }}
                   </span>
@@ -760,6 +772,9 @@
                     v-for="note in contextCard.doNotAssume"
                     :key="note"
                     class="item"
+                    role="group"
+                    :title="contextDoNotAssumeBoundary(note)"
+                    :aria-label="contextDoNotAssumeBoundary(note)"
                   >
                     <p>{{ note }}</p>
                   </div>
@@ -4032,6 +4047,66 @@ function countHiddenSensitiveContext(
     summary.redactedOpenLoops +
     summary.redactedRetrievalHints
   );
+}
+
+function contextCardBoundaryPersonName() {
+  return contextCard.value?.person.name || selectedPerson.value?.name || '当前人物';
+}
+
+function contextCardBoundaryScope() {
+  const card = contextCard.value;
+  if (!card) return '当前隐私范围';
+  return contextPrivacyScopeLabel(card.privacySummary.sensitiveIncluded === true);
+}
+
+function contextActionSuggestionBoundary(suggestion: ContextActionSuggestion) {
+  const evidence = suggestion.evidenceRef
+    ? `带 ${evidenceLabel(suggestion.evidenceRef)} 依据`
+    : '没有可打开的证据按钮';
+  return [
+    `现在建议：${suggestionToneLabel(suggestion.tone)}「${compactText(suggestion.title, 48)}」。`,
+    `理由：${compactText(suggestion.reason, 72)}；${evidence}。`,
+    `当前卡片是 ${contextCardBoundaryPersonName()} 的${contextCardBoundaryScope()}版本。`,
+    '阅读这条建议只用于沟通前复核，不会确认关系事实、写入人物画像、发送消息、创建跟进、刷新上下文卡或同步外部系统。',
+  ].join(' ');
+}
+
+function contextKnownFactBoundary(
+  fact: RelationshipContextCard['knownFacts'][number],
+) {
+  const status = fact.confirmed ? '已确认事实' : '待确认事实';
+  return [
+    `人物事实：${status}「${compactText(`${fact.key}: ${fact.value}`, 96)}」，置信度 ${formatPercent(fact.confidence)}。`,
+    `当前卡片是 ${contextCardBoundaryPersonName()} 的${contextCardBoundaryScope()}版本。`,
+    '查看这行只用于复制前复核；不会重新确认、驳回、提升、降低或写入人物画像，也不会发送消息、创建跟进、刷新上下文卡或同步外部系统。',
+  ].join(' ');
+}
+
+function contextRelationshipHintBoundary(
+  hint: RelationshipContextCard['relationshipHints'][number],
+) {
+  const context = hint.context || hint.targetType || '未提供关系上下文';
+  return [
+    `关系提示：${contextCardBoundaryPersonName()} 与 ${hint.targetName} 的「${hint.relationType}」关联，强度 ${formatPercent(hint.strength)}。`,
+    `上下文：${compactText(context, 96)}。`,
+    '查看这行只用于判断关系线索；不会确认关系边、写入人物画像、改关系图谱、发送消息、创建跟进、刷新上下文卡或同步外部系统。',
+  ].join(' ');
+}
+
+function contextRetrievalBoostBoundary(term: string) {
+  return [
+    `检索增强提示：「${compactText(term, 64)}」来自 ${contextCardBoundaryPersonName()} 的 Context Card。`,
+    `当前卡片为${contextCardBoundaryScope()}版本；复制上下文时它只作为可复核提示。`,
+    '查看这个标签不会重跑搜索或 Ask，不会改变 RecallEngine 排名、写入人物画像、发送消息、创建跟进、刷新上下文卡或同步外部系统。',
+  ].join(' ');
+}
+
+function contextDoNotAssumeBoundary(note: string) {
+  return [
+    `不要假设：${compactText(note, 120)}。`,
+    `当前卡片是 ${contextCardBoundaryPersonName()} 的${contextCardBoundaryScope()}版本。`,
+    '这只是外发和沟通前的谨慎边界；查看它不会删除事实、写入人物画像、确认或驳回候选、发送消息、创建跟进、刷新上下文卡或同步外部系统。',
+  ].join(' ');
 }
 
 function contextActionSuggestionCount(card: RelationshipContextCard) {

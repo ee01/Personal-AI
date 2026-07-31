@@ -9,6 +9,7 @@ import type { EnvConfigType } from '../utils';
 const OUTLOOK_AUTH_STORAGE_KEY = 'outlookCalendarAuth';
 const OUTLOOK_STATUS_STORAGE_KEY = 'outlookCalendarStatus';
 const OUTLOOK_SCOPES = ['offline_access', 'User.Read', 'Calendars.Read'];
+const MAX_CALENDAR_SYNC_ATTENDEES = 120;
 
 interface OutlookTokenState {
   accessToken: string;
@@ -170,7 +171,7 @@ export async function syncCalendarEventsToMemoryService(
   return result;
 }
 
-function normalizeCalendarEventsForSync(
+export function normalizeCalendarEventsForSync(
   events: CalendarEventSyncItem[],
 ): CalendarEventSyncItem[] {
   return events
@@ -217,14 +218,28 @@ function normalizeCalendarEventForSync(
         ): attendee is NonNullable<CalendarEventSyncItem['organizer']> =>
           Boolean(attendee),
       );
-    if (attendees.length > 0) normalized.attendees = attendees;
+    if (attendees.length > 0) {
+      normalized.attendees = attendees.slice(0, MAX_CALENDAR_SYNC_ATTENDEES);
+    }
+    if (attendees.length > MAX_CALENDAR_SYNC_ATTENDEES) {
+      normalized.metadata = {
+        ...(normalized.metadata || {}),
+        attendeeCount: attendees.length,
+        attendeesTruncated: true,
+      };
+    }
   }
   if (location) normalized.location = location;
   if (joinUrl) normalized.joinUrl = joinUrl;
   if (sourceUrl) normalized.sourceUrl = sourceUrl;
   if (typeof event.cancelled === 'boolean') normalized.cancelled = event.cancelled;
   if (lastModifiedTime != null) normalized.lastModifiedTime = lastModifiedTime;
-  if (metadata) normalized.metadata = metadata;
+  if (metadata) {
+    normalized.metadata = {
+      ...metadata,
+      ...(normalized.metadata || {}),
+    };
+  }
 
   return normalized;
 }

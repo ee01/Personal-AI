@@ -46,6 +46,8 @@ import { UserContextManager } from '../core/UserContextManager.js';
 import { RecallEngine } from '../core/RecallEngine.js';
 import {
   extractAskContextTitle,
+  formatAskResumeContextHints,
+  getAskResumePreferredTopic,
   resolveAskCandidateSelection,
 } from '../routes/ask.js';
 import { buildApp } from '../server.js';
@@ -178,6 +180,84 @@ describe('Ask API', () => {
         'Surface: Browser page. Current page title: AI Tooling Roadmap. Current URL: https://docs.example.com/roadmap Visible page text: MTR-141852 next steps.',
       ),
     ).toBe('AI Tooling Roadmap');
+  });
+
+  it('formats a local Ask resume snapshot as a non-authoritative retrieval hint', () => {
+    const hints = {
+      source: 'local_ask_resume_snapshot',
+      localOnly: true as const,
+      updatedAt: '2026-07-15T02:00:00.000Z',
+      topicTitle: 'MTR-141852: AI Custom VBG',
+      previousQuestion: '那个 BE ready 了吗？',
+      previousAnswerSummary: '上一轮判断 backend 还在等待 design。',
+      evidenceRefs: ['jira:MTR-141852', 'message:ai-vbg-backend'],
+    } as const;
+    const context = formatAskResumeContextHints(hints);
+
+    expect(context).toContain('Selected topic: MTR-141852: AI Custom VBG.');
+    expect(context).toContain('may be stale; do not treat as evidence');
+    expect(context).toContain('Re-retrieve current evidence before answering.');
+    expect(context).toContain('Do not persist this hint as user memory');
+    expect(getAskResumePreferredTopic(hints)).toBe(
+      'MTR-141852: AI Custom VBG',
+    );
+  });
+
+  it('uses a local Ask resume hint without persisting the snapshot text as memory', async () => {
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: '重新检索后，仍建议先找技术评审负责人确认。',
+      }),
+    });
+    const uniquePreviousSummary =
+      'LOCAL-RESUME-ONLY previous answer summary must not become memory';
+    const beforeCount = Number(
+      db.prepare('SELECT COUNT(*) AS count FROM messages_raw').get().count,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '所以现在应该先找谁确认？',
+        includeEvidence: true,
+        contextHints: {
+          source: 'local_ask_resume_snapshot',
+          localOnly: true,
+          updatedAt: '2026-07-15T02:00:00.000Z',
+          topicTitle: 'Q2 Planning Review',
+          previousQuestion: 'Q2 预算评审下一步是什么？',
+          previousAnswerSummary: uniquePreviousSummary,
+          evidenceRefs: ['meeting:ask-meeting-memory'],
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.continuityReceipt).toEqual({
+      source: 'local_ask_resume_snapshot',
+      localOnly: true,
+      usedAsHint: true,
+      reRetrieved: true,
+      detail:
+        '已使用本机续聊线索，并重新检索本轮证据；续聊快照未写入长期记忆。',
+    });
+    expect(body.contextMatch).toMatchObject({
+      state: 'locked',
+      selectedTopic: {
+        label: expect.stringContaining('Q2 Planning Review'),
+      },
+    });
+    const afterCount = Number(
+      db.prepare('SELECT COUNT(*) AS count FROM messages_raw').get().count,
+    );
+    expect(afterCount).toBe(beforeCount);
+    expect(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE content = ?')
+        .get(uniquePreviousSummary).count,
+    ).toBe(0);
   });
 
   it('resolves a candidate-number follow-up from the previous ambiguous Ask turn', () => {
@@ -415,6 +495,89 @@ describe('Ask API', () => {
     );
   });
 
+  it('filters cross-topic evidence before Ask prompt assembly', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO watched_projects
+        (id, name, aliases_json, is_active, priority, created_at)
+       VALUES (?, ?, ?, 1, 8, ?)`,
+    ).run(
+      'project-umw',
+      'Unified Messaging Workspace',
+      JSON.stringify(['UMW']),
+      currentTime,
+    );
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-umw-repository',
+            type: 'message',
+            content:
+              'Unified Messaging Workspace purpose is unified messaging workflows. Repository URL is github.com/ringcentral/unified-messaging-workspace.',
+            score: 0.91,
+            source: 'glip',
+            sourceTitle: 'Unified Messaging Workspace',
+            timestamp: currentTime - 120,
+            metadata: { groupName: 'Unified Messaging Workspace' },
+          },
+          {
+            id: 'ask-rc-ai-learning-noise',
+            type: 'message',
+            content:
+              'Signal Deck purpose and repository URL are documented in github.com/esone/rc-ai-learning.',
+            score: 0.89,
+            source: 'glip',
+            sourceTitle: 'rc-ai-learning',
+            timestamp: currentTime - 60,
+            metadata: { groupName: 'rc-ai-learning' },
+          },
+        ],
+        totalFound: 2,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer:
+          'Unified Messaging Workspace serves unified messaging workflows.',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query:
+          'Unified Messaging Workspace 的 purpose 和 repository URL 是什么？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence.map((item: { id: string }) => item.id)).toEqual([
+      'ask-umw-repository',
+    ]);
+    expect(body.cohesionReceipt).toMatchObject({
+      state: 'cohesive',
+      usedCount: 1,
+      excludedCount: 1,
+      silent: true,
+    });
+    const prompts = generateMock.mock.calls
+      .map((call) => call[0])
+      .filter((value): value is string => typeof value === 'string');
+    expect(prompts.some((prompt) => prompt.includes('ask-rc-ai-learning-noise'))).toBe(
+      false,
+    );
+    expect(prompts.some((prompt) => prompt.includes('Signal Deck purpose'))).toBe(
+      false,
+    );
+    recallSpy.mockRestore();
+  });
+
   it('falls back to plain text when the model does not return JSON', async () => {
     generateMock.mockResolvedValue({
       content:
@@ -474,6 +637,55 @@ describe('Ask API', () => {
     );
     expect(body.analysis.summary).toContain('可能相关的记忆');
     expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps locked resume-topic evidence when answer generation times out', async () => {
+    generateMock
+      .mockResolvedValueOnce({
+        resolutionState: 'partial',
+        directFindings: [],
+        resolvedConclusion: '',
+        remainingQuestions: ['需要确认下一步 owner。'],
+        candidateArtifacts: [],
+        recommendedAction: 'none',
+        confidence: 0.5,
+        legacyClassification: 'answer',
+        summary: 'Need current owner confirmation.',
+      })
+      .mockRejectedValueOnce(
+        new Error('[LLMClient] Request timed out after 5000ms'),
+      );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '所以现在应该先找谁确认？',
+        includeEvidence: true,
+        contextHints: {
+          source: 'local_ask_resume_snapshot',
+          localOnly: true,
+          updatedAt: '2026-07-15T02:00:00.000Z',
+          topicTitle: 'Q2 Planning Review',
+          previousQuestion: 'Q2 预算评审下一步是什么？',
+          previousAnswerSummary: '旧摘要只作定位线索。',
+          evidenceRefs: ['meeting:ask-meeting-memory'],
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.contextMatch).toMatchObject({
+      state: 'locked',
+      selectedTopic: {
+        label: expect.stringContaining('Q2 Planning Review'),
+      },
+    });
+    expect(body.answer).toContain('基于已检索到的记忆');
+    expect(body.evidence.map((item: { id: string }) => item.id)).toContain(
+      'ask-meeting-memory',
+    );
   });
 
   it('does not turn unrelated recalled items into fallback evidence', async () => {
@@ -1508,7 +1720,7 @@ describe('Ask API', () => {
       method: 'POST',
       url: '/api/v1/ask',
       payload: {
-        query: '为什么当时决定推 Codex 而不是继续 Cursor？',
+        query: '为什么决定推 Codex 而不是继续 Cursor？这个决定是什么时候做出的？',
         includeEvidence: true,
       },
     });
@@ -1611,6 +1823,15 @@ describe('Ask API', () => {
       payload: {
         query: '最近三天 John 说过什么？',
         includeEvidence: true,
+        contextHints: {
+          source: 'local_ask_resume_snapshot',
+          localOnly: true,
+          updatedAt: '2026-07-15T02:00:00.000Z',
+          topicTitle: 'John release risk note',
+          previousQuestion: 'John 最近提过什么风险？',
+          previousAnswerSummary: '上一轮提到 release risk。',
+          evidenceRefs: ['message:ask-john-message'],
+        },
       },
     });
 
@@ -1634,6 +1855,15 @@ describe('Ask API', () => {
       res.body.indexOf('event: answer_done'),
     );
     expect(res.body).toContain('Release risk increased.');
+    const resultEvent = parseSseEvents(res.body).find(
+      (event) => event.type === 'result',
+    );
+    expect(resultEvent?.continuityReceipt).toMatchObject({
+      source: 'local_ask_resume_snapshot',
+      localOnly: true,
+      usedAsHint: true,
+      reRetrieved: true,
+    });
   });
 
   it('streams ambiguous Ask as a clarification state without generating an answer', async () => {
@@ -1872,6 +2102,55 @@ describe('Ask API', () => {
       userContextManager.closeAll();
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('keeps evaluationMode read_only free of actions and answer-memory writes', async () => {
+    generateMock
+      .mockResolvedValueOnce({
+        resolutionState: 'partial',
+        directFindings: ['John 提到 release risk 正在上升。'],
+        resolvedConclusion: '需要补充外部系统中的具体发布时间。',
+        remainingQuestions: ['具体发布日期尚未确认。'],
+        candidateArtifacts: [],
+        recommendedAction: 'delegate_openclaw',
+        actionParams: {
+          task: '核实 release 的具体发布日期。',
+          mode: 'read',
+          targetSystem: 'jira',
+        },
+        confidence: 0.86,
+        legacyClassification: 'answer',
+        summary: '本地证据不足，需要外部查证。',
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          answer: 'John 提到 release risk 正在上升，具体发布日期仍未确认。',
+          confidence: 0.8,
+        }),
+      });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'release 的具体发布日期是什么？',
+        includeEvidence: true,
+        evaluationMode: 'read_only',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.answer).toContain('具体发布日期');
+    expect(body.resolutionState).toBe('partial');
+    expect(body.followUpActions).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      db.prepare('SELECT COUNT(*) AS count FROM proposed_actions').get(),
+    ).toMatchObject({ count: 0 });
+    expect(
+      db.prepare('SELECT COUNT(*) AS count FROM answer_memory_observations').get(),
+    ).toMatchObject({ count: 0 });
   });
 
   it('streams status updates and planner-enriched results when OpenClaw evidence is needed', async () => {

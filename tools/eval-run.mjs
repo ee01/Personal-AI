@@ -23,9 +23,20 @@ import {
   runProcess,
   runShell,
 } from './eval-lib.mjs';
+import {
+  buildReaderProofModel,
+  readerProofLegacyLists,
+} from './eval-reader-proof.mjs';
 
 const args = parseArgs();
 const registry = await loadRegistry();
+
+if (args.rerender) {
+  const rerendered = await rerenderExistingRun(args.rerender, registry);
+  console.log(`RERENDERED ${rerendered.suiteId}: ${rerendered.reportPath}`);
+  process.exit(0);
+}
+
 const agentsConfig = await loadAgents();
 const selectedSuites = await selectSuites(registry, args);
 
@@ -99,6 +110,7 @@ async function runSuite(selection) {
     casesPath: suite.cases,
     caseCount: cases.length,
     selectedCaseIds: caseIds || null,
+    readerProof: suite.readerProof || null,
     args,
   };
   const reportPath = path.join(runDir, 'report.html');
@@ -168,6 +180,10 @@ async function runCase({ suite, caseItem, runDir }) {
     collectedAt: new Date().toISOString(),
     ...collected,
   });
+
+  if (suite.id === 'ask-conversation-continuity') {
+    return runAskConversationContinuityCase({ suite, caseItem, runDir, collected });
+  }
 
   if (suite.id === 'ask-context-gap') {
     const request = buildAskContextGapRequest({ caseItem, collected });
@@ -252,12 +268,45 @@ async function runCase({ suite, caseItem, runDir }) {
     return runEvidenceWatchContractsCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'open-question-exit-contracts') {
+    return runOpenQuestionExitContractsCase({
+      suite,
+      caseItem,
+      runDir,
+      collected,
+    });
+  }
+
+  if (suite.id === 'action-readiness-contracts') {
+    return runActionReadinessContractsCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'evidence-cohesion-gate') {
+    return runEvidenceCohesionGateCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'source-memory-distiller') {
+    return runSourceMemoryDistillerCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'change-memory-ledger') {
+    return runChangeMemoryLedgerCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'scene-memory-autopilot') {
     return runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'keystone-memory-briefs') {
+    return runKeystoneMemoryBriefsCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'estimate-cue-compiler') {
     return runEstimateCueCompilerCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'meeting-outcome-binder') {
+    return runMeetingOutcomeBinderCase({ suite, caseItem, runDir, collected });
   }
 
   if (suite.id === 'compose-style-memory') {
@@ -343,10 +392,105 @@ async function runCase({ suite, caseItem, runDir }) {
   return result;
 }
 
+async function runAskConversationContinuityCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const request = buildAskContextGapRequest({ caseItem, collected });
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const responseEnvelope = await postAskContextGap({ suite, caseItem, request });
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    ...responseEnvelope,
+  });
+
+  const heuristic = judgeAskConversationContinuity({
+    caseItem,
+    request,
+    response: responseEnvelope.response,
+  });
+  const status = responseEnvelope.ok ? heuristic.verdict : 'error';
+  const expectedReceipt = Boolean(caseItem.expectContinuityReceipt);
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    query: caseItem.query,
+    problemStatement: caseItem.problemStatement,
+    expectedExtraction: caseItem.expectedExtraction,
+    expectedTopics: caseItem.expectedTopics || [],
+    expectedSelectedTopics: caseItem.expectedSelectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      ...buildAskContextGapSampleDetails(caseItem, collected),
+      contextHintsAgeHours: caseItem.contextHintsAgeHours,
+      contextHints: request.contextHints || null,
+      expectContinuityReceipt: expectedReceipt,
+      requireFreshEvidence: Boolean(caseItem.requireFreshEvidence),
+    },
+    sampleSummary: summarizeSampleText(collected.primaryText),
+    status,
+    verdict: status,
+    scores: heuristic.scores,
+    overallScore: computeOverallScore(heuristic.scores, status),
+    userConclusion: responseEnvelope.ok
+      ? heuristic.userConclusion
+      : `Ask 续接请求失败，无法判断体验：${responseEnvelope.error || 'unknown error'}`,
+    improvementSuggestions: responseEnvelope.ok
+      ? heuristic.improvementSuggestions
+      : [
+          '先恢复 Ask 服务或排除请求超时，再用同一真实场景重跑。',
+          '不要把网络错误误判为续接检索质量问题。',
+        ],
+    why: responseEnvelope.ok ? heuristic.why : responseEnvelope.error,
+    topMatch: heuristic.topMatch,
+    contextMatch: heuristic.contextMatch,
+    continuityReceipt: heuristic.continuityReceipt,
+    matchedExpectedTopics: heuristic.matchedExpectedTopics,
+    matchedEvidenceTopics: heuristic.matchedEvidenceTopics,
+    matchedSelectedTopics: heuristic.matchedSelectedTopics,
+    selectedTopicLabel: heuristic.selectedTopicLabel,
+    matchedMustNotReturnTopics: heuristic.matchedMustNotReturnTopics,
+    evidenceCount: heuristic.evidenceCount,
+    actualOutput: summarizeAskContextGapActualOutput({
+      response: responseEnvelope.response,
+      error: responseEnvelope.ok ? undefined : responseEnvelope.error,
+      statusCode: responseEnvelope.statusCode,
+      durationMs: responseEnvelope.durationMs,
+      timeoutMs: responseEnvelope.timeoutMs,
+    }),
+    judge: {
+      heuristic,
+      llm: null,
+    },
+    error: responseEnvelope.ok ? undefined : responseEnvelope.error,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
 async function runComposeAssistCase({ suite, caseItem, runDir, collected }) {
+  if (caseItem.kind === 'compose_assist_persona_projection_contract') {
+    return runComposeAssistPersonaProjectionCase({
+      suite,
+      caseItem,
+      runDir,
+      collected,
+    });
+  }
+
   if (
     caseItem.kind === 'compose_assist_context_pack' ||
-    caseItem.kind === 'compose_assist_prompt_patch'
+    caseItem.kind === 'compose_assist_prompt_patch' ||
+    caseItem.kind === 'compose_assist_prompt_rewrite'
   ) {
     return runComposeAssistContextPackCase({ suite, caseItem, runDir, collected });
   }
@@ -433,6 +577,304 @@ async function runComposeAssistCase({ suite, caseItem, runDir, collected }) {
   };
   await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
   return result;
+}
+
+async function runComposeAssistPersonaProjectionCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const sample = caseItem.sampleContext || {};
+  const variants = Array.isArray(sample.variants) ? sample.variants : [];
+  const request = {
+    kind: caseItem.kind,
+    variantCount: variants.length,
+    profileItemCount: Array.isArray(sample.profileItems)
+      ? sample.profileItems.length
+      : 0,
+    socialEdgeCount: Array.isArray(sample.socialEdges)
+      ? sample.socialEdges.length
+      : 0,
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  let actual = null;
+  let error;
+  try {
+    const moduleUrl = new URL(
+      '../memory-service/dist/core/PersonaProjectionService.js',
+      import.meta.url,
+    );
+    const {
+      PersonaProjectionService,
+      formatPersonaProjectionForExternalContext,
+      formatPersonaProjectionForGeneration,
+    } = await import(moduleUrl.href);
+    const db = buildPersonaProjectionEvalDb(sample);
+    const service = new PersonaProjectionService(db);
+    const projected = variants.map((variant) => {
+      const projection = service.project({
+        request: variant.request,
+        suggestionType: variant.suggestionType || 'reply_context',
+        timestamp: sample.timestamp,
+      });
+      return {
+        id: variant.id,
+        summary: projection.summary,
+        controlKeys: projection.controls.map((slot) => slot.key),
+        speakableKeys: projection.speakableContext.map((slot) => slot.key),
+        softControlKeys: projection.softControls.map((slot) => slot.key),
+        projectedValues: [
+          ...projection.controls,
+          ...projection.speakableContext,
+          ...projection.softControls,
+        ].map((slot) => slot.value),
+        generationContext: formatPersonaProjectionForGeneration(projection),
+        externalContext: formatPersonaProjectionForExternalContext(projection),
+      };
+    });
+    actual = { variants: projected };
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
+
+  const heuristic = judgeComposePersonaProjectionContract({
+    caseItem,
+    variants,
+    actual,
+    error,
+  });
+  const responseEnvelope = {
+    ok: !error,
+    response: summarizeComposePersonaProjectionOutput(actual),
+    error,
+  };
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    ...responseEnvelope,
+  });
+
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      variantCount: variants.length,
+      profileItemCount: request.profileItemCount,
+      socialEdgeCount: request.socialEdgeCount,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.title,
+    ),
+    status: error ? 'error' : heuristic.verdict,
+    verdict: error ? 'error' : heuristic.verdict,
+    scores: heuristic.scores,
+    overallScore: error
+      ? 0
+      : Math.round(
+          (Object.values(heuristic.scores).reduce(
+            (sum, value) => sum + Number(value || 0),
+            0,
+          ) /
+            (Object.keys(heuristic.scores).length * 3)) *
+            100,
+        ),
+    userConclusion: error
+      ? `身份投影策略 fixture 未执行：${error}`
+      : heuristic.userConclusion,
+    improvementSuggestions: error
+      ? ['先运行 npm --prefix memory-service run build，再重跑 compose-assist eval。']
+      : heuristic.improvementSuggestions,
+    why: error || heuristic.why,
+    actualOutput: summarizeComposePersonaProjectionOutput(actual),
+    judge: { heuristic, llm: null },
+    error,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+function buildPersonaProjectionEvalDb(sample) {
+  const profileRows = (sample.profileItems || []).map((item, index) => ({
+    item_type: item.itemType || 'preference',
+    item_key: item.itemKey,
+    item_value: item.itemValue,
+    source_kind: item.confirmed === false ? 'inferred' : 'explicit',
+    confidence: item.confidence ?? 0.9,
+    user_confirmed: item.confirmed === false ? 0 : 1,
+    status: item.confirmed === false ? 'pending_confirm' : 'active',
+    salience_score: item.salienceScore ?? 0.9,
+    valid_to: item.validTo ?? null,
+    updated_at: item.updatedAt ?? index + 1,
+  }));
+  const socialRows = (sample.socialEdges || []).map((edge) => ({
+    relation_type: edge.relationType,
+    confidence: edge.confidence ?? 0.9,
+    name: edge.name,
+    aliases_json: JSON.stringify(edge.aliases || []),
+  }));
+  return {
+    prepare(sql) {
+      return {
+        all() {
+          if (String(sql).includes('FROM social_edges')) return socialRows;
+          if (String(sql).includes('FROM user_profile_items')) {
+            return profileRows;
+          }
+          throw new Error('unsupported_persona_projection_eval_query');
+        },
+      };
+    },
+  };
+}
+
+function judgeComposePersonaProjectionContract({
+  caseItem,
+  variants,
+  actual,
+  error,
+}) {
+  if (error || !actual) {
+    return {
+      verdict: 'error',
+      scores: {
+        contract_correctness: 0,
+        privacy_suppression: 0,
+        interaction_boundary: 0,
+        scenario_differentiation: 0,
+      },
+      why: error || 'persona_projection_result_missing',
+      userConclusion: '身份投影策略没有产生可判分结果。',
+      improvementSuggestions: ['检查 memory-service build 产物和 fixture schema。'],
+    };
+  }
+
+  const failures = [];
+  const outputById = new Map(
+    actual.variants.map((variant) => [variant.id, variant]),
+  );
+  let privacyChecks = 0;
+  let privacyPasses = 0;
+  let boundaryChecks = 0;
+  let boundaryPasses = 0;
+
+  for (const variant of variants) {
+    const output = outputById.get(variant.id);
+    const expected = variant.expected || {};
+    if (!output) {
+      failures.push(`${variant.id}: missing projection`);
+      continue;
+    }
+    for (const field of [
+      'audienceType',
+      'audienceSource',
+      'representationMode',
+      'voiceMode',
+      'requiresPreview',
+    ]) {
+      if (expected[field] === undefined) continue;
+      boundaryChecks += 1;
+      if (output.summary?.[field] === expected[field]) boundaryPasses += 1;
+      else {
+        failures.push(
+          `${variant.id}: ${field} expected ${expected[field]} got ${output.summary?.[field]}`,
+        );
+      }
+    }
+    for (const [field, outputField] of [
+      ['controlKeys', 'controlKeys'],
+      ['softControlKeys', 'softControlKeys'],
+      ['speakableKeys', 'speakableKeys'],
+      ['reasonCodes', 'reasonCodes'],
+    ]) {
+      for (const expectedValue of expected[field] || []) {
+        privacyChecks += 1;
+        const actualValues =
+          outputField === 'reasonCodes'
+            ? output.summary?.reasonCodes || []
+            : output[outputField] || [];
+        if (actualValues.includes(expectedValue)) privacyPasses += 1;
+        else failures.push(`${variant.id}: missing ${field} ${expectedValue}`);
+      }
+    }
+    for (const forbiddenValue of expected.mustNotProjectValues || []) {
+      privacyChecks += 1;
+      const leaked = output.projectedValues.some((value) =>
+        String(value).includes(forbiddenValue),
+      );
+      if (!leaked) privacyPasses += 1;
+      else failures.push(`${variant.id}: projected forbidden profile value`);
+    }
+  }
+
+  let differentiationChecks = 0;
+  let differentiationPasses = 0;
+  for (const pair of caseItem.expectedBehavior?.distinctProjectionPairs || []) {
+    differentiationChecks += 1;
+    const left = outputById.get(pair[0]);
+    const right = outputById.get(pair[1]);
+    const leftSignature = JSON.stringify({
+      mode: left?.summary?.representationMode,
+      controls: left?.controlKeys,
+      soft: left?.softControlKeys,
+    });
+    const rightSignature = JSON.stringify({
+      mode: right?.summary?.representationMode,
+      controls: right?.controlKeys,
+      soft: right?.softControlKeys,
+    });
+    if (left && right && leftSignature !== rightSignature) {
+      differentiationPasses += 1;
+    } else {
+      failures.push(`${pair.join(' vs ')}: projection did not differ`);
+    }
+  }
+
+  const verdict = failures.length ? 'fail' : 'pass';
+  const score = (passes, checks) =>
+    checks === 0 ? 3 : Math.round((passes / checks) * 3);
+  return {
+    verdict,
+    scores: {
+      contract_correctness: failures.length ? 1 : 3,
+      privacy_suppression: score(privacyPasses, privacyChecks),
+      interaction_boundary: score(boundaryPasses, boundaryChecks),
+      scenario_differentiation: score(
+        differentiationPasses,
+        differentiationChecks,
+      ),
+    },
+    why: failures.length
+      ? failures.join('; ')
+      : '实际 PersonaProjectionService 输出满足 fixture 中的身份、场景、slot 和预览边界。',
+    userConclusion: failures.length
+      ? '至少一个身份投影场景会错误使用身份信息或选择错误的交互模式。'
+      : '身份投影在这些场景中能控制生成上下文，并保持该预览时预览、该排除时排除。',
+    improvementSuggestions: failures.length
+      ? ['检查 audience precedence、slot scope 和 representation mode 决策。']
+      : ['继续用真实 compose API E2E 验证最终文本没有绕过 projection。'],
+  };
+}
+
+function summarizeComposePersonaProjectionOutput(actual) {
+  if (!actual) return null;
+  return {
+    variants: actual.variants.map((variant) => ({
+      id: variant.id,
+      summary: variant.summary,
+      controlKeys: variant.controlKeys,
+      speakableKeys: variant.speakableKeys,
+      softControlKeys: variant.softControlKeys,
+      projectedValueCount: variant.projectedValues.length,
+    })),
+  };
 }
 
 async function runComposeAssistLensRoutingContractCase({
@@ -1044,6 +1486,176 @@ async function runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected 
   return result;
 }
 
+async function runKeystoneMemoryBriefsCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      expectedBehavior: caseItem.expectedBehavior,
+      brief: caseItem.sampleContext?.brief,
+      sourceCount: caseItem.sampleContext?.sources?.length ?? 0,
+      recallRequest: caseItem.sampleContext?.request,
+      rawMatchCount: caseItem.sampleContext?.matches?.length ?? 0,
+    },
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-keystone-memory-briefs.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'keystone_memory_briefs_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-5000),
+    stderr: commandResult.stderr.slice(-5000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      collectionMode: collected.collectionMode,
+      sourceProvenance: caseItem.sampleContext?.sourceProvenance || [],
+      memoryCount: caseItem.sampleContext?.sources?.length ?? 0,
+      request: caseItem.sampleContext?.request,
+      brief: caseItem.sampleContext?.brief,
+      rawMatches: caseItem.sampleContext?.matches || [],
+    },
+    sampleSummary: summarizeSampleText(collected.primaryText || caseItem.title),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Keystone Memory Briefs eval 时出错，未能判断简报边界。'
+        : 'Keystone Memory Briefs eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runChangeMemoryLedgerCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      query: caseItem.query,
+      expectedBehavior: caseItem.expectedBehavior,
+      sourceCount: caseItem.sampleContext?.sources?.length ?? 0,
+    },
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-change-memory-ledger.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'change_memory_ledger_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-5000),
+    stderr: commandResult.stderr.slice(-5000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      collectionMode: collected.collectionMode,
+      sourceCount: caseItem.sampleContext?.sources?.length ?? 0,
+      query: caseItem.query,
+    },
+    sampleSummary: summarizeSampleText(collected.primaryText || caseItem.title),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Change Memory Ledger eval 时出错，未能判断变化脉络。'
+        : 'Change Memory Ledger eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
 async function runEvidenceWatchContractsCase({ suite, caseItem, runDir, collected }) {
   const casePath = path.join(runDir, `${caseItem.id}.case.json`);
   await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
@@ -1122,6 +1734,483 @@ async function runEvidenceWatchContractsCase({ suite, caseItem, runDir, collecte
         : 'Evidence Watch eval completed.'),
     improvementSuggestions: response.improvementSuggestions || [
       '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runOpenQuestionExitContractsCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    question: caseItem.question,
+    owner: caseItem.owner,
+    existingOwner: caseItem.existingOwner,
+    repeat: caseItem.repeat,
+    resume: caseItem.resume,
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-open-question-exit-contracts.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'open_question_exit_contracts_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      question: caseItem.question,
+      owner: caseItem.owner,
+      existingOwner: caseItem.existingOwner,
+      repeat: caseItem.repeat,
+      resume: caseItem.resume,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.question || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Open Question Exit Contract eval 时出错，未能判断问题生命周期。'
+        : 'Open Question Exit Contract eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runActionReadinessContractsCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    action: caseItem.action,
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-action-readiness-contracts.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'action_readiness_contracts_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      action: caseItem.action,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.scenario || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Action Readiness eval 时出错，未能判断执行前门禁。'
+        : 'Action Readiness eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runEvidenceCohesionGateCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    gateRequest: caseItem.request,
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-evidence-cohesion-gate.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'evidence_cohesion_gate_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      gateRequest: caseItem.request,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.scenario || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Evidence Cohesion Gate eval 时出错，未能判断证据对齐边界。'
+        : 'Evidence Cohesion Gate eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runMeetingOutcomeBinderCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      scenario: caseItem.scenario,
+      previewSlotCount: caseItem.preview?.candidateSlots?.length || 0,
+      meetingId: caseItem.meeting?.meetingId,
+      evidenceCount:
+        (caseItem.meeting?.decisions?.length || 0) +
+        (caseItem.meeting?.actionItems?.length || 0) +
+        (caseItem.meeting?.chapters?.length || 0) +
+        (caseItem.meeting?.transcript?.length || 0),
+      expectedBehavior: caseItem.expectedBehavior,
+    },
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-meeting-outcome-binder.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'meeting_outcome_binder_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      preview: caseItem.preview,
+      meeting: caseItem.meeting,
+      llm: caseItem.llm,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.scenario || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Meeting Outcome Binder eval 时出错，未能判断证据装订质量。'
+        : 'Meeting Outcome Binder eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 migration、生产 service 与 tsx runner 可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runSourceMemoryDistillerCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      scenario: caseItem.scenario,
+      sourceCount: caseItem.sources?.length ?? 0,
+      recallChecks: caseItem.recallChecks || [],
+      expectedBehavior: caseItem.expectedBehavior,
+    },
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-source-memory-distiller.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'source_memory_distiller_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      sourceCount: caseItem.sources?.length ?? 0,
+      sourceKinds: (caseItem.sources || []).map((source) => source.sourceKind),
+      modelProfile: caseItem.modelProfile,
+      recallChecks: caseItem.recallChecks || [],
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.scenario || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Source Memory Distiller eval 时出错，未能判断证据与副作用边界。'
+        : 'Source Memory Distiller eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 migration、生产 service 与 tsx runner 是否可执行。',
     ],
     why: response.why || responseEnvelope.error,
     topMatch: response.topMatch,
@@ -1352,7 +2441,8 @@ async function collectContext(caseItem) {
   if (
     args.live &&
     (caseItem.kind === 'compose_assist_context_pack' ||
-      caseItem.kind === 'compose_assist_prompt_patch')
+      caseItem.kind === 'compose_assist_prompt_patch' ||
+      caseItem.kind === 'compose_assist_prompt_rewrite')
   ) {
     const live = await collectLiveWebAiComposerContext(caseItem);
     if (live.ok) return live;
@@ -1427,6 +2517,7 @@ function summarizeAskContextGapActualOutput({ response, error, statusCode, durat
       evidenceCount: 0,
       evidence: [],
       contextMatch: null,
+      continuityReceipt: null,
       structuredAnswer: null,
     };
   }
@@ -1446,6 +2537,15 @@ function summarizeAskContextGapActualOutput({ response, error, statusCode, durat
       snippet: truncateText(String(item.content || item.summary || ''), 220),
     })),
     contextMatch: summarizeAskContextMatch(response?.contextMatch),
+    continuityReceipt: response?.continuityReceipt
+      ? {
+          source: response.continuityReceipt.source,
+          localOnly: response.continuityReceipt.localOnly,
+          usedAsHint: response.continuityReceipt.usedAsHint,
+          reRetrieved: response.continuityReceipt.reRetrieved,
+          detail: truncateText(String(response.continuityReceipt.detail || ''), 240),
+        }
+      : null,
     structuredAnswer: response?.structuredAnswer
       ? {
           summary: truncateText(String(response.structuredAnswer.summary || ''), 300),
@@ -1974,6 +3074,18 @@ function buildAskContextGapRequest({ caseItem }) {
     scope: caseItem.scope || 'work',
   };
   if (caseItem.context) request.context = caseItem.context;
+  if (caseItem.contextHints) {
+    const contextHints = { ...caseItem.contextHints };
+    const ageHours = Number(caseItem.contextHintsAgeHours);
+    if (Number.isFinite(ageHours) && ageHours >= 0) {
+      contextHints.updatedAt = new Date(
+        Date.now() - ageHours * 60 * 60 * 1000,
+      ).toISOString();
+    } else if (!contextHints.updatedAt) {
+      contextHints.updatedAt = new Date().toISOString();
+    }
+    request.contextHints = contextHints;
+  }
   return request;
 }
 
@@ -2586,6 +3698,177 @@ function judgeContextRecall({ caseItem, response }) {
   };
 }
 
+function judgeAskConversationContinuity({ caseItem, request, response }) {
+  const expected = caseItem.expectedTopics || [];
+  const expectedSelectedTopics = caseItem.expectedSelectedTopics || [];
+  const banned = caseItem.mustNotReturnTopics || [];
+  const expectedReceipt = Boolean(caseItem.expectContinuityReceipt);
+  const requireFreshEvidence = Boolean(caseItem.requireFreshEvidence);
+  const answerText = askAnswerText(response);
+  const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
+  const evidenceText = evidence.map(askEvidenceText).join('\n');
+  const contextMatch = summarizeAskContextMatch(response?.contextMatch);
+  const selectedTopicLabel = String(response?.contextMatch?.selectedTopic?.label || '');
+  const selectedTopicText = [
+    selectedTopicLabel,
+    ...(response?.contextMatch?.selectedTopic?.aliases || []),
+    ...(response?.contextMatch?.selectedTopic?.anchors || []),
+    response?.contextMatch?.userFacingSummary,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const responseText = [
+    answerText,
+    evidenceText,
+    JSON.stringify(response?.blocks || []),
+    selectedTopicText,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const matchedExpectedTopics = hitTerms(responseText, expected);
+  const matchedEvidenceTopics = hitTerms(evidenceText, expected);
+  const matchedSelectedTopics = hitTerms(selectedTopicLabel, expectedSelectedTopics);
+  const matchedMustNotReturnTopics = hitTerms(responseText, banned);
+  const minExpectedHits = Number(caseItem.minExpectedTopicHits ?? 1);
+  const minEvidenceHits = Number(caseItem.minEvidenceTopicHits ?? 1);
+  const continuityReceipt = response?.continuityReceipt || null;
+  const receiptMatches = expectedReceipt
+    ? continuityReceipt?.source === 'local_ask_resume_snapshot' &&
+      continuityReceipt?.localOnly === true &&
+      continuityReceipt?.usedAsHint === true &&
+      continuityReceipt?.reRetrieved === true
+    : !continuityReceipt;
+  const hintPresenceMatches = expectedReceipt
+    ? request?.contextHints?.source === 'local_ask_resume_snapshot'
+    : !request?.contextHints;
+  const hasExpectedTopic = matchedExpectedTopics.length >= minExpectedHits;
+  const selectedTopicMatches =
+    expectedSelectedTopics.length === 0 || matchedSelectedTopics.length > 0;
+  const hasGroundedFreshEvidence =
+    !requireFreshEvidence ||
+    (evidence.length > 0 && matchedEvidenceTopics.length >= minEvidenceHits);
+  const hasReadableAnswer = answerText.trim().length >= 12;
+  const hasBannedTopic = matchedMustNotReturnTopics.length > 0;
+  const topMatch = summarizeAskEvidence(evidence[0]);
+
+  const continuityContract = receiptMatches && hintPresenceMatches
+    ? 3
+    : continuityReceipt || request?.contextHints
+      ? 1
+      : 0;
+  const evidenceRefresh = requireFreshEvidence
+    ? hasGroundedFreshEvidence
+      ? 3
+      : evidence.length
+        ? 1
+        : 0
+    : 3;
+  const topicAlignment = hasBannedTopic
+    ? 0
+    : hasExpectedTopic
+      ? 3
+      : matchedExpectedTopics.length
+        ? 1
+        : 0;
+  const contextIsolation = hasBannedTopic || (!expectedReceipt && continuityReceipt)
+    ? 0
+    : 3;
+  const answerQuality = hasReadableAnswer
+    ? answerText.trim().length >= 40
+      ? 3
+      : 2
+    : answerText.trim()
+      ? 1
+      : 0;
+  const topicSelection = expectedSelectedTopics.length === 0
+    ? 3
+    : selectedTopicMatches
+      ? 3
+      : 0;
+  const hardPass =
+    Boolean(response && typeof response === 'object') &&
+    receiptMatches &&
+    hintPresenceMatches &&
+    hasExpectedTopic &&
+    selectedTopicMatches &&
+    hasGroundedFreshEvidence &&
+    !hasBannedTopic &&
+    hasReadableAnswer;
+  const verdict = hardPass ? 'pass' : 'fail';
+  const problems = [];
+  if (!hintPresenceMatches) problems.push('request hint presence did not match the case');
+  if (!receiptMatches) problems.push('continuity receipt contract did not match');
+  if (!hasExpectedTopic) {
+    problems.push(`expected topic hits ${matchedExpectedTopics.length}/${minExpectedHits}`);
+  }
+  if (!selectedTopicMatches) {
+    problems.push(
+      `selected topic "${selectedTopicLabel || 'none'}" did not match ${expectedSelectedTopics.join(', ')}`,
+    );
+  }
+  if (!hasGroundedFreshEvidence) {
+    problems.push(`grounded evidence hits ${matchedEvidenceTopics.length}/${minEvidenceHits}`);
+  }
+  if (hasBannedTopic) {
+    problems.push(`banned topic leaked: ${matchedMustNotReturnTopics.join(', ')}`);
+  }
+  if (!hasReadableAnswer) problems.push('answer was empty or too short');
+
+  const improvementSuggestions = [];
+  if (!receiptMatches) {
+    improvementSuggestions.push('检查 `/ask` 是否只在接收本机续聊 hint 时返回完整 continuityReceipt。');
+  }
+  if (!hasGroundedFreshEvidence) {
+    improvementSuggestions.push('把 resume hint 只用于 topic boost，并确保最终回答重新走 recall/evidence 链路。');
+  }
+  if (!hasExpectedTopic) {
+    improvementSuggestions.push('检查 topicTitle、previousQuestion 和 evidenceRefs 是否进入 context match / recall expansion。');
+  }
+  if (!selectedTopicMatches) {
+    improvementSuggestions.push(
+      '让显式续聊 topic 在 MemoryContextMatchService 中优先于近期环境 frame，并校验 selectedTopic 本身。',
+    );
+  }
+  if (hasBannedTopic) {
+    improvementSuggestions.push('检查“新问题”请求隔离和 recall rerank，避免上一轮 topic 泄漏。');
+  }
+  if (!improvementSuggestions.length) {
+    improvementSuggestions.push('保留该真实场景回归；Ask prompt、recall 或续接契约变化后手动重跑。');
+  }
+
+  return {
+    verdict,
+    scores: {
+      continuity_contract: continuityContract,
+      evidence_refresh: evidenceRefresh,
+      topic_alignment: topicAlignment,
+      topic_selection: topicSelection,
+      context_isolation: contextIsolation,
+      answer_quality: answerQuality,
+    },
+    why: hardPass
+      ? expectedReceipt
+        ? `本机续聊回执完整，命中 ${matchedExpectedTopics.length} 个话题锚点和 ${matchedEvidenceTopics.length} 个 evidence 锚点。`
+        : '新问题未携带续聊 hint、未返回续聊回执，也没有上一轮 topic 污染。'
+      : problems.join('; '),
+    userConclusion: hardPass
+      ? expectedReceipt
+        ? '重新打开 Ask 后可以直接追问；系统会沿用本机话题线索，但答案仍来自本轮重新检索。'
+        : '点击“新问题”后得到的是干净上下文，不会静默继承上一轮 Ask。'
+      : '当前续聊体验仍可能复述旧摘要、缺少证据或污染新问题，不能交付为可信连续性。',
+    improvementSuggestions,
+    topMatch,
+    contextMatch,
+    continuityReceipt,
+    matchedExpectedTopics,
+    matchedEvidenceTopics,
+    matchedSelectedTopics,
+    selectedTopicLabel,
+    matchedMustNotReturnTopics,
+    evidenceCount: evidence.length,
+  };
+}
+
 function judgeAskContextGap({ caseItem, response }) {
   const expected = caseItem.expectedTopics || [];
   const banned = caseItem.mustNotReturnTopics || [];
@@ -2743,11 +4026,12 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   const banned = caseItem.mustNotReturnTopics || [];
   const expectedBehavior = caseItem.expectedBehavior || {};
   const expectedSuggestionType = expectedBehavior.suggestionType || 'context_pack';
+  const isPromptRewrite = expectedSuggestionType === 'rewrite_prompt';
   const insertText = String(response?.insertText || '');
   const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
   const evidenceText = evidence.map(composeEvidenceText).join('\n');
   const contextPackMemoryText =
-    expectedSuggestionType === 'prompt_patch'
+    expectedSuggestionType === 'prompt_patch' || isPromptRewrite
       ? [insertText, evidenceText].filter(Boolean).join('\n')
       : [
           extractContextPackSection(insertText, '相关记忆'),
@@ -2762,13 +4046,12 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   const matchedMustNotReturnTopics = hitTerms(combinedText, banned);
   const minExpectedHits = Number(caseItem.minExpectedTopicHits ?? 2);
   const minEvidenceHits = Number(caseItem.minEvidenceTopicHits ?? 1);
-  const requiredSections = expectedBehavior.requiredSections || [
-    '任务判断',
-    '目标工具适配',
-    '相关记忆',
-    '约束',
-    '来源',
-  ];
+  const requireEvidence =
+    expectedBehavior.requireEvidence == null
+      ? !isPromptRewrite
+      : Boolean(expectedBehavior.requireEvidence);
+  const requiredSections = expectedBehavior.requiredSections ||
+    (isPromptRewrite ? [] : ['相关上下文']);
   const matchedSections = hitTerms(insertText, requiredSections);
   const missingSections = requiredSections.filter((section) => !matchedSections.includes(section));
   const mustInclude = expectedBehavior.mustInclude || [];
@@ -2777,12 +4060,31 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   const matchedMustNotInclude = hitTerms(insertText, mustNotInclude);
   const hasMustInclude = mustInclude.length === 0 || matchedMustInclude.length >= mustInclude.length;
   const hasExpectedSuggestionType = response?.suggestionType === expectedSuggestionType;
+  const expectedInsertMode = expectedBehavior.insertMode ||
+    (isPromptRewrite ? 'replace_draft' : 'append_patch');
+  const insertModeMatches = response?.insertMode === expectedInsertMode;
   const expectedPreview = expectedBehavior.previewRequired;
   const previewMatches = expectedPreview == null || response?.previewRequired === expectedPreview;
   const expectedRisk = expectedBehavior.riskLevel;
   const riskMatches = !expectedRisk || response?.riskLevel === expectedRisk;
-  const hasContextPack = response?.available === true && hasExpectedSuggestionType && insertText.length >= 80;
-  const hasGroundedEvidence = evidence.length > 0 && matchedEvidenceTopics.length >= minEvidenceHits;
+  const expectedLanguage = expectedBehavior.language;
+  const hanCharacterCount = (insertText.match(/[\u3400-\u9fff]/g) || []).length;
+  const latinCharacterCount = (insertText.match(/[A-Za-z]/g) || []).length;
+  const languageMatches =
+    !expectedLanguage ||
+    (expectedLanguage === 'zh'
+      ? hanCharacterCount >= 8
+      : expectedLanguage === 'en'
+        ? latinCharacterCount >= 30 && hanCharacterCount <= 2
+        : true);
+  const hasContextPack =
+    response?.available === true &&
+    hasExpectedSuggestionType &&
+    insertModeMatches &&
+    insertText.length >= (isPromptRewrite ? 120 : 80);
+  const hasGroundedEvidence =
+    !requireEvidence ||
+    (evidence.length > 0 && matchedEvidenceTopics.length >= minEvidenceHits);
   const hasRelevantText = matchedExpectedTopics.length >= minExpectedHits;
   const bannedHits = matchedMustNotReturnTopics.length + matchedMustNotInclude.length;
 
@@ -2806,10 +4108,17 @@ function judgeComposeContextPack({ caseItem, response, request }) {
   }
 
   const contextRelevance = bannedHits ? 0 : Math.min(3, matchedExpectedTopics.length);
-  const evidenceGrounding = bannedHits ? 0 : hasGroundedEvidence ? Math.min(3, matchedEvidenceTopics.length) : 0;
+  const evidenceGrounding = bannedHits
+    ? 0
+    : !requireEvidence
+      ? 3
+      : hasGroundedEvidence
+        ? Math.min(3, matchedEvidenceTopics.length)
+        : 0;
   const answerQuality = bannedHits
     ? 0
     : hasContextPack && !missingSections.length && previewMatches && riskMatches
+      && languageMatches
       && hasMustInclude
       ? 3
       : hasContextPack && matchedSections.length >= 3
@@ -2840,7 +4149,8 @@ function judgeComposeContextPack({ caseItem, response, request }) {
     hasMustInclude &&
     !missingSections.length &&
     previewMatches &&
-    riskMatches
+    riskMatches &&
+    languageMatches
   ) {
     verdict = 'pass';
   } else if (hasContextPack || hasRelevantText || hasGroundedEvidence) {
@@ -2866,8 +4176,11 @@ function judgeComposeContextPack({ caseItem, response, request }) {
       matchedMustInclude,
       matchedMustNotInclude,
       hasExpectedSuggestionType,
+      insertModeMatches,
       previewMatches,
       riskMatches,
+      languageMatches,
+      requireEvidence,
       evidenceCount: evidence.length,
       expectedSuggestionType,
     }),
@@ -2880,6 +4193,7 @@ function judgeComposeContextPack({ caseItem, response, request }) {
     matchedMustNotInclude,
     evidenceCount: evidence.length,
     suggestionType: response?.suggestionType,
+    insertMode: response?.insertMode,
     available: response?.available,
   };
 }
@@ -3044,6 +4358,38 @@ async function writeSummary(runDir, summary, caseResults) {
   await fs.writeFile(resolveRepoPath(path.join(runDir, 'report.html')), buildReaderReportHtml(readerReport));
 }
 
+async function rerenderExistingRun(runPath, registryConfig) {
+  const requestedPath = resolveRepoPath(String(runPath));
+  const runDir = /\.(?:html|json)$/i.test(requestedPath)
+    ? path.dirname(requestedPath)
+    : requestedPath;
+  const summary = JSON.parse(
+    await fs.readFile(path.join(runDir, 'summary.json'), 'utf8'),
+  );
+  const caseResults = JSON.parse(
+    await fs.readFile(path.join(runDir, 'case-results.json'), 'utf8'),
+  );
+  const suite = getSuiteById(registryConfig, summary.suiteId);
+  if (!suite) throw new Error(`Unknown eval suite in existing run: ${summary.suiteId}`);
+
+  const readerReport = buildReaderReportModel(
+    {
+      ...summary,
+      readerProof: summary.readerProof || suite.readerProof || null,
+    },
+    caseResults,
+  );
+  await fs.writeFile(
+    path.join(runDir, 'reader-report.json'),
+    JSON.stringify(readerReport, null, 2),
+  );
+  await fs.writeFile(path.join(runDir, 'report.html'), buildReaderReportHtml(readerReport));
+  return {
+    suiteId: summary.suiteId,
+    reportPath: path.relative(repoRoot, path.join(runDir, 'report.html')),
+  };
+}
+
 function buildRunReportHtml(summary, caseResults) {
   return buildReaderReportHtml(buildReaderReportModel(summary, caseResults));
 }
@@ -3052,6 +4398,11 @@ function buildReaderReportModel(summary, caseResults) {
   const counts = summary.counts || countStatuses(caseResults);
   const readerCases = caseResults.map((item, index) => buildReaderCase(item, index));
   const averageScore = averageCaseScore(caseResults);
+  const readerProof = buildReaderProofModel({
+    contract: summary.readerProof,
+    caseResults,
+  });
+  const legacyProofLists = readerProofLegacyLists(readerProof);
   const artifactRows = [
     ['input.jsonl', '采集到的页面或快照上下文'],
     ['requests.jsonl', '发往服务端的请求证据'],
@@ -3079,8 +4430,9 @@ function buildReaderReportModel(summary, caseResults) {
         ['失败样本', (summary.failedCaseIds || []).join(', ') || '-'],
         ['报告契约', formatReportContract(summary.reportContract)],
       ],
-      proved: buildReaderProved(summary, caseResults),
-      notProved: buildReaderNotProved(summary, caseResults),
+      readerProof,
+      proved: legacyProofLists.proved,
+      notProved: legacyProofLists.notProved,
       nextSteps: buildRunNextSteps(summary, caseResults),
       reportContract: summary.reportContract,
     },
@@ -3151,49 +4503,6 @@ function buildReaderReportHtml(model) {
       </section>
     `,
   });
-}
-
-function buildReaderProved(summary, caseResults) {
-  if (summary.status === 'skipped') return ['本次没有执行样本，因此没有形成体验判断。'];
-
-  const proofSummaries = caseResults
-    .map((item) => item.proofSummary)
-    .filter(Boolean);
-  if (proofSummaries.length) {
-    const explicit = Array.from(
-      new Set(proofSummaries.flatMap((proof) => normalizeArray(proof.proves))),
-    );
-    if (explicit.length) return explicit;
-  }
-
-  const counts = countStatuses(caseResults);
-  return [
-    `${caseResults.length} 个样本完成运行并生成 Reader Contract 卡片。`,
-    counts.pass ? `${counts.pass} 个样本达到当前 suite 的通过标准。` : '',
-    counts.warn ? `${counts.warn} 个样本需要人工复核。` : '',
-    counts.fail ? `${counts.fail} 个样本暴露失败路径。` : '',
-    summary.reportContract?.issueCount
-      ? ''
-      : '所有样本都满足基础 report contract 字段要求。',
-  ].filter(Boolean);
-}
-
-function buildReaderNotProved(summary, caseResults) {
-  const explicit = Array.from(
-    new Set(
-      caseResults.flatMap((item) =>
-        Array.isArray(item.proofSummary?.doesNotProve)
-          ? item.proofSummary.doesNotProve
-          : [],
-      ),
-    ),
-  );
-  if (explicit.length) return explicit;
-  return [
-    '不证明未运行的 suite 或 case 行为正确。',
-    '不证明生产环境所有真实数据分布都已覆盖。',
-    '不替代查看 artifact 中的原始 request、response 和 judge 证据。',
-  ];
 }
 
 function buildReaderCase(item, index) {
@@ -3297,7 +4606,9 @@ function readableCaseKind(item) {
   const labels = {
     'context-recall': 'Memory Lens / Context Recall',
     'scene-memory-autopilot': 'Scene Memory Autopilot',
+    'keystone-memory-briefs': '关键记忆简报',
     'ask-context-gap': 'Ask 缺上下文',
+    'ask-conversation-continuity': 'Ask 会话续接',
     'answer-memory-tracker': 'Ask 活答案记忆',
     'compose-assist': 'Compose Assist',
     'compose-style-memory': '写作风格记忆',
@@ -3313,11 +4624,17 @@ function deriveReaderCaseGoal(item) {
   if (item.suiteId === 'ask-context-gap') {
     return '验证 Ask 是否能从短问句补齐上下文，并用 evidence 给出有根据的回答。';
   }
+  if (item.suiteId === 'ask-conversation-continuity') {
+    return '验证本机 Ask 续聊线索是否只用于延续话题、重新检索证据，并在新问题中保持隔离。';
+  }
   if (item.suiteId === 'answer-memory-tracker') {
     return '验证多轮 Ask 的 answerMemory 状态和权威决策是否按预期演进。';
   }
   if (['context-recall', 'scene-memory-autopilot'].includes(item.suiteId)) {
     return '验证当前场景下 Memory Lens / Autopilot 是否展示强相关记忆并静默弱噪音。';
+  }
+  if (item.suiteId === 'keystone-memory-briefs') {
+    return '验证跨来源简报是否只在证据与场景足够时进入现有 Memory Lens，并在单源、冲突、过期或外发风险下正确降级。';
   }
   if (item.suiteId === 'compose-assist') {
     if (item.caseKind === 'compose_assist_lens_routing_contract') {
@@ -3338,6 +4655,14 @@ function buildReaderInputSummary(item) {
       ['页面标题', request.title || sample.title],
       ['URL', request.url || sample.url || item.targetUrl],
       ['用户问句', item.query || sample.query],
+      ['续聊来源', sample.contextHints?.source],
+      ['续聊话题', sample.contextHints?.topicTitle],
+      [
+        '快照年龄',
+        sample.contextHintsAgeHours == null
+          ? undefined
+          : `${sample.contextHintsAgeHours} 小时`,
+      ],
       ['当前文本', request.primaryText || sample.primaryText],
       ['surface', request.surface || sample.surface || sample.site],
       ['contextType', request.contextType || sample.contextType],
@@ -3366,10 +4691,68 @@ function buildReaderExpectedSummary(item) {
 
 function buildReaderActualSummary(item) {
   const output = item.actualOutput || {};
+  if (item.suiteId === 'keystone-memory-briefs') {
+    const brief = output.brief || {};
+    const presentation = output.presentation || {};
+    return {
+      quote: truncateText(
+        String(brief.summary || brief.externalSummary || item.why || ''),
+        700,
+      ),
+      emptyText: item.reason || item.error || '本 case 没有生成关键简报结果。',
+      rows: [
+        ['状态', brief.status || item.status],
+        ['blocked reason', brief.blockedReason],
+        ['来源数', brief.sourceCount],
+        ['来源引用', brief.sourceRefs],
+        ['freshness', brief.freshness],
+        ['presentation mode', presentation.presentationMode],
+        ['whyNow', presentation.whyNow],
+        ['证据记忆', presentation.evidenceMatchIds],
+        ['允许复制', brief.displayPolicy?.canCopyToDraft],
+        ['仅本机来源', brief.displayPolicy?.hiddenSourceCount],
+        ['外发摘要', brief.externalSummary],
+        ['写入边界', brief.writeReceipt],
+      ],
+    };
+  }
+  if (item.suiteId === 'change-memory-ledger') {
+    const projections = Array.isArray(output.projections) ? output.projections : [];
+    const composeEvidence = Array.isArray(output.composeEvidence) ? output.composeEvidence : [];
+    const projectionText = projections
+      .map((projection) => `${projection.subjectKey || projection.chainKey} · ${projection.propertyKey} · ${projection.status}`)
+      .join('；');
+    return {
+      quote: truncateText(String(output.prompt || projectionText || output.receipt?.detail || ''), 700),
+      emptyText: item.reason || item.error || '本 case 没有形成变化投影。',
+      rows: [
+        ['状态', item.status],
+        ['提取状态', output.receipt?.status],
+        ['提取事件', output.receipt?.extractedCount],
+        ['排除噪音', output.receipt?.excludedNoiseCount],
+        ['投影数', projections.length],
+        ['变化投影', projectionText],
+        ['Ask 边界', output.prompt],
+        ['Compose 证据', composeEvidence.map((evidence) => evidence.snippet || evidence.boundary)],
+      ],
+    };
+  }
+  const personaVariants = Array.isArray(output.variants)
+    ? output.variants
+    : [];
   const topMatch = item.topMatch;
   const contextMatch = output.contextMatch || item.contextMatch;
+  const continuityReceipt = output.continuityReceipt || item.continuityReceipt;
   const answerMemory = output.steps?.at?.(-1)?.answerMemory || output.answerMemory;
   const quote =
+    (personaVariants.length
+      ? personaVariants
+          .map(
+            (variant) =>
+              `${variant.id}: ${variant.summary?.audienceType || 'unknown'} / ${variant.summary?.representationMode || 'unknown'}`,
+          )
+          .join('；')
+      : '') ||
     output.insertText ||
     output.answer ||
     output.assist ||
@@ -3388,10 +4771,23 @@ function buildReaderActualSummary(item) {
     ['Context Match', contextMatch?.state],
     ['锁定话题', contextMatch?.selectedTopic?.label],
     ['Evidence 数量', output.evidenceCount ?? output.evidence?.length],
+    ['续聊回执来源', continuityReceipt?.source],
+    ['本机线索', continuityReceipt?.localOnly],
+    ['仅作提示', continuityReceipt?.usedAsHint],
+    ['本轮重新检索', continuityReceipt?.reRetrieved],
+    ['续聊回执', continuityReceipt?.detail],
     ['available', output.available],
     ['suggestionType', output.suggestionType],
     ['riskLevel', output.riskLevel],
     ['previewRequired', output.previewRequired],
+    ['投影变体数', personaVariants.length || undefined],
+    [
+      '投影场景',
+      personaVariants.map(
+        (variant) =>
+          `${variant.id}:${variant.summary?.scene}/${variant.summary?.voiceMode}`,
+      ),
+    ],
     ['route', output.route],
     ['Compose icon 可见', output.composeAssistIconVisible],
     ['Memory Lens eligible', output.memoryLensEligible],
@@ -3446,6 +4842,41 @@ function buildReaderProofChecks(item) {
         .filter(Boolean)
         .join('；') || '没有可见上下文证据。',
     });
+  }
+
+  if (item.suiteId === 'ask-conversation-continuity') {
+    const expectsReceipt = Boolean(item.expectedBehavior?.continuityReceipt);
+    const receipt = output.continuityReceipt || item.continuityReceipt;
+    const receiptMatches = expectsReceipt
+      ? receipt?.source === 'local_ask_resume_snapshot' &&
+        receipt?.localOnly === true &&
+        receipt?.usedAsHint === true &&
+        receipt?.reRetrieved === true
+      : !receipt;
+    checks.push({
+      label: expectsReceipt ? '续聊回执契约' : '新问题隔离',
+      status: receiptMatches ? 'pass' : 'fail',
+      detail: expectsReceipt
+        ? receiptMatches
+          ? '本机线索、仅作提示和重新检索字段完整。'
+          : '缺少或错误返回 continuityReceipt。'
+        : receiptMatches
+          ? '请求未继承续聊线索，响应也没有续聊回执。'
+          : '新问题错误继承了续聊回执。',
+    });
+    if (item.expectedSelectedTopics?.length) {
+      const selectedTopicLabel =
+        output.contextMatch?.selectedTopic?.label || item.selectedTopicLabel || '';
+      const selectedTopicMatches =
+        hitTerms(selectedTopicLabel, item.expectedSelectedTopics).length > 0;
+      checks.push({
+        label: '显式续聊话题',
+        status: selectedTopicMatches ? 'pass' : 'fail',
+        detail: selectedTopicMatches
+          ? `已锁定到 ${selectedTopicLabel}。`
+          : `实际锁定到 ${selectedTopicLabel || 'none'}，预期 ${item.expectedSelectedTopics.join(' / ')}。`,
+      });
+    }
   }
 
   if (item.reportContract?.issues?.length) {
@@ -3522,25 +4953,65 @@ function buildReaderDebugLinks() {
 }
 
 function renderReaderProofSummary(summary) {
+  const readerProof = summary.readerProof;
+  const structuredClaims = Array.isArray(readerProof?.claims)
+    ? readerProof.claims
+    : [];
+  const provedClaims = structuredClaims.filter((claim) => claim.status === 'proved');
+  const notProvedClaims = structuredClaims.filter((claim) => claim.status !== 'proved');
+  const boundaries = Array.isArray(readerProof?.boundaries)
+    ? readerProof.boundaries
+    : [];
+  const proofSourceText = readerProof?.source === 'suite_contract'
+    ? '以下主张来自 suite 声明的需求验证契约，只有映射 case 全部运行、通过并达到证据门槛才会列为已证明。'
+    : '以下结论由本次实际 case 结果归纳；该 suite 尚未声明完整的需求验证契约。';
   return `<section class="proof-section">
     <div class="proof-head">
       <div>
         <h2>这份 report 到底证明了什么</h2>
-        <p class="muted">这里是 Reader Contract 归一化后的读者结论；完整 debug 留在证据文件里。</p>
+        <p class="muted">${escapeHtml(proofSourceText)} 报告字段完整性单独显示在“报告契约”。</p>
       </div>
       <div class="proof-status">${statusBadge(summary.status)}</div>
     </div>
     <div class="proof-grid">
       <div class="proof-panel proof-panel-good">
-        <h3>已证明</h3>
-        <ul>${(summary.proved || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('') || '<li>本次没有形成正向证明。</li>'}</ul>
+        <h3>已证明的需求行为</h3>
+        <div class="proof-claim-list">${provedClaims.length
+          ? provedClaims.map(renderRequirementProofClaim).join('')
+          : (summary.proved || []).map((item) => `<p class="proof-claim-statement">${escapeHtml(item)}</p>`).join('') || '<p class="muted">本次没有形成需求级正向证明。</p>'}</div>
       </div>
       <div class="proof-panel proof-panel-boundary">
-        <h3>没有证明</h3>
-        <ul>${(summary.notProved || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('') || '<li>没有记录边界说明。</li>'}</ul>
+        <h3>未证明与验证边界</h3>
+        <div class="proof-claim-list">${[
+          ...notProvedClaims.map(renderRequirementProofClaim),
+          ...boundaries.map((item) => `<div class="proof-boundary"><strong>边界</strong><p>${escapeHtml(item)}</p></div>`),
+        ].join('') || (summary.notProved || []).map((item) => `<div class="proof-boundary"><p>${escapeHtml(item)}</p></div>`).join('') || '<p class="muted">没有记录验证边界。</p>'}</div>
       </div>
     </div>
   </section>`;
+}
+
+function renderRequirementProofClaim(claim) {
+  const evidence = Array.isArray(claim.evidence) ? claim.evidence : [];
+  return `<div class="proof-claim">
+    <p class="proof-claim-statement">${escapeHtml(claim.statement)}</p>
+    ${evidence.length ? `<ul class="proof-evidence-list">${evidence.map(renderRequirementProofEvidence).join('')}</ul>` : ''}
+    ${claim.reason ? `<p class="proof-reason">${escapeHtml(claim.reason)}</p>` : ''}
+  </div>`;
+}
+
+function renderRequirementProofEvidence(evidence) {
+  const scoreChecks = Array.isArray(evidence.scoreChecks)
+    ? evidence.scoreChecks
+    : [];
+  const scoreText = scoreChecks.length
+    ? `；门槛：${scoreChecks
+      .map((check) =>
+        `${localizeScoreKey(check.scoreKey)} ${check.actual ?? '缺失'}（要求 >= ${check.minimum}）`,
+      )
+      .join('，')}`
+    : '';
+  return `<li><span>${escapeHtml(evidence.title || evidence.caseId)}</span><small>${escapeHtml(evidence.caseId || '')} · ${escapeHtml(localizeStatus(evidence.status))}${escapeHtml(scoreText)}</small></li>`;
 }
 
 function renderReaderCaseCard(item, index) {
@@ -3671,7 +5142,11 @@ function reportTitle(summary) {
   if (summary.suiteId === 'context-recall') return 'Memory Lens 真实群组关联评估';
   if (summary.suiteId === 'scene-memory-autopilot')
     return 'Scene Memory Autopilot 本地过滤评估';
+  if (summary.suiteId === 'keystone-memory-briefs')
+    return '关键记忆简报来源与场景边界评估';
   if (summary.suiteId === 'ask-context-gap') return 'Ask 缺上下文回补评估';
+  if (summary.suiteId === 'ask-conversation-continuity')
+    return 'Ask 会话续接真实场景评估';
   if (summary.suiteId === 'answer-memory-tracker') return 'Ask 活答案记忆追踪评估';
   if (summary.suiteId === 'estimate-cue-compiler') return 'Estimate Cue + Outcome Loop 评估';
   return summary.title || summary.suiteId;
@@ -3697,6 +5172,15 @@ function runExecutiveConclusion(summary, caseResults) {
     }
     return `这次 Ask 缺上下文评估通过，短问句能补齐上下文并用 evidence 回答，平均体验分 ${averageScore ?? '-'}.`;
   }
+  if (summary.suiteId === 'ask-conversation-continuity') {
+    if ((counts.error || 0) > 0) {
+      return `这次 Ask 会话续接评估有 ${counts.error} 条请求错误或超时，不能据此判断能力，平均体验分 ${averageScore ?? '-'}。`;
+    }
+    if ((counts.fail || 0) > 0) {
+      return `这次 Ask 会话续接评估未达标：${counts.fail} 条在回执、重新检索、话题延续或新问题隔离上失败，平均体验分 ${averageScore ?? '-'}。`;
+    }
+    return `这次 Ask 会话续接评估通过：本机线索能延续真实话题并重新检索，新问题保持隔离，平均体验分 ${averageScore ?? '-'}。`;
+  }
   if (summary.suiteId === 'context-recall') {
     if ((counts.fail || 0) > 0) {
       return `这次 Memory Lens 真实群组评估未达标：${counts.fail || 0} 条明显不该展示，平均体验分 ${averageScore ?? '-'}。优先改进召回门槛、标题摘要和为什么相关的解释。`;
@@ -3714,6 +5198,12 @@ function runExecutiveConclusion(summary, caseResults) {
       return `这次 Scene Memory Autopilot 有 ${counts.warn || 0} 条诊断不完整，平均体验分 ${averageScore ?? '-'}。需要补齐 Autopilot 摘要或解释锚点。`;
     }
     return `这次 Scene Memory Autopilot 本地过滤评估通过，弱关联和重复候选被静默，平均体验分 ${averageScore ?? '-'}。`;
+  }
+  if (summary.suiteId === 'keystone-memory-briefs') {
+    if ((counts.fail || 0) > 0 || (counts.error || 0) > 0) {
+      return `这次关键记忆简报评估未达标：${(counts.fail || 0) + (counts.error || 0)} 条在来源覆盖、场景命中、时效或外发边界上失败，平均体验分 ${averageScore ?? '-'}。`;
+    }
+    return `这次关键记忆简报评估通过：ready、candidate、partial、stale 与外发脱敏边界符合预期，平均体验分 ${averageScore ?? '-'}。`;
   }
   if (summary.suiteId === 'estimate-cue-compiler') {
     if ((counts.fail || 0) > 0) {
@@ -3746,6 +5236,23 @@ function buildRunNextSteps(summary, caseResults) {
       ];
     }
     return ['继续保留这条 suite，并从最新高频记忆定期补充新的短问句样本。'];
+  }
+  if (summary.suiteId === 'ask-conversation-continuity') {
+    const hasError = caseResults.some((item) => item.status === 'error');
+    const hasFail = caseResults.some((item) => item.status === 'fail');
+    if (hasError) {
+      return ['先恢复 Ask endpoint 或排除超时，再用同一请求重跑；错误结果不用于判断续接质量。'];
+    }
+    if (hasFail) {
+      return [
+        '先检查失败 case 的 continuityReceipt 和 requests.jsonl，确认前端 hint 与服务端回执边界。',
+        '再检查 evidence 命中和禁入话题，避免用旧摘要代替本轮检索或污染新问题。',
+      ];
+    }
+    return [
+      'Ask prompt、recall、context match 或续接 payload 变化后手动重跑该 suite。',
+      '在提供 no-write eval 模式前保持手动运行，避免真实用户 answer memory 被测试会话污染。',
+    ];
   }
   if (summary.status === 'fail') {
     return [
@@ -3798,6 +5305,11 @@ function computeOverallScore(scores = {}, status = '') {
     evidence_grounding: 25,
     context_match: 25,
     gap_resolution: 25,
+    continuity_contract: 30,
+    evidence_refresh: 25,
+    topic_alignment: 25,
+    topic_selection: 25,
+    context_isolation: 20,
     answer_memory_tracking: 30,
     authority_contract: 20,
     specificity: 15,
@@ -3851,9 +5363,9 @@ function buildAskContextGapUserConclusion({ status, heuristic, error }) {
 
 function buildComposeContextPackUserConclusion({ status, heuristic, error }) {
   if (status === 'error') return `未完成：Composer Assist 请求失败${error ? `（${error}）` : ''}。`;
-  if (status === 'pass') return '通过：AI 输入框场景生成了有证据、有任务判断、可预览插入的跨 AI 上下文包。';
-  if (status === 'warn') return '需复核：生成了部分上下文包，但相关性、证据或隐私边界还不够稳定。';
-  if (status === 'fail') return '失败：没有生成可用的跨 AI 上下文包，或生成内容与当前 chat/记忆证据不匹配。';
+  if (status === 'pass') return '通过：AI 输入框场景生成了模式、语言、证据和预览边界都符合契约的 Prompt 建议。';
+  if (status === 'warn') return '需复核：生成了 Prompt 建议，但专业结构、相关性、证据或替换边界还不够稳定。';
+  if (status === 'fail') return '失败：没有生成可用的 Prompt 建议，或模式、语言、内容与当前草稿不匹配。';
   return heuristic?.why || '需要人工复核这个 Compose Assist 样本。';
 }
 
@@ -3909,18 +5421,21 @@ function buildComposeContextPackImprovementSuggestions({ caseItem, status, heuri
   const matched = heuristic.matchedExpectedTopics || [];
   const evidenceMatched = heuristic.matchedEvidenceTopics || [];
   const missing = expected.filter((topic) => !matched.includes(topic));
+  const requiresEvidence = caseItem.expectedBehavior?.requireEvidence !== false;
+  const isRewrite =
+    caseItem.expectedBehavior?.suggestionType === 'rewrite_prompt';
 
   if (heuristic.available === false) {
     suggestions.push('如果当前 chat 有明确任务且记忆库有证据，不能只返回 available=false；优先查看 debug.rejectedReason 和 recallRequest。');
   }
-  if (!heuristic.evidenceCount) {
+  if (requiresEvidence && !heuristic.evidenceCount) {
     suggestions.push('context pack 必须带 evidence；没有证据时应该保持安静并在 report 里解释 rejectedReason。');
   }
-  if (!evidenceMatched.length) {
+  if (requiresEvidence && !evidenceMatched.length) {
     suggestions.push('证据没有命中预期锚点；检查 sourceTypes、当前 provider 自回声过滤，以及 web_agent_prompt 的 primaryText/draftText 是否进入 recall。');
   }
   if ((heuristic.missingSections || []).length) {
-    suggestions.push(`补齐 context pack 固定结构：${heuristic.missingSections.join('、')}。`);
+    suggestions.push(`补齐建议文本的要求结构：${heuristic.missingSections.join('、')}。`);
   }
   if (missing.length && status !== 'pass') {
     suggestions.push(`生成文本缺少当前任务锚点：${missing.slice(0, 6).join('、')}。`);
@@ -3929,7 +5444,11 @@ function buildComposeContextPackImprovementSuggestions({ caseItem, status, heuri
     suggestions.push('生成文本包含禁止主题或无关旧上下文，应加强 rerank 和 egress 过滤。');
   }
   if ((heuristic.missingSections || []).length && (heuristic.scores?.answer_quality ?? 0) < 3) {
-    suggestions.push('报告期望看到任务判断、目标工具适配、相关记忆、约束、来源；缺任何一块都应降级。');
+    suggestions.push(
+      isRewrite
+        ? '完整重写应补齐研究范围、证据层级、多维分析、个体化条件和输出结构。'
+        : '补丁或上下文只保留直接有用的结构，不要恢复任务判断、工具推荐或通用来源壳。',
+    );
   }
   if (!suggestions.length) suggestions.push('维持这条回归；后续用 --live 接入真实 ChatGPT/Codex 页面采样。');
   return [...new Set(suggestions)];
@@ -4243,6 +5762,7 @@ function summarizeComposeContextPackOutput(response) {
   return {
     available: response.available,
     suggestionType: response.suggestionType,
+    insertMode: response.insertMode,
     title: response.title,
     summary: response.summary,
     insertText: response.insertText || '',
@@ -4374,8 +5894,11 @@ function buildComposeContextPackWhy({
   matchedMustInclude,
   matchedMustNotInclude,
   hasExpectedSuggestionType,
+  insertModeMatches,
   previewMatches,
   riskMatches,
+  languageMatches,
+  requireEvidence,
   evidenceCount,
   expectedSuggestionType,
 }) {
@@ -4391,9 +5914,19 @@ function buildComposeContextPackWhy({
   if (!hasExpectedSuggestionType) {
     return `Expected ${expectedSuggestionType || 'context_pack'}, got ${response?.suggestionType || '-'}.`;
   }
-  if (!evidenceCount) return 'Composer Assist generated no evidence-backed context.';
-  if (!matchedEvidenceTopics.length) return 'Evidence was returned, but it did not contain the expected memory anchors.';
-  if (missingSections.length) return `Context pack is missing section(s): ${missingSections.join('、')}.`;
+  if (!insertModeMatches) {
+    return `Insert mode mismatch for ${expectedSuggestionType}: got ${response?.insertMode || '-'}.`;
+  }
+  if (requireEvidence && !evidenceCount) {
+    return 'Composer Assist generated no evidence-backed context.';
+  }
+  if (requireEvidence && !matchedEvidenceTopics.length) {
+    return 'Evidence was returned, but it did not contain the expected memory anchors.';
+  }
+  if (missingSections.length) return `Prompt suggestion is missing section(s): ${missingSections.join('、')}.`;
+  if (!languageMatches) {
+    return 'Prompt Compiler output did not preserve the current draft language.';
+  }
   if (!previewMatches || !riskMatches) {
     return `Privacy boundary mismatch: risk=${response?.riskLevel}, preview=${response?.previewRequired}.`;
   }
@@ -4401,7 +5934,7 @@ function buildComposeContextPackWhy({
   if (!matchedMustInclude.length && request?.draftText) {
     return 'Context pack was generated, but it missed the case-specific must-include terms.';
   }
-  return `Context pack hit ${matchedExpectedTopics.length} expected topic(s) and ${matchedEvidenceTopics.length} evidence anchor(s).`;
+  return `${expectedSuggestionType} hit ${matchedExpectedTopics.length} expected topic(s) and ${matchedEvidenceTopics.length} evidence anchor(s).`;
 }
 
 function anchorCount(match) {
@@ -4850,7 +6383,8 @@ function renderSceneSourceProvenanceAudit(audit) {
 function renderComposeAssistCaseCard(item) {
   if (
     item.caseKind === 'compose_assist_context_pack' ||
-    item.caseKind === 'compose_assist_prompt_patch'
+    item.caseKind === 'compose_assist_prompt_patch' ||
+    item.caseKind === 'compose_assist_prompt_rewrite'
   ) {
     return renderComposeContextPackCaseCard(item);
   }
@@ -5279,6 +6813,11 @@ function localizeScoreKey(key) {
     evidence_grounding: '证据支撑',
     context_match: '话题锁定',
     gap_resolution: '缺口补齐',
+    continuity_contract: '续聊回执',
+    evidence_refresh: '重新检索',
+    topic_alignment: '话题延续',
+    topic_selection: '显式话题锁定',
+    context_isolation: '新问题隔离',
     specificity: '具体性',
     title_quality: '标题质量',
     explanation_quality: '解释质量',
@@ -5293,6 +6832,11 @@ function localizeScoreKey(key) {
     cue_stability: 'Cue 稳定',
     actionable_text: '可行动文案',
     outcome_linkage: 'Outcome 关联',
+    sourceGrounding: '来源覆盖',
+    sceneRelevance: '场景相关',
+    statusAndFreshness: '状态与时效',
+    privacyAndProjection: '隐私与投影',
+    contractIntegrity: '契约完整性',
   };
   return labels[key] || key;
 }
@@ -5378,6 +6922,18 @@ function buildHtmlShell({ title, body }) {
     .proof-panel h3 { margin-bottom: 10px; font-size: 15px; }
     .proof-panel ul { margin: 0; padding-left: 18px; }
     .proof-panel li { margin: 7px 0; }
+    .proof-claim-list { display: grid; gap: 12px; }
+    .proof-claim { padding-bottom: 12px; border-bottom: 1px solid rgba(71, 84, 103, 0.16); }
+    .proof-claim:last-child { padding-bottom: 0; border-bottom: 0; }
+    .proof-claim-statement { margin: 0; color: #1d2939; font-weight: 700; overflow-wrap: anywhere; }
+    .proof-evidence-list { display: grid; gap: 6px; margin-top: 8px !important; padding: 0 !important; list-style: none; }
+    .proof-evidence-list li { display: grid; gap: 2px; margin: 0; color: #344054; }
+    .proof-evidence-list small { color: var(--muted); overflow-wrap: anywhere; }
+    .proof-reason { margin: 8px 0 0; color: #b54708; font-size: 13px; overflow-wrap: anywhere; }
+    .proof-boundary { padding-bottom: 10px; border-bottom: 1px solid rgba(181, 71, 8, 0.14); }
+    .proof-boundary:last-child { padding-bottom: 0; border-bottom: 0; }
+    .proof-boundary strong { color: #b54708; font-size: 12px; }
+    .proof-boundary p { margin: 3px 0 0; overflow-wrap: anywhere; }
     .proof-panel-good { border-color: #b6ded4; background: #f3fbf8; }
     .proof-panel-boundary { border-color: #fedf89; background: #fffcf2; }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }

@@ -108,3 +108,31 @@ Return JSON only:
 - `replace_draft` preserves the original through the existing undo contract.
 - Continuous typing cancels stale compiler responses and does not call the LLM every 700ms.
 - Existing Jira estimate/Sites/automation deterministic patches remain stable.
+
+## 2026-07-15 implementation handoff
+
+- The user approved implementation and replaced the prior stable-draft debounce recommendation with a strict blur trigger.
+- The response contract is locked to `rewrite_prompt + replace_draft` and append behavior for prompt patches/context packs.
+- English compiler instructions are acceptable, but generated text must follow the current draft's dominant language.
+- The reported childcare case must compile into a Chinese research/decision prompt without `chunk:*`, `(no preview available)`, Gemma license, `事实变化`, NotebookLM recommendations, or generic Jira confirmation copy.
+- The worktree contains many unrelated parallel changes. Compose Assist core files are currently clean; `src/services/MemoryServiceClient.ts` has one unrelated Provider feed interface addition that must be preserved.
+- `.planning/.active_plan` belongs to a concurrent automation task, so this task will update its existing isolated plan directory without changing the shared pointer.
+
+## Implementation map confirmed
+
+- Backend changes remain concentrated in `ContextAssistService.ts`: the evidence gate occurs before generation, Web AI bypasses the LLM path, and `MAX_INSERT_TEXT=2400` is currently shared by all modes.
+- The response union is mirrored in `memory-service/src/types/index.ts`, `src/composer-guard/types.ts`, and `src/services/MemoryServiceClient.ts`; the last file has an unrelated dirty hunk far from the Compose types.
+- Frontend requests are still scheduled from `activateFromElement()` and `handleInput()` through the 700ms timer; blur support must also cover the rich-iframe bridge.
+- Full replacement should be added beside the existing snapshot/restore/append helpers in `siteContextAdapters.ts`, then selected centrally by `insertLatestAssist()`.
+- Mode-aware preview and insertion receipt copy is centralized in `assistPreviewPolicy.ts` and `getComposerGuardAssistLabel()`.
+
+## Implemented behavior and final findings
+
+- Compose Assist now treats capture-phase `focusout` as the only request trigger. `focusin` establishes a session, while `input` advances the draft revision, removes the old preview, and invalidates in-flight work without requesting.
+- The blur boundary includes send-pointer suppression, internal toolbar/Personal AI/undo focus transitions, rich-iframe bridging, per-`contextKey + draftRevision` de-duplication, retained post-blur anchoring, and stale-response rejection after later edits.
+- Web AI now has a default-on Prompt Compiler that can rewrite a meaningful zero-memory draft. It returns only structured mode/text/evidence ids/gaps/confidence; the service derives insertion mode and fails closed on timeout, invalid JSON, language mismatch, missing goals, or invalid evidence ids.
+- The empirical GPT-5 latency fix is `reasoning_effort=none` plus a compact 520-Unicode-character output contract inside the existing 1600-token/5.5-second envelope. The hard rewrite guard remains 6000 characters.
+- Web evidence removes empty/placeholder shells, de-duplicates by id and normalized content, requires exact anchors or meaningful semantic overlap, and caps final evidence at three. A locked Context Match can recover selected evidence ids from the same user's raw messages, but cannot bypass a recall path that never ran.
+- The backend normalizes a model-proposed rewrite into an evidence-only context pack when a non-research draft already specifies a writing deliverable and the only material addition is directly relevant memory.
+- Sensitive child, health, family, development, diagnostic, salary, or financial content makes Web AI high risk and preview-required. A normal `manual` project-memory label alone remains medium risk.
+- The live Chrome Canary step is not a code failure: the native host manifest is valid and Chrome is running, but the ChatGPT Chrome Extension is absent from the selected profile, so the browser-control skill correctly forbids fallback automation.

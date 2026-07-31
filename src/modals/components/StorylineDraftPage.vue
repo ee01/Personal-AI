@@ -5,14 +5,14 @@
         <div class="page-eyebrow">memory-exploring · {{ pagePath }}</div>
         <h1>故事线编排器</h1>
         <p>
-          把会前准备、会议记录和相关记忆编排成可讲述草稿。生成稿不会自动外发，只在这里复核、切换输出格式和复制。
+          把会前准备或资料记忆 seed 编排成可讲述草稿。生成稿不会自动外发，只在这里复核、切换输出格式和复制。
         </p>
       </div>
 
       <div class="header-actions">
         <span class="trigger-chip">
           <span class="status-dot"></span>
-          {{ prepId ? `${sourceLabel} · ${prepShortId}` : '等待会前准备入口' }}
+          {{ canRequestDraft ? `${sourceLabel} · ${prepShortId}` : '等待 Storyline 来源' }}
         </span>
         <div
           v-if="canRequestDraft"
@@ -71,7 +71,7 @@
 
     <section v-else-if="loading" class="state-panel">
       <div class="loading-spinner"></div>
-      <p>正在根据会前准备生成 Storyline draft...</p>
+      <p>正在根据已选证据来源生成 Storyline draft...</p>
       <section
         v-if="draftRequestReceipt && !regenerateRequestReceipt"
         class="draft-request-receipt"
@@ -85,7 +85,7 @@
         <div class="receipt-metrics" aria-label="Storyline draft request receipt">
           <span>请求 {{ draftRequestReceipt.requestedAtLabel }}</span>
           <span>{{ artifactLabel(draftRequestReceipt.targetArtifact) }}</span>
-          <span>Prep {{ draftRequestReceipt.prepShortId }}</span>
+          <span>来源 {{ draftRequestReceipt.prepShortId }}</span>
           <span>等待服务端证据回执</span>
         </div>
       </section>
@@ -102,7 +102,7 @@
         <div class="receipt-metrics" aria-label="Storyline regenerate request receipt">
           <span>请求 {{ regenerateRequestReceipt.requestedAtLabel }}</span>
           <span>{{ artifactLabel(regenerateRequestReceipt.targetArtifact) }}</span>
-          <span>Prep {{ regenerateRequestReceipt.prepShortId }}</span>
+          <span>来源 {{ regenerateRequestReceipt.prepShortId }}</span>
           <span>复核确认已重置</span>
         </div>
       </section>
@@ -528,12 +528,12 @@
 
     <section v-else class="state-panel empty">
       <div class="empty-kicker">Storyline draft</div>
-      <h2>从会前准备进入故事线草稿</h2>
+      <h2>从证据来源进入故事线草稿</h2>
       <p>
-        P0 不维护多草稿历史列表，也不会自动扫描生成。打开 RingCentral Video Home 的 Today Pilot 会前准备卡片，只有当 LLM 判断这场会议值得沉淀为分享、汇报或复盘时，才会出现生成入口。
+        P0 不维护多草稿历史列表，也不会自动扫描生成。请从 Today Pilot 会前准备或资料记忆中的 Storyline seed 打开；所有输出都需要在本页复核后手动复制。
       </p>
       <div class="empty-flow">
-        <span>会前准备提示</span>
+        <span>来源提示</span>
         <span>生成故事线</span>
         <span>复核证据和风险</span>
         <span>复制到目标位置</span>
@@ -688,6 +688,15 @@ const sourceKind = computed(() =>
   String(route.query.source || 'today_meeting_prep'),
 );
 const prepId = computed(() => String(route.query.prepId || '').trim());
+const capsuleId = computed(() => String(route.query.capsuleId || '').trim());
+const seedId = computed(() => String(route.query.seedId || '').trim());
+const sourceRequestId = computed(() =>
+  sourceKind.value === 'source_memory_seed'
+    ? capsuleId.value && seedId.value
+      ? `${capsuleId.value}:${seedId.value}`
+      : ''
+    : prepId.value,
+);
 const targetArtifact = computed(
   () => normalizeTargetArtifact(route.query.target) || 'speaker_notes',
 );
@@ -696,14 +705,16 @@ const activeTarget = computed(
   () => draft.value?.targetArtifact || targetArtifact.value,
 );
 const canRequestDraft = computed(
-  () => Boolean(prepId.value) && isSupportedStorylineSourceKind(sourceKind.value),
+  () =>
+    Boolean(sourceRequestId.value) &&
+    isSupportedStorylineSourceKind(sourceKind.value),
 );
 const canReloadDraft = computed(() => canRequestDraft.value && !loading.value);
 const cacheKey = computed(() =>
   [
     'pai.storylineDraft',
     sourceKind.value,
-    prepId.value,
+    sourceRequestId.value,
     targetArtifact.value,
     audienceHint.value || '',
   ].join(':'),
@@ -711,9 +722,11 @@ const cacheKey = computed(() =>
 const sourceLabel = computed(() =>
   sourceKind.value === 'today_meeting_prep'
     ? 'Today Pilot 会前准备'
-    : sourceKind.value,
+    : sourceKind.value === 'source_memory_seed'
+      ? '资料记忆 Storyline seed'
+      : sourceKind.value,
 );
-const prepShortId = computed(() => shortEvidenceId(prepId.value));
+const prepShortId = computed(() => shortEvidenceId(sourceRequestId.value));
 const selectedSegment = computed(
   () => draft.value?.segments[selectedIndex.value] ?? null,
 );
@@ -895,7 +908,7 @@ const sessionCacheReceipt = computed<SessionCacheReceipt | null>(() => {
 const sessionCacheReceiptBoundary = computed(() => {
   if (!sessionCacheReceipt.value) return '';
   return [
-    '这次没有重新调用 Draft API，也没有重新读取会前准备、刷新证据详情、同步 Memory Service 或确认外发状态',
+    '这次没有重新调用 Draft API，也没有重新读取证据来源、刷新证据详情、同步 Memory Service 或确认外发状态',
     '如会议资料、证据或目标格式刚变化，请点重新生成后再复制',
   ].join('；');
 });
@@ -1007,7 +1020,7 @@ function normalizeTargetArtifact(
 function isSupportedStorylineSourceKind(
   value: string,
 ): value is StorylineSourceKind {
-  return value === 'today_meeting_prep';
+  return value === 'today_meeting_prep' || value === 'source_memory_seed';
 }
 
 function artifactLabel(target: StorylineSuggestedArtifact): string {
@@ -1054,7 +1067,7 @@ function targetHandoffCopy(
 function targetSwitchButtonBoundary(target: StorylineSuggestedArtifact): string {
   const label = artifactLabel(target);
   const handoff = targetHandoffCopy(target);
-  const prep = prepShortId.value || '当前 prep';
+  const prep = prepShortId.value || '当前来源';
   const noWriteBoundary =
     '不会写回 Slides / Docs / RingCentral，不会发送消息，不会保存长期 Storyline 历史，也不会更新 Memory Service 证据状态';
 
@@ -1073,7 +1086,7 @@ function targetSwitchButtonBoundary(target: StorylineSuggestedArtifact): string 
     : '会清除当前复制状态';
 
   return [
-    `切换到 ${label}（${handoff.format}），为 Prep ${prep} 从本页缓存读取或请求 Storyline Draft API`,
+    `切换到 ${label}（${handoff.format}），为来源 ${prep} 从本页缓存读取或请求 Storyline Draft API`,
     reviewReset,
     copyReset,
     '来源打开回执会回到当前草稿上下文',
@@ -1346,7 +1359,7 @@ function recordEvidenceSourceOpen(
   sourceOpenReceipt.value = {
     summary: `${host || '外部来源'} · ${title}`,
     boundary:
-      '只在新标签打开这个来源；本页没有重新读取会前准备、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也没有满足复制前复核。',
+      '只在新标签打开这个来源；本页没有重新读取证据来源、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也没有满足复制前复核。',
   };
 }
 
@@ -1410,7 +1423,7 @@ function readCachedDraft(): CachedDraftReadResult | null {
         ? (record.draft as StorylineDraftResponse)
         : (parsed as StorylineDraftResponse);
     return candidate?.sourceKind === sourceKind.value &&
-      candidate?.sourceId === prepId.value &&
+      candidate?.sourceId === sourceRequestId.value &&
       candidate?.targetArtifact === targetArtifact.value &&
       candidate?.generationReceipt?.boundary ===
         'draft_only_manual_copy_no_external_write'
@@ -1441,7 +1454,7 @@ function writeCachedDraft(
 
 async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   const loadToken = ++draftLoadToken;
-  if (!prepId.value) {
+  if (!sourceRequestId.value) {
     draft.value = null;
     loadError.value = '';
     loading.value = false;
@@ -1459,7 +1472,7 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   if (!isSupportedStorylineSourceKind(requestedSourceKind)) {
     draft.value = null;
     loadError.value =
-      '当前 Storyline Draft 只支持 Today Pilot 会前准备来源，请回到会前准备入口重新打开。';
+      '当前 Storyline Draft 只支持 Today Pilot 会前准备或资料记忆 Storyline seed。';
     loading.value = false;
     copied.value = false;
     copyError.value = '';
@@ -1488,12 +1501,12 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     }
   }
   const requestCacheKey = cacheKey.value;
-  const requestedPrepId = prepId.value;
+  const requestedSourceId = sourceRequestId.value;
   const requestedTarget = targetArtifact.value;
   const requestedAudience = audienceHint.value || undefined;
   draftRequestReceipt.value = options.force
     ? null
-    : buildDraftRequestReceipt(requestedTarget, requestedPrepId);
+    : buildDraftRequestReceipt(requestedTarget, requestedSourceId);
   loading.value = true;
   loadError.value = '';
   copied.value = false;
@@ -1502,12 +1515,20 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   sourceOpenReceipt.value = null;
   cacheHit.value = null;
   try {
-    const result = await client.createStorylineDraft({
-      sourceKind: requestedSourceKind,
-      prepId: requestedPrepId,
-      targetArtifact: requestedTarget,
-      audienceHint: requestedAudience,
-    });
+    const result = requestedSourceKind === 'source_memory_seed'
+      ? await client.createStorylineDraft({
+          sourceKind: 'source_memory_seed',
+          capsuleId: capsuleId.value,
+          seedId: seedId.value,
+          targetArtifact: requestedTarget,
+          audienceHint: requestedAudience,
+        })
+      : await client.createStorylineDraft({
+          sourceKind: 'today_meeting_prep',
+          prepId: prepId.value,
+          targetArtifact: requestedTarget,
+          audienceHint: requestedAudience,
+        });
     if (loadToken !== draftLoadToken) return;
     if (result.targetArtifact !== requestedTarget) {
       throw new Error('storyline_target_mismatch');
@@ -1539,10 +1560,10 @@ function formatDraftError(error: unknown): string {
   if (error instanceof MemoryServiceError) {
     const code = String(error.body?.error || '').trim();
     if (code === 'storyline_source_has_no_usable_evidence') {
-      return '这份会前准备没有可追溯的 evidence refs，暂时不能生成故事线草稿。';
+      return '这份来源没有可追溯的 evidence refs，暂时不能生成故事线草稿。';
     }
     if (error.status === 404) {
-      return '这份会前准备已过期或不存在，请回到 Today Pilot 重新生成会前准备。';
+      return '这份来源已过期、不存在或 seed 已失效，请回到来源详情重新打开。';
     }
     const detail = String(error.body?.detail || '').trim();
     return detail || error.message;
@@ -1633,7 +1654,14 @@ function copyWithTextarea(text: string): boolean {
 }
 
 watch(
-  () => [sourceKind.value, prepId.value, targetArtifact.value, audienceHint.value],
+  () => [
+    sourceKind.value,
+    prepId.value,
+    capsuleId.value,
+    seedId.value,
+    targetArtifact.value,
+    audienceHint.value,
+  ],
   () => {
     void loadDraft();
   },

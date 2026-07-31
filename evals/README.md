@@ -74,6 +74,8 @@ The canonical contract lives in `evals/report-contract.md`. Every runnable suite
 
 Runner results should include `caseTitle`, `sampleSummary` or redacted `sampleDetails`, `expectedBehavior`, a structured `actualOutput` or `topMatch`, `scores`, `userConclusion`, and `improvementSuggestions`. Cases can also include optional `manualVerification` with reviewer setup, steps, expected results, cleanup, and evidence notes; the shared report renders it when present and does not count it as automated scoring. If a suite needs domain-specific interpretation, add an adapter that maps its output to `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `outcomeSignals`, `conclusion`, `nextSteps`, `manualVerification`, and `debugLinks`.
 
+New runnable suites should also declare `readerProof.claims` and `readerProof.boundaries` in `registry.yaml`. Each claim maps a reader-facing requirement statement to one or more `caseIds` and optional `requiredScores`; the report marks it proved only when all mapped evidence ran and met the declared thresholds. Report-format health is shown separately as “报告契约” and never appears as feature proof. Legacy suites use case conclusions as a labeled fallback until they adopt the explicit contract.
+
 Run `npm run eval:validate` after adding a suite or case. The validator checks that each suite has a Chinese description, workflow, cases file, and `Report requirements` section, and that cases include enough input/expected-output fields to produce a readable report. `npm run eval:run` also records report-contract warnings when a case cannot be normalized into a readable Reader Contract card.
 
 For Compose Assist context-pack cases, the adapter must summarize the evaluated chat/composer sample, draft text, source types, generated compose text, returned evidence, verdict, and improvement suggestions. Full debug summary belongs in artifacts unless it is needed to explain a reader-facing proof check. Live Web AI sampling uses `webpage-mcp` through `mcporter` when `--live` is passed; if no matching tab is available, the runner records the live failure and falls back to the case snapshot.
@@ -81,6 +83,7 @@ For Compose Assist context-pack cases, the adapter must summarize the evaluated 
 ## Configuration
 
 - `registry.yaml` lists suites, Chinese descriptions, case paths, schedule mode, judge mode, and repair policy.
+- `registry.yaml` also stores suite-level `readerProof` claims, case/score evidence mappings, and honest validation boundaries.
 - `agents.yaml` configures pluggable repair runners. Codex is the default.
 - `cases/*/*.jsonl` stores versioned cases.
 - `workflows/*/*.md` stores human-readable workflow instructions. The overview report uses these files to explain what each suite evaluates and links back to the source workflow.

@@ -19,6 +19,7 @@ import {
 
 export interface RecallContextExpansionInput {
   query: string;
+  preferredTopicTitle?: string;
   surface?: string;
   contextType?: string;
   title?: string;
@@ -150,6 +151,18 @@ const STATUS_INTENT_PATTERN =
 const ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/g;
 const ISSUE_KEY_SINGLE_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const URL_PATTERN = /https?:\/\/[^\s)）]+/g;
+const DIRECT_NAMED_SUBJECT_PATTERN = /\b[A-Z][A-Za-z0-9._-]{2,}\b/g;
+const GENERIC_NAMED_SUBJECTS = new Set([
+  'API',
+  'AND',
+  'FOR',
+  'THE',
+  'THIS',
+  'THAT',
+  'WHAT',
+  'WHEN',
+  'WITH',
+]);
 
 function safeJsonParse<T>(json: string | null | undefined): T | undefined {
   if (!json) return undefined;
@@ -270,6 +283,14 @@ function extractTokens(value: string): string[] {
   return Array.from(tokens).filter((token) => token.length >= 2);
 }
 
+function hasDirectNamedSubject(query: string): boolean {
+  if (ISSUE_KEY_SINGLE_PATTERN.test(query)) return true;
+  return (query.match(DIRECT_NAMED_SUBJECT_PATTERN) ?? []).some((token) => {
+    const normalized = token.toUpperCase();
+    return !GENERIC_NAMED_SUBJECTS.has(normalized) && !/^(?:BE|FE)$/i.test(token);
+  });
+}
+
 function overlapCount(text: string, tokens: string[]): number {
   const comparable = normalizeComparable(text);
   let score = 0;
@@ -320,10 +341,17 @@ export class RecallContextExpansionService {
     const roleTerms = uniq([...queryRoles, ...contextRoles]);
     const deictic = DEICTIC_PATTERN.test(originalQuery);
     const statusIntent = STATUS_INTENT_PATTERN.test(originalQuery);
+    const directNamedSubject = hasDirectNamedSubject(originalQuery);
+    const hasExplicitSurfaceContext = Boolean(
+      input.preferredTopicTitle ||
+        input.currentContext?.title ||
+        input.currentContext?.sourceAnchorHints?.length,
+    );
     const queryTokens = extractTokens([originalQuery, contextText].join(' '));
     const shouldRunContextMatch =
-      deictic ||
-      statusIntent ||
+      Boolean(input.preferredTopicTitle) ||
+      (deictic && !directNamedSubject) ||
+      (statusIntent && !directNamedSubject) ||
       roleTerms.length > 0 ||
       ISSUE_KEY_SINGLE_PATTERN.test(originalQuery) ||
       Boolean(input.currentContext?.sourceAnchorHints?.length);
@@ -356,9 +384,10 @@ export class RecallContextExpansionService {
           );
     const canResolve =
       contextMatchCandidate ||
-      (top &&
-      !ambiguous &&
-      (top.score >= 2.2 || (deictic && top.score >= 1.6) || roleTerms.length > 0));
+      ((!directNamedSubject || roleTerms.length > 0 || hasExplicitSurfaceContext) &&
+        top &&
+        !ambiguous &&
+        (top.score >= 2.2 || (deictic && top.score >= 1.6) || roleTerms.length > 0));
 
     const selected = canResolve ? top : undefined;
     const sourceAnchors = uniq([

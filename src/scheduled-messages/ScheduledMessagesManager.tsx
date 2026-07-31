@@ -2378,6 +2378,9 @@ const ScheduledMessagesManager: React.FC = () => {
     : shouldSuggestAppScriptVersionCleanup
       ? `Project History 只剩 ${appScriptVersionUsage?.remaining} 个版本，建议先打开 Project History 清理旧版本，再执行升级。`
       : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；提交更新后会确认 Web App URL 已返回新版本，确认失败会尝试回退到升级前 deployment 版本，已是最新则跳过脚本写入和版本创建。';
+  const appScriptUpgradeProofReceipt = isAppScriptVersionLimitReached
+    ? '升级证明回执: 版本历史已满，本次主操作只打开 Project History；清理后需重新检查，仍未写 Sheet/Script/Jira Rule。'
+    : '升级证明回执: 只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新；未确认时保留旧配置并走回退/检查页面，不发送消息或改 Logs。';
   const appScriptVersionProbeUrl = config?.webAppUrl
     ? buildAppScriptWebAppActionUrl(config.webAppUrl, 'getVersion')
     : '';
@@ -4539,6 +4542,13 @@ const ScheduledMessagesManager: React.FC = () => {
                     {step}
                   </span>
                 ))}
+              </div>
+              <div
+                style={styles.updateProofReceipt}
+                title={appScriptUpgradeProofReceipt}
+                aria-label="App Script 升级证明回执"
+              >
+                {appScriptUpgradeProofReceipt}
               </div>
             </div>
           </div>
@@ -9995,6 +10005,18 @@ ${content}
                   <small style={dialogStyles.hint}>
                     如何获取 Team ID 请参考 <a href="https://drive.google.com/file/d/1t6KrOK7OZL3f8X2LBIM02H5OsIl38_QC/view" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>教程</a>
                   </small>
+                  {formData.Push_Method === 'Bot' && (
+                    <div
+                      style={dialogStyles.methodPreviewReceipt}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <strong>群组 Bot 前置条件</strong>
+                      <span>
+                        Bot 群组消息会由 SM AI 机器人发出。请先把 “SM AI” 加到目标群；未加人时保存仍可写入 Messages，但到点推送会失败。私发不需要加群。
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -10553,6 +10575,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '11px',
     lineHeight: 1,
     flexShrink: 0,
+  },
+  updateProofReceipt: {
+    marginTop: '10px',
+    padding: '8px 10px',
+    backgroundColor: '#fff',
+    border: '1px solid #fdba74',
+    borderRadius: '6px',
+    color: '#7c2d12',
+    fontSize: '12px',
+    lineHeight: 1.45,
+    maxWidth: '720px',
   },
   updateErrorDescription: {
     margin: '4px 0 0 0',

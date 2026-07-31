@@ -35,6 +35,8 @@
             v-if="safeSourceUrl"
             type="button"
             class="primary-action"
+            :title="openSourceBoundaryText"
+            :aria-label="openSourceBoundaryText"
             @click="openSource"
           >
             打开来源
@@ -43,6 +45,8 @@
             v-if="linkedMemoryAvailable"
             class="secondary-action"
             :to="timelineRoute"
+            :title="linkedMemoryBoundaryText"
+            :aria-label="linkedMemoryBoundaryText"
           >
             查看关联记忆
           </router-link>
@@ -148,6 +152,142 @@
           <pre>{{ distillationCompactMemo }}</pre>
         </div>
 
+        <div v-if="deepDistillationStatus" class="deep-distillation">
+          <div class="deep-distillation-head">
+            <div>
+              <p class="eyebrow">异步深度层</p>
+              <h3>证据约束蒸馏</h3>
+            </div>
+            <span :class="['deep-status-badge', deepDistillationTone]">
+              {{ deepDistillationStatusLabel }}
+            </span>
+          </div>
+          <p class="deep-distillation-detail">{{ deepDistillationDetail }}</p>
+          <dl class="deep-distillation-meta">
+            <div v-if="deepEvidenceSpans.length">
+              <dt>证据跨度</dt>
+              <dd>{{ deepEvidenceSpans.length }} 条</dd>
+            </div>
+            <div v-if="deepDistillationAttempts">
+              <dt>尝试次数</dt>
+              <dd>{{ deepDistillationAttempts }}</dd>
+            </div>
+            <div v-if="deepDistillationGeneratedAt">
+              <dt>深度生成</dt>
+              <dd>{{ deepDistillationGeneratedAt }}</dd>
+            </div>
+            <div v-if="deepDistillationNextAttemptAt">
+              <dt>下次重试</dt>
+              <dd>{{ deepDistillationNextAttemptAt }}</dd>
+            </div>
+            <div v-if="deepClusterLabel">
+              <dt>来源簇</dt>
+              <dd>{{ deepClusterLabel }}</dd>
+            </div>
+          </dl>
+
+          <details v-if="deepFullMemo" class="deep-memo-details">
+            <summary>查看 full memo</summary>
+            <pre>{{ deepFullMemo }}</pre>
+          </details>
+
+          <div v-if="deepTriggerCards.length" class="deep-artifact-group">
+            <h4>场景触发卡</h4>
+            <div class="deep-artifact-list">
+              <article v-for="(card, index) in deepTriggerCards" :key="`trigger-${index}`">
+                <div class="card-meta">
+                  <span>{{ deepSceneLabel(card.sceneType) }}</span>
+                  <span>{{ deepBudgetLabel(card.budget) }}</span>
+                  <span>置信度 {{ formatConfidence(Number(card.confidence)) }}</span>
+                </div>
+                <p>{{ card.description }}</p>
+              </article>
+            </div>
+          </div>
+
+          <div
+            v-if="deepFactCandidates.length || deepOpenQuestions.length"
+            class="deep-artifact-grid"
+          >
+            <section v-if="deepFactCandidates.length" class="deep-artifact-group">
+              <h4>事实候选</h4>
+              <div class="deep-artifact-list">
+                <article
+                  v-for="(item, index) in deepFactCandidates"
+                  :key="`fact-${index}`"
+                >
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.statement }}</p>
+                  <small>仅代表来源陈述，不是已确认画像事实</small>
+                </article>
+              </div>
+            </section>
+            <section v-if="deepOpenQuestions.length" class="deep-artifact-group">
+              <h4>开放问题</h4>
+              <div class="deep-artifact-list">
+                <article
+                  v-for="(item, index) in deepOpenQuestions"
+                  :key="`question-${index}`"
+                >
+                  <strong>{{ item.question }}</strong>
+                  <p>{{ item.reason }}</p>
+                  <small>{{ deepEscalationLabel(item.escalation) }}</small>
+                </article>
+              </div>
+            </section>
+          </div>
+
+          <div v-if="deepSkillSeeds.length" class="deep-artifact-group">
+            <h4>Skill seeds</h4>
+            <div class="deep-artifact-list">
+              <article v-for="(item, index) in deepSkillSeeds" :key="`skill-${index}`">
+                <strong>{{ item.title }}</strong>
+                <p>{{ item.summary }}</p>
+                <small>单条资料只保留 seed；重复且高置信后才进入未激活的 Skill 建议。</small>
+              </article>
+            </div>
+          </div>
+
+          <div v-if="deepStorylineSeeds.length" class="deep-artifact-group">
+            <h4>Storyline seeds</h4>
+            <div class="deep-artifact-list">
+              <article
+                v-for="(item, index) in deepStorylineSeeds"
+                :key="`storyline-${index}`"
+                class="deep-storyline-row"
+              >
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.claim }}</p>
+                  <small>只生成可复核草稿，不自动写回 Slides、Docs 或消息。</small>
+                </div>
+                <button
+                  type="button"
+                  :title="storylineSeedBoundaryText(item)"
+                  :aria-label="storylineSeedBoundaryText(item)"
+                  @click="openStorylineSeed(item)"
+                >
+                  生成草稿
+                </button>
+              </article>
+            </div>
+          </div>
+
+          <details v-if="deepEvidenceSpans.length" class="deep-evidence-details">
+            <summary>查看 {{ deepEvidenceSpans.length }} 条 evidence spans</summary>
+            <ol>
+              <li v-for="span in deepEvidenceSpans" :key="String(span.id)">
+                <code>{{ span.id }}</code>
+                <p>{{ span.text }}</p>
+              </li>
+            </ol>
+          </details>
+
+          <p v-if="deepBlockedLabels.length" class="deep-policy-boundary">
+            不会自动执行：{{ deepBlockedLabels.join('、') }}。
+          </p>
+        </div>
+
         <div
           v-if="downstreamAllowedLabels.length || downstreamBlockedLabels.length"
           class="distillation-downstream"
@@ -164,6 +304,90 @@
 
         <p v-if="distillationNextStep" class="distillation-next">
           {{ distillationNextStep }}
+        </p>
+      </section>
+
+      <section :class="['change-ledger-panel', changeLedgerTone]" role="note">
+        <div class="change-ledger-head">
+          <div>
+            <p class="eyebrow">变化脉络</p>
+            <h2>{{ changeLedgerLabel }}</h2>
+          </div>
+          <span class="change-ledger-badge">{{ changeLedgerStatusLabel }}</span>
+        </div>
+        <p class="change-ledger-detail">{{ changeLedgerDetail }}</p>
+        <div v-if="changeLedgerEvidence.length" class="change-ledger-evidence">
+          <span
+            v-for="item in changeLedgerEvidence"
+            :key="item"
+            class="change-ledger-chip"
+          >
+            {{ item }}
+          </span>
+        </div>
+
+        <div v-if="changeProjections.length" class="change-projection-list">
+          <article
+            v-for="projection in changeProjections"
+            :key="projection.chainKey"
+            class="change-projection-row"
+          >
+            <div class="change-projection-summary">
+              <div>
+                <strong>{{ projection.propertyLabel }}</strong>
+                <p>
+                  <span>{{ projection.previousValue?.display || '未记录' }}</span>
+                  <span aria-hidden="true">→</span>
+                  <b>{{ projectionCurrentDisplay(projection) }}</b>
+                </p>
+              </div>
+              <span :class="['change-projection-state', projection.status]">
+                {{ changeProjectionStatusLabel(projection.status) }}
+              </span>
+            </div>
+            <p class="change-projection-boundary">{{ projection.boundary }}</p>
+            <dl class="change-projection-meta">
+              <div>
+                <dt>事件</dt>
+                <dd>{{ projection.eventCount }} 条</dd>
+              </div>
+              <div v-if="projection.reversalCount">
+                <dt>回退</dt>
+                <dd>{{ projection.reversalCount }} 次</dd>
+              </div>
+              <div v-if="projection.currentEvent?.sourceRef.title">
+                <dt>最后来源</dt>
+                <dd>{{ projection.currentEvent.sourceRef.title }}</dd>
+              </div>
+              <div v-if="projection.lastObservedAt">
+                <dt>最后观测</dt>
+                <dd>{{ formatTimestamp(projection.lastObservedAt) }}</dd>
+              </div>
+            </dl>
+            <details v-if="projection.history.length" class="change-history">
+              <summary>查看 {{ projection.history.length }} 条历史证据</summary>
+              <ol>
+                <li
+                  v-for="event in changeHistory(projection)"
+                  :key="event.id"
+                >
+                  <div class="change-history-main">
+                    <time>{{ formatTimestamp(event.observedAt) }}</time>
+                    <strong>{{ formatChangeTransition(event) }}</strong>
+                    <span v-if="event.isReversal" class="change-reversal-label">回退</span>
+                  </div>
+                  <p>
+                    {{ changeAuthorityLabel(event.authorityRole) }} ·
+                    {{ event.sourceRef.title || event.sourceRef.type }}
+                    <template v-if="event.reason"> · 原因：{{ event.reason }}</template>
+                  </p>
+                </li>
+              </ol>
+            </details>
+          </article>
+        </div>
+        <p v-else class="change-ledger-empty">
+          当前没有可展示的前后值事件；这不代表功能未运行，请以上方提取回执为准。
         </p>
       </section>
 
@@ -199,6 +423,8 @@
             type="button"
             class="primary-action"
             :disabled="!canSubmitNote"
+            :title="noteSubmitBoundaryText"
+            :aria-label="noteSubmitBoundaryText"
             @click="submitNoteUpdate"
           >
             {{ savingNote ? '提交中...' : noteSubmitLabel }}
@@ -207,6 +433,8 @@
             type="button"
             class="secondary-action"
             :disabled="savingNote || !noteChanged"
+            :title="noteResetBoundaryText"
+            :aria-label="noteResetBoundaryText"
             @click="resetNoteDraft"
           >
             恢复当前备注
@@ -401,7 +629,13 @@
           <h2>不再使用这条资料</h2>
           <p>撤销后会移除关联的 web 记忆信号，后续召回不再使用这条 capsule。</p>
         </div>
-        <button type="button" :disabled="dismissing" @click="dismissCapsule">
+        <button
+          type="button"
+          :disabled="dismissing"
+          :title="dismissBoundaryText"
+          :aria-label="dismissBoundaryText"
+          @click="dismissCapsule"
+        >
           {{ dismissing ? '撤销中...' : '撤销资料记忆' }}
         </button>
       </section>
@@ -410,10 +644,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type MemoryChangeEvent,
+  type MemoryChangeProjection,
+  type MemoryChangeProjectionStatus,
   type SourceMemoryCapsule,
   type SourceMemoryCaptureMode,
   type SourceMemoryPrivacyLevel,
@@ -439,6 +676,7 @@ interface NoteUpdateReceipt {
   nextStep: string;
 }
 const noteUpdateReceipt = ref<NoteUpdateReceipt | null>(null);
+let deepRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 const capsuleId = computed(() => String(route.params.id || '').trim());
 const capsuleMetadata = computed(() => asRecord(capsule.value?.metadata) || {});
@@ -569,6 +807,108 @@ const distillationSourceReliability = computed(() => {
   const reliability = asRecord(distillation.value?.sourceReliability);
   return String(reliability?.reason || '').trim();
 });
+const deepDistillation = computed(() => asRecord(distillation.value?.deep) || {});
+const deepInputIsCurrent = computed(() => {
+  const deepHash = String(deepDistillation.value.inputHash || '').trim();
+  const p0Hash = String(distillation.value?.inputHash || '').trim();
+  return Boolean(deepHash && p0Hash && deepHash === p0Hash);
+});
+const deepDistillationStatus = computed(() => {
+  const status = String(deepDistillation.value.status || '').trim();
+  if (!status) return '';
+  return status === 'ready' && !deepInputIsCurrent.value ? 'stale' : status;
+});
+const deepDistillationTone = computed(() => {
+  if (deepDistillationStatus.value === 'ready') return 'ready';
+  if (['queued', 'running', 'retry_wait'].includes(deepDistillationStatus.value)) {
+    return 'pending';
+  }
+  return 'blocked';
+});
+const deepDistillationStatusLabel = computed(() =>
+  deepDistillationStatusDisplayLabel(deepDistillationStatus.value),
+);
+const deepDistillationDetail = computed(() => {
+  const details: Record<string, string> = {
+    queued: '已进入后台队列；同步 P0 提示仍可立即召回。',
+    running: '正在从已保存证据构造可引用产物；同步 P0 提示仍可使用。',
+    retry_wait: '本次深度生成失败，已按有界退避等待重试；不会降级或覆盖 P0。',
+    ready: '深度产物已通过 evidence span 引用校验；下列事实、问题和 seeds 仍是候选。',
+    stale: '深度产物属于旧快照，当前不会用于召回；等待新输入指纹重新生成。',
+    blocked: '深度处理被隐私、审核、证据或注入策略阻断；资料原文与同步 P0 仍保留。',
+    failed: '深度处理已达到重试上限；同步 P0 仍保留，可在来源更新后重新排队。',
+  };
+  return details[deepDistillationStatus.value] || '尚未启动异步深度蒸馏。';
+});
+const deepDistillationAttempts = computed(() =>
+  Math.max(0, Number(deepDistillation.value.attempts || 0)),
+);
+const deepDistillationGeneratedAt = computed(() =>
+  formatDistillationTimestamp(deepDistillation.value.generatedAt),
+);
+const deepDistillationNextAttemptAt = computed(() =>
+  formatDistillationTimestamp(deepDistillation.value.nextAttemptAt),
+);
+const deepFullMemo = computed(() =>
+  deepInputIsCurrent.value ? String(deepDistillation.value.fullMemo || '').trim() : '',
+);
+const deepEvidenceSpans = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.evidenceSpans) : [],
+);
+const deepTriggerCards = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.triggerCards) : [],
+);
+const deepFactCandidates = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.factCandidates) : [],
+);
+const deepOpenQuestions = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.openQuestions) : [],
+);
+const deepSkillSeeds = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.skillSeeds) : [],
+);
+const deepStorylineSeeds = computed(() =>
+  deepInputIsCurrent.value ? toRecordArray(deepDistillation.value.storylineSeeds) : [],
+);
+const deepCluster = computed(() => asRecord(deepDistillation.value.cluster) || {});
+const deepClusterLabel = computed(() => {
+  const key = String(deepCluster.value.key || '').trim();
+  const size = Number(deepCluster.value.size || 0);
+  if (!key) return '';
+  return size > 1 ? `${key} · ${size} 条独立来源` : `${key} · 当前 1 条来源`;
+});
+const deepPolicy = computed(() => asRecord(deepDistillation.value.policyReceipt) || {});
+const deepBlockedLabels = computed(() =>
+  toStringArray(deepPolicy.value.blocked).filter(Boolean).map(downstreamUseLabel),
+);
+const changeLedger = computed(() => capsule.value?.changeLedger || null);
+const changeLedgerLabel = computed(
+  () => changeLedger.value?.label || '尚未检查变化',
+);
+const changeLedgerDetail = computed(
+  () =>
+    changeLedger.value?.detail ||
+    '当前 Memory Service 没有返回变化提取回执；不会把空结果当作没有发生变化。',
+);
+const changeLedgerStatus = computed(
+  () => changeLedger.value?.status || 'not_run',
+);
+const changeLedgerStatusLabel = computed(() => {
+  if (changeLedgerStatus.value === 'ready') return '已提取';
+  if (changeLedgerStatus.value === 'no_change') return '未发现变化';
+  if (changeLedgerStatus.value === 'blocked') return '缺少稳定对象';
+  return '尚未检查';
+});
+const changeLedgerTone = computed(() => {
+  if (capsule.value?.status === 'dismissed') return 'historical';
+  return changeLedgerStatus.value;
+});
+const changeLedgerEvidence = computed(() =>
+  (changeLedger.value?.evidence || []).filter(Boolean),
+);
+const changeProjections = computed(() =>
+  (changeLedger.value?.projections || []).filter(Boolean),
+);
 const currentUserNote = computed(() =>
   String(capsuleMetadata.value.userNote || '').trim(),
 );
@@ -592,6 +932,40 @@ const noteDraftCountLabel = computed(
 );
 const noteUpdateReceiptTone = computed(
   () => noteUpdateReceipt.value?.tone || '',
+);
+const sourceMemoryControlTarget = computed(
+  () =>
+    String(capsule.value?.sourceTitle || '').trim() ||
+    capsuleId.value ||
+    '当前资料',
+);
+const openSourceBoundaryText = computed(() => {
+  const host =
+    String(capsule.value?.sourceHost || '').trim() ||
+    safeSourceUrl.value ||
+    '原始来源';
+  return `打开来源：在新标签打开 ${host} 核对原始资料；不会新增、撤销或更新资料记忆，不写画像/任务，不插入输入框、发送内容、确认事实或同步外部系统。`;
+});
+const linkedMemoryBoundaryText = computed(
+  () =>
+    `查看关联记忆：打开 ${sourceMemoryControlTarget.value} 关联的 web 记忆信号时间轴；只读复核当前已返回信号，不重新召回、不写入、不恢复已撤销资料、不外发或同步。`,
+);
+const noteSubmitBoundaryText = computed(() => {
+  if (savingNote.value) {
+    return `备注刷新提交中：正在等待 Memory Service 确认 ${sourceMemoryControlTarget.value} 的备注、关联 web 检索信号和资料蒸馏回执；当前页面仍是上一版快照，不自动写画像、创建任务、确认事实或同步外部系统。`;
+  }
+  if (!noteChanged.value) {
+    return `备注未改变：当前不会提交 ${sourceMemoryControlTarget.value}；不刷新关联 web 检索信号、资料蒸馏回执或任何外部系统。`;
+  }
+  return `提交备注刷新：向 Memory Service 更新 ${sourceMemoryControlTarget.value} 的备注、关联 web 检索信号和资料蒸馏回执；提交中先显示待确认回执，不自动写画像、创建任务、确认事实或同步外部系统。`;
+});
+const noteResetBoundaryText = computed(
+  () =>
+    `恢复当前备注：只把输入框恢复为 ${sourceMemoryControlTarget.value} 当前已读取的备注；不请求 Memory Service、不刷新关联 web 检索信号或资料蒸馏、不撤销资料。`,
+);
+const dismissBoundaryText = computed(
+  () =>
+    `撤销资料记忆：提交后移除 ${sourceMemoryControlTarget.value} 的关联 web 检索信号，后续 Ask、Memory Lens 和时间轴不再召回；不会删除原网页、外部系统内容、已保存复核记录，也不会外发或同步。`,
 );
 const downstreamUse = computed(() => asRecord(distillation.value?.downstreamUse));
 const downstreamAllowedLabels = computed(() =>
@@ -665,9 +1039,11 @@ async function loadCapsule() {
     capsule.value = response.capsule;
     syncNoteDraftFromCapsule();
     noteUpdateReceipt.value = null;
+    scheduleDeepRefresh();
   } catch (error) {
     capsule.value = null;
     errorMessage.value = String((error as Error)?.message || error);
+    clearDeepRefresh();
   } finally {
     loading.value = false;
   }
@@ -685,6 +1061,7 @@ async function dismissCapsule() {
     capsule.value = response.capsule;
     syncNoteDraftFromCapsule();
     noteUpdateReceipt.value = null;
+    scheduleDeepRefresh();
   } catch (error) {
     errorMessage.value = String((error as Error)?.message || error);
   } finally {
@@ -707,6 +1084,7 @@ async function submitNoteUpdate() {
     capsule.value = response.capsule;
     syncNoteDraftFromCapsule();
     noteUpdateReceipt.value = buildConfirmedNoteReceipt(response.capsule);
+    scheduleDeepRefresh();
   } catch (error) {
     noteUpdateReceipt.value = buildFailedNoteReceipt(note, error);
   } finally {
@@ -786,6 +1164,58 @@ function openSource() {
   window.open(safeSourceUrl.value, '_blank', 'noopener,noreferrer');
 }
 
+function storylineSeedBoundaryText(item: Record<string, unknown>) {
+  const title = String(item.title || '当前 Storyline seed').trim();
+  return `从“${title}”打开 Storyline 草稿页；只读取当前 capsule 已校验的 evidence spans 并生成可复制草稿，不自动写回 Slides、Docs、RingCentral，不发送、不发布。`;
+}
+
+function openStorylineSeed(item: Record<string, unknown>) {
+  const seedId = String(item.seedKey || '').trim();
+  if (!capsule.value || !seedId) return;
+  router.push({
+    path: '/storylines/draft',
+    query: {
+      source: 'source_memory_seed',
+      capsuleId: capsule.value.id,
+      seedId,
+      target: 'speaker_notes',
+      audience: String(item.audience || '').trim(),
+    },
+  });
+}
+
+function clearDeepRefresh() {
+  if (deepRefreshTimer) {
+    clearTimeout(deepRefreshTimer);
+    deepRefreshTimer = null;
+  }
+}
+
+function scheduleDeepRefresh() {
+  clearDeepRefresh();
+  if (!['queued', 'running', 'retry_wait'].includes(deepDistillationStatus.value)) {
+    return;
+  }
+  deepRefreshTimer = setTimeout(() => {
+    void refreshDeepDistillation();
+  }, 5000);
+}
+
+async function refreshDeepDistillation() {
+  if (!capsuleId.value || loading.value || savingNote.value || dismissing.value) {
+    scheduleDeepRefresh();
+    return;
+  }
+  try {
+    const response = await client.getSourceMemoryCapsule(capsuleId.value);
+    capsule.value = response.capsule;
+  } catch {
+    // Keep the last confirmed capsule snapshot; the regular detail retry remains available.
+  } finally {
+    scheduleDeepRefresh();
+  }
+}
+
 function goBack() {
   if (window.history.state?.back) {
     router.back();
@@ -825,6 +1255,9 @@ function sourceKindLabel(value: string) {
     jira_comment: 'Jira 评论',
     message_reply: '消息回复',
     web_ai_prompt: 'Web AI 输入',
+    ai_conversation: 'AI 对话',
+    document: '文档资料',
+    meeting_material: '会议资料',
     manual: '手动录入',
   };
   return labels[value] || value || '资料来源';
@@ -880,6 +1313,81 @@ function distillationStatusDisplayLabel(value: string) {
   return '未生成';
 }
 
+function deepDistillationStatusDisplayLabel(value: string) {
+  if (value === 'queued') return '排队中';
+  if (value === 'running') return '生成中';
+  if (value === 'retry_wait') return '等待重试';
+  if (value === 'ready') return '已就绪';
+  if (value === 'stale') return '旧快照';
+  if (value === 'blocked') return '策略阻断';
+  if (value === 'failed') return '重试终止';
+  return '未启动';
+}
+
+function deepSceneLabel(value: unknown) {
+  const labels: Record<string, string> = {
+    general: '通用场景',
+    page: '页面阅读',
+    compose: '写作 / 回复',
+    ask: 'Ask 对话',
+    meeting: '会议',
+    jira: 'Jira',
+    research: '研究',
+  };
+  const key = String(value || '').trim();
+  return labels[key] || key || '通用场景';
+}
+
+function deepBudgetLabel(value: unknown) {
+  const labels: Record<string, string> = {
+    one_line: '一行提示',
+    compact: 'Compact memo',
+    full: 'Full memo',
+  };
+  const key = String(value || '').trim();
+  return labels[key] || key || 'Compact memo';
+}
+
+function deepEscalationLabel(value: unknown) {
+  if (value === 'when_relevant') return '只在相关场景出现时交给 Ask / Reflection';
+  if (value === 'when_blocking') return '仅在阻塞当前任务时请求确认';
+  return '默认不升级、不创建确认队列';
+}
+
+function changeProjectionStatusLabel(value: MemoryChangeProjectionStatus) {
+  if (value === 'confirmed_current') return '已确认当前';
+  if (value === 'last_observed') return '最后观测';
+  if (value === 'conflicted') return '存在冲突';
+  if (value === 'historical_only') return '仅历史';
+  if (value === 'superseded_at_source') return '来源已有新值';
+  if (value === 'superseded_on_page') return '页面已有新值';
+  return value;
+}
+
+function projectionCurrentDisplay(projection: MemoryChangeProjection) {
+  if ((projection.status === 'superseded_on_page' || projection.status === 'superseded_at_source') && projection.visiblePageValue) {
+    return `${projection.visiblePageValue.display}（页面当前）`;
+  }
+  return projection.currentValue?.display || '未知';
+}
+
+function changeHistory(projection: MemoryChangeProjection) {
+  return [...projection.history].reverse();
+}
+
+function formatChangeTransition(event: MemoryChangeEvent) {
+  return `${event.previousValue?.display || '未记录'} → ${event.nextValue.display}`;
+}
+
+function changeAuthorityLabel(value: MemoryChangeEvent['authorityRole']) {
+  if (value === 'authoritative_source') return '权威来源';
+  if (value === 'owner_authored') return '用户本人';
+  if (value === 'team_message') return '团队消息';
+  if (value === 'ai_generated') return 'AI 生成';
+  if (value === 'source_snapshot') return '来源快照';
+  return '推断证据';
+}
+
 function downstreamUseLabel(value: string) {
   const labels: Record<string, string> = {
     source_memory_detail: '资料详情复核',
@@ -889,6 +1397,11 @@ function downstreamUseLabel(value: string) {
     auto_profile_write: '自动写用户画像',
     auto_task_creation: '自动创建任务',
     external_write_or_sync: '外部写入或同步',
+    profile_fact_confirmation: '确认用户画像事实',
+    profile_write: '写入用户画像',
+    action_execution: '执行操作',
+    automatic_skill_publish: '自动发布 Skill',
+    storyline_writeback: 'Storyline 自动写回',
   };
   return labels[value] || value;
 }
@@ -903,6 +1416,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim())
+    : [];
+}
+
+function toRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
     : [];
 }
 
@@ -1019,11 +1540,16 @@ function visualKindDisplayLabel(value: string) {
 }
 
 watch(capsuleId, () => {
+  clearDeepRefresh();
   void loadCapsule();
 });
 
 onMounted(() => {
   void loadCapsule();
+});
+
+onBeforeUnmount(() => {
+  clearDeepRefresh();
 });
 </script>
 
@@ -1482,6 +2008,387 @@ onMounted(() => {
   color: #991b1b;
 }
 
+.deep-distillation {
+  margin-top: 16px;
+  border-top: 1px solid #a7f3d0;
+  padding-top: 14px;
+}
+
+.deep-distillation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.deep-distillation-head h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+}
+
+.deep-status-badge {
+  flex: 0 0 auto;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #374151;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.deep-status-badge.ready {
+  border-color: #86efac;
+  color: #166534;
+}
+
+.deep-status-badge.pending {
+  border-color: #facc15;
+  background: #fefce8;
+  color: #854d0e;
+}
+
+.deep-status-badge.blocked {
+  border-color: #fca5a5;
+  background: #fff7f7;
+  color: #991b1b;
+}
+
+.deep-distillation-detail,
+.deep-policy-boundary {
+  margin: 9px 0 0;
+  color: #374151;
+  line-height: 1.55;
+}
+
+.deep-distillation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 12px 0 0;
+}
+
+.deep-distillation-meta div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.deep-distillation-meta dt {
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.deep-distillation-meta dd {
+  margin: 0;
+  color: #111827;
+  overflow-wrap: anywhere;
+}
+
+.deep-memo-details,
+.deep-evidence-details {
+  margin-top: 14px;
+  border-top: 1px solid #d1fae5;
+  padding-top: 10px;
+}
+
+.deep-memo-details summary,
+.deep-evidence-details summary {
+  color: #065f46;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.deep-memo-details pre {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #1f2937;
+  font: inherit;
+  line-height: 1.6;
+}
+
+.deep-artifact-group {
+  margin-top: 16px;
+  border-top: 1px solid #d1fae5;
+  padding-top: 12px;
+}
+
+.deep-artifact-group h4 {
+  margin: 0 0 8px;
+  color: #065f46;
+  font-size: 14px;
+}
+
+.deep-artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.deep-artifact-list article {
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.deep-artifact-list article:last-child {
+  border-bottom: 0;
+}
+
+.deep-artifact-list strong {
+  color: #111827;
+}
+
+.deep-artifact-list p {
+  margin: 5px 0 0;
+  color: #374151;
+  line-height: 1.55;
+}
+
+.deep-artifact-list small {
+  display: block;
+  margin-top: 6px;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
+.deep-storyline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.deep-storyline-row button {
+  border: 1px solid #059669;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #047857;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.deep-storyline-row button:hover,
+.deep-storyline-row button:focus-visible {
+  background: #ecfdf5;
+}
+
+.deep-evidence-details ol {
+  margin: 10px 0 0;
+  padding-left: 22px;
+}
+
+.deep-evidence-details li {
+  padding: 6px 0;
+}
+
+.deep-evidence-details code {
+  color: #065f46;
+  overflow-wrap: anywhere;
+}
+
+.deep-evidence-details p {
+  margin: 4px 0 0;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.change-ledger-panel {
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  background: #f0fdfa;
+  padding: 16px;
+}
+
+.change-ledger-panel.no_change,
+.change-ledger-panel.not_run {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.change-ledger-panel.blocked,
+.change-ledger-panel.historical {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.change-ledger-head,
+.change-projection-summary,
+.change-history-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.change-ledger-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.change-ledger-badge,
+.change-projection-state,
+.change-reversal-label {
+  flex: 0 0 auto;
+  border: 1px solid #6ee7b7;
+  border-radius: 999px;
+  background: #d1fae5;
+  color: #065f46;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.change-ledger-panel.blocked .change-ledger-badge,
+.change-ledger-panel.historical .change-ledger-badge,
+.change-projection-state.historical_only,
+.change-projection-state.superseded_on_page,
+.change-projection-state.superseded_at_source {
+  border-color: #fdba74;
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.change-projection-state.conflicted {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.change-ledger-panel.no_change .change-ledger-badge,
+.change-ledger-panel.not_run .change-ledger-badge {
+  border-color: #d1d5db;
+  background: #ffffff;
+  color: #4b5563;
+}
+
+.change-ledger-detail,
+.change-projection-boundary,
+.change-ledger-empty {
+  margin: 10px 0 0;
+  color: #374151;
+  line-height: 1.6;
+}
+
+.change-ledger-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.change-ledger-chip {
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #065f46;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.change-projection-list {
+  margin-top: 14px;
+  border-top: 1px solid #99f6e4;
+}
+
+.change-projection-row {
+  padding: 14px 0;
+  border-bottom: 1px solid #ccfbf1;
+}
+
+.change-projection-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.change-projection-summary strong {
+  color: #134e4a;
+}
+
+.change-projection-summary p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 5px 0 0;
+  color: #4b5563;
+}
+
+.change-projection-summary b {
+  color: #111827;
+}
+
+.change-projection-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 10px 0 0;
+}
+
+.change-projection-meta div {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.change-projection-meta dt {
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.change-projection-meta dd {
+  margin: 0;
+  color: #1f2937;
+  overflow-wrap: anywhere;
+}
+
+.change-history {
+  margin-top: 12px;
+}
+
+.change-history summary {
+  color: #0f766e;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.change-history ol {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.change-history li {
+  border-left: 2px solid #5eead4;
+  padding: 6px 0 10px 12px;
+}
+
+.change-history-main {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.change-history time {
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.change-history li p {
+  margin: 5px 0 0;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.change-reversal-label {
+  border-color: #facc15;
+  background: #fef9c3;
+  color: #854d0e;
+  padding: 2px 6px;
+}
+
 .source-memory-detail-note-panel {
   border: 1px solid #bfdbfe;
   border-radius: 8px;
@@ -1908,8 +2815,16 @@ onMounted(() => {
   }
 
   .distillation-downstream,
-  .distillation-summary div {
+  .distillation-summary div,
+  .deep-artifact-grid,
+  .deep-storyline-row {
     grid-template-columns: 1fr;
+  }
+
+  .change-ledger-head,
+  .change-projection-summary {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

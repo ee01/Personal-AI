@@ -462,7 +462,16 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                               resultHandoffReceipt.terminalStepNumber! - 1,
                             )
                           }
-                          aria-label={`从结果整理回执跳到终止步骤 ${resultHandoffReceipt.terminalStepNumber}`}
+                          title={buildAgentTraceStepButtonBoundary(
+                            '结果整理回执',
+                            resultHandoffReceipt.terminalStepNumber,
+                            resultHandoffReceipt.inspectionRoute,
+                          )}
+                          aria-label={buildAgentTraceStepButtonBoundary(
+                            '结果整理回执',
+                            resultHandoffReceipt.terminalStepNumber,
+                            resultHandoffReceipt.inspectionRoute,
+                          )}
                         >
                           终止步骤 #{resultHandoffReceipt.terminalStepNumber}
                         </button>
@@ -634,7 +643,16 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                                   key={stepNumber}
                                   type="button"
                                   onClick={() => jumpToStep(stepNumber - 1)}
-                                  aria-label={`从${item.label}跳到步骤 ${stepNumber}`}
+                                  title={buildAgentTraceStepButtonBoundary(
+                                    item.label,
+                                    stepNumber,
+                                    item.detail,
+                                  )}
+                                  aria-label={buildAgentTraceStepButtonBoundary(
+                                    item.label,
+                                    stepNumber,
+                                    item.detail,
+                                  )}
                                 >
                                   步骤 #{stepNumber}
                                 </button>
@@ -755,7 +773,16 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           key={stepIndex}
                           type="button"
                           onClick={() => jumpToStep(stepIndex)}
-                          aria-label={`跳到步骤 ${stepIndex + 1}`}
+                          title={buildAgentTraceStepButtonBoundary(
+                            item.title,
+                            stepIndex + 1,
+                            item.action,
+                          )}
+                          aria-label={buildAgentTraceStepButtonBoundary(
+                            item.title,
+                            stepIndex + 1,
+                            item.action,
+                          )}
                         >
                           #{stepIndex + 1}
                         </button>
@@ -800,7 +827,16 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                           key={stepNumber}
                           type="button"
                           onClick={() => jumpToStep(stepNumber - 1)}
-                          aria-label={`从待确认队列跳到步骤 ${stepNumber}`}
+                          title={buildAgentTraceStepButtonBoundary(
+                            '待确认队列',
+                            stepNumber,
+                            approvalQueueReceipt.nextStep,
+                          )}
+                          aria-label={buildAgentTraceStepButtonBoundary(
+                            '待确认队列',
+                            stepNumber,
+                            approvalQueueReceipt.nextStep,
+                          )}
                         >
                           步骤 #{stepNumber}
                         </button>
@@ -1275,11 +1311,24 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
                 className={`flow-node ${step.type} ${step.resultClass || ''} ${
                   canJumpToTimeline ? 'jumpable' : ''
                 }`}
-                aria-label={`${step.name}${step.result ? `: ${step.result}` : ''}${
+                title={
                   canJumpToTimeline
-                    ? `，跳到时间线步骤 ${(step.stepIndex ?? 0) + 1}`
-                    : ''
-                }`}
+                    ? buildAgentTraceStepButtonBoundary(
+                        '处理流程图',
+                        (step.stepIndex ?? 0) + 1,
+                        step.detail || step.result || step.name,
+                      )
+                    : undefined
+                }
+                aria-label={
+                  canJumpToTimeline
+                    ? buildAgentTraceStepButtonBoundary(
+                        '处理流程图',
+                        (step.stepIndex ?? 0) + 1,
+                        step.detail || step.result || step.name,
+                      )
+                    : `${step.name}${step.result ? `: ${step.result}` : ''}`
+                }
                 role={canJumpToTimeline ? 'button' : undefined}
                 tabIndex={canJumpToTimeline ? 0 : undefined}
                 onClick={() => jumpToTimelineStep(step.stepIndex)}
@@ -1410,7 +1459,18 @@ const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({
                       type="button"
                       className="result-pending-approval-step"
                       onClick={() => jumpToPendingApprovalStep(approval.stepIndex)}
-                      aria-label={`定位 ${approval.toolId} 的步骤 ${approval.stepIndex + 1}`}
+                      title={buildAgentTraceStepButtonBoundary(
+                        '结果区审批定位',
+                        approval.stepIndex + 1,
+                        `${approval.toolId} 尚未执行，实际审批仍在待确认动作队列中复制审核包或重跑配置后重新运行。`,
+                        '只展开并聚焦当前页面时间线；不会批准、复制、重跑、发送通知、写入、删除或执行外部动作。',
+                      )}
+                      aria-label={buildAgentTraceStepButtonBoundary(
+                        '结果区审批定位',
+                        approval.stepIndex + 1,
+                        `${approval.toolId} 尚未执行，实际审批仍在待确认动作队列中复制审核包或重跑配置后重新运行。`,
+                        '只展开并聚焦当前页面时间线；不会批准、复制、重跑、发送通知、写入、删除或执行外部动作。',
+                      )}
                     >
                       定位步骤 #{approval.stepIndex + 1}
                     </button>

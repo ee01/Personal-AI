@@ -186,3 +186,41 @@ pill click expands an in-chat status card first, including setup blockers, so th
 user can see what is missing before opening settings. Doubao sync issues include
 the failed lane, trigger, timestamp, and a short next-action hint before the user
 continues troubleshooting or retries from settings.
+
+## Quick Ask Conversation Continuity
+
+Quick Ask stores one versioned, redacted `AskResumeSnapshot` in desktop-local
+storage after a successful Ask. The snapshot expires after 24 hours and keeps
+only bounded question/answer previews, topic metadata, up to five evidence
+references, and up to three pending candidates. It is not a full transcript and
+is not written to Memory Service.
+
+When no live renderer session is available, Quick Ask embeds a compact resume
+strip above the composer:
+
+- **Continue** activates the snapshot for the next request and renders a local
+  receipt before any server response.
+- **New question** hides the strip and sends no `contextHints`.
+- **Discard** removes only the desktop-local snapshot and leaves long-term
+  memory untouched.
+- Direct typing while the strip is visible is treated as a new question.
+
+The next resumed request sends `contextHints.source =
+local_ask_resume_snapshot`. Memory Service may use it for topic
+disambiguation/retrieval boost, but must re-run evidence recall and return a
+`continuityReceipt` with `localOnly`, `usedAsHint`, and `reRetrieved` set to
+`true`. Expired or malformed snapshots are deleted during load; secret-like
+fields, tokens, emails, phone numbers, and URL credentials are redacted before
+storage.
+
+`contextHints.topicTitle` is sent as an explicit preferred topic rather than
+being appended to the user's query. The server prioritizes a semantically
+matching topic candidate over ambient recent frames that merely share a broad
+anchor, and deterministic generation fallback retains evidence using that
+locked topic's aliases and source anchors.
+
+Verification:
+
+- `npm --prefix desktop-app run test:quick-ask-resume`
+- `npm run verify:quick-ask:e2e`
+- `npm run eval:run -- --suite ask-conversation-continuity --no-repair`

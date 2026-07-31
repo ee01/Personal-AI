@@ -677,6 +677,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive, computed, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { openMemoryEntryRules } from '../../utils/memoryEntryRulesNavigation';
 import {
   getMemoryServiceClient,
   type ConfirmRequest,
@@ -1519,17 +1520,11 @@ async function openMessageRuleImprovement(req: ConfirmRequest) {
         timestamp: Date.now(),
       },
     });
-    const url = chrome.runtime.getURL('topic-modal.html');
-    if (chrome.windows?.create) {
-      await chrome.windows.create({
-        url,
-        type: 'popup',
-        width: 1100,
-        height: 820,
-      });
-    } else {
-      window.open(url, '_blank');
-    }
+    await openMemoryEntryRules({
+      asPopup: true,
+      width: 1100,
+      height: 820,
+    });
   } catch (e: any) {
     cardErrors[req.id] = e.message || '打开规则编辑失败';
   } finally {

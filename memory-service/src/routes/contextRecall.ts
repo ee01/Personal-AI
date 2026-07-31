@@ -9,10 +9,13 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from '../core/ContextRecallService.js';
+import { KeystoneBriefService } from '../core/KeystoneBriefService.js';
 import { buildWeaveStats } from '../core/weaveStats.js';
 import type {
+  ContextRecallMatch,
   ContextRecallRequest,
   ContextRecallResponse,
 } from '../types/index.js';
@@ -116,6 +119,22 @@ const contextRecallBodySchema = {
               name: { type: 'string' as const, maxLength: 120 },
               value: { type: 'string' as const, maxLength: 120 },
               rawText: { type: 'string' as const, maxLength: 240 },
+            },
+            additionalProperties: false,
+          },
+        },
+        verifiedSourceFields: {
+          type: 'array' as const,
+          maxItems: 12,
+          items: {
+            type: 'object' as const,
+            required: ['propertyKey', 'name', 'value', 'source', 'checkedAt'],
+            properties: {
+              propertyKey: { type: 'string' as const, maxLength: 120 },
+              name: { type: 'string' as const, maxLength: 120 },
+              value: { type: ['string', 'null'] as const, maxLength: 120 },
+              source: { type: 'string' as const, enum: ['jira_rest'] },
+              checkedAt: { type: 'number' as const },
             },
             additionalProperties: false,
           },
@@ -407,6 +426,56 @@ function buildContextRecallFallback(
   };
 }
 
+function buildKeystoneOnlyFallback(
+  request: ContextRecallRequest,
+  startedAt: number,
+  db: Database.Database,
+): ContextRecallResponse {
+  const fallback = buildContextRecallFallback(
+    request,
+    startedAt,
+    'passive_fast_search_disabled',
+  );
+  const presentation = new KeystoneBriefService(db).matchContext(
+    request,
+    [],
+    { requireRecallEvidence: false },
+  );
+  if (!presentation || presentation.presentationMode === 'stale_notice') {
+    return fallback;
+  }
+  const brief = presentation.brief;
+  const english = brief.compositionVersion.endsWith('-en-US');
+  const match: ContextRecallMatch = {
+    id: `keystone:${brief.id}`,
+    type: 'reflection_thread',
+    score: presentation.presentationMode === 'conflict' ? 0.94 : 0.97,
+    title: brief.title,
+    uiSummary: brief.summary,
+    snippet: brief.summary,
+    sourceLabel: english ? 'Keystone Brief' : '关键简报',
+    links: [],
+    whyMatched: presentation.whyNow,
+    whyRelevant: [
+      english
+        ? `Keystone Brief: ${brief.sourceMap.length} sources`
+        : `关键简报：${brief.sourceMap.length} 条来源`,
+      presentation.whyNow,
+    ],
+    reasonType: 'prior_decision',
+    evidenceRole: 'context',
+    displayPriority: 'p1',
+    timestamp: brief.sourceAsOf,
+    metadata: { keystoneBriefFallback: true },
+  };
+  return {
+    ...fallback,
+    matches: [match],
+    topMatch: match,
+    keystoneBrief: presentation,
+  };
+}
+
 function withContextRecallRouteTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -446,10 +515,10 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
           'context-recall skipped by passive route guard',
         );
         return reply.send(
-          buildContextRecallFallback(
+          buildKeystoneOnlyFallback(
             request.body,
             startedAt,
-            'passive_fast_search_disabled',
+            request.userContext.db,
           ),
         );
       }
@@ -511,6 +580,17 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
           })),
         );
         if (weave.crossSource) result.weave = weave;
+        try {
+          result.keystoneBrief = new KeystoneBriefService(db).matchContext(
+            request.body,
+            result.matches ?? [],
+          );
+        } catch (err) {
+          request.log.warn(
+            { err },
+            'keystone brief matching failed; returning ordinary recall',
+          );
+        }
         return reply.send(result);
       } catch (err) {
         routeReturned = true;

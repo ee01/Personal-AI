@@ -419,6 +419,89 @@ test('run-now endpoint returns skipped status for manual sync feedback', async (
   await app.close();
 });
 
+test('run-now endpoint returns manual sync audit metadata without source ids', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-run-now-audit-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+  const browser = new FakeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = {
+    runNow: async (kind: string) => {
+      assert.equal(kind, 'mobile_briefing');
+      return {
+        status: 'succeeded',
+        externalThreadId: 'mobile-context-thread-1234567890',
+        packageKinds: ['active_focus_digest'],
+        packageItemCount: 2,
+        sourceRefCount: 2,
+        sourceRefs: ['memory:one', 'memory:two'],
+        transportUsed: 'dom',
+        transportMode: 'webpage_mcp',
+        transportFallbackReason: 'webpage-mcp recovered after retry',
+        verified: true,
+        messageVisible: true,
+        challengeDetected: false,
+        telemetryError: 'Sync job report failed',
+      };
+    },
+  };
+
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager: syncManager as unknown as BridgeSyncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/sync/run-now',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      kind: 'mobile_briefing',
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json() as Record<string, unknown>;
+  assert.deepEqual(body, {
+    ok: true,
+    kind: 'mobile_briefing',
+    status: 'succeeded',
+    externalThreadId: 'mobile-context-thread-1234567890',
+    packageKinds: ['active_focus_digest'],
+    packageItemCount: 2,
+    sourceRefCount: 2,
+    transportUsed: 'dom',
+    transportMode: 'webpage_mcp',
+    transportFallbackReason: 'webpage-mcp recovered after retry',
+    verified: true,
+    messageVisible: true,
+    challengeDetected: false,
+    telemetryError: 'Sync job report failed',
+  });
+  assert.equal('sourceRefs' in body, false);
+
+  await app.close();
+});
+
 test('createMemorySyncThread creates a real chat-style binding', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-thread-'),
@@ -930,7 +1013,7 @@ test('settings endpoint updates effective sync configuration', async () => {
   await app.close();
 });
 
-test('assistant ask route forwards explicit scope to memory client', async () => {
+test('assistant ask route forwards explicit scope and local resume hints to memory client', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-ask-scope-'),
   );
@@ -961,8 +1044,16 @@ test('assistant ask route forwards explicit scope to memory client', async () =>
   );
 
   let capturedScope: string | undefined;
-  memoryClient.ask = async (_query, _context, _includeEvidence, scope) => {
+  let capturedContextHints: unknown;
+  memoryClient.ask = async (
+    _query,
+    _context,
+    _includeEvidence,
+    scope,
+    contextHints,
+  ) => {
     capturedScope = scope;
+    capturedContextHints = contextHints;
     return {
       answer: 'scoped answer',
       queryTimeMs: 5,
@@ -1011,11 +1102,27 @@ test('assistant ask route forwards explicit scope to memory client', async () =>
       query: '最近有什么变化？',
       includeEvidence: true,
       scope: 'both',
+      contextHints: {
+        source: 'local_ask_resume_snapshot',
+        localOnly: true,
+        updatedAt: '2026-07-15T02:00:00.000Z',
+        topicTitle: 'MTR-141852: AI Custom VBG',
+        previousQuestion: '那个 BE ready 了吗？',
+        evidenceRefs: ['jira:MTR-141852'],
+      },
     },
   });
 
   assert.equal(response.statusCode, 200);
   assert.equal(capturedScope, 'both');
+  assert.deepEqual(capturedContextHints, {
+    source: 'local_ask_resume_snapshot',
+    localOnly: true,
+    updatedAt: '2026-07-15T02:00:00.000Z',
+    topicTitle: 'MTR-141852: AI Custom VBG',
+    previousQuestion: '那个 BE ready 了吗？',
+    evidenceRefs: ['jira:MTR-141852'],
+  });
 
   syncManager.stop();
   await app.close();

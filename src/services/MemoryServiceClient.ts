@@ -16,11 +16,48 @@ const DEFAULT_BASE_URL = 'http://localhost:3210/api/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
+interface StoredMemoryUserInfo {
+  username?: string;
+  userEmail?: string;
+  email?: string;
+}
+
+function resolveStoredMemoryUserId(userinfo?: StoredMemoryUserInfo): string | null {
+  const candidates = [
+    userinfo?.username,
+    userinfo?.userEmail?.split('@')[0],
+    userinfo?.email?.split('@')[0],
+  ];
+  for (const candidate of candidates) {
+    const normalized = candidate?.trim();
+    if (normalized && USER_ID_PATTERN.test(normalized)) return normalized;
+  }
+  return null;
+}
+
 export interface MemoryServiceConfig {
   baseUrl: string;
   apiKey?: string;
   timeout?: number; // ms, default 30000
   userId?: string; // multi-user isolation, default 'default'
+}
+
+/**
+ * Single frontend usage/token event uploaded to the analytics ingest endpoint.
+ * Shape mirrors the cross-repo contract consumed by
+ * `POST /api/v1/usage/telemetry` (see src/analytics/UsageTracker.ts).
+ */
+export interface UsageTelemetryEvent {
+  ts: number;
+  side: 'frontend';
+  capability: string;
+  feature: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  status?: 'ok' | 'error';
+  errorKind?: string;
+  tokensEstimated?: boolean;
 }
 
 // ============================================================================
@@ -619,6 +656,13 @@ export interface ContextRecallCurrentContext {
   participants?: string[];
   visibleMessages?: ContextRecallVisibleMessage[];
   visibleFields?: ContextRecallVisibleField[];
+  verifiedSourceFields?: Array<{
+    propertyKey: string;
+    name: string;
+    value: string | null;
+    source: 'jira_rest';
+    checkedAt: number;
+  }>;
   sourceAnchorHints?: string[];
 }
 
@@ -713,6 +757,102 @@ export interface LensPresentation {
   presentationId?: string;
 }
 
+export interface KeystoneBriefClaim {
+  text: string;
+  sourceRefs: string[];
+  confidence?: 'high' | 'medium' | 'low';
+  authority?:
+    | 'user_owned'
+    | 'direct_message'
+    | 'source_memory'
+    | 'jira'
+    | 'meeting'
+    | 'reflection'
+    | 'derived';
+  validAsOf?: number;
+  staleRisk?: 'low' | 'medium' | 'high';
+  projection?: 'local_only' | 'summary_ok' | 'blocked_external';
+  actor?: string;
+  decidedAt?: number;
+}
+
+export interface KeystoneBrief {
+  id: string;
+  briefKey: string;
+  title: string;
+  subjectType: string;
+  scope: 'work' | 'personal' | 'mixed_summary_only';
+  status: 'candidate' | 'ready' | 'partial' | 'blocked' | 'stale' | 'hidden';
+  summary: string;
+  externalSummary?: string;
+  sourceAsOf: number;
+  freshness: {
+    state: 'fresh' | 'watching' | 'stale_risk' | 'blocked_source';
+    reason: string;
+    expiresAt?: number;
+    watchContractId?: string;
+  };
+  slots: {
+    whyItMatters: string;
+    currentState: string;
+    stableFacts: KeystoneBriefClaim[];
+    decisions: KeystoneBriefClaim[];
+    constraints: KeystoneBriefClaim[];
+    traps: KeystoneBriefClaim[];
+    peopleAndSources: Array<{ name: string; role: string; sourceRefs: string[] }>;
+    nextUseCases: string[];
+    openQuestions: string[];
+  };
+  sourceMap: Array<{
+    ref: string;
+    sourceType: string;
+    sourceId: string;
+    role: 'authority' | 'supporting' | 'derived' | 'prior';
+    title?: string;
+    url?: string;
+    timestamp?: number;
+    authority: KeystoneBriefClaim['authority'];
+    projection: 'local_only' | 'summary_ok' | 'blocked_external';
+    hidden?: boolean;
+    snippet?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  sceneAnchors: {
+    projects: string[];
+    jiraKeys: string[];
+    people: string[];
+    topics: string[];
+    surfaces: string[];
+  };
+  displayPolicy: {
+    defaultMode: 'silent' | 'chip' | 'card';
+    maxLines: number;
+    canCopyToDraft: boolean;
+    externalSummaryOnly: boolean;
+    hiddenSourceCount: number;
+  };
+  writeReceipt: {
+    writesProfile: false;
+    sendsExternal: false;
+    createsTask: false;
+    updatesFacts: false;
+    writesOutcomeEvent: true;
+  };
+  repairState: 'clean' | 'needs_repair';
+  blockedReason?: string;
+  compositionVersion: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KeystoneBriefPresentation {
+  brief: KeystoneBrief;
+  presentationMode: 'primary' | 'conflict' | 'stale_notice';
+  whyNow: string;
+  evidenceMatchIds: string[];
+  relatedMemoryCount: number;
+}
+
 export interface ContextRecallMatch {
   id: string;
   type:
@@ -784,6 +924,86 @@ export interface ContextRecallAutopilotDecision {
   gates: string[];
 }
 
+export type MemoryChangeProjectionStatus =
+  | 'confirmed_current'
+  | 'last_observed'
+  | 'conflicted'
+  | 'historical_only'
+  | 'superseded_on_page'
+  | 'superseded_at_source';
+
+export interface MemoryChangeValue {
+  kind: 'text' | 'number' | 'date' | 'boolean' | 'status' | 'entity_ref' | 'set';
+  display: string;
+  normalized: string | number | boolean | string[] | null;
+  raw?: string;
+}
+
+export interface MemoryChangeEvent {
+  id: string;
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  previousValue?: MemoryChangeValue;
+  nextValue: MemoryChangeValue;
+  eventKind: 'set' | 'update' | 'clear' | 'revert';
+  authorityRole:
+    | 'authoritative_source'
+    | 'owner_authored'
+    | 'team_message'
+    | 'ai_generated'
+    | 'source_snapshot'
+    | 'inferred';
+  confidence: number;
+  sourceRef: { type: string; id: string; title?: string; url?: string };
+  actor?: string;
+  reason?: string;
+  evidenceQuote?: string;
+  observedAt: number;
+  capturedAt: number;
+  active: boolean;
+  isReversal: boolean;
+}
+
+export interface MemoryChangeProjection {
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  currentValue?: MemoryChangeValue;
+  previousValue?: MemoryChangeValue;
+  visiblePageValue?: MemoryChangeValue;
+  status: MemoryChangeProjectionStatus;
+  summary: string;
+  boundary: string;
+  eventCount: number;
+  reversalCount: number;
+  conflictCount: number;
+  firstObservedAt?: number;
+  lastObservedAt?: number;
+  currentEvent?: MemoryChangeEvent;
+  history: MemoryChangeEvent[];
+}
+
+export interface MemoryChangeLedgerReceipt {
+  status: 'ready' | 'no_change' | 'blocked' | 'not_run';
+  label: string;
+  detail: string;
+  evidence: string[];
+  inputHash?: string;
+  extractedCount: number;
+  excludedNoiseCount: number;
+  generatedAt?: number;
+  active: boolean;
+  events: MemoryChangeEvent[];
+  projections: MemoryChangeProjection[];
+}
+
 export interface ContextRecallScopeCounts {
   work: number;
   personal: number;
@@ -814,8 +1034,10 @@ export interface ContextRecallResponse {
   queryTimeMs: number;
   scopeReceipt?: ContextRecallScopeReceipt;
   autopilot?: ContextRecallAutopilotDecision;
+  changeProjections?: MemoryChangeProjection[];
   /** Weave provenance (P0-5): present only when matches stitch ≥2 sources or ≥7 days. */
   weave?: WeaveStats;
+  keystoneBrief?: KeystoneBriefPresentation;
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
@@ -990,6 +1212,62 @@ export interface ComposerAudience {
   relationshipHint?: string;
 }
 
+export type ComposerAudienceType =
+  | 'peer'
+  | 'manager'
+  | 'direct_report'
+  | 'external'
+  | 'mixed'
+  | 'unknown';
+
+export type ComposerAudienceSource =
+  | 'confirmed_social_edge'
+  | 'relationship_hint'
+  | 'scene_default'
+  | 'unresolved';
+
+export type PersonaProjectionScene =
+  | 'ringcentral_message'
+  | 'ringcentral_thread'
+  | 'jira_comment'
+  | 'web_ai_context_pack'
+  | 'web_ai_prompt_patch'
+  | 'web_ai_rewrite_prompt';
+
+export type PersonaRepresentationMode =
+  | 'draft_only'
+  | 'draft_preview_required'
+  | 'context_pack_copyable'
+  | 'blocked';
+
+export type PersonaVoiceMode =
+  | 'write_as_user'
+  | 'speak_about_user'
+  | 'never_speak_as_user';
+
+export type PersonaProjectionSlotKind =
+  | 'work_identity'
+  | 'personal_context'
+  | 'preference'
+  | 'constraint'
+  | 'writing_style';
+
+export interface PersonaProjectionSummary {
+  version: 1;
+  scene: PersonaProjectionScene;
+  audienceType: ComposerAudienceType;
+  audienceSource: ComposerAudienceSource;
+  audienceConfidence: number;
+  representationMode: PersonaRepresentationMode;
+  voiceMode: PersonaVoiceMode;
+  usedSlotKinds: PersonaProjectionSlotKind[];
+  usedCount: number;
+  blockedCount: number;
+  reasonCodes: string[];
+  requiresPreview: boolean;
+  degraded?: boolean;
+}
+
 export interface ComposerContextItem {
   type: ComposerContextItemType;
   id?: string;
@@ -1031,7 +1309,13 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'reflection_thread';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -1051,8 +1335,10 @@ export interface ComposerAssistResponse {
     | 'none'
     | 'context_pack'
     | 'prompt_patch'
+    | 'rewrite_prompt'
     | 'reply_context'
     | 'issue_context';
+  insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
   insertText?: string;
@@ -1061,6 +1347,7 @@ export interface ComposerAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  personaProjection?: PersonaProjectionSummary;
   debug?: Record<string, unknown>;
 }
 
@@ -1191,14 +1478,26 @@ export interface StorylineOpportunity {
   suggestedArtifact?: StorylineSuggestedArtifact;
 }
 
-export type StorylineSourceKind = 'today_meeting_prep';
+export type StorylineSourceKind = 'today_meeting_prep' | 'source_memory_seed';
 
-export interface StorylineDraftRequest {
-  sourceKind: StorylineSourceKind;
+export interface MeetingPrepStorylineDraftRequest {
+  sourceKind: 'today_meeting_prep';
   prepId: string;
   targetArtifact?: StorylineSuggestedArtifact;
   audienceHint?: string;
 }
+
+export interface SourceMemoryStorylineDraftRequest {
+  sourceKind: 'source_memory_seed';
+  capsuleId: string;
+  seedId: string;
+  targetArtifact?: StorylineSuggestedArtifact;
+  audienceHint?: string;
+}
+
+export type StorylineDraftRequest =
+  | MeetingPrepStorylineDraftRequest
+  | SourceMemoryStorylineDraftRequest;
 
 export interface StorylineDraftSegment {
   title: string;
@@ -1310,6 +1609,7 @@ export interface ContextAssistResponse {
   title?: string;
   summary?: string;
   insertText?: string;
+  insertMode?: ComposerAssistResponse['insertMode'];
   cueCards: ContextAssistCueCard[];
   evidence: ComposerAssistEvidence[];
   riskLevel: 'low' | 'medium' | 'high';
@@ -1378,6 +1678,122 @@ export interface MeetingRecord {
   decisionCount?: number;
 }
 
+export type MeetingOutcomeBinderStatus =
+  | 'planned'
+  | 'in_meeting'
+  | 'post_meeting_pending'
+  | 'bound'
+  | 'partial'
+  | 'blocked';
+
+export type MeetingOutcomeSlotStatus =
+  | 'planned'
+  | 'resolved'
+  | 'partially_resolved'
+  | 'unresolved'
+  | 'carried_over'
+  | 'blocked_by_missing_evidence'
+  | 'discarded_agenda';
+
+export type MeetingOutcomeSlotType =
+  | 'decision'
+  | 'action'
+  | 'open_question'
+  | 'fact_update'
+  | 'context_to_carry'
+  | 'discarded_agenda';
+
+export type MeetingOutcomeEvidenceKind =
+  | 'calendar'
+  | 'memory'
+  | 'transcript'
+  | 'action'
+  | 'decision'
+  | 'chapter';
+
+export interface MeetingOutcomeEvidence {
+  id: string;
+  kind: MeetingOutcomeEvidenceKind;
+  refId: string;
+  label?: string;
+  snippet: string;
+  timestamp?: number;
+  sourceUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MeetingOutcomeSlot {
+  id: string;
+  title: string;
+  type: MeetingOutcomeSlotType;
+  status: MeetingOutcomeSlotStatus;
+  mentionState: 'not_seen' | 'mentioned' | 'supported';
+  sourceEvidenceIds: string[];
+  evidence: MeetingOutcomeEvidence[];
+  resultSummary?: string;
+  confidence: number;
+}
+
+export interface MeetingOutcomeBinder {
+  id: string;
+  userId: string;
+  prepId: string;
+  eventExternalId: string;
+  eventSeriesKey?: string;
+  eventTitle: string;
+  eventStartAt: number;
+  meetingId?: string;
+  status: MeetingOutcomeBinderStatus;
+  slots: MeetingOutcomeSlot[];
+  sourceEvidence: MeetingOutcomeEvidence[];
+  sourceHash: string;
+  bindingMode?: 'llm' | 'deterministic_fallback';
+  bindingError?: string;
+  generatedAt: number;
+  boundAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  receipt: {
+    source: string;
+    coverage: string;
+    freshness: string;
+    boundary: string;
+  };
+}
+
+export interface MeetingOutcomeBindInput {
+  binderId?: string;
+  meetingId: string;
+  title?: string;
+  eventExternalId?: string;
+  transcript?: Array<{
+    id: string;
+    text: string;
+    speaker?: string;
+    ts?: number;
+  }>;
+  actionItems?: Array<{
+    id: string;
+    title: string;
+    owner?: string;
+    deadline?: string;
+    status?: 'pending' | 'done';
+    evidence?: string;
+    timestamp?: string;
+  }>;
+  decisions?: Array<{
+    id: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  chapters?: Array<{
+    id: string;
+    title: string;
+    summary?: string;
+    startLabel?: string;
+  }>;
+}
+
 export type MeetingArchiveStatusFilter =
   | 'all'
   | 'ready'
@@ -1429,6 +1845,7 @@ export interface MeetingRecordDetail extends MeetingRecord {
     keyQuote: string;
     timeRange?: string;
   }>;
+  outcomeBinder?: MeetingOutcomeBinder;
 }
 
 export interface MeetingRecordListResponse {
@@ -1443,6 +1860,8 @@ export interface MeetingRecordListResponse {
 export interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
+  /** Read-only Meeting Pilot outcome binders used for this answer. */
+  meetingOutcomeSources?: MeetingOutcomeBinder[];
   queryTimeMs: number;
   contextMatch?: {
     state: 'locked' | 'ambiguous' | 'none';
@@ -2382,6 +2801,53 @@ export interface RuntimeAction {
   utilityScore?: number;
   urgencyScore?: number;
   outreachSessionId?: string;
+  readinessReceipt?: ActionReadinessReceipt;
+}
+
+export type ActionReadinessStatus =
+  | 'ready'
+  | 'unknown'
+  | 'blocked_auth'
+  | 'blocked_capability'
+  | 'blocked_input'
+  | 'blocked_proof'
+  | 'degraded'
+  | 'expired';
+
+export type ActionReadinessDecision =
+  | 'allow'
+  | 'allow_manual_only'
+  | 'probe_first'
+  | 'block';
+
+export interface ActionReadinessReceipt {
+  contractId: string;
+  scopeKey: string;
+  status: ActionReadinessStatus;
+  checkedAt: number;
+  expiresAt?: number;
+  reason?: string;
+  affectedActionCount: number;
+  requiredInputs: string[];
+  requiredApprovals: string[];
+  proofRequirements: string[];
+  dispatchState: 'not_dispatched' | 'dispatched';
+  doesNotProve: string[];
+}
+
+export interface ActionReadinessSummary {
+  status: 'ready' | 'attention' | 'blocked';
+  title: string;
+  detail: string;
+  trackedActionCount: number;
+  affectedActionCount: number;
+  blockedContractCount: number;
+  degradedContractCount: number;
+  unknownActionCount: number;
+  contracts: ActionReadinessReceipt[];
+  boundary: string;
+  readAt: number;
+  readOnly: boolean;
 }
 
 export interface RuntimeActionListResponse {
@@ -2389,6 +2855,7 @@ export interface RuntimeActionListResponse {
   total: number;
   limit: number;
   offset: number;
+  readinessSummary?: ActionReadinessSummary;
 }
 
 export interface MessageRuleAutomationAttachment {
@@ -3285,6 +3752,9 @@ export type SourceMemorySourceKind =
   | 'jira_comment'
   | 'message_reply'
   | 'web_ai_prompt'
+  | 'ai_conversation'
+  | 'document'
+  | 'meeting_material'
   | 'manual';
 export type SourceMemoryCaptureMode = 'auto' | 'suggested' | 'manual';
 export type SourceMemoryPrivacyLevel =
@@ -3410,6 +3880,7 @@ export interface SourceMemoryCapsule {
   contentPreview: string;
   messageId?: string;
   metadata?: Record<string, unknown>;
+  changeLedger?: MemoryChangeLedgerReceipt;
   writeReceipt?: SourceMemoryCaptureWriteReceipt;
   actionReceipt?: SourceMemoryCaptureActionReceipt;
   createdAt: number;
@@ -3653,6 +4124,7 @@ export interface TodayPilotMeetingPrepRecord {
   redaction: Record<string, unknown>;
   llmUsage: Record<string, unknown>;
   storylineOpportunity?: StorylineOpportunity;
+  outcomeBinder?: MeetingOutcomeBinder;
   sourceHash: string;
   generatedAt: number;
   expiresAt: number;
@@ -3910,6 +4382,10 @@ export interface ProviderMemoryProduct {
   kind: ProviderMemoryProductKind;
   title: string;
   bodyMd: string;
+  itemCount?: number;
+  feedHasMore?: boolean;
+  feedLimit?: number;
+  feedSnapshotReceipt?: string;
   stability: 'stable' | 'rolling' | 'ephemeral';
   transport: ProviderTransport;
   targetBindingType: string;
@@ -4184,7 +4660,7 @@ export class MemoryServiceClient {
   /**
    * Load configuration from envConfig and userinfo in chrome.storage.local.
    * - baseUrl, apiKey, timeout: from envConfig (MEMORY_SERVICE_*)
-   * - userId: from userinfo.username
+   * - userId: from userinfo.username, or the local part of a stored work email
    */
   private loadConfigFromStorage(): Promise<void> {
     if (this.configLoaded) {
@@ -4198,7 +4674,7 @@ export class MemoryServiceClient {
             ['envConfig', 'userinfo'],
             (result: {
               envConfig?: Record<string, any>;
-              userinfo?: { username?: string };
+              userinfo?: StoredMemoryUserInfo;
             }) => {
               const env = result.envConfig;
               if (env?.MEMORY_SERVICE_BASE_URL) {
@@ -4214,9 +4690,9 @@ export class MemoryServiceClient {
                 const t = Number(env.MEMORY_SERVICE_TIMEOUT);
                 if (!Number.isNaN(t)) this.timeout = t;
               }
-              const username = result.userinfo?.username?.trim();
-              if (username && USER_ID_PATTERN.test(username)) {
-                this.userId = username;
+              const userId = resolveStoredMemoryUserId(result.userinfo);
+              if (userId) {
+                this.userId = userId;
                 this.userIdentityExplicit = true;
               }
               this.configLoaded = true;
@@ -4246,7 +4722,7 @@ export class MemoryServiceClient {
   }
 
   /**
-   * Resolve userId from userinfo.username when it is still 'default'.
+   * Resolve userId from stored user info when it is still 'default'.
    * Runs once per "default" period.
    */
   private async ensureUserIdResolved(): Promise<void> {
@@ -4257,11 +4733,11 @@ export class MemoryServiceClient {
       try {
         if (typeof chrome === 'undefined' || !chrome?.storage?.local) return;
         const result = (await chrome.storage.local.get('userinfo')) as {
-          userinfo?: { username?: string };
+          userinfo?: StoredMemoryUserInfo;
         };
-        const username = result.userinfo?.username?.trim();
-        if (username && USER_ID_PATTERN.test(username)) {
-          this.userId = username;
+        const userId = resolveStoredMemoryUserId(result.userinfo);
+        if (userId) {
+          this.userId = userId;
           this.userIdentityExplicit = true;
         }
       } finally {
@@ -4638,6 +5114,32 @@ export class MemoryServiceClient {
     );
   }
 
+  async recordKeystoneBriefEvent(
+    id: string,
+    input: {
+      eventType:
+        | 'shown'
+        | 'opened'
+        | 'evidence_opened'
+        | 'copied'
+        | 'useful'
+        | 'hidden'
+        | 'not_accurate'
+        | 'used_in_ask'
+        | 'used_by_compiler';
+      surface?: string;
+      context?: Record<string, unknown>;
+      reason?: string;
+      detail?: string;
+    },
+  ): Promise<{ item: KeystoneBrief }> {
+    return this.request<{ item: KeystoneBrief }>(
+      'POST',
+      `/keystone-briefs/${encodeURIComponent(id)}/events`,
+      input,
+    );
+  }
+
   /**
    * Context Assist — shared orchestration for meeting prep and Composer Guard.
    * The backend still reuses context-recall/recall for retrieval.
@@ -4802,6 +5304,35 @@ export class MemoryServiceClient {
       'GET',
       `/meetings/${encodeURIComponent(meetingId)}`,
     );
+  }
+
+  async getMeetingOutcome(id: string): Promise<MeetingOutcomeBinder | null> {
+    const response = await this.request<{ binder: MeetingOutcomeBinder }>(
+      'GET',
+      `/meeting-outcomes/${encodeURIComponent(id)}`,
+    );
+    return response.binder ?? null;
+  }
+
+  async getMeetingOutcomeByMeetingId(
+    meetingId: string,
+  ): Promise<MeetingOutcomeBinder | null> {
+    const response = await this.request<{ binder: MeetingOutcomeBinder | null }>(
+      'GET',
+      `/meeting-outcomes?meetingId=${encodeURIComponent(meetingId)}`,
+    );
+    return response.binder;
+  }
+
+  async bindMeetingOutcome(
+    payload: MeetingOutcomeBindInput,
+  ): Promise<MeetingOutcomeBinder> {
+    const response = await this.request<{ binder: MeetingOutcomeBinder }>(
+      'POST',
+      '/meeting-outcomes/bind',
+      payload,
+    );
+    return response.binder;
   }
 
   // --------------------------------------------------------------------------
@@ -5080,6 +5611,51 @@ export class MemoryServiceClient {
     const qs = params.toString();
     const path = `/projects/watched${qs ? '?' + qs : ''}`;
     return this.request<WatchedProject[]>('GET', path);
+  }
+
+  async getFocusProjects(): Promise<{
+    projects: any[];
+    contexts?: { row?: string; paragraph?: string; seeds?: any[] };
+  }> {
+    return this.request('GET', '/projects/focus');
+  }
+
+  async syncFocusProjects(snapshot: {
+    teamId: string;
+    teamName?: string;
+    items: Array<Record<string, unknown>>;
+    syncedAt: number;
+  }): Promise<{
+    upserted: number;
+    archived: number;
+    skipped: boolean;
+    projects: any[];
+  }> {
+    return this.request('POST', '/projects/watched/sync', snapshot);
+  }
+
+  async archiveFocusTeam(teamId: string): Promise<{ archived: number }> {
+    return this.request('POST', '/projects/watched/archive-team', { teamId });
+  }
+
+  async getMemoryProjectCandidates(): Promise<{ candidates: any[] }> {
+    return this.request('GET', '/projects/memory-candidates');
+  }
+
+  async getProjectDriftReceipts(projectId?: string): Promise<{ items: any[] }> {
+    const qs = projectId
+      ? `?projectId=${encodeURIComponent(projectId)}`
+      : '';
+    return this.request('GET', `/projects/drift-receipts${qs}`);
+  }
+
+  async resolveProjectDriftReceipt(body: {
+    id?: string;
+    status?: 'accepted' | 'ignored' | 'converged';
+    barTargetEnd?: string;
+    projectId?: string;
+  }): Promise<any> {
+    return this.request('POST', '/projects/drift-receipts/resolve', body);
   }
 
   /**
@@ -5576,11 +6152,30 @@ export class MemoryServiceClient {
     queueStatus: string;
     result?: Record<string, any>;
     error?: string;
+    readinessReceipt?: ActionReadinessReceipt;
   }> {
     return this.request(
       'POST',
       `/actions/${encodeURIComponent(id)}/execute`,
       options,
+    );
+  }
+
+  async probeActionReadiness(id: string): Promise<{
+    decision: ActionReadinessDecision;
+    receipt: ActionReadinessReceipt;
+    probeReceipt: {
+      probeOnly: true;
+      originalActionExecuted: false;
+      checkedAt: number;
+      status: ActionReadinessStatus;
+      summary: string;
+      boundary: string;
+    };
+  }> {
+    return this.request(
+      'POST',
+      `/actions/${encodeURIComponent(id)}/readiness/probe`,
     );
   }
 
@@ -6748,6 +7343,43 @@ export class MemoryServiceClient {
     } catch {
       return null;
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Usage Analytics (frontend telemetry)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Upload a batch of frontend usage/token events to the analytics ingest
+   * endpoint. Reuses the shared `request()` wrapper, so the current user is
+   * automatically attached via the `X-User-Id` header.
+   *
+   * @param batch Frontend usage events (see UsageTelemetryEvent shape).
+   */
+  async postUsageTelemetry(batch: UsageTelemetryEvent[]): Promise<void> {
+    const FLUSH_BATCH_SIZE = 100;
+    for (let i = 0; i < batch.length; i += FLUSH_BATCH_SIZE) {
+      const chunk = batch.slice(i, i + FLUSH_BATCH_SIZE);
+      await this.request('POST', '/usage/telemetry', { events: chunk });
+    }
+  }
+
+  /**
+   * Issue a signed personal usage dashboard link (scope=self).
+   * Uses the client's X-User-Id. Returns a path relative to the API base
+   * (e.g. `/usage/dashboard?token=...`).
+   */
+  async createUsageMyLink(opts?: { ttlDays?: number }): Promise<{
+    token: string;
+    path: string;
+    scope: 'self' | 'all';
+    userId: string;
+    expiresAt: number;
+  }> {
+    return this.request('POST', '/usage/my-link', {
+      scope: 'self',
+      ttlDays: opts?.ttlDays,
+    });
   }
 
   // --------------------------------------------------------------------------

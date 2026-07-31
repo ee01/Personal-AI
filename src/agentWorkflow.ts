@@ -1,4 +1,5 @@
 import { callLLMJsonAPI } from './llm';
+import { CAPABILITIES } from './analytics/capabilities';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { buildMessageFilterSystemPrompt } from './prompts';
@@ -665,6 +666,8 @@ const availableTools: Record<string, AgentTool> = {
       const relationshipData = await callLLMJsonAPI({
         prompt: relationshipPrompt,
         type: 'query',
+        capability: CAPABILITIES.AGENT_WORKFLOW,
+        feature: 'relationship_analysis',
       });
       return relationshipData || { relationships: [] };
     },
@@ -765,7 +768,12 @@ const availableTools: Record<string, AgentTool> = {
       }
       `;
 
-      return await callLLMJsonAPI({ prompt: relevancePrompt, type: 'query' });
+      return await callLLMJsonAPI({
+        prompt: relevancePrompt,
+        type: 'query',
+        capability: CAPABILITIES.AGENT_WORKFLOW,
+        feature: 'relevance_check',
+      });
     },
   },
   externalServiceQuery: {
@@ -827,7 +835,12 @@ const availableTools: Record<string, AgentTool> = {
       }
       `;
 
-      return await callLLMJsonAPI({ prompt: replyPrompt, type: 'query' });
+      return await callLLMJsonAPI({
+        prompt: replyPrompt,
+        type: 'query',
+        capability: CAPABILITIES.AGENT_WORKFLOW,
+        feature: 'reply_suggestion',
+      });
     },
   },
   concernedItemMatcher: {
@@ -884,6 +897,8 @@ ${xmlMessage}
         system_prompt: systemPrompt,
         user_prompt: userPrompt,
         type: 'query',
+        capability: CAPABILITIES.AGENT_WORKFLOW,
+        feature: 'concerned_item_match',
       });
 
       const firstMatch = Array.isArray(matchResult?.data)

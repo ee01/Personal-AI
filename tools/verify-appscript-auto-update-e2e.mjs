@@ -347,6 +347,17 @@ try {
   await page.locator('text=Project History 200/200').waitFor({
     timeout: 15000,
   });
+  const proofReceipt = page.locator('[aria-label="App Script 升级证明回执"]');
+  await proofReceipt.waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=升级证明回执: 版本历史已满，本次主操作只打开 Project History').waitFor({
+    timeout: 15000,
+  });
+  assert.match(
+    await proofReceipt.getAttribute('title') || '',
+    /仍未写 Sheet\/Script\/Jira Rule/,
+  );
   const limitProjectHistoryButton = page.locator('button', { hasText: '打开 Project History' }).first();
   await limitProjectHistoryButton.waitFor({
     timeout: 15000,
@@ -388,6 +399,13 @@ try {
   await page.locator('text=Project History 198/200').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新').waitFor({
+    timeout: 15000,
+  });
+  assert.match(
+    await proofReceipt.getAttribute('title') || '',
+    /未确认时保留旧配置并走回退\/检查页面/,
+  );
   const cleanupButton = page.locator('button', { hasText: '打开 Project History' }).first();
   await cleanupButton.waitFor({
     timeout: 15000,

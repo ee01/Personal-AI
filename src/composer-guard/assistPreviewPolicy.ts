@@ -37,6 +37,7 @@ export interface ComposerAssistInsertionReceiptInput {
   contextType?: string;
   surface?: string;
   suggestionType?: string;
+  insertMode?: 'append_patch' | 'replace_draft';
 }
 
 export interface ComposerAssistInsertionReceipt {
@@ -259,6 +260,9 @@ export function buildComposerRehearsalCueScopeLabel(
 function getComposerDraftTargetLabel(
   input: ComposerAssistDraftReceiptInput,
 ): string {
+  if (input.suggestionType === 'rewrite_prompt') {
+    return '外部 AI 完整 prompt';
+  }
   if (input.suggestionType === 'prompt_patch') {
     return '外部 AI prompt 补丁';
   }
@@ -469,13 +473,18 @@ function getComposerRouteBoundary(
       currentProviderSources.length > 0 &&
       currentProviderSources.every((sourceType) => !sourceTypes.has(sourceType));
     const patchLabel =
-      input.suggestionType === 'prompt_patch' ? 'prompt 补丁' : 'context pack';
+      input.suggestionType === 'prompt_patch'
+          ? 'prompt 补丁'
+          : 'context pack';
+    const actionLabel = input.suggestionType === 'rewrite_prompt'
+      ? '只替换完整 prompt'
+      : `只插 ${patchLabel}`;
     const boundary =
       currentProviderSources.length === 0
-        ? `只插 ${patchLabel}，不提交；按当前 AI provider 边界召回`
+        ? `${actionLabel}，不提交；按当前 AI provider 边界召回`
         : providerSelfExcluded
-        ? `当前 AI 自身历史已排除；只插 ${patchLabel}，不提交`
-        : `只插 ${patchLabel}，不提交；当前 AI 自身历史后端剔除`;
+        ? `当前 AI 自身历史已排除；${actionLabel}，不提交`
+        : `${actionLabel}，不提交；当前 AI 自身历史后端剔除`;
     return {
       label: '路由边界',
       value: boundary,
@@ -578,6 +587,7 @@ export function buildComposerAssistDraftReceipt(
   input: ComposerAssistDraftReceiptInput,
 ): ComposerAssistDraftReceipt {
   const reviewRequired = Boolean(input.reviewRequired);
+  const replacesDraft = input.suggestionType === 'rewrite_prompt';
   return {
     title: '草稿回执',
     rows: [
@@ -589,8 +599,12 @@ export function buildComposerAssistDraftReceipt(
       {
         label: '动作边界',
         value: reviewRequired
-          ? '先锁定预览，确认后只插入草稿'
-          : '点击 icon 只插入草稿，不发送/提交',
+          ? replacesDraft
+            ? '先锁定完整预览，确认后替换原 prompt'
+            : '先锁定预览，确认后只插入草稿'
+          : replacesDraft
+            ? '点击 icon 只替换原 prompt，不发送/提交'
+            : '点击 icon 只插入草稿，不发送/提交',
         tone: reviewRequired ? 'warn' : 'ok',
       },
       getComposerReviewBoundary(input),
@@ -603,6 +617,9 @@ export function buildComposerAssistInsertionReceipt(
   input: ComposerAssistInsertionReceiptInput,
 ): ComposerAssistInsertionReceipt {
   const target = getComposerDraftTargetLabel(input);
+  const replacesDraft =
+    input.suggestionType === 'rewrite_prompt' &&
+    input.insertMode === 'replace_draft';
   const isWebAi =
     input.contextType === 'web_agent_prompt' ||
     input.suggestionType === 'context_pack' ||
@@ -621,7 +638,13 @@ export function buildComposerAssistInsertionReceipt(
         : '没有发送或提交';
 
   return {
-    title: '已插入草稿',
+    title: replacesDraft
+      ? '已替换原 prompt'
+      : input.suggestionType === 'prompt_patch'
+        ? '已追加 prompt 补丁'
+        : input.suggestionType === 'context_pack'
+          ? '已追加上下文'
+          : '已插入草稿',
     detail: `写入目标：${target}；${boundary}；约 ${COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS} 秒内可撤销；撤销窗口结束后才记录 accepted 和脱敏校准信号。`,
   };
 }

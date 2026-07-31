@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-07-13*
+*最后更新: 2026-07-14*
 
 ## 功能概述
 
@@ -211,6 +211,7 @@
 - 写入前会预检是否存在可更新的正式 Web App deployment、确认 Web App URL 匹配、读取远端项目代码确认 Personal AI 调度脚本标记，并检查 Project History 版本额度
 - 当 Project History 已满或接近 200 个版本上限时，升级提示会同时提供 Project History 入口和“重新检查”，用户清理旧版本后不用刷新页面就能重新读取额度并继续升级
 - “检查脚本”“重新检查”“打开 Project History”“打开版本端点”“打开 Apps Script”“升级调度系统”和升级结果里的“打开检查页面”按钮都会在 hover / 读屏中说明本次点击是只读检查、打开恢复页面、清理版本入口，还是会进入升级确认；按钮文案同时保留当前/目标版本、Project History 额度、是否写 Sheet/Script/Jira Rule、是否确认 Web App 新版本和失败回退边界
+- 可升级横幅会在点击前显示“升级证明回执”：版本历史已满时说明主操作只是打开 Project History；可升级时说明只有 Web App `getVersion` 返回目标版本才会把 Sheet / Storage 标记最新，未确认时保留旧配置并进入回退 / 检查页面，不发送消息或改 Logs
 - 用户确认“升级调度系统”后会先显示“App Script 升级请求回执”，说明 Sheet、App Script deployment 和 Jira Automation 正在依次检查，并明确 Web App URL 新版本、Sheet / Storage 最新标记、Jira rule 更新和渠道投递都还没有确认
 - 只有写入代码、创建版本、`deployments.update` 成功，并且当前 Web App URL 的 `getVersion` 已确认返回目标版本后，才同步 Sheet / Storage 里的版本字段
 - 部署生效确认未确认返回目标版本时，不会把配置标记为最新
@@ -828,6 +829,7 @@ A:
 - 2026-06-29：App Script 自动更新增加升级请求回执；用户确认升级后立即看到在途范围和未确认边界，最终成功、部分失败或中断回执仍会覆盖该请求回执。
 - 2026-07-12：一键初始化的创建、Apps Script API 设置、重新初始化、授权打开和继续初始化按钮补充 hover / 读屏边界，点击前即可区分第一阶段创建、外部设置恢复、授权页面和第二阶段触发器 / 测试消息 / Config 写入。
 - 2026-07-11：App Script 自动更新的检查、重新检查、Project History、版本端点、Apps Script 项目、升级和恢复按钮都补充 hover / 读屏边界，点击前即可区分只读检查、打开恢复页面和真实升级确认。
+- 2026-07-14：App Script 可升级横幅增加“升级证明回执”，点击前说明版本历史满载时只打开 Project History，以及可升级时以 `getVersion` 返回目标版本作为 Sheet / Storage 标记最新的唯一证明。
 - 2026-05-31：管理页“同步”现在先刷新 Sheet Config，再加载 Messages；当 Sheet Config 比本机更新时会自动应用到本机缓存并展示同步来源，避免跨设备更新后的 App Script / Bot / Timeline 配置继续被旧缓存遮蔽。该调整参考 Airtable Sync 的源/字段/故障排查、Zapier 连接测试/重连，以及 trigger-action programming 研究中对心智模型和可调试性的要求。
 - 2026-05-31：删除确认补充消息 ID、状态、目标和执行时间，托管 JiraAutomation 删除恢复 trigger 时改为按本机时区换算 UTC，并在恢复前置检查失败时保留本地行，而不是假设固定 UTC+8 或删除后再补救。这个调整参考 Slack / Gmail / Twilio 对已排程消息的取消、删除和状态边界，以及 end-user debugging 研究中“操作前看清对象和后果”的要求。
 - 2026-06-04：一键初始化完成后会把授权前后的 Sheet / Script / Deployment / 子表 / 触发器信息压成一次性完成收据，在刷新后的管理页展示；这延续了 Zapier / Airtable 对自动化运行状态和排障路径的可见性，也避免用户只看到页面刷新而不知道哪些步骤已经成功。

@@ -238,14 +238,31 @@ try {
   await page.locator('.agent-trace-span-composition-steps button', {
     hasText: '步骤 #6',
   }).waitFor({ timeout: 12000 });
+  const traceSpanIssueStepButton = page.locator(
+    '.agent-trace-span-composition-steps button',
+    {
+      hasText: '步骤 #6',
+    },
+  );
+  const traceSpanIssueStepTitle =
+    (await traceSpanIssueStepButton.getAttribute('title')) || '';
+  const traceSpanIssueStepAria =
+    (await traceSpanIssueStepButton.getAttribute('aria-label')) || '';
+  assert.match(traceSpanIssueStepTitle, /从问题 span跳到步骤 6/);
+  assert.match(
+    traceSpanIssueStepTitle,
+    /复核理由：只统计失败、待确认、阻断和缺证 span/,
+  );
+  assert.match(traceSpanIssueStepTitle, /只展开并聚焦当前页面时间线/);
+  assert.match(traceSpanIssueStepAria, /从问题 span跳到步骤 6/);
+  assert.match(
+    traceSpanIssueStepAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
   await page.locator('.agent-trace-span-composition', {
     hasText: '不是标准 OpenTelemetry / LangSmith / Langfuse 拓扑',
   }).waitFor({ timeout: 12000 });
-  await page
-    .locator('.agent-trace-span-composition-steps button', {
-      hasText: '步骤 #6',
-    })
-    .click();
+  await traceSpanIssueStepButton.click();
   await page.locator('.thought-step.expanded', {
     hasText: 'messageNotification',
   }).waitFor({ timeout: 3000 });
@@ -426,11 +443,32 @@ try {
   await page.locator('.agent-approval-queue-receipt', {
     hasText: '批准时复制对应重跑配置并用同一工具和同一参数重新运行',
   }).waitFor({ timeout: 12000 });
-  await page
-    .locator('.agent-approval-queue-steps button', {
+  const approvalQueueStepButton = page.locator(
+    '.agent-approval-queue-steps button',
+    {
       hasText: '步骤 #6',
-    })
-    .click();
+    },
+  );
+  const approvalQueueStepTitle =
+    (await approvalQueueStepButton.getAttribute('title')) || '';
+  const approvalQueueStepAria =
+    (await approvalQueueStepButton.getAttribute('aria-label')) || '';
+  assert.match(approvalQueueStepTitle, /从待确认队列跳到步骤 6/);
+  assert.match(
+    approvalQueueStepTitle,
+    /复核理由：逐条复核参数、接收方和安全说明/,
+  );
+  assert.match(
+    approvalQueueStepTitle,
+    /批准时复制对应重跑配置并用同一工具和同一参数重新运行/,
+  );
+  assert.match(approvalQueueStepTitle, /只展开并聚焦当前页面时间线/);
+  assert.match(approvalQueueStepAria, /从待确认队列跳到步骤 6/);
+  assert.match(
+    approvalQueueStepAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
+  await approvalQueueStepButton.click();
   await page.locator('#agent-step-5.thought-step.expanded', {
     hasText: 'messageNotification',
   }).waitFor({ timeout: 3000 });
@@ -707,6 +745,18 @@ try {
     .locator('.agent-run-review-step-links button')
     .first();
   await emptyEvidenceStepLink.waitFor({ timeout: 12000 });
+  const emptyEvidenceStepTitle =
+    (await emptyEvidenceStepLink.getAttribute('title')) || '';
+  const emptyEvidenceStepAria =
+    (await emptyEvidenceStepLink.getAttribute('aria-label')) || '';
+  assert.match(emptyEvidenceStepTitle, /从工具证据不足跳到步骤/);
+  assert.match(emptyEvidenceStepTitle, /复核理由：调整查询参数/);
+  assert.match(emptyEvidenceStepTitle, /只展开并聚焦当前页面时间线/);
+  assert.match(emptyEvidenceStepAria, /从工具证据不足跳到步骤/);
+  assert.match(
+    emptyEvidenceStepAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
   await emptyEvidenceStepLink.click();
   await page.locator('.thought-step.expanded', {
     hasText: 'historySearch 已执行，但没有返回可用证据。',
@@ -720,9 +770,25 @@ try {
   await page.locator('.thought-step .step-summary', {
     hasText: 'historySearch 已执行，但没有返回可用证据。',
   }).waitFor({ timeout: 12000 });
-  await page.locator('.flow-node.tool.approval', {
+  const approvalFlowNode = page.locator('.flow-node.tool.approval', {
     hasText: 'messageNotification',
-  }).click();
+  });
+  const approvalFlowNodeTitle =
+    (await approvalFlowNode.getAttribute('title')) || '';
+  const approvalFlowNodeAria =
+    (await approvalFlowNode.getAttribute('aria-label')) || '';
+  assert.match(approvalFlowNodeTitle, /从处理流程图跳到步骤 6/);
+  assert.match(
+    approvalFlowNodeTitle,
+    /复核理由：通知动作需要人工确认/,
+  );
+  assert.match(approvalFlowNodeTitle, /只展开并聚焦当前页面时间线/);
+  assert.match(approvalFlowNodeAria, /从处理流程图跳到步骤 6/);
+  assert.match(
+    approvalFlowNodeAria,
+    /不会批准、复制诊断包、重跑、发送通知、写入、删除或执行外部动作/,
+  );
+  await approvalFlowNode.click();
   await page.locator('.thought-step.expanded', {
     hasText: 'messageNotification',
   }).waitFor({ timeout: 3000 });
@@ -987,9 +1053,34 @@ try {
   await page.locator('.result-pending-approval-handoff', {
     hasText: '不会批准、复制、重跑、发送通知、写入、删除或执行外部动作',
   }).waitFor({ timeout: 12000 });
-  await page.locator('.result-pending-approval-step', {
-    hasText: '定位步骤 #6',
-  }).click();
+  const resultPendingApprovalStepButton = page.locator(
+    '.result-pending-approval-step',
+    {
+      hasText: '定位步骤 #6',
+    },
+  );
+  const resultPendingApprovalStepTitle =
+    (await resultPendingApprovalStepButton.getAttribute('title')) || '';
+  const resultPendingApprovalStepAria =
+    (await resultPendingApprovalStepButton.getAttribute('aria-label')) || '';
+  assert.match(
+    resultPendingApprovalStepTitle,
+    /从结果区审批定位跳到步骤 6/,
+  );
+  assert.match(
+    resultPendingApprovalStepTitle,
+    /messageNotification 尚未执行/,
+  );
+  assert.match(
+    resultPendingApprovalStepTitle,
+    /不会批准、复制、重跑、发送通知、写入、删除或执行外部动作/,
+  );
+  assert.match(
+    resultPendingApprovalStepAria,
+    /从结果区审批定位跳到步骤 6/,
+  );
+  assert.match(resultPendingApprovalStepAria, /不会批准、复制、重跑/);
+  await resultPendingApprovalStepButton.click();
   await page.locator('#agent-step-5.thought-step.expanded', {
     hasText: 'messageNotification',
   }).waitFor({ timeout: 3000 });

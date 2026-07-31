@@ -135,6 +135,42 @@ function normalizeAutoSyncKind(kind: RunNowRequestKind): AutoSyncKind {
   return kind;
 }
 
+function buildRunNowResponse(
+  kind: AutoSyncKind,
+  result: Awaited<ReturnType<BridgeSyncManager['runNow']>>,
+): Record<string, unknown> {
+  const response: Record<string, unknown> = {
+    ok: true,
+    kind,
+    status: result.status,
+  };
+  const metadataKeys = [
+    'errorMessage',
+    'externalThreadId',
+    'packageKinds',
+    'packageItemCount',
+    'sourceRefCount',
+    'feedHasMore',
+    'feedLimit',
+    'feedSnapshotReceipt',
+    'transportUsed',
+    'transportMode',
+    'transportFallbackReason',
+    'verified',
+    'messageVisible',
+    'challengeDetected',
+    'telemetryError',
+    'reminderDeliveryMode',
+  ] as const;
+
+  for (const key of metadataKeys) {
+    if (result[key] !== undefined) {
+      response[key] = result[key];
+    }
+  }
+  return response;
+}
+
 function uniqueReasons(
   reasons: BridgeBlockingReason[],
 ): BridgeBlockingReason[] {
@@ -638,6 +674,7 @@ export async function createBridgeServer(
         request.body.context,
         request.body.includeEvidence,
         request.body.scope,
+        request.body.contextHints,
       );
       const runtime = await loadAssistantRuntimeSummary(service, deps);
       return {
@@ -719,6 +756,7 @@ export async function createBridgeServer(
             return;
           }
         },
+        request.body.contextHints,
       );
     } catch (error) {
       writeSseEvent(reply, 'error', {
@@ -851,12 +889,7 @@ export async function createBridgeServer(
     try {
       const kind = normalizeAutoSyncKind(request.body.kind);
       const result = await deps.syncManager.runNow(kind);
-      return {
-        ok: true,
-        kind,
-        status: result.status,
-        errorMessage: result.errorMessage,
-      };
+      return buildRunNowResponse(kind, result);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Run-now sync failed';

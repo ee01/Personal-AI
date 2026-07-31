@@ -60,6 +60,9 @@ export interface ProviderMemoryProduct {
   title: string;
   bodyMd: string;
   itemCount?: number;
+  feedHasMore?: boolean;
+  feedLimit?: number;
+  feedSnapshotReceipt?: string;
   stability: 'stable' | 'rolling' | 'ephemeral';
   transport: ProviderTransport;
   targetBindingType: string;
@@ -152,6 +155,13 @@ function clampMarkdownByBudget(markdown: string, tokenBudget: number): string {
 
   const cutoff = Math.max(0, maxChars - 32);
   return `${markdown.slice(0, cutoff).trim()}\n\n> Truncated to fit token budget.`;
+}
+
+function extractFeedSnapshotReceipt(markdown: string): string | undefined {
+  const line = markdown
+    .split('\n')
+    .find((value) => value.includes('Feed 快照口径回执'));
+  return line?.replace(/^>\s*/, '').trim() || undefined;
 }
 
 function bindingTypeForScenario(scenario: ProviderScenario | string, explicitBindingType?: string): string {
@@ -611,6 +621,9 @@ export class ProviderContextService {
       title: titleForKind(kind),
       bodyMd,
       itemCount: rendered.itemCount,
+      feedHasMore: rendered.feedHasMore,
+      feedLimit: rendered.feedLimit,
+      feedSnapshotReceipt: extractFeedSnapshotReceipt(bodyMd),
       stability: stabilityForKind(kind),
       transport: transportForKind(kind),
       targetBindingType: 'mobile_context_thread',
@@ -632,6 +645,9 @@ export class ProviderContextService {
       title: titleForKind('notice_digest'),
       bodyMd,
       itemCount: rendered.itemCount,
+      feedHasMore: rendered.feedHasMore,
+      feedLimit: rendered.feedLimit,
+      feedSnapshotReceipt: extractFeedSnapshotReceipt(bodyMd),
       stability: stabilityForKind('notice_digest'),
       transport: transportForKind('notice_digest'),
       targetBindingType: 'mobile_context_thread',

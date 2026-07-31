@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>桌面选区记忆胶囊 Demo</title>
+  <title>桌面选区记忆胶囊 Demo（搁置视觉参考）</title>
   <style>
     :root {
       color-scheme: light;
@@ -92,6 +92,17 @@
       color: var(--muted);
       font-size: 13px;
       line-height: 1.35;
+    }
+
+    .shelf-note {
+      margin: 8px 0 0;
+      padding: 8px 10px;
+      border: 1px solid #efce83;
+      border-radius: 8px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-size: 12px;
+      line-height: 1.45;
     }
 
     .hotkey {
@@ -685,6 +696,7 @@
         <div>
           <h1>桌面选区记忆胶囊</h1>
           <p>模拟在任意桌面 App 选中文字后，用 Personal AI 召回相关记忆。</p>
+          <div class="shelf-note">搁置视觉参考：近期先专注 Web / Chrome extension，验证可行后再恢复桌面 App 深入能力。</div>
         </div>
       </div>
       <div class="hotkey" aria-label="快捷键">
@@ -789,7 +801,7 @@
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
         <div class="mini-guide">
-          <strong>Demo 说明：</strong> 这是计划页配套的交互模拟。真实实现里胶囊会由 macOS 全局热键、Services 或手动粘贴触发；P0 不做后台截图、不周期读取剪贴板。
+          <strong>Demo 说明：</strong> 这是搁置方案的视觉参考。近期不进入桌面 App 实现；先在 Web / Chrome extension 里验证选区召回、资料保存、prompt patch 和 secret 阻断。
         </div>
       </aside>
     </section>

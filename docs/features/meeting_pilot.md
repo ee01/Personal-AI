@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-07-13_
+_最后更新: 2026-07-16_
 
 ## 是什么
 
@@ -25,7 +25,8 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 2. Readiness 状态：Meeting Pilot 开关、ASR、memory-service、分析模型、Minutes API 任一不可用都会影响能力完整度。
 3. 会前 handoff：Today Pilot / Video Home 提前准备的 meeting prep 和 Rehearsal 预演提醒会影响会中 cue cards 和目标提示；Rehearsal 只表示“这场未来会议里应该想起/说/做什么”，不是普通事实记忆。
 4. ASR 层级：RingCentral Transcript、Desktop Local ASR / Whisper fallback、远端分析可用性决定实时文本质量和延迟。
-5. 会议结束归档：停止 capture 后的摘要、行动项、Panorama 依赖已收集转写和事件是否完整。
+5. 会前目标证据：Today Pilot 的 `MeetingOutcomeBinder` 决定 side panel 要跟踪哪些“本场要闭环”事项；没有 binder 时不伪造目标。
+6. 会议结束归档：停止 capture 后的摘要、行动项、Panorama 和结果装订依赖已收集转写和事件是否完整。
 
 ## 用户主流程
 
@@ -65,6 +66,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
   2. 请求 `POST /api/v3/generate_digest`
   3. background 只在本次 capture 生成的有效 lookup 窗口内轮询 `GET /api/v3/digest/{id}`；超过 30 分钟仍未完成会停止轮询并标记 PDF 生成失败，避免旧会话在后台无限探测 Minutes API。
 - 同时，会议结构化数据会**在停止录制时立即写入 memory-service**，不等待 PDF 完成。
+- 写入会议归档前，background 会把当前 transcript、决议、章节和行动项交给 Memory Service 装订会前 binder；装订失败不会阻止原始会议归档，Panorama 会保留可重试的失败边界。
 - PDF 就绪后，后台会补全 meeting record 中的 `pdfUrl`。
 
 ## 主要能力
@@ -83,6 +85,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 - 当前话题
 - Catch Up 轻量快照
 - Today Pilot / Context Assist 会前准备 handoff（目标、问题、Rehearsal 预演提醒、证据来源）
+- `本场要闭环`：对同一份会前 binder 显示 `未提到 / 已提到 / 待会后核验 / 最终结果`；会中不直接把目标改成 resolved
 - 时间线（支持展开详情）
 - 行动项列表（owner / deadline / transcript 依据）
 - readiness 状态
@@ -96,8 +99,21 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 - 决议
 - 参会者发言分布
 - 参会者立场与态度
+- `会后结果装订`：逐项展示 resolved、partially resolved、unresolved、carried over、证据不足或移出议程，以及支撑证据
 - PDF 纪要区块与状态
 - 从历史归档重新打开
+
+### 会前目标到会后结果装订
+
+Meeting Outcome Binder 是 Meeting Pilot 对 Today Pilot 会前目标的消费机制，不是另一套 action item 或摘要产品。
+
+1. **会中跟踪**：side panel 从匹配的 handoff 读取 binder。Transcript 关键词命中只显示 `已提到`；出现相关决议或行动项时只显示 `待会后核验`。这两个状态都不等于已解决。
+2. **会后装订**：停止 capture 后调用 `POST /api/v1/meeting-outcomes/bind`，输入本场 transcript、决议、行动项和章节。每个结果只保留存在且与 slot 匹配的 evidence ref。
+3. **证据守卫**：`resolved` 必须有匹配决议或状态为 done 的行动项；pending 行动项最高是 `partially_resolved`；transcript 单独提及是 `unresolved`；只有证据明确说“下次继续”才是 `carried_over`；不存在或不匹配的引用进入 `blocked_by_missing_evidence`。
+4. **归档恢复**：binder 使用独立持久化表，并投影到 meeting detail。用户从会议历史重新打开 Panorama 时，完整归档会恢复同一份结果；如果详情 API 失败，页面不会根据列表计数伪造结果。
+5. **无外部写回**：结果是 Personal AI 的只读派生对象。P0 不修改 Calendar agenda，不创建 Jira/外部任务，不发送纪要，也不替用户确认决定。
+
+Panorama 首屏在原有输出范围回执之后展示 compact `会后结果装订`，包括总状态、每个 slot 的结果摘要、证据预览和无写回边界。真实交互可通过内置 `meeting-panorama.html?demo=1` 查看；概念串联参考 [Meeting Outcome Binder demo](../demo/meeting-outcome-binder.html)。
 
 ### 会议历史归档
 

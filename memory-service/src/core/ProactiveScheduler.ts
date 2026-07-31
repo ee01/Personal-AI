@@ -22,6 +22,14 @@ import { OutreachEngine } from './OutreachEngine.js';
 import { RelationshipRadarService } from './RelationshipRadarService.js';
 import { TodayPilotMeetingPrepService } from './TodayPilotMeetingPrepService.js';
 import { UserContextManager } from './UserContextManager.js';
+import { getAnalyticsStore } from '../analytics/AnalyticsStore.js';
+import { runWithUsageContext } from '../analytics/usageContext.js';
+import { KeystoneBriefComposerService } from './KeystoneBriefComposerService.js';
+
+// Usage-analytics rollup cron schedules (independent of proactive features).
+const USAGE_ROLLUP_HOURLY_CRON = '0 * * * *';
+const USAGE_ROLLUP_DAILY_CRON = '20 0 * * *';
+const DEFAULT_KEYSTONE_COMPOSER_INTERVAL_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // ProactiveScheduler
@@ -36,6 +44,9 @@ export class ProactiveScheduler {
   private weeklyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyReportTask: ReturnType<typeof cron.schedule> | null = null;
   private todayPilotPrepTask: ReturnType<typeof cron.schedule> | null = null;
+  private usageRollupHourlyTask: ReturnType<typeof cron.schedule> | null = null;
+  private usageRollupDailyTask: ReturnType<typeof cron.schedule> | null = null;
+  private keystoneComposerIntervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   constructor(ucm: UserContextManager) {
@@ -53,6 +64,11 @@ export class ProactiveScheduler {
       console.warn('[ProactiveScheduler] Already running, ignoring start()');
       return;
     }
+
+    // Usage-analytics rollup runs regardless of the proactive scheduler flag,
+    // so reports have cached daily aggregates even when background features off.
+    this.scheduleUsageRollup();
+    this.scheduleKeystoneBriefComposer();
 
     const config = getConfig();
     if (!config.proactiveSchedulerEnabled) {
@@ -115,6 +131,13 @@ export class ProactiveScheduler {
    * Stop all scheduler loops, clear the interval, and destroy cron tasks.
    */
   stop(): void {
+    // Usage rollup crons run independently of `running`, so stop them first.
+    this.stopUsageRollup();
+    if (this.keystoneComposerIntervalId !== null) {
+      clearInterval(this.keystoneComposerIntervalId);
+      this.keystoneComposerIntervalId = null;
+    }
+
     if (!this.running) {
       return;
     }
@@ -170,7 +193,10 @@ export class ProactiveScheduler {
           ctx.userDataManager,
           userId,
         );
-        await heartbeat.run();
+        await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'heartbeat' },
+          () => heartbeat.run(),
+        );
       } catch (err) {
         console.error(
           `[ProactiveScheduler] Heartbeat error for user ${userId}:`,
@@ -186,7 +212,10 @@ export class ProactiveScheduler {
       try {
         const ctx = this.ucm.getContext(userId);
         const engine = new OutreachEngine(ctx.db, ctx.userDataManager, userId);
-        await engine.runSchedulerCycle();
+        await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'outreach' },
+          () => engine.runSchedulerCycle(),
+        );
       } catch (err) {
         console.error(
           `[ProactiveScheduler] Outreach cycle error for user ${userId}:`,
@@ -207,13 +236,19 @@ export class ProactiveScheduler {
       try {
         const ctx = this.ucm.getContext(userId);
         const engine = new ConsolidationEngine(ctx.db, ctx.userDataManager);
-        const result = await engine.runDailyConsolidation();
+        const result = await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'daily_consolidation' },
+          () => engine.runDailyConsolidation(),
+        );
         console.log(
           `[ProactiveScheduler] Daily consolidation for user ${userId}:`,
           JSON.stringify(result),
         );
         const relationshipRadar = new RelationshipRadarService(ctx.db);
-        const radarResult = relationshipRadar.consolidatePeople({ limit: 40 });
+        const radarResult = runWithUsageContext(
+          { side: 'backend', userId, capability: 'relationship_radar', feature: 'radar_consolidation' },
+          () => relationshipRadar.consolidatePeople({ limit: 40 }),
+        );
         console.log(
           `[ProactiveScheduler] Relationship radar consolidation for user ${userId}:`,
           JSON.stringify(radarResult),
@@ -243,7 +278,10 @@ export class ProactiveScheduler {
       try {
         const ctx = this.ucm.getContext(userId);
         const replay = new GenerativeReplay(ctx.db, ctx.userDataManager);
-        const result = await replay.runWeeklyDreaming();
+        const result = await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'weekly_dreaming' },
+          () => replay.runWeeklyDreaming(),
+        );
         console.log(
           `[ProactiveScheduler] Weekly dreaming for user ${userId}:`,
           JSON.stringify(result),
@@ -277,7 +315,10 @@ export class ProactiveScheduler {
           ctx.userDataManager,
           userId,
         );
-        const result = await reporter.generateWeeklyReport();
+        const result = await runWithUsageContext(
+          { side: 'backend', userId, capability: 'notification_center', feature: 'weekly_report' },
+          () => reporter.generateWeeklyReport(),
+        );
         console.log(
           `[ProactiveScheduler] Weekly report for user ${userId}:`,
           JSON.stringify(result),
@@ -306,12 +347,16 @@ export class ProactiveScheduler {
       try {
         const ctx = this.ucm.getContext(userId);
         const service = new TodayPilotMeetingPrepService(ctx.db, userId);
-        const result = await service.prepare({
-          timezone: config.todayPilotTimezone,
-          horizonHours: 36,
-          maxMeetings: config.todayPilotMeetingPrepMax,
-          mode: 'nightly_llm',
-        });
+        const result = await runWithUsageContext(
+          { side: 'backend', userId, capability: 'today_pilot', feature: 'meeting_prep' },
+          () =>
+            service.prepare({
+              timezone: config.todayPilotTimezone,
+              horizonHours: 36,
+              maxMeetings: config.todayPilotMeetingPrepMax,
+              mode: 'nightly_llm',
+            }),
+        );
         console.log(
           `[ProactiveScheduler] Today Pilot meeting prep for user ${userId}:`,
           JSON.stringify(result),
@@ -328,6 +373,93 @@ export class ProactiveScheduler {
     console.log(
       `[ProactiveScheduler] Today Pilot meeting prep complete for ${userIds.length} user(s) in ${elapsedMs}ms`,
     );
+  }
+
+  // ---- Usage-analytics rollup --------------------------------------------
+
+  /**
+   * Schedule hourly + daily rollup of usage_events into usage_rollup_daily.
+   * Runs an immediate rollup on start so reports have data without waiting.
+   */
+  private scheduleUsageRollup(): void {
+    if (!getAnalyticsStore()) {
+      return;
+    }
+
+    // Immediate rollup (yesterday + today) so the report cache is warm.
+    this.safeRun('usageRollupStartup', async () => this.runUsageRollup(2));
+
+    this.usageRollupHourlyTask = cron.schedule(USAGE_ROLLUP_HOURLY_CRON, () => {
+      this.safeRun('usageRollupHourly', async () => this.runUsageRollup(1));
+    });
+    this.usageRollupDailyTask = cron.schedule(USAGE_ROLLUP_DAILY_CRON, () => {
+      this.safeRun('usageRollupDaily', async () => this.runUsageRollup(2));
+    });
+
+    console.log(
+      `[ProactiveScheduler] Usage rollup scheduled - hourly "${USAGE_ROLLUP_HOURLY_CRON}", daily "${USAGE_ROLLUP_DAILY_CRON}"`,
+    );
+  }
+
+  private stopUsageRollup(): void {
+    if (this.usageRollupHourlyTask) {
+      this.usageRollupHourlyTask.stop();
+      this.usageRollupHourlyTask = null;
+    }
+    if (this.usageRollupDailyTask) {
+      this.usageRollupDailyTask.stop();
+      this.usageRollupDailyTask = null;
+    }
+  }
+
+  private runUsageRollup(days: number): void {
+    const store = getAnalyticsStore();
+    if (!store) return;
+    const rolled = store.rollupRecentDays(days);
+    console.log(
+      `[ProactiveScheduler] Usage rollup complete for ${rolled.length} day(s): ${rolled.join(', ')}`,
+    );
+  }
+
+  private scheduleKeystoneBriefComposer(): void {
+    const enabled = process.env.KEYSTONE_BRIEF_COMPOSER_ENABLED?.trim().toLowerCase();
+    if (enabled && ['0', 'false', 'no', 'off'].includes(enabled)) {
+      console.log('[ProactiveScheduler] Keystone brief composer disabled');
+      return;
+    }
+    const configuredInterval = Number.parseInt(
+      process.env.KEYSTONE_BRIEF_COMPOSER_INTERVAL_MS || '',
+      10,
+    );
+    const intervalMs = Number.isFinite(configuredInterval)
+      ? Math.max(60_000, configuredInterval)
+      : DEFAULT_KEYSTONE_COMPOSER_INTERVAL_MS;
+
+    this.safeRun('keystoneBriefComposerStartup', () =>
+      this.runKeystoneBriefComposer(),
+    );
+    this.keystoneComposerIntervalId = setInterval(() => {
+      this.safeRun('keystoneBriefComposer', () => this.runKeystoneBriefComposer());
+    }, intervalMs);
+    this.keystoneComposerIntervalId.unref?.();
+    console.log(
+      `[ProactiveScheduler] Keystone brief composer scheduled every ${intervalMs}ms`,
+    );
+  }
+
+  private async runKeystoneBriefComposer(): Promise<void> {
+    const userIds = this.ucm.getRegisteredUserIds();
+    for (const userId of userIds) {
+      const context = this.ucm.getContext(userId);
+      const result = await new KeystoneBriefComposerService(context.db).run({
+        maxBriefs: 2,
+      });
+      if (result.composed > 0 || result.failed > 0) {
+        console.log(
+          `[ProactiveScheduler] Keystone briefs for ${userId}: composed=${result.composed}, ready=${result.ready}, partial=${result.partial}, stale=${result.stale}, failed=${result.failed}`,
+        );
+      }
+    }
   }
 
   // ---- Error wrapper ------------------------------------------------------

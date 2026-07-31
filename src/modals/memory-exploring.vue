@@ -3,9 +3,9 @@
     <!-- AI 搜索动画 -->
     <AISearchAnimation :show="store.isAISearching" />
 
-    <div class="memory-container">
-      <!-- 侧边栏 -->
-      <div class="sidebar">
+    <div :class="['memory-container', { 'task-surface': isTaskSurface }]">
+      <!-- 侧边栏：任务态入口不渲染，避免离开表单后预填草稿不可恢复 -->
+      <div v-if="!isTaskSurface" class="sidebar">
         <div class="sidebar-header">
           <div class="logo">🧠 {{ t('memoryExplorer.title') }}</div>
           <p class="sidebar-note">
@@ -162,6 +162,22 @@
           </router-link>
 
           <router-link
+            to="/memory-entry-rules"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">📋</div>
+            <div class="entity-labels">
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.memoryEntryRules') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.memoryEntryRulesSubnote') }}
+              </div>
+            </div>
+          </router-link>
+
+          <router-link
             to="/dreams"
             class="entity-type"
             active-class="router-link-active"
@@ -313,6 +329,24 @@
             </div>
           </router-link>
 
+          <button
+            type="button"
+            class="entity-type usage-analytics-entry"
+            :title="t('memoryExplorer.nav.usageAnalyticsBoundary')"
+            :aria-label="t('memoryExplorer.nav.usageAnalyticsBoundary')"
+            @click="openUsageAnalyticsDashboard"
+          >
+            <div class="entity-icon">📊</div>
+            <div class="entity-labels">
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.usageAnalytics') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.usageAnalyticsSubnote') }}
+              </div>
+            </div>
+          </button>
+
           <hr class="sidebar-divider" />
 
           <router-link
@@ -331,8 +365,37 @@
 
       <!-- 主内容区 -->
       <div class="main-content">
+        <!-- 任务态头部：替代侧栏与全局搜索，只保留本次任务的身份和出口 -->
+        <div v-if="isTaskSurface" class="task-header">
+          <div class="task-copy">
+            <div class="task-eyebrow">{{ taskSurfaceCopy.eyebrow }}</div>
+            <h2 class="task-title">{{ taskSurfaceCopy.title }}</h2>
+            <p class="task-summary">{{ taskSurfaceCopy.summary }}</p>
+          </div>
+          <div class="task-actions">
+            <button
+              type="button"
+              class="task-action"
+              :title="taskHubActionBoundary"
+              :aria-label="taskHubActionBoundary"
+              @click="openMemoryEntryRulesHub"
+            >
+              在完整记忆探索中打开
+            </button>
+            <button
+              type="button"
+              class="task-action task-action-close"
+              :title="taskCloseActionBoundary"
+              :aria-label="taskCloseActionBoundary"
+              @click="closeTaskSurface"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+
         <!-- 搜索头部 -->
-        <div class="search-header">
+        <div v-if="!isTaskSurface" class="search-header">
           <div class="search-box">
             <div class="search-icon">🔍</div>
             <input
@@ -353,7 +416,8 @@
               v-for="option in recallScopeOptions"
               :key="option.value"
               type="button"
-              :title="option.title"
+              :title="getRecallScopeButtonBoundary(option.value)"
+              :aria-label="getRecallScopeButtonBoundary(option.value)"
               :aria-pressed="selectedRecallScope === option.value"
               :class="[
                 'scope-option',
@@ -373,6 +437,7 @@
         </div>
 
         <div
+          v-if="!isTaskSurface"
           :class="[
             'scope-intent-receipt',
             `scope-intent-receipt-${scopeIntentReceipt.tone}`,
@@ -420,7 +485,18 @@ import {
   type OutreachTemplateRuntimeStatusItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
+import { getEnvConfig } from '../utils';
 import { extensionUiLanguage, initExtensionVueI18n, vueT } from '../i18n/vue';
+import {
+  MEMORY_ENTRY_RULES_HASH,
+  buildMemoryEntryRulesUrl,
+} from '../utils/memoryEntryRulesNavigation';
+import {
+  getMemoryEntryRulesIntentCopy,
+  isMemoryEntryRulesTaskDoneMessage,
+  parseMemoryEntryRulesIntent,
+  parseMemoryEntryRulesSurface,
+} from '../utils/memoryEntryRulesSurface';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -432,6 +508,62 @@ const router = useRouter();
 const route = useRoute();
 const t = vueT;
 const entityTypes = computed(() => store.entityTypes);
+
+// 任务态：从消息工具栏进来只为配置一条规则，外壳收敛到任务头 + 表单
+const isTaskSurface = computed(
+  () =>
+    route.path === MEMORY_ENTRY_RULES_HASH &&
+    parseMemoryEntryRulesSurface(route.query.surface) === 'task',
+);
+const taskSurfaceCopy = computed(() =>
+  getMemoryEntryRulesIntentCopy(parseMemoryEntryRulesIntent(route.query.intent)),
+);
+const taskHubActionBoundary =
+  '在新标签页打开完整的记忆入口规则列表；当前窗口的草稿保持不变，也不会保存规则';
+const taskCloseActionBoundary =
+  '关闭这个配置窗口；未保存的草稿不会被保留，也不会创建任何规则或动作';
+
+async function openMemoryEntryRulesHub(): Promise<void> {
+  try {
+    await chrome.tabs.create({ url: buildMemoryEntryRulesUrl(), active: true });
+  } catch (error) {
+    console.warn('Failed to open memory entry rules hub:', error);
+  }
+}
+
+async function closeTaskSurface(): Promise<void> {
+  // popup 窗口整窗关闭；标签页形态只关自己，避免连带关掉用户的其他标签
+  try {
+    const current = await chrome.windows?.getCurrent?.();
+    if (current?.type === 'popup' && typeof current.id === 'number') {
+      await chrome.windows.remove(current.id);
+      return;
+    }
+    const tab = await chrome.tabs?.getCurrent?.();
+    if (typeof tab?.id === 'number') {
+      await chrome.tabs.remove(tab.id);
+      return;
+    }
+  } catch (error) {
+    console.warn('Failed to close memory entry rules task surface:', error);
+  }
+  window.close();
+}
+
+function handleTaskSurfaceMessage(event: MessageEvent): void {
+  if (event.origin !== window.location.origin) return;
+  if (!isMemoryEntryRulesTaskDoneMessage(event.data)) return;
+  void closeTaskSurface();
+}
+
+onMounted(() => {
+  window.addEventListener('message', handleTaskSurfaceMessage);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('message', handleTaskSurfaceMessage);
+});
+
 const searchQuery = ref('');
 const selectedRecallScope = ref<RecallScope>('work');
 const followThreadCount = ref(0);
@@ -547,6 +679,26 @@ const scopeIntentReceipt = computed(() => {
     ],
   };
 });
+
+function getRecallScopeButtonBoundary(scope: RecallScope): string {
+  const isCurrentScope = selectedRecallScope.value === scope;
+  const rerunsCurrentSearch =
+    route.path === '/search' && searchQuery.value.trim().length >= 2;
+  const scopeKey =
+    scope === 'personal' ? 'personal' : scope === 'all' ? 'all' : 'work';
+  const actionKey = isCurrentScope
+    ? 'current'
+    : rerunsCurrentSearch
+    ? 'rerun'
+    : 'idle';
+
+  return t(`memoryExplorer.scopeButton.${actionKey}`, {
+    label: t(`common.${scopeKey}`),
+    domain: t(`memoryExplorer.scopeButton.domain.${scopeKey}`),
+    caution: t(`memoryExplorer.scopeButton.caution.${scopeKey}`),
+    noEffects: t('memoryExplorer.scopeButton.noEffects'),
+  });
+}
 
 const memoryUserIdentitySourceLabel = computed(() => {
   const source = memoryUserIdentity.value?.identitySource;
@@ -874,6 +1026,25 @@ function openMemoryIdentitySettings() {
   window.open(url, '_blank', 'noopener');
 }
 
+async function openUsageAnalyticsDashboard() {
+  try {
+    const env = await getEnvConfig();
+    const base = String(env.MEMORY_SERVICE_BASE_URL || '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (!base) {
+      window.alert('请先在 Options 填写记忆服务 API 地址');
+      return;
+    }
+    const client = getMemoryServiceClient();
+    const link = await client.createUsageMyLink();
+    window.open(`${base}${link.path}`, '_blank', 'noopener');
+  } catch (error) {
+    console.error('打开用量分析报表失败:', error);
+    window.alert('打开用量分析报表失败，请检查记忆服务配置与登录身份');
+  }
+}
+
 function describeMemoryUserIdentityError(error: unknown) {
   if (error instanceof MemoryServiceError) {
     const errorCode = String(error.body?.code || '');
@@ -1184,6 +1355,87 @@ html,
   max-height: 100vh;
 }
 
+.memory-container.task-surface .main-content {
+  padding: 1rem 1.15rem 1.15rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.task-header {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.task-copy {
+  min-width: 0;
+}
+
+.task-eyebrow {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.task-title {
+  margin: 0.2rem 0 0.3rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.task-summary {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(203, 213, 225, 0.85);
+  max-width: 46rem;
+}
+
+.task-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-action {
+  padding: 0.45rem 0.85rem;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: 0.6rem;
+  color: #93c5fd;
+  font-size: 0.76rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s ease;
+}
+
+.task-action:hover {
+  background: rgba(59, 130, 246, 0.22);
+}
+
+.task-action-close {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+
+.task-action-close:hover {
+  background: rgba(148, 163, 184, 0.22);
+}
+
+.memory-container.task-surface .main-content > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
 /* 侧边栏样式 */
 .sidebar {
   width: 280px;
@@ -1378,6 +1630,16 @@ html,
   border-left: 3px solid transparent;
   text-decoration: none;
   color: inherit;
+}
+
+button.entity-type.usage-analytics-entry {
+  width: 100%;
+  background: transparent;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  font: inherit;
+  text-align: left;
 }
 
 .entity-type:hover {

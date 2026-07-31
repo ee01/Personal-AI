@@ -49,6 +49,8 @@
               v-if="currentTopicMutedState"
               type="button"
               class="topic-detail-action-btn topic-detail-mute-restore"
+              :title="getDetailMuteRestoreBoundary()"
+              :aria-label="getDetailMuteRestoreBoundary()"
               @click.stop="handleRestoreMuteFromDetail"
             >
               ↩ 取消静音
@@ -117,6 +119,8 @@
               <button
                 type="button"
                 class="topic-detail-action-btn mute"
+                :title="getDetailMuteMenuButtonBoundary()"
+                :aria-label="getDetailMuteMenuButtonBoundary()"
                 :aria-expanded="detailMuteMenuOpen"
                 @click.stop="toggleDetailMuteMenu"
               >
@@ -149,6 +153,8 @@
                         'topic-detail-mute-reason-option',
                         { active: detailSelectedMuteReason === reason.key },
                       ]"
+                      :title="getDetailMuteReasonBoundary(reason)"
+                      :aria-label="getDetailMuteReasonBoundary(reason)"
                       :aria-pressed="detailSelectedMuteReason === reason.key"
                       @click.stop="detailSelectedMuteReason = reason.key"
                     >
@@ -163,6 +169,8 @@
                   type="button"
                   class="topic-detail-defer-option topic-detail-mute-option"
                   role="menuitem"
+                  :title="getDetailMuteOptionBoundary(option)"
+                  :aria-label="getDetailMuteOptionBoundary(option)"
                   @click.stop="
                     handleMuteTopicFromDetail(
                       option.until,
@@ -221,7 +229,14 @@
           formatMutedReason(detailMuteUndo.reason)
         }}{{ formatMutedUntil(detailMuteUndo.until) }}。本机过滤，未读保留；未同步或标记已读。
       </span>
-      <button type="button" @click="handleUndoDetailMute">取消静音</button>
+      <button
+        type="button"
+        :title="getDetailMuteRestoreBoundary(detailMuteUndo)"
+        :aria-label="getDetailMuteRestoreBoundary(detailMuteUndo)"
+        @click="handleUndoDetailMute"
+      >
+        取消静音
+      </button>
     </div>
 
     <div
@@ -857,6 +872,7 @@ import {
   getTopicMuteReasonOptions,
   useMemoryStore,
   type TopicDeferPresetOption,
+  type TopicMutePresetOption,
   type TopicMuteReasonKey,
 } from '../memory-store';
 import {
@@ -1127,6 +1143,36 @@ const getDetailDeferRestoreBoundary = (
 ): string => {
   const topicName = getDetailTopicBoundaryName(override);
   return `恢复未读回执：点击只删除「${topicName}」的本机稍后处理状态；未读信号保留，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。`;
+};
+
+const getDetailMuteMenuButtonBoundary = (): string => {
+  const topicName = getDetailTopicBoundaryName();
+  return `静音边界：点击只打开或收起「${topicName}」的本机静音菜单；选择原因和时长前不会写入本机静音状态、标记已读、同步 Memory Service 或改写原始聊天平台。`;
+};
+
+const getDetailMuteReasonBoundary = (reason: {
+  key: TopicMuteReasonKey;
+  label: string;
+  description: string;
+}): string => {
+  const topicName = getDetailTopicBoundaryName();
+  return `静音原因「${reason.label}」：这里只选择「${topicName}」的本机降噪原因；点击静音时长前不会写入静音状态、标记已读、同步 Memory Service 或改写原始聊天平台。${reason.description}`;
+};
+
+const getDetailMuteOptionBoundary = (
+  option: TopicMutePresetOption,
+): string => {
+  const topicName = getDetailTopicBoundaryName();
+  const muteUntil = formatMutedUntil(option.until) || '所选时间';
+  const reasonLabel = getTopicMuteReasonLabel(detailSelectedMuteReason.value);
+  return `${option.label}：把「${topicName}」写入本机浏览器静音状态${muteUntil}，原因「${reasonLabel}」；未读仍保留，只从本机未读流隐藏，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。可在静音视图或本页取消静音。`;
+};
+
+const getDetailMuteRestoreBoundary = (
+  override?: { topicName?: string } | null,
+): string => {
+  const topicName = getDetailTopicBoundaryName(override);
+  return `取消静音回执：点击只删除「${topicName}」的本机静音过滤；未读信号保留，不会标记已读、同步 Memory Service、发送、删除或改写原始聊天平台。`;
 };
 
 const conversationUnreadCount = computed(() =>

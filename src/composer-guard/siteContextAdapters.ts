@@ -84,7 +84,6 @@ export const WEB_AGENT_SOURCE_TYPES = [
   'manual',
   'source_memory',
   'system',
-  'user_core',
   'markdown',
   'reflection',
   'reflection_thread',
@@ -859,7 +858,6 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
         'web',
         'jira',
         'system',
-        'user_core',
         'reflection',
         'reflection_thread',
         'rehearsal',
@@ -1252,7 +1250,6 @@ const jiraIssueAdapter: SiteContextAdapter = {
         'manual',
         'source_memory',
         'system',
-        'user_core',
         'reflection',
         'reflection_thread',
         'rehearsal',
@@ -1541,7 +1538,6 @@ const genericPageAdapter: SiteContextAdapter = {
         'meeting',
         'glip',
         'jira',
-        'user_core',
         'reflection',
         'reflection_thread',
         'rehearsal',
@@ -1952,6 +1948,77 @@ function cloneSelectionRangeInside(
   }
 }
 
+function getTextSelectionOffsets(
+  element: HTMLElement,
+  ownerDocument: Document = element.ownerDocument,
+): { selectionStart: number; selectionEnd: number } | null {
+  const range = getSelectionRangeInside(element, ownerDocument);
+  if (!range) return null;
+  try {
+    const beforeStart = ownerDocument.createRange();
+    beforeStart.selectNodeContents(element);
+    beforeStart.setEnd(range.startContainer, range.startOffset);
+    const beforeEnd = ownerDocument.createRange();
+    beforeEnd.selectNodeContents(element);
+    beforeEnd.setEnd(range.endContainer, range.endOffset);
+    return {
+      selectionStart: beforeStart.toString().length,
+      selectionEnd: beforeEnd.toString().length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function restoreTextSelectionOffsets(
+  element: HTMLElement,
+  selectionStart: number | undefined,
+  selectionEnd: number | undefined,
+  ownerDocument: Document = element.ownerDocument,
+): boolean {
+  if (!Number.isFinite(selectionStart) || !Number.isFinite(selectionEnd)) {
+    return false;
+  }
+  const start = Math.max(0, Number(selectionStart));
+  const end = Math.max(start, Number(selectionEnd));
+  const showText = ownerDocument.defaultView?.NodeFilter.SHOW_TEXT ?? 4;
+  const walker = ownerDocument.createTreeWalker(element, showText);
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+
+  const resolveBoundary = (offset: number): { node: Node; offset: number } => {
+    let remaining = offset;
+    for (const node of textNodes) {
+      const length = node.data.length;
+      if (remaining <= length) {
+        return { node, offset: remaining };
+      }
+      remaining -= length;
+    }
+    if (textNodes.length) {
+      const last = textNodes[textNodes.length - 1];
+      return { node: last, offset: last.data.length };
+    }
+    return { node: element, offset: element.childNodes.length };
+  };
+
+  try {
+    const startBoundary = resolveBoundary(start);
+    const endBoundary = resolveBoundary(end);
+    const range = ownerDocument.createRange();
+    range.setStart(startBoundary.node, startBoundary.offset);
+    range.setEnd(endBoundary.node, endBoundary.offset);
+    setSelectionRange(range, ownerDocument);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function collapseRangeToEnd(element: HTMLElement): Range {
   const range = document.createRange();
   range.selectNodeContents(element);
@@ -2070,15 +2137,21 @@ export function captureComposerTextSnapshot(
 
   if (target.kind === 'richiframe') {
     const body = getRichTextFrameBody(target.element);
+    const selection = body
+      ? getTextSelectionOffsets(body, body.ownerDocument)
+      : null;
     return {
       kind: target.kind,
       html: body?.innerHTML || '',
+      ...(selection ?? {}),
     };
   }
 
+  const selection = getTextSelectionOffsets(target.element);
   return {
     kind: target.kind,
     html: target.element.innerHTML,
+    ...(selection ?? {}),
   };
 }
 
@@ -2119,6 +2192,19 @@ export function restoreComposerTextSnapshot(
     if (!body) return false;
     body.innerHTML = snapshot.html;
     body.focus({ preventScroll: true });
+    if (
+      !restoreTextSelectionOffsets(
+        body,
+        snapshot.selectionStart,
+        snapshot.selectionEnd,
+        body.ownerDocument,
+      )
+    ) {
+      const range = body.ownerDocument.createRange();
+      range.selectNodeContents(body);
+      range.collapse(false);
+      setSelectionRange(range, body.ownerDocument);
+    }
     dispatchRichTextFrameInput(target.element, body, 'historyUndo', null);
     return true;
   }
@@ -2126,8 +2212,16 @@ export function restoreComposerTextSnapshot(
   if (typeof snapshot.html === 'string') {
     target.element.focus({ preventScroll: true });
     target.element.innerHTML = snapshot.html;
-    const range = collapseRangeToEnd(target.element);
-    setSelectionRange(range);
+    if (
+      !restoreTextSelectionOffsets(
+        target.element,
+        snapshot.selectionStart,
+        snapshot.selectionEnd,
+      )
+    ) {
+      const range = collapseRangeToEnd(target.element);
+      setSelectionRange(range);
+    }
     target.element.dispatchEvent(
       new InputEvent('input', {
         bubbles: true,
@@ -2225,6 +2319,61 @@ export function insertTextIntoComposer(
   return true;
 }
 
+export function replaceComposerText(
+  target: ComposerTarget,
+  text: string,
+): boolean {
+  const element = target.element as HTMLTextAreaElement | HTMLInputElement;
+  const replacement = text.trim();
+  if (!replacement) return false;
+  if (
+    element.disabled ||
+    element.readOnly ||
+    element.getAttribute('aria-disabled') === 'true' ||
+    element.getAttribute('contenteditable') === 'false'
+  ) {
+    return false;
+  }
+
+  if (target.kind === 'textarea' || target.kind === 'input') {
+    target.element.focus({ preventScroll: true });
+    element.value = replacement;
+    element.setSelectionRange(replacement.length, replacement.length);
+    element.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: replacement,
+      }),
+    );
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  if (target.kind === 'richiframe') {
+    return replaceTextInRichTextFrame(target.element, replacement);
+  }
+
+  const ownerDocument = target.element.ownerDocument;
+  target.element.focus({ preventScroll: true });
+  target.element.textContent = replacement;
+
+  const endRange = ownerDocument.createRange();
+  endRange.selectNodeContents(target.element);
+  endRange.collapse(false);
+  setSelectionRange(endRange, ownerDocument);
+  target.element.dispatchEvent(
+    new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      inputType: 'insertReplacementText',
+      data: replacement,
+    }),
+  );
+  target.element.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
 function dispatchRichTextFrameInput(
   frame: HTMLElement,
   body: HTMLElement,
@@ -2281,6 +2430,29 @@ function insertTextIntoRichTextFrame(frame: HTMLElement, insertion: string): boo
   }
 
   dispatchRichTextFrameInput(frame, body, 'insertText', insertedText);
+  return true;
+}
+
+function replaceTextInRichTextFrame(
+  frame: HTMLElement,
+  replacement: string,
+): boolean {
+  const body = getRichTextFrameBody(frame);
+  if (!body) return false;
+  const frameDocument = body.ownerDocument;
+  body.focus({ preventScroll: true });
+  body.textContent = replacement;
+
+  const endRange = frameDocument.createRange();
+  endRange.selectNodeContents(body);
+  endRange.collapse(false);
+  setSelectionRange(endRange, frameDocument);
+  dispatchRichTextFrameInput(
+    frame,
+    body,
+    'insertReplacementText',
+    replacement,
+  );
   return true;
 }
 

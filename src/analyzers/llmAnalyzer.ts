@@ -8,8 +8,9 @@ import {
   SlideContentAnalyzer, 
   SlideAnalysisResult
 } from '../interfaces/slideAnalyzer';
-import { BaseSlideAnalyzer } from './baseAnalyzer';
 import { callLLMJsonAPI } from '../llm';
+import { CAPABILITIES } from '../analytics/capabilities';
+import { BaseSlideAnalyzer } from './baseAnalyzer';
 
 /**
  * LLM辅助分析器类
@@ -228,10 +229,16 @@ ${slideContent}
       const requestBody = {
         prompt: prompt,
         type: 'analyze', // 根据实际需要调整类型
+        capability: CAPABILITIES.GOOGLE_SLIDES_ANALYZER,
+        feature: 'slide_analysis',
       };
       
       // 调用API并获取响应
-      const response = await callLLMJsonAPI(requestBody);
+      const response = await callLLMJsonAPI({
+        ...requestBody,
+        capability: CAPABILITIES.GOOGLE_SLIDES_ANALYZER,
+        feature: 'slide_analysis',
+      });
       
       // 如果没有有效响应，提供默认结构
       if (!response || typeof response !== 'object') {

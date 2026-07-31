@@ -451,6 +451,14 @@ describe('Provider API', () => {
     expect(todoBody.packages).toHaveLength(1);
     expect(todoBody.packages[0].kind).toBe('todo_digest');
     expect(todoBody.packages[0].itemCount).toBe(2);
+    expect(todoBody.packages[0].feedHasMore).toBe(false);
+    expect(todoBody.packages[0].feedLimit).toBe(8);
+    expect(todoBody.packages[0].feedSnapshotReceipt).toContain(
+      'Feed 快照口径回执',
+    );
+    expect(todoBody.packages[0].feedSnapshotReceipt).toContain(
+      'limit=8 返回 2 条',
+    );
     expect(todoBody.packages[0].bodyMd).toContain('Need a decision');
     expect(todoBody.packages[0].bodyMd).toContain('Review the rollout notes');
     expect(todoBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
@@ -469,6 +477,14 @@ describe('Provider API', () => {
     expect(noticeBody.packages).toHaveLength(1);
     expect(noticeBody.packages[0].kind).toBe('notice_digest');
     expect(noticeBody.packages[0].itemCount).toBe(1);
+    expect(noticeBody.packages[0].feedHasMore).toBe(false);
+    expect(noticeBody.packages[0].feedLimit).toBe(8);
+    expect(noticeBody.packages[0].feedSnapshotReceipt).toContain(
+      'Feed 快照口径回执',
+    );
+    expect(noticeBody.packages[0].feedSnapshotReceipt).toContain(
+      'limit=8 返回 1 条',
+    );
     expect(noticeBody.packages[0].bodyMd).toContain('Weekly Report Ready');
     expect(noticeBody.packages[0].bodyMd).toContain(
       'Weekly launch summary',
@@ -492,6 +508,45 @@ describe('Provider API', () => {
     expect(reminderAliasBody.packages[0].itemCount).toBe(2);
     expect(reminderAliasBody.packages[0].bodyMd).toContain('Need a decision');
     expect(reminderAliasBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
+  });
+
+  it('preserves feed slice metadata on provider digests when more items remain', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (let i = 0; i < 9; i += 1) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, sent_at, created_at)
+         VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+      ).run(
+        `notif-provider-slice-${i}`,
+        `Provider feed notice ${i}`,
+        `Notice body ${i}`,
+        now - i,
+        now - i,
+      );
+    }
+
+    const noticeRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'notice_sync',
+      },
+    });
+
+    expect(noticeRes.statusCode).toBe(200);
+    const body = noticeRes.json();
+    expect(body.packages).toHaveLength(1);
+    expect(body.packages[0].kind).toBe('notice_digest');
+    expect(body.packages[0].itemCount).toBe(8);
+    expect(body.packages[0].feedHasMore).toBe(true);
+    expect(body.packages[0].feedLimit).toBe(8);
+    expect(body.packages[0].feedSnapshotReceipt).toContain(
+      '还有更多未返回条目',
+    );
+    expect(body.packages[0].bodyMd).toContain('Feed 还有更多');
   });
 
   it('returns itemCount 0 for empty todo and notice digests', async () => {

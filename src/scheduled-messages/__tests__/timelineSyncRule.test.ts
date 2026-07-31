@@ -1706,39 +1706,53 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
   );
 });
 
-test('Executor rule keeps Bot API token hidden and redacted from diagnostic logs', () => {
+test('Executor rule routes Bot private/group through Dify botman jumpboard', () => {
   const template = JSON.parse(
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
-  const botApiWebhooks: any[] = [];
+  const botmanDifyWebhooks: any[] = [];
+  const legacyBotApiWebhooks: any[] = [];
+  const agentTaskDifyWebhooks: any[] = [];
 
-  const collectBotApiWebhooks = (node: any) => {
+  const collect = (node: any) => {
     if (!node || typeof node !== 'object') {
       return;
     }
-    if (
-      node.type === 'jira.issue.outgoing.webhook' &&
-      String(node.value?.url || '').includes('{{BOT_API_BASE_URL}}/')
-    ) {
-      botApiWebhooks.push(node);
+    if (node.type === 'jira.issue.outgoing.webhook') {
+      const url = String(node.value?.url || '');
+      if (url.includes('{{BOTMAN_DIFY_API_BASE_URL}}/workflows/run')) {
+        botmanDifyWebhooks.push(node);
+      }
+      if (url.includes('{{BOT_API_BASE_URL}}/')) {
+        legacyBotApiWebhooks.push(node);
+      }
+      if (url.includes('{{AGENT_TASK_DIFY_API_BASE_URL}}/workflows/run')) {
+        agentTaskDifyWebhooks.push(node);
+      }
     }
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) {
-        value.forEach(collectBotApiWebhooks);
+        value.forEach(collect);
       } else if (value && typeof value === 'object') {
-        collectBotApiWebhooks(value);
+        collect(value);
       }
     }
   };
 
-  collectBotApiWebhooks(template);
+  collect(template);
 
-  assert.equal(botApiWebhooks.length, 2);
-  for (const webhook of botApiWebhooks) {
+  assert.equal(legacyBotApiWebhooks.length, 0);
+  assert.equal(botmanDifyWebhooks.length, 2);
+  assert.equal(agentTaskDifyWebhooks.length, 1);
+  for (const webhook of botmanDifyWebhooks) {
     const authHeader = webhook.value.headers.find((header: any) => header.name === 'Authorization');
-    assert.equal(authHeader?.value?.keyOrValue, 'Bearer {{BOT_TOKEN}}');
+    assert.equal(authHeader?.value?.keyOrValue, 'Bearer {{BOTMAN_DIFY_API_KEY}}');
     assert.equal(authHeader?.value?.secret, false);
   }
+  const agentAuth = agentTaskDifyWebhooks[0].value.headers.find(
+    (header: any) => header.name === 'Authorization',
+  );
+  assert.equal(agentAuth?.value?.keyOrValue, 'Bearer {{AGENT_TASK_DIFY_API_KEY}}');
 
   const payload = {
     token: 'root-token',

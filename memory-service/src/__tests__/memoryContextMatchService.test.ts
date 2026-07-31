@@ -462,4 +462,64 @@ describe('MemoryContextMatchService', () => {
     expect(match.selectedTopic?.label).toContain('MTR-141852');
     expect(match.selectedTopic?.reasons.join(' ')).toContain('外部上下文文本锚点');
   });
+
+  it('prioritizes an explicitly resumed topic over a recent frame sharing only its issue anchor', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, group_id, conversation_id, title, summary,
+         dominant_projects_json, topics_json, role_terms_json,
+         source_anchors_json, confidence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertFrame.run(
+      'glip:nova-aggregated',
+      'glip',
+      'glip',
+      'nova-group',
+      'nova-group',
+      'Nova delivery work',
+      'Nova version cleanup and ticket update work.',
+      JSON.stringify(['Nova']),
+      JSON.stringify(['JQL', 'version update', 'change plan']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['MTR-149462', 'MTR-141852']),
+      0.95,
+      currentTime - 60,
+      currentTime - 60,
+    );
+    insertFrame.run(
+      'glip:ai-vbg-resume',
+      'glip',
+      'glip',
+      'vbg-group',
+      'vbg-group',
+      'MTR-141852: AI Custom VBG',
+      'AI VBG backend is waiting for RCV BE new design confirmation.',
+      JSON.stringify(['AI VBG']),
+      JSON.stringify(['QR code', 'UI color difference']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['MTR-141852']),
+      0.72,
+      currentTime - 7 * 24 * 60 * 60,
+      currentTime - 7 * 24 * 60 * 60,
+    );
+
+    const match = service.match({
+      query: '所以现在应该先找谁确认？',
+      preferredTopicTitle: 'MTR-141852: AI Custom VBG',
+      currentContext: { issueKey: 'MTR-141852' },
+      scope: 'work',
+    });
+
+    expect(match.state).toBe('locked');
+    expect(match.selectedTopic?.label).toBe('AI VBG');
+    expect(match.selectedTopic?.reasons.join(' ')).toContain(
+      '用户显式续聊 topic 匹配',
+    );
+    expect(match.candidates.findIndex((candidate) => candidate.label === 'AI VBG')).toBeLessThan(
+      match.candidates.findIndex((candidate) => candidate.label === 'Nova'),
+    );
+  });
 });

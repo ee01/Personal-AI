@@ -48,7 +48,7 @@
 - 每个项目卡片会展示决策依据：阻塞、过期、近 7 天到期、缺 ETA、缺 Jira/平台来源等信号会聚合成建议下一步。
 - 今日焦点和项目内优先处理项会显示活动级风险分，按阻塞、过期/临期、来源缺口、平台阻塞和临近里程碑解释为什么该任务排在前面。
 - 今日焦点下方会集中显示证据补全队列，把缺 ETA、缺 Jira/平台来源的活动任务变成可点击的修复入口；从队列或首屏证据摘要进入时，会直接聚焦到应先补的 ETA 或来源输入区。
-- 任务详情会显示证据修复面板，直接指出 ETA、来源和风险驱动是否完整；平台状态、平台负责人或平台 Jira 会被统一计入“平台来源”，并可从面板直接定位到 ETA 或来源输入区。详情页、证据队列、首屏决策摘要、图表关键任务和数据源检查里的修复按钮都会在 hover / 读屏文案里说明这只是打开本地 ETA、来源或首个任务填写位置。
+- 任务详情会显示证据修复面板，直接指出 ETA、来源和风险驱动是否完整；平台状态、平台负责人或平台 Jira 会被统一计入“平台来源”，并可从面板直接定位到 ETA 或来源输入区。详情页、证据队列、首屏决策摘要、跨项目 / 项目内优先处理卡、图表关键任务和数据源检查里的修复入口都会在 hover / 读屏文案里说明这只是打开本地任务详情、ETA、来源或首个任务填写位置。
 - 平台来源编辑区会区分“未填写来源”和“来源已记录”；未保存的平台不会再以默认 `pending` 看起来像已有来源，`补来源` 会直接聚焦到平台状态、负责人或 Jira 输入。
 - 每个项目可先预览状态更新草稿，再复制发送；草稿按健康摘要、里程碑、阻塞/过期/近期到期任务和证据来源组织。
 - 状态更新草稿预览支持直接编辑审阅稿、恢复生成稿、再复制发送，避免把规则化摘要未经人工确认地转发给团队。
@@ -102,7 +102,7 @@
 - 本轮补齐证据队列跳转回执：参考 Asana Smart Status、GitHub Project Insights、Linear Project Graph 和 dashboard 信息质量研究，项目风险入口应把数据范围、缺口排序和补证据动作放在同一个用户路径里。现在从首屏证据补全队列打开任务详情时，会说明这是本地队列中的第几项、当前缺口构成、排序只基于本地任务缺口 / 风险分 / ETA，并再次声明不会读取或写回 Memory Service、Jira、GitHub 或 Confluence。
 - 本轮补齐 watched-project 首屏状态可见性：参考 GitHub Projects Insights / 状态更新、Linear Project Graph / 项目更新和 provenance / data-quality dashboard 研究，项目状态入口应在展开详情前先说明具体数据切片。因此同步状态条会复用数据源卡片的新增 / 已匹配项目预览，仍只表示本地工作台补齐或匹配，不代表 Jira/GitHub/Confluence 已同步或 Memory Service 被反写。
 - 本轮补齐数据源检查按钮级边界：参考 GitHub Projects Insights 的 project item source data、Linear Project Graph 的足够 issue data 前提，以及 provenance / data-quality dashboard 对来源和完整性元数据的要求，检查入口在点击前就告诉用户本次只读 Memory Service watched projects、外部项目源不会被读取或写回、同步结果最多创建或匹配当前浏览器本地工作台。
-- 本轮补齐证据修复按钮级边界：Atlassian / GitHub / Linear 的项目状态入口都把状态、来源数据和更新动作分开，dashboard data-quality 研究也强调用户需要先理解数据质量和来源再行动。因此 Project Dashboard 的 ETA / 来源 / 规划项目修复入口在点击前就说明它只聚焦当前浏览器工作台，不读取或写回 Memory Service、Jira、GitHub、Confluence，也不会确认项目状态或发送通知。
+- 本轮补齐证据修复按钮级边界：Atlassian / GitHub / Linear 的项目状态入口都把状态、来源数据和更新动作分开，dashboard data-quality 研究也强调用户需要先理解数据质量和来源再行动。因此 Project Dashboard 的 ETA / 来源 / 规划项目 / 优先处理任务入口在点击前就说明它只聚焦当前浏览器工作台，不读取或写回 Memory Service、Jira、GitHub、Confluence，也不会确认项目状态或发送通知。
 - 本轮补齐数据源检查面板收起边界：参考项目洞察和 provenance dashboard 对来源可见性的要求，收起只是隐藏本轮检查面板，不清空已同步的本地工作台或状态条，也不会触发任何外部读取、写回或通知。
 
 ## 当前边界

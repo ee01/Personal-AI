@@ -44,6 +44,11 @@ import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { EvidenceWatchContractService } from './EvidenceWatchContractService.js';
+import { ActionReadinessService } from './ActionReadinessService.js';
+import {
+  OpenQuestionExitContractService,
+  type OpenQuestionExitContract,
+} from './OpenQuestionExitContractService.js';
 import type {
   RecallChannelDiagnostic,
   Rehearsal,
@@ -289,6 +294,8 @@ export class ReflectionThreadService {
   private readonly researcher: ReflectionResearcher;
   private readonly rehearsalService: RehearsalService;
   private readonly evidenceWatchService: EvidenceWatchContractService;
+  private readonly actionReadinessService: ActionReadinessService;
+  private readonly openQuestionExitService: OpenQuestionExitContractService;
   private readonly markdownManager?: MarkdownManager;
 
   constructor(
@@ -299,10 +306,16 @@ export class ReflectionThreadService {
     this.repo = new ReflectionThreadRepository(db);
     this.actionRepo = new ActionRepository(db);
     this.actionResultRepo = new ActionResultRepository(db);
-    this.worker = new ReflectionWorker();
+    this.worker = new ReflectionWorker(db);
     this.researcher = new ReflectionResearcher(userDataManager);
     this.rehearsalService = new RehearsalService(db, userDataManager);
     this.evidenceWatchService = new EvidenceWatchContractService(db);
+    this.openQuestionExitService = new OpenQuestionExitContractService(db);
+    this.actionReadinessService = new ActionReadinessService(
+      db,
+      userDataManager,
+      userId,
+    );
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
@@ -354,6 +367,7 @@ export class ReflectionThreadService {
       }
     >;
     dreamRuns: DreamRunRecord[];
+    openQuestionExitContracts: OpenQuestionExitContract[];
   } | null {
     const thread = this.repo.getThreadById(threadId);
     if (!thread) return null;
@@ -368,6 +382,10 @@ export class ReflectionThreadService {
       ...this.hydrateLink(link),
     }));
     const dreamRuns = this.repo.listDreamRuns({ threadId, limit: 10 });
+    const openQuestionExitContracts = this.openQuestionExitService.listBySource(
+      'reflection_thread',
+      threadId,
+    );
 
     return {
       thread,
@@ -377,6 +395,7 @@ export class ReflectionThreadService {
       researchAttempts,
       links,
       dreamRuns,
+      openQuestionExitContracts,
     };
   }
 
@@ -838,6 +857,21 @@ export class ReflectionThreadService {
       triggerType,
       outputLanguage,
     );
+    const combinedEvidenceRefs = combinedEvidence.map(
+      (item) => `${item.sourceKind}:${item.sourceId}`,
+    );
+    const exitEvaluation = this.openQuestionExitService.evaluate({
+      sourceKind: 'reflection_thread',
+      sourceRefId: thread.id,
+      subjectKey: thread.topicKey,
+      questions: generated.openQuestions,
+      evidenceRefs: combinedEvidenceRefs,
+      priority: thread.priority,
+      salience: thread.salience,
+    });
+    const eligibleActionProposals = exitEvaluation.suppressDerivedActions
+      ? []
+      : generated.actionProposals;
 
     const threadPath =
       thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
@@ -847,44 +881,50 @@ export class ReflectionThreadService {
       threadId: thread.id,
       runType: options.runType ?? 'continuous_reflection',
       triggerType,
-      inputRefs: combinedEvidence.map(
-        (item) => `${item.sourceKind}:${item.sourceId}`,
-      ),
+      inputRefs: combinedEvidenceRefs,
       previousRunId: latestRun?.id,
       summary: generated.summary,
       hypothesisBefore: thread.currentHypothesis,
       hypothesisAfter: generated.hypothesisAfter,
       discoveries: generated.discoveries,
-      openQuestions: generated.openQuestions,
-      actions: generated.actionProposals.map((action) => ({
+      openQuestions: exitEvaluation.activeQuestions,
+      actions: eligibleActionProposals.map((action) => ({
         ...action,
       })),
       markdownSnapshotPath: threadPath,
     });
 
-    const createdActions = generated.actionProposals.map((proposal, index) => {
+    const createdActions = eligibleActionProposals.flatMap((proposal, index) => {
       const proposalParams =
         proposal.params &&
         typeof proposal.params === 'object' &&
         !Array.isArray(proposal.params)
           ? (proposal.params as Record<string, unknown>)
           : {};
+      const primaryExitDecision = exitEvaluation.primaryDecision;
+      const paramsWithExitReceipt = primaryExitDecision
+        ? {
+            ...proposalParams,
+            openQuestionExitContractId: primaryExitDecision.contract.id,
+            openQuestionExitReceipt: primaryExitDecision.receipt,
+          }
+        : proposalParams;
       const evidenceWatchPreparation =
         this.evidenceWatchService.prepareActionForProposal({
           actionType: proposal.actionType,
           question: proposal.title,
           title: `Reflection 守望: ${thread.title}`,
           summary: proposal.description ?? generated.summary,
-          params: proposalParams,
+          params: paramsWithExitReceipt,
           createdFrom: { kind: 'reflection', refId: thread.id },
           cadence: 'on_revisit',
         });
       const paramsWithEvidenceWatch = evidenceWatchPreparation
         ? {
-            ...proposalParams,
+            ...paramsWithExitReceipt,
             ...evidenceWatchPreparation.paramsPatch,
           }
-        : proposal.params;
+        : paramsWithExitReceipt;
       const delegatePolicy =
         proposal.actionType === 'delegate_openclaw'
           ? resolveDelegateOpenClawPolicy({
@@ -902,7 +942,45 @@ export class ReflectionThreadService {
           : null;
       const idempotencyKey =
         evidenceWatchPreparation?.idempotencyKey ??
-        `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`;
+        (primaryExitDecision
+          ? `${thread.topicKey}:open-question:${primaryExitDecision.contract.id}:${primaryExitDecision.actionEpoch}:${proposal.actionType}:${index}`
+          : `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`);
+      if (proposal.actionType === 'delegate_openclaw') {
+        const readiness = this.actionReadinessService.checkAction(
+          {
+            actionType: proposal.actionType,
+            title: proposal.title,
+            description: proposal.description,
+            params:
+              paramsWithEvidenceWatch &&
+              typeof paramsWithEvidenceWatch === 'object' &&
+              !Array.isArray(paramsWithEvidenceWatch)
+                ? (paramsWithEvidenceWatch as Record<string, unknown>)
+                : {},
+            executionMode:
+              delegatePolicy?.executionMode ?? proposal.executionMode,
+            requiresApproval:
+              delegatePolicy?.requiresApproval ?? proposal.requiresApproval,
+            sourceKind: 'reflection_thread',
+            sourceRefId: thread.id,
+            threadId: thread.id,
+            runId: run.id,
+          },
+          { persistStaticBlock: true },
+        );
+        if (
+          readiness.decision === 'block' ||
+          readiness.decision === 'probe_first'
+        ) {
+          this.actionReadinessService.linkSource(
+            readiness.receipt.contractId,
+            'reflection_thread',
+            thread.id,
+            'blocked_by_readiness',
+          );
+          return [];
+        }
+      }
       const existingAction = this.actionRepo.findReusableByIdempotencyKey(
         idempotencyKey,
       );
@@ -957,7 +1035,21 @@ export class ReflectionThreadService {
           summary: `Reflection 已复用现有 ${action.actionType} 动作，未重复创建外部查证。`,
         });
       }
-      return action;
+      if (primaryExitDecision) {
+        if (evidenceWatchPreparation) {
+          this.openQuestionExitService.linkEvidenceWatchOwner(
+            primaryExitDecision.contract.id,
+            evidenceWatchPreparation.contract.id,
+            action.id,
+          );
+        } else {
+          this.openQuestionExitService.linkActionOwner(
+            primaryExitDecision.contract.id,
+            action.id,
+          );
+        }
+      }
+      return [action];
     });
 
     if (createdActions.length > 0) {
@@ -980,15 +1072,24 @@ export class ReflectionThreadService {
       generated.rehearsalCandidates ?? [],
       combinedEvidence,
     );
+    const activeOpenQuestions =
+      this.openQuestionExitService.getActiveQuestionsForSource(
+        'reflection_thread',
+        thread.id,
+      );
 
     const updatedThread = this.repo.updateThreadAfterRun(thread.id, {
       latestSummary: generated.summary,
       latestMarkdownPath: threadPath,
       currentHypothesis: generated.hypothesisAfter,
-      openQuestions: generated.openQuestions,
+      openQuestions: activeOpenQuestions,
+      replaceOpenQuestions: true,
       nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
       lastReflectedAt: now(),
-      continueReason: generated.openQuestions[0] ?? thread.continueReason,
+      continueReason:
+        activeOpenQuestions[0] ??
+        exitEvaluation.primaryDecision?.receipt.label ??
+        thread.continueReason,
       status: thread.status,
     });
 
@@ -1217,6 +1318,13 @@ export class ReflectionThreadService {
       });
       if (updated) {
         resumed.push(threadId);
+        this.openQuestionExitService.resumeForSource({
+          sourceKind: 'reflection_thread',
+          sourceRefId: threadId,
+          reasonCode: 'confirm_answered',
+          evidenceRefs: [`confirm_request:${confirmRequestId}`],
+          confirmRequestId,
+        });
         this.syncThreadDocument(threadId);
       }
     }
@@ -1235,6 +1343,12 @@ export class ReflectionThreadService {
     this.repo.updateThreadProgressMarker(result.threadId, {
       nextReflectionAt: now(),
       continueReason: 'new action result available',
+    });
+    this.openQuestionExitService.resumeForSource({
+      sourceKind: 'reflection_thread',
+      sourceRefId: result.threadId,
+      reasonCode: 'action_result_available',
+      evidenceRefs: [`action_result:${result.id}`],
     });
     this.syncThreadDocument(result.threadId);
   }

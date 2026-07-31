@@ -9,6 +9,7 @@ import {
 } from 'vitest';
 
 const llmGenerateMock = vi.hoisted(() => vi.fn());
+const llmGenerateJsonMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../llm/EmbeddingClient.js', () => ({
   EmbeddingClient: {
@@ -23,11 +24,12 @@ vi.mock('../llm/EmbeddingClient.js', () => ({
 vi.mock('../llm/LLMClient.js', () => ({
   LLMClient: vi.fn().mockImplementation(() => ({
     generate: llmGenerateMock,
-    generateJSON: vi.fn(),
+    generateJSON: llmGenerateJsonMock,
     generateStream: vi.fn(),
   })),
   getLLMClient: () => ({
     generate: llmGenerateMock,
+    generateJSON: llmGenerateJsonMock,
   }),
 }));
 
@@ -55,9 +57,44 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
   beforeEach(() => {
     llmGenerateMock.mockReset();
+    llmGenerateJsonMock.mockReset();
     llmGenerateMock.mockResolvedValue({
       content:
         'Factory AI 试用已经过了 security approval，但 production 场景还是要用 RingCentral email login。',
+    });
+    llmGenerateJsonMock.mockImplementation(async (prompt: string) => {
+      const jsonStart = prompt.indexOf('{');
+      const input = JSON.parse(prompt.slice(jsonStart)) as {
+        currentDraft: string;
+        outputLanguage: 'cjk' | 'latin' | 'unknown';
+        candidateMemories: Array<{ id: string; context: string }>;
+      };
+      const usedEvidenceIds = input.candidateMemories.map((item) => item.id);
+      const context = input.candidateMemories
+        .map((item) => item.context)
+        .join('；');
+      if (usedEvidenceIds.length > 0) {
+        return {
+          mode: 'context_pack',
+          insertText:
+            input.outputLanguage === 'cjk'
+              ? `请把以下与当前问题直接相关的项目背景作为补充上下文，并在回答前核对其中的状态：${context}。这些内容只用于补充背景，不是已经验证的外部证据，也不要据此编造结论。`
+              : `Use this directly relevant context for the current prompt without treating it as verified external evidence: ${context}`,
+          usedEvidenceIds,
+          gaps: ['relevant context'],
+          confidence: 0.86,
+        };
+      }
+      return {
+        mode: 'rewrite_prompt',
+        insertText:
+          input.outputLanguage === 'cjk'
+            ? `请完整处理以下任务，并保留其原始目标：${input.currentDraft}\n\n请明确分析范围、证据要求、不确定性和输出结构；信息不足时先列出需要补充的问题。`
+            : `Complete the following task while preserving its original objective: ${input.currentDraft}\n\nDefine the scope, evidence requirements, uncertainty, and output structure. Ask for missing information instead of inventing it.`,
+        usedEvidenceIds: [],
+        gaps: ['scope', 'evidence', 'output structure'],
+        confidence: 0.86,
+      };
     });
 
     db.prepare('DELETE FROM messages_raw').run();
@@ -223,16 +260,409 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('context_pack');
+    expect(body.insertMode).toBe('append_patch');
     expect(body.previewRequired).toBe(true);
     expect(body.riskLevel).toBe('medium');
     expect(body.insertText).not.toContain('Personal AI context pack (review before sending)');
     expect(body.insertText).not.toContain('Please review and edit before sending');
-    expect(body.insertText).toContain('请结合下面上下文回答');
-    expect(body.insertText).toContain('不要直接暴露不必要的私人细节');
+    expect(body.insertText).toContain('directly relevant context');
+    expect(body.insertText).not.toContain('任务判断');
+    expect(body.insertText).not.toContain('目标工具适配');
     expect(body.evidence.length).toBeGreaterThan(0);
+    expect(body.personaProjection).toMatchObject({
+      scene: 'web_ai_context_pack',
+      representationMode: 'context_pack_copyable',
+      voiceMode: 'speak_about_user',
+      requiresPreview: true,
+    });
   });
 
-  it('adds task framing and target-tool fit for compose-to-AI prompts', async () => {
+  it('rewrites a Chinese childcare research prompt without requiring memory', async () => {
+    const draftText =
+      '请针对幼儿是早些进幼儿园还是迟些进幼儿园的利弊，先检索专业的论文以及专业人士的发言或书籍，对这个问题的各方面影响做一个总结的判断。然后结合我的小孩的目前发育情况，给我一个推荐的决策。';
+    llmGenerateJsonMock.mockResolvedValueOnce({
+      mode: 'rewrite_prompt',
+      insertText: [
+        '请以发展心理学、儿童健康与学前教育研究者的视角，评估幼儿早些进入幼儿园与迟些进入幼儿园的利弊，并给出可执行的个体化决策建议。',
+        '',
+        '研究要求：优先检索同行评审论文、系统综述、权威机构资料、专业人士可核验的发言及专业书籍，提供可核验引用；区分相关性与因果关系，并说明研究设计、样本年龄、托育质量和家庭背景等混杂因素。',
+        '',
+        '分析维度：依恋与压力、语言和认知、社交与情绪、身体健康、照护质量、家庭资源、入园适应以及短期和长期影响；同时呈现支持早入园、迟入园和条件性结论的证据。',
+        '',
+        '决策部分：先给出一般证据结论，再结合我已提供的小孩发育情况进行个体化判断。若年龄、语言、情绪调节、分离适应、健康、照护环境或幼儿园质量信息不足，请先列出必须补充的问题，不要自行编造或作医学诊断。',
+        '',
+        '输出格式：证据摘要、争议与不确定性、多维对照表、一般结论、个体化决策矩阵、最终建议和过渡实施方案。',
+      ].join('\n'),
+      usedEvidenceIds: [],
+      gaps: ['evidence method', 'decision criteria', 'missing child context'],
+      confidence: 0.9,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT',
+        draftText,
+        primaryText: 'New blank AI chat',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['manual'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('rewrite_prompt');
+    expect(body.insertMode).toBe('replace_draft');
+    expect(body.riskLevel).toBe('high');
+    expect(body.previewRequired).toBe(true);
+    expect(body.evidence).toEqual([]);
+    expect(body.insertText).toContain('同行评审论文');
+    expect(body.insertText).toContain('区分相关性与因果关系');
+    expect(body.insertText).toContain('一般证据结论');
+    expect(body.insertText).toContain('个体化决策矩阵');
+    expect(body.insertText).toContain('必须补充的问题');
+    expect(body.insertText).not.toMatch(
+      /Gemma 4|chunk\s*:|no preview available|事实变化|NotebookLM|owner/i,
+    );
+    const compilerOptions = llmGenerateJsonMock.mock.calls[0][1];
+    expect(compilerOptions.systemPrompt).toContain(
+      'same dominant natural language as currentDraft',
+    );
+    expect(compilerOptions.maxTokens).toBe(1600);
+    expect(compilerOptions.timeoutMs).toBe(5500);
+    expect(compilerOptions.reasoningEffort).toBe('none');
+  });
+
+  it('filters placeholder, duplicate, and off-topic memories before prompt compilation', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'chunk:38982',
+          type: 'chunk',
+          score: 0.9,
+          title: '事实变化',
+          snippet: 'chunk:38982: (no preview available)',
+          links: [],
+        },
+        {
+          id: 'chunk:38982',
+          type: 'chunk',
+          score: 0.89,
+          title: '事实变化',
+          snippet: '(no preview available)',
+          links: [],
+        },
+        {
+          id: 'reflection:gemma-license',
+          type: 'reflection_thread',
+          score: 0.84,
+          title: 'Fallback local research',
+          snippet:
+            'Fallback local research for unresolved reflection question: Gemma 4 license 是否还会继续变化？',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateJsonMock.mockResolvedValueOnce({
+      mode: 'rewrite_prompt',
+      insertText:
+        '请研究幼儿早些进入幼儿园与迟些进入幼儿园的影响，核验专业论文与书籍，区分相关性和因果关系，再结合已提供的小孩发育情况给出决策；信息不足时先提问。',
+      usedEvidenceIds: [],
+      gaps: ['evidence', 'personalization'],
+      confidence: 0.88,
+    });
+
+    const body = await service.assistComposer({
+      surface: 'chatgpt',
+      contextType: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
+      title: 'ChatGPT',
+      draftText:
+        '请研究幼儿早些进幼儿园还是迟些进幼儿园，并结合我的小孩发育情况给出决策。',
+      primaryText: 'New blank AI chat',
+      identifiers: { provider: 'chatgpt' },
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('rewrite_prompt');
+    expect(body.evidence).toEqual([]);
+    expect(body.debug?.rawEvidenceCount).toBe(3);
+    expect(body.debug?.filteredEvidenceCount).toBe(0);
+    const compilerPrompt = String(llmGenerateJsonMock.mock.calls[0][0]);
+    expect(compilerPrompt).not.toMatch(
+      /Gemma 4|chunk:38982|no preview available|事实变化/,
+    );
+  });
+
+  it('gates mixed Jira evidence before Web AI context-pack compilation', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'mtr-141852-status',
+          type: 'message',
+          scope: 'work',
+          score: 0.94,
+          title: 'MTR-141852 release status',
+          snippet:
+            'MTR-141852 Jira ticket status and release risk are still under review.',
+          links: [],
+          matchedAnchors: { projects: ['MTR-141852'] },
+          metadata: {
+            issueKey: 'MTR-141852',
+            relatedProject: 'MTR',
+          },
+        },
+        {
+          id: 'nav-8891-status-noise',
+          type: 'message',
+          scope: 'work',
+          score: 0.93,
+          title: 'NAV-8891 release status',
+          snippet:
+            'NAV-8891 Jira ticket status and release risk belong to another project.',
+          links: [],
+          matchedAnchors: { projects: ['NAV-8891'] },
+          metadata: {
+            issueKey: 'NAV-8891',
+            relatedProject: 'NAV',
+          },
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+
+    const body = await service.assistComposer({
+      surface: 'chatgpt',
+      contextType: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
+      title: 'ChatGPT - MTR-141852 status',
+      draftText:
+        '请根据 MTR-141852 Jira ticket status 和 release risk 生成评审摘要。',
+      primaryText: 'Current task is a Jira ticket status and release risk review.',
+      identifiers: { provider: 'chatgpt', issueKey: 'MTR-141852' },
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('context_pack');
+    expect(body.evidence.map((item) => item.id)).toEqual([
+      'mtr-141852-status',
+    ]);
+    expect(body.cohesionReceipt).toMatchObject({
+      policyVersion: 'evidence-cohesion-v1',
+      state: 'cohesive',
+      usedCount: 1,
+      excludedCount: 1,
+      silent: true,
+    });
+    const compilerPrompt = String(llmGenerateJsonMock.mock.calls.at(-1)?.[0]);
+    expect(compilerPrompt).toContain('MTR-141852');
+    expect(compilerPrompt).not.toContain('NAV-8891');
+  });
+
+  it('resolves locked context evidence before compiling a context pack', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_title, timestamp, created_at, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'orbit-release-evidence',
+      'Project Orbit deployment checks were flaky in the latest two runs. Maya requires two stable runs before calling the release safe.',
+      'manual',
+      'Project Orbit release review',
+      now,
+      now,
+      'work',
+    );
+
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {
+        normalizedQuery: 'Project Orbit deployment checks Maya release',
+        channelsHit: [],
+        contextExpansion: {
+          contextMatch: {
+            state: 'locked',
+            selectedTopic: {
+              id: 'topic:project-orbit-release',
+              label: 'Project Orbit release review',
+              score: 0.91,
+              reasons: ['Project Orbit and deployment checks matched'],
+              evidenceIds: ['orbit-release-evidence'],
+            },
+            candidates: [],
+          },
+        },
+      },
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateJsonMock.mockResolvedValueOnce({
+      mode: 'rewrite_prompt',
+      insertText:
+        '请完整重写 Project Orbit release 风险说明，并纳入 deployment checks 与 Maya 的判断标准。',
+      usedEvidenceIds: ['orbit-release-evidence'],
+      gaps: ['current deployment check status'],
+      confidence: 0.9,
+    });
+
+    const body = await service.assistComposer({
+      surface: 'chatgpt',
+      contextType: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
+      title: 'ChatGPT - Project Orbit release risk',
+      draftText:
+        '请写 Project Orbit release 风险说明，重点核对 deployment checks 是否稳定。',
+      primaryText: 'Maya 之前如何判断 release risk？',
+      identifiers: { provider: 'chatgpt' },
+      sourceTypes: ['manual'],
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('context_pack');
+    expect(body.insertMode).toBe('append_patch');
+    expect(body.riskLevel).toBe('medium');
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0]).toMatchObject({
+      id: 'orbit-release-evidence',
+      type: 'message',
+      sourceLabel: 'manual',
+    });
+    expect(body.insertText).toContain('Project Orbit');
+    expect(body.insertText).not.toContain('请完整重写');
+    expect(body.debug?.compiler).toMatchObject({
+      mode: 'context_pack',
+      rawMode: 'rewrite_prompt',
+      modeNormalized: true,
+    });
+    expect(String(llmGenerateJsonMock.mock.calls[0][0])).toContain(
+      'deployment checks were flaky',
+    );
+  });
+
+  it('fails closed when the compiler returns the wrong language', async () => {
+    llmGenerateJsonMock.mockResolvedValueOnce({
+      mode: 'rewrite_prompt',
+      insertText:
+        'Research the advantages and disadvantages of starting kindergarten earlier or later, then provide a decision framework.',
+      usedEvidenceIds: [],
+      gaps: ['evidence'],
+      confidence: 0.9,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        draftText: '请研究幼儿早入园还是迟入园，并给出建议。',
+        primaryText: 'New blank AI chat',
+        sourceTypes: ['manual'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      available: false,
+      suggestionType: 'none',
+    });
+  });
+
+  it('fails closed when the compiler response is invalid JSON', async () => {
+    llmGenerateJsonMock.mockRejectedValueOnce(
+      new SyntaxError('Unexpected token in JSON'),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        draftText:
+          'Research whether an earlier or later kindergarten start is better and recommend a decision.',
+        primaryText: 'New blank AI chat',
+        sourceTypes: ['manual'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      available: false,
+      suggestionType: 'none',
+    });
+  });
+
+  it('fails closed when the compiler request times out', async () => {
+    llmGenerateJsonMock.mockRejectedValueOnce(
+      new Error('llm_request_timeout'),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        draftText:
+          'Research whether an earlier or later kindergarten start is better and recommend a decision.',
+        primaryText: 'New blank AI chat',
+        sourceTypes: ['manual'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      available: false,
+      suggestionType: 'none',
+    });
+  });
+
+  it('keeps English prompt rewrites in English', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        draftText:
+          'Compare early versus late kindergarten entry using professional research and recommend a decision.',
+        primaryText: 'New blank AI chat',
+        sourceTypes: ['manual'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('rewrite_prompt');
+    expect(body.insertMode).toBe('replace_draft');
+    expect(body.insertText).toContain('preserving its original objective');
+    expect(body.insertText).not.toMatch(/[\u3400-\u9fff]/);
+  });
+
+  it('keeps task framing and target-tool fit in debug only for compose-to-AI prompts', async () => {
     const now = Math.floor(Date.now() / 1000);
     insertChunk({
       id: 9221,
@@ -264,9 +694,9 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.available).toBe(true);
-    expect(body.insertText).toContain('任务判断');
-    expect(body.insertText).toContain('目标工具适配');
-    expect(body.insertText).toContain('更适合的备选：codex_cli');
+    expect(body.insertText).not.toContain('任务判断');
+    expect(body.insertText).not.toContain('目标工具适配');
+    expect(body.insertText).not.toContain('更适合的备选：codex_cli');
     expect(body.debug.taskFrame.kind).toBe('repo_bugfix');
     expect(body.debug.targetToolFit.betterTool).toBe('codex_cli');
     expect(body.debug.sourceMix.codex_cli).toBeGreaterThan(0);
@@ -305,6 +735,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.insertMode).toBe('append_patch');
     expect(body.title).toBe('提问上下文补丁');
     expect(body.summary).toContain('数据源');
     expect(body.summary).toContain('点击 icon 只插入当前 prompt 草稿');
@@ -314,6 +745,13 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).toContain('来源处理');
     expect(body.insertText).toContain('Codex Sites');
     expect(body.debug.promptPatch.intentKind).toBe('codex_sites_dashboard');
+    expect(body.personaProjection).toMatchObject({
+      scene: 'web_ai_prompt_patch',
+      representationMode: 'context_pack_copyable',
+      voiceMode: 'never_speak_as_user',
+      usedCount: 0,
+      requiresPreview: true,
+    });
   });
 
   it('returns an estimate prompt patch with dry-run and missing-reason boundaries', async () => {
@@ -349,6 +787,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.insertMode).toBe('append_patch');
     expect(body.title).toBe('估算口径补丁');
     expect(body.insertText).toContain('依据字段');
     expect(body.insertText).toContain('Historical Story Points benchmark');
@@ -406,6 +845,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('prompt_patch');
+    expect(body.insertMode).toBe('append_patch');
     expect(body.confidence).toBe(0.82);
     expect(body.insertText).toContain('Historical Story Points benchmark');
     expect(body.insertText).toContain('missing reason / low confidence reason');
@@ -416,7 +856,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     );
   });
 
-  it('keeps Jira status prompts source-aware when composing to another AI', async () => {
+  it('keeps Jira status routing in debug without inserting tool recommendations', async () => {
     const now = Math.floor(Date.now() / 1000);
     insertChunk({
       id: 9222,
@@ -448,9 +888,11 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.available).toBe(true);
-    expect(body.insertText).toContain('任务判断');
-    expect(body.insertText).toContain('Jira/项目上下文');
-    expect(body.insertText).toContain('更适合的备选：jira_or_project_dashboard');
+    expect(body.insertText).not.toContain('任务判断');
+    expect(body.insertText).not.toContain('目标工具适配');
+    expect(body.insertText).not.toContain(
+      '更适合的备选：jira_or_project_dashboard',
+    );
     expect(body.debug.taskFrame.kind).toBe('jira_data_analysis');
     expect(body.debug.targetToolFit.betterTool).toBe(
       'jira_or_project_dashboard',
@@ -498,6 +940,8 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('context_pack');
+    expect(body.insertMode).toBe('append_patch');
     expect(body.insertText).toContain('Artifact lineage checklist');
     expect(
       body.evidence.some(
@@ -551,8 +995,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('context_pack');
-    expect(body.insertText).toContain('目标：AI VBG 的 BE 部分完成情况如何');
-    expect(body.insertText).toContain('仍需确认');
+    expect(body.insertMode).toBe('append_patch');
+    expect(body.insertText).toContain('补充上下文');
+    expect(body.insertText).not.toContain('目标：AI VBG 的 BE 部分完成情况如何');
+    expect(body.insertText).not.toContain('仍需确认');
     expect(body.evidence.map((item: any) => item.snippet).join('\n')).toContain(
       'RCV-148412',
     );
@@ -682,6 +1128,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.evidence[0].cue?.actionType).toBe('draft_hint');
     expect(body.evidence[0].cue?.cueKey).toContain('MTR-148115');
     expect(body.evidence[0].cue?.sourceRefs?.length).toBeGreaterThan(0);
+    expect(body.personaProjection).toMatchObject({
+      scene: 'jira_comment',
+      voiceMode: 'write_as_user',
+    });
     expect(body.debug.recall.sceneFrame.sceneType).toBe('jira_estimate');
     expect(body.debug.recall.sceneFrame.interactionSceneType).toBe(
       'jira_comment_composing',
@@ -901,9 +1351,14 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     );
     expect(body.insertText).not.toContain('我最喜欢聊了');
     expect(body.insertText).not.toContain('咱们一起捣鼓下');
-    expect(body.debug.personalization.confirmedStyleHintKeys).toContain(
-      'writing_style.ringcentral.peer.casual_reply.zh',
-    );
+    expect(body.personaProjection).toMatchObject({
+      version: 1,
+      audienceType: 'peer',
+      representationMode: 'draft_only',
+      requiresPreview: false,
+    });
+    expect(body.personaProjection.usedSlotKinds).toContain('writing_style');
+    expect(body.debug.personaProjection).toEqual(body.personaProjection);
     expect(llmGenerateMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({

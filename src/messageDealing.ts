@@ -1,4 +1,5 @@
 import { callLLMJsonAPI } from './llm';
+import { CAPABILITIES } from './analytics/capabilities';
 import {
   EnvConfigType,
   getEnvConfig,
@@ -1782,7 +1783,13 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
     }
     if (!body.prompt)
       body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
-    const dealResponse = await callLLMJsonAPI(body);
+    body.capability = body.capability || CAPABILITIES.MESSAGE_ANALYSIS;
+    body.feature = body.feature || 'message_analysis';
+    const dealResponse = await callLLMJsonAPI({
+      ...body,
+      capability: body.capability,
+      feature: body.feature,
+    });
     console.log('MessageDealing response:', dealResponse, {
       hasMessageData: Boolean(body.messageData),
       promptLength: String(body.prompt || '').length,

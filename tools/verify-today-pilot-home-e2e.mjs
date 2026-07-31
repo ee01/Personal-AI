@@ -1322,18 +1322,99 @@ try {
       hasText: '查看全部 4',
     })
     .waitFor({ timeout: 15000 });
+  const popupOverflowButton = overflowPopupPage.locator(
+    '.today-pilot-scope-handoff button',
+    {
+      hasText: '查看全部 4',
+    },
+  );
+  assert.match(
+    (await popupOverflowButton.getAttribute('title')) || '',
+    /只打开 Today Pilot 首页，不会刷新、写反馈、发送消息或执行动作/,
+    'popup overflow handoff should expose the no-effect boundary before click',
+  );
+  assert.match(
+    (await popupOverflowButton.getAttribute('aria-label')) || '',
+    /Top 3 之外还有 1 张 mission/,
+    'popup overflow handoff should expose the hidden mission count to assistive tech',
+  );
   await overflowPopupPage
     .locator('.today-pilot-scope-handoff', {
       hasText:
         'Top 3 之外还有 1 张 mission；打开 Today Pilot 首页只查看完整可见 brief，不会刷新、写反馈、发送消息或执行动作。',
     })
     .waitFor({ timeout: 15000 });
+  const popupCopyableCard = overflowPopupPage.locator('.today-pilot-card', {
+    hasText: '整理 Webpage-MCP 链接检查说明',
+  });
+  await popupCopyableCard.waitFor({ timeout: 15000 });
+  const popupCopyableMainButton = popupCopyableCard.locator(
+    '.today-pilot-card-main',
+  );
+  assert.match(
+    (await popupCopyableMainButton.getAttribute('title')) || '',
+    /Top 3 折叠快照/,
+    'popup card main button should identify the collapsed Top 3 snapshot',
+  );
+  assert.match(
+    (await popupCopyableMainButton.getAttribute('aria-label')) || '',
+    /不会刷新 brief、写反馈、复制上下文、发送消息或执行动作/,
+    'popup card main button should expose its navigation-only boundary',
+  );
+  const popupCopyDoneButton = popupCopyableCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /^完成$|^Done$/,
+    },
+  );
+  const popupCopyLaterButton = popupCopyableCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /^稍后$|^Later$/,
+    },
+  );
+  const popupCopyButton = popupCopyableCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /^复制$|^Copy$/,
+    },
+  );
+  assert.match(
+    (await popupCopyDoneButton.getAttribute('title')) || '',
+    /只写 Today Pilot 展示\/排序反馈/,
+    'popup done button should say it only writes Today Pilot display feedback',
+  );
+  assert.match(
+    (await popupCopyDoneButton.getAttribute('aria-label')) || '',
+    /不会完成来源任务、标记消息已读/,
+    'popup done button should not imply source task completion',
+  );
+  assert.match(
+    (await popupCopyLaterButton.getAttribute('title')) || '',
+    /6 小时内不进 Top 3/,
+    'popup later button should describe the Top 3 hiding window',
+  );
+  assert.match(
+    (await popupCopyLaterButton.getAttribute('aria-label')) || '',
+    /不会改来源任务排程、日历、动作执行时间/,
+    'popup later button should not imply source rescheduling',
+  );
+  assert.match(
+    (await popupCopyButton.getAttribute('title')) || '',
+    /生成通用 context pack 并写入本机剪贴板/,
+    'popup copy button should describe the clipboard-only context pack action',
+  );
+  assert.match(
+    (await popupCopyButton.getAttribute('aria-label')) || '',
+    /不会发送给外部 AI、批准或执行动作、写回来源系统或完成任务/,
+    'popup copy button should expose no-send and no-execute boundaries',
+  );
   await assertPopupLayoutWidth(overflowPopupPage);
   await overflowPopupPage
     .locator('.today-pilot-card', { hasText: '补齐本周状态快照' })
     .waitFor({ state: 'detached', timeout: 15000 });
   const fullBriefPagePromise = context.waitForEvent('page');
-  await overflowPopupPage.getByRole('button', { name: '查看全部 4' }).click();
+  await popupOverflowButton.click();
   const fullBriefPage = await fullBriefPagePromise;
   await fullBriefPage.waitForURL(/memory-exploring\.html#\//, {
     timeout: 15000,
@@ -1421,13 +1502,53 @@ try {
     'popup refresh button should expose the no-source-side-effect boundary to assistive tech',
   );
   await assertPopupLayoutWidth(popupPage);
-  await popupDecisionCard
-    .getByRole('button', { name: /去处理|Review/ })
-    .waitFor({ timeout: 15000 });
-  await assert.rejects(
-    popupDecisionCard
-      .getByRole('button', { name: /^复制$|^Copy$/ })
-      .waitFor({ timeout: 600 }),
+  const popupExternalReviewButton = popupDecisionCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /去处理|Review/,
+    },
+  );
+  await popupExternalReviewButton.waitFor({ timeout: 15000 });
+  assert.match(
+    (await popupExternalReviewButton.getAttribute('title')) || '',
+    /只打开动作证据对应的处理页复核外部执行/,
+    'popup external review button should say it only opens the handling page',
+  );
+  assert.match(
+    (await popupExternalReviewButton.getAttribute('aria-label')) || '',
+    /不会批准、拒绝、重试或执行 OpenClaw/,
+    'popup external review button should not imply execution from the popup',
+  );
+  const popupDecisionDoneButton = popupDecisionCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /^完成$|^Done$/,
+    },
+  );
+  const popupDecisionLaterButton = popupDecisionCard.locator(
+    '.today-pilot-card-actions button',
+    {
+      hasText: /^稍后$|^Later$/,
+    },
+  );
+  assert.match(
+    (await popupDecisionDoneButton.getAttribute('title')) || '',
+    /不会完成来源任务、标记消息已读/,
+    'popup external done button should keep the source task boundary',
+  );
+  assert.match(
+    (await popupDecisionLaterButton.getAttribute('aria-label')) || '',
+    /不会改来源任务排程、日历、动作执行时间/,
+    'popup external later button should keep the source schedule boundary',
+  );
+  assert.equal(
+    await popupDecisionCard
+      .locator('.today-pilot-card-actions button', {
+        hasText: /^复制$|^Copy$/,
+      })
+      .count(),
+    0,
+    'external execution popup card should not show the normal copy button',
   );
 
   failTodayPilotRequest = true;
@@ -1450,7 +1571,7 @@ try {
   await popupDecisionCard.waitFor({ timeout: 15000 });
 
   delayFeedbackCardId = visibleDecision.id;
-  await popupDecisionCard.getByRole('button', { name: /^完成$|^Done$/ }).click();
+  await popupDecisionDoneButton.click();
   await popupPage
     .locator('.today-pilot-message', {
       hasText: '正在提交反馈：完成',
@@ -1464,17 +1585,30 @@ try {
   await popupDecisionCard.waitFor({ timeout: 15000 });
   assert.equal(
     await popupDecisionCard
-      .getByRole('button', { name: /^处理中$|^Working$/ })
+      .locator('.today-pilot-card-actions button', {
+        hasText: /^处理中$|^Working$/,
+      })
       .isDisabled(),
     true,
     'popup active feedback button should stay disabled while feedback is pending',
   );
   assert.equal(
     await popupDecisionCard
-      .getByRole('button', { name: /^稍后$|^Later$/ })
+      .locator('.today-pilot-card-actions button', {
+        hasText: /^稍后$|^Later$/,
+      })
       .isDisabled(),
     true,
     'popup sibling feedback button should stay disabled while feedback is pending',
+  );
+  assert.match(
+    (await popupDecisionCard
+      .locator('.today-pilot-card-actions button', {
+        hasText: /^处理中$|^Working$/,
+      })
+      .getAttribute('title')) || '',
+    /正在提交.*完成反馈/,
+    'popup active feedback button title should switch to a pending boundary',
   );
   const releasePopupFeedback = await waitForDelayedFeedbackHook();
   releasePopupFeedback();

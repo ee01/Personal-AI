@@ -96,6 +96,94 @@ function capsuleFixture(status = 'saved') {
           evidenceAnchorIds: ['anchor-1'],
           takeawayCount: 1,
           triggerCount: 1,
+          deep: {
+            schemaVersion: 1,
+            status: 'ready',
+            inputHash: 'verify-distillation-input-hash',
+            oneLineCue: 'Falcon 交接讨论出现时，带回 owner checklist 与发布风险。',
+            compactMemo:
+              'Falcon 资料要求把 owner checklist、客户沟通和 launch risk 绑定到来源证据。',
+            fullMemo:
+              '这份 Falcon handoff 资料描述了负责人核对清单、客户沟通、发布风险和下一次 readiness review；所有衍生产物都引用已保存证据跨度。',
+            triggerCards: [
+              {
+                sceneType: 'meeting',
+                description: 'Falcon readiness review 会议中展示 compact memo。',
+                showAs: 'source_card',
+                budget: 'compact',
+                keywords: ['Falcon', 'readiness review'],
+                confidence: 0.91,
+                evidenceSpanIds: ['capsule-falcon-source:S1'],
+              },
+            ],
+            factCandidates: [
+              {
+                title: '交接负责人候选',
+                statement: '来源资料把 owner checklist 作为发布交接的一部分。',
+                authority: 'source_only',
+                confidence: 0.87,
+                evidenceSpanIds: ['capsule-falcon-source:S1'],
+              },
+            ],
+            openQuestions: [
+              {
+                question: '下一次 readiness review 的负责人是否已确认？',
+                reason: '资料提到 review，但没有给出已确认负责人。',
+                escalation: 'when_relevant',
+                confidence: 0.75,
+                evidenceSpanIds: ['capsule-falcon-source:S1'],
+              },
+            ],
+            skillSeeds: [
+              {
+                seedKey: 'falcon-handoff-checklist',
+                title: 'Falcon 交接检查流程',
+                summary: '按证据核对 owner、客户沟通、发布风险和 review。',
+                confidence: 0.86,
+                evidenceSpanIds: ['capsule-falcon-source:S1'],
+              },
+            ],
+            storylineSeeds: [
+              {
+                seedKey: 'falcon-handoff-story',
+                title: 'Falcon 交接叙事',
+                claim: '从 owner checklist 到 readiness review 组织一份可复核说明。',
+                audience: 'Falcon 项目组',
+                confidence: 0.84,
+                evidenceSpanIds: ['capsule-falcon-source:S1'],
+              },
+            ],
+            evidenceSpans: [
+              {
+                id: 'capsule-falcon-source:S1',
+                capsuleId: 'capsule-falcon-source',
+                inputHash: 'verify-distillation-input-hash',
+                spanIndex: 1,
+                spanKind: 'anchor',
+                locator: 'https://source.example.com/falcon/handoff',
+                text: 'Falcon launch handoff notes preserve the owner checklist and next readiness review.',
+                confidence: 0.92,
+              },
+            ],
+            cluster: {
+              key: 'url:source.example.com/falcon/handoff',
+              size: 2,
+              relatedCapsuleIds: ['capsule-falcon-related'],
+            },
+            policyReceipt: {
+              state: 'ready',
+              detail: 'Deep artifacts are evidence-grounded candidates.',
+              blocked: [
+                'profile_fact_confirmation',
+                'profile_write',
+                'action_execution',
+                'automatic_skill_publish',
+                'storyline_writeback',
+              ],
+            },
+            attempts: 1,
+            generatedAt: nowSeconds - 1200,
+          },
         },
       },
       actionReceipt:
@@ -364,24 +452,24 @@ try {
   await page
     .getByText('没有创建、撤销、更新备注、写入 web 检索信号或同步外部系统')
     .waitFor({ timeout: 10000 });
-  await page.getByRole('button', { name: '重试' }).waitFor({
+  await page.getByRole('button', { name: '重试', exact: true }).waitFor({
     timeout: 10000,
   });
-  await page.getByRole('button', { name: '返回时间轴' }).waitFor({
+  await page.getByRole('button', { name: '返回时间轴', exact: true }).waitFor({
     timeout: 10000,
   });
   assert.equal(
-    await page.getByRole('button', { name: '打开来源' }).count(),
+    await page.getByRole('button', { name: /打开来源/ }).count(),
     0,
     'failed source memory detail should not expose source-opening actions',
   );
   assert.equal(
-    await page.getByRole('link', { name: '查看关联记忆' }).count(),
+    await page.getByRole('link', { name: /查看关联记忆/ }).count(),
     0,
     'failed source memory detail should not link to a recall signal',
   );
   assert.equal(
-    await page.getByRole('button', { name: '撤销资料记忆' }).count(),
+    await page.getByRole('button', { name: /撤销资料记忆/ }).count(),
     0,
     'failed source memory detail should not expose destructive actions',
   );
@@ -462,6 +550,64 @@ try {
     .locator('.distillation-downstream')
     .getByText('自动写用户画像、自动创建任务、外部写入或同步')
     .waitFor({ timeout: 10000 });
+  const deepPanel = distillationPanel.locator('.deep-distillation');
+  await deepPanel.getByText('异步深度层').waitFor({ timeout: 10000 });
+  await deepPanel.getByText('证据约束蒸馏').waitFor({ timeout: 10000 });
+  await deepPanel
+    .locator('.deep-status-badge', { hasText: /^已就绪$/ })
+    .waitFor({ timeout: 10000 });
+  await deepPanel.getByText('证据跨度', { exact: true }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel.getByText('1 条', { exact: true }).waitFor({ timeout: 10000 });
+  await deepPanel
+    .getByText('url:source.example.com/falcon/handoff · 2 条独立来源')
+    .waitFor({ timeout: 10000 });
+  await deepPanel.getByRole('heading', { name: '场景触发卡' }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel.getByText('Falcon readiness review 会议中展示 compact memo。').waitFor({
+    timeout: 10000,
+  });
+  await deepPanel.getByRole('heading', { name: '事实候选' }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel
+    .getByText('仅代表来源陈述，不是已确认画像事实')
+    .waitFor({ timeout: 10000 });
+  await deepPanel.getByRole('heading', { name: '开放问题' }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel
+    .getByText('只在相关场景出现时交给 Ask / Reflection')
+    .waitFor({ timeout: 10000 });
+  await deepPanel.getByRole('heading', { name: 'Skill seeds' }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel
+    .getByText('重复且高置信后才进入未激活的 Skill 建议')
+    .waitFor({ timeout: 10000 });
+  await deepPanel.getByRole('heading', { name: 'Storyline seeds' }).waitFor({
+    timeout: 10000,
+  });
+  await deepPanel
+    .getByText('只生成可复核草稿，不自动写回 Slides、Docs 或消息。')
+    .waitFor({ timeout: 10000 });
+  await deepPanel
+    .getByText('不会自动执行：确认用户画像事实、写入用户画像、执行操作、自动发布 Skill、Storyline 自动写回。')
+    .waitFor({ timeout: 10000 });
+  const evidenceDetails = deepPanel.getByText('查看 1 条 evidence spans');
+  await evidenceDetails.click();
+  await deepPanel.getByText('capsule-falcon-source:S1').waitFor({
+    timeout: 10000,
+  });
+  const storylineButton = deepPanel.getByRole('button', { name: /Falcon 交接叙事/ });
+  const storylineTitle = await storylineButton.getAttribute('title');
+  assert.match(
+    storylineTitle || '',
+    /只读取当前 capsule 已校验的 evidence spans 并生成可复制草稿/,
+    'storyline seed should expose its grounded draft-only boundary',
+  );
   await page
     .locator('.subtitle')
     .getByText('Falcon handoff owner, launch risk')
@@ -486,16 +632,75 @@ try {
     timeout: 10000,
   });
 
-  const timelineHref = await page
-    .getByRole('link', { name: '查看关联记忆' })
-    .getAttribute('href');
+  const timelineLink = page.getByRole('link', { name: /查看关联记忆/ });
+  const timelineHref = await timelineLink.getAttribute('href');
   assert.ok(
     timelineHref?.includes('#/timeline?focus=source-memory-message-falcon'),
     `timeline link should target the linked web memory signal: ${timelineHref}`,
   );
+  const timelineTitle = await timelineLink.getAttribute('title');
+  assert.match(
+    timelineTitle || '',
+    /只读复核当前已返回信号，不重新召回、不写入/,
+    'linked memory action should expose a read-only recall-signal boundary',
+  );
+
+  const openSourceButton = page.getByRole('button', { name: /打开来源/ });
+  const openSourceTitle = await openSourceButton.getAttribute('title');
+  assert.match(
+    openSourceTitle || '',
+    /不会新增、撤销或更新资料记忆/,
+    'open source action should expose the no-write/no-fact-confirmation boundary',
+  );
+  assert.match(
+    openSourceTitle || '',
+    /不插入输入框、发送内容、确认事实或同步外部系统/,
+    'open source action should say it does not send or sync',
+  );
+
+  await page
+    .locator('#source-memory-note-input')
+    .fill('下一次 Falcon readiness review 时引用这份 handoff source');
+  const noteSubmitButton = page.getByRole('button', {
+    name: /提交备注刷新/,
+  });
+  const noteSubmitTitle = await noteSubmitButton.getAttribute('title');
+  assert.match(
+    noteSubmitTitle || '',
+    /更新 Falcon handoff source packet 的备注、关联 web 检索信号和资料蒸馏回执/,
+    'note submit action should describe the backend-controlled refresh target',
+  );
+  assert.match(
+    noteSubmitTitle || '',
+    /不自动写画像、创建任务、确认事实或同步外部系统/,
+    'note submit action should expose its non-side-effect boundary',
+  );
+  const noteResetButton = page.getByRole('button', {
+    name: /恢复当前备注/,
+  });
+  const noteResetTitle = await noteResetButton.getAttribute('title');
+  assert.match(
+    noteResetTitle || '',
+    /不请求 Memory Service、不刷新关联 web 检索信号或资料蒸馏、不撤销资料/,
+    'note reset action should stay explicitly local-only',
+  );
+  await noteResetButton.click();
+
+  const dismissButton = page.getByRole('button', { name: /撤销资料记忆/ });
+  const dismissTitle = await dismissButton.getAttribute('title');
+  assert.match(
+    dismissTitle || '',
+    /提交后移除 Falcon handoff source packet 的关联 web 检索信号/,
+    'dismiss action should describe the recall-signal effect before click',
+  );
+  assert.match(
+    dismissTitle || '',
+    /不会删除原网页、外部系统内容、已保存复核记录，也不会外发或同步/,
+    'dismiss action should expose what it will not delete or sync',
+  );
 
   const sourcePagePromise = context.waitForEvent('page');
-  await page.getByRole('button', { name: '打开来源' }).click();
+  await openSourceButton.click();
   const sourcePage = await sourcePagePromise;
   await sourcePage.waitForLoadState('domcontentloaded');
   assert.equal(
@@ -504,6 +709,15 @@ try {
   );
   assert.equal(openSourceCount, 1);
   await sourcePage.close();
+
+  await storylineButton.click();
+  await page.waitForURL(/#\/storylines\/draft\?/);
+  const storylineUrl = new URL(page.url());
+  const storylineQuery = new URLSearchParams(storylineUrl.hash.split('?')[1] || '');
+  assert.equal(storylineQuery.get('source'), 'source_memory_seed');
+  assert.equal(storylineQuery.get('capsuleId'), 'capsule-falcon-source');
+  assert.equal(storylineQuery.get('seedId'), 'falcon-handoff-story');
+  assert.equal(storylineQuery.get('target'), 'speaker_notes');
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/source-memory/capsule-sensitive-source`,
@@ -518,7 +732,7 @@ try {
     .getByText('来源链接已隐藏：包含敏感参数；资料详情仍可复核已保存内容。')
     .waitFor({ timeout: 10000 });
   assert.equal(
-    await page.getByRole('button', { name: '打开来源' }).count(),
+    await page.getByRole('button', { name: /打开来源/ }).count(),
     0,
     'tokenized source URLs should not expose an open-source action',
   );
@@ -539,7 +753,7 @@ try {
       timeout: 10000,
     });
 
-  await page.getByRole('button', { name: '撤销资料记忆' }).click();
+  await page.getByRole('button', { name: /撤销资料记忆/ }).click();
   await page
     .locator('.status-chip.dismissed', { hasText: /^已撤销$/ })
     .waitFor({ timeout: 10000 });
@@ -557,12 +771,12 @@ try {
     .waitFor({ timeout: 10000 });
   assert.equal(dismissCount, 1);
   assert.equal(
-    await page.getByRole('button', { name: '撤销资料记忆' }).count(),
+    await page.getByRole('button', { name: /撤销资料记忆/ }).count(),
     0,
     'dismissed source memory should not keep the destructive action visible',
   );
   assert.equal(
-    await page.getByRole('link', { name: '查看关联记忆' }).count(),
+    await page.getByRole('link', { name: /查看关联记忆/ }).count(),
     0,
     'dismissed source memory should not link to a removed web memory signal',
   );

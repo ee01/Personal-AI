@@ -245,7 +245,16 @@ const contextCard = {
       confirmed: true,
     },
   ],
-  relationshipHints: [],
+  relationshipHints: [
+    {
+      relationType: 'demo collaborator',
+      targetId: secondPerson.id,
+      targetName: secondPerson.name,
+      targetType: 'Person',
+      strength: 0.64,
+      context: 'Shared owner review for the Relationship Radar demo',
+    },
+  ],
   openLoops: [
     {
       id: 'loop-alice-owner',
@@ -265,7 +274,7 @@ const contextCard = {
       evidenceRef,
     },
   ],
-  doNotAssume: [],
+  doNotAssume: ['不要把 Alice Radar 当成最终 demo owner，先确认当前责任人。'],
   evidenceRefs: [evidenceRef],
   retrievalHints: {
     entityIds: [person.id],
@@ -1055,6 +1064,78 @@ try {
     .locator('.action-card')
     .getByText('推进 Relationship Radar demo 前先确认 owner 与下一步')
     .waitFor({ timeout: 15000 });
+  await expectControlBoundary(
+    page.locator('.action-card').filter({ hasText: '先确认 demo owner' }).first(),
+    [
+      /现在建议：优先/,
+      /来自最近的未闭环消息/,
+      /带 消息证据 依据/,
+      /Alice Radar 的默认隐藏敏感上下文版本/,
+      /不会确认关系事实/,
+      /刷新上下文卡/,
+    ],
+    'relationship context action suggestion card',
+  );
+  await expectControlBoundary(
+    page
+      .locator('.panel')
+      .filter({ hasText: '已知事实' })
+      .locator('.item')
+      .filter({ hasText: 'relationship_context' })
+      .first(),
+    [
+      /人物事实：已确认事实/,
+      /relationship_context/,
+      /置信度 90%/,
+      /复制前复核/,
+      /不会重新确认/,
+    ],
+    'relationship context known fact row',
+  );
+  await expectControlBoundary(
+    page
+      .locator('.panel')
+      .filter({ hasText: '关联对象' })
+      .locator('.relation-item')
+      .filter({ hasText: 'Bob Radar' })
+      .first(),
+    [
+      /关系提示/,
+      /Bob Radar/,
+      /demo collaborator/,
+      /强度 64%/,
+      /不会确认关系边/,
+      /改关系图谱/,
+    ],
+    'relationship context relationship hint row',
+  );
+  await expectControlBoundary(
+    page.locator('.boost-cloud .chip').filter({ hasText: 'Relationship Radar' }).first(),
+    [
+      /检索增强提示/,
+      /Relationship Radar/,
+      /默认隐藏敏感上下文版本/,
+      /不会重跑搜索或 Ask/,
+      /不会改变 RecallEngine 排名/,
+    ],
+    'relationship context retrieval boost chip',
+  );
+  await expectControlBoundary(
+    page
+      .locator('.panel')
+      .filter({ hasText: '不要假设' })
+      .locator('.item')
+      .filter({ hasText: '最终 demo owner' })
+      .first(),
+    [
+      /不要假设/,
+      /最终 demo owner/,
+      /谨慎边界/,
+      /不会删除事实/,
+      /同步外部系统/,
+    ],
+    'relationship context do-not-assume row',
+  );
   await page.getByText('已隐藏敏感上下文').waitFor({ timeout: 15000 });
   await page.getByText('6 条可能敏感的人物上下文默认未纳入').waitFor({
     timeout: 15000,
