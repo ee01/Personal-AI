@@ -126,6 +126,8 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 
 用户不需要手动生成简报。独立于完整 Proactive Scheduler 的轻量 `KeystoneBriefComposerService` 维护循环会在 memory-service 启动时运行，此后默认每 15 分钟运行一次；它从活跃 Reflection Thread 发现稳定主题，在工作范围的 `messages_raw` 中查找近 180 天证据。至少两条独立来源且有一条非 reflection / derived 权威时，才确定性组成或刷新简报。每轮每位用户最多处理两份，重复来源签名跳过；用户隐藏或标记不准的简报受保护，不会被下一轮自动恢复。页面打开时的 `/context-recall` 只匹配已经准备好的简报，不调用 LLM、不等待生成，也不因浏览页面产生写入。
 
+简报的用户可读语言服从 Options 页的默认语言。Options 把 `personalAiUiPreferences.language` 同步为 active `user_profile_items.language_preference`；Composer 据此生成中文或 English 的标题、摘要、事实、待确认问题、时效原因和使用提示，并把语言写入 `compositionVersion`。语言改变后，即使证据没有变化，同一 `briefKey` 也会在后台刷新为新语言，不创建重复简报。Lens 侧的状态、栏目、日期、按钮和操作回执直接读取同一 Options 语言；人名、项目名、群组名、URL、Jira key、数字及来源标题/证据保持原文，便于复核。语言转换只允许等义转换既有字段，不能增加、删除或推断事实；转换失败时本轮不覆盖已有简报，等待后续维护重试。
+
 `/context-recall` 在普通召回和 Evidence Cohesion Gate 完成后，尝试同步、确定性匹配一份简报。匹配失败或 Brief Service 异常必须 fail open：响应继续返回原有 `matches`，Lens 继续走普通卡片，不允许简报故障拖垮被动召回。
 
 | 简报状态 | Rest / Hover Peek | Expanded Card 首屏 | 原始关联记忆 |
@@ -142,6 +144,7 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 - 查看来源图、打开原始记忆、复制摘要和反馈都不会写入用户画像、创建任务、确认事实、插入输入框或发送到当前网页。来源详情仍沿用原有安全 URL 和只读打开边界。
 - Selection Memory Search 和 Rehearsal 保持各自 variant。`selected_text`、`selection_memory_search` 或首条结果为 Rehearsal 时，Brief Service 不接管首屏，即使响应里误带 brief，renderer 也必须忽略。
 - Brief 的 `shown`、`opened`、`evidence_opened`、`copied`、`useful`、`hidden`、`not_accurate`、`used_in_ask`、`used_by_compiler` 使用专用事件；普通 Lens 的分页、来源打开、Autopilot 和 recall feedback 语义保持不变。
+- Options 选择中文时，简报壳和用户可读合成内容使用中文；选择 English 时使用 English。原始来源标题和证据不翻译，且语言切换必须刷新现有自动简报而不是等待新证据。
 
 缓存重放必须同时保留 `keystoneBrief` 和原始 `matches`，这样同页恢复时仍能维持首屏层级；隐藏或标记不准后只移除 brief，不删除本轮原始召回结果。关键回归由 `memory-service/src/__tests__/keystone-brief-composer.test.ts`、`tools/verify-webpage-memory-detection.ts`、`desktop-app/scripts/webpage-memory-detection-check.mjs` 和 `keystone-memory-briefs` eval suite 覆盖。其中 E2E 必须构造同轮同时含 `keystoneBrief + changeProjections` 的响应，并断言简报独占首屏。
 

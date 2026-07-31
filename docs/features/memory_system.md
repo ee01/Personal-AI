@@ -342,6 +342,8 @@ Gate 不修改存储分类。原始请求里的明确 issue/project/entity hint 
 
 `KeystoneBriefService` 保存一份围绕稳定 `briefKey` 和工作对象的多来源简报。日常生产者是独立于完整 Proactive Scheduler 的轻量 `KeystoneBriefComposerService` 维护循环：服务启动时运行，此后默认每 15 分钟运行；即使 `PROACTIVE_SCHEDULER_ENABLED=false`，也不会要求用户手动生成或开启通知、动作、Dream 等后台任务。它从活跃 Reflection Thread 确定性发现稳定主题，再从近 180 天工作记忆中收集至少两条独立原始来源，组成 title、summary、claims、scene anchors 和 source map；每轮有界处理并按来源签名幂等刷新。用户隐藏、标记不准或由非自动版本维护的简报不会被后台覆盖。`POST /api/v1/keystone-briefs/mine` 保留为内部导入、测试与维护入口，不是用户日常操作。
 
+Composer 将 Options 同步到画像的 `language_preference` 纳入生成签名。用户可读合成字段按该语言做受约束的等义转换，语言变化会触发同一 `briefKey` 刷新；原始 source map、来源标题和证据片段保持原文。具体双语栏目及展示行为由 [Memory Lens](./memory_lens.md#关键记忆简报keystone-memory-brief) 维护。
+
 自动生成与页面召回解耦：被动 `/context-recall` fast path 不调用 LLM，也不会在用户打开网页时临时生成摘要；它只同步匹配已经准备好的简报。后台生成失败时不影响普通召回，证据不足时保持无简报。简报、变化脉络和普通记忆如何争夺 Lens 首屏，统一由 [Memory Lens 展示地图](./memory_lens.md#展示地图与首屏仲裁) 定义，系统文档不重复维护 UI 细节。
 
 准入是确定性的：title/summary 必须存在；至少两条 `sourceType:sourceId` 独立来源；至少一条来源不是 `derived` / `reflection`；至少一个 fact/decision/constraint/trap claim；每个 claim 的 `sourceRefs` 都必须能解析到 source map。未达到门槛保存为 `candidate`，受限来源保存为 `blocked`，过期或 `stale_risk` 保存/呈现为 `stale`，显式冲突可进入 `partial`；只有 `ready` 可作为无冲突首屏简报。
