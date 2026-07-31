@@ -2122,7 +2122,7 @@ async function verifyRehearsalLensPresentation(server, context) {
   await page.close();
 }
 
-async function verifyKeystoneBriefMemoryLens(server, context) {
+async function verifyKeystoneBriefMemoryLens(server, context, serviceWorker) {
   const readyPage = await context.newPage();
   const readyDiagnostics = attachPageDiagnostics(readyPage, 'keystone-ready');
   const readyStartCount = server.contextRecallRequests.length;
@@ -2285,6 +2285,41 @@ async function verifyKeystoneBriefMemoryLens(server, context) {
     throw new Error(staleDiagnostics.join('\n'));
   }
   await stalePage.close();
+
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.set({
+      personalAiUiPreferences: { language: 'en-US', updatedAt: Date.now() },
+    });
+  });
+  const englishPage = await context.newPage();
+  const englishDiagnostics = attachPageDiagnostics(englishPage, 'keystone-english');
+  await englishPage.goto(`${server.origin}/keystone-english`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await englishPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await englishPage.locator('.pai-context-bubble').click();
+  await englishPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const englishCardText = await englishPage.locator('.pai-context-card').innerText();
+  assert.match(englishCardText, /Keystone Brief/);
+  assert.match(englishCardText, /Current state/);
+  assert.match(englishCardText, /Constraints and boundaries/);
+  assert.match(englishCardText, /Research the RingCX WhatsApp and SMS infrastructure/);
+  assert.match(englishCardText, /View evidence and related memories/);
+  assert.match(englishCardText, /Copy redacted summary/);
+  assert.doesNotMatch(englishCardText, /关键简报|当前状态|约束与边界|查看证据与相关记忆/);
+  if (englishDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    throw new Error(englishDiagnostics.join('\n'));
+  }
+  await englishPage.close();
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.set({
+      personalAiUiPreferences: { language: 'zh-CN', updatedAt: Date.now() },
+    });
+  });
 }
 
 async function verifyNormalPage(server, context, serviceWorker, extensionId) {
@@ -6380,7 +6415,7 @@ try {
   await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
   await verifyRingCentralLensSuppressedByComposeAssist(server, context);
   await verifyRehearsalLensPresentation(server, context);
-  await verifyKeystoneBriefMemoryLens(server, context);
+  await verifyKeystoneBriefMemoryLens(server, context, serviceWorker);
   await verifyJiraIssueContext(server, context);
   await verifySelectedTextTrigger(server, context);
   await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
