@@ -6415,7 +6415,7 @@ try {
   await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
   await verifyRingCentralLensSuppressedByComposeAssist(server, context);
   await verifyRehearsalLensPresentation(server, context);
-  await verifyKeystoneBriefMemoryLens(server, context, serviceWorker);
+  await verifyKeystoneBriefMemoryLens(server, context, launch.serviceWorker);
   await verifyJiraIssueContext(server, context);
   await verifySelectedTextTrigger(server, context);
   await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);

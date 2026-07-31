@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>记忆回声抑制器 · Quick Ask 场景 Demo</title>
+  <!--
+    Assumptions:
+    1. 生产形态复用现有 RingCentral 工作现场与 Quick Ask 浮窗，不新增独立页面。
+    2. 顶部深色控制条只用于演示 Before / After 与三种状态，不属于产品 UI。
+    3. MTR-147866 与 0.1d → 0.2d 是依据真实工作流脱敏重组的演示数据，不代表当前 Jira 真值。
+    4. “折叠”只改变证据计权与送入模型的上下文，不删除、覆盖或写回任何原始记忆。
+    Design intent:
+    - 默认静默；只有回声折叠改变结论时，才显示一句可展开的回执。
+    - 先解释用户后果，再按需展示 origin family / derivation edge 等内部结构。
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #dfe4e7;
+      --host: #f7f8f8;
+      --surface: #ffffff;
+      --surface-soft: #f2f5f4;
+      --surface-strong: #202728;
+      --ink: #172022;
+      --ink-soft: #465255;
+      --muted: #6e797b;
+      --line: #d7dddd;
+      --line-strong: #b7c1c2;
+      --green: #17695d;
+      --green-soft: #e5f1ee;
+      --amber: #855709;
+      --amber-soft: #fff2d8;
+      --red: #983d37;
+      --red-soft: #f8e9e7;
+      --blue: #345b78;
+      --blue-soft: #e8eff5;
+      --shadow: 0 22px 56px rgba(24, 34, 36, 0.19), 0 3px 12px rgba(24, 34, 36, 0.09);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+    button:focus-visible {
+      outline: 3px solid rgba(52, 91, 120, 0.32);
+      outline-offset: 2px;
+    }
+    [hidden] { display: none !important; }
+
+    .prototype-bar {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 10px 22px;
+      background: var(--surface-strong);
+      color: #fff;
+      border-bottom: 1px solid #101617;
+    }
+    .prototype-title { min-width: 214px; }
+    .prototype-title strong { display: block; font-size: 14px; }
+    .prototype-title span { display: block; margin-top: 3px; color: #bac4c5; font-size: 11px; }
+    .switch-group {
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(104px, auto);
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid #4d585a;
+      border-radius: 7px;
+      background: #30393b;
+    }
+    .switch-label {
+      align-self: center;
+      color: #9eabad;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .switch-button, .reset-button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: #d1d8d9;
+      cursor: pointer;
+    }
+    .switch-button { padding: 8px 13px; white-space: nowrap; }
+    .switch-button:hover, .reset-button:hover { background: #3b4648; color: #fff; }
+    .switch-button[aria-pressed="true"] { background: #fff; color: var(--ink); font-weight: 760; }
+    .mode-group { grid-auto-columns: minmax(78px, auto); }
+    .reset-button {
+      width: 42px;
+      margin-left: auto;
+      border: 1px solid #4d585a;
+      font-size: 17px;
+    }
+
+    .stage { padding: 26px; }
+    .host-window {
+      position: relative;
+      width: min(1420px, 100%);
+      height: min(820px, calc(100vh - 120px));
+      min-height: 650px;
+      margin: 0 auto;
+      overflow: hidden;
+      background: var(--host);
+      border: 1px solid #adb7b8;
+      border-radius: 8px;
+      box-shadow: 0 24px 64px rgba(26, 36, 38, .16);
+    }
+    .host-topbar {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 18px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+    .window-dots { display: flex; gap: 7px; }
+    .window-dots i { width: 9px; height: 9px; border-radius: 50%; background: #c8d0d1; }
+    .host-brand { font-size: 13px; font-weight: 800; }
+    .host-search {
+      width: min(430px, 40vw);
+      margin: 0 auto;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f2f4f4;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .host-avatar {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #dbe7ed;
+      color: #24475c;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .workspace {
+      height: calc(100% - 54px);
+      display: grid;
+      grid-template-columns: 70px 286px minmax(0, 1fr);
+    }
+    .rail {
+      padding: 14px 10px;
+      background: #273032;
+      color: #b9c2c3;
+      border-right: 1px solid #161c1d;
+    }
+    .rail-item {
+      width: 48px;
+      min-height: 48px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 8px;
+      border-radius: 7px;
+      font-size: 11px;
+      text-align: center;
+    }
+    .rail-item.active { background: #3c494b; color: #fff; }
+    .conversation-list { overflow: hidden; background: #f1f3f3; border-right: 1px solid var(--line); }
+    .list-head { padding: 20px 18px 12px; font-size: 16px; font-weight: 780; }
+    .conversation {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 68px;
+      padding: 10px 14px;
+      border-top: 1px solid #e1e6e6;
+    }
+    .conversation.active { background: #fff; box-shadow: inset 3px 0 0 var(--green); }
+    .conversation-avatar {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #d7e5e1;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .conversation-title { overflow: hidden; font-size: 12px; font-weight: 730; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-preview { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-time { color: #8a9496; font-size: 10px; }
+
+    .thread { position: relative; min-width: 0; overflow: hidden; background: #fff; }
+    .thread-head {
+      height: 70px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+    }
+    .thread-title { font-weight: 780; }
+    .thread-subtitle { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .thread-meta { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .messages {
+      height: calc(100% - 132px);
+      overflow: hidden;
+      padding: 22px 28px 110px;
+      background: linear-gradient(180deg, #fff 0%, #fafbfb 100%);
+    }
+    .day-marker { margin: 0 0 18px; color: #8a9496; font-size: 10px; text-align: center; }
+    .message-row { display: grid; grid-template-columns: 34px minmax(0, 640px); gap: 10px; margin-bottom: 20px; }
+    .message-row.me { margin-left: 44px; }
+    .sender-avatar {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #e1e7ea;
+      color: #46575c;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .message-name { margin-bottom: 5px; font-size: 11px; font-weight: 720; }
+    .message-name time { margin-left: 6px; color: #949d9f; font-size: 9px; font-weight: 500; }
+    .message-bubble {
+      width: fit-content;
+      max-width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #e0e5e5;
+      border-radius: 6px;
+      background: #f8f9f9;
+      color: var(--ink-soft);
+      font-size: 12px;
+      line-height: 1.48;
+    }
+    .quote {
+      margin-bottom: 7px;
+      padding-left: 9px;
+      border-left: 2px solid #a8b5b7;
+      color: #647174;
+      font-size: 10px;
+    }
+    .message-input {
+      position: absolute;
+      right: 24px;
+      bottom: 18px;
+      left: 24px;
+      height: 58px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      color: #98a1a3;
+      font-size: 12px;
+    }
+
+    .quick-ask {
+      position: absolute;
+      z-index: 5;
+      top: 86px;
+      right: 28px;
+      width: min(540px, calc(100% - 410px));
+      min-width: 450px;
+      max-height: calc(100% - 118px);
+      overflow: auto;
+      border: 1px solid rgba(255, 255, 255, .94);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .97), rgba(241, 246, 246, .94));
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(212, 221, 221, .45);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
+    }
+    .ask-head {
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 15px;
+      border-bottom: 1px solid rgba(105, 120, 122, .14);
+    }
+    .product-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      object-fit: cover;
+      box-shadow: 0 2px 7px rgba(29, 45, 46, .14);
+    }
+    .ask-name { font-size: 13px; font-weight: 800; }
+    .ask-scope { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .ask-boundary { margin-left: auto; color: #728082; font-size: 10px; }
+    .ask-body { padding: 15px 16px 12px; }
+    .user-question {
+      width: fit-content;
+      max-width: 92%;
+      margin-left: auto;
+      padding: 9px 11px;
+      border-radius: 9px 9px 3px 9px;
+      background: #dfe8f0;
+      color: #2b4253;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .answer { margin-top: 14px; }
+    .answer-kicker { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+    .answer-value { margin-top: 5px; font-size: 25px; font-weight: 790; letter-spacing: -.02em; }
+    .answer-copy { margin: 7px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
+    .answer-value.before { color: var(--red); }
+    .answer-value.after { color: var(--green); }
+    .answer-value.neutral { color: var(--ink); }
+
+    .confidence-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .confidence-track { flex: 1; height: 4px; overflow: hidden; border-radius: 2px; background: #dfe5e5; }
+    .confidence-fill { height: 100%; background: var(--green); transition: width 220ms ease; }
+
+    .echo-receipt {
+      margin-top: 13px;
+      border: 1px solid #c8d9d4;
+      border-left: 3px solid var(--green);
+      border-radius: 7px;
+      background: rgba(229, 241, 238, .8);
+    }
+    .echo-receipt.warning { border-color: #ecd8ad; border-left-color: var(--amber); background: rgba(255, 242, 216, .78); }
+    .receipt-summary {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+    }
+    .receipt-metric { min-width: 106px; font-size: 15px; font-weight: 800; }
+    .receipt-copy { flex: 1; color: #3e5450; font-size: 11px; line-height: 1.42; }
+    .warning .receipt-copy { color: #6b4b17; }
+    .why-button {
+      min-width: 72px;
+      min-height: 44px;
+      border: 1px solid rgba(38, 92, 79, .22);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, .74);
+      color: var(--green);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .warning .why-button { border-color: rgba(133, 87, 9, .24); color: var(--amber); }
+    .origin-panel { padding: 0 11px 11px; border-top: 1px solid rgba(54, 100, 89, .12); }
+    .origin-note { margin: 9px 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .origin-tree { position: relative; display: grid; gap: 6px; }
+    .origin-node {
+      position: relative;
+      min-height: 46px;
+      display: grid;
+      grid-template-columns: 19px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 8px;
+      border: 1px solid #d8e1df;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, .72);
+    }
+    .origin-node.derived { margin-left: 22px; }
+    .origin-node.derived::before {
+      content: "";
+      position: absolute;
+      top: -7px;
+      left: -14px;
+      width: 13px;
+      height: 29px;
+      border-bottom: 1px solid #9eb6b0;
+      border-left: 1px solid #9eb6b0;
+    }
+    .node-mark { color: var(--green); font-size: 13px; font-weight: 900; text-align: center; }
+    .derived .node-mark { color: #82908d; }
+    .node-title { font-size: 11px; font-weight: 730; }
+    .node-meta { margin-top: 2px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .node-tag { color: var(--green); font-size: 9px; font-weight: 720; white-space: nowrap; }
+    .derived .node-tag { color: #7c8886; }
+    .open-source {
+      min-height: 44px;
+      margin-top: 9px;
+      padding: 7px 10px;
+      border: 1px solid #c5d0cf;
+      border-radius: 6px;
+      background: #fff;
+      color: #415b56;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .evidence-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .evidence-chip {
+      padding: 5px 8px;
+      border: 1px solid #d7dddd;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .72);
+      color: #647174;
+      font-size: 9px;
+    }
+    .evidence-chip.echo { border-style: dashed; color: #7d6b4c; }
+    .composer {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 12px 16px 15px;
+      padding: 8px 9px 8px 12px;
+      border: 1px solid #cfd8d8;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .82);
+      color: #899496;
+      font-size: 11px;
+    }
+    .composer span { flex: 1; }
+    .composer button {
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 8px;
+      background: #496276;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .demo-data-note {
+      position: absolute;
+      z-index: 4;
+      right: 30px;
+      bottom: 13px;
+      color: rgba(78, 91, 94, .7);
+      font-size: 9px;
+    }
+    .toast {
+      position: fixed;
+      z-index: 10;
+      right: 22px;
+      bottom: 22px;
+      max-width: min(430px, calc(100vw - 44px));
+      padding: 11px 14px;
+      border: 1px solid #bfcaca;
+      border-radius: 7px;
+      background: #fff;
+      box-shadow: 0 12px 34px rgba(23, 32, 34, .18);
+      color: var(--ink-soft);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 980px) {
+      .prototype-bar { align-items: flex-start; flex-wrap: wrap; }
+      .prototype-title { min-width: 100%; }
+      .reset-button { margin-left: 0; }
+      .workspace { grid-template-columns: 60px 230px minmax(0, 1fr); }
+      .quick-ask { right: 18px; width: min(520px, calc(100% - 330px)); min-width: 420px; }
+    }
+
+    @media (max-width: 700px) {
+      .prototype-bar { gap: 9px; padding: 10px 12px; }
+      .switch-label { width: 100%; }
+      .switch-group { width: 100%; grid-auto-columns: 1fr; }
+      .switch-button { min-width: 0; padding-inline: 7px; }
+      .mode-group { width: calc(100% - 51px); }
+      .reset-button { width: 42px; }
+      .stage { padding: 0; }
+      .host-window { width: 100%; height: calc(100vh - 203px); min-height: 640px; border: 0; border-radius: 0; }
+      .host-topbar { padding: 0 12px; }
+      .host-search { width: auto; flex: 1; }
+      .host-brand, .window-dots { display: none; }
+      .workspace { display: block; }
+      .rail, .conversation-list { display: none; }
+      .thread { height: 100%; }
+      .thread-head { height: 62px; padding: 0 14px; }
+      .messages { height: calc(100% - 62px); padding: 18px 15px 140px; opacity: .34; }
+      .message-row { grid-template-columns: 30px minmax(0, 1fr); }
+      .quick-ask {
+        top: 72px;
+        right: 8px;
+        left: 8px;
+        width: auto;
+        min-width: 0;
+        max-height: calc(100% - 82px);
+        border-radius: 18px;
+      }
+      .ask-boundary { max-width: 110px; text-align: right; }
+      .receipt-summary { align-items: flex-start; flex-wrap: wrap; }
+      .receipt-metric { min-width: 120px; }
+      .receipt-copy { min-width: calc(100% - 140px); }
+      .why-button { width: 100%; }
+      .demo-data-note { display: none; }
+      .toast { right: 10px; bottom: 10px; max-width: calc(100vw - 20px); }
+    }
+  </style>
+</head>
+<body>
+  <header class="prototype-bar" aria-label="原型控制台">
+    <div class="prototype-title">
+      <strong>记忆回声抑制器 · 交互 Demo</strong>
+      <span>控制条仅用于演示；产品中不会新增这条工具栏</span>
+    </div>
+    <span class="switch-label">场景</span>
+    <div class="switch-group" role="group" aria-label="选择演示场景">
+      <button class="switch-button scenario-button" type="button" data-scenario="stale" aria-pressed="true">旧值回声</button>
+      <button class="switch-button scenario-button" type="button" data-scenario="independent" aria-pressed="false">独立确认</button>
+      <button class="switch-button scenario-button" type="button" data-scenario="quiet" aria-pressed="false">正常静默</button>
+    </div>
+    <span class="switch-label">对比</span>
+    <div class="switch-group mode-group" role="group" aria-label="切换改进前后">
+      <button class="switch-button mode-button" type="button" data-mode="before" aria-pressed="false">Before</button>
+      <button class="switch-button mode-button" type="button" data-mode="after" aria-pressed="true">After</button>
+    </div>
+    <button class="reset-button" id="resetButton" type="button" aria-label="重置为旧值回声 After">↺</button>
+  </header>
+
+  <main class="stage">
+    <section class="host-window" aria-label="RingCentral Messages 与 Quick Ask 模拟工作现场">
+      <div class="host-topbar">
+        <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="host-brand">RingCentral</div>
+        <div class="host-search">搜索消息、人员或团队</div>
+        <div class="host-avatar" aria-label="用户 Esone">EQ</div>
+      </div>
+
+      <div class="workspace">
+        <nav class="rail" aria-label="RingCentral 主导航">
+          <div class="rail-item">主页</div>
+          <div class="rail-item active">消息</div>
+          <div class="rail-item">视频</div>
+          <div class="rail-item">联系人</div>
+        </nav>
+
+        <aside class="conversation-list" aria-label="会话列表">
+          <div class="list-head">消息</div>
+          <div class="conversation active">
+            <div class="conversation-avatar">Q3</div>
+            <div><div class="conversation-title">Q3 Planning · Estimate</div><div class="conversation-preview">MTR-147866 latest estimate...</div></div>
+            <div class="conversation-time">10:22</div>
+          </div>
+          <div class="conversation">
+            <div class="conversation-avatar">JV</div>
+            <div><div class="conversation-title">Jupiter Video Dev</div><div class="conversation-preview">26.3 scope is ready</div></div>
+            <div class="conversation-time">09:48</div>
+          </div>
+          <div class="conversation">
+            <div class="conversation-avatar">AI</div>
+            <div><div class="conversation-title">AI Native</div><div class="conversation-preview">card review notes</div></div>
+            <div class="conversation-time">昨天</div>
+          </div>
+        </aside>
+
+        <section class="thread" aria-label="Q3 Planning 会话">
+          <header class="thread-head">
+            <div class="conversation-avatar">Q3</div>
+            <div><div class="thread-title">Q3 Planning · Estimate</div><div class="thread-subtitle">7 位成员 · 团队消息</div></div>
+            <div class="thread-meta">详情</div>
+          </header>
+          <div class="messages" id="messages"></div>
+          <div class="message-input">发送消息给 Q3 Planning · Estimate</div>
+        </section>
+      </div>
+
+      <section class="quick-ask" aria-label="Personal AI Quick Ask">
+        <header class="ask-head">
+          <img class="product-icon" src="../../static/icons/icon48.png" alt="Personal AI" />
+          <div><div class="ask-name">Personal AI</div><div class="ask-scope">Quick Ask · 当前会话 + 私人记忆</div></div>
+          <div class="ask-boundary">只读回答 · 未写回 Jira</div>
+        </header>
+        <div class="ask-body">
+          <div class="user-question" id="question"></div>
+          <article class="answer" aria-live="polite" aria-atomic="true">
+            <div class="answer-kicker" id="answerKicker"></div>
+            <div class="answer-value" id="answerValue"></div>
+            <p class="answer-copy" id="answerCopy"></p>
+            <div class="confidence-row">
+              <span id="confidenceLabel"></span>
+              <div class="confidence-track" aria-hidden="true"><div class="confidence-fill" id="confidenceFill"></div></div>
+              <span id="confidenceValue"></span>
+            </div>
+            <section class="echo-receipt" id="receipt">
+              <div class="receipt-summary">
+                <div class="receipt-metric" id="receiptMetric"></div>
+                <div class="receipt-copy" id="receiptCopy"></div>
+                <button class="why-button" id="whyButton" type="button" aria-expanded="false" aria-controls="originPanel">为什么</button>
+              </div>
+              <div class="origin-panel" id="originPanel" hidden>
+                <p class="origin-note" id="originNote"></p>
+                <div class="origin-tree" id="originTree"></div>
+                <button class="open-source" id="openSourceButton" type="button">打开代表来源</button>
+              </div>
+            </section>
+            <div class="evidence-row" id="evidenceRow" aria-label="回答采用的证据"></div>
+          </article>
+        </div>
+        <div class="composer"><span>继续追问…</span><button type="button" id="sendButton" aria-label="发送追问演示">↑</button></div>
+      </section>
+
+      <div class="demo-data-note">演示值为脱敏重组数据，不代表当前 Jira 真值</div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    const states = {
+      stale: {
+        question: 'MTR-147866 现在的 DEV Estimate 是多少？',
+        messages: [
+          ['Lena', 'L', '周一 09:48', 'MTR-147866 is 0.1d now.', 'Jira bot · 09:42：DEV Estimate = 0.1d'],
+          ['Meeting Recap', 'MR', '周一 10:16', 'Estimate follow-up: MTR-147866 remains 0.1d.', 'Q3 Planning · Lena 09:48'],
+          ['AI Summary', 'AI', '周一 10:22', 'Today’s planning summary: DEV Estimate is 0.1d.', 'Meeting Recap · 10:16'],
+          ['Jira', 'J', '周二 09:12', 'MTR-147866 · DEV Estimate changed: 0.1d → 0.2d', 'Canonical change event']
+        ],
+        before: {
+          kicker: '按提及数量汇总 · 4 条记录', value: '0.1d？', valueClass: 'before', confidence: 62,
+          copy: '三条旧记录都指向 0.1d，另一条 Jira 记录显示 0.2d。来源之间有冲突，建议再确认。',
+          metric: '4 条 = 4 票', receipt: '不同 surface 被当作独立来源，旧值因转发次数多而占优。', warning: true,
+          note: 'Before 只按记录 / source id 计数，无法看见它们其实沿用了同一个旧 Jira 快照。',
+          chips: [['Jira · 0.1d', false], ['Glip · 0.1d', false], ['Meeting · 0.1d', false], ['Jira · 0.2d', false]],
+          nodes: [
+            ['Jira snapshot · 0.1d', '周一 09:42 · 被计为第 1 票', '独立来源', false],
+            ['RingCentral repost · 0.1d', '周一 09:48 · 被计为第 2 票', '误算独立', false],
+            ['Meeting recap · 0.1d', '周一 10:16 · 被计为第 3 票', '误算独立', false],
+            ['Jira current event · 0.2d', '周二 09:12 · 最新权威事件', '独立来源', false]
+          ]
+        },
+        after: {
+          kicker: '当前权威值 · Jira change event', value: '0.2d', valueClass: 'after', confidence: 93,
+          copy: '周二 Jira 已从 0.1d 更新为 0.2d。三条旧提及来自同一个周一快照，保留可追溯，但不重复增加置信度。',
+          metric: '4 条 → 2 家族', receipt: '3 条旧提及属于同一来源链；当前值以更新后的 Jira 事件为准。', warning: false,
+          note: '原始记录一条未删；这里只折叠计票与上下文。展示 2 个代表来源，完整检索仍有 4 条。',
+          chips: [['Jira current · 0.2d', false], ['旧 Jira 家族 · 0.1d', false], ['2 条派生回声未计票', true]],
+          nodes: [
+            ['Jira snapshot · 0.1d', '周一 09:42 · 旧来源家族 origin', '1 份历史证据', false],
+            ['RingCentral repost', '明确引用 Jira snapshot · 周一 09:48', '派生回声', true],
+            ['Meeting + AI summary', '沿用 RingCentral / recap · 2 条', '派生回声', true],
+            ['Jira change event · 0.2d', '周二 09:12 · current + canonical', '独立当前来源', false]
+          ]
+        }
+      },
+      independent: {
+        question: 'MTR-147866 的 0.2d 有独立复核吗？',
+        messages: [
+          ['Jira', 'J', '09:12', 'DEV Estimate = 0.2d', 'Canonical field'],
+          ['Esone', 'EQ', '09:36', 'I recalculated from the code scope: still 0.2d.', '没有引用 Jira'],
+          ['QA Owner', 'QA', '10:05', 'Test matrix check gives the same 0.2d estimate.', '独立测试矩阵'],
+          ['AI Summary', 'AI', '10:22', 'Estimate was independently confirmed at 0.2d.', '摘要 Esone + QA Owner']
+        ],
+        before: {
+          kicker: '相似文本去重 · 保守合并', value: '1 个来源？', valueClass: 'before', confidence: 58,
+          copy: '四条记录都包含 0.2d，单纯按语义相似度去重可能把真正独立的推导一起合并。',
+          metric: '4 条 → 1 组', receipt: '只看文本相似，用户复算与 QA 测试矩阵的独立性被抹掉。', warning: true,
+          note: 'Before 的粗粒度语义去重没有利用引用链、责任人和推导依据。',
+          chips: [['0.2d · 合并组', true]],
+          nodes: [
+            ['四条 0.2d 记录', '仅因 subject + value 相同被归为一组', '独立性未知', false]
+          ]
+        },
+        after: {
+          kicker: '独立确认 · 来源与推导依据不同', value: '3 个独立来源', valueClass: 'after', confidence: 96,
+          copy: 'Jira 当前字段、你的代码范围复算、QA 测试矩阵各自形成一份证据；AI summary 只是一条派生说明，不算第 4 票。',
+          metric: '4 条 → 3 家族', receipt: '保留 3 次独立确认，只折叠 1 条 AI 摘要。', warning: false,
+          note: '相同结论不会自动合并；只有明确引用、summary lineage 或强确定性信号才建立派生边。',
+          chips: [['Jira current', false], ['用户独立复算', false], ['QA 独立测试', false], ['AI summary 未计票', true]],
+          nodes: [
+            ['Jira current field · 0.2d', '09:12 · canonical event', '独立来源 1', false],
+            ['你的代码范围复算 · 0.2d', '09:36 · owner observation', '独立来源 2', false],
+            ['QA 测试矩阵 · 0.2d', '10:05 · independent observer', '独立来源 3', false],
+            ['AI summary', '10:22 · summary_of 用户与 QA 原话', '派生回声', true]
+          ]
+        }
+      },
+      quiet: {
+        question: 'Q3 Planning 今天还有哪些未决项？',
+        messages: [
+          ['Lena', 'L', '09:20', 'Owner for rollout checklist is still pending.', 'Q3 checklist'],
+          ['Esone', 'EQ', '09:44', 'DEV Estimate is confirmed; no follow-up needed.', '直接判断'],
+          ['QA Owner', 'QA', '10:05', 'Regression window starts Thursday.', '测试计划'],
+          ['Jira', 'J', '10:18', 'Rollout checklist · Owner: Unassigned', 'Canonical field']
+        ],
+        before: {
+          kicker: '基于当前会话与 Jira', value: '1 个未决项', valueClass: 'neutral', confidence: 91,
+          copy: 'Rollout checklist 仍缺 owner；DEV Estimate 已确认，回归窗口为周四。',
+          metric: '', receipt: '', warning: false, note: '',
+          chips: [['RingCentral', false], ['Jira', false]], nodes: []
+        },
+        after: {
+          kicker: '基于当前会话与 Jira', value: '1 个未决项', valueClass: 'neutral', confidence: 91,
+          copy: 'Rollout checklist 仍缺 owner；DEV Estimate 已确认，回归窗口为周四。',
+          metric: '', receipt: '', warning: false, note: '',
+          chips: [['RingCentral', false], ['Jira', false]], nodes: []
+        }
+      }
+    };
+
+    let scenario = 'stale';
+    let mode = 'after';
+    let toastTimer;
+
+    const $ = (selector) => document.querySelector(selector);
+    const els = {
+      messages: $('#messages'), question: $('#question'), answerKicker: $('#answerKicker'),
+      answerValue: $('#answerValue'), answerCopy: $('#answerCopy'), confidenceLabel: $('#confidenceLabel'),
+      confidenceFill: $('#confidenceFill'), confidenceValue: $('#confidenceValue'), receipt: $('#receipt'),
+      receiptMetric: $('#receiptMetric'), receiptCopy: $('#receiptCopy'), whyButton: $('#whyButton'),
+      originPanel: $('#originPanel'), originNote: $('#originNote'), originTree: $('#originTree'),
+      evidenceRow: $('#evidenceRow'), toast: $('#toast')
+    };
+
+    function renderMessages(items) {
+      els.messages.innerHTML = '<div class="day-marker">今天 · 脱敏重组演示</div>' + items.map(([name, initials, time, text, quote]) => `
+        <article class="message-row">
+          <div class="sender-avatar">${initials}</div>
+          <div>
+            <div class="message-name">${name}<time>${time}</time></div>
+            <div class="message-bubble">${quote ? `<div class="quote">${quote}</div>` : ''}${text}</div>
+          </div>
+        </article>`).join('');
+    }
+
+    function renderNodes(nodes) {
+      els.originTree.innerHTML = nodes.map(([title, meta, tag, derived]) => `
+        <div class="origin-node${derived ? ' derived' : ''}">
+          <span class="node-mark" aria-hidden="true">${derived ? '↳' : '●'}</span>
+          <div><div class="node-title">${title}</div><div class="node-meta">${meta}</div></div>
+          <span class="node-tag">${tag}</span>
+        </div>`).join('');
+    }
+
+    function closeDetails() {
+      els.originPanel.hidden = true;
+      els.whyButton.setAttribute('aria-expanded', 'false');
+      els.whyButton.textContent = '为什么';
+    }
+
+    function render() {
+      const scenarioState = states[scenario];
+      const view = scenarioState[mode];
+      document.querySelectorAll('.scenario-button').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.scenario === scenario));
+      });
+      document.querySelectorAll('.mode-button').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
+      });
+      renderMessages(scenarioState.messages);
+      els.question.textContent = scenarioState.question;
+      els.answerKicker.textContent = view.kicker;
+      els.answerValue.textContent = view.value;
+      els.answerValue.className = `answer-value ${view.valueClass}`;
+      els.answerCopy.textContent = view.copy;
+      els.confidenceLabel.textContent = '回答把握';
+      els.confidenceFill.style.width = `${view.confidence}%`;
+      els.confidenceValue.textContent = `${view.confidence}%`;
+      els.evidenceRow.innerHTML = view.chips.map(([text, echo]) => `<span class="evidence-chip${echo ? ' echo' : ''}">${text}</span>`).join('');
+
+      const showReceipt = scenario !== 'quiet';
+      els.receipt.hidden = !showReceipt;
+      if (showReceipt) {
+        els.receipt.classList.toggle('warning', view.warning);
+        els.receiptMetric.textContent = view.metric;
+        els.receiptCopy.textContent = view.receipt;
+        els.originNote.textContent = view.note;
+        renderNodes(view.nodes);
+      }
+      closeDetails();
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      els.toast.textContent = message;
+      els.toast.hidden = false;
+      toastTimer = window.setTimeout(() => { els.toast.hidden = true; }, 3200);
+    }
+
+    document.querySelectorAll('.scenario-button').forEach((button) => {
+      button.addEventListener('click', () => { scenario = button.dataset.scenario; render(); });
+    });
+    document.querySelectorAll('.mode-button').forEach((button) => {
+      button.addEventListener('click', () => { mode = button.dataset.mode; render(); });
+    });
+    $('#resetButton').addEventListener('click', () => { scenario = 'stale'; mode = 'after'; render(); showToast('已重置：旧值回声 · After。'); });
+    els.whyButton.addEventListener('click', () => {
+      const expanded = els.whyButton.getAttribute('aria-expanded') === 'true';
+      els.whyButton.setAttribute('aria-expanded', String(!expanded));
+      els.whyButton.textContent = expanded ? '为什么' : '收起来源链';
+      els.originPanel.hidden = expanded;
+    });
+    $('#openSourceButton').addEventListener('click', () => showToast('来源打开演示：只读查看，不写入记忆、不改 Jira、不发送消息。'));
+    $('#sendButton').addEventListener('click', () => showToast('这是交互 Demo：没有发送追问，也没有写入或外发任何数据。'));
+
+    render();
+  </script>
+</body>
+</html>
