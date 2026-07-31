@@ -3,6 +3,7 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
+import { openMemoryEntryRules } from './utils/memoryEntryRulesNavigation';
 import { getGoogleAuthToken } from './utils/googleAuth';
 import {
   getMemoryServiceClient,
@@ -2415,6 +2416,117 @@ function buildTodayPilotPopupRefreshFailureReceipt(
   };
 }
 
+function formatTodayPilotPopupCardLabel(card: DayPilotCard): string {
+  return card.title || card.missionId || card.id || 'mission';
+}
+
+function buildTodayPilotPopupCardMainBoundary(
+  card: DayPilotCard,
+  language: UiLanguage,
+): string {
+  const label = formatTodayPilotPopupCardLabel(card);
+  const next = card.nextBestAction?.trim();
+  const reason = card.whyNow?.trim();
+  if (language === 'en-US') {
+    return [
+      `Open Today Pilot home for "${label}".`,
+      'This popup row is only a collapsed Top 3 snapshot; opening it navigates to the full visible brief.',
+      next ? `Next action: ${next}.` : '',
+      reason ? `Reason: ${reason}.` : '',
+      'It does not refresh the brief, write feedback, copy context, send messages, or execute actions.',
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+  return [
+    `打开 Today Pilot 首页查看「${label}」。`,
+    '这行只是 Top 3 折叠快照；点击只导航到完整可见 brief。',
+    next ? `你要做：${next}。` : '',
+    reason ? `为什么出现：${reason}。` : '',
+    '不会刷新 brief、写反馈、复制上下文、发送消息或执行动作。',
+  ]
+    .filter(Boolean)
+    .join('');
+}
+
+function buildTodayPilotPopupOverflowBoundary(
+  receipt: TodayPilotPopupScopeReceipt,
+  language: UiLanguage,
+): string {
+  if (language === 'en-US') {
+    return receipt.overflowBoundary
+      ? `${receipt.overflowBoundary} This button only opens Today Pilot home; it does not refresh, write feedback, send messages, or execute actions.`
+      : 'Open Today Pilot home to view the full visible brief; this does not refresh, write feedback, send messages, or execute actions.';
+  }
+  return receipt.overflowBoundary
+    ? `${receipt.overflowBoundary} 这个按钮只打开 Today Pilot 首页，不会刷新、写反馈、发送消息或执行动作。`
+    : '打开 Today Pilot 首页查看完整可见 brief；不会刷新、写反馈、发送消息或执行动作。';
+}
+
+function buildTodayPilotPopupMeetingBoundary(
+  card: DayPilotCard,
+  language: UiLanguage,
+): string {
+  const label = formatTodayPilotPopupCardLabel(card);
+  if (language === 'en-US') {
+    return `Open RingCentral Video Home for "${label}" to review the meeting-prep surface. This only opens the meeting list; it does not join a meeting, start capture, write feedback, send messages, or change calendar data.`;
+  }
+  return `打开 RingCentral Video Home 复核「${label}」的会前准备入口；只打开会议列表，不会加入会议、开始 Capture、写反馈、发送消息或改日历。`;
+}
+
+function buildTodayPilotPopupFeedbackButtonBoundary(
+  card: DayPilotCard,
+  action: TodayPilotPopupFeedbackAction,
+  language: UiLanguage,
+  pending = false,
+): string {
+  const label = formatTodayPilotPopupCardLabel(card);
+  const actionLabel = todayPilotPopupFeedbackActionLabel(action, language);
+  if (language === 'en-US') {
+    if (pending) {
+      return `Submitting ${actionLabel} for "${label}". The mission stays visible until Memory Service confirms; source tasks, messages, calendar items, schedules, and external systems are unchanged.`;
+    }
+    if (action === 'done') {
+      return `Done for "${label}": writes Today Pilot display/ranking feedback and hides this mission from today's Top 3 after confirmation. It does not complete source tasks, mark messages read, change calendars or schedules, sync external systems, or execute actions.`;
+    }
+    return `Later for "${label}": writes Today Pilot display/ranking feedback and hides this mission for 6 hours after confirmation. It does not reschedule the source task, change calendars or action execution time, send messages, sync external systems, or execute actions.`;
+  }
+  if (pending) {
+    return `正在提交「${label}」的${actionLabel}反馈：等待 Memory Service 确认前 mission 仍保留；不会修改来源任务、消息、日历、排程、外部系统或执行动作。`;
+  }
+  if (action === 'done') {
+    return `完成「${label}」：确认后只写 Today Pilot 展示/排序反馈，并从今天 Top 3 隐藏；不会完成来源任务、标记消息已读、改日历/排程、同步外部系统或执行动作。`;
+  }
+  return `稍后 6 小时「${label}」：确认后只写 Today Pilot 展示/排序反馈，并让这张 mission 6 小时内不进 Top 3；不会改来源任务排程、日历、动作执行时间、发送消息、同步外部系统或执行动作。`;
+}
+
+function buildTodayPilotPopupCopyBoundary(
+  card: DayPilotCard,
+  language: UiLanguage,
+  copying = false,
+): string {
+  const label = formatTodayPilotPopupCardLabel(card);
+  if (language === 'en-US') {
+    return copying
+      ? `Copying context for "${label}". This is only writing the generated context pack to the local clipboard; it does not send it to an external AI, approve or execute actions, write back to sources, or complete tasks.`
+      : `Copy context for "${label}": generates a generic context pack and writes it to the local clipboard. It does not send it to an external AI, approve or execute actions, write back to sources, or complete tasks.`;
+  }
+  return copying
+    ? `正在复制「${label}」的上下文包：只把生成正文写入本机剪贴板；不会发送给外部 AI、批准或执行动作、写回来源系统或完成任务。`
+    : `复制「${label}」上下文包：生成通用 context pack 并写入本机剪贴板；不会发送给外部 AI、批准或执行动作、写回来源系统或完成任务。`;
+}
+
+function buildTodayPilotPopupExternalReviewBoundary(
+  card: DayPilotCard,
+  language: UiLanguage,
+): string {
+  const label = formatTodayPilotPopupCardLabel(card);
+  if (language === 'en-US') {
+    return `Review external execution for "${label}": opens the handling page for the action evidence. The popup does not approve, reject, retry, execute OpenClaw, copy a context pack, send messages, or write feedback.`;
+  }
+  return `去处理「${label}」：只打开动作证据对应的处理页复核外部执行；popup 内不会批准、拒绝、重试或执行 OpenClaw，不会复制上下文包、发送消息或写反馈。`;
+}
+
 function formatTodayPilotContextPackReceipt(
   pack: DayPilotContextPackResponse,
 ): string {
@@ -2928,6 +3040,10 @@ const Popup = () => {
           }),
         );
       }
+
+      if (newState) {
+        void maybeOpenSilentAnalysisOnboarding();
+      }
     } catch (error: any) {
       setIsScheduleActive(previousState);
       const fallbackTask = taskSchedulerTasks.find(
@@ -3306,14 +3422,46 @@ const Popup = () => {
     });
   };
 
-  const openTopicWindow = () => {
-    chrome.windows.create({
-      url: 'topic-modal.html',
-      type: 'popup',
-      width: 980,
-      height: 920,
-      focused: true,
+  const openProjectRoadmap = async () => {
+    const config = envConfig || (await getEnvConfig());
+    const roadmapUrl = String(config.ROADMAP_BASE_URL || '').trim();
+    if (!roadmapUrl) {
+      chrome.tabs.create({
+        url: chrome.runtime.getURL('options.html#roadmap-config'),
+        active: true,
+      });
+      return;
+    }
+    chrome.tabs.create({
+      url: roadmapUrl,
+      active: true,
     });
+  };
+
+  const maybeOpenSilentAnalysisOnboarding = async () => {
+    try {
+      const stored = await chrome.storage.local.get([
+        'silentAnalysisOnboarded',
+        'concernedItems',
+      ]);
+      if (stored.silentAnalysisOnboarded) return;
+
+      const items = Array.isArray(stored.concernedItems)
+        ? stored.concernedItems
+        : [];
+      const hasCustomRules = items.some((item: any) => {
+        const id = String(item?.id || '');
+        return id && !['1', '2', '3'].includes(id);
+      });
+      if (hasCustomRules) {
+        await chrome.storage.local.set({ silentAnalysisOnboarded: true });
+        return;
+      }
+
+      await openMemoryEntryRules({ onboarding: true });
+    } catch (error) {
+      console.warn('Silent analysis onboarding failed:', error);
+    }
   };
 
   const _openProjectDashboard = () => {
@@ -4429,8 +4577,8 @@ const Popup = () => {
         ⏰ {t('popup.scheduledMessages')}
       </button>
 
-      <button onClick={openTopicWindow} className="message-button">
-        📋 {t('popup.manageMemoryEntries')}
+      <button onClick={openProjectRoadmap} className="message-button">
+        🗺 {t('popup.projectRoadmap')}
       </button>
 
       <section className="today-pilot-panel">
@@ -4439,6 +4587,7 @@ const Popup = () => {
             className="today-pilot-title"
             onClick={openTodayPilotHome}
             title={t('popup.today.openTitle')}
+            aria-label={t('popup.today.openTitle')}
           >
             {t('terms.todayPilot')}
           </button>
@@ -4461,7 +4610,14 @@ const Popup = () => {
                 <button
                   type="button"
                   onClick={openTodayPilotHome}
-                  title={todayPilotScopeReceipt.overflowBoundary}
+                  title={buildTodayPilotPopupOverflowBoundary(
+                    todayPilotScopeReceipt,
+                    uiLanguage,
+                  )}
+                  aria-label={buildTodayPilotPopupOverflowBoundary(
+                    todayPilotScopeReceipt,
+                    uiLanguage,
+                  )}
                 >
                   {todayPilotScopeReceipt.overflowActionLabel}
                 </button>
@@ -4490,12 +4646,36 @@ const Popup = () => {
               const feedbackPending = todayPilotFeedbackingCardId.startsWith(
                 `${card.id}:`,
               );
+              const cardMainBoundary = buildTodayPilotPopupCardMainBoundary(
+                card,
+                uiLanguage,
+              );
+              const doneBoundary = buildTodayPilotPopupFeedbackButtonBoundary(
+                card,
+                'done',
+                uiLanguage,
+                todayPilotFeedbackingCardId === doneKey,
+              );
+              const laterBoundary = buildTodayPilotPopupFeedbackButtonBoundary(
+                card,
+                'later',
+                uiLanguage,
+                todayPilotFeedbackingCardId === laterKey,
+              );
+              const copyOrReviewBoundary = externalExecution
+                ? buildTodayPilotPopupExternalReviewBoundary(card, uiLanguage)
+                : buildTodayPilotPopupCopyBoundary(
+                    card,
+                    uiLanguage,
+                    copying,
+                  );
               return (
                 <article className="today-pilot-card" key={card.id}>
                   <button
                     className="today-pilot-card-main"
                     onClick={openTodayPilotHome}
-                    title={card.whyNow}
+                    title={cardMainBoundary}
+                    aria-label={cardMainBoundary}
                   >
                     <span className={`today-pilot-priority ${card.priority}`}>
                       {getTodayPilotPriorityLabel(card)}
@@ -4522,7 +4702,17 @@ const Popup = () => {
                   </button>
                   <div className="today-pilot-card-actions">
                     {isMeeting ? (
-                      <button onClick={openRingCentralVideoHome}>
+                      <button
+                        onClick={openRingCentralVideoHome}
+                        title={buildTodayPilotPopupMeetingBoundary(
+                          card,
+                          uiLanguage,
+                        )}
+                        aria-label={buildTodayPilotPopupMeetingBoundary(
+                          card,
+                          uiLanguage,
+                        )}
+                      >
                         Video Home
                       </button>
                     ) : null}
@@ -4531,7 +4721,8 @@ const Popup = () => {
                         void sendTodayPilotPopupFeedback(card, 'done')
                       }
                       disabled={feedbackPending}
-                      title={t('popup.today.doneTitle')}
+                      title={doneBoundary}
+                      aria-label={doneBoundary}
                     >
                       {todayPilotFeedbackingCardId === doneKey
                         ? t('popup.today.handling')
@@ -4542,7 +4733,8 @@ const Popup = () => {
                         void sendTodayPilotPopupFeedback(card, 'later')
                       }
                       disabled={feedbackPending}
-                      title={t('popup.today.laterTitle')}
+                      title={laterBoundary}
+                      aria-label={laterBoundary}
                     >
                       {todayPilotFeedbackingCardId === laterKey
                         ? t('popup.today.handling')
@@ -4555,11 +4747,8 @@ const Popup = () => {
                           : void copyTodayPilotContextPack(card)
                       }
                       disabled={!externalExecution && copying}
-                      title={
-                        externalExecution
-                          ? t('popup.today.externalExecutionTitle')
-                          : undefined
-                      }
+                      title={copyOrReviewBoundary}
+                      aria-label={copyOrReviewBoundary}
                     >
                       {externalExecution
                         ? t('popup.today.reviewExternal')

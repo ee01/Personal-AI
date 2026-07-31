@@ -77,6 +77,10 @@ export interface EnvConfigType {
   MEMORY_SERVICE_BASE_URL: string; // 记忆服务 API 地址，如 http://localhost:3210/api/v1
   MEMORY_SERVICE_API_KEY?: string; // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
   MEMORY_SERVICE_TIMEOUT?: number; // 请求超时（毫秒），默认 30000
+  /** Usage Analytics dashboard admin token（仅 esone.qiu 入口使用） */
+  ANALYTICS_ADMIN_TOKEN?: string;
+  // Personal Roadmap 站点
+  ROADMAP_BASE_URL?: string; // 例如 http://roadmap.xmnup.com 或 http://localhost:3220
   // 自动周报 (Weekly Report)
   WEEKLY_REPORT_ENABLED: string; // 'true' | 'false'
   WEEKLY_REPORT_CRON: string; // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
@@ -117,6 +121,10 @@ export interface EnvConfigType {
   RINGCENTRAL_JWT_CONFIGURED?: boolean;
   RINGCENTRAL_SENDER_DIFY_API_BASE_URL: string;
   RINGCENTRAL_SENDER_DIFY_API_KEY: string;
+  AGENT_TASK_DIFY_API_BASE_URL: string;
+  AGENT_TASK_DIFY_API_KEY: string;
+  BOTMAN_DIFY_API_BASE_URL: string;
+  BOTMAN_DIFY_API_KEY: string;
   MEETING_PILOT_ENABLED: boolean;
   MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
   CONTEXT_ASSIST_ENABLED: boolean;
@@ -548,9 +556,13 @@ export const defaultEnvConfig: EnvConfigType = {
     process.env.OWNER_SPEECH_LEARNING_ENABLED !== 'false',
   // 记忆系统 (Memory Service)
   MEMORY_SERVICE_BASE_URL:
-    process.env.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1',
+    process.env.MEMORY_SERVICE_BASE_URL || 'http://memory.xmnup.com/api/v1',
   MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || '',
   MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
+  ANALYTICS_ADMIN_TOKEN: process.env.ANALYTICS_ADMIN_TOKEN || '',
+  // Personal Roadmap 站点
+  ROADMAP_BASE_URL:
+    process.env.ROADMAP_BASE_URL || 'http://roadmap.xmnup.com',
   // 自动周报 (Weekly Report)
   WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || 'true',
   WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
@@ -615,6 +627,16 @@ export const defaultEnvConfig: EnvConfigType = {
     'https://dify.int.rclabenv.com/v1',
   RINGCENTRAL_SENDER_DIFY_API_KEY:
     process.env.RINGCENTRAL_SENDER_DIFY_API_KEY || '',
+  AGENT_TASK_DIFY_API_BASE_URL:
+    process.env.AGENT_TASK_DIFY_API_BASE_URL ||
+    process.env.RINGCENTRAL_SENDER_DIFY_API_BASE_URL ||
+    'https://dify.int.rclabenv.com/v1',
+  AGENT_TASK_DIFY_API_KEY: process.env.AGENT_TASK_DIFY_API_KEY || '',
+  BOTMAN_DIFY_API_BASE_URL:
+    process.env.BOTMAN_DIFY_API_BASE_URL ||
+    process.env.RINGCENTRAL_SENDER_DIFY_API_BASE_URL ||
+    'https://dify.int.rclabenv.com/v1',
+  BOTMAN_DIFY_API_KEY: process.env.BOTMAN_DIFY_API_KEY || '',
   MEETING_PILOT_ENABLED:
     process.env.MEETING_PILOT_ENABLED !== 'false' &&
     process.env.MEETING_FEATURE_ENABLED !== 'false',

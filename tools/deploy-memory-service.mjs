@@ -24,6 +24,7 @@ function parseArgs(argv) {
     remoteDir: process.env.MEMORY_DEPLOY_PATH || '/Users/rcadmin/personal-ai',
     userId: process.env.MEMORY_DEPLOY_USER_ID || 'esone.qiu',
     skipLocalBuild: false,
+    skipSync: false,
     noCache: false,
   };
 
@@ -48,6 +49,10 @@ function parseArgs(argv) {
       options.skipLocalBuild = true;
       continue;
     }
+    if (arg === '--skip-sync') {
+      options.skipSync = true;
+      continue;
+    }
     if (arg === '--no-cache') {
       options.noCache = true;
       continue;
@@ -62,50 +67,78 @@ const options = parseArgs(process.argv.slice(2));
 const sshArgs = ['-o', 'StrictHostKeyChecking=accept-new'];
 const rsyncSsh = `ssh ${sshArgs.join(' ')}`;
 
-if (!options.skipLocalBuild) {
+if (!options.skipSync && !options.skipLocalBuild) {
   run('npm', ['--prefix', 'memory-service', 'run', 'build']);
+  run('npm', ['--prefix', 'roadmap-service', 'run', 'build']);
 }
 
-run('rsync', [
-  '-az',
-  '--delete',
-  '--exclude',
-  '.env',
-  '--exclude',
-  'data/',
-  '--exclude',
-  'node_modules/',
-  '--exclude',
-  'dist/',
-  '--exclude',
-  'coverage/',
-  '--exclude',
-  '.DS_Store',
-  '-e',
-  rsyncSsh,
-  `${path.join(repoRoot, 'memory-service')}/`,
-  `${options.host}:${options.remoteDir}/memory-service/`,
-]);
+if (!options.skipSync) {
+  run('rsync', [
+    '-az',
+    '--delete',
+    '--exclude',
+    '.env',
+    '--exclude',
+    'data/',
+    '--exclude',
+    'node_modules/',
+    '--exclude',
+    'dist/',
+    '--exclude',
+    'coverage/',
+    '--exclude',
+    '.DS_Store',
+    '-e',
+    rsyncSsh,
+    `${path.join(repoRoot, 'memory-service')}/`,
+    `${options.host}:${options.remoteDir}/memory-service/`,
+  ]);
 
-run('rsync', [
-  '-az',
-  '-e',
-  rsyncSsh,
-  path.join(repoRoot, 'docker-compose.yml'),
-  `${options.host}:${options.remoteDir}/docker-compose.yml`,
-]);
+  // roadmap uses prebuilt dist/ + web/dist/ in Docker (avoids in-image tsc/vite)
+  run('rsync', [
+    '-az',
+    '--delete',
+    '--exclude',
+    '.env',
+    '--exclude',
+    'data/',
+    '--exclude',
+    'node_modules/',
+    '--exclude',
+    'coverage/',
+    '--exclude',
+    '.DS_Store',
+    '-e',
+    rsyncSsh,
+    `${path.join(repoRoot, 'roadmap-service')}/`,
+    `${options.host}:${options.remoteDir}/roadmap-service/`,
+  ]);
+
+  run('rsync', [
+    '-az',
+    '-e',
+    rsyncSsh,
+    path.join(repoRoot, 'docker-compose.yml'),
+    `${options.host}:${options.remoteDir}/docker-compose.yml`,
+  ]);
+} else {
+  console.log('\nSkipping source sync; rebuilding the existing remote worktree.');
+}
 
 const remoteSteps = [
   'set -euo pipefail',
+  'export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"',
   `cd ${shellQuote(options.remoteDir)}`,
   'test -f docker-compose.yml',
   'test -f memory-service/Dockerfile',
-  `docker compose build${options.noCache ? ' --no-cache' : ''} memory-service`,
-  'docker compose up -d memory-service',
+  `docker compose build${options.noCache ? ' --no-cache' : ''} memory-service roadmap-service`,
+  'docker compose up -d memory-service roadmap-service',
   'for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3210/health >/dev/null && break; sleep 2; done',
   'curl -fsS http://127.0.0.1:3210/health >/dev/null',
+  'for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3220/health >/dev/null && break; sleep 2; done',
+  'curl -fsS http://127.0.0.1:3220/health >/dev/null',
   `curl -fsS -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null`,
-  'docker compose ps memory-service',
+  'docker compose ps memory-service roadmap-service',
 ];
 
 run('ssh', [
@@ -114,4 +147,4 @@ run('ssh', [
   `bash -lc ${shellQuote(remoteSteps.join(' && '))}`,
 ]);
 
-console.log('\nMemory service deploy completed.');
+console.log('\nMemory + Roadmap service deploy completed.');

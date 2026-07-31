@@ -6,12 +6,19 @@ import {
 } from './services/MemoryServiceClient';
 import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
 
-export type WatchRuleRef = `manual:${string}` | `outreach:${string}`;
+export type WatchRuleRef =
+  | `manual:${string}`
+  | `outreach:${string}`
+  | `project:${string}`;
 
 export interface WatchRuleBase {
   ruleRef: WatchRuleRef;
-  source: 'manual' | 'outreach';
-  kind: 'manual' | 'follow_thread' | 'outreach_answer_resolution';
+  source: 'manual' | 'outreach' | 'project';
+  kind:
+    | 'manual'
+    | 'follow_thread'
+    | 'outreach_answer_resolution'
+    | 'focus_project';
   text: string;
   filterSender?: string;
   filterGroup?: string;
@@ -46,7 +53,18 @@ export interface OutreachWatchRule extends WatchRuleBase {
   renderedContext?: string;
 }
 
-export type WatchRule = ManualWatchRule | OutreachWatchRule;
+export interface ProjectWatchRule extends WatchRuleBase {
+  ruleRef: `project:${string}`;
+  source: 'project';
+  kind: 'focus_project';
+  system: true;
+  projectId: string;
+  displayName: string;
+  teamRef?: string;
+  notifyMethod: '';
+}
+
+export type WatchRule = ManualWatchRule | OutreachWatchRule | ProjectWatchRule;
 
 export interface ResolvedWatchRuleMatch {
   watchRules: WatchRule[];
@@ -610,34 +628,114 @@ export function buildRuntimeWatchRules(params: {
   manualItems: TopicItemWithAutoReply[];
   outreachSessions?: OutreachSession[];
   outreachRuntimeItems?: OutreachTemplateRuntimeStatusItem[];
+  focusProjects?: FocusProjectWatchInput[];
 }): WatchRule[] {
   const manualRules = buildManualWatchRules(params.manualItems);
   const outreachRules = params.outreachRuntimeItems
     ? buildOutreachWatchRulesFromRuntimeStatus(params.outreachRuntimeItems)
     : buildOutreachWatchRules(params.outreachSessions || []);
-  return [...manualRules, ...outreachRules];
+  const projectRules = buildFocusProjectWatchRules(params.focusProjects || []);
+  return [...manualRules, ...outreachRules, ...projectRules];
+}
+
+export interface FocusProjectWatchInput {
+  id: string;
+  displayName?: string;
+  name?: string;
+  teamRef?: string;
+  teamName?: string;
+  aliases?: string[];
+  keywords?: string[];
+  externalRef?: { itemKey?: string; jiraKey?: string | null; isDraft?: boolean };
+  targetStart?: string | null;
+  targetEnd?: string | null;
+}
+
+export function buildFocusProjectWatchRules(
+  projects: FocusProjectWatchInput[],
+): ProjectWatchRule[] {
+  return projects.map((project) => {
+    const displayName =
+      project.displayName ||
+      project.aliases?.[0] ||
+      project.name ||
+      project.externalRef?.jiraKey ||
+      project.id;
+    // Drafts have no Jira issue yet; their itemKey is a synthetic LOCAL-… token that
+    // can never appear in a message, so it must stay out of the rule text.
+    const isDraft = project.externalRef?.isDraft === true;
+    const key = isDraft
+      ? ''
+      : project.externalRef?.jiraKey ||
+        project.externalRef?.itemKey ||
+        project.id;
+    const keywords = Array.from(
+      new Set([
+        key,
+        displayName,
+        ...(project.aliases || []),
+        ...(project.keywords || []),
+      ]),
+    )
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(' / ');
+    const team = project.teamName || project.teamRef || '-';
+    const range =
+      project.targetStart || project.targetEnd
+        ? ` target=${project.targetStart || '?'}→${project.targetEnd || '?'}`
+        : '';
+
+    return {
+      ruleRef: `project:${project.id}`,
+      source: 'project',
+      kind: 'focus_project',
+      system: true,
+      projectId: project.id,
+      displayName,
+      teamRef: project.teamRef,
+      notifyMethod: '',
+      text: isDraft
+        ? `Focus project ${displayName} (team=${team}${range}). This project has no Jira issue yet. Match messages about this project by alias/keywords only (${keywords}). Memory-only: store matches, never notify.`
+        : `Focus project [${key}] ${displayName} (team=${team}${range}). Match messages about this project using exact Jira key first, then alias/keywords (${keywords}). Memory-only: store matches, never notify.`,
+    } satisfies ProjectWatchRule;
+  });
 }
 
 export async function loadRuntimeWatchRules(
   manualItems: TopicItemWithAutoReply[],
 ): Promise<WatchRule[]> {
+  const client = getMemoryServiceClient();
+  let outreachRuntimeItems: OutreachTemplateRuntimeStatusItem[] | undefined;
+  let focusProjects: FocusProjectWatchInput[] = [];
+
   try {
-    const client = getMemoryServiceClient();
     const response = await client.getOutreachTemplateRuntimeStatus(
       undefined,
       200,
     );
-    return buildRuntimeWatchRules({
-      manualItems,
-      outreachRuntimeItems: response.items || [],
-    });
+    outreachRuntimeItems = response.items || [];
   } catch (error) {
     console.warn(
-      'Failed to load runtime outreach watch rules, falling back to manual rules only:',
+      'Failed to load runtime outreach watch rules:',
       error,
     );
-    return buildRuntimeWatchRules({ manualItems });
   }
+
+  try {
+    const focus = await client.getFocusProjects();
+    focusProjects = (focus.projects || []).filter(
+      (project: any) => project.tier === 'focus',
+    );
+  } catch (error) {
+    console.warn('Failed to load focus project watch rules:', error);
+  }
+
+  return buildRuntimeWatchRules({
+    manualItems,
+    outreachRuntimeItems,
+    focusProjects,
+  });
 }
 
 export function extractRuleRefsFromMatchedRule(matchedRule: string): string[] {

@@ -309,4 +309,189 @@ export async function projectRoutes(
       return reply.status(200).send({ id, deleted: true });
     },
   );
+
+  // POST /projects/watched/sync — authoritative per-team focus snapshot from Roadmap
+  app.post<{
+    Body: {
+      teamId: string;
+      teamName?: string;
+      items?: Array<Record<string, unknown>>;
+      syncedAt?: number;
+    };
+  }>('/projects/watched/sync', async (request, reply) => {
+    const { db } = request.userContext;
+    const body = request.body || { teamId: '' };
+    if (!body.teamId) {
+      return reply.status(400).send({ error: 'teamId is required' });
+    }
+
+    const {
+      syncFocusProjectsForTeam,
+    } = await import('../core/FocusProjectSyncService.js');
+
+    const result = syncFocusProjectsForTeam(db, {
+      teamId: String(body.teamId),
+      teamName: body.teamName ? String(body.teamName) : undefined,
+      syncedAt: Number(body.syncedAt) || Date.now(),
+      items: Array.isArray(body.items)
+        ? body.items.map((item) => ({
+            key: String(item.key || ''),
+            type: item.type ? String(item.type) : undefined,
+            title: String(item.title || item.key || ''),
+            alias: item.alias ? String(item.alias) : null,
+            displayName: item.displayName ? String(item.displayName) : undefined,
+            isDraft: item.isDraft === true,
+            jiraKey: item.jiraKey ? String(item.jiraKey) : null,
+            quarter: item.quarter ? String(item.quarter) : null,
+            targetStart: item.targetStart ? String(item.targetStart) : null,
+            targetEnd: item.targetEnd ? String(item.targetEnd) : null,
+            start: item.start ? String(item.start) : null,
+            days: typeof item.days === 'number' ? item.days : null,
+            keywords: Array.isArray(item.keywords)
+              ? item.keywords.map(String)
+              : undefined,
+            priorityHints:
+              item.priorityHints && typeof item.priorityHints === 'object'
+                ? (item.priorityHints as {
+                    hasAlias?: boolean;
+                    subActivity?: boolean;
+                    intersectsCurrentMonth?: boolean;
+                  })
+                : undefined,
+          }))
+        : [],
+    });
+
+    return reply.status(200).send(result);
+  });
+
+  // POST /projects/watched/archive-team — archive all focus projects for a team
+  app.post<{ Body: { teamId: string } }>(
+    '/projects/watched/archive-team',
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const teamId = String(request.body?.teamId || '').trim();
+      if (!teamId) {
+        return reply.status(400).send({ error: 'teamId is required' });
+      }
+      const { archiveTeamFocusProjects } = await import(
+        '../core/FocusProjectSyncService.js'
+      );
+      const archived = archiveTeamFocusProjects(db, teamId);
+      return reply.status(200).send({ teamId, archived });
+    },
+  );
+
+  // GET /projects/focus — list active focus/candidate projects for injection
+  app.get('/projects/focus', async (request, reply) => {
+    const { db } = request.userContext;
+    const { listFocusProjects } = await import(
+      '../core/FocusProjectSyncService.js'
+    );
+    const {
+      buildFocusRowContext,
+      buildFocusParagraphContext,
+      buildFocusSeedContext,
+    } = await import('../core/FocusProjectContextBuilder.js');
+    const projects = listFocusProjects(db);
+    return reply.status(200).send({
+      projects,
+      contexts: {
+        row: buildFocusRowContext(projects),
+        paragraph: buildFocusParagraphContext(projects),
+        seeds: buildFocusSeedContext(projects),
+      },
+    });
+  });
+
+  // GET /projects/memory-candidates — personal-layer nominations not currently focused
+  app.get('/projects/memory-candidates', async (request, reply) => {
+    const { db } = request.userContext;
+    const { listFocusProjects } = await import(
+      '../core/FocusProjectSyncService.js'
+    );
+    const focus = listFocusProjects(db);
+    const focusedNames = new Set(
+      focus.flatMap((p) =>
+        [p.name, p.displayName, ...(p.aliases || []), p.externalRef?.jiraKey]
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase()),
+      ),
+    );
+
+    const rows = db
+      .prepare(
+        `SELECT id, name, type, description, mention_count, last_seen
+         FROM entities
+         WHERE type IN ('Project', 'Topic')
+           AND status = 'active'
+         ORDER BY mention_count DESC, last_seen DESC
+         LIMIT 30`,
+      )
+      .all() as Array<{
+      id: string;
+      name: string;
+      type: string;
+      description: string | null;
+      mention_count: number;
+      last_seen: number | null;
+    }>;
+
+    const candidates = rows
+      .filter((row) => !focusedNames.has(row.name.toLowerCase()))
+      .slice(0, 8)
+      .map((row) => ({
+        id: row.id,
+        title: row.name,
+        type: row.type,
+        description: row.description,
+        mentionCount: row.mention_count,
+        lastSeen: row.last_seen,
+        source: 'memory',
+      }));
+
+    return reply.status(200).send({ candidates });
+  });
+
+  // Drift receipts for personal-layer roadmap overlays
+  app.get<{ Querystring: { projectId?: string } }>(
+    '/projects/drift-receipts',
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const { ProjectTimelineExtractor } = await import(
+        '../core/ProjectTimelineExtractor.js'
+      );
+      const extractor = new ProjectTimelineExtractor(db);
+      return reply.status(200).send({
+        items: extractor.listOpenReceipts(request.query.projectId),
+      });
+    },
+  );
+
+  app.post<{
+    Body: {
+      id: string;
+      status?: 'accepted' | 'ignored' | 'converged';
+      barTargetEnd?: string;
+      projectId?: string;
+    };
+  }>('/projects/drift-receipts/resolve', async (request, reply) => {
+    const { db } = request.userContext;
+    const { ProjectTimelineExtractor } = await import(
+      '../core/ProjectTimelineExtractor.js'
+    );
+    const extractor = new ProjectTimelineExtractor(db);
+    if (request.body?.barTargetEnd && request.body.projectId) {
+      const converged = extractor.convergeIfMatches({
+        projectId: request.body.projectId,
+        barTargetEnd: request.body.barTargetEnd,
+      });
+      return reply.status(200).send({ converged });
+    }
+    if (!request.body?.id) {
+      return reply.status(400).send({ error: 'id is required' });
+    }
+    extractor.resolveReceipt(request.body.id, request.body.status || 'ignored');
+    return reply.status(200).send({ ok: true });
+  });
 }

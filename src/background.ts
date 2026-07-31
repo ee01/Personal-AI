@@ -6,11 +6,14 @@ import {
   getEnvConfig,
   normalizeConcernedItemsDigestHour,
 } from './utils';
+import { syncRoadmapContentScript } from './roadmapContentScriptRegistry';
 import {
   FETCH_JIRA_TICKETS,
   JIRA_COOKIE_AUTH_GUARD_MESSAGE,
+  JIRA_PROXY_FETCH_MESSAGE,
   JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE,
   assertJiraCookieAuthAllowed,
+  handleJiraProxyFetch,
   notifyJiraIssuePagesToSyncXsrf,
 } from './jira';
 import {
@@ -82,14 +85,17 @@ import type {
 import {
   getCurrentUser,
   getProjectByKey,
+  getJiraMemoryFreshnessFields,
   jiraFetch,
   getTicketDetail,
 } from './jira';
 import { handleLLMRequest } from './llm';
+import { CAPABILITIES } from './analytics/capabilities';
 import { concernedItemsSyncService } from './services/ConcernedItemsSyncService';
 import { isManualConcernedItem, partitionConcernedItems } from './watchRules';
 
 import { Logger } from './utils/logger';
+import { UsageTracker } from './analytics/UsageTracker';
 import {
   cleanupExpiredFollowThreads,
   getNextCleanupTime,
@@ -98,6 +104,10 @@ import {
 } from './message-reaction/FollowThreadHandler';
 import { buildPendingFollowThreadConfig } from './message-reaction/followThreadPendingConfig';
 import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
+import {
+  MEMORY_ENTRY_RULES_TASK_POPUP_SIZE,
+  openMemoryEntryRules,
+} from './utils/memoryEntryRulesNavigation';
 import {
   doesSnoozeReminderMatchSchedule,
   findOpenSnoozeReminderForMessage,
@@ -1082,6 +1092,14 @@ void syncStoredUserIdentityToMemory().catch((error) => {
           8,
         ),
       );
+      try {
+        const roadmapBase =
+          envConfig?.ROADMAP_BASE_URL ||
+          (await getEnvConfig()).ROADMAP_BASE_URL;
+        await syncRoadmapContentScript(roadmapBase);
+      } catch (error) {
+        console.warn('[pai-roadmap] content script sync failed', error);
+      }
       await taskScheduler.startAllTasks();
     }, 5000); // 5秒延迟，确保扩展环境完全就绪
   } catch (error) {
@@ -1129,6 +1147,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     // 加载配置
     const config = await getEnvConfig();
     console.log('Global config loaded:', config);
+
+    try {
+      await syncRoadmapContentScript(config.ROADMAP_BASE_URL);
+    } catch (error) {
+      console.warn('[pai-roadmap] content script sync failed', error);
+    }
 
     // 启动统一任务调度器
     await taskScheduler.startAllTasks();
@@ -1343,6 +1367,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       return;
     }
 
+    // 定时上报前端用量打点（token / 能力频率）
+    if (alarm.name === 'flushUsageTelemetry') {
+      await UsageTracker.flush();
+      return;
+    }
+
     if (alarm.name === 'contextAssistOutlookCalendarSync') {
       const envConfig = await getEnvConfig();
       if (
@@ -1399,6 +1429,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   //   '来自:',
   //   sender.tab?.url || sender.url || 'unknown',
   // );
+
+  if (request.type === 'FLUSH_USAGE_TELEMETRY') {
+    (async () => {
+      try {
+        const before = await UsageTracker.getFlushDiagnostics();
+        await UsageTracker.flush();
+        const after = await UsageTracker.getFlushDiagnostics();
+        sendResponse({
+          success: !after.lastFlushError,
+          before,
+          diagnostics: after,
+        });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || String(error),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'GET_USAGE_TELEMETRY_STATUS') {
+    (async () => {
+      try {
+        const diagnostics = await UsageTracker.getFlushDiagnostics();
+        sendResponse({ success: true, diagnostics });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || String(error),
+        });
+      }
+    })();
+    return true;
+  }
 
   if (request.type === 'EXECUTE_PERSONAL_AI_AR_BINDING') {
     (async () => {
@@ -1766,6 +1832,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       MEMORY_SERVICE_BASE_URL?: string;
       MEMORY_SERVICE_API_KEY?: string;
       MEMORY_SERVICE_TIMEOUT?: number;
+      ROADMAP_BASE_URL?: string;
     };
     chrome.storage.local.set({ envConfig: request.config });
     console.log('Updated environment config:', request.config);
@@ -1787,6 +1854,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           client.setTimeout(Number(config.MEMORY_SERVICE_TIMEOUT));
       } catch (e) {
         console.warn('MemoryServiceClient config sync:', e);
+      }
+      try {
+        await syncRoadmapContentScript(
+          config?.ROADMAP_BASE_URL ?? request.config?.ROADMAP_BASE_URL,
+        );
+      } catch (e) {
+        console.warn('[pai-roadmap] content script sync failed', e);
       }
       sendResponse({ success: true });
     })();
@@ -1824,6 +1898,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // 非 Jira 站点的内容脚本（如 roadmap 页面）受宿主 CORS 限制，由 SW 代发
+  if (request.type === JIRA_PROXY_FETCH_MESSAGE) {
+    (async () => {
+      const result = await handleJiraProxyFetch(request);
+      if (!result.success) {
+        console.warn('[jira-proxy] request failed', {
+          url: request.url,
+          label: request.requestLabel,
+          error: result.error,
+        });
+      }
+      sendResponse(result);
+    })();
+    return true;
+  }
+
   if (request.type === JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE) {
     (async () => {
       await notifyJiraIssuePagesToSyncXsrf();
@@ -1850,6 +1940,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse(result);
     })();
     return true; // 保持消息通道开放
+  }
+
+  if (request.type === 'FETCH_JIRA_MEMORY_FRESHNESS_FIELDS') {
+    (async () => {
+      const ticketKey = String(request.ticketKey || '').trim();
+      if (!/^[A-Z][A-Z0-9]+-\d+$/i.test(ticketKey)) {
+        sendResponse({ success: false, error: 'invalid Jira ticket key' });
+        return;
+      }
+      sendResponse(await getJiraMemoryFreshnessFields(ticketKey.toUpperCase()));
+    })();
+    return true;
   }
 
   // 获取 DORA Metrics Rollout Date（避免 CORS 问题）
@@ -1993,7 +2095,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           success: true,
           topMatch: result.topMatch,
           matches: result.matches,
+          changeProjections: result.changeProjections,
           autopilot: result.autopilot,
+          keystoneBrief: result.keystoneBrief,
           debug: result.debug,
           queryTimeMs: result.queryTimeMs,
         });
@@ -2053,6 +2157,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, result });
       } catch (err) {
         console.warn('[background] context-recall feedback failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'KEYSTONE_BRIEF_EVENT') {
+    (async () => {
+      try {
+        const briefId = String(request.briefId || '').trim();
+        const event = request.event || {};
+        const allowedEventTypes = new Set([
+          'shown',
+          'opened',
+          'evidence_opened',
+          'copied',
+          'useful',
+          'hidden',
+          'not_accurate',
+          'used_in_ask',
+          'used_by_compiler',
+        ]);
+        if (!briefId || !allowedEventTypes.has(event.eventType)) {
+          sendResponse({ success: false, error: 'invalid_keystone_brief_event' });
+          return;
+        }
+        const client = getMemoryServiceClient();
+        const result = await client.recordKeystoneBriefEvent(briefId, {
+          eventType: event.eventType,
+          surface: typeof event.surface === 'string' ? event.surface : undefined,
+          context:
+            event.context && typeof event.context === 'object'
+              ? event.context
+              : undefined,
+          reason: typeof event.reason === 'string' ? event.reason.slice(0, 400) : undefined,
+          detail: typeof event.detail === 'string' ? event.detail.slice(0, 1200) : undefined,
+        });
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] keystone brief event failed:', err);
         sendResponse({
           success: false,
           error: String((err as Error)?.message || err),
@@ -3241,7 +3388,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('🤖 调用 LLM 总结规则...');
 
         const { handleLLMRequest } = await import('./llm');
-        const summary = await handleLLMRequest({ prompt });
+        const { CAPABILITIES } = await import('./analytics/capabilities');
+        const summary = await handleLLMRequest({
+          prompt,
+          capability: CAPABILITIES.JIRA_AUTOMATION_IMPORT,
+          feature: 'rule_summary',
+        });
 
         console.log('✅ LLM 总结完成:', summary);
         sendResponse({ success: true, summary });
@@ -3485,13 +3637,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           });
         }
 
-        // 使用独立窗口打开 topic-modal 页面
-        const url = chrome.runtime.getURL('topic-modal.html');
-        await chrome.windows.create({
-          url,
-          type: 'popup',
-          width: 920,
-          height: 720,
+        // 打开记忆入口规则（memory-exploring 路由，iframe 承载 topic-modal）
+        await openMemoryEntryRules({
+          asPopup: true,
+          surface: 'task',
+          intent: 'auto-reply',
+          ...MEMORY_ENTRY_RULES_TASK_POPUP_SIZE,
         });
         sendResponse({ success: true });
       } catch (error: any) {
@@ -3516,12 +3667,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           });
         }
 
-        const url = chrome.runtime.getURL('topic-modal.html');
-        await chrome.windows.create({
-          url,
-          type: 'popup',
-          width: 920,
-          height: 720,
+        await openMemoryEntryRules({
+          asPopup: true,
+          surface: 'task',
+          intent: 'linked-action',
+          ...MEMORY_ENTRY_RULES_TASK_POPUP_SIZE,
         });
         sendResponse({ success: true });
       } catch (error: any) {
@@ -3800,6 +3950,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             const summaryResult = await handleLLMRequest({
               prompt: summaryPrompt,
+              capability: CAPABILITIES.SCHEDULED_MESSAGES,
+              feature: 'message_summary',
             });
             if (summaryResult && summaryResult.trim()) {
               const newTopicSummary = summaryResult.trim().substring(0, 20);
@@ -4005,12 +4157,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           ),
         });
 
-        // 打开 topic-modal
-        await chrome.windows.create({
-          url: chrome.runtime.getURL('topic-modal.html'),
-          type: 'popup',
-          width: 800,
-          height: 700,
+        // 打开记忆入口规则
+        await openMemoryEntryRules({
+          asPopup: true,
+          surface: 'task',
+          intent: 'follow-thread',
+          ...MEMORY_ENTRY_RULES_TASK_POPUP_SIZE,
         });
 
         sendResponse({ success: true });
@@ -4285,6 +4437,16 @@ ensureBackgroundAlarm(
     periodInMinutes: 30,
   },
   (alarm) => alarm.periodInMinutes !== 30,
+);
+
+// 每 5 分钟上报一次前端用量打点缓冲（阈值刷新由 UsageTracker.record 内部触发）
+ensureBackgroundAlarm(
+  'flushUsageTelemetry',
+  {
+    delayInMinutes: 1,
+    periodInMinutes: 5,
+  },
+  (alarm) => alarm.periodInMinutes !== 5,
 );
 
 /** Track the last notification we saw so we don't re-show it. */

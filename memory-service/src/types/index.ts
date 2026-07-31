@@ -284,6 +284,128 @@ export interface MeetingRecord {
   decisionCount?: number;
 }
 
+export type MeetingOutcomeBinderStatus =
+  | 'planned'
+  | 'in_meeting'
+  | 'post_meeting_pending'
+  | 'bound'
+  | 'partial'
+  | 'blocked';
+
+export type MeetingOutcomeSlotStatus =
+  | 'planned'
+  | 'resolved'
+  | 'partially_resolved'
+  | 'unresolved'
+  | 'carried_over'
+  | 'blocked_by_missing_evidence'
+  | 'discarded_agenda';
+
+export type MeetingOutcomeSlotType =
+  | 'decision'
+  | 'action'
+  | 'open_question'
+  | 'fact_update'
+  | 'context_to_carry'
+  | 'discarded_agenda';
+
+export type MeetingOutcomeEvidenceKind =
+  | 'calendar'
+  | 'memory'
+  | 'transcript'
+  | 'action'
+  | 'decision'
+  | 'chapter';
+
+export interface MeetingOutcomeEvidence {
+  id: string;
+  kind: MeetingOutcomeEvidenceKind;
+  refId: string;
+  label?: string;
+  snippet: string;
+  timestamp?: number;
+  sourceUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MeetingOutcomeSlot {
+  id: string;
+  title: string;
+  type: MeetingOutcomeSlotType;
+  status: MeetingOutcomeSlotStatus;
+  mentionState: 'not_seen' | 'mentioned' | 'supported';
+  sourceEvidenceIds: string[];
+  evidence: MeetingOutcomeEvidence[];
+  resultSummary?: string;
+  confidence: number;
+}
+
+export interface MeetingOutcomeBinder {
+  id: string;
+  userId: string;
+  prepId: string;
+  eventExternalId: string;
+  eventSeriesKey?: string;
+  eventTitle: string;
+  eventStartAt: number;
+  meetingId?: string;
+  status: MeetingOutcomeBinderStatus;
+  slots: MeetingOutcomeSlot[];
+  sourceEvidence: MeetingOutcomeEvidence[];
+  sourceHash: string;
+  bindingMode?: 'llm' | 'deterministic_fallback';
+  bindingError?: string;
+  generatedAt: number;
+  boundAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  receipt: {
+    source: string;
+    coverage: string;
+    freshness: string;
+    boundary: string;
+  };
+}
+
+export interface MeetingOutcomeCandidateSlot {
+  title: string;
+  type?: MeetingOutcomeSlotType;
+  evidenceIds?: string[];
+}
+
+export interface MeetingOutcomeBindInput {
+  binderId?: string;
+  meetingId: string;
+  title?: string;
+  eventExternalId?: string;
+  transcript?: Array<{
+    id: string;
+    text: string;
+    speaker?: string;
+    ts?: number;
+  }>;
+  actionItems?: Array<{
+    id: string;
+    title: string;
+    owner?: string;
+    deadline?: string;
+    status?: 'pending' | 'done';
+    evidence?: string;
+    timestamp?: string;
+  }>;
+  decisions?: Array<{
+    id: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  chapters?: Array<{
+    id: string;
+    title: string;
+    summary?: string;
+    startLabel?: string;
+  }>;
+}
+
 export interface MeetingRecordDetail extends MeetingRecord {
   summary?: string;
   latestObservationText?: string;
@@ -323,6 +445,7 @@ export interface MeetingRecordDetail extends MeetingRecord {
     keyQuote: string;
     timeRange?: string;
   }>;
+  outcomeBinder?: MeetingOutcomeBinder;
 }
 
 export interface Chunk {
@@ -374,6 +497,22 @@ export interface WatchedProject {
   priority: number;
   createdAt: number;
   updatedAt?: number;
+  source?: 'manual' | 'roadmap' | 'system';
+  teamRef?: string;
+  externalRef?: {
+    itemKey?: string;
+    /** Null while the roadmap item is still a hand-made draft with no Jira issue. */
+    jiraKey?: string | null;
+    isDraft?: boolean;
+    teamName?: string;
+    quarter?: string | null;
+    targetStart?: string | null;
+    targetEnd?: string | null;
+  };
+  tier?: 'candidate' | 'focus' | 'archived';
+  displayName?: string;
+  lastEngagedAt?: number;
+  lastSyncedAt?: number;
 }
 
 export interface ReflectionArtifact {
@@ -903,6 +1042,25 @@ export type ContextRecallContextType =
 
 export type ContextRecallScope = RecallScope;
 
+export type EvidenceCohesionState =
+  | 'cohesive'
+  | 'cohesive_with_background'
+  | 'split_required'
+  | 'insufficient_anchor'
+  | 'conflict_needs_authority'
+  | 'blocked_cross_scene';
+
+export interface EvidenceCohesionReceipt {
+  policyVersion: 'evidence-cohesion-v1';
+  state: EvidenceCohesionState;
+  usedCount: number;
+  excludedCount: number;
+  clusterCount: number;
+  primarySubject?: string;
+  silent: boolean;
+  summary: string;
+}
+
 export interface ContextRecallEntityHint {
   /** Coarse hint type, e.g. `jira_key`, `person`, `project`, `group`. */
   kind: string;
@@ -1045,7 +1203,17 @@ export interface ContextRecallCurrentContext {
   participants?: string[];
   visibleMessages?: ContextRecallVisibleMessage[];
   visibleFields?: ContextRecallVisibleField[];
+  /** A read-only source API result. `null` is an explicit current empty value. */
+  verifiedSourceFields?: ContextRecallVerifiedSourceField[];
   sourceAnchorHints?: string[];
+}
+
+export interface ContextRecallVerifiedSourceField {
+  propertyKey: string;
+  name: string;
+  value: string | null;
+  source: 'jira_rest';
+  checkedAt: number;
 }
 
 export interface ContextRecallExclude {
@@ -1122,6 +1290,110 @@ export interface ContextRecallAutopilotDecision {
   quietReasons: ContextRecallAutopilotQuietReason[];
   sceneAnchors?: ContextRecallSceneSummary;
   gates: string[];
+}
+
+export type MemoryChangeValueKind =
+  | 'text'
+  | 'number'
+  | 'date'
+  | 'boolean'
+  | 'status'
+  | 'entity_ref'
+  | 'set';
+
+export interface MemoryChangeValue {
+  kind: MemoryChangeValueKind;
+  display: string;
+  normalized: string | number | boolean | string[] | null;
+  raw?: string;
+}
+
+export type MemoryChangeAuthorityRole =
+  | 'authoritative_source'
+  | 'owner_authored'
+  | 'team_message'
+  | 'ai_generated'
+  | 'source_snapshot'
+  | 'inferred';
+
+export type MemoryChangeEventKind =
+  | 'set'
+  | 'update'
+  | 'clear'
+  | 'revert';
+
+export type MemoryChangeProjectionStatus =
+  | 'confirmed_current'
+  | 'last_observed'
+  | 'conflicted'
+  | 'historical_only'
+  | 'superseded_on_page'
+  | 'superseded_at_source';
+
+export interface MemoryChangeSourceRef {
+  type: string;
+  id: string;
+  title?: string;
+  url?: string;
+}
+
+export interface MemoryChangeEvent {
+  id: string;
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  previousValue?: MemoryChangeValue;
+  nextValue: MemoryChangeValue;
+  eventKind: MemoryChangeEventKind;
+  authorityRole: MemoryChangeAuthorityRole;
+  confidence: number;
+  sourceRef: MemoryChangeSourceRef;
+  actor?: string;
+  reason?: string;
+  evidenceQuote?: string;
+  observedAt: number;
+  capturedAt: number;
+  active: boolean;
+  isReversal: boolean;
+}
+
+export interface MemoryChangeProjection {
+  chainKey: string;
+  subjectKey: string;
+  subjectLabel: string;
+  subjectKind: string;
+  propertyKey: string;
+  propertyLabel: string;
+  currentValue?: MemoryChangeValue;
+  previousValue?: MemoryChangeValue;
+  visiblePageValue?: MemoryChangeValue;
+  status: MemoryChangeProjectionStatus;
+  summary: string;
+  boundary: string;
+  eventCount: number;
+  reversalCount: number;
+  conflictCount: number;
+  firstObservedAt?: number;
+  lastObservedAt?: number;
+  currentEvent?: MemoryChangeEvent;
+  history: MemoryChangeEvent[];
+}
+
+export interface MemoryChangeLedgerReceipt {
+  status: 'ready' | 'no_change' | 'blocked' | 'not_run';
+  label: string;
+  detail: string;
+  evidence: string[];
+  inputHash?: string;
+  extractedCount: number;
+  excludedNoiseCount: number;
+  generatedAt?: number;
+  active: boolean;
+  events: MemoryChangeEvent[];
+  projections: MemoryChangeProjection[];
 }
 
 export interface ContextRecallRequest {
@@ -1408,14 +1680,157 @@ export interface ContextRecallDebug {
   };
 }
 
+export type KeystoneBriefSubjectType =
+  | 'project'
+  | 'jira_issue'
+  | 'topic'
+  | 'workflow'
+  | 'person_context'
+  | 'decision_context'
+  | 'ai_tool_experience';
+
+export type KeystoneBriefScope = 'work' | 'personal' | 'mixed_summary_only';
+export type KeystoneBriefStatus =
+  | 'candidate'
+  | 'ready'
+  | 'partial'
+  | 'blocked'
+  | 'stale'
+  | 'hidden';
+export type KeystoneBriefAuthority =
+  | 'user_owned'
+  | 'direct_message'
+  | 'source_memory'
+  | 'jira'
+  | 'meeting'
+  | 'reflection'
+  | 'derived';
+export type KeystoneBriefProjection =
+  | 'local_only'
+  | 'summary_ok'
+  | 'blocked_external';
+
+export interface KeystoneBriefFreshness {
+  state: 'fresh' | 'watching' | 'stale_risk' | 'blocked_source';
+  reason: string;
+  expiresAt?: number;
+  watchContractId?: string;
+}
+
+export interface KeystoneBriefClaim {
+  text: string;
+  sourceRefs: string[];
+  confidence?: 'high' | 'medium' | 'low';
+  authority?: KeystoneBriefAuthority;
+  validAsOf?: number;
+  staleRisk?: 'low' | 'medium' | 'high';
+  projection?: KeystoneBriefProjection;
+  actor?: string;
+  decidedAt?: number;
+}
+
+export interface KeystoneBriefSourceRole {
+  name: string;
+  role: string;
+  sourceRefs: string[];
+}
+
+export interface KeystoneBriefSlots {
+  whyItMatters: string;
+  currentState: string;
+  stableFacts: KeystoneBriefClaim[];
+  decisions: KeystoneBriefClaim[];
+  constraints: KeystoneBriefClaim[];
+  traps: KeystoneBriefClaim[];
+  peopleAndSources: KeystoneBriefSourceRole[];
+  nextUseCases: string[];
+  openQuestions: string[];
+}
+
+export interface KeystoneBriefSourceRef {
+  ref: string;
+  sourceType: string;
+  sourceId: string;
+  role: 'authority' | 'supporting' | 'derived' | 'prior';
+  title?: string;
+  url?: string;
+  timestamp?: number;
+  authority: KeystoneBriefAuthority;
+  projection: KeystoneBriefProjection;
+  hidden?: boolean;
+  snippet?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KeystoneBriefSceneAnchors {
+  projects: string[];
+  jiraKeys: string[];
+  people: string[];
+  topics: string[];
+  surfaces: string[];
+}
+
+export interface KeystoneBriefDisplayPolicy {
+  defaultMode: 'silent' | 'chip' | 'card';
+  maxLines: number;
+  canCopyToDraft: boolean;
+  externalSummaryOnly: boolean;
+  hiddenSourceCount: number;
+}
+
+export interface KeystoneBriefWriteReceipt {
+  writesProfile: false;
+  sendsExternal: false;
+  createsTask: false;
+  updatesFacts: false;
+  writesOutcomeEvent: true;
+}
+
+export interface KeystoneBrief {
+  id: string;
+  briefKey: string;
+  title: string;
+  subjectType: KeystoneBriefSubjectType;
+  scope: KeystoneBriefScope;
+  status: KeystoneBriefStatus;
+  summary: string;
+  externalSummary?: string;
+  sourceAsOf: number;
+  freshness: KeystoneBriefFreshness;
+  slots: KeystoneBriefSlots;
+  sourceMap: KeystoneBriefSourceRef[];
+  sceneAnchors: KeystoneBriefSceneAnchors;
+  displayPolicy: KeystoneBriefDisplayPolicy;
+  writeReceipt: KeystoneBriefWriteReceipt;
+  repairState: 'clean' | 'needs_repair';
+  blockedReason?: string;
+  compositionVersion: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KeystoneBriefPresentation {
+  brief: KeystoneBrief;
+  presentationMode: 'primary' | 'conflict' | 'stale_notice';
+  whyNow: string;
+  evidenceMatchIds: string[];
+  relatedMemoryCount: number;
+}
+
 export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
   scopeReceipt?: ContextRecallScopeReceipt;
+  /** Consumption-time receipt; normal cross-topic filtering stays UI-silent. */
+  cohesionReceipt?: EvidenceCohesionReceipt;
   autopilot?: ContextRecallAutopilotDecision;
+  /** Evidence-backed state changes for the stable subject in the current scene. */
+  changeProjections?: MemoryChangeProjection[];
   /** Weave provenance (P0-5): present only when matches stitch ≥2 sources or ≥7 days. */
   weave?: WeaveStats;
+  /** Optional source-grounded brief for the existing passive Memory Lens shell. */
+  keystoneBrief?: KeystoneBriefPresentation;
   debug?: ContextRecallDebug;
 }
 
@@ -1478,6 +1893,62 @@ export interface ComposerAudience {
   people?: string[];
   provider?: string;
   relationshipHint?: string;
+}
+
+export type ComposerAudienceType =
+  | 'peer'
+  | 'manager'
+  | 'direct_report'
+  | 'external'
+  | 'mixed'
+  | 'unknown';
+
+export type ComposerAudienceSource =
+  | 'confirmed_social_edge'
+  | 'relationship_hint'
+  | 'scene_default'
+  | 'unresolved';
+
+export type PersonaProjectionScene =
+  | 'ringcentral_message'
+  | 'ringcentral_thread'
+  | 'jira_comment'
+  | 'web_ai_context_pack'
+  | 'web_ai_prompt_patch'
+  | 'web_ai_rewrite_prompt';
+
+export type PersonaRepresentationMode =
+  | 'draft_only'
+  | 'draft_preview_required'
+  | 'context_pack_copyable'
+  | 'blocked';
+
+export type PersonaVoiceMode =
+  | 'write_as_user'
+  | 'speak_about_user'
+  | 'never_speak_as_user';
+
+export type PersonaProjectionSlotKind =
+  | 'work_identity'
+  | 'personal_context'
+  | 'preference'
+  | 'constraint'
+  | 'writing_style';
+
+export interface PersonaProjectionSummary {
+  version: 1;
+  scene: PersonaProjectionScene;
+  audienceType: ComposerAudienceType;
+  audienceSource: ComposerAudienceSource;
+  audienceConfidence: number;
+  representationMode: PersonaRepresentationMode;
+  voiceMode: PersonaVoiceMode;
+  usedSlotKinds: PersonaProjectionSlotKind[];
+  usedCount: number;
+  blockedCount: number;
+  reasonCodes: string[];
+  requiresPreview: boolean;
+  degraded?: boolean;
 }
 
 export interface ComposerContextItem {
@@ -1544,6 +2015,7 @@ export interface ComposerAssistEvidence {
   metadata?: Record<string, any>;
   timestamp?: number;
   score?: number;
+  scope?: MemoryScope;
   cue?: ContextCue;
 }
 
@@ -1553,8 +2025,10 @@ export interface ComposerAssistResponse {
     | 'none'
     | 'context_pack'
     | 'prompt_patch'
+    | 'rewrite_prompt'
     | 'reply_context'
     | 'issue_context';
+  insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
   insertText?: string;
@@ -1563,6 +2037,9 @@ export interface ComposerAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  /** Final evidence-consumption receipt; cohesive filtering remains UI-silent. */
+  cohesionReceipt?: EvidenceCohesionReceipt;
+  personaProjection?: PersonaProjectionSummary;
   debug?: Record<string, unknown>;
 }
 
@@ -1597,14 +2074,26 @@ export interface StorylineOpportunity {
   suggestedArtifact?: StorylineSuggestedArtifact;
 }
 
-export type StorylineSourceKind = 'today_meeting_prep';
+export type StorylineSourceKind = 'today_meeting_prep' | 'source_memory_seed';
 
-export interface StorylineDraftRequest {
-  sourceKind: StorylineSourceKind;
+export interface MeetingPrepStorylineDraftRequest {
+  sourceKind: 'today_meeting_prep';
   prepId: string;
   targetArtifact?: StorylineSuggestedArtifact;
   audienceHint?: string;
 }
+
+export interface SourceMemoryStorylineDraftRequest {
+  sourceKind: 'source_memory_seed';
+  capsuleId: string;
+  seedId: string;
+  targetArtifact?: StorylineSuggestedArtifact;
+  audienceHint?: string;
+}
+
+export type StorylineDraftRequest =
+  | MeetingPrepStorylineDraftRequest
+  | SourceMemoryStorylineDraftRequest;
 
 export interface StorylineDraftSegment {
   title: string;
@@ -1716,6 +2205,7 @@ export interface ContextAssistResponse {
   title?: string;
   summary?: string;
   insertText?: string;
+  insertMode?: ComposerAssistResponse['insertMode'];
   cueCards: ContextAssistCueCard[];
   evidence: ComposerAssistEvidence[];
   riskLevel: 'low' | 'medium' | 'high';

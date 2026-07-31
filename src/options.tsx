@@ -2197,6 +2197,7 @@ const Options = () => {
   const meetingPilotConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const openClawConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<EnvConfigType>({ ...defaultEnvConfig });
+  const [currentUsername, setCurrentUsername] = useState('');
   const [status, setStatus] = useState<{
     message: string;
     type: 'success' | 'error' | '';
@@ -2628,8 +2629,22 @@ const Options = () => {
 
   // 页面加载时从 Chrome 存储中获取配置
   useEffect(() => {
-    chrome.storage.local.get(['envConfig'], (result) => {
+    chrome.storage.local.get(['envConfig', 'userinfo'], (result) => {
       console.log('result', result);
+      // Align with MemoryServiceClient identity resolution: username, then
+      // email local-part. Otherwise esone.qiu-only UI can stay hidden when
+      // chrome.storage only has email / userEmail.
+      const userinfo = result?.userinfo || {};
+      const usernameCandidates = [
+        userinfo.username,
+        userinfo.userEmail?.split?.('@')?.[0],
+        userinfo.email?.split?.('@')?.[0],
+      ];
+      const username =
+        usernameCandidates
+          .map((value: unknown) => String(value || '').trim())
+          .find((value: string) => /^[a-zA-Z0-9._-]+$/.test(value)) || '';
+      setCurrentUsername(username);
       if (result.envConfig) {
         const merged = sanitizeLocalEnvConfig({
           ...defaultEnvConfig,
@@ -3816,6 +3831,127 @@ const Options = () => {
           >
             📊 项目进展图
           </button>
+          <button
+            onClick={() =>
+              window.open(
+                'http://eexx.me/Personal-AI/demo/%E7%94%A8%E9%87%8F%E5%88%86%E6%9E%90-%E4%BD%BF%E7%94%A8%E8%A7%86%E8%A7%92.html',
+                '_blank',
+              )
+            }
+            style={{
+              backgroundColor: '#0ea5e9',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold',
+            }}
+          >
+            📈 用量分析（使用视角 Demo）
+          </button>
+          <button
+            onClick={() =>
+              window.open(
+                'http://eexx.me/Personal-AI/demo/%E5%AE%9A%E6%97%B6%E6%B6%88%E6%81%AF-%E5%BE%85%E5%8F%91%E9%80%81%E5%8A%A8%E7%94%BB.html',
+                '_blank',
+              )
+            }
+            style={{
+              backgroundColor: '#f59e0b',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold',
+            }}
+          >
+            ⏱ 定时消息（待发送动画）
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const base = String(config.MEMORY_SERVICE_BASE_URL || '')
+                  .trim()
+                  .replace(/\/+$/, '');
+                if (!base) {
+                  setStatus({
+                    message: '请先填写记忆服务 API 地址',
+                    type: 'error',
+                  });
+                  return;
+                }
+                const client = await createMemoryServiceClient(config);
+                const link = await client.createUsageMyLink();
+                window.open(
+                  `${base}${link.path}`,
+                  '_blank',
+                  'noopener',
+                );
+              } catch (error) {
+                setStatus({
+                  message:
+                    error instanceof Error
+                      ? `打开我的用量报表失败: ${error.message}`
+                      : '打开我的用量报表失败',
+                  type: 'error',
+                });
+              }
+            }}
+            style={{
+              backgroundColor: '#0ea5e9',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold',
+            }}
+          >
+            📊 打开我的用量报表
+          </button>
+          {currentUsername.toLowerCase() === 'esone.qiu' && (
+            <button
+              type="button"
+              onClick={() => {
+                const base = String(config.MEMORY_SERVICE_BASE_URL || '')
+                  .trim()
+                  .replace(/\/+$/, '');
+                if (!base) {
+                  setStatus({
+                    message: '请先填写记忆服务 API 地址',
+                    type: 'error',
+                  });
+                  return;
+                }
+                const token = String(
+                  config.ANALYTICS_ADMIN_TOKEN || 'esone',
+                ).trim();
+                window.open(
+                  `${base}/usage/dashboard?token=${encodeURIComponent(token)}`,
+                  '_blank',
+                  'noopener',
+                );
+              }}
+              style={{
+                backgroundColor: '#6366f1',
+                color: 'white',
+                padding: '10px 20px',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold',
+              }}
+            >
+              📊 打开全体用量报表（Admin）
+            </button>
+          )}
         </div>
       </div>
 
@@ -4096,6 +4232,83 @@ const Options = () => {
             对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
           </small>
         </div>
+        {currentUsername.toLowerCase() === 'esone.qiu' && (
+          <div className="form-group">
+            <label htmlFor="ANALYTICS_ADMIN_TOKEN">用量分析 Admin Token</label>
+            <input
+              type="password"
+              id="ANALYTICS_ADMIN_TOKEN"
+              name="ANALYTICS_ADMIN_TOKEN"
+              value={config.ANALYTICS_ADMIN_TOKEN || ''}
+              onChange={handleInputChange}
+              placeholder="与 memory-service ANALYTICS_ADMIN_TOKEN 一致"
+            />
+            <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+              仅 esone.qiu 可见。用于打开用量分析报表；默认可用 esone（与当前远端配置一致）。
+            </small>
+            <button
+              type="button"
+              style={{ marginTop: '10px' }}
+              onClick={() => {
+                const base = String(config.MEMORY_SERVICE_BASE_URL || '')
+                  .trim()
+                  .replace(/\/+$/, '');
+                if (!base) {
+                  setStatus({
+                    message: '请先填写记忆服务 API 地址',
+                    type: 'error',
+                  });
+                  return;
+                }
+                const token = String(
+                  config.ANALYTICS_ADMIN_TOKEN || 'esone',
+                ).trim();
+                const url = `${base}/usage/dashboard?token=${encodeURIComponent(
+                  token,
+                )}`;
+                window.open(url, '_blank', 'noopener');
+              }}
+            >
+              打开用量分析报表
+            </button>
+            <button
+              type="button"
+              style={{ marginTop: '10px', marginLeft: '8px' }}
+              onClick={async () => {
+                try {
+                  const response = await chrome.runtime.sendMessage({
+                    type: 'FLUSH_USAGE_TELEMETRY',
+                  });
+                  const diag = response?.diagnostics;
+                  if (!response?.success) {
+                    setStatus({
+                      message: `用量上报失败：${
+                        response?.error ||
+                        diag?.lastFlushError ||
+                        '未知错误'
+                      }（缓冲 ${diag?.bufferSize ?? '?'} 条）`,
+                      type: 'error',
+                    });
+                    return;
+                  }
+                  setStatus({
+                    message: `用量上报成功：本次 ${
+                      diag?.lastFlushIngested ?? 0
+                    } 条，剩余缓冲 ${diag?.bufferSize ?? 0} 条`,
+                    type: 'success',
+                  });
+                } catch (error: any) {
+                  setStatus({
+                    message: `用量自检失败：${error?.message || String(error)}`,
+                    type: 'error',
+                  });
+                }
+              }}
+            >
+              立即上报并自检
+            </button>
+          </div>
+        )}
         <h3 style={{ margin: '16px 0 10px' }}>自我反思 / 场景预演生产</h3>
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
@@ -4188,6 +4401,27 @@ const Options = () => {
             Dream Digest。
           </small>
           {renderDigestManualPushReceipt(dreamDigestPushReceipt)}
+        </div>
+      </div>
+
+      <div className="form-section" id="roadmap-config">
+        <h2>{t('options.sections.roadmap')}</h2>
+        <div className="form-group">
+          <label htmlFor="ROADMAP_BASE_URL">项目 Roadmap 站点地址</label>
+          <input
+            type="url"
+            id="ROADMAP_BASE_URL"
+            name="ROADMAP_BASE_URL"
+            value={config.ROADMAP_BASE_URL || ''}
+            onChange={handleInputChange}
+            placeholder="http://roadmap.xmnup.com"
+          />
+          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+            Personal Roadmap 可视化站点，默认 http://roadmap.xmnup.com。Popup「项目
+            Roadmap」会打开此地址；留空则跳转到本配置项。已安装扩展时，打开站点会自动带入
+            Glip 身份，无需再手动输入名字。自定义域名会在保存后动态注入桥接脚本；改完请刷新
+            Roadmap 页。
+          </small>
         </div>
       </div>
 

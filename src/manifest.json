@@ -3,7 +3,7 @@
   "name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
   "default_locale": "zh_CN",
-  "version": "8.7.0",
+  "version": "9.0.0",
   "permissions": [
     "tabs",
     "storage",
@@ -30,27 +30,45 @@
         "https://rc-a-develop.jupiter.int.rclabenv.com/*",
         "https://app.ringcentral.com/*"
       ],
-      "js": ["contentScriptGlip.js"]
+      "js": [
+        "contentScriptGlip.js"
+      ]
     },
     {
-      "matches": ["https://v.ringcentral.com/conf/on/*"],
-      "js": ["contentScriptRingCentralMeeting.js"],
+      "matches": [
+        "https://v.ringcentral.com/conf/on/*"
+      ],
+      "js": [
+        "contentScriptRingCentralMeeting.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     },
     {
-      "matches": ["https://app.ringcentral.com/*"],
-      "js": ["contentScriptRingCentralVideoHome.js"],
+      "matches": [
+        "https://app.ringcentral.com/*"
+      ],
+      "js": [
+        "contentScriptRingCentralVideoHome.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     },
     {
-      "matches": ["https://docs.google.com/spreadsheets/*"],
-      "js": ["contentScriptGoogleSheet.js"]
+      "matches": [
+        "https://docs.google.com/spreadsheets/*"
+      ],
+      "js": [
+        "contentScriptGoogleSheet.js"
+      ]
     },
     {
-      "matches": ["https://docs.google.com/presentation/*"],
-      "js": ["contentScriptGoogleSlide.js"]
+      "matches": [
+        "https://docs.google.com/presentation/*"
+      ],
+      "js": [
+        "contentScriptGoogleSlide.js"
+      ]
     },
     {
       "matches": [
@@ -58,7 +76,9 @@
         "*://*.atlassian.net/browse/*",
         "*://jira.ringcentral.com/browse/*"
       ],
-      "js": ["contentScriptJira.js"],
+      "js": [
+        "contentScriptJira.js"
+      ],
       "run_at": "document_end"
     },
     {
@@ -67,19 +87,45 @@
         "*://*.atlassian.net/secure/AutomationProjectAdminAction*",
         "*://jira.ringcentral.com/secure/AutomationProjectAdminAction*"
       ],
-      "js": ["contentScriptJiraAutomation.js"],
+      "js": [
+        "contentScriptJiraAutomation.js"
+      ],
       "run_at": "document_end",
       "all_frames": true
     },
     {
-      "matches": ["https://rpa.int.rclabenv.com/*"],
-      "js": ["contentScriptRPA.js"],
+      "matches": [
+        "https://rpa.int.rclabenv.com/*"
+      ],
+      "js": [
+        "contentScriptRPA.js"
+      ],
       "run_at": "document_end",
       "all_frames": false
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["contentScriptWebIntelligence.js"],
+      "matches": [
+        "http://localhost:3220/*",
+        "http://127.0.0.1:3220/*",
+        "http://10.32.56.212:3220/*",
+        "http://roadmap.xmnup.com/*",
+        "https://roadmap.xmnup.com/*",
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*"
+      ],
+      "js": [
+        "contentScriptRoadmap.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "contentScriptWebIntelligence.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -101,7 +147,11 @@
     }
   },
   "options_page": "options.html",
-  "host_permissions": ["*://*/*", "file:///*", "https://v.ringcentral.com/*"],
+  "host_permissions": [
+    "*://*/*",
+    "file:///*",
+    "https://v.ringcentral.com/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -144,7 +194,9 @@
         "previews/Personal AI - design link.png",
         "previews/Personal AI - scheduled messages.png"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "icons": {

@@ -44,6 +44,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.messageAnalysis': '消息分析推送',
     'options.sections.messageInteraction': '消息交互功能',
     'options.sections.memoryService': '记忆系统 (Memory Service)',
+    'options.sections.roadmap': '项目 Roadmap',
     'options.sections.meetingPilot': '会议全貌',
     'options.sections.contextAssist': 'Context Assist / 会前准备',
     'options.sections.memoryLens': '记忆提示控制',
@@ -69,6 +70,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.memoryExplorer': '实体记忆查询',
     'popup.scheduledMessages': '定时消息管理',
     'popup.manageMemoryEntries': '管理记忆入口',
+    'popup.projectRoadmap': '项目 Roadmap',
     'popup.messageAnalysis.background': '静默消息分析',
     'popup.messageAnalysis.every': '每 {interval}',
     'popup.backgroundTasks': '后台任务',
@@ -79,7 +81,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.meetingPilot.start': '开启会议全貌',
     'popup.meetingPilot.processing': '处理中...',
     'popup.meetingPilot.openOptions': '打开配置',
-    'popup.today.openTitle': '打开今天首页',
+    'popup.today.openTitle':
+      '打开 Today Pilot 首页查看完整可见 brief；只导航，不会刷新、写反馈、复制上下文、发送消息或执行动作。',
     'popup.today.refreshTitle':
       '刷新 Today Pilot Top 3 快照：只读取或重新生成当前用户今日派生 brief；不会标记消息已读、完成来源任务、写入反馈、发送消息、审批或执行外部动作。',
     'popup.today.loading': '正在读取今日 mission',
@@ -150,6 +153,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.userProfile': '用户画像',
     'memoryExplorer.nav.followThreads': '关注后续',
     'memoryExplorer.nav.followThreadsSubnote': '仅统计手动规则',
+    'memoryExplorer.nav.memoryEntryRules': '记忆入口规则',
+    'memoryExplorer.nav.memoryEntryRulesSubnote': '手动关注话题',
     'memoryExplorer.nav.dreams': '梦境重放',
     'memoryExplorer.nav.reports': '周报报告',
     'memoryExplorer.nav.reflection': '自我反思',
@@ -165,6 +170,10 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.skillsSubnote': '在用技能与萃取建议',
     'memoryExplorer.nav.coverage': '记忆覆盖',
     'memoryExplorer.nav.coverageSubnote': '平台覆盖与智能导入',
+    'memoryExplorer.nav.usageAnalytics': '我的用量',
+    'memoryExplorer.nav.usageAnalyticsSubnote': '仅看自己的功能与 Token',
+    'memoryExplorer.nav.usageAnalyticsBoundary':
+      '打开个人用量报表（HMAC 签名链接）；只读，不写入记忆。',
     'memoryExplorer.search.placeholder':
       '搜索任何内容、实体或关键词（按 Enter 搜索）...',
     'memoryExplorer.search.scopeAria': '记忆范围',
@@ -195,6 +204,21 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.scopeIntent.metric.workExcluded': '不含工作',
     'memoryExplorer.scopeIntent.metric.personalReview': '个人证据需确认',
     'memoryExplorer.scopeIntent.metric.noWrite': '不写入/删除/同步/确认',
+    'memoryExplorer.scopeButton.domain.work': '工作记忆',
+    'memoryExplorer.scopeButton.domain.personal': '个人记忆',
+    'memoryExplorer.scopeButton.domain.all': '全部记忆',
+    'memoryExplorer.scopeButton.caution.work': '个人记忆不会进入候选。',
+    'memoryExplorer.scopeButton.caution.personal': '工作记忆不会进入候选。',
+    'memoryExplorer.scopeButton.caution.all':
+      '工作与个人证据都可能进入结果，个人证据带到工作场景前需要确认。',
+    'memoryExplorer.scopeButton.noEffects':
+      '不会写入、删除、同步外部来源、写反馈、确认答案或外发。',
+    'memoryExplorer.scopeButton.current':
+      '{label}：当前已选择{domain}；下一次搜索按这个范围读取。{caution} {noEffects}',
+    'memoryExplorer.scopeButton.rerun':
+      '{label}：切到{domain}会立即用当前 query 重新请求 Memory Service 并同步 URL；上一次结果只作为旧快照，返回前不会当成本轮证据。{caution} {noEffects}',
+    'memoryExplorer.scopeButton.idle':
+      '{label}：选择{domain}只设置下一次搜索范围；输入查询或点击搜索后才读取 Memory Service。{caution} {noEffects}',
 
     'desktop.language.label': '界面语言',
     'desktop.language.updated': '界面语言已更新。',
@@ -271,6 +295,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.messageAnalysis': 'Message Analysis Delivery',
     'options.sections.messageInteraction': 'Message Reaction',
     'options.sections.memoryService': 'Memory Service',
+    'options.sections.roadmap': 'Project Roadmap',
     'options.sections.meetingPilot': 'Meeting Pilot',
     'options.sections.contextAssist': 'Context Assist / Meeting Prep',
     'options.sections.memoryLens': 'Memory Lens',
@@ -297,6 +322,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.memoryExplorer': 'Memory Explorer',
     'popup.scheduledMessages': 'Scheduled Messages',
     'popup.manageMemoryEntries': 'Manage Memory Entries',
+    'popup.projectRoadmap': 'Project Roadmap',
     'popup.messageAnalysis.background': 'Analyze msg in background',
     'popup.messageAnalysis.every': 'every {interval}',
     'popup.backgroundTasks': 'Background Tasks',
@@ -307,7 +333,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.meetingPilot.start': 'Start Meeting Pilot',
     'popup.meetingPilot.processing': 'Processing...',
     'popup.meetingPilot.openOptions': 'Open Settings',
-    'popup.today.openTitle': 'Open Today Pilot',
+    'popup.today.openTitle':
+      'Open Today Pilot home to view the full visible brief; this only navigates and does not refresh, write feedback, copy context, send messages, or execute actions.',
     'popup.today.refreshTitle':
       "Refresh the Today Pilot Top 3 snapshot: only reads or regenerates this user's derived today brief; it does not mark messages read, complete source tasks, write feedback, send messages, approve, or execute external actions.",
     'popup.today.loading': 'Reading today missions',
@@ -378,6 +405,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.userProfile': 'User Profile',
     'memoryExplorer.nav.followThreads': 'Follow Threads',
     'memoryExplorer.nav.followThreadsSubnote': 'Manual rules only',
+    'memoryExplorer.nav.memoryEntryRules': 'Memory Entry Rules',
+    'memoryExplorer.nav.memoryEntryRulesSubnote': 'Manual topic watches',
     'memoryExplorer.nav.dreams': 'Dream Replay',
     'memoryExplorer.nav.reports': 'Reports',
     'memoryExplorer.nav.reflection': 'Self Reflection',
@@ -393,6 +422,10 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.skillsSubnote': 'Active skills and extraction ideas',
     'memoryExplorer.nav.coverage': 'Memory Coverage',
     'memoryExplorer.nav.coverageSubnote': 'Platform coverage and smart import',
+    'memoryExplorer.nav.usageAnalytics': 'My Usage',
+    'memoryExplorer.nav.usageAnalyticsSubnote': 'Your feature and token report',
+    'memoryExplorer.nav.usageAnalyticsBoundary':
+      'Opens your personal usage report (HMAC signed link); read-only.',
     'memoryExplorer.search.placeholder':
       'Search any content, entity, or keyword (press Enter)...',
     'memoryExplorer.search.scopeAria': 'Memory scope',
@@ -425,6 +458,23 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       'Review personal evidence',
     'memoryExplorer.scopeIntent.metric.noWrite':
       'No write/delete/sync/confirmation',
+    'memoryExplorer.scopeButton.domain.work': 'work memories',
+    'memoryExplorer.scopeButton.domain.personal': 'personal memories',
+    'memoryExplorer.scopeButton.domain.all': 'all memories',
+    'memoryExplorer.scopeButton.caution.work':
+      'Personal memories will not enter candidates.',
+    'memoryExplorer.scopeButton.caution.personal':
+      'Work memories will not enter candidates.',
+    'memoryExplorer.scopeButton.caution.all':
+      'Work and personal evidence may both enter results; review personal evidence before bringing it into work.',
+    'memoryExplorer.scopeButton.noEffects':
+      'It will not write, delete, sync external sources, write feedback, confirm answers, or send externally.',
+    'memoryExplorer.scopeButton.current':
+      '{label}: {domain} are already selected; the next search reads this scope. {caution} {noEffects}',
+    'memoryExplorer.scopeButton.rerun':
+      '{label}: switching to {domain} immediately reruns the current query against Memory Service and updates the URL; previous results are only an old snapshot and are not current evidence before the response returns. {caution} {noEffects}',
+    'memoryExplorer.scopeButton.idle':
+      '{label}: selecting {domain} only stages the next search scope; Memory Service is read after you enter a query or press Search. {caution} {noEffects}',
 
     'desktop.language.label': 'UI Language',
     'desktop.language.updated': 'UI language updated.',

@@ -1,0 +1,218 @@
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import {
+  applyIntent,
+  createShareToken,
+  createTeam,
+  getTeamSnapshot,
+  listActivity,
+  listFocusItems,
+  listTeams,
+  pruneOldActivity,
+  touchPresence,
+  validateShareToken,
+} from '../core/TeamService.js';
+import { getEventBus } from '../core/EventBus.js';
+import type { ActorContext, ActorSource } from '../types.js';
+
+function readActor(request: FastifyRequest): ActorContext {
+  const body = (request.body || {}) as Record<string, unknown>;
+  const headers = request.headers;
+  const name =
+    String(body.actorName || headers['x-actor-name'] || '').trim() || 'Guest';
+  const clientId =
+    String(body.clientId || headers['x-client-id'] || '').trim() || 'anonymous';
+  const sourceRaw = String(
+    body.actorSource || headers['x-actor-source'] || 'anonymous',
+  );
+  const source: ActorSource =
+    sourceRaw === 'extension' || sourceRaw === 'creator'
+      ? sourceRaw
+      : 'anonymous';
+  const shareToken = String(
+    body.shareToken || headers['x-share-token'] || '',
+  ).trim();
+  return {
+    name,
+    clientId,
+    source,
+    shareTokenId: null,
+    ip: request.ip,
+    // stash token temporarily for validation helpers
+    ...(shareToken ? { shareToken } : {}),
+  } as ActorContext & { shareToken?: string };
+}
+
+function requireWriteAccess(
+  teamId: string,
+  actor: ActorContext & { shareToken?: string },
+): { ok: true; actor: ActorContext } | { ok: false; status: number; error: string } {
+  const result = validateShareToken(teamId, actor.shareToken);
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Editable share token required for write operations',
+    };
+  }
+  return {
+    ok: true,
+    actor: { ...actor, shareTokenId: result.shareTokenId || null },
+  };
+}
+
+export async function registerRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/health', async () => ({
+    ok: true,
+    service: 'roadmap-service',
+    ts: Date.now(),
+  }));
+
+  app.get('/api/v1/teams', async () => ({
+    items: listTeams(),
+  }));
+
+  app.post('/api/v1/teams', async (request, reply) => {
+    const body = (request.body || {}) as Record<string, unknown>;
+    const name = String(body.name || '').trim();
+    const jql = String(body.jql || '').trim();
+    if (!name || !jql) {
+      return reply.code(400).send({ error: 'name and jql are required' });
+    }
+    const actor = readActor(request);
+    // Creating a team does not require a prior share token; creator becomes editor.
+    actor.source = actor.source === 'anonymous' ? 'creator' : actor.source;
+    const snapshot = createTeam({
+      name,
+      jql,
+      checkedQuarters: Array.isArray(body.checkedQuarters)
+        ? body.checkedQuarters.map(String)
+        : undefined,
+      actor,
+    });
+    const share = createShareToken(snapshot.team.id, actor);
+    return {
+      snapshot,
+      editToken: share.token,
+    };
+  });
+
+  app.get<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId',
+    async (request, reply) => {
+      const snapshot = getTeamSnapshot(request.params.teamId);
+      if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
+      const actor = readActor(request);
+      touchPresence(request.params.teamId, actor);
+      return { snapshot };
+    },
+  );
+
+  app.get<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/focus-items',
+    async (request, reply) => {
+      const snapshot = getTeamSnapshot(request.params.teamId);
+      if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
+      return {
+        teamId: request.params.teamId,
+        teamName: snapshot.team.name,
+        items: listFocusItems(request.params.teamId),
+        syncedAt: Date.now(),
+      };
+    },
+  );
+
+  app.post<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/share',
+    async (request, reply) => {
+      const actor = readActor(request) as ActorContext & { shareToken?: string };
+      const access = requireWriteAccess(request.params.teamId, actor);
+      if (!access.ok) {
+        // Allow creator of brand-new team without token only if team has no tokens yet?
+        // For simplicity: also allow if actorSource is creator and team exists.
+        const snapshot = getTeamSnapshot(request.params.teamId);
+        if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
+        if (actor.source !== 'creator' && actor.source !== 'extension') {
+          return reply.code(access.status).send({ error: access.error });
+        }
+      }
+      const share = createShareToken(
+        request.params.teamId,
+        access.ok ? access.actor : actor,
+      );
+      return { token: share.token, id: share.id };
+    },
+  );
+
+  app.post<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/intents',
+    async (request, reply) => {
+      const body = (request.body || {}) as Record<string, unknown>;
+      const actor = readActor(request) as ActorContext & { shareToken?: string };
+      const access = requireWriteAccess(request.params.teamId, actor);
+      if (!access.ok) {
+        return reply.code(access.status).send({ error: access.error });
+      }
+      const result = applyIntent(request.params.teamId, body, access.actor);
+      if (!result.ok) {
+        const status = result.error === 'version_conflict' ? 409 : 400;
+        return reply.code(status).send(result);
+      }
+      return result;
+    },
+  );
+
+  app.get<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/activity',
+    async (request, reply) => {
+      const snapshot = getTeamSnapshot(request.params.teamId);
+      if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
+      const limit = Number((request.query as { limit?: string }).limit || 100);
+      return { items: listActivity(request.params.teamId, limit) };
+    },
+  );
+
+  app.get<{ Params: { teamId: string }; Querystring: { clientId?: string } }>(
+    '/api/v1/teams/:teamId/events',
+    async (request, reply) => {
+      const teamId = request.params.teamId;
+      const snapshot = getTeamSnapshot(teamId);
+      if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      reply.raw.write(`event: connected\ndata: ${JSON.stringify({ teamId })}\n\n`);
+
+      const actor = readActor(request);
+      if (request.query.clientId) actor.clientId = request.query.clientId;
+      touchPresence(teamId, actor);
+
+      const unsubscribe = getEventBus().subscribe((event, data, eventTeamId) => {
+        if (eventTeamId && eventTeamId !== teamId) return;
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      });
+
+      const heartbeat = setInterval(() => {
+        reply.raw.write(`: heartbeat ${Date.now()}\n\n`);
+      }, 15000);
+
+      request.raw.on('close', () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    },
+  );
+
+  // Periodic cleanup of old activity
+  setInterval(() => {
+    try {
+      pruneOldActivity();
+    } catch {
+      // ignore
+    }
+  }, 6 * 60 * 60 * 1000);
+}

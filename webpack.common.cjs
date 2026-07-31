@@ -37,6 +37,7 @@ module.exports = (env) => {
       contentScriptJiraAutomation: './src/contentScriptJiraAutomation.ts',
       contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       contentScriptRPA: './src/contentScriptRPA.ts',
+      contentScriptRoadmap: './src/contentScriptRoadmap.ts',
       contentScriptRingCentralVideoHome:
         './src/contentScriptRingCentralVideoHome.ts',
       contentScriptRingCentralMeeting:

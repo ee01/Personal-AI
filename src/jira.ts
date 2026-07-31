@@ -9,6 +9,7 @@ const JIRA_ISSUE_URL_PATTERNS = [
   '*://jira.ringcentral.com/browse/*',
 ];
 export const JIRA_COOKIE_AUTH_GUARD_MESSAGE = 'PERSONAL_AI_JIRA_COOKIE_AUTH_GUARD';
+export const JIRA_PROXY_FETCH_MESSAGE = 'PERSONAL_AI_JIRA_PROXY_FETCH';
 export const JIRA_ISSUE_EDIT_STATE_MESSAGE = 'PERSONAL_AI_JIRA_ISSUE_EDIT_STATE';
 export const JIRA_SYNC_XSRF_TOKEN_MESSAGE = 'PERSONAL_AI_JIRA_SYNC_XSRF_TOKEN';
 export const JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE = 'PERSONAL_AI_JIRA_SYNC_XSRF_TOKEN_ALL';
@@ -20,6 +21,20 @@ export interface JiraFetchAuthOptions {
   requestLabel?: string;
   syncIssueTokens?: boolean;
 }
+
+export interface JiraMemoryFreshnessField {
+  propertyKey: 'estimate.dev' | 'estimate.qa' | 'estimate.story_points';
+  name: string;
+  value: string | null;
+  source: 'jira_rest';
+  checkedAt: number;
+}
+
+const JIRA_MEMORY_FRESHNESS_FIELDS = [
+  { id: 'customfield_25757', propertyKey: 'estimate.dev' as const, fallbackName: 'DEV Estimate' },
+  { id: 'customfield_25958', propertyKey: 'estimate.qa' as const, fallbackName: 'QA Estimate' },
+  { id: 'customfield_10422', propertyKey: 'estimate.story_points' as const, fallbackName: 'Story Points' },
+];
 
 // =====================================================
 // JIRA 认证工具函数（统一管理 Token 和受控 Cookie 认证）
@@ -288,6 +303,124 @@ export async function jiraFetch(
   return response;
 }
 
+export interface JiraProxyFetchPayload {
+  url: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  headers?: Record<string, string>;
+  body?: any;
+  authMode?: JiraAuthMode;
+  requestLabel?: string;
+}
+
+export interface JiraProxyFetchResult {
+  success: boolean;
+  status: number;
+  bodyText: string;
+  error?: string;
+}
+
+/** fetch-like 子集，让代理调用点保持和 `jiraFetch` 一样的写法。 */
+export interface JiraProxyResponse {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+  json(): Promise<any>;
+}
+
+const JIRA_PROXY_FETCH_TIMEOUT_MS = 60_000;
+
+function isSameOriginAsJira(url: string, baseUrl: string): boolean {
+  try {
+    return new URL(url).origin === new URL(baseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * MV3 里内容脚本的 fetch 仍受宿主页面的 CORS 约束，所以只有跑在 Jira 站点上的
+ * 内容脚本能直接调 Jira REST。其他站点（例如 roadmap-service 页面）必须让
+ * service worker 代发请求，否则请求会在发出前就被拦掉。
+ */
+export async function jiraFetchViaBackground(
+  url: string,
+  options: Omit<JiraProxyFetchPayload, 'url'> = {},
+): Promise<JiraProxyResponse> {
+  const chromeApi = getChromeApi();
+  if (!chromeApi?.runtime?.sendMessage) {
+    throw new Error('扩展消息通道不可用，无法访问 Jira');
+  }
+
+  let result: JiraProxyFetchResult | undefined;
+  try {
+    result = await Promise.race([
+      chromeApi.runtime.sendMessage({
+        type: JIRA_PROXY_FETCH_MESSAGE,
+        ...options,
+        url,
+      }) as Promise<JiraProxyFetchResult | undefined>,
+      new Promise<undefined>((resolve) =>
+        setTimeout(() => resolve(undefined), JIRA_PROXY_FETCH_TIMEOUT_MS),
+      ),
+    ]);
+  } catch (error: any) {
+    throw new Error(
+      `扩展后台请求失败：${error?.message || String(error)}（请在 chrome://extensions 重新加载扩展后刷新页面）`,
+    );
+  }
+  if (!result) {
+    throw new Error('扩展后台未响应 Jira 请求（请重新加载扩展后刷新页面重试）');
+  }
+  if (!result.success) {
+    throw new Error(result.error || 'Jira 请求失败');
+  }
+
+  const bodyText = result.bodyText || '';
+  return {
+    ok: result.status >= 200 && result.status < 300,
+    status: result.status,
+    text: async () => bodyText,
+    json: async () => JSON.parse(bodyText),
+  };
+}
+
+/** service worker 侧的代理入口。只允许打到当前配置的 Jira origin。 */
+export async function handleJiraProxyFetch(
+  payload: JiraProxyFetchPayload,
+): Promise<JiraProxyFetchResult> {
+  const url = String(payload?.url || '');
+  try {
+    const baseUrl = await getJiraBaseUrl();
+    if (!isSameOriginAsJira(url, baseUrl)) {
+      return {
+        success: false,
+        status: 0,
+        bodyText: '',
+        error: `代理仅允许访问 ${baseUrl}，已拒绝：${url || '(empty url)'}`,
+      };
+    }
+    const response = await jiraFetch(url, {
+      method: payload.method,
+      headers: payload.headers,
+      body: payload.body,
+      authMode: payload.authMode,
+      requestLabel: payload.requestLabel,
+    });
+    return {
+      success: true,
+      status: response.status,
+      bodyText: await response.text(),
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      status: 0,
+      bodyText: '',
+      error: error?.message || String(error),
+    };
+  }
+}
+
 /**
  * 获取 JIRA Base URL
  * 优先从环境配置读取，否则使用默认值
@@ -476,6 +609,44 @@ export async function getTicketDetail(ticketKey: string): Promise<{
   } catch (error: any) {
     console.error('Error fetching ticket detail:', error);
     return { success: false, error: error.message || '获取 Ticket 信息失败' };
+  }
+}
+
+/**
+ * Reads the Jira fields needed to reconcile ledger estimates. Explicit null is
+ * preserved so an omitted page field is never mistaken for an empty Jira value.
+ */
+export async function getJiraMemoryFreshnessFields(
+  ticketKey: string,
+): Promise<{ success: boolean; fields?: JiraMemoryFreshnessField[]; error?: string }> {
+  try {
+    const baseUrl = await getJiraBaseUrl();
+    const fieldIds = JIRA_MEMORY_FRESHNESS_FIELDS.map((field) => field.id).join(',');
+    const response = await jiraFetch(
+      `${baseUrl}/rest/api/2/issue/${encodeURIComponent(ticketKey)}?fields=${fieldIds}&expand=names`,
+      { requestLabel: `verify Jira memory fields for ${ticketKey}` },
+    );
+    if (!response.ok) {
+      return { success: false, error: `读取 Jira 当前字段失败 (${response.status})` };
+    }
+    const issue = await response.json();
+    const checkedAt = Math.floor(Date.now() / 1000);
+    const names = issue.names || {};
+    return {
+      success: true,
+      fields: JIRA_MEMORY_FRESHNESS_FIELDS.map((field) => {
+        const rawValue = issue.fields?.[field.id];
+        return {
+          propertyKey: field.propertyKey,
+          name: typeof names[field.id] === 'string' ? names[field.id] : field.fallbackName,
+          value: rawValue === null || rawValue === undefined ? null : String(rawValue),
+          source: 'jira_rest' as const,
+          checkedAt,
+        };
+      }),
+    };
+  } catch (error: any) {
+    return { success: false, error: error?.message || '读取 Jira 当前字段失败' };
   }
 }
 
