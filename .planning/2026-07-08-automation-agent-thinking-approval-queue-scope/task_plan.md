@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Thinking 工具审批`
-- Docs: `docs/features/agent_thinking.md`, `docs/features/index.md`
+- Docs: `docs/features/agent_thinking.md`, `docs/index.md`
 - Main surface: Options Agent Thinking demo / `AgentVisualizer`
 
 ## Plan

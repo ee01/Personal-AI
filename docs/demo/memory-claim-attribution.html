@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>记忆主张归属 · 低打扰体验 Demo</title>
+    <!--
+      Assumptions
+      1. P0 is silent: ordinary Glip messages receive no new toolbar action or mandatory step.
+      2. P1 reuses the real Ask receipt rail and Memory Lens Expanded Card; no standalone workbench.
+      3. P2 corrections change Personal AI's derived attribution only. Raw messages and external systems remain unchanged.
+
+      Design reasoning
+      - Reuse the product's existing dark Ask surface and warm Memory Lens card language.
+      - Let "ordinary" mode remove the receipt entirely, so low disturbance is visible rather than merely described.
+      - Keep correction one disclosure level below the compact receipt.
+    -->
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172033;
+        --muted: #667085;
+        --line: #d9dee8;
+        --paper: #f4f6f9;
+        --blue: #335cff;
+        --ask-bg: #0d1220;
+        --ask-panel: #151c2d;
+        --ask-line: rgba(148, 163, 184, 0.2);
+        --ask-text: #ecf2ff;
+        --ask-muted: #9eabc1;
+        --lens-paper: #fffdfa;
+        --lens-ink: #302820;
+        --lens-muted: #77695c;
+        --violet: #6d28d9;
+        --success: #18794e;
+        --danger: #b42318;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        line-height: 1.65;
+      }
+
+      button, summary { font: inherit; }
+      button { cursor: pointer; }
+
+      .shell {
+        width: min(1440px, 100%);
+        margin: 0 auto;
+        padding: 28px clamp(16px, 3vw, 42px) 48px;
+      }
+
+      .brief {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 22px;
+        align-items: end;
+        padding: 0 0 22px;
+        border-bottom: 1px solid #cfd5df;
+      }
+
+      .eyebrow {
+        margin: 0 0 6px;
+        color: #536078;
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 760px;
+        font-family: "Songti SC", "STSong", serif;
+        font-size: clamp(32px, 5vw, 60px);
+        font-weight: 650;
+        line-height: 1.08;
+        text-wrap: balance;
+      }
+
+      .lede {
+        max-width: 800px;
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 15px;
+        text-wrap: pretty;
+      }
+
+      .implementation-note {
+        max-width: 330px;
+        padding-left: 20px;
+        border-left: 1px solid #b8c0ce;
+        color: #39445a;
+        font-size: 13px;
+      }
+
+      .implementation-note strong {
+        display: block;
+        margin-bottom: 4px;
+        color: #172033;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 18px 0;
+      }
+
+      .segmented {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        padding: 3px;
+        border: 1px solid #c8cfda;
+        background: #e8ebf1;
+      }
+
+      .segmented button {
+        min-height: 38px;
+        padding: 7px 13px;
+        border: 0;
+        background: transparent;
+        color: #536078;
+        font-size: 13px;
+      }
+
+      .segmented button.active {
+        background: white;
+        color: #14203a;
+        box-shadow: 0 1px 3px rgba(20, 32, 58, 0.12);
+        font-weight: 720;
+      }
+
+      .mode-control button.active {
+        background: #172033;
+        color: white;
+      }
+
+      .stage {
+        min-height: 720px;
+        overflow: hidden;
+        border: 1px solid #c8cfda;
+        background: white;
+        box-shadow: 0 18px 48px rgba(20, 32, 58, 0.12);
+      }
+
+      .scene { display: none; min-height: 720px; }
+      .scene.active { display: block; }
+
+      .quiet-scene {
+        display: none;
+        grid-template-columns: minmax(280px, 0.86fr) minmax(420px, 1.14fr);
+        min-height: 720px;
+      }
+
+      .quiet-scene.active { display: grid; }
+
+      .quiet-copy {
+        padding: clamp(34px, 5vw, 72px);
+        background: #172033;
+        color: white;
+      }
+
+      .quiet-copy h2,
+      .ask-main h2 {
+        margin: 0;
+        font-family: "Songti SC", "STSong", serif;
+        font-size: clamp(30px, 4vw, 52px);
+        line-height: 1.15;
+      }
+
+      .quiet-copy p { color: #bdc8da; }
+
+      .no-ui {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 24px;
+        padding: 7px 10px;
+        border: 1px solid rgba(255,255,255,.25);
+        color: #e6eeff;
+        font-size: 12px;
+      }
+
+      .no-ui::before {
+        width: 7px;
+        height: 7px;
+        background: #6ee7b7;
+        border-radius: 50%;
+        content: "";
+      }
+
+      .quiet-flow {
+        display: grid;
+        align-content: center;
+        gap: 0;
+        padding: clamp(32px, 5vw, 72px);
+        background: #f8f9fb;
+      }
+
+      .flow-step {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 16px;
+        padding: 22px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .flow-step:last-child { border-bottom: 0; }
+      .flow-index { color: #77839a; font: 600 12px/1.5 ui-monospace, SFMono-Regular, monospace; }
+      .flow-step strong { display: block; margin-bottom: 4px; font-size: 16px; }
+      .flow-step p { margin: 0; color: var(--muted); font-size: 14px; }
+
+      .ask-scene { background: var(--ask-bg); color: var(--ask-text); }
+      .ask-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 720px; }
+      .ask-sidebar { padding: 22px 16px; border-right: 1px solid var(--ask-line); background: #101728; }
+      .ask-brand { padding: 0 10px 18px; font-weight: 760; letter-spacing: .02em; }
+      .ask-nav { display: grid; gap: 4px; }
+      .ask-nav span { padding: 9px 10px; color: #96a4ba; font-size: 13px; }
+      .ask-nav .selected { background: #1c263a; color: white; }
+      .ask-main { padding: clamp(28px, 4vw, 58px); }
+      .ask-main h2 { max-width: 780px; font-family: inherit; font-size: clamp(25px, 3vw, 40px); }
+      .ask-answer { max-width: 860px; margin-top: 26px; font-size: 16px; color: #dce5f4; }
+      .ask-answer strong { color: white; }
+      .answer-source { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--ask-line); color: var(--ask-muted); font-size: 12px; }
+
+      .receipt {
+        max-width: 860px;
+        margin-top: 22px;
+        padding: 14px 15px;
+        border: 1px solid rgba(96, 165, 250, .24);
+        background: rgba(30, 64, 175, .11);
+      }
+
+      .receipt[hidden] { display: none; }
+      .receipt-top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+      .receipt-label { color: #bfdbfe; font-size: 12px; font-weight: 760; }
+      .receipt-summary { color: #e1ebff; font-size: 13px; }
+      .metrics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+      .metrics span { padding: 2px 7px; border: 1px solid var(--ask-line); color: #aab8cf; font-size: 11px; }
+
+      .receipt details { margin-top: 10px; color: #cbd5e1; font-size: 12px; }
+      .receipt summary { width: fit-content; color: #bfdbfe; cursor: pointer; }
+      .claim-list { display: grid; gap: 8px; margin-top: 10px; }
+      .claim-row { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--ask-line); }
+      .claim-row strong { color: #e0f2fe; font-size: 12px; }
+      .claim-row p { margin: 0; color: #9eabc1; font-size: 12px; }
+      .claim-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; }
+      .claim-actions button { min-height: 32px; padding: 4px 8px; border: 1px solid rgba(96,165,250,.28); background: rgba(30,64,175,.14); color: #dbeafe; font-size: 11px; }
+      .correction-status { grid-column: 2; min-height: 18px; margin: 0; color: #86efac; font-size: 11px; }
+
+      .lens-scene { position: relative; min-height: 720px; overflow: hidden; background: #f8f5ef; }
+      .source-page { width: min(850px, calc(100% - 390px)); min-height: 720px; padding: 42px clamp(28px, 5vw, 72px); background: white; }
+      .source-page .crumb { color: #8a94a5; font-size: 12px; }
+      .source-page h2 { max-width: 680px; margin: 40px 0 14px; color: #1d2939; font-family: "Songti SC", "STSong", serif; font-size: clamp(28px, 4vw, 48px); line-height: 1.25; }
+      .source-page p { max-width: 670px; color: #596579; }
+      .source-page blockquote { margin: 34px 0; padding: 12px 0 12px 20px; border-left: 2px solid #64748b; color: #334155; }
+
+      .lens-card {
+        position: absolute;
+        top: 50%;
+        right: 24px;
+        width: min(390px, calc(100% - 32px));
+        transform: translateY(-50%);
+        border: 1px solid rgba(177, 153, 125, .38);
+        background: var(--lens-paper);
+        color: var(--lens-ink);
+        box-shadow: 0 24px 58px rgba(60, 47, 35, .2);
+      }
+
+      .lens-head { display: flex; justify-content: space-between; gap: 14px; padding: 16px 17px 12px; border-bottom: 1px solid rgba(177,153,125,.25); }
+      .lens-head strong { font-family: "Songti SC", "STSong", serif; font-size: 17px; }
+      .lens-head span { color: var(--lens-muted); font-size: 11px; }
+      .lens-body { padding: 15px 17px 17px; }
+      .lens-title { margin: 0 0 7px; font-size: 15px; line-height: 1.45; }
+      .lens-snippet { margin: 0; color: #5e5247; font-size: 13px; }
+      .lens-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }
+      .lens-meta span { padding: 3px 7px; border: 1px solid rgba(177,153,125,.3); color: #76675a; font-size: 10px; }
+      .lens-meta .attribution-chip { border-color: rgba(124,58,237,.24); background: #f5f3ff; color: var(--violet); font-weight: 700; }
+      .lens-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 11px; border-top: 1px solid rgba(177,153,125,.25); }
+      .lens-actions button { min-height: 34px; border: 0; background: transparent; color: #66574a; font-size: 11px; }
+      .lens-actions button:hover { color: #2f261f; }
+
+      .lens-drawer { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(177,153,125,.25); }
+      .lens-drawer.open { display: grid; gap: 8px; }
+      .lens-drawer h4 { margin: 0; color: #64548d; font-size: 11px; }
+      .lens-drawer p { margin: 0; color: #77695c; font-size: 11px; }
+      .lens-drawer .drawer-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+      .lens-drawer button { min-height: 31px; padding: 4px 7px; border: 1px solid rgba(124,58,237,.25); background: white; color: #5b21b6; font-size: 10px; }
+      .lens-status { min-height: 17px; color: var(--success) !important; }
+
+      .scene-caption {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 11px 15px;
+        border-top: 1px solid #cfd5df;
+        background: #eef1f5;
+        color: #4f5b70;
+        font-size: 12px;
+      }
+
+      .scene-caption strong { color: #1f2a44; }
+      .ordinary-only, .mixed-only { display: none; }
+      body[data-mode="ordinary"] .ordinary-only { display: inline; }
+      body[data-mode="mixed"] .mixed-only { display: inline; }
+      body[data-mode="ordinary"] .receipt,
+      body[data-mode="ordinary"] .attribution-chip,
+      body[data-mode="ordinary"] .lens-drawer,
+      body[data-mode="ordinary"] #lensFeedback { display: none !important; }
+
+      @media (max-width: 900px) {
+        .brief { grid-template-columns: 1fr; }
+        .implementation-note { max-width: none; }
+        .quiet-scene.active { grid-template-columns: 1fr; }
+        .ask-layout { grid-template-columns: 1fr; }
+        .ask-sidebar { display: none; }
+        .source-page { width: 100%; min-height: 820px; padding-bottom: 390px; }
+        .lens-card { top: auto; right: 16px; bottom: 18px; left: 16px; width: auto; transform: none; }
+        .claim-row { grid-template-columns: 1fr; }
+        .claim-actions, .correction-status { grid-column: 1; }
+      }
+
+      @media (max-width: 620px) {
+        .shell { padding-inline: 0; padding-top: 0; }
+        .brief, .controls { margin-inline: 16px; }
+        .stage { border-inline: 0; }
+        .controls { align-items: stretch; }
+        .segmented { width: 100%; }
+        .segmented button { flex: 1; }
+        .scene-caption { flex-direction: column; }
+      }
+    </style>
+  </head>
+  <body data-mode="mixed">
+    <main class="shell">
+      <header class="brief">
+        <div>
+          <p class="eyebrow">Personal AI · Runtime UX</p>
+          <h1>记忆主张归属，是后台门禁，不是一条新的用户旅程。</h1>
+          <p class="lede">普通消息发送后没有新增动作。只有当 AI 建议、他人观点或假设会改变回答、画像或承诺判断时，既有 Ask / Memory Lens 才出现一条可展开的归属回执。</p>
+        </div>
+        <aside class="implementation-note">
+          <strong>当前实现口径</strong>
+          Memory Lens 的纠错只写 Personal AI 派生归属；不修改原始消息，也不写回 Glip、网页或其他外部系统。
+        </aside>
+      </header>
+
+      <div class="controls">
+        <div class="segmented scene-control" aria-label="Demo 场景">
+          <button class="active" data-scene="quiet">0 · 普通聊天</button>
+          <button data-scene="ask">1 · Ask 回答</button>
+          <button data-scene="lens">2 · Memory Lens</button>
+        </div>
+        <div class="segmented mode-control" aria-label="记忆内容类型">
+          <button data-mode="ordinary">单一明确自述</button>
+          <button class="active" data-mode="mixed">混合主张</button>
+        </div>
+      </div>
+
+      <section class="stage" aria-live="polite">
+        <article id="scene-quiet" class="scene quiet-scene active">
+          <div class="quiet-copy">
+            <p class="eyebrow" style="color:#9fb0cc">P0 · 默认路径</p>
+            <h2>用户照常发消息。界面什么都不多。</h2>
+            <p>没有「记住这段」，没有归属确认弹窗，也没有待审队列。价值发生在写入前：系统先保存原文，再决定哪些句子有资格成为画像、事实或承诺。</p>
+            <div class="no-ui">Glip 主旅程零新增操作</div>
+          </div>
+          <div class="quiet-flow">
+            <div class="flow-step"><span class="flow-index">01</span><div><strong>原始消息照常留存</strong><p>保留原文、来源和时间，不因后续判断或纠错而改写。</p></div></div>
+            <div class="flow-step"><span class="flow-index">02</span><div><strong>后台切分主张</strong><p class="mixed-only">识别「我的决定」「另一位 AI 建议」「先假设」三种不同责任边界。</p><p class="ordinary-only">单一明确自述直接通过，用户不会看到任何归属 UI。</p></div></div>
+            <div class="flow-step"><span class="flow-index">03</span><div><strong>高责任写入失败关闭</strong><p>AI 建议不成为用户偏好，假设不成为当前事实；归属不明时宁可暂不派生。</p></div></div>
+          </div>
+        </article>
+
+        <article id="scene-ask" class="scene ask-scene">
+          <div class="ask-layout">
+            <aside class="ask-sidebar">
+              <div class="ask-brand">Personal AI</div>
+              <nav class="ask-nav"><span>记忆时间线</span><span class="selected">Ask</span><span>会议</span><span>个人资料</span></nav>
+            </aside>
+            <div class="ask-main">
+              <p class="eyebrow" style="color:#7f91ad">Ask Personal AI</p>
+              <h2>Project Nimbus 最后决定用什么？</h2>
+              <div class="ask-answer">
+                <p><strong>你的明确决定是这轮保留 Vue</strong>，等性能测试后再评估。React 是另一位 AI 的建议，仅作背景；「七月一日上线」只是一个假设，没有作为确定日期使用。</p>
+                <div class="answer-source">本轮使用：项目讨论消息 · 3 个句内主张</div>
+              </div>
+
+              <section class="receipt" aria-label="归属回执">
+                <div class="receipt-top"><span class="receipt-label">归属回执</span><span class="receipt-summary">采用 1 条；仅作背景 1 条；未使用 1 条</span></div>
+                <div class="metrics"><span>采用 1</span><span>仅作背景 1</span><span>未使用 1</span></div>
+                <details>
+                  <summary>查看依据或纠正归属</summary>
+                  <div class="claim-list">
+                    <div class="claim-row"><strong>你 · 明确表达</strong><p>「我的决定是这轮保留 Vue」· 可作为本轮直接证据</p></div>
+                    <div class="claim-row"><strong>AI · 建议</strong><p>「另一位 AI 建议改用 React」· 仅作背景，不代表你的立场</p><div class="claim-actions"><button data-correct="ask">不是我的观点</button><button data-correct="ask">这是建议</button></div><p id="askCorrectionStatus" class="correction-status"></p></div>
+                    <div class="claim-row"><strong>你 · 假设</strong><p>「先假设七月一日上线」· 本轮未使用，也不会沉淀为当前事实</p></div>
+                  </div>
+                </details>
+              </section>
+            </div>
+          </div>
+        </article>
+
+        <article id="scene-lens" class="scene lens-scene">
+          <div class="source-page">
+            <div class="crumb">Engineering Notes / Project Nimbus</div>
+            <h2>前端迁移讨论：框架选择与上线假设</h2>
+            <p>团队正在比较 Vue 与 React 的迁移成本。以下段落来自此前讨论记录，包含用户自己的决定、AI 建议和一个估算假设。</p>
+            <blockquote>我的决定是这轮保留 Vue；另一位 AI 建议改用 React；先假设七月一日上线。</blockquote>
+            <p>Memory Lens 在用户阅读到相关页面时继续按原本方式提供只读关联提示。归属能力不会在网页正文旁增加新的常驻控件。</p>
+          </div>
+
+          <aside class="lens-card" aria-label="Memory Lens Expanded Card">
+            <div class="lens-head"><div><strong>Memory Lens</strong><br><span>与当前页面相关</span></div><span>1 / 1</span></div>
+            <div class="lens-body">
+              <h3 class="lens-title">Project Nimbus 框架决定</h3>
+              <p class="lens-snippet"><span class="ordinary-only">你的明确决定是继续使用 Vue。</span><span class="mixed-only">你的决定是保留 Vue；React 建议仅作背景，七月上线假设未使用。</span></p>
+              <div class="lens-meta"><span class="attribution-chip">AI · 建议 · 仅作背景</span><span>Glip 讨论</span><span>2 天前</span></div>
+              <div class="lens-actions"><button>打开来源</button><button id="lensFeedback">反馈与归属</button></div>
+              <div id="lensDrawer" class="lens-drawer">
+                <h4>内容归属</h4>
+                <p>「另一位 AI 建议改用 React」目前仅作背景，不代表你的立场。</p>
+                <div class="drawer-actions"><button data-correct="lens">这不是我的观点</button><button data-correct="lens">这是我的决定</button></div>
+                <p id="lensCorrectionStatus" class="lens-status">只修改 Personal AI 的派生归属，不改原始消息或外部系统。</p>
+              </div>
+            </div>
+          </aside>
+        </article>
+      </section>
+
+      <footer class="scene-caption">
+        <span><strong id="captionTitle">普通聊天 · 零打扰</strong> <span id="captionCopy">发送后没有新增入口；归属只在后台保护派生写入。</span></span>
+        <span>Demo 数据不写入真实记忆</span>
+      </footer>
+    </main>
+
+    <script>
+      const captions = {
+        quiet: ['普通聊天 · 零打扰', '发送后没有新增入口；归属只在后台保护派生写入。'],
+        ask: ['Ask · 条件式回执', '只有混合主张影响答案时才显示；单一明确自述时整条回执消失。'],
+        lens: ['Memory Lens · Expanded Card', '归属 chip 与纠错藏在既有展开卡和反馈详情中，Rest / Peek 不出现。'],
+      };
+
+      function selectScene(scene) {
+        document.querySelectorAll('.scene').forEach((node) => node.classList.toggle('active', node.id === `scene-${scene}`));
+        document.querySelectorAll('[data-scene]').forEach((button) => button.classList.toggle('active', button.dataset.scene === scene));
+        document.getElementById('captionTitle').textContent = captions[scene][0];
+        document.getElementById('captionCopy').textContent = captions[scene][1];
+      }
+
+      function selectMode(mode) {
+        document.body.dataset.mode = mode;
+        document.querySelectorAll('[data-mode]').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
+        document.getElementById('lensDrawer').classList.remove('open');
+        document.getElementById('askCorrectionStatus').textContent = '';
+      }
+
+      document.querySelectorAll('[data-scene]').forEach((button) => button.addEventListener('click', () => selectScene(button.dataset.scene)));
+      document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => selectMode(button.dataset.mode)));
+      document.addEventListener('click', (event) => {
+        if (event.target.closest('#lensFeedback')) {
+          document.getElementById('lensDrawer').classList.toggle('open');
+          return;
+        }
+        const button = event.target.closest('[data-correct]');
+        if (!button) return;
+        const target = button.dataset.correct === 'ask' ? document.getElementById('askCorrectionStatus') : document.getElementById('lensCorrectionStatus');
+        target.textContent = '已更新派生归属；原始消息未修改。';
+      });
+    </script>
+  </body>
+</html>

@@ -10,7 +10,7 @@ Phase 5
 
 ### Phase 1: Requirements & Discovery
 - [x] Read `AGENT.md`, automation memory, memory notes, existing planning state, `docs/progressing/to-verify.md`, and feature index
-- [x] Randomly select a feature from `docs/features/index.md`
+- [x] Randomly select a feature from `docs/index.md`
 - [x] Check local Reminders via AppleScript and EventKit fallback
 - [x] Inspect relevant docs, source, and existing verify/E2E coverage
 - [x] Gather external product/research references
@@ -24,7 +24,7 @@ Phase 5
 ### Phase 3: Implementation
 - [x] Add dynamic `title` / `aria-label` copy to the top-level backup download button and backup zip mode button
 - [x] Extend the existing Memory Coverage E2E to assert the button-level boundaries
-- [x] Update `docs/features/memory_system.md` and the feature index copy concisely
+- [x] Update `docs/memory_system.md` and the feature index copy concisely
 - **Status:** completed
 
 ### Phase 4: Testing & Verification

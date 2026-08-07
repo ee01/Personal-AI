@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Ask 主动问答` / `Ask 活答案记忆`
-- Docs: `docs/features/ask.md`, `docs/features/index.md`
+- Docs: `docs/features/ask.md`, `docs/index.md`
 - Primary UI: `src/modals/components/SearchResultPage.vue`
 - Verification: `tools/verify-ask-clarification-e2e.mjs`
 

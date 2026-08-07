@@ -27,6 +27,19 @@
 - ✅ **向量存储系统** (`vectorStore.ts`) - ChromaDB 集成
 - ✅ **消息分析过滤** (`messageDealing.ts`) - 智能消息处理
 
+#### Personal Roadmap（团队排期站）✅
+详见功能文档 [`docs/features/personal_roadmap.md`](./features/personal_roadmap.md)；静态 Demo：`docs/demo/roadmap-demo.html`。
+
+> **文档归属**：Personal Roadmap 的**实现说明 / 行为契约**写在 `docs/features/personal_roadmap.md`；本文件（`docs/roadmap.md`）只记产品级完成状态与规划条目。新增细节请改 features 文档，不要把长篇实现说明堆进本文件。
+
+- ✅ 团队 Gantt / Backlog / 人员视图、两档分享、activity SSE、手动 draft、两阶段创建 Jira
+- ✅ 阶段节点与外部依赖 Markers（标记轨 / 缺 ETA 角标 / 扩展读 Target End）
+- ✅ Expand 本机化（URL `expand=`，多人不同步）
+- ✅ 协作 SyncTicker + 头像 hover 用户名
+- ✅ **导入 Task**：扩展 Options `JIRA_API_TOKEN`；无扩展不显示按钮
+- ✅ **拖动回写 Target**：扩展 Options token 优先 → 服务端 `JIRA_PAT` fallback → 皆无静默
+- ✅ 发布时间表标尺：团队 Google Sheet（Release/Phase/Date）→ Sprint 双轴表头；配置存 `teams.release_sheet_json`，Apps Script token 前端写死
+
 #### 内容脚本集成
 - ✅ **多平台支持** - Jira、Google Docs、聊天平台
 - ✅ **Web Intelligence** - 网页智能分析和相关性检测
@@ -680,7 +693,7 @@
 - [ ] 动态调整缓存策略
 - [ ] 性能评估
 
-**相关文档**: `docs/features/memory_system.md`
+**相关文档**: `docs/memory_system.md`
 
 ---
 
@@ -833,7 +846,7 @@
 
 - **定时消息管理**: `docs/features/scheduled_messages_manager.md`
 - **用户画像系统**: `docs/features/user_profile_system.md`
-- **记忆系统**: `docs/features/memory_system.md`
+- **记忆系统**: `docs/memory_system.md`
 - **项目仪表盘**: `docs/features/project_dashboard_usage_guide.md`
 - **Web 智能分析**: `docs/features/web_intelligence_detailed_explanation.md`
 - **消息分析过滤**: `docs/features/message_analysis_filter.md`

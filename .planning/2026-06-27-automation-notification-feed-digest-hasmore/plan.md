@@ -2,7 +2,7 @@
 
 ## Target
 
-Random feature: `Notification Center feed` in `docs/features/index.md`.
+Random feature: `Notification Center feed` in `docs/index.md`.
 
 ## Current gap
 

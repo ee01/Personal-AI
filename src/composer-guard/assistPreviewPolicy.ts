@@ -52,6 +52,9 @@ export interface ComposerRehearsalCueScopeInput {
 }
 
 export const DEFAULT_ASSIST_CONFIDENCE_THRESHOLD = 0.78;
+export const DEFAULT_DRAFT_COMPOSE_CONFIDENCE_THRESHOLD = 0.78;
+export const DEFAULT_WEB_REFINE_CONFIDENCE_THRESHOLD = 0.72;
+export const DEFAULT_WORK_REFINE_CONFIDENCE_THRESHOLD = 0.86;
 export const DEFAULT_ASSIST_PREVIEW_LIMIT = 520;
 export const COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS = 10;
 const MIN_ADAPTIVE_ASSIST_CONFIDENCE = 0.62;
@@ -60,12 +63,50 @@ const ACCEPT_THRESHOLD_ADJUSTMENT_RATE = 0.12;
 const REJECT_THRESHOLD_ADJUSTMENT_RATE = 0.16;
 const DEFAULT_REHEARSAL_CUE_SCOPE_ITEMS = 4;
 
+const WEB_AI_SURFACES = new Set([
+  'chatgpt',
+  'doubao',
+  'claude',
+  'gemini',
+  'codex_cli',
+  'claude_code_cli',
+  'cursor_agent_cli',
+  'generic_agent',
+]);
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
 function roundThreshold(value: number): number {
   return Number(value.toFixed(3));
+}
+
+export function buildComposerAssistThresholdKey(
+  surface?: string | null,
+  assistIntent?: string | null,
+): string | undefined {
+  const normalizedSurface = surface?.trim();
+  if (!normalizedSurface) return undefined;
+  const normalizedIntent =
+    assistIntent === 'draft_compose' || assistIntent === 'draft_refine'
+      ? assistIntent
+      : null;
+  return normalizedIntent
+    ? `${normalizedSurface}:${normalizedIntent}`
+    : normalizedSurface;
+}
+
+export function getDefaultComposerAssistThresholdForQuadrant(
+  surface?: string | null,
+  assistIntent?: string | null,
+): number {
+  if (assistIntent === 'draft_refine') {
+    return WEB_AI_SURFACES.has(surface || '')
+      ? DEFAULT_WEB_REFINE_CONFIDENCE_THRESHOLD
+      : DEFAULT_WORK_REFINE_CONFIDENCE_THRESHOLD;
+  }
+  return DEFAULT_DRAFT_COMPOSE_CONFIDENCE_THRESHOLD;
 }
 
 export function normalizeComposerAssistThreshold(
@@ -115,10 +156,29 @@ export function normalizeComposerAssistSurfaceThresholds(
 export function getComposerAssistThresholdForSurface(
   surface: string | undefined,
   thresholds: ComposerAssistSurfaceThresholds,
-  fallback = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
+  fallback?: number,
+  assistIntent?: string | null,
 ): number {
-  const normalizedFallback = normalizeComposerAssistThreshold(fallback);
+  const quadrantDefault = getDefaultComposerAssistThresholdForQuadrant(
+    surface,
+    assistIntent,
+  );
+  const normalizedFallback = normalizeComposerAssistThreshold(
+    Number.isFinite(fallback) ? fallback : quadrantDefault,
+    quadrantDefault,
+  );
   if (!surface) return normalizedFallback;
+  const compositeKey = buildComposerAssistThresholdKey(surface, assistIntent);
+  const compositeThreshold =
+    compositeKey && Number.isFinite(thresholds[compositeKey])
+      ? thresholds[compositeKey]
+      : undefined;
+  if (Number.isFinite(compositeThreshold)) {
+    return normalizeComposerAssistThreshold(
+      compositeThreshold,
+      normalizedFallback,
+    );
+  }
   const surfaceThreshold = thresholds[surface];
   return Number.isFinite(surfaceThreshold)
     ? normalizeComposerAssistThreshold(surfaceThreshold, normalizedFallback)
@@ -260,11 +320,28 @@ export function buildComposerRehearsalCueScopeLabel(
 function getComposerDraftTargetLabel(
   input: ComposerAssistDraftReceiptInput,
 ): string {
-  if (input.suggestionType === 'rewrite_prompt') {
-    return '外部 AI 完整 prompt';
+  if (
+    input.suggestionType === 'rewrite_prompt' ||
+    input.suggestionType === 'prompt_draft'
+  ) {
+    return input.suggestionType === 'prompt_draft'
+      ? '外部 AI 起草 prompt'
+      : '外部 AI 完整 prompt';
   }
   if (input.suggestionType === 'prompt_patch') {
     return '外部 AI prompt 补丁';
+  }
+  if (input.suggestionType === 'reply_refine') {
+    if (input.contextType === 'jira_issue' || input.surface === 'jira_issue') {
+      return 'Jira comment 精修草稿';
+    }
+    if (input.surface === 'ringcentral_thread') {
+      return 'RingCentral thread 精修草稿';
+    }
+    if (input.surface === 'ringcentral_message') {
+      return 'RingCentral 精修草稿';
+    }
+    return '精修后的草稿';
   }
   if (
     input.contextType === 'web_agent_prompt' ||
@@ -587,7 +664,10 @@ export function buildComposerAssistDraftReceipt(
   input: ComposerAssistDraftReceiptInput,
 ): ComposerAssistDraftReceipt {
   const reviewRequired = Boolean(input.reviewRequired);
-  const replacesDraft = input.suggestionType === 'rewrite_prompt';
+  const replacesDraft =
+    input.suggestionType === 'rewrite_prompt' ||
+    input.suggestionType === 'prompt_draft' ||
+    input.suggestionType === 'reply_refine';
   return {
     title: '草稿回执',
     rows: [
@@ -600,10 +680,14 @@ export function buildComposerAssistDraftReceipt(
         label: '动作边界',
         value: reviewRequired
           ? replacesDraft
-            ? '先锁定完整预览，确认后替换原 prompt'
+            ? input.suggestionType === 'reply_refine'
+              ? '先锁定完整预览，确认后替换原草稿'
+              : '先锁定完整预览，确认后替换原 prompt'
             : '先锁定预览，确认后只插入草稿'
           : replacesDraft
-            ? '点击 icon 只替换原 prompt，不发送/提交'
+            ? input.suggestionType === 'reply_refine'
+              ? '点击 icon 只替换原草稿，不发送/提交'
+              : '点击 icon 只替换原 prompt，不发送/提交'
             : '点击 icon 只插入草稿，不发送/提交',
         tone: reviewRequired ? 'warn' : 'ok',
       },
@@ -618,12 +702,16 @@ export function buildComposerAssistInsertionReceipt(
 ): ComposerAssistInsertionReceipt {
   const target = getComposerDraftTargetLabel(input);
   const replacesDraft =
-    input.suggestionType === 'rewrite_prompt' &&
+    (input.suggestionType === 'rewrite_prompt' ||
+      input.suggestionType === 'prompt_draft' ||
+      input.suggestionType === 'reply_refine') &&
     input.insertMode === 'replace_draft';
   const isWebAi =
     input.contextType === 'web_agent_prompt' ||
     input.suggestionType === 'context_pack' ||
-    input.suggestionType === 'prompt_patch';
+    input.suggestionType === 'prompt_patch' ||
+    input.suggestionType === 'prompt_draft' ||
+    input.suggestionType === 'rewrite_prompt';
   const isJira =
     input.contextType === 'jira_issue' || input.surface === 'jira_issue';
   const isRingCentral =
@@ -639,7 +727,9 @@ export function buildComposerAssistInsertionReceipt(
 
   return {
     title: replacesDraft
-      ? '已替换原 prompt'
+      ? input.suggestionType === 'reply_refine'
+        ? '已替换原草稿'
+        : '已替换原 prompt'
       : input.suggestionType === 'prompt_patch'
         ? '已追加 prompt 补丁'
         : input.suggestionType === 'context_pack'

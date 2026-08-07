@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/index.md`.
 - [x] Randomly select a non-fresh feature target from the index.
 - [x] Check local Reminders `Personal AI` with AppleScript plus EventKit fallback.
 - [x] Inspect Memory Lens docs, source, and existing E2E verifier.

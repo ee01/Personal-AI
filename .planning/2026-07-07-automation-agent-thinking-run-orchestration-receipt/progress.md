@@ -2,7 +2,7 @@
 
 ## 2026-07-07
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and the random-feature memory workflow.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and the random-feature memory workflow.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over item.
 - Sampled feature rows and selected `Agent Thinking 分析编排`.
 - Created this isolated planning directory.

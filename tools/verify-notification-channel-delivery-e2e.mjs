@@ -51,15 +51,19 @@ async function startMockMemoryServer() {
       ) {
         assert.equal(url.searchParams.get('channel'), 'chrome');
         assert.equal(url.searchParams.get('lanes'), 'todo,notice');
+        assert.equal(url.searchParams.get('deliveryMode'), 'incremental');
+        const visibleItems = feedItems.filter(
+          (item) => !successfullyDeliveredRefs.has(item.sourceRef),
+        );
         sendJson(res, {
-          items: feedItems,
-          total: feedItems.length,
+          items: visibleItems,
+          total: visibleItems.length,
           meta: {
             channel: 'chrome',
             lanes: ['todo', 'notice'],
-            deliveryMode: 'retry_after_cooldown',
+            deliveryMode: 'incremental',
             limit: 20,
-            returned: feedItems.length,
+            returned: visibleItems.length,
             hasMore: false,
             snapshotReceipt: {
               label: 'Feed 快照口径回执',
@@ -79,7 +83,22 @@ async function startMockMemoryServer() {
         url.pathname.endsWith('/notification-center/delivery')
       ) {
         const body = await readRequestBody(req);
+        deliveryAttempts.push(body.events);
+        if (failDeliveryRequestsRemaining > 0) {
+          failDeliveryRequestsRemaining -= 1;
+          sendJson(res, { error: 'simulated_delivery_write_failure' }, 503);
+          return;
+        }
         deliveryBatches.push(body.events);
+        for (const event of body.events) {
+          if (
+            event.status === 'delivered' ||
+            event.status === 'clicked' ||
+            event.status === 'dismissed'
+          ) {
+            successfullyDeliveredRefs.add(event.sourceRef);
+          }
+        }
         sendJson(res, {
           ok: true,
           updated: body.events.length,
@@ -309,6 +328,10 @@ const feedItems = [
 ];
 
 const deliveryBatches = [];
+const deliveryAttempts = [];
+const successfullyDeliveredRefs = new Set();
+let failDeliveryRequestsRemaining =
+  process.env.NOTIFICATION_E2E_FAIL_FIRST_DELIVERY === '1' ? 1 : 0;
 let launched;
 let mockMemory;
 
@@ -346,13 +369,33 @@ try {
     });
   }, mockMemory.baseUrl);
 
+  const exercisesOutbox =
+    process.env.NOTIFICATION_E2E_FAIL_FIRST_DELIVERY === '1';
+  if (exercisesOutbox) {
+    await waitFor(
+      () => deliveryAttempts.length >= 1,
+      'initial failed batched delivery attempt',
+      70000,
+    );
+    await serviceWorker.evaluate(async () => {
+      await globalThis.__personalAiPollBackendNotificationsForE2E();
+    });
+  }
+
   await waitFor(
-    () => deliveryBatches.flat().length >= 4,
+    () => deliveryBatches.flat().length >= (exercisesOutbox ? 5 : 4),
     'failed and delivered delivery reports',
     70000,
   );
 
-  const deliveries = deliveryBatches.flat();
+  const deliveries = deliveryBatches[0];
+  assert.equal(
+    deliveryBatches.length,
+    exercisesOutbox ? 2 : 1,
+    exercisesOutbox
+      ? 'the recovery poll should flush one outbox batch, then report the one Chrome create retry failure'
+      : 'one poll should report all Chrome delivery receipts in one POST',
+  );
   assert.deepEqual(
     deliveries.map((event) => [
       event.sourceRef,
@@ -377,7 +420,7 @@ try {
   const createCalls = await serviceWorker.evaluate(
     () => globalThis.__notificationCreateCalls,
   );
-  assert.equal(createCalls.length, 4);
+  assert.equal(createCalls.length, exercisesOutbox ? 5 : 4);
   assert.match(createCalls[0].notificationId, /notif-create-fail/);
   assert.match(createCalls[1].notificationId, /notif-create-ok/);
   assert.match(createCalls[2].notificationId, /notif-snoozed-due/);
@@ -394,9 +437,31 @@ try {
     createCalls[3].contextMessage,
     /Glip发送失败（bot_not_configured，未送达）/,
   );
+  if (exercisesOutbox) {
+    assert.equal(
+      createCalls.filter((call) => call.notificationId.includes('notif-create-ok')).length,
+      1,
+      'a delivered notification must not be displayed again after outbox recovery',
+    );
+    assert.equal(
+      createCalls.filter((call) => call.notificationId.includes('notif-snoozed-due')).length,
+      1,
+      'a delivered todo must not be displayed again after outbox recovery',
+    );
+    const outbox = await serviceWorker.evaluate(async () =>
+      chrome.storage.local.get('notification_center_chrome_delivery_outbox_v1'),
+    );
+    assert.equal(
+      outbox.notification_center_chrome_delivery_outbox_v1,
+      undefined,
+      'successful outbox replay should remove the persisted batch',
+    );
+  }
 
   console.log(
-    '✅ notification channel delivery E2E passed: create failure wrote failed receipt, later items still delivered, due snooze kept unresolved context, and cross-channel receipts stayed visible',
+    exercisesOutbox
+      ? '✅ notification channel delivery outbox E2E passed: failed batch was replayed before the next incremental feed and successful notifications were not displayed twice'
+      : '✅ notification channel delivery E2E passed: one incremental poll wrote one batched receipt POST, create failure stayed isolated, due snooze kept unresolved context, and cross-channel receipts stayed visible',
   );
 } finally {
   if (launched?.context) {

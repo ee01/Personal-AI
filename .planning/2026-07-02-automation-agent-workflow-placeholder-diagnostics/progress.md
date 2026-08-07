@@ -6,7 +6,7 @@
 - Checked Reminders with AppleScript plus EventKit fallback; found no open or related `Personal AI` item to incorporate.
 - Completed current web research against OpenAI Agents SDK tracing, LangGraph persistence, OpenTelemetry GenAI conventions, and the 2026 structural coverage paper.
 - Chosen implementation slice: make Agent Workflow run diagnostics and next actions honor `storageReview.toolPlaceholderCount` when trace labels are absent.
-- Implemented the fallback in `src/agentWorkflowDiagnostics.ts`, added a storageReview-only placeholder-count verifier case, and updated `docs/features/agent_workflow.md`.
+- Implemented the fallback in `src/agentWorkflowDiagnostics.ts`, added a storageReview-only placeholder-count verifier case, and updated `docs/features/message_analysis.md`.
 - Validation passed:
   - `npm run verify:agent-workflow`
   - `node --check tools/verify-agent-workflow-options-e2e.mjs`

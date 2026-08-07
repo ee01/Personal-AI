@@ -25,7 +25,7 @@
 3. 当当前页面已有可搜索 query 且位于搜索结果页时，说明切换范围会立即重跑当前搜索并同步 URL；否则说明输入查询后才按该范围读取。
 4. 更新中文/英文 i18n 文案。
 5. 扩展 `verify-memory-search-scope-e2e.mjs`，验证 Work、All、Personal 和 legacy `both` 路由下 receipt 文案。
-6. 更新 `docs/features/memory_system.md` 和 `docs/features/index.md`。
+6. 更新 `docs/memory_system.md` 和 `docs/index.md`。
 
 ## 验证
 

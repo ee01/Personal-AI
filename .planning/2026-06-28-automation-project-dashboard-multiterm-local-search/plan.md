@@ -6,7 +6,7 @@
 
 ## 依据
 
-- 本轮随机目标来自 `docs/features/index.md`：`项目本地查找` / `Project Dashboard`。
+- 本轮随机目标来自 `docs/index.md`：`项目本地查找` / `Project Dashboard`。
 - `docs/progressing/to-verify.md` 为空。
 - 本机 Reminders 可读，但没有 `Personal AI` 列表；本轮没有 Reminder item 可关联或完成。
 - 业内扫描：

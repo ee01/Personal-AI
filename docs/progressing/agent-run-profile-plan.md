@@ -468,10 +468,10 @@ npm run eval:run -- --suite agent-run-profile --no-repair
 
 功能实现完成后，要把关键点和关键逻辑维护进正式 docs：
 
-- 若 P0 只做输入框 chip 和草稿注入：更新 `docs/features/compose_assist.md`，说明 `compose_to_ai` / Web AI 输入框里的 run profile 边界。
+- 若 P0 只做输入框 chip 和草稿注入：更新 `docs/features/assist.md`，说明 `compose_to_ai` / Web AI 输入框里的 run profile 边界。
 - 更新 `docs/features/custom_prompts.md`，说明 Run Profile 与长期自定义提示词的区别：局部任务设置 vs 长期偏好配置。
 - 更新 `docs/features/personal_skill_foundry.md`，说明 skill 可以声明 default run profile，但 profile 不等于 skill。
-- 更新 `docs/features/memory_system.md`，说明 `AgentRunProfile` 是运行前配置记忆，来源、匹配和 redaction 规则。
+- 更新 `docs/memory_system.md`，说明 `AgentRunProfile` 是运行前配置记忆，来源、匹配和 redaction 规则。
 - 如果 P1/P2 做成独立 API 和列表页，再新增 `docs/features/agent_run_profile.md`，避免把大段运行画像逻辑塞进 Compose Assist 文档。
 - 若 Desktop App / Codex / OpenClaw 适配落地，还要同步更新 `desktop-app/docs/features/doubao_bridge.md` 或相关 provider docs。
 

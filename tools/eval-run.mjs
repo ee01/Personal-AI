@@ -289,6 +289,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runSourceMemoryDistillerCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'memory-claim-attribution') {
+    return runMemoryClaimAttributionCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'change-memory-ledger') {
     return runChangeMemoryLedgerCase({ suite, caseItem, runDir, collected });
   }
@@ -2211,6 +2215,106 @@ async function runSourceMemoryDistillerCase({
         : 'Source Memory Distiller eval completed.'),
     improvementSuggestions: response.improvementSuggestions || [
       '检查 eval command stderr/stdout，确认 migration、生产 service 与 tsx runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runMemoryClaimAttributionCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const input = caseItem.sampleContext?.input || {};
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      scenario: caseItem.scenario,
+      sourceType: input.sourceType,
+      hasSender: Boolean(input.sender),
+      contentLength: String(input.content || '').length,
+      forceResolverFailure: Boolean(caseItem.sampleContext?.forceResolverFailure),
+      correction: caseItem.sampleContext?.correction,
+      expectedBehavior: caseItem.expectedBehavior,
+    },
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-memory-claim-attribution.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'memory_claim_attribution_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-6000),
+    stderr: commandResult.stderr.slice(-6000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      sourceProvenance: caseItem.sampleContext?.sourceProvenance || [],
+      sourceType: input.sourceType,
+      hasSender: Boolean(input.sender),
+      metadataSignals: Object.keys(input.metadata || {}),
+      forceResolverFailure: Boolean(caseItem.sampleContext?.forceResolverFailure),
+      correction: caseItem.sampleContext?.correction || null,
+    },
+    sampleSummary: summarizeSampleText(
+      input.content || collected.primaryText || caseItem.scenario || caseItem.title,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Memory Claim Attribution eval 时出错，未能判断主张归属与写入边界。'
+        : 'Memory Claim Attribution eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 migration、生产 claim service 与 tsx runner 是否可执行。',
     ],
     why: response.why || responseEnvelope.error,
     topMatch: response.topMatch,

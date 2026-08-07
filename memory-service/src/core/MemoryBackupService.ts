@@ -212,6 +212,9 @@ interface MemoryBackupImportInspection {
 const TABLES_TO_MERGE = [
   '_migrations',
   'messages_raw',
+  'memory_claims',
+  'memory_claim_revisions',
+  'memory_claim_links',
   'chunks',
   'entities',
   'entity_properties',

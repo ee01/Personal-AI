@@ -34,7 +34,7 @@
   - `src/modals/components/MeetingHistoryPage.vue`
   - `desktop-app/scripts/meeting-pilot-history-check.mjs`
   - `docs/features/meeting_pilot.md`
-  - `docs/features/index.md`
+  - `docs/index.md`
 
 ### Phase 4: Verification
 - **Status:** complete

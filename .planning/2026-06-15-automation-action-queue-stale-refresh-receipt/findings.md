@@ -3,7 +3,7 @@
 ## Repo Findings
 
 - `docs/progressing/to-verify.md` currently says `暂无。`; there is no carry-over verification item.
-- Random selected feature: `动作队列` under Memory Service, documented in `docs/features/memory_system.md`.
+- Random selected feature: `动作队列` under Memory Service, documented in `docs/memory_system.md`.
 - The Action Queue page already summarizes visible results, attention items, running items, and failed/dead-letter items.
 - `ActionQueue.vue` preserves data on silent polling failures, but a manual refresh failure clears `actions` and `totalActions` even when the page already had a valid list. That makes a transient service failure feel like the queue is empty or unavailable rather than "current state is unknown, last snapshot retained."
 - `loadError` is displayed below guidance. When data is retained after a silent failure, the primary guidance can still say the queue is normal, so the user has to notice the lower error box to understand freshness.

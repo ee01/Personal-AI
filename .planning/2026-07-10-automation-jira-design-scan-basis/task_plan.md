@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, automation memory, and `docs/progressing/to-verify.md`
+- [x] Read `AGENT.md`, `docs/index.md`, automation memory, and `docs/progressing/to-verify.md`
 - [x] Check Reminders list state with AppleScript and EventKit fallback
 - [x] Inspect `docs/features/jira_design_links.md`, `src/jiraDesignLinks.ts`, `src/contentScriptJira.ts`, and existing verifier/E2E
 - [x] Run a small external scan for Figma/Jira, Zeplin/Jira, and traceability guidance
@@ -28,7 +28,7 @@ Complete
 
 ### Phase 4: Docs
 - [x] Update `docs/features/jira_design_links.md`
-- [x] Update the matching `docs/features/index.md` row
+- [x] Update the matching `docs/index.md` row
 - **Status:** complete
 
 ### Phase 5: Verification

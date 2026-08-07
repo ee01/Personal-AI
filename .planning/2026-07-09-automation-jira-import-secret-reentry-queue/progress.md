@@ -4,7 +4,7 @@
 
 - Read `AGENT.md`, automation memory, random-feature-loop memory skill, and planning-with-files skill.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over item.
-- Sampled `docs/features/index.md` and selected `secret value 脱敏` under Jira Automation Import.
+- Sampled `docs/index.md` and selected `secret value 脱敏` under Jira Automation Import.
 - Checked Reminders: EventKit found `Personal AI`, 4 total reminders, 0 incomplete; no related open item to complete.
 - Researched Atlassian, Microsoft Power Platform, GitHub push protection, and TAP security/usability papers.
 - Inspected Jira Automation Import docs, transform logic, content script UI, unit tests, and E2E script. Current gap: flat secret map is safe but not grouped into an actionable re-entry queue.

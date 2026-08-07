@@ -721,7 +721,7 @@ LLM 返回的匹配结果格式：
 **相关文档**:
 
 - [定时消息管理](./scheduled_messages_manager.md)
-- [消息分析过滤](./message_analysis_filter.md)
+- [聊天消息分析入库](./message_analysis.md)
 
 **外部参考**:
 

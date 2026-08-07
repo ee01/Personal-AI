@@ -2,7 +2,7 @@
 
 ## Goal
 
-Improve one randomly selected feature from `docs/features/index.md`: `Rehearsal 管理页`.
+Improve one randomly selected feature from `docs/index.md`: `Rehearsal 管理页`.
 
 Scope is intentionally narrow: make the actual Rehearsal management controls state their read/write/execution boundary before the user clicks, without changing Rehearsal matching, API contracts, lifecycle semantics, or external integrations.
 
@@ -12,7 +12,7 @@ Scope is intentionally narrow: make the actual Rehearsal management controls sta
 2. [complete] Research comparable reminder/task/prospective-memory products and papers.
 3. [complete] Add control-level `title` and `aria-label` boundaries to Rehearsals page filter/search/refresh/load-more/recovery/cue-editor controls.
 4. [complete] Extend `tools/verify-rehearsals-page-e2e.mjs` to assert the new pre-click boundaries.
-5. [complete] Update `docs/features/rehearsal.md` and the `Rehearsal 管理页` row in `docs/features/index.md`.
+5. [complete] Update `docs/features/rehearsal.md` and the `Rehearsal 管理页` row in `docs/index.md`.
 6. [complete] Run targeted verification: Rehearsals E2E, `npm start` first successful compile, scoped `git diff --check`.
 7. [complete] Update automation memory with the selected feature, Reminder result, implementation, docs, and verification.
 

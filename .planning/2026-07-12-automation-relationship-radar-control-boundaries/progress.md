@@ -2,7 +2,7 @@
 
 ## 2026-07-12
 
-- Selected `人脉关系人物雷达` from `docs/features/index.md` after `docs/progressing/to-verify.md` was empty and recent automation memory showed many exact targets already covered.
+- Selected `人脉关系人物雷达` from `docs/index.md` after `docs/progressing/to-verify.md` was empty and recent automation memory showed many exact targets already covered.
 - Checked local `Personal AI` Reminders with EventKit: 4 total items, all completed historical Doubao / notification feedback; no Relationship Radar item needed incorporation or completion.
 - Added control-level `title` / `aria-label` boundaries in `src/modals/components/RelationshipRadarPage.vue` for:
   - people search input
@@ -14,7 +14,7 @@
   - person cards
   - spotlight `查看完整 brief`, `强制刷新此人`, and `复制给 AI`
 - Updated `tools/verify-relationship-radar-e2e.mjs` to assert those boundaries in the rebuilt extension UI.
-- Updated `docs/features/relationship_radar.md` and the Relationship Radar row in `docs/features/index.md`.
+- Updated `docs/features/relationship_radar.md` and the Relationship Radar row in `docs/index.md`.
 
 ## Verification
 

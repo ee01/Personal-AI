@@ -2,8 +2,11 @@
 # 用途：Jira Automation 不能直连 memory-service 时，经 Dify HTTP 转发到 /api/v1/agent-tasks/execute
 #
 # 导入后请检查：
-# 1. 环境变量 MEMORY_SERVICE_AGENT_TASK_URL（默认已填 memory.xmnup.com）
-# 2. 环境变量 MEMORY_SERVICE_API_KEY（若 memory-service 开了 API_KEY 再填）
+# 1. 环境变量 MEMORY_SERVICE_AGENT_TASK_URL
+#    默认写死 Dify worker 可达的 NodePort：http://10.32.56.212:3210/...
+#    （hostname memory.xmnup.com 对 Dify 不可达；Chrome AR 仍用 .env MEMORY_SERVICE_BASE_URL）
+# 2. HTTP 节点默认 no-auth（当前 memory-service 未开 API_KEY）。若后端启用了 API_KEY，
+#    在 Dify 里把该 HTTP 节点 Authorization 改成 Bearer，并填 MEMORY_SERVICE_API_KEY
 # 3. 发布为 Workflow，复制 API Access 的 URL + API Key，回头给我替换 Config / AppScript 包装体
 #
 # Jira / AppScript 期望调用体（response_mode=blocking）：
@@ -32,9 +35,9 @@ workflow:
   environment_variables:
     - id: env-memory-agent-task-url
       name: MEMORY_SERVICE_AGENT_TASK_URL
-      value: http://memory.xmnup.com/api/v1/agent-tasks/execute
+      value: http://10.32.56.212:3210/api/v1/agent-tasks/execute
       value_type: string
-      description: memory-service AgentTask execute 完整 URL；导入后可按环境改写
+      description: memory-service AgentTask execute 完整 URL（Dify 跳板专用 NodePort；非 Chrome .env）
     - id: env-memory-api-key
       name: MEMORY_SERVICE_API_KEY
       value: ''
@@ -468,10 +471,8 @@ workflow:
           method: post
           url: '{{#env.MEMORY_SERVICE_AGENT_TASK_URL#}}'
           authorization:
-            type: api-key
-            config:
-              type: bearer
-              api_key: '{{#env.MEMORY_SERVICE_API_KEY#}}'
+            type: no-auth
+            config: null
           headers: "Content-Type: application/json\nAccept: application/json\nX-User-Id: {{#1785472000002.x_user_id#}}\nX-Agent-Task-Jumpboard: dify"
           params: ''
           body:

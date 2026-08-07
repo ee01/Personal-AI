@@ -23,7 +23,7 @@
 1. Add explicit hover and screen-reader boundaries to the `Join in browser`, `Copy link`, and `Try app again` buttons.
 2. Keep the change presentation/accessibility-only: no parsing, native scheme launch, browser URL, copy payload, storage write, or timer semantics change.
 3. Extend unit and Playwright E2E assertions so the button labels prove hidden passcode/details and no-join/no-default-change boundaries.
-4. Update `docs/features/meeting_native_join.md` and `docs/features/index.md` concisely.
+4. Update `docs/features/meeting_native_join.md` and `docs/index.md` concisely.
 5. Verify with Native Join unit/E2E checks, `npm start` first successful compile, and scoped `git diff --check`.
 
 ## Implementation Notes

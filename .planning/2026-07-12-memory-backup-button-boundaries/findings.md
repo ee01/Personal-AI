@@ -1,12 +1,12 @@
 # Findings & Decisions
 
 ## Requirements
-- User asked for a random feature sweep from `docs/features/index.md`: verify docs vs code, research comparable products/papers, inspect Reminders, plan first, implement, update docs, and run the strongest practical validation.
+- User asked for a random feature sweep from `docs/index.md`: verify docs vs code, research comparable products/papers, inspect Reminders, plan first, implement, update docs, and run the strongest practical validation.
 - `docs/progressing/to-verify.md` says there is no carry-over work.
 - Worktree is broadly dirty from prior automation/user work; this run should only own Memory Coverage backup button boundaries, docs/index updates, planning files, and automation memory.
 
 ## Research Findings
-- Selected feature: `记忆导入/导出/备份` under Memory Service, source doc `docs/features/memory_system.md`.
+- Selected feature: `记忆导入/导出/备份` under Memory Service, source doc `docs/memory_system.md`.
 - Reminder findings: AppleScript listed local Reminder lists but missed `Personal AI`; EventKit found `Personal AI` with 4 total items and 0 incomplete items. No Reminder feedback applies or should be marked done.
 - Current docs accurately describe `/export`, `/import`, manifest size/SHA checks, dry-run, merge/replace, cross-user confirmation, and Coverage failure receipts.
 - Current Memory Coverage UI already shows pre-action, pending, success, failure, dry-run, write confirmation, restore failure, and post-restore receipts.

@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `梦境重放` (`docs/features/memory_system.md`)
+- Feature: `梦境重放` (`docs/memory_system.md`)
 - UI: `src/modals/components/DreamInsights.vue`
 - Verifier: `tools/verify-memory-dreams-e2e.mjs`
 
@@ -22,7 +22,7 @@
 2. Show a first-screen `深链已忽略` receipt when the raw query exists but does not normalize to a safe single `.md` dream filename.
 3. Keep invalid deep links read-only: do not request the invalid file, do not re-run Dream Replay, do not update digest state, and do not confirm or write memory.
 4. Extend the existing Dream Replay E2E to load an invalid deep link and assert the receipt plus non-effect boundary.
-5. Update the Dream Replay section in `docs/features/memory_system.md`.
+5. Update the Dream Replay section in `docs/memory_system.md`.
 
 ## Validation
 

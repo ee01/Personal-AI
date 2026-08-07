@@ -5,7 +5,7 @@
 - Feature: `关注后续 / Watch`
 - Capability: Message Reaction
 - Source doc: `docs/features/message_reaction.md`
-- Index row: `docs/features/index.md`
+- Index row: `docs/index.md`
 
 ## Context
 

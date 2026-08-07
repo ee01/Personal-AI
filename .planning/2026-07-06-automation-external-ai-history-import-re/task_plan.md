@@ -9,7 +9,7 @@ Phase 5
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, prior memory guidance, existing planning files, and Reminder state.
+- [x] Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, prior memory guidance, existing planning files, and Reminder state.
 - [x] Randomly select a viable feature while avoiding the freshest exact targets.
 - [x] Inspect the feature doc, UI code, service tests, and E2E harness.
 - **Status:** complete

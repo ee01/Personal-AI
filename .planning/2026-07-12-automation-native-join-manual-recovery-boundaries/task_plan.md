@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `NC 加会` / `NC 加会浏览器回退`
-- Docs: `docs/features/meeting_native_join.md`, `docs/features/index.md`
+- Docs: `docs/features/meeting_native_join.md`, `docs/index.md`
 - Main code: `src/ringcentralNativeJoin.ts`
 - Verifier: `tools/verify-ringcentral-native-join-e2e.mjs`
 

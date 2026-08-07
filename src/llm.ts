@@ -10,6 +10,7 @@ import {
 import {
   buildSamplingPayload,
   buildTokenLimitPayload,
+  isOpenAIReasoningModel,
   resolveTemperature,
   SCENARIO_TEMPERATURE,
   type LLMScenario,
@@ -445,6 +446,9 @@ async function handleOllamaRequest(body: any): Promise<LLMHandlerResult> {
             options: {
                 ...(temperature === undefined ? {} : { temperature }),
                 top_p: DEFAULT_TOP_P,
+                ...(typeof body.max_tokens === 'number' && Number.isFinite(body.max_tokens)
+                    ? { num_predict: body.max_tokens }
+                    : {}),
             },
         })
     });
@@ -496,6 +500,10 @@ async function handleOpenAIRequest(body: any): Promise<LLMHandlerResult> {
         ...readSamplingRequest(body),
         topP: DEFAULT_TOP_P,
       }),
+      ...buildTokenLimitPayload(model, body.max_tokens),
+      ...(isOpenAIReasoningModel(model) && body.reasoning_effort
+        ? { reasoning_effort: body.reasoning_effort }
+        : {}),
   });
 
   return {
@@ -528,6 +536,7 @@ async function handleGroqRequest(body: any): Promise<LLMHandlerResult> {
           ...readSamplingRequest(body),
           topP: DEFAULT_TOP_P,
         }),
+        ...buildTokenLimitPayload(groqModel, body.max_tokens),
     });
 
     return {

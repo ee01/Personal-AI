@@ -51,7 +51,10 @@ import {
   getDesignUrlDedupeKey,
   getFigmaDisplayLabel,
   getUXEpicStatusTone,
+  isClosedJiraStatus,
   isDesignUpdatedDateMissing,
+  isSameJiraProject,
+  JIRA_CONTEXT_PANEL_ITEM_LIMIT,
   matchesDesignDomain,
   matchesProjectPattern,
   normalizeDesignUrl,
@@ -64,6 +67,7 @@ import {
   parseJiraIssueKeysFromText,
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
+  prepareDesignDisplayItems,
   shouldShowUXTicketKeySourceReceipt,
   sortDesignDisplayItems,
 } from '../src/jiraDesignLinks.ts';
@@ -75,6 +79,12 @@ function verifyProjectPatternMatching() {
   assert.equal(matchesProjectPattern('UXDES-123', 'UX*'), true);
   assert.equal(matchesProjectPattern('UXDES-123', ' ux* '), true);
   assert.equal(matchesProjectPattern('RCV-123', 'UX*'), false);
+  assert.equal(isSameJiraProject('RCV-1', 'RCV-99'), true);
+  assert.equal(isSameJiraProject('RCV-1', 'MTR-99'), false);
+  assert.equal(isSameJiraProject('UX-1', 'UXDES-2'), false);
+  assert.equal(isClosedJiraStatus('Closed'), true);
+  assert.equal(isClosedJiraStatus('Done'), true);
+  assert.equal(isClosedJiraStatus('In Progress'), false);
 }
 
 function verifyUrlNormalization() {
@@ -642,6 +652,15 @@ function verifyDisplayOrdering() {
       summary: 'Missing link item',
       source: 'parent_child_issue',
       linkProvided: false,
+      issueStatus: 'To Do',
+    },
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'UX-125',
+      summary: 'Closed parent item',
+      source: 'parent_issue_link',
+      linkProvided: false,
+      issueStatus: 'Closed',
     },
     {
       type: 'design_link',
@@ -664,22 +683,39 @@ function verifyDisplayOrdering() {
   ];
 
   const sorted = sortDesignDisplayItems(items);
-  assert.equal(getDesignDisplayPriority(sorted[0]), 0);
-  assert.equal(getDesignDisplayStatusTone(sorted[0]), 'ready');
-  assert.equal(getDesignAttentionLevel(sorted[0]), 'ready');
+  // Channel: current-ticket direct / linked+remote first, then parent (closed before open).
   assert.equal((sorted[0] as any).uxTicketKey, 'UX-123');
+  assert.equal(getDesignDisplayStatusTone(sorted[0]), 'ready');
   assert.equal((sorted[1] as any).status, 'Design updated');
-  assert.equal(getDesignDisplayStatusTone(sorted[1]), 'updated');
-  assert.equal(getDesignAttentionLevel(sorted[1]), 'updated');
-  assert.equal((sorted[2] as any).linkProvided, false);
-  assert.equal(getDesignDisplayStatusTone(sorted[2]), 'missing');
-  assert.equal(getDesignAttentionLevel(sorted[2]), 'missing');
-  assert.equal(sorted[3].type, 'figma');
-  assert.equal(getDesignDisplayStatusTone(sorted[3]), 'neutral');
-  assert.equal(getDesignAttentionLevel(sorted[3]), 'neutral');
-  assert.equal(
+  assert.equal(sorted[2].type, 'figma');
+  assert.equal((sorted[3] as any).uxTicketKey, 'UX-125');
+  assert.equal((sorted[4] as any).uxTicketKey, 'UX-124');
+
+  const prepared = prepareDesignDisplayItems([
+    ...items,
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'ABC-999',
+      summary: 'Same project should hide',
+      source: 'linked_issues',
+      linkProvided: false,
+    },
+    {
+      type: 'figma',
+      url: 'https://www.figma.com/design/extra/one',
+      source: 'description',
+    },
+    {
+      type: 'figma',
+      url: 'https://www.figma.com/design/extra/two',
+      source: 'description',
+    },
+  ], 'ABC-123');
+  assert.equal(prepared.length, JIRA_CONTEXT_PANEL_ITEM_LIMIT);
+  assert.ok(prepared.every(item => item.type !== 'ux_ticket' || (item as any).uxTicketKey !== 'ABC-999'));
+  assert.match(
     getDesignSourceSummary(sorted),
-    '4 entries · Remote link, Linked issue, Parent child, Description',
+    /^5 entries · Remote link, Linked issue/,
   );
 }
 

@@ -7,7 +7,7 @@
 - **Started:** 2026-06-10T16:xx:xx+08:00
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, and automation memory.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, and automation memory.
 - Checked local Reminders; no `Personal AI` list is present.
 - Selected `定时消息列表筛选` under Scheduled Messages.
 - Inspected docs, `ScheduledMessagesManager.tsx`, `scheduledMessagesFilters.ts`, unit tests, and CRUD E2E verifier.

@@ -7,7 +7,7 @@ Improve the randomly selected `今天排序与噪声控制` feature by making th
 ## Selected Feature
 
 - Feature: `今天排序与噪声控制`
-- Docs: `docs/features/today_pilot.md`, `docs/features/index.md`
+- Docs: `docs/features/today_pilot.md`, `docs/index.md`
 - Main UI: `src/modals/components/OverviewPage.vue`, `src/popup.tsx`
 - Verifiers: `tools/verify-day-pilot-home.ts`, `tools/verify-today-pilot-home-e2e.mjs`
 

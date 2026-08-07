@@ -2,7 +2,7 @@
 
 ## Repo State
 
-- `docs/progressing/to-verify.md` is empty, so a fresh random feature was selected from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` is empty, so a fresh random feature was selected from `docs/index.md`.
 - The worktree is broadly dirty from earlier runs. This run owns only the Skill Foundry suggestion button boundary slice plus matching E2E/docs/planning updates.
 
 ## Reminder State

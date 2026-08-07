@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机选中 `docs/features/index.md` 中的 `今天 Mission`。本轮只做一个窄的 UX 修复：Today Pilot 首页 mission 展开后，在反馈/复制/打开详情按钮前显示操作范围回执，让用户在点击前知道哪些动作只写 Today Pilot 展示/排序反馈，哪些只是本机剪贴板或导航，不会完成来源任务、标已读、改排程、发送或执行外部动作。
+随机选中 `docs/index.md` 中的 `今天 Mission`。本轮只做一个窄的 UX 修复：Today Pilot 首页 mission 展开后，在反馈/复制/打开详情按钮前显示操作范围回执，让用户在点击前知道哪些动作只写 Today Pilot 展示/排序反馈，哪些只是本机剪贴板或导航，不会完成来源任务、标已读、改排程、发送或执行外部动作。
 
 ## 依据
 
@@ -22,6 +22,6 @@
    - OpenClaw 卡：从首页移除不代表批准/拒绝/执行；真正处理必须去动作队列或决策中心。
 3. 补充样式，保持紧凑，不改排序、反馈 API、context pack、后端逻辑。
 4. 更新 `tools/verify-today-pilot-home-e2e.mjs`，覆盖普通卡和 OpenClaw 卡的预操作回执。
-5. 更新 `docs/features/today_pilot.md` 和 `docs/features/index.md` 的简短说明。
+5. 更新 `docs/features/today_pilot.md` 和 `docs/index.md` 的简短说明。
 6. 验证：`verify:day-pilot-home` -> `npm start` 首次成功编译 -> `verify:today-pilot-home:e2e` -> scoped `git diff --check`。
 

@@ -6,7 +6,7 @@
 - Read `AGENT.md`, the relevant planning skill instructions, and memory guidance for random feature loops.
 - Read stale root planning files and treated them as legacy Scheduled Messages context.
 - Checked `docs/progressing/to-verify.md`; no pending carry-over item.
-- Read `docs/features/index.md` and selected `人脉关系人物雷达` from a corrected random sample while avoiding very recent exact automation focuses.
+- Read `docs/index.md` and selected `人脉关系人物雷达` from a corrected random sample while avoiding very recent exact automation focuses.
 - Checked local Reminders list names; no `Personal AI` list exists.
 - Created this isolated planning directory for the current run.
 - Inspected `docs/features/relationship_radar.md`, `src/modals/components/RelationshipRadarPage.vue`, `memory-service/src/core/RelationshipRadarService.ts`, package verify scripts, and `tools/verify-relationship-radar-e2e.mjs`.

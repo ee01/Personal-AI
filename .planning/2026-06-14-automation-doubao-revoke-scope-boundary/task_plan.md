@@ -16,7 +16,7 @@ Goal: improve the selected `豆包互联 / Doubao Bridge` feature by checking cu
 
 ## Decisions
 
-- Selected feature: `豆包互联` under Doubao Bridge from `docs/features/index.md`.
+- Selected feature: `豆包互联` under Doubao Bridge from `docs/index.md`.
 - Source doc: `docs/features/doubao_bridge.md`.
 - Target UX gap: the Explorer `撤回已入库记忆` action is privacy-sensitive and scope-sensitive, but the near-control UI does not explain why the button is disabled or that the action only affects the current saved default scope while leaving the other scope and remote chat untouched.
 - Implementation slice: add a concise per-source revoke boundary receipt/status beside the revoke button. It should name Memory Service readiness, source running state, current saved scope, local artifact count, legacy unscoped audit count, and the non-effect on remote chat / other scopes.

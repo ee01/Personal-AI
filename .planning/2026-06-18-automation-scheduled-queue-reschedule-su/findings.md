@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Keep the corresponding feature doc current but not overly detailed.
 - Search current product and paper references for comparable patterns.
 - Implement low-decision incomplete/improvement work, then update docs and verify as fully as practical.

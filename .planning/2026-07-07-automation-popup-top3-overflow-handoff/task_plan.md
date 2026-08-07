@@ -8,7 +8,7 @@ Improve Today Pilot popup Top 3 so a user can recover the missions hidden by the
 
 - Feature: `Popup Top 3`
 - Capability: Today Pilot
-- Docs: `docs/features/today_pilot.md`, `docs/features/index.md`
+- Docs: `docs/features/today_pilot.md`, `docs/index.md`
 - Main UI: `src/popup.tsx`
 - Verification: `tools/verify-day-pilot-home.ts`, `tools/verify-today-pilot-home-e2e.mjs`
 

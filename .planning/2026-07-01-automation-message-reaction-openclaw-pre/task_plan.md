@@ -44,7 +44,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: `联动操作 / Openclaw` under Message Reaction | Random sample from `docs/features/index.md` after excluding very recent exact-focus runs |
+| Selected feature: `联动操作 / Openclaw` under Message Reaction | Random sample from `docs/index.md` after excluding very recent exact-focus runs |
 | Source doc: `docs/features/message_reaction.md` | Feature index source of truth |
 | Reminders branch closed: no visible `Personal AI` list | Local Reminders returned lists but no `Personal AI`; no item can be incorporated or marked done |
 | Keep edits narrow | Worktree is broadly dirty from prior/user work |

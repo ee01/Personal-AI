@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `多用户隔离` in `docs/features/index.md`.
+- Feature: `多用户隔离` in `docs/index.md`.
 - Surface: Memory Exploring / Today Pilot overview header.
 - Current state: Memory Service already resolves `X-User-Id`, blocks fallback writes, returns identity metadata from `/stats`, and the Explorer sidebar shows the current memory user.
 
@@ -22,7 +22,7 @@ Today Pilot's overview header can show memory/source counts from `/stats`, but t
 2. Use normal tone for explicit `X-User-Id` and warning tone for `default_fallback`.
 3. State the storage key and boundary: overview stats and missions are read from that per-user SQLite space; fallback is read-only compatibility and writes/import/restore remain blocked.
 4. Extend `tools/verify-memory-user-identity-e2e.mjs` to cover explicit and fallback overview receipts.
-5. Update `docs/features/memory_system.md` to document the overview receipt.
+5. Update `docs/memory_system.md` to document the overview receipt.
 
 ## Validation
 

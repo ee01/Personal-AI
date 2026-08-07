@@ -7,7 +7,7 @@ Goal: Improve the `Desktop Local ASR / Whisper fallback` user path for Meeting P
 1. [completed] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, feature index, target docs/code, Reminder state, and external references.
 2. [completed] Implement a narrow Speech panel presentation improvement for Local ASR stream warnings.
 3. [completed] Add focused verifier/E2E assertions for the new receipt wording.
-4. [completed] Update `docs/features/meeting_pilot.md` and `docs/features/index.md` concisely.
+4. [completed] Update `docs/features/meeting_pilot.md` and `docs/index.md` concisely.
 5. [completed] Run targeted verification, dev build, E2E, diff checks, and process cleanup.
 6. [completed] Update automation memory with the run summary.
 

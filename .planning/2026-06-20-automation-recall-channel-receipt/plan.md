@@ -11,7 +11,7 @@
 1. 检查 `RecallEngine`、搜索页和功能文档，确认四通道诊断字段是否已经真实返回。
 2. 检索业内产品与论文，确认多通道召回应该暴露来源、权限、通道缺席和关系/时间上下文，而不是只给一个黑箱分数。
 3. 在搜索结果摘要区新增 `召回通道回执`，说明本轮结果来自几个通道、哪些通道未完整覆盖，以及查看/刷新不会写入或确认答案。
-4. 更新 `docs/features/memory_system.md` 与 `docs/features/index.md`。
+4. 更新 `docs/memory_system.md` 与 `docs/index.md`。
 5. 运行 helper、dev compile、搜索页 E2E 和 scoped diff 验证。
 
 ## External Scan

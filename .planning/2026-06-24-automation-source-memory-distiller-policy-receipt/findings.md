@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Selected feature from `docs/features/index.md`: `Source Memory 蒸馏器`.
+- Selected feature from `docs/index.md`: `Source Memory 蒸馏器`.
 - Feature owner/capability: Memory Capture.
 - Source document: `docs/features/memory_capture.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`.

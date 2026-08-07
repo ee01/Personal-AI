@@ -2,13 +2,13 @@
 
 ## Goal
 
-本轮从 `docs/features/index.md` 随机样本中选中 `Coverage 质量分`。目标是让用户在点击质量分相关控件前，就能知道操作只作用于当前 Coverage 快照或只读诊断切片，不会重扫、同步、写库、标记已读或外发。
+本轮从 `docs/index.md` 随机样本中选中 `Coverage 质量分`。目标是让用户在点击质量分相关控件前，就能知道操作只作用于当前 Coverage 快照或只读诊断切片，不会重扫、同步、写库、标记已读或外发。
 
 ## Scope
 
 - In: `MemoryCoveragePage.vue` 中质量分焦点 `查看平台`、排序切换、P0 切片刷新等控制点的 `title` / `aria-label`。
 - In: 现有 Coverage E2E 增加真实 DOM 控制点断言。
-- In: `docs/features/memory_coverage_map.md` 与 `docs/features/index.md` 的简短文档更新。
+- In: `docs/features/memory_coverage_map.md` 与 `docs/index.md` 的简短文档更新。
 - Out: 质量分算法、`/coverage/map` 聚合、`priorityFocus` 排序、provider sync、智能录入、备份下载/恢复和真实 Memory Service 写入。
 
 ## Plan
@@ -31,7 +31,7 @@
 - `node --check tools/verify-memory-coverage-e2e.mjs`
 - `npm start -- --progress`，等首次 successful compile 后停止
 - `npm run verify:memory-coverage:e2e`
-- `git diff --check -- src/modals/components/MemoryCoveragePage.vue tools/verify-memory-coverage-e2e.mjs docs/features/memory_coverage_map.md docs/features/index.md .planning/2026-07-14-automation-coverage-quality-score-control-boundaries`
+- `git diff --check -- src/modals/components/MemoryCoveragePage.vue tools/verify-memory-coverage-e2e.mjs docs/features/memory_coverage_map.md docs/index.md .planning/2026-07-14-automation-coverage-quality-score-control-boundaries`
 
 ## Errors Encountered
 

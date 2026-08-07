@@ -1,7 +1,7 @@
 # Storyline Draft Findings
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`, inspect code and docs, research similar product/paper patterns, plan first, implement a bounded improvement, update docs, and verify thoroughly.
+- Pick a random feature from `docs/index.md`, inspect code and docs, research similar product/paper patterns, plan first, implement a bounded improvement, update docs, and verify thoroughly.
 - Check local Reminders `Personal AI` feedback before implementation and mark done only if a real related item exists.
 
 ## Selected Feature

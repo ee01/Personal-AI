@@ -17,7 +17,7 @@
 2. 保持旧保存样例兼容：旧基线没有配置快照时不强制判定为行为漂移。
 3. 在保存样例来源回执里，当基线配置和当前配置不同，明确标出“配置已变更”；如果结果也已过期，两者同时展示。
 4. 在单条保存基线对比和批量回归报告中加入配置行/配置摘要，帮助区分配置版本变化和业务结果变化。
-5. 更新 `docs/features/agent_workflow.md`，并跑 Agent Workflow helper verify、extension compile、Options E2E 和 scoped diff check。
+5. 更新 `docs/features/message_analysis.md`，并跑 Agent Workflow helper verify、extension compile、Options E2E 和 scoped diff check。
 
 ## 实现结果
 
@@ -25,7 +25,7 @@
 - `src/options.tsx`：复用配置快照作为 stale key；保存基线、批量回归、导出报告都携带配置摘要。
 - `tools/verify-agent-workflow-replay.ts`：覆盖配置快照、回读和配置漂移回执。
 - `tools/verify-agent-workflow-options-e2e.mjs`：覆盖真实 Options 保存基线、报告字段和配置变更后的回执提示。
-- `docs/features/agent_workflow.md`：同步当前行为。
+- `docs/features/message_analysis.md`：同步当前行为。
 
 ## Reminder
 
@@ -37,4 +37,4 @@
 - `npm run verify:agent-workflow`：通过。
 - `npm start`：首次 webpack dev compile 通过，随后停止 watch。
 - `node tools/verify-agent-workflow-options-e2e.mjs`：通过。
-- `git diff --check -- src/agentWorkflowReplay.ts src/options.tsx tools/verify-agent-workflow-replay.ts tools/verify-agent-workflow-options-e2e.mjs docs/features/agent_workflow.md .planning/2026-06-15-automation-agent-workflow-baseline-config-snapshot/plan.md`：通过。
+- `git diff --check -- src/agentWorkflowReplay.ts src/options.tsx tools/verify-agent-workflow-replay.ts tools/verify-agent-workflow-options-e2e.mjs docs/features/message_analysis.md .planning/2026-06-15-automation-agent-workflow-baseline-config-snapshot/plan.md`：通过。

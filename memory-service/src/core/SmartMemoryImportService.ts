@@ -7,6 +7,7 @@ import type { UserContext } from './UserContextManager.js';
 import { contentHash } from '../utils/hashing.js';
 import { chunkText } from '../utils/chunking.js';
 import { now } from '../utils/time.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
 
 export type SmartMemoryImportInputKind = 'paste' | 'file';
 export type SmartMemoryImportDetectedKind =
@@ -571,8 +572,9 @@ export class SmartMemoryImportService {
         `INSERT INTO messages_raw
           (id, content, summary, scope, source, source_type, source_title,
            sender, group_id, group_name, timestamp, entities_json,
-           matched_projects_json, importance, sentiment, metadata_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           matched_projects_json, importance, sentiment, metadata_json,
+           claim_attribution_status, claim_attribution_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)`,
       )
       .run(
         messageId,
@@ -667,6 +669,7 @@ export class SmartMemoryImportService {
         ts,
       );
     }
+    new MemoryClaimAttributionService(this.db).ensureForMessage(messageId);
   }
 
   private tableExists(table: string): boolean {

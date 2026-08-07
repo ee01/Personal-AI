@@ -56,6 +56,7 @@ import { SceneFrameService } from './SceneFrameService.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
 import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
 
 const DEFAULT_LIMIT_BY_SURFACE: Record<string, number> = {
   web_passive: 3,
@@ -458,6 +459,7 @@ export class ContextRecallService {
   private outcomeLoop: MemoryOutcomeLoopService;
   private changeLedger: MemoryChangeLedgerService;
   private cohesionGate: EvidenceCohesionGateService;
+  private claimAttribution: MemoryClaimAttributionService;
 
   constructor(
     private db: Database.Database,
@@ -474,6 +476,7 @@ export class ContextRecallService {
     this.outcomeLoop = new MemoryOutcomeLoopService(db, userId);
     this.changeLedger = new MemoryChangeLedgerService(db);
     this.cohesionGate = new EvidenceCohesionGateService();
+    this.claimAttribution = new MemoryClaimAttributionService(db);
   }
 
   async recall(request: ContextRecallRequest): Promise<ContextRecallResponse> {
@@ -813,14 +816,20 @@ export class ContextRecallService {
       const hiddenCount = rankedMatches.filter(
         (match) => match.displayPriority === 'hidden',
       ).length;
+      const attributedCandidates = this.claimAttribution.filterContextMatches(
+        rankedMatches.filter(isDisplayableContextMatch),
+      );
       const cohesion = applyContextRecallCohesion({
         gate: this.cohesionGate,
         request: expandedRequest,
         authorityRequest: request,
         authorityQuery: preliminaryNormalized.query,
-        matches: rankedMatches.filter(isDisplayableContextMatch),
+        matches: attributedCandidates.items,
       });
-      const matches = cohesion.matches.slice(0, limit);
+      const finalAttribution = this.claimAttribution.filterContextMatches(
+        cohesion.matches.slice(0, limit),
+      );
+      const matches = finalAttribution.items;
       const cohesionQuietReasons = buildCohesionQuietReasons(cohesion.result);
       const autopilot = buildAutopilotDecision({
         request: expandedRequest,
@@ -860,6 +869,7 @@ export class ContextRecallService {
           candidateMatches,
         ),
         cohesionReceipt: cohesion.result?.receipt,
+        attributionReceipt: finalAttribution.attributionReceipt,
         autopilot,
         debug,
       };
@@ -920,14 +930,20 @@ export class ContextRecallService {
         return true;
       })
       .sort(compareContextMatches);
+    const attributedCandidates = this.claimAttribution.filterContextMatches(
+      displayCandidates,
+    );
     const cohesion = applyContextRecallCohesion({
       gate: this.cohesionGate,
       request: expandedRequest,
       authorityRequest: request,
       authorityQuery: preliminaryNormalized.query,
-      matches: displayCandidates,
+      matches: attributedCandidates.items,
     });
-    const matches = cohesion.matches.slice(0, limit);
+    const finalAttribution = this.claimAttribution.filterContextMatches(
+      cohesion.matches.slice(0, limit),
+    );
+    const matches = finalAttribution.items;
     const cohesionQuietReasons = buildCohesionQuietReasons(cohesion.result);
 
     let rejectedReason: string | undefined;
@@ -1002,6 +1018,7 @@ export class ContextRecallService {
       queryTimeMs: Date.now() - startedAt,
       scopeReceipt,
       cohesionReceipt: cohesion.result?.receipt,
+      attributionReceipt: finalAttribution.attributionReceipt,
       autopilot,
       debug,
     };

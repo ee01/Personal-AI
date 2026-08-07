@@ -16,7 +16,7 @@
 - Added `buildPassivePeekSliceReceipt()` to passive Memory Lens bubbles.
 - Rendered `.pai-context-peek-slice` between provenance footer and recall basis for multi-candidate Hover Peek.
 - Mirrored the same slice boundary into the collapsed bubble `title` / `aria-label`.
-- Updated `tools/verify-webpage-memory-detection.ts`, `docs/features/memory_lens.md`, and `docs/features/index.md`.
+- Updated `tools/verify-webpage-memory-detection.ts`, `docs/features/memory_lens.md`, and `docs/index.md`.
 - Updated automation memory at `/Users/Esone/.codex/automations/automation/memory.md`.
 
 ### Test Results

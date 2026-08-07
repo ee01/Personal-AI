@@ -3,7 +3,7 @@
 ## Repo And Reminder Findings
 
 - `docs/progressing/to-verify.md` is empty.
-- Randomized eligible candidates from `docs/features/index.md` included `Ask 活答案记忆`; it was selected after avoiding the freshest exact targets from automation memory such as Topic source links, User Profile influence controls, Reflection research controls, Coverage quality score, Meeting ASR, Snooze, Timeline, Skill Foundry, Relationship Radar, Message Analysis, Memory Capture, Jira Import, Scheduled Messages, Today Pilot, and AR Data.
+- Randomized eligible candidates from `docs/index.md` included `Ask 活答案记忆`; it was selected after avoiding the freshest exact targets from automation memory such as Topic source links, User Profile influence controls, Reflection research controls, Coverage quality score, Meeting ASR, Snooze, Timeline, Skill Foundry, Relationship Radar, Message Analysis, Memory Capture, Jira Import, Scheduled Messages, Today Pilot, and AR Data.
 - The worktree is broadly dirty from prior automation/user work. This run should own only the Ask/Search Result files, Ask docs/index rows, planning directory, `.planning/.active_plan`, and automation memory.
 - AppleScript listed Reminder lists but not `Personal AI`; EventKit found `Personal AI` with 4 total items and 0 incomplete items. No open Reminder feedback relates to Ask active answers.
 

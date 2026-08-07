@@ -1,8 +1,32 @@
 export type ActorSource = 'creator' | 'extension' | 'anonymous';
 
+/** Persisted per-team release-train ruler config (shared via snapshot). */
+export interface ReleaseFilter {
+  mode: 'all' | 'major' | 'custom';
+  pattern: string;
+}
+
+export interface ReleaseSheetConfig {
+  url: string;
+  spreadsheetId: string;
+  sheetName: string;
+  range: string;
+  /** Normalized phase kind used as Sprint split anchor (e.g. 'ff'). */
+  splitPhase: string;
+  /** Normalized phase kinds drawn on the ruler; always includes splitPhase. */
+  showPhases: string[];
+  /** Keep/drop rules for release names on the ruler. */
+  releaseFilter?: ReleaseFilter | null;
+  /** Cached Apps Script rows; clients may refresh when stale. */
+  rows: Array<Record<string, unknown>>;
+  /** ISO timestamp of last successful fetch. */
+  fetchedAt: string | null;
+}
+
 export type IntentOp =
   | 'create_team'
   | 'update_jql'
+  | 'update_release_sheet'
   | 'import'
   | 'schedule'
   | 'unschedule'
@@ -22,9 +46,32 @@ export type IntentOp =
   | 'add_member'
   | 'update_member'
   | 'remove_member'
+  | 'add_marker'
+  | 'update_marker'
+  | 'delete_marker'
   | 'lock'
   | 'unlock'
   | 'set_quarters';
+
+export type MarkerKind = 'phase' | 'dep';
+export type PhaseKind = 'design' | 'stage' | 'production' | 'custom';
+export type EtaSource = 'jira' | 'manual';
+
+export interface MarkerRow {
+  id: string;
+  team_id: string;
+  item_key: string;
+  kind: MarkerKind;
+  phase_kind: PhaseKind | null;
+  label: string;
+  date: string | null;
+  jira_key: string | null;
+  eta_source: EtaSource | null;
+  created_by: string;
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
 
 export interface TeamRow {
   id: string;
@@ -32,6 +79,7 @@ export interface TeamRow {
   jql: string;
   checked_quarters_json: string;
   imported_quarters_json: string;
+  release_sheet_json: string;
   version: number;
   created_by: string;
   created_at: number;
@@ -89,6 +137,8 @@ export interface SubRow {
   start_date: string | null;
   days: number | null;
   is_draft: number;
+  /** 1 = hidden from Gantt/Resource after cleanup; restored when Epic is re-scheduled. */
+  cleared: number;
   created_by: string;
   version: number;
   created_at: number;
@@ -136,6 +186,10 @@ export interface TeamSnapshot {
     version: number;
     createdBy: string;
     jqlHints: JqlHints;
+    /** Server can talk to Jira (PAT configured) for Target sync / import Tasks. */
+    jiraEnabled?: boolean;
+    /** Team-shared release-train ruler; null = month ruler. */
+    releaseSheet?: ReleaseSheetConfig | null;
   };
   items: Array<{
     key: string;
@@ -165,6 +219,18 @@ export interface TeamSnapshot {
       start?: string | null;
       days?: number | null;
       temp: boolean;
+      cleared?: boolean;
+      createdBy: string;
+      version: number;
+    }>;
+    markers: Array<{
+      id: string;
+      kind: MarkerKind;
+      phaseKind?: PhaseKind | null;
+      label: string;
+      date?: string | null;
+      jiraKey?: string | null;
+      etaSource?: EtaSource | null;
       createdBy: string;
       version: number;
     }>;

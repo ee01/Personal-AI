@@ -2,14 +2,14 @@
 
 ## Goal
 
-Improve the shipped `工作/个人/全部范围语义` feature from `docs/features/index.md` by checking current docs/code, incorporating Reminder state, researching comparable products/papers, then implementing one low-risk user-facing improvement with focused verification.
+Improve the shipped `工作/个人/全部范围语义` feature from `docs/index.md` by checking current docs/code, incorporating Reminder state, researching comparable products/papers, then implementing one low-risk user-facing improvement with focused verification.
 
 ## Selected Feature
 
 - Feature: `工作/个人/全部范围语义`
 - Ability: Memory Service
-- Source doc: `docs/features/memory_system.md`
-- Selection: randomized from `docs/features/index.md` after avoiding the freshest exact/family automation targets where practical.
+- Source doc: `docs/memory_system.md`
+- Selection: randomized from `docs/index.md` after avoiding the freshest exact/family automation targets where practical.
 
 ## Plan
 

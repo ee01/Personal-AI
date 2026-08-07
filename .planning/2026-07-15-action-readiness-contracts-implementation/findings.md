@@ -11,7 +11,7 @@
 - `AGENT.md` requires the first successful `npm start` compile for extension source changes, targeted tests, extension E2E for user-visible extension UI, and an eval suite when a complete feature depends on action gating or judgment quality.
 - Approved P0 covers `delegate_openclaw`, `openclaw:global`, `openclaw:<targetSystem>:read/write`, Action Queue summary/card receipts, contract updates for `auth_error`, `capability_missing`, missing proof, and successful artifacts, plus ReflectionWorker suppression for clearly blocked scopes.
 - P0 explicitly excludes automatic credential repair, blanket retries of old actions, a full MCP registry, a standalone settings page, and a user-authored readiness matrix.
-- The implementation must add an `action-readiness-contracts` eval suite, run validation and the suite, then move durable behavior into `docs/features/memory_system.md`, `docs/features/evidence_watch_contracts.md`, `docs/features/message_reaction.md`, `docs/features/agent_workflow.md`, and `docs/features/index.md` as applicable.
+- The implementation must add an `action-readiness-contracts` eval suite, run validation and the suite, then move durable behavior into `docs/memory_system.md`, `docs/features/evidence_watch_contracts.md`, `docs/features/message_reaction.md`, `docs/features/message_analysis.md`, and `docs/index.md` as applicable.
 - Once canonical docs are updated, the approved `docs/progressing/action-readiness-contracts-*` artifact pair should be removed to avoid dual-track documentation.
 
 ## Existing Architecture Map

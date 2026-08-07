@@ -22,7 +22,7 @@ Phase 7
 
 | Decision | Rationale |
 | --- | --- |
-| Selected feature: `会议历史归档` under Meeting Pilot | Random pick from `docs/features/index.md`, excluding recent automation targets to avoid duplicate work |
+| Selected feature: `会议历史归档` under Meeting Pilot | Random pick from `docs/index.md`, excluding recent automation targets to avoid duplicate work |
 | Reminder branch blocked by absent list | Local Reminders exposes several lists but no `Personal AI`; do not invent feedback or mark anything done |
 | Keep edits scoped to Meeting Pilot history archive | Repository is already broadly dirty from previous work |
 | Implementation slice: blocked PDF URLs must be `attention` and show recovery guidance | Matches current doc promise and product/paper signals around explicit recap prerequisites/status |

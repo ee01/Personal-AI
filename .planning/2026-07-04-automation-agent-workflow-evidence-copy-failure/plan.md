@@ -1,7 +1,7 @@
 # Agent Workflow evidence-copy failure receipt plan
 
 ## Target
-- Feature: Agent Workflow 关注项测试 (docs/features/agent_workflow.md).
+- Feature: Agent Workflow 关注项测试 (docs/features/message_analysis.md).
 - Scope: Options test panel single-run evidence packet copy path.
 
 ## Context
@@ -21,17 +21,17 @@
 2. Render the receipt inline in the evidence packet card for both success and failure; failure must state no clipboard write/export/baseline/memory/notification/automation happened.
 3. Keep existing successful-copy semantics and evidence packet text unchanged.
 4. Extend focused diagnostics/unit verifier and Options E2E to assert the failure receipt and no-success ambiguity.
-5. Update docs/features/agent_workflow.md concisely.
+5. Update docs/features/message_analysis.md concisely.
 6. Validate with targeted scripts, first successful npm start compile, fresh extension E2E, and scoped diff check.
 
 ## Files expected
 - src/options.tsx
 - tools/verify-agent-workflow-options-e2e.mjs
-- docs/features/agent_workflow.md
+- docs/features/message_analysis.md
 - .planning/2026-07-04-automation-agent-workflow-evidence-copy-failure/plan.md
 
 ## Outcome
 - Completed: added visible Agent Workflow evidence-copy failure receipt in the Options evidence packet card.
 - Completed: extended Options E2E with a mocked clipboard-denied path.
-- Completed: documented the clipboard failure boundary in `docs/features/agent_workflow.md`.
+- Completed: documented the clipboard failure boundary in `docs/features/message_analysis.md`.
 - Verified: `npm run verify:agent-workflow`, `node --check tools/verify-agent-workflow-options-e2e.mjs`, first successful `npm start -- --progress` compile, `node tools/verify-agent-workflow-options-e2e.mjs`, scoped diff checks, and no leftover watcher/E2E process.

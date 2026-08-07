@@ -23,7 +23,7 @@ Goal: improve `Ask 短问句话题锁定` by making the automatic topic-lock bou
 | 1 | completed | Read `AGENT.md`, feature index, automation memory, stale root planning files, Reminders, and current Ask docs/code |
 | 2 | completed | Implement a pre-answer `Ask 话题锁定回执` in `SearchResultPage.vue` for `contextMatch.state = locked` |
 | 3 | completed | Extend `tools/verify-ask-clarification-e2e.mjs` with a direct locked-topic case |
-| 4 | completed | Update `docs/features/ask.md` and `docs/features/index.md` concisely |
+| 4 | completed | Update `docs/features/ask.md` and `docs/index.md` concisely |
 | 5 | completed | Run focused backend/UI/E2E verification and scoped whitespace checks |
 | 6 | completed | Update automation memory with current runtime and Reminder outcome |
 

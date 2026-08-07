@@ -6,7 +6,7 @@
 - **Status:** complete
 - **Started:** 2026-07-04T21:03:50+0800
 - Actions taken:
-  - Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+  - Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md`.
   - Random target narrowed to `Coverage 质量分` after excluding very fresh targets.
   - Checked Reminder lists with AppleScript and EventKit.
   - Reviewed Coverage docs/source/E2E and external product/research references.

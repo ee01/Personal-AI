@@ -3,7 +3,7 @@
 ## Selected feature
 
 - Randomized index target: `记忆搜索结果页` / Memory Exploring search results.
-- Source of truth: `docs/features/memory_system.md`.
+- Source of truth: `docs/memory_system.md`.
 - Primary UI: `src/modals/components/SearchResultPage.vue`.
 - Primary state path: `src/modals/memory-store.ts`.
 
@@ -30,5 +30,5 @@
 2. Remove generated vector-search mock fallback from search paths; failed searches must set `entities=[]` and expose the receipt.
 3. Render a distinct failed-search state in `SearchResultPage.vue`, before the normal empty state, with retry and broaden-scope recovery actions.
 4. Delete the now-unused generated vector-search mock function so future code cannot accidentally reconnect it.
-5. Update `docs/features/memory_system.md` to state that search never fabricates result cards on backend failure.
+5. Update `docs/memory_system.md` to state that search never fabricates result cards on backend failure.
 6. Extend verification to cover the real-failure state and run focused search checks plus extension compile.

@@ -8,7 +8,7 @@
 
 ## 现状检查
 
-- 文档 `docs/features/agent_workflow.md` 已经覆盖关注项测试、最近消息回放、本地保存样例、结构覆盖、运行前范围、基线写回和批量回归。
+- 文档 `docs/features/message_analysis.md` 已经覆盖关注项测试、最近消息回放、本地保存样例、结构覆盖、运行前范围、基线写回和批量回归。
 - 代码侧已有 `buildAgentWorkflowOrchestrationReceipt`、`buildAgentWorkflowStructuralCoverage`、`buildAgentWorkflowRunVerdict`、readiness checks、recommended actions 和批量回归 JSON 导出。
 - UX 缺口：单次运行刚完成时，用户只能看页面或等保存样例后做批量报告，不能把本次结论、结构覆盖、复核/阻塞项和副作用边界作为一段可携带材料复制给发布检查或 issue 备注。
 
@@ -33,7 +33,7 @@
 3. 更新 `tools/verify-agent-workflow-diagnostics.ts` 和 `tools/verify-agent-workflow-options-e2e.mjs`：
    - helper 断言覆盖包内容、边界和不含原始正文。
    - E2E 断言页面可复制、剪贴板有结构覆盖/下一步、无 Memory Service/通知/规则自动化副作用，且旧快照提示可见。
-4. 更新 `docs/features/agent_workflow.md`：
+4. 更新 `docs/features/message_analysis.md`：
    - 保持文档简洁，只补单次运行证据包的用户可见行为和边界。
 
 ## 验证计划

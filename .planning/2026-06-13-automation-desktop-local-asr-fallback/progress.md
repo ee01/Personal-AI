@@ -2,7 +2,7 @@
 
 ## 2026-06-13
 
-- Read automation memory, `AGENT.md`, memory registry hints, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read automation memory, `AGENT.md`, memory registry hints, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Confirmed Reminders is readable but has no visible `Personal AI` list.
 - Selected `Desktop Local ASR / Whisper fallback` under Meeting Pilot after avoiding the freshly repeated Compose Assist/Agent Workflow surfaces.
 - Created scoped planning files under `.planning/2026-06-13-automation-desktop-local-asr-fallback/`.

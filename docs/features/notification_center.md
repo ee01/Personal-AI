@@ -176,6 +176,7 @@ Notification Center 对外主要暴露两个接口：
 - 每个 feed item 会带 `deliveryContext`，说明它是全新通知、上次投递失败后重试、待办冷却结束后的再次提醒，还是每日摘要里“已提醒但仍未完成”的待办；Chrome 通知和 Provider digest 会把这个原因展示出来，避免用户误以为重复出现的待办是全新事件
 - 如果某个待办曾经成功送达、后来又发生投递失败，等它重新进入 feed 时会优先显示“上次发送失败”，而不是只显示普通“再次提醒”；这样用户能区分“冷却后重复提醒”和“渠道最近确实失败过”
 - `feed` 可以通过 `deliveryMode` 选择打扰策略：`retry_after_cooldown` 是默认实时提醒，`incremental` 只返回从未成功送达的新待办，`daily_digest` 返回仍未完成的待办用于低打扰汇总。`daily_digest` 只放宽 `todo` 的已投递过滤，`notice` 仍然保持送达后不重复进入 feed
+- Chrome extension 的 15 分钟 poller 明确使用 `deliveryMode=incremental`。同一轮先创建所有系统通知，再把 delivered / failed 回执合成一个 `POST /notification-center/delivery`（feed 上限 20，低于 API 的 100-event 上限）；不需要 LLM。批量 POST 失败时写入有界本地 outbox，下一轮先重放 outbox，仍失败则不继续拉 feed，避免“通知已显示但回执未写入”时再次展示同一批成功通知。clicked / dismissed 仍是用户动作发生时的即时单条回执。
 - `daily_digest` 放宽的是“已送达但仍未完成”的待办，不会把该 channel 已经 `clicked` / `dismissed` 的待办重新拉回摘要；摘要排序也会把新待办和失败重试放在“已提醒过，仍待处理”的旧待办前面
 - Provider / Doubao 摘要会按 token budget 只保留完整条目；如果放不下全部，会追加“已截断，还有 N 条未放入本次摘要”的回执，并且只把真正展示出来的 sourceRef 写入渠道送达回执。未展示的通知或待办会继续留在后续 feed，不会因为一次截断摘要被误判成已经送达。若不是 token budget，而是 digest 只取了 feed 前 N 条，正文会显示“Feed 还有更多”，说明本次摘要只是一个受限视图，剩余条目仍留在 Notification Center feed。非空摘要也会显示 `Feed 快照口径回执`，把本次 channel、lane、deliveryMode、limit、返回条数、是否还有更多和只读边界直接放进摘要正文。
 - `feed` 响应会带 `meta`，记录本次实际 channel、lanes、deliveryMode、limit、returned 和 `hasMore`。`total` 仍表示本次返回条数；如果 `hasMore=true`，说明这次 response 被 limit 截断，并不代表当前 feed 已经全部展示完。

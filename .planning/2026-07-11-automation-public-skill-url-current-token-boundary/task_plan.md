@@ -17,7 +17,7 @@ Goal: improve the selected `Public Skill URL` feature by keeping the docs curren
 ## Decisions
 
 - Selected feature: `Public Skill URL` under Skill Foundry.
-- Source doc: `docs/features/personal_skill_foundry.md`; index row: `docs/features/index.md`.
+- Source doc: `docs/features/personal_skill_foundry.md`; index row: `docs/index.md`.
 - Reminder state: EventKit found the local `Personal AI` list with 4 total items and 0 open items. All are completed historical Doubao / notification / test feedback, unrelated to Skill Foundry, token URL, secret scan, copy, preview, or token freshness.
 - Existing implementation already covers share receipt, copy receipt, preview receipt, popup-blocked preview, stale copy/preview receipt after live token rotation, and unavailable button states.
 - The smallest useful gap is before activation: enabled `复制可访问 URL`, `打开预览`, and manual install-copy controls currently say "with token" but do not identify the current active version, sha, or token tail at the button control itself.

@@ -17,7 +17,7 @@ Goal: improve the randomly selected `工作/个人/全部范围语义` feature b
 ## Decisions
 
 - Selected feature: `工作/个人/全部范围语义`.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Local Reminders list scan succeeded, but no visible list named `Personal AI` exists, so there are no Reminder items to incorporate or mark done in this run.
 - Existing dirty worktree is broad and mostly unrelated. Keep edits scoped to Memory Service scope semantics plus planning/automation bookkeeping.
 - Implementation target: add a scope-boundary receipt and broaden action for successful non-`all` search results, so partial in-scope hits do not imply cross-scope completeness.

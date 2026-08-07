@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机抽中：`docs/features/index.md` 中的「选中文字保存为资料记忆」。
+- 随机抽中：`docs/index.md` 中的「选中文字保存为资料记忆」。
 - 相关文档：`docs/features/memory_capture.md`。
 - 相关代码：`src/contentScriptWebIntelligence.ts`、`tools/verify-webpage-memory-detection.ts`。
 

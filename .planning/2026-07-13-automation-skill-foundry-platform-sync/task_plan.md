@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, feature docs, source, and E2E.
+- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, feature docs, source, and E2E.
 - [x] Check local Reminders with AppleScript and EventKit.
 - [x] Run a small product/paper scan for agent skills, publishing, approval, and automation debugging patterns.
 - **Status:** complete
@@ -24,7 +24,7 @@ Complete
 - [x] Add reusable control-boundary helpers in `PersonalSkillsPage.vue`.
 - [x] Wire helpers into the header/binding sync-dialog entry buttons, dialog close button, OpenClaw sync button, Desktop App sync buttons, and platform switches.
 - [x] Update the Skill Foundry E2E assertions.
-- [x] Update `docs/features/personal_skill_foundry.md` and `docs/features/index.md` concisely.
+- [x] Update `docs/features/personal_skill_foundry.md` and `docs/index.md` concisely.
 - **Status:** complete
 
 ### Phase 4: Verification
@@ -42,7 +42,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `平台同步 / Skill Foundry` | Random candidate from `docs/features/index.md`; avoids the freshest exact targets in automation memory. |
+| Target `平台同步 / Skill Foundry` | Random candidate from `docs/index.md`; avoids the freshest exact targets in automation memory. |
 | Do a presentation/accessibility-only change | The code already shows post-click receipts; the remaining user-risk is pre-click ambiguity on the actual controls. |
 | Keep sync semantics unchanged | No user decision is needed for a scoped UX boundary fix, and changing backend sync would increase risk unnecessarily. |
 

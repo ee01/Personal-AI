@@ -33,6 +33,6 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/today_pilot.md`
 - `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`

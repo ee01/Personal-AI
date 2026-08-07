@@ -153,9 +153,17 @@ export function effectiveJqlHtml(jql: string, quarters: string[]): string {
 }
 
 export function fitLanes(root: HTMLElement) {
-  root.querySelectorAll<HTMLElement>('.bar.free-h').forEach((b) => {
-    const parent = b.parentElement;
-    if (parent) parent.style.height = `${b.offsetHeight + 18}px`;
+  root.querySelectorAll<HTMLElement>('.g-lane').forEach((lane) => {
+    const bar = lane.querySelector(':scope > .bar') as HTMLElement | null;
+    if (!bar) return;
+    const track = lane.querySelector(':scope > .marker-track') as HTMLElement | null;
+    const barBottom = 9 + bar.offsetHeight;
+    let h = Math.max(58, barBottom + 18);
+    if (track) {
+      h = Math.max(h, barBottom + 30);
+      track.style.top = `${barBottom}px`;
+    }
+    lane.style.height = `${h}px`;
   });
   root.querySelectorAll<HTMLElement>('.sbar.free-h').forEach((b) => {
     const parent = b.parentElement;

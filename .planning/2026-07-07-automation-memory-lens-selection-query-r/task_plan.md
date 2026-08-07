@@ -20,7 +20,7 @@ Complete
 ## Decisions
 
 - Selected feature: `划词查找关联记忆` under Memory Lens.
-- Source doc: `docs/features/memory_lens.md`; index row: `docs/features/index.md`.
+- Source doc: `docs/features/memory_lens.md`; index row: `docs/index.md`.
 - Reminder state: EventKit found the local `Personal AI` list with 4 total items and 0 incomplete items; no open item is related to Memory Lens or selection search.
 - Implementation slice: add an in-card `打开/候选` receipt for Selection Memory Search results. It will state that the click only opens already matched `selected_text` candidates, does not perform a second recall, and does not save, insert, send, or call external AI.
 - Keep the change presentation-only. Do not alter `/context-recall`, selection eligibility, site controls, memory capture, feedback writes, source-memory APIs, passive Lens, or Compose Assist mutual exclusion.

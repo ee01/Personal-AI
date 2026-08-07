@@ -2,7 +2,7 @@
 
 ## Repo Findings
 
-- Random selection chose `Public Skill URL` from `docs/features/index.md` after excluding the freshest exact automation targets.
+- Random selection chose `Public Skill URL` from `docs/index.md` after excluding the freshest exact automation targets.
 - `docs/features/personal_skill_foundry.md` is already current through 2026-07-10 for share receipts, copy receipts, preview receipts, secret-scan blocking, old token freshness, and unavailable button states.
 - `src/modals/components/PersonalSkillsPage.vue` has the stable share-control helpers: `shareActionTitle`, `buildShareCopySnapshot`, `shareCopySuccessReceipt`, `sharePreviewReceipt`, and `skillShareReceiptRows`.
 - Existing E2E coverage in `tools/verify-personal-skill-foundry-e2e.mjs` already asserts full token clipboard payloads, preview full URL, popup-blocked receipt, unavailable button title/ARIA, manual install copy, and stale copy receipt after token rotation.

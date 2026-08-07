@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `通知提醒与免打扰路径` in `docs/features/memory_system.md`.
+- Selected feature: `通知提醒与免打扰路径` in `docs/memory_system.md`.
 - Scope: make due snoozed notifications visibly read as old unresolved reminders, not fresh notifications or completed work.
 
 ## Context
@@ -16,7 +16,7 @@
 2. Keep retry / failed-delivery semantics intact; avoid duplicate unresolved wording for the already-delivered-unfinished path.
 3. Extend focused unit coverage for `buildBackendNotificationContextMessage`.
 4. Extend the notification channel E2E fixture so a due snoozed feed item reaches `chrome.notifications.create` with the unresolved reminder context.
-5. Update `docs/features/memory_system.md` and `docs/features/index.md` concisely.
+5. Update `docs/memory_system.md` and `docs/index.md` concisely.
 
 ## Validation
 

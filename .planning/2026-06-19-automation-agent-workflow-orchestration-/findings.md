@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Random target: `Agent Workflow 多 Agent 编排` from `docs/features/index.md`.
+- Random target: `Agent Workflow 多 Agent 编排` from `docs/index.md`.
 - User expects docs/code freshness check, product and paper scan, scoped implementation, UX review, strong practical validation, automation memory update, and archive attempt.
 - Local Reminders check returned `NO_PERSONAL_AI_LIST`, so there are no target-related Reminder items to merge or complete.
 

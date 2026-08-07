@@ -30,5 +30,5 @@
 2. 给首屏搜索、刷新、后台整理、状态筛选、候选切换、查看候选、清空筛选、人物卡和 spotlight 三个动作补 `title` / `aria-label`。
 3. 保持行为不变：不改 API、排序、筛选、context card、Review Queue、后台整理逻辑或存储 schema。
 4. 扩展 `tools/verify-relationship-radar-e2e.mjs`，断言新 boundary 覆盖且 `title` 与 `aria-label` 一致。
-5. 更新 `docs/features/relationship_radar.md` 和 `docs/features/index.md`，只记录用户可见边界，不铺实现细节。
+5. 更新 `docs/features/relationship_radar.md` 和 `docs/index.md`，只记录用户可见边界，不铺实现细节。
 6. 验证：`node --check`、`npm run verify:relationship-radar`、`npm start` 首次 successful compile、`npm run verify:relationship-radar:e2e`、scoped `git diff --check`。

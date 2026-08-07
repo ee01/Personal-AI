@@ -20,7 +20,7 @@
 3. Show runtime observation count, enabled templates, waiting-reply sessions, sync issues, source kinds, and sample targets.
 4. Keep the receipt explicitly read-only: no importing, sorting, exporting, history replay, memory write, notification, auto-reply, RuntimeAction creation, or external execution.
 5. Extend the existing Message Analysis E2E verifier to assert the receipt against the runtime-status fixture.
-6. Update `docs/features/message_analysis.md` and `docs/features/index.md`.
+6. Update `docs/features/message_analysis.md` and `docs/index.md`.
 7. Run focused checks, dev compile, E2E, and scoped diff checks.
 
 ## Non-goals

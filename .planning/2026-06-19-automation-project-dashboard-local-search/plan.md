@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `项目面板` / Project Dashboard from `docs/features/index.md`.
+- Random feature: `项目面板` / Project Dashboard from `docs/index.md`.
 - Scope: current browser-local Project Dashboard list filtering and navigation only.
 
 ## Current Finding

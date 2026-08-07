@@ -25,7 +25,7 @@ Run time: 2026-07-05T19:08:05+0800
 2. Render an `Ask 证据守望回执` before the answer body when `askResult.evidenceWatch` is present.
 3. Add evidence-watch metrics to `Ask 本轮状态`, including watch state and confirm-request presence.
 4. Extend the Ask clarification E2E fixture and assertions for the watch receipt.
-5. Update `docs/features/ask.md` and `docs/features/index.md`.
+5. Update `docs/features/ask.md` and `docs/index.md`.
 6. Verify with targeted Ask tests, a first successful dev build, Ask E2E, and scoped `git diff --check`.
 
 ## Non-goals

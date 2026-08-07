@@ -6,7 +6,7 @@
 - **Status:** complete
 - **Started:** 2026-07-07
 - Actions taken:
-  - Read automation memory, AGENT.md, docs/features/index.md, docs/progressing/to-verify.md, and git status.
+  - Read automation memory, AGENT.md, docs/index.md, docs/progressing/to-verify.md, and git status.
   - Used EventKit to inspect Reminders because AppleScript did not show `Personal AI`.
   - Selected Rehearsal / future scene memory after random sampling and recent-surface avoidance.
   - Inspected Rehearsal docs, management page implementation, E2E script, and API tests.

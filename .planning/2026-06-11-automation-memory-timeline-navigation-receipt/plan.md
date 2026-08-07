@@ -3,7 +3,7 @@
 ## Target
 
 - Selected feature: `时间轴/搜索安全跳转` under Memory Exploring.
-- Source of truth: `docs/features/memory_system.md`.
+- Source of truth: `docs/memory_system.md`.
 - Code surface: `src/modals/components/TimelinePage.vue`, `src/modals/timelinePresentation.ts`, timeline verifiers.
 
 ## Context

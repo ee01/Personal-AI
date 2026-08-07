@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Source Memory 召回卡片`
-- Canonical docs: `docs/features/memory_capture.md`, `docs/features/index.md`
+- Canonical docs: `docs/features/memory_capture.md`, `docs/index.md`
 - Main runtime surface: `src/contentScriptWebIntelligence.ts`
 - Main browser proof: `desktop-app/scripts/webpage-memory-detection-check.mjs`
 

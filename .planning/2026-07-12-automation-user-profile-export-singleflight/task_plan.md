@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机巡检 `docs/features/index.md` 选中 `用户画像导出`。本轮只修一个用户可感知缺口：导出已经开始重新分页并生成本地 JSON manifest 时，按钮和回执应明确这是单飞中的同一次导出，重复点击不会启动第二轮分页、生成第二个 manifest、触发第二次下载或改变画像。
+随机巡检 `docs/index.md` 选中 `用户画像导出`。本轮只修一个用户可感知缺口：导出已经开始重新分页并生成本地 JSON manifest 时，按钮和回执应明确这是单飞中的同一次导出，重复点击不会启动第二轮分页、生成第二个 manifest、触发第二次下载或改变画像。
 
 ## 已检查
 
@@ -11,7 +11,7 @@
 - 自动化记忆：避开今天刚扫过的 Project Dashboard、Outreach、Reflection、Relationship Radar、Scheduled Messages 等精确目标
 - Reminders：AppleScript 未列出 `Personal AI`，EventKit 读到 `Personal AI`，4 条均已完成且与用户画像导出无关
 - 代码/文档：
-  - `docs/features/index.md`
+  - `docs/index.md`
   - `docs/features/user_profile_system.md`
   - `src/modals/components/UserProfilePage.vue`
   - `src/services/UserProfileMessageHandler.ts`
@@ -24,7 +24,7 @@
 2. [done] 做小范围业内产品/论文检索，确认导出/迁移边界应在点击前、等待中和结果回执里保持可见。
 3. [done] 在导出按钮禁用状态和 pending receipt 上补“同一轮导出/重复点击无副作用”的边界。
 4. [done] 扩展 `tools/verify-user-profile-export-e2e.mjs`，断言进行中按钮 title/ARIA 和 pending receipt。
-5. [done] 更新 `docs/features/user_profile_system.md` 和 `docs/features/index.md` 的简要描述。
+5. [done] 更新 `docs/features/user_profile_system.md` 和 `docs/index.md` 的简要描述。
 6. [done] 验证：
    - `node --check tools/verify-user-profile-export-e2e.mjs`
    - `npm start -- --progress` 首次 webpack dev 编译成功后停止

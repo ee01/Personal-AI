@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `Coverage 质量分` in `docs/features/index.md`.
+- Feature: `Coverage 质量分` in `docs/index.md`.
 - Canonical doc: `docs/features/memory_coverage_map.md`.
 - Main code: `memory-service/src/core/MemoryCoverageService.ts` and `src/modals/components/MemoryCoveragePage.vue`.
 

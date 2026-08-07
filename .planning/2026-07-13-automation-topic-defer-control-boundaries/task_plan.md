@@ -5,7 +5,7 @@
 - Feature: `主题稍后处理`
 - Capability: Topic Messages
 - Source docs: `docs/features/topic_based_messages.md`
-- Index row: `docs/features/index.md`
+- Index row: `docs/index.md`
 
 ## Current State
 
@@ -31,7 +31,7 @@ The list and detail pages already show defer boundary receipts after opening men
 2. Add matching detail-page boundary-label helpers in `TopicDetailPage.vue`.
 3. Apply the labels to menu-open, preset/custom defer, toast view/restore, persistent restore, and hidden-unread recovery controls via `title` and `aria-label`.
 4. Update `tools/verify-topic-based-messages.ts` and `tools/verify-topic-based-messages-e2e.mjs` so targeted and browser checks prove the button-level boundaries.
-5. Update `docs/features/topic_based_messages.md` and the `主题稍后处理` row in `docs/features/index.md`.
+5. Update `docs/features/topic_based_messages.md` and the `主题稍后处理` row in `docs/index.md`.
 6. Validate with `verify:topic-based-messages`, `npm start` first successful compile, `verify:topic-based-messages:e2e`, and scoped `git diff --check`.
 
 ## Non-Goals

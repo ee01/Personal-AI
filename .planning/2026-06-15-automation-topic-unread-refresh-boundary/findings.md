@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick a random feature from `docs/features/index.md`.
+- Pick a random feature from `docs/index.md`.
 - Check that docs match current code.
 - Search similar product and research references.
 - Implement unfinished or low-decision improvements when practical.
@@ -36,7 +36,7 @@
 
 ## Resources
 
-- Feature index: `docs/features/index.md`
+- Feature index: `docs/index.md`
 - Selected feature doc: `docs/features/topic_based_messages.md`
 - Slack Unreads: https://slack.com/help/articles/226410907-View-all-your-unread-messages
 - Gmail Snooze: https://support.google.com/mail/answer/7622010

@@ -1,8 +1,8 @@
-# 记忆入口消息观察规则
+# 聊天消息分析入库
 
-_最后更新: 2026-07-30_
+_最后更新: 2026-08-03_
 
-> 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
+> 说明：本文档旧标题是「记忆入口消息观察规则」，更早的旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。Agent Workflow 编排引擎（原 `agent_workflow.md`）已并入本文档下方章节。
 
 ## 概述
 
@@ -296,6 +296,43 @@ Heartbeat / Action Runtime 会执行已到期且可自动执行的动作。
 - `requiresApproval=false` 时，可走自动执行链路
 - `requiresApproval=true` 时，动作保留为待批准状态
 - 自动执行中的 OpenClaw 动作如果超过用户配置的 `openClawTimeoutMs + 60 秒` 仍停在 `running`，会被恢复为 `dead_letter` 并保留 `lastError`；系统不会自动重试外部写操作，避免文件上传、消息发送或 Drive link 发送重复发生
+
+## Agent Workflow 编排引擎（agentWorkflow 分析模式）
+
+> 2026-08-03 并入本文档，原独立文档 `agent_workflow.md` 已删除。它不是独立主功能，而是消息分析在 `ANALYSIS_TYPE=agentWorkflow` 时使用的多 Agent 编排引擎——三种分析模式（普通 filter / Agent Thinking / Agent Workflow）之一。
+
+`messageDealing.ts` 逐条消息调用 `processNewMessage`，由 `AgentCoordinator` 按优先级顺序执行多个专职 Agent。它的定位不是最深度的自由推理，而是稳定、可解释、易配置的消息处理流水线：提取实体、匹配关注项、分析关系、判断是否存储、生成回复建议，并把需要保留的消息写入 Memory Service。
+
+### 运行流程
+
+| 阶段 | Agent | 优先级 | 主要工具 | 当前作用 |
+| ---- | ------------------ | -----: | --------------------------------------- | ----------------------------------------------------- |
+| 1 | 实体识别 Agent | 100 | `entityExtraction` | 提取人物、项目、主题、资源、行动项等结构化信息 |
+| 2 | 通知判断 Agent | 95 | `concernedItemMatcher` | 使用关注项和运行时系统规则匹配消息，产出通知/存储决策 |
+| 3 | 关系分析 Agent | 90 | `relationshipAnalysis`, `historySearch` | 基于实体和历史消息补充人物关系上下文 |
+| 4 | 重要性判断 Agent | 80 | `relevanceJudgment`, `historySearch` | 判断消息是否重要、是否值得存储 |
+| 5 | 外部信息获取 Agent | 70 | `externalServiceQuery` | 预留 Jira/Wiki 类外部查询接口，目前仍是模拟实现 |
+| 6 | 回复建议 Agent | 60 | `replyAdviser` | 生成是否需要回复及建议文案 |
+
+### 关键逻辑
+
+- 消息标准化：`processNewMessage` 规范化 `content` / `message_content` / `text`、时间和实体结果，避免不同入口传参差异导致后续 Agent 丢上下文。
+- 规则归因：`concernedItemMatcher` 读取手动关注项，并经 `loadRuntimeWatchRules` 合并主动询问等系统运行时规则；只有命中手动关注项才触发用户通知和手动规则自动化，系统规则只用于存储证据。匹配结果优先用稳定的 `matchedRuleRefs`，LLM 返回的过期/未知引用不会污染存储归因。
+- 低置信复核门槛：手动关注项命中置信度低于 70% 时，原始命中、置信度、阈值和复核原因写入 `notificationReview` 审计，`shouldNotify` 降级为 false，并暂停该规则的 `automationPrompt` 规划；`0.42` / `42` / `"42%"` 等置信度先统一归一化到 0-1 再做门控和展示。
+- trace 降敏：写入 Memory Service 的 `agentWorkflowTrace` 保留 Agent / 工具状态、耗时、跳过与失败信息，省略消息原文和 `historySearch` 查询文本；跳过工具计入 `storageReview.toolSkippedCount` 并把 `traceStatus` 标为 `partial`。
+- 占位工具：`externalServiceQuery` 在接入真实 Jira/Wiki adapter 前把“不支持的服务或缺少参数”记录成 `placeholder` 状态，进入 `storageReview.toolPlaceholderCount` 并把 `traceStatus` 标为 `partial`，避免把“没查到外部证据”误记为完整链路。
+- 通知、摘要队列和规则自动化仍由 `messageDealing.ts` 在 Agent Workflow 结果返回后统一执行（见上文「附加能力分发」）。
+
+### Options 测试与诊断
+
+Options 页选择「标准 Agent 工作流」后提供配置检查（重复 Agent ID、启用但无工具、未注册工具、关系分析缺前置实体、外部查询占位提示；重复 Agent ID 运行时只保留第一个）和「关注项测试」：可从内置样例、最近 Memory Service 消息或本地保存样例（`chrome.storage.local.agentWorkflowSavedScenarios`，上限 12 条）回放消息，查看存储/通知/置信度/复核决策、结构覆盖、每个 Agent / 工具的执行 trace、运行诊断和下一步动作；保存样例可建立基线（含 Agent 配置快照）并批量回归、导出 JSON 报告、复制脱敏证据包。所有测试动作只发生在本地并带控件级边界回执：不写 Memory Service、不发送通知、不执行规则自动化、不标记原消息已读；基线写回是单独动作并有独立回执。自定义 Agent 保存在 `chrome.storage.local.customAgents`。
+
+### 当前边界
+
+- 单次顺序执行，没有持久 checkpoint、暂停恢复或时间旅行调试；批量处理按消息逐条调用，适合稳定性优先的消息入口，不适合作为复杂长任务执行器。
+- `externalServiceQuery` 仍是占位实现，还没有接真实 Jira/Wiki adapter。
+- Agent 级错误会被隔离并继续后续流程，轻量 trace 和 `storageReview` 会保存到记忆元数据。
+- Options 的「运行就绪检查」只判断本地测试样例、trace、基线和 Agent 配置是否足以作为回归证据，不创建或更新 runtime contract；真实消息后续创建 `delegate_openclaw` 时，dispatch 另由 [Action Readiness Contracts](./action_readiness_contracts.md) 检查 OpenClaw 鉴权、目标能力、必填输入和 proof，两个“就绪”不能互相代替。
 
 ## 数据模型演进
 

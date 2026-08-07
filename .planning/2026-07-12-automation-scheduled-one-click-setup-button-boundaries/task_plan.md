@@ -7,7 +7,7 @@ Improve the randomly selected `定时消息一键初始化` feature so the setup
 ## Context
 
 - `docs/progressing/to-verify.md` is empty.
-- Random sampling from `docs/features/index.md` produced several recent exact/family targets; this run selected `定时消息一键初始化` after skipping fresh Doubao revoke, Topic read, Storyline, Relationship, Today, Meeting, Agent Workflow, Memory Lens, and Message Analysis candidates.
+- Random sampling from `docs/index.md` produced several recent exact/family targets; this run selected `定时消息一键初始化` after skipping fresh Doubao revoke, Topic read, Storyline, Relationship, Today, Meeting, Agent Workflow, Memory Lens, and Message Analysis candidates.
 - Reminder check: AppleScript did not expose `Personal AI`; EventKit found the local `Personal AI` list with 0 incomplete items, so no Reminder feedback was incorporated or marked done.
 - Current docs already describe the setup receipts, but the actual buttons lack equivalent hover / screen-reader boundaries.
 
@@ -32,7 +32,7 @@ Improve the randomly selected `定时消息一键初始化` feature so the setup
 - `npm run verify:scheduled-messages-one-click-setup`
 - `npm start -- --progress` compiled successfully in 16736 ms and was stopped after the first success
 - `npm run verify:scheduled-messages-one-click-setup:e2e`
-- `git diff --check -- .planning/.active_plan .planning/2026-07-12-automation-scheduled-one-click-setup-button-boundaries/task_plan.md .planning/2026-07-12-automation-scheduled-one-click-setup-button-boundaries/research.md src/scheduled-messages/components/OneClickSetup.tsx tools/verify-scheduled-messages-one-click-setup-e2e.mjs docs/features/scheduled_messages_manager.md docs/features/index.md`
+- `git diff --check -- .planning/.active_plan .planning/2026-07-12-automation-scheduled-one-click-setup-button-boundaries/task_plan.md .planning/2026-07-12-automation-scheduled-one-click-setup-button-boundaries/research.md src/scheduled-messages/components/OneClickSetup.tsx tools/verify-scheduled-messages-one-click-setup-e2e.mjs docs/features/scheduled_messages_manager.md docs/index.md`
 - Process check found no remaining webpack watcher or one-click setup E2E/browser process from this run.
 
 ## Non-Goals

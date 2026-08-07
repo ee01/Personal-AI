@@ -2,7 +2,7 @@
 
 ## 2026-06-24
 
-- Read automation memory, `AGENT.md`, repo memory guidance, `docs/progressing/to-verify.md`, `docs/features/index.md`, root planning files, and worktree status.
+- Read automation memory, `AGENT.md`, repo memory guidance, `docs/progressing/to-verify.md`, `docs/index.md`, root planning files, and worktree status.
 - Checked local Reminders with a bounded AppleScript probe; no `Personal AI` list exists.
 - Selected `项目数据源检查` under Project Dashboard after rerolling away from a too-recent Jira Design Links target.
 - Created this isolated planning directory for the current run.

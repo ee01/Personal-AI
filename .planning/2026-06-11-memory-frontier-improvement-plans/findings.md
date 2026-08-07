@@ -110,4 +110,4 @@
 - 书原文文本：/tmp/zhishen.txt（333 页 PDF 已提取）
 - ChatGPT 对话提取：/tmp/chatgpt_conv.txt
 - 关键论文：HippoRAG2 2502.14802 / A-MEM 2502.12110 / sleep-time 2504.13171 / Mem0 2504.19413 / Zep 2501.13956 / LongMemEval 2410.10813 / experience-following 2505.16067 / 操作分类学 2505.00675 / ProAct 2605.25971 / ProMemAssist 2507.21378 / Memory-R1 2508.19828 / Agentic Unlearning 2602.17692
-- 业界对照：docs/features/memory_system.md「与业界记忆系统对比」节（1111-1138 行）
+- 业界对照：docs/memory_system.md「与业界记忆系统对比」节（1111-1138 行）

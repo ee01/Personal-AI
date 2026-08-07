@@ -335,7 +335,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
       'same dominant natural language as currentDraft',
     );
     expect(compilerOptions.maxTokens).toBe(1600);
-    expect(compilerOptions.timeoutMs).toBe(5500);
+    expect(compilerOptions.timeoutMs).toBe(30_000);
     expect(compilerOptions.reasoningEffort).toBe('none');
   });
 
@@ -1461,5 +1461,155 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(false);
     expect(body.suggestionType).toBe('none');
+  });
+
+  it('accepts assistIntent and returns prompt_draft for empty Web AI compose', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'factory-ai-security',
+          type: 'message',
+          scope: 'work',
+          score: 0.95,
+          title: 'Factory AI security approval',
+          snippet:
+            'Factory AI free trial already passed security approval for RingCentral email login.',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateJsonMock.mockImplementationOnce(async () => ({
+      mode: 'rewrite_prompt',
+      insertText:
+        'Draft a concise status prompt about Factory AI security approval and RingCentral email login.',
+      usedEvidenceIds: ['factory-ai-security'],
+      gaps: [],
+      confidence: 0.9,
+    }));
+
+    const body = await service.assistComposer({
+      surface: 'chatgpt',
+      contextType: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
+      assistIntent: 'draft_compose',
+      title: 'ChatGPT',
+      draftText: '',
+      primaryText: 'New blank AI chat about Factory AI rollout',
+      visibleMessages: [
+        {
+          sender: 'assistant',
+          text: 'What do you want to ask about Factory AI?',
+        },
+      ],
+      identifiers: { provider: 'chatgpt' },
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('prompt_draft');
+    expect(body.insertMode).toBe('replace_draft');
+    expect(body.insertText).toMatch(/Factory AI/i);
+  });
+
+  it('returns reply_refine for Glip draft refine when gain is material', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'factory-ai-security',
+          type: 'message',
+          scope: 'work',
+          score: 0.96,
+          title: 'Factory AI security approval',
+          snippet:
+            'Factory AI free trial already passed security approval; production still needs RingCentral email login.',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateMock.mockResolvedValueOnce({
+      content:
+        'Factory AI free trial already passed security approval; production still needs RingCentral email login before rollout.',
+    });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_refine',
+      title: 'Factory AI rollout',
+      draftText: 'trial is approved',
+      primaryText: 'Can you confirm Factory AI trial status?',
+      visibleMessages: [
+        {
+          sender: 'Alice',
+          text: 'Can you confirm Factory AI trial status?',
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('reply_refine');
+    expect(body.insertMode).toBe('replace_draft');
+    expect(body.previewRequired).toBe(true);
+    expect(body.debug?.refineReceipt?.pass).toBe(true);
+  });
+
+  it('rejects Glip draft refine when incremental gain is insufficient', async () => {
+    const service = new ContextAssistService(db, 'default');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'factory-ai-security',
+          type: 'message',
+          scope: 'work',
+          score: 0.96,
+          title: 'Factory AI security approval',
+          snippet: 'trial is approved already',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateMock.mockResolvedValueOnce({
+      content: 'trial is already approved',
+    });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_refine',
+      title: 'Factory AI rollout',
+      draftText: 'trial is approved',
+      primaryText: 'Can you confirm Factory AI trial status?',
+      visibleMessages: [
+        {
+          sender: 'Alice',
+          text: 'Can you confirm Factory AI trial status?',
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(false);
+    expect(body.suggestionType).toBe('none');
+    expect(body.debug?.refineReceipt).toMatchObject({
+      pass: false,
+      reason: 'insufficient_gain',
+    });
   });
 });

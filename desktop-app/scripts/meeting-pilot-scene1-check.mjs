@@ -1034,7 +1034,7 @@ try {
     const stepText =
       shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '';
     return (
-      coachmark?.classList.contains('visible') && /开启会议全貌/.test(stepText)
+      coachmark?.classList.contains('visible') && /开启会议弹幕/.test(stepText)
     );
   });
   const coachmarkState = await page.evaluate(() => {
@@ -1050,7 +1050,7 @@ try {
   });
   assert.equal(coachmarkState.visible, true, 'side panel 未打开授权步骤');
   assert.match(coachmarkState.title, /扩展图标|扩展 icon/);
-  assert.match(coachmarkState.step2, /开启会议全貌/);
+  assert.match(coachmarkState.step2, /开启会议弹幕/);
   await saveScreenshot(page, 'scene1-2b-capture-guide.png');
 
   log('附加校验: side panel 设置页展示核心服务状态与 options 入口');

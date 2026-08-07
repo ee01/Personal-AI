@@ -92,6 +92,8 @@ export interface ScheduledMessage {
   Agent_Last_Status?: string;
   Agent_Last_Result?: string;
   Agent_Last_Error?: string;
+  /** Runtime-only overlay from memory-service artifact evidence; not a Sheet column. */
+  Agent_Last_Evidence?: string;
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -143,6 +145,8 @@ export interface CreateMessageFormData {
   Agent_Last_Status?: string;
   Agent_Last_Result?: string;
   Agent_Last_Error?: string;
+  /** Runtime-only overlay from memory-service artifact evidence; not a Sheet column. */
+  Agent_Last_Evidence?: string;
   // 分类标签
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
   // Jira Automation 链接

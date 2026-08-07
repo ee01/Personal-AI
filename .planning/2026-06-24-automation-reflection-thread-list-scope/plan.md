@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机目标：`自我反思线程`，所属 `Memory Service`，主文档 `docs/features/memory_system.md`。
+- 随机目标：`自我反思线程`，所属 `Memory Service`，主文档 `docs/memory_system.md`。
 - 本轮不改 Reflection 后端调度、run 生成、动作队列、主动询问或研究补查逻辑，只优化线程列表的查看路径。
 
 ## 现状
@@ -22,7 +22,7 @@
 1. 在 `ReflectionThreads.vue` 增加列表范围回执，展示状态筛选、搜索词、handoff 来源、可见/总计数和刷新边界。
 2. 保持现有卡片级推进回执，不改变 list API 参数、路由、状态机或详情页操作。
 3. 更新 `tools/verify-reflection-research-e2e.mjs`，覆盖列表首屏范围回执、搜索/可见计数和刷新失败后的保留快照边界。
-4. 更新 `docs/features/memory_system.md` 中自我反思线程查看说明。
+4. 更新 `docs/memory_system.md` 中自我反思线程查看说明。
 5. 运行 `npm start` 首次成功编译、Reflection E2E、`git diff --check` 和进程清理。
 
 ## 验证预期

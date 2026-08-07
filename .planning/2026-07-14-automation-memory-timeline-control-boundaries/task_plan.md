@@ -2,13 +2,13 @@
 
 ## Goal
 
-Improve the `记忆时间轴` feature from `docs/features/index.md` by aligning docs with code, scanning adjacent product/research patterns, checking Reminders, and implementing one bounded UX fix with strong verification.
+Improve the `记忆时间轴` feature from `docs/index.md` by aligning docs with code, scanning adjacent product/research patterns, checking Reminders, and implementing one bounded UX fix with strong verification.
 
 ## Selected Feature
 
 - Feature: `记忆时间轴`
 - Capability: Memory Exploring
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main surface: `src/modals/components/TimelinePage.vue`
 - Existing verifiers: `tools/verify-memory-timeline.ts`, `tools/verify-memory-timeline-e2e.mjs`
 

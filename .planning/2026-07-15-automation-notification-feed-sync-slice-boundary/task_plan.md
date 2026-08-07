@@ -9,7 +9,7 @@ Improve `Notification Center feed` so downstream Provider/Doubao sync attempts p
 ## Target
 
 - Feature: `Notification Center feed`
-- Docs: `docs/features/notification_center.md`, `docs/features/index.md`
+- Docs: `docs/features/notification_center.md`, `docs/index.md`
 - Primary code: `memory-service/src/core/NotificationCenterService.ts`, `memory-service/src/core/ProviderContextService.ts`, `desktop-app/src/syncManager.ts`, related shared types/tests
 
 ## Plan

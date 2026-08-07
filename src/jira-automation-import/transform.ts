@@ -61,11 +61,26 @@ export interface ImportRuleContext {
   ownerId?: string;
   allowOtherRuleTrigger?: boolean;
   disableAfterImport?: boolean;
+  /**
+   * When true (default), scrub secret/sensitive payloads before create.
+   * When false, preserve source sensitive values in the imported rule payload.
+   */
+  replaceSensitiveValues?: boolean;
   existingRuleNames?: string[];
   nameCheck?: JiraAutomationImportNameCheck;
   createStageAcknowledgement?: JiraAutomationImportCreateStageAcknowledgement;
   sourceCloud?: boolean;
   now?: number;
+}
+
+export function shouldReplaceJiraAutomationImportSensitiveValues(
+  context: Pick<ImportRuleContext, 'replaceSensitiveValues'> | boolean | undefined,
+): boolean {
+  if (typeof context === 'boolean') {
+    return context;
+  }
+
+  return context?.replaceSensitiveValues !== false;
 }
 
 export interface JiraAutomationRuleSummary {
@@ -385,16 +400,23 @@ export function sanitizeJiraAutomationImportDisplayText(value: string): string {
   return redactInlineSecretText(value);
 }
 
-function sanitizeJiraAutomationImportName(value: string): string {
-  return sanitizeJiraAutomationImportDisplayText(value).replace(/\s+/g, ' ').trim() || 'Imported Jira Automation rule';
+function sanitizeJiraAutomationImportName(value: string, replaceSensitiveValues = true): string {
+  const prepared = replaceSensitiveValues
+    ? sanitizeJiraAutomationImportDisplayText(value)
+    : value;
+  return prepared.replace(/\s+/g, ' ').trim() || 'Imported Jira Automation rule';
 }
 
 function normalizeRuleNameForComparison(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
-function buildImportedRuleNameWithSuffix(sourceName: string, suffix: string): string {
-  const normalizedName = sanitizeJiraAutomationImportName(sourceName);
+function buildImportedRuleNameWithSuffix(
+  sourceName: string,
+  suffix: string,
+  replaceSensitiveValues = true,
+): string {
+  const normalizedName = sanitizeJiraAutomationImportName(sourceName, replaceSensitiveValues);
   const maxSourceNameLength = Math.max(
     0,
     JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH
@@ -426,10 +448,17 @@ function normalizeNameCheck(context: ImportRuleContext): JiraAutomationImportNam
 export function buildJiraAutomationImportNameCheckReceipt(
   exportedRule: ExportedRule,
   context: ImportRuleContext,
-  importedRuleName = buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames),
+  importedRuleName = buildJiraAutomationUniqueImportedRuleName(
+    exportedRule.name,
+    context.existingRuleNames,
+    shouldReplaceJiraAutomationImportSensitiveValues(context),
+  ),
 ): string {
   const nameCheck = normalizeNameCheck(context);
-  const defaultImportedRuleName = buildJiraAutomationImportedRuleName(exportedRule.name);
+  const defaultImportedRuleName = buildJiraAutomationImportedRuleName(
+    exportedRule.name,
+    shouldReplaceJiraAutomationImportSensitiveValues(context),
+  );
   const importedNameWasNumbered = importedRuleName !== defaultImportedRuleName;
 
   if (nameCheck?.status === 'confirmed') {
@@ -782,7 +811,15 @@ export function formatJiraAutomationImportSecretReentrySummary(
 
 export function buildJiraAutomationImportCredentialRestoreGateSummary(
   slots: JiraAutomationImportSecretReentrySlot[],
+  replaceSensitiveValues = true,
 ): string {
+  if (!shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
+    return [
+      'Credential restore gate: skipped by user choice; sensitive values will be preserved in the create payload.',
+      'Confirm the preserved secrets are intended for the target project before enabling.',
+    ].join(' ');
+  }
+
   if (slots.length === 0) {
     return 'Credential restore gate: no redacted credential slot was detected in this import, but external connections still need ordinary Jira review before enabling.';
   }
@@ -796,10 +833,13 @@ export function buildJiraAutomationImportCredentialRestoreGateSummary(
 export function buildJiraAutomationImportEnablementPlan(
   exportedRule: ExportedRule,
   sourceCloud?: boolean,
+  replaceSensitiveValues = true,
 ): JiraAutomationImportEnablementStep[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
-  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
+  const secretReentrySlots = shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
+    ? collectJiraAutomationImportSecretReentrySlots(exportedRule)
+    : [];
   const steps: JiraAutomationImportEnablementStep[] = [
     {
       id: 'keep-disabled',
@@ -859,9 +899,12 @@ export function buildJiraAutomationImportEnablementPlan(
         ? `${summary.emailReferenceCount + summary.accountReferenceCount} account/recipient reference(s)`
         : '',
     ].filter(Boolean);
+    const preserveSensitiveDetail = !shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
+      ? 'Sensitive values will be preserved in the create payload by user choice; confirm they are intended for the target project. '
+      : '';
     const hiddenSecretDetail = secretReentrySlots.length > 0
       ? `Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. `
-      : hiddenSecretReferences.length > 0
+      : hiddenSecretReferences.length > 0 && shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
         ? `Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. `
       : '';
     const credentialQueueDetail = secretReentrySlots.length > 0
@@ -870,7 +913,7 @@ export function buildJiraAutomationImportEnablementPlan(
     steps.push({
       id: 'reconnect-external-effects',
       label: 'Reconnect external effects and credentials',
-      detail: `${hiddenSecretDetail}${credentialQueueDetail}${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
+      detail: `${preserveSensitiveDetail}${hiddenSecretDetail}${credentialQueueDetail}${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
       severity: 'high',
     });
   }
@@ -914,13 +957,27 @@ export function buildJiraAutomationImportReviewPacket(
   exportedRule: ExportedRule,
   context: JiraAutomationImportReviewPacketContext,
 ): string {
+  const replaceSensitiveValues = shouldReplaceJiraAutomationImportSensitiveValues(context);
   const checklist = buildJiraAutomationImportReviewChecklist(exportedRule, context.sourceCloud);
   const findings = buildJiraAutomationImportReviewFindings(exportedRule);
-  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
-  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule, context.sourceCloud);
-  const warnings = buildJiraAutomationImportWarnings(exportedRule, context.sourceCloud);
+  const detectedSecretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
+  const secretReentrySlots = replaceSensitiveValues ? detectedSecretReentrySlots : [];
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(
+    exportedRule,
+    context.sourceCloud,
+    replaceSensitiveValues,
+  );
+  const warnings = buildJiraAutomationImportWarnings(
+    exportedRule,
+    context.sourceCloud,
+    replaceSensitiveValues,
+  );
   const importedRuleName = context.importedRuleName ||
-    buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames);
+    buildJiraAutomationUniqueImportedRuleName(
+      exportedRule.name,
+      context.existingRuleNames,
+      replaceSensitiveValues,
+    );
   const targetProject = context.projectKey
     ? `${context.projectKey} (${context.projectId})`
     : context.projectId;
@@ -928,20 +985,29 @@ export function buildJiraAutomationImportReviewPacket(
   const ruleChaining = sourceAllowsChainedTrigger
     ? (context.allowOtherRuleTrigger === true ? 'preserved from source by user choice' : 'blocked in imported copy')
     : 'disabled in source';
+  const sensitiveValuesChoice = replaceSensitiveValues
+    ? 'replace sensitive values with PERSONAL_AI_REENTER_SECRET / REDACTED placeholders'
+    : 'preserve sensitive values in the create payload by user choice';
+  const sourceRuleLabel = replaceSensitiveValues
+    ? sanitizeJiraAutomationImportDisplayText(exportedRule.name)
+    : exportedRule.name.replace(/\s+/g, ' ').trim();
 
   return [
     '# Jira Automation import review',
     '',
-    `- Source rule: ${sanitizeJiraAutomationImportDisplayText(exportedRule.name)}`,
+    `- Source rule: ${sourceRuleLabel}`,
     `- Imported name: ${importedRuleName}`,
     `- ${buildJiraAutomationImportNameCheckReceipt(exportedRule, context, importedRuleName)}`,
     `- Target project: ${targetProject}`,
     `- Source format: ${formatJiraAutomationImportSourceFormat(context.sourceCloud)}`,
     '- Imported state: DISABLED',
     `- Rule chaining: ${ruleChaining}`,
+    `- Sensitive values: ${sensitiveValuesChoice}`,
     `- High-risk gate: ${formatHighRiskGateSummary(checklist)}`,
-    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
-    `- ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)}`,
+    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots, replaceSensitiveValues)}`,
+    `- ${replaceSensitiveValues
+      ? formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)
+      : `Credential re-entry queue: skipped; ${detectedSecretReentrySlots.length} sensitive slot(s) detected but preserved by user choice.`}`,
     `- Checklist summary: ${formatChecklistSeveritySummary(checklist)}`,
     '',
     '## Review before enabling',
@@ -955,9 +1021,13 @@ export function buildJiraAutomationImportReviewPacket(
       : ['- None detected.']),
     '',
     '## Secret re-entry map',
-    ...(secretReentrySlots.length > 0
-      ? secretReentrySlots.map((slot) => `- ${formatSecretReentrySlot(slot)}`)
-      : ['- No secret-bearing fields were replaced or redacted in the disabled copy.']),
+    ...(replaceSensitiveValues
+      ? (secretReentrySlots.length > 0
+        ? secretReentrySlots.map((slot) => `- ${formatSecretReentrySlot(slot)}`)
+        : ['- No secret-bearing fields were replaced or redacted in the disabled copy.'])
+      : [
+        `- Sensitive values will be preserved in the create payload by user choice (${detectedSecretReentrySlots.length} sensitive slot(s) detected).`,
+      ]),
     '',
     '## Activation plan',
     ...enablementPlan.map(formatReviewPacketEnablementStep),
@@ -985,10 +1055,17 @@ export function buildJiraAutomationImportReviewNote(
   exportedRule: ExportedRule,
   context: ImportRuleContext,
 ): string {
+  const replaceSensitiveValues = shouldReplaceJiraAutomationImportSensitiveValues(context);
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const checklist = buildJiraAutomationImportReviewChecklist(exportedRule, context.sourceCloud);
-  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule, context.sourceCloud);
-  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(
+    exportedRule,
+    context.sourceCloud,
+    replaceSensitiveValues,
+  );
+  const secretReentrySlots = replaceSensitiveValues
+    ? collectJiraAutomationImportSecretReentrySlots(exportedRule)
+    : [];
   const targetProject = context.projectKey
     ? `${context.projectKey} (${context.projectId})`
     : context.projectId;
@@ -996,20 +1073,28 @@ export function buildJiraAutomationImportReviewNote(
   const ruleChaining = sourceAllowsChainedTrigger
     ? (context.allowOtherRuleTrigger === true ? 'preserved from source by user choice' : 'blocked in imported copy')
     : 'disabled in source';
+  const sensitiveValuesChoice = replaceSensitiveValues
+    ? 'replace sensitive values with PERSONAL_AI_REENTER_SECRET / REDACTED placeholders'
+    : 'preserve sensitive values in the create payload by user choice';
 
   return [
     JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING,
     `- Imported as a disabled copy into ${targetProject}.`,
     `- ${buildJiraAutomationImportNameCheckReceipt(exportedRule, context)}`,
     `- Source format: ${formatJiraAutomationImportSourceFormat(context.sourceCloud)}.`,
+    `- Sensitive values: ${sensitiveValuesChoice}.`,
     `- Enablement checklist: ${formatChecklistSeveritySummary(checklist)}.`,
     `- High-risk gate: ${formatHighRiskGateSummary(checklist)}.`,
     `- Create-stage acknowledgement: ${formatCreateStageAcknowledgementSummary(checklist, context)}.`,
-    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots)}`,
-    `- ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)}.`,
+    `- ${buildJiraAutomationImportCredentialRestoreGateSummary(secretReentrySlots, replaceSensitiveValues)}`,
+    `- ${replaceSensitiveValues
+      ? formatJiraAutomationImportSecretReentryQueue(secretReentrySlots)
+      : 'Credential re-entry queue: skipped because sensitive values were preserved by user choice'}.`,
     `- Detected bindings: ${formatDetectedReferenceSummary(summary)}.`,
     `- Top detected bindings: ${formatReviewFindingsForNote(buildJiraAutomationImportReviewFindings(exportedRule))}.`,
-    `- Secret re-entry map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}.`,
+    `- Secret re-entry map: ${replaceSensitiveValues
+      ? formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)
+      : 'skipped; sensitive values preserved by user choice'}.`,
     `- Activation plan: ${formatEnablementPlanSummary(enablementPlan)}.`,
     `- Rule chaining: ${ruleChaining}.`,
   ].join('\n');
@@ -1019,8 +1104,13 @@ function buildJiraAutomationImportDescription(
   exportedRule: ExportedRule,
   context: ImportRuleContext,
 ): string {
+  const replaceSensitiveValues = shouldReplaceJiraAutomationImportSensitiveValues(context);
   const sourceDescription = typeof exportedRule.description === 'string'
-    ? sanitizeJiraAutomationImportDisplayText(stripExistingImportReviewNote(exportedRule.description)).trim()
+    ? (
+      replaceSensitiveValues
+        ? sanitizeJiraAutomationImportDisplayText(stripExistingImportReviewNote(exportedRule.description))
+        : stripExistingImportReviewNote(exportedRule.description)
+    ).trim()
     : '';
   const reviewNote = buildJiraAutomationImportReviewNote(exportedRule, context);
   const baseDescription = sourceDescription || (() => {
@@ -1605,34 +1695,38 @@ export function isJiraAutomationImportFileSizeAllowed(size: number): boolean {
   return size <= JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES;
 }
 
-export function buildJiraAutomationImportedRuleName(sourceName: string): string {
-  return buildImportedRuleNameWithSuffix(sourceName, '');
+export function buildJiraAutomationImportedRuleName(
+  sourceName: string,
+  replaceSensitiveValues = true,
+): string {
+  return buildImportedRuleNameWithSuffix(sourceName, '', replaceSensitiveValues);
 }
 
 export function buildJiraAutomationUniqueImportedRuleName(
   sourceName: string,
   existingRuleNames: string[] = [],
+  replaceSensitiveValues = true,
 ): string {
   const existingNames = new Set(
     existingRuleNames
       .filter((name): name is string => typeof name === 'string')
       .map(normalizeRuleNameForComparison),
   );
-  const baseName = buildJiraAutomationImportedRuleName(sourceName);
+  const baseName = buildJiraAutomationImportedRuleName(sourceName, replaceSensitiveValues);
 
   if (!existingNames.has(normalizeRuleNameForComparison(baseName))) {
     return baseName;
   }
 
   for (let index = 2; index < 1000; index += 1) {
-    const candidate = buildImportedRuleNameWithSuffix(sourceName, ` (${index})`);
+    const candidate = buildImportedRuleNameWithSuffix(sourceName, ` (${index})`, replaceSensitiveValues);
     if (!existingNames.has(normalizeRuleNameForComparison(candidate))) {
       return candidate;
     }
   }
 
   const fallbackSuffix = ` (${Date.now()})`;
-  return buildImportedRuleNameWithSuffix(sourceName, fallbackSuffix);
+  return buildImportedRuleNameWithSuffix(sourceName, fallbackSuffix, replaceSensitiveValues);
 }
 
 export function summarizeJiraAutomationImportRule(
@@ -2110,13 +2204,43 @@ function sanitizeAutomationImportNestedValue(value: unknown, insideHiddenSecret 
   return clone;
 }
 
-function sanitizeAutomationImportLabels(labels: any[]): any[] {
+function cloneAutomationImportNestedValue(value: unknown): any {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneAutomationImportNestedValue(item));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const clone: Record<string, any> = {};
+  Object.entries(value).forEach(([key, nestedValue]) => {
+    clone[key] = cloneAutomationImportNestedValue(nestedValue);
+  });
+  return clone;
+}
+
+function prepareAutomationImportNestedValue(
+  value: unknown,
+  replaceSensitiveValues: boolean,
+): any {
+  return replaceSensitiveValues
+    ? sanitizeAutomationImportNestedValue(value)
+    : cloneAutomationImportNestedValue(value);
+}
+
+function sanitizeAutomationImportLabels(
+  labels: any[],
+  replaceSensitiveValues = true,
+): any[] {
   return labels.map((label) => {
     if (typeof label === 'string') {
-      return redactInlineSecretText(label, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER);
+      return replaceSensitiveValues
+        ? redactInlineSecretText(label, JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER)
+        : label;
     }
 
-    return sanitizeAutomationImportNestedValue(label);
+    return prepareAutomationImportNestedValue(label, replaceSensitiveValues);
   });
 }
 
@@ -2124,6 +2248,7 @@ function remapAutomationNodeIds(
   node: unknown,
   nextId: () => string,
   id: string,
+  replaceSensitiveValues = true,
 ): any {
   if (!isRecord(node)) {
     return node;
@@ -2137,11 +2262,16 @@ function remapAutomationNodeIds(
     }
 
     if ((key === 'children' || key === 'conditions') && Array.isArray(nestedValue)) {
-      clone[key] = nestedValue.map((child) => remapAutomationNodeIds(child, nextId, nextId()));
+      clone[key] = nestedValue.map((child) => remapAutomationNodeIds(
+        child,
+        nextId,
+        nextId(),
+        replaceSensitiveValues,
+      ));
       return;
     }
 
-    clone[key] = sanitizeAutomationImportNestedValue(nestedValue);
+    clone[key] = prepareAutomationImportNestedValue(nestedValue, replaceSensitiveValues);
   });
 
   return clone;
@@ -2155,6 +2285,7 @@ export function buildJiraAutomationImportRule(
     throw new Error('Target Jira projectId is required');
   }
 
+  const replaceSensitiveValues = shouldReplaceJiraAutomationImportSensitiveValues(context);
   const now = context.now ?? Date.now();
   const projectTypeKey =
     context.projectTypeKey ||
@@ -2165,13 +2296,14 @@ export function buildJiraAutomationImportRule(
   const actorAccountId = context.ownerId || exportedRule.actorAccountId || exportedRule.authorAccountId || '';
 
   const convertedComponents = exportedRule.components.map((component) => (
-    remapAutomationNodeIds(component, nextComponentId, nextComponentId())
+    remapAutomationNodeIds(component, nextComponentId, nextComponentId(), replaceSensitiveValues)
   ));
 
   const convertedTrigger = remapAutomationNodeIds(
     exportedRule.trigger,
     nextComponentId,
     '__NEW__TRIGGER',
+    replaceSensitiveValues,
   );
 
   const projects = [{
@@ -2180,7 +2312,11 @@ export function buildJiraAutomationImportRule(
   }];
 
   return {
-    name: buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames),
+    name: buildJiraAutomationUniqueImportedRuleName(
+      exportedRule.name,
+      context.existingRuleNames,
+      replaceSensitiveValues,
+    ),
     isNewRule: true,
     state: context.disableAfterImport === false ? 'ENABLED' : 'DISABLED',
     canOtherRuleTrigger: Boolean(exportedRule.canOtherRuleTrigger) && context.allowOtherRuleTrigger === true,
@@ -2191,7 +2327,7 @@ export function buildJiraAutomationImportRule(
     updated: now,
     components: convertedComponents,
     trigger: convertedTrigger,
-    labels: sanitizeAutomationImportLabels(exportedRule.labels || []),
+    labels: sanitizeAutomationImportLabels(exportedRule.labels || [], replaceSensitiveValues),
     description: buildJiraAutomationImportDescription(exportedRule, context),
     projects,
   };
@@ -2200,16 +2336,23 @@ export function buildJiraAutomationImportRule(
 export function buildJiraAutomationImportWarnings(
   exportedRule: ExportedRule,
   sourceCloud?: boolean,
+  replaceSensitiveValues = true,
 ): string[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
-  const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(exportedRule);
+  const secretReentrySlots = shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
+    ? collectJiraAutomationImportSecretReentrySlots(exportedRule)
+    : [];
   const warnings = [
     'Imported rules are created disabled. Review and enable them in Jira after import.',
     'Project scope is remapped to the current Jira project.',
     'Use exports from the same Jira Automation version when possible; incompatible JSON may fail to create or run correctly.',
     'Rule actor and author are replaced with the current Jira user when Personal AI can resolve it. Verify permissions before enabling.',
   ];
+
+  if (!shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
+    warnings.push('Sensitive values will be preserved in the create payload by user choice. Confirm the preserved secrets, tokens, and signed URLs are intended for the target project before enabling.');
+  }
 
   if (sourceCloud === false) {
     warnings.push(`Source export is marked cloud=false. Confirm the target Jira Automation edition/version before enabling; Send web request headers, app-provided components, credentials, or webhooks may need manual rebuild in the target rule.`);
@@ -2240,10 +2383,14 @@ export function buildJiraAutomationImportWarnings(
   }
 
   if (summary.secretReferenceCount > 0) {
-    warnings.push('Includes secret references. Verify target Jira secrets and connections before enabling.');
+    warnings.push(
+      shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
+        ? 'Includes secret references. Verify target Jira secrets and connections before enabling.'
+        : 'Includes secret references that will be preserved in the create payload. Confirm they are target-safe before enabling.',
+    );
   }
 
-  if (hiddenSecretReferences.length > 0) {
+  if (hiddenSecretReferences.length > 0 && shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
     warnings.push(`Includes ${hiddenSecretReferences.length} hidden secret field(s): ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. Jira export/import will not restore hidden values, so re-enter them in the target rule before enabling.`);
   }
 
@@ -2294,7 +2441,11 @@ export function buildJiraAutomationImportWarnings(
   }
 
   if (summary.sensitiveReferenceCount > 0) {
-    warnings.push(`Includes ${summary.sensitiveReferenceCount} sensitive or hidden value reference(s). Re-enter masked web request headers, tokens, passwords, or API keys in Jira before enabling.`);
+    warnings.push(
+      shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)
+        ? `Includes ${summary.sensitiveReferenceCount} sensitive or hidden value reference(s). Re-enter masked web request headers, tokens, passwords, or API keys in Jira before enabling.`
+        : `Includes ${summary.sensitiveReferenceCount} sensitive or hidden value reference(s) that will be preserved in the create payload. Confirm they are target-safe before enabling.`,
+    );
   }
 
   if (exportedRule.canOtherRuleTrigger) {

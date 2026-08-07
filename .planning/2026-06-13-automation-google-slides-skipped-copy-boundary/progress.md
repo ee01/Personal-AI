@@ -5,7 +5,7 @@
 - Read `AGENT.md`, automation memory fallback, prior memory hints, feature index, existing root planning files, and current dirty worktree state.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over work.
 - Checked local Reminders via AppleScript; no visible `Personal AI` list exists.
-- Randomly selected `Slides partial success skipped reasons` from `docs/features/index.md`, excluding immediately recent feature families.
+- Randomly selected `Slides partial success skipped reasons` from `docs/index.md`, excluding immediately recent feature families.
 - Inspected Google Slides Analyzer docs, focused code references, E2E assertions, and prior-memory pointers.
 - Created isolated planning files under `.planning/2026-06-13-automation-google-slides-skipped-copy-boundary/`.
 - Researched Google Slides API atomic `batchUpdate`, Gemini in Slides/source controls, Copilot in PowerPoint draft/review guidance, and NB2Slides human-AI collaboration findings.

@@ -26,7 +26,7 @@ Goal: improve the randomly selected `场景预演边界` feature by confirming d
 
 | Error | Attempt | Resolution |
 | --- | --- | --- |
-| `shuf` missing | Random feature selection | Used a Node parser over `docs/features/index.md` with recent-doc filtering |
+| `shuf` missing | Random feature selection | Used a Node parser over `docs/index.md` with recent-doc filtering |
 | AppleScript Reminders list scan missed `Personal AI` | Initial Reminder check | Confirmed via EventKit; all items completed and unrelated |
 | E2E strict locator collision on `有锚定线索` | First E2E run | Tightened the detail-panel assertion to exact text because the same label also appears in the cue summary |
 | E2E strict locator collision on repeated `0 条` | Second E2E run | Switched that check to receipt text regex scoped by row labels |

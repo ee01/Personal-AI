@@ -8,7 +8,7 @@
 
 ### Actions Taken
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, `docs/progressing/to-verify.md`, and the personal-ai random feature loop memory skill.
+- Read `AGENT.md`, automation memory, `docs/index.md`, `docs/progressing/to-verify.md`, and the personal-ai random feature loop memory skill.
 - Used the planning-with-files skill and created `.planning/2026-07-03-automation-popup-top3-evidence-freshness/`.
 - Randomly selected `Popup Top 3` from the feature index after avoiding the freshest exact automation targets.
 - Checked Reminders via AppleScript and EventKit; EventKit found only completed unrelated `Personal AI` items.

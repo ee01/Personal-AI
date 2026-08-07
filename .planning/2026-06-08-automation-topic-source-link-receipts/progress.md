@@ -3,7 +3,7 @@
 ## 2026-06-08
 
 - Read repo workflow rules, automation memory, feature index, `docs/progressing/to-verify.md`, and prior random-feature-loop memory.
-- Randomly selected `Topic 来源链接安全展示` from `docs/features/index.md`, avoiding the freshest Google Slides target.
+- Randomly selected `Topic 来源链接安全展示` from `docs/index.md`, avoiding the freshest Google Slides target.
 - Checked local Reminders with AppleScript; no `Personal AI` list exists.
 - Inspected `docs/features/topic_based_messages.md`, `TopicDetailPage.vue`, `topic-link-safety.ts`, and existing Topic Messages verifiers.
 - Researched Slack, Teams, Zulip, URL safety, and phishing/user-attention references.

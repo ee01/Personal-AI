@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, automation memory, `docs/features/index.md`, `docs/progressing/to-verify.md`, and current worktree state.
+- [x] Read `AGENT.md`, automation memory, `docs/index.md`, `docs/progressing/to-verify.md`, and current worktree state.
 - [x] Randomly sample feature-index candidates and select `会议历史归档` while avoiding the freshest exact/family automation targets.
 - [x] Inspect `docs/features/meeting_pilot.md`, `src/modals/components/MeetingHistoryPage.vue`, `desktop-app/scripts/meeting-pilot-history-check.mjs`, and related package scripts.
 - [x] Check local Reminders with AppleScript and EventKit.

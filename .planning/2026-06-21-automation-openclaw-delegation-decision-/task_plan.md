@@ -17,7 +17,7 @@ Goal: improve the randomly selected `OpenClaw 外部委派` feature by confirmin
 ## Decisions
 
 - Selected feature: `OpenClaw 外部委派` under Memory Service.
-- Source doc: `docs/features/memory_system.md`; index row: `docs/features/index.md`.
+- Source doc: `docs/memory_system.md`; index row: `docs/index.md`.
 - Local Reminders is reachable but has no `Personal AI` list, so no Reminder item can be incorporated or marked done in this run.
 - The worktree is broadly dirty. This run must stay scoped to OpenClaw delegation/action-queue files, docs, verification helpers, this planning directory, and automation memory.
 
@@ -27,7 +27,7 @@ Goal: improve the randomly selected `OpenClaw 外部委派` feature by confirmin
 - Add OpenClaw-specific approval copy that separates human approval from external completion proof.
 - Add approval facts for mode, target system, and result contract: approved execution still needs artifact / transcript / queue status to prove the external result.
 - Update `tools/verify-action-queue-e2e.mjs` to exercise a write-bearing OpenClaw approval card and assert the new pre-click approval boundary.
-- Update `docs/features/memory_system.md` to keep the OpenClaw delegation doc current without over-detailing implementation.
+- Update `docs/memory_system.md` to keep the OpenClaw delegation doc current without over-detailing implementation.
 
 ## Errors Encountered
 

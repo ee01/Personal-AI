@@ -2,7 +2,7 @@
 
 ## Repo Context
 
-- Target selected from `docs/features/index.md`: `今天排序与噪声控制` under Today Pilot.
+- Target selected from `docs/index.md`: `今天排序与噪声控制` under Today Pilot.
 - `docs/progressing/to-verify.md` says `暂无。`.
 - Local Reminders is reachable, but there is no `Personal AI` list, so no Reminder item can be incorporated or completed.
 - Current worktree already contains broad Today Pilot and unrelated automation changes; this run must stay scoped.

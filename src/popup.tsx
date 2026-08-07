@@ -4,7 +4,10 @@ import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
 import { openMemoryEntryRules } from './utils/memoryEntryRulesNavigation';
-import { getGoogleAuthToken } from './utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthToken,
+} from './utils/googleAuth';
 import {
   getMemoryServiceClient,
   type AmbientCalibrationEvidenceRef,
@@ -40,12 +43,11 @@ import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './services/digestQu
 import { useExtensionUiLanguage, useStaticDomI18n } from './i18n/react';
 import type { UiLanguage } from './i18n';
 
-const WIKI_URL =
-  'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
 const DOUBAO_ICON_URL =
   typeof chrome !== 'undefined' && chrome.runtime?.getURL
     ? chrome.runtime.getURL('icons/connect-doubao.png')
     : '';
+const HELP_ONBOARDING_SEEN_KEY = 'helpCenterOnboardingSeen';
 
 const Toggle = ({
   checked,
@@ -59,7 +61,6 @@ const Toggle = ({
   disabled?: boolean;
 }) => (
   <div className="toggle-container">
-    <span className="toggle-label">{label}</span>
     <label className="toggle-switch">
       <input
         type="checkbox"
@@ -69,6 +70,7 @@ const Toggle = ({
       />
       <span className="toggle-slider"></span>
     </label>
+    <span className="toggle-label">{label}</span>
   </div>
 );
 
@@ -2211,7 +2213,7 @@ function buildMeetingPilotStartNotice(
       tone: 'error',
       message: `${formatMeetingPilotCaptureError(
         session.capture.lastError,
-      )}。请确认原会议 tab 仍打开，再点击“开启会议全貌”重新授权；本次失败没有通知参会者、创建纪要或写入外部任务。`,
+      )}。请确认原会议 tab 仍打开，再点击“开启会议弹幕”重新授权；本次失败没有通知参会者、创建纪要或写入外部任务。`,
     };
   }
 
@@ -2741,6 +2743,7 @@ const Popup = () => {
   const [isExpandingEpic, setIsExpandingEpic] = useState(false);
   const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
   const [isScheduleUpdating, setIsScheduleUpdating] = useState(false);
+  const [showHelpOnboarding, setShowHelpOnboarding] = useState(false);
   const [isTaskStatusLoading, setIsTaskStatusLoading] = useState(false);
   const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false);
   const [taskStatusNow, setTaskStatusNow] = useState(() => Date.now());
@@ -2886,6 +2889,23 @@ const Popup = () => {
       setTodayPilotLoading(false);
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const stored = await chrome.storage.local.get([HELP_ONBOARDING_SEEN_KEY]);
+        if (!cancelled && !stored[HELP_ONBOARDING_SEEN_KEY]) {
+          setShowHelpOnboarding(true);
+        }
+      } catch (error) {
+        console.warn('Failed to load help onboarding state:', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -3303,7 +3323,7 @@ const Popup = () => {
       );
       setMeetingPilotNotice({
         tone: 'warning',
-        message: '没有找到当前 RingCentral 会议 tab。请切回会议页后再开启会议全貌。',
+        message: '没有找到当前 RingCentral 会议 tab。请切回会议页后再开启会议弹幕。',
       });
       sendMessageToActiveTab(
         { type: 'RADAR-POC-OPEN-PANEL' },
@@ -3338,7 +3358,7 @@ const Popup = () => {
         setMeetingPilotNotice({
           tone: 'warning',
           message:
-            '当前 tab 还不是 RingCentral 会议房间页。请进入 /conf/on/ 会议页后再开启会议全貌。',
+            '当前 tab 还不是 RingCentral 会议房间页。请进入 /conf/on/ 会议页后再开启会议弹幕。',
         });
         return;
       }
@@ -3391,7 +3411,7 @@ const Popup = () => {
                 '[Meeting Pilot][popup] failed to focus active recording tab',
                 error,
               );
-              alert('正在录制的会议 tab 已无法访问，请重试开启会议全貌。');
+              alert('正在录制的会议 tab 已无法访问，请重试开启会议弹幕。');
             }
           }
         }
@@ -3406,7 +3426,7 @@ const Popup = () => {
       console.error('[Meeting Pilot][popup] failed to open panorama', error);
       setMeetingPilotNotice({
         tone: 'error',
-        message: `开启会议全貌失败：${String(
+        message: `开启会议弹幕失败：${String(
           (error as Error)?.message || error,
         )}。请确认会议页仍打开后重试。`,
       });
@@ -3578,20 +3598,26 @@ const Popup = () => {
     });
   };
 
-  // Help 图标点击处理
-  const handleOpenHelp = () => {
-    chrome.tabs.create({ url: WIKI_URL, active: true });
+  // Help 图标点击处理 — 打开扩展内置帮助中心
+  const markHelpOnboardingSeen = async () => {
+    setShowHelpOnboarding(false);
+    try {
+      await chrome.storage.local.set({ [HELP_ONBOARDING_SEEN_KEY]: true });
+    } catch (error) {
+      console.warn('Failed to persist help onboarding state:', error);
+    }
   };
 
-  // Share 图标点击处理 - 打开独立窗口
-  const handleOpenShare = () => {
-    chrome.windows.create({
-      url: 'share-modal.html',
-      type: 'popup',
-      width: 560,
-      height: 680,
-      focused: true,
+  const handleOpenHelp = () => {
+    void markHelpOnboardingSeen();
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('help.html'),
+      active: true,
     });
+  };
+
+  const handleDismissHelpOnboarding = () => {
+    void markHelpOnboardingSeen();
   };
 
   const handleOpenDesktopApp = () => {
@@ -3610,6 +3636,7 @@ const Popup = () => {
       // 先获取OAuth token
       const token = await getGoogleAuthToken({
         caller: 'popup.analyzeSlidesProjects',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
       });
       if (!token) {
         console.error('无法获取Google认证，请检查账号授权');
@@ -3799,6 +3826,7 @@ const Popup = () => {
       const tabId = activeTab.id;
       const token = await getGoogleAuthToken({
         caller: 'popup.openJiraQueryDialog',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
       });
 
       chrome.tabs.sendMessage(
@@ -3832,6 +3860,7 @@ const Popup = () => {
         const tabId = activeTab.id;
         const token = await getGoogleAuthToken({
           caller: 'popup.expandEpicTickets',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
 
         if (token) {
@@ -3892,6 +3921,7 @@ const Popup = () => {
           try {
             const token = await getGoogleAuthToken({
               caller: 'popup.handleSlidesAnalysis',
+              scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
             });
             if (token) {
               chrome.tabs.sendMessage(activeTab.id, {
@@ -3959,21 +3989,52 @@ const Popup = () => {
             )}
           </button>
           <button
-            className="header-icon-btn"
-            onClick={handleOpenShare}
-            title={t('popup.shareWithColleagues')}
-          >
-            ↗️
-          </button>
-          <button
-            className="header-icon-btn"
+            className={`header-icon-btn${
+              showHelpOnboarding ? ' help-icon-spotlight' : ''
+            }`}
             onClick={handleOpenHelp}
             title={t('popup.helpDocs')}
+            aria-label={t('popup.helpDocs')}
           >
             ❓
           </button>
         </div>
       </div>
+      {showHelpOnboarding && (
+        <div className="help-onboarding-mask" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="help-onboarding-backdrop"
+            aria-label={t('popup.helpOnboarding.dismiss')}
+            onClick={handleDismissHelpOnboarding}
+          />
+          <div className="help-onboarding-card">
+            <div className="help-onboarding-title">
+              {t('popup.helpOnboarding.title')}
+            </div>
+            <div className="help-onboarding-body">
+              {t('popup.helpOnboarding.body')}
+            </div>
+            <div className="help-onboarding-actions">
+              <button
+                type="button"
+                className="help-onboarding-dismiss"
+                onClick={handleDismissHelpOnboarding}
+              >
+                {t('popup.helpOnboarding.dismiss')}
+              </button>
+              <button
+                type="button"
+                className="help-onboarding-cta"
+                onClick={handleOpenHelp}
+              >
+                {t('popup.helpOnboarding.cta')}
+              </button>
+            </div>
+            <div className="help-onboarding-arrow" aria-hidden="true" />
+          </div>
+        </div>
+      )}
       {headerSchedulePendingReceipt && (
         <div
           className="task-header-pending-receipt"
@@ -5941,6 +6002,105 @@ const Popup = () => {
                     transform: scale(1.1);
                 }
 
+                .header-icon-btn.help-icon-spotlight {
+                    position: relative;
+                    z-index: 1002;
+                    background: #ffffff;
+                    box-shadow: 0 0 0 3px rgba(0, 64, 221, 0.35),
+                      0 0 0 8px rgba(0, 64, 221, 0.12);
+                    transform: scale(1.08);
+                }
+
+                .help-onboarding-mask {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 1000;
+                    pointer-events: none;
+                }
+
+                .help-onboarding-backdrop {
+                    position: absolute;
+                    inset: 0;
+                    border: 0;
+                    padding: 0;
+                    margin: 0;
+                    background: rgba(20, 24, 36, 0.48);
+                    cursor: pointer;
+                    pointer-events: auto;
+                }
+
+                .help-onboarding-card {
+                    position: absolute;
+                    top: 44px;
+                    right: 10px;
+                    width: min(260px, calc(100vw - 24px));
+                    background: #ffffff;
+                    border: 1px solid #dddfe5;
+                    border-radius: 12px;
+                    box-shadow: 0 12px 28px rgba(20, 31, 56, 0.18);
+                    padding: 12px 14px 12px;
+                    pointer-events: auto;
+                    z-index: 1001;
+                }
+
+                .help-onboarding-arrow {
+                    position: absolute;
+                    top: -6px;
+                    right: 14px;
+                    width: 12px;
+                    height: 12px;
+                    background: #ffffff;
+                    border-left: 1px solid #dddfe5;
+                    border-top: 1px solid #dddfe5;
+                    transform: rotate(45deg);
+                }
+
+                .help-onboarding-title {
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #323439;
+                    margin-bottom: 4px;
+                }
+
+                .help-onboarding-body {
+                    font-size: 12px;
+                    line-height: 1.45;
+                    color: #75767b;
+                    margin-bottom: 10px;
+                }
+
+                .help-onboarding-actions {
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 8px;
+                    align-items: center;
+                }
+
+                .help-onboarding-dismiss {
+                    border: 0;
+                    background: transparent;
+                    color: #75767b;
+                    font-size: 12px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    padding: 4px 6px;
+                }
+
+                .help-onboarding-cta {
+                    border: 0;
+                    background: rgb(0, 64, 221);
+                    color: #ffffff;
+                    font-size: 12px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                }
+
+                .help-onboarding-cta:hover {
+                    filter: brightness(1.05);
+                }
+
                 .doubao-icon-btn {
                     padding: 0 !important;
                     overflow: hidden;
@@ -5965,13 +6125,14 @@ const Popup = () => {
                 .toggle-container {
                     display: flex;
                     align-items: center;
-                    justify-content: space-between;
+                    justify-content: flex-start;
+                    gap: 8px;
                     padding: 8px;
                     margin-bottom: 5px; /* Added margin */
                 }
 
                 .toggle-label {
-                    margin-right: 10px;
+                    margin-right: 0;
                     font-size: 12px; /* Adjusted font size */
                 }
 

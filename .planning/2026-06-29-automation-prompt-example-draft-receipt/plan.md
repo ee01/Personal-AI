@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `自定义消息分析提示词` / Prompt Config from `docs/features/index.md`.
+- Feature: `自定义消息分析提示词` / Prompt Config from `docs/index.md`.
 - Source doc: `docs/features/custom_prompts.md`.
 - Main code: `src/modals/prompt-config.tsx`, with coverage in `tools/verify-custom-prompts.ts` and `tools/verify-custom-prompts-e2e.mjs`.
 

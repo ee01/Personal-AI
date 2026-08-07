@@ -35,4 +35,4 @@
 - `node --check tools/verify-today-pilot-home-e2e.mjs`
 - `npm start` 首次成功编译后停止 watcher
 - `npm run verify:today-pilot-home:e2e`
-- `git diff --check -- src/meeting-shell/meetingSidePanel.tsx tools/verify-today-pilot-video-home.ts docs/features/today_pilot.md docs/features/index.md .planning/2026-06-24-automation-meeting-handoff-match-receipt/plan.md`
+- `git diff --check -- src/meeting-shell/meetingSidePanel.tsx tools/verify-today-pilot-video-home.ts docs/features/today_pilot.md docs/index.md .planning/2026-06-24-automation-meeting-handoff-match-receipt/plan.md`

@@ -16,6 +16,7 @@ import type {
   KeystoneBriefSubjectType,
   KeystoneBriefScope,
 } from '../types/index.js';
+import type { UiLanguage } from '../i18n.js';
 import { now } from '../utils/time.js';
 
 const WRITE_RECEIPT = {
@@ -517,7 +518,10 @@ export class KeystoneBriefService {
   matchContext(
     request: ContextRecallRequest,
     matches: ContextRecallMatch[],
-    options?: { requireRecallEvidence?: boolean },
+    options?: {
+      requireRecallEvidence?: boolean;
+      outputLanguage?: UiLanguage;
+    },
   ): KeystoneBriefPresentation | undefined {
     if (
       (options?.requireRecallEvidence !== false && matches.length === 0) ||
@@ -541,7 +545,16 @@ export class KeystoneBriefService {
 
     for (const brief of this.list({ limit: 100 })) {
       if (!['ready', 'partial', 'stale'].includes(brief.status)) continue;
-      const english = brief.compositionVersion.endsWith('-en-US');
+      if (
+        options?.outputLanguage &&
+        brief.compositionVersion.startsWith('auto-') &&
+        !brief.compositionVersion.endsWith(`-${options.outputLanguage}`)
+      ) {
+        continue;
+      }
+      const english = options?.outputLanguage
+        ? options.outputLanguage === 'en-US'
+        : brief.compositionVersion.endsWith('-en-US');
       const evidenceMatchIds = matches
         .filter((match) =>
           brief.sourceMap.some((source) => sourceMatchesRecall(source, match)),
@@ -592,7 +605,9 @@ export class KeystoneBriefService {
       brief.freshness.expiresAt !== undefined &&
       brief.freshness.expiresAt <= now();
     if (expired && brief.status !== 'stale') {
-      const english = brief.compositionVersion.endsWith('-en-US');
+      const english = options?.outputLanguage
+        ? options.outputLanguage === 'en-US'
+        : brief.compositionVersion.endsWith('-en-US');
       brief = {
         ...brief,
         status: 'stale',

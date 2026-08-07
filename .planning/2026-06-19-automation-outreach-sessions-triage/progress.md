@@ -2,7 +2,7 @@
 
 ## 2026-06-19
 
-- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, existing root planning files, and local Reminders state.
+- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, existing root planning files, and local Reminders state.
 - Rerolled away from the first Decision Center hit because same-day Decision Center planning already exists.
 - Selected `主动询问会话管理` under Memory Exploring / Memory Service.
 - Confirmed local Reminders has no `Personal AI` list.

@@ -23,7 +23,7 @@ Phase 6 - Complete
 
 | Decision | Rationale |
 | --- | --- |
-| Selected `今日预演提示` from `docs/features/index.md` | Random sampler picked this feature after excluding the freshest target docs from recent automation runs |
+| Selected `今日预演提示` from `docs/index.md` | Random sampler picked this feature after excluding the freshest target docs from recent automation runs |
 | Keep Reminder branch closed unless a `Personal AI` list appears | Local Reminders is reachable but the visible list names do not include `Personal AI` |
 | Use `.planning/2026-06-09-automation-today-rehearsal-cue/` | Avoids overwriting root planning files and prior automation plans |
 | Implement a Today Pilot `rehearsalCueReceipt` | The gap is not missing Rehearsal data, but missing cue/status/script/boundary visibility before the user opens details |

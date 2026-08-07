@@ -5,7 +5,7 @@
 ### Phase 1: Discovery
 
 - **Status:** complete
-- Read `AGENT.md`, automation memory, memory guidance, the random-feature-loop guidance, `docs/progressing/to-verify.md`, `docs/features/index.md`, and current worktree status.
+- Read `AGENT.md`, automation memory, memory guidance, the random-feature-loop guidance, `docs/progressing/to-verify.md`, `docs/index.md`, and current worktree status.
 - Checked local Reminders via AppleScript; Reminders is reachable but has no `Personal AI` list.
 - Randomly sampled feature rows and accepted `DigestQueueService 本地摘要`.
 - Read `docs/features/notification_center.md`, `src/services/DigestQueueService.ts`, and the beginning of `tools/verify-digest-queue-service.ts`.
@@ -45,7 +45,7 @@
 - Updated `src/services/TaskScheduler.ts` so the fallback digest queue summary includes the local delayed/no-write/no-confirm boundary.
 - Updated `src/popup.tsx` so structured Chinese and English popup summaries carry the same boundary.
 - Extended `tools/verify-digest-queue-service.ts` and `tools/verify-task-scheduler-popup-filters-e2e.mjs` to assert the boundary.
-- Updated `docs/features/notification_center.md` and `docs/features/index.md`.
+- Updated `docs/features/notification_center.md` and `docs/index.md`.
 
 ## 2026-06-19T16:06:00Z
 

@@ -11,9 +11,12 @@ import type {
   MemoryChangeProjectionStatus,
   MemoryChangeValue,
   MemoryChangeValueKind,
+  MemoryClaimEnvelope,
 } from '../types/index.js';
 import { contentHash } from '../utils/hashing.js';
 import { now } from '../utils/time.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
+import { MemoryClaimRepository } from '../repositories/MemoryClaimRepository.js';
 
 export interface MemoryChangeSourceInput {
   sourceRefType: string;
@@ -21,6 +24,7 @@ export interface MemoryChangeSourceInput {
   sourceTitle?: string;
   sourceUrl?: string;
   sourceKind?: string;
+  sourceMessageId?: string;
   text?: string;
   metadata?: Record<string, unknown>;
   entityHints?: Array<{ kind: string; value: string }>;
@@ -134,7 +138,39 @@ export class MemoryChangeLedgerService {
   syncSource(input: MemoryChangeSourceInput): MemoryChangeLedgerReceipt {
     const extractedAt = now();
     const active = input.active !== false;
-    const extraction = extractMemoryChanges(input);
+    let extraction = extractMemoryChanges(input);
+    const sourceMessageId = this.resolveSourceMessageId(input);
+    const authoritativeStructuredSource =
+      input.metadata?.authoritative === true &&
+      input.metadata?.connectorReceipt === true &&
+      readExplicitChanges(input.metadata ?? {}).length > 0;
+    const claimByCandidate = new Map<
+      MemoryChangeCandidate,
+      MemoryClaimEnvelope
+    >();
+    if (sourceMessageId && !authoritativeStructuredSource) {
+      const claimService = new MemoryClaimAttributionService(this.db);
+      const decision = claimService.ensureForMessage(sourceMessageId);
+      const claims =
+        decision.status === 'resolved'
+          ? claimService.getClaimsForMessage(sourceMessageId, { ensure: false })
+          : [];
+      const gatedCandidates = extraction.candidates.filter((candidate) => {
+        const claim = findEligibleChangeClaim(candidate, claims);
+        if (!claim) return false;
+        claimByCandidate.set(candidate, claim);
+        candidate.authorityRole =
+          claim.owner.kind === 'self' ? 'owner_authored' : 'inferred';
+        return true;
+      });
+      extraction = {
+        ...extraction,
+        candidates: gatedCandidates,
+        excludedNoiseCount:
+          extraction.excludedNoiseCount +
+          (extraction.candidates.length - gatedCandidates.length),
+      };
+    }
     const inputHash = contentHash(
       JSON.stringify({
         text: input.text ?? '',
@@ -154,6 +190,30 @@ export class MemoryChangeLedgerService {
     });
 
     const transaction = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE memory_claim_links
+           SET status = 'invalidated',
+               invalidated_at = COALESCE(invalidated_at, ?),
+               invalidation_reason = COALESCE(
+                 invalidation_reason,
+                 'memory_change_source_resynced'
+               ),
+               updated_at = ?
+           WHERE target_type = 'memory_change_event'
+             AND status = 'active'
+             AND target_id IN (
+               SELECT id
+               FROM memory_change_events
+               WHERE source_ref_type = ? AND source_ref_id = ?
+             )`,
+        )
+        .run(
+          extractedAt,
+          extractedAt,
+          input.sourceRefType,
+          input.sourceRefId,
+        );
       this.db
         .prepare(
           `DELETE FROM memory_change_events
@@ -213,6 +273,15 @@ export class MemoryChangeLedgerService {
           extractedAt,
           extractedAt,
         );
+        const sourceClaim = claimByCandidate.get(candidate);
+        if (sourceClaim) {
+          new MemoryClaimRepository(this.db).linkDerived(
+            sourceClaim.id,
+            'memory_change_event',
+            id,
+            'current_truth',
+          );
+        }
       }
 
       this.db
@@ -254,6 +323,17 @@ export class MemoryChangeLedgerService {
 
     transaction();
     return this.getSourceLedger(input.sourceRefType, input.sourceRefId);
+  }
+
+  private resolveSourceMessageId(
+    input: MemoryChangeSourceInput,
+  ): string | undefined {
+    if (input.sourceMessageId?.trim()) return input.sourceMessageId.trim();
+    if (input.sourceRefType !== 'message') return undefined;
+    const row = this.db
+      .prepare('SELECT id FROM messages_raw WHERE id = ?')
+      .get(input.sourceRefId) as { id: string } | undefined;
+    return row?.id;
   }
 
   setSourceActive(sourceRefType: string, sourceRefId: string, active: boolean): void {
@@ -620,6 +700,47 @@ export class MemoryChangeLedgerService {
         ts,
       );
   }
+}
+
+function findEligibleChangeClaim(
+  candidate: MemoryChangeCandidate,
+  claims: MemoryClaimEnvelope[],
+): MemoryClaimEnvelope | null {
+  const evidence = normalizeText(candidate.evidenceQuote);
+  if (!evidence) return null;
+  const exactMatches = claims.filter(
+    (claim) => normalizeText(claim.sourceText) === evidence,
+  );
+  if (
+    exactMatches.length === 0 ||
+    exactMatches.some((claim) => !claim.policy.currentTruthCandidate)
+  ) {
+    return null;
+  }
+
+  // A source-memory wrapper can repeat the same evidence once in Summary and
+  // once in its Evidence section. Accept that duplication only when every
+  // exact occurrence has the same attribution; otherwise the candidate is
+  // ambiguous and must fail closed. The last occurrence is the actual
+  // Evidence section in the canonical wrapper.
+  const attributionKeys = new Set(
+    exactMatches.map((claim) =>
+      [
+        claim.owner.kind,
+        claim.owner.entityId ?? '',
+        claim.owner.displayName ?? '',
+        claim.speechMode,
+        claim.polarity,
+        claim.timeBasis,
+        claim.verification,
+        claim.commitment,
+      ].join('|'),
+    ),
+  );
+  if (attributionKeys.size !== 1) return null;
+  return exactMatches.reduce((latest, claim) =>
+    claim.sourceSpan.start > latest.sourceSpan.start ? claim : latest,
+  );
 }
 
 export function extractMemoryChanges(input: MemoryChangeSourceInput): ExtractedMemoryChanges {

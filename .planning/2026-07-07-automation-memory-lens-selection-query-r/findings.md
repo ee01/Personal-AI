@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Randomly choose one feature from `docs/features/index.md`.
+- Randomly choose one feature from `docs/index.md`.
 - Confirm docs are current against code and update concise docs if behavior changes.
 - Search comparable industry products and research papers for constructive ideas.
 - Inspect local `Personal AI` Reminders and incorporate related open feedback.

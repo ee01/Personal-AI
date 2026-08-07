@@ -6,7 +6,7 @@
 - **Status:** complete
 - **Started:** 2026-06-20T05:01:53Z
 - Actions taken:
-  - Read `AGENT.md`, automation memory, memory registry pointers, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+  - Read `AGENT.md`, automation memory, memory registry pointers, `docs/progressing/to-verify.md`, and `docs/index.md`.
   - Checked local Reminders; `Personal AI` list is absent.
   - Selected `跟进追问 / Followup` from the random candidate set.
   - Inspected `docs/features/message_reaction.md`, `src/message-reaction/MessageReactionUI.ts`, `src/message-reaction/followupAskPresentation.ts`, background message routing, client Outreach calls, and existing Message Reaction E2E.
@@ -34,7 +34,7 @@
   - `src/message-reaction/followupAskPresentation.ts`
   - `src/message-reaction/MessageReactionUI.ts`
   - `docs/features/message_reaction.md`
-  - `docs/features/index.md`
+  - `docs/index.md`
 
 ### Phase 4: Verification
 - **Status:** complete

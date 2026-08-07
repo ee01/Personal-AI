@@ -8,7 +8,7 @@
 - `src/modals/prompt-config.tsx`：版本历史列表新增 `history-restore-impact`，复用 `buildPreferenceChangeImpact(lastPersistedConfig, entry.config, { userContextScope: previewScope })`，显示恢复后保存的影响和恢复按钮的无写入边界。
 - `tools/verify-custom-prompts.ts`：补源码级断言。
 - `tools/verify-custom-prompts-e2e.mjs`：补版本历史恢复前影响的页面断言。
-- `docs/features/custom_prompts.md` 和 `docs/features/index.md`：同步当前用户可见行为。
+- `docs/features/custom_prompts.md` 和 `docs/index.md`：同步当前用户可见行为。
 
 ## 验证
 
@@ -16,7 +16,7 @@
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-custom-prompts.ts` 通过。
 - `npm start -- --progress` 首次成功编译通过，用时约 14202 ms，并已停止 watcher。
 - `npm run verify:custom-prompts:e2e` 通过。
-- `git diff --check -- src/modals/prompt-config.tsx tools/verify-custom-prompts.ts tools/verify-custom-prompts-e2e.mjs docs/features/custom_prompts.md docs/features/index.md` 通过。
+- `git diff --check -- src/modals/prompt-config.tsx tools/verify-custom-prompts.ts tools/verify-custom-prompts-e2e.mjs docs/features/custom_prompts.md docs/index.md` 通过。
 - 进程检查未发现仍存活的本轮 webpack / Prompt Config E2E / Playwright / Chromium 进程。
 
 ## 边界

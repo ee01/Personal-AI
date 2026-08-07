@@ -10,7 +10,7 @@ Complete
 
 ### Phase 1: Discovery
 - [x] Read `AGENT.md`
-- [x] Read `docs/features/index.md`
+- [x] Read `docs/index.md`
 - [x] Read automation memory and long-term memory guidance
 - [x] Check `docs/progressing/to-verify.md`
 - [x] Probe local Reminders list names
@@ -18,7 +18,7 @@ Complete
 - **Status:** complete
 
 ### Phase 2: Feature Inspection
-- [x] Read `docs/features/memory_system.md`
+- [x] Read `docs/memory_system.md`
 - [x] Inspect multi-user isolation implementation and existing tests
 - [x] Identify a current UX/API/docs gap
 - **Status:** complete
@@ -55,7 +55,7 @@ Complete
 
 | Decision | Rationale |
 |----------|-----------|
-| Selected `多用户隔离` / Memory Service | Random draw from `docs/features/index.md` after avoiding the freshest exact automation-memory focus areas. |
+| Selected `多用户隔离` / Memory Service | Random draw from `docs/index.md` after avoiding the freshest exact automation-memory focus areas. |
 | Reminder branch has no related item | The visible Reminders lists are `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, and `Tasks`; no `Personal AI` list is visible. |
 | Use isolated `.planning` directory | The repo has many unrelated dirty files and stale root-level planning files. |
 | Fix unresolved-default identity in `MemoryServiceClient` | The backend already supports fallback receipts and write fail-closed behavior, but the frontend was converting unresolved local identity into explicit `X-User-Id: default`. |

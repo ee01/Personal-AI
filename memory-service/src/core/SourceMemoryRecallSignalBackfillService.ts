@@ -4,6 +4,7 @@ import path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { classifyTrust, screenForInjection } from './injectionScreen.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
 import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { now } from '../utils/time.js';
@@ -412,6 +413,10 @@ export class SourceMemoryRecallSignalBackfillService {
     const { distillation: _distillation, ...sourceMetadata } = capsuleMetadata;
     const metadata = {
       ...sourceMetadata,
+      // A captured webpage is external evidence even when the user explicitly
+      // chose to save it. Preserve that owner boundary for claim attribution.
+      authorRole: 'external',
+      isSelf: false,
       captureMode: sourceMetadata.captureMode ?? row.capture_mode,
       sourceKind: sourceMetadata.sourceKind ?? row.source_kind,
       sourceHost: sourceMetadata.sourceHost ?? row.source_host ?? undefined,
@@ -430,9 +435,10 @@ export class SourceMemoryRecallSignalBackfillService {
            id, content, summary, scope, source, source_type, source_url,
            source_title, sender, group_id, group_name, timestamp,
            importance, sentiment, metadata_json, trust_class,
-           injection_flags_json, created_at, updated_at
+           injection_flags_json, claim_attribution_status,
+           claim_attribution_version, created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, 'Memory Capture', ?, ?, ?, ?,
-           'neutral', ?, ?, ?, ?, ?)`,
+           'neutral', ?, ?, ?, 'pending', 1, ?, ?)`,
       )
       .run(
         messageId,
@@ -519,6 +525,10 @@ export class SourceMemoryRecallSignalBackfillService {
       );
       applied.chunkMetadataRows += result.changes;
     }
+
+    // This path restores a brand-new raw row, so there is no prior claim set to
+    // invalidate and force=true would only create needless stale revisions.
+    new MemoryClaimAttributionService(this.db).ensureForMessage(messageId);
   }
 }
 

@@ -22,7 +22,7 @@ Completed
 
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: `人脉关系 Assistant Draft` | Random sample from `docs/features/index.md`; avoids the freshest Scheduled Messages and Task Scheduler runs |
+| Selected feature: `人脉关系 Assistant Draft` | Random sample from `docs/index.md`; avoids the freshest Scheduled Messages and Task Scheduler runs |
 | No Reminder item incorporated | Reminders is readable, but no visible list named `Personal AI` exists |
 | Implement a generation receipt, not a new review queue | Low-decision UX gap: the draft panel shows metrics, but the source/privacy/action boundary is only clear after copy |
 | Normalize assistant context surface to `relationship_assistant_draft` | The service already has a readable label for this surface; current call used `relationship_assistant`, which could leak a raw label into receipts |

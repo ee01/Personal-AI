@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`.
+- Pick a random feature from `docs/index.md`.
 - Check docs against implementation, external products/papers, Reminders, bugs, UX, and unfinished work.
 - Produce a plan first, then implement completely and verify as far as practical.
 

@@ -18,7 +18,7 @@ async function confirm() {
     state.modals.value.cleanup = false;
     state.popKeys.value = epics.map((e) => e.key);
     state.toast(
-      `<span class="ok">✓</span> 已清理：${epics.length} 个 Epic 回退 Backlog，${subs.length} 个过期子任务`,
+      `<span class="ok">✓</span> 已清理：${epics.length} 个 Epic 回退 Backlog，${subs.length} 个过期子任务（可还原）`,
     );
   } catch {
     /* handled */

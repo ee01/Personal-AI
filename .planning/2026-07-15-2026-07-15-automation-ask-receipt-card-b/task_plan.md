@@ -7,7 +7,7 @@ Goal: improve the selected `Ask 主动问答` feature by checking current docs/c
 | Phase | Status | Scope |
 | --- | --- | --- |
 | 1 | completed | Read `AGENT.md`, feature index, `docs/progressing/to-verify.md`, automation memory, memory guidance, worktree status, and planning-skill instructions |
-| 2 | completed | Select a non-recent random feature from `docs/features/index.md` and inspect its docs, source, and verifiers |
+| 2 | completed | Select a non-recent random feature from `docs/index.md` and inspect its docs, source, and verifiers |
 | 3 | completed | Check local Reminders via AppleScript and EventKit |
 | 4 | completed | Search current product/research references for Ask / AI search / RAG trust patterns |
 | 5 | completed | Implement the selected low-decision UX improvement |
@@ -18,7 +18,7 @@ Goal: improve the selected `Ask 主动问答` feature by checking current docs/c
 ## Decisions
 
 - Selected feature: `Ask 主动问答`.
-- Source doc: `docs/features/ask.md`; index row: `Ask 主动问答` in `docs/features/index.md`.
+- Source doc: `docs/features/ask.md`; index row: `Ask 主动问答` in `docs/index.md`.
 - Primary UI/source target: `src/modals/components/SearchResultPage.vue`.
 - Existing verifier target: `tools/verify-ask-clarification-e2e.mjs`; backend guard: `memory-service/src/__tests__/api-ask.test.ts`.
 - Scope: Ask answer receipt cards in Search Result should expose their own hover/read-screen boundaries. Do not change `/ask`, `MemoryContextMatchService`, `RecallEngine`, answer-memory persistence, Evidence Watch contracts, external action creation, or Memory Service deployment.

@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 运行诊断`
-- Source doc: `docs/features/agent_workflow.md`
+- Source doc: `docs/features/message_analysis.md`
 - Main code: `src/agentWorkflowDiagnostics.ts`, `src/options.tsx`
 - Verification: `npm run verify:agent-workflow`, `npm start` first compile, `npm run verify:agent-workflow:e2e`
 
@@ -34,7 +34,7 @@ As a user, this is a handoff problem. I can copy a convincing packet, but the re
    - baseline/config state
    - replay/source type
 4. Update the diagnostic verifier and Options E2E assertions so the contract is covered in both pure builder output and browser-level UI/clipboard behavior.
-5. Update `docs/features/agent_workflow.md` with the new user-visible evidence qualification behavior.
+5. Update `docs/features/message_analysis.md` with the new user-visible evidence qualification behavior.
 
 ## Non-Goals
 

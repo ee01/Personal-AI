@@ -23,7 +23,7 @@
 1. Add a manual push failure receipt helper for `stable_memory`, `mobile_briefing`, and `reminder_sync`.
 2. Use it in the three manual push `catch` branches.
 3. Extend `desktop-app/scripts/doubao-source-toggle-gating-check.mjs` to simulate a rejected `runNow` and assert the failure copy.
-4. Update `docs/features/doubao_bridge.md` and `docs/features/index.md`.
+4. Update `docs/features/doubao_bridge.md` and `docs/index.md`.
 
 ## Verification
 

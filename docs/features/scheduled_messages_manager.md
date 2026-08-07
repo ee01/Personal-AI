@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-07-14*
+*最后更新: 2026-08-06*
 
 ## 功能概述
 
@@ -33,6 +33,7 @@
 - 初始化收据会保留并展示维护表子表定位、Web App deployment、触发器状态和安全边界；授权后保存 Config 时使用同一批元数据，避免新建表后还要靠后续同步修复 Messages / Logs 链接或 App Script 升级目标
 - 授权后完成初始化并刷新到管理页时，会显示一次性完成收据，概括 Sheet、子表定位、Deployment、Script、触发器状态和共享/权限注意事项；关闭后不再重复打扰
 - 通常 10-15 秒完成自动步骤；如果需要开启 Apps Script API 或完成授权，会停在可恢复的下一步
+- 首次 One Click Setup 会明确请求完整 Google scope 集合，以覆盖 Sheet、Drive、Apps Script 和 Slides 等扩展完整能力；授权返回后会检查实际授予的 scopes，不能把部分勾选误当成完整授权。
 
 ### 2. 统一数据模型
 
@@ -49,8 +50,11 @@
 - **AgentTask Runtime**：处理“帮我做”的到期触发、OpenClaw 执行、run 账本、artifact 和 Bot 私发通知
 - **Chrome Extension 备用**：浏览器开启时可直接执行
 - 管理页打开时只等待本机 Config、Google 授权缓存和 Messages 基础行读取；Jira Automation 状态同步、Outreach runtime 覆盖 / Done 回填、Bot 配置有效性检查和 App Script 升级检查都会在后台补齐，避免把整页停在首屏 loading。
+- 日常 Scheduled Messages 加载、读写、同步、后台标注和自动答复只请求 Google Sheets scope，不会因为打开定时消息管理页捎带请求 Google Slides；Slides 分析、身份读取和 App Script 管理分别使用自己的最小 scope。较小 scope 不会撤销 One Click Setup 已授予的完整授权。
+- 管理页会区分缺少 Google Sheets scope、未登录/取消授权和其它 OAuth 错误，不再把所有静默取 token 失败统一描述为“授权已过期”。
 - 管理页列表、健康告警和诊断回执会显示真实执行引擎：例如 AsMe 是 AppScript 邮件 fallback 还是 Jira Automation RingCentral sender，Bot/AI 是否依赖 Bot executor，JiraAutomation 是外部规则还是托管 API，Outreach 是否由 memory-service runtime 接管。新增 / 编辑表单默认只显示预计下次执行，缺少前置配置时才显示简短“发送配置待完成”提醒。
 - 列表主题后会展示相关执行入口：JiraAutomation 行的 link icon 打开 Jira Rule；AgentTask 行的 link icon 打开 `Action Queue`，按 `sourceKind=agent_task` 和当前 Messages `ID` 定位执行账本。
+- 打开定时消息列表时，会像“帮我问”一样只读叠加 memory-service 运行态：Outreach 读 session 结果；AgentTask 读 `/agent-tasks/runtime-status`，列表与 hover 只展示 OpenClaw `summary`（缺 summary 时才回退第一条 artifact）；Bot 私发文案和 Sheet `Agent_Last_*` 只作兜底，不是结果真源。完整 artifact 仍在 Action Queue。
 - 新增 / 编辑表单把推送方式放在弹窗顶部 tab；Bot 和 AI Report 即使缺少 Bot executor 也可以先选中填写草稿，tab 会标成“可预览 · 待配置”，保存会被明确阻止，不会写入 Messages、发送消息或创建 Jira Rule。
 - “帮我做”是独立入口，不出现在普通推送方式 tab 里；普通入口创建的 AgentTask 可以是一次性或重复任务，但不暴露 AR 绑定入口。只有网页 [AR 数据](./ar_data_overlay.md) 入口创建且勾选重复执行的任务，才会写入 `Agent_AR_Binding_ID` 并出现在列表里。
 
@@ -77,7 +81,7 @@
 - RingCentral/Glip 消息输入框旁会注入闹钟按钮。用户选择未来时间后，扩展读取当前草稿和会话目标；只有内容、目标、未来时间、Scheduled Messages 配置和 Google 授权都有效时，才创建一条 `Push_Method = AsMe`、`Category = ComposeScheduled` 的 Messages 行。
 - 创建成功后才清空输入框，并按当前 `chatId` 在消息列表底部显示虚线未来消息；卡片里的“管理”会打开 Scheduled Messages 并定位对应 `messageId`。它是 `chrome.storage.local.glipMessageMarkers.pendingScheduledByChatId` 的本地快照，不是已经发到 RingCentral 的真实消息。
 - 虚线卡片的完成判定按以下顺序执行：
-  1. 后台读取最近 500 条 Logs，找到相同 `Message_ID` 且 `Status = Success` 时，从 pending 缓存删除；失败日志不会删除。
+  1. Logs 写入端始终把新记录插在第 2 行，因此后台用有界 A1 range 只读取表头和最上方 500 条数据行（即最新 500 条），找到相同 `Message_ID` 且 `Status = Success` 时，从 pending 缓存删除；失败日志不会删除。该刷新不再先下载完整 Logs 工作表。
   2. marker 缓存默认每 5 分钟刷新；页面初始化或 Service Worker 重新加载也会主动刷新。缓存变化后，内容脚本约 500ms 防抖重绘，因此真实消息发出后可能短暂与虚线卡片同时存在。
   3. 如果成功日志缺失、授权不可用或 Sheet 读取失败，计划时间超过 6 小时后才按时间兜底清理，避免永久残留。
 - 卡片不会因为计划时间到点、Glip DOM 出现相同正文而直接删除；滚动区距离底部超过 160px 时只会暂时隐藏，回到底部仍可显示，这不等于缓存已清理。
@@ -129,16 +133,16 @@
 - 无时间的 08:00 后队列会把当天后续明确时间消息占用的分钟扣掉；如果明确时间已经吃掉剩余容量，队列卡片会说明“已避开明确时间分钟”，并把最晚受影响项建议到下一可用队列日
 - 已有 Active 消息如果因为手工改 Sheet 或长期未打开而错过可执行窗口，管理页会在顶部和行内提示需要改期；用户可以编辑为未来明确时间，或对执行器消息清空时间进入 08:00 后队列
 - 错过执行窗口或执行时间格式异常时，顶部健康告警会给出“一键改期”：明确时间改到下一分钟，未设时间的执行器消息改回今天的 08:00 后队列，减少手工编辑阻塞
-- 多条明确时间消息同时错过窗口时，一键改期会按告警顺序分配连续可用分钟，并在告警行直接显示建议目标和原因，避免把所有恢复操作重新挤到同一个分钟
+- 多条明确时间消息同时错过窗口时，一键改期会按告警顺序分配连续可用分钟，并在告警行直接显示建议操作，避免把所有恢复操作重新挤到同一个分钟
 - 未设时间的执行器消息错过日期后，健康告警会先检查今天默认队列是否还剩可执行分钟；如果已经接近跨日或同批恢复会挤爆今天队列，就改到下一个可用默认队列日，避免“一键恢复”后立刻再次错过
 - 需要改期的消息超过 4 条时，顶部健康告警可展开显示全部，保证每条阻塞项都有定位、编辑和一键改期入口
-- 顶部健康告警会先给出 triage 摘要：优先处理哪条、多少条可一键恢复、多少条需要手动检查，以及“一键改期只写 `Schedule_Date` / `Schedule_Time`、不会立即发送或改 Logs”的边界，用户不用逐条读完整原因也能判断先做什么
-- 顶部健康告警还会显示诊断分布；每条告警显示诊断线索，区分补偿超窗、时间异常、默认队列日期过期和 Apps Script 默认发送已过，并标明是 Jira Automation 执行器队列还是 Apps Script / AsMe 路径
-- 点击健康告警的一键改期后，当前行会先显示“改期写入中”回执，保留点击时的目标行、建议时间和只处理这一条告警的边界；写入成功或失败后再切换成最终回执
+- 顶部健康告警默认只保留标题、条数摘要和可操作告警行；不再展开 triage 摘要、诊断分布或写回边界说明，减少首屏篇幅
+- 每条健康告警只展示消息主题、错过的发送窗口，以及建议操作（通常是“改到下一可用分钟”）；定位 / 编辑 / 一键改期按钮保留在同一行
+- 点击健康告警的一键改期后，当前行会先显示简短“写入中：改到 …”回执；写入成功或失败后再切换成最终回执
 - 队列建议或健康告警的一键改期成功后，管理页会留下“已应用改期建议”回执，说明来源、写入的 Messages 行、是否清空 `Schedule_Time` 保留 08:00 后队列语义，并把“新计划已写入”和“执行器已领取 / 发送 / 写 Logs”分开确认
-- 健康告警、队列建议、表单草稿和改期成功回执都会显示“写入后领取口径”：明确建议时间会走未来明确时间槽、30 分钟补偿链路还是 `08:00 后队列`，避免用户把“已写入建议”误看成“已经发送 / 已经被 Jira 确认执行”
+- 队列建议、表单草稿和改期成功回执仍会显示“写入后领取口径”：明确建议时间会走未来明确时间槽、30 分钟补偿链路还是 `08:00 后队列`，避免用户把“已写入建议”误看成“已经发送 / 已经被 Jira 确认执行”
 - 一键改期如果找不到目标行、没有可应用建议或写入 Google Sheet 失败，不再只弹出一次性提示；页面会保留“改期建议未应用”回执，说明来源、目标、未写入边界、失败原因和下一步恢复动作
-- 健康告警和队列建议在点击前会直接说明操作边界：按钮只写回 `Messages` 的 `Schedule_Date` / `Schedule_Time`，不会立即发送、不会改 Logs 或跳过前序消息；写入后仍要同步刷新或等待下一轮 Jira Automation 确认当前队列是否恢复
+- 队列建议在点击前仍会说明操作边界：按钮只写回 `Messages` 的 `Schedule_Date` / `Schedule_Time`，不会立即发送、不会改 Logs 或跳过前序消息；写入后仍要同步刷新或等待下一轮 Jira Automation 确认当前队列是否恢复
 
 ### 8. 执行匹配、补偿与幂等
 
@@ -149,7 +153,7 @@
 - `markBotMessageExecuted` 会携带 `messageId` / `rowIndex` / `executionKey` 写回，Sheet 行移动、缺失 rowIndex 或 Jira 重试时仍能定位并去重
 - `getBotMessageCurrentTime` 支持 `autoMarkOnFetch=api`；Jira Rule 模板只对 AI Report / 自定义 API Endpoint 启用领取即标记，普通 Bot 和 RingCentral sender 仍在发送回调后写 `Last_Exec` / Logs
 - 管理页的执行引擎回执会把这条边界讲清楚：Bot/RingCentral sender 是发送后回调写回，AI/API 和带 `AI_Endpoint` 的托管 JiraAutomation 是领取时先写 `Last_Exec` / Logs 防重复，endpoint 运行结果需要回到 Jira/API 执行记录排查
-- 管理页列表、健康告警和改期回执会显示“领取口径”：明确时间槽走当前分钟 / 30 分钟补偿，未填写时间的 Bot/AI/托管 JiraAutomation 走 `08:00 后队列`，AsMe 不进入这个队列，外部 JiraAutomation 和 Outreach 会显示它们不由 Personal AI executor 领取；新增 / 编辑弹窗默认不展开这些细节
+- 管理页列表、队列建议和改期回执会显示“领取口径”：明确时间槽走当前分钟 / 30 分钟补偿，未填写时间的 Bot/AI/托管 JiraAutomation 走 `08:00 后队列`，AsMe 不进入这个队列，外部 JiraAutomation 和 Outreach 会显示它们不由 Personal AI executor 领取；新增 / 编辑弹窗和顶部健康告警默认不展开这些细节
 - 领取口径会同时写出证明边界：Bot/RingCentral sender 只有发送回调后才算写回，AI/API 领取时先写回防重复但 endpoint 成败要看 Jira/API 运行记录；因此“领取”不会被误看成“已发送”
 - 明确时间的 Bot / AI / 托管 JiraAutomation 如果已经错过当前分钟但仍在 2-30 分钟补偿窗口内，列表行会显示“补偿窗口回执”：可见文案写明下一轮仍可补偿领取且尚未发送，hover / 读屏说明三段匹配顺序、`08:00 后队列` 优先级边界，以及 `Last_Exec` / `Exec_Log` / `Execution_Key` 幂等跳过依据
 - 当未填写时间的执行器队列排到当天结束后，建议改期会继续保持 `Schedule_Time` 为空，而不是改成明确 `08:00`；这样用户看到的“08:00 后队列”不会被一键恢复误改成准点优先执行
@@ -198,8 +202,8 @@
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '2.9.1';
-  var APP_SCRIPT_LAST_UPDATED = '2026-07-03';
+  var APP_SCRIPT_VERSION = '2.9.2';
+  var APP_SCRIPT_LAST_UPDATED = '2026-08-04';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步。
@@ -316,11 +320,12 @@
 - 未填写时间的执行器队列会扣除同一天未来明确执行时间占用的分钟；如果剩余可用分钟不足，卡片会显示已避开的明确时间分钟数，并建议保留空时间移动到下一可用队列日
 - 创建或编辑消息时，如果系统已经能算出可避开拥挤队列的空闲分钟，预计执行区域会提供“使用建议时间”；未设时间的队列排满当天时会优先建议下一天 08:00 后队列，并保持执行时间为空
 - 如果顶部提示“有定时消息需要改期”，表示有 Active 一次性消息已经错过实际执行窗口或时间格式异常；这些消息不会只靠等待自动恢复，需要从列表行进入编辑并改成未来时间
+- 健康告警行只保留消息主题、错过的发送窗口和建议操作，并提供定位、编辑、一键改期；不再在顶部展开 triage、诊断线索或写回边界长文
 - 健康提示里的“一键改期”会直接把目标消息恢复到可执行窗口：明确时间改到下一分钟，未设时间的执行器消息改到今天的默认队列，AsMe 默认时间已过时会移到下一个默认发送日
 - 如果今天的执行器默认队列已经没有剩余分钟，或同批恢复会让后面的未设时间消息排到今天结束后，健康提示会把后续项改到下一个可用默认队列日
 - 当需要处理的健康告警超过 4 条时，先显示前 4 条和隐藏数量；点击“显示全部”后可逐条处理其余消息
 - 表单打开时会自动刷新时间判断，长时间停留后仍能正确阻止已错过的执行时间
-- 点击“一键改期”或“改到建议”前先看顶部操作边界：它只改维护表里的排程字段，不代表消息已经发出，也不代表队列已重新计算完成；写入后使用同步刷新或等待下一轮执行器轮询确认
+- 点击队列建议的“改到建议”前先看该区域操作边界：它只改维护表里的排程字段，不代表消息已经发出，也不代表队列已重新计算完成；写入后使用同步刷新或等待下一轮执行器轮询确认
 
 ### 消息类型说明
 
@@ -361,6 +366,7 @@
   - `Esone Qiu` → `esone.qiu@reply.ringcentral.glip.com`
   - 或直接使用群组 ID：`{teamId}@reply.ringcentral.glip.com`
 - 如果 Bot 初始化时配置了 RingCentral Client ID / Client Secret / JWT，AsMe 会改由 **Jira Automation** 调内网 Dify RingCentral sender workflow 发送
+- RingCentral sender 的 Dify 导出在 [src/scheduled-messages/dify/ringcentral_dify_workflow_split_credentials.yml](../../src/scheduled-messages/dify/ringcentral_dify_workflow_split_credentials.yml)；Jira Rule 使用 `RINGCENTRAL_SENDER_DIFY_API_BASE_URL` / `RINGCENTRAL_SENDER_DIFY_API_KEY`，不直连 RingCentral API
 - RingCentral sender 路径继续复用 `Glip_User_Name` / `Glip_Team_ID` 作为 Dify `chatId`；例如 `Glip_User_Name = esone.qiu` 会传给 Dify 的 `chatId`
 - 创建 RingCentral app / JWT 时至少需要 `ReadAccounts`、`ReadMessages`、`EditMessages` 权限；`ReadAccounts` 用于读取公司通讯录，把 `esone.qiu` 这类 personName 解析成 person id。缺少该权限时 OAuth 仍可能成功，但 directory endpoint 会返回 `403 InsufficientPermissions`，并导致 sender workflow 报 `Cannot resolve target personName`
 - RingCentral sender 不再在领取消息时预标记完成；Jira Rule 会在 Dify workflow 返回 `data.status = succeeded` 后通过 GET 调用 `markBotMessageExecuted` 写回 Done 和 Logs，返回 `failed` 时写入失败日志避免当天重复发送；发送成功后的 `chatId/postId/sentAt` 记录在 Logs 单次执行行中，用于 Glip message marker
@@ -370,15 +376,17 @@
 
 #### Bot（机器人身份发送）
 
-- 通过 Jira Automation 调用内网 Bot API
-- 在 Glip 中显示为机器人发送的消息
-- Bot 路由和凭据由扩展配置 / Jira Automation 规则维护，不需要在单条消息里额外填写专属 endpoint 字段
+- 通过 Jira Automation 调用 Bot API；因 Jira 出站限制，私发 / 群发改为经 Dify botman jumpboard 转发，导出见 [src/scheduled-messages/dify/botman-jumpboard.yml](../../src/scheduled-messages/dify/botman-jumpboard.yml)
+- 在 Glip 中显示为机器人（SM AI）发送的消息
+- Bot 路由和凭据由扩展配置 / Jira Automation 规则 / Dify 环境变量维护，不需要在单条消息里额外填写专属 endpoint 字段
+- 群组消息需要先把 “SM AI” 加到目标群；私发不需要
 - 由 **Jira Automation 引擎**执行（同时负责 AI 推送），解决内网访问限制
 
 #### AI Report（AI 报告推送）
 
 - 通过 Jira Automation 调用外部 API，发送结构化报告
 - 提供 **AI report / PEP report / Multiple Jira Query / 自定义** 四种模板，并为每种模板保留独立配置
+- 默认 AI report 模板对应 Dify advanced-chat 应用，导出见 [src/scheduled-messages/dify/AI report.yml](../../src/scheduled-messages/dify/AI%20report.yml)
 - `AI_Endpoint` 与 `AI_Headers` 会根据模板自动填充，可随时切换；`AI_Body` 可直接编辑并支持 `{Topic}`、`{Content}` 变量
 - 自定义模板支持完全自由填写 Endpoint / Headers / Body，切换模板时系统会记住各自的输入
 
@@ -498,12 +506,15 @@ Chrome Extension 管理界面
     ↓
 Google Sheets（统一数据源）
     ↓
-    ├─→ AppScript Trigger（AsMe 推送）
+    ├─→ AppScript Trigger（AsMe 邮件 fallback）
     │   └─→ minuteTrigger（每分钟统一检查时间 / 周期 / Timeline）
     │
-    └─→ Jira Automation（Bot/AI/AgentTask 执行器）
-        ├─→ 每分钟读取 Sheet，只有命中 due 行才调用 Bot/API/memory-service
-        └─→ AgentTask 到期时调用 memory-service /api/v1/agent-tasks/execute
+    └─→ Jira Automation Executor Rule（Bot / AI / AsMe RC sender / AgentTask）
+        ├─→ 每分钟读取 Sheet，只有命中 due 行才继续
+        ├─→ Bot 私发/群发 → Dify botman jumpboard → botman
+        ├─→ AsMe RingCentral sender → Dify RingCentral sender workflow → RingCentral
+        ├─→ AI Report → 行级 AI_Endpoint（默认 Dify AI report app）
+        └─→ AgentTask → Dify agent-task jumpboard → memory-service /agent-tasks/execute
     ↓
 memory-service runtime（Outreach）
     ├─→ 模板同步 / runtime overlay
@@ -519,6 +530,8 @@ memory-service runtime（AgentTask）
     ├─→ 成功或失败 Bot 私发通知
     └─→ AR result cache（仅 AR binding 需要）
 ```
+
+Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../src/scheduled-messages/dify/README.md)：`agent-task-jumpboard.yml`、`botman-jumpboard.yml`、`ringcentral_dify_workflow_split_credentials.yml`、`AI report.yml`。Jira 因出站限制不能直连 botman / memory-service 时，由这些 Workflow 做跳板；Chrome AR 即时刷新仍直连 memory-service。
 
 ### 核心组件
 
@@ -582,7 +595,9 @@ memory-service runtime（AgentTask）
 #### 6. AgentTask Runtime（帮我做）
 
 - 将 `Push_Method = AgentTask` 的 Messages 行视为 Agent task 计划，可一次性执行，也可重复执行。Sheet 保存 `Agent_Task_ID`、`Agent_Executor`、`Agent_Task_Prompt`、`Agent_Notify_Template`、`Agent_Trigger_Source`、`Agent_AR_Binding_ID` 和最近触发摘要；不保存完整 run/transcript/artifact。
-- Jira Executor Rule 仍每分钟运行，但先通过 AppScript 读取 Sheet 并筛选 due 行。没有到期 AgentTask 时不会访问 memory-service；命中到期行时才返回 memory-service webhook payload。
+- Jira Executor Rule 仍每分钟运行，但先通过 AppScript 读取 Sheet 并筛选 due 行。没有到期 AgentTask 时不会访问 memory-service；命中到期行时才返回 AgentTask webhook payload。
+- 因 Jira 不能直连 memory-service，Executor Rule ≥ 1.6.0 把 AgentTask 转到 Dify agent-task jumpboard（[src/scheduled-messages/dify/agent-task-jumpboard.yml](../../src/scheduled-messages/dify/agent-task-jumpboard.yml)），由 Dify 再 POST `/api/v1/agent-tasks/execute`；Chrome AR 即时刷新仍直连 memory-service，不受该跳板影响。
+- Executor Rule ≥ 1.6.1 在领取成功（`executed=true`）后、进入各发送分支前，会用 Log action 把本次 `messageId` / `topic` / `pushMethod` / `targetType` / `executionKey` / `rowIndex` 写入 Jira Automation audit log，方便对照 Apps Script 偶发超时或 404 时实际领到的任务。
 - AppScript 在返回 AgentTask webhook 前检查 `Config!agent_task_webhook_url` 或行级 `AI_Endpoint`。缺失时不会领取该任务，也不会写 `Last_Exec`，避免配置错误导致任务静默跳过。
 - 管理页保存 / 更新“帮我做”时会先检查 Config；缺少默认 webhook 时从本机 `MEMORY_SERVICE_BASE_URL` 派生 `/agent-tasks/execute`，并连同 `agent_task_user_id` 写回 Sheet Config 后才保存任务行。
 - 管理页普通打开和基础列表加载只是只读检查：不会因为发现本机缺少 AgentTask webhook 就静默写回 Config。只有用户点击手动同步、创建/保存“帮我做”、AR 入口创建重复 AgentTask，或明确运行 schema/规则升级路径时，才会进入 Sheet-first webhook 补齐。
@@ -590,6 +605,7 @@ memory-service runtime（AgentTask）
 - Options/env 里的 `OPENCLAW_*` 是扩展侧配置，memory-service `/config` 返回的是后端当前用户 runtime 配置。两边可能短暂不一致：例如 Options 已保存但后端 runtime 未同步、请求未带 `X-User-Id` 读到 default 用户、或扩展仍复用旧 memory-service 地址。此时会阻止保存并显示缺失原因，避免创建到期后必然失败的 AgentTask。
 - AgentTask webhook 默认是 `POST https://.../api/v1/agent-tasks/execute`，内网环境也可配置 `http://...`；需要 `Config!agent_task_user_id` 填写 memory-service 的用户 id，Jira Rule 模板会把它作为 `X-User-Id` 转发。
 - memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用 `idempotencyKey` 创建或复用 `delegate_openclaw` action，调用 OpenClaw，保存成功/失败结果，并无论成功或失败都 Bot 私发通知。
+- 管理页列表加载会额外请求 `GET /api/v1/agent-tasks/runtime-status?ids=<Messages.ID[,Agent_Task_ID]>`，按 `sourceKind=agent_task` + `sourceRefId` 取最近一次 run；列表摘要和 hover 只展示 `result.summary`，不在 hover 里重复展开 artifact。该叠加只改页面展示态，不写回 Sheet。
 - AgentTask 的 `Glip_User_Name / Glip_Team_ID` 不由 Jira Rule 直接发送；AppScript 会把它们转换成 `notifyTarget` 传给 memory-service。memory-service 在 OpenClaw 执行结束后按 `notifyTarget` 私发或群发结果；如果没有传 `glipUser` / `Glip_User_Name` / 群组目标，则默认用 webhook 的 `userId` / `X-User-Id` 私发给 memory 用户本人。
 - `Agent_Notify_Template` 只影响执行成功后的通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。失败通知不走模板，直接说明失败状态和错误。
 - v1 自动执行器只支持 `openclaw`。Codex / Claude Code 可以作为人工工作台或未来外部执行器，但不作为当前远程自动执行后端。
@@ -635,10 +651,10 @@ memory-service runtime（AgentTask）
 | Agent_Notify_Template | String | ❌ | 成功后 Bot 私发通知的文案模板，不改变原始结果        |
 | Agent_Trigger_Source | String | ❌   | `jira_rule`，未来可扩展为 `memory_cron`              |
 | Agent_AR_Binding_ID | String  | ❌   | 仅 AR 入口创建的重复任务会写入                       |
-| Agent_Last_Run_At  | DateTime | ❌   | 最近一次被 Jira Rule 触发 memory-service 的时间      |
-| Agent_Last_Status  | String   | ❌   | 最近触发状态摘要；完整状态以 memory-service run 为准 |
-| Agent_Last_Result  | String   | ❌   | 最近结果摘要缓存；完整 artifact 仍在 memory-service  |
-| Agent_Last_Error   | String   | ❌   | 最近触发错误摘要                                     |
+| Agent_Last_Run_At  | DateTime | ❌   | 最近一次被 Jira Rule 触发 memory-service 的时间；列表打开时可由 runtime-status 叠加覆盖展示 |
+| Agent_Last_Status  | String   | ❌   | 最近触发状态摘要；列表优先展示 memory-service run 状态 |
+| Agent_Last_Result  | String   | ❌   | Sheet 侧最近结果摘要缓存；列表真源是 runtime-status 的 `summary`，完整 artifact 仍在 memory-service |
+| Agent_Last_Error   | String   | ❌   | 最近触发错误摘要；失败 run 的 lastError 会叠加到列表 hover |
 | Status             | Enum     | ✅   | Active/Paused/Completed                              |
 | Last_Exec          | DateTime | ❌   | 最后执行时间（自动）                                 |
 | Next_Exec          | DateTime | ❌   | 下次执行时间（自动）                                 |
@@ -683,7 +699,7 @@ memory-service runtime（AgentTask）
 | ringcentral_sender_client_secret     | RingCentral sender Client Secret                               |
 | ringcentral_sender_jwt               | RingCentral sender JWT                                         |
 | ringcentral_sender_updated_at        | RingCentral sender 配置更新时间                                |
-| agent_task_webhook_url               | memory-service AgentTask webhook，例如 `https://.../api/v1/agent-tasks/execute` 或内网 `http://...` |
+| agent_task_webhook_url               | memory-service AgentTask webhook，例如 `https://.../api/v1/agent-tasks/execute` 或内网 `http://...`；Jira ≥ 1.6.0 实际出站走 `AGENT_TASK_DIFY_*` 跳板 |
 | agent_task_webhook_token             | 可选 Bearer token，会作为 `Authorization` 转发给 webhook         |
 | agent_task_user_id                   | memory-service 用户 id，会作为 `X-User-Id` 转发                  |
 | sheet_version                        | 版本号                                                         |
@@ -811,6 +827,9 @@ A:
 
 ## 最近更新
 
+- 2026-08-04：Executor Rule `1.6.1` 在 `getBotMessageCurrentTime` 返回 `executed=true` 后先写一条 audit Log（messageId / topic / pushMethod / targetType / executionKey / rowIndex），再进入 AgentTask/Bot/AsMe/AI 分支；Apps Script `2.9.2` 对各领取成功返回统一带上 `topic` 与 `pushMethod`，便于对照偶发超时 / 404 时到底领了哪条任务。
+- 2026-08-03：帮我做列表结果改为打开时只读叠加 memory-service `/agent-tasks/runtime-status`；列表与 hover 只展示 OpenClaw `summary`，不再把 Bot 通知或 Sheet `Agent_Last_Result` 当唯一真源，也不在 hover 重复展 artifact。
+- 2026-08-03：补齐 Dify 跳板目录说明；Bot / AgentTask / AsMe RingCentral sender / AI Report 的 YAML 统一放在 `src/scheduled-messages/dify/`，Jira Executor ≥ 1.6.0 经跳板出站，Chrome AR 仍直连 memory-service。
 - 2026-07-13：将 Glip 输入框闹钟快速定时和虚线未来消息收口到正式文档；明确创建门禁、pending 缓存、`Message_ID + Success` 清理、5 分钟刷新、500ms 重绘、6 小时兜底和滚动隐藏边界，并删除对应 progressing 动画原型。
 - 2026-05-20：把配置同步、执行匹配 / 补偿 / 幂等、Timeline 缓存排障和 App Script 自动更新规则归并到本文，移除对应子文档。
 - 2026-05-20：核对当前 Timeline Sync Rule 仍以 GET 写缓存为准，POST JSON 仅作为旧链路和诊断兼容能力保留。
@@ -866,13 +885,14 @@ A:
 - 2026-06-22：队列可视化的每个改期建议增加“建议依据”行，把槽位类型、目标位置、前序阻塞数量、已展示 / 未展开样例、建议写入目标和“不自动处理前序或发送消息”边界放在操作按钮前；这个调整参考 Slack Scheduled 消息的集中管理入口、Power Automate run history 的可恢复操作状态，以及 trigger-action programming 研究对 timing / expectation bug 的解释需求。
 - 2026-06-29：管理列表的执行器队列提示改为默认折叠，只展示简短排队摘要；操作边界、建议依据、前序样例和改期按钮收进“查看详情”，避免列表首屏被队列诊断占满。
 - 2026-06-23：执行引擎回执旁新增“领取口径”，在列表、健康告警和诊断回执中区分明确时间槽、30 分钟补偿、`08:00 后队列`、AsMe、外部 JiraAutomation 和 Outreach；同时显示 Bot 回调写回与 AI/API 领取时先写回的证明边界，避免用户把领取、补偿、写 Logs 或真实发送混为一个状态。
-- 2026-06-27：改期建议补充“写入后领取口径”，健康告警、队列卡片、表单草稿和成功回执都会说明建议落点进入明确时间槽还是 `08:00 后队列`，并继续强调不会立即发送或改 Logs。
+- 2026-06-27：改期建议补充“写入后领取口径”，队列卡片、表单草稿和成功回执都会说明建议落点进入明确时间槽还是 `08:00 后队列`，并继续强调不会立即发送或改 Logs。
 - 2026-07-02：队列卡片折叠摘要补充最大同槽、最大预计延后和风险下一步，用户不展开也能先判断这只是轻微排队还是需要处理的执行窗口风险。
 - 2026-07-05：队列卡片展开详情时新增本地快照回执，显示计算口径、展示 / 未展开槽位和无写入边界；该调整参考 Slack scheduled messages 的 list/delete/status 边界、Twilio scheduled message 状态、Power Automate run history 排障路径，以及 trigger-action debugging 研究中对时间和触发后果的解释需求。
 - 2026-07-06：队列建议 / 健康告警改期成功回执新增“确认口径”，明确本回执只证明 `Schedule_Date / Schedule_Time` 已写入，不代表 Jira Automation / AppScript 已领取、发送、写 `Last_Exec / Logs` 或产生 AgentTask run；用户需要看目标行、同步刷新或等待下一轮执行记录确认。
 - 2026-06-28：列表筛选回执改为按每个开启条件独立解释隐藏行，并在同一行被多项条件挡住时显示重叠提示；这延续 Zapier filter chips / run history 和 trigger-action debugging 研究中“why / why-not”可见性的原则，实际筛选结果、Sheet 写入和发送路径不变。
 - 2026-06-30：`过滤掉仅发我的` 改为身份归一匹配，兼容旧表显示名、邮箱本地名和多人分隔写法；筛选回执同时显示当前账号识别口径，避免用户误以为旧格式个人提醒没有被筛选或已被执行/删除。
 - 2026-07-04：列表筛选回执在后台补齐 Jira / Outreach / Done 状态时显示“后台补齐中”快照边界，避免用户把基础 Messages 计数误当最终执行状态。
+- 2026-08-03：顶部健康告警收敛为首屏摘要 + 可操作卡片；去掉 triage / 诊断线索 / 写回边界长文，每条只保留消息主题、错过的发送窗口和建议操作，以及定位 / 编辑 / 一键改期。
 
 ## 未来规划
 

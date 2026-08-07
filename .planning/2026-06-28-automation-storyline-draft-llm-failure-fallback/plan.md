@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `Storyline Draft API` from `docs/features/index.md`
+- Random feature: `Storyline Draft API` from `docs/index.md`
 - Canonical doc: `docs/features/memory_storyline_builder.md`
 - Reminder check: local Reminders is readable, but the `Personal AI` list is absent; no Reminder item is linked to this run.
 

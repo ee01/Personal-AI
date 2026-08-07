@@ -2,7 +2,7 @@
 
 ## 2026-06-04
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory state, memory registry hints, and existing planning files.
+- Read `AGENT.md`, `docs/index.md`, automation memory state, memory registry hints, and existing planning files.
 - Randomly selected `定时消息一键初始化` from the feature index.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found, so no reminder items can be incorporated or completed.
 - Created a fresh plan/findings/progress set for this Scheduled Messages run.

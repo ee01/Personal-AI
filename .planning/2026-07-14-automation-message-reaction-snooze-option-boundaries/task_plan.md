@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected feature: `Snooze 快速时间菜单` in `docs/features/index.md`.
+- Selected feature: `Snooze 快速时间菜单` in `docs/index.md`.
 - Canonical doc: `docs/features/message_reaction.md`.
 - Runtime surface: RingCentral message hover toolbar Snooze quick menu.
 - Reminder check: EventKit found the local `Personal AI` list with 4 total items and 0 incomplete items, so no Reminder item is included or marked done.

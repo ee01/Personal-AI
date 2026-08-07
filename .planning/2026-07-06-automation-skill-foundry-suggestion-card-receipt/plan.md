@@ -28,7 +28,7 @@ The page already has a top-level decision overview and a detail-level `确认后
 1. Add a compact `建议处理回执` block to each visible suggestion card.
 2. Keep it read-only and derived from existing state: review status, external-change binding, enabled sync settings, Desktop App availability and manual-only boundary.
 3. Update the Skill Foundry E2E fixture to assert the card receipt for reviewed, external-change and quick-promote suggestions.
-4. Update `docs/features/personal_skill_foundry.md` and the `docs/features/index.md` row.
+4. Update `docs/features/personal_skill_foundry.md` and the `docs/index.md` row.
 5. Verify with syntax check, dev extension compile, focused Skill Foundry E2E and scoped `git diff --check`.
 
 ## Non-Goals

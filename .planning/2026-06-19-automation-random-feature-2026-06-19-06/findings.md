@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick one random feature from `docs/features/index.md`, inspect docs and code, research comparable products/papers, check Reminders, produce a plan, implement, update docs, verify thoroughly, and archive the Codex session.
+- Pick one random feature from `docs/index.md`, inspect docs and code, research comparable products/papers, check Reminders, produce a plan, implement, update docs, verify thoroughly, and archive the Codex session.
 - Target selected: `自动答复 / Reply` under Message Reaction, documented in `docs/features/message_reaction.md`.
 
 ## Research Findings

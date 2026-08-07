@@ -2,7 +2,7 @@
 
 ## 2026-07-04
 
-- Read automation memory, `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, root planning files, and the memory random-feature-loop guidance.
+- Read automation memory, `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, root planning files, and the memory random-feature-loop guidance.
 - Checked worktree status and confirmed broad unrelated dirty state existed before this run.
 - Sampled feature-index rows randomly and selected `自定义消息分析提示词` after avoiding very recent exact targets.
 - Checked Reminders through AppleScript and EventKit; no related open Personal AI item was found.

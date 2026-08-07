@@ -47,7 +47,7 @@ Phase 5
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `会前准备` under Today Pilot | Random sample selected this feature from `docs/features/index.md`; latest automation runs already covered other surfaces. |
+| Target `会前准备` under Today Pilot | Random sample selected this feature from `docs/index.md`; latest automation runs already covered other surfaces. |
 | No Reminder items to incorporate | Local Reminders are accessible but there is no `Personal AI` list on this machine. |
 | Improve the Video Home prep receipt instead of server generation | Existing records already expose mode/status/evidence; the user risk is misreading source coverage in the meeting-list consumer surface. |
 | Show high-confidence sources, basic background, and meeting-use boundary separately | Copilot/Gemini and provenance papers emphasize access/sources, limited summaries when related content is missing, and concise verifiable attribution. |

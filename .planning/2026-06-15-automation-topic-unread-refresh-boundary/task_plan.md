@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery And Selection
-- [x] Read `AGENT.md`, automation memory, memory hints, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, automation memory, memory hints, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - [x] Check local Reminders list names.
 - [x] Randomly select an eligible feature while avoiding the freshest automation-memory feature families.
 - **Status:** complete

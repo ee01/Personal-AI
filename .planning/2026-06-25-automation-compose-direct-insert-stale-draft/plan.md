@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature row: `回复助手直接插入`
-- Canonical doc: `docs/features/compose_assist.md`
+- Canonical doc: `docs/features/assist.md`
 - Main implementation: `src/composer-guard/ComposerGuardController.ts`
 - Existing proof path: `tools/verify-compose-assist-direct-insert-e2e.mjs`
 

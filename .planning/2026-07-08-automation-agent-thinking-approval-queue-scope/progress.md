@@ -9,7 +9,7 @@
 - [x] Rendered `待确认队列口径` in the approval queue with step navigation.
 - [x] Added CSS for the queue receipt.
 - [x] Updated Agent Thinking static verifier and Options E2E assertions.
-- [x] Updated `docs/features/agent_thinking.md` and `docs/features/index.md`.
+- [x] Updated `docs/features/agent_thinking.md` and `docs/index.md`.
 - [x] Run targeted verifier.
 - [x] Run first successful `npm start` compile and stop watch.
 - [x] Run Options E2E.

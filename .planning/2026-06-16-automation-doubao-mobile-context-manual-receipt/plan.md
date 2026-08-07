@@ -9,7 +9,7 @@
 
 ## 现状核对
 
-- `docs/features/index.md` 已把 `Mobile Context Thread` 指到 `docs/features/doubao_bridge.md`。
+- `docs/index.md` 已把 `Mobile Context Thread` 指到 `docs/features/doubao_bridge.md`。
 - 代码已在绑定手机对话卡片下方显示“推送前会发生什么”，说明近期重点、待办 / 通知、Quick Ask 有证据回答都会进入 `mobile_context_thread`，长期 persona / voice 不会混入。
 - 缺口：点击手动推送后的成功 / 跳过即时文案仍较短，用户需要去最近同步流水才能确认本次到底是 `active_focus_digest`、待办完整摘要，还是没有发送占位。
 - `docs/progressing/to-verify.md` 为“暂无。”。

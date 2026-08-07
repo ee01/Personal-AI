@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`, inspect docs/code, research comparable products/papers, produce a plan, implement a bounded improvement, update docs, verify thoroughly, and handle related `Personal AI` Reminders if present.
+- Pick a random feature from `docs/index.md`, inspect docs/code, research comparable products/papers, produce a plan, implement a bounded improvement, update docs, verify thoroughly, and handle related `Personal AI` Reminders if present.
 - Selected feature: `记忆提示预演提醒`, capability surface `Memory Lens`, source docs `docs/features/rehearsal.md` and `docs/features/memory_lens.md`.
 
 ## Research Findings

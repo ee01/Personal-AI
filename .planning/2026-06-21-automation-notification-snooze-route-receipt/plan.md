@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `通知提醒与免打扰路径`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main code paths:
   - `memory-service/src/routes/notifications.ts`
   - `memory-service/src/repositories/NotificationRepository.ts`

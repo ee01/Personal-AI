@@ -6,7 +6,7 @@
 - Recent automation memory covered Google Slides skipped reasons, Agent Thinking approval retry receipts, Memory Service `/events` identity receipts, and Scheduled Messages target-filter receipts.
 - Local Reminders list names: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
 - No visible Reminders list named `Personal AI`; no Reminder feedback can be used or completed for this run.
-- Random selection from `docs/features/index.md`: `分层 ASR` under Meeting Pilot, documented in `docs/features/meeting_pilot.md`.
+- Random selection from `docs/index.md`: `分层 ASR` under Meeting Pilot, documented in `docs/features/meeting_pilot.md`.
 
 ## Code And UX Findings
 

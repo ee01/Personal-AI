@@ -7,7 +7,7 @@
 - **Started:** 2026-06-25
 
 ### Actions Taken
-- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, random-loop memory notes, and existing root planning files.
+- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, random-loop memory notes, and existing root planning files.
 - Created isolated planning files in `.planning/2026-06-25-automation-rehearsal-lens-receipt/`.
 - Checked Reminders list names; `Personal AI` was absent.
 - Randomly selected `记忆提示预演提醒 / Memory Lens` after avoiding recent exact feature families.

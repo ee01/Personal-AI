@@ -2,7 +2,7 @@
 
 ## Goal
 
-Random feature sweep target: `Ask 活答案记忆` from `docs/features/index.md` / `docs/features/ask.md`.
+Random feature sweep target: `Ask 活答案记忆` from `docs/index.md` / `docs/features/ask.md`.
 
 Improve the user-facing Ask active-answer path so stale or previously verified answer-memory priors show a concrete review time basis instead of only abstract gate labels.
 

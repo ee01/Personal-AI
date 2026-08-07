@@ -13,7 +13,7 @@ Complete
 - [x] Check `docs/progressing/to-verify.md`
 - [x] Read automation memory
 - [x] Check local Reminders list names
-- [x] Randomly select a feature from `docs/features/index.md`
+- [x] Randomly select a feature from `docs/index.md`
 - [x] Inspect target docs, tests, and code
 - **Status:** complete
 
@@ -47,7 +47,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `工作/个人/全部范围语义` | Selected by single random draw from `docs/features/index.md`. |
+| Target `工作/个人/全部范围语义` | Selected by single random draw from `docs/index.md`. |
 | Keep implementation scoped to normalized recall scope receipts | The feature already has strong scope boundaries; the remaining UX defect is that missing stored scopes are filtered as work but can be counted/displayed as unknown. |
 | Do not implement broad scope policy changes | Changing default scopes or cross-domain retrieval would affect recall behavior and require product decisions plus broader evals. |
 | No Reminder item will be completed | Reminders was readable, but no `Personal AI` list exists on this Mac. |

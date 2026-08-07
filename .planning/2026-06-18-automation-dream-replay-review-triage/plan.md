@@ -2,8 +2,8 @@
 
 ## Target
 
-- Randomly selected feature: `梦境重放` / Dream replay from `docs/features/index.md`.
-- Source of truth: `docs/features/memory_system.md`.
+- Randomly selected feature: `梦境重放` / Dream replay from `docs/index.md`.
+- Source of truth: `docs/memory_system.md`.
 - Main surface: `src/modals/components/DreamInsights.vue`.
 
 ## Context
@@ -34,12 +34,12 @@
 - Added a top-level `优先复核` metric plus per-card triage chips and `处理回执`.
 - The receipt explains the next step and the boundary: no automatic notification, task dispatch, external writeback, profile write, Rehearsal creation, or fact confirmation.
 - Extended `tools/verify-memory-dreams-e2e.mjs` to check grounded risk triage and ungrounded evidence triage.
-- Updated `docs/features/memory_system.md` to keep the Dream replay behavior current without over-documenting implementation details.
+- Updated `docs/memory_system.md` to keep the Dream replay behavior current without over-documenting implementation details.
 
 ## Validation
 
 - `PATH="$HOME/.nvm/versions/node/v24.13.0/bin:$PATH" npm --prefix memory-service test -- --run src/__tests__/generativeReplay.test.ts src/__tests__/heartbeatLoopDreamDigest.test.ts`
 - `PATH="$HOME/.nvm/versions/node/v24.13.0/bin:$PATH" npm start` reached the first successful webpack development compile and was stopped.
 - `PATH="$HOME/.nvm/versions/node/v24.13.0/bin:$PATH" npm run verify:memory-dreams:e2e`
-- `git diff --check -- src/modals/components/DreamInsights.vue tools/verify-memory-dreams-e2e.mjs docs/features/memory_system.md`
+- `git diff --check -- src/modals/components/DreamInsights.vue tools/verify-memory-dreams-e2e.mjs docs/memory_system.md`
 - Process check confirmed no `webpack --watch` / `npm start` process remained.

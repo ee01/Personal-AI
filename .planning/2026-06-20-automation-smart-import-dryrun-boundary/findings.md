@@ -5,7 +5,7 @@
 - `AGENT.md` requires targeted validation plus `npm start` first successful compile after runtime source changes.
 - `docs/progressing/to-verify.md` currently has no pending items.
 - Automation memory shows recent runs covered Jira Design Links, Notification Center digest, Outreach Sessions, Memory Search safety jump, Today Pilot meeting prep, Reflection Threads, Prompt Config, User Profile, Ask, Dream Replay, Message Analysis, Message Reaction, Task Scheduler, Agent Workflow, Native Join, Memory Capture, and Decision Center.
-- Random selection chose `智能资料录入` from `docs/features/index.md`.
+- Random selection chose `智能资料录入` from `docs/index.md`.
 - Reminders list names are visible, but there is no list named `Personal AI`.
 
 ## Research Notes

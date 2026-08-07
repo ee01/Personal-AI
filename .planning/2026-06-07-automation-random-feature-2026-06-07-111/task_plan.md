@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read automation memory, `AGENT.md`, `docs/features/index.md`, and `docs/progressing/to-verify.md`
+- [x] Read automation memory, `AGENT.md`, `docs/index.md`, and `docs/progressing/to-verify.md`
 - [x] Randomly select a non-recent feature from the feature index
 - [x] Check local Reminders list names before item-level Reminder work
 - [x] Inspect current Storyline docs, route, service, page, tests, E2E, and existing diffs

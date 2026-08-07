@@ -2,6 +2,7 @@ import {
   hasSensitiveUrlSignal,
   isSensitiveControlDescriptor,
 } from '../web-intelligence/contextRecallGuards.js';
+import { buildClaimAttributionCompactPresentation } from '../claimAttributionPresentation.js';
 import {
   buildInteractionSceneSnapshot,
   captureComposerSelectionSnapshot,
@@ -20,9 +21,11 @@ import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
   COMPOSER_ASSIST_INSERT_UNDO_WINDOW_SECONDS,
   buildComposerAssistInsertionReceipt,
+  buildComposerAssistThresholdKey,
   buildComposerRehearsalCueScopeLabel,
   getComposerAssistThresholdForSurface,
   getComposerAssistPreviewText,
+  getDefaultComposerAssistThresholdForQuadrant,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
   normalizeComposerAssistSurfaceThresholds,
@@ -33,7 +36,9 @@ import {
   CONFIDENCE_THRESHOLD_CONFIG_KEY,
   ENV_CONFIG_KEY,
   isComposerAssistEnabledFromConfig,
+  isComposerAssistIntentEnabledFromConfig,
   SURFACE_THRESHOLDS_CONFIG_KEY,
+  type ComposerAssistIntent,
 } from './assistConfig.js';
 import type {
   ComposerAssistRequest,
@@ -45,6 +50,7 @@ import type {
 const ROOT_ID = 'pai-composer-guard-root';
 const STYLE_ID = 'pai-composer-guard-styles';
 const REQUEST_BLUR_SETTLE_MS = 0;
+const REQUEST_FOCUS_SETTLE_MS = 700;
 const SEND_BLUR_SUPPRESSION_MS = 1500;
 const MAX_REQUESTED_ASSIST_SIGNATURES = 120;
 const MIN_WEB_AI_DRAFT_CHARACTERS = 8;
@@ -75,6 +81,7 @@ interface ActiveComposerSession {
   draftText: string;
   draftRevision: number;
   pageHref: string;
+  assistIntent?: ComposerAssistIntent;
 }
 
 interface ReviewInsertionSelection {
@@ -263,11 +270,39 @@ function buildSessionContextKey(
 export function buildComposerAssistRequestSignature(
   contextKey: string,
   draftRevision: number,
+  assistIntent: ComposerAssistIntent = 'draft_compose',
 ): string {
   const normalizedRevision = Number.isFinite(draftRevision)
     ? Math.max(0, Math.trunc(draftRevision))
     : 0;
-  return `${contextKey}|revision:${normalizedRevision}`;
+  return `${contextKey}|revision:${normalizedRevision}|intent:${assistIntent}`;
+}
+
+export function getEffectiveComposerDraftLength(draftText?: string): number {
+  return (draftText || '').replace(/\s/g, '').length;
+}
+
+export function resolveComposerAssistIntentFromDraft(
+  draftText?: string,
+): ComposerAssistIntent {
+  return getEffectiveComposerDraftLength(draftText) > 0
+    ? 'draft_refine'
+    : 'draft_compose';
+}
+
+export function inferAssistIntentFromSuggestionType(
+  suggestionType?: ComposerAssistResponse['suggestionType'] | null,
+): ComposerAssistIntent | undefined {
+  if (!suggestionType || suggestionType === 'none') return undefined;
+  if (
+    suggestionType === 'rewrite_prompt' ||
+    suggestionType === 'prompt_patch' ||
+    suggestionType === 'context_pack' ||
+    suggestionType === 'reply_refine'
+  ) {
+    return 'draft_refine';
+  }
+  return 'draft_compose';
 }
 
 export function getComposerAssistRequestGate({
@@ -312,11 +347,23 @@ function getComposerGuardAssistLabel(
   assist: ComposerAssistResponse,
   snapshot: SiteContextSnapshot,
 ): { label: string; title: string } {
-  if (assist.suggestionType === 'rewrite_prompt') {
+  if (
+    assist.suggestionType === 'rewrite_prompt' ||
+    assist.suggestionType === 'prompt_draft'
+  ) {
     return {
-      label: '优化后的完整提问',
-      title: '替换原 prompt',
+      label:
+        assist.suggestionType === 'prompt_draft'
+          ? '建议提问草稿'
+          : '优化后的完整提问',
+      title:
+        assist.suggestionType === 'prompt_draft'
+          ? '替换为建议提问'
+          : '替换原 prompt',
     };
+  }
+  if (assist.suggestionType === 'reply_refine') {
+    return { label: '优化后的回复', title: '替换原草稿' };
   }
   if (assist.suggestionType === 'prompt_patch') {
     return { label: '提问补丁', title: '追加 prompt 补丁' };
@@ -370,15 +417,24 @@ function hasComposerEvidenceSource(
   });
 }
 
-function shouldReviewComposerAssistBeforeInsert(
+export function shouldReviewComposerAssistBeforeInsert(
   assist: ComposerAssistResponse,
 ): boolean {
   return (
     assist.previewRequired ||
+    Boolean(assist.attributionReceipt) ||
     assist.personaProjection?.requiresPreview === true ||
     assist.riskLevel === 'high' ||
     hasRehearsalEvidence(assist)
   );
+}
+
+export function buildComposerAssistClaimAttributionReceipt(
+  assist: ComposerAssistResponse,
+) {
+  return buildClaimAttributionCompactPresentation(assist.attributionReceipt, {
+    includeUsedOnly: true,
+  });
 }
 
 export function isComposerAssistProjectionBlocked(
@@ -404,9 +460,12 @@ function hasRehearsalEvidence(assist: ComposerAssistResponse): boolean {
 }
 
 function getComposerFeedbackSurfaceLabel(
-  surface?: SiteContextSnapshot['surface'],
+  surface?: SiteContextSnapshot['surface'] | string,
 ): string {
-  switch (surface) {
+  const baseSurface = String(surface || '')
+    .split(':')[0]
+    .trim();
+  switch (baseSurface) {
     case 'chatgpt':
       return 'ChatGPT 场景';
     case 'doubao':
@@ -1060,6 +1119,7 @@ export class ComposerGuardController {
   private assistSurfaceThresholds: ComposerAssistSurfaceThresholds = {};
   private configLoaded = false;
   private composeAssistEnabled = false;
+  private lastEnvConfig: Record<string, unknown> | null = null;
   private pendingInsertionUndo: PendingInsertionUndo | null = null;
   private acceptedInsertionDraft: AmbientAssistDraft | null = null;
   private previewedAssistDraft: AmbientAssistDraft | null = null;
@@ -1452,6 +1512,7 @@ export class ComposerGuardController {
       draftText,
       draftRevision,
       pageHref: window.location.href,
+      assistIntent: resolveComposerAssistIntentFromDraft(draftText),
     };
     this.writeDebugState('activate:session', {
       kind: context.target.kind,
@@ -1461,6 +1522,7 @@ export class ComposerGuardController {
       issueKey: context.snapshot.identifiers?.issueKey,
       sourceTypes: context.snapshot.sourceTypes,
       draftLength: draftText.length,
+      assistIntent: this.activeSession.assistIntent,
     });
 
     if (contextChanged || draftChangedWithoutInput) {
@@ -1477,11 +1539,28 @@ export class ComposerGuardController {
     }
 
     this.positionRoot();
-    this.writeDebugState('activate:no_request_until_blur', {
+    const effectiveDraftLength = getEffectiveComposerDraftLength(draftText);
+    if (effectiveDraftLength === 0) {
+      this.writeDebugState('activate:schedule_draft_compose', {
+        contextKey,
+        draftRevision,
+        contextChanged,
+        draftChangedWithoutInput,
+      });
+      this.scheduleAssistRequest(
+        { ...this.activeSession },
+        'draft_compose',
+        'focusin',
+      );
+      return;
+    }
+
+    this.writeDebugState('activate:await_blur_for_refine', {
       contextKey,
       draftRevision,
       contextChanged,
       draftChangedWithoutInput,
+      effectiveDraftLength,
     });
   }
 
@@ -1577,21 +1656,33 @@ export class ComposerGuardController {
 
     this.invalidateAssistForDraftChange(false);
     if (!this.activeSession) return;
+    const effectiveDraftLength = getEffectiveComposerDraftLength(
+      this.activeSession.draftText,
+    );
+    if (effectiveDraftLength === 0) {
+      this.writeDebugState('blur:empty_draft_skip_refine', {
+        contextKey: this.activeSession.contextKey,
+        draftRevision: this.activeSession.draftRevision,
+      });
+      return;
+    }
     if (
       this.activeSession.snapshot.contextType === 'web_agent_prompt' &&
-      this.activeSession.draftText.replace(/\s/g, '').length <
-        MIN_WEB_AI_DRAFT_CHARACTERS
+      effectiveDraftLength < MIN_WEB_AI_DRAFT_CHARACTERS
     ) {
       this.writeDebugState('blur:short_web_draft', {
         contextKey: this.activeSession.contextKey,
         draftRevision: this.activeSession.draftRevision,
-        effectiveDraftLength: this.activeSession.draftText.replace(/\s/g, '')
-          .length,
+        effectiveDraftLength,
       });
       return;
     }
 
-    this.scheduleAssistRequest({ ...this.activeSession });
+    this.scheduleAssistRequest(
+      { ...this.activeSession },
+      'draft_refine',
+      'focusout',
+    );
   }
 
   private findLikelySendElement(target: Element): HTMLElement | null {
@@ -1743,20 +1834,41 @@ export class ComposerGuardController {
     this.writeDebugState('session:cleared_after_send', { contextKey });
   }
 
-  private scheduleAssistRequest = (session: ActiveComposerSession): void => {
+  private scheduleAssistRequest = (
+    session: ActiveComposerSession,
+    assistIntent: ComposerAssistIntent,
+    trigger: 'focusin' | 'focusout',
+  ): void => {
     if (!this.canRunComposerAssist()) return;
+    if (
+      !isComposerAssistIntentEnabledFromConfig(
+        assistIntent,
+        this.lastEnvConfig,
+      )
+    ) {
+      this.writeDebugState('request:intent_disabled', {
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
+        assistIntent,
+        trigger,
+      });
+      return;
+    }
     this.pruneAssistRetryCooldowns();
     const requestSignature = buildComposerAssistRequestSignature(
       session.contextKey,
       session.draftRevision,
+      assistIntent,
     );
     if (
       this.requestedAssistSignatures.has(requestSignature) ||
       this.scheduledAssistSignature === requestSignature
     ) {
-      this.writeDebugState('request:already_requested_for_blur_revision', {
+      this.writeDebugState('request:already_requested_for_revision', {
         contextKey: session.contextKey,
         draftRevision: session.draftRevision,
+        assistIntent,
+        trigger,
       });
       return;
     }
@@ -1765,6 +1877,7 @@ export class ComposerGuardController {
       this.writeDebugState('request:suppressed_before_schedule', {
         contextKey: session.contextKey,
         draftRevision: session.draftRevision,
+        assistIntent,
         reason: requestGate.reason,
         retryAfterMs: requestGate.retryAfterMs ?? null,
       });
@@ -1774,10 +1887,19 @@ export class ComposerGuardController {
       replacingTimer: this.requestTimer != null,
       contextKey: session.contextKey,
       draftRevision: session.draftRevision,
-      trigger: 'focusout',
+      assistIntent,
+      trigger,
     });
     this.cancelScheduledAssistRequest();
     this.scheduledAssistSignature = requestSignature;
+    const settleMs =
+      assistIntent === 'draft_compose'
+        ? REQUEST_FOCUS_SETTLE_MS
+        : REQUEST_BLUR_SETTLE_MS;
+    const sessionWithIntent: ActiveComposerSession = {
+      ...session,
+      assistIntent,
+    };
     this.requestTimer = window.setTimeout(() => {
       this.requestTimer = null;
       this.scheduledAssistSignature = null;
@@ -1789,9 +1911,24 @@ export class ComposerGuardController {
         this.activeSession.pageHref !== session.pageHref ||
         window.location.href !== session.pageHref
       ) {
-        this.writeDebugState('request:stale_blur_snapshot', {
+        this.writeDebugState('request:stale_snapshot', {
           contextKey: session.contextKey,
           draftRevision: session.draftRevision,
+          assistIntent,
+          trigger,
+        });
+        return;
+      }
+      const liveIntent = resolveComposerAssistIntentFromDraft(
+        this.activeSession.draftText,
+      );
+      if (liveIntent !== assistIntent) {
+        this.writeDebugState('request:intent_mismatch_at_fire', {
+          contextKey: session.contextKey,
+          draftRevision: session.draftRevision,
+          assistIntent,
+          liveIntent,
+          trigger,
         });
         return;
       }
@@ -1806,9 +1943,11 @@ export class ComposerGuardController {
       this.writeDebugState('request:timer_fire', {
         contextKey: session.contextKey,
         draftRevision: session.draftRevision,
+        assistIntent,
+        trigger,
       });
-      void this.requestAssist(session);
-    }, REQUEST_BLUR_SETTLE_MS);
+      void this.requestAssist(sessionWithIntent);
+    }, settleMs);
   };
 
   private async requestAssist(session: ActiveComposerSession): Promise<void> {
@@ -1824,9 +1963,13 @@ export class ComposerGuardController {
 
     const draftRevision = session.draftRevision;
     const contextKey = session.contextKey;
+    const assistIntent =
+      session.assistIntent ||
+      resolveComposerAssistIntentFromDraft(session.draftText);
     const requestSignature = buildComposerAssistRequestSignature(
       contextKey,
       draftRevision,
+      assistIntent,
     );
     const requestGate = this.getAssistRequestGate(requestSignature);
     if (requestGate.suppress) {
@@ -1930,10 +2073,14 @@ export class ComposerGuardController {
     session: ActiveComposerSession,
   ): ComposerAssistRequest {
     const snapshot = session.snapshot;
+    const assistIntent =
+      session.assistIntent ||
+      resolveComposerAssistIntentFromDraft(session.draftText);
     return {
       surface: snapshot.surface,
       contextType: snapshot.contextType,
       scenario: snapshot.scenario,
+      assistIntent,
       title: snapshot.title,
       url: snapshot.url,
       draftText: session.draftText,
@@ -1983,14 +2130,17 @@ export class ComposerGuardController {
   }
 
   private hasInsertableAssist(assist: ComposerAssistResponse | null): boolean {
+    const requiresReplace =
+      assist?.suggestionType === 'rewrite_prompt' ||
+      assist?.suggestionType === 'prompt_draft' ||
+      assist?.suggestionType === 'reply_refine';
     return Boolean(
       assist?.available &&
         assist.insertText &&
         !isComposerAssistProjectionBlocked(assist) &&
-        (assist.suggestionType !== 'rewrite_prompt' ||
-          assist.insertMode === 'replace_draft') &&
+        (!requiresReplace || assist.insertMode === 'replace_draft') &&
         looksLikeSendableComposerText(assist.insertText) &&
-        assist.confidence >= this.getActiveAssistThreshold(),
+        assist.confidence >= this.getActiveAssistThreshold(assist),
     );
   }
 
@@ -2030,17 +2180,25 @@ export class ComposerGuardController {
       this.activeSession.snapshot,
     );
     const primaryActionLabel =
-      assist.suggestionType === 'rewrite_prompt'
-        ? '替换原 prompt'
-        : this.activeSession.snapshot.contextType === 'web_agent_prompt'
-          ? '追加到 prompt'
-          : '插入草稿';
+      assist.suggestionType === 'rewrite_prompt' ||
+      assist.suggestionType === 'prompt_draft'
+        ? assist.suggestionType === 'prompt_draft'
+          ? '替换为建议提问'
+          : '替换原 prompt'
+        : assist.suggestionType === 'reply_refine'
+          ? '替换原草稿'
+          : this.activeSession.snapshot.contextType === 'web_agent_prompt'
+            ? '追加到 prompt'
+            : '插入草稿';
     const rejectBoundary = buildComposerAssistRejectBoundary(
       assist,
       this.activeSession.snapshot,
     );
     const projectionReviewNote = reviewOpen
       ? getComposerAssistProjectionReviewNote(assist)
+      : null;
+    const claimAttributionReceipt = reviewOpen
+      ? buildComposerAssistClaimAttributionReceipt(assist)
       : null;
 
     root.innerHTML = `
@@ -2066,6 +2224,39 @@ export class ComposerGuardController {
           </button>
         </div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
+        ${
+          claimAttributionReceipt
+            ? `<div class="pai-composer-guard-draft-receipt pai-composer-guard-claim-attribution-receipt pai-composer-guard-claim-attribution-receipt--${escapeHtml(
+                claimAttributionReceipt.tone,
+              )}" aria-label="${escapeHtml(
+                claimAttributionReceipt.ariaLabel,
+              )}">
+                <div class="pai-composer-guard-draft-receipt-title">${escapeHtml(
+                  claimAttributionReceipt.label,
+                )} · ${escapeHtml(claimAttributionReceipt.title)}</div>
+                <div class="pai-composer-guard-draft-receipt-rows">
+                  <div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--warn">
+                    <span>使用结果</span>
+                    <strong>${escapeHtml(claimAttributionReceipt.summary)}</strong>
+                  </div>
+                  ${
+                    claimAttributionReceipt.details.length
+                      ? `<div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--muted">
+                          <span>归属判断</span>
+                          <strong>${escapeHtml(
+                            claimAttributionReceipt.details.join('；'),
+                          )}</strong>
+                        </div>`
+                      : ''
+                  }
+                  <div class="pai-composer-guard-draft-receipt-row pai-composer-guard-draft-receipt-row--muted">
+                    <span>边界</span>
+                    <strong>${escapeHtml(claimAttributionReceipt.boundary)}</strong>
+                  </div>
+                </div>
+              </div>`
+            : ''
+        }
         ${
           projectionReviewNote
             ? `<div class="pai-composer-guard-review-note">${escapeHtml(
@@ -2399,7 +2590,9 @@ export class ComposerGuardController {
     );
     if (!insertText) return;
     const replaceDraft =
-      this.latestAssist.suggestionType === 'rewrite_prompt' &&
+      (this.latestAssist.suggestionType === 'rewrite_prompt' ||
+        this.latestAssist.suggestionType === 'prompt_draft' ||
+        this.latestAssist.suggestionType === 'reply_refine') &&
       this.latestAssist.insertMode === 'replace_draft';
     if (!replaceDraft) {
       restoreComposerSelectionSnapshot(target, selectionSnapshot);
@@ -2456,6 +2649,7 @@ export class ComposerGuardController {
   }
 
   private applyComposerGuardConfig(envConfig?: Record<string, unknown>): void {
+    this.lastEnvConfig = envConfig || null;
     this.composeAssistEnabled = isComposerAssistEnabledFromConfig(envConfig);
     this.assistConfidenceThreshold = normalizeComposerAssistThreshold(
       envConfig?.[CONFIDENCE_THRESHOLD_CONFIG_KEY],
@@ -2466,11 +2660,20 @@ export class ComposerGuardController {
     );
   }
 
-  private getActiveAssistThreshold(): number {
+  private getActiveAssistThreshold(
+    assist: ComposerAssistResponse | null = this.latestAssist,
+  ): number {
+    const assistIntent =
+      this.activeSession?.assistIntent ||
+      inferAssistIntentFromSuggestionType(assist?.suggestionType);
     return getComposerAssistThresholdForSurface(
       this.activeSession?.snapshot.surface,
       this.assistSurfaceThresholds,
-      this.assistConfidenceThreshold,
+      getDefaultComposerAssistThresholdForQuadrant(
+        this.activeSession?.snapshot.surface,
+        assistIntent,
+      ),
+      assistIntent,
     );
   }
 
@@ -2929,20 +3132,26 @@ export class ComposerGuardController {
       envConfig[SURFACE_THRESHOLDS_CONFIG_KEY],
     );
     const surfaceKey = snapshot?.surface;
+    const assistIntent =
+      this.activeSession?.assistIntent ||
+      inferAssistIntentFromSuggestionType(assist?.suggestionType);
+    const thresholdKey =
+      buildComposerAssistThresholdKey(surfaceKey, assistIntent) || surfaceKey;
     const currentThreshold = getComposerAssistThresholdForSurface(
       surfaceKey,
       surfaceThresholds,
-      globalThreshold,
+      getDefaultComposerAssistThresholdForQuadrant(surfaceKey, assistIntent),
+      assistIntent,
     );
     const nextThreshold = getNextComposerAssistThreshold(
       currentThreshold,
       kind,
     );
     const nextEnvConfig: Record<string, unknown> = { ...envConfig };
-    if (surfaceKey) {
+    if (thresholdKey) {
       const nextSurfaceThresholds = {
         ...surfaceThresholds,
-        [surfaceKey]: nextThreshold,
+        [thresholdKey]: nextThreshold,
       };
       this.assistConfidenceThreshold = globalThreshold;
       this.assistSurfaceThresholds = nextSurfaceThresholds;
@@ -2958,8 +3167,10 @@ export class ComposerGuardController {
       timestamp: Date.now(),
       thresholdBefore: currentThreshold,
       thresholdAfter: nextThreshold,
-      thresholdScope: surfaceKey ? 'surface' : 'global',
-      thresholdSurface: surfaceKey,
+      thresholdScope: thresholdKey ? 'surface' : 'global',
+      thresholdSurface: (thresholdKey || surfaceKey) as
+        | SiteContextSnapshot['surface']
+        | undefined,
       confidence: assist?.confidence,
       suggestionType: assist?.suggestionType,
       surface: snapshot?.surface,
@@ -4040,6 +4251,15 @@ export class ComposerGuardController {
       .pai-composer-guard-source-route-receipt {
         border-color: rgba(37, 99, 235, 0.12);
         background: rgba(239, 246, 255, 0.78);
+      }
+      .pai-composer-guard-claim-attribution-receipt {
+        margin: 8px 0 0;
+        border-color: rgba(180, 83, 9, 0.18);
+        background: rgba(255, 251, 235, 0.9);
+      }
+      .pai-composer-guard-claim-attribution-receipt--corrected {
+        border-color: rgba(37, 99, 235, 0.18);
+        background: rgba(239, 246, 255, 0.9);
       }
       .pai-composer-guard-rehearsal-review-receipt {
         border-color: rgba(15, 118, 110, 0.16);

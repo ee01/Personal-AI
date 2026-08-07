@@ -2,7 +2,7 @@
 
 ## Goal
 
-从 `docs/features/index.md` 随机样本中选定 `手动关注项规则`，核对文档和代码，结合 Reminder 与外部参考，做一个不需要额外用户决策的 UX/边界改进，并按 repo 验证规则闭环。
+从 `docs/index.md` 随机样本中选定 `手动关注项规则`，核对文档和代码，结合 Reminder 与外部参考，做一个不需要额外用户决策的 UX/边界改进，并按 repo 验证规则闭环。
 
 ## Scope
 

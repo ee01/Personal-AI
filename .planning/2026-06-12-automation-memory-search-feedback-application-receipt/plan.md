@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机抽中的功能是 `搜索结果有用/不相关反馈`，所属 `Memory Exploring`，source of truth 是 `docs/features/memory_system.md`。现有实现已经支持有用 / 不相关 / 撤销、按 `targetType` 提交、恢复按钮状态和范围回执；本轮只补用户点击后的服务端效果可见性。
+随机抽中的功能是 `搜索结果有用/不相关反馈`，所属 `Memory Exploring`，source of truth 是 `docs/memory_system.md`。现有实现已经支持有用 / 不相关 / 撤销、按 `targetType` 提交、恢复按钮状态和范围回执；本轮只补用户点击后的服务端效果可见性。
 
 ## 外部参照
 
@@ -28,7 +28,7 @@
 2. 扩展反馈回执文案，展示服务端实际动作：patch created/cleared、显著性实际变化、是否没有做全局降权。
 3. 更新 `verify-memory-search-feedback-e2e.mjs`，覆盖有用、不相关、撤销三种点击后的服务端效果文案。
 4. 补充 `api-feedback.test.ts` 对 scene-aware negative feedback `appliedDelta=0` 的断言。
-5. 更新 `docs/features/memory_system.md`，保持文档与行为同步。
+5. 更新 `docs/memory_system.md`，保持文档与行为同步。
 
 ## 验收
 

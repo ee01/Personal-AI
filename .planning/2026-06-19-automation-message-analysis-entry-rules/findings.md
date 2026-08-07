@@ -2,7 +2,7 @@
 
 ## Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `记忆入口规则`.
+- Randomly selected feature from `docs/index.md`: `记忆入口规则`.
 - Feature owner/capability: Message Analysis.
 - Source document: `docs/features/message_analysis.md`.
 - Index description: 手动规则与系统观察规则的统一运行时视图.

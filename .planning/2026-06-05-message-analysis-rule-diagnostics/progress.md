@@ -2,7 +2,7 @@
 
 ## 2026-06-05
 
-- Read `AGENT.md`, automation memory, random loop memory, `docs/features/index.md`, root planning files, `docs/progressing/to-verify.md`, and worktree status.
+- Read `AGENT.md`, automation memory, random loop memory, `docs/index.md`, root planning files, `docs/progressing/to-verify.md`, and worktree status.
 - Randomly selected `Message Analysis / 手动关注项规则`, avoiding recent automation feature families.
 - Checked Reminders with AppleScript; no visible `Personal AI` list exists locally.
 - Inspected `docs/features/message_analysis.md`, `src/watchRules.ts`, `src/messageDealing.ts`, `src/modals/topic-modal.tsx`, `src/modals/topic-rule-safety.ts`, and existing verify scripts.

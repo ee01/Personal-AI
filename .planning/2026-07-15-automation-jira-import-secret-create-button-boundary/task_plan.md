@@ -4,7 +4,7 @@
 
 - Feature: `secret value 脱敏`
 - Area: Jira Automation Import
-- Docs: `docs/features/jira_automation_import.md`, `docs/features/index.md`
+- Docs: `docs/features/jira_automation_import.md`, `docs/index.md`
 - Runtime: `src/contentScriptJiraAutomation.ts`, `src/jira-automation-import/transform.ts`
 - Verifier: `tools/verify-jira-automation-import-e2e.mjs`, `npm run verify:jira-automation-import`, `npm run verify:jira-automation-import:e2e`
 

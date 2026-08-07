@@ -1,8 +1,8 @@
 # OpenClaw Auto Delegation Findings
 
 ## Requirements
-- User asked for a random `docs/features/index.md` feature sweep: verify docs vs code, search industry/papers, incorporate relevant Reminders, plan first, implement, update docs, and run strong verification.
-- Selected feature: `OpenClaw 外部委派` under Memory Service, source doc `docs/features/memory_system.md`.
+- User asked for a random `docs/index.md` feature sweep: verify docs vs code, search industry/papers, incorporate relevant Reminders, plan first, implement, update docs, and run strong verification.
+- Selected feature: `OpenClaw 外部委派` under Memory Service, source doc `docs/memory_system.md`.
 - Reminder state: AppleScript did not list `Personal AI`; Swift/EventKit found `Personal AI` with 4 completed historical Doubao/Notification items and 0 open related items.
 
 ## Research Findings
@@ -28,6 +28,6 @@
 ## Resources
 - `src/modals/components/ActionQueue.vue`
 - `tools/verify-action-queue-e2e.mjs`
-- `docs/features/memory_system.md`
+- `docs/memory_system.md`
 - `memory-service/src/core/actions/ActionExecutor.ts`
 - `memory-service/src/core/actions/delegateOpenClawPolicy.ts`

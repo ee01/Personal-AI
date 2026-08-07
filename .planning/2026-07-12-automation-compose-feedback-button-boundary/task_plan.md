@@ -2,18 +2,18 @@
 
 ## Goal
 
-Random feature sweep target: `回复助手阈值与反馈` in `docs/features/compose_assist.md`.
+Random feature sweep target: `回复助手阈值与反馈` in `docs/features/assist.md`.
 
 Improve the user-visible pre-click boundary on the Compose Assist thumb-down control so the button itself explains what clicking does before the feedback receipt appears.
 
 ## Plan
 
-1. [complete] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/features/index.md`, and Reminder state.
+1. [complete] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/index.md`, and Reminder state.
 2. [complete] Select a less-recent random feature candidate and inspect current docs/source/E2E coverage.
 3. [complete] Research comparable writing-assistant feedback/product patterns.
 4. [complete] Implement a narrow `title` / `aria-label` boundary for the Compose Assist reject button.
 5. [complete] Extend the existing Compose Assist E2E assertions for the button boundary.
-6. [complete] Update `docs/features/compose_assist.md` and `docs/features/index.md`.
+6. [complete] Update `docs/features/assist.md` and `docs/index.md`.
 7. [complete] Verify with targeted checks, first successful `npm start`, E2E, and scoped `git diff --check`.
 
 ## Decisions

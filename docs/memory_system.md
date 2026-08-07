@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-07-15 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；补充 InteractionScene 查询契约、source-memory、timeline 跳转边界、主动召回范围回执、搜索范围意图回执、搜索范围边界回执、搜索失败真实回执、搜索空结果完成回执、搜索结果打开动作回执、搜索结果类型筛选按钮预览与回执、搜索结果来源覆盖回执、搜索/时间轴链接安全状态、搜索结果安全诊断复制回执、时间轴卡片点击预告与安全诊断复制回执、搜索/时间轴反馈状态校准、时间轴反馈操作回执、搜索反馈失败回执、搜索反馈后续取证回执、搜索反馈条件快照回执、召回通道跳过/失败可见原因回执、证据通道交叉回执、时间轴范围/来源/定位/打开动作回执、时间轴来源覆盖、时间轴控制点 hover/读屏边界、时间轴空结果回执、刷新中快照回执与刷新失败快照回执、时间轴外部来源确认回执、Outreach 本页优先级回执、Outreach 列表会话推进回执、列表发送前复核、终态重试路径、Outreach 详情操作范围、Outreach 详情提交中回执、发送前复核与操作结果回执、Outreach 按钮级 hover/读屏操作边界、决策中心提交中回执、审核包复制回执与操作回执、决策中心按钮级 hover/读屏边界、通知深链未命中队列口径与规则改进预填边界、通知稍后按钮点击前时间/边界回执、待观察只读查证边界与 OpenClaw 绑定动作结果回执、Action Queue 刷新失败快照回执、处理构成回执、空筛选恢复回执、泛用执行范围回执、按钮级操作边界与操作提交中回执、OpenClaw 失败委派证据校验回执与恢复路径回执、审批前确认边界与操作回执、执行就绪契约与 probe-only 恢复、批量摄入决策汇总、cue-level Outcome Loop、自我反思列表查看范围/刷新中快照回执、自我反思推进回执与真实运行计数边界、自我反思本地研究范围裁剪和本轮研究范围回执、自我反思操作范围与操作结果回执、Ambient Calibration 原文防漏与回执、Dream Digest 周期范围回执、Dream replay 复核路径回执、未解析身份 default fallback、身份来源回执、Today Pilot 首屏统计身份回执与身份快照恢复入口、备份下载 manifest 摘要、archive 指纹回执与备份按钮 hover/读屏边界；保留范围语义、摄入决策、抽取降级索引、备份导入边界、跨用户恢复确认、恢复失败回执与反思本地研究降级逻辑)_
+_最后更新: 2026-08-03（补充 Options 语言存储、请求 header、画像投影与 Keystone Composer 的同步边界；其余系统能力沿用本文既有章节）_
 
 ## 系统概述
 
@@ -31,6 +31,7 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 7. 写作风格学习：Compose Assist 会从用户真实改写和发送行为里提炼“怎么写才像用户本人”，重复证据足够后进入 `USER_CORE` 的 Writing Style，而不是保存用户最终发送原文。
 8. 关键记忆简报：跨来源证据达到准入门槛后可沉淀为 `KeystoneBrief`。被动召回只做确定性场景匹配；`ready` 简报由 Memory Lens 优先展示，证据不足、过期、隐藏或阻断时继续使用普通召回结果。
 9. 会议结果装订：Today Pilot 把会前目标保存为 `planned` binder；Meeting Pilot 在归档时只用匹配的 transcript、决议、章节和行动项更新结果；Ask 只能读取这份派生对象。
+10. 记忆主张归属：原始消息先保存，再按句内 claim 判断 owner、表达方式、时间、验证与承诺状态；AI 建议、他人转述、假设和归属失败不能继承整条消息的 `ownerAuthored` 权限。普通消息无新增 UI，只有归属改变消费后果时才返回紧凑回执。详见 [Memory Claim Attribution](./features/memory_claim_attribution.md)。
 
 ## 记忆功能地图
 
@@ -39,24 +40,25 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 | 功能                                                    | 角色           | 一句话说明                                                                                                            |
 | ------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Memory Ingestion                                        | 入库基础层     | 消息、会议、Jira、AI 对话、手动记录等进入 `messages_raw`、`chunks`、实体和关系；显著性决定是否索引。                  |
-| [Memory Capture](./memory_capture.md) / 记忆捕捉        | 资料入库与 source-local 蒸馏层 | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，先同步生成可召回 P0，再异步把已保存 capsule 蒸馏为 evidence-grounded source pack。 |
-| [Memory Lens](./memory_lens.md)                         | 场景提示层     | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。                          |
+| [Memory Claim Attribution](./features/memory_claim_attribution.md) | 句内责任门禁层 | raw-first 切分主张并保护画像、当前事实、承诺和消费证据；默认无界面，纠错只改派生归属。                              |
+| [Memory Capture](./features/memory_capture.md) / 记忆捕捉        | 资料入库与 source-local 蒸馏层 | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，先同步生成可召回 P0，再异步把已保存 capsule 蒸馏为 evidence-grounded source pack。 |
+| [Memory Lens](./features/memory_lens.md)                         | 场景提示层     | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。                          |
 | Keystone Memory Briefs / 关键记忆简报                  | 跨来源整理层   | 把同一工作对象的多条消息、Jira、会议和资料证据整理成带 source map、freshness 和状态门禁的简报；当前由 Memory Lens 同入口消费。 |
-| [Personal AI AR Data](./ar_data_overlay.md)             | 网页叠加层     | 把用户定义或 AgentTask 生成的数据展示回具体网页 DOM / overlay；不是 Memory Lens 的只读记忆卡片。                     |
-| [Compose Assist](./compose_assist.md)                   | 输入框生成层   | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。                              |
-| `/recall` / [Ask](./ask.md)                             | 主动查询层     | 用户主动搜索或提问时，先处理范围、话题锁定和活答案 prior，再走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
-| [Evidence Watch Contracts](./evidence_watch_contracts.md) | 证据复核层     | 把可变化事实、未来复核和来源阻塞从一次性 action 变成可复用 contract，Ask/Reflection/Action Queue 共用去重与收据。 |
+| [Personal AI AR Data](./features/ar_data_overlay.md)             | 网页叠加层     | 把用户定义或 AgentTask 生成的数据展示回具体网页 DOM / overlay；不是 Memory Lens 的只读记忆卡片。                     |
+| [Compose Assist](./features/assist.md)                   | 输入框生成层   | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。                              |
+| `/recall` / [Ask](./features/ask.md)                             | 主动查询层     | 用户主动搜索或提问时，先处理范围、话题锁定和活答案 prior，再走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
+| [Evidence Watch Contracts](./features/evidence_watch_contracts.md) | 证据复核层     | 把可变化事实、未来复核和来源阻塞从一次性 action 变成可复用 contract，Ask/Reflection/Action Queue 共用去重与收据。 |
 | Memory Exploring                                        | 记忆浏览层     | 展示搜索结果、时间轴、反思线程、决策中心、Rehearsal、动作队列等用户可检查的记忆视图。                                 |
-| [Memory Coverage Map](./memory_coverage_map.md)         | 覆盖与导入层   | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。                                 |
-| [User Profile](./user_profile_system.md)                | 稳定画像层     | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。                            |
-| [Rehearsal](./rehearsal.md)                             | 未来场景预演层 | 保存“未来遇到某人/项目/会议/issue 时该想起什么”，通过 `/context-recall` 被 Lens、Compose Assist、Today Pilot 等消费。 |
+| [Memory Coverage Map](./features/memory_coverage_map.md)         | 覆盖与导入层   | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。                                 |
+| [User Profile](./features/user_profile_system.md)                | 稳定画像层     | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。                            |
+| [Rehearsal](./features/rehearsal.md)                             | 未来场景预演层 | 保存“未来遇到某人/项目/会议/issue 时该想起什么”，通过 `/context-recall` 被 Lens、Compose Assist、Today Pilot 等消费。 |
 | Reflection / Dream Replay                               | 跨记忆离线整理层 | Reflection 围绕长期主题解释和规划，Dream 做低置信跨记忆联想；两者可消费 source pack，但不能替代来源蒸馏或跳过各自 authority gate。 |
 | Confirm Requests / Notifications / Outreach             | 主动推进层     | 当记忆系统缺用户判断、需要提醒或需要问外部人时，分别进入决策中心、通知链路或主动询问。                                |
-| [Relationship Radar](./relationship_radar.md)           | 人物关系层     | 从记忆中整理人物、关系、会议上下文和助手草稿证据，供会议、回复和人脉判断使用。                                        |
-| [Today Pilot](./today_pilot.md)                         | 今日场景层     | 把今天的会议、任务、Rehearsal、项目风险和记忆线索组织成可行动的 mission。                                             |
+| [Relationship Radar](./features/relationship_radar.md)           | 人物关系层     | 从记忆中整理人物、关系、会议上下文和助手草稿证据，供会议、回复和人脉判断使用。                                        |
+| [Today Pilot](./features/today_pilot.md)                         | 今日场景层     | 把今天的会议、任务、Rehearsal、项目风险和记忆线索组织成可行动的 mission。                                             |
 | Meeting Pilot                                           | 会议记忆层     | 捕捉和整理会议现场、转写、摘要、行动项，并把相关历史记忆和 Rehearsal 带入会议场景。                                   |
 | Meeting Outcome Binder                                  | 会议闭环派生层 | 把 Today Pilot 的会前目标与 Meeting Pilot 的会议证据装订成可持久化结果，并供 Panorama 和 Ask 只读引用。              |
-| [Project Dashboard](./project_dashboard_usage_guide.md) | 项目记忆层     | 把项目相关记忆、Jira、会议、风险和里程碑组织成项目视图，便于复盘和跟进。                                              |
+| [Project Dashboard](./features/project_dashboard_usage_guide.md) | 项目记忆层     | 把项目相关记忆、Jira、会议、风险和里程碑组织成项目视图，便于复盘和跟进。                                              |
 | Ambient Calibration / Outcome Loop                      | 横切反馈层     | 不做独立校准平台；从用户真实动作中记录 redacted trace，用于后续调权、诊断、写作风格学习和 cue-level suppress / boost。 |
 
 ### Meeting Outcome Binder 共享契约
@@ -79,7 +81,7 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 4. `GET /api/v1/meeting-outcomes/:id`、`GET /api/v1/meeting-outcomes?meetingId=...` 和 meeting detail API 提供只读恢复；Ask 使用服务内 `findRelevant()`，不会调用 bind。
 5. binder 属于派生数据：可从会前证据和 meeting archive 重建，不覆盖 raw transcript、action item、decision 或 Calendar event。P0 不向 Calendar、Jira、RingCentral、消息或外部任务写入。
 
-体验规则分别维护在 [Today Pilot 会前准备](./today_pilot.md)、[Meeting Pilot 会中/会后](./meeting_pilot.md) 和 [Ask 只读引用](./ask.md)。质量门槛由 `meeting-outcome-binder` eval suite 持续验证。
+体验规则分别维护在 [Today Pilot 会前准备](./features/today_pilot.md)、[Meeting Pilot 会中/会后](./features/meeting_pilot.md) 和 [Ask 只读引用](./features/ask.md)。质量门槛由 `meeting-outcome-binder` eval suite 持续验证。
 
 ### InteractionScene 查询契约
 
@@ -104,10 +106,10 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 
 | 能力                                  | 大白话                                                   | 读/写方向        | 典型场景                                                                                                    | 不负责                                                             |
 | ------------------------------------- | -------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [Memory Lens](./memory_lens.md)       | 读已有记忆，提示“这和你以前什么相关”。                   | 读记忆           | 浏览网页、Jira、消息会话、会议上下文，或划词查旧记忆。                                                      | 不写入网页，不生成回复，不插入输入框。                             |
-| [Memory Capture](./memory_capture.md) | 写入新资料，决定“这段 / 这页 / 这次输入要不要记住”。     | 写记忆           | 选中文本点右侧半露出 `+ 入库`、复制/深读网页点页面 `+ 入库` 或高置信自动入库、Jira owner comment 自动捕捉。 | 不展示旧记忆，不把普通浏览史全量保存，不直接写 confirmed profile。 |
-| [Compose Assist](./compose_assist.md) | 用记忆生成可插入内容，帮助“我现在怎么回复 / 怎么问 AI”。 | 读记忆后生成草稿 | RingCentral 回复、Jira comment、ChatGPT/豆包/Claude/Gemini 输入框。                                         | 不自动发送，不做后台入库判断，不展开 Memory Lens 式来源卡片。      |
-| [Personal AI AR Data](./ar_data_overlay.md) | 把定义好的数据展示回当前网页位置。                    | 展示缓存 / 可绑定 AgentTask | Jira 报告数字、网页表格指标、未来相似文本位置。                                                           | 不自动入库网页，不替代 Lens 召回，不因打开页面自动刷新 Agent。      |
+| [Memory Lens](./features/memory_lens.md)       | 读已有记忆，提示“这和你以前什么相关”。                   | 读记忆           | 浏览网页、Jira、消息会话、会议上下文，或划词查旧记忆。                                                      | 不写入网页，不生成回复，不插入输入框。                             |
+| [Memory Capture](./features/memory_capture.md) | 写入新资料，决定“这段 / 这页 / 这次输入要不要记住”。     | 写记忆           | 选中文本点右侧半露出 `+ 入库`、复制/深读网页点页面 `+ 入库` 或高置信自动入库、Jira owner comment 自动捕捉。 | 不展示旧记忆，不把普通浏览史全量保存，不直接写 confirmed profile。 |
+| [Compose Assist](./features/assist.md) | 用记忆生成可插入内容，帮助“我现在怎么回复 / 怎么问 AI”。 | 读记忆后生成草稿 | RingCentral 回复、Jira comment、ChatGPT/豆包/Claude/Gemini 输入框。                                         | 不自动发送，不做后台入库判断，不展开 Memory Lens 式来源卡片。      |
+| [Personal AI AR Data](./features/ar_data_overlay.md) | 把定义好的数据展示回当前网页位置。                    | 展示缓存 / 可绑定 AgentTask | Jira 报告数字、网页表格指标、未来相似文本位置。                                                           | 不自动入库网页，不替代 Lens 召回，不因打开页面自动刷新 Agent。      |
 
 推荐文档结构是：`memory_system.md` 做总览，Lens / Capture / Compose Assist / AR Data 保持独立子文档。原因是它们共享上下文和浏览器注入基础设施，但用户心智分别是“提示旧记忆 / 捕捉新资料 / 生成可插入内容 / 把定义好的数据叠回网页”，权限边界和失败模式也不同。
 
@@ -324,7 +326,7 @@ flowchart LR
 - 压掉跨域噪音，例如 Codex/Cursor/额度场景里召回 AI Notes、虚拟背景、HR 通告或旅行记忆。
 - 合并同一会议、群组、会话或来源 URL 的重复 chunk，只把一个 source cluster 给 UI。
 - 返回 `autopilot` 摘要：候选数、展示数、强/弱相关数、静默数、hidden 数、低信息数、来源排除数、重复合并数、场景锚点和 quiet reasons。
-- `autopilot` 摘要随响应交给消费端；具体放在 Rest、Hover Peek 还是 Expanded Card footer，以及信息密度和展开方式，统一由 [Memory Lens](./memory_lens.md) 的展示契约维护。
+- `autopilot` 摘要随响应交给消费端；具体放在 Rest、Hover Peek 还是 Expanded Card footer，以及信息密度和展开方式，统一由 [Memory Lens](./features/memory_lens.md) 的展示契约维护。
 - 在少数结构足够明确的场景进入 Cue Compiler。当前先覆盖 Jira estimate：`SceneFrameService` 从当前原始 request 提取 issueKey、sceneType 和 fieldHints；`MemoryCueFactService` 从候选记忆抽 `estimate.unit`、`jira.field`、`close_policy`、`due_date_policy`；`CueCompilerService` 返回带 `sourceRefs` 的 `ContextCue`。Memory Lens 使用 `remember` 只读 cue，Compose Assist 使用 `draft_hint` 草稿 cue。
 - Outcome Loop 在 cue 维度建立成效账本：`memory_outcome_events` 记录展开、插入、发送和不相关等行为，`memory_outcome_policy_patches` 写可撤销的 `suppress` / `boost` patch。Context Recall 读取 patch 后会把重复无效 cue 静默，把重复成功的 cue 提前；Compose Assist 的重复 `sent_after_insert` 还能生成 Personal Skill Foundry suggestion。
 
@@ -332,7 +334,7 @@ flowchart LR
 
 ### Evidence Cohesion Gate（证据对齐）
 
-[Evidence Cohesion Gate（证据对齐）](./evidence_cohesion_gate.md) 位于候选召回之后、回答/卡片/草稿/动作消费之前。它按 subject、scene、明确 identifier、claim slot 和 scope 隔离“关键词相似但不是同一件事”的证据。`/context-recall` 在 passive fast path 和普通 path 都会在最终展示、`limit` 切片、ContextCue 与 Keystone Brief 消费前执行 Gate；正常排除只写入 `cohesionReceipt` 和 autopilot quiet reason，不新增 UI 或 review 队列。
+[Evidence Cohesion Gate（证据对齐）](./features/evidence_cohesion_gate.md) 位于候选召回之后、回答/卡片/草稿/动作消费之前。它按 subject、scene、明确 identifier、claim slot 和 scope 隔离“关键词相似但不是同一件事”的证据。`/context-recall` 在 passive fast path 和普通 path 都会在最终展示、`limit` 切片、ContextCue 与 Keystone Brief 消费前执行 Gate；正常排除只写入 `cohesionReceipt` 和 autopilot quiet reason，不新增 UI 或 review 队列。
 
 Gate 不修改存储分类。原始请求里的明确 issue/project/entity hint 才有删除权限；Recall Context Expansion、推断 topic 和 expanded query 只帮助召回与排序，不能把推断结果反过来当成排除证据的事实。宽泛历史请求保留合法多场景证据，同一问题内的冲突则保留双方并交给 Authority / Evidence Watch。
 
@@ -342,16 +344,18 @@ Gate 不修改存储分类。原始请求里的明确 issue/project/entity hint 
 
 `KeystoneBriefService` 保存一份围绕稳定 `briefKey` 和工作对象的多来源简报。日常生产者是独立于完整 Proactive Scheduler 的轻量 `KeystoneBriefComposerService` 维护循环：服务启动时运行，此后默认每 15 分钟运行；即使 `PROACTIVE_SCHEDULER_ENABLED=false`，也不会要求用户手动生成或开启通知、动作、Dream 等后台任务。它从活跃 Reflection Thread 确定性发现稳定主题，再从近 180 天工作记忆中收集至少两条独立原始来源，组成 title、summary、claims、scene anchors 和 source map；每轮有界处理并按来源签名幂等刷新。用户隐藏、标记不准或由非自动版本维护的简报不会被后台覆盖。`POST /api/v1/keystone-briefs/mine` 保留为内部导入、测试与维护入口，不是用户日常操作。
 
-Composer 将 Options 同步到画像的 `language_preference` 纳入生成签名。用户可读合成字段按该语言做受约束的等义转换，语言变化会触发同一 `briefKey` 刷新；原始 source map、来源标题和证据片段保持原文。具体双语栏目及展示行为由 [Memory Lens](./memory_lens.md#关键记忆简报keystone-memory-brief) 维护。
+Composer 将 Options 同步到画像的 `language_preference` 纳入生成签名。该画像条目是后台生成投影；页面召回与 Lens 展示仍以 Options 本地当前语言为准。Options 打开时会自动修复投影漂移并触发后台刷新，召回服务在刷新完成前过滤语言不一致的自动简报。用户可读合成字段按该语言做受约束的等义转换，语言变化会触发同一 `briefKey` 刷新；原始 source map、来源标题和证据片段保持原文。具体双语栏目及展示行为由 [Memory Lens](./features/memory_lens.md#关键记忆简报keystone-memory-brief) 维护。
 
-自动生成与页面召回解耦：被动 `/context-recall` fast path 不调用 LLM，也不会在用户打开网页时临时生成摘要；它只同步匹配已经准备好的简报。后台生成失败时不影响普通召回，证据不足时保持无简报。简报、变化脉络和普通记忆如何争夺 Lens 首屏，统一由 [Memory Lens 展示地图](./memory_lens.md#展示地图与首屏仲裁) 定义，系统文档不重复维护 UI 细节。
+后端没有读取 Chrome `envConfig` 中语言的隐式通道，且语言本身不在 `envConfig`。扩展的 `personalAiUiPreferences.language` 是当前设置；`MemoryServiceClient` 把它放进每次请求的 `X-Personal-AI-Language` / `Accept-Language`，Context Recall 据此做即时语言匹配。`envConfig` 只让客户端获得 memory-service 地址和鉴权配置。Options 另行调用 Profile API，把同一个当前设置投影到 per-user SQLite 的 `language_preference`，供脱离浏览器请求运行的 Composer 使用。详细数据流和失败降级见 [Memory Lens 的 Options 语言读取与后端同步链路](./features/memory_lens.md#options-语言读取与后端同步链路)。
+
+自动生成与页面召回解耦：被动 `/context-recall` fast path 不调用 LLM，也不会在用户打开网页时临时生成摘要；它只同步匹配已经准备好的简报。后台生成失败时不影响普通召回，证据不足时保持无简报。简报、变化脉络和普通记忆如何争夺 Lens 首屏，统一由 [Memory Lens 展示地图](./features/memory_lens.md#展示地图与首屏仲裁) 定义，系统文档不重复维护 UI 细节。
 
 准入是确定性的：title/summary 必须存在；至少两条 `sourceType:sourceId` 独立来源；至少一条来源不是 `derived` / `reflection`；至少一个 fact/decision/constraint/trap claim；每个 claim 的 `sourceRefs` 都必须能解析到 source map。未达到门槛保存为 `candidate`，受限来源保存为 `blocked`，过期或 `stale_risk` 保存/呈现为 `stale`，显式冲突可进入 `partial`；只有 `ready` 可作为无冲突首屏简报。
 
 读链路保持原召回为真值底座：
 
 1. `/context-recall` 先完成普通候选、证据对齐、排序和 `matches`。
-2. `KeystoneBriefService.matchContext()` 用 Jira key、project、topic、people、surface 以及 source-to-match 对应关系同步评分，只考虑 `ready` / `partial` / `stale`。
+2. `KeystoneBriefService.matchContext()` 用 Jira key、project、topic、people、surface 以及 source-to-match 对应关系同步评分，只考虑 `ready` / `partial` / `stale`；自动简报还必须与请求 header 的 Options 语言一致。
 3. 响应可选附带 `keystoneBrief` presentation，不改变 `matches` 的顺序和数量。Selection Memory Search、`selected_text` 和 Rehearsal 不附加简报。
 4. Memory Lens 按 `primary` / `conflict` / `stale_notice` 渲染；缺失、candidate、blocked、hidden 或服务异常都 fail open 到普通卡片。
 
@@ -416,12 +420,12 @@ API 还提供列表、详情、`GET /keystone-briefs/match`、专用 event、hid
 
 ### Ask 主动问答
 
-[Ask](./ask.md) 是用户主动提问时的记忆问答入口。它会先尊重用户显式范围和 filters，再通过 `MemoryContextMatchService` 处理“那个 / 这个 / BE ready / 最近 MR”这类短问句，随后进入 Active Recall、证据缺口判断、答案生成和异步活答案沉淀。
+[Ask](./features/ask.md) 是用户主动提问时的记忆问答入口。它会先尊重用户显式范围和 filters，再通过 `MemoryContextMatchService` 处理“那个 / 这个 / BE ready / 最近 MR”这类短问句，随后进入 Active Recall、证据缺口判断、答案生成和异步活答案沉淀。
 
 本总览只保留边界：
 
-- Ask 的完整查询优先级、可视化流程、活答案记忆和 `answerMemory` 诊断字段，以 [Ask](./ask.md) 为 source of truth。
-- `MemoryContextMatchService` 也被 `/context-recall` 使用；被动场景里的提示策略见 [Memory Lens](./memory_lens.md)。
+- Ask 的完整查询优先级、可视化流程、活答案记忆和 `answerMemory` 诊断字段，以 [Ask](./features/ask.md) 为 source of truth。
+- `MemoryContextMatchService` 也被 `/context-recall` 使用；被动场景里的提示策略见 [Memory Lens](./features/memory_lens.md)。
 - 活答案 prior 只是“上次答案 + 已知缺口 + 改变条件 + 旧证据 refs”的召回提示，不能单独作为事实。
 - Ask 最终回答仍必须由本次召回或外部查证证据支撑；ambiguous topic 不写活答案 observation/thread。
 - `/ask/stream` 不新增可见 SSE 事件，只在最终结果中可选携带诊断字段。
@@ -430,7 +434,7 @@ API 还提供列表、详情、`GET /keystone-briefs/match`、专用 event、hid
 
 2026-06-24 搜索结果类型筛选复查：[Google Search filters](https://support.google.com/websearch/answer/2466433) 和 [Microsoft Search verticals](https://learn.microsoft.com/en-us/microsoftsearch/manage-verticals) 都把类型/来源垂直入口放在结果页内，用来收窄已有结果集合；Marti Hearst 的 faceted search / search UI 研究也强调筛选界面应让用户理解当前看到的是集合中的哪一部分。因此 Personal AI 的类型筛选不再只改变卡片列表，而是在筛选按钮上提前标出会显示 / 隐藏多少，并在摘要区明确当前显示、隐藏数量和本地无副作用边界。
 
-Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`source-memory` 是用户主动保存的资料证据 capsule，适合网页、选区、视觉证据、表格证据和 Jira 页面资料，重点是来源、保存原因、证据锚点、备注和未来触发线索；`timeline` 是普通原始记忆的时间线定位，适合 message、chunk、meeting、Glip、Jira 活动等，重点是发生时间、附近消息和上下文回放。召回结果如果引用“用户保存过的资料证据”，优先跳 `#/source-memory/:id`；如果引用“当时发生的消息/会议/上下文”，优先跳 `#/timeline?...focus=...`。完整例子和路由规则见 [Memory Capture](./memory_capture.md#source-memory-与-timeline-的边界)。
+Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`source-memory` 是用户主动保存的资料证据 capsule，适合网页、选区、视觉证据、表格证据和 Jira 页面资料，重点是来源、保存原因、证据锚点、备注和未来触发线索；`timeline` 是普通原始记忆的时间线定位，适合 message、chunk、meeting、Glip、Jira 活动等，重点是发生时间、附近消息和上下文回放。召回结果如果引用“用户保存过的资料证据”，优先跳 `#/source-memory/:id`；如果引用“当时发生的消息/会议/上下文”，优先跳 `#/timeline?...focus=...`。完整例子和路由规则见 [Memory Capture](./features/memory_capture.md#source-memory-与-timeline-的边界)。
 
 `memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口、来源筛选和命中通道，避免全局范围按钮与实际请求范围脱节。页面还会显示一个紧凑的“时间轴回执”：说明本次只读取哪个 scope、只请求哪个时间窗口、来源筛选只是收窄已加载结果而不会扩大检索，以及定位链接是否把窗口外或来源外的目标置顶。列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。加载后如果命中来自多个来源，页面会提供本地来源筛选下拉和来源覆盖 chip，不重新请求后端就能看到当前窗口的来源分布、哪些来源被当前筛选隐藏，并把同一时间窗口收窄到具体会议、网页、手动记录或其它 source。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天、全部范围或全部来源的入口，而不是示例数据或静态占位；当 `/recall` 成功返回 0 条时，空态内会显示“时间轴空结果回执”，明确这是 successful empty，不是刷新失败、删除、清空索引、反馈写入或来源同步；如果只是来源筛选把本批结果收窄到 0 条，则显示“来源筛选空结果回执”，说明切回全部来源可恢复被隐藏结果。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞；如果当前来源筛选会隐藏定位目标，页面会清除来源筛选并显示回执，说明是为了展示定位记忆，而不是让用户误以为置顶失败。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截；signed URL、credential URL 和 token URL 会显示更具体的隐藏原因，避免把临时访问能力误当成普通可分享来源。时间轴卡片会在点击前说明“卡片点击”到底会做什么：有安全内链时只进入 Memory Exploring；有安全来源但无内链时，整卡点击只显示外部来源确认回执，不直接打开新标签，用户需要点明确的 `打开来源` 按钮才会打开 sanitized host；被拦截时只展示拦截原因，无目标时明确是只读卡片，避免用户把 blocked/no-target 状态误当成可直接打开的来源。用户点击卡片、`在记忆中查看` 或 `打开来源` 后，页面会补一条回执：安全内链说明只在 Memory Exploring 内跳转且不改写记忆，安全来源按钮说明新标签 host 与不重新同步/确认来源内容的边界，外部来源确认回执说明卡片点击没有打开外部标签页、重新读取来源、同步外部系统、写入反馈或确认内容；如果没有安全目标或链接被拦截，回执会保留拦截原因和恢复路径，避免卡片点击后像无响应。时间轴反馈提交、记录、撤销和失败都有独立 `时间轴反馈回执`：说明目标记忆、当前范围/时间窗/来源筛选，以及 `/feedback` 只写 recall_quality 信号，不会删除或隐藏当前记忆、重新读取来源、外发内容、写画像或立即重排本页列表；失败时保留上一反馈状态，不再把反馈失败显示成整页时间轴加载失败。同一 scope 和时间窗口刷新中，页面不会把旧列表突然换成全屏 loading，而是显示“刷新中 · 上次快照”：说明下面暂时仍是上次成功读取的结果、来源筛选仍只作用于旧批次，刷新成功后才整体替换，且刷新中不代表 Memory Service 已确认最新状态或发生写入/同步。刷新失败时，如果当前请求的 scope 和时间窗口与上次成功快照一致，页面会继续保留已加载列表并显示“刷新失败 · 上次快照”：说明 Memory Service 当前状态未确认、下面只是最后一次成功读取的结果、来源筛选仍只作用于这批旧结果；如果用户切换到新的工作/个人范围或新的时间窗口后请求失败，则不会复用旧范围数据，避免把上一组记忆误当成当前范围的空/满状态。
 
@@ -476,7 +480,7 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 - **摄入接入 (P1)** `SalienceScorer`：开启 `salienceAffinityEnabled`（env `SALIENCE_AFFINITY_ENABLED`，默认开）时，摄入打分把「用户相关性」预算拆分——`userInterestBoost` 权重降到 0.10，并加 `salienceAffinityWeight(默认0.10) * max(0, entityAffinity)`。`computeEntityAffinityBoost(names)` 把摄入期尚未 resolve 的实体名按 active `entities.name` 和 `aliases_json` 匹配，读 `behavior_affinity` 取最大**正向**亲密度。只有正向进摄入——负向永不阻止入库（遗忘交给 ForgettingEngine）。
 - **边界（写进实现）**：亲密度**只调排序，不产生副作用**（不自动已读、不自动订阅、不写画像——书的「已读恐怖主义」红线）；负向下限 −0.5（一段时间忽略 ≠ 永久静默，区别于 outcome policy 的显式 suppress）。
 - **开关**：`recallAffinityEnabled`（env `RECALL_AFFINITY_ENABLED`，默认开）；affinity 在 rollup 跑出数据前恒为 0，默认开启是 no-op，安全。
-- **与 Outcome Loop 的关系**：[Memory Outcome Loop](../progressing/memory-outcome-loop-plan.md) 管单条 cue 的短期 suppress/boost（TTL 7-14 天，作用于 cue 编译）；本因子是同一事件源的**长期权重消费端**，作用于召回主排序，二者不重复采集。
+- **与 Outcome Loop 的关系**：[Memory Outcome Loop](./progressing/memory-outcome-loop-plan.md) 管单条 cue 的短期 suppress/boost（TTL 7-14 天，作用于 cue 编译）；本因子是同一事件源的**长期权重消费端**，作用于召回主排序，二者不重复采集。
 - **验证**：`behaviorAffinity.test.ts`（5：强正向、负向下限、message ref 解析出 source+entity、时间衰减、全量重算忽略未知动作）+ `recallAffinity.test.ts`（2：高亲密度实体被提到等分同侪之前、无数据时不改排序）+ 召回回归 65 绿。
 
 时间轴卡片提供轻量反馈入口：用户可以把某条召回结果标记为“有用”或“不相关”，也可以在点错后改判或撤销反馈。扩展会通过 `SUBMIT_MEMORY_FEEDBACK` 转发到 memory-service `/feedback`，并在请求里携带 `targetType`，因此 message/chunk/entity 即使 ID 相同也不会调错显著性记录。服务端会记录每个目标的最新召回反馈，同一动作重复提交不会反复放大显著性；改判或撤销时只应用净变化，并拒绝不存在的反馈目标，避免产生幽灵显著性数据。`/recall` 和精确记忆定位接口会在 metadata 中带回已有反馈状态，时间轴刷新或从搜索结果定位回来时会恢复按钮高亮与状态文案，避免用户误以为反馈丢失。时间轴与搜索结果保持同一套 tone 语义：“有用”是正向绿调，“不相关”是纠错红调，pending 与已撤销是独立中性状态，避免把负反馈误读成系统奖励。时间轴页面还会在提交中、成功、撤销和失败时显示操作回执：反馈只训练召回质量，不代表当前卡片被删除、隐藏、确认、重新同步来源或立即重排；如果写入失败，上一反馈状态继续保留。
@@ -643,7 +647,7 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 | Self Reflection | 多条记忆围绕一个长期 thread，在新证据/问答/动作结果出现后推进 | 主题解释、开放问题、确认请求、Rehearsal/action candidate | 不能把 source candidate 当已确认事实；动作仍经过 authority、cohesion、exit/readiness gates |
 | Dream Replay | 周期性跨记忆生成式重放 | 低置信 insight、risk、潜在关系与复核线索 | 不直接生成 active Rehearsal、confirmed relationship、画像或外部动作 |
 
-因此“入库即蒸馏”只指同步 P0：它保证刚保存的资料立即有一个稳定、可预算的召回单元。LLM 深蒸馏仍是异步的，失败时只显示 deep retry/blocked/failed，P0 和原文继续可用。Reflection 与 Dream 发生得更晚、跨越更多记忆；它们可以引用 deep pack 的 span/candidate，但不能回写成该来源已经确认的用户事实。完整队列、证据、聚类与下游契约见 [memory_capture.md](./memory_capture.md)。
+因此“入库即蒸馏”只指同步 P0：它保证刚保存的资料立即有一个稳定、可预算的召回单元。LLM 深蒸馏仍是异步的，失败时只显示 deep retry/blocked/failed，P0 和原文继续可用。Reflection 与 Dream 发生得更晚、跨越更多记忆；它们可以引用 deep pack 的 span/candidate，但不能回写成该来源已经确认的用户事实。完整队列、证据、聚类与下游契约见 [memory_capture.md](./features/memory_capture.md)。
 
 ---
 
@@ -755,7 +759,7 @@ Reflection Worker 在 LLM/fallback reflection、Evidence Resolution 和动作规
 
 反思线程列表和详情页都不能把服务错误伪装成空状态。列表读取失败时会显示错误横幅和重试入口，并保留上次成功读取的线程；详情页的主线程、关联主动询问、动作队列、研究补查和证据是可独立降级的部分。关联主动询问加载失败时，主反思详情仍应可打开，页面只在该区块显示错误和重试；手动 revisit、暂停、恢复、关闭或动作执行失败时，也会在页内显示具体错误，而不是只在 console 里失败。
 
-线程列表首屏会显示 `列表查看范围`，说明当前状态筛选、标题/topic key 搜索、梦境复核 handoff、可见/总计数和刷新边界。筛选、搜索和刷新只读 `reflection_threads` 列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作；如果已有线程时重新刷新，页面先保留下方上次成功快照并显示刷新中回执，刷新失败后继续说明下方保留的是上次成功读取的线程快照，避免用户误以为旧线程被清空或刷新已经确认最新状态。
+线程列表首屏会显示 `列表查看范围`，说明当前状态筛选、标题/topic key 搜索、梦境复核 handoff、已读取/总计数、当前已读取切片的逾期推进数和刷新边界。逾期数只代表当前已读取的条目，不能推断未读取线程的状态；列表会明确说明打开或翻页不会自动补跑反思。若总数超过首批，`列表分页回执` 会显示仍未读取的数量，并通过“加载更多线程”只读取当前筛选和搜索条件的下一批；未读取项不能被当成不存在、已处理或没有待推进事项。筛选、搜索、刷新和加载更多只读 `reflection_threads` 列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作；如果已有线程时重新刷新，页面先保留下方上次成功快照并显示刷新中回执，刷新失败后继续说明下方保留的是上次成功读取的线程快照，避免用户误以为旧线程被清空或刷新已经确认最新状态。
 
 如果普通筛选或梦境复核 handoff 成功读取但返回 0 条，列表页会显示 `筛选未命中回执`：它点明请求来源、搜索词、状态筛选、服务端 0 结果和恢复路径，并说明这次空结果不会新建反思线程、运行 `manual_revisit`、写记忆、确认决策、发送消息或执行动作。
 
@@ -819,7 +823,7 @@ Reflection Worker 在 LLM/fallback reflection、Evidence Resolution 和动作规
 
 2026-07-09 体验校准：动作按钮本身也带 `title` / `aria-label` 级别的操作边界。用户 hover、键盘聚焦或使用读屏时，不只听到 `执行`、`确认并执行`、`重试入队`、`取消`，还会看到这次点击只是向 Memory Service 提交执行、批准、重试或取消请求；OpenClaw 写操作不会立即证明 Jira / Drive / 部署已完成，重试只重新入队，取消也不会撤销已经发生的外部副作用或删除反思证据。
 
-2026-07-15 增加 [Action Readiness Contracts](./action_readiness_contracts.md)：`delegate_openclaw` 在 `markRunning()` 前按 global / target read-write scope 检查鉴权、能力、必填输入和结果证明。已知 blocker 不创建 attempt、不增加 retry，也不会重复提交原任务；Action Queue 用只读聚合摘要和卡内 receipt 展示状态，并用 `dispatchState` 区分“本动作派发前被拦截”与“历史派发后缺少能力/证明”，后者不会被误写成没有潜在外部副作用。修复后通过 probe-only 请求重测，probe 成功仍不批准或再次执行原动作。列表读取不会仅因打开页面就持久化 contract；dispatch、probe、Reflection 门禁或真实 outcome 才写 contract/link。
+2026-07-15 增加 [Action Readiness Contracts](./features/action_readiness_contracts.md)：`delegate_openclaw` 在 `markRunning()` 前按 global / target read-write scope 检查鉴权、能力、必填输入和结果证明。已知 blocker 不创建 attempt、不增加 retry，也不会重复提交原任务；Action Queue 用只读聚合摘要和卡内 receipt 展示状态，并用 `dispatchState` 区分“本动作派发前被拦截”与“历史派发后缺少能力/证明”，后者不会被误写成没有潜在外部副作用。修复后通过 probe-only 请求重测，probe 成功仍不批准或再次执行原动作。列表读取不会仅因打开页面就持久化 contract；dispatch、probe、Reflection 门禁或真实 outcome 才写 contract/link。
 
 ### 用户侧三条主要呈现链路
 
@@ -1195,7 +1199,7 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 
 Rehearsal 是 Memory Service 的**未来场景预演记忆层**。它保存的不是“已经发生了什么事实”，而是“如果未来遇到某个场景，我应该想起、说或做什么”。
 
-详细功能文档见 [`rehearsal.md`](./rehearsal.md)。
+详细功能文档见 [`rehearsal.md`](./features/rehearsal.md)。
 
 ### 产品边界
 
@@ -1509,4 +1513,4 @@ services:
 7. **完全自主可控** — 本地 Embedding + 本地 SQLite，无需任何云服务依赖；外部能力按用户配置启用
 ## 变化脉络维护入口
 
-跨来源状态变化的正式契约见 [Change Memory Ledger / 变化脉络](./change_memory_ledger.md)。Memory Service 使用 `memory_change_extractions`、`memory_change_events`、`memory_change_chains` 分开保存提取回执、历史事件和当前证据投影；Source Memory 是首个入口，Context Recall、Ask 和 Compose 复用同一投影。它不是 `entity_properties` 的替代写入层，也不把页面读取结果自动写成权威事实。
+跨来源状态变化的正式契约见 [Change Memory Ledger / 变化脉络](./features/change_memory_ledger.md)。Memory Service 使用 `memory_change_extractions`、`memory_change_events`、`memory_change_chains` 分开保存提取回执、历史事件和当前证据投影；Source Memory 是首个入口，Context Recall、Ask 和 Compose 复用同一投影。它不是 `entity_properties` 的替代写入层，也不把页面读取结果自动写成权威事实。

@@ -2,7 +2,7 @@
 
 ## 选中功能
 
-- 随机样本中选择 `反思本地研究补查`，source of truth 是 `docs/features/memory_system.md` 和 `docs/features/index.md` 对应行。
+- 随机样本中选择 `反思本地研究补查`，source of truth 是 `docs/memory_system.md` 和 `docs/index.md` 对应行。
 - `docs/progressing/to-verify.md` 当前为 `暂无。`
 - 避开了 automation memory 中刚覆盖的 Coverage、Meeting ASR、Snooze、Timeline、Skill Foundry、Relationship Radar、Message Analysis 等最新目标。
 
@@ -27,7 +27,7 @@
 3. 给外部委派 transcript 展开 / 收起补本地文件读取边界。
 4. 给关联主动询问 `查看会话` 链接补只读导航边界。
 5. 更新 `tools/verify-reflection-research-e2e.mjs` fixture 和断言，证明这些真实控件带有一致 `title` / `aria-label`。
-6. 更新 `docs/features/memory_system.md` 和 `docs/features/index.md`，保持文档与当前代码一致。
+6. 更新 `docs/memory_system.md` 和 `docs/index.md`，保持文档与当前代码一致。
 
 ## 非目标
 

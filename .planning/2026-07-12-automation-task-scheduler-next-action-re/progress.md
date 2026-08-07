@@ -7,7 +7,7 @@
 - **Started:** 2026-07-12
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hits, and the planning-with-files skill.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hits, and the planning-with-files skill.
 - Random sample produced `Task Scheduler 状态 API` as an eligible target after avoiding today's freshest feature families.
 - Checked local Reminders: AppleScript omitted `Personal AI`; EventKit found the list, 4 total completed items, and 0 incomplete related items.
 - Inspected `docs/features/task_scheduler_api.md` and found it already documents refresh receipts, next-step handling, attention overview, disabled/manual-run semantics, and button-level boundaries.
@@ -16,7 +16,7 @@
 - Chosen implementation slice: add hover/reader boundaries to the top `下一步处理` status strip while keeping visible copy compact.
 - Implemented `taskSchedulerNextStep.boundary` in `src/popup.tsx` and attached it to `title` / `aria-label`.
 - Extended `tools/verify-task-scheduler-popup-filters-e2e.mjs` to assert the failed next-step hover/reader boundary.
-- Updated `docs/features/task_scheduler_api.md` and `docs/features/index.md` with the new next-step boundary.
+- Updated `docs/features/task_scheduler_api.md` and `docs/index.md` with the new next-step boundary.
 - Wrote automation memory to `/Users/Esone/.codex/automations/automation/memory.md`.
 
 ### Test Results

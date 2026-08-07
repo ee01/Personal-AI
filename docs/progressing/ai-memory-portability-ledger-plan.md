@@ -417,9 +417,9 @@ npm run eval:memory-abilities
 
 - `docs/features/memory_coverage_map.md`：新增 AI 记忆迁移账本卡片、对账抽屉、round-trip audit、与外部 AI 历史导入的关系。
 - `docs/features/user_profile_system.md`：说明 provider memory 不能直接成为 confirmed profile，必须走确认/证据门控。
-- `docs/features/memory_system.md`：补充 provider memory 的 trust class、canonical source、迁移 projection 原则。
+- `docs/memory_system.md`：补充 provider memory 的 trust class、canonical source、迁移 projection 原则。
 - `docs/features/personal_skill_foundry.md`：如果迁移中发现 skill hint，应进入 skill suggestion，而不是普通记忆。
-- `docs/features/index.md`：新增小功能点，例如 `AI 记忆迁移账本`，归属 Memory Coverage Map / Memory Service。
+- `docs/index.md`：新增小功能点，例如 `AI 记忆迁移账本`，归属 Memory Coverage Map / Memory Service。
 
 如果该能力最终成为独立入口，再考虑新建 feature doc；P0 推荐先并入 Coverage Map。
 

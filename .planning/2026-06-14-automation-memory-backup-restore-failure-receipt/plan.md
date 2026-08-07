@@ -3,7 +3,7 @@
 ## Selected feature
 
 - Random feature index pick: `记忆导入/导出/备份`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - User-facing surface: Memory Coverage Map import drawer backup-zip restore path
 
 ## Context
@@ -29,7 +29,7 @@ Backup restore already has dry-run, replace confirmation, cross-user confirmatio
 3. Preserve preview context when a write fails after dry-run.
 4. State that current Memory Service data remains authoritative and that retry will not silently change merge/replace, delete files, sync external platforms, or send content.
 5. Extend `tools/verify-memory-coverage-e2e.mjs` to fail one restore write, assert the failure receipt, then retry successfully.
-6. Update `docs/features/memory_system.md` with the failure boundary.
+6. Update `docs/memory_system.md` with the failure boundary.
 
 ## Validation
 

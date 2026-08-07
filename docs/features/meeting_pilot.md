@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-07-16_
+_最后更新: 2026-07-31_
 
 ## 是什么
 
@@ -27,6 +27,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 4. ASR 层级：RingCentral Transcript、Desktop Local ASR / Whisper fallback、远端分析可用性决定实时文本质量和延迟。
 5. 会前目标证据：Today Pilot 的 `MeetingOutcomeBinder` 决定 side panel 要跟踪哪些“本场要闭环”事项；没有 binder 时不伪造目标。
 6. 会议结束归档：停止 capture 后的摘要、行动项、Panorama 和结果装订依赖已收集转写和事件是否完整。
+7. 主张归属：Meeting Pilot 消费的历史记忆会先经过 [Memory Claim Attribution](./memory_claim_attribution.md)，区分负责人指派、用户明确接受、AI 摘要和可验证完成；`assigned` 不会自动升级成 `accepted`，文本中的“完成”也不能替代 connector receipt。会中 live transcript 的即时行动项/决议提取仍先服务本场 side panel，随后异步 ingest 才建立 claim attribution；因此当前不能把这层门禁理解成实时 transcript 分析的前置条件。
 
 ## 用户主流程
 
@@ -86,6 +87,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 - Catch Up 轻量快照
 - Today Pilot / Context Assist 会前准备 handoff（目标、问题、Rehearsal 预演提醒、证据来源）
 - `本场要闭环`：对同一份会前 binder 显示 `未提到 / 已提到 / 待会后核验 / 最终结果`；会中不直接把目标改成 resolved
+- 归属回执只出现在既有“证据来源”详情中，聚合显示 `used / background_only / blocked` claim；只要 evidence 被降为背景、阻止使用或已有纠正，就显示原因，否则不占用 side panel。Meeting 此处只有只读解释，没有归属纠错控件；需要纠正时从 Ask 或 Memory Lens 的既有详情进入。纠错结果只影响 Personal AI 派生判断，不改 transcript、会议记录或外部 action。
 - 时间线（支持展开详情）
 - 行动项列表（owner / deadline / transcript 依据）
 - readiness 状态
@@ -196,7 +198,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - Side Panel 的 Live 卡片和页脚会在 Capture 未开启时提供 `查看开启步骤`，直接在会议页打开扩展 icon / popup 授权 coachmark，避免用户只看到静态说明。
 - Side Panel 的 Capture 起步卡主按钮和底部 sticky Capture / 配置按钮都有 hover / 读屏边界，区分打开 Options、显示 popup 授权步骤、增强 Transcript-only 低配运行、重试/重新开启和停止当前 Capture；点击前会说明不会直接开始录制、上传音视频、通知参会者、发送纪要或创建外部任务。
-- popup 点击 `开启会议全貌` 后会先显示本机 Capture 启动提交回执：提交中不代表录制已开始，也不会通知参会者、发送会议内容、创建纪要、写外部任务或代表用户取得录制同意；失败回执也保留同一非效果边界。
+- popup 点击 `开启会议弹幕` 后会先显示本机 Capture 启动提交回执：提交中不代表录制已开始，也不会通知参会者、发送会议内容、创建纪要、写外部任务或代表用户取得录制同意；失败回执也保留同一非效果边界。
 - Side Panel 的 Capture 起步卡会显示 `当前 / 范围 / 下一步` 回执，区分等待授权、配置阻断、部分降级、启动失败、已停止和 Transcript-only 低配运行，并说明本机 Capture 不会自动通知参会者或代表用户取得录制同意，避免用户把“未录制”“低配可用”或“需要从 popup 重新授权”混在一起。
 - 会议页浮动入口支持当前页面临时隐藏或保存为“永不展示”；保存成功后当前会议页会立即隐藏入口，之后可在 Options 的 Meeting Pilot 配置里重新打开，避免入口关闭像失败一样停留在页面上。
 - 会议页入口请求内嵌面板时，如果目标 tab 无法接收内嵌面板消息，background 会返回 `surface='unavailable'` 和可恢复错误码；页面不再显示“已打开”，而是提示用户保留会议页、从 popup / Chrome 侧边栏重试或去 Options 修复配置。

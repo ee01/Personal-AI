@@ -15,12 +15,17 @@ import {
   normalizeComposerAssistSurfaceThresholds,
   sanitizeComposerAssistInsertText,
 } from '../assistPreviewPolicy.ts';
-import { isComposerAssistEnabledFromConfig } from '../assistConfig.ts';
 import {
+  isComposerAssistEnabledFromConfig,
+  isComposerAssistIntentEnabledFromConfig,
+} from '../assistConfig.ts';
+import {
+  buildComposerAssistClaimAttributionReceipt,
   buildComposerAssistRequestSignature,
   getComposerAssistProjectionReviewNote,
   getComposerAssistRequestGate,
   isComposerAssistProjectionBlocked,
+  shouldReviewComposerAssistBeforeInsert,
 } from '../ComposerGuardController.ts';
 
 test('normalizeComposerAssistThreshold: defaults to 0.78 and clamps bounds', () => {
@@ -56,6 +61,8 @@ test('getNextComposerAssistThreshold: rejected feedback raises non-linearly', ()
 test('surface thresholds: normalize per-surface overrides and preserve global fallback', () => {
   const thresholds = normalizeComposerAssistSurfaceThresholds({
     chatgpt: 0.91,
+    'chatgpt:draft_refine': 0.7,
+    'ringcentral_message:draft_refine': 0.9,
     ringcentral_message: 0.55,
     jira_issue: 'not-a-number',
     '': 0.8,
@@ -63,6 +70,8 @@ test('surface thresholds: normalize per-surface overrides and preserve global fa
 
   assert.deepEqual(thresholds, {
     chatgpt: 0.91,
+    'chatgpt:draft_refine': 0.7,
+    'ringcentral_message:draft_refine': 0.9,
     ringcentral_message: 0.62,
   });
   assert.equal(
@@ -70,8 +79,70 @@ test('surface thresholds: normalize per-surface overrides and preserve global fa
     0.91,
   );
   assert.equal(
+    getComposerAssistThresholdForSurface(
+      'chatgpt',
+      thresholds,
+      0.78,
+      'draft_refine',
+    ),
+    0.7,
+  );
+  assert.equal(
+    getComposerAssistThresholdForSurface(
+      'ringcentral_message',
+      thresholds,
+      0.78,
+      'draft_refine',
+    ),
+    0.9,
+  );
+  assert.equal(
     getComposerAssistThresholdForSurface('jira_issue', thresholds, 0.78),
     0.78,
+  );
+  assert.equal(
+    getComposerAssistThresholdForSurface(
+      'jira_issue',
+      {},
+      undefined,
+      'draft_refine',
+    ),
+    0.86,
+  );
+  assert.equal(
+    getComposerAssistThresholdForSurface(
+      'chatgpt',
+      {},
+      undefined,
+      'draft_refine',
+    ),
+    0.72,
+  );
+});
+
+test('assist config: draft and refine switches gate independently under compose assist', () => {
+  assert.equal(
+    isComposerAssistEnabledFromConfig({ CONTEXT_ASSIST_ENABLED: false }),
+    false,
+  );
+  assert.equal(
+    isComposerAssistIntentEnabledFromConfig('draft_compose', {
+      COMPOSE_DRAFT_ENABLED: false,
+    }),
+    false,
+  );
+  assert.equal(
+    isComposerAssistIntentEnabledFromConfig('draft_refine', {
+      COMPOSE_REFINE_ENABLED: false,
+    }),
+    false,
+  );
+  assert.equal(
+    isComposerAssistIntentEnabledFromConfig('draft_compose', {
+      CONTEXT_ASSIST_ENABLED: true,
+      COMPOSE_ASSIST_ENABLED: true,
+    }),
+    true,
   );
 });
 
@@ -147,6 +218,95 @@ test('persona projection: review notes stay accurate and blocked suggestions are
     }),
     true,
   );
+});
+
+test('claim attribution consequence always stays behind the existing review preview', () => {
+  assert.equal(
+    shouldReviewComposerAssistBeforeInsert({
+      available: true,
+      suggestionType: 'reply_context',
+      insertText: '请按当前 owner 边界回复。',
+      evidence: [],
+      riskLevel: 'low',
+      previewRequired: false,
+      confidence: 0.9,
+      queryTimeMs: 4,
+      attributionReceipt: {
+        status: 'downgraded',
+        visibility: 'compact',
+        summary: '采用 1 条；仅作背景 1 条',
+        boundary: '只影响 Personal AI 如何使用派生记忆，不修改原始消息。',
+        used: [{ kind: 'self:direct_assertion', label: '你 · 明确表达', count: 1 }],
+        backgroundOnly: [{ kind: 'ai_agent:suggestion', label: 'AI · 建议', count: 1 }],
+        blocked: [],
+        claims: [],
+        affectedHighResponsibility: false,
+        correctedCount: 0,
+      },
+    }),
+    true,
+  );
+});
+
+test('used-only attribution receipt explains why Compose upgraded to locked review', () => {
+  const assist = {
+    available: true,
+    suggestionType: 'reply_context' as const,
+    insertText: '我来负责这个 follow-up。',
+    evidence: [],
+    riskLevel: 'low' as const,
+    previewRequired: false,
+    confidence: 0.9,
+    queryTimeMs: 4,
+    attributionReceipt: {
+      status: 'downgraded' as const,
+      visibility: 'compact' as const,
+      summary: '采用 1 条',
+      boundary: '只影响 Personal AI 如何使用派生记忆，不修改原始消息。',
+      used: [
+        {
+          kind: 'self:commitment',
+          label: '你 · 已接受承诺',
+          count: 1,
+        },
+      ],
+      backgroundOnly: [],
+      blocked: [],
+      claims: [
+        {
+          claimId: 'claim-commitment',
+          sourceMessageId: 'message-commitment',
+          revision: 1,
+          excerpt: '我来负责这个 follow-up。',
+          ownerKind: 'self' as const,
+          ownerLabel: '你',
+          speechMode: 'commitment' as const,
+          verification: 'unverified' as const,
+          commitment: 'accepted' as const,
+          effect: 'used' as const,
+          displayLabel: '你 · 已接受承诺',
+          consequence: '可作为本轮直接证据',
+          correctionAllowed: true,
+          corrected: false,
+        },
+      ],
+      affectedHighResponsibility: false,
+      correctedCount: 0,
+    },
+  };
+
+  assert.equal(shouldReviewComposerAssistBeforeInsert(assist), true);
+  const presentation = buildComposerAssistClaimAttributionReceipt(assist);
+  assert.ok(presentation);
+  assert.equal(presentation.title, '已按归属采用证据');
+  assert.equal(presentation.summary, '采用 1 条');
+  assert.deepEqual(presentation.details, [
+    '你 · 已接受承诺：可作为本轮直接证据',
+  ]);
+
+  const ordinary = { ...assist, attributionReceipt: undefined };
+  assert.equal(shouldReviewComposerAssistBeforeInsert(ordinary), false);
+  assert.equal(buildComposerAssistClaimAttributionReceipt(ordinary), null);
 });
 
 test('buildComposerAssistDraftReceipt: explains direct insert versus review boundaries', () => {
@@ -432,9 +592,24 @@ test('isComposerAssistEnabledFromConfig: context and compose toggles both gate t
 });
 
 test('composer assist request gate suppresses duplicate in-flight and failed retries', () => {
-  const signature = buildComposerAssistRequestSignature('thread:staff-slides', 2);
+  const signature = buildComposerAssistRequestSignature(
+    'thread:staff-slides',
+    2,
+    'draft_compose',
+  );
 
-  assert.equal(signature, 'thread:staff-slides|revision:2');
+  assert.equal(
+    signature,
+    'thread:staff-slides|revision:2|intent:draft_compose',
+  );
+  assert.equal(
+    buildComposerAssistRequestSignature(
+      'thread:staff-slides',
+      2,
+      'draft_refine',
+    ),
+    'thread:staff-slides|revision:2|intent:draft_refine',
+  );
   assert.deepEqual(
     getComposerAssistRequestGate({
       signature,

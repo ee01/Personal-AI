@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机抽中 `docs/features/index.md` 里的 `动作队列`。当前 Action Queue 已经有健康摘要、执行范围、审批、OpenClaw 预检、刷新失败旧快照和操作提交中回执，但顶部 `需要处理` 只给总数，用户仍要扫每张卡片才能判断优先处理哪类阻塞。
+随机抽中 `docs/index.md` 里的 `动作队列`。当前 Action Queue 已经有健康摘要、执行范围、审批、OpenClaw 预检、刷新失败旧快照和操作提交中回执，但顶部 `需要处理` 只给总数，用户仍要扫每张卡片才能判断优先处理哪类阻塞。
 
 ## Reminder 检查
 
@@ -21,7 +21,7 @@
 1. 在 Action Queue 顶部新增只读 `处理构成` 回执。
 2. 将 `需要处理` 拆成互斥类别：失败/死信、已到期自动动作、待人工确认、高风险已可执行。
 3. 如果列表是刷新失败后保留的旧快照，回执明确说明这是上次成功读取的构成。
-4. 更新 Action Queue E2E 断言和 `docs/features/memory_system.md`。
+4. 更新 Action Queue E2E 断言和 `docs/memory_system.md`。
 
 ## 非目标
 

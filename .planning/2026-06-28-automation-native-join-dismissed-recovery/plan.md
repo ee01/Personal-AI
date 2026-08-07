@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `NC 加会` / RingCentral Native Join from `docs/features/index.md`.
+- Feature: `NC 加会` / RingCentral Native Join from `docs/index.md`.
 - Reminder branch: local Reminders did not contain a `Personal AI` list, so no Reminder item is linked or marked done.
 - Existing state: current code already has native handoff receipt, safe browser fallback, hidden passcode display, copy full link, Meeting ID copy, app retry, and browser-default toggle.
 

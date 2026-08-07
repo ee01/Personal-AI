@@ -9,7 +9,7 @@
 
 - `docs/progressing/to-verify.md` 为空。
 - `Personal AI` Reminders 列表可通过 EventKit 读取：4 条全部已完成，均为豆包 / Notification 历史反馈；无未完成条目和本目标相关。
-- 当前 worktree 已有大量历史自动化脏文件；本轮只触碰本计划、`src/modals/topic-modal.tsx`、`tools/verify-message-analysis-rule-diagnostics-e2e.mjs`、`docs/features/message_analysis.md`、`docs/features/index.md` 和自动化 memory。
+- 当前 worktree 已有大量历史自动化脏文件；本轮只触碰本计划、`src/modals/topic-modal.tsx`、`tools/verify-message-analysis-rule-diagnostics-e2e.mjs`、`docs/features/message_analysis.md`、`docs/index.md` 和自动化 memory。
 
 ## 外部参考
 
@@ -31,5 +31,5 @@
 1. 新增通用手动规则保存按钮边界文案 helper，并复用已有 `getRuleRunPreviewReceipt` 的状态。
 2. 新建规则 `确认` 和编辑规则 `保存` 按钮：普通规则使用通用边界；自动答复规则继续使用现有自动答复专用边界。
 3. 在现有 `verify-message-analysis-rule-diagnostics-e2e.mjs` 中断言普通新建和编辑保存按钮的 `title` / `aria-label`。
-4. 更新 `message_analysis.md` 和 `docs/features/index.md` 的手动关注项规则描述。
+4. 更新 `message_analysis.md` 和 `docs/index.md` 的手动关注项规则描述。
 5. 验证：`node --check`、`npm start` 首次成功编译、`node tools/verify-message-analysis-rule-diagnostics-e2e.mjs`、scoped `git diff --check`。

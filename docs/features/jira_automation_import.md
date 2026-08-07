@@ -69,6 +69,8 @@
 
 2026-07-15 补充：真正会发送 create request 的两个 `Import disabled copy` 按钮也会带本轮导入边界。按钮 hover / 读屏会说明要创建的 disabled copy、目标项目、高风险复核仍 open、凭据重录组和脱敏位置数量、当前链式触发选择，以及这次点击只发送一个已清洗 POST，不会启用、运行、激活 schedule、恢复 secret、编辑源规则或生成可工作的凭据。
 
+2026-08-04 补充：导入预览顶部新增默认勾选的 `Replace sensitive information` / `替换敏感信息` checkbox。默认行为不变，仍然会把 secret / token / signed URL 等替换为 `PERSONAL_AI_REENTER_SECRET` / `REDACTED`；用户取消勾选后，create payload 会保留源规则敏感信息，预览回执、Secret 重录图、凭据恢复门控和导入描述会同步说明这次是按用户选择保留，而不是默认脱敏。sticky header 右上角保持 `导入后规则设为不启用状态` + `替换敏感信息` + `导入规则` 同一行；create-stage ready 文案改为仅供读屏 / `aria-describedby`，不再占用按钮左侧空间。
+
 ## 使用方法
 
 1. **访问 Jira 自动化页面**
@@ -88,7 +90,8 @@
    - 预览会汇总启用前检查数量，并把精简复核备注和关键环境绑定样例写入导入副本的描述，方便跳转到 Jira 规则详情后继续检查
    - 预览会生成 `Activation plan`，把导入后到启用前最该做的几步排出来：保持 disabled、映射目标项目查询依赖、重连外部请求/secret/账号、确认 app-provided component 可用、测试 schedule / smart value / 链式触发，再确认 actor 权限和 audit 结果
    - 预览顶部会显示 `Import boundary receipt`：创建什么、不会自动做什么、哪些复核内容会写进 Jira 描述、导入后第一步去哪处理；这让用户在点击前先看到 create-stage 边界，而不是只在 checklist 里找风险
-   - 隐藏 secret、明显 token/password/API key 字段和 URL 里的凭据片段不会随导入原样迁移；Personal AI 在创建 disabled copy 时用 `PERSONAL_AI_REENTER_SECRET` / `REDACTED` 占位，用户需要在目标 Jira 里重新录入真实值后再启用
+   - 隐藏 secret、明显 token/password/API key 字段和 URL 里的凭据片段默认不会随导入原样迁移；Personal AI 在创建 disabled copy 时用 `PERSONAL_AI_REENTER_SECRET` / `REDACTED` 占位，用户需要在目标 Jira 里重新录入真实值后再启用
+   - 预览顶部提供默认勾选的 `Replace sensitive information` / `替换敏感信息`；取消勾选后，create payload 会保留源规则敏感信息，预览、回执和导入描述会标明这是用户主动选择保留，而不是默认脱敏
    - 预览会显示 `Secret re-entry map`，把需要重录或复核的安全字段路径压缩成清单；占位符不是可工作的凭据，启用前仍要在 Jira 里重新录入或确认留空
    - `Credential restore gate` 会把 Secret 重录图压缩成启用前门控摘要，明确创建 disabled copy 可以继续，但凭据恢复仍未完成
    - `Credential re-entry queue` 会把同一批脱敏 slot 按处理类型分组：hidden Jira secret 需要在目标规则重录或重建，signed URL / function key / API gateway query 需要重新生成，inline secret-like text 需要确认是否恢复目标环境安全值，命名 credential 字段需要重新录入 API key / JWT / Authorization 等；这只是启用前队列，不会恢复真实凭据
@@ -100,7 +103,7 @@
    - 复制包和导入副本描述会包含 `Secret re-entry map`，但只包含安全路径和原因，不包含原始 secret 值
    - 复制包、导入副本描述和成功回执也会包含 `Credential re-entry queue`，避免用户离开预览后只看到占位符却不知道下一步先处理哪类凭据
    - 如果预检发现高风险项，预览会直接列出高风险类别和下一步处理建议，但不再强制勾选确认；用户可以直接创建禁用态副本，启用前仍需在 Jira 里完成高风险复核
-   - sticky header 会同步显示当前 create stage 是 ready：按钮只会创建 disabled-copy，不会启用、运行、激活 schedule 或恢复 secret；高风险复核仍然留在 Jira 启用前完成
+   - sticky header 右上角同一行放置：`导入后规则设为不启用状态`、`替换敏感信息`、`导入规则`；create-stage ready 仍通过读屏 / 按钮描述提供，不再挤占按钮左侧
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留。旁边的链式触发选择回执会说明当前状态会怎样进入 disabled-copy payload；切换这个安全选项只会重算预览、复核包和 create payload，不会发送 Jira create request，也不会要求重新勾选确认
    - 预览首屏会显示 `Create request scope`：当前还没有向 Jira 发送 create request；点击确认后只创建一个脱敏的 disabled copy；源规则不会被编辑、启用或运行；嵌入的环境引用只进入复核，不会被自动重写
    - 顶部和底部的 `Import disabled copy` / `导入禁用副本` 按钮会在 hover / 读屏里重复本轮 create request 边界：目标副本、目标项目、凭据重录队列数量、链式触发选择、启用计划仍 open，以及不会启用、运行、恢复 secret 或编辑源规则
@@ -194,7 +197,7 @@
    - `Copy review packet` 区块会直接说明它只是本机剪贴板 handoff，不会创建/编辑/启用 Jira automation，也不会运行 schedule 或恢复 secret
    - 预览详情、导入边界回执和两个 create 按钮都会显示 `Secret re-entry map` / `Credential re-entry queue` 的压缩口径；用户可以在创建 disabled copy 前看到哪些字段只是占位符，而不是导入后才发现凭据没有恢复
    - 检测到高风险项时，预览会显示 JQL/过滤器、源项目引用、外部效果、环境绑定等高风险类别，以及 Activation plan 的首个高风险步骤；导入按钮不再因为高风险项而禁用
-   - sticky header 的导入按钮旁会显示 create-stage ready 回执，说明点击只会创建禁用副本，Jira-side Activation plan review 仍然 open
+   - sticky header 右上角同一行是两个导入选项 checkbox + 导入按钮；create-stage ready 仍通过读屏 / 按钮描述提供，说明点击只会创建禁用副本，Jira-side Activation plan review 仍然 open
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要和 `规则链式触发选择` 回执中；每次切换都会重算导入副本预览和复核包，但不再重新锁住导入按钮，也不会在点击导入前写 Jira
    - 导入预览、按钮、复制复核包状态、预检 / pending / success / failure 回执会读取 Options 页的 `personalAiUiPreferences.language`，按中文或 English 展示
    - 创建成功后显示短暂但可读的 post-import 回执，复述 disabled copy、secret 重录、手动测试、Jira 描述中保留 Activation plan，以及即将跳转到导入规则详情；错误时显示脱敏失败回执，不回显 Jira/API 返回的原始 secret-bearing response

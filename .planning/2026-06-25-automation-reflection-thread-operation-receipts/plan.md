@@ -17,7 +17,7 @@
 2. 详情页新增操作结果回执：手动反思显示 run id 和候选动作数量；暂停/恢复/关闭显示确认后的线程状态。
 3. 成功回执统一写明不会发送消息、确认决策、执行 OpenClaw、写 confirmed profile 或删除原始证据；失败仍显示错误。
 4. 更新 `tools/verify-reflection-research-e2e.mjs`，覆盖手动反思、暂停、恢复和列表刷新中旧快照保留。
-5. 更新 `docs/features/memory_system.md`，只记录用户可感知边界。
+5. 更新 `docs/memory_system.md`，只记录用户可感知边界。
 
 ## 验证计划
 

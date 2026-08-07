@@ -14,6 +14,6 @@
 
 1. 在 Panorama header 下增加 `输出范围回执`，聚合页面链接、跟进清单、PDF、录制和 JSON 导出的可用性及副作用边界。
 2. 给 footer 的 `内容准确` / `需要修正` 增加真实可见反馈回执，明确当前不会写入校准、重跑分析、创建修正任务或修改行动项。
-3. 更新 `meeting_pilot.md` 与 `docs/features/index.md` 的 Panorama 描述。
+3. 更新 `meeting_pilot.md` 与 `docs/index.md` 的 Panorama 描述。
 4. 扩展 Panorama E2E，断言输出范围回执和反馈按钮回执存在。
 5. 运行 targeted Panorama E2E、首次 `npm start` 编译和 scoped `git diff --check`。

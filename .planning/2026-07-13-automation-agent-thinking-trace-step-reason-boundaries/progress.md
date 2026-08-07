@@ -2,7 +2,7 @@
 
 ## 2026-07-13
 
-- Read `AGENT.md`, automation memory, memory guidance, existing root planning files, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, automation memory, memory guidance, existing root planning files, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Randomly sampled feature candidates and selected `Agent Thinking trace 可视化`.
 - Checked current worktree and confirmed broad unrelated dirty state; this run will keep changes scoped.
 - Checked Reminders with AppleScript and EventKit fallback; `Personal AI` exists in EventKit but has 0 incomplete items.

@@ -19,7 +19,7 @@
   - `npm run verify:project-dashboard`
   - `npm start` first successful webpack dev compile, then stopped watch with Ctrl-C
   - `npm run verify:project-dashboard:e2e`
-  - `git diff --check -- src/utils/dashboardIntegration.ts src/components/dashboard/ProjectDashboard.tsx tools/verify-project-dashboard.ts tools/verify-project-dashboard-e2e.mjs docs/features/brain_like_project_analysis_system.md docs/features/project_dashboard_usage_guide.md docs/features/index.md .planning/2026-06-22-automation-project-dashboard-data-source/task_plan.md .planning/2026-06-22-automation-project-dashboard-data-source/findings.md .planning/2026-06-22-automation-project-dashboard-data-source/progress.md`
+  - `git diff --check -- src/utils/dashboardIntegration.ts src/components/dashboard/ProjectDashboard.tsx tools/verify-project-dashboard.ts tools/verify-project-dashboard-e2e.mjs docs/features/brain_like_project_analysis_system.md docs/features/project_dashboard_usage_guide.md docs/index.md .planning/2026-06-22-automation-project-dashboard-data-source/task_plan.md .planning/2026-06-22-automation-project-dashboard-data-source/findings.md .planning/2026-06-22-automation-project-dashboard-data-source/progress.md`
   - process cleanup check showed no lingering webpack / Playwright / Project Dashboard E2E process
 - No Reminder item was completed because the `Personal AI` list is absent.
 

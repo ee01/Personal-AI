@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 运行诊断`
-- Canonical doc: `docs/features/agent_workflow.md`
+- Canonical doc: `docs/features/message_analysis.md`
 - Index row: `Agent Workflow 运行诊断`
 - Primary surface: Options `Agent Workflow` / `关注项测试`
 
@@ -35,7 +35,7 @@
    - copy single-run evidence packet
 2. Keep behavior unchanged: these controls should still perform only their existing local test, local storage, download, clipboard, or read-only replay actions.
 3. Extend `tools/verify-agent-workflow-options-e2e.mjs` to assert the control-level boundaries before clicks.
-4. Update `docs/features/agent_workflow.md` and `docs/features/index.md` with the concise current behavior.
+4. Update `docs/features/message_analysis.md` and `docs/index.md` with the concise current behavior.
 5. Verify with:
    - `npm run verify:agent-workflow`
    - `npm start -- --progress` until first successful compile, then stop

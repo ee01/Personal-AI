@@ -8,7 +8,7 @@ Improve the Memory Lens site-control experience so the Options management page m
 
 ## Context
 
-- Selected feature: `站点静默/屏蔽/白名单` under `Memory Lens` from `docs/features/index.md`.
+- Selected feature: `站点静默/屏蔽/白名单` under `Memory Lens` from `docs/index.md`.
 - Carry-over: `docs/progressing/to-verify.md` says `暂无。`.
 - Reminder probe: Reminders is readable, but there is no `Personal AI` list.
 - Existing implementation already covers card-menu receipts, storage keys, conflict cleanup, and E2E for allow/mute/block behavior.

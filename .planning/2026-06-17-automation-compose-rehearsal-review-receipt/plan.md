@@ -3,7 +3,7 @@
 ## Target
 
 - Random index item: `回复助手预演提醒`.
-- Canonical docs: `docs/features/rehearsal.md` and `docs/features/compose_assist.md`.
+- Canonical docs: `docs/features/rehearsal.md` and `docs/features/assist.md`.
 - Main implementation: `src/composer-guard/ComposerGuardController.ts` and `src/composer-guard/assistPreviewPolicy.ts`.
 
 ## Current State
@@ -25,5 +25,5 @@
 2. Separate the user-critical fields into stable rows: matched cue, rehearsal script, insert boundary, and feedback path.
 3. Keep the block hidden for ordinary low-risk and high-risk non-Rehearsal suggestions.
 4. Update the direct-insert E2E to assert the new receipt and verify it is absent from high-risk non-Rehearsal review.
-5. Update `docs/features/rehearsal.md` and `docs/features/compose_assist.md` with the current behavior.
+5. Update `docs/features/rehearsal.md` and `docs/features/assist.md` with the current behavior.
 6. Validate with targeted scripts, `npm start` first successful compile, E2E, and diff checks.

@@ -16,7 +16,7 @@ Goal: improve the selected `项目面板` feature by making local snapshot refre
 
 ## Decisions
 
-- Selected feature: `项目面板` / Project Dashboard from `docs/features/index.md`.
+- Selected feature: `项目面板` / Project Dashboard from `docs/index.md`.
 - Primary doc: `docs/features/project_dashboard_usage_guide.md`.
 - Related context doc: `docs/features/brain_like_project_analysis_system.md`.
 - Main implementation: `src/components/dashboard/ProjectDashboard.tsx`.

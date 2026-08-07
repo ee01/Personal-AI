@@ -2,8 +2,8 @@
 
 ## Target
 
-- Random feature: `主动询问` / Outreach under `docs/features/index.md`.
-- Source of truth: `docs/features/memory_system.md`.
+- Random feature: `主动询问` / Outreach under `docs/index.md`.
+- Source of truth: `docs/memory_system.md`.
 - UI surface: `src/modals/components/OutreachSessionDetail.vue`.
 
 ## Initial Evidence
@@ -27,10 +27,10 @@
 2. Summarize target readiness, planned send timing, session freshness, existing evidence/reply risk, and external side-effect boundary.
 3. Keep approval semantics unchanged: unresolved targets still block via existing `canApprove`; stale/evidence warnings remain visible guidance rather than hidden state changes.
 4. Extend `verify-outreach-sessions-e2e.mjs` to assert the pre-approve review on a pending-approval detail, including stale/evidence warnings and approval boundary copy.
-5. Update `docs/features/memory_system.md` concisely.
+5. Update `docs/memory_system.md` concisely.
 
 ## Verification Plan
 
 - `node tools/verify-outreach-sessions-e2e.mjs`
 - `npm start` until first successful development compile, then stop watcher.
-- `git diff --check -- src/modals/components/OutreachSessionDetail.vue tools/verify-outreach-sessions-e2e.mjs docs/features/memory_system.md .planning/2026-06-29-automation-outreach-preapprove-review/plan.md`
+- `git diff --check -- src/modals/components/OutreachSessionDetail.vue tools/verify-outreach-sessions-e2e.mjs docs/memory_system.md .planning/2026-06-29-automation-outreach-preapprove-review/plan.md`

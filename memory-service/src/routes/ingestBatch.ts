@@ -21,6 +21,7 @@ import {
 } from '../types/index.js';
 import { IngestionPipeline } from '../core/IngestionPipeline.js';
 import { getEventBus } from './events.js';
+import { ingestClaimAttributionDecisionSchema } from './claimAttributionSchemas.js';
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -147,6 +148,7 @@ const ingestDecisionSchema = {
         reason: { type: 'string' as const },
       },
     },
+    claimAttribution: ingestClaimAttributionDecisionSchema,
   },
 };
 

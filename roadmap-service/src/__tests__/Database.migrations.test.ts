@@ -79,6 +79,9 @@ describe('items migrations on an existing database', () => {
       '002_items_manual_source',
       '003_items_jira_key_index',
       '004_items_backfill_jira_key',
+      '005_subs_cleared',
+      '006_item_markers',
+      '007_teams_release_sheet',
     ]);
     const row = db
       .prepare(`SELECT source, jira_key, project_key FROM items WHERE id = 'i1'`)
@@ -88,12 +91,17 @@ describe('items migrations on an existing database', () => {
       jira_key: 'NOVA-42',
       project_key: 'NOVA',
     });
+    expect(
+      (
+        db.pragma(`table_info(teams)`) as Array<{ name: string }>
+      ).some((c) => c.name === 'release_sheet_json'),
+    ).toBe(true);
   });
 
   it('is safe to re-run on an already migrated database', () => {
     closeDb();
     const db = getDb();
-    expect(migrationIds(db)).toHaveLength(4);
+    expect(migrationIds(db)).toHaveLength(7);
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM items`).get() as { n: number },
     ).toEqual({ n: 1 });

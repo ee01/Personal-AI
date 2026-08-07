@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机抽中的功能点：`Agent Workflow 运行诊断`
-- Source of truth：`docs/features/agent_workflow.md`
+- Source of truth：`docs/features/message_analysis.md`
 - 本轮目标：让 Options 的保存样例批量回归不仅比较行为字段，还能把本次运行的 trace 健康、就绪门禁、运行结论和下一步动作沉淀到页面列表与导出报告里。
 
 ## 当前判断
@@ -25,7 +25,7 @@
 2. 将诊断快照写入 `WorkflowSavedRegressionResult` 和导出的 `agent-workflow.saved-regression-report`。
 3. 在批量回归列表中展示每条样例的简短门禁状态和首个建议动作，方便用户不用展开单条测试也能定位处理顺序。
 4. 更新 `tools/verify-agent-workflow-options-e2e.mjs`，断言 UI 列表和导出 JSON 都包含诊断快照。
-5. 更新 `docs/features/agent_workflow.md`，把批量回归报告的诊断快照写入当前行为和本轮行业参考结论。
+5. 更新 `docs/features/message_analysis.md`，把批量回归报告的诊断快照写入当前行为和本轮行业参考结论。
 
 ## 验证计划
 

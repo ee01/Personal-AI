@@ -2,7 +2,7 @@
 
 ## 2026-06-14
 
-- Read `AGENT.md`, planning skill instructions, automation memory, repo memory hints, stale/root planning context, active previous planning context, `docs/progressing/to-verify.md`, `docs/features/index.md`, and current dirty worktree state.
+- Read `AGENT.md`, planning skill instructions, automation memory, repo memory hints, stale/root planning context, active previous planning context, `docs/progressing/to-verify.md`, `docs/index.md`, and current dirty worktree state.
 - Checked local Reminders via AppleScript; the Reminders app is readable but has no visible `Personal AI` list.
 - Randomly selected `分层 ASR` under Meeting Pilot while avoiding the freshest exact automation targets.
 - Inspected Meeting Pilot docs, `SpeechTab`, `TierBadge`, ASR orchestrator, Cloud ASR provider, Desktop Local ASR provider, protocol/store flow, Options API-style setting, and Scene 2 runtime E2E.

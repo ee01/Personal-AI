@@ -34,5 +34,5 @@
    - `打开豆包检查`: opens login/check path, not a sync proof.
    - Mobile actions keep their own short boundaries so shared recovery helper remains accurate.
 3. Extend the existing Doubao desktop E2E check to assert these hover/ARIA boundaries on primary and dynamic recovery buttons.
-4. Update `docs/features/doubao_bridge.md` and the `Memory Sync Thread` row in `docs/features/index.md` concisely.
+4. Update `docs/features/doubao_bridge.md` and the `Memory Sync Thread` row in `docs/index.md` concisely.
 5. Verify with desktop E2E, JS syntax check, first successful extension compile, and scoped diff check.

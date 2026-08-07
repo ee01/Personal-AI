@@ -4,7 +4,7 @@ Run time: 2026-07-05T10:04:03+0800
 
 ## Selected feature
 
-- `AR 数据网页叠加` / Personal AI AR Data, from `docs/features/index.md`.
+- `AR 数据网页叠加` / Personal AI AR Data, from `docs/index.md`.
 - Reminder check: EventKit found the local `Personal AI` list with 4 completed historical Doubao / Notification items. No open or AR-related Reminder item is included in this run.
 
 ## Current state

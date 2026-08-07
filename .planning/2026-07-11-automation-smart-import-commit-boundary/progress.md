@@ -7,7 +7,7 @@
 - **Started:** 2026-07-11
 
 ### Actions Taken
-- Read `AGENT.md`, planning skill instructions, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, planning skill instructions, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over item.
 - Rerolled away from recent Memory Lens selection search and selected `智能资料录入`.
 - Checked Reminders: EventKit found `Personal AI`, with 4 completed historical items and 0 incomplete related items.

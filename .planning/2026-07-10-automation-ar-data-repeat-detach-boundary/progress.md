@@ -2,7 +2,7 @@
 
 ## 2026-07-10
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, `docs/progressing/to-verify.md`, and relevant memory guidance.
+- Read `AGENT.md`, automation memory, `docs/index.md`, `docs/progressing/to-verify.md`, and relevant memory guidance.
 - Checked Reminders with AppleScript and EventKit; EventKit confirmed `Personal AI` exists with 4 completed unrelated items and no incomplete AR Data feedback.
 - Selected `AR 数据网页叠加`.
 - Inspected `docs/features/ar_data_overlay.md`, `src/contentScriptWebIntelligence.ts`, `src/background.ts`, `tools/verify-ar-data-overlay-e2e.mjs`, and package scripts.

@@ -1,3 +1,8 @@
+import type {
+  ClaimAttributionReceipt,
+  ClaimAttributionReceiptItem,
+} from '../services/MemoryServiceClient';
+
 export type ComposerSurface =
   | 'ringcentral_message'
   | 'ringcentral_thread'
@@ -24,6 +29,9 @@ export type ComposerScenario =
   | 'compose_to_ai'
   | 'agent_compose'
   | 'document_note';
+
+/** Draft Compose (focus + empty) vs Draft Refine (blur + non-empty). */
+export type ComposerAssistIntent = 'draft_compose' | 'draft_refine';
 
 export type ComposerContextItemType =
   | 'message'
@@ -283,12 +291,15 @@ export interface ComposerAssistEvidence {
   timestamp?: number;
   score?: number;
   cue?: ContextCue;
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 export interface ComposerAssistRequest {
   surface: ComposerSurface;
   contextType: ComposerContextType;
   scenario?: ComposerScenario;
+  /** Draft Compose vs Draft Refine; omitted clients get a compatibility default. */
+  assistIntent?: ComposerAssistIntent;
   title?: string;
   url?: string;
   draftText?: string;
@@ -314,8 +325,10 @@ export interface ComposerAssistResponse {
     | 'context_pack'
     | 'prompt_patch'
     | 'rewrite_prompt'
+    | 'prompt_draft'
     | 'reply_context'
-    | 'issue_context';
+    | 'issue_context'
+    | 'reply_refine';
   insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
@@ -325,6 +338,7 @@ export interface ComposerAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  attributionReceipt?: ClaimAttributionReceipt;
   personaProjection?: {
     version: 1;
     scene:

@@ -94,6 +94,14 @@ export interface IngestPayload {
   skipExtraction?: boolean;
 }
 
+export interface IngestClaimAttributionDecision {
+  status: 'legacy_unclassified' | 'pending' | 'resolved' | 'failed';
+  claimCount: number;
+  highResponsibilityAllowed: number;
+  highResponsibilityBlocked: number;
+  receipt?: ClaimAttributionReceipt;
+}
+
 export interface IngestDecision {
   storage: 'indexed' | 'stored_unindexed' | 'duplicate' | 'error';
   reason:
@@ -127,6 +135,7 @@ export interface IngestDecision {
     neighborIds: number[];
     reason: string;
   };
+  claimAttribution?: IngestClaimAttributionDecision;
 }
 
 export interface IngestResult {
@@ -853,6 +862,86 @@ export interface KeystoneBriefPresentation {
   relatedMemoryCount: number;
 }
 
+export interface EvidenceCohesionReceipt {
+  policyVersion: 'evidence-cohesion-v1';
+  state:
+    | 'cohesive'
+    | 'cohesive_with_background'
+    | 'split_required'
+    | 'insufficient_anchor'
+    | 'conflict_needs_authority'
+    | 'blocked_cross_scene';
+  usedCount: number;
+  excludedCount: number;
+  clusterCount: number;
+  primarySubject?: string;
+  silent: boolean;
+  summary: string;
+}
+
+export interface ClaimAttributionReceiptItem {
+  claimId: string;
+  sourceMessageId: string;
+  revision: number;
+  excerpt: string;
+  ownerKind:
+    | 'self'
+    | 'named_person'
+    | 'organization_or_source'
+    | 'ai_agent'
+    | 'system_observation'
+    | 'unknown';
+  ownerLabel: string;
+  speechMode: string;
+  verification: string;
+  commitment: string;
+  effect: 'used' | 'background_only' | 'blocked';
+  displayLabel: string;
+  consequence: string;
+  correctionAllowed: boolean;
+  corrected: boolean;
+}
+
+export interface ClaimAttributionReceipt {
+  status: 'mixed' | 'downgraded' | 'corrected';
+  visibility: 'compact' | 'review';
+  summary: string;
+  boundary: string;
+  used: Array<{ kind: string; label: string; count: number }>;
+  backgroundOnly: Array<{ kind: string; label: string; count: number }>;
+  blocked: Array<{ kind: string; label: string; count: number }>;
+  claims: ClaimAttributionReceiptItem[];
+  affectedHighResponsibility: boolean;
+  correctedCount: number;
+}
+
+export interface MemoryClaimCorrectionRequest {
+  correction:
+    | 'not_my_view'
+    | 'my_decision'
+    | 'reported_speech'
+    | 'hypothesis'
+    | 'undo_last';
+  expectedRevision: number;
+  source:
+    | 'ask_receipt'
+    | 'memory_lens'
+    | 'user_profile'
+    | 'meeting_pilot'
+    | 'api';
+  idempotencyKey?: string;
+}
+
+export interface MemoryClaimCorrectionResponse {
+  claimId: string;
+  revision: number;
+  invalidatedDerived: Record<string, number>;
+  recomputeStatus: 'not_needed' | 'queued' | 'required';
+  rawSourceChanged: false;
+  previous: Record<string, unknown>;
+  current: Record<string, unknown>;
+}
+
 export interface ContextRecallMatch {
   id: string;
   type:
@@ -892,6 +981,7 @@ export interface ContextRecallMatch {
   timestamp?: number;
   cue?: ContextCue;
   lensPresentation?: LensPresentation;
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 export interface ContextRecallSceneSummary {
@@ -1033,11 +1123,13 @@ export interface ContextRecallResponse {
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
   scopeReceipt?: ContextRecallScopeReceipt;
+  cohesionReceipt?: EvidenceCohesionReceipt;
   autopilot?: ContextRecallAutopilotDecision;
   changeProjections?: MemoryChangeProjection[];
   /** Weave provenance (P0-5): present only when matches stitch ≥2 sources or ≥7 days. */
   weave?: WeaveStats;
   keystoneBrief?: KeystoneBriefPresentation;
+  attributionReceipt?: ClaimAttributionReceipt;
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
@@ -1178,6 +1270,9 @@ export type ComposerScenario =
   | 'agent_compose'
   | 'document_note';
 
+/** Draft Compose (focus + empty) vs Draft Refine (blur + non-empty). */
+export type ComposerAssistIntent = 'draft_compose' | 'draft_refine';
+
 export type ComposerContextItemType =
   | 'message'
   | 'thread_root'
@@ -1283,6 +1378,8 @@ export interface ComposerAssistRequest {
   surface: ComposerSurface;
   contextType: ComposerContextType;
   scenario?: ComposerScenario;
+  /** Draft Compose vs Draft Refine; omitted clients get a compatibility default. */
+  assistIntent?: ComposerAssistIntent;
   title?: string;
   url?: string;
   draftText?: string;
@@ -1327,6 +1424,7 @@ export interface ComposerAssistEvidence {
   timestamp?: number;
   score?: number;
   cue?: ContextCue;
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 export interface ComposerAssistResponse {
@@ -1336,8 +1434,10 @@ export interface ComposerAssistResponse {
     | 'context_pack'
     | 'prompt_patch'
     | 'rewrite_prompt'
+    | 'prompt_draft'
     | 'reply_context'
-    | 'issue_context';
+    | 'issue_context'
+    | 'reply_refine';
   insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
@@ -1347,6 +1447,8 @@ export interface ComposerAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  cohesionReceipt?: EvidenceCohesionReceipt;
+  attributionReceipt?: ClaimAttributionReceipt;
   personaProjection?: PersonaProjectionSummary;
   debug?: Record<string, unknown>;
 }
@@ -1885,6 +1987,8 @@ export interface AskResponse {
   /** Weave provenance (P0-5): present only when the answer stitches ≥2 sources or ≥7 days. */
   weave?: WeaveStats;
   scopeReceipt?: RecallScopeReceipt;
+  cohesionReceipt?: EvidenceCohesionReceipt;
+  attributionReceipt?: ClaimAttributionReceipt;
   answerMemory?: {
     state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
     threadId?: string;
@@ -3141,6 +3245,35 @@ export interface OutreachTemplateRuntimeStatusItem {
 
 export interface OutreachTemplateRuntimeStatusResponse {
   items: OutreachTemplateRuntimeStatusItem[];
+  total: number;
+}
+
+export interface AgentTaskEvidencePreview {
+  kind?: string;
+  title?: string;
+  content?: string;
+}
+
+export interface AgentTaskRuntimeStatusItem {
+  sourceRefId: string;
+  sheetMessageId?: string;
+  taskId?: string;
+  latestAction?: {
+    id: string;
+    title: string;
+    queueStatus: string;
+    resultStatus?: string;
+    startedAt?: number;
+    finishedAt?: number;
+    createdAt?: number;
+    lastError?: string;
+  } | null;
+  summary?: string;
+  evidence?: AgentTaskEvidencePreview;
+}
+
+export interface AgentTaskRuntimeStatusResponse {
+  items: AgentTaskRuntimeStatusItem[];
   total: number;
 }
 
@@ -5068,6 +5201,17 @@ export class MemoryServiceClient {
     return this.request<MemoryFeedbackResult>('POST', '/feedback', payload);
   }
 
+  async correctMemoryClaim(
+    claimId: string,
+    payload: MemoryClaimCorrectionRequest,
+  ): Promise<MemoryClaimCorrectionResponse> {
+    return this.request<MemoryClaimCorrectionResponse>(
+      'POST',
+      `/memory-claims/${encodeURIComponent(claimId)}/corrections`,
+      payload,
+    );
+  }
+
   async submitRecallRelevanceFeedback(
     payload: RecallRelevanceFeedbackPayload,
   ): Promise<{ ok: true; result: RecallRelevanceRecordResult }> {
@@ -5138,6 +5282,13 @@ export class MemoryServiceClient {
       `/keystone-briefs/${encodeURIComponent(id)}/events`,
       input,
     );
+  }
+
+  async refreshKeystoneBriefLanguage(): Promise<{
+    scheduled: boolean;
+    reason?: string;
+  }> {
+    return this.request('POST', '/keystone-briefs/refresh-language', {});
   }
 
   /**
@@ -6213,6 +6364,20 @@ export class MemoryServiceClient {
     );
   }
 
+  async getAgentTaskRuntimeStatus(
+    ids?: string[],
+    limit = 100,
+  ): Promise<AgentTaskRuntimeStatusResponse> {
+    const params = new URLSearchParams();
+    if (ids && ids.length > 0) params.set('ids', ids.join(','));
+    params.set('limit', String(limit));
+    const qs = params.toString();
+    return this.request<AgentTaskRuntimeStatusResponse>(
+      'GET',
+      `/agent-tasks/runtime-status${qs ? '?' + qs : ''}`,
+    );
+  }
+
   async upsertOutreachTemplate(body: {
     id?: string;
     sourceKind: string;
@@ -6469,6 +6634,7 @@ export class MemoryServiceClient {
     id: string,
     body: {
       itemValue?: string;
+      evidenceRefs?: unknown[];
       confidence?: number;
       salienceScore?: number;
       status?: string;

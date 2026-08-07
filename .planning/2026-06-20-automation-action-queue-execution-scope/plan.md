@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `动作队列` under Memory Service / Memory Exploring.
-- Canonical doc: `docs/features/memory_system.md`.
+- Canonical doc: `docs/memory_system.md`.
 - Main UI: `src/modals/components/ActionQueue.vue`.
 
 ## Current Findings
@@ -30,5 +30,5 @@
    - generic runtime actions: submit to Memory Service runtime, with completion proven only by queue state/result.
 3. Preserve the existing OpenClaw preflight/verification UI without duplicating it.
 4. Extend `tools/verify-action-queue-e2e.mjs` to assert the new panel on notification, outreach, and filtered failed actions.
-5. Update `docs/features/memory_system.md` and `docs/features/index.md`.
+5. Update `docs/memory_system.md` and `docs/index.md`.
 6. Verify with targeted Action Queue E2E, first successful `npm start` compile, scoped `git diff --check`, and no lingering watcher process.

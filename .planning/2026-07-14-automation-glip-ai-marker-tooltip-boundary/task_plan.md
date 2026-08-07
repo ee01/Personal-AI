@@ -15,7 +15,7 @@ Goal: improve the `Glip AI 标注` feature by checking that docs match current c
 
 ## Decisions
 
-- Selected feature: `Glip AI 标注` under Message Reaction, from randomized `docs/features/index.md` candidates after skipping fresher exact/family targets.
+- Selected feature: `Glip AI 标注` under Message Reaction, from randomized `docs/index.md` candidates after skipping fresher exact/family targets.
 - Source doc: `docs/features/message_reaction.md`.
 - Reminder result so far: AppleScript did not list `Personal AI`, but EventKit found it with 4 total items and 0 incomplete items. No live Reminder item is available to incorporate or mark done.
 - Current worktree is broadly dirty from prior runs. This run owns only Glip AI marker tooltip/boundary changes, matching verifier/doc updates, this planning folder, `.planning/.active_plan`, and automation memory.

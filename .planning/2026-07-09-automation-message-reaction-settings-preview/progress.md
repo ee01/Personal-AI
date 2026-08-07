@@ -1,7 +1,7 @@
 # Progress
 
 - Selected `消息交互工具栏`.
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, feature doc, implementation file, i18n translations, and E2E harness.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, feature doc, implementation file, i18n translations, and E2E harness.
 - Checked local Reminders via AppleScript plus EventKit fallback; no incomplete related Personal AI items.
 - Drafted scoped plan before editing.
 - Implemented the dynamic settings preview and hit an E2E layout failure: the taller settings popup could flip above the toolbar and land outside the viewport. Added viewport clamping for the popup position.

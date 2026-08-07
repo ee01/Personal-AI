@@ -8,7 +8,7 @@ Improve one bounded UX/trust gap in `Slides 写回预览` after checking docs, c
 
 - Feature: `Slides 写回预览`
 - Ability: Google Slides Analyzer
-- Canonical docs: `docs/features/google_slides_analyzer.md`, `docs/features/index.md`
+- Canonical docs: `docs/features/google_slides_analyzer.md`, `docs/index.md`
 
 ## Plan
 

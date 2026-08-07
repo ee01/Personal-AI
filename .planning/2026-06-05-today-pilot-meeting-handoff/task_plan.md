@@ -2,7 +2,7 @@
 
 ## Scope
 
-Randomly selected feature: `Meeting Pilot handoff` in `docs/features/index.md`.
+Randomly selected feature: `Meeting Pilot handoff` in `docs/index.md`.
 
 This run focuses on the handoff from RingCentral Video Home / Today Pilot meeting prep into Meeting Pilot side panel.
 

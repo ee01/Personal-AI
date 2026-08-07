@@ -77,6 +77,8 @@ describe('Change Memory Ledger API integration', () => {
         metadata: {
           releaseId: 'desktop-8.4',
           releaseTitle: 'Desktop 8.4',
+          authoritative: true,
+          connectorReceipt: true,
           changeEvents: [{
             field: 'Release Date',
             oldValue: '2026-08-01',

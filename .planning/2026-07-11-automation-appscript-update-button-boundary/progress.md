@@ -11,7 +11,7 @@
 - Current implementation plan: add shared App Script update action-boundary copy and apply it to `title` / `aria-label` on the real check, recheck, open, cleanup, and upgrade buttons.
 - Implemented `buildAppScriptUpdateActionBoundary()` and wired it into header check/upgrade buttons, update-auth retry, update-error recovery buttons, Project History, recheck, update banner, and upgrade-result recovery controls.
 - Extended `tools/verify-appscript-auto-update.ts` and `tools/verify-appscript-auto-update-e2e.mjs` to assert the new button-level hover and reader boundaries.
-- Updated `docs/features/scheduled_messages_manager.md` and the `App Script 自动更新` row in `docs/features/index.md`.
+- Updated `docs/features/scheduled_messages_manager.md` and the `App Script 自动更新` row in `docs/index.md`.
 - First static verifier run failed because an existing sheet-first metadata sync assertion expected one Sheet Config read; current `updateConfigVersion()` performs two Sheet reads before write/storage. Updated that verifier expectation and reran successfully.
 - Validation passed:
   - `node --check tools/verify-appscript-auto-update-e2e.mjs`

@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 关注项测试`
-- Canonical doc: `docs/features/agent_workflow.md`
+- Canonical doc: `docs/features/message_analysis.md`
 - Main UI/source: `src/options.tsx`, `src/agentWorkflowReplay.ts`
 
 ## Context

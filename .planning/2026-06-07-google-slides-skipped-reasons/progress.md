@@ -9,7 +9,7 @@
 
 ### Actions Taken
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, memory registry hints, active planning files, and `docs/progressing/to-verify.md`.
+- Read `AGENT.md`, `docs/index.md`, automation memory, memory registry hints, active planning files, and `docs/progressing/to-verify.md`.
 - Randomly selected `Slides partial success skipped reasons` under Google Slides Analyzer, avoiding recent automation targets listed in automation memory.
 - Checked local Reminders lists; no `Personal AI` list was visible.
 - Inspected `docs/features/google_slides_analyzer.md`, `src/contentScriptGoogleSlide.tsx`, `src/slide.ts`, `src/modals/slides-analysis.tsx`, `tools/verify-google-slides-analyzer.ts`, and `tools/verify-google-slides-analyzer-e2e.mjs`.

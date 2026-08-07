@@ -2,7 +2,7 @@
 
 ## 2026-06-08
 
-- Read automation memory, `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, and existing root planning files.
+- Read automation memory, `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, and existing root planning files.
 - Checked local Reminders via AppleScript; no `Personal AI` list exists on this machine.
 - Random draw produced Jira secret redaction first, skipped as a recent related surface, and selected Today Pilot `Context Pack` from the next usable draw.
 - Inspected Today Pilot feature docs, `DayPilotService`, `OverviewPage.vue`, `popup.tsx`, `MemoryServiceClient` types, and existing Today Pilot verifier/E2E coverage.

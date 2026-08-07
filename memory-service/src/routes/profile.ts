@@ -16,9 +16,12 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import type BetterSqlite3 from 'better-sqlite3';
 import { v4 } from 'uuid';
 
+import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
 import type { UserContext } from '../core/UserContextManager.js';
+import { MemoryClaimRepository } from '../repositories/MemoryClaimRepository.js';
 import { getConfig } from '../config.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { ProfileInsightService } from '../core/ProfileInsightService.js';
@@ -102,7 +105,46 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
 // Formatters
 // ---------------------------------------------------------------------------
 
-function formatProfileItem(row: ProfileItemRow) {
+function getProfileItemAttributionReceipt(
+  db: BetterSqlite3.Database,
+  profileItemId: string,
+) {
+  const links = db
+    .prepare(
+      `SELECT claim_id, status
+       FROM memory_claim_links
+       WHERE target_type = 'profile_item' AND target_id = ?
+       ORDER BY created_at ASC`,
+    )
+    .all(profileItemId) as Array<{
+    claim_id: string;
+    status: 'active' | 'invalidated';
+  }>;
+  if (links.length === 0) return undefined;
+
+  const repository = new MemoryClaimRepository(db);
+  const claims = links
+    .map((link) => repository.getClaim(link.claim_id))
+    .filter((claim): claim is NonNullable<typeof claim> => Boolean(claim));
+  const attributionChangedConsequence = links.some(
+    (link) => link.status === 'invalidated',
+  ) || claims.some(
+    (claim) => claim.corrected || !claim.policy.profileCandidate,
+  );
+  if (!attributionChangedConsequence) return undefined;
+
+  return new MemoryClaimAttributionService(db).buildReceipt(claims, {
+    affectedHighResponsibility: true,
+  });
+}
+
+function formatProfileItem(
+  row: ProfileItemRow,
+  db?: BetterSqlite3.Database,
+) {
+  const attributionReceipt = db
+    ? getProfileItemAttributionReceipt(db, row.id)
+    : undefined;
   return {
     id: row.id,
     itemType: row.item_type,
@@ -121,6 +163,7 @@ function formatProfileItem(row: ProfileItemRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     fingerprint: row.fingerprint,
+    ...(attributionReceipt ? { attributionReceipt } : {}),
   };
 }
 
@@ -263,6 +306,7 @@ const updateProfileItemBodySchema = {
   type: 'object' as const,
   properties: {
     itemValue: { type: 'string' as const, minLength: 1 },
+    evidenceRefs: { type: 'array' as const, items: { type: 'object' as const } },
     confidence: { type: 'number' as const, minimum: 0, maximum: 1 },
     salienceScore: { type: 'number' as const, minimum: 0, maximum: 1 },
     validFrom: { type: 'number' as const },
@@ -316,6 +360,7 @@ interface CreateProfileItemBody {
 
 interface UpdateProfileItemBody {
   itemValue?: string;
+  evidenceRefs?: unknown[];
   confidence?: number;
   salienceScore?: number;
   validFrom?: number;
@@ -435,7 +480,7 @@ export async function profileRoutes(
     const rows = db.prepare(dataSql).all(...params, limit, offset) as ProfileItemRow[];
 
     return reply.status(200).send({
-      items: rows.map(formatProfileItem),
+      items: rows.map((row) => formatProfileItem(row, db)),
       total,
       limit,
       offset,
@@ -503,7 +548,7 @@ export async function profileRoutes(
           .get(existing.id) as ProfileItemRow;
 
         await refreshUserCoreSnapshot(request.userContext);
-        return reply.status(200).send(formatProfileItem(row));
+        return reply.status(200).send(formatProfileItem(row, db));
       }
 
       const id = v4();
@@ -535,7 +580,7 @@ export async function profileRoutes(
         .get(id) as ProfileItemRow;
 
       await refreshUserCoreSnapshot(request.userContext);
-      return reply.status(201).send(formatProfileItem(row));
+      return reply.status(201).send(formatProfileItem(row, db));
     },
   );
 
@@ -600,7 +645,7 @@ export async function profileRoutes(
           .get(existing.id) as ProfileItemRow;
 
         await refreshUserCoreSnapshot(request.userContext);
-        return reply.status(200).send(formatProfileItem(row));
+        return reply.status(200).send(formatProfileItem(row, db));
       }
 
       const id = v4();
@@ -633,7 +678,7 @@ export async function profileRoutes(
         .get(id) as ProfileItemRow;
 
       await refreshUserCoreSnapshot(request.userContext);
-      return reply.status(201).send(formatProfileItem(row));
+      return reply.status(201).send(formatProfileItem(row, db));
     },
   );
 
@@ -684,6 +729,10 @@ export async function profileRoutes(
         updates.push('fingerprint = ?');
         params.push(newFingerprint);
       }
+      if (body.evidenceRefs !== undefined) {
+        updates.push('evidence_refs = ?');
+        params.push(JSON.stringify(body.evidenceRefs));
+      }
       if (body.confidence !== undefined) {
         updates.push('confidence = ?');
         params.push(body.confidence);
@@ -706,7 +755,7 @@ export async function profileRoutes(
       }
 
       if (updates.length === 0) {
-        return reply.status(200).send(formatProfileItem(existing));
+        return reply.status(200).send(formatProfileItem(existing, db));
       }
 
       updates.push('updated_at = ?');
@@ -720,7 +769,7 @@ export async function profileRoutes(
         .get(id) as ProfileItemRow;
 
       await refreshUserCoreSnapshot(request.userContext);
-      return reply.status(200).send(formatProfileItem(row));
+      return reply.status(200).send(formatProfileItem(row, db));
     },
   );
 
@@ -769,7 +818,7 @@ export async function profileRoutes(
       }
 
       if (existing.status !== 'retracted') {
-        return reply.status(200).send(formatProfileItem(existing));
+        return reply.status(200).send(formatProfileItem(existing, db));
       }
 
       const currentTime = now();
@@ -784,7 +833,7 @@ export async function profileRoutes(
         .get(id) as ProfileItemRow;
 
       await refreshUserCoreSnapshot(request.userContext);
-      return reply.status(200).send(formatProfileItem(row));
+      return reply.status(200).send(formatProfileItem(row, db));
     },
   );
 
@@ -808,7 +857,7 @@ export async function profileRoutes(
       if (existing.user_confirmed === 1) {
         return reply.status(200).send({
           message: 'Already confirmed',
-          item: formatProfileItem(existing),
+          item: formatProfileItem(existing, db),
         });
       }
 
@@ -822,7 +871,7 @@ export async function profileRoutes(
         .get(id) as ProfileItemRow;
 
       await refreshUserCoreSnapshot(request.userContext);
-      return reply.status(200).send(formatProfileItem(row));
+      return reply.status(200).send(formatProfileItem(row, db));
     },
   );
 

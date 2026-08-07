@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`.
+- Pick a random feature from `docs/index.md`.
 - Verify docs/code are current, inspect defects and UX blockers, do brief external product/paper research, check local Reminders, plan first, implement if low-decision, update docs, test thoroughly, update automation memory, and archive the Codex session when possible.
 
 ## Research Findings

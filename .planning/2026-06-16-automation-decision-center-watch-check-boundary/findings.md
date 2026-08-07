@@ -2,7 +2,7 @@
 
 ## Repository Findings
 
-- Random selection from `docs/features/index.md`: `决策中心`, capability `Memory Service`, source doc `docs/features/memory_system.md`.
+- Random selection from `docs/index.md`: `决策中心`, capability `Memory Service`, source doc `docs/memory_system.md`.
 - `docs/progressing/to-verify.md` currently says `暂无。`.
 - Local Reminders list names: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`; no visible `Personal AI` list.
 - Current UI already separates `需你拍板`, `稍后决策`, and `待观察`, has review-package copy, deep-link highlighting, partial queue failure handling, and post-action receipts.

@@ -309,12 +309,12 @@ function resolveLaunchLabel(view: PopupSessionView): string {
     return '启用画面理解与纪要';
   }
   if (view.captureKind === 'error') {
-    return '重试开启会议全貌';
+    return '重试开启会议弹幕';
   }
   if (view.captureKind === 'stopped') {
-    return '重新开启会议全貌';
+    return '重新开启会议弹幕';
   }
-  return '开启会议全貌';
+  return '开启会议弹幕';
 }
 
 function resolveStatusLabel(view: PopupSessionView): string {
@@ -564,7 +564,7 @@ export function MeetingPilotPopupCard({
       <div className="mp-head">
         <div>
           <div className="mp-eyebrow">Meeting Pilot</div>
-          <div className="mp-title">会议全貌</div>
+          <div className="mp-title">会议弹幕</div>
           <div className="mp-subtitle">
             {safeText(view.title, 'RingCentral meeting')}
             <br />

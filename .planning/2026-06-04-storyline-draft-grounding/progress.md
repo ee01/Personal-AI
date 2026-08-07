@@ -2,7 +2,7 @@
 
 ## 2026-06-04
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, Storyline feature doc, selected code surfaces, and existing Storyline tests/E2E.
+- Read `AGENT.md`, `docs/index.md`, automation memory, Storyline feature doc, selected code surfaces, and existing Storyline tests/E2E.
 - Randomly selected `Storyline Draft 页面` from the feature index.
 - Checked macOS Reminders list names; no `Personal AI` list exists in the visible Reminders account.
 - Reviewed current external product and research references around grounded narrative outputs, meeting recap/source citations, and narrative hallucination/coherence risks.

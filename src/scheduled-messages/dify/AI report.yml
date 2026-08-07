@@ -1,0 +1,2281 @@
+app:
+  description: 用于 AI Report 的枢纽接口
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  mode: advanced-chat
+  name: AI report
+  use_icon_as_answer_icon: true
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openai:0.2.5@373362a028986aae53a7baf73a7f11991ba3c22c69eaf97d6cde048cfd4a9f98
+kind: app
+version: 0.3.0
+workflow:
+  conversation_variables:
+  - description: ''
+    id: a71e2c02-944a-4863-ae5e-b71ec3576610
+    name: outputs
+    selector:
+    - conversation
+    - outputs
+    value: summary, analysis, epics, storypoints, duedate, toTest, toResolve
+    value_type: string
+  - description: ''
+    id: ca5144b9-e934-47ae-9c0d-65cf62a4b787
+    name: report
+    selector:
+    - conversation
+    - report
+    value: ''
+    value_type: string
+  - description: ''
+    id: cb793033-642f-494b-99c4-b4f9eaa46a66
+    name: prompt
+    selector:
+    - conversation
+    - prompt
+    value: ''
+    value_type: string
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        image_file_size_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: assigner
+        targetType: llm
+      id: 1751955941682-source-llm-target
+      selected: false
+      source: '1751955941682'
+      sourceHandle: source
+      target: llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 1751956163572-source-parse_private_send_result-target
+      selected: false
+      source: '1751956163572'
+      sourceHandle: source
+      target: parse_private_send_result
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: answer
+      id: parse_private_send_result-source-answer_private_send_result-target
+      selected: false
+      source: parse_private_send_result
+      sourceHandle: source
+      target: answer_private_send_result
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: http-request
+      id: 1752031720462-false-1751956163572-target
+      selected: false
+      source: '1752031720462'
+      sourceHandle: 'false'
+      target: '1751956163572'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: assigner
+        targetType: llm
+      id: 1751955996712-source-1752629411847-target
+      selected: false
+      source: '1751955996712'
+      sourceHandle: source
+      target: '1752629411847'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: llm
+        targetType: template-transform
+      id: 1752629411847-source-1752631069306-target
+      selected: false
+      source: '1752629411847'
+      sourceHandle: source
+      target: '1752631069306'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 1752631069306-source-1752631954998-target
+      selected: false
+      source: '1752631069306'
+      sourceHandle: source
+      target: '1752631954998'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: assigner
+        targetType: if-else
+      id: 1752631954998-source-1752031720462-target
+      selected: false
+      source: '1752631954998'
+      sourceHandle: source
+      target: '1752031720462'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: assigner
+      id: llm-source-1752632036624-target
+      selected: false
+      source: llm
+      sourceHandle: source
+      target: '1752632036624'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: assigner
+        targetType: if-else
+      id: 1752632036624-source-1752031720462-target
+      selected: false
+      source: '1752632036624'
+      sourceHandle: source
+      target: '1752031720462'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: assigner
+        targetType: if-else
+      id: 1753693292639-source-1751955853084-target
+      selected: false
+      source: '1753693292639'
+      sourceHandle: source
+      target: '1751955853084'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: assigner
+      id: 1753693399109-true-1753693292639-target
+      selected: false
+      source: '1753693399109'
+      sourceHandle: 'true'
+      target: '1753693292639'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: if-else
+      id: 1753693399109-false-1751955853084-target
+      selected: false
+      source: '1753693399109'
+      sourceHandle: 'false'
+      target: '1751955853084'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1751955853084-4c9f4a6d-15f3-4407-90f2-39c6fd781570-1753694271974-target
+      selected: false
+      source: '1751955853084'
+      sourceHandle: 4c9f4a6d-15f3-4407-90f2-39c6fd781570
+      target: '1753694271974'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 1753694271974-source-1751955996712-target
+      selected: false
+      source: '1753694271974'
+      sourceHandle: source
+      target: '1751955996712'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1751955853084-true-1754273569996-target
+      selected: false
+      source: '1751955853084'
+      sourceHandle: 'true'
+      target: '1754273569996'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 1754273569996-source-1751955941682-target
+      selected: false
+      source: '1754273569996'
+      sourceHandle: source
+      target: '1751955941682'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 17520317556080-source-parse_team_send_result-target
+      selected: false
+      source: '17520317556080'
+      sourceHandle: source
+      target: parse_team_send_result
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: code
+        targetType: answer
+      id: parse_team_send_result-source-answer_team_send_result-target
+      selected: false
+      source: parse_team_send_result
+      sourceHandle: source
+      target: answer_team_send_result
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 1753693985764-source-1751956009215-target
+      selected: false
+      source: '1753693985764'
+      sourceHandle: source
+      target: '1751956009215'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: assigner
+        targetType: llm
+      id: 1751956009215-source-1756893317555-target
+      selected: false
+      source: '1751956009215'
+      sourceHandle: source
+      target: '1756893317555'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: assigner
+        targetType: if-else
+      id: 1756893371510-source-1752031720462-target
+      selected: false
+      source: '1756893371510'
+      sourceHandle: source
+      target: '1752031720462'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: template-transform
+      id: 1756893317555-source-1756950894426-target
+      selected: false
+      source: '1756893317555'
+      sourceHandle: source
+      target: '1756950894426'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 1756950894426-source-1756893371510-target
+      selected: false
+      source: '1756950894426'
+      sourceHandle: source
+      target: '1756893371510'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1752031720462-true-1757495639906-target
+      selected: false
+      source: '1752031720462'
+      sourceHandle: 'true'
+      target: '1757495639906'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: http-request
+      id: 1757495639906-source-17520317556080-target
+      selected: false
+      source: '1757495639906'
+      sourceHandle: source
+      target: '17520317556080'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1751955853084-45a9ee28-b038-4172-baf8-3cca0dd917c4-1753693985764-target
+      selected: false
+      source: '1751955853084'
+      sourceHandle: 45a9ee28-b038-4172-baf8-3cca0dd917c4
+      target: '1753693985764'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: llm
+        targetType: template-transform
+      id: 17580085477390-source-17580085969260-target
+      selected: false
+      source: '17580085477390'
+      sourceHandle: source
+      target: '17580085969260'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: assigner
+      id: 17580085969260-source-1758008635654-target
+      selected: false
+      source: '17580085969260'
+      sourceHandle: source
+      target: '1758008635654'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: assigner
+        targetType: if-else
+      id: 1758008635654-source-1752031720462-target
+      selected: false
+      source: '1758008635654'
+      sourceHandle: source
+      target: '1752031720462'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 1758009205110-source-1758010224196-target
+      selected: false
+      source: '1758009205110'
+      sourceHandle: source
+      target: '1758010224196'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: template-transform
+      id: 1751955623825-source-1758175772635-target
+      selected: false
+      source: '1751955623825'
+      sourceHandle: source
+      target: '1758175772635'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: template-transform
+        targetType: if-else
+      id: 1758175772635-source-1753693399109-target
+      selected: false
+      source: '1758175772635'
+      sourceHandle: source
+      target: '1753693399109'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1751955853084-false-1761891815799-target
+      selected: false
+      source: '1751955853084'
+      sourceHandle: 'false'
+      target: '1761891815799'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: http-request
+      id: 1761891815799-source-1758009205110-target
+      selected: false
+      source: '1761891815799'
+      sourceHandle: source
+      target: '1758009205110'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: if-else
+      id: 1758010224196-source-1763537882205-target
+      source: '1758010224196'
+      sourceHandle: source
+      target: '1763537882205'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: answer
+      id: 1763537882205-false-1763538520846-target
+      source: '1763537882205'
+      sourceHandle: 'false'
+      target: '1763538520846'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: if-else
+      id: 1763537882205-true-1764665918022-target
+      source: '1763537882205'
+      sourceHandle: 'true'
+      target: '1764665918022'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: llm
+      id: 1764665918022-false-17580085477390-target
+      source: '1764665918022'
+      sourceHandle: 'false'
+      target: '17580085477390'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: if-else
+        targetType: template-transform
+      id: 1764665918022-true-17580085969260-target
+      source: '1764665918022'
+      sourceHandle: 'true'
+      target: '17580085969260'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: Start
+        type: start
+        variables:
+        - label: currentPhase
+          max_length: 48
+          options: []
+          required: false
+          type: text-input
+          variable: currentPhase
+        - label: teamId
+          max_length: 48
+          options: []
+          required: false
+          type: text-input
+          variable: teamId
+        - label: mentionList
+          max_length: null
+          options: []
+          required: false
+          type: paragraph
+          variable: mentionList
+        - label: epics
+          max_length: null
+          options: []
+          required: false
+          type: paragraph
+          variable: epics
+        - label: epicsCount
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: epicsCount
+        - label: appEstimate
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: appEstimate
+        - label: SDKEstimate
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: SDKEstimate
+        - label: featuresCount
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: featuresCount
+        - label: techtasksCount
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: techtasksCount
+        - label: featuresSDKEstimate
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: featuresSDKEstimate
+        - label: featuresAppEstimate
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: featuresAppEstimate
+        - label: extraText
+          max_length: null
+          options: []
+          required: false
+          type: paragraph
+          variable: extraText
+        - label: userStoriesCount
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: userStoriesCount
+        - hide: false
+          label: outputs
+          max_length: null
+          options:
+          - summary
+          - epics
+          - storypoints
+          - analysis
+          - toTest
+          - toSolve
+          required: false
+          type: paragraph
+          variable: outputs
+        - label: currentPhaseStartedWorkdays
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: currentPhaseStartedWorkdays
+        - label: storyPoints
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: storyPoints
+        - label: currentRelease
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: currentRelease
+        - label: totalEffortDays
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: totalEffortDays
+        - label: effortDaysBaseline_PerDev
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: effortDaysBaseline_PerDev
+        - label: bugsBaseline
+          max_length: 48
+          options: []
+          required: false
+          type: number
+          variable: bugsBaseline
+        - label: bugFilter
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: bugFilter
+        - label: language
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: language
+        - label: jql
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: jql
+        - label: title
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: title
+        - label: ruleName
+          max_length: null
+          options: []
+          required: false
+          type: text-input
+          variable: ruleName
+        - label: ticketIncludes
+          max_length: 200
+          options: []
+          required: false
+          type: text-input
+          variable: ticketIncludes
+        - label: customOutputs
+          max_length: null
+          options: []
+          required: false
+          type: paragraph
+          variable: customOutputs
+      height: 766
+      id: '1751955623825'
+      position:
+        x: 182.97438205261187
+        y: 282
+      positionAbsolute:
+        x: 182.97438205261187
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "function main({body}) {\n  function parse(value) {\n    try {\n  \
+          \    return JSON.parse(value || '{}');\n    } catch (e) {\n      return\
+          \ {};\n    }\n  }\n  function pick(object, keys) {\n    if (!object ||\
+          \ typeof object !== 'object') return '';\n    for (const key of keys) {\n\
+          \      if (object[key] !== undefined && object[key] !== null && String(object[key]).trim()\
+          \ !== '') {\n        return String(object[key]);\n      }\n    }\n   \
+          \ return '';\n  }\n  const json = parse(body);\n  const candidates = [json,\
+          \ json.data, json.outputs, json.result, json.post, json.message].filter(Boolean);\n\
+          \  const result = { chatId: '', postId: '', sentAt: '' };\n  for (const\
+          \ item of candidates) {\n    if (!result.chatId) result.chatId = pick(item,\
+          \ ['chatId', 'groupId', 'chat_id', 'group_id', 'resolved_chat_id']);\n\
+          \    if (!result.postId) result.postId = pick(item, ['postId', 'post_id',\
+          \ 'id']);\n    if (!result.sentAt) result.sentAt = pick(item, ['sentAt',\
+          \ 'creationTime', 'createdAt', 'created_at', 'timestamp']);\n  }\n  if\
+          \ ((result.chatId || result.postId) && !result.sentAt) result.sentAt = new\
+          \ Date().toISOString();\n  return result;\n}"
+        code_language: javascript
+        desc: ''
+        outputs:
+          chatId:
+            children: null
+            type: string
+          postId:
+            children: null
+            type: string
+          sentAt:
+            children: null
+            type: string
+        selected: false
+        title: Parse team send result
+        type: code
+        variables:
+        - value_selector:
+          - '17520317556080'
+          - body
+          value_type: string
+          variable: body
+      height: 54
+      id: parse_team_send_result
+      position:
+        x: 5033
+        y: 400
+      positionAbsolute:
+        x: 5033
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{"chatId":"{{#parse_team_send_result.chatId#}}","postId":"{{#parse_team_send_result.postId#}}","sentAt":"{{#parse_team_send_result.sentAt#}}"}'
+        desc: ''
+        selected: false
+        title: Send Result
+        type: answer
+        variables: []
+      height: 105
+      id: answer_team_send_result
+      position:
+        x: 5354
+        y: 400
+      positionAbsolute:
+        x: 5354
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        memory:
+          query_prompt_template: '一下是 JIRA 的 tickets 数据：
+
+            ----
+
+            {{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: false
+            size: 10
+        model:
+          completion_params:
+            temperature: 0
+          mode: chat
+          name: gpt-4.1
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: 5cbabae3-c425-48c6-b8ce-d702bedd9740
+          role: system
+          text: '{{#conversation.prompt#}}'
+        selected: false
+        title: LLM
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 90
+      id: llm
+      position:
+        x: 2019
+        y: 282
+      positionAbsolute:
+        x: 2019
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#conversation.report#}}'
+        desc: ''
+        selected: false
+        title: Answer
+        type: answer
+        variables: []
+      height: 105
+      id: answer
+      position:
+        x: 5033.3733906866855
+        y: 530.9511648138634
+      positionAbsolute:
+        x: 5033.3733906866855
+        y: 530.9511648138634
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "function main({body}) {\n  function parse(value) {\n    try {\n  \
+          \    return JSON.parse(value || '{}');\n    } catch (e) {\n      return\
+          \ {};\n    }\n  }\n  function pick(object, keys) {\n    if (!object ||\
+          \ typeof object !== 'object') return '';\n    for (const key of keys) {\n\
+          \      if (object[key] !== undefined && object[key] !== null && String(object[key]).trim()\
+          \ !== '') {\n        return String(object[key]);\n      }\n    }\n   \
+          \ return '';\n  }\n  const json = parse(body);\n  const candidates = [json,\
+          \ json.data, json.outputs, json.result, json.post, json.message].filter(Boolean);\n\
+          \  const result = { chatId: '', postId: '', sentAt: '' };\n  for (const\
+          \ item of candidates) {\n    if (!result.chatId) result.chatId = pick(item,\
+          \ ['chatId', 'groupId', 'chat_id', 'group_id', 'resolved_chat_id']);\n\
+          \    if (!result.postId) result.postId = pick(item, ['postId', 'post_id',\
+          \ 'id']);\n    if (!result.sentAt) result.sentAt = pick(item, ['sentAt',\
+          \ 'creationTime', 'createdAt', 'created_at', 'timestamp']);\n  }\n  if\
+          \ ((result.chatId || result.postId) && !result.sentAt) result.sentAt = new\
+          \ Date().toISOString();\n  return result;\n}"
+        code_language: javascript
+        desc: ''
+        outputs:
+          chatId:
+            children: null
+            type: string
+          postId:
+            children: null
+            type: string
+          sentAt:
+            children: null
+            type: string
+        selected: false
+        title: Parse private send result
+        type: code
+        variables:
+        - value_selector:
+          - '1751956163572'
+          - body
+          value_type: string
+          variable: body
+      height: 54
+      id: parse_private_send_result
+      position:
+        x: 4712
+        y: 565
+      positionAbsolute:
+        x: 4712
+        y: 565
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{"chatId":"{{#parse_private_send_result.chatId#}}","postId":"{{#parse_private_send_result.postId#}}","sentAt":"{{#parse_private_send_result.sentAt#}}"}'
+        desc: ''
+        selected: false
+        title: Send Result
+        type: answer
+        variables: []
+      height: 105
+      id: answer_private_send_result
+      position:
+        x: 5033
+        y: 565
+      positionAbsolute:
+        x: 5033
+        y: 565
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: contains
+            id: 8a9aa330-1218-450a-8afe-5efb3d3cc665
+            value: Regression
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - currentPhase
+          - comparison_operator: contains
+            id: 93966048-d9a4-464c-ad69-5d5b28a281f2
+            value: CF
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - currentPhase
+          id: 'true'
+          logical_operator: or
+        - case_id: 4c9f4a6d-15f3-4407-90f2-39c6fd781570
+          conditions:
+          - comparison_operator: contains
+            id: ae87beea-7ea3-4e6c-ac73-d7d01f005245
+            value: DoR
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - currentPhase
+          id: 4c9f4a6d-15f3-4407-90f2-39c6fd781570
+          logical_operator: and
+        - case_id: 45a9ee28-b038-4172-baf8-3cca0dd917c4
+          conditions:
+          - comparison_operator: contains
+            id: 4637bacf-1353-4a2a-8162-95a408beb919
+            value: Embedded
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - currentPhase
+          id: 45a9ee28-b038-4172-baf8-3cca0dd917c4
+          logical_operator: and
+        desc: ''
+        selected: false
+        title: IF/ELSE
+        type: if-else
+      height: 248
+      id: '1751955853084'
+      position:
+        x: 1089
+        y: 282
+      positionAbsolute:
+        x: 1089
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1754273569996'
+          - output
+          variable_selector:
+          - conversation
+          - prompt
+          write_mode: over-write
+        selected: false
+        title: Regression
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1751955941682'
+      position:
+        x: 1689
+        y: 282
+      positionAbsolute:
+        x: 1689
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1753694271974'
+          - output
+          variable_selector:
+          - conversation
+          - prompt
+          write_mode: over-write
+        selected: false
+        title: DoR
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1751955996712'
+      position:
+        x: 1689
+        y: 409
+      positionAbsolute:
+        x: 1689
+        y: 409
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1753693985764'
+          - output
+          variable_selector:
+          - conversation
+          - prompt
+          write_mode: over-write
+        selected: false
+        title: Embedded
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1751956009215'
+      position:
+        x: 1689
+        y: 549.463560496364
+      positionAbsolute:
+        x: 1689
+        y: 549.463560496364
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data:
+          - id: key-value-115
+            key: ''
+            type: text
+            value: "{\n  \"email\": \"esone.qiu@ringcentral.com\",\n  \"message\"\
+              : \"{{#conversation.report#}}\",\n  \"mentionAutoCorrect\": true,\n\
+              \  \"mention\": false\n}"
+          type: json
+        desc: ''
+        headers: 'Authorization:Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImVzb25lLnFpdUByaW5nY2VudHJhbC5jb20iLCJzZXJ2aWNlIjoiU01fYm90LnNlcnZpY2UiLCJyb2xlIjoiUk9MRV9VU0VSIiwiaWF0IjoxNzM5OTQyMjUyLCJleHAiOjIwNTUzMDIyNTJ9.ieSb3zGIwVhUTqZpkgJipK8ktH4FVJr3vDF0kyQ-4DI
+
+          bot:4700372020@37439510.bot.glip.net'
+        method: post
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: Notify me
+        type: http-request
+        url: https://botman.int.rclabenv.com/v2/user/message
+        variables: []
+      height: 139
+      id: '1751956163572'
+      position:
+        x: 4340.938963038755
+        y: 530.9511648138634
+      positionAbsolute:
+        x: 4340.938963038755
+        y: 530.9511648138634
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: not empty
+            id: 03ee8d2a-2c90-421b-823d-483e9993bd84
+            value: ''
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - teamId
+          id: 'true'
+          logical_operator: and
+        desc: ''
+        selected: false
+        title: IF/ELSE 2
+        type: if-else
+      height: 126
+      id: '1752031720462'
+      position:
+        x: 3958.97292142112
+        y: 334.99785455120656
+      positionAbsolute:
+        x: 3958.97292142112
+        y: 334.99785455120656
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data:
+          - id: key-value-115
+            key: ''
+            type: text
+            value: "{\n  \"mentionList\": {{#1757495639906.output#}},\n  \"message\"\
+              : \"{{#conversation.report#}}\",\n  \"isTeamMention\": false,\n  \"\
+              teamId\": \"{{#1751955623825.teamId#}}\",\n  \"teamName\": \"\",\n \
+              \ \"skipMentionCheck\": true,\n  \"mentionAutoCorrect\": true\n}"
+          type: json
+        desc: ''
+        headers: 'Authorization:Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImVzb25lLnFpdUByaW5nY2VudHJhbC5jb20iLCJzZXJ2aWNlIjoiU01fYm90LnNlcnZpY2UiLCJyb2xlIjoiUk9MRV9VU0VSIiwiaWF0IjoxNzM5OTQyMjUyLCJleHAiOjIwNTUzMDIyNTJ9.ieSb3zGIwVhUTqZpkgJipK8ktH4FVJr3vDF0kyQ-4DI
+
+          bot:4700372020@37439510.bot.glip.net'
+        method: post
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: Notify team
+        type: http-request
+        url: https://botman.int.rclabenv.com/v2/team/message
+        variables: []
+      height: 139
+      id: '17520317556080'
+      position:
+        x: 4712.580394385733
+        y: 365.94994274239133
+      positionAbsolute:
+        x: 4712.580394385733
+        y: 365.94994274239133
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params: {}
+          mode: chat
+          name: o3
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: acf4349e-ad37-48bf-ad11-dc20b692ffa6
+          role: system
+          text: '{{#conversation.prompt#}}'
+        - id: d1d59f2b-0b7b-4791-8daf-e0edf5e6205e
+          role: user
+          text: '一下是 JIRA 的 tickets 数据：
+
+            ----
+
+            {{#sys.query#}}'
+        selected: false
+        title: LLM 2
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 90
+      id: '1752629411847'
+      position:
+        x: 1993
+        y: 409
+      positionAbsolute:
+        x: 1993
+        y: 409
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: '{% if ''En'' not in language and ''en'' not in language -%}
+
+
+          ---- **📈 `Planning Result 报告`** ----
+
+          {% if "summary" in outputs -%}
+
+          {% if currentRelease %}
+
+          - 当前版本：{{ currentRelease }}{% endif %}
+
+          - 当前 Release 的 User Story/Task 总数：`{{ userStoriesCount }}`
+
+          - 评估结果:  {{ ''App - `'' ~ appEstimate ~ ''` 人月;'' if appEstimate }} {{ ''SDK
+          - `'' ~ SDKEstimate ~ ''` 人月;'' if SDKEstimate }} {{ ''`'' ~ storyPoints
+          ~ ''` story points;'' if storyPoints }} {{ ''`'' ~ totalEffortDays ~ ''`
+          days'' if totalEffortDays }}
+
+          {% if featuresAppEstimate and featuresSDKEstimate -%}
+
+          - 其中 Feature 部分占: App - `{{ featuresAppEstimate }}` 人月; SDK - `{{ featuresSDKEstimate
+          }}` 人月{% endif %}
+
+          {%- endif %}
+
+
+          {%- else -%}
+
+
+          ---- **📈 `Planning Result Report`** ----
+
+          {% if "summary" in outputs -%}
+
+          {% if currentRelease %}
+
+          - Current Release：{{ currentRelease }}{% endif %}
+
+          - Total User Story/Task in Current release：`{{ userStoriesCount }}`
+
+          - Estimate result:  {{ ''App - `'' ~ appEstimate ~ ''` staff month;'' if
+          appEstimate }} {{ ''SDK - `'' ~ SDKEstimate ~ ''` staff month'' if SDKEstimate
+          }} {{ ''`'' ~ storyPoints ~ ''` story points'' if storyPoints }} {{ ''`''
+          ~ totalEffortDays ~ ''` days'' if totalEffortDays }}
+
+          {% if featuresAppEstimate and featuresSDKEstimate -%}
+
+          - Features ratio: App - `{{ featuresAppEstimate }}` staff month; SDK - `{{
+          featuresSDKEstimate }}` staff month{% endif %}
+
+          {%- endif %}
+
+
+          {%- endif %}
+
+
+          {% if "epics" in outputs and epics %}
+
+          ** 📜 {{ ''Epic 概览'' if ''En'' not in language and ''en'' not in language
+          else ''Epic overview'' }} **
+
+          ----
+
+
+          {{ epics | replace(''"'', ''\\\\"'') }}
+
+          {% endif %}
+
+          {{ estimate | replace(''"'', ''\\\\"'') }}
+
+
+
+          ----
+
+          {{ extraText }}'
+        title: DoR output
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1752629411847'
+          - text
+          variable: estimate
+        - value_selector:
+          - '1751955623825'
+          - epicsCount
+          variable: epicsCount
+        - value_selector:
+          - '1751955623825'
+          - featuresCount
+          variable: featuresCount
+        - value_selector:
+          - '1751955623825'
+          - techtasksCount
+          variable: techtasksCount
+        - value_selector:
+          - '1751955623825'
+          - epics
+          variable: epics
+        - value_selector:
+          - '1751955623825'
+          - appEstimate
+          variable: appEstimate
+        - value_selector:
+          - '1751955623825'
+          - SDKEstimate
+          variable: SDKEstimate
+        - value_selector:
+          - '1751955623825'
+          - featuresAppEstimate
+          variable: featuresAppEstimate
+        - value_selector:
+          - '1751955623825'
+          - featuresSDKEstimate
+          variable: featuresSDKEstimate
+        - value_selector:
+          - '1751955623825'
+          - extraText
+          variable: extraText
+        - value_selector:
+          - '1751955623825'
+          - userStoriesCount
+          variable: userStoriesCount
+        - value_selector:
+          - '1751955623825'
+          - storyPoints
+          value_type: number
+          variable: storyPoints
+        - value_selector:
+          - conversation
+          - outputs
+          value_type: string
+          variable: outputs
+        - value_selector:
+          - '1751955623825'
+          - currentRelease
+          value_type: string
+          variable: currentRelease
+        - value_selector:
+          - '1751955623825'
+          - totalEffortDays
+          value_type: number
+          variable: totalEffortDays
+        - value_selector:
+          - '1758175772635'
+          - output
+          value_type: string
+          variable: language
+      height: 54
+      id: '1752631069306'
+      position:
+        x: 2286.0784746307836
+        y: 409
+      positionAbsolute:
+        x: 2286.0784746307836
+        y: 409
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1752631069306'
+          - output
+          variable_selector:
+          - conversation
+          - report
+          write_mode: over-write
+        selected: false
+        title: Variable Assigner 4
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1752631954998'
+      position:
+        x: 2569.7956418022386
+        y: 409
+      positionAbsolute:
+        x: 2569.7956418022386
+        y: 409
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - llm
+          - text
+          variable_selector:
+          - conversation
+          - report
+          write_mode: over-write
+        selected: false
+        title: Variable Assigner 5
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1752632036624'
+      position:
+        x: 2512.972000246529
+        y: 263.2278306963558
+      positionAbsolute:
+        x: 2512.972000246529
+        y: 263.2278306963558
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1751955623825'
+          - outputs
+          variable_selector:
+          - conversation
+          - outputs
+          write_mode: over-write
+        selected: false
+        title: Set outputs
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1753693292639'
+      position:
+        x: 714.7235223860329
+        y: 379.7555126331495
+      positionAbsolute:
+        x: 714.7235223860329
+        y: 379.7555126331495
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: not empty
+            id: e285833c-f78b-42aa-8879-f9544d060b45
+            value: ''
+            varType: string
+            variable_selector:
+            - '1751955623825'
+            - outputs
+          id: 'true'
+          logical_operator: and
+        desc: ''
+        selected: false
+        title: IF/ELSE 3
+        type: if-else
+      height: 126
+      id: '1753693399109'
+      position:
+        x: 569.9741264719852
+        y: 512.8478589703298
+      positionAbsolute:
+        x: 569.9741264719852
+        y: 512.8478589703298
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: true
+        template: "你是一个产品研发团队的项目助理，现在我将提供一个 Jira 数据的原始文本（格式包括 ticket ID、状态、标题、Assignee、Due\
+          \ date、Story Points，以及每个 User Story 下关联的 Bug 数量和状态）。请你帮我基于以下要求整理一份适合发送到团队聊天窗口的\
+          \ **Bug analysis report**：  \n\n__报表内容包括：__  \n* 统计 Bug 数量较多的 User Story{%\
+          \ if bugsBaseline %}（Bug 数量 ≥ {{ bugsBaseline }} 的 User Story）{% endif %}，列出这些\
+          \ Story 的 Jira ID 和标题，并标注 Bug 数量。 格式可以是：\n * [<Bug ID>](https://jira.ringcentral.com/browse/<Bug\
+          \ ID>) – <Summary> （共 <Bug sum> 个 Bug）\n* 统计还未关闭（状态不为 Closed/Resolved）的\
+          \ Bug 总数，并列出涉及这些未关闭 Bug 的 User Story 数量。 如果需要列 ticket，也带上 link.\n* 汇总分析：指出当前\
+          \ Release 是否存在 Bug 集中在少数几个 User Story 的情况（例如超过 50% 的 Bug 来自 2 个或更少的 Story），如果存在，请在报表中高亮提示。\
+          \  \n\n__报表格式要求：__  \n1. 报表不需要标题，我会自己添加。  \n2. 报表的分栏标题通常用这样带分割线的格式：  \n\
+          ** \U0001F41E Bug analysis report **  \n----\n\n3. 使用聊天窗口支持的格式(不需要返回格式化后的富文本，就返回如下源码信息)：\n\
+          \   - `**加粗**`\n   - `__下划线__`\n   - `* 列表`\n   - `1. 数字列表`\n   - `----`（分割线）\n\
+          \   - ``反引号用于标红高亮``\n   - `> 引用文本`\n   - [文本](超链接)\n4. 语言为{{ language if\
+          \ language else '中文' }}，风格专业、清晰、简洁，但是 JIRA ticket 的 summary 标题不需要翻译。\n"
+        title: story bugs prompt
+        type: template-transform
+        variables:
+        - value_selector:
+          - conversation
+          - outputs
+          value_type: string
+          variable: outputs
+        - value_selector:
+          - '1751955623825'
+          - bugsBaseline
+          variable: bugsBaseline
+        - value_selector:
+          - '1751955623825'
+          - language
+          value_type: string
+          variable: language
+      height: 54
+      id: '1753693985764'
+      position:
+        x: 1394.4846141420394
+        y: 530.9511648138634
+      positionAbsolute:
+        x: 1394.4846141420394
+        y: 530.9511648138634
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: "你是一个产品研发团队的项目助理，现在我将提供一个 Jira 数据的原始文本（格式包括 ticket ID、状态、标题、Assignee、QA\
+          \ assginee、Due date 和 Story Points/Effort days 等），请你帮我基于以下要求整理一份适合发送到团队聊天窗口的\
+          \ **Release Planning 报表**：\n\n__报表内容包括：__\n{% if \"storypoint\" in outputs\
+          \ %}\n* 每位 开发同学(Assignee) 的 Story Points 总计：Story Point 为空或为 0 的不展示\n{%\
+          \ endif %}\n{% if \"effortdays\" in outputs %}\n* 每位 开发同学(Assignee) 的 Effort\
+          \ days 总计：Effort days 为空或为 0 的不展示\n{% endif %}\n{% if \"duedate\" in outputs\
+          \ %}\n* 列出所有未填写 Due Date 的任务：并注明对应 Assignee，方便提醒补充，JIRA id 带上链接，如 [MTR-xxx](https://jira.ringcentral.com/browse/MTR-xxx)\
+          \ Summary - <MentionAssignee>\n{% endif %}\n{% if \"analysis\" in outputs\
+          \ %}\n* 汇总分析：包括分析哪些开发同学的工作量是否有可能负荷{% if effortDaysBaseline_PerDev %}（每个开发的工作总量参考天数为{{\
+          \ effortDaysBaseline_PerDev }}天，超过{{ effortDaysBaseline_PerDev }}天预警，少于{{\
+          \ effortDaysBaseline_PerDev/2 }}天也需要预警）{% endif %}；Due date 代表开发完成的提测时间，根据每个\
+          \ QA Assginee ticket 的 Due date 的分布来判断是否有重叠在一起( 只判断同一个 QA Assignee 是否有超过\
+          \ 5 个 ticket 的 Due date 集中在 2 天内)提测导致某位 QA 繁忙的情况，按如下方式列出：QA同学 xxx 在 5/20和5/21\
+          \ 有多个任务提测 ([MTR-xxx1](https://jira.ringcentral.com/browse/MTR-xxx1), [MTR-xxx2](https://jira.ringcentral.com/browse/MTR-xxx2),\
+          \ ...)。\n{% endif %}\n\n__报表格式要求：__\n1. 报表不需要标题，我会自己添加\n2. 报表的分栏标题通常用这样带分割线的格式：\n\
+          ** 合适的图标 分栏标题 **\n----\n3. 使用聊天窗口支持的格式(不需要返回格式化后的富文本，就返回如下源码信息)：\n   - `**加粗**`\n\
+          \   - `__下划线__`\n   - `* 列表`\n   - `1. 数字列表`\n   - `----`（分割线）\n   - ``反引号用于标红高亮``\n\
+          \   - `> 引用文本`\n   - [文本](超链接)\n4. <MentionAssignee>, <MentionReporter>\
+          \ 请用 \"@firstName.lastName\" 这样的格式\n5. 语言为{{ language if language else '中文'\
+          \ }}，风格专业、清晰、简洁，但是 JIRA ticket 的 summary 标题不需要翻译。"
+        title: DoR prompt
+        type: template-transform
+        variables:
+        - value_selector:
+          - conversation
+          - outputs
+          value_type: string
+          variable: outputs
+        - value_selector:
+          - '1751955623825'
+          - effortDaysBaseline_PerDev
+          variable: effortDaysBaseline_PerDev
+        - value_selector:
+          - '1751955623825'
+          - language
+          variable: language
+      height: 54
+      id: '1753694271974'
+      position:
+        x: 1389
+        y: 409
+      positionAbsolute:
+        x: 1389
+        y: 409
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: "以下是某次 release regression 的 Jira bugs 数据，请根据以下要求，帮我生成一份团队报表，格式适配聊天窗口（仅支持粗体、下划线、引用、列表、数字列表、分割线和反引号标红）并输出支持的格式源码(最外层不需要用代码块包裹)：\n\
+          \n----\n**【输出要求】**\n1. 标题为 “---- **\U0001F9EA `Regression{{ \" Day \" ~\
+          \ currentPhaseStartedWorkdays if currentPhaseStartedWorkdays }} 报告`（截至今日上午）**\
+          \ ----”。\n{% if \"summary\" in outputs -%}\n2. 在标题下方添加一些信息汇总，内容如下：\n   -\
+          \ `\U0001F4CC 本轮回归共发现：<总数, 包括Closed数量> 个 Bugs`\n   - `✅ 已关闭：<Closed 数量>`\n\
+          \   - `\U0001F9EA 待 QA 验证：<Resolved 数量>`\n   - `\U0001F527 Dev 需跟进：<Open\
+          \ / In Progress / 未 Resolved 状态的数量>`\n{%- endif %}\n{% if bugFilter -%}\n\
+          3. 添加链接到所有 regression bugs 的固定筛选视图：https://jira.ringcentral.com/issues/?filter={{\
+          \ bugFilter }}\n{%- endif %}\n4. 分两个区块输出内容（但是如果所有bug都closed了，就不需要展示着两个区块，可以用线框绘制一个庆祝的画面图例）：\n\
+          \   - \U0001F9EA **QA 待验证（Resolved 状态）**\n     将所有状态为 `Resolved` 的 Bugs，按\
+          \ `Reporter` 字段分组，每个 QA 一个子分组，清晰列出每个 QA 对应 Bugs。格式为：  \n  `<MentionReporter>:`\n\
+          \     * [<Bug ID>](https://jira.ringcentral.com/browse/<Bug ID>) – <Summary>\
+          \ （Assignee: <Assignee>）\n   - \U0001F468‍\U0001F4BB **Dev 需跟进（未 Resolved\
+          \ / Closed）** \n     所有状态不是 `Resolved` 或 `Closed` 的 Bugs，Bug Priority可以转化为\
+          \ Critical->P0, High->P1, Normal->P2, Low->P3，列出格式：\n     * <Bug Priority>:\
+          \ [<Bug ID>](https://jira.ringcentral.com/browse/<Bug ID>) – <Summary> （Assignee:\
+          \ <MentionAssignee>）\n；若没有未完成的项，则显示：  \n     \U0001F21A️ – 所有问题已进入 Resolved\
+          \ 或 Closed 状态，暂无开发待处理项。✅\n{% if extraText -%}\n5. 在最后落款处增加信息说明：{{ extraText\
+          \ }}\n{%- endif %}\n5. 使用聊天窗口支持的格式(不需要返回格式化后的富文本，就返回如下源码信息)：\n   - `**加粗**`\n\
+          \   - `__下划线__`\n   - `* 列表`\n   - `1. 数字列表`\n   - `----`（分割线）\n   - ``反引号用于标红高亮``\n\
+          \   - `> 引用文本`\n   - [文本](超链接)\n6. 不要列出已关闭（Closed）的 bug。\n7. <MentionAssignee>,\
+          \ <MentionReporter> 请用 \"@firstName.lastName\" 这样的格式\n8. 语言为{{ language\
+          \ if language else '中文' }}，风格专业、清晰、简洁，但是 JIRA ticket 的 summary 标题不需要翻译。\n"
+        title: Regression prompt
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1751955623825'
+          - currentPhaseStartedWorkdays
+          variable: currentPhaseStartedWorkdays
+        - value_selector:
+          - '1751955623825'
+          - bugFilter
+          variable: bugFilter
+        - value_selector:
+          - '1751955623825'
+          - extraText
+          variable: extraText
+        - value_selector:
+          - conversation
+          - outputs
+          variable: outputs
+        - value_selector:
+          - '1751955623825'
+          - language
+          value_type: string
+          variable: language
+      height: 54
+      id: '1754273569996'
+      position:
+        x: 1389
+        y: 282
+      positionAbsolute:
+        x: 1389
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params:
+            temperature: 0
+          mode: chat
+          name: gpt-4.1
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: 1f106b57-5a94-49c4-b6c1-ecf9345a471f
+          role: system
+          text: '{{#conversation.prompt#}}'
+        - id: 825a7613-fa95-4f99-ba3f-6f54017b361e
+          role: user
+          text: '一下是 JIRA 的 tickets 数据：
+
+            ----
+
+            {{#sys.query#}}'
+        selected: false
+        title: LLM 3
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 90
+      id: '1756893317555'
+      position:
+        x: 1993
+        y: 549.463560496364
+      positionAbsolute:
+        x: 1993
+        y: 549.463560496364
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '1756950894426'
+          - output
+          variable_selector:
+          - conversation
+          - report
+          write_mode: over-write
+        selected: false
+        title: Variable Assigner 7
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1756893371510'
+      position:
+        x: 2610.463560496364
+        y: 564.6100660547735
+      positionAbsolute:
+        x: 2610.463560496364
+        y: 564.6100660547735
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: '{{ text }}
+
+
+
+          ----
+
+          {{ extraText }}'
+        title: story bugs output
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1756893317555'
+          - text
+          value_type: string
+          variable: text
+        - value_selector:
+          - '1751955623825'
+          - extraText
+          variable: extraText
+      height: 54
+      id: '1756950894426'
+      position:
+        x: 2308.7806154343184
+        y: 564.6100660547735
+      positionAbsolute:
+        x: 2308.7806154343184
+        y: 564.6100660547735
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: '{% set items = mentionList.split(",") if mentionList else [] %}
+
+          {{- items | tojson -}}'
+        title: mentionList
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1751955623825'
+          - mentionList
+          variable: mentionList
+      height: 54
+      id: '1757495639906'
+      position:
+        x: 4346.329759335111
+        y: 365.94994274239133
+      positionAbsolute:
+        x: 4346.329759335111
+        y: 365.94994274239133
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params: {}
+          mode: chat
+          name: gpt-5
+          provider: langgenius/openai/openai
+        prompt_config:
+          jinja2_variables:
+          - value_selector:
+            - '1751955623825'
+            - title
+            value_type: string
+            variable: title
+          - value_selector:
+            - conversation
+            - outputs
+            value_type: string
+            variable: outputs
+          - value_selector:
+            - '1758010224196'
+            - today
+            value_type: string
+            variable: today
+          - value_selector:
+            - '1751955623825'
+            - customOutputs
+            value_type: string
+            variable: customOutputs
+        prompt_template:
+        - edition_type: jinja2
+          id: 1f106b57-5a94-49c4-b6c1-ecf9345a471f
+          jinja2_text: "你是一个产品研发团队的项目助理，现在我将提供一个 Jira 数据的原始文本（格式包括 ticket ID、状态、标题、Assignee、QA\
+            \ assginee、Due date 和 Story Points/Effort days 等），请你帮我基于以下要求整理一份适合发送到团队聊天窗口的：\
+            \  \n\n__报表内容包括：__\n{% if \"noduedate\" in outputs %}\n* 列出所有未填写 Due Date\
+            \ 的任务且 Status 是 Open 或 In progress 的：并注明对应 Assignee，方便提醒补充，JIRA id 带上链接，如\
+            \ [MTR-xxx](https://jira.ringcentral.com/browse/MTR-xxx)(status) Summary\
+            \ - <MentionAssignee>\n{% endif %}\n{% if \"overdue\" in outputs %}\n\
+            * 今天的日期是 {{ today }}。列出所有 Due Date 超时且 Status 不是以下状态之一(Closed,Resolved,Cancelled)\
+            \ 的任务：并注明对应 Assignee，方便提醒补充，JIRA id 带上链接，如 [MTR-xxx](https://jira.ringcentral.com/browse/MTR-xxx)(status)\
+            \ Summary - <MentionAssignee>\n{% endif %}\n{% if \"toTestByReporter\"\
+            \ in outputs %}\n\U0001F9EA **QA 待验证（Resolved 状态）**\n     将所有状态为 `Resolved`\
+            \ 的 Bugs，按 `Reporter` 字段分组，每个 QA 一个子分组，清晰列出每个 QA 对应 Bugs。格式为：  \n  `<MentionReporter>:`\n\
+            \     * [<ticket ID>](https://jira.ringcentral.com/browse/<ticket ID>)\
+            \ – <Summary> （Assignee: <Assignee Name>）\n{% elif \"toTest\" in outputs\
+            \ %}\n\U0001F9EA **QA 待验证（Resolved 状态）**\n     列出所有状态为 `Resolved` 的 tickets。格式为：\
+            \  \n   * [<ticket ID>](https://jira.ringcentral.com/browse/<ticket ID>)\
+            \ – <Summary> （Assignee: <Assignee Name>）\n{% endif %}\n\n{%- set custom_items\
+            \ = customOutputs.split('|') if customOutputs else [] %}\n{% for item\
+            \ in custom_items -%}\n  {% if ':' in item -%}\n    {% set parts = item.split(':',\
+            \ 1) -%}\n* {{ parts[0] | trim }}: {{ parts[1] | trim }}\n  {% else %}\n\
+            * {{ item | trim }}\n  {% endif %}\n{% endfor %}\n\n__报表格式要求：__  \n1.\
+            \ 报表不需要标题，我会自己添加。  \n2. 报表的分栏标题通常用这样带分割线的格式：  \n** <icon> <report title>\
+            \ **  \n----\n\n3. 使用聊天窗口支持的格式，消息格式支持：  \n**加粗**  \n__下划线__  \n* 列表  \n\
+            n. 数字列表  \n---- (分割线，单独一行且左右不能有空格)  \n标红高亮  \n> 引用文本  \n（不支持完整 markdown\
+            \ 或表格）  \n4. <MentionAssignee>, <MentionReporter> 请用 \"@firstName.lastName\"\
+            \ 这样的格式\n5. 语言为{{ language if language else '中文' }}，风格专业、清晰、简洁，但是 JIRA\
+            \ ticket 的 summary 标题不需要翻译。\n"
+          role: system
+          text: "你是一个产品研发团队的项目助理，现在我将提供一个 Jira 数据的原始文本（格式包括 ticket ID、状态、标题、Assignee、QA\
+            \ assginee、Due date 和 Story Points/Effort days 等），请你帮我基于以下要求整理一份适合发送到团队聊天窗口的：\
+            \  \n\n\n__报表内容包括：__  \n{% if \"noduedate\" in outputs %}\n* 列出所有未填写 Due\
+            \ Date 的任务：并注明对应 Assignee，方便提醒补充，JIRA id 带上链接，如 [MTR-xxx](https://jira.ringcentral.com/browse/MTR-xxx)\
+            \ Summary - <Assignee>\n{% endif %}\n{% if \"overdue\" in outputs %}\n\
+            * 列出所有 Due Date 超时的任务：并注明对应 Assignee，方便提醒补充，JIRA id 带上链接，如 [MTR-xxx](https://jira.ringcentral.com/browse/MTR-xxx)\
+            \ Summary - <Assignee>\n{% endif %}\n{% if \"toTest\" in outputs %}\n\U0001F9EA\
+            \ **QA 待验证（Resolved 状态）**\n     将所有状态为 `Resolved` 的 Bugs，按 `Reporter`\
+            \ 字段分组，每个 QA 一个子分组，清晰列出每个 QA 对应 Bugs。格式为：  \n  `<Reporter>:`\n     * [<Bug\
+            \ ID>](https://jira.ringcentral.com/browse/<Bug ID>) – <Summary> （Assignee:\
+            \ <Assignee Name>）\n{% endif %}\n\n\n__报表格式要求：__  \n1. 报表不需要标题，我会自己添加。\
+            \  \n2. 报表的分栏标题通常用这样带分割线的格式：  \n** \U0001F41E Bug analysis report ** \
+            \ \n----\n\n\n3. 使用聊天窗口支持的格式，消息格式支持：  \n**加粗**  \n__下划线__  \n* 列表  \n\
+            1. 数字列表  \n---- (分割线，单独一行且左右不能有空格)  \n标红高亮  \n> 引用文本  \n（不支持完整 markdown\
+            \ 或表格）  \n4. 语言为中文，风格专业、清晰、简洁。  "
+        - id: 825a7613-fa95-4f99-ba3f-6f54017b361e
+          role: user
+          text: '一下是 JIRA 的 tickets 数据：
+
+            ----
+
+            {{#1758010224196.result#}}'
+        selected: false
+        title: LLM 4
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 90
+      id: '17580085477390'
+      position:
+        x: 2920.973156004889
+        y: 805.2847974857598
+      positionAbsolute:
+        x: 2920.973156004889
+        y: 805.2847974857598
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: '-- ** {{ title }} ** --
+
+          ----
+
+
+          {% if "tickets" in outputs %}
+
+          {{ jiraText | replace(''"'', ''\\\\"'') }}
+
+          {% endif %}
+
+
+          {{ llmText | replace(''"'', ''\\\\"'') if outputs!=''tickets'' }}
+
+
+
+          ----
+
+          {{ extraText | replace(''"'', ''\\\\"'') }}'
+        title: output
+        type: template-transform
+        variables:
+        - value_selector:
+          - '17580085477390'
+          - text
+          value_type: string
+          variable: llmText
+        - value_selector:
+          - '1751955623825'
+          - extraText
+          variable: extraText
+        - value_selector:
+          - '1751955623825'
+          - title
+          value_type: string
+          variable: title
+        - value_selector:
+          - '1758010224196'
+          - result
+          value_type: string
+          variable: jiraText
+        - value_selector:
+          - conversation
+          - outputs
+          value_type: string
+          variable: outputs
+      height: 54
+      id: '17580085969260'
+      position:
+        x: 3212.76030059847
+        y: 754.7299473918187
+      positionAbsolute:
+        x: 3212.76030059847
+        y: 754.7299473918187
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        items:
+        - input_type: variable
+          operation: over-write
+          value:
+          - '17580085969260'
+          - output
+          variable_selector:
+          - conversation
+          - report
+          write_mode: over-write
+        selected: false
+        title: Variable Assigner 8
+        type: assigner
+        version: '2'
+      height: 88
+      id: '1758008635654'
+      position:
+        x: 3564.8185113099075
+        y: 754.7299473918187
+      positionAbsolute:
+        x: 3564.8185113099075
+        y: 754.7299473918187
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data:
+          - id: key-value-123
+            key: ''
+            type: text
+            value: '{{#1761891815799.output#}}'
+          type: json
+        desc: ''
+        headers: Authorization:Bearer app-6iUw7pD1gPBOcYgacd49uzlF
+        method: post
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: Get jira info
+        type: http-request
+        url: https://dify.int.rclabenv.com/v1/workflows/run
+        variables: []
+      height: 139
+      id: '1758009205110'
+      position:
+        x: 1694.4846141420394
+        y: 736.8532034093026
+      positionAbsolute:
+        x: 1694.4846141420394
+        y: 736.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "function main({body}) {\n    const json = JSON.parse(body);\n\n   \
+          \ return {\n        today: new Date().toLocaleDateString(),\n        result:\
+          \ json.data.outputs.text\n    }\n}"
+        code_language: javascript
+        desc: ''
+        outputs:
+          result:
+            children: null
+            type: string
+          today:
+            children: null
+            type: string
+        selected: false
+        title: Code
+        type: code
+        variables:
+        - value_selector:
+          - '1758009205110'
+          - body
+          value_type: string
+          variable: body
+      height: 54
+      id: '1758010224196'
+      position:
+        x: 1998.00972348211
+        y: 736.8532034093026
+      positionAbsolute:
+        x: 1998.00972348211
+        y: 736.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: '{{ language | default(''中文'',true) }}'
+        title: language default
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1751955623825'
+          - language
+          value_type: string
+          variable: language
+      height: 54
+      id: '1758175772635'
+      position:
+        x: 536.4382586230306
+        y: 736.8532034093026
+      positionAbsolute:
+        x: 536.4382586230306
+        y: 736.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: ''
+        selected: false
+        template: "{\n  \"response_mode\": \"blocking\",\n  \"user\": \"default-user\"\
+          ,\n  \"inputs\": {\n    \"jql\": {{ jql | tojson }},\n    \"includes\":\
+          \ {{ ticketIncludes | tojson if ticketIncludes else 'summary, status, assignee,\
+          \ reporter, fixVersions, duedate' | tojson }},\n    \"withLink\": {{ 'true'\
+          \ | tojson if 'tickets' in outputs else 'false' | tojson }}\n  }\n}\n"
+        title: jql
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1751955623825'
+          - jql
+          value_type: string
+          variable: jql
+        - value_selector:
+          - conversation
+          - outputs
+          value_type: string
+          variable: outputs
+        - value_selector:
+          - '1751955623825'
+          - ticketIncludes
+          value_type: string
+          variable: ticketIncludes
+      height: 54
+      id: '1761891815799'
+      position:
+        x: 1394.4846141420394
+        y: 736.8532034093026
+      positionAbsolute:
+        x: 1394.4846141420394
+        y: 736.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: not empty
+            id: bbeef69e-710b-4f79-b560-5279c35d00ab
+            value: ''
+            varType: string
+            variable_selector:
+            - '1758010224196'
+            - result
+          id: 'true'
+          logical_operator: and
+        desc: ''
+        selected: false
+        title: Has JIRA data
+        type: if-else
+      height: 126
+      id: '1763537882205'
+      position:
+        x: 2299.9172809044408
+        y: 736.8532034093026
+      positionAbsolute:
+        x: 2299.9172809044408
+        y: 736.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: JIRA 数据为空，终止推送！
+        desc: ''
+        selected: false
+        title: Answer 2
+        type: answer
+        variables: []
+      height: 102
+      id: '1763538520846'
+      position:
+        x: 2599.9172809044408
+        y: 865.8532034093026
+      positionAbsolute:
+        x: 2599.9172809044408
+        y: 865.8532034093026
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: 4c02cbbc-3fb8-4661-8c03-a1e799f96c0b
+            value: tickets
+            varType: string
+            variable_selector:
+            - conversation
+            - outputs
+          id: 'true'
+          logical_operator: and
+        desc: ''
+        selected: false
+        title: only tickets
+        type: if-else
+      height: 126
+      id: '1764665918022'
+      position:
+        x: 2599.9172809044408
+        y: 725.0092736653004
+      positionAbsolute:
+        x: 2599.9172809044408
+        y: 725.0092736653004
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: -681.1886373158966
+      y: 49.80223620971037
+      zoom: 0.547558158285696

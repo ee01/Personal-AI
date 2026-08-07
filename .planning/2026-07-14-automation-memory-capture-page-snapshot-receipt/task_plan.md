@@ -13,7 +13,7 @@ Complete
 - [x] Confirm `docs/progressing/to-verify.md` is empty
 - [x] Read automation memory and avoid recent targets
 - [x] Check local `Personal AI` Reminders
-- [x] Select a bounded feature from `docs/features/index.md`
+- [x] Select a bounded feature from `docs/index.md`
 - **Status:** complete
 
 ### Phase 2: Research & Plan

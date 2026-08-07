@@ -3,7 +3,7 @@
 ## Repo And Reminder Findings
 
 - `docs/progressing/to-verify.md` currently says `暂无。`, so there is no carry-over feature to continue.
-- Random selected feature: `记忆提示 Expanded Card` in `docs/features/index.md`.
+- Random selected feature: `记忆提示 Expanded Card` in `docs/index.md`.
 - Reminder list scan returned `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`; no `Personal AI` list is present.
 - The worktree has many unrelated dirty files. Current run should not revert or stage unrelated changes.
 

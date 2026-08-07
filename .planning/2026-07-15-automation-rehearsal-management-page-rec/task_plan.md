@@ -53,4 +53,4 @@ Complete
 |-------|------------|
 | Root `task_plan.md` is stale from an older Scheduled Messages run | Created isolated `.planning/2026-07-15-automation-rehearsal-management-page-rec/` |
 | AppleScript did not list `Personal AI` | Used EventKit fallback, which found the list and confirmed 0 incomplete items |
-| `docs/features/index.md` already had unrelated dirty edits from prior automation runs | Left unrelated lines untouched and treated only the Rehearsal row wording as owned by this pass |
+| `docs/index.md` already had unrelated dirty edits from prior automation runs | Left unrelated lines untouched and treated only the Rehearsal row wording as owned by this pass |

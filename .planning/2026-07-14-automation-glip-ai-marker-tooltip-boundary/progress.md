@@ -2,7 +2,7 @@
 
 ## 2026-07-14
 
-- Read `AGENT.md`, planning skill instructions, automation memory, memory registry hints, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, planning skill instructions, automation memory, memory registry hints, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Confirmed the root `task_plan.md` / `findings.md` / `progress.md` are stale 2026-06-04 Scheduled Messages files and created this dedicated planning folder for the current run.
 - Checked Reminders via AppleScript and EventKit; EventKit found `Personal AI` with 0 incomplete items.
 - Ran external scan for Slack Later, Teams scheduled messages, status indicators, group-chat tagging, and trigger-action debugging research.

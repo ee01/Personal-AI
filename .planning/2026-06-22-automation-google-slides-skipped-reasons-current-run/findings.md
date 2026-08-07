@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` currently says there are no pending verification items.
 - Recent automation targets include Popup Top 3, User Profile influence calibration, Memory Coverage backup failure, Outreach Sessions focus lane, Memory search filters, Timeline refresh, Jira Automation Import, Snooze undo, and OpenClaw delegation, so this run avoids those fresh slices.
-- Random sampler selected `Slides partial success skipped reasons` from `docs/features/index.md` after excluding recent exact targets and freshest high-churn families.
+- Random sampler selected `Slides partial success skipped reasons` from `docs/index.md` after excluding recent exact targets and freshest high-churn families.
 - Local Reminders lists are: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`; no `Personal AI` list is visible.
 - The root `task_plan.md` / `findings.md` / `progress.md` are from an older Scheduled Messages run. This run uses the isolated planning folder `.planning/2026-06-22-automation-google-slides-skipped-reasons-current-run/`.
 

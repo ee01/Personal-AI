@@ -385,7 +385,7 @@ UI 上不能出现「已完成」「已保存」「已同步」这类会误导�
 - 最后将功能关键点和关键逻辑维护进正式功能文档：
   - 首选新增：`desktop-app/docs/features/memory-change-simulator.md`
   - 如果它最终归入 Memory Exploring 或 Settings，也需要在对应文档中补充入口和边界。
-  - 同时检查 `docs/features/index.md` 是否需要加入索引。
+  - 同时检查 `docs/index.md` 是否需要加入索引。
 
 ## 验收标准
 

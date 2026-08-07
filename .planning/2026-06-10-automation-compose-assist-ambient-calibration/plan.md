@@ -3,7 +3,7 @@
 ## Feature
 
 - Random index target: `回复助手无感校准`
-- Source docs: `docs/features/memory_system.md`, `docs/features/compose_assist.md`
+- Source docs: `docs/memory_system.md`, `docs/features/assist.md`
 - Carry-over: `docs/progressing/to-verify.md` says `暂无。`
 - Reminder state: local Reminders is accessible, but there is no `Personal AI` list to incorporate or complete.
 

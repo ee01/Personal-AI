@@ -2,7 +2,7 @@
 
 ## 2026-06-09T14:30+08:00
 
-- Read automation memory, `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, local Reminders list names, and current Native Join docs/code/tests.
+- Read automation memory, `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, local Reminders list names, and current Native Join docs/code/tests.
 - Random target: `NC 加会浏览器回退` under `docs/features/meeting_native_join.md`.
 - Plan: hide query/passcode in the fallback panel by default, preserve full Join/Copy recovery, add explicit reveal, then verify with focused tests and E2E.
 

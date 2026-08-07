@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `通知提醒与免打扰路径` in `docs/features/memory_system.md`.
+- Selected feature: `通知提醒与免打扰路径` in `docs/memory_system.md`.
 - Reminder state: EventKit found the local `Personal AI` list with 4 total items and 0 incomplete items. All items were completed historical Doubao / notification feedback, so nothing is related to this run and nothing should be marked done.
 
 ## Research Notes
@@ -21,5 +21,5 @@
 1. Preserve `evidence_refs_json` and `weave_json` when creating the future snoozed notification.
 2. Extend the Notification Center API test to assert the copied fields and the due feed/digest evidence receipt.
 3. Extend the Chrome notification E2E fixture to assert a snoozed due item displays both snooze and evidence context.
-4. Update `docs/features/memory_system.md`, `docs/features/notification_center.md`, and the feature index.
+4. Update `docs/memory_system.md`, `docs/features/notification_center.md`, and the feature index.
 5. Verify with targeted notification tests, first successful `npm start` compile, notification E2E, and scoped `git diff --check`.

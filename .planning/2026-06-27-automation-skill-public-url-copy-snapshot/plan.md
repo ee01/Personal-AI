@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Skill Foundry / Public Skill URL`
-- Source docs: `docs/features/index.md` -> `docs/features/personal_skill_foundry.md`
+- Source docs: `docs/index.md` -> `docs/features/personal_skill_foundry.md`
 - Entry point: `memory-exploring.html#/skills`, Binding tab
 
 ## Current State

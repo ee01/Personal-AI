@@ -10,7 +10,7 @@
 
 ## Code And UX Findings
 
-- Selected feature from `docs/features/index.md`: `定时消息列表筛选`.
+- Selected feature from `docs/index.md`: `定时消息列表筛选`.
 - Source doc: `docs/features/scheduled_messages_manager.md`.
 - Main implementation files:
   - `src/scheduled-messages/ScheduledMessagesManager.tsx`

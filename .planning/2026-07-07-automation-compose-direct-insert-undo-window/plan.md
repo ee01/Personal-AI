@@ -6,7 +6,7 @@ Goal: improve `回复助手直接插入` by making the post-insert undo window e
 
 - Feature row: `回复助手直接插入`
 - Capability: Compose Assist
-- Source document: `docs/features/compose_assist.md`
+- Source document: `docs/features/assist.md`
 - Reminder state: EventKit found the local `Personal AI` Reminders list with 4 total items and 0 incomplete items. No open Reminder item is related to Compose Assist direct insert, undo, draft insertion, or writing-assistant feedback.
 
 ## External Reference Findings
@@ -23,7 +23,7 @@ Goal: improve `回复助手直接插入` by making the post-insert undo window e
 | 1 | completed | Read `AGENT.md`, carry-over docs, automation memory, index, Reminders, current Compose Assist docs/code/verifier |
 | 2 | completed | Research comparable product and paper patterns for direct-insert writing assistants |
 | 3 | completed | Add a visible undo-window duration to the post-insert receipt and focused assertions |
-| 4 | completed | Update `docs/features/compose_assist.md` and `docs/features/index.md` concisely |
+| 4 | completed | Update `docs/features/assist.md` and `docs/index.md` concisely |
 | 5 | completed | Run focused unit/E2E verification, `npm start` first compile, and scoped whitespace checks |
 | 6 | completed | Update automation memory with current runtime and Reminder outcome |
 

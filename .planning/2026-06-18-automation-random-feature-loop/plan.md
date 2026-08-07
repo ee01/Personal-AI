@@ -2,7 +2,7 @@
 
 ## Goal
 
-Pick one current feature from `docs/features/index.md`, verify docs against code, use external product/research context, implement one bounded low-decision improvement, update docs, and run the strongest practical validation for the touched surface.
+Pick one current feature from `docs/index.md`, verify docs against code, use external product/research context, implement one bounded low-decision improvement, update docs, and run the strongest practical validation for the touched surface.
 
 ## Status
 

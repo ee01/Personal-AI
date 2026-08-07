@@ -349,7 +349,7 @@ async function verifyRichIframeBlur(context) {
   assert.equal(
     await page.evaluate(() => window.__paiComposeAssistRequests.length),
     0,
-    'rich iframe focus/input must not request Compose Assist',
+    'rich iframe focus/input with draft must not request Draft Refine before blur',
   );
   await page.locator('#outside-focus').click();
   await page.waitForFunction(
@@ -602,11 +602,17 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
 
     await page.locator('#prompt-textarea').click();
-    await page.waitForTimeout(900);
+    await page.waitForFunction(
+      () => window.__paiComposeAssistRequests?.length >= 1,
+      null,
+      { timeout: 6000 },
+    );
     assert.equal(
-      await page.evaluate(() => window.__paiComposeAssistRequests?.length || 0),
-      0,
-      'focus alone must not request Compose Assist',
+      await page.evaluate(
+        () => window.__paiComposeAssistRequests[0].assistIntent,
+      ),
+      'draft_compose',
+      'Web AI empty focus should request Draft Compose',
     );
     await page
       .locator('#prompt-textarea')
@@ -614,33 +620,34 @@ async function main() {
     await page.waitForTimeout(900);
     assert.equal(
       await page.evaluate(() => window.__paiComposeAssistRequests?.length || 0),
-      0,
-      'input changes must not request Compose Assist before blur',
+      1,
+      'input changes must not request Draft Refine before blur',
     );
     await blurComposer(page);
     await page.waitForFunction(
-      () => window.__paiComposeAssistRequests?.length >= 1,
+      () => window.__paiComposeAssistRequests?.length >= 2,
       null,
       { timeout: 6000 },
     );
     const requests = await page.evaluate(
       () => window.__paiComposeAssistRequests,
     );
-    assert.equal(requests[0].contextType, 'web_agent_prompt');
-    assert.equal(requests[0].draftText, 'Factory AI rollout status prompt');
-    assert.equal(requests[0].sourceTypes.includes('chatgpt'), false);
-    assert.ok(requests[0].sourceTypes.includes('markdown'));
-    assert.ok(requests[0].sourceTypes.includes('reflection'));
-    assert.ok(requests[0].sourceTypes.includes('reflection_thread'));
-    assert.ok(requests[0].sourceTypes.includes('source_memory'));
-    assert.ok(requests[0].sourceTypes.includes('calendar'));
+    assert.equal(requests[1].assistIntent, 'draft_refine');
+    assert.equal(requests[1].contextType, 'web_agent_prompt');
+    assert.equal(requests[1].draftText, 'Factory AI rollout status prompt');
+    assert.equal(requests[1].sourceTypes.includes('chatgpt'), false);
+    assert.ok(requests[1].sourceTypes.includes('markdown'));
+    assert.ok(requests[1].sourceTypes.includes('reflection'));
+    assert.ok(requests[1].sourceTypes.includes('reflection_thread'));
+    assert.ok(requests[1].sourceTypes.includes('source_memory'));
+    assert.ok(requests[1].sourceTypes.includes('calendar'));
     await page.locator('#prompt-textarea').click();
     await blurComposer(page);
     await page.waitForTimeout(300);
     assert.equal(
       await page.evaluate(() => window.__paiComposeAssistRequests.length),
-      1,
-      'the same contextKey + draftRevision must only request once',
+      2,
+      'the same contextKey + draftRevision + intent must only request once',
     );
 
     const controlsBeforeClick = await page.evaluate(() => ({
@@ -842,7 +849,7 @@ async function main() {
     assert.equal(
       await page.evaluate(() => window.__paiComposeAssistRequests.length),
       0,
-      'rewrite requests must also wait for blur',
+      'rewrite Draft Refine requests must also wait for blur',
     );
     await blurComposer(page);
     await page.locator('.pai-composer-guard-icon-button').waitFor({
@@ -1349,7 +1356,9 @@ async function main() {
     await page.waitForFunction(
       () =>
         window.__paiStorageState?.envConfig
-          ?.COMPOSER_GUARD_SURFACE_CONFIDENCE_THRESHOLDS?.chatgpt > 0.78,
+          ?.COMPOSER_GUARD_SURFACE_CONFIDENCE_THRESHOLDS?.[
+          'chatgpt:draft_refine'
+        ] > 0.72,
       null,
       { timeout: 3000 },
     );
@@ -1367,7 +1376,7 @@ async function main() {
       .then((handle) => handle.jsonValue());
     assert.match(
       updatedFeedbackReceiptText,
-      /调阈已保存：ChatGPT 场景阈值 0\.780 -> 0\.802/,
+      /调阈已保存：ChatGPT 场景阈值 0\.720 -> 0\.752/,
     );
     assert.match(updatedFeedbackReceiptText, /只影响这个 surface/);
     const thresholdState = await page.evaluate(
@@ -1375,9 +1384,11 @@ async function main() {
     );
     assert.equal(thresholdState.COMPOSER_GUARD_CONFIDENCE_THRESHOLD, 0.78);
     assert.equal(
-      thresholdState.COMPOSER_GUARD_SURFACE_CONFIDENCE_THRESHOLDS.chatgpt,
-      0.802,
-      'rejecting a Web AI suggestion should only raise the ChatGPT surface threshold',
+      thresholdState.COMPOSER_GUARD_SURFACE_CONFIDENCE_THRESHOLDS[
+        'chatgpt:draft_refine'
+      ],
+      0.752,
+      'rejecting a Web AI Draft Refine suggestion should only raise the ChatGPT refine threshold',
     );
     await page
       .locator('#prompt-textarea')

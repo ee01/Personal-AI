@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机命中：`docs/features/index.md` -> Jira Automation Import / `secret value 脱敏`
+- 随机命中：`docs/index.md` -> Jira Automation Import / `secret value 脱敏`
 - 当前文档：`docs/features/jira_automation_import.md`
 - Reminder：本机 Reminders 可访问，但没有 `Personal AI` 列表；本轮没有可合并或可完成的 Reminder item。
 

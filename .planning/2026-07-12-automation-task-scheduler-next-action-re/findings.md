@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Follow the recurring `docs/features/index.md` sweep: choose one feature, verify docs against code, research comparable products/papers, find and implement a low-decision improvement, update docs, run strong focused validation, and close relevant Reminders.
+- Follow the recurring `docs/index.md` sweep: choose one feature, verify docs against code, research comparable products/papers, find and implement a low-decision improvement, update docs, run strong focused validation, and close relevant Reminders.
 - Source feature: `Task Scheduler 状态 API` in `docs/features/task_scheduler_api.md`.
 - Relevant source files found so far: `src/popup.tsx`, `src/services/TaskScheduler.ts`, `src/services/taskSchedulerDefinitions.ts`, `tools/verify-task-scheduler-api.ts`, and `tools/verify-task-scheduler-popup-filters-e2e.mjs`.
 

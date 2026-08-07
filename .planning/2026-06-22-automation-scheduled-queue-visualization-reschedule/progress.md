@@ -2,7 +2,7 @@
 
 ## 2026-06-22T06:02:06Z
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and random-loop memory guidance.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and random-loop memory guidance.
 - Checked Reminders list names; `Personal AI` list is absent.
 - Rerolled away from a very recent Message Reaction/Snooze target.
 - Selected `队列可视化与改期建议` under Scheduled Messages.

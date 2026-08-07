@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` says `暂无。`, so there is no carry-over verification item.
 - Recent automation memory already covered Agent Thinking, Topic Messages, Agent Workflow, Rehearsal, Doubao, Action Queue, Coverage, Relationship Radar, Scheduled Messages, Task Scheduler, Memory Capture, and Message Reaction; this run avoids those exact recent families.
-- Random eligible selection chose `记忆时间轴`, with source document `docs/features/memory_system.md`.
+- Random eligible selection chose `记忆时间轴`, with source document `docs/memory_system.md`.
 - Local Reminder lists are: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`. No `Personal AI` list is visible.
 - The worktree is already broadly dirty. Keep this run scoped to timeline files, docs, and this planning folder.
 

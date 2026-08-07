@@ -2,7 +2,7 @@
 
 ## 2026-06-14
 
-- Read `AGENT.md`, the automation memory fallback at `/Users/Esone/.codex/automations/automation/memory.md`, memory-loop guidance, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, the automation memory fallback at `/Users/Esone/.codex/automations/automation/memory.md`, memory-loop guidance, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Checked local Reminders through AppleScript; no visible `Personal AI` list exists, so no Reminder item is available for this run.
 - Randomly selected `豆包互联 / Doubao Bridge`, then inspected `docs/features/doubao_bridge.md`, Desktop App Explorer source-card UI, revoke code, and `desktop-app/scripts/doubao-source-toggle-gating-check.mjs`.
 - Reviewed current product/research references: OpenAI Memory FAQ, Claude memory import/export help, and Eywa provenance-grounded memory.

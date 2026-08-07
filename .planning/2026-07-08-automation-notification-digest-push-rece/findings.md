@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- User asked for a random `docs/features/index.md` sweep: inspect code/docs, research comparable products and papers, check Reminders, plan first, implement, update docs, and run the strongest practical verification.
+- User asked for a random `docs/index.md` sweep: inspect code/docs, research comparable products and papers, check Reminders, plan first, implement, update docs, and run the strongest practical verification.
 - Repository workflow requires `AGENT.md` first, `docs/progressing/to-verify.md`, automation memory, Reminder check, then a bounded feature improvement and focused verifier/E2E.
 - Current `docs/progressing/to-verify.md` is empty.
 - `.planning/.active_plan` pointed at a previous User Profile run and was stale.

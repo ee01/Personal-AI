@@ -28,7 +28,21 @@ npm run eval:cron
 memory-service/node_modules/.bin/tsx tools/eval-memory-abilities.ts \
   --endpoint http://10.32.56.212:3210/api/v1/ask --user esone.qiu
 # add --update-baseline to refresh evals/.baseline/memory-abilities.json
+
+# Passive webpage analysis contract eval (synthetic, no external model call)
+npm run eval:passive-webpage-analysis
 ```
+
+### Passive webpage analysis contract eval (standalone)
+
+`tools/eval-passive-webpage-analysis.ts` runs the blocker, decision-chat,
+static-shell, and strict-skip fixtures under
+`evals/cases/passive-webpage-analysis/cases.jsonl`. It checks that runtime
+normalization keeps only facts/entities with direct page evidence, enforces the
+empty `skip` contract, and does not let unsupported context entities or
+notification flags survive. It is deliberately synthetic and does not call a
+live provider; provider/model quality still needs a controlled live comparison
+when the configured model or prompt version changes.
 
 ### Memory Abilities benchmark (standalone)
 

@@ -13,7 +13,7 @@
 - Started inspecting Today Pilot docs, backend service, UI, and verifier/test surfaces.
 - Recorded Microsoft Plan My Day, Gemini Daily Brief, and notification-management research references in findings.
 - Implemented visible selected-count recalculation in `DayPilotRepository`, Today Pilot home, and popup scope receipt.
-- Updated `docs/features/today_pilot.md`, `docs/features/index.md`, backend test assertions, and Today Pilot E2E assertions.
+- Updated `docs/features/today_pilot.md`, `docs/index.md`, backend test assertions, and Today Pilot E2E assertions.
 - Verification passed: `npm --prefix memory-service test -- --run src/__tests__/api-day-pilot.test.ts` (21 tests).
 - Verification passed: `npm start` first successful webpack compile; watcher stopped with Ctrl-C.
 - Verification passed: `npm run verify:today-pilot-home:e2e`.

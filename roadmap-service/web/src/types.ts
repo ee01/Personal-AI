@@ -1,6 +1,28 @@
 export type ActorSource = 'creator' | 'extension' | 'anonymous';
 export type ViewMode = 'gantt' | 'resource';
 export type ResWindow = '2w' | 'all';
+export type MarkerKind = 'phase' | 'dep';
+export type PhaseKind = 'design' | 'stage' | 'production' | 'custom';
+export type EtaSource = 'jira' | 'manual';
+export type RulerMode = 'release' | 'month';
+export type ReleaseFilterMode = 'all' | 'major' | 'custom';
+
+export interface ReleaseFilter {
+  mode: ReleaseFilterMode;
+  pattern: string;
+}
+
+export interface ReleaseSheetConfig {
+  url: string;
+  spreadsheetId: string;
+  sheetName: string;
+  range: string;
+  splitPhase: string;
+  showPhases: string[];
+  releaseFilter?: ReleaseFilter | null;
+  rows: Array<Record<string, unknown>>;
+  fetchedAt: string | null;
+}
 
 export interface TeamSummary {
   id: string;
@@ -26,6 +48,18 @@ export interface JqlHints {
   confident: boolean;
 }
 
+export interface RoadmapMarker {
+  id: string;
+  kind: MarkerKind;
+  phaseKind?: PhaseKind | null;
+  label: string;
+  date?: string | null;
+  jiraKey?: string | null;
+  etaSource?: EtaSource | null;
+  createdBy: string;
+  version: number;
+}
+
 export interface RoadmapSub {
   id: string;
   key?: string | null;
@@ -35,6 +69,8 @@ export interface RoadmapSub {
   start?: string | null;
   days?: number | null;
   temp: boolean;
+  /** Soft-hidden after cleanup; still counted in Backlog memory. */
+  cleared?: boolean;
   createdBy: string;
   version: number;
 }
@@ -59,6 +95,7 @@ export interface RoadmapItem {
   expanded: boolean;
   version: number;
   subs: RoadmapSub[];
+  markers: RoadmapMarker[];
 }
 
 export interface TeamMember {
@@ -92,6 +129,10 @@ export interface TeamSnapshot {
     version: number;
     createdBy: string;
     jqlHints: JqlHints;
+    /** Server can talk to Jira (PAT configured) for Target sync / import Tasks. */
+    jiraEnabled?: boolean;
+    /** Team-shared release-train ruler; null/absent = month ruler. */
+    releaseSheet?: ReleaseSheetConfig | null;
   };
   items: RoadmapItem[];
   members: TeamMember[];

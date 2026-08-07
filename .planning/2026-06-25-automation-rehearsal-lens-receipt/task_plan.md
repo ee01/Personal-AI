@@ -11,7 +11,7 @@ Phase 5
 ### Phase 1: Requirements & Discovery
 - [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, feature index, and random-loop memory notes
 - [x] Check Reminders list names
-- [x] Select a non-fresh random feature from `docs/features/index.md`
+- [x] Select a non-fresh random feature from `docs/index.md`
 - **Status:** completed
 
 ### Phase 2: Planning & Structure

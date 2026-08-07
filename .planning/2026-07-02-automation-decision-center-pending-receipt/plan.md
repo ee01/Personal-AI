@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机选中：`决策中心`
-- 文档：`docs/features/memory_system.md`
+- 文档：`docs/memory_system.md`
 - 主要代码：`src/modals/components/DecisionCenter.vue`
 - 验证：`tools/verify-decision-center-e2e.mjs`
 
@@ -30,7 +30,7 @@
    - 给第一个 `answer` 请求加可控延迟。
    - 点击 `批准执行` 后先断言 `正在提交决策` 回执可见，再放行服务端响应。
    - 给待观察 `state` 请求加可控延迟，断言 `正在排入只读查证` 回执可见。
-3. 更新 `docs/features/memory_system.md`。
+3. 更新 `docs/memory_system.md`。
    - 在 Confirm Requests 当前实现特征里补充提交中等待期的真实边界。
 
 ## 不做

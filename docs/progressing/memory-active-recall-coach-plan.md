@@ -477,11 +477,11 @@ evals/workflows/memory-active-recall-coach/experience.md
 
 完成代码实现后，需要把关键点维护进正式功能文档：
 
-- `docs/features/memory_system.md`：新增 Active Recall Coach 在记忆系统里的位置、表、调度边界和 `mastery_only` 写入边界。
+- `docs/memory_system.md`：新增 Active Recall Coach 在记忆系统里的位置、表、调度边界和 `mastery_only` 写入边界。
 - `docs/features/today_pilot.md`：说明 Today / Meeting Prep 如何展示 `90 秒回忆`，以及不创建每日学习任务的原则。
 - `docs/features/memory_lens.md`：说明 `复习 1 题` chip 的触发、显示上限、答案折叠和反馈。
 - `docs/features/memory_capture.md` 或 Source Memory 相关文档：如果 Source Detail 支持显式生成卡片，需要记录来源和 privacy 策略。
-- `docs/features/index.md`：新增小功能点索引。
+- `docs/index.md`：新增小功能点索引。
 - 如果桌面端 Quick Ask / menubar 也承载这类入口，再在 `desktop-app/docs/features/` 下新增或合并一个简短文档，说明桌面端只展示卡片和 mastery receipt，不本地复制完整敏感来源。
 
 ## 风险和对策

@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import { copyTextToClipboard, esc, initials } from '../composables/useGeometry';
+import SyncTicker from './SyncTicker.vue';
 
 const state = useRoadmapState();
 const teamOpen = ref(false);
@@ -33,6 +34,8 @@ async function shareLink() {
 
   let url = '';
   try {
+    // Keep expand/q/view in the address bar so the shared link mirrors this view.
+    state.syncUrl();
     const token = await state.api.shareTeam(state.teamId.value);
     const p = new URLSearchParams(location.search);
     p.set('team', state.teamId.value);
@@ -133,14 +136,14 @@ document.addEventListener('click', (e) => {
 
     <div class="top-spacer" />
 
-    <div
-      class="presence"
-      data-tip="在线协作成员：草稿任务与拖动实时同步给所有人"
-    >
+    <SyncTicker />
+
+    <div class="presence">
       <span
         v-for="p in (state.snapshot.value?.presence || []).slice(0, 5)"
         :key="p.clientId"
         class="avatar"
+        :data-tip="p.name + (p.clientId === state.api.clientId ? '（你）' : '')"
         :style="{
           background:
             state.snapshot.value?.members.find((m) => m.name === p.name)
@@ -149,7 +152,10 @@ document.addEventListener('click', (e) => {
       >
         {{ initials(p.name) }}
       </span>
-      <span class="live-pill">
+      <span
+        class="live-pill"
+        data-tip="在线协作成员：草稿任务与拖动实时同步给所有人"
+      >
         <span class="live-dot" />
         LIVE
       </span>

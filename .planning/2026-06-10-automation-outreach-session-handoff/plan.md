@@ -3,7 +3,7 @@
 ## Target
 
 - Feature index pick: `主动询问会话管理`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main UI: `src/modals/components/OutreachSessions.vue`
 - Existing proof: `tools/verify-outreach-sessions-e2e.mjs`
 
@@ -29,5 +29,5 @@
    - terminal retryable states: retry creates a new session cycle and keeps audit trail
    - resolved / cancelled: no automatic re-send
 3. Extend `verify-outreach-sessions-e2e.mjs` to assert waiting, message-reaction, and retry receipts.
-4. Update `docs/features/memory_system.md` with the list receipt behavior.
+4. Update `docs/memory_system.md` with the list receipt behavior.
 5. Validate with targeted Outreach E2E, first successful `npm start` compile, and `git diff --check`.

@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Selected feature from `docs/features/index.md`: `渠道投递回执`.
+- Selected feature from `docs/index.md`: `渠道投递回执`.
 - Capability: Notification Center.
 - Source document: `docs/features/notification_center.md`.
 - Local Reminders list scan returned visible lists, but none named `Personal AI`.

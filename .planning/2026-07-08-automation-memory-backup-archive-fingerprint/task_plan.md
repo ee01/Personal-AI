@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `记忆导入/导出/备份`
-- Source docs: `docs/features/memory_system.md`, with Coverage Map recovery UI in `docs/features/memory_coverage_map.md`
+- Source docs: `docs/memory_system.md`, with Coverage Map recovery UI in `docs/features/memory_coverage_map.md`
 - Runtime surfaces: `/api/v1/export`, `/api/v1/import`, Coverage Map backup download / restore drawer
 
 ## Plan

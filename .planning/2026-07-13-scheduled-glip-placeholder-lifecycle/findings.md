@@ -12,5 +12,5 @@
 - 5 分钟 alarm 只是 background 的缓存同步节奏；卡片删除不看 Glip DOM 中是否已经出现相同正文，也不看计划时间是否已到。新真实消息到来只会触发重新读取当前本地缓存，因此成功日志尚未进入缓存时仍会继续显示。
 - 安全兜底是到期后保留 6 小时再按时间裁剪；它防止缺失/无法读取 Logs 时无限残留，但也意味着日志匹配失败时可能显示很久。
 - 完整视觉规格在 `docs/progressing/glip-compose-scheduled-pending-animation-demo.html`：输入框闹钟约 723-730 行、虚线未来卡约 665-691 行、视觉含义约 270-348/742-744 行；该 demo 没有真实发送后消失规则。
-- canonical `docs/features/scheduled_messages_manager.md` 仅在未来规划中同时写 `[ ] RingCentral 聊天界面集成` 与 `[x] 一键定时回复按钮`（约 866-867 行），状态有歧义；`docs/features/index.md` 也没有这两个当前能力条目。
+- canonical `docs/features/scheduled_messages_manager.md` 仅在未来规划中同时写 `[ ] RingCentral 聊天界面集成` 与 `[x] 一键定时回复按钮`（约 866-867 行），状态有歧义；`docs/index.md` 也没有这两个当前能力条目。
 - 文档收口采用窄删除范围：`glip-compose-scheduled-pending-animation-demo.html` 是本能力唯一直接 progressing 产物；`schedule-messages-potential-requirements.md` 是覆盖多种 Glip 场景的大清单，`scheduled-messages-channel-activation-*` 是独立的通道激活方案，均不应因本次收口被误删。

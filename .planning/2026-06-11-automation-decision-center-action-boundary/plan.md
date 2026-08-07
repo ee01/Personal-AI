@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `决策中心` in `docs/features/memory_system.md`
+- Feature: `决策中心` in `docs/memory_system.md`
 - Surface: `memory-exploring.html#/decisions`
 
 ## Research Notes

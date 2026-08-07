@@ -18,5 +18,5 @@
 1. Keep the existing mission-level `操作前回执`, but add button-level `title` and `aria-label` copy for `完成/从首页移除`, `稍后 6h`, `有用`, `不准确`, `复制上下文包`, `打开详情`, and `不再提醒同类`.
 2. Make OpenClaw execution-card button copy explicit that `从首页移除` is not approve/retry/execute.
 3. Update static verifier and E2E assertions so this does not regress into generic button labels.
-4. Update `docs/features/today_pilot.md` and `docs/features/index.md` to describe the button-level hover/reader boundary without adding unnecessary implementation detail.
+4. Update `docs/features/today_pilot.md` and `docs/index.md` to describe the button-level hover/reader boundary without adding unnecessary implementation detail.
 5. Run `verify:day-pilot-home`, `npm start` to first successful compile, `verify:today-pilot-home:e2e`, scoped `git diff --check`, and `verify:i18n`.

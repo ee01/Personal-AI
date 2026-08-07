@@ -2,8 +2,8 @@
 
 ## Target
 
-- Random feature: `动作队列` from `docs/features/index.md`.
-- Source of truth: `docs/features/memory_system.md`.
+- Random feature: `动作队列` from `docs/index.md`.
+- Source of truth: `docs/memory_system.md`.
 - Main implementation: `src/modals/components/ActionQueue.vue`.
 - Existing browser proof: `tools/verify-action-queue-e2e.mjs`.
 

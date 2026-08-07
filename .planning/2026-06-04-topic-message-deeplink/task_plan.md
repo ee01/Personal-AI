@@ -10,7 +10,7 @@ Complete
 
 ### Phase 1: Requirements & Discovery
 - [x] Read automation memory, repo rules, feature index, and planning state
-- [x] Randomly select a feature from `docs/features/index.md`
+- [x] Randomly select a feature from `docs/index.md`
 - [x] Check local Reminders `Personal AI` list
 - [x] Inspect Topic Messages docs, code, tests, and current dirty diffs
 - **Status:** complete
@@ -46,7 +46,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: `主题详情深链定位` | Randomly selected from `docs/features/index.md`. |
+| Selected feature: `主题详情深链定位` | Randomly selected from `docs/index.md`. |
 | No Reminder incorporation | Reminders exposed lists such as `We`, `Next actions`, and `Tasks`, but no visible `Personal AI` list. |
 | Improvement slice: deep-link identity fallback | It fixes a concrete navigation blocker without changing product policy or adding review burden. |
 | Preserve unrelated dirty worktree | Current repo has broad pre-existing modifications; keep this run scoped to Topic Messages and automation/planning files. |

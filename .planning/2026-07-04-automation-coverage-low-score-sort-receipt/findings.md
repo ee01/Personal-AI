@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`, avoiding the freshest repeated targets where possible.
+- Pick a random feature from `docs/index.md`, avoiding the freshest repeated targets where possible.
 - Ensure docs are current enough, scan code for defects or unreasonable UX, and implement low-decision improvements.
 - Check local Reminders `Personal AI` list and include related feedback if present.
 - Search current products and papers for constructive guidance.

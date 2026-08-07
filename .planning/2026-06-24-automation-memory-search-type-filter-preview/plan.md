@@ -4,7 +4,7 @@
 
 - 随机目标：`记忆搜索结果页`
 - 所属能力：Memory Exploring / Memory Service
-- 主文档：`docs/features/memory_system.md`
+- 主文档：`docs/memory_system.md`
 
 ## 当前状态
 
@@ -24,11 +24,11 @@
 2. 在按钮 `title` / `aria-label` 中说明这是本地筛选，不会重新召回、重排、写反馈或隐藏服务端结果。
 3. 把提示格式抽到 `searchResultPresentation.ts`，用现有 `verify-memory-search-results` 覆盖边界文本。
 4. 更新 `verify-memory-search-scope-e2e.mjs`，证明真实扩展页里按钮点击前和点击后都有正确预览。
-5. 更新 `docs/features/memory_system.md` 和 `docs/features/index.md` 的简要描述，避免文档落后。
+5. 更新 `docs/memory_system.md` 和 `docs/index.md` 的简要描述，避免文档落后。
 
 ## 验证
 
 - `npm run verify:memory-search-results`
 - `npm start` 首次 successful compile 后停止
 - `npm run verify:memory-search-scope:e2e`
-- `git diff --check -- src/modals/components/SearchResultPage.vue src/modals/searchResultPresentation.ts tools/verify-memory-search-results.ts tools/verify-memory-search-scope-e2e.mjs docs/features/memory_system.md docs/features/index.md .planning/2026-06-24-automation-memory-search-type-filter-preview/plan.md`
+- `git diff --check -- src/modals/components/SearchResultPage.vue src/modals/searchResultPresentation.ts tools/verify-memory-search-results.ts tools/verify-memory-search-scope-e2e.mjs docs/memory_system.md docs/index.md .planning/2026-06-24-automation-memory-search-type-filter-preview/plan.md`

@@ -16,7 +16,7 @@ Improve the Topic Messages `主题稍后处理 / 主题静音` user path so a us
 ## Plan
 
 1. Context and selection - complete
-   - Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+   - Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md`.
    - Checked Reminders list names; `Personal AI` list is absent.
    - Selected Topic Messages defer/mute from the random candidate sample.
 

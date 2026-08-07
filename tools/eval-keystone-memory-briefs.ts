@@ -181,7 +181,11 @@ async function composeAutomatically(
       item.timestamp,
     );
   }
-  const result = await new KeystoneBriefComposerService(db).run({ maxBriefs: 2 });
+  const result = await new KeystoneBriefComposerService(db, async (input) => ({
+    summary: input.summary,
+    claims: input.claims,
+    openQuestions: input.openQuestions,
+  })).run({ maxBriefs: 2 });
   const brief = service.getByBriefKey(caseItem.sampleContext.brief.briefKey);
   if (!brief) {
     throw new Error(`automatic composer did not create expected brief: ${JSON.stringify(result)}`);

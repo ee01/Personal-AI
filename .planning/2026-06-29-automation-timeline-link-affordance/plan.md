@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 随机目标：`时间轴/搜索安全跳转`，source of truth 是 `docs/features/memory_system.md`。
+- 随机目标：`时间轴/搜索安全跳转`，source of truth 是 `docs/memory_system.md`。
 - 首次随机命中 `记忆搜索结果页`，但 2026-06-28 已做过成功空结果回执；本轮 reroll 到时间轴安全跳转。
 - Reminder：本机 Reminders 可读，但没有 `Personal AI` 列表；无相关条目可纳入或完成。
 
@@ -35,5 +35,5 @@
    - 没有目标：说明这是只读卡片和恢复路径。
 2. 根据安全状态调整卡片 cursor / class，避免 blocked/no-target 卡片看起来像直接打开链接。
 3. 不改后端、不放宽安全策略、不复制 blocked raw URL。
-4. 更新 `docs/features/memory_system.md` 中时间轴安全跳转说明。
+4. 更新 `docs/memory_system.md` 中时间轴安全跳转说明。
 5. 扩展 `tools/verify-memory-timeline-e2e.mjs` 覆盖新 affordance，跑 focused verifier、`npm start` 首次成功编译、i18n 和 scoped diff check。

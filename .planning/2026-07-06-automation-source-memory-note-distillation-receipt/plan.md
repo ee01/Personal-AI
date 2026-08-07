@@ -23,7 +23,7 @@ The backend already supports `POST /source-memory/capsules/:id/note`, and that c
 2. Show a pending receipt immediately after submit, before Memory Service confirms the note, web signal, or distillation refresh.
 3. Replace pending with returned action/distillation receipts on success; show a no-confirmation failure receipt on error.
 4. Extend the existing webpage-memory E2E harness to open the source-memory detail page, update a note, assert pending/success/failure receipts, and keep API semantics unchanged.
-5. Update `docs/features/memory_capture.md` and `docs/features/index.md`.
+5. Update `docs/features/memory_capture.md` and `docs/index.md`.
 
 ## Verification plan
 

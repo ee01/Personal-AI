@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- User requested a recurring random feature sweep from `docs/features/index.md`: inspect current docs/code, research comparable products and papers, identify constructive improvements, implement bounded unfinished/low-decision work, optimize UX, test as fully as practical, and close completed Reminder ideas.
+- User requested a recurring random feature sweep from `docs/index.md`: inspect current docs/code, research comparable products and papers, identify constructive improvements, implement bounded unfinished/low-decision work, optimize UX, test as fully as practical, and close completed Reminder ideas.
 - Selected feature: `会前准备` under Today Pilot, documented in `docs/features/today_pilot.md`.
 - Reminder state: EventKit found `Personal AI` with 4 total items and 0 incomplete items, so no local feedback is available to incorporate or mark done.
 

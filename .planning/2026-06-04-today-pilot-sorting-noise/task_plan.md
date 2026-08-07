@@ -10,7 +10,7 @@ Phase 1
 
 ### Phase 1: Requirements & Discovery
 - [x] Read automation memory, repo rules, feature index, and previous planning state
-- [x] Randomly select a non-repeated feature from `docs/features/index.md`
+- [x] Randomly select a non-repeated feature from `docs/index.md`
 - [x] Check local Reminders `Personal AI` list for relevant feedback
 - [x] Inspect current Today Pilot docs, code, tests, and dirty diffs
 - [x] Document discoveries in findings.md
@@ -48,7 +48,7 @@ Phase 1
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: `今天排序与噪声控制` | Randomly selected from `docs/features/index.md`, excluding the last-run Scheduled Messages feature to avoid immediate repetition. |
+| Selected feature: `今天排序与噪声控制` | Randomly selected from `docs/index.md`, excluding the last-run Scheduled Messages feature to avoid immediate repetition. |
 | Use isolated plan directory | Root planning files contain the previous completed Scheduled Messages automation run and should not be overwritten. |
 | Improvement slice: selected-evidence stats | This fixes a concrete UX ambiguity in ranking/noise summary without requiring new user decisions or a new review queue. |
 | No Reminder completion | The local Reminders app has no visible `Personal AI` list, so there is nothing to mark done in this run. |

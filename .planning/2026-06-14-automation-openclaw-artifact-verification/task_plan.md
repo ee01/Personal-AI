@@ -15,8 +15,8 @@ Goal: improve the randomly selected `OpenClaw 外部委派` feature by removing 
 
 ## Decisions
 
-- Selected feature: `OpenClaw 外部委派` from `docs/features/index.md`.
-- Source doc: `docs/features/memory_system.md`.
+- Selected feature: `OpenClaw 外部委派` from `docs/index.md`.
+- Source doc: `docs/memory_system.md`.
 - Local Reminders list scan did not show `Personal AI`, so no Reminder item can be incorporated or marked done in this run.
 - Existing broad dirty worktree is pre-existing. Keep edits scoped to `ActionQueue.vue`, its E2E verifier, the feature doc, and this planning folder.
 - Concrete improvement: when OpenClaw returns an artifact that fails evidence validation, Action Queue must not label it as `可验证 artifact`.
@@ -33,4 +33,4 @@ Goal: improve the randomly selected `OpenClaw 外部委派` feature by removing 
 
 - `npm start` reached first successful webpack dev compile, then watch was stopped with Ctrl-C.
 - `npm run verify:action-queue:e2e`
-- `git diff --check -- src/modals/components/ActionQueue.vue tools/verify-action-queue-e2e.mjs docs/features/memory_system.md .planning/2026-06-14-automation-openclaw-artifact-verification/task_plan.md .planning/2026-06-14-automation-openclaw-artifact-verification/findings.md .planning/2026-06-14-automation-openclaw-artifact-verification/progress.md`
+- `git diff --check -- src/modals/components/ActionQueue.vue tools/verify-action-queue-e2e.mjs docs/memory_system.md .planning/2026-06-14-automation-openclaw-artifact-verification/task_plan.md .planning/2026-06-14-automation-openclaw-artifact-verification/findings.md .planning/2026-06-14-automation-openclaw-artifact-verification/progress.md`

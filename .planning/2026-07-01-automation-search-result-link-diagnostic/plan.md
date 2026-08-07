@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机选中：`时间轴/搜索安全跳转`
-- 所属文档：`docs/features/memory_system.md`
+- 所属文档：`docs/memory_system.md`
 - 当前范围：Memory Exploring 搜索结果与时间轴共用的链接安全呈现。
 
 ## 现状
@@ -24,7 +24,7 @@
 1. 在 `searchResultPresentation.ts` 增加搜索结果安全诊断 builder 与复制成功/失败回执。
 2. 在 `SearchResultPage.vue` 为被拦截或无目标的搜索结果显示 `复制安全诊断`，诊断不包含原始 URL 或内部 route。
 3. 修正决策证据 `在记忆中查看` 的点击参数，复用同一安全跳转函数。
-4. 更新 `docs/features/memory_system.md` 的当前行为描述。
+4. 更新 `docs/memory_system.md` 的当前行为描述。
 5. 用纯函数验证和 E2E 验证诊断内容、无敏感 URL 泄漏、按钮可见和复制回执。
 
 ## 非目标

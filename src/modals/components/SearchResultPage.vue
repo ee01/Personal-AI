@@ -273,6 +273,73 @@
         </div>
 
         <div
+          v-if="askAttributionReceipt"
+          class="answer-memory-receipt answer-memory-receipt-info claim-attribution-receipt"
+          role="note"
+          :aria-label="askAttributionReceiptBoundary"
+          :title="askAttributionReceiptBoundary"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">归属回执</span>
+            <span class="answer-memory-receipt-detail">
+              {{ askAttributionReceipt.summary }}
+            </span>
+            <details
+              v-if="askAttributionReceipt.claims?.length"
+              class="claim-attribution-details"
+            >
+              <summary>查看依据或纠正归属</summary>
+              <div
+                v-for="claim in askAttributionReceipt.claims"
+                :key="`${claim.claimId}:${claim.revision}`"
+                class="claim-attribution-item"
+              >
+                <div class="claim-attribution-item-copy">
+                  <strong>{{ claim.displayLabel }}</strong>
+                  <span>{{ claim.consequence }}</span>
+                  <q>{{ claim.excerpt }}</q>
+                </div>
+                <div
+                  v-if="claim.correctionAllowed"
+                  class="claim-attribution-actions"
+                  aria-label="纠正这条记忆的内容归属"
+                >
+                  <button
+                    v-for="action in claimCorrectionActions"
+                    :key="action.value"
+                    type="button"
+                    :disabled="claimCorrectionPending(claim.claimId)"
+                    @click="submitClaimCorrection(claim, action.value)"
+                  >
+                    {{ action.label }}
+                  </button>
+                </div>
+                <p
+                  v-if="claimCorrectionState[claim.claimId]"
+                  :class="[
+                    'claim-attribution-correction-state',
+                    `claim-attribution-correction-${claimCorrectionState[claim.claimId].status}`,
+                  ]"
+                >
+                  {{ claimCorrectionState[claim.claimId].message }}
+                </p>
+              </div>
+            </details>
+          </div>
+          <div
+            v-if="askAttributionReceiptMetrics.length"
+            class="answer-memory-receipt-metrics"
+          >
+            <span
+              v-for="metric in askAttributionReceiptMetrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
           v-if="answerMemoryReceipt"
           :class="[
             'answer-memory-receipt',
@@ -1166,6 +1233,8 @@ import type {
   MemoryFeedbackAction,
   MemoryFeedbackTargetType,
   RecallScope,
+  ClaimAttributionReceiptItem,
+  MemoryClaimCorrectionRequest,
 } from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
@@ -1361,6 +1430,21 @@ const feedbackFailureByResultKey = ref<Record<string, SearchFeedbackFailure>>(
   {},
 );
 const searchFailureReceipt = computed(() => store.searchFailureReceipt);
+const claimCorrectionState = ref<
+  Record<
+    string,
+    { status: 'pending' | 'success' | 'error'; message: string }
+  >
+>({});
+const claimCorrectionActions: Array<{
+  value: MemoryClaimCorrectionRequest['correction'];
+  label: string;
+}> = [
+  { value: 'not_my_view', label: '不是我的观点' },
+  { value: 'reported_speech', label: '这是转述' },
+  { value: 'hypothesis', label: '这是建议或假设' },
+  { value: 'my_decision', label: '这是我的决定' },
+];
 
 const renderedAnswer = computed(() => {
   const ans = searchContext.value.askResult?.answer;
@@ -1376,6 +1460,81 @@ const answerMemoryReviewMetrics = computed(() =>
 );
 
 const askScopeReceipt = computed(() => searchContext.value.askResult?.scopeReceipt);
+
+const askAttributionReceipt = computed(
+  () => searchContext.value.askResult?.attributionReceipt,
+);
+
+const askAttributionReceiptMetrics = computed(() => {
+  const receipt = askAttributionReceipt.value;
+  if (!receipt) return [];
+  const count = (buckets: Array<{ count?: number }> | undefined) =>
+    (buckets || []).reduce((total, bucket) => total + (bucket.count || 0), 0);
+  const used = count(receipt.used);
+  const background = count(receipt.backgroundOnly);
+  const blocked = count(receipt.blocked);
+  return [
+    used > 0 ? `采用 ${used}` : '',
+    background > 0 ? `仅作背景 ${background}` : '',
+    blocked > 0 ? `未使用 ${blocked}` : '',
+    receipt.correctedCount > 0 ? `已纠正 ${receipt.correctedCount}` : '',
+  ].filter(Boolean);
+});
+
+const askAttributionReceiptBoundary = computed(
+  () =>
+    askAttributionReceipt.value?.boundary ||
+    '归属回执只影响 Personal AI 如何使用派生记忆，不修改原始消息或外部系统。',
+);
+
+const claimCorrectionPending = (claimId: string) =>
+  claimCorrectionState.value[claimId]?.status === 'pending';
+
+async function submitClaimCorrection(
+  claim: ClaimAttributionReceiptItem,
+  correction: MemoryClaimCorrectionRequest['correction'],
+) {
+  if (claimCorrectionPending(claim.claimId)) return;
+  claimCorrectionState.value[claim.claimId] = {
+    status: 'pending',
+    message: '正在更新派生归属…',
+  };
+  try {
+    const idempotencyKey =
+      (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : '') || `ask-claim-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const response = (await chromeAPI.sendMessage({
+      type: 'MEMORY_CLAIM_CORRECTION',
+      claimId: claim.claimId,
+      correction: {
+        correction,
+        expectedRevision: claim.revision,
+        source: 'ask_receipt',
+        idempotencyKey,
+      },
+    })) as any;
+    if (!response?.success) {
+      throw new Error(response?.error || 'claim_correction_failed');
+    }
+    claim.revision = response.result.revision;
+    claim.corrected = true;
+    claimCorrectionState.value[claim.claimId] = {
+      status: 'success',
+      message: response.result.rawSourceChanged === false
+        ? '已更新派生归属；原始消息未修改。'
+        : '归属已更新。',
+    };
+  } catch (error) {
+    claimCorrectionState.value[claim.claimId] = {
+      status: 'error',
+      message:
+        error instanceof Error
+          ? `未更新：${error.message}`
+          : '未更新，请稍后再试。',
+    };
+  }
+}
 
 const askScopeReceiptNote = computed(() => {
   const note = askScopeReceipt.value?.note;
@@ -4359,6 +4518,80 @@ const handleResultClick = (entity: any) => {
   border-radius: 0.375rem;
   background: rgba(15, 23, 42, 0.45);
   border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.claim-attribution-receipt {
+  align-items: flex-start;
+}
+
+.claim-attribution-details {
+  margin-top: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+}
+
+.claim-attribution-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #bfdbfe;
+}
+
+.claim-attribution-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding: 0.65rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.claim-attribution-item-copy {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.claim-attribution-item-copy strong {
+  color: #e0f2fe;
+}
+
+.claim-attribution-item-copy q {
+  color: #94a3b8;
+  font-style: normal;
+}
+
+.claim-attribution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.claim-attribution-actions button {
+  padding: 0.3rem 0.48rem;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(96, 165, 250, 0.25);
+  color: #dbeafe;
+  background: rgba(30, 64, 175, 0.16);
+  cursor: pointer;
+}
+
+.claim-attribution-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.claim-attribution-correction-state {
+  margin: 0;
+  font-size: 0.76rem;
+}
+
+.claim-attribution-correction-success {
+  color: #86efac;
+}
+
+.claim-attribution-correction-error {
+  color: #fca5a5;
 }
 
 .answer-structured {

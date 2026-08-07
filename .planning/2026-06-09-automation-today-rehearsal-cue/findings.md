@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Confirm the feature doc matches current code and update it if behavior changes.
 - Research adjacent product and paper guidance.
 - Check local Reminders for relevant `Personal AI` items; mark completed items done only if the list exists and items are actually incorporated.
@@ -36,6 +36,6 @@
 ## Resources
 
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/rehearsal.md`
 - `docs/features/today_pilot.md`

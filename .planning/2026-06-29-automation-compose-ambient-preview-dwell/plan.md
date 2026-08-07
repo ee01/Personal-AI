@@ -18,7 +18,7 @@
 1. 在 `ComposerGuardController` 增加预览 dwell 计时：hover 需要短暂停留后才调用 `rememberPreviewedAssist()`；focus 和锁定复核仍立即记录。
 2. 在清理路径取消未完成的 dwell 计时，避免旧 hover 在页面状态变化后补记候选。
 3. 扩展 ambient calibration E2E：快速 pointerover/pointerout 后发送不应产生 `sent_without_insert`；停留 hover 后发送仍应产生。
-4. 更新 `docs/features/compose_assist.md`，把“hover 预览”改成“实际停留/键盘聚焦预览”才进入被动 no-insert 校准。
+4. 更新 `docs/features/assist.md`，把“hover 预览”改成“实际停留/键盘聚焦预览”才进入被动 no-insert 校准。
 5. 验证：运行 ambient calibration E2E、`npm start` 首次成功编译、`npm run verify:i18n` 和 scoped `git diff --check`。
 
 ## 非目标

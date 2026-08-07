@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `决策中心` under Memory Service.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Main UI: `src/modals/components/DecisionCenter.vue`.
 - Existing proof: `tools/verify-decision-center-e2e.mjs`.
 
@@ -12,7 +12,7 @@
 - `AGENT.md`
 - `docs/progressing/to-verify.md` (`暂无。`)
 - `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - Local Reminders: Reminders is reachable, but there is no `Personal AI` list.
 
 ## External Scan

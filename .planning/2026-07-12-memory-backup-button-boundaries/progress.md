@@ -11,11 +11,11 @@
 - Confirmed `docs/progressing/to-verify.md` has no open carry-over items.
 - Randomly selected `记忆导入/导出/备份`.
 - Checked Reminders: EventKit found `Personal AI` with 4 total and 0 incomplete items.
-- Inspected `docs/features/memory_system.md`, `memory-service/src/routes/import.ts`, `memory-service/src/routes/export.ts`, `memory-service/src/core/MemoryBackupService.ts`, `src/modals/components/MemoryCoveragePage.vue`, `src/services/MemoryServiceClient.ts`, and `tools/verify-memory-coverage-e2e.mjs`.
+- Inspected `docs/memory_system.md`, `memory-service/src/routes/import.ts`, `memory-service/src/routes/export.ts`, `memory-service/src/core/MemoryBackupService.ts`, `src/modals/components/MemoryCoveragePage.vue`, `src/services/MemoryServiceClient.ts`, and `tools/verify-memory-coverage-e2e.mjs`.
 - Researched current export/data-portability/backup-recovery references and decided on a button-level UX/accessibility improvement.
 - Implemented dynamic `title` / `aria-label` boundaries on the top-level `记忆备份` button and drawer `备份 zip` mode button.
 - Extended `tools/verify-memory-coverage-e2e.mjs` to assert export-only, no-restore/no-write, prior-result, file-picker, recognized-backup, and dry-run-before-write button boundaries.
-- Updated `docs/features/memory_system.md` and the `记忆导入/导出/备份` row in `docs/features/index.md`.
+- Updated `docs/memory_system.md` and the `记忆导入/导出/备份` row in `docs/index.md`.
 - Updated automation memory at `/Users/Esone/.codex/automations/automation/memory.md`.
 
 ### Test Results

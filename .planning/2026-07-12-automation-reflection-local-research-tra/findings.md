@@ -1,12 +1,12 @@
 # Findings & Decisions
 
 ## Requirements
-- User asked for a random `docs/features/index.md` feature sweep: verify docs freshness, research similar products/papers, check Reminders, create a plan first, implement, test as fully as practical, and mark completed Reminder ideas done if used.
+- User asked for a random `docs/index.md` feature sweep: verify docs freshness, research similar products/papers, check Reminders, create a plan first, implement, test as fully as practical, and mark completed Reminder ideas done if used.
 - `docs/progressing/to-verify.md` says `暂无`.
 - EventKit found `Personal AI` Reminders with 4 total items and 0 incomplete items; no Reflection-related Reminder item was available to incorporate or complete.
 
 ## Repository Findings
-- Feature selected: `反思本地研究补查` in `docs/features/index.md`, source of truth `docs/features/memory_system.md`.
+- Feature selected: `反思本地研究补查` in `docs/index.md`, source of truth `docs/memory_system.md`.
 - Main UI: `src/modals/components/ReflectionThreadDetail.vue`.
 - Existing verifier: `tools/verify-reflection-research-e2e.mjs`.
 - Current page already shows `本轮研究范围`, summary pills, `研究证据采用回执`, pending request receipts, individual trace rows, and research evidence links.
@@ -34,7 +34,7 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
-- `docs/features/memory_system.md`
+- `docs/index.md`
+- `docs/memory_system.md`
 - `src/modals/components/ReflectionThreadDetail.vue`
 - `tools/verify-reflection-research-e2e.mjs`

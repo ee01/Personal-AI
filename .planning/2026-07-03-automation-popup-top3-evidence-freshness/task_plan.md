@@ -17,7 +17,7 @@ Goal: improve the selected `Popup Top 3` feature by making the Today Pilot popup
 
 | Decision | Rationale |
 | --- | --- |
-| Selected feature: `Popup Top 3` | Chosen from a random eligible `docs/features/index.md` sample while avoiding the freshest exact automation targets |
+| Selected feature: `Popup Top 3` | Chosen from a random eligible `docs/index.md` sample while avoiding the freshest exact automation targets |
 | Improvement slice: snapshot-basis receipt | The popup already says Top 3 is non-executing, but it does not expose generated/read freshness; this is a low-decision trust/UX improvement |
 | No Reminder item to close | EventKit found `Personal AI`, but all 4 items are completed historical Doubao / digest / sync feedback and unrelated to Popup Top 3 |
 

@@ -2,14 +2,14 @@
 
 ## 2026-07-09
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, `docs/progressing/to-verify.md`, the stale root planning files, and the planning-with-files skill instructions.
+- Read `AGENT.md`, automation memory, `docs/index.md`, `docs/progressing/to-verify.md`, the stale root planning files, and the planning-with-files skill instructions.
 - Checked local Reminders through EventKit: `Personal AI` exists with 4 total items and 0 incomplete items.
 - Randomly selected `选中文字保存为资料记忆` after the first shell sampler failed because `shuf` is unavailable.
 - Created this isolated planning directory and set `.planning/.active_plan` to this run.
 - Inspected `docs/features/memory_capture.md`, `src/contentScriptWebIntelligence.ts`, `tools/verify-webpage-memory-detection.ts`, and `desktop-app/scripts/webpage-memory-detection-check.mjs`.
 - Searched comparable products/research: Readwise Reader, Obsidian Web Clipper, Hypothesis, Keeping Found Things Found, IBM/ACM RAG trust/transparency, and a RAG trustworthiness survey.
 - Chosen improvement: add a selected-text snapshot receipt to the selection-save review panel, then update verifier/E2E and docs.
-- Implemented the selection snapshot receipt in `src/contentScriptWebIntelligence.ts`, added static assertions, extended the webpage-memory E2E selected-text review assertions, and updated `docs/features/memory_capture.md` plus `docs/features/index.md`.
+- Implemented the selection snapshot receipt in `src/contentScriptWebIntelligence.ts`, added static assertions, extended the webpage-memory E2E selected-text review assertions, and updated `docs/features/memory_capture.md` plus `docs/index.md`.
 - Validation passed:
   - `npm run verify:webpage-memory-detection`
   - `node --check desktop-app/scripts/webpage-memory-detection-check.mjs`

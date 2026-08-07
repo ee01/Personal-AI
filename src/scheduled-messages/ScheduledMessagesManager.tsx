@@ -21,7 +21,15 @@ import { JiraRuleUpdater } from './JiraRuleUpdater';
 import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 import { jiraFetch } from '../jira';
-import { getGoogleAuthToken, getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  formatGoogleAuthFailure,
+  getGoogleAuthToken,
+  getGoogleAuthTokenResult,
+  getGoogleAuthTokenSilently,
+  getGoogleAuthTokenSilentlyResult,
+  isGoogleAuthRecoveryError,
+} from '../utils/googleAuth';
 import { getEnvConfig, getUserInfo } from '../utils';
 import {
   DEFAULT_TIMELINE_PROJECT,
@@ -85,6 +93,7 @@ import {
   getMemoryServiceClient,
   type RuntimeConfigResponse,
   type OutreachTemplateRuntimeStatusItem,
+  type AgentTaskRuntimeStatusItem,
 } from '../services/MemoryServiceClient';
 import {
   formatLocalScheduleDate,
@@ -118,11 +127,11 @@ import {
   type ScheduleQueueSlotSummary,
 } from './scheduleQueuePressure';
 import {
-  buildScheduleHealthTriageSummary,
   formatScheduleCompensationWindowReceipt,
   formatScheduleCompensationWindowReceiptDetail,
-  formatScheduleHealthIssueDiagnostic,
   formatScheduleHealthIssue,
+  formatScheduleHealthIssueMissedWindow,
+  formatScheduleHealthIssueSuggestedAction,
   formatScheduleHealthSummary,
   getScheduleCompensationWindowReceipt,
   getScheduleHealthIssue,
@@ -474,14 +483,7 @@ function buildRescheduleFailureNotice(input: RescheduleFailureNoticeInput): Conf
 }
 
 function formatScheduleHealthPendingReceipt(input: ScheduleHealthPendingReceipt): string {
-  const writeScope = input.clearsScheduleTime
-    ? '写入 Schedule_Date 并清空 Schedule_Time'
-    : '写入 Schedule_Date / Schedule_Time';
-  const laneText = input.executionLaneSummary
-    ? `；写入后${input.executionLaneSummary}`
-    : '';
-
-  return `改期写入中：来源健康告警；目标 Messages 行 ${input.messageId}；点击快照 ${input.label}；本次只处理「${input.topic}」，${writeScope}，其他健康告警未改；尚未确认发送、Logs 或 Jira 领取${laneText}。`;
+  return `写入中：改到 ${input.label}`;
 }
 
 function buildAppScriptUpgradeNotice(input: {
@@ -881,6 +883,18 @@ function getOutreachResult(message: ScheduledMessage): string {
   return message.Outreach_Result?.trim() || message.Outreach_Last_Result?.trim() || '';
 }
 
+function getAgentTaskPrompt(message: ScheduledMessage): string {
+  return message.Agent_Task_Prompt?.trim() || message.Content?.trim() || '';
+}
+
+function getAgentTaskResult(message: ScheduledMessage): string {
+  return message.Agent_Last_Result?.trim() || '';
+}
+
+function getAgentTaskEvidence(message: ScheduledMessage): string {
+  return message.Agent_Last_Evidence?.trim() || '';
+}
+
 function normalizeOutreachTargetLabel(targetType: string | undefined, targetRef: string | undefined): string {
   const raw = targetRef?.trim() || '';
   if (!raw) {
@@ -994,6 +1008,39 @@ function formatOutreachSummary(message: ScheduledMessage): string {
     parts.push(`结果:${result.length > 18 ? `${result.substring(0, 18)}…` : result}`);
   }
 
+  return parts.join(' · ');
+}
+
+function formatAgentTaskRuntimeStatus(value?: string): string {
+  if (value === 'queued') return '排队中';
+  if (value === 'running') return '执行中';
+  if (value === 'succeeded') return '已完成';
+  if (value === 'failed') return '失败';
+  if (value === 'cancelled') return '已取消';
+  if (value === 'dead_letter') return '死信';
+  if (value === 'success') return '成功';
+  if (value === 'error') return '错误';
+  if (value === 'capability_missing') return '能力缺失';
+  if (value === 'auth_error') return '鉴权失败';
+  if (value === 'need_human_decision') return '待人工决策';
+  return value || '未知';
+}
+
+function formatAgentTaskSummary(message: ScheduledMessage): string {
+  const parts: string[] = [];
+  if (message.Agent_Last_Status?.trim()) {
+    parts.push(`状态:${formatAgentTaskRuntimeStatus(message.Agent_Last_Status)}`);
+  }
+  if (message.Agent_Last_Run_At?.trim()) {
+    parts.push(`最近:${message.Agent_Last_Run_At}`);
+  }
+  const result = getAgentTaskResult(message);
+  if (result) {
+    parts.push(`结果:${result.length > 18 ? `${result.substring(0, 18)}…` : result}`);
+  }
+  if (message.Agent_AR_Binding_ID?.trim()) {
+    parts.push('AR 绑定');
+  }
   return parts.join(' · ');
 }
 
@@ -1111,17 +1158,79 @@ function summarizeOutreachResult(item: OutreachTemplateRuntimeStatusItem): strin
   return undefined;
 }
 
-function getScheduledMessageTooltipContent(message: ScheduledMessage): string {
-  if (!isOutreachMessage(message)) {
-    return message.Content || '';
+function formatAgentTaskEvidencePreview(evidence?: {
+  kind?: string;
+  title?: string;
+  content?: string;
+}): string | undefined {
+  if (!evidence) return undefined;
+  const parts = [evidence.title, evidence.content].filter(
+    (part): part is string => Boolean(part && part.trim()),
+  );
+  if (parts.length === 0) return undefined;
+  return parts.join(' — ');
+}
+
+function summarizeAgentTaskRuntimeResult(item: AgentTaskRuntimeStatusItem): {
+  summary?: string;
+  evidence?: string;
+  status?: string;
+  runAt?: string;
+} {
+  const latest = item.latestAction;
+  if (!latest) {
+    return {
+      summary: item.summary?.trim() || undefined,
+      evidence: formatAgentTaskEvidencePreview(item.evidence),
+    };
   }
 
-  const question = getOutreachQuestion(message);
-  const result = getOutreachResult(message);
-  if (question && result) {
-    return `${question}\n\n询问结果：${result}`;
+  const status = latest.resultStatus || latest.queueStatus;
+  const runAtMs = latest.finishedAt || latest.startedAt || latest.createdAt;
+  let runAt: string | undefined;
+  if (typeof runAtMs === 'number' && Number.isFinite(runAtMs)) {
+    try {
+      const { dateStr, timeStr } = formatLocalScheduleDateTime(new Date(runAtMs));
+      runAt = `${dateStr} ${timeStr}`;
+    } catch {
+      runAt = undefined;
+    }
   }
-  return question || (result ? `询问结果：${result}` : '');
+  return {
+    summary: item.summary?.trim() || latest.lastError?.trim() || undefined,
+    evidence: formatAgentTaskEvidencePreview(item.evidence),
+    status,
+    runAt,
+  };
+}
+
+function getScheduledMessageTooltipContent(message: ScheduledMessage): string {
+  if (isOutreachMessage(message)) {
+    const question = getOutreachQuestion(message);
+    const result = getOutreachResult(message);
+    if (question && result) {
+      return `${question}\n\n询问结果：${result}`;
+    }
+    return question || (result ? `询问结果：${result}` : '');
+  }
+
+  if (isAgentTaskMessage(message)) {
+    const prompt = getAgentTaskPrompt(message);
+    const result = getAgentTaskResult(message) || getAgentTaskEvidence(message);
+    const sections: string[] = [];
+    if (prompt) {
+      sections.push(prompt);
+    }
+    if (result) {
+      sections.push(`执行结果：${result}`);
+    }
+    if (message.Agent_Last_Error?.trim() && !getAgentTaskResult(message)) {
+      sections.push(`错误：${message.Agent_Last_Error.trim()}`);
+    }
+    return sections.join('\n\n');
+  }
+
+  return message.Content || '';
 }
 
 function formatOutreachSyncState(value?: string): string {
@@ -1236,6 +1345,66 @@ async function overlayOutreachRuntimeStatus(messages: ScheduledMessage[]): Promi
   }
 }
 
+async function overlayAgentTaskRuntimeStatus(messages: ScheduledMessage[]): Promise<ScheduledMessage[]> {
+  const agentTaskMessages = messages.filter((message) => isAgentTaskMessage(message));
+  if (agentTaskMessages.length === 0) {
+    return messages;
+  }
+
+  const lookupIds = Array.from(
+    new Set(
+      agentTaskMessages
+        .flatMap((message) => [message.ID, message.Agent_Task_ID])
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter(Boolean),
+    ),
+  );
+  if (lookupIds.length === 0) {
+    return messages;
+  }
+
+  try {
+    const client = getMemoryServiceClient();
+    const runtime = await client.getAgentTaskRuntimeStatus(lookupIds, lookupIds.length);
+    const mapping = new Map<string, AgentTaskRuntimeStatusItem>();
+    for (const item of runtime.items) {
+      for (const key of [item.sourceRefId, item.sheetMessageId, item.taskId]) {
+        if (key?.trim()) {
+          mapping.set(key.trim(), item);
+        }
+      }
+    }
+
+    return messages.map((message) => {
+      if (!isAgentTaskMessage(message)) {
+        return message;
+      }
+      const runtimeItem =
+        mapping.get(message.ID) ||
+        (message.Agent_Task_ID ? mapping.get(message.Agent_Task_ID) : undefined);
+      if (!runtimeItem?.latestAction) {
+        return message;
+      }
+
+      const summarized = summarizeAgentTaskRuntimeResult(runtimeItem);
+      return {
+        ...message,
+        Agent_Last_Status: summarized.status || message.Agent_Last_Status,
+        Agent_Last_Run_At: summarized.runAt || message.Agent_Last_Run_At,
+        Agent_Last_Result: summarized.summary || message.Agent_Last_Result,
+        Agent_Last_Error:
+          runtimeItem.latestAction.queueStatus === 'succeeded'
+            ? undefined
+            : runtimeItem.latestAction.lastError || message.Agent_Last_Error,
+        Agent_Last_Evidence: summarized.evidence,
+      };
+    });
+  } catch (error) {
+    console.info('加载 AgentTask runtime 状态失败，使用 Sheet 数据兜底:', error);
+    return messages;
+  }
+}
+
 async function backfillOutreachDoneStatus(
   messageService: ScheduledMessageService,
   msgs: ScheduledMessage[],
@@ -1316,6 +1485,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);  // 🔧 新增：是否需要重新授权
+  const [authFailureMessage, setAuthFailureMessage] = useState('');
   const [config, setConfig] = useState<SheetConfig | null>(null);
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [statistics, setStatistics] = useState<Statistics>({
@@ -1448,10 +1618,15 @@ const ScheduledMessagesManager: React.FC = () => {
         setTimelineBotConfigured(hasTimelineSyncRule(savedConfig));
         
         // 🔧 优先使用缓存的 token，避免在页面加载时弹出授权窗口
-        const token = await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.init' });
+        const authResult = await getGoogleAuthTokenSilentlyResult({
+          caller: 'ScheduledMessagesManager.init',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+        });
+        const token = authResult.token;
         if (!token) {
-          // 如果没有缓存的 token，显示提示让用户手动授权
-          console.warn('⚠️ 无缓存的 Google 认证 token，需要用户手动授权');
+          const failureMessage = formatGoogleAuthFailure(authResult);
+          console.warn('⚠️ Google Sheets 授权不可用，需要用户手动处理:', failureMessage);
+          setAuthFailureMessage(failureMessage);
           setNeedsReauth(true);
         }
         
@@ -1615,9 +1790,10 @@ const ScheduledMessagesManager: React.FC = () => {
         seedMessages: ScheduledMessage[],
       ): Promise<ScheduledMessage[]> => {
         const outreachOverlayMsgs = await overlayOutreachRuntimeStatus(seedMessages);
+        const agentTaskOverlayMsgs = await overlayAgentTaskRuntimeStatus(outreachOverlayMsgs);
         const updatedMsgs = await backfillOutreachDoneStatus(
           messageService,
-          outreachOverlayMsgs,
+          agentTaskOverlayMsgs,
         );
 
         setMessages(updatedMsgs);
@@ -1648,6 +1824,10 @@ const ScheduledMessagesManager: React.FC = () => {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || '未知错误');
       lastLoadMessagesErrorRef.current = message;
+      if (isGoogleAuthRecoveryError(error)) {
+        setAuthFailureMessage(message);
+        setNeedsReauth(true);
+      }
       console.error('加载消息失败:', error);
       return [];
     }
@@ -1899,6 +2079,7 @@ const ScheduledMessagesManager: React.FC = () => {
     try {
       const token = await getGoogleAuthToken({
         caller: 'ScheduledMessagesManager.syncConfigFromSheet',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
       });
       if (!token) {
         const configStage: ManualConfigSyncStage = {
@@ -2026,7 +2207,10 @@ const ScheduledMessagesManager: React.FC = () => {
         console.log('⏳ 同步时发现 Messages/Logs 工作表 ID 缺失，尝试获取...');
         try {
           const token = configSyncToken ||
-            await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncWorksheetIds' });
+            await getGoogleAuthToken({
+              caller: 'ScheduledMessagesManager.syncWorksheetIds',
+              scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+            });
           if (token) {
             const worksheetIds = await fetchScheduledWorksheetIds(token, nextConfig.sheetId);
             const updatedConfig = { ...nextConfig };
@@ -2114,8 +2298,14 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       const token = interactive
-        ? await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.checkForUpdates.manual' })
-        : await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.checkForUpdates.auto' });
+        ? await getGoogleAuthToken({
+            caller: 'ScheduledMessagesManager.checkForUpdates.manual',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
+          })
+        : await getGoogleAuthTokenSilently({
+            caller: 'ScheduledMessagesManager.checkForUpdates.auto',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
+          });
       if (!token) {
         setUpdateCheckNeedsAuth(true);
         setUpdateCheckError('');
@@ -2202,7 +2392,10 @@ const ScheduledMessagesManager: React.FC = () => {
     let appScriptRecoveryTitle = 'App Script 需要处理后重试';
     
     try {
-      const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleUpgrade' });
+      const token = await getGoogleAuthToken({
+        caller: 'ScheduledMessagesManager.handleUpgrade',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
+      });
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
@@ -2498,6 +2691,7 @@ const ScheduledMessagesManager: React.FC = () => {
           caller: tab === 'messages'
             ? 'ScheduledMessagesManager.openMessagesSheet'
             : 'ScheduledMessagesManager.openLogsSheet',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
 
         if (token) {
@@ -3556,7 +3750,10 @@ const ScheduledMessagesManager: React.FC = () => {
       };
     }
 
-    const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.ensureAgentTaskWebhook' });
+    const token = await getGoogleAuthToken({
+      caller: 'ScheduledMessagesManager.ensureAgentTaskWebhook',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+    });
     if (!token) {
       throw new Error('帮我做需要 Google 授权才能把 memory-service webhook 写入 Sheet Config。');
     }
@@ -3576,7 +3773,10 @@ const ScheduledMessagesManager: React.FC = () => {
   
   const getCurrentUserName = async () => {
     try {
-      const token = await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.getCurrentUserName' });
+      const token = await getGoogleAuthTokenSilently({
+        caller: 'ScheduledMessagesManager.getCurrentUserName',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.IDENTITY,
+      });
       if (!token) {
         return;
       }
@@ -3995,13 +4195,6 @@ const ScheduledMessagesManager: React.FC = () => {
     () => getScheduleHealthRecoverySuggestions(messages, queueSummaryNow),
     [messages, queueSummaryNow],
   );
-  const scheduleHealthTriageSummary = useMemo(
-    () => buildScheduleHealthTriageSummary(
-      scheduleHealthIssues,
-      scheduleHealthRecoverySuggestions,
-    ),
-    [scheduleHealthIssues, scheduleHealthRecoverySuggestions],
-  );
   const visibleScheduleHealthIssues = showAllScheduleHealthIssues
     ? scheduleHealthIssues
     : scheduleHealthIssues.slice(0, DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT);
@@ -4215,8 +4408,13 @@ const ScheduledMessagesManager: React.FC = () => {
   if (needsReauth) {
     const handleReauth = async () => {
       try {
-        const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleReauth' });
+        const authResult = await getGoogleAuthTokenResult({
+          caller: 'ScheduledMessagesManager.handleReauth',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+        });
+        const token = authResult.token;
         if (token) {
+          setAuthFailureMessage('');
           setNeedsReauth(false);
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
@@ -4230,6 +4428,8 @@ const ScheduledMessagesManager: React.FC = () => {
           if (config) {
             void checkBotConfigValidity(config, initialMessages);
           }
+        } else {
+          setAuthFailureMessage(formatGoogleAuthFailure(authResult));
         }
       } catch (error) {
         console.error('重新授权失败:', error);
@@ -4240,9 +4440,10 @@ const ScheduledMessagesManager: React.FC = () => {
     return (
       <div style={styles.loadingContainer}>
         <div style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '18px', marginBottom: '16px' }}>🔐 需要 Google 授权</p>
+          <p style={{ fontSize: '18px', marginBottom: '16px' }}>🔐 需要 Google Sheets 授权</p>
           <p style={{ color: '#666', marginBottom: '24px' }}>
-            您的 Google 授权已过期，请点击下方按钮重新授权以继续使用定时消息功能。
+            {authFailureMessage || '当前无法取得定时消息所需的 Google Sheets 权限。'}
+            请点击下方按钮完成或恢复授权；本次不会请求 Google Slides 权限。
           </p>
           <button 
             onClick={handleReauth}
@@ -4642,28 +4843,6 @@ const ScheduledMessagesManager: React.FC = () => {
               <p style={styles.queueRiskDescription}>
                 {formatScheduleHealthSummary(scheduleHealthIssues)}
               </p>
-              {scheduleHealthTriageSummary && (
-                <div style={styles.queueTriageGrid} aria-label="定时消息健康摘要">
-                  <span style={styles.queueTriageItem}>
-                    {scheduleHealthTriageSummary.priorityLabel}
-                  </span>
-                  <span style={styles.queueTriageItem}>
-                    {scheduleHealthTriageSummary.diagnosticLabel}
-                  </span>
-                  <span style={styles.queueTriageItem}>
-                    {scheduleHealthTriageSummary.recoverableLabel}
-                  </span>
-                  <span style={styles.queueTriageItem}>
-                    {scheduleHealthTriageSummary.manualReviewLabel}
-                  </span>
-                  <span style={styles.queueTriageItem}>
-                    {scheduleHealthTriageSummary.boundaryLabel}
-                  </span>
-                </div>
-              )}
-              <p style={styles.queueBoundaryDescription}>
-                操作边界：一键改期只写回 Messages 的 Schedule_Date / Schedule_Time，不会立即发送、不会改 Logs；写入后需同步刷新或等待下一轮 Jira Automation 确认队列已恢复。
-              </p>
               <div style={styles.queueSlotList}>
                 {visibleScheduleHealthIssues.map(issue => {
                   const message = messages.find(candidate => candidate.ID === issue.messageId);
@@ -4671,9 +4850,6 @@ const ScheduledMessagesManager: React.FC = () => {
                     ? scheduleHealthRecoverySuggestions.get(issue.messageId) ||
                       getScheduleHealthRecoverySuggestion(message, queueSummaryNow)
                     : null;
-                  const recoveryLaneSummary = message && recoverySuggestion
-                    ? getRescheduleSuggestionLaneSummary(message, recoverySuggestion)
-                    : '';
                   const pendingReceipt = scheduleHealthPendingReceipt?.messageId === issue.messageId
                     ? scheduleHealthPendingReceipt
                     : null;
@@ -4685,20 +4861,13 @@ const ScheduledMessagesManager: React.FC = () => {
                       title={formatScheduleHealthIssue(issue)}
                     >
                       <span style={styles.queueIssueText}>
-                        {issue.topic}: {formatScheduleHealthIssue(issue)}
-                        <small style={styles.queueIssueDiagnosticText}>
-                          {formatScheduleHealthIssueDiagnostic(issue)}
+                        <strong>{issue.topic}</strong>
+                        <small style={styles.queueIssueSuggestionText}>
+                          {formatScheduleHealthIssueMissedWindow(issue)}
                         </small>
-                        {recoverySuggestion && (
-                          <small style={styles.queueIssueSuggestionText}>
-                            建议改到 {recoverySuggestion.label}。{recoverySuggestion.reason}
-                          </small>
-                        )}
-                        {recoveryLaneSummary && (
-                          <small style={styles.queueIssueSuggestionText}>
-                            写入后{recoveryLaneSummary}
-                          </small>
-                        )}
+                        <small style={styles.queueIssueSuggestionText}>
+                          {formatScheduleHealthIssueSuggestedAction(issue, recoverySuggestion)}
+                        </small>
                         {pendingReceipt && (
                           <small
                             style={styles.queueIssuePendingReceipt}
@@ -5301,11 +5470,7 @@ const ScheduledMessagesManager: React.FC = () => {
                             )}
                             {isAgentTaskMessage(message) && (
                               <small style={{ color: '#6c757d', lineHeight: 1.4 }}>
-                                {[
-                                  message.Agent_Last_Status ? `状态:${message.Agent_Last_Status}` : '',
-                                  message.Agent_Last_Run_At ? `最近:${message.Agent_Last_Run_At}` : '',
-                                  message.Agent_AR_Binding_ID ? 'AR 绑定' : '',
-                                ].filter(Boolean).join(' · ') || '结果以 memory-service run / Bot 通知为准'}
+                                {formatAgentTaskSummary(message) || '结果以 memory-service 执行账本为准'}
                               </small>
                             )}
                           </div>
@@ -5650,7 +5815,11 @@ const ScheduledMessagesManager: React.FC = () => {
                ? getOutreachResult(hoveredMessage)
                  ? '主动询问内容与结果'
                  : '主动询问内容'
-               : '消息内容'}
+               : isAgentTaskMessage(hoveredMessage)
+                 ? getAgentTaskResult(hoveredMessage) || getAgentTaskEvidence(hoveredMessage)
+                   ? '帮我做内容与结果'
+                   : '帮我做内容'
+                 : '消息内容'}
            </div>
            <div style={styles.tooltipContent}>{getScheduledMessageTooltipContent(hoveredMessage)}</div>
          </div>
@@ -11831,7 +12000,10 @@ const BotConfigDialog: React.FC<{
 
       // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage。放在 Jira rule 更新成功之后，
       // 避免 Config 先启用 sender 但 executor rule 未更新时禁用旧邮件 fallback。
-      const token = await getGoogleAuthToken({ caller: 'BotConfigDialog.handleSubmit' });
+      const token = await getGoogleAuthToken({
+        caller: 'BotConfigDialog.handleSubmit',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+      });
       const { ConfigSyncService } = await import('./ConfigSyncService');
       const syncService = new ConfigSyncService(token);
       const syncedConfig = await syncService.syncConfig(updatedConfig, { syncAction: 'bot_config_update' });

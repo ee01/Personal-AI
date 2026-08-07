@@ -30,7 +30,7 @@ Context Card 的关键控制点本身还缺少点击前边界：
 1. 在 `src/modals/components/RelationshipRadarPage.vue` 增加 Context Card 控制点边界 helper。
 2. 给复制按钮、敏感范围切换按钮、建议证据按钮、open loop 证据按钮绑定 `title` 和 `aria-label`。
 3. 更新 `tools/verify-relationship-radar-e2e.mjs`，断言这些控制点在点击前已有边界文案。
-4. 更新 `docs/features/relationship_radar.md` 和 `docs/features/index.md`，只补充当前行为概述，不展开实现细节。
+4. 更新 `docs/features/relationship_radar.md` 和 `docs/index.md`，只补充当前行为概述，不展开实现细节。
 5. 验证：`npm run verify:relationship-radar`、`npm start` 首次成功编译、`npm run verify:relationship-radar:e2e`、scoped `git diff --check`。
 
 ## 边界

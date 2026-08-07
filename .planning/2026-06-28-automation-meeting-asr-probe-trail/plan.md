@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 随机目标：`docs/features/index.md` 中的 `分层 ASR` / Meeting Pilot。
+- 随机目标：`docs/index.md` 中的 `分层 ASR` / Meeting Pilot。
 - 用户体验缺口：Speech 面板已经显示当前 ASR 层级、上传边界和切层说明，但用户看不到本轮已经检查/跳过了哪些 ASR provider。Auto 模式从本地失败切到 Cloud 时，云端上传像是直接发生，而不是可解释的 fallback。
 - Reminder：本机没有 `Personal AI` Reminders 列表，本轮没有 Reminder item 可关联或完成。
 

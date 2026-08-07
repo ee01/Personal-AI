@@ -2,7 +2,7 @@
 
 ## 选择
 
-- 来源：`docs/features/index.md` 随机抽样后选择 `Storyline Draft 页面`。
+- 来源：`docs/index.md` 随机抽样后选择 `Storyline Draft 页面`。
 - 避开：最近自动化刚做过的 Meeting History、Relationship Radar、Project Dashboard、Message Analysis、Compose Assist、Jira、Task Scheduler、Doubao、Topic 等目标。
 - 文档：`docs/features/memory_storyline_builder.md` 描述仍匹配当前 Draft API / Draft 页面主流程。
 - Reminder：AppleScript 未列出 `Personal AI`；EventKit 找到 4 条，全部已完成且都是 Doubao / digest / sync 历史反馈，与 Storyline Draft 无关，本轮不标记 Reminder。

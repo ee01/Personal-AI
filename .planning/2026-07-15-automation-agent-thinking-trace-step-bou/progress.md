@@ -7,14 +7,14 @@
 - **Started:** 2026-07-15
 
 ### Actions Taken
-- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, `docs/features/agent_thinking.md`, Agent Thinking source, and the Options E2E.
+- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, `docs/features/agent_thinking.md`, Agent Thinking source, and the Options E2E.
 - Randomized feature sample and selected `Agent Thinking 分析编排`.
 - Checked Reminders: AppleScript missed `Personal AI`; EventKit found it with 0 incomplete items.
 - Researched LangSmith, Langfuse, OpenTelemetry GenAI, OpenAI Agents SDK HITL, LangGraph/LangChain HITL, and AgentTrace.
 - Identified uncovered step-locator buttons that only jump within the current page but do not expose the same hover/read-screen no-effect boundary as existing trace-route buttons.
 - Implemented shared step-locator `title` / `aria-label` boundaries for result handoff terminal step, trace span composition problem steps, run-review involved steps, approval queue steps, flow diagram nodes, and result-card pending approval steps.
 - Updated Agent Thinking Options E2E assertions for the new boundaries.
-- Updated `docs/features/agent_thinking.md` and the Agent Thinking row in `docs/features/index.md`.
+- Updated `docs/features/agent_thinking.md` and the Agent Thinking row in `docs/index.md`.
 - Updated automation memory at `$CODEX_HOME/automations/automation/memory.md`.
 
 ### Test Results

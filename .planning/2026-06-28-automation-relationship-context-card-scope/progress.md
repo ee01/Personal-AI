@@ -2,7 +2,7 @@
 
 ## 2026-06-28
 
-- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, and relevant memory registry hints.
+- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, and relevant memory registry hints.
 - Confirmed `docs/progressing/to-verify.md` currently says there are no carry-over verification items.
 - Checked local Reminders via `perl alarm` JXA scan; no `Personal AI` list is visible.
 - Created this isolated plan after selecting `人脉关系 Context Card`.

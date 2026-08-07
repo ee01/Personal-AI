@@ -2,7 +2,7 @@
 
 ## Goal
 
-Random feature selected from `docs/features/index.md`: `反思本地研究补查` under Memory Service (`docs/features/memory_system.md`).
+Random feature selected from `docs/index.md`: `反思本地研究补查` under Memory Service (`docs/memory_system.md`).
 
 This run will improve one bounded UX gap: local reflection research already records query / hit / empty / failed states, but when the LLM planner asks for unsupported source types, users only see the sanitized source list. The UI should expose that the query scope was safely clipped to Personal AI-supported local sources, without treating it as an error or adding a user review queue.
 
@@ -27,7 +27,7 @@ This run will improve one bounded UX gap: local reflection research already reco
 2. Store a non-error `scopeNotice` on `reflection_research_attempts`.
 3. Render the scope notice in Reflection Thread detail as a `研究范围回执`, separate from failed/partial recall errors.
 4. Update the reflection E2E fixture/assertions and focused researcher tests.
-5. Update `docs/features/memory_system.md` with the new scope clipping receipt.
+5. Update `docs/memory_system.md` with the new scope clipping receipt.
 6. Validate with focused memory-service tests, `npm start` first compile, reflection E2E, and `git diff --check`.
 
 ## Progress

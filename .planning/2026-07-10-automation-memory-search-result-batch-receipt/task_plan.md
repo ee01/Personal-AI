@@ -4,7 +4,7 @@
 
 - 功能点：`记忆搜索结果页`
 - 所属能力：Memory Exploring
-- 主文档：`docs/features/memory_system.md`
+- 主文档：`docs/memory_system.md`
 - 主要代码：`src/modals/components/SearchResultPage.vue`、`src/modals/searchResultPresentation.ts`
 
 ## 现状核对
@@ -28,7 +28,7 @@
 2. 在 `SearchResultPage.vue` 的结果摘要顶部渲染 `结果批次回执`，放在来源覆盖、类型筛选和通道诊断之前。
 3. 更新 `tools/verify-memory-search-results.ts` 覆盖 formatter 和页面渲染源检查。
 4. 更新 `tools/verify-memory-search-scope-e2e.mjs`，确认工作范围、全部范围和类型筛选后的批次基准可见。
-5. 更新 `docs/features/memory_system.md` 与 `docs/features/index.md` 的搜索结果页说明。
+5. 更新 `docs/memory_system.md` 与 `docs/index.md` 的搜索结果页说明。
 6. 验证：`verify-memory-search-results`、`npm start` 首次编译、`verify-memory-search-scope:e2e`、 scoped `git diff --check`。
 
 ## 非目标

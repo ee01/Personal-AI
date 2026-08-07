@@ -2,7 +2,7 @@
 
 ## Initial Selection
 
-- Random sample from `docs/features/index.md` included Doubao manual push, four-channel recall, Relationship Context Card, Today meeting prep, Source Memory recall card, Memory Lens eval, Prompt Config user context injection, and Meeting History archive.
+- Random sample from `docs/index.md` included Doubao manual push, four-channel recall, Relationship Context Card, Today meeting prep, Source Memory recall card, Memory Lens eval, Prompt Config user context injection, and Meeting History archive.
 - Selected `人脉关系 Context Card` because the first two sampled candidates overlap with very recent automation work, while Context Card is a narrower Relationship Radar route distinct from the latest Meeting Brief pending-receipt run.
 - Local Reminders lists visible in this session: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`.
 - No visible local Reminders list named `Personal AI`; no Reminder feedback is available for this run.

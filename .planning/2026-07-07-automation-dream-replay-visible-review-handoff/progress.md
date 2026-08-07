@@ -6,7 +6,7 @@
 - Read agent instructions, feature index, `to-verify`, automation memory, memory workflow notes, and current dirty worktree status.
 - Random sample produced several candidates; selected `梦境重放` to avoid the freshest exact surfaces and because it has a focused E2E.
 - Checked Reminders through AppleScript and EventKit. EventKit found `Personal AI`, but there are 0 incomplete items.
-- Read `DreamInsights.vue`, `tools/verify-memory-dreams-e2e.mjs`, and the dream replay section of `docs/features/memory_system.md`.
+- Read `DreamInsights.vue`, `tools/verify-memory-dreams-e2e.mjs`, and the dream replay section of `docs/memory_system.md`.
 - External scan completed and summarized in `findings.md`.
 - Identified the bounded improvement: visible card-level review handoff beside the triage receipt.
 
@@ -15,7 +15,7 @@
 - Implemented a visible `复核入口` row in `DreamInsights.vue` that reuses the existing Reflection review route and boundary copy.
 - Added responsive styling for the visible handoff row.
 - Extended `tools/verify-memory-dreams-e2e.mjs` to assert high-risk and ungrounded cards expose the review entry and preserve `source=dream` plus topic search.
-- Updated `docs/features/memory_system.md` and the `梦境重放` row in `docs/features/index.md`.
+- Updated `docs/memory_system.md` and the `梦境重放` row in `docs/index.md`.
 
 ## 2026-07-07T23:08:00+0800
 

@@ -552,11 +552,52 @@ async function startHarnessServer() {
   const ambientCalibrationRequests = [];
   const sourceMemoryCandidateRequests = [];
   const sourceMemoryCreateRequests = [];
+  const webpageAnalysisRequests = [];
   const sourceMemoryCapsules = new Map();
   const keystoneBriefEvents = [];
 
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === 'POST' && req.url === '/api/generate') {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        webpageAnalysisRequests.push(body);
+        const prompt = String(body.prompt || '');
+        const pageText =
+          prompt.match(/<page_text>([\s\S]*?)<\/page_text>/)?.[1]?.trim() || '';
+        const evidence = pageText.includes('Falcon webpage capture review notes')
+          ? 'Falcon webpage capture review notes preserve the source owner'
+          : pageText.slice(0, 120);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            response: JSON.stringify({
+              decision: evidence ? 'remember' : 'skip',
+              summary: '页面包含可复用的资料事实。',
+              durableFacts: evidence
+                ? [{ statement: '页面包含可复用的资料。', evidence }]
+                : [],
+              entities: {
+                projects: pageText.includes('Falcon') ? ['Falcon'] : [],
+                people: pageText.includes('Priya Shah') ? ['Priya Shah'] : [],
+                technologies: [],
+                organizations: [],
+                topics: [],
+              },
+              actionItems: [],
+              enrichmentHints: [],
+              shouldNotify: false,
+              notificationReason: '',
+              confidence: evidence ? 0.88 : 0.1,
+              reason: evidence ? '正文包含可复用事实。' : '缺少稳定事实。',
+            }),
+            prompt_eval_count: 240,
+            eval_count: 80,
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'POST' && req.url === '/api/v1/context-recall') {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
@@ -1834,6 +1875,7 @@ async function startHarnessServer() {
     ambientCalibrationRequests,
     sourceMemoryCandidateRequests,
     sourceMemoryCreateRequests,
+    webpageAnalysisRequests,
     keystoneBriefEvents,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -1865,6 +1907,9 @@ async function launchExtensionContext(apiBaseUrl) {
     MEMORY_SERVICE_BASE_URL: apiBaseUrl,
     MEMORY_SERVICE_API_KEY: '',
     MEMORY_SERVICE_TIMEOUT: 5000,
+    LLM_TYPE: 'local',
+    OLLAMA_BASE_URL: apiBaseUrl.replace(/\/api\/v1$/, ''),
+    OLLAMA_MODEL: 'webpage-analysis-e2e',
   };
 
   await serviceWorker.evaluate(
@@ -2122,7 +2167,7 @@ async function verifyRehearsalLensPresentation(server, context) {
   await page.close();
 }
 
-async function verifyKeystoneBriefMemoryLens(server, context, serviceWorker) {
+async function verifyKeystoneBriefMemoryLens(server, context) {
   const readyPage = await context.newPage();
   const readyDiagnostics = attachPageDiagnostics(readyPage, 'keystone-ready');
   const readyStartCount = server.contextRecallRequests.length;
@@ -2286,6 +2331,9 @@ async function verifyKeystoneBriefMemoryLens(server, context, serviceWorker) {
   }
   await stalePage.close();
 
+}
+
+async function verifyEnglishKeystoneBriefMemoryLens(server, context, serviceWorker) {
   await serviceWorker.evaluate(async () => {
     await chrome.storage.local.set({
       personalAiUiPreferences: { language: 'en-US', updatedAt: Date.now() },
@@ -5582,6 +5630,7 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
   const page = await context.newPage();
   const diagnostics = attachPageDiagnostics(page, 'page-capture-review');
   const createStartCount = server.sourceMemoryCreateRequests.length;
+  const analysisStartCount = server.webpageAnalysisRequests.length;
   await page.goto(`${server.origin}/page-capture-review`, {
     waitUntil: 'domcontentloaded',
     timeout: 15000,
@@ -5786,6 +5835,11 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
   assert.equal(savedSourceMemory.note, '用于 Falcon QBR 资料包');
   assert.equal(savedSourceMemory.interactions?.manualClick, true);
   assert.match(savedSourceMemory.text, /Falcon webpage capture review notes/);
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 1,
+    '同一页面在屏蔽开关抖动和重复候选评估后仍应只调用一次聚焦 LLM',
+  );
   await page.waitForSelector('.pai-page-memory-capture-review-panel', {
     state: 'detached',
     timeout: 5000,
@@ -5821,6 +5875,25 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     timeout: 5000,
   });
   await detailPage.close();
+
+  const sameSnapshotPage = await context.newPage();
+  await sameSnapshotPage.goto(`${server.origin}/page-capture-review`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await sameSnapshotPage.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+  });
+  await sameSnapshotPage.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 1,
+    '另一个标签页的相同语义快照应命中 background/session cache，不重复调用 LLM',
+  );
+  await sameSnapshotPage.close();
 
   const duplicatePage = await context.newPage();
   const duplicateDiagnostics = attachPageDiagnostics(duplicatePage, 'page-capture-duplicate-no-note');
@@ -6401,6 +6474,42 @@ async function verifySensitivePage(server, context) {
   await page.close();
 }
 
+async function verifyBackgroundContextRecallCache(server, context) {
+  const startCount = server.contextRecallRequests.length;
+  const firstUrl = `${server.origin}/normal?context-cache-a=1`;
+  const firstPage = await context.newPage();
+  await firstPage.goto(firstUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await firstPage.waitForSelector('.pai-context-bubble', { timeout: 10000 });
+  await waitForRequestCount(server, startCount + 1, 10000);
+
+  await firstPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+  await firstPage.waitForSelector('.pai-context-bubble', { timeout: 10000 });
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '相同上下文刷新后应命中 background/session cache',
+  );
+
+  const secondPage = await context.newPage();
+  await secondPage.goto(`${server.origin}/normal?context-cache-b=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await secondPage.waitForSelector('.pai-context-bubble', { timeout: 10000 });
+  await waitForRequestCount(server, startCount + 2, 10000);
+  assert.match(
+    String(server.contextRecallRequests.at(-1)?.url || ''),
+    /context-cache-b=1/,
+    '不同 URL 上下文必须形成新的 background recall key',
+  );
+
+  await secondPage.close();
+  await firstPage.close();
+}
+
 let server;
 let context;
 
@@ -6410,39 +6519,51 @@ try {
   const launch = await launchExtensionContext(server.apiBaseUrl);
   context = launch.context;
 
-  await verifySensitiveTransitionRace(server, context);
-  await verifySensitiveQueryPage(server, context);
-  await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
-  await verifyRingCentralLensSuppressedByComposeAssist(server, context);
-  await verifyRehearsalLensPresentation(server, context);
-  await verifyKeystoneBriefMemoryLens(server, context, launch.serviceWorker);
-  await verifyJiraIssueContext(server, context);
-  await verifySelectedTextTrigger(server, context);
-  await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
-  await verifySelectedTextPrivacyAndUiBoundaries(server, context);
-  await verifyUnsafeExploreRoute(server, context);
-  await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
-  await verifyIrrelevantFeedback(server, context);
-  await verifyFeedbackDrawerMobileSheet(server, context);
-  await verifyFeedbackFailureDisclosure(server, context);
-  await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
-  await verifyAllowSiteClearsCoveredControls(
-    server,
-    context,
-    launch.serviceWorker,
-    launch.extensionId,
-  );
-  await verifyLiveSiteControlStorageSync(server, context, launch.serviceWorker);
-  await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
-  await verifyContextBubbleDrag(server, context);
-  await verifyPossibleHoverPeek(server, context);
-  await verifyMetadataSummaryPresentation(server, context);
-  await verifySourceUrlOnlyProvenance(server, context);
-  await verifySourceMemorySensitiveSourceHidden(server, context);
-  await verifySourceStatusReceipts(server, context);
-  await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
-  await verifySensitivePage(server, context);
-  log('browser checks passed');
+  if (process.env.PERSONAL_AI_E2E_FOCUS === 'keystone-language') {
+    await verifyKeystoneBriefMemoryLens(server, context);
+    await verifyEnglishKeystoneBriefMemoryLens(server, context, launch.serviceWorker);
+    log('Keystone language checks passed');
+  } else if (process.env.PERSONAL_AI_E2E_FOCUS === 'page-analysis') {
+    await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
+    log('Focused webpage analysis and capture checks passed');
+  } else if (process.env.PERSONAL_AI_E2E_FOCUS === 'context-cache') {
+    await verifyBackgroundContextRecallCache(server, context);
+    log('Background context recall cache checks passed');
+  } else {
+    await verifySensitiveTransitionRace(server, context);
+    await verifySensitiveQueryPage(server, context);
+    await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
+    await verifyRingCentralLensSuppressedByComposeAssist(server, context);
+    await verifyRehearsalLensPresentation(server, context);
+    await verifyKeystoneBriefMemoryLens(server, context);
+    await verifyJiraIssueContext(server, context);
+    await verifySelectedTextTrigger(server, context);
+    await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
+    await verifySelectedTextPrivacyAndUiBoundaries(server, context);
+    await verifyUnsafeExploreRoute(server, context);
+    await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
+    await verifyIrrelevantFeedback(server, context);
+    await verifyFeedbackDrawerMobileSheet(server, context);
+    await verifyFeedbackFailureDisclosure(server, context);
+    await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
+    await verifyAllowSiteClearsCoveredControls(
+      server,
+      context,
+      launch.serviceWorker,
+      launch.extensionId,
+    );
+    await verifyLiveSiteControlStorageSync(server, context, launch.serviceWorker);
+    await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
+    await verifyContextBubbleDrag(server, context);
+    await verifyPossibleHoverPeek(server, context);
+    await verifyMetadataSummaryPresentation(server, context);
+    await verifySourceUrlOnlyProvenance(server, context);
+    await verifySourceMemorySensitiveSourceHidden(server, context);
+    await verifySourceStatusReceipts(server, context);
+    await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
+    await verifySensitivePage(server, context);
+    log('browser checks passed');
+  }
 } finally {
   if (context) {
     await context.close();

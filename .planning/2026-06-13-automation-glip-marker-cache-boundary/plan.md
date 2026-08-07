@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮从 `docs/features/index.md` 随机样本中选择 `Message Reaction / Glip AI 标注`。目标是修复一个小但会影响信任感的 UX 缺口：原消息旁的 AI 标注已经显示来源和缓存刷新时间，但仍容易被误读成实时远端确认。
+本轮从 `docs/index.md` 随机样本中选择 `Message Reaction / Glip AI 标注`。目标是修复一个小但会影响信任感的 UX 缺口：原消息旁的 AI 标注已经显示来源和缓存刷新时间，但仍容易被误读成实时远端确认。
 
 ## 参考信号
 

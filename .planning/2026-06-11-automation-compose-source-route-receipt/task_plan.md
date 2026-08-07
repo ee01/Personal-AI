@@ -12,7 +12,7 @@ Improve `回复助手来源适配` so users can see which source route Compose A
 | Research adjacent products and papers | complete | RingCentral, Atlassian, Smart Compose, GhostWriter, and interaction-required suggestions all support inline, user-controlled writing help with visible boundaries. |
 | Identify bounded improvement | complete | Existing `草稿回执` covered insertion/review/evidence, but source-adapter routing stayed implicit. |
 | Implement receipt | complete | Added `来源路由` helper and popover rendering with route, current context, allowed sources, and boundary. |
-| Update docs and tests | complete | Updated `docs/features/compose_assist.md`, unit tests, and direct-insert E2E assertions. |
+| Update docs and tests | complete | Updated `docs/features/assist.md`, unit tests, and direct-insert E2E assertions. |
 | Validate | complete | Focused TS tests, `npm start` compile, direct-insert E2E, `git diff --check`, and watcher check passed. |
 
 ## Errors Encountered

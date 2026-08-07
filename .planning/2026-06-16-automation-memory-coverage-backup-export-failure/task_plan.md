@@ -25,7 +25,7 @@ Goal: improve Memory Coverage Map by making backup-export failures explicit and 
 
 ## Decisions
 
-- Selected feature: `记忆覆盖地图` / Memory Coverage Map from `docs/features/index.md`.
+- Selected feature: `记忆覆盖地图` / Memory Coverage Map from `docs/index.md`.
 - Reminder state: local Reminders is readable, but no list named `Personal AI` is visible, so no item is incorporated or completed.
 - Scope: UI/E2E/docs only; do not change backup/export backend semantics.
 - Existing worktree is broadly dirty. Keep edits to `MemoryCoveragePage.vue`, `tools/verify-memory-coverage-e2e.mjs`, `docs/features/memory_coverage_map.md`, and this planning directory.

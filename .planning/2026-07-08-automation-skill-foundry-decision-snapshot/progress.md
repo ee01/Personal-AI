@@ -2,7 +2,7 @@
 
 ## 2026-07-08
 
-- Read repo workflow (`AGENT.md`), automation memory, memory hints, package scripts, `docs/progressing/to-verify.md`, `docs/features/index.md`, and current worktree status.
+- Read repo workflow (`AGENT.md`), automation memory, memory hints, package scripts, `docs/progressing/to-verify.md`, `docs/index.md`, and current worktree status.
 - Selected `技能使用/丢弃/稍后审` under Skill Foundry from a random viable sample while avoiding the freshest exact automation targets.
 - Checked Reminders: AppleScript did not list `Personal AI`; EventKit found `Personal AI` with 4 completed historical items and no open Skill Foundry-related feedback.
 - Inspected Skill Foundry docs, `PersonalSkillsPage.vue`, existing E2E fixtures/assertions, `SkillLibraryService`, skill routes, and `MemoryServiceClient` methods.
@@ -10,7 +10,7 @@
 - Created this focused plan for a decision-snapshot receipt change.
 - Implemented click-time snapshot rows for pending, success, and failure suggestion action receipts in `PersonalSkillsPage.vue`.
 - Extended `tools/verify-personal-skill-foundry-e2e.mjs` to assert snapshot rows for local import use, quick use pending/success, snooze, unsnooze, and dismiss flows.
-- Updated `docs/features/personal_skill_foundry.md` and the Skill Foundry decision row in `docs/features/index.md`.
+- Updated `docs/features/personal_skill_foundry.md` and the Skill Foundry decision row in `docs/index.md`.
 - Verification passed:
   - `node --check tools/verify-personal-skill-foundry-e2e.mjs`
   - `npm --prefix memory-service test -- --run src/__tests__/api-skills.test.ts` (15/15)

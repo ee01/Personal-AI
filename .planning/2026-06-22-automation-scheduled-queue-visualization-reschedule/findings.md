@@ -5,7 +5,7 @@
 - Selected feature: `队列可视化与改期建议`
 - Capability: Scheduled Messages
 - Canonical doc: `docs/features/scheduled_messages_manager.md`
-- Index source: `docs/features/index.md`
+- Index source: `docs/index.md`
 
 ## Reminder Result
 

@@ -1,6 +1,6 @@
 # Progress
 
-- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, and Ask docs/code.
+- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, and Ask docs/code.
 - [x] Checked local Reminders via AppleScript and EventKit.
 - [x] Completed small product/paper scan.
 - [x] Selected Ask and scoped a presentation-only provenance improvement.

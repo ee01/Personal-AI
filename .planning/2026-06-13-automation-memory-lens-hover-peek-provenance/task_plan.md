@@ -2,7 +2,7 @@
 
 ## Target
 
-Random feature selected from `docs/features/index.md`: `记忆提示 Hover Peek` under `Memory Lens`.
+Random feature selected from `docs/index.md`: `记忆提示 Hover Peek` under `Memory Lens`.
 
 ## Findings
 

@@ -3,7 +3,7 @@
 ## 2026-06-05
 
 - Read automation memory location; no existing automation memory file was present.
-- Read `AGENT.md` validation policy and `docs/features/index.md`.
+- Read `AGENT.md` validation policy and `docs/index.md`.
 - Checked local Reminders; `Personal AI` list is absent.
 - Created this isolated plan directory without changing `.planning/.active_plan`.
 - Completed code/doc discovery for Personal Skill Foundry.

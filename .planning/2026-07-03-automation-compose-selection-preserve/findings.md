@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` has no carry-over items.
 - Recent automation memory covered Jira Design Links, Task Scheduler, Quick Ask voice, Topic Messages, Coverage Map, Jira Automation Import, and User Profile export. Compose Assist direct insert is a viable non-fresh random target.
-- `docs/features/compose_assist.md` already documents direct insert, undo, stale draft checks, readonly failure, Rehearsal review, keyboard dwell calibration, and surface-specific feedback.
+- `docs/features/assist.md` already documents direct insert, undo, stale draft checks, readonly failure, Rehearsal review, keyboard dwell calibration, and surface-specific feedback.
 - Current direct-insert E2E covers stale silent draft changes, selected-range replacement when selection survives, readonly failure, high-risk review, undo, and feedback.
 
 ## UX Gap

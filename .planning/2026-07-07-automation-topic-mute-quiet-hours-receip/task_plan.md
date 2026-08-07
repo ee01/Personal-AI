@@ -9,9 +9,9 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read AGENT.md, docs/progressing/to-verify.md, docs/features/index.md, and automation memory
+- [x] Read AGENT.md, docs/progressing/to-verify.md, docs/index.md, and automation memory
 - [x] Check local Personal AI Reminders
-- [x] Randomly select Topic Messages / topic mute from docs/features/index.md
+- [x] Randomly select Topic Messages / topic mute from docs/index.md
 - [x] Review docs/features/topic_based_messages.md and current mute implementation/tests
 - **Status:** complete
 

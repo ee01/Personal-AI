@@ -79,6 +79,8 @@ describe('Ingest API profile extraction', () => {
           item_type: 'preference',
           item_key: 'communication_style',
           item_value: 'concise product status updates',
+          claim_index: 0,
+          claim_text: 'I prefer concise product status updates.',
         },
       ],
     });
@@ -241,6 +243,8 @@ describe('Ingest API profile extraction', () => {
           item_type: 'fact',
           item_key: 'writing_style.conciseness',
           item_value: 'prefers short direct release updates',
+          claim_index: 0,
+          claim_text: 'I prefer release notes that are short and direct.',
         },
       ],
     });
@@ -250,7 +254,7 @@ describe('Ingest API profile extraction', () => {
       url: '/api/v1/ingest',
       headers: { 'x-user-id': userId },
       payload: {
-        content: 'Quick release note: keep the update short and direct.',
+        content: 'I prefer release notes that are short and direct.',
         sourceType: 'manual',
         sender: 'test-user',
         timestamp,

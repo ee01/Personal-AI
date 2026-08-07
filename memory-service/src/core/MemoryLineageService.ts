@@ -20,6 +20,14 @@ export interface CascadeReceipt {
   evidenceTrims: { relationships: number; profileItems: number };
   orphansArchived: { entities: number; relationships: number };
   recompute: { reflectionsRedacted: number; reflectionsRetracted: number; profileDemoted: number };
+  claimDerived: {
+    claims: number;
+    profileItems: number;
+    entityProperties: number;
+    opinions: number;
+    changeEvents: number;
+    actions: number;
+  };
 }
 
 const PROFILE_PROMOTION_MIN_EVIDENCE = 3;
@@ -48,6 +56,14 @@ export class MemoryLineageService {
       evidenceTrims: { relationships: 0, profileItems: 0 },
       orphansArchived: { entities: 0, relationships: 0 },
       recompute: { reflectionsRedacted: 0, reflectionsRetracted: 0, profileDemoted: 0 },
+      claimDerived: {
+        claims: 0,
+        profileItems: 0,
+        entityProperties: 0,
+        opinions: 0,
+        changeEvents: 0,
+        actions: 0,
+      },
     };
     if (messageIds.length === 0) return receipt;
     const deleted = new Set(messageIds);
@@ -56,6 +72,107 @@ export class MemoryLineageService {
 
     // Track entities whose evidence we touched, to re-check for orphan status.
     const touchedEntities = new Set<string>();
+
+    // 0. Claim-linked high-responsibility derivatives. This runs before the
+    // messages_raw delete so the claim/link audit trail is still queryable.
+    try {
+      const claims = this.db
+        .prepare(
+          `SELECT id FROM memory_claims
+           WHERE source_message_id IN (${ph})`,
+        )
+        .all(...messageIds) as Array<{ id: string }>;
+      receipt.claimDerived.claims = claims.length;
+      if (claims.length > 0) {
+        const claimIds = claims.map((claim) => claim.id);
+        const claimPlaceholders = claimIds.map(() => '?').join(', ');
+        const links = this.db
+          .prepare(
+            `SELECT id, claim_id, target_type, target_id
+             FROM memory_claim_links
+             WHERE claim_id IN (${claimPlaceholders}) AND status = 'active'`,
+          )
+          .all(...claimIds) as Array<{
+          id: number;
+          claim_id: string;
+          target_type: string;
+          target_id: string;
+        }>;
+        const invalidateLink = this.db.prepare(
+          `UPDATE memory_claim_links
+           SET status = 'invalidated', invalidated_at = ?,
+               invalidation_reason = 'source_deleted', updated_at = ?
+           WHERE id = ?`,
+        );
+        for (const link of links) {
+          switch (link.target_type) {
+            case 'profile_item': {
+              const otherEvidence = (
+                this.db
+                  .prepare(
+                    `SELECT COUNT(*) AS count FROM memory_claim_links
+                     WHERE claim_id <> ? AND target_type = ? AND target_id = ?
+                       AND status = 'active'`,
+                  )
+                  .get(link.claim_id, link.target_type, link.target_id) as {
+                  count: number;
+                }
+              ).count;
+              if (otherEvidence === 0) {
+                receipt.claimDerived.profileItems += this.db
+                  .prepare(
+                    `UPDATE user_profile_items
+                     SET status = 'retracted', updated_at = ?
+                     WHERE id = ? AND status IN ('active', 'pending_confirm')`,
+                  )
+                  .run(nowTs, link.target_id).changes;
+              }
+              break;
+            }
+            case 'entity_property':
+            case 'timeline_property':
+              receipt.claimDerived.entityProperties += this.db
+                .prepare(
+                  `UPDATE entity_properties
+                   SET status = 'retracted', tx_end = ?
+                   WHERE id = ? AND status = 'active'`,
+                )
+                .run(nowTs, link.target_id).changes;
+              break;
+            case 'opinion_item':
+              receipt.claimDerived.opinions += this.db
+                .prepare(
+                  `UPDATE opinion_items
+                   SET status = 'retracted', updated_at = ?
+                   WHERE id = ? AND status IN ('active', 'pending_confirm')`,
+                )
+                .run(nowTs, link.target_id).changes;
+              break;
+            case 'memory_change_event':
+              receipt.claimDerived.changeEvents += this.db
+                .prepare(
+                  `UPDATE memory_change_events
+                   SET active = 0, updated_at = ?
+                   WHERE id = ? AND active = 1`,
+                )
+                .run(nowTs, link.target_id).changes;
+              break;
+            case 'action':
+            case 'proposed_action':
+              receipt.claimDerived.actions += this.db
+                .prepare(
+                  `UPDATE proposed_actions SET state = 'dismissed'
+                   WHERE id = ? AND state IN ('pending', 'approved')`,
+                )
+                .run(link.target_id).changes;
+              break;
+          }
+          invalidateLink.run(nowTs, nowTs, link.id);
+        }
+      }
+    } catch {
+      /* claim tables may not exist in pre-migration recovery databases */
+    }
 
     // 1. entity_properties sourced from deleted messages -> delete (orphan props).
     try {

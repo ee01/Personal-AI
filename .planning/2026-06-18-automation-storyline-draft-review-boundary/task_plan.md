@@ -21,7 +21,7 @@ Goal: Improve the Memory Storyline Builder draft review experience from the feat
 ## Decisions
 
 - Avoid recent exact automation-memory targets where practical.
-- Selected Memory Storyline Builder draft page/API from docs/features/index.md after rerolling away from fresh Memory Capture/Memory Lens overlap.
+- Selected Memory Storyline Builder draft page/API from docs/index.md after rerolling away from fresh Memory Capture/Memory Lens overlap.
 - Use .planning/2026-06-18-automation-storyline-draft-review-boundary for this run.
 - Locked scoped implementation: add a draft-level segment grounding review receipt, require copy acknowledgement to cover that receipt, update Storyline docs, and extend the existing Storyline draft page E2E.
 - Reminder branch: local Reminders was readable, but no `Personal AI` list was visible.

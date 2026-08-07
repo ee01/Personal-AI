@@ -2,7 +2,7 @@
 
 ## 2026-06-10T20:02:26+08:00
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, `docs/progressing/to-verify.md`, and Memory Coverage Map docs/source/tests.
+- Read `AGENT.md`, automation memory, `docs/index.md`, `docs/progressing/to-verify.md`, and Memory Coverage Map docs/source/tests.
 - Checked Reminders; no `Personal AI` list exists locally.
 - Randomly selected `备份下载与恢复入口`.
 - Researched Google Takeout, OpenAI ChatGPT export, Claude memory import/export, data portability research, and PIM backup/archive literature.

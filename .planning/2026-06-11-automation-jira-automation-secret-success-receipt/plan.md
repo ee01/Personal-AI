@@ -6,7 +6,7 @@ Improve the `secret value 脱敏` slice of Jira Automation Import so the user st
 
 ## Context
 
-- Selected from `docs/features/index.md` after avoiding the freshest automation targets.
+- Selected from `docs/index.md` after avoiding the freshest automation targets.
 - `docs/progressing/to-verify.md` says `暂无。`.
 - Reminders are readable, but there is no `Personal AI` list on this Mac.
 - Existing code already redacts `secret=true` payloads from preview, review packet, create payload, and console.

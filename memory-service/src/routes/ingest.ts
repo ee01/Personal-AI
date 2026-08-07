@@ -13,6 +13,7 @@ import {
   type IngestResult,
 } from '../types/index.js';
 import { IngestionPipeline } from '../core/IngestionPipeline.js';
+import { ingestClaimAttributionDecisionSchema } from './claimAttributionSchemas.js';
 
 const ingestDecisionSchema = {
   type: 'object' as const,
@@ -84,6 +85,7 @@ const ingestDecisionSchema = {
         reason: { type: 'string' as const },
       },
     },
+    claimAttribution: ingestClaimAttributionDecisionSchema,
   },
 };
 

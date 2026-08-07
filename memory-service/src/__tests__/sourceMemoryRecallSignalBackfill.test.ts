@@ -167,6 +167,26 @@ describe('SourceMemoryRecallSignalBackfillService', () => {
       },
     });
     expect(restoredMetadata).not.toHaveProperty('distillation');
+    expect(
+      fixture.db
+        .prepare(
+          `SELECT claim_attribution_status AS status,
+                  claim_attribution_version AS version
+           FROM messages_raw
+           WHERE id = 'message-with-chunk'`,
+        )
+        .get(),
+    ).toEqual({ status: 'resolved', version: 1 });
+    expect(
+      fixture.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM memory_claims
+           WHERE source_message_id IN ('message-with-chunk', 'message-without-chunk')
+             AND status = 'active'`,
+        )
+        .get(),
+    ).toEqual({ count: 4 });
     const rebuiltChunkTimestamps = fixture.db
       .prepare(
         `SELECT DISTINCT created_at, updated_at
@@ -315,6 +335,12 @@ function createFixture(): {
       INSERT INTO chunks_fts(rowid, content) VALUES (new.chunk_id, new.content);
     END;
   `);
+  db.exec(
+    fs.readFileSync(
+      new URL('../storage/migrations/058_memory_claim_attribution.sql', import.meta.url),
+      'utf8',
+    ),
+  );
   return { db, sourceMemoryDir };
 }
 

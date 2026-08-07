@@ -2,7 +2,7 @@
 
 ## 2026-06-13
 
-- Read `AGENT.md`, automation memory, memory registry hints, legacy root planning files, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, automation memory, memory registry hints, legacy root planning files, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Confirmed `docs/progressing/to-verify.md` says `暂无。`.
 - Checked local Reminders with a Perl-alarmed AppleScript probe; no visible `Personal AI` list exists.
 - Randomly selected `记忆捕捉` under Memory Capture from the feature index while avoiding the freshest exact automation target families.

@@ -3,48 +3,11 @@
 #   POST {BOT_API_BASE_URL}/user/message  （私发）
 #   POST {BOT_API_BASE_URL}/team/message  （群发）
 #
-# 导入后请检查：
+# 导入后请检查（secret 不会随 YAML 带入，必须手工填）：
 # 1. 环境变量 BOT_API_BASE_URL（默认 https://botman.int.rclabenv.com/v2）
-# 2. 环境变量 BOT_TOKEN（Bearer）
-# 3. 环境变量 BOT_ID（请求头 bot）
-# 4. 发布 Workflow，复制 API URL + API Key，回头给我替换 Jira rule 里的
-#    {{BOT_API_BASE_URL}}/user/message 与 /team/message 两段 webhook
-#
-# HTTP 实际打：{{BOT_API_BASE_URL}}/{{request_path}}
-#   user/private → user/message
-#   team/group   → team/message
-#
-# Jira / 调用方期望体（response_mode=blocking）：
-#
-# 私发：
-# {
-#   "inputs": {
-#     "mode": "user",
-#     "message": "正文",
-#     "email": "esone.qiu@ringcentral.com",
-#     "mention": "true",
-#     "mentionAutoCorrect": "true"
-#   },
-#   "response_mode": "blocking",
-#   "user": "esone.qiu"
-# }
-#
-# 群发：
-# {
-#   "inputs": {
-#     "mode": "team",
-#     "message": "正文",
-#     "teamId": "148192141318",
-#     "skipMentionCheck": "true",
-#     "isTeamMention": "false",
-#     "mentionList_json": "[]"
-#   },
-#   "response_mode": "blocking",
-#   "user": "esone.qiu"
-# }
-#
-# 也可用 payload_json 直接传完整 botman body；mode 仍决定打哪个 endpoint。
-# 成功输出对齐现有 Jira mark 路径：data.outputs.chatId / postId / sentAt（及 id / creationTime 别名）。
+# 2. 环境变量 BOT_TOKEN（必填，Bearer；空值会导致 Illegal header value b'Bearer '）
+# 3. 环境变量 BOT_ID（请求头 bot，默认 SM AI bot id）
+# 4. 发布 Workflow，复制 API URL + API Key
 
 app:
   description: Jira Automation → Dify → botman /user/message 与 /team/message 跳板。只转发，不改写正文。
@@ -593,9 +556,20 @@ workflow:
                 nested = parsed.get('data') if isinstance(parsed.get('data'), dict) else {}
                 chat_id = _pick(parsed, 'chatId', 'groupId') or _pick(nested, 'chatId', 'groupId')
                 group_id = _pick(parsed, 'groupId') or _pick(nested, 'groupId') or chat_id
-                post_id = _pick(parsed, 'postId', 'id') or _pick(nested, 'postId', 'id')
+                # botman private enqueue returns data.queueId; treat as id/postId for receipt
+                post_id = (
+                    _pick(parsed, 'postId', 'id', 'queueId')
+                    or _pick(nested, 'postId', 'id', 'queueId')
+                )
                 sent_at = _pick(parsed, 'sentAt', 'creationTime') or _pick(nested, 'sentAt', 'creationTime')
-                error = _pick(parsed, 'error', 'message', 'detail') or _pick(nested, 'error', 'message', 'detail')
+                # Do NOT treat top-level message:"success" as an error (botman success body).
+                error = _pick(parsed, 'error', 'detail') or _pick(nested, 'error', 'detail')
+                if not error and not str(status_code).startswith('2'):
+                    error = (
+                        _pick(parsed, 'message')
+                        or _pick(nested, 'message')
+                        or f'http_{_trim(status_code) or "0"}'
+                    )
                 status_text = _pick(parsed, 'status') or ('succeeded' if str(status_code).startswith('2') and not error else 'failed')
                 accepted = 'true' if str(status_code).startswith('2') and not error else 'false'
 

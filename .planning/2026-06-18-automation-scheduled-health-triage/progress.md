@@ -2,7 +2,7 @@
 
 ## 2026-06-18
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory workflow notes, and current Reminders list names.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory workflow notes, and current Reminders list names.
 - Confirmed no `Personal AI` Reminders list exists locally.
 - Rerolled away from Google Slides Analyzer due same-day family coverage and selected `Scheduled Messages / 队列健康提示`.
 - Inspected Scheduled Messages docs, `scheduleQueuePressure`, `scheduleHealth`, manager UI rendering, and current targeted E2E scripts.

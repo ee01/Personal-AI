@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected feature: `Memory Capture API` in `docs/features/index.md`.
+- Selected feature: `Memory Capture API` in `docs/index.md`.
 - Source doc: `docs/features/memory_capture.md`.
 - Code surface: `src/modals/components/SourceMemoryDetailPage.vue` and `tools/verify-source-memory-capsule-e2e.mjs`.
 - Boundary: presentation/accessibility-only for source-memory detail controls. Do not change candidate scoring, save/note/dismiss APIs, linked `web` signal semantics, distillation, source URL safety, or Memory Service deployment.

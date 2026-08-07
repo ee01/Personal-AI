@@ -2,7 +2,7 @@
 
 ## 2026-06-16
 
-- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, planning skill instructions, random-feature memory procedure, and worktree status.
+- Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, planning skill instructions, random-feature memory procedure, and worktree status.
 - Checked local Reminders list names with AppleScript; no visible `Personal AI` list exists.
 - Initial random feature pick hit a very recent User Profile family; rerolled after excluding recent automation-memory targets.
 - Selected `自定义消息分析提示词` / Prompt Config and created this isolated planning directory.

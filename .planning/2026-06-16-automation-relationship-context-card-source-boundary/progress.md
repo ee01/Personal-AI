@@ -2,7 +2,7 @@
 
 ## 2026-06-16
 
-- Read `AGENT.md`, automation memory, memory registry hints, stale root planning files, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, automation memory, memory registry hints, stale root planning files, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Randomly selected `人脉关系 Context Card` from the feature index after excluding the freshest exact automation-memory feature families where practical.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found, so no reminder items can be incorporated or completed.
 - Created a fresh isolated planning directory for this run.

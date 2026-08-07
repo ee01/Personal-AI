@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick a random shipped feature from `docs/features/index.md`.
+- Pick a random shipped feature from `docs/index.md`.
 - Ensure the feature doc matches current code without over-detailing.
 - Search current industry products and relevant research before shaping the improvement.
 - Implement a low-decision unfinished or UX improvement if available.

@@ -7,7 +7,7 @@
 - **Started:** 2026-07-01
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and memory registry hints.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and memory registry hints.
 - Randomly selected `联动操作 / Openclaw` from the feature index after excluding the freshest exact-focus automation targets.
 - Checked local Reminders; visible lists do not include `Personal AI`.
 - Created this isolated planning directory and recorded initial constraints.

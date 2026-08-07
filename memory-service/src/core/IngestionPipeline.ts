@@ -24,6 +24,8 @@ import type {
   IngestDecision,
   IngestSalienceComponents,
   EntityType,
+  IngestClaimAttributionDecision,
+  MemoryClaimEnvelope,
   ProfileCandidate,
 } from '../types/index.js';
 import { SalienceScorer } from './SalienceScorer.js';
@@ -41,6 +43,11 @@ import { MergeDecisionService, type MergeDecision } from './MergeDecisionService
 import { getConfig } from '../config.js';
 import { toSlug } from '../utils/slug.js';
 import { now, formatDate } from '../utils/time.js';
+import {
+  MemoryClaimAttributionService,
+  type MemoryClaimPolicyKey,
+} from './MemoryClaimAttributionService.js';
+import { MemoryClaimRepository } from '../repositories/MemoryClaimRepository.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +70,8 @@ interface LLMExtraction {
     action_type: string;
     confidence: number;
     context: string;
+    claim_index?: number;
+    claim_text?: string;
   }>;
   importance: number;
   sentiment: string;
@@ -74,6 +83,8 @@ interface LLMExtraction {
     item_key: string;
     item_value: string;
     confidence?: number;
+    claim_index?: number;
+    claim_text?: string;
   }>;
   profileCandidates?: ProfileCandidate[];
 }
@@ -134,6 +145,8 @@ export class IngestionPipeline {
   private scorer: SalienceScorer;
   private truthMaintainer: TruthMaintainer;
   private contextExpansion: RecallContextExpansionService;
+  private claimAttribution: MemoryClaimAttributionService;
+  private claimRepository: MemoryClaimRepository;
   private userDataManager?: UserDataManager;
 
   constructor(
@@ -146,6 +159,8 @@ export class IngestionPipeline {
     this.scorer = new SalienceScorer(db);
     this.truthMaintainer = new TruthMaintainer(db, userId);
     this.contextExpansion = new RecallContextExpansionService(db);
+    this.claimAttribution = new MemoryClaimAttributionService(db);
+    this.claimRepository = new MemoryClaimRepository(db);
   }
 
   /**
@@ -221,6 +236,9 @@ export class IngestionPipeline {
     const injectionScreen = screenForInjection(payload.content);
 
     if (existing) {
+      const claimAttribution = this.claimAttribution.ensureForMessage(
+        existing.id,
+      );
       return {
         id: existing.id,
         status: 'duplicate',
@@ -236,6 +254,7 @@ export class IngestionPipeline {
           trustClass,
           sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
           injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
+          claimAttribution,
         },
       };
     }
@@ -311,8 +330,9 @@ export class IngestionPipeline {
             (id, content, summary, scope, source, source_type, source_url, source_title,
              sender, group_id, group_name, timestamp,
              entities_json, matched_projects_json,
-              importance, sentiment, metadata_json, trust_class, injection_flags_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              importance, sentiment, metadata_json, trust_class, injection_flags_json,
+              claim_attribution_status, claim_attribution_version, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?)`,
         )
         .run(
           id,
@@ -353,6 +373,38 @@ export class IngestionPipeline {
       };
     }
 
+    // Claim attribution is a mandatory fail-closed gate for every newly stored
+    // message, independent of whether the optional LLM extraction ran. Raw
+    // storage remains available if attribution fails; only higher-responsibility
+    // derived memories are withheld below.
+    let claimAttribution: IngestClaimAttributionDecision;
+    let claims: MemoryClaimEnvelope[] = [];
+    try {
+      claimAttribution = this.claimAttribution.ensureForMessage(id);
+      if (claimAttribution.status === 'resolved') {
+        claims = this.claimAttribution.getClaimsForMessage(id, {
+          ensure: false,
+        });
+      }
+    } catch (err) {
+      const error =
+        err instanceof Error ? err.message : 'claim_attribution_failed';
+      console.warn(
+        '[IngestionPipeline] Claim attribution failed; derived memories are blocked:',
+        error,
+      );
+      this.claimRepository.setMessageState(id, 'failed', {
+        version: 1,
+        error,
+      });
+      claimAttribution = {
+        status: 'failed',
+        claimCount: 0,
+        highResponsibilityAllowed: 0,
+        highResponsibilityBlocked: contentNormalized.trim() ? 1 : 0,
+      };
+    }
+
     // ---- 5. Generate embedding & store in messages_vec ----
     if (isIngestEmbeddingEnabled()) {
       try {
@@ -378,7 +430,7 @@ export class IngestionPipeline {
     if (shouldIndex) {
       if (extraction) {
         try {
-          this.processEntities(extraction, id, ts);
+          this.processEntities(extraction, id, ts, claims);
         } catch (err) {
           console.warn(
             '[IngestionPipeline] Entity processing failed:',
@@ -462,7 +514,12 @@ export class IngestionPipeline {
       this.isOwnerAuthoredPayload(payload)
     ) {
       try {
-        this.processProfileCandidates(extraction.profileCandidates, id, ts);
+        this.processProfileCandidates(
+          extraction.profileCandidates,
+          id,
+          ts,
+          claims,
+        );
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Profile extraction failed:',
@@ -474,7 +531,7 @@ export class IngestionPipeline {
     // ---- 6c. Opinion candidate extraction from sentiment-laden messages ----
     if (extraction) {
       try {
-        this.processOpinionCandidates(extraction, id, ts);
+        this.processOpinionCandidates(extraction, id, ts, claims);
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Opinion extraction failed:',
@@ -532,12 +589,19 @@ export class IngestionPipeline {
           })
           .map((project) => project.id);
         if (matchedIds.length > 0) {
-          const extractor = new ProjectTimelineExtractor(this.db);
-          void extractor.extractFromMessage({
-            messageId: id,
-            content: contentNormalized,
-            matchedProjectIds: matchedIds,
-          });
+          const eligibleTimelineContent = claims
+            .filter((claim) => claim.policy.currentTruthCandidate)
+            .map((claim) => claim.sourceText.trim())
+            .filter(Boolean)
+            .join('\n');
+          if (eligibleTimelineContent) {
+            const extractor = new ProjectTimelineExtractor(this.db);
+            void extractor.extractFromMessage({
+              messageId: id,
+              content: eligibleTimelineContent,
+              matchedProjectIds: matchedIds,
+            });
+          }
         }
       } catch (err) {
         console.warn(
@@ -607,6 +671,7 @@ export class IngestionPipeline {
       trustClass,
       sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
       injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
+      claimAttribution,
       mergeOp:
         mergeOp && mergeOp.op !== 'ADD'
           ? { op: mergeOp.op, neighborIds: mergeOp.neighborIds, reason: mergeOp.reason }
@@ -727,7 +792,9 @@ Return JSON:
       "value": "property_value",
       "action_type": "set",
       "confidence": 0.8,
-      "context": "why this property was extracted"
+      "context": "why this property was extracted",
+      "claim_index": 0,
+      "claim_text": "exact source claim copied from Message"
     }
   ],
   "importance": 0.7,
@@ -736,7 +803,7 @@ Return JSON:
   "is_decision": false,
   "is_action_item": false,
   "profile_candidates": [
-    {"item_type": "interest|preference|fact|habit|constraint", "item_key": "string", "item_value": "string"}
+    {"item_type": "interest|preference|fact|habit|constraint", "item_key": "string", "item_value": "string", "claim_index": 0, "claim_text": "exact source claim copied from Message"}
   ]
 }
 
@@ -744,6 +811,10 @@ Rules:
 - importance is 0-1 (0 = trivial chat, 1 = critical decision)
 - sentiment is one of: positive, negative, neutral, mixed
 - Only include entities that are clearly referenced
+- Every properties and profile_candidates item must identify its exact source
+  claim. claim_index is the zero-based claim/sentence order in Message and
+  claim_text must be copied exactly from Message, without paraphrasing.
+- Omit a property or profile candidate when no single exact source claim supports it.
 - profile_candidates: only extract profile information when Owner-authored message is yes
   - Never extract profile_candidates from external senders or messages merely about the owner
   - Extract personal traits, preferences, facts, habits, constraints, interests, writing style, and owner knowledge from owner-authored messages
@@ -753,12 +824,12 @@ Rules:
     - owner_knowledge.* for what the owner knows or constraints they state; use item_type fact or constraint
     - interest_signal.* for owner interests or recurring focus areas; use item_type interest
   - Examples:
-    - Timezone mentioned → {"item_type": "fact", "item_key": "timezone", "item_value": "GMT+8"}
-    - User focuses on a project → {"item_type": "interest", "item_key": "focus_project", "item_value": "Apollo"}
-    - Communication preference → {"item_type": "preference", "item_key": "communication_style", "item_value": "async"}
-    - Writing style → {"item_type": "preference", "item_key": "writing_style.conciseness", "item_value": "prefers concise status updates"}
-    - Owner knowledge → {"item_type": "fact", "item_key": "owner_knowledge.release_process", "item_value": "knows the BE release checklist"}
-    - Interest signal → {"item_type": "interest", "item_key": "interest_signal.ai_memory", "item_value": "personal AI memory systems"}
+    - Timezone mentioned → item_type=fact, item_key=timezone, item_value=GMT+8, plus exact claim_index and claim_text
+    - User focuses on a project → item_type=interest, item_key=focus_project, item_value=Apollo, plus exact claim_index and claim_text
+    - Communication preference → item_type=preference, item_key=communication_style, item_value=async, plus exact claim_index and claim_text
+    - Writing style → item_type=preference, item_key=writing_style.conciseness, item_value=prefers concise status updates, plus exact claim_index and claim_text
+    - Owner knowledge → item_type=fact, item_key=owner_knowledge.release_process, item_value=knows the BE release checklist, plus exact claim_index and claim_text
+    - Interest signal → item_type=interest, item_key=interest_signal.ai_memory, item_value=personal AI memory systems, plus exact claim_index and claim_text
   - Only include profile_candidates when there is clear evidence in the message
 - Return ONLY valid JSON, no extra text`;
 
@@ -778,6 +849,8 @@ Rules:
             itemKey: pc.item_key,
             itemValue: pc.item_value,
             confidence: pc.confidence,
+            claimIndex: pc.claim_index,
+            claimText: pc.claim_text,
           }),
         )
         .filter((pc): pc is ProfileCandidate => pc != null);
@@ -874,6 +947,39 @@ Rules:
     };
   }
 
+  /** Resolve a candidate's evidence fail-closed, including index/text agreement. */
+  private resolveReferencedClaim(
+    claims: MemoryClaimEnvelope[],
+    reference: { claimIndex?: number; claimText?: string },
+    policyKey: MemoryClaimPolicyKey,
+  ): MemoryClaimEnvelope | null {
+    const hasIndex =
+      Number.isInteger(reference.claimIndex) &&
+      (reference.claimIndex as number) >= 0;
+    const hasText = Boolean(reference.claimText?.trim());
+    if (!hasIndex && !hasText) return null;
+
+    const byIndex = hasIndex
+      ? this.claimAttribution.resolveCandidateClaim(
+          claims,
+          { claimIndex: reference.claimIndex },
+          policyKey,
+        )
+      : null;
+    const byText = hasText
+      ? this.claimAttribution.resolveCandidateClaim(
+          claims,
+          { claimText: reference.claimText },
+          policyKey,
+        )
+      : null;
+
+    if (hasIndex && hasText) {
+      return byIndex?.id === byText?.id ? byIndex : null;
+    }
+    return byIndex ?? byText;
+  }
+
   /**
    * Flatten the categorized entities from the LLM extraction into a
    * uniform array of { type, name } objects.
@@ -905,6 +1011,7 @@ Rules:
     extraction: LLMExtraction,
     messageId: string,
     ts: number,
+    claims: MemoryClaimEnvelope[],
   ): void {
     const entitiesList = this.flattenEntities(extraction);
     const entityIds: string[] = [];
@@ -968,11 +1075,21 @@ Rules:
     // Process extracted properties
     if (extraction.properties && extraction.properties.length > 0) {
       for (const prop of extraction.properties) {
+        const supportingClaim = this.resolveReferencedClaim(
+          claims,
+          {
+            claimIndex: prop.claim_index,
+            claimText: prop.claim_text,
+          },
+          'currentTruthCandidate',
+        );
+        if (!supportingClaim) continue;
+
         const slug = toSlug(prop.entity_name);
         const entityId = `${prop.entity_type.toLowerCase()}_${slug}`;
 
         try {
-          this.db
+          const result = this.db
             .prepare(
               `INSERT INTO entity_properties
                 (entity_id, property_key, property_value, value_type,
@@ -990,6 +1107,12 @@ Rules:
               prop.confidence,
               prop.action_type,
             );
+          this.claimRepository.linkDerived(
+            supportingClaim.id,
+            'entity_property',
+            String(result.lastInsertRowid),
+            'evidence',
+          );
         } catch (err) {
           // Entity may not exist yet if it came from properties but not entities list
           console.warn(
@@ -1010,12 +1133,24 @@ Rules:
     candidates: ProfileCandidate[],
     messageId: string,
     timestamp: number,
+    claims: MemoryClaimEnvelope[],
   ): void {
     for (const candidate of candidates) {
+      const supportingClaim = this.resolveReferencedClaim(
+        claims,
+        {
+          claimIndex: candidate.claimIndex,
+          claimText: candidate.claimText,
+        },
+        'profileCandidate',
+      );
+      if (!supportingClaim) continue;
+
       const key = candidate.itemKey;
       const value = candidate.itemValue.toLowerCase().trim();
       const fingerprint = contentHash(key + ':' + value);
       const confidence = candidate.confidence ?? 0.6;
+      let profileItemId: string;
 
       const existing = this.db
         .prepare(
@@ -1034,6 +1169,7 @@ Rules:
         | undefined;
 
       if (existing) {
+        profileItemId = existing.id;
         // Reinforce existing profile item
         const newMentionCount = existing.mention_count + 1;
         const evidenceRefs: Array<{ messageId: string; ts: number }> =
@@ -1078,7 +1214,7 @@ Rules:
         );
 
         // Insert new profile item
-        const id = uuidv4();
+        profileItemId = uuidv4();
         const frequencyNorm = 1 / 10; // first mention
         const recency = 1.0;
         const confirmationBonus = 0;
@@ -1104,7 +1240,7 @@ Rules:
              VALUES (?, ?, ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, ?, ?, ?)`,
           )
           .run(
-            id,
+            profileItemId,
             candidate.itemType,
             key,
             candidate.itemValue,
@@ -1118,6 +1254,13 @@ Rules:
             now(),
           );
       }
+
+      this.claimRepository.linkDerived(
+        supportingClaim.id,
+        'profile_item',
+        profileItemId,
+        'evidence',
+      );
 
       // Mark profile as dirty so snapshot rebuild picks it up
       try {
@@ -1141,7 +1284,20 @@ Rules:
     extraction: LLMExtraction,
     messageId: string,
     timestamp: number,
+    claims: MemoryClaimEnvelope[],
   ): void {
+    const supportingClaim = this.claimAttribution.uniqueEligibleClaim(
+      claims,
+      'currentTruthCandidate',
+    );
+    if (
+      !supportingClaim ||
+      supportingClaim.owner.kind !== 'self' ||
+      supportingClaim.speechMode !== 'direct_assertion'
+    ) {
+      return;
+    }
+
     // Only process when sentiment is clearly non-neutral
     const sentiment = extraction.sentiment;
     if (!sentiment || sentiment === 'neutral') return;
@@ -1207,6 +1363,12 @@ Rules:
           currentTime,
           currentTime,
         );
+      this.claimRepository.linkDerived(
+        supportingClaim.id,
+        'opinion_item',
+        id,
+        'evidence',
+      );
     }
   }
 

@@ -1,7 +1,7 @@
 # Progress
 
 - Selected feature: `Meeting Pilot handoff`.
-- Read `AGENT.md`, `docs/features/index.md`, `docs/features/today_pilot.md`, and `docs/features/meeting_pilot.md`.
+- Read `AGENT.md`, `docs/index.md`, `docs/features/today_pilot.md`, and `docs/features/meeting_pilot.md`.
 - Confirmed Reminder branch: no visible `Personal AI` list.
 - Reviewed external product/paper references.
 - Drafted implementation plan.

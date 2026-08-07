@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 随机候选：`Ask 活答案记忆`，来源于 `docs/features/index.md`。
+- 随机候选：`Ask 活答案记忆`，来源于 `docs/index.md`。
 - 目标文档：`docs/features/ask.md`。
 - 目标代码：`src/modals/components/SearchResultPage.vue`、`tools/verify-ask-clarification-e2e.mjs`。
 

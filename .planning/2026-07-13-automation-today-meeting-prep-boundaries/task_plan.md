@@ -1,7 +1,7 @@
 # Task Plan: Today Pilot Meeting Prep Boundary Sweep
 
 ## Goal
-Improve the selected `会前准备` feature from `docs/features/index.md` with one bounded, code-backed UX/trust fix, keep docs current, and verify through the repo's real Today Pilot meeting-prep harness.
+Improve the selected `会前准备` feature from `docs/index.md` with one bounded, code-backed UX/trust fix, keep docs current, and verify through the repo's real Today Pilot meeting-prep harness.
 
 ## Current Phase
 Complete
@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and Reminder state
+- [x] Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and Reminder state
 - [x] Randomly select `会前准备` under Today Pilot from the feature index while avoiding the freshest exact targets where practical
 - [x] Document initial repo and Reminder context in findings.md
 - **Status:** complete

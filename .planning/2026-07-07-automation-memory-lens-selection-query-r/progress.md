@@ -7,7 +7,7 @@
 - **Started:** 2026-07-07
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, root planning files, automation memory, and memory registry hints.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, root planning files, automation memory, and memory registry hints.
 - Used `planning-with-files` and created isolated plan directory `.planning/2026-07-07-automation-memory-lens-selection-query-r/`.
 - Checked local Reminders with EventKit: `Personal AI` exists, 4 total items, 0 incomplete; no related open Memory Lens feedback to incorporate or mark done.
 - Random sample selected `划词查找关联记忆` after avoiding the freshest exact automation surfaces.
@@ -16,7 +16,7 @@
 - Baseline `node --check desktop-app/scripts/webpage-memory-detection-check.mjs` passed after prepending the local nvm Node path.
 - Implemented Selection Memory Search `打开` / `候选` receipt rows in `src/contentScriptWebIntelligence.ts`.
 - Updated static and E2E verifier assertions for the new receipt, including the true candidate-count/current-position behavior.
-- Updated `docs/features/memory_lens.md` and `docs/features/index.md` concisely.
+- Updated `docs/features/memory_lens.md` and `docs/index.md` concisely.
 
 ### Files Created/Modified
 - `.planning/2026-07-07-automation-memory-lens-selection-query-r/task_plan.md`
@@ -27,7 +27,7 @@
 - `tools/verify-webpage-memory-detection.ts`
 - `desktop-app/scripts/webpage-memory-detection-check.mjs`
 - `docs/features/memory_lens.md`
-- `docs/features/index.md`
+- `docs/index.md`
 
 ### Planned Verification
 | Test | Expected | Actual | Status |

@@ -8,7 +8,7 @@
 
 ## Selected Feature
 
-- Random sample selected `Task Scheduler 状态 API` from `docs/features/index.md`.
+- Random sample selected `Task Scheduler 状态 API` from `docs/index.md`.
 - The feature doc already describes status refresh receipts, control receipts, schedule health, run history, skipped results, failed refresh, and UI sorting.
 
 ## External Research

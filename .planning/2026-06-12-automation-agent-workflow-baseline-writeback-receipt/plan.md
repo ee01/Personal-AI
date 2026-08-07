@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机抽中：`Agent Workflow 关注项测试`
-- 主文档：`docs/features/agent_workflow.md`
+- 主文档：`docs/features/message_analysis.md`
 - 入口：Options 页面 `标准 Agent 工作流` 的关注项测试、保存样例和批量回归。
 
 ## 发现

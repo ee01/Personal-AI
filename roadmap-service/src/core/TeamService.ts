@@ -7,14 +7,21 @@ import { buildJqlHints } from './JqlIntrospect.js';
 import type {
   ActivityRow,
   ActorContext,
+  EtaSource,
   IntentOp,
   ItemRow,
   ItemSource,
+  MarkerKind,
+  MarkerRow,
   MemberRow,
+  PhaseKind,
+  ReleaseSheetConfig,
   SubRow,
   TeamRow,
   TeamSnapshot,
 } from '../types.js';
+import type { RemoteTask } from './JiraClient.js';
+import { jiraSearchChildTasks } from './JiraClient.js';
 
 function parseJsonArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -24,6 +31,79 @@ function parseJsonArray(raw: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function normalizeReleaseFilter(
+  raw: unknown,
+): ReleaseSheetConfig['releaseFilter'] {
+  if (!raw || typeof raw !== 'object') return { mode: 'all', pattern: '' };
+  const o = raw as Record<string, unknown>;
+  const modeRaw = String(o.mode || 'all');
+  const mode =
+    modeRaw === 'major' || modeRaw === 'custom' ? modeRaw : 'all';
+  const pattern = String(o.pattern || '').trim();
+  if (mode === 'custom' && !pattern) return { mode: 'all', pattern: '' };
+  return { mode, pattern: mode === 'custom' ? pattern : '' };
+}
+
+function parseReleaseSheet(
+  raw: string | null | undefined,
+): ReleaseSheetConfig | null {
+  if (!raw || raw === 'null') return null;
+  try {
+    const parsed = JSON.parse(raw) as ReleaseSheetConfig | null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.url || !parsed.spreadsheetId) return null;
+    return {
+      url: String(parsed.url),
+      spreadsheetId: String(parsed.spreadsheetId),
+      sheetName: String(parsed.sheetName || 'Sheet1'),
+      range: String(parsed.range || 'A1:C500'),
+      splitPhase: String(parsed.splitPhase || 'ff'),
+      showPhases: Array.isArray(parsed.showPhases)
+        ? parsed.showPhases.map(String)
+        : [],
+      releaseFilter: normalizeReleaseFilter(parsed.releaseFilter),
+      rows: Array.isArray(parsed.rows) ? parsed.rows : [],
+      fetchedAt:
+        typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Validate + normalize a client-submitted releaseSheet payload (or null to clear). */
+function normalizeReleaseSheetInput(
+  raw: unknown,
+): ReleaseSheetConfig | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const url = String(o.url || '').trim();
+  const spreadsheetId = String(o.spreadsheetId || '').trim();
+  if (!url || !spreadsheetId) return null;
+  return {
+    url,
+    spreadsheetId,
+    sheetName: String(o.sheetName || 'Sheet1').trim() || 'Sheet1',
+    range: String(o.range || 'A1:C500').trim() || 'A1:C500',
+    splitPhase: String(o.splitPhase || 'ff'),
+    showPhases: Array.isArray(o.showPhases)
+      ? o.showPhases.map(String)
+      : [],
+    releaseFilter: normalizeReleaseFilter(o.releaseFilter),
+    rows: Array.isArray(o.rows)
+      ? (o.rows as Array<Record<string, unknown>>)
+      : [],
+    fetchedAt:
+      typeof o.fetchedAt === 'string'
+        ? o.fetchedAt
+        : o.fetchedAt
+          ? new Date(o.fetchedAt as string | number | Date).toISOString()
+          : null,
+  };
 }
 
 function now(): number {
@@ -52,7 +132,21 @@ function projectKeyFromJiraKey(key: string): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
-function mapItem(row: ItemRow, subs: SubRow[]) {
+function mapMarker(row: MarkerRow) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    phaseKind: row.phase_kind,
+    label: row.label,
+    date: row.date,
+    jiraKey: row.jira_key,
+    etaSource: row.eta_source,
+    createdBy: row.created_by,
+    version: row.version,
+  };
+}
+
+function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
   return {
     key: row.key,
     type: row.type,
@@ -80,9 +174,11 @@ function mapItem(row: ItemRow, subs: SubRow[]) {
       start: sub.start_date,
       days: sub.days,
       temp: Boolean(sub.is_draft),
+      cleared: Boolean(sub.cleared),
       createdBy: sub.created_by,
       version: sub.version,
     })),
+    markers: markers.map(mapMarker),
   };
 }
 
@@ -146,6 +242,11 @@ export function getTeamSnapshot(teamId: string): TeamSnapshot | null {
   const subs = db
     .prepare(`SELECT * FROM subs WHERE team_id = ? ORDER BY created_at ASC`)
     .all(teamId) as SubRow[];
+  const markers = db
+    .prepare(
+      `SELECT * FROM item_markers WHERE team_id = ? ORDER BY created_at ASC`,
+    )
+    .all(teamId) as MarkerRow[];
   const members = db
     .prepare(`SELECT * FROM members WHERE team_id = ? ORDER BY name ASC`)
     .all(teamId) as MemberRow[];
@@ -185,6 +286,12 @@ export function getTeamSnapshot(teamId: string): TeamSnapshot | null {
     list.push(sub);
     subsByItem.set(sub.item_key, list);
   }
+  const markersByItem = new Map<string, MarkerRow[]>();
+  for (const marker of markers) {
+    const list = markersByItem.get(marker.item_key) || [];
+    list.push(marker);
+    markersByItem.set(marker.item_key, list);
+  }
 
   return {
     team: {
@@ -199,8 +306,16 @@ export function getTeamSnapshot(teamId: string): TeamSnapshot | null {
         jql: team.jql,
         modeItemType: modeItemType(teamId),
       }),
+      jiraEnabled: config.jira.enabled,
+      releaseSheet: parseReleaseSheet(team.release_sheet_json),
     },
-    items: items.map((item) => mapItem(item, subsByItem.get(item.key) || [])),
+    items: items.map((item) =>
+      mapItem(
+        item,
+        subsByItem.get(item.key) || [],
+        markersByItem.get(item.key) || [],
+      ),
+    ),
     members: members.map((m) => ({
       id: m.id,
       name: m.name,
@@ -235,8 +350,8 @@ export function createTeam(input: {
   db.prepare(
     `INSERT INTO teams (
       id, name, jql, checked_quarters_json, imported_quarters_json,
-      version, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, '[]', 1, ?, ?, ?)`,
+      release_sheet_json, version, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, '[]', 'null', 1, ?, ?, ?)`,
   ).run(
     id,
     input.name.trim(),
@@ -398,6 +513,10 @@ export function renderActivityText(
       return `${who} 创建了团队 ${summary.name || label}`;
     case 'update_jql':
       return `${who} 更新了团队 JQL`;
+    case 'update_release_sheet':
+      return summary.cleared
+        ? `${who} 清除了发布时间表标尺`
+        : `${who} 更新了发布时间表标尺`;
     case 'import':
       return `${who} 导入了 ${(summary.quarters as string[])?.join(', ') || '数据'}，${summary.count || 0} 项`;
     case 'schedule':
@@ -418,12 +537,40 @@ export function renderActivityText(
       return `${who} 把 ${label} 创建为 ${summary.jiraKey || ''}`;
     case 'add_sub':
       return `${who} 给 ${summary.parent || row.target_key} 加了${summary.temp ? '草稿' : ''}任务 ${label}`;
+    case 'update_sub':
+      return `${who} 更新了任务 ${label}`;
     case 'delete_sub':
       return `${who} 删除了任务 ${label}`;
     case 'resolve_draft':
       return `${who} 将草稿 ${label} 创建为 ${summary.jiraKey || ''}`;
     case 'cleanup':
       return `${who} 清理了 ${summary.count || 0} 个过期任务`;
+    case 'update_member':
+      return `${who} 把成员 ${summary.from || ''} 改名为 ${summary.to || label}`;
+    case 'add_marker':
+      return `${who} 给 ${summary.parent || row.target_key} 添加了${
+        summary.kind === 'dep' ? '外部依赖' : '节点'
+      } ${label}`;
+    case 'update_marker':
+      return `${who} 更新了 ${label}${
+        summary.etaSet ? `（ETA ${summary.date || ''}）` : ''
+      }`;
+    case 'delete_marker':
+      return `${who} 删除了${
+        summary.kind === 'dep' ? '外部依赖' : '节点'
+      } ${label}`;
+    case 'jira_sync':
+      return `${who} 的排期变更已回写 ${summary.jiraKey || label} Target ${
+        summary.start || '?'
+      } → ${summary.end || '?'}`;
+    case 'jira_sync_failed':
+      return `${who} 回写 ${summary.jiraKey || label} Target 失败${
+        summary.status ? `（HTTP ${summary.status}）` : ''
+      }`;
+    case 'import_tasks':
+      return `${who} 导入了 ${summary.added || 0} 个 Task（跳过 ${
+        summary.skipped || 0
+      } 个已存在）`;
     case 'lock':
       return `${who} 正在编辑 ${label}`;
     default:
@@ -460,6 +607,36 @@ function getItem(teamId: string, key: string): ItemRow | null {
       .prepare(`SELECT * FROM items WHERE team_id = ? AND key = ?`)
       .get(teamId, key) as ItemRow | undefined) || null
   );
+}
+
+/**
+ * Insert `movedKey` at `insertAt` among scheduled items and renumber lanes 0..n-1.
+ * Without this, dragging up to an occupied lane leaves duplicates and the sort
+ * looks like the row never moved.
+ */
+function reindexScheduledLanes(
+  teamId: string,
+  movedKey: string,
+  insertAt: number,
+  ts: number,
+): void {
+  const db = getDb();
+  const scheduled = db
+    .prepare(
+      `SELECT key FROM items
+       WHERE team_id = ? AND scheduled = 1
+       ORDER BY lane ASC, key ASC`,
+    )
+    .all(teamId) as Array<{ key: string }>;
+  const others = scheduled.map((r) => r.key).filter((k) => k !== movedKey);
+  const at = Math.max(0, Math.min(Math.floor(insertAt), others.length));
+  others.splice(at, 0, movedKey);
+  const update = db.prepare(
+    `UPDATE items SET lane = ?, updated_at = ? WHERE team_id = ? AND key = ?`,
+  );
+  others.forEach((key, index) => {
+    update.run(index, ts, teamId, key);
+  });
 }
 
 /**
@@ -522,16 +699,52 @@ export function applyIntent(
   let createdItemKey: string | null = null;
 
   if (op === 'update_jql') {
-    db.prepare(
-      `UPDATE teams SET jql = ?, version = version + 1, updated_at = ? WHERE id = ?`,
-    ).run(String(intent.jql || ''), ts, teamId);
+    const releaseSheet = normalizeReleaseSheetInput(intent.releaseSheet);
+    if (releaseSheet === undefined) {
+      db.prepare(
+        `UPDATE teams SET jql = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      ).run(String(intent.jql || ''), ts, teamId);
+    } else {
+      db.prepare(
+        `UPDATE teams SET jql = ?, release_sheet_json = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      ).run(
+        String(intent.jql || ''),
+        JSON.stringify(releaseSheet),
+        ts,
+        teamId,
+      );
+    }
     writeActivity({
       teamId,
       actor,
       op,
       targetType: 'team',
       targetKey: teamId,
-      summary: { jql: intent.jql },
+      summary: {
+        jql: intent.jql,
+        releaseSheet: releaseSheet === undefined ? undefined : Boolean(releaseSheet),
+      },
+    });
+  } else if (op === 'update_release_sheet') {
+    const releaseSheet = normalizeReleaseSheetInput(
+      intent.releaseSheet === undefined ? null : intent.releaseSheet,
+    );
+    const next = releaseSheet === undefined ? null : releaseSheet;
+    db.prepare(
+      `UPDATE teams SET release_sheet_json = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+    ).run(JSON.stringify(next), ts, teamId);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'team',
+      targetKey: teamId,
+      summary: {
+        cleared: !next,
+        splitPhase: next?.splitPhase,
+        showPhases: next?.showPhases,
+        rowCount: next?.rows?.length || 0,
+      },
     });
   } else if (op === 'import') {
     const items = Array.isArray(intent.items) ? intent.items : [];
@@ -555,6 +768,9 @@ export function applyIntent(
         const keyPlaceholders = doomed.map(() => '?').join(',');
         db.prepare(
           `DELETE FROM subs WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
+        ).run(teamId, ...doomed);
+        db.prepare(
+          `DELETE FROM item_markers WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
         ).run(teamId, ...doomed);
         db.prepare(
           `DELETE FROM items WHERE team_id = ? AND key IN (${keyPlaceholders})`,
@@ -661,6 +877,10 @@ export function applyIntent(
     const check = bumpItemVersion(teamId, key, baseVersion);
     if (!check.ok) return check;
     const before = check.item;
+    const lane =
+      typeof intent.lane === 'number' && Number.isFinite(intent.lane)
+        ? Math.floor(intent.lane)
+        : null;
     db.prepare(
       `UPDATE items SET
         scheduled = 1,
@@ -673,11 +893,22 @@ export function applyIntent(
     ).run(
       intent.start ? String(intent.start) : before.start_date,
       typeof intent.days === 'number' ? intent.days : before.days,
-      typeof intent.lane === 'number' ? intent.lane : null,
+      lane,
       ts,
       teamId,
       key,
     );
+    // Vertical reorder must shift siblings; a lone lane write leaves duplicates.
+    if (lane != null && (op === 'move' || op === 'schedule')) {
+      reindexScheduledLanes(teamId, key, lane, ts);
+    }
+    // Re-dragging an Epic onto the Gantt restores soft-cleared child tasks.
+    if (op === 'schedule') {
+      db.prepare(
+        `UPDATE subs SET cleared = 0, updated_at = ?
+         WHERE team_id = ? AND item_key = ? AND cleared = 1`,
+      ).run(ts, teamId, key);
+    }
     writeActivity({
       teamId,
       actor,
@@ -690,8 +921,11 @@ export function applyIntent(
         from: before.start_date,
         to: intent.start || before.start_date,
         days: intent.days ?? before.days,
+        lane: lane ?? before.lane,
       },
     });
+    // Target Start/End sync is viewer-driven (extension Options token first,
+    // server JIRA_PAT fallback). Do not auto-queue here.
   } else if (op === 'unschedule') {
     const key = String(intent.itemKey || '');
     const baseVersion = Number(intent.baseVersion);
@@ -749,13 +983,10 @@ export function applyIntent(
       });
     }
   } else if (op === 'expand' || op === 'collapse') {
-    const key = String(intent.itemKey || '');
-    const check = bumpItemVersion(teamId, key, Number(intent.baseVersion));
-    if (!check.ok) return check;
-    db.prepare(
-      `UPDATE items SET expanded = ?, version = version + 1, updated_at = ?
-       WHERE team_id = ? AND key = ?`,
-    ).run(op === 'expand' ? 1 : 0, ts, teamId, key);
+    // Expand/collapse is per-viewer (URL `expand=` + local UI). Accept the op
+    // for older clients but do not mutate shared state or broadcast — otherwise
+    // one person's fold would close another mid add-subtask.
+    return { ok: true, snapshot: getTeamSnapshot(teamId)! };
   } else if (op === 'add_item') {
     const title = String(intent.title || '').trim();
     if (!title) return { ok: false, error: 'title_required' };
@@ -806,6 +1037,10 @@ export function applyIntent(
       return { ok: false, error: 'item_has_jira' };
     }
     db.prepare(`DELETE FROM subs WHERE team_id = ? AND item_key = ?`).run(
+      teamId,
+      key,
+    );
+    db.prepare(`DELETE FROM item_markers WHERE team_id = ? AND item_key = ?`).run(
       teamId,
       key,
     );
@@ -862,8 +1097,8 @@ export function applyIntent(
     db.prepare(
       `INSERT INTO subs (
         id, team_id, item_key, jira_key, title, alias, owner,
-        start_date, days, is_draft, created_by, version, created_at, updated_at
-      ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 1, ?, 1, ?, ?)`,
+        start_date, days, is_draft, cleared, created_by, version, created_at, updated_at
+      ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 1, 0, ?, 1, ?, ?)`,
     ).run(
       id,
       teamId,
@@ -871,7 +1106,7 @@ export function applyIntent(
       String(intent.title || 'Untitled'),
       intent.owner ? String(intent.owner) : null,
       intent.start ? String(intent.start) : item.start_date,
-      typeof intent.days === 'number' ? intent.days : 3,
+      typeof intent.days === 'number' ? intent.days : 14,
       actor.name,
       ts,
       ts,
@@ -889,6 +1124,78 @@ export function applyIntent(
         title: intent.title,
         parent: item.alias || item.title,
         temp: true,
+        owner: intent.owner || null,
+      },
+    });
+  } else if (op === 'update_sub') {
+    const subId = String(intent.subId || '');
+    const sub = db
+      .prepare(`SELECT * FROM subs WHERE team_id = ? AND id = ?`)
+      .get(teamId, subId) as SubRow | undefined;
+    if (!sub) return { ok: false, error: 'sub_not_found' };
+    if (
+      intent.baseVersion != null &&
+      sub.version !== Number(intent.baseVersion)
+    ) {
+      return { ok: false, error: 'version_conflict', current: sub };
+    }
+    const nextTitle =
+      intent.title !== undefined ? String(intent.title || '').trim() || sub.title : sub.title;
+    const nextAlias =
+      intent.alias !== undefined
+        ? intent.alias
+          ? String(intent.alias)
+          : null
+        : sub.alias;
+    const nextOwner =
+      intent.owner !== undefined
+        ? intent.owner
+          ? String(intent.owner).trim() || null
+          : null
+        : sub.owner;
+    const nextStart =
+      intent.start !== undefined
+        ? intent.start
+          ? String(intent.start)
+          : null
+        : sub.start_date;
+    const nextDays =
+      intent.days !== undefined
+        ? typeof intent.days === 'number'
+          ? intent.days
+          : sub.days
+        : sub.days;
+    const nextCleared =
+      intent.cleared !== undefined ? (intent.cleared ? 1 : 0) : sub.cleared;
+    db.prepare(
+      `UPDATE subs SET
+        title = ?, alias = ?, owner = ?, start_date = ?, days = ?, cleared = ?,
+        version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      nextTitle,
+      nextAlias,
+      nextOwner,
+      nextStart,
+      nextDays,
+      nextCleared,
+      ts,
+      sub.id,
+    );
+    if (nextOwner) ensureMember(teamId, nextOwner);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'sub',
+      targetKey: sub.id,
+      summary: {
+        title: nextTitle,
+        alias: nextAlias,
+        owner: nextOwner,
+        from: sub.start_date,
+        to: nextStart,
+        days: nextDays,
       },
     });
   } else if (op === 'delete_sub') {
@@ -949,10 +1256,10 @@ export function applyIntent(
       ).run(ts, teamId, key);
     }
     for (const subId of expiredSubIds) {
-      db.prepare(`DELETE FROM subs WHERE team_id = ? AND id = ?`).run(
-        teamId,
-        subId,
-      );
+      db.prepare(
+        `UPDATE subs SET cleared = 1, version = version + 1, updated_at = ?
+         WHERE team_id = ? AND id = ?`,
+      ).run(ts, teamId, subId);
     }
     writeActivity({
       teamId,
@@ -964,11 +1271,214 @@ export function applyIntent(
     });
   } else if (op === 'add_member') {
     ensureMember(teamId, String(intent.name || ''), String(intent.avatarColor || ''));
+  } else if (op === 'update_member') {
+    const memberId = String(intent.memberId || '');
+    const nextName = String(intent.name || '').trim();
+    if (!nextName) return { ok: false, error: 'name_required' };
+    const member = db
+      .prepare(`SELECT * FROM members WHERE team_id = ? AND id = ?`)
+      .get(teamId, memberId) as MemberRow | undefined;
+    if (!member) return { ok: false, error: 'member_not_found' };
+    if (member.name === nextName) {
+      // no-op
+    } else {
+      const clash = db
+        .prepare(`SELECT id FROM members WHERE team_id = ? AND name = ? AND id != ?`)
+        .get(teamId, nextName, memberId);
+      if (clash) return { ok: false, error: 'member_name_taken' };
+      db.prepare(`UPDATE members SET name = ? WHERE id = ?`).run(nextName, memberId);
+      // Owner is stored as the display name string — rename must cascade.
+      db.prepare(
+        `UPDATE subs SET owner = ?, version = version + 1, updated_at = ?
+         WHERE team_id = ? AND owner = ?`,
+      ).run(nextName, ts, teamId, member.name);
+      writeActivity({
+        teamId,
+        actor,
+        op,
+        targetType: 'member',
+        targetKey: memberId,
+        summary: { from: member.name, to: nextName },
+      });
+    }
   } else if (op === 'remove_member') {
     db.prepare(`DELETE FROM members WHERE team_id = ? AND id = ?`).run(
       teamId,
       String(intent.memberId || ''),
     );
+  } else if (op === 'add_marker') {
+    const itemKey = String(intent.itemKey || '');
+    const item = getItem(teamId, itemKey);
+    if (!item) return { ok: false, error: 'item_not_found' };
+    const kind = String(intent.kind || '') as MarkerKind;
+    if (kind !== 'phase' && kind !== 'dep') {
+      return { ok: false, error: 'invalid_marker_kind' };
+    }
+    const phaseKindRaw = intent.phaseKind
+      ? (String(intent.phaseKind) as PhaseKind)
+      : null;
+    const label = String(intent.label || '').trim();
+    const date =
+      intent.date === null || intent.date === undefined || intent.date === ''
+        ? null
+        : String(intent.date);
+    const jiraKey = intent.jiraKey ? String(intent.jiraKey).trim() || null : null;
+    const etaSourceRaw = intent.etaSource
+      ? (String(intent.etaSource) as EtaSource)
+      : null;
+    if (kind === 'phase') {
+      if (!date) return { ok: false, error: 'phase_date_required' };
+      if (
+        !phaseKindRaw ||
+        !['design', 'stage', 'production', 'custom'].includes(phaseKindRaw)
+      ) {
+        return { ok: false, error: 'phase_kind_required' };
+      }
+      if (phaseKindRaw === 'custom' && !label) {
+        return { ok: false, error: 'label_required' };
+      }
+    } else if (!label) {
+      return { ok: false, error: 'label_required' };
+    }
+    const phaseKind = kind === 'phase' ? phaseKindRaw : null;
+    const resolvedLabel =
+      kind === 'phase' && phaseKind !== 'custom'
+        ? label ||
+          ({ design: 'Design', stage: 'Stage', production: 'Production' } as const)[
+            phaseKind as 'design' | 'stage' | 'production'
+          ]
+        : label;
+    const etaSource =
+      kind === 'dep' && date
+        ? etaSourceRaw === 'jira' || etaSourceRaw === 'manual'
+          ? etaSourceRaw
+          : 'manual'
+        : null;
+    const id = nanoid(12);
+    db.prepare(
+      `INSERT INTO item_markers (
+        id, team_id, item_key, kind, phase_kind, label, date, jira_key, eta_source,
+        created_by, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    ).run(
+      id,
+      teamId,
+      itemKey,
+      kind,
+      phaseKind,
+      resolvedLabel,
+      date,
+      kind === 'dep' ? jiraKey : null,
+      etaSource,
+      actor.name,
+      ts,
+      ts,
+    );
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'marker',
+      targetKey: id,
+      summary: {
+        kind,
+        label: resolvedLabel,
+        date,
+        jiraKey,
+        parent: item.alias || item.title,
+      },
+    });
+  } else if (op === 'update_marker') {
+    const markerId = String(intent.markerId || '');
+    const marker = db
+      .prepare(`SELECT * FROM item_markers WHERE team_id = ? AND id = ?`)
+      .get(teamId, markerId) as MarkerRow | undefined;
+    if (!marker) return { ok: false, error: 'marker_not_found' };
+    if (
+      intent.baseVersion != null &&
+      marker.version !== Number(intent.baseVersion)
+    ) {
+      return { ok: false, error: 'version_conflict', current: mapMarker(marker) };
+    }
+    const nextLabel =
+      intent.label !== undefined
+        ? String(intent.label || '').trim() || marker.label
+        : marker.label;
+    if (marker.kind === 'phase' && marker.phase_kind === 'custom' && !nextLabel) {
+      return { ok: false, error: 'label_required' };
+    }
+    let nextDate = marker.date;
+    let etaSet = false;
+    if (intent.date !== undefined) {
+      if (intent.date === null || intent.date === '') {
+        if (marker.kind === 'phase') {
+          return { ok: false, error: 'phase_date_required' };
+        }
+        nextDate = null;
+      } else {
+        nextDate = String(intent.date);
+        etaSet = marker.kind === 'dep';
+      }
+    }
+    const nextJiraKey =
+      intent.jiraKey !== undefined
+        ? intent.jiraKey
+          ? String(intent.jiraKey).trim() || null
+          : null
+        : marker.jira_key;
+    let nextEtaSource = marker.eta_source;
+    if (marker.kind === 'dep') {
+      if (!nextDate) nextEtaSource = null;
+      else if (intent.etaSource === 'jira' || intent.etaSource === 'manual') {
+        nextEtaSource = intent.etaSource;
+      } else if (!nextEtaSource) {
+        nextEtaSource = 'manual';
+      }
+    } else {
+      nextEtaSource = null;
+    }
+    db.prepare(
+      `UPDATE item_markers SET
+        label = ?, date = ?, jira_key = ?, eta_source = ?,
+        version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    ).run(nextLabel, nextDate, nextJiraKey, nextEtaSource, ts, marker.id);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'marker',
+      targetKey: marker.id,
+      summary: {
+        kind: marker.kind,
+        label: nextLabel,
+        date: nextDate,
+        jiraKey: nextJiraKey,
+        parent: marker.item_key,
+        etaSet,
+      },
+    });
+  } else if (op === 'delete_marker') {
+    const markerId = String(intent.markerId || '');
+    const marker = db
+      .prepare(`SELECT * FROM item_markers WHERE team_id = ? AND id = ?`)
+      .get(teamId, markerId) as MarkerRow | undefined;
+    if (!marker) return { ok: false, error: 'marker_not_found' };
+    db.prepare(`DELETE FROM item_markers WHERE id = ?`).run(markerId);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'marker',
+      targetKey: markerId,
+      summary: {
+        kind: marker.kind,
+        label: marker.label,
+        date: marker.date,
+        jiraKey: marker.jira_key,
+        parent: marker.item_key,
+      },
+    });
   } else if (op === 'lock') {
     const targetType = String(intent.targetType || 'item');
     const targetKey = String(intent.targetKey || '');
@@ -1097,13 +1607,16 @@ export function listFocusItems(teamId: string) {
         keywords: [
           jiraKey,
           item.alias,
-          ...item.subs.map((s) => s.alias || s.title).filter(Boolean),
+          ...item.subs
+            .filter((s) => !s.cleared)
+            .map((s) => s.alias || s.title)
+            .filter(Boolean),
         ].filter(Boolean),
         hasAlias: Boolean(item.alias),
-        subCount: item.subs.length,
+        subCount: item.subs.filter((s) => !s.cleared).length,
         priorityHints: {
           hasAlias: Boolean(item.alias),
-          subActivity: item.subs.length > 0,
+          subActivity: item.subs.some((s) => !s.cleared),
           intersectsCurrentMonth: intersectsCurrentMonth(item.start, item.days),
         },
       };
@@ -1127,4 +1640,245 @@ function intersectsCurrentMonth(
   const mStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1);
   const mEnd = new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0);
   return s <= mEnd && e >= mStart;
+}
+
+export interface ImportTasksResult {
+  added: number;
+  skipped: number;
+  byEpic: Record<string, { added: number; skipped: number }>;
+  snapshot: TeamSnapshot;
+}
+
+function normalizeRemoteTasks(raw: unknown): RemoteTask[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RemoteTask[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const key = String(r.key || '').trim();
+    const epicKey = String(r.epicKey || '').trim();
+    if (!key || !epicKey) continue;
+    out.push({
+      key,
+      summary: String(r.summary || key),
+      epicKey,
+      targetStart: r.targetStart ? String(r.targetStart) : null,
+      targetEnd: r.targetEnd ? String(r.targetEnd) : null,
+      assignee: r.assignee ? String(r.assignee) : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Insert pre-fetched Jira Tasks (from extension Options token search) into
+ * subs, deduped by jira_key. Used by the primary import-tasks path.
+ */
+export function importRemoteTasks(
+  teamId: string,
+  actor: ActorContext,
+  remoteInput: unknown,
+):
+  | { ok: true; result: ImportTasksResult }
+  | { ok: false; error: string; status?: number } {
+  const team = getTeam(teamId);
+  if (!team) return { ok: false, error: 'team_not_found', status: 404 };
+
+  const remote = normalizeRemoteTasks(remoteInput);
+  const db = getDb();
+  const parents = db
+    .prepare(
+      `SELECT * FROM items
+       WHERE team_id = ? AND scheduled = 1 AND jira_key IS NOT NULL AND jira_key != ''`,
+    )
+    .all(teamId) as ItemRow[];
+  const parentByJira = new Map(parents.map((p) => [p.jira_key!, p]));
+
+  const existing = new Set(
+    (
+      db
+        .prepare(
+          `SELECT jira_key FROM subs
+           WHERE team_id = ? AND jira_key IS NOT NULL AND jira_key != ''`,
+        )
+        .all(teamId) as Array<{ jira_key: string }>
+    ).map((r) => r.jira_key),
+  );
+
+  let added = 0;
+  let skipped = 0;
+  const byEpic: Record<string, { added: number; skipped: number }> = {};
+  const ts = now();
+
+  for (const task of remote) {
+    const bucket = byEpic[task.epicKey] || { added: 0, skipped: 0 };
+    byEpic[task.epicKey] = bucket;
+    if (existing.has(task.key)) {
+      skipped++;
+      bucket.skipped++;
+      continue;
+    }
+    const parent = parentByJira.get(task.epicKey);
+    if (!parent) {
+      skipped++;
+      bucket.skipped++;
+      continue;
+    }
+
+    let start = task.targetStart || parent.start_date;
+    let days = 7;
+    if (task.targetStart && task.targetEnd) {
+      const startMs = Date.parse(task.targetStart);
+      const endMs = Date.parse(task.targetEnd);
+      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+        days = Math.max(1, Math.round((endMs - startMs) / 86_400_000) + 1);
+      }
+    } else if (!task.targetStart && parent.start_date) {
+      start = parent.start_date;
+    }
+
+    const id = nanoid(12);
+    const owner = task.assignee || null;
+    db.prepare(
+      `INSERT INTO subs (
+        id, team_id, item_key, jira_key, title, alias, owner,
+        start_date, days, is_draft, cleared, created_by, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, 0, ?, 1, ?, ?)`,
+    ).run(
+      id,
+      teamId,
+      parent.key,
+      task.key,
+      task.summary,
+      owner,
+      start,
+      days,
+      actor.name,
+      ts,
+      ts,
+    );
+    if (owner) ensureMember(teamId, owner);
+    existing.add(task.key);
+    added++;
+    bucket.added++;
+  }
+
+  writeActivity({
+    teamId,
+    actor,
+    op: 'import_tasks',
+    targetType: 'team',
+    targetKey: teamId,
+    summary: { added, skipped, byEpic },
+  });
+
+  const snapshot = getTeamSnapshot(teamId)!;
+  getEventBus().emit('snapshot', snapshot, teamId);
+  getEventBus().emit('intent', { op: 'import_tasks', actor }, teamId);
+
+  return {
+    ok: true,
+    result: { added, skipped, byEpic, snapshot },
+  };
+}
+
+/**
+ * Server-side Jira search + import (fallback when body has no tasks and
+ * JIRA_PAT is configured). Prefer extension-fetched tasks via importRemoteTasks.
+ */
+export async function importTasksFromJira(
+  teamId: string,
+  actor: ActorContext,
+): Promise<
+  | { ok: true; result: ImportTasksResult }
+  | { ok: false; error: string; status?: number }
+> {
+  if (!config.jira.enabled) {
+    return { ok: false, error: 'jira_not_configured', status: 501 };
+  }
+  const team = getTeam(teamId);
+  if (!team) return { ok: false, error: 'team_not_found', status: 404 };
+
+  const db = getDb();
+  const parents = db
+    .prepare(
+      `SELECT * FROM items
+       WHERE team_id = ? AND scheduled = 1 AND jira_key IS NOT NULL AND jira_key != ''`,
+    )
+    .all(teamId) as ItemRow[];
+
+  if (!parents.length) {
+    const snapshot = getTeamSnapshot(teamId)!;
+    return {
+      ok: true,
+      result: { added: 0, skipped: 0, byEpic: {}, snapshot },
+    };
+  }
+
+  const hints = buildJqlHints({
+    jql: team.jql,
+    modeItemType: modeItemType(teamId),
+  });
+  const epicKeys = parents.map((p) => p.jira_key!).filter(Boolean);
+
+  let remote: RemoteTask[];
+  try {
+    remote = await jiraSearchChildTasks(epicKeys, hints);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `jira_search_failed:${msg}`, status: 502 };
+  }
+
+  return importRemoteTasks(teamId, actor, remote);
+}
+
+/**
+ * Extension already wrote Target dates to Jira — mirror into local DB + activity.
+ */
+export function confirmTargetSync(
+  teamId: string,
+  actor: ActorContext,
+  input: { itemKey: string; start: string; end: string; jiraKey?: string },
+):
+  | { ok: true; snapshot: TeamSnapshot }
+  | { ok: false; error: string; status?: number } {
+  const itemKey = String(input.itemKey || '').trim();
+  const start = String(input.start || '').trim();
+  const end = String(input.end || '').trim();
+  if (!itemKey || !start || !end) {
+    return { ok: false, error: 'start_end_required', status: 400 };
+  }
+  const db = getDb();
+  const item = db
+    .prepare(`SELECT * FROM items WHERE team_id = ? AND key = ?`)
+    .get(teamId, itemKey) as ItemRow | undefined;
+  if (!item) return { ok: false, error: 'item_not_found', status: 404 };
+  const jiraKey = item.jira_key || String(input.jiraKey || '').trim() || null;
+  if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
+
+  const ts = now();
+  db.prepare(
+    `UPDATE items SET target_start = ?, target_end = ?, updated_at = ?
+     WHERE team_id = ? AND key = ?`,
+  ).run(start, end, ts, teamId, itemKey);
+
+  writeActivity({
+    teamId,
+    actor,
+    op: 'jira_sync',
+    targetType: 'item',
+    targetKey: itemKey,
+    summary: {
+      title: item.title,
+      alias: item.alias,
+      jiraKey,
+      start,
+      end,
+      via: 'extension',
+    },
+  });
+
+  const snapshot = getTeamSnapshot(teamId)!;
+  getEventBus().emit('snapshot', snapshot, teamId);
+  return { ok: true, snapshot };
 }

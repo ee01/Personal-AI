@@ -2,11 +2,11 @@
 
 ## Goal
 
-从 `docs/features/index.md` 随机抽到并确认本轮目标为 `时间轴/搜索安全跳转`。在不改变安全跳转行为的前提下，把搜索结果和时间轴里实际按钮的 hover / 读屏边界补齐，让用户在点击前就知道这是内部跳转、外部新标签、详情页 fallback，还是复制本机安全诊断。
+从 `docs/index.md` 随机抽到并确认本轮目标为 `时间轴/搜索安全跳转`。在不改变安全跳转行为的前提下，把搜索结果和时间轴里实际按钮的 hover / 读屏边界补齐，让用户在点击前就知道这是内部跳转、外部新标签、详情页 fallback，还是复制本机安全诊断。
 
 ## Scope
 
-- 目标文档：`docs/features/memory_system.md` 与 `docs/features/index.md`
+- 目标文档：`docs/memory_system.md` 与 `docs/index.md`
 - 目标代码：`src/modals/components/SearchResultPage.vue`、`src/modals/components/TimelinePage.vue`
 - 目标验证：现有搜索/时间轴 verifier 和 E2E，外加 dev extension compile
 - 非目标：不放宽 URL allowlist，不改变 signed URL / credential URL 拦截，不改 Memory Service 召回、反馈写入、路由行为或外部打开行为
@@ -17,7 +17,7 @@
 2. 已完成：核对代码和文档现状，确认已有安全拦截、点击后回执和部分来源按钮 title，但搜索/时间轴的内链、详情 fallback、复制诊断和搜索主打开按钮缺少完整控件级边界。
 3. 已完成：检索业内产品和研究，提炼建设性方向：敏感 URL 参数应拦截，外部新标签要 opener/referrer 隔离，链接目的地和安全后果应在点击前可见。
 4. 已完成：实现 button-level `title` / `aria-label`，复用现有安全状态和回执语义，保持行为不变。
-5. 已完成：更新 `docs/features/memory_system.md` 和索引中该行的简述。
+5. 已完成：更新 `docs/memory_system.md` 和索引中该行的简述。
 6. 已完成：扩展现有 E2E 断言控件级 title / aria 边界，运行 targeted verifier、`npm start` 首次成功编译、E2E 和 `git diff --check`。
 
 ## Reminder Result

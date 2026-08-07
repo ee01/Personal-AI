@@ -1584,6 +1584,34 @@ test('Apps Script cacheReleaseInfo reports schema mismatch separately from parse
   assert.equal(properties.TIMELINE_CACHE_mThor, undefined);
 });
 
+test('Executor rule logs claimed task details after executed=true', () => {
+  const template = JSON.parse(
+    readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
+  );
+
+  assert.equal(template._metadata.version, '1.6.1');
+
+  const components = Array.isArray(template.components) ? template.components : [];
+  const executedGateIndex = components.findIndex((node: any) =>
+    node?.type === 'jira.comparator.condition'
+    && node?.value?.first === '{{webhookResponse.body.executed}}'
+    && node?.value?.second === 'true'
+    && node?.value?.operator === 'EQUALS'
+  );
+  assert.ok(executedGateIndex >= 0, 'executed=true gate should exist');
+
+  const claimLog = components[executedGateIndex + 1];
+  assert.equal(claimLog?.type, 'codebarrel.action.log');
+  assert.equal(claimLog?.component, 'ACTION');
+  assert.match(
+    String(claimLog?.value || ''),
+    /Claimed scheduled message: messageId=\{\{messageId\}\}, topic=\{\{replacedTopic\}\}, pushMethod=\{\{webhookResponse\.body\.pushMethod\}\}, targetType=\{\{webhookResponse\.body\.targetType\}\}, executionKey=\{\{executionKey\}\}, rowIndex=\{\{rowIndex\}\}/,
+  );
+
+  const branchContainer = components[executedGateIndex + 2];
+  assert.equal(branchContainer?.type, 'jira.condition.container.block');
+});
+
 test('Executor rule marks sent messages through GET Apps Script callbacks with saved lookup variables', () => {
   const template = JSON.parse(
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
@@ -1868,7 +1896,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.9\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.9\.2';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

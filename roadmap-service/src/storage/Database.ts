@@ -61,6 +61,50 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    id: '005_subs_cleared',
+    up: (database) => {
+      // Soft-hide expired subs from the Gantt; Backlog keeps the rows for restore.
+      addColumn(database, 'subs', 'cleared', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    id: '006_item_markers',
+    up: (database) => {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS item_markers (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          item_key TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          phase_kind TEXT,
+          label TEXT NOT NULL,
+          date TEXT,
+          jira_key TEXT,
+          eta_source TEXT,
+          created_by TEXT NOT NULL DEFAULT '',
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_item_markers_team_item
+          ON item_markers(team_id, item_key);
+      `);
+    },
+  },
+  {
+    id: '007_teams_release_sheet',
+    up: (database) => {
+      // Team-shared release-train ruler config (url / phases / cached rows).
+      addColumn(
+        database,
+        'teams',
+        'release_sheet_json',
+        `TEXT NOT NULL DEFAULT 'null'`,
+      );
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

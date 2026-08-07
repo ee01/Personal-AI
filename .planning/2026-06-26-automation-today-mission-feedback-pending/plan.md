@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机扫到 `docs/features/index.md` 里的 `今天 Mission`。本轮聚焦首页 mission 反馈路径：用户点击完成、稍后、静默、有用或不准确后，界面不能在 Memory Service 确认前让人误以为来源任务、排程或排序反馈已经完成。
+随机扫到 `docs/index.md` 里的 `今天 Mission`。本轮聚焦首页 mission 反馈路径：用户点击完成、稍后、静默、有用或不准确后，界面不能在 Memory Service 确认前让人误以为来源任务、排程或排序反馈已经完成。
 
 ## 外部参考
 

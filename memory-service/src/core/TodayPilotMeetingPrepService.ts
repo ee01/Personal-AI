@@ -254,6 +254,7 @@ function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
     whyMatched: match.whyMatched,
     timestamp: match.timestamp,
     score: match.score,
+    claimAttribution: match.claimAttribution,
   };
 }
 

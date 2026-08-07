@@ -2,8 +2,8 @@
 
 ## Target
 
-- Selected feature: `梦境重放` from `docs/features/index.md`.
-- Source doc: `docs/features/memory_system.md`.
+- Selected feature: `梦境重放` from `docs/index.md`.
+- Source doc: `docs/memory_system.md`.
 - Primary UI: `src/modals/components/DreamInsights.vue`.
 - Verifier: `tools/verify-memory-dreams-e2e.mjs`.
 

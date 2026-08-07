@@ -9,7 +9,7 @@
 - Inspected Assistant Draft code/docs/E2E anchors and chose a presentation/accessibility-only implementation slice: button-level generate/copy preflight labels.
 - Implemented dynamic Assistant Draft generate/copy `title` and `aria-label` boundaries in `src/modals/components/RelationshipRadarPage.vue`.
 - Extended `tools/verify-relationship-radar-e2e.mjs` to assert pre-click generate, stale-copy-lock, and copy-to-clipboard boundaries.
-- Updated `docs/features/relationship_radar.md` and the Assistant Draft row in `docs/features/index.md`.
+- Updated `docs/features/relationship_radar.md` and the Assistant Draft row in `docs/index.md`.
 - Validation passed:
   - `node --check tools/verify-relationship-radar-e2e.mjs`
   - `npm run verify:relationship-radar` (16/16 tests)

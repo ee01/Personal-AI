@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Personal AI · 帮助中心(静态演示)</title>
+<style>
+  /* ===== 色板与基础:完全取自 claude design(Spring DS) ===== */
+  :root {
+    --bg: #f5f6f9;
+    --panel: #ffffff;
+    --text: #323439;
+    --muted: #75767b;
+    --line: #dddfe5;
+    --brand: rgb(0, 64, 221);
+    --brand-soft: rgba(0, 64, 221, 0.1);
+    --ok: #16a937;
+    --ok-fg: #12872c;
+    --ok-soft: rgba(22, 169, 55, 0.1);
+    --warn: #cc5200;
+    --warn-soft: rgba(255, 102, 0, 0.1);
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); font-family: var(--font); color: var(--text); }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  summary { list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  details[open] .om-caret { transform: rotate(180deg); }
+  :focus-visible { outline: 2px solid rgb(2,38,133); outline-offset: 2px; }
+
+  /* ===== 语言切换(设计稿机制) ===== */
+  [data-l="en"] .l-zh { display: none !important; }
+  [data-l="zh"] .l-en { display: none !important; }
+
+  /* ===== 顶栏 ===== */
+  header.top {
+    position: sticky; top: 0; z-index: 10; background: #fff;
+    border-bottom: 1px solid var(--line); padding: 0 24px; height: 56px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  header.top .logo { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg,#ff6b81,#ff3b6b); display: grid; place-items: center; color: #fff; font-size: 13px; flex: none; }
+  header.top .brand { font-size: 15px; font-weight: 700; }
+  header.top .sub { font-size: 13px; color: var(--muted); }
+  header.top .spacer { flex: 1; }
+  .lang-switch { display: flex; background: #f0f1f4; border-radius: 8px; padding: 2px; gap: 2px; }
+  .lang-switch button { border: none; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 6px; cursor: pointer; }
+  [data-l="zh"] .lang-zh, [data-l="en"] .lang-en { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+
+  /* ===== hero ===== */
+  .hero { padding: 28px 24px 4px; max-width: 1240px; margin: 0 auto; }
+  .hero h1 { margin: 0 0 6px; font-size: 24px; font-weight: 700; }
+  .hero p { margin: 0; font-size: 14px; color: var(--muted); max-width: 640px; line-height: 21px; }
+  .demo-note { max-width: 1240px; margin: 12px auto 0; padding: 0 24px; font-size: 12px; color: var(--muted); line-height: 18px; }
+
+  /* ===== 双栏 ===== */
+  .page { max-width: 1240px; margin: 20px auto 60px; padding: 0 24px; display: grid; grid-template-columns: 232px minmax(0,1fr); gap: 24px; align-items: start; }
+  @media (max-width: 940px) { .page { grid-template-columns: 1fr; } .sidebar { position: static !important; } }
+  .sidebar { position: sticky; top: 72px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 10px; font-size: 13px; max-height: calc(100vh - 92px); overflow-y: auto; }
+  .sidebar .grp { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .3px; margin: 6px 8px 5px; }
+  .sidebar .grp + .grp { margin-top: 14px; }
+  .sidebar a { display: block; color: var(--text); padding: 5px 9px; border-radius: 6px; margin-bottom: 1px; border-left: 2px solid transparent; }
+  .sidebar a:hover { background: var(--brand-soft); color: var(--brand); text-decoration: none; }
+  .sidebar a.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; border-left-color: var(--brand); }
+  .sidebar a .n { color: #a3a4a9; font-weight: 600; margin-right: 6px; font-size: 11px; }
+  .sidebar a.active .n { color: var(--brand); }
+  .sidebar hr { border: 0; border-top: 1px solid var(--line); margin: 12px 4px; }
+  .content { min-width: 0; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 0 2px 16px; align-items: center; }
+  .section { margin-bottom: 32px; }
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 4px; }
+  .section-head h2 { margin: 0; font-size: 18px; font-weight: 700; }
+  .section-head .sub { color: var(--muted); font-size: 13px; }
+  .section-desc { color: var(--muted); font-size: 13px; margin: 0 2px 14px; }
+
+  /* ===== 功能卡:设计稿规格(白底 + 1px 描边 + radius 16,无阴影) ===== */
+  details.feature { background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; margin-bottom: 10px; scroll-margin-top: 70px; }
+  summary.feature-head { display: flex; gap: 14px; align-items: center; padding: 16px 20px; cursor: pointer; }
+  .f-icon { width: 40px; height: 40px; border-radius: 10px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 18px; background: var(--brand-soft); }
+  .f-main { flex: 1; min-width: 0; }
+  .f-title { display: block; font-size: 15px; font-weight: 600; color: var(--text); }
+  .f-title .tag { margin-left: 6px; }
+  .f-desc { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .om-caret { width: 14px; height: 14px; flex: none; color: var(--muted); font-size: 11px; transition: transform .16s cubic-bezier(.382,0,.786,1); display: grid; place-items: center; }
+
+  .tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; white-space: nowrap; }
+  .tag.free { color: var(--ok-fg); background: var(--ok-soft); }
+  .tag.setup { color: var(--warn); background: var(--warn-soft); }
+  .tag.demo { color: var(--brand); background: var(--brand-soft); }
+  .tag.new { color: var(--brand); background: var(--brand-soft); }
+
+  .rec-btn { flex: none; border: 1px solid var(--line); background: #fff; cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 4px 10px; border-radius: 9999px; }
+  .rec-btn:hover { border-color: var(--brand); color: var(--brand); }
+  .rec-btn.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+
+  /* 卡内容:设计稿 padding 4px 20px 20px 74px + gap 12px */
+  .f-body { padding: 4px 20px 20px 74px; display: flex; flex-direction: column; gap: 12px; }
+  @media (max-width: 640px) { .f-body { padding-left: 20px; } }
+  .blk-label { font-size: 12px; font-weight: 700; color: var(--text); }
+
+  /* 使用前检查:设计稿 radius 4px */
+  .checks { display: flex; flex-direction: column; gap: 6px; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); padding: 8px 12px; border-radius: 4px; }
+  .check.ok { background: var(--ok-soft); }
+  .check.todo { background: var(--warn-soft); }
+  .check .ico { width: 15px; height: 15px; flex: none; border-radius: 9999px; display: grid; place-items: center; font-size: 10px; color: #fff; font-weight: 700; }
+  .check.ok .ico { background: var(--ok); }
+  .check.todo .ico { background: var(--warn); }
+  .check .grow { flex: 1; }
+  .check .state { font-size: 11px; font-weight: 600; color: var(--ok-fg); }
+  .check .go { font-size: 12px; font-weight: 600; color: var(--brand); border: 1px solid var(--brand); border-radius: 14px; padding: 3px 14px; background: #fff; cursor: pointer; font-family: inherit; }
+  .check-hint { font-size: 12px; color: var(--muted); line-height: 18px; }
+  .check-hint code { background: #f0f1f4; border-radius: 3px; padding: 0 4px; font-size: 11.5px; }
+
+  /* 步骤:设计稿 22px 圆点 */
+  .steps { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+  .steps > li { display: flex; gap: 10px; align-items: flex-start; }
+  .steps .n { width: 22px; height: 22px; flex: none; border-radius: 9999px; background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  .steps .t { flex: 1; font-size: 13px; line-height: 20px; color: var(--text); }
+  .steps code { background: #f0f1f4; border-radius: 3px; padding: 0 4px; font-size: 11.5px; }
+
+  /* 结果预览:设计稿 radius 10 + 灰底 header 11px */
+  .pv { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .pv-head { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; color: var(--muted); background: #f5f6f9; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+  .pv-head .grow { flex: 1; }
+  .pv-toggle { border: 0; background: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; color: var(--brand); padding: 0; }
+  .pv-body { padding: 14px; }
+  .pv-extra { display: none; padding: 0 14px 14px; }
+  .pv-extra.visible { display: block; }
+  .pv-body.hidden { display: none; }
+  .demo-frame { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+
+  /* 截图 */
+  .shot-img { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+  .shot-img img { display: block; width: 100%; height: auto; }
+  .shot-img.narrow { max-width: 330px; }
+  .shot-img.mid { max-width: 560px; }
+  .shot-cap { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 16px; }
+  .shot-todo { border: 1px dashed #c9cbd2; border-radius: 8px; background: #fafbfc; color: #9a9ba0; font-size: 12px; display: grid; place-items: center; min-height: 80px; text-align: center; padding: 12px; }
+
+  /* ---- Ask 双入口 ---- */
+  .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 720px) { .entry-grid { grid-template-columns: 1fr; } }
+  .entry { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .entry-t { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .entry-d { font-size: 12.5px; color: var(--muted); line-height: 19px; }
+  .entry-tag { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 9999px; }
+  .entry-tag.ready { color: var(--ok-fg); background: var(--ok-soft); }
+  .entry-tag.link { color: var(--brand); background: var(--brand-soft); }
+  .entry-tag.link:hover { text-decoration: none; }
+
+  /* ---- Ask 气泡(设计稿) ---- */
+  .chat { display: flex; flex-direction: column; gap: 10px; }
+  .chat-q { align-self: flex-end; max-width: 75%; background: var(--brand); color: #fff; font-size: 13px; line-height: 19px; padding: 8px 12px; border-radius: 14px 14px 4px 14px; }
+  .chat-a { align-self: flex-start; max-width: 85%; background: #f5f6f9; color: var(--text); font-size: 13px; line-height: 19px; padding: 10px 12px; border-radius: 14px 14px 14px 4px; }
+  .chat-src { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .chat-src span { font-size: 11px; color: var(--brand); background: var(--brand-soft); padding: 2px 8px; border-radius: 9999px; }
+
+  /* ---- Memory Lens 角标卡(设计稿) ---- */
+  .lens-stage { background: #fbfbfc; display: flex; justify-content: flex-end; padding: 20px 14px; }
+  .lens-card { width: 260px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 20px -5px rgba(0,0,0,.1); padding: 12px; }
+  .lens-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .lens-t .ai { color: var(--brand); font-size: 12px; }
+  .lens-body { font-size: 12px; line-height: 18px; color: var(--text); background: #f5f6f9; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+  .lens-src { font-size: 11px; color: var(--muted); }
+
+  /* ---- 划词选区(设计稿) ---- */
+  .sel-stage { position: relative; }
+  .sel-text { margin: 0; font-size: 13px; line-height: 20px; color: var(--muted); max-width: 420px; }
+  .sel-text mark { background: var(--brand-soft); color: var(--text); padding: 1px 0; }
+  .sel-pill { position: absolute; right: 14px; top: 12px; display: flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--line); border-radius: 9999px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--brand); box-shadow: 0 2px 4px rgba(0,0,0,.2); }
+  .sel-pill .plus { font-size: 14px; line-height: 1; }
+
+  /* ---- 定时消息 composer(设计稿) ---- */
+  .mc { max-width: 620px; }
+  .mc-input { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 14px; padding: 12px 15px; background: #fff; }
+  .mc-ph { flex: 1; color: #9a9ba0; font-size: 13.5px; }
+  .mc-ic { width: 24px; height: 24px; border-radius: 9999px; display: grid; place-items: center; font-size: 13px; }
+  .mc-ic.clock { color: var(--brand); border: 1.5px solid var(--brand); font-size: 11px; }
+  .mc-ic.emoji { color: var(--muted); }
+  .mc-pending { display: flex; align-items: center; gap: 9px; margin-top: 10px; border: 1.5px dashed #a9b4d8; border-radius: 12px; padding: 10px 14px; color: #5a6473; font-size: 13px; }
+  .mc-pending .ck { color: var(--warn); }
+
+  /* ---- 记忆外接 ---- */
+  .feed-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .feed-bar select, .feed-bar input[type=text] { font: inherit; font-size: 13px; padding: 7px 11px; border-radius: 8px; border: 1px solid #cbcdd4; background: #fff; color: var(--text); }
+  .feed-bar input[type=text] { flex: 1; min-width: 200px; display: none; }
+  .feed-bar input.visible { display: block; }
+  .btn { border: 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; background: var(--brand); color: #fff; }
+  .btn.ghost { background: var(--brand-soft); color: var(--brand); }
+  .code-box { background: #23272e; color: #d7e3f4; border-radius: 8px; padding: 12px 14px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; line-height: 1.65; overflow-x: auto; }
+  .code-box .dim { opacity: .55; }
+  .prompt-box { margin-top: 10px; background: #fffdf7; border: 1px solid #f0e2c8; color: #4a4432; border-radius: 10px; padding: 12px 14px; font-size: 12.5px; font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; position: relative; line-height: 1.65; }
+  .prompt-box .copy { position: absolute; top: 9px; right: 9px; border: 0; cursor: pointer; background: var(--brand); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 11px; border-radius: 7px; }
+  .prompt-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .hint-line { font-size: 12px; color: var(--muted); line-height: 18px; }
+  .hint-line.exp { color: var(--warn); }
+  .hint-line code { background: #f0f1f4; border-radius: 3px; padding: 0 4px; font-size: 11.5px; }
+
+  /* 更多能力 */
+  .more-list { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 20px; font-size: 13px; padding: 4px 20px 18px 74px; }
+  @media (max-width: 640px) { .more-list { grid-template-columns: 1fr; padding-left: 20px; } }
+  .more-list .item { display: flex; gap: 7px; align-items: baseline; }
+  .more-list .item b { white-space: nowrap; font-weight: 600; }
+  .more-list .item span { color: var(--muted); }
+
+  /* 分享托盘 */
+  .share-tray { position: fixed; right: 20px; bottom: 20px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; }
+  .tray-pill { display: inline-flex; align-items: center; gap: 8px; border: 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: var(--brand); padding: 11px 18px; border-radius: 9999px; box-shadow: 0 8px 22px rgba(0,64,221,.28); }
+  .tray-pill .cnt { background: rgba(255,255,255,.25); border-radius: 9999px; font-size: 12px; min-width: 22px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; }
+  .tray-panel { display: none; width: 380px; max-width: calc(100vw - 40px); background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 16px 44px rgba(20,31,56,.18); padding: 16px; margin-bottom: 10px; }
+  .share-tray.open .tray-panel { display: block; }
+  .tray-panel h3 { margin: 0 0 3px; font-size: 14px; font-weight: 600; }
+  .tray-panel .sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .tray-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+  .tray-chips .chip { font-size: 11.5px; font-weight: 600; background: var(--brand-soft); color: var(--brand); border-radius: 9999px; padding: 3px 10px; cursor: pointer; }
+  .tray-chips .chip:hover::after { content: " ✕"; }
+  .tray-chips .empty { color: var(--muted); font-size: 12px; }
+  .tray-panel textarea { width: 100%; min-height: 100px; font: inherit; font-size: 12px; line-height: 1.6; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: #f8f9fb; resize: vertical; color: var(--text); }
+  .tray-panel input[type=text] { width: 100%; font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; margin-top: 8px; }
+  .tray-actions { display: flex; gap: 8px; margin-top: 9px; align-items: center; }
+  .tray-actions .note { font-size: 11px; color: var(--warn); flex: 1; line-height: 15px; }
+
+  footer.foot { max-width: 1240px; margin: 0 auto 40px; padding: 0 24px; color: var(--muted); font-size: 12.5px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="root" data-l="zh">
+
+<header class="top">
+  <span class="logo">✦</span>
+  <span class="brand">Personal AI</span>
+  <span class="sub"><span class="l-zh">帮助中心</span><span class="l-en">Help Center</span></span>
+  <span class="spacer"></span>
+  <span class="lang-switch">
+    <button class="lang-zh" onclick="setLang('zh')">中文</button>
+    <button class="lang-en" onclick="setLang('en')">EN</button>
+  </span>
+  <a href="https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools" style="font-size:12.5px;font-weight:600">Wiki</a>
+</header>
+
+<div class="hero">
+  <h1><span class="l-zh">它能为你做什么,怎么开始</span><span class="l-en">What it does for you, and how to start</span></h1>
+  <p>
+    <span class="l-zh">Personal AI 在后台悄悄替你记住工作里的一切。这页告诉你:记忆是怎么<b>捕获</b>进来的,能在哪些地方<b>提取</b>回来,以及怎么让它<b>替你做事</b>。</span>
+    <span class="l-en">Personal AI quietly remembers your work in the background. This page shows how memories are <b>captured</b>, where you can <b>retrieve</b> them, and how to let it <b>act for you</b>.</span>
+  </p>
+</div>
+<div class="demo-note">
+  <span class="l-zh">⚠️ 静态演示:页内截图为<b>真实界面截图</b>或 headless Chromium 加载 dist 扩展的<b>真实组件渲染</b>(演示数据);配置状态为模拟。</span>
+  <span class="l-en">⚠️ Static demo: screenshots are either <b>real UI captures</b> or <b>real component renders</b> from the dist extension loaded in headless Chromium (demo data); readiness states are simulated.</span>
+</div>
+
+<main class="page">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="grp"><span class="l-zh">📤 提取记忆</span><span class="l-en">📤 Retrieve</span></div>
+    <a href="#get-1" data-spy="get-1"><span class="n">1</span><span class="l-zh">记忆外接</span><span class="l-en">Context Pack</span></a>
+    <a href="#get-2" data-spy="get-2"><span class="n">2</span><span class="l-zh">Ask 主动问答</span><span class="l-en">Ask</span></a>
+    <a href="#get-3" data-spy="get-3"><span class="n">3</span><span class="l-zh">记忆提示</span><span class="l-en">Memory Lens</span></a>
+    <a href="#get-4" data-spy="get-4"><span class="n">4</span><span class="l-zh">回复助手</span><span class="l-en">Compose Assist</span></a>
+    <a href="#get-5" data-spy="get-5"><span class="n">5</span><span class="l-zh">每天先看「今天」</span><span class="l-en">Today Pilot</span></a>
+    <a href="#get-6" data-spy="get-6"><span class="n">6</span><span class="l-zh">开会飘弹幕</span><span class="l-en">Meeting Pilot</span></a>
+    <a href="#get-7" data-spy="get-7"><span class="n">7</span><span class="l-zh">Jira 设计稿与后端依赖</span><span class="l-en">Jira design & backend</span></a>
+    <a href="#get-8" data-spy="get-8"><span class="n">8</span><span class="l-zh">记忆备份</span><span class="l-en">Memory backup</span></a>
+    <div class="grp"><span class="l-zh">📥 捕获记忆</span><span class="l-en">📥 Capture</span></div>
+    <a href="#cap-1" data-spy="cap-1"><span class="n">1</span><span class="l-zh">划词 / 整页保存</span><span class="l-en">Selection & page save</span></a>
+    <a href="#cap-2" data-spy="cap-2"><span class="n">2</span><span class="l-zh">消息分析入库</span><span class="l-en">Message analysis</span></a>
+    <a href="#cap-3" data-spy="cap-3"><span class="n">3</span><span class="l-zh">导入外部 AI 历史</span><span class="l-en">Import AI history</span></a>
+    <a href="#cap-4" data-spy="cap-4"><span class="n">4</span><span class="l-zh">它眼里的你</span><span class="l-en">Your profile</span></a>
+    <div class="grp"><span class="l-zh">🤖 让 AI 替你做事</span><span class="l-en">🤖 Let AI act</span></div>
+    <a href="#act-1" data-spy="act-1"><span class="n">1</span><span class="l-zh">Glip 快速定时消息</span><span class="l-en">Scheduled messages</span></a>
+    <a href="#act-2" data-spy="act-2"><span class="n">2</span><span class="l-zh">消息联动操作</span><span class="l-en">Message actions</span></a>
+    <a href="#act-3" data-spy="act-3"><span class="n">3</span><span class="l-zh">记忆随身(豆包)</span><span class="l-en">Memory on mobile</span></a>
+    <hr />
+    <a href="#more" data-spy="more"><span class="l-zh">🧰 更多能力</span><span class="l-en">🧰 More</span></a>
+  </aside>
+
+  <div class="content">
+
+  <div class="legend">
+    <span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span> <span class="l-zh">装好即用</span><span class="l-en">works out of the box</span></span>
+    <span><span class="tag setup"><span class="l-zh">需配置</span><span class="l-en">Setup</span></span> <span class="l-zh">有使用前检查与引导</span><span class="l-en">has a readiness check</span></span>
+    <span><span class="tag demo"><span class="l-zh">含演示</span><span class="l-en">Demo</span></span> <span class="l-zh">配置前可先预览</span><span class="l-en">preview before setup</span></span>
+  </div>
+
+  <!-- ============ 提取记忆 ============ -->
+  <section class="section" id="get">
+    <div class="section-head">
+      <h2><span class="l-zh">📤 提取记忆</span><span class="l-en">📤 Retrieve memories</span></h2>
+      <span class="sub"><span class="l-zh">让积累的记忆随时为你所用</span><span class="l-en">Put what it remembers to work</span></span>
+    </div>
+    <p class="section-desc"><span class="l-zh">全部零配置(会议副驾需一次授权),装好就能体验。</span><span class="l-en">All ready to use (Meeting Pilot needs one authorization).</span></p>
+
+    <!-- get-1 记忆外接 -->
+    <details class="feature" id="get-1" open>
+      <summary class="feature-head">
+        <span class="f-icon">🔌</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">记忆外接(Context Pack)</span><span class="l-en">Context Pack</span><span class="tag new">NEW</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">把你的身份与偏好装进一段 Prompt,嵌入任何外部 AI 系统</span><span class="l-en">Pack your identity and preferences into a prompt for any external AI</span></span>
+        </span>
+        <button class="rec-btn" data-rec="context-pack"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">Memory Service 连接 · Token 有效</span><span class="l-en">Memory Service connected · token valid</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+        </div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh"><b>调用接口即可拿到 Prompt。</b>外部系统(Dify、Claude、内部 bot)直接请求;支持 MCP 的客户端(Claude Code、Cursor)可直连 MCP Server。</span><span class="l-en"><b>Call the endpoint to get a prompt.</b> External systems (Dify, Claude, internal bots) request it directly; MCP clients like Claude Code and Cursor can connect to the MCP Server.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh"><b>选择要外接的内容</b>——默认「身份与偏好」,也可选近期重点、今日安排、项目动态,或自定义主题(实验性)。</span><span class="l-en"><b>Pick what to expose</b> — identity & preferences by default, plus recent focus, today, project updates, or a custom topic (experimental).</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">把结果粘贴到外部系统的 system prompt,或让它直接调接口——记忆更新后外部系统自动拿到最新版本。</span><span class="l-en">Paste the result into the target system prompt, or let it call the endpoint — it always gets the latest as your memory updates.</span></span></li>
+        </ol>
+        <div class="code-box">GET {memory-service}/api/v1/context-pack?scope=identity_preferences
+Authorization: Bearer &lt;token&gt;
+
+200 → { "prompt": "..." }   <span class="dim"># scope=custom&q=… </span></div>
+
+        <div class="blk-label"><span class="l-zh">结果预览 · 默认拉取结果</span><span class="l-en">Result preview · default pull</span></div>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">选择内容,实时生成(演示数据)</span><span class="l-en">Pick a scope, generated live (demo data)</span></span></div>
+          <div class="pv-body">
+            <div class="feed-bar">
+              <select id="feedPreset">
+                <option value="identity" data-zh="身份与偏好" data-en="Identity & preferences" selected></option>
+                <option value="recent" data-zh="近期重点" data-en="Recent focus"></option>
+                <option value="today" data-zh="今日安排" data-en="Today"></option>
+                <option value="projects" data-zh="重点项目动态" data-en="Projects"></option>
+                <option value="custom" data-zh="自定义(实验性)" data-en="Custom (experimental)"></option>
+              </select>
+              <button class="btn" id="copyPrompt"><span class="l-zh">📋 复制 Prompt</span><span class="l-en">📋 Copy prompt</span></button>
+              <input type="text" id="feedCustom" placeholder="Personal AI 项目的近期动态" />
+            </div>
+            <div class="prompt-box"><button class="copy" onclick="copyPromptText(this)">copy</button><span id="promptText"></span></div>
+            <div class="prompt-meta" id="promptMeta"></div>
+            <div class="hint-line exp" id="customHint" style="display:none"><span class="l-zh">实验性:自定义主题走记忆检索管线生成,输出结构不保证稳定;敏感内容仍会经过脱敏层。</span><span class="l-en">Experimental: custom topics go through the retrieval pipeline; output shape is not guaranteed. Redaction still applies.</span></div>
+            <div class="hint-line"><span class="l-zh">输出只读、经脱敏层处理;核心隐私画像(USER_CORE)不会外发。</span><span class="l-en">Read-only and redacted; your core private profile (USER_CORE) is never exposed.</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-2 Ask -->
+    <details class="feature" id="get-2">
+      <summary class="feature-head">
+        <span class="f-icon">💬</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">Ask 主动问答</span><span class="l-en">Ask</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">直接问你的记忆,答案带证据来源</span><span class="l-en">Ask your memory directly — answers come with evidence</span></span>
+        </span>
+        <button class="rec-btn" data-rec="ask-ai"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">两处入口,选一个即可</span><span class="l-en">Two entry points — pick either</span></div>
+        <div class="entry-grid">
+          <div class="entry">
+            <div class="entry-t"><span class="l-zh">① 浏览器内 · 实体记忆查询</span><span class="l-en">① In browser · Memory search</span></div>
+            <div class="entry-d"><span class="l-zh">点扩展图标 → <b>实体记忆查询</b>,在搜索页提问。装好即用,无需额外安装。</span><span class="l-en">Click the extension icon → <b>Memory search</b> and ask there. No extra install needed.</span></div>
+            <span class="entry-tag ready">✓ <span class="l-zh">已就绪</span><span class="l-en">Ready</span></span>
+          </div>
+          <div class="entry">
+            <div class="entry-t"><span class="l-zh">② 全局随手问 · Desktop App</span><span class="l-en">② Anywhere · Desktop App</span></div>
+            <div class="entry-d"><span class="l-zh">安装 <b>Personal AI.app</b> 后,menubar 的 <b>Quick Ask 小窗</b>可在任何应用里一键唤起,支持语音输入。</span><span class="l-en">With <b>Personal AI.app</b> installed, the menubar <b>Quick Ask</b> window opens from any app, with voice input.</span></div>
+            <a class="entry-tag link" href="#act-3">↓ <span class="l-zh">需先安装 Desktop App</span><span class="l-en">Install Desktop App first</span></a>
+          </div>
+        </div>
+        <div class="check-hint"><span class="l-zh">Desktop App 安装三步:下载 <code>Personal-AI-Desktop-&lt;version&gt;-Installer.pkg</code> → 在 Applications 打开 <code>Personal AI.app</code> → app 内完成 Memory Service 与线程绑定。详见「记忆随身」条目。</span><span class="l-en">Three steps: download <code>Personal-AI-Desktop-&lt;version&gt;-Installer.pkg</code> → open <code>Personal AI.app</code> from Applications → bind Memory Service and threads inside the app. See "Memory on mobile".</span></div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">在上面任一入口的输入框直接提问;短问句会自动锁定当前话题,搜索范围可切 <b>工作 / 个人 / 全部</b>。</span><span class="l-en">Type your question in either entry; short questions lock onto your current topic. Scope switches between <b>work / personal / all</b>.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">答案自带来源回执,点击来源可跳回原始消息或会议。</span><span class="l-en">Answers include source receipts; click one to jump back to the original message or meeting.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">重复问同一话题,答案会沉淀为「活答案」,下次首屏直接给出并显示复核时间。</span><span class="l-en">Repeat a question and it becomes a living answer, served instantly with its last-verified time.</span></span></li>
+        </ol>
+
+        <div class="blk-label"><span class="l-zh">结果预览</span><span class="l-en">Result preview</span></div>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">问答效果</span><span class="l-en">Q&A</span></span><button class="pv-toggle" data-pv="pvAsk"><span class="l-zh">▶ 查看真实界面</span><span class="l-en">▶ See real UI</span></button></div>
+          <div class="pv-body">
+            <div class="chat">
+              <div class="chat-q"><span class="l-zh">上周和 Leo 定的 API 方案是什么?</span><span class="l-en">What API approach did Leo and I settle on last week?</span></div>
+              <div class="chat-a"><span class="l-zh">定了 v2 采用 <b>context-pack 单接口 + scope 参数</b>,弃用多端点方案;Leo 负责网关侧鉴权,本周五联调。</span><span class="l-en">You settled on <b>a single context-pack endpoint with a scope parameter</b> for v2, dropping the multi-endpoint plan. Leo owns gateway auth; integration test this Friday.</span>
+                <div class="chat-src"><span>Glip · #api-design</span><span><span class="l-zh">会议 · 7月28日</span><span class="l-en">Meeting · Jul 28</span></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="pv-extra" id="pvAsk">
+            <div class="shot-img"><img src="./extension-help-center-assets/explore-search.png" alt="memory search" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">实体记忆查询页 · 真实组件渲染 · 演示数据</span><span class="l-en">Memory search page · real component render · demo data</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-3 Memory Lens -->
+    <details class="feature" id="get-3">
+      <summary class="feature-head">
+        <span class="f-icon">🔍</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">记忆提示(Memory Lens)</span><span class="l-en">Memory Lens</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">浏览时右下角自动浮现关联记忆</span><span class="l-en">Related memories surface in the corner while you browse</span></span>
+        </span>
+        <button class="rec-btn" data-rec="memory-lens"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">打开网页、消息或 Jira 时,如果有相关记忆,右下角出现低打扰提示。</span><span class="l-en">When a page, chat or Jira issue has related memories, a quiet hint appears bottom-right.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">悬停轻预览,点击展开完整卡片;也可以划选文字主动查找关联记忆。</span><span class="l-en">Hover to peek, click to expand the full card; you can also select text to look up related memories.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">对某站点不想被提示?在 Options 里把它加入静默或屏蔽名单。</span><span class="l-en">Don't want hints on a site? Silence or block it in Options.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览</span><span class="l-en">Result preview</span></span></div>
+          <div class="pv-body lens-stage">
+            <div class="lens-card">
+              <div class="lens-t"><span class="ai">✦</span><span class="l-zh">关联记忆 · 2</span><span class="l-en">Related memories · 2</span></div>
+              <div class="lens-body"><span class="l-zh">你在 4 月备注过:这个库的 v3 有 breaking change,升级前先看迁移指南。</span><span class="l-en">You noted in April: this library's v3 has breaking changes — read the migration guide before upgrading.</span></div>
+              <div class="lens-src"><span class="l-zh">来源:网页笔记 · 4月2日</span><span class="l-en">Source: web note · Apr 2</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-4 Compose Assist -->
+    <details class="feature" id="get-4">
+      <summary class="feature-head">
+        <span class="f-icon">✍️</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">回复助手(Compose Assist)</span><span class="l-en">Compose Assist</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">在输入框旁按你的记忆和写作风格给草稿</span><span class="l-en">Drafts beside the composer, in your memory and your voice</span></span>
+        </span>
+        <button class="rec-btn" data-rec="compose"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">在 RingCentral 消息、Jira 评论等输入框打字时,右侧出现 Personal AI 入口。</span><span class="l-en">While typing in RingCentral, Jira comments and similar composers, the Personal AI entry appears on the right.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">悬停<b>只预览</b>草稿正文;点击 icon 直接插入,插入后约 10 秒内可撤销。</span><span class="l-en">Hover to <b>preview only</b>; click the icon to insert, with about 10 seconds to undo.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">草稿参考相关记忆与你的写作风格画像,并按对象(上级/外部)自动收敛可说内容。</span><span class="l-en">Drafts draw on related memories and your writing-style profile, tightening what's sayable for managers or external contacts.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · 输入框旁的建议内容</span><span class="l-en">Result preview · suggestion beside the composer</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img mid"><img src="./extension-help-center-assets/compose-assist.png" alt="compose assist" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实界面截图 · 悬停显示「建议内容」,右侧红圈是 Personal AI 入口,可 thumb-down 反馈</span><span class="l-en">Real UI capture · hovering shows the suggested draft; the highlighted icon is the Personal AI entry, with thumb-down feedback</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-5 Today -->
+    <details class="feature" id="get-5">
+      <summary class="feature-head">
+        <span class="f-icon">🌅</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">每天先看「今天」(Today Pilot)</span><span class="l-en">Today Pilot</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">popup 首页 Top 3:今天最该关注什么、会前要准备什么</span><span class="l-en">Top 3 in the popup: what matters today and what to prep before meetings</span></span>
+        </span>
+        <button class="rec-btn" data-rec="today"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">点开扩展 popup,首屏即今日 <b>Top 3</b> 与后台任务状态。</span><span class="l-en">Open the popup: today's <b>Top 3</b> and background task status are right there.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">有会议时自动生成<b>会前准备</b>(相关记忆、待闭环目标、人物背景)。</span><span class="l-en">Before meetings it generates <b>prep</b>: related memories, open outcomes and people context.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">需要把上下文带去别处?点 <b>Context Pack</b> 一键复制当日上下文包。</span><span class="l-en">Need the context elsewhere? <b>Context Pack</b> copies today's bundle in one click.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · popup 首屏</span><span class="l-en">Result preview · popup</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img narrow"><img src="./extension-help-center-assets/popup.png" alt="popup" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实组件渲染 · 演示数据(今日卡片 fixture M4 补齐)</span><span class="l-en">Real component render · demo data (today cards fixture pending)</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-6 Meeting -->
+    <details class="feature" id="get-6">
+      <summary class="feature-head">
+        <span class="f-icon">🎧</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">开会飘弹幕(Meeting Pilot)</span><span class="l-en">Meeting Pilot</span><span class="tag setup"><span class="l-zh">需授权</span><span class="l-en">Auth</span></span></span>
+          <span class="f-desc"><span class="l-zh">提醒直接飘在会议画面上,会后一页 Panorama 回放</span><span class="l-en">Nudges drift right over the meeting view, with a one-page Panorama after</span></span>
+        </span>
+        <button class="rec-btn" data-rec="meeting"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">Chrome 标签页音频捕获授权</span><span class="l-en">Chrome tab audio capture</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+          <div class="check todo"><span class="ico">i</span><span class="grow"><span class="l-zh">Desktop App 本地转写(可选,离线更准)</span><span class="l-en">Desktop App local transcription (optional, better offline)</span></span><button class="go"><span class="l-zh">去安装</span><span class="l-en">Install</span></button></div>
+        </div>
+        <div class="check-hint"><span class="l-zh">仅本机录制;不通知参会者、不外发会议内容。</span><span class="l-en">Records locally only; participants are not notified and nothing is sent out.</span></div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">进入 RingCentral 会议页,点嵌入的 <b>Meeting Pilot 入口</b>主动开始捕获。</span><span class="l-en">On a RingCentral meeting page, click the embedded <b>Meeting Pilot</b> entry to start capture.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">会中提醒以<b>弹幕</b>形式直接浮在会议画面上,不用切窗口:<b>P0 紧急</b>(被点名、新任务)居中定格、需手动关闭;<b>P1 关注</b>(关键词命中、行动项候选)弹幕飘过;<b>P2 信息</b>(话题切换、摘要进度)轻量提示。</span><span class="l-en">Nudges appear as <b>danmaku</b> floating right over the meeting — no window switching. <b>P0 urgent</b> (you were named, a task landed) pins center and needs dismissing; <b>P1</b> (keyword hits, action-item candidates) drifts past; <b>P2</b> (topic shifts, summary progress) stays lightweight.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">会后打开 <b>Panorama</b> 一页回放:结果装订核验会前目标、行动项、决议、提及你的次数;内容同时沉淀为记忆。</span><span class="l-en">After the meeting, <b>Panorama</b> replays it on one page: outcome binding against your goals, action items, decisions and mentions — all saved to memory.</span></span></li>
+        </ol>
+
+        <div class="blk-label"><span class="l-zh">结果预览</span><span class="l-en">Result preview</span></div>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">会中弹幕提醒</span><span class="l-en">In-meeting danmaku nudges</span></span><button class="pv-toggle" data-pv="pvPanorama"><span class="l-zh">▶ 查看会后 Panorama</span><span class="l-en">▶ See Panorama</span></button></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/meeting-danmaku.png" alt="in-meeting danmaku" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">会议画面上的弹幕提醒 · 居中定格的是 P0 紧急项(被点名 / 新任务),飘过的是 P1 / P2</span><span class="l-en">Nudges over the meeting view · the pinned cards are P0 urgent items (being named, a new task); the drifting ones are P1 / P2</span></div>
+          </div>
+          <div class="pv-extra" id="pvPanorama">
+            <div class="shot-img"><img src="./extension-help-center-assets/meeting-panorama.png" alt="panorama" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">会后 Panorama · 真实组件渲染 · 内置演示会话</span><span class="l-en">Panorama · real component render · built-in demo session</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- get-7 Jira -->
+    <details class="feature" id="get-7">
+      <summary class="feature-head">
+        <span class="f-icon">🎨</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">Jira 设计稿与后端依赖</span><span class="l-en">Jira design links & backend dates</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">开 Jira 票时,自动汇总设计入口与后端依赖上线日期</span><span class="l-en">Opens a Jira issue and gathers design entries plus backend ship dates</span></span>
+        </span>
+        <button class="rec-btn" data-rec="jira-links"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">打开任意 Jira 开发票——两张面板自动出现在 summary 下方,无需点任何按钮。</span><span class="l-en">Open any Jira dev issue — both panels appear under the summary automatically.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh"><b>蓝色设计面板</b>:自动扫 description、Jira Designs 区块、remote links、linked issues、Epic、Parent(INIT),把 Figma / Zeplin / Miro / Loom / Slides 的<b>交付入口</b>逐条列出,带 <b>Ready for dev / Design updated / Missing link</b> 状态和更新时间。</span><span class="l-en"><b>Blue design panel</b>: scans description, the Jira Designs section, remote links, linked issues, Epic and Parent (INIT), listing Figma / Zeplin / Miro / Loom / Slides <b>handoff entries</b> with <b>Ready for dev / Design updated / Missing link</b> status and update dates.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh"><b>绿色后端面板</b>:汇总依赖票(默认 RCV)的 <b>Early Build</b> 与 <b>Rollout to Prod</b> 日期,判断后端是否已可联调/上线;无日期显示 <code>N/A</code>,有 fixVersion 但 DORA 还没数据时显示可点的 <code>pending</code>。</span><span class="l-en"><b>Green backend panel</b>: summarizes <b>Early Build</b> and <b>Rollout to Prod</b> for dependency issues (RCV by default), so you know if the backend is ready. Shows <code>N/A</code> without dates, or a clickable <code>pending</code> when a fixVersion exists but DORA has no data yet.</span></span></li>
+          <li><span class="n">4</span><span class="t"><span class="l-zh">点链接只是<b>只读打开来源</b>——不刷新 Figma 元数据、不标记设计已复查、不创建或编辑 Jira 关联。</span><span class="l-en">Clicking a link only <b>opens the source read-only</b> — it never refreshes Figma metadata, marks a design reviewed, or creates/edits Jira links.</span></span></li>
+        </ol>
+
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · Jira summary 下方的两张面板</span><span class="l-en">Result preview · both panels under the Jira summary</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/jira-panels.png" alt="jira panels" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实界面截图 · 左:蓝色设计面板逐条列出 Design Link 与来源标签;右:绿色后端面板给 Early Build / Rollout to Prod</span><span class="l-en">Real UI capture · left: blue design panel lists each design link with its source tag; right: green backend panel with Early Build / Rollout to Prod</span></div>
+          </div>
+        </div>
+        <div class="hint-line"><span class="l-zh">设计域名白名单可用 <code>DESIGN_LINK_DOMAINS</code> 补充内部原型站点;UX 项目识别默认 <code>UX*</code>,可用 <code>DESIGN_JIRA_PROJECT</code> 精确指定。</span><span class="l-en">Add internal prototype hosts via <code>DESIGN_LINK_DOMAINS</code>; UX project matching defaults to <code>UX*</code> and can be pinned with <code>DESIGN_JIRA_PROJECT</code>.</span></div>
+      </div>
+    </details>
+
+    <!-- get-8 记忆备份 -->
+    <details class="feature" id="get-8">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:rgba(108,92,231,.1)">💾</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">记忆备份</span><span class="l-en">Memory backup</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">一键下载全部记忆的 backup zip,换机或误删时能恢复回来</span><span class="l-en">Download a backup zip of everything, and restore it after a device change or accidental delete</span></span>
+        </span>
+        <button class="rec-btn" data-rec="backup"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh"><b>下载备份:</b>记忆覆盖地图页右上角点 <b>记忆备份</b>,直接下载 backup zip。下载后页面保留回执:文件名、时间、zip 大小、manifest 摘要和 archive SHA-256 短指纹。</span><span class="l-en"><b>Download:</b> click <b>Memory backup</b> at the top right of the coverage map page to get a backup zip. A receipt stays on the page with filename, time, size, manifest summary and a short archive SHA-256 fingerprint.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh"><b>恢复:</b>从同页 <b>录入 → 备份 zip</b> 重新选择文件;后端预检确认是 Personal AI backup 才进入恢复模式,选错普通 zip 会退回普通资料流程,不会误报成备份。</span><span class="l-en"><b>Restore:</b> re-select the file via <b>Intake → backup zip</b> on the same page. Restore mode only opens once the backend confirms it is a Personal AI backup; an ordinary zip falls back to the normal document flow instead of being misread as a backup.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">恢复<b>必须先 dry-run</b>,再按 <b>merge / replace</b> 的影响预览确认才会写入——下载按钮本身只保存本机文件,不会恢复、删除、替换、同步或外发任何记忆。</span><span class="l-en">Restoring <b>always dry-runs first</b>, then needs your confirmation on the <b>merge / replace</b> impact preview. The download button only saves a local file — it never restores, deletes, replaces, syncs or sends anything.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · 覆盖地图页右上角的备份入口</span><span class="l-en">Result preview · backup entry on the coverage map page</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/explore-coverage.png" alt="memory backup" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实页面渲染 · 右上角「记忆备份 / 录入」入口,下方是备份操作前回执(说明只保存本机 zip、不恢复不外发)</span><span class="l-en">Real page render · the "Memory backup / Intake" entries top right, with the pre-action receipt below (saves a local zip only, no restore, no sending)</span></span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 捕获记忆 ============ -->
+  <section class="section" id="capture">
+    <div class="section-head">
+      <h2><span class="l-zh">📥 捕获记忆</span><span class="l-en">📥 Capture memories</span></h2>
+      <span class="sub"><span class="l-zh">记忆从哪里来</span><span class="l-en">Where memories come from</span></span>
+    </div>
+    <p class="section-desc"><span class="l-zh">大部分捕获是自动、低打扰的;这里是你可以主动参与的入口。</span><span class="l-en">Most capture is automatic and quiet; these are the entries you drive yourself.</span></p>
+
+    <!-- cap-1 -->
+    <details class="feature" id="cap-1">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:rgba(108,92,231,.1)">✂️</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">划词 / 整页保存</span><span class="l-en">Selection & full-page save</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">看到有用的内容,选中就能「+ 记住」</span><span class="l-en">See something useful? Select it and hit "+ Remember"</span></span>
+        </span>
+        <button class="rec-btn" data-rec="capture"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">在任意网页选中文字,右侧浮出「+ 记住」按钮,点击进入复核面板确认保存。</span><span class="l-en">Select text on any page; a "+ Remember" button slides in. Click to review and save.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">深度阅读、复制或长停留时,扩展会建议整页保存——采不采纳都在你。</span><span class="l-en">Deep reading, copying or dwelling triggers a full-page save suggestion — always your call.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">保存后后台自动蒸馏出场景卡片和来源锚点,之后 Ask 和记忆提示都能召回。</span><span class="l-en">Saved items are distilled into scene cards and anchors, recallable by Ask and Memory Lens.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览</span><span class="l-en">Result preview</span></span></div>
+          <div class="pv-body sel-stage">
+            <p class="sel-text"><span class="l-zh">…迁移到 v2 之前,<mark>需要先把所有 scope 参数改为小写下划线格式,否则网关会静默丢弃请求</mark>,这是文档里最容易漏掉的一步…</span><span class="l-en">…before migrating to v2, <mark>convert every scope parameter to lowercase snake_case or the gateway silently drops the request</mark> — the step most people miss in the docs…</span></p>
+            <div class="sel-pill"><span class="plus">+</span><span class="l-zh">记住</span><span class="l-en">Remember</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- cap-2 -->
+    <details class="feature" id="cap-2">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:var(--ok-soft)">📡</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">消息分析入库</span><span class="l-en">Message analysis</span><span class="tag setup"><span class="l-zh">需开启</span><span class="l-en">Toggle</span></span></span>
+          <span class="f-desc"><span class="l-zh">后台静默分析 RingCentral 消息,按规则入库</span><span class="l-en">Silently analyzes RingCentral messages into memory, by rule</span></span>
+        </span>
+        <button class="rec-btn" data-rec="message-analysis"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">静默消息分析开关(popup 顶部)</span><span class="l-en">Background analysis toggle (top of popup)</span></span><span class="state"><span class="l-zh">已开启</span><span class="l-en">On</span></span></div>
+        </div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">popup 顶部打开<b>静默消息分析</b>开关(默认每 30 分钟一轮)。</span><span class="l-en">Turn on <b>background message analysis</b> at the top of the popup (every 30 minutes by default).</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">在<b>记忆入口规则页</b>添加关注规则:哪些人/群/关键词值得记。</span><span class="l-en">Add rules on the <b>memory entry rules</b> page: which people, chats or keywords are worth keeping.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">命中内容自动入库,按需走通知中心低打扰提醒;规则页可看每轮执行回执。</span><span class="l-en">Matches are saved automatically and may raise a quiet notification; the rules page shows each run's receipt.</span></span></li>
+        </ol>
+
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · 记忆入口规则页</span><span class="l-en">Result preview · memory entry rules</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/explore-rules.png" alt="rules page" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实页面渲染 · 演示数据</span><span class="l-en">Real page render · demo data</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- cap-3 -->
+    <details class="feature" id="cap-3">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:rgba(108,92,231,.1)">🔄</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">导入外部 AI 的历史</span><span class="l-en">Import external AI history</span><span class="tag setup"><span class="l-zh">部分需配置</span><span class="l-en">Partly setup</span></span></span>
+          <span class="f-desc"><span class="l-zh">把 ChatGPT / Claude / 豆包 聊过的内容带进你的记忆库</span><span class="l-en">Bring ChatGPT / Claude / Doubao conversations into your memory</span></span>
+        </span>
+        <button class="rec-btn" data-rec="import-ai"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">zip 一次性导入 · 无需任何配置</span><span class="l-en">One-off zip import · no setup needed</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+          <div class="check todo"><span class="ico">i</span><span class="grow"><span class="l-zh">持续同步豆包 / ChatGPT 会话需安装 Desktop App</span><span class="l-en">Continuous Doubao / ChatGPT sync needs the Desktop App</span></span><button class="go"><span class="l-zh">去安装</span><span class="l-en">Install</span></button></div>
+        </div>
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh"><b>一次性导入:</b>覆盖地图页上传 ChatGPT / Claude 官方导出的 <b>conversations.json zip</b>,预览范围回执后入库。</span><span class="l-en"><b>One-off:</b> upload the official ChatGPT / Claude <b>conversations.json zip</b> on the coverage page; review the scope receipt, then import.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh"><b>持续同步:</b>Desktop App 抓取豆包 / ChatGPT 会话持续回写,已入库内容可随时撤回。</span><span class="l-en"><b>Continuous:</b> the Desktop App keeps syncing Doubao / ChatGPT sessions back, and anything ingested can be revoked.</span></span></li>
+        </ol>
+      </div>
+    </details>
+
+    <!-- cap-4 -->
+    <details class="feature" id="cap-4">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:rgba(108,92,231,.1)">🪞</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">它眼里的你(用户画像)</span><span class="l-en">Your profile</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
+          <span class="f-desc"><span class="l-zh">系统从日常行为自动沉淀你的偏好画像,可随时查看、修正、导出</span><span class="l-en">Builds a preference profile from your behavior — inspect, correct or export it anytime</span></span>
+        </span>
+        <button class="rec-btn" data-rec="profile"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">打开<b>用户画像页</b>,查看已沉淀的偏好条目与证据。</span><span class="l-en">Open the <b>profile page</b> to see accumulated preference items and their evidence.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">不准的条目可<b>降低影响或排除</b>;重要的可手动增强。</span><span class="l-en">Wrong items can be <b>weakened or excluded</b>; important ones boosted.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">画像驱动 Compose 风格、记忆外接、豆包 Persona 等所有"懂你"的地方。</span><span class="l-en">The profile powers Compose style, Context Pack, the Doubao persona — everywhere it "gets" you.</span></span></li>
+        </ol>
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · 画像条目管理页</span><span class="l-en">Result preview · profile items</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/explore-profile.png" alt="profile" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实页面渲染 · 演示数据</span><span class="l-en">Real page render · demo data</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 让 AI 替你做事 ============ -->
+  <section class="section" id="act">
+    <div class="section-head">
+      <h2><span class="l-zh">🤖 让 AI 替你做事</span><span class="l-en">🤖 Let AI act for you</span></h2>
+      <span class="sub"><span class="l-zh">基于记忆的助理动作,都需要少量配置</span><span class="l-en">Memory-driven assistant actions, each needs a little setup</span></span>
+    </div>
+    <p class="section-desc"><span class="l-zh">每项都可先看效果演示,再决定要不要配。</span><span class="l-en">Preview each one before deciding to set it up.</span></p>
+
+    <!-- act-1 定时消息 -->
+    <details class="feature" id="act-1" open>
+      <summary class="feature-head">
+        <span class="f-icon" style="background:var(--warn-soft)">🕐</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">Glip 快速定时消息</span><span class="l-en">Scheduled Glip messages</span><span class="tag setup"><span class="l-zh">需配置</span><span class="l-en">Setup</span></span><span class="tag demo"><span class="l-zh">含演示</span><span class="l-en">Demo</span></span></span>
+          <span class="f-desc"><span class="l-zh">输入框里的闹钟图标,写好消息定时发出</span><span class="l-en">The clock icon in the composer — write now, send later</span></span>
+        </span>
+        <button class="rec-btn" data-rec="scheduled-messages"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">定时消息初始化(Sheet + Apps Script + 触发器)</span><span class="l-en">Scheduler initialized (Sheet + Apps Script + trigger)</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">RingCentral token 配置</span><span class="l-en">RingCentral token configured</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+          <div class="check todo"><span class="ico">i</span><span class="grow"><span class="l-zh">Google 授权(Sheet 读写需要)</span><span class="l-en">Google authorization (needed for Sheet access)</span></span><button class="go"><span class="l-zh">去授权</span><span class="l-en">Authorize</span></button></div>
+        </div>
+        <div class="check-hint"><span class="l-zh">未初始化时,popup 的定时消息管理页提供一键初始化,按提示完成三步即可。</span><span class="l-en">If not initialized, the scheduled-messages page in the popup offers one-click setup in three guided steps.</span></div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">在 Glip 输入框写好消息,点击工具栏的闹钟图标选择发送时间。</span><span class="l-en">Write your message in the Glip composer, then click the clock icon in the toolbar to pick a send time.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">会话底部出现虚线「未来消息」——那是本地待发送快照,不是已发出的消息,到点才会以你的身份发送。</span><span class="l-en">A dashed "future message" appears at the bottom of the conversation — a local pending snapshot, not a sent message. It goes out as you at the scheduled time.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">所有待发送消息都可在定时消息管理页编辑、改期或删除。</span><span class="l-en">Every pending message can be edited, rescheduled or deleted on the scheduled-messages page.</span></span></li>
+        </ol>
+
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">效果演示 · 配置前先看看它长什么样</span><span class="l-en">Demo · see it before you set it up</span></span><button class="pv-toggle" data-pv="pvSched" data-frame="../demo/定时消息-待发送动画.html" data-swap="1"><span class="l-zh">▶ 加载预览</span><span class="l-en">▶ Load preview</span></button></div>
+          <div class="pv-body" id="pvSchedStatic">
+            <div class="mc">
+              <div class="mc-input"><span class="mc-ph"><span class="l-zh">周报已整理好,明早 9 点发给团队...</span><span class="l-en">Weekly report is ready — send to the team at 9am...</span></span><span class="mc-ic clock">🕐</span><span class="mc-ic emoji">☺</span></div>
+              <div class="mc-pending"><span class="ck">🕐</span><span class="l-zh">未来消息 · 明天 09:00 待发送 — 周报已整理好...</span><span class="l-en">Future message · pending tomorrow 09:00 — Weekly report is ready...</span></div>
+            </div>
+          </div>
+          <div class="pv-extra" id="pvSched"><iframe class="demo-frame" title="scheduled demo"></iframe></div>
+        </div>
+        <div class="hint-line"><span class="l-zh">还可以:一句「帮我做」交给 AgentTask、AI Report 定期报告、Jira 自动化推送——见定时消息管理页。</span><span class="l-en">Also available: hand a task to AgentTask, recurring AI Reports, and Jira automation pushes — see the scheduled-messages page.</span></div>
+      </div>
+    </details>
+
+    <!-- act-2 消息联动 -->
+    <details class="feature" id="act-2">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:var(--warn-soft)">🤝</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">消息联动操作</span><span class="l-en">Message actions</span><span class="tag setup"><span class="l-zh">需配置</span><span class="l-en">Setup</span></span></span>
+          <span class="f-desc"><span class="l-zh">消息上的稍后 / 关注后续 / 答复 / 联动,四个按钮接管跟进</span><span class="l-en">Snooze, watch, reply and automate — four buttons on any message</span></span>
+        </span>
+        <button class="rec-btn" data-rec="reaction"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">消息工具栏入口(RingCentral 消息 hover 即见)</span><span class="l-en">Message toolbar (hover any RingCentral message)</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+          <div class="check todo"><span class="ico">i</span><span class="grow"><span class="l-zh">OpenClaw API(「联动」执行外部任务需要)</span><span class="l-en">OpenClaw API (needed for "automate" to run external tasks)</span></span><button class="go"><span class="l-zh">去配置</span><span class="l-en">Configure</span></button></div>
+        </div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">鼠标悬停任意 RingCentral 消息,右下角出现四个按钮:<b>稍后</b>(定时提醒)、<b>关注后续</b>(追踪这个话题的后续讨论)、<b>答复</b>(按规则自动回复)、<b>联动</b>(交给 OpenClaw 执行任务)。</span><span class="l-en">Hover any RingCentral message and four buttons appear: <b>Later</b> (remind me), <b>Watch</b> (track follow-ups on this thread), <b>Reply</b> (rule-based auto-reply) and <b>Automate</b> (hand the task to OpenClaw).</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">每个动作保存前都有<b>范围与边界预览</b>(提醒时间、监听范围、回复规则),确认才生效。</span><span class="l-en">Each action shows a <b>scope and boundary preview</b> before saving — reminder time, watch scope, reply rules — and only applies once confirmed.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">已处理的消息带 AI 角标,悬停可见来源与状态;联动操作经 OpenClaw 执行并回执通知。</span><span class="l-en">Handled messages carry an AI marker; hover to see source and status. Automations run via OpenClaw and report back.</span></span></li>
+        </ol>
+
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · 消息右下角的四个按钮</span><span class="l-en">Result preview · four buttons on a message</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/message-reaction.png" alt="message actions" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实界面截图 · 悬停消息时浮出「稍后 / 关注后续 / 答复 / 联动」</span><span class="l-en">Real UI capture · hovering a message reveals Later / Watch / Reply / Automate</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- act-3 豆包 -->
+    <details class="feature" id="act-3">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:var(--warn-soft)">📱</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">记忆随身(豆包互联 / Desktop App)</span><span class="l-en">Memory on mobile (Doubao / Desktop App)</span><span class="tag setup"><span class="l-zh">需配置</span><span class="l-en">Setup</span></span></span>
+          <span class="f-desc"><span class="l-zh">把近期重点、提醒、画像推到豆包,手机上也能用你的记忆</span><span class="l-en">Push recent focus, reminders and your profile to Doubao — your memory on your phone</span></span>
+        </span>
+        <button class="rec-btn" data-rec="doubao"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="f-body">
+        <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
+        <div class="checks">
+          <div class="check todo"><span class="ico">i</span><span class="grow"><span class="l-zh">Desktop App 安装并绑定豆包账号</span><span class="l-en">Install the Desktop App and bind your Doubao account</span></span><button class="go"><span class="l-zh">去安装</span><span class="l-en">Install</span></button></div>
+        </div>
+
+        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
+        <ol class="steps">
+          <li><span class="n">1</span><span class="t"><span class="l-zh">下载并安装 <code>Personal-AI-Desktop-&lt;version&gt;-Installer.pkg</code>,在 Applications 中打开 <code>Personal AI.app</code>。</span><span class="l-en">Download and install <code>Personal-AI-Desktop-&lt;version&gt;-Installer.pkg</code>, then open <code>Personal AI.app</code> from Applications.</span></span></li>
+          <li><span class="n">2</span><span class="t"><span class="l-zh">在 app 内完成 Memory Service、豆包登录和线程绑定;关闭窗口后回到 popup 确认后台服务已运行。</span><span class="l-en">Inside the app, set up Memory Service, sign in to Doubao and bind threads; close the window and confirm the background service is running from the popup.</span></span></li>
+          <li><span class="n">3</span><span class="t"><span class="l-zh">系统维护<b>长期记忆线程</b>与<b>移动上下文线程</b>,可手动或定期推送近期重点、提醒、Quick Ask 答案;手机打开豆包对应会话即可继续对话。</span><span class="l-en">It maintains a <b>long-term memory thread</b> and a <b>mobile context thread</b>, pushing recent focus, reminders and Quick Ask answers on demand or on a schedule. Open that Doubao conversation on your phone and keep going.</span></span></li>
+        </ol>
+
+        <div class="pv">
+          <div class="pv-head"><span class="grow"><span class="l-zh">结果预览 · Desktop App 安装引导与服务状态</span><span class="l-en">Result preview · install guide and service status</span></span></div>
+          <div class="pv-body">
+            <div class="shot-img"><img src="./extension-help-center-assets/desktop-app.png" alt="desktop app" loading="lazy" /></div>
+            <div class="shot-cap"><span class="l-zh">真实页面渲染 · 演示状态</span><span class="l-en">Real page render · demo state</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 更多能力 ============ -->
+  <section class="section" id="more">
+    <details class="feature">
+      <summary class="feature-head">
+        <span class="f-icon" style="background:#f0f1f4">🧰</span>
+        <span class="f-main">
+          <span class="f-title"><span class="l-zh">更多能力</span><span class="l-en">More capabilities</span></span>
+          <span class="f-desc"><span class="l-zh">进阶与团队特定工具,详见功能文档</span><span class="l-en">Advanced and team-specific tools — see the feature docs</span></span>
+        </span>
+        <span class="om-caret">▼</span>
+      </summary>
+      <div class="more-list">
+        <div class="item"><b><span class="l-zh">场景预演</span><span class="l-en">Rehearsal</span></b><span><span class="l-zh">下次遇到某场景时提醒你想起什么</span><span class="l-en">Reminds you what to recall next time a scene repeats</span></span></div>
+        <div class="item"><b><span class="l-zh">人脉关系</span><span class="l-en">Relationship Radar</span></b><span><span class="l-zh">人物时间线、会前人物简报</span><span class="l-en">People timelines and pre-meeting briefs</span></span></div>
+        <div class="item"><b><span class="l-zh">记忆故事线</span><span class="l-en">Storyline</span></b><span><span class="l-zh">把记忆织成可讲述的草稿</span><span class="l-en">Weaves memories into a narrative draft</span></span></div>
+        <div class="item"><b><span class="l-zh">技能库</span><span class="l-en">Skill Foundry</span></b><span><span class="l-zh">把重复做法沉淀为可同步技能</span><span class="l-en">Turns repeated practices into syncable skills</span></span></div>
+        <div class="item"><b><span class="l-zh">主题式消息阅读</span><span class="l-en">Topic reading</span></b><span><span class="l-zh">按主题聚合未读,稍后处理</span><span class="l-en">Groups unread by topic, defer for later</span></span></div>
+        <div class="item"><b><span class="l-zh">项目面板 / Roadmap</span><span class="l-en">Dashboard / Roadmap</span></b><span><span class="l-zh">项目进展、甘特与漂移角标</span><span class="l-en">Progress, Gantt and drift badges</span></span></div>
+        <div class="item"><b><span class="l-zh">Jira 自动化导入</span><span class="l-en">Jira automation import</span></b><span><span class="l-zh">导入预览与 disabled copy 创建</span><span class="l-en">Import preview and disabled-copy creation</span></span></div>
+        <div class="item"><b><span class="l-zh">Google Slides 分析器</span><span class="l-en">Slides analyzer</span></b><span><span class="l-zh">Slides 项目字段分析与写回</span><span class="l-en">Analyzes and writes back Slides project fields</span></span></div>
+        <div class="item"><b><span class="l-zh">通知中心</span><span class="l-en">Notification Center</span></b><span><span class="l-zh">所有提醒的统一收口与免打扰</span><span class="l-en">One place for reminders, with quiet hours</span></span></div>
+        <div class="item"><b><span class="l-zh">任务调度器</span><span class="l-en">Task scheduler</span></b><span><span class="l-zh">后台任务状态,popup 内即可管理</span><span class="l-en">Background task status, managed in the popup</span></span></div>
+      </div>
+    </details>
+  </section>
+
+  </div>
+</main>
+
+<div class="share-tray" id="shareTray">
+  <div class="tray-panel">
+    <h3><span class="l-zh">↗️ 推荐给同事</span><span class="l-en">↗️ Share with a colleague</span></h3>
+    <div class="sub"><span class="l-zh">从上面的功能卡点「+ 推荐」组装清单,文案自动生成</span><span class="l-en">Hit "+ Share" on any card to build a list; the message writes itself</span></div>
+    <div class="tray-chips" id="trayChips"></div>
+    <textarea id="trayCopy" readonly></textarea>
+    <input type="text" id="trayRecipient" placeholder="Esone Qiu / esone.qiu" />
+    <div class="tray-actions">
+      <span class="note"><span class="l-zh">发送走「定时消息」通道 · ⚠️ 演示态未配置</span><span class="l-en">Sends via the scheduled-messages channel · ⚠️ not configured in this demo</span></span>
+      <button class="btn ghost" id="trayCopyBtn"><span class="l-zh">📋 复制</span><span class="l-en">📋 Copy</span></button>
+      <button class="btn" id="traySendBtn" disabled><span class="l-zh">↗️ 代发</span><span class="l-en">↗️ Send</span></button>
+    </div>
+  </div>
+  <button class="tray-pill" id="trayPill"><span class="l-zh">↗️ 推荐给同事</span><span class="l-en">↗️ Share</span> <span class="cnt" id="trayCnt">0</span></button>
+</div>
+
+<footer class="foot">
+  <span class="l-zh">找不到答案?查看 <a href="#">团队 Wiki · Personal AI Tools</a> 或 <a href="#">完整功能文档索引</a></span>
+  <span class="l-en">Still stuck? See the <a href="#">team Wiki · Personal AI Tools</a> or the <a href="#">full feature index</a></span>
+</footer>
+
+</div>
+
+<script>
+  /* ===== 语言切换 ===== */
+  var root = document.getElementById('root');
+  function setLang(l) {
+    root.setAttribute('data-l', l);
+    document.documentElement.lang = l === 'en' ? 'en' : 'zh-CN';
+    try { localStorage.setItem('helpLang', l); } catch (e) {}
+    renderPrompt(); renderTray();
+  }
+  window.setLang = setLang;
+  // 演示态:从 localStorage 恢复。真实页面改为读 Options 语言(见 plan §9)
+  try { var saved = localStorage.getItem('helpLang'); if (saved) root.setAttribute('data-l', saved); } catch (e) {}
+  function isEn() { return root.getAttribute('data-l') === 'en'; }
+
+  /* ===== 记忆外接 ===== */
+  var PRESETS = {
+    identity: {
+      zh: '# Persona Context — 拉取于今天 09:42\n你正在协助的用户具备以下身份与偏好:\n- 身份:RingCentral 敏捷教练 / Scrum Master,负责跨团队协同\n- 沟通偏好:中文为主、结论先行;代码示例用 TypeScript\n- 当前重点:Personal AI 记忆平台、Sprint 排期与依赖跟进\n- 边界:不要代发消息或创建外部任务,先给预览',
+      en: '# Persona Context — pulled today 09:42\nThe user you are assisting has this identity and these preferences:\n- Role: RingCentral agile coach / Scrum Master, driving cross-team coordination\n- Communication: Chinese first, conclusion first; TypeScript for code samples\n- Current focus: Personal AI memory platform, sprint planning and dependency tracking\n- Boundaries: never send messages or create external tasks — always preview first',
+      meta: { zh: '来源:用户画像(身份投影,已脱敏) · scope=identity_preferences', en: 'Source: user profile (identity projection, redacted) · scope=identity_preferences' }
+    },
+    recent: {
+      zh: '# Recent Focus — 滚动更新\n- 帮助中心页面设计中,等待 review\n- 商家认证账号审核:等平台结果,Rebecca 跟进中\n- 下个 Sprint 评审材料:周四前需要 timeline 截图\n- Memory Service v2 迁移:context-pack 单接口方案已定稿',
+      en: '# Recent Focus — rolling\n- Help center page in design, awaiting review\n- Merchant verification: waiting on the platform, Rebecca following up\n- Next sprint review deck: timeline screenshot needed by Thursday\n- Memory Service v2 migration: single context-pack endpoint finalized',
+      meta: { zh: '来源:Recent Focus 滚动上下文 · scope=recent_focus', en: 'Source: rolling recent-focus context · scope=recent_focus' }
+    },
+    today: {
+      zh: '# Today — 今日安排与待闭环\n- 10:00 敏捷教练周会:待闭环——认证材料截图是否同步\n- 14:00 1:1 with Stephen:上次遗留——认证流程结论\n- 今日 Top:评审材料初稿、回复平台审核邮件',
+      en: '# Today — schedule and open loops\n- 10:00 agile coach weekly: open loop — has the verification screenshot been shared?\n- 14:00 1:1 with Stephen: leftover — conclusion on the verification flow\n- Top today: first draft of the review deck, reply to the platform review email',
+      meta: { zh: '来源:Today Pilot 当日简报 · scope=today', en: 'Source: Today Pilot daily brief · scope=today' }
+    },
+    projects: {
+      zh: '# Focus Project Updates — 重点项目动态\n- [Personal AI] 帮助中心进入 review;v9.0.0 已发布\n- [商家认证] 平台审核中,预计今天上午出结果\n- [Roadmap Q3] 两个 milestone 已回填 Jira key',
+      en: '# Focus Project Updates\n- [Personal AI] Help center in review; v9.0.0 shipped\n- [Merchant verification] Under platform review, result expected this morning\n- [Roadmap Q3] Two milestones now backfilled with Jira keys',
+      meta: { zh: '来源:watched projects 快照 · scope=projects', en: 'Source: watched-projects snapshot · scope=projects' }
+    },
+    custom: {
+      zh: '(输入自定义主题后点「复制 Prompt」——演示环境返回模拟结果)\n\n# Personal AI 项目的近期动态\n- 最近发布:v9.0.0(Personal Roadmap 协作规划)\n- 进行中:扩展帮助中心(三板块引导)\n- 近期讨论:记忆外接命名与预设/自定义混合方案',
+      en: '(Type a topic, then copy — this demo returns a canned result)\n\n# Recent activity on the Personal AI project\n- Latest release: v9.0.0 (Personal Roadmap collaborative planning)\n- In progress: extension help center (three-section guide)\n- Under discussion: Context Pack naming and the preset/custom mix',
+      meta: { zh: '来源:记忆检索(实验性) · scope=custom&q=…', en: 'Source: memory retrieval (experimental) · scope=custom&q=…' }
+    }
+  };
+  var presetSel = document.getElementById('feedPreset');
+  var customInput = document.getElementById('feedCustom');
+  var customHint = document.getElementById('customHint');
+  var promptText = document.getElementById('promptText');
+  var promptMeta = document.getElementById('promptMeta');
+  function renderPrompt() {
+    var p = PRESETS[presetSel.value];
+    var en = isEn();
+    // <option> 内不能用 l-zh/l-en span,按语言改写文本
+    [].forEach.call(presetSel.options, function (o) {
+      o.textContent = o.getAttribute(en ? 'data-en' : 'data-zh');
+    });
+    customInput.placeholder = en ? 'Recent activity on the Personal AI project' : 'Personal AI 项目的近期动态';
+    promptText.textContent = en ? p.en : p.zh;
+    promptMeta.textContent = (en ? p.meta.en : p.meta.zh) + (en ? ' · read-only, never writes to memory' : ' · 只读接口,不写入记忆');
+    var isCustom = presetSel.value === 'custom';
+    customInput.classList.toggle('visible', isCustom);
+    customHint.style.display = isCustom ? 'block' : 'none';
+  }
+  presetSel.addEventListener('change', renderPrompt);
+  renderPrompt();
+  function copyPromptText(btn) {
+    navigator.clipboard.writeText(promptText.textContent).then(function () {
+      btn.textContent = '✓'; setTimeout(function () { btn.textContent = 'copy'; }, 1400);
+    });
+  }
+  window.copyPromptText = copyPromptText;
+  document.getElementById('copyPrompt').addEventListener('click', function () {
+    var b = this, keep = b.innerHTML;
+    navigator.clipboard.writeText(promptText.textContent).then(function () {
+      b.textContent = isEn() ? '✅ Copied' : '✅ 已复制';
+      setTimeout(function () { b.innerHTML = keep; }, 1400);
+    });
+  });
+
+  /* ===== 结果预览 toggle:加载 iframe 后隐藏静态展示 ===== */
+  document.querySelectorAll('.pv-toggle').forEach(function (t) {
+    t.__label = t.innerHTML;
+    t.addEventListener('click', function () {
+      var extra = document.getElementById(t.getAttribute('data-pv'));
+      if (!extra) return;
+      var frameSrc = t.getAttribute('data-frame');
+      if (frameSrc) {
+        var f = extra.querySelector('iframe');
+        if (f && !f.src) f.src = frameSrc;
+      }
+      var showing = extra.classList.toggle('visible');
+      // data-swap:展开预览时隐藏同卡的静态展示(定时消息)
+      if (t.getAttribute('data-swap')) {
+        var stat = t.closest('.pv').querySelector('.pv-body');
+        if (stat) stat.classList.toggle('hidden', showing);
+      }
+      t.innerHTML = showing
+        ? (isEn() ? '▼ Hide preview' : '▼ 收起预览')
+        : t.__label;
+    });
+  });
+
+  /* ===== 目录 scrollspy ===== */
+  var spyLinks = [].slice.call(document.querySelectorAll('#sidebar a[data-spy]'));
+  var spyTargets = spyLinks.map(function (a) { return document.getElementById(a.getAttribute('data-spy')); }).filter(Boolean);
+  var currentSpy = null;
+  function setSpy(id) {
+    if (id === currentSpy) return;
+    currentSpy = id;
+    spyLinks.forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-spy') === id); });
+  }
+  function updateSpy() {
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+      var last = null;
+      spyTargets.forEach(function (el) { var r = el.getBoundingClientRect(); if (r.top < window.innerHeight && r.bottom > 0) last = el; });
+      if (last) { setSpy(last.id); return; }
+    }
+    var line = window.innerHeight * 0.3, best = null, bestD = Infinity;
+    spyTargets.forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) return;
+      var d = (r.top <= line && r.bottom >= line) ? -1 : Math.abs(r.top - line);
+      if (d < bestD) { bestD = d; best = el; }
+    });
+    if (best) setSpy(best.id);
+  }
+  window.addEventListener('scroll', updateSpy, { passive: true });
+  window.addEventListener('resize', updateSpy);
+  updateSpy();
+  spyLinks.forEach(function (a) {
+    a.addEventListener('click', function () {
+      var el = document.getElementById(a.getAttribute('data-spy'));
+      if (el && el.tagName === 'DETAILS') el.open = true;
+    });
+  });
+
+  /* ===== 分享托盘 ===== */
+  var REC = {
+    'context-pack':      { zh: ['记忆外接', '一个接口把你的身份偏好输出成 Prompt,任何 AI 都能用'], en: ['Context Pack', 'one endpoint turns your identity and preferences into a prompt any AI can use'] },
+    'ask-ai':            { zh: ['记忆查询', ''], en: ['Ask', ''] },  // 无推荐语:只用名字
+    'memory-lens':       { zh: ['记忆提示', '浏览网页时自动浮出相关记忆'], en: ['Memory Lens', 'related memories surface as you browse'] },
+    'compose':           { zh: ['回复助手', '输入框旁按你的风格给草稿'], en: ['Compose Assist', 'drafts beside the composer, in your voice'] },
+    'today':             { zh: ['今日领航', '每天先看 Top 3 和会前准备'], en: ['Today Pilot', 'start the day with Top 3 and meeting prep'] },
+    'meeting':           { zh: ['会议弹幕', '提醒直接飘在会议画面上,会后一页回放'], en: ['Meeting Pilot', 'nudges drift over the meeting view, one-page replay after'] },
+    'jira-links':        { zh: ['Jira 设计稿与后端依赖', '在 User Story 上直接看到设计入口和后端上线日期'], en: ['Jira design & backend dates', 'design entries and backend ship dates right on the story'] },
+    'scheduled-messages':{ zh: ['定时消息管理', '可以假装"我"定时发消息,也可以管理 AI report'], en: ['Scheduled messages', 'send later as yourself, and manage AI reports'] },
+    'reaction':          { zh: ['消息联动操作', '稍后提醒、自动回复,联动 OpenClaw 执行任务'], en: ['Message actions', 'snooze, auto-reply, and run tasks via OpenClaw'] },
+    'doubao':            { zh: ['豆包互联', '手机上的豆包也能用你的记忆'], en: ['Memory on mobile', 'your memory, available in Doubao on your phone'] },
+    'capture':           { zh: ['划词记住', '选中文字一键存为资料记忆'], en: ['Selection save', 'select text and keep it as a source memory'] },
+    'message-analysis':  { zh: ['消息分析入库', '分析过滤出我感兴趣的话题'], en: ['Message analysis', 'filters out the topics you care about'] },
+    'import-ai':         { zh: ['外部 AI 导入', '把 ChatGPT/Claude 历史带进记忆库'], en: ['Import AI history', 'bring ChatGPT/Claude history into memory'] },
+    'profile':           { zh: ['用户画像', '看它眼里的你,可修正可导出'], en: ['Your profile', 'see how it models you — correct or export it'] },
+    'backup':            { zh: ['记忆备份', '一键下载全部记忆的 backup zip,换机也不怕丢'], en: ['Memory backup', 'one click to download a backup zip of everything'] }
+  };
+  var STORE = 'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel';
+  var WIKI = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
+  var selected = [];
+  var tray = document.getElementById('shareTray');
+  var trayCnt = document.getElementById('trayCnt');
+  var trayChips = document.getElementById('trayChips');
+  var trayCopy = document.getElementById('trayCopy');
+  function label(id) { var r = REC[id]; return isEn() ? r.en[0] : r.zh[0]; }
+  function desc(id) { var r = REC[id]; return isEn() ? r.en[1] : r.zh[1]; }
+  function renderTray() {
+    var en = isEn();
+    trayCnt.textContent = selected.length;
+    document.querySelectorAll('.rec-btn').forEach(function (b) {
+      var on = selected.indexOf(b.getAttribute('data-rec')) >= 0;
+      b.classList.toggle('on', on);
+      if (on) b.textContent = en ? '✓ Added' : '✓ 已选';
+      else b.innerHTML = '<span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span>';
+    });
+    if (!selected.length) {
+      trayChips.innerHTML = '<span class="empty">' + (en ? 'Nothing selected — hit "+ Share" on any card' : '还没选功能——去任意功能卡点「+ 推荐」') + '</span>';
+      trayCopy.value = (en ? 'Install: ' : '安装:') + STORE + '\n' + (en ? 'or see the wiki: ' : '或者查看 wiki:') + WIKI;
+      return;
+    }
+    trayChips.innerHTML = selected.map(function (id) {
+      return '<span class="chip" data-id="' + id + '">' + label(id) + '</span>';
+    }).join('');
+    // 没写推荐语的条目(如 Ask)只用名字造句,避免出现「推荐个小工具,」这种断句
+    var first = selected[0], d = desc(first);
+    var text = d
+      ? (en ? 'Sharing a small tool — ' : '推荐个小工具,') + d
+      : (en ? 'Sharing a small tool with ' + label(first) : '推荐个小工具,有「' + label(first) + '」');
+    if (selected.length > 1) {
+      text += '\n' + (en ? 'It also does: ' : '还可以做到:') + selected.slice(1).map(label).join(en ? ', ' : '、') + (en ? ' and more' : ' 等');
+    }
+    text += '\n\n' + (en ? 'Install: ' : '安装:') + STORE + '\n' + (en ? 'or see the wiki: ' : '或者查看 wiki:') + WIKI;
+    trayCopy.value = text;
+  }
+  document.querySelectorAll('.rec-btn').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      var id = b.getAttribute('data-rec'), i = selected.indexOf(id);
+      if (i >= 0) selected.splice(i, 1); else selected.push(id);
+      renderTray();
+      if (selected.length) tray.classList.add('open');
+    });
+  });
+  trayChips.addEventListener('click', function (e) {
+    var id = e.target.getAttribute && e.target.getAttribute('data-id');
+    if (!id) return;
+    selected.splice(selected.indexOf(id), 1); renderTray();
+  });
+  document.getElementById('trayPill').addEventListener('click', function () { tray.classList.toggle('open'); });
+  document.getElementById('trayCopyBtn').addEventListener('click', function () {
+    var b = this, keep = b.innerHTML;
+    navigator.clipboard.writeText(trayCopy.value).then(function () {
+      b.textContent = isEn() ? '✅ Copied' : '✅ 已复制';
+      setTimeout(function () { b.innerHTML = keep; }, 1400);
+    });
+  });
+  renderTray();
+</script>
+</body>
+</html>

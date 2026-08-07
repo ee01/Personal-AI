@@ -3,7 +3,7 @@
 ## Selected Feature
 
 - Randomly selected feature: `Agent Workflow 多 Agent 编排`.
-- Source document: `docs/features/agent_workflow.md`.
+- Source document: `docs/features/message_analysis.md`.
 - Primary implementation files inspected: `src/agentWorkflow.ts`, `src/agentWorkflowDiagnostics.ts`, `src/options.tsx`, `static/options.css`.
 - Existing verification files inspected: `tools/verify-agent-workflow-diagnostics.ts`, `tools/verify-agent-workflow-replay.ts`, `tools/verify-agent-workflow-options-e2e.mjs`.
 

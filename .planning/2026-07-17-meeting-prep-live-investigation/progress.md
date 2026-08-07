@@ -22,5 +22,5 @@
 - Added and deployed shared meeting-credential redaction, cleaned affected derived caches, and confirmed a database rescan found zero unsafe prep/binder rows.
 - Fixed cross-day meeting prep cache keys, added the future-window regression, deployed the scoped service file, and regenerated the real 96-hour window with 8 prepared / 17 skipped / 0 failed.
 - Verified real Pluto, RCVSDK Daily Sync, Native Client Sprint Demo, Nova CA - Brandy, and MTR-148115 pages; recorded the visible card receipts, outcome slots, sources, and no-writeback boundaries.
-- Updated `docs/features/today_pilot.md` and `docs/features/index.md` with the visible-mount, attendee cap, cross-day cache, and credential-redaction contracts.
+- Updated `docs/features/today_pilot.md` and `docs/index.md` with the visible-mount, attendee cap, cross-day cache, and credential-redaction contracts.
 - Restored Webpage MCP background mode to `On`.

@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `Agent Thinking trace 可视化`
-- Source docs: `docs/features/agent_thinking.md` and `docs/features/index.md`
+- Source docs: `docs/features/agent_thinking.md` and `docs/index.md`
 - Runtime surface: Options Agent Thinking demo, especially `AgentVisualizer`
 
 ## Current Findings

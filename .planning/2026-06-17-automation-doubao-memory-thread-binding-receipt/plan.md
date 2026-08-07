@@ -6,7 +6,7 @@ Improve the selected `Memory Sync Thread` feature in Doubao Bridge by making the
 
 ## Context
 
-- Random feature selected from `docs/features/index.md`: `Memory Sync Thread`.
+- Random feature selected from `docs/index.md`: `Memory Sync Thread`.
 - Source doc: `docs/features/doubao_bridge.md`.
 - Main implementation: `desktop-app/src/bridgeService.ts`, `desktop-app/src/syncManager.ts`, `desktop-app/app/renderer.js`.
 - Browser-level verifier: `desktop-app/scripts/doubao-source-toggle-gating-check.mjs`.

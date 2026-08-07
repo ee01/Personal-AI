@@ -2,7 +2,7 @@
 
 ## 背景
 
-- 本轮从 `docs/features/index.md` 随机选中 `画像快速增强/降低影响`。
+- 本轮从 `docs/index.md` 随机选中 `画像快速增强/降低影响`。
 - `docs/progressing/to-verify.md` 当前为空。
 - 本机 Reminders 可读，但没有 `Personal AI` 列表，因此没有可纳入或可完成的 Reminder 条目。
 - 工作区已有大量无关改动，本轮只触碰用户画像校准相关文件。

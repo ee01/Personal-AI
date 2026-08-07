@@ -116,6 +116,11 @@ describe('Context Assist API (POST /context-assist)', () => {
   }
 
   it('returns a meeting prep brief with cue cards and evidence', async () => {
+    db.prepare(
+      `UPDATE messages_raw
+       SET sender = 'AI Notes', metadata_json = ?`,
+    ).run(JSON.stringify({ authorRole: 'assistant' }));
+
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/context-assist',
@@ -172,6 +177,17 @@ describe('Context Assist API (POST /context-assist)', () => {
               ),
             }),
           ]),
+        }),
+      ]),
+    );
+    const attributedEvidence = body.evidence.find(
+      (item: any) => item.claimAttribution?.length,
+    );
+    expect(attributedEvidence?.claimAttribution).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerKind: 'ai_agent',
+          effect: 'background_only',
         }),
       ]),
     );

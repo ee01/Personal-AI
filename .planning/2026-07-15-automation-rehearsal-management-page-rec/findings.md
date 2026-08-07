@@ -1,7 +1,7 @@
 # Rehearsal Management Findings
 
 ## Requirements
-- Pick one bounded feature from `docs/features/index.md`.
+- Pick one bounded feature from `docs/index.md`.
 - Confirm docs and code are current enough.
 - Search comparable products and research.
 - Include related local `Personal AI` Reminder feedback if any.

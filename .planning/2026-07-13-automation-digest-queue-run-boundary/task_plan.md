@@ -2,7 +2,7 @@
 
 ## 选择结果
 
-- 来源：`docs/features/index.md` 随机候选第 8 项。
+- 来源：`docs/index.md` 随机候选第 8 项。
 - 目标功能：`DigestQueueService 本地摘要`。
 - 所属文档：`docs/features/notification_center.md`。
 - 本轮范围：popup 里 `digest_queue_process / 汇总推送队列处理` 任务行的可见操作边界，以及 `立即执行` 按钮的 hover / 读屏语义。
@@ -59,7 +59,7 @@
    - 覆盖已到期、空队列、状态未确认。
 5. 更新文档。
    - `docs/features/notification_center.md` 补充本地摘要执行按钮边界。
-   - `docs/features/index.md` 的该行保持简洁同步。
+   - `docs/index.md` 的该行保持简洁同步。
 
 ## 验证计划
 

@@ -251,22 +251,29 @@ async function main() {
     await page.addScriptTag({ path: contentScriptPath });
 
     await page.locator('#composer').click();
-    await page.waitForTimeout(900);
-    assert.equal(
-      await page.evaluate(() => window.__paiComposeAssistRequests.length),
-      0,
-      'RingCentral focus alone must not request Compose Assist',
-    );
-    await page.locator('#outside-focus').click();
     await page.waitForFunction(
       () => window.__paiComposeAssistRequests?.length >= 1,
       null,
       { timeout: 6000 },
     );
     assert.equal(
+      await page.evaluate(
+        () => window.__paiComposeAssistRequests[0].assistIntent,
+      ),
+      'draft_compose',
+      'RingCentral empty focus should request Draft Compose',
+    );
+    assert.equal(
       await page.evaluate(() => window.__paiComposeAssistRequests[0].draftText),
       '',
-      'RingCentral may still request an empty draft from thread context on blur',
+      'RingCentral Draft Compose may use empty draft with thread context',
+    );
+    await page.locator('#outside-focus').click();
+    await page.waitForTimeout(400);
+    assert.equal(
+      await page.evaluate(() => window.__paiComposeAssistRequests.length),
+      1,
+      'empty blur after Draft Compose must not re-request the same revision',
     );
 
     await page.goto(fixtureUrl);
@@ -324,7 +331,7 @@ async function main() {
     assert.equal(
       await page.evaluate(() => window.__paiComposeAssistRequests.length),
       2,
-      'silent mutation and refocus must still wait for the next real blur',
+      'silent mutation and refocus with non-empty draft must wait for Draft Refine blur',
     );
     assert.equal(
       await page.locator('.pai-composer-guard-icon-button').count(),

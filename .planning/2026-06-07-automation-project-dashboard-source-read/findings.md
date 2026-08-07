@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Automation task: choose a random feature from docs/features/index.md, compare docs to current code, research similar products/papers, implement low-decision improvements, validate deeply, and update Reminders only when related Personal AI items exist.
+- Automation task: choose a random feature from docs/index.md, compare docs to current code, research similar products/papers, implement low-decision improvements, validate deeply, and update Reminders only when related Personal AI items exist.
 - Carry-over check: docs/progressing/to-verify.md says "暂无。".
 - Reminder check: local Reminders is accessible, but no list named "Personal AI" exists. No Reminder items can be incorporated or marked done.
 - Random feature selected: 项目数据源检查 under Project Dashboard, source doc docs/features/brain_like_project_analysis_system.md.

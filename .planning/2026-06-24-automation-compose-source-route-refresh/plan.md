@@ -4,7 +4,7 @@
 
 - Feature index row: `回复助手来源适配`
 - Capability: Compose Assist
-- Source doc: `docs/features/compose_assist.md`
+- Source doc: `docs/features/assist.md`
 
 ## Context Checked
 
@@ -24,7 +24,7 @@ The source-route receipt already tells the user whether the current editor is Ri
 1. Add a compact `刷新口径` row to the Compose Assist source-route receipt.
 2. Split RingCentral main conversation and thread route boundaries so the receipt explicitly says which context is not mixed in.
 3. Update the direct-insert E2E fixture to assert the new Web AI route refresh copy.
-4. Update `docs/features/compose_assist.md` and `docs/features/index.md` with current behavior.
+4. Update `docs/features/assist.md` and `docs/index.md` with current behavior.
 5. Verify with script syntax check, first successful dev compile, Compose Assist E2E, scoped whitespace check, and process cleanup.
 
 ## Non-goals

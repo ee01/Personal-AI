@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Randomly select one feature from `docs/features/index.md`.
+- Randomly select one feature from `docs/index.md`.
 - Check current code and keep the feature doc current without excessive detail.
 - Research similar industry product behavior and relevant papers, then extract constructive suggestions.
 - If unfinished work can be implemented without much user decision, implement it and update docs.
@@ -36,7 +36,7 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/today_pilot.md`
 - `.planning/2026-06-07-automation-today-prep-source-boundary/task_plan.md`
 - https://support.microsoft.com/en-gb/topic/prepare-for-your-meeting-with-copilot-f23326fc-7721-45f1-875e-23e77aaf3d89

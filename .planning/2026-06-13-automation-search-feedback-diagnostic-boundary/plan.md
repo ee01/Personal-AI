@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机选中：`搜索结果有用/不相关反馈`
-- 所属文档：`docs/features/memory_system.md`
+- 所属文档：`docs/memory_system.md`
 - 主要代码：`src/modals/components/SearchResultPage.vue`
 
 ## 外部参考
@@ -25,4 +25,4 @@
 - `node --check tools/verify-memory-search-feedback-e2e.mjs`
 - `npm run verify:memory-search-feedback:e2e`
 - `npm start` 首次成功编译后停止
-- `git diff --check -- src/modals/components/SearchResultPage.vue tools/verify-memory-search-feedback-e2e.mjs docs/features/memory_system.md .planning/2026-06-13-automation-search-feedback-diagnostic-boundary/plan.md`
+- `git diff --check -- src/modals/components/SearchResultPage.vue tools/verify-memory-search-feedback-e2e.mjs docs/memory_system.md .planning/2026-06-13-automation-search-feedback-diagnostic-boundary/plan.md`

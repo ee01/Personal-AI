@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`, avoid immediately repeating the newest exact automation targets, inspect docs/code, research similar products and papers, check local Reminders, plan first, implement, update docs, and verify thoroughly.
+- Pick a random feature from `docs/index.md`, avoid immediately repeating the newest exact automation targets, inspect docs/code, research similar products and papers, check local Reminders, plan first, implement, update docs, and verify thoroughly.
 - Selected feature: `会后 Panorama` under Meeting Pilot (`docs/features/meeting_pilot.md` and `src/meeting-shell/meetingPanorama.tsx`).
 
 ## Research Findings

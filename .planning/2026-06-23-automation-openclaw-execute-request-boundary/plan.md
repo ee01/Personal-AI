@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `OpenClaw 外部委派`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Primary UI: `src/modals/components/ActionQueue.vue`
 - Main verifier: `tools/verify-action-queue-e2e.mjs`
 
@@ -23,5 +23,5 @@
 1. Move Action Queue optimistic state updates so `running` / final status is applied only after the execute API returns successfully.
 2. Add an operation-error receipt for OpenClaw execute failures that says the execute request was not accepted, approval was not recorded unless the server says so later, and external completion is still unproven.
 3. Extend `tools/verify-action-queue-e2e.mjs` with a failing write-mode OpenClaw action where the execute request returns 503 and the following list refresh also fails; assert the card remains queued and shows the no-submit boundary instead of running.
-4. Update `docs/features/memory_system.md` with the current execute-request failure boundary.
+4. Update `docs/memory_system.md` with the current execute-request failure boundary.
 5. Validate with the Action Queue E2E, first successful `npm start` compile, and scoped `git diff --check`.

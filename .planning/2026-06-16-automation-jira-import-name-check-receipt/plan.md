@@ -2,7 +2,7 @@
 
 ## Context
 
-- Selected from `docs/features/index.md`: `Jira 自动化规则导入` / `Jira Automation Import`.
+- Selected from `docs/index.md`: `Jira 自动化规则导入` / `Jira Automation Import`.
 - `docs/progressing/to-verify.md` has no carry-over item.
 - Local Reminders is readable, but there is no visible `Personal AI` list; no Reminder item is incorporated or completed.
 - External scan: Atlassian import/export docs emphasize version compatibility and import review; Atlassian Data Center KB notes bulk imported automation rules start disabled; trigger-action programming research highlights debugging and rule-difference comprehension issues.

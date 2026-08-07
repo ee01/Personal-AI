@@ -2,7 +2,7 @@
 
 ## Target
 
-Random feature selected from `docs/features/index.md`: `Slides partial success skipped reasons` under Google Slides Analyzer.
+Random feature selected from `docs/index.md`: `Slides partial success skipped reasons` under Google Slides Analyzer.
 
 ## Initial Findings
 

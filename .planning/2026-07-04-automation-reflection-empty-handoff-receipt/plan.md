@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- `docs/features/index.md` 随机目标：`自我反思线程`，所在文档 `docs/features/memory_system.md`。
+- `docs/index.md` 随机目标：`自我反思线程`，所在文档 `docs/memory_system.md`。
 - 相关页面：`memory-exploring.html#/reflection-threads` 和 `#/reflection-threads/:id`。
 - 本轮不改反思 planner、worker、研究补查、动作执行或后端数据结构，只补列表页成功空结果的用户可见边界。
 
@@ -29,7 +29,7 @@
 1. 在 `ReflectionThreads.vue` 增加 `emptyFilterReceipt`，仅在成功读取、无错误、无结果时显示。
 2. 回执区分梦境 handoff、普通搜索和无搜索词空列表，展示请求、读取结果、边界和恢复路径。
 3. 扩展 `tools/verify-reflection-research-e2e.mjs`，覆盖 `source=dream&search=Project Cedar` 的 0 结果回执。
-4. 在 `docs/features/memory_system.md` 的自我反思列表段落补充该行为。
+4. 在 `docs/memory_system.md` 的自我反思列表段落补充该行为。
 5. 跑 `node --check`、`npm start` 首次成功编译、`verify:reflection-research:e2e` 和 scoped `git diff --check`。
 
 ## 验收标准

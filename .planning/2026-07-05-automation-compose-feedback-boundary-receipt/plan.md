@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `回复助手阈值与反馈` under Compose Assist.
-- Source doc: `docs/features/compose_assist.md`.
+- Source doc: `docs/features/assist.md`.
 - Main code: `src/composer-guard/ComposerGuardController.ts`.
 - Existing proof path: `tools/verify-compose-assist-direct-insert-e2e.mjs`.
 

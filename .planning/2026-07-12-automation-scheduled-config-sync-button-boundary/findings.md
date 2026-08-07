@@ -2,7 +2,7 @@
 
 ## Repo Findings
 
-- `docs/progressing/to-verify.md` is empty, so this run picked a fresh item from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` is empty, so this run picked a fresh item from `docs/index.md`.
 - Random selection, after avoiding the freshest exact targets where practical, chose `定时消息配置同步` under Scheduled Messages.
 - `docs/features/scheduled_messages_manager.md` already documents the core behavior: Config is cross-device source, local storage is cache, writes are Sheet-first, manual sync reads Sheet Config first, same-timestamp conflicts do not silently overwrite, and the banner explains Config vs Messages/Logs outcomes.
 - `ConfigSyncService` already preserves unmanaged keys, deduplicates managed keys, uses `RAW` writes, blocks writes when Sheet Config is newer than the local base, recovers missing Config sheet/tabs, and uses Sheet or same-timestamp Sheet as the base for partial updates where appropriate.

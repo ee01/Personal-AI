@@ -12,7 +12,7 @@
 - Created this isolated planning directory and made it the active plan.
 - Implemented `suggestionCardLocalScanRows()` in `src/modals/components/PersonalSkillsPage.vue`.
 - Extended `tools/verify-personal-skill-foundry-e2e.mjs` to assert the missing-validation branch and a validation-present local import branch.
-- Updated `docs/features/personal_skill_foundry.md` and the `本地 agent skill 导入建议` row in `docs/features/index.md`.
+- Updated `docs/features/personal_skill_foundry.md` and the `本地 agent skill 导入建议` row in `docs/index.md`.
 - Validation passed:
   - `node --check tools/verify-personal-skill-foundry-e2e.mjs`
   - `npm start -- --progress` compiled successfully in 15800 ms and was stopped after the first successful compile

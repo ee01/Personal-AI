@@ -4,7 +4,7 @@
 
 - Feature: `回复助手草稿辅助`
 - Capability: Compose Assist
-- Source doc: `docs/features/compose_assist.md`
+- Source doc: `docs/features/assist.md`
 
 ## Reminder Check
 

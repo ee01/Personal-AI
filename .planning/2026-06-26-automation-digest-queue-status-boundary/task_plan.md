@@ -1,6 +1,6 @@
 # Notification Center Digest Queue Status Boundary Plan
 
-Goal: improve the `DigestQueueService 本地摘要` user path from `docs/features/index.md` by making the popup queue status easier to scan without changing queue semantics or requiring new user decisions.
+Goal: improve the `DigestQueueService 本地摘要` user path from `docs/index.md` by making the popup queue status easier to scan without changing queue semantics or requiring new user decisions.
 
 ## Phases
 

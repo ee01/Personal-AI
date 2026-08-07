@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/index.md`.
 - [x] Select `反思本地研究补查` from the feature index after avoiding the freshest exact automation targets.
 - [x] Check EventKit Reminders list `Personal AI`.
 - [x] Inspect current docs, UI, service, and verifier shape.
@@ -23,7 +23,7 @@ Complete
 ### Phase 3: Implementation
 - [x] Add per-trace hover/focus/ARIA boundary copy to `ReflectionThreadDetail.vue`.
 - [x] Update `verify-reflection-research-e2e.mjs` to assert trace card title/ARIA semantics.
-- [x] Update `docs/features/memory_system.md` and `docs/features/index.md` concisely.
+- [x] Update `docs/memory_system.md` and `docs/index.md` concisely.
 - **Status:** complete
 
 ### Phase 4: Testing & Verification

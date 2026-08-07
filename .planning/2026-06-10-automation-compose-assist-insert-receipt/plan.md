@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `回复助手直接插入`
-- Source doc: `docs/features/compose_assist.md`
+- Source doc: `docs/features/assist.md`
 
 ## Context
 

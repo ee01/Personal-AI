@@ -10,7 +10,10 @@
  */
 
 import { generateAutoReply } from '../llm';
-import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthTokenSilently,
+} from '../utils/googleAuth';
 import { ScheduledMessageService } from '../scheduled-messages/ScheduledMessageService';
 import { isScheduledMessagesInitialized } from '../scheduled-messages/ScheduledMessagesUtils';
 import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime';
@@ -327,6 +330,7 @@ async function createAutoReplyScheduledMessage(params: {
     // 🔧 优先使用静默方法，避免在后台任务中弹出授权窗口
     const token = await getGoogleAuthTokenSilently({
       caller: 'AutoReplyHandler.createMessage',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
     if (!token) {
       console.warn(

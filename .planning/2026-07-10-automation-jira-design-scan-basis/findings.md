@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick one random item from `docs/features/index.md`.
+- Pick one random item from `docs/index.md`.
 - Check docs against code and keep docs concise.
 - Search comparable products and papers for constructive guidance.
 - Implement any low-decision improvement, update docs, and verify as thoroughly as practical.

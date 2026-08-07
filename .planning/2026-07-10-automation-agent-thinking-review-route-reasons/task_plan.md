@@ -9,7 +9,7 @@ Improve `Agent Thinking trace 可视化` so the first-screen review route explai
 - Feature: `Agent Thinking trace 可视化`
 - Capability: Agent Thinking
 - Source doc: `docs/features/agent_thinking.md`
-- Random selection note: chosen from a randomized `docs/features/index.md` sample after excluding the freshest exact automation targets.
+- Random selection note: chosen from a randomized `docs/index.md` sample after excluding the freshest exact automation targets.
 
 ## Plan
 

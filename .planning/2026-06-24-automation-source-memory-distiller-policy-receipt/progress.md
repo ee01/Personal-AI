@@ -2,7 +2,7 @@
 
 ## 2026-06-24
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, repo memory guidance, root planning files, and current worktree status.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, repo memory guidance, root planning files, and current worktree status.
 - Checked local Reminders with a bounded AppleScript probe; no `Personal AI` list exists.
 - Selected `Source Memory 蒸馏器` under Memory Capture after rerolling away from too-recent exact feature families.
 - Created this isolated planning directory for the current run.

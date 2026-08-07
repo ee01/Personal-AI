@@ -2,7 +2,7 @@
 
 ## Selection
 
-- Randomized `docs/features/index.md` sample produced `Slides 写回预览` among eligible non-recent feature families.
+- Randomized `docs/index.md` sample produced `Slides 写回预览` among eligible non-recent feature families.
 - `docs/progressing/to-verify.md` is empty.
 
 ## Reminders

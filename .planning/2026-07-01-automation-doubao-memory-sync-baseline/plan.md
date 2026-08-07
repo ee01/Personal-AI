@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机选中：`Memory Sync Thread`（`docs/features/index.md` -> `docs/features/doubao_bridge.md`）
+- 随机选中：`Memory Sync Thread`（`docs/index.md` -> `docs/features/doubao_bridge.md`）
 - 用户路径：Desktop App 中的 `绑定长期记忆线程` 卡片，负责 `memory_sync_thread` 和 `stable_memory` / persona 同步。
 
 ## 已确认状态

@@ -9,6 +9,8 @@ import {
   formatScheduleHealthDiagnosticSummary,
   formatScheduleHealthIssue,
   formatScheduleHealthIssueDiagnostic,
+  formatScheduleHealthIssueMissedWindow,
+  formatScheduleHealthIssueSuggestedAction,
   formatScheduleHealthSummary,
   getScheduleCompensationWindowReceipt,
   getScheduleHealthIssue,
@@ -297,6 +299,38 @@ test('formats diagnostic route labels for health issue cards', () => {
   assert.equal(
     formatScheduleHealthIssueDiagnostic(missedAsMe),
     '诊断线索: 默认发送已过 · Apps Script / AsMe · 预期 2026-05-04 09:00',
+  );
+});
+
+test('formats compact health alert card copy for the manager banner', () => {
+  const missedExecutor = getScheduleHealthIssue(
+    makeMessage({ Topic: '回顾行动项' }),
+    new Date('2026-05-04T10:01:00'),
+  )!;
+  const invalidTime = getScheduleHealthIssue(
+    makeMessage({ Topic: '坏时间', Schedule_Time: '99:00' }),
+    new Date('2026-05-04T10:01:00'),
+  )!;
+  const suggestion = getScheduleHealthRecoverySuggestion(
+    makeMessage({ Topic: '回顾行动项' }),
+    new Date('2026-05-04T10:01:30'),
+  );
+
+  assert.equal(
+    formatScheduleHealthIssueMissedWindow(missedExecutor),
+    '错过 2026-05-04 09:30 发送窗口（已超过 30 分钟补偿窗口）',
+  );
+  assert.equal(
+    formatScheduleHealthIssueSuggestedAction(missedExecutor, suggestion),
+    '建议操作：改到 2026-05-04 10:02',
+  );
+  assert.equal(
+    formatScheduleHealthIssueMissedWindow(invalidTime),
+    '执行时间格式异常',
+  );
+  assert.equal(
+    formatScheduleHealthIssueSuggestedAction(invalidTime, null),
+    '建议操作：编辑为 00:00-23:59 的本地时间。',
   );
 });
 

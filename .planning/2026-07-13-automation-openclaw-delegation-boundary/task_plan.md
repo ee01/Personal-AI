@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, root/stale planning files, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, root/stale planning files, and `docs/index.md`.
 - [x] Check local Reminders with AppleScript and Swift/EventKit.
 - [x] Randomly select a viable feature while rerolling away from the freshest exact targets.
 - [x] Inspect OpenClaw delegation docs, Action Queue UI, memory-service delegation code, existing E2E coverage, and the July 6 OpenClaw automation run.

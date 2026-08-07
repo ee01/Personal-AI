@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机抽中：`Agent Workflow 运行诊断`
-- Source of truth：`docs/features/agent_workflow.md`
+- Source of truth：`docs/features/message_analysis.md`
 - 本轮目标：让 Options 测试结果在首屏诊断里直接指出工具级错误发生在哪个 Agent / 工具上，而不是只显示 `工具错误 N`。
 
 ## 当前判断
@@ -24,7 +24,7 @@
 2. 让结构覆盖、编排回执、决策路径、运行诊断、运行就绪和下一步动作优先展示前几个 `Agent / Tool` 标签；只有 trace 没有标签时才回退到 `工具错误 N`。
 3. 更新 `tools/verify-agent-workflow-diagnostics.ts` 覆盖 storageReview-only 和 trace-derived tool error 两种路径。
 4. 更新 `tools/verify-agent-workflow-options-e2e.mjs`，确认 Options UI 在工具错误场景下首屏出现具体 Agent / Tool。
-5. 更新 `docs/features/agent_workflow.md` 和 `docs/features/index.md` 的简要描述。
+5. 更新 `docs/features/message_analysis.md` 和 `docs/index.md` 的简要描述。
 
 ## 验证计划
 

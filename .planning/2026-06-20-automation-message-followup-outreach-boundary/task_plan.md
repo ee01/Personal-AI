@@ -11,7 +11,7 @@ Phase 5
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/features/index.md`
+- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/index.md`
 - [x] Check local Reminders `Personal AI` list state
 - [x] Inspect Followup docs, source, and existing verifiers
 - **Status:** complete
@@ -23,7 +23,7 @@ Phase 5
 
 ### Phase 3: Implementation
 - [x] Implement the smallest low-decision UX/code improvement
-- [x] Update `docs/features/message_reaction.md` and `docs/features/index.md` if behavior changes
+- [x] Update `docs/features/message_reaction.md` and `docs/index.md` if behavior changes
 - **Status:** complete
 
 ### Phase 4: Verification

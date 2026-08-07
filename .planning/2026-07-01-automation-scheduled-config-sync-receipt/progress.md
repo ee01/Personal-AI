@@ -7,7 +7,7 @@
 - **Started:** 2026-07-01
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant MEMORY.md random-sweep notes.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant MEMORY.md random-sweep notes.
 - Random sampler initially failed because `shuf` is unavailable; reran with Perl and selected `定时消息配置同步`.
 - Checked Reminders through AppleScript and EventKit. EventKit found 4 completed Personal AI reminders, none relevant to this feature.
 - Inspected Scheduled Messages Config sync docs, manager code, ConfigSyncService, and focused E2E.

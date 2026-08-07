@@ -2,7 +2,7 @@
 
 ## 2026-07-09T20:04:50+0800
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, repo memory notes, and the random-feature loop instructions.
+- Read `AGENT.md`, automation memory, `docs/index.md`, repo memory notes, and the random-feature loop instructions.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over work.
 - Checked Reminders: AppleScript missed `Personal AI`; EventKit found the list with 4 total items and 0 incomplete.
 - Selected `Coverage 质量分` and inspected `docs/features/memory_coverage_map.md`, `MemoryCoveragePage.vue`, `MemoryCoverageService.ts`, package scripts, and `tools/verify-memory-coverage-e2e.mjs`.
@@ -14,7 +14,7 @@
 - Added `质量分快照口径` inside the selected platform score breakdown in `MemoryCoveragePage.vue`.
 - The receipt shows current Coverage snapshot generation/read times, snapshot age, freshness window, selected platform latest signal, recent-ratio basis, and recalculation boundary.
 - Updated `tools/verify-memory-coverage-e2e.mjs` to assert the receipt.
-- Updated `docs/features/memory_coverage_map.md` and the `Coverage 质量分` row in `docs/features/index.md`.
+- Updated `docs/features/memory_coverage_map.md` and the `Coverage 质量分` row in `docs/index.md`.
 
 ## 2026-07-09T20:09:00+0800
 

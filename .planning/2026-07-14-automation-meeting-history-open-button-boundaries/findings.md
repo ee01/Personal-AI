@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Verify docs are current enough and update concise canonical docs if behavior changes.
 - Search comparable products/papers for constructive ideas.
 - Inspect and improve code/UX/bugs, then implement a bounded improvement that does not require user decisions.
@@ -36,7 +36,7 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/meeting_pilot.md`
 - `src/modals/components/MeetingHistoryPage.vue`
 - `desktop-app/scripts/meeting-pilot-history-check.mjs`

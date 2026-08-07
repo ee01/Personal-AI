@@ -2,7 +2,7 @@
 
 ## Repo Findings
 
-- Random selection from `docs/features/index.md`: `场景预演边界`.
+- Random selection from `docs/index.md`: `场景预演边界`.
 - Feature owner/capability: Rehearsal.
 - Source document: `docs/features/rehearsal.md`.
 - `docs/progressing/to-verify.md` currently says `暂无。`, so no carry-over verification item was pending.

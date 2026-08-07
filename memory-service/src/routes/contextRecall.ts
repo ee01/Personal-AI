@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import { ContextRecallService } from '../core/ContextRecallService.js';
 import { KeystoneBriefService } from '../core/KeystoneBriefService.js';
 import { buildWeaveStats } from '../core/weaveStats.js';
+import { getUiLanguageFromHeaders, type UiLanguage } from '../i18n.js';
 import type {
   ContextRecallMatch,
   ContextRecallRequest,
@@ -430,6 +431,7 @@ function buildKeystoneOnlyFallback(
   request: ContextRecallRequest,
   startedAt: number,
   db: Database.Database,
+  outputLanguage: UiLanguage,
 ): ContextRecallResponse {
   const fallback = buildContextRecallFallback(
     request,
@@ -439,13 +441,13 @@ function buildKeystoneOnlyFallback(
   const presentation = new KeystoneBriefService(db).matchContext(
     request,
     [],
-    { requireRecallEvidence: false },
+    { requireRecallEvidence: false, outputLanguage },
   );
   if (!presentation || presentation.presentationMode === 'stale_notice') {
     return fallback;
   }
   const brief = presentation.brief;
-  const english = brief.compositionVersion.endsWith('-en-US');
+  const english = outputLanguage === 'en-US';
   const match: ContextRecallMatch = {
     id: `keystone:${brief.id}`,
     type: 'reflection_thread',
@@ -519,6 +521,7 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
             request.body,
             startedAt,
             request.userContext.db,
+            getUiLanguageFromHeaders(request.headers),
           ),
         );
       }
@@ -584,6 +587,7 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
           result.keystoneBrief = new KeystoneBriefService(db).matchContext(
             request.body,
             result.matches ?? [],
+            { outputLanguage: getUiLanguageFromHeaders(request.headers) },
           );
         } catch (err) {
           request.log.warn(

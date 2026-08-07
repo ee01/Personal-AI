@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机巡检 `docs/features/index.md` 选中 `项目本地查找`。本轮只做 Project Dashboard 本地查找路径的可理解性修复：用户在输入、清除、切到全部命中前，应能通过 hover / 读屏先知道这是当前浏览器本地快照过滤，会与项目视图筛选组合，不会读取、同步或写回外部系统。
+随机巡检 `docs/index.md` 选中 `项目本地查找`。本轮只做 Project Dashboard 本地查找路径的可理解性修复：用户在输入、清除、切到全部命中前，应能通过 hover / 读屏先知道这是当前浏览器本地快照过滤，会与项目视图筛选组合，不会读取、同步或写回外部系统。
 
 ## 已检查
 
@@ -11,7 +11,7 @@
 - 自动化记忆：避开最近精确重复目标
 - Reminders：AppleScript 未列出 `Personal AI`，EventKit 读到 `Personal AI`，4 条均已完成且与 Project Dashboard 无关
 - 代码/文档：
-  - `docs/features/index.md`
+  - `docs/index.md`
   - `docs/features/project_dashboard_usage_guide.md`
   - `src/components/dashboard/ProjectDashboard.tsx`
   - `src/utils/dashboardIntegration.ts`

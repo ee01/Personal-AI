@@ -9,7 +9,7 @@ Improve `队列健康提示` in Scheduled Messages so a user applying one health
 ## Plan
 
 1. [complete] Read repo rules, feature index, automation memory, `to-verify`, and current worktree state.
-2. [complete] Select a non-recent random target from `docs/features/index.md`: `队列健康提示`.
+2. [complete] Select a non-recent random target from `docs/index.md`: `队列健康提示`.
 3. [complete] Check local `Personal AI` Reminders and external product/paper references.
 4. [complete] Inspect Scheduled Messages health code and E2E coverage, then implement a scoped UX-only pending receipt for health one-click reschedule.
 5. [complete] Update concise feature docs/index wording.

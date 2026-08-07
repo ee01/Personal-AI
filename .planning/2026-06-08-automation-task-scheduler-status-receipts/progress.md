@@ -4,7 +4,7 @@
 
 - Read automation memory, `AGENT.md`, feature index, `to-verify.md`, and relevant memory registry entries.
 - Confirmed no local `Personal AI` Reminder list exists.
-- Selected `Task Scheduler 状态 API` from `docs/features/index.md`.
+- Selected `Task Scheduler 状态 API` from `docs/index.md`.
 - Reviewed current Task Scheduler docs, API code, popup status helpers, and verifiers.
 - Started implementation plan for structured status receipts.
 - Added `statusReceipt` to Task Scheduler status output.

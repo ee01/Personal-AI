@@ -1,6 +1,6 @@
 # Findings
 
-- `docs/progressing/to-verify.md` is empty, so this run selected a fresh random feature from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` is empty, so this run selected a fresh random feature from `docs/index.md`.
 - Random target: `项目本地查找` under Project Dashboard.
 - Reminder state: AppleScript did not list `Personal AI`; EventKit found it with 4 total items, all completed. No open Project Dashboard related feedback was available to incorporate.
 - External scan: Jira dashboards emphasize customizable dashboard/search/gadget contexts; Linear filters show view-local narrowing and shareable filtered views; dashboard research highlights that information currency, completeness, and user expectation mismatch affect decision quality.

@@ -17,7 +17,7 @@ Goal: improve the randomly selected `场景记忆自动驾驶` feature by reconc
 ## Decisions
 
 - Selected feature: `场景记忆自动驾驶`.
-- Source docs: `docs/features/memory_system.md` and `docs/features/memory_lens.md`.
+- Source docs: `docs/memory_system.md` and `docs/features/memory_lens.md`.
 - Reminder result: local Reminders is reachable, but there is no `Personal AI` list, so no Reminder item can be incorporated or completed in this run.
 - Keep edits scoped to the passive context-recall / Memory Lens boundary path and its docs/tests.
 - Implementation slice: thread backend `autopilot` summary through passive Memory Lens cache/rendering and show a first-screen `展示前过滤回执`; do not change recall ranking, matching, write paths, or Selection Memory Search.

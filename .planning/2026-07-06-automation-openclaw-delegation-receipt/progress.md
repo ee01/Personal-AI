@@ -15,7 +15,7 @@
 - Presented the implementation plan before runtime edits.
 - Implemented OpenClaw auto-queued preflight copy/facts in `ActionQueue.vue`.
 - Added an E2E fixture for `queued + auto + no approval` OpenClaw read delegation and asserted the background-scheduler trigger boundary.
-- Updated `docs/features/memory_system.md` and `docs/features/index.md` with concise behavior copy.
+- Updated `docs/memory_system.md` and `docs/index.md` with concise behavior copy.
 - Confirmed no leftover webpack watcher, Action Queue E2E, or temporary browser profile process.
 
 ### Test Results

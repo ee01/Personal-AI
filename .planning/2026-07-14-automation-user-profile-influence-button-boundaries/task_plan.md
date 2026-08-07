@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected feature: `画像快速增强/降低影响` from `docs/features/index.md`.
+- Selected feature: `画像快速增强/降低影响` from `docs/index.md`.
 - Source document: `docs/features/user_profile_system.md`.
 - Runtime surface: `src/modals/components/UserProfilePage.vue`.
 - Verifier: `tools/verify-user-profile-export-e2e.mjs`.
@@ -31,7 +31,7 @@
 2. Attach the helper to both row and prediction queue influence buttons as `title` and `aria-label`.
 3. Add a dedicated undo button boundary for `撤销影响力调整`, including pending copy.
 4. Update the existing User Profile E2E to assert `title` / `aria-label` parity and key boundary fragments for boost, lower, prediction lower, and undo controls.
-5. Update `docs/features/user_profile_system.md` and the matching `docs/features/index.md` row concisely.
+5. Update `docs/features/user_profile_system.md` and the matching `docs/index.md` row concisely.
 6. Verify with:
    - `node --check tools/verify-user-profile-export-e2e.mjs`
    - `npm start -- --progress` until first successful compile, then stop

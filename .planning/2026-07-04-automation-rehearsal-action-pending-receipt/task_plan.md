@@ -24,7 +24,7 @@ Goal: improve the selected `Rehearsal 管理页` feature by checking docs/code a
 
 ## Decisions
 
-- Selected feature: `Rehearsal 管理页` from `docs/features/index.md`.
+- Selected feature: `Rehearsal 管理页` from `docs/index.md`.
 - Reminder state: AppleScript did not list `Personal AI`; EventKit found it with 4 items, all completed and unrelated to Rehearsal.
 - External scan supports visible cue/action binding, centralized management, pause/delete/recover paths, and explicit limits before treating an action as done.
 - Implementation stays presentation-first; no Rehearsal API, activation, recall, feedback semantics, or memory-service write path changes.

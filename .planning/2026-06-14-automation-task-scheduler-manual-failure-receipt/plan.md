@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 来源索引：`docs/features/index.md`
+- 来源索引：`docs/index.md`
 - 选中功能：Task Scheduler 状态 API / Popup 后台任务概览
 - 主文档：`docs/features/task_scheduler_api.md`
 

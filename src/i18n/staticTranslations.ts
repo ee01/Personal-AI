@@ -84,7 +84,7 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '技能库': 'Skill Foundry',
   '实体记忆查询': 'Memory Explorer',
   '项目进展图': 'Project Progress Chart',
-  '会议全貌': 'Meeting Pilot',
+  '会议弹幕': 'Meeting Pilot',
   '会前准备': 'Meeting Prep',
   '写作护航': 'Writing Assist',
   '主动询问': 'Outreach',
@@ -285,11 +285,11 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '每月': 'Monthly',
   '每隔': 'Every',
   '天': 'days',
-  '每次会议默认开启会议全貌': 'Enable Meeting Pilot by default for meetings',
-  '关闭后不会在会议页默认注入悬浮入口；仍可从扩展 popup 点击“开启会议全貌”，对当前会议单次启用。':
+  '每次会议默认开启会议弹幕': 'Enable Meeting Pilot by default for meetings',
+  '关闭后不会在会议页默认注入悬浮入口；仍可从扩展 popup 点击“开启会议弹幕”，对当前会议单次启用。':
     'When disabled, the floating entry is not injected by default. You can still start Meeting Pilot once for the current meeting from the extension popup.',
   '显示会议页右下角悬浮入口': 'Show the floating meeting entry',
-  '悬浮 icon hover 3 秒后会出现小 x，可隐藏当前页面入口或选择永不展示；如果选过“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用 popup 单次会议全貌。':
+  '悬浮 icon hover 3 秒后会出现小 x，可隐藏当前页面入口或选择永不展示；如果选过“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用 popup 单次会议弹幕。':
     'Hover the floating icon for 3 seconds to reveal a close control. You can hide it on the current page or never show it again. This setting restores it after “never show”. Disabling it only hides the floating entry and overlay prompts; one-time popup launch still works.',
   '优先用 RingCentral app 加会': 'Prefer RingCentral app for joining',
   '开启后会拦截 RingCentral Web 中的 Video Join 链接和部分 Join 按钮，改用本机 RingCentral app 打开会议；若 app 没有接管，页面会保留浏览器加入兜底，也可在兜底浮层里改为默认使用浏览器。':
@@ -320,7 +320,7 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '开启后优先读取会议页面 Notes / Transcript 中 RingCentral 自动生成的转录；读取成功时不会再启动 Local ASR 或 Cloud ASR。':
     'When enabled, the meeting page Notes / Transcript is used first. If it is found, Local ASR or Cloud ASR will not start.',
   'ASR Provider API Key': 'ASR Provider API Key',
-  '输入会议全貌转写服务 API Key': 'Enter Meeting Pilot transcription API key',
+  '输入会议弹幕转写服务 API Key': 'Enter Meeting Pilot transcription API key',
   '启用 OpenClaw 外部委派': 'Enable OpenClaw external delegation',
   '开启后，自我反思与联动操作都可把外部系统查询/执行委派给 OpenClaw。':
     'When enabled, self reflection and linked actions can delegate external queries or execution to OpenClaw.',
@@ -398,9 +398,9 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '分析 Slide 项目信息并更新':
     'Analyze slide project information and update it',
   '正在分析 Slide 项目信息...': 'Analyzing slide project information...',
-  '打开会议全貌': 'Open Meeting Pilot',
+  '打开会议弹幕': 'Open Meeting Pilot',
   '启用画面理解与纪要': 'Enable Vision and Minutes',
-  '开启会议全貌': 'Start Meeting Pilot',
+  '开启会议弹幕': 'Start Meeting Pilot',
   '打开配置': 'Open Settings',
   '任务状态不可用': 'Task status unavailable',
   '任务控制失败': 'Task control failed',

@@ -2,7 +2,7 @@
 
 ## 2026-06-24
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, the root planning files, and `docs/features/index.md`.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, the root planning files, and `docs/index.md`.
 - Checked local Reminders with a bounded AppleScript probe; result was `NO_PERSONAL_AI_LIST`, so no Reminder feedback can be included or marked done.
 - Random sampler selected `Jira issue key 解析` under Jira Design Links after excluding the freshest same-day feature families.
 - Created this planning directory for the run.

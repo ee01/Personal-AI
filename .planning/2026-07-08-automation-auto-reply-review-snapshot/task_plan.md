@@ -7,7 +7,7 @@ Improve the `自动答复 / Reply` PendingReview user journey so the human appro
 ## Scope
 
 - Selected feature: `自动答复 / Reply` under Message Reaction.
-- Main files: `src/scheduled-messages/ScheduledMessagesManager.tsx`, `tools/verify-scheduled-messages-status-actions-e2e.mjs`, `docs/features/message_reaction.md`, `docs/features/index.md`.
+- Main files: `src/scheduled-messages/ScheduledMessagesManager.tsx`, `tools/verify-scheduled-messages-status-actions-e2e.mjs`, `docs/features/message_reaction.md`, `docs/index.md`.
 - Out of scope: changing AutoReplyHandler queue creation, LLM generation, ScheduledMessageService writes, Google Sheets schema, trigger matching, or actual send behavior.
 
 ## Plan

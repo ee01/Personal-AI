@@ -4,7 +4,7 @@
  *
  * IMPORTANT: The frontend worker uses an identical capability key set. These
  * exact string keys must stay in sync across both sides — see
- * `docs/features/index.md` ("所属能力").
+ * `docs/index.md` ("所属能力").
  */
 
 export const CAPABILITY_KEYS = [
@@ -45,7 +45,7 @@ export type CapabilityKey = (typeof CAPABILITY_KEYS)[number];
 
 /**
  * 中文展示名（仅报表展示层使用；打点/存储仍用英文 key）。
- * 术语与 docs/features/index.md「第一批中英术语」对齐。
+ * 术语与 docs/index.md「主功能列表」对齐。
  */
 export const CAPABILITY_LABELS_ZH: Record<CapabilityKey, string> = {
   memory_service: '记忆服务（核心平台）',
@@ -98,7 +98,7 @@ export function normalizeCapability(value: string | null | undefined): Capabilit
  * Route-prefix → capability mapping. Prefixes are matched against the request
  * path with the `/api/v1` group prefix stripped. Longest matching prefix wins.
  *
- * Aligned with docs/features/index.md "所属能力".
+ * Aligned with docs/index.md "所属能力".
  */
 const ROUTE_CAPABILITY_ENTRIES: Array<[string, CapabilityKey]> = [
   ['/ask', 'ask'],

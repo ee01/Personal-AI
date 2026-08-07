@@ -1,6 +1,6 @@
 # Memory Lens
 
-*最后更新: 2026-07-31（含 Lens 展示地图、关键简报自动生成、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
+*最后更新: 2026-08-03（含 Lens 展示地图、关键简报自动生成、Options 语言同步链路、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
 
 ## 概述
 
@@ -32,6 +32,7 @@ Memory Lens 的逻辑是“当前页面像什么，就去记忆库里找你以�
 5. 与 Compose Assist 的互斥：用户正在输入框附近写回复时，Compose Assist 优先，Memory Lens 右下角入口会隐藏。
 6. 精准 cue：少数结构足够明确的场景会把相关记忆编译成一句可行动只读提示，例如用户在 RingCentral 群聊或 Jira comment 中讨论 MTR-148115 估算时提示“上次 original estimate 口径是人天”。这仍然只是展示旧记忆，不插入、不提交；如果同一句 cue 在同类场景被重复标成不相关，Outcome Loop 会让后续同类场景静默。
 7. 关键简报：如果同一工作对象已有至少两条独立来源、非纯派生权威和可回溯的 claim，`/context-recall` 可以在不改变原始召回排序的前提下附带一份 `keystoneBrief`。符合 `ready` 的简报会替换 Expanded Card 首屏的零散记忆；原始记忆不会消失，而是移到“来源与原始记忆”里供复核。
+8. [记忆主张归属](./memory_claim_attribution.md)：context recall 在展示前按句内 claim 移除假设/未知归属等 block 证据，并把 AI 建议或他人转述降为背景。普通 single-self 结果完全无新增 UI；只有后果变化时，Expanded Card metadata 才显示一个归属 chip，Rest / Hover Peek 保持不变。
 
 ## 产品边界
 
@@ -41,13 +42,14 @@ Memory Lens 负责：
 - 展示少量高相关记忆或 Rehearsal 预演提醒，按"为什么相关 → 可提取信息 / 预演内容 → 建议动作 / 我能做什么"三层组织卡片内容。
 - 当当前场景命中可信的多来源关键简报时，在同一枚 Rest icon、同一个 Hover Peek 和 Expanded Card 壳内优先展示简报，并保留来源图和原始关联记忆下钻。
 - 提供正/负反馈 icon 和站点/页面级静默控制；控制类操作默认折叠，不占据卡片主体。
+- mixed claim 的归属纠错复用 Expanded Card 既有反馈详情；它只写 Personal AI 派生 attribution revision，不改来源原文、不写回网页或外部系统，也不承担 Memory Capture 的 `+ 入库`。
 - 在用户选中文本后提供 **划词记忆检索（Selection Memory Search）**：先静默召回，命中强相关才在选区动作条里显示 `icon48.png` 查记忆入口。
 
 Memory Lens 不负责：
 
 - 不自动保存完整 DOM、网页正文、截图、密码/支付/登录表单或私密输入。
 - 不因为用户打开网页就强化长期记忆的 `access_count`。
-- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。即使命中 Rehearsal 或 Cue Compiler，Memory Lens 也只展示只读提醒，不生成回复。
+- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`assist.md`](./assist.md)。即使命中 Rehearsal 或 Cue Compiler，Memory Lens 也只展示只读提醒，不生成回复。
 - 不为关键简报新增第二枚悬浮 icon、并列面板或新的日常维护页；简报只是现有被动 Lens 的高信号展示对象。
 - 不做网页 DOM 替换、视觉 overlay 或用户定义的数据回填；这些属于 [Personal AI AR Data](./ar_data_overlay.md)。未来 AR 可以复用 Lens 的场景语义和相似文本匹配能力，但不能混淆 Lens 的只读提示边界。
 - 不在 `v.ringcentral.com/conf/on/*` 上显示通用右下角 bubble；会议页由 Meeting Pilot 接管。
@@ -126,7 +128,28 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 
 用户不需要手动生成简报。独立于完整 Proactive Scheduler 的轻量 `KeystoneBriefComposerService` 维护循环会在 memory-service 启动时运行，此后默认每 15 分钟运行一次；它从活跃 Reflection Thread 发现稳定主题，在工作范围的 `messages_raw` 中查找近 180 天证据。至少两条独立来源且有一条非 reflection / derived 权威时，才确定性组成或刷新简报。每轮每位用户最多处理两份，重复来源签名跳过；用户隐藏或标记不准的简报受保护，不会被下一轮自动恢复。页面打开时的 `/context-recall` 只匹配已经准备好的简报，不调用 LLM、不等待生成，也不因浏览页面产生写入。
 
-简报的用户可读语言服从 Options 页的默认语言。Options 把 `personalAiUiPreferences.language` 同步为 active `user_profile_items.language_preference`；Composer 据此生成中文或 English 的标题、摘要、事实、待确认问题、时效原因和使用提示，并把语言写入 `compositionVersion`。语言改变后，即使证据没有变化，同一 `briefKey` 也会在后台刷新为新语言，不创建重复简报。Lens 侧的状态、栏目、日期、按钮和操作回执直接读取同一 Options 语言；人名、项目名、群组名、URL、Jira key、数字及来源标题/证据保持原文，便于复核。语言转换只允许等义转换既有字段，不能增加、删除或推断事实；转换失败时本轮不覆盖已有简报，等待后续维护重试。
+简报的用户可读语言服从 Options 页当前保存的语言，而不是代码默认值，也不以服务端画像条目反推当前设置。每次页面召回都会携带 `personalAiUiPreferences.language`；Lens 的状态、栏目、日期、按钮和操作回执直接使用本次请求语言。服务端只返回 `compositionVersion` 与本次请求语言一致的自动简报，旧语言简报未刷新完成时回退到普通关联记忆，不能把旧英文简报展示给已设置中文的用户。
+
+Options 会把当前语言同步为 active `user_profile_items.language_preference`，该画像条目只负责约束 Composer 的生成语言，是 Options 设置的服务端投影，不是 UI 语言的权威来源。Options 页面打开时会自动核对并修复漂移；发生变化后立即请求后台刷新同一 `briefKey`，同时保留每 15 分钟维护循环作为兜底，不要求用户手动切换或生成。Composer 据此生成中文或 English 的标题、摘要、事实、待确认问题、时效原因和使用提示，并把语言写入 `compositionVersion`。人名、项目名、群组名、URL、Jira key、数字及来源标题/证据保持原文，便于复核。语言转换只允许等义转换既有字段，不能增加、删除或推断事实；转换失败时本轮不覆盖已有简报，等待后续维护重试。
+
+#### Options 语言读取与后端同步链路
+
+语言不存储在 `envConfig`。两类本地配置用途不同：
+
+| Chrome 本地存储 | 内容 | 用途 |
+|---|---|---|
+| `personalAiUiPreferences.language` | `zh-CN` / `en-US` | Options 当前语言的唯一权威来源；控制 Lens 即时 UI 和请求语言 |
+| `envConfig` | `MEMORY_SERVICE_BASE_URL`、API key、timeout 等 | 只用于连接 memory-service；不代表用户选择的语言 |
+
+完整链路如下：
+
+1. `useExtensionUiLanguage()` 通过 `readExtensionUiPreferences()` 读取 `personalAiUiPreferences.language`；下拉框变化通过 `writeExtensionUiLanguage()` 立即写回同一个独立 storage key。
+2. `MemoryServiceClient.request()` 每次请求前重新读取该值，并写入 `X-Personal-AI-Language` 与 `Accept-Language`。memory-service 不会也不能直接读取浏览器的 Chrome storage。
+3. `/context-recall` 用请求 header 选择本次召回语言，并过滤 `compositionVersion` 与请求语言不一致的自动简报。`src/background.ts` 同时把本地 `uiLanguage` 放进扩展消息响应，Lens 外壳直接按它渲染，不从简报正文或画像反推语言。
+4. Options 页面使用 `envConfig` 中的连接信息创建 `MemoryServiceClient`，再把当前语言写成 active `user_profile_items.language_preference`。这里 `envConfig` 只是“如何连接后端”，不是“语言值从哪里来”。
+5. `KeystoneBriefComposerService` 在 memory-service 内读取 `language_preference`，决定后台新生成/刷新的简报语言。若 Options 本地值与画像不一致，打开 Options 会自动修复画像及证据引用，并调用 `/keystone-briefs/refresh-language`；定时维护循环继续兜底。
+
+因此读链路有两个明确时效层级：**当前页面展示以本次请求 header 为准，后台内容生成以同步后的画像投影为准**。画像同步失败时，已保存的 Options 语言和 Lens 外壳仍然生效；语言不一致的旧自动简报被过滤并回退普通记忆，不会错误展示。
 
 `/context-recall` 在普通召回和 Evidence Cohesion Gate 完成后，尝试同步、确定性匹配一份简报。匹配失败或 Brief Service 异常必须 fail open：响应继续返回原有 `matches`，Lens 继续走普通卡片，不允许简报故障拖垮被动召回。
 

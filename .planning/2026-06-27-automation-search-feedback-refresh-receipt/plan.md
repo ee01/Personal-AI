@@ -4,7 +4,7 @@
 
 - 随机目标：`搜索结果有用/不相关反馈`
 - 所属能力：Memory Exploring / Memory Service
-- Source of truth：`docs/features/memory_system.md`
+- Source of truth：`docs/memory_system.md`
 
 ## 已核对现状
 
@@ -26,7 +26,7 @@
 2. 增加一个卡片内 `重新取证` 按钮，只在反馈成功回执出现时渲染；失败回执不显示，避免把未写入反馈当成可复查状态。
 3. 按当前搜索模式复用 `performAskSearch` / `performEntityVectorSearch`，保留 URL 的 `q` 和 `scope`，不改变 feedback API、存储或排序语义。
 4. 更新 `verify-memory-search-feedback-e2e.mjs`，断言成功反馈后的后续取证按钮和点击后的同 scope/query 新请求。
-5. 更新 `docs/features/memory_system.md`，补充反馈后重新取证路径。
+5. 更新 `docs/memory_system.md`，补充反馈后重新取证路径。
 
 ## 验证计划
 

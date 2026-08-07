@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `Rehearsal 管理页` from `docs/features/index.md`
+- Feature: `Rehearsal 管理页` from `docs/index.md`
 - Surface: `memory-exploring.html#/rehearsals`
 - Scope: presentation-layer honesty for the current list/filter view
 

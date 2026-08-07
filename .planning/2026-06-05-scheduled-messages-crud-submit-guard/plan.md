@@ -2,7 +2,7 @@
 
 ## Target
 
-Feature sampled from `docs/features/index.md`: `定时消息创建/编辑/删除` under Scheduled Messages.
+Feature sampled from `docs/index.md`: `定时消息创建/编辑/删除` under Scheduled Messages.
 
 ## Context checked
 

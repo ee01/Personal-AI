@@ -6,7 +6,7 @@ Tighten the Rehearsal management page so legacy or imported Rehearsals without s
 
 ## Scope
 
-- Target feature: `Rehearsal 管理页` from `docs/features/index.md`.
+- Target feature: `Rehearsal 管理页` from `docs/index.md`.
 - Primary UI: `src/modals/components/RehearsalsPage.vue`.
 - Verification: `tools/verify-rehearsals-page-e2e.mjs`, `npm start` first compile, path-scoped `git diff --check`.
 - Reminder status: Reminders is reachable, but there is no `Personal AI` list on this machine.

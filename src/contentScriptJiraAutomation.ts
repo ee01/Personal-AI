@@ -26,6 +26,7 @@ import {
   parseJiraAutomationExport,
   redactJiraAutomationImportErrorText,
   sanitizeJiraAutomationImportDisplayText,
+  shouldReplaceJiraAutomationImportSensitiveValues,
   summarizeJiraAutomationImportRule,
   type ExportedData,
   type ImportRule,
@@ -131,9 +132,17 @@ function formatJiraImportSecretSummary(
 
 function formatJiraImportCredentialRestoreGateSummary(
   slots: JiraAutomationImportSecretReentrySlot[],
+  replaceSensitiveValues = true,
 ): string {
   if (isJiraAutomationImportEnglish()) {
-    return buildJiraAutomationImportCredentialRestoreGateSummary(slots);
+    return buildJiraAutomationImportCredentialRestoreGateSummary(slots, replaceSensitiveValues);
+  }
+
+  if (!shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
+    return [
+      '凭据恢复门控：已按用户选择跳过；敏感信息会保留在 create payload 中。',
+      '启用前请确认这些被保留的 secret 确实适用于目标项目。',
+    ].join(' ');
   }
 
   if (slots.length === 0) {
@@ -149,7 +158,15 @@ function formatJiraImportCredentialRestoreGateSummary(
 function formatJiraImportSecretReentryQueue(
   slots: JiraAutomationImportSecretReentrySlot[],
   maxSlotsPerGroup = 3,
+  replaceSensitiveValues = true,
 ): string {
+  if (!shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
+    return jiraImportText(
+      'Credential re-entry queue: skipped; sensitive values will be preserved in the create payload by user choice.',
+      '凭据重录队列：已跳过；按用户选择，敏感信息会保留在 create payload 中。',
+    );
+  }
+
   if (isJiraAutomationImportEnglish()) {
     return formatJiraAutomationImportSecretReentryQueue(slots, maxSlotsPerGroup);
   }
@@ -190,7 +207,15 @@ function formatJiraImportSecretReentryQueue(
 
 function formatJiraImportButtonCredentialQueueSummary(
   slots: JiraAutomationImportSecretReentrySlot[],
+  replaceSensitiveValues = true,
 ): string {
+  if (!shouldReplaceJiraAutomationImportSensitiveValues(replaceSensitiveValues)) {
+    return jiraImportText(
+      'Sensitive values will be preserved in the create payload by user choice.',
+      '按用户选择，敏感信息会保留在 create payload 中。',
+    );
+  }
+
   if (slots.length === 0) {
     return jiraImportText(
       'No redacted credential slots were detected in this preview; ordinary Jira review still applies.',
@@ -232,8 +257,11 @@ function buildJiraImportCreateButtonBoundaryLabel(options: {
   sourceAllowsChainedTrigger: boolean;
   preventChainedTrigger: boolean;
   disableAfterImport: boolean;
+  replaceSensitiveValues: boolean;
 }): string {
-  const importedRuleName = sanitizeJiraAutomationImportDisplayText(options.importedRuleName);
+  const importedRuleName = options.replaceSensitiveValues
+    ? sanitizeJiraAutomationImportDisplayText(options.importedRuleName)
+    : options.importedRuleName.replace(/\s+/g, ' ').trim();
   const projectKey = sanitizeJiraAutomationImportDisplayText(options.projectKey);
   const reviewText = options.highRiskCount > 0
     ? jiraImportText(
@@ -258,17 +286,30 @@ function buildJiraImportCreateButtonBoundaryLabel(options: {
       'Rule chaining stays disabled in the imported copy.',
       '导入副本会保持链式触发禁用。',
     );
-  const credentialText = formatJiraImportButtonCredentialQueueSummary(options.secretReentrySlots);
+  const credentialText = formatJiraImportButtonCredentialQueueSummary(
+    options.secretReentrySlots,
+    options.replaceSensitiveValues,
+  );
   const importedState = options.disableAfterImport ? 'DISABLED' : 'ENABLED';
   const noSideEffectText = options.disableAfterImport
-    ? jiraImportText(
-      'Sends one sanitized POST only; does not enable, run, activate schedules, restore secrets, edit the source rule, or create working credentials.',
-      '只发送一个已清洗的 POST；不会启用、运行、激活 schedule、恢复 secret、编辑源规则或创建可工作的凭据。',
-    )
-    : jiraImportText(
-      'Sends one sanitized POST that creates the rule enabled; it does not run the rule immediately, restore secrets, edit the source rule, or create working credentials.',
-      '发送一个已清洗的 POST，并以启用状态创建规则；不会立即运行规则、恢复 secret、编辑源规则或创建可工作的凭据。',
-    );
+    ? (options.replaceSensitiveValues
+      ? jiraImportText(
+        'Sends one sanitized POST only; does not enable, run, activate schedules, restore secrets, edit the source rule, or create working credentials.',
+        '只发送一个已清洗的 POST；不会启用、运行、激活 schedule、恢复 secret、编辑源规则或创建可工作的凭据。',
+      )
+      : jiraImportText(
+        'Sends one POST that preserves sensitive values; does not enable, run, activate schedules, edit the source rule, or create working credentials.',
+        '发送一个会保留敏感信息的 POST；不会启用、运行、激活 schedule、编辑源规则或创建可工作的凭据。',
+      ))
+    : (options.replaceSensitiveValues
+      ? jiraImportText(
+        'Sends one sanitized POST that creates the rule enabled; it does not run the rule immediately, restore secrets, edit the source rule, or create working credentials.',
+        '发送一个已清洗的 POST，并以启用状态创建规则；不会立即运行规则、恢复 secret、编辑源规则或创建可工作的凭据。',
+      )
+      : jiraImportText(
+        'Sends one POST that preserves sensitive values and creates the rule enabled; it does not run the rule immediately, edit the source rule, or create working credentials.',
+        '发送一个会保留敏感信息的 POST，并以启用状态创建规则；不会立即运行规则、编辑源规则或创建可工作的凭据。',
+      ));
 
   return jiraImportText(
     `${options.buttonPrefix}: create "${importedRuleName}" with ${importedState} state in ${projectKey}. ${reviewText} ${credentialText} ${chainingText} ${noSideEffectText}`,
@@ -1517,6 +1558,7 @@ function renderImportOutcomeSummary(
   preventChainedTrigger: boolean,
   nameCheck: JiraAutomationImportNameCheck,
   disableAfterImport: boolean,
+  replaceSensitiveValues: boolean,
 ): void {
   container.textContent = '';
 
@@ -1542,9 +1584,12 @@ function renderImportOutcomeSummary(
       ' 目标规则名冲突检查未确认；重试或启用前请先在 Jira 检查 disabled copy。',
     )
     : '';
+  const sensitiveValuesText = replaceSensitiveValues
+    ? jiraImportText(' Sensitive values will be replaced.', ' 敏感信息会被替换。')
+    : jiraImportText(' Sensitive values will be preserved.', ' 敏感信息会被保留。');
   body.textContent = jiraImportText(
-    `${importedRuleName} will be created ${disableAfterImport ? 'disabled' : 'enabled'} in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.${nextActionText}${nameCheckText}`,
-    `${importedRuleName} 将在 ${projectContext.projectKey} 中创建为${disableAfterImport ? '禁用' : '启用'}状态。${formatChecklistSeverityCounts(checklist)}；${highCount} 个高风险项；${chainingState === 'chained triggers blocked' ? '已阻止链式触发' : chainingState === 'chained triggers preserved' ? '将保留链式触发' : '链式触发为禁用状态'}。${nextActionText}${nameCheckText}`,
+    `${importedRuleName} will be created ${disableAfterImport ? 'disabled' : 'enabled'} in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.${sensitiveValuesText}${nextActionText}${nameCheckText}`,
+    `${importedRuleName} 将在 ${projectContext.projectKey} 中创建为${disableAfterImport ? '禁用' : '启用'}状态。${formatChecklistSeverityCounts(checklist)}；${highCount} 个高风险项；${chainingState === 'chained triggers blocked' ? '已阻止链式触发' : chainingState === 'chained triggers preserved' ? '将保留链式触发' : '链式触发为禁用状态'}。${replaceSensitiveValues ? '敏感信息会被替换。' : '敏感信息会被保留。'}${nextActionText}${nameCheckText}`,
   );
   body.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; word-break: break-word;';
 
@@ -1563,10 +1608,15 @@ function renderImportOutcomeSummary(
     doc,
     container,
     jiraImportText('Create request', '创建请求'),
-    jiraImportText(
-      `On import, Personal AI sends one sanitized POST to create "${importedRuleName}" as ${disableAfterImport ? 'DISABLED' : 'ENABLED'} in ${projectContext.projectKey}; the source rule is not edited or run.`,
-      `点击导入后，Personal AI 会发送一个已清洗的 POST，在 ${projectContext.projectKey} 中创建 ${disableAfterImport ? 'DISABLED' : 'ENABLED'} 状态的 "${importedRuleName}"；源规则不会被编辑或运行。`,
-    ),
+    replaceSensitiveValues
+      ? jiraImportText(
+        `On import, Personal AI sends one sanitized POST to create "${importedRuleName}" as ${disableAfterImport ? 'DISABLED' : 'ENABLED'} in ${projectContext.projectKey}; the source rule is not edited or run.`,
+        `点击导入后，Personal AI 会发送一个已清洗的 POST，在 ${projectContext.projectKey} 中创建 ${disableAfterImport ? 'DISABLED' : 'ENABLED'} 状态的 "${importedRuleName}"；源规则不会被编辑或运行。`,
+      )
+      : jiraImportText(
+        `On import, Personal AI sends one POST that preserves sensitive values to create "${importedRuleName}" as ${disableAfterImport ? 'DISABLED' : 'ENABLED'} in ${projectContext.projectKey}; the source rule is not edited or run.`,
+        `点击导入后，Personal AI 会发送一个保留敏感信息的 POST，在 ${projectContext.projectKey} 中创建 ${disableAfterImport ? 'DISABLED' : 'ENABLED'} 状态的 "${importedRuleName}"；源规则不会被编辑或运行。`,
+      ),
   );
   appendInfoRow(doc, container, jiraImportText('Reference scope', '引用范围'), formatCreateRequestReferenceScope(summary));
 }
@@ -1585,12 +1635,14 @@ function renderImportBoundaryReceipt(
   preventChainedTrigger: boolean,
   nameCheckReceipt: string,
   disableAfterImport: boolean,
+  replaceSensitiveValues: boolean,
 ): void {
   container.textContent = '';
 
   const highCount = checklist.filter((item) => item.severity === 'high').length;
   const firstAction = enablementPlan.find((step) => step.severity === 'high') || enablementPlan[0];
-  const secretText = summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0
+  const effectiveSecretSlots = replaceSensitiveValues ? secretReentrySlots : [];
+  const secretText = replaceSensitiveValues && (summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0)
     ? 're-enter hidden secrets, '
     : '';
   const chainText = sourceAllowsChainedTrigger
@@ -1632,35 +1684,62 @@ function renderImportBoundaryReceipt(
       value: nameCheckReceipt.replace(/^Name collision check:\s*/i, ''),
     },
     {
+      label: jiraImportText('Sensitive values', '敏感信息'),
+      value: replaceSensitiveValues
+        ? jiraImportText(
+          'Replace with PERSONAL_AI_REENTER_SECRET / REDACTED placeholders in the create payload.',
+          '在 create payload 中替换为 PERSONAL_AI_REENTER_SECRET / REDACTED 占位。',
+        )
+        : jiraImportText(
+          'Preserve source sensitive values in the create payload by user choice.',
+          '按用户选择，在 create payload 中保留源规则敏感信息。',
+        ),
+    },
+    {
       label: jiraImportText('Does not', '不会执行'),
-      value: jiraImportText(
-        'No auto-enable, run, schedule activation, or secret restoration.',
-        '不会自动启用、运行、激活 schedule 或恢复 secret。',
-      ),
+      value: replaceSensitiveValues
+        ? jiraImportText(
+          'No auto-enable, run, schedule activation, or secret restoration.',
+          '不会自动启用、运行、激活 schedule 或恢复 secret。',
+        )
+        : jiraImportText(
+          'No auto-enable, run, or schedule activation.',
+          '不会自动启用、运行或激活 schedule。',
+        ),
     },
     {
       label: jiraImportText('Secret map', 'Secret 重录图'),
-      value: secretReentrySlots.length > 0
-        ? jiraImportText(
-          `${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. Placeholder or REDACTED values are not working credentials.`,
-          `${formatJiraImportSecretSummary(secretReentrySlots)}。占位符或 REDACTED 值不是可工作的凭据。`,
-        )
-        : formatJiraImportSecretSummary(secretReentrySlots),
+      value: replaceSensitiveValues
+        ? (effectiveSecretSlots.length > 0
+          ? jiraImportText(
+            `${formatJiraAutomationImportSecretReentrySummary(effectiveSecretSlots)}. Placeholder or REDACTED values are not working credentials.`,
+            `${formatJiraImportSecretSummary(effectiveSecretSlots)}。占位符或 REDACTED 值不是可工作的凭据。`,
+          )
+          : formatJiraImportSecretSummary(effectiveSecretSlots))
+        : jiraImportText(
+          'Skipped; sensitive values will be preserved in the create payload.',
+          '已跳过；敏感信息会保留在 create payload 中。',
+        ),
     },
     {
       label: jiraImportText('Credential restore gate', '凭据恢复门控'),
-      value: formatJiraImportCredentialRestoreGateSummary(secretReentrySlots),
+      value: formatJiraImportCredentialRestoreGateSummary(effectiveSecretSlots, replaceSensitiveValues),
     },
     {
       label: jiraImportText('Re-entry queue', '凭据重录队列'),
-      value: formatJiraImportSecretReentryQueue(secretReentrySlots, 2),
+      value: formatJiraImportSecretReentryQueue(effectiveSecretSlots, 2, replaceSensitiveValues),
     },
     {
       label: jiraImportText('Carries over', '会带入'),
-      value: jiraImportText(
-        'Sanitized review note and Activation plan stay in the Jira description.',
-        '已清洗的复核备注和启用计划会保留在 Jira 描述中。',
-      ),
+      value: replaceSensitiveValues
+        ? jiraImportText(
+          'Sanitized review note and Activation plan stay in the Jira description.',
+          '已清洗的复核备注和启用计划会保留在 Jira 描述中。',
+        )
+        : jiraImportText(
+          'Review note and Activation plan stay in the Jira description; sensitive values are preserved by user choice.',
+          '复核备注和启用计划会保留在 Jira 描述中；敏感信息按用户选择保留。',
+        ),
     },
     {
       label: jiraImportText('Next in Jira', 'Jira 中下一步'),
@@ -1682,21 +1761,25 @@ function buildPostImportSuccessReceipt(
   secretReentrySlots: JiraAutomationImportSecretReentrySlot[],
   enablementPlan: JiraAutomationImportEnablementStep[],
   nameCheck: JiraAutomationImportNameCheck,
+  replaceSensitiveValues = true,
 ): string {
   const firstAction = enablementPlan.find((step) => step.severity === 'high') || enablementPlan[0];
+  const effectiveSecretSlots = replaceSensitiveValues ? secretReentrySlots : [];
   if (!isJiraAutomationImportEnglish()) {
-    const nextAction = summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0
+    const nextAction = replaceSensitiveValues && (summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0)
       ? '重新录入隐藏 secret，手动测试后再在 Jira 中启用。'
       : '手动测试后再在 Jira 中启用。';
     const firstCheckText = firstAction ? ` 优先检查：${translateJiraImportEnablementLabel(firstAction)}。` : '';
-    const secretMapText = secretReentrySlots.length > 0
-      ? ` Secret 重录图：${formatJiraImportSecretSummary(secretReentrySlots)}。占位符不是可工作的凭据。`
-      : '';
-    const credentialGateText = secretReentrySlots.length > 0
+    const secretMapText = effectiveSecretSlots.length > 0
+      ? ` Secret 重录图：${formatJiraImportSecretSummary(effectiveSecretSlots)}。占位符不是可工作的凭据。`
+      : (!replaceSensitiveValues
+        ? ' 敏感信息按用户选择已保留在 create payload 中。'
+        : '');
+    const credentialGateText = effectiveSecretSlots.length > 0
       ? ' 凭据恢复门控仍未完成；这些字段需要在 Jira 中重新录入或明确留空后再启用。'
       : '';
-    const credentialQueueText = secretReentrySlots.length > 0
-      ? ` ${formatJiraImportSecretReentryQueue(secretReentrySlots, 2)}`
+    const credentialQueueText = effectiveSecretSlots.length > 0
+      ? ` ${formatJiraImportSecretReentryQueue(effectiveSecretSlots, 2, replaceSensitiveValues)}`
       : '';
 
     return [
@@ -1707,28 +1790,34 @@ function buildPostImportSuccessReceipt(
       sourceCloud === false
         ? '来源文件是 cloud=false；启用前请确认 Web request、app 组件和凭据等格式敏感部分。'
         : '',
-      '没有自动启用、运行、激活 schedule 或恢复 secret。',
+      replaceSensitiveValues
+        ? '没有自动启用、运行、激活 schedule 或恢复 secret。'
+        : '没有自动启用、运行或激活 schedule；敏感信息按用户选择保留。',
       nextAction,
       secretMapText,
       credentialGateText,
       credentialQueueText,
-      '已清洗的复核备注和启用计划已写入 Jira 描述。',
+      replaceSensitiveValues
+        ? '已清洗的复核备注和启用计划已写入 Jira 描述。'
+        : '复核备注和启用计划已写入 Jira 描述。',
       `${firstCheckText}正在跳转到导入规则。`,
     ].filter(Boolean).join(' ');
   }
 
-  const nextAction = summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0
+  const nextAction = replaceSensitiveValues && (summary.secretReferenceCount > 0 || summary.sensitiveReferenceCount > 0)
     ? 'Re-enter hidden secrets, test manually, then enable in Jira.'
     : 'Test manually, then enable in Jira.';
   const firstCheckText = firstAction ? ` First check: ${firstAction.label}.` : '';
-  const secretMapText = secretReentrySlots.length > 0
-    ? ` Secret map: ${formatJiraAutomationImportSecretReentrySummary(secretReentrySlots)}. Placeholders are not working credentials.`
-    : '';
-  const credentialGateText = secretReentrySlots.length > 0
+  const secretMapText = effectiveSecretSlots.length > 0
+    ? ` Secret map: ${formatJiraAutomationImportSecretReentrySummary(effectiveSecretSlots)}. Placeholders are not working credentials.`
+    : (!replaceSensitiveValues
+      ? ' Sensitive values were preserved in the create payload by user choice.'
+      : '');
+  const credentialGateText = effectiveSecretSlots.length > 0
     ? ' Credential restore gate remains open until those fields are re-entered or intentionally left blank in Jira.'
     : '';
-  const credentialQueueText = secretReentrySlots.length > 0
-    ? ` ${formatJiraAutomationImportSecretReentryQueue(secretReentrySlots, 2)}`
+  const credentialQueueText = effectiveSecretSlots.length > 0
+    ? ` ${formatJiraAutomationImportSecretReentryQueue(effectiveSecretSlots, 2)}`
     : '';
 
   return [
@@ -1739,12 +1828,16 @@ function buildPostImportSuccessReceipt(
     sourceCloud === false
       ? 'Source file was cloud=false; confirm format-sensitive web request, app, and credential pieces before enabling.'
       : '',
-    'No auto-enable, run, schedule activation, or secret restoration happened.',
+    replaceSensitiveValues
+      ? 'No auto-enable, run, schedule activation, or secret restoration happened.'
+      : 'No auto-enable, run, or schedule activation happened; sensitive values were preserved by user choice.',
     nextAction,
     secretMapText,
     credentialGateText,
     credentialQueueText,
-    'Sanitized review note and Activation plan are in the Jira description.',
+    replaceSensitiveValues
+      ? 'Sanitized review note and Activation plan are in the Jira description.'
+      : 'Review note and Activation plan are in the Jira description.',
     `${firstCheckText}Redirecting to the imported rule.`,
   ].filter(Boolean).join(' ');
 }
@@ -1925,7 +2018,7 @@ function showImportPreviewDialog(
   doc: Document,
   existingRuleNames: string[],
   nameCheck: JiraAutomationImportNameCheck,
-): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean }> {
+): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean; replaceSensitiveValues: boolean }> {
   return new Promise((resolve) => {
     const previousActiveElement = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
     const overlay = doc.createElement('div');
@@ -1951,7 +2044,7 @@ function showImportPreviewDialog(
     dialog.setAttribute('aria-labelledby', 'personal-ai-jira-import-title');
     dialog.tabIndex = -1;
     dialog.style.cssText = `
-      width: min(640px, 100%);
+      width: min(720px, 100%);
       max-height: min(720px, 92vh);
       overflow: auto;
       background: white;
@@ -1969,9 +2062,8 @@ function showImportPreviewDialog(
       top: -24px;
       z-index: 1;
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
-      flex-wrap: wrap;
       gap: 12px;
       margin: -24px -24px 12px;
       padding: 16px 24px 12px;
@@ -1982,7 +2074,7 @@ function showImportPreviewDialog(
     const title = doc.createElement('h3');
     title.id = 'personal-ai-jira-import-title';
     title.textContent = jiraImportText('Import Jira Automation Rule', '导入 Jira Automation 规则');
-    title.style.cssText = 'margin: 0; font-size: 18px; line-height: 1.3;';
+    title.style.cssText = 'margin: 0; font-size: 18px; line-height: 1.3; flex: 0 1 auto; min-width: 0;';
     header.appendChild(title);
     dialog.appendChild(header);
 
@@ -2018,6 +2110,7 @@ function showImportPreviewDialog(
     let select: HTMLSelectElement | null = null;
     let preventChainedTrigger = Boolean(exportedData.rules[0]?.canOtherRuleTrigger);
     let disableAfterImport = true;
+    let replaceSensitiveValues = true;
     let topConfirmButton: HTMLButtonElement | null = null;
     let currentReviewPacket = '';
     let currentHighRiskCount = 0;
@@ -2040,6 +2133,7 @@ function showImportPreviewDialog(
           sourceAllowsChainedTrigger: currentSourceAllowsChainedTrigger,
           preventChainedTrigger: currentPreventChainedTrigger,
           disableAfterImport,
+          replaceSensitiveValues,
         },
       );
 
@@ -2069,7 +2163,6 @@ function showImportPreviewDialog(
           `Create-stage ready: the imported rule will be ${disableAfterImport ? 'disabled' : 'enabled'}.`,
           `创建阶段就绪：导入规则将处于${disableAfterImport ? '不启用' : '启用'}状态。`,
         );
-      createStageStatus.style.color = '#216E4E';
     };
 
     if (exportedData.rules.length > 1) {
@@ -2282,6 +2375,7 @@ function showImportPreviewDialog(
         selectedRuleIndex,
         allowOtherRuleTrigger: Boolean(selectedRule.canOtherRuleTrigger) && !preventChainedTrigger,
         disableAfterImport,
+        replaceSensitiveValues,
       });
     };
 
@@ -2289,14 +2383,23 @@ function showImportPreviewDialog(
       const rule = exportedData.rules[selectedRuleIndex];
       const summary = summarizeJiraAutomationImportRule(rule);
       const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
-      const secretReentrySlots = collectJiraAutomationImportSecretReentrySlots(rule);
+      const detectedSecretReentrySlots = collectJiraAutomationImportSecretReentrySlots(rule);
+      const secretReentrySlots = replaceSensitiveValues ? detectedSecretReentrySlots : [];
       const reviewChecklist = buildJiraAutomationImportReviewChecklist(rule, exportedData.cloud);
       const reviewFindings = buildJiraAutomationImportReviewFindings(rule);
-      const enablementPlan = buildJiraAutomationImportEnablementPlan(rule, exportedData.cloud);
+      const enablementPlan = buildJiraAutomationImportEnablementPlan(
+        rule,
+        exportedData.cloud,
+        replaceSensitiveValues,
+      );
       const highRiskCount = reviewChecklist.filter((item) => item.severity === 'high').length;
       currentHighRiskCount = highRiskCount;
-      const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name);
-      const importedRuleName = buildJiraAutomationUniqueImportedRuleName(rule.name, existingRuleNames);
+      const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name, replaceSensitiveValues);
+      const importedRuleName = buildJiraAutomationUniqueImportedRuleName(
+        rule.name,
+        existingRuleNames,
+        replaceSensitiveValues,
+      );
       const importNameWasNumbered = importedRuleName !== defaultImportedRuleName;
       const nameCheckReceipt = buildJiraAutomationImportNameCheckReceipt(rule, {
         projectId: projectContext.projectId,
@@ -2304,6 +2407,7 @@ function showImportPreviewDialog(
         projectTypeKey: projectContext.projectTypeKey,
         existingRuleNames,
         nameCheck,
+        replaceSensitiveValues,
       }, importedRuleName);
       const accountReferenceSamples = [
         ...reviewSignals.emailReferences,
@@ -2325,6 +2429,7 @@ function showImportPreviewDialog(
         nameCheck,
         importedRuleName,
         sourceCloud: exportedData.cloud,
+        replaceSensitiveValues,
       });
       copyReviewPacketStatus.textContent = '';
       chainedTriggerCheckbox.disabled = !sourceAllowsChainedTrigger;
@@ -2385,6 +2490,7 @@ function showImportPreviewDialog(
         preventChainedTrigger,
         nameCheck,
         disableAfterImport,
+        replaceSensitiveValues,
       );
       renderImportBoundaryReceipt(
         doc,
@@ -2400,6 +2506,7 @@ function showImportPreviewDialog(
         preventChainedTrigger,
         nameCheckReceipt,
         disableAfterImport,
+        replaceSensitiveValues,
       );
 
       details.textContent = '';
@@ -2434,9 +2541,27 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, jiraImportText('Web requests', 'Web request'), summary.webRequestCount > 0 ? jiraImportText(`${summary.webRequestCount} to review`, `${summary.webRequestCount} 个待复核`) : jiraImportText('None detected', '未检测到'));
       appendInfoRow(doc, details, jiraImportText('External actions', '外部动作'), summary.externalIntegrationCount > 0 ? jiraImportText(`${summary.externalIntegrationCount} to review`, `${summary.externalIntegrationCount} 个待复核`) : jiraImportText('None detected', '未检测到'));
       appendInfoRow(doc, details, jiraImportText('Secrets', 'Secrets'), formatReviewSignalValue(summary.secretReferenceCount, reviewSignals.secretReferences));
-      appendInfoRow(doc, details, jiraImportText('Secret re-entry map', 'Secret 重录图'), formatJiraImportSecretSummary(secretReentrySlots));
-      appendInfoRow(doc, details, jiraImportText('Credential restore gate', '凭据恢复门控'), formatJiraImportCredentialRestoreGateSummary(secretReentrySlots));
-      appendInfoRow(doc, details, jiraImportText('Credential re-entry queue', '凭据重录队列'), formatJiraImportSecretReentryQueue(secretReentrySlots, 2));
+      appendInfoRow(
+        doc,
+        details,
+        jiraImportText('Sensitive values', '敏感信息'),
+        replaceSensitiveValues
+          ? jiraImportText('Replace in create payload', '在 create payload 中替换')
+          : jiraImportText('Preserve in create payload', '在 create payload 中保留'),
+      );
+      appendInfoRow(
+        doc,
+        details,
+        jiraImportText('Secret re-entry map', 'Secret 重录图'),
+        replaceSensitiveValues
+          ? formatJiraImportSecretSummary(secretReentrySlots)
+          : jiraImportText(
+            `Skipped; ${detectedSecretReentrySlots.length} sensitive slot(s) detected but preserved by user choice.`,
+            `已跳过；检测到 ${detectedSecretReentrySlots.length} 个敏感位置，但按用户选择保留。`,
+          ),
+      );
+      appendInfoRow(doc, details, jiraImportText('Credential restore gate', '凭据恢复门控'), formatJiraImportCredentialRestoreGateSummary(secretReentrySlots, replaceSensitiveValues));
+      appendInfoRow(doc, details, jiraImportText('Credential re-entry queue', '凭据重录队列'), formatJiraImportSecretReentryQueue(secretReentrySlots, 2, replaceSensitiveValues));
       appendInfoRow(doc, details, 'JQL / filters', formatReviewSignalValue(summary.jqlReferenceCount, reviewSignals.jqlReferences));
       appendInfoRow(doc, details, jiraImportText('Hard-coded URLs', '硬编码 URL'), formatReviewSignalValue(summary.hardcodedUrlCount, reviewSignals.hardcodedUrls));
       appendInfoRow(doc, details, jiraImportText('Custom fields', 'Custom field'), formatReviewSignalValue(summary.customFieldReferenceCount, reviewSignals.customFieldReferences));
@@ -2464,7 +2589,7 @@ function showImportPreviewDialog(
       renderEnablementPlan(doc, enablementPlanBox, enablementPlan);
 
       warningBox.textContent = '';
-      const warnings = buildJiraAutomationImportWarnings(rule, exportedData.cloud);
+      const warnings = buildJiraAutomationImportWarnings(rule, exportedData.cloud, replaceSensitiveValues);
       if (nameCheck.status === 'unconfirmed') {
         warnings.unshift('Target rule names could not be read. The imported name is a best-effort preview; check Jira for an existing or newly created disabled copy before retrying or enabling.');
       }
@@ -2527,10 +2652,11 @@ function showImportPreviewDialog(
     const headerActions = doc.createElement('div');
     headerActions.style.cssText = `
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: flex-end;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 10px;
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
       margin-left: auto;
     `;
 
@@ -2538,15 +2664,21 @@ function showImportPreviewDialog(
     createStageStatus.id = 'personal-ai-jira-import-create-stage-status';
     createStageStatus.setAttribute('role', 'status');
     createStageStatus.setAttribute('aria-live', 'polite');
+    // Keep for screen readers / button aria-describedby; omit from sticky header to free space for checkboxes + import.
     createStageStatus.style.cssText = `
-      max-width: 250px;
-      font-size: 11px;
-      line-height: 1.35;
-      text-align: right;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     `;
 
     const disableAfterImportLabel = doc.createElement('label');
-    disableAfterImportLabel.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; max-width: 260px; font-size: 12px; line-height: 1.35; color: #44546F; cursor: pointer;';
+    disableAfterImportLabel.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; max-width: 168px; font-size: 12px; line-height: 1.35; color: #44546F; cursor: pointer; white-space: normal;';
     const disableAfterImportCheckbox = doc.createElement('input');
     disableAfterImportCheckbox.type = 'checkbox';
     disableAfterImportCheckbox.checked = true;
@@ -2554,19 +2686,34 @@ function showImportPreviewDialog(
     const disableAfterImportText = doc.createElement('span');
     disableAfterImportText.textContent = jiraImportText(
       'Set this rule disable after import',
-      '导入后规则设为不启用状态',
+      '导入后设为不启用状态',
     );
     disableAfterImportLabel.appendChild(disableAfterImportCheckbox);
     disableAfterImportLabel.appendChild(disableAfterImportText);
 
-    headerActions.appendChild(createStageStatus);
+    const replaceSensitiveValuesLabel = doc.createElement('label');
+    replaceSensitiveValuesLabel.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; max-width: 120px; font-size: 12px; line-height: 1.35; color: #44546F; cursor: pointer; white-space: normal;';
+    const replaceSensitiveValuesCheckbox = doc.createElement('input');
+    replaceSensitiveValuesCheckbox.type = 'checkbox';
+    replaceSensitiveValuesCheckbox.checked = true;
+    replaceSensitiveValuesCheckbox.setAttribute('data-personal-ai-jira-import-replace-sensitive-values', 'true');
+    const replaceSensitiveValuesText = doc.createElement('span');
+    replaceSensitiveValuesText.textContent = jiraImportText(
+      'Replace sensitive information',
+      '替换敏感信息',
+    );
+    replaceSensitiveValuesLabel.appendChild(replaceSensitiveValuesCheckbox);
+    replaceSensitiveValuesLabel.appendChild(replaceSensitiveValuesText);
+
     headerActions.appendChild(disableAfterImportLabel);
+    headerActions.appendChild(replaceSensitiveValuesLabel);
     headerActions.appendChild(topConfirmButton);
     header.appendChild(headerActions);
+    dialog.appendChild(createStageStatus);
     footer.appendChild(cancelButton);
     dialog.appendChild(footer);
 
-    const close = (result: { confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean }) => {
+    const close = (result: { confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean; disableAfterImport: boolean; replaceSensitiveValues: boolean }) => {
       doc.removeEventListener('keydown', onKeyDown);
       if (doc.body.contains(overlay)) {
         doc.body.removeChild(overlay);
@@ -2581,22 +2728,26 @@ function showImportPreviewDialog(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport });
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport, replaceSensitiveValues });
         return;
       }
       trapDialogFocus(event, dialog, doc);
     };
 
     doc.addEventListener('keydown', onKeyDown);
-    cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport }));
+    cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport, replaceSensitiveValues }));
     disableAfterImportCheckbox.addEventListener('change', () => {
       disableAfterImport = disableAfterImportCheckbox.checked;
+      renderRuleDetails();
+    });
+    replaceSensitiveValuesCheckbox.addEventListener('change', () => {
+      replaceSensitiveValues = replaceSensitiveValuesCheckbox.checked;
       renderRuleDetails();
     });
     topConfirmButton.addEventListener('click', triggerImport);
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) {
-        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport });
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false, disableAfterImport, replaceSensitiveValues });
       }
     });
 
@@ -2645,8 +2796,14 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
       const ownerId = await getCurrentOwnerId();
       const ruleToImport = exportedData.rules[previewResult.selectedRuleIndex];
       const importSummary = summarizeJiraAutomationImportRule(ruleToImport);
-      const importSecretReentrySlots = collectJiraAutomationImportSecretReentrySlots(ruleToImport);
-      const importEnablementPlan = buildJiraAutomationImportEnablementPlan(ruleToImport, exportedData.cloud);
+      const importSecretReentrySlots = previewResult.replaceSensitiveValues
+        ? collectJiraAutomationImportSecretReentrySlots(ruleToImport)
+        : [];
+      const importEnablementPlan = buildJiraAutomationImportEnablementPlan(
+        ruleToImport,
+        exportedData.cloud,
+        previewResult.replaceSensitiveValues,
+      );
       const convertedRule = buildJiraAutomationImportRule(ruleToImport, {
         projectId: projectContext.projectId,
         projectKey: projectContext.projectKey,
@@ -2654,6 +2811,7 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
         ownerId,
         allowOtherRuleTrigger: previewResult.allowOtherRuleTrigger,
         disableAfterImport: previewResult.disableAfterImport,
+        replaceSensitiveValues: previewResult.replaceSensitiveValues,
         existingRuleNames,
         nameCheck,
         sourceCloud: exportedData.cloud,
@@ -2694,6 +2852,7 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
             importSecretReentrySlots,
             importEnablementPlan,
             nameCheck,
+            previewResult.replaceSensitiveValues,
           ),
           { ruleUrl },
         );
@@ -2709,6 +2868,7 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
             importSecretReentrySlots,
             importEnablementPlan,
             nameCheck,
+            previewResult.replaceSensitiveValues,
           ),
           { fallbackReload: true },
         );

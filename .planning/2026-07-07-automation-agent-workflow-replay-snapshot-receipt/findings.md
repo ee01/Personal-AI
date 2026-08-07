@@ -10,7 +10,7 @@
 
 ## 代码发现
 
-- `docs/features/agent_workflow.md` 已描述 Agent Workflow 的编排、低置信度复核、Options 关注项测试、保存样例、批量回归、证据包和本地门禁。
+- `docs/features/message_analysis.md` 已描述 Agent Workflow 的编排、低置信度复核、Options 关注项测试、保存样例、批量回归、证据包和本地门禁。
 - `src/options.tsx` 的 `loadWorkflowReplaySamples` 会调用 `MemoryServiceClient.recall('', { channels:['time'], includeMetadata:true })`，再用 `buildAgentWorkflowReplayMessages` 构造最多 8 条最近消息样本。
 - 最近消息 select 在加载中/空结果时会显示 `加载中...` 或 `无可用消息`，并用 `workflowReplayError` 显示 `没有可回放的最近消息` 或错误消息。
 - `buildAgentWorkflowReplaySourceReceipt` 目前只根据是否有选中 message 显示 `最近消息范围` / `最近消息回放范围`，不能表达 loading、empty 或 error 是否只是只读快照。

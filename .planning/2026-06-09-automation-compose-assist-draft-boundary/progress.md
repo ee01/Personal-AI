@@ -6,7 +6,7 @@
 - Randomly selected `回复助手草稿辅助` under Compose Assist.
 - Checked local Reminders; no visible `Personal AI` list exists, so no reminder items can be incorporated or marked done.
 - Reviewed current external product/paper references for AI writing assistance and user agency.
-- Inspected `docs/features/compose_assist.md`, `src/composer-guard/ComposerGuardController.ts`, `src/composer-guard/assistPreviewPolicy.ts`, focused controller tests, and Compose Assist E2E fixtures.
+- Inspected `docs/features/assist.md`, `src/composer-guard/ComposerGuardController.ts`, `src/composer-guard/assistPreviewPolicy.ts`, focused controller tests, and Compose Assist E2E fixtures.
 - Implemented a compact `草稿回执` helper in `assistPreviewPolicy.ts`, rendered it in `ComposerGuardController`, added focused unit assertions, extended the direct-insert E2E for normal/Rehearsal/high-risk receipts, and updated the Compose Assist feature doc.
 - Validation passed so far:
   - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/composer-guard/__tests__/ComposerGuardController.test.ts`

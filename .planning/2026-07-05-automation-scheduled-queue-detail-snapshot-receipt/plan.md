@@ -14,7 +14,7 @@ Created: 2026-07-05T21:05:09+0800
 2. Compare with relevant scheduled-message / automation-monitoring products and trigger-action debugging research.
 3. Add a narrow queue-detail snapshot receipt when the user expands the queue card.
 4. Update focused unit/E2E coverage and keep scheduling/writeback semantics unchanged.
-5. Update `docs/features/scheduled_messages_manager.md` and `docs/features/index.md` only if needed.
+5. Update `docs/features/scheduled_messages_manager.md` and `docs/index.md` only if needed.
 6. Run targeted checks, first successful `npm start` compile, E2E, and scoped diff checks.
 
 ## Findings

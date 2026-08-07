@@ -11,7 +11,7 @@ Phase 5
 ### Phase 1: Requirements & Discovery
 - [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and the feature index.
 - [x] Check local `Personal AI` Reminders through EventKit.
-- [x] Pick a randomized bounded feature slice from `docs/features/index.md`.
+- [x] Pick a randomized bounded feature slice from `docs/index.md`.
 - [x] Inspect Memory Lens docs, code, and verifiers.
 - **Status:** complete
 
@@ -24,7 +24,7 @@ Phase 5
 - [x] Add a Hover Peek slice receipt when multiple recall candidates are available.
 - [x] Mirror the slice receipt into the collapsed bubble `title` / `aria-label`.
 - [x] Update `tools/verify-webpage-memory-detection.ts`.
-- [x] Update `docs/features/memory_lens.md` and `docs/features/index.md`.
+- [x] Update `docs/features/memory_lens.md` and `docs/index.md`.
 - **Status:** complete
 
 ### Phase 4: Testing & Verification

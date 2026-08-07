@@ -2,7 +2,7 @@
 
 ## Repo Findings
 
-- `docs/progressing/to-verify.md` is empty, so this run can pick a fresh feature from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` is empty, so this run can pick a fresh feature from `docs/index.md`.
 - The randomly selected target is `Agent Thinking trace 可视化`, documented in `docs/features/agent_thinking.md`.
 - Current docs are mostly up to date: they already describe trace navigation, trace review lane, problem span composition, diagnostic copy boundaries, and the July 13 approval-copy button boundaries.
 - Source inspection found a control-point gap: step route reasons are visible beside buttons, but the buttons themselves use short labels such as `从当前 trace 导航跳到步骤 6` and `从审批上下文跳到步骤 6`. Hover/reader users do not get the route reason or no-effect boundary before activation.

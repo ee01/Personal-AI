@@ -8,7 +8,7 @@ Phase 6
 ## Phases
 
 ### Phase 1: Requirements, Memory, And Reminder Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and existing planning state
+- [x] Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and existing planning state
 - [x] Randomly select a feature while avoiding recent automation targets
 - [x] Check local Reminders for a `Personal AI` list
 - [x] Document initial findings
@@ -49,7 +49,7 @@ Phase 6
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected `项目数据源检查` under Project Dashboard | Random sampler selected it from `docs/features/index.md` after excluding recent exact targets and very recent broad feature families |
+| Selected `项目数据源检查` under Project Dashboard | Random sampler selected it from `docs/index.md` after excluding recent exact targets and very recent broad feature families |
 | Reminder branch has no items to incorporate | Local Reminders is reachable, but list names do not include `Personal AI` |
 | Use a separate `.planning/2026-06-22-automation-project-dashboard-data-source/` plan | Root planning files are an older completed Scheduled Messages run and should not be overwritten |
 | Keep edits scoped to Project Dashboard data-source diagnostics | The worktree is broadly dirty from prior/user changes |

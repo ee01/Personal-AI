@@ -16,8 +16,8 @@ Goal: improve the randomly selected `动作队列` feature by checking docs and 
 
 ## Decisions
 
-- Selected feature: `动作队列` from `docs/features/index.md`.
-- Source doc: `docs/features/memory_system.md`.
+- Selected feature: `动作队列` from `docs/index.md`.
+- Source doc: `docs/memory_system.md`.
 - Main implementation: `src/modals/components/ActionQueue.vue`.
 - Existing verifier: `tools/verify-action-queue-e2e.mjs`.
 - Local Reminders was readable but there is no visible list named `Personal AI`; no Reminder item is available to incorporate or mark done.

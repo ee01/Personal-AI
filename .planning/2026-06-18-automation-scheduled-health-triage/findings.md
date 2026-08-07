@@ -2,7 +2,7 @@
 
 ## Repo Findings
 
-- `docs/features/index.md` random target after reroll: `队列健康提示` under `Scheduled Messages`.
+- `docs/index.md` random target after reroll: `队列健康提示` under `Scheduled Messages`.
 - Reminders app is reachable, but local list names do not include `Personal AI`; no Reminder items can be inspected or completed.
 - Existing queue health already supports congested explicit-time slots, no-time 08:00 queues, expired execution windows, invalid times, one-click recovery, failure receipts, and E2E coverage.
 - UX gap: the top health banner lists detailed issue rows, but lacks a compact triage summary that tells the user how many rows can be fixed now, how many require manual editing, and which item should be handled first.

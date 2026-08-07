@@ -1,7 +1,7 @@
 # External AI History Import Findings
 
 ## Requirements
-- Start from `docs/features/index.md`, select one feature, verify docs/code, research comparable products and papers, check Reminders, plan first, implement a bounded improvement, test as completely as practical, and update automation memory.
+- Start from `docs/index.md`, select one feature, verify docs/code, research comparable products and papers, check Reminders, plan first, implement a bounded improvement, test as completely as practical, and update automation memory.
 
 ## Selected Feature
 - Feature: `外部 AI 历史基础录入`

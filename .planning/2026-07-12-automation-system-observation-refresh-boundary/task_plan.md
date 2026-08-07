@@ -24,5 +24,5 @@
 1. 在 `src/modals/topic-modal.tsx` 增加系统观察刷新按钮的 `title` / `aria-label` 文案。
 2. 文案按状态区分 `loading` / `unconfigured` / `failed` / `ready empty` / `ready with items`，但共同说明只重新读取 runtime status。
 3. 在 `tools/verify-message-analysis-rule-diagnostics-e2e.mjs` 断言刷新按钮 title/ARIA 的只读、无写入、无通知、无 RuntimeAction、无 OpenClaw 边界。
-4. 在 `docs/features/message_analysis.md` 和 `docs/features/index.md` 记录该按钮级边界。
+4. 在 `docs/features/message_analysis.md` 和 `docs/index.md` 记录该按钮级边界。
 5. 运行 targeted verifier、`npm start` 首次成功编译、E2E 和 scoped `git diff --check`。

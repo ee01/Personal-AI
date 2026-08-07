@@ -1,6 +1,6 @@
 # Ask Active Answer Receipt Boundary Plan
 
-Goal: improve the selected `Ask 活答案记忆` feature from `docs/features/index.md` by checking docs/code freshness, using current product and research references, incorporating local Reminder feedback when applicable, and implementing one focused UX/code improvement with verification.
+Goal: improve the selected `Ask 活答案记忆` feature from `docs/index.md` by checking docs/code freshness, using current product and research references, incorporating local Reminder feedback when applicable, and implementing one focused UX/code improvement with verification.
 
 ## Phases
 

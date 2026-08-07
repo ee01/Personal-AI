@@ -2,7 +2,7 @@
 
 ## 2026-06-04 Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `定时消息一键初始化`.
+- Randomly selected feature from `docs/index.md`: `定时消息一键初始化`.
 - Feature owner/capability: Scheduled Messages.
 - Source document: `docs/features/scheduled_messages_manager.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.

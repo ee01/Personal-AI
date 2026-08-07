@@ -39,6 +39,7 @@ import type {
 } from '../integrations/OpenClawDelegationService.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
 import { getConfig } from '../config.js';
 
 interface ParsedReply {
@@ -1234,6 +1235,7 @@ export class OutreachEngine {
   private readonly evidencePlanner: EvidenceResolutionPlanner;
   private readonly recallEngine: RecallEngine;
   private readonly notificationCenterService: NotificationCenterService;
+  private readonly claimAttribution: MemoryClaimAttributionService;
 
   constructor(
     private readonly db: Database.Database,
@@ -1252,6 +1254,7 @@ export class OutreachEngine {
     this.ringClient = new RingCentralClient(userDataManager, db, userId);
     this.evidencePlanner = new EvidenceResolutionPlanner();
     this.recallEngine = new RecallEngine(db);
+    this.claimAttribution = new MemoryClaimAttributionService(db);
     this.notificationCenterService = new NotificationCenterService(db, () =>
       getUserRuntimeConfig(userDataManager),
     );
@@ -3752,17 +3755,31 @@ export class OutreachEngine {
     timestamp = now(),
   ): void {
     const id = randomUUID();
+    const ownerAuthored = sourceType === 'outreach_question' && Boolean(this.userId);
+    const externalSender =
+      sourceType === 'outreach_reply' && typeof metadata.sender === 'string'
+        ? metadata.sender.trim()
+        : '';
+    const sender =
+      sourceType === 'outreach_question'
+        ? this.userId ?? 'outreach-engine'
+        : externalSender ||
+          session.replySender ||
+          session.targetResolvedLabel ||
+          session.targetRef;
     this.db
       .prepare(
         `INSERT INTO messages_raw
-          (id, content, source_type, sender, group_id, group_name, timestamp, metadata_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, content, source_type, sender, group_id, group_name, timestamp,
+           metadata_json, claim_attribution_status, claim_attribution_version,
+           created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?)`,
       )
       .run(
         id,
         content,
         sourceType,
-        this.userId ?? 'outreach-engine',
+        sender,
         session.targetType === 'group' ? session.targetRef : null,
         session.targetType === 'group' ? 'outreach-group' : null,
         timestamp,
@@ -3770,9 +3787,18 @@ export class OutreachEngine {
           sessionId: session.id,
           originKind: session.originKind,
           ...metadata,
+          authorRole: ownerAuthored
+            ? 'user'
+            : sourceType === 'outreach_reply'
+              ? 'external'
+              : 'system',
+          isSelf: ownerAuthored,
         }),
         timestamp,
       );
+    // Every outreach row is new (random UUID), so ordinary ensure semantics are
+    // sufficient. force=true is reserved for paths that replace raw content.
+    this.claimAttribution.ensureForMessage(id);
   }
 
   private async hydrateReplySender(

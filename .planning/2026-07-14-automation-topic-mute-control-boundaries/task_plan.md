@@ -2,7 +2,7 @@
 
 ## 背景
 
-- 选择功能：`主题静音`，来自 `docs/features/index.md` 的随机候选。
+- 选择功能：`主题静音`，来自 `docs/index.md` 的随机候选。
 - `docs/progressing/to-verify.md` 为空。
 - 自动化记忆显示最近已覆盖 Scheduled Messages、Project Dashboard、Doubao、Native Join、Notification Center、Message Reaction、Message Analysis、Memory Capture、Jira Design Links、Google Slides Analyzer、Memory Service、Agent Thinking 等功能族，本轮避开这些新近目标。
 - EventKit 读取 `Personal AI` Reminders：4 条全部已完成，均为历史 Doubao / Notification 反馈；没有未完成且与 Topic 静音相关的条目。
@@ -25,5 +25,5 @@
 1. 给 Topic 列表页的静音入口、原因、时长、toast 查看静音、toast/卡片取消静音、空状态查看静音补按钮级边界。
 2. 给 Topic 详情页的静音入口、原因、时长、toast/header 取消静音补按钮级边界。
 3. 更新 `tools/verify-topic-based-messages.ts` 和 E2E，断言 hover/读屏文案与本机/no-write 行为一致。
-4. 简要更新 `docs/features/topic_based_messages.md` 与 `docs/features/index.md`，只记录当前行为，不写过细实现。
+4. 简要更新 `docs/features/topic_based_messages.md` 与 `docs/index.md`，只记录当前行为，不写过细实现。
 5. 验证：`npm run verify:topic-based-messages`、`npm start -- --progress` 首次成功编译、`npm run verify:topic-based-messages:e2e`、scoped `git diff --check`。

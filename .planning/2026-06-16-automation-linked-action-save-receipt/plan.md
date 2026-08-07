@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 来源：`docs/features/index.md`
+- 来源：`docs/index.md`
 - 抽中功能：`联动操作 / Openclaw`
 - 所属能力：Message Reaction
 - 主文档：`docs/features/message_reaction.md`

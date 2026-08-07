@@ -2,7 +2,7 @@
 
 ## Context
 
-- Selected feature: `DigestQueueService 本地摘要` from `docs/features/index.md`.
+- Selected feature: `DigestQueueService 本地摘要` from `docs/index.md`.
 - Carry-over: `docs/progressing/to-verify.md` says `暂无。`.
 - Reminders: local Reminders is accessible, but there is no `Personal AI` list, so no reminder item can be incorporated or marked done.
 - Research: Slack Later/Gmail Snooze/Teams Activity emphasize recoverable queues and source/processing status; notification batching research supports predictable batches and warns against opaque delay/failure.

@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 关注项测试`
-- Docs: `docs/features/agent_workflow.md`
+- Docs: `docs/features/message_analysis.md`
 - Main code: `src/agentWorkflowReplay.ts`, `src/options.tsx`
 - Verification: `npm run verify:agent-workflow-replay`, `npm start`, `node tools/verify-agent-workflow-options-e2e.mjs`, scoped `git diff --check`
 

@@ -2,7 +2,7 @@
 
 ## Current State
 
-- `docs/features/index.md` lists `OpenClaw 外部委派` under Memory Service, with `docs/features/memory_system.md` as the current source of truth.
+- `docs/index.md` lists `OpenClaw 外部委派` under Memory Service, with `docs/memory_system.md` as the current source of truth.
 - The existing OpenClaw delegation backend already downgrades `success` responses without a verifiable artifact into `status: error` plus `payload.artifactValidation = 'missing_verifiable_artifact'`.
 - `ActionQueue.vue` already shows a `证据校验回执` for failed OpenClaw results and keeps artifact/payload/transcript visible after refresh.
 - UX bug found: `delegationArtifactCountLabel()` currently labels every returned artifact as `可验证 artifact N 条`, even when the same card says `OpenClaw 返回缺少可验证 artifact`.

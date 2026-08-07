@@ -13,11 +13,15 @@ export type UXTicketReference = {
   key: string;
   summary: string;
   source: string;
+  status?: string;
   keySource?: UXTicketKeySource;
   keyRecoveryCandidateCount?: number;
   keyRecoveryIgnoredCandidateCount?: number;
   keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
 };
+
+/** Max design-link / BE-progress rows shown on a Jira issue page. */
+export const JIRA_CONTEXT_PANEL_ITEM_LIMIT = 5;
 
 export type JiraIssueKeyUrlCandidate = {
   key: string;
@@ -88,6 +92,7 @@ export type UXDesignItem = {
   keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
   source: string;
   linkProvided: boolean;
+  issueStatus?: string;
   uxEpicKey?: string;
   uxEpicStatus?: string;
   uxEta?: string;
@@ -460,6 +465,7 @@ function getDesignStatusPriority(status?: string): number {
 }
 
 function getSourcePriority(source: string): number {
+  // Authority for merged source labels (Remote / Designs stay most authoritative).
   if (source.includes('remote_link')) return 0;
   if (source.includes('jira_designs')) return 0;
   if (source.includes('design_field')) return 1;
@@ -469,8 +475,100 @@ function getSourcePriority(source: string): number {
   return 4;
 }
 
+/**
+ * Display / truncation channel priority:
+ * current-ticket direct (description / remote / Jira Designs) >
+ * linked issues (and epic-level relations) >
+ * parent / INIT relations.
+ */
+export function getDesignChannelPriority(source: string): number {
+  const parts = splitSources(source);
+  if (parts.length === 0) return 3;
+  return Math.min(...parts.map(getSingleDesignChannelPriority));
+}
+
+function getSingleDesignChannelPriority(source: string): number {
+  if (source.includes('parent_')) return 2;
+  if (
+    source.includes('linked_issues')
+    || source.includes('issue_link')
+    || source.includes('epic_')
+    || source.includes('child_issue')
+    || source.includes('subtask')
+  ) {
+    return 1;
+  }
+  if (
+    source.includes('description')
+    || source.includes('remote_link')
+    || source.includes('jira_designs')
+    || source.includes('design_field')
+  ) {
+    return 0;
+  }
+  return 1;
+}
+
 function getItemSourcePriority(item: DesignDisplayItem): number {
   return getSourcePriority(item.source || '');
+}
+
+function getItemChannelPriority(item: DesignDisplayItem): number {
+  return getDesignChannelPriority(item.source || '');
+}
+
+export function getJiraProjectKey(ticketKey?: string | null): string | null {
+  if (!ticketKey) return null;
+  const normalized = ticketKey.trim().toUpperCase();
+  if (!normalized) return null;
+  const projectPart = normalized.split('-')[0];
+  return projectPart || null;
+}
+
+export function isSameJiraProject(leftKey?: string | null, rightKey?: string | null): boolean {
+  const left = getJiraProjectKey(leftKey);
+  const right = getJiraProjectKey(rightKey);
+  return Boolean(left && right && left === right);
+}
+
+export function isClosedJiraStatus(status?: string | null): boolean {
+  const tone = getUXEpicStatusTone(status || undefined);
+  return tone === 'done' || tone === 'cancelled';
+}
+
+function getParentClosedPreferPriority(item: DesignDisplayItem): number {
+  if (getItemChannelPriority(item) !== 2) return 0;
+  if (item.type !== 'ux_ticket') return 1;
+  return isClosedJiraStatus(item.issueStatus || item.uxEpicStatus) ? 0 : 1;
+}
+
+export function filterSameProjectDesignItems(
+  items: DesignDisplayItem[],
+  currentTicketKey: string,
+): DesignDisplayItem[] {
+  return items.filter(item => {
+    if (item.type !== 'ux_ticket') return true;
+    return !isSameJiraProject(currentTicketKey, item.uxTicketKey);
+  });
+}
+
+export function limitDesignDisplayItems(
+  items: DesignDisplayItem[],
+  limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
+): DesignDisplayItem[] {
+  if (!Number.isFinite(limit) || limit <= 0) return [];
+  return items.slice(0, limit);
+}
+
+export function prepareDesignDisplayItems(
+  items: DesignDisplayItem[],
+  currentTicketKey: string,
+  limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
+): DesignDisplayItem[] {
+  return limitDesignDisplayItems(
+    sortDesignDisplayItems(filterSameProjectDesignItems(dedupeDesignData(items), currentTicketKey)),
+    limit,
+  );
 }
 
 export function getDesignDisplayPriority(item: DesignDisplayItem): number {
@@ -734,6 +832,12 @@ export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDispla
   return items
     .map((item, index) => ({ item, index }))
     .sort((a, b) => {
+      const channelDiff = getItemChannelPriority(a.item) - getItemChannelPriority(b.item);
+      if (channelDiff !== 0) return channelDiff;
+
+      const closedPreferDiff = getParentClosedPreferPriority(a.item) - getParentClosedPreferPriority(b.item);
+      if (closedPreferDiff !== 0) return closedPreferDiff;
+
       const priorityDiff = getDesignDisplayPriority(a.item) - getDesignDisplayPriority(b.item);
       if (priorityDiff !== 0) return priorityDiff;
 

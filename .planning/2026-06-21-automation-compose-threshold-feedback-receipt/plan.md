@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `回复助手阈值与反馈`
-- Source doc: `docs/features/compose_assist.md`
+- Source doc: `docs/features/assist.md`
 - Scope: thumb-down feedback receipt for Compose Assist, not direct insert, Web AI source routing, or ambient calibration privacy rules.
 
 ## Product / Research Direction

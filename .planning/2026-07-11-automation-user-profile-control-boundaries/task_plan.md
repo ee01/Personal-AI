@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮随机扫中 `docs/features/index.md` 的 `用户画像条目`。`docs/progressing/to-verify.md` 当前为空；本机 `Personal AI` Reminders 共有 4 条、0 条未完成，历史 Doubao / 通知反馈与用户画像条目无关。
+本轮随机扫中 `docs/index.md` 的 `用户画像条目`。`docs/progressing/to-verify.md` 当前为空；本机 `Personal AI` Reminders 共有 4 条、0 条未完成，历史 Doubao / 通知反馈与用户画像条目无关。
 
 ## 业内与论文信号
 
@@ -22,7 +22,7 @@
    - 导出会重新分页请求全部状态，不受当前筛选/切片限制；本地 JSON 不会恢复、删除、同步或发送画像。
    - 加载全部是只读扩页，不写 USER_CORE，不刷新证据，不调用外部 provider。
 4. 扩展 `tools/verify-user-profile-export-e2e.mjs`，断言这些控件的 `title` / `aria-label`。
-5. 更新 `docs/features/user_profile_system.md` 和 `docs/features/index.md`，保持描述简洁。
+5. 更新 `docs/features/user_profile_system.md` 和 `docs/index.md`，保持描述简洁。
 6. 验证：`node --check tools/verify-user-profile-export-e2e.mjs`、`npm start -- --progress` 首次成功后停止、`node tools/verify-user-profile-export-e2e.mjs`、scoped `git diff --check`。
 
 ## 非目标

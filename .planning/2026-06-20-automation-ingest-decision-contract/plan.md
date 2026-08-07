@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `记忆摄入、去重、显著性评估`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Scope: keep the actual ingest/write semantics unchanged, but make the decision receipt contract complete and serializable for clients.
 
 ## Research Notes
@@ -27,7 +27,7 @@
    - Add trust/sanitization counters to `BatchIngestDecisionSummary`.
 
 4. Update docs.
-   - Summarize duplicate safety receipts and serialized `mergeOp` in `docs/features/memory_system.md`.
+   - Summarize duplicate safety receipts and serialized `mergeOp` in `docs/memory_system.md`.
 
 5. Verify.
    - `npm --prefix memory-service test -- --run src/__tests__/api-ingest.test.ts src/__tests__/api-ingest-injection.test.ts src/__tests__/mergeDecision.test.ts`

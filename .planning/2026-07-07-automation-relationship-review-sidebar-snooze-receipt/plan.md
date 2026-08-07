@@ -2,7 +2,7 @@
 
 ## 背景
 
-- 本轮从 `docs/features/index.md` 随机样本中选择 `人脉关系 Review Queue`，避开最近几轮已经精确覆盖的 Task Scheduler、Memory Capture、Rehearsal、Slides、Compose Assist 和 Ask 等功能点。
+- 本轮从 `docs/index.md` 随机样本中选择 `人脉关系 Review Queue`，避开最近几轮已经精确覆盖的 Task Scheduler、Memory Capture、Rehearsal、Slides、Compose Assist 和 Ask 等功能点。
 - `docs/progressing/to-verify.md` 当前无待校验事项。
 - EventKit 能读取本机 `Personal AI` Reminders 列表，但 4 条均已完成，且都是 Doubao / Notification / 测试历史项；没有开放的 Relationship Radar / Review Queue 相关反馈可纳入或标记完成。
 - 现有 Review Queue 已有完整复核卡、确认 / 驳回 / 稍后成功失败回执、空筛选回执和侧栏分流；主要 UX 缺口在右侧摘要卡的 `稍后 7 天` 快捷按钮。
@@ -20,7 +20,7 @@
 2. 回执同时提示：侧栏 quick snooze 会使用当前候选原文和已有备注；如果用户要改写入内容或补备注，应先点 `进入复核`。
 3. 保持现有 API、Review Queue 状态机、完整复核卡、成功失败回执和侧栏 `进入复核` 行为不变。
 4. 扩展 `tools/verify-relationship-radar-e2e.mjs`，覆盖侧栏回执文本，并继续断言打开完整卡不会写入画像。
-5. 更新 `docs/features/relationship_radar.md` 和 `docs/features/index.md` 的简短说明，文档只记录用户可见边界，不写实现细节。
+5. 更新 `docs/features/relationship_radar.md` 和 `docs/index.md` 的简短说明，文档只记录用户可见边界，不写实现细节。
 6. 验证：`node --check tools/verify-relationship-radar-e2e.mjs`、`npm run verify:relationship-radar`、`npm start -- --progress` 首次成功编译后停止、`npm run verify:relationship-radar:e2e`、scoped `git diff --check`。
 
 ## 执行结果

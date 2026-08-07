@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `主动询问会话管理`
-- Source of truth: `docs/features/memory_system.md`
+- Source of truth: `docs/memory_system.md`
 - UI surface: `src/modals/components/OutreachSessions.vue`
 
 ## Current Finding
@@ -23,7 +23,7 @@ The Outreach sessions list already has page-level triage and per-card receipts, 
 2. Pick one exact focus object using the same UX priority as the triage receipt: load/config blockers, retriable terminal sessions, pending approval, waiting/deferred, scheduled, then pending templates.
 3. Keep the lane read-only. Its primary action navigates to detail or the relevant filtered list and does not approve, send, retry, cancel, write RingCentral, or update Memory Service.
 4. Add E2E assertions for initial failed-session focus, post-retry waiting-session focus, and message-reaction filtered focus.
-5. Update `docs/features/memory_system.md` and `docs/features/index.md`.
+5. Update `docs/memory_system.md` and `docs/index.md`.
 
 ## Validation
 

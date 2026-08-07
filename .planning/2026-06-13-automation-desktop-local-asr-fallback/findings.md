@@ -4,7 +4,7 @@
 
 - Carry-over check: `docs/progressing/to-verify.md` says `暂无。`.
 - Last automation run worked on Compose Assist source exclusion, so this run avoided repeating Compose Assist.
-- Random eligible feature selected from `docs/features/index.md`: `Desktop Local ASR / Whisper fallback`.
+- Random eligible feature selected from `docs/index.md`: `Desktop Local ASR / Whisper fallback`.
 - Local Reminder lists visible: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
 - No visible `Personal AI` Reminders list exists on this machine.
 

@@ -9,7 +9,7 @@ Phase 3
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md`
+- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md`
 - [x] Pick a non-fresh random feature: `智能资料录入`
 - [x] Check local Reminders `Personal AI` through EventKit
 - [x] Inspect Coverage docs, UI, smart-import service, and existing E2E
@@ -24,7 +24,7 @@ Phase 3
 - [x] Add smart-import pending receipt for non-external-AI ordinary imports
 - [x] Add `title` and `aria-label` boundary copy to the drawer primary action button
 - [x] Update Coverage E2E assertions
-- [x] Update `docs/features/memory_coverage_map.md` and `docs/features/index.md`
+- [x] Update `docs/features/memory_coverage_map.md` and `docs/index.md`
 - **Status:** complete
 
 ### Phase 4: Testing & Verification

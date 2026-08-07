@@ -2,7 +2,7 @@
 
 ## Context
 
-- Random target from `docs/features/index.md`: `消息入库与通知分发`.
+- Random target from `docs/index.md`: `消息入库与通知分发`.
 - Capability: Message Analysis.
 - Source document: `docs/features/message_analysis.md`.
 - Reminder scan returned list names including `We`, `Next actions`, `Tasks`, and several Chinese personal lists, but no `Personal AI` list.

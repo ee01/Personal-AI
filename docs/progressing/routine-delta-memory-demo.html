@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>例行差分记忆 · Today Pilot / Meeting Pilot 集成 Demo</title>
+  <!--
+    Assumptions:
+    1. 这是集成式能力，生产形态复用 Today Pilot / Video Home 与 Meeting Pilot，不新增独立管理页。
+    2. 顶部深色演示控制条不属于产品 UI，只用于比较“有变化 / 与例行一致 / 匹配不确定”三种状态。
+    3. Nova Brandy Daily、Team 字段和 Estimate 规则来自真实工作形态的脱敏重组，不代表线上 Jira 或会议当前真值。
+    4. “不是同一例行”只修正 Personal AI 内部 series membership，不修改 Calendar，不删除任何原始 occurrence。
+    5. Demo 不发起网络请求，也不执行外部写回；所有交互只改变当前页面的演示状态。
+
+    Design intent:
+    - 把变化放在固定摘要之前；无变化时让 UI 真正退回安静状态。
+    - 先给用户可行动的差分，再按需展开 before / after、例行基线和原始 occurrence。
+    - 颜色承担状态辅助但不单独承载语义；所有关键状态都有文字标签。
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #d9ddd8;
+      --paper: #f7f5ef;
+      --surface: #fffefb;
+      --surface-soft: #efeee8;
+      --surface-tint: #edf4f0;
+      --ink: #18201e;
+      --ink-soft: #46504d;
+      --muted: #747c78;
+      --line: #d8d9d2;
+      --line-strong: #b9bdb7;
+      --forest: #1f6254;
+      --forest-dark: #16473e;
+      --forest-soft: #dcebe5;
+      --rust: #a34c2f;
+      --rust-soft: #f4e4dc;
+      --ochre: #916412;
+      --ochre-soft: #f7edcf;
+      --blue: #355f77;
+      --blue-soft: #e5edf2;
+      --charcoal: #222a28;
+      --shadow: 0 24px 70px rgba(32, 41, 38, .18), 0 2px 10px rgba(32, 41, 38, .08);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: Georgia, "Songti SC", "STSong", serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(255,255,255,.7), transparent 28%),
+        var(--canvas);
+      color: var(--ink);
+      font: 14px/1.5 var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+    button:focus-visible {
+      outline: 3px solid rgba(53, 95, 119, .34);
+      outline-offset: 2px;
+    }
+    [hidden] { display: none !important; }
+
+    .demo-bar {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 10px 22px;
+      background: var(--charcoal);
+      color: #fff;
+      border-bottom: 1px solid #111715;
+    }
+    .demo-heading { min-width: 218px; }
+    .demo-heading strong { display: block; font-size: 14px; letter-spacing: .01em; }
+    .demo-heading span { display: block; margin-top: 2px; color: #b7c0bd; font-size: 11px; }
+    .control-label {
+      align-self: center;
+      color: #9ba7a3;
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .segmented {
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(104px, auto);
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid #4a5652;
+      border-radius: 8px;
+      background: #303936;
+    }
+    .segmented.scene { grid-auto-columns: minmax(94px, auto); }
+    .segmented button {
+      min-height: 44px;
+      padding: 8px 14px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: #c8d0ce;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .segmented button:hover { background: #3c4743; color: #fff; }
+    .segmented button[aria-pressed="true"] { background: #fff; color: var(--ink); font-weight: 760; }
+    .demo-reset {
+      width: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      margin-left: auto;
+      border: 1px solid #4a5652;
+      border-radius: 7px;
+      background: transparent;
+      color: #dbe1df;
+      cursor: pointer;
+      font-size: 17px;
+    }
+    .demo-reset:hover { background: #3c4743; }
+
+    .stage { padding: 24px; }
+    .host-window {
+      position: relative;
+      width: min(1420px, 100%);
+      height: min(828px, calc(100vh - 120px));
+      min-height: 670px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid #aeb5b0;
+      border-radius: 10px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    .host-topbar {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .window-dots { display: flex; gap: 6px; }
+    .window-dots i { width: 9px; height: 9px; border-radius: 50%; background: #c7cac5; }
+    .brand { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 800; }
+    .brand img { width: 28px; height: 28px; border-radius: 7px; }
+    .search {
+      width: min(460px, 42vw);
+      margin: 0 auto;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f1f1ed;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .avatar {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .workspace {
+      height: calc(100% - 58px);
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+    }
+    .rail {
+      padding: 16px 10px;
+      background: #26302d;
+      color: #bac3c0;
+      border-right: 1px solid #19201e;
+    }
+    .rail-item {
+      width: 54px;
+      min-height: 50px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 8px;
+      border-radius: 8px;
+      font-size: 10px;
+      text-align: center;
+    }
+    .rail-item.active { background: #3a4743; color: #fff; box-shadow: inset 3px 0 var(--forest-soft); }
+    .rail-item small { display: block; color: inherit; font-size: 16px; line-height: 1; }
+
+    .today-scene, .meeting-scene { height: 100%; min-width: 0; }
+    .today-scene {
+      display: grid;
+      grid-template-columns: minmax(510px, 1fr) 356px;
+      overflow: hidden;
+    }
+    .today-main { min-width: 0; overflow: auto; padding: 34px 42px 60px; }
+    .today-aside { overflow: auto; padding: 28px 24px; background: #efeee8; border-left: 1px solid var(--line); }
+    .eyebrow {
+      color: var(--forest);
+      font-size: 10px;
+      font-weight: 820;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+    .page-heading { display: flex; align-items: flex-end; gap: 18px; margin: 6px 0 26px; }
+    .page-heading h1 {
+      margin: 0;
+      font: 400 clamp(30px, 4vw, 46px)/1.06 var(--display);
+      letter-spacing: -.025em;
+    }
+    .page-heading p { max-width: 420px; margin: 0 0 4px; color: var(--muted); font-size: 12px; }
+    .section-title { margin: 0 0 12px; font-size: 12px; font-weight: 820; letter-spacing: .04em; }
+    .meeting-list { display: grid; gap: 14px; }
+    .meeting-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 1px 3px rgba(30, 39, 36, .05);
+    }
+    .meeting-card.muted { opacity: .72; }
+    .meeting-head {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      min-height: 86px;
+      padding: 16px 18px;
+    }
+    .time-block { padding-right: 16px; border-right: 1px solid var(--line); }
+    .time-block strong { display: block; font: 400 20px/1 var(--display); }
+    .time-block span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+    .meeting-name { font-size: 15px; font-weight: 780; }
+    .meeting-meta { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .join-button, .outline-button, .text-button {
+      min-height: 44px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .join-button { padding: 0 16px; border: 0; background: var(--forest); color: #fff; font-weight: 760; }
+    .join-button:hover { background: var(--forest-dark); }
+    .outline-button { padding: 0 14px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft); }
+    .outline-button:hover { border-color: var(--forest); color: var(--forest); }
+    .text-button { padding: 0 8px; border: 0; background: transparent; color: var(--forest); font-weight: 720; }
+    .text-button:hover { text-decoration: underline; }
+
+    .delta-panel { border-top: 1px solid var(--line); background: linear-gradient(135deg, #f7faf8, #f2f6f3); }
+    .delta-summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 49px;
+      padding: 0 18px;
+      border-bottom: 1px solid #dfe7e2;
+      color: var(--ink-soft);
+      font-size: 11px;
+    }
+    .delta-summary strong { color: var(--forest-dark); font-size: 12px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rust); flex: 0 0 auto; }
+    .summary-spacer { flex: 1; }
+    .delta-content { padding: 16px 18px 18px; }
+    .delta-content h3 { margin: 0 0 10px; font: 400 18px/1.2 var(--display); }
+    .delta-items { display: grid; gap: 8px; }
+    .delta-item {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      min-height: 58px;
+      padding: 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .delta-item:hover, .delta-item[aria-expanded="true"] { border-color: #cadbd4; background: rgba(255,255,255,.72); }
+    .delta-index {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--rust-soft);
+      color: var(--rust);
+      font: 700 12px/1 var(--display);
+    }
+    .delta-copy strong { display: block; font-size: 12px; }
+    .delta-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .delta-kind { color: var(--rust); font-size: 10px; font-weight: 820; letter-spacing: .04em; }
+    .evidence-detail {
+      grid-column: 2 / 4;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 3px;
+    }
+    .evidence-box { padding: 9px 10px; border-radius: 6px; background: var(--surface-soft); }
+    .evidence-box.after { background: var(--forest-soft); }
+    .evidence-box b { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .evidence-box span { font-size: 11px; }
+    .evidence-source { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+    .carryover {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+      padding: 11px 10px;
+      border: 1px solid #ead8a9;
+      border-radius: 8px;
+      background: var(--ochre-soft);
+    }
+    .carryover-mark { color: var(--ochre); font: 700 18px/1 var(--display); text-align: center; }
+    .carryover strong { display: block; font-size: 11px; }
+    .carryover span { display: block; margin-top: 2px; color: #75643e; font-size: 10px; }
+    .delta-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .boundary-note { margin-left: auto; color: var(--muted); font-size: 10px; }
+
+    .quiet-receipt, .uncertain-receipt {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 54px;
+      padding: 0 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .quiet-receipt i, .uncertain-receipt i { width: 8px; height: 8px; border-radius: 50%; background: var(--forest); }
+    .uncertain-receipt { background: var(--ochre-soft); color: #6d5d36; }
+    .uncertain-receipt i { background: var(--ochre); }
+
+    .aside-card { margin-bottom: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.68); }
+    .aside-card h2 { margin: 0; font: 400 20px/1.2 var(--display); }
+    .aside-card p { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+    .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 14px; }
+    .metric { padding: 9px 6px; border-top: 2px solid var(--forest); background: #fff; }
+    .metric strong { display: block; font: 400 18px/1 var(--display); }
+    .metric span { color: var(--muted); font-size: 9px; }
+    .agenda { display: grid; gap: 0; }
+    .agenda-row { display: grid; grid-template-columns: 45px 1fr; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line); }
+    .agenda-row:first-child { border-top: 0; }
+    .agenda-row time { color: var(--muted); font-size: 10px; }
+    .agenda-row strong { display: block; font-size: 11px; }
+    .agenda-row span { color: var(--muted); font-size: 10px; }
+
+    .meeting-scene {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      background: #151a19;
+    }
+    .meeting-stage {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(37,50,47,.7), rgba(10,13,12,.96)),
+        #151a19;
+    }
+    .meeting-top {
+      height: 62px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 22px;
+      color: #e9eeec;
+      border-bottom: 1px solid rgba(255,255,255,.1);
+    }
+    .meeting-top strong { font-size: 13px; }
+    .meeting-top span { color: #9aa7a3; font-size: 10px; }
+    .live-pill { margin-left: auto; padding: 4px 8px; border-radius: 99px; background: rgba(194,73,55,.22); color: #ffc2b7 !important; font-size: 9px !important; font-weight: 800; }
+    .video-grid { height: calc(100% - 132px); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 20px; }
+    .video-tile {
+      position: relative;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      background: linear-gradient(145deg, #303a37, #212825);
+      color: #d8e0dd;
+    }
+    .video-tile:nth-child(2) { background: linear-gradient(145deg, #35313d, #26232c); }
+    .video-avatar { width: 70px; height: 70px; display: grid; place-items: center; border-radius: 50%; background: rgba(255,255,255,.1); font: 400 25px/1 var(--display); }
+    .video-name { position: absolute; left: 12px; bottom: 10px; font-size: 10px; }
+    .meeting-controls { height: 70px; display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(255,255,255,.1); }
+    .meeting-control { min-width: 54px; min-height: 44px; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; background: #27302d; color: #dbe2df; font-size: 10px; }
+    .meeting-control.leave { padding: 0 18px; background: #a53e31; border-color: #a53e31; }
+
+    .side-panel { min-width: 0; overflow: auto; background: var(--surface); border-left: 1px solid #090c0b; }
+    .side-head { position: sticky; top: 0; z-index: 2; padding: 18px 20px 14px; background: rgba(255,254,251,.96); border-bottom: 1px solid var(--line); backdrop-filter: blur(10px); }
+    .side-head-row { display: flex; align-items: center; gap: 8px; }
+    .side-head h2 { margin: 0; font: 400 21px/1.1 var(--display); }
+    .side-head small { color: var(--muted); font-size: 9px; }
+    .side-body { padding: 18px; }
+    .side-delta { border: 1px solid #cadbd4; border-radius: 9px; background: var(--surface-tint); }
+    .side-delta-head { padding: 14px; border-bottom: 1px solid #d7e4df; }
+    .side-delta-head span { color: var(--forest); font-size: 9px; font-weight: 820; letter-spacing: .08em; text-transform: uppercase; }
+    .side-delta-head h3 { margin: 4px 0 0; font: 400 18px/1.2 var(--display); }
+    .side-delta-list { padding: 7px; }
+    .side-delta-list .delta-item { grid-template-columns: 22px minmax(0, 1fr); min-height: 52px; padding: 9px; }
+    .side-delta-list .delta-kind { grid-column: 2; }
+    .side-delta-list .evidence-detail { grid-column: 2; grid-template-columns: 1fr; }
+    .side-delta-list .evidence-source { grid-column: 1; }
+    .transcript { margin-top: 16px; }
+    .transcript h3 { margin: 0 0 8px; font-size: 11px; }
+    .utterance { display: grid; grid-template-columns: 27px 1fr; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .utterance b { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-soft); font-size: 9px; }
+    .utterance strong { display: block; font-size: 10px; }
+    .utterance p { margin: 2px 0 0; color: var(--ink-soft); font-size: 10px; }
+
+    .drawer, .modal {
+      position: absolute;
+      z-index: 10;
+      inset: 0;
+      display: flex;
+      justify-content: flex-end;
+      background: rgba(20, 27, 25, .36);
+    }
+    .drawer-panel { width: min(470px, 92%); height: 100%; overflow: auto; padding: 24px; background: var(--surface); box-shadow: -14px 0 40px rgba(20,27,25,.2); }
+    .drawer-head, .modal-head { display: flex; align-items: start; gap: 12px; }
+    .drawer-head h2, .modal-head h2 { margin: 0; font: 400 24px/1.15 var(--display); }
+    .drawer-head p, .modal-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .icon-close { width: 44px; min-width: 44px; min-height: 44px; margin-left: auto; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+    .baseline-list, .occurrence-list { display: grid; gap: 8px; margin-top: 20px; }
+    .baseline-row, .occurrence-row { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+    .baseline-row strong, .occurrence-row strong { display: block; font-size: 11px; }
+    .baseline-row span, .occurrence-row span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .receipt-box { margin-top: 18px; padding: 12px; border-left: 3px solid var(--forest); background: var(--forest-soft); color: var(--forest-dark); font-size: 10px; }
+
+    .modal { align-items: center; justify-content: center; padding: 20px; }
+    .modal-panel { width: min(520px, 96%); padding: 24px; border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+    .scope-list { margin: 18px 0; padding: 0; list-style: none; }
+    .scope-list li { padding: 8px 0; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; }
+    .scope-list li:first-child { border-top: 0; }
+    .scope-list b { color: var(--ink); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .danger-button { min-height: 44px; padding: 0 15px; border: 0; border-radius: 7px; background: var(--rust); color: #fff; cursor: pointer; font-weight: 760; }
+    .danger-button:hover { background: #843d28; }
+
+    .toast {
+      position: absolute;
+      z-index: 20;
+      left: 50%;
+      bottom: 22px;
+      width: min(560px, calc(100% - 34px));
+      transform: translateX(-50%);
+      padding: 13px 16px;
+      border-radius: 8px;
+      background: var(--charcoal);
+      color: #fff;
+      box-shadow: 0 12px 30px rgba(20,27,25,.24);
+      font-size: 11px;
+    }
+    .toast strong { color: #cce8dd; }
+
+    @media (max-width: 1040px) {
+      .demo-bar { flex-wrap: wrap; }
+      .demo-heading { width: 100%; }
+      .demo-reset { margin-left: 0; }
+      .host-window { height: 820px; }
+      .today-scene { grid-template-columns: 1fr; }
+      .today-aside { display: none; }
+      .meeting-scene { grid-template-columns: minmax(0, 1fr) 340px; }
+    }
+    @media (max-width: 760px) {
+      .demo-bar { align-items: stretch; padding: 12px; gap: 8px; }
+      .control-label { display: none; }
+      .segmented { width: 100%; grid-auto-columns: 1fr; }
+      .demo-reset { width: 100%; }
+      .stage { padding: 0; }
+      .host-window { height: auto; min-height: 900px; border: 0; border-radius: 0; }
+      .host-topbar { padding: 0 10px; }
+      .search { display: none; }
+      .avatar { margin-left: auto; }
+      .workspace { grid-template-columns: 1fr; }
+      .rail { display: none; }
+      .today-main { padding: 24px 16px 50px; }
+      .page-heading { display: block; }
+      .page-heading p { margin-top: 10px; }
+      .meeting-head { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; }
+      .meeting-head .join-button { grid-column: 1 / -1; }
+      .boundary-note { width: 100%; margin-left: 0; }
+      .evidence-detail { grid-template-columns: 1fr; }
+      .evidence-source { grid-column: 1; }
+      .meeting-scene { display: block; }
+      .meeting-stage { display: none; }
+      .side-panel { height: 100%; border-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="demo-bar" aria-label="Demo 控制器">
+    <div class="demo-heading">
+      <strong>例行差分记忆 · 集成体验</strong>
+      <span>顶部控制仅用于演示，不属于产品界面</span>
+    </div>
+    <span class="control-label">场景</span>
+    <div class="segmented scene" role="group" aria-label="选择产品场景">
+      <button type="button" data-scene="today" aria-pressed="true">今日日程</button>
+      <button type="button" data-scene="meeting" aria-pressed="false">会中侧栏</button>
+    </div>
+    <span class="control-label">差分状态</span>
+    <div class="segmented" role="group" aria-label="选择差分状态">
+      <button type="button" data-state="changed" aria-pressed="true">有变化</button>
+      <button type="button" data-state="quiet" aria-pressed="false">与例行一致</button>
+      <button type="button" data-state="uncertain" aria-pressed="false">匹配不确定</button>
+    </div>
+    <button class="demo-reset" type="button" id="resetDemo" title="恢复 Demo 初始状态" aria-label="恢复 Demo 初始状态">↺</button>
+  </header>
+
+  <main class="stage">
+    <section class="host-window" aria-label="Personal AI 产品场景模拟">
+      <div class="host-topbar">
+        <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="brand"><img src="../../static/icons/icon128.png" alt="Personal AI" />Personal AI</div>
+        <div class="search">搜索消息、会议、记忆或直接提问</div>
+        <div class="avatar" aria-label="当前用户 E">E</div>
+      </div>
+
+      <div class="workspace">
+        <nav class="rail" aria-label="Personal AI 主导航">
+          <div class="rail-item"><small>⌂</small>主页</div>
+          <div class="rail-item active"><small>◷</small>今天</div>
+          <div class="rail-item"><small>◎</small>记忆</div>
+          <div class="rail-item"><small>⌕</small>Ask</div>
+          <div class="rail-item"><small>◫</small>会议</div>
+        </nav>
+
+        <section class="today-scene" id="todayScene">
+          <div class="today-main">
+            <div class="eyebrow">Today Pilot · Asia / Shanghai</div>
+            <div class="page-heading">
+              <h1>8 月 5 日，星期三</h1>
+              <p>今天只把真正不同的内容带到你面前。固定的例行背景仍保留，需要时再展开。</p>
+            </div>
+
+            <h2 class="section-title">接下来 · 2 场会议</h2>
+            <div class="meeting-list">
+              <article class="meeting-card" aria-labelledby="novaTitle">
+                <div class="meeting-head">
+                  <div class="time-block"><strong>10:00</strong><span>30 分钟</span></div>
+                  <div>
+                    <div class="meeting-name" id="novaTitle">Nova Brandy Daily</div>
+                    <div class="meeting-meta">RingCentral Video · recurring · 9 位参与者</div>
+                  </div>
+                  <button class="join-button" type="button" id="joinMeeting" title="演示中不会真的加入会议" aria-label="加入 Nova Brandy Daily，演示中不会真的加入">加入会议</button>
+                </div>
+
+                <section class="delta-panel state-changed">
+                  <div class="delta-summary">
+                    <i class="status-dot" aria-hidden="true"></i>
+                    <strong>第 30 次同系列</strong>
+                    <span>基线更新于 7 月 29 日</span>
+                    <span class="summary-spacer"></span>
+                    <span>2 项变化 · 1 条延续</span>
+                  </div>
+                  <div class="delta-content">
+                    <h3>今天和例行相比</h3>
+                    <div class="delta-items">
+                      <button class="delta-item" type="button" aria-expanded="false" data-delta="team" title="展开 Team 字段变化的前后证据">
+                        <span class="delta-index">1</span>
+                        <span class="delta-copy"><strong>Team 字段刚补齐，今天可确认影响范围</strong><span>RCV Native Meeting SDK 首次明确进入范围</span></span>
+                        <span class="delta-kind">SCOPE</span>
+                        <span class="evidence-detail" hidden>
+                          <span class="evidence-box"><b>Before · 7 月 29 日</b><span>Team 未填写，影响范围暂不明确</span></span>
+                          <span class="evidence-box after"><b>After · 8 月 4 日</b><span>Team = RCV Native Meeting SDK</span></span>
+                          <span class="evidence-source">来源：Jira 字段快照 + 最近一次会议结果 · 脱敏演示</span>
+                        </span>
+                      </button>
+                      <button class="delta-item" type="button" aria-expanded="false" data-delta="estimate" title="展开 Estimate 议题变化的前后证据">
+                        <span class="delta-index">2</span>
+                        <span class="delta-copy"><strong>议题首次出现 DEV / QA Estimate 汇总规则</strong><span>过去 7 次例行议题中未出现；本次需要确认覆盖还是求和</span></span>
+                        <span class="delta-kind">DECISION</span>
+                        <span class="evidence-detail" hidden>
+                          <span class="evidence-box"><b>Before · 最近 7 次</b><span>固定议题：进度、风险、release blocker</span></span>
+                          <span class="evidence-box after"><b>After · 本次邀请</b><span>新增：DEV 与 QA Estimate 汇总口径</span></span>
+                          <span class="evidence-source">来源：Calendar agenda + 7 次 occurrence baseline · 脱敏演示</span>
+                        </span>
+                      </button>
+                    </div>
+
+                    <div class="carryover">
+                      <div class="carryover-mark">↳</div>
+                      <div><strong>从上次延续：确认 DEV 与 QA Estimate 是覆盖还是求和</strong><span>7 月 29 日 occurrence · 尚未找到明确 closing evidence，不代表外部任务状态</span></div>
+                    </div>
+
+                    <div class="delta-actions">
+                      <button class="outline-button" type="button" data-open="baseline" title="只读查看被折叠的稳定例行信息">查看例行基线</button>
+                      <button class="text-button" type="button" data-open="occurrences" title="只读查看最近 3 次原始发生记录">查看 3 次原始记录</button>
+                      <button class="text-button" type="button" data-open="correction" title="修正 Personal AI 内部系列关系，不修改日历">不是同一例行</button>
+                      <span class="boundary-note">Personal AI 内部提示 · 未写回 Calendar / Jira</span>
+                    </div>
+                  </div>
+                </section>
+
+                <div class="quiet-receipt state-quiet" hidden><i aria-hidden="true"></i><strong>与例行一致</strong><span>5 条稳定基线已安静折叠 · 无新卡片、无通知</span><button class="text-button" type="button" data-open="baseline" title="只读查看被折叠的例行基线">查看</button></div>
+                <div class="uncertain-receipt state-uncertain" hidden><i aria-hidden="true"></i><strong>可能属于同一例行，暂未合并</strong><span>缺少稳定 series ID；先按单场准备，避免串线</span></div>
+              </article>
+
+              <article class="meeting-card muted">
+                <div class="meeting-head">
+                  <div class="time-block"><strong>14:30</strong><span>45 分钟</span></div>
+                  <div><div class="meeting-name">Application Video Weekly Sync Up</div><div class="meeting-meta">Google Calendar · weekly · 12 位参与者</div></div>
+                  <button class="outline-button" type="button" title="只读打开会议准备">查看准备</button>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <aside class="today-aside">
+            <section class="aside-card state-changed">
+              <div class="eyebrow">Attention receipt</div>
+              <h2>少读 82% 固定内容</h2>
+              <p>本场 29 条候选记忆中，5 条稳定基线被折叠，2 条变化和 1 条延续进入默认视图。</p>
+              <div class="metric-row">
+                <div class="metric"><strong>30</strong><span>系列发生次数</span></div>
+                <div class="metric"><strong>2</strong><span>本次变化</span></div>
+                <div class="metric"><strong>1</strong><span>待收口</span></div>
+              </div>
+            </section>
+            <section class="aside-card state-quiet" hidden>
+              <div class="eyebrow">Quiet receipt</div>
+              <h2>没有变化，也是一种结果</h2>
+              <p>本场 5 条稳定基线已折叠；没有差分进入高优先卡位，也不会生成主动通知。</p>
+              <div class="metric-row">
+                <div class="metric"><strong>30</strong><span>系列发生次数</span></div>
+                <div class="metric"><strong>0</strong><span>本次变化</span></div>
+                <div class="metric"><strong>0</strong><span>新增打断</span></div>
+              </div>
+            </section>
+            <section class="aside-card state-uncertain" hidden>
+              <div class="eyebrow">Identity gate</div>
+              <h2>宁可少做，不要串线</h2>
+              <p>当前缺少稳定 series ID。系统保留单场准备，但不生成跨 occurrence 差分。</p>
+              <div class="metric-row">
+                <div class="metric"><strong>0</strong><span>已确认合并</span></div>
+                <div class="metric"><strong>1</strong><span>候选匹配</span></div>
+                <div class="metric"><strong>0</strong><span>跨场断言</span></div>
+              </div>
+            </section>
+            <section class="aside-card">
+              <h2>今日时间线</h2>
+              <div class="agenda">
+                <div class="agenda-row"><time>10:00</time><div><strong>Nova Brandy Daily</strong><span class="state-changed">2 项变化 · 建议提前 2 分钟看完</span><span class="state-quiet" hidden>与例行一致 · 无需额外准备</span><span class="state-uncertain" hidden>按单场准备 · 暂不跨场比较</span></div></div>
+                <div class="agenda-row"><time>14:30</time><div><strong>Application Video Weekly</strong><span>等待本次 agenda</span></div></div>
+                <div class="agenda-row"><time>17:30</time><div><strong>专注时间</strong><span>未发现需要主动打断的变化</span></div></div>
+              </div>
+            </section>
+          </aside>
+        </section>
+
+        <section class="meeting-scene" id="meetingScene" hidden>
+          <div class="meeting-stage">
+            <div class="meeting-top"><strong>Nova Brandy Daily</strong><span>10:00 · 00:16:42</span><span class="live-pill">LIVE TRANSCRIPT</span></div>
+            <div class="video-grid">
+              <div class="video-tile"><div class="video-avatar">EQ</div><span class="video-name">You</span></div>
+              <div class="video-tile"><div class="video-avatar">MS</div><span class="video-name">Mobile SDK</span></div>
+            </div>
+            <div class="meeting-controls">
+              <button class="meeting-control" type="button">麦克风</button>
+              <button class="meeting-control" type="button">摄像头</button>
+              <button class="meeting-control" type="button">共享</button>
+              <button class="meeting-control leave" type="button">离开</button>
+            </div>
+          </div>
+
+          <aside class="side-panel">
+            <div class="side-head">
+              <div class="side-head-row"><h2>会议弹幕</h2><span class="summary-spacer"></span><small>Personal AI · 只读提示</small></div>
+              <small>Nova Brandy Daily · 第 30 次同系列</small>
+            </div>
+            <div class="side-body">
+              <section class="side-delta state-changed">
+                <div class="side-delta-head"><span>本场不同点</span><h3>2 项变化 · 1 条延续</h3></div>
+                <div class="side-delta-list">
+                  <button class="delta-item" type="button" aria-expanded="false" title="展开 Team 字段变化证据">
+                    <span class="delta-index">1</span><span class="delta-copy"><strong>Team 已明确为 Native Meeting SDK</strong><span>影响范围从未定变为已明确</span></span>
+                    <span class="delta-kind">SCOPE · 已固化</span>
+                    <span class="evidence-detail" hidden><span class="evidence-box"><b>Before</b><span>Team 未填写</span></span><span class="evidence-box after"><b>After</b><span>RCV Native Meeting SDK</span></span><span class="evidence-source">Jira 字段快照 · 8 月 4 日</span></span>
+                  </button>
+                  <button class="delta-item" type="button" aria-expanded="false" title="展开本场 Estimate 议题证据">
+                    <span class="delta-index">2</span><span class="delta-copy"><strong>Estimate 汇总口径进入决策</strong><span>首次出现；会后才写入稳定结果</span></span>
+                    <span class="delta-kind">DECISION · 会中暂定</span>
+                    <span class="evidence-detail" hidden><span class="evidence-box"><b>Baseline</b><span>最近 7 次无此议题</span></span><span class="evidence-box after"><b>Live</b><span>“DEV 与 QA 应该覆盖还是求和？”</span></span><span class="evidence-source">当前 transcript · 暂定，不是已确认结论</span></span>
+                  </button>
+                </div>
+                <div class="carryover" style="margin:0 14px 14px"><div class="carryover-mark">↳</div><div><strong>上次仍未收口：Estimate 规则</strong><span>未找到 closing evidence</span></div></div>
+                <div class="delta-actions" style="padding:0 14px 14px;margin:0">
+                  <button class="text-button" type="button" data-open="occurrences" title="只读查看最近 3 次原始发生记录">原始记录</button>
+                  <button class="text-button" type="button" data-open="correction" title="修正 Personal AI 内部系列关系，不修改会议或日历">不是同一例行</button>
+                </div>
+              </section>
+
+              <div class="quiet-receipt state-quiet" hidden style="border:1px solid var(--line);border-radius:8px"><i aria-hidden="true"></i><strong>与例行一致</strong><span>本场不显示差分卡</span></div>
+              <div class="uncertain-receipt state-uncertain" hidden style="border:1px solid #ead8a9;border-radius:8px"><i aria-hidden="true"></i><strong>暂未合并</strong><span>只显示单场 cue</span></div>
+
+              <section class="transcript">
+                <h3>实时转写</h3>
+                <div class="utterance"><b>MS</b><div><strong>Mobile SDK · 10:14</strong><p>Team 已经补上了，今天主要确认 estimate 的合并口径。</p></div></div>
+                <div class="utterance"><b>EQ</b><div><strong>You · 10:15</strong><p>先确认 DEV 和 QA 是覆盖还是求和，避免表里重复统计。</p></div></div>
+                <div class="utterance"><b>AI</b><div><strong>Personal AI · 当前</strong><p>这条仍是会中暂定信息；会后会用 transcript 与 meeting outcome 固化或撤回。</p></div></div>
+              </section>
+            </div>
+          </aside>
+        </section>
+      </div>
+
+      <section class="drawer" id="baselineDrawer" hidden aria-modal="true" role="dialog" aria-labelledby="baselineTitle">
+        <div class="drawer-panel">
+          <div class="drawer-head"><div><h2 id="baselineTitle">例行基线</h2><p>稳定信息仍然存在，只是默认不再重复占据注意力。</p></div><button class="icon-close" type="button" data-close title="关闭例行基线" aria-label="关闭例行基线">×</button></div>
+          <div class="baseline-list">
+            <div class="baseline-row"><strong>目的 · 项目 daily 状态同步</strong><span>由最近 12 次 occurrence 支撑 · baseline v4</span></div>
+            <div class="baseline-row"><strong>固定节奏 · 工作日 10:00 / 30 分钟</strong><span>Calendar recurrence · 单次改期会作为差分</span></div>
+            <div class="baseline-row"><strong>稳定议题 · 进度、风险、release blocker</strong><span>最近 7 次出现 6 次 · 不含本次新增 Estimate 议题</span></div>
+            <div class="baseline-row"><strong>固定来源 · Daily board 与 meeting outcome</strong><span>会议链接和 dial-in secret 不进入基线</span></div>
+            <div class="baseline-row"><strong>常驻角色 · 项目、Mobile SDK、QA</strong><span>只保留角色，不在 Demo 展示真实参会人</span></div>
+          </div>
+          <div class="receipt-box">查看是只读操作。基线 v4 不覆盖任何原始 Calendar、消息或会议记录；系列关系修正后可从原始 occurrence 重算。</div>
+        </div>
+      </section>
+
+      <section class="drawer" id="occurrencesDrawer" hidden aria-modal="true" role="dialog" aria-labelledby="occurrencesTitle">
+        <div class="drawer-panel">
+          <div class="drawer-head"><div><h2 id="occurrencesTitle">最近 3 次发生记录</h2><p>每次 occurrence 独立存在；差分不会把它们合并成一份新真相。</p></div><button class="icon-close" type="button" data-close title="关闭原始发生记录" aria-label="关闭原始发生记录">×</button></div>
+          <div class="occurrence-list">
+            <div class="occurrence-row"><strong>8 月 5 日 · 当前 occurrence</strong><span>Calendar agenda + live transcript（会中暂定）· 2 项变化候选</span></div>
+            <div class="occurrence-row"><strong>7 月 29 日 · occurrence #29</strong><span>Calendar + meeting outcome · 1 条开放问题</span></div>
+            <div class="occurrence-row"><strong>7 月 28 日 · occurrence #28</strong><span>Calendar only · transcript 缺失，未声称“无变化”</span></div>
+          </div>
+          <div class="receipt-box">范围：同一个 Calendar series ID 下最近 3 次 occurrence。已排除 1 场同标题但 organizer 不同的会议。</div>
+        </div>
+      </section>
+
+      <section class="modal" id="correctionModal" hidden aria-modal="true" role="dialog" aria-labelledby="correctionTitle">
+        <div class="modal-panel">
+          <div class="modal-head"><div><h2 id="correctionTitle">确认不是同一例行？</h2><p>只修正 Personal AI 对本次 occurrence 的系列归属。</p></div><button class="icon-close" type="button" data-close title="取消修正" aria-label="取消修正">×</button></div>
+          <ul class="scope-list">
+            <li><b>会改变：</b>本次 series membership；相关 baseline / delta 标记 stale 并重算。</li>
+            <li><b>不会改变：</b>Calendar、会议邀请、Jira、参会人或任何外部数据。</li>
+            <li><b>不会删除：</b>原始 Calendar occurrence、会议记录和历史差分审计。</li>
+          </ul>
+          <div class="modal-actions"><button class="outline-button" type="button" data-close>取消</button><button class="danger-button" type="button" id="confirmCorrection">确认拆分并重算</button></div>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const sceneButtons = [...document.querySelectorAll('[data-scene]')];
+      const stateButtons = [...document.querySelectorAll('[data-state]')];
+      const todayScene = document.getElementById('todayScene');
+      const meetingScene = document.getElementById('meetingScene');
+      const toast = document.getElementById('toast');
+      let toastTimer;
+
+      function setScene(scene) {
+        todayScene.hidden = scene !== 'today';
+        meetingScene.hidden = scene !== 'meeting';
+        sceneButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.scene === scene)));
+      }
+
+      function setState(state) {
+        document.querySelectorAll('.state-changed').forEach((node) => { node.hidden = state !== 'changed'; });
+        document.querySelectorAll('.state-quiet').forEach((node) => { node.hidden = state !== 'quiet'; });
+        document.querySelectorAll('.state-uncertain').forEach((node) => { node.hidden = state !== 'uncertain'; });
+        stateButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.state === state)));
+      }
+
+      function closeOverlays() {
+        document.querySelectorAll('.drawer, .modal').forEach((node) => { node.hidden = true; });
+      }
+
+      function showToast(message) {
+        clearTimeout(toastTimer);
+        toast.innerHTML = message;
+        toast.hidden = false;
+        toastTimer = setTimeout(() => { toast.hidden = true; }, 4800);
+      }
+
+      sceneButtons.forEach((button) => button.addEventListener('click', () => setScene(button.dataset.scene)));
+      stateButtons.forEach((button) => button.addEventListener('click', () => setState(button.dataset.state)));
+
+      document.querySelectorAll('.delta-item').forEach((button) => {
+        button.addEventListener('click', () => {
+          const detail = button.querySelector('.evidence-detail');
+          if (!detail) return;
+          const willOpen = detail.hidden;
+          detail.hidden = !willOpen;
+          button.setAttribute('aria-expanded', String(willOpen));
+        });
+      });
+
+      document.querySelectorAll('[data-open]').forEach((button) => {
+        button.addEventListener('click', () => {
+          closeOverlays();
+          const target = button.dataset.open;
+          if (target === 'baseline') document.getElementById('baselineDrawer').hidden = false;
+          if (target === 'occurrences') document.getElementById('occurrencesDrawer').hidden = false;
+          if (target === 'correction') document.getElementById('correctionModal').hidden = false;
+        });
+      });
+
+      document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', closeOverlays));
+      document.querySelectorAll('.drawer, .modal').forEach((overlay) => {
+        overlay.addEventListener('click', (event) => { if (event.target === overlay) closeOverlays(); });
+      });
+
+      document.getElementById('confirmCorrection').addEventListener('click', () => {
+        closeOverlays();
+        setState('uncertain');
+        showToast('<strong>已拆分并排队重算。</strong> 只修改 Personal AI 系列关系；Calendar、会议与原始 occurrence 未改变。');
+      });
+
+      document.getElementById('joinMeeting').addEventListener('click', () => {
+        showToast('<strong>Demo 未执行加入会议。</strong> 生产入口仍由现有 Video Home 处理，本能力只提供记忆差分。');
+      });
+
+      document.getElementById('resetDemo').addEventListener('click', () => {
+        closeOverlays();
+        setScene('today');
+        setState('changed');
+        document.querySelectorAll('.evidence-detail').forEach((node) => { node.hidden = true; });
+        document.querySelectorAll('.delta-item').forEach((node) => node.setAttribute('aria-expanded', 'false'));
+        showToast('<strong>已恢复初始演示。</strong> 今日日程 · 有变化。');
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeOverlays();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -5,7 +5,7 @@
 - Feature: `证据守望契约`
 - Capability: Memory Service
 - Source doc: `docs/features/evidence_watch_contracts.md`
-- Index row: `docs/features/index.md`
+- Index row: `docs/index.md`
 
 ## Context checks
 

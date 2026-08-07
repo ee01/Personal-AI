@@ -2,7 +2,7 @@
 
 ## 2026-06-14
 
-- Read `AGENT.md`, the planning-file skill, random feature-loop memory skill, `docs/progressing/to-verify.md`, `docs/features/index.md`, automation memory, and the local Reminder list state.
+- Read `AGENT.md`, the planning-file skill, random feature-loop memory skill, `docs/progressing/to-verify.md`, `docs/index.md`, automation memory, and the local Reminder list state.
 - Confirmed no local Reminders list named `Personal AI` exists.
 - Selected `系统观察规则` under Message Analysis after avoiding the freshest exact automation-memory feature families.
 - Inspected `docs/features/message_analysis.md`, `src/watchRules.ts`, `src/modals/topic-modal.tsx`, `src/modals/topic-rule-safety.ts`, `tools/verify-message-analysis-rule-diagnostics-e2e.mjs`, and package verify commands.

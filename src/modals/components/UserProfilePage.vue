@@ -488,6 +488,24 @@
                 <span class="profile-evidence-scope-label">证据审计</span>
                 <span>{{ getEvidenceInspectReceipt(prediction) }}</span>
               </div>
+              <div
+                v-if="prediction.claimAttributionReceipt"
+                class="profile-claim-attribution-receipt"
+                :class="`receipt-${prediction.claimAttributionReceipt.tone}`"
+                :aria-label="prediction.claimAttributionReceipt.ariaLabel"
+              >
+                <div class="profile-claim-attribution-head">
+                  <span>{{ prediction.claimAttributionReceipt.label }}</span>
+                  <strong>{{ prediction.claimAttributionReceipt.title }}</strong>
+                </div>
+                <span>{{ prediction.claimAttributionReceipt.summary }}</span>
+                <span v-if="prediction.claimAttributionReceipt.details.length">
+                  {{ prediction.claimAttributionReceipt.details.join('；') }}
+                </span>
+                <span class="profile-claim-attribution-boundary">
+                  {{ prediction.claimAttributionReceipt.boundary }}
+                </span>
+              </div>
               <component
                 :is="evidence.sourceUrl ? 'a' : 'span'"
                 v-for="(evidence, evidenceIndex) in (prediction.evidencePreview || []).slice(0, 3)"
@@ -742,6 +760,24 @@
                   <span class="profile-evidence-scope-label">证据审计</span>
                   <span>{{ getEvidenceInspectReceipt(item) }}</span>
                 </div>
+                <div
+                  v-if="item.claimAttributionReceipt"
+                  class="profile-claim-attribution-receipt"
+                  :class="`receipt-${item.claimAttributionReceipt.tone}`"
+                  :aria-label="item.claimAttributionReceipt.ariaLabel"
+                >
+                  <div class="profile-claim-attribution-head">
+                    <span>{{ item.claimAttributionReceipt.label }}</span>
+                    <strong>{{ item.claimAttributionReceipt.title }}</strong>
+                  </div>
+                  <span>{{ item.claimAttributionReceipt.summary }}</span>
+                  <span v-if="item.claimAttributionReceipt.details.length">
+                    {{ item.claimAttributionReceipt.details.join('；') }}
+                  </span>
+                  <span class="profile-claim-attribution-boundary">
+                    {{ item.claimAttributionReceipt.boundary }}
+                  </span>
+                </div>
                 <component
                   :is="evidence.sourceUrl ? 'a' : 'span'"
                   v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
@@ -911,6 +947,24 @@
                   <div class="profile-evidence-scope-receipt">
                     <span class="profile-evidence-scope-label">证据审计</span>
                     <span>{{ getEvidenceInspectReceipt(item) }}</span>
+                  </div>
+                  <div
+                    v-if="item.claimAttributionReceipt"
+                    class="profile-claim-attribution-receipt"
+                    :class="`receipt-${item.claimAttributionReceipt.tone}`"
+                    :aria-label="item.claimAttributionReceipt.ariaLabel"
+                  >
+                    <div class="profile-claim-attribution-head">
+                      <span>{{ item.claimAttributionReceipt.label }}</span>
+                      <strong>{{ item.claimAttributionReceipt.title }}</strong>
+                    </div>
+                    <span>{{ item.claimAttributionReceipt.summary }}</span>
+                    <span v-if="item.claimAttributionReceipt.details.length">
+                      {{ item.claimAttributionReceipt.details.join('；') }}
+                    </span>
+                    <span class="profile-claim-attribution-boundary">
+                      {{ item.claimAttributionReceipt.boundary }}
+                    </span>
                   </div>
                   <component
                     :is="evidence.sourceUrl ? 'a' : 'span'"
@@ -4545,6 +4599,44 @@ onMounted(() => {
   color: #1d4f91;
   font-weight: 800;
   flex-shrink: 0;
+}
+
+.profile-claim-attribution-receipt {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #f1d49a;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #68512d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.profile-claim-attribution-receipt.receipt-corrected {
+  border-color: #bfd5f5;
+  background: #f4f8ff;
+  color: #405d82;
+}
+
+.profile-claim-attribution-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profile-claim-attribution-head span {
+  color: #8a5a00;
+  font-weight: 800;
+}
+
+.profile-claim-attribution-receipt.receipt-corrected
+  .profile-claim-attribution-head span {
+  color: #1d4f91;
+}
+
+.profile-claim-attribution-boundary {
+  color: #6c757d;
 }
 
 a.profile-evidence-item:hover .profile-evidence-label {

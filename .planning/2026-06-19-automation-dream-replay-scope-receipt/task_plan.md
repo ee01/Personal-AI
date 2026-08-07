@@ -16,8 +16,8 @@ Goal: improve the randomly selected `梦境重放` feature by confirming docs an
 
 ## Decisions
 
-- Selected feature: `梦境重放` in `docs/features/index.md`.
-- Source doc: `docs/features/memory_system.md`.
+- Selected feature: `梦境重放` in `docs/index.md`.
+- Source doc: `docs/memory_system.md`.
 - Main UI file: `src/modals/components/DreamInsights.vue`.
 - Existing E2E: `tools/verify-memory-dreams-e2e.mjs`.
 - Local Reminders is reachable, but no `Personal AI` list exists, so there are no related Reminder items to incorporate or complete.

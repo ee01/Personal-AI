@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮随机命中 `docs/features/index.md` 里的 `自定义消息分析提示词 / Prompt Config`。当前文档与代码已经覆盖草稿预览、已生效基线、注入范围、复制审计和提示词风险确认，但用户上下文字段如果误粘贴 token、API key、password、private key 或 webhook，页面只会把它当作普通低优先级 `user_context` 数据保存、预览并尝试备份。
+本轮随机命中 `docs/index.md` 里的 `自定义消息分析提示词 / Prompt Config`。当前文档与代码已经覆盖草稿预览、已生效基线、注入范围、复制审计和提示词风险确认，但用户上下文字段如果误粘贴 token、API key、password、private key 或 webhook，页面只会把它当作普通低优先级 `user_context` 数据保存、预览并尝试备份。
 
 ## 外部参考
 

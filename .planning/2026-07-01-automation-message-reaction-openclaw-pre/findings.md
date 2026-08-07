@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Automation request: choose a random feature from `docs/features/index.md`, reconcile docs and code, search related products and papers, implement incomplete/low-decision improvements, inspect UX/bugs/blockers, check Reminders feedback, plan first, then implement and verify as fully as practical.
+- Automation request: choose a random feature from `docs/index.md`, reconcile docs and code, search related products and papers, implement incomplete/low-decision improvements, inspect UX/bugs/blockers, check Reminders feedback, plan first, then implement and verify as fully as practical.
 - Selected feature: `联动操作 / Openclaw`.
 - Capability: Message Reaction.
 - Source document: `docs/features/message_reaction.md`.
@@ -30,7 +30,7 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/message_reaction.md`
 - `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`
 - Slack Workflow Builder, Zapier trigger setup, Microsoft Copilot Studio Request for Information, and Huang/Cakmak TAP mental-model paper

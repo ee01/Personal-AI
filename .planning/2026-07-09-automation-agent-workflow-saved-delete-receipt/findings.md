@@ -2,7 +2,7 @@
 
 ## Repo State
 
-- `docs/progressing/to-verify.md` 为“暂无”，本轮可以从 `docs/features/index.md` 随机选择已上线功能。
+- `docs/progressing/to-verify.md` 为“暂无”，本轮可以从 `docs/index.md` 随机选择已上线功能。
 - 自动化记忆显示最近覆盖过 User Profile、Meeting History、Evidence Watch、Google Slides、Message Reaction、Scheduled Messages 等，本轮避开这些新鲜目标。
 - Worktree 已有大量未提交变更；本轮只在 Agent Workflow 保存样例删除回执这条 UX 边界上增量修改。
 

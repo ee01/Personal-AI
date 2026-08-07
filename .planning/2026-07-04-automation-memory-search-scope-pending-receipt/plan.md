@@ -10,7 +10,7 @@ Complete
 
 ### Phase 1: Discovery
 - [x] Read `AGENT.md`, feature index, automation memory, memory workflow notes, and `docs/progressing/to-verify.md`.
-- [x] Randomly sample `docs/features/index.md` and select the first eligible non-fresh target.
+- [x] Randomly sample `docs/index.md` and select the first eligible non-fresh target.
 - [x] Check Reminders via AppleScript and EventKit fallback.
 - [x] Inspect Memory Search scope docs, UI, presentation helpers, and E2E/static verifier.
 - **Status:** complete
@@ -43,7 +43,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `工作/个人/全部范围语义` in `docs/features/memory_system.md` | Random sample first eligible target after skipping recent exact/family automation targets. |
+| Target `工作/个人/全部范围语义` in `docs/memory_system.md` | Random sample first eligible target after skipping recent exact/family automation targets. |
 | Add a pending receipt instead of backend scope changes | The risk is user perception during scope switching, not recall correctness. |
 | Keep results visible while labeling them stale/pending | Avoids layout churn and preserves prior evidence while making the current request boundary explicit. |
 

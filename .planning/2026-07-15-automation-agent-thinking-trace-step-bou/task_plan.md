@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, current automation memory, and Agent Thinking docs/source/E2E.
+- [x] Read `AGENT.md`, `docs/index.md`, current automation memory, and Agent Thinking docs/source/E2E.
 - [x] Check `docs/progressing/to-verify.md`.
 - [x] Check local Reminders through AppleScript and EventKit.
 - [x] Gather external references for agent trace/HITL UX.
@@ -23,7 +23,7 @@ Complete
 ### Phase 3: Implementation
 - [x] Add shared `title` / `aria-label` boundaries to uncovered step-locator buttons in `src/agent-visualizer.tsx`.
 - [x] Update `tools/verify-agent-thinking-options-e2e.mjs` to assert the new boundaries.
-- [x] Update `docs/features/agent_thinking.md` and `docs/features/index.md` concisely.
+- [x] Update `docs/features/agent_thinking.md` and `docs/index.md` concisely.
 - **Status:** complete
 
 ### Phase 4: Testing & Verification

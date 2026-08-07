@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机选中 `docs/features/index.md` 中的 `豆包互联 / Doubao Bridge`
+- 随机选中 `docs/index.md` 中的 `豆包互联 / Doubao Bridge`
 - 本轮只处理 Quick Ask 的状态胶囊 / 状态卡路径
 
 ## 背景检查

@@ -28,5 +28,5 @@
 2. 失败时不再显示 `暂无已排除画像条目`，而显示 `已排除画像读取失败`，说明当前只是旧快照/空快照，不能证明没有 retracted 画像。
 3. 成功读取时显示 `status=retracted`、返回数量、当前快照只读、不确认/恢复/导出/写入 USER_CORE 的边界。
 4. 更新 `tools/verify-user-profile-export-e2e.mjs`，覆盖读取失败不误报为空、成功快照回执、空快照回执。
-5. 更新 `docs/features/user_profile_system.md` 和 `docs/features/index.md`，保持文档精简。
+5. 更新 `docs/features/user_profile_system.md` 和 `docs/index.md`，保持文档精简。
 6. 验证: `node --check`、`npm run verify:user-profile-system`、`npm start` 首次编译、`node tools/verify-user-profile-export-e2e.mjs`、 scoped `git diff --check`。

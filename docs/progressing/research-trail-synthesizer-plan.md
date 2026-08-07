@@ -494,9 +494,9 @@ npm run eval:run -- --suite research-trail-synthesizer --no-repair
 如果后续实现，应在最后把关键逻辑精简维护进正式功能文档：
 
 - `docs/features/memory_capture.md`：补 source memory 如何加入 research trail。
-- `docs/features/memory_system.md`：补 `research_trail` source type、召回和 Ask/Compose 集成。
-- `docs/features/compose_assist.md`：补 `research_patch` 类型和不自动发送边界。
-- 如果 Research Trail 有独立路由和 API，新增 `docs/features/research_trails.md`，并在 `docs/features/index.md` 新增小功能点。
+- `docs/memory_system.md`：补 `research_trail` source type、召回和 Ask/Compose 集成。
+- `docs/features/assist.md`：补 `research_patch` 类型和不自动发送边界。
+- 如果 Research Trail 有独立路由和 API，新增 `docs/features/research_trails.md`，并在 `docs/index.md` 新增小功能点。
 
 完成后，如果 `docs/progressing/research-trail-synthesizer-plan.md` 的内容已迁入正式文档，应删除或标记为已迁移，避免 progressing 和 features 双真源。
 

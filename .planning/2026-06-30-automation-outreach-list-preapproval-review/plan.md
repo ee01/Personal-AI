@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机选中功能：`主动询问`（Memory Service / `docs/features/memory_system.md`）
+- 随机选中功能：`主动询问`（Memory Service / `docs/memory_system.md`）
 - 入口：`memory-exploring.html#/outreach`
 - 主要文件：`src/modals/components/OutreachSessions.vue`、`src/modals/components/OutreachSessionDetail.vue`、`tools/verify-outreach-sessions-e2e.mjs`
 
@@ -23,7 +23,7 @@
 2. 当待审批会话已经有发送前证据或回复线索时，禁用列表一键 `批准发送`，改为 `先到详情复核`。
 3. 保留详情页批准路径，让用户在完整发送前复核、证据面板和操作范围回执同屏时决定批准、取消或编辑问题。
 4. 更新 Outreach E2E 覆盖待审批筛选列表和被拦截的一键批准按钮。
-5. 同步 `docs/features/memory_system.md`，说明列表不会绕过已有证据的外发复核。
+5. 同步 `docs/memory_system.md`，说明列表不会绕过已有证据的外发复核。
 
 ## 实现结果
 
@@ -37,5 +37,5 @@
 - `node --check tools/verify-outreach-sessions-e2e.mjs`
 - `npm start -- --progress` 首次编译成功后停止
 - `node tools/verify-outreach-sessions-e2e.mjs`
-- `git diff --check -- src/modals/components/OutreachSessions.vue tools/verify-outreach-sessions-e2e.mjs docs/features/memory_system.md`
+- `git diff --check -- src/modals/components/OutreachSessions.vue tools/verify-outreach-sessions-e2e.mjs docs/memory_system.md`
 - `pgrep -fl "webpack.*webpack\\.dev\\.cjs"` 无残留 watcher

@@ -12,9 +12,8 @@
 
 ### 核心分析系统
 - [`agent_thinking.md`](features/agent_thinking.md) - 智能Agent思考系统
-- [`agent_workflow.md`](features/agent_workflow.md) - Agent工作流系统 
-- [`message_analysis.md`](features/message_analysis.md) - 记忆入口消息观察规则与自动化编排
-- [`memory_system.md`](features/memory_system.md) - 实体记忆系统综合设计文档 **(完整实现)**
+- [`message_analysis.md`](features/message_analysis.md) - 聊天消息分析入库与自动化编排（含 Agent Workflow 编排引擎）
+- [`memory_system.md`](memory_system.md) - 实体记忆系统综合设计文档 **(完整实现)**
 
 ### 专项功能
 - [`custom_prompts.md`](features/custom_prompts.md) - 自定义提示词功能

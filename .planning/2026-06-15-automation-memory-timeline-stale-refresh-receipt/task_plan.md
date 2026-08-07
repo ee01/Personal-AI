@@ -7,7 +7,7 @@ Goal: improve the randomly selected `记忆时间轴` feature by keeping docs cu
 | Phase | Status | Scope |
 | --- | --- | --- |
 | 1 | completed | Read `AGENT.md`, automation memory, memory registry hints, feature index, carry-over list, Reminder list names, and current worktree state |
-| 2 | completed | Select `记忆时间轴` from `docs/features/index.md` while avoiding the freshest automation-memory feature families |
+| 2 | completed | Select `记忆时间轴` from `docs/index.md` while avoiding the freshest automation-memory feature families |
 | 3 | completed | Inspect timeline docs, source files, targeted verifier, and Playwright E2E |
 | 4 | completed | Implement the scoped stale-refresh UX boundary and update docs/verifiers |
 | 5 | completed | Run targeted verify, first successful `npm start` compile, E2E, and scoped diff checks |
@@ -16,7 +16,7 @@ Goal: improve the randomly selected `记忆时间轴` feature by keeping docs cu
 ## Decisions
 
 - Selected feature: `记忆时间轴` / Memory Exploring.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Implementation slice: preserve the last successful timeline snapshot when a refresh fails for the same scope and range, and show an explicit stale-snapshot receipt instead of clearing the list.
 - First-load failure should remain a true error/empty state, because there is no prior data to preserve.
 - Scope/range changes should not reuse a previous snapshot after failure; wrong-scope stale data is worse than an empty failure state.

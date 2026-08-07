@@ -2,7 +2,7 @@
 
 ## Goal
 
-Improve the `主动询问` user journey from `docs/features/index.md` by inspecting docs/code, checking Reminders, using a small product/paper scan, implementing one bounded UX/trust fix, updating docs, and running targeted verification plus extension build/E2E.
+Improve the `主动询问` user journey from `docs/index.md` by inspecting docs/code, checking Reminders, using a small product/paper scan, implementing one bounded UX/trust fix, updating docs, and running targeted verification plus extension build/E2E.
 
 ## Phases
 
@@ -18,7 +18,7 @@ Improve the `主动询问` user journey from `docs/features/index.md` by inspect
 
 - Feature: `主动询问`
 - Capability: `Memory Service`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Primary UI: `src/modals/components/OutreachSessions.vue` and `src/modals/components/OutreachSessionDetail.vue`
 - Existing E2E: `tools/verify-outreach-sessions-e2e.mjs`
 

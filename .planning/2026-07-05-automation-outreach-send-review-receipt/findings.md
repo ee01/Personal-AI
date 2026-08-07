@@ -12,7 +12,7 @@
 
 ## Code/UX Findings
 
-- `docs/features/memory_system.md` already documents Outreach list triage, focus lane, detail operation scope, pre-dispatch review, draft receipt, and final success/failure operation receipts.
+- `docs/memory_system.md` already documents Outreach list triage, focus lane, detail operation scope, pre-dispatch review, draft receipt, and final success/failure operation receipts.
 - `src/modals/components/OutreachSessionDetail.vue` currently clears `operationResult` before `approve`, `cancel`, `retry`, and `save`, then waits for the API response. During that latency the only visible state is disabled buttons; there is no in-flight receipt saying the page has not confirmed approval, external send, cancel, retry, or draft persistence yet.
 - Existing E2E already covers final failure and success receipts for approval, so the narrowest useful fix is to add a pending operation receipt in the same detail receipt slot and assert it before the delayed approval response resolves.
 

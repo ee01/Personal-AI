@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Check that the feature document still matches code.
 - Search current industry products and papers for similar functionality and constructive ideas.
 - Inspect unfinished work and implement any low-decision improvement.
@@ -14,13 +14,13 @@
 
 - `docs/progressing/to-verify.md` says `暂无。`, so there is no carry-over verification item to continue.
 - Existing automation memory shows very recent sweeps of OpenClaw Action Queue receipts, Ask follow-up receipts, Google Slides recovery receipts, search feedback failure receipts, Prompt Config sensitive-context receipts, Skill Foundry decision receipts, Meeting Pilot alert receipts, Native Join app retry, Agent Workflow baseline acceptance, Memory Ingestion batch trust summary, Task Scheduler refresh receipts, Today Mission feedback, Decision Center watch checks, Jira Automation Import name checks, Agent Thinking diagnostic copy, Compose Assist review backout, Topic deep-link stability, and Doubao Mobile Context manual receipts.
-- Random target selected after avoiding those freshest exact focus areas: `多用户隔离` / Memory Service, documented in `docs/features/memory_system.md`.
+- Random target selected after avoiding those freshest exact focus areas: `多用户隔离` / Memory Service, documented in `docs/memory_system.md`.
 - Local Reminders list names were readable on the second probe: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, and `Tasks`.
 - No visible Reminders list named `Personal AI`; no Reminder item can be incorporated or marked complete in this run.
 
 ## Code And UX Findings
 
-- `docs/features/memory_system.md` describes multi-user isolation as per-user SQLite at `data/users/{userId}/memory.db`, `X-User-Id` identity resolution, read-only fallback to `default`, write-operation fail-closed behavior when identity is missing or blank, SSE `?userId=`, `/stats` identity receipts, and visible Memory Exploring identity status.
+- `docs/memory_system.md` describes multi-user isolation as per-user SQLite at `data/users/{userId}/memory.db`, `X-User-Id` identity resolution, read-only fallback to `default`, write-operation fail-closed behavior when identity is missing or blank, SSE `?userId=`, `/stats` identity receipts, and visible Memory Exploring identity status.
 - Backend code largely matches the document:
   - `memory-service/src/utils/userIdentity.ts` validates user IDs with `^[a-zA-Z0-9._-]+$`, rejects duplicate headers, and treats missing/blank headers as `default` fallback.
   - `memory-service/src/middleware/auth.ts` attaches a per-user context for every non-health/docs request.
@@ -50,8 +50,8 @@
 ## Resources
 
 - `AGENT.md`
-- `docs/features/index.md`
-- `docs/features/memory_system.md`
+- `docs/index.md`
+- `docs/memory_system.md`
 - `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`
 - OpenAI Memory FAQ: https://help.openai.com/en/articles/8590148-memory-faq
 - Anthropic Claude memory announcement: https://claude.com/blog/memory

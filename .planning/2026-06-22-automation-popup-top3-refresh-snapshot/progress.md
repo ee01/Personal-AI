@@ -3,7 +3,7 @@
 ## 2026-06-22
 
 - Read repo workflow and validation policy from `AGENT.md`.
-- Read automation memory, memory registry hints, `docs/progressing/to-verify.md`, `docs/features/index.md`, and current worktree state.
+- Read automation memory, memory registry hints, `docs/progressing/to-verify.md`, `docs/index.md`, and current worktree state.
 - Checked local Reminders list names; `Personal AI` is absent.
 - Randomly sampled eligible feature rows and selected `Popup Top 3` because it was not a recent exact automation target.
 - Inspected `docs/features/today_pilot.md`, `src/popup.tsx`, `tools/verify-day-pilot-home.ts`, and `tools/verify-today-pilot-home-e2e.mjs`.

@@ -1,4 +1,7 @@
-import { getGoogleAuthToken } from './utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthToken,
+} from './utils/googleAuth';
 
 export class Sheet {
   private token: string;
@@ -36,7 +39,10 @@ export class Sheet {
   }
 
   static async getToken(): Promise<string> {
-    const token = await getGoogleAuthToken({ caller: 'Sheet.getToken' });
+    const token = await getGoogleAuthToken({
+      caller: 'Sheet.getToken',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+    });
     if (!token) {
       throw new Error('无法获取 Google 授权');
     }
@@ -85,6 +91,29 @@ export class Sheet {
     
     const json = await res.json();
     return json.values;
+  }
+
+  /**
+   * 只读取当前工作表中的指定 A1 范围，避免调用方为了取一个有界窗口下载整张表。
+   * 例如 `1:501` 表示表头加前 500 条数据行。
+   */
+  async readRange(
+    range: string,
+    valueRenderOption: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA' = 'FORMATTED_VALUE',
+  ): Promise<string[][]> {
+    const a1Range = encodeURIComponent(`${this.sheetName}!${range}`);
+    const sheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}/values/${a1Range}?valueRenderOption=${valueRenderOption}`;
+    const res = await fetch(sheetUrl, {
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`读取 Sheet 范围失败 (${res.status}): ${errorText}`);
+    }
+
+    const json = await res.json();
+    return json.values || [];
   }
 
   async writeSheet(values: string[][], position = 'A1'): Promise<any> {

@@ -1,6 +1,6 @@
 # Agent Workflow orchestration receipt plan
 
-Target: `Agent Workflow 多 Agent 编排` in `docs/features/agent_workflow.md`.
+Target: `Agent Workflow 多 Agent 编排` in `docs/features/message_analysis.md`.
 
 Context:
 - `docs/progressing/to-verify.md` is empty.
@@ -12,4 +12,4 @@ Plan:
 2. Keep the receipt derived from existing result trace and current enabled-agent config; do not change runtime ordering or real `messageDealing.ts` behavior.
 3. Render the receipt near the top of the single-run result before deeper verdict/coverage cards.
 4. Cover the helper and Options E2E with stable text assertions.
-5. Update `docs/features/agent_workflow.md` with the new current behavior and run the focused verification ladder.
+5. Update `docs/features/message_analysis.md` with the new current behavior and run the focused verification ladder.

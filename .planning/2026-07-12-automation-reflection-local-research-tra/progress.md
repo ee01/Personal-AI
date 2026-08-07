@@ -7,7 +7,7 @@
 - **Started:** 2026-07-12
 
 ### Actions Taken
-- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Read the `planning-with-files` skill and initialized `.planning/2026-07-12-automation-reflection-local-research-tra/`.
 - Checked EventKit Reminders list `Personal AI`: 4 total items, 0 incomplete items.
 - Selected `反思本地研究补查`.

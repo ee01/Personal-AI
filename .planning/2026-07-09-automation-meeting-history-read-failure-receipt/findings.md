@@ -2,7 +2,7 @@
 
 ## Repo / Reminder
 
-- `docs/progressing/to-verify.md` 为空，适合从 `docs/features/index.md` 抽样新目标。
+- `docs/progressing/to-verify.md` 为空，适合从 `docs/index.md` 抽样新目标。
 - AppleScript 未列出 `Personal AI` Reminders；EventKit 找到 `Personal AI` 列表，4 条全部 completed，且都是 Doubao / digest / test 历史反馈，与会议历史归档无关。
 
 ## External Scan

@@ -14,6 +14,7 @@ import type {
   ResWindow,
   RoadmapItem,
   RoadmapSub,
+  RulerMode,
   TeamSnapshot,
   TeamSummary,
   ViewMode,
@@ -46,6 +47,11 @@ const INTENT_ERROR_TEXT: Record<string, string> = {
   item_has_jira: '该条目已在 Jira 中创建，不能从 Roadmap 删除，可退回 Backlog',
   jira_key_required: '缺少 Jira key',
   sub_not_found: '子任务不存在，可能已被其他人删除',
+  marker_not_found: '标记不存在，可能已被其他人删除',
+  label_required: '请填写名称',
+  phase_date_required: '阶段节点必须有日期',
+  phase_kind_required: '请选择节点类型',
+  invalid_marker_kind: '无效的标记类型',
 };
 
 export function intentErrorText(error?: string | null): string {
@@ -71,6 +77,8 @@ export function createRoadmapState() {
   const view = ref<ViewMode>('gantt');
   const resWin = ref<ResWindow>('2w');
   const focusQuarter = ref(CURQ);
+  /** Session-only Sprint↔month toggle; not persisted / not synced. */
+  const rulerMode = ref<RulerMode>('release');
 
   const modals = ref({
     team: false,
@@ -130,15 +138,46 @@ export function createRoadmapState() {
     };
   }
 
+  /**
+   * Expand/collapse is per-viewer UI state (URL `expand=` + local Set).
+   * Never read/write `item.expanded` from the shared snapshot for display —
+   * that field is legacy and must not affect other collaborators.
+   */
+  const expandedKeys = ref<Set<string>>(new Set());
+
+  function overlayExpand(snap: TeamSnapshot): TeamSnapshot {
+    return {
+      ...snap,
+      items: snap.items.map((item) => ({
+        ...item,
+        expanded: expandedKeys.value.has(item.key),
+      })),
+    };
+  }
+
+  function commitSnapshot(snap: TeamSnapshot) {
+    snapshot.value = overlayExpand(snap);
+  }
+
+  function setItemExpanded(key: string, open: boolean) {
+    const next = new Set(expandedKeys.value);
+    if (open) next.add(key);
+    else next.delete(key);
+    expandedKeys.value = next;
+    if (snapshot.value) {
+      snapshot.value = overlayExpand(snapshot.value);
+    }
+    syncUrl();
+  }
+
   function syncUrl() {
     if (!teamId.value) return;
     const p = new URLSearchParams();
     p.set('team', teamId.value);
     if (focusQuarter.value) p.set('q', focusQuarter.value);
     if (view.value !== 'gantt') p.set('view', view.value);
-    const expanded = scheduledItems.value
-      .filter((i) => i.expanded)
-      .map((i) => i.key);
+    const scheduledKeys = new Set(scheduledItems.value.map((i) => i.key));
+    const expanded = [...expandedKeys.value].filter((k) => scheduledKeys.has(k));
     if (expanded.length) p.set('expand', expanded.join(','));
     if (view.value === 'resource' && resWin.value !== '2w') p.set('w', resWin.value);
     const url = `${location.pathname}?${p.toString()}`;
@@ -168,28 +207,25 @@ export function createRoadmapState() {
     api.unsubscribeEvents();
     try {
       const snap = await api.fetchTeam(id);
-      snapshot.value = snap;
+      // Restore expand from URL when landing via link; clear when switching teams.
+      if (opts.fromUrl || opts.expand !== undefined) {
+        expandedKeys.value = new Set(
+          String(opts.expand || '')
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean),
+        );
+      } else {
+        expandedKeys.value = new Set();
+      }
+      commitSnapshot(snap);
       focusQuarter.value = readUrlParams().q || CURQ;
       view.value = readUrlParams().view || 'gantt';
       resWin.value = readUrlParams().w || '2w';
-      if (opts.expand) {
-        const keys = opts.expand.split(',').filter(Boolean);
-        for (const key of keys) {
-          const item = snap.items.find((i) => i.key === key);
-          if (item?.scheduled && editable.value) {
-            await api.sendIntent(id, {
-              op: 'expand',
-              itemKey: key,
-              baseVersion: item.version,
-            }).catch(() => undefined);
-          }
-        }
-        snapshot.value = await api.fetchTeam(id);
-      }
       activity.value = await api.fetchActivity(id);
       api.subscribeEvents(id, {
         onSnapshot: (s) => {
-          snapshot.value = s;
+          commitSnapshot(s);
         },
         onActivity: (entry) => {
           activity.value = [entry, ...activity.value].slice(0, 100);
@@ -206,12 +242,12 @@ export function createRoadmapState() {
   ) {
     if (!teamId.value || !editable.value) return;
     try {
-      snapshot.value = await api.sendIntent(teamId.value, intent);
+      commitSnapshot(await api.sendIntent(teamId.value, intent));
     } catch (err: unknown) {
       const e = err as { status?: number; body?: { error?: string } };
       if (e.status === 409) {
         toast('版本冲突，正在刷新…');
-        snapshot.value = await api.fetchTeam(teamId.value);
+        commitSnapshot(await api.fetchTeam(teamId.value));
       } else {
         toast(intentErrorText(e.body?.error));
       }
@@ -235,7 +271,7 @@ export function createRoadmapState() {
       if (addD(it.start, it.days - 1) < today) epics.push(it);
       else {
         for (const s of it.subs) {
-          if (!s.start || !s.days) continue;
+          if (s.cleared || !s.start || !s.days) continue;
           if (addD(s.start, s.days - 1) < today) {
             subs.push({ subId: s.id, item: it });
           }
@@ -255,7 +291,7 @@ export function createRoadmapState() {
     const out: Array<{ item: RoadmapItem; sub: RoadmapSub }> = [];
     for (const it of scheduledItems.value) {
       for (const s of it.subs) {
-        if (s.temp) out.push({ item: it, sub: s });
+        if (s.temp && !s.cleared) out.push({ item: it, sub: s });
       }
     }
     return out;
@@ -364,6 +400,7 @@ export function createRoadmapState() {
     view,
     resWin,
     focusQuarter,
+    rulerMode,
     modals,
     importOverwrite,
     teamId,
@@ -384,6 +421,8 @@ export function createRoadmapState() {
     pendingImportQuarters,
     chipList,
     syncUrl,
+    setItemExpanded,
+    commitSnapshot,
     postMessageState,
     pushStateToExtension,
   };

@@ -31,5 +31,5 @@
 - `src/modals/slides-analysis.tsx`: 新增提交中回执构造和 UI；等待态锁定审阅筛选与快捷筛选按钮。
 - `tools/verify-google-slides-analyzer-e2e.mjs`: 覆盖点击应用后、API 返回前的提交中回执和锁定控件。
 - `docs/features/google_slides_analyzer.md`: 记录提交中回执和等待态锁定边界。
-- `docs/features/index.md`: 更新 `Slides 写回预览` 简述。
+- `docs/index.md`: 更新 `Slides 写回预览` 简述。
 

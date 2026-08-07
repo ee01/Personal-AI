@@ -9,9 +9,9 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery And Plan
-- [x] Read AGENT.md, docs/features/index.md, docs/progressing/to-verify.md, automation memory, and relevant prior memory registry lines.
+- [x] Read AGENT.md, docs/index.md, docs/progressing/to-verify.md, automation memory, and relevant prior memory registry lines.
 - [x] Check Reminders list availability.
-- [x] Randomly select a non-recent feature candidate from docs/features/index.md.
+- [x] Randomly select a non-recent feature candidate from docs/index.md.
 - [x] Inspect target docs, code, and validation harnesses.
 - **Status:** complete
 
@@ -28,7 +28,7 @@ Complete
 - **Status:** complete
 
 ### Phase 4: Documentation And Closeout
-- [x] Update docs/features/memory_system.md with concise current behavior.
+- [x] Update docs/memory_system.md with concise current behavior.
 - [x] Run scoped git diff checks.
 - [x] Update automation memory with outcome and current run time.
 - **Status:** complete

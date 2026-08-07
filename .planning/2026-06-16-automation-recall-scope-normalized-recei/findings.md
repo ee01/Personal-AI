@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Randomly select one feature from `docs/features/index.md`.
+- Randomly select one feature from `docs/index.md`.
 - Ensure the feature doc matches current behavior without excessive implementation detail.
 - Search current product/research context for similar capabilities.
 - Implement low-decision unfinished or defective parts.
@@ -12,7 +12,7 @@
 ## Selected Feature
 - Random target: `工作/个人/全部范围语义`
 - Capability: Memory Service
-- Canonical doc: `docs/features/memory_system.md`
+- Canonical doc: `docs/memory_system.md`
 
 ## Local Reminder Finding
 - Reminders was readable.

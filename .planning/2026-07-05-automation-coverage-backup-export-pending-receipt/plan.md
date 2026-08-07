@@ -24,5 +24,5 @@
 2. Keep existing export success/failure behavior unchanged.
 3. Make the pending receipt distinguish a current unconfirmed request from any previous success/failure receipt.
 4. Update Coverage Map E2E to assert pending, success, and pending-after-success states.
-5. Update `docs/features/memory_coverage_map.md` and `docs/features/index.md` concisely.
+5. Update `docs/features/memory_coverage_map.md` and `docs/index.md` concisely.
 6. Verify with focused backup, Coverage E2E, first `npm start` compile, and scoped whitespace checks.

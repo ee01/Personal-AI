@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮从 `docs/features/index.md` 随机抽中 `记忆时间轴`。当前时间轴已经具备范围、来源、定位、打开动作和刷新失败回执，但用户在同一 scope / 时间窗口点击刷新时，旧列表会先被全屏 loading 挡住。作为真实用户，这会让人短暂无法判断：当前看到的是正在重新读取、旧快照仍有效，还是列表已经被清空。
+本轮从 `docs/index.md` 随机抽中 `记忆时间轴`。当前时间轴已经具备范围、来源、定位、打开动作和刷新失败回执，但用户在同一 scope / 时间窗口点击刷新时，旧列表会先被全屏 loading 挡住。作为真实用户，这会让人短暂无法判断：当前看到的是正在重新读取、旧快照仍有效，还是列表已经被清空。
 
 ## 外部对照
 
@@ -15,7 +15,7 @@
 
 1. 在 timeline presentation 层新增 `buildTimelineRefreshingSnapshotReceipt()`，说明同范围刷新正在进行、下面仍是上次成功快照、来源筛选仍只作用于旧批次、刷新成功后会替换。
 2. Timeline 页面区分同范围刷新和跨范围加载：同范围已有数据时不隐藏列表，只显示刷新中快照回执；切换 scope / 时间窗口后仍使用阻塞 loading，避免旧范围冒充新范围。
-3. 更新 `docs/features/memory_system.md` 的时间轴描述，补上刷新中和刷新失败的快照边界。
+3. 更新 `docs/memory_system.md` 的时间轴描述，补上刷新中和刷新失败的快照边界。
 4. 扩展 `tools/verify-memory-timeline.ts` 与 `tools/verify-memory-timeline-e2e.mjs`，覆盖 helper 文案、刷新中保留列表、跨范围失败不复用旧快照。
 
 ## 验证
@@ -23,4 +23,4 @@
 - `npm run verify:memory-timeline`
 - `npm start` 首次成功 compile 后停止 watcher
 - `node tools/verify-memory-timeline-e2e.mjs`
-- `git diff --check -- src/modals/timelinePresentation.ts src/modals/components/TimelinePage.vue tools/verify-memory-timeline.ts tools/verify-memory-timeline-e2e.mjs docs/features/memory_system.md .planning/2026-06-21-automation-memory-timeline-refresh-snapshot/plan.md`
+- `git diff --check -- src/modals/timelinePresentation.ts src/modals/components/TimelinePage.vue tools/verify-memory-timeline.ts tools/verify-memory-timeline-e2e.mjs docs/memory_system.md .planning/2026-06-21-automation-memory-timeline-refresh-snapshot/plan.md`

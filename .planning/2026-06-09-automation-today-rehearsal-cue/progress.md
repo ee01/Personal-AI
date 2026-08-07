@@ -5,7 +5,7 @@
 ### Phase 1: Discovery
 
 - **Status:** complete
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, `docs/progressing/to-verify.md`, root planning files, and the prior active automation plan.
+- Read `AGENT.md`, `docs/index.md`, automation memory, `docs/progressing/to-verify.md`, root planning files, and the prior active automation plan.
 - Checked local Reminders list names; no `Personal AI` list is visible.
 - Random sampler selected `今日预演提示` under Today Pilot / Rehearsal.
 - Created isolated planning files for this run.

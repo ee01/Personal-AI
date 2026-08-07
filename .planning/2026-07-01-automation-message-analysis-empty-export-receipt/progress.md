@@ -2,7 +2,7 @@
 
 ## 2026-07-01
 
-- 读取 `AGENT.md`、自动化记忆、`docs/progressing/to-verify.md`、`docs/features/index.md` 和既有 planning 状态。
+- 读取 `AGENT.md`、自动化记忆、`docs/progressing/to-verify.md`、`docs/index.md` 和既有 planning 状态。
 - 随机选中 `记忆入口规则` / Message Analysis，并确认近期虽有相邻改动，但本轮切口不同。
 - 检查 Reminders：没有 `Personal AI` 列表，未纳入或标记任何提醒项。
 - 检查 Message Analysis 文档、规则页、运行时 helper 和现有 E2E。

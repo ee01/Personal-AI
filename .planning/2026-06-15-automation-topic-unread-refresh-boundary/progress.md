@@ -8,7 +8,7 @@
 - Actions taken:
   - Read `AGENT.md`, automation memory, memory registry hints, and the random feature loop memory skill.
   - Read `docs/progressing/to-verify.md`; it has no pending item.
-  - Read `docs/features/index.md` and randomly selected from eligible rows after excluding freshest automation-memory families.
+  - Read `docs/index.md` and randomly selected from eligible rows after excluding freshest automation-memory families.
   - Checked local Reminders lists; no `Personal AI` list is visible.
 - Files created/modified:
   - `.planning/.active_plan`

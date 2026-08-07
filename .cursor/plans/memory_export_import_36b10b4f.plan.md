@@ -215,7 +215,7 @@ memory-backup.zip
 
 ## 关键参考文件
 
-- [docs/features/memory_system.md](/Users/Esone/git/personal-ai/docs/features/memory_system.md)
+- [docs/memory_system.md](/Users/Esone/git/personal-ai/docs/memory_system.md)
 - [memory-service/src/routes/export.ts](/Users/Esone/git/personal-ai/memory-service/src/routes/export.ts)
 - [memory-service/src/core/ExportEngine.ts](/Users/Esone/git/personal-ai/memory-service/src/core/ExportEngine.ts)
 - [src/services/MemoryServiceClient.ts](/Users/Esone/git/personal-ai/src/services/MemoryServiceClient.ts)

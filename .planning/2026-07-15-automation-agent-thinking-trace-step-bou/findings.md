@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Randomly select one feature from `docs/features/index.md`, avoid very recent repeats where practical, inspect docs/code, research comparable products/papers, make a constructive improvement, update docs, verify thoroughly, and close Reminder/automation memory.
+- Randomly select one feature from `docs/index.md`, avoid very recent repeats where practical, inspect docs/code, research comparable products/papers, make a constructive improvement, update docs, verify thoroughly, and close Reminder/automation memory.
 - Selected feature: `Agent Thinking 分析编排` in `docs/features/agent_thinking.md`.
 - Reminder state: AppleScript did not list `Personal AI`; EventKit did list it with 4 total items and 0 incomplete items. No Reminder item is related or available to complete.
 

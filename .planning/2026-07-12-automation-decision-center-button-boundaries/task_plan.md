@@ -2,8 +2,8 @@
 
 ## Target
 
-- Selected feature: `决策中心` from `docs/features/index.md`.
-- Source of truth: `docs/features/memory_system.md`.
+- Selected feature: `决策中心` from `docs/index.md`.
+- Source of truth: `docs/memory_system.md`.
 - Runtime surface: `src/modals/components/DecisionCenter.vue`.
 - Verifier: `tools/verify-decision-center-e2e.mjs`.
 
@@ -25,6 +25,6 @@
 1. Add compact `title` / `aria-label` boundary helpers for Decision Center refresh/retry, copy-review, answer, state-transition, watch-transition, and visibility toggles.
 2. Convert the `添加备注` clickable `div` into a real button while preserving visual styling and behavior.
 3. Extend the existing Decision Center E2E to assert the new pre-click boundaries before approving, copying, snoozing, restoring, retrying, rule-improvement handling, and watch actions.
-4. Update `docs/features/memory_system.md` and `docs/features/index.md` with the concise current behavior.
+4. Update `docs/memory_system.md` and `docs/index.md` with the concise current behavior.
 5. Verify with `node --check`, `npm start` first compile, the Decision Center E2E, and scoped `git diff --check`.
 

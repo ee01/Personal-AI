@@ -2,7 +2,7 @@
 
 ## Goal
 
-随机抽中 `docs/features/index.md` 里的 `主动询问`。本轮目标是让 Outreach 详情页在读取失败时保持真实状态边界：服务错误、网络错误或目录状态失败不能显示成“未找到该会话”，用户要能重试详情读取或返回列表继续处理。
+随机抽中 `docs/index.md` 里的 `主动询问`。本轮目标是让 Outreach 详情页在读取失败时保持真实状态边界：服务错误、网络错误或目录状态失败不能显示成“未找到该会话”，用户要能重试详情读取或返回列表继续处理。
 
 ## Context
 
@@ -16,7 +16,7 @@
 2. [complete] 做小范围业内产品和论文扫描，确认设计原则。
 3. [complete] 修复 `OutreachSessionDetail.vue` 详情加载失败呈现：保留错误原因、重试按钮、返回列表路径和边界文案。
 4. [complete] 更新 `tools/verify-outreach-sessions-e2e.mjs`，覆盖详情页 503/服务错误不能误报“未找到”。
-5. [complete] 更新 `docs/features/memory_system.md` 与 `docs/features/index.md` 的主动询问说明，保持文档最新但不堆细节。
+5. [complete] 更新 `docs/memory_system.md` 与 `docs/index.md` 的主动询问说明，保持文档最新但不堆细节。
 6. [complete] 验证：静态检查、`npm start` 首次成功编译、Outreach E2E、scoped `git diff --check`。
 
 ## Decisions

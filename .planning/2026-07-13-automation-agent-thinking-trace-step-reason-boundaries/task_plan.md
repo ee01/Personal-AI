@@ -16,7 +16,7 @@ Goal: improve the randomly selected `Agent Thinking trace 可视化` feature by 
 
 ## Decisions
 
-- Selected feature: `Agent Thinking trace 可视化` from `docs/features/index.md`.
+- Selected feature: `Agent Thinking trace 可视化` from `docs/index.md`.
 - Main doc: `docs/features/agent_thinking.md`.
 - Main implementation files: `src/agent-visualizer.tsx` and `src/agentVisualizerPresentation.ts`.
 - Main verifiers: `tools/verify-memory-entry-agent-thinking.ts` and `tools/verify-agent-thinking-options-e2e.mjs`.

@@ -2,11 +2,11 @@
 
 ## Goal
 
-Improve `动作队列` from `docs/features/index.md` by making action deep links trustworthy when the target action is outside the first visible list slice.
+Improve `动作队列` from `docs/index.md` by making action deep links trustworthy when the target action is outside the first visible list slice.
 
 ## Context
 
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Code surface: `src/modals/components/ActionQueue.vue`, `src/services/MemoryServiceClient.ts`, `memory-service/src/routes/actions.ts`, `memory-service/src/repositories/ActionRepository.ts`.
 - Existing verifier: `tools/verify-action-queue-e2e.mjs`.
 - Reminder check: EventKit found `Personal AI` with 4 items, all already completed and Doubao/Notification-related; none apply to Action Queue.
@@ -25,7 +25,7 @@ Improve `动作队列` from `docs/features/index.md` by making action deep links
 | 1 | complete | Read repo workflow, automation memory, feature index, docs, Reminders, Action Queue code, tests, and outside references. |
 | 2 | complete | Add backend/client support for `actionId` on `GET /actions` so direct links can locate one action outside normal pagination. |
 | 3 | complete | Add a visible `定位请求回执` on Action Queue when `actionId` is present, including found/not-found state and no-side-effect boundary. |
-| 4 | complete | Update `docs/features/memory_system.md` with the direct-link behavior and receipt boundary. |
+| 4 | complete | Update `docs/memory_system.md` with the direct-link behavior and receipt boundary. |
 | 5 | complete | Extend API and extension E2E verification for action-id lookup outside the first visible slice. |
 | 6 | complete | Run targeted memory-service test, `npm start` first compile, Action Queue E2E, scoped `git diff --check`, then update automation memory. |
 

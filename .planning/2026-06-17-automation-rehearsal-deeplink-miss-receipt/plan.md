@@ -4,7 +4,7 @@
 
 Feature: Rehearsal 管理页 (`memory-exploring.html#/rehearsals`).
 
-Random source: `docs/features/index.md` -> `Rehearsal 管理页`.
+Random source: `docs/index.md` -> `Rehearsal 管理页`.
 
 ## Plan
 

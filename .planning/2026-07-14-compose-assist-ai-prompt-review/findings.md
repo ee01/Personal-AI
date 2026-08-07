@@ -2,7 +2,7 @@
 
 ## Canonical documentation
 
-- `docs/features/compose_assist.md` explicitly owns ChatGPT, Doubao, Claude, and Gemini input-box assistance under `compose_to_ai`; this is not documented as a separate feature.
+- `docs/features/assist.md` explicitly owns ChatGPT, Doubao, Claude, and Gemini input-box assistance under `compose_to_ai`; this is not documented as a separate feature.
 - Web AI draft text is intentionally an enrichment signal and part of the context key. RingCentral/Jira draft text is not the primary recall query.
 - The documented trigger is input focus plus a recognized compose scene. After focus, draft changes immediately invalidate the old suggestion and schedule a debounced request; it is not documented as blur-only.
 - Web AI can return either a context pack or `suggestionType='prompt_patch'`. Prompt patch is selected for a clear task that lacks slots such as data source, output format, writeback boundary, validation, or failure receipts.

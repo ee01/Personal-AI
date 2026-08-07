@@ -6,7 +6,7 @@ Improve `Storyline Draft 页面` so users can inspect evidence sources without m
 
 ## Context
 
-- Feature selected from `docs/features/index.md`: `Storyline Draft 页面`.
+- Feature selected from `docs/index.md`: `Storyline Draft 页面`.
 - Reminder check: local Reminders is reachable, but there is no `Personal AI` list.
 - Existing docs and code already cover draft generation scope, grounding review, unsafe-link hiding, copy-before-review gating, stale-request protection, and unsupported-source blocking.
 - External scan points toward traceable evidence and explicit sharing/governance boundaries in meeting recaps and evidence-grounded generation UX.

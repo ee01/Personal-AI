@@ -3,7 +3,7 @@
 ## Repo
 
 - `docs/progressing/to-verify.md` says there are no pending carry-over verification items.
-- `docs/features/index.md` random sample included `Agent Thinking 工具审批`; more recent exact targets such as Quick Ask, Notification feed, Meeting side panel, User Profile export, and Project Dashboard were skipped.
+- `docs/index.md` random sample included `Agent Thinking 工具审批`; more recent exact targets such as Quick Ask, Notification feed, Meeting side panel, User Profile export, and Project Dashboard were skipped.
 - `docs/features/agent_thinking.md` already documents that approval is a temporary retry credential, not persistent checkpointing.
 - `src/agent-visualizer.tsx` renders three approval copy buttons: `复制 key`, `复制审核包`, and `复制重跑配置`.
 - Surrounding approval receipts are strong, but the buttons themselves only have short `aria-label` values. That leaves the actual click point weaker than nearby copy.

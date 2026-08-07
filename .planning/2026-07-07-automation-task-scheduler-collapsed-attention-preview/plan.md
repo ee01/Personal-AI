@@ -19,5 +19,5 @@
 2. 保持展开态现有“下一步处理”和“需处理总览”不变；折叠态只解释当前已确认快照，不触发刷新、执行、启停或重排。
 3. 添加紧凑样式，避免 popup summary 文本挤压标题或溢出。
 4. 更新 `tools/verify-task-scheduler-popup-filters-e2e.mjs`，覆盖折叠 summary 的具体任务预览。
-5. 更新 `docs/features/task_scheduler_api.md` 和 `docs/features/index.md` 的简短说明，保持文档不写实现细节。
+5. 更新 `docs/features/task_scheduler_api.md` 和 `docs/index.md` 的简短说明，保持文档不写实现细节。
 6. 验证：`node --check`、`npm run verify:task-scheduler-api`、`npm start -- --progress` 首次成功编译后停止、`npm run verify:task-scheduler-popup-filters:e2e`、scoped `git diff --check`。

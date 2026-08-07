@@ -29,5 +29,5 @@ Design implication: original-message markers are useful as a return path, but st
 2. Keep fresh badges unchanged; add compact `旧` / `old` and `待刷` / `sync?` flags only when the cache is stale or unrefreshed.
 3. Preserve existing tooltip and `aria-label` boundary copy as the detailed explanation.
 4. Update the Glip marker source-contract verifier and the real extension toolbar E2E fixture.
-5. Update `docs/features/message_reaction.md` and `docs/features/index.md`.
+5. Update `docs/features/message_reaction.md` and `docs/index.md`.
 6. Verify with focused marker checks, first successful `npm start` compile, and scoped `git diff --check`.

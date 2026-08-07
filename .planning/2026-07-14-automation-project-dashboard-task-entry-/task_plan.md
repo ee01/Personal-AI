@@ -5,7 +5,7 @@
 - Random feature: `项目证据修复路径`
 - Feature family: Project Dashboard
 - Canonical doc: `docs/features/brain_like_project_analysis_system.md`
-- Index row: `docs/features/index.md:152`
+- Index row: `docs/index.md:152`
 
 ## Pre-checks
 

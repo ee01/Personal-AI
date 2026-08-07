@@ -433,154 +433,28 @@ try {
   await page.goto('https://jira.ringcentral.com/browse/ABC-123/');
   await page.waitForSelector('.design-links-container', { state: 'attached', timeout: 20000 });
   await page.waitForFunction(
-    () => document.querySelectorAll('.design-link-item').length === 16,
+    () => document.querySelectorAll('.design-link-item').length === 5,
     null,
     { timeout: 20000 },
   );
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
-  const missingLinkStatusPattern = /Missing link|Missing design link|缺少设计稿链接/;
   const designUpdatedStatusPattern = /Design updated|设计已更新/;
   const updatedDateMissingPattern = /Updated date missing|更新时间缺失/;
   const notReadyStatusPattern = /Not ready for dev|尚未可开发|未准备好/;
-  const recoveryBoundaryPattern = /Read-only recovered|只读恢复/;
-  const sourceSummary = '16 entries · Remote link, Jira Designs, Linked issue, Description';
-  const updateReviewSummary = '5 design update signals; latest 2026-05-21; latest source Object date; 1 missing update time';
   const filteredSummary = '6 filtered non-handoff refs';
   const filteredSourceSummary = 'Design field 1, Description 5';
   const filteredReasonSummary = 'Figma Community 2, Figma documentation 1, Zeplin documentation or marketing page 1, Zeplin app non-project page 1, Zeplin non-resource project page 1';
-  const recoverySummary = '5 recovered UX ticket candidates';
-  const recoverySourceSummary = '2 selectedIssue query, 1 JQL query, 1 data-issue-key, 1 ARIA label';
-  const recoveryFilterSummary = '2 non-design candidates ignored';
-  const recoveryFilterSourceSummary = '1 Jira issue URL, 1 ARIA label';
-  const scanBasisSummary = `Jira-visible handoff scan: ${sourceSummary}; ${filteredSummary}`;
-  assert.equal(
+  assert.match(
     await page.locator('.design-links-container').getAttribute('aria-label'),
-    `Design context: ${scanBasisSummary}; ${updateReviewSummary}; filtered sources ${filteredSourceSummary}; filtered reasons ${filteredReasonSummary}; 1 design-field non-handoff ref; ${recoverySummary}; sources ${recoverySourceSummary}; ${recoveryFilterSummary}; filtered candidate sources ${recoveryFilterSourceSummary}`,
-    'design panel should expose a compact source summary to assistive tech',
+    /^Design context: 5 entries · /,
+    'design panel should expose a compact source summary for the capped rows',
   );
-  assert.match(await page.locator('.design-links-footer .footer-text').textContent(), /16 entries · Remote link, Jira Designs, Linked issue, Description/);
-  const scanBasisRow = page.locator('.design-scan-basis-row');
-  assert.equal(await scanBasisRow.count(), 1, 'design panel should show a first-screen scan-basis receipt');
-  assert.match(
-    await scanBasisRow.textContent(),
-    /Scan basis|扫描口径/,
-    'scan-basis receipt should be visible before status/filter/recovery rows',
-  );
-  assert.match(
-    await scanBasisRow.textContent(),
-    /Jira-visible handoff entries|Jira 可见交付入口/,
-    'scan-basis receipt should frame rows as Jira-visible handoff entries',
-  );
-  assert.equal(
-    await scanBasisRow.locator('.design-source-basis-tag').textContent(),
-    sourceSummary,
-    'scan-basis receipt should keep source-channel summary visible without hovering',
-  );
-  assert.equal(
-    await scanBasisRow.locator('.filtered-design-tag').textContent(),
-    filteredSummary,
-    'scan-basis receipt should keep filtered non-handoff count visible before the footer',
-  );
-  assert.match(
-    await scanBasisRow.getAttribute('aria-label'),
-    /only uses links visible in this Jira page and read-only Jira APIs.*does not refresh Figma or Zeplin.*create or edit Jira links.*mark design review complete/,
-    'scan-basis receipt should not imply a live Figma or Zeplin inventory or writeback',
-  );
-  const updateReviewScopeRow = page.locator('.design-update-review-scope-row');
-  assert.equal(await updateReviewScopeRow.count(), 1, 'rows with updated timestamps should show a visible review-scope receipt');
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /Review scope|复查范围/,
-    'review-scope receipt should be visible before users inspect each updated row',
-  );
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /5 条更新时间信号/,
-    'review-scope receipt should count dated update signals plus updated rows missing timestamps',
-  );
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /最新 2026-05-21/,
-    'review-scope receipt should surface the newest usable design update date',
-  );
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /(最新来源\s+(Object date|对象日期)|Latest source\s+Object date)/,
-    'review-scope receipt should expose the metadata basis for the newest update date',
-  );
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /1 条缺时间/,
-    'review-scope receipt should keep missing updated-time rows visible',
-  );
-  assert.match(
-    await updateReviewScopeRow.textContent(),
-    /只读提示/,
-    'review-scope receipt should label itself as a read-only prompt, not an action',
-  );
-  assert.match(
-    await updateReviewScopeRow.getAttribute('aria-label'),
-    /does not refresh Figma, edit Jira, or confirm that the design update was reviewed/,
-    'review-scope receipt should preserve refresh/write/review boundaries for assistive tech',
-  );
-  assert.match(
-    await updateReviewScopeRow.locator('.design-scan-boundary-tag').getAttribute('title'),
-    /only highlights Jira\/Figma metadata.*does not refresh Figma, edit Jira, or confirm/,
-    'review-scope receipt should not imply a live refresh or review confirmation',
-  );
-  const recoveryScopeRow = page.locator('.design-recovery-scope-row');
-  assert.equal(await recoveryScopeRow.count(), 1, 'mixed standard and recovered UX keys should show a visible recovery-scope receipt');
-  assert.match(
-    await recoveryScopeRow.textContent(),
-    /Recovery scope|恢复范围/,
-    'recovery-scope receipt should be visible before users inspect each recovered row',
-  );
-  assert.match(
-    await recoveryScopeRow.textContent(),
-    /5 recovered UX ticket candidates/,
-    'recovery-scope receipt should keep the recovered candidate count visible',
-  );
-  assert.match(
-    await recoveryScopeRow.textContent(),
-    /2 selectedIssue query, 1 JQL query, 1 data-issue-key, 1 ARIA label/,
-    'recovery-scope receipt should show the actual source distribution for recovered keys',
-  );
-  assert.match(
-    await recoveryScopeRow.textContent(),
-    /Read-only candidates|只读候选/,
-    'recovery-scope receipt should label recovered keys as candidates rather than confirmed Jira writes',
-  );
-  assert.match(
-    await recoveryScopeRow.getAttribute('aria-label'),
-    /selectedIssue query.*JQL query.*data-issue-key.*ARIA label/,
-    'recovery-scope receipt should explain the non-standard evidence sources',
-  );
-  assert.doesNotMatch(
-    await recoveryScopeRow.getAttribute('aria-label'),
-    /raw text|纯文本/,
-    'recovery-scope receipt should not claim raw-text recovery when no raw-text candidate was selected',
-  );
-  assert.equal(
-    await recoveryScopeRow.locator('.ux-key-source-breakdown-tag').textContent(),
-    `来源 ${recoverySourceSummary}`,
-    'recovery-scope receipt should keep actual recovery sources visible without opening tooltips',
-  );
-  assert.equal(
-    await recoveryScopeRow.locator('.ux-key-recovery-filter-tag').textContent(),
-    recoveryFilterSummary,
-    'recovery-scope receipt should show non-design candidates filtered by the design-project gate',
-  );
-  assert.match(
-    await recoveryScopeRow.locator('.ux-key-recovery-filter-tag').getAttribute('title'),
-    /2 non-design candidates ignored.*1 Jira issue URL, 1 ARIA label.*不匹配当前设计项目配置/,
-    'recovery-scope receipt should explain which candidate sources were ignored',
-  );
-  assert.match(
-    await recoveryScopeRow.locator('.ux-key-recovery-tag').getAttribute('title'),
-    /does not create or edit Jira issue links|不(?:会)?创建或编辑 Jira issue links/,
-    'recovery-scope receipt should keep the no-write boundary visible',
-  );
+  assert.match(await page.locator('.design-links-footer .footer-text').textContent(), /Personal AI provided/);
+  assert.equal(await page.locator('.design-scan-basis-row').count(), 0, 'design panel should not show scan-basis summary receipts');
+  assert.equal(await page.locator('.design-update-review-scope-row').count(), 0, 'design panel should not show review-scope summary receipts');
+  assert.equal(await page.locator('.design-recovery-scope-row').count(), 0, 'design panel should not show recovery-scope summary receipts');
+  assert.equal(await page.locator('.design-filter-scope-row').count(), 0, 'design panel should not show filter-scope summary receipts');
   const footerFilteredTag = page.locator('.design-links-footer .filtered-design-tag');
   assert.equal(await footerFilteredTag.textContent(), filteredSummary);
   assert.match(
@@ -598,50 +472,8 @@ try {
     `原因 ${filteredReasonSummary}`,
     'filtered footer should keep reason distribution visible on hover',
   );
-  const filterScopeRow = page.locator('.design-filter-scope-row');
-  assert.equal(await filterScopeRow.count(), 1, 'mixed handoff and filtered refs should show a visible filter-scope receipt');
-  assert.match(
-    await filterScopeRow.textContent(),
-    /Filter scope|过滤范围/,
-    'filter-scope receipt should be visible without hovering the footer',
-  );
-  assert.match(
-    await filterScopeRow.textContent(),
-    /Non-handoff design-tool links filtered|非交付设计工具链接已过滤/,
-    'filter-scope receipt should distinguish ignored design-tool pages from handoff rows',
-  );
-  assert.match(
-    await filterScopeRow.getAttribute('aria-label'),
-    /only development handoff entries are shown|只展示可开发交付入口/,
-    'filter-scope receipt should expose the conservative classification boundary to assistive tech',
-  );
-  assert.equal(
-    await filterScopeRow.locator('.filtered-design-source-tag').textContent(),
-    `来源 ${filteredSourceSummary}`,
-    'filter-scope receipt should expose which scan channels produced filtered refs',
-  );
-  assert.equal(
-    await filterScopeRow.locator('.filtered-design-reason-tag').textContent(),
-    `原因 ${filteredReasonSummary}`,
-    'filter-scope receipt should expose why non-handoff refs were filtered',
-  );
-  assert.equal(
-    await filterScopeRow.locator('.filtered-design-field-tag').textContent(),
-    '设计字段被过滤 1',
-    'filter-scope receipt should explicitly say UX design-field refs were scanned but filtered',
-  );
-  assert.match(
-    await filterScopeRow.locator('.filtered-design-field-tag').getAttribute('title'),
-    /UX ticket design-field URLs were scanned.*Missing link state.*does not edit Jira design fields/,
-    'design-field filtered receipt should explain that filtered field refs are not hidden valid handoff links',
-  );
-  assert.match(
-    await filterScopeRow.locator('.design-scan-boundary-tag').getAttribute('title'),
-    /does not create or edit Jira|不创建或编辑 Jira/,
-    'filter-scope receipt should preserve the no-write Jira boundary',
-  );
   assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a summary header');
-  assert.equal(itemTexts.length, 16, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
+  assert.equal(itemTexts.length, 5, 'design panel should cap visible rows at 5 after channel sorting');
   assert.match(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
   assert.match(itemTexts[0], /Ready for development/);
@@ -716,108 +548,19 @@ try {
     'Native pricing handoff ↗',
     'native Jira Designs card title should not include status or CTA text',
   );
-  assert.match(itemTexts[4], /UX-200/);
-  assert.doesNotMatch(itemTexts[4], /Missing design spec/);
-  assert.match(itemTexts[4], missingLinkStatusPattern);
-  assert.match(
-    await filterScopeRow.getAttribute('aria-label'),
-    /设计字段已扫描但只包含非交付链接时，仍保留 Missing link/,
-    'filter-scope receipt should connect filtered UX design-field refs to the visible Missing link state',
-  );
+  assert.match(itemTexts[4], /Draft onboarding walkthrough/);
+  assert.match(itemTexts[4], notReadyStatusPattern);
+  assert.match(itemTexts[4], /(Updated|已更新) 2026-05-17/);
   assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UX-200' }).locator('.ux-ticket-link').getAttribute('title'),
-    await page.locator('.design-link-item', { hasText: 'UX-200' }).locator('.ux-ticket-link').getAttribute('aria-label'),
-    'UX ticket link title and aria-label should carry the same pre-click open boundary',
+    await page.locator('.design-links-footer .filtered-design-field-tag').textContent(),
+    '设计字段被过滤 1',
+    'footer should keep filtered UX design-field count when Missing link remains',
   );
   assert.match(
-    await page.locator('.design-link-item', { hasText: 'UX-200' }).locator('.ux-ticket-link').getAttribute('title'),
-    /UX-200.*目标：UX-200.*Linked issue.*Figma\/Jira.*Memory Service/s,
-    'missing-design UX ticket link should say opening the ticket is read-only and does not refresh/write before click',
+    await page.locator('.design-links-footer .filtered-design-field-tag').getAttribute('title'),
+    /UX ticket design-field URLs were scanned.*Missing link state.*does not edit Jira design fields/,
+    'footer filtered design-field tag should connect filtered UX design-field refs to the visible Missing link state',
   );
-  assert.match(itemTexts[5], /UXDES-300/);
-  assert.doesNotMatch(itemTexts[5], /Shared UXDES spec/);
-  assert.match(itemTexts[5], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXDES-300' }).locator('.ux-ticket-link').getAttribute('title'),
-    await page.locator('.design-link-item', { hasText: 'UXDES-300' }).locator('.ux-ticket-link').getAttribute('aria-label'),
-    'UXDES ticket link title and aria-label should carry the same pre-click open boundary',
-  );
-  assert.match(itemTexts[6], /UXRAW-400/);
-  assert.match(itemTexts[6], /Key from data-issue-key/);
-  assert.match(itemTexts[6], recoveryBoundaryPattern);
-  assert.doesNotMatch(itemTexts[6], /Raw text fallback UX spec/);
-  assert.match(itemTexts[6], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXRAW-400' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXRAW-400',
-  );
-  assert.match(itemTexts[7], /UXMULTI-500/);
-  assert.match(itemTexts[7], /Key from ARIA label/);
-  assert.match(itemTexts[7], recoveryBoundaryPattern);
-  assert.doesNotMatch(itemTexts[7], /ABC-999/);
-  assert.match(itemTexts[7], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXMULTI-500' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXMULTI-500',
-  );
-  assert.match(itemTexts[8], /UXCLOUD-600/);
-  assert.doesNotMatch(itemTexts[8], /Open design dependency/);
-  assert.match(itemTexts[8], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXCLOUD-600' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXCLOUD-600',
-  );
-  assert.doesNotMatch(itemTexts[8], /Key from/);
-  assert.match(itemTexts[9], /UXQUERY-700/);
-  assert.match(itemTexts[9], /Key from selectedIssue query/);
-  assert.match(itemTexts[9], recoveryBoundaryPattern);
-  assert.doesNotMatch(itemTexts[9], /Query selected issue fallback UX spec/);
-  assert.match(itemTexts[9], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXQUERY-700' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXQUERY-700',
-  );
-  assert.match(
-    await page.locator('.design-link-item', { hasText: 'UXQUERY-700' }).locator('.ux-ticket-link').getAttribute('title'),
-    /UXQUERY-700.*Key from selectedIssue query.*(does not create or edit Jira issue links|不(?:会)?创建或编辑 Jira issue links).*Figma\/Jira.*Memory Service/s,
-    'recovered UX ticket link title should preserve the recovered-candidate boundary before click',
-  );
-  assert.match(
-    await page.locator('.design-link-item', { hasText: 'UXQUERY-700' }).locator('.ux-key-source-tag').getAttribute('title'),
-    /standard \/browse\/KEY linked issue URL.*selectedIssue query.*configured design project/,
-  );
-  assert.match(
-    await page.locator('.design-link-item', { hasText: 'UXQUERY-700' }).locator('.ux-key-recovery-tag').getAttribute('title'),
-    /does not create or edit Jira issue links|不会创建或编辑 Jira issue links/,
-    'recovered query-key rows should explain that Personal AI did not write Jira relationships',
-  );
-  assert.match(itemTexts[10], /UXQUERY-701/);
-  assert.match(itemTexts[10], /Key from selectedIssue query/);
-  assert.match(itemTexts[10], recoveryBoundaryPattern);
-  assert.doesNotMatch(itemTexts[10], /ABC-123/);
-  assert.doesNotMatch(itemTexts[10], /Mixed path query fallback UX spec/);
-  assert.match(itemTexts[10], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXQUERY-701' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXQUERY-701',
-  );
-  assert.match(itemTexts[11], /UXJQL-800/);
-  assert.match(itemTexts[11], /Key from JQL query/);
-  assert.match(itemTexts[11], recoveryBoundaryPattern);
-  assert.doesNotMatch(itemTexts[11], /JQL filtered issue fallback UX spec/);
-  assert.match(itemTexts[11], missingLinkStatusPattern);
-  assert.equal(
-    await page.locator('.design-link-item', { hasText: 'UXJQL-800' }).locator('.ux-ticket-link').getAttribute('href'),
-    '/browse/UXJQL-800',
-  );
-  assert.match(itemTexts[12], /Draft onboarding walkthrough/);
-  assert.match(itemTexts[12], notReadyStatusPattern);
-  assert.match(itemTexts[12], /(Updated|已更新) 2026-05-17/);
-  assert.match(itemTexts[13], /Checkout mobile handoff/);
-  assert.match(itemTexts[13], /Description/);
-  assert.match(itemTexts[14], /Miro board/);
-  assert.match(itemTexts[15], /Zeplin screen/);
-  assert.match(itemTexts[15], /Description/);
   assert.equal(
     await page.locator('.design-link[href="https://miro.com/pricing"]').count(),
     0,
@@ -848,8 +591,6 @@ try {
     readyDesignTitle,
     'design link aria-label should mirror the pre-click open boundary',
   );
-  const descriptionHref = await page.locator('.design-link[href^="https://www.figma.com/design/abc123"]').first().getAttribute('href');
-  assert.equal(descriptionHref, 'https://www.figma.com/design/abc123/Spec?node-id=1-2');
   assert.equal(await page.locator('.design-open-receipt').isHidden(), true, 'open receipt should stay hidden before a panel link is opened');
   const [openedDesignPage] = await Promise.all([
     context.waitForEvent('page'),
@@ -905,44 +646,24 @@ try {
   );
   const [openedUxPage] = await Promise.all([
     context.waitForEvent('page'),
-    page.locator('.design-link-item', { hasText: 'UXQUERY-700' }).locator('.ux-ticket-link').click(),
+    page.locator('.design-link-item', { hasText: 'Ready checkout prototype' }).locator('.ux-ticket-link').click(),
   ]);
   await openedUxPage.close();
   const uxOpenReceiptText = await page.locator('.design-open-receipt').textContent();
   assert.match(
     uxOpenReceiptText,
-    /已打开 UX ticket：UXQUERY-700/,
-    'opening a recovered UX ticket should replace the receipt with the current target',
+    /已打开 UX ticket：UX-100/,
+    'opening a UX ticket should replace the receipt with the current target',
   );
   assert.match(
     uxOpenReceiptText,
-    /目标 UXQUERY-700/,
+    /目标 UX-100/,
     'UX-ticket open receipt should show the ticket key instead of a vague Jira host',
   );
   assert.match(
     uxOpenReceiptText,
     /只读打开/,
     'UX-ticket open receipt should keep the read-only boundary visible',
-  );
-  assert.match(
-    uxOpenReceiptText,
-    /Key from selectedIssue query/,
-    'opening a recovered UX-ticket candidate should keep the recovery source visible in the open receipt',
-  );
-  assert.match(
-    uxOpenReceiptText,
-    /恢复候选打开/,
-    'opening a recovered UX-ticket candidate should label the click as a recovered-candidate open',
-  );
-  assert.match(
-    uxOpenReceiptText,
-    /does not create or edit Jira issue links|不会创建或编辑 Jira issue links/,
-    'recovered UX-ticket open receipt should repeat the no-Jira-write boundary',
-  );
-  assert.match(
-    await page.locator('.design-open-receipt').getAttribute('aria-label'),
-    /selectedIssue query.*does not create or edit Jira issue links|selectedIssue query.*不会创建或编辑 Jira issue links/,
-    'recovered UX-ticket open receipt aria label should preserve recovery source and candidate boundary',
   );
   assert.doesNotMatch(
     uxOpenReceiptText,
@@ -964,9 +685,7 @@ try {
   assert.match(statusClass, /design-status-tag--ready/);
   assert.equal(await page.locator('.design-link-item[data-design-attention="ready"]').count(), 1);
   assert.equal(await page.locator('.design-link-item[data-design-attention="updated"]').count(), 3);
-  assert.equal(await page.locator('.design-link-item[data-design-attention="missing"]').count(), 8);
   assert.equal(await page.locator('.design-link-item[data-design-attention="not-ready"]').count(), 1);
-  assert.equal(await page.locator('.design-link-item[data-design-attention="neutral"]').count(), 3);
   const readyItemStyles = await page.locator('.design-link-item[data-design-attention="ready"]').evaluate(element => {
     const styles = getComputedStyle(element);
     return {
@@ -976,17 +695,6 @@ try {
   });
   assert.notEqual(readyItemStyles.borderLeftColor, 'rgba(0, 0, 0, 0)');
   assert.notEqual(readyItemStyles.backgroundColor, 'rgba(0, 0, 0, 0)');
-  const missingStatusTags = page.locator('.design-link-item[data-design-attention="missing"] .design-status-tag');
-  assert.equal(await missingStatusTags.count(), 8, 'missing UX rows should show a missing status even when parsed from raw text, Jira issue URLs, selectedIssue query URLs, or JQL query URLs');
-  assert.equal(await page.locator('.design-link-item .ux-key-source-tag').count(), 5, 'only non-standard key recovery paths should show key-source receipts');
-  assert.equal(await page.locator('.design-link-item .ux-key-recovery-tag').count(), 5, 'only non-standard key recovery paths should show read-only recovery boundary receipts');
-  const missingStatusClass = await missingStatusTags.first().getAttribute('class');
-  assert.match(missingStatusClass, /design-status-tag--missing/);
-  assert.match(
-    await missingStatusTags.first().getAttribute('title'),
-    /no handoff URL is available.*add or check the design link before implementing/,
-    'missing UX rows should explain the recovery action rather than only naming the status',
-  );
   const notReadyStatusClass = await page.locator('.design-status-tag', { hasText: notReadyStatusPattern }).getAttribute('class');
   assert.match(notReadyStatusClass, /design-status-tag--not-ready/);
   const updatedStatusClass = await page.locator('.design-status-tag', { hasText: designUpdatedStatusPattern }).first().getAttribute('class');
@@ -1009,7 +717,7 @@ try {
   assert.equal(
     await page.locator('.design-updated-basis-tag').count(),
     4,
-    'every visible updated timestamp with source metadata should show its time-basis chip',
+    'visible updated timestamps with source metadata should show their time-basis chips',
   );
   assert.match(
     await page.locator('.design-status-tag', { hasText: designUpdatedStatusPattern }).first().getAttribute('title'),
@@ -1128,13 +836,9 @@ try {
   );
   assert.equal(
     await page.locator('.design-links-container').getAttribute('aria-label'),
-    'Design context: Jira-visible handoff scan: 0 handoff entries; 4 filtered non-handoff refs; filtered sources Remote link 1, Description 3; filtered reasons Figma Community 1, Figma documentation 1, Zeplin non-resource project page 1, Zeplin app non-project page 1',
+    'Design context: 0 handoff entries',
   );
-  assert.match(
-    await page.locator('.design-scan-basis-row .design-scan-boundary-tag').getAttribute('title'),
-    /does not refresh Figma or Zeplin.*create or edit Jira links/,
-    'filtered-only scan-basis receipt should keep live-refresh and write boundaries visible',
-  );
+  assert.equal(await page.locator('.design-scan-basis-row').count(), 0, 'filtered-only panel should not show scan-basis summary');
   assert.match(
     await page.locator('.design-link-item .design-scan-boundary-tag').getAttribute('title'),
     /does not create or edit Jira design links|不创建或编辑 Jira 设计链接/,

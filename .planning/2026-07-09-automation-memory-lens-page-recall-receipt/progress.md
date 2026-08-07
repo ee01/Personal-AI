@@ -8,7 +8,7 @@
 - Created this planning directory before editing runtime code.
 - Implemented passive Expanded Card `页面召回回执` in `src/contentScriptWebIntelligence.ts`, with current/cached recall basis, page title/host, optional anchors, and no-write/no-insert/no-send boundary.
 - Updated `desktop-app/scripts/webpage-memory-detection-check.mjs` to assert the receipt on the normal passive Lens card.
-- Updated `docs/features/memory_lens.md` and the Memory Lens row in `docs/features/index.md`.
+- Updated `docs/features/memory_lens.md` and the Memory Lens row in `docs/index.md`.
 - Verification passed with `$HOME/.nvm/versions/node/v24.13.0/bin` on PATH:
   - `node --check desktop-app/scripts/webpage-memory-detection-check.mjs`
   - `npm run verify:webpage-memory-detection`

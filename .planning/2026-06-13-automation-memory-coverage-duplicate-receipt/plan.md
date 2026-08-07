@@ -4,7 +4,7 @@
 
 Feature: `Memory Coverage Map / 记忆覆盖地图`
 
-Random index pick: `记忆覆盖地图` from `docs/features/index.md`.
+Random index pick: `记忆覆盖地图` from `docs/index.md`.
 
 Reminder status: local Reminders has no `Personal AI` list on this machine, so no user feedback item was available to fold in or mark done.
 

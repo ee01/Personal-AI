@@ -18,7 +18,7 @@
 1. 在 `UserProfilePage.vue` 增加导出失败回执 builder。
 2. `EXPORT_USER_PROFILE` 返回失败或抛异常时设置 warning receipt，并保留 status error。
 3. 更新 `tools/verify-user-profile-export-e2e.mjs` 中 `export-failure` 阶段，断言失败回执存在而不是 detached。
-4. 更新 `docs/features/user_profile_system.md` 和 `docs/features/index.md` 的导出描述。
+4. 更新 `docs/features/user_profile_system.md` 和 `docs/index.md` 的导出描述。
 5. 运行目标语法检查、`npm start` 首次成功编译、目标 E2E 和 scoped `git diff --check`。
 
 ## 非目标

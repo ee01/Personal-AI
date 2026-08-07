@@ -2,7 +2,7 @@
 
 ## 2026-07-04
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/features/index.md`, memory guidance, and Reminder state.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/index.md`, memory guidance, and Reminder state.
 - Random sample selected `Notification Center feed` after skipping fresher exact feature families.
 - Created this planning directory before product code edits.
 - Inspected Notification Center docs, feed route, feed service logic, Chrome poller, existing feed/delivery tests, and notification-channel E2E helper.

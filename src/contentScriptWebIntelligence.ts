@@ -46,12 +46,9 @@ import {
 } from './composer-guard/siteContextAdapters';
 import type { InteractionSceneSnapshot, SiteContextSnapshot } from './composer-guard/types';
 import {
-    getContentScriptUiLanguage,
-    initContentScriptI18n,
-} from './i18n/contentScript';
-
-initContentScriptI18n();
-
+    buildPassiveWebpageAnalysisKey,
+    type PassiveWebpageAnalysisResult,
+} from './web-intelligence/passiveWebpageAnalysis';
 interface SimplePageContent {
     title: string;
     url: string;
@@ -59,20 +56,6 @@ interface SimplePageContent {
     mainContent: string;
     wordCount: number;
     timestamp: number;
-}
-
-interface SimpleAnalysisResult {
-    isRelevant: boolean;
-    confidence: number;
-    suggestedStorage: boolean;
-    extractedInfo: {
-        projects?: string[];
-        people?: string[];
-        technologies?: string[];
-        actionItems?: string[];
-    };
-    reasoning: string;
-    categories: string[];
 }
 
 interface ContextMatchPayload {
@@ -141,6 +124,23 @@ interface SelectedTextContextPayload extends ContextMatchPayload {
     // selections attach the right-edge "记住" + at the end of the selection rather than the first line.
     captureRect: DOMRect;
     selectionRecallEligible: boolean;
+}
+
+interface ClaimAttributionReceiptItem {
+    claimId: string;
+    sourceMessageId: string;
+    revision: number;
+    excerpt: string;
+    ownerKind: string;
+    ownerLabel: string;
+    speechMode: string;
+    verification: string;
+    commitment: string;
+    effect: 'used' | 'background_only' | 'blocked';
+    displayLabel: string;
+    consequence: string;
+    correctionAllowed: boolean;
+    corrected: boolean;
 }
 
 interface ContextRecallMatch {
@@ -215,6 +215,7 @@ interface ContextRecallMatch {
         suppressReason?: string;
         presentationId?: string;
     };
+    claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 interface KeystoneBriefClaim {
@@ -280,6 +281,7 @@ interface KeystoneBriefPresentationPayload {
         };
         repairState: 'clean' | 'needs_repair';
         blockedReason?: string;
+        compositionVersion?: string;
     };
     presentationMode: 'primary' | 'conflict' | 'stale_notice';
     whyNow: string;
@@ -391,6 +393,22 @@ const CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS: Array<{
     },
 ];
 
+type MemoryClaimCorrectionAction =
+    | 'not_my_view'
+    | 'my_decision'
+    | 'reported_speech'
+    | 'hypothesis';
+
+const MEMORY_CLAIM_CORRECTION_ACTIONS: Array<{
+    value: MemoryClaimCorrectionAction;
+    label: string;
+}> = [
+    { value: 'not_my_view', label: '这不是我的观点' },
+    { value: 'reported_speech', label: '这是引用或转述' },
+    { value: 'hypothesis', label: '这是建议或假设' },
+    { value: 'my_decision', label: '这是我的决定' },
+];
+
 const CONTEXT_THUMB_UP_ICON_HTML = `
     <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M7 10v12"></path>
@@ -462,6 +480,7 @@ interface ContextRecallAutopilotDecision {
 }
 
 interface ContextRecallResponsePayload {
+    uiLanguage?: 'zh-CN' | 'en-US';
     matches?: ContextRecallMatch[];
     topMatch?: ContextRecallMatch | null;
     autopilot?: ContextRecallAutopilotDecision | null;
@@ -472,6 +491,7 @@ interface ContextRecallResponsePayload {
 type ContextBubbleMode = 'lens' | 'selectionSearch';
 
 interface ContextBubbleOptions {
+    uiLanguage?: 'zh-CN' | 'en-US';
     mode?: ContextBubbleMode;
     selectedText?: string;
     autopilot?: ContextRecallAutopilotDecision | null;
@@ -565,6 +585,7 @@ interface ContextMatchCacheEntry {
     autopilot?: ContextRecallAutopilotDecision | null;
     changeProjections?: MemoryChangeProjection[];
     keystoneBrief?: KeystoneBriefPresentationPayload;
+    uiLanguage?: 'zh-CN' | 'en-US';
     /** The source-read snapshot used to build this cache entry, when present. */
     jiraFreshnessCheckedAt?: number;
     ts: number;
@@ -2350,7 +2371,6 @@ class WebIntelligenceContentScript {
     private isAnalyzing = false;
     private lastAnalysisTime = 0;
     private analysisCount = 0;
-    private readonly MIN_ANALYSIS_INTERVAL = 5000;
     private lastSeenUrl = window.location.href;
     private urlWatcherId: number | null = null;
     private contextMatchTimer: number | null = null;
@@ -2384,6 +2404,7 @@ class WebIntelligenceContentScript {
     private pageCapturePendingContextKey: string | null = null;
     private pageCaptureShownContextKey: string | null = null;
     private pageCaptureStoredContextKey: string | null = null;
+    private pageAnalysisResultByKey = new Map<string, PassiveWebpageAnalysisResult>();
     private pageCaptureStartedAt = Date.now();
     private pageCaptureMaxScrollDepth = 0;
     private pageCaptureCopiedText = false;
@@ -2434,7 +2455,6 @@ class WebIntelligenceContentScript {
         this.setupSiteControlStorageListener();
         void this.loadSiteControls().then(() => this.scheduleContextMatch(200));
 
-        this.scheduleAnalysis(2000);
         this.scheduleContextMatch(2000);
     }
 
@@ -2452,11 +2472,9 @@ class WebIntelligenceContentScript {
     private setupEventListeners(): void {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => {
-                this.scheduleAnalysis(1000);
                 this.scheduleContextMatch(1500);
             });
         } else {
-            this.scheduleAnalysis(1000);
             this.scheduleContextMatch(1500);
         }
 
@@ -2475,8 +2493,15 @@ class WebIntelligenceContentScript {
                 }
 
                 const hasSignificantChanges = this.hasSignificantAnalysisChanges(mutations);
-                if (hasSignificantChanges) {
-                    this.scheduleAnalysis(1000);
+                if (
+                    hasSignificantChanges &&
+                    (
+                        this.getPageMemoryCaptureDwellMs() >= PAGE_MEMORY_CAPTURE_MIN_DWELL_MS ||
+                        this.pageCaptureCopiedText ||
+                        this.pageCaptureMaxScrollDepth >= 0.6
+                    )
+                ) {
+                    this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_INTERACTION_DELAY_MS);
                 }
 
                 if (this.shouldReevaluateContext(mutations)) {
@@ -2505,7 +2530,6 @@ class WebIntelligenceContentScript {
         }
 
         window.addEventListener('focus', () => {
-            this.scheduleAnalysis(1000);
             this.scheduleContextMatch(400);
         });
 
@@ -2563,7 +2587,7 @@ class WebIntelligenceContentScript {
 
         chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             if (request.type === 'TRIGGER_MANUAL_ANALYSIS') {
-                this.performAnalysis()
+                this.performAnalysis({ force: true })
                     .then(result => sendResponse({ success: true, result }))
                     .catch(error => sendResponse({ success: false, error: error.message }));
                 return true;
@@ -2608,7 +2632,6 @@ class WebIntelligenceContentScript {
             this.clearPageMemoryCaptureChip();
         }
 
-        this.scheduleAnalysis(1000);
         this.scheduleContextMatch(this.getContextChangeDelayMs());
         this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_MIN_DWELL_MS);
     }
@@ -2690,17 +2713,6 @@ class WebIntelligenceContentScript {
             node.id === 'pai-context-bubble-styles' ||
             !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-feedback-layer, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
         );
-    }
-
-    private scheduleAnalysis(delayMs = 1000): void {
-        const now = Date.now();
-        if (now - this.lastAnalysisTime < this.MIN_ANALYSIS_INTERVAL || this.isAnalyzing) {
-            return;
-        }
-
-        window.setTimeout(() => {
-            void this.performAnalysis();
-        }, delayMs);
     }
 
     private scheduleContextMatch(delayMs = 0): void {
@@ -2850,24 +2862,23 @@ class WebIntelligenceContentScript {
         return this.isRingCentralMessagePage() ? RINGCENTRAL_CONTEXT_STABLE_MS : GENERIC_CONTEXT_STABLE_MS;
     }
 
-    private async performAnalysis(): Promise<SimpleAnalysisResult | null> {
+    private async performAnalysis(
+        options: { force?: boolean } = {},
+    ): Promise<PassiveWebpageAnalysisResult | null> {
         if (this.isAnalyzing) return null;
         if (this.isSensitiveContextPage()) {
             console.log('🔒 当前页面处于敏感场景，跳过网页智能分析');
             return null;
         }
-        await this.loadSiteControls();
-        if (this.isPassiveContextSuppressedBySiteControls()) {
-            console.log('🚫 当前站点已关闭被动网页记忆处理，跳过网页智能分析');
-            return null;
-        }
 
         this.isAnalyzing = true;
-        this.lastAnalysisTime = Date.now();
-        this.analysisCount++;
 
         try {
-            console.log(`🔍 开始智能分析 #${this.analysisCount}:`, window.location.href);
+            await this.loadSiteControls();
+            if (this.isPassiveContextSuppressedBySiteControls()) {
+                console.log('🚫 当前站点已关闭被动网页记忆处理，跳过网页智能分析');
+                return null;
+            }
 
             const pageContent = this.extractPageContent();
             if (!pageContent || pageContent.wordCount < 50) {
@@ -2875,52 +2886,26 @@ class WebIntelligenceContentScript {
                 return null;
             }
 
-            const analysisResult = this.quickAnalyze(pageContent);
-
-            if (analysisResult.isRelevant && analysisResult.confidence > 0.5) {
-                console.log('📤 准备发送到后台处理:', {
-                    相关性: analysisResult.isRelevant,
-                    置信度: analysisResult.confidence,
-                    建议存储: analysisResult.suggestedStorage,
-                    提取信息: Object.keys(analysisResult.extractedInfo)
-                });
-
-                chrome.runtime.sendMessage({
-                    type: 'WEB_INTELLIGENCE_ANALYSIS',
-                    pageContent,
-                    analysisResult,
-                    timestamp: Date.now()
-                }).then(response => {
-                    if (response && response.success) {
-                        console.log('✅ 后台处理响应:', response);
-                        if (response.processed) {
-                            console.log('🎯 内容已通过agentThinking处理并存储');
-                        }
-                    } else {
-                        console.warn('⚠️ 后台处理未成功:', response);
-                    }
-                }).catch(error => {
-                    console.error('❌ 发送分析结果失败:', error);
-                });
-
-                if (analysisResult.confidence > 0.8) {
-                    // this.showNotification(analysisResult);
-                }
-            } else {
-                console.log('⏭️ 跳过后台处理:', {
-                    相关性: analysisResult.isRelevant,
-                    置信度: analysisResult.confidence,
-                    阈值: '0.5'
-                });
-            }
-
-            console.log('✅ 分析完成:', {
-                相关性: (analysisResult.confidence * 100).toFixed(1) + '%',
-                是否相关: analysisResult.isRelevant ? '是' : '否',
-                分类: analysisResult.categories.join(', ')
+            this.lastAnalysisTime = Date.now();
+            this.analysisCount++;
+            console.log(`🔍 开始单次网页资料分析 #${this.analysisCount}:`, window.location.href);
+            const analysisKey = buildPassiveWebpageAnalysisKey(pageContent);
+            const response = await chrome.runtime.sendMessage({
+                type: 'WEB_INTELLIGENCE_ANALYSIS',
+                pageContent,
+                analysisKey,
+                force: Boolean(options.force),
+                triggerSource: 'manual',
             });
-
-            return analysisResult;
+            if (!response?.success) {
+                throw new Error(response?.error || '网页分析未返回成功结果');
+            }
+            console.log('✅ 单次网页资料分析完成（尚未写入记忆）:', {
+                decision: response.result?.decision,
+                requestReuse: response.requestReuse,
+                storageBoundary: response.storageBoundary,
+            });
+            return response.result || null;
         } catch (error) {
             console.error('❌ 智能分析失败:', error);
             return null;
@@ -3454,140 +3439,6 @@ class WebIntelligenceContentScript {
         return chineseChars + englishWords;
     }
 
-    private quickAnalyze(pageContent: SimplePageContent): SimpleAnalysisResult {
-        const content = pageContent.mainContent.toLowerCase();
-        let confidence = 0;
-        const categories: string[] = [];
-        const extractedInfo: SimpleAnalysisResult['extractedInfo'] = {};
-        const reasons: string[] = [];
-
-        const urlAnalysis = this.analyzeUrl(pageContent.url);
-        confidence += urlAnalysis.score;
-        categories.push(...urlAnalysis.categories);
-        reasons.push(...urlAnalysis.reasons);
-
-        const keywordAnalysis = this.analyzeKeywords(content);
-        confidence += keywordAnalysis.score;
-        reasons.push(...keywordAnalysis.reasons);
-
-        const entities = this.extractSimpleEntities(pageContent.mainContent);
-        Object.assign(extractedInfo, entities);
-
-        const finalConfidence = Math.min(confidence, 1);
-        const isRelevant = finalConfidence > 0.3;
-        const suggestedStorage = isRelevant && finalConfidence > 0.4;
-
-        return {
-            isRelevant,
-            confidence: finalConfidence,
-            suggestedStorage,
-            extractedInfo,
-            reasoning: reasons.join('; ') || '基于内容特征分析',
-            categories: Array.from(new Set(categories))
-        };
-    }
-
-    private analyzeUrl(url: string): { score: number; categories: string[]; reasons: string[] } {
-        const categories: string[] = [];
-        const reasons: string[] = [];
-        let score = 0;
-
-        const patterns = [
-            { pattern: /github\.com/i, score: 0.4, reason: 'GitHub平台', category: 'development' },
-            { pattern: /jira.*\/browse/i, score: 0.5, reason: 'Jira任务', category: 'project_management' },
-            { pattern: /confluence/i, score: 0.4, reason: 'Confluence文档', category: 'documentation' },
-            { pattern: /notion\.so/i, score: 0.4, reason: 'Notion页面', category: 'documentation' },
-            { pattern: /slack\.com/i, score: 0.3, reason: 'Slack对话', category: 'communication' },
-            { pattern: /figma\.com/i, score: 0.3, reason: 'Figma设计', category: 'design' },
-            { pattern: /docs\.google\.com/i, score: 0.3, reason: 'Google文档', category: 'documentation' },
-            { pattern: /trello\.com/i, score: 0.3, reason: 'Trello看板', category: 'project_management' },
-            { pattern: /linear\.app/i, score: 0.4, reason: 'Linear任务', category: 'project_management' }
-        ];
-
-        for (const { pattern, score: patternScore, reason, category } of patterns) {
-            if (pattern.test(url)) {
-                score += patternScore;
-                reasons.push(reason);
-                categories.push(category);
-                break;
-            }
-        }
-
-        return { score, categories, reasons };
-    }
-
-    private analyzeKeywords(content: string): { score: number; reasons: string[] } {
-        const reasons: string[] = [];
-        let score = 0;
-
-        const keywordGroups = [
-            { keywords: ['项目', 'project', '任务', 'task', 'issue', '功能'], score: 0.2, reason: '项目管理相关' },
-            { keywords: ['开发', 'development', '代码', 'code', 'api', '接口', 'bug'], score: 0.2, reason: '开发相关' },
-            { keywords: ['设计', 'design', 'ui', 'ux', '界面', '原型'], score: 0.15, reason: '设计相关' },
-            { keywords: ['测试', 'test', 'qa', '质量'], score: 0.1, reason: '测试相关' },
-            { keywords: ['发布', 'release', '部署', 'deploy', '上线'], score: 0.15, reason: '发布相关' },
-            { keywords: ['sprint', 'scrum', 'agile', '敏捷', '冲刺'], score: 0.2, reason: '敏捷开发' }
-        ];
-
-        for (const group of keywordGroups) {
-            if (group.keywords.some(keyword => content.includes(keyword))) {
-                score += group.score;
-                reasons.push(group.reason);
-            }
-        }
-
-        return { score, reasons };
-    }
-
-    private extractSimpleEntities(content: string): SimpleAnalysisResult['extractedInfo'] {
-        const entities: SimpleAnalysisResult['extractedInfo'] = {};
-
-        const projects = this.extractWithPattern(content, [
-            /项目[：:]?\s*([^\s,，。]{2,20})/g,
-            /Project[:\s]+([A-Za-z0-9\s-]{2,30})/gi,
-            /\[([A-Z]+-\d+)\]/g
-        ]);
-        if (projects.length > 0) entities.projects = projects;
-
-        const people = this.extractWithPattern(content, [
-            /@([a-zA-Z0-9\u4e00-\u9fa5]{2,20})/g,
-            /负责人[：:]?\s*([^\s,，。]{2,10})/g,
-            /Assignee[:\s]*([^\s,，。]{2,20})/gi
-        ]);
-        if (people.length > 0) entities.people = people;
-
-        const techKeywords = [
-            'react', 'vue', 'angular', 'javascript', 'typescript', 'node.js', 'python',
-            'java', 'spring', 'docker', 'kubernetes', 'aws', 'mongodb', 'mysql', 'redis'
-        ];
-        const technologies = techKeywords.filter(tech => content.toLowerCase().includes(tech));
-        if (technologies.length > 0) entities.technologies = technologies;
-
-        const actions = this.extractWithPattern(content, [
-            /TODO[:\s]*([^。！!.\n]{5,50})/gi,
-            /需要\s*([^。！!.]{5,50})/g,
-            /- \[ \]\s*([^。！!.\n]{5,50})/g
-        ]);
-        if (actions.length > 0) entities.actionItems = actions;
-
-        return entities;
-    }
-
-    private extractWithPattern(content: string, patterns: RegExp[]): string[] {
-        const results = new Set<string>();
-
-        for (const pattern of patterns) {
-            let match;
-            while ((match = pattern.exec(content)) !== null) {
-                if (match[1] && match[1].trim().length > 1) {
-                    results.add(match[1].trim());
-                }
-            }
-        }
-
-        return Array.from(results).slice(0, 10);
-    }
-
     private async tryContextMatch(): Promise<void> {
         if (this.isSensitiveContextPage()) {
             this.clearContextBubble();
@@ -3676,6 +3527,7 @@ class WebIntelligenceContentScript {
                         autopilot: cached.autopilot,
                         changeProjections: cachedChangeProjections,
                         keystoneBrief: cached.keystoneBrief,
+                        uiLanguage: cached.uiLanguage,
                         recallBasis: buildContextRecallCachedBasisReceipt(cached.ts, now),
                         recallContext: buildContextBubbleRecallContext(payload),
                     },
@@ -3775,6 +3627,7 @@ class WebIntelligenceContentScript {
                 autopilot,
                 changeProjections,
                 keystoneBrief,
+                uiLanguage: response?.uiLanguage,
                 jiraFreshnessCheckedAt,
                 ts: Date.now(),
             });
@@ -3790,6 +3643,7 @@ class WebIntelligenceContentScript {
                         autopilot,
                         changeProjections,
                         keystoneBrief,
+                        uiLanguage: response?.uiLanguage,
                         recallBasis: buildContextRecallCurrentBasisReceipt(),
                         recallContext: buildContextBubbleRecallContext(payload),
                     },
@@ -4940,6 +4794,14 @@ class WebIntelligenceContentScript {
         if (this.pageCapturePendingContextKey === payload.contextKey) {
             return;
         }
+        if (payload.contextKey.startsWith('page-capture:')) {
+            const completedAnalysis = this.pageAnalysisResultByKey.get(
+                payload.contextKey.slice('page-capture:'.length),
+            );
+            if (completedAnalysis?.decision === 'skip') {
+                return;
+            }
+        }
 
         const requestId = ++this.pageCaptureRequestId;
         this.pageCapturePendingContextKey = payload.contextKey;
@@ -4950,24 +4812,126 @@ class WebIntelligenceContentScript {
             if (requestId !== this.pageCaptureRequestId) {
                 return;
             }
-            this.pageCapturePendingContextKey = null;
             const currentPayload = this.buildPageMemoryCaptureRequest();
             if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
+                this.pageCapturePendingContextKey = null;
                 this.clearPageMemoryCaptureChip();
                 return;
             }
             if (chrome.runtime.lastError || !response?.success || !response.result?.eligible) {
+                this.pageCapturePendingContextKey = null;
                 this.clearPageMemoryCaptureChip();
                 return;
             }
-            const autoDecision = this.getPageMemoryCaptureAutoDecision(response.result, currentPayload.request);
+            void this.completePageMemoryCaptureCandidate(
+                requestId,
+                currentPayload,
+                response.result,
+            );
+        });
+    }
+
+    private async completePageMemoryCaptureCandidate(
+        requestId: number,
+        payload: { contextKey: string; request: Record<string, unknown> },
+        candidate: MemoryCaptureCandidateResult,
+    ): Promise<void> {
+        try {
+            if (payload.request.sourceKind === 'webpage') {
+                const analysis = await this.requestPassiveWebpageAnalysis(payload);
+                if (requestId !== this.pageCaptureRequestId) return;
+                const currentPayload = this.buildPageMemoryCaptureRequest();
+                if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
+                    this.clearPageMemoryCaptureChip();
+                    return;
+                }
+                if (analysis?.decision === 'skip') {
+                    console.log('⏭️ 单次网页分析判断无需进入资料候选:', {
+                        contextKey: payload.contextKey,
+                        reason: analysis.reason,
+                    });
+                    this.clearPageMemoryCaptureChip();
+                    return;
+                }
+            }
+
+            const autoDecision = this.getPageMemoryCaptureAutoDecision(
+                candidate,
+                payload.request,
+            );
             if (autoDecision.shouldAutoSave) {
-                this.autoSavePageMemoryCapture(currentPayload, autoDecision.reason);
+                this.autoSavePageMemoryCapture(payload, autoDecision.reason);
                 return;
             }
-            this.showPageMemoryCaptureChip(currentPayload, response.result);
-            this.schedulePageMemoryCaptureAutoRecheck(currentPayload.request);
-        });
+            this.showPageMemoryCaptureChip(payload, candidate);
+            this.schedulePageMemoryCaptureAutoRecheck(payload.request);
+        } finally {
+            if (
+                requestId === this.pageCaptureRequestId &&
+                this.pageCapturePendingContextKey === payload.contextKey
+            ) {
+                this.pageCapturePendingContextKey = null;
+            }
+        }
+    }
+
+    private async requestPassiveWebpageAnalysis(
+        payload: { contextKey: string; request: Record<string, unknown> },
+    ): Promise<PassiveWebpageAnalysisResult | null> {
+        const sourceTitle = String(payload.request.sourceTitle || '');
+        const sourceUrl = String(payload.request.sourceUrl || '');
+        const text = String(payload.request.text || '');
+        const metadata = (payload.request.metadata || {}) as Record<string, unknown>;
+        const pageContent: SimplePageContent = {
+            title: sourceTitle,
+            url: sourceUrl,
+            domain: String(metadata.host || window.location.hostname),
+            mainContent: text,
+            wordCount: Number(metadata.wordCount || this.countWords(text)),
+            timestamp: Date.now(),
+        };
+        const analysisKey = buildPassiveWebpageAnalysisKey(pageContent);
+        const cached = this.pageAnalysisResultByKey.get(analysisKey);
+        if (cached) return cached;
+
+        this.lastAnalysisTime = Date.now();
+        this.analysisCount++;
+        try {
+            const response = await Promise.race([
+                chrome.runtime.sendMessage({
+                    type: 'WEB_INTELLIGENCE_ANALYSIS',
+                    pageContent,
+                    analysisKey,
+                    force: false,
+                    triggerSource: 'memory_capture_candidate',
+                }),
+                new Promise<never>((_resolve, reject) => {
+                    window.setTimeout(
+                        () => reject(new Error('passive_webpage_analysis_timeout')),
+                        30_000,
+                    );
+                }),
+            ]);
+            if (!response?.success || !response.result) {
+                throw new Error(response?.error || 'passive_webpage_analysis_failed');
+            }
+            this.pageAnalysisResultByKey.delete(analysisKey);
+            this.pageAnalysisResultByKey.set(analysisKey, response.result);
+            while (this.pageAnalysisResultByKey.size > 30) {
+                const oldestKey = this.pageAnalysisResultByKey.keys().next().value;
+                if (typeof oldestKey !== 'string') break;
+                this.pageAnalysisResultByKey.delete(oldestKey);
+            }
+            console.log('✅ 网页候选已完成单次分析（写入仍由 Memory Capture 决定）:', {
+                decision: response.result.decision,
+                requestReuse: response.requestReuse,
+                stored: response.stored,
+            });
+            return response.result;
+        } catch (error) {
+            console.warn('⚠️ 单次网页分析不可用，沿用确定性候选评分:', error);
+            return null;
+        }
     }
 
     private buildPageMemoryCaptureRequest(): { contextKey: string; request: Record<string, unknown> } | null {
@@ -5054,11 +5018,13 @@ class WebIntelligenceContentScript {
             return null;
         }
 
-        const contextKey = [
-            'page-capture',
-            sourceUrl,
-            this.createContextSignature(`${pageContent.title}:${pageContent.mainContent.slice(0, 600)}`),
-        ].join(':');
+        const contextKey = `page-capture:${buildPassiveWebpageAnalysisKey({
+            title: pageContent.title,
+            url: sourceUrl,
+            mainContent: pageContent.mainContent,
+            domain: pageContent.domain,
+            wordCount: pageContent.wordCount,
+        })}`;
 
         return {
             contextKey,
@@ -8499,6 +8465,13 @@ class WebIntelligenceContentScript {
                 font-weight: 600;
             }
 
+            .pai-context-attribution-chip {
+                border: 1px solid rgba(124, 58, 237, 0.24);
+                background: rgba(245, 243, 255, 0.9);
+                color: #6d28d9;
+                font-weight: 650;
+            }
+
             .pai-context-source-status {
                 border: 1px solid rgba(14, 116, 144, 0.22);
                 background: rgba(236, 254, 255, 0.82);
@@ -8840,6 +8813,71 @@ class WebIntelligenceContentScript {
             .pai-context-feedback-reason-icon {
                 color: #2d7064;
                 font-weight: 900;
+            }
+
+            .pai-context-claim-correction {
+                display: grid;
+                gap: 8px;
+                margin-top: 4px;
+                padding-top: 10px;
+                border-top: 1px solid rgba(177, 153, 125, 0.28);
+            }
+
+            .pai-context-claim-correction-item {
+                display: grid;
+                gap: 7px;
+                padding: 9px 10px;
+                border: 1px solid rgba(124, 58, 237, 0.2);
+                border-radius: 9px;
+                background: rgba(245, 243, 255, 0.72);
+            }
+
+            .pai-context-claim-correction-copy {
+                display: grid;
+                gap: 2px;
+                color: #475569;
+                font-size: 11px;
+                line-height: 1.4;
+            }
+
+            .pai-context-claim-correction-copy strong {
+                color: #5b21b6;
+                font-size: 12px;
+            }
+
+            .pai-context-claim-correction-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+            }
+
+            .pai-context-claim-correction-actions button {
+                border: 1px solid rgba(124, 58, 237, 0.25);
+                border-radius: 7px;
+                background: rgba(255, 255, 255, 0.84);
+                color: #5b21b6;
+                cursor: pointer;
+                font-size: 11px;
+                padding: 5px 7px;
+            }
+
+            .pai-context-claim-correction-actions button:disabled {
+                cursor: wait;
+                opacity: 0.55;
+            }
+
+            .pai-context-claim-correction-status {
+                color: #64748b;
+                font-size: 10px;
+                line-height: 1.4;
+            }
+
+            .pai-context-claim-correction-status[data-state="success"] {
+                color: #166534;
+            }
+
+            .pai-context-claim-correction-status[data-state="error"] {
+                color: #b91c1c;
             }
 
             .pai-context-feedback-note-toggle {
@@ -9370,7 +9408,7 @@ class WebIntelligenceContentScript {
         const mode = options.mode || 'lens';
         const isSelectionSearch = mode === 'selectionSearch';
         const selectedText = normalizeText(options.selectedText);
-        const keystoneEnglish = getContentScriptUiLanguage() === 'en-US';
+        const keystoneEnglish = options.uiLanguage === 'en-US';
         const keystoneText = {
             brief: keystoneEnglish ? 'Keystone Brief' : '关键简报',
             synthesized: keystoneEnglish ? 'Synthesized' : '已综合',
@@ -9767,7 +9805,7 @@ class WebIntelligenceContentScript {
         const formatKeystoneDate = (timestamp: number): string => {
             if (!Number.isFinite(timestamp) || timestamp <= 0) return keystoneText.unknownTime;
             const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
-            return new Intl.DateTimeFormat(getContentScriptUiLanguage(), {
+            return new Intl.DateTimeFormat(keystoneEnglish ? 'en-US' : 'zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
@@ -10192,6 +10230,30 @@ class WebIntelligenceContentScript {
                     </button>
                 `)
                 .join('');
+                const correctableClaims = (match.claimAttribution || []).filter(
+                    (claim) => claim.correctionAllowed,
+                );
+                const attributionCorrectionHtml = correctableClaims.length
+                    ? `
+                        <div class="pai-context-claim-correction" aria-label="内容归属纠正">
+                            <div class="pai-context-feedback-scene-label">内容归属</div>
+                            ${correctableClaims.map((claim) => `
+                                <div class="pai-context-claim-correction-item" data-claim-id="${escapeHtmlAttribute(claim.claimId)}">
+                                    <div class="pai-context-claim-correction-copy">
+                                        <strong>${escapeHtml(claim.displayLabel)}</strong>
+                                        <span>${escapeHtml(claim.consequence)}</span>
+                                    </div>
+                                    <div class="pai-context-claim-correction-actions">
+                                        ${MEMORY_CLAIM_CORRECTION_ACTIONS.map((action) => `
+                                            <button type="button" data-claim-correction="${escapeHtmlAttribute(action.value)}" data-claim-id="${escapeHtmlAttribute(claim.claimId)}">${escapeHtml(action.label)}</button>
+                                        `).join('')}
+                                    </div>
+                                    <div class="pai-context-claim-correction-status" role="status">只修改 Personal AI 的派生归属，不改原始消息或外部系统。</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `
+                    : '';
 
                 drawer.innerHTML = `
                     <button type="button" class="pai-context-feedback-scrim" aria-label="关闭反馈原因选择"></button>
@@ -10212,6 +10274,7 @@ class WebIntelligenceContentScript {
                         <div class="pai-context-feedback-reasons">
                             ${reasonButtonsHtml}
                         </div>
+                        ${attributionCorrectionHtml}
                         ${negativeFeedbackNoteExpanded ? `
                             <textarea class="pai-context-feedback-note" maxlength="260" placeholder="补充原因（可选，不填也会生效）">${escapeHtml(negativeFeedbackNote)}</textarea>
                         ` : `
@@ -10265,6 +10328,69 @@ class WebIntelligenceContentScript {
                             autoApplied: true,
                             restoreBubbleOptions: { mode, selectedText },
                         });
+                        return;
+                    }
+
+                    const claimCorrectionButton = target.closest<HTMLButtonElement>(
+                        '[data-claim-correction][data-claim-id]',
+                    );
+                    if (claimCorrectionButton) {
+                        event.preventDefault();
+                        const claimId = claimCorrectionButton.dataset.claimId || '';
+                        const correction = claimCorrectionButton.dataset
+                            .claimCorrection as MemoryClaimCorrectionAction | undefined;
+                        const claim = correctableClaims.find(
+                            (item) => item.claimId === claimId,
+                        );
+                        if (!claim || !correction) return;
+                        const item = claimCorrectionButton.closest<HTMLElement>(
+                            '.pai-context-claim-correction-item',
+                        );
+                        const buttons = item?.querySelectorAll<HTMLButtonElement>('button') || [];
+                        const status = item?.querySelector<HTMLElement>(
+                            '.pai-context-claim-correction-status',
+                        );
+                        buttons.forEach((button) => {
+                            button.disabled = true;
+                        });
+                        if (status) status.textContent = '正在更新派生归属…';
+                        chrome.runtime.sendMessage(
+                            {
+                                type: 'MEMORY_CLAIM_CORRECTION',
+                                claimId,
+                                correction: {
+                                    correction,
+                                    expectedRevision: claim.revision,
+                                    source: 'memory_lens',
+                                    idempotencyKey:
+                                        (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                                            ? crypto.randomUUID()
+                                            : '') ||
+                                        `lens-claim-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                                },
+                            },
+                            (response) => {
+                                const error = chrome.runtime.lastError?.message || response?.error;
+                                if (!response?.success || error) {
+                                    buttons.forEach((button) => {
+                                        button.disabled = false;
+                                    });
+                                    if (status) {
+                                        status.textContent = `未更新：${error || '服务未确认写入'}`;
+                                        status.dataset.state = 'error';
+                                    }
+                                    return;
+                                }
+                                claim.revision = response.result.revision;
+                                claim.corrected = true;
+                                if (status) {
+                                    status.textContent = response.result.rawSourceChanged === false
+                                        ? '已更新派生归属；原始消息未修改。'
+                                        : '归属已更新。';
+                                    status.dataset.state = 'success';
+                                }
+                            },
+                        );
                     }
                 });
 
@@ -10443,6 +10569,12 @@ class WebIntelligenceContentScript {
             const weaveChipHtml = weaveLabel
                 ? `<span class="pai-context-meta-item pai-context-weave-chip" title="跨来源缝合证据">${escapeHtml(weaveLabel)}</span>`
                 : '';
+            const attributionItem = (match.claimAttribution || []).find(
+                (item) => item.corrected || item.effect !== 'used',
+            );
+            const attributionChipHtml = attributionItem
+                ? `<span class="pai-context-meta-item pai-context-attribution-chip" title="${escapeHtmlAttribute(`${attributionItem.consequence}；只影响 Personal AI 的派生使用，不修改原始消息。`)}">${escapeHtml(attributionItem.displayLabel)} · ${escapeHtml(attributionItem.effect === 'background_only' ? '仅作背景' : attributionItem.effect === 'blocked' ? '未使用' : '已纠正')}</span>`
+                : '';
             const pagerHtml = matches.length > 1
                 ? `
                     <div class="pai-context-pager" aria-label="相关记忆候选分页">
@@ -10608,6 +10740,7 @@ class WebIntelligenceContentScript {
                     ${changeProjectionHtml}
 
                     <div class="pai-context-meta-row" aria-label="记忆来源摘要">
+                        ${attributionChipHtml}
                         ${weaveChipHtml}
                         ${metaHtml}
                         ${sourceLinksHtml}
@@ -11329,61 +11462,6 @@ class WebIntelligenceContentScript {
         }
     }
 
-    private showNotification(result: SimpleAnalysisResult): void {
-        if (document.querySelector('.web-intelligence-notification')) {
-            return;
-        }
-
-        const notification = document.createElement('div');
-        notification.className = 'web-intelligence-notification';
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 12px 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 2147483647;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 13px;
-            max-width: 280px;
-            cursor: pointer;
-            transform: translateX(300px);
-            transition: transform 0.3s ease;
-        `;
-
-        const confidencePercent = Math.round(result.confidence * 100);
-        notification.innerHTML = `
-            <div style="display: flex; align-items: center; margin-bottom: 6px;">
-                <span style="margin-right: 8px;">🧠</span>
-                <span style="font-weight: 600;">发现相关内容</span>
-                <span style="margin-left: auto; font-size: 11px; opacity: 0.8;">${confidencePercent}%</span>
-            </div>
-            <div style="font-size: 11px; opacity: 0.9;">
-                ${escapeHtml(result.reasoning.substring(0, 60))}...
-            </div>
-        `;
-
-        document.body.appendChild(notification);
-
-        window.setTimeout(() => {
-            notification.style.transform = 'translateX(0)';
-        }, 100);
-
-        notification.addEventListener('click', () => {
-            notification.style.transform = 'translateX(300px)';
-            window.setTimeout(() => notification.remove(), 300);
-        });
-
-        window.setTimeout(() => {
-            if (notification.parentNode) {
-                notification.style.transform = 'translateX(300px)';
-                window.setTimeout(() => notification.remove(), 300);
-            }
-        }, 6000);
-    }
 }
 
 function sanitizeVisualMemorySvgStyleValue(value: string): string {

@@ -30,7 +30,7 @@
 3. 增加 focused verification。
    - 静态 verifier 断言 pending receipt 函数和文案存在。
    - E2E 在自动入库保存接口延迟时断言 pending toast 可见，且在响应前未把它当作 confirmed write。
-4. 更新 `docs/features/memory_capture.md` 和 `docs/features/index.md`。
+4. 更新 `docs/features/memory_capture.md` 和 `docs/index.md`。
    - 保持文档简洁，只补自动入库提交中边界。
 5. 验证。
    - `node --check desktop-app/scripts/webpage-memory-detection-check.mjs`

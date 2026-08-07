@@ -1,6 +1,6 @@
 # Message Analysis 空导出回执计划
 
-随机目标：`docs/features/index.md` 中的 `记忆入口规则` / Message Analysis。
+随机目标：`docs/index.md` 中的 `记忆入口规则` / Message Analysis。
 
 ## 需要改进的点
 

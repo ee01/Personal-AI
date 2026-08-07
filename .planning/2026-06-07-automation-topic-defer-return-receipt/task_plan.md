@@ -12,7 +12,7 @@ Complete
 - [x] Read automation memory and avoid recent feature targets
 - [x] Check `docs/progressing/to-verify.md`
 - [x] Check local Reminders for a `Personal AI` list
-- [x] Randomly select a non-recent feature from `docs/features/index.md`
+- [x] Randomly select a non-recent feature from `docs/index.md`
 - [x] Inspect Topic Messages defer code and tests
 - [x] Record external product and paper research in `findings.md`
 - **Status:** complete

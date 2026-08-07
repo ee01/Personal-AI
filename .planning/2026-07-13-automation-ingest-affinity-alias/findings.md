@@ -10,5 +10,5 @@
   - OpenAI ChatGPT Memory distinguishes stable saved memories from adaptive chat-history references, reinforcing that memory systems must be selective and user-controllable.
   - Recent agent-memory surveys and experience-following studies warn against naive memory growth and stale/irrelevant replay.
   - Trustworthy memory-search work treats memory retrieval/admission as a trust boundary, supporting explicit gates and diagnostics.
-- Code finding: `docs/features/memory_system.md` and the `SalienceScorer` comment both say ingest affinity matches entity name/alias, but `computeEntityAffinityBoost()` only matched `entities.name`. Alias-only project codes or people aliases therefore lost positive behavior affinity during ingest scoring.
+- Code finding: `docs/memory_system.md` and the `SalienceScorer` comment both say ingest affinity matches entity name/alias, but `computeEntityAffinityBoost()` only matched `entities.name`. Alias-only project codes or people aliases therefore lost positive behavior affinity during ingest scoring.
 

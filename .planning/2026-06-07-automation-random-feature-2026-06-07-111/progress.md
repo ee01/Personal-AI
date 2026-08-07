@@ -7,7 +7,7 @@
 - **Started:** 2026-06-07
 
 ### Actions Taken
-- Read automation memory, `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, and relevant memory notes.
+- Read automation memory, `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, and relevant memory notes.
 - Confirmed no carry-over in `docs/progressing/to-verify.md`.
 - Randomly selected `Storyline Draft API` after excluding recent automation targets.
 - Checked Reminders list names; no local `Personal AI` list exists.

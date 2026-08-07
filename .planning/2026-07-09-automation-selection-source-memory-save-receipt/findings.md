@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `选中文字保存为资料记忆`.
+- Randomly selected feature from `docs/index.md`: `选中文字保存为资料记忆`.
 - Feature owner/capability: Memory Capture.
 - Source document: `docs/features/memory_capture.md`.
 - `docs/progressing/to-verify.md` currently says `暂无`.

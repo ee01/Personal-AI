@@ -17,6 +17,7 @@ import {
   notifyJiraIssuePagesToSyncXsrf,
 } from './jira';
 import {
+  GOOGLE_AUTH_SCOPE_SETS,
   getGoogleAuthToken,
   getGoogleAuthTokenSilently,
 } from './utils/googleAuth';
@@ -26,6 +27,7 @@ import {
   getMemoryServiceClient,
   type IngestPayload,
 } from './services/MemoryServiceClient';
+import { readExtensionUiPreferences } from './i18n';
 import {
   buildBackendNotificationButtons,
   buildBackendNotificationContextMessage,
@@ -42,6 +44,16 @@ import {
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
+import {
+  buildPassiveWebpageAnalysisKey,
+  PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
+  type PassiveWebpageAnalysisResult,
+} from './web-intelligence/passiveWebpageAnalysis';
+import { analyzePassiveWebpageOnce } from './web-intelligence/runPassiveWebpageAnalysis';
+import {
+  buildSessionRequestCacheKey,
+  SessionRequestCache,
+} from './web-intelligence/sessionRequestCache';
 import {
   DashboardMessageHandler,
   buildProjectDashboardLaunchPath,
@@ -138,7 +150,7 @@ import {
   syncCalendarEventsToMemoryService,
   syncOutlookCalendarToMemoryService,
 } from './context-assist/outlookCalendar';
-import { isComposerAssistEnabledFromConfig } from './composer-guard/assistConfig';
+import { isComposerAssistEnabledFromConfig, isComposerAssistIntentEnabledFromConfig } from './composer-guard/assistConfig';
 
 console.log('Background script loaded');
 const PERSONAL_AI_AR_CONTEXT_MENU_ID = 'personal-ai-ar-data';
@@ -158,6 +170,80 @@ const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
 const pendingSnoozeReminderKeys = new Set<string>();
 const GLIP_POPUP_DEFAULT_WIDTH = 1100;
 const GLIP_POPUP_DEFAULT_HEIGHT = 900;
+const CONTEXT_RECALL_BACKGROUND_CACHE_STORAGE_KEY =
+  'context_recall_background_cache_v1';
+const WEBPAGE_ANALYSIS_BACKGROUND_CACHE_STORAGE_KEY =
+  'webpage_analysis_background_cache_v2';
+const CONTEXT_RECALL_BACKGROUND_CACHE_TTL_MS = 5 * 60 * 1000;
+const WEBPAGE_ANALYSIS_SKIP_CACHE_TTL_MS = 20 * 60 * 1000;
+const WEBPAGE_ANALYSIS_RESULT_CACHE_TTL_MS = 45 * 60 * 1000;
+const contextRecallBackgroundCache = new SessionRequestCache<any>(
+  CONTEXT_RECALL_BACKGROUND_CACHE_TTL_MS,
+  40,
+);
+const webpageAnalysisBackgroundCache =
+  new SessionRequestCache<PassiveWebpageAnalysisResult>(
+    WEBPAGE_ANALYSIS_RESULT_CACHE_TTL_MS,
+    80,
+  );
+const contextRecallBackgroundInFlight = new Map<string, Promise<any>>();
+const webpageAnalysisBackgroundInFlight = new Map<
+  string,
+  Promise<PassiveWebpageAnalysisResult>
+>();
+let contextRecallBackgroundCacheLoadPromise: Promise<void> | null = null;
+let webpageAnalysisBackgroundCacheLoadPromise: Promise<void> | null = null;
+
+function getSessionStorageArea(): any | null {
+  return (chrome.storage as any)?.session || null;
+}
+
+async function loadBackgroundSessionCache<T>(
+  storageKey: string,
+  cache: SessionRequestCache<T>,
+): Promise<void> {
+  const storageArea = getSessionStorageArea();
+  if (!storageArea) return;
+  try {
+    const stored = await storageArea.get(storageKey);
+    cache.hydrate(stored?.[storageKey]);
+  } catch (error) {
+    console.debug(`[background] failed to load ${storageKey}:`, error);
+  }
+}
+
+async function persistBackgroundSessionCache<T>(
+  storageKey: string,
+  cache: SessionRequestCache<T>,
+): Promise<void> {
+  const storageArea = getSessionStorageArea();
+  if (!storageArea) return;
+  try {
+    await storageArea.set({ [storageKey]: cache.snapshot() });
+  } catch (error) {
+    console.debug(`[background] failed to persist ${storageKey}:`, error);
+  }
+}
+
+function ensureContextRecallBackgroundCacheLoaded(): Promise<void> {
+  if (!contextRecallBackgroundCacheLoadPromise) {
+    contextRecallBackgroundCacheLoadPromise = loadBackgroundSessionCache(
+      CONTEXT_RECALL_BACKGROUND_CACHE_STORAGE_KEY,
+      contextRecallBackgroundCache,
+    );
+  }
+  return contextRecallBackgroundCacheLoadPromise;
+}
+
+function ensureWebpageAnalysisBackgroundCacheLoaded(): Promise<void> {
+  if (!webpageAnalysisBackgroundCacheLoadPromise) {
+    webpageAnalysisBackgroundCacheLoadPromise = loadBackgroundSessionCache(
+      WEBPAGE_ANALYSIS_BACKGROUND_CACHE_STORAGE_KEY,
+      webpageAnalysisBackgroundCache,
+    );
+  }
+  return webpageAnalysisBackgroundCacheLoadPromise;
+}
 
 function buildComposerAssistDisabledResponse(debug = false) {
   return {
@@ -549,6 +635,7 @@ async function detachPersonalAiArAgentTask(data: Record<string, any>): Promise<S
 
   const token = await getGoogleAuthTokenSilently({
     caller: 'background.detachAgentTaskFromArBinding',
+    scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
   });
   if (!token) {
     throw new Error('缺少 Google 授权，无法暂停重复 AR AgentTask');
@@ -679,16 +766,21 @@ function formatChromeNotificationCreateError(error: unknown): string {
   return `${compacted.slice(0, 139).trim()}…`;
 }
 
+type ChromeDeliveryEvent = {
+  sourceRef: string;
+  lane: 'todo' | 'notice';
+  status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  externalRef?: string;
+  error?: string;
+};
+
+const CHROME_DELIVERY_OUTBOX_STORAGE_KEY =
+  'notification_center_chrome_delivery_outbox_v1';
+
 async function safeReportChromeDelivery(
-  events: Array<{
-    sourceRef: string;
-    lane: 'todo' | 'notice';
-    status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
-    externalRef?: string;
-    error?: string;
-  }>,
-): Promise<void> {
-  if (events.length === 0) return;
+  events: ChromeDeliveryEvent[],
+): Promise<boolean> {
+  if (events.length === 0) return true;
   try {
     const client = getMemoryServiceClient();
     await client.reportNotificationCenterDelivery(
@@ -697,12 +789,76 @@ async function safeReportChromeDelivery(
         channel: 'chrome',
       })),
     );
+    return true;
   } catch (error: any) {
     if (isNotificationCenterCompatError(error)) {
-      return;
+      return true;
     }
     console.debug('safeReportChromeDelivery error:', error);
+    return false;
   }
+}
+
+function getChromeDeliveryEventKey(event: ChromeDeliveryEvent): string {
+  return [
+    event.sourceRef,
+    event.lane,
+    event.status,
+    event.externalRef || '',
+    event.error || '',
+  ].join('\u001f');
+}
+
+async function readChromeDeliveryOutbox(): Promise<ChromeDeliveryEvent[]> {
+  try {
+    const stored = await chrome.storage.local.get(
+      CHROME_DELIVERY_OUTBOX_STORAGE_KEY,
+    );
+    const raw = stored?.[CHROME_DELIVERY_OUTBOX_STORAGE_KEY];
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (event: any) =>
+        event &&
+        typeof event.sourceRef === 'string' &&
+        (event.lane === 'todo' || event.lane === 'notice') &&
+        ['delivered', 'failed', 'clicked', 'dismissed'].includes(event.status),
+    );
+  } catch (error) {
+    console.debug('readChromeDeliveryOutbox error:', error);
+    return [];
+  }
+}
+
+async function enqueueChromeDeliveryOutbox(
+  events: ChromeDeliveryEvent[],
+): Promise<void> {
+  if (events.length === 0) return;
+  try {
+    const merged = new Map<string, ChromeDeliveryEvent>();
+    for (const event of [...(await readChromeDeliveryOutbox()), ...events]) {
+      merged.set(getChromeDeliveryEventKey(event), event);
+    }
+    await chrome.storage.local.set({
+      [CHROME_DELIVERY_OUTBOX_STORAGE_KEY]: Array.from(merged.values()).slice(
+        -100,
+      ),
+    });
+  } catch (error) {
+    console.debug('enqueueChromeDeliveryOutbox error:', error);
+  }
+}
+
+async function flushChromeDeliveryOutbox(): Promise<boolean> {
+  const pending = await readChromeDeliveryOutbox();
+  if (pending.length === 0) return true;
+  const reported = await safeReportChromeDelivery(pending);
+  if (!reported) return false;
+  try {
+    await chrome.storage.local.remove(CHROME_DELIVERY_OUTBOX_STORAGE_KEY);
+  } catch (error) {
+    console.debug('flushChromeDeliveryOutbox cleanup error:', error);
+  }
+  return true;
 }
 
 async function storeBackendNotificationMeta(
@@ -964,6 +1120,7 @@ async function getScheduledSheetDataForMarkers(): Promise<{
     }
     const token = await getGoogleAuthTokenSilently({
       caller: 'refreshGlipMessageMarkers',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
     if (!token) {
       return { messages: [], pushLogs: [] };
@@ -1168,7 +1325,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       // 使用静默方法：只使用缓存的 token，不弹出授权窗口
       SheetSchemaUpdater.checkAndAutoUpdate(
         () =>
-          getGoogleAuthTokenSilently({ caller: 'background.autoUpdateSchema' }),
+          getGoogleAuthTokenSilently({
+            caller: 'background.autoUpdateSchema',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+          }),
         {
           showNotification: true,
         },
@@ -1192,6 +1352,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         AppScriptUpdater.checkAndAutoUpdate(() =>
           getGoogleAuthTokenSilently({
             caller: 'background.autoUpdateAppScript',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
           }),
         )
           .then(() => {
@@ -1214,6 +1375,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         () =>
           getGoogleAuthTokenSilently({
             caller: 'background.autoUpdateJiraRule',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
           }),
         {
           delay: 8000,
@@ -1504,6 +1666,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = request.data || {};
         const token = await getGoogleAuthTokenSilently({
           caller: 'background.createAgentTaskFromArBinding',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         if (!token) {
           throw new Error('缺少 Google 授权，无法写入 Scheduled Messages');
@@ -2081,29 +2244,106 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CONTEXT_RECALL_REQUEST') {
     (async () => {
       try {
-        const envConfig = await getEnvConfig();
-        const client = getMemoryServiceClient();
-        const result = await client.contextRecall({
+        const [envConfig, uiPreferences, identityStorage] = await Promise.all([
+          getEnvConfig(),
+          readExtensionUiPreferences(),
+          chrome.storage.local.get(['userinfo']),
+        ]);
+        const contextRequest = {
           ...(request.request || {}),
           sourceTypes: filterSceneRehearsalSourceTypes(
             request.request?.sourceTypes,
             envConfig,
             DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
           ),
+        };
+        const cacheKey = buildSessionRequestCacheKey('context-recall-v1', {
+          request: contextRequest,
+          uiLanguage: uiPreferences.language,
+          memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
+          userIdentity: {
+            id: identityStorage?.userinfo?.id,
+            username: identityStorage?.userinfo?.username,
+            email: identityStorage?.userinfo?.email,
+          },
         });
+        const cacheable = !contextRequest.debug;
+
+        await ensureContextRecallBackgroundCacheLoaded();
+        const cached = cacheable
+          ? contextRecallBackgroundCache.get(cacheKey)
+          : undefined;
+        if (cached) {
+          sendResponse({ ...cached, requestReuse: 'cache_hit' });
+          return;
+        }
+
+        const existing = contextRecallBackgroundInFlight.get(cacheKey);
+        const responsePromise =
+          existing ||
+          (async () => {
+            try {
+              const result = await getMemoryServiceClient().contextRecall(
+                contextRequest,
+              );
+              const response = {
+                success: true,
+                uiLanguage: uiPreferences.language,
+                topMatch: result.topMatch,
+                matches: result.matches,
+                scopeReceipt: result.scopeReceipt,
+                cohesionReceipt: result.cohesionReceipt,
+                attributionReceipt: result.attributionReceipt,
+                changeProjections: result.changeProjections,
+                autopilot: result.autopilot,
+                keystoneBrief: result.keystoneBrief,
+                debug: result.debug,
+                queryTimeMs: result.queryTimeMs,
+              };
+              if (cacheable) {
+                contextRecallBackgroundCache.set(cacheKey, response);
+                await persistBackgroundSessionCache(
+                  CONTEXT_RECALL_BACKGROUND_CACHE_STORAGE_KEY,
+                  contextRecallBackgroundCache,
+                );
+              }
+              return response;
+            } finally {
+              contextRecallBackgroundInFlight.delete(cacheKey);
+            }
+          })();
+
+        if (!existing) {
+          contextRecallBackgroundInFlight.set(cacheKey, responsePromise);
+        }
+        const response = await responsePromise;
         sendResponse({
-          success: true,
-          topMatch: result.topMatch,
-          matches: result.matches,
-          changeProjections: result.changeProjections,
-          autopilot: result.autopilot,
-          keystoneBrief: result.keystoneBrief,
-          debug: result.debug,
-          queryTimeMs: result.queryTimeMs,
+          ...response,
+          requestReuse: existing ? 'joined_inflight' : 'backend_request',
         });
       } catch (err) {
         console.warn('[background] context-recall failed:', err);
         sendResponse({ success: true, topMatch: null, matches: [] });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CLAIM_CORRECTION') {
+    (async () => {
+      try {
+        const claimId = String(request.claimId || '').trim();
+        if (!claimId) throw new Error('claimId is required');
+        const result = await getMemoryServiceClient().correctMemoryClaim(
+          claimId,
+          request.correction,
+        );
+        sendResponse({ success: true, result });
+      } catch (err) {
+        sendResponse({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     })();
     return true;
@@ -2432,10 +2672,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         const envConfig = await getEnvConfig();
+        const assistIntent =
+          request.request?.assistIntent === 'draft_refine'
+            ? 'draft_refine'
+            : request.request?.assistIntent === 'draft_compose'
+              ? 'draft_compose'
+              : null;
         if (
           !isComposerAssistEnabledFromConfig(
             envConfig as unknown as Record<string, unknown>,
-          )
+          ) ||
+          (assistIntent &&
+            !isComposerAssistIntentEnabledFromConfig(
+              assistIntent,
+              envConfig as unknown as Record<string, unknown>,
+            ))
         ) {
           sendResponse({
             success: true,
@@ -2663,68 +2914,119 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // 处理智能网页分析请求
   if (request.type === 'WEB_INTELLIGENCE_ANALYSIS') {
-    const { pageContent, analysisResult, timestamp: _timestamp } = request;
-
-    try {
-      console.log('🧠 收到智能网页分析结果:', {
-        url: pageContent.url,
-        title: pageContent.title,
-        confidence: analysisResult.confidence,
-        isRelevant: analysisResult.isRelevant,
-        suggestedStorage: analysisResult.suggestedStorage,
-        extractedInfo: Object.keys(analysisResult.extractedInfo || {}),
-      });
-
-      // 如果分析结果建议存储，进行进一步处理
-      if (
-        analysisResult.suggestedStorage ||
-        (analysisResult.isRelevant && analysisResult.confidence > 0.5)
-      ) {
-        console.log('✅ 满足深度处理条件，调用agentThinking...');
-        // 调用agentThinking进行深度分析和存储
-        const agent = new IntelligentAgent();
-        agent
-          .analyze(
-            {
-              type: 'webpage',
-              url: pageContent.url,
-              title: pageContent.title,
-              content: pageContent.mainContent,
-              metadata: pageContent.metadata,
-              extractedInfo: analysisResult.extractedInfo,
-            },
-            {
-              type: 'webpage',
-              analysisDepth: 'normal',
-            },
-          )
-          .then((result) => {
-            console.log('✅ 网页内容已通过agentThinking处理:', result);
-            sendResponse({ success: true, processed: true, result });
-          })
-          .catch((error) => {
-            console.error('❌ agentThinking处理失败:', error);
-            sendResponse({ success: false, error: error.message });
+    (async () => {
+      try {
+        const pageContent = request.pageContent || {};
+        const input = {
+          title: String(pageContent.title || ''),
+          url: String(pageContent.url || ''),
+          domain: String(pageContent.domain || ''),
+          mainContent: String(pageContent.mainContent || ''),
+          wordCount: Number(pageContent.wordCount || 0),
+        };
+        if (!input.url || input.mainContent.trim().length < 120) {
+          sendResponse({
+            success: true,
+            processed: false,
+            stored: false,
+            reason: 'insufficient_page_content',
           });
-      } else {
-        // 记录但不进行深度处理
-        console.log('⏭️ 跳过深度处理:', {
-          suggestedStorage: analysisResult.suggestedStorage,
-          isRelevant: analysisResult.isRelevant,
-          confidence: analysisResult.confidence,
-          required:
-            'suggestedStorage=true OR (isRelevant=true AND confidence>0.5)',
+          return;
+        }
+
+        const envConfig = await getEnvConfig();
+        const analysisKey = String(
+          request.analysisKey || buildPassiveWebpageAnalysisKey(input),
+        );
+        const cacheKey = buildSessionRequestCacheKey('webpage-analysis-v2', {
+          analysisKey,
+          promptVersion: PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
+          provider: envConfig.LLM_TYPE,
+          model:
+            envConfig.LLM_TYPE === 'local'
+              ? envConfig.OLLAMA_MODEL
+              : envConfig.LLM_TYPE === 'groq'
+                ? envConfig.GROQ_MODEL
+                : envConfig.OPENAI_MODEL,
+        });
+        const force = Boolean(request.force);
+        const triggerSource =
+          request.triggerSource === 'manual'
+            ? 'manual'
+            : 'memory_capture_candidate';
+
+        await ensureWebpageAnalysisBackgroundCacheLoaded();
+        const cached = force
+          ? undefined
+          : webpageAnalysisBackgroundCache.get(cacheKey);
+        if (cached) {
+          sendResponse({
+            success: true,
+            processed: cached.decision !== 'skip',
+            analyzed: true,
+            stored: false,
+            storageBoundary: 'memory_capture_contract_only',
+            requestReuse: 'cache_hit',
+            triggerSource,
+            analysisKey,
+            result: cached,
+          });
+          return;
+        }
+
+        const existing = webpageAnalysisBackgroundInFlight.get(cacheKey);
+        const resultPromise =
+          existing ||
+          (async () => {
+            try {
+              const result = await analyzePassiveWebpageOnce(input);
+              webpageAnalysisBackgroundCache.set(cacheKey, result, {
+                ttlMs:
+                  result.decision === 'skip'
+                    ? WEBPAGE_ANALYSIS_SKIP_CACHE_TTL_MS
+                    : WEBPAGE_ANALYSIS_RESULT_CACHE_TTL_MS,
+              });
+              await persistBackgroundSessionCache(
+                WEBPAGE_ANALYSIS_BACKGROUND_CACHE_STORAGE_KEY,
+                webpageAnalysisBackgroundCache,
+              );
+              return result;
+            } finally {
+              webpageAnalysisBackgroundInFlight.delete(cacheKey);
+            }
+          })();
+
+        if (!existing) {
+          webpageAnalysisBackgroundInFlight.set(cacheKey, resultPromise);
+        }
+        const result = await resultPromise;
+        console.log('✅ 网页候选已完成单次聚焦分析:', {
+          url: input.url,
+          decision: result.decision,
+          confidence: result.confidence,
+          requestReuse: existing ? 'joined_inflight' : 'model_run',
+          triggerSource,
         });
         sendResponse({
           success: true,
-          processed: false,
-          reason: 'conditions_not_met',
+          processed: result.decision !== 'skip',
+          analyzed: true,
+          stored: false,
+          storageBoundary: 'memory_capture_contract_only',
+          requestReuse: existing ? 'joined_inflight' : 'model_run',
+          triggerSource,
+          analysisKey,
+          result,
+        });
+      } catch (error) {
+        console.error('❌ 单次网页分析失败:', error);
+        sendResponse({
+          success: false,
+          stored: false,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
-    } catch (error) {
-      console.error('❌ 处理智能网页分析失败:', error);
-      sendResponse({ success: false, error: error.message });
-    }
+    })();
 
     return true; // 保持消息通道开放
   }
@@ -3100,6 +3402,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('🔐 获取 Google 认证 token...');
         const token = await getGoogleAuthToken({
           caller: 'background.createScheduledMessage',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         console.log('✅ Token 获取成功');
 
@@ -3201,6 +3504,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const token = await getGoogleAuthToken({
           caller: 'background.createGlipComposeScheduledMessage',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         if (!token) {
           sendResponse({
@@ -3282,6 +3586,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         );
         const token = await getGoogleAuthTokenSilently({
           caller: 'background.checkAutomationLink',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         if (!token) {
           console.warn(
@@ -3340,6 +3645,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         );
         const token = await getGoogleAuthTokenSilently({
           caller: 'background.batchCheckAutomationLinks',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         if (!token) {
           console.warn(
@@ -3752,6 +4058,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const token = await getGoogleAuthToken({
           caller: 'background.cancelSnoozeReminder',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         const service = new ScheduledMessageService(token);
         const messages = await service.getAllMessages();
@@ -3858,6 +4165,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('🔔 Background: 获取 Google Auth Token...');
         const token = await getGoogleAuthToken({
           caller: 'background.createSnoozeMessage',
+          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
         console.log('🔔 Background: Token 获取成功');
 
@@ -3961,6 +4269,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               try {
                 const freshToken = await getGoogleAuthToken({
                   caller: 'background.updateMessageTopic',
+                  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
                 });
                 const freshService = new ScheduledMessageService(freshToken);
                 await freshService.updateMessage(newMessage.ID, {
@@ -4455,12 +4764,20 @@ let _lastSeenNotifCreatedAt = 0;
 async function pollBackendNotifications(): Promise<void> {
   try {
     const client = getMemoryServiceClient();
+    if (!(await flushChromeDeliveryOutbox())) {
+      console.debug(
+        'pollBackendNotifications skipped: pending delivery outbox is still unavailable',
+      );
+      return;
+    }
     try {
       const feed = await client.getNotificationCenterFeed(
         'chrome',
         ['todo', 'notice'],
         20,
+        'incremental',
       );
+      const deliveryEvents: ChromeDeliveryEvent[] = [];
       for (const item of feed.items) {
         const notifId = buildBackendNotificationId(item.sourceRef);
         await storeBackendNotificationMeta(notifId, {
@@ -4505,29 +4822,28 @@ async function pollBackendNotifications(): Promise<void> {
               item.sourceType,
             ),
           });
-          await safeReportChromeDelivery([
-            {
-              sourceRef: item.sourceRef,
-              lane: item.lane,
-              status: 'delivered',
-              externalRef: notifId,
-            },
-          ]);
+          deliveryEvents.push({
+            sourceRef: item.sourceRef,
+            lane: item.lane,
+            status: 'delivered',
+            externalRef: notifId,
+          });
         } catch (createError) {
           const errorMessage =
             formatChromeNotificationCreateError(createError);
           await clearBackendNotificationMeta(notifId);
-          await safeReportChromeDelivery([
-            {
-              sourceRef: item.sourceRef,
-              lane: item.lane,
-              status: 'failed',
-              externalRef: notifId,
-              error: errorMessage,
-            },
-          ]);
+          deliveryEvents.push({
+            sourceRef: item.sourceRef,
+            lane: item.lane,
+            status: 'failed',
+            externalRef: notifId,
+            error: errorMessage,
+          });
           console.debug('Backend notification create failed:', errorMessage);
         }
+      }
+      if (!(await safeReportChromeDelivery(deliveryEvents))) {
+        await enqueueChromeDeliveryOutbox(deliveryEvents);
       }
       return;
     } catch (feedError: any) {
@@ -4750,6 +5066,7 @@ async function handleSlideAnalysisRequest(tabId: number) {
     // 获取认证token（用户主动操作，可以弹窗）
     const token = await getGoogleAuthToken({
       caller: 'background.analyzeSlides',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
     });
     if (token) {
       // 发送回内容脚本

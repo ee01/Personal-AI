@@ -2,7 +2,7 @@
 
 ## 目标
 
-从 `docs/features/index.md` 随机巡检中选中 Notification Center 的 `周报与梦境摘要推送`。本轮只做一个低决策、可验证的 UX 改进：当手动推送已经生成摘要但 Bot 或 notice 投递未完整成功时，Options 页面必须第一眼显示为“部分完成/需留意”，而不是纯成功。
+从 `docs/index.md` 随机巡检中选中 Notification Center 的 `周报与梦境摘要推送`。本轮只做一个低决策、可验证的 UX 改进：当手动推送已经生成摘要但 Bot 或 notice 投递未完整成功时，Options 页面必须第一眼显示为“部分完成/需留意”，而不是纯成功。
 
 ## Plan
 

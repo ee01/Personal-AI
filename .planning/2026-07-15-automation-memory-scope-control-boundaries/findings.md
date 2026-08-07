@@ -9,7 +9,7 @@
 
 ## Current Implementation
 
-- `docs/features/memory_system.md` already documents scope semantics: default active recall is `work`; `personal` is opt-in; `all`/`both` reads both work and personal; passive context recall defaults broader.
+- `docs/memory_system.md` already documents scope semantics: default active recall is `work`; `personal` is opt-in; `all`/`both` reads both work and personal; passive context recall defaults broader.
 - `src/modals/memory-exploring.vue` renders the shared search header and scope segmented controls.
 - `src/modals/components/SearchResultPage.vue` already shows search scope intent, loading scope receipt, result scope breakdown, scope boundary notice, Ask scope receipt, empty result receipt, and batch receipt.
 - `tools/verify-memory-search-scope-e2e.mjs` already covers work/all/personal scope requests and result receipts. It does not yet assert button-level pre-click title/ARIA boundaries for the scope controls.

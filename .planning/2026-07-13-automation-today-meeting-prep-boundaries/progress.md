@@ -13,7 +13,7 @@
 - Ran external scan across Microsoft Copilot meeting prep, Microsoft Sales Copilot meeting cards, Google Meet Gemini notes, Zoom AI Companion summaries, and trust-in-AI transparency research.
 - Chosen implementation scope: presentation/accessibility-only control boundaries for the actual Video Home refresh and evidence source-link click targets.
 - Implemented `buildMeetingPrepRefreshButtonBoundary` and `buildMeetingPrepEvidenceLinkBoundary` in `src/contentScriptRingCentralVideoHome.ts`; refresh is disabled while loading to avoid duplicate backfill/resolve.
-- Updated `tools/verify-today-pilot-video-home.ts`, `tools/verify-context-assist-meeting-prep.mjs`, `docs/features/today_pilot.md`, and `docs/features/index.md`.
+- Updated `tools/verify-today-pilot-video-home.ts`, `tools/verify-context-assist-meeting-prep.mjs`, `docs/features/today_pilot.md`, and `docs/index.md`.
 - Static/source verifier initially failed because the new link boundary used `重新生成`, which is explicitly forbidden in this Video Home source to avoid on-demand generation semantics. Reworded to `另行生成`.
 - E2E initially failed because the fixture `exploreLink` used `?chunkId=...`, which `sanitizeExploreRoute` correctly drops. Updated the fixture to `#/timeline?focus=memory-1` so the Memory Exploring link is real.
 - Updated `/Users/Esone/.codex/automations/automation/memory.md` with selected feature, Reminder state, research, implementation, verification, and worktree notes.

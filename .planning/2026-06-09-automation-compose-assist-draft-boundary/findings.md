@@ -2,9 +2,9 @@
 
 ## Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `回复助手草稿辅助`.
+- Randomly selected feature from `docs/index.md`: `回复助手草稿辅助`.
 - Capability: Compose Assist.
-- Source document: `docs/features/compose_assist.md`.
+- Source document: `docs/features/assist.md`.
 - Local Reminders list scan returned `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`; no visible `Personal AI` list exists.
 - The worktree is already broadly dirty from earlier automation runs. Treat existing changes as user/automation-owned and avoid reverting them.
 

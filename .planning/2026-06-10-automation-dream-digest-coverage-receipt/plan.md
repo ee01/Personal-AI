@@ -6,8 +6,8 @@ Improve the Dream Replay / Dream Digest user path so a pushed digest explains wh
 
 ## Context
 
-- Selected random feature: `梦境重放` from `docs/features/index.md`.
-- Source of truth: `docs/features/memory_system.md`.
+- Selected random feature: `梦境重放` from `docs/index.md`.
+- Source of truth: `docs/memory_system.md`.
 - Main code paths:
   - `memory-service/src/core/GenerativeReplay.ts`
   - `memory-service/src/core/HeartbeatLoop.ts`
@@ -22,7 +22,7 @@ Improve the Dream Replay / Dream Digest user path so a pushed digest explains wh
 2. Use external product/paper references to shape the UX improvement.
 3. Add a compact coverage receipt to Dream Digest payload and rendered notification digest/previews. - Done
 4. Add focused tests for included/excluded dream scope. - Done
-5. Update `docs/features/memory_system.md`. - Done
+5. Update `docs/memory_system.md`. - Done
 6. Run targeted memory-service tests, dev extension compile, Dream Replay E2E, and `git diff --check`. - Done
 
 ## External Direction

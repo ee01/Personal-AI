@@ -3,7 +3,7 @@
 ## Selected Feature
 
 - Feature: `搜索结果有用/不相关反馈`
-- Source docs: `docs/features/memory_system.md`, `docs/features/index.md`
+- Source docs: `docs/memory_system.md`, `docs/index.md`
 - Primary code: `src/modals/components/SearchResultPage.vue`
 - Verification: `tools/verify-memory-search-feedback-e2e.mjs`, `npm run verify:memory-search-feedback:e2e`
 

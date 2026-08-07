@@ -232,6 +232,28 @@ describe('KeystoneBriefService', () => {
     ).toBeUndefined();
   });
 
+  it('matches automatic briefs only in the requested Options language', () => {
+    service.upsertComposedCandidate(
+      readyInput({
+        compositionVersion: 'auto-reflection-grounded-v2-en-US',
+      }),
+    );
+
+    expect(
+      service.matchContext(recallRequest(), rawMatches, {
+        outputLanguage: 'zh-CN',
+      }),
+    ).toBeUndefined();
+    expect(
+      service.matchContext(recallRequest(), rawMatches, {
+        outputLanguage: 'en-US',
+      }),
+    ).toMatchObject({
+      presentationMode: 'primary',
+      whyNow: 'Covers 1 original memories recalled this time',
+    });
+  });
+
   it('falls back after hide or inaccurate feedback without deleting sources', () => {
     const brief = service.upsertComposedCandidate(readyInput());
     const hidden = service.recordEvent(brief.id, {
@@ -281,7 +303,9 @@ describe('Keystone brief API', () => {
     const mine = await app.inject({
       method: 'POST',
       url: '/api/v1/keystone-briefs/mine',
-      payload: readyInput(),
+      payload: readyInput({
+        compositionVersion: 'auto-reflection-grounded-v2-zh-CN',
+      }),
     });
     expect(mine.statusCode).toBe(200);
     expect(mine.json().item.status).toBe('ready');
@@ -290,6 +314,7 @@ describe('Keystone brief API', () => {
     const match = await app.inject({
       method: 'GET',
       url: '/api/v1/keystone-briefs/match?scene=ringcentral_thread_reading&text=WhatsApp%20SMS%20reuse',
+      headers: { 'x-personal-ai-language': 'zh-CN' },
     });
     expect(match.statusCode).toBe(200);
     expect(match.json().items[0]).toMatchObject({
@@ -297,6 +322,14 @@ describe('Keystone brief API', () => {
       presentationMode: 'primary',
     });
     expect(match.json().scopeReceipt.note).toContain('不会写入');
+
+    const mismatchedLanguage = await app.inject({
+      method: 'GET',
+      url: '/api/v1/keystone-briefs/match?scene=ringcentral_thread_reading&text=WhatsApp%20SMS%20reuse',
+      headers: { 'x-personal-ai-language': 'en-US' },
+    });
+    expect(mismatchedLanguage.statusCode).toBe(200);
+    expect(mismatchedLanguage.json().items).toEqual([]);
 
     const event = await app.inject({
       method: 'POST',

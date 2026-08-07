@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮从 `docs/features/index.md` 随机选中 `Storyline 会前提示`。目标是让 Today Pilot 会前准备里的 Storyline 入口在打开 Draft 页前，更清楚地说明私有素材、脱敏提示和风险提醒范围，避免用户把“可生成故事线”误读成“已经可以外发”。
+本轮从 `docs/index.md` 随机选中 `Storyline 会前提示`。目标是让 Today Pilot 会前准备里的 Storyline 入口在打开 Draft 页前，更清楚地说明私有素材、脱敏提示和风险提醒范围，避免用户把“可生成故事线”误读成“已经可以外发”。
 
 ## 外部参考
 

@@ -52,7 +52,7 @@
 
 ## Resources
 - `docs/demo/open-question-exit-contract.html`
-- `docs/features/memory_system.md`
+- `docs/memory_system.md`
 - `docs/features/evidence_watch_contracts.md`
 - `docs/features/today_pilot.md`
 - `AGENT.md`

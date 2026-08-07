@@ -21,5 +21,5 @@
 1. 在燃尽/完成面板所有状态的 `metrics` 和说明中加入 `任务数口径`，明确当前只按本地任务条目计数，不含 story point、工时、scope change 或速度预测。
 2. 更新 `verify-project-dashboard` 的图表单测，覆盖风险、缺 ETA、ready、empty 四类燃尽状态的口径。
 3. 更新 Project Dashboard E2E，确认页面燃尽卡直接显示 `任务数口径`。
-4. 更新 `docs/features/project_dashboard_usage_guide.md` 和 `docs/features/index.md` 的目标行，保持文档是最新但不过细。
+4. 更新 `docs/features/project_dashboard_usage_guide.md` 和 `docs/index.md` 的目标行，保持文档是最新但不过细。
 5. 跑 `npm run verify:project-dashboard`、`npm start` 首次成功编译、`npm run verify:project-dashboard:e2e`、scoped `git diff --check`。

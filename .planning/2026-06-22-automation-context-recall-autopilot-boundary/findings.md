@@ -2,9 +2,9 @@
 
 ## Initial State
 
-- Randomly selected feature from `docs/features/index.md`: `场景记忆自动驾驶`.
+- Randomly selected feature from `docs/index.md`: `场景记忆自动驾驶`.
 - Capability: Memory Service / Memory Lens.
-- Indexed source docs: `docs/features/memory_system.md` and `docs/features/memory_lens.md`.
+- Indexed source docs: `docs/memory_system.md` and `docs/features/memory_lens.md`.
 - Local Reminder scan returned list names `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`; no `Personal AI` list is visible.
 - The worktree is already broadly dirty from prior runs. Treat all pre-existing changes as user/automation-owned and keep this run's edits scoped.
 

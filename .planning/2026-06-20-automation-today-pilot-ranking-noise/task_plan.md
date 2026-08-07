@@ -9,7 +9,7 @@ Phase 5
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - [x] Randomly select a feature while avoiding recent exact automation targets.
 - [x] Check local Reminders `Personal AI` list.
 - [x] Inspect Today Pilot service/UI/tests and identify a bounded implementation gap.
@@ -53,5 +53,5 @@ Phase 5
 ## Errors Encountered
 | Error | Resolution |
 |-------|------------|
-| Perl sampler printed mojibake in terminal | The selected row was decoded from the source index as `今天排序与噪声控制`; continue with exact feature from `docs/features/index.md`. |
+| Perl sampler printed mojibake in terminal | The selected row was decoded from the source index as `今天排序与噪声控制`; continue with exact feature from `docs/index.md`. |
 | First watcher-cleanup probe matched the probe command itself | Reran with fully bracketed patterns: `rg '[w]ebpack|[n]pm start|[w]ebpack\\.dev\\.cjs'`; no watcher remained. |

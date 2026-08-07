@@ -92,7 +92,7 @@ After：每个答案、prompt patch、skill action 都带同一份时间合约�
 本方案来自：
 
 - `docs/progressing/to-verify.md` 当前为 `暂无。`
-- 对 `docs/progressing/`、`docs/features/index.md`、automation memory 和近邻计划的去重。
+- 对 `docs/progressing/`、`docs/index.md`、automation memory 和近邻计划的去重。
 - 对 `10.32.56.212` 上 `esone.qiu` 记忆库的只读 SSH/SQLite 采样；HTTP memory-service 本轮超时，没有假装 API 可读。
 - 当前 AI agent、scheduled task、context engineering、temporal RAG 和 temporal reasoning 研究趋势。
 
@@ -610,9 +610,9 @@ Docs/demo 阶段：
 
 功能实现完成后，需要把关键点精简维护进正式 features 文档：
 
-- [`docs/features/memory_system.md`](../features/memory_system.md)：补 `TimeBasisFrame` 在 Ask、Recall、Action Queue 前的横切合约。
+- [`docs/memory_system.md`](../memory_system.md)：补 `TimeBasisFrame` 在 Ask、Recall、Action Queue 前的横切合约。
 - [`docs/features/ask.md`](../features/ask.md)：补 current/as-of/simulation 分栏回答和不足时的 warning。
-- [`docs/features/compose_assist.md`](../features/compose_assist.md)：补 Prompt Context Compiler 插入 time header 的边界。
+- [`docs/features/assist.md`](../features/assist.md)：补 Prompt Context Compiler 插入 time header 的边界。
 - [`docs/features/task_scheduler_api.md`](../features/task_scheduler_api.md)：如果 scheduled/task runner 消费 time basis，补运行时间 vs 业务时间。
 - [`docs/features/personal_skill_foundry.md`](../features/personal_skill_foundry.md)：如果 skill manifest 增加 `requires_time_basis`，补 skill runner preflight。
 - 如果 Desktop Quick Ask / Doubao Bridge 直接展示时间 chip，也应维护 [`desktop-app/docs/features/doubao_bridge.md`](../../desktop-app/docs/features/doubao_bridge.md) 或新建一个更合适的 desktop feature doc。

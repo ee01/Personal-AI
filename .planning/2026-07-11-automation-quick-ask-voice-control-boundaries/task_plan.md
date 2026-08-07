@@ -26,5 +26,5 @@
 1. 在 `quick-ask.js` 增加语音按钮边界生成函数，按当前 voice phase、草稿、错误、scope 和 locale 生成动态 `title` / `aria-label`。
 2. 在 `renderVoiceSheet()` 中同步更新 `voice-orb`、`voice-cancel`、`voice-send`、`voice-recovery` 的按钮级边界。
 3. 扩展 Quick Ask 现有 E2E，覆盖 listening、stopped empty、speech permission recovery、interrupted draft、stopped draft 和 send draft 的按钮属性。
-4. 更新 `docs/features/doubao_bridge.md` 与 `docs/features/index.md`，保持文档简洁描述当前真实行为。
+4. 更新 `docs/features/doubao_bridge.md` 与 `docs/index.md`，保持文档简洁描述当前真实行为。
 5. 验证：`node --check desktop-app/app/quick-ask.js`、`node --check desktop-app/scripts/quick-ask-status-card-check.mjs`、`npm start` 首次成功编译、`node desktop-app/scripts/quick-ask-status-card-check.mjs`、scoped `git diff --check`。

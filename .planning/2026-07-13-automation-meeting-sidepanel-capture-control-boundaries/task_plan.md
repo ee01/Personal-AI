@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `会中 side panel` in `docs/features/index.md`
+- Feature: `会中 side panel` in `docs/index.md`
 - Canonical doc: `docs/features/meeting_pilot.md`
 - Main surface: `src/meeting-shell/meetingSidePanel.tsx`
 - Scope: capture-start card and sticky footer Capture/settings button boundaries.

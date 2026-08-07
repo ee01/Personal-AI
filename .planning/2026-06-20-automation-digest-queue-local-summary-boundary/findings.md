@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Confirm docs match current code without over-detailing.
 - Search comparable products and papers for constructive guidance.
 - Identify and implement a no-extra-decision improvement if available.
@@ -35,7 +35,7 @@
 ## Resources
 
 - `docs/features/notification_center.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `src/services/DigestQueueService.ts`
 - `src/services/TaskScheduler.ts`
 - `src/popup.tsx`

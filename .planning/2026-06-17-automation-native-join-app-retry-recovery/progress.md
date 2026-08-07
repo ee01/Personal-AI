@@ -5,7 +5,7 @@
 - Read `AGENT.md`, automation memory, planning skill instructions, and random-loop memory guidance.
 - Checked `docs/progressing/to-verify.md`: no pending carry-over item.
 - Checked local Reminders list names: no visible `Personal AI` list.
-- Selected `NC 加会浏览器回退` from `docs/features/index.md`.
+- Selected `NC 加会浏览器回退` from `docs/index.md`.
 - Inspected `docs/features/meeting_native_join.md`, `src/ringcentralNativeJoin.ts`, `src/__tests__/ringcentralNativeJoin.test.ts`, and `tools/verify-ringcentral-native-join-e2e.mjs`.
 - Ran web research for RingCentral / Zoom / Teams browser fallback patterns and deep-link security research.
 - Decided on a scoped recovery-state app retry action.

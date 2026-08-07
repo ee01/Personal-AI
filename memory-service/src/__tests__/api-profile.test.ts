@@ -6,7 +6,10 @@ import type { FastifyInstance } from 'fastify';
 
 import { buildApp } from '../server.js';
 import { MarkdownManager } from '../core/MarkdownManager.js';
+import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
+import { MemoryClaimCorrectionService } from '../core/MemoryClaimCorrectionService.js';
 import { UserContextManager } from '../core/UserContextManager.js';
+import { MemoryClaimRepository } from '../repositories/MemoryClaimRepository.js';
 import { contentHash } from '../utils/hashing.js';
 import { now } from '../utils/time.js';
 
@@ -223,6 +226,105 @@ describe('Profile API', () => {
       'retracted-profile',
       'visible-profile',
     ]);
+  });
+
+  it('adds a compact audit receipt only after claim correction changes profile use', async () => {
+    const context = userContextManager.getContext(userId);
+    const currentTime = now();
+    const messageId = 'profile-claim-attribution-message';
+    const profileItemId = 'profile-claim-attribution-item';
+    const rawContent = '我的偏好是 code review 先给结论，再给 evidence。';
+
+    context.db
+      .prepare(
+        `INSERT INTO messages_raw
+          (id, content, source_type, sender, timestamp, metadata_json,
+           created_at, updated_at)
+         VALUES (?, ?, 'glip', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        messageId,
+        rawContent,
+        userId,
+        currentTime,
+        JSON.stringify({ authorRole: 'user', isSelf: true }),
+        currentTime,
+        currentTime,
+      );
+    const attributionService = new MemoryClaimAttributionService(context.db);
+    expect(attributionService.ensureForMessage(messageId).status).toBe('resolved');
+    const claim = attributionService.getClaimsForMessage(messageId, {
+      ensure: false,
+    })[0];
+    expect(claim.policy.profileCandidate).toBe(true);
+
+    context.db
+      .prepare(
+        `INSERT INTO user_profile_items
+          (id, item_type, item_key, item_value, evidence_refs, source_kind,
+           confidence, user_confirmed, status, salience_score, mention_count,
+           last_seen, created_at, updated_at, fingerprint)
+         VALUES (?, 'preference', 'writing_style.review', ?, ?, 'inferred',
+           0.9, 0, 'pending_confirm', 0.8, 1, ?, ?, ?, ?)`,
+      )
+      .run(
+        profileItemId,
+        '先给结论，再给 evidence',
+        JSON.stringify([{ messageId, ts: currentTime }]),
+        currentTime,
+        currentTime,
+        currentTime,
+        contentHash('writing_style.review:先给结论，再给 evidence'),
+      );
+    new MemoryClaimRepository(context.db).linkDerived(
+      claim.id,
+      'profile_item',
+      profileItemId,
+      'evidence',
+    );
+
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/items',
+      headers: { 'x-user-id': userId },
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().items[0].attributionReceipt).toBeUndefined();
+
+    new MemoryClaimCorrectionService(context.db).correct(claim.id, {
+      correction: 'not_my_view',
+      expectedRevision: 1,
+      source: 'user_profile',
+      idempotencyKey: 'profile-claim-attribution-correction',
+    });
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/items?status=retracted',
+      headers: { 'x-user-id': userId },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().items[0]).toMatchObject({
+      id: profileItemId,
+      status: 'retracted',
+      attributionReceipt: {
+        status: 'corrected',
+        visibility: 'review',
+        correctedCount: 1,
+        affectedHighResponsibility: true,
+        blocked: [
+          expect.objectContaining({
+            kind: 'unknown:reported_speech',
+            count: 1,
+          }),
+        ],
+      },
+    });
+    expect(
+      context.db
+        .prepare('SELECT content FROM messages_raw WHERE id = ?')
+        .get(messageId),
+    ).toEqual({ content: rawContent });
   });
 
   it('records inferred profile candidates as pending and reinforces repeats', async () => {

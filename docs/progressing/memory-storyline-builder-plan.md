@@ -252,7 +252,7 @@ Personal AI 可以先生成故事线，再交给当前 AI 润色。
 - 有多 surface 共同消费的 Storyline 数据模型，而不再只是 Today Pilot 的衍生按钮。
 - 有独立验证脚本或 E2E 覆盖 Storyline draft/edit/export。
 
-到那时再创建 `docs/features/memory_storyline_builder.md`，并在 `today_pilot.md`、`compose_assist.md`、`google_slides_analyzer.md` 中只保留各自入口如何调用 Storyline。
+到那时再创建 `docs/features/memory_storyline_builder.md`，并在 `today_pilot.md`、`assist.md`、`google_slides_analyzer.md` 中只保留各自入口如何调用 Storyline。
 
 
 ### 2. 默认给一个可以立刻讲的结构

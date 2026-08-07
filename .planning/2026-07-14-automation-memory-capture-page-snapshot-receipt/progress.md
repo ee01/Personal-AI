@@ -31,13 +31,13 @@
   - Rendered page snapshot and trigger receipts in the whole-page review panel.
   - Added the same basis to whole-page suggestion title, auto-save pending toast, auto-save success toast, manual success toast, and save failure receipt.
   - Limited Memory Capture note panels to the viewport and enabled internal scroll after E2E exposed the taller panel pushing the save button out of view.
-  - Updated static verifier, E2E assertions, `docs/features/memory_capture.md`, and `docs/features/index.md`.
+  - Updated static verifier, E2E assertions, `docs/features/memory_capture.md`, and `docs/index.md`.
 - Files created/modified:
   - `src/contentScriptWebIntelligence.ts`
   - `tools/verify-webpage-memory-detection.ts`
   - `desktop-app/scripts/webpage-memory-detection-check.mjs`
   - `docs/features/memory_capture.md`
-  - `docs/features/index.md`
+  - `docs/index.md`
   - `.planning/.active_plan`
   - `.planning/2026-07-14-automation-memory-capture-page-snapshot-receipt/*`
 

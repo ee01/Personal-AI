@@ -3,7 +3,7 @@
 ## Initial Context
 
 - `docs/progressing/to-verify.md` says there are no pending verification items.
-- `docs/features/index.md` lists `Snooze 快速时间菜单` under Message Reaction and points to `docs/features/message_reaction.md`.
+- `docs/index.md` lists `Snooze 快速时间菜单` under Message Reaction and points to `docs/features/message_reaction.md`.
 - Local Reminders list names are readable, but `Personal AI` is absent.
 - The repo worktree was already broadly dirty before this run; avoid unrelated changes.
 

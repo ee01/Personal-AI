@@ -2,8 +2,8 @@
 
 ## Target
 
-- Random feature: `OpenClaw 外部委派` from `docs/features/index.md`.
-- Canonical doc: `docs/features/memory_system.md`.
+- Random feature: `OpenClaw 外部委派` from `docs/index.md`.
+- Canonical doc: `docs/memory_system.md`.
 - Main UI: `memory-exploring.html#/actions` / `ActionQueue.vue`.
 
 ## Product Scan

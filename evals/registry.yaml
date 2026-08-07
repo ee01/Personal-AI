@@ -548,6 +548,89 @@ suites:
         - node tools/verify-source-memory-capsule-e2e.mjs
         - npm run eval:run -- --suite source-memory-distiller --no-repair
 
+  - id: memory-claim-attribution
+    title: Memory Claim Attribution Experience Eval
+    description: 验证混合消息、会议承诺、缺失角色、解析失败与用户纠正是否在 claim 粒度保持正确归属、失败关闭、原文不变，并只在有消费后果时显示低打扰回执。
+    enabled: true
+    workflow: evals/workflows/memory-claim-attribution/experience.md
+    cases: evals/cases/memory-claim-attribution/cases.jsonl
+    runMode: manual
+    readerProof:
+      claims:
+        - id: mixed-message-keeps-claim-owners-separate
+          statement: >-
+            同一条 owner-authored 消息中的 AI 建议、同事转述、本人决定和假设会被分成独立 claim；只有本人明确决定可以进入当前事实候选。
+          caseIds:
+            - mixed-ai-colleague-self-hypothesis
+          requiredScores:
+            attributionAccuracy: 3
+            policySafety: 3
+            receiptNoiseControl: 3
+        - id: assignment-does-not-imply-acceptance-or-completion
+          statement: >-
+            会议中的 assigned、用户 accepted 与 verified completion 保持三层边界；负责人指派和 AI summary 不会冒充本人已接受或已完成。
+          caseIds:
+            - meeting-assigned-and-accepted-stay-distinct
+          requiredScores:
+            attributionAccuracy: 3
+            policySafety: 3
+            commitmentBoundary: 3
+        - id: unknown-and-failure-stay-fail-closed
+          statement: >-
+            缺 sender/role 或归属解析失败时，raw 仍保留，但画像、当前事实和行动候选全部阻断，不回退成整段 self。
+          caseIds:
+            - missing-role-remains-unknown
+            - resolver-failure-keeps-high-responsibility-closed
+          requiredScores:
+            policySafety: 3
+            failureClosure: 3
+        - id: correction-adds-revision-without-changing-raw
+          statement: >-
+            用户选择“这不是我的观点”会追加 attribution revision、重编 policy 并留下纠正信号，原消息逐字不变且响应明确 rawSourceChanged=false。
+          caseIds:
+            - correction-not-my-view-preserves-raw
+          requiredScores:
+            policySafety: 3
+            correctionIntegrity: 3
+            receiptNoiseControl: 3
+        - id: ordinary-self-claim-remains-ui-silent
+          statement: >-
+            单一、明确且低歧义的本人偏好继续在后台处理，不给 Ask、Memory Lens 或 Compose 增加归属回执。
+          caseIds:
+            - single-self-preference-stays-silent
+          requiredScores:
+            attributionAccuracy: 3
+            policySafety: 3
+            receiptNoiseControl: 3
+      boundaries:
+        - 本 suite 使用本地隔离数据库和脱敏真实模式，证明生产 claim/policy/correction/receipt hard gate；不证明线上全部语言、讽刺、ASR 错词或旧数据分布已经覆盖。
+        - 本 suite 不操作真实 Glip、Jira、会议或外部 AI，也不替代 Ask、Memory Lens、Compose、Profile 与 Meeting 的 Playwright 交互验证。
+        - resolver failure 由受控失败注入触发；它证明失败路径不会放行高责任派生，不证明线上模型或 provider 当前可用。
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/memory-claim-attribution.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/ClaimSegmenter.ts
+        - memory-service/src/core/ClaimPolicyCompiler.ts
+        - memory-service/src/core/MemoryClaimAttributionService.ts
+        - memory-service/src/core/MemoryClaimCorrectionService.ts
+        - memory-service/src/repositories/MemoryClaimRepository.ts
+        - memory-service/src/routes/memoryClaims.ts
+        - memory-service/src/types/index.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-memory-claim-attribution.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/claimSegmenter.test.ts src/__tests__/claimPolicyCompiler.test.ts src/__tests__/memoryClaimRepository.test.ts src/__tests__/api-memory-claims.test.ts
+        - npm run eval:run -- --suite memory-claim-attribution --no-repair
+
   - id: memory-lifecycle
     title: Memory Lifecycle Experience Eval
     description: 评估无感记忆遗忘层是否正确衰减、归档和降权旧记忆，并确保默认 Ask、Context Recall、Compose Assist 不再关联 archive_only 或 forgotten 记忆。

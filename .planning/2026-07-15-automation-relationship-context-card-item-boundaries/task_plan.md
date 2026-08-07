@@ -18,7 +18,7 @@ Goal: improve the selected `人脉关系 Context Card` feature by checking docs/
 
 - Feature: `人脉关系 Context Card`
 - Area: Relationship Radar
-- Docs: `docs/features/relationship_radar.md`, `docs/features/index.md`
+- Docs: `docs/features/relationship_radar.md`, `docs/index.md`
 - Main UI: `src/modals/components/RelationshipRadarPage.vue`
 - Main verifier: `tools/verify-relationship-radar-e2e.mjs`
 

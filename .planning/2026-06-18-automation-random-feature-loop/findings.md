@@ -8,7 +8,7 @@
 
 ## Target feature: Native Join
 
-- Randomly selected `NC 加会` / Native Join from `docs/features/index.md`.
+- Randomly selected `NC 加会` / Native Join from `docs/index.md`.
 - The current doc is mostly up to date with code: it already covers Safe Links unwrap, browser fallback, passcode-hidden display, copy failure recovery, app retry, default-path toggle, and Video Home DOM/IndexedDB matching.
 - The target files were already dirty before this run; existing uncommitted work includes Native Join handoff receipts, full-link reveal, redirect unwrap tests, and E2E coverage.
 - Reminders list names were readable: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`. There is no `Personal AI` list.

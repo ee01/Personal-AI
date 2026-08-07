@@ -8,7 +8,7 @@ Improve `回复助手直接插入` so a user-selected range in a contenteditable
 
 - Feature: `回复助手直接插入`
 - Capability: Compose Assist
-- Source doc: `docs/features/compose_assist.md`
+- Source doc: `docs/features/assist.md`
 - Primary files: `src/composer-guard/siteContextAdapters.ts`, `src/composer-guard/ComposerGuardController.ts`, `tools/verify-compose-assist-direct-insert-e2e.mjs`
 
 ## Plan

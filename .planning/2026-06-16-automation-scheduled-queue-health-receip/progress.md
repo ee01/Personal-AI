@@ -7,7 +7,7 @@
 - **Started:** 2026-06-16
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory loop guidance, and existing root planning files.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory loop guidance, and existing root planning files.
 - Checked local Reminders list names; no visible `Personal AI` list exists.
 - Randomly selected a Scheduled Messages queue-health improvement from eligible feature-index candidates.
 - Inspected Scheduled Messages docs, queue health/queue pressure helpers, manager banner UI, unit tests, and existing E2E scripts.

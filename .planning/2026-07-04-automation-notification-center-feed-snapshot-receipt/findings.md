@@ -2,7 +2,7 @@
 
 ## Selection
 
-Selected `Notification Center feed` from `docs/features/index.md` random sample because fresher exact targets in the sample were skipped.
+Selected `Notification Center feed` from `docs/index.md` random sample because fresher exact targets in the sample were skipped.
 
 ## Reminder State
 

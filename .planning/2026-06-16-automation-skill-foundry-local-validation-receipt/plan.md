@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机命中 `docs/features/index.md` 里的 `本地 agent skill 导入建议`。本轮只改 Skill Foundry 本地导入建议路径：让用户在确认本机 Codex / Claude Code / Cursor skill 进入 Personal AI active 真源前，能看到该包是否带有测试、eval、fixture、spec 或验证脚本线索。
+随机命中 `docs/index.md` 里的 `本地 agent skill 导入建议`。本轮只改 Skill Foundry 本地导入建议路径：让用户在确认本机 Codex / Claude Code / Cursor skill 进入 Personal AI active 真源前，能看到该包是否带有测试、eval、fixture、spec 或验证脚本线索。
 
 ## 外部参考约束
 

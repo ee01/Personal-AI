@@ -4,7 +4,7 @@
 
 - 随机选中：`搜索结果有用/不相关反馈`
 - 所属能力：Memory Exploring / Memory Service
-- 主文档：`docs/features/memory_system.md`
+- 主文档：`docs/memory_system.md`
 
 ## 当前状态
 
@@ -25,7 +25,7 @@
 2. 失败时恢复点击前的 `有用` / `不相关` / `已撤销` / neutral 状态，并在原卡片显示 `反馈未提交`。
 3. 回执明确说明未写入服务端、未创建相近场景修正、未改变显著性、未删除记忆，并保留查询现场。
 4. 扩展 `verify-memory-search-feedback-e2e.mjs`，模拟 `/feedback` 503，断言失败回执和按钮状态恢复。
-5. 更新 `docs/features/memory_system.md` 的搜索反馈段落。
+5. 更新 `docs/memory_system.md` 的搜索反馈段落。
 
 ## 验证计划
 

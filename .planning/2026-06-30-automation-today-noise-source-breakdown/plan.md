@@ -2,7 +2,7 @@
 
 ## Target
 
-- Randomly selected feature: `今天排序与噪声控制` in `docs/features/index.md`.
+- Randomly selected feature: `今天排序与噪声控制` in `docs/index.md`.
 - Canonical doc: `docs/features/today_pilot.md`.
 - Main surfaces inspected: `memory-service/src/core/DayPilotService.ts`, `src/modals/components/OverviewPage.vue`, `src/popup.tsx`, `tools/verify-day-pilot-home.ts`, `tools/verify-today-pilot-home-e2e.mjs`.
 

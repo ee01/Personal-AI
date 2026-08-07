@@ -1,5 +1,7 @@
 # Personal Roadmap 与重点项目记忆联动
 
+静态交互原型（纯前端、无真实 Jira / 扩展）：[`docs/demo/roadmap-demo.html`](../demo/roadmap-demo.html)。Options → 功能 Demo →「项目 Roadmap（静态 Demo）」会打开打包进扩展的同款页面。
+
 ## 产品边界
 
 Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记忆系统是个人私有的现实观察。用户把 Epic 拖进 Gantt = 声明「这是我的重点项目」；记忆系统据此做消息打标、反思与 dreaming，并在 Roadmap 页用个人图层角标报告意图与现实的偏差。系统**绝不自动改团队 bar**。
@@ -138,8 +140,10 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余
 
 ## 分享两档
 
-- 地址栏复制：只读（encode team/q/view/expand）
-- 右上角分享：带 token 的可编辑链接；匿名 name 可冒充，审计记 client_id
+- 地址栏复制：只读（encode team/q/view/expand）；`expand` 是**本机视图状态**，展开/收起会 `replaceState` 更新地址栏，刷新可还原
+- 右上角分享：带 token 的可编辑链接（分享前同步当前 `expand`/q/view）；匿名 name 可冒充，审计记 client_id
+- **展开状态不同步多人**：SSE 快照不覆盖本机 expand；服务端 `expand`/`collapse` intent 为 no-op（兼容旧客户端）
+- 顶栏 SyncTicker 只展示其他人的最新 activity；点击打开活动日志
 - 可编辑只看本机是否有该团队 edit token（与是否安装扩展无关）
 - 分享复制：优先 `navigator.clipboard`；在 `http://IP:端口` 等非安全上下文走 `textarea` + `execCommand('copy')`；仍失败则 toast + `prompt` 展示完整链接，不再与「无编辑权限」混报
 
@@ -159,6 +163,69 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余
 - 未勾选＝增量模式，只导入 `checkedQuarters` 里还没导过的 quarter
 - 勾选＝覆盖模式，按 `checkedQuarters` 全量重拉，后端先 `DELETE` 这些 quarter 的 items（含已排期位置）
 
+## Owner、人员视图与清理记忆
+
+- 新增子任务默认 **14 天**，Owner 可选：标题 `@` 建议、左侧头像点选、手输新名（自动进成员表）。Enter 不设 Owner 也可创建。
+- 双击子任务条可改备注名，并点头像更换/移除 Owner；`update_sub` 保留 draft / Jira key 身份（拖拽不再 delete+add）。
+- 人员视图：近 2 周 / 全部、并行车道堆叠、窗口外「更早/更晚」角标；双击成员名 `update_member`（级联改所有 sub.owner）。
+- 清理过期：Epic 回退 Backlog；未过期 Epic 下的过期子任务 `cleared=1`（Gantt/人员视图隐藏，Backlog 仍计「↺ n 个子任务记录」）。Epic 再次拖入 Gantt（`schedule`）时清空 `cleared` 还原。
+
+## 阶段节点与外部依赖（Markers）
+
+主任务统一用 **Marker** 体系：`phase`（Design/Stage/Production/自定义，必有日期）与 `dep`（外部依赖，ETA 可空）。有日期的落在 bar 下方标记轨；缺 ETA 的 dep 在 bar 右上角红色脉动 `🔗N` 角标提醒。右侧 ◆＋ 添加入口。ETA 可通过扩展 `pai-roadmap-fetch-issue-dates` 从 Jira Target End 读取。Epic 退回 Backlog 时 markers 保留。拖动 marker 可改日期（`update_marker`）。
+
+## Expand 是本机视图状态
+
+展开/收起**不同步多人**（否则会打断他人正在加子任务）：
+
+- 前端本地 `expandedKeys` + URL `expand=`（`history.replaceState`）；刷新按地址栏还原
+- SSE 快照到达时用本机 expand 覆盖展示，忽略服务端 `items.expanded`
+- 服务端 `expand` / `collapse` intent 为 no-op（兼容旧客户端，不 bump version、不广播）
+- 右上角分享可编辑链接前会 `syncUrl()`，带上当前 expand/q/view
+
+## 协作 Presence 与同步 Ticker
+
+- 顶栏头像逐个 `data-tip` 显示用户名（自己加「（你）」）；LIVE pill 保留整体说明
+- `SyncTicker`：头像左侧展示**其他成员**最新一条 activity（过滤自己 + `lock/unlock/expand/collapse`），新日志滚入动画；点击打开 ActivityDrawer
+- 取数纯函数：`pickTickerEntry` / `tickerLabel`（`useRoadmapContract.ts`）
+
+## 导入 Task 与拖动回写 Target（扩展优先）
+
+| 能力 | 凭据优先级 | 展示 / 行为 |
+|---|---|---|
+| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + **已安装扩展** + 甘特上有 Jira Epic 才显示；无扩展隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重 |
+| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast |
+
+注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。不回写子任务日期；不做 Jira→Roadmap 反向日期合并。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。
+
+## 发布时间表标尺（Release Train Ruler）
+
+团队可在「编辑团队 JQL」弹窗配置 Google Sheet 发布时间表（三列 `Release / Phase / Date`）。保存后甘特主标尺从「月份 + 周刻度」换成**发布 Sprint 双轴**：Sprint 段为主轴，月份降为细行副轴。
+
+### 配置与存储
+
+| 字段 | 存哪 | 说明 |
+|---|---|---|
+| `url` / `spreadsheetId` / `sheetName` / `range` | `teams.release_sheet_json`（团队共享） | 与 JQL 一样走 intent 落库 |
+| `splitPhase` / `showPhases` | 同上 | ⚑ 分割节点 + 勾选展示阶段 |
+| `releaseFilter` `{ mode, pattern }` | 同上 | `all` / `major`（尾号 0）/ `custom`（通配符或 `/正则/`） |
+| `rows` / `fetchedAt` | 同上（缓存） | 保存时写入；TTL≈6h 后有编辑权客户端静默刷新 |
+| Apps Script `token` | **前端写死** | 与 RPA sheet reader 同源 Web App，不入库 |
+
+Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet` 用于清除 / 静默刷新。
+
+### 前端行为要点
+
+- 地址/表名/范围变化后 600ms 防抖自动读取；未加载就保存会兜底拉取，默认 FF 分界 + 全阶段展示
+- 阶段 chips：点主体切换展示，点 ⚑ 设分割节点；分割节点勾选锁定
+- Release 过滤：全部 / 仅大版本 / 自定义通配符；实时预览保留与划线过滤名单；非法正则或滤空则兜底不过滤
+- 过滤作用于分段、刻度、竖线与「可赶 Sprint」；阶段 chips / 数据预览仍看全量表
+- 工具栏 `Sprint | 月份` 开关仅会话级（`rulerMode`），不改团队配置、刷新恢复 Sprint
+- 「可赶 Sprint」提示（bar tooltip / 拖拽浮签）走**过滤后**数据口径，临时切月份仍保留
+- 人员视图不显示标尺开关与阶段图例
+
+静态交互参考：[`docs/demo/roadmap-demo.html`](../demo/roadmap-demo.html)。
+
 ## 决策逻辑优先级（注入）
 
 1. 只取 `tier=focus`（在 Gantt 上的主任务）
@@ -168,8 +235,10 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余
 
 ## 源码入口
 
-- `roadmap-service/`（`src/core/JqlIntrospect.ts`、`src/storage/Database.ts` 的迁移表）
-- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload）
+- `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`src/storage/Database.ts` 的迁移表）
+- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker）
+- `roadmap-service/web/src/composables/useReleaseRuler.ts`（发布时间表解析 / 分段 / 拉取）
+- `roadmap-service/web/src/components/SyncTicker.vue`
 - `src/contentScriptRoadmap.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
 - `memory-service/src/core/FocusProjectSyncService.ts`
@@ -181,10 +250,11 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（JQL 解析含嵌套引号、迁移的新库/老库两条路径、覆盖导入不删手动项、`resolve_item` / `resolve_draft` 幂等、web 契约）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
+- 部署后：导入 Task / 创建 Jira 依赖扩展 Options `JIRA_API_TOKEN`；拖动回写在无扩展或未填 Options token 时可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`
-- 部署：`npm run deploy:memory`（本地 tsc + vite 产出 `dist/`、`web/dist/` 后 rsync，Docker 里不再编译）
+- 部署：`npm run deploy:roadmap`（仅 roadmap-service；本地 build 后 rsync + 远端 docker compose，默认 `10.32.56.212:3220`）。若同时改 memory，用 `npm run deploy:memory`（两者一起发）
 - focus sync / 抽取：`evals/cases/roadmap-focus-projects/`

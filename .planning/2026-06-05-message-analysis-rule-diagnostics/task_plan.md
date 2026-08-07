@@ -6,7 +6,7 @@ Improve `消息入库与通知分发` so users can understand why a manual Messa
 
 ## Scope
 
-- Target feature: `消息入库与通知分发` in `docs/features/index.md`.
+- Target feature: `消息入库与通知分发` in `docs/index.md`.
 - Canonical doc: `docs/features/message_analysis.md`.
 - Runtime surfaces: normal filter, Agent Thinking, Agent Workflow, rule-card UI, and local diagnostics storage.
 - Reminder source: checked local Reminders; no visible `Personal AI` list exists.

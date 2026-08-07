@@ -78,7 +78,7 @@ Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统�
 
 ### 1.2 开放问题的新证据恢复
 
-Today Pilot 是 [开放问题退出契约](./memory_system.md#开放问题退出契约) 唯一的主动展示面。它不展示 parked/waiting contract 列表，也不展示“后台退场了多少条”这类治理统计。
+Today Pilot 是 [开放问题退出契约](../memory_system.md#开放问题退出契约) 唯一的主动展示面。它不展示 parked/waiting contract 列表，也不展示“后台退场了多少条”这类治理统计。
 
 受 contract 管理的 reflection thread 只有同时满足以下条件才进入 mission 扫描：
 

@@ -38,7 +38,7 @@
 2. 在提交中回执里同步保留事实边界，说明服务端确认成功前后都不会把旧 assistant 回答直接当事实。
 3. 在完成回执里扩展外部 AI 边界，让 batch/source 审计路径和事实边界同时可见。
 4. 更新 `tools/verify-memory-coverage-e2e.mjs`，断言提交前、提交中、完成三个阶段都能看到事实边界。
-5. 更新 `docs/features/memory_coverage_map.md` 和 `docs/features/index.md` 的简要描述。
+5. 更新 `docs/features/memory_coverage_map.md` 和 `docs/index.md` 的简要描述。
 6. 跑目标验证: `node --check tools/verify-memory-coverage-e2e.mjs`、`npm start` 首次成功编译、`npm run verify:memory-coverage:e2e`、相关 memory-service import/coverage 测试，以及 scoped `git diff --check`。
 
 ## 非目标

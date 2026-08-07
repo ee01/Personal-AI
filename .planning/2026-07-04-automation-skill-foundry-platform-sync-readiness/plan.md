@@ -4,7 +4,7 @@ Goal: improve the randomly selected `平台同步` feature in Skill Foundry by m
 
 ## Context
 
-- Selected feature: `平台同步` under Skill Foundry from `docs/features/index.md`.
+- Selected feature: `平台同步` under Skill Foundry from `docs/index.md`.
 - Source doc: `docs/features/personal_skill_foundry.md`.
 - Code surface: `src/modals/components/PersonalSkillsPage.vue`.
 - E2E surface: `tools/verify-personal-skill-foundry-e2e.mjs`.

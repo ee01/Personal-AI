@@ -4,7 +4,7 @@ Goal: improve `项目证据修复路径` by making the actual repair controls st
 
 ## Context
 
-- Selected feature: `项目证据修复路径` from `docs/features/index.md`.
+- Selected feature: `项目证据修复路径` from `docs/index.md`.
 - Carry-over: `docs/progressing/to-verify.md` is empty.
 - Reminder state: EventKit found `Personal AI` with 4 total items and 0 incomplete items; no Project Dashboard-related Reminder item is available to incorporate or mark done.
 - Recent automation memory already covered Project Dashboard data-source button boundaries and evidence-queue entry receipts, so this run focuses on the lower control point: repair buttons in task detail, chart drill-down, decision brief, evidence queue, and data-source local repair actions.

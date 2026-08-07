@@ -2,8 +2,8 @@
 
 ## Target
 
-- Feature: `回复助手无感校准` from `docs/features/index.md`.
-- Source docs: `docs/features/compose_assist.md` and `docs/features/memory_system.md`.
+- Feature: `回复助手无感校准` from `docs/index.md`.
+- Source docs: `docs/features/assist.md` and `docs/memory_system.md`.
 - Primary files: `src/composer-guard/ComposerGuardController.ts` and `tools/verify-compose-assist-ambient-calibration-e2e.mjs`.
 
 ## Findings

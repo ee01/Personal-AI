@@ -15,7 +15,7 @@
    - 总开关未保存变更时显示待保存回执。
    - 用户上下文页签回执区分当前页面预览与真实已生效基线。
    - helper 文案支持草稿注入状态，避免把未保存暂停误读成真实运行时已暂停。
-5. 更新 `docs/features/custom_prompts.md` 和 `docs/features/index.md` 的简要说明。
+5. 更新 `docs/features/custom_prompts.md` 和 `docs/index.md` 的简要说明。
 6. 运行 `verify:custom-prompts`、`npm start` 首次编译、`verify:custom-prompts:e2e` 和 scoped `git diff --check`。
 
 ## 非目标

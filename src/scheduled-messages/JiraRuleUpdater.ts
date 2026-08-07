@@ -17,7 +17,10 @@ import {
   JIRA_TIMELINE_SYNC_RULE_VERSION,
 } from './JiraAutomationService';
 import { getEnvConfig } from '../utils';
-import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthTokenSilently,
+} from '../utils/googleAuth';
 import { buildTimelineSyncComponentsFragment } from './timelineProjects';
 import { getExecutorRule, getTimelineSyncRule, normalizeSheetConfig } from './botAutomationConfig';
 import { replaceScheduledMessagesDifyJumpboardPlaceholders } from './difyJumpboardConfig';
@@ -463,7 +466,10 @@ export class JiraRuleUpdater {
   private async syncConfigToSheet(tokenOverride?: string | null): Promise<void> {
     try {
       // 获取 Google token（静默方式，不弹窗）
-      const token = tokenOverride || await getGoogleAuthTokenSilently({ caller: 'JiraRuleUpdater.syncConfigToSheet' });
+      const token = tokenOverride || await getGoogleAuthTokenSilently({
+        caller: 'JiraRuleUpdater.syncConfigToSheet',
+        scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+      });
       
       if (!token) {
         throw new Error('No token');

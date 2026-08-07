@@ -2,7 +2,7 @@
 
 ## Target
 
-Random feature pick from `docs/features/index.md`: Jira Design Links, especially conservative Figma/Zeplin classification.
+Random feature pick from `docs/index.md`: Jira Design Links, especially conservative Figma/Zeplin classification.
 
 ## Current finding
 

@@ -2,7 +2,7 @@
 
 ## Target feature
 
-- Random feature: `多用户隔离` in `docs/features/memory_system.md`
+- Random feature: `多用户隔离` in `docs/memory_system.md`
 - Scope: Memory Service `/events` SSE identity boundary
 - Reminder state: local Reminders was readable, but there is no `Personal AI` list, so no Reminder item is included.
 
@@ -21,5 +21,5 @@
 1. Extend the SSE identity resolver with a small structured receipt: identity source, fallback flag, per-user storage key, and event-filter boundary.
 2. Include that receipt in the initial `connected` event without changing downstream notification payloads.
 3. Expand the existing `verify:memory-events-multiuser` helper and `events.test.ts` assertions.
-4. Update `docs/features/memory_system.md` so the multi-user isolation section matches the code.
+4. Update `docs/memory_system.md` so the multi-user isolation section matches the code.
 5. Validate with the targeted memory-events script, first successful `npm start` compile, memory user identity E2E, and scoped whitespace checks.

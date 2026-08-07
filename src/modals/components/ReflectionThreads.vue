@@ -55,6 +55,10 @@
           <strong>{{ listScopeReceipt.countLine }}</strong>
         </div>
         <div>
+          <span>推进节奏</span>
+          <strong>{{ listScopeReceipt.overdueLine }}</strong>
+        </div>
+        <div>
           <span>边界</span>
           <strong>{{ listScopeReceipt.boundary }}</strong>
         </div>
@@ -181,6 +185,27 @@
         </div>
       </router-link>
     </div>
+
+    <section
+      v-if="hasMoreThreads"
+      class="list-pagination-receipt"
+      role="group"
+      aria-label="反思线程列表分页回执"
+    >
+      <div>
+        <div class="list-pagination-title">列表分页回执</div>
+        <h3>{{ listPaginationReceipt.title }}</h3>
+        <p>{{ listPaginationReceipt.summary }}</p>
+        <p>{{ listPaginationReceipt.boundary }}</p>
+      </div>
+      <button
+        class="load-more-btn"
+        :disabled="loadingMore"
+        :title="loadMoreBoundary"
+        :aria-label="loadMoreBoundary"
+        @click="loadMoreThreads"
+      >{{ loadingMore ? '正在读取下一批…' : '加载更多线程' }}</button>
+    </section>
   </div>
 </template>
 
@@ -200,9 +225,11 @@ const loading = ref(true);
 const threads = ref<ReflectionThread[]>([]);
 const totalThreads = ref(0);
 const loadError = ref('');
+const loadingMore = ref(false);
 const statusFilter = ref<'active' | 'paused' | 'closed' | 'all'>('active');
 const searchText = ref('');
 const handoffSource = ref('');
+const PAGE_SIZE = 50;
 
 const handoffSearch = computed(() =>
   handoffSource.value === 'dream' ? searchText.value.trim() : '',
@@ -218,6 +245,16 @@ const threadReceipts = computed(() =>
     ]),
   ),
 );
+const hasMoreThreads = computed(() => threads.value.length < totalThreads.value);
+const overdueVisibleCount = computed(() => {
+  const currentSeconds = Math.floor(Date.now() / 1000);
+  return threads.value.filter(
+    thread =>
+      thread.status === 'active' &&
+      typeof thread.nextReflectionAt === 'number' &&
+      thread.nextReflectionAt <= currentSeconds,
+  ).length;
+});
 const emptyMessage = computed(() => {
   const query = searchText.value.trim();
   if (handoffSource.value === 'dream' && query) {
@@ -232,9 +269,16 @@ const listScopeReceipt = computed(() => {
   const visible = threads.value.length;
   const total = totalThreads.value || visible;
   const status = statusLabel(statusFilter.value);
+  const overdue = overdueVisibleCount.value;
+  const hasMore = hasMoreThreads.value;
 
   return {
-    tone: staleSnapshot ? 'attention' : fromDream || query ? 'handoff' : 'ready',
+    tone:
+      staleSnapshot || overdue > 0
+        ? 'attention'
+        : fromDream || query
+          ? 'handoff'
+          : 'ready',
     title: staleSnapshot
       ? '保留上次成功快照'
       : fromDream
@@ -248,12 +292,20 @@ const listScopeReceipt = computed(() => {
         ? `当前只在自我反思线程内查找“${query}”，用于承接梦境重放复核。`
         : query
           ? `当前只按标题或 topic key 查找“${query}”，不会搜索全部原始记忆。`
-          : '当前列表只读取 Reflection thread 索引，用来查看长期复盘主题。',
+          : overdue > 0
+            ? `当前已读取的 ${visible} 条中有 ${overdue} 条已到推进时间；它们仍是只读快照，系统不会因为打开列表而自动补跑。`
+            : '当前列表只读取 Reflection thread 索引，用来查看长期复盘主题。',
     statusLine: `${statusFilter.value === 'all' ? '全部状态' : status}`,
     searchLine: query
       ? `${fromDream ? '梦境 handoff' : '本页搜索'}: ${query}`
       : '未输入搜索词',
-    countLine: `可见 ${visible} / 总计 ${total}`,
+    countLine: `已读取 ${visible} / 总计 ${total}`,
+    overdueLine:
+      overdue > 0
+        ? `已逾期 ${overdue} 条${hasMore ? '（仅已读取）' : ''}`
+        : hasMore
+          ? '当前已读取未见逾期'
+          : '当前可见未见逾期',
     boundary:
       '筛选、搜索和刷新只读列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作。',
     chips: [
@@ -261,10 +313,27 @@ const listScopeReceipt = computed(() => {
       statusFilter.value === 'all' ? '全部状态' : `状态 ${status}`,
       query ? '标题/topic key' : '无搜索词',
       fromDream ? '梦境复核' : '',
-      `可见 ${visible}`,
+      `已读取 ${visible}`,
+      overdue > 0 ? `已逾期 ${overdue}` : '当前未见逾期',
+      hasMore ? `未读取 ${Math.max(total - visible, 0)}` : '已读取全部',
     ].filter((chip): chip is string => Boolean(chip)),
   };
 });
+const listPaginationReceipt = computed(() => {
+  const visible = threads.value.length;
+  const total = totalThreads.value;
+  const remaining = Math.max(total - visible, 0);
+  return {
+    title: '还有线程未读取',
+    summary: `已读取 ${visible} / ${total} 条，仍有 ${remaining} 条未读取。未读取线程不能被视为不存在、已处理或没有待推进事项。`,
+    boundary:
+      '加载更多只读取当前筛选和搜索条件的下一批线程；不会运行反思、改变线程状态、确认决策、发送消息或执行动作。',
+  };
+});
+const loadMoreBoundary = computed(
+  () =>
+    `加载更多自我反思线程：只读取当前筛选的下一批，已读取 ${threads.value.length}/${totalThreads.value} 条；不会运行反思、写记忆、改变线程状态、确认决策、发送消息或执行动作。`,
+);
 const emptyFilterReceipt = computed(() => {
   if (
     loading.value ||
@@ -354,7 +423,8 @@ async function loadThreads() {
     const response = await client.getReflectionThreads({
       status: statusFilter.value,
       search: searchText.value.trim() || undefined,
-      limit: 50,
+      limit: PAGE_SIZE,
+      offset: 0,
     });
     threads.value = response.items;
     totalThreads.value = response.total;
@@ -364,6 +434,31 @@ async function loadThreads() {
     loadError.value = errorMessage(error);
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMoreThreads() {
+  if (loadingMore.value || !hasMoreThreads.value) return;
+  loadingMore.value = true;
+  try {
+    const response = await client.getReflectionThreads({
+      status: statusFilter.value,
+      search: searchText.value.trim() || undefined,
+      limit: PAGE_SIZE,
+      offset: threads.value.length,
+    });
+    const existingIds = new Set(threads.value.map(thread => thread.id));
+    threads.value = [
+      ...threads.value,
+      ...response.items.filter(thread => !existingIds.has(thread.id)),
+    ];
+    totalThreads.value = response.total;
+    loadError.value = '';
+  } catch (error) {
+    console.error('Failed to load more reflection threads:', error);
+    loadError.value = errorMessage(error);
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -515,7 +610,7 @@ function relativeTime(ts?: number) {
 
 .list-scope-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.65rem;
   margin-top: 0.8rem;
 }
@@ -860,6 +955,60 @@ function relativeTime(ts?: number) {
   margin-top: 0.9rem;
 }
 
+.list-pagination-receipt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-left: 3px solid rgba(56, 189, 248, 0.82);
+  border-radius: 8px;
+  background: rgba(8, 47, 73, 0.3);
+  color: #cbd5e1;
+  padding: 0.9rem;
+  margin-top: 1rem;
+}
+
+.list-pagination-title {
+  color: #bae6fd;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.list-pagination-receipt h3 {
+  color: #e2e8f0;
+  font-size: 0.96rem;
+  margin: 0 0 0.3rem;
+}
+
+.list-pagination-receipt p {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0.22rem 0 0;
+}
+
+.load-more-btn {
+  flex-shrink: 0;
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e0f2fe;
+  cursor: pointer;
+  padding: 0.52rem 0.78rem;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  border-color: rgba(125, 211, 252, 0.7);
+  color: #fff;
+}
+
+.load-more-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .status-badge,
 .priority-badge,
 .salience-score {
@@ -930,6 +1079,11 @@ function relativeTime(ts?: number) {
   }
 
   .load-error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .list-pagination-receipt {
     align-items: flex-start;
     flex-direction: column;
   }

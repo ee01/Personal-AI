@@ -9,7 +9,7 @@
 
 ## 发现
 
-- `docs/progressing/to-verify.md` 为空，本轮应从 `docs/features/index.md` 随机选择已落地功能。
+- `docs/progressing/to-verify.md` 为空，本轮应从 `docs/index.md` 随机选择已落地功能。
 - Watch 管理页已经有列表快照、监听状态、空筛选和操作完成回执。
 - 取消关注仍依赖浏览器原生 `confirm()`，确认前只显示规则名，没有说明它只删除本机手动规则、不会删除原消息、不会清理已写入 Memory Service 的历史索引、不会补发或撤回通知。
 - 这会把关键安全边界放到操作之后才出现，且原生 dialog 不符合当前页面已有的回执式 UX。
@@ -20,7 +20,7 @@
 2. 将 Watch 管理页的 `confirm()` 替换为卡片内 inline 确认态；第一次点击只打开确认回执，二次确认才删除本地手动规则。
 3. 保持延长、筛选、命中时间线、系统 Watch 隐藏和存储结构不变。
 4. 更新 Message Reaction 单元测试和 Follow Threads E2E：断言无原生 dialog、确认前 storage 不变、确认后只删除手动规则并保留系统 Watch。
-5. 更新 `docs/features/message_reaction.md` 和 `docs/features/index.md` 的 Watch 行，记录取消前确认边界。
+5. 更新 `docs/features/message_reaction.md` 和 `docs/index.md` 的 Watch 行，记录取消前确认边界。
 
 ## 验证计划
 

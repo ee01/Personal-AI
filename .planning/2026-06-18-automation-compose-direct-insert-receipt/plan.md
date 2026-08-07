@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `回复助手直接插入` / Compose Assist.
-- Canonical doc: `docs/features/compose_assist.md`.
+- Canonical doc: `docs/features/assist.md`.
 - Runtime focus: `src/composer-guard/ComposerGuardController.ts` and `src/composer-guard/assistPreviewPolicy.ts`.
 
 ## Current State

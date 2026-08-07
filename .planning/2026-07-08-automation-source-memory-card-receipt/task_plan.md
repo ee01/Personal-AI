@@ -16,5 +16,5 @@
 1. 在 `src/web-intelligence/contextRecallGuards.ts` 增加 `buildSourceMemoryRecallReceiptItems()`，从 `type/sourceLabel/metadata/whyRelevant/exploreLink/sourceLinks` 生成稳定的资料回执行。
 2. 在 `src/contentScriptWebIntelligence.ts` 的 Expanded Card 中仅对 `source_memory` 渲染 `资料回执`，样式复用现有 receipt 语言但与 Rehearsal 分开。
 3. 扩展 `tools/verify-webpage-memory-detection.ts` 和 `desktop-app/scripts/webpage-memory-detection-check.mjs`，覆盖 ready distillation、敏感来源隐藏时的详情可复核和只读边界。
-4. 更新 `docs/features/memory_capture.md` 与 `docs/features/index.md` 的简要说明。
+4. 更新 `docs/features/memory_capture.md` 与 `docs/index.md` 的简要说明。
 5. 验证：`npm run verify:webpage-memory-detection`，`npm start` 首次成功编译，`npm run verify:webpage-memory-detection:e2e`， scoped `git diff --check`。

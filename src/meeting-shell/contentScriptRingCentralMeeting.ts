@@ -3772,7 +3772,7 @@ function createOverlay(): void {
         </div>
         <div class="coachmark-step">
           <span class="coachmark-step-index">2</span>
-          <span id="mpCoachmarkStep2Text">在弹出的 popup 第一项点击“开启会议全貌”。</span>
+          <span id="mpCoachmarkStep2Text">在弹出的 popup 第一项点击“开启会议弹幕”。</span>
         </div>
       </div>
     </div>
@@ -4316,7 +4316,7 @@ function renderOverlay(
   }
 
   if (!enabled) {
-    if (eyebrow) eyebrow.textContent = '会议全貌';
+    if (eyebrow) eyebrow.textContent = '会议弹幕';
     const fallbackError =
       captureKind === 'error'
         ? formatCaptureStartError(snapshot?.capture.lastError)
@@ -4337,14 +4337,14 @@ function renderOverlay(
       : captureKind === 'error'
         ? `${
             fallbackError || 'Capture 未能成功启动，请重试。'
-          } 请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”重新授权。`
+          } 请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议弹幕”重新授权。`
         : captureKind === 'stopped'
-          ? '录制已停止。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”重新开始。'
+          ? '录制已停止。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议弹幕”重新开始。'
           : shareOwner
             ? `${shareOwner}${
                 snapshot?.selfSharing || context?.selfSharing ? '（你）' : ''
-              } 正在共享屏幕。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”开始录制、实时总结和会后分析。`
-            : '请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”开始录制、实时总结和会后分析。';
+              } 正在共享屏幕。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议弹幕”开始录制、实时总结和会后分析。`
+            : '请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议弹幕”开始录制、实时总结和会后分析。';
     const idleCopyWithReadiness =
       readiness?.status === 'degraded' &&
       !readinessBlocked &&
@@ -4453,7 +4453,7 @@ function syncCoachmark(
   const transcriptPilotEnabled = isTranscriptPilotEnabled(snapshot);
   const popupActionLabel = transcriptPilotEnabled
     ? '启用画面理解与纪要'
-    : '开启会议全貌';
+    : '开启会议弹幕';
   const step2 = shadow.getElementById('mpCoachmarkStep2Text');
 
   backdrop?.classList.toggle('visible', visible);
@@ -4476,7 +4476,7 @@ function syncCoachmark(
           snapshot?.readiness.summary || '当前配置阻止了 Capture。'
         } 先修复配置，再点击浏览器右上角的 Personal AI 图标，在 popup 第一项点击“${popupActionLabel}”。`
       : transcriptPilotEnabled
-        ? '当前已通过 RingCentral Transcript 运行低配会议全貌。要让记忆关联同时利用共享画面 OCR，并生成会后图文纪要，需要从扩展 popup 发起一次浏览器授权。'
+        ? '当前已通过 RingCentral Transcript 运行低配会议弹幕。要让记忆关联同时利用共享画面 OCR，并生成会后图文纪要，需要从扩展 popup 发起一次浏览器授权。'
         : `Chrome 的 tab capture 授权在当前实现里需要从扩展 popup 稳定发起。先点击浏览器右上角的 Personal AI 图标，然后在弹出的 popup 第一项点击“${popupActionLabel}”。`;
   }
   if (step2) {

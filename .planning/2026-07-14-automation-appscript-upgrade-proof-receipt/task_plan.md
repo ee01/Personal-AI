@@ -27,7 +27,7 @@
 2. 在 Project History 已满状态下，同一回执说明主操作只是打开 Project History，清理后要重新检查，当前不会写 Sheet / Script / Jira Rule。
 3. 保持 `updateAppScript()`、deployment 更新、rollback、Config 同步行为不变，只改 UI 证明口径。
 4. 更新静态 verifier 和 Playwright E2E，防止该回执退化成文档或 hover-only copy。
-5. 同步更新功能文档和 `docs/features/index.md`。
+5. 同步更新功能文档和 `docs/index.md`。
 
 ## 验证清单
 

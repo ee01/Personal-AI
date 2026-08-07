@@ -2,7 +2,7 @@
 
 ## 2026-07-09T02:04:27+0800
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry notes, and Reminders.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry notes, and Reminders.
 - Confirmed old root/active planning files are historical and created this current plan directory.
 - Selected `动作队列` from randomized viable feature candidates.
 

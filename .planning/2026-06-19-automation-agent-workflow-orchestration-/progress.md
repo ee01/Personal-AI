@@ -7,13 +7,13 @@
 - **Started:** 2026-06-19
 
 ### Actions Taken
-- Read AGENT.md, automation memory, docs/progressing/to-verify.md, docs/features/index.md, and relevant memory registry notes.
-- Random target selected: `Agent Workflow 多 Agent 编排` from `docs/features/agent_workflow.md`.
+- Read AGENT.md, automation memory, docs/progressing/to-verify.md, docs/index.md, and relevant memory registry notes.
+- Random target selected: `Agent Workflow 多 Agent 编排` from `docs/features/message_analysis.md`.
 - Reminder check: first AppleScript probe failed with syntax error -2740; multiline retry returned `NO_PERSONAL_AI_LIST`.
 - Created isolated planning directory `.planning/2026-06-19-automation-agent-workflow-orchestration-/`.
-- Inspected `docs/features/agent_workflow.md`, `src/agentWorkflow.ts`, `src/agentWorkflowDiagnostics.ts`, `src/options.tsx`, and existing Agent Workflow verify scripts.
+- Inspected `docs/features/message_analysis.md`, `src/agentWorkflow.ts`, `src/agentWorkflowDiagnostics.ts`, `src/options.tsx`, and existing Agent Workflow verify scripts.
 - Added a low-confidence notification review receipt that marks Options results as local review candidates, not real queue/write/send/automation side effects.
-- Updated Options review banner, CSS, diagnostics tests, Options E2E, `docs/features/agent_workflow.md`, and `docs/features/index.md`.
+- Updated Options review banner, CSS, diagnostics tests, Options E2E, `docs/features/message_analysis.md`, and `docs/index.md`.
 
 ### Test Results
 | Test | Expected | Actual | Status |

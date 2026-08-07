@@ -2,7 +2,7 @@
 
 ## 2026-06-08 Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `回复助手预演提醒`.
+- Randomly selected feature from `docs/index.md`: `回复助手预演提醒`.
 - Feature owner/capability: Compose Assist using Rehearsal evidence.
 - Source document: `docs/features/rehearsal.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
@@ -11,7 +11,7 @@
 
 ## Code And UX Findings
 
-- `docs/features/rehearsal.md` and `docs/features/compose_assist.md` already describe the important contract: Rehearsal evidence must be treated as a future-scene cue, previewed before insert, and fed back as `accepted` / `irrelevant`.
+- `docs/features/rehearsal.md` and `docs/features/assist.md` already describe the important contract: Rehearsal evidence must be treated as a future-scene cue, previewed before insert, and fed back as `accepted` / `irrelevant`.
 - `src/composer-guard/ComposerGuardController.ts` already forces Rehearsal evidence through preview even when the backend omits `previewRequired`, and the review evidence line exposes `metadata.rehearsal.content` / summary.
 - `getStructuredEvidenceFeedbackTargets()` and `submitStructuredEvidenceFeedback()` already route Rehearsal evidence through `CONTEXT_RECALL_FEEDBACK` with `rehearsalActivationId`.
 - UX gap: `showFeedbackReceipt()` always says only that the current input surface will be more conservative. When the rejected evidence is Rehearsal, users cannot tell that this specific future-scene cue is being marked irrelevant / downgraded for similar scenes.

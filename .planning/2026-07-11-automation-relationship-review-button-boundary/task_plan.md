@@ -68,7 +68,7 @@ The remaining UX gap is at the actual click controls. The full-card `确认`, `�
    - Full-card snooze title/aria mentions 7-day return and no profile write.
    - Full-card reject title/aria mentions no profile write and evidence retention.
    - Side-rail quick snooze title/aria mentions current candidate/existing note and no full-card review.
-4. Update `docs/features/relationship_radar.md` Review Queue section and the matching `docs/features/index.md` row.
+4. Update `docs/features/relationship_radar.md` Review Queue section and the matching `docs/index.md` row.
 
 ## Non-Goals
 

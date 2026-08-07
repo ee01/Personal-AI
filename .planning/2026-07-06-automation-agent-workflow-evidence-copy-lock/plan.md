@@ -3,7 +3,7 @@
 ## Selected Feature
 
 - Feature: Agent Workflow 运行诊断
-- Canonical doc: `docs/features/agent_workflow.md`
+- Canonical doc: `docs/features/message_analysis.md`
 - Index row: `Agent Workflow 运行诊断`
 
 ## Context
@@ -22,7 +22,7 @@
 2. While clipboard write is pending, lock the test input fields, source selectors, replay/sample controls, saved-scenario controls, and baseline/report actions so a copied packet cannot be visually mixed with a newly edited current input.
 3. Update the pending receipt to state that this temporary lock exists only to keep the evidence snapshot aligned and does not write Memory Service, send notifications, execute automation, overwrite baselines, or export reports.
 4. Extend `tools/verify-agent-workflow-options-e2e.mjs` to assert the pending copy lock and keep the existing success/failure/stale-copy checks.
-5. Update `docs/features/agent_workflow.md` and the `docs/features/index.md` row concisely.
+5. Update `docs/features/message_analysis.md` and the `docs/index.md` row concisely.
 
 ## Validation Target
 

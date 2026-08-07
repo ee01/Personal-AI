@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 运行诊断`
-- Docs: `docs/features/agent_workflow.md`, `docs/features/index.md`
+- Docs: `docs/features/message_analysis.md`, `docs/index.md`
 - Main code: `src/agentWorkflowDiagnostics.ts`, `src/options.tsx`
 - Verification: `npm run verify:agent-workflow`, `node tools/verify-agent-workflow-options-e2e.mjs`, dev build via `npm start`
 

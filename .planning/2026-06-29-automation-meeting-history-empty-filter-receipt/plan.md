@@ -4,7 +4,7 @@
 
 ## 目标
 
-本轮从 `docs/features/index.md` 随机抽中 `会议历史归档`。近期自动化已覆盖 ASR、Today Pilot、Reflection、Coverage、User Profile、通知和 Decision Center 等方向；本轮聚焦 Meeting Pilot 历史归档页的筛选路径。
+本轮从 `docs/index.md` 随机抽中 `会议历史归档`。近期自动化已覆盖 ASR、Today Pilot、Reflection、Coverage、User Profile、通知和 Decision Center 等方向；本轮聚焦 Meeting Pilot 历史归档页的筛选路径。
 
 ## 外部参考
 

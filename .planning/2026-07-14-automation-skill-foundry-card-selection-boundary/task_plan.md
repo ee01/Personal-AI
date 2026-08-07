@@ -4,7 +4,7 @@
 
 - Feature: `技能使用/丢弃/稍后审`
 - Source doc: `docs/features/personal_skill_foundry.md`
-- Index row: `docs/features/index.md`
+- Index row: `docs/index.md`
 - Runtime surface: `memory-exploring.html#/skills`
 
 ## Context checks

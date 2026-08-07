@@ -6,9 +6,9 @@ Improve one bounded UX/code gap for `整页资料保存` under Memory Capture, t
 
 ## Current Status
 
-- [x] Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- [x] Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - [x] Checked Reminders list names; no `Personal AI` list exists on this machine.
-- [x] Randomly selected `整页资料保存` from `docs/features/index.md`.
+- [x] Randomly selected `整页资料保存` from `docs/index.md`.
 - [x] Read `docs/features/memory_capture.md`.
 - [x] Inspect implementation and existing verifiers.
 - [x] Do brief external product/paper research.
@@ -27,4 +27,4 @@ Improve one bounded UX/code gap for `整页资料保存` under Memory Capture, t
 
 | Error | Attempt | Resolution |
 | --- | --- | --- |
-| macOS `awk` did not support the random-selection regex/match-array shape | Initial random feature picker | Switched to Ruby for `docs/features/index.md` parsing and sampling |
+| macOS `awk` did not support the random-selection regex/match-array shape | Initial random feature picker | Switched to Ruby for `docs/index.md` parsing and sampling |

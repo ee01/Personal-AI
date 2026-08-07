@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `Agent Thinking 分析编排` from `docs/features/index.md`.
+- Random feature: `Agent Thinking 分析编排` from `docs/index.md`.
 - Canonical doc: `docs/features/agent_thinking.md`.
 - Reminder branch: local Reminders is readable, but there is no `Personal AI` list, so no Reminder item is linked or completed.
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 随机选中 `docs/features/index.md` 中的 `Scheduled Messages / 队列可视化与改期建议`。
+- 随机选中 `docs/index.md` 中的 `Scheduled Messages / 队列可视化与改期建议`。
 - 本轮只处理新增 / 编辑表单里的 `使用建议时间` 路径，不改执行器、Sheet schema 或 Jira Automation 规则。
 
 ## 外部参照

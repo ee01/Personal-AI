@@ -2,7 +2,7 @@
 
 ## Repo And Reminder Findings
 
-- `docs/progressing/to-verify.md` is empty, so this run can pick a fresh feature from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` is empty, so this run can pick a fresh feature from `docs/index.md`.
 - Random selection was rerolled away from exact features covered in today's automation memory. The selected bounded target is `App Script 自动更新` under Scheduled Messages.
 - AppleScript listed local Reminder lists but missed `Personal AI`.
 - EventKit read `Personal AI`: 4 total items, 0 incomplete. All completed items are historical Doubao / notification feedback and unrelated to App Script upgrade, Project History, deployment update, version endpoint, or Scheduled Messages update controls.

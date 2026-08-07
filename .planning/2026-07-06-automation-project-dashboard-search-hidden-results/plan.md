@@ -27,7 +27,7 @@ EventKit 找到 `Personal AI` Reminders 列表，合计 4 条，未完成 0 条�
 1. 在 `ProjectDashboard.tsx` 的本地查找回执中，把隐藏命中的提示升级为带按钮的恢复行。
 2. 点击恢复按钮时切换到 `全部` 项目视图，并显示短状态回执，说明这只是放宽当前本地筛选，不会读取或同步外部系统。
 3. 更新 `tools/verify-project-dashboard-e2e.mjs`，优先点击新回执按钮证明路径可用。
-4. 更新 `docs/features/project_dashboard_usage_guide.md` 和 `docs/features/index.md` 的简短描述。
+4. 更新 `docs/features/project_dashboard_usage_guide.md` 和 `docs/index.md` 的简短描述。
 5. 运行 `tools/verify-project-dashboard.ts`、`npm start` 首次编译、`tools/verify-project-dashboard-e2e.mjs` 和 scoped `git diff --check`。
 
 ## 边界

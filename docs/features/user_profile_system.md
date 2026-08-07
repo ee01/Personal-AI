@@ -1,6 +1,6 @@
 # 用户画像系统
 
-更新日期: 2026-07-14
+更新日期: 2026-08-03
 
 ## 功能概述
 
@@ -18,6 +18,7 @@
 4. 状态生命周期：pending、active、retracted、archived、superseded 的边界决定条目是否展示、是否使用、是否可恢复。
 5. 页面适配层：前端只是把 profile items 分组展示，不应把 mock 或展示派生数据当成画像真源。
 6. 写作风格：`writing_style.*` 来自 Compose Assist 的重复改写证据，主要影响语气、长度、结构和禁用话术，不应被当成用户事实或项目知识。
+7. 句内归属：自动画像候选必须由 [Memory Claim Attribution](./memory_claim_attribution.md) 的唯一 `profileCandidate` claim 支撑；AI 建议、他人转述、假设、问句和未知 owner 不能因为整条消息由用户发送而进入画像。
 
 ## 当前实现
 
@@ -50,6 +51,8 @@
 
 前端不再依赖旧版 `interests.projects/people/topics` 响应结构。`userProfileViewModel` 会把后端 profile items 规整成页面需要的项目、人员、主题、JIRA、技术和文档分组，并补齐统计、洞察、趋势图和空状态。后端时间戳以 Unix 秒保存，前端适配层会统一转成毫秒，避免活动趋势、最近更新时间和日均活动被错误计算。LLM、Web Intelligence 和 snooze 等自动抽取的新画像候选通过 `/profile/items/inferred` 写入，默认进入 `pending_confirm` 校准队列；只有用户确认后的 `active` 条目才会参与 `USER_CORE` 核心画像渲染、主动通知偏好匹配和外部 provider context package，人物关系也只渲染已确认的 social edge。重复推断会强化已有条目的命中次数和权重，证据引用会按来源和片段稳定去重，避免同一来源只因采集时间不同反复扩大证据覆盖率。画像证据里的来源链接只渲染可点击的 `http(s)` URL；其他协议或格式错误的链接会保留证据摘要并显示“来源链接已隐藏”原因。
 
+claim link 存在且归属改变画像后果时，现有“证据审计”展开区会附带紧凑归属回执；普通 self evidence 不增加标签。Profile 此处只有只读解释，没有归属纠错控件；在 Ask 或 Memory Lens 完成纠错后，失去证据的画像条目会退出 active/pending 使用。纠错不改 evidence 原文或外部来源。
+
 ### 写作风格条目
 
 `writing_style.*` 是画像系统里专门给 Compose Assist 使用的偏好条目。它和普通用户事实不同：
@@ -70,7 +73,10 @@
 - 中文值：`回复和生成面向用户的内容时使用中文`。
 - 英文值：`Reply and generate user-facing content in English.`。
 - 影响范围：Reflection 自动生成的 Rehearsal、后续需要后台自主生成用户可读内容的能力，都应优先读取这个画像项；它不是普通 UI 翻译开关，也不改变人名、项目名、URL、Jira key 等原文。
-- 更新规则：用户修改 Options 语言选项时同步更新同一个 `language_preference` 条目，不创建多条并列偏好。
+- 更新规则：Options 本地保存的当前语言是权威来源；用户修改语言或重新打开 Options 时，系统会核对并同步更新同一个 `language_preference` 条目，不创建多条并列偏好。服务端条目只约束后台生成，不能单独用来判断 Options 当前选择。
+- 存储边界：语言不在 `chrome.storage.local.envConfig`。`envConfig` 只保存 memory-service 连接参数；当前语言单独位于 `personalAiUiPreferences.language`。
+- 同步路径：扩展请求用 `X-Personal-AI-Language` / `Accept-Language` 传递当前值；Options 再通过 Profile API 把值和 `options.ui_language` evidence 一起写入用户数据库。memory-service 不直接访问 Chrome storage。
+- 漂移处理：本地设置与画像不一致时以本地 Options 为准。Options 自动修复画像并触发依赖语言的后台内容刷新；修复完成前，消费端过滤错误语言的自动产物。
 
 ### 画像洞察查询（POST /profile/insight，QW-2）
 

@@ -7,7 +7,7 @@
 - **Started:** 2026-06-07T16:00+08:00
 
 ### Actions Taken
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, and `docs/progressing/to-verify.md`.
+- Read `AGENT.md`, automation memory, `docs/index.md`, and `docs/progressing/to-verify.md`.
 - Confirmed local Reminders has no `Personal AI` list.
 - Randomly selected `主题稍后处理` under Topic Messages.
 - Initialized isolated planning directory `.planning/2026-06-07-automation-topic-defer-return-receipt`.

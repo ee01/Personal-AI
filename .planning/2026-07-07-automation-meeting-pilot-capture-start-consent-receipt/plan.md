@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected feature: `Meeting Pilot 捕获` from `docs/features/index.md`.
+- Selected feature: `Meeting Pilot 捕获` from `docs/index.md`.
 - Source doc: `docs/features/meeting_pilot.md`.
 - Reminder state: EventKit found the local `Personal AI` Reminders list with 4 total items and 0 incomplete items. All items are completed historical Doubao / Notification / test feedback, so no Reminder item is related to Meeting Pilot Capture or will be marked done in this run.
 

@@ -11,7 +11,7 @@
 1. 梳理 Agent Workflow 文档、Options UI、保存样例 helper 和现有 verify/E2E，确认当前真实行为。
 2. 对照行业参考，保持“测试/草稿/本地回归”和“真实发布/真实副作用”分离。
 3. 增加保存样例删除回执，显示删除对象、剩余样例数、基线是否移出，以及不影响 Memory Service、通知、自动化、导出报告和当前输入。
-4. 更新 `docs/features/agent_workflow.md` 和 `docs/features/index.md` 的当前行为说明。
+4. 更新 `docs/features/message_analysis.md` 和 `docs/index.md` 的当前行为说明。
 5. 补 `verify:agent-workflow-replay` 和 Options E2E 断言，并按 AGENT.md 跑 targeted verify、首次 `npm start` 编译、E2E 和 scoped `git diff --check`。
 
 ## 非目标

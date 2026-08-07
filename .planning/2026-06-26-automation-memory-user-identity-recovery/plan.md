@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮随机功能：`多用户隔离`，source of truth 是 `docs/features/memory_system.md`。
+本轮随机功能：`多用户隔离`，source of truth 是 `docs/memory_system.md`。
 
 ## 外部参考信号
 
@@ -20,5 +20,5 @@
 2. 在身份卡补充 `刷新身份快照` 与 `打开设置` 动作。
 3. default fallback / local inferred 状态继续保持写入、导入、恢复被拦截的边界，不改后端隔离模型。
 4. 更新 `tools/verify-memory-user-identity-e2e.mjs`，覆盖快照时间、刷新按钮和打开设置动作。
-5. 更新 `docs/features/memory_system.md` 的多用户隔离说明。
+5. 更新 `docs/memory_system.md` 的多用户隔离说明。
 6. 运行 targeted verify、`npm start` 首次编译、E2E 和 scoped `git diff --check`。

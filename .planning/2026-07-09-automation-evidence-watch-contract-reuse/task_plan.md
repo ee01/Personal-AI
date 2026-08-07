@@ -9,7 +9,7 @@ Random `docs/features` improvement pass for `证据守望契约` / Evidence Watc
 - Feature row: `证据守望契约`
 - Capability: `Memory Service`
 - Canonical doc: `docs/features/evidence_watch_contracts.md`
-- Reason: randomly sampled from `docs/features/index.md`; earlier sampled rows were mostly very recent exact surfaces, while this one has a clear source-of-truth contract and existing validation paths.
+- Reason: randomly sampled from `docs/index.md`; earlier sampled rows were mostly very recent exact surfaces, while this one has a clear source-of-truth contract and existing validation paths.
 
 ## Plan
 

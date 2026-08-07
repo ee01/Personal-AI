@@ -2,7 +2,7 @@
 
 ## 2026-06-16
 
-- Read `AGENT.md`, the planning skill instructions, automation memory, memory registry hints, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, the planning skill instructions, automation memory, memory registry hints, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Checked local Reminders list names; no visible `Personal AI` list exists.
 - Re-ran random feature selection after fixing a Markdown table parsing mistake; selected `记忆覆盖地图` / `Memory Coverage Map`.
 - Inspected the feature doc, `MemoryCoveragePage.vue`, `MemoryCoverageService.ts`, API tests, and the coverage E2E.

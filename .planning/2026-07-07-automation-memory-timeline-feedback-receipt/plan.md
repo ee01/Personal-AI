@@ -2,7 +2,7 @@
 
 ## 背景
 
-- 随机目标：`记忆时间轴`，所属 `Memory Exploring`，主文档 `docs/features/memory_system.md`。
+- 随机目标：`记忆时间轴`，所属 `Memory Exploring`，主文档 `docs/memory_system.md`。
 - `docs/progressing/to-verify.md` 当前为空。
 - Reminders：EventKit 找到 `Personal AI` 列表，共 4 条，未完成 0 条；没有与时间轴反馈、召回质量训练或时间线快照相关的待办。
 - 现状：时间轴已有范围、来源、刷新中/刷新失败、打开来源和安全诊断回执；反馈操作只有卡片内 `提交中...` / `已记录` 状态，失败时落到全页 error，用户不容易判断它到底写了什么、没写什么。
@@ -20,5 +20,5 @@
 3. 失败时保留上一状态，不把反馈失败伪装成时间轴加载失败，也不清空列表。
 4. 更新 `timelinePresentation` 纯函数和 verifier，保证文案稳定。
 5. 更新 Playwright E2E，覆盖 pending、成功、撤销和失败回执，以及失败后旧状态保留。
-6. 更新 `docs/features/memory_system.md` 和索引日期/说明，保持文档描述为当前行为。
+6. 更新 `docs/memory_system.md` 和索引日期/说明，保持文档描述为当前行为。
 7. 运行 targeted verifier、`npm start` 首次编译、时间轴 E2E 和 scoped `git diff --check`。

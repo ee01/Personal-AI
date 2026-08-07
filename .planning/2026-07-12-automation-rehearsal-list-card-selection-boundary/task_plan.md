@@ -4,7 +4,7 @@
 
 - Automation: `轮询检查改进每个功能`
 - Selected feature: `未来场景预演记忆` / Rehearsal
-- Feature docs: `docs/features/rehearsal.md`, `docs/features/index.md`
+- Feature docs: `docs/features/rehearsal.md`, `docs/index.md`
 - Main surface: `src/modals/components/RehearsalsPage.vue`
 - Verifier: `tools/verify-rehearsals-page-e2e.mjs`
 
@@ -38,7 +38,7 @@ The Rehearsal management list already shows status, cue strength, prompt eligibi
 2. Mirror that helper into `title` and `aria-label` for every `.rehearsal-card`.
 3. Keep the helper derived from existing title, status, prompt eligibility, cue summary, and selection state.
 4. Extend `tools/verify-rehearsals-page-e2e.mjs` to assert active, stale, cue-less, and weak-cue card boundaries.
-5. Update `docs/features/rehearsal.md` and `docs/features/index.md` concisely.
+5. Update `docs/features/rehearsal.md` and `docs/index.md` concisely.
 6. Verify with syntax check, first successful dev compile, Rehearsals E2E, and scoped diff checks.
 
 ## Boundary

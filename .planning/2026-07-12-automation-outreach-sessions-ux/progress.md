@@ -7,11 +7,11 @@
 - **Started:** 2026-07-12
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, `docs/progressing/to-verify.md`, stale root plan files, and relevant memory registry hints.
+- Read `AGENT.md`, `docs/index.md`, automation memory, `docs/progressing/to-verify.md`, stale root plan files, and relevant memory registry hints.
 - Created isolated plan directory `.planning/2026-07-12-automation-outreach-sessions-ux/`.
 - Randomly selected `主动询问会话管理` after excluding the freshest exact/family targets from today's automation memory.
 - EventKit found `Personal AI` Reminders with 4 total items and 0 incomplete; no Outreach-related incomplete feedback to incorporate.
-- Inspected `docs/features/memory_system.md`, `src/modals/components/OutreachSessions.vue`, `src/modals/components/OutreachSessionDetail.vue`, `tools/verify-outreach-sessions-e2e.mjs`, and package scripts.
+- Inspected `docs/memory_system.md`, `src/modals/components/OutreachSessions.vue`, `src/modals/components/OutreachSessionDetail.vue`, `tools/verify-outreach-sessions-e2e.mjs`, and package scripts.
 - Reviewed external product/research references for Zapier Human in the Loop, Copilot Studio RFI, trigger-action debugging, and proactive conversational agents.
 - Implemented read-only navigation/control boundaries for Outreach list/detail pages and updated the existing Outreach E2E plus canonical docs/index.
 - Verification passed:

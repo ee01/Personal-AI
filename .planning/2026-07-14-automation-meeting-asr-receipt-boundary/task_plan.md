@@ -3,7 +3,7 @@
 ## Target
 
 - Selected feature: `Desktop Local ASR / Whisper fallback`
-- Canonical docs: `docs/features/meeting_pilot.md` and the matching `docs/features/index.md` row
+- Canonical docs: `docs/features/meeting_pilot.md` and the matching `docs/index.md` row
 - Scope: Speech panel ASR receipt card boundary. This does not change ASR provider ordering, Desktop App bridge behavior, cloud upload behavior, capture start/stop, transcript parsing, action item generation, or meeting archive writes.
 
 ## Current Context
@@ -34,7 +34,7 @@ The Speech panel already renders rich ASR receipt rows, including mode, current 
    - Explicitly state non-effects: no capture start/stop, no ASR mode switch, no extra audio upload, no platform transcript save/download, no meeting note send, no external task write.
 2. Attach the label to `.speech-asr-receipt` as both `title` and `aria-label`, and set `role="group"` so assistive tech gets a meaningful receipt group boundary.
 3. Extend `desktop-app/scripts/meeting-pilot-scene2-runtime-check.mjs` to assert the card-level boundary for a local final-only state and an RC transcript state.
-4. Update `docs/features/meeting_pilot.md` and the `Desktop Local ASR / Whisper fallback` row in `docs/features/index.md` concisely.
+4. Update `docs/features/meeting_pilot.md` and the `Desktop Local ASR / Whisper fallback` row in `docs/index.md` concisely.
 5. Verify:
    - `node --check desktop-app/scripts/meeting-pilot-scene2-runtime-check.mjs`
    - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-meeting-pilot-asr-preflight.ts`

@@ -4,7 +4,7 @@
 
 - Automation: `轮询检查改进每个功能`
 - Selected feature: `用户上下文注入` under Prompt Config
-- Source docs: `docs/features/custom_prompts.md`, `docs/features/index.md`
+- Source docs: `docs/features/custom_prompts.md`, `docs/index.md`
 - Primary implementation surface: `src/modals/prompt-config.tsx`
 - Validation surface: `tools/verify-custom-prompts.ts`, `tools/verify-custom-prompts-e2e.mjs`
 
@@ -35,7 +35,7 @@ Prompt Config already has strong receipts around draft vs saved baseline, low-pr
 3. Keep behavior presentation/accessibility-only: do not change preview computation, saved config, memory-service backup, profile fusion, or runtime injection.
 4. Extend `tools/verify-custom-prompts.ts` so the static verifier locks in the helper and boundary strings.
 5. Extend `tools/verify-custom-prompts-e2e.mjs` to assert button-level boundaries before click for all three scopes and for the user-context tab switch.
-6. Update `docs/features/custom_prompts.md` and the `用户上下文注入` row in `docs/features/index.md`.
+6. Update `docs/features/custom_prompts.md` and the `用户上下文注入` row in `docs/index.md`.
 
 ## Validation Target
 

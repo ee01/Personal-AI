@@ -3,7 +3,7 @@
 ## Repo Context
 
 - `docs/progressing/to-verify.md` is empty, so this is a fresh random feature pass.
-- Random selection chose `今天排序与噪声控制` from `docs/features/index.md`.
+- Random selection chose `今天排序与噪声控制` from `docs/index.md`.
 - The worktree was already broadly dirty before this run. Scope this run to Today Pilot refresh-boundary changes plus planning/memory updates.
 - Today Pilot already has source-breakdown, snapshot-basis, hidden-selected-evidence, mission action, catch-up, context-pack failure, and popup overflow receipts from prior work.
 

@@ -4,7 +4,7 @@
 
 ## 目标
 
-随机选中 `docs/features/index.md` 中的 `Topic 来源链接安全展示`。本次只处理 Topic 详情页聊天、资源、网页来源链接的预点击边界，不改 URL 安全判定、外部打开行为、已读同步、后端 API 或本机稍后/静音状态。
+随机选中 `docs/index.md` 中的 `Topic 来源链接安全展示`。本次只处理 Topic 详情页聊天、资源、网页来源链接的预点击边界，不改 URL 安全判定、外部打开行为、已读同步、后端 API 或本机稍后/静音状态。
 
 ## 当前状态
 
@@ -25,5 +25,5 @@
 1. 在 `src/modals/topic-link-safety.ts` 的安全链接 presentation 里统一生成更完整的 `title` 文案。
 2. 让 Topic 详情页现有聊天 / 资源 / 网页来源链接继续复用该 presentation，自动获得相同 `title` / `aria-label` 边界。
 3. 扩展 `tools/verify-topic-based-messages.ts` 的 helper 断言和 `tools/verify-topic-based-messages-e2e.mjs` 的 DOM 断言，证明 title/ARIA parity 以及 no-read/no-sync/no-write 口径。
-4. 更新 `docs/features/topic_based_messages.md` 和 `docs/features/index.md`，保持文档简洁，只记录用户可感知行为。
+4. 更新 `docs/features/topic_based_messages.md` 和 `docs/index.md`，保持文档简洁，只记录用户可感知行为。
 5. 验证：`npm run verify:topic-based-messages`、`npm start` 首次成功编译、`npm run verify:topic-based-messages:e2e`、scoped `git diff --check`。

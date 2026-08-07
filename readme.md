@@ -137,7 +137,7 @@ yarn start
 # 4. Chrome 加载 dist 目录
 ```
 
-插件默认连接 `http://localhost:3210`。可在插件**选项页**的「记忆系统」中修改 API 地址，或通过 `.env` 的 `MEMORY_SERVICE_BASE_URL` 设置默认值。记忆系统文档：[docs/features/memory_system.md](docs/features/memory_system.md)
+插件默认连接 `http://localhost:3210`。可在插件**选项页**的「记忆系统」中修改 API 地址，或通过 `.env` 的 `MEMORY_SERVICE_BASE_URL` 设置默认值。记忆系统文档：[docs/memory_system.md](docs/memory_system.md)
 
 ---
 

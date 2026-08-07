@@ -9,8 +9,8 @@ Phase 5
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read AGENT.md, docs/features/index.md, docs/progressing/to-verify.md, automation memory, and random-loop memory guidance
-- [x] Pick a random viable feature from docs/features/index.md while avoiding the freshest exact targets
+- [x] Read AGENT.md, docs/index.md, docs/progressing/to-verify.md, automation memory, and random-loop memory guidance
+- [x] Pick a random viable feature from docs/index.md while avoiding the freshest exact targets
 - [x] Check Reminders Personal AI list via AppleScript and EventKit fallback
 - [x] Inspect current User Profile export docs, source, and E2E
 - [x] Document in findings.md

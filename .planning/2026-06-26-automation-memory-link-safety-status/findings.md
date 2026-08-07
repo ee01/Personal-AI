@@ -1,8 +1,8 @@
 # Findings
 
 ## Selection
-- Random selection from docs/features/index.md after excluding the freshest exact feature families selected `Memory Exploring / 时间轴/搜索安全跳转`.
-- Source doc: docs/features/memory_system.md.
+- Random selection from docs/index.md after excluding the freshest exact feature families selected `Memory Exploring / 时间轴/搜索安全跳转`.
+- Source doc: docs/memory_system.md.
 - Primary code surfaces: src/modals/searchResultPresentation.ts, src/modals/timelinePresentation.ts, src/modals/components/TimelinePage.vue, src/modals/components/SearchResultPage.vue.
 - Existing harnesses: npm run verify:memory-search-results, npm run verify:memory-timeline, npm run verify:memory-timeline:e2e.
 

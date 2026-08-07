@@ -9,7 +9,7 @@ Improve the `Agent Thinking 分析编排` result-handoff window so a user can te
 - Feature: `Agent Thinking 分析编排`
 - Capability: Agent Thinking
 - Source doc: `docs/features/agent_thinking.md`
-- Random selection note: chosen as the first viable item from a randomized `docs/features/index.md` sample after excluding the freshest exact automation targets.
+- Random selection note: chosen as the first viable item from a randomized `docs/index.md` sample after excluding the freshest exact automation targets.
 
 ## Plan
 

@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `回复助手预演提醒`
-- Docs: `docs/features/rehearsal.md`, `docs/features/compose_assist.md`
+- Docs: `docs/features/rehearsal.md`, `docs/features/assist.md`
 - Main code: `src/composer-guard/ComposerGuardController.ts`
 
 ## Findings

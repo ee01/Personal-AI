@@ -4,7 +4,7 @@
 
 - Feature: `搜索结果有用/不相关反馈`
 - Capability: Memory Exploring
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Reason: Random sample produced this as a viable target and recent automation memory did not cover this exact feature. Recent adjacent search work focused on scope/loading/source safety; this pass focuses on feedback condition truthfulness.
 
 ## Current repo and reminder state
@@ -32,11 +32,11 @@ Search feedback already shows strong receipts: click-before scope, server effect
 3. Render post-feedback receipts from the feedback-time snapshot, and clearly label it if the current page conditions have changed.
 4. Make `用同一条件重新取证` rerun the feedback-time query/scope/mode instead of the current page state.
 5. Extend `tools/verify-memory-search-feedback-e2e.mjs` to mutate the route/query after a successful feedback write and verify the rerun still uses the feedback-time conditions.
-6. Update `docs/features/memory_system.md` with a concise note.
+6. Update `docs/memory_system.md` with a concise note.
 
 ## Validation
 
 - `node --check tools/verify-memory-search-feedback-e2e.mjs`
 - `npm start -- --progress`, wait for first successful compile, then stop
 - `npm run verify:memory-search-feedback:e2e`
-- `git diff --check -- src/modals/components/SearchResultPage.vue tools/verify-memory-search-feedback-e2e.mjs docs/features/memory_system.md .planning/.active_plan .planning/2026-07-05-automation-memory-search-feedback-condition-snapshot/plan.md`
+- `git diff --check -- src/modals/components/SearchResultPage.vue tools/verify-memory-search-feedback-e2e.mjs docs/memory_system.md .planning/.active_plan .planning/2026-07-05-automation-memory-search-feedback-condition-snapshot/plan.md`

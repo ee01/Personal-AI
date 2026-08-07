@@ -2,7 +2,7 @@
 
 ## 2026-07-11T14:05:21+0800
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, relevant memory workflow notes, and `docs/features/index.md`.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, relevant memory workflow notes, and `docs/index.md`.
 - Randomly selected `今天排序与噪声控制`.
 - Inspected Today Pilot doc/source/verifier/E2E areas and found existing source-breakdown/snapshot receipts.
 - Checked Reminders with AppleScript and EventKit; no incomplete related Reminder items.

@@ -4,7 +4,7 @@
 
 - Feature: `Ask 主动问答`
 - Source doc: `docs/features/ask.md`
-- Selected from `docs/features/index.md` after avoiding recent automation targets.
+- Selected from `docs/index.md` after avoiding recent automation targets.
 
 ## Context
 

@@ -375,8 +375,9 @@ try {
   assert.match(previewText, /Next: Confirm source-format compatibility/);
   assert.match(previewText, /You can import the disabled copy now; complete these checks in Jira before enabling the rule/);
   assert.match(previewText, /Import is available now; the imported copy will remain disabled until you enable it in Jira/);
-  assert.match(previewText, /Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open before enablement/);
   assert.doesNotMatch(previewText, /I understand this only creates a disabled copy/);
+  const createStageStatusText = await frame.locator('#personal-ai-jira-import-create-stage-status').textContent();
+  assert.match(createStageStatusText || '', /Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open before enablement/);
   assert.match(previewText, /Copy the sanitized checklist and detected bindings before you leave the preview\. This is a handoff packet, not an approval/);
   assert.match(previewText, /Clipboard only\s+Copy writes a sanitized local clipboard packet for review handoff/);
   assert.match(previewText, /Does not\s+It does not create or edit Jira rules, enable automation, run schedules, or restore secrets/);
@@ -387,12 +388,14 @@ try {
 
   const importRuleButton = frame.getByRole('button', { name: /^Import rule:/ });
   const disableAfterImportCheckbox = frame.getByLabel('Set this rule disable after import');
+  const replaceSensitiveValuesCheckbox = frame.getByLabel('Replace sensitive information');
   const chainedTriggerSafeguard = frame.getByLabel(/Prevent other automation rules from triggering this imported copy/);
   const chainedTriggerChoiceReceipt = frame.locator('[data-personal-ai-jira-import-chaining-choice-receipt="true"]');
   const importRuleTitle = await importRuleButton.getAttribute('title');
   const importRuleAria = await importRuleButton.getAttribute('aria-label');
   assert.equal(importRuleAria, importRuleTitle);
   assert.equal(await disableAfterImportCheckbox.isChecked(), true);
+  assert.equal(await replaceSensitiveValuesCheckbox.isChecked(), true);
   assert.equal(await frame.getByRole('button', { name: /^Import rule:/ }).count(), 1);
   assert.match(importRuleTitle, /Import rule: create "\(Imported by Personal AI\) Notify release owner \(2\)" with DISABLED state in TGT/);
   assert.match(importRuleTitle, /7 high-risk review item\(s\) and the Jira-side Activation plan remain open before enablement/);
@@ -417,7 +420,11 @@ try {
   assert.equal(await importRuleButton.isDisabled(), false);
 
   await chainedTriggerSafeguard.check();
-  await frame.getByText(/Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open/).waitFor({ timeout: 5000 });
+  await frame.locator('#personal-ai-jira-import-create-stage-status').waitFor({ state: 'attached', timeout: 5000 });
+  assert.match(
+    (await frame.locator('#personal-ai-jira-import-create-stage-status').textContent()) || '',
+    /Create-stage ready: direct import is allowed; Jira-side Activation plan review remains open/,
+  );
   await frame.getByText(/Current preview will block rule chaining in the imported DISABLED copy/).waitFor({ timeout: 5000 });
   assert.equal(await importRuleButton.isDisabled(), false);
 
@@ -426,6 +433,13 @@ try {
   assert.match(await importRuleButton.getAttribute('title'), /with ENABLED state/);
   await disableAfterImportCheckbox.check();
   await frame.getByText(/Disabled import preview/).waitFor({ timeout: 5000 });
+
+  await replaceSensitiveValuesCheckbox.uncheck();
+  await frame.getByText(/Preserve in create payload|Sensitive values will be preserved/).waitFor({ timeout: 5000 });
+  assert.match(await importRuleButton.getAttribute('title'), /preserves sensitive values|Sensitive values will be preserved/);
+  await replaceSensitiveValuesCheckbox.check();
+  await frame.getByText(/Replace in create payload|Sensitive values will be replaced/).waitFor({ timeout: 5000 });
+  assert.match(await importRuleButton.getAttribute('title'), /sanitized POST/);
 
   await importRuleButton.click();
   const pendingCreateReceipt = page.locator('[data-personal-ai-jira-import-pending-receipt="true"]');

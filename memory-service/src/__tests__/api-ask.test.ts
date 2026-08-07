@@ -578,6 +578,80 @@ describe('Ask API', () => {
     recallSpy.mockRestore();
   });
 
+  it('sanitizes mixed-owner claims before Ask generation and returns a compact attribution receipt', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const mixedContent =
+      '我的决定是 Project Nimbus 保留 Vue；另一位 AI 建议 Project Nimbus 改用 React；先假设 Project Nimbus 七月一日上线。';
+    db.prepare(
+      `INSERT INTO messages_raw (
+         id, content, source_type, source, scope, sender, timestamp,
+         importance, sentiment, metadata_json, created_at
+       ) VALUES (?, ?, 'glip', 'glip', 'work', 'Esone', ?, 0.92, 'neutral', ?, ?)`,
+    ).run(
+      'ask-claim-mixed',
+      mixedContent,
+      currentTime,
+      JSON.stringify({ authorRole: 'user' }),
+      currentTime,
+    );
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-claim-mixed',
+            type: 'message',
+            content: mixedContent,
+            score: 0.96,
+            source: 'glip',
+            sourceTitle: 'Project Nimbus decision',
+            timestamp: currentTime,
+            metadata: { messageId: 'ask-claim-mixed' },
+          },
+        ],
+        totalFound: 1,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: '你的决定是保留 Vue；React 仅是 AI 建议。',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'Project Nimbus 最后决定用什么？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0].content).toContain('保留 Vue');
+    expect(body.evidence[0].content).toContain('改用 React');
+    expect(body.evidence[0].content).not.toContain('七月一日上线');
+    expect(body.evidence[0].claimAttribution.map((claim: any) => claim.effect)).toEqual([
+      'used',
+      'background_only',
+      'blocked',
+    ]);
+    expect(body.attributionReceipt).toMatchObject({
+      visibility: 'compact',
+      summary: '采用 1 条；仅作背景 1 条；未使用 1 条',
+      boundary: expect.stringContaining('不修改原始消息或外部系统'),
+    });
+    const prompts = generateMock.mock.calls
+      .map((call) => call[0])
+      .filter((value): value is string => typeof value === 'string');
+    expect(prompts.some((prompt) => prompt.includes('七月一日上线'))).toBe(false);
+    expect(prompts.some((prompt) => prompt.includes('保留 Vue'))).toBe(true);
+    recallSpy.mockRestore();
+  });
+
   it('falls back to plain text when the model does not return JSON', async () => {
     generateMock.mockResolvedValue({
       content:

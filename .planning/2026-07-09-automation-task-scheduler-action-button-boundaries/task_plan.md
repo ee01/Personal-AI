@@ -24,7 +24,7 @@
 1. 在 `src/popup.tsx` 增加按钮级 title / aria-label 文案 helper，复用已有操作边界语义。
 2. 把任务行开关、重排、暂停、立即执行按钮的 `title` 和 `aria-label` 改成包含动作和边界的短句。
 3. 更新 `tools/verify-task-scheduler-popup-filters-e2e.mjs`，断言按钮级 hover/aria 文案包含 no-run / no-history / no-reenable 等关键边界。
-4. 更新 `docs/features/task_scheduler_api.md` 和 `docs/features/index.md` 的简短描述。
+4. 更新 `docs/features/task_scheduler_api.md` 和 `docs/index.md` 的简短描述。
 5. 跑 targeted verifier、dev build、Task Scheduler popup E2E、scoped diff check。
 
 ## 非目标

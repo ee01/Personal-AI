@@ -2,7 +2,7 @@
 
 ## 2026-06-30
 
-- Read `AGENT.md`, automation memory state, memory guidance, planning skill instructions, `to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, automation memory state, memory guidance, planning skill instructions, `to-verify.md`, and `docs/index.md`.
 - Checked local Reminders list names with a bounded AppleScript probe; no `Personal AI` list exists.
 - Selected `Snooze 快速时间菜单` from a random feature sample while avoiding the immediately repeated scheduled-message one-click setup surface.
 - Created this isolated planning directory because the repo already has broad unrelated dirty state and a stale root `task_plan.md`.

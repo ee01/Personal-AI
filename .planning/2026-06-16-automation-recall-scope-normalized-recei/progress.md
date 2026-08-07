@@ -10,13 +10,13 @@
 - Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and planning skill instructions.
 - Confirmed `docs/progressing/to-verify.md` says `暂无。`.
 - Checked Reminders list names; `Personal AI` list is absent.
-- Randomly selected `工作/个人/全部范围语义` from `docs/features/index.md`.
-- Inspected `docs/features/memory_system.md`, `RecallEngine`, `ActiveRecallService`, `/recall`, `/ask`, context recall scope receipts, and search-result presentation tests.
+- Randomly selected `工作/个人/全部范围语义` from `docs/index.md`.
+- Inspected `docs/memory_system.md`, `RecallEngine`, `ActiveRecallService`, `/recall`, `/ask`, context recall scope receipts, and search-result presentation tests.
 - Identified scope-return drift for legacy messages with missing stored scope.
 - Updated `RecallEngine` so returned message metadata scope is normalized from `messages_raw.scope`.
 - Added an API regression for stale `metadata_json.scope` conflicting with the authoritative stored scope column.
 - Added a search-result presentation regression showing top-level returned scope wins over stale metadata scope.
-- Updated `docs/features/memory_system.md` with the concise scope authority boundary.
+- Updated `docs/memory_system.md` with the concise scope authority boundary.
 - Updated automation memory with this run's summary and final run time.
 - Archived Codex session `019ece29-eb06-7e51-89a2-6eb4939dd648`.
 

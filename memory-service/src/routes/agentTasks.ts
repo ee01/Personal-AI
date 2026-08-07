@@ -182,6 +182,105 @@ function getResultStatus(result?: Record<string, unknown>, queueStatus?: string)
   return queueStatus || 'unknown';
 }
 
+export interface AgentTaskEvidencePreview {
+  kind?: string;
+  title?: string;
+  content?: string;
+}
+
+export interface AgentTaskRuntimeStatusItem {
+  sourceRefId: string;
+  sheetMessageId?: string;
+  taskId?: string;
+  latestAction?: {
+    id: string;
+    title: string;
+    queueStatus: string;
+    resultStatus?: string;
+    startedAt?: number;
+    finishedAt?: number;
+    createdAt?: number;
+    lastError?: string;
+  } | null;
+  /** Prefer OpenClaw result.summary; fall back to lastError when failed. */
+  summary?: string;
+  /** First artifact for evidence hover; does not replace summary as primary result. */
+  evidence?: AgentTaskEvidencePreview;
+}
+
+function firstArtifactPreview(
+  result?: Record<string, unknown>,
+): AgentTaskEvidencePreview | undefined {
+  const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+  for (const raw of artifacts) {
+    if (!raw || typeof raw !== 'object') continue;
+    const artifact = raw as Record<string, unknown>;
+    const kind =
+      typeof artifact.kind === 'string' && artifact.kind.trim()
+        ? artifact.kind.trim()
+        : undefined;
+    const title =
+      typeof artifact.title === 'string' && artifact.title.trim()
+        ? artifact.title.trim()
+        : undefined;
+    const content =
+      typeof artifact.content === 'string' && artifact.content.trim()
+        ? artifact.content.trim()
+        : undefined;
+    if (!title && !content) continue;
+    return { kind, title, content };
+  }
+  return undefined;
+}
+
+export function buildAgentTaskRuntimeStatusItem(action: {
+  id: string;
+  title: string;
+  queueStatus: string;
+  startedAt?: number;
+  finishedAt?: number;
+  createdAt?: number;
+  lastError?: string;
+  result?: Record<string, unknown>;
+  sourceRefId?: string;
+  params?: Record<string, unknown>;
+}): AgentTaskRuntimeStatusItem {
+  const metadata =
+    action.params?.metadata && typeof action.params.metadata === 'object'
+      ? (action.params.metadata as Record<string, unknown>)
+      : undefined;
+  const sheetMessageId =
+    nonEmptyString(metadata?.sheetMessageId) ||
+    (action.sourceRefId?.startsWith('msg_') ? action.sourceRefId : undefined);
+  const taskId =
+    nonEmptyString(metadata?.taskId) ||
+    (action.sourceRefId && !action.sourceRefId.startsWith('msg_')
+      ? action.sourceRefId
+      : undefined);
+  const summary =
+    getExecutionSummary(action.result) ||
+    (action.lastError?.trim() ? action.lastError.trim() : undefined);
+  const evidence = firstArtifactPreview(action.result);
+
+  return {
+    sourceRefId: action.sourceRefId || sheetMessageId || taskId || action.id,
+    sheetMessageId,
+    taskId,
+    latestAction: {
+      id: action.id,
+      title: action.title,
+      queueStatus: action.queueStatus,
+      resultStatus: getResultStatus(action.result, action.queueStatus),
+      startedAt: action.startedAt,
+      finishedAt: action.finishedAt,
+      createdAt: action.createdAt,
+      lastError: action.lastError,
+    },
+    summary,
+    evidence,
+  };
+}
+
 async function formatSuccessNotificationWithTemplate(input: {
   template: string;
   title: string;
@@ -226,6 +325,59 @@ async function formatSuccessNotificationWithTemplate(input: {
 }
 
 export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{
+    Querystring: { ids?: string; limit?: string };
+  }>('/agent-tasks/runtime-status', async (request, reply) => {
+    const { db } = request.userContext;
+    const repo = new ActionRepository(db);
+    const ids =
+      typeof request.query.ids === 'string'
+        ? request.query.ids
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [];
+    const limit = Math.max(
+      1,
+      Math.min(parseInt(request.query.limit ?? '100', 10) || 100, 200),
+    );
+    const scopedIds = ids.slice(0, limit);
+
+    if (scopedIds.length === 0) {
+      return reply.status(200).send({ items: [], total: 0 });
+    }
+
+    const actions = repo.listLatestBySourceRefs({
+      sourceKind: 'agent_task',
+      sourceRefIds: scopedIds,
+      limitPerRef: 1,
+    });
+
+    const byRef = new Map<string, AgentTaskRuntimeStatusItem>();
+    for (const action of actions) {
+      const item = buildAgentTaskRuntimeStatusItem(action);
+      const keys = [item.sourceRefId, item.sheetMessageId, item.taskId].filter(
+        (value): value is string => Boolean(value),
+      );
+      for (const key of keys) {
+        if (!byRef.has(key)) {
+          byRef.set(key, item);
+        }
+      }
+    }
+
+    const items = scopedIds.map(
+      (id) =>
+        byRef.get(id) ||
+        ({
+          sourceRefId: id,
+          latestAction: null,
+        } satisfies AgentTaskRuntimeStatusItem),
+    );
+
+    return reply.status(200).send({ items, total: items.length });
+  });
+
   app.post<{ Body: AgentTaskExecuteBody }>(
     '/agent-tasks/execute',
     async (request, reply) => {

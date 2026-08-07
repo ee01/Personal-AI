@@ -43,5 +43,5 @@
 - `npm --prefix desktop-app run test:source-toggle-gating`
 - `npm --prefix desktop-app run build`
 - `npm start -- --progress` reached first successful webpack compile in 14335 ms and was stopped.
-- `git diff --check -- desktop-app/src/syncManager.ts desktop-app/src/server.ts desktop-app/src/__tests__/syncManager.test.ts desktop-app/src/__tests__/bridgeService.test.ts desktop-app/scripts/doubao-source-toggle-gating-check.mjs docs/features/doubao_bridge.md docs/features/index.md`
+- `git diff --check -- desktop-app/src/syncManager.ts desktop-app/src/server.ts desktop-app/src/__tests__/syncManager.test.ts desktop-app/src/__tests__/bridgeService.test.ts desktop-app/scripts/doubao-source-toggle-gating-check.mjs docs/features/doubao_bridge.md docs/index.md`
 - Process check found no remaining webpack watcher or target verifier process.

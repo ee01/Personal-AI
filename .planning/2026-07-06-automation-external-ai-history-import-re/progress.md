@@ -7,14 +7,14 @@
 - **Started:** 2026-07-06
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, relevant memory registry lines, existing planning files, and git status.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, relevant memory registry lines, existing planning files, and git status.
 - Randomly sampled feature rows and selected `外部 AI 历史基础录入` after skipping fresher exact or adjacent targets where practical.
 - Checked Reminders with AppleScript and Swift/EventKit; found no open related `Personal AI` item.
 - Researched current official/product and paper references for exported AI histories, data portability, and long-term memory imports.
 - Inspected `docs/features/memory_coverage_map.md`, `src/modals/components/MemoryCoveragePage.vue`, `tools/verify-memory-coverage-e2e.mjs`, package scripts, and smart-import backend test pointers.
 - Implemented an `外部 AI 写入提交中回执` shown only while external-AI commit is pending.
 - Extended `tools/verify-memory-coverage-e2e.mjs` with a delayed external-AI commit fixture and assertions for pending and completed receipts.
-- Updated `docs/features/memory_coverage_map.md` and `docs/features/index.md` with concise behavior copy.
+- Updated `docs/features/memory_coverage_map.md` and `docs/index.md` with concise behavior copy.
 - Validation passed and no relevant leftover watcher/E2E/Chromium process remained.
 
 ### Test Results

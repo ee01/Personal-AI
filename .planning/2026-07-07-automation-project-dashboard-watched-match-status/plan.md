@@ -8,7 +8,7 @@ Improve the `Memory Service watched projects 补齐` UX so the first visible syn
 
 - Random sample item: `Memory Service watched projects 补齐`
 - Capability: Project Dashboard
-- Source docs: `docs/features/brain_like_project_analysis_system.md`, `docs/features/index.md`
+- Source docs: `docs/features/brain_like_project_analysis_system.md`, `docs/index.md`
 - Runtime surface: `project-dashboard.html` data-source sync/check flow
 
 ## Plan

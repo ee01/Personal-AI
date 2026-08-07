@@ -16,7 +16,7 @@ Goal: improve the `Snooze 快速时间菜单` feature by checking code and docs,
 
 ## Decisions
 
-- Selected feature: `Snooze 快速时间菜单` from `docs/features/index.md`.
+- Selected feature: `Snooze 快速时间菜单` from `docs/index.md`.
 - Source doc: `docs/features/message_reaction.md`.
 - Reminder state: local Reminders lists are readable, but no list named `Personal AI` exists, so there are no Reminder items to incorporate or mark done.
 - Worktree state: broad unrelated dirty changes already exist. Keep this run scoped to Snooze quick-menu files plus this planning directory and automation memory.

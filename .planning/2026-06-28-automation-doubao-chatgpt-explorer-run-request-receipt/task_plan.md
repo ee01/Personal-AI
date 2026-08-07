@@ -7,7 +7,7 @@ Goal: improve the selected `Doubao / ChatGPT explorer 输入链路` feature by c
 | Phase | Status | Scope |
 | --- | --- | --- |
 | 1 | completed | Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, old planning state, feature index, and local Reminders list state |
-| 2 | completed | Randomly select a non-recent feature from `docs/features/index.md` |
+| 2 | completed | Randomly select a non-recent feature from `docs/index.md` |
 | 3 | completed | Inspect Doubao Bridge docs, desktop Explorer source code, UI renderer, and existing verifier coverage |
 | 4 | completed | Search current product/docs and paper references for AI chat memory import/export, source controls, and conversational-memory provenance |
 | 5 | completed | Implement the smallest no-extra-decision UX/code change |

@@ -1330,9 +1330,9 @@ a,
   overflow: hidden;
   color: rgba(39, 50, 63, 0.9);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.45;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
 

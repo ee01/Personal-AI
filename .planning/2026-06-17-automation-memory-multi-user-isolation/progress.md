@@ -6,7 +6,7 @@
 - **Status:** complete
 - **Started:** 2026-06-17 14:03:32 CST
 - Actions taken:
-  - Read `AGENT.md`, `docs/features/index.md`, automation memory, and relevant long-term memory notes.
+  - Read `AGENT.md`, `docs/index.md`, automation memory, and relevant long-term memory notes.
   - Read `docs/progressing/to-verify.md`; no carry-over item exists.
   - Checked local Reminders. First JavaScript probe timed out; second AppleScript probe returned list names and confirmed no `Personal AI` list.
   - Randomly selected `多用户隔离` / Memory Service from the feature index, avoiding the freshest exact automation-memory focus areas.
@@ -20,7 +20,7 @@
 ### Phase 2: Feature Inspection
 - **Status:** complete
 - Actions taken:
-  - Read the multi-user isolation section in `docs/features/memory_system.md`.
+  - Read the multi-user isolation section in `docs/memory_system.md`.
   - Inspected backend identity parsing, auth, write guard, per-user context creation, `/stats`, SSE events, frontend `MemoryServiceClient`, Memory Exploring identity display, and existing multi-user tests/E2E scripts.
   - Found a client-side unresolved-default identity gap: when `userinfo.username` is unavailable, the client sends `X-User-Id: default`, hiding fallback warnings and bypassing missing-identity write guard semantics.
 - Files created/modified:
@@ -49,12 +49,12 @@
   - Kept explicitly configured/resolved user IDs, including an intentionally configured `default`, as visible explicit identities.
   - Extended `tools/verify-memory-events-multiuser.ts` to cover resolved EventSource identity, unresolved fallback EventSource URL, unresolved fallback HTTP write headers, and explicit default headers.
   - Extended `tools/verify-memory-user-identity-e2e.mjs` to assert `/stats` request headers for explicit vs fallback identity and the visible Memory Exploring warning.
-  - Updated `docs/features/memory_system.md` multi-user isolation notes.
+  - Updated `docs/memory_system.md` multi-user isolation notes.
 - Files created/modified:
   - `src/services/MemoryServiceClient.ts`
   - `tools/verify-memory-events-multiuser.ts`
   - `tools/verify-memory-user-identity-e2e.mjs`
-  - `docs/features/memory_system.md`
+  - `docs/memory_system.md`
 
 ### Phase 6: Verification
 - **Status:** complete

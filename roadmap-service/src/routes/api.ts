@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   applyIntent,
+  confirmTargetSync,
   createShareToken,
   createTeam,
   getTeamSnapshot,
+  importRemoteTasks,
+  importTasksFromJira,
   listActivity,
   listFocusItems,
   listTeams,
@@ -12,6 +15,8 @@ import {
   validateShareToken,
 } from '../core/TeamService.js';
 import { getEventBus } from '../core/EventBus.js';
+import { config } from '../config.js';
+import { queueTargetSync } from '../core/TargetSync.js';
 import type { ActorContext, ActorSource } from '../types.js';
 
 function readActor(request: FastifyRequest): ActorContext {
@@ -65,6 +70,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     ok: true,
     service: 'roadmap-service',
     ts: Date.now(),
+    jiraEnabled: config.jira.enabled,
   }));
 
   app.get('/api/v1/teams', async () => ({
@@ -158,6 +164,77 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(status).send(result);
       }
       return result;
+    },
+  );
+
+  app.post<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/import-tasks',
+    async (request, reply) => {
+      const actor = readActor(request) as ActorContext & { shareToken?: string };
+      const access = requireWriteAccess(request.params.teamId, actor);
+      if (!access.ok) {
+        return reply.code(access.status).send({ error: access.error });
+      }
+      const body = (request.body || {}) as Record<string, unknown>;
+      // Primary path: extension already searched with Options token.
+      if (Array.isArray(body.tasks)) {
+        const result = importRemoteTasks(
+          request.params.teamId,
+          access.actor,
+          body.tasks,
+        );
+        if (!result.ok) {
+          return reply.code(result.status || 400).send({ error: result.error });
+        }
+        return result.result;
+      }
+      // Legacy / server-PAT fallback search.
+      const result = await importTasksFromJira(
+        request.params.teamId,
+        access.actor,
+      );
+      if (!result.ok) {
+        return reply
+          .code(result.status || 400)
+          .send({ error: result.error });
+      }
+      return result.result;
+    },
+  );
+
+  app.post<{ Params: { teamId: string } }>(
+    '/api/v1/teams/:teamId/sync-target',
+    async (request, reply) => {
+      const actor = readActor(request) as ActorContext & { shareToken?: string };
+      const access = requireWriteAccess(request.params.teamId, actor);
+      if (!access.ok) {
+        return reply.code(access.status).send({ error: access.error });
+      }
+      const body = (request.body || {}) as Record<string, unknown>;
+      const itemKey = String(body.itemKey || '').trim();
+      if (!itemKey) {
+        return reply.code(400).send({ error: 'itemKey_required' });
+      }
+      // mode=confirm: extension already wrote Jira; mirror DB + activity.
+      if (body.mode === 'confirm') {
+        const result = confirmTargetSync(request.params.teamId, access.actor, {
+          itemKey,
+          start: String(body.start || ''),
+          end: String(body.end || ''),
+          jiraKey: body.jiraKey ? String(body.jiraKey) : undefined,
+        });
+        if (!result.ok) {
+          return reply.code(result.status || 400).send({ error: result.error });
+        }
+        return { ok: true, via: 'extension', snapshot: result.snapshot };
+      }
+      // Fallback: queue server JIRA_PAT sync (silent skip if not configured).
+      const queued = queueTargetSync(
+        request.params.teamId,
+        itemKey,
+        access.actor,
+      );
+      return { ok: true, ...queued, via: 'server' };
     },
   );
 

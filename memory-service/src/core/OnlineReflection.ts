@@ -4,8 +4,7 @@
  *
  * Analyses the query, recalled items, and LLM response to:
  *   - Reinforce memories that were actually used in the response
- *   - Extract new facts about entities (stored via TruthMaintainer)
- *   - Detect implicit user preferences (appended to CORE_MEMORY.md)
+ *   - Detect explicit, user-authored preference candidates
  *   - Suggest improvements for future recall
  *
  * All operations are wrapped in try/catch so that reflection failures
@@ -17,14 +16,14 @@ import type Database from 'better-sqlite3';
 import type { RecallItem } from '../types/index.js';
 
 import { ForgettingEngine } from './ForgettingEngine.js';
-import { TruthMaintainer } from './TruthMaintainer.js';
-import type { PropertyChange } from './TruthMaintainer.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { contentHash } from '../utils/hashing.js';
-import { now, formatDate } from '../utils/time.js';
+import { now } from '../utils/time.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { segmentMemoryClaims } from './ClaimSegmenter.js';
+import { compileMemoryClaimPolicy } from './ClaimPolicyCompiler.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,7 +102,21 @@ export class OnlineReflection {
     }
 
     const { query, recalledItems, llmResponse, usedItemIds } = input;
-    const currentTime = now();
+    const queryClaims = segmentMemoryClaims({
+      content: query,
+      sourceType: 'manual',
+      metadata: { role: 'user', ownerAuthored: true },
+    }).map((claim) => ({
+      claim,
+      policy: compileMemoryClaimPolicy(claim),
+    }));
+    const eligibleProfileClaims = queryClaims.filter(
+      ({ policy }) => policy.profileCandidate,
+    );
+    const profileEvidence = eligibleProfileClaims
+      .map(({ claim }) => claim.sourceText.trim())
+      .filter(Boolean);
+    const profileEvidenceText = profileEvidence.join(' ');
 
     // Step 1: Reinforce used memories
     const forgettingEngine = new ForgettingEngine(this.db);
@@ -121,14 +134,14 @@ export class OnlineReflection {
       ? llmResponse.slice(0, 500) + '...'
       : llmResponse;
 
-    const prompt = `The user asked: "${query}"
+    const prompt = `The user asked a question. The only user-authored profile claims eligible for reflection are: "${profileEvidenceText || '[none]'}"
 System recalled ${recalledItems.length} memories, used ${usedItemIds.length} of them.
 System answered: "${responsePreview}"
 
 Quick reflection:
 1. Was the answer accurate and complete? Anything important missed?
-2. Any new facts to record?
-3. Did the user imply a preference or interest?
+2. Do not infer entity facts from recalled memories or the system answer.
+3. Only record a preference when it is stated verbatim in the eligible profile claims. If the eligible set is empty, userPreferences and newFacts must be empty.
 Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":0.7}], "userPreferences": [], "improvements": [], "shouldStore": true/false }`;
 
     const llm = getLLMClient();
@@ -144,52 +157,17 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
       return;
     }
 
-    // Step 3: If new facts found, insert via TruthMaintainer
-    const newFacts = reflectionData.newFacts ?? [];
-    if (newFacts.length > 0) {
-      const truthMaintainer = new TruthMaintainer(this.db);
+    // Step 3: Ask is not a lineage-bearing fact source.
+    // Ask reflection has no persisted source message/claim revision. Entity
+    // truth therefore stays read-only here; it must enter through a source that
+    // can carry claim lineage and correction semantics.
+    const newFacts: ReflectionLLMResponse['newFacts'] = [];
 
-      for (const fact of newFacts) {
-        try {
-          // Resolve entity ID by name
-          const entity = this.db
-            .prepare(
-              `SELECT id FROM entities
-               WHERE LOWER(name) = LOWER(?) AND status = 'active'
-               LIMIT 1`,
-            )
-            .get(fact.entity) as { id: string } | undefined;
-
-          if (!entity) {
-            console.warn(
-              `[OnlineReflection] Entity "${fact.entity}" not found, skipping fact: ${fact.key}`,
-            );
-            continue;
-          }
-
-          const change: PropertyChange = {
-            entityId: entity.id,
-            entityName: fact.entity,
-            key: fact.key,
-            value: fact.value,
-            actionType: 'set',
-            sourceAuthority: 'inferred',
-            sourceContext: `Inferred from user query: "${query.slice(0, 100)}"`,
-            confidence: fact.confidence ?? 0.5,
-          };
-
-          await truthMaintainer.processPropertyChange(change);
-        } catch (err) {
-          console.warn(
-            `[OnlineReflection] Failed to store fact for "${fact.entity}": ${fact.key}:`,
-            err,
-          );
-        }
-      }
-    }
-
-    // Step 4: If user preferences found, write to DB (primary) and CORE_MEMORY.md (fallback)
-    const userPreferences = reflectionData.userPreferences ?? [];
+    // Step 4: Persist only preferences grounded in eligible query claims.
+    const userPreferences = filterGroundedPreferences(
+      reflectionData.userPreferences,
+      profileEvidence,
+    );
     if (userPreferences.length > 0) {
       try {
         this.writePreferencesToDb(userPreferences);
@@ -197,31 +175,6 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
         console.warn('[OnlineReflection] Failed to write preferences to DB:', err);
       }
 
-      // Keep CORE_MEMORY.md append as fallback
-      try {
-        const udm = this.userDataManager;
-        if (!udm) throw new Error('UserDataManager not available');
-        const dateStr = formatDate(currentTime);
-        const prefEntries = userPreferences
-          .map((p) => `- ${p} _(discovered ${dateStr})_`)
-          .join('\n');
-
-        udm.appendToFile(
-          'CORE_MEMORY.md',
-          `\n${prefEntries}\n`,
-        );
-      } catch (err) {
-        console.warn('[OnlineReflection] Failed to append user preferences to CORE_MEMORY.md:', err);
-      }
-    }
-
-    // Step 4b: If new facts found, also write to profile DB as item_type='fact'
-    if (newFacts.length > 0) {
-      try {
-        this.writeFactsToDb(newFacts);
-      } catch (err) {
-        console.warn('[OnlineReflection] Failed to write facts to profile DB:', err);
-      }
     }
 
     // Log improvements for debugging / future use
@@ -259,17 +212,26 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
 
       const existing = this.db
         .prepare(
-          `SELECT id, mention_count, evidence_refs, salience_score
+          `SELECT id, mention_count, evidence_refs, salience_score, status
            FROM user_profile_items
            WHERE fingerprint = ?
            LIMIT 1`,
         )
         .get(fingerprint) as
-        | { id: string; mention_count: number; evidence_refs: string | null; salience_score: number }
+        | {
+            id: string;
+            mention_count: number;
+            evidence_refs: string | null;
+            salience_score: number;
+            status: string;
+          }
         | undefined;
 
       if (existing) {
-        // Reinforce existing preference
+        // Reflection may reinforce only another unconfirmed candidate. It
+        // must not silently mutate a preference the user already confirmed,
+        // retracted or archived.
+        if (existing.status !== 'pending_confirm') continue;
         const newMentionCount = existing.mention_count + 1;
         const evidenceRefs: Array<{ messageId?: string; ts: number }> = existing.evidence_refs
           ? JSON.parse(existing.evidence_refs)
@@ -296,7 +258,8 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
                  salience_score = ?,
                  evidence_refs = ?,
                  updated_at = ?
-             WHERE id = ?`,
+             WHERE id = ?
+               AND status = 'pending_confirm'`,
           )
           .run(
             newMentionCount,
@@ -330,118 +293,12 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
                source_kind, confidence, salience_score,
                mention_count, last_seen, evidence_refs,
                user_confirmed, status, created_at, updated_at)
-             VALUES (?, 'preference', ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, 'active', ?, ?)`,
+             VALUES (?, 'preference', ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, 'pending_confirm', ?, ?)`,
           )
           .run(
             id,
             itemKey,
             pref,
-            fingerprint,
-            confidence,
-            salience,
-            currentTime,
-            evidenceRefs,
-            currentTime,
-            currentTime,
-          );
-      }
-
-      // Mark profile as dirty
-      try {
-        this.db
-          .prepare(`UPDATE profile_sync_state SET profile_dirty = 1`)
-          .run();
-      } catch {
-        // Table may not exist yet — safe to ignore
-      }
-    }
-  }
-
-  /**
-   * Write extracted facts to user_profile_items as item_type='fact'.
-   */
-  private writeFactsToDb(
-    facts: Array<{ entity: string; key: string; value: string; confidence: number }>,
-  ): void {
-    const currentTime = now();
-
-    for (const fact of facts) {
-      const normalised = (fact.key + ':' + fact.value).toLowerCase().trim();
-      const fingerprint = contentHash('fact:' + normalised);
-
-      const existing = this.db
-        .prepare(
-          `SELECT id, mention_count, evidence_refs, salience_score
-           FROM user_profile_items
-           WHERE fingerprint = ?
-           LIMIT 1`,
-        )
-        .get(fingerprint) as
-        | { id: string; mention_count: number; evidence_refs: string | null; salience_score: number }
-        | undefined;
-
-      if (existing) {
-        const newMentionCount = existing.mention_count + 1;
-        const evidenceRefs: Array<{ ts: number }> = existing.evidence_refs
-          ? JSON.parse(existing.evidence_refs)
-          : [];
-        evidenceRefs.push({ ts: currentTime });
-
-        const confidence = fact.confidence ?? 0.6;
-        const frequencyNorm = Math.min(newMentionCount / 10, 1.0);
-        const recency = 1.0;
-        const confirmationBonus = 0.1;
-        const salience =
-          0.4 * confidence +
-          0.3 * frequencyNorm +
-          0.2 * recency +
-          0.1 * confirmationBonus;
-
-        this.db
-          .prepare(
-            `UPDATE user_profile_items
-             SET mention_count = ?,
-                 last_seen = ?,
-                 salience_score = ?,
-                 evidence_refs = ?,
-                 updated_at = ?
-             WHERE id = ?`,
-          )
-          .run(
-            newMentionCount,
-            currentTime,
-            salience,
-            JSON.stringify(evidenceRefs),
-            currentTime,
-            existing.id,
-          );
-      } else {
-        const id = uuidv4();
-        const confidence = fact.confidence ?? 0.6;
-        const frequencyNorm = 1 / 10;
-        const recency = 1.0;
-        const confirmationBonus = 0;
-        const salience =
-          0.4 * confidence +
-          0.3 * frequencyNorm +
-          0.2 * recency +
-          0.1 * confirmationBonus;
-
-        const evidenceRefs = JSON.stringify([{ ts: currentTime }]);
-
-        this.db
-          .prepare(
-            `INSERT INTO user_profile_items
-              (id, item_type, item_key, item_value, fingerprint,
-               source_kind, confidence, salience_score,
-               mention_count, last_seen, evidence_refs,
-               user_confirmed, status, created_at, updated_at)
-             VALUES (?, 'fact', ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, 'active', ?, ?)`,
-          )
-          .run(
-            id,
-            fact.key,
-            fact.value,
             fingerprint,
             confidence,
             salience,
@@ -475,4 +332,42 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
 
     return 'general_preference';
   }
+}
+
+function normalizeGroundingText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)、]\s*)/u, '')
+    .replace(/\s+/gu, ' ')
+    .replace(/[。.!！？?；;，,]+$/u, '')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function filterGroundedPreferences(
+  rawPreferences: unknown,
+  eligibleEvidence: string[],
+): string[] {
+  if (!Array.isArray(rawPreferences) || eligibleEvidence.length === 0) {
+    return [];
+  }
+
+  const normalizedEvidence = eligibleEvidence
+    .map(normalizeGroundingText)
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const grounded: string[] = [];
+  for (const rawPreference of rawPreferences) {
+    if (typeof rawPreference !== 'string') continue;
+    const preference = rawPreference.trim();
+    const normalized = normalizeGroundingText(preference);
+    if (!normalized || seen.has(normalized)) continue;
+    const supported = normalizedEvidence.some(
+      (evidence) => evidence === normalized || evidence.includes(normalized),
+    );
+    if (!supported) continue;
+    seen.add(normalized);
+    grounded.push(preference);
+  }
+  return grounded;
 }

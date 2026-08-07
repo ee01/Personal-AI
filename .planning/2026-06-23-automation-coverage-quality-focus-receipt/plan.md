@@ -10,7 +10,7 @@
 - `AGENT.md`
 - `docs/progressing/to-verify.md` (`暂无。`)
 - automation memory for recent feature-family rerolls
-- `docs/features/index.md`
+- `docs/index.md`
 - local Reminders list names; `Personal AI` list is absent on this machine
 - `docs/features/memory_coverage_map.md`
 - `src/modals/components/MemoryCoveragePage.vue`

@@ -27,7 +27,27 @@ describe('a database created from schema.sql', () => {
       '002_items_manual_source',
       '003_items_jira_key_index',
       '004_items_backfill_jira_key',
+      '005_subs_cleared',
+      '006_item_markers',
+      '007_teams_release_sheet',
     ]);
+    expect(
+      (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
+        (row) => row.name,
+      ),
+    ).toEqual(expect.arrayContaining(['cleared']));
+    expect(
+      (db.pragma('table_info(teams)') as Array<{ name: string }>).map(
+        (row) => row.name,
+      ),
+    ).toEqual(expect.arrayContaining(['release_sheet_json']));
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'item_markers'`,
+        )
+        .get(),
+    ).toEqual({ name: 'item_markers' });
     expect(
       db
         .prepare(

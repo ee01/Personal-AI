@@ -9,7 +9,7 @@
 
 ## Selected Feature
 
-- Selected `Coverage 质量分` from `docs/features/index.md`.
+- Selected `Coverage 质量分` from `docs/index.md`.
 - Source doc already says quality score covers platform state, freshness, healthy contributions, failure/pressure penalties, and boundaries.
 - Backend `MemoryCoverageService` computes `qualityScoreBreakdown` from state base, healthy contribution bonus, freshness bonus, and failing penalty. No backend issue found for this slice.
 - UI already has a score breakdown, score boundary receipt, route receipt, low-score sort receipt, and stale snapshot receipt.

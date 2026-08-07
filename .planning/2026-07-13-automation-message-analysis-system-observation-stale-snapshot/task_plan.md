@@ -27,7 +27,7 @@
 2. 调整规则页系统观察回执：失败态显示 `刷新失败 · 上次快照` 或 `刷新失败 · 上次空状态`，指标标成“上次”，并说明当前状态未确认。
 3. 调整刷新按钮 `title` / `aria-label`：失败后说明上次快照只用于排障，不证明观察仍在运行或已经停止。
 4. 扩展 E2E：覆盖 ready -> failed keeps last non-empty snapshot -> ready empty -> failed keeps last empty snapshot。
-5. 更新 `docs/features/message_analysis.md` 和 `docs/features/index.md` 的当前行为描述。
+5. 更新 `docs/features/message_analysis.md` 和 `docs/index.md` 的当前行为描述。
 6. 验证：先跑脚本语法检查 / 目标 E2E，再跑 `npm start` 首次成功编译，最后跑 scoped `git diff --check`。
 
 ## 非目标

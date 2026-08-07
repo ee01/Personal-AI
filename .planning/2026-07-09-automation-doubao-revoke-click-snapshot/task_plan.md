@@ -8,7 +8,7 @@ Improve the `Revoke ingested memory` path in Doubao Bridge so a user can tell wh
 
 1. Complete context pass.
    - Status: complete
-   - Read `AGENT.md`, `docs/features/index.md`, automation memory, `docs/progressing/to-verify.md`, Reminder state, `docs/features/doubao_bridge.md`, and the revoke UI / E2E files.
+   - Read `AGENT.md`, `docs/index.md`, automation memory, `docs/progressing/to-verify.md`, Reminder state, `docs/features/doubao_bridge.md`, and the revoke UI / E2E files.
 2. Research and scope the UX change.
    - Status: complete
    - Use product and research references around memory deletion, activity deletion, portability, provenance, and machine-unlearning verification.

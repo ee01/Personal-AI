@@ -2,7 +2,7 @@
 
 ## 2026-06-27
 
-- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, `docs/features/index.md`, memory registry guidance, and planning skill guidance.
+- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, `docs/index.md`, memory registry guidance, and planning skill guidance.
 - Checked local Reminders with AppleScript; the `Personal AI` list is absent.
 - Random candidate selection included `设计链接更新时间展示`; selected it after avoiding the newest exact automation targets.
 - Started inspecting `docs/features/jira_design_links.md`, `src/jiraDesignLinks.ts`, `src/contentScriptJira.ts`, and Jira Design Links verifiers.

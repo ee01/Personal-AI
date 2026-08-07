@@ -160,6 +160,62 @@ export function useRoadmapApi() {
     return data.snapshot;
   }
 
+  async function importTasks(
+    teamId: string,
+    tasks?: Array<{
+      key: string;
+      summary: string;
+      epicKey: string;
+      targetStart?: string | null;
+      targetEnd?: string | null;
+      assignee?: string | null;
+    }>,
+  ) {
+    return apiFetch<{
+      added: number;
+      skipped: number;
+      byEpic: Record<string, { added: number; skipped: number }>;
+      snapshot: TeamSnapshot;
+    }>(`/api/v1/teams/${teamId}/import-tasks`, {
+      teamId,
+      method: 'POST',
+      body: JSON.stringify({
+        ...actorPayload.value,
+        shareToken: getShareToken(teamId),
+        ...(tasks ? { tasks } : {}),
+      }),
+    });
+  }
+
+  async function syncTarget(
+    teamId: string,
+    input:
+      | { itemKey: string; mode?: 'queue' }
+      | {
+          itemKey: string;
+          mode: 'confirm';
+          start: string;
+          end: string;
+          jiraKey?: string;
+        },
+  ) {
+    return apiFetch<{
+      ok: true;
+      queued?: boolean;
+      skipped?: string;
+      via?: string;
+      snapshot?: TeamSnapshot;
+    }>(`/api/v1/teams/${teamId}/sync-target`, {
+      teamId,
+      method: 'POST',
+      body: JSON.stringify({
+        ...actorPayload.value,
+        shareToken: getShareToken(teamId),
+        ...input,
+      }),
+    });
+  }
+
   async function fetchActivity(teamId: string, limit = 100) {
     const data = await apiFetch<{ items: ActivityEntry[] }>(
       `/api/v1/teams/${teamId}/activity?limit=${limit}`,
@@ -229,6 +285,8 @@ export function useRoadmapApi() {
     fetchTeam,
     shareTeam,
     sendIntent,
+    importTasks,
+    syncTarget,
     fetchActivity,
     subscribeEvents,
     unsubscribeEvents,

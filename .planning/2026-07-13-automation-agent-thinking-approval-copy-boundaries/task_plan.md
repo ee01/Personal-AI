@@ -7,7 +7,7 @@ Improve `Agent Thinking 工具审批` so the actual approval-copy controls state
 ## Target
 
 - Feature: `Agent Thinking 工具审批`
-- Docs: `docs/features/agent_thinking.md`, `docs/features/index.md`
+- Docs: `docs/features/agent_thinking.md`, `docs/index.md`
 - Code: `src/agent-visualizer.tsx`, `src/agentVisualizerPresentation.ts`
 - Verifier: `tools/verify-agent-thinking-options-e2e.mjs`
 

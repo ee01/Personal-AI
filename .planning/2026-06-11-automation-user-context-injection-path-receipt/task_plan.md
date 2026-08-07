@@ -6,7 +6,7 @@ Improve the `用户上下文注入` feature in Prompt Config so users can see, b
 
 ## Context
 
-- Selected from `docs/features/index.md`: `用户上下文注入` under Prompt Config (`docs/features/custom_prompts.md`).
+- Selected from `docs/index.md`: `用户上下文注入` under Prompt Config (`docs/features/custom_prompts.md`).
 - `docs/progressing/to-verify.md`: `暂无。`
 - Reminders probe: Reminders list is readable, but there is no `Personal AI` list, so no Reminder items are incorporated or marked done.
 - Existing worktree is broadly dirty. Keep edits scoped to Prompt Config docs/source/verifiers and this planning directory.

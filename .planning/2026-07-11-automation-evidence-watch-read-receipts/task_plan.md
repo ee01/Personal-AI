@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `证据守望契约` from `docs/features/index.md`.
+- Random feature: `证据守望契约` from `docs/index.md`.
 - Source of truth: `docs/features/evidence_watch_contracts.md`.
 - Reminder check: EventKit found `Personal AI` with 4 total items and 0 incomplete items; all completed items are historical Doubao / notification feedback and unrelated to Evidence Watch.
 

@@ -16,7 +16,7 @@
 1. 在自动答复处理器中移除硬编码默认回复。AI 生成失败时，仅当固定文本非空才 fallback；否则返回未处理并跳过本次队列创建。
 2. 固定文本模式也保护空文本：固定文本为空时不创建 Scheduled Message。
 3. 在配置页“发送口径”回执里补充 fallback/skip 文案，区分 AI 生成失败且有固定文本、AI 生成失败且无固定文本、固定文本为空三种路径。
-4. 更新 `docs/features/message_reaction.md` 和 `docs/features/index.md`，保持文档导航级别，不展开实现细节。
+4. 更新 `docs/features/message_reaction.md` 和 `docs/index.md`，保持文档导航级别，不展开实现细节。
 5. 用 message-reaction 单测、规则诊断 E2E、dev extension compile 和 whitespace 检查验证。
 
 ## 验收

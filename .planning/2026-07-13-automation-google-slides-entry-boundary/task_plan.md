@@ -18,7 +18,7 @@
 1. 将 Google Slides 工具栏入口 idle 状态的 `title` / `aria-label` 改成审阅快照边界：只生成分析结果和可写字段建议，不立即写回 Slides，不反写 Jira / Memory Service。
 2. 将授权中、分析中、重复点击和启动超时提示统一到同一边界：重复点击不会二次授权、重复分析、打开多份结果页或写回外部系统。
 3. 更新 `tools/verify-google-slides-analyzer-e2e.mjs`，在真实扩展内容脚本里断言入口 idle/busy/duplicate toast 的文案。
-4. 更新 `docs/features/google_slides_analyzer.md` 和 `docs/features/index.md` 的入口能力描述。
+4. 更新 `docs/features/google_slides_analyzer.md` 和 `docs/index.md` 的入口能力描述。
 5. 验证顺序：`npm run verify:google-slides-analyzer`，`npm start -- --progress` 首次成功编译，`npm run verify:google-slides-analyzer:e2e`，scoped `git diff --check`。
 
 ## 非目标

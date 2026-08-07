@@ -10,7 +10,7 @@
 
 1. 补齐 `/stats.user.identitySource`，区分显式 `X-User-Id` 与缺失身份导致的 `default_fallback`。
 2. Memory Exploring 侧栏展示身份来源、storage key、显式空间读写范围，以及 fallback 时的只读兼容/写入拦截边界。
-3. 更新 `docs/features/memory_system.md` 和 `docs/features/index.md` 中 `多用户隔离` 描述。
+3. 更新 `docs/memory_system.md` 和 `docs/index.md` 中 `多用户隔离` 描述。
 4. 跑 multi-user targeted verify、webpack 首次编译、Memory Exploring identity E2E 和 scoped whitespace check。
 
 ## 外部参考

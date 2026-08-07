@@ -17,5 +17,5 @@
 1. 修改 Prompt Config 保存前确认逻辑，让所有已启用且命中风险的提示词都要求确认。
 2. 在生效预览的风险提示里显示运行时状态：当前会注入，或当前已暂停但仍会随配置保存。
 3. 调整 summary / 保存影响 helper，让安全提示计数覆盖暂停但会保存的风险提示词。
-4. 更新 `docs/features/custom_prompts.md` 和 `docs/features/index.md`。
+4. 更新 `docs/features/custom_prompts.md` 和 `docs/index.md`。
 5. 跑 `verify-custom-prompts`、开发构建、Prompt Config E2E 和 diff 检查。

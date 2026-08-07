@@ -10,7 +10,7 @@
 - Researched comparable HITL/workflow/proactive-agent patterns and narrowed the improvement to button-level hover/ARIA action boundaries.
 - Implemented button-level `title` / `aria-label` boundaries for Outreach list approve/cancel/retry and detail approve/edit/retry/cancel/save/discard controls.
 - Updated `tools/verify-outreach-sessions-e2e.mjs` with representative accessibility-boundary assertions.
-- Updated `docs/features/memory_system.md` and the `主动询问` row in `docs/features/index.md`.
+- Updated `docs/memory_system.md` and the `主动询问` row in `docs/index.md`.
 - Verification passed:
   - `node --check tools/verify-outreach-sessions-e2e.mjs`
   - `npm start -- --progress` first successful webpack dev compile in 16426 ms, then stopped

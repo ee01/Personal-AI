@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick one feature from `docs/features/index.md`.
+- Pick one feature from `docs/index.md`.
 - Confirm docs match code at useful granularity.
 - Search comparable products and research.
 - Implement low-decision improvements directly, update docs, and verify.

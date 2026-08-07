@@ -16,7 +16,7 @@ Goal: improve the randomly selected `Notification Center feed` feature by aligni
 
 ## Decisions
 
-- Selected feature: `Notification Center feed` from `docs/features/index.md`.
+- Selected feature: `Notification Center feed` from `docs/index.md`.
 - Source doc: `docs/features/notification_center.md`.
 - Local Reminders was readable, but there is no visible `Personal AI` list; no Reminder feedback can be incorporated or marked done.
 - Existing worktree is broadly dirty from prior/user work. Keep this run scoped to Notification Center feed files plus the isolated `.planning` folder and automation memory.

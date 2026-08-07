@@ -9,7 +9,7 @@
 - Identified bounded implementation: render the existing run-preview receipt in rule create/edit/saved contexts.
 - Implemented UI wiring in `src/modals/topic-modal.tsx`: new/edit forms now show the run-path receipt, and saved rule cards show the paused/stopped run state when silent capture is off or the rule is expired.
 - Updated `tools/verify-message-analysis-rule-diagnostics-e2e.mjs` to run with message analysis disabled and assert the paused run-path receipt on saved and new rules.
-- Updated `docs/features/message_analysis.md` and `docs/features/index.md` with concise current behavior.
+- Updated `docs/features/message_analysis.md` and `docs/index.md` with concise current behavior.
 - Verification pass 1: helper test passed 17/17, E2E syntax check passed, scoped `git diff --check` passed, and `npm start -- --progress` compiled successfully in 14719 ms before the watcher was stopped.
 - E2E pass 1 failed because the old strict `text=写入记忆` locator now matched the new run-path receipt text in addition to the action chip. Narrowed that assertion to `.rule-action-chip-row .rule-badge`.
 - Verification pass 2: `node --check tools/verify-message-analysis-rule-diagnostics-e2e.mjs` passed; `node tools/verify-message-analysis-rule-diagnostics-e2e.mjs` passed; final scoped `git diff --check` passed; process cleanup found no remaining webpack, Message Analysis E2E, Playwright, or Chromium process.

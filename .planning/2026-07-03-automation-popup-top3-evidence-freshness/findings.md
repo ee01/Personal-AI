@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- User asked to choose a random feature from `docs/features/index.md`, check docs/code, research similar products and papers, inspect Reminders, plan first, implement, update docs, and run strong verification.
+- User asked to choose a random feature from `docs/index.md`, check docs/code, research similar products and papers, inspect Reminders, plan first, implement, update docs, and run strong verification.
 - `docs/progressing/to-verify.md` has no carry-over items.
 - Existing worktree is broadly dirty; keep edits scoped to Popup Top 3 source/docs/E2E plus this plan.
 

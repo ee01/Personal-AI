@@ -2,7 +2,7 @@
 
 ## 2026-06-23
 
-- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, `docs/features/index.md`, and random-loop memory guidance.
+- Read automation memory, `AGENT.md`, `docs/progressing/to-verify.md`, `docs/index.md`, and random-loop memory guidance.
 - Checked local Reminders list names; `Personal AI` list is absent.
 - Selected `Storyline Draft 页面` from the feature index while avoiding the freshest same-day automation targets.
 - Audited Storyline docs, page code, API/service code, API tests, and E2E.

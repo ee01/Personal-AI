@@ -2,7 +2,7 @@
 
 ## 2026-07-10
 
-- Read `AGENT.md`, automation memory, Memory quick-pass entries, planning skill instructions, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read `AGENT.md`, automation memory, Memory quick-pass entries, planning skill instructions, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Selected `Snooze 快速时间菜单` from the randomized feature sample.
 - Checked local Reminders: EventKit found `Personal AI` with no incomplete items.
 - Created this isolated planning directory and set it active.

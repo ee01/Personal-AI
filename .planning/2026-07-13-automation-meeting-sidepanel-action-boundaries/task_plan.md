@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `会中 side panel` in `docs/features/index.md`
+- Feature: `会中 side panel` in `docs/index.md`
 - Canonical doc: `docs/features/meeting_pilot.md`
 - Main surface: `src/meeting-shell/meetingSidePanel.tsx`
 
@@ -24,7 +24,7 @@
 1. Add reusable button-boundary helpers for Meeting Pilot side panel tabs, action filters, action toolbar buttons, meeting-prep cue actions, manual action drafts, and per-action item controls.
 2. Mirror those boundaries into `title` and `aria-label` on the actual controls without changing existing click handlers or backend state transitions.
 3. Extend existing Meeting Pilot Scene 1 and Scene 2 Playwright checks to assert the new control-level boundaries.
-4. Update `docs/features/meeting_pilot.md` and the `会中 side panel` row in `docs/features/index.md`.
+4. Update `docs/features/meeting_pilot.md` and the `会中 side panel` row in `docs/index.md`.
 5. Validate with syntax checks, the dev webpack compile, relevant Meeting Pilot E2E, and scoped `git diff --check`.
 
 ## Scope Boundary

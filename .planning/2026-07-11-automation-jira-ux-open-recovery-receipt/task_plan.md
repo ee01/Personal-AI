@@ -2,7 +2,7 @@
 
 ## 本轮选择
 
-- 随机候选来自 `docs/features/index.md`：`Jira issue key 解析` / Jira Design Links。
+- 随机候选来自 `docs/index.md`：`Jira issue key 解析` / Jira Design Links。
 - `docs/progressing/to-verify.md` 为空。
 - automation memory 最近刚覆盖了 Memory Lens Hover Peek、Meeting Pilot 会中提醒、Agent Workflow 运行诊断、Scheduled Messages CRUD、Quick Ask 语音、Topic Messages 等；Jira Design Links 最近覆盖的是 Figma/Zeplin 过滤和扫描口径，不重复本轮精确控制点。
 - EventKit 读取到本机 `Personal AI` Reminders 列表：4 条总项目，0 条未完成；没有 Jira Design Links / issue key 恢复相关待办可纳入或标记完成。
@@ -29,7 +29,7 @@
 1. 在恢复出的 UX ticket 链接上复用已有 key source / recovery boundary 文案，写入打开动作的 `data-*` 属性。
 2. 点击恢复出的 UX ticket 后，`来源打开回执` 显示 `Key from ...`、`恢复候选打开` 和候选关系边界；`aria-label` 同步包含恢复来源和不写 Jira 边界。
 3. 不改 issue key 解析、候选选择、Jira API、设计链接分类、Jira 写入、Memory Service 或外部系统。
-4. 更新 `docs/features/jira_design_links.md` 和 `docs/features/index.md`，只说明用户可见的打开回执行为。
+4. 更新 `docs/features/jira_design_links.md` 和 `docs/index.md`，只说明用户可见的打开回执行为。
 5. 扩展 `tools/verify-jira-design-links-e2e.mjs`，验证点击 `UXQUERY-700` 后 open receipt 保留 `selectedIssue query` 和不写 Jira 边界。
 
 ## 验证计划

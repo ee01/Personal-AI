@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 随机目标：`Task Scheduler 状态 API`，来源于 `docs/features/index.md`。
+- 随机目标：`Task Scheduler 状态 API`，来源于 `docs/index.md`。
 - 用户问题：后台任务面板已经解释当前状态，但点击启用、停用、立即执行或重排后，用户仍需要从列表变化里推断“这次点击到底做了什么”。
 - 设计方向：增加轻量、持久的操作回执，明确本次点击是否只改排程、只执行一次，或只重建 Chrome alarm。
 

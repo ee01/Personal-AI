@@ -17,7 +17,7 @@
 1. 保持反思运行和动作队列后端语义不变，只在前端派生操作范围说明。
 2. 在 `reflectionThreadPresentation.ts` 增加 `buildReflectionOperationScopeReceipt()`，根据 thread 状态、动作、研究补查和主动询问读取状态生成标题、写入范围、边界和恢复路径。
 3. 在 `ReflectionThreadDetail.vue` 顶部详情布局第一行显示 `本次操作范围`，让用户点击按钮前先看到：手动反思只写 run / trace /候选动作，不直接发送、确认、执行 OpenClaw 或写 confirmed profile；暂停/关闭/恢复只改线程推进状态，不删除证据。
-4. 更新 `docs/features/memory_system.md` 和 `docs/features/index.md`，把这个行为记录到当前自我反思 source of truth。
+4. 更新 `docs/memory_system.md` 和 `docs/index.md`，把这个行为记录到当前自我反思 source of truth。
 5. 扩展 `tools/verify-reflection-research-e2e.mjs` 覆盖操作范围回执，然后跑 targeted E2E、`npm start` 首次编译、scoped `git diff --check`。
 
 ## 非目标

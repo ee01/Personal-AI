@@ -18,7 +18,6 @@ import {
   DesignUpdatedAtSelection,
   IgnoredDesignLikeLink,
   UXTicketReference,
-  dedupeDesignData,
   escapeAttribute,
   escapeHtml,
   extractDesignLinkScan,
@@ -34,31 +33,26 @@ import {
   getDesignDisplayStatusTone,
   getDesignSourceSummary,
   getDesignSourceTooltip,
-  getDesignScanBasisReceipt,
   getDesignStatusTone,
   getDesignStatusActionHint,
   getDesignSourceLabel,
-  getDesignUpdateReviewScope,
   getIgnoredDesignFieldLinkCount,
-  getIgnoredDesignFieldLinkSummary,
   getIgnoredDesignFieldLinkTooltip,
-  getRecoveredUXTicketCandidateCount,
-  getUXTicketRecoveryFilterSummary,
-  getUXTicketRecoveryIgnoredCandidateCount,
-  getUXTicketRecoveryIgnoredSourceSummary,
-  getUXTicketRecoverySourceSummary,
   getIgnoredDesignLinkSummary,
   getIgnoredDesignLinkReasonSummary,
   getIgnoredDesignLinkSourceSummary,
   getIgnoredDesignLinkTooltip,
   getUXTicketKeyRecoveryBoundaryHint,
   getUXTicketKeyRecoveryBoundaryLabel,
-  getUXTicketRecoveryScopeSummary,
   getUXTicketKeySourceHint,
   getUXTicketKeySourceLabel,
   getUXEpicStatusTone,
+  getJiraProjectKey,
+  isClosedJiraStatus,
   isDesignUpdatedDateMissing,
   isMeaningfulDesignTitle,
+  isSameJiraProject,
+  JIRA_CONTEXT_PANEL_ITEM_LIMIT,
   mergeDesignSources,
   matchesProjectPattern,
   normalizeDesignUrl,
@@ -67,8 +61,8 @@ import {
   parseJiraIssueKeysFromText,
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
+  prepareDesignDisplayItems,
   shouldShowUXTicketKeySourceReceipt,
-  sortDesignDisplayItems,
   UXTicketKeySource,
 } from './jiraDesignLinks';
 import { getEnvConfig } from './utils';
@@ -693,16 +687,19 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): Array<{
   key: string;
   url: string;
   summary: string;
+  status?: string;
   source: 'linked_issues';
   keySource: UXTicketKeySource;
   keyRecoveryCandidateCount?: number;
   keyRecoveryIgnoredCandidateCount?: number;
   keyRecoveryIgnoredSourceCounts?: Partial<Record<UXTicketKeySource, number>>;
 }> {
+  const currentTicketKey = getTicketIdFromUrl();
   const uxTickets: Array<{
     key: string;
     url: string;
     summary: string;
+    status?: string;
     source: 'linked_issues';
     keySource: UXTicketKeySource;
     keyRecoveryCandidateCount?: number;
@@ -718,15 +715,24 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): Array<{
     links.forEach(linkElement => {
       const reference = getLinkedIssueReference(linkElement, projectPrefix);
       
-      if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
+      if (
+        reference
+        && matchesProjectPattern(reference.key, projectPrefix)
+        && !isSameJiraProject(currentTicketKey, reference.key)
+      ) {
         // 尝试获取summary
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
         const summary = summaryElement?.textContent?.trim() || reference.key;
+        const statusText = linkElement.closest('.issue-link')
+          ?.querySelector('.aui-lozenge, .status-text, [data-tooltip]')
+          ?.textContent
+          ?.trim();
         
         uxTickets.push({
           key: reference.key,
           url: reference.url,
           summary: summary,
+          status: statusText,
           source: 'linked_issues',
           keySource: reference.keySource,
           keyRecoveryCandidateCount: reference.keyRecoveryCandidateCount,
@@ -801,17 +807,29 @@ async function findUXTickets(parentData: any, currentTicketKey: string, projectP
       ...childIssues.map((issue: any) => ({ ...issue, source: 'child_issue' }))
     ];
     
-    // 筛选匹配项目前缀且不是当前ticket的issue
-    allRelatedIssues.forEach((issue: any) => {
-      if (issue.key && matchesProjectPattern(issue.key, projectPrefix) && issue.key !== currentTicketKey) {
+    // 筛选匹配项目前缀、不同项目且不是当前ticket的issue；parent 通道优先保留 closed
+    const matchedIssues = allRelatedIssues.filter((issue: any) => (
+      issue.key
+      && matchesProjectPattern(issue.key, projectPrefix)
+      && issue.key !== currentTicketKey
+      && !isSameJiraProject(currentTicketKey, issue.key)
+    ));
+
+    matchedIssues
+      .sort((a: any, b: any) => {
+        const aClosed = isClosedJiraStatus(a.fields?.status?.name || a.status?.name) ? 0 : 1;
+        const bClosed = isClosedJiraStatus(b.fields?.status?.name || b.status?.name) ? 0 : 1;
+        return aClosed - bClosed;
+      })
+      .forEach((issue: any) => {
         uxTickets.push({
           key: issue.key,
           summary: issue.fields?.summary || issue.summary || issue.key,
+          status: issue.fields?.status?.name || issue.status?.name,
           source: issue.source,
           keySource: 'api'
         });
-      }
-    });
+      });
     
     return uxTickets;
   } catch (error) {
@@ -1039,10 +1057,10 @@ async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: s
 }
 
 // 从Epic ticket中查找UX linked issues
-async function getUXTicketsFromEpic(epicKey: string, projectPrefix = 'UX*'): Promise<UXTicketReference[]> {
+async function getUXTicketsFromEpic(epicKey: string, projectPrefix = 'UX*', currentTicketKey = ''): Promise<UXTicketReference[]> {
   try {
     const epicData = await fetchTicketData(epicKey);
-    return await findUXTickets(epicData, '', projectPrefix); // 传空字符串作为currentTicketKey
+    return await findUXTickets(epicData, currentTicketKey || epicKey, projectPrefix);
   } catch (error) {
     console.error('Error fetching UX tickets from Epic:', error);
     return [];
@@ -1056,8 +1074,10 @@ async function appendUXDesignItems(
   extraDesignDomains: string[] = [],
   addIgnoredDesignLikeLinks?: (links: IgnoredDesignLikeLink[]) => void,
 ): Promise<void> {
+  const currentTicketKey = getTicketIdFromUrl();
+  const scopedTickets = uxTickets.filter(uxTicket => !isSameJiraProject(currentTicketKey, uxTicket.key));
   const ticketContexts = await Promise.all(
-    uxTickets.map(async uxTicket => ({
+    scopedTickets.map(async uxTicket => ({
       uxTicket,
       designContext: await fetchUXDesignContext(uxTicket.key, extraDesignDomains)
     }))
@@ -1069,6 +1089,7 @@ async function appendUXDesignItems(
       addIgnoredDesignLikeLinks?.(designContext.ignoredDesignLikeLinks);
     }
     const baseSource = sourcePrefix ? `${sourcePrefix}_${uxTicket.source}` : uxTicket.source;
+    const issueStatus = uxTicket.status || designContext.status;
     const candidates = designContext.designLinks.length > 0
       ? designContext.designLinks
       : extractDesignLinks(normalizeDesignUrl(designContext.designLink), true).map(candidate => ({
@@ -1087,6 +1108,7 @@ async function appendUXDesignItems(
         keyRecoveryIgnoredSourceCounts: uxTicket.keyRecoveryIgnoredSourceCounts,
         source: baseSource,
         linkProvided: false,
+        issueStatus,
         uxEpicKey: designContext.uxEpicKey,
         uxEpicStatus: designContext.uxEpicStatus,
         uxEta: designContext.uxEta,
@@ -1109,6 +1131,7 @@ async function appendUXDesignItems(
         keyRecoveryIgnoredSourceCounts: uxTicket.keyRecoveryIgnoredSourceCounts,
         source: mergeDesignSources(baseSource, candidate.source || 'design_field'),
         linkProvided: true,
+        issueStatus,
         designStatus: candidate.status,
         uxEpicKey: designContext.uxEpicKey,
         uxEpicStatus: designContext.uxEpicStatus,
@@ -1332,39 +1355,17 @@ function displayDesignLinks(
   const ignoredSourceSummary = getIgnoredDesignLinkSourceSummary(ignoredDesignLikeLinks);
   const ignoredReasonSummary = getIgnoredDesignLinkReasonSummary(ignoredDesignLikeLinks);
   const ignoredDesignFieldLinkCount = getIgnoredDesignFieldLinkCount(ignoredDesignLikeLinks);
-  const ignoredDesignFieldSummary = getIgnoredDesignFieldLinkSummary(ignoredDesignLikeLinks);
   const ignoredDesignFieldTooltip = getIgnoredDesignFieldLinkTooltip(ignoredDesignLikeLinks);
-  const ignoredAccessibleSummary = [
-    ignoredSourceSummary ? `filtered sources ${ignoredSourceSummary}` : '',
-    ignoredReasonSummary ? `filtered reasons ${ignoredReasonSummary}` : '',
-    ignoredDesignFieldSummary,
-  ].filter(Boolean).join('; ');
+  const ignoredTooltip = getIgnoredDesignLinkTooltip(ignoredDesignLikeLinks);
 
   const designLinksContainer = document.createElement('div');
   const sourceSummary = designData.length > 0
     ? getDesignSourceSummary(designData)
     : ui('0 handoff entries');
-  const scanBasisReceipt = getDesignScanBasisReceipt(designData, ignoredDesignLikeLinks);
-  const ignoredTooltip = getIgnoredDesignLinkTooltip(ignoredDesignLikeLinks);
-  const recoveredUXTicketCandidateCount = getRecoveredUXTicketCandidateCount(designData);
-  const recoveredUXTicketSummary = getUXTicketRecoveryScopeSummary(recoveredUXTicketCandidateCount);
-  const recoveredUXTicketSourceSummary = getUXTicketRecoverySourceSummary(designData);
-  const recoveryIgnoredCandidateCount = getUXTicketRecoveryIgnoredCandidateCount(designData);
-  const recoveryFilterSummary = getUXTicketRecoveryFilterSummary(recoveryIgnoredCandidateCount);
-  const recoveryIgnoredSourceSummary = getUXTicketRecoveryIgnoredSourceSummary(designData);
-  const recoveredUXTicketAccessibleSummary = recoveredUXTicketSummary
-    ? [
-      recoveredUXTicketSummary,
-      recoveredUXTicketSourceSummary ? `sources ${recoveredUXTicketSourceSummary}` : '',
-      recoveryFilterSummary,
-      recoveryIgnoredSourceSummary ? `filtered candidate sources ${recoveryIgnoredSourceSummary}` : '',
-    ].filter(Boolean).join('; ')
-    : undefined;
-  const updateReviewScope = getDesignUpdateReviewScope(designData);
-  const accessibleSummary = [scanBasisReceipt.summary, updateReviewScope?.summary, ignoredAccessibleSummary, recoveredUXTicketAccessibleSummary]
-    .filter(Boolean)
-    .join('; ');
-  
+  // Panel UI shows only concrete design/UX link rows (one per entry). Scan/filter/recovery/review
+  // summary receipts stay out of the first screen; source channel remains in the compact footer.
+  const accessibleSummary = sourceSummary;
+
   // 获取扩展内的 icon 路径
   const iconUrl = chrome.runtime.getURL('icons/icon48.png');
   const missingUpdatedDateTooltip = ui('Jira/Figma 报告设计已更新，但这个来源没有提供可用更新时间。');
@@ -1376,34 +1377,12 @@ function displayDesignLinks(
     ? `其中 ${ignoredDesignFieldLinkCount} 个来自 UX ticket 设计字段；设计字段已扫描但只包含非交付链接时，仍保留 Missing link，不视为有效设计稿。`
     : '';
   const filterScopeTooltip = ui(`过滤范围：只展示可开发交付入口；文档、社区、营销、个人页或设置页不会显示成设计入口，也不会创建或编辑 Jira。${filteredSourceBoundary}${filteredReasonBoundary}${filteredDesignFieldBoundary}`);
-  const scanBasisTooltip = ui(scanBasisReceipt.tooltip);
-  const scanBasisIgnoredTagHtml = scanBasisReceipt.ignoredSummary
-    ? `<span class="filtered-design-tag" title="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(scanBasisReceipt.ignoredSummary)}</span>`
-    : '';
-  const scanBasisSourceTagHtml = `<span class="design-source-basis-tag" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(scanBasisReceipt.sourceSummary)}</span>`;
   const filteredReasonTagHtml = ignoredReasonSummary
     ? `<span class="filtered-design-reason-tag" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`原因 ${ignoredReasonSummary}`)}</span>`
     : '';
   const filteredDesignFieldTagHtml = ignoredDesignFieldLinkCount > 0
     ? `<span class="filtered-design-field-tag" title="${escapeAttribute(ui(ignoredDesignFieldTooltip || filterScopeTooltip))}" aria-label="${escapeAttribute(ui(ignoredDesignFieldTooltip || filterScopeTooltip))}">${escapeHtml(`${ui('设计字段被过滤')} ${ignoredDesignFieldLinkCount}`)}</span>`
     : '';
-  const recoveryFilterTooltipPart = recoveryFilterSummary
-    ? `已过滤 ${recoveryFilterSummary}${recoveryIgnoredSourceSummary ? `，过滤来源 ${recoveryIgnoredSourceSummary}` : ''}；这些候选不匹配当前设计项目配置。`
-    : '';
-  const recoveryScopeTooltip = ui(`恢复范围：实际来源 ${recoveredUXTicketSourceSummary || '非标准页面证据'}。${recoveryFilterTooltipPart}Personal AI 只保留匹配设计项目配置的 UX ticket key，并且只展示只读候选，不创建或编辑 Jira issue links、设计字段或关联关系，也不证明这是正式 Jira 关联。`);
-  const shouldShowFilterScopeReceipt = designData.length > 0 && Boolean(ignoredSummary);
-  const shouldShowRecoveryScopeReceipt = Boolean(recoveredUXTicketSummary);
-  const shouldShowUpdateReviewScopeReceipt = Boolean(updateReviewScope);
-  const scanBasisReceiptHtml = `
-    <div class="design-scan-basis-row" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">
-      <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-      <span class="design-link-label">${escapeHtml(ui('扫描口径'))}</span>
-      <span class="design-scan-basis-text">${escapeHtml(ui('本次只展示 Jira 可见交付入口'))}</span>
-      ${scanBasisSourceTagHtml}
-      ${scanBasisIgnoredTagHtml}
-      <span class="design-scan-boundary-tag" title="${escapeAttribute(scanBasisTooltip)}" aria-label="${escapeAttribute(scanBasisTooltip)}">${escapeHtml(ui('只读批次'))}</span>
-    </div>
-  `;
 
   designLinksContainer.className = 'design-links-container';
   designLinksContainer.setAttribute('role', 'region');
@@ -1427,60 +1406,6 @@ function displayDesignLinks(
       </div>
     `;
   }
-
-  const filterScopeReceiptHtml = shouldShowFilterScopeReceipt
-    ? `
-      <div class="design-filter-scope-row" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">
-        <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-        <span class="design-link-label">${escapeHtml(ui('过滤范围'))}</span>
-        <span class="design-filter-scope-text">${escapeHtml(ui('非交付设计工具链接已过滤'))}</span>
-        <span class="filtered-design-tag" title="${escapeAttribute(ignoredTooltip || ignoredSummary)}">${escapeHtml(ignoredSummary || '')}</span>
-        ${ignoredSourceSummary
-          ? `<span class="filtered-design-source-tag" title="${escapeAttribute(filterScopeTooltip)}" aria-label="${escapeAttribute(filterScopeTooltip)}">${escapeHtml(`来源 ${ignoredSourceSummary}`)}</span>`
-          : ''}
-        ${filteredReasonTagHtml}
-        ${filteredDesignFieldTagHtml}
-        <span class="design-scan-boundary-tag" title="${escapeAttribute(readonlyBoundary)}" aria-label="${escapeAttribute(readonlyBoundary)}">${escapeHtml(ui('只读扫描'))}</span>
-      </div>
-    `
-    : '';
-  const recoveryScopeReceiptHtml = shouldShowRecoveryScopeReceipt
-    ? `
-      <div class="design-recovery-scope-row" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">
-        <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-        <span class="design-link-label">${escapeHtml(ui('恢复范围'))}</span>
-        <span class="design-recovery-scope-text">${escapeHtml(ui('这批 UX ticket key 来自非标准页面证据，只是候选关系。'))}</span>
-        <span class="ux-key-source-tag" title="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(recoveredUXTicketSummary || '')}</span>
-        ${recoveredUXTicketSourceSummary
-          ? `<span class="ux-key-source-breakdown-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(`来源 ${recoveredUXTicketSourceSummary}`)}</span>`
-          : ''}
-        ${recoveryFilterSummary
-          ? `<span class="ux-key-recovery-filter-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(recoveryFilterSummary)}</span>`
-          : ''}
-        <span class="ux-key-recovery-tag" title="${escapeAttribute(recoveryScopeTooltip)}" aria-label="${escapeAttribute(recoveryScopeTooltip)}">${escapeHtml(ui('只读候选'))}</span>
-      </div>
-    `
-    : '';
-  const updateReviewScopeReceiptHtml = updateReviewScope
-    ? `
-      <div class="design-update-review-scope-row" title="${escapeAttribute(ui(updateReviewScope.tooltip))}" aria-label="${escapeAttribute(ui(updateReviewScope.tooltip))}">
-        <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-        <span class="design-link-label">${escapeHtml(ui('复查范围'))}</span>
-        <span class="design-update-review-scope-text">${escapeHtml(ui('本页有设计更新时间信号，开始实现前先复查对应设计。'))}</span>
-        <span class="design-update-review-count-tag" title="${escapeAttribute(ui(updateReviewScope.tooltip))}">${escapeHtml(`${updateReviewScope.updateSignalCount} 条更新时间信号`)}</span>
-        ${updateReviewScope.latestUpdatedDateLabel
-          ? `<span class="design-update-review-latest-tag" title="${escapeAttribute(ui(updateReviewScope.tooltip))}">${escapeHtml(ui('最新'))} ${escapeHtml(updateReviewScope.latestUpdatedDateLabel)}</span>`
-          : ''}
-        ${updateReviewScope.latestUpdatedAtBasisLabel
-          ? `<span class="design-update-review-source-tag" title="${escapeAttribute(ui(updateReviewScope.tooltip))}" aria-label="${escapeAttribute(ui(updateReviewScope.tooltip))}">${escapeHtml(ui('最新来源'))} ${escapeHtml(ui(updateReviewScope.latestUpdatedAtBasisLabel))}</span>`
-          : ''}
-        ${updateReviewScope.missingUpdatedAtCount > 0
-          ? `<span class="design-update-review-missing-tag" title="${escapeAttribute(ui(updateReviewScope.tooltip))}">${escapeHtml(`${updateReviewScope.missingUpdatedAtCount} 条缺时间`)}</span>`
-          : ''}
-        <span class="design-scan-boundary-tag" title="${escapeAttribute(ui(updateReviewScope.tooltip))}" aria-label="${escapeAttribute(ui(updateReviewScope.tooltip))}">${escapeHtml(ui('只读提示'))}</span>
-      </div>
-    `
-    : '';
 
   designData.forEach((design, _index) => {
     const designStatusTone = getDesignDisplayStatusTone(design);
@@ -1646,16 +1571,12 @@ function displayDesignLinks(
   
   designLinksContainer.innerHTML = `
     <div class="design-links-content">
-      ${scanBasisReceiptHtml}
-      ${updateReviewScopeReceiptHtml}
-      ${recoveryScopeReceiptHtml}
-      ${filterScopeReceiptHtml}
       <div class="design-open-receipt" hidden aria-live="polite"></div>
       ${linksHtml}
     </div>
     <div class="design-links-footer">
       <span class="footer-main">
-        <span class="footer-text" title="${escapeAttribute(accessibleSummary)}">${escapeHtml(ui('Personal AI provided'))} · ${escapeHtml(sourceSummary)}</span>
+        <span class="footer-text" title="${escapeAttribute(accessibleSummary)}">${escapeHtml(ui('Personal AI provided'))}</span>
         ${ignoredSummary
           ? `<span class="filtered-design-tag" title="${escapeAttribute(ignoredTooltip || ignoredSummary)}">${escapeHtml(ignoredSummary)}</span>`
           : ''}
@@ -1676,14 +1597,7 @@ function displayDesignLinks(
   
   // 添加样式
   const renderedDesignItemCount = designData.length > 0 ? designData.length : (ignoredSummary ? 1 : 0);
-  const visibleRowCount = Math.max(
-    1,
-    renderedDesignItemCount
-      + 1
-      + (shouldShowUpdateReviewScopeReceipt ? 1 : 0)
-      + (shouldShowFilterScopeReceipt ? 1 : 0)
-      + (shouldShowRecoveryScopeReceipt ? 1 : 0),
-  );
+  const visibleRowCount = Math.max(1, renderedDesignItemCount);
   const collapsedMaxHeight = 40 + (visibleRowCount - 1) * 30;
   const hoverMaxHeight = 80 + (visibleRowCount - 1) * 30;
   let style = document.getElementById('personal-ai-design-links-style') as HTMLStyleElement | null;
@@ -2265,17 +2179,75 @@ function isSubtaskTicket(): boolean {
   }
 }
 
+// Backend Progress数据接口
+interface BackendProgressData {
+  dependencyTicketKey: string;
+  dependencyTicketUrl: string;
+  summary: string;
+  earlyBuildDate: string | null;
+  rolloutDate: string | null;
+  fixVersion: string | null;
+  source: string;
+  issueStatus?: string | null;
+}
+
+function getBackendChannelPriority(source: string): number {
+  // linked / story > epic > parent impact layers > parent sub issues
+  if (source.includes('parent_impact_layer')) return 2;
+  if (source.includes('parent_')) return 3;
+  if (source.includes('epic')) return 1;
+  if (source.includes('linked_issues') || source.includes('user_story')) return 0;
+  return 1;
+}
+
+function sortBackendProgressItems(items: BackendProgressData[]): BackendProgressData[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const aChannel = getBackendChannelPriority(a.item.source);
+      const bChannel = getBackendChannelPriority(b.item.source);
+      const channelDiff = aChannel - bChannel;
+      if (channelDiff !== 0) return channelDiff;
+
+      // Prefer closed/done for parent impact layers and parent sub-issue channels.
+      if (aChannel >= 2) {
+        const aClosed = isClosedJiraStatus(a.item.issueStatus) ? 0 : 1;
+        const bClosed = isClosedJiraStatus(b.item.issueStatus) ? 0 : 1;
+        if (aClosed !== bClosed) return aClosed - bClosed;
+      }
+
+      return a.index - b.index;
+    })
+    .map(entry => entry.item);
+}
+
+function prepareBackendProgressItems(
+  items: BackendProgressData[],
+  currentTicketKey: string,
+  limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
+): BackendProgressData[] {
+  const filtered = items.filter(item => !isSameJiraProject(currentTicketKey, item.dependencyTicketKey));
+  return sortBackendProgressItems(filtered).slice(0, Math.max(0, limit));
+}
+
 // 从API数据中查找外部依赖项目的tickets（仅搜索issue links）
-function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string }[] {
-  const tickets: { key: string; summary: string }[] = [];
+function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string; status?: string }[] {
+  const tickets: { key: string; summary: string; status?: string }[] = [];
   const issueLinks = data.fields?.issuelinks || [];
   
   issueLinks.forEach((link: any) => {
     const issue = link.outwardIssue || link.inwardIssue;
-    if (issue && issue.key && matchesProjectPattern(issue.key, projectPrefix) && issue.key !== currentTicketKey) {
+    if (
+      issue
+      && issue.key
+      && matchesProjectPattern(issue.key, projectPrefix)
+      && issue.key !== currentTicketKey
+      && !isSameJiraProject(currentTicketKey, issue.key)
+    ) {
       tickets.push({
         key: issue.key,
-        summary: issue.fields?.summary || issue.key
+        summary: issue.fields?.summary || issue.key,
+        status: issue.fields?.status?.name,
       });
     }
   });
@@ -2283,9 +2255,333 @@ function findDependencyTicketsFromData(data: any, projectPrefix: string, current
   return tickets;
 }
 
+function isJiraEpicIssueType(issue: any): boolean {
+  const issueTypeName = String(issue?.fields?.issuetype?.name || issue?.issuetype?.name || '').trim().toLowerCase();
+  return issueTypeName === 'epic' || issueTypeName.includes('epic');
+}
+
+function shouldIncludeParentDependencyEpic(issue: any): boolean {
+  const issueTypeName = String(issue?.fields?.issuetype?.name || issue?.issuetype?.name || '').trim();
+  // Linked-issue payloads sometimes omit issue type; keep them when project matches.
+  if (!issueTypeName) return true;
+  return isJiraEpicIssueType(issue);
+}
+
+/** INIT Impacted Layer/s field (multi-select). */
+const IMPACTED_LAYERS_FIELD = 'customfield_32651';
+/** INIT Artifacts JSON field — layer status including Required. */
+const INIT_ARTIFACTS_FIELD = 'customfield_19972';
+
+/**
+ * Known Impacted Layer → Jira project key prefixes.
+ * Verified against INIT decomp table (e.g. Platform→PLA, Telco→CNV, Nova→NOVA, UX→UXAI/UXPHONE).
+ */
+const IMPACT_LAYER_PROJECT_PREFIXES: Record<string, string[]> = {
+  Platform: ['PLA'],
+  Telco: ['CNV'],
+  Nova: ['NOVA'],
+  UX: ['UX', 'UXAI', 'UXPHONE'],
+  'Engage UX': ['EUX'],
+  RCV: ['RCV'],
+  Glip: ['GLIP', 'MSG'],
+  'Media (SRS+)': ['SRS', 'MEDIA'],
+  'Core DB': ['UP'],
+  'Apps - Jupiter': ['FIJI'],
+  'Apps - mThor': ['MTR'],
+  'IVA / AIR': ['IVAS', 'AIR'],
+  'Copilot (RIO) / AVA': ['AIT'],
+  'Copilot (RIO) / RCX AI': ['AIT'],
+  RingSense: ['VA'],
+  'Engage Digital': ['RD'],
+  'RCX Analytics': ['EA'],
+  'Service Web (Admin Portal)': ['UIA', 'PBX'],
+  'System Configuration Portal (SCP)': ['SCP'],
+};
+
+function normalizeImpactLayerName(value?: string | null): string {
+  return String(value || '').trim();
+}
+
+function getImpactLayerProjectPrefixes(layerName: string): string[] {
+  const normalized = normalizeImpactLayerName(layerName);
+  if (!normalized) return [];
+  if (IMPACT_LAYER_PROJECT_PREFIXES[normalized]) {
+    return IMPACT_LAYER_PROJECT_PREFIXES[normalized];
+  }
+  const matchedKey = Object.keys(IMPACT_LAYER_PROJECT_PREFIXES).find(
+    key => key.toLowerCase() === normalized.toLowerCase(),
+  );
+  return matchedKey ? IMPACT_LAYER_PROJECT_PREFIXES[matchedKey] : [];
+}
+
+function issueMatchesImpactLayerProject(issueKey: string, layerName: string): boolean {
+  const projectKey = getJiraProjectKey(issueKey);
+  if (!projectKey) return false;
+  const prefixes = getImpactLayerProjectPrefixes(layerName);
+  if (prefixes.length === 0) {
+    // Fallback: summary-less project equals layer token (e.g. layer "NOVA" → NOVA-*)
+    const layerToken = normalizeImpactLayerName(layerName).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return Boolean(layerToken && projectKey.startsWith(layerToken));
+  }
+  return prefixes.some(prefix => {
+    const normalizedPrefix = prefix.trim().toUpperCase();
+    if (!normalizedPrefix) return false;
+    if (normalizedPrefix.endsWith('*')) {
+      return projectKey.startsWith(normalizedPrefix.slice(0, -1));
+    }
+    return projectKey === normalizedPrefix || projectKey.startsWith(normalizedPrefix);
+  });
+}
+
+function parseImpactedLayerNames(fieldValue: any): string[] {
+  if (!fieldValue) return [];
+  if (Array.isArray(fieldValue)) {
+    return fieldValue
+      .map(entry => normalizeImpactLayerName(typeof entry === 'string' ? entry : entry?.value))
+      .filter(Boolean);
+  }
+  if (typeof fieldValue === 'string') {
+    return fieldValue.split(/[,;]/).map(normalizeImpactLayerName).filter(Boolean);
+  }
+  if (typeof fieldValue === 'object' && fieldValue.value) {
+    return [normalizeImpactLayerName(fieldValue.value)].filter(Boolean);
+  }
+  return [];
+}
+
+function parseRequiredArtifactLayers(artifactsRaw: any): Set<string> | null {
+  if (!artifactsRaw) return null;
+  let parsed: Record<string, unknown> | null = null;
+  if (typeof artifactsRaw === 'string') {
+    try {
+      parsed = JSON.parse(artifactsRaw);
+    } catch {
+      return null;
+    }
+  } else if (typeof artifactsRaw === 'object') {
+    parsed = artifactsRaw as Record<string, unknown>;
+  }
+  if (!parsed) return null;
+
+  const required = new Set<string>();
+  Object.entries(parsed).forEach(([layer, status]) => {
+    if (layer.startsWith('_')) return;
+    if (String(status || '').trim().toLowerCase() === 'required') {
+      required.add(normalizeImpactLayerName(layer));
+    }
+  });
+  return required;
+}
+
+async function fetchInitImpactLayerContext(initKey: string): Promise<{
+  impactedLayers: string[];
+  requiredLayers: Set<string> | null;
+  children: any[];
+} | null> {
+  try {
+    const response = await fetchJiraRead(
+      `/rest/api/2/issue/${initKey}?fields=${IMPACTED_LAYERS_FIELD},${INIT_ARTIFACTS_FIELD},summary&expand=names`,
+      `fetch INIT impacted layers for ${initKey}`,
+    );
+    if (!response || !response.ok) return null;
+    const data = await response.json();
+    const impactedLayers = parseImpactedLayerNames(data.fields?.[IMPACTED_LAYERS_FIELD]);
+    const requiredLayers = parseRequiredArtifactLayers(data.fields?.[INIT_ARTIFACTS_FIELD]);
+    const children = await fetchChildIssues(initKey);
+    return { impactedLayers, requiredLayers, children };
+  } catch (error) {
+    console.error('Error fetching INIT impacted layers:', error);
+    return null;
+  }
+}
+
+/**
+ * From Parent/INIT Impacted Layer/s, resolve child Epics in mapped layer projects.
+ * Example: INIT-30072 layers Platform/Telco → PLA-97920 / CNV-88546.
+ *
+ * Layers whose projects already match DEPENDENCIES_JIRA_PROJECT (e.g. RCV) are skipped —
+ * those stay on the traditional parent_child_issue / linked path with the original source tags.
+ * Only the Impacted Layer/s field drives this channel; Artifacts Required is a filter, not a fallback.
+ */
+async function findImpactLayerEpicsFromParent(
+  parentKey: string,
+  currentTicketKey: string,
+  depProject = '',
+): Promise<{ key: string; summary: string; source: string; status?: string; layer?: string }[]> {
+  const context = await fetchInitImpactLayerContext(parentKey);
+  if (!context) return [];
+
+  // Do not fall back to Artifacts-only Required layers when Impacted Layer/s is empty.
+  const selectedLayers = context.impactedLayers;
+  if (selectedLayers.length === 0) return [];
+
+  const activeLayers = selectedLayers.filter(layer => {
+    if (!context.requiredLayers) return true;
+    return context.requiredLayers.has(layer)
+      || Array.from(context.requiredLayers).some(required => required.toLowerCase() === layer.toLowerCase());
+  });
+  const layersToMatch = activeLayers.length > 0 ? activeLayers : selectedLayers;
+
+  const matches: { key: string; summary: string; source: string; status?: string; layer?: string }[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const layer of layersToMatch) {
+    for (const issue of context.children) {
+      const key = issue?.key;
+      if (!key || seenKeys.has(key)) continue;
+      if (key === currentTicketKey || isSameJiraProject(currentTicketKey, key)) continue;
+      // Keep configured dependency-project tickets on the classic parent/linked channels.
+      if (depProject && matchesProjectPattern(key, depProject)) continue;
+      if (!shouldIncludeParentDependencyEpic(issue)) continue;
+      if (!issueMatchesImpactLayerProject(key, layer)) continue;
+
+      seenKeys.add(key);
+      matches.push({
+        key,
+        summary: issue.fields?.summary || issue.summary || key,
+        source: 'parent_impact_layer',
+        status: issue.fields?.status?.name || issue.status?.name,
+        layer,
+      });
+    }
+  }
+
+  return matches.sort((a, b) => {
+    const aClosed = isClosedJiraStatus(a.status) ? 0 : 1;
+    const bClosed = isClosedJiraStatus(b.status) ? 0 : 1;
+    return aClosed - bClosed;
+  });
+}
+
+// 从 Parent / INIT 中查找外部依赖 Epic（issue links + subtasks + portfolio children）
+async function findDependencyEpicsFromParent(
+  parentData: any,
+  currentTicketKey: string,
+  projectPrefix: string,
+  excludeKeys: Set<string> = new Set(),
+): Promise<{ key: string; summary: string; source: string; status?: string }[]> {
+  const tickets: { key: string; summary: string; source: string; status?: string }[] = [];
+  if (!parentData?.fields) return tickets;
+
+  const issueLinks = parentData.fields.issuelinks || [];
+  const subtasks = parentData.fields.subtasks || [];
+  const parentKey = parentData.key || parentData.id;
+  const childIssues = parentKey ? await fetchChildIssues(parentKey) : [];
+
+  const allRelatedIssues = [
+    ...subtasks.map((subtask: any) => ({ ...subtask, source: 'subtask' })),
+    ...issueLinks.map((link: any) => ({
+      ...(link.outwardIssue || link.inwardIssue),
+      source: 'issue_link',
+    })).filter((issue: any) => issue?.key),
+    ...childIssues.map((issue: any) => ({ ...issue, source: 'child_issue' })),
+  ];
+
+  allRelatedIssues
+    .filter((issue: any) => (
+      issue.key
+      && !excludeKeys.has(issue.key)
+      && matchesProjectPattern(issue.key, projectPrefix)
+      && issue.key !== currentTicketKey
+      && !isSameJiraProject(currentTicketKey, issue.key)
+      && shouldIncludeParentDependencyEpic(issue)
+    ))
+    .sort((a: any, b: any) => {
+      const aClosed = isClosedJiraStatus(a.fields?.status?.name || a.status?.name) ? 0 : 1;
+      const bClosed = isClosedJiraStatus(b.fields?.status?.name || b.status?.name) ? 0 : 1;
+      return aClosed - bClosed;
+    })
+    .forEach((issue: any) => {
+      tickets.push({
+        key: issue.key,
+        summary: issue.fields?.summary || issue.summary || issue.key,
+        source: issue.source,
+        status: issue.fields?.status?.name || issue.status?.name,
+      });
+    });
+
+  return tickets;
+}
+
+async function appendBackendProgressItems(
+  allProgressData: BackendProgressData[],
+  depTickets: Array<{ key: string; summary: string; url?: string; status?: string }>,
+  source: string,
+  shouldContinue: () => boolean,
+): Promise<void> {
+  for (const dep of depTickets) {
+    const details = await fetchDependencyDetails(dep.key);
+    if (!shouldContinue()) return;
+    let rolloutDate: string | null = null;
+    if (details.fixVersion) {
+      rolloutDate = await fetchRolloutDate(details.fixVersion);
+      if (!shouldContinue()) return;
+    }
+    allProgressData.push({
+      dependencyTicketKey: dep.key,
+      dependencyTicketUrl: dep.url || `/browse/${dep.key}`,
+      summary: dep.summary,
+      earlyBuildDate: details.targetEnd,
+      rolloutDate,
+      fixVersion: details.fixVersion,
+      source,
+      issueStatus: dep.status || details.status || null,
+    });
+  }
+}
+
+async function appendBackendProgressFromParentInit(
+  allProgressData: BackendProgressData[],
+  epicKey: string,
+  currentTicketKey: string,
+  depProject: string,
+  shouldContinue: () => boolean,
+): Promise<void> {
+  const parentLink = await getEpicParentLink(epicKey);
+  if (!shouldContinue() || !parentLink) return;
+
+  console.log('Backend Progress parent/INIT ticket:', parentLink.key);
+
+  // 1) Parent Impacted Layers → layer-project child Epics (not limited to DEPENDENCIES_JIRA_PROJECT;
+  //    tickets that already match depProject stay on the classic parent path below)
+  const impactLayerEpics = await findImpactLayerEpicsFromParent(parentLink.key, currentTicketKey, depProject);
+  if (!shouldContinue()) return;
+  const impactLayerKeys = new Set(impactLayerEpics.map(dep => dep.key));
+  for (const dep of impactLayerEpics) {
+    const source = dep.layer
+      ? `parent_impact_layer:${dep.layer}`
+      : 'parent_impact_layer';
+    await appendBackendProgressItems(allProgressData, [dep], source, shouldContinue);
+    if (!shouldContinue()) return;
+  }
+
+  // 2) Parent sub issues / links matching DEPENDENCIES_JIRA_PROJECT (e.g. RCV Epics)
+  const parentData = await fetchTicketData(parentLink.key);
+  if (!shouldContinue() || !parentData) return;
+
+  const parentDepEpics = await findDependencyEpicsFromParent(
+    parentData,
+    currentTicketKey,
+    depProject,
+    impactLayerKeys,
+  );
+  if (!shouldContinue()) return;
+
+  for (const dep of parentDepEpics) {
+    const source = dep.source === 'child_issue'
+      ? 'parent_child_issue'
+      : dep.source === 'subtask'
+        ? 'parent_subtask'
+        : 'parent_issue_link';
+    await appendBackendProgressItems(allProgressData, [dep], source, shouldContinue);
+    if (!shouldContinue()) return;
+  }
+}
+
 // 从DOM中查找linked issues中的外部依赖项目tickets
-function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: string; url: string; summary: string }[] {
-  const tickets: { key: string; url: string; summary: string }[] = [];
+function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: string; url: string; summary: string; status?: string }[] {
+  const currentTicketKey = getTicketIdFromUrl();
+  const tickets: { key: string; url: string; summary: string; status?: string }[] = [];
   const issueLinkSections = document.querySelectorAll('.links-list .links-section');
   
   issueLinkSections.forEach(section => {
@@ -2293,10 +2589,18 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
     links.forEach(linkElement => {
       const reference = getLinkedIssueReference(linkElement, projectPrefix);
       
-      if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
+      if (
+        reference
+        && matchesProjectPattern(reference.key, projectPrefix)
+        && !isSameJiraProject(currentTicketKey, reference.key)
+      ) {
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
         const summary = summaryElement?.textContent?.trim() || reference.key;
-        tickets.push({ key: reference.key, url: reference.url, summary });
+        const statusText = linkElement.closest('.issue-link')
+          ?.querySelector('.aui-lozenge, .status-text, [data-tooltip]')
+          ?.textContent
+          ?.trim();
+        tickets.push({ key: reference.key, url: reference.url, summary, status: statusText });
       }
     });
   });
@@ -2308,13 +2612,14 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
 async function fetchDependencyDetails(ticketKey: string): Promise<{
   targetEnd: string | null;
   fixVersion: string | null;
+  status: string | null;
 }> {
   try {
     const response = await fetchJiraRead(
-      `/rest/api/2/issue/${ticketKey}?fields=customfield_18351,customfield_14354,fixVersions`,
+      `/rest/api/2/issue/${ticketKey}?fields=customfield_18351,customfield_14354,fixVersions,status`,
       `fetch Jira dependency details for ${ticketKey}`,
     );
-    if (!response) return { targetEnd: null, fixVersion: null };
+    if (!response) return { targetEnd: null, fixVersion: null, status: null };
     if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
     const data = await response.json();
     
@@ -2323,11 +2628,12 @@ async function fetchDependencyDetails(ticketKey: string): Promise<{
     const fixVersions = data.fields.fixVersions || [];
     // 取最后一个fixVersion（最新的版本）
     const fixVersion = fixVersions.length > 0 ? fixVersions[fixVersions.length - 1].name : null;
+    const status = data.fields.status?.name || null;
     
-    return { targetEnd, fixVersion };
+    return { targetEnd, fixVersion, status };
   } catch (error) {
     console.error('Error fetching dependency details:', error);
-    return { targetEnd: null, fixVersion: null };
+    return { targetEnd: null, fixVersion: null, status: null };
   }
 }
 
@@ -2376,17 +2682,6 @@ function formatDateShort(dateStr: string): string {
   }
 }
 
-// Backend Progress数据接口
-interface BackendProgressData {
-  dependencyTicketKey: string;
-  dependencyTicketUrl: string;
-  summary: string;
-  earlyBuildDate: string | null;
-  rolloutDate: string | null;
-  fixVersion: string | null;
-  source: string;
-}
-
 // 显示Backend Progress信息
 function displayBackendProgress(progressData: BackendProgressData[]): void {
   const anchor = document.querySelector('.design-links-container') || document.querySelector('.issue-header-content');
@@ -2418,14 +2713,14 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
     
     itemsHtml += `
       <div class="backend-progress-item">
-        <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
-        Backend: <a href="${item.dependencyTicketUrl}" target="_blank" class="progress-link">
-          ${item.dependencyTicketKey} <span class="external-link-icon">↗️</span>
+        <img src="${iconUrl}" title="Personal AI" class="design-icon" />
+        Depends: <a href="${item.dependencyTicketUrl}" target="_blank" class="progress-link">
+          ${item.dependencyTicketKey} <span class="external-link-icon">↗</span>
         </a>
         <span class="progress-detail">Early Build: ${earlyBuildDisplay}</span>
         <span class="progress-separator">|</span>
         <span class="progress-detail">Rollout to Prod: ${rolloutDisplay}</span>
-        <span class="source-tag">${item.source}</span>
+        <span class="source-tag" title="Source: ${item.source}">${item.source}</span>
       </div>
     `;
   });
@@ -2481,9 +2776,28 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
         align-items: center;
         margin-bottom: 4px;
         position: relative;
+        flex-wrap: wrap;
+        padding-right: 4px;
+        gap: 0;
       }
       .backend-progress-item:last-child {
         margin-bottom: 0;
+      }
+      .backend-progress-container .design-icon {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 16px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .backend-progress-container .source-tag {
+        font-size: 10px;
+        color: #666;
+        background-color: #e6e6e6;
+        padding: 2px 6px;
+        border-radius: 10px;
+        margin-left: 8px;
+        white-space: nowrap;
       }
       .backend-progress-footer {
         font-size: 12px;
@@ -2575,24 +2889,12 @@ async function collectAndDisplayBackendProgress(
       const epicData = await fetchTicketData(ticketId);
       if (!shouldContinue()) return;
       const depTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
-      for (const dep of depTickets) {
-        const details = await fetchDependencyDetails(dep.key);
-        if (!shouldContinue()) return;
-        let rolloutDate: string | null = null;
-        if (details.fixVersion) {
-          rolloutDate = await fetchRolloutDate(details.fixVersion);
-          if (!shouldContinue()) return;
-        }
-        allProgressData.push({
-          dependencyTicketKey: dep.key,
-          dependencyTicketUrl: `/browse/${dep.key}`,
-          summary: dep.summary,
-          earlyBuildDate: details.targetEnd,
-          rolloutDate,
-          fixVersion: details.fixVersion,
-          source: 'epic'
-        });
-      }
+      await appendBackendProgressItems(allProgressData, depTickets, 'epic', shouldContinue);
+      if (!shouldContinue()) return;
+
+      // Epic 的 Parent Link（通常是 INIT）下再找匹配的依赖 Epic
+      await appendBackendProgressFromParentInit(allProgressData, ticketId, ticketId, depProject, shouldContinue);
+      if (!shouldContinue()) return;
     } else if (isSubtask) {
       // 当前是Sub-task，先找到上级User Story，查找其linked issues
       const parentLink = getParentLinkFromDOM();
@@ -2600,24 +2902,8 @@ async function collectAndDisplayBackendProgress(
         const parentData = await fetchTicketData(parentLink.key);
         if (!shouldContinue()) return;
         const depTickets = findDependencyTicketsFromData(parentData, depProject, ticketId);
-        for (const dep of depTickets) {
-          const details = await fetchDependencyDetails(dep.key);
-          if (!shouldContinue()) return;
-          let rolloutDate: string | null = null;
-          if (details.fixVersion) {
-            rolloutDate = await fetchRolloutDate(details.fixVersion);
-            if (!shouldContinue()) return;
-          }
-          allProgressData.push({
-            dependencyTicketKey: dep.key,
-            dependencyTicketUrl: `/browse/${dep.key}`,
-            summary: dep.summary,
-            earlyBuildDate: details.targetEnd,
-            rolloutDate,
-            fixVersion: details.fixVersion,
-            source: 'user_story'
-          });
-        }
+        await appendBackendProgressItems(allProgressData, depTickets, 'user_story', shouldContinue);
+        if (!shouldContinue()) return;
         
         // Sub-task的Epic可能不在当前DOM中，通过API获取parent的Epic Link
         const epicKey = await fetchTicketEpicLink(parentLink.key);
@@ -2626,92 +2912,60 @@ async function collectAndDisplayBackendProgress(
           const epicData = await fetchTicketData(epicKey);
           if (!shouldContinue()) return;
           const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
-          for (const dep of epicDepTickets) {
-            const details = await fetchDependencyDetails(dep.key);
-            if (!shouldContinue()) return;
-            let rolloutDate: string | null = null;
-            if (details.fixVersion) {
-              rolloutDate = await fetchRolloutDate(details.fixVersion);
-              if (!shouldContinue()) return;
-            }
-            allProgressData.push({
-              dependencyTicketKey: dep.key,
-              dependencyTicketUrl: `/browse/${dep.key}`,
-              summary: dep.summary,
-              earlyBuildDate: details.targetEnd,
-              rolloutDate,
-              fixVersion: details.fixVersion,
-              source: 'epic'
-            });
-          }
+          await appendBackendProgressItems(allProgressData, epicDepTickets, 'epic', shouldContinue);
+          if (!shouldContinue()) return;
+
+          await appendBackendProgressFromParentInit(allProgressData, epicKey, ticketId, depProject, shouldContinue);
+          if (!shouldContinue()) return;
         }
       }
     } else {
       // 普通ticket（Story, Task等），查找当前页面的linked issues
       const domDepTickets = getDependencyTicketsFromLinkedIssues(depProject);
-      for (const dep of domDepTickets) {
-        const details = await fetchDependencyDetails(dep.key);
-        if (!shouldContinue()) return;
-        let rolloutDate: string | null = null;
-        if (details.fixVersion) {
-          rolloutDate = await fetchRolloutDate(details.fixVersion);
-          if (!shouldContinue()) return;
-        }
-        allProgressData.push({
-          dependencyTicketKey: dep.key,
-          dependencyTicketUrl: dep.url,
-          summary: dep.summary,
-          earlyBuildDate: details.targetEnd,
-          rolloutDate,
-          fixVersion: details.fixVersion,
-          source: 'linked_issues'
-        });
-      }
+      await appendBackendProgressItems(allProgressData, domDepTickets, 'linked_issues', shouldContinue);
+      if (!shouldContinue()) return;
       
-      // 查找Epic的linked issues
+      // 查找Epic的linked issues，再查 Epic Parent（INIT）下的依赖 Epic / Impacted Layers
       const epicLink = getParentEpicFromDOM();
       if (epicLink) {
         const epicData = await fetchTicketData(epicLink.key);
         if (!shouldContinue()) return;
         const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
-        for (const dep of epicDepTickets) {
-          const details = await fetchDependencyDetails(dep.key);
-          if (!shouldContinue()) return;
-          let rolloutDate: string | null = null;
-          if (details.fixVersion) {
-            rolloutDate = await fetchRolloutDate(details.fixVersion);
-            if (!shouldContinue()) return;
-          }
-          allProgressData.push({
-            dependencyTicketKey: dep.key,
-            dependencyTicketUrl: `/browse/${dep.key}`,
-            summary: dep.summary,
-            earlyBuildDate: details.targetEnd,
-            rolloutDate,
-            fixVersion: details.fixVersion,
-            source: 'epic'
-          });
-        }
+        await appendBackendProgressItems(allProgressData, epicDepTickets, 'epic', shouldContinue);
+        if (!shouldContinue()) return;
+
+        await appendBackendProgressFromParentInit(allProgressData, epicLink.key, ticketId, depProject, shouldContinue);
+        if (!shouldContinue()) return;
+      } else {
+        // Story/Task 也可能直接挂 Parent Link（INIT），仍尝试 Impacted Layers / parent deps
+        await appendBackendProgressFromParentInit(allProgressData, ticketId, ticketId, depProject, shouldContinue);
+        if (!shouldContinue()) return;
       }
     }
     
     // 合并重复的dependency tickets（同一ticket来自不同source时合并source标签）
     const mergedProgressData: BackendProgressData[] = [];
     for (const item of allProgressData) {
+      if (isSameJiraProject(ticketId, item.dependencyTicketKey)) continue;
       const existing = mergedProgressData.find(p => p.dependencyTicketKey === item.dependencyTicketKey);
       if (existing) {
         if (!existing.source.includes(item.source)) {
           existing.source += `, ${item.source}`;
         }
+        if (!existing.issueStatus && item.issueStatus) {
+          existing.issueStatus = item.issueStatus;
+        }
       } else {
         mergedProgressData.push({ ...item });
       }
     }
+
+    const limitedProgressData = prepareBackendProgressItems(mergedProgressData, ticketId);
     
-    if (mergedProgressData.length > 0) {
+    if (limitedProgressData.length > 0) {
       if (!shouldContinue()) return;
-      console.log('Backend progress found:', mergedProgressData);
-      displayBackendProgress(mergedProgressData);
+      console.log('Backend progress found:', limitedProgressData);
+      displayBackendProgress(limitedProgressData);
     } else {
       console.log('No backend progress found');
     }
@@ -2786,7 +3040,7 @@ async function main(): Promise<void> {
     if (await isEpicTicket()) {
       if (!isCurrentRun()) return;
       // 如果是Epic，直接从Epic中查找UX linked issues
-      const epicUXTickets = await getUXTicketsFromEpic(ticketId, designProject);
+      const epicUXTickets = await getUXTicketsFromEpic(ticketId, designProject, ticketId);
       await appendUXDesignItems(allDesignData, epicUXTickets, 'epic', extraDesignDomains, addIgnoredDesignLikeLinks);
       if (!isCurrentRun()) return;
       
@@ -2808,7 +3062,7 @@ async function main(): Promise<void> {
         console.log('Epic ticket:', epicLink.key);
         
         // 从Epic中查找UX linked issues
-        const epicUXTickets = await getUXTicketsFromEpic(epicLink.key, designProject);
+        const epicUXTickets = await getUXTicketsFromEpic(epicLink.key, designProject, ticketId);
         await appendUXDesignItems(allDesignData, epicUXTickets, 'epic', extraDesignDomains, addIgnoredDesignLikeLinks);
         if (!isCurrentRun()) return;
         
@@ -2826,8 +3080,8 @@ async function main(): Promise<void> {
       }
     }
     
-    // 去重处理
-    const uniqueDesignData = sortDesignDisplayItems(dedupeDesignData(allDesignData));
+    // 去重、同项目过滤、渠道排序后最多展示 5 条
+    const uniqueDesignData = prepareDesignDisplayItems(allDesignData, ticketId);
     if (!isCurrentRun()) return;
     
     if (uniqueDesignData.length > 0 || ignoredDesignLikeLinks.length > 0) {

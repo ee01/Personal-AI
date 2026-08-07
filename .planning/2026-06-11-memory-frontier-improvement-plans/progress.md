@@ -41,7 +41,7 @@
 
 ### 实现阶段（2026-06-11 起，逐个落地）
 快赢三项已实现 + 测试 + 文档：
-- **QW-1 近期重点注入块**：`core/RecentFocusService.ts`（`buildRecentFocusBlock`，单一来源，ProviderContextService 与 /ask 共用）；config `recentFocusEnabled/WindowDays/TokenBudget`；ask.ts buildAugmentedSystemPrompt 注入。测试 `recentFocusService.test.ts`（5）+ 回归 ask/providers（32）。文档 docs/features/memory_system.md「近期重点注入块」+「外部入口同步边界」。无需独立 eval（确定性，端到端由 P0-1 体检覆盖）。
+- **QW-1 近期重点注入块**：`core/RecentFocusService.ts`（`buildRecentFocusBlock`，单一来源，ProviderContextService 与 /ask 共用）；config `recentFocusEnabled/WindowDays/TokenBudget`；ask.ts buildAugmentedSystemPrompt 注入。测试 `recentFocusService.test.ts`（5）+ 回归 ask/providers（32）。文档 docs/memory_system.md「近期重点注入块」+「外部入口同步边界」。无需独立 eval（确定性，端到端由 P0-1 体检覆盖）。
 - **QW-2 画像洞察端点 POST /profile/insight**：`core/ProfileInsightService.ts`（honcho dialectic 式，合成洞察不吐原文，confidence 受 basisCount 约束，basis 0 → available:false）；routes/profile.ts 接入。测试 `api-profile-insight.test.ts`（4）。文档 docs/features/user_profile_system.md「画像洞察查询」。修过 basisCount 双计 bug（近期画像信号与已确认条目重叠，只计 message/reflection）。
 - **QW-3 渐进证据装配 L0/L1/L2**：ask.ts `assembleEvidenceContext`（top fullCount 全文 / 其余摘要 / 预算尽则标题行 + 显式省略），formatRecalledContext 委托；config `evidenceProgressiveEnabled/FullCount/TokenBudget`。测试 `evidenceBudget.test.ts`（5）+ 回归 ask/recall（41）。文档 memory_system.md「渐进证据装配」。
 
@@ -51,7 +51,7 @@
 - 探针 workflow 打线上 `/ask`（esone.qiu，9925 msg/13796 entity）发现真实场景：mThor（extraction）、Cursor 30%贵/许可政策（multi_session/temporal/knowledge_update）、巴黎航班（abstention，系统不编造时刻=正确）、Everyone AI Campaign（prospective）。
 - 关键发现：线上 `/ask` 的 LLM 综合**超时**→返回确定性证据摘要；且 `entity_properties` 双时态精确值（DEV Estimate 3→3.01）**不被 /ask 召回命中**（喂给 merge-evolution-ttl-plan 的真实 gap）。
 - 交付：`tools/eval-memory-abilities.ts`（standalone，打 live /ask + 确定性启发式判官，无判官模型方差）+ `evals/cases/memory-abilities/cases.jsonl`（6 用例，golden 源自真实数据）+ `evals/judges/memory-abilities.md` rubric + `evals/.baseline/memory-abilities.json`（基线 overall=1.0，6/6）。两次运行确认确定性。
-- 文档：evals/README.md（standalone 运行说明）+ docs/features/memory_system.md「记忆六能力体检」。
+- 文档：evals/README.md（standalone 运行说明）+ docs/memory_system.md「记忆六能力体检」。
 - 不接 eval-run.mjs（4800 行、需 dispatch 改造且该路径已有预存在失败）；standalone 更适合打 live endpoint，与 context-recall 的 endpoint 模式一致。
 - **此体检即后续 PPR/亲密度的统一回归门**：每次召回/写入改动后重跑，回归>0.05 即 fail。
 

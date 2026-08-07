@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, and `docs/index.md`.
 - [x] Randomly select a non-recent target from the feature index.
 - [x] Check local Reminders `Personal AI` list through AppleScript and EventKit.
 - [x] Review target docs/source/E2E and external product/research references.
@@ -55,4 +55,4 @@ Complete
 
 ## Notes
 - Worktree was already broadly dirty before this run; only touch Coverage Map target files and this planning directory.
-- Selected feature: `Coverage 质量分` from `docs/features/index.md`.
+- Selected feature: `Coverage 质量分` from `docs/index.md`.

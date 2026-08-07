@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `定时消息创建/编辑/删除`.
+- Randomly selected feature from `docs/index.md`: `定时消息创建/编辑/删除`.
 - Capability: Scheduled Messages.
 - Source document: `docs/features/scheduled_messages_manager.md`.
 - Current scope is create/edit/delete rows backed by the Messages sheet and corresponding user-visible CRUD boundaries.

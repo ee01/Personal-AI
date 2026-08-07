@@ -4,7 +4,7 @@
 
 - 索引条目：`记忆时间轴`
 - 所属能力：Memory Exploring
-- 主文档：`docs/features/memory_system.md`
+- 主文档：`docs/memory_system.md`
 - 主要实现：`src/modals/components/TimelinePage.vue`
 
 ## 当前判断

@@ -2,7 +2,7 @@
 
 ## 2026-06-19
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, `docs/features/index.md`, existing root planning files, and current worktree status.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, `docs/index.md`, existing root planning files, and current worktree status.
 - Used random selection while avoiding recent automation targets; selected `记忆提示 Expanded Card` under Memory Lens.
 - Checked local Reminders through a bounded AppleScript list scan; there is no `Personal AI` list.
 - Inspected `docs/features/memory_lens.md`, `src/contentScriptWebIntelligence.ts`, and `tools/verify-webpage-memory-detection.ts`.

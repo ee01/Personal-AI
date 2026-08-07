@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` is empty.
 - Automation memory shows the most recent exact targets were Rehearsal management, Project Dashboard data-source close, Quick Ask status card, Notification Center feed, Meeting Pilot side panel, User Profile export, Task Scheduler next-step, Google Slides writeback, Decision Center, Scheduled one-click setup, Ask active answer, and Native Join manual recovery.
-- Randomized `docs/features/index.md` sample included `Figma/Zeplin 保守分类`; this was selected after avoiding the newest exact/family targets.
+- Randomized `docs/index.md` sample included `Figma/Zeplin 保守分类`; this was selected after avoiding the newest exact/family targets.
 - Existing Jira Design Links implementation already filters Figma Community/help/blog/marketing and Zeplin profile/settings/marketing pages and exposes scan/filter receipts.
 
 ## Reminders

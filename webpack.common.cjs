@@ -56,6 +56,7 @@ module.exports = (env) => {
       'project-dashboard': './src/modals/project-dashboard.tsx',
       'prompt-config': './src/modals/prompt-config.tsx',
       'share-modal': './src/modals/share-modal.tsx',
+      help: './src/help.ts',
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
@@ -130,7 +131,12 @@ module.exports = (env) => {
       new CopyPlugin({
         patterns: [
           { from: 'static' },
-          // { from: 'docs/demo', to: 'demo' }, // No compliance with MV3 policy
+          // Pack selected docs/demo HTML into the extension so Options can open them
+          // via chrome.runtime.getURL (full docs/demo tree is not MV3-friendly).
+          {
+            from: 'docs/demo/roadmap-demo.html',
+            to: 'help-demos/roadmap-demo.html',
+          },
           {
             from: 'src/scheduled-messages/app-script-template.gs',
             to: 'app-script-template.gs',

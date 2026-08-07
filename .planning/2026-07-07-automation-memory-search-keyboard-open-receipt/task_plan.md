@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `记忆搜索结果页` under Memory Exploring.
-- Source of truth: `docs/features/memory_system.md` and `docs/features/index.md`.
+- Source of truth: `docs/memory_system.md` and `docs/index.md`.
 - User feedback: local `Personal AI` Reminders had 4 total items and 0 incomplete items; none related to Memory Search.
 
 ## Plan

@@ -252,18 +252,25 @@ function threadDetailFixture() {
   };
 }
 
-function threadListFixture() {
+function threadListFixture(offset = 0) {
   const { thread } = threadDetailFixture();
   return {
     items: [
       {
         ...thread,
-        latestSummary: '正在等待外部回复，不会自动跳过联系人确认。',
+        id: offset === 0 ? thread.id : 'thread-2',
+        title: offset === 0 ? thread.title : '项目反思: Horizon',
+        topicKey: offset === 0 ? thread.topicKey : 'project:horizon',
+        latestSummary:
+          offset === 0
+            ? '正在等待外部回复，不会自动跳过联系人确认。'
+            : '下一批只读线程，用于验证分页不会遗漏待复盘主题。',
+        nextReflectionAt: nowSeconds - 3 * 86400,
       },
     ],
     total: 7,
     limit: 50,
-    offset: 0,
+    offset,
   };
 }
 
@@ -358,11 +365,12 @@ try {
     }
 
     if (pathname.endsWith('/reflection-threads')) {
+      const offset = Number(new URL(requestUrl).searchParams.get('offset') ?? '0');
       await route.fulfill(
         jsonResponse(
           emptyReflectionList
             ? { items: [], total: 0, limit: 50, offset: 0 }
-            : threadListFixture(),
+            : threadListFixture(offset),
         ),
       );
       return;
@@ -803,10 +811,38 @@ try {
     .getByText('未输入搜索词')
     .waitFor({ timeout: 10000 });
   await listScope
-    .getByText('可见 1 / 总计 7')
+    .getByText('已读取 1 / 总计 7')
+    .waitFor({ timeout: 10000 });
+  await listScope
+    .getByText('已逾期 1 条（仅已读取）')
     .waitFor({ timeout: 10000 });
   await listScope
     .getByText(/筛选、搜索和刷新只读列表快照，不会运行反思、写记忆、确认决策、发送消息或执行动作/)
+    .waitFor({ timeout: 10000 });
+  const paginationReceipt = page.getByLabel('反思线程列表分页回执');
+  await paginationReceipt
+    .getByText('列表分页回执', { exact: true })
+    .waitFor({ timeout: 10000 });
+  await paginationReceipt
+    .getByText('已读取 1 / 7 条，仍有 6 条未读取。未读取线程不能被视为不存在、已处理或没有待推进事项。')
+    .waitFor({ timeout: 10000 });
+  await paginationReceipt
+    .getByText(/加载更多只读取当前筛选和搜索条件的下一批线程；不会运行反思、改变线程状态、确认决策、发送消息或执行动作/)
+    .waitFor({ timeout: 10000 });
+  const loadMoreButton = paginationReceipt.locator('button.load-more-btn');
+  const loadMoreBoundary = await loadMoreButton.getAttribute('title');
+  assert.match(loadMoreBoundary, /只读取当前筛选的下一批/);
+  assert.match(loadMoreBoundary, /已读取 1\/7 条/);
+  assert.match(
+    loadMoreBoundary,
+    /不会运行反思、写记忆、改变线程状态、确认决策、发送消息或执行动作/,
+  );
+  assert.equal(await loadMoreButton.getAttribute('aria-label'), loadMoreBoundary);
+  await loadMoreButton.click();
+  await page.getByText('项目反思: Horizon').waitFor({ timeout: 10000 });
+  await listScope.getByText('已读取 2 / 总计 7').waitFor({ timeout: 10000 });
+  await paginationReceipt
+    .getByText('已读取 2 / 7 条，仍有 5 条未读取。未读取线程不能被视为不存在、已处理或没有待推进事项。')
     .waitFor({ timeout: 10000 });
 
   const listCard = page.locator('.thread-card', {

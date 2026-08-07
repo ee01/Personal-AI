@@ -20,5 +20,5 @@
 1. 在 `searchResultPresentation.ts` 增加空结果回执 formatter，复用现有 scope label 和 recall channel formatter。
 2. 在 `memory-store.ts` 为 Ask / recall 的成功空返回保留 `emptyResult` 元数据；失败仍走现有 `searchFailureReceipt`。
 3. 在 `SearchResultPage.vue` 空状态渲染“空结果回执”、通道诊断和恢复建议，不改变搜索/排序/反馈行为。
-4. 更新 `docs/features/memory_system.md` 的搜索结果页说明。
+4. 更新 `docs/memory_system.md` 的搜索结果页说明。
 5. 扩展 `tools/verify-memory-search-results.ts` 与 `tools/verify-memory-search-scope-e2e.mjs`，再运行 dev build 和 scoped diff check。

@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` is empty.
 - Recent automation memory already covered Doubao/ChatGPT explorer, Project Dashboard local search, Memory Capture whole-page prereview, Relationship Radar Context Card, Topic empty-batch recovery, Slides skipped rows, Digest Queue, Rehearsal, Skill Foundry sync, auto reply, ASR, Today Pilot, Message Analysis manual rules, Scheduled Messages filters, Coverage slices, Relationship Meeting Brief, ingest scoring, Memory Lens rest tooltip, and Glip AI marker timestamps.
-- Random candidate selected for this run: `决策中心 | Memory Service | docs/features/memory_system.md`.
+- Random candidate selected for this run: `决策中心 | Memory Service | docs/memory_system.md`.
 - Worktree is broadly dirty from prior/user work; keep this run scoped to Decision Center, docs, and the new `.planning` directory.
 - Local Reminders lists are readable, but there is no `Personal AI` list.
 

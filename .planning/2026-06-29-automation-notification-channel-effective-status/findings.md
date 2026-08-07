@@ -2,7 +2,7 @@
 
 ## Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `渠道投递回执`.
+- Randomly selected feature from `docs/index.md`: `渠道投递回执`.
 - Capability: Notification Center.
 - Source document: `docs/features/notification_center.md`.
 - Implementation anchors found so far:

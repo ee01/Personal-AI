@@ -307,3 +307,210 @@ describe('import guard', () => {
     expect(promoted.title).toBe('Created in Jira (renamed)');
   });
 });
+
+describe('owner / members / cleared memory', () => {
+  it('defaults new subs to 14 days and accumulates the owner as a member', () => {
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q1'],
+        overwrite: false,
+        items: [
+          {
+            key: 'NOVA-OWN',
+            type: 'Epic',
+            title: 'Owner epic',
+            quarter: '2026-Q1',
+          },
+        ],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'schedule',
+        itemKey: 'NOVA-OWN',
+        start: '2026-08-03',
+        days: 21,
+        baseVersion: itemOf(getTeamSnapshot(teamId)!, 'NOVA-OWN').version,
+      }),
+    );
+    const after = expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: 'NOVA-OWN',
+        title: 'Owned work',
+        owner: 'Ada',
+      }),
+    ).snapshot;
+    const sub = itemOf(after, 'NOVA-OWN').subs.find((s) => s.title === 'Owned work')!;
+    expect(sub.days).toBe(14);
+    expect(sub.owner).toBe('Ada');
+    expect(after.members.some((m) => m.name === 'Ada')).toBe(true);
+  });
+
+  it('update_sub moves a bar without recreating the draft identity', () => {
+    const before = itemOf(getTeamSnapshot(teamId)!, 'NOVA-OWN').subs.find(
+      (s) => s.title === 'Owned work',
+    )!;
+    const after = expectOk(
+      apply(teamId, {
+        op: 'update_sub',
+        subId: before.id,
+        start: '2026-08-10',
+        days: 10,
+        baseVersion: before.version,
+      }),
+    ).snapshot;
+    const sub = itemOf(after, 'NOVA-OWN').subs.find((s) => s.id === before.id)!;
+    expect(sub.start).toBe('2026-08-10');
+    expect(sub.days).toBe(10);
+    expect(sub.temp).toBe(true);
+    expect(sub.owner).toBe('Ada');
+  });
+
+  it('update_member renames and cascades to sub owners', () => {
+    const member = getTeamSnapshot(teamId)!.members.find((m) => m.name === 'Ada')!;
+    const after = expectOk(
+      apply(teamId, {
+        op: 'update_member',
+        memberId: member.id,
+        name: 'Ada Lovelace',
+      }),
+    ).snapshot;
+    expect(after.members.some((m) => m.name === 'Ada Lovelace')).toBe(true);
+    expect(
+      itemOf(after, 'NOVA-OWN').subs.find((s) => s.title === 'Owned work')!.owner,
+    ).toBe('Ada Lovelace');
+  });
+
+  it('cleanup soft-clears expired subs; schedule restores them', () => {
+    const snap = getTeamSnapshot(teamId)!;
+    const epic = itemOf(snap, 'NOVA-OWN');
+    const sub = epic.subs.find((s) => s.title === 'Owned work')!;
+    expectOk(
+      apply(teamId, {
+        op: 'update_sub',
+        subId: sub.id,
+        start: '2026-01-01',
+        days: 5,
+        baseVersion: sub.version,
+      }),
+    );
+    const cleared = expectOk(
+      apply(teamId, {
+        op: 'cleanup',
+        itemKeys: [],
+        subIds: [sub.id],
+      }),
+    ).snapshot;
+    expect(
+      itemOf(cleared, 'NOVA-OWN').subs.find((s) => s.id === sub.id)!.cleared,
+    ).toBe(true);
+
+    const restored = expectOk(
+      apply(teamId, {
+        op: 'unschedule',
+        itemKey: 'NOVA-OWN',
+        baseVersion: itemOf(cleared, 'NOVA-OWN').version,
+      }),
+    ).snapshot;
+    const back = expectOk(
+      apply(teamId, {
+        op: 'schedule',
+        itemKey: 'NOVA-OWN',
+        start: '2026-08-03',
+        days: 21,
+        baseVersion: itemOf(restored, 'NOVA-OWN').version,
+      }),
+    ).snapshot;
+    expect(
+      itemOf(back, 'NOVA-OWN').subs.find((s) => s.id === sub.id)!.cleared,
+    ).toBe(false);
+  });
+});
+
+describe('expand / collapse (viewer-local)', () => {
+  it('accepts expand/collapse without mutating shared expanded or version', () => {
+    const key = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Expand local only', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const before = itemOf(getTeamSnapshot(teamId)!, key);
+    const expandedBefore = before.expanded;
+    const versionBefore = before.version;
+
+    const afterExpand = expectOk(
+      apply(teamId, {
+        op: 'expand',
+        itemKey: key,
+        baseVersion: versionBefore,
+      }),
+    ).snapshot;
+    const expanded = itemOf(afterExpand, key);
+    expect(expanded.expanded).toBe(expandedBefore);
+    expect(expanded.version).toBe(versionBefore);
+
+    const afterCollapse = expectOk(
+      apply(teamId, {
+        op: 'collapse',
+        itemKey: key,
+        baseVersion: versionBefore,
+      }),
+    ).snapshot;
+    const collapsed = itemOf(afterCollapse, key);
+    expect(collapsed.expanded).toBe(expandedBefore);
+    expect(collapsed.version).toBe(versionBefore);
+  });
+});
+
+describe('gantt lane reorder', () => {
+  it('reindexes siblings so dragging a lower row upward sticks', () => {
+    const a = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Lane A', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const b = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Lane B', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const c = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Lane C', quarter: '2026-Q3' }),
+    ).itemKey!;
+
+    for (const [key, lane] of [
+      [a, 0],
+      [b, 1],
+      [c, 2],
+    ] as const) {
+      const item = itemOf(getTeamSnapshot(teamId)!, key);
+      expectOk(
+        apply(teamId, {
+          op: 'schedule',
+          itemKey: key,
+          start: '2026-08-01',
+          days: 7,
+          lane,
+          baseVersion: item.version,
+        }),
+      );
+    }
+
+    const before = itemOf(getTeamSnapshot(teamId)!, c);
+    expectOk(
+      apply(teamId, {
+        op: 'move',
+        itemKey: c,
+        start: before.start,
+        days: before.days,
+        lane: 0,
+        baseVersion: before.version,
+      }),
+    );
+
+    const ordered = getTeamSnapshot(teamId)!
+      .items.filter((i) => i.scheduled && [a, b, c].includes(i.key))
+      .sort((x, y) => x.lane - y.lane)
+      .map((i) => i.key);
+    expect(ordered).toEqual([c, a, b]);
+    expect(itemOf(getTeamSnapshot(teamId)!, c).lane).toBe(0);
+    expect(itemOf(getTeamSnapshot(teamId)!, a).lane).toBe(1);
+    expect(itemOf(getTeamSnapshot(teamId)!, b).lane).toBe(2);
+  });
+});

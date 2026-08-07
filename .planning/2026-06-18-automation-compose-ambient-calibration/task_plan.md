@@ -14,7 +14,7 @@ Improve the Compose Assist ambient calibration path so natural feedback remains 
 
 ## Decisions
 
-- Target feature: `回复助手无感校准` from `docs/features/index.md`.
+- Target feature: `回复助手无感校准` from `docs/index.md`.
 - Reminder branch: local Reminders has no `Personal AI` list, so no item can be marked complete.
 - Scope: keep Compose Assist calibration low-friction; do not add a new feedback form or review queue.
 

@@ -10,7 +10,7 @@
 ## Context Checked
 
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/message_reaction.md`
 - `docs/progressing/to-verify.md` (`暂无。`)
 - Automation memory at `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`

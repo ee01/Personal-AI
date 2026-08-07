@@ -26,6 +26,7 @@ describe('AgentTask API', () => {
       text: async () => '{}',
     });
     db.prepare('DELETE FROM action_results').run();
+    db.prepare('DELETE FROM proposed_action_attempts').run();
     db.prepare('DELETE FROM proposed_actions').run();
   });
 
@@ -61,5 +62,83 @@ describe('AgentTask API', () => {
     expect(action).toBeTruthy();
     expect(action?.actionType).toBe('delegate_openclaw');
     expect(action?.params.timeoutMs).toBe(600000);
+  });
+
+  it('returns runtime-status from memory-service ledger preferring summary over artifact', async () => {
+    const repo = new ActionRepository(db);
+    const sourceRefId = 'msg_1785731886246';
+    const action = repo.create({
+      actionType: 'delegate_openclaw',
+      title: '打开百度',
+      description: '打开百度首页',
+      params: {
+        task: '打开百度首页',
+        metadata: {
+          taskId: 'agent_task_baidu',
+          sheetMessageId: sourceRefId,
+        },
+      },
+      riskLevel: 'medium',
+      confidence: 0.8,
+      requiresApproval: false,
+      executionMode: 'auto',
+      priority: 7,
+      sourceKind: 'agent_task',
+      sourceRefId,
+      queueStatus: 'queued',
+    });
+    db.prepare(
+      `UPDATE proposed_actions
+       SET queue_status = 'succeeded',
+           state = 'executed',
+           finished_at = ?,
+           result_json = ?
+       WHERE id = ?`,
+    ).run(
+      Date.now(),
+      JSON.stringify({
+        status: 'success',
+        summary: '已在 Chrome 新标签页打开 baidu.com，页面加载正常。',
+        artifacts: [
+          {
+            kind: 'note',
+            title: '百度页面已打开',
+            content: 'https://www.baidu.com/ 已成功打开并读取到百度首页内容。',
+          },
+        ],
+      }),
+      action.id,
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(sourceRefId)},missing_msg`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{
+        sourceRefId: string;
+        summary?: string;
+        evidence?: { title?: string; content?: string; kind?: string };
+        latestAction?: { queueStatus?: string } | null;
+      }>;
+      total: number;
+    };
+    expect(body.total).toBe(2);
+    expect(body.items[0]).toMatchObject({
+      sourceRefId,
+      summary: '已在 Chrome 新标签页打开 baidu.com，页面加载正常。',
+      evidence: {
+        kind: 'note',
+        title: '百度页面已打开',
+        content: 'https://www.baidu.com/ 已成功打开并读取到百度首页内容。',
+      },
+      latestAction: { queueStatus: 'succeeded' },
+    });
+    expect(body.items[1]).toMatchObject({
+      sourceRefId: 'missing_msg',
+      latestAction: null,
+    });
   });
 });

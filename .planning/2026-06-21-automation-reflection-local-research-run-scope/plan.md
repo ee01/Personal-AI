@@ -3,7 +3,7 @@
 ## Target
 
 - Feature index row: `反思本地研究补查`
-- Canonical doc: `docs/features/memory_system.md`
+- Canonical doc: `docs/memory_system.md`
 - Runtime surface: `src/modals/components/ReflectionThreadDetail.vue`
 
 ## Research Notes
@@ -18,7 +18,7 @@
 2. Add a first-row `本轮研究范围` receipt above the research trace list.
 3. Derive the receipt from the current `researchAttempts`: query count, hit/empty/failed/degraded counts, unique evidence refs, source count, rejected-source count, and local-only/read-only boundary.
 4. Update the existing reflection research E2E to assert the receipt and preserve existing per-query trace coverage.
-5. Update `docs/features/memory_system.md` with the run-level receipt behavior.
+5. Update `docs/memory_system.md` with the run-level receipt behavior.
 
 ## Validation Plan
 

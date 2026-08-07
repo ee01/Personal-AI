@@ -21,7 +21,7 @@
 - The receipt shows current scope, search mode, old snapshot count, and no-write/no-delete/no-sync/no-feedback/no-fact-confirmation boundaries.
 - Updated `tools/verify-memory-search-results.ts` with static source assertions.
 - Updated `tools/verify-memory-search-scope-e2e.mjs` to delay one all-scope Ask response and assert the loading receipt before final results.
-- Updated `docs/features/memory_system.md` range semantics.
+- Updated `docs/memory_system.md` range semantics.
 
 ### Phase 4: Verification
 - **Status:** complete

@@ -13,6 +13,6 @@ Improve the Memory Exploring search result page so users can tell which sources 
 
 ## Notes
 
-- Random target: `记忆搜索结果页` from `docs/features/index.md`.
+- Random target: `记忆搜索结果页` from `docs/index.md`.
 - Reminder result: local Reminders is reachable, but there is no `Personal AI` list.
-- Scope: `src/modals/components/SearchResultPage.vue`, `src/modals/searchResultPresentation.ts`, search verification scripts, and `docs/features/memory_system.md`.
+- Scope: `src/modals/components/SearchResultPage.vue`, `src/modals/searchResultPresentation.ts`, search verification scripts, and `docs/memory_system.md`.

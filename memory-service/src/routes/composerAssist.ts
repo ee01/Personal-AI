@@ -109,6 +109,10 @@ const composerAssistBodySchema = {
         'document_note',
       ],
     },
+    assistIntent: {
+      type: 'string' as const,
+      enum: ['draft_compose', 'draft_refine'],
+    },
     title: { type: 'string' as const },
     url: { type: 'string' as const },
     draftText: { type: 'string' as const },

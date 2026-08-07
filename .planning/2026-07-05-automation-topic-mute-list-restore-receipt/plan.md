@@ -27,5 +27,5 @@
 1. Add a Topic list `取消静音回执` after `restoreMutedTopic` from both the muted-card restore button and the post-mute undo toast.
 2. Keep semantics unchanged: remove only the local muted topic entry, preserve unread state, do not sync Memory Service or write the source platform.
 3. Extend Topic E2E to assert the new receipt for both restore entry points.
-4. Update `topic_based_messages.md` and `docs/features/index.md` with a concise current-behavior note.
+4. Update `topic_based_messages.md` and `docs/index.md` with a concise current-behavior note.
 5. Run targeted Topic checks, dev compile, E2E, and scoped diff checks.

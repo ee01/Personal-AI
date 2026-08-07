@@ -2,7 +2,7 @@
 
 ## 2026-06-14
 
-- Read repo instructions, automation memory, memory hints, stale root planning files, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read repo instructions, automation memory, memory hints, stale root planning files, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Checked local Reminders via AppleScript; Reminders are readable but no visible `Personal AI` list exists.
 - Randomly selected `Storyline 会前提示` from the feature index.
 - Created isolated planning files under `.planning/2026-06-14-automation-storyline-entry-receipt/` and switched `.planning/.active_plan` to this run.

@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` says there is no carry-over verification work.
 - Automation memory shows many fresh 2026-06-29 exact-surface receipt improvements; this run avoids those targets.
-- Random target chosen from `docs/features/index.md`: `Task Scheduler 状态 API`.
+- Random target chosen from `docs/index.md`: `Task Scheduler 状态 API`.
 - Local Reminders result: no `Personal AI` list is visible, so this run has no Reminder-derived requirement.
 
 ## Code And UX Findings

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Randomly pick one feature from `docs/features/index.md`.
+- Randomly pick one feature from `docs/index.md`.
 - Check code and keep the feature doc current without over-detailing.
 - Search similar industry products and research papers before locking the improvement.
 - Implement unfinished or low-decision improvements directly.
@@ -37,7 +37,7 @@
 
 ## Resources
 
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/message_reaction.md`
 - Boomerang for Gmail follow-up response tracking: https://www.boomeranggmail.com/l/follow-up-email-no-response.html
 - Superhuman Auto Reminders & Auto Drafts: https://help.superhuman.com/hc/en-us/articles/46005658551053-Auto-Reminders-Auto-Drafts

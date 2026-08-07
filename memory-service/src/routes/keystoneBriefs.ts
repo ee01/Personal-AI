@@ -1,10 +1,13 @@
 import type { FastifyInstance } from 'fastify';
+import type Database from 'better-sqlite3';
 
+import { KeystoneBriefComposerService } from '../core/KeystoneBriefComposerService.js';
 import {
   KeystoneBriefService,
   type KeystoneBriefEventInput,
   type UpsertKeystoneBriefInput,
 } from '../core/KeystoneBriefService.js';
+import { getUiLanguageFromHeaders } from '../i18n.js';
 import type { ContextRecallRequest } from '../types/index.js';
 
 const EVENT_TYPES = new Set<KeystoneBriefEventInput['eventType']>([
@@ -18,6 +21,7 @@ const EVENT_TYPES = new Set<KeystoneBriefEventInput['eventType']>([
   'used_in_ask',
   'used_by_compiler',
 ]);
+const languageRefreshes = new WeakMap<Database.Database, Promise<void>>();
 
 function parseBoolean(value: unknown): boolean {
   return value === true || value === 'true' || value === '1';
@@ -72,6 +76,7 @@ export async function keystoneBriefRoutes(app: FastifyInstance): Promise<void> {
     };
     const item = service.matchContext(recallRequest, [], {
       requireRecallEvidence: false,
+      outputLanguage: getUiLanguageFromHeaders(request.headers),
     });
     return {
       items: item ? [item] : [],
@@ -82,6 +87,30 @@ export async function keystoneBriefRoutes(app: FastifyInstance): Promise<void> {
         note: '只读取匹配简报；不会写入画像、任务或外部系统。',
       },
     };
+  });
+
+  app.post('/keystone-briefs/refresh-language', async (request, reply) => {
+    const db = request.userContext.db;
+    if (languageRefreshes.has(db)) {
+      return reply.code(202).send({ scheduled: false, reason: 'already_running' });
+    }
+
+    const refresh = new KeystoneBriefComposerService(db)
+      .run({ maxBriefs: 10, scanThreads: 250 })
+      .then((result) => {
+        request.log.info(
+          { composed: result.composed, failed: result.failed },
+          'keystone brief language refresh completed',
+        );
+      })
+      .catch((err) => {
+        request.log.error({ err }, 'keystone brief language refresh failed');
+      })
+      .finally(() => {
+        languageRefreshes.delete(db);
+      });
+    languageRefreshes.set(db, refresh);
+    return reply.code(202).send({ scheduled: true });
   });
 
   app.post<{ Body: UpsertKeystoneBriefInput }>(

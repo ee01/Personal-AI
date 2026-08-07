@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - [x] Randomly sampled feature candidates and selected `关注后续 / Watch`.
 - [x] Checked local Reminders through EventKit after AppleScript historically missed `Personal AI`.
 - [x] Inspected Message Reaction docs, Watch code, FollowThreads management UI, and current verifier coverage.

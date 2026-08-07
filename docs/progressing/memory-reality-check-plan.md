@@ -8,7 +8,7 @@
 
 当前暂不建议把 Memory Reality Check 作为独立新能力推进。
 
-核心原因是阶段优先级不匹配：现阶段 `docs/features/compose_assist.md` 已经覆盖“用户正在输入时”的低打扰记忆辅助，包括 RingCentral 回复、Jira comment、Web AI 输入框、可预览插入、证据过滤、置信度阈值、thumb-down 反馈和 sendable 校验。当前真正影响体验的是 Compose Assist 本身还不够准确，尤其是召回相关性、场景理解、可发送文本质量和错误提示收敛。因此，比起在用户输入错误或 AI 输出错误之后再做核验纠错，优先级更高的是把 `/composer/assist` 的输入阶段做准，让系统少给错建议、少插入无关上下文、少打扰用户。
+核心原因是阶段优先级不匹配：现阶段 `docs/features/assist.md` 已经覆盖“用户正在输入时”的低打扰记忆辅助，包括 RingCentral 回复、Jira comment、Web AI 输入框、可预览插入、证据过滤、置信度阈值、thumb-down 反馈和 sendable 校验。当前真正影响体验的是 Compose Assist 本身还不够准确，尤其是召回相关性、场景理解、可发送文本质量和错误提示收敛。因此，比起在用户输入错误或 AI 输出错误之后再做核验纠错，优先级更高的是把 `/composer/assist` 的输入阶段做准，让系统少给错建议、少插入无关上下文、少打扰用户。
 
 换句话说，Reality Check 的“输出后审稿”方向只有在 Compose Assist 的输入质量稳定后才有价值。否则它会变成给不稳定建议再补一个纠错层，产品链路更长，用户负担更重，也会分散当前最该解决的准确率问题。
 

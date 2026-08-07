@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `智能资料录入`.
+- Randomly selected feature from `docs/index.md`: `智能资料录入`.
 - Capability: Memory Coverage Map.
 - Source document: `docs/features/memory_coverage_map.md`.
 - Local Reminders lists: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`.

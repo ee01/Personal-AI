@@ -76,6 +76,7 @@ import { ambientCalibrationRoutes } from './routes/ambientCalibration.js';
 import { recallRelevanceRoutes } from './routes/recallRelevance.js';
 import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js';
 import { usageRoutes } from './routes/usage.js';
+import { memoryClaimRoutes } from './routes/memoryClaims.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 import {
   initAnalyticsStore,
@@ -304,6 +305,7 @@ export async function buildApp(
       await instance.register(recallRelevanceRoutes);
       await instance.register(evidenceWatchContractRoutes);
       await instance.register(usageRoutes);
+      await instance.register(memoryClaimRoutes);
     },
     { prefix: '/api/v1' },
   );

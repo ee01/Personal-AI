@@ -3,7 +3,7 @@
 ## Repo Findings
 
 - `docs/progressing/to-verify.md` currently says there are no pending verification items.
-- `docs/features/index.md` lists `DigestQueueService 本地摘要` as a Notification Center feature implemented by the extension-local digest queue.
+- `docs/index.md` lists `DigestQueueService 本地摘要` as a Notification Center feature implemented by the extension-local digest queue.
 - `docs/features/notification_center.md` already correctly separates service-side Notification Center from extension-local `DigestQueueService`.
 - Current code already preserves queue safety: `DigestQueueService.processTask()` keeps items when notification delivery fails, and waiting items remain queued when they are not due.
 - Current popup presentation uses `formatDigestQueueStatusSummaryForUi()` to collapse total items, due count, earliest release, task breakdown, and no-send boundary into one long text line. The queue is safe, but the UX is hard to scan when due and future items coexist.

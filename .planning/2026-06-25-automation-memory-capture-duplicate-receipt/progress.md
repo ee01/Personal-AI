@@ -2,7 +2,7 @@
 
 ## 2026-06-25
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, memory registry guidance, and the random-feature-loop memory skill.
+- Read `AGENT.md`, `docs/index.md`, automation memory, memory registry guidance, and the random-feature-loop memory skill.
 - Checked `docs/progressing/to-verify.md`; no carry-over item exists.
 - Read stale root `task_plan.md`, `findings.md`, and `progress.md`; created this isolated planning folder for the current run.
 - Randomly selected `Memory Capture -> 整页资料保存` after excluding freshest automation-memory exact families.

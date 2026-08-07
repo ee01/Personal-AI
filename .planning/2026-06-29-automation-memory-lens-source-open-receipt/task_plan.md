@@ -16,7 +16,7 @@ Goal: improve `记忆提示 Expanded Card` in Memory Lens by making source/detai
 
 ## Decisions
 
-- Selected feature: `记忆提示 Expanded Card` under Memory Lens from `docs/features/index.md`.
+- Selected feature: `记忆提示 Expanded Card` under Memory Lens from `docs/index.md`.
 - Reminder branch: Reminders is readable, but there is no `Personal AI` list on this machine, so no Reminder item can be incorporated or marked done.
 - Current gap: Expanded Card shows source links and source status chips, but opening a source/detail link does not leave a visible receipt in the card. Users can infer navigation happened without seeing whether it was current page, same-site, external source, memory detail, or whether any write/confirmation occurred.
 - Implementation slice: after clicking `在记忆中查看` or an original source link, show a compact `来源打开回执` in the card. It should name the opened target, state the review scope, and explicitly say it does not write memory, insert text, send content, or confirm the fact.

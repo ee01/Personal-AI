@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature from `docs/features/index.md`: `Storyline Draft API`
+- Random feature from `docs/index.md`: `Storyline Draft API`
 - Capability: Memory Storyline Builder
 - Source doc: `docs/features/memory_storyline_builder.md`
 - Reminder state: Apple Reminders is accessible, but no visible list named `Personal AI` was found, so there are no relevant Reminder items to incorporate or mark done.

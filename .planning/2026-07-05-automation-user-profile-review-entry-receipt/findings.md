@@ -2,7 +2,7 @@
 
 ## Selection And Reminder State
 
-- `docs/progressing/to-verify.md` says `暂无`, so this run uses a fresh random feature from `docs/features/index.md`.
+- `docs/progressing/to-verify.md` says `暂无`, so this run uses a fresh random feature from `docs/index.md`.
 - The random sample included several very recent families such as Project Dashboard, Message Analysis, Meeting Pilot, Memory Timeline, Watch, Memory Capture, Jira Design Links, Prompt Config, Topic, Storyline, Jira Automation, and Compose Assist. I selected `画像快速增强/降低影响` because it is narrow, user-visible, and less fresh.
 - AppleScript listed Reminders without `Personal AI`, but EventKit found `Personal AI` with 4 items. All 4 were already completed historical Doubao / Notification feedback items, none related to User Profile, profile calibration, memory personalization, or influence weighting.
 

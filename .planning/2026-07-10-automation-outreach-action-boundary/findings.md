@@ -8,7 +8,7 @@
 
 ## Code/doc inspection
 
-- Canonical doc section `docs/features/memory_system.md` says Outreach is for missing information from a known external person/group, with RingCentral target resolution, pending approval, scheduling, waiting, retry, cancel, and detail editing.
+- Canonical doc section `docs/memory_system.md` says Outreach is for missing information from a known external person/group, with RingCentral target resolution, pending approval, scheduling, waiting, retry, cancel, and detail editing.
 - `src/modals/components/OutreachSessions.vue` already has page triage, focus lane, filter scope, filtered-empty, session/template handoff, list operation pending/success/failure, and list pre-dispatch review receipts.
 - `src/modals/components/OutreachSessionDetail.vue` already has operation scope, pre-dispatch review, unsaved draft, operation pending/success/failure, and target search safeguards.
 - UX gap: several actual high-impact buttons do not carry the same action boundary in their own `title` / `aria-label`. Detail buttons (`批准发送`, `编辑目标与时间`, `重试`, `取消`, edit save/cancel, directory refresh/search) and list `取消` / terminal `重试` rely on nearby receipts, but hover/reader users do not get the exact click boundary at the control itself.

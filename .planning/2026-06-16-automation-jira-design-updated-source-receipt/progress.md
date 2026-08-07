@@ -2,7 +2,7 @@
 
 ## 2026-06-16
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry notes, and the reusable random-feature loop notes.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry notes, and the reusable random-feature loop notes.
 - Checked Reminders list names; `Personal AI` is absent.
 - Randomly selected Jira Design Links / design updated-date display.
 - Read current Jira Design Links docs, implementation, verifier, E2E fixture, and existing diff.

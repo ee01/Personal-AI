@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- [x] Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - [x] Randomly sampled candidates and skipped very fresh Today / Memory Lens exact surfaces.
 - [x] Selected `Memory Capture API` under `docs/features/memory_capture.md`.
 - [x] Checked local Reminders with AppleScript and EventKit fallback.

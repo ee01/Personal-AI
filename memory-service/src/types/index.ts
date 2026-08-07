@@ -680,6 +680,196 @@ export interface ProfileCandidate {
   itemValue: string;
   confidence?: number;
   sourceKind?: ProfileSourceKind;
+  /** Zero-based source claim index returned by the ingestion extractor. */
+  claimIndex?: number;
+  /** Exact source text fallback when an extractor cannot emit claimIndex. */
+  claimText?: string;
+}
+
+// ============ Memory Claim Attribution ============
+
+export type ClaimOwnerKind =
+  | 'self'
+  | 'named_person'
+  | 'organization_or_source'
+  | 'ai_agent'
+  | 'system_observation'
+  | 'unknown';
+
+export type ClaimSpeechMode =
+  | 'direct_assertion'
+  | 'quote'
+  | 'reported_speech'
+  | 'suggestion'
+  | 'question'
+  | 'hypothesis'
+  | 'simulation'
+  | 'intent_or_plan'
+  | 'commitment'
+  | 'correction';
+
+export type ClaimVerificationState =
+  | 'unverified'
+  | 'source_only'
+  | 'corroborated'
+  | 'verified_completion'
+  | 'contradicted';
+
+export type ClaimPolarity = 'affirmed' | 'negated' | 'uncertain';
+
+export type ClaimTimeBasis =
+  | 'current'
+  | 'as_of_source_time'
+  | 'future_intent'
+  | 'hypothetical'
+  | 'counterfactual'
+  | 'unknown';
+
+export type ClaimCommitmentState =
+  | 'none'
+  | 'proposed'
+  | 'assigned'
+  | 'accepted';
+
+export type ClaimAttributionSignal =
+  | 'message_role'
+  | 'speaker_label'
+  | 'reply_target'
+  | 'quote_boundary'
+  | 'mention'
+  | 'linguistic_marker'
+  | 'connector_receipt'
+  | 'llm_resolution'
+  | 'user_correction';
+
+export type ClaimPassiveRecallPolicy =
+  | 'allow'
+  | 'background_only'
+  | 'block';
+
+export interface MemoryClaimPolicy {
+  profileCandidate: boolean;
+  currentTruthCandidate: boolean;
+  actionCandidate: boolean;
+  passiveRecall: ClaimPassiveRecallPolicy;
+}
+
+export interface MemoryClaimSourceSpan {
+  start: number;
+  end: number;
+  textHash: string;
+}
+
+export interface MemoryClaimOwner {
+  kind: ClaimOwnerKind;
+  entityId?: string;
+  displayName?: string;
+}
+
+export interface MemoryClaimEnvelope {
+  id: string;
+  sourceMessageId: string;
+  sourceSpan: MemoryClaimSourceSpan;
+  sourceText: string;
+  normalizedClaim: string;
+  owner: MemoryClaimOwner;
+  speechMode: ClaimSpeechMode;
+  polarity: ClaimPolarity;
+  timeBasis: ClaimTimeBasis;
+  verification: ClaimVerificationState;
+  commitment: ClaimCommitmentState;
+  confidence: number;
+  signals: ClaimAttributionSignal[];
+  policy: MemoryClaimPolicy;
+  revision: number;
+  status: 'active' | 'stale' | 'superseded';
+  corrected: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type MessageClaimAttributionStatus =
+  | 'legacy_unclassified'
+  | 'pending'
+  | 'resolved'
+  | 'failed';
+
+export type ClaimAttributionEffect = 'used' | 'background_only' | 'blocked';
+export type ClaimAttributionVisibility = 'silent' | 'compact' | 'review';
+
+export interface ClaimAttributionReceiptBucket {
+  kind: string;
+  label: string;
+  count: number;
+}
+
+export interface ClaimAttributionReceiptItem {
+  claimId: string;
+  sourceMessageId: string;
+  revision: number;
+  excerpt: string;
+  ownerKind: ClaimOwnerKind;
+  ownerLabel: string;
+  speechMode: ClaimSpeechMode;
+  verification: ClaimVerificationState;
+  commitment: ClaimCommitmentState;
+  effect: ClaimAttributionEffect;
+  displayLabel: string;
+  consequence: string;
+  correctionAllowed: boolean;
+  corrected: boolean;
+}
+
+export interface ClaimAttributionReceipt {
+  status: 'mixed' | 'downgraded' | 'corrected';
+  visibility: Exclude<ClaimAttributionVisibility, 'silent'>;
+  summary: string;
+  boundary: string;
+  used: ClaimAttributionReceiptBucket[];
+  backgroundOnly: ClaimAttributionReceiptBucket[];
+  blocked: ClaimAttributionReceiptBucket[];
+  claims: ClaimAttributionReceiptItem[];
+  affectedHighResponsibility: boolean;
+  correctedCount: number;
+}
+
+export interface IngestClaimAttributionDecision {
+  status: MessageClaimAttributionStatus;
+  claimCount: number;
+  highResponsibilityAllowed: number;
+  highResponsibilityBlocked: number;
+  receipt?: ClaimAttributionReceipt;
+}
+
+export type MemoryClaimCorrection =
+  | 'not_my_view'
+  | 'my_decision'
+  | 'reported_speech'
+  | 'hypothesis'
+  | 'undo_last';
+
+export type MemoryClaimCorrectionSource =
+  | 'ask_receipt'
+  | 'memory_lens'
+  | 'user_profile'
+  | 'meeting_pilot'
+  | 'api';
+
+export interface MemoryClaimCorrectionRequest {
+  correction: MemoryClaimCorrection;
+  expectedRevision: number;
+  source: MemoryClaimCorrectionSource;
+  idempotencyKey?: string;
+}
+
+export interface MemoryClaimCorrectionResponse {
+  claimId: string;
+  previous: MemoryClaimEnvelope;
+  current: MemoryClaimEnvelope;
+  revision: number;
+  invalidatedDerived: Record<string, number>;
+  recomputeStatus: 'not_needed' | 'queued' | 'required';
+  rawSourceChanged: false;
 }
 
 // ============ API Types ============
@@ -751,6 +941,8 @@ export interface IngestDecision {
     neighborIds: number[];
     reason: string;
   };
+  /** Silent claim-level owner / stance gate. Single clear self claims omit receipt. */
+  claimAttribution?: IngestClaimAttributionDecision;
 }
 
 export interface IngestResult {
@@ -918,6 +1110,8 @@ export interface RecallItem {
   timestamp?: number;
   metadata?: Record<string, any>;
   entity?: Entity;
+  /** Present only when claim ownership changes evidence consumption. */
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 // ---------- Block schema (active recall stage 2 output) ----------
@@ -1619,6 +1813,8 @@ export interface ContextRecallMatch {
   timestamp?: number;
   cue?: ContextCue;
   lensPresentation?: LensPresentation;
+  /** Present only when attribution changes how this evidence may be consumed. */
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 export interface ContextRecallScopeCounts {
@@ -1831,6 +2027,8 @@ export interface ContextRecallResponse {
   weave?: WeaveStats;
   /** Optional source-grounded brief for the existing passive Memory Lens shell. */
   keystoneBrief?: KeystoneBriefPresentation;
+  /** Omitted for ordinary single-owner recall to keep Memory Lens quiet. */
+  attributionReceipt?: ClaimAttributionReceipt;
   debug?: ContextRecallDebug;
 }
 
@@ -1860,6 +2058,9 @@ export type ComposerScenario =
   | 'compose_to_ai'
   | 'agent_compose'
   | 'document_note';
+
+/** Draft Compose (focus + empty) vs Draft Refine (blur + non-empty). */
+export type ComposerAssistIntent = 'draft_compose' | 'draft_refine';
 
 export type ComposerContextItemType =
   | 'message'
@@ -1966,6 +2167,8 @@ export interface ComposerAssistRequest {
   surface: ComposerSurface;
   contextType: ComposerContextType;
   scenario?: ComposerScenario;
+  /** Draft Compose vs Draft Refine; omitted clients get a compatibility default. */
+  assistIntent?: ComposerAssistIntent;
   title?: string;
   url?: string;
   draftText?: string;
@@ -2017,6 +2220,7 @@ export interface ComposerAssistEvidence {
   score?: number;
   scope?: MemoryScope;
   cue?: ContextCue;
+  claimAttribution?: ClaimAttributionReceiptItem[];
 }
 
 export interface ComposerAssistResponse {
@@ -2026,8 +2230,10 @@ export interface ComposerAssistResponse {
     | 'context_pack'
     | 'prompt_patch'
     | 'rewrite_prompt'
+    | 'prompt_draft'
     | 'reply_context'
-    | 'issue_context';
+    | 'issue_context'
+    | 'reply_refine';
   insertMode?: 'append_patch' | 'replace_draft';
   title?: string;
   summary?: string;
@@ -2039,6 +2245,7 @@ export interface ComposerAssistResponse {
   queryTimeMs: number;
   /** Final evidence-consumption receipt; cohesive filtering remains UI-silent. */
   cohesionReceipt?: EvidenceCohesionReceipt;
+  attributionReceipt?: ClaimAttributionReceipt;
   personaProjection?: PersonaProjectionSummary;
   debug?: Record<string, unknown>;
 }

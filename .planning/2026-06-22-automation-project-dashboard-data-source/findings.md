@@ -2,7 +2,7 @@
 
 ## Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `项目数据源检查`.
+- Randomly selected feature from `docs/index.md`: `项目数据源检查`.
 - Feature owner/capability: Project Dashboard.
 - Source document from index: `docs/features/brain_like_project_analysis_system.md`.
 - Feature index note: Jira/GitHub/Confluence status and gaps.
@@ -41,7 +41,7 @@
 
 ## Resources
 
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/brain_like_project_analysis_system.md`
 - `docs/features/project_dashboard_usage_guide.md`
 - GitHub Projects docs: https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects

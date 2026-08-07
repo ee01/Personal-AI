@@ -17,7 +17,7 @@ Goal: improve the selected `回复助手直接插入` feature by checking docume
 ## Decisions
 
 - Selected feature: `回复助手直接插入`.
-- Source doc: `docs/features/compose_assist.md`.
+- Source doc: `docs/features/assist.md`.
 - Reminder scan result: visible Reminders lists do not include `Personal AI`; no Reminder item can be incorporated or marked complete in this run.
 - Existing worktree is very broad and dirty. Keep changes scoped to Compose Assist and this planning directory.
 - Avoid recent exact automation families from today where practical; this run selected Compose Assist from the remaining candidates.

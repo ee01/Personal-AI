@@ -52,16 +52,14 @@ assert.ok(
 );
 
 assert.ok(
-  managerSource.includes(
-    "getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.checkForUpdates.auto' })",
-  ),
-  'Automatic update checks should use silent Google auth',
+  /getGoogleAuthTokenSilently\(\{\s*caller: 'ScheduledMessagesManager\.checkForUpdates\.auto',\s*scopes: GOOGLE_AUTH_SCOPE_SETS\.APPS_SCRIPT_ADMIN,\s*\}\)/
+    .test(managerSource),
+  'Automatic update checks should use silent App Script admin-scoped Google auth',
 );
 assert.ok(
-  managerSource.includes(
-    "getGoogleAuthToken({ caller: 'ScheduledMessagesManager.checkForUpdates.manual' })",
-  ),
-  'Manual update checks should keep an interactive Google auth path',
+  /getGoogleAuthToken\(\{\s*caller: 'ScheduledMessagesManager\.checkForUpdates\.manual',\s*scopes: GOOGLE_AUTH_SCOPE_SETS\.APPS_SCRIPT_ADMIN,\s*\}\)/
+    .test(managerSource),
+  'Manual update checks should keep an interactive App Script admin-scoped Google auth path',
 );
 assert.ok(
   managerSource.includes('checkForUpdates({ interactive: false })'),

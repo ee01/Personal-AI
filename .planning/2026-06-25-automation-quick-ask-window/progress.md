@@ -2,7 +2,7 @@
 
 ## 2026-06-25
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, and existing planning files.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, and existing planning files.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found.
 - Randomly selected `Quick Ask 小窗` after rerolling away from freshly touched exact feature families.
 - Created isolated planning files under `.planning/2026-06-25-automation-quick-ask-window/`.

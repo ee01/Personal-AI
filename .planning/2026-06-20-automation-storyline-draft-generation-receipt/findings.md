@@ -2,7 +2,7 @@
 
 ## Initial Findings
 
-- Random accepted target: `Storyline Draft API` from `docs/features/index.md`.
+- Random accepted target: `Storyline Draft API` from `docs/index.md`.
 - Feature owner/capability: Memory Storyline Builder.
 - Source document: `docs/features/memory_storyline_builder.md`.
 - Local Reminders scan returned `NO_PERSONAL_AI_LIST`; no Reminder feedback can be applied or completed in this run.

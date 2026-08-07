@@ -2684,6 +2684,8 @@ export const useMemoryStore = defineStore('memory', () => {
         contextMatch: result.contextMatch,
         answerMemory: result.answerMemory,
         scopeReceipt: result.scopeReceipt,
+        cohesionReceipt: result.cohesionReceipt,
+        attributionReceipt: result.attributionReceipt,
         resolutionState: result.resolutionState,
         missingInfo: result.missingInfo || [],
         followUpActions: result.followUpActions || [],

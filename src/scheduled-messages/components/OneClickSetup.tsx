@@ -7,7 +7,10 @@ import * as React from 'react';
 import { useState } from 'react';
 import { SheetInitializer } from '../SheetInitializer';
 import { InitializationResult, SheetConfig } from '../types';
-import { getGoogleAuthToken } from '../../utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthToken,
+} from '../../utils/googleAuth';
 import {
   buildSheetUrl,
   getManualBindSheetInputFeedback,
@@ -433,7 +436,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const getAuthTokenWithForceRefresh = async (): Promise<string | null> => {
     return getGoogleAuthToken({ 
       caller: 'OneClickSetup.getAuthToken',
-      forceRefresh: true  // 强制刷新，以应用新的权限范围
+      forceRefresh: true,  // 强制刷新，以应用新的权限范围
+      scopes: GOOGLE_AUTH_SCOPE_SETS.FULL,
     });
   };
   

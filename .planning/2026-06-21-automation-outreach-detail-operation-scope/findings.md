@@ -3,14 +3,14 @@
 ## Repo And Reminder Findings
 
 - `docs/progressing/to-verify.md` says there are no pending verification items.
-- Randomly selected feature: `主动询问` / Memory Service / `docs/features/memory_system.md`.
+- Randomly selected feature: `主动询问` / Memory Service / `docs/memory_system.md`.
 - Local Reminders list names: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
 - No visible `Personal AI` Reminders list exists, so this run has no Reminder item to complete.
 - Worktree is already broadly dirty. Preserve unrelated changes.
 
 ## Code And UX Findings
 
-- `docs/features/memory_system.md` already documents the Outreach engine, target resolution, list priority receipt, session handoff receipt, terminal retry path, and list failure recovery.
+- `docs/memory_system.md` already documents the Outreach engine, target resolution, list priority receipt, session handoff receipt, terminal retry path, and list failure recovery.
 - Main implementation files inspected:
   - `memory-service/src/core/OutreachEngine.ts`
   - `memory-service/src/routes/outreach.ts`

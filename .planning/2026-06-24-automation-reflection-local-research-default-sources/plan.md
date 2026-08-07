@@ -3,7 +3,7 @@
 ## Target
 
 - Feature index item: `反思本地研究补查`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Runtime surface: `ReflectionResearcher` planning plus Reflection thread detail trace display
 
 ## Plan

@@ -1,6 +1,6 @@
 # Relationship Context Card Improvement Plan
 
-Goal: improve the `人脉关系 Context Card` feature from `docs/features/index.md` by checking current docs against code, using current product/research references, applying a narrow low-decision UX/code fix, updating docs, and validating the result.
+Goal: improve the `人脉关系 Context Card` feature from `docs/index.md` by checking current docs against code, using current product/research references, applying a narrow low-decision UX/code fix, updating docs, and validating the result.
 
 ## Phases
 

@@ -143,7 +143,7 @@ npm run eval:memory-abilities
 Manual-interaction pauses:
 
 - When a flow needs user action that automation cannot safely perform, pause with exact instructions and wait for the user to reply before continuing
-- Example: "请在 Meeting Pilot popup 里点击 `开启会议全貌`，完成后回复我继续验证"
+- Example: "请在 Meeting Pilot popup 里点击 `开启会议弹幕`，完成后回复我继续验证"
 - After the user replies, continue the same validation tier and include the manual step in the final evidence
 
 ### Real Chrome / webpage-mcp Harness
@@ -200,7 +200,8 @@ After a complete feature or bug fix is validated:
 |---------|---------|-------------|
 | `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
 | `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
-| `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the remote memory service | Only after local verification is complete and you need real-environment validation |
+| `npm run deploy:memory` | Sync local `memory-service/` (+ roadmap) to `10.32.56.212` and rebuild both remote containers | After local verification when you need real-environment validation for memory and/or roadmap |
+| `npm run deploy:roadmap` | Sync local `roadmap-service/` only to `10.32.56.212` and rebuild the roadmap container | Roadmap-only changes; faster than `deploy:memory` |
 | `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
 
 ### Chrome Extension E2E Validation
@@ -321,9 +322,9 @@ When modifying `src/scheduled-messages/app-script-template.gs`:
 
 ### Documentation
 - When making a large feature change, user-visible behavior change, or meaningful logic/ranking/data-contract change, check the relevant file under `docs/features/` and update it in the same task when the feature behavior or boundary changed
-- When creating or updating a feature doc under `docs/features/` (or `desktop-app/docs/features/` when that is the canonical surface), also update `docs/features/index.md` in the same task: add or revise the corresponding small-capability row(s), keep `所在文档` pointing at the current source of truth, and refresh the index date when the navigation set changes
+- When creating or updating a feature doc under `docs/features/` (or `desktop-app/docs/features/` when that is the canonical surface), also update `docs/index.md` in the same task: add or revise the corresponding small-capability row(s), keep `所在文档` pointing at the current source of truth, and refresh the index date when the navigation set changes
 - Keep `docs/features/` for current product feature docs. Do not add rule-only `.mdc`, compatibility-pointer, quick-guide, or implementation-summary docs there; merge durable agent rules into `AGENT.md` and merge valid user-visible behavior into the primary feature `.md`.
-- When a feature described in `docs/progressing/` is implemented and landed into canonical feature docs, summarize the completed behavior as key feature points in the appropriate `docs/features/` document, then update `docs/features/index.md` to reference that landed capability, and delete the related `docs/progressing/` planning notes. Creating or revising a `docs/progressing/` plan alone does not require an index update. If the feature has an associated HTML demo, move that demo into `docs/demo/`.
+- When a feature described in `docs/progressing/` is implemented and landed into canonical feature docs, summarize the completed behavior as key feature points in the appropriate `docs/features/` document, then update `docs/index.md` to reference that landed capability, and delete the related `docs/progressing/` planning notes. Creating or revising a `docs/progressing/` plan alone does not require an index update. If the feature has an associated HTML demo, move that demo into `docs/demo/`.
 - Feature docs under `docs/features/` should explain not only what the feature does, but how it decides what to show or do. For each product feature doc, include near the top a plain-language `大白话运行逻辑` / equivalent section that answers:
   - what the feature is trying to decide for the user
   - what inputs or data sources influence the result

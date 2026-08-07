@@ -3,7 +3,7 @@
  *
  * 这里的字符串键必须与后端 memory-service 的 capabilityMap 完全一致，
  * 作为跨仓库（Chrome 扩展前端 / memory-service 后端）的统一契约。
- * 对齐 docs/features/index.md 的「所属能力」分类。
+ * 对齐 docs/index.md 的「所属能力」分类。
  *
  * ⚠️ 修改任何键之前，必须同步更新后端的能力枚举，否则打点归类会错位。
  */

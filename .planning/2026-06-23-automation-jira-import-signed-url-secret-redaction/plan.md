@@ -26,6 +26,6 @@ The remaining gap is narrower: URL query secret detection does not explicitly co
 1. Extend the shared sensitive-key detector in `src/jira-automation-import/transform.ts` for signed URL and cloud credential query parameters.
 2. Add transform tests proving signed URL query parameters are redacted in preview signals, review notes, re-entry map, and create payload.
 3. Update the Jira Automation Import E2E fixture so the browser preview, post-import receipt, Jira description, create payload, and console checks reject signed URL leaks.
-4. Update `docs/features/jira_automation_import.md` and `docs/features/index.md` with a concise note; do not add implementation-level detail beyond the user-facing contract.
+4. Update `docs/features/jira_automation_import.md` and `docs/index.md` with a concise note; do not add implementation-level detail beyond the user-facing contract.
 5. Verify with `verify:jira-automation-import`, `npm start` first compile, `verify:jira-automation-import:e2e`, and scoped whitespace checks.
 

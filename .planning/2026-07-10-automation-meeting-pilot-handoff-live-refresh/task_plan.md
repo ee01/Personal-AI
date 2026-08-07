@@ -9,7 +9,7 @@ Improve `Meeting Pilot handoff` so an already-open Meeting Pilot side panel refr
 - Feature: `Meeting Pilot handoff`
 - Capability: Today Pilot / Meeting Pilot
 - Source docs: `docs/features/today_pilot.md`, `docs/features/meeting_pilot.md`
-- Random selection note: chosen from a randomized `docs/features/index.md` sample after excluding the freshest exact Memory Service, Memory Lens, Jira Import, Skill Foundry, Rehearsal, Topic, and Scheduled Messages targets.
+- Random selection note: chosen from a randomized `docs/index.md` sample after excluding the freshest exact Memory Service, Memory Lens, Jira Import, Skill Foundry, Rehearsal, Topic, and Scheduled Messages targets.
 
 ## Findings
 

@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `项目面板` / Project Dashboard from `docs/features/index.md`.
+- Selected feature: `项目面板` / Project Dashboard from `docs/index.md`.
 - Source docs: `docs/features/project_dashboard_usage_guide.md` and `docs/features/brain_like_project_analysis_system.md`.
 - Reminder scan: AppleScript missed `Personal AI`; EventKit found 4 items, all completed and unrelated to Project Dashboard.
 

@@ -37,7 +37,7 @@
 3. 在待确认动作卡片中把 `审批前确认` 渲染在复制按钮之前。
 4. 补充 CSS，让回执紧凑、可换行，并保持长 key/参数不会撑破布局。
 5. 更新 `tools/verify-memory-entry-agent-thinking.ts` 与 `tools/verify-agent-thinking-options-e2e.mjs`，覆盖结构化数据、UI 文案和审核包导出。
-6. 更新 `docs/features/agent_thinking.md` 与 `docs/features/index.md`，只记录当前用户可感知行为，不展开实现细节。
+6. 更新 `docs/features/agent_thinking.md` 与 `docs/index.md`，只记录当前用户可感知行为，不展开实现细节。
 
 ## 验证计划
 

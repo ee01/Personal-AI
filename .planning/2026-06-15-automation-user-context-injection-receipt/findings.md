@@ -3,7 +3,7 @@
 ## Initial Context
 
 - `docs/progressing/to-verify.md` says `暂无。`; no carry-over verification item overrides random selection.
-- Random sample selected `用户上下文注入` under Prompt Config from `docs/features/index.md`.
+- Random sample selected `用户上下文注入` under Prompt Config from `docs/index.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
 - No visible Reminders list named `Personal AI`; no local Reminder feedback can be incorporated or completed for this feature.
 - Existing dirty worktree is broad and predates this run. Preserve unrelated modifications.

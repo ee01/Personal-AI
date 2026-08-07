@@ -1,20 +1,20 @@
 # Findings & Decisions
 
 ## Requirements
-- Pick a random feature from `docs/features/index.md`.
+- Pick a random feature from `docs/index.md`.
 - Check docs against implementation, external products/papers, Reminders, bugs, UX, and unfinished work.
 - Produce a plan first, then implement completely and verify as far as practical.
 
 ## Repository Findings
 - `docs/progressing/to-verify.md` says `暂无。`, so there is no carry-over item.
 - Random sample first eligible target: `工作/个人/全部范围语义` under Memory Service.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Main UI path: `src/modals/components/SearchResultPage.vue`.
 - Presentation helper path: `src/modals/searchResultPresentation.ts`.
 - Verification anchors: `npm run verify:memory-search-results` and `npm run verify:memory-search-scope:e2e`.
 - Existing code already sends `scope=work|personal|all`, normalizes legacy `both` to `all`, shows scope intent, result breakdown, exposure/boundary notices, empty-result receipts, and recall channel receipts.
 - UX gap: when the user switches scope with existing results on screen, the old results can remain visible while the new request is pending. The scope caption and intent can already move to the requested scope, but there is no explicit pending receipt that says the visible cards are still the prior scope snapshot until Memory Service returns.
-- Worktree already has broad unrelated dirty state, including pre-existing changes in `docs/features/memory_system.md`; do not revert or claim unrelated diffs.
+- Worktree already has broad unrelated dirty state, including pre-existing changes in `docs/memory_system.md`; do not revert or claim unrelated diffs.
 
 ## Reminder Findings
 - AppleScript listed local Reminders lists but did not include `Personal AI`.
@@ -37,7 +37,7 @@ Add a compact `搜索范围请求中` receipt that appears only when a new scope
 - `src/modals/searchResultPresentation.ts`
 - `tools/verify-memory-search-results.ts`
 - `tools/verify-memory-search-scope-e2e.mjs`
-- `docs/features/memory_system.md`
+- `docs/memory_system.md`
 - OpenAI Memory FAQ: https://help.openai.com/en/articles/8590148-memory-faq
 - Claude Code memory docs: https://code.claude.com/docs/en/memory
 - Notion Enterprise Search security: https://www.notion.com/help/enterprise-search-security-and-privacy-practices

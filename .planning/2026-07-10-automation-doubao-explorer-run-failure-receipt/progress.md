@@ -4,7 +4,7 @@
 
 ### Phase 1: Discovery
 - **Status:** complete
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory workflow notes.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory workflow notes.
 - Random sample selected `Doubao / ChatGPT explorer 输入链路`.
 - Worktree was already broadly dirty before this run.
 
@@ -25,7 +25,7 @@
   - `desktop-app/app/renderer.js`
   - `desktop-app/scripts/doubao-source-toggle-gating-check.mjs`
   - `docs/features/doubao_bridge.md`
-  - `docs/features/index.md`
+  - `docs/index.md`
 
 ### Phase 4: Verification
 - **Status:** complete
@@ -33,7 +33,7 @@
 - `node --check desktop-app/scripts/doubao-source-toggle-gating-check.mjs` passed.
 - `npm --prefix desktop-app run test:source-toggle-gating` passed.
 - `npm start -- --progress` compiled successfully with webpack 5.94.0 in 15478 ms and was stopped after first success.
-- Scoped `git diff --check -- desktop-app/app/renderer.js desktop-app/scripts/doubao-source-toggle-gating-check.mjs docs/features/doubao_bridge.md docs/features/index.md .planning/.active_plan .planning/2026-07-10-automation-doubao-explorer-run-failure-receipt` passed.
+- Scoped `git diff --check -- desktop-app/app/renderer.js desktop-app/scripts/doubao-source-toggle-gating-check.mjs docs/features/doubao_bridge.md docs/index.md .planning/.active_plan .planning/2026-07-10-automation-doubao-explorer-run-failure-receipt` passed.
 - Process check found no remaining webpack watcher or Doubao source-toggle E2E process from this run.
 
 ## Test Results

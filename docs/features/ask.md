@@ -1,6 +1,6 @@
 # Ask
 
-_最后更新: 2026-07-16_
+_最后更新: 2026-07-31_
 
 Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标不是简单搜索关键词，而是先判断用户到底在问哪个话题，再从消息、网页、会议、外部 AI 对话、实体图谱、时间线和外部查证动作里组织证据，最后给出带来源感的答案。
 
@@ -14,11 +14,14 @@ Ask 是用户主动向 Personal AI 提问时的记忆问答入口。它的目标
 4. 如果这个话题以前形成过“活答案”，把上次答案、证据缺口和可能变化条件拿出来作为提示，但不能把旧答案当事实。
 5. 再跑正式召回：vector、FTS、graph、time 四通道一起找证据。
 6. 把当前场景 anchor、高频互动记忆、旧证据 refs 和普通召回结果一起去重、排序、降权或前置。
-7. 合并候选后先经过 [Evidence Cohesion Gate（证据对齐）](./evidence_cohesion_gate.md)。它只让围绕同一个问题的证据进入 Evidence Resolution、答案 prompt 和 response；正常通过默认静默，无法安全选出主题时复用现有候选澄清，不改写或重新分类原始记忆。
-8. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；如果缺口是未来可能变化的事实，会进入 [Evidence Watch Contracts](./evidence_watch_contracts.md)，Ask response 返回 `evidenceWatch` 收据，用来说明复核状态、来源阻塞和重复动作合并边界。Search Result 的 Ask 答案区会先展示 `Ask 本轮状态`，再展示自动话题锁定、候选承接、证据守望或查证缺口回执，并在答案前显示当前返回 evidence 的来源/通道摘要，最后才展示答案正文，避免把“已锁定话题 / 已建立守望 / 看到某个来源”误读成“事实已确认或全库已覆盖”。
-9. 生成答案后，异步观察这次 Ask 是否值得写入 observation、promote 成活答案 thread，或经过权威证据门控后更新活答案 version。
+7. 合并候选后先经过 [Memory Claim Attribution（记忆主张归属）](./memory_claim_attribution.md)。它按句内 owner / stance 把 AI 建议、转述降为背景，把假设、问句和未知归属移出 prompt；展示 evidence 同步使用净化文本。
+8. 归属过滤后的候选再经过 [Evidence Cohesion Gate（证据对齐）](./evidence_cohesion_gate.md)。它只让围绕同一个问题的证据进入 Evidence Resolution、答案 prompt 和 response；正常通过默认静默，无法安全选出主题时复用现有候选澄清，不改写或重新分类原始记忆。
+9. 如果本地证据不足，判断是否需要外部查证、confirm request，或者明确保持 unknown；如果缺口是未来可能变化的事实，会进入 [Evidence Watch Contracts](./evidence_watch_contracts.md)，Ask response 返回 `evidenceWatch` 收据，用来说明复核状态、来源阻塞和重复动作合并边界。Search Result 的 Ask 答案区会先展示 `Ask 本轮状态`，再展示自动话题锁定、候选承接、证据守望或查证缺口回执，并在答案前显示当前返回 evidence 的来源/通道摘要，最后才展示答案正文，避免把“已锁定话题 / 已建立守望 / 看到某个来源”误读成“事实已确认或全库已覆盖”。
+10. 生成答案后，异步观察这次 Ask 是否值得写入 observation、promote 成活答案 thread，或经过权威证据门控后更新活答案 version。
 
 这意味着 Ask 的回答仍然由“本次证据”支撑；活答案 prior 只是帮助系统少走弯路。
+
+`attributionReceipt` 只在 mixed、downgraded 或 corrected evidence 真正影响本轮答案时返回。Search Result 在答案区显示一条可折叠的 `归属回执`；普通 single-self 证据完全不显示。详情中的纠错使用 revision + idempotency 门禁，成功回执必须明确“原始消息未修改”，不写回 Glip 或其他外部系统。
 
 当问题命中某场会议的标题、会前目标或会后结果时，Ask 还会读取 `MeetingOutcomeBinder`。它是 Meeting Pilot 已经按 transcript、决议和行动项装订好的结构化派生证据，不是旧答案 prior，也不会因为 Ask 被读取而再次装订或写回会议。
 
@@ -200,7 +203,7 @@ flowchart TD
 
 ## API 与诊断字段
 
-`/ask` 不新增独立页面。Quick Ask 在原小窗内嵌入续聊条和续聊回执；Search Result Ask 保持现有展示。底层增强主要通过召回提示、证据锚定和异步活答案观察生效。
+`/ask` 不新增独立页面。Quick Ask 在原小窗内嵌入续聊条和续聊回执；Search Result Ask 保持现有展示。底层增强主要通过召回提示、证据锚定和异步活答案观察生效。Quick Ask 答案下方的「证据」卡片默认只显示一两句定位摘要（在哪个来源/工单里有关于什么的信息），完整原文折叠在「查看原文片段」中，避免网页快照或评论串把卡片撑满。
 
 Search Result 的 Ask 答案区会把 `resolutionState`、`answerMemory.receipt`、`answerMemory.authority`、`followUpActions`、`externalEvidence` 和 `missingInfo` 合并成第一行 `Ask 本轮状态`。这行在答案正文之前出现，用来先说明本轮是完整、部分、证据不足还是已转待查，当前证据和旧 prior 各有多少，以及这次展示不会自动确认结论、代表用户发消息、执行外部写入，或把缺口写成长期事实。如果 `contextMatch.state = locked`，答案前还会显示 `Ask 话题锁定回执`，让用户先看到短问句被锁到哪个 topic、依据是什么，以及该锁定只是检索锚点补全。如果命中过往活答案但本轮没有当前证据，状态栏会先显示旧答案未复核，明确旧 prior 只作召回提示，不确认当前事实、不写新版本，也不代表用户执行外部动作。如果 AuthorityGate 返回同证据同义、仅辅助证据、等待新权威证据、已建立 thread 或已写新版本，状态栏会直接说明“未写新版本 / 不能改写长期答案 / 等待权威证据 / 已写新版本”等门控结果；下面的活答案、范围、查证/缺口回执仍保留，用于看更细的证据门控和后续动作状态。
 

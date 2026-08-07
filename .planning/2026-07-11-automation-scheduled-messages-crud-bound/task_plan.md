@@ -10,7 +10,7 @@ Phase 5
 
 ### Phase 1: Requirements & Discovery
 - [x] Read `AGENT.md`, feature index, automation memory, and `docs/progressing/to-verify.md`
-- [x] Randomly select one viable feature from `docs/features/index.md`
+- [x] Randomly select one viable feature from `docs/index.md`
 - [x] Check the local `Personal AI` Reminders list
 - [x] Inspect feature docs, code, and current verification harness
 - [x] Document in findings.md

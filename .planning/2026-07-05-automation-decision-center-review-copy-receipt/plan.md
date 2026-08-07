@@ -3,7 +3,7 @@
 ## 选题
 
 - 随机功能点：`决策中心` / Confirm Requests
-- Source of truth：`docs/features/memory_system.md`
+- Source of truth：`docs/memory_system.md`
 - 主要代码：`src/modals/components/DecisionCenter.vue`
 - 验证入口：`npm run verify:decision-center:e2e`
 
@@ -23,7 +23,7 @@
 2. 回执正文点名处理选项数量、证据引用数量、隐藏证据数量和队列快照性质。
 3. 复制出去的审核包附带页面同款 `处理边界`，让离开页面后的外部复核仍保留“不提交/不外发/不续跑”的说明。
 4. 扩展 `verify-decision-center-e2e.mjs`，覆盖普通决策和规则改进两类审核包复制回执。
-5. 更新 `docs/features/memory_system.md` 中决策中心说明，保持文档简洁。
+5. 更新 `docs/memory_system.md` 中决策中心说明，保持文档简洁。
 6. 运行 focused verifier、dev compile、E2E 与 scoped `git diff --check`。
 
 ## 不做

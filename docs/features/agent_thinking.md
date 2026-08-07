@@ -9,7 +9,7 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 当前主要使用场景:
 
 - 消息批量分析: `messageDealing.ts` 会把群消息转成 message group 后调用 `IntelligentAgent.analyze(...)`。
-- 项目/网页分析: background、Google Slides、网页智能等路径会复用同一个分析入口。
+- 项目/显式分析: background、Google Slides 等路径会复用同一个分析入口。被动网页 Memory Capture 已改为单次聚焦 LLM，不再进入 Agent Thinking 工具循环。
 - Options 演示页: `src/options.tsx` + `src/agent-visualizer.tsx` 展示工具目录、思考步骤和结果摘要。
 
 ## 大白话运行逻辑
@@ -39,6 +39,8 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 
 - `historySearch`: 通过 Memory Service recall 搜索历史上下文；工具安全边界是只读、低风险、无需人工确认。
 - `jiraQuery`: 通过 Jira REST API 查询单个或多个 issue，并带 30 分钟内存缓存；工具安全边界是外部只读、低风险、无需人工确认。
+
+2026-08-06 边界更新：`WEB_INTELLIGENCE_ANALYSIS` 不再调用 `IntelligentAgent.analyze({ type: 'webpage' })`。普通网页先经过 Memory Capture 的确定性候选门槛，再由 `llm.ts` 做一次无工具的结构化筛选；结果本身明确 `stored: false`，只有现有 Memory Capture 复核或强意图自动入库路径才能创建 source-memory capsule。Agent Thinking 保留给消息、项目和用户显式触发的编排场景。
 
 注意: 组织架构、发布任务、Sprint 等工具仍是注释中的示例，不应在文档或 UI 中描述为已上线能力。网页初始分析可以直接产出 `shouldStore`、`shouldNotify`、实体和行动建议，不依赖这些未注册工具。
 
@@ -668,14 +670,14 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖 `buildAgentTraceReviewLane` 会从诊断包派生运行状态、审批上下文、工具证据和诊断包四个复核条目。
 - `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
 - `node tools/verify-agent-thinking-options-e2e.mjs` 通过，覆盖 Options 演示页在预算耗尽 trace 中显示 `Trace 复核路线`、待确认动作、阻断/缺证工具证据和本地诊断包边界。
-- `git diff --check -- src/agentVisualizerPresentation.ts src/agent-visualizer.tsx static/agent-visualizer.css tools/verify-memory-entry-agent-thinking.ts tools/verify-agent-thinking-options-e2e.mjs docs/features/agent_thinking.md docs/features/index.md .planning/2026-06-20-automation-agent-thinking-trace-review-lane/plan.md` 通过；进程检查确认没有遗留 webpack watch。
+- `git diff --check -- src/agentVisualizerPresentation.ts src/agent-visualizer.tsx static/agent-visualizer.css tools/verify-memory-entry-agent-thinking.ts tools/verify-agent-thinking-options-e2e.mjs docs/features/agent_thinking.md docs/index.md .planning/2026-06-20-automation-agent-thinking-trace-review-lane/plan.md` 通过；进程检查确认没有遗留 webpack watch。
 
 2026-06-20 审批前确认回执验证覆盖:
 
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖待确认动作和审核包 JSON 都携带 `preflightReceipt`。
 - `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
 - `node tools/verify-agent-thinking-options-e2e.mjs` 通过，覆盖 Options 待确认动作卡片在复制按钮前展示 `审批前确认`、未执行边界、复制非效果和下一步。
-- `git diff --check -- src/agentVisualizerPresentation.ts src/agent-visualizer.tsx static/agent-visualizer.css tools/verify-memory-entry-agent-thinking.ts tools/verify-agent-thinking-options-e2e.mjs docs/features/agent_thinking.md docs/features/index.md .planning/2026-06-20-automation-agent-thinking-approval-preflight-receipt/plan.md` 通过；新增 plan 文件无尾随空白；进程检查确认没有遗留 webpack watch。
+- `git diff --check -- src/agentVisualizerPresentation.ts src/agent-visualizer.tsx static/agent-visualizer.css tools/verify-memory-entry-agent-thinking.ts tools/verify-agent-thinking-options-e2e.mjs docs/features/agent_thinking.md docs/index.md .planning/2026-06-20-automation-agent-thinking-approval-preflight-receipt/plan.md` 通过；新增 plan 文件无尾随空白；进程检查确认没有遗留 webpack watch。
 
 2026-06-24 验证覆盖:
 

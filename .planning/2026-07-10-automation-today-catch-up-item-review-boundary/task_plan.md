@@ -4,7 +4,7 @@
 
 - Feature: `高压后补课` under Today Pilot.
 - Source doc: `docs/features/today_pilot.md`.
-- Selected from the randomized `docs/features/index.md` sample after `docs/progressing/to-verify.md` was empty and recent exact automation targets were avoided.
+- Selected from the randomized `docs/index.md` sample after `docs/progressing/to-verify.md` was empty and recent exact automation targets were avoided.
 
 ## Current State
 
@@ -29,5 +29,5 @@
 1. Add item-level hover/ARIA copy for catch-up cards that names the source, snapshot window, destination, and no-side-effect boundary.
 2. Pass a lightweight `source=today_pilot_catch_up` query flag when opening Memory Search, so the route itself carries review context without changing backend behavior.
 3. Update the Today Pilot static verifier and Playwright E2E to assert the item-level boundary and route context.
-4. Update `docs/features/today_pilot.md` and the `docs/features/index.md` row concisely.
+4. Update `docs/features/today_pilot.md` and the `docs/index.md` row concisely.
 5. Verify with `npm run verify:day-pilot-home`, `npm start` first successful compile, `npm run verify:today-pilot-home:e2e`, and scoped `git diff --check`.

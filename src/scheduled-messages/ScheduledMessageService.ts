@@ -43,7 +43,11 @@
 
 import { Sheet } from '../sheet';
 import { ScheduledMessage, CreateMessageFormData, SheetConfig, Statistics, MessageType, PushLog } from './types';
-import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  formatGoogleAuthFailure,
+  getGoogleAuthTokenSilentlyResult,
+} from '../utils/googleAuth';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import { formatTimelineNextExecutionText } from './timelineFormatting';
 import {
@@ -111,13 +115,17 @@ export class ScheduledMessageService {
    */
   private async refreshToken(): Promise<string> {
     // 使用静默方法 + forceRefresh：清除旧 token，尝试获取新的（不弹窗）
-    const newToken = await getGoogleAuthTokenSilently({ 
+    const authResult = await getGoogleAuthTokenSilentlyResult({
       caller: 'ScheduledMessageService.refreshToken',
-      forceRefresh: true
+      forceRefresh: true,
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
+    const newToken = authResult.token;
     
     if (!newToken) {
-      throw new Error('Token 已过期，请手动重新授权');
+      throw new Error(
+        `Google Sheets 授权不可用：${formatGoogleAuthFailure(authResult)}`,
+      );
     }
     
     this.token = newToken;
@@ -135,6 +143,14 @@ export class ScheduledMessageService {
       const is401Error = error.message?.includes('401') || 
                          error.message?.includes('Unauthorized') ||
                          error.message?.includes('Invalid Credentials');
+      const isScopeError =
+        error.message?.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
+        error.message?.includes('insufficient authentication scopes') ||
+        error.message?.includes('insufficientPermissions');
+
+      if (isScopeError) {
+        throw new Error('Google Sheets 授权不完整，请重新授予 Google Sheets 权限');
+      }
       
       if (is401Error) {
         console.log('🔄 检测到 401 错误，尝试刷新 token...');
@@ -240,7 +256,10 @@ export class ScheduledMessageService {
 
     return await this.withTokenRetry(async () => {
       const sheet = new Sheet(this.token, this.config.sheetId, 'Logs');
-      const data = await sheet.readSheet();
+      // Apps Script always inserts new log rows at row 2, so the first N data
+      // rows are the newest N records. Read that bounded head range directly.
+      const safeLimit = Math.max(0, Math.min(5000, Math.floor(Number(limit) || 0)));
+      const data = await sheet.readRange(`1:${safeLimit + 1}`);
 
       if (!data || data.length <= 1) {
         return [];
@@ -248,7 +267,7 @@ export class ScheduledMessageService {
 
       const headers = data[0];
       return data
-        .slice(1, Math.max(1, limit + 1))
+        .slice(1, safeLimit + 1)
         .map((row) => this.parseRowToPushLog(row, headers))
         .filter((log): log is PushLog => Boolean(log));
     });

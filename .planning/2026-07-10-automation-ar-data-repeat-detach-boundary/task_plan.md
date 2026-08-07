@@ -22,7 +22,7 @@ Improve `AR 数据网页叠加` so an existing repeated AR binding cannot be sil
 
 ## Boundaries
 
-- Scope: `docs/features/ar_data_overlay.md`, `docs/features/index.md`, `src/contentScriptWebIntelligence.ts`, `src/background.ts`, `tools/verify-ar-data-overlay-e2e.mjs`, and this planning directory.
+- Scope: `docs/features/ar_data_overlay.md`, `docs/index.md`, `src/contentScriptWebIntelligence.ts`, `src/background.ts`, `tools/verify-ar-data-overlay-e2e.mjs`, and this planning directory.
 - Do not change AR execution prompt semantics, OpenClaw payloads, Sheet schema, Memory Service routes, or unrelated Scheduled Messages UI.
 
 ## Errors Encountered

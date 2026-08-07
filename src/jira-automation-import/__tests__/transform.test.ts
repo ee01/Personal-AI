@@ -669,6 +669,76 @@ test('buildJiraAutomationImportRule scrubs hidden and sensitive payloads before 
   );
 });
 
+test('buildJiraAutomationImportRule can preserve sensitive payloads when replaceSensitiveValues is false', () => {
+  const rule = {
+    ...baseRule,
+    name: 'Deploy token=keep-secret-token-123',
+    description: 'Authorization: Bearer keep-bearer-secret-789',
+    labels: ['token=keep-label-secret-123'],
+    components: [
+      {
+        id: 'action-1',
+        component: 'ACTION',
+        type: 'jira.webhook.post',
+        value: {
+          url: 'https://hooks.example.com/SRC/release/keepSecretPath1234567890ABCD?apiToken=keep-api-token-123&project=SRC',
+          authorizationHeader: 'Bearer sk-prod-secret-should-keep',
+          apiToken: 'prod-api-token-123',
+          headers: [
+            {
+              name: 'Authorization',
+              value: {
+                secret: true,
+                keyOrValue: 'Bearer sk-prod-secret-should-keep',
+              },
+            },
+          ],
+          secretSlot: {
+            secret: true,
+            name: 'xoxb123456789ABCDEFGHIJKLMNOP',
+            keyOrValue: 'https://hooks.slack.com/services/T000/B000/XXXXXXXX',
+          },
+        },
+        children: [],
+        conditions: [],
+      },
+    ],
+  };
+
+  const importRule = buildJiraAutomationImportRule(rule, {
+    projectId: '10001',
+    projectKey: 'TGT',
+    replaceSensitiveValues: false,
+    now: 1777600000800,
+  });
+  const payloadText = JSON.stringify(importRule);
+
+  assert.equal(importRule.name, '(Imported by Personal AI) Deploy token=keep-secret-token-123');
+  assert.match(importRule.description || '', /Authorization: Bearer keep-bearer-secret-789/);
+  assert.deepEqual(importRule.labels, ['token=keep-label-secret-123']);
+  assert.equal(
+    importRule.components[0].value.url,
+    'https://hooks.example.com/SRC/release/keepSecretPath1234567890ABCD?apiToken=keep-api-token-123&project=SRC',
+  );
+  assert.equal(
+    importRule.components[0].value.authorizationHeader,
+    'Bearer sk-prod-secret-should-keep',
+  );
+  assert.equal(importRule.components[0].value.apiToken, 'prod-api-token-123');
+  assert.equal(
+    importRule.components[0].value.headers[0].value.keyOrValue,
+    'Bearer sk-prod-secret-should-keep',
+  );
+  assert.equal(
+    importRule.components[0].value.secretSlot.keyOrValue,
+    'https://hooks.slack.com/services/T000/B000/XXXXXXXX',
+  );
+  assert.match(importRule.description || '', /Sensitive values: preserve sensitive values in the create payload by user choice/);
+  assert.doesNotMatch(payloadText, new RegExp(JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER));
+  assert.match(payloadText, /sk-prod-secret-should-keep/);
+  assert.match(payloadText, /keep-api-token-123/);
+});
+
 test('free-text import fields redact inline secrets across display, notes, labels, and payload', () => {
   const rule = {
     ...baseRule,

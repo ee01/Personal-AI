@@ -27,7 +27,7 @@ Complete
 ### Phase 3: Implementation
 
 - [x] Update TaskScheduler / popup presentation code and focused verifiers.
-- [x] Update `docs/features/notification_center.md` and `docs/features/index.md` if behavior changes.
+- [x] Update `docs/features/notification_center.md` and `docs/index.md` if behavior changes.
 - **Status:** complete
 
 ### Phase 4: Verification

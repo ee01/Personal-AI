@@ -2,7 +2,7 @@
 
 ## Repository Findings
 
-- Randomized feature sample selected `人脉关系 Context Card` from `docs/features/index.md` after avoiding recent exact/family targets such as Agent Thinking, Ask, Memory scope, Rehearsal, Jira Import, User Profile, Coverage, Topic, and Reflection.
+- Randomized feature sample selected `人脉关系 Context Card` from `docs/index.md` after avoiding recent exact/family targets such as Agent Thinking, Ask, Memory scope, Rehearsal, Jira Import, User Profile, Coverage, Topic, and Reflection.
 - `docs/progressing/to-verify.md` is empty.
 - `docs/features/relationship_radar.md` is generally current for Context Card: it documents default sensitive hiding, context receipt, copy receipt, request/failure receipts, copy/sensitive/evidence button boundaries, stored-card staleness, and validation commands.
 - Existing UI already has strong boundaries on copy, sensitive toggle, evidence buttons, request receipts, refresh failure receipts, and copy receipts.

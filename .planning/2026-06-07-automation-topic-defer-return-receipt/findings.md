@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Feature selected from `docs/features/index.md`: `主题稍后处理` under Topic Messages, source doc `docs/features/topic_based_messages.md`.
+- Feature selected from `docs/index.md`: `主题稍后处理` under Topic Messages, source doc `docs/features/topic_based_messages.md`.
 - Carry-over: `docs/progressing/to-verify.md` says `暂无。`.
 - Reminders: local Reminders lists are accessible, but no `Personal AI` list exists; no Reminder item can be incorporated or marked done.
 - Automation memory recent targets include Timeline/Search safe jump, Project Dashboard source checks, Memory Lens, Today Pilot, Storyline, Scheduled Messages, User Profile, Jira Design Links, Ask, Prompt Config, Google Slides, Memory Capture, Notification Center, Message Reaction, Jira Automation Import, and others. Avoid repeating them.

@@ -9,7 +9,7 @@ Complete
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and memory registry hints
+- [x] Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and memory registry hints
 - [x] Randomly select `Task Scheduler 状态 API` while avoiding today's freshest exact/family targets
 - [x] Check local `Personal AI` Reminders through AppleScript and EventKit
 - [x] Read older Task Scheduler sweep plans to avoid repeating status receipts, collapsed previews, header toggles, or button-boundary work
@@ -42,7 +42,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: `Task Scheduler 状态 API` | It was randomly sampled from `docs/features/index.md` after avoiding today's freshest exact/family targets. |
+| Selected feature: `Task Scheduler 状态 API` | It was randomly sampled from `docs/index.md` after avoiding today's freshest exact/family targets. |
 | Reminder branch closed without changes | EventKit found `Personal AI` with 4 total items, all completed historical Doubao/notification/test items unrelated to Task Scheduler. |
 | Do not repeat old Task Scheduler button/status work | Existing sweeps already covered status receipts, header toggle receipt, collapsed attention preview, and task-row button title/ARIA boundaries. |
 | Keep this scoped to presentation/status-contract behavior unless a scheduler bug appears | The feature has many side-effect boundaries; a narrow control-point fix is safer in the existing dirty worktree. |

@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Use docs/features/index.md to pick one random feature.
+- Use docs/index.md to pick one random feature.
 - Check code and docs for current behavior.
 - Search current products/research for comparable patterns and constructive guidance.
 - Check local Reminders list `Personal AI`; include related open feedback and mark done only if implemented.

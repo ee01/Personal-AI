@@ -2,7 +2,7 @@
 
 ## Selection
 
-- Random target from `docs/features/index.md`: `会前准备`.
+- Random target from `docs/index.md`: `会前准备`.
 - Capability: Today Pilot.
 - Source document: `docs/features/today_pilot.md`.
 - Reminder scan returned `NO_PERSONAL_AI_LIST`; no related local Reminder items can be marked done.

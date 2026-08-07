@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `Memory Capture API` from `docs/features/index.md`.
+- Random feature: `Memory Capture API` from `docs/index.md`.
 - Source of truth: `docs/features/memory_capture.md`.
 - Reminder check: local Reminders is reachable, but there is no `Personal AI` list on this machine, so no Reminder item can be merged or completed.
 

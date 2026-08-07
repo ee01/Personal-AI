@@ -2,7 +2,7 @@
 
 ## 2026-07-03
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, `docs/progressing/to-verify.md`, and relevant memory notes.
+- Read `AGENT.md`, `docs/index.md`, automation memory, `docs/progressing/to-verify.md`, and relevant memory notes.
 - Checked Reminders through AppleScript and EventKit. EventKit found `Personal AI`, but all items are completed and unrelated to Task Scheduler.
 - Randomly sampled feature rows twice and selected `Task Scheduler 状态 API` after avoiding the freshest exact targets.
 - Created this scoped planning directory.

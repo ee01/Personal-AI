@@ -2,7 +2,7 @@
 
 Started: 2026-07-15T01:03:52+0800
 Automation ID: automation
-Target feature: `画像快速增强/降低影响` / User Profile, from `docs/features/index.md`
+Target feature: `画像快速增强/降低影响` / User Profile, from `docs/index.md`
 
 ## Goal
 
@@ -15,7 +15,7 @@ Tighten the User Profile calibration path so high-impact profile actions tell th
 3. [complete] Check local Reminders. AppleScript did not expose `Personal AI`; EventKit found 4 total items and 0 incomplete items, all unrelated/completed.
 4. [complete] Run a small product/research scan for memory/profile management and memory selection.
 5. [complete] Implement the bounded UX fix: add confirm/retract/restore button `title` / `aria-label` copy and E2E assertions.
-6. [complete] Update concise docs in `docs/features/user_profile_system.md` and `docs/features/index.md`.
+6. [complete] Update concise docs in `docs/features/user_profile_system.md` and `docs/index.md`.
 7. [complete] Verify with targeted User Profile checks, first successful `npm start` compile, User Profile E2E, and scoped `git diff --check`.
 8. [complete] Update automation memory with the exact scope, evidence, runtime, and Reminder result.
 

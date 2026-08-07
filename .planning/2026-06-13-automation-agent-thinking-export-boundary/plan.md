@@ -2,7 +2,7 @@
 
 ## 选择理由
 
-- 随机候选来自 `docs/features/index.md` 的 `Agent Thinking 分析编排`。
+- 随机候选来自 `docs/index.md` 的 `Agent Thinking 分析编排`。
 - `docs/progressing/to-verify.md` 当前为空；本机 Reminders 可读，但没有 `Personal AI` 列表。
 - 近几轮 Agent Thinking 已把诊断包、trace spans 和复制范围做成 UI 收据；剩余缺口是诊断包被复制到页面外后，payload 自身没有足够的 schema/export 边界。
 

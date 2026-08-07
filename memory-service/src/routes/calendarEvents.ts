@@ -8,6 +8,7 @@ import type {
   CalendarEventSyncItem,
   CalendarEventSyncParticipant,
 } from '../types/index.js';
+import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
 
 const nullableStringSchema = { type: ['string', 'null'] as const };
 const nullableNumberSchema = { type: ['number', 'null'] as const };
@@ -329,8 +330,8 @@ function upsertCalendarMemory(
     `INSERT INTO messages_raw
       (id, content, source_type, source, scope, source_url, source_title, sender,
        group_id, group_name, timestamp, importance, sentiment, metadata_json,
-       created_at, updated_at)
-     VALUES (?, ?, 'calendar', ?, 'work', ?, ?, ?, ?, ?, ?, 0.6, 'neutral', ?, ?, ?)
+       claim_attribution_status, claim_attribution_version, created_at, updated_at)
+     VALUES (?, ?, 'calendar', ?, 'work', ?, ?, ?, ?, ?, ?, 0.6, 'neutral', ?, 'pending', 1, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        content = excluded.content,
        source = excluded.source,
@@ -341,6 +342,9 @@ function upsertCalendarMemory(
        group_name = excluded.group_name,
        timestamp = excluded.timestamp,
        metadata_json = excluded.metadata_json,
+       claim_attribution_status = 'pending',
+       claim_attribution_version = messages_raw.claim_attribution_version + 1,
+       claim_attribution_error = NULL,
        updated_at = excluded.updated_at`,
   ).run(
     messageId,
@@ -356,6 +360,9 @@ function upsertCalendarMemory(
     event.syncedAt,
     event.syncedAt,
   );
+  new MemoryClaimAttributionService(db).ensureForMessage(messageId, {
+    force: true,
+  });
 
   const existingChunk = db
     .prepare(`SELECT content_hash FROM chunks WHERE file_path = ?`)

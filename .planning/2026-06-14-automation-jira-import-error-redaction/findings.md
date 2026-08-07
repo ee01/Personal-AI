@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Confirm docs match current code.
 - Check related product and research references.
 - Implement an improvement that needs no substantial user decision.

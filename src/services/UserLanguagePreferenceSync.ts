@@ -33,6 +33,14 @@ export async function syncUserLanguagePreferenceProfileItem(
     }
     const item = await client.updateProfileItem(existing.id, {
       itemValue,
+      evidenceRefs: [
+        {
+          source: 'options.ui_language',
+          language,
+          snippet: itemValue,
+          timestamp: Date.now(),
+        },
+      ],
       confidence: 1,
       salienceScore: 1,
       status: 'active',

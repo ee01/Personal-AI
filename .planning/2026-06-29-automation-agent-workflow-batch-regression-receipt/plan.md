@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Agent Workflow 多 Agent 编排`
-- Source doc: `docs/features/agent_workflow.md`
+- Source doc: `docs/features/message_analysis.md`
 - Main surfaces: Options `关注项测试` saved-scenario batch regression path
 
 ## Context

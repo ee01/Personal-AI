@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `Context Pack`.
+- Randomly selected feature from `docs/index.md`: `Context Pack`.
 - Feature owner/capability: Today Pilot.
 - Source document: `docs/features/today_pilot.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.

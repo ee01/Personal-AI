@@ -7,6 +7,7 @@ import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { classifyTrust, screenForInjection } from './injectionScreen.js';
 import { MemoryChangeLedgerService } from './MemoryChangeLedgerService.js';
+import { MemoryClaimAttributionService } from './MemoryClaimAttributionService.js';
 import { SourceMemoryDistillationWorker } from './SourceMemoryDistillationWorker.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -1171,6 +1172,7 @@ export class SourceMemoryCaptureService {
       this.changeLedger.syncSource({
         sourceRefType: 'source_memory',
         sourceRefId: id,
+        sourceMessageId: row.message_id ?? undefined,
         sourceTitle: row.source_title,
         sourceUrl: row.source_url ?? undefined,
         sourceKind: row.source_kind,
@@ -1214,8 +1216,9 @@ export class SourceMemoryCaptureService {
            id, content, summary, scope, source, source_type, source_url,
            source_title, sender, group_id, group_name, timestamp,
            importance, sentiment, metadata_json, trust_class, injection_flags_json,
+           claim_attribution_status, claim_attribution_version,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, ?, ?, ?, 'neutral', ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, ?, ?, ?, 'neutral', ?, ?, ?, 'pending', 1, ?, ?)`,
       )
       .run(
         input.messageId,
@@ -1281,6 +1284,9 @@ export class SourceMemoryCaptureService {
       );
       metadataStmt.run('chunk', String(result.lastInsertRowid), chunkImportance, chunkImportance, 'working', input.ts, input.ts);
     }
+    new MemoryClaimAttributionService(this.db).ensureForMessage(
+      input.messageId,
+    );
   }
 
   private removeLinkedMemorySignal(messageId?: string | null): void {

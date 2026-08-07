@@ -7,7 +7,7 @@
 - **Started:** 2026-06-18
 
 ### Actions Taken
-- Read automation memory, `AGENT.md`, planning-with-files instructions, personal-ai random feature loop memory skill, old root planning files, worktree status, `docs/progressing/to-verify.md`, and `docs/features/index.md`.
+- Read automation memory, `AGENT.md`, planning-with-files instructions, personal-ai random feature loop memory skill, old root planning files, worktree status, `docs/progressing/to-verify.md`, and `docs/index.md`.
 - Checked local Reminders list names; no visible `Personal AI` list exists.
 - Randomly selected `队列可视化与改期建议` from Scheduled Messages.
 - Inspected Scheduled Messages doc, queue helper, manager rendering/apply code, helper tests, and queue suggestion E2E.

@@ -2,7 +2,7 @@
 
 ## 2026-06-15
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, planning skill guidance, and the Rehearsal feature loop memory skill.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hints, planning skill guidance, and the Rehearsal feature loop memory skill.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list exists, so no Reminder feedback can be incorporated or marked done.
 - Randomly selected `场景预演边界` / Rehearsal after filtering recent automation feature families.
 - Inspected `docs/features/rehearsal.md`, `memory-service/src/core/RehearsalActivationService.ts`, `memory-service/src/core/RehearsalService.ts`, `memory-service/src/__tests__/api-rehearsals.test.ts`, and `tools/verify-rehearsals-page-e2e.mjs`.

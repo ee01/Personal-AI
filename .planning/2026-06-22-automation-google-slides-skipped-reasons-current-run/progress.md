@@ -2,7 +2,7 @@
 
 ## 2026-06-22
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hits, root planning files, local Reminders list names, and git status.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory registry hits, root planning files, local Reminders list names, and git status.
 - Used the planning-with-files workflow and created an isolated plan for this run.
 - Selected `Slides partial success skipped reasons` under Google Slides Analyzer as the target feature.
 - Inspected the Google Slides Analyzer feature doc, current skipped-field matching and handoff code, E2E coverage, and package verify scripts.

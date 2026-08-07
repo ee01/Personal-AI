@@ -3,7 +3,7 @@
 ## Target
 
 - Feature index row: `决策中心`
-- Source of truth: `docs/features/memory_system.md`
+- Source of truth: `docs/memory_system.md`
 - Primary UI: `src/modals/components/DecisionCenter.vue`
 
 ## Research Direction

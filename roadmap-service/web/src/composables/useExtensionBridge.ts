@@ -13,12 +13,18 @@ export type ImportItemPayload = {
 type BridgeRequestType =
   | 'pai-roadmap-import-jql'
   | 'pai-roadmap-create-jira'
-  | 'pai-roadmap-ai-alias';
+  | 'pai-roadmap-ai-alias'
+  | 'pai-roadmap-fetch-issue-dates'
+  | 'pai-roadmap-import-tasks'
+  | 'pai-roadmap-update-target-dates';
 
 type BridgeResultType =
   | 'pai-roadmap-import-jql-result'
   | 'pai-roadmap-create-jira-result'
-  | 'pai-roadmap-ai-alias-result';
+  | 'pai-roadmap-ai-alias-result'
+  | 'pai-roadmap-fetch-issue-dates-result'
+  | 'pai-roadmap-import-tasks-result'
+  | 'pai-roadmap-update-target-dates-result';
 
 const ACK_TIMEOUT_MS = 4_000;
 
@@ -141,4 +147,93 @@ export async function bridgeCreateJira(
     parent: result.result?.parent,
     children: result.result?.children || [],
   };
+}
+
+/** Read Target End / due date from a Jira issue for external-dep ETA. */
+export async function bridgeFetchIssueDates(
+  jiraKey: string,
+): Promise<string | null> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{
+    ok: true;
+    targetEnd?: string | null;
+  }>('pai-roadmap-fetch-issue-dates-result', id, 30_000);
+  const acked = waitForBridgeAck('pai-roadmap-fetch-issue-dates-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    { type: 'pai-roadmap-fetch-issue-dates', requestId: id, jiraKey },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  const result = await pending;
+  return result.targetEnd || null;
+}
+
+export type RemoteChildTask = {
+  key: string;
+  summary: string;
+  epicKey: string;
+  targetStart: string | null;
+  targetEnd: string | null;
+  assignee: string | null;
+};
+
+/** Search child Tasks under Epics via extension Options JIRA_API_TOKEN. */
+export async function bridgeImportChildTasks(
+  epicKeys: string[],
+  linkField: string | null,
+): Promise<RemoteChildTask[]> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{
+    ok: true;
+    tasks: RemoteChildTask[];
+  }>('pai-roadmap-import-tasks-result', id, 120_000);
+  const acked = waitForBridgeAck('pai-roadmap-import-tasks-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    {
+      type: 'pai-roadmap-import-tasks',
+      requestId: id,
+      epicKeys,
+      linkField,
+    },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  const result = await pending;
+  return Array.isArray(result.tasks) ? result.tasks : [];
+}
+
+/**
+ * Write Target Start/End via extension Options token.
+ * Throws with message `jira_token_missing` when Options has no token.
+ */
+export async function bridgeUpdateTargetDates(
+  jiraKey: string,
+  start: string,
+  end: string,
+): Promise<void> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{ ok: true }>(
+    'pai-roadmap-update-target-dates-result',
+    id,
+    30_000,
+  );
+  const acked = waitForBridgeAck('pai-roadmap-update-target-dates-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    {
+      type: 'pai-roadmap-update-target-dates',
+      requestId: id,
+      jiraKey,
+      start,
+      end,
+    },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  await pending;
 }

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Confirm docs are current enough and keep them concise.
 - Scan related industry products and research.
 - Check local `Personal AI` Reminders and fold in related open feedback.

@@ -3,7 +3,7 @@
 ## Selected feature
 
 - Random pick: `工作/个人/全部范围语义`
-- Source of truth: `docs/features/memory_system.md`
+- Source of truth: `docs/memory_system.md`
 
 ## Context
 
@@ -18,6 +18,6 @@
 2. Preserve current retrieval behavior: `context-recall` still defaults to `all`, `all` remains server-equivalent to `both`, and specific `work` / `personal` requests still narrow results.
 3. Carry stored `scope` onto each `ContextRecallMatch` so Memory Lens cards can show the domain of the actual evidence.
 4. Show the scope label in Memory Lens compact/expanded metadata without making the card busier than the existing source/date chips.
-5. Update `docs/features/memory_system.md` to record the passive recall scope receipt.
+5. Update `docs/memory_system.md` to record the passive recall scope receipt.
 6. Verify with the focused API test, web-intelligence helper check, dev compile, context recall E2E where practical, and diff checks.
 

@@ -3,7 +3,7 @@
 ## Repo Context
 
 - `docs/progressing/to-verify.md` says `暂无。`, so there is no carry-over item.
-- The random picker selected `本地 agent skill 导入建议` under Skill Foundry from `docs/features/index.md`.
+- The random picker selected `本地 agent skill 导入建议` under Skill Foundry from `docs/index.md`.
 - Existing docs and E2E already cover local directory source, resource count, ignored unsafe path count, missing validation clues, review gate, confirmation boundaries, and post-promote boundaries.
 - Backend metadata already includes `validationFilePaths` and `rejectedFilePaths` in `memory-service/src/routes/skills.ts`; the UI mostly shows counts, not the path names.
 

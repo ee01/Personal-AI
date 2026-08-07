@@ -3,7 +3,7 @@
 ## Selected feature
 
 - Feature: `主动询问会话管理`
-- Source docs: `docs/features/index.md` -> `docs/features/memory_system.md`
+- Source docs: `docs/index.md` -> `docs/memory_system.md`
 - Runtime surface: `src/modals/components/OutreachSessions.vue`
 - Verifier: `tools/verify-outreach-sessions-e2e.mjs`
 

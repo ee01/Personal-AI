@@ -17,6 +17,7 @@ import type {
   RecallItem,
   RecallScope,
   RecallScopeReceipt,
+  ClaimAttributionReceipt,
 } from '../types/index.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
 import { MeetingOutcomeBinderService } from '../core/MeetingOutcomeBinderService.js';
@@ -72,6 +73,11 @@ import {
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import type Database from 'better-sqlite3';
+import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
+import {
+  claimAttributionReceiptItemSchema,
+  claimAttributionReceiptSchema,
+} from './claimAttributionSchemas.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -184,6 +190,8 @@ interface AskResponse {
   }>;
   /** Read-only structured meeting outcomes used as answer context. */
   meetingOutcomeSources?: MeetingOutcomeBinder[];
+  /** Omitted for ordinary single-owner evidence. */
+  attributionReceipt?: ClaimAttributionReceipt;
 }
 
 interface ResolvedAskCandidateSelection {
@@ -204,6 +212,7 @@ interface PreparedAskContext {
   answerMemoryPrior?: AnswerMemoryPrior;
   answerMemoryDiagnostic?: AnswerMemoryDiagnostic;
   cohesionResult?: EvidenceCohesionResult;
+  attributionReceipt?: ClaimAttributionReceipt;
   meetingOutcomeSources: MeetingOutcomeBinder[];
   parsedIntent?: ParsedQueryIntent;
   intentContext: string;
@@ -1457,6 +1466,7 @@ async function recallForAsk(
   answerMemoryPrior?: AnswerMemoryPrior;
   answerMemoryDiagnostic?: AnswerMemoryDiagnostic;
   cohesionResult?: EvidenceCohesionResult;
+  attributionReceipt?: ClaimAttributionReceipt;
 }> {
   const changeLedger = new MemoryChangeLedgerService(db);
   const changeContext = changeLedger.formatForPrompt(
@@ -1550,6 +1560,10 @@ async function recallForAsk(
     contextAnchorItems,
     filteredRecallItems,
   ).slice(0, askTopK);
+  const claimAttribution = new MemoryClaimAttributionService(db);
+  const attributedCandidates = claimAttribution.filterRecallItems(
+    mergedRecallItems,
+  );
   const cohesionResult = buildAskEvidenceCohesion({
     query,
     parsedIntent,
@@ -1561,18 +1575,24 @@ async function recallForAsk(
       preferredTopicTitle
         ? expansion.sourceAnchors
         : undefined,
-    items: mergedRecallItems,
+    items: attributedCandidates.items,
   });
   const includedEvidenceRefs = new Set(
     cohesionResult?.includedEvidenceRefs ??
-      mergedRecallItems.map((item) => item.id),
+      attributedCandidates.items.map((item) => item.id),
   );
-  const recalledItems = cohesionResult
-    ? mergedRecallItems.filter((item) => includedEvidenceRefs.has(item.id))
-    : mergedRecallItems;
+  const cohesionItems = cohesionResult
+    ? attributedCandidates.items.filter((item) =>
+        includedEvidenceRefs.has(item.id),
+      )
+    : attributedCandidates.items;
+  const finalAttribution = claimAttribution.filterRecallItems(cohesionItems);
+  const recalledItems = finalAttribution.items;
   const recallBlocks = filterAskRecallBlocksForCohesion(
     recallResult.blocks,
     cohesionResult,
+    new Set(recalledItems.map((item) => item.id)),
+    recalledItems.length !== mergedRecallItems.length,
   );
   const answerMemoryContext =
     answerMemoryService.formatPriorForPrompt(answerMemoryPrior);
@@ -1614,6 +1634,7 @@ async function recallForAsk(
     answerMemoryPrior,
     answerMemoryDiagnostic: answerMemoryLookup.diagnostic,
     cohesionResult,
+    attributionReceipt: finalAttribution.attributionReceipt,
   };
 }
 
@@ -1875,9 +1896,13 @@ function getMetadataStringValues(
 function filterAskRecallBlocksForCohesion(
   blocks: RecallBlock[] | undefined,
   result: EvidenceCohesionResult | undefined,
+  finalEvidenceRefs?: ReadonlySet<string>,
+  attributionChangedEvidence = false,
 ): RecallBlock[] | undefined {
-  if (!blocks?.length || !result || result.excluded.length === 0) return blocks;
-  const included = new Set(result.includedEvidenceRefs);
+  if (!blocks?.length) return blocks;
+  const cohesionChangedEvidence = Boolean(result && result.excluded.length > 0);
+  if (!cohesionChangedEvidence && !attributionChangedEvidence) return blocks;
+  const included = finalEvidenceRefs ?? new Set(result?.includedEvidenceRefs ?? []);
   const filtered = blocks.flatMap<RecallBlock>((block) => {
     if (block.type === 'evidence_list') {
       const cards = block.payload.cards.filter((card) =>
@@ -1889,7 +1914,8 @@ function filterAskRecallBlocksForCohesion(
     }
     if (block.type === 'timeline') {
       const events = block.payload.events.filter(
-        (event) => !event.sourceItemId || included.has(event.sourceItemId),
+        (event) =>
+          Boolean(event.sourceItemId) && included.has(event.sourceItemId as string),
       );
       return events.length > 0
         ? [{ ...block, payload: { ...block.payload, events } }]
@@ -1897,7 +1923,7 @@ function filterAskRecallBlocksForCohesion(
     }
     if (block.type === 'media') {
       const items = block.payload.items.filter(
-        (media) => !media.itemId || included.has(media.itemId),
+        (media) => Boolean(media.itemId) && included.has(media.itemId as string),
       );
       return items.length > 0
         ? [{ ...block, payload: { ...block.payload, items } }]
@@ -2803,6 +2829,7 @@ async function prepareAskContext(
     answerMemoryPrior,
     answerMemoryDiagnostic,
     cohesionResult,
+    attributionReceipt,
   } = await recallForAsk(
     db,
     query,
@@ -2847,6 +2874,7 @@ async function prepareAskContext(
       answerMemoryPrior,
       answerMemoryDiagnostic,
       cohesionResult,
+      attributionReceipt,
       meetingOutcomeSources,
       intentContext,
       combinedMemoryContext: memoryContextWithMeetingOutcomes,
@@ -2869,6 +2897,7 @@ async function prepareAskContext(
       answerMemoryPrior,
       answerMemoryDiagnostic,
       cohesionResult,
+      attributionReceipt,
       meetingOutcomeSources,
       intentContext,
       combinedMemoryContext: memoryContextWithMeetingOutcomes,
@@ -2956,6 +2985,7 @@ async function prepareAskContext(
     answerMemoryPrior,
     answerMemoryDiagnostic,
     cohesionResult,
+    attributionReceipt,
     meetingOutcomeSources,
     intentContext,
     combinedMemoryContext,
@@ -3088,6 +3118,10 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                     sourceTitle: { type: 'string' },
                     timestamp: { type: 'number' },
                     metadata: { type: 'object', additionalProperties: true },
+                    claimAttribution: {
+                      type: 'array',
+                      items: claimAttributionReceiptItemSchema,
+                    },
                   },
                 },
               },
@@ -3238,6 +3272,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                   summary: { type: 'string' },
                 },
               },
+              attributionReceipt: claimAttributionReceiptSchema,
               cohesionChoices: {
                 type: 'array',
                 nullable: true,
@@ -3397,6 +3432,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           contextMatch,
           answerMemoryDiagnostic,
           cohesionResult,
+          attributionReceipt,
           meetingOutcomeSources,
           intentContext,
           combinedMemoryContext,
@@ -3425,6 +3461,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           if (meetingOutcomeSources.length > 0) {
             ambiguousResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
+          ambiguousResponse.attributionReceipt = attributionReceipt;
           attachAskContinuityReceipt(ambiguousResponse, contextHints);
           return reply.status(200).send(ambiguousResponse);
         }
@@ -3438,6 +3475,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           if (meetingOutcomeSources.length > 0) {
             cohesionResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
+          cohesionResponse.attributionReceipt = attributionReceipt;
           attachAskContinuityReceipt(cohesionResponse, contextHints);
           return reply.status(200).send(cohesionResponse);
         }
@@ -3490,6 +3528,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             channelDiagnostics: recallChannelDiagnostics,
             scopeReceipt: recallScopeReceipt,
             cohesionReceipt: cohesionResult?.receipt,
+            attributionReceipt,
             meetingOutcomeSources:
               meetingOutcomeSources.length > 0
                 ? meetingOutcomeSources
@@ -3559,6 +3598,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             queryTimeMs: Date.now() - startMs,
           });
           fallbackResponse.cohesionReceipt = cohesionResult?.receipt;
+          fallbackResponse.attributionReceipt = attributionReceipt;
           if (meetingOutcomeSources.length > 0) {
             fallbackResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
@@ -3657,6 +3697,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           contextMatch,
           answerMemoryDiagnostic,
           cohesionResult,
+          attributionReceipt,
           meetingOutcomeSources,
           intentContext,
           combinedMemoryContext,
@@ -3687,6 +3728,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           blocks: recallBlocks ?? [],
           scopeReceipt: recallScopeReceipt,
           cohesionReceipt: cohesionResult?.receipt,
+          attributionReceipt,
           meetingOutcomeSources,
           contextMatch,
           evidence: includeEvidence
@@ -3714,6 +3756,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           if (meetingOutcomeSources.length > 0) {
             ambiguousResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
+          ambiguousResponse.attributionReceipt = attributionReceipt;
           attachAskContinuityReceipt(ambiguousResponse, contextHints);
           writeSseEvent(reply, 'status', {
             message: uiT('ask.status.needsClarification', uiLanguage),
@@ -3737,6 +3780,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           if (meetingOutcomeSources.length > 0) {
             cohesionResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
+          cohesionResponse.attributionReceipt = attributionReceipt;
           attachAskContinuityReceipt(cohesionResponse, contextHints);
           writeSseEvent(reply, 'status', {
             message: uiT('ask.status.needsClarification', uiLanguage),
@@ -3821,6 +3865,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             queryTimeMs: Date.now() - startMs,
           });
           fallbackResponse.cohesionReceipt = cohesionResult?.receipt;
+          fallbackResponse.attributionReceipt = attributionReceipt;
           if (meetingOutcomeSources.length > 0) {
             fallbackResponse.meetingOutcomeSources = meetingOutcomeSources;
           }
@@ -3897,6 +3942,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           channelDiagnostics: recallChannelDiagnostics,
           scopeReceipt: recallScopeReceipt,
           cohesionReceipt: cohesionResult?.receipt,
+          attributionReceipt,
           meetingOutcomeSources:
             meetingOutcomeSources.length > 0
               ? meetingOutcomeSources

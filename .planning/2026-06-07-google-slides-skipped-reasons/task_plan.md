@@ -30,7 +30,7 @@ Phase 7
 
 | Decision | Rationale |
 | --- | --- |
-| Selected feature: `Slides partial success skipped reasons` under Google Slides Analyzer | Random pick from `docs/features/index.md`, avoiding recent automation targets |
+| Selected feature: `Slides partial success skipped reasons` under Google Slides Analyzer | Random pick from `docs/index.md`, avoiding recent automation targets |
 | Reminder branch blocked by absent list | Local Reminders exposes several lists but no `Personal AI`; do not invent feedback or mark anything done |
 | Keep edits scoped to Google Slides Analyzer skipped writeback receipts | Repository is already broadly dirty from previous work |
 | Implementation slice: invalid row/table/slide location failures become field-specific skipped reasons | The existing UI already has a handoff list, but project-level invalid-location errors cannot be matched back to selected fields |

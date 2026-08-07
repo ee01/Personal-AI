@@ -216,11 +216,38 @@ describe('OutreachEngine', () => {
 
     const messages = db
       .prepare(
-        `SELECT source_type, content FROM messages_raw WHERE source_type = 'outreach_question'`,
+        `SELECT id, source_type, content, claim_attribution_status
+         FROM messages_raw
+         WHERE source_type = 'outreach_question'`,
       )
-      .all() as Array<{ source_type: string; content: string }>;
+      .all() as Array<{
+      id: string;
+      source_type: string;
+      content: string;
+      claim_attribution_status: string;
+    }>;
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toContain('测试窗口是否已经锁定');
+    expect(messages[0].claim_attribution_status).toBe('resolved');
+    const questionClaims = db
+      .prepare(
+        `SELECT owner_kind, speech_mode, passive_recall
+         FROM memory_claims
+         WHERE source_message_id = ? AND status = 'active'
+         ORDER BY span_start`,
+      )
+      .all(messages[0].id) as Array<{
+      owner_kind: string;
+      speech_mode: string;
+      passive_recall: string;
+    }>;
+    expect(questionClaims.length).toBeGreaterThan(0);
+    expect(questionClaims.every((claim) => claim.owner_kind === 'self')).toBe(
+      true,
+    );
+    expect(questionClaims.every((claim) => claim.passive_recall === 'block')).toBe(
+      true,
+    );
   });
 
   it('marks reflection outreach resolved and writes action_result after reply arrives', async () => {
@@ -401,11 +428,44 @@ describe('OutreachEngine', () => {
 
     const replyMessages = db
       .prepare(
-        `SELECT content FROM messages_raw WHERE source_type = 'outreach_reply' ORDER BY timestamp ASC`,
+        `SELECT id, content, sender, claim_attribution_status
+         FROM messages_raw
+         WHERE source_type = 'outreach_reply'
+         ORDER BY timestamp ASC`,
       )
-      .all() as Array<{ content: string }>;
+      .all() as Array<{
+      id: string;
+      content: string;
+      sender: string;
+      claim_attribution_status: string;
+    }>;
     expect(replyMessages).toHaveLength(1);
     expect(replyMessages[0].content).toContain('video相关应该都在下周');
+    expect(replyMessages[0]).toMatchObject({
+      sender: 'Sophia (Jinmei) Lin',
+      claim_attribution_status: 'resolved',
+    });
+    const replyClaims = db
+      .prepare(
+        `SELECT owner_kind, owner_display_name, passive_recall
+         FROM memory_claims
+         WHERE source_message_id = ? AND status = 'active'
+         ORDER BY span_start`,
+      )
+      .all(replyMessages[0].id) as Array<{
+      owner_kind: string;
+      owner_display_name: string | null;
+      passive_recall: string;
+    }>;
+    expect(replyClaims.length).toBeGreaterThan(0);
+    expect(
+      replyClaims.every(
+        (claim) =>
+          claim.owner_kind === 'named_person' &&
+          claim.owner_display_name === 'Sophia (Jinmei) Lin' &&
+          claim.passive_recall === 'background_only',
+      ),
+    ).toBe(true);
 
     const followUpActions = actionRepo.list({
       sourceKind: 'outreach_session',

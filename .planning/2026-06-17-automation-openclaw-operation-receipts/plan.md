@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected from `docs/features/index.md`: `OpenClaw 外部委派` / Memory Service / `docs/features/memory_system.md`.
+- Selected from `docs/index.md`: `OpenClaw 外部委派` / Memory Service / `docs/memory_system.md`.
 - Main surface: `memory-exploring.html#/actions`, implemented in `src/modals/components/ActionQueue.vue`.
 - Keep this run scoped to user-visible operation feedback for existing Action Queue actions. Do not change the OpenClaw delegation protocol, storage schema, or execution policy.
 
@@ -32,7 +32,7 @@
 3. Update `tools/verify-action-queue-e2e.mjs`.
    - Assert `确认并执行` still sends `approve: true`.
    - Assert the card shows the new operation receipt and key boundary copy after execution.
-4. Update `docs/features/memory_system.md`.
+4. Update `docs/memory_system.md`.
    - Add one concise note under OpenClaw Action Queue behavior; keep docs high level.
 5. Verify.
    - Run the Action Queue E2E after rebuilding `dist`.

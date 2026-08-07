@@ -29,7 +29,7 @@ The receipt should:
 - `src/modals/components/StorylineDraftPage.vue`: add computed target receipt metadata, render the receipt, and style it.
 - `tools/verify-storyline-draft-page-e2e.mjs`: assert the receipt appears for Slides and RingCentral post target changes.
 - `docs/features/memory_storyline_builder.md`: document the output target receipt in the Draft page section.
-- `docs/features/index.md`: keep the feature row concise and current.
+- `docs/index.md`: keep the feature row concise and current.
 
 ## Verification
 

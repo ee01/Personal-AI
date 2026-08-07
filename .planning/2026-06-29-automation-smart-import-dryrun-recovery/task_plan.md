@@ -1,6 +1,6 @@
 # Smart Import Dry-Run Recovery Plan
 
-Goal: improve the selected `智能资料录入` feature from `docs/features/index.md` by checking docs/code freshness, incorporating current external references, implementing a low-decision UX/code improvement, updating docs, and validating through the repo's preferred proof ladder.
+Goal: improve the selected `智能资料录入` feature from `docs/index.md` by checking docs/code freshness, incorporating current external references, implementing a low-decision UX/code improvement, updating docs, and validating through the repo's preferred proof ladder.
 
 ## Phases
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-从 `docs/features/index.md` 随机抽到 `Storyline 会前提示`。本轮只处理 RingCentral Video Home 会前准备里的 Storyline 入口，不改 Draft API 的生成逻辑。
+从 `docs/index.md` 随机抽到 `Storyline 会前提示`。本轮只处理 RingCentral Video Home 会前准备里的 Storyline 入口，不改 Draft API 的生成逻辑。
 
 ## 已检查
 

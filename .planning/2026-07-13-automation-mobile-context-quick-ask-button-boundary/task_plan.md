@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `Mobile Context Thread` in `docs/features/index.md`.
+- Selected feature: `Mobile Context Thread` in `docs/index.md`.
 - Source doc: `docs/features/doubao_bridge.md`.
 - Implementation surface: Quick Ask answer card action `发到豆包手机对话` in `desktop-app/app/quick-ask.js`.
 

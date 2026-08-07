@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Random sample from `docs/features/index.md` included `Storyline 会前提示`; this was selected as the first valid, non-fresh duplicate feature family.
+- Random sample from `docs/index.md` included `Storyline 会前提示`; this was selected as the first valid, non-fresh duplicate feature family.
 - `docs/progressing/to-verify.md` is clear: `暂无。`.
 - Automation memory's freshest runs covered Google Slides, Agent Thinking approval retry, memory `/events` identity, Scheduled Messages target filtering, Meeting Pilot ASR, and Doubao revoke scope. This run should avoid those exact surfaces.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-随机抽中 `主动询问`（Memory Service / `docs/features/memory_system.md`），检查当前代码与文档，结合行业资料和 Reminder 信号，做一个不需要额外用户决策的 UX/缺陷改进，并完成代码、文档和验证闭环。
+随机抽中 `主动询问`（Memory Service / `docs/memory_system.md`），检查当前代码与文档，结合行业资料和 Reminder 信号，做一个不需要额外用户决策的 UX/缺陷改进，并完成代码、文档和验证闭环。
 
 ## Current Context
 

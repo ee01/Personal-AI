@@ -2,9 +2,9 @@
 
 ## 2026-07-01
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/features/index.md`, and `docs/features/memory_capture.md`.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, `docs/index.md`, and `docs/features/memory_capture.md`.
 - Probed Reminders list names; no `Personal AI` list exists.
-- Randomly selected `选中文字保存为资料记忆` from `docs/features/index.md` after excluding the freshest exact-focus automation targets.
+- Randomly selected `选中文字保存为资料记忆` from `docs/index.md` after excluding the freshest exact-focus automation targets.
 - Inspected selection-save UI, source-memory route/service/client bridge, and existing Memory Capture E2E coverage.
 - Ran external scan across Notion, Readwise, Hypothesis, Zotero, KFTF, and PIM references.
 - Implemented selected-text dock pre-review receipt in `src/contentScriptWebIntelligence.ts`.

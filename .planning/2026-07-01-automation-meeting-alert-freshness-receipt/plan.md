@@ -2,7 +2,7 @@
 
 ## 选择依据
 
-- 从 `docs/features/index.md` 随机候选中选中 `Meeting Pilot / 会中提醒`，避开最近几轮精确目标。
+- 从 `docs/index.md` 随机候选中选中 `Meeting Pilot / 会中提醒`，避开最近几轮精确目标。
 - `docs/progressing/to-verify.md` 当前无待续做事项。
 - AppleScript 未列出 `Personal AI` Reminders，但 EventKit 只读探测到该列表；4 条均已完成且主题是 Doubao / Notification 同步，不纳入本轮 Meeting Pilot 改进。
 

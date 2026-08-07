@@ -17,7 +17,7 @@ Goal: improve the selected `梦境重放` feature by keeping docs current, using
 ## Decisions
 
 - Selected feature: `梦境重放` under Memory Service.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Main UI file: `src/modals/components/DreamInsights.vue`.
 - Existing E2E: `tools/verify-memory-dreams-e2e.mjs`.
 - Local Reminders is reachable, but there is no `Personal AI` list; no Reminder item will be inspected, completed, or annotated.
@@ -33,7 +33,7 @@ Add a compact `复核交接回执` next to `复核这个主题` inside each expa
 - Added `dreamReviewHandoffReceipt()` in `DreamInsights.vue`.
 - Rendered the receipt inside the expanded dream-card review action area.
 - Updated `tools/verify-memory-dreams-e2e.mjs` to assert target, source, evidence, and boundary text.
-- Updated `docs/features/memory_system.md` to describe the review handoff without expanding low-level implementation detail.
+- Updated `docs/memory_system.md` to describe the review handoff without expanding low-level implementation detail.
 
 ## Errors Encountered
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮重抽命中 `docs/features/index.md` 里的 `记忆提示 Hover Peek / Memory Lens`。当前文档和代码已经覆盖强/弱相关、来源 footer、p2 低打扰、拖拽锚点和 Expanded Card 来源状态，但 Hover Peek 本身只显示相关性与来源，不直接说明这是只读提示。用户在 hover/focus 的第一眼可能仍需要进入卡片才知道不会写入网页、插入输入框或发送消息。
+本轮重抽命中 `docs/index.md` 里的 `记忆提示 Hover Peek / Memory Lens`。当前文档和代码已经覆盖强/弱相关、来源 footer、p2 低打扰、拖拽锚点和 Expanded Card 来源状态，但 Hover Peek 本身只显示相关性与来源，不直接说明这是只读提示。用户在 hover/focus 的第一眼可能仍需要进入卡片才知道不会写入网页、插入输入框或发送消息。
 
 ## 外部参考
 

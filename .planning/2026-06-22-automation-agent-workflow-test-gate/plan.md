@@ -19,5 +19,5 @@
 1. 扩展 `buildAgentWorkflowRunScopeReceipt()`，加入本地门禁资格判断。
 2. 在 Options 页传入当前保存样例是否有基线、输入是否仍对齐保存样例、当前 Agent 配置是否匹配基线。
 3. 更新 targeted verifier 和 Options E2E，覆盖无保存基线、门禁可用、配置变更、结果过期等状态。
-4. 更新 `docs/features/agent_workflow.md` 和 `docs/features/index.md`，保持文档和代码一致。
+4. 更新 `docs/features/message_analysis.md` 和 `docs/index.md`，保持文档和代码一致。
 5. 运行 `verify:agent-workflow`、`npm start` 首次成功编译、Options E2E 和 scoped `git diff --check`。

@@ -3,7 +3,7 @@
 ## 目标功能
 
 - 随机抽中：`回复助手来源适配` / Compose Assist。
-- Source of truth：`docs/features/compose_assist.md`。
+- Source of truth：`docs/features/assist.md`。
 - 代码入口：`src/composer-guard/siteContextAdapters.ts`、`src/composer-guard/assistPreviewPolicy.ts`、`src/composer-guard/ComposerGuardController.ts`。
 
 ## 当前观察
@@ -30,7 +30,7 @@
    - `siteContextAdapters.test.ts` 覆盖 helper。
    - `ComposerGuardController.test.ts` 覆盖新回执文案。
    - `tools/verify-compose-assist-direct-insert-e2e.mjs` 断言 ChatGPT 请求不再包含 `chatgpt`。
-5. 更新 `docs/features/compose_assist.md`，记录前端 allowlist 已先排除当前目标 provider。
+5. 更新 `docs/features/assist.md`，记录前端 allowlist 已先排除当前目标 provider。
 
 ## 验证
 

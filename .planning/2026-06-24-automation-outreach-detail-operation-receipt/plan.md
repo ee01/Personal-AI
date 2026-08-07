@@ -17,5 +17,5 @@
 1. Add an inline operation result receipt to `OutreachSessionDetail.vue` so approve/retry/cancel/save failures are visible in the page instead of only in console or alerts.
 2. On success, show the returned/current status and state that approval/retry/cancel/save does not prove a RingCentral send, reply, profile write, or external sync unless the session status/event shows it.
 3. Extend `verify-outreach-sessions-e2e.mjs` with pending-approval detail coverage for approve failure and approve success receipts.
-4. Update `docs/features/memory_system.md` with the concise current behavior.
+4. Update `docs/memory_system.md` with the concise current behavior.
 5. Verify with the targeted Outreach E2E, dev compile, and scoped whitespace check.

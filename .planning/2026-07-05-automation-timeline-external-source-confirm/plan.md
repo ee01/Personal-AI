@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `时间轴/搜索安全跳转`
-- Canonical doc: `docs/features/memory_system.md`
+- Canonical doc: `docs/memory_system.md`
 - UI/code: `src/modals/components/TimelinePage.vue`, `src/modals/timelinePresentation.ts`
 
 ## Research Notes
@@ -19,7 +19,7 @@
 2. Change only Timeline cards whose only safe navigation target is an external `sourceUrl`: card click should show a confirmation/boundary receipt instead of opening a new tab.
 3. Keep explicit `打开来源` as the only external-open action, preserving `noopener,noreferrer`.
 4. Update the focused verifier and E2E fixture with a source-only safe row to prove card click does not call `window.open`, while the explicit button still does.
-5. Update `docs/features/memory_system.md` with the current user-visible behavior.
+5. Update `docs/memory_system.md` with the current user-visible behavior.
 
 ## Reminder Outcome
 

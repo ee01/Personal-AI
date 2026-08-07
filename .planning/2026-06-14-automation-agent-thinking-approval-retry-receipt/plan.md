@@ -15,7 +15,7 @@ Goal: improve the randomly selected `Agent Thinking 工具审批` feature by kee
 
 ## Decisions
 
-- Selected feature: `Agent Thinking 工具审批` from `docs/features/index.md`.
+- Selected feature: `Agent Thinking 工具审批` from `docs/index.md`.
 - Avoided the first random pick, `Desktop Local ASR / Whisper fallback`, because a recent `.planning/2026-06-13-automation-desktop-local-asr-fallback/` directory already exists.
 - Source doc: `docs/features/agent_thinking.md`.
 - Local Reminders are readable, but there is no visible `Personal AI` list; no Reminder item can be incorporated or marked done.

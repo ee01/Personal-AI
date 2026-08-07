@@ -6,7 +6,7 @@ Goal: improve `NC 加会浏览器回退` by keeping docs current, using external
 
 | Phase | Status | Scope |
 | --- | --- | --- |
-| 1 | completed | Read `AGENT.md`, stale planning state, automation memory, `docs/progressing/to-verify.md`, and `docs/features/index.md` |
+| 1 | completed | Read `AGENT.md`, stale planning state, automation memory, `docs/progressing/to-verify.md`, and `docs/index.md` |
 | 2 | completed | Select `NC 加会浏览器回退` after rerolling away from fresh Relationship Radar targets |
 | 3 | completed | Inspect `docs/features/meeting_native_join.md`, Native Join source, Video Home integration, and E2E verifier |
 | 4 | completed | Check local Reminders with AppleScript plus EventKit fallback |

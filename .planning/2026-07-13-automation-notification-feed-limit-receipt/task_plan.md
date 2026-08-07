@@ -28,5 +28,5 @@
 2. Sanitize direct service `limit` input so `NaN`, fractional, zero, and out-of-range values cannot leak into SQL `LIMIT`.
 3. Update the extension client type for the new meta receipt.
 4. Add targeted backend tests for default, exact, upper-clamped, lower-clamped, and non-finite direct-service limits.
-5. Update `docs/features/notification_center.md` and the `docs/features/index.md` row concisely.
+5. Update `docs/features/notification_center.md` and the `docs/index.md` row concisely.
 6. Verify with the Notification Center test file, `npm start` first compile, notification E2E, and scoped diff checks.

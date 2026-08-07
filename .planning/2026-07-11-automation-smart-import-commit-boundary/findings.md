@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Automation request: randomly pick one `docs/features/index.md` feature, verify docs/code freshness, do industry/paper research, plan first, implement, update docs, test thoroughly, and close related Reminders if any.
+- Automation request: randomly pick one `docs/index.md` feature, verify docs/code freshness, do industry/paper research, plan first, implement, update docs, test thoroughly, and close related Reminders if any.
 - Selected feature: `智能资料录入` under Memory Coverage Map (`docs/features/memory_coverage_map.md`).
 - Reminder result: EventKit found `Personal AI` with 4 total items and 0 incomplete items; all completed items are historical Doubao / notification feedback and unrelated to smart import.
 

@@ -2,7 +2,7 @@
 
 ## 2026-07-07
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory registry snippets.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory registry snippets.
 - Randomly selected `Snooze 快速时间菜单` from viable non-recent feature rows.
 - Checked EventKit Reminders: `Personal AI` list has 4 total items, all completed, no related open feedback.
 - Inspected Message Reaction docs, `MessageReactionUI.ts`, `snoozeQuickMenuPresentation.ts`, current E2E coverage, and static translations.

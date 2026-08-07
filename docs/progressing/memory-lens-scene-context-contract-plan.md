@@ -387,7 +387,7 @@ npm start
 
 - 把 `current_page_field_echo` 改名或迁移为正式 `visible_fact_echo` policy。
 - 删除只服务单个字段的 ad hoc 文本比较。
-- 更新 `docs/features/memory_lens.md`、`docs/features/memory_system.md`、`docs/features/compose_assist.md`。
+- 更新 `docs/features/memory_lens.md`、`docs/memory_system.md`、`docs/features/assist.md`。
 - 在 eval report 中保留 MTR-148115 类似案例的解释路径。
 
 ## 风险和边界
@@ -448,8 +448,8 @@ scene.userMode in ['focus_composer', 'compose', 'reply', 'comment']
 - `evals/cases/estimate-cue-compiler/cases.jsonl`
 - `evals/workflows/estimate-cue-compiler/experience.md`
 - `docs/features/memory_lens.md`
-- `docs/features/memory_system.md`
-- `docs/features/compose_assist.md`
+- `docs/memory_system.md`
+- `docs/features/assist.md`
 
 ## 用户真实体验案例
 

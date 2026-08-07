@@ -2,7 +2,7 @@
 
 ## 2026-06-04
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory state, relevant memory registry hints, existing planning files, and the planning-with-files skill.
+- Read `AGENT.md`, `docs/index.md`, automation memory state, relevant memory registry hints, existing planning files, and the planning-with-files skill.
 - Randomly selected `NC 加会浏览器回退` from the feature index.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found, so no reminder items can be incorporated or completed.
 - Confirmed current dirty worktree is broad but has no Native Join file diff.

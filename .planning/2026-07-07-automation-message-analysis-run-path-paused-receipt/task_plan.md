@@ -31,4 +31,4 @@ Improve the manual Message Analysis rule UX so users can see, at the rule-creati
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/modals/__tests__/topicRuleSafety.test.ts`
 - `npm start -- --progress` until first successful compile, then stop.
 - `node tools/verify-message-analysis-rule-diagnostics-e2e.mjs`
-- `git diff --check -- .planning/.active_plan .planning/2026-07-07-automation-message-analysis-run-path-paused-receipt src/modals/topic-modal.tsx tools/verify-message-analysis-rule-diagnostics-e2e.mjs docs/features/message_analysis.md docs/features/index.md`
+- `git diff --check -- .planning/.active_plan .planning/2026-07-07-automation-message-analysis-run-path-paused-receipt src/modals/topic-modal.tsx tools/verify-message-analysis-rule-diagnostics-e2e.mjs docs/features/message_analysis.md docs/index.md`

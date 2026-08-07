@@ -1,4 +1,50 @@
-import type { JqlHints, RoadmapItem, RoadmapSub } from '../types';
+import type {
+  ActivityEntry,
+  JqlHints,
+  PhaseKind,
+  RoadmapItem,
+  RoadmapMarker,
+  RoadmapSub,
+} from '../types';
+import { addD, fmtISO, parseDate } from './useGeometry';
+
+/** ticker 忽略的低信息量操作（含已废弃的 expand/collapse） */
+export const TICKER_NOISE_OPS = new Set([
+  'lock',
+  'unlock',
+  'expand',
+  'collapse',
+]);
+
+/**
+ * 取最新一条「其他人」的有效日志；没有则 null（ticker 隐藏）。
+ * `activity` 假定按时间倒序（最新在前）。
+ */
+export function pickTickerEntry(
+  activity: ActivityEntry[],
+  selfClientId: string,
+): ActivityEntry | null {
+  for (const entry of activity) {
+    if (entry.actorClientId === selfClientId) continue;
+    if (TICKER_NOISE_OPS.has(entry.op)) continue;
+    return entry;
+  }
+  return null;
+}
+
+/**
+ * ticker 动作文案：去掉后端 text 里重复的 actor 名前缀，超长截断。
+ * 主任务缩写已由服务端 `renderActivityText`（alias || title）写进 text。
+ */
+export function tickerLabel(entry: ActivityEntry, maxLen = 72): string {
+  const who = String(entry.actorName || '').trim();
+  let action = String(entry.text || '').trim();
+  if (who && action.startsWith(who)) {
+    action = action.slice(who.length).trimStart();
+  }
+  if (action.length <= maxLen) return action;
+  return `${action.slice(0, Math.max(0, maxLen - 1))}…`;
+}
 
 /** Used when talking to a server that predates `team.jqlHints`. */
 export const EMPTY_JQL_HINTS: JqlHints = {
@@ -8,6 +54,64 @@ export const EMPTY_JQL_HINTS: JqlHints = {
   linkField: null,
   confident: false,
 };
+
+export const PHASE_DEFS: Record<
+  PhaseKind,
+  { label: string | null; glyph: string; color: string }
+> = {
+  design: { label: 'Design', glyph: 'D', color: '#6D4FA3' },
+  stage: { label: 'Stage', glyph: 'S', color: '#0684BC' },
+  production: { label: 'Production', glyph: 'P', color: '#2E8540' },
+  custom: { label: null, glyph: '★', color: '#8B93A0' },
+};
+
+/** 缺 ETA 的依赖数（角标是否红色脉动） */
+export function pendingDepCount(
+  item: Pick<RoadmapItem, 'markers'>,
+): number {
+  return (item.markers || []).filter((m) => m.kind === 'dep' && !m.date).length;
+}
+
+/** 全部外部依赖（含无 ETA） */
+export function depMarkers(item: Pick<RoadmapItem, 'markers'>): RoadmapMarker[] {
+  return (item.markers || []).filter((m) => m.kind === 'dep');
+}
+
+/** 标记轨上可渲染的 markers（phase 全部 + 有 date 的 dep），按 date 升序 */
+export function trackMarkers(
+  item: Pick<RoadmapItem, 'markers'>,
+): RoadmapMarker[] {
+  return (item.markers || [])
+    .filter((m) => m.kind === 'phase' || Boolean(m.date))
+    .slice()
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+/** 新 phase 的默认日期：bar end + 7 + phases.length*7（与 demo 一致） */
+export function defaultPhaseDate(
+  item: Pick<RoadmapItem, 'start' | 'days' | 'markers'>,
+): string {
+  const start = item.start ? parseDate(item.start) : new Date();
+  const days = item.days || 1;
+  const base = addD(start, days - 1);
+  const phaseCount = (item.markers || []).filter((m) => m.kind === 'phase').length;
+  return fmtISO(addD(base, 7 + phaseCount * 7));
+}
+
+export function phaseGlyph(marker: RoadmapMarker): string {
+  if (marker.phaseKind === 'custom') {
+    return (marker.label.trim()[0] || '★').toUpperCase();
+  }
+  return PHASE_DEFS[marker.phaseKind || 'custom']?.glyph || '★';
+}
+
+export function phaseColor(marker: RoadmapMarker): string {
+  return PHASE_DEFS[marker.phaseKind || 'custom']?.color || '#8B93A0';
+}
+
+export function jiraBrowseUrl(jiraKey: string, base = 'https://jira.ringcentral.com'): string {
+  return `${base.replace(/\/$/, '')}/browse/${encodeURIComponent(jiraKey)}`;
+}
 
 /**
  * An item is a draft exactly while no Jira issue exists for it.
@@ -193,7 +297,7 @@ export interface DraftGroup {
 export function buildDraftGroups(items: RoadmapItem[]): DraftGroup[] {
   const groups: DraftGroup[] = [];
   for (const item of items) {
-    const subs = item.subs.filter((s) => s.temp);
+    const subs = item.subs.filter((s) => s.temp && !s.cleared);
     if (!subs.length && !isDraftItem(item)) continue;
     groups.push({ item, subs });
   }

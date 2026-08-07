@@ -9,7 +9,7 @@
 
 ### Actions Taken
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, memory registry hints, root planning files, and `docs/progressing/to-verify.md`.
+- Read `AGENT.md`, `docs/index.md`, automation memory, memory registry hints, root planning files, and `docs/progressing/to-verify.md`.
 - Initialized isolated planning files under `.planning/2026-06-07-automation-random-feature-2026-06-07`.
 - Randomly selected `会议历史归档` under Meeting Pilot, avoiding the recent automation targets listed in automation memory.
 - Checked local Reminders lists; no `Personal AI` list was visible.

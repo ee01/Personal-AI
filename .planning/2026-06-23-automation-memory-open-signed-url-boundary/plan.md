@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `时间轴/搜索安全跳转`
-- Source of truth: `docs/features/memory_system.md`
+- Source of truth: `docs/memory_system.md`
 - Primary code: `src/modals/searchResultPresentation.ts`, `src/modals/components/TimelinePage.vue`, `src/modals/components/SearchResultPage.vue`
 
 ## Current State

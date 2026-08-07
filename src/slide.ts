@@ -628,6 +628,7 @@ export async function applyProjectUpdates(
 // 这里的导出是为了向后兼容，避免大规模修改现有代码
 
 import { 
+  GOOGLE_AUTH_SCOPE_SETS,
   getGoogleAuthToken, 
   getGoogleAuthTokenSilently 
 } from './utils/googleAuth';
@@ -638,7 +639,10 @@ import {
  * @returns OAuth token
  */
 export async function getAuthToken(): Promise<string | null> {
-  return getGoogleAuthToken({ caller: 'slide.getAuthToken' });
+  return getGoogleAuthToken({
+    caller: 'slide.getAuthToken',
+    scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
+  });
 }
 
 /**
@@ -648,7 +652,10 @@ export async function getAuthToken(): Promise<string | null> {
  * @returns OAuth token，如果没有缓存则返回 null
  */
 export async function getCachedAuthToken(): Promise<string | null> {
-  return getGoogleAuthTokenSilently({ caller: 'slide.getCachedAuthToken' });
+  return getGoogleAuthTokenSilently({
+    caller: 'slide.getCachedAuthToken',
+    scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
+  });
 }
 
 /**

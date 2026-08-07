@@ -18,7 +18,7 @@ Goal: improve the randomly selected `Agent Workflow 运行诊断` feature by che
 ## Decisions
 
 - Selected feature: `Agent Workflow 运行诊断`.
-- Source doc: `docs/features/agent_workflow.md`.
+- Source doc: `docs/features/message_analysis.md`.
 - Main implementation surface: `src/options.tsx` with diagnostics helpers in `src/agentWorkflowDiagnostics.ts`.
 - Existing verifier surface: `npm run verify:agent-workflow`, `tools/verify-agent-workflow-options-e2e.mjs`, and `npm start` first successful compile.
 - Reminder result: EventKit found `Personal AI`, but all 4 items are completed historical Doubao/notification items and unrelated to Agent Workflow diagnostics.

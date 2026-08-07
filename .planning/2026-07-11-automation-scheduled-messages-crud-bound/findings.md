@@ -2,7 +2,7 @@
 
 ## Requirements
 - Follow the `personal-ai` random-feature automation loop.
-- Keep `docs/features/index.md` and the target feature document current without excessive detail.
+- Keep `docs/index.md` and the target feature document current without excessive detail.
 - Search comparable products and research for constructive guidance.
 - Implement any low-decision unfinished/UX/code improvement.
 - Check code quality, bugs, blocking operations, and user experience.
@@ -38,7 +38,7 @@
 
 ## Resources
 - `AGENT.md`
-- `docs/features/index.md`
+- `docs/index.md`
 - `docs/features/scheduled_messages_manager.md`
 - `${CODEX_HOME:-$HOME/.codex}/automations/automation/memory.md`
 - Slack scheduled messages: https://slack.com/help/articles/201457107-Send-and-read-messages

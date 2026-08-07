@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮从 `docs/features/index.md` 随机落到 Message Reaction 的 `关注后续 / Watch`。近期自动化已经覆盖自动答复、Snooze、Glip marker 和手动规则边界，本轮只补 Watch 管理页里“后续命中之后到底发生了什么”的可见性。
+本轮从 `docs/index.md` 随机落到 Message Reaction 的 `关注后续 / Watch`。近期自动化已经覆盖自动答复、Snooze、Glip marker 和手动规则边界，本轮只补 Watch 管理页里“后续命中之后到底发生了什么”的可见性。
 
 ## 外部参考
 

@@ -29,7 +29,7 @@
 - `core/weaveStats.ts` `buildWeaveStats`（sourceCount/sourceKinds/daySpanDays/entityCount/crossSource，阈值 ≥2 来源或 ≥7 天，纯函数零额外查询）。
 - `/ask` 顶层 `weave`（已加进 200 响应 schema 防 strip）；`/context-recall` 顶层 `weave`（基于 matches）。`crossSource=false` 时整字段省略。
 - 测试：`weaveStats.test.ts`（6）+ `api-context-recall-weave.test.ts`（2）。已部署到 10.32.56.212；线上 mThor 查询实测 `weave={sourceCount:5,…,daySpanDays:99,crossSource:true}`；记忆六能力体检 6/6 无回归。
-- 文档：`docs/features/memory_system.md`「缝合可感知」。
+- 文档：`docs/memory_system.md`「缝合可感知」。
 - **前端徽章已落地（2026-06-17）**：搜索 Ask 结果页 `SearchResultPage.vue`（读 `askResult.weave`，答案下方「⊕ 缝合 N 来源 × M 天」）+ Memory Lens 浮窗 `contentScriptWebIntelligence.ts`（meta-row weave chip，由展示 matches 客户端计算）。client 类型加 `weave`。webpack 编译通过。
 - **仍未做（P1）**：通知中心「依据」行（依赖 notification evidence 列 migration，归 proactivity-cost-asymmetry-plan）；桌面 quick-ask 徽章（需穿过 SSE 流事件）；per-item ⚠ 标记；P2 解释链路（依赖 PPR diagnostics）。
 

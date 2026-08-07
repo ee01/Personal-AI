@@ -3,7 +3,7 @@
 ## Local State
 
 - `docs/progressing/to-verify.md` says `暂无`.
-- Random selection chose `Agent Thinking 工具审批` from `docs/features/index.md`.
+- Random selection chose `Agent Thinking 工具审批` from `docs/index.md`.
 - `docs/features/agent_thinking.md` is current and already documents approval key exact matching, review packages, retry config, diagnostic packages, trace navigation, and no-effect boundaries.
 - Current UI has durable freshness receipts for diagnostic package copy, but approval key / review package / retry config copy only shows a short transient status. The user can lose the first-screen confirmation of what clipboard content currently represents.
 

@@ -2,7 +2,7 @@
 
 ## 2026-06-04 Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `Storyline Draft 页面`.
+- Randomly selected feature from `docs/index.md`: `Storyline Draft 页面`.
 - Feature owner/capability: Memory Storyline Builder.
 - Source document: `docs/features/memory_storyline_builder.md`.
 - Local Reminders list scan returned no list named `Personal AI`; no relevant Reminder feedback is available for this run.

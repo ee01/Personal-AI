@@ -10,7 +10,7 @@ Goal: improve `人脉关系 Assistant Draft` by checking docs and code, incorpor
 | 2 | completed | Check local Reminders `Personal AI` list and external product/research references for relationship-aware draft assistance |
 | 3 | completed | Inspect Relationship Radar docs, Assistant Draft service/UI path, and existing API/E2E verifier coverage |
 | 4 | completed | Implement button-level generate/copy preflight boundaries and update E2E assertions |
-| 5 | completed | Update `docs/features/relationship_radar.md` and the Assistant Draft row in `docs/features/index.md` |
+| 5 | completed | Update `docs/features/relationship_radar.md` and the Assistant Draft row in `docs/index.md` |
 | 6 | completed | Run targeted API tests, webpack dev compile, E2E, and scoped diff checks |
 | 7 | completed | Update automation memory and close out Reminder state honestly |
 

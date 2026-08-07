@@ -7,7 +7,7 @@ Goal: improve the randomly selected `Popup Top 3` feature so its docs match curr
 | Phase | Status | Scope |
 | --- | --- | --- |
 | 1 | completed | Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, feature index, worktree state, and Reminders list names |
-| 2 | completed | Select a non-recent random feature from `docs/features/index.md` and inspect current docs/code/verifiers |
+| 2 | completed | Select a non-recent random feature from `docs/index.md` and inspect current docs/code/verifiers |
 | 3 | completed | Search current industry product references and related research for daily brief / proactive summary UX |
 | 4 | completed | Implement a focused Popup Top 3 refresh-failure snapshot receipt |
 | 5 | completed | Update feature docs and verifier/E2E assertions |

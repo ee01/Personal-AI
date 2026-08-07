@@ -341,9 +341,9 @@ npm run eval:run -- --suite desktop-selection-memory-capsule --no-repair
 - 如果 Desktop App 侧成为独立入口，新增 `desktop-app/docs/features/desktop_selection_memory_capsule.md`。
 - 在 `desktop-app/docs/features/doubao_bridge.md` 或现有 Quick Ask 文档中补充“桌面入口与 Quick Ask 的关系”，避免用户误以为胶囊会写入豆包线程或移动上下文线程。
 - 在 `docs/features/memory_capture.md` 补 `desktop_selection` source-memory 保存边界。
-- 在 `docs/features/memory_lens.md` 或 `docs/features/memory_system.md` 补 `surface='desktop_selection_capsule'` 的 recall 规则。
-- 在 `docs/features/compose_assist.md` 补外部 AI prompt patch 的复制边界：只复制，不插入，不发送。
-- 更新 `docs/features/index.md`，把该能力归到桌面入口、记忆召回、资料保存、外部 AI context 四个索引点。
+- 在 `docs/features/memory_lens.md` 或 `docs/memory_system.md` 补 `surface='desktop_selection_capsule'` 的 recall 规则。
+- 在 `docs/features/assist.md` 补外部 AI prompt patch 的复制边界：只复制，不插入，不发送。
+- 更新 `docs/index.md`，把该能力归到桌面入口、记忆召回、资料保存、外部 AI context 四个索引点。
 
 如果后续实现并验收通过，应删除本 `docs/progressing` plan，并把 demo 移到 `docs/demo/` 或保留为 release demo。
 

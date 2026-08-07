@@ -10,7 +10,7 @@ Complete
 
 ### Phase 1: Requirements & Discovery
 - [x] Read automation memory, AGENT.md, feature index, carry-over to-verify, and local Reminder lists
-- [x] Randomly select a non-recent feature from docs/features/index.md
+- [x] Randomly select a non-recent feature from docs/index.md
 - [x] Inspect relevant Project Dashboard docs, code, and verification scripts
 - [x] Check external product and paper direction
 - **Status:** complete
@@ -45,7 +45,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `项目数据源检查` under Project Dashboard | Randomly selected from docs/features/index.md after excluding recent automation targets. |
+| Target `项目数据源检查` under Project Dashboard | Randomly selected from docs/index.md after excluding recent automation targets. |
 | Do not add real Jira/GitHub/Confluence sync | Current product boundary explicitly says external sync is not connected; this run should improve trust/UX without overclaiming authority. |
 | Promote local evidence quality to a top-level receipt | Source cards already show detailed diagnostics, but the panel header does not give a direct action when Memory Service is readable yet local ETA/source coverage is poor. |
 

@@ -5,11 +5,16 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-07-13*
+*最后更新: 2026-08-03*
 
 ## 功能概述
 
-Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira 原生 Designs 区块、remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma/FigJam/Figma Slides、Miro、Loom、Google Slides、Zeplin 和 UX 项目 ticket 上维护的设计链接，并在 Jira summary 下方用紧凑面板逐条展示设计入口、UX ticket、可行动设计状态、设计更新时间、UX Epic 状态和 ETA。
+Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira 原生 Designs 区块、remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma/FigJam/Figma Slides、Miro、Loom、Google Slides、Zeplin 和 UX 项目 ticket 上维护的设计链接，并在 Jira summary 下方用紧凑面板**逐条展示具体设计入口**（一行一个 link），附带 UX ticket、可行动设计状态、设计更新时间、UX Epic 状态和 ETA。面板**不展示** `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 这类汇总摘要行；过滤计数等边界信息只保留在 footer 或具体行内标签。
+
+额外展示约束：
+
+1. **同项目不展示**：目标 UX ticket 与当前 issue 同项目时不展示（例如在 `RCV-xxx` 上不会把同项目 `RCV-*` 当成设计依赖）。
+2. **最多 5 条**：按渠道排序后截断。渠道优先级为 **当前票直连（description / remote link / Jira Designs）> linked issues（含 epic 关联）> parent / INIT**；同渠道内继续按行动状态与更新时间排序；parent 通道有多条时 **closed/done 优先**。
 
 ## 大白话运行逻辑
 
@@ -18,11 +23,11 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 结果主要受这些因素影响：
 
 1. 当前 ticket 本身的链接最直接：description、原生 Designs 区块和 remote links 会优先给出明确入口。
-2. UX ticket 关联质量：linked issue、Epic、Parent 能不能找到 UX 项目 ticket，决定能不能补充缺失设计入口；当 Jira DOM 只暴露 query 参数、`jql` 过滤条件、属性或纯文本 key 时，面板会先显示 `恢复范围` 总览和本页实际恢复来源分布，query 来源会细分为 `selectedIssue query`、`issueKey query` 或 `JQL query`，再在具体行显示 key 来源回执和 `只读恢复` 边界，而不是把弱回退伪装成标准链接或已经写入的 Jira 关系；如果 URL path 是普通开发票、query 里才有 UX 票，也会按配置的设计项目选择 UX key，并在恢复总览中说明同一 DOM 片段里有多少非设计项目候选被忽略。
+2. UX ticket 关联质量：linked issue、Epic、Parent（通常是 INIT）能不能找到 UX 项目 ticket，决定能不能补充缺失设计入口。查找路径与 Backend Progress 类似：当前票 linked issues → 上级 Epic 的 linked/subtask/child → Epic 的 Parent Link（INIT）下的 UX ticket。当 Jira DOM 只暴露 query 参数、`jql` 过滤条件、属性或纯文本 key 时，具体行会显示 `Key from ...` 和 `只读恢复` 边界，而不是把弱回退伪装成标准链接或已经写入的 Jira 关系；面板顶部不再渲染 `恢复范围` 总览行。
 3. 域名白名单：只有 Figma、Miro、Loom、Google Slides、Zeplin 或配置过的设计域名会被当成设计链接；Miro 只收 board / live-embed 路径，Loom 只收 share / embed 路径，避免官网、帮助、博客、价格页误占交付入口。
-4. 设计状态字段：remote link / UX ticket 上有状态、更新时间、ETA 时，面板才会显示更强行动提示；如果 remote link 的 `object.url` 不是设计链接，也会从 encoded `globalId`、status icon link 或跳转 URL 参数里保守补找可信设计 URL。若来源只给了 `Design updated` 状态但没有可用更新时间，会展示 `更新时间缺失`，不把缺失日期伪装成普通已更新行；若多个更新时间字段并存，会展示最新有效日期，并用可见短标签说明该日期来自 status、object 还是 remote link 元数据，hover/读屏文案继续保留完整来源；只要本页有更新时间信号或缺时间的 Design updated 行，面板顶部会显示 `复查范围`，汇总更新时间信号数量、最新有效日期、最新来源口径和缺时间数量，提醒开始实现前复查设计，但不刷新 Figma、不编辑 Jira，也不确认已经复核。
-5. 去重与安全过滤：同一 Figma 文件/节点、encoded URL、重复链接会被合并；非 http/https 链接不会展示。面板首屏先显示 `扫描口径`，说明当前行只是 Jira 页面和只读 Jira API 可见的交付入口批次，不会刷新 Figma/Zeplin、枚举私有设计文件、创建/编辑 Jira 链接或标记设计已复查。Figma Community / help / marketing、Zeplin marketing / profile / project settings 这类看起来像设计工具但不是交付资源的 URL 不会变成设计行；即使它们来自 UX ticket 的设计链接字段，也不会因为该字段允许内部 generic http(s) 入口而降级成 `Design link`。如果同一面板里有真实设计入口，会先显示 `过滤范围` 回执，并在 footer 保留已过滤的 non-handoff refs、过滤来源分布和过滤原因分布，例如 Description、Design field、Figma Community、Zeplin settings；当过滤项包含 UX ticket 设计字段时，首屏额外显示 `设计字段被过滤`，说明字段已扫描但只剩非交付链接时仍保留 `Missing link`，方便用户知道这是有意剔除，不是漏扫或隐藏有效设计；如果本页只发现这类非交付设计工具链接，也会显示 `未找到交付设计入口`、过滤来源、过滤原因、设计字段过滤和 `只读扫描` 回执，而不是静默不显示。
-6. 打开链接只是打开来源：设计入口、UX ticket 或 UX Epic 链接的 hover / 读屏文案会先说明目标、来源、待复查更新时间、恢复候选来源和只读边界；点击后原 Jira 页会留下 `来源打开回执`，显示刚打开的目标、来源通道和 `只读打开` 边界。如果点击的是带更新时间或缺时间状态的设计入口，回执会继续带上 `待复查` 日期、更新时间来源或 `更新时间缺失`，并说明打开不等于已核对最新更新；如果点击的是非标准 DOM 证据恢复出的 UX ticket，回执会继续显示 `Key from ...`、`恢复候选打开` 和候选关系边界，避免把能打开 ticket 误读成 Jira 已存在正式 issue link。这不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。
+4. 设计状态字段：remote link / UX ticket 上有状态、更新时间、ETA 时，对应设计行会显示行动提示和日期标签；若来源只给了 `Design updated` 状态但没有可用更新时间，会展示 `更新时间缺失`。面板顶部不再渲染 `复查范围` 汇总行。
+5. 去重与安全过滤：同一 Figma 文件/节点、encoded URL、重复链接会被合并；非 http/https 链接不会展示。面板首屏**直接展示具体设计/UX 行**，不显示 `扫描口径` 或 `过滤范围` 汇总；被过滤的 non-handoff refs、过滤来源/原因仍可在 footer 看到。如果本页只发现非交付设计工具链接，会显示一行 `未找到交付设计入口`，而不是静默不显示。
+6. 打开链接只是打开来源：设计入口、UX ticket 或 UX Epic 链接的 hover / 读屏文案会先说明目标、来源、待复查更新时间、恢复候选来源和只读边界；点击后原 Jira 页会留下 `来源打开回执`。这不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。
 
 ## 主要功能
 
@@ -30,11 +35,11 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 2. **可配置 UX 项目识别**：默认使用 `UX*` 前缀模式，也支持通过 `DESIGN_JIRA_PROJECT` 改为 `UX` 这类精确匹配；配置会自动处理首尾空格和大小写差异。
 3. **自定义设计域名识别**：通过 `DESIGN_LINK_DOMAINS` 补充内部原型、设计系统或交付站点域名；精确域名只匹配该 host，`*.example.com` 只匹配子域名。
 4. **层级关联分析**：Epic 和非 Epic ticket 都会尝试向上查找相关 UX ticket。
-5. **稳定展示**：在 Jira summary 下方展示紧凑面板，长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
+5. **稳定展示**：在 Jira summary 下方逐条展示具体设计入口（一行一个），长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；**不渲染** `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 汇总摘要行。Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
 6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态和更新时间；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色，Jira/Figma 的 `Changed`/过期类状态会统一呈现为 `Design updated`。
 7. **可行动状态展示**：逐条展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的状态，并用左侧状态扫描线降低多链接场景下的识别成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
-8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前，避免开发者误以为没有设计依赖；如果 key 来自 query 参数（细分 `selectedIssue` / `issueKey` / `jql` 里的 issue key）、`data-issue-key`、`aria-label` 或纯文本，面板会显示恢复候选总数、实际来源分布和 `恢复范围`，具体行会额外显示 `Key from ...` 和 `只读恢复` 回执，说明 Personal AI 只是展示候选，不会创建/编辑 Jira issue links、设计字段或关联关系，也不证明这是正式 Jira 关联；点击这些恢复候选后，打开回执仍保留恢复来源和候选边界。
-9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签；Figma 文件/节点链接会按稳定设计身份去重，避免 Jira encoded URL、描述中的可读 URL 或分享参数差异把同一设计展示成多行。
+8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前；如果 key 来自非标准 DOM 恢复，具体行会显示 `Key from ...` 和 `只读恢复`，面板顶部不再显示 `恢复范围` 总览。
+9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签；Figma 文件/节点链接会按稳定设计身份去重。
 
 ## 使用方法
 
@@ -93,17 +98,19 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 ### 5. Epic 层级分析
 - **当前票为Epic时**：
   - 直接从Epic中查找UX related issues
-  - 检查Epic的Parent Link下的UX tickets
-- **当前票非Epic时**：
+  - 检查Epic的Parent Link（通常是 INIT）下的UX tickets（issue links / subtasks / portfolio children）
+- **当前票非Epic时（User Story / Task 等）**：
   - 查找上级Epic的UX linked issues
-  - 通过Epic的Parent Link查找相关UX tickets
+  - 通过Epic的Parent Link查找 INIT 下相关UX tickets
 
 ### 6. API 数据获取
 - 调用Jira REST API获取ticket详细信息
 - 提取UX tickets的customfield_21233字段（设计链接）
 - 读取 Jira remote links，作为比 description 更结构化的设计来源
-- 使用JQL查询获取child issues
+- 使用JQL查询获取child issues（`portfolioChildrenOf`）
 - 拉取 UX ticket 的summary、status、Epic Link、due date、fixVersion，用于补充上下文
+
+> Backend Progress（Early Build / Rollout）见独立文档 [jira_backend_progress.md](./jira_backend_progress.md)。
 
 ## 技术架构
 
@@ -176,17 +183,11 @@ interface FigmaLink {
 ### 基本样式
 - 使用浅灰背景和 Atlassian 风格蓝色链接，尽量贴近 Jira 页面本身。
 - 面板 hover 使用与 Backend ETA 卡片一致的轻微浮动和 footer 展开效果，不挤压页面内容。
-- 面板不做顶部开工判定、状态摘要或主行动推荐，因为真实设计入口可能分布在多个 UX ticket 中；用户直接扫描每一条 ticket/link 自行判断。
-- 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态，并在 hover 说明里提示先打开 UX ticket 补查/补齐交付入口，避免设计 ticket 标题占据扫描空间。
-- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`，同等行动状态下最近更新的设计会排在更前；旁边的 `状态时间` / `对象日期` / `链接时间` 等 chip 会把时间来源口径直接露出来，避免用户必须 hover 才知道这是 status、object 还是 remote-link 元数据。日期 hover 和屏幕阅读器标签会说明“如果实现已经开始，需要重新检查设计”。有具体时刻时会显示标准化 UTC 时间；只有日期时只按日级证据说明，避免把来源没有给出的时间精度说成确定事实；如果 Jira/Figma 同步了多个更新时间字段，tooltip 会标明当前采用的字段来源；若只能确认设计已更新、不能确认更新时间，会用灰色虚线 `更新时间缺失` 标签说明这是来源缺口。面板顶部的 `复查范围` 会把这些更新时间信号先汇总出来，并直接显示最新日期的来源口径，让用户不用逐行找 chip 才知道本页是否需要重新检查设计。
-- 点击设计入口、UX ticket 或 UX Epic 之前，链接本身的 `title` / `aria-label` 会先说明打开目标、来源通道、更新时间或恢复来源，以及只读打开、不刷新 Figma/Jira、不标记复查、不写 Jira/Memory Service 的边界；点击后面板内会出现 `来源打开回执`，保留同一批信息。如果打开的是有更新时间信号的设计入口，回执会保留 `待复查 YYYY-MM-DD`、时间来源 chip 或缺时间提示，防止用户回到 Jira 页后把“打开过”误读成“已经复查确认”；如果打开的是恢复候选 UX ticket，回执会继续显示恢复来源和候选关系边界，防止用户把“能打开”误读成“已建立正式 Jira 关联”。这个回执不会把点击解释成设计复查完成、Jira 关系写入、Figma/Jira 元数据刷新或 Memory Service 写入。
-- 每行会按状态添加轻量视觉扫描线：Ready、Updated、Missing/Not ready/Blocked、Review 使用不同边线和浅底色，普通链接保持中性样式。
-- Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。状态标签 hover 会说明它对开发者意味着什么，例如设计已变更时提示重新检查链接设计。
-- 重复链接合并时会优先保留 Jira remote link / Designs 提供的结构化标题和状态，UX ticket 行也会优先展示具体设计名，避免 description 或工具默认名覆盖真正可行动的设计状态。
-- 行内来源 tag 会优先显示更权威的来源，例如合并行显示 `Remote link, Linked issue`，而不是按内部合并顺序把关联票放在前面；hover 文案使用 `Source: ...` 人类可读格式，不暴露 `linked_issues` 这类内部 key。
-- 面板首屏会展示 `扫描口径`，把本次交付入口数量、来源通道、被过滤的非交付设计工具 URL 数量和只读边界放在所有设计行之前；这表示 Personal AI 只汇总本页和 Jira 只读 API 当前可见的 handoff 批次，不刷新 Figma/Zeplin、不枚举私有文件、不写 Jira，也不确认用户已经复查设计。
-- 面板 footer 和无障碍标签会展示紧凑来源摘要，例如 `8 entries · Remote link, Jira Designs, Linked issue, Description`，用于快速确认本次结果来自哪些扫描通道；如果 description / Jira Designs / remote link / UX ticket 设计字段里同时出现被过滤的 Figma/Zeplin 文档、社区、营销或设置链接，会在设计行上方显示 `过滤范围` 回执，并在 footer 保留 `filtered non-handoff refs`、`来源 Description 3, Remote link 1`、`原因 Figma Community 2, Zeplin non-resource project page 1` 和 `设计字段被过滤 1` 这类小标签，只解释过滤边界，不把这些 URL 展示成设计入口。若本页没有任何真实 handoff 行、但确实出现了这些设计工具 URL，会渲染一行 `未找到交付设计入口 / 仅过滤非交付链接 / 过滤来源 / 过滤原因 / 设计字段被过滤 / 只读扫描`，说明 Personal AI 只是读页面和 remote link，不创建或编辑 Jira 设计链接、issue link 或关联关系；当 UX ticket 字段只剩非交付链接时，UX ticket 行仍保留 `Missing link`。
-- 对非标准 linked issue key 恢复路径，面板会先显示 `恢复范围` 行、候选数量和实际来源分布，只列出本页真正用到的 query 参数、`data-issue-key`、ARIA label 或纯文本等非标准页面证据；如果同一 DOM 片段里还出现当前开发票、其他项目票或不匹配 `DESIGN_JIRA_PROJECT` 的 key，恢复范围会显示被忽略的非设计项目候选数量，并把过滤来源放进 hover/读屏说明；UX ticket 行会显示 `Key from selectedIssue query`、`Key from issueKey query`、`Key from JQL query`、`Key from data-issue-key`、`Key from ARIA label` 或 `Key from raw text`，并带 `只读恢复` 标签，让用户知道这张缺失设计链接卡片来自可见但不完整的 Jira 结构，而不是完整 remote link 或已经写入的 Jira 关联。
+- 面板不做顶部开工判定、状态摘要、主行动推荐，也**不渲染** `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 汇总行；首屏只逐条展示可点击设计入口和 UX ticket。
+- 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态。
+- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`；行内可显示 `状态时间` / `对象日期` / `链接时间` 等 chip。
+- 被过滤的 Figma/Zeplin 非交付 URL 计数、来源分布和原因分布保留在 footer，不占用首屏设计行。
+- 非标准恢复的 UX key 只在对应行显示 `Key from ...` 和 `只读恢复`，不再额外占用顶部总览行。
 
 ### 响应式设计
 - 多个设计链接垂直排列。
@@ -364,6 +365,8 @@ const PAGE_CHANGE_DELAY = 1000;
 57. 面板首屏新增 `扫描口径` 回执，显示当前 Jira 可见 handoff 批次、来源通道、过滤项数量和只读边界，避免用户把本地扫描结果误读成 Figma/Zeplin 的实时全量清单或 Jira 写回。
 58. 设计入口、UX ticket 和 UX Epic 链接的 hover / 读屏文案会在点击前说明只读打开、更新时间待复查、恢复候选关系和不刷新/不写入边界；点击后的 `来源打开回执` 只是把这次打开结果留在原 Jira 页。
 59. Miro / Loom 不再按 host 全量识别；只有 Miro board/live-embed 和 Loom share/embed 这类可交付路径会进入设计行，普通产品、帮助、博客、价格页不会被误显示成 handoff。
+60. 面板首屏改为只展示具体设计/UX 行（一行一个），不再渲染 `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 汇总摘要；过滤计数保留在 footer，行内状态/来源/Key from 标签不变。
+61. 同项目过滤：目标 UX ticket 与当前 issue 同项目时不展示；面板最多 5 条，渠道优先级为当前票直连（description / remote / Jira Designs）> linked / epic > parent，parent 多条时 closed 优先。
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。

@@ -2,7 +2,7 @@
 
 ## 2026-06-26
 
-- Read repo workflow rules in `AGENT.md`, random-loop skill memory, automation memory, `docs/progressing/to-verify.md`, `docs/features/index.md`, and current worktree status.
+- Read repo workflow rules in `AGENT.md`, random-loop skill memory, automation memory, `docs/progressing/to-verify.md`, `docs/index.md`, and current worktree status.
 - Checked local Reminders list names with AppleScript; no `Personal AI` list was present, so Reminder item processing stopped.
 - Selected `Notification Center / DigestQueueService 本地摘要` after avoiding the most recent exact automation targets.
 - Inspected `docs/features/notification_center.md`, `src/services/DigestQueueService.ts`, `src/types/digestQueue.ts`, `src/services/TaskScheduler.ts`, `src/popup.tsx`, and `tools/verify-digest-queue-service.ts`.

@@ -8,7 +8,7 @@
 
 ## 当前发现
 
-- `docs/progressing/to-verify.md` 暂无待接续事项；本轮从 `docs/features/index.md` 随机抽样后选中 `用户上下文注入`，并避开今天已覆盖的 Project Dashboard、Storyline、Action Queue、User Profile、Skill Foundry、Notification、Digest Queue 等精确目标。
+- `docs/progressing/to-verify.md` 暂无待接续事项；本轮从 `docs/index.md` 随机抽样后选中 `用户上下文注入`，并避开今天已覆盖的 Project Dashboard、Storyline、Action Queue、User Profile、Skill Foundry、Notification、Digest Queue 等精确目标。
 - 主文档已基本覆盖真实行为：用户上下文会按消息 / 项目范围裁剪，和自定义提示词一样以低优先级 `user_context` 数据块注入；配置页已有草稿 / 已生效基线、范围依据、注入回执、复制审计、敏感信息和保存阻塞回执。
 - 代码中 `renderInjectionControl()` 的“用户上下文”来源开关会立即改变当前页面预览，但开关区本身缺少一个就地待保存回执。用户如果刚关闭或重新开启来源，可能把当前预览状态误读成真实分析已经改用这个来源状态。
 - `tools/verify-custom-prompts.ts` 覆盖注入与 helper；`tools/verify-custom-prompts-e2e.mjs` 覆盖 Prompt Config 页面、范围切换、来源暂停、复制和安全门禁，是本轮最可靠的验证入口。
@@ -30,7 +30,7 @@ EventKit 找到本机 `Personal AI` Reminders 列表，合计 4 条，未完成 
 2. 回执区分“暂停待保存”和“开启待保存”，说明当前页面预览已经按草稿开关重算，但真实消息 / 项目 / 会议 / 文档分析仍读取已生效基线，保存后才会写入本机并尝试备份到记忆服务。
 3. 回执展示当前范围下用户上下文信号数量，说明这只是当前页面预览，不会保存配置、触发真实分析、融合画像或写入记忆服务。
 4. 更新 `tools/verify-custom-prompts-e2e.mjs`，覆盖关闭和重新开启“用户上下文”来源后的待保存回执。
-5. 更新 `docs/features/custom_prompts.md` 和 `docs/features/index.md` 的简短描述。
+5. 更新 `docs/features/custom_prompts.md` 和 `docs/index.md` 的简短描述。
 6. 验证：`node --check tools/verify-custom-prompts-e2e.mjs`、`npm run verify:custom-prompts`、`npm start -- --progress` 首次成功编译、`npm run verify:custom-prompts:e2e`、scoped `git diff --check`。
 
 ## 边界

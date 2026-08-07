@@ -4,7 +4,7 @@
 
 - Feature: `跟进追问 / Followup` under Message Reaction.
 - Source doc: `docs/features/message_reaction.md`.
-- Selected from a randomized `docs/features/index.md` sample after `docs/progressing/to-verify.md` was empty and very recent exact automation targets were avoided.
+- Selected from a randomized `docs/index.md` sample after `docs/progressing/to-verify.md` was empty and very recent exact automation targets were avoided.
 
 ## Current State
 
@@ -30,5 +30,5 @@
 1. Add a reusable Followup submit-boundary formatter that combines target, current run summary, and no-side-effect semantics.
 2. Wire the formatter into the dialog submit button `title` and `aria-label`, refreshing when interval or max-followup changes and during pending state.
 3. Extend the existing Followup presentation tests and `message-reaction-toolbar-check` E2E assertions.
-4. Update `docs/features/message_reaction.md` and the `docs/features/index.md` row concisely.
+4. Update `docs/features/message_reaction.md` and the `docs/index.md` row concisely.
 5. Verify with the focused Followup presentation test, `npm start` first successful compile, `node desktop-app/scripts/message-reaction-toolbar-check.mjs`, and scoped `git diff --check`.

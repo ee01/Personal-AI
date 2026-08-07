@@ -2,7 +2,7 @@
 
 ## Goal
 
-Randomly selected feature: `Agent Workflow` (`docs/features/agent_workflow.md`). Improve one scoped UX or correctness gap after checking docs, implementation, Reminder state, external references, and existing validation paths.
+Randomly selected feature: `Agent Workflow` (`docs/features/message_analysis.md`). Improve one scoped UX or correctness gap after checking docs, implementation, Reminder state, external references, and existing validation paths.
 
 ## Phases
 
@@ -24,7 +24,7 @@ Randomly selected feature: `Agent Workflow` (`docs/features/agent_workflow.md`).
 1. Add a persistent single-sample baseline writeback receipt after `接受当前结果为基线` / `建立当前结果基线`.
 2. Reuse the existing Agent Workflow baseline writeback visual style and keep the boundary explicit: only `chrome.storage.local.agentWorkflowSavedScenarios` changes; no Memory Service write, notification, rule automation, report export, test input overwrite, or raw-message export.
 3. Extend the Agent Workflow Options E2E to assert the new single-sample receipt.
-4. Update `docs/features/agent_workflow.md` to document the single-sample writeback boundary.
+4. Update `docs/features/message_analysis.md` to document the single-sample writeback boundary.
 
 ## Errors Encountered
 

@@ -44,4 +44,4 @@ Goal: improve the randomly selected `Figma/Zeplin 保守分类` feature by keepi
 - `tools/verify-jira-design-links.ts`
 - `tools/verify-jira-design-links-e2e.mjs`
 - `docs/features/jira_design_links.md`
-- `docs/features/index.md`
+- `docs/index.md`

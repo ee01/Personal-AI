@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: 梦境重放
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main UI: `src/modals/components/DreamInsights.vue`
 - Verifier: `tools/verify-memory-dreams-e2e.mjs`
 
@@ -23,7 +23,7 @@ Dream Replay already has strong read-only, grounding, notification, and Reflecti
 2. Add a compact card-level freshness receipt showing generated date, filename date, date basis, and read-only/staleness boundary.
 3. Keep sort/window behavior conservative: the recent-file window still comes from the existing user-file list, while per-card display clarifies the evidence basis.
 4. Update the Dream Replay E2E fixture and assertions to cover generated-date and filename-date disclosure, including missing generated-date fallback.
-5. Update `docs/features/memory_system.md` with the new user-visible freshness behavior.
+5. Update `docs/memory_system.md` with the new user-visible freshness behavior.
 
 ## Validation
 

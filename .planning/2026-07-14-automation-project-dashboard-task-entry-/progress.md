@@ -9,7 +9,7 @@
 
 ### Actions Taken
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and current git status.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and current git status.
 - Read planning skill instructions from `/Users/Esone/.agents/skills/planning-with-files/SKILL.md`.
 - Checked local `Personal AI` Reminders with EventKit: 4 total, 0 incomplete.
 - Randomized feature rows and selected `项目证据修复路径` in Project Dashboard.
@@ -19,7 +19,7 @@
 - Added `buildProjectTaskEntryBoundary()` in `src/components/dashboard/ProjectDashboard.tsx`.
 - Applied the boundary to cross-project `.focus-item` buttons and project-level `.project-alert` buttons through `title` and `aria-label`.
 - Added E2E assertions in `tools/verify-project-dashboard-e2e.mjs`.
-- Updated `docs/features/brain_like_project_analysis_system.md` and the `项目证据修复路径` row in `docs/features/index.md`.
+- Updated `docs/features/brain_like_project_analysis_system.md` and the `项目证据修复路径` row in `docs/index.md`.
 
 ### Test Results
 

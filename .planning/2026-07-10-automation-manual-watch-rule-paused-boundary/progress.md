@@ -2,7 +2,7 @@
 
 ## 2026-07-10
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, memory registry hits, and the random-feature workflow memory skill.
+- Read `AGENT.md`, `docs/index.md`, automation memory, memory registry hits, and the random-feature workflow memory skill.
 - Read `docs/progressing/to-verify.md`; no carry-over item exists.
 - Checked Reminder list names with AppleScript and EventKit; EventKit found `Personal AI` with 0 incomplete items.
 - Selected `手动关注项规则` as the bounded target from the randomized index sample.

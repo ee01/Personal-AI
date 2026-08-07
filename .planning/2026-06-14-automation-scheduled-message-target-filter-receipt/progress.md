@@ -2,7 +2,7 @@
 
 ## 2026-06-14
 
-- Read `AGENT.md`, planning skill instructions, automation memory, repo memory hints, `docs/progressing/to-verify.md`, `docs/features/index.md`, worktree status, and prior/stale planning files.
+- Read `AGENT.md`, planning skill instructions, automation memory, repo memory hints, `docs/progressing/to-verify.md`, `docs/index.md`, worktree status, and prior/stale planning files.
 - Checked local Reminders via AppleScript; the Reminders app is readable but has no visible `Personal AI` list.
 - Random sample produced several candidates; selected `定时消息列表筛选` while avoiding the freshest exact features from automation memory.
 - Inspected Scheduled Messages list filtering docs, shared helper, manager UI, focused unit tests, and CRUD-focus E2E.

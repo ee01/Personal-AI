@@ -2,7 +2,7 @@
 
 ## Initial Findings
 
-- Randomly selected feature from `docs/features/index.md`: `Jira issue key 解析`.
+- Randomly selected feature from `docs/index.md`: `Jira issue key 解析`.
 - Feature owner/capability: Jira Design Links.
 - Source document: `docs/features/jira_design_links.md`.
 - Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.

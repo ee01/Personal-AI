@@ -2,7 +2,7 @@
 
 ## Target
 
-- Random feature: `Figma/Zeplin 保守分类` in `docs/features/index.md`.
+- Random feature: `Figma/Zeplin 保守分类` in `docs/index.md`.
 - Source of truth: `docs/features/jira_design_links.md`.
 - Reminder check: local Reminders is reachable, but there is no `Personal AI` list, so no Reminder item is available for this target.
 

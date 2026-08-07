@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `未来场景预演记忆` / Rehearsal from `docs/features/index.md`.
+- Selected feature: `未来场景预演记忆` / Rehearsal from `docs/index.md`.
 - Source doc: `docs/features/rehearsal.md`.
 - Main UI: `src/modals/components/RehearsalsPage.vue`.
 - Browser proof: `tools/verify-rehearsals-page-e2e.mjs`.

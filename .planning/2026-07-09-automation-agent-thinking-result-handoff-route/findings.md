@@ -8,7 +8,7 @@
 
 ## Feature Context
 
-- `docs/features/index.md` lists `Agent Thinking 分析编排` as the Agent Thinking feature for the shared tool/thinking loop and the handoff between terminal trace state and result cards.
+- `docs/index.md` lists `Agent Thinking 分析编排` as the Agent Thinking feature for the shared tool/thinking loop and the handoff between terminal trace state and result cards.
 - Current implementation already has `resultHandoffReceipt` in `src/agentVisualizerPresentation.ts`, rendered by `src/agent-visualizer.tsx` as `结果整理中` while `isProcessing` is true after a terminal action appears.
 - Existing E2E already confirms `结果整理中` appears, disappears when `.agent-result-summary` appears, and does not leave ordinary `处理中` visible.
 - Gap: the receipt states that the trace reached a terminal step, but the receipt itself does not expose a terminal-step button or summarize unresolved issue counts. Users must infer from adjacent navigation/review sections.

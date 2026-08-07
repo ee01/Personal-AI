@@ -2,7 +2,7 @@
 
 ## 目标
 
-随机选中 `docs/features/index.md` 里的 `Figma/Zeplin 保守分类`。现有实现已经会过滤 Figma Community / help / marketing、Zeplin profile / settings 等非交付页面，并在 mixed 与 filtered-only 场景显示过滤数量和来源；但“为什么过滤”主要藏在 hover tooltip 里。真实用户扫 Jira ticket 时，仍可能把 `6 filtered non-handoff refs` 理解成漏扫或不确定的黑盒过滤。
+随机选中 `docs/index.md` 里的 `Figma/Zeplin 保守分类`。现有实现已经会过滤 Figma Community / help / marketing、Zeplin profile / settings 等非交付页面，并在 mixed 与 filtered-only 场景显示过滤数量和来源；但“为什么过滤”主要藏在 hover tooltip 里。真实用户扫 Jira ticket 时，仍可能把 `6 filtered non-handoff refs` 理解成漏扫或不确定的黑盒过滤。
 
 ## 外部参考
 

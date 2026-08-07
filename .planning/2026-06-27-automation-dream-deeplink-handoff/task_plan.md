@@ -7,7 +7,7 @@ Improve the Dream Replay page so a user arriving from a Dream Digest notificatio
 ## Target
 
 - Feature index row: `梦境重放`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main UI: `src/modals/components/DreamInsights.vue`
 - Existing proof: `npm run verify:memory-dreams:e2e`
 

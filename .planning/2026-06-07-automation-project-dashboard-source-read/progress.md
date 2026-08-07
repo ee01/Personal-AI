@@ -7,7 +7,7 @@
 - **Started:** 2026-06-07
 
 ### Actions Taken
-- Read automation memory, AGENT.md, docs/features/index.md, docs/progressing/to-verify.md, and local Reminders list names.
+- Read automation memory, AGENT.md, docs/index.md, docs/progressing/to-verify.md, and local Reminders list names.
 - Selected Project Dashboard data source checks as the random feature, avoiding recently covered automation targets.
 - Inspected docs/features/brain_like_project_analysis_system.md, docs/features/project_dashboard_usage_guide.md, src/utils/dashboardIntegration.ts, src/components/dashboard/ProjectDashboard.tsx, tools/verify-project-dashboard.ts, and tools/verify-project-dashboard-e2e.mjs.
 - Researched Jira dashboard gadgets, GitHub project updates, Linear Project Graph, Asana Smart Status/project updates, and dashboard data-quality research.

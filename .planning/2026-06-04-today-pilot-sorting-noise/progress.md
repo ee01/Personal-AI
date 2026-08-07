@@ -9,7 +9,7 @@
 
 ### Actions Taken
 - Read automation memory fallback at `/Users/Esone/.codex/automations/automation/memory.md`; previous run selected Scheduled Messages one-click init, so this run excluded that immediate repeat.
-- Randomly selected `今天排序与噪声控制` from `docs/features/index.md`.
+- Randomly selected `今天排序与噪声控制` from `docs/index.md`.
 - Initialized isolated plan directory `.planning/2026-06-04-today-pilot-sorting-noise/` to avoid overwriting root planning files from the previous automation run.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found.
 - Inspected `docs/features/today_pilot.md`, `memory-service/src/core/DayPilotService.ts`, Today Pilot tests, frontend overview UI, and current diffs.

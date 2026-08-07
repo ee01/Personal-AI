@@ -22,7 +22,7 @@
 2. Add a dynamic pre-click boundary for `全部已阅`.
    - The button should name the current topic, known unread count, current visible batch, cache-write path, undo window, and no external-platform write/send/delete/history-pull boundary.
 3. Update targeted verifier and E2E assertions so the boundary exists at the actual controls, not only in the surrounding receipt.
-4. Update `docs/features/topic_based_messages.md` and `docs/features/index.md` concisely.
+4. Update `docs/features/topic_based_messages.md` and `docs/index.md` concisely.
 5. Verify with `npm run verify:topic-based-messages`, `npm start -- --progress` to first compile, `npm run verify:topic-based-messages:e2e`, and scoped `git diff --check`.
 
 ## Non-goals

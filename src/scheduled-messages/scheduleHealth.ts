@@ -661,6 +661,31 @@ export function formatScheduleHealthIssue(issue: ScheduleHealthIssue): string {
   return `${nextLabel}${issue.summary}，${issue.action}`;
 }
 
+export function formatScheduleHealthIssueMissedWindow(
+  issue: ScheduleHealthIssue,
+): string {
+  if (issue.code === 'invalid_time') {
+    return issue.summary;
+  }
+
+  if (issue.nextExecution) {
+    return `错过 ${issue.nextExecution} 发送窗口（${issue.summary}）`;
+  }
+
+  return issue.summary;
+}
+
+export function formatScheduleHealthIssueSuggestedAction(
+  issue: ScheduleHealthIssue,
+  suggestion?: ScheduleHealthRecoverySuggestion | null,
+): string {
+  if (suggestion) {
+    return `建议操作：改到 ${suggestion.label}`;
+  }
+
+  return `建议操作：${issue.action}`;
+}
+
 export function formatScheduleHealthSummary(
   issues: ScheduleHealthIssue[],
 ): string {

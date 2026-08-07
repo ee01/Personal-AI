@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `覆盖聚合 API` in `docs/features/index.md`
+- Feature: `覆盖聚合 API` in `docs/index.md`
 - Scope: Memory Coverage Map P0 aggregate slice endpoints under `/api/v1/coverage/*`
 - Reminder state: local Reminders list `Personal AI` is absent on this Mac, so no Reminder item is linked or completed.
 

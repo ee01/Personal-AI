@@ -7,7 +7,7 @@
  */
 
 import { getMemoryServiceClient } from './services/MemoryServiceClient';
-import { getJiraBaseUrl, jiraFetchViaBackground } from './jira';
+import { getJiraBaseUrl, getJiraToken, jiraFetchViaBackground } from './jira';
 import {
   buildJiraCreateFields,
   findIssueType,
@@ -344,6 +344,190 @@ function mapIssueToImportItem(issue: any): ImportItemPayload | null {
     targetStart: toIsoDate(fields[JIRA_FIELD_TARGET_START]),
     targetEnd,
   };
+}
+
+async function handleFetchIssueDates(
+  jiraKey: string,
+): Promise<string | null> {
+  const key = String(jiraKey || '').trim();
+  if (!key) throw new Error('jira_key_required');
+  const baseUrl = await getJiraBaseUrl();
+  const fields = [JIRA_FIELD_TARGET_END, JIRA_FIELD_END_DATE].join(',');
+  const response = await jiraFetchViaBackground(
+    `${baseUrl}/rest/api/2/issue/${encodeURIComponent(key)}?fields=${fields}`,
+    { method: 'GET' },
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(
+      `Jira ${response.status}: ${text.slice(0, 200) || response.statusText}`,
+    );
+  }
+  const issue = await response.json();
+  const issueFields = (issue?.fields || {}) as Record<string, unknown>;
+  return (
+    toIsoDate(issueFields[JIRA_FIELD_TARGET_END]) ||
+    toIsoDate(issueFields[JIRA_FIELD_END_DATE]) ||
+    null
+  );
+}
+
+export type RemoteChildTask = {
+  key: string;
+  summary: string;
+  epicKey: string;
+  targetStart: string | null;
+  targetEnd: string | null;
+  assignee: string | null;
+};
+
+function childLinkClause(linkField: string | null, epicKeys: string[]): string {
+  const quoted = epicKeys.map((k) => `"${k.replace(/"/g, '\\"')}"`).join(', ');
+  if (linkField === JIRA_FIELD_PARENT_LINK) {
+    return `"Parent Link" in (${quoted})`;
+  }
+  if (linkField === 'parent') {
+    return `parent in (${quoted})`;
+  }
+  return `"Epic Link" in (${quoted})`;
+}
+
+function resolveChildEpicKey(
+  fields: Record<string, unknown>,
+  candidates: string[],
+): string | null {
+  const set = new Set(candidates);
+  const parent = fields.parent as { key?: string } | null;
+  if (parent?.key && set.has(parent.key)) return parent.key;
+  const epicLink = fields[JIRA_FIELD_EPIC_LINK];
+  if (typeof epicLink === 'string' && set.has(epicLink)) return epicLink;
+  if (epicLink && typeof epicLink === 'object' && epicLink !== null && 'key' in epicLink) {
+    const key = String((epicLink as { key?: string }).key || '');
+    if (set.has(key)) return key;
+  }
+  const parentLink = fields[JIRA_FIELD_PARENT_LINK];
+  if (typeof parentLink === 'string' && set.has(parentLink)) return parentLink;
+  return null;
+}
+
+/**
+ * Search Tasks under scheduled Epics using Options JIRA_API_TOKEN.
+ * Requires an explicit token (no cookie fallback) so missing Options config
+ * can fall through to server PAT elsewhere.
+ */
+async function handleSearchChildTasks(
+  epicKeys: string[],
+  linkField: string | null,
+): Promise<RemoteChildTask[]> {
+  const token = await getJiraToken();
+  if (!token) {
+    throw Object.assign(new Error('jira_token_missing'), {
+      code: 'jira_token_missing',
+    });
+  }
+  const unique = [
+    ...new Set(epicKeys.map((k) => String(k || '').trim()).filter(Boolean)),
+  ];
+  if (!unique.length) return [];
+
+  const baseUrl = await getJiraBaseUrl();
+  const fields = [
+    'summary',
+    'issuetype',
+    'assignee',
+    'parent',
+    JIRA_FIELD_TARGET_START,
+    JIRA_FIELD_TARGET_END,
+    JIRA_FIELD_EPIC_LINK,
+    JIRA_FIELD_PARENT_LINK,
+  ];
+  const results: RemoteChildTask[] = [];
+
+  // Chunk epic keys to keep JQL reasonable.
+  for (let i = 0; i < unique.length; i += 40) {
+    const group = unique.slice(i, i + 40);
+    const jql =
+      `${childLinkClause(linkField, group)} ` +
+      `AND issuetype = Task AND status not in (Cancelled, Closed) ` +
+      `ORDER BY key ASC`;
+    let startAt = 0;
+    const maxResults = 100;
+    let total = Infinity;
+    while (startAt < total) {
+      const response = await jiraFetchViaBackground(
+        `${baseUrl}/rest/api/2/search`,
+        {
+          method: 'POST',
+          body: { jql, startAt, maxResults, fields },
+          authMode: 'token-only',
+          requestLabel: 'roadmap import child tasks',
+        },
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Jira 查询失败 (${response.status}): ${errorText.slice(0, 300)}`,
+        );
+      }
+      const data = await response.json();
+      total = Number(data.total || 0);
+      const page = Array.isArray(data.issues) ? data.issues : [];
+      for (const issue of page) {
+        const f = (issue?.fields || {}) as Record<string, unknown>;
+        const assignee = f.assignee as { displayName?: string } | null;
+        results.push({
+          key: String(issue.key),
+          summary: String(f.summary || issue.key),
+          epicKey: resolveChildEpicKey(f, group) || group[0],
+          targetStart: toIsoDate(f[JIRA_FIELD_TARGET_START]),
+          targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]),
+          assignee: assignee?.displayName?.trim() || null,
+        });
+      }
+      if (!page.length) break;
+      startAt += page.length;
+      if (startAt > 2000) break;
+    }
+  }
+  return results;
+}
+
+async function handleUpdateTargetDates(
+  jiraKey: string,
+  start: string,
+  end: string,
+): Promise<void> {
+  const key = String(jiraKey || '').trim();
+  const s = String(start || '').trim();
+  const e = String(end || '').trim();
+  if (!key || !s || !e) throw new Error('start_end_required');
+  const token = await getJiraToken();
+  if (!token) {
+    throw Object.assign(new Error('jira_token_missing'), {
+      code: 'jira_token_missing',
+    });
+  }
+  const baseUrl = await getJiraBaseUrl();
+  const response = await jiraFetchViaBackground(
+    `${baseUrl}/rest/api/2/issue/${encodeURIComponent(key)}`,
+    {
+      method: 'PUT',
+      body: {
+        fields: {
+          [JIRA_FIELD_TARGET_START]: s,
+          [JIRA_FIELD_TARGET_END]: e,
+        },
+      },
+      authMode: 'token-only',
+      requestLabel: 'roadmap sync target dates',
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(
+      `Jira ${response.status}: ${text.slice(0, 200) || response.statusText}`,
+    );
+  }
 }
 
 async function handleImportJql(
@@ -1033,6 +1217,114 @@ function injectBridge(): void {
             requestId: data.requestId,
             ok: false,
             error: error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-fetch-issue-dates') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-fetch-issue-dates-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        const targetEnd = await handleFetchIssueDates(String(data.jiraKey || ''));
+        window.postMessage(
+          {
+            type: 'pai-roadmap-fetch-issue-dates-result',
+            requestId: data.requestId,
+            ok: true,
+            targetEnd,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-fetch-issue-dates-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-import-tasks') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-import-tasks-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        const epicKeys = Array.isArray(data.epicKeys)
+          ? data.epicKeys.map(String)
+          : [];
+        const tasks = await handleSearchChildTasks(
+          epicKeys,
+          data.linkField ? String(data.linkField) : null,
+        );
+        window.postMessage(
+          {
+            type: 'pai-roadmap-import-tasks-result',
+            requestId: data.requestId,
+            ok: true,
+            tasks,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-import-tasks-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.code || error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-update-target-dates') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-update-target-dates-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        await handleUpdateTargetDates(
+          String(data.jiraKey || ''),
+          String(data.start || ''),
+          String(data.end || ''),
+        );
+        window.postMessage(
+          {
+            type: 'pai-roadmap-update-target-dates-result',
+            requestId: data.requestId,
+            ok: true,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-update-target-dates-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.code || error?.message || String(error),
           },
           '*',
         );

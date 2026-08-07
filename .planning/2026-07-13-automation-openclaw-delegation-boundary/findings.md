@@ -1,13 +1,13 @@
 # OpenClaw Delegation Findings
 
 ## Requirements
-- User asked for a random `docs/features/index.md` feature sweep: verify current docs vs code, research related products/papers, include relevant `Personal AI` Reminders, plan first, implement, update docs, and run strong verification.
-- Selected feature: `OpenClaw 外部委派` under Memory Service, source doc `docs/features/memory_system.md`.
+- User asked for a random `docs/index.md` feature sweep: verify current docs vs code, research related products/papers, include relevant `Personal AI` Reminders, plan first, implement, update docs, and run strong verification.
+- Selected feature: `OpenClaw 外部委派` under Memory Service, source doc `docs/memory_system.md`.
 - Initial random draw selected `梦境重放`, but `.planning/2026-07-12-automation-dream-review-filter/` already covered the Dream Replay family recently, so this run rerolled.
 - Reminder state: AppleScript listed Reminder lists but missed `Personal AI`; Swift/EventKit found `Personal AI` with 4 total items and 0 incomplete items. All items are completed historical Doubao/Notification feedback and unrelated to OpenClaw delegation.
 
 ## Code And UX Findings
-- `docs/features/memory_system.md` is current for the core OpenClaw delegation design: `delegate_openclaw` actions, approval gating, artifact validation, transcript path, recovery actions, and July 6 queued-auto scheduler boundary are all described.
+- `docs/memory_system.md` is current for the core OpenClaw delegation design: `delegate_openclaw` actions, approval gating, artifact validation, transcript path, recovery actions, and July 6 queued-auto scheduler boundary are all described.
 - `src/modals/components/ActionQueue.vue` already has OpenClaw-specific preflight, approval checkpoint, operation pending/result, failure, artifact verification, recovery path, result artifact, structured payload, and stale-running receipts.
 - Prior `.planning/2026-07-06-automation-openclaw-delegation-receipt/` already implemented the queued-auto background scheduler boundary, including E2E assertions.
 - Remaining low-decision UX gap: the transcript toggle button remains a generic `展开` / `收起`. The surrounding panel says `transcript: ...`, but the click target does not expose that expansion only reads a stored `delegations/` user file and does not rerun OpenClaw, approve/retry/cancel a queue item, write `action_results`, confirm external facts, or mutate Jira/Drive/deployment systems.
@@ -39,6 +39,6 @@
 ## Resources
 - `src/modals/components/ActionQueue.vue`
 - `tools/verify-action-queue-e2e.mjs`
-- `docs/features/memory_system.md`
-- `docs/features/index.md`
+- `docs/memory_system.md`
+- `docs/index.md`
 - `.planning/2026-07-06-automation-openclaw-delegation-receipt/`

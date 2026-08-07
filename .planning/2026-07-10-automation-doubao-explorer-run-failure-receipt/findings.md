@@ -1,7 +1,7 @@
 # Findings And Decisions
 
 ## Requirements
-- Pick one random feature from `docs/features/index.md`.
+- Pick one random feature from `docs/index.md`.
 - Check code and docs freshness.
 - Search comparable products and papers for constructive improvement ideas.
 - Implement unfinished or low-decision improvements when feasible.

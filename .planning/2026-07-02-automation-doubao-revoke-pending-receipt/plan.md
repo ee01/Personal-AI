@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `Revoke ingested memory`
-- Source: `docs/features/index.md` -> `docs/features/doubao_bridge.md`
+- Source: `docs/index.md` -> `docs/features/doubao_bridge.md`
 - Surface: `Personal AI.app` Explorer source cards for Doubao / ChatGPT
 
 ## Inputs Checked

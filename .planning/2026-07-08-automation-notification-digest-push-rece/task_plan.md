@@ -37,7 +37,7 @@ Complete
 - **Status:** complete
 
 ### Phase 5: Delivery
-- [x] Update `docs/features/notification_center.md` and `docs/features/index.md`.
+- [x] Update `docs/features/notification_center.md` and `docs/index.md`.
 - [x] Update automation memory.
 - [x] Summarize result, validation, Reminder state, and owned files.
 - **Status:** complete

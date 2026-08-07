@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `决策中心` in `docs/features/memory_system.md`
+- Feature: `决策中心` in `docs/memory_system.md`
 - Surface: `memory-exploring.html#/decisions`
 - Random index row: `决策中心 | Memory Service | memory_system.md | DecisionCenter.vue / confirm_requests`
 
@@ -27,11 +27,11 @@
 - Implemented action-specific answer receipts in `DecisionCenter.vue`.
 - Updated `ConfirmRequestAnswerResponse` in `MemoryServiceClient.ts`.
 - Extended `tools/verify-decision-center-e2e.mjs` with the retry receipt path.
-- Updated `docs/features/memory_system.md`.
+- Updated `docs/memory_system.md`.
 
 ## Validation
 
 - `npm --prefix memory-service test -- --run src/__tests__/confirmRequestsApi.test.ts`
 - `npm start` first webpack compile, then stopped
 - `npm run verify:decision-center:e2e`
-- `git diff --check -- src/services/MemoryServiceClient.ts src/modals/components/DecisionCenter.vue tools/verify-decision-center-e2e.mjs docs/features/memory_system.md`
+- `git diff --check -- src/services/MemoryServiceClient.ts src/modals/components/DecisionCenter.vue tools/verify-decision-center-e2e.mjs docs/memory_system.md`

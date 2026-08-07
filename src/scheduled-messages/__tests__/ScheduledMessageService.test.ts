@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const serviceSource = readFileSync(resolve(__dirname, '../ScheduledMessageService.ts'), 'utf8');
+const appScriptTemplateSource = readFileSync(
+  resolve(__dirname, '../app-script-template.gs'),
+  'utf8',
+);
 
 test('ScheduledMessageService updateMessage refreshes live headers before full-row writes', () => {
   const updateMessageStart = serviceSource.indexOf('async updateMessage(');
@@ -43,5 +47,26 @@ test('ScheduledMessageService createMessage also avoids stale header cache on ap
     createMessageSource,
     /const liveHeaders = await this\.getHeaders\(\{ forceRefresh: true \}\);\s*const row = await this\.messageToRow\(message, liveHeaders\);/,
     'createMessage should append rows with live headers, not a stale header cache',
+  );
+});
+
+test('recent push logs use the newest-first sheet contract and a bounded head range', () => {
+  assert.match(
+    appScriptTemplateSource,
+    /logsSheet\.insertRowAfter\(1\);[\s\S]*logsSheet\.getRange\(2, 1, 1, logRow\.length\)/,
+    'Apps Script should insert each new log immediately below the header',
+  );
+  assert.match(
+    serviceSource,
+    /const data = await sheet\.readRange\(`1:\$\{safeLimit \+ 1\}`\);/,
+    'recent log refresh should request only the header and newest bounded rows',
+  );
+  assert.doesNotMatch(
+    serviceSource.slice(
+      serviceSource.indexOf('async getRecentPushLogs('),
+      serviceSource.indexOf('/**\n   * 根据 ID 获取消息', serviceSource.indexOf('async getRecentPushLogs(')),
+    ),
+    /readSheet\(/,
+    'recent log refresh must not download the complete Logs sheet',
   );
 });

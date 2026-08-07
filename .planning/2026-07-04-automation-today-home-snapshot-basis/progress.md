@@ -2,7 +2,7 @@
 
 ## 2026-07-04
 
-- Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, `docs/features/index.md`, and prior root planning files.
+- Read `AGENT.md`, automation memory, memory guidance, `docs/progressing/to-verify.md`, `docs/index.md`, and prior root planning files.
 - Randomly sampled feature candidates and selected Today Pilot `今天排序与噪声控制` after avoiding fresher AR / Jira target areas.
 - Checked Reminders: AppleScript missed `Personal AI`, EventKit found it with four already-completed unrelated historical items.
 - Inspected Today Pilot docs, source files, and verification scripts.

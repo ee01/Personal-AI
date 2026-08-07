@@ -41,7 +41,7 @@ Complete
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Selected feature: Scheduled Messages queue health / execution compensation | Random eligible candidate from `docs/features/index.md`, avoiding the freshest exact automation-memory feature families |
+| Selected feature: Scheduled Messages queue health / execution compensation | Random eligible candidate from `docs/index.md`, avoiding the freshest exact automation-memory feature families |
 | Reminder branch stopped | Local Reminders has no visible `Personal AI` list |
 | Improvement slice: pre-action writeback boundary | Existing recovery works, but the user should see before clicking that the action writes `Messages` only and does not send immediately |
 | Keep change UI/docs/E2E-scoped | Worktree is broadly dirty; avoid unrelated refactors |

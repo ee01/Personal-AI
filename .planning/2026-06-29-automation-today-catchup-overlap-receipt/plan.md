@@ -2,7 +2,7 @@
 
 ## Target
 
-- Randomly selected feature: `高压后补课` in `docs/features/index.md`.
+- Randomly selected feature: `高压后补课` in `docs/index.md`.
 - Source of truth: `docs/features/today_pilot.md`.
 - Code paths: `src/modals/components/OverviewPage.vue`, `memory-service/src/core/CatchUpService.ts`, `tools/verify-day-pilot-home.ts`, `tools/verify-today-pilot-home-e2e.mjs`.
 

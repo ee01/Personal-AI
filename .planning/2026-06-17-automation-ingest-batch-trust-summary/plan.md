@@ -3,7 +3,7 @@
 ## Target
 
 - Feature index row: `记忆摄入、去重、显著性评估`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Code surface: Memory Service ingestion API, especially `/ingest/batch`
 
 ## Findings

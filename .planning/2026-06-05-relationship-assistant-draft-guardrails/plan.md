@@ -2,7 +2,7 @@
 
 ## Target
 
-Feature selected from `docs/features/index.md`: `人脉关系 Assistant Draft` / Relationship Radar.
+Feature selected from `docs/index.md`: `人脉关系 Assistant Draft` / Relationship Radar.
 
 ## Findings
 

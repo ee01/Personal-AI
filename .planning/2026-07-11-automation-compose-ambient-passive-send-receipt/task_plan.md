@@ -2,8 +2,8 @@
 
 ## Context
 
-- Automation target: `回复助手无感校准` from `docs/features/index.md`.
-- Source docs: `docs/features/compose_assist.md` and `docs/features/memory_system.md`.
+- Automation target: `回复助手无感校准` from `docs/index.md`.
+- Source docs: `docs/features/assist.md` and `docs/memory_system.md`.
 - Reminder state: AppleScript did not list `Personal AI`; EventKit found the list with 4 total items and 0 incomplete items, all completed historical Doubao/test feedback, so no Reminder item is incorporated or marked done.
 - Recent automation memory already covered direct insert, thumb-down, and several adjacent Compose/Message/Memory surfaces. This run focuses on the passive `sent_without_insert` path after a user actually dwells on a suggestion and sends their own reply.
 

@@ -6,7 +6,7 @@ Goal: improve the randomly selected `Agent Workflow 多 Agent 编排` feature by
 
 | Phase | Status | Scope |
 | --- | --- | --- |
-| 1 | completed | Read `AGENT.md`, automation memory, memory hints, `docs/progressing/to-verify.md`, current worktree status, Reminders list names, and `docs/features/index.md` |
+| 1 | completed | Read `AGENT.md`, automation memory, memory hints, `docs/progressing/to-verify.md`, current worktree status, Reminders list names, and `docs/index.md` |
 | 2 | completed | Randomly select a non-recent feature and inspect its feature doc, source, and verification scripts |
 | 3 | completed | Search current product/paper references for agent workflow tracing, evals, persistence, and structural coverage |
 | 4 | completed | Implement a focused UX/doc/test improvement for the selected feature |
@@ -16,7 +16,7 @@ Goal: improve the randomly selected `Agent Workflow 多 Agent 编排` feature by
 ## Decisions
 
 - Selected feature: `Agent Workflow 多 Agent 编排`.
-- Source doc: `docs/features/agent_workflow.md`.
+- Source doc: `docs/features/message_analysis.md`.
 - Implementation slice: add a visible pre-click boundary near the batch-regression `接受结果为基线` action, clarifying that only changed/no-baseline saved scenarios will have local baselines updated; failed items are not overwritten; no Memory Service write, notification, rule automation, export, or raw message body copy happens.
 - Reminders: the Reminders app is readable, but no visible list named `Personal AI` exists, so no Reminder item can be incorporated or marked complete.
 - Worktree: very broad pre-existing dirty state. Keep edits scoped to Agent Workflow files and this planning directory.

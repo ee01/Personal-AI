@@ -10,7 +10,7 @@ Phase 1
 
 ### Phase 1: Requirements & Discovery
 - [x] Read AGENT.md, automation memory, feature index, and to-verify carry-over
-- [x] Randomly select a not-recent feature from docs/features/index.md
+- [x] Randomly select a not-recent feature from docs/index.md
 - [x] Check local Reminders Personal AI list
 - [x] Inspect Agent Workflow docs, implementation, and existing validation harness
 - [x] Run product/paper scan and document in findings.md
@@ -23,7 +23,7 @@ Phase 1
 
 ### Phase 3: Implementation
 - [x] Apply the scoped code/UI change
-- [x] Update docs/features/agent_workflow.md and docs/features/index.md if behavior changes
+- [x] Update docs/features/message_analysis.md and docs/index.md if behavior changes
 - **Status:** complete
 
 ### Phase 4: Testing & Verification

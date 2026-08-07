@@ -18,7 +18,7 @@
 3. [complete] Add a bounded Search Result UI improvement: a compact `Ask 本轮状态` strip before the answer body, summarizing answer completeness, current/prior evidence, external-check state, and non-effect boundaries.
 4. [complete] Implement the strip in `src/modals/components/SearchResultPage.vue` using existing Ask response fields; no backend schema change is planned.
 5. [complete] Extend the existing Ask E2E fixture to prove the status strip appears before the answer and carries the partial/deferred boundary.
-6. [complete] Update `docs/features/ask.md` and `docs/features/index.md` only if behavior or summary changes.
+6. [complete] Update `docs/features/ask.md` and `docs/index.md` only if behavior or summary changes.
 7. [complete] Verify with targeted Ask checks, first successful `npm start` compile, relevant E2E/browser proof, and scoped `git diff --check`.
 8. [in_progress] Update automation memory and attempt thread archive through the available Codex thread tool.
 

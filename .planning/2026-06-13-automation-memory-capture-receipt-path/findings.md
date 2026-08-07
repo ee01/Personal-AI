@@ -2,7 +2,7 @@
 
 ## Initial Context
 
-- Randomly selected feature from `docs/features/index.md`: `记忆捕捉`.
+- Randomly selected feature from `docs/index.md`: `记忆捕捉`.
 - Capability: Memory Capture.
 - Source document: `docs/features/memory_capture.md`.
 - `docs/progressing/to-verify.md`: `暂无。`.

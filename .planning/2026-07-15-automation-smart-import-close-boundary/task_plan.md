@@ -4,7 +4,7 @@
 
 - Feature: `智能资料录入`
 - Capability: Memory Coverage Map
-- Docs: `docs/features/memory_coverage_map.md`, `docs/features/index.md`
+- Docs: `docs/features/memory_coverage_map.md`, `docs/index.md`
 - UI: `src/modals/components/MemoryCoveragePage.vue`
 - Browser proof: `tools/verify-memory-coverage-e2e.mjs`
 

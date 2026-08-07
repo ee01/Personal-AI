@@ -2,7 +2,7 @@
 
 _最后更新: 2026-07-31_
 
-Usage Analytics 是一套**本地打点**的系统级用量观测能力：把 Chrome 扩展（前端）和 memory-service（后端）每一次 LLM 调用的真实 token 用量，按 [docs/features/index.md](./index.md) 的「所属能力」归类，写入一个独立的集中式 analytics 库，最终以鉴权的 HTTP 报表页呈现。报表默认是**使用/运营视角**：功能总览（一功能一行，行内拆前端/后端）、用户活跃度（DAU + 排行）、用户×功能偏好矩阵，并支持中文功能名、30 天窗口、全体/单用户与**端过滤（全部 / 仅前端 / 仅后端）**。
+Usage Analytics 是一套**本地打点**的系统级用量观测能力：把 Chrome 扩展（前端）和 memory-service（后端）每一次 LLM 调用的真实 token 用量，按 [docs/index.md](../index.md) 的「所属能力」归类，写入一个独立的集中式 analytics 库，最终以鉴权的 HTTP 报表页呈现。报表默认是**使用/运营视角**：功能总览（一功能一行，行内拆前端/后端）、用户活跃度（DAU + 排行）、用户×功能偏好矩阵，并支持中文功能名、30 天窗口、全体/单用户与**端过滤（全部 / 仅前端 / 仅后端）**。
 
 它解决的问题是：oneapi 后台只能看到 token / 模型级别的账单，无法回答“**哪个用户、用哪个功能、烧了多少 token**”。本系统在前后端各自的 LLM 出口处打点，把用量归因到 `user × capability × model × side`。
 
@@ -50,7 +50,7 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 
 报表里「记忆服务 / `memory_service`」**不是** others 垃圾桶，也**不是**「除下面功能以外的剩余项」。`unknown` 才是未映射路由的兜底。
 
-它是 [index.md](./index.md) 里的一个正式「所属能力」：**Memory Service 核心平台能力**——记忆摄入/召回/生命周期、反思线程、动作队列、主动询问、证据守望、Keystone Brief 等后端主链路。route → capability 映射见 `capabilityMap.ts`。
+它是 [index.md](../index.md) 里的一个正式「所属能力」：**Memory Service 核心平台能力**——记忆摄入/召回/生命周期、反思线程、动作队列、主动询问、证据守望、Keystone Brief 等后端主链路。route → capability 映射见 `capabilityMap.ts`。
 
 解读建议：看「记忆服务」时优先切换排序到 **Token / 成本**，并展开报表底部的**接口调用明细**；若 `/stats` 占比过大，说明的是平台心跳/轮询。真正未归类的流量在 **`unknown`（未归类）**。
 

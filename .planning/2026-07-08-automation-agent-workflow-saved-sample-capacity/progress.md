@@ -1,7 +1,7 @@
 # Progress
 
 - Started: 2026-07-08 Asia/Shanghai
-- Target selected randomly from `docs/features/index.md`: `Agent Workflow 关注项测试`.
+- Target selected randomly from `docs/index.md`: `Agent Workflow 关注项测试`.
 - Read `AGENT.md`, automation memory, `docs/progressing/to-verify.md`, feature index, feature doc, core source, and verifiers.
 - Checked Reminders through AppleScript and EventKit; EventKit found `Personal AI`, but no incomplete items.
 - External scan completed and narrowed the improvement to local saved-sample capacity visibility.

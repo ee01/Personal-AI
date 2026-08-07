@@ -7,7 +7,7 @@
 
 ## Feature Selection
 
-- Selected `Agent Thinking 分析编排` from `docs/features/index.md`.
+- Selected `Agent Thinking 分析编排` from `docs/index.md`.
 - Recent automation memory showed the freshest exact target was `记忆搜索结果页`; other recent exact targets included Prompt Config, Today popup, Message Analysis, Coverage Map, Snooze, Ask, Timeline, Meeting Pilot, and User Profile, so this feature broadens coverage.
 
 ## Reminder State

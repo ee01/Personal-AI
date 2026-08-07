@@ -2,7 +2,7 @@
 
 ## 目标功能
 
-- 随机选中：`项目面板`，来源 `docs/features/index.md`。
+- 随机选中：`项目面板`，来源 `docs/index.md`。
 - 主文档：`docs/features/project_dashboard_usage_guide.md`。
 - 辅助文档：`docs/features/brain_like_project_analysis_system.md`。
 

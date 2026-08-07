@@ -16,7 +16,7 @@ Goal: improve the randomly selected `主动询问` feature by making the Outreac
 
 ## Decisions
 
-- Random target: `主动询问` under Memory Service, source doc `docs/features/memory_system.md`.
+- Random target: `主动询问` under Memory Service, source doc `docs/memory_system.md`.
 - No `docs/progressing/to-verify.md` carry-over item exists.
 - Local Reminders is reachable, but list names do not include `Personal AI`; no Reminder feedback can be included or marked done.
 - Existing worktree has many unrelated modified/untracked files. Keep this run scoped to Outreach detail UI, docs, E2E, and this planning directory.

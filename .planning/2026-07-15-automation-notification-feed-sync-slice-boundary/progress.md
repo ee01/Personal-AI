@@ -2,7 +2,7 @@
 
 ## 2026-07-15T09:04:01+0800
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, `docs/features/index.md`, automation memory, and the personal-ai random-feature memory workflow.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, `docs/index.md`, automation memory, and the personal-ai random-feature memory workflow.
 - Selected `Notification Center feed` after skipping recent adjacent random candidates.
 - Checked Reminders through AppleScript and EventKit; `Personal AI` has 0 incomplete items.
 - Inspected Notification Center docs, service, route, provider rendering, desktop sync manager, and existing tests.
@@ -16,7 +16,7 @@
 
 ## 2026-07-15T09:12:25+0800
 
-- Updated `docs/features/notification_center.md` and the `Notification Center feed` row in `docs/features/index.md`.
+- Updated `docs/features/notification_center.md` and the `Notification Center feed` row in `docs/index.md`.
 - Verification passed:
   - `npm --prefix memory-service test -- --run src/__tests__/api-providers.test.ts src/__tests__/notificationCenter.test.ts`
   - `NODE_ENV=test ./desktop-app/node_modules/.bin/tsx --test desktop-app/src/__tests__/syncManager.test.ts`

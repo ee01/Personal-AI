@@ -2,7 +2,7 @@
 
 ## 目标
 
-本轮随机抽中 `docs/features/index.md` 里的 `联动操作 / Openclaw`。目标是补齐 RingCentral 消息工具栏中最高风险入口的点击前边界，避免用户把 `联动操作` 误解成已经创建 RuntimeAction 或已经调用 OpenClaw。
+本轮随机抽中 `docs/index.md` 里的 `联动操作 / Openclaw`。目标是补齐 RingCentral 消息工具栏中最高风险入口的点击前边界，避免用户把 `联动操作` 误解成已经创建 RuntimeAction 或已经调用 OpenClaw。
 
 ## Reminder 检查
 

@@ -3,7 +3,7 @@
 ## Target
 
 - Feature: `记忆时间轴` under Memory Exploring.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Main UI: `src/modals/components/TimelinePage.vue`.
 - Presentation helper: `src/modals/timelinePresentation.ts`.
 
@@ -35,7 +35,7 @@ The Timeline page already distinguishes safe links, source coverage, focused tar
    - source-filter empty: loaded rows exist, current source filter shows 0.
 4. State non-effects explicitly: no deletion, no index clearing, no feedback write, no source sync, no read marking.
 5. Keep existing recall, sorting, source filtering, feedback, and open-link behavior unchanged.
-6. Update `docs/features/memory_system.md`.
+6. Update `docs/memory_system.md`.
 7. Extend `verify-memory-timeline.ts` and `verify-memory-timeline-e2e.mjs`.
 
 ## Verification

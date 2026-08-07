@@ -9,7 +9,7 @@ Phase 5
 ## Phases
 
 ### Phase 1: Requirements & Discovery
-- [x] Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, planning files, and Reminder state.
+- [x] Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, memory guidance, planning files, and Reminder state.
 - [x] Randomly select a viable feature while avoiding the freshest exact targets.
 - [x] Inspect OpenClaw delegation docs, UI code, backend executor policy, and existing E2E coverage.
 - **Status:** complete

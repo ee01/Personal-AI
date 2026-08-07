@@ -16,7 +16,7 @@
 2. pending 期间显示 `证据包复制中`，说明尚未确认剪贴板写入成功，并禁用复制按钮。
 3. 成功/失败后用最终回执替换 pending，保留无 Memory Service 写入、无通知、无规则自动化、无基线覆盖边界。
 4. 更新 `tools/verify-agent-workflow-options-e2e.mjs`，用延迟 clipboard mock 断言 pending 回执和按钮锁定。
-5. 更新 `docs/features/agent_workflow.md` 和 `docs/features/index.md` 的当前行为描述。
+5. 更新 `docs/features/message_analysis.md` 和 `docs/index.md` 的当前行为描述。
 
 ## 验证计划
 

@@ -10,6 +10,6 @@
 2. 复查外部产品与研究：Memory sources / memory controls、多租户 RAG 授权、local-first memory isolation 和 multiuser memory fabric。
 3. 调整 Memory Service hook 顺序，让 `writeGuardMiddleware` 先于 auth middleware 处理写请求。
 4. 在现有 `api-health.test.ts` 多用户隔离测试中补回归断言：无身份写请求返回 403，且不创建 `data/users/default/`。
-5. 更新 `docs/features/memory_system.md` 的多用户隔离说明。
+5. 更新 `docs/memory_system.md` 的多用户隔离说明。
 6. 跑定向后端测试、dev extension 首次编译、memory user identity E2E 和 scoped diff check。
 

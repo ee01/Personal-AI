@@ -343,9 +343,9 @@ try {
     waitUntil: 'domcontentloaded',
   });
   await popupPage
-    .locator('.radar-button', { hasText: '开启会议全貌' })
+    .locator('.radar-button', { hasText: '开启会议弹幕' })
     .waitFor({ timeout: 15000 });
-  await popupPage.locator('.radar-button', { hasText: '开启会议全貌' }).click();
+  await popupPage.locator('.radar-button', { hasText: '开启会议弹幕' }).click();
   await popupPage
     .locator('.meeting-pilot-notice.info', {
       hasText: '正在提交 Meeting Pilot Capture 启动请求',

@@ -2,7 +2,7 @@
 
 ## Selected feature
 
-- Index row: `梦境重放` / Memory Service / `docs/features/memory_system.md`
+- Index row: `梦境重放` / Memory Service / `docs/memory_system.md`
 - User-facing surface: `memory-exploring.html#/dreams`
 
 ## Current state
@@ -33,4 +33,4 @@ The Dreams page shows per-card grounding after expansion, but the list entrance 
 
 - `npm run verify:memory-dreams:e2e`
 - `npm start` until first successful compile, then stop
-- `git diff --check -- src/modals/components/DreamInsights.vue tools/verify-memory-dreams-e2e.mjs docs/features/memory_system.md .planning/2026-06-14-automation-dream-replay-review-readiness/plan.md`
+- `git diff --check -- src/modals/components/DreamInsights.vue tools/verify-memory-dreams-e2e.mjs docs/memory_system.md .planning/2026-06-14-automation-dream-replay-review-readiness/plan.md`

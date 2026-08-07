@@ -3,7 +3,7 @@
 ## Repo
 
 - `docs/progressing/to-verify.md` says `暂无。`, so this run can choose a fresh feature.
-- Selected `secret value 脱敏` from `docs/features/index.md`, under `docs/features/jira_automation_import.md`.
+- Selected `secret value 脱敏` from `docs/index.md`, under `docs/features/jira_automation_import.md`.
 - Current implementation already has `Secret re-entry map` and `Credential restore gate`, but the preview compresses all redacted slots into a flat path list. This is safe but not very actionable when multiple credential classes are present.
 - Existing verifier coverage already asserts no raw signed URL, provider token, hidden secret, body secret, label token, or failure-response secret leaks into preview, copy packet, create payload, console, or success/failure receipts.
 

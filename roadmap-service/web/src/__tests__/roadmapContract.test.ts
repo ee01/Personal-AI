@@ -4,10 +4,15 @@ import {
   buildDraftGroups,
   buildStateMessage,
   canDeleteItem,
+  defaultPhaseDate,
   formatEstimate,
   isDraftItem,
   itemDisplayKey,
+  pendingDepCount,
+  pickTickerEntry,
   subTypeComesFromCreateMeta,
+  tickerLabel,
+  trackMarkers,
   typeBadge,
 } from '../composables/useRoadmapContract';
 import type { RoadmapItem, RoadmapSub } from '../types';
@@ -48,6 +53,7 @@ function item(overrides: Partial<RoadmapItem> = {}): RoadmapItem {
     expanded: false,
     version: 1,
     subs: [],
+    markers: [],
     ...overrides,
   };
 }
@@ -227,5 +233,117 @@ describe('create-jira payload', () => {
     expect(payload.parent).toBeNull();
     expect(payload.children[0].parentJiraKey).toBe('NOVA-7');
     expect(payload.children[0].parentItemKey).toBe('NOVA-7');
+  });
+});
+
+describe('markers helpers', () => {
+  it('counts pending deps and sorts track markers', () => {
+    const row = item({
+      markers: [
+        {
+          id: 'd1',
+          kind: 'dep',
+          label: 'no eta',
+          date: null,
+          createdBy: 't',
+          version: 1,
+        },
+        {
+          id: 'p1',
+          kind: 'phase',
+          phaseKind: 'production',
+          label: 'Production',
+          date: '2026-09-01',
+          createdBy: 't',
+          version: 1,
+        },
+        {
+          id: 'd2',
+          kind: 'dep',
+          label: 'with eta',
+          date: '2026-08-10',
+          jiraKey: 'PLAT-1',
+          etaSource: 'jira',
+          createdBy: 't',
+          version: 1,
+        },
+      ],
+    });
+    expect(pendingDepCount(row)).toBe(1);
+    expect(trackMarkers(row).map((m) => m.id)).toEqual(['d2', 'p1']);
+  });
+
+  it('defaults phase dates past the bar end with stagger', () => {
+    const row = item({
+      start: '2026-08-01',
+      days: 14,
+      markers: [
+        {
+          id: 'p0',
+          kind: 'phase',
+          phaseKind: 'design',
+          label: 'Design',
+          date: '2026-08-20',
+          createdBy: 't',
+          version: 1,
+        },
+      ],
+    });
+    // end = Aug 14; +7 + 1*7 = Aug 28
+    expect(defaultPhaseDate(row)).toBe('2026-08-28');
+  });
+});
+
+describe('sync ticker', () => {
+  function entry(
+    overrides: Partial<import('../types').ActivityEntry> = {},
+  ): import('../types').ActivityEntry {
+    return {
+      id: 'a1',
+      teamId: 't1',
+      at: Date.now(),
+      actorName: 'Kevin',
+      actorClientId: 'other',
+      actorSource: 'anonymous',
+      op: 'move',
+      targetType: 'item',
+      targetKey: 'NOVA-1',
+      summary: { alias: 'Readiness' },
+      text: 'Kevin 把 Readiness 从 2026-08-01 移到 2026-08-05',
+      ...overrides,
+    };
+  }
+
+  it('pickTickerEntry skips self and noise ops', () => {
+    expect(pickTickerEntry([], 'me')).toBeNull();
+    expect(
+      pickTickerEntry(
+        [entry({ actorClientId: 'me' }), entry({ id: 'a2', op: 'lock' })],
+        'me',
+      ),
+    ).toBeNull();
+    const hit = entry({ id: 'a3', actorClientId: 'other', op: 'add_sub' });
+    expect(
+      pickTickerEntry(
+        [
+          entry({ actorClientId: 'me' }),
+          entry({ id: 'noise', op: 'expand' }),
+          hit,
+        ],
+        'me',
+      ),
+    ).toBe(hit);
+  });
+
+  it('tickerLabel strips actor prefix and truncates', () => {
+    expect(tickerLabel(entry())).toBe(
+      '把 Readiness 从 2026-08-01 移到 2026-08-05',
+    );
+    const long = entry({
+      text: `Kevin ${'很长的动作文案'.repeat(20)}`,
+    });
+    const label = tickerLabel(long, 20);
+    expect(label.endsWith('…')).toBe(true);
+    expect(label.length).toBe(20);
   });
 });

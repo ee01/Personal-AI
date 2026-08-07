@@ -2,7 +2,7 @@
 
 ## 2026-07-09
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory guidance.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, and relevant memory guidance.
 - Random sample selected `证据守望契约` after skipping fresher exact feature surfaces.
 - Created dedicated planning directory and switched `.planning/.active_plan`.
 - Inspected Evidence Watch docs, service tests, API tests, service implementation, Ask route wiring, and Search Result Ask receipt rendering.

@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { formatMainLlmProfileForMeetingPilot } from '../llm';
+import { buildClaimAttributionCompactPresentationFromItems } from '../claimAttributionPresentation';
 import {
   extractRingCentralVideoJoinUrl,
   parseRingCentralVideoJoinTarget,
@@ -2213,6 +2214,39 @@ const shellStyle = `
     font-size: 11.5px;
   }
 
+  .meeting-prep-attribution-receipt {
+    display: grid;
+    gap: 4px;
+    margin: 8px 0 4px;
+    padding: 8px;
+    border: 1px solid rgba(245,158,11,0.28);
+    border-radius: 8px;
+    background: rgba(120,53,15,0.16);
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  .meeting-prep-attribution-receipt.corrected {
+    border-color: rgba(96,165,250,0.3);
+    background: rgba(30,64,175,0.16);
+  }
+
+  .meeting-prep-attribution-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    color: var(--text);
+  }
+
+  .meeting-prep-attribution-head span {
+    color: #fbbf24;
+    font-weight: 800;
+  }
+
+  .meeting-prep-attribution-detail {
+    overflow-wrap: anywhere;
+  }
+
   .meeting-prep-links {
     display: flex;
     flex-wrap: wrap;
@@ -3673,7 +3707,7 @@ function buildCaptureHandoffReceipt(
     status: '等待授权',
     scope:
       '不会静默录制；授权后才开始本机录制、实时总结和会后分析。参会者通知和录制同意需要你在会议中自行处理。',
-    nextStep: '点击扩展 icon，在 popup 第一项开启会议全貌。',
+    nextStep: '点击扩展 icon，在 popup 第一项开启会议弹幕。',
   };
 }
 
@@ -4982,14 +5016,14 @@ function MeetingSidePanel() {
     ? '请改从 popup 重新开始 Capture'
     : '请从 popup 开始 Capture';
   const captureStartDescription = !session.readiness.canStartCapture
-    ? '当前配置仍有阻断项。先修复配置，再点击浏览器右上角的 Personal AI 图标，并在 popup 第一项点击“开启会议全貌”。'
+    ? '当前配置仍有阻断项。先修复配置，再点击浏览器右上角的 Personal AI 图标，并在 popup 第一项点击“开启会议弹幕”。'
     : isTranscriptPilotActive
     ? '当前已通过 RingCentral Transcript 支撑发言、实时摘要、时间线、行动项和记忆关联。启用画面理解与纪要后，会额外读取共享画面/OCR，并把画面文字一起用于记忆关联和会后图文 Minutes。'
     : session.capture.lastError === 'tabCapture_stream_unavailable'
-    ? 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。'
+    ? 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议弹幕”。'
     : session.capture.kind === 'stopped'
-    ? '录制已经停止。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”，恢复会中总结、时间线和会后分析。'
-    : 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。';
+    ? '录制已经停止。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议弹幕”，恢复会中总结、时间线和会后分析。'
+    : 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议弹幕”。';
   const captureGuideButtonLabel =
     captureGuideFeedback === 'shown'
       ? '已显示开启步骤'
@@ -5116,6 +5150,10 @@ function MeetingSidePanel() {
   const meetingPrepEvidence = meetingPrepHandoff
     ? meetingPrepHandoff.evidence.slice(0, 5)
     : [];
+  const meetingPrepClaimAttributionReceipt =
+    buildClaimAttributionCompactPresentationFromItems(
+      meetingPrepEvidence.flatMap((item) => item.claimAttribution ?? []),
+    );
   const meetingPrepGoal = meetingPrepHandoff
     ? meetingPrepHandoff.goal ||
       buildMeetingPrepHandoffGoalFromCards(
@@ -5582,6 +5620,26 @@ function MeetingSidePanel() {
                 {meetingPrepEvidence.length ? (
                   <details className="meeting-prep-evidence">
                     <summary>证据来源（{meetingPrepEvidence.length}）</summary>
+                    {meetingPrepClaimAttributionReceipt ? (
+                      <div
+                        className={`meeting-prep-attribution-receipt ${
+                          meetingPrepClaimAttributionReceipt.tone
+                        }`}
+                        aria-label={meetingPrepClaimAttributionReceipt.ariaLabel}
+                      >
+                        <div className="meeting-prep-attribution-head">
+                          <span>{meetingPrepClaimAttributionReceipt.label}</span>
+                          <strong>{meetingPrepClaimAttributionReceipt.title}</strong>
+                        </div>
+                        <div>{meetingPrepClaimAttributionReceipt.summary}</div>
+                        {meetingPrepClaimAttributionReceipt.details.length ? (
+                          <div className="meeting-prep-attribution-detail">
+                            {meetingPrepClaimAttributionReceipt.details.join('；')}
+                          </div>
+                        ) : null}
+                        <div>{meetingPrepClaimAttributionReceipt.boundary}</div>
+                      </div>
+                    ) : null}
                     {meetingPrepEvidence.map((item) => {
                       const links = getMeetingPrepEvidenceLinks(item);
                       return (

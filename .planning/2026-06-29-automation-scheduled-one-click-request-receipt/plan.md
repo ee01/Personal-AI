@@ -2,7 +2,7 @@
 
 ## 目标
 
-从 `docs/features/index.md` 随机抽中 `定时消息一键初始化`。本轮只优化首次初始化路径的状态可见性，不改变 Google Sheet、Apps Script、Web App、触发器或 Config 的创建契约。
+从 `docs/index.md` 随机抽中 `定时消息一键初始化`。本轮只优化首次初始化路径的状态可见性，不改变 Google Sheet、Apps Script、Web App、触发器或 Config 的创建契约。
 
 ## 观察
 

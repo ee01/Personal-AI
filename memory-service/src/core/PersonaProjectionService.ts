@@ -134,6 +134,7 @@ export class PersonaProjectionService {
       scene,
       audience.type,
       limitedSpeakable.length > 0,
+      input.suggestionType,
     );
     const voiceMode = resolveVoiceMode(scene);
     const requiresPreview =
@@ -438,7 +439,12 @@ function resolveProjectionScene(
 ): PersonaProjectionScene {
   if (request.contextType === 'web_agent_prompt') {
     if (suggestionType === 'prompt_patch') return 'web_ai_prompt_patch';
-    if (suggestionType === 'rewrite_prompt') return 'web_ai_rewrite_prompt';
+    if (
+      suggestionType === 'rewrite_prompt' ||
+      suggestionType === 'prompt_draft'
+    ) {
+      return 'web_ai_rewrite_prompt';
+    }
     return 'web_ai_context_pack';
   }
   if (request.contextType === 'jira_issue') return 'jira_comment';
@@ -451,7 +457,9 @@ function resolveRepresentationMode(
   scene: PersonaProjectionScene,
   audienceType: ComposerAudienceType,
   usesSpeakableFacts: boolean,
+  suggestionType?: ComposerAssistResponse['suggestionType'],
 ): PersonaProjectionSummary['representationMode'] {
+  if (suggestionType === 'reply_refine') return 'draft_preview_required';
   if (scene.startsWith('web_ai_')) return 'context_pack_copyable';
   if (scene === 'jira_comment' && usesSpeakableFacts) {
     return 'draft_preview_required';

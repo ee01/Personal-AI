@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` is empty.
 - AppleScript did not list `Personal AI`, but EventKit did. EventKit result: `Personal AI` has 4 total reminders and 0 incomplete reminders.
-- `docs/features/compose_assist.md` already documents that thumb-down hides the current suggestion, adjusts only the current surface threshold, and reports calibration write status.
+- `docs/features/assist.md` already documents that thumb-down hides the current suggestion, adjusts only the current surface threshold, and reports calibration write status.
 - `src/composer-guard/ComposerGuardController.ts` already splits post-click receipt text into local hide, threshold save, Rehearsal feedback, and ambient calibration states.
 - Current reject button attributes are generic: `title="减少这类建议"` and matching `aria-label`, which does not state the no-send/no-delete/no-global-silence boundary before click.
 

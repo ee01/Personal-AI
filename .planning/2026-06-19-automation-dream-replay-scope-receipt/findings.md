@@ -9,7 +9,7 @@
 
 ## Code Findings
 
-- `docs/features/index.md` lists `梦境重放` under Memory Service, documented in `docs/features/memory_system.md`.
+- `docs/index.md` lists `梦境重放` under Memory Service, documented in `docs/memory_system.md`.
 - `src/modals/components/DreamInsights.vue` already parses `dreams/*.md`, loads up to 10 recent files plus an explicit notification deep-link target, surfaces skipped files, evidence readiness, triage, and reflection handoff.
 - Existing UX gap: the page has card-level processing receipts but no first-row receipt saying the page is a bounded local view of recent/readable dream files, not the full dream archive or a writeback action.
 - Existing E2E `tools/verify-memory-dreams-e2e.mjs` already stubs list/read file APIs and checks deep-link handling, skipped file warnings, grounding receipts, and reflection route handoff. It is the right place to assert the new scope receipt.

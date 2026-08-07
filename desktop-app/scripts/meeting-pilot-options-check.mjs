@@ -276,25 +276,25 @@ try {
   await page.waitForSelector('#MEETING_MINUTES_API_URL', { timeout: 15000 });
 
   const headingText = await page
-    .locator('h2', { hasText: '会议全貌' })
+    .locator('h2', { hasText: '会议弹幕' })
     .textContent();
-  assert.match(headingText || '', /会议全貌/);
+  assert.match(headingText || '', /会议弹幕/);
   const sectionHeadings = await page.locator('h2').allTextContents();
   const meetingSectionIndex = sectionHeadings.findIndex(
-    (text) => text.trim() === '会议全貌',
+    (text) => text.trim() === '会议弹幕',
   );
   const webpageMemorySectionIndex = sectionHeadings.findIndex(
     (text) =>
       ['网页记忆提示控制', '记忆提示控制', 'Memory Lens'].includes(text.trim()),
   );
-  assert.ok(meetingSectionIndex >= 0, '未找到会议全貌板块');
+  assert.ok(meetingSectionIndex >= 0, '未找到会议弹幕板块');
   assert.ok(
     webpageMemorySectionIndex > meetingSectionIndex,
-    '网页记忆提示控制板块应位于会议全貌之后',
+    '网页记忆提示控制板块应位于会议弹幕之后',
   );
   await saveScreenshot(page, 'meeting-pilot-options-section.png');
 
-  log('填写会议全貌配置并保存');
+  log('填写会议弹幕配置并保存');
   const providerUrl = 'https://whisper.example.test';
   const providerKey = 'meeting-provider-key';
   const transcribeModel = 'whisper-test-model';

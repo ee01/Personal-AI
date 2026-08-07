@@ -14,7 +14,7 @@
 - Added button-level `title` / `aria-label` boundaries in `TimelinePage.vue` for internal memory route, external source open, and security diagnostic copy controls.
 - Added matching button-level boundaries in `SearchResultPage.vue` for primary open, internal route, source open, details fallback, and security diagnostic copy controls.
 - Updated affected memory E2E selectors and added pre-click title assertions for search source/open, blocked diagnostic copy, timeline internal route, timeline source open, and timeline diagnostic copy.
-- Updated `docs/features/memory_system.md` and `docs/features/index.md` for the new control-point boundary.
+- Updated `docs/memory_system.md` and `docs/index.md` for the new control-point boundary.
 - `node --check` passed for the three edited E2E files.
 
 ## 2026-07-12T03:12:19+0800

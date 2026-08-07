@@ -30,6 +30,6 @@
 - Added Chinese childcare and English prompt-rewrite eval cases; updated the legacy context-pack case and banned placeholder/tool/Jira boilerplate in the judge.
 - Verified backend API/LLM tests: 29/29 passed; frontend unit tests: 19/19 passed; direct-insert, draft-staleness, and ambient-calibration E2Es all passed.
 - Verified `memory-service` build, the first successful `npm start` watch compile, `eval:validate`, and the full `compose-assist --no-repair` suite. Final report: `.eval-runs/20260715T043458Z-compose-assist-9quphb/report.html`.
-- Updated `docs/features/compose_assist.md` with the blur trigger, rewrite/append modes, language contract, evidence governance, latency controls, risk boundary, normalization rule, evals, and acceptance cases.
+- Updated `docs/features/assist.md` with the blur trigger, rewrite/append modes, language contract, evidence governance, latency controls, risk boundary, normalization rule, evals, and acceptance cases.
 - Retried the Chrome browser binding and ran the prescribed diagnostics. Chrome is running and the native host is valid, but the ChatGPT Chrome Extension is not installed in the selected profile; real-page automation remains the only unfinished acceptance step.
 - Re-ran the final Compose Assist API/LLM, frontend unit, and three E2E checks successfully. A later repo-wide `eval:validate` now fails only on five missing-context cases in concurrent untracked `action-readiness-contracts` fixtures; no Compose files or cases are implicated, so those edits were left untouched.

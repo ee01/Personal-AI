@@ -2,7 +2,7 @@
 
 ## 2026-07-15T01:03:52+0800
 
-- Read `AGENT.md`, automation memory, `docs/features/index.md`, planning skill instructions, repo memory pointers, `docs/progressing/to-verify.md`, and worktree status.
+- Read `AGENT.md`, automation memory, `docs/index.md`, planning skill instructions, repo memory pointers, `docs/progressing/to-verify.md`, and worktree status.
 - Randomly sampled feature rows and selected User Profile `画像快速增强/降低影响` after excluding freshest automation feature families.
 - Inspected `docs/features/user_profile_system.md`, `src/modals/components/UserProfilePage.vue`, `src/services/UserProfileMessageHandler.ts`, `src/services/userProfileViewModel.ts`, `memory-service/src/routes/profile.ts`, `tools/verify-user-profile-system.ts`, and `tools/verify-user-profile-export-e2e.mjs`.
 - Checked Reminders: EventKit found `Personal AI` with 4 total items and 0 incomplete items.
@@ -14,7 +14,7 @@
 - Added User Profile confirm/retract/restore button boundary helpers in `src/modals/components/UserProfilePage.vue`.
 - Connected `title` / `aria-label` to pending queue confirm/retract buttons, profile row confirm/retract buttons, the immediate undo-retract button, and retracted-audit restore buttons.
 - Extended `tools/verify-user-profile-export-e2e.mjs` to assert the real DOM boundaries before clicking confirm, retract, undo-retract, and retracted audit restore.
-- Updated `docs/features/user_profile_system.md` and the User Profile row in `docs/features/index.md`.
+- Updated `docs/features/user_profile_system.md` and the User Profile row in `docs/index.md`.
 
 ## 2026-07-15T01:14:14+0800
 

@@ -24,7 +24,7 @@
 
 1. 给 `.data-source-close` 按钮补 `title` 和 `aria-label`，说明只隐藏当前面板。
 2. 在 Project Dashboard E2E 的 watched-project 成功同步路径里断言收起边界，并点击收起后确认状态条和新增项目仍存在。
-3. 更新 `docs/features/brain_like_project_analysis_system.md`、`docs/features/project_dashboard_usage_guide.md` 和 `docs/features/index.md`。
+3. 更新 `docs/features/brain_like_project_analysis_system.md`、`docs/features/project_dashboard_usage_guide.md` 和 `docs/index.md`。
 4. 验证：`node --check tools/verify-project-dashboard-e2e.mjs`、`npm run verify:project-dashboard`、`npm start -- --progress` 首次编译、`npm run verify:project-dashboard:e2e`、scoped `git diff --check`。
 
 ## 当前时间

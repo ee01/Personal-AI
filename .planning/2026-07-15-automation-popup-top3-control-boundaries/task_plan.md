@@ -4,7 +4,7 @@ Goal: improve `Popup Top 3` under Today Pilot by keeping docs current, using cur
 
 ## Feature Selection
 
-- Selected feature: `Popup Top 3` from `docs/features/index.md` -> `docs/features/today_pilot.md`.
+- Selected feature: `Popup Top 3` from `docs/index.md` -> `docs/features/today_pilot.md`.
 - Randomization note: the first randomized candidates included recent Agent Workflow, Topic, Doubao, Coverage, Ask, Rehearsal, Reflection, and Scheduled/Project families. `Popup Top 3` is a valid less-recent target with a clear popup/E2E verification path.
 - Carry-over check: `docs/progressing/to-verify.md` says `暂无`.
 - Reminder state: AppleScript did not list `Personal AI`; EventKit found `Personal AI` with 4 total items and 0 incomplete items, so no Reminder item applies or should be completed.
@@ -15,7 +15,7 @@ Goal: improve `Popup Top 3` under Today Pilot by keeping docs current, using cur
 |---|---|---|
 | 1 | completed | Recorded plan, research, Reminder result, and selected gap |
 | 2 | completed | Added dynamic `title` / `aria-label` boundaries to Popup Top 3 card controls |
-| 3 | completed | Updated Today Pilot docs and `docs/features/index.md` with concise current behavior |
+| 3 | completed | Updated Today Pilot docs and `docs/index.md` with concise current behavior |
 | 4 | completed | Static verifier, `npm start` first compile, Today Pilot E2E, and scoped `git diff --check` passed |
 
 ## Intended Scope

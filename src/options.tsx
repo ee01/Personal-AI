@@ -505,7 +505,7 @@ function ChromeOnDeviceASRPanel({ enabled }: { enabled: boolean }) {
       </small>
       <small style={{ color: '#6b7280', display: 'block', marginBottom: 8 }}>
         由于 Chrome 对 extension offscreen 中的自定义 audio track 支持不稳定，
-        会议全貌仅在 Local only 模式下尝试使用它；Auto 模式会优先
+        会议弹幕仅在 Local only 模式下尝试使用它；Auto 模式会优先
         Local ASR，然后回退 Cloud。
       </small>
       <small
@@ -2198,6 +2198,7 @@ const Options = () => {
   const openClawConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<EnvConfigType>({ ...defaultEnvConfig });
   const [currentUsername, setCurrentUsername] = useState('');
+  const lastLanguageSyncKeyRef = useRef('');
   const [status, setStatus] = useState<{
     message: string;
     type: 'success' | 'error' | '';
@@ -2766,21 +2767,44 @@ const Options = () => {
 
   const handleUiLanguageChange = async (nextLanguage: UiLanguage) => {
     await setUiLanguage(nextLanguage);
-    try {
-      const client = await createMemoryServiceClient(config);
-      await syncUserLanguagePreferenceProfileItem(nextLanguage, client);
-      setStatus({
-        message: '语言偏好已同步到用户画像',
-        type: 'success',
-      });
-    } catch (error) {
-      console.warn('Failed to sync UI language into user profile:', error);
-      setStatus({
-        message: '界面语言已保存，但同步用户画像失败，请检查 memory-service 设置',
-        type: 'error',
-      });
-    }
   };
+
+  useEffect(() => {
+    const baseUrl = config.MEMORY_SERVICE_BASE_URL?.trim();
+    if (!currentUsername || !baseUrl) return;
+    const syncKey = `${currentUsername}|${baseUrl}|${uiLanguage}`;
+    if (lastLanguageSyncKeyRef.current === syncKey) return;
+    lastLanguageSyncKeyRef.current = syncKey;
+
+    void (async () => {
+      try {
+        const client = await createMemoryServiceClient(config);
+        const result = await syncUserLanguagePreferenceProfileItem(
+          uiLanguage,
+          client,
+        );
+        if (result.operation !== 'unchanged') {
+          await client.refreshKeystoneBriefLanguage();
+          setStatus({
+            message: '语言偏好已同步，相关简报正在后台刷新',
+            type: 'success',
+          });
+        }
+      } catch (error) {
+        lastLanguageSyncKeyRef.current = '';
+        console.warn('Failed to reconcile UI language with user profile:', error);
+        setStatus({
+          message: '界面语言已保存，但同步用户画像失败，请检查 memory-service 设置',
+          type: 'error',
+        });
+      }
+    })();
+  }, [
+    uiLanguage,
+    currentUsername,
+    config.MEMORY_SERVICE_BASE_URL,
+    config.MEMORY_SERVICE_API_KEY,
+  ]);
 
   const getRuntimeConfigFromBackend = async (
     targetConfig: EnvConfigType,
@@ -3873,6 +3897,29 @@ const Options = () => {
           </button>
           <button
             type="button"
+            onClick={() => {
+              const url =
+                typeof chrome !== 'undefined' && chrome.runtime?.getURL
+                  ? chrome.runtime.getURL('help-demos/roadmap-demo.html')
+                  : 'docs/demo/roadmap-demo.html';
+              window.open(url, '_blank');
+            }}
+            style={{
+              backgroundColor: '#20242A',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold',
+            }}
+            title="纯静态 Personal Roadmap 原型（无真实 Jira / 扩展调用）"
+          >
+            🗺 项目 Roadmap（静态 Demo）
+          </button>
+          <button
+            type="button"
             onClick={async () => {
               try {
                 const base = String(config.MEMORY_SERVICE_BASE_URL || '')
@@ -4447,7 +4494,7 @@ const Options = () => {
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          这里是会议全貌的唯一核心配置入口：ASR / 转写 Provider、 Minutes
+          这里是会议弹幕的唯一核心配置入口：ASR / 转写 Provider、 Minutes
           API、分析模型与密钥都在这里维护；side panel
           只保留会中体验和个性化设置。建议配置转写能力，用于实时 transcript，
           并提升摘要、行动项和决议提取准确度； Minutes API 可选，主要用于会后
@@ -4458,8 +4505,8 @@ const Options = () => {
           name="MEETING_PILOT_ENABLED"
           checked={config.MEETING_PILOT_ENABLED === true}
           onChange={handleInputChange}
-          label="每次会议默认开启会议全貌"
-          description="关闭后不会在会议页默认注入悬浮入口；仍可从扩展 popup 点击“开启会议全貌”，对当前会议单次启用。"
+          label="每次会议默认开启会议弹幕"
+          description="关闭后不会在会议页默认注入悬浮入口；仍可从扩展 popup 点击“开启会议弹幕”，对当前会议单次启用。"
         />
         <ToggleField
           id="MEETING_PILOT_FLOATING_ICON_VISIBLE"
@@ -4467,7 +4514,7 @@ const Options = () => {
           checked={config.MEETING_PILOT_FLOATING_ICON_VISIBLE !== false}
           onChange={handleInputChange}
           label="显示会议页右下角悬浮入口"
-          description="悬浮 icon hover 3 秒后会出现小 x，可隐藏当前页面入口或选择永不展示；如果选过“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用 popup 单次会议全貌。"
+          description="悬浮 icon hover 3 秒后会出现小 x，可隐藏当前页面入口或选择永不展示；如果选过“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用 popup 单次会议弹幕。"
           disabled={config.MEETING_PILOT_ENABLED !== true}
         />
         <ToggleField
@@ -4761,7 +4808,7 @@ const Options = () => {
             name="MEETING_PROVIDER_API_KEY"
             value={config.MEETING_PROVIDER_API_KEY || ''}
             onChange={handleInputChange}
-            placeholder="输入会议全貌转写服务 API Key"
+            placeholder="输入会议弹幕转写服务 API Key"
             autoComplete="new-password"
             disabled={config.MEETING_PILOT_ENABLED !== true}
           />

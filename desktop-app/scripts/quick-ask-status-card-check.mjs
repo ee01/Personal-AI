@@ -1261,30 +1261,43 @@ async function main() {
       firstEvidence.locator('.evidence-meta-row span').last(),
       '弱相关网页快照',
     );
+    const firstEvidenceCopy = await firstEvidence
+      .locator('.evidence-copy')
+      .textContent();
+    assert.match(firstEvidenceCopy || '', /弱相关网页快照|展开可看原文/);
+    assert.doesNotMatch(firstEvidenceCopy || '', /CloseLearn more|Restore this version/);
+    assert.ok(
+      (firstEvidenceCopy || '').length <= 140,
+      `noisy evidence copy should stay short, got ${firstEvidenceCopy?.length}`,
+    );
     assert.equal(
       await firstEvidence.locator('.evidence-raw[open]').count(),
       0,
     );
     const evidenceBox = await firstEvidence.boundingBox();
     assert.ok(
-      evidenceBox && evidenceBox.height < 190,
+      evidenceBox && evidenceBox.height < 160,
       `noisy evidence card should stay compact, got ${evidenceBox?.height}`,
     );
-    await contextPage
-      .locator('.evidence-item')
-      .nth(1)
+    const secondEvidence = contextPage.locator('.evidence-item').nth(1);
+    await secondEvidence
       .locator('.evidence-head')
       .filter({ hasText: 'MTR-141852: AI Custom VBG' })
       .waitFor({ state: 'visible' });
-    await contextPage
-      .locator('.evidence-item')
-      .nth(1)
-      .locator('.evidence-raw summary')
-      .click();
-    const rawBody = contextPage
-      .locator('.evidence-item')
-      .nth(1)
-      .locator('.evidence-raw-body');
+    const secondEvidenceCopy = await secondEvidence
+      .locator('.evidence-copy')
+      .textContent();
+    assert.match(secondEvidenceCopy || '', /在 .+中有/);
+    assert.doesNotMatch(
+      secondEvidenceCopy || '',
+      /at_mention_compose|Initiative to replace VCG/,
+    );
+    assert.ok(
+      (secondEvidenceCopy || '').length <= 140,
+      `evidence locator copy should stay short, got ${secondEvidenceCopy?.length}`,
+    );
+    await secondEvidence.locator('.evidence-raw summary').click();
+    const rawBody = secondEvidence.locator('.evidence-raw-body');
     await rawBody.locator('a[data-external-link]').first().waitFor({
       state: 'visible',
     });

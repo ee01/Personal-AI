@@ -22,7 +22,7 @@ Phase 3
 ### Phase 3: Implementation
 - [x] Add Auto Reply rule-scope/queue boundary receipt helper
 - [x] Render receipt in new/edit auto reply config panels
-- [x] Update docs/features/message_reaction.md and docs/features/index.md
+- [x] Update docs/features/message_reaction.md and docs/index.md
 - **Status:** complete
 
 ### Phase 4: Testing & Verification
@@ -43,7 +43,7 @@ Phase 3
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Target `自动答复 / Reply` from `docs/features/index.md` | Randomly sampled from index after excluding recently touched automation feature families. |
+| Target `自动答复 / Reply` from `docs/index.md` | Randomly sampled from index after excluding recently touched automation feature families. |
 | Add an in-form rule boundary receipt | The risk is user misunderstanding before saving: save rule vs send now vs future queue row vs review path. |
 | Keep change client-side/presentation-only | Existing backend queue and PendingReview behavior already has coverage; the UX gap is visible explanation. |
 

@@ -1,8 +1,8 @@
 # 新能力：Memory Echo Dampener / 记忆回声抑制器
 
-> 状态：待决策；本轮只完成方案与交互 Demo，未改运行时代码  
-> 规划日期：2026-07-31  
-> 建议复制标题：`新能力：记忆回声抑制器`  
+> 状态：待决策；本轮只完成方案与交互 Demo，未改运行时代码
+> 规划日期：2026-07-31
+> 建议复制标题：`新能力：记忆回声抑制器`
 > 中文 Demo：[memory-echo-dampener-demo.html](./memory-echo-dampener-demo.html)
 
 ## 结论先行
@@ -95,14 +95,17 @@ Personal AI 已经会去掉完全重复的消息、隔离不同问题的证据�
 
 ## 为什么现在做
 
-### 1. 线上真实数据已经出现“记录重复很多，但独立性未知”的结构
+### 1. 线上真实数据已经出现“内容不重复，但来源并不独立”的结构
 
-2026-07-29 对 `10.32.56.212` 上 `esone.qiu` memory service 做了只读 API 与 SQLite `readonly + immutable=1` 检查；没有调用会更新 access count、恢复 stale action 或产生分析写入的接口。
+2026-07-31 对 `10.32.56.212` 上 `esone.qiu` memory service 做了只读 API 与 SQLite `readonly + immutable=1` 检查；没有调用会更新 access count、恢复 stale action 或产生分析写入的接口。当前快照约有 11,631 条 messages、10,463 个 chunks；快照仍可能漏掉尚未 checkpoint 的 WAL，因此只作为结构证据，不当生产审计结论。
 
-- `/stats` 返回约 11,588 条 messages、10,413 个 chunks、14,186 个 entities、54,683 条 relationships。
-- `messages_raw` 按精确内容聚合有 433 条 duplicate excess；其中 meeting 为 121 / 324（约 37.3%），Glip 为 278 条 excess。
-- active chunks 按 content hash 聚合有 468 条 duplicate excess；meeting 为 157 / 351（约 44.7%），`reflection_thread` 为 121 / 1,899。
-- 这些聚合能证明真实库里存在显著重复载体，但**不能单独证明某个具体 Ask 已经因跨来源回声答错**。因此本方案要求先 shadow eval，再影响生产排序。
+- 非空 raw message 精确重复为 195 组、416 条 duplicate excess；长度 ≥ 8 的实质内容跨 source 精确重复为 0。也就是说，普通 exact dedup 不是主要答案。
+- 1,281 条 issue 候选里只发现两个高相似跨 surface 传播候选：一条 Jira 记录 4 秒后被 Web Source Memory 再包装保存；另一条 Glip issue 标题被完整嵌入后续 Calendar agenda。
+- 更关键的真实形态是**语义派生回声**：某条脱敏后的 `MTR-148***` DEV Estimate `0.3 → 0.4` 变化链，后来出现在 Web 1 条、Daily Log 3 条、Reflection Thread 28 条 chunks 中；32 条内容 hash 全不同。这不是字节重复，而是同一证据被持续改写、反思和再投影。
+- 全表跨 source-label 的 chunk hash 重复主要来自 `unknown ↔ daily_log` 旧标签或派生投影，也不能当作独立来源相互佐证。
+- `source_type` 不是严格 provenance；正式判链仍必须结合 `source_url`、`source_memory_links`、`file_path`、显式 parent ref 与时间。重复 issue / value 也可能只是合法历史，不能只凭相似度强行折叠。
+
+这些检查证明真实库里已经存在“一个原始来源 → 多个不同 hash 派生记录”的结构，但**仍不能单独证明某个具体 Ask 已经因此答错**。因此本方案要求先 shadow eval，再影响生产排序。
 
 更重要的是，当前代码存在可验证的结构暴露：
 
@@ -152,13 +155,17 @@ Personal AI 已覆盖 Glip、Jira、meeting、calendar、web、Source Memory、�
 | 能力 | 已解决什么 | 本能力新增什么 | 必须复用 / 禁止重复 |
 | --- | --- | --- | --- |
 | Ingestion dedup | 同 post 或同 `content + source_type + sender` 的重复写入 | 跨 source、轻改写、引用、摘要和 AI 改写的派生家族 | 不改变 raw 去重语义；在派生层建关系 |
+| Merge / Evolution / TTL | 对已经进入系统的高相似 chunk 做 ADD / UPDATE / MERGE / NOOP 与生命周期处理 | 允许多份合法投影继续存在，但不把它们误算为独立佐证 | 不触发二次合并，不覆写 raw episode |
 | Scene Memory Autopilot | 低信息、当前页 echo、同 source cluster 的展示过滤 | 消费前的 claim-level 独立来源计数 | 复用 quiet reason；不另建 attention 页面 |
 | Evidence Cohesion Gate | 把同题 evidence 留在一起，隔离跨题证据 | 在同题 cluster 内判断哪些只是同一个 origin 的回声 | 固定顺序：Cohesion → Echo Dampener |
 | Change Memory Ledger | 保存字段 old/new/current/historical 链 | 防止旧 event 的派生副本累加成多数票 | 当前值仍由 Ledger/authority 决定 |
 | Keystone Memory Brief | 多来源高信号简报 | 把“两个 source id”升级为“两个 independent origin family” | 不新增第二种简报 |
 | Source Memory Distiller | source capsule 内的 evidence spans、takeaways、triggers、fact candidates | 把多个 capsule / message / summary 连接到同一个原始 claim | 复用 evidence span hash 与 cluster metadata |
+| Memory Weave Provenance | 告诉用户答案跨了多少 source kind、时间与实体 | 防止派生 surface 虚增“跨来源”统计，额外输出 independent family count | 继续复用 weave 展示，不增加第二枚常驻 badge |
 | Memory Claim Attribution（待决策） | owner、reported speech、AI suggestion、hypothesis、commitment | 证据之间的 derivation / independence | 可消费 attribution，但 P0 不依赖其 UI 或落地 |
 | Artifact Memory Lineage（搁置） | 用户维护成果物的完整来源与影响链 | 只为 claim 置信度做最小派生边，无 artifact 工作台 | 不能增加“成果中心”或维护成本 |
+| Memory Intake Quality Gate（搁置） | 以 review queue 处理已入库内容的噪声、重复与合并 | 后台自动计算证据独立性，用户只在后果变化时看回执 | 不复活人工质检台，不要求逐条清理 |
+| Memory Trust Console（搁置） | 全局可信、隐私、过期与修复控制台 | 热路径自动降权同源回声 | 不建全局治理页或新的维护责任 |
 | Memory Outcome Loop | 提示/草稿被使用后的效果反馈 | 使用前证据是否重复计票 | 不重复 outcome event 与反馈入口 |
 
 去重结论：这是一个**证据独立性层**，位于“同题聚类”与“置信度 / 生成 / 写入”之间。现有系统已经知道“这些证据相关”，但还不知道“它们是否只是互相抄来的”。
@@ -176,7 +183,7 @@ Personal AI 已覆盖 Glip、Jira、meeting、calendar、web、Source Memory、�
 
 ### NotebookLM
 
-- [NotebookLM / Gemini notebook grounding](https://support.google.com/notebooklm/answer/17003757)强调 NotebookLM 的回答只基于 notebook sources。
+- [NotebookLM chat grounding](https://support.google.com/notebooklm/answer/16179559?hl=en)强调回答基于用户选中的 notebook sources，并以 inline citations 回到原文；[管理 sources](https://support.google.com/notebooklm/answer/16164461?hl=en)允许逐源纳入或排除。
 
 启发：严格 source grounding 很重要，但用户可能把同一原文、复制件和 AI 摘要一起放入 sources。回声抑制解决的是 source set 内的独立性，而不是“有没有来源”。
 
@@ -706,10 +713,10 @@ npm run eval:memory-abilities
 完成功能代码的最后一步，必须把关键点和关键逻辑精简维护进正式 feature docs：
 
 1. 建议新建 `docs/features/evidence_independence.md` 作为跨 surface 唯一完整契约；如果实现最终只限 Ask + Keystone，也可以并入 `docs/features/evidence_cohesion_gate.md`，不要为很小切片过度拆文档。
-2. 在 `docs/features/memory_system.md` 说明 ingestion dedup、cohesion 与 independence 的顺序和差异。
+2. 在 `docs/memory_system.md` 说明 ingestion dedup、cohesion 与 independence 的顺序和差异。
 3. 在 `docs/features/ask.md`、`docs/features/memory_lens.md`、`docs/features/memory_capture.md`、`docs/features/change_memory_ledger.md` 只记录各 surface 的接入和回执，不复制整套算法。
 4. 若 Claim Attribution 已实现，双方文档明确 `owner / speech mode` 与 `origin / derivation` 是两个正交轴。
-5. 更新 `docs/features/index.md` 的小功能行和最后更新日期。
+5. 更新 `docs/index.md` 的小功能行和最后更新日期。
 6. 功能落地后删除本 plan；将 demo 移到 `docs/demo/`，保持 `docs/progressing/` 只放未完成规划。
 
 ---

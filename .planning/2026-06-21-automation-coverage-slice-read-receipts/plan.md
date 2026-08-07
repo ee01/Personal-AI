@@ -7,7 +7,7 @@ Improve `覆盖聚合 API` so direct P0 slice consumers can tell what was read, 
 ## Target
 
 - Feature: `覆盖聚合 API`
-- Docs: `docs/features/memory_coverage_map.md`, `docs/features/index.md`
+- Docs: `docs/features/memory_coverage_map.md`, `docs/index.md`
 - Backend: `memory-service/src/routes/coverage.ts`, `memory-service/src/core/MemoryCoverageService.ts`
 - Tests: `memory-service/src/__tests__/api-coverage.test.ts`
 

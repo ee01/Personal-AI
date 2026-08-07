@@ -2,7 +2,7 @@
 
 ## 2026-06-29
 
-- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory-loop guidance, current dirty status, Reminders list names, and `docs/features/index.md`.
+- Read `AGENT.md`, `docs/progressing/to-verify.md`, automation memory, memory-loop guidance, current dirty status, Reminders list names, and `docs/index.md`.
 - Reminders result: local list names are readable, but `Personal AI` is absent; no items can be linked or completed.
 - Selected `记忆提示 Expanded Card` from Memory Lens after avoiding the freshest exact automation targets.
 - Inspected `docs/features/memory_lens.md`, `src/contentScriptWebIntelligence.ts`, `tools/verify-webpage-memory-detection.ts`, and `desktop-app/scripts/webpage-memory-detection-check.mjs`.

@@ -17,7 +17,7 @@ Goal: improve the selected `主动询问会话管理` feature by keeping the doc
 ## Decisions
 
 - Selected feature: `主动询问会话管理` under Memory Exploring / Memory Service.
-- Source doc: `docs/features/memory_system.md`.
+- Source doc: `docs/memory_system.md`.
 - Primary UI: `src/modals/components/OutreachSessions.vue`.
 - Existing Reminders lists are visible, but there is no `Personal AI` list, so no Reminder item can be incorporated or marked done.
 - Keep the change frontend-only: list filtering and empty-state presentation should not alter approval, send, retry, cancel, target search, or Memory Service contracts.
@@ -44,5 +44,5 @@ Goal: improve the selected `主动询问会话管理` feature by keeping the doc
 - `node --check tools/verify-outreach-sessions-e2e.mjs`
 - `npm start` first successful webpack dev compile, then stopped
 - `node tools/verify-outreach-sessions-e2e.mjs`
-- `git diff --check -- src/modals/components/OutreachSessions.vue tools/verify-outreach-sessions-e2e.mjs docs/features/memory_system.md .planning/.active_plan .planning/2026-06-26-automation-outreach-filter-empty-boundary/task_plan.md .planning/2026-06-26-automation-outreach-filter-empty-boundary/findings.md .planning/2026-06-26-automation-outreach-filter-empty-boundary/progress.md`
+- `git diff --check -- src/modals/components/OutreachSessions.vue tools/verify-outreach-sessions-e2e.mjs docs/memory_system.md .planning/.active_plan .planning/2026-06-26-automation-outreach-filter-empty-boundary/task_plan.md .planning/2026-06-26-automation-outreach-filter-empty-boundary/findings.md .planning/2026-06-26-automation-outreach-filter-empty-boundary/progress.md`
 - No leftover `webpack --watch --config webpack.dev.cjs` process found

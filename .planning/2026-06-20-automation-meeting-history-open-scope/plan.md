@@ -2,7 +2,7 @@
 
 ## 随机目标
 
-- 来源：`docs/features/index.md`
+- 来源：`docs/index.md`
 - 抽样命中：`会议历史归档`
 - 近期避重：跳过刚刚触达的 Memory Coverage Map exact/family；本轮选择 Meeting Pilot 的历史归档页。
 - Reminder：本机 Reminders 可访问，但没有 `Personal AI` 列表，因此没有可合并或可标记完成的反馈项。
@@ -25,5 +25,5 @@
 1. 在每张会议卡片的按钮前加入 `打开范围` 区块。
 2. 对安全 PDF、PDF blocked、Digest failed、Digest completed but missing PDF、processing、only archived 六类状态给出不同说明。
 3. 保持原打开逻辑不变：Panorama 继续只传安全 PDF URL，PDF 按钮仍只允许安全 http(s)。
-4. 更新 `docs/features/meeting_pilot.md` 和 `docs/features/index.md`，只写用户可见行为，不展开实现细节。
+4. 更新 `docs/features/meeting_pilot.md` 和 `docs/index.md`，只写用户可见行为，不展开实现细节。
 5. 验证：`npm start` 首次 compile、`npm run test:meeting-pilot-history`、scoped `git diff --check`，并检查无残留 webpack watcher。

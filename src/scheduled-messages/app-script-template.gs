@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.9.1';
-var APP_SCRIPT_LAST_UPDATED = '2026-07-03';
+var APP_SCRIPT_VERSION = '2.9.2';
+var APP_SCRIPT_LAST_UPDATED = '2026-08-04';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -3137,6 +3137,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       return {
         executed: true,
         messageId: messageId,
+        topic: message.Topic || '',
         targetType: 'api',
         aiEndpoint: agentTaskApiPayload.endpointInfo.url,
         aiProtocol: agentTaskApiPayload.endpointInfo.protocol,
@@ -3174,6 +3175,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       return {
         executed: true,
         messageId: messageId,
+        topic: message.Topic || '',
         targetType: 'api',
         aiEndpoint: endpointInfo.url,
         aiProtocol: endpointInfo.protocol,
@@ -3184,6 +3186,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         aiBody: bodyStr,
         rowIndex: message.rowIndex,
         executionKey: executionKey,
+        pushMethod: message.Push_Method || '',
         requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
         autoMarkOnFetch: autoMarkOnFetchResult,
         timestamp: new Date().toISOString()
@@ -3208,6 +3211,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       glipEmailAddress: message.glipEmailAddress || '',
       rowIndex: message.rowIndex,
       executionKey: executionKey,
+      pushMethod: message.Push_Method || '',
       requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
       autoMarkOnFetch: autoMarkOnFetchResult,
       timestamp: new Date().toISOString()

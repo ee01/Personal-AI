@@ -2,7 +2,7 @@
 
 ## Target
 
-- Selected feature: `Google Slides 项目分析器` from `docs/features/index.md`.
+- Selected feature: `Google Slides 项目分析器` from `docs/index.md`.
 - Skip reason for earlier random candidates: recent automation runs already touched Project Dashboard, Quick Ask, Glip markers, Relationship Radar, Memory Lens, Compose Assist, and User Profile export.
 - Reminder check: AppleScript did not list `Personal AI`; EventKit found 4 completed historical Doubao / notification items and no open Google Slides Analyzer feedback.
 

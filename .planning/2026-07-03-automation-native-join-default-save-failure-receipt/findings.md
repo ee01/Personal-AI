@@ -1,6 +1,6 @@
 # Native Join Default Save Failure Receipt Findings
 
-- Selected feature: `NC 加会` / RingCentral Native Join from `docs/features/index.md`.
+- Selected feature: `NC 加会` / RingCentral Native Join from `docs/index.md`.
 - Source doc: `docs/features/meeting_native_join.md`.
 - Main implementation: `src/ringcentralNativeJoin.ts`.
 - Existing targeted coverage: `src/__tests__/ringcentralNativeJoin.test.ts` and `tools/verify-ringcentral-native-join-e2e.mjs`; package script is `npm run verify:ringcentral-native-join:e2e`.

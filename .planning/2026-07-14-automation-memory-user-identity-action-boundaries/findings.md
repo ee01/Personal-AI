@@ -3,7 +3,7 @@
 ## Repo findings
 
 - `docs/progressing/to-verify.md` is empty.
-- `docs/features/index.md` maps `多用户隔离` to `docs/features/memory_system.md`.
+- `docs/index.md` maps `多用户隔离` to `docs/memory_system.md`.
 - `/api/v1/stats` returns `user.id`, `identitySource`, `storageKey`, `fallbackToDefault`, and machine-readable `writeBoundary`.
 - `Memory Exploring` already shows the identity card and snapshot receipt, but the `刷新身份快照` and `打开设置` buttons do not expose their no-write / no-migration boundary through `title` or `aria-label`.
 - Existing proof path: `npm run verify:memory-user-identity:e2e`.

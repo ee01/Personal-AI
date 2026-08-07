@@ -15,10 +15,16 @@
 **适用场景**：用户主动操作（点击按钮、提交表单等）
 
 ```typescript
-import { getGoogleAuthToken } from './utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthToken,
+} from './utils/googleAuth';
 
 // 基础用法
-const token = await getGoogleAuthToken({ caller: 'popup.analyzeSlides' });
+const token = await getGoogleAuthToken({
+  caller: 'popup.analyzeSlides',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
+});
 if (!token) {
   alert('获取授权失败');
   return;
@@ -29,6 +35,8 @@ if (!token) {
 - `caller`: 调用者标识（用于日志追踪）
 - `forceRefresh`: 是否先清除旧 token（默认 false）
 - `silent`: 是否静默（不记录日志，默认 false）
+- `scopes`: 当前功能实际需要的 scopes；传入后覆盖 manifest 全局 scopes
+- `requiredScopes`: 必须授予的 scopes；默认与 `scopes` 相同
 
 ### 2. `getGoogleAuthTokenSilently()` - 静默授权方法
 
@@ -37,10 +45,16 @@ if (!token) {
 **适用场景**：后台自动任务、页面初始化等不应打扰用户的场景
 
 ```typescript
-import { getGoogleAuthTokenSilently } from './utils/googleAuth';
+import {
+  GOOGLE_AUTH_SCOPE_SETS,
+  getGoogleAuthTokenSilently,
+} from './utils/googleAuth';
 
 // 基础用法
-const token = await getGoogleAuthTokenSilently({ caller: 'background.autoUpdate' });
+const token = await getGoogleAuthTokenSilently({
+  caller: 'background.autoUpdate',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+});
 if (!token) {
   console.log('无缓存 token，跳过自动任务');
   return;
@@ -50,6 +64,22 @@ if (!token) {
 **参数**：
 - `caller`: 调用者标识（用于日志追踪）
 - `forceRefresh`: 是否先清除旧 token（默认 false）
+- `scopes`: 当前后台任务实际需要的 scopes
+- `requiredScopes`: 必须授予的 scopes；默认与 `scopes` 相同
+
+## Scope 策略
+
+每个调用点必须声明当前功能需要的最小 scope：
+
+| 场景 | Scope set |
+| --- | --- |
+| Scheduled Messages 读写、Config、Schema、Jira Rule 同步 | `GOOGLE_AUTH_SCOPE_SETS.SHEETS` |
+| Google Slides 分析和写回 | `GOOGLE_AUTH_SCOPE_SETS.SLIDES` |
+| Google 用户名/邮箱识别 | `GOOGLE_AUTH_SCOPE_SETS.IDENTITY` |
+| App Script 检查和升级 | `GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN` |
+| 首次 One Click Setup | `GOOGLE_AUTH_SCOPE_SETS.FULL` |
+
+较小 scope 请求不会撤销已有的更大授权；如果该 scope 已授予，Chrome 会直接使用缓存或生成对应 token，不会仅仅因为本次 scope 集合更小而重新弹授权。`getGoogleAuthTokenResult()` / `getGoogleAuthTokenSilentlyResult()` 会同时返回 `grantedScopes`、`missingScopes` 和失败原因，适合需要向用户解释授权状态的页面。
 
 ## 使用场景详解
 
@@ -90,7 +120,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'checkUpdate') {
     // ✅ 使用 getGoogleAuthTokenSilently（不弹窗）
     const token = await getGoogleAuthTokenSilently({ 
-      caller: 'background.autoUpdate' 
+      caller: 'background.autoUpdate',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
     
     if (!token) {
@@ -116,12 +147,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 useEffect(() => {
   const initializeData = async () => {
     // ✅ 使用 getGoogleAuthTokenSilently（不弹窗）
-    const token = await getGoogleAuthTokenSilently({ 
-      caller: 'ScheduledMessagesManager.init' 
+    const authResult = await getGoogleAuthTokenSilentlyResult({
+      caller: 'ScheduledMessagesManager.init',
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
+    const token = authResult.token;
     
     if (!token) {
-      // 显示"需要授权"提示，让用户主动点击授权按钮
+      // 使用 formatGoogleAuthFailure(authResult) 显示缺少 Sheets、未登录或 OAuth 错误
       setNeedsReauth(true);
       return;
     }
@@ -138,7 +171,7 @@ useEffect(() => {
 - 页面加载时不应弹窗（打扰用户）
 - 没有 token 就显示提示，让用户主动授权
 
-### 场景 4: 需要新权限（manifest 更新了 scopes）
+### 场景 4: 首次 One Click Setup 请求完整权限
 
 **示例**：OneClickSetup 首次配置
 
@@ -150,7 +183,8 @@ const handleInitialize = async () => {
     // ✅ 使用 getGoogleAuthToken + forceRefresh
     const token = await getGoogleAuthToken({ 
       caller: 'OneClickSetup.init',
-      forceRefresh: true  // 清除旧 token，应用新的权限范围
+      forceRefresh: true,
+      scopes: GOOGLE_AUTH_SCOPE_SETS.FULL,
     });
     
     if (!token) {
@@ -165,10 +199,7 @@ const handleInitialize = async () => {
 };
 ```
 
-**为什么用 `forceRefresh: true`**：
-- manifest.json 更新了 `oauth2.scopes`
-- 旧 token 权限不足（例如只有 readonly，现在需要 write）
-- 必须清除旧 token，重新授权以获取新权限
+**为什么这里使用完整 scope**：首次初始化会创建 Sheet、Drive 文件、Apps Script 项目与部署，需要一次完成完整授权。普通 Scheduled Messages 页面不会复用这个完整 scope，而只请求 Sheets。
 
 ### 场景 5: API 返回 401，尝试刷新 token
 
@@ -180,7 +211,8 @@ class ScheduledMessageService {
     // ✅ 使用 getGoogleAuthTokenSilently + forceRefresh
     const token = await getGoogleAuthTokenSilently({ 
       caller: 'ScheduledMessageService.refresh',
-      forceRefresh: true  // 清除旧 token，尝试获取新的
+      forceRefresh: true,
+      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
     });
     
     if (!token) {
@@ -260,17 +292,20 @@ const token = await getGoogleAuthToken({
 
 ## 最佳实践
 
-### 1. 始终提供 caller 参数
+### 1. 始终提供 caller 和 scopes
 
 ```typescript
 // ❌ 不好
 const token = await getGoogleAuthToken();
 
 // ✅ 好
-const token = await getGoogleAuthToken({ caller: 'popup.analyzeSlides' });
+const token = await getGoogleAuthToken({
+  caller: 'popup.analyzeSlides',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
+});
 ```
 
-**原因**：便于在日志中追踪 token 获取的来源，方便调试
+**原因**：`caller` 便于追踪来源，`scopes` 避免一个功能捎带请求其它产品权限。
 
 ### 2. 根据场景选择正确的方法
 
@@ -316,10 +351,11 @@ const token = await getGoogleAuthToken({
   forceRefresh: true  // 每次都清除缓存，增加不必要的授权次数
 });
 
-// ✅ 好：只在需要新权限时强制刷新
+// ✅ 好：首次完整初始化明确请求完整 scope
 const token = await getGoogleAuthToken({ 
   caller: 'OneClickSetup.init',
-  forceRefresh: true  // 只在首次配置时强制刷新
+  forceRefresh: true,
+  scopes: GOOGLE_AUTH_SCOPE_SETS.FULL,
 });
 ```
 
@@ -363,8 +399,10 @@ await logs.auth().clear();
 ### Q2: 为什么需要 `forceRefresh`？
 
 **两个场景**：
-1. **需要新权限**：manifest.json 更新了 scopes，旧 token 权限不足
-2. **token 过期**：API 返回 401，尝试刷新 token
+1. **首次完整初始化**：One Click Setup 明确刷新并请求 `FULL`
+2. **token 无效**：API 实际返回 401 后，清除该 access token 缓存并静默重取
+
+新增权限不应仅依赖 manifest 变更；调用点应声明新的功能 scope，并检查 `missingScopes`。
 
 ### Q3: `getGoogleAuthToken` 会每次都弹窗吗？
 
@@ -379,12 +417,8 @@ await logs.auth().clear();
 ```typescript
 const token = await getGoogleAuthToken({ caller: 'MyComponent' });
 if (!token) {
-  // token 为 null 可能是：
-  // 1. 用户拒绝授权
-  // 2. 网络错误
-  // 3. 其他错误
-  
-  alert('获取授权失败，请检查网络或重新授权');
+  // 需要精确原因时改用 getGoogleAuthTokenResult()
+  alert('未取得当前功能所需的 Google 权限');
   return;
 }
 ```
@@ -399,7 +433,7 @@ Chrome 会自动缓存 OAuth token，直到：
 
 即使调用 `chrome.identity.getAuthToken({ interactive: true })`，如果有缓存也会直接返回缓存，不会弹窗。
 
-**这就是为什么需要 `forceRefresh`**：必须先清除缓存，才能强制重新授权。
+应用只应在 API 确认 token 无效或首次完整初始化时使用 `forceRefresh`。粒度授权缺少 scope 时，共享 helper 会识别 `grantedScopes`，并在用户主动授权路径中移除该 access token 缓存后补请求缺失权限。
 
 ### 日志记录
 

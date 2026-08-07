@@ -22,7 +22,7 @@ Goal: improve `主动询问会话管理` by aligning the doc with current code, 
 ## Selected Target
 
 - Feature index row: `主动询问会话管理`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Main UI: `src/modals/components/OutreachSessions.vue`
 - Verifier: `tools/verify-outreach-sessions-e2e.mjs`
 

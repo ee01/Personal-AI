@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` says there is no carry-over.
 - Automation memory shows the freshest exact feature targets were Message Analysis, Coverage Map, Snooze, Jira Design Links, Topic Messages, Project Dashboard, Agent Workflow, Ask, Compose Assist, Google Slides, and Meeting Pilot; this run avoids those exact targets.
-- Random selection from `docs/features/index.md` chose `Popup Top 3` under Today Pilot.
+- Random selection from `docs/index.md` chose `Popup Top 3` under Today Pilot.
 - EventKit found the `Personal AI` Reminders list with 4 total items and 0 incomplete items. AppleScript did not list `Personal AI`, which matches prior local probe quirks.
 
 ## Product/Research Scan

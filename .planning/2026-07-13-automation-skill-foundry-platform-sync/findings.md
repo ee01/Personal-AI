@@ -6,7 +6,7 @@
 - This run should own only the Skill Foundry platform-sync control-boundary edits, matching docs/E2E updates, the active-plan pointer, this planning directory, and automation memory.
 
 ## Feature Selection
-- Selected feature: `平台同步` under Skill Foundry, documented in `docs/features/personal_skill_foundry.md` and indexed in `docs/features/index.md`.
+- Selected feature: `平台同步` under Skill Foundry, documented in `docs/features/personal_skill_foundry.md` and indexed in `docs/index.md`.
 - Existing docs already describe platform-level sync as per-platform, not per-skill, with OpenClaw API, Desktop App local filesystem platforms, and manual-only platforms.
 - Existing implementation already has post-click receipts for switch pending/success/failure and sync pending/result states.
 

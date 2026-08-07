@@ -1,7 +1,7 @@
 # Findings & Decisions
 
 ## Requirements
-- Randomly choose one feature from `docs/features/index.md`.
+- Randomly choose one feature from `docs/index.md`.
 - Ensure the feature doc still matches current code at a useful level of detail.
 - Search current industry products and research papers for similar functionality.
 - Implement low-decision improvements, update docs, and test according to `AGENT.md`.

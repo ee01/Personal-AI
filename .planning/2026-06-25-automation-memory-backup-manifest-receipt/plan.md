@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `记忆导入/导出/备份`
-- Source doc: `docs/features/memory_system.md`
+- Source doc: `docs/memory_system.md`
 - Primary surfaces: `/export`, Coverage Map backup download receipt, backup restore dry-run flow
 
 ## Current Finding
@@ -23,7 +23,7 @@ The backup system already validates `manifest.json`, supports dry-run, requires 
 2. Parse those headers in `MemoryServiceClient.exportMemory()`.
 3. Show manifest summary rows in the Coverage Map backup download receipt.
 4. Extend `verify-memory-backup.ts` and `verify-memory-coverage-e2e.mjs` to prove the header contract and receipt rendering.
-5. Update `docs/features/memory_system.md` with the export receipt behavior.
+5. Update `docs/memory_system.md` with the export receipt behavior.
 
 ## Verification Plan
 

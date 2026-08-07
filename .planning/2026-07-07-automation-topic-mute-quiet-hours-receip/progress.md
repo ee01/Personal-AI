@@ -13,7 +13,7 @@
 - Compared current code/docs with external product/research references and narrowed the implementation to a post-mute recovery path.
 - Added `查看静音` to the Topic list post-mute toast and a handler that switches the current list to the muted view without changing mute persistence.
 - Added static and E2E assertions for the muted-view handoff and undo return path.
-- Updated `docs/features/topic_based_messages.md` and `docs/features/index.md` with concise behavior notes.
+- Updated `docs/features/topic_based_messages.md` and `docs/index.md` with concise behavior notes.
 - Updated automation memory with this run's feature choice, Reminder state, implementation boundary, verification evidence, and run time.
 
 ### Test Results

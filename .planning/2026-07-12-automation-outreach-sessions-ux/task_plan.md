@@ -10,7 +10,7 @@ Phase 5
 
 ### Phase 1: Requirements & Discovery
 - [x] Read `AGENT.md`, feature index, automation memory, stale root plan files, and `docs/progressing/to-verify.md`
-- [x] Randomly select a non-fresh feature family from `docs/features/index.md`
+- [x] Randomly select a non-fresh feature family from `docs/index.md`
 - [x] Inspect local `Personal AI` Reminders for Outreach-related feedback
 - [x] Inspect Outreach docs, source, tests, and dirty worktree context
 - [x] Document findings in findings.md
@@ -25,7 +25,7 @@ Phase 5
 ### Phase 3: Implementation
 - [x] Apply navigation/read-only control boundary labels in Outreach list and detail pages
 - [x] Extend `tools/verify-outreach-sessions-e2e.mjs` to assert those labels
-- [x] Update `docs/features/memory_system.md` and `docs/features/index.md`
+- [x] Update `docs/memory_system.md` and `docs/index.md`
 - **Status:** completed
 
 ### Phase 4: Testing & Verification

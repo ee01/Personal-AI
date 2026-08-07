@@ -4,7 +4,7 @@
 
 - `docs/progressing/to-verify.md` is empty.
 - Automation memory shows the freshest exact surfaces include Project Dashboard local search, whole-page Memory Capture, Relationship Radar Context Card, Topic empty batch, Slides skipped reselect, Digest Queue release window, Rehearsal list scope, Skill Foundry platform sync, Storyline fallback, Agent Thinking diagnostics, Message Analysis, Scheduled filters, Coverage slices, Memory ingest, Memory Lens, Message Reaction, Prompt Config, Jira Design Links, User Profile, Agent Workflow, and Dream Replay. The random selection avoided these exact rows.
-- Randomly selected feature: `Doubao / ChatGPT explorer 输入链路` from `docs/features/index.md`.
+- Randomly selected feature: `Doubao / ChatGPT explorer 输入链路` from `docs/index.md`.
 - Reminders list scan returned visible lists `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`; no visible `Personal AI` list.
 - The worktree is very dirty with many unrelated files. Keep edits scoped to Doubao Bridge desktop UI, its verifier, docs, and this planning folder.
 

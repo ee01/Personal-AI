@@ -11,7 +11,7 @@
 - Created isolated `.planning/2026-07-07-automation-ask-topic-lock-receipt/` plan, findings, and progress files.
 - Implemented `Ask 话题锁定回执` in `SearchResultPage.vue`, including topic label, reasons, anchors, role terms, source count, and explicit no-effect boundaries.
 - Extended `tools/verify-ask-clarification-e2e.mjs` with a direct locked-topic Ask case and layout/order assertions for the new receipt.
-- Updated `docs/features/ask.md` and `docs/features/index.md` to describe the pre-answer topic-lock receipt and validation expectation.
+- Updated `docs/features/ask.md` and `docs/index.md` to describe the pre-answer topic-lock receipt and validation expectation.
 - Validation passed:
   - `node --check tools/verify-ask-clarification-e2e.mjs`
   - `npm --prefix memory-service test -- --run src/__tests__/api-ask.test.ts`

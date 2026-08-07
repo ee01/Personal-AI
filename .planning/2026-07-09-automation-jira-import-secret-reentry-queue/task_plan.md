@@ -39,6 +39,6 @@ Improve `secret value 脱敏` under Jira Automation Import so users can act on r
 
 | Error | Attempt | Resolution |
 |---|---|---|
-| `docs/features/index.md` parser initially returned zero rows | Used the second column as doc column | Re-read index and parsed the third column as `所在文档` |
+| `docs/index.md` parser initially returned zero rows | Used the second column as doc column | Re-read index and parsed the third column as `所在文档` |
 | E2E old failure toast intercepted success-receipt controls | Reproduced after adding queue assertions | Added import-error cleanup across same-origin documents and asserted retry removes stale failure UI |
 | E2E failure assertion watched the wrong document | Failure toast now renders in the import dialog document | Moved the failure assertion to the dialog frame while keeping pending-receipt assertions at the page level |

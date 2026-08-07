@@ -1,3 +1,9 @@
+import {
+  buildClaimAttributionCompactPresentation,
+  type ClaimAttributionCompactPresentation,
+} from '../claimAttributionPresentation';
+import type { ClaimAttributionReceipt } from './MemoryServiceClient';
+
 export type UserProfileCategory =
   | 'projects'
   | 'people'
@@ -25,6 +31,7 @@ export interface UserProfileInterestItem {
   contextUseState: 'usable' | 'needs_confirmation';
   evidenceRefs: unknown[];
   evidencePreview: UserProfileEvidencePreview[];
+  claimAttributionReceipt: ClaimAttributionCompactPresentation | null;
   calibrationPriority: UserProfileCalibrationPriority;
   calibrationPriorityScore: number;
   calibrationReason: string;
@@ -90,6 +97,7 @@ export interface UserProfileReviewQueueItem {
   canUseForPersonalization: boolean;
   reason: string;
   evidencePreview: UserProfileEvidencePreview[];
+  claimAttributionReceipt: ClaimAttributionCompactPresentation | null;
   calibrationPriority: UserProfileCalibrationPriority;
   calibrationPriorityScore: number;
   calibrationReason: string;
@@ -466,6 +474,9 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
   const name = pickDisplayName(item, parsedValue);
   const evidenceRefs = parseEvidenceRefs(item.evidenceRefs ?? item.evidence_refs);
   const evidencePreview = evidenceRefs.map(buildEvidencePreview);
+  const claimAttributionReceipt = buildClaimAttributionCompactPresentation(
+    item.attributionReceipt as ClaimAttributionReceipt | undefined,
+  );
   const confidence = clamp01(item.confidence, 0.5);
   const salienceScore = clamp01(item.salienceScore ?? item.salience_score, confidence);
   const category = detectCategory(item, name);
@@ -516,6 +527,7 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
     contextUseState: canUseForPersonalization ? 'usable' : 'needs_confirmation',
     evidenceRefs,
     evidencePreview,
+    claimAttributionReceipt,
     calibrationPriority,
     calibrationPriorityScore,
     calibrationReason,
@@ -745,6 +757,7 @@ function buildReviewQueueItem(item: UserProfileInterestItem): UserProfileReviewQ
     lastSeen: item.lastSeen,
     canUseForPersonalization: item.canUseForPersonalization,
     evidencePreview: item.evidencePreview,
+    claimAttributionReceipt: item.claimAttributionReceipt,
     calibrationPriority: item.calibrationPriority,
     calibrationPriorityScore: item.calibrationPriorityScore,
     calibrationReason: item.calibrationReason,

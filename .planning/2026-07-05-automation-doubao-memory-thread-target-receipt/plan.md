@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Selected feature: `Memory Sync Thread` under Doubao Bridge, from `docs/features/index.md`.
+- Selected feature: `Memory Sync Thread` under Doubao Bridge, from `docs/index.md`.
 - Canonical doc: `docs/features/doubao_bridge.md`.
 - Runtime surface: Desktop App broadcast column, `绑定长期记忆线程`.
 - Verification surface: `desktop-app/scripts/doubao-source-toggle-gating-check.mjs`.

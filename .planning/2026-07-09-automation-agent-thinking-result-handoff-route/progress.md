@@ -2,7 +2,7 @@
 
 ## 2026-07-09T07:04:03+0800
 
-- Read `AGENT.md`, `docs/features/index.md`, automation memory, relevant memory notes, `docs/progressing/to-verify.md`, and active planning state.
+- Read `AGENT.md`, `docs/index.md`, automation memory, relevant memory notes, `docs/progressing/to-verify.md`, and active planning state.
 - EventKit checked the local `Personal AI` Reminders list: 4 total items, 0 incomplete, no related open Agent Thinking feedback.
 - Randomized feature sample selected `Agent Thinking 分析编排`.
 - Inspected `docs/features/agent_thinking.md`, `src/agent-visualizer.tsx`, `src/agentVisualizerPresentation.ts`, `static/agent-visualizer.css`, `tools/verify-agent-thinking-options-e2e.mjs`, and `tools/verify-memory-entry-agent-thinking.ts`.
@@ -13,7 +13,7 @@
 - Updated `AgentResultHandoffReceipt` with `unresolvedIssueSummary`, `inspectionRoute`, and `terminalStepNumber`.
 - Rendered a compact `终止步骤 #N` button inside the result-handoff receipt using the existing same-page `jumpToStep` helper.
 - Added CSS for the handoff step button and extended the source/E2E verifier assertions.
-- Updated `docs/features/agent_thinking.md` and the `Agent Thinking 分析编排` row in `docs/features/index.md`.
+- Updated `docs/features/agent_thinking.md` and the `Agent Thinking 分析编排` row in `docs/index.md`.
 
 ## 2026-07-09T07:07:39+0800
 

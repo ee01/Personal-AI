@@ -7,7 +7,7 @@
 - **Started:** 2026-07-12
 
 ### Actions Taken
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory, planning skill instructions, and random-feature-loop memory instructions.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory, planning skill instructions, and random-feature-loop memory instructions.
 - Confirmed `docs/progressing/to-verify.md` has no carry-over item.
 - Selected Meeting Pilot `会后 Panorama`.
 - Checked Reminders through AppleScript and EventKit; no incomplete `Personal AI` items.
@@ -15,7 +15,7 @@
 - Created scoped planning directory and set `.planning/.active_plan`.
 - Added Panorama button-level `title` / `aria-label` boundaries for PDF section jump, page link copy, JSON export, recording replay, follow-up checklist copy, PDF open/download/copy, recording copy, config/refresh fallback controls, and footer feedback buttons.
 - Renamed the lower PDF `分享链接` control to `复制链接` because it only writes the safe PDF URL to the local clipboard.
-- Updated the Panorama E2E, `docs/features/meeting_pilot.md`, and the `会后 Panorama` row in `docs/features/index.md`.
+- Updated the Panorama E2E, `docs/features/meeting_pilot.md`, and the `会后 Panorama` row in `docs/index.md`.
 
 ### Test Results
 | Test | Expected | Actual | Status |

@@ -2,7 +2,7 @@
 
 ## 2026-06-09
 
-- Read `AGENT.md`, `docs/features/index.md`, `docs/progressing/to-verify.md`, automation memory tail, memory registry hints, and existing root planning files.
+- Read `AGENT.md`, `docs/index.md`, `docs/progressing/to-verify.md`, automation memory tail, memory registry hints, and existing root planning files.
 - Checked local Reminders with AppleScript; no visible `Personal AI` list was found, so no reminder items can be incorporated or completed.
 - Randomly selected `Jira issue key 解析` under Jira Design Links after excluding the freshest automation target documents.
 - Created this isolated planning set under `.planning/2026-06-09-automation-jira-issue-key-parsing/`.

@@ -2,7 +2,7 @@
 
 ## Target
 
-- Feature: `跟进追问 / Followup` from `docs/features/index.md`.
+- Feature: `跟进追问 / Followup` from `docs/index.md`.
 - Current doc: `docs/features/message_reaction.md`.
 - Reminder branch: local Reminders is readable, but this Mac has no `Personal AI` list, so no Reminder item is linked or completed in this run.
 

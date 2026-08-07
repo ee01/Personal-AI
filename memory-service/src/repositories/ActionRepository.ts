@@ -352,6 +352,51 @@ export class ActionRepository {
     };
   }
 
+  /**
+   * Latest action per source_ref_id for a source_kind (e.g. agent_task ledger overlay).
+   * Orders by finished/started/created descending, then keeps the first hit per ref.
+   */
+  listLatestBySourceRefs(input: {
+    sourceKind: string;
+    sourceRefIds: string[];
+    limitPerRef?: number;
+  }): QueuedActionRecord[] {
+    const sourceRefIds = Array.from(
+      new Set(
+        input.sourceRefIds
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter(Boolean),
+      ),
+    );
+    if (sourceRefIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = sourceRefIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE source_kind = ?
+           AND source_ref_id IN (${placeholders})
+         ORDER BY COALESCE(finished_at, started_at, created_at) DESC, created_at DESC`,
+      )
+      .all(input.sourceKind, ...sourceRefIds) as ActionRow[];
+
+    const limitPerRef = Math.max(1, Math.min(input.limitPerRef ?? 1, 5));
+    const counts = new Map<string, number>();
+    const selected: QueuedActionRecord[] = [];
+    for (const row of rows) {
+      const refId = row.source_ref_id || '';
+      if (!refId) continue;
+      const seen = counts.get(refId) || 0;
+      if (seen >= limitPerRef) continue;
+      counts.set(refId, seen + 1);
+      selected.push(this.rowToAction(row));
+    }
+    return selected;
+  }
+
   listDueAutoActions(limit: number, currentTime = now()): QueuedActionRecord[] {
     const rows = this.db
       .prepare(

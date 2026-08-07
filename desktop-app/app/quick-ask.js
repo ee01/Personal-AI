@@ -1404,6 +1404,130 @@ function getEvidenceReason(item, weak) {
   return reasons.join(' · ');
 }
 
+const EVIDENCE_LOCATOR_MAX = 120;
+const EVIDENCE_RAW_MAX = 1800;
+
+function extractEvidenceIssueKey(text) {
+  const match = String(text || '').match(/\b[A-Z][A-Z0-9]+-\d+\b/);
+  return match ? match[0] : '';
+}
+
+function pickEvidenceCue(text, queryText, limit = 64) {
+  const cleaned = normalizeInlineText(text);
+  if (!cleaned) return '';
+  const terms = getHighlightTerms(queryText).map((term) => term.toLowerCase());
+  const segments = cleaned
+    .split(/(?<=[。！？!?；;])\s*|(?<=\.)\s+(?=[A-Z0-9「])|\n+/)
+    .map((segment) => normalizeInlineText(segment))
+    .filter((segment) => segment.length >= 8 && segment.length <= 220);
+
+  let best = '';
+  let bestScore = -1;
+  for (const segment of segments) {
+    if (isLowValueEvidenceCue(segment)) continue;
+
+    const lower = segment.toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (lower.includes(term)) score += term.length >= 4 ? 3 : 1.5;
+    }
+    if (/ready|pending|design|决定|owner|评论|comment|通知|share|材料/i.test(segment)) {
+      score += 1;
+    }
+    if (segment.length >= 16 && segment.length <= 96) score += 0.6;
+    if (score > bestScore) {
+      bestScore = score;
+      best = segment;
+    }
+  }
+
+  if (bestScore < 1) return '';
+  return best ? clipText(sanitizeEvidenceCue(best) || best, limit) : '';
+}
+
+function isLowValueEvidenceCue(segment) {
+  const value = normalizeInlineText(segment);
+  if (!value) return true;
+  if (/^#/.test(value)) return true;
+  if (/CloseLearn more|Restore this version|FileEditView|Ask Gemini/i.test(value)) {
+    return true;
+  }
+  if (/^summary:\s*/i.test(value)) return true;
+  if (/added a comment\s*[-–—]/i.test(value)) return true;
+  if (/^collapse\s+comment/i.test(value)) return true;
+  return false;
+}
+
+function sanitizeEvidenceCue(segment) {
+  return normalizeInlineText(segment)
+    .replace(/^AI\s+Generate\s*/i, '')
+    .replace(/^@?[^\s:]{1,64}\s+wrote\s*:\s*/i, '')
+    .replace(/^Wang\s*>\s*/i, '');
+}
+
+function buildEvidenceTopicPhrase(cleaned, title, queryText) {
+  const haystack = `${title} ${cleaned}`.toLowerCase();
+  const matchedTerms = getHighlightTerms(queryText)
+    .filter((term) => haystack.includes(String(term).toLowerCase()))
+    .slice(0, 3);
+  if (matchedTerms.length) return matchedTerms.join(' / ');
+
+  const afterKey = String(title || '')
+    .replace(/^[A-Z][A-Z0-9]+-\d+\s*[:：\-–—]?\s*/, '')
+    .trim();
+  if (afterKey.length >= 4) return clipText(afterKey, 48);
+  return '';
+}
+
+function buildEvidenceLocatorSummary(item, options) {
+  const { cleaned, title, sourceLabel, weak, queryText } = options;
+  const host = getEvidenceHost(item);
+  const place = host || sourceLabel || '记忆';
+  const issueKey =
+    extractEvidenceIssueKey(title) || extractEvidenceIssueKey(cleaned);
+  const shortTitle = issueKey || clipText(title, 36);
+  const topic = buildEvidenceTopicPhrase(cleaned, title, queryText);
+  const preview = cleanEvidenceText(
+    item?.previewText || item?.displayText || '',
+  );
+  const cueSource =
+    preview && preview.length >= 12 && preview.length + 24 < cleaned.length
+      ? preview
+      : cleaned;
+  const cue = pickEvidenceCue(cueSource, queryText, 56);
+
+  if (weak) {
+    return clipText(
+      `在 ${place}「${clipText(title, 40)}」有弱相关网页快照；展开可看原文片段。`,
+      EVIDENCE_LOCATOR_MAX,
+    );
+  }
+
+  if (topic && cue) {
+    const cueLower = cue.toLowerCase();
+    const topicSeed = topic.slice(0, Math.min(12, topic.length)).toLowerCase();
+    if (!topicSeed || !cueLower.includes(topicSeed)) {
+      return clipText(
+        `在 ${place}「${shortTitle}」中有关于 ${topic} 的信息：${cue}`,
+        EVIDENCE_LOCATOR_MAX,
+      );
+    }
+  }
+  if (topic) {
+    return clipText(
+      `在 ${place}「${shortTitle}」中有关于 ${topic} 的信息。`,
+      EVIDENCE_LOCATOR_MAX,
+    );
+  }
+  if (cue) {
+    return clipText(`在 ${place}「${shortTitle}」中有：${cue}`, EVIDENCE_LOCATOR_MAX);
+  }
+  return clipText(
+    `在 ${place}「${shortTitle}」中有相关信息，展开可看原文。`,
+    EVIDENCE_LOCATOR_MAX,
+  );
+}
+
 function getHighlightTerms(query) {
   const terms = extractQueryAnchors(query);
   for (const term of String(query || '').match(/\bBE\b|\bFE\b|ready\b/gi) || []) {
@@ -1567,8 +1691,11 @@ function renderRichEvidenceText(text, query) {
 
 function shouldRenderRawEvidence(item, snippet) {
   const content = String(item?.content || '');
+  if (!normalizeInlineText(content)) return false;
+  const cleaned = cleanEvidenceText(content);
   return (
-    cleanEvidenceText(content) !== snippet ||
+    cleaned.length > Math.max(String(snippet || '').length + 16, 64) ||
+    cleaned !== snippet ||
     looksLikeHtml(content) ||
     /\r?\n|\[[^\]\n]{1,160}\]\(https?:\/\/[^)\s]+\)/.test(content)
   );
@@ -1593,11 +1720,15 @@ function renderEvidence(evidence, queryText = '') {
                 ? `${Math.round(item.score * 100)}%`
                 : '';
             const reason = getEvidenceReason(item, weak);
-            const snippet = weak
-              ? clipText(`${title}。${cleaned}`, 220)
-              : clipText(cleaned, 260);
+            const snippet = buildEvidenceLocatorSummary(item, {
+              cleaned,
+              title,
+              sourceLabel,
+              weak,
+              queryText,
+            });
             const raw = renderRichEvidenceText(
-              String(item.content || '').slice(0, 1800),
+              String(item.content || '').slice(0, EVIDENCE_RAW_MAX),
               queryText,
             );
             return `

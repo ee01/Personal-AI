@@ -2,7 +2,7 @@
 
 ## Goal
 
-Improve the `Agent Thinking 分析编排` feature from `docs/features/index.md` with one bounded, user-visible UX/logic fix, keep its docs current, and verify through the repo's targeted harnesses.
+Improve the `Agent Thinking 分析编排` feature from `docs/index.md` with one bounded, user-visible UX/logic fix, keep its docs current, and verify through the repo's targeted harnesses.
 
 ## Target Feature
 
@@ -17,7 +17,7 @@ Improve the `Agent Thinking 分析编排` feature from `docs/features/index.md` 
 2. [complete] Do a brief external product/research scan for comparable agent-run orchestration UX.
 3. [complete] Identify one low-decision improvement that clarifies user state, run scope, pending work, or non-effects.
 4. [complete] Implement the scoped code change and update focused verifier/E2E coverage.
-5. [complete] Update canonical feature docs and `docs/features/index.md` only where behavior changed.
+5. [complete] Update canonical feature docs and `docs/index.md` only where behavior changed.
 6. [complete] Run targeted verification, `npm start` first successful compile, feature E2E, and scoped `git diff --check`.
 7. [complete] Update automation memory and close any completed Reminder item if this run used one.
 

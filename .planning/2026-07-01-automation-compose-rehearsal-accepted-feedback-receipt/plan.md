@@ -3,7 +3,7 @@
 ## Target
 
 - Random feature: `回复助手预演提醒`
-- Canonical docs: `docs/features/rehearsal.md`, with Compose Assist boundary mirrored in `docs/features/compose_assist.md`
+- Canonical docs: `docs/features/rehearsal.md`, with Compose Assist boundary mirrored in `docs/features/assist.md`
 - Reminder state: local Reminders lists are readable, but there is no `Personal AI` list on this Mac, so no Reminder item is incorporated or completed.
 
 ## External Scan

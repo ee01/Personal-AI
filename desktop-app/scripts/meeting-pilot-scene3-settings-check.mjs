@@ -118,9 +118,9 @@ try {
     waitUntil: 'load',
   });
   const defaultToggleCopy = await controlPage
-    .locator('label', { hasText: '每次会议默认开启会议全貌' })
+    .locator('label', { hasText: '每次会议默认开启会议弹幕' })
     .textContent();
-  assert.match(defaultToggleCopy || '', /每次会议默认开启会议全貌/);
+  assert.match(defaultToggleCopy || '', /每次会议默认开启会议弹幕/);
   const disabledMeetingTabId = await controlPage.evaluate(async (targetUrl) => {
     const tabs = await chrome.tabs.query({ url: targetUrl });
     return tabs[0]?.id ?? null;

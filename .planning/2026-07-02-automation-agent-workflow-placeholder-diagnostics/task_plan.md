@@ -10,14 +10,14 @@ Goal: improve the randomly selected `Agent Workflow 运行诊断` feature by kee
 | 2 | completed | Randomly select `Agent Workflow 运行诊断`, inspect the feature doc, diagnostics helper, Options UI wiring, and existing verifier/E2E |
 | 3 | completed | Check local Reminders with AppleScript and EventKit fallback; run current product/paper scan |
 | 4 | completed | Patch placeholder-tool fallback so diagnostics and next actions stay consistent when only `storageReview.toolPlaceholderCount` survives |
-| 5 | completed | Update `docs/features/agent_workflow.md` and focused verifier coverage |
+| 5 | completed | Update `docs/features/message_analysis.md` and focused verifier coverage |
 | 6 | completed | Run targeted verifier, `npm start` first successful compile, Options E2E, and scoped `git diff --check` |
 | 7 | completed | Update automation memory and final summary |
 
 ## Decisions
 
-- Selected feature: `Agent Workflow 运行诊断` from `docs/features/index.md`, after avoiding the freshest exact automation targets.
-- Source doc: `docs/features/agent_workflow.md`.
+- Selected feature: `Agent Workflow 运行诊断` from `docs/index.md`, after avoiding the freshest exact automation targets.
+- Source doc: `docs/features/message_analysis.md`.
 - Implementation slice: bridge the UX gap where `storageReview.toolPlaceholderCount` indicates placeholder tools but the live trace lacks labels, causing the diagnostic block and next-step list to understate the issue.
 - Keep change in `src/agentWorkflowDiagnostics.ts`, `tools/verify-agent-workflow-diagnostics.ts`, and the feature doc; run the existing Options E2E as UI proof.
 

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS teams (
   jql TEXT NOT NULL DEFAULT '',
   checked_quarters_json TEXT NOT NULL DEFAULT '[]',
   imported_quarters_json TEXT NOT NULL DEFAULT '[]',
+  release_sheet_json TEXT NOT NULL DEFAULT 'null',
   version INTEGER NOT NULL DEFAULT 1,
   created_by TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS subs (
   start_date TEXT,
   days INTEGER,
   is_draft INTEGER NOT NULL DEFAULT 1,
+  cleared INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL DEFAULT '',
   version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
@@ -67,6 +69,25 @@ CREATE TABLE IF NOT EXISTS subs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_subs_team_item ON subs(team_id, item_key);
+
+CREATE TABLE IF NOT EXISTS item_markers (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  phase_kind TEXT,
+  label TEXT NOT NULL,
+  date TEXT,
+  jira_key TEXT,
+  eta_source TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_markers_team_item ON item_markers(team_id, item_key);
 
 CREATE TABLE IF NOT EXISTS members (
   id TEXT PRIMARY KEY,

@@ -13,7 +13,7 @@
 - Inspected `docs/features/message_reaction.md`, Auto Reply presentation/helper code, handler queue creation, topic modal config UI, Scheduled Messages review UI, and existing verify scripts.
 - Ran external product/research scan and narrowed UX direction to pre-save rule/queue boundary clarity.
 - Added `buildAutoReplyRuleScopeReceipt()` with tests and rendered its output in new/edit Auto Reply config panels.
-- Updated `docs/features/message_reaction.md` and `docs/features/index.md` for the current behavior.
+- Updated `docs/features/message_reaction.md` and `docs/index.md` for the current behavior.
 
 ### Test Results
 | Test | Expected | Actual | Status |
