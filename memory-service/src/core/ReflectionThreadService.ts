@@ -32,6 +32,8 @@ import {
   type TopicMemoryLinkRecord,
   type DreamRunRecord,
 } from '../repositories/ReflectionThreadRepository.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { resolveExecutorDefaults } from '../integrations/executors/executorRegistry.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import {
   RehearsalService,
@@ -945,7 +947,10 @@ export class ReflectionThreadService {
         (primaryExitDecision
           ? `${thread.topicKey}:open-question:${primaryExitDecision.contract.id}:${primaryExitDecision.actionEpoch}:${proposal.actionType}:${index}`
           : `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`);
-      if (proposal.actionType === 'delegate_openclaw') {
+      if (
+        proposal.actionType === 'delegate_openclaw' ||
+        proposal.actionType === 'delegate_agent'
+      ) {
         const readiness = this.actionReadinessService.checkAction(
           {
             actionType: proposal.actionType,
@@ -984,24 +989,52 @@ export class ReflectionThreadService {
       const existingAction = this.actionRepo.findReusableByIdempotencyKey(
         idempotencyKey,
       );
+      const baseParams =
+        proposal.actionType === 'notify_user'
+          ? {
+              ...(paramsWithEvidenceWatch ?? {}),
+              payload: {
+                ...((paramsWithEvidenceWatch as Record<string, unknown> | undefined)?.payload as
+                  | Record<string, unknown>
+                  | undefined),
+                threadId: thread.id,
+                runId: run.id,
+                userId: this.userId,
+              },
+            }
+          : paramsWithEvidenceWatch;
+      let createParams = baseParams;
+      if (
+        proposal.actionType === 'delegate_openclaw' ||
+        proposal.actionType === 'delegate_agent'
+      ) {
+        const runtimeConfig = getUserRuntimeConfig(this.userDataManager);
+        const defaults = resolveExecutorDefaults(runtimeConfig);
+        const paramsObj =
+          baseParams && typeof baseParams === 'object' && !Array.isArray(baseParams)
+            ? { ...(baseParams as Record<string, unknown>) }
+            : {};
+        if (!paramsObj.executor) {
+          paramsObj.executor = defaults.reflection_research;
+        }
+        const metadata =
+          paramsObj.metadata &&
+          typeof paramsObj.metadata === 'object' &&
+          !Array.isArray(paramsObj.metadata)
+            ? { ...(paramsObj.metadata as Record<string, unknown>) }
+            : {};
+        if (!metadata.executor && !metadata.executorId) {
+          metadata.executor = defaults.reflection_research;
+          metadata.executorId = defaults.reflection_research;
+        }
+        paramsObj.metadata = metadata;
+        createParams = paramsObj;
+      }
       const action = this.actionRepo.create({
         actionType: proposal.actionType,
         title: proposal.title,
         description: proposal.description,
-        params:
-          proposal.actionType === 'notify_user'
-            ? {
-                ...(paramsWithEvidenceWatch ?? {}),
-                payload: {
-                  ...((paramsWithEvidenceWatch as Record<string, unknown> | undefined)?.payload as
-                    | Record<string, unknown>
-                    | undefined),
-                  threadId: thread.id,
-                  runId: run.id,
-                  userId: this.userId,
-                },
-              }
-            : paramsWithEvidenceWatch,
+        params: createParams,
         riskLevel: proposal.riskLevel,
         confidence: proposal.confidence,
         evidenceRefs: uniqStrings([

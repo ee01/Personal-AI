@@ -12,6 +12,8 @@ import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 
 const READY_TTL_SECONDS = 6 * 60 * 60;
 const DEGRADED_TTL_SECONDS = 15 * 60;
+/** Single-task proof failure should not permanently block the whole scope. */
+const PROOF_FAIL_TTL_SECONDS = 5 * 60;
 
 export type ActionReadinessStatus =
   | 'ready'
@@ -253,7 +255,12 @@ function statusReason(status: ActionReadinessStatus): string {
 export function getActionReadinessScope(
   action: ActionReadinessCandidate,
 ): ReadinessScope | null {
-  if (action.actionType !== 'delegate_openclaw') return null;
+  if (
+    action.actionType !== 'delegate_openclaw' &&
+    action.actionType !== 'delegate_agent'
+  ) {
+    return null;
+  }
   const params = safeObject(action.params);
   const mode = params.mode === 'write' ? 'write' : 'read';
   const targetSystem =
@@ -411,7 +418,7 @@ export class ActionReadinessService {
 
     const scope = getActionReadinessScope(action);
     if (!scope) {
-      throw new Error('Only delegate_openclaw actions support readiness probes');
+      throw new Error('Only agent delegate actions support readiness probes');
     }
 
     const checkedAt = now();
@@ -496,7 +503,12 @@ export class ActionReadinessService {
   } {
     const receipts: ActionReadinessReceipt[] = [];
     const items = input.items.map((action) => {
-      if (action.actionType !== 'delegate_openclaw') return action;
+      if (
+        action.actionType !== 'delegate_openclaw' &&
+        action.actionType !== 'delegate_agent'
+      ) {
+        return action;
+      }
       const readinessReceipt = this.checkAction(action).receipt;
       receipts.push(readinessReceipt);
       return { ...action, readinessReceipt };
@@ -632,7 +644,7 @@ export class ActionReadinessService {
   ): ActionReadinessReceipt {
     const scope = getActionReadinessScope(action);
     if (!scope) {
-      throw new Error('Only delegate_openclaw outcomes update readiness');
+      throw new Error('Only agent delegate outcomes update readiness');
     }
 
     const payload = safeObject(outcome.payload);
@@ -700,7 +712,14 @@ export class ActionReadinessService {
       outcome.status === 'error' &&
       payload.artifactValidation === 'missing_verifiable_artifact'
     ) {
-      contract = update(scope, 'blocked_proof', outcome.summary);
+      // Fault #3: do not cascade blocked_proof across the whole scope.
+      // Keep siblings dispatchable; short degraded TTL allows automatic probe recovery.
+      contract = update(
+        scope,
+        'degraded',
+        `单次 artifact 校验失败（不影响同 scope 其他任务）: ${outcome.summary}`,
+        currentTime + PROOF_FAIL_TTL_SECONDS,
+      );
     } else if (outcome.status === 'need_human_decision') {
       contract = update(
         scope,

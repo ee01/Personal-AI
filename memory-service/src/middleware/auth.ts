@@ -15,10 +15,11 @@ export function createAuthMiddleware(ucm: UserContextManager) {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
-    // Skip auth for health checks, docs, and CORS preflight
+    // Skip auth for health checks, docs, MCP HTTP (self-authed), and CORS preflight
     if (
       request.url === '/health' ||
       request.url.startsWith('/docs') ||
+      request.url.split('?')[0] === '/mcp' ||
       request.method === 'OPTIONS'
     ) {
       return;

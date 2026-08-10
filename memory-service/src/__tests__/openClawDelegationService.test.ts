@@ -331,6 +331,63 @@ describe('OpenClawDelegationService', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('accepts object-shaped observedFields as a verifiable artifact', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 5000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: '已打开目标页面。',
+            artifacts: [
+              {
+                kind: 'browser_tab',
+                title: '百度',
+                content: 'https://www.baidu.com/',
+                metadata: {
+                  sourceSystem: 'chrome',
+                  entityKey: 'tab-42',
+                  verification: 'browser_navigation',
+                  observedFields: { url: 'https://www.baidu.com/', tabId: 42 },
+                },
+              },
+            ],
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-object-fields',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '打开百度',
+      mode: 'read',
+      targetSystem: 'chrome',
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.payload?.artifactValidation).not.toBe('missing_verifiable_artifact');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('synthesizes a verifiable artifact from structured delegation results when OpenClaw omits one', async () => {
     vi.stubGlobal('fetch', fetchMock);
 

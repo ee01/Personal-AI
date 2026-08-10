@@ -9,7 +9,8 @@ export type ActionQueueStatus =
   | 'succeeded'
   | 'failed'
   | 'cancelled'
-  | 'dead_letter';
+  | 'dead_letter'
+  | 'input_required';
 
 export interface QueuedActionRecord {
   id: string;
@@ -208,43 +209,52 @@ export class ActionRepository {
     const id = input.id ?? randomUUID();
     const createdAt = input.createdAt ?? now();
 
-    this.db
-      .prepare(
-        `INSERT INTO proposed_actions
-          (id, type, title, description, params_json, risk_level, confidence, evidence_refs_json,
-           requires_approval, state, source, expires_at, created_at, thread_id, run_id,
-           action_type, execution_mode, priority, idempotency_key, depends_on_json,
-           scheduled_at, source_kind, source_ref_id, queue_status, utility_score, urgency_score)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        input.actionType,
-        input.title,
-        input.description ?? null,
-        JSON.stringify(input.params ?? {}),
-        input.riskLevel ?? 'low',
-        input.confidence ?? 0.5,
-        JSON.stringify(uniqStrings(input.evidenceRefs ?? [])),
-        input.requiresApproval ? 1 : 0,
-        input.state ?? 'pending',
-        input.source ?? null,
-        input.expiresAt ?? null,
-        createdAt,
-        input.threadId ?? null,
-        input.runId ?? null,
-        input.actionType,
-        input.executionMode ?? 'manual',
-        clampPriority(input.priority),
-        input.idempotencyKey ?? null,
-        JSON.stringify(uniqStrings(input.dependsOn ?? [])),
-        input.scheduledAt ?? null,
-        input.sourceKind ?? null,
-        input.sourceRefId ?? null,
-        input.queueStatus ?? 'queued',
-        input.utilityScore ?? null,
-        input.urgencyScore ?? null,
-      );
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO proposed_actions
+            (id, type, title, description, params_json, risk_level, confidence, evidence_refs_json,
+             requires_approval, state, source, expires_at, created_at, thread_id, run_id,
+             action_type, execution_mode, priority, idempotency_key, depends_on_json,
+             scheduled_at, source_kind, source_ref_id, queue_status, utility_score, urgency_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          input.actionType,
+          input.title,
+          input.description ?? null,
+          JSON.stringify(input.params ?? {}),
+          input.riskLevel ?? 'low',
+          input.confidence ?? 0.5,
+          JSON.stringify(uniqStrings(input.evidenceRefs ?? [])),
+          input.requiresApproval ? 1 : 0,
+          input.state ?? 'pending',
+          input.source ?? null,
+          input.expiresAt ?? null,
+          createdAt,
+          input.threadId ?? null,
+          input.runId ?? null,
+          input.actionType,
+          input.executionMode ?? 'manual',
+          clampPriority(input.priority),
+          input.idempotencyKey ?? null,
+          JSON.stringify(uniqStrings(input.dependsOn ?? [])),
+          input.scheduledAt ?? null,
+          input.sourceKind ?? null,
+          input.sourceRefId ?? null,
+          input.queueStatus ?? 'queued',
+          input.utilityScore ?? null,
+          input.urgencyScore ?? null,
+        );
+    } catch (error) {
+      // UNIQUE idempotency race: another insert won; reuse that row.
+      if (input.idempotencyKey) {
+        const raced = this.findReusableByIdempotencyKey(input.idempotencyKey);
+        if (raced) return raced;
+      }
+      throw error;
+    }
 
     return this.getById(id)!;
   }
@@ -476,6 +486,29 @@ export class ActionRepository {
       )
       .run(approvedAt, id);
 
+    return this.getById(id);
+  }
+
+  patchRunningResult(
+    id: string,
+    patch: Record<string, unknown>,
+  ): QueuedActionRecord | null {
+    const current = this.getById(id);
+    if (!current) return null;
+    const merged = {
+      ...(current.result && typeof current.result === 'object'
+        ? current.result
+        : {}),
+      ...patch,
+    };
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET result_json = ?
+         WHERE id = ?
+           AND queue_status = 'running'`,
+      )
+      .run(JSON.stringify(merged), id);
     return this.getById(id);
   }
 

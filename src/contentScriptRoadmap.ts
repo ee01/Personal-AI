@@ -600,6 +600,7 @@ type CreateJiraParentInput = {
   projectKey: string;
   targetStart: string | null;
   targetEnd: string | null;
+  fixVersion?: string | null;
 };
 
 type CreateJiraChildInput = {
@@ -609,6 +610,7 @@ type CreateJiraChildInput = {
   projectKey: string;
   parentItemKey: string;
   parentJiraKey: string | null;
+  fixVersion?: string | null;
 };
 
 type CreateJiraPayload = {
@@ -619,8 +621,37 @@ type CreateJiraPayload = {
 };
 
 type CreateJiraResult = {
-  parent?: { itemKey: string; jiraKey?: string; error?: string };
-  children: Array<{ draftId: string; jiraKey?: string; error?: string }>;
+  parent?: {
+    itemKey: string;
+    jiraKey?: string;
+    error?: string;
+    warnings?: string[];
+  };
+  children: Array<{
+    draftId: string;
+    jiraKey?: string;
+    error?: string;
+    warnings?: string[];
+  }>;
+};
+
+type AgentCreateConstraints = {
+  projectKey?: string | null;
+  issueType?: string | null;
+  subType?: string | null;
+  fixVersion?: string | null;
+  sprint?: string | null;
+};
+
+type AgentCreateJiraPayload = {
+  teamId: string;
+  token: string | null;
+  prompt: string;
+  executor: string;
+  teamName?: string | null;
+  constraints: AgentCreateConstraints;
+  parent: CreateJiraParentInput | null;
+  children: CreateJiraChildInput[];
 };
 
 type LegacyCreateJiraPayload = {
@@ -855,11 +886,13 @@ async function createJiraIssue(input: {
   targetStart?: string | null;
   targetEnd?: string | null;
   quarter?: string | null;
+  fixVersion?: string | null;
   link?: ChildLink & { parentKey: string };
   requestLabel: string;
-}): Promise<string> {
+}): Promise<{ jiraKey: string; warnings: string[] }> {
   const { typeMeta } = input;
-  const fields = buildJiraCreateFields(input);
+  const warnings: string[] = [];
+  const fields = buildJiraCreateFields({ ...input, warnings });
 
   const baseUrl = await getJiraBaseUrl();
   const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/issue`, {
@@ -884,7 +917,7 @@ async function createJiraIssue(input: {
   const created = await response.json();
   const key = String(created?.key || '').trim();
   if (!key) throw new Error('Jira 未返回 issue key');
-  return key;
+  return { jiraKey: key, warnings };
 }
 
 function isLegacyCreatePayload(payload: any): payload is LegacyCreateJiraPayload {
@@ -936,7 +969,7 @@ async function handleCreateJiraBatch(
           parent.projectKey,
           parent.issueType,
         );
-        const jiraKey = await createJiraIssue({
+        const created = await createJiraIssue({
           projectKey: parent.projectKey,
           typeName,
           typeMeta,
@@ -944,22 +977,27 @@ async function handleCreateJiraBatch(
           targetStart: parent.targetStart,
           targetEnd: parent.targetEnd,
           quarter: itemsByKey.get(parent.itemKey)?.quarter || null,
+          fixVersion: parent.fixVersion,
           requestLabel: 'roadmap create jira item',
         });
-        parentKeys.set(parent.itemKey, jiraKey);
-        result.parent = { itemKey: parent.itemKey, jiraKey };
+        parentKeys.set(parent.itemKey, created.jiraKey);
+        result.parent = {
+          itemKey: parent.itemKey,
+          jiraKey: created.jiraKey,
+          warnings: created.warnings.length ? created.warnings : undefined,
+        };
         try {
           // Persisted before any child work: a child failure or a closed tab
           // must never orphan a created issue from its roadmap row.
           await sendRoadmapIntent(teamId, payload.token, {
             op: 'resolve_item',
             itemKey: parent.itemKey,
-            jiraKey,
+            jiraKey: created.jiraKey,
             type: typeName,
             projectKey: parent.projectKey,
           });
         } catch (error) {
-          result.parent.error = `已创建 ${jiraKey}，但回写 Roadmap 失败：${errorMessage(
+          result.parent.error = `已创建 ${created.jiraKey}，但回写 Roadmap 失败：${errorMessage(
             error,
           )}`;
         }
@@ -987,7 +1025,12 @@ async function handleCreateJiraBatch(
       continue;
     }
 
-    const row: { draftId: string; jiraKey?: string; error?: string } = { draftId };
+    const row: {
+      draftId: string;
+      jiraKey?: string;
+      error?: string;
+      warnings?: string[];
+    } = { draftId };
     try {
       const parentIssueType =
         (parent && parent.itemKey === child.parentItemKey
@@ -1001,22 +1044,24 @@ async function handleCreateJiraBatch(
         { wantsSubtask },
       );
       const link = resolveChildLink(typeMeta, parentIssueType, hintLinkField);
-      const jiraKey = await createJiraIssue({
+      const created = await createJiraIssue({
         projectKey: child.projectKey,
         typeName,
         typeMeta,
         summary: child.title,
+        fixVersion: child.fixVersion,
         link: { ...link, parentKey: parentJiraKey },
         requestLabel: 'roadmap create jira sub-task',
       });
-      row.jiraKey = jiraKey;
+      row.jiraKey = created.jiraKey;
+      if (created.warnings.length) row.warnings = created.warnings;
       try {
         await sendRoadmapIntent(teamId, payload.token, {
           op: 'resolve_draft',
-          mappings: [{ draftId, jiraKey }],
+          mappings: [{ draftId, jiraKey: created.jiraKey }],
         });
       } catch (error) {
-        row.error = `已创建 ${jiraKey}，但回写 Roadmap 失败：${errorMessage(error)}`;
+        row.error = `已创建 ${created.jiraKey}，但回写 Roadmap 失败：${errorMessage(error)}`;
       }
     } catch (error) {
       row.error = errorMessage(error);
@@ -1040,7 +1085,7 @@ async function handleLegacyCreateJira(
         projectKey,
         'Task',
       );
-      const jiraKey = await createJiraIssue({
+      const created = await createJiraIssue({
         projectKey,
         typeName,
         typeMeta,
@@ -1050,7 +1095,7 @@ async function handleLegacyCreateJira(
           : undefined,
         requestLabel: 'roadmap create jira task (legacy)',
       });
-      mappings.push({ draftId: draft.id, jiraKey });
+      mappings.push({ draftId: draft.id, jiraKey: created.jiraKey });
     } catch (error) {
       mappings.push({ draftId: draft.id, error: errorMessage(error) });
     }
@@ -1065,6 +1110,321 @@ async function handleCreateJira(
     return handleLegacyCreateJira(payload);
   }
   return handleCreateJiraBatch(payload as CreateJiraPayload);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stableIdempotencySuffix(parts: string[]): string {
+  return parts
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .sort()
+    .join('+')
+    .replace(/[^a-zA-Z0-9:_+-]/g, '_')
+    .slice(0, 160);
+}
+
+function extractJsonObject(text: string): unknown {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* try fenced / embedded JSON */
+  }
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) {
+    try {
+      return JSON.parse(fence[1].trim());
+    } catch {
+      /* fall through */
+    }
+  }
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function parseAgentMappings(
+  ...candidates: Array<string | null | undefined>
+): Array<{ draftId: string; jiraKey: string }> {
+  for (const candidate of candidates) {
+    const parsed = extractJsonObject(candidate || '');
+    if (!parsed || typeof parsed !== 'object') continue;
+    const mappings = (parsed as { mappings?: unknown }).mappings;
+    if (!Array.isArray(mappings)) continue;
+    const out: Array<{ draftId: string; jiraKey: string }> = [];
+    for (const row of mappings) {
+      if (!row || typeof row !== 'object') continue;
+      const draftId = String((row as { draftId?: unknown }).draftId || '').trim();
+      const jiraKey = String((row as { jiraKey?: unknown }).jiraKey || '').trim();
+      if (draftId && jiraKey) out.push({ draftId, jiraKey });
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
+  const constraints = payload.constraints || {};
+  const filled: string[] = [];
+  const blank: string[] = [];
+  const push = (label: string, value: string | null | undefined) => {
+    const text = String(value || '').trim();
+    if (text) filled.push(`- ${label}: ${text}`);
+    else blank.push(`- ${label}: （未填，由你决定）`);
+  };
+  push('Project Key', constraints.projectKey);
+  push('主任务类型', constraints.issueType);
+  push('子任务类型', constraints.subType);
+  push('fixVersion（统一覆盖）', constraints.fixVersion);
+  push('Sprint', constraints.sprint);
+
+  const rows: string[] = [];
+  if (payload.parent) {
+    rows.push(
+      [
+        `parent draftId=${payload.parent.itemKey}`,
+        `title=${JSON.stringify(payload.parent.title)}`,
+        `suggestedIssueType=${payload.parent.issueType || ''}`,
+        `targetStart=${payload.parent.targetStart || ''}`,
+        `targetEnd=${payload.parent.targetEnd || ''}`,
+        `suggestedFixVersion=${payload.parent.fixVersion || ''}`,
+      ].join(' | '),
+    );
+  }
+  for (const child of payload.children || []) {
+    rows.push(
+      [
+        `child draftId=${child.draftId}`,
+        `title=${JSON.stringify(child.title)}`,
+        `parentItemKey=${child.parentItemKey}`,
+        `parentJiraKey=${child.parentJiraKey || ''}`,
+        `suggestedIssueType=${child.issueType || ''}`,
+        `suggestedFixVersion=${child.fixVersion || ''}`,
+      ].join(' | '),
+    );
+  }
+
+  return [
+    '你是 Personal Roadmap 的 Jira 创建助手。请根据用户指令在 Jira 中创建 issue，并把结果回写成可验证 artifact。',
+    '',
+    `团队：${payload.teamName || payload.teamId}`,
+    `执行器：${payload.executor}`,
+    '',
+    '## 用户 Prompt',
+    payload.prompt.trim(),
+    '',
+    '## 硬性约束（已填必须遵守；未填由你决定）',
+    ...filled,
+    ...blank,
+    '',
+    '## 待创建草稿',
+    ...rows,
+    '',
+    '## 结果契约（必须遵守）',
+    '1. 为每个 draftId 创建对应 Jira issue（parent 的 draftId 就是 itemKey）。',
+    '2. 若 parentJiraKey 已存在，子任务必须 link 到该父 issue。',
+    '3. 未填 Sprint 时查询并填入当前 active sprint；未填 fixVersion 时可用 suggestedFixVersion。',
+    '4. 最终必须返回可验证 artifact：content 为 JSON 字符串，格式严格为',
+    '{"mappings":[{"draftId":"...","jiraKey":"PROJ-123"}]}',
+    '5. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key）。',
+    '6. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
+  ].join('\n');
+}
+
+async function listAgentExecutors(): Promise<
+  Array<{ id: string; label: string }>
+> {
+  try {
+    const client = getMemoryServiceClient();
+    const config = await client.getRuntimeConfig();
+    const fromRegistry = Array.isArray(config?.agentExecutors)
+      ? config.agentExecutors
+          .filter((item) => item && item.enabled !== false && item.id)
+          .map((item) => ({
+            id: String(item.id),
+            label: String(item.label || item.id),
+          }))
+      : [];
+    if (fromRegistry.length) return fromRegistry;
+    if (config?.openClawEnabled) {
+      return [{ id: 'openclaw', label: 'OpenClaw' }];
+    }
+  } catch (error) {
+    console.warn('[pai-roadmap] list agent executors failed', error);
+  }
+  return [];
+}
+
+async function waitForAgentTaskTerminal(
+  sourceRefId: string,
+  timeoutMs = 10 * 60 * 1000,
+): Promise<{
+  queueStatus: string;
+  summary?: string;
+  evidenceContent?: string;
+  lastError?: string;
+}> {
+  const client = getMemoryServiceClient();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await client.getAgentTaskRuntimeStatus([sourceRefId]);
+    const item = status.items?.[0];
+    const queueStatus = String(item?.latestAction?.queueStatus || '').trim();
+    if (
+      ['succeeded', 'failed', 'dead_letter', 'input_required'].includes(
+        queueStatus,
+      )
+    ) {
+      return {
+        queueStatus,
+        summary: item?.summary,
+        evidenceContent: item?.evidence?.content,
+        lastError: item?.latestAction?.lastError,
+      };
+    }
+    await sleep(5_000);
+  }
+  throw new Error('Agent 创建超时（超过 10 分钟）');
+}
+
+/**
+ * Agent path: enqueue one OpenClaw AgentTask per draft group, poll runtime
+ * status, then resolve_item / resolve_draft from the artifact mappings.
+ */
+async function handleAgentCreateJira(
+  payload: AgentCreateJiraPayload,
+): Promise<CreateJiraResult> {
+  const teamId = String(payload.teamId || '').trim();
+  const prompt = String(payload.prompt || '').trim();
+  const executor = String(payload.executor || '').trim() || 'openclaw';
+  const parent = payload.parent || null;
+  const children = Array.isArray(payload.children) ? payload.children : [];
+  if (!teamId) throw new Error('缺少 teamId，无法把创建结果写回 Roadmap');
+  if (!prompt) throw new Error('Agent 模式需要填写 Prompt');
+  if (!parent && !children.length) return { children: [] };
+
+  const executors = await listAgentExecutors();
+  if (!executors.some((e) => e.id === executor)) {
+    throw new Error(
+      '未配置可用的 Agent 执行器：请先在插件 Options 启用 OpenClaw',
+    );
+  }
+
+  const draftIds = [
+    ...(parent ? [parent.itemKey] : []),
+    ...children.map((c) => c.draftId),
+  ];
+  const taskId = `roadmap:${teamId}:${stableIdempotencySuffix(draftIds)}`;
+  const idempotencyKey = `roadmap_create:${teamId}:${stableIdempotencySuffix(draftIds)}`;
+  const client = getMemoryServiceClient();
+  const execute = await client.executeAgentTask({
+    taskId,
+    title: `Roadmap 创建 Jira · ${teamId}`,
+    task: buildAgentCreateTaskText({ ...payload, prompt, executor }),
+    executor,
+    notify: false,
+    idempotencyKey,
+    triggerSource: 'roadmap_create_jira',
+  });
+
+  let mappings = parseAgentMappings(
+    execute.result?.summary,
+    execute.result?.artifacts?.[0]?.content,
+  );
+
+  const queueStatus = String(execute.queueStatus || '');
+  if (!mappings.length && queueStatus !== 'succeeded') {
+    const terminal = await waitForAgentTaskTerminal(taskId);
+    if (terminal.queueStatus !== 'succeeded') {
+      throw new Error(
+        terminal.lastError ||
+          terminal.summary ||
+          `Agent 创建失败（${terminal.queueStatus}）`,
+      );
+    }
+    mappings = parseAgentMappings(terminal.evidenceContent, terminal.summary);
+  } else if (!mappings.length && queueStatus === 'succeeded') {
+    // Reused succeeded run without inline result body — refresh from ledger.
+    const terminal = await waitForAgentTaskTerminal(taskId, 15_000);
+    mappings = parseAgentMappings(terminal.evidenceContent, terminal.summary);
+  }
+
+  if (!mappings.length) {
+    throw new Error(
+      'Agent 已完成但未返回 mappings artifact（需要 JSON {mappings:[{draftId,jiraKey}]}）',
+    );
+  }
+
+  const byId = new Map(mappings.map((m) => [m.draftId, m.jiraKey]));
+  const result: CreateJiraResult = { children: [] };
+
+  if (parent) {
+    const jiraKey = byId.get(parent.itemKey);
+    if (jiraKey) {
+      result.parent = { itemKey: parent.itemKey, jiraKey };
+      try {
+        await sendRoadmapIntent(teamId, payload.token, {
+          op: 'resolve_item',
+          itemKey: parent.itemKey,
+          jiraKey,
+          type: parent.issueType || undefined,
+          projectKey: parent.projectKey || undefined,
+        });
+      } catch (error) {
+        result.parent.error = `已创建 ${jiraKey}，但回写 Roadmap 失败：${errorMessage(
+          error,
+        )}`;
+      }
+    } else {
+      result.parent = {
+        itemKey: parent.itemKey,
+        error: 'Agent 结果未包含该主任务的 mapping',
+      };
+    }
+  }
+
+  const childMappings: Array<{ draftId: string; jiraKey: string }> = [];
+  for (const child of children) {
+    const jiraKey = byId.get(child.draftId);
+    if (jiraKey) {
+      result.children.push({ draftId: child.draftId, jiraKey });
+      childMappings.push({ draftId: child.draftId, jiraKey });
+    } else {
+      result.children.push({
+        draftId: child.draftId,
+        error: 'Agent 结果未包含该草稿的 mapping',
+      });
+    }
+  }
+  if (childMappings.length) {
+    try {
+      await sendRoadmapIntent(teamId, payload.token, {
+        op: 'resolve_draft',
+        mappings: childMappings,
+      });
+    } catch (error) {
+      for (const row of result.children) {
+        if (row.jiraKey && !row.error) {
+          row.error = `已创建 ${row.jiraKey}，但回写 Roadmap 失败：${errorMessage(
+            error,
+          )}`;
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 async function handleAiAlias(title: string): Promise<string> {
@@ -1188,6 +1548,106 @@ function injectBridge(): void {
         window.postMessage(
           {
             type: 'pai-roadmap-create-jira-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-agent-executors') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-agent-executors-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        const executors = await listAgentExecutors();
+        window.postMessage(
+          {
+            type: 'pai-roadmap-agent-executors-result',
+            requestId: data.requestId,
+            ok: true,
+            executors,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-agent-executors-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-open-options') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-open-options-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        await chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' });
+        window.postMessage(
+          {
+            type: 'pai-roadmap-open-options-result',
+            requestId: data.requestId,
+            ok: true,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-open-options-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-agent-create') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-agent-create-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        const result = await handleAgentCreateJira(
+          (data.payload || {}) as AgentCreateJiraPayload,
+        );
+        window.postMessage(
+          {
+            type: 'pai-roadmap-agent-create-result',
+            requestId: data.requestId,
+            ok: true,
+            result,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-agent-create-result',
             requestId: data.requestId,
             ok: false,
             error: error?.message || String(error),

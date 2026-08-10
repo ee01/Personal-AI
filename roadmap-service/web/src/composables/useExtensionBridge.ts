@@ -1,4 +1,8 @@
-import type { CreateJiraPayload, CreateJiraResult } from './useRoadmapContract';
+import type {
+  AgentCreateJiraPayload,
+  CreateJiraPayload,
+  CreateJiraResult,
+} from './useRoadmapContract';
 
 export type ImportItemPayload = {
   key: string;
@@ -10,23 +14,24 @@ export type ImportItemPayload = {
   targetEnd?: string;
 };
 
-type BridgeRequestType =
-  | 'pai-roadmap-import-jql'
-  | 'pai-roadmap-create-jira'
-  | 'pai-roadmap-ai-alias'
-  | 'pai-roadmap-fetch-issue-dates'
-  | 'pai-roadmap-import-tasks'
-  | 'pai-roadmap-update-target-dates';
+export type AgentExecutorOption = {
+  id: string;
+  label: string;
+};
 
 type BridgeResultType =
   | 'pai-roadmap-import-jql-result'
   | 'pai-roadmap-create-jira-result'
+  | 'pai-roadmap-agent-create-result'
+  | 'pai-roadmap-agent-executors-result'
+  | 'pai-roadmap-open-options-result'
   | 'pai-roadmap-ai-alias-result'
   | 'pai-roadmap-fetch-issue-dates-result'
   | 'pai-roadmap-import-tasks-result'
   | 'pai-roadmap-update-target-dates-result';
 
 const ACK_TIMEOUT_MS = 4_000;
+const AGENT_CREATE_TIMEOUT_MS = 11 * 60 * 1000;
 
 function requestId(): string {
   return `req_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -86,25 +91,6 @@ function waitForBridgeResult<T>(
   });
 }
 
-async function callBridge<T>(
-  type: BridgeRequestType,
-  resultType: BridgeResultType,
-  payload: Record<string, unknown>,
-  timeoutMs?: number,
-): Promise<T> {
-  const id = requestId();
-  const pending = waitForBridgeResult<T>(resultType, id, timeoutMs);
-  window.postMessage(
-    {
-      type,
-      requestId: id,
-      ...payload,
-    },
-    '*',
-  );
-  return pending;
-}
-
 export async function bridgeImportJql(
   jql: string,
   quarters: string[],
@@ -137,16 +123,86 @@ export async function bridgeImportJql(
 export async function bridgeCreateJira(
   payload: CreateJiraPayload,
 ): Promise<CreateJiraResult> {
-  const result = await callBridge<{
+  const id = requestId();
+  const pending = waitForBridgeResult<{
     ok: true;
     result: CreateJiraResult;
-  }>('pai-roadmap-create-jira', 'pai-roadmap-create-jira-result', {
-    payload: payload as unknown as Record<string, unknown>,
-  });
+  }>('pai-roadmap-create-jira-result', id);
+  const acked = waitForBridgeAck('pai-roadmap-create-jira-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    {
+      type: 'pai-roadmap-create-jira',
+      requestId: id,
+      payload: payload as unknown as Record<string, unknown>,
+    },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  const result = await pending;
   return {
     parent: result.result?.parent,
     children: result.result?.children || [],
   };
+}
+
+/** Prompt path: extension enqueues an AgentTask and resolves mappings. */
+export async function bridgeAgentCreateJira(
+  payload: AgentCreateJiraPayload,
+): Promise<CreateJiraResult> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{
+    ok: true;
+    result: CreateJiraResult;
+  }>('pai-roadmap-agent-create-result', id, AGENT_CREATE_TIMEOUT_MS);
+  const acked = waitForBridgeAck('pai-roadmap-agent-create-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    {
+      type: 'pai-roadmap-agent-create',
+      requestId: id,
+      payload: payload as unknown as Record<string, unknown>,
+    },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  const result = await pending;
+  return {
+    parent: result.result?.parent,
+    children: result.result?.children || [],
+  };
+}
+
+export async function bridgeListAgentExecutors(): Promise<AgentExecutorOption[]> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{
+    ok: true;
+    executors: AgentExecutorOption[];
+  }>('pai-roadmap-agent-executors-result', id, 30_000);
+  const acked = waitForBridgeAck('pai-roadmap-agent-executors-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage({ type: 'pai-roadmap-agent-executors', requestId: id }, '*');
+  await Promise.race([acked, pending]);
+  const result = await pending;
+  return Array.isArray(result.executors) ? result.executors : [];
+}
+
+export async function bridgeOpenOptionsPage(): Promise<void> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{ ok: true }>(
+    'pai-roadmap-open-options-result',
+    id,
+    15_000,
+  );
+  const acked = waitForBridgeAck('pai-roadmap-open-options-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage({ type: 'pai-roadmap-open-options', requestId: id }, '*');
+  await Promise.race([acked, pending]);
+  await pending;
 }
 
 /** Read Target End / due date from a Jira issue for external-dep ETA. */

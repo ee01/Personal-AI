@@ -300,7 +300,7 @@ async function main() {
     const slidesTargetBoundary = await slidesTargetButton.getAttribute('title');
     assert(
       slidesTargetBoundary?.includes('切换到 Slides 提纲') &&
-        slidesTargetBoundary.includes('为 Prep prep-storyline 从本页缓存读取或请求 Storyline Draft API') &&
+        slidesTargetBoundary.includes('为会前准备 prep-storyline 从本页缓存读取或请求 Storyline Draft API') &&
         slidesTargetBoundary.includes('切换后会重置复核确认') &&
         slidesTargetBoundary.includes('会清除当前复制状态') &&
         slidesTargetBoundary.includes('不会写回 Slides / Docs / RingCentral') &&
@@ -616,7 +616,7 @@ async function main() {
     });
     await page.waitForFunction(() =>
       document.body.textContent?.includes(
-        '当前 Storyline Draft 只支持 Today Pilot 会前准备来源',
+        '当前 Storyline Draft 只支持 Today Pilot 会前准备或资料记忆 Storyline seed',
       ),
     );
     const unsupportedHashText = await page.textContent('body');
@@ -641,7 +641,7 @@ async function main() {
     );
     await page.waitForFunction(() =>
       document.body.textContent?.includes(
-        '当前 Storyline Draft 只支持 Today Pilot 会前准备来源',
+        '当前 Storyline Draft 只支持 Today Pilot 会前准备或资料记忆 Storyline seed',
       ),
     );
     const unsupportedSourceText = await page.textContent('body');
@@ -724,7 +724,7 @@ async function main() {
       'draft request receipt boundary missing while initial load is pending',
     );
     assert(
-      draftRequestReceiptText?.includes('Prep prep-pending') &&
+      draftRequestReceiptText?.includes('来源 prep-pending') &&
         draftRequestReceiptText.includes('等待服务端证据回执'),
       'draft request receipt metrics missing while initial load is pending',
     );

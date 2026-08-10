@@ -954,3 +954,34 @@ suites:
         - docs/features/personal_roadmap.md
       validate:
         - npm --prefix memory-service test -- --run src/__tests__/focusProjectContextBuilder.test.ts
+
+  - id: agent-executor-runtime
+    title: Agent Executor Runtime Eval
+    description: 确定性验证 Gateway reconcile、artifact observedFields 形状、MCP 证据门控、ACP envelope、executor registry 合成与 A2A id 映射。
+    enabled: true
+    workflow: evals/workflows/agent-executor-runtime/experience.md
+    cases: evals/cases/agent-executor-runtime/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/integrations/executors/**
+        - memory-service/src/integrations/acp/**
+        - memory-service/src/integrations/openclaw/**
+        - memory-service/src/mcp/**
+        - memory-service/src/routes/a2a.ts
+        - memory-service/src/routes/mcp.ts
+        - memory-service/src/core/actions/ActionExecutor.ts
+        - memory-service/src/__tests__/**
+        - tools/eval-agent-executor-runtime.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/agent_executor_runtime.md
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/openClawGatewayExecutor.test.ts src/__tests__/acpExecutor.test.ts src/__tests__/mcpTools.test.ts src/__tests__/a2aRoutes.test.ts src/__tests__/executorRegistry.test.ts
+        - npm run eval:run -- --suite agent-executor-runtime --no-repair

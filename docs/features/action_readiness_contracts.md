@@ -2,7 +2,7 @@
 
 _最后更新: 2026-07-15_
 
-执行就绪契约是 `delegate_openclaw` 的 dispatch 前门禁。它回答的不是“这个动作值不值得做”，而是“当前连接、鉴权、目标能力、必填输入和结果证明是否足以安全开始执行”。
+执行就绪契约是 `delegate_agent` / `delegate_openclaw` 的 dispatch 前门禁。它回答的不是“这个动作值不值得做”，而是“当前连接、鉴权、目标能力、必填输入和结果证明是否足以安全开始执行”。执行器选型与 Gateway/ACP 运行时见 [Agent Executor Runtime](./agent_executor_runtime.md)。
 
 ## 用户体验
 

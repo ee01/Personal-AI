@@ -18,6 +18,7 @@ import {
   type UpdateRuntimeConfigPayload,
   type CalendarEventsSyncResponse,
 } from './services/MemoryServiceClient';
+import { AgentExecutorsSettings } from './components/AgentExecutorsSettings';
 import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
 import { agentCoordinator } from './agentWorkflow';
 import {
@@ -2909,6 +2910,29 @@ const Options = () => {
         OPENCLAW_API_KEY_CONFIGURED: Boolean(
           serverConfig?.openClawApiKeyConfigured,
         ),
+        AGENT_EXECUTORS: Array.isArray(serverConfig?.agentExecutors)
+          ? serverConfig.agentExecutors.map((item) => ({
+              id: String(item.id || ''),
+              label: String(item.label || item.id || ''),
+              type:
+                item.type === 'openclaw-gateway' ||
+                item.type === 'acp-codex' ||
+                item.type === 'acp-claude-code'
+                  ? item.type
+                  : 'openclaw-responses',
+              baseUrl: item.baseUrl || '',
+              apiKey: '',
+              cwd: item.cwd || '',
+              enabled: item.enabled !== false,
+              apiKeyConfigured: Boolean(item.apiKeyConfigured),
+              clearApiKey: false,
+            }))
+          : prev.AGENT_EXECUTORS || [],
+        EXECUTOR_DEFAULTS: {
+          agent_task: serverConfig?.executorDefaults?.agent_task || '',
+          reflection_research:
+            serverConfig?.executorDefaults?.reflection_research || '',
+        },
         OUTREACH_ENABLED:
           serverConfig?.outreachEnabled !== undefined
             ? Boolean(serverConfig.outreachEnabled)
@@ -3304,6 +3328,23 @@ const Options = () => {
           Number(config.OPENCLAW_TIMEOUT_MS) || 600000,
         ),
         clearOpenClawApiKey,
+        agentExecutors: (config.AGENT_EXECUTORS || []).map((item) => ({
+          id: item.id,
+          label: item.label,
+          type: item.type,
+          baseUrl: item.baseUrl,
+          cwd: item.cwd,
+          enabled: item.enabled,
+          clearApiKey: item.clearApiKey === true,
+          ...(item.apiKey && item.apiKey.trim()
+            ? { apiKey: item.apiKey.trim() }
+            : {}),
+        })),
+        executorDefaults: {
+          agent_task: config.EXECUTOR_DEFAULTS?.agent_task || '',
+          reflection_research:
+            config.EXECUTOR_DEFAULTS?.reflection_research || '',
+        },
         outreachEnabled: config.OUTREACH_ENABLED,
         outreachIntervalMs: Math.max(
           1000,
@@ -4244,10 +4285,11 @@ const Options = () => {
             name="MEMORY_SERVICE_BASE_URL"
             value={config.MEMORY_SERVICE_BASE_URL}
             onChange={handleInputChange}
-            placeholder="http://localhost:3210/api/v1"
+            placeholder={defaultEnvConfig.MEMORY_SERVICE_BASE_URL}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            记忆系统后端地址，需包含 /api/v1 路径。默认 localhost:3210
+            记忆系统后端地址，需包含 /api/v1 路径。未保存时使用当前构建默认值：
+            {defaultEnvConfig.MEMORY_SERVICE_BASE_URL}
           </small>
         </div>
         <div className="form-group">
@@ -4967,6 +5009,25 @@ const Options = () => {
           </label>
         </div>
       </div>
+
+      <AgentExecutorsSettings
+        executors={config.AGENT_EXECUTORS || []}
+        defaults={
+          config.EXECUTOR_DEFAULTS || {
+            agent_task: '',
+            reflection_research: '',
+          }
+        }
+        openClawEnabled={config.OPENCLAW_ENABLED === true}
+        openClawBaseUrl={config.OPENCLAW_BASE_URL || ''}
+        onChange={({ executors, defaults }) =>
+          setConfig((prev) => ({
+            ...prev,
+            AGENT_EXECUTORS: executors,
+            EXECUTOR_DEFAULTS: defaults,
+          }))
+        }
+      />
 
       <div
         id="outreach-config"

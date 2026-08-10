@@ -1,12 +1,13 @@
 {
   "_metadata": {
-    "version": "1.6.1",
-    "lastUpdated": "2026-08-04",
+    "version": "1.7.0",
+    "lastUpdated": "2026-08-09",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
-      "The initial getBotMessageCurrentTime call uses autoMarkOnFetch=api so AI Report and custom API endpoint messages write Last_Exec and Logs as soon as Jira claims them; one-time or finished periodic messages still become Done through the normal schedule rules, while Bot and RingCentral sender paths mark after send callbacks.",
+      "The initial getBotMessageCurrentTime call uses autoMarkOnFetch=api so AgentTask / AI Report / custom API only write claimed (⏳ 已领取待确认), not final ✅. Final success is written by confirmBotMessageTriggered after the downstream call succeeds.",
       "When getBotMessageCurrentTime returns executed=true, a Log action records messageId/topic/pushMethod/targetType/executionKey/rowIndex in the rule audit log before AgentTask/Bot/AsMe/AI branches run.",
+      "AgentTask and custom API branches call confirmBotMessageTriggered after a successful downstream webhook. If the rule times out or 404s before confirm, Sheet stays claimed (not fake ✅); AgentTask may reclaim (at-least-once), custom API stays at-most-once until claim TTL expires as trigger_delivery_failed.",
       "API branches forward X-User-Id from Apps Script so memory-service write endpoints can keep per-user execution ledgers.",
       "API forwarding keeps literal http/https prefixes in Jira Rule URLs because Jira Automation rejects URL fields that are only smart-value variables.",
       "Bot private/group webhooks go through Dify botman jumpboard (BOTMAN_DIFY_*) because Jira cannot reach botman.int.rclabenv.com.",
@@ -658,6 +659,24 @@
               "conditions": [],
               "optimisedIds": [],
               "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=confirmed&executionKey={{executionKey.urlEncode}}&topic={{replacedTopic.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
             }
           ],
           "conditions": [
@@ -763,6 +782,24 @@
                 "contentType": "empty",
                 "method": "GET",
                 "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=confirmed&executionKey={{executionKey.urlEncode}}&topic={{replacedTopic.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -902,6 +939,24 @@
                 "contentType": "empty",
                 "method": "GET",
                 "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=confirmed&executionKey={{executionKey.urlEncode}}&topic={{replacedTopic.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -1048,6 +1103,24 @@
               "conditions": [],
               "optimisedIds": [],
               "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=confirmed&executionKey={{executionKey.urlEncode}}&topic={{replacedTopic.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
             }
           ],
           "conditions": [
@@ -1182,6 +1255,24 @@
                 "customBody": "{{webhookResponse.body.aiBody}}",
                 "method": "POST",
                 "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=confirmed&executionKey={{executionKey.urlEncode}}&topic={{replacedTopic.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],

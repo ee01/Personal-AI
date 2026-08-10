@@ -210,6 +210,7 @@ describe('create-jira payload', () => {
         projectKey: 'NOVA',
         targetStart: '2026-07-01',
         targetEnd: '2026-08-01',
+        fixVersion: null,
       },
       children: [
         {
@@ -219,9 +220,42 @@ describe('create-jira payload', () => {
           projectKey: 'NOVA',
           parentItemKey: 'LOCAL-ab12cd34',
           parentJiraKey: null,
+          fixVersion: null,
         },
       ],
     });
+  });
+
+  it('applies per-row fixVersion suggestions and a uniform override', () => {
+    const group = buildDraftGroups([
+      item({
+        key: 'LOCAL-ab12cd34',
+        source: 'manual',
+        jiraKey: null,
+        title: 'Manual epic',
+        subs: [sub({ id: 'd1', title: 'first child' })],
+      }),
+    ])[0];
+
+    expect(
+      buildCreateJiraPayload(group, {
+        ...fields,
+        fixVersionByKey: {
+          'LOCAL-ab12cd34': '26.3.220',
+          d1: '26.4.10',
+        },
+      }).parent?.fixVersion,
+    ).toBe('26.3.220');
+    expect(
+      buildCreateJiraPayload(group, {
+        ...fields,
+        fixVersionOverride: '26.5.0',
+        fixVersionByKey: {
+          'LOCAL-ab12cd34': '26.3.220',
+          d1: '26.4.10',
+        },
+      }).children[0].fixVersion,
+    ).toBe('26.5.0');
   });
 
   it('omits the parent and passes its key when the issue already exists', () => {

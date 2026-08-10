@@ -592,6 +592,27 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 .f-note{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:5px}
 .hint-warn{display:flex;align-items:center;gap:8px;font-size:12px;color:#9A5B00;
   background:#FFF4E5;border:1px solid #FFD9A8;border-radius:9px;padding:9px 12px}
+/* 创建 Jira：双路径（直连 API / Agent 执行器） */
+.mode-badge{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.05em;
+  border-radius:5px;padding:2px 7px;margin-left:8px;vertical-align:2px}
+.mode-badge.api{background:#EAF3FA;color:var(--fut-deep)}
+.mode-badge.agent{background:#F3EEFA;color:#6D4FA3}
+.exec-row{display:none}
+.exec-row.show{display:block;animation:cjIn .18s ease}
+.exec-select{display:flex;gap:8px;flex-wrap:wrap}
+.exec-opt{display:flex;align-items:center;gap:7px;padding:7px 12px;border:1.5px solid var(--line);
+  border-radius:9px;font-size:12.5px;font-weight:500;transition:all .13s;background:#fff}
+.exec-opt:hover{border-color:#C9C6BB}
+.exec-opt.on{border-color:#6D4FA3;background:#F3EEFA;color:#4A3570;font-weight:600}
+.exec-opt .eo-dot{width:7px;height:7px;border-radius:50%;background:#B8BFC7;flex:none}
+.exec-opt.on .eo-dot{background:#6D4FA3}
+.exec-guide{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.6}
+.exec-guide a{color:var(--fut-deep);font-weight:600;text-decoration:underline;
+  text-underline-offset:2px;cursor:pointer}
+.fv-chip{font-family:var(--mono);font-size:9.5px;color:#2E8540;background:#EAF6EC;
+  border-radius:4px;padding:2px 6px;flex:none}
+.fv-chip.none{color:var(--muted);background:var(--bg)}
+.f-auto-note{font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.5}
 /* 创建 Jira 列表（主任务 + 子任务分组） */
 .ai-group{border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-top:8px}
 .ai-group .ai-row.parent{background:var(--bg);font-weight:600}

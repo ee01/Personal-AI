@@ -77,6 +77,8 @@ import { recallRelevanceRoutes } from './routes/recallRelevance.js';
 import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js';
 import { usageRoutes } from './routes/usage.js';
 import { memoryClaimRoutes } from './routes/memoryClaims.js';
+import { mcpHttpRoutes } from './routes/mcp.js';
+import { a2aRoutes } from './routes/a2a.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 import {
   initAnalyticsStore,
@@ -312,6 +314,12 @@ export async function buildApp(
 
   // Tokenized, read-only skill share URLs for external agents.
   await app.register(publicSkillRoutes, { userContextManager });
+
+  // Streamable HTTP MCP (Block F) — top-level /mcp, bearer + origin gated.
+  await app.register(mcpHttpRoutes);
+
+  // A2A Agent Card + JSON-RPC (Block G).
+  await app.register(a2aRoutes);
 
   // Top-level health check (no prefix) for container orchestrators
   await app.register(healthRoutes);

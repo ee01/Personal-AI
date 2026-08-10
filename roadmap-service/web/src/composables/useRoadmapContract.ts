@@ -260,6 +260,8 @@ export interface CreateJiraParent {
   projectKey: string;
   targetStart: string | null;
   targetEnd: string | null;
+  /** Per-row Fix Version override / auto suggestion. */
+  fixVersion?: string | null;
 }
 
 export interface CreateJiraChild {
@@ -270,6 +272,7 @@ export interface CreateJiraChild {
   parentItemKey: string;
   /** Set when the parent issue already exists, so the extension can link right away. */
   parentJiraKey: string | null;
+  fixVersion?: string | null;
 }
 
 export interface CreateJiraPayload {
@@ -280,8 +283,37 @@ export interface CreateJiraPayload {
 }
 
 export interface CreateJiraResult {
-  parent?: { itemKey: string; jiraKey?: string; error?: string };
-  children: Array<{ draftId: string; jiraKey?: string; error?: string }>;
+  parent?: {
+    itemKey: string;
+    jiraKey?: string;
+    error?: string;
+    warnings?: string[];
+  };
+  children: Array<{
+    draftId: string;
+    jiraKey?: string;
+    error?: string;
+    warnings?: string[];
+  }>;
+}
+
+export interface AgentCreateConstraints {
+  projectKey?: string | null;
+  issueType?: string | null;
+  subType?: string | null;
+  fixVersion?: string | null;
+  sprint?: string | null;
+}
+
+export interface AgentCreateJiraPayload {
+  teamId: string;
+  token: string | null;
+  prompt: string;
+  executor: string;
+  teamName?: string | null;
+  constraints: AgentCreateConstraints;
+  parent: CreateJiraParent | null;
+  children: CreateJiraChild[];
 }
 
 /** One main item plus the draft children waiting on it. */
@@ -312,9 +344,16 @@ export function buildCreateJiraPayload(
     projectKey: string;
     issueType: string;
     subType: string;
+    /** Uniform override applied to every row when set. */
+    fixVersionOverride?: string | null;
+    /** Per-row suggested Fix Version (Target End → release sheet). */
+    fixVersionByKey?: Record<string, string | null | undefined>;
   },
 ): CreateJiraPayload {
   const parentIsDraft = isDraftItem(group.item);
+  const override = String(fields.fixVersionOverride || '').trim() || null;
+  const parentSuggested =
+    fields.fixVersionByKey?.[group.item.key] ?? null;
   return {
     teamId: fields.teamId,
     token: fields.token,
@@ -326,6 +365,7 @@ export function buildCreateJiraPayload(
           projectKey: fields.projectKey,
           targetStart: group.item.targetStart ?? null,
           targetEnd: group.item.targetEnd ?? null,
+          fixVersion: override || parentSuggested || null,
         }
       : null,
     children: group.subs.map((sub) => ({
@@ -335,6 +375,7 @@ export function buildCreateJiraPayload(
       projectKey: fields.projectKey,
       parentItemKey: group.item.key,
       parentJiraKey: group.item.jiraKey ?? null,
+      fixVersion: override || fields.fixVersionByKey?.[sub.id] || null,
     })),
   };
 }

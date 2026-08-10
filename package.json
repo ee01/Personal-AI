@@ -44,6 +44,7 @@
     "verify:memory-backup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-backup.ts",
     "verify:memory-events-multiuser": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-events-multiuser.ts && npm --prefix memory-service test -- --run src/__tests__/events.test.ts",
     "verify:memory-user-identity:e2e": "node tools/verify-memory-user-identity-e2e.mjs",
+    "verify:memory-service-default-url:e2e": "node tools/verify-memory-service-default-url-e2e.mjs",
     "verify:message-reaction": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/message-reaction/__tests__/*.test.ts",
     "verify:message-reaction:e2e": "npm --prefix desktop-app run test:message-reaction-toolbar",
     "verify:follow-threads-management:e2e": "node tools/verify-follow-threads-management-e2e.mjs",

@@ -1589,7 +1589,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.6.1');
+  assert.equal(template._metadata.version, '1.7.0');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1665,11 +1665,12 @@ test('Executor rule marks sent messages through GET Apps Script callbacks with s
   assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=false')).length, 1);
 });
 
-test('Executor rule lets Apps Script auto-mark API messages when claimed', () => {
+test('Executor rule confirms AgentTask/API after downstream call instead of fetch-time final success', () => {
   const template = JSON.parse(
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
   const getMessageWebhooks: any[] = [];
+  const confirmWebhooks: any[] = [];
   const apiWebhooks: Array<{ node: any; url: string; conditions: any[] }> = [];
 
   const collectRuleNodes = (node: any, parentConditions: any[] = []) => {
@@ -1685,13 +1686,16 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
       if (url.includes('action=getBotMessageCurrentTime')) {
         getMessageWebhooks.push(node);
       }
+      if (url.includes('action=confirmBotMessageTriggered')) {
+        confirmWebhooks.push(node);
+      }
       if (url.includes('://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}')) {
         apiWebhooks.push({ node, url, conditions: inheritedConditions });
       }
       assert.equal(
         url.includes('action=markBotMessageExecuted') && url.includes('sentPayload='),
         false,
-        'AI/API branches should rely on autoMarkOnFetch instead of a post-send mark callback',
+        'AI/API branches should not use sentPayload mark callbacks',
       );
     }
     for (const value of Object.values(node)) {
@@ -1711,6 +1715,16 @@ test('Executor rule lets Apps Script auto-mark API messages when claimed', () =>
     '{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api',
   );
   assert.equal(apiWebhooks.length, 4);
+  // 4 API branches + 1 AgentTask branch
+  assert.equal(confirmWebhooks.length, 5);
+  assert.equal(
+    confirmWebhooks.every((node) =>
+      String(node.value.url).includes('stage=confirmed')
+      && node.value.method === 'GET'
+      && node.value.responseEnabled === false
+    ),
+    true,
+  );
   assert.deepEqual(
     apiWebhooks.map(item => item.url).sort(),
     [
@@ -1896,7 +1910,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.9\.2';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.10\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -2061,7 +2075,7 @@ test('Apps Script mark-executed records RingCentral post metadata in Logs for Gl
   assert.equal(logRow[PUSH_LOG_HEADERS.indexOf('Sent_At')], '2026-05-03T12:00:00Z');
 });
 
-test('Apps Script auto-marks API messages on fetch when Jira requests it', () => {
+test('Apps Script claims API messages on fetch without writing final success', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const headers = [
     'ID',
@@ -2118,14 +2132,73 @@ result = getMessageCurrentTimeWithReleaseInfo({
   assert.equal(context.result.executed, true);
   assert.equal(context.result.messageId, 'MSG-AI');
   assert.equal(context.result.targetType, 'api');
-  assert.equal(context.result.requiresExecutionCallback, false);
-  assert.equal(context.result.autoMarkOnFetch.marked, true);
+  assert.equal(context.result.requiresExecutionCallback, true);
+  assert.equal(context.result.autoMarkOnFetch.marked, false);
+  assert.equal(context.result.autoMarkOnFetch.claimed, true);
   assert.equal(context.result.autoMarkOnFetch.success, true);
-  assert.equal(logs.length, 1);
-  assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Status') + 1 && update.value === 'Done'));
+  assert.equal(logs.length, 0);
+  assert.equal(
+    updates.some(update => update.row === 2 && update.col === headers.indexOf('Status') + 1 && update.value === 'Done'),
+    false,
+  );
+  assert.equal(
+    updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Count') + 1),
+    false,
+  );
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Last_Exec') + 1 && update.value === '2026-05-03 12:00'));
-  assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Count') + 1 && update.value === 1));
+  assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '⏳ API 已领取待确认'));
+});
+
+test('Apps Script confirm turns claimed API row into final success', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_Team_ID',
+    'AI_Endpoint',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    [
+      'MSG-AI',
+      'AI topic',
+      'filter=130387',
+      'AI',
+      '54490570758',
+      'POST https://example.com/report',
+      '2026-05-03',
+      '12:00',
+      '2026-05-03 12:00',
+      '0',
+      '',
+      '⏳ API 已领取待确认',
+      'Active',
+    ],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+
+  vm.runInNewContext(
+    `${appScript}
+result = confirmBotMessageTriggered('MSG-AI', 2, true, '', 'AI topic', 'filter=130387', 'exec-confirm-api', 'confirmed');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '✅ 推送成功'));
+  assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Count') + 1 && update.value === 1));
+  assert.equal(logs.length, 1);
 });
 
 test('Apps Script API-only auto-mark does not pre-mark normal Bot messages', () => {

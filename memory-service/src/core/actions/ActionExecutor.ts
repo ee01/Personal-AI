@@ -6,6 +6,15 @@ import {
   OpenClawDelegationService,
   type DelegationOutcome,
 } from '../../integrations/OpenClawDelegationService.js';
+import { OpenClawResponsesExecutor } from '../../integrations/executors/OpenClawResponsesExecutor.js';
+import { OpenClawGatewayExecutor } from '../../integrations/executors/OpenClawGatewayExecutor.js';
+import { AcpExecutor } from '../../integrations/executors/AcpExecutor.js';
+import {
+  findEnabledExecutor,
+  isAgentDelegateActionType,
+  resolveExecutorDefaults,
+  type AgentExecutorInstance,
+} from '../../integrations/executors/executorRegistry.js';
 import {
   ActionRepository,
   type ActionQueueStatus,
@@ -43,7 +52,10 @@ export interface ActionExecutionOptions {
 
 interface DispatchOutcome {
   result: Record<string, unknown>;
-  queueStatus?: Extract<ActionQueueStatus, 'failed' | 'dead_letter'>;
+  queueStatus?: Extract<
+    ActionQueueStatus,
+    'failed' | 'dead_letter' | 'running' | 'input_required'
+  >;
   errorMessage?: string;
   delegationOutcome?: DelegationOutcome;
 }
@@ -211,10 +223,16 @@ export class ActionExecutor {
     const staleAfterSeconds = getOpenClawStaleRunningAfterSeconds(
       this.userDataManager,
     );
+    const staleError = buildOpenClawStaleRunningError(staleAfterSeconds);
     this.actionRepo.recoverStaleRunningActions({
       actionType: 'delegate_openclaw',
       staleAfterSeconds,
-      errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
+      errorMessage: staleError,
+    });
+    this.actionRepo.recoverStaleRunningActions({
+      actionType: 'delegate_agent',
+      staleAfterSeconds,
+      errorMessage: staleError,
     });
 
     const dueActions = this.actionRepo.listDueAutoActions(limit);
@@ -311,7 +329,7 @@ export class ActionExecutor {
       };
     }
 
-    if (action.actionType === 'delegate_openclaw') {
+    if (isAgentDelegateActionType(action.actionType)) {
       const readiness =
         await this.actionReadinessService.prepareActionForDispatch(action);
       if (readiness.decision === 'block') {
@@ -347,6 +365,22 @@ export class ActionExecutor {
     const attemptId = this.actionRepo.markRunning(action.id);
     try {
       const outcome = await this.dispatch(action);
+      if (
+        outcome.queueStatus === 'running' ||
+        outcome.queueStatus === 'input_required'
+      ) {
+        // Keep queue_status=running with remote run metadata for later reconcile.
+        this.actionRepo.patchRunningResult(action.id, {
+          ...outcome.result,
+          parkReason: outcome.queueStatus,
+        });
+        return {
+          actionId: action.id,
+          actionType: action.actionType,
+          queueStatus: 'running',
+          result: outcome.result,
+        };
+      }
       if (
         outcome.queueStatus === 'failed' ||
         outcome.queueStatus === 'dead_letter'
@@ -437,8 +471,8 @@ export class ActionExecutor {
     if (action.actionType === 'update_truth_property') {
       return { result: await this.updateTruthProperty(action) };
     }
-    if (action.actionType === 'delegate_openclaw') {
-      return this.delegateOpenClaw(action);
+    if (isAgentDelegateActionType(action.actionType)) {
+      return this.delegateAgent(action);
     }
     if (action.actionType === 'query_external_tool') {
       return { result: await this.queryExternalTool(action) };
@@ -636,7 +670,37 @@ export class ActionExecutor {
     return { updated: true };
   }
 
-  private async delegateOpenClaw(
+  private resolveExecutorForAction(
+    action: QueuedActionRecord,
+    params: Record<string, unknown>,
+  ): AgentExecutorInstance | null {
+    const config = getUserRuntimeConfig(this.userDataManager);
+    const metadata =
+      params.metadata &&
+      typeof params.metadata === 'object' &&
+      !Array.isArray(params.metadata)
+        ? (params.metadata as Record<string, unknown>)
+        : {};
+    const requested =
+      (typeof params.executor === 'string' && params.executor.trim()) ||
+      (typeof metadata.executor === 'string' && metadata.executor.trim()) ||
+      (typeof metadata.executorId === 'string' && metadata.executorId.trim()) ||
+      undefined;
+
+    if (requested) {
+      return findEnabledExecutor(config, requested);
+    }
+
+    // Legacy action type without an explicit executor id.
+    if (action.actionType === 'delegate_openclaw') {
+      return findEnabledExecutor(config, 'openclaw');
+    }
+
+    const defaults = resolveExecutorDefaults(config);
+    return findEnabledExecutor(config, defaults.agent_task);
+  }
+
+  private async delegateAgent(
     action: QueuedActionRecord,
   ): Promise<DispatchOutcome> {
     const params = safeJsonValue(action.params);
@@ -645,7 +709,7 @@ export class ActionExecutor {
       return {
         result: {
           status: 'error',
-          summary: '需要审批的 OpenClaw 动作不能以自动模式执行。',
+          summary: '需要审批的 Agent 委派动作不能以自动模式执行。',
           payload: {
             mode,
             executionMode: action.executionMode,
@@ -653,11 +717,65 @@ export class ActionExecutor {
           },
         },
         queueStatus: 'failed',
-        errorMessage: '需要审批的 OpenClaw 动作不能以自动模式执行。',
+        errorMessage: '需要审批的 Agent 委派动作不能以自动模式执行。',
       };
     }
 
-    const outcome = await this.delegationService.delegate({
+    const executorInstance = this.resolveExecutorForAction(action, params);
+    if (!executorInstance) {
+      return {
+        result: {
+          status: 'capability_missing',
+          summary: '未找到已启用的 Agent 执行器，请在 Options → Agent 执行器 中配置。',
+          payload: { configured: false },
+        },
+        queueStatus: 'failed',
+        errorMessage:
+          '未找到已启用的 Agent 执行器，请在 Options → Agent 执行器 中配置。',
+      };
+    }
+
+    if (
+      executorInstance.type !== 'openclaw-responses' &&
+      executorInstance.type !== 'openclaw-gateway' &&
+      executorInstance.type !== 'acp-codex' &&
+      executorInstance.type !== 'acp-claude-code'
+    ) {
+      return {
+        result: {
+          status: 'capability_missing',
+          summary: `执行器类型「${executorInstance.type}」尚未接入。`,
+          payload: {
+            executorId: executorInstance.id,
+            executorType: executorInstance.type,
+          },
+        },
+        queueStatus: 'failed',
+        errorMessage: `执行器类型「${executorInstance.type}」尚未接入。`,
+      };
+    }
+
+    const executor =
+      executorInstance.type === 'openclaw-gateway'
+        ? new OpenClawGatewayExecutor(executorInstance, {
+            defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
+              .openClawTimeoutMs,
+            onProgress: async (patch) => {
+              this.actionRepo.patchRunningResult(action.id, patch);
+            },
+          })
+        : executorInstance.type === 'acp-codex' ||
+            executorInstance.type === 'acp-claude-code'
+          ? new AcpExecutor(executorInstance, {
+              userId: this.userId,
+              defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
+                .openClawTimeoutMs,
+            })
+          : new OpenClawResponsesExecutor(
+              this.delegationService,
+              executorInstance,
+            );
+    const envelope = await executor.submit({
       task:
         typeof params.task === 'string' && params.task.trim().length > 0
           ? params.task.trim()
@@ -684,9 +802,64 @@ export class ActionExecutor {
         params.metadata &&
         typeof params.metadata === 'object' &&
         !Array.isArray(params.metadata)
-          ? (params.metadata as Record<string, unknown>)
-        : undefined,
+          ? {
+              ...(params.metadata as Record<string, unknown>),
+              executorId: executorInstance.id,
+              executorType: executorInstance.type,
+            }
+          : {
+              executorId: executorInstance.id,
+              executorType: executorInstance.type,
+            },
     });
+
+    if (envelope.status === 'running' || envelope.status === 'input_required') {
+      this.actionRepo.patchRunningResult(action.id, {
+        status: envelope.status,
+        summary: envelope.summary,
+        remoteRunId: envelope.remoteRunId,
+        eventCursor: envelope.eventCursor,
+        sessionKey: envelope.sessionKey,
+        payload: envelope.payload,
+        executorId: executorInstance.id,
+        executorType: executorInstance.type,
+      });
+      return {
+        result: {
+          status: envelope.status,
+          summary: envelope.summary,
+          remoteRunId: envelope.remoteRunId,
+          eventCursor: envelope.eventCursor,
+          sessionKey: envelope.sessionKey,
+          payload: envelope.payload,
+        },
+        queueStatus: envelope.status,
+      };
+    }
+
+    const outcome: DelegationOutcome = {
+      status:
+        envelope.status === 'succeeded'
+          ? 'success'
+          : envelope.status === 'capability_missing'
+            ? 'capability_missing'
+            : envelope.status === 'auth_error'
+              ? 'auth_error'
+              : envelope.status === 'need_human_decision'
+                ? 'need_human_decision'
+                : 'error',
+      summary: envelope.summary,
+      artifacts: envelope.artifacts || [],
+      transcriptPath: envelope.transcriptPath,
+      payload: {
+        ...(envelope.payload || {}),
+        executorId: executorInstance.id,
+        executorType: executorInstance.type,
+        remoteRunId: envelope.remoteRunId,
+        eventCursor: envelope.eventCursor,
+        sessionKey: envelope.sessionKey,
+      },
+    };
     this.actionReadinessService.recordDelegationOutcome(action, outcome);
 
     if (outcome.status === 'success') {

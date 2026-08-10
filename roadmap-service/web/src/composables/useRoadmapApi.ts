@@ -41,10 +41,7 @@ export function setShareToken(teamId: string, token: string) {
 }
 
 export function getAiPrompt(): string {
-  return (
-    localStorage.getItem(AI_PROMPT_KEY) ||
-    '创建 Task 类型的 jira ticket，字段填写 Sprint：Nova26: 07/27-08/07，fixVersion：Nova 26.3.220，Team 与父 Epic 保持一致。'
-  );
+  return localStorage.getItem(AI_PROMPT_KEY) || '';
 }
 
 export function setAiPrompt(prompt: string) {

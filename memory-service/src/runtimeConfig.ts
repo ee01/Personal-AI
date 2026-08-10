@@ -1,5 +1,10 @@
 import { getConfig } from './config.js';
 import type { UserDataManager } from './storage/UserDataManager.js';
+import {
+  normalizeAgentExecutorInstance,
+  type AgentExecutorInstance,
+  type ExecutorDefaults,
+} from './integrations/executors/executorRegistry.js';
 
 export type RuntimePushTarget = 'me' | 'group' | 'none';
 export type DreamDigestScheduleType = 'weekly' | 'every_x_days' | 'monthly';
@@ -27,6 +32,9 @@ export interface UserRuntimeConfig {
   openClawBaseUrl: string;
   openClawApiKey: string;
   openClawTimeoutMs: number;
+  /** Explicit executor instances; empty ⇒ synthesize from openClaw* legacy fields. */
+  agentExecutors: AgentExecutorInstance[];
+  executorDefaults: ExecutorDefaults;
   outreachEnabled: boolean;
   outreachIntervalMs: number;
   outreachRequireApprovalForReflection: boolean;
@@ -173,6 +181,28 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
         Math.max(MIN_OPENCLAW_TIMEOUT_MS, appConfig.openClawTimeoutMs),
       ),
     ),
+    agentExecutors: Array.isArray(persisted.agentExecutors)
+      ? persisted.agentExecutors
+          .map((item) => normalizeAgentExecutorInstance(item))
+          .filter((item): item is AgentExecutorInstance => Boolean(item))
+      : [],
+    executorDefaults: {
+      agent_task:
+        typeof (persisted.executorDefaults as ExecutorDefaults | undefined)
+          ?.agent_task === 'string'
+          ? String(
+              (persisted.executorDefaults as ExecutorDefaults).agent_task,
+            ).trim()
+          : '',
+      reflection_research:
+        typeof (persisted.executorDefaults as ExecutorDefaults | undefined)
+          ?.reflection_research === 'string'
+          ? String(
+              (persisted.executorDefaults as ExecutorDefaults)
+                .reflection_research,
+            ).trim()
+          : '',
+    },
     outreachEnabled: normalizeBoolean(persisted.outreachEnabled, appConfig.outreachEnabled),
     outreachIntervalMs: Math.max(
       1000,

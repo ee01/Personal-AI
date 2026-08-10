@@ -14,7 +14,8 @@
  *     --user-id esone.qiu --base-url http://localhost:3210 --scopes work
  *
  * Flags: --user-id <id>  --base-url <url>  --scopes work,personal
- *        --api-key <key>  --db <path-to-user.sqlite>  (optional audit sink)
+ *        --api-key <key>  --oauth-scopes memory.read,evidence.raw.read
+ *        --db <path-to-user.sqlite>  (optional audit sink)
  */
 
 import process from 'node:process';
@@ -45,6 +46,10 @@ async function main() {
     .map((s) => s.trim())
     .filter(Boolean);
   const apiKey = args['api-key'] || process.env.MEMORY_SERVICE_API_KEY;
+  const oauthScopes = (args['oauth-scopes'] || process.env.MCP_OAUTH_SCOPES || 'memory.read')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   // Optional direct-to-sqlite audit sink.
   let auditFn;
@@ -86,6 +91,7 @@ async function main() {
       userId,
       apiKey,
       allowedScopes,
+      oauthScopes,
       clientInfo: 'mcp',
       fetchFn: fetch,
       audit: auditFn,

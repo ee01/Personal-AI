@@ -907,8 +907,14 @@ const sessionCacheReceipt = computed<SessionCacheReceipt | null>(() => {
 });
 const sessionCacheReceiptBoundary = computed(() => {
   if (!sessionCacheReceipt.value) return '';
+  const draftSource =
+    sourceKind.value === 'today_meeting_prep'
+      ? '会前准备'
+      : sourceKind.value === 'source_memory_seed'
+        ? '资料记忆 seed'
+        : '来源';
   return [
-    '这次没有重新调用 Draft API，也没有重新读取证据来源、刷新证据详情、同步 Memory Service 或确认外发状态',
+    `这次没有重新调用 Draft API，也没有重新读取${draftSource}、刷新证据详情、同步 Memory Service 或确认外发状态`,
     '如会议资料、证据或目标格式刚变化，请点重新生成后再复制',
   ].join('；');
 });
@@ -1068,6 +1074,12 @@ function targetSwitchButtonBoundary(target: StorylineSuggestedArtifact): string 
   const label = artifactLabel(target);
   const handoff = targetHandoffCopy(target);
   const prep = prepShortId.value || '当前来源';
+  const sourceReference =
+    sourceKind.value === 'today_meeting_prep'
+      ? '会前准备'
+      : sourceKind.value === 'source_memory_seed'
+        ? '资料记忆 seed'
+        : '当前来源';
   const noWriteBoundary =
     '不会写回 Slides / Docs / RingCentral，不会发送消息，不会保存长期 Storyline 历史，也不会更新 Memory Service 证据状态';
 
@@ -1086,7 +1098,7 @@ function targetSwitchButtonBoundary(target: StorylineSuggestedArtifact): string 
     : '会清除当前复制状态';
 
   return [
-    `切换到 ${label}（${handoff.format}），为来源 ${prep} 从本页缓存读取或请求 Storyline Draft API`,
+    `切换到 ${label}（${handoff.format}），为${sourceReference} ${prep} 从本页缓存读取或请求 Storyline Draft API`,
     reviewReset,
     copyReset,
     '来源打开回执会回到当前草稿上下文',
@@ -1356,10 +1368,16 @@ function recordEvidenceSourceOpen(
     evidence.title,
     evidence.id,
   );
+  const draftSource =
+    sourceKind.value === 'today_meeting_prep'
+      ? '会前准备'
+      : sourceKind.value === 'source_memory_seed'
+        ? '资料记忆 seed'
+        : '当前 Storyline 来源';
   sourceOpenReceipt.value = {
     summary: `${host || '外部来源'} · ${title}`,
     boundary:
-      '只在新标签打开这个来源；本页没有重新读取证据来源、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也没有满足复制前复核。',
+      `只在新标签打开这个来源；本页没有重新读取${draftSource}、刷新证据、同步 Memory Service、确认可外发、写回 Slides / Docs / RingCentral，也没有满足复制前复核。`,
   };
 }
 
@@ -1472,7 +1490,7 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
   if (!isSupportedStorylineSourceKind(requestedSourceKind)) {
     draft.value = null;
     loadError.value =
-      '当前 Storyline Draft 只支持 Today Pilot 会前准备或资料记忆 Storyline seed。';
+      `当前 Storyline Draft 只支持 Today Pilot 会前准备或资料记忆 Storyline seed（收到的来源：${requestedSourceKind}）。`;
     loading.value = false;
     copied.value = false;
     copyError.value = '';
@@ -1560,7 +1578,13 @@ function formatDraftError(error: unknown): string {
   if (error instanceof MemoryServiceError) {
     const code = String(error.body?.error || '').trim();
     if (code === 'storyline_source_has_no_usable_evidence') {
-      return '这份来源没有可追溯的 evidence refs，暂时不能生成故事线草稿。';
+      const draftSource =
+        sourceKind.value === 'today_meeting_prep'
+          ? '会前准备'
+          : sourceKind.value === 'source_memory_seed'
+            ? '资料记忆 seed'
+            : '来源';
+      return `这份${draftSource}没有可追溯的 evidence refs，暂时不能生成故事线草稿。`;
     }
     if (error.status === 404) {
       return '这份来源已过期、不存在或 seed 已失效，请回到来源详情重新打开。';

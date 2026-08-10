@@ -14,8 +14,12 @@ export async function writeGuardMiddleware(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  // Skip for health checks and docs (no user context)
-  if (request.url === '/health' || request.url.startsWith('/docs')) {
+  // Skip for health checks, docs, and MCP HTTP (self-authed bearer)
+  if (
+    request.url === '/health' ||
+    request.url.startsWith('/docs') ||
+    request.url.split('?')[0] === '/mcp'
+  ) {
     return;
   }
 

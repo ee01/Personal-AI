@@ -281,6 +281,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runActionReadinessContractsCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'agent-executor-runtime') {
+    return runAgentExecutorRuntimeCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'evidence-cohesion-gate') {
     return runEvidenceCohesionGateCase({ suite, caseItem, runDir, collected });
   }
@@ -1930,6 +1934,97 @@ async function runActionReadinessContractsCase({
       (status === 'error'
         ? '运行 Action Readiness eval 时出错，未能判断执行前门禁。'
         : 'Action Readiness eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runAgentExecutorRuntimeCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-agent-executor-runtime.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'agent_executor_runtime_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.scenario || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Agent Executor Runtime eval 时出错。'
+        : 'Agent Executor Runtime eval completed.'),
     improvementSuggestions: response.improvementSuggestions || [
       '检查 eval command stderr/stdout，确认 runner 是否可执行。',
     ],
@@ -4746,6 +4841,9 @@ function deriveReaderCaseGoal(item) {
     }
     return '验证 Compose Assist 是否基于当前 composer 场景生成可用、可追溯且隐私安全的结果。';
   }
+  if (item.suiteId === 'agent-executor-runtime') {
+    return item.sampleDetails?.scenario || item.caseTitle || item.sampleSummary || '验证 Agent Executor Runtime 契约。';
+  }
   return item.caseTitle || item.sampleSummary || '验证该 eval case 的预期行为。';
 }
 
@@ -4841,6 +4939,31 @@ function buildReaderActualSummary(item) {
       ],
     };
   }
+  if (item.suiteId === 'agent-executor-runtime') {
+    const checks = Array.isArray(output.proofChecks) ? output.proofChecks : [];
+    return {
+      quote: truncateText(
+        String(
+          output.summary ||
+            output.scenario ||
+            item.sampleDetails?.scenario ||
+            item.why ||
+            '',
+        ),
+        700,
+      ),
+      emptyText: item.reason || item.error || '本 case 没有结构化实际输出。',
+      rows: [
+        ['状态', item.status],
+        ['scenario', output.scenario || item.sampleDetails?.scenario],
+        ['proofChecks', checks.length],
+        ...Object.entries(output)
+          .filter(([key]) => !['scenario', 'proofChecks', 'summary'].includes(key))
+          .slice(0, 8)
+          .map(([key, value]) => [key, value]),
+      ],
+    };
+  }
   const personaVariants = Array.isArray(output.variants)
     ? output.variants
     : [];
@@ -4931,6 +5054,19 @@ function buildReaderProofChecks(item) {
   }
 
   const output = item.actualOutput || {};
+  if (Array.isArray(output.proofChecks) && output.proofChecks.length) {
+    for (const check of output.proofChecks) {
+      const passed = check.passed !== false && check.status !== 'fail';
+      checks.push({
+        label: String(check.key || check.label || 'proof'),
+        status: passed ? 'pass' : 'fail',
+        detail:
+          check.detail ||
+          `expected=${JSON.stringify(check.expected)} actual=${JSON.stringify(check.actual)}`,
+      });
+    }
+  }
+
   if (item.topMatch || output.contextMatch || output.evidenceCount != null) {
     checks.push({
       label: '证据/上下文',

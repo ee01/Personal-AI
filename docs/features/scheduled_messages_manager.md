@@ -151,7 +151,7 @@
 - 显式时间只允许准点或最多迟到 1 分钟的触发器抖动容差，不会提前发送；补偿窗口支持跨午夜恢复
 - `Last_Exec`、`Exec_Log` 和 `Execution_Key` 共同提供轻量幂等：当天成功或失败的消息都会跳过，避免失败项阻塞后续队列或 Jira 重试造成重复发送
 - `markBotMessageExecuted` 会携带 `messageId` / `rowIndex` / `executionKey` 写回，Sheet 行移动、缺失 rowIndex 或 Jira 重试时仍能定位并去重
-- `getBotMessageCurrentTime` 支持 `autoMarkOnFetch=api`；Jira Rule 模板只对 AI Report / 自定义 API Endpoint 启用领取即标记，普通 Bot 和 RingCentral sender 仍在发送回调后写 `Last_Exec` / Logs
+- `getBotMessageCurrentTime` 支持 `autoMarkOnFetch=api`；对 AgentTask / AI Report / 自定义 API，领取阶段只写 `⏳ …已领取待确认`（claimed），**不写最终 ✅**。最终成功由 `confirmBotMessageTriggered` 在下游（Dify / 第三方 API）调用成功后回写。普通 Bot 和 RingCentral sender 仍在发送回调后写 `Last_Exec` / Logs。
 - 管理页的执行引擎回执会把这条边界讲清楚：Bot/RingCentral sender 是发送后回调写回，AI/API 和带 `AI_Endpoint` 的托管 JiraAutomation 是领取时先写 `Last_Exec` / Logs 防重复，endpoint 运行结果需要回到 Jira/API 执行记录排查
 - 管理页列表、队列建议和改期回执会显示“领取口径”：明确时间槽走当前分钟 / 30 分钟补偿，未填写时间的 Bot/AI/托管 JiraAutomation 走 `08:00 后队列`，AsMe 不进入这个队列，外部 JiraAutomation 和 Outreach 会显示它们不由 Personal AI executor 领取；新增 / 编辑弹窗和顶部健康告警默认不展开这些细节
 - 领取口径会同时写出证明边界：Bot/RingCentral sender 只有发送回调后才算写回，AI/API 领取时先写回防重复但 endpoint 成败要看 Jira/API 运行记录；因此“领取”不会被误看成“已发送”
@@ -202,8 +202,8 @@
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '2.9.2';
-  var APP_SCRIPT_LAST_UPDATED = '2026-08-04';
+  var APP_SCRIPT_VERSION = '2.10.0';
+  var APP_SCRIPT_LAST_UPDATED = '2026-08-09';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步。
@@ -565,8 +565,9 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
   - Timeline Sync Rule 每天 05:00 按项目刷新 releaseInfo 缓存
 - Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。状态面板可直接运行 Apps Script dry-run 测试，也保留复制 curl 的手工排障路径。
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
-- 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
-- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AI Report / 自定义 API Endpoint 在领取时立即写 `Last_Exec` 和 Logs；一次性或已到结束条件的周期消息仍按原有规则变成 `Done`，Timeline 消息只标记本次执行，避免长耗时 API 响应导致下一分钟重复领取；普通 Bot / RingCentral sender 不走领取即标记，仍按发送结果回调写入。
+- 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
+- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。AgentTask 未确认可按 at-least-once 重领（memory-service 幂等吸收）；自定义 API 默认 at-most-once，claimed TTL（2h）后标 `trigger_delivery_failed`。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
+- Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.6.1 的领取 audit Log 仍保留。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
 - Timeline Sync Rule 逐项目调用内网 release info API 并通过 GET 写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
 - 首次配置或修复 Timeline Sync Rule 后，用户可以手动运行一次 Sync Rule 让缓存立即生效；新增/编辑 Timeline 消息或使用 `{currentRelease}`、`{nextPhase}` 等项目变量时，管理页会读取所选项目的缓存状态并展示执行影响，但不会阻止保存草稿。
@@ -604,11 +605,12 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 打开“帮我做”弹窗时，管理页会用当前 Options/env 里的 `MEMORY_SERVICE_BASE_URL` 和当前用户 id 请求 memory-service `/config`，确认后端 runtime 里 `openClawEnabled/openClawBaseUrl/openClawApiKeyConfigured` 已就绪；这个检查只读，不写 Messages，也不创建可领取任务。
 - Options/env 里的 `OPENCLAW_*` 是扩展侧配置，memory-service `/config` 返回的是后端当前用户 runtime 配置。两边可能短暂不一致：例如 Options 已保存但后端 runtime 未同步、请求未带 `X-User-Id` 读到 default 用户、或扩展仍复用旧 memory-service 地址。此时会阻止保存并显示缺失原因，避免创建到期后必然失败的 AgentTask。
 - AgentTask webhook 默认是 `POST https://.../api/v1/agent-tasks/execute`，内网环境也可配置 `http://...`；需要 `Config!agent_task_user_id` 填写 memory-service 的用户 id，Jira Rule 模板会把它作为 `X-User-Id` 转发。
-- memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用 `idempotencyKey` 创建或复用 `delegate_openclaw` action，调用 OpenClaw，保存成功/失败结果，并无论成功或失败都 Bot 私发通知。
+- memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用确定性 `idempotencyKey` 创建或复用 `delegate_agent` action（兼容旧 `delegate_openclaw`），入队即返回；由 Options「Agent 执行器」registry 选择 OpenClaw Gateway/Responses 或 ACP 执行，并无论成功或失败都可 Bot 私发通知。详见 [Agent Executor Runtime](./agent_executor_runtime.md)。
+- Apps Script / Jira Rule 模板需在本页手动升级后，claim≠confirm 假成功修复才对真实 Sheet 生效。
+- v1 自动执行器通过 registry 配置；默认可合成 legacy `openclaw`。Codex 可通过 `acp-codex` 实例启用。
 - 管理页列表加载会额外请求 `GET /api/v1/agent-tasks/runtime-status?ids=<Messages.ID[,Agent_Task_ID]>`，按 `sourceKind=agent_task` + `sourceRefId` 取最近一次 run；列表摘要和 hover 只展示 `result.summary`，不在 hover 里重复展开 artifact。该叠加只改页面展示态，不写回 Sheet。
 - AgentTask 的 `Glip_User_Name / Glip_Team_ID` 不由 Jira Rule 直接发送；AppScript 会把它们转换成 `notifyTarget` 传给 memory-service。memory-service 在 OpenClaw 执行结束后按 `notifyTarget` 私发或群发结果；如果没有传 `glipUser` / `Glip_User_Name` / 群组目标，则默认用 webhook 的 `userId` / `X-User-Id` 私发给 memory 用户本人。
 - `Agent_Notify_Template` 只影响执行成功后的通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。失败通知不走模板，直接说明失败状态和错误。
-- v1 自动执行器只支持 `openclaw`。Codex / Claude Code 可以作为人工工作台或未来外部执行器，但不作为当前远程自动执行后端。
 
 #### 7. AR 绑定来源
 
@@ -827,6 +829,7 @@ A:
 
 ## 最近更新
 
+- 2026-08-09：Apps Script `2.10.0` + Executor Rule `1.7.0` 拆分 claim/confirm——领取不再写最终 ✅；AgentTask/API 在下游成功后 `confirmBotMessageTriggered`；未确认 claimed 可对账（`scanUnconfirmedClaims`），修复「Sheet 假成功但请求未到 memory-service」主故障。
 - 2026-08-04：Executor Rule `1.6.1` 在 `getBotMessageCurrentTime` 返回 `executed=true` 后先写一条 audit Log（messageId / topic / pushMethod / targetType / executionKey / rowIndex），再进入 AgentTask/Bot/AsMe/AI 分支；Apps Script `2.9.2` 对各领取成功返回统一带上 `topic` 与 `pushMethod`，便于对照偶发超时 / 404 时到底领了哪条任务。
 - 2026-08-03：帮我做列表结果改为打开时只读叠加 memory-service `/agent-tasks/runtime-status`；列表与 hover 只展示 OpenClaw `summary`，不再把 Bot 通知或 Sheet `Agent_Last_Result` 当唯一真源，也不在 hover 重复展 artifact。
 - 2026-08-03：补齐 Dify 跳板目录说明；Bot / AgentTask / AsMe RingCentral sender / AI Report 的 YAML 统一放在 `src/scheduled-messages/dify/`，Jira Executor ≥ 1.6.0 经跳板出站，Chrome AR 仍直连 memory-service。

@@ -4,7 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { NotificationCenterService } from '../core/NotificationCenterService.js';
 import { OpenClawDelegationService } from '../integrations/OpenClawDelegationService.js';
+import {
+  findEnabledExecutor,
+  publicExecutorOptions,
+  resolveExecutorDefaults,
+} from '../integrations/executors/executorRegistry.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
 
 const AGENT_TASK_OPENCLAW_TIMEOUT_MS = 10 * 60 * 1000;
@@ -393,15 +399,29 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: 'task is required' });
       }
 
-      const executor = nonEmptyString(body.executor) || 'openclaw';
-      if (executor !== 'openclaw') {
+      const { db, userDataManager } = request.userContext;
+      const runtimeConfig = getUserRuntimeConfig(userDataManager);
+      const defaults = resolveExecutorDefaults(runtimeConfig);
+      const requestedExecutor =
+        nonEmptyString(body.executor) || defaults.agent_task;
+      const executorInstance = findEnabledExecutor(
+        runtimeConfig,
+        requestedExecutor,
+      );
+      if (!executorInstance) {
+        const available = publicExecutorOptions(runtimeConfig);
         return reply.status(400).send({
           error: 'unsupported_executor',
-          detail: 'v1 only supports openclaw as the automatic AgentTask executor',
+          detail: available.length
+            ? `executor "${requestedExecutor}" is not enabled; available: ${available
+                .map((item) => item.id)
+                .join(', ')}`
+            : 'no enabled agent executors configured; open Options → Agent 执行器',
+          available,
         });
       }
+      const executor = executorInstance.id;
 
-      const { db, userDataManager } = request.userContext;
       const userId = nonEmptyString(body.userId) || request.userId || 'default';
       const title = nonEmptyString(body.title) || taskId;
       const triggerSource = nonEmptyString(body.triggerSource) || 'jira_rule';
@@ -414,7 +434,11 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           : undefined;
       const idempotencyKey =
         nonEmptyString(body.idempotencyKey) ||
-        `${triggerSource}:${taskId}:${Date.now()}`;
+        [
+          triggerSource,
+          taskId,
+          nonEmptyString(body.scheduleSpec) || 'adhoc',
+        ].join(':');
       const sourceRefId = nonEmptyString(body.sheetMessageId) || taskId;
       const notifyTarget = normalizeAgentTaskNotifyTarget(body.notifyTarget);
       const timeoutMs = normalizeAgentTaskTimeoutMs(body.timeoutMs);
@@ -426,7 +450,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const repo = new ActionRepository(db);
       const existingAction = repo.findReusableByIdempotencyKey(idempotencyKey);
       const action = existingAction ?? repo.create({
-        actionType: 'delegate_openclaw',
+        actionType: 'delegate_agent',
         title,
         description: task,
         params: {
@@ -434,11 +458,14 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           mode: 'read',
           targetSystem,
           timeoutMs,
+          executor,
           metadata: {
             taskId,
             sheetMessageId: body.sheetMessageId,
             rowIndex: body.rowIndex,
             executor,
+            executorId: executor,
+            executorType: executorInstance.type,
             targetSystem,
             taskKind,
             executionHints,
@@ -474,16 +501,21 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       });
 
       const reused = Boolean(existingAction);
+      const statusUrl = `/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(sourceRefId)}`;
       if (
         reused &&
-        ['running', 'succeeded', 'failed', 'dead_letter'].includes(action.queueStatus)
+        ['running', 'succeeded', 'failed', 'dead_letter', 'input_required'].includes(
+          action.queueStatus,
+        )
       ) {
         return reply.status(200).send({
           accepted: true,
           reused: true,
           taskId,
+          runId: action.id,
           actionId: action.id,
           queueStatus: action.queueStatus,
+          statusUrl,
           result: action.result,
           error: action.lastError,
           notificationTarget: resolvedNotificationTarget,
@@ -495,84 +527,91 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      const executorService = new ActionExecutor(db, userDataManager, userId);
-      const execution = await executorService.executeAction(action.id);
+      // Block A: enqueue-and-return. Execution + notification run in background
+      // (HeartbeatLoop also drains due auto actions). Result and notification are
+      // independent — notification failure must not rewrite run status.
+      const shouldNotify = body.notify !== false;
+      const notifyTemplate = nonEmptyString(body.notifyTemplate);
+      setImmediate(() => {
+        void (async () => {
+          try {
+            const executorService = new ActionExecutor(db, userDataManager, userId);
+            const execution = await executorService.executeAction(action.id);
+            if (!shouldNotify) return;
 
-      const resultStatus = getResultStatus(execution.result, execution.queueStatus);
-      const summary = getExecutionSummary(execution.result);
-      const defaultBody = buildDefaultNotificationBody({
-        title,
-        taskId,
-        resultStatus,
-        queueStatus: execution.queueStatus,
-        summary,
-        error: execution.error,
-        actionId: action.id,
-        triggerSource,
-        arBindingId: nonEmptyString(body.arBindingId),
+            const resultStatus = getResultStatus(execution.result, execution.queueStatus);
+            const summary = getExecutionSummary(execution.result);
+            let notificationBody = buildDefaultNotificationBody({
+              title,
+              taskId,
+              resultStatus,
+              queueStatus: execution.queueStatus,
+              summary,
+              error: execution.error,
+              actionId: action.id,
+              triggerSource,
+              arBindingId: nonEmptyString(body.arBindingId),
+            });
+            if (notifyTemplate && execution.queueStatus === 'succeeded') {
+              try {
+                notificationBody = await formatSuccessNotificationWithTemplate({
+                  template: notifyTemplate,
+                  title,
+                  task,
+                  defaultBody: notificationBody,
+                  result: execution.result,
+                  userDataManager,
+                  userId,
+                });
+              } catch (error) {
+                request.log.warn(
+                  { err: error, taskId, actionId: action.id },
+                  'AgentTask notification template formatting failed; using default body',
+                );
+              }
+            }
+
+            const notificationService = new NotificationCenterService(db);
+            await notificationService.deliverNoticeToGlip({
+              sourceRef: `agent_task:${action.id}`,
+              title:
+                execution.queueStatus === 'succeeded'
+                  ? `帮我做完成: ${title}`
+                  : `帮我做失败: ${title}`,
+              body: notificationBody,
+              mention: true,
+              targetUserId:
+                resolvedNotificationTarget.type === 'private'
+                  ? resolvedNotificationTarget.targetUserId
+                  : undefined,
+              targetGroupId:
+                resolvedNotificationTarget.type === 'group'
+                  ? resolvedNotificationTarget.targetGroupId
+                  : undefined,
+            });
+          } catch (error) {
+            request.log.error(
+              { err: error, taskId, actionId: action.id },
+              'AgentTask background execution/notification failed',
+            );
+          }
+        })();
       });
 
-      let notificationBody = defaultBody;
-      const notifyTemplate = nonEmptyString(body.notifyTemplate);
-      if (body.notify !== false && notifyTemplate && execution.queueStatus === 'succeeded') {
-        try {
-          notificationBody = await formatSuccessNotificationWithTemplate({
-            template: notifyTemplate,
-            title,
-            task,
-            defaultBody,
-            result: execution.result,
-            userDataManager,
-            userId,
-          });
-        } catch (error) {
-          request.log.warn(
-            { err: error, taskId, actionId: action.id },
-            'AgentTask notification template formatting failed; using default body',
-          );
-        }
-      }
-
-      let notification:
-        | Awaited<ReturnType<NotificationCenterService['deliverNoticeToGlip']>>
-        | { sent: false; skipped: true; reason: string };
-      if (body.notify === false) {
-        notification = {
-          sent: false,
-          skipped: true,
-          reason: 'notification_disabled',
-        };
-      } else {
-        const notificationService = new NotificationCenterService(db);
-        notification = await notificationService.deliverNoticeToGlip({
-          sourceRef: `agent_task:${action.id}`,
-          title:
-            execution.queueStatus === 'succeeded'
-              ? `帮我做完成: ${title}`
-              : `帮我做失败: ${title}`,
-          body: notificationBody,
-          mention: true,
-          targetUserId:
-            resolvedNotificationTarget.type === 'private'
-              ? resolvedNotificationTarget.targetUserId
-              : undefined,
-          targetGroupId:
-            resolvedNotificationTarget.type === 'group'
-              ? resolvedNotificationTarget.targetGroupId
-              : undefined,
-        });
-      }
-
-      return reply.status(200).send({
+      return reply.status(202).send({
         accepted: true,
         reused,
         taskId,
+        runId: action.id,
         actionId: action.id,
-        queueStatus: execution.queueStatus,
-        result: execution.result,
-        error: execution.error,
+        queueStatus: action.queueStatus,
+        statusUrl,
         notificationTarget: resolvedNotificationTarget,
-        notification,
+        notification: {
+          sent: false,
+          skipped: !shouldNotify,
+          reason: shouldNotify ? 'queued_for_delivery' : 'notification_disabled',
+        },
       });
     },
   );

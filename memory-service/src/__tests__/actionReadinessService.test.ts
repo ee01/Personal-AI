@@ -281,4 +281,77 @@ describe('ActionReadinessService', () => {
     ]);
     expect(actionRepo.getById(blocked.id)?.retryCount).toBe(0);
   });
+
+  it('does not cascade a single missing-artifact failure across the whole scope', async () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const failed = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '打开百度',
+      params: {
+        task: '打开百度。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+      },
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(failed, {
+      status: 'error',
+      summary: 'OpenClaw 返回了 success，但缺少可验证 artifact。',
+      artifacts: [],
+      payload: { artifactValidation: 'missing_verifiable_artifact' },
+    });
+
+    const contract = service.getByScopeKey('openclaw:agent_task:read');
+    expect(contract?.status).toBe('degraded');
+    expect(contract?.status).not.toBe('blocked_proof');
+
+    const sibling = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '打开 Nova',
+      params: {
+        task: '打开 Nova。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+      },
+      executionMode: 'auto',
+      requiresApproval: false,
+      queueStatus: 'queued',
+    });
+
+    const dueIds = actionRepo.listDueAutoActions(10).map((item) => item.id);
+    expect(dueIds).toContain(sibling.id);
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: 'probe ok',
+            artifacts: [
+              {
+                kind: 'readiness_probe',
+                title: 'probe',
+                content: 'ok',
+                metadata: {
+                  sourceSystem: 'agent_task',
+                  entityKey: 'probe',
+                  verification: 'connector_capability_check',
+                  observedFields: ['connection'],
+                },
+              },
+            ],
+          }),
+        }),
+    });
+
+    const prepare = await service.prepareActionForDispatch(sibling);
+    expect(['allow', 'allow_manual_only']).toContain(prepare.decision);
+  });
 });

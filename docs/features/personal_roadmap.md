@@ -74,13 +74,44 @@ draft 同步进 memory 时 `externalRef.jiraKey` 写 `null`、`isDraft: true`。
 
 `confident: false` 或 `projectKey` 为空时，创建弹窗显示「未能从 JQL 识别…请手动填写」，字段可编辑，不静默猜。
 
-## 两阶段创建 Jira
+## 创建 Jira（直连 API / Agent 执行器双路径）
 
-Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」由扩展代发（Token 不出个人域）。弹窗按主/子任务分组展示，顶部三个可编辑字段 projectKey / 主任务类型 / 子任务类型预填 `jqlHints`，逐行回显状态。
+Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同一弹窗。模式由 **Prompt 是否为空** 决定（无独立开关）：
+
+| Prompt | 路径 | 行为 |
+|---|---|---|
+| 留空 | 直连 API | 扩展用 Options `JIRA_API_TOKEN` 调 Jira REST；字段必填（Project / 类型） |
+| 非空 | Agent 执行器 | 扩展组装任务文本 → memory-service `POST /agent-tasks/execute`（异步接单）→ 轮询 `runtime-status` → 解析 artifact `mappings` 后 `resolve_item` / `resolve_draft` |
+
+交互对齐 `docs/demo/roadmap-demo.html`：
+
+- 标题旁徽标实时切换：`直连 API` ↔ `AGENT 执行器`
+- Agent 模式显示执行器 chip（当前 fallback：`openClawEnabled` 时出现 OpenClaw）；无配置时引导打开插件 Options
+- 字段两模式共享；Agent 模式下空字段 placeholder 为「自动 · 由 Agent 决定」，已填值作为硬约束下发
+- Prompt / 执行器选择写入 `localStorage`（`personalroadmap.aiPrompt` / `personalroadmap.aiExecutor`）
+
+### fixVersion 自动填
+
+团队配置了发布时间表后，按各行 **Target End**（或 `start + days - 1`）经 `catchRelease` 匹配最近 Pro release：
+
+- 全部落同一 release → 字段直接填入
+- 跨 release → 字段留空 + 列表逐行绿色 chip；用户输入固定值覆盖全部
+- 插件侧 `buildJiraCreateFields` 写 `fixVersions`：exact → **唯一后缀匹配**（解决表里 `26.3.220` vs Jira `Nova 26.3.220`）；歧义/无匹配则丢字段并带回 warning，不阻断创建
+
+Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器查当前 sprint。
+
+### 两阶段回写（直连路径）
+
+弹窗按主/子任务分组展示，逐行回显状态。
 
 ```mermaid
 flowchart TD
-    Start[点击创建 Jira] --> Loop{遍历 draft 主任务}
+    Start[点击创建 Jira] --> Mode{Prompt 非空?}
+    Mode -->|否| Direct[直连 Jira REST]
+    Mode -->|是| Agent[AgentTask execute + 轮询]
+    Direct --> Loop{遍历 draft 主任务}
+    Agent --> Map[解析 mappings]
+    Map --> ResolveAll[resolve_item / resolve_draft]
     Loop -->|已有 jiraKey| SkipParent[跳过父创建]
     Loop -->|无 jiraKey| CreateParent[创建主任务 issue]
     CreateParent -->|失败| MarkFail[记录失败, 跳过其子任务]
@@ -92,7 +123,7 @@ flowchart TD
     ResolveDraft --> Next
 ```
 
-主任务成功后**立刻**单独发 `resolve_item`，不等子任务：否则子任务失败后重试会重复建父 issue。一行失败不会中断整批，每行各自回显 key 或错误。
+主任务成功后**立刻**单独发 `resolve_item`，不等子任务：否则子任务失败后重试会重复建父 issue。一行失败不会中断整批，每行各自回显 key 或错误。Agent 路径按 parent 组一个 task，idempotencyKey = `roadmap_create:{teamId}:{sorted draftIds}`，重复点击复用同一 run。
 
 ### 类型与链接字段映射
 
@@ -104,15 +135,18 @@ flowchart TD
 
 最后一行的子任务类型名各 Jira 实例不同（`Sub-task` / `Subtask` / `子任务`），所以**不硬编码**：后端对这一档直接下发 `subType: null`，弹窗的子任务类型允许留空并提示「留空时扩展会用该项目实际的子任务类型」，由扩展查 `/rest/api/2/issue/createmeta?projectKeys=X&expand=projects.issuetypes.fields` 解析。createmeta 拿不到时报明确错误，让用户手填，而不是拿空类型名去撞 Jira 的 400。
 
-### 写入字段
+### 写入字段（直连）
 
 - 通用：`summary`、`issuetype`、`project`
 - `customfield_18350` / `customfield_18351` ← Target start / end
 - `customfield_21998` ← `item.quarter`（仅当该 project 的 createmeta 里存在此字段，且值能匹配上 allowedValues）
+- `fixVersions` ← 弹窗建议/覆盖的 release name（createmeta 门控 + 后缀匹配）
 - **创建 Epic 必须带 `customfield_11451`（Epic Name）**，否则 Jira Server 直接 400
 - 子任务：按上表填 `linkField` 或 `parent`
 
 createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余可选字段一律不发——一个该 project 不支持的字段 id 会让 Jira 拒掉整次创建。
+
+roadmap-service **服务端零改动**：创建与 Agent 编排都在扩展 / memory-service；页面只经 `postMessage` bridge。
 
 ## 数据库迁移
 
@@ -149,13 +183,23 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余
 
 ## 扩展桥
 
-`contentScriptRoadmap` 匹配 roadmap 域名：身份注入、focus sync、JQL 导入 / 创建 Jira / AI 缩写代理。Token 不出个人域。
+`contentScriptRoadmap` 匹配 roadmap 域名：身份注入、focus sync、JQL 导入 / 创建 Jira（直连 + Agent）/ AI 缩写代理。Token 不出个人域。
 
 默认站点 `http://roadmap.xmnup.com`（`.env` / `ROADMAP_BASE_URL`）。**Options 里改地址只改 Popup 打开的入口**；身份自动注入依赖 content script 是否匹配当前 origin。静态匹配含 `roadmap.xmnup.com` 与本地/旧 IP；自定义域名在保存 Options 后由 background 动态 `registerContentScripts`。改域名后需**重新加载扩展并刷新 Roadmap 页**，否则仍会弹出「输入名字」。
 
-页面与扩展之间用 `window.postMessage` 通信（`pai-roadmap-import-jql` / `-ack` / `-result`）。内容脚本收到导入请求会**先回一条 ack**，页面 4 秒内收不到 ack 就直接报「扩展未接收请求，请重新加载扩展后刷新本页」，而不是一直停在「正在执行 JQL 查询 Jira…」。
+页面与扩展之间用 `window.postMessage` 通信：
+
+- `pai-roadmap-import-jql` / `-ack` / `-result`
+- `pai-roadmap-create-jira` / `-ack` / `-result`（直连）
+- `pai-roadmap-agent-create` / `-ack` / `-result`（Agent；超时约 11 分钟）
+- `pai-roadmap-agent-executors` / `-ack` / `-result`
+- `pai-roadmap-open-options` / `-ack` / `-result`
+
+内容脚本收到请求会**先回一条 ack**，页面 4 秒内收不到 ack 就直接报「扩展未接收请求，请重新加载扩展后刷新本页」。
 
 **Jira REST 一律由 service worker 代发**：MV3 下内容脚本的 fetch 仍受宿主页面的 CORS 约束，roadmap 页面（`localhost:3220` 等）直连 `jira.ringcentral.com` 会在请求发出前被拦掉，表现为「有 loading、没有网络请求」。所以内容脚本走 `jiraFetchViaBackground()` → `PERSONAL_AI_JIRA_PROXY_FETCH` → background `handleJiraProxyFetch()`，代理只允许打到当前配置的 Jira origin，Token 只在扩展上下文里解析。排查时看扩展 service worker 的 Network/Console，而不是页面的 Network 面板。
+
+Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）：`executeAgentTask` + `getAgentTaskRuntimeStatus`；Jira token **不**交给 Agent。
 
 ## 导入 Quarters
 
@@ -237,7 +281,9 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 
 - `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`src/storage/Database.ts` 的迁移表）
 - `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker）
-- `roadmap-service/web/src/composables/useReleaseRuler.ts`（发布时间表解析 / 分段 / 拉取）
+- `roadmap-service/web/src/composables/useExtensionBridge.ts`（直连 / Agent create bridge）
+- `roadmap-service/web/src/components/modals/AiCreateModal.vue`（双路径创建弹窗）
+- `roadmap-service/web/src/composables/useReleaseRuler.ts`（发布时间表解析 / 分段 / 拉取 / catchRelease）
 - `roadmap-service/web/src/components/SyncTicker.vue`
 - `src/contentScriptRoadmap.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
@@ -252,7 +298,8 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
 - roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
-- Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
+- Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
+- Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
 - 部署后：导入 Task / 创建 Jira 依赖扩展 Options `JIRA_API_TOKEN`；拖动回写在无扩展或未填 Options token 时可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`

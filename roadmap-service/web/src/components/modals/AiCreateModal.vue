@@ -10,7 +10,24 @@ import {
   typeBadge,
   type DraftGroup,
 } from '../../composables/useRoadmapContract';
-import { bridgeCreateJira } from '../../composables/useExtensionBridge';
+import {
+  bridgeAgentCreateJira,
+  bridgeCreateJira,
+  bridgeListAgentExecutors,
+  bridgeOpenOptionsPage,
+  type AgentExecutorOption,
+} from '../../composables/useExtensionBridge';
+import {
+  catchRelease,
+  relParsed,
+  type ParsedReleaseSchedule,
+  type ReleaseSheetConfig,
+} from '../../composables/useReleaseRuler';
+import { addD, fmtISO } from '../../composables/useGeometry';
+import {
+  getAiPrompt,
+  setAiPrompt,
+} from '../../composables/useRoadmapApi';
 
 type RowStatus =
   | { kind: 'pending' }
@@ -18,13 +35,21 @@ type RowStatus =
   | { kind: 'ok'; jiraKey: string }
   | { kind: 'error'; message: string };
 
+const AI_EXECUTOR_KEY = 'personalroadmap.aiExecutor';
+
 const state = useRoadmapState();
 const running = ref(false);
 const rowStatus = ref<Record<string, RowStatus>>({});
 
+const prompt = ref('');
 const projectKey = ref('');
 const itemType = ref('');
 const subType = ref('');
+const fixVersion = ref('');
+const sprint = ref('');
+const executors = ref<AgentExecutorOption[]>([]);
+const selectedExecutor = ref('');
+const executorsLoading = ref(false);
 
 /**
  * Rows are frozen for the duration of a run: resolving a child immediately
@@ -43,6 +68,83 @@ const totalRows = computed(() =>
 );
 const needsSubType = computed(() => groups.value.some((g) => g.subs.length > 0));
 const needsParent = computed(() => groups.value.some((g) => isDraftItem(g.item)));
+const agentMode = computed(() => prompt.value.trim().length > 0);
+
+const teamRel = computed<ParsedReleaseSchedule | null>(() => {
+  const cfg = state.snapshot.value?.team.releaseSheet as
+    | ReleaseSheetConfig
+    | null
+    | undefined;
+  if (!cfg?.rows?.length) return null;
+  return relParsed(cfg);
+});
+
+function endDateOf(row: {
+  targetEnd?: string | null;
+  start?: string | null;
+  days?: number | null;
+}): string | null {
+  if (row.targetEnd) return row.targetEnd;
+  if (row.start && row.days && row.days > 0) {
+    return fmtISO(addD(row.start, row.days - 1));
+  }
+  return null;
+}
+
+function suggestedFixVersion(row: {
+  targetEnd?: string | null;
+  start?: string | null;
+  days?: number | null;
+}): string | null {
+  const end = endDateOf(row);
+  if (!end || !teamRel.value) return null;
+  return catchRelease(end, teamRel.value)?.release || null;
+}
+
+const fixVersionByKey = computed(() => {
+  const map: Record<string, string | null> = {};
+  for (const g of groups.value) {
+    if (isDraftItem(g.item)) {
+      map[g.item.key] = suggestedFixVersion(g.item);
+    }
+    for (const sub of g.subs) {
+      map[sub.id] = suggestedFixVersion(sub);
+    }
+  }
+  return map;
+});
+
+const uniqueSuggestedReleases = computed(() => {
+  const set = new Set<string>();
+  for (const value of Object.values(fixVersionByKey.value)) {
+    if (value) set.add(value);
+  }
+  return [...set];
+});
+
+const fixVersionNote = computed(() => {
+  if (!teamRel.value) {
+    return '配置发布时间表（JQL ✎ 弹窗）后可按 Target End 自动填写';
+  }
+  if (uniqueSuggestedReleases.value.length === 1) {
+    return '已按任务 Target End 落点自动填入，可修改';
+  }
+  if (uniqueSuggestedReleases.value.length > 1) {
+    return `任务落在不同 release（${uniqueSuggestedReleases.value.join(' / ')}），逐条按 Target End 匹配；输入固定值可覆盖全部`;
+  }
+  return '所有任务的 Target End 之后没有匹配的 release';
+});
+
+const fixVersionPlaceholder = computed(() => {
+  if (agentMode.value && !fixVersion.value.trim()) {
+    return '自动 · 由 Agent 决定';
+  }
+  if (!teamRel.value) return '如 26.3.220';
+  if (uniqueSuggestedReleases.value.length === 1) return uniqueSuggestedReleases.value[0];
+  return '自动 · 按各任务 Target End 匹配';
+});
+
+const agentPlaceholder = '自动 · 由 Agent 决定';
 
 /**
  * `confident` only covers the issue type, so an unparsed project key has to be
@@ -63,6 +165,11 @@ const subTypeAuto = computed(() => subTypeComesFromCreateMeta(itemType.value));
 const blockReason = computed(() => {
   if (!state.hasExtension.value) return '需要 Personal AI 扩展';
   if (!state.editable.value) return '当前为只读模式';
+  if (agentMode.value) {
+    if (!executors.value.length) return '请先配置 Agent 执行器';
+    if (!selectedExecutor.value) return '请选择 Agent 执行器';
+    return '';
+  }
   if (!projectKey.value.trim()) return '请填写 Project Key';
   if (needsParent.value && !itemType.value.trim()) return '请填写主任务类型';
   if (needsSubType.value && !subType.value.trim() && !subTypeAuto.value) {
@@ -96,6 +203,51 @@ function errorOf(id: string): string {
   return status.kind === 'error' ? status.message : '';
 }
 
+function loadingLabel(): string {
+  if (!agentMode.value) return 'API 创建中';
+  const label =
+    executors.value.find((e) => e.id === selectedExecutor.value)?.label || 'Agent';
+  return `${label} 创建中`;
+}
+
+async function refreshExecutors() {
+  if (!state.hasExtension.value) {
+    executors.value = [];
+    return;
+  }
+  executorsLoading.value = true;
+  try {
+    const list = await bridgeListAgentExecutors();
+    executors.value = list;
+    const remembered = localStorage.getItem(AI_EXECUTOR_KEY) || '';
+    if (remembered && list.some((e) => e.id === remembered)) {
+      selectedExecutor.value = remembered;
+    } else if (list.length) {
+      selectedExecutor.value = list[0].id;
+    } else {
+      selectedExecutor.value = '';
+    }
+  } catch {
+    executors.value = [];
+    selectedExecutor.value = '';
+  } finally {
+    executorsLoading.value = false;
+  }
+}
+
+function selectExecutor(id: string) {
+  selectedExecutor.value = id;
+  localStorage.setItem(AI_EXECUTOR_KEY, id);
+}
+
+async function openOptions() {
+  try {
+    await bridgeOpenOptionsPage();
+  } catch {
+    state.toast('无法打开插件 Options，请手动打开扩展设置');
+  }
+}
+
 watch(
   () => state.modals.value.aiCreate,
   (open) => {
@@ -104,18 +256,36 @@ watch(
     rowStatus.value = {};
     frozenGroups.value = null;
     running.value = false;
+    prompt.value = getAiPrompt();
     projectKey.value = hints.projectKey || '';
     itemType.value = hints.itemType || '';
     subType.value = hints.subType || '';
+    sprint.value = '';
+    const uniq = uniqueSuggestedReleases.value;
+    fixVersion.value = uniq.length === 1 ? uniq[0] : '';
+    void refreshExecutors();
   },
 );
+
+watch(uniqueSuggestedReleases, (uniq) => {
+  if (!state.modals.value.aiCreate || running.value) return;
+  if (!fixVersion.value.trim() && uniq.length === 1) {
+    fixVersion.value = uniq[0];
+  }
+});
 
 async function start() {
   if (blockReason.value || running.value) return;
   frozenGroups.value = groups.value;
   running.value = true;
+  setAiPrompt(prompt.value);
+  if (selectedExecutor.value) {
+    localStorage.setItem(AI_EXECUTOR_KEY, selectedExecutor.value);
+  }
   const teamId = state.teamId.value;
   const token = state.api.getShareToken(teamId) || null;
+  const teamName = state.snapshot.value?.team.name || null;
+  const override = fixVersion.value.trim() || null;
   let created = 0;
   let failed = 0;
 
@@ -128,15 +298,34 @@ async function start() {
     }
 
     try {
-      const result = await bridgeCreateJira(
-        buildCreateJiraPayload(group, {
-          teamId,
-          token,
-          projectKey: projectKey.value.trim(),
-          issueType: itemType.value.trim(),
-          subType: subType.value.trim(),
-        }),
-      );
+      const baseFields = {
+        teamId,
+        token,
+        projectKey: projectKey.value.trim(),
+        issueType: itemType.value.trim(),
+        subType: subType.value.trim(),
+        fixVersionOverride: override,
+        fixVersionByKey: fixVersionByKey.value,
+      };
+      const createPayload = buildCreateJiraPayload(group, baseFields);
+      const result = agentMode.value
+        ? await bridgeAgentCreateJira({
+            teamId,
+            token,
+            prompt: prompt.value.trim(),
+            executor: selectedExecutor.value,
+            teamName,
+            constraints: {
+              projectKey: projectKey.value.trim() || null,
+              issueType: itemType.value.trim() || null,
+              subType: subType.value.trim() || null,
+              fixVersion: override,
+              sprint: sprint.value.trim() || null,
+            },
+            parent: createPayload.parent,
+            children: createPayload.children,
+          })
+        : await bridgeCreateJira(createPayload);
 
       if (parentIsDraft) {
         const parent = result.parent;
@@ -167,7 +356,8 @@ async function start() {
           failed += 1;
         }
       }
-      // The extension resolves the parent key itself; sub keys are ours to write back.
+      // Direct path: extension may already have resolved; agent path too.
+      // Re-apply is idempotent and keeps the page UI in sync.
       if (mappings.length) {
         await state.applySnapshotFromIntent({ op: 'resolve_draft', mappings }).catch(
           () => undefined,
@@ -183,7 +373,6 @@ async function start() {
     }
   }
 
-  // The parent resolve happened server-side, so pull the authoritative rows back.
   try {
     if (teamId) state.snapshot.value = await state.api.fetchTeam(teamId);
   } catch {
@@ -191,7 +380,16 @@ async function start() {
   }
 
   running.value = false;
-  if (created) state.toast(`<span class="ok">✓</span> 已创建 <b>${created}</b> 个 Jira issue`);
+  const execLabel = agentMode.value
+    ? executors.value.find((e) => e.id === selectedExecutor.value)?.label
+    : null;
+  if (created) {
+    state.toast(
+      execLabel
+        ? `<span class="ok">✓</span> 已由 <b>${execLabel}</b> 创建 <b>${created}</b> 个 Jira issue`
+        : `<span class="ok">✓</span> 已创建 <b>${created}</b> 个 Jira issue`,
+    );
+  }
   if (!failed) {
     state.modals.value.aiCreate = false;
   } else if (!created) {
@@ -206,40 +404,133 @@ async function start() {
     :class="{ show: state.modals.value.aiCreate }"
     @click.self="!running && (state.modals.value.aiCreate = false)"
   >
-    <div class="modal">
+    <div class="modal" style="width: 620px">
       <div class="m-head">
-        <div class="m-title">创建 Jira</div>
+        <div class="m-title">
+          创建 Jira
+          <span class="mode-badge" :class="agentMode ? 'agent' : 'api'">
+            {{ agentMode ? 'AGENT 执行器' : '直连 API' }}
+          </span>
+        </div>
         <div class="m-sub">
-          扩展会先创建主任务并立即回写 key，再按层级创建子任务并挂上父子链接。
+          Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给
+          <b>Agent 执行器</b>创建（可用技能、自动填当前 Sprint 等动态字段）——已填字段作为约束带给
+          Agent，未填字段由 Agent 决定。Prompt 与执行器选择会记住上次内容。
         </div>
       </div>
       <div class="m-body">
         <div v-if="hintWarning" class="hint-warn">{{ hintWarning }}</div>
+
+        <label class="f-label">创建 Prompt（可选）</label>
+        <textarea
+          v-model="prompt"
+          class="f-input"
+          style="min-height: 64px"
+          :disabled="running"
+          placeholder="例：创建 Task 类型 ticket，Sprint 填当前 sprint，fixVersion 按发布时间表，Team 与父 Epic 保持一致"
+        />
+
+        <div class="exec-row" :class="{ show: agentMode }">
+          <label class="f-label">Agent 执行器</label>
+          <div v-if="executors.length" class="exec-select">
+            <button
+              v-for="e in executors"
+              :key="e.id"
+              type="button"
+              class="exec-opt"
+              :class="{ on: e.id === selectedExecutor }"
+              :disabled="running"
+              @click="selectExecutor(e.id)"
+            >
+              <span class="eo-dot" />{{ e.label }}
+            </button>
+          </div>
+          <div class="exec-guide">
+            <template v-if="executorsLoading">正在检测执行器…</template>
+            <template v-else-if="!executors.length">
+              尚未配置任何 Agent 执行器 ——
+              <a href="#" @click.prevent="openOptions">去插件 Options 配置</a>，配置后
+              <a href="#" @click.prevent="refreshExecutors">重新检测</a>
+            </template>
+            <template v-else>
+              执行器在插件 Options 中管理；已填字段作为约束带给 Agent，未填字段由 Agent 决定。
+              <a href="#" @click.prevent="refreshExecutors">重新检测</a>
+            </template>
+          </div>
+        </div>
+
         <div class="f-grid">
           <div>
             <label class="f-label">Project Key</label>
-            <input v-model="projectKey" class="f-input" placeholder="如 NOVA" :disabled="running" />
+            <input
+              v-model="projectKey"
+              class="f-input"
+              :placeholder="agentMode ? agentPlaceholder : '如 NOVA'"
+              :disabled="running"
+            />
           </div>
           <div>
             <label class="f-label">主任务类型</label>
-            <input v-model="itemType" class="f-input" placeholder="如 Epic" :disabled="running" />
+            <input
+              v-model="itemType"
+              class="f-input"
+              :placeholder="agentMode ? agentPlaceholder : '如 Epic'"
+              :disabled="running"
+            />
           </div>
           <div>
             <label class="f-label">子任务类型</label>
             <input
               v-model="subType"
               class="f-input"
-              :placeholder="subTypeAuto ? '留空＝由 Jira 决定' : '如 Task'"
+              :placeholder="
+                agentMode
+                  ? agentPlaceholder
+                  : subTypeAuto
+                    ? '留空＝由 Jira 决定'
+                    : '如 Task'
+              "
               :disabled="running"
             />
-            <div v-if="subTypeAuto && !subType.trim()" class="f-note">
+            <div v-if="!agentMode && subTypeAuto && !subType.trim()" class="f-note">
               留空时扩展会用该项目实际的子任务类型
             </div>
           </div>
         </div>
 
+        <div class="f-grid" style="margin-top: 10px">
+          <div>
+            <label class="f-label">fixVersion</label>
+            <input
+              v-model="fixVersion"
+              class="f-input"
+              :placeholder="fixVersionPlaceholder"
+              :disabled="running"
+            />
+            <div class="f-auto-note">{{ fixVersionNote }}</div>
+          </div>
+          <div>
+            <label class="f-label">Sprint</label>
+            <input
+              v-model="sprint"
+              class="f-input"
+              :placeholder="
+                agentMode ? agentPlaceholder : '直连 v1 不支持，留空跳过'
+              "
+              :disabled="running"
+            />
+            <div class="f-auto-note">
+              {{
+                agentMode
+                  ? '未填时由 Agent 查询当前 Sprint 自动填写'
+                  : '直连 API 需要 Sprint ID，v1 不填此字段；要自动填当前 Sprint 请改用 Prompt'
+              }}
+            </div>
+          </div>
+        </div>
+
         <label class="f-label">
-          待创建 <span style="color: var(--cur-deep)">（{{ totalRows }}）</span>
+          待创建任务 <span style="color: var(--cur-deep)">（{{ totalRows }}）</span>
         </label>
         <div v-if="!groups.length" class="ai-empty">没有待创建的草稿</div>
         <div v-for="g in groups" :key="g.item.key" class="ai-group">
@@ -248,12 +539,19 @@ async function start() {
               {{ typeBadge(itemType || g.item.type).label }}
             </span>
             <span class="t">{{ g.item.alias || g.item.title }}</span>
+            <span
+              v-if="teamRel && isDraftItem(g.item)"
+              class="fv-chip"
+              :class="{ none: !fixVersionByKey[g.item.key] }"
+            >
+              {{ fixVersionByKey[g.item.key] || '无匹配 release' }}
+            </span>
             <span class="st">
               <template v-if="!isDraftItem(g.item)">
                 <span class="newkey">{{ itemDisplayKey(g.item) }}</span>
               </template>
               <template v-else-if="kindOf(itemRowId(g.item.key)) === 'loading'">
-                <span class="mini-spin" /> 创建中
+                <span class="mini-spin" /> {{ loadingLabel() }}
               </template>
               <span v-else-if="kindOf(itemRowId(g.item.key)) === 'ok'" class="newkey">
                 ✓ {{ okKey(itemRowId(g.item.key)) }}
@@ -271,9 +569,16 @@ async function start() {
           <div v-for="s in g.subs" :key="s.id" class="ai-row child">
             <span class="child-mark">└</span>
             <span class="t">{{ s.alias || s.title }}</span>
+            <span
+              v-if="teamRel"
+              class="fv-chip"
+              :class="{ none: !fixVersionByKey[s.id] }"
+            >
+              {{ fixVersionByKey[s.id] || '无匹配 release' }}
+            </span>
             <span class="st">
               <template v-if="kindOf(subRowId(s.id)) === 'loading'">
-                <span class="mini-spin" /> 创建中
+                <span class="mini-spin" /> {{ loadingLabel() }}
               </template>
               <span v-else-if="kindOf(subRowId(s.id)) === 'ok'" class="newkey">
                 ✓ {{ okKey(subRowId(s.id)) }}
@@ -297,7 +602,7 @@ async function start() {
           :disabled="running"
           @click="state.modals.value.aiCreate = false"
         >
-          关闭
+          取消
         </button>
         <button
           class="btn btn-orange"

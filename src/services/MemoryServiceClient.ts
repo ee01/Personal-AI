@@ -6,13 +6,16 @@
  * using the standard fetch API and chrome.storage.local for configuration.
  */
 
-import { DEFAULT_UI_LANGUAGE, readExtensionUiPreferences } from '../i18n';
+import {
+  DEFAULT_UI_LANGUAGE,
+  readExtensionUiPreferences,
+} from '../i18n/index.js';
+import { DEFAULT_MEMORY_SERVICE_BASE_URL } from '../memoryServiceConfig.js';
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-const DEFAULT_BASE_URL = 'http://localhost:3210/api/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
@@ -3521,6 +3524,24 @@ export interface RuntimeConfigResponse {
   openClawBaseUrl?: string;
   openClawTimeoutMs?: number;
   openClawApiKeyConfigured?: boolean;
+  agentExecutors?: Array<{
+    id: string;
+    label: string;
+    type?:
+      | 'openclaw-responses'
+      | 'openclaw-gateway'
+      | 'acp-codex'
+      | 'acp-claude-code'
+      | string;
+    baseUrl?: string;
+    cwd?: string;
+    enabled?: boolean;
+    apiKeyConfigured?: boolean;
+  }>;
+  executorDefaults?: {
+    agent_task?: string;
+    reflection_research?: string;
+  };
   outreachEnabled?: boolean;
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
@@ -3559,6 +3580,20 @@ export interface UpdateRuntimeConfigPayload {
   openClawTimeoutMs?: number;
   openClawApiKey?: string;
   clearOpenClawApiKey?: boolean;
+  agentExecutors?: Array<{
+    id: string;
+    label?: string;
+    type?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    cwd?: string;
+    enabled?: boolean;
+    clearApiKey?: boolean;
+  }>;
+  executorDefaults?: {
+    agent_task?: string;
+    reflection_research?: string;
+  };
   outreachEnabled?: boolean;
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
@@ -4773,7 +4808,7 @@ export class MemoryServiceClient {
   private _userIdResolvePromise: Promise<void> | null = null;
 
   constructor(config?: Partial<MemoryServiceConfig>) {
-    this.baseUrl = config?.baseUrl ?? DEFAULT_BASE_URL;
+    this.baseUrl = config?.baseUrl ?? DEFAULT_MEMORY_SERVICE_BASE_URL;
     this.apiKey = config?.apiKey;
     this.timeout = config?.timeout ?? DEFAULT_TIMEOUT_MS;
     this.userId = 'default';
@@ -6376,6 +6411,33 @@ export class MemoryServiceClient {
       'GET',
       `/agent-tasks/runtime-status${qs ? '?' + qs : ''}`,
     );
+  }
+
+  async executeAgentTask(body: {
+    taskId: string;
+    title?: string;
+    task: string;
+    executor?: string;
+    notify?: boolean;
+    idempotencyKey?: string;
+    triggerSource?: string;
+    timeoutMs?: number;
+  }): Promise<{
+    accepted?: boolean;
+    reused?: boolean;
+    taskId?: string;
+    runId?: string;
+    actionId?: string;
+    queueStatus?: string;
+    statusUrl?: string;
+    result?: {
+      status?: string;
+      summary?: string;
+      artifacts?: Array<{ kind?: string; title?: string; content?: string }>;
+    };
+    error?: string;
+  }> {
+    return this.request('POST', '/agent-tasks/execute', body);
   }
 
   async upsertOutreachTemplate(body: {

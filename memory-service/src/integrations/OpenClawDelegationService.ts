@@ -1,6 +1,7 @@
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
+import { hasVerifiableArtifact as sharedHasVerifiableArtifact } from './executors/agentResultContract.js';
 
 export type DelegationStatus =
   | 'success'
@@ -55,59 +56,12 @@ interface StructuredObservation {
   values: Record<string, string | number | boolean>;
 }
 
-function getMetadataString(
-  metadata: Record<string, unknown> | undefined,
-  keys: string[],
-): string | undefined {
-  if (!metadata) return undefined;
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function hasMetadataStringArray(
-  metadata: Record<string, unknown> | undefined,
-  keys: string[],
-): boolean {
-  if (!metadata) return false;
-  return keys.some((key) => {
-    const value = metadata[key];
-    return Array.isArray(value) && value.some((item) => typeof item === 'string' && item.trim().length > 0);
-  });
-}
-
 function hasVerifiableArtifact(
   artifacts: DelegationArtifact[],
   input: DelegationRequest,
 ): boolean {
-  return artifacts.some((artifact) => {
-    const metadata = artifact.metadata;
-    const sourceSystem =
-      getMetadataString(metadata, ['sourceSystem', 'targetSystem', 'system']) ??
-      input.targetSystem?.trim();
-    const entityId = getMetadataString(metadata, [
-      'entityId',
-      'entityKey',
-      'recordId',
-      'resourceId',
-      'ticketId',
-      'ticketKey',
-      'issueKey',
-    ]);
-    const verification =
-      metadata?.verified === true || Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-    const hasObservedFields = hasMetadataStringArray(metadata, ['observedFields', 'changedFields']);
-    const hasOperation = Boolean(getMetadataString(metadata, ['operation', 'operationType', 'action']));
-    const hasObservedAt = Boolean(getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']));
-    const hasBody =
-      (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
-      (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
-
-    return Boolean(sourceSystem && entityId && verification && hasBody && (hasObservedFields || hasOperation || hasObservedAt));
+  return sharedHasVerifiableArtifact(artifacts, {
+    targetSystem: input.targetSystem,
   });
 }
 

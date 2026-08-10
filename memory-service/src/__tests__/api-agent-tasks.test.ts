@@ -12,6 +12,8 @@ describe('AgentTask API', () => {
   let db: BetterSqlite3.Database;
 
   beforeAll(async () => {
+    process.env.OPENCLAW_ENABLED = 'true';
+    process.env.OPENCLAW_BASE_URL = 'http://openclaw.test';
     db = getTestDb();
     const result = await buildApp({ db });
     app = result.app;
@@ -55,13 +57,82 @@ describe('AgentTask API', () => {
       },
     });
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as {
+      accepted?: boolean;
+      statusUrl?: string;
+      runId?: string;
+      queueStatus?: string;
+    };
+    expect(body.accepted).toBe(true);
+    expect(body.queueStatus).toBe('queued');
+    expect(body.statusUrl).toContain('/api/v1/agent-tasks/runtime-status');
+    expect(body.runId).toBeTruthy();
 
     const repo = new ActionRepository(db);
     const action = repo.findReusableByIdempotencyKey(idempotencyKey);
     expect(action).toBeTruthy();
-    expect(action?.actionType).toBe('delegate_openclaw');
+    expect(action?.actionType).toBe('delegate_agent');
     expect(action?.params.timeoutMs).toBe(600000);
+  });
+
+  it('rejects an executor that is not in the enabled registry', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: {
+        taskId: 'agent-task-bad-executor',
+        task: 'Should fail',
+        executor: 'not-a-real-executor',
+        notify: false,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'unsupported_executor' });
+  });
+
+  it('reuses a deterministic idempotency key without Date.now fallback', async () => {
+    const payload = {
+      taskId: 'agent-task-idempotent',
+      title: 'idempotent',
+      task: 'Do once',
+      executor: 'openclaw',
+      triggerSource: 'jira_rule',
+      scheduleSpec: 'daily@08:00',
+      notify: false,
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload,
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect([200, 202]).toContain(second.statusCode);
+    const firstBody = first.json() as { actionId: string; reused?: boolean };
+    const secondBody = second.json() as { actionId: string; reused?: boolean };
+    expect(secondBody.actionId).toBe(firstBody.actionId);
+    if (second.statusCode === 200) {
+      expect(secondBody.reused).toBe(true);
+    }
+
+    const count = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count
+             FROM proposed_actions
+            WHERE source_kind = 'agent_task'
+              AND source_ref_id = ?`,
+        )
+        .get('agent-task-idempotent') as { count: number }
+    ).count;
+    expect(count).toBe(1);
   });
 
   it('returns runtime-status from memory-service ledger preferring summary over artifact', async () => {

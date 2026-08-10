@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.9.2';
-var APP_SCRIPT_LAST_UPDATED = '2026-08-04';
+var APP_SCRIPT_VERSION = '2.10.0';
+var APP_SCRIPT_LAST_UPDATED = '2026-08-09';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -35,6 +35,14 @@ var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
 var TIMELINE_CACHE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 var EXECUTION_MARK_KEY_PREFIX = 'BOT_EXECUTION_MARK_';
 var EXECUTION_MARK_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+// Claim/confirm 拆分：领取只写 claimed，确认成功后才写最终 ✅，避免 302/超时假成功锁死当天。
+var CLAIM_MARK_KEY_PREFIX = 'BOT_CLAIM_MARK_';
+var CLAIM_PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+var AGENT_TASK_CLAIM_LOG = '⏳ AgentTask 已领取待确认';
+var API_CLAIM_LOG = '⏳ API 已领取待确认';
+var AGENT_TASK_TRIGGERED_LOG = '✅ AgentTask 已触发 memory-service';
+var API_TRIGGERED_LOG = '✅ 推送成功';
+var TRIGGER_DELIVERY_FAILED_LOG = '❌ trigger_delivery_failed';
 var JIRA_RELEASE_INFO_MAX_CHARS = 12000;
 var JIRA_GROOVY_MAX_NESTING_DEPTH = 12;
 var TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS = 260;
@@ -891,11 +899,22 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   }
   
   if (execLogCol > 0) {
-    let logMessage = rowData.Push_Method === 'AgentTask'
-      ? (success ? '✅ AgentTask 已触发 memory-service' : '❌ AgentTask 触发失败' + (errorMsg ? ': ' + errorMsg : ''))
-      : success ?
-        '✅ 推送成功' :
-      ('❌ 推送失败' + (errorMsg ? ': ' + errorMsg : ''));
+    let logMessage;
+    if (rowData.Push_Method === 'AgentTask') {
+      if (success) {
+        logMessage = AGENT_TASK_TRIGGERED_LOG;
+      } else if (String(errorMsg || '').indexOf('trigger_delivery_failed') !== -1) {
+        logMessage = TRIGGER_DELIVERY_FAILED_LOG + (errorMsg && errorMsg !== 'trigger_delivery_failed' ? ': ' + errorMsg : '');
+      } else {
+        logMessage = '❌ AgentTask 触发失败' + (errorMsg ? ': ' + errorMsg : '');
+      }
+    } else if (success) {
+      logMessage = API_TRIGGERED_LOG;
+    } else if (String(errorMsg || '').indexOf('trigger_delivery_failed') !== -1) {
+      logMessage = TRIGGER_DELIVERY_FAILED_LOG + (errorMsg && errorMsg !== 'trigger_delivery_failed' ? ': ' + errorMsg : '');
+    } else {
+      logMessage = '❌ 推送失败' + (errorMsg ? ': ' + errorMsg : '');
+    }
     sheet.getRange(rowIndex, execLogCol).setValue(logMessage);
   }
 
@@ -905,7 +924,13 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
       sheet.getRange(rowIndex, agentLastRunAtCol).setValue(runAtText);
     }
     if (agentLastStatusCol > 0) {
-      sheet.getRange(rowIndex, agentLastStatusCol).setValue(success ? 'triggered' : 'trigger_failed');
+      let agentStatus = 'trigger_failed';
+      if (success) {
+        agentStatus = 'triggered';
+      } else if (String(errorMsg || '').indexOf('trigger_delivery_failed') !== -1) {
+        agentStatus = 'trigger_delivery_failed';
+      }
+      sheet.getRange(rowIndex, agentLastStatusCol).setValue(agentStatus);
     }
     if (agentLastErrorCol > 0) {
       sheet.getRange(rowIndex, agentLastErrorCol).setValue(success ? '' : (errorMsg || 'trigger failed'));
@@ -1140,31 +1165,211 @@ function shouldAutoMarkMessageOnFetch(mode, message) {
   return false;
 }
 
+function isAgentTaskMessage(message) {
+  return Boolean(message && message.Push_Method === 'AgentTask');
+}
+
+function isClaimConfirmMessage(message) {
+  if (!message) {
+    return false;
+  }
+  return isAgentTaskMessage(message) ||
+    message.targetType === 'api' ||
+    message.Push_Method === 'AI' ||
+    (message.Push_Method === 'JiraAutomation' && String(message.AI_Endpoint || '').trim() !== '');
+}
+
+function buildClaimLogMessage(message) {
+  return isAgentTaskMessage(message) ? AGENT_TASK_CLAIM_LOG : API_CLAIM_LOG;
+}
+
+function isClaimPendingLog(execLog) {
+  const text = String(execLog || '');
+  return text.indexOf('⏳') !== -1 && text.indexOf('已领取待确认') !== -1;
+}
+
+function isFinalSuccessLog(execLog) {
+  const text = String(execLog || '');
+  return text.indexOf('✅') !== -1 || text.indexOf('成功') !== -1;
+}
+
+function isTriggerDeliveryFailedLog(execLog) {
+  const text = String(execLog || '');
+  return text.indexOf('trigger_delivery_failed') !== -1 ||
+    (text.indexOf('❌') !== -1 && text.indexOf('触发失败') !== -1);
+}
+
+function buildClaimMarkPropertyKey(executionKey) {
+  return CLAIM_MARK_KEY_PREFIX + String(executionKey || '').trim();
+}
+
+/**
+ * 领取阶段：只写 claimed / pending，不写最终 ✅，不增加 Exec_Count，不 Done。
+ * AgentTask 允许未确认后按 at-least-once 重领；自定义 API 默认 at-most-once。
+ */
+function claimMessagePending(messageId, rowIndex, message, executionKey) {
+  const applyClaim = function() {
+    const now = new Date();
+    const normalizedExecutionKey = normalizeExecutionKey(executionKey);
+    const props = PropertiesService.getScriptProperties();
+    const claimPropertyKey = normalizedExecutionKey
+      ? buildClaimMarkPropertyKey(normalizedExecutionKey)
+      : '';
+
+    if (claimPropertyKey) {
+      const existingClaim = getRecordedExecutionMark(props, claimPropertyKey, now);
+      if (existingClaim) {
+        return {
+          success: true,
+          claimed: true,
+          duplicate: true,
+          stage: 'claimed',
+          messageId: getRequestParameterValue(messageId) || getRequestParameterValue(existingClaim.messageId),
+          rowIndex: parseInt(existingClaim.rowIndex, 10) || parseInt(rowIndex, 10) || 0,
+          executionKey: normalizedExecutionKey,
+          logMessage: buildClaimLogMessage(message)
+        };
+      }
+    }
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    if (!sheet) {
+      return { success: false, error: 'Messages sheet not found', stage: 'claimed' };
+    }
+
+    const data = sheet.getDataRange().getDisplayValues();
+    const headers = data[0];
+    const resolvedRow = resolveExecutionMarkRow(data, headers, rowIndex, messageId);
+    if (!resolvedRow.success) {
+      return {
+        success: false,
+        error: resolvedRow.error,
+        messageId: messageId,
+        rowIndex: rowIndex,
+        stage: 'claimed'
+      };
+    }
+
+    const actualRowIndex = resolvedRow.rowIndex;
+    const rowData = resolvedRow.rowData || message || {};
+    const claimLog = buildClaimLogMessage(rowData);
+    const lastExecCol = getColumnIndex(headers, 'Last_Exec');
+    const execLogCol = getColumnIndex(headers, 'Exec_Log');
+    const agentLastRunAtCol = getColumnIndex(headers, 'Agent_Last_Run_At');
+    const agentLastStatusCol = getColumnIndex(headers, 'Agent_Last_Status');
+    const agentLastErrorCol = getColumnIndex(headers, 'Agent_Last_Error');
+    const runAtText = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+
+    if (lastExecCol > 0) {
+      sheet.getRange(actualRowIndex, lastExecCol).setValue(runAtText);
+    }
+    if (execLogCol > 0) {
+      sheet.getRange(actualRowIndex, execLogCol).setValue(claimLog);
+    }
+    if (isAgentTaskMessage(rowData)) {
+      if (agentLastRunAtCol > 0) {
+        sheet.getRange(actualRowIndex, agentLastRunAtCol).setValue(runAtText);
+      }
+      if (agentLastStatusCol > 0) {
+        sheet.getRange(actualRowIndex, agentLastStatusCol).setValue('claimed');
+      }
+      if (agentLastErrorCol > 0) {
+        sheet.getRange(actualRowIndex, agentLastErrorCol).setValue('');
+      }
+    }
+
+    if (claimPropertyKey) {
+      recordExecutionMark(
+        props,
+        claimPropertyKey,
+        normalizedExecutionKey,
+        messageId,
+        actualRowIndex,
+        true,
+        now
+      );
+    }
+
+    Logger.log(`标记消息领取待确认: ${messageId}, executionKey=${normalizedExecutionKey}`);
+    return {
+      success: true,
+      claimed: true,
+      duplicate: false,
+      stage: 'claimed',
+      messageId: messageId,
+      rowIndex: actualRowIndex,
+      executionKey: normalizedExecutionKey,
+      logMessage: claimLog
+    };
+  };
+
+  if (normalizeExecutionKey(executionKey)) {
+    return withExecutionMarkLock(applyClaim);
+  }
+  return applyClaim();
+}
+
 function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
   const normalizedMode = mode || 'none';
   if (!shouldAutoMarkMessageOnFetch(normalizedMode, message)) {
     return {
       requested: normalizedMode,
-      marked: false
+      marked: false,
+      claimed: false
     };
   }
 
-  const markResult = markBotMessageExecuted(
+  // 兼容档：mode=all 仍走旧的最终成功标记；api 模式改为 claim-only。
+  if (normalizedMode === 'all' && !isClaimConfirmMessage(message)) {
+    const markResult = markBotMessageExecuted(
+      messageId,
+      message.rowIndex,
+      true,
+      '',
+      message.Topic || '',
+      message.Content || '',
+      executionKey || ''
+    );
+
+    if (!markResult || markResult.success !== true) {
+      return {
+        requested: normalizedMode,
+        marked: false,
+        claimed: false,
+        success: false,
+        error: markResult && markResult.error ? markResult.error : 'auto mark on fetch failed',
+        messageId: messageId,
+        rowIndex: message.rowIndex,
+        executionKey: executionKey || ''
+      };
+    }
+
+    return {
+      requested: normalizedMode,
+      marked: true,
+      claimed: false,
+      success: true,
+      duplicate: markResult.duplicate === true,
+      messageId: markResult.messageId || messageId,
+      rowIndex: markResult.rowIndex || message.rowIndex,
+      executionKey: markResult.executionKey || executionKey || ''
+    };
+  }
+
+  const claimResult = claimMessagePending(
     messageId,
     message.rowIndex,
-    true,
-    '',
-    message.Topic || '',
-    message.Content || '',
+    message,
     executionKey || ''
   );
 
-  if (!markResult || markResult.success !== true) {
+  if (!claimResult || claimResult.success !== true) {
     return {
       requested: normalizedMode,
       marked: false,
+      claimed: false,
       success: false,
-      error: markResult && markResult.error ? markResult.error : 'auto mark on fetch failed',
+      error: claimResult && claimResult.error ? claimResult.error : 'auto claim on fetch failed',
       messageId: messageId,
       rowIndex: message.rowIndex,
       executionKey: executionKey || ''
@@ -1173,13 +1378,45 @@ function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
 
   return {
     requested: normalizedMode,
-    marked: true,
+    marked: false,
+    claimed: true,
     success: true,
-    duplicate: markResult.duplicate === true,
-    messageId: markResult.messageId || messageId,
-    rowIndex: markResult.rowIndex || message.rowIndex,
-    executionKey: markResult.executionKey || executionKey || ''
+    duplicate: claimResult.duplicate === true,
+    stage: 'claimed',
+    messageId: claimResult.messageId || messageId,
+    rowIndex: claimResult.rowIndex || message.rowIndex,
+    executionKey: claimResult.executionKey || executionKey || '',
+    logMessage: claimResult.logMessage || buildClaimLogMessage(message)
   };
+}
+
+/**
+ * 确认触发已到达下游（Jira 已成功调用 Dify/第三方 API）。
+ * 这才是最终 ✅；与领取 claimed 分离。
+ */
+function confirmBotMessageTriggered(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey, stage) {
+  const normalizedStage = String(stage || (success ? 'confirmed' : 'trigger_delivery_failed')).trim().toLowerCase();
+  if (normalizedStage === 'trigger_delivery_failed' || success === false) {
+    return markBotMessageExecuted(
+      messageId,
+      rowIndex,
+      false,
+      errorMsg || 'trigger_delivery_failed',
+      replacedTopic || '',
+      replacedContent || '',
+      executionKey || ''
+    );
+  }
+
+  return markBotMessageExecuted(
+    messageId,
+    rowIndex,
+    true,
+    '',
+    replacedTopic || '',
+    replacedContent || '',
+    executionKey || ''
+  );
 }
 
 function parseJsonStringFragment(fragment) {
@@ -1988,6 +2225,30 @@ function doGet(e) {
       JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, sendResultMeta.sentChatId, sendResultMeta.sentPostId, sendResultMeta.sentAt))
     ).setMimeType(ContentService.MimeType.JSON);
   }
+
+  // 确认下游已收到触发（与领取 claimed 分离，避免 302/超时假成功）
+  if (action === 'confirmBotMessageTriggered') {
+    const messageId = e.parameter.messageId || '';
+    const rowIndex = parseInt(e.parameter.rowIndex) || 0;
+    const success = e.parameter.success !== 'false';
+    const error = e.parameter.error || '';
+    const executionKey = getRequestParameterValue(e.parameter.executionKey);
+    const replacedTopic = getRequestParameterValue(e.parameter.topic);
+    const replacedContent = getRequestParameterValue(e.parameter.content);
+    const stage = getRequestParameterValue(e.parameter.stage) || (success ? 'confirmed' : 'trigger_delivery_failed');
+
+    return ContentService.createTextOutput(
+      JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage))
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'scanUnconfirmedClaims') {
+    return ContentService.createTextOutput(
+      JSON.stringify(scanUnconfirmedClaims({
+        maxAgeMs: parseInt(e.parameter.maxAgeMs, 10) || CLAIM_PENDING_MAX_AGE_MS
+      }))
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
   
   if (action === 'setupTriggers') {
     // 通过 Web App 创建触发器
@@ -2052,6 +2313,31 @@ function doPost(e) {
 
       return ContentService.createTextOutput(
         JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, sendResultMeta.sentChatId, sendResultMeta.sentPostId, sendResultMeta.sentAt))
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === 'confirmBotMessageTriggered') {
+      const parameters = mergeRequestParameters(queryParameters, postData);
+      const messageId = getRequestParameterValue(parameters.messageId);
+      const rowIndex = parseInt(getRequestParameterValue(parameters.rowIndex)) || 0;
+      const success = parameters.success === true || getRequestParameterValue(parameters.success) !== 'false';
+      const error = getRequestParameterValue(parameters.error);
+      const replacedTopic = getRequestParameterValue(parameters.topic);
+      const replacedContent = getRequestParameterValue(parameters.content);
+      const executionKey = getRequestParameterValue(parameters.executionKey);
+      const stage = getRequestParameterValue(parameters.stage) || (success ? 'confirmed' : 'trigger_delivery_failed');
+
+      return ContentService.createTextOutput(
+        JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage))
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === 'scanUnconfirmedClaims') {
+      const parameters = mergeRequestParameters(queryParameters, postData);
+      return ContentService.createTextOutput(
+        JSON.stringify(scanUnconfirmedClaims({
+          maxAgeMs: parseInt(getRequestParameterValue(parameters.maxAgeMs), 10) || CLAIM_PENDING_MAX_AGE_MS
+        }))
       ).setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -2413,6 +2699,12 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     if (isPushedSuccessfullyToday(rowData, matchDate)) {
       continue;
     }
+
+    // 自定义 API / AI：claimed 未确认时 at-most-once，避免第三方被重复调用。
+    // AgentTask：未确认可重领（at-least-once），重复由 memory-service 幂等吸收。
+    if (isClaimPendingBlockingReclaim(rowData, matchDate, now, i + 1)) {
+      continue;
+    }
     
     // 过滤：该执行日期已推送失败的消息（避免阻塞队列）
     if (isPushedFailedToday(rowData, matchDate)) {
@@ -2613,7 +2905,7 @@ function matchesNoSpecifiedTime(rowData, now, messageType) {
 }
 
 /**
- * 判断消息在指定执行日期是否已成功推送
+ * 判断消息在指定执行日期是否已成功推送（最终 ✅，不含领取 claimed）
  */
 function isPushedSuccessfullyToday(rowData, currentDate) {
   const lastExec = rowData.Last_Exec;
@@ -2626,11 +2918,81 @@ function isPushedSuccessfullyToday(rowData, currentDate) {
   if (lastExecDate !== currentDate) {
     return false;
   }
+
+  // claimed 不是最终成功；只有最终 ✅ / 「成功」才锁死当天。
+  if (isClaimPendingLog(execLog)) {
+    return false;
+  }
   
-  // 检查是否成功（包含 ✅ 或 "成功"）
-  const isSuccess = execLog.includes('✅') || execLog.includes('成功');
-  
-  return isSuccess;
+  return isFinalSuccessLog(execLog);
+}
+
+/**
+ * claimed 是否应阻止自动重领。
+ * - AgentTask：不阻止（at-least-once）
+ * - 自定义 API/AI：TTL 内阻止；超时后标 trigger_delivery_failed 并继续阻止自动重领
+ */
+function isClaimPendingBlockingReclaim(rowData, currentDate, now, rowIndex) {
+  const lastExec = rowData.Last_Exec;
+  const execLog = rowData.Exec_Log || '';
+  if (!lastExec || !isClaimPendingLog(execLog)) {
+    return false;
+  }
+
+  const lastExecDate = lastExec.toString().substring(0, 10);
+  if (lastExecDate !== currentDate) {
+    return false;
+  }
+
+  if (isAgentTaskMessage(rowData)) {
+    return false;
+  }
+
+  const lastExecTime = parseSheetDateTime(lastExec);
+  if (lastExecTime && (now.getTime() - lastExecTime.getTime()) > CLAIM_PENDING_MAX_AGE_MS) {
+    expireStaleClaimAsDeliveryFailed(rowData, rowIndex || rowData.rowIndex);
+    return true;
+  }
+
+  return true;
+}
+
+function parseSheetDateTime(value) {
+  if (!value) return null;
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return value;
+  }
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (!match) return null;
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4] || 0),
+    Number(match[5] || 0)
+  );
+}
+
+function expireStaleClaimAsDeliveryFailed(rowData, rowIndex) {
+  try {
+    const resolvedRowIndex = parseInt(rowIndex, 10) || 0;
+    if (!rowData || !resolvedRowIndex) {
+      return;
+    }
+    markBotMessageExecuted(
+      rowData.ID || '',
+      resolvedRowIndex,
+      false,
+      'trigger_delivery_failed: claim TTL expired without confirm',
+      rowData.Topic || '',
+      rowData.Content || '',
+      ''
+    );
+    Logger.log(`claimed TTL 过期，标记 trigger_delivery_failed: ${rowData.ID}`);
+  } catch (error) {
+    Logger.log(`expireStaleClaimAsDeliveryFailed 失败: ${error}`);
+  }
 }
 
 /**
@@ -2647,11 +3009,70 @@ function isPushedFailedToday(rowData, currentDate) {
   if (lastExecDate !== currentDate) {
     return false;
   }
+
+  if (isClaimPendingLog(execLog)) {
+    return false;
+  }
   
   // 检查是否失败（包含 ❌ 或 "失败"）
   const isFailed = execLog.includes('❌') || execLog.includes('失败');
   
   return isFailed;
+}
+
+/**
+ * 对账扫描：列出 Sheet 上 claimed / 假成功可疑行，供人工或看板清理。
+ * 「Sheet ✅ 但 memory-service 无 action」需要结合 memory-service 侧查询；本函数先暴露 Sheet 侧状态。
+ */
+function scanUnconfirmedClaims(options) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+  if (!sheet) {
+    return { success: false, error: 'Messages sheet not found', items: [] };
+  }
+
+  const data = sheet.getDataRange().getDisplayValues();
+  if (data.length <= 1) {
+    return { success: true, items: [], total: 0 };
+  }
+
+  const headers = data[0];
+  const now = new Date();
+  const maxAgeMs = options && options.maxAgeMs ? Number(options.maxAgeMs) : CLAIM_PENDING_MAX_AGE_MS;
+  const items = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const rowData = parseRow(data[i], headers);
+    rowData.rowIndex = i + 1;
+    const execLog = rowData.Exec_Log || '';
+    const lastExec = rowData.Last_Exec || '';
+    if (!isClaimPendingLog(execLog) && !isTriggerDeliveryFailedLog(execLog)) {
+      continue;
+    }
+
+    const lastExecTime = parseSheetDateTime(lastExec);
+    const ageMs = lastExecTime ? Math.max(0, now.getTime() - lastExecTime.getTime()) : null;
+    items.push({
+      messageId: rowData.ID || '',
+      rowIndex: i + 1,
+      pushMethod: rowData.Push_Method || '',
+      topic: rowData.Topic || '',
+      status: rowData.Status || '',
+      lastExec: lastExec,
+      execLog: execLog,
+      agentLastStatus: rowData.Agent_Last_Status || '',
+      claimPending: isClaimPendingLog(execLog),
+      triggerDeliveryFailed: isTriggerDeliveryFailedLog(execLog),
+      stale: ageMs !== null ? ageMs > maxAgeMs : false,
+      ageMs: ageMs
+    });
+  }
+
+  return {
+    success: true,
+    items: items,
+    total: items.length,
+    scannedAt: now.toISOString()
+  };
 }
 
 /**

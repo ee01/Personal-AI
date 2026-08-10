@@ -1613,6 +1613,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'OPEN_OPTIONS_PAGE') {
+    (async () => {
+      try {
+        await chrome.runtime.openOptionsPage();
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || String(error),
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.type === 'GET_USAGE_TELEMETRY_STATUS') {
     (async () => {
       try {

@@ -201,6 +201,8 @@ interface TopicItem {
 
 确认后调用 `POST /api/v1/outreach/sessions/from-message`：
 
+请求基址与 Options 中「记忆服务 API 地址」显示的当前构建默认值保持一致；用户尚未保存 `envConfig` 时也不会另行回退到 `localhost:3210`。保存自定义地址后，后台单例客户端会立即切换到该地址。
+
 - `originKind = message_reaction`
 - `status = waiting_reply`
 - `renderedQuestion = 原消息内容`

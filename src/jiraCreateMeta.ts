@@ -7,8 +7,6 @@
  * or trusting the hierarchy hints parsed from the team JQL.
  */
 
-import { getJiraBaseUrl, jiraFetchViaBackground } from './jira';
-
 /** RingCentral Jira custom fields used by Roadmap's create calls. */
 export const JIRA_FIELD_TARGET_START = 'customfield_18350';
 export const JIRA_FIELD_TARGET_END = 'customfield_18351';
@@ -19,6 +17,8 @@ export const JIRA_FIELD_EPIC_NAME = 'customfield_11451';
 export const JIRA_FIELD_PARENT_LINK = 'customfield_15751';
 /** Epic Link: hangs a Task under an Epic. */
 export const JIRA_FIELD_EPIC_LINK = 'customfield_11450';
+/** System field: Fix Version/s (array of versions). */
+export const JIRA_FIELD_FIX_VERSIONS = 'fixVersions';
 
 export interface JiraAllowedValue {
   id?: string;
@@ -80,6 +80,9 @@ async function fetchProjectCreateMeta(
   projectKey: string,
   requestKey: string,
 ): Promise<JiraProjectCreateMeta> {
+  // Lazy-load jira helpers so pure field-builder unit tests stay free of
+  // chrome/env dependency graphs under Node's native ESM loader.
+  const { getJiraBaseUrl, jiraFetchViaBackground } = await import('./jira.js');
   const baseUrl = await getJiraBaseUrl();
   const url =
     `${baseUrl}/rest/api/2/issue/createmeta` +
@@ -219,6 +222,10 @@ export interface JiraCreateFieldsInput {
   targetStart?: string | null;
   targetEnd?: string | null;
   quarter?: string | null;
+  /** Release name from the team release sheet (or a user override). */
+  fixVersion?: string | null;
+  /** Optional mutable collector for non-fatal field warnings. */
+  warnings?: string[];
   link?: ChildLink & { parentKey: string };
 }
 
@@ -275,6 +282,17 @@ export function buildJiraCreateFields(
         fields[JIRA_FIELD_QUARTER] = quarterValue;
       }
     }
+    if (input.fixVersion && supportsField(typeMeta, JIRA_FIELD_FIX_VERSIONS)) {
+      const fixVersionsValue = buildFixVersionsValue(
+        typeMeta.fields[JIRA_FIELD_FIX_VERSIONS],
+        input.fixVersion,
+      );
+      if (fixVersionsValue.value !== undefined) {
+        fields[JIRA_FIELD_FIX_VERSIONS] = fixVersionsValue.value;
+      } else if (fixVersionsValue.warning) {
+        input.warnings?.push(fixVersionsValue.warning);
+      }
+    }
   }
 
   return fields;
@@ -322,4 +340,56 @@ export function buildFieldValue(
 
   const single = hit.id ? { id: hit.id } : { value: hit.value ?? hit.name };
   return field.schemaType === 'array' ? [single] : single;
+}
+
+/**
+ * Match a release-sheet name onto Jira Fix Version/s.
+ * Order: exact (case-insensitive) → unique suffix match → drop with warning.
+ * Suffix matching covers "26.3.220" ↔ "Nova 26.3.220" without per-team templates.
+ */
+export function buildFixVersionsValue(
+  field: JiraFieldMeta | undefined,
+  releaseName: string,
+): { value?: unknown; warning?: string } {
+  const text = String(releaseName || '').trim();
+  if (!field || !text) return {};
+
+  const allowed = field.allowedValues || [];
+  if (!allowed.length) {
+    // No createmeta options — send the name and let Jira resolve/reject.
+    return { value: [{ name: text }] };
+  }
+
+  const exact = allowed.find(
+    (option) =>
+      String(option.name ?? option.value ?? '').trim().toLowerCase() ===
+      text.toLowerCase(),
+  );
+  if (exact) {
+    const single = exact.id
+      ? { id: exact.id }
+      : { name: exact.name ?? exact.value ?? text };
+    return { value: [single] };
+  }
+
+  const lowered = text.toLowerCase();
+  const suffixHits = allowed.filter((option) => {
+    const name = String(option.name ?? option.value ?? '').trim().toLowerCase();
+    return name === lowered || name.endsWith(lowered) || name.endsWith(` ${lowered}`);
+  });
+  if (suffixHits.length === 1) {
+    const hit = suffixHits[0];
+    const single = hit.id
+      ? { id: hit.id }
+      : { name: hit.name ?? hit.value ?? text };
+    return { value: [single] };
+  }
+  if (suffixHits.length > 1) {
+    return {
+      warning: `fixVersion「${text}」匹配到多个 Jira 版本，已跳过该字段`,
+    };
+  }
+  return {
+    warning: `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
+  };
 }

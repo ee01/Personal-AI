@@ -435,10 +435,10 @@ try {
   await frame.getByText(/Disabled import preview/).waitFor({ timeout: 5000 });
 
   await replaceSensitiveValuesCheckbox.uncheck();
-  await frame.getByText(/Preserve in create payload|Sensitive values will be preserved/).waitFor({ timeout: 5000 });
+  await frame.getByText('Preserve in create payload', { exact: true }).waitFor({ timeout: 5000 });
   assert.match(await importRuleButton.getAttribute('title'), /preserves sensitive values|Sensitive values will be preserved/);
   await replaceSensitiveValuesCheckbox.check();
-  await frame.getByText(/Replace in create payload|Sensitive values will be replaced/).waitFor({ timeout: 5000 });
+  await frame.getByText('Replace in create payload', { exact: true }).waitFor({ timeout: 5000 });
   assert.match(await importRuleButton.getAttribute('title'), /sanitized POST/);
 
   await importRuleButton.click();

@@ -1,3 +1,5 @@
+import { DEFAULT_MEMORY_SERVICE_BASE_URL } from './memoryServiceConfig.js';
+
 export type BotPushTargetMode = 'me' | 'group' | 'none';
 
 export type BotPushScenario =
@@ -107,6 +109,25 @@ export interface EnvConfigType {
   OPENCLAW_API_KEY?: string;
   OPENCLAW_CLEAR_API_KEY?: boolean;
   OPENCLAW_API_KEY_CONFIGURED?: boolean;
+  AGENT_EXECUTORS?: Array<{
+    id: string;
+    label: string;
+    type:
+      | 'openclaw-responses'
+      | 'openclaw-gateway'
+      | 'acp-codex'
+      | 'acp-claude-code';
+    baseUrl?: string;
+    apiKey?: string;
+    cwd?: string;
+    enabled: boolean;
+    apiKeyConfigured?: boolean;
+    clearApiKey?: boolean;
+  }>;
+  EXECUTOR_DEFAULTS?: {
+    agent_task: string;
+    reflection_research: string;
+  };
   OUTREACH_ENABLED: boolean;
   OUTREACH_INTERVAL_MS: number;
   OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION: boolean;
@@ -555,8 +576,7 @@ export const defaultEnvConfig: EnvConfigType = {
   OWNER_SPEECH_LEARNING_ENABLED:
     process.env.OWNER_SPEECH_LEARNING_ENABLED !== 'false',
   // 记忆系统 (Memory Service)
-  MEMORY_SERVICE_BASE_URL:
-    process.env.MEMORY_SERVICE_BASE_URL || 'http://memory.xmnup.com/api/v1',
+  MEMORY_SERVICE_BASE_URL: DEFAULT_MEMORY_SERVICE_BASE_URL,
   MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || '',
   MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
   ANALYTICS_ADMIN_TOKEN: process.env.ANALYTICS_ADMIN_TOKEN || '',
@@ -603,6 +623,8 @@ export const defaultEnvConfig: EnvConfigType = {
   OPENCLAW_API_KEY: '',
   OPENCLAW_CLEAR_API_KEY: false,
   OPENCLAW_API_KEY_CONFIGURED: Boolean(process.env.OPENCLAW_API_KEY),
+  AGENT_EXECUTORS: [],
+  EXECUTOR_DEFAULTS: { agent_task: '', reflection_research: '' },
   OUTREACH_ENABLED: process.env.OUTREACH_ENABLED === 'true',
   OUTREACH_INTERVAL_MS: Math.max(
     1000,

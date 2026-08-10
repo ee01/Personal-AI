@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-08-04*
+*最后更新: 2026-08-09*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -133,7 +133,7 @@
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 保存任务计划；Jira Rule ≥ 1.6.0 经 Dify agent-task jumpboard 触发 memory-service，OpenClaw 执行并 Bot 通知 |
+| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP） |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |
 | Agent Workflow 关注项测试 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 内置样例、最近消息只读快照、本地保存样例；测试区先显示运行前范围、本地门禁资格、保存样例容量和无副作用边界 |
 | Agent Workflow 运行诊断 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | trace / storageReview / readiness；下一步动作显示本地排障边界，实时 trace 工具错误优先显示 Agent / Tool，证据包复制中锁定当前测试输入；运行/回放/基线/导出/复制控件 hover 与读屏说明本地测试、只读召回、剪贴板、下载和本地基线写入边界 |
@@ -183,7 +183,7 @@
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
 | Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
-| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 主任务建成即回写 `resolve_item` 再建子任务；类型/链接字段按层级映射，子任务类型查 createmeta |
+| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝Agent 执行器；fixVersion 按 Target End 自动填 |
 | 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展把 Gantt 主任务 sync 到 watched_projects；落选 archived |
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
 | Roadmap 漂移角标 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 个人层意图 vs 现实偏差；可更新/忽略/收敛消除 |
@@ -269,6 +269,7 @@
 | Agent Thinking 分析编排 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | `IntelligentAgent` 通用工具/思考循环供消息分析、Google Slides、主动通知和显式编排复用；被动网页 Memory Capture 使用单次无工具 LLM，不进入该循环 |
 | Agent Thinking 工具审批 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | 阻断、队列口径、审批前确认、结果区定位、批准 key / 审核包 / 重跑配置复制按钮边界 |
 | Agent Thinking trace 可视化 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | Options 演示、Trace 复核路线、问题 span 步骤定位、步骤按钮 hover/读屏复核理由与复制反馈 |
+| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP）、证据级 MCP、A2A Agent Card；不含反向 Worker |
 | Task Scheduler 后台任务调度 | 任务调度 | [task_scheduler_api.md](./features/task_scheduler_api.md) | 扩展后台 `scheduled_task_*` alarm 统一调度；任务启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
 | 用量与 Token 分析报表 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 使用视角四视图（功能总览/用户活跃/偏好矩阵/次要面板）+ 中文功能名 + 30d；按 user × capability × model × side 归因 |
 | 前后端用量打点 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 前端 `UsageTracker` 缓冲 + `chrome.alarms` 批量上报 `POST /usage/telemetry`；后端 `AsyncLocalStorage` + `LLMClient`（含 stream）记录真实/估算 usage，onResponse 记接口频率 |

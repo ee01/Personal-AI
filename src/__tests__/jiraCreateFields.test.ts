@@ -13,6 +13,7 @@ import {
   buildJiraCreateFields,
   JIRA_FIELD_EPIC_LINK,
   JIRA_FIELD_EPIC_NAME,
+  JIRA_FIELD_FIX_VERSIONS,
   JIRA_FIELD_PARENT_LINK,
   JIRA_FIELD_QUARTER,
   JIRA_FIELD_TARGET_END,
@@ -217,4 +218,99 @@ test('without createmeta only Epic Name is guessed, and only for an Epic', () =>
       summary: '盲建 Task',
     },
   );
+});
+
+test('fixVersions uses exact match against createmeta allowed values', () => {
+  const task = issueType('Task', [...DATE_FIELDS, JIRA_FIELD_FIX_VERSIONS]);
+  task.fields[JIRA_FIELD_FIX_VERSIONS] = field(JIRA_FIELD_FIX_VERSIONS, {
+    name: 'Fix Version/s',
+    schemaType: 'array',
+    schemaItems: 'version',
+    allowedValues: [
+      { id: '100', name: '26.3.220' },
+      { id: '101', name: '26.4.10' },
+    ],
+  });
+
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '带版本的任务',
+    fixVersion: '26.3.220',
+  });
+
+  assert.deepEqual(fields[JIRA_FIELD_FIX_VERSIONS], [{ id: '100' }]);
+});
+
+test('fixVersions unique suffix match covers release-sheet vs Jira name prefixes', () => {
+  const task = issueType('Task', [JIRA_FIELD_FIX_VERSIONS]);
+  task.fields[JIRA_FIELD_FIX_VERSIONS] = field(JIRA_FIELD_FIX_VERSIONS, {
+    name: 'Fix Version/s',
+    schemaType: 'array',
+    schemaItems: 'version',
+    allowedValues: [
+      { id: '200', name: 'Nova 26.3.220' },
+      { id: '201', name: 'Nova 26.4.10' },
+    ],
+  });
+
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '后缀匹配',
+    fixVersion: '26.3.220',
+  });
+
+  assert.deepEqual(fields[JIRA_FIELD_FIX_VERSIONS], [{ id: '200' }]);
+});
+
+test('fixVersions drops the field with a warning when the suffix match is ambiguous', () => {
+  const task = issueType('Task', [JIRA_FIELD_FIX_VERSIONS]);
+  task.fields[JIRA_FIELD_FIX_VERSIONS] = field(JIRA_FIELD_FIX_VERSIONS, {
+    name: 'Fix Version/s',
+    schemaType: 'array',
+    schemaItems: 'version',
+    allowedValues: [
+      { id: '300', name: 'Nova 26.3.220' },
+      { id: '301', name: 'Jupiter 26.3.220' },
+    ],
+  });
+  const warnings: string[] = [];
+
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '歧义版本',
+    fixVersion: '26.3.220',
+    warnings,
+  });
+
+  assert.equal(JIRA_FIELD_FIX_VERSIONS in fields, false);
+  assert.match(warnings[0] || '', /多个 Jira 版本/);
+});
+
+test('fixVersions drops the field with a warning when nothing matches', () => {
+  const task = issueType('Task', [JIRA_FIELD_FIX_VERSIONS]);
+  task.fields[JIRA_FIELD_FIX_VERSIONS] = field(JIRA_FIELD_FIX_VERSIONS, {
+    name: 'Fix Version/s',
+    schemaType: 'array',
+    schemaItems: 'version',
+    allowedValues: [{ id: '400', name: 'Nova 26.4.10' }],
+  });
+  const warnings: string[] = [];
+
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '无匹配',
+    fixVersion: '26.3.220',
+    warnings,
+  });
+
+  assert.equal(JIRA_FIELD_FIX_VERSIONS in fields, false);
+  assert.match(warnings[0] || '', /找不到匹配版本/);
 });

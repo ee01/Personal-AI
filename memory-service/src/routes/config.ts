@@ -11,6 +11,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { getConfig } from '../config.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
+import {
+  normalizeAgentExecutorInstance,
+  resolveAgentExecutors,
+  resolveExecutorDefaults,
+  sanitizeAgentExecutorsForResponse,
+  type AgentExecutorInstance,
+} from '../integrations/executors/executorRegistry.js';
 
 const MIN_OPENCLAW_TIMEOUT_INPUT_MS = 5 * 60 * 1000;
 const MIN_OPENCLAW_TIMEOUT_MS = 10 * 60 * 1000;
@@ -49,6 +56,11 @@ interface UpdatableConfig {
   openClawApiKey?: string;
   openClawTimeoutMs?: number;
   clearOpenClawApiKey?: boolean;
+  agentExecutors?: Array<Record<string, unknown>>;
+  executorDefaults?: {
+    agent_task?: string;
+    reflection_research?: string;
+  };
   outreachEnabled?: boolean;
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
@@ -147,6 +159,28 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
     typeof raw.ringCentralJwt === 'string' && raw.ringCentralJwt.trim().length > 0;
   clean.botTokenConfigured =
     typeof raw.botToken === 'string' && raw.botToken.trim().length > 0;
+
+  // Expand agentExecutors with legacy OpenClaw synthesis + strip apiKeys.
+  const runtimeLike = {
+    openClawEnabled: Boolean(raw.openClawEnabled),
+    openClawBaseUrl:
+      typeof raw.openClawBaseUrl === 'string' ? raw.openClawBaseUrl : '',
+    openClawApiKey:
+      typeof raw.openClawApiKey === 'string' ? raw.openClawApiKey : '',
+    agentExecutors: Array.isArray(raw.agentExecutors)
+      ? (raw.agentExecutors as AgentExecutorInstance[])
+      : [],
+    executorDefaults:
+      raw.executorDefaults && typeof raw.executorDefaults === 'object'
+        ? (raw.executorDefaults as {
+            agent_task?: string;
+            reflection_research?: string;
+          })
+        : { agent_task: '', reflection_research: '' },
+  };
+  const resolved = resolveAgentExecutors(runtimeLike);
+  clean.agentExecutors = sanitizeAgentExecutorsForResponse(resolved);
+  clean.executorDefaults = resolveExecutorDefaults(runtimeLike);
   return clean;
 }
 
@@ -197,6 +231,41 @@ const updateConfigBodySchema = {
     openClawApiKey: { type: 'string' as const },
     openClawTimeoutMs: { type: 'number' as const, minimum: MIN_OPENCLAW_TIMEOUT_INPUT_MS },
     clearOpenClawApiKey: { type: 'boolean' as const },
+    agentExecutors: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        properties: {
+          id: { type: 'string' as const },
+          label: { type: 'string' as const },
+          type: {
+            type: 'string' as const,
+            enum: [
+              'openclaw-responses',
+              'openclaw-gateway',
+              'acp-codex',
+              'acp-claude-code',
+              'openclaw',
+            ],
+          },
+          baseUrl: { type: 'string' as const },
+          apiKey: { type: 'string' as const },
+          cwd: { type: 'string' as const },
+          enabled: { type: 'boolean' as const },
+          clearApiKey: { type: 'boolean' as const },
+        },
+        required: ['id'],
+        additionalProperties: true,
+      },
+    },
+    executorDefaults: {
+      type: 'object' as const,
+      properties: {
+        agent_task: { type: 'string' as const },
+        reflection_research: { type: 'string' as const },
+      },
+      additionalProperties: false,
+    },
     outreachEnabled: { type: 'boolean' as const },
     outreachIntervalMs: { type: 'number' as const, minimum: 1000 },
     outreachRequireApprovalForReflection: { type: 'boolean' as const },
@@ -337,6 +406,43 @@ export async function configRoutes(
       }
       if (updates.clearOpenClawApiKey === true) {
         delete persisted.openClawApiKey;
+      }
+      if (updates.agentExecutors !== undefined) {
+        const previous = Array.isArray(persisted.agentExecutors)
+          ? (persisted.agentExecutors as Array<Record<string, unknown>>)
+          : [];
+        const previousById = new Map(
+          previous
+            .map((item) => normalizeAgentExecutorInstance(item))
+            .filter((item): item is AgentExecutorInstance => Boolean(item))
+            .map((item) => [item.id, item] as const),
+        );
+        persisted.agentExecutors = updates.agentExecutors
+          .map((raw) => {
+            const next = normalizeAgentExecutorInstance(raw);
+            if (!next) return null;
+            const prev = previousById.get(next.id);
+            const clearApiKey = (raw as { clearApiKey?: boolean }).clearApiKey === true;
+            if (clearApiKey) {
+              next.apiKey = undefined;
+            } else if (!next.apiKey && prev?.apiKey) {
+              next.apiKey = prev.apiKey;
+            }
+            return next;
+          })
+          .filter((item): item is AgentExecutorInstance => Boolean(item));
+      }
+      if (updates.executorDefaults !== undefined) {
+        persisted.executorDefaults = {
+          agent_task:
+            typeof updates.executorDefaults.agent_task === 'string'
+              ? updates.executorDefaults.agent_task.trim()
+              : '',
+          reflection_research:
+            typeof updates.executorDefaults.reflection_research === 'string'
+              ? updates.executorDefaults.reflection_research.trim()
+              : '',
+        };
       }
       if (updates.outreachEnabled !== undefined) {
         persisted.outreachEnabled = updates.outreachEnabled;
