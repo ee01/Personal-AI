@@ -105,6 +105,30 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    id: '008_teams_create_jira_prompt',
+    up: (database) => {
+      // Team-shared Create-Jira Agent prompt (visible to all collaborators).
+      addColumn(
+        database,
+        'teams',
+        'create_jira_prompt',
+        `TEXT NOT NULL DEFAULT ''`,
+      );
+    },
+  },
+  {
+    id: '009_teams_assignee_map',
+    up: (database) => {
+      // System name → Jira Firstname Lastname, shared by the whole team.
+      addColumn(
+        database,
+        'teams',
+        'assignee_map_json',
+        `TEXT NOT NULL DEFAULT '{}'`,
+      );
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

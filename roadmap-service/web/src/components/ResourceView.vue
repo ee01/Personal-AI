@@ -13,9 +13,14 @@ import {
   type Timeline,
 } from '../composables/useGeometry';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
+import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
 
 const props = defineProps<{ tl: Timeline }>();
 const state = useRoadmapState();
+const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
+function showName(name: string | null | undefined) {
+  return dispName(assigneeMap.value, name);
+}
 const addingMember = ref(false);
 const newMemberName = ref('');
 const renamingId = ref<string | null>(null);
@@ -208,7 +213,7 @@ async function commitRename(m: TeamMember) {
             :data-tip="row.virtual ? undefined : '双击修改名字'"
             @dblclick="!row.virtual && startRename(row.m!)"
           >
-            {{ row.virtual ? '未分配' : row.m!.name }}
+            {{ row.virtual ? '未分配' : showName(row.m!.name) }}
           </div>
           <div v-if="row.tasks.length" class="rp-meta">
             {{ row.tasks.length }} 个任务 · 共 {{ row.tasks.reduce((a, t) => a + (t.s.days || 0), 0) }}d

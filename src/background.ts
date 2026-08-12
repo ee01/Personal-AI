@@ -8,6 +8,10 @@ import {
 } from './utils';
 import { syncRoadmapContentScript } from './roadmapContentScriptRegistry';
 import {
+  ROADMAP_MEMORY_REQUEST,
+  type RoadmapMemoryMethod,
+} from './roadmapMemoryBridge';
+import {
   FETCH_JIRA_TICKETS,
   JIRA_COOKIE_AUTH_GUARD_MESSAGE,
   JIRA_PROXY_FETCH_MESSAGE,
@@ -46,14 +50,18 @@ import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import {
   buildPassiveWebpageAnalysisKey,
+  normalizePassiveWebpageAnalysisResult,
   PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
   type PassiveWebpageAnalysisResult,
 } from './web-intelligence/passiveWebpageAnalysis';
-import { analyzePassiveWebpageOnce } from './web-intelligence/runPassiveWebpageAnalysis';
 import {
   buildSessionRequestCacheKey,
   SessionRequestCache,
 } from './web-intelligence/sessionRequestCache';
+import {
+  classifyWebpageAnalysisFailure,
+  WebpageAnalysisFailureBackoff,
+} from './web-intelligence/webpageAnalysisBackoff';
 import {
   DashboardMessageHandler,
   buildProjectDashboardLaunchPath,
@@ -142,6 +150,7 @@ import {
   syncStoredUserIdentityToMemory,
   syncUserIdentityToMemory,
 } from './services/UserIdentitySyncService';
+import { runPersistentlyThrottledTask } from './services/PersistentTaskThrottle';
 import { initMeetingPilotBackgroundRuntime } from './meeting-shell/background';
 import {
   connectOutlookCalendar,
@@ -174,6 +183,8 @@ const CONTEXT_RECALL_BACKGROUND_CACHE_STORAGE_KEY =
   'context_recall_background_cache_v1';
 const WEBPAGE_ANALYSIS_BACKGROUND_CACHE_STORAGE_KEY =
   'webpage_analysis_background_cache_v2';
+const WEBPAGE_ANALYSIS_FAILURE_BACKOFF_STORAGE_KEY =
+  'webpage_analysis_failure_backoff_v1';
 const CONTEXT_RECALL_BACKGROUND_CACHE_TTL_MS = 5 * 60 * 1000;
 const WEBPAGE_ANALYSIS_SKIP_CACHE_TTL_MS = 20 * 60 * 1000;
 const WEBPAGE_ANALYSIS_RESULT_CACHE_TTL_MS = 45 * 60 * 1000;
@@ -186,6 +197,7 @@ const webpageAnalysisBackgroundCache =
     WEBPAGE_ANALYSIS_RESULT_CACHE_TTL_MS,
     80,
   );
+const webpageAnalysisFailureBackoff = new WebpageAnalysisFailureBackoff();
 const contextRecallBackgroundInFlight = new Map<string, Promise<any>>();
 const webpageAnalysisBackgroundInFlight = new Map<
   string,
@@ -193,6 +205,7 @@ const webpageAnalysisBackgroundInFlight = new Map<
 >();
 let contextRecallBackgroundCacheLoadPromise: Promise<void> | null = null;
 let webpageAnalysisBackgroundCacheLoadPromise: Promise<void> | null = null;
+let webpageAnalysisFailureBackoffLoadPromise: Promise<void> | null = null;
 
 function getSessionStorageArea(): any | null {
   return (chrome.storage as any)?.session || null;
@@ -243,6 +256,39 @@ function ensureWebpageAnalysisBackgroundCacheLoaded(): Promise<void> {
     );
   }
   return webpageAnalysisBackgroundCacheLoadPromise;
+}
+
+function ensureWebpageAnalysisFailureBackoffLoaded(): Promise<void> {
+  if (!webpageAnalysisFailureBackoffLoadPromise) {
+    webpageAnalysisFailureBackoffLoadPromise = (async () => {
+      const storageArea = getSessionStorageArea();
+      if (!storageArea) return;
+      try {
+        const stored = await storageArea.get(
+          WEBPAGE_ANALYSIS_FAILURE_BACKOFF_STORAGE_KEY,
+        );
+        webpageAnalysisFailureBackoff.hydrate(
+          stored?.[WEBPAGE_ANALYSIS_FAILURE_BACKOFF_STORAGE_KEY],
+        );
+      } catch (error) {
+        console.debug('[background] failed to load webpage analysis backoff:', error);
+      }
+    })();
+  }
+  return webpageAnalysisFailureBackoffLoadPromise;
+}
+
+async function persistWebpageAnalysisFailureBackoff(): Promise<void> {
+  const storageArea = getSessionStorageArea();
+  if (!storageArea) return;
+  try {
+    await storageArea.set({
+      [WEBPAGE_ANALYSIS_FAILURE_BACKOFF_STORAGE_KEY]:
+        webpageAnalysisFailureBackoff.snapshot(),
+    });
+  } catch (error) {
+    console.debug('[background] failed to persist webpage analysis backoff:', error);
+  }
 }
 
 function buildComposerAssistDisabledResponse(debug = false) {
@@ -1190,13 +1236,25 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
   return glipMarkerRefreshInFlight;
 }
 
-function scheduleGlipMessageMarkerRefresh(delayMs = 1200): void {
+function scheduleGlipMessageMarkerRefresh(
+  delayMs = 1200,
+  persistentBootstrap = false,
+): void {
   if (glipMarkerRefreshTimer) {
     clearTimeout(glipMarkerRefreshTimer);
   }
   glipMarkerRefreshTimer = setTimeout(() => {
     glipMarkerRefreshTimer = null;
-    void refreshGlipMessageMarkers().catch((error) => {
+    const refreshPromise = persistentBootstrap
+      ? runPersistentlyThrottledTask({
+          storage: chrome.storage.local,
+          taskId: 'glip-message-markers-bootstrap',
+          successIntervalMs: 5 * 60_000,
+          failureIntervalMs: 60_000,
+          task: refreshGlipMessageMarkers,
+        })
+      : refreshGlipMessageMarkers();
+    void refreshPromise.catch((error) => {
       console.warn('⚠️ 刷新 Glip 标注缓存失败:', error);
     });
   }, delayMs);
@@ -1210,7 +1268,7 @@ ensureBackgroundAlarm(
   { periodInMinutes: 5 },
   (alarm) => alarm.periodInMinutes !== 5,
 );
-scheduleGlipMessageMarkerRefresh(3000);
+scheduleGlipMessageMarkerRefresh(3000, true);
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes.concernedItems) {
@@ -1220,7 +1278,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 // 记录扩展启动
 Logger.lifecycle('startup', 'Background script loaded');
-void syncStoredUserIdentityToMemory().catch((error) => {
+void runPersistentlyThrottledTask({
+  storage: chrome.storage.local,
+  taskId: 'stored-user-identity-bootstrap',
+  successIntervalMs: 5 * 60_000,
+  failureIntervalMs: 60_000,
+  task: syncStoredUserIdentityToMemory,
+}).catch((error) => {
   console.warn('User identity bootstrap sync failed:', error);
 });
 
@@ -1709,8 +1773,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           Category: 'AR 数据,帮我做',
           Agent_Task_ID: String(data.agentTaskId || `agent_task_${Date.now()}`),
           Agent_Executor: 'openclaw',
-          Agent_Task_Prompt: taskPrompt,
           Agent_Notify_Template: String(data.notifyTemplate || '').trim(),
+          Agent_Notify_Success_Receipt: 'Y',
           Agent_Trigger_Source: 'jira_rule',
           Agent_AR_Binding_ID: String(data.arBindingId || '').trim(),
         };
@@ -2255,6 +2319,84 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Roadmap content script → memory-service (avoid host-page CORS)
+  if (request.type === ROADMAP_MEMORY_REQUEST) {
+    (async () => {
+      try {
+        const method = String(request.method || '') as RoadmapMemoryMethod;
+        const args = Array.isArray(request.args) ? request.args : [];
+        const client = getMemoryServiceClient();
+        let data: unknown;
+        switch (method) {
+          case 'getMemoryProjectCandidates':
+            data = await client.getMemoryProjectCandidates();
+            break;
+          case 'getProjectDriftReceipts':
+            data = await client.getProjectDriftReceipts(
+              args[0] as string | undefined,
+            );
+            break;
+          case 'resolveProjectDriftReceipt':
+            data = await client.resolveProjectDriftReceipt(
+              (args[0] || {}) as {
+                id?: string;
+                status?: 'accepted' | 'ignored' | 'converged';
+                barTargetEnd?: string;
+                projectId?: string;
+              },
+            );
+            break;
+          case 'syncFocusProjects':
+            data = await client.syncFocusProjects(
+              args[0] as {
+                teamId: string;
+                teamName?: string;
+                items: Array<Record<string, unknown>>;
+                syncedAt: number;
+              },
+            );
+            break;
+          case 'getRuntimeConfig':
+            data = await client.getRuntimeConfig();
+            break;
+          case 'getAgentTaskRuntimeStatus':
+            data = await client.getAgentTaskRuntimeStatus(
+              args[0] as string[] | undefined,
+              args[1] as number | undefined,
+            );
+            break;
+          case 'executeAgentTask':
+            data = await client.executeAgentTask(
+              args[0] as {
+                taskId: string;
+                title?: string;
+                task: string;
+                executor?: string;
+                notify?: boolean;
+                idempotencyKey?: string;
+                triggerSource?: string;
+                timeoutMs?: number;
+              },
+            );
+            break;
+          default:
+            sendResponse({
+              success: false,
+              error: `unsupported_roadmap_memory_method:${method}`,
+            });
+            return;
+        }
+        sendResponse({ success: true, data });
+      } catch (err) {
+        sendResponse({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
   // Passive context recall: proxy request to memory-service /context-recall
   if (request.type === 'CONTEXT_RECALL_REQUEST') {
     (async () => {
@@ -2282,7 +2424,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             email: identityStorage?.userinfo?.email,
           },
         });
-        const cacheable = !contextRequest.debug;
+        // Session reuse is for passive scene projection. A selected-text query
+        // is an explicit user action; repeating the same selection should
+        // re-read current memory state instead of silently replaying a prior
+        // result from the passive background cache.
+        const cacheable =
+          !contextRequest.debug && contextRequest.contextType !== 'selected_text';
 
         await ensureContextRecallBackgroundCacheLoaded();
         const cached = cacheable
@@ -2949,20 +3096,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
 
-        const envConfig = await getEnvConfig();
         const analysisKey = String(
           request.analysisKey || buildPassiveWebpageAnalysisKey(input),
         );
         const cacheKey = buildSessionRequestCacheKey('webpage-analysis-v2', {
           analysisKey,
           promptVersion: PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
-          provider: envConfig.LLM_TYPE,
-          model:
-            envConfig.LLM_TYPE === 'local'
-              ? envConfig.OLLAMA_MODEL
-              : envConfig.LLM_TYPE === 'groq'
-                ? envConfig.GROQ_MODEL
-                : envConfig.OPENAI_MODEL,
+          provider: 'memory_service',
+          model: 'backend_configured',
         });
         const force = Boolean(request.force);
         const triggerSource =
@@ -2970,7 +3111,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             ? 'manual'
             : 'memory_capture_candidate';
 
-        await ensureWebpageAnalysisBackgroundCacheLoaded();
+        await Promise.all([
+          ensureWebpageAnalysisBackgroundCacheLoaded(),
+          ensureWebpageAnalysisFailureBackoffLoaded(),
+        ]);
         const cached = force
           ? undefined
           : webpageAnalysisBackgroundCache.get(cacheKey);
@@ -2989,12 +3133,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
 
+        const failureCooldown = force
+          ? undefined
+          : webpageAnalysisFailureBackoff.getCooldown(cacheKey);
+        if (failureCooldown) {
+          sendResponse({
+            success: false,
+            stored: false,
+            error: 'passive_webpage_analysis_cooldown',
+            errorKind: failureCooldown.errorKind,
+            retryAfterMs: Math.max(0, failureCooldown.retryAfter - Date.now()),
+            requestReuse: 'failure_cooldown',
+            triggerSource,
+            analysisKey,
+          });
+          return;
+        }
+
         const existing = webpageAnalysisBackgroundInFlight.get(cacheKey);
         const resultPromise =
           existing ||
           (async () => {
             try {
-              const result = await analyzePassiveWebpageOnce(input);
+              const response = await getMemoryServiceClient()
+                .analyzeSourceMemoryWebpage(input);
+              if (
+                response.promptVersion !==
+                PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION
+              ) {
+                throw new Error('passive_webpage_analysis_prompt_version_mismatch');
+              }
+              const result = normalizePassiveWebpageAnalysisResult(
+                response.result,
+                input.mainContent,
+              );
               webpageAnalysisBackgroundCache.set(cacheKey, result, {
                 ttlMs:
                   result.decision === 'skip'
@@ -3005,7 +3177,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 WEBPAGE_ANALYSIS_BACKGROUND_CACHE_STORAGE_KEY,
                 webpageAnalysisBackgroundCache,
               );
+              if (webpageAnalysisFailureBackoff.clear(cacheKey)) {
+                await persistWebpageAnalysisFailureBackoff();
+              }
               return result;
+            } catch (error) {
+              webpageAnalysisFailureBackoff.recordFailure(
+                cacheKey,
+                classifyWebpageAnalysisFailure(error),
+              );
+              await persistWebpageAnalysisFailureBackoff();
+              throw error;
             } finally {
               webpageAnalysisBackgroundInFlight.delete(cacheKey);
             }

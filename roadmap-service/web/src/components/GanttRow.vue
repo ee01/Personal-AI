@@ -17,7 +17,12 @@ import {
 import { memberChipHtml, openOwnerFloat } from '../composables/useOwnerFloat';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { useRoadmapState } from '../composables/useRoadmapState';
-import { isDraftItem, itemDisplayKey, pendingDepCount, trackMarkers, phaseColor, phaseGlyph } from '../composables/useRoadmapContract';
+import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, trackMarkers, phaseColor, phaseGlyph } from '../composables/useRoadmapContract';
+import {
+  defaultNewSubSpan,
+  dispName,
+  teamAssigneeMap,
+} from '../composables/useAssigneeMap';
 import {
   isMarkerDone,
   linkIconHtml,
@@ -83,6 +88,22 @@ const aliasTarget = ref<{ sub?: RoadmapSub }>({});
 const aliasValue = ref('');
 const aliasOwner = ref<TeamMember | null>(null);
 const aliasOwnerDirty = ref(false);
+const aliasStyle = ref({ left: '0px', top: '4px' });
+
+const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
+const jiraBase = computed(
+  () => state.snapshot.value?.team.jiraBaseUrl || 'https://jira.ringcentral.com',
+);
+const currentUser = computed(() => state.api.actorName.value || '');
+
+function showName(name: string | null | undefined) {
+  return dispName(assigneeMap.value, name);
+}
+
+function browseUrl(key: string | null | undefined) {
+  if (!key) return '';
+  return jiraBrowseUrl(key, jiraBase.value);
+}
 
 const disp = computed(() => props.item.alias || props.item.title);
 const isDraft = computed(() => isDraftItem(props.item));
@@ -159,7 +180,17 @@ function barDragStart(
   barEl: HTMLElement,
 ) {
   if (!props.editable || e.button !== 0) return;
-  if ((e.target as HTMLElement).closest('.bar-x, .bar-plus')) return;
+  if ((e.target as HTMLElement).closest('.bar-x, .bar-plus, .bar-link')) return;
+
+  // ⌘/Ctrl+click opens Jira (modifier+click = new tab muscle memory).
+  const jiraKey = sub ? sub.key : props.item.jiraKey;
+  if ((e.metaKey || e.ctrlKey) && jiraKey) {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(browseUrl(jiraKey), '_blank', 'noopener');
+    return;
+  }
+
   e.preventDefault();
 
   const target = sub || props.item;
@@ -331,10 +362,35 @@ function openAlias(sub: RoadmapSub | null) {
   aliasOwnerDirty.value = false;
   aliasOpen.value = true;
   nextTick(() => {
+    positionAliasEditor();
     const inp = rowRef.value?.querySelector('.alias-editor input') as HTMLInputElement | null;
     inp?.focus();
     inp?.select();
   });
+}
+
+function positionAliasEditor() {
+  const root = rowRef.value;
+  if (!root) return;
+  const sub = aliasTarget.value.sub;
+  const el = (
+    sub
+      ? root.querySelector(`[data-sub-id="${sub.id}"]`)
+      : root.querySelector('.g-lane > .bar')
+  ) as HTMLElement | null;
+  if (!el) {
+    aliasStyle.value = {
+      left: `${sub?.start ? X(props.tl, sub.start) : barLeft()}px`,
+      top: sub ? '62px' : '4px',
+    };
+    return;
+  }
+  const er = el.getBoundingClientRect();
+  const rr = root.getBoundingClientRect();
+  aliasStyle.value = {
+    left: `${er.left - rr.left}px`,
+    top: `${er.top - rr.top}px`,
+  };
 }
 
 async function saveAlias() {
@@ -386,7 +442,7 @@ function openAliasOwnerPop(chip: HTMLElement) {
       const inp = rowRef.value?.querySelector('.alias-editor input') as HTMLInputElement | null;
       inp?.focus();
     },
-    { allowClear: true },
+    { allowClear: true, assigneeMap: assigneeMap.value },
   );
 }
 
@@ -517,8 +573,11 @@ function selectEditorOwner(m: TeamMember) {
 function openEditorPop(q: string) {
   editorPopQuery.value = q;
   editorPopIdx.value = 0;
-  editorPopList.value = members.value.filter((o) =>
-    o.name.toLowerCase().includes((q || '').toLowerCase()),
+  const ql = (q || '').toLowerCase();
+  editorPopList.value = members.value.filter(
+    (o) =>
+      o.name.toLowerCase().includes(ql) ||
+      showName(o.name).toLowerCase().includes(ql),
   );
   editorPopOpen.value = true;
 }
@@ -590,7 +649,7 @@ function openEditorOwnerChip(chip: HTMLElement) {
       editorOwner.value = m;
       editorInputRef.value?.focus();
     },
-    { allowClear: true },
+    { allowClear: true, assigneeMap: assigneeMap.value },
   );
 }
 
@@ -600,13 +659,14 @@ async function submitSub() {
     editorOpen.value = false;
     return;
   }
+  const span = defaultNewSubSpan(props.tl.end);
   emit('addSub', {
     op: 'add_sub',
     itemKey: props.item.key,
     title,
     owner: editorOwner.value?.name || null,
-    start: props.item.start,
-    days: 14,
+    start: span.start,
+    days: span.days,
   });
   editorOpen.value = false;
 }
@@ -641,7 +701,7 @@ watch(
           { 'free-h': wrapMode, enter: enter, draft: isDraft },
         ]"
         :style="{ left: `${barLeft()}px`, width: `${barW}px` }"
-        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}||${item.title}||单击展开 · 双击改备注名 · 拖动/两端拉伸排期${barCatchTip(item.start, item.days)}`"
+        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}||${item.title}||单击展开 · 双击改备注名 · 拖动/两端拉伸排期${item.jiraKey ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}${barCatchTip(item.start, item.days)}`"
         :data-pai-item="item.key"
         :data-pai-team="teamId"
         :data-pai-target-start="item.targetStart || ''"
@@ -652,6 +712,20 @@ watch(
         <span v-else-if="labelIn" class="in-label">{{ esc(disp) }}</span>
         <span v-else class="out-label">{{ disp }}</span>
         <span v-if="isDraft" class="draft-tag">DRAFT</span>
+        <a
+          v-if="item.jiraKey"
+          class="bar-link"
+          :href="browseUrl(item.jiraKey)"
+          target="_blank"
+          rel="noopener"
+          data-tip="在 Jira 打开"
+          @pointerdown.stop
+          @click.stop
+        >
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 3H3.5A1.5 1.5 0 002 4.5v4A1.5 1.5 0 003.5 10h4A1.5 1.5 0 009 8.5V7M7 2h3v3M5.5 6.5L10 2" />
+          </svg>
+        </a>
         <span v-if="depCount || nSubs" class="badge-cluster">
           <span
             v-if="depCount"
@@ -770,6 +844,7 @@ watch(
       <div v-for="(s, si) in visibleSubs" :key="s.id" class="sub-lane">
         <div
           class="sbar"
+          :data-sub-id="s.id"
           :class="[
             s.temp ? 'draft' : s.start && s.days ? colorCls(s.start, s.days) : '',
             { 'free-h': !!s.alias },
@@ -783,7 +858,7 @@ watch(
                 ? 'subIn .34s cubic-bezier(.22,1,.36,1) backwards'
                 : undefined,
           }"
-          :data-tip="`${s.key || '草稿'} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · ${s.owner}` : ''}||${s.title}||双击改备注名/Owner · 拖动/两端拉伸${barCatchTip(s.start, s.days)}`"
+          :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}||${s.title}||双击改备注名/Owner · 拖动/两端拉伸${s.key ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}${barCatchTip(s.start, s.days)}`"
           @pointerdown="barDragStart($event, s, $event.currentTarget as HTMLElement)"
         >
           <div v-if="s.alias" class="wrap-label">{{ esc(s.alias) }}</div>
@@ -791,19 +866,39 @@ watch(
             <span v-if="s.key" style="font-family: var(--mono); font-size: 9.5px; opacity: 0.75">{{ s.key }}</span>
             {{ s.key ? ' · ' : '' }}{{ esc(s.title) }}
           </span>
-          <span v-if="s.temp" class="draft-tag">DRAFT{{ s.createdBy ? ` · ${s.createdBy}` : '' }}</span>
+          <span v-if="s.temp" class="draft-tag">DRAFT</span>
+          <span
+            v-if="s.createdBy && s.createdBy !== currentUser"
+            class="creator-tag"
+          >{{ showName(s.createdBy) }} created</span>
           <span
             v-if="s.owner"
             class="own-av sbar-owner"
             :style="{ background: memberColor(s.owner) }"
+            :data-tip="`Owner：${showName(s.owner)}`"
           >
             {{ initials(s.owner) }}
           </span>
+          <a
+            v-if="s.key"
+            class="bar-link"
+            :href="browseUrl(s.key)"
+            target="_blank"
+            rel="noopener"
+            data-tip="在 Jira 打开"
+            @pointerdown.stop
+            @click.stop
+          >
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 3H3.5A1.5 1.5 0 002 4.5v4A1.5 1.5 0 003.5 10h4A1.5 1.5 0 009 8.5V7M7 2h3v3M5.5 6.5L10 2" />
+            </svg>
+          </a>
           <div class="hdl l" />
           <div class="hdl r" />
           <button
-            v-if="editable && s.temp"
+            v-if="editable"
             class="bar-x"
+            :data-tip="s.temp ? '删除草稿' : '从 Roadmap 移除（可再导入）'"
             @pointerdown.stop
             @click.stop="emit('deleteSub', { op: 'delete_sub', subId: s.id })"
           >
@@ -819,7 +914,7 @@ watch(
               type="button"
               :data-tip="
                 editorOwner
-                  ? `Owner：${editorOwner.name}（点击更换）`
+                  ? `Owner：${showName(editorOwner.name)}（点击更换）`
                   : 'Owner（可选）：点选或在标题里输入 @'
               "
               @pointerdown.prevent
@@ -834,20 +929,22 @@ watch(
               @keydown="onEditorKeydown"
             />
             <div class="owner-pop" :class="{ show: editorPopOpen }">
-              <template v-if="editorPopList.length">
-                <div
-                  v-for="(o, i) in editorPopList"
-                  :key="o.id || o.name"
-                  class="owner-item"
-                  :class="{ act: i === editorPopIdx }"
-                  @pointerdown.prevent.stop="selectEditorOwner(o)"
-                >
-                  <span class="own-av" :style="{ background: o.avatarColor }">{{ initials(o.name) }}</span>
-                  {{ o.name }}
+              <div class="owner-list">
+                <template v-if="editorPopList.length">
+                  <div
+                    v-for="(o, i) in editorPopList"
+                    :key="o.id || o.name"
+                    class="owner-item"
+                    :class="{ act: i === editorPopIdx }"
+                    @pointerdown.prevent.stop="selectEditorOwner(o)"
+                  >
+                    <span class="own-av" :style="{ background: o.avatarColor }">{{ initials(o.name) }}</span>
+                    {{ showName(o.name) }}
+                  </div>
+                </template>
+                <div v-else class="owner-none">
+                  无匹配成员 —— Enter 将「{{ editorPopQuery || '' }}」作为自定义 Owner
                 </div>
-              </template>
-              <div v-else class="owner-none">
-                无匹配成员 —— Enter 将「{{ editorPopQuery || '' }}」作为自定义 Owner
               </div>
             </div>
           </div>
@@ -879,7 +976,7 @@ watch(
     <div
       v-if="aliasOpen"
       class="alias-editor"
-      :style="{ left: `${barLeft()}px`, top: '4px' }"
+      :style="aliasStyle"
       @pointerdown.stop
     >
       <button
@@ -887,7 +984,7 @@ watch(
         class="te-owner ae-owner"
         type="button"
         :data-tip="
-          aliasOwner ? `Owner：${aliasOwner.name}（点击更换）` : '设置 Owner'
+          aliasOwner ? `Owner：${showName(aliasOwner.name)}（点击更换）` : '设置 Owner'
         "
         @pointerdown.prevent.stop
         @click="openAliasOwnerPop($event.currentTarget as HTMLElement)"

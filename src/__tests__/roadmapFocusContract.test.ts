@@ -18,6 +18,9 @@ import {
   toFocusSyncItem,
   type RoadmapStateMessage,
 } from '../roadmapFocusContract.js';
+import { reportAndRethrowMessageAnalysisError } from '../messageAnalysisError.js';
+import { buildMessageFilterSystemPrompt } from '../prompts/messageAnalysis.js';
+import type { EnvConfigType } from '../utils.js';
 import { buildFocusProjectWatchRules } from '../watchRules.js';
 
 function item(overrides: Partial<RoadmapItem> = {}): RoadmapItem {
@@ -208,4 +211,37 @@ test('a resolved item goes back to exact-key matching', () => {
 
   assert.equal(rule.text.includes('[NOVA-900]'), true);
   assert.equal(rule.text.includes('LOCAL-'), false);
+});
+
+test('a focus project watch rule can enter the message analysis prompt', () => {
+  const [rule] = buildFocusProjectWatchRules([
+    {
+      id: 'demo-project',
+      displayName: 'Demo project',
+      teamName: 'Demo team',
+      externalRef: {
+        itemKey: 'DEMO-1',
+        jiraKey: 'DEMO-1',
+        isDraft: false,
+      },
+    },
+  ]);
+
+  const prompt = buildMessageFilterSystemPrompt({
+    concernedItems: [rule],
+    username: 'Test User',
+    envConfig: { ANALYZE_BY_GROUP: true } as EnvConfigType,
+  });
+
+  assert.match(prompt, /\[RULE_REF:project:demo-project\]/);
+  assert.match(prompt, /Focus project \[DEMO-1\] Demo project/);
+});
+
+test('background-safe analysis error handling rethrows the original error', () => {
+  const originalError = new Error('primary analysis failure');
+
+  assert.throws(
+    () => reportAndRethrowMessageAnalysisError(originalError),
+    (error) => error === originalError,
+  );
 });

@@ -133,6 +133,12 @@ export interface TeamSnapshot {
     jiraEnabled?: boolean;
     /** Team-shared release-train ruler; null/absent = month ruler. */
     releaseSheet?: ReleaseSheetConfig | null;
+    /** Team-shared Create-Jira Agent prompt shown to all collaborators. */
+    createJiraPrompt?: string;
+    /** System name (lowercase key) → Jira Firstname Lastname. */
+    assigneeMap?: Record<string, string>;
+    /** Browse base from server env; empty when unset. */
+    jiraBaseUrl?: string;
   };
   items: RoadmapItem[];
   members: TeamMember[];

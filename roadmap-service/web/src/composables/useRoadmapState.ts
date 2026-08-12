@@ -86,6 +86,7 @@ export function createRoadmapState() {
     import: false,
     cleanup: false,
     aiCreate: false,
+    assigneeMap: false,
   });
 
   // 导入栏勾选的覆盖开关；预览弹窗只读取，不再让用户勾第二遍

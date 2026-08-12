@@ -51,7 +51,9 @@ export type IntentOp =
   | 'delete_marker'
   | 'lock'
   | 'unlock'
-  | 'set_quarters';
+  | 'set_quarters'
+  | 'update_create_jira_prompt'
+  | 'update_assignee_map';
 
 export type MarkerKind = 'phase' | 'dep';
 export type PhaseKind = 'design' | 'stage' | 'production' | 'custom';
@@ -80,6 +82,8 @@ export interface TeamRow {
   checked_quarters_json: string;
   imported_quarters_json: string;
   release_sheet_json: string;
+  create_jira_prompt: string;
+  assignee_map_json: string;
   version: number;
   created_by: string;
   created_at: number;
@@ -190,6 +194,12 @@ export interface TeamSnapshot {
     jiraEnabled?: boolean;
     /** Team-shared release-train ruler; null = month ruler. */
     releaseSheet?: ReleaseSheetConfig | null;
+    /** Team-shared Create-Jira Agent prompt. */
+    createJiraPrompt?: string;
+    /** System name (lowercase key) → Jira Firstname Lastname. */
+    assigneeMap?: Record<string, string>;
+    /** Browse base from server env (no trailing slash); may be empty. */
+    jiraBaseUrl?: string;
   };
   items: Array<{
     key: string;

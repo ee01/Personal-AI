@@ -82,6 +82,8 @@ describe('items migrations on an existing database', () => {
       '005_subs_cleared',
       '006_item_markers',
       '007_teams_release_sheet',
+      '008_teams_create_jira_prompt',
+      '009_teams_assignee_map',
     ]);
     const row = db
       .prepare(`SELECT source, jira_key, project_key FROM items WHERE id = 'i1'`)
@@ -96,12 +98,22 @@ describe('items migrations on an existing database', () => {
         db.pragma(`table_info(teams)`) as Array<{ name: string }>
       ).some((c) => c.name === 'release_sheet_json'),
     ).toBe(true);
+    expect(
+      (
+        db.pragma(`table_info(teams)`) as Array<{ name: string }>
+      ).some((c) => c.name === 'create_jira_prompt'),
+    ).toBe(true);
+    expect(
+      (
+        db.pragma(`table_info(teams)`) as Array<{ name: string }>
+      ).some((c) => c.name === 'assignee_map_json'),
+    ).toBe(true);
   });
 
   it('is safe to re-run on an already migrated database', () => {
     closeDb();
     const db = getDb();
-    expect(migrationIds(db)).toHaveLength(7);
+    expect(migrationIds(db)).toHaveLength(9);
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM items`).get() as { n: number },
     ).toEqual({ n: 1 });

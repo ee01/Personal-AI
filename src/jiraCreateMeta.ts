@@ -224,6 +224,8 @@ export interface JiraCreateFieldsInput {
   quarter?: string | null;
   /** Release name from the team release sheet (or a user override). */
   fixVersion?: string | null;
+  /** Jira Server/DC username (`firstname.lastname`); omitted when unknown. */
+  assignee?: string | null;
   /** Optional mutable collector for non-fatal field warnings. */
   warnings?: string[];
   link?: ChildLink & { parentKey: string };
@@ -293,6 +295,12 @@ export function buildJiraCreateFields(
         input.warnings?.push(fixVersionsValue.warning);
       }
     }
+  }
+
+  const assignee = String(input.assignee || '').trim();
+  if (assignee) {
+    // Server/DC accepts name; Cloud needs accountId — leave unset when unknown.
+    fields.assignee = { name: assignee };
   }
 
   return fields;

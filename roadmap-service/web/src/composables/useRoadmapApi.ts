@@ -5,9 +5,14 @@ import type { ActorSource } from '../types';
 const CLIENT_ID_KEY = 'roadmap-client-id';
 const ACTOR_NAME_KEY = 'roadmap-actor-name';
 const AI_PROMPT_KEY = 'personalroadmap.aiPrompt';
+const AI_PROMPT_DRAFT_PREFIX = 'personalroadmap.aiPrompt:';
 
 function editTokenKey(teamId: string) {
   return `roadmap-edit-token:${teamId}`;
+}
+
+function aiPromptDraftKey(teamId: string) {
+  return `${AI_PROMPT_DRAFT_PREFIX}${teamId}`;
 }
 
 function randomId() {
@@ -40,10 +45,31 @@ export function setShareToken(teamId: string, token: string) {
   else localStorage.removeItem(editTokenKey(teamId));
 }
 
+/** Per-team draft; `null` means this browser has never edited the prompt for the team. */
+export function getAiPromptDraft(teamId: string): string | null {
+  if (!teamId) return null;
+  const key = aiPromptDraftKey(teamId);
+  if (localStorage.getItem(key) !== null) return localStorage.getItem(key);
+  // Legacy global key — migrate once so closing the modal still restores text.
+  const legacy = localStorage.getItem(AI_PROMPT_KEY);
+  if (legacy !== null) {
+    localStorage.setItem(key, legacy);
+    return legacy;
+  }
+  return null;
+}
+
+export function setAiPromptDraft(teamId: string, prompt: string) {
+  if (!teamId) return;
+  localStorage.setItem(aiPromptDraftKey(teamId), prompt);
+}
+
+/** @deprecated Prefer getAiPromptDraft(teamId). Kept for older call sites. */
 export function getAiPrompt(): string {
   return localStorage.getItem(AI_PROMPT_KEY) || '';
 }
 
+/** @deprecated Prefer setAiPromptDraft(teamId, prompt). */
 export function setAiPrompt(prompt: string) {
   localStorage.setItem(AI_PROMPT_KEY, prompt);
 }

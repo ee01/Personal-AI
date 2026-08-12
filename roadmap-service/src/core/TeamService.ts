@@ -22,6 +22,12 @@ import type {
 } from '../types.js';
 import type { RemoteTask } from './JiraClient.js';
 import { jiraSearchChildTasks } from './JiraClient.js';
+import {
+  importedTaskSpan,
+  migrateAssigneeMapKey,
+  normalizeAssigneeMap,
+  parseAssigneeMap,
+} from './assigneeMap.js';
 
 function parseJsonArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -308,6 +314,9 @@ export function getTeamSnapshot(teamId: string): TeamSnapshot | null {
       }),
       jiraEnabled: config.jira.enabled,
       releaseSheet: parseReleaseSheet(team.release_sheet_json),
+      createJiraPrompt: team.create_jira_prompt || '',
+      assigneeMap: parseAssigneeMap(team.assignee_map_json),
+      jiraBaseUrl: config.jira.baseUrl || '',
     },
     items: items.map((item) =>
       mapItem(
@@ -350,8 +359,9 @@ export function createTeam(input: {
   db.prepare(
     `INSERT INTO teams (
       id, name, jql, checked_quarters_json, imported_quarters_json,
-      release_sheet_json, version, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, '[]', 'null', 1, ?, ?, ?)`,
+      release_sheet_json, create_jira_prompt, assignee_map_json,
+      version, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, '[]', 'null', '', '{}', 1, ?, ?, ?)`,
   ).run(
     id,
     input.name.trim(),
@@ -517,8 +527,12 @@ export function renderActivityText(
       return summary.cleared
         ? `${who} 清除了发布时间表标尺`
         : `${who} 更新了发布时间表标尺`;
+    case 'update_create_jira_prompt':
+      return `${who} 更新了创建 Jira Prompt`;
+    case 'update_assignee_map':
+      return `${who} 更新了 Assignee 映射`;
     case 'import':
-      return `${who} 导入了 ${(summary.quarters as string[])?.join(', ') || '数据'}，${summary.count || 0} 项`;
+      return `${who} 导入了 ${(summary.quarters as string[])?.join(', ') || 'Backlog'}，${summary.count || 0} 项`;
     case 'schedule':
       return `${who} 把 ${label} 排进了 Gantt`;
     case 'unschedule':
@@ -763,6 +777,27 @@ export function applyIntent(
              WHERE team_id = ? AND source = 'jira' AND quarter IN (${placeholders})`,
           )
           .all(teamId, ...quarters) as Array<{ key: string }>
+      ).map((row) => row.key);
+      if (doomed.length) {
+        const keyPlaceholders = doomed.map(() => '?').join(',');
+        db.prepare(
+          `DELETE FROM subs WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
+        ).run(teamId, ...doomed);
+        db.prepare(
+          `DELETE FROM item_markers WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
+        ).run(teamId, ...doomed);
+        db.prepare(
+          `DELETE FROM items WHERE team_id = ? AND key IN (${keyPlaceholders})`,
+        ).run(teamId, ...doomed);
+      }
+    } else if (overwrite && !quarters.length) {
+      // No Target Delivery Quarter in JQL: overwrite clears all jira-sourced rows.
+      const doomed = (
+        db
+          .prepare(
+            `SELECT key FROM items WHERE team_id = ? AND source = 'jira'`,
+          )
+          .all(teamId) as Array<{ key: string }>
       ).map((row) => row.key);
       if (doomed.length) {
         const keyPlaceholders = doomed.map(() => '?').join(',');
@@ -1292,6 +1327,18 @@ export function applyIntent(
         `UPDATE subs SET owner = ?, version = version + 1, updated_at = ?
          WHERE team_id = ? AND owner = ?`,
       ).run(nextName, ts, teamId, member.name);
+      const teamRow = getTeam(teamId);
+      if (teamRow) {
+        const nextMap = migrateAssigneeMapKey(
+          parseAssigneeMap(teamRow.assignee_map_json),
+          member.name,
+          nextName,
+        );
+        db.prepare(
+          `UPDATE teams SET assignee_map_json = ?, version = version + 1, updated_at = ?
+           WHERE id = ?`,
+        ).run(JSON.stringify(nextMap), ts, teamId);
+      }
       writeActivity({
         teamId,
         actor,
@@ -1537,6 +1584,34 @@ export function applyIntent(
       `UPDATE teams SET checked_quarters_json = ?, version = version + 1, updated_at = ?
        WHERE id = ?`,
     ).run(JSON.stringify(intent.checkedQuarters || []), ts, teamId);
+  } else if (op === 'update_create_jira_prompt') {
+    const prompt = String(intent.prompt || '');
+    db.prepare(
+      `UPDATE teams SET create_jira_prompt = ?, version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    ).run(prompt, ts, teamId);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'team',
+      targetKey: teamId,
+      summary: { length: prompt.trim().length },
+    });
+  } else if (op === 'update_assignee_map') {
+    const nextMap = normalizeAssigneeMap(intent.assigneeMap);
+    db.prepare(
+      `UPDATE teams SET assignee_map_json = ?, version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    ).run(JSON.stringify(nextMap), ts, teamId);
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'team',
+      targetKey: teamId,
+      summary: { count: Object.keys(nextMap).length },
+    });
   } else {
     return { ok: false, error: `unsupported_op:${op}` };
   }
@@ -1725,17 +1800,21 @@ export function importRemoteTasks(
       continue;
     }
 
-    let start = task.targetStart || parent.start_date;
-    let days = 7;
-    if (task.targetStart && task.targetEnd) {
-      const startMs = Date.parse(task.targetStart);
-      const endMs = Date.parse(task.targetEnd);
-      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
-        days = Math.max(1, Math.round((endMs - startMs) / 86_400_000) + 1);
-      }
-    } else if (!task.targetStart && parent.start_date) {
-      start = parent.start_date;
+    const parentStart = parent.start_date;
+    const parentDays =
+      typeof parent.days === 'number' && parent.days > 0 ? parent.days : 14;
+    if (!parentStart) {
+      skipped++;
+      bucket.skipped++;
+      continue;
     }
+    const span = importedTaskSpan(
+      { start: parentStart, days: parentDays },
+      task.targetStart,
+      task.targetEnd,
+    );
+    const start = span.start;
+    const days = span.days;
 
     const id = nanoid(12);
     const owner = task.assignee || null;

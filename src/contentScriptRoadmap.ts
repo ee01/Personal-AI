@@ -6,8 +6,8 @@
  * - Renders personal-layer overlays (drift badges, memory candidates mount)
  */
 
-import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { getJiraBaseUrl, getJiraToken, jiraFetchViaBackground } from './jira';
+import { roadmapMemoryCall } from './roadmapMemoryBridge';
 import {
   buildJiraCreateFields,
   findIssueType,
@@ -50,7 +50,7 @@ type ImportItemPayload = {
   targetEnd?: string;
 };
 
-function isRoadmapHost(): boolean {
+function isBuiltinRoadmapHost(): boolean {
   const host = location.hostname;
   return (
     host === 'localhost' ||
@@ -58,6 +58,19 @@ function isRoadmapHost(): boolean {
     host === '10.32.56.212' ||
     host.includes('roadmap')
   );
+}
+
+/** Match Options ROADMAP_BASE_URL so self-hosted plan.acme.com still injects. */
+async function shouldInjectBridge(): Promise<boolean> {
+  if (isBuiltinRoadmapHost()) return true;
+  try {
+    const stored = await chrome.storage.local.get(['envConfig']);
+    const raw = String(stored?.envConfig?.ROADMAP_BASE_URL || '').trim();
+    if (!raw) return false;
+    return new URL(raw).hostname === location.hostname;
+  } catch {
+    return false;
+  }
 }
 
 async function getActorIdentity(): Promise<{
@@ -107,44 +120,82 @@ async function isParticipated(teamId: string): Promise<boolean> {
   return list.includes(teamId);
 }
 
-function ensureBridgeBadge(focusCount: number): void {
+const FOCUS_COUNT_KEY = 'pai.roadmap.lastFocusCount';
+const FOCUS_TITLES_KEY = 'pai.roadmap.lastFocusTitles';
+let badgeHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function ensureBridgeBadge(
+  focusCount: number,
+  opts?: { addedTitles?: string[]; forceShow?: boolean },
+): void {
   let badge = document.getElementById('pai-roadmap-bridge-badge');
   if (!badge) {
     badge = document.createElement('div');
     badge.id = 'pai-roadmap-bridge-badge';
     badge.style.cssText = [
       'position:fixed',
-      'top:12px',
-      'right:18px',
+      'bottom:20px',
+      'left:50%',
+      'transform:translateX(-50%)',
       'z-index:99999',
       'background:#20242A',
       'color:#fff',
-      'font:600 11px/1.2 -apple-system,BlinkMacSystemFont,sans-serif',
-      'padding:6px 10px',
-      'border-radius:999px',
+      'font:600 11px/1.35 -apple-system,BlinkMacSystemFont,sans-serif',
+      'padding:8px 14px',
+      'border-radius:10px',
       'box-shadow:0 4px 16px rgba(0,0,0,.18)',
       'cursor:pointer',
+      'max-width:min(92vw,420px)',
+      'text-align:center',
+      'opacity:0',
+      'transition:opacity .25s ease',
+      'pointer-events:none',
     ].join(';');
     badge.title = 'Personal AI 已连接。点击可关停重点项目同步。';
     badge.addEventListener('click', async () => {
       const stored = await chrome.storage.local.get([SYNC_ENABLED_KEY]);
       const next = stored[SYNC_ENABLED_KEY] === false;
       await chrome.storage.local.set({ [SYNC_ENABLED_KEY]: next });
-      badge!.textContent = next
-        ? `Personal AI 已连接 · ${focusCount} 个重点项目`
-        : 'Personal AI 同步已关闭';
+      showBridgeBadge(
+        next
+          ? `Personal AI 已连接 · ${focusCount} 个重点项目`
+          : 'Personal AI 同步已关闭',
+        4000,
+      );
     });
     document.body.appendChild(badge);
   }
-  badge.textContent = `Personal AI 已连接 · ${focusCount} 个重点项目`;
+
+  const added = (opts?.addedTitles || []).filter(Boolean);
+  let text = `Personal AI 已连接 · ${focusCount} 个重点项目`;
+  if (added.length) {
+    const sample = added.slice(0, 2).join('、');
+    const more = added.length > 2 ? ` 等 ${added.length} 个` : '';
+    text = `新加入的 ${sample}${more} 已纳入 Personal AI 重点项目`;
+  }
+  showBridgeBadge(text, added.length || opts?.forceShow ? 5000 : 3500);
+}
+
+function showBridgeBadge(text: string, hideAfterMs: number): void {
+  const badge = document.getElementById('pai-roadmap-bridge-badge');
+  if (!badge) return;
+  badge.textContent = text;
+  badge.style.opacity = '1';
+  badge.style.pointerEvents = 'auto';
+  if (badgeHideTimer) clearTimeout(badgeHideTimer);
+  badgeHideTimer = setTimeout(() => {
+    badge.style.opacity = '0';
+    badge.style.pointerEvents = 'none';
+  }, hideAfterMs);
 }
 
 async function renderMemoryCandidates(): Promise<void> {
   const mount = document.getElementById('pai-memory-candidates');
   if (!mount) return;
   try {
-    const client = getMemoryServiceClient();
-    const response = await client.getMemoryProjectCandidates();
+    const response = await roadmapMemoryCall<{ candidates: any[] }>(
+      'getMemoryProjectCandidates',
+    );
     const candidates = response?.candidates || [];
     if (!candidates.length) {
       mount.innerHTML = '';
@@ -186,8 +237,9 @@ function escapeHtml(value: string): string {
 
 async function renderDriftBadges(): Promise<void> {
   try {
-    const client = getMemoryServiceClient();
-    const response = await client.getProjectDriftReceipts();
+    const response = await roadmapMemoryCall<{ items: any[] }>(
+      'getProjectDriftReceipts',
+    );
     const items = response?.items || [];
     for (const item of items) {
       if (item.status !== 'open' || item.event_type !== 'date_change') continue;
@@ -220,7 +272,7 @@ async function renderDriftBadges(): Promise<void> {
         const accept = confirm(
           `${item.summary || '检测到日期漂移'}\n\n按此更新团队 bar？\n确定=接受建议（需你在页面手动拖动或后续写回）\n取消=忽略此提示`,
         );
-        await client.resolveProjectDriftReceipt({
+        await roadmapMemoryCall('resolveProjectDriftReceipt', {
           id: item.id,
           status: accept ? 'accepted' : 'ignored',
         });
@@ -242,17 +294,47 @@ async function syncFocusSnapshot(state: RoadmapStateMessage): Promise<void> {
   if (!(await isParticipated(teamId))) return;
 
   const scheduled = (state.items || []).filter(Boolean);
-  const client = getMemoryServiceClient();
-  const result = await client.syncFocusProjects({
+  const titles = scheduled.map(
+    (item) => item.displayName || item.alias || item.title || item.key || '',
+  );
+  const stored = await chrome.storage.local.get([
+    FOCUS_COUNT_KEY,
+    FOCUS_TITLES_KEY,
+  ]);
+  const prevCount = Number(stored[FOCUS_COUNT_KEY] || 0);
+  const prevTitles = Array.isArray(stored[FOCUS_TITLES_KEY])
+    ? (stored[FOCUS_TITLES_KEY] as string[])
+    : [];
+  const prevSet = new Set(prevTitles.map((t) => String(t || '').toLowerCase()));
+  const addedTitles = titles.filter(
+    (t) => t && !prevSet.has(String(t).toLowerCase()),
+  );
+  const firstPaint = !stored[FOCUS_COUNT_KEY] && !stored[FOCUS_TITLES_KEY];
+
+  const result = await roadmapMemoryCall<{
+    upserted: number;
+    archived: number;
+    skipped: boolean;
+    projects?: Array<{ tier?: string }>;
+  }>('syncFocusProjects', {
     teamId,
     teamName: state.teamName,
     syncedAt: Date.now(),
     items: scheduled.map(toFocusSyncItem),
   });
-  ensureBridgeBadge(
-    result.projects?.filter((p: any) => p.tier === 'focus').length ||
-      scheduled.length,
-  );
+  const focusCount =
+    result.projects?.filter((p) => p.tier === 'focus').length ||
+    scheduled.length;
+
+  await chrome.storage.local.set({
+    [FOCUS_COUNT_KEY]: focusCount,
+    [FOCUS_TITLES_KEY]: titles,
+  });
+
+  ensureBridgeBadge(focusCount, {
+    addedTitles: firstPaint ? [] : addedTitles,
+    forceShow: firstPaint || focusCount !== prevCount,
+  });
   void renderMemoryCandidates();
   void renderDriftBadges();
 }
@@ -277,17 +359,17 @@ function queueFocusSnapshot(state: RoadmapStateMessage): void {
 }
 
 function applyQuartersToJql(jql: string, quarters: string[]): string {
+  // No quarters selected (or JQL has no Target Delivery Quarter field): run as-is.
+  if (!quarters.length) return jql;
   const replacement = quarters.join(', ');
-  const re = /("Target Delivery Quarter"\s+in\s*\()([^)]*)(\))/g;
+  const re = /("Target Delivery Quarter"\s+in\s*\()([^)]*)(\))/gi;
   let hit = false;
   const out = jql.replace(re, (_m, p1: string, _p2: string, p3: string) => {
     hit = true;
     return `${p1}${replacement}${p3}`;
   });
-  if (!hit) {
-    return `${jql} AND "Target Delivery Quarter" in (${replacement})`;
-  }
-  return out;
+  // Do not append a quarter clause when the field is absent from the JQL.
+  return hit ? out : jql;
 }
 
 function optionValue(raw: unknown): string | undefined {
@@ -611,6 +693,7 @@ type CreateJiraChildInput = {
   parentItemKey: string;
   parentJiraKey: string | null;
   fixVersion?: string | null;
+  assignee?: string | null;
 };
 
 type CreateJiraPayload = {
@@ -887,6 +970,7 @@ async function createJiraIssue(input: {
   targetEnd?: string | null;
   quarter?: string | null;
   fixVersion?: string | null;
+  assignee?: string | null;
   link?: ChildLink & { parentKey: string };
   requestLabel: string;
 }): Promise<{ jiraKey: string; warnings: string[] }> {
@@ -1050,6 +1134,7 @@ async function handleCreateJiraBatch(
         typeMeta,
         summary: child.title,
         fixVersion: child.fixVersion,
+        assignee: child.assignee || null,
         link: { ...link, parentKey: parentJiraKey },
         requestLabel: 'roadmap create jira sub-task',
       });
@@ -1175,70 +1260,30 @@ function parseAgentMappings(
 }
 
 function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
-  const constraints = payload.constraints || {};
-  const filled: string[] = [];
-  const blank: string[] = [];
-  const push = (label: string, value: string | null | undefined) => {
-    const text = String(value || '').trim();
-    if (text) filled.push(`- ${label}: ${text}`);
-    else blank.push(`- ${label}: （未填，由你决定）`);
-  };
-  push('Project Key', constraints.projectKey);
-  push('主任务类型', constraints.issueType);
-  push('子任务类型', constraints.subType);
-  push('fixVersion（统一覆盖）', constraints.fixVersion);
-  push('Sprint', constraints.sprint);
-
-  const rows: string[] = [];
-  if (payload.parent) {
-    rows.push(
-      [
-        `parent draftId=${payload.parent.itemKey}`,
-        `title=${JSON.stringify(payload.parent.title)}`,
-        `suggestedIssueType=${payload.parent.issueType || ''}`,
-        `targetStart=${payload.parent.targetStart || ''}`,
-        `targetEnd=${payload.parent.targetEnd || ''}`,
-        `suggestedFixVersion=${payload.parent.fixVersion || ''}`,
-      ].join(' | '),
-    );
-  }
-  for (const child of payload.children || []) {
-    rows.push(
-      [
-        `child draftId=${child.draftId}`,
-        `title=${JSON.stringify(child.title)}`,
-        `parentItemKey=${child.parentItemKey}`,
-        `parentJiraKey=${child.parentJiraKey || ''}`,
-        `suggestedIssueType=${child.issueType || ''}`,
-        `suggestedFixVersion=${child.fixVersion || ''}`,
-      ].join(' | '),
-    );
-  }
-
+  // Frontend already assembles user prompt + field constraints + assignee map
+  // + task list; extension only appends the result contract the executor must honor.
+  const body = String(payload.prompt || '').trim();
   return [
-    '你是 Personal Roadmap 的 Jira 创建助手。请根据用户指令在 Jira 中创建 issue，并把结果回写成可验证 artifact。',
-    '',
-    `团队：${payload.teamName || payload.teamId}`,
-    `执行器：${payload.executor}`,
-    '',
-    '## 用户 Prompt',
-    payload.prompt.trim(),
-    '',
-    '## 硬性约束（已填必须遵守；未填由你决定）',
-    ...filled,
-    ...blank,
-    '',
-    '## 待创建草稿',
-    ...rows,
+    body || '（空 Prompt）',
     '',
     '## 结果契约（必须遵守）',
     '1. 为每个 draftId 创建对应 Jira issue（parent 的 draftId 就是 itemKey）。',
     '2. 若 parentJiraKey 已存在，子任务必须 link 到该父 issue。',
     '3. 未填 Sprint 时查询并填入当前 active sprint；未填 fixVersion 时可用 suggestedFixVersion。',
-    '4. 最终必须返回可验证 artifact：content 为 JSON 字符串，格式严格为',
+    '4. Assignee 按 Prompt 中的映射表检索 Jira 用户后填写；未映射可留空。',
+    '5. 最终必须返回可验证 artifact：content 为 JSON 字符串，格式严格为',
     '{"mappings":[{"draftId":"...","jiraKey":"PROJ-123"}]}',
-    '5. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key）。',
-    '6. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
+    '6. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key）。',
+    '7. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
+    '',
+    '## draftId 索引（便于核对）',
+    payload.parent
+      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)}`
+      : '（无 parent draft）',
+    ...(payload.children || []).map(
+      (c) =>
+        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''}`,
+    ),
   ].join('\n');
 }
 
@@ -1246,8 +1291,10 @@ async function listAgentExecutors(): Promise<
   Array<{ id: string; label: string }>
 > {
   try {
-    const client = getMemoryServiceClient();
-    const config = await client.getRuntimeConfig();
+    const config = await roadmapMemoryCall<{
+      agentExecutors?: Array<{ id?: string; label?: string; enabled?: boolean }>;
+      openClawEnabled?: boolean;
+    }>('getRuntimeConfig');
     const fromRegistry = Array.isArray(config?.agentExecutors)
       ? config.agentExecutors
           .filter((item) => item && item.enabled !== false && item.id)
@@ -1275,10 +1322,15 @@ async function waitForAgentTaskTerminal(
   evidenceContent?: string;
   lastError?: string;
 }> {
-  const client = getMemoryServiceClient();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const status = await client.getAgentTaskRuntimeStatus([sourceRefId]);
+    const status = await roadmapMemoryCall<{
+      items?: Array<{
+        latestAction?: { queueStatus?: string; lastError?: string };
+        summary?: string;
+        evidence?: { content?: string };
+      }>;
+    }>('getAgentTaskRuntimeStatus', [sourceRefId]);
     const item = status.items?.[0];
     const queueStatus = String(item?.latestAction?.queueStatus || '').trim();
     if (
@@ -1327,8 +1379,13 @@ async function handleAgentCreateJira(
   ];
   const taskId = `roadmap:${teamId}:${stableIdempotencySuffix(draftIds)}`;
   const idempotencyKey = `roadmap_create:${teamId}:${stableIdempotencySuffix(draftIds)}`;
-  const client = getMemoryServiceClient();
-  const execute = await client.executeAgentTask({
+  const execute = await roadmapMemoryCall<{
+    queueStatus?: string;
+    result?: {
+      summary?: string;
+      artifacts?: Array<{ content?: string }>;
+    };
+  }>('executeAgentTask', {
     taskId,
     title: `Roadmap 创建 Jira · ${teamId}`,
     task: buildAgentCreateTaskText({ ...payload, prompt, executor }),
@@ -1798,6 +1855,6 @@ function injectBridge(): void {
   }, 800);
 }
 
-if (isRoadmapHost()) {
-  injectBridge();
-}
+void shouldInjectBridge().then((ok) => {
+  if (ok) injectBridge();
+});

@@ -128,6 +128,9 @@ describe('importTasksFromJira', () => {
     expect(subs.map((s) => s.key).sort()).toEqual(['NOVA-201', 'NOVA-202']);
     expect(subs.find((s) => s.key === 'NOVA-201')!.owner).toBe('Vivi');
     expect(subs.find((s) => s.key === 'NOVA-201')!.temp).toBe(false);
+    const mirrored = subs.find((s) => s.key === 'NOVA-202')!;
+    expect(mirrored.start).toBe('2026-08-01');
+    expect(mirrored.days).toBe(30);
 
     const second = await importTasksFromJira(teamId, actor);
     expect(second.ok).toBe(true);

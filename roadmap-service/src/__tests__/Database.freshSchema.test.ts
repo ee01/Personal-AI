@@ -30,6 +30,8 @@ describe('a database created from schema.sql', () => {
       '005_subs_cleared',
       '006_item_markers',
       '007_teams_release_sheet',
+      '008_teams_create_jira_prompt',
+      '009_teams_assignee_map',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
@@ -40,7 +42,13 @@ describe('a database created from schema.sql', () => {
       (db.pragma('table_info(teams)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['release_sheet_json']));
+    ).toEqual(
+      expect.arrayContaining([
+        'release_sheet_json',
+        'create_jira_prompt',
+        'assignee_map_json',
+      ]),
+    );
     expect(
       db
         .prepare(

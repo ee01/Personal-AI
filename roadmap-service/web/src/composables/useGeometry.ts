@@ -136,20 +136,22 @@ export function colorCls(start: Date | string, days: number): string {
   return 'c-cur';
 }
 
+/** True when the team JQL declares a Target Delivery Quarter filter. */
+export function jqlHasTargetDeliveryQuarter(jql: string): boolean {
+  return /"Target Delivery Quarter"\s+in\s*\(/i.test(jql || '');
+}
+
 export function effectiveJqlHtml(jql: string, quarters: string[]): string {
-  const re = /("Target Delivery Quarter"\s+in\s*\()([^)]*)(\))/g;
-  let hit = false;
-  const out = jql.replace(re, (_, p1: string, _2: string, p3: string) => {
-    hit = true;
-    return `${p1}@@${p3}`;
-  });
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  let html = esc(out).replace(/@@/g, `<mark>${quarters.join(', ')}</mark>`);
-  if (!hit) {
-    html += `<br><span style="color:#8B93A0">// 未找到 quarter 子句，将附加：</span> AND <mark>"Target Delivery Quarter" in (${quarters.join(', ')})</mark>`;
+  if (!quarters.length || !jqlHasTargetDeliveryQuarter(jql)) {
+    return esc(jql || '');
   }
-  return html;
+  const re = /("Target Delivery Quarter"\s+in\s*\()([^)]*)(\))/gi;
+  const out = jql.replace(re, (_, p1: string, _2: string, p3: string) => {
+    return `${p1}@@${p3}`;
+  });
+  return esc(out).replace(/@@/g, `<mark>${quarters.join(', ')}</mark>`);
 }
 
 export function fitLanes(root: HTMLElement) {

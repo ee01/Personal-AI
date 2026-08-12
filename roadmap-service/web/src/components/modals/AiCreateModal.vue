@@ -25,9 +25,16 @@ import {
 } from '../../composables/useReleaseRuler';
 import { addD, fmtISO } from '../../composables/useGeometry';
 import {
-  getAiPrompt,
-  setAiPrompt,
+  getAiPromptDraft,
+  setAiPromptDraft,
 } from '../../composables/useRoadmapApi';
+import {
+  buildAgentCreatePrompt,
+  dispName,
+  resolveAssignee,
+  teamAssigneeMap,
+  type ResolvedAssignee,
+} from '../../composables/useAssigneeMap';
 
 type RowStatus =
   | { kind: 'pending' }
@@ -40,6 +47,7 @@ const AI_EXECUTOR_KEY = 'personalroadmap.aiExecutor';
 const state = useRoadmapState();
 const running = ref(false);
 const rowStatus = ref<Record<string, RowStatus>>({});
+const promptPeekOpen = ref(false);
 
 const prompt = ref('');
 const projectKey = ref('');
@@ -51,6 +59,25 @@ const executors = ref<AgentExecutorOption[]>([]);
 const selectedExecutor = ref('');
 const executorsLoading = ref(false);
 
+const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
+const currentUser = computed(() => state.api.actorName.value || '');
+
+function resolveSub(sub: { owner?: string | null; createdBy: string }): ResolvedAssignee {
+  return resolveAssignee({
+    map: assigneeMap.value,
+    sub,
+    currentUser: currentUser.value,
+  });
+}
+
+function openAssigneeMap() {
+  state.modals.value.assigneeMap = true;
+}
+
+function showName(name: string) {
+  return dispName(assigneeMap.value, name);
+}
+
 /**
  * Rows are frozen for the duration of a run: resolving a child immediately
  * drops it out of the live draft list, and a row that vanishes takes its
@@ -60,6 +87,52 @@ const frozenGroups = ref<DraftGroup[] | null>(null);
 const groups = computed(
   () => frozenGroups.value ?? buildDraftGroups(state.scheduledItems.value),
 );
+
+const assigneeChips = computed(() => {
+  const seen = new Map<string, ResolvedAssignee>();
+  for (const g of groups.value) {
+    for (const sub of g.subs) {
+      const r = resolveSub(sub);
+      const k = r.name.toLowerCase();
+      if (!seen.has(k)) seen.set(k, r);
+    }
+  }
+  return [...seen.values()];
+});
+
+const assigneeByDraftId = computed(() => {
+  const map: Record<string, string | null> = {};
+  for (const g of groups.value) {
+    for (const sub of g.subs) {
+      map[sub.id] = resolveSub(sub).user;
+    }
+  }
+  return map;
+});
+
+const fullAgentPrompt = computed(() => {
+  const drafts: Array<{
+    item: DraftGroup['item'];
+    sub: DraftGroup['subs'][number];
+  }> = [];
+  for (const g of groups.value) {
+    for (const sub of g.subs) drafts.push({ item: g.item, sub });
+  }
+  return buildAgentCreatePrompt({
+    userPrompt: prompt.value,
+    projectKey: projectKey.value.trim(),
+    itemType: itemType.value.trim(),
+    subType: subType.value.trim(),
+    fixVersion: fixVersion.value.trim(),
+    sprint: sprint.value.trim(),
+    map: assigneeMap.value,
+    currentUser: currentUser.value,
+    members: state.snapshot.value?.members || [],
+    items: state.snapshot.value?.items || [],
+    drafts,
+  });
+});
+
 const totalRows = computed(() =>
   groups.value.reduce(
     (n, g) => n + (isDraftItem(g.item) ? 1 : 0) + g.subs.length,
@@ -256,7 +329,11 @@ watch(
     rowStatus.value = {};
     frozenGroups.value = null;
     running.value = false;
-    prompt.value = getAiPrompt();
+    promptPeekOpen.value = false;
+    const teamId = state.teamId.value;
+    const draft = getAiPromptDraft(teamId);
+    const teamPrompt = state.snapshot.value?.team.createJiraPrompt || '';
+    prompt.value = draft !== null ? draft : teamPrompt;
     projectKey.value = hints.projectKey || '';
     itemType.value = hints.itemType || '';
     subType.value = hints.subType || '';
@@ -266,6 +343,14 @@ watch(
     void refreshExecutors();
   },
 );
+
+// Persist the prompt draft whenever the user types — closing the modal must not lose it.
+watch(prompt, (value) => {
+  if (!state.modals.value.aiCreate) return;
+  const teamId = state.teamId.value;
+  if (!teamId) return;
+  setAiPromptDraft(teamId, value);
+});
 
 watch(uniqueSuggestedReleases, (uniq) => {
   if (!state.modals.value.aiCreate || running.value) return;
@@ -278,11 +363,26 @@ async function start() {
   if (blockReason.value || running.value) return;
   frozenGroups.value = groups.value;
   running.value = true;
-  setAiPrompt(prompt.value);
+  const teamId = state.teamId.value;
+  setAiPromptDraft(teamId, prompt.value);
+  const trimmedPrompt = prompt.value.trim();
+  // Executing with a prompt promotes it to team config so collaborators see it.
+  if (
+    trimmedPrompt &&
+    trimmedPrompt !== (state.snapshot.value?.team.createJiraPrompt || '')
+  ) {
+    try {
+      await state.applySnapshotFromIntent({
+        op: 'update_create_jira_prompt',
+        prompt: trimmedPrompt,
+      });
+    } catch {
+      /* non-blocking: create can still proceed */
+    }
+  }
   if (selectedExecutor.value) {
     localStorage.setItem(AI_EXECUTOR_KEY, selectedExecutor.value);
   }
-  const teamId = state.teamId.value;
   const token = state.api.getShareToken(teamId) || null;
   const teamName = state.snapshot.value?.team.name || null;
   const override = fixVersion.value.trim() || null;
@@ -306,13 +406,14 @@ async function start() {
         subType: subType.value.trim(),
         fixVersionOverride: override,
         fixVersionByKey: fixVersionByKey.value,
+        assigneeByDraftId: assigneeByDraftId.value,
       };
       const createPayload = buildCreateJiraPayload(group, baseFields);
       const result = agentMode.value
         ? await bridgeAgentCreateJira({
             teamId,
             token,
-            prompt: prompt.value.trim(),
+            prompt: fullAgentPrompt.value,
             executor: selectedExecutor.value,
             teamName,
             constraints: {
@@ -415,7 +516,7 @@ async function start() {
         <div class="m-sub">
           Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给
           <b>Agent 执行器</b>创建（可用技能、自动填当前 Sprint 等动态字段）——已填字段作为约束带给
-          Agent，未填字段由 Agent 决定。Prompt 与执行器选择会记住上次内容。
+          Agent，未填字段由 Agent 决定。Prompt 草稿保存在本机；执行创建时同步为团队配置，协作者也能看到。
         </div>
       </div>
       <div class="m-body">
@@ -529,6 +630,47 @@ async function start() {
           </div>
         </div>
 
+        <label class="f-label">Assignee</label>
+        <div class="asg-bar">
+          <span
+            v-for="r in assigneeChips"
+            :key="r.name"
+            class="asg-chip"
+            :class="r.user ? 'ok' : 'miss'"
+            :data-tip="
+              `${showName(r.name)}${r.fallback ? '（按创建人回落）' : ''}||${
+                r.user
+                  ? 'assignee 将填 ' + r.user
+                  : '未映射 Firstname Lastname，无法定位 Jira 用户'
+              }||${r.user ? '在「配置映射…」中可修改' : '点击补全映射'}`
+            "
+            @click="!r.user && openAssigneeMap()"
+          >
+            {{ showName(r.name) }}<span class="arrow">→</span>{{ r.user || '?' }}
+          </span>
+          <button type="button" class="asg-cfg" @click="openAssigneeMap">
+            配置映射…
+          </button>
+        </div>
+        <div class="asg-note">
+          {{
+            agentMode
+              ? '映射名单随字段约束一并写入 Prompt，由 Agent 在 Jira 检索实名后填写 assignee'
+              : 'Owner 按映射转成 firstname.lastname 填入 assignee；未映射的任务将留空 assignee'
+          }}
+        </div>
+
+        <div v-if="agentMode" style="margin-top: 10px">
+          <button
+            type="button"
+            class="asg-cfg"
+            @click="promptPeekOpen = !promptPeekOpen"
+          >
+            {{ promptPeekOpen ? '收起完整 Prompt' : '查看将发送的完整 Prompt' }}
+          </button>
+          <pre v-if="promptPeekOpen" class="prompt-peek">{{ fullAgentPrompt }}</pre>
+        </div>
+
         <label class="f-label">
           待创建任务 <span style="color: var(--cur-deep)">（{{ totalRows }}）</span>
         </label>
@@ -575,6 +717,17 @@ async function start() {
               :class="{ none: !fixVersionByKey[s.id] }"
             >
               {{ fixVersionByKey[s.id] || '无匹配 release' }}
+            </span>
+            <span
+              class="fv-chip"
+              :class="{ none: !resolveSub(s).user }"
+              :data-tip="
+                `Assignee：${resolveSub(s).full || showName(resolveSub(s).name)}${
+                  resolveSub(s).fallback ? '（无 Owner，按创建人回落）' : ''
+                }${resolveSub(s).user ? '' : ' · 未映射'}`
+              "
+            >
+              @{{ resolveSub(s).user || '未映射' }}
             </span>
             <span class="st">
               <template v-if="kindOf(subRowId(s.id)) === 'loading'">

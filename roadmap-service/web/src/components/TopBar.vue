@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import { copyTextToClipboard, esc, initials } from '../composables/useGeometry';
+import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
 import SyncTicker from './SyncTicker.vue';
 
 const state = useRoadmapState();
 const teamOpen = ref(false);
+const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
+function showName(name: string) {
+  return dispName(assigneeMap.value, name);
+}
 
 function switchTeam(id: string) {
   teamOpen.value = false;
@@ -143,7 +148,7 @@ document.addEventListener('click', (e) => {
         v-for="p in (state.snapshot.value?.presence || []).slice(0, 5)"
         :key="p.clientId"
         class="avatar"
-        :data-tip="p.name + (p.clientId === state.api.clientId ? '（你）' : '')"
+        :data-tip="showName(p.name) + (p.clientId === state.api.clientId.value ? '（你）' : '')"
         :style="{
           background:
             state.snapshot.value?.members.find((m) => m.name === p.name)

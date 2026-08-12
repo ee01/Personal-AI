@@ -442,8 +442,9 @@ onUnmounted(() => {
       <div class="m-head">
         <div class="m-title">编辑团队 JQL</div>
         <div class="m-sub">
-          修改仅影响<b>之后的导入</b>；已导入数据与排期不受影响。quarter 子句仍会在导入时被勾选的
-          quarters 替换。
+          修改仅影响<b>之后的导入</b>；已导入数据与排期不受影响。若 JQL 含
+          <b style="font-family: var(--mono)">"Target Delivery Quarter" in (...)</b>，导入时会用勾选的
+          quarters 替换该子句；不含该字段时不显示 quarters 勾选，直接按原 JQL 导入。
         </div>
       </div>
       <div class="m-body">

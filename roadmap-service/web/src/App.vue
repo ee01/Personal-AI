@@ -13,6 +13,7 @@ import JqlModal from './components/modals/JqlModal.vue';
 import ImportModal from './components/modals/ImportModal.vue';
 import CleanupModal from './components/modals/CleanupModal.vue';
 import AiCreateModal from './components/modals/AiCreateModal.vue';
+import AssigneeMapModal from './components/modals/AssigneeMapModal.vue';
 import NameGateModal from './components/modals/NameGateModal.vue';
 
 const state = provideRoadmapState();
@@ -42,6 +43,7 @@ const state = provideRoadmapState();
     <ImportModal />
     <CleanupModal />
     <AiCreateModal />
+    <AssigneeMapModal />
     <NameGateModal />
   </div>
 </template>

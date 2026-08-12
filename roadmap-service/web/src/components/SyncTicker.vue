@@ -5,11 +5,13 @@ import {
   tickerLabel,
 } from '../composables/useRoadmapContract';
 import { useRoadmapState } from '../composables/useRoadmapState';
+import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
 
 const state = useRoadmapState();
+const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
 
 const entry = computed(() =>
-  pickTickerEntry(state.activity.value, state.api.clientId),
+  pickTickerEntry(state.activity.value, state.api.clientId.value),
 );
 
 const visible = computed(() => Boolean(entry.value));
@@ -55,7 +57,7 @@ watch(
     const incoming: Line = {
       id: next.id,
       time: fmtHM(next.at),
-      who: next.actorName,
+      who: dispName(assigneeMap.value, next.actorName),
       label: tickerLabel(next),
       anim: firstPaint ? '' : 'in',
     };

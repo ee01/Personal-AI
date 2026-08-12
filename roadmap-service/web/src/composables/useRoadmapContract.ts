@@ -6,7 +6,10 @@ import type {
   RoadmapMarker,
   RoadmapSub,
 } from '../types';
-import { addD, fmtISO, parseDate } from './useGeometry';
+// Keep the runtime import Node-ESM compatible: the extension's contract test
+// imports this module directly, while Vite resolves the `.js` specifier to the
+// TypeScript source during the web build.
+import { addD, fmtISO, parseDate } from './useGeometry.js';
 
 /** ticker 忽略的低信息量操作（含已废弃的 expand/collapse） */
 export const TICKER_NOISE_OPS = new Set([
@@ -273,6 +276,8 @@ export interface CreateJiraChild {
   /** Set when the parent issue already exists, so the extension can link right away. */
   parentJiraKey: string | null;
   fixVersion?: string | null;
+  /** Jira username (firstname.lastname); omit / null → leave assignee empty. */
+  assignee?: string | null;
 }
 
 export interface CreateJiraPayload {
@@ -348,6 +353,8 @@ export function buildCreateJiraPayload(
     fixVersionOverride?: string | null;
     /** Per-row suggested Fix Version (Target End → release sheet). */
     fixVersionByKey?: Record<string, string | null | undefined>;
+    /** Per-child Jira username (firstname.lastname). */
+    assigneeByDraftId?: Record<string, string | null | undefined>;
   },
 ): CreateJiraPayload {
   const parentIsDraft = isDraftItem(group.item);
@@ -376,6 +383,7 @@ export function buildCreateJiraPayload(
       parentItemKey: group.item.key,
       parentJiraKey: group.item.jiraKey ?? null,
       fixVersion: override || fields.fixVersionByKey?.[sub.id] || null,
+      assignee: fields.assigneeByDraftId?.[sub.id] || null,
     })),
   };
 }

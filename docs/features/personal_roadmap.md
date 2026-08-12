@@ -88,7 +88,9 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 - 标题旁徽标实时切换：`直连 API` ↔ `AGENT 执行器`
 - Agent 模式显示执行器 chip（当前 fallback：`openClawEnabled` 时出现 OpenClaw）；无配置时引导打开插件 Options
 - 字段两模式共享；Agent 模式下空字段 placeholder 为「自动 · 由 Agent 决定」，已填值作为硬约束下发
-- Prompt / 执行器选择写入 `localStorage`（`personalroadmap.aiPrompt` / `personalroadmap.aiExecutor`）
+- Prompt 草稿按团队写入本机 `localStorage`（`personalroadmap.aiPrompt:<teamId>`）；关闭弹窗再打开会恢复
+- 用户**执行创建**且 Prompt 非空时，写入团队配置 `team.createJiraPrompt`，其他协作者打开弹窗（本机无草稿时）也能看到
+- 执行器选择写入 `localStorage`（`personalroadmap.aiExecutor`）
 
 ### fixVersion 自动填
 
@@ -99,6 +101,25 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 - 插件侧 `buildJiraCreateFields` 写 `fixVersions`：exact → **唯一后缀匹配**（解决表里 `26.3.220` vs Jira `Nova 26.3.220`）；歧义/无匹配则丢字段并带回 warning，不阻断创建
 
 Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器查当前 sprint。
+
+### Assignee 映射（系统名 → Jira 实名）
+
+创建弹窗有 **Assignee** 汇总条与「配置映射…」。映射按团队存 `teams.assignee_map_json`（协作方共享）：
+
+- 人员全集 = 当前用户 ∪ 团队成员 ∪ 子任务 Owner ∪ 草稿 `createdBy`
+- Owner 优先；无 Owner 回落创建人；本地自建未记名再回落当前用户
+- **直连 API**：实名转 `firstname.lastname` 写入 `fields.assignee.name`；未映射则留空，不阻塞创建
+- **Agent 模式**：前端组装完整 Prompt（用户 Prompt + 字段约束 + 映射表 + 任务清单），扩展只追加结果契约
+- 全站展示名走 `dispName()`（选人浮层、人员视图、创建者灰字、协作 ticker）；存储仍用系统名
+
+### 甘特体验（与 demo 对齐）
+
+- 草稿创建者：条上仅 `DRAFT`；协作方创建的子任务 hover 时左侧浮现灰色 `xxx created`
+- 新建子任务默认今天起 14 天（贴齐时间轴末端）
+- 选人浮层：搜索置顶、打开即聚焦、列表限高滚动、键盘导航、视口不够时向上翻转
+- 导入 Task：`importedTaskSpan` 兜底（双端齐全按 Target；都缺则同主任务；只一端则两周并钳制进主任务范围）
+- 打开 Jira：hover 左上 ↗，或 ⌘/Ctrl+单击；base URL 来自服务端 `JIRA_BASE_URL`
+- 子任务（含已导入）可单独 × 从 Roadmap 移除，需要时可再导入
 
 ### 两阶段回写（直连路径）
 
@@ -141,12 +162,13 @@ flowchart TD
 - `customfield_18350` / `customfield_18351` ← Target start / end
 - `customfield_21998` ← `item.quarter`（仅当该 project 的 createmeta 里存在此字段，且值能匹配上 allowedValues）
 - `fixVersions` ← 弹窗建议/覆盖的 release name（createmeta 门控 + 后缀匹配）
+- `assignee` ← 子任务 Owner（经团队映射表）转成的 `firstname.lastname`；未映射则不发
 - **创建 Epic 必须带 `customfield_11451`（Epic Name）**，否则 Jira Server 直接 400
 - 子任务：按上表填 `linkField` 或 `parent`
 
 createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余可选字段一律不发——一个该 project 不支持的字段 id 会让 Jira 拒掉整次创建。
 
-roadmap-service **服务端零改动**：创建与 Agent 编排都在扩展 / memory-service；页面只经 `postMessage` bridge。
+创建编排在扩展 / memory-service；Assignee 映射与 Prompt 组装在 roadmap-service 页面与团队配置中完成。
 
 ## 数据库迁移
 
@@ -168,7 +190,7 @@ roadmap-service **服务端零改动**：创建与 Agent 编排都在扩展 / me
 
 ### memory-service
 
-- `POST /api/v1/projects/watched/sync` — 按 `teamId` 权威快照覆盖
+- `POST /api/v1/projects/watched/sync` — 按 `teamId` 权威快照覆盖（由 **扩展 background** 代发，content script 不再直连 memory-service，避免宿主页 CORS）
 - `POST /api/v1/projects/watched/archive-team`
 - `GET /api/v1/projects/focus` — 含 row/paragraph/seed 三种上下文
 
@@ -183,7 +205,7 @@ roadmap-service **服务端零改动**：创建与 Agent 编排都在扩展 / me
 
 ## 扩展桥
 
-`contentScriptRoadmap` 匹配 roadmap 域名：身份注入、focus sync、JQL 导入 / 创建 Jira（直连 + Agent）/ AI 缩写代理。Token 不出个人域。
+`contentScriptRoadmap` 按 Options `ROADMAP_BASE_URL`（及内置 roadmap 域名）注入：身份、focus sync、JQL 导入 / 创建 Jira（直连 + Agent）/ AI 缩写代理。Token 不出个人域。Focus sync / memory candidates / drift / agent runtime 一律经 `ROADMAP_MEMORY_REQUEST` 由 background 调 memory-service；与 Target 回写（同源 `sync-target`）是两条独立链路。
 
 默认站点 `http://roadmap.xmnup.com`（`.env` / `ROADMAP_BASE_URL`）。**Options 里改地址只改 Popup 打开的入口**；身份自动注入依赖 content script 是否匹配当前 origin。静态匹配含 `roadmap.xmnup.com` 与本地/旧 IP；自定义域名在保存 Options 后由 background 动态 `registerContentScripts`。改域名后需**重新加载扩展并刷新 Roadmap 页**，否则仍会弹出「输入名字」。
 
@@ -203,9 +225,11 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 
 ## 导入 Quarters
 
+- JQL **含** `"Target Delivery Quarter" in (...)` 时显示 quarters 勾选；导入按钮文案固定为「导入 Backlog」
+- JQL **不含**该字段时不显示 quarters 勾选，只显示「导入 Backlog」；实际执行原 JQL，不再自动附加 quarter 子句
 - 「覆盖已有数据」只在导入栏勾一次；预览弹窗直接按这个开关渲染要导入的 quarters 与实际 JQL，不再要求二次勾选
-- 未勾选＝增量模式，只导入 `checkedQuarters` 里还没导过的 quarter
-- 勾选＝覆盖模式，按 `checkedQuarters` 全量重拉，后端先 `DELETE` 这些 quarter 的 items（含已排期位置）
+- 未勾选＝增量模式，只导入 `checkedQuarters` 里还没导过的 quarter（无 quarter 字段时按整份 JQL 增量去重）
+- 勾选＝覆盖模式：有 quarter 时按 `checkedQuarters` 全量重拉并 `DELETE` 对应 quarter 的 jira items；无 quarter 字段时清除该团队全部 `source='jira'` 行（手动条目保留）
 
 ## Owner、人员视图与清理记忆
 
