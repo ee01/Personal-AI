@@ -514,3 +514,139 @@ describe('gantt lane reorder', () => {
     expect(itemOf(getTeamSnapshot(teamId)!, b).lane).toBe(2);
   });
 });
+
+describe('update_item title', () => {
+  it('renames a draft item title used by Create Jira', () => {
+    const key = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Old draft title', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const item = itemOf(getTeamSnapshot(teamId)!, key);
+    expectOk(
+      apply(teamId, {
+        op: 'update_item',
+        itemKey: key,
+        title: 'New draft title for Jira',
+        baseVersion: item.version,
+      }),
+    );
+    expect(itemOf(getTeamSnapshot(teamId)!, key).title).toBe(
+      'New draft title for Jira',
+    );
+  });
+
+  it('rejects empty title', () => {
+    const key = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Keep me', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const item = itemOf(getTeamSnapshot(teamId)!, key);
+    const result = apply(teamId, {
+      op: 'update_item',
+      itemKey: key,
+      title: '   ',
+      baseVersion: item.version,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('title_required');
+  });
+});
+
+describe('draft description', () => {
+  it('stores description on add_item and add_sub', () => {
+    const key = expectOk(
+      apply(teamId, {
+        op: 'add_item',
+        title: 'Draft with desc',
+        quarter: '2026-Q3',
+        description: '  parent background  ',
+      }),
+    ).itemKey!;
+    const item = itemOf(getTeamSnapshot(teamId)!, key);
+    expect(item.description).toBe('parent background');
+    expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: key,
+        title: 'child',
+        description: 'child constraint',
+      }),
+    );
+    const sub = itemOf(getTeamSnapshot(teamId)!, key).subs[0];
+    expect(sub.description).toBe('child constraint');
+  });
+
+  it('update_item description is draft-only', () => {
+    const key = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Will resolve', quarter: '2026-Q3' }),
+    ).itemKey!;
+    const draft = itemOf(getTeamSnapshot(teamId)!, key);
+    expectOk(
+      apply(teamId, {
+        op: 'update_item',
+        itemKey: key,
+        title: draft.title,
+        description: 'before jira',
+        baseVersion: draft.version,
+      }),
+    );
+    expect(itemOf(getTeamSnapshot(teamId)!, key).description).toBe('before jira');
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_item',
+        itemKey: key,
+        jiraKey: 'NOVA-DESC-1',
+      }),
+    );
+    const resolved = itemOf(getTeamSnapshot(teamId)!, key);
+    const result = apply(teamId, {
+      op: 'update_item',
+      itemKey: key,
+      title: resolved.title,
+      description: 'should fail',
+      baseVersion: resolved.version,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('item_not_draft');
+  });
+
+  it('update_sub description is draft-only', () => {
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-DESC-P', type: 'Epic', title: 'Parent', quarter: '2026-Q3' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, { op: 'add_sub', itemKey: 'NOVA-DESC-P', title: 'draft child' }),
+    );
+    const sub = itemOf(getTeamSnapshot(teamId)!, 'NOVA-DESC-P').subs[0];
+    expectOk(
+      apply(teamId, {
+        op: 'update_sub',
+        subId: sub.id,
+        description: 'user notes',
+        baseVersion: sub.version,
+      }),
+    );
+    const withDesc = itemOf(getTeamSnapshot(teamId)!, 'NOVA-DESC-P').subs[0];
+    expect(withDesc.description).toBe('user notes');
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: withDesc.id, jiraKey: 'NOVA-DESC-C' }],
+      }),
+    );
+    const resolved = itemOf(getTeamSnapshot(teamId)!, 'NOVA-DESC-P').subs[0];
+    const result = apply(teamId, {
+      op: 'update_sub',
+      subId: resolved.id,
+      description: 'nope',
+      baseVersion: resolved.version,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('item_not_draft');
+  });
+});

@@ -26,6 +26,8 @@ export type RoadmapFocusItem = {
   jiraKey?: string | null;
   subActivity?: boolean;
   keywords?: string[];
+  /** Draft / Jira description mirror. Paragraph material only — never a watch-rule keyword. */
+  description?: string | null;
   priorityHints?: Record<string, boolean>;
 };
 
@@ -85,6 +87,7 @@ export function toFocusSyncItem(
     start: item.start,
     days: item.days,
     keywords: item.keywords,
+    description: item.description ?? null,
     priorityHints,
   };
 }

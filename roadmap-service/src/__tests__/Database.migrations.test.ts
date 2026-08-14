@@ -84,6 +84,8 @@ describe('items migrations on an existing database', () => {
       '007_teams_release_sheet',
       '008_teams_create_jira_prompt',
       '009_teams_assignee_map',
+      '010_item_sub_description',
+      '011_teams_jira_refreshed_at',
     ]);
     const row = db
       .prepare(`SELECT source, jira_key, project_key FROM items WHERE id = 'i1'`)
@@ -113,7 +115,7 @@ describe('items migrations on an existing database', () => {
   it('is safe to re-run on an already migrated database', () => {
     closeDb();
     const db = getDb();
-    expect(migrationIds(db)).toHaveLength(9);
+    expect(migrationIds(db)).toHaveLength(11);
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM items`).get() as { n: number },
     ).toEqual({ n: 1 });

@@ -32,12 +32,19 @@ describe('a database created from schema.sql', () => {
       '007_teams_release_sheet',
       '008_teams_create_jira_prompt',
       '009_teams_assignee_map',
+      '010_item_sub_description',
+      '011_teams_jira_refreshed_at',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['cleared']));
+    ).toEqual(expect.arrayContaining(['cleared', 'description']));
+    expect(
+      (db.pragma('table_info(items)') as Array<{ name: string }>).map(
+        (row) => row.name,
+      ),
+    ).toEqual(expect.arrayContaining(['description']));
     expect(
       (db.pragma('table_info(teams)') as Array<{ name: string }>).map(
         (row) => row.name,
@@ -47,6 +54,7 @@ describe('a database created from schema.sql', () => {
         'release_sheet_json',
         'create_jira_prompt',
         'assignee_map_json',
+        'jira_refreshed_at',
       ]),
     );
     expect(

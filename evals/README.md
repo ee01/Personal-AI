@@ -31,6 +31,9 @@ memory-service/node_modules/.bin/tsx tools/eval-memory-abilities.ts \
 
 # Passive webpage analysis contract eval (synthetic, no external model call)
 npm run eval:passive-webpage-analysis
+
+# Recall synthesis routing contract eval (synthetic, no external model call)
+npm run eval:recall-synthesis-contract
 ```
 
 ### Passive webpage analysis contract eval (standalone)
@@ -43,6 +46,14 @@ empty `skip` contract, and does not let unsupported context entities or
 notification flags survive. It is deliberately synthetic and does not call a
 live provider; provider/model quality still needs a controlled live comparison
 when the configured model or prompt version changes.
+
+### Recall synthesis contract eval (standalone)
+
+`tools/eval-recall-synthesis-contract.ts` uses an in-memory Recall database and
+synthetic model outputs to verify default zero-LLM retrieval, minimum-evidence
+gating, grounded evidence IDs, invalid-output rejection, and same-snapshot cache
+reuse. It deliberately does not call a live provider, so prose quality and live
+retrieval relevance remain outside this suite's proof boundary.
 
 ### Memory Abilities benchmark (standalone)
 

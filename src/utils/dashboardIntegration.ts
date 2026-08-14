@@ -4920,10 +4920,6 @@ export class DashboardDataManager {
   async suggestProjects(question: string): Promise<{ success: boolean; suggestions: string[]; error?: string }> {
     try {
       const client = getMemoryServiceClient();
-
-      // Recall similar messages for context (result not directly used for names)
-      await client.recall(question, { topK: 10 });
-
       const projectResult = await client.getEntities('Project');
       const suggestions = rankProjectSuggestionNames(projectResult.items || [], question);
       return { success: true, suggestions };

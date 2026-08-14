@@ -41,6 +41,43 @@
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
+| Add new explicit request fields while retaining legacy `blockTypes` | Decouples behavior without breaking unknown external clients |
+| Keep passive, tool, workflow, and specialized-generation paths evidence-only | Avoids hidden token use and double generation |
+| Put manual synthesis on entity-mode Memory Exploring search | It is the only direct human-facing raw-result surface identified in the audit |
+| Cache by normalized query plus returned evidence identity/content | Reuse is safe only when both the question and evidence snapshot are unchanged |
+| Use module-level single-flight/cache in the service process | Route handlers construct a new `ActiveRecallService` per request, so instance-local state would not deduplicate concurrent requests |
+
+## 2026-08-12 Re-baseline Findings
+- The relevant backend Recall files are currently clean except `memory-service/src/types/index.ts`, whose only existing diff is unrelated Fastify authentication metadata at the end of the file.
+- `MemoryServiceClient.ts` has unrelated device-key authentication work near request transport, but the Recall types/method section is unchanged and can be patched narrowly.
+- `options.tsx` has broad unrelated changes; the workflow replay call itself is unchanged, so only the empty query literal should be touched there.
+- Memory Exploring entity search currently sends `SEARCH_ENTITIES`, stores only mapped result items, and exposes no synthesis state. The message handler is the narrow boundary where an explicit summary request can call Recall with synthesis enabled.
+- SearchResultPage already has a large AI-answer area for overview `/ask`, but entity-mode raw search needs a separate small synthesis card/button so the two contracts are not conflated.
+- Current Recall types duplicate the contract in backend and extension client. Both must evolve together; the backend file's unrelated auth diff is outside the Recall section and can be preserved.
+- Active Recall currently creates a fresh `LLMClient` on every service instance and reports one combined `queryTimeMs`. New module-level cache/single-flight plus explicit retrieval/synthesis timings can be added without changing `RecallEngine`.
+- The route schema still accepts dead `analysisMode`, `table`, and `chart`. The migration should deprecate but continue accepting `analysisMode` for compatibility, while removing unsupported `table`/`chart` from the accepted block enum/type rather than pretending they work.
+- Entity-search UI already carries scope, query, type filter, result batch receipts, and read-only boundaries. The synthesis control should sit beside the result summary, reset on query/scope/type changes, and state that clicking starts an LLM request but does not write memory or contact external systems.
+- Implemented contract direction: `retrievalMode` selects `fast|balanced|deep`, `presentationBlocks` contains only deterministic supported blocks, and `synthesis` explicitly opts into `summary`; legacy `blockTypes` maps to the new behavior.
+- Unsupported `table` and `chart` were removed from accepted Recall types/schema instead of returning empty blocks silently.
+- Grounded synthesis now requires `summaryEvidence` and evidence indexes on every finding. Indexes are converted to returned item IDs; invalid or ungrounded output receives `invalid_output` rather than being presented as a successful summary.
+- Summary cache/single-flight keys include normalized query, scope, max token budget, and the returned evidence IDs/content/timestamps, preventing cross-snapshot reuse.
+- The route now exposes whether safe FTS policy was effective, while separate retrieval and synthesis timings stop `queryTimeMs` from masquerading as retrieval-only latency.
+- Memory Exploring now has a dedicated `SUMMARIZE_SEARCH_RESULTS` message rather than overloading normal search. It reuses the same query/scope/entity filters, requires at least three returned items, and opts in with `trigger: user` and a 500-token cap.
+- The UI compares the evidence result-key snapshot used for synthesis with the currently displayed snapshot. If retrieval changed after the click, it refreshes the visible result list before showing the summary and marks that boundary.
+- The new control is unavailable below three visible results and explicitly says clicking spends an LLM request while remaining read-only with respect to memory and external systems.
+- Other repaired callers remain deterministic: Dashboard no longer makes a discarded Recall, replay uses a legal query, `/ask` uses explicit deep retrieval plus deterministic blocks, and provider output is labeled as an evidence card/receipt rather than a generated answer.
+- The development extension is configured against `10.32.56.212`, so the deterministic E2E harness must intercept `/api/v1/**` independently of host. This keeps the test local while still validating the actual compiled configuration.
+- The Memory Exploring E2E now proves the summary is not requested during ordinary search, is requested only after the button click, carries the explicit user/minimum-evidence/token-budget contract, and renders the grounding/timing/cache receipt.
+- The hybrid diagnostics fixture contains the exact lexical phrase `Q2 planning review`; an FTS hit alongside the time-channel hit is the truthful current result. The old `time`-only assertion is stale and should be repaired rather than weakening production FTS behavior.
+- The shared eval runner dispatches by hard-coded suite IDs; an unregistered new suite would be marked `suite_runner_not_implemented`. A small standalone deterministic contract eval, following the existing passive-webpage-analysis precedent, is the lower-risk way to exercise Recall synthesis routing without calling a live service or judge model.
+- The standalone eval can execute the actual `ActiveRecallService` against the repository's in-memory migrated SQLite fixture, while injecting only the model output. This validates retrieval routing, call count, parser grounding, receipts, and cache behavior without production writes or token spend.
+- Eval cases must isolate their in-memory evidence corpus: otherwise earlier rows can legitimately satisfy a later case's minimum-evidence gate. With per-case cleanup, all four routing/grounding/cache cases pass.
+- Canonical memory-system documentation already centralizes the Memory Exploring search-result contract, so the new routing/cache/grounding behavior belongs there and in the docs index rather than in a disconnected feature file.
+- Repository-wide caller search after migration shows only intentional legacy coverage remains: the compatibility unit tests and one performance fixture. Production callers now either use explicit `presentationBlocks`/`synthesis` or raw evidence retrieval, and `table`/`chart` survive only as a negative schema test.
+- The worktree still contains many unrelated user edits in files that overlap this task (`package.json`, docs, client auth, Options). Final delivery must describe the scoped Recall changes and avoid staging, committing, or deploying the entire dirty tree.
+- UI review confirms the entity-search summary path is separately messaged and does not alter ordinary `SEARCH_ENTITIES`: it re-runs the same query/scope/entity filters only after the click, compares stable result keys, refreshes changed evidence before rendering, and uses Vue text interpolation for model prose.
+- Final cache review found and closed a multi-user isolation edge: the process-level cache key now includes a WeakMap-backed database-instance namespace plus prompt-relevant source metadata, so identical-looking evidence in separate per-user databases cannot share a synthesis entry.
+- The new registered suite passes all four cases and its Reader Proof marks all three claims proved with an explicit synthetic/live-quality boundary. The first generated reader card still labels its generic actual-summary quote empty even though structured details exist, so the runner adapter should expose a concise human-readable actual output before closeout.
 
 ## Issues Encountered
 | Issue | Resolution |

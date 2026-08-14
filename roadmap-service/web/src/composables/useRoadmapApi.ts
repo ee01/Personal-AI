@@ -214,8 +214,16 @@ export function useRoadmapApi() {
     teamId: string,
     input:
       | { itemKey: string; mode?: 'queue' }
+      | { subId: string; mode?: 'queue' }
       | {
           itemKey: string;
+          mode: 'confirm';
+          start: string;
+          end: string;
+          jiraKey?: string;
+        }
+      | {
+          subId: string;
           mode: 'confirm';
           start: string;
           end: string;

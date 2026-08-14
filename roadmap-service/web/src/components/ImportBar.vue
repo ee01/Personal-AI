@@ -7,8 +7,10 @@ import {
   jqlHasTargetDeliveryQuarter,
   qCmp,
 } from '../composables/useGeometry';
+import { extensionLockTip, useExtensionGate } from '../composables/useExtensionGate';
 
 const state = useRoadmapState();
+const gate = useExtensionGate();
 const overwrite = state.importOverwrite;
 
 const team = computed(() => state.snapshot.value?.team);
@@ -30,8 +32,6 @@ const showImportBtn = computed(() => {
   return pending.value.length > 0 || overwrite.value;
 });
 
-const extTitle = '需要 Personal AI 扩展';
-
 async function toggleQuarter(q: string) {
   if (!team.value || !state.editable.value) return;
   const checked = [...team.value.checkedQuarters];
@@ -44,7 +44,10 @@ async function toggleQuarter(q: string) {
 }
 
 function openImport() {
-  if (!state.hasExtension.value) return;
+  if (!state.hasExtension.value) {
+    gate.openGate('import');
+    return;
+  }
   if (!state.ensureActorName()) return;
   state.modals.value.import = true;
 }
@@ -100,11 +103,12 @@ function openImport() {
       <button
         v-show="showImportBtn"
         class="btn btn-primary"
-        :disabled="!state.hasExtension.value || !state.editable.value"
-        :title="!state.hasExtension.value ? extTitle : undefined"
+        :class="{ locked: !state.hasExtension.value }"
+        :disabled="!state.editable.value"
+        :data-tip="!state.hasExtension.value ? extensionLockTip('import') : undefined"
         @click="openImport"
       >
-        <svg width="13" height="13" viewBox="0 0 14 14">
+        <svg class="ico" width="13" height="13" viewBox="0 0 14 14">
           <path
             d="M7 1v8M3.5 6L7 9.5 10.5 6M2 12.5h10"
             fill="none"
@@ -112,6 +116,25 @@ function openImport() {
             stroke-width="1.6"
             stroke-linecap="round"
             stroke-linejoin="round"
+          />
+        </svg>
+        <svg class="lock" width="12" height="13" viewBox="0 0 14 15">
+          <rect
+            x="2.4"
+            y="6.2"
+            width="9.2"
+            height="7"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+          />
+          <path
+            d="M4.7 6.2V4.4a2.3 2.3 0 014.6 0v1.8"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
           />
         </svg>
         导入 Backlog

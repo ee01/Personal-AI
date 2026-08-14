@@ -285,6 +285,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runAgentExecutorRuntimeCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'recall-synthesis-contract') {
+    return runRecallSynthesisContractCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'evidence-cohesion-gate') {
     return runEvidenceCohesionGateCase({ suite, caseItem, runDir, collected });
   }
@@ -396,6 +400,87 @@ async function runCase({ suite, caseItem, runDir }) {
     },
     error: responseEnvelope.ok ? undefined : responseEnvelope.error,
   };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runRecallSynthesisContractCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const execution = await runProcess(
+    path.join(repoRoot, 'memory-service/node_modules/.bin/tsx'),
+    [
+      'tools/eval-recall-synthesis-contract.ts',
+      '--case',
+      caseItem.id,
+      '--json',
+    ],
+    { timeoutMs: 30_000 },
+  );
+  let payload = null;
+  try {
+    payload = JSON.parse(execution.stdout.trim());
+  } catch {
+    payload = null;
+  }
+  const actual = payload?.results?.[0];
+  const status = execution.code === 0 && actual?.status === 'pass' ? 'pass' : 'fail';
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    query: caseItem.query,
+    sampleSummary: `${caseItem.evidence?.length || 0} 条合成证据；${caseItem.request?.synthesis?.mode || 'none'} synthesis`,
+    expectedBehavior: caseItem.expectedBehavior,
+    status,
+    verdict: status,
+    scores: { contract: status === 'pass' ? 3 : 0 },
+    overallScore: status === 'pass' ? 1 : 0,
+    actualOutput: actual?.details
+      ? {
+          summary: actual.actual,
+          ...actual.details,
+        }
+      : {
+          error: actual?.error || execution.stderr || execution.stdout,
+        },
+    userConclusion:
+      status === 'pass'
+        ? `契约通过：${actual?.actual || caseItem.expectedBehavior}`
+        : `契约失败：${actual?.error || execution.stderr || 'runner 未返回可解析结果'}`,
+    improvementSuggestions:
+      status === 'pass'
+        ? []
+        : ['检查 Recall synthesis receipt、模型调用计数、证据门槛和缓存 key。'],
+    why: status === 'pass' ? ['真实 ActiveRecallService 路径满足 case 断言'] : [],
+    judge: {
+      heuristic: {
+        verdict: status,
+        expected: caseItem.expected,
+        actual: actual?.details,
+      },
+      llm: null,
+    },
+    error: status === 'pass' ? undefined : execution.stderr || actual?.error,
+    sampleDetails: {
+      query: caseItem.query,
+      evidenceCount: caseItem.evidence?.length || 0,
+      request: caseItem.request,
+      collectedContext: summarizeSampleText(collected.primaryText),
+    },
+  };
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    execution: {
+      code: execution.code,
+      stderr: execution.stderr,
+    },
+    payload,
+  });
   await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
   return result;
 }

@@ -978,10 +978,20 @@ export type RecallAnalysisMode = 'search' | 'research' | 'aggregate';
 export type RecallBlockType =
   | 'summary'
   | 'timeline'
-  | 'table'
-  | 'chart'
   | 'evidence_list'
   | 'media';
+export type RecallPresentationBlockType = Exclude<RecallBlockType, 'summary'>;
+export type RecallRetrievalMode = 'fast' | 'balanced' | 'deep';
+export type RecallSynthesisTrigger = 'user' | 'api';
+export interface RecallSynthesisRequest {
+  mode: 'none' | 'summary';
+  /** Who explicitly opted into token-consuming synthesis. */
+  trigger?: RecallSynthesisTrigger;
+  /** Bounded output budget for this synthesis only. */
+  maxTokens?: number;
+  /** Do not spend tokens unless at least this many evidence items were found. */
+  minEvidenceItems?: number;
+}
 export type RecallPresentationHint =
   | 'default'
   | 'compact'
@@ -1020,19 +1030,17 @@ export interface RecallQuery {
   presentationHint?: RecallPresentationHint;
   lifecycleMode?: RecallLifecycleMode;
   previewMaxLength?: number;
-  /** Hint to ActiveRecallService about the desired second-stage processing. */
+  /** @deprecated Accepted for compatibility; it no longer controls routing. */
   analysisMode?: RecallAnalysisMode;
+  /** Retrieval cost/breadth; independent from presentation and synthesis. */
+  retrievalMode?: RecallRetrievalMode;
+  /** Deterministic UI blocks. Never invokes an LLM. */
+  presentationBlocks?: RecallPresentationBlockType[];
+  /** Explicit opt-in to an optional LLM synthesis stage. */
+  synthesis?: RecallSynthesisRequest;
   /**
-   * Which UI blocks to build alongside the items list.
-   *
-   * - Omitted / empty → evidence-only mode: response contains `items` only,
-   *   no `blocks`, no `analysis`, no LLM calls.
-   * - Provided → response contains `items` + the requested `blocks`. If the
-   *   list includes `'summary'`, an LLM second-stage runs to produce
-   *   `analysis` (and prepends a `summary` block).
-   *
-   * This single field replaces the old `responseMode` switch. The model is
-   * "you ask for what you want; LLM is opt-in by including 'summary'".
+   * @deprecated Use `presentationBlocks` and `synthesis`. Kept so existing
+   * clients remain compatible during migration.
    */
   blockTypes?: RecallBlockType[];
 }
@@ -1081,12 +1089,44 @@ export interface RecallResult {
   channels: string[];
   channelDiagnostics?: RecallChannelDiagnostic[];
   scopeReceipt?: RecallScopeReceipt;
-  /** Block-style render schema (only present when `blockTypes` was provided). */
+  /** Retrieval-only latency, excluding optional synthesis. */
+  retrievalTimeMs?: number;
+  /** Optional LLM-stage latency. */
+  synthesisTimeMs?: number;
+  retrievalReceipt?: RecallRetrievalReceipt;
+  synthesisReceipt?: RecallSynthesisReceipt;
+  /** Block-style render schema when presentation or synthesis was requested. */
   blocks?: RecallBlock[];
-  /** Higher-level analysis (only present when `blockTypes` includes `summary`). */
+  /** Higher-level analysis when explicit synthesis succeeds. */
   analysis?: RecallAnalysis;
   /** Multi-modal references (URLs, file refs, structured spec). */
   artifacts?: RecallArtifact[];
+}
+
+export interface RecallRetrievalReceipt {
+  requestedMode: RecallRetrievalMode;
+  effectiveChannels: string[];
+  runtimePolicy: 'default' | 'safe_fts';
+}
+
+export type RecallSynthesisStatus =
+  | 'not_requested'
+  | 'skipped_empty'
+  | 'skipped_insufficient'
+  | 'skipped_by_caller'
+  | 'succeeded'
+  | 'failed'
+  | 'invalid_output';
+
+export interface RecallSynthesisReceipt {
+  requested: boolean;
+  mode: 'none' | 'summary';
+  trigger?: RecallSynthesisTrigger;
+  status: RecallSynthesisStatus;
+  cacheHit: boolean;
+  evidenceItemIds: string[];
+  minimumEvidenceItems?: number;
+  errorCode?: 'llm_failed' | 'invalid_output';
 }
 
 export interface RecallItem {
@@ -1141,19 +1181,6 @@ export interface RecallTimelineBlockPayload {
   events: RecallTimelineEvent[];
 }
 
-export interface RecallTableBlockPayload {
-  columns: Array<{ key: string; label: string }>;
-  rows: Array<Record<string, string | number | null>>;
-}
-
-export interface RecallChartBlockPayload {
-  chartType: 'line' | 'bar' | 'pie' | 'scatter';
-  labels: string[];
-  series: Array<{ name: string; data: number[] }>;
-  xAxisLabel?: string;
-  yAxisLabel?: string;
-}
-
 export interface RecallEvidenceCard {
   itemId: string;
   title: string;
@@ -1185,16 +1212,23 @@ export interface RecallMediaBlockPayload {
 export type RecallBlock =
   | RecallBlockBase<'summary', RecallSummaryBlockPayload>
   | RecallBlockBase<'timeline', RecallTimelineBlockPayload>
-  | RecallBlockBase<'table', RecallTableBlockPayload>
-  | RecallBlockBase<'chart', RecallChartBlockPayload>
   | RecallBlockBase<'evidence_list', RecallEvidenceListBlockPayload>
   | RecallBlockBase<'media', RecallMediaBlockPayload>;
+
+export interface RecallGroundedFinding {
+  text: string;
+  evidenceItemIds: string[];
+}
 
 export interface RecallAnalysis {
   /** Short synthesized summary describing what was retrieved. */
   summary: string;
+  /** Evidence items supporting the summary. */
+  evidenceItemIds?: string[];
   /** Key conclusions, ordered by importance. */
   keyFindings?: string[];
+  /** Verifiable form of each key conclusion. */
+  groundedFindings?: RecallGroundedFinding[];
   /** Higher-level insights derived from the evidence. */
   insights?: string[];
   /** Why specific evidence items were ranked above others. */
@@ -2497,5 +2531,9 @@ declare module 'fastify' {
   interface FastifyRequest {
     userId: string;
     userContext: UserContext;
+    /** How the caller proved identity: tier-2 user key, tier-1 service key, or neither. */
+    authMode?: 'user_key' | 'service_key' | 'bootstrap_key' | 'anonymous';
+    /** Scopes carried by a tier-2 user key. */
+    authScopes?: string[];
   }
 }

@@ -188,7 +188,10 @@ describe('Recall API', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.channels).toEqual(['time']);
+    // The fixture text contains this exact query, so both lexical and time
+    // recall should report a real hit. Keeping the FTS receipt honest matters
+    // more than preserving the older time-only expectation.
+    expect(body.channels).toEqual(['fts', 'time']);
     expect(body.channelDiagnostics).toEqual([
       {
         channel: 'vector',
@@ -196,10 +199,51 @@ describe('Recall API', () => {
         candidateCount: 0,
         reason: 'embedding_unavailable',
       },
-      { channel: 'fts', status: 'empty', candidateCount: 0 },
+      { channel: 'fts', status: 'hit', candidateCount: 1 },
       { channel: 'graph', status: 'empty', candidateCount: 0 },
       { channel: 'time', status: 'hit', candidateCount: 1 },
     ]);
+  });
+
+  it('keeps deterministic presentation separate from explicit no-synthesis retrieval', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Q2 planning review',
+        topK: 5,
+        retrievalMode: 'fast',
+        presentationBlocks: ['evidence_list'],
+        synthesis: { mode: 'none' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.retrievalReceipt).toMatchObject({
+      requestedMode: 'fast',
+      effectiveChannels: ['fts'],
+    });
+    expect(body.blocks.map((block: any) => block.type)).toEqual([
+      'evidence_list',
+    ]);
+    expect(body.synthesisReceipt).toMatchObject({
+      requested: false,
+      status: 'not_requested',
+    });
+  });
+
+  it('rejects unsupported presentation blocks instead of silently ignoring them', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Q2 planning review',
+        presentationBlocks: ['table'],
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
   });
 
   it('defaults evidence-only recall to FTS so ambient clients avoid slow channels', async () => {

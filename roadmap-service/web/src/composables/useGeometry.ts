@@ -122,8 +122,24 @@ export function chipList(checked: string[]): string[] {
   return list;
 }
 
-export const X = (tl: Timeline, d: Date | string) =>
-  diffD(tl.start, typeof d === 'string' ? parseDate(d) : d) * DAY_W;
+export function dateMs(d: Date | string): number {
+  return strip(typeof d === 'string' ? parseDate(d) : d).getTime();
+}
+
+/** Inclusive overlap: start..end intersects winS..winE. Accepts ISO strings or Date. */
+export function rangesOverlap(
+  start: Date | string,
+  end: Date | string,
+  winS: Date | string,
+  winE: Date | string,
+): boolean {
+  return dateMs(end) >= dateMs(winS) && dateMs(start) <= dateMs(winE);
+}
+
+/** Pixel offset of a calendar day from the timeline start (left edge of the day cell). */
+export function X(tl: Timeline, d: Date | string): number {
+  return diffD(tl.start, d) * DAY_W;
+}
 
 export const dateAtX = (tl: Timeline, px: number) =>
   addD(tl.start, Math.round(px / DAY_W));

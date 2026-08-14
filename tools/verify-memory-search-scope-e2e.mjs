@@ -144,7 +144,7 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 });
 
 try {
-  await context.route('http://localhost:3210/api/v1/**', async (route) => {
+  await context.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const url = request.url();
     const pathname = new URL(url).pathname;
@@ -247,6 +247,73 @@ try {
     if (pathname.endsWith('/recall')) {
       const payload = request.postDataJSON();
       recallRequests.push(payload);
+      if (payload.query === 'summary results') {
+        const items = [1, 2, 3].map((index) => ({
+          id: `summary-memory-${index}`,
+          type: 'message',
+          content: `Summary evidence ${index}`,
+          displayTitle: `Summary result ${index}`,
+          displayText: `Grounded summary evidence ${index}.`,
+          score: 0.9 - index * 0.02,
+          source: 'manual',
+          sourceTitle: `Summary source ${index}`,
+          sourceUrl: `https://example.com/summary-${index}`,
+          timestamp: nowSeconds - index * 60,
+          scope: 'work',
+          metadata: { channels: ['fts'] },
+        }));
+        await route.fulfill(
+          jsonResponse({
+            items,
+            totalFound: items.length,
+            queryTimeMs: payload.synthesis ? 29 : 7,
+            retrievalTimeMs: 7,
+            synthesisTimeMs: payload.synthesis ? 22 : undefined,
+            channels: ['fts'],
+            channelDiagnostics: [
+              { channel: 'fts', status: 'hit', candidateCount: items.length },
+            ],
+            retrievalReceipt: {
+              requestedMode: payload.retrievalMode || 'fast',
+              effectiveChannels: ['fts'],
+              runtimePolicy: 'safe_fts',
+            },
+            synthesisReceipt: payload.synthesis
+              ? {
+                  requested: true,
+                  mode: 'summary',
+                  trigger: 'user',
+                  status: 'succeeded',
+                  cacheHit: false,
+                  evidenceItemIds: items.map((item) => item.id),
+                  minimumEvidenceItems: 3,
+                }
+              : {
+                  requested: false,
+                  mode: 'none',
+                  status: 'not_requested',
+                  cacheHit: false,
+                  evidenceItemIds: [],
+                },
+            analysis: payload.synthesis
+              ? {
+                  summary:
+                    '三条证据共同表明当前结果可以形成可核对的总结。',
+                  evidenceItemIds: items.map((item) => item.id),
+                  keyFindings: ['三个结果均来自当前工作记忆。'],
+                  groundedFindings: [
+                    {
+                      text: '三个结果均来自当前工作记忆。',
+                      evidenceItemIds: items.map((item) => item.id),
+                    },
+                  ],
+                  confidence: 0.86,
+                }
+              : undefined,
+          }),
+        );
+        return;
+      }
       if (payload.query === 'backend outage') {
         await route.fulfill(
           {
@@ -664,6 +731,47 @@ try {
     askRequests.map((request) => request.scope),
     ['work', 'all', 'personal', 'all', 'all'],
   );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/entity/Person`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page.locator('.search-header .search-input').fill('summary results');
+  await page.locator('.search-header .filter-btn').first().click();
+  await page.getByText('Summary result 1').waitFor({ timeout: 10000 });
+  const summaryButton = page.getByRole('button', {
+    name: /点击会为“summary results”重新召回当前范围并调用一次 LLM/,
+  });
+  const summaryBoundary = (await summaryButton.getAttribute('title')) || '';
+  assert.ok(
+    summaryBoundary.includes('不写入记忆') &&
+      summaryBoundary.includes('不发送消息或执行外部动作'),
+    'summary button should expose token use and no-write/no-external-action boundary',
+  );
+  await summaryButton.click();
+  const summarySection = page.getByLabel('搜索结果总结');
+  await summarySection.getByText('总结已生成').waitFor({ timeout: 10000 });
+  await summarySection
+    .getByText('三条证据共同表明当前结果可以形成可核对的总结。')
+    .waitFor({ timeout: 10000 });
+  await summarySection
+    .getByText('三个结果均来自当前工作记忆。')
+    .waitFor({ timeout: 10000 });
+  await summarySection.getByText('依据 3 条当前证据').waitFor({
+    timeout: 10000,
+  });
+  await summarySection.getByText('有效通道 fts').waitFor({ timeout: 10000 });
+  await summarySection.getByText('召回 7ms').waitFor({ timeout: 10000 });
+  await summarySection.getByText('生成 22ms').waitFor({ timeout: 10000 });
+  const synthesisRequest = recallRequests.at(-1);
+  assert.deepEqual(synthesisRequest?.presentationBlocks, ['evidence_list']);
+  assert.deepEqual(synthesisRequest?.synthesis, {
+    mode: 'summary',
+    trigger: 'user',
+    maxTokens: 500,
+    minEvidenceItems: 3,
+  });
+  assert.equal(synthesisRequest?.retrievalMode, 'balanced');
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/entity/Person`,

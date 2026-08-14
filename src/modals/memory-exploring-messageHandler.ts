@@ -324,6 +324,57 @@ const messageHandlers: Record<string, MessageHandler> = {
     }
   },
 
+  SUMMARIZE_SEARCH_RESULTS: async (request) => {
+    try {
+      const { query, entityType, scope = 'work', limit = 30 } = request;
+      const normalizedQuery = String(query || '').trim();
+      if (!normalizedQuery) {
+        return { success: false, error: '缺少需要总结的搜索关键词。' };
+      }
+
+      const recallResult = await client.recall(normalizedQuery, {
+        topK: Math.min(Math.max(Number(limit) || 30, 3), 50),
+        channels: entityType ? ['graph', 'vector', 'fts'] : ['vector', 'fts'],
+        entityTypes: entityType ? [entityType] : undefined,
+        scope,
+        includeMetadata: true,
+        presentationHint: 'compact',
+        retrievalMode: 'balanced',
+        presentationBlocks: ['evidence_list'],
+        synthesis: {
+          mode: 'summary',
+          trigger: 'user',
+          maxTokens: 500,
+          minEvidenceItems: 3,
+        },
+      });
+      const data = (recallResult.items || []).map(mapRecallItemToSearchResult);
+      const expectedResultKeys = Array.isArray(request.expectedResultKeys)
+        ? request.expectedResultKeys.map(String)
+        : [];
+      const resultKeys = data.map((item) => item.resultKey);
+      const snapshotChanged =
+        expectedResultKeys.length > 0 &&
+        (expectedResultKeys.length !== resultKeys.length ||
+          expectedResultKeys.some((key, index) => key !== resultKeys[index]));
+
+      return {
+        success: true,
+        data,
+        analysis: recallResult.analysis,
+        synthesisReceipt: recallResult.synthesisReceipt,
+        retrievalReceipt: recallResult.retrievalReceipt,
+        retrievalTimeMs: recallResult.retrievalTimeMs,
+        synthesisTimeMs: recallResult.synthesisTimeMs,
+        snapshotChanged,
+        source: 'memory-service',
+      };
+    } catch (error: any) {
+      console.error('总结搜索结果失败:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
   GET_RECENT_TIMELINE: async (request) => {
     try {
       const limit = Math.min(Math.max(Number(request.limit) || 50, 1), 100);

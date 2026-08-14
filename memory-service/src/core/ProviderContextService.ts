@@ -669,7 +669,7 @@ export class ProviderContextService {
     });
 
     const bodySections = [
-      '# Query Answer Card',
+      '# Query Evidence Card',
       `> Question: ${query}`,
       '',
       '## Evidence',
@@ -682,7 +682,7 @@ export class ProviderContextService {
         'No recall evidence found.',
       ),
       '',
-      '## Recall Summary',
+      '## Retrieval Receipt',
       `- totalFound: ${recall.totalFound}`,
       `- channels: ${recall.channels.join(', ') || 'none'}`,
       `- queryTimeMs: ${recall.queryTimeMs}`,

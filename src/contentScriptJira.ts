@@ -66,6 +66,12 @@ import {
   UXTicketKeySource,
 } from './jiraDesignLinks';
 import { getEnvConfig } from './utils';
+import {
+  formatBackendProgressSource,
+  getJiraIssueLinkRelationship,
+  isSameJiraIssue,
+  shouldIncludeBackendDependency,
+} from './jiraBackendProgress';
 
 initContentScriptI18n(() => {
   setTimeout(main, 0);
@@ -2226,13 +2232,13 @@ function prepareBackendProgressItems(
   currentTicketKey: string,
   limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
 ): BackendProgressData[] {
-  const filtered = items.filter(item => !isSameJiraProject(currentTicketKey, item.dependencyTicketKey));
+  const filtered = items.filter(item => !isSameJiraIssue(currentTicketKey, item.dependencyTicketKey));
   return sortBackendProgressItems(filtered).slice(0, Math.max(0, limit));
 }
 
 // 从API数据中查找外部依赖项目的tickets（仅搜索issue links）
-function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string; status?: string }[] {
-  const tickets: { key: string; summary: string; status?: string }[] = [];
+function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string; status?: string; relationship?: string }[] {
+  const tickets: { key: string; summary: string; status?: string; relationship?: string }[] = [];
   const issueLinks = data.fields?.issuelinks || [];
   
   issueLinks.forEach((link: any) => {
@@ -2241,13 +2247,13 @@ function findDependencyTicketsFromData(data: any, projectPrefix: string, current
       issue
       && issue.key
       && matchesProjectPattern(issue.key, projectPrefix)
-      && issue.key !== currentTicketKey
-      && !isSameJiraProject(currentTicketKey, issue.key)
+      && shouldIncludeBackendDependency(currentTicketKey, issue.key, 'issue_links')
     ) {
       tickets.push({
         key: issue.key,
         summary: issue.fields?.summary || issue.key,
         status: issue.fields?.status?.name,
+        relationship: getJiraIssueLinkRelationship(link) || undefined,
       });
     }
   });
@@ -2429,7 +2435,7 @@ async function findImpactLayerEpicsFromParent(
     for (const issue of context.children) {
       const key = issue?.key;
       if (!key || seenKeys.has(key)) continue;
-      if (key === currentTicketKey || isSameJiraProject(currentTicketKey, key)) continue;
+      if (!shouldIncludeBackendDependency(currentTicketKey, key, 'init_parent')) continue;
       // Keep configured dependency-project tickets on the classic parent/linked channels.
       if (depProject && matchesProjectPattern(key, depProject)) continue;
       if (!shouldIncludeParentDependencyEpic(issue)) continue;
@@ -2482,8 +2488,7 @@ async function findDependencyEpicsFromParent(
       issue.key
       && !excludeKeys.has(issue.key)
       && matchesProjectPattern(issue.key, projectPrefix)
-      && issue.key !== currentTicketKey
-      && !isSameJiraProject(currentTicketKey, issue.key)
+      && shouldIncludeBackendDependency(currentTicketKey, issue.key, 'init_parent')
       && shouldIncludeParentDependencyEpic(issue)
     ))
     .sort((a: any, b: any) => {
@@ -2505,7 +2510,7 @@ async function findDependencyEpicsFromParent(
 
 async function appendBackendProgressItems(
   allProgressData: BackendProgressData[],
-  depTickets: Array<{ key: string; summary: string; url?: string; status?: string }>,
+  depTickets: Array<{ key: string; summary: string; url?: string; status?: string; relationship?: string }>,
   source: string,
   shouldContinue: () => boolean,
 ): Promise<void> {
@@ -2524,7 +2529,7 @@ async function appendBackendProgressItems(
       earlyBuildDate: details.targetEnd,
       rolloutDate,
       fixVersion: details.fixVersion,
-      source,
+      source: formatBackendProgressSource(source, dep.relationship),
       issueStatus: dep.status || details.status || null,
     });
   }
@@ -2592,7 +2597,7 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
       if (
         reference
         && matchesProjectPattern(reference.key, projectPrefix)
-        && !isSameJiraProject(currentTicketKey, reference.key)
+        && shouldIncludeBackendDependency(currentTicketKey, reference.key, 'issue_links')
       ) {
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
         const summary = summaryElement?.textContent?.trim() || reference.key;
@@ -2946,7 +2951,7 @@ async function collectAndDisplayBackendProgress(
     // 合并重复的dependency tickets（同一ticket来自不同source时合并source标签）
     const mergedProgressData: BackendProgressData[] = [];
     for (const item of allProgressData) {
-      if (isSameJiraProject(ticketId, item.dependencyTicketKey)) continue;
+      if (isSameJiraIssue(ticketId, item.dependencyTicketKey)) continue;
       const existing = mergedProgressData.find(p => p.dependencyTicketKey === item.dependencyTicketKey);
       if (existing) {
         if (!existing.source.includes(item.source)) {

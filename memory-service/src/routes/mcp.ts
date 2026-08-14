@@ -13,6 +13,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { getConfig } from '../config.js';
 import {
+  parseUserApiKey,
+  verifyUserApiKey,
+} from '../core/auth/userApiKeys.js';
+import {
   handleMcpJsonRpc,
   isOriginAllowed,
   parseBearerToken,
@@ -51,7 +55,7 @@ function resolveMcpUserId(request: FastifyRequest): string {
   return process.env.MCP_USER_ID || 'default';
 }
 
-function buildCtx(request: FastifyRequest): McpToolContext {
+function buildCtx(request: FastifyRequest, userId: string): McpToolContext {
   const config = getConfig();
   const allowedScopes = (envList('MCP_ALLOWED_SCOPES').length
     ? envList('MCP_ALLOWED_SCOPES')
@@ -67,7 +71,7 @@ function buildCtx(request: FastifyRequest): McpToolContext {
 
   return {
     baseUrl: baseUrl.replace(/\/$/, ''),
-    userId: resolveMcpUserId(request),
+    userId,
     apiKey: expectedBearer() || undefined,
     allowedScopes,
     oauthScopes: parseOauthScopes(process.env.MCP_OAUTH_SCOPES),
@@ -90,22 +94,42 @@ function checkOrigin(request: FastifyRequest, reply: FastifyReply): boolean {
   return true;
 }
 
-function checkBearer(request: FastifyRequest, reply: FastifyReply): boolean {
-  const expected = expectedBearer();
-  if (!expected) {
-    // Dev-friendly: if no API key configured, allow local unsigned MCP.
-    return true;
-  }
+/**
+ * Accept either a tier-2 personal key (binds the session to its owner) or the
+ * tier-1 service bearer. Returns the userId to serve, or null when rejected.
+ */
+function authorizeMcp(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): { userId: string } | null {
   const token = parseBearerToken(
     typeof request.headers.authorization === 'string'
       ? request.headers.authorization
       : undefined,
   );
+
+  const parsedUserKey = parseUserApiKey(token);
+  if (parsedUserKey) {
+    const context = request.server.userContextManager.getContext(
+      parsedUserKey.userId,
+    );
+    if (!verifyUserApiKey(context.db, parsedUserKey.token)) {
+      rejectUnauthorized(reply, 'invalid_user_api_key');
+      return null;
+    }
+    return { userId: parsedUserKey.userId };
+  }
+
+  const expected = expectedBearer();
+  if (!expected) {
+    // Dev-friendly: if no API key configured, allow local unsigned MCP.
+    return { userId: resolveMcpUserId(request) };
+  }
   if (!token || token !== expected) {
     rejectUnauthorized(reply, 'invalid_bearer_token');
-    return false;
+    return null;
   }
-  return true;
+  return { userId: resolveMcpUserId(request) };
 }
 
 export async function mcpHttpRoutes(app: FastifyInstance): Promise<void> {
@@ -114,12 +138,14 @@ export async function mcpHttpRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'mcp_http_disabled' });
     }
     if (!checkOrigin(request, reply)) return;
-    if (!checkBearer(request, reply)) return;
+    const auth = authorizeMcp(request, reply);
+    if (!auth) return;
     return reply.code(200).send({
       name: 'personal-memory',
       transport: 'streamable-http',
       protocolVersion: '2024-11-05',
       endpoint: '/mcp',
+      userId: auth.userId,
       tools: [
         'memory_search',
         'memory_ask',
@@ -140,9 +166,13 @@ export async function mcpHttpRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'mcp_http_disabled' });
     }
     if (!checkOrigin(request, reply)) return;
-    if (!checkBearer(request, reply)) return;
+    const auth = authorizeMcp(request, reply);
+    if (!auth) return;
 
-    const handled = await handleMcpJsonRpc(request.body, buildCtx(request));
+    const handled = await handleMcpJsonRpc(
+      request.body,
+      buildCtx(request, auth.userId),
+    );
     if (handled.status === 202) {
       return reply.code(202).send();
     }

@@ -5,9 +5,12 @@
 # 1. 环境变量 MEMORY_SERVICE_AGENT_TASK_URL
 #    默认写死 Dify worker 可达的 NodePort：http://10.32.56.212:3210/...
 #    （hostname memory.xmnup.com 对 Dify 不可达；Chrome AR 仍用 .env MEMORY_SERVICE_BASE_URL）
-# 2. HTTP 节点默认 no-auth（当前 memory-service 未开 API_KEY）。若后端启用了 API_KEY，
-#    在 Dify 里把该 HTTP 节点 Authorization 改成 Bearer，并填 MEMORY_SERVICE_API_KEY
-# 3. 发布为 Workflow，复制 API Access 的 URL + API Key，回头给我替换 Config / AppScript 包装体
+# 2. 环境变量 MEMORY_SERVICE_API_KEY（必填，secret）
+#    填 memory-service 全权 API_KEY（所有用户共用这一把，配合 X-User-Id 扮演具体用户）。
+#    不要填 pak.… 个人 key，也不要填 BOOTSTRAP_API_KEY。
+#    secret 不会随 YAML 带入，必须在 Dify 环境变量里手工粘贴后再 Publish。
+# 3. HTTP 节点 Authorization = Bearer {{#env.MEMORY_SERVICE_API_KEY#}}（已写进本 YAML）
+# 4. 发布为 Workflow，复制 API Access 的 URL + API Key，回头给我替换 Config / AppScript 包装体
 #
 # Jira / AppScript 期望调用体（response_mode=blocking）：
 # {
@@ -29,7 +32,7 @@ app:
   use_icon_as_answer_icon: false
 dependencies: []
 kind: app
-version: 0.1.0
+version: 0.1.1
 workflow:
   conversation_variables: []
   environment_variables:
@@ -42,7 +45,7 @@ workflow:
       name: MEMORY_SERVICE_API_KEY
       value: ''
       value_type: secret
-      description: 可选。memory-service API_KEY；空则不带 Authorization
+      description: 必填。memory-service 全权 API_KEY（非 pak / 非 bootstrap）；导入后在 Dify 环境变量中填写
   features:
     file_upload:
       enabled: false
@@ -471,8 +474,10 @@ workflow:
           method: post
           url: '{{#env.MEMORY_SERVICE_AGENT_TASK_URL#}}'
           authorization:
-            type: no-auth
-            config: null
+            type: api-key
+            config:
+              type: bearer
+              api_key: '{{#env.MEMORY_SERVICE_API_KEY#}}'
           headers: "Content-Type: application/json\nAccept: application/json\nX-User-Id: {{#1785472000002.x_user_id#}}\nX-Agent-Task-Jumpboard: dify"
           params: ''
           body:

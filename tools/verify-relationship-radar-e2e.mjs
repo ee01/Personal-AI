@@ -586,7 +586,9 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 });
 
 try {
-  await context.route('http://localhost:3210/api/v1/**', async (route) => {
+  // The development bundle can target a configured remote Memory Service.
+  // Keep this fixture E2E hermetic by intercepting the API path regardless of host.
+  await context.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const url = request.url();
     const pathname = new URL(url).pathname;

@@ -6,6 +6,7 @@ import {
   buildScheduledMessagesSetupReceipt,
   buildScheduledMessagesSetupReceiptNotice,
 } from '../src/scheduled-messages/setupReceipt';
+import { getLocalScheduleTimeZone } from '../src/scheduled-messages/scheduleDateTime';
 
 type CapturedRequest = {
   url: string;
@@ -175,6 +176,33 @@ try {
   assert.equal(result.messagesSheetId, 101);
   assert.equal(result.logsSheetId, 103);
   assert.match(result.authUrl || '', /action=authSuccess/);
+
+  const spreadsheetCreateRequest = capturedRequests.find((request) =>
+    request.url === 'https://sheets.googleapis.com/v4/spreadsheets' && request.method === 'POST',
+  );
+  assert.ok(spreadsheetCreateRequest, 'Initializer should create the spreadsheet');
+  const spreadsheetCreateBody = JSON.parse(spreadsheetCreateRequest.body || '{}');
+  const expectedTimeZone = getLocalScheduleTimeZone();
+  assert.equal(
+    spreadsheetCreateBody.properties.timeZone,
+    expectedTimeZone,
+    'New maintenance spreadsheets should use the current browser time zone',
+  );
+
+  const projectContentRequest = capturedRequests.find((request) =>
+    request.url === 'https://script.googleapis.com/v1/projects/script-123/content' && request.method === 'PUT',
+  );
+  assert.ok(projectContentRequest, 'Initializer should upload the Apps Script manifest');
+  const projectContentBody = JSON.parse(projectContentRequest.body || '{}');
+  const appScriptManifest = JSON.parse(
+    projectContentBody.files.find((file: { name?: string }) => file.name === 'appsscript').source,
+  );
+  assert.equal(
+    appScriptManifest.timeZone,
+    expectedTimeZone,
+    'The Apps Script scheduler must use the same browser time zone as its spreadsheet',
+  );
+
   assert.ok(
     result.setupWarnings?.some((warning) => warning.includes('仅创建者可编辑')),
     'Domain-sharing failure should be surfaced as an owner-only setup warning',

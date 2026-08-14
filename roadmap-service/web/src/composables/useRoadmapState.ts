@@ -52,6 +52,11 @@ const INTENT_ERROR_TEXT: Record<string, string> = {
   phase_date_required: '阶段节点必须有日期',
   phase_kind_required: '请选择节点类型',
   invalid_marker_kind: '无效的标记类型',
+  merge_names_required: '合并需要选择两个不同的人名',
+  merge_same_name: '不能与自身合并',
+  merge_target_not_full_name: '合并目标必须是 Firstname Lastname',
+  member_name_taken: '该成员名已存在，请用 Assignee 映射的「合并」',
+  item_not_draft: '已创建 Jira 的条目不能在 Roadmap 改 description',
 };
 
 export function intentErrorText(error?: string | null): string {
@@ -88,6 +93,16 @@ export function createRoadmapState() {
     aiCreate: false,
     assigneeMap: false,
   });
+
+  /**
+   * Create-Jira run can outlive the modal: user may close the dialog while the
+   * extension is still creating / polling. Toolbar button stays busy until this
+   * flips back to false; completion always toasts.
+   */
+  const createJiraRunning = ref(false);
+  /** In-flight Agent runs resumed after a tab close / refresh. */
+  const resumeBusyTeamIds = ref<string[]>([]);
+  const resumeLeft = ref(0);
 
   // 导入栏勾选的覆盖开关；预览弹窗只读取，不再让用户勾第二遍
   const importOverwrite = ref(false);
@@ -350,6 +365,57 @@ export function createRoadmapState() {
       api.setActorName(name);
       api.markExtensionConnected();
       nameGateOpen.value = false;
+      return;
+    }
+    if (data.type === 'pai-roadmap-agent-resume') {
+      const teamIds = Array.isArray(data.teamIds)
+        ? data.teamIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const count = Math.max(0, Number(data.runningCount) || 0);
+      resumeBusyTeamIds.value = teamIds;
+      resumeLeft.value = count;
+      if (count > 0 && teamIds.includes(teamId.value)) {
+        createJiraRunning.value = true;
+        toast('检测到未完成的 Agent 创建，正在同步 Jira 回写…', 3600);
+      }
+      return;
+    }
+    if (data.type === 'pai-roadmap-agent-reconciled') {
+      const reconciledTeam = String(data.teamId || '').trim();
+      resumeLeft.value = Math.max(0, resumeLeft.value - 1);
+      const forThisTeam = reconciledTeam === teamId.value;
+      if (forThisTeam) {
+        const created = Number(data.created) || 0;
+        const failed = Number(data.failed) || 0;
+        const stillRunning = Boolean(data.stillRunning);
+        if (created) {
+          toast(
+            `<span class="ok">✓</span> 已补回写 <b>${created}</b> 个 Jira issue`,
+            4200,
+          );
+        } else if (stillRunning) {
+          toast(
+            'Agent 仍在后台执行。可先离开本页，下次打开 Roadmap 会再同步。',
+            5200,
+          );
+        } else if (data.error && !stillRunning) {
+          toast(String(data.error), 5200);
+        } else if (failed && !stillRunning && !created) {
+          toast('上次 Agent 创建未返回可回写的 Jira key', 4200);
+        }
+        if (teamId.value) {
+          api.fetchTeam(teamId.value).then((snap) => {
+            snapshot.value = snap;
+          }).catch(() => undefined);
+        }
+      }
+      if (
+        resumeLeft.value === 0 &&
+        resumeBusyTeamIds.value.includes(teamId.value)
+      ) {
+        createJiraRunning.value = false;
+        resumeBusyTeamIds.value = [];
+      }
     }
   }
 
@@ -381,6 +447,12 @@ export function createRoadmapState() {
 
   watch([view, resWin, focusQuarter], syncUrl);
 
+  watch(teamId, (id) => {
+    if (resumeLeft.value > 0 && resumeBusyTeamIds.value.includes(id)) {
+      createJiraRunning.value = true;
+    }
+  });
+
   // Everything memory cares about, so an unrelated snapshot field does not
   // trigger a sync round-trip.
   const stateFingerprint = computed(() => JSON.stringify(postMessageState()));
@@ -403,6 +475,7 @@ export function createRoadmapState() {
     focusQuarter,
     rulerMode,
     modals,
+    createJiraRunning,
     importOverwrite,
     teamId,
     editable,

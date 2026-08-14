@@ -84,8 +84,9 @@ export interface ScheduledMessage {
   // 帮我做 / Agent Task 字段
   Agent_Task_ID?: string;
   Agent_Executor?: 'openclaw' | string;
-  Agent_Task_Prompt?: string;
   Agent_Notify_Template?: string;
+  /** Y/empty = on (default); N = off. Controls success receipt only; failure receipt always on. */
+  Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;
@@ -137,8 +138,9 @@ export interface CreateMessageFormData {
   // 帮我做 / Agent Task 字段
   Agent_Task_ID?: string;
   Agent_Executor?: 'openclaw' | string;
-  Agent_Task_Prompt?: string;
   Agent_Notify_Template?: string;
+  /** Y/empty = on (default); N = off. Controls success receipt only; failure receipt always on. */
+  Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;

@@ -438,6 +438,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       caller: 'OneClickSetup.getAuthToken',
       forceRefresh: true,  // 强制刷新，以应用新的权限范围
       scopes: GOOGLE_AUTH_SCOPE_SETS.FULL,
+      promptForAccount: true,
     });
   };
   

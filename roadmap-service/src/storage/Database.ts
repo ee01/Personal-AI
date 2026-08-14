@@ -129,6 +129,19 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    id: '010_item_sub_description',
+    up: (database) => {
+      addColumn(database, 'items', 'description', 'TEXT');
+      addColumn(database, 'subs', 'description', 'TEXT');
+    },
+  },
+  {
+    id: '011_teams_jira_refreshed_at',
+    up: (database) => {
+      addColumn(database, 'teams', 'jira_refreshed_at', 'INTEGER');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

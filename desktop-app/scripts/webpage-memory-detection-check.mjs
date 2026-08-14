@@ -553,6 +553,7 @@ async function startHarnessServer() {
   const sourceMemoryCandidateRequests = [];
   const sourceMemoryCreateRequests = [];
   const webpageAnalysisRequests = [];
+  let webpageAnalysisFailureMode = false;
   const sourceMemoryCapsules = new Map();
   const keystoneBriefEvents = [];
 
@@ -593,6 +594,51 @@ async function startHarnessServer() {
             }),
             prompt_eval_count: 240,
             eval_count: 80,
+          }),
+        );
+        return;
+      }
+
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v1/source-memory/webpage-analysis'
+      ) {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        webpageAnalysisRequests.push(body);
+        if (webpageAnalysisFailureMode) {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'synthetic_webpage_analysis_failure' }));
+          return;
+        }
+        const pageText = String(body.mainContent || '');
+        const evidence = pageText.includes('Falcon webpage capture review notes')
+          ? 'Falcon webpage capture review notes preserve the source owner'
+          : pageText.slice(0, 120);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            promptVersion: 'passive-webpage-memory-v2',
+            result: {
+              decision: evidence ? 'remember' : 'skip',
+              summary: '页面包含可复用的资料事实。',
+              durableFacts: evidence
+                ? [{ statement: '页面包含可复用的资料。', evidence }]
+                : [],
+              entities: {
+                projects: pageText.includes('Falcon') ? ['Falcon'] : [],
+                people: pageText.includes('Priya Shah') ? ['Priya Shah'] : [],
+                technologies: [],
+                organizations: [],
+                topics: [],
+              },
+              actionItems: [],
+              enrichmentHints: [],
+              shouldNotify: false,
+              notificationReason: '',
+              confidence: evidence ? 0.88 : 0.1,
+              reason: evidence ? '正文包含可复用事实。' : '缺少稳定事实。',
+            },
           }),
         );
         return;
@@ -1876,6 +1922,9 @@ async function startHarnessServer() {
     sourceMemoryCandidateRequests,
     sourceMemoryCreateRequests,
     webpageAnalysisRequests,
+    setWebpageAnalysisFailureMode(value) {
+      webpageAnalysisFailureMode = Boolean(value);
+    },
     keystoneBriefEvents,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -5750,6 +5799,17 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
   );
 
   const candidateCountAfterChip = server.sourceMemoryCandidateRequests.length;
+  await page.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+    document.body.appendChild(document.createTextNode(' '));
+  });
+  await page.waitForTimeout(1600);
+  assert.equal(
+    server.sourceMemoryCandidateRequests.length,
+    candidateCountAfterChip,
+    '复制/滚动阈值未变化时不应每次事件都重复 POST 候选评分',
+  );
   await serviceWorker.evaluate(
     async ({ blockStorageKey }) => {
       await chrome.storage.local.set({
@@ -5786,6 +5846,11 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
   await page.waitForSelector('.pai-memory-capture-page-chip', {
     timeout: 7000,
   });
+  assert.equal(
+    server.sourceMemoryCandidateRequests.length,
+    candidateCountAfterChip,
+    '站点控制恢复时应复用同一阈值候选，不额外 POST 评分',
+  );
 
   await page.locator('.pai-memory-capture-page-chip').click();
   await page.locator('.pai-page-memory-capture-review-panel .pai-memory-capture-note-input').fill(
@@ -5955,6 +6020,83 @@ async function verifyPageCaptureInlineReview(server, context, serviceWorker) {
     throw new Error('重复整页入库复核页面出现脚本异常');
   }
   await page.close();
+}
+
+async function triggerManualPageAnalysis(serviceWorker, pageUrl) {
+  return serviceWorker.evaluate(async (targetUrl) => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((item) => item.url === targetUrl);
+    if (!tab?.id) {
+      throw new Error(`missing extension tab for ${targetUrl}`);
+    }
+    return chrome.tabs.sendMessage(tab.id, {
+      type: 'TRIGGER_MANUAL_ANALYSIS',
+    });
+  }, pageUrl);
+}
+
+async function verifyPageAnalysisFailureBackoff(server, context, serviceWorker) {
+  server.setWebpageAnalysisFailureMode(true);
+  const pageUrl = `${server.origin}/page-capture-review?analysis-failure-backoff=1`;
+  const analysisStartCount = server.webpageAnalysisRequests.length;
+
+  const firstPage = await context.newPage();
+  await firstPage.goto(pageUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await firstPage.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+  });
+  await firstPage.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 1,
+    '首次网页分析失败应只产生一次 backend LLM 尝试',
+  );
+
+  const sameSnapshotPage = await context.newPage();
+  await sameSnapshotPage.goto(pageUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await sameSnapshotPage.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+    document.dispatchEvent(new Event('copy'));
+  });
+  await sameSnapshotPage.waitForSelector('.pai-memory-capture-page-chip', {
+    timeout: 7000,
+  });
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 1,
+    '相同快照在失败冷却期应沿用确定性评分，不重复请求 backend LLM',
+  );
+
+  await triggerManualPageAnalysis(serviceWorker, sameSnapshotPage.url());
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 2,
+    '用户手动分析应绕过失败冷却并真实重试一次',
+  );
+
+  server.setWebpageAnalysisFailureMode(false);
+  const recovered = await triggerManualPageAnalysis(
+    serviceWorker,
+    sameSnapshotPage.url(),
+  );
+  assert.equal(recovered?.result?.decision, 'remember');
+  assert.equal(
+    server.webpageAnalysisRequests.length,
+    analysisStartCount + 3,
+    '恢复后的手动分析应成功并清除失败状态',
+  );
+
+  await sameSnapshotPage.close();
+  await firstPage.close();
 }
 
 async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
@@ -6525,10 +6667,14 @@ try {
     log('Keystone language checks passed');
   } else if (process.env.PERSONAL_AI_E2E_FOCUS === 'page-analysis') {
     await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
+    await verifyPageAnalysisFailureBackoff(server, context, launch.serviceWorker);
     log('Focused webpage analysis and capture checks passed');
   } else if (process.env.PERSONAL_AI_E2E_FOCUS === 'context-cache') {
     await verifyBackgroundContextRecallCache(server, context);
     log('Background context recall cache checks passed');
+  } else if (process.env.PERSONAL_AI_E2E_FOCUS === 'jira-context') {
+    await verifyJiraIssueContext(server, context);
+    log('Jira reading-state Context Bubble check passed');
   } else {
     await verifySensitiveTransitionRace(server, context);
     await verifySensitiveQueryPage(server, context);
@@ -6539,6 +6685,7 @@ try {
     await verifyJiraIssueContext(server, context);
     await verifySelectedTextTrigger(server, context);
     await verifyPageCaptureInlineReview(server, context, launch.serviceWorker);
+    await verifyPageAnalysisFailureBackoff(server, context, launch.serviceWorker);
     await verifySelectedTextPrivacyAndUiBoundaries(server, context);
     await verifyUnsafeExploreRoute(server, context);
     await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);

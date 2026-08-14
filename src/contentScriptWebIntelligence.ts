@@ -2318,7 +2318,6 @@ const PAGE_MEMORY_CAPTURE_AUTO_MIN_WORDS = 260;
 const PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS = 90_000;
 const PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS = 240_000;
 const PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS = 480_000;
-const PAGE_MEMORY_CAPTURE_AUTO_RECHECK_MS = 30_000;
 const PAGE_VISUAL_MEMORY_MIN_AREA = 28_000;
 const PAGE_VISUAL_MEMORY_MIN_TEXT_CHARS = 16;
 const COMPOSER_GUARD_ROOT_SELECTOR = '#pai-composer-guard-root';
@@ -2405,6 +2404,9 @@ class WebIntelligenceContentScript {
     private pageCaptureShownContextKey: string | null = null;
     private pageCaptureStoredContextKey: string | null = null;
     private pageAnalysisResultByKey = new Map<string, PassiveWebpageAnalysisResult>();
+    private pageCaptureCandidateByContextKey = new Map<string, MemoryCaptureCandidateResult>();
+    private pageCaptureScoreSignalByContextKey = new Map<string, string>();
+    private pageCaptureEvaluationSignalByContextKey = new Map<string, string>();
     private pageCaptureStartedAt = Date.now();
     private pageCaptureMaxScrollDepth = 0;
     private pageCaptureCopiedText = false;
@@ -2485,7 +2487,12 @@ class WebIntelligenceContentScript {
                 }
 
                 if (this.mutationMayAffectComposerAssistAffordance(mutations)) {
-                    if (this.shouldSuppressContextBubbleForComposerAssist()) {
+                    const currentPayload = this.buildContextMatchPayload();
+                    if (
+                        this.shouldSuppressContextBubbleForComposerAssist(
+                            currentPayload || undefined,
+                        )
+                    ) {
                         this.invalidatePendingContextRequest();
                         this.clearContextBubble();
                     }
@@ -2535,12 +2542,18 @@ class WebIntelligenceContentScript {
 
         window.addEventListener(COMPOSE_ASSIST_VISIBILITY_EVENT, (event) => {
             const visible = Boolean((event as CustomEvent<{ visible?: boolean }>).detail?.visible);
-            if (visible) {
+            const currentPayload = this.buildContextMatchPayload();
+            if (
+                visible &&
+                this.shouldSuppressContextBubbleForComposerAssist(
+                    currentPayload || undefined,
+                )
+            ) {
                 this.invalidatePendingContextRequest();
                 this.clearPassiveContextBubble();
                 return;
             }
-            this.scheduleContextMatch(250);
+            this.scheduleContextMatch(visible ? 0 : 250);
         });
 
         window.addEventListener('hashchange', () => {
@@ -4743,6 +4756,9 @@ class WebIntelligenceContentScript {
         this.pageCaptureCopiedText = false;
         this.pageCaptureShownContextKey = null;
         this.pageCaptureStoredContextKey = null;
+        this.pageCaptureCandidateByContextKey.clear();
+        this.pageCaptureScoreSignalByContextKey.clear();
+        this.pageCaptureEvaluationSignalByContextKey.clear();
         this.clearPageMemoryCaptureReview();
         this.clearVisualMemoryPreview();
         this.invalidatePageMemoryCaptureRequest();
@@ -4751,6 +4767,7 @@ class WebIntelligenceContentScript {
     private invalidatePageMemoryCaptureRequest(): void {
         this.pageCaptureRequestId++;
         this.pageCapturePendingContextKey = null;
+        this.pageCaptureEvaluationSignalByContextKey.clear();
     }
 
     private schedulePageMemoryCaptureEvaluation(delayMs: number): void {
@@ -4803,6 +4820,42 @@ class WebIntelligenceContentScript {
             }
         }
 
+        const evaluationSignal = this.buildPageMemoryCaptureEvaluationSignal(payload);
+        if (
+            this.pageCaptureEvaluationSignalByContextKey.get(payload.contextKey) ===
+            evaluationSignal
+        ) {
+            return;
+        }
+        this.pageCaptureEvaluationSignalByContextKey.set(
+            payload.contextKey,
+            evaluationSignal,
+        );
+
+        const scoreSignal = this.buildPageMemoryCaptureScoreSignal(payload);
+        const cachedCandidate = this.pageCaptureCandidateByContextKey.get(
+            payload.contextKey,
+        );
+        if (
+            cachedCandidate &&
+            this.pageCaptureScoreSignalByContextKey.get(payload.contextKey) ===
+                scoreSignal
+        ) {
+            const requestId = ++this.pageCaptureRequestId;
+            this.pageCapturePendingContextKey = payload.contextKey;
+            if (!cachedCandidate.eligible) {
+                this.pageCapturePendingContextKey = null;
+                this.schedulePageMemoryCaptureScoreRecheck(payload.request);
+                return;
+            }
+            void this.completePageMemoryCaptureCandidate(
+                requestId,
+                payload,
+                cachedCandidate,
+            );
+            return;
+        }
+
         const requestId = ++this.pageCaptureRequestId;
         this.pageCapturePendingContextKey = payload.contextKey;
         chrome.runtime.sendMessage({
@@ -4818,9 +4871,33 @@ class WebIntelligenceContentScript {
                 this.clearPageMemoryCaptureChip();
                 return;
             }
-            if (chrome.runtime.lastError || !response?.success || !response.result?.eligible) {
+            const currentScoreSignal = this.buildPageMemoryCaptureScoreSignal(
+                currentPayload,
+            );
+            if (currentScoreSignal !== scoreSignal) {
+                this.pageCapturePendingContextKey = null;
+                this.pageCaptureEvaluationSignalByContextKey.delete(payload.contextKey);
+                this.schedulePageMemoryCaptureEvaluation(0);
+                return;
+            }
+            if (chrome.runtime.lastError || !response?.success || !response.result) {
                 this.pageCapturePendingContextKey = null;
                 this.clearPageMemoryCaptureChip();
+                this.schedulePageMemoryCaptureScoreRecheck(currentPayload.request);
+                return;
+            }
+            this.pageCaptureCandidateByContextKey.set(
+                payload.contextKey,
+                response.result,
+            );
+            this.pageCaptureScoreSignalByContextKey.set(
+                payload.contextKey,
+                scoreSignal,
+            );
+            if (!response.result.eligible) {
+                this.pageCapturePendingContextKey = null;
+                this.clearPageMemoryCaptureChip();
+                this.schedulePageMemoryCaptureScoreRecheck(currentPayload.request);
                 return;
             }
             void this.completePageMemoryCaptureCandidate(
@@ -4829,6 +4906,35 @@ class WebIntelligenceContentScript {
                 response.result,
             );
         });
+    }
+
+    private buildPageMemoryCaptureScoreSignal(
+        payload: { contextKey: string; request: Record<string, unknown> },
+    ): string {
+        const interactions = (payload.request.interactions || {}) as Record<string, unknown>;
+        return [
+            payload.contextKey,
+            payload.request.sourceKind,
+            Boolean(interactions.copiedText),
+            Number(interactions.dwellMs || 0) >= PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS,
+            Number(interactions.scrollDepth || 0) >= 0.6,
+        ].join(':');
+    }
+
+    private buildPageMemoryCaptureEvaluationSignal(
+        payload: { contextKey: string; request: Record<string, unknown> },
+    ): string {
+        const interactions = (payload.request.interactions || {}) as Record<string, unknown>;
+        const dwellMs = Number(interactions.dwellMs || 0);
+        const scrollDepth = Number(interactions.scrollDepth || 0);
+        return [
+            this.buildPageMemoryCaptureScoreSignal(payload),
+            dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS,
+            dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS,
+            scrollDepth >= 0.75,
+            scrollDepth >= 0.85,
+            scrollDepth >= 0.9,
+        ].join(':');
     }
 
     private async completePageMemoryCaptureCandidate(
@@ -4913,6 +5019,13 @@ class WebIntelligenceContentScript {
                 }),
             ]);
             if (!response?.success || !response.result) {
+                if (response?.requestReuse === 'failure_cooldown') {
+                    console.debug('⏸️ 网页分析处于失败退避期，沿用确定性候选评分:', {
+                        retryAfterMs: response.retryAfterMs,
+                        errorKind: response.errorKind,
+                    });
+                    return null;
+                }
                 throw new Error(response?.error || 'passive_webpage_analysis_failed');
             }
             this.pageAnalysisResultByKey.delete(analysisKey);
@@ -5120,9 +5233,26 @@ class WebIntelligenceContentScript {
         }
         const delayMs = Math.max(
             5_000,
-            Math.min(nextThreshold - dwellMs + 500, PAGE_MEMORY_CAPTURE_AUTO_RECHECK_MS),
+            nextThreshold - dwellMs + 500,
         );
         this.schedulePageMemoryCaptureEvaluation(delayMs);
+    }
+
+    private schedulePageMemoryCaptureScoreRecheck(request: Record<string, unknown>): void {
+        if (request.sourceKind === 'visual_memory') {
+            return;
+        }
+        const interactions = (request.interactions || {}) as Record<string, unknown>;
+        const dwellMs = Number(interactions.dwellMs || 0);
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS) {
+            return;
+        }
+        this.schedulePageMemoryCaptureEvaluation(
+            Math.max(
+                5_000,
+                PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS - dwellMs + 500,
+            ),
+        );
     }
 
     private showPageMemoryCaptureChip(

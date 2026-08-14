@@ -1536,7 +1536,8 @@ async function recallForAsk(
       groupFilter: parsedIntent.filters.groupNames,
       minImportance: parsedIntent.filters.minImportance,
       sourceTypes: parsedIntent.filters.sourceTypes,
-      blockTypes: ['evidence_list', 'timeline', 'media'],
+      retrievalMode: 'deep',
+      presentationBlocks: ['evidence_list', 'timeline', 'media'],
       lifecycleMode: isHistoricalRecallIntent(query, parsedIntent)
         ? 'historical'
         : 'active_default',

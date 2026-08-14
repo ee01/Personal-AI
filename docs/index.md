@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-08-09*
+*最后更新: 2026-08-14*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -76,7 +76,7 @@
 | 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | Coverage 页面下载前/提交中/下载后都有边界回执，抽屉内识别备份 zip、archive 指纹并 merge/replace |
 | 记忆捕捉 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 选区/网页/外部输入的低打扰入库层 |
 | 选中文字保存为资料记忆 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 右侧半露出 `+ 记住`，复核面板显示选区快照、保存 `source_memory_capsule` 和 `web` 记忆信号 |
-| 整页资料保存 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 确定性候选后以单次无工具 LLM 筛选新语义快照；跨刷新/标签页复用结果，写入仍只走 `+ 记住` 复核或强意图自动入库，并可查看详情或撤销 |
+| 整页资料保存 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 确定性候选后由 memory-service 专用路由做单次无工具 LLM 筛选；内容 hash、阈值评分、single-flight、成功缓存和 5/10/15 分钟失败退避覆盖 DOM 抖动/刷新/多标签页，写入仍只走 `+ 记住` 复核或强意图自动入库 |
 | Source Memory 召回卡片 | Memory Capture / Memory Lens | [memory_capture.md](./features/memory_capture.md) | `/context-recall` 支持 `sourceTypes:['source_memory']`，返回带资料回执、来源安全、详情复核和按钮级新标签/无写入边界的资料记忆卡 |
 | Source Memory 蒸馏器 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 保存/补备注同步生成 P0，后台 deep worker 以 evidence spans 生成 scene cards、来源候选、Skill/Storyline seeds 和强锚点来源簇；失败保留 P0，详情页显示状态与零高责任写入边界 |
 | 变化脉络 | Ask / Memory Lens / Compose Assist / Memory Capture | [change_memory_ledger.md](./features/change_memory_ledger.md) | 为稳定对象保存带前后值、来源和时间的状态事件链；区分已确认当前、最后观测、冲突、页面新值和仅历史，并供 Source Memory、Lens、Ask、Compose 使用 |
@@ -183,13 +183,16 @@
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
 | Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
-| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝Agent 执行器；fixVersion 按 Target End 自动填 |
-| 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展把 Gantt 主任务 sync 到 watched_projects；落选 archived |
+| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；组内部分成功仍回写 jiraKey |
+| 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 background 代发 sync；落选 archived；与 Target 回写独立 |
+| Memory Service 自托管 | 记忆平台 | [self-hosting-memory-service.md](./self-hosting-memory-service.md) | Docker + Options 填地址；bootstrap / 设备 key / CORS 默认全关 |
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
 | Roadmap 漂移角标 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 个人层意图 vs 现实偏差；可更新/忽略/收敛消除 |
 | Roadmap Markers | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 阶段节点 / 外部依赖；缺 ETA 角标 |
 | Roadmap 协作 Ticker | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 顶栏滚动展示其他人最新编辑；头像 hover 用户名 |
-| Roadmap Jira Target 回写 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 优先，服务端 PAT fallback，皆无静默 |
+| Roadmap Jira Target 回写 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 主/子任务均可；扩展 Options token 优先，服务端 PAT fallback，皆无静默 |
+| Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
+| Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
 | Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
 | 项目本地查找 | Project Dashboard | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 在当前浏览器本地快照内查找项目、任务、Jira、平台来源和里程碑；输入/清除/查看全部控制点与回执显示当前视图可见/隐藏命中和无外部读写边界 |
 | 项目数据源检查 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | Jira/GitHub/Confluence 状态、缺口、检查口径、按钮/收起边界与 warning 状态 |
@@ -257,10 +260,10 @@
 | 反思本地研究补查 | 反思与梦境 | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆和派生证据；详情页显示本轮研究范围、trace 卡、研究证据采用回执和手动推进 / 动作 / transcript / 会话导航控件边界 |
 | 梦境重放 | 反思与梦境 | [memory_system.md](./memory_system.md) | `DreamInsights.vue` / `dreams/*.md`，含本页范围、复核视图筛选、只读边界和可见复核入口 |
 | 动作队列 | 动作与确认 | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions`；筛选空结果、普通动作、按钮 hover/读屏和操作提交都有边界回执 |
-| 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | `delegate_openclaw` dispatch 前按鉴权、能力、输入与 proof 失败关闭；probe 不提交原任务，Reflection 不堆积阻断动作 |
+| 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | `delegate_openclaw` dispatch 前按鉴权、能力、输入与 proof 失败关闭；`agent_task` 只检查 gateway 连接层；probe 不提交原任务，Reflection 不堆积阻断动作 |
 | OpenClaw 外部委派 | 动作与确认 | [memory_system.md](./memory_system.md) | `delegate_openclaw` action；自动调度卡片和 transcript 展开按钮显示只读/触发边界 |
 | 决策中心 | 动作与确认 | [memory_system.md](./memory_system.md) | `DecisionCenter.vue` / `confirm_requests`；通知深链未命中显示已读队列与部分失败口径，审核包复制与处理按钮显示剪贴板/证据/写入边界 |
-| 记忆搜索结果页 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `SearchResultPage.vue`；摘要显示结果批次基准，类型筛选按钮预览可见/隐藏数量，卡片可键盘打开并显示安全回执 |
+| 记忆搜索结果页 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `SearchResultPage.vue`；普通搜索零 Recall LLM，用户可主动请求带证据 ID、快照/缓存/耗时回执的结果总结；类型筛选和安全打开边界保持可见 |
 | 搜索结果有用/不相关反馈 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `/feedback`，按 target type 记录；按钮 hover/读屏说明有用、不相关和撤销的写入边界 |
 | 记忆时间轴 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `TimelinePage.vue`，基于 recall time 通道，含范围/来源/刷新快照、控制点 hover/读屏边界与反馈操作回执 |
 | 时间轴/搜索安全跳转 | 记忆探索界面 | [memory_system.md](./memory_system.md) | 只接受安全内部路由和无凭据 http(s) 来源链接；打开、详情和安全诊断按钮在 hover/读屏先说明目标与无副作用边界 |
@@ -269,7 +272,7 @@
 | Agent Thinking 分析编排 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | `IntelligentAgent` 通用工具/思考循环供消息分析、Google Slides、主动通知和显式编排复用；被动网页 Memory Capture 使用单次无工具 LLM，不进入该循环 |
 | Agent Thinking 工具审批 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | 阻断、队列口径、审批前确认、结果区定位、批准 key / 审核包 / 重跑配置复制按钮边界 |
 | Agent Thinking trace 可视化 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | Options 演示、Trace 复核路线、问题 span 步骤定位、步骤按钮 hover/读屏复核理由与复制反馈 |
-| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP）、证据级 MCP、A2A Agent Card；不含反向 Worker |
+| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP）；新用户默认用 `.env` 的 `OPENCLAW_*` Gateway；证据级 MCP、A2A Agent Card；不含反向 Worker |
 | Task Scheduler 后台任务调度 | 任务调度 | [task_scheduler_api.md](./features/task_scheduler_api.md) | 扩展后台 `scheduled_task_*` alarm 统一调度；任务启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
 | 用量与 Token 分析报表 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 使用视角四视图（功能总览/用户活跃/偏好矩阵/次要面板）+ 中文功能名 + 30d；按 user × capability × model × side 归因 |
 | 前后端用量打点 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 前端 `UsageTracker` 缓冲 + `chrome.alarms` 批量上报 `POST /usage/telemetry`；后端 `AsyncLocalStorage` + `LLMClient`（含 stream）记录真实/估算 usage，onResponse 记接口频率 |

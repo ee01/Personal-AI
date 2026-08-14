@@ -23,9 +23,14 @@ import type {
 import type { RemoteTask } from './JiraClient.js';
 import { jiraSearchChildTasks } from './JiraClient.js';
 import {
+  clipDescription,
+  daysBetweenIso,
   importedTaskSpan,
+  looksFullName,
+  mergeAssigneeMapIdentities,
   migrateAssigneeMapKey,
   normalizeAssigneeMap,
+  ownerMatchesAssignee,
   parseAssigneeMap,
 } from './assigneeMap.js';
 
@@ -171,6 +176,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
     lane: row.lane,
     expanded: Boolean(row.expanded),
     version: row.version,
+    description: row.description || null,
     subs: subs.map((sub) => ({
       id: sub.id,
       key: sub.jira_key,
@@ -183,6 +189,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
       cleared: Boolean(sub.cleared),
       createdBy: sub.created_by,
       version: sub.version,
+      description: sub.description || null,
     })),
     markers: markers.map(mapMarker),
   };
@@ -317,6 +324,7 @@ export function getTeamSnapshot(teamId: string): TeamSnapshot | null {
       createJiraPrompt: team.create_jira_prompt || '',
       assigneeMap: parseAssigneeMap(team.assignee_map_json),
       jiraBaseUrl: config.jira.baseUrl || '',
+      jiraRefreshedAt: team.jira_refreshed_at || null,
     },
     items: items.map((item) =>
       mapItem(
@@ -531,6 +539,8 @@ export function renderActivityText(
       return `${who} 更新了创建 Jira Prompt`;
     case 'update_assignee_map':
       return `${who} 更新了 Assignee 映射`;
+    case 'merge_people':
+      return `${who} 合并了人员 ${summary.from || ''} → ${summary.to || label}`;
     case 'import':
       return `${who} 导入了 ${(summary.quarters as string[])?.join(', ') || 'Backlog'}，${summary.count || 0} 项`;
     case 'schedule':
@@ -543,6 +553,12 @@ export function renderActivityText(
       return `${who} 调整了 ${label} 的时长到 ${summary.days || '?'} 天`;
     case 'set_alias':
       return `${who} 把 ${summary.key || row.target_key} 备注名为 ${summary.alias || label}`;
+    case 'update_item':
+      return `${who} 更新了条目 ${label}`;
+    case 'refresh_from_jira':
+      return `Jira 刷新 · 经 ${who} 的扩展${
+        summary.count ? `，更新 ${summary.count} 项` : ''
+      }`;
     case 'add_item':
       return `${who} 新建了${summary.type ? `${summary.type} ` : ''}条目 ${label}`;
     case 'delete_item':
@@ -1017,6 +1033,40 @@ export function applyIntent(
         summary: { alias: intent.alias, title: check.item.title, key },
       });
     }
+  } else if (op === 'update_item') {
+    const key = String(intent.itemKey || '');
+    const hasTitle = intent.title !== undefined;
+    const hasDesc = intent.description !== undefined;
+    const nextTitle = hasTitle ? String(intent.title || '').trim() : '';
+    if (hasTitle && !nextTitle) return { ok: false, error: 'title_required' };
+    if (!hasTitle && !hasDesc) return { ok: false, error: 'title_required' };
+    const check = bumpItemVersion(teamId, key, Number(intent.baseVersion));
+    if (!check.ok) return check;
+    const nextDesc = hasDesc ? clipDescription(intent.description) : undefined;
+    if (hasDesc && check.item.jira_key) {
+      return { ok: false, error: 'item_not_draft' };
+    }
+    const titleSame = !hasTitle || check.item.title === nextTitle;
+    const descSame =
+      nextDesc === undefined || (check.item.description || null) === nextDesc;
+    if (titleSame && descSame) {
+      // no-op
+    } else {
+      const title = hasTitle ? nextTitle : check.item.title;
+      const description = hasDesc ? nextDesc : check.item.description;
+      db.prepare(
+        `UPDATE items SET title = ?, description = ?, version = version + 1, updated_at = ?
+         WHERE team_id = ? AND key = ?`,
+      ).run(title, description, ts, teamId, key);
+      writeActivity({
+        teamId,
+        actor,
+        op,
+        targetType: 'item',
+        targetKey: key,
+        summary: { title, from: check.item.title, description: Boolean(description) },
+      });
+    }
   } else if (op === 'expand' || op === 'collapse') {
     // Expand/collapse is per-viewer (URL `expand=` + local UI). Accept the op
     // for older clients but do not mutate shared state or broadcast — otherwise
@@ -1038,8 +1088,8 @@ export function applyIntent(
       `INSERT INTO items (
         id, team_id, key, type, title, alias, quarter, estimate,
         target_start, target_end, scheduled, start_date, days, lane,
-        expanded, source, jira_key, project_key, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL, NULL, 0, 0, 'manual', NULL, ?, 1, ?, ?)`,
+        expanded, source, jira_key, project_key, description, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL, NULL, 0, 0, 'manual', NULL, ?, ?, 1, ?, ?)`,
     ).run(
       nanoid(12),
       teamId,
@@ -1051,6 +1101,7 @@ export function applyIntent(
       intent.targetStart ? String(intent.targetStart) : null,
       intent.targetEnd ? String(intent.targetEnd) : null,
       projectKey,
+      clipDescription(intent.description),
       ts,
       ts,
     );
@@ -1132,8 +1183,8 @@ export function applyIntent(
     db.prepare(
       `INSERT INTO subs (
         id, team_id, item_key, jira_key, title, alias, owner,
-        start_date, days, is_draft, cleared, created_by, version, created_at, updated_at
-      ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 1, 0, ?, 1, ?, ?)`,
+        start_date, days, is_draft, cleared, created_by, description, version, created_at, updated_at
+      ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 1, 0, ?, ?, 1, ?, ?)`,
     ).run(
       id,
       teamId,
@@ -1143,6 +1194,7 @@ export function applyIntent(
       intent.start ? String(intent.start) : item.start_date,
       typeof intent.days === 'number' ? intent.days : 14,
       actor.name,
+      clipDescription(intent.description),
       ts,
       ts,
     );
@@ -1202,10 +1254,17 @@ export function applyIntent(
         : sub.days;
     const nextCleared =
       intent.cleared !== undefined ? (intent.cleared ? 1 : 0) : sub.cleared;
+    if (intent.description !== undefined && sub.jira_key) {
+      return { ok: false, error: 'item_not_draft' };
+    }
+    const nextDesc =
+      intent.description !== undefined
+        ? clipDescription(intent.description)
+        : sub.description;
     db.prepare(
       `UPDATE subs SET
         title = ?, alias = ?, owner = ?, start_date = ?, days = ?, cleared = ?,
-        version = version + 1, updated_at = ?
+        description = ?, version = version + 1, updated_at = ?
        WHERE id = ?`,
     ).run(
       nextTitle,
@@ -1214,6 +1273,7 @@ export function applyIntent(
       nextStart,
       nextDays,
       nextCleared,
+      nextDesc,
       ts,
       sub.id,
     );
@@ -1612,6 +1672,79 @@ export function applyIntent(
       targetKey: teamId,
       summary: { count: Object.keys(nextMap).length },
     });
+  } else if (op === 'merge_people') {
+    const fromName = String(intent.fromName || '').trim();
+    const toName = String(intent.toName || '').trim();
+    if (!fromName || !toName) {
+      return { ok: false, error: 'merge_names_required' };
+    }
+    if (fromName.toLowerCase() === toName.toLowerCase()) {
+      return { ok: false, error: 'merge_same_name' };
+    }
+    if (!looksFullName(toName)) {
+      return { ok: false, error: 'merge_target_not_full_name' };
+    }
+
+    // Cascade identity strings on subs (Owner + createdBy); match case-insensitively.
+    db.prepare(
+      `UPDATE subs SET owner = ?, version = version + 1, updated_at = ?
+       WHERE team_id = ? AND lower(owner) = lower(?)`,
+    ).run(toName, ts, teamId, fromName);
+    db.prepare(
+      `UPDATE subs SET created_by = ?, version = version + 1, updated_at = ?
+       WHERE team_id = ? AND lower(created_by) = lower(?)`,
+    ).run(toName, ts, teamId, fromName);
+
+    const fromMember = db
+      .prepare(
+        `SELECT * FROM members WHERE team_id = ? AND lower(name) = lower(?)`,
+      )
+      .get(teamId, fromName) as MemberRow | undefined;
+    const toMember = db
+      .prepare(
+        `SELECT * FROM members WHERE team_id = ? AND lower(name) = lower(?)`,
+      )
+      .get(teamId, toName) as MemberRow | undefined;
+
+    if (fromMember && toMember) {
+      // Prefer the canonical full-name member; drop the short-name duplicate.
+      db.prepare(`DELETE FROM members WHERE id = ?`).run(fromMember.id);
+    } else if (fromMember && !toMember) {
+      db.prepare(`UPDATE members SET name = ? WHERE id = ?`).run(
+        toName,
+        fromMember.id,
+      );
+    } else if (!fromMember && !toMember) {
+      // Creators-only identity: ensure the canonical name exists for pickers.
+      ensureMember(teamId, toName);
+    }
+
+    const teamRow = getTeam(teamId);
+    if (teamRow) {
+      const nextMap = mergeAssigneeMapIdentities(
+        parseAssigneeMap(teamRow.assignee_map_json),
+        fromName,
+        toName,
+      );
+      db.prepare(
+        `UPDATE teams SET assignee_map_json = ?, version = version + 1, updated_at = ?
+         WHERE id = ?`,
+      ).run(JSON.stringify(nextMap), ts, teamId);
+    }
+
+    writeActivity({
+      teamId,
+      actor,
+      op,
+      targetType: 'member',
+      targetKey: toMember?.id || fromMember?.id || toName,
+      summary: { from: fromName, to: toName },
+    });
+  } else if (op === 'refresh_from_jira') {
+    const ttlSkip = applyRefreshFromJira(teamId, team, intent, actor, ts);
+    if (ttlSkip) {
+      return { ok: true, snapshot: getTeamSnapshot(teamId)! };
+    }
   } else {
     return { ok: false, error: `unsupported_op:${op}` };
   }
@@ -1677,8 +1810,16 @@ export function listFocusItems(teamId: string) {
         targetEnd: item.targetEnd,
         start: item.start,
         days: item.days,
+        description: [
+          item.description,
+          ...item.subs
+            .filter((s) => !s.cleared && s.description)
+            .map((s) => s.description),
+        ]
+          .filter(Boolean)
+          .join('\n') || null,
         // The synthetic LOCAL-xxx key never appears in a message, so it would
-        // only pollute the generated watch rules.
+        // only pollute the generated watch rules. Description stays out of keywords.
         keywords: [
           jiraKey,
           item.alias,
@@ -1911,23 +2052,248 @@ export async function importTasksFromJira(
   return importRemoteTasks(teamId, actor, remote);
 }
 
+export const JIRA_REFRESH_TTL_MS = 10 * 60 * 1000;
+
+function isoDateOrNull(raw: unknown): string | null {
+  const value = String(raw || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+/**
+ * Batch Jira → Roadmap mirror. Returns true when the call was skipped by TTL
+ * (caller should not write activity / should not treat it as a mutation).
+ */
+function applyRefreshFromJira(
+  teamId: string,
+  team: TeamRow,
+  intent: Record<string, unknown>,
+  actor: ActorContext,
+  ts: number,
+): boolean {
+  const db = getDb();
+  if (team.jira_refreshed_at && ts - Number(team.jira_refreshed_at) < JIRA_REFRESH_TTL_MS) {
+    return true;
+  }
+  db.prepare(
+    `UPDATE teams SET jira_refreshed_at = ?, updated_at = ? WHERE id = ?`,
+  ).run(ts, ts, teamId);
+
+  const map = parseAssigneeMap(team.assignee_map_json);
+  const issues = Array.isArray(intent.issues) ? intent.issues : [];
+  let changed = 0;
+
+  for (const raw of issues) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const fields =
+      row.fields && typeof row.fields === 'object'
+        ? (row.fields as Record<string, unknown>)
+        : row;
+    const key = String(row.key || fields.key || '').trim();
+    if (!key) continue;
+    const fetchedAt = Number(row.fetchedAt || fields.fetchedAt) || ts;
+    const summary =
+      fields.summary !== undefined ? String(fields.summary || '').trim() : undefined;
+    const description =
+      fields.description !== undefined
+        ? clipDescription(fields.description)
+        : undefined;
+    const targetStart =
+      fields.targetStart !== undefined ? isoDateOrNull(fields.targetStart) : undefined;
+    const targetEnd =
+      fields.targetEnd !== undefined ? isoDateOrNull(fields.targetEnd) : undefined;
+    const assignee =
+      fields.assignee !== undefined
+        ? String(fields.assignee || '').trim() || null
+        : undefined;
+
+    const item = db
+      .prepare(`SELECT * FROM items WHERE team_id = ? AND jira_key = ?`)
+      .get(teamId, key) as ItemRow | undefined;
+    const sub = item
+      ? undefined
+      : (db
+          .prepare(`SELECT * FROM subs WHERE team_id = ? AND jira_key = ?`)
+          .get(teamId, key) as SubRow | undefined);
+
+    if (item) {
+      if (item.updated_at > fetchedAt) continue;
+      const nextTitle = summary || item.title;
+      const nextDesc =
+        description !== undefined ? description : item.description;
+      const nextTStart =
+        targetStart !== undefined ? targetStart : item.target_start;
+      const nextTEnd = targetEnd !== undefined ? targetEnd : item.target_end;
+      let nextStart = item.start_date;
+      let nextDays = item.days;
+      if (item.scheduled && (targetStart !== undefined || targetEnd !== undefined)) {
+        if (nextTStart && nextTEnd) {
+          nextStart = nextTStart;
+          nextDays = daysBetweenIso(nextTStart, nextTEnd);
+        } else if (nextTStart) {
+          nextStart = nextTStart;
+        } else if (nextTEnd && item.start_date) {
+          nextDays = daysBetweenIso(item.start_date, nextTEnd);
+        }
+      }
+      const same =
+        nextTitle === item.title &&
+        (nextDesc || null) === (item.description || null) &&
+        (nextTStart || null) === (item.target_start || null) &&
+        (nextTEnd || null) === (item.target_end || null) &&
+        (nextStart || null) === (item.start_date || null) &&
+        nextDays === item.days;
+      if (same) continue;
+      const result = db
+        .prepare(
+          `UPDATE items SET
+            title = ?, description = ?, target_start = ?, target_end = ?,
+            start_date = ?, days = ?, version = version + 1, updated_at = ?
+           WHERE team_id = ? AND key = ? AND version = ?`,
+        )
+        .run(
+          nextTitle,
+          nextDesc,
+          nextTStart,
+          nextTEnd,
+          nextStart,
+          nextDays,
+          ts,
+          teamId,
+          item.key,
+          item.version,
+        );
+      if (result.changes) changed += 1;
+    } else if (sub) {
+      if (sub.updated_at > fetchedAt) continue;
+      const nextTitle = summary || sub.title;
+      const nextDesc =
+        description !== undefined ? description : sub.description;
+      let nextStart = sub.start_date;
+      let nextDays = sub.days;
+      if (targetStart !== undefined || targetEnd !== undefined) {
+        const tStart = targetStart || sub.start_date;
+        const tEnd =
+          targetEnd ||
+          (sub.start_date && sub.days
+            ? addIsoDaysLocal(sub.start_date, Math.max(1, sub.days) - 1)
+            : null);
+        if (tStart && tEnd) {
+          nextStart = tStart;
+          nextDays = daysBetweenIso(tStart, tEnd);
+        } else if (tStart) {
+          nextStart = tStart;
+        }
+      }
+      let nextOwner = sub.owner;
+      if (assignee) {
+        if (!ownerMatchesAssignee(map, sub.owner, assignee)) {
+          nextOwner = assignee;
+        }
+      }
+      const same =
+        nextTitle === sub.title &&
+        (nextDesc || null) === (sub.description || null) &&
+        (nextStart || null) === (sub.start_date || null) &&
+        nextDays === sub.days &&
+        (nextOwner || null) === (sub.owner || null);
+      if (same) continue;
+      const result = db
+        .prepare(
+          `UPDATE subs SET
+            title = ?, description = ?, start_date = ?, days = ?, owner = ?,
+            version = version + 1, updated_at = ?
+           WHERE id = ? AND version = ?`,
+        )
+        .run(
+          nextTitle,
+          nextDesc,
+          nextStart,
+          nextDays,
+          nextOwner,
+          ts,
+          sub.id,
+          sub.version,
+        );
+      if (result.changes) {
+        changed += 1;
+        if (nextOwner) ensureMember(teamId, nextOwner);
+      }
+    }
+  }
+
+  if (changed > 0) {
+    writeActivity({
+      teamId,
+      actor,
+      op: 'refresh_from_jira',
+      targetType: 'team',
+      targetKey: teamId,
+      summary: { count: changed, via: 'extension' },
+    });
+  }
+  return false;
+}
+
+function addIsoDaysLocal(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
 /**
  * Extension already wrote Target dates to Jira — mirror into local DB + activity.
  */
 export function confirmTargetSync(
   teamId: string,
   actor: ActorContext,
-  input: { itemKey: string; start: string; end: string; jiraKey?: string },
+  input: {
+    itemKey?: string;
+    subId?: string;
+    start: string;
+    end: string;
+    jiraKey?: string;
+  },
 ):
   | { ok: true; snapshot: TeamSnapshot }
   | { ok: false; error: string; status?: number } {
   const itemKey = String(input.itemKey || '').trim();
+  const subId = String(input.subId || '').trim();
   const start = String(input.start || '').trim();
   const end = String(input.end || '').trim();
-  if (!itemKey || !start || !end) {
+  if ((!itemKey && !subId) || !start || !end) {
     return { ok: false, error: 'start_end_required', status: 400 };
   }
   const db = getDb();
+  const ts = now();
+
+  if (subId) {
+    const sub = db
+      .prepare(`SELECT * FROM subs WHERE team_id = ? AND id = ?`)
+      .get(teamId, subId) as SubRow | undefined;
+    if (!sub) return { ok: false, error: 'sub_not_found', status: 404 };
+    const jiraKey = sub.jira_key || String(input.jiraKey || '').trim() || null;
+    if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
+    writeActivity({
+      teamId,
+      actor,
+      op: 'jira_sync',
+      targetType: 'sub',
+      targetKey: subId,
+      summary: {
+        title: sub.title,
+        alias: sub.alias,
+        jiraKey,
+        start,
+        end,
+        via: 'extension',
+      },
+    });
+    const snapshot = getTeamSnapshot(teamId)!;
+    getEventBus().emit('snapshot', snapshot, teamId);
+    return { ok: true, snapshot };
+  }
+
   const item = db
     .prepare(`SELECT * FROM items WHERE team_id = ? AND key = ?`)
     .get(teamId, itemKey) as ItemRow | undefined;
@@ -1935,7 +2301,6 @@ export function confirmTargetSync(
   const jiraKey = item.jira_key || String(input.jiraKey || '').trim() || null;
   if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
 
-  const ts = now();
   db.prepare(
     `UPDATE items SET target_start = ?, target_end = ?, updated_at = ?
      WHERE team_id = ? AND key = ?`,

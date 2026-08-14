@@ -45,4 +45,75 @@ describe('assignee map intent', () => {
       vivi: 'Vivi Wang',
     });
   });
+
+  it('merge_people rewrites owners/createdBy, collapses members, keeps alias', () => {
+    expectOk(
+      applyIntent(
+        teamId,
+        { op: 'add_member', name: 'ray', avatarColor: '#111111' },
+        actor,
+      ),
+    );
+    expectOk(
+      applyIntent(
+        teamId,
+        { op: 'add_member', name: 'Ray Zhang', avatarColor: '#222222' },
+        actor,
+      ),
+    );
+    const added = expectOk(
+      applyIntent(
+        teamId,
+        {
+          op: 'add_item',
+          title: 'Merge Epic',
+          type: 'Epic',
+        },
+        actor,
+      ),
+    );
+    const itemKey = added.itemKey!;
+    expectOk(
+      applyIntent(
+        teamId,
+        {
+          op: 'add_sub',
+          itemKey,
+          title: 'Owned by short name',
+          owner: 'ray',
+          start: '2026-08-01',
+          days: 7,
+          temp: true,
+        },
+        actor,
+      ),
+    );
+
+    const merged = expectOk(
+      applyIntent(
+        teamId,
+        { op: 'merge_people', fromName: 'ray', toName: 'Ray Zhang' },
+        actor,
+      ),
+    );
+
+    expect(merged.snapshot.members.some((m) => m.name === 'ray')).toBe(false);
+    expect(merged.snapshot.members.some((m) => m.name === 'Ray Zhang')).toBe(
+      true,
+    );
+    const sub = merged.snapshot.items
+      .find((it) => it.key === itemKey)!
+      .subs.find((s) => s.title === 'Owned by short name')!;
+    expect(sub.owner).toBe('Ray Zhang');
+    expect(merged.snapshot.team.assigneeMap).toMatchObject({
+      ray: 'Ray Zhang',
+      'ray zhang': 'Ray Zhang',
+    });
+  });
 });
+
+function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error('expected ok');
+  return result as T & { ok: true };
+}

@@ -113,6 +113,7 @@ const remoteSteps = [
   'for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3220/health >/dev/null && break; sleep 2; done',
   'curl -fsS http://127.0.0.1:3220/health >/dev/null',
   'docker compose ps roadmap-service',
+  shellQuote(`${options.remoteDir}/tools/server-public-stack-watchdog.sh`),
 ];
 
 run('ssh', [

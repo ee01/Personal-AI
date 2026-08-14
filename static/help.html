@@ -186,6 +186,25 @@
   .mc-pending .ck { color: var(--warn); }
 
   /* ---- 记忆外接 ---- */
+  .proto-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 12px; padding: 3px; background: #f0f1f4; border-radius: 10px; width: fit-content; max-width: 100%; }
+  .proto-tab { border: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 8px; background: transparent; color: var(--muted); }
+  .proto-tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+  .proto-pane { display: none; }
+  .proto-pane.active { display: block; }
+  .keycard { margin: 0 0 14px; border: 1px solid var(--line); background: #fff; border-radius: 12px; padding: 12px 14px; }
+  .keycard-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .keycard-head .grow { flex: 1; min-width: 160px; font-size: 13px; color: var(--text); }
+  .keycard-value { position: relative; margin-top: 10px; background: #fffdf7; border: 1px solid #f0e2c8; color: #4a4432; border-radius: 10px; padding: 12px 52px 12px 14px; font-size: 12.5px; font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; line-height: 1.6; }
+  .keycard-value .copy { position: absolute; top: 9px; right: 9px; border: 0; cursor: pointer; background: var(--brand); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 11px; border-radius: 7px; }
+  .keycard .hint-line { margin-top: 8px; }
+  .takeaway { margin: 0 0 14px; border: 1px solid #c9d4f5; background: #f7f9ff; border-radius: 12px; padding: 12px 14px; }
+  .takeaway-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .takeaway-head .grow { flex: 1; min-width: 140px; font-size: 13px; font-weight: 600; color: var(--text); }
+  .takeaway .code-box { margin: 0; position: relative; padding-right: 52px; }
+  .takeaway .code-box .copy { position: absolute; top: 9px; right: 9px; border: 0; cursor: pointer; background: var(--brand); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 11px; border-radius: 7px; }
+  .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tool-chip { border: 1px solid var(--line); background: #fff; cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 4px 10px; border-radius: 9999px; }
+  .tool-chip.active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
   .feed-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .feed-bar select, .feed-bar input[type=text] { font: inherit; font-size: 13px; padding: 7px 11px; border-radius: 8px; border: 1px solid #cbcdd4; background: #fff; color: var(--text); }
   .feed-bar input[type=text] { flex: 1; min-width: 200px; display: none; }
@@ -199,6 +218,7 @@
   .prompt-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
   .hint-line { font-size: 12px; color: var(--muted); line-height: 18px; }
   .hint-line.exp { color: var(--warn); }
+  .hint-line.warn { color: var(--warn); }
   .hint-line code { background: #f0f1f4; border-radius: 3px; padding: 0 4px; font-size: 11.5px; }
 
   /* 更多能力 */
@@ -245,6 +265,9 @@
   <span class="lang-switch">
     <button class="lang-zh" >中文</button>
     <button class="lang-en" >EN</button>
+    <button type="button" class="lang-reset" id="langReset" hidden style="margin-left:8px;border:0;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline">
+      <span class="l-zh">恢复跟随设置</span><span class="l-en">Follow Options language</span>
+    </button>
   </span>
   <a href="https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools" style="font-size:12.5px;font-weight:600">Wiki</a>
 </header>
@@ -302,48 +325,124 @@
       <summary class="feature-head">
         <span class="f-icon">🔌</span>
         <span class="f-main">
-          <span class="f-title"><span class="l-zh">记忆外接(Context Pack)</span><span class="l-en">Context Pack</span><span class="tag new">NEW</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span></span>
-          <span class="f-desc"><span class="l-zh">把你的身份与偏好装进一段 Prompt,嵌入任何外部 AI 系统</span><span class="l-en">Pack your identity and preferences into a prompt for any external AI</span></span>
+          <span class="f-title"><span class="l-zh">记忆外接(Context Pack)</span><span class="l-en">Context Pack</span><span class="tag new">NEW</span><span class="tag free"><span class="l-zh">零配置</span><span class="l-en">Ready</span></span><span class="tag demo"><span class="l-zh">含演示</span><span class="l-en">Demo</span></span></span>
+          <span class="f-desc"><span class="l-zh">REST / MCP / A2A 三条路,把记忆接到外部 AI 或 Agent</span><span class="l-en">Three paths — REST, MCP, A2A — to wire your memory into external AI or agents</span></span>
         </span>
         <button class="rec-btn" data-rec="context-pack"><span class="l-zh">+ 推荐</span><span class="l-en">+ Share</span></button>
         <span class="om-caret">▼</span>
       </summary>
       <div class="f-body">
         <div class="blk-label"><span class="l-zh">使用前检查</span><span class="l-en">Readiness check</span></div>
-        <div class="checks">
-          <div class="check ok"><span class="ico">✓</span><span class="grow"><span class="l-zh">Memory Service 连接 · Token 有效</span><span class="l-en">Memory Service connected · token valid</span></span><span class="state"><span class="l-zh">已就绪</span><span class="l-en">Ready</span></span></div>
+        <div class="checks" id="contextPackChecks">
+          <div class="check todo" id="contextPackReadyCheck"><span class="ico">ⓘ</span><span class="grow" id="contextPackReadyLabel"><span class="l-zh">正在检查 Memory Service…</span><span class="l-en">Checking Memory Service…</span></span><span class="state" id="contextPackReadyState"><span class="l-zh">检查中</span><span class="l-en">Checking</span></span></div>
         </div>
 
-        <div class="blk-label"><span class="l-zh">步骤</span><span class="l-en">Steps</span></div>
-        <ol class="steps">
-          <li><span class="n">1</span><span class="t"><span class="l-zh"><b>调用接口即可拿到 Prompt。</b>外部系统(Dify、Claude、内部 bot)直接请求;支持 MCP 的客户端(Claude Code、Cursor)可直连 MCP Server。</span><span class="l-en"><b>Call the endpoint to get a prompt.</b> External systems (Dify, Claude, internal bots) request it directly; MCP clients like Claude Code and Cursor can connect to the MCP Server.</span></span></li>
-          <li><span class="n">2</span><span class="t"><span class="l-zh"><b>选择要外接的内容</b>——默认「身份与偏好」,也可选近期重点、今日安排、项目动态,或自定义主题(实验性)。</span><span class="l-en"><b>Pick what to expose</b> — identity & preferences by default, plus recent focus, today, project updates, or a custom topic (experimental).</span></span></li>
-          <li><span class="n">3</span><span class="t"><span class="l-zh">把结果粘贴到外部系统的 system prompt,或让它直接调接口——记忆更新后外部系统自动拿到最新版本。</span><span class="l-en">Paste the result into the target system prompt, or let it call the endpoint — it always gets the latest as your memory updates.</span></span></li>
-        </ol>
-        <div class="code-box">GET {memory-service}/api/v1/context-pack?scope=identity_preferences
-Authorization: Bearer &lt;token&gt;
+        <div class="blk-label"><span class="l-zh">外接凭证</span><span class="l-en">Access key</span></div>
+        <div class="keycard" id="userKeyCard">
+          <div class="keycard-head">
+            <span class="grow" id="userKeyStatus"></span>
+            <button type="button" class="btn ghost" id="userKeyRevoke" hidden><span class="l-zh">吊销</span><span class="l-en">Revoke</span></button>
+            <button type="button" class="btn" id="userKeyIssue"><span class="l-zh">生成外接 key</span><span class="l-en">Create access key</span></button>
+          </div>
+          <div class="keycard-value" id="userKeyValue" hidden><button type="button" class="copy" id="copyUserKey">copy</button><span id="userKeyText"></span></div>
+          <div class="hint-line" id="userKeyHint"></div>
+        </div>
 
-200 → { "prompt": "..." }   <span class="dim"># scope=custom&q=… </span></div>
+        <div class="blk-label"><span class="l-zh">接入方式</span><span class="l-en">How to connect</span></div>
+        <div class="proto-tabs" role="tablist" aria-label="Context Pack protocols">
+          <button type="button" class="proto-tab active" data-proto="rest" role="tab" aria-selected="true">REST</button>
+          <button type="button" class="proto-tab" data-proto="mcp" role="tab" aria-selected="false">MCP</button>
+          <button type="button" class="proto-tab" data-proto="a2a" role="tab" aria-selected="false">A2A</button>
+        </div>
 
-        <div class="blk-label"><span class="l-zh">结果预览 · 默认拉取结果</span><span class="l-en">Result preview · default pull</span></div>
-        <div class="pv">
-          <div class="pv-head"><span class="grow"><span class="l-zh">选择内容,实时生成(演示数据)</span><span class="l-en">Pick a scope, generated live (demo data)</span></span></div>
-          <div class="pv-body">
-            <div class="feed-bar">
-              <select id="feedPreset">
-                <option value="identity" data-zh="身份与偏好" data-en="Identity & preferences" selected></option>
-                <option value="recent" data-zh="近期重点" data-en="Recent focus"></option>
-                <option value="today" data-zh="今日安排" data-en="Today"></option>
-                <option value="projects" data-zh="重点项目动态" data-en="Projects"></option>
-                <option value="custom" data-zh="自定义(实验性)" data-en="Custom (experimental)"></option>
-              </select>
-              <button class="btn" id="copyPrompt"><span class="l-zh">📋 复制 Prompt</span><span class="l-en">📋 Copy prompt</span></button>
-              <input type="text" id="feedCustom" placeholder="Personal AI 项目的近期动态" />
+        <!-- REST -->
+        <div class="proto-pane active" data-proto-pane="rest">
+          <ol class="steps">
+            <li><span class="n">1</span><span class="t"><span class="l-zh"><b>复制下方请求</b>给 Dify / 脚本 / 内部 bot——已填入你的 Memory Service 地址与 Token。</span><span class="l-en"><b>Copy the request below</b> into Dify / a script / an internal bot — your Memory Service URL and token are already filled in.</span></span></li>
+            <li><span class="n">2</span><span class="t"><span class="l-zh">用预设切换 scope;外部系统按需轮询即可拿到最新 Prompt。</span><span class="l-en">Switch the preset for a different scope; poll on demand for the latest prompt.</span></span></li>
+            <li><span class="n">3</span><span class="t"><span class="l-zh">下方黄底是<strong>实时拉取</strong>的 Prompt;蓝色框是给外部系统用的可复制请求。</span><span class="l-en">The yellow box is the <strong>live</strong> prompt; the blue box is the copyable request for external systems.</span></span></li>
+          </ol>
+          <div class="takeaway">
+            <div class="takeaway-head">
+              <span class="grow"><span class="l-zh">可复制请求 · 含 host / token</span><span class="l-en">Copyable request · host / token included</span></span>
+              <div class="feed-bar" style="margin:0">
+                <select id="feedPreset">
+                  <option value="identity" data-zh="身份与偏好" data-en="Identity & preferences" selected></option>
+                  <option value="recent" data-zh="近期重点" data-en="Recent focus"></option>
+                  <option value="today" data-zh="今日安排" data-en="Today"></option>
+                  <option value="projects" data-zh="重点项目动态" data-en="Projects"></option>
+                  <option value="custom" data-zh="自定义(实验性)" data-en="Custom (experimental)"></option>
+                </select>
+                <input type="text" id="feedCustom" placeholder="Personal AI 项目的近期动态" />
+                <button type="button" class="btn" id="copyRestTakeaway"><span class="l-zh">📋 复制请求</span><span class="l-en">📋 Copy request</span></button>
+              </div>
             </div>
-            <div class="prompt-box"><button class="copy" onclick="copyPromptText(this)">copy</button><span id="promptText"></span></div>
-            <div class="prompt-meta" id="promptMeta"></div>
-            <div class="hint-line exp" id="customHint" style="display:none"><span class="l-zh">实验性:自定义主题走记忆检索管线生成,输出结构不保证稳定;敏感内容仍会经过脱敏层。</span><span class="l-en">Experimental: custom topics go through the retrieval pipeline; output shape is not guaranteed. Redaction still applies.</span></div>
-            <div class="hint-line"><span class="l-zh">输出只读、经脱敏层处理;核心隐私画像(USER_CORE)不会外发。</span><span class="l-en">Read-only and redacted; your core private profile (USER_CORE) is never exposed.</span></div>
+            <div class="code-box" id="restTakeaway"><button type="button" class="copy" id="copyRestTakeawayMini">copy</button><span id="restTakeawayText"></span></div>
+            <div class="hint-line" id="restConnHint"></div>
+            <div class="hint-line exp" id="customHint" style="display:none"><span class="l-zh">实验性:自定义主题走记忆检索管线;输出结构不保证稳定。</span><span class="l-en">Experimental: custom topics use retrieval; output shape is not guaranteed.</span></div>
+          </div>
+
+          <div class="blk-label"><span class="l-zh">返回样例(演示数据)</span><span class="l-en">Sample response (demo)</span></div>
+          <div class="pv">
+            <div class="pv-body">
+              <div class="prompt-box"><button class="copy" type="button" onclick="copyPromptText(this)">copy</button><span id="promptText"></span></div>
+              <div class="prompt-meta" id="promptMeta"></div>
+              <div class="hint-line"><span class="l-zh">只读、经脱敏;核心隐私画像(USER_CORE)不会外发。</span><span class="l-en">Read-only and redacted; USER_CORE is never exposed.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MCP -->
+        <div class="proto-pane" data-proto-pane="mcp">
+          <ol class="steps">
+            <li><span class="n">1</span><span class="t"><span class="l-zh"><b>复制接入片段</b>到 Claude Code / Cursor / 其它 MCP 客户端——地址、user-id、token 已填好。</span><span class="l-en"><b>Copy the install snippet</b> into Claude Code / Cursor / another MCP client — URL, user-id, and token are filled in.</span></span></li>
+            <li><span class="n">2</span><span class="t"><span class="l-zh">客户端发现工具后按需调 <code>memory_context_brief</code> 等,不必先复制整段 Prompt。</span><span class="l-en">After discovery, call tools like <code>memory_context_brief</code> on demand — no full prompt paste needed.</span></span></li>
+            <li><span class="n">3</span><span class="t"><span class="l-zh">黄底是工具返回样例,仅对照形态;写入类工具不会在此执行。</span><span class="l-en">Yellow boxes are shape demos only; write tools are not executed here.</span></span></li>
+          </ol>
+          <div class="takeaway">
+            <div class="takeaway-head">
+              <span class="grow"><span class="l-zh">可复制接入 · 含 host / token / user</span><span class="l-en">Copyable install · host / token / user</span></span>
+              <button type="button" class="btn" id="copyMcpTakeaway"><span class="l-zh">📋 复制接入</span><span class="l-en">📋 Copy install</span></button>
+            </div>
+            <div class="tool-chips" id="mcpTakeawayChips" role="tablist"></div>
+            <div class="code-box" id="mcpTakeaway"><button type="button" class="copy" id="copyMcpTakeawayMini">copy</button><span id="mcpTakeawayText"></span></div>
+            <div class="hint-line" id="mcpConnHint"></div>
+          </div>
+
+          <div class="blk-label"><span class="l-zh">工具返回样例(演示)</span><span class="l-en">Sample tool output (demo)</span></div>
+          <div class="pv">
+            <div class="pv-body">
+              <div class="tool-chips" id="mcpToolChips" role="tablist"></div>
+              <div class="prompt-box"><button class="copy" type="button" id="copyMcpPreview">copy</button><span id="mcpPreviewText"></span></div>
+              <div class="prompt-meta" id="mcpPreviewMeta"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- A2A -->
+        <div class="proto-pane" data-proto-pane="a2a">
+          <ol class="steps">
+            <li><span class="n">1</span><span class="t"><span class="l-zh"><b>复制发现 URL 或 JSON-RPC 请求</b>给对端 Agent——host / Bearer 已填入。</span><span class="l-en"><b>Copy the discovery URL or JSON-RPC request</b> for a peer agent — host / Bearer already filled in.</span></span></li>
+            <li><span class="n">2</span><span class="t"><span class="l-zh">委派任务还需 Options「Agent 执行器」;纯记忆召回 skill 不依赖外部执行器。</span><span class="l-en">Delegated tasks still need Options → Agent Executors; memory-recall does not.</span></span></li>
+            <li><span class="n">3</span><span class="t"><span class="l-zh">黄底回执只演示形态;本页不会真实入队任务。</span><span class="l-en">Yellow receipts are shape-only; this page does not enqueue real tasks.</span></span></li>
+          </ol>
+          <div class="takeaway">
+            <div class="takeaway-head">
+              <span class="grow"><span class="l-zh">可复制调用 · 含 host / token</span><span class="l-en">Copyable call · host / token included</span></span>
+              <button type="button" class="btn" id="copyA2aTakeaway"><span class="l-zh">📋 复制调用</span><span class="l-en">📋 Copy call</span></button>
+            </div>
+            <div class="tool-chips" id="a2aTakeawayChips" role="tablist"></div>
+            <div class="code-box" id="a2aTakeaway"><button type="button" class="copy" id="copyA2aTakeawayMini">copy</button><span id="a2aTakeawayText"></span></div>
+            <div class="hint-line" id="a2aConnHint"></div>
+          </div>
+
+          <div class="blk-label"><span class="l-zh">回执样例(演示)</span><span class="l-en">Sample receipt (demo)</span></div>
+          <div class="pv">
+            <div class="pv-body">
+              <div class="tool-chips" id="a2aPreviewChips" role="tablist"></div>
+              <div class="prompt-box"><button class="copy" type="button" id="copyA2aPreview">copy</button><span id="a2aPreviewText"></span></div>
+              <div class="prompt-meta" id="a2aPreviewMeta"></div>
+            </div>
           </div>
         </div>
       </div>

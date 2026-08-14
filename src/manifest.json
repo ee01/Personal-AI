@@ -3,7 +3,7 @@
   "name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
   "default_locale": "zh_CN",
-  "version": "9.1.0",
+  "version": "10.0.0",
   "permissions": [
     "tabs",
     "storage",

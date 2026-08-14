@@ -218,6 +218,8 @@ function expectedBearer(): string {
 }
 
 function checkBearer(request: FastifyRequest, reply: FastifyReply): boolean {
+  // Auth middleware already verified tier-2 personal keys and bound the user.
+  if (request.authMode === 'user_key') return true;
   const expected = expectedBearer();
   if (!expected) return true;
   const header = request.headers.authorization;
@@ -234,6 +236,7 @@ function checkBearer(request: FastifyRequest, reply: FastifyReply): boolean {
 }
 
 function resolveUserId(request: FastifyRequest): string {
+  if (request.authMode === 'user_key' && request.userId) return request.userId;
   const resolved = resolveUserIdHeader(request.headers['x-user-id']);
   if (resolved.userId) return resolved.userId;
   if (request.userId) return request.userId;

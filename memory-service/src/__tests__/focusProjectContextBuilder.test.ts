@@ -90,6 +90,20 @@ describe('FocusProjectContextBuilder', () => {
     expect(paragraph).not.toContain('(');
   });
 
+  it('puts user description in paragraph notes and not the row line', () => {
+    const withNotes: FocusProjectRecord = {
+      ...draft,
+      description: 'LaunchDarkly flags for composer and mobile',
+    };
+    const paragraph = buildFocusParagraphContext([withNotes], {
+      maxTotal: 3,
+      perTeamFloor: 1,
+    });
+    expect(paragraph).toContain('notes: LaunchDarkly flags for composer and mobile');
+    const row = buildFocusRowContext([withNotes], { maxTotal: 3, perTeamFloor: 1 });
+    expect(row).not.toContain('LaunchDarkly');
+  });
+
   it('renders the real key once a draft is resolved to a Jira issue', () => {
     const resolved: FocusProjectRecord = {
       ...draft,

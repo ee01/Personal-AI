@@ -5,15 +5,17 @@ import {
   addD,
   colorCls,
   diffD,
-  esc,
   fmtMD,
   initials,
   parseDate,
+  rangesOverlap,
+  dateMs,
   today,
   type Timeline,
 } from '../composables/useGeometry';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
+import { tooltipHintLine } from '../composables/useRoadmapContract';
 
 const props = defineProps<{ tl: Timeline }>();
 const state = useRoadmapState();
@@ -89,14 +91,14 @@ function overflowCounts(placed: ReturnType<typeof placeLanes>['placed']) {
   let before = 0;
   let after = 0;
   for (const { s, end } of placed) {
-    if (end < winS.value) before += 1;
-    else if (s.start! > winE.value) after += 1;
+    if (dateMs(end) < dateMs(winS.value)) before += 1;
+    else if (dateMs(s.start!) > dateMs(winE.value)) after += 1;
   }
   return { before, after };
 }
 
 function inWindow(s: RoadmapSub, end: Date | string) {
-  return end >= winS.value && s.start! <= winE.value;
+  return rangesOverlap(s.start!, end, winS.value, winE.value);
 }
 
 async function removeMember(id: string) {
@@ -229,6 +231,20 @@ async function commitRename(m: TeamMember) {
         </button>
       </div>
       <div class="res-strip" :style="{ minHeight: `${row.stripH}px` }">
+        <template v-if="!allWin">
+          <div
+            v-for="i in days"
+            v-show="i > 1"
+            :key="`g-${i}`"
+            class="res-gridline"
+            :style="{ left: `${((i - 1) / days) * 100}%` }"
+          />
+        </template>
+        <div
+          v-if="dateMs(today) >= dateMs(winS) && dateMs(today) <= dateMs(winE)"
+          class="res-gridline today"
+          :style="{ left: `${((diffD(winS, today) + 0.5) / days) * 100}%` }"
+        />
         <template v-for="({ s, it, end, li }) in row.placed" :key="s.id">
           <div
             v-if="inWindow(s, end)"
@@ -236,18 +252,18 @@ async function commitRename(m: TeamMember) {
             :class="[
               s.temp ? 'draft' : colorCls(s.start!, s.days!),
               {
-                'clip-l': s.start! < winS,
-                'clip-r': end > winE,
+                'clip-l': dateMs(s.start!) < dateMs(winS),
+                'clip-r': dateMs(end) > dateMs(winE),
               },
             ]"
             :style="{
-              left: `${pct(s.start! < winS ? winS : s.start!)}%`,
-              width: `${((diffD(s.start! < winS ? winS : s.start!, end > winE ? winE : end) + 1) / days) * 100}%`,
+              left: `${pct(dateMs(s.start!) < dateMs(winS) ? winS : s.start!)}%`,
+              width: `${((diffD(dateMs(s.start!) < dateMs(winS) ? winS : s.start!, dateMs(end) > dateMs(winE) ? winE : end) + 1) / days) * 100}%`,
               top: `${8 + li * 27}px`,
             }"
-            :data-tip="`${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start!)} → ${fmtMD(end)} · ${s.days}d||${s.title}||主任务：${it.alias || it.title}`"
+            :data-tip="`${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start!)} → ${fmtMD(end)} · ${s.days}d||${s.title}||${tooltipHintLine(s.description, `主任务：${it.alias || it.title}`)}`"
           >
-            <span class="rb-label">{{ esc(s.alias || s.title) }}</span>
+            <span class="rb-label">{{ s.alias || s.title }}</span>
           </div>
         </template>
         <span

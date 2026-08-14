@@ -605,14 +605,11 @@ async function executePersonalAiArBinding(data: Record<string, any>): Promise<{
     },
   };
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
-  if (envConfig.MEMORY_SERVICE_API_KEY) {
-    headers.Authorization = `Bearer ${envConfig.MEMORY_SERVICE_API_KEY}`;
-  }
-  headers['X-User-Id'] = userId;
+  const client = getMemoryServiceClient();
+  client.setUserId(userId);
+  const headers = await client.buildAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  headers.Accept = 'application/json';
 
   console.info('[Personal AI AR] execute via memory-service', {
     arBindingId,

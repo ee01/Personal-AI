@@ -194,7 +194,7 @@ Options 会把当前语言同步为 active `user_profile_items.language_preferen
 
 如果没有匹配到高相关记忆，不显示划词入口，也不弹出“没有找到高相关记忆”这类空结果提示。`p2`、`hidden`、纯语义相似、只有页面背景命中但没有选中文本命中的结果都不展示入口。只有 `Codex`、`AI`、`RingCentral` 这类宽泛主题词命中时，也不能展示入口；需要命中 `续约`、`300万`、票号、项目名、人名、行动项等更具体的选中文本锚点。
 
-每次选区变化都会立即清除上一条划词入口、取消上一条 pending recall，并重新发起 `selected_text` 匹配。Selection Memory Search 不读取上一轮划词缓存，避免用户快速多次选择文本时把旧结果误展示在新选区旁。
+每次选区变化都会立即清除上一条划词入口、取消上一条 pending recall，并重新发起 `selected_text` 匹配。Selection Memory Search 不读取上一轮划词缓存，background/session 的 completed-result cache 也必须绕过 `selected_text`；即使用户重复选择相同文本，这仍是一次显式用户动作，应重新读取当前记忆状态，避免把旧结果误展示在新选区旁。
 
 同一页面如果多处出现相同选中文字，附近段落也会进入本次划词上下文签名；用户从第一处相同短语切到第二处时会重新发起 `selected_text` 召回，而不是只把第一处结果挪到新位置。
 
@@ -365,7 +365,7 @@ Memory Lens 可消费 `/context-recall.changeProjections`，详见 [Change Memor
 - 链级卡 footer 固定为 `链级只读`，操作边界固定说明不确认当前值、不写入、不插入、不发送。
 - Cache 必须连同 `changeProjections` 保存，不能首次出现后在同页稳定缓存命中时消失。
 - 排序先按专用交互和高阶展示对象仲裁，再按 `displayPriority` 与关联分数：Selection / Rehearsal 保持专用视图；`ready` / `partial` 简报优先于变化脉络；变化脉络优先于普通强相关记忆。
-- Jira Lens 的缓存、去重和展示身份使用稳定 `issueKey`，而不是延迟渲染的字段签名。字段继续作为请求上下文传给服务端，但同一 issue 的局部重绘不得清空图标或重复发起 Context Recall。
+- Jira Lens 的缓存、去重和展示身份使用稳定 `issueKey`，而不是延迟渲染的字段签名。字段继续作为请求上下文传给服务端，但同一 issue 的局部重绘不得清空图标或重复发起 Context Recall。Compose Assist 的预渲染 icon 只有在当前上下文确实是可编辑 composer 时才抑制 Lens；Jira 阅读态必须把当前 issue payload 传入抑制判断，不能仅因 icon 可见就丢弃已完成的 recall 响应。
 - Selection Memory Search 不消费页面级变化链。
 - UI 回归使用 `node tools/verify-change-memory-ledger-e2e.mjs`。
 

@@ -11,6 +11,12 @@ import {
   readExtensionUiPreferences,
 } from '../i18n/index.js';
 import { DEFAULT_MEMORY_SERVICE_BASE_URL } from '../memoryServiceConfig.js';
+import {
+  ensureDeviceApiKey,
+  clearStoredDeviceKey,
+  clearStoredHelpCenterKey,
+} from '../deviceApiKey.js';
+import { getDefaultEnvConfig } from '../utils.js';
 
 // ============================================================================
 // Configuration
@@ -188,10 +194,17 @@ export type RecallAnalysisMode = 'search' | 'research' | 'aggregate';
 export type RecallBlockType =
   | 'summary'
   | 'timeline'
-  | 'table'
-  | 'chart'
   | 'evidence_list'
   | 'media';
+export type RecallPresentationBlockType = Exclude<RecallBlockType, 'summary'>;
+export type RecallRetrievalMode = 'fast' | 'balanced' | 'deep';
+export type RecallSynthesisTrigger = 'user' | 'api';
+export interface RecallSynthesisRequest {
+  mode: 'none' | 'summary';
+  trigger?: RecallSynthesisTrigger;
+  maxTokens?: number;
+  minEvidenceItems?: number;
+}
 export type RecallPresentationHint =
   | 'default'
   | 'compact'
@@ -248,12 +261,14 @@ export interface RecallOptions {
   lifecycleMode?: RecallLifecycleMode;
   previewMaxLength?: number;
   scope?: RecallScope;
+  /** @deprecated Accepted for compatibility; it no longer controls routing. */
   analysisMode?: RecallAnalysisMode;
+  retrievalMode?: RecallRetrievalMode;
+  presentationBlocks?: RecallPresentationBlockType[];
+  synthesis?: RecallSynthesisRequest;
   /**
-   * Drives both block construction and LLM use:
-   *  - omit / empty → evidence-only response (fast, no LLM)
-   *  - provided → response includes `blocks`; if it contains `'summary'`,
-   *    an `analysis` block is also produced via LLM.
+   * @deprecated Use `presentationBlocks` and `synthesis`. Kept for older
+   * clients during migration.
    */
   blockTypes?: RecallBlockType[];
 }
@@ -265,8 +280,38 @@ export interface RecallResult {
   channels: string[];
   channelDiagnostics?: RecallChannelDiagnostic[];
   scopeReceipt?: RecallScopeReceipt;
+  retrievalTimeMs?: number;
+  synthesisTimeMs?: number;
+  retrievalReceipt?: RecallRetrievalReceipt;
+  synthesisReceipt?: RecallSynthesisReceipt;
   blocks?: RecallBlock[];
   analysis?: RecallAnalysis;
+}
+
+export interface RecallRetrievalReceipt {
+  requestedMode: RecallRetrievalMode;
+  effectiveChannels: string[];
+  runtimePolicy: 'default' | 'safe_fts';
+}
+
+export type RecallSynthesisStatus =
+  | 'not_requested'
+  | 'skipped_empty'
+  | 'skipped_insufficient'
+  | 'skipped_by_caller'
+  | 'succeeded'
+  | 'failed'
+  | 'invalid_output';
+
+export interface RecallSynthesisReceipt {
+  requested: boolean;
+  mode: 'none' | 'summary';
+  trigger?: RecallSynthesisTrigger;
+  status: RecallSynthesisStatus;
+  cacheHit: boolean;
+  evidenceItemIds: string[];
+  minimumEvidenceItems?: number;
+  errorCode?: 'llm_failed' | 'invalid_output';
 }
 
 export interface RecallItem {
@@ -415,25 +460,6 @@ export type RecallBlock =
       payload: { events: RecallTimelineEvent[] };
     }
   | {
-      type: 'table';
-      title?: string;
-      payload: {
-        columns: Array<{ key: string; label: string }>;
-        rows: Array<Record<string, string | number | null>>;
-      };
-    }
-  | {
-      type: 'chart';
-      title?: string;
-      payload: {
-        chartType: 'line' | 'bar' | 'pie' | 'scatter';
-        labels: string[];
-        series: Array<{ name: string; data: number[] }>;
-        xAxisLabel?: string;
-        yAxisLabel?: string;
-      };
-    }
-  | {
       type: 'evidence_list';
       title?: string;
       payload: { cards: RecallEvidenceCard[] };
@@ -503,7 +529,12 @@ export type AskBlock =
 
 export interface RecallAnalysis {
   summary: string;
+  evidenceItemIds?: string[];
   keyFindings?: string[];
+  groundedFindings?: Array<{
+    text: string;
+    evidenceItemIds: string[];
+  }>;
   insights?: string[];
   rankingRationale?: string;
   openQuestions?: string[];
@@ -3966,6 +3997,19 @@ export interface SourceMemoryCandidateResponse {
   policyReceipt?: SourceMemoryCapturePolicyReceipt;
 }
 
+export interface SourceMemoryWebpageAnalysisRequest {
+  title: string;
+  url: string;
+  mainContent: string;
+  domain?: string;
+  wordCount?: number;
+}
+
+export interface SourceMemoryWebpageAnalysisResponse {
+  result: unknown;
+  promptVersion: string;
+}
+
 export interface SourceMemoryCapturePolicyReceipt {
   state: 'blocked' | 'ignored_low_signal' | 'suggested_review' | 'auto_save_candidate';
   label: string;
@@ -4800,14 +4844,18 @@ export class MemoryServiceError extends Error {
 export class MemoryServiceClient {
   private baseUrl: string;
   private apiKey: string | undefined;
+  private bootstrapKey: string | undefined;
   private timeout: number;
   private userId: string;
   private userIdentityExplicit = false;
   private configLoaded = false;
   private _configLoadPromise: Promise<void> | null = null;
   private _userIdResolvePromise: Promise<void> | null = null;
+  private _deviceKeyPromise: Promise<string | null> | null = null;
+  private readonly configOverrides: Partial<MemoryServiceConfig>;
 
   constructor(config?: Partial<MemoryServiceConfig>) {
+    this.configOverrides = { ...config };
     this.baseUrl = config?.baseUrl ?? DEFAULT_MEMORY_SERVICE_BASE_URL;
     this.apiKey = config?.apiKey;
     this.timeout = config?.timeout ?? DEFAULT_TIMEOUT_MS;
@@ -4817,23 +4865,26 @@ export class MemoryServiceClient {
       this.setUserId(config.userId);
     }
 
-    // If no explicit config provided, try to load from chrome.storage.local
-    if (!config?.baseUrl) {
-      this._configLoadPromise = this.loadConfigFromStorage();
-    } else {
-      this.configLoaded = true;
-    }
+    // Always load storage (bootstrap + existing pak). Explicit constructor
+    // fields overlay afterwards so callers that pass baseUrl still authenticate.
+    this._configLoadPromise = this.loadConfigFromStorage();
   }
 
   /**
    * Load configuration from envConfig and userinfo in chrome.storage.local.
    * - baseUrl, apiKey, timeout: from envConfig (MEMORY_SERVICE_*)
    * - userId: from userinfo.username, or the local part of a stored work email
+   * Constructor overrides win for baseUrl / apiKey / timeout / userId.
+   * Bootstrap is always taken from storage or the baked build env.
    */
   private loadConfigFromStorage(): Promise<void> {
     if (this.configLoaded) {
       return Promise.resolve();
     }
+
+    const applyBootstrapFallback = () => {
+      this.bootstrapKey = this.resolveBootstrapKey(this.bootstrapKey);
+    };
 
     try {
       if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
@@ -4845,24 +4896,39 @@ export class MemoryServiceClient {
               userinfo?: StoredMemoryUserInfo;
             }) => {
               const env = result.envConfig;
-              if (env?.MEMORY_SERVICE_BASE_URL) {
+              if (
+                env?.MEMORY_SERVICE_BASE_URL &&
+                !this.configOverrides.baseUrl
+              ) {
                 this.baseUrl = env.MEMORY_SERVICE_BASE_URL;
               }
               if (
-                env?.MEMORY_SERVICE_API_KEY != null &&
-                env.MEMORY_SERVICE_API_KEY !== ''
+                env?.MEMORY_SERVICE_API_KEY &&
+                !this.configOverrides.apiKey
               ) {
                 this.apiKey = env.MEMORY_SERVICE_API_KEY;
               }
-              if (env?.MEMORY_SERVICE_TIMEOUT != null) {
+              if (
+                env?.MEMORY_SERVICE_BOOTSTRAP_KEY != null &&
+                env.MEMORY_SERVICE_BOOTSTRAP_KEY !== ''
+              ) {
+                this.bootstrapKey = env.MEMORY_SERVICE_BOOTSTRAP_KEY;
+              }
+              if (
+                env?.MEMORY_SERVICE_TIMEOUT != null &&
+                this.configOverrides.timeout == null
+              ) {
                 const t = Number(env.MEMORY_SERVICE_TIMEOUT);
                 if (!Number.isNaN(t)) this.timeout = t;
               }
-              const userId = resolveStoredMemoryUserId(result.userinfo);
-              if (userId) {
-                this.userId = userId;
-                this.userIdentityExplicit = true;
+              if (this.configOverrides.userId == null) {
+                const userId = resolveStoredMemoryUserId(result.userinfo);
+                if (userId) {
+                  this.userId = userId;
+                  this.userIdentityExplicit = true;
+                }
               }
+              applyBootstrapFallback();
               this.configLoaded = true;
               resolve();
             },
@@ -4873,8 +4939,91 @@ export class MemoryServiceClient {
       // chrome.storage not available — use defaults
     }
 
+    applyBootstrapFallback();
     this.configLoaded = true;
     return Promise.resolve();
+  }
+
+  private resolveBootstrapKey(fromStorage?: string): string {
+    const stored = String(fromStorage || '').trim();
+    if (stored) return stored;
+    const baked = String(
+      (typeof process !== 'undefined'
+        ? process.env.MEMORY_SERVICE_BOOTSTRAP_KEY
+        : '') ||
+        getDefaultEnvConfig().MEMORY_SERVICE_BOOTSTRAP_KEY ||
+        '',
+    ).trim();
+    return baked;
+  }
+
+  private async ensureDeviceBearer(): Promise<string | undefined> {
+    await this.ensureConfigLoaded();
+    await this.ensureUserIdResolved();
+    if (!this.shouldSendUserIdentity()) return this.apiKey;
+    this.bootstrapKey = this.resolveBootstrapKey(this.bootstrapKey);
+
+    if (!this._deviceKeyPromise) {
+      this._deviceKeyPromise = this.issueDeviceKeyPromise(false);
+    }
+    const deviceToken = await this._deviceKeyPromise;
+    // Prefer per-device tier-2; fall back to service key only if needed.
+    return deviceToken || this.apiKey;
+  }
+
+  private issueDeviceKeyPromise(forceReissue: boolean): Promise<string | null> {
+    return ensureDeviceApiKey({
+      baseUrl: this.baseUrl,
+      bootstrapKey: this.resolveBootstrapKey(this.bootstrapKey),
+      serviceKey: this.apiKey,
+      userId: this.userId,
+      forceReissue,
+    })
+      .then((token) => {
+        if (!token) this._deviceKeyPromise = null;
+        return token;
+      })
+      .catch(() => {
+        this._deviceKeyPromise = null;
+        return null;
+      });
+  }
+
+  private isRecoverableAuthError(
+    status: number,
+    errorBody: { error?: string } | string | null | undefined,
+  ): 'scope' | 'invalid' | null {
+    const code =
+      errorBody && typeof errorBody === 'object' ? errorBody.error : undefined;
+    if (status === 403 && code === 'user_key_scope_insufficient') return 'scope';
+    if (status === 401 && code === 'invalid_user_api_key') return 'invalid';
+    return null;
+  }
+
+  private async rotateDeviceKeyAfterAuthFailure(
+    kind: 'scope' | 'invalid',
+  ): Promise<void> {
+    await clearStoredDeviceKey().catch(() => undefined);
+    if (kind === 'invalid') {
+      // Server no longer recognizes this pak (revoked / DB reset). Help-center
+      // copies are equally stale; drop them so bootstrap can mint a new one.
+      await clearStoredHelpCenterKey().catch(() => undefined);
+    }
+    this._deviceKeyPromise = this.issueDeviceKeyPromise(true);
+    await this._deviceKeyPromise;
+  }
+
+  async buildAuthHeaders(): Promise<Record<string, string>> {
+    await this.ensureConfigLoaded();
+    await this.ensureUserIdResolved();
+    const headers: Record<string, string> = {};
+    this.applyUserIdentityHeader(headers);
+    await this.applyUiLanguageHeaders(headers);
+    const deviceBearer = await this.ensureDeviceBearer();
+    if (deviceBearer) {
+      headers.Authorization = `Bearer ${deviceBearer}`;
+    }
+    return headers;
   }
 
   private async ensureConfigLoaded(): Promise<void> {
@@ -4948,6 +5097,7 @@ export class MemoryServiceClient {
     method: string,
     path: string,
     body?: any,
+    retried = false,
   ): Promise<T> {
     await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
@@ -4964,8 +5114,9 @@ export class MemoryServiceClient {
       headers['Content-Type'] = 'application/json';
     }
 
-    if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const deviceBearer = await this.ensureDeviceBearer();
+    if (deviceBearer) {
+      headers['Authorization'] = `Bearer ${deviceBearer}`;
     }
 
     const controller = new AbortController();
@@ -4983,6 +5134,14 @@ export class MemoryServiceClient {
 
       if (!response.ok) {
         const errorBody = await this.parseErrorResponse(response);
+        const recoverable = this.isRecoverableAuthError(
+          response.status,
+          errorBody,
+        );
+        if (!retried && recoverable) {
+          await this.rotateDeviceKeyAfterAuthFailure(recoverable);
+          return this.request(method, path, body, true);
+        }
         const message =
           errorBody?.error || errorBody?.message || response.statusText;
         throw new MemoryServiceError(response.status, message, errorBody);
@@ -5050,8 +5209,9 @@ export class MemoryServiceClient {
       headers['Content-Type'] = 'application/json';
     }
 
-    if (this.apiKey) {
-      headers.Authorization = `Bearer ${this.apiKey}`;
+    const deviceBearer = await this.ensureDeviceBearer();
+    if (deviceBearer) {
+      headers['Authorization'] = `Bearer ${deviceBearer}`;
     }
 
     const controller = new AbortController();
@@ -5125,8 +5285,9 @@ export class MemoryServiceClient {
     this.applyUserIdentityHeader(headers);
     await this.applyUiLanguageHeaders(headers);
 
-    if (this.apiKey) {
-      headers.Authorization = `Bearer ${this.apiKey}`;
+    const deviceBearer = await this.ensureDeviceBearer();
+    if (deviceBearer) {
+      headers.Authorization = `Bearer ${deviceBearer}`;
     }
 
     const controller = new AbortController();
@@ -5198,10 +5359,10 @@ export class MemoryServiceClient {
   /**
    * Active recall — research-grade multi-channel recall.
    *
-   * Returns evidence items always. When `blockTypes` is provided, the
-   * response also includes structured UI `blocks` (timeline, evidence_list,
-   * media, summary). If `blockTypes` includes `'summary'`, an LLM second
-   * stage runs and produces `analysis`.
+   * Returns evidence items always. Retrieval cost, deterministic presentation
+   * blocks, and token-consuming synthesis are independent options. Synthesis
+   * only runs when `synthesis.mode` is explicitly `'summary'` (or a legacy
+   * caller includes `'summary'` in `blockTypes`).
    *
    * For passive associative recall (web/meeting bubbles), use
    * {@link MemoryServiceClient.contextRecall} instead.
@@ -7049,6 +7210,16 @@ export class MemoryServiceClient {
     );
   }
 
+  async analyzeSourceMemoryWebpage(
+    payload: SourceMemoryWebpageAnalysisRequest,
+  ): Promise<SourceMemoryWebpageAnalysisResponse> {
+    return this.request<SourceMemoryWebpageAnalysisResponse>(
+      'POST',
+      '/source-memory/webpage-analysis',
+      payload,
+    );
+  }
+
   async scoreSourceMemorySelection(
     payload: SourceMemoryCandidateRequest,
   ): Promise<SourceMemoryCandidateResponse> {
@@ -7644,15 +7815,18 @@ export class MemoryServiceClient {
    * Also persists the new value to chrome.storage.local if available.
    */
   setUserId(userId: string): void {
+    const previous = this.userId;
     const normalized = userId.trim();
     if (normalized && USER_ID_PATTERN.test(normalized)) {
       this.userId = normalized;
       this.userIdentityExplicit = true;
-      return;
+    } else {
+      this.userId = 'default';
+      this.userIdentityExplicit = false;
     }
-
-    this.userId = 'default';
-    this.userIdentityExplicit = false;
+    if (this.userId !== previous) {
+      this._deviceKeyPromise = null;
+    }
   }
 
   /**
@@ -7679,15 +7853,21 @@ let _client: MemoryServiceClient | null = null;
 /**
  * Get (or lazily create) the global MemoryServiceClient singleton.
  *
- * If called with a config object, the existing singleton is replaced.
- * If called without arguments, returns the existing instance or creates
- * one with default configuration.
+ * Passing config overlays the existing singleton; it never replaces it, so a
+ * page that passes `{ baseUrl }` cannot drop bootstrap / device-key loading.
  */
 export function getMemoryServiceClient(
   config?: Partial<MemoryServiceConfig>,
 ): MemoryServiceClient {
-  if (config || !_client) {
+  if (!_client) {
     _client = new MemoryServiceClient(config);
+    return _client;
+  }
+  if (config) {
+    if (config.baseUrl) _client.setBaseUrl(config.baseUrl);
+    if (config.apiKey) _client.setApiKey(config.apiKey);
+    if (config.timeout != null) _client.setTimeout(config.timeout);
+    if (config.userId) _client.setUserId(config.userId);
   }
   return _client;
 }

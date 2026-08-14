@@ -36,10 +36,19 @@ import GanttRow from './GanttRow.vue';
 import ResourceView from './ResourceView.vue';
 import {
   bridgeImportChildTasks,
+  bridgeRefreshJiraIssues,
+  bridgeUpdateAssignee,
   bridgeUpdateTargetDates,
 } from '../composables/useExtensionBridge';
+import { extensionLockTip, useExtensionGate } from '../composables/useExtensionGate';
+import {
+  jiraUsernameFromFull,
+  mapGet,
+  teamAssigneeMap,
+} from '../composables/useAssigneeMap';
 
 const state = useRoadmapState();
+const gate = useExtensionGate();
 const gScroll = ref<HTMLElement | null>(null);
 const gBody = ref<HTMLElement | null>(null);
 const dropVisible = ref(false);
@@ -266,59 +275,116 @@ const draftCount = computed(
 const hasScheduledJiraEpics = computed(() =>
   state.scheduledItems.value.some((it) => Boolean(it.jiraKey)),
 );
-/** 导入 Task：必须有扩展（用 Options Jira token）；无扩展不显示。 */
+/**
+ * 导入 Task 走扩展的 Options Jira token。无扩展时仍然显示，但呈锁定态并引导安装
+ * —— 直接隐藏会让人以为功能不存在。
+ */
 const showImportTasks = computed(
-  () =>
-    state.view.value === 'gantt' &&
-    state.hasExtension.value &&
-    hasScheduledJiraEpics.value,
+  () => state.view.value === 'gantt' && hasScheduledJiraEpics.value,
 );
 
 const importTasksLoading = ref(false);
 
-const extTitle = '需要 Personal AI 扩展';
-
-/** Debounce Target sync per item (matches server 1.5s). */
+/** Debounce Target sync per item/sub (matches server 1.5s). */
 const targetSyncTimers = new Map<string, number>();
+const JIRA_REFRESH_TTL_MS = 10 * 60 * 1000;
+let jiraRefreshTimer: number | null = null;
+let jiraRefreshInFlight = false;
 
-function scheduleTargetDateSync(itemKey: string) {
-  const existing = targetSyncTimers.get(itemKey);
+type TargetSyncRef = {
+  itemKey?: string;
+  subId?: string;
+  jiraKey: string;
+  start: string;
+  days: number;
+};
+
+function targetTimerKey(ref: TargetSyncRef) {
+  return ref.subId ? `sub:${ref.subId}` : `item:${ref.itemKey}`;
+}
+
+function scheduleTargetDateSync(ref: TargetSyncRef) {
+  const timerKey = targetTimerKey(ref);
+  const existing = targetSyncTimers.get(timerKey);
   if (existing) window.clearTimeout(existing);
   targetSyncTimers.set(
-    itemKey,
+    timerKey,
     window.setTimeout(() => {
-      targetSyncTimers.delete(itemKey);
-      void runTargetDateSync(itemKey);
+      targetSyncTimers.delete(timerKey);
+      void runTargetDateSync(ref);
     }, 1500),
   );
 }
 
+function pendingTargetJiraKeys(): Set<string> {
+  const out = new Set<string>();
+  for (const it of state.scheduledItems.value) {
+    if (targetSyncTimers.has(`item:${it.key}`) && it.jiraKey) out.add(it.jiraKey);
+    for (const s of it.subs) {
+      if (targetSyncTimers.has(`sub:${s.id}`) && s.key) out.add(s.key);
+    }
+  }
+  return out;
+}
+
+function editingOrDraggingJiraKeys(): Set<string> {
+  const out = new Set<string>();
+  document.querySelectorAll('.g-row').forEach((row) => {
+    const busy = row.querySelector('.dragging, .alias-editor, .task-editor');
+    if (!busy) return;
+    const itemKey = row.getAttribute('data-key');
+    const item = state.scheduledItems.value.find((i) => i.key === itemKey);
+    if (item?.jiraKey) out.add(item.jiraKey);
+    const subEl = busy.closest('[data-sub-id]') || row.querySelector('.dragging[data-sub-id]');
+    const subId = subEl?.getAttribute('data-sub-id');
+    const sub = item?.subs.find((s) => s.id === subId);
+    if (sub?.key) out.add(sub.key);
+    else if (item) {
+      for (const s of item.subs) if (s.key) out.add(s.key);
+    }
+  });
+  return out;
+}
+
 /**
  * Prefer extension Options JIRA_API_TOKEN; fall back to server JIRA_PAT.
- * If neither is available, stay silent (no toast).
+ * If neither is available, stay silent (no toast). Success gets a light toast.
  */
-async function runTargetDateSync(itemKey: string) {
+async function runTargetDateSync(ref: TargetSyncRef) {
   if (!state.teamId.value || !state.editable.value) return;
-  const item = state.scheduledItems.value.find((i) => i.key === itemKey);
-  if (!item?.jiraKey || !item.start || !item.days) return;
-  const start = item.start;
-  const end = fmtISO(addD(parseDate(start), Math.max(1, item.days) - 1));
+  const start = ref.start;
+  const end = fmtISO(addD(parseDate(start), Math.max(1, ref.days) - 1));
+  const viaExt = state.hasExtension.value;
 
-  if (state.hasExtension.value) {
+  if (viaExt) {
     try {
-      await bridgeUpdateTargetDates(item.jiraKey, start, end);
-      const confirmed = await state.api.syncTarget(state.teamId.value, {
-        itemKey,
-        mode: 'confirm',
-        start,
-        end,
-        jiraKey: item.jiraKey,
-      });
+      await bridgeUpdateTargetDates(ref.jiraKey, start, end);
+      const confirmed = await state.api.syncTarget(
+        state.teamId.value,
+        ref.subId
+          ? {
+              subId: ref.subId,
+              mode: 'confirm',
+              start,
+              end,
+              jiraKey: ref.jiraKey,
+            }
+          : {
+              itemKey: ref.itemKey!,
+              mode: 'confirm',
+              start,
+              end,
+              jiraKey: ref.jiraKey,
+            },
+      );
       if (confirmed.snapshot) state.commitSnapshot(confirmed.snapshot);
+      state.toast(
+        `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}（经你的 Jira 账号）`,
+        2600,
+      );
       return;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Missing Options token → soft fall through to server PAT.
       if (!/jira_token_missing|扩展未接收|扩展响应超时/i.test(msg)) {
         // Hard Jira write failure: still try server fallback once.
       }
@@ -326,11 +392,84 @@ async function runTargetDateSync(itemKey: string) {
   }
 
   try {
-    await state.api.syncTarget(state.teamId.value, { itemKey, mode: 'queue' });
+    await state.api.syncTarget(
+      state.teamId.value,
+      ref.subId
+        ? { subId: ref.subId, mode: 'queue' }
+        : { itemKey: ref.itemKey!, mode: 'queue' },
+    );
+    state.toast(
+      `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}`,
+      2600,
+    );
   } catch {
     // Silent when server PAT also missing / network fails.
   }
 }
+
+function collectRefreshKeys(): string[] {
+  const blocked = new Set([
+    ...pendingTargetJiraKeys(),
+    ...editingOrDraggingJiraKeys(),
+  ]);
+  const keys: string[] = [];
+  for (const it of state.scheduledItems.value) {
+    if (it.jiraKey && !blocked.has(it.jiraKey)) keys.push(it.jiraKey);
+    for (const s of it.subs) {
+      if (s.cleared || !s.key || blocked.has(s.key)) continue;
+      keys.push(s.key);
+    }
+  }
+  return [...new Set(keys)].slice(0, 50);
+}
+
+async function silentRefreshFromJira() {
+  if (!state.teamId.value || !state.editable.value || !state.hasExtension.value) return;
+  if (jiraRefreshInFlight) return;
+  const last = state.snapshot.value?.team.jiraRefreshedAt || 0;
+  if (last && Date.now() - last < JIRA_REFRESH_TTL_MS) return;
+  const keys = collectRefreshKeys();
+  if (!keys.length) return;
+  jiraRefreshInFlight = true;
+  try {
+    const issues = await bridgeRefreshJiraIssues(keys);
+    if (!issues.length) return;
+    await state.applySnapshotFromIntent({
+      op: 'refresh_from_jira',
+      issues: issues.map((issue) => ({
+        key: issue.key,
+        fetchedAt: issue.fetchedAt,
+        fields: {
+          summary: issue.summary,
+          description: issue.description,
+          targetStart: issue.targetStart,
+          targetEnd: issue.targetEnd,
+          assignee: issue.assignee,
+        },
+      })),
+    });
+  } catch (err) {
+    console.debug('[roadmap] silent jira refresh skipped', err);
+  } finally {
+    jiraRefreshInFlight = false;
+  }
+}
+
+function scheduleSilentJiraRefresh() {
+  if (jiraRefreshTimer) window.clearTimeout(jiraRefreshTimer);
+  jiraRefreshTimer = window.setTimeout(() => {
+    jiraRefreshTimer = null;
+    void silentRefreshFromJira();
+  }, 2000);
+}
+
+watch(
+  () => [state.hasExtension.value, state.editable.value, state.snapshot.value?.team.id] as const,
+  ([hasExt, editable, teamId]) => {
+    if (hasExt && editable && teamId) scheduleSilentJiraRefresh();
+  },
+  { immediate: true },
+);
 
 watch(
   () => state.scheduledItems.value.length,
@@ -443,7 +582,14 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
           scheduleFromBacklog(it, start, days, lane),
         );
         state.enterKey.value = it.key;
-        if (it.jiraKey) scheduleTargetDateSync(it.key);
+        if (it.jiraKey) {
+          scheduleTargetDateSync({
+            itemKey: it.key,
+            jiraKey: it.jiraKey,
+            start: fmtISO(start),
+            days,
+          });
+        }
         state.toast(
           hasTarget
             ? `<span class="ok">✓</span> ${it.key} 已按 Target 日期落位：${fmtMD(start)} → ${fmtMD(addD(start, days - 1))}`
@@ -514,6 +660,14 @@ async function commitBar(
       days: payload.days,
       baseVersion: sub.version,
     });
+    if (sub.key) {
+      scheduleTargetDateSync({
+        subId: sub.id,
+        jiraKey: sub.key,
+        start: payload.start,
+        days: payload.days,
+      });
+    }
     return;
   }
   const op =
@@ -528,7 +682,60 @@ async function commitBar(
     baseVersion: it.version,
   });
   if (it.jiraKey && (op === 'schedule' || op === 'move' || op === 'resize')) {
-    scheduleTargetDateSync(it.key);
+    scheduleTargetDateSync({
+      itemKey: it.key,
+      jiraKey: it.jiraKey,
+      start: payload.start,
+      days: payload.days,
+    });
+  }
+}
+
+async function onUpdateSub(intent: Record<string, unknown>) {
+  const subId = String(intent.subId || '');
+  const item = state.scheduledItems.value.find((row) =>
+    row.subs.some((s) => s.id === subId),
+  );
+  const sub = item?.subs.find((s) => s.id === subId);
+  const nextOwner =
+    intent.owner === undefined ? undefined : (intent.owner as string | null);
+  const ownerChanging =
+    Boolean(sub) &&
+    nextOwner !== undefined &&
+    (nextOwner || null) !== (sub?.owner || null);
+  const jiraKey = sub?.key || null;
+
+  if (ownerChanging && jiraKey && nextOwner === null) {
+    if (!window.confirm('清空 Owner 会同时从 Jira 去掉 assignee，确定吗？')) {
+      return;
+    }
+  }
+
+  await state.applySnapshotFromIntent(intent);
+
+  if (!ownerChanging || !jiraKey) return;
+  if (!state.hasExtension.value) {
+    state.toast('未回写 assignee（需要 Personal AI 扩展）', 2600);
+    return;
+  }
+  const map = teamAssigneeMap(state.snapshot.value);
+  const mapped = nextOwner ? mapGet(map, nextOwner) : null;
+  if (nextOwner && !mapped) {
+    state.toast(`未回写 assignee（${nextOwner} 未映射）`, 2600);
+    return;
+  }
+  const jiraUser = mapped ? jiraUsernameFromFull(mapped) : null;
+  try {
+    await bridgeUpdateAssignee(jiraKey, jiraUser);
+    state.toast(
+      jiraUser
+        ? `<span class="ok">✓</span> 已回写 ${jiraKey} assignee → ${jiraUser}（经你的 Jira 账号）`
+        : `<span class="ok">✓</span> 已回写 ${jiraKey} assignee（已清空，经你的 Jira 账号）`,
+      2600,
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    state.toast(`未回写 assignee：${msg}`, 3200);
   }
 }
 
@@ -538,16 +745,21 @@ function openCleanup() {
 }
 
 function openAiCreate() {
-  if (!state.hasExtension.value || !state.editable.value) return;
+  if (!state.hasExtension.value) {
+    gate.openGate('createJira');
+    return;
+  }
+  if (!state.editable.value) return;
+  // Allow reopen while a run is in progress to inspect row status.
   state.modals.value.aiCreate = true;
 }
 
 async function onImportTasks() {
-  if (!state.editable.value || !state.teamId.value || importTasksLoading.value) {
+  if (!state.hasExtension.value) {
+    gate.openGate('importTasks');
     return;
   }
-  if (!state.hasExtension.value) {
-    state.toast('需要 Personal AI 扩展才能导入 Task');
+  if (!state.editable.value || !state.teamId.value || importTasksLoading.value) {
     return;
   }
   if (!state.ensureActorName()) return;
@@ -598,6 +810,7 @@ onUnmounted(() => {
   window.removeEventListener('roadmap-card-drag-start', onCardDragStart);
   for (const timer of targetSyncTimers.values()) window.clearTimeout(timer);
   targetSyncTimers.clear();
+  if (jiraRefreshTimer) window.clearTimeout(jiraRefreshTimer);
 });
 </script>
 
@@ -709,22 +922,75 @@ onUnmounted(() => {
       <button
         v-show="showImportTasks"
         class="btn btn-ghost import-tasks-btn"
+        :class="{ locked: !state.hasExtension.value }"
         :disabled="!state.editable.value || importTasksLoading"
-        data-tip="从 Jira 拉取甘特上各 Epic 名下的 Task，按 Key 去重导入为子任务"
+        :data-tip="
+          state.hasExtension.value
+            ? '从 Jira 拉取甘特上各 Epic 名下的 Task，按 Key 去重导入为子任务'
+            : extensionLockTip('importTasks')
+        "
         @click="onImportTasks"
       >
         <span v-if="importTasksLoading" class="mini-spin" />
+        <svg v-else class="lock" width="12" height="13" viewBox="0 0 14 15">
+          <rect
+            x="2.4"
+            y="6.2"
+            width="9.2"
+            height="7"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+          />
+          <path
+            d="M4.7 6.2V4.4a2.3 2.3 0 014.6 0v1.8"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          />
+        </svg>
         {{ importTasksLoading ? '查询 Jira…' : '导入 Task' }}
       </button>
 
       <button
-        v-show="state.view.value === 'gantt' && draftCount"
+        v-show="state.view.value === 'gantt' && (draftCount || state.createJiraRunning.value)"
         class="btn btn-orange create-jira"
-        :disabled="!state.hasExtension.value || !state.editable.value"
-        :title="!state.hasExtension.value ? extTitle : undefined"
+        :class="{
+          busy: state.createJiraRunning.value,
+          locked: !state.hasExtension.value,
+        }"
+        :disabled="!state.editable.value"
+        :title="state.createJiraRunning.value ? '创建进行中…点击可查看进度' : undefined"
+        :data-tip="!state.hasExtension.value ? extensionLockTip('createJira') : undefined"
         @click="openAiCreate"
       >
-        <svg width="13" height="13" viewBox="0 0 14 14">
+        <span
+          v-if="state.createJiraRunning.value"
+          class="mini-spin"
+          style="border-top-color: #fff; border-color: rgba(255,255,255,.35)"
+        />
+        <svg class="lock" width="12" height="13" viewBox="0 0 14 15">
+          <rect
+            x="2.4"
+            y="6.2"
+            width="9.2"
+            height="7"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+          />
+          <path
+            d="M4.7 6.2V4.4a2.3 2.3 0 014.6 0v1.8"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          />
+        </svg>
+        <svg v-if="!state.createJiraRunning.value" class="ico" width="13" height="13" viewBox="0 0 14 14">
           <path
             d="M7 2.5c1.5-1.8 4.5-1 4.5 1.5 0 1.8-2 2.5-3 4M7 11.5v.01M2.5 7H1M13 7h-1.5"
             fill="none"
@@ -734,8 +1000,8 @@ onUnmounted(() => {
           />
           <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4" />
         </svg>
-        创建 Jira
-        <span class="cnt">{{ draftCount }}</span>
+        {{ state.createJiraRunning.value ? '创建中…' : '创建 Jira' }}
+        <span v-if="!state.createJiraRunning.value" class="cnt">{{ draftCount }}</span>
       </button>
     </div>
 
@@ -854,7 +1120,7 @@ onUnmounted(() => {
             @set-alias="(p) => state.applySnapshotFromIntent(p)"
             @add-sub="(p) => onAddSub(it, p)"
             @delete-sub="(p) => state.applySnapshotFromIntent(p)"
-            @update-sub="(p) => state.applySnapshotFromIntent(p)"
+            @update-sub="(p) => onUpdateSub(p)"
           />
         </div>
         <div

@@ -680,6 +680,7 @@ interface OutreachRuntimeState {
   ringCentralReady: boolean;
   openClawReady: boolean;
   openClawMissingReason?: string;
+  configLoadError?: string;
 }
 
 const OUTREACH_OPTIONS_HASH = 'outreach-config';
@@ -688,7 +689,7 @@ const DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT = 3;
 const DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT = 4;
 const RINGCENTRAL_SENDER_REQUIRED_PERMISSIONS = ['ReadAccounts', 'ReadMessages', 'EditMessages'];
 
-type AddDialogMode = 'default' | 'reminder' | 'outreach' | 'agent-task';
+type AddDialogMode = 'default' | 'reminder';
 
 const PROJECT_VARIABLE_KEYS = [
   '{currentRelease}',
@@ -884,7 +885,7 @@ function getOutreachResult(message: ScheduledMessage): string {
 }
 
 function getAgentTaskPrompt(message: ScheduledMessage): string {
-  return message.Agent_Task_Prompt?.trim() || message.Content?.trim() || '';
+  return message.Content?.trim() || (message as ScheduledMessage & { Agent_Task_Prompt?: string }).Agent_Task_Prompt?.trim() || '';
 }
 
 function getAgentTaskResult(message: ScheduledMessage): string {
@@ -1618,10 +1619,22 @@ const ScheduledMessagesManager: React.FC = () => {
         setTimelineBotConfigured(hasTimelineSyncRule(savedConfig));
         
         // 🔧 优先使用缓存的 token，避免在页面加载时弹出授权窗口
-        const authResult = await getGoogleAuthTokenSilentlyResult({
+        let authResult = await getGoogleAuthTokenSilentlyResult({
           caller: 'ScheduledMessagesManager.init',
           scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
         });
+        if (
+          !authResult.token &&
+          (authResult.failureReason === 'auth_error' || authResult.failureReason === 'no_token')
+        ) {
+          // Chrome Identity 偶发会在扩展刚重载/账号状态刚恢复时短暂返回失败。
+          // 再静默检查一次（包括其它 Chrome Google 账号），仍失败才打断页面。
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          authResult = await getGoogleAuthTokenSilentlyResult({
+            caller: 'ScheduledMessagesManager.init.retry',
+            scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+          });
+        }
         const token = authResult.token;
         if (!token) {
           const failureMessage = formatGoogleAuthFailure(authResult);
@@ -1707,12 +1720,10 @@ const ScheduledMessagesManager: React.FC = () => {
         normalizeAgentTaskUserId(currentUsername) ||
         normalizeAgentTaskUserId(userinfo?.username) ||
         normalizeAgentTaskUserId(userinfo?.email);
-      const client = getMemoryServiceClient({
-        baseUrl: runtimeBaseUrl,
-        apiKey: envConfig.MEMORY_SERVICE_API_KEY || undefined,
-        timeout: Number(envConfig.MEMORY_SERVICE_TIMEOUT) || undefined,
-        userId: runtimeUserId,
-      });
+      const client = getMemoryServiceClient();
+      if (runtimeUserId) {
+        client.setUserId(runtimeUserId);
+      }
       const runtime = await client.getRuntimeConfig();
       const ringCentralReady =
         Boolean(runtime.ringCentralServerUrl?.trim()) &&
@@ -1725,13 +1736,18 @@ const ScheduledMessagesManager: React.FC = () => {
         ringCentralReady,
         openClawReady: !openClawMissingReason,
         openClawMissingReason,
+        configLoadError: undefined,
       });
     } catch (error) {
-      console.info('加载 Outreach runtime 配置失败，按未配置处理:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.info('加载 Outreach runtime 配置失败:', error);
       setOutreachRuntime({
         enabled: false,
         ringCentralReady: false,
         openClawReady: false,
+        configLoadError: runtimeBaseUrl
+          ? `无法读取 memory-service runtime 配置（${runtimeBaseUrl}）：${message}`
+          : '无法读取 memory-service runtime 配置：MEMORY_SERVICE_BASE_URL 为空。',
         openClawMissingReason: runtimeBaseUrl
           ? `无法读取 memory-service runtime 配置（${runtimeBaseUrl}），请确认 Memory Service 可访问后再创建帮我做任务。`
           : '无法读取 memory-service runtime 配置：MEMORY_SERVICE_BASE_URL 为空，请先在 Options 配置 Memory Service 地址。',
@@ -1742,11 +1758,11 @@ const ScheduledMessagesManager: React.FC = () => {
   };
 
   useEffect(() => {
-    if (showAddDialog && addDialogMode === 'agent-task') {
+    if (showAddDialog) {
       setOutreachRuntimeLoaded(false);
       void loadOutreachRuntime();
     }
-  }, [showAddDialog, addDialogMode]);
+  }, [showAddDialog]);
 
   const openOptionsPage = () => {
     if (chrome?.runtime?.openOptionsPage) {
@@ -2547,33 +2563,11 @@ const ScheduledMessagesManager: React.FC = () => {
     ? `Project History 已用 ${appScriptVersionUsage.count}/${appScriptVersionUsage.limit}，剩余 ${appScriptVersionUsage.remaining} 个版本。`
     : '升级前会检查 Project History 版本额度。';
   const appScriptUpdateCheckedAtText = formatAppScriptUpdateCheckedAt(appScriptUpdateCheckedAt);
-  const appScriptUpgradeSummary = [
-    `当前 ${appScriptVersion || '未知'}`,
-    `最新 ${latestAppScriptVersion || '未知'}`,
-    appScriptVersionUsage
-      ? `Project History ${appScriptVersionUsage.count}/${appScriptVersionUsage.limit}`
-      : '升级前预检版本额度',
-    appScriptUpdateCheckedAtText ? `检查于 ${appScriptUpdateCheckedAtText}` : '',
-    'URL 匹配后更新',
-    'Web App URL 不变',
-    '失败回退旧部署',
-  ].filter(Boolean);
-  const appScriptUpgradePreflightSteps = [
-    '重新确认线上版本',
-    '匹配当前 Web App deployment',
-    '检查 Project History 额度',
-    '确认新版本已生效',
-    '失败回退旧 deployment',
-    '更新后同步 Sheet 配置',
-  ];
-  const appScriptUpgradeGuidance = isAppScriptVersionLimitReached
-    ? '请先清理旧版本，避免升级流程被 200 个版本上限阻塞。'
+  const appScriptUpgradeToastText = isAppScriptVersionLimitReached
+    ? 'App Script 可升级，但版本历史已满，请先清理旧版本。'
     : shouldSuggestAppScriptVersionCleanup
-      ? `Project History 只剩 ${appScriptVersionUsage?.remaining} 个版本，建议先打开 Project History 清理旧版本，再执行升级。`
-      : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；提交更新后会确认 Web App URL 已返回新版本，确认失败会尝试回退到升级前 deployment 版本，已是最新则跳过脚本写入和版本创建。';
-  const appScriptUpgradeProofReceipt = isAppScriptVersionLimitReached
-    ? '升级证明回执: 版本历史已满，本次主操作只打开 Project History；清理后需重新检查，仍未写 Sheet/Script/Jira Rule。'
-    : '升级证明回执: 只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新；未确认时保留旧配置并走回退/检查页面，不发送消息或改 Logs。';
+      ? `App Script ${latestAppScriptVersion || ''} 可升级；Project History 仅剩 ${appScriptVersionUsage?.remaining} 个版本。`
+      : `App Script ${latestAppScriptVersion || ''} 可升级。`;
   const appScriptVersionProbeUrl = config?.webAppUrl
     ? buildAppScriptWebAppActionUrl(config.webAppUrl, 'getVersion')
     : '';
@@ -2812,18 +2806,6 @@ const ScheduledMessagesManager: React.FC = () => {
     setShowAddDialog(true);
   };
 
-  const handleAddOutreach = () => {
-    setAddDialogMode('outreach');
-    setEditingMessage(null);
-    setShowAddDialog(true);
-  };
-
-  const handleAddAgentTask = () => {
-    setAddDialogMode('agent-task');
-    setEditingMessage(null);
-    setShowAddDialog(true);
-  };
-  
   // 托管确认弹窗状态
   const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
   const [takeoverMessage, setTakeoverMessage] = useState<ScheduledMessage | null>(null);
@@ -2843,8 +2825,8 @@ const ScheduledMessagesManager: React.FC = () => {
       return;
     }
     
-    // 正常编辑流程
-    setAddDialogMode(isOutreachMessage(message) ? 'outreach' : isAgentTaskMessage(message) ? 'agent-task' : 'default');
+    // 正常编辑流程（Push_Method 由 editingMessage 驱动表单，不再使用 outreach/agent-task dialogMode）
+    setAddDialogMode('default');
     setEditingMessage(message);
     setShowAddDialog(true);
   };
@@ -4382,12 +4364,19 @@ const ScheduledMessagesManager: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [targetMessageId, filteredMessages]);
 
-  const showOutreachConfigWarning =
-    outreachRuntimeLoaded && (!outreachRuntime.enabled || !outreachRuntime.ringCentralReady);
-  const outreachConfigWarningTitle = !outreachRuntime.enabled
+  const showOutreachConfigWarning = outreachRuntimeLoaded && (
+    Boolean(outreachRuntime.configLoadError) ||
+    !outreachRuntime.enabled ||
+    !outreachRuntime.ringCentralReady
+  );
+  const outreachConfigWarningTitle = outreachRuntime.configLoadError
+    ? '无法验证主动询问配置'
+    : !outreachRuntime.enabled
     ? '主动询问引擎尚未开启'
     : 'RingCentral 配置尚未完成';
-  const outreachConfigWarningDescription = !outreachRuntime.enabled
+  const outreachConfigWarningDescription = outreachRuntime.configLoadError
+    ? `${outreachRuntime.configLoadError}。不会将此错误视为 RingCentral 未配置；请恢复 Memory Service 访问后重试。`
+    : !outreachRuntime.enabled
     ? '“帮我问”和主动询问计划依赖主动询问引擎。请先到 Options 开启，再继续使用。'
     : '“帮我问”需要 RingCentral Server URL、Client ID、Client Secret 和 JWT。补齐后才能创建和派发主动询问。';
   
@@ -4411,6 +4400,7 @@ const ScheduledMessagesManager: React.FC = () => {
         const authResult = await getGoogleAuthTokenResult({
           caller: 'ScheduledMessagesManager.handleReauth',
           scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+          promptForAccount: true,
         });
         const token = authResult.token;
         if (token) {
@@ -4472,40 +4462,6 @@ const ScheduledMessagesManager: React.FC = () => {
           <button style={styles.reminderButton} onClick={handleAddReminder} title="快速创建个人提醒">
             ⏰ 提醒我
           </button>
-          <button
-            style={{
-              ...styles.reminderButton,
-              background: botConfigured
-                ? 'linear-gradient(135deg, #111827, #374151)'
-                : '#94a3b8',
-              opacity: botConfigured ? 1 : 0.72,
-              cursor: botConfigured ? 'pointer' : 'not-allowed',
-            }}
-            onClick={handleAddAgentTask}
-            title={botConfigured
-              ? '创建一次性或重复 Agent task，由 Jira Rule 到期触发 memory-service'
-              : '请先配置 Bot executor rule，Jira Rule 才能到期触发 memory-service'}
-            disabled={!botConfigured}
-          >
-            🧠 帮我做
-          </button>
-          <button
-            style={{
-              ...styles.reminderButton,
-              background: outreachRuntime.enabled && outreachRuntime.ringCentralReady
-                ? 'linear-gradient(135deg, #0ea5e9, #2563eb)'
-                : '#94a3b8',
-              opacity: outreachRuntime.enabled && outreachRuntime.ringCentralReady ? 1 : 0.7,
-              cursor: outreachRuntime.enabled && outreachRuntime.ringCentralReady ? 'pointer' : 'not-allowed',
-            }}
-            onClick={handleAddOutreach}
-            title={outreachRuntime.enabled && outreachRuntime.ringCentralReady
-              ? '创建主动询问计划'
-              : '请先在 Options 中启用主动询问并完成 RingCentral 配置'}
-            disabled={!outreachRuntime.enabled || !outreachRuntime.ringCentralReady}
-          >
-            💬 帮我问
-          </button>
           <button style={styles.addButton} onClick={handleAddMessage} title="新增消息">
             ➕ 新增
           </button>
@@ -4531,19 +4487,6 @@ const ScheduledMessagesManager: React.FC = () => {
               aria-label={appScriptCheckActionBoundary}
             >
               {isCheckingUpdates ? '⏳ 检查中...' : '🔎 检查脚本'}
-            </button>
-          )}
-          {updateAvailable && (
-            <button 
-              style={styles.updateButton} 
-              onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
-              disabled={isUpdating}
-              title={appScriptUpgradeActionBoundary}
-              aria-label={appScriptUpgradeActionBoundary}
-            >
-              {isUpdating
-                ? '⏳ 升级中...'
-                : isAppScriptVersionLimitReached ? '🧹 清理脚本版本' : '🚀 升级调度系统'}
             </button>
           )}
           <button style={styles.configButton} onClick={handleOpenLogsSheet} title="查看推送记录">
@@ -4717,79 +4660,21 @@ const ScheduledMessagesManager: React.FC = () => {
       )}
 
       {updateAvailable && (
-        <div style={styles.updateAvailableBanner}>
-          <div style={styles.warningContent}>
-            <span style={styles.warningIcon}>🚀</span>
-            <div style={styles.warningText}>
-              <strong>
-                {isAppScriptVersionLimitReached
-                  ? 'App Script 可升级，但版本历史已满'
-                  : shouldSuggestAppScriptVersionCleanup
-                    ? 'App Script 可升级，版本历史接近上限'
-                    : 'App Script 可升级'}
-              </strong>
-              <p style={styles.updateDescription}>
-                {appScriptUpgradeGuidance}
-              </p>
-              <div style={styles.updateMetaRow}>
-                {appScriptUpgradeSummary.map((item) => (
-                  <span key={item} style={styles.updateMetaItem}>{item}</span>
-                ))}
-              </div>
-              <div style={styles.updatePreflightRow} aria-label="App Script 升级前检查">
-                {appScriptUpgradePreflightSteps.map((step, index) => (
-                  <span key={step} style={styles.updatePreflightItem}>
-                    <strong style={styles.updatePreflightItemNumber}>{index + 1}</strong>
-                    {step}
-                  </span>
-                ))}
-              </div>
-              <div
-                style={styles.updateProofReceipt}
-                title={appScriptUpgradeProofReceipt}
-                aria-label="App Script 升级证明回执"
-              >
-                {appScriptUpgradeProofReceipt}
-              </div>
-            </div>
-          </div>
-          <div style={styles.updateBannerActions}>
-            {shouldSuggestAppScriptVersionCleanup && (
-              <button
-                style={styles.secondaryUpdateBannerButton}
-                onClick={handleOpenAppScriptProjectHistory}
-                disabled={isUpdating}
-                title={appScriptProjectHistoryActionBoundary}
-                aria-label={appScriptProjectHistoryActionBoundary}
-              >
-                打开 Project History
-              </button>
-            )}
-            {(isAppScriptVersionLimitReached || shouldSuggestAppScriptVersionCleanup) && (
-              <button
-                style={styles.secondaryUpdateBannerButton}
-                onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
-                disabled={isCheckingUpdates || isUpdating}
-                title={appScriptRecheckActionBoundary}
-                aria-label={appScriptRecheckActionBoundary}
-              >
-                {isCheckingUpdates ? '检查中...' : '重新检查'}
-              </button>
-            )}
-            <button
-              style={styles.updateBannerButton}
-              onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
-              disabled={isCheckingUpdates || isUpdating}
-              title={isAppScriptVersionLimitReached
-                ? appScriptProjectHistoryActionBoundary
-                : appScriptUpgradeActionBoundary}
-              aria-label={isAppScriptVersionLimitReached
-                ? appScriptProjectHistoryActionBoundary
-                : appScriptUpgradeActionBoundary}
-            >
-              {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '打开 Project History' : '升级调度系统'}
-            </button>
-          </div>
+        <div style={styles.updateAvailableToast} role="status" aria-live="polite">
+          <span>🚀 {appScriptUpgradeToastText}</span>
+          <button
+            style={styles.updateToastAction}
+            onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
+            disabled={isCheckingUpdates || isUpdating}
+            title={isAppScriptVersionLimitReached
+              ? appScriptProjectHistoryActionBoundary
+              : appScriptUpgradeActionBoundary}
+            aria-label={isAppScriptVersionLimitReached
+              ? appScriptProjectHistoryActionBoundary
+              : appScriptUpgradeActionBoundary}
+          >
+            {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '清理版本' : '升级'}
+          </button>
         </div>
       )}
       
@@ -5629,6 +5514,7 @@ const ScheduledMessagesManager: React.FC = () => {
            timelineSyncRuleUrl={timelineSyncRuleUrl}
            outreachEnabled={outreachRuntime.enabled}
            outreachConfigured={outreachRuntime.enabled && outreachRuntime.ringCentralReady}
+           outreachConfigLoadError={outreachRuntime.configLoadError}
            agentTaskOpenClawConfigured={outreachRuntime.openClawReady}
            agentTaskOpenClawCheckLoaded={outreachRuntimeLoaded}
            agentTaskOpenClawMissingReason={outreachRuntime.openClawMissingReason}
@@ -6526,6 +6412,7 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl?: string;
   outreachEnabled: boolean;
   outreachConfigured: boolean;
+  outreachConfigLoadError?: string;
   agentTaskOpenClawConfigured: boolean;
   agentTaskOpenClawCheckLoaded: boolean;
   agentTaskOpenClawMissingReason?: string;
@@ -6549,6 +6436,7 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl,
   outreachEnabled,
   outreachConfigured,
+  outreachConfigLoadError,
   agentTaskOpenClawConfigured,
   agentTaskOpenClawCheckLoaded,
   agentTaskOpenClawMissingReason,
@@ -6565,8 +6453,6 @@ const AddMessageDialog: React.FC<{
 }) => {
   const isEditMode = !!editingMessage;
   const isReminderMode = dialogMode === 'reminder';
-  const isOutreachMode = dialogMode === 'outreach';
-  const isAgentTaskMode = dialogMode === 'agent-task';
   const [scheduleNow, setScheduleNow] = React.useState(() => new Date());
 
   React.useEffect(() => {
@@ -6585,7 +6471,7 @@ const AddMessageDialog: React.FC<{
       const outreachTargetType = editingMessage.Target_Type || editingMessage.Outreach_Target_Type || (editingMessage.Glip_Team_ID ? 'group' : 'private');
       return {
         Topic: editingMessage.Topic || '',
-        Content: editingMessage.Content || editingMessage.Agent_Task_Prompt || (editingMessage as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question || '',
+        Content: editingMessage.Content || (editingMessage as ScheduledMessage & { Agent_Task_Prompt?: string }).Agent_Task_Prompt || (editingMessage as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question || '',
         Schedule_Date: editingMessage.Schedule_Date || '',
         Schedule_Time: formatTimeToHHMM(editingMessage.Schedule_Time),
         Push_Method: editingMessage.Push_Method || 'AsMe',
@@ -6620,8 +6506,8 @@ const AddMessageDialog: React.FC<{
         Timeline_Offset: editingMessage.Timeline_Offset,
         Agent_Task_ID: editingMessage.Agent_Task_ID,
         Agent_Executor: editingMessage.Agent_Executor || 'openclaw',
-        Agent_Task_Prompt: editingMessage.Agent_Task_Prompt,
         Agent_Notify_Template: editingMessage.Agent_Notify_Template,
+        Agent_Notify_Success_Receipt: editingMessage.Agent_Notify_Success_Receipt,
         Agent_Trigger_Source: editingMessage.Agent_Trigger_Source || 'jira_rule',
         Agent_AR_Binding_ID: editingMessage.Agent_AR_Binding_ID,
         Agent_Last_Run_At: editingMessage.Agent_Last_Run_At,
@@ -6636,7 +6522,7 @@ const AddMessageDialog: React.FC<{
       Content: '',
       Schedule_Date: getTodayLocalScheduleDate(),
       Schedule_Time: '',
-      Push_Method: isOutreachMode ? 'Outreach' : isAgentTaskMode ? 'AgentTask' : 'AsMe',
+      Push_Method: 'AsMe',
       Target_Type: 'private',
       Glip_User_Name: '',
       Glip_Team_ID: '',
@@ -6679,6 +6565,19 @@ const AddMessageDialog: React.FC<{
   };
   
   const [formData, setFormData] = useState<CreateMessageFormData>(getInitialFormData);
+  const isOutreachMode = formData.Push_Method === 'Outreach';
+  const isAgentTaskMode = isAgentTaskPushMethod(formData.Push_Method);
+  const [agentResultNotifyEnabled, setAgentResultNotifyEnabled] = useState(() => {
+    if (!editingMessage || !isAgentTaskMessage(editingMessage)) return false;
+    return Boolean(
+      editingMessage.Glip_Team_ID?.trim() ||
+      editingMessage.Glip_User_Name?.trim()
+    );
+  });
+  const [agentSuccessReceipt, setAgentSuccessReceipt] = useState(() => {
+    if (!editingMessage) return true;
+    return String(editingMessage.Agent_Notify_Success_Receipt || 'Y').trim().toUpperCase() !== 'N';
+  });
   const [scheduleQueueSuggestionReceipt, setScheduleQueueSuggestionReceipt] =
     useState<ScheduleQueueDraftSuggestionReceipt | null>(null);
   const [userTags, setUserTags] = useState<string[]>(getInitialUserTags);
@@ -7031,34 +6930,6 @@ ${content}
       }
     }
   }, [isReminderMode, isEditMode]);
-
-  React.useEffect(() => {
-    if (isOutreachMode && !isEditMode) {
-      handleChange('Push_Method', 'Outreach');
-      handleChange('Target_Type', 'private');
-      if (!formData.Outreach_Target_Type) {
-        handleChange('Outreach_Target_Type', 'private');
-      }
-      if (formData.Outreach_Max_Followup === undefined) {
-        handleChange('Outreach_Max_Followup', 2);
-      }
-      if (formData.Outreach_Followup_Interval_Hours === undefined) {
-        handleChange('Outreach_Followup_Interval_Hours', 24);
-      }
-    }
-  }, [isOutreachMode, isEditMode]);
-
-  React.useEffect(() => {
-    if (isAgentTaskMode && !isEditMode) {
-      handleChange('Push_Method', 'AgentTask');
-      handleChange('Target_Type', 'private');
-      handleChange('Agent_Executor', 'openclaw');
-      handleChange('Agent_Trigger_Source', 'jira_rule');
-      if (currentUsername) {
-        setUserTags([formatUserName.toDisplayFormat(currentUsername)]);
-      }
-    }
-  }, [isAgentTaskMode, isEditMode, currentUsername]);
   
   // 四个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
@@ -7426,7 +7297,7 @@ ${content}
     }
     
     // 验证必填字段
-    if (!isOutreachMode && !formData.Topic) {
+    if (formData.Push_Method !== 'Outreach' && !formData.Topic) {
       alert('请填写消息主题');
       return;
     }
@@ -7522,12 +7393,28 @@ ${content}
         return;
       }
 
-      if (!formData.Agent_Task_Prompt?.trim() && !formData.Content?.trim()) {
+      if (!formData.Content?.trim()) {
         alert('请填写希望 AI 帮你执行的任务描述');
         return;
       }
 
+      if (agentResultNotifyEnabled) {
+        if (formData.Target_Type === 'private' && userTags.length === 0) {
+          alert('请填写结果通知接收人');
+          return;
+        }
+        if (formData.Target_Type === 'group' && !formData.Glip_Team_ID?.trim()) {
+          alert('请填写结果通知群组 ID');
+          return;
+        }
+      }
+
     } else if (formData.Push_Method === 'Outreach') {
+      if (outreachConfigLoadError) {
+        alert(`无法验证主动询问配置：${outreachConfigLoadError}。这不代表 RingCentral 未配置；请恢复 Memory Service 访问后重试。`);
+        return;
+      }
+
       if (!outreachEnabled) {
         alert('主动询问引擎尚未开启，请先到 Options 页面启用后再创建主动询问计划。');
         return;
@@ -7660,12 +7547,7 @@ ${content}
       outreachTargetRefValue,
       outreachQuestion,
     );
-    const agentTaskRecipientTagsForSave = formData.Push_Method === 'AgentTask' &&
-      formData.Target_Type !== 'group' &&
-      userTags.length === 0 &&
-      currentUsername
-      ? [formatUserName.toDisplayFormat(currentUsername)]
-      : userTags;
+    const agentTaskRecipientTagsForSave = userTags;
     const repeatFields = buildRepeatSubmissionFields({
       isRepeating,
       repeatEvery: formData.Repeat_Every,
@@ -7681,7 +7563,7 @@ ${content}
       Content: formData.Push_Method === 'Outreach'
         ? (formData.Content || '')
         : formData.Push_Method === 'AgentTask'
-          ? (formData.Agent_Task_Prompt || formData.Content || '').trim()
+          ? (formData.Content || '').trim()
         : formData.Content,
       Target_Type: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Target_Type || 'private'
@@ -7694,9 +7576,13 @@ ${content}
           )
         : formData.Push_Method === 'AgentTask'
           ? (
-              formData.Target_Type === 'group'
-                ? undefined
-                : formatUserName.joinForStorage(agentTaskRecipientTagsForSave)
+              agentResultNotifyEnabled
+                ? (
+                    formData.Target_Type === 'group'
+                      ? undefined
+                      : formatUserName.joinForStorage(agentTaskRecipientTagsForSave.slice(0, 1))
+                  )
+                : undefined
             )
         : formData.Push_Method === 'AI'
           ? undefined
@@ -7709,7 +7595,7 @@ ${content}
           )
         : formData.Push_Method === 'AgentTask'
           ? (
-              formData.Target_Type === 'group'
+              agentResultNotifyEnabled && formData.Target_Type === 'group'
                 ? formData.Glip_Team_ID?.trim()
                 : undefined
             )
@@ -7750,11 +7636,11 @@ ${content}
       Agent_Executor: formData.Push_Method === 'AgentTask'
         ? formData.Agent_Executor || 'openclaw'
         : undefined,
-      Agent_Task_Prompt: formData.Push_Method === 'AgentTask'
-        ? (formData.Agent_Task_Prompt || formData.Content || '').trim()
-        : undefined,
       Agent_Notify_Template: formData.Push_Method === 'AgentTask'
         ? formData.Agent_Notify_Template?.trim()
+        : undefined,
+      Agent_Notify_Success_Receipt: formData.Push_Method === 'AgentTask'
+        ? (agentSuccessReceipt ? 'Y' : 'N')
         : undefined,
       Agent_Trigger_Source: formData.Push_Method === 'AgentTask'
         ? 'jira_rule'
@@ -7789,6 +7675,25 @@ ${content}
     ) {
       setScheduleQueueSuggestionReceipt(null);
     }
+  };
+
+  const handlePushMethodTabClick = (method: CreateMessageFormData['Push_Method']) => {
+    setFormData((prev) => {
+      const next: CreateMessageFormData = { ...prev, Push_Method: method };
+      if (method === 'Outreach') {
+        next.Target_Type = 'private';
+        if (!next.Outreach_Target_Type) next.Outreach_Target_Type = 'private';
+        if (next.Outreach_Max_Followup === undefined) next.Outreach_Max_Followup = 2;
+        if (next.Outreach_Followup_Interval_Hours === undefined) {
+          next.Outreach_Followup_Interval_Hours = 24;
+        }
+      } else if (method === 'AgentTask') {
+        next.Agent_Executor = next.Agent_Executor || 'openclaw';
+        next.Agent_Trigger_Source = 'jira_rule';
+      }
+      return next;
+    });
+    setScheduleQueueSuggestionReceipt(null);
   };
 
   const handleScheduleDateChange = (
@@ -8155,18 +8060,85 @@ ${content}
           : agentTaskOpenClawMissingReason || 'OpenClaw 尚未配置，帮我做任务到期后无法执行。')
       : '正在检查 OpenClaw 配置，请稍候。'
     : '';
+  const outreachGateActive = isOutreachMode && !(outreachEnabled && outreachConfigured);
+  const outreachReadinessUnknown = isOutreachMode && Boolean(outreachConfigLoadError);
+  const agentTaskBotGateActive = isAgentTaskMode && !botConfigured;
   const shouldShowExecutionSetupWarning = Boolean(executionRouteBlockReason);
   const isSubmitBlockedByExecutionRoute = Boolean(executionRouteBlockReason);
   const isSubmitBlockedByAgentTaskOpenClaw = Boolean(agentTaskOpenClawBlockReason);
+  const isSubmitBlockedByOutreachGate = outreachGateActive;
+  const isSubmitBlockedByAgentTaskBotGate = agentTaskBotGateActive;
   const isSubmitBlockedBySchedule = Boolean(scheduleTimeError || scheduleBlockReason || scheduleQueueBlockReason);
-  const isSubmitBlocked = isSubmitBlockedBySchedule || isSubmitBlockedByExecutionRoute || isSubmitBlockedByAgentTaskOpenClaw;
+  const isSubmitBlocked = isSubmitBlockedBySchedule ||
+    isSubmitBlockedByExecutionRoute ||
+    isSubmitBlockedByAgentTaskOpenClaw ||
+    isSubmitBlockedByOutreachGate ||
+    isSubmitBlockedByAgentTaskBotGate;
   const submitBlockedTitle = isSubmitBlockedByExecutionRoute
     ? executionRouteBlockReason
     : isSubmitBlockedByAgentTaskOpenClaw
       ? agentTaskOpenClawBlockReason
+    : outreachReadinessUnknown
+      ? '无法验证主动询问配置；请恢复 Memory Service 访问后重试。'
+    : isSubmitBlockedByOutreachGate
+      ? '主动询问前置配置尚未完成，请先补齐后再保存。'
+    : isSubmitBlockedByAgentTaskBotGate
+      ? '帮我做依赖 Bot executor rule，请先配置 Bot 推送规则。'
     : isSubmitBlockedBySchedule
       ? '请先修正执行时间或队列风险'
       : undefined;
+
+  const agentNotifyTargetLabel = React.useMemo(() => {
+    if (formData.Target_Type === 'group') {
+      const id = formData.Glip_Team_ID?.trim() || '（未填写群组 ID）';
+      return `群组 ${id}`;
+    }
+    const name = userTags[0]?.trim() || formatUserName.joinForStorage(userTags.slice(0, 1)).trim() || '（未填写接收人）';
+    return `私发 ${name}`;
+  }, [formData.Target_Type, formData.Glip_Team_ID, userTags]);
+
+  const agentNotifyPreview = React.useMemo(() => {
+    if (!isAgentTaskMode) {
+      return { successSilent: false, successLine: '', failLine: '' };
+    }
+    const hasTemplate = Boolean(formData.Agent_Notify_Template?.trim());
+    const normalizedCurrentUsername = currentUsername.trim().toLowerCase();
+    const normalizedTarget = formatUserName.joinForStorage(userTags.slice(0, 1)).trim().toLowerCase();
+    const isSelf = agentResultNotifyEnabled &&
+      formData.Target_Type === 'private' &&
+      Boolean(normalizedCurrentUsername) &&
+      (
+        normalizedTarget === normalizedCurrentUsername ||
+        normalizedTarget === 'user' ||
+        normalizedTarget === 'me' ||
+        normalizedTarget === 'self'
+      );
+    const failLine = 'Bot 私发失败回执给我（始终，不发到通知目标）';
+    let successLine = '';
+    let successSilent = false;
+    if (agentResultNotifyEnabled && agentSuccessReceipt) {
+      successLine = isSelf
+        ? `${agentNotifyTargetLabel}（即本人）收到${hasTemplate ? '按模板整理的' : '默认'}成功结果——与成功回执合并为一条，不重复发送`
+        : `${agentNotifyTargetLabel} 收到${hasTemplate ? '按模板整理的' : '默认'}成功结果 + Bot 私发成功回执给我`;
+    } else if (agentResultNotifyEnabled && !agentSuccessReceipt) {
+      successLine = `${agentNotifyTargetLabel} 收到${hasTemplate ? '按模板整理的' : '默认'}成功结果（不私发成功回执）`;
+    } else if (!agentResultNotifyEnabled && agentSuccessReceipt) {
+      successLine = 'Bot 私发成功回执给我（默认摘要）';
+    } else {
+      successSilent = true;
+      successLine = '⚠️ 静默——不推送任何消息，成功结果只能在列表运行态和 Action Queue 查看';
+    }
+    return { successSilent, successLine, failLine };
+  }, [
+    agentNotifyTargetLabel,
+    agentResultNotifyEnabled,
+    agentSuccessReceipt,
+    currentUsername,
+    formData.Agent_Notify_Template,
+    formData.Target_Type,
+    isAgentTaskMode,
+    userTags,
+  ]);
   
   const handleUserTagsChange = (tags: string[]) => {
     setUserTags(tags);
@@ -8192,22 +8164,32 @@ ${content}
     '只更新当前定时消息表单里的草稿，尚未写 Messages、保存 AI_Body、发送消息或改 Logs。',
     '保存整个定时消息后才会写入 Sheet。',
   ].join('');
+  const dialogTitleHint = isOutreachMode
+    ? '由 memory-service 负责追问与结果整理'
+    : isAgentTaskMode
+      ? '到期后由 OpenClaw 执行，结果通知单独配置'
+      : '';
   
   return (
     <div style={dialogStyles.overlay}>
       <div style={dialogStyles.dialog}>
         <div style={dialogStyles.header}>
-          <h2 style={dialogStyles.title}>
-            {isEditMode
-              ? (isOutreachMode ? '✏️ 编辑主动询问计划' : isAgentTaskMode ? '✏️ 编辑帮我做任务' : '✏️ 编辑定时消息')
-              : isReminderMode
-                ? '⏰ 新增个人提醒'
-                : isOutreachMode
-                  ? '💬 新增主动询问'
-                  : isAgentTaskMode
-                    ? '🧠 新增帮我做'
-                  : '➕ 新增定时消息'}
-          </h2>
+          <div style={dialogStyles.titleRow}>
+            <h2 style={dialogStyles.title}>
+              {isEditMode
+                ? (isOutreachMode ? '✏️ 编辑主动询问计划' : isAgentTaskMode ? '✏️ 编辑帮我做任务' : '✏️ 编辑定时消息')
+                : isReminderMode
+                  ? '⏰ 新增个人提醒'
+                  : isOutreachMode
+                    ? '💬 新增主动询问'
+                    : isAgentTaskMode
+                      ? '🧠 新增帮我做'
+                    : '➕ 新增定时消息'}
+            </h2>
+            {dialogTitleHint && (
+              <span style={dialogStyles.titleHint}>{dialogTitleHint}</span>
+            )}
+          </div>
           <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
         </div>
         
@@ -8240,10 +8222,10 @@ ${content}
             </div>
           )}
 
-          {!isReminderMode && !isOutreachMode && !isAgentTaskMode && (
+          {!isReminderMode && (
             <div style={dialogStyles.methodTabsSection}>
               {formData.Push_Method === 'JiraAutomation' ? (
-                <div role="tablist" aria-label="推送方式" style={dialogStyles.methodTabs}>
+                <div role="tablist" aria-label="任务类型" style={dialogStyles.methodTabs}>
                   <button
                     type="button"
                     role="tab"
@@ -8257,28 +8239,59 @@ ${content}
                     🔧 JIRA 自动化
                   </button>
                 </div>
+              ) : isEditMode && isOutreachMode ? (
+                <div role="tablist" aria-label="任务类型" style={dialogStyles.methodTabs}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    style={{
+                      ...getMethodTabStyle(true),
+                      cursor: 'default',
+                    }}
+                    disabled
+                  >
+                    💬 帮我问
+                  </button>
+                </div>
+              ) : isEditMode && isAgentTaskMode ? (
+                <div role="tablist" aria-label="任务类型" style={dialogStyles.methodTabs}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    style={{
+                      ...getMethodTabStyle(true),
+                      cursor: 'default',
+                    }}
+                    disabled
+                  >
+                    🧠 帮我做
+                  </button>
+                </div>
               ) : (
-                <div role="tablist" aria-label="推送方式" style={dialogStyles.methodTabs}>
+                <div style={dialogStyles.methodTabGroups} role="tablist" aria-label="任务类型">
+                  <span style={dialogStyles.methodTabGroupLabelInline}>发消息</span>
                   <button
                     type="button"
                     role="tab"
                     aria-selected={formData.Push_Method === 'AsMe'}
                     style={getMethodTabStyle(formData.Push_Method === 'AsMe')}
-                    onClick={() => handleChange('Push_Method', 'AsMe')}
+                    onClick={() => handlePushMethodTabClick('AsMe')}
                   >
-                    👤 AsMe（以我的身份）
+                    👤 AsMe
                   </button>
                   <button
                     type="button"
                     role="tab"
                     aria-selected={formData.Push_Method === 'Bot'}
                     style={getMethodTabStyle(formData.Push_Method === 'Bot', !botConfigured && formData.Push_Method !== 'Bot')}
-                    onClick={() => handleChange('Push_Method', 'Bot')}
-                    title={!botConfigured ? '可先选择填写草稿；保存前需要配置 Bot。' : undefined}
+                    onClick={() => handlePushMethodTabClick('Bot')}
+                    title={!botConfigured ? '可先选择填写草稿；保存前需要配置 Bot。' : 'Bot（机器人）'}
                   >
-                    <span>🤖 Bot（机器人）</span>
+                    <span>🤖 Bot</span>
                     {!botConfigured && formData.Push_Method !== 'Bot' && (
-                      <span style={dialogStyles.methodPreviewBadge}>可预览 · 待配置</span>
+                      <span style={dialogStyles.methodPreviewBadge}>待配置</span>
                     )}
                   </button>
                   <button
@@ -8286,17 +8299,86 @@ ${content}
                     role="tab"
                     aria-selected={formData.Push_Method === 'AI'}
                     style={getMethodTabStyle(formData.Push_Method === 'AI', !botConfigured && formData.Push_Method !== 'AI')}
-                    onClick={() => handleChange('Push_Method', 'AI')}
-                    title={!botConfigured ? '可先选择填写草稿；保存前需要配置 Bot。' : undefined}
+                    onClick={() => handlePushMethodTabClick('AI')}
+                    title={!botConfigured ? '可先选择填写草稿；保存前需要配置 Bot。' : 'AI Report'}
                   >
                     <span>🤖 AI Report</span>
                     {!botConfigured && formData.Push_Method !== 'AI' && (
-                      <span style={dialogStyles.methodPreviewBadge}>可预览 · 待配置</span>
+                      <span style={dialogStyles.methodPreviewBadge}>待配置</span>
+                    )}
+                  </button>
+                  <span style={dialogStyles.methodTabInlineDivider} aria-hidden="true" />
+                  <span style={dialogStyles.methodTabGroupLabelInline}>Agent</span>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={formData.Push_Method === 'Outreach'}
+                    style={getMethodTabStyle(
+                      formData.Push_Method === 'Outreach',
+                      !(outreachEnabled && outreachConfigured) && formData.Push_Method !== 'Outreach',
+                    )}
+                    onClick={() => handlePushMethodTabClick('Outreach')}
+                    title={!(outreachEnabled && outreachConfigured)
+                      ? '可先选择填写草稿；保存前需要在 Options 启用主动询问并完成 RingCentral 配置。'
+                      : '帮我问'}
+                  >
+                    <span>💬 帮我问</span>
+                    {!(outreachEnabled && outreachConfigured) && formData.Push_Method !== 'Outreach' && (
+                      <span style={dialogStyles.methodPreviewBadge}>待配置</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isAgentTaskMode}
+                    style={getMethodTabStyle(isAgentTaskMode, !botConfigured && !isAgentTaskMode)}
+                    onClick={() => handlePushMethodTabClick('AgentTask')}
+                    title={!botConfigured
+                      ? '可先选择填写草稿；保存前需要配置 Bot executor rule。'
+                      : '帮我做'}
+                  >
+                    <span>🧠 帮我做</span>
+                    {!botConfigured && !isAgentTaskMode && (
+                      <span style={dialogStyles.methodPreviewBadge}>待配置</span>
                     )}
                   </button>
                 </div>
               )}
-              {!botConfigured && formData.Push_Method !== 'JiraAutomation' && (
+              <div style={{ fontSize: '12px', color: '#5d6978', margin: '4px 0 0', lineHeight: 1.6 }}>
+                前三类到点「发一条消息」；后两类到点「让 Agent 干活并回报」。编辑已有帮我问 / 帮我做行时 tab 锁定。
+              </div>
+              {(outreachGateActive || agentTaskBotGateActive) && (
+                <div style={dialogStyles.methodSetupNotice} role="alert">
+                  <p style={dialogStyles.methodSetupText}>
+                    ⚠️ <strong>{outreachReadinessUnknown ? '无法验证配置' : '前置配置待完成'}</strong>——当前 tab 可先填写草稿；保存会被阻止，不会写入 Messages、不会创建 Jira Rule 或同步 runtime。
+                    {isAgentTaskMode ? ' 帮我做需要 Bot executor rule + OpenClaw 配置；' : ''}
+                    {isOutreachMode
+                      ? outreachReadinessUnknown
+                        ? ` 帮我问暂时无法读取 Memory Service 配置（${outreachConfigLoadError}）；这不代表 RingCentral 未配置。`
+                        : ' 帮我问需要在 Options 启用主动询问并完成 RingCentral 配置。'
+                      : ''}
+                  </p>
+                  {isOutreachMode && (
+                    <button
+                      type="button"
+                      onClick={onConfigureOutreach}
+                      style={dialogStyles.methodSetupButton}
+                    >
+                      前往主动询问配置
+                    </button>
+                  )}
+                  {isAgentTaskMode && !botConfigured && (
+                    <button
+                      type="button"
+                      onClick={() => onConfigureBot()}
+                      style={dialogStyles.methodSetupButton}
+                    >
+                      🔧 配置 Bot 后启用
+                    </button>
+                  )}
+                </div>
+              )}
+              {!botConfigured && (formData.Push_Method === 'Bot' || formData.Push_Method === 'AI') && (
                 <div style={dialogStyles.methodPreviewReceipt} role="status" aria-live="polite">
                   <strong>发送配置待完成</strong>
                   <span>
@@ -8371,40 +8453,6 @@ ${content}
             </div>
           )}
 
-          {isOutreachMode && (
-            <div style={{
-              padding: '12px 16px',
-              backgroundColor: '#eef6ff',
-              borderRadius: '8px',
-              marginBottom: '16px',
-              border: '1px solid #cfe2ff',
-            }}>
-              <div style={{ fontSize: '14px', color: '#1f4e79', lineHeight: '1.6' }}>
-                <strong>💬 主动询问计划</strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
-                  这里填写“要问谁、问什么、希望拿到什么信息”。Sheet 里只保留原始提问和基础目标信息；信息目标、追问策略和结果摘要都以下游 memory-service 为准。
-                </p>
-              </div>
-            </div>
-          )}
-
-          {isAgentTaskMode && (
-            <div style={{
-              padding: '12px 16px',
-              backgroundColor: '#f3f4f6',
-              borderRadius: '8px',
-              marginBottom: '16px',
-              border: '1px solid #d1d5db',
-            }}>
-              <div style={{ fontSize: '14px', color: '#111827', lineHeight: '1.6' }}>
-                <strong>🧠 帮我做</strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
-                  这里保存 Agent task 计划，可一次性执行，也可重复执行。Jira Rule 每分钟先检查 Sheet，只有到期任务才访问 memory-service；OpenClaw 执行结果和通知以 memory-service 为准。
-                </p>
-              </div>
-            </div>
-          )}
-          
           {/* 消息内容（提醒模式始终显示；主动询问使用独立的问题输入框） */}
           {!isOutreachMode && !isAgentTaskMode && !(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
             <div style={dialogStyles.formGroup}>
@@ -8430,38 +8478,191 @@ ${content}
 
           {isAgentTaskMode && (
             <div style={{...dialogStyles.section, backgroundColor: '#fafafa', padding: '16px', borderRadius: '8px', border: '1px solid #e5e7eb'}}>
-              <h3 style={{margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#111827'}}>
-                🧠 任务与通知
-              </h3>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>任务描述 *</label>
                 <textarea
                   style={dialogStyles.textarea}
-                  value={formData.Agent_Task_Prompt || formData.Content || ''}
-                  onChange={(event) => {
-                    handleChange('Agent_Task_Prompt', event.target.value);
-                    handleChange('Content', event.target.value);
-                  }}
+                  value={formData.Content || ''}
+                  onChange={(event) => handleChange('Content', event.target.value)}
+                  onBlur={handleContentBlur}
                   placeholder="例如：查找 RCV Mobile Q2 JQL 数据，整理 issues 总数、异常项和需要跟进的人，并输出简短结论"
                   rows={5}
                 />
                 <small style={dialogStyles.hint}>
-                  这段内容会作为 OpenClaw 执行任务本身；通知模板不会改变这里的原始任务。
+                  这段内容会作为 OpenClaw 执行任务本身（存入 Content 列）；不需要再在这里写「通知到某某群」——推送由下方结果通知配置在拿到结果后完成。
                 </small>
               </div>
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>结果按如下模板通知我（可选）</label>
-                <textarea
-                  style={dialogStyles.textarea}
-                  value={formData.Agent_Notify_Template || ''}
-                  onChange={(event) => handleChange('Agent_Notify_Template', event.target.value)}
-                  placeholder={'例如：用 3 行告诉我：本次结果、需要我关注的风险、下一步建议。'}
-                  rows={3}
-                />
-                <small style={dialogStyles.hint}>
-                  留空也会在每次成功或失败后 Bot 私发默认摘要；填写后只影响通知文案，不改变 OpenClaw 原始结果和 artifact。
-                </small>
+
+              <div style={{...dialogStyles.section, backgroundColor: '#fbfdff', padding: '16px', borderRadius: '8px', border: '1px dashed #b3d7ff', marginBottom: '16px'}}>
+                <h3 style={{margin: '0 0 14px 0', fontSize: '15px', fontWeight: 'bold', color: '#111827'}}>
+                  📣 结果通知
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                  <label style={{ position: 'relative', display: 'inline-flex', width: '40px', height: '22px', flexShrink: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={agentResultNotifyEnabled}
+                      onChange={(event) => setAgentResultNotifyEnabled(event.target.checked)}
+                      style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                    />
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        borderRadius: '999px',
+                        backgroundColor: agentResultNotifyEnabled ? '#0066cc' : '#c3ccd5',
+                        transition: 'background-color 0.18s ease',
+                      }}
+                    />
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        top: '2px',
+                        left: agentResultNotifyEnabled ? '20px' : '2px',
+                        width: '18px',
+                        height: '18px',
+                        borderRadius: '50%',
+                        backgroundColor: '#fff',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                        transition: 'left 0.18s ease',
+                      }}
+                    />
+                  </label>
+                  <span style={{ fontSize: '13px', fontWeight: 600 }}>成功结果通知到指定目标</span>
+                </div>
+
+                {agentResultNotifyEnabled && (
+                  <div style={{ marginTop: '12px', padding: '14px', border: '1px dashed #b3d7ff', borderRadius: '8px', backgroundColor: '#fbfdff' }}>
+                    <div style={dialogStyles.formGroup}>
+                      <label style={dialogStyles.label}>结果按如下模板通知（可选）</label>
+                      <textarea
+                        style={dialogStyles.textarea}
+                        value={formData.Agent_Notify_Template || ''}
+                        onChange={(event) => handleChange('Agent_Notify_Template', event.target.value)}
+                        placeholder="例如：用 3 行告诉我：本次结果、需要关注的风险、下一步建议。"
+                        rows={3}
+                      />
+                      <small style={dialogStyles.hint}>
+                        填写后成功结果按模板发到下面的通知目标（memory-service 做一次仅格式化的整理再推送）；不改变 OpenClaw 原始结果和 artifact。失败不会发到通知目标。
+                      </small>
+                    </div>
+                    <div style={dialogStyles.formGroup}>
+                      <label style={dialogStyles.label}>通知目标 *</label>
+                      <div style={dialogStyles.buttonGroup}>
+                        <button
+                          type="button"
+                          style={getButtonStyle(formData.Target_Type === 'private')}
+                          onClick={() => handleChange('Target_Type', 'private')}
+                        >
+                          💬 私发消息
+                        </button>
+                        <button
+                          type="button"
+                          style={getButtonStyle(formData.Target_Type === 'group')}
+                          onClick={() => handleChange('Target_Type', 'group')}
+                        >
+                          👥 群组消息
+                        </button>
+                      </div>
+                    </div>
+                    {formData.Target_Type === 'private' && (
+                      <div style={dialogStyles.formGroup}>
+                        <label style={dialogStyles.label}>接收人 *（只能填一个人名）</label>
+                        <TagsInput
+                          tags={userTags}
+                          onChange={handleUserTagsChange}
+                          placeholder="输入人名后按 Enter 或直接移开焦点添加，例如：Esone Qiu 或 esone.qiu"
+                          maxTags={1}
+                        />
+                        <small style={dialogStyles.hint}>复用 Bot 推送的接收人组件（TagsInput，maxTags = 1）。</small>
+                      </div>
+                    )}
+                    {formData.Target_Type === 'group' && (
+                      <div style={dialogStyles.formGroup}>
+                        <label style={dialogStyles.label}>群组 ID *</label>
+                        <input
+                          style={dialogStyles.input}
+                          type="text"
+                          value={formData.Glip_Team_ID || ''}
+                          onChange={(event) => handleChange('Glip_Team_ID', event.target.value)}
+                          placeholder="例如：148192141318"
+                        />
+                        <small style={dialogStyles.hint}>
+                          复用 Bot 推送的群组组件。群组通知由 SM AI 机器人发出，请先把「SM AI」加到目标群。
+                        </small>
+                      </div>
+                    )}
+                    <div style={{ ...dialogStyles.formGroup, marginBottom: 0 }}>
+                      <label style={dialogStyles.label}>通知发送身份</label>
+                      <div style={dialogStyles.buttonGroup}>
+                        <button
+                          type="button"
+                          style={getButtonStyle(true)}
+                        >
+                          🤖 Bot（SM AI）
+                        </button>
+                        <button
+                          type="button"
+                          style={{
+                            ...getButtonStyle(false),
+                            opacity: 0.55,
+                            cursor: 'not-allowed',
+                            display: 'inline-flex',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: '6px',
+                            flexWrap: 'nowrap',
+                          }}
+                          disabled
+                          title="结果通知以本人身份发送属于 v2 能力，当前版本固定由 Bot（SM AI）发送。Sheet 里的 RingCentral token 用于顶部「AsMe」发消息 tab，不会解锁此处。"
+                        >
+                          <span>👤 AsMe</span>
+                          <span style={{ ...dialogStyles.methodPreviewBadge, marginTop: 0 }}>v2 · 暂未开放</span>
+                        </button>
+                      </div>
+                      <small style={dialogStyles.hint}>
+                        这是结果通知的投递身份（v1 固定 Bot），与顶部「AsMe」发消息 tab、Sheet RingCentral token 无关。推送由 memory-service 在拿到执行结果后代码层完成。
+                      </small>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: '14px' }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={agentSuccessReceipt}
+                      onChange={(event) => setAgentSuccessReceipt(event.target.checked)}
+                      style={{ marginTop: '2px' }}
+                    />
+                    <span><strong>成功回执：任务成功时也回执给我</strong>（Bot 私发）</span>
+                  </label>
+                  <small style={{ ...dialogStyles.hint, marginLeft: '24px', display: 'block' }}>
+                    <strong>失败回执始终开启</strong>，不受此开关影响——任务失败一定会 Bot 私发回执给我，失败信息不会发到上面的通知目标。
+                  </small>
+                </div>
+
+                <div
+                  style={{
+                    ...dialogStyles.agentNotifyPreview,
+                    ...(agentNotifyPreview.successSilent ? dialogStyles.agentNotifyPreviewSilent : {}),
+                    marginTop: '14px',
+                  }}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <strong>通知预览</strong>
+                  <div style={{ marginTop: '4px' }}>
+                    ✅ 成功时：{agentNotifyPreview.successLine}
+                  </div>
+                  <div>
+                    ❌ 失败时：{agentNotifyPreview.failLine}
+                  </div>
+                </div>
               </div>
+
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>执行器</label>
@@ -9330,7 +9531,7 @@ ${content}
           )}
           
           {/* 非提醒模式：显示完整的推送配置 */}
-          {!isReminderMode && !isOutreachMode && (
+          {!isReminderMode && formData.Push_Method !== 'Outreach' && (
             <>
           {/* AI Report 配置 */}
           {formData.Push_Method === 'AI' && (
@@ -10115,11 +10316,11 @@ ${content}
             </div>
           )}
           
-          {/* 推送目标（AgentTask 新建默认给自己，编辑时允许修改） */}
+          {/* 推送目标（AgentTask 由结果通知面板负责，不在此显示） */}
           {formData.Push_Method !== 'AI' &&
             formData.Push_Method !== 'JiraAutomation' &&
             formData.Push_Method !== 'Outreach' &&
-            !(isAgentTaskMode && !isEditMode) && (
+            formData.Push_Method !== 'AgentTask' && (
             <>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>推送目标 *</label>
@@ -10267,23 +10468,25 @@ const getButtonStyle = (isSelected: boolean, isPreviewOnly = false): React.CSSPr
 
 const getMethodTabStyle = (isSelected: boolean, isPreviewOnly = false): React.CSSProperties => ({
   flex: '1 1 160px',
-  minHeight: '48px',
-  padding: '10px 14px',
+  minHeight: '36px',
+  padding: '6px 10px',
   backgroundColor: isPreviewOnly ? '#fff8e6' : (isSelected ? '#eef6ff' : '#fff'),
   color: isPreviewOnly ? '#8a4b00' : (isSelected ? '#0056b3' : '#334155'),
   border: `1px solid ${isPreviewOnly ? '#f0c36d' : (isSelected ? '#80bdff' : '#d9e2ef')}`,
   borderBottom: isSelected && !isPreviewOnly ? '3px solid #007bff' : `1px solid ${isPreviewOnly ? '#f0c36d' : '#d9e2ef'}`,
   borderRadius: '6px 6px 0 0',
   cursor: 'pointer',
-  fontSize: '14px',
+  fontSize: '13px',
   fontWeight: isSelected ? 700 : 600,
   lineHeight: 1.25,
   transition: 'all 0.2s',
   display: 'inline-flex',
-  flexDirection: 'column',
+  flexDirection: 'row',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: '3px',
+  gap: '4px',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
 });
 
 const getTypeStyle = (pushMethod: string): React.CSSProperties => {
@@ -10560,6 +10763,32 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: 'center',
     borderBottom: '1px solid #fed7aa',
     animation: 'slideDown 0.3s ease-out',
+  },
+  updateAvailableToast: {
+    backgroundColor: '#fff3cd',
+    borderLeft: '4px solid #ffc107',
+    borderBottom: '1px solid #ffc107',
+    padding: '8px 20px',
+    color: '#856404',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    fontSize: '13px',
+    fontWeight: 600,
+    lineHeight: 1.35,
+    animation: 'slideDown 0.3s ease-out',
+  },
+  updateToastAction: {
+    padding: '6px 12px',
+    backgroundColor: '#ffc107',
+    color: '#000',
+    border: 'none',
+    borderRadius: '5px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
   },
   updateErrorBanner: {
     backgroundColor: '#fef2f2',
@@ -11374,6 +11603,19 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     fontWeight: 'bold',
     color: '#333',
   },
+  titleRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    flexWrap: 'wrap',
+    gap: '8px',
+    minWidth: 0,
+  },
+  titleHint: {
+    color: '#6b7280',
+    fontSize: '12px',
+    fontWeight: 400,
+    lineHeight: 1.4,
+  },
   closeButton: {
     background: 'transparent',
     border: 'none',
@@ -11413,6 +11655,60 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     alignItems: 'stretch',
     gap: '6px',
     flexWrap: 'wrap',
+  },
+  methodTabGroups: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+    overflowX: 'auto',
+  },
+  methodTabGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  methodTabGroupDivider: {
+    marginLeft: 14,
+    paddingLeft: 14,
+    borderLeft: '1px solid #d9e0e7',
+  },
+  methodTabGroupLabel: {
+    fontSize: 11,
+    color: '#5d6978',
+    letterSpacing: 1,
+    paddingLeft: 2,
+  },
+  methodTabGroupLabelInline: {
+    fontSize: 11,
+    color: '#5d6978',
+    letterSpacing: 0.5,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    padding: '0 2px',
+  },
+  methodTabInlineDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: '#d9e0e7',
+    margin: '0 4px',
+    flexShrink: 0,
+  },
+  agentNotifyPreview: {
+    borderRadius: 8,
+    padding: '10px 14px',
+    fontSize: 12.5,
+    lineHeight: 1.8,
+    background: '#e9f7ec',
+    border: '1px solid #bfe5c8',
+    color: '#14532d',
+  },
+  agentNotifyPreviewSilent: {
+    background: '#fff3cd',
+    borderColor: '#ffc107',
+    color: '#856404',
   },
   quickActions: {
     display: 'flex',
@@ -11507,13 +11803,13 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: '4px',
-    padding: '2px 6px',
+    marginTop: 0,
+    padding: '1px 5px',
     borderRadius: '4px',
     backgroundColor: '#fff3cd',
     color: '#8a4b00',
     border: '1px solid #f0c36d',
-    fontSize: '11px',
+    fontSize: '10px',
     lineHeight: 1.2,
     fontWeight: 600,
     whiteSpace: 'nowrap',

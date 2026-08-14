@@ -158,21 +158,21 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
 
 - Extension origin: `chrome-extension://$HARNESS_EXTENSION_ID`
 - Common pages: `popup.html`, `options.html`, `meeting-sidepanel.html`, `meeting-panorama.html`
-- Treat webpage-mcp as a real-browser control surface, not a simulated or read-only browser. It operates the user's actual Chrome/Canary profile and tabs, so prefer inspecting an already-open relevant tab before opening or navigating pages.
-- For webpage-mcp or similar real-browser testing and validation, keep operations silent in the background by default. Pass `background: true` when the tool supports it, and do not activate Chrome/Canary, switch visible tabs, or bring browser windows to the foreground unless the check explicitly depends on visible UI, OS-level focus/activation behavior, interactive debugging, or the user asks to see/control the page.
+- Treat webpage-mcp as a real-browser control surface, not a simulated or read-only browser. It operates the user's actual Google Chrome profile and tabs by default, so prefer inspecting an already-open relevant tab before opening or navigating pages. Use Chrome Canary only when the user explicitly asks for it or the task requires a Canary-only extension/runtime check.
+- For webpage-mcp or similar real-browser testing and validation, keep operations silent in the background by default. Pass `background: true` when the tool supports it, and do not activate Google Chrome, switch visible tabs, or bring browser windows to the foreground unless the check explicitly depends on visible UI, OS-level focus/activation behavior, interactive debugging, or the user asks to see/control the page.
 - If webpage-mcp can inspect Chrome extension pages in the current environment, open or select the page by id
 - If Chrome internal / extension URLs are redacted or unsupported by the active webpage-mcp tool, use a Playwright persistent context loaded from `dist/`, or ask the user to open the exact extension page and continue from the available tab
-- If webpage-mcp is unavailable or cannot inspect the needed active Chrome/Canary page, and the task still needs the user's real browser/profile state, fall back to narrow AppleScript probes first. Prefer read-only tab URL inspection and small `execute javascript` checks in the target browser (`Google Chrome Canary` or `Google Chrome`). Do not use AppleScript as a replacement for reproducible E2E verification; use Playwright for rebuilt-extension validation.
+- If webpage-mcp is unavailable or cannot inspect the needed active Google Chrome page, and the task still needs the user's real browser/profile state, fall back to narrow AppleScript probes first. Prefer read-only tab URL inspection and small `execute javascript` checks in `Google Chrome`. Use `Google Chrome Canary` only when the user explicitly asks for it or the task requires a Canary-only extension/runtime check. Do not use AppleScript as a replacement for reproducible E2E verification; use Playwright for rebuilt-extension validation.
 - If validating the user's already-installed dev extension, do not stop at "please reload the extension" when browser control is available:
   - Open or ask the user to open `chrome://extensions/?id=$HARNESS_EXTENSION_ID`
   - Reload the unpacked extension from the extension details page
   - Confirm the page shows the extension id and a reload result, or report exactly why automation could not operate on the Chrome internal page
-  - If webpage-mcp cannot operate `chrome://extensions` but Apple Events JavaScript is enabled in Chrome/Canary, fall back to AppleScript. Prefer the active browser the user is validating (`Google Chrome` or `Google Chrome Canary`) and keep the extension id exact:
+  - If webpage-mcp cannot operate `chrome://extensions` but Apple Events JavaScript is enabled in Google Chrome, fall back to AppleScript. Use `Google Chrome` by default and keep the extension id exact; use `Google Chrome Canary` only for an explicitly requested or Canary-only check:
 
     ```bash
     HARNESS_EXTENSION_ID="${HARNESS_EXTENSION_ID:-hkmimegiefnbeadjoonnlogikcdddcho}"
     osascript <<APPLESCRIPT
-    tell application "Google Chrome Canary"
+    tell application "Google Chrome"
       set extTab to make new tab at end of tabs of front window with properties {URL:"chrome://extensions/?id=$HARNESS_EXTENSION_ID"}
       delay 2
       set js to "(() => { const mgr = document.querySelector('extensions-manager'); const detail = mgr?.shadowRoot?.querySelector('extensions-detail-view'); const item = detail || mgr?.shadowRoot?.querySelector('extensions-item'); const reload = item?.shadowRoot?.querySelector('#dev-reload-button, cr-icon-button[iron-icon=\"cr:reload\"]'); if (!reload) return 'NO_RELOAD_BUTTON'; reload.click(); return 'RELOADED'; })()"
@@ -181,7 +181,7 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
     APPLESCRIPT
     ```
 
-    Use `"Google Chrome"` instead when validating stable Chrome. After reload, refresh or reopen the target tab so content scripts are reinjected from the rebuilt `dist/`.
+    After reload, refresh or reopen the target tab so content scripts are reinjected from the rebuilt `dist/`.
 - For Google Sheets and other auth-bound flows, prefer the real Chrome profile/webpage-mcp route because Playwright's clean profile may not have the required session
 
 ### Commit / Push Gate
@@ -200,8 +200,8 @@ After a complete feature or bug fix is validated:
 |---------|---------|-------------|
 | `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
 | `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
-| `npm run deploy:memory` | Sync local `memory-service/` (+ roadmap) to `10.32.56.212` and rebuild both remote containers | After local verification when you need real-environment validation for memory and/or roadmap |
-| `npm run deploy:roadmap` | Sync local `roadmap-service/` only to `10.32.56.212` and rebuild the roadmap container | Roadmap-only changes; faster than `deploy:memory` |
+| `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the memory container | After local verification when you need real-environment validation for memory |
+| `npm run deploy:roadmap` | Sync local `roadmap-service/` only to `10.32.56.212` and rebuild the roadmap container | Roadmap-only changes |
 | `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
 
 ### Chrome Extension E2E Validation

@@ -6,8 +6,13 @@ import {
   jqlHasTargetDeliveryQuarter,
 } from '../../composables/useGeometry';
 import { bridgeImportJql } from '../../composables/useExtensionBridge';
+import {
+  extensionLockTip,
+  useExtensionGate,
+} from '../../composables/useExtensionGate';
 
 const state = useRoadmapState();
+const gate = useExtensionGate();
 const loading = ref(false);
 // 覆盖开关在导入栏已经勾过，这里只跟随它预览，不再要求二次确认
 const overwrite = state.importOverwrite;
@@ -41,7 +46,7 @@ async function runImport() {
   if (!team.value) return;
   if (hasQuarterField.value && !importQs.value.length) return;
   if (!state.hasExtension.value) {
-    state.toast('需要 Personal AI 扩展才能导入 Jira');
+    gate.openGate('import');
     return;
   }
   loading.value = true;
@@ -120,8 +125,9 @@ async function runImport() {
         <button class="btn btn-ghost" @click="state.modals.value.import = false">取消</button>
         <button
           class="btn btn-primary"
-          :disabled="!state.hasExtension.value || !state.editable.value"
-          :title="!state.hasExtension.value ? '需要 Personal AI 扩展' : undefined"
+          :class="{ locked: !state.hasExtension.value }"
+          :disabled="!state.editable.value"
+          :data-tip="!state.hasExtension.value ? extensionLockTip('import') : undefined"
           @click="runImport"
         >
           确认导入

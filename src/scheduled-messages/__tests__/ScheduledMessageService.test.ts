@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isGoogleSheetsInvalidCredentialError } from '../googleSheetsAuthErrors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const serviceSource = readFileSync(resolve(__dirname, '../ScheduledMessageService.ts'), 'utf8');
@@ -10,6 +11,29 @@ const appScriptTemplateSource = readFileSync(
   resolve(__dirname, '../app-script-template.gs'),
   'utf8',
 );
+
+test('token refresh classification only accepts confirmed Google Sheets credential failures', () => {
+  assert.equal(
+    isGoogleSheetsInvalidCredentialError(
+      new Error('读取 Sheet 失败 (401): Invalid Credentials'),
+    ),
+    true,
+  );
+  assert.equal(
+    isGoogleSheetsInvalidCredentialError(
+      new Error('Memory Service request failed (401): Unauthorized'),
+    ),
+    false,
+    'An unrelated 401 must not evict the Google access token',
+  );
+  assert.equal(
+    isGoogleSheetsInvalidCredentialError(
+      new Error('Messages row contains reference 401 but the Sheet request timed out'),
+    ),
+    false,
+    'A bare 401 substring is not credential proof',
+  );
+});
 
 test('ScheduledMessageService updateMessage refreshes live headers before full-row writes', () => {
   const updateMessageStart = serviceSource.indexOf('async updateMessage(');

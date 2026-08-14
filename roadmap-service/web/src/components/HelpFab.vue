@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { EXTENSION_STORE_URL } from '../composables/useExtensionGate';
 
 const open = ref(false);
 </script>
@@ -9,15 +10,20 @@ const open = ref(false);
   <div class="help-pop" :class="{ show: open }">
     <h4>使用说明</h4>
     <ul>
-      <li><b>导入 / 创建 Jira 需要 Personal AI 扩展</b></li>
+      <li>
+        <b>导入 / 创建 Jira / 读取 ETA 需要 Personal AI 扩展</b>：未安装时按钮呈锁定态，点击可查看安装指引
+        <a class="help-install" :href="EXTENSION_STORE_URL" target="_blank" rel="noopener">前往安装 ↗</a>
+      </li>
       <li>Bar 可<b>拖动 / 左右把手伸缩 / 上下换行</b>，按天吸附</li>
-      <li><b>单击 bar 展开/收起</b>；<b>双击编辑备注名</b>（子任务可改 Owner）</li>
+      <li><b>单击 bar 展开/收起</b>；草稿双击<b>改任务名</b>（可折叠填描述，Shift+Enter 展开；创建 Jira 用），已创建的双击改备注名（子任务可改 Owner）</li>
       <li>已导入 / 草稿子任务均可 <b>× 从 Roadmap 移除</b>（可再导入）</li>
       <li>有 Jira key 时：hover 左上 <b>↗</b> 或 <b>⌘/Ctrl+单击</b> 打开 Jira</li>
-      <li>添加任务：左侧头像点选，或标题里输入 <b>@</b> 指定 Owner（可选）；默认从今天起两周</li>
+      <li>添加任务：左侧头像点选，或标题里输入 <b>@</b> 指定 Owner（可选）；默认从今天起两周；描述可选，不挡 Enter 秒建</li>
       <li>创建 Jira 可配置 <b>Assignee 映射</b>（系统名 → Firstname Lastname）</li>
       <li>悬浮：bar <b>左侧 ＋ 添加任务</b>，<b>右侧 ◆＋ 阶段节点/外部依赖</b>，<b>右上角 × 退回 Backlog</b></li>
       <li><b>阶段节点</b>与有 ETA 的依赖落在标记轨；缺 ETA 时红色 🔗 角标持续提醒</li>
+      <li>装了扩展时，打开 Roadmap 会<b>静默刷新</b>甘特上非草稿票的 summary / description / Target / assignee（10 分钟内不重复）</li>
+      <li>非草稿主/子任务拖动会回写 Jira Target；子任务改 Owner 会回写 assignee（需映射；清空会确认）</li>
       <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部）；双击改名、添加/移除空闲成员</li>
       <li><b>清理过期</b>：过期 Epic 回退 Backlog；过期子任务标记清理（可再拖回还原）</li>
       <li><b>发布时间表标尺</b>：✎ 弹窗可配置 Google Sheet（Release / Phase / Date）；可用 Release 过滤去掉小版本；保存后主标尺换成发布 Sprint，工具栏可临时切回月份</li>

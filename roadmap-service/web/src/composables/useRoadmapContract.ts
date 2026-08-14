@@ -17,6 +17,7 @@ export const TICKER_NOISE_OPS = new Set([
   'unlock',
   'expand',
   'collapse',
+  'refresh_from_jira',
 ]);
 
 /**
@@ -145,6 +146,29 @@ export function formatEstimate(estimate: number | null | undefined): string {
     : '—';
 }
 
+/** UI cap for user-entered draft descriptions (Prompt budget). */
+export const DESCRIPTION_MAX_CHARS = 500;
+
+export function clipTxt(text: string | null | undefined, max: number): string {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  if (flat.length <= max) return flat;
+  return `${flat.slice(0, Math.max(0, max))}…`;
+}
+
+/** Gray-line slot of a `data-tip`: description when present, else the operation hint. */
+export function tooltipHintLine(
+  description: string | null | undefined,
+  fallback: string,
+): string {
+  const clipped = clipTxt(description, 150);
+  return clipped || fallback;
+}
+
+export function clampDescription(raw: string, max = DESCRIPTION_MAX_CHARS): string {
+  return String(raw || '').slice(0, max);
+}
+
 /**
  * Badge class + label for an item type. The CSS classes are uppercase
  * (`.type-EPIC`), while the backend returns canonical Jira casing (`Epic`).
@@ -201,6 +225,7 @@ export interface RoadmapStateItem {
   isDraft: boolean;
   jiraKey: string | null;
   subActivity: boolean;
+  description?: string | null;
 }
 
 export interface RoadmapStateMessage {
@@ -231,6 +256,15 @@ export function toStateItem(
     isDraft: isDraftItem(item),
     jiraKey: item.jiraKey ?? null,
     subActivity: item.subs.length > 0,
+    description:
+      [
+        item.description,
+        ...item.subs
+          .filter((s) => !s.cleared && s.description)
+          .map((s) => s.description),
+      ]
+        .filter(Boolean)
+        .join('\n') || null,
   };
 }
 
@@ -265,6 +299,7 @@ export interface CreateJiraParent {
   targetEnd: string | null;
   /** Per-row Fix Version override / auto suggestion. */
   fixVersion?: string | null;
+  description?: string | null;
 }
 
 export interface CreateJiraChild {
@@ -278,6 +313,7 @@ export interface CreateJiraChild {
   fixVersion?: string | null;
   /** Jira username (firstname.lastname); omit / null → leave assignee empty. */
   assignee?: string | null;
+  description?: string | null;
 }
 
 export interface CreateJiraPayload {
@@ -373,6 +409,7 @@ export function buildCreateJiraPayload(
           targetStart: group.item.targetStart ?? null,
           targetEnd: group.item.targetEnd ?? null,
           fixVersion: override || parentSuggested || null,
+          description: group.item.description ?? null,
         }
       : null,
     children: group.subs.map((sub) => ({
@@ -384,6 +421,7 @@ export function buildCreateJiraPayload(
       parentJiraKey: group.item.jiraKey ?? null,
       fixVersion: override || fields.fixVersionByKey?.[sub.id] || null,
       assignee: fields.assigneeByDraftId?.[sub.id] || null,
+      description: sub.description ?? null,
     })),
   };
 }

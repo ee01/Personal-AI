@@ -15,7 +15,10 @@ import {
   defaultPhaseDate,
   jiraBrowseUrl,
 } from './useRoadmapContract';
+import { extensionLockTip, useExtensionGate } from './useExtensionGate';
 import type { PhaseKind, RoadmapItem, RoadmapMarker } from '../types';
+
+const { openGate } = useExtensionGate();
 
 const LINK_SVG =
   '<svg width="9" height="9" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 8.2l2.2-2.2a2.2 2.2 0 013.1 3.1L9.1 11.3a2.2 2.2 0 01-3.1 0"/><path d="M8 5.8L5.8 8a2.2 2.2 0 01-3.1-3.1L5 2.7a2.2 2.2 0 013.1 0"/></svg>';
@@ -354,7 +357,9 @@ export function openDepForm(
       <input class="me-field df-title" placeholder="依赖描述，例如：等待平台团队接口就绪" style="margin-bottom:7px">
       <div class="df-row" style="margin-bottom:7px">
         <input class="me-field df-jira" placeholder="Jira Key（可选），如 PLAT-123" style="font-family:var(--mono)">
-        <button class="df-fetch" type="button" ${handlers.hasExtension ? '' : 'disabled title="需要 Personal AI 扩展"'}>读取 ETA</button>
+        <button class="df-fetch${handlers.hasExtension ? '' : ' locked'}" type="button"${
+          handlers.hasExtension ? '' : ` data-tip="${extensionLockTip('fetchEta')}"`
+        }>读取 ETA</button>
       </div>
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">交付时间 ETA（可留空）</label>
       <input type="date" class="me-field df-eta">
@@ -369,12 +374,15 @@ export function openDepForm(
   const fetchBtn = p.querySelector('.df-fetch') as HTMLButtonElement;
   let etaSource: 'jira' | 'manual' | null = null;
   fetchBtn.onclick = async () => {
+    if (!handlers.hasExtension || !handlers.fetchIssueDates) {
+      openGate('fetchEta');
+      return;
+    }
     const key = jiraInp.value.trim();
     if (!key) {
       jiraInp.focus();
       return;
     }
-    if (!handlers.fetchIssueDates) return;
     fetchBtn.textContent = '…';
     try {
       const targetEnd = await handlers.fetchIssueDates(key);
@@ -443,7 +451,9 @@ export function openDepPopover(
             d.etaSource === 'jira' ? ' · 来自 Jira' : ''
           }</span>${
             d.jiraKey && handlers.editable
-              ? `<button class="dep-refresh" data-id="${d.id}" type="button">刷新</button>`
+              ? `<button class="dep-refresh${handlers.hasExtension ? '' : ' locked'}" data-id="${d.id}" type="button"${
+                  handlers.hasExtension ? '' : ` data-tip="${extensionLockTip('fetchEta')}"`
+                }>刷新</button>`
               : ''
           }<input class="dep-eta-edit" data-id="${d.id}" type="date" value="${d.date}">`
         : `<span class="dep-eta missing">需要 ETA${
@@ -529,7 +539,11 @@ export function openDepPopover(
       e.stopPropagation();
       const id = (b as HTMLElement).dataset.id!;
       const dep = deps.find((d) => d.id === id);
-      if (!dep?.jiraKey || !handlers.fetchIssueDates) return;
+      if (!dep?.jiraKey) return;
+      if (!handlers.hasExtension || !handlers.fetchIssueDates) {
+        openGate('fetchEta');
+        return;
+      }
       try {
         const targetEnd = await handlers.fetchIssueDates(dep.jiraKey);
         if (targetEnd) {

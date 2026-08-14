@@ -21,6 +21,10 @@ function normalizeChinesePeriod(value: string): 'AM' | 'PM' {
   return value === '下午' ? 'PM' : 'AM';
 }
 
+export function getLocalScheduleTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+}
+
 export function formatLocalScheduleDate(value: Date | string | number): string {
   return formatLocalScheduleDateTime(value).dateStr;
 }

@@ -432,6 +432,8 @@ API 还提供列表、详情、`GET /keystone-briefs/match`、专用 event、hid
 
 搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。结果摘要先显示 `结果批次回执`：把当前可见卡片绑定到本批 query、scope、搜索模式、类型筛选、可见/总结果数和召回通道命中口径，说明这是 Memory Service 已返回结果的页面批次基准；类型筛选只收窄这批结果，不会重新召回、重排、同步外部来源或确认事实，反馈按钮仍按卡片上的反馈范围单独写入。这个方向参考了 [OpenAI Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 的 sources 可见但非完整因子说明、[Claude chat search and memory](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context) 的用户可控记忆/引用路径、[Glean enterprise search](https://www.glean.com/enterprise-search-software) 的 query context 与 filters，以及 [`Dissecting users' needs for search result explanations`](https://arxiv.org/abs/2401.16509) 对“解释应服务复杂任务、避免显而易见噪音”的建议。用户按消息、片段、实体等类型收窄前，筛选按钮会先显示将显示多少、隐藏多少；点击后，结果摘要会显示当前可见数量 / 原始返回数量，并展示 `类型筛选回执`：说明这只是本页本地筛选，不会重新召回、重排、写反馈或隐藏服务端结果，也提供“显示全部类型”恢复入口。多条结果时，摘要区还会显示 `来源覆盖回执`，按当前可见结果汇总来源/标题数量、最大来源和可见/原始结果数；它只解释本轮已返回结果和本地筛选后的来源分布，不会重新读取来源、刷新连接器、同步外部系统、写反馈或确认事实。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。如果 Ask 或实体/向量搜索没有从 Memory Service 拿到真实结果，页面会显示“真实搜索没有完成”的回执，保留 query、scope、搜索模式、后端错误和重试入口；这不是普通空态，也不会展示模拟人物、项目或主题卡片，避免用户把开发样例误当成真实个人记忆。如果 Memory Service 成功返回但当前范围下是 0 条，页面显示 `真实空结果回执`，说明本轮查询已完成、使用了哪个 scope / 模式、哪些召回通道命中或未运行/无命中/失败，并明确空结果只代表本轮查询和已返回通道没有可展示结果，不会写入、删除、同步来源、刷新连接器、写反馈或确认事实；恢复路径是换更具体关键词、扩展到全部记忆，或等待刚导入/保存的内容完成索引后再搜。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且不能包含用户名/密码、token/session/passcode 等敏感参数，也会隐藏 AWS/GCS/CDN 这类带 signature、credential 或访问 key query 的 signed URL；可打开的来源按钮会标明目标 host，被隐藏的来源会说明“仅支持 http/https / 包含账号信息 / 包含敏感参数 / 包含签名或访问凭据参数”，异常内部路由也会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。2026-06-19 补齐搜索结果打开动作回执：点击安全来源后页面显示目标、host、`noopener/noreferrer` 新标签边界，并说明这不代表 Memory Service 重新读取、同步或确认来源；点击安全内链或详情页只切换 Memory Exploring 内部视图，不改写记忆、反馈或来源资料；如果结果只有被拦截的链接，不再退到泛化 `/entity/message` 之类页面，而是保留拦截原因和恢复路径。2026-07-01 搜索结果补齐 `复制安全诊断`：当结果没有安全内链、详情页或可打开来源时，用户可以复制只含标题、搜索条件、范围、结果 key、来源标签和拦截原因的诊断文本；诊断不会复制被拦截的原始 URL 或内部 route，也不会写入、同步、确认或重新读取来源。2026-07-12 搜索/时间轴安全跳转补齐控件级边界：`打开结果`、`在记忆中查看`、`打开来源`、`查看详情` 和 `复制安全诊断` 的 hover / 读屏文案会在点击前说明内部路由、详情 fallback、外部新标签 host、`noopener/noreferrer` 隔离、拦截原因和无写入/同步/确认/重新读取边界；这只是把已有安全策略前移到实际按钮，不放宽 URL 拦截和路由 allowlist。
 
+2026-08-12 Recall LLM 路由校准：`/recall` 把三个原本耦合的意图拆成 `retrievalMode`（`fast` / `balanced` / `deep`）、`presentationBlocks`（只含确定性的 `evidence_list` / `timeline` / `media`）和显式 `synthesis.mode=summary`。普通搜索、时间轴、Context Recall、Agent 工具检索和 `/ask` 的内部取证不会因为需要展示块而额外调用 Recall LLM；`analysisMode` 仅为兼容而保留、运行时不生效，未实现的 `table` / `chart` 不再被 schema 静默接受。Memory Exploring 的实体搜索只在用户点击 `AI 结果总结`、且本次至少返回 3 条证据时请求一次最多 500 token 的总结；按钮点击前明确说明这会消耗一次 LLM 请求，但不会写记忆、确认事实或联系外部系统。模型输出必须为摘要和每条 finding 提供本次结果快照内的证据索引，服务端映射为 item ID；越界或无依据输出标记 `invalid_output` 而不展示为成功。服务端按用户数据库实例、规范化 query、scope、token/证据门槛与证据 ID/内容/时间戳/来源做 5 分钟缓存和 single-flight，只有同一用户数据库里的相同内容快照才复用；响应分别暴露 retrieval/synthesis 时间、有效通道、safe-FTS policy、跳过/失败原因和 cache hit。用户点击后若服务端取到的证据快照已变化，页面先替换为这次真实快照，再展示与之绑定的总结。
+
 2026-06-24 搜索结果类型筛选复查：[Google Search filters](https://support.google.com/websearch/answer/2466433) 和 [Microsoft Search verticals](https://learn.microsoft.com/en-us/microsoftsearch/manage-verticals) 都把类型/来源垂直入口放在结果页内，用来收窄已有结果集合；Marti Hearst 的 faceted search / search UI 研究也强调筛选界面应让用户理解当前看到的是集合中的哪一部分。因此 Personal AI 的类型筛选不再只改变卡片列表，而是在筛选按钮上提前标出会显示 / 隐藏多少，并在摘要区明确当前显示、隐藏数量和本地无副作用边界。
 
 Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`source-memory` 是用户主动保存的资料证据 capsule，适合网页、选区、视觉证据、表格证据和 Jira 页面资料，重点是来源、保存原因、证据锚点、备注和未来触发线索；`timeline` 是普通原始记忆的时间线定位，适合 message、chunk、meeting、Glip、Jira 活动等，重点是发生时间、附近消息和上下文回放。召回结果如果引用“用户保存过的资料证据”，优先跳 `#/source-memory/:id`；如果引用“当时发生的消息/会议/上下文”，优先跳 `#/timeline?...focus=...`。完整例子和路由规则见 [Memory Capture](./features/memory_capture.md#source-memory-与-timeline-的边界)。
@@ -562,6 +564,22 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 - **审计**：每次 tool 调用写 `mcp_access_log`（migration `048`：tool/client/scope/itemCount/status），对外开口可检视。
 - **验证**：`mcpTools.test.ts`（3：scope 越界拒绝+审计、脱敏截断+敏感源排除、memory_save 走 mcp_client 内部源）；启动冒烟通过（stdio 连接 + SDK/工具 import 解析）。
 - **仍在推进**：SSE 远程档、OpenClaw 双向。
+
+### 外接凭证：三层信任（全权 / bootstrap / 个人设备 key）
+
+对外开口之前，身份一度只靠 `X-User-Id`——任意网页都能自称任意用户。现在分三层：
+
+- **全权 `API_KEY`**：可带任意 `X-User-Id` 读写。只给 Desktop App / 运维 / 部署验证，**不要打进扩展包或 Options**。生产环境配置后，匿名 `X-User-Id`（无 Bearer）一律 401。扩展日常不走这把钥匙，因此 Options 里填了也不会变成「模拟他人」。
+- **Bootstrap `BOOTSTRAP_API_KEY`**：scope 仅 `keys.issue`，只能调 `/users/me/keys`。扩展构建或 Options 可注入；泄露后不能直接读数据，必须先留痕签发。新用户设备 key 签发只依赖 bootstrap，与是否配置全权 `API_KEY` 无关。
+- **Tier-2 个人 key（`pak.<base64url(userId)>.<secret>`）**：每台设备各自签发，绑定唯一用户。库内只存 sha256（migration `060`，含 `issued_from_ip` / `issued_from_ua`）。扩展 background 首次访问时用 bootstrap 自动签发；帮助中心仍可手动签发外接用 key。本机 `chrome.storage.local.memoryServiceDeviceKey` 里的 pak 如果被服务端判定 `invalid_user_api_key`（例如服务端用户库重建、key 被吊销），扩展会丢掉过期 pak，再用 Bootstrap 重签一把，而不是一直带着作废密钥 401。Roadmap 部署不会清掉这把本机 key。
+
+约束点：
+
+- **CORS 默认全关**：`ALLOWED_ORIGINS` 留空则不反射任何浏览器 Origin。扩展 SW / `chrome-extension://` 页面本就不走 CORS。Roadmap content script 的 memory 调用一律经 background 代理。
+- **签发可信**：`POST /users/me/keys` 要求 bootstrap / service key / 同用户已有 key；匿名在配置了密钥后被拒。每用户每小时签发上限 10。
+- **越权即拒绝**：`X-User-Id` 与 key 绑定用户不一致 → 403；bootstrap 访问非 keys 路径 → 403 `bootstrap_key_scope_insufficient`。
+- **已知限制**：bootstrap 可从扩展包逆向提取；装了扩展的人仍可篡改本地 userinfo 冒充他人——根治需 SSO，本轮不处理。
+- **验证**：`userApiKeys.test.ts`（含多设备与 bootstrap scope）；自托管指引见 [self-hosting-memory-service.md](./self-hosting-memory-service.md)。
 
 ### 删除的彻底性：级联删除 (Cascade Deletion, P2-10)
 

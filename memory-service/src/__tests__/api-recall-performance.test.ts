@@ -181,7 +181,8 @@ describe('Recall API performance comparison', () => {
           query: 'Falcon platform launch readiness',
           topK: 5,
           channels: ['fts', 'time'],
-          blockTypes: ['evidence_list', 'timeline'],
+          retrievalMode: 'deep',
+          presentationBlocks: ['evidence_list', 'timeline'],
         },
       });
       samples.push(Date.now() - t0);

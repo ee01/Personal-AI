@@ -5,7 +5,7 @@
 
 import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
-import { formatLocalScheduleDate } from './scheduleDateTime';
+import { formatLocalScheduleDate, getLocalScheduleTimeZone } from './scheduleDateTime';
 
 interface SharingPermissionResult {
   status: 'domain_writer' | 'owner_only';
@@ -33,9 +33,10 @@ type InitializationSetupMetadata = Pick<
  * - v2.7: Outreach 模板改为只复用 Content / Glip_User_Name / Glip_Team_ID / Target_Type，运行态和上下文下沉到 memory-service
  * - v2.8: Glip 发送结果元数据下沉到 Logs，Messages 只保存计划定义
  * - v2.9: 添加 AgentTask / 帮我做字段，Sheet 只保存重复任务计划和 Jira Rule 扫描入口
+ * - v2.10: 删除 Agent_Task_Prompt（任务描述统一 Content）；新增 Agent_Notify_Success_Receipt（成功回执开关）
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.9',
+  version: '2.10',
   columns: [
     'ID',
     'Topic',
@@ -61,8 +62,8 @@ export const MESSAGES_SCHEMA = {
     'Automation_Link',
     'Agent_Task_ID',
     'Agent_Executor',
-    'Agent_Task_Prompt',
     'Agent_Notify_Template',
+    'Agent_Notify_Success_Receipt',
     'Agent_Trigger_Source',
     'Agent_AR_Binding_ID',
     'Agent_Last_Run_At',
@@ -195,6 +196,7 @@ export class SheetInitializer {
     spreadsheetUrl: string;
   }> {
     const userInfo = await this.getUserInfo();
+    const timeZone = getLocalScheduleTimeZone();
     const response = await fetch(
       'https://sheets.googleapis.com/v4/spreadsheets',
       {
@@ -206,6 +208,7 @@ export class SheetInitializer {
         body: JSON.stringify({
           properties: {
             title: `${userInfo.given_name} 的定时消息管理 - Personal AI`,
+            timeZone,
           },
           sheets: [
             {
@@ -555,6 +558,7 @@ export class SheetInitializer {
     const userInfo = await this.getUserInfo();
     // 读取 AppScript 模板代码
     const scriptCode = await this.loadAppScriptTemplate();
+    const timeZone = getLocalScheduleTimeZone();
 
     // 创建 Apps Script 项目
     const createResponse = await fetch(
@@ -609,7 +613,7 @@ export class SheetInitializer {
               name: 'appsscript',
               type: 'JSON',
               source: JSON.stringify({
-                timeZone: 'Asia/Shanghai',
+                timeZone,
                 exceptionLogging: 'STACKDRIVER',
                 runtimeVersion: 'V8',
                 webapp: {

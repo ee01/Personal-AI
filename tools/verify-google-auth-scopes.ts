@@ -8,7 +8,9 @@ type AuthResponse = {
 };
 
 const authResponses: AuthResponse[] = [];
-const authRequests: Array<{ interactive?: boolean; scopes?: string[] }> = [];
+const accountAuthResponses = new Map<string, AuthResponse[]>();
+const availableAccounts: Array<{ id: string }> = [];
+const authRequests: Array<{ interactive?: boolean; scopes?: string[]; accountId?: string }> = [];
 const removedTokens: string[] = [];
 const storage = new Map<string, unknown>();
 
@@ -18,19 +20,27 @@ const chromeMock = {
   },
   identity: {
     getAuthToken(
-      details: { interactive?: boolean; scopes?: string[] },
+      details: { interactive?: boolean; scopes?: string[]; account?: { id: string } },
       callback: (token?: string, grantedScopes?: string[]) => void,
     ) {
-      authRequests.push({
+      const request: { interactive?: boolean; scopes?: string[]; accountId?: string } = {
         interactive: details.interactive,
         scopes: details.scopes ? [...details.scopes] : undefined,
-      });
-      const response = authResponses.shift() || {};
+      };
+      if (details.account?.id) request.accountId = details.account.id;
+      authRequests.push(request);
+      const accountQueue = details.account?.id
+        ? accountAuthResponses.get(details.account.id)
+        : undefined;
+      const response = accountQueue?.shift() || authResponses.shift() || {};
       chromeMock.runtime.lastError = response.error
         ? { message: response.error }
         : undefined;
       callback(response.token, response.grantedScopes);
       chromeMock.runtime.lastError = undefined;
+    },
+    getAccounts(callback: (accounts: Array<{ id: string }>) => void) {
+      callback([...availableAccounts]);
     },
     removeCachedAuthToken(
       details: { token: string },
@@ -42,8 +52,9 @@ const chromeMock = {
   },
   storage: {
     local: {
-      async get(key: string) {
-        return { [key]: storage.get(key) };
+      async get(key: string | string[]) {
+        const keys = Array.isArray(key) ? key : [key];
+        return Object.fromEntries(keys.map((storageKey) => [storageKey, storage.get(storageKey)]));
       },
       async set(values: Record<string, unknown>) {
         Object.entries(values).forEach(([key, value]) => storage.set(key, value));
@@ -69,6 +80,23 @@ function resetHarness(...responses: AuthResponse[]) {
   authResponses.splice(0, authResponses.length, ...responses);
   authRequests.splice(0, authRequests.length);
   removedTokens.splice(0, removedTokens.length);
+  accountAuthResponses.clear();
+  availableAccounts.splice(0, availableAccounts.length);
+}
+
+function configureAccounts(
+  accountIds: string[],
+  responses: Record<string, AuthResponse[]>,
+) {
+  availableAccounts.splice(
+    0,
+    availableAccounts.length,
+    ...accountIds.map((id) => ({ id })),
+  );
+  accountAuthResponses.clear();
+  Object.entries(responses).forEach(([accountId, accountResponses]) => {
+    accountAuthResponses.set(accountId, [...accountResponses]);
+  });
 }
 
 assert.equal(GOOGLE_AUTH_SCOPE_SETS.FULL.length, 9);
@@ -141,6 +169,99 @@ assert.equal(silentFailure.token, null);
 assert.equal(silentFailure.failureReason, 'auth_error');
 assert.equal(formatGoogleAuthFailure(silentFailure), 'The user is not signed in.');
 
+resetHarness();
+configureAccounts(['personal-account', 'work-account'], {
+  'personal-account': [{ error: 'OAuth2 not granted or revoked.' }],
+  'work-account': [{
+    token: 'work-sheets-token',
+    grantedScopes: [GOOGLE_AUTH_SCOPES.SPREADSHEETS],
+  }],
+});
+const multiAccountResult = await getGoogleAuthTokenSilentlyResult({
+  caller: 'verify.multiAccount',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+});
+assert.equal(multiAccountResult.token, 'work-sheets-token');
+assert.equal(multiAccountResult.accountId, 'work-account');
+assert.equal(multiAccountResult.availableAccountCount, 2);
+assert.deepEqual(
+  authRequests.map((request) => request.accountId),
+  ['personal-account', 'work-account'],
+  'Silent auth should probe beyond the default/personal account',
+);
+const sheetsAccountStorageKey = `googleAuthPreferredAccountId:${GOOGLE_AUTH_SCOPES.SPREADSHEETS}`;
+assert.equal(storage.get(sheetsAccountStorageKey), 'work-account');
+
+authRequests.splice(0, authRequests.length);
+configureAccounts(['personal-account', 'work-account'], {
+  'work-account': [{
+    token: 'work-sheets-token-2',
+    grantedScopes: [GOOGLE_AUTH_SCOPES.SPREADSHEETS],
+  }],
+  'personal-account': [{ error: 'should not be called' }],
+});
+const pinnedAccountResult = await getGoogleAuthTokenSilentlyResult({
+  caller: 'verify.multiAccount.pinned',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+});
+assert.equal(pinnedAccountResult.token, 'work-sheets-token-2');
+assert.deepEqual(
+  authRequests.map((request) => request.accountId),
+  ['work-account'],
+  'The persisted Sheets account should be tried before other Chrome accounts',
+);
+
+authRequests.splice(0, authRequests.length);
+configureAccounts(['personal-account', 'work-account'], {
+  'personal-account': [{
+    token: 'personal-slides-token',
+    grantedScopes: [GOOGLE_AUTH_SCOPES.PRESENTATIONS],
+  }],
+  'work-account': [{ error: 'should not be called for Slides' }],
+});
+const separateSlidesAccountResult = await getGoogleAuthTokenSilentlyResult({
+  caller: 'verify.multiAccount.slides',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SLIDES,
+});
+assert.equal(separateSlidesAccountResult.accountId, 'personal-account');
+assert.equal(
+  storage.get(sheetsAccountStorageKey),
+  'work-account',
+  'A Slides account choice must not overwrite the Scheduled Messages Sheets binding',
+);
+
+storage.delete(sheetsAccountStorageKey);
+resetHarness({
+  token: 'interactive-work-token',
+  grantedScopes: [GOOGLE_AUTH_SCOPES.SPREADSHEETS],
+});
+configureAccounts(['personal-account', 'work-account'], {
+  'personal-account': [
+    { error: 'OAuth2 not granted or revoked.' },
+    { error: 'OAuth2 not granted or revoked.' },
+  ],
+  'work-account': [
+    { error: 'OAuth2 not granted or revoked.' },
+    {
+      token: 'interactive-work-token',
+      grantedScopes: [GOOGLE_AUTH_SCOPES.SPREADSHEETS],
+    },
+  ],
+});
+const selectedAccountResult = await getGoogleAuthTokenResult({
+  caller: 'verify.multiAccount.select',
+  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+  promptForAccount: true,
+});
+assert.equal(selectedAccountResult.token, 'interactive-work-token');
+assert.equal(selectedAccountResult.accountId, 'work-account');
+assert.equal(
+  authRequests.find((request) => request.interactive)?.accountId,
+  undefined,
+  'Explicit reauthorization should leave account unset so Chrome can show its account chooser',
+);
+assert.equal(storage.get(sheetsAccountStorageKey), 'work-account');
+
 const manifest = JSON.parse(readFileSync('src/manifest.json', 'utf8'));
 assert.deepEqual(
   manifest.oauth2.scopes,
@@ -154,7 +275,7 @@ const oneClickSource = readFileSync(
 );
 assert.match(
   oneClickSource,
-  /caller: 'OneClickSetup\.getAuthToken',[\s\S]{0,160}scopes: GOOGLE_AUTH_SCOPE_SETS\.FULL/,
+  /caller: 'OneClickSetup\.getAuthToken',[\s\S]{0,220}scopes: GOOGLE_AUTH_SCOPE_SETS\.FULL,[\s\S]{0,80}promptForAccount: true/,
   'One Click Setup must keep the complete scope request',
 );
 
@@ -171,6 +292,11 @@ assert.match(
   managerSource,
   /本次不会请求 Google Slides 权限/,
   'Scheduled Messages recovery UI must state its no-Slides boundary',
+);
+assert.match(
+  managerSource,
+  /caller: 'ScheduledMessagesManager\.handleReauth',[\s\S]{0,160}promptForAccount: true/,
+  'Explicit Scheduled Messages recovery must allow choosing another Google account',
 );
 
 const backgroundSource = readFileSync('src/background.ts', 'utf8');

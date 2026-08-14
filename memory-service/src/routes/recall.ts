@@ -5,12 +5,12 @@
  *
  * Active recall pipeline. Returns:
  *   - `items`     : evidence list (always)
- *   - `blocks`    : structured UI blocks (when `blockTypes` is provided)
- *   - `analysis`  : LLM-synthesized summary / findings (when `blockTypes`
- *                   includes `'summary'`)
+ *   - `blocks`    : deterministic presentation and optional summary block
+ *   - `analysis`  : grounded LLM synthesis when explicitly requested
+ *   - receipts    : effective retrieval policy and synthesis outcome
  *
- * The single `blockTypes` field decides everything: omit it for a fast
- * evidence-only response; include `'summary'` to opt-in to the LLM stage.
+ * Retrieval, presentation, and synthesis are independent. `blockTypes` is
+ * retained only for backward compatibility.
  *
  * For passive associative recall used by web/meeting bubbles, see
  * POST /context-recall instead.
@@ -106,18 +106,39 @@ const recallBodySchema = {
       type: 'string' as const,
       enum: ['search', 'research', 'aggregate'],
     },
-    blockTypes: {
+    retrievalMode: {
+      type: 'string' as const,
+      enum: ['fast', 'balanced', 'deep'],
+    },
+    presentationBlocks: {
       type: 'array' as const,
+      uniqueItems: true,
       items: {
         type: 'string' as const,
-        enum: [
-          'summary',
-          'timeline',
-          'table',
-          'chart',
-          'evidence_list',
-          'media',
-        ],
+        enum: ['timeline', 'evidence_list', 'media'],
+      },
+    },
+    synthesis: {
+      type: 'object' as const,
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string' as const, enum: ['none', 'summary'] },
+        trigger: { type: 'string' as const, enum: ['user', 'api'] },
+        maxTokens: { type: 'number' as const, minimum: 100, maximum: 1200 },
+        minEvidenceItems: {
+          type: 'number' as const,
+          minimum: 1,
+          maximum: 10,
+        },
+      },
+      additionalProperties: false,
+    },
+    blockTypes: {
+      type: 'array' as const,
+      uniqueItems: true,
+      items: {
+        type: 'string' as const,
+        enum: ['summary', 'timeline', 'evidence_list', 'media'],
       },
     },
   },
@@ -135,10 +156,12 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { db } = request.userContext;
       const service = new ActiveRecallService(db);
-      const query = normalizeRecallQueryForRuntime(request.body);
+      const normalized = normalizeRecallQueryForRuntime(request.body);
 
       try {
-        const result: RecallResult = await service.recall(query);
+        const result: RecallResult = await service.recall(normalized.query, {
+          runtimePolicy: normalized.runtimePolicy,
+        });
         return reply.status(200).send(result);
       } catch (err) {
         request.log.error(err, 'Recall failed');
@@ -154,23 +177,29 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
   );
 }
 
-function normalizeRecallQueryForRuntime(body: RecallQuery): RecallQuery {
+function normalizeRecallQueryForRuntime(body: RecallQuery): {
+  query: RecallQuery;
+  runtimePolicy: 'default' | 'safe_fts';
+} {
   const query: RecallQuery = {
     ...body,
     scope: body.scope ?? 'work',
   };
 
   if (!isRecallRouteSafeModeEnabled() || areRecallSlowChannelsEnabled()) {
-    return query;
+    return { query, runtimePolicy: 'default' };
   }
 
   return {
-    ...query,
-    channels: SAFE_EVIDENCE_CHANNELS,
-    topK: Math.min(
-      query.topK ?? getRecallSafeTopK(),
-      getRecallSafeMaxTopK(),
-    ),
+    query: {
+      ...query,
+      channels: SAFE_EVIDENCE_CHANNELS,
+      topK: Math.min(
+        query.topK ?? getRecallSafeTopK(),
+        getRecallSafeMaxTopK(),
+      ),
+    },
+    runtimePolicy: 'safe_fts',
   };
 }
 

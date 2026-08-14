@@ -1589,7 +1589,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.7.0');
+  assert.equal(template._metadata.version, '1.7.1');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1670,7 +1670,7 @@ test('Executor rule confirms AgentTask/API after downstream call instead of fetc
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
   const getMessageWebhooks: any[] = [];
-  const confirmWebhooks: any[] = [];
+  const confirmWebhooks: Array<{ node: any; url: string; conditions: any[] }> = [];
   const apiWebhooks: Array<{ node: any; url: string; conditions: any[] }> = [];
 
   const collectRuleNodes = (node: any, parentConditions: any[] = []) => {
@@ -1687,7 +1687,7 @@ test('Executor rule confirms AgentTask/API after downstream call instead of fetc
         getMessageWebhooks.push(node);
       }
       if (url.includes('action=confirmBotMessageTriggered')) {
-        confirmWebhooks.push(node);
+        confirmWebhooks.push({ node, url, conditions: inheritedConditions });
       }
       if (url.includes('://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}')) {
         apiWebhooks.push({ node, url, conditions: inheritedConditions });
@@ -1715,16 +1715,43 @@ test('Executor rule confirms AgentTask/API after downstream call instead of fetc
     '{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api',
   );
   assert.equal(apiWebhooks.length, 4);
-  // 4 API branches + 1 AgentTask branch
-  assert.equal(confirmWebhooks.length, 5);
+  // 4 API branches + AgentTask accepted/rejected branches
+  assert.equal(confirmWebhooks.length, 6);
+  const confirmedWebhooks = confirmWebhooks.filter(({ url }) =>
+    url.includes('success=true') && url.includes('stage=confirmed')
+  );
+  const failedWebhooks = confirmWebhooks.filter(({ url }) =>
+    url.includes('success=false') && url.includes('stage=trigger_delivery_failed')
+  );
+  assert.equal(confirmedWebhooks.length, 5);
+  assert.equal(failedWebhooks.length, 1);
   assert.equal(
-    confirmWebhooks.every((node) =>
-      String(node.value.url).includes('stage=confirmed')
-      && node.value.method === 'GET'
+    confirmWebhooks.every(({ node }) =>
+      node.value.method === 'GET'
       && node.value.responseEnabled === false
     ),
     true,
   );
+  const agentTaskAccepted = confirmedWebhooks.find(({ conditions }) =>
+    conditions.some((condition: any) =>
+      condition.value?.first === '{{webhookResponse.body.data.outputs.accepted}}'
+      && condition.value?.second === 'true'
+      && condition.value?.operator === 'EQUALS'
+    )
+  );
+  assert.ok(agentTaskAccepted, 'AgentTask success callback must require Dify accepted=true');
+  assert.equal(
+    failedWebhooks[0].conditions.some((condition: any) =>
+      condition.value?.first === '{{webhookResponse.body.data.outputs.accepted}}'
+      && condition.value?.second === 'true'
+      && condition.value?.operator === 'NOT_EQUALS'
+    ),
+    true,
+    'AgentTask failure callback must handle missing/false Dify acceptance',
+  );
+  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.error\.urlEncode/);
+  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.statusCode\.urlEncode/);
+  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.queueStatus\.urlEncode/);
   assert.deepEqual(
     apiWebhooks.map(item => item.url).sort(),
     [
@@ -1910,7 +1937,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.10\.0';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.11\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1963,7 +1990,7 @@ first = JSON.parse(buildAgentTaskApiPayload({
   Topic: 'Daily Jira hygiene',
   Content: 'Summarize due tickets',
   Agent_Task_ID: 'agent-task-1',
-  Agent_Task_Prompt: 'Summarize due tickets',
+  Agent_Notify_Success_Receipt: 'Y',
   Glip_User_Name: 'Esone Qiu',
   Glip_Team_ID: '',
   rowIndex: 2
@@ -1972,11 +1999,20 @@ second = JSON.parse(buildAgentTaskApiPayload({
   Topic: 'Default notification target',
   Content: 'Run without explicit Glip target',
   Agent_Task_ID: 'agent-task-2',
-  Agent_Task_Prompt: 'Run without explicit Glip target',
+  Agent_Notify_Success_Receipt: 'N',
   Glip_User_Name: '',
   Glip_Team_ID: '',
   rowIndex: 3
-}, 'MSG-2', 'exec-2').body);`,
+}, 'MSG-2', 'exec-2').body);
+third = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Content preferred over stale prompt',
+  Content: 'Fresh content task',
+  Agent_Task_ID: 'agent-task-3',
+  Agent_Task_Prompt: 'Stale prompt should not win',
+  Glip_User_Name: '',
+  Glip_Team_ID: '148192141318',
+  rowIndex: 4
+}, 'MSG-3', 'exec-3').body);`,
     context,
   );
 
@@ -1985,8 +2021,16 @@ second = JSON.parse(buildAgentTaskApiPayload({
   assert.equal(context.first.notifyTarget.glipUserName, 'Esone Qiu');
   assert.equal(context.first.notifyTarget.glipUser, 'Esone Qiu');
   assert.equal(context.first.userId, 'esone.qiu');
+  assert.equal(context.first.successReceipt, true);
+  assert.equal(context.first.notifyVia, 'bot');
+  assert.equal(context.first.task, 'Summarize due tickets');
   assert.equal(context.second.notifyTarget, undefined);
   assert.equal(context.second.userId, 'esone.qiu');
+  assert.equal(context.second.successReceipt, false);
+  assert.equal(context.third.task, 'Fresh content task');
+  assert.equal(context.third.notifyTarget.type, 'group');
+  assert.equal(context.third.notifyTarget.targetGroupId, '148192141318');
+  assert.equal(context.third.successReceipt, true);
 });
 
 test('Apps Script mark-executed accepts the last data row index without ID fallback', () => {
@@ -2198,6 +2242,85 @@ result = confirmBotMessageTriggered('MSG-AI', 2, true, '', 'AI topic', 'filter=1
   assert.equal(context.result.success, true);
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '✅ 推送成功'));
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Count') + 1 && update.value === 1));
+  assert.equal(logs.length, 1);
+});
+
+test('Apps Script records rejected AgentTask delivery as a Sheet failure without marking Done', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_Team_ID',
+    'Schedule_Type',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+    'Agent_Last_Run_At',
+    'Agent_Last_Status',
+    'Agent_Last_Error',
+  ];
+  const data = [
+    headers,
+    [
+      'MSG-AGENT',
+      'Agent task',
+      '打开 baidu.com',
+      'AgentTask',
+      '',
+      'OneTime',
+      '2026-05-03',
+      '12:00',
+      '2026-05-03 12:00',
+      '0',
+      '',
+      '⏳ AgentTask 已领取待确认',
+      'Active',
+      '',
+      'claimed',
+      '',
+    ],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const error = 'trigger_delivery_failed: authentication_required (statusCode=401, queueStatus=failed)';
+
+  vm.runInNewContext(
+    `${appScript}\nresult = confirmBotMessageTriggered('MSG-AGENT', 2, false, '${error}', 'Agent task', '打开 baidu.com', 'exec-agent-failed', 'trigger_delivery_failed');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
+  assert.ok(updates.some(update =>
+    update.row === 2
+    && update.col === headers.indexOf('Exec_Log') + 1
+    && String(update.value).includes('authentication_required')
+  ));
+  assert.ok(updates.some(update =>
+    update.row === 2
+    && update.col === headers.indexOf('Agent_Last_Status') + 1
+    && update.value === 'trigger_delivery_failed'
+  ));
+  assert.ok(updates.some(update =>
+    update.row === 2
+    && update.col === headers.indexOf('Agent_Last_Error') + 1
+    && update.value === error
+  ));
+  assert.equal(
+    updates.some(update =>
+      update.row === 2
+      && update.col === headers.indexOf('Status') + 1
+      && update.value === 'Done'
+    ),
+    false,
+  );
   assert.equal(logs.length, 1);
 });
 
@@ -2706,6 +2829,7 @@ function createMarkExecutedVmContext(
     result: null as any,
     first: null as any,
     second: null as any,
+    third: null as any,
   };
 }
 

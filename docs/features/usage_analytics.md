@@ -1,6 +1,6 @@
 # Usage Analytics / 用量与 Token 分析
 
-_最后更新: 2026-07-31_
+_最后更新: 2026-08-12_
 
 Usage Analytics 是一套**本地打点**的系统级用量观测能力：把 Chrome 扩展（前端）和 memory-service（后端）每一次 LLM 调用的真实 token 用量，按 [docs/index.md](../index.md) 的「所属能力」归类，写入一个独立的集中式 analytics 库，最终以鉴权的 HTTP 报表页呈现。报表默认是**使用/运营视角**：功能总览（一功能一行，行内拆前端/后端）、用户活跃度（DAU + 排行）、用户×功能偏好矩阵，并支持中文功能名、30 天窗口、全体/单用户与**端过滤（全部 / 仅前端 / 仅后端）**。
 
@@ -18,6 +18,8 @@ Usage Analytics 是一套**本地打点**的系统级用量观测能力：把 Ch
 - **报表**：读取每小时/每日 rollup 缓存，并合并“今天尚未 rollup”的原始事件；`byCapability` 默认按 **usageCount** 排序，并注入中文 `label`、`apiCallCount`、`userCount`、`bySide`（前端/后端分桶）、`failCount`、`features` 下钻。全体视图额外返回 `byUser`、`userCapabilityMatrix`、`dailyActivity`。成本在报表层按当前 `MODEL_PRICING` 重算。
 
 关键边界：**打点永远是 best-effort 副作用**——analytics 任何异常都被吞掉，绝不影响 LLM 主链路或 API 响应；成本是本地估算，不做 oneapi 对账。
+
+后端 LLM 的最终失败也会记录一条 0-token `status:'error'` 事件，并把错误归为 `auth / rate_limit / timeout / network / server / unknown`；内部 provider retry 不会被重复记成多次功能调用。网页聚焦分析现在归到 `memory_capture`，下钻 route 为 `/source-memory/webpage-analysis`。
 
 ## 个人链接（HMAC）
 
@@ -45,6 +47,13 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 - 堆叠条形图（前端色 + 后端色）
 
 顶部「端」过滤器：`全部 / 仅前端 / 仅后端`。仅前端时接口调用列显示 `—`，使用频度改为纯 LLM 调用。点击功能行可下钻 `feature`（前端）或 `route`（后端）。`unknown` 行高亮，作为打点覆盖率健康指标。
+
+### 如何查看网页分析与审计表的对应数据
+
+- 当前网页分析走后端：切到「仅后端」，展开「记忆捕捉」，查看 `/source-memory/webpage-analysis` 的调用、失败和 token；模型面板给出同一窗口的模型与 token 总量。
+- 历史浏览器直连版本走前端：切到「仅前端」，展开「记忆捕捉」，可看到 `passive_webpage_memory_analysis` 的调用/失败；旧 Agent Thinking 网页请求归在对应的 Agent Thinking feature。
+- 消息分析可展开「消息分析」能力查看 feature 调用与 token。
+- Dashboard 当前没有把 `feature/route × model × status × errorKind` 四个维度合成一张交叉表。需要精确复现某次审计里“某 feature 使用某 model、其中多少是 network 失败”的单表时，应查询 `${DATA_DIR}/analytics/usage.db` 的 `usage_events`；Markdown 文档是口径说明，不是历史数据文件。
 
 ## `memory_service`（记忆服务）是什么？
 

@@ -12,9 +12,11 @@ import {
   pickTickerEntry,
   subTypeComesFromCreateMeta,
   tickerLabel,
+  tooltipHintLine,
   trackMarkers,
   typeBadge,
 } from '../composables/useRoadmapContract';
+import { ROADMAP_CREATE_JIRA_SYSTEM_PROMPT } from '../composables/useCreateJiraAgentPrompt';
 import type { RoadmapItem, RoadmapSub } from '../types';
 
 function sub(overrides: Partial<RoadmapSub> = {}): RoadmapSub {
@@ -154,6 +156,7 @@ describe('postMessage state', () => {
       isDraft: true,
       jiraKey: null,
       subActivity: true,
+      description: null,
     });
   });
 
@@ -211,6 +214,7 @@ describe('create-jira payload', () => {
         targetStart: '2026-07-01',
         targetEnd: '2026-08-01',
         fixVersion: null,
+        description: null,
       },
       children: [
         {
@@ -221,6 +225,8 @@ describe('create-jira payload', () => {
           parentItemKey: 'LOCAL-ab12cd34',
           parentJiraKey: null,
           fixVersion: null,
+          assignee: null,
+          description: null,
         },
       ],
     });
@@ -267,6 +273,22 @@ describe('create-jira payload', () => {
     expect(payload.parent).toBeNull();
     expect(payload.children[0].parentJiraKey).toBe('NOVA-7');
     expect(payload.children[0].parentItemKey).toBe('NOVA-7');
+  });
+
+  it('forwards draft descriptions on parent and children', () => {
+    const group = buildDraftGroups([
+      item({
+        key: 'LOCAL-ab12cd34',
+        source: 'manual',
+        jiraKey: null,
+        title: 'Manual epic',
+        description: 'parent notes',
+        subs: [sub({ id: 'd1', title: 'first child', description: 'child notes' })],
+      }),
+    ])[0];
+    const payload = buildCreateJiraPayload(group, fields);
+    expect(payload.parent?.description).toBe('parent notes');
+    expect(payload.children[0].description).toBe('child notes');
   });
 });
 
@@ -362,6 +384,7 @@ describe('sync ticker', () => {
         [
           entry({ actorClientId: 'me' }),
           entry({ id: 'noise', op: 'expand' }),
+          entry({ id: 'refresh', op: 'refresh_from_jira' }),
           hit,
         ],
         'me',
@@ -379,5 +402,27 @@ describe('sync ticker', () => {
     const label = tickerLabel(long, 20);
     expect(label.endsWith('…')).toBe(true);
     expect(label.length).toBe(20);
+  });
+});
+
+describe('draft description contract', () => {
+  it('tooltip hint prefers description over the operation hint', () => {
+    expect(tooltipHintLine('LaunchDarkly 开关覆盖 Web 与移动端', '双击修改备注名')).toBe(
+      'LaunchDarkly 开关覆盖 Web 与移动端',
+    );
+    expect(tooltipHintLine(null, '双击修改备注名')).toBe('双击修改备注名');
+    expect(tooltipHintLine('   ', '拖到右侧时间轴排期')).toBe('拖到右侧时间轴排期');
+  });
+
+  it('system prompt combines user description and allows rewrite', () => {
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(
+      '该子任务用户填写的描述',
+    );
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(
+      '不必与用户输入逐字一致',
+    );
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(
+      '带用户描述的 draft 主任务以用户描述为基础润色',
+    );
   });
 });

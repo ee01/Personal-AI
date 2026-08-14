@@ -35,6 +35,14 @@ import {
   teamAssigneeMap,
   type ResolvedAssignee,
 } from '../../composables/useAssigneeMap';
+import {
+  extensionLockTip,
+  useExtensionGate,
+} from '../../composables/useExtensionGate';
+import {
+  AGENT_CREATE_CONCURRENCY,
+  runWithConcurrency,
+} from '../../composables/runWithConcurrency';
 
 type RowStatus =
   | { kind: 'pending' }
@@ -45,7 +53,13 @@ type RowStatus =
 const AI_EXECUTOR_KEY = 'personalroadmap.aiExecutor';
 
 const state = useRoadmapState();
-const running = ref(false);
+const gate = useExtensionGate();
+const running = computed({
+  get: () => state.createJiraRunning.value,
+  set: (v: boolean) => {
+    state.createJiraRunning.value = v;
+  },
+});
 const rowStatus = ref<Record<string, RowStatus>>({});
 const promptPeekOpen = ref(false);
 
@@ -235,8 +249,10 @@ const hintWarning = computed(() => {
 /** Task-level parents take a sub-task whose name only Jira knows — see the helper. */
 const subTypeAuto = computed(() => subTypeComesFromCreateMeta(itemType.value));
 
+const extensionMissing = computed(() => !state.hasExtension.value);
+
 const blockReason = computed(() => {
-  if (!state.hasExtension.value) return '需要 Personal AI 扩展';
+  if (extensionMissing.value) return '需要 Personal AI 扩展';
   if (!state.editable.value) return '当前为只读模式';
   if (agentMode.value) {
     if (!executors.value.length) return '请先配置 Agent 执行器';
@@ -325,21 +341,23 @@ watch(
   () => state.modals.value.aiCreate,
   (open) => {
     if (!open) return;
-    const hints = state.jqlHints.value;
-    rowStatus.value = {};
-    frozenGroups.value = null;
-    running.value = false;
-    promptPeekOpen.value = false;
-    const teamId = state.teamId.value;
-    const draft = getAiPromptDraft(teamId);
-    const teamPrompt = state.snapshot.value?.team.createJiraPrompt || '';
-    prompt.value = draft !== null ? draft : teamPrompt;
-    projectKey.value = hints.projectKey || '';
-    itemType.value = hints.itemType || '';
-    subType.value = hints.subType || '';
-    sprint.value = '';
-    const uniq = uniqueSuggestedReleases.value;
-    fixVersion.value = uniq.length === 1 ? uniq[0] : '';
+    // Re-opening mid-run keeps progress rows; only reset for a fresh session.
+    if (!running.value) {
+      const hints = state.jqlHints.value;
+      rowStatus.value = {};
+      frozenGroups.value = null;
+      promptPeekOpen.value = false;
+      const teamId = state.teamId.value;
+      const draft = getAiPromptDraft(teamId);
+      const teamPrompt = state.snapshot.value?.team.createJiraPrompt || '';
+      prompt.value = draft !== null ? draft : teamPrompt;
+      projectKey.value = hints.projectKey || '';
+      itemType.value = hints.itemType || '';
+      subType.value = hints.subType || '';
+      sprint.value = '';
+      const uniq = uniqueSuggestedReleases.value;
+      fixVersion.value = uniq.length === 1 ? uniq[0] : '';
+    }
     void refreshExecutors();
   },
 );
@@ -359,7 +377,27 @@ watch(uniqueSuggestedReleases, (uniq) => {
   }
 });
 
+function promptForGroup(group: DraftGroup): string {
+  return buildAgentCreatePrompt({
+    userPrompt: prompt.value,
+    projectKey: projectKey.value.trim(),
+    itemType: itemType.value.trim(),
+    subType: subType.value.trim(),
+    fixVersion: fixVersion.value.trim(),
+    sprint: sprint.value.trim(),
+    map: assigneeMap.value,
+    currentUser: currentUser.value,
+    members: state.snapshot.value?.members || [],
+    items: state.snapshot.value?.items || [],
+    drafts: group.subs.map((sub) => ({ item: group.item, sub })),
+  });
+}
+
 async function start() {
+  if (extensionMissing.value) {
+    gate.openGate('createJira');
+    return;
+  }
   if (blockReason.value || running.value) return;
   frozenGroups.value = groups.value;
   running.value = true;
@@ -389,7 +427,7 @@ async function start() {
   let created = 0;
   let failed = 0;
 
-  for (const group of groups.value) {
+  async function createOneGroup(group: DraftGroup): Promise<void> {
     const parentId = itemRowId(group.item.key);
     const parentIsDraft = isDraftItem(group.item);
     if (parentIsDraft) rowStatus.value[parentId] = { kind: 'loading' };
@@ -413,7 +451,7 @@ async function start() {
         ? await bridgeAgentCreateJira({
             teamId,
             token,
-            prompt: fullAgentPrompt.value,
+            prompt: promptForGroup(group),
             executor: selectedExecutor.value,
             teamName,
             constraints: {
@@ -433,6 +471,12 @@ async function start() {
         if (parent?.jiraKey) {
           rowStatus.value[parentId] = { kind: 'ok', jiraKey: parent.jiraKey };
           created += 1;
+          if (parent.error) {
+            rowStatus.value[parentId] = {
+              kind: 'error',
+              message: parent.error,
+            };
+          }
         } else {
           rowStatus.value[parentId] = {
             kind: 'error',
@@ -446,9 +490,18 @@ async function start() {
       for (const sub of group.subs) {
         const row = result.children.find((c) => c.draftId === sub.id);
         if (row?.jiraKey) {
-          rowStatus.value[subRowId(sub.id)] = { kind: 'ok', jiraKey: row.jiraKey };
+          rowStatus.value[subRowId(sub.id)] = {
+            kind: 'ok',
+            jiraKey: row.jiraKey,
+          };
           mappings.push({ draftId: sub.id, jiraKey: row.jiraKey });
           created += 1;
+          if (row.error) {
+            rowStatus.value[subRowId(sub.id)] = {
+              kind: 'error',
+              message: row.error,
+            };
+          }
         } else {
           rowStatus.value[subRowId(sub.id)] = {
             kind: 'error',
@@ -475,27 +528,55 @@ async function start() {
   }
 
   try {
-    if (teamId) state.snapshot.value = await state.api.fetchTeam(teamId);
-  } catch {
-    /* SSE will catch up */
-  }
+    if (agentMode.value) {
+      await runWithConcurrency(
+        groups.value,
+        AGENT_CREATE_CONCURRENCY,
+        createOneGroup,
+      );
+    } else {
+      for (const group of groups.value) {
+        await createOneGroup(group);
+      }
+    }
 
-  running.value = false;
+    try {
+      if (teamId) state.snapshot.value = await state.api.fetchTeam(teamId);
+    } catch {
+      /* SSE will catch up */
+    }
+  } finally {
+    running.value = false;
+  }
   const execLabel = agentMode.value
     ? executors.value.find((e) => e.id === selectedExecutor.value)?.label
     : null;
+  const modalOpen = state.modals.value.aiCreate;
+  // Longer toast when the dialog was closed — user may not be looking at the form.
+  const toastMs = modalOpen ? 2900 : 5200;
   if (created) {
     state.toast(
       execLabel
         ? `<span class="ok">✓</span> 已由 <b>${execLabel}</b> 创建 <b>${created}</b> 个 Jira issue`
         : `<span class="ok">✓</span> 已创建 <b>${created}</b> 个 Jira issue`,
+      toastMs,
     );
   }
-  if (!failed) {
-    state.modals.value.aiCreate = false;
-  } else if (!created) {
-    state.toast(`创建失败：${failed} 项未成功`);
+  if (failed) {
+    state.toast(
+      created
+        ? `部分失败：成功 ${created} · 失败 ${failed}`
+        : `创建失败：${failed} 项未成功`,
+      toastMs,
+    );
+  } else {
+    frozenGroups.value = null;
+    if (modalOpen) state.modals.value.aiCreate = false;
   }
+}
+
+function closeModal() {
+  state.modals.value.aiCreate = false;
 }
 </script>
 
@@ -503,7 +584,7 @@ async function start() {
   <div
     class="modal-back"
     :class="{ show: state.modals.value.aiCreate }"
-    @click.self="!running && (state.modals.value.aiCreate = false)"
+    @click.self="closeModal"
   >
     <div class="modal" style="width: 620px">
       <div class="m-head">
@@ -512,6 +593,7 @@ async function start() {
           <span class="mode-badge" :class="agentMode ? 'agent' : 'api'">
             {{ agentMode ? 'AGENT 执行器' : '直连 API' }}
           </span>
+          <span v-if="running" class="m-run-hint">创建中 · 可关闭弹窗</span>
         </div>
         <div class="m-sub">
           Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给
@@ -668,6 +750,9 @@ async function start() {
           >
             {{ promptPeekOpen ? '收起完整 Prompt' : '查看将发送的完整 Prompt' }}
           </button>
+          <div class="f-note" style="margin-top: 6px">
+            预览是全部草稿总览；实际发送按 Epic 拆成独立 Agent 请求，最多 2 路并行，每路只含该组 draft。
+          </div>
           <pre v-if="promptPeekOpen" class="prompt-peek">{{ fullAgentPrompt }}</pre>
         </div>
 
@@ -681,6 +766,11 @@ async function start() {
               {{ typeBadge(itemType || g.item.type).label }}
             </span>
             <span class="t">{{ g.item.alias || g.item.title }}</span>
+            <span
+              v-if="g.item.description"
+              class="fv-chip desc"
+              :data-tip="g.item.description"
+            >≡ 描述</span>
             <span
               v-if="teamRel && isDraftItem(g.item)"
               class="fv-chip"
@@ -711,6 +801,11 @@ async function start() {
           <div v-for="s in g.subs" :key="s.id" class="ai-row child">
             <span class="child-mark">└</span>
             <span class="t">{{ s.alias || s.title }}</span>
+            <span
+              v-if="s.description"
+              class="fv-chip desc"
+              :data-tip="s.description"
+            >≡ 描述</span>
             <span
               v-if="teamRel"
               class="fv-chip"
@@ -749,21 +844,29 @@ async function start() {
         </div>
       </div>
       <div class="m-foot">
-        <span v-if="blockReason" class="foot-note">{{ blockReason }}</span>
-        <button
-          class="btn btn-ghost"
-          :disabled="running"
-          @click="state.modals.value.aiCreate = false"
-        >
-          取消
+        <button v-if="extensionMissing" class="foot-note eb-link" @click="gate.openGate('createJira')">
+          需要 Personal AI 扩展 · 查看安装指引
+        </button>
+        <span v-else-if="blockReason" class="foot-note">{{ blockReason }}</span>
+        <span v-else-if="running" class="foot-note">
+          {{
+            agentMode
+              ? 'Agent 按 Epic 最多 2 路并行；一组失败不影响其它组已成功的回写。关闭后工具栏保持创建中'
+              : '关闭后工具栏按钮会保持创建中，完成后 toast 通知'
+          }}
+        </span>
+        <button class="btn btn-ghost" @click="closeModal">
+          {{ running ? '关闭（后台继续）' : '取消' }}
         </button>
         <button
           class="btn btn-orange"
-          :disabled="running || !!blockReason || !groups.length"
-          :title="blockReason || undefined"
+          :class="{ locked: extensionMissing }"
+          :disabled="running || (!extensionMissing && (!!blockReason || !groups.length))"
+          :title="extensionMissing ? undefined : blockReason || undefined"
+          :data-tip="extensionMissing ? extensionLockTip('createJira') : undefined"
           @click="start"
         >
-          开始创建
+          {{ running ? '创建中…' : '开始创建' }}
         </button>
       </div>
     </div>

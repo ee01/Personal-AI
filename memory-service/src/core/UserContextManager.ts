@@ -5,6 +5,7 @@ import { Database } from '../storage/Database.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 import { ProfileManager } from './ProfileManager.js';
 import { assertValidUserId, isValidUserId } from '../utils/userIdentity.js';
+import { isSqliteCorruptError } from '../utils/sqliteErrors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,7 +68,13 @@ export class UserContextManager {
     const existing = this.contexts.get(normalizedUserId);
     if (existing) {
       existing.lastAccessedAt = Date.now();
-      return existing;
+      if (this.connectionIsUsable(existing)) {
+        return existing;
+      }
+      console.error(
+        `[UserContextManager] sqlite connection unusable for ${normalizedUserId}; resetting context`,
+      );
+      this.resetContext(normalizedUserId);
     }
     return this.createContext(normalizedUserId);
   }
@@ -132,6 +139,16 @@ export class UserContextManager {
   // -----------------------------------------------------------------------
   // Internals
   // -----------------------------------------------------------------------
+
+  private connectionIsUsable(ctx: UserContext): boolean {
+    try {
+      ctx.db.prepare('SELECT 1 AS ok').get();
+      return true;
+    } catch (error) {
+      if (isSqliteCorruptError(error)) return false;
+      throw error;
+    }
+  }
 
   private createContext(userId: string): UserContext {
     const userDir = path.join(this.usersBaseDir, userId);

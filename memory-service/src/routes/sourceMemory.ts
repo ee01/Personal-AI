@@ -6,6 +6,11 @@ import {
   type SourceMemoryCandidateInput,
   type SourceMemoryCreateInput,
 } from '../core/SourceMemoryCaptureService.js';
+import {
+  PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
+  PassiveWebpageAnalysisService,
+  type PassiveWebpageAnalysisInput,
+} from '../core/PassiveWebpageAnalysisService.js';
 
 const interactionSignalsSchema = {
   type: 'object' as const,
@@ -67,6 +72,23 @@ const candidateBodySchema = {
   additionalProperties: false,
 };
 
+const webpageAnalysisBodySchema = {
+  type: 'object' as const,
+  required: ['title', 'url', 'mainContent'],
+  properties: {
+    title: { type: 'string' as const, maxLength: 500 },
+    url: { type: 'string' as const, minLength: 1, maxLength: 2_048 },
+    mainContent: {
+      type: 'string' as const,
+      minLength: 120,
+      maxLength: 16_000,
+    },
+    domain: { type: 'string' as const, maxLength: 255 },
+    wordCount: { type: 'number' as const, minimum: 0 },
+  },
+  additionalProperties: false,
+};
+
 const createBodySchema = {
   ...candidateBodySchema,
   properties: {
@@ -112,6 +134,23 @@ function buildValidationErrorResponse(error: SourceMemoryCaptureValidationError)
 }
 
 export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
+  app.post<{ Body: PassiveWebpageAnalysisInput }>(
+    '/source-memory/webpage-analysis',
+    {
+      schema: {
+        body: webpageAnalysisBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const service = new PassiveWebpageAnalysisService();
+      const result = await service.analyze(request.body);
+      return reply.status(200).send({
+        result,
+        promptVersion: PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
+      });
+    },
+  );
+
   app.post<{ Body: SourceMemoryCandidateInput }>(
     '/source-memory/candidates/score',
     {

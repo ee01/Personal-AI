@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   importedTaskSpan,
+  mergeAssigneeMapIdentities,
   migrateAssigneeMapKey,
   normalizeAssigneeMap,
+  ownerMatchesAssignee,
   parseAssigneeMap,
 } from '../core/assigneeMap.js';
 
@@ -52,5 +54,24 @@ describe('assignee map helpers', () => {
     expect(
       migrateAssigneeMapKey({ ray: 'Ray Zhang' }, 'ray', 'Ray Zhang'),
     ).toEqual({ 'ray zhang': 'Ray Zhang' });
+  });
+
+  it('merges identities while keeping the short-name alias', () => {
+    expect(
+      mergeAssigneeMapIdentities({ ray: 'Something Else' }, 'ray', 'Ray Zhang'),
+    ).toEqual({
+      ray: 'Ray Zhang',
+      'ray zhang': 'Ray Zhang',
+    });
+  });
+});
+
+describe('ownerMatchesAssignee', () => {
+  const map = { esone: 'Esone Qiu', ada: 'Ada Lovelace' };
+
+  it('treats mapped full name as the same person', () => {
+    expect(ownerMatchesAssignee(map, 'esone', 'Esone Qiu')).toBe(true);
+    expect(ownerMatchesAssignee(map, 'Esone Qiu', 'Esone Qiu')).toBe(true);
+    expect(ownerMatchesAssignee(map, 'esone', 'Kevin Liu')).toBe(false);
   });
 });

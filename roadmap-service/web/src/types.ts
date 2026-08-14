@@ -73,6 +73,8 @@ export interface RoadmapSub {
   cleared?: boolean;
   createdBy: string;
   version: number;
+  /** Draft user text, or Jira description mirror for imported tasks. */
+  description?: string | null;
 }
 
 export interface RoadmapItem {
@@ -94,6 +96,8 @@ export interface RoadmapItem {
   lane: number;
   expanded: boolean;
   version: number;
+  /** Draft user text, or Jira description mirror for non-draft items. */
+  description?: string | null;
   subs: RoadmapSub[];
   markers: RoadmapMarker[];
 }
@@ -139,6 +143,8 @@ export interface TeamSnapshot {
     assigneeMap?: Record<string, string>;
     /** Browse base from server env; empty when unset. */
     jiraBaseUrl?: string;
+    /** Epoch ms of last successful Jira refresh; used for 10-minute TTL. */
+    jiraRefreshedAt?: number | null;
   };
   items: RoadmapItem[];
   members: TeamMember[];

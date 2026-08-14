@@ -17,7 +17,7 @@ import {
 import { memberChipHtml, openOwnerFloat } from '../composables/useOwnerFloat';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { useRoadmapState } from '../composables/useRoadmapState';
-import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, trackMarkers, phaseColor, phaseGlyph } from '../composables/useRoadmapContract';
+import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS } from '../composables/useRoadmapContract';
 import {
   defaultNewSubSpan,
   dispName,
@@ -34,7 +34,6 @@ import {
 import { bridgeFetchIssueDates } from '../composables/useExtensionBridge';
 import {
   catchReleaseHint,
-  catchReleaseTooltipLine,
   relParsed,
   type ReleaseSheetConfig,
 } from '../composables/useReleaseRuler';
@@ -82,13 +81,19 @@ const editorPopList = ref<TeamMember[]>([]);
 const editorPopIdx = ref(0);
 const editorPopQuery = ref<string | null>(null);
 const editorInputRef = ref<HTMLInputElement | null>(null);
+const editorDesc = ref('');
+const editorDescOpen = ref(false);
 
 const aliasOpen = ref(false);
 const aliasTarget = ref<{ sub?: RoadmapSub }>({});
 const aliasValue = ref('');
+const aliasDesc = ref('');
+const aliasDescOpen = ref(false);
 const aliasOwner = ref<TeamMember | null>(null);
 const aliasOwnerDirty = ref(false);
 const aliasStyle = ref({ left: '0px', top: '4px' });
+/** Draft bars edit the real title (used by Create Jira); non-drafts edit alias. */
+const aliasEditingTitle = ref(false);
 
 const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
 const jiraBase = computed(
@@ -129,10 +134,17 @@ const teamRelParsed = computed(() => {
   return relParsed(cfg);
 });
 
-function barCatchTip(start: string | null | undefined, days: number | null | undefined) {
+function barSprintTitle(start: string | null | undefined, days: number | null | undefined) {
   if (!start || !days || !teamRelParsed.value) return '';
-  const line = catchReleaseTooltipLine(addD(start, days - 1), teamRelParsed.value);
-  return line ? ` · ${line}` : '';
+  return catchReleaseHint(addD(start, days - 1), teamRelParsed.value);
+}
+
+function itemOpsHint() {
+  return `单击展开 · 双击${isDraft.value ? '改任务名' : '改备注名'} · 拖动/两端拉伸排期${props.item.jiraKey ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}`;
+}
+
+function subOpsHint(s: RoadmapSub) {
+  return `双击${s.temp ? '改任务名' : '改备注名'}/Owner · 拖动/两端拉伸${s.key ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}`;
 }
 
 function markerHandlers(): MarkerHandlers {
@@ -357,9 +369,16 @@ function parseDate(s: string) {
 
 function openAlias(sub: RoadmapSub | null) {
   aliasTarget.value = { sub: sub || undefined };
-  aliasValue.value = (sub || props.item).alias || '';
+  const editingTitle = sub ? Boolean(sub.temp) : isDraftItem(props.item);
+  aliasEditingTitle.value = editingTitle;
+  const target = sub || props.item;
+  aliasValue.value = editingTitle
+    ? target.title || ''
+    : target.alias || '';
   aliasOwner.value = sub ? findMember(sub.owner) : null;
   aliasOwnerDirty.value = false;
+  aliasDesc.value = editingTitle ? String(target.description || '') : '';
+  aliasDescOpen.value = editingTitle && Boolean(String(target.description || '').trim());
   aliasOpen.value = true;
   nextTick(() => {
     positionAliasEditor();
@@ -395,11 +414,41 @@ function positionAliasEditor() {
 
 async function saveAlias() {
   const sub = aliasTarget.value.sub;
+  const text = aliasValue.value.trim();
+  if (aliasEditingTitle.value) {
+    if (!text) {
+      state.toast('任务名不能为空');
+      return;
+    }
+    if (sub) {
+      const intent: Record<string, unknown> = {
+        op: 'update_sub',
+        subId: sub.id,
+        title: text,
+        description: aliasDesc.value.trim() || null,
+        baseVersion: sub.version,
+      };
+      if (aliasOwnerDirty.value) {
+        intent.owner = aliasOwner.value?.name || null;
+      }
+      emit('updateSub', intent);
+    } else {
+      emit('setAlias', {
+        op: 'update_item',
+        itemKey: props.item.key,
+        title: text,
+        description: aliasDesc.value.trim() || null,
+        baseVersion: props.item.version,
+      });
+    }
+    aliasOpen.value = false;
+    return;
+  }
   if (sub) {
     const intent: Record<string, unknown> = {
       op: 'update_sub',
       subId: sub.id,
-      alias: aliasValue.value.trim() || null,
+      alias: text || null,
       baseVersion: sub.version,
     };
     if (aliasOwnerDirty.value) {
@@ -410,7 +459,7 @@ async function saveAlias() {
     emit('setAlias', {
       op: 'set_alias',
       itemKey: props.item.key,
-      alias: aliasValue.value.trim() || null,
+      alias: text || null,
       baseVersion: props.item.version,
     });
   }
@@ -534,6 +583,8 @@ async function expandThenEdit() {
 function showEditor() {
   editorOpen.value = true;
   editorTitle.value = '';
+  editorDesc.value = '';
+  editorDescOpen.value = false;
   editorOwner.value = null;
   editorPopOpen.value = false;
   editorPopQuery.value = null;
@@ -633,6 +684,14 @@ function onEditorKeydown(e: KeyboardEvent) {
     editorOpen.value = false;
     return;
   }
+  if (e.key === 'Enter' && e.shiftKey) {
+    e.preventDefault();
+    editorDescOpen.value = true;
+    nextTick(() => {
+      (rowRef.value?.querySelector('.te-desc') as HTMLTextAreaElement | null)?.focus();
+    });
+    return;
+  }
   if (e.key === 'Enter' && editorTitle.value.trim()) {
     e.preventDefault();
     submitSub();
@@ -667,11 +726,90 @@ async function submitSub() {
     owner: editorOwner.value?.name || null,
     start: span.start,
     days: span.days,
+    description: editorDesc.value.trim() || null,
   });
   editorOpen.value = false;
 }
 
+function toggleEditorDesc() {
+  editorDescOpen.value = !editorDescOpen.value;
+  nextTick(() => {
+    if (editorDescOpen.value) {
+      (rowRef.value?.querySelector('.te-desc') as HTMLTextAreaElement | null)?.focus();
+    } else {
+      editorInputRef.value?.focus();
+    }
+  });
+}
+
+function toggleAliasDesc() {
+  aliasDescOpen.value = !aliasDescOpen.value;
+  nextTick(() => {
+    const sel = aliasDescOpen.value ? '.alias-editor .desc-input' : '.alias-editor input';
+    (rowRef.value?.querySelector(sel) as HTMLElement | null)?.focus();
+  });
+}
+
+function onDescInput(which: 'editor' | 'alias', ev: Event) {
+  const el = ev.target as HTMLTextAreaElement;
+  const next = clampDescription(el.value);
+  if (next !== el.value) el.value = next;
+  if (which === 'editor') editorDesc.value = next;
+  else aliasDesc.value = next;
+}
+
+function onEditorFocusOut() {
+  setTimeout(() => {
+    const ed = rowRef.value?.querySelector('.task-editor');
+    if (!ed || !document.body.contains(ed)) return;
+    if (ed.contains(document.activeElement) || document.querySelector('.owner-float')) return;
+    editorOpen.value = false;
+  }, 150);
+}
+
+function onAliasFocusOut() {
+  setTimeout(() => {
+    const ed = rowRef.value?.querySelector('.alias-editor');
+    if (!ed || !document.body.contains(ed)) return;
+    if (ed.contains(document.activeElement) || document.querySelector('.owner-float')) return;
+    cancelAlias();
+  }, 150);
+}
+
+function onAliasTitleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    cancelAlias();
+    return;
+  }
+  if (e.key === 'Enter' && e.shiftKey && aliasEditingTitle.value) {
+    e.preventDefault();
+    aliasDescOpen.value = true;
+    nextTick(() => {
+      (rowRef.value?.querySelector('.alias-editor .desc-input') as HTMLTextAreaElement | null)?.focus();
+    });
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    void saveAlias();
+  }
+}
+
+function onDescKeydown(e: KeyboardEvent, submit: () => void) {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    if (editorOpen.value) editorOpen.value = false;
+    else cancelAlias();
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submit();
+  }
+}
+
 function suggestAlias() {
+  if (aliasEditingTitle.value) return;
   const target = aliasTarget.value.sub || props.item;
   const t = target.title.split(/[:：]/)[0].trim();
   aliasValue.value = t.length > 34 ? `${t.slice(0, 32)}…` : t;
@@ -701,7 +839,7 @@ watch(
           { 'free-h': wrapMode, enter: enter, draft: isDraft },
         ]"
         :style="{ left: `${barLeft()}px`, width: `${barW}px` }"
-        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}||${item.title}||单击展开 · 双击改备注名 · 拖动/两端拉伸排期${item.jiraKey ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}${barCatchTip(item.start, item.days)}`"
+        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}${barSprintTitle(item.start, item.days)}||${item.title}||${tooltipHintLine(item.description, itemOpsHint())}`"
         :data-pai-item="item.key"
         :data-pai-team="teamId"
         :data-pai-target-start="item.targetStart || ''"
@@ -711,7 +849,6 @@ watch(
         <div v-if="wrapMode" class="wrap-label">{{ esc(disp) }}</div>
         <span v-else-if="labelIn" class="in-label">{{ esc(disp) }}</span>
         <span v-else class="out-label">{{ disp }}</span>
-        <span v-if="isDraft" class="draft-tag">DRAFT</span>
         <a
           v-if="item.jiraKey"
           class="bar-link"
@@ -858,7 +995,7 @@ watch(
                 ? 'subIn .34s cubic-bezier(.22,1,.36,1) backwards'
                 : undefined,
           }"
-          :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}||${s.title}||双击改备注名/Owner · 拖动/两端拉伸${s.key ? ' · 左上 ↗ / ⌘单击打开 Jira' : ''}${barCatchTip(s.start, s.days)}`"
+          :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}${barSprintTitle(s.start, s.days)}||${s.title}||${tooltipHintLine(s.description, subOpsHint(s))}`"
           @pointerdown="barDragStart($event, s, $event.currentTarget as HTMLElement)"
         >
           <div v-if="s.alias" class="wrap-label">{{ esc(s.alias) }}</div>
@@ -866,7 +1003,6 @@ watch(
             <span v-if="s.key" style="font-family: var(--mono); font-size: 9.5px; opacity: 0.75">{{ s.key }}</span>
             {{ s.key ? ' · ' : '' }}{{ esc(s.title) }}
           </span>
-          <span v-if="s.temp" class="draft-tag">DRAFT</span>
           <span
             v-if="s.createdBy && s.createdBy !== currentUser"
             class="creator-tag"
@@ -907,7 +1043,8 @@ watch(
         </div>
       </div>
       <div v-if="editorOpen" class="add-lane">
-        <div class="task-editor" :style="{ left: `${barLeft()}px` }">
+        <div class="task-editor" :style="{ left: `${barLeft()}px` }" @focusout="onEditorFocusOut">
+          <div class="te-row">
           <div class="te-box">
             <button
               class="te-owner"
@@ -928,6 +1065,14 @@ watch(
               @input="onEditorInput"
               @keydown="onEditorKeydown"
             />
+            <button
+              class="desc-toggle"
+              type="button"
+              :class="{ on: editorDescOpen, filled: !!editorDesc.trim() }"
+              data-tip="描述（可选）：背景 / 交付物 / 验收要点||创建 Jira 时并入 AI 生成 description；hover 任务条可见||Shift+Enter 也可展开"
+              @pointerdown.prevent
+              @click="toggleEditorDesc"
+            ><span class="dot"></span>≡ 描述</button>
             <div class="owner-pop" :class="{ show: editorPopOpen }">
               <div class="owner-list">
                 <template v-if="editorPopList.length">
@@ -949,6 +1094,16 @@ watch(
             </div>
           </div>
           <span class="te-hint">Enter 创建 · Esc 取消</span>
+          </div>
+          <textarea
+            v-if="editorDescOpen"
+            class="desc-input te-desc"
+            :value="editorDesc"
+            :maxlength="DESCRIPTION_MAX_CHARS"
+            placeholder="描述（可选）：背景 / 交付物 / 验收要点。Enter 创建，Shift+Enter 换行"
+            @input="onDescInput('editor', $event)"
+            @keydown="onDescKeydown($event, submitSub)"
+          />
         </div>
       </div>
       <div v-else-if="editable" class="add-lane">
@@ -978,7 +1133,9 @@ watch(
       class="alias-editor"
       :style="aliasStyle"
       @pointerdown.stop
+      @focusout="onAliasFocusOut"
     >
+      <div class="ae-row">
       <button
         v-if="aliasTarget.sub"
         class="te-owner ae-owner"
@@ -992,12 +1149,39 @@ watch(
       />
       <input
         v-model="aliasValue"
-        placeholder="输入备注名（显示名），留空恢复原名"
-        @keydown.enter="saveAlias"
-        @keydown.esc="cancelAlias"
+        :placeholder="
+          aliasEditingTitle
+            ? '输入任务名（创建 Jira 时使用）'
+            : '输入备注名（显示名），留空恢复原名'
+        "
+        @keydown="onAliasTitleKeydown"
       />
-      <button class="ae-ai" type="button" @click="suggestAlias">✦ AI 缩写</button>
+      <button
+        v-if="aliasEditingTitle"
+        class="desc-toggle"
+        type="button"
+        :class="{ on: aliasDescOpen, filled: !!aliasDesc.trim() }"
+        data-tip="描述（可选）||创建 Jira 时与父 Epic 描述一起交给 AI 综合生成最终 description；hover 任务条可见"
+        @pointerdown.prevent
+        @click="toggleAliasDesc"
+      ><span class="dot"></span>≡ 描述</button>
+      <button
+        v-if="!aliasEditingTitle"
+        class="ae-ai"
+        type="button"
+        @click="suggestAlias"
+      >✦ AI 缩写</button>
       <span class="ae-hint">Enter 保存 · Esc 取消</span>
+      </div>
+      <textarea
+        v-if="aliasEditingTitle && aliasDescOpen"
+        class="desc-input"
+        :value="aliasDesc"
+        :maxlength="DESCRIPTION_MAX_CHARS"
+        placeholder="描述（可选）：背景 / 交付物 / 验收要点。Enter 保存，Shift+Enter 换行"
+        @input="onDescInput('alias', $event)"
+        @keydown="onDescKeydown($event, saveAlias)"
+      />
     </div>
   </div>
 </template>

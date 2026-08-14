@@ -77,6 +77,8 @@ import { recallRelevanceRoutes } from './routes/recallRelevance.js';
 import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js';
 import { usageRoutes } from './routes/usage.js';
 import { memoryClaimRoutes } from './routes/memoryClaims.js';
+import { userKeyRoutes } from './routes/userKeys.js';
+import { contextPackRoutes } from './routes/contextPack.js';
 import { mcpHttpRoutes } from './routes/mcp.js';
 import { a2aRoutes } from './routes/a2a.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
@@ -90,6 +92,7 @@ import {
   normalizeRoutePath,
 } from './analytics/capabilityMap.js';
 import { enterUsageContext } from './analytics/usageContext.js';
+import { isSqliteCorruptError } from './utils/sqliteErrors.js';
 
 // ---------------------------------------------------------------------------
 // App builder (exported for testing)
@@ -133,11 +136,49 @@ export async function buildApp(
   });
   app.decorate('userContextManager', userContextManager);
 
+  app.setErrorHandler((error, request, reply) => {
+    if (isSqliteCorruptError(error) && request.userId) {
+      try {
+        userContextManager.resetContext(request.userId);
+        request.log.error(
+          { err: error, userId: request.userId },
+          'sqlite corrupt; user context reset so the next request reopens the database',
+        );
+      } catch (resetError) {
+        request.log.warn(
+          { err: resetError, userId: request.userId },
+          'sqlite corrupt; failed to reset user context',
+        );
+      }
+    }
+    reply.send(error);
+  });
+
   // ---- Plugins ----
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const corsOrigin =
+    allowedOrigins.length === 0
+      ? false
+      : allowedOrigins.includes('*')
+        ? true
+        : allowedOrigins;
   await app.register(cors, {
-    origin: true, // 允许所有跨域来源（反射请求的 Origin）
+    // Empty ALLOWED_ORIGINS → deny browser CORS (extension SW / chrome-extension
+    // pages do not need CORS). Explicit list allows only those origins.
+    // ALLOWED_ORIGINS=* reflects any Origin (legacy / emergency).
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-User-Id'],
+    allowedHeaders: [
+      'Content-Type',
+      'Accept',
+      'Authorization',
+      'X-User-Id',
+      'X-Personal-AI-Language',
+      'Accept-Language',
+    ],
     exposedHeaders: [
       'Content-Disposition',
       'X-Personal-AI-Backup-User-Id',
@@ -308,6 +349,8 @@ export async function buildApp(
       await instance.register(evidenceWatchContractRoutes);
       await instance.register(usageRoutes);
       await instance.register(memoryClaimRoutes);
+      await instance.register(userKeyRoutes);
+      await instance.register(contextPackRoutes);
     },
     { prefix: '/api/v1' },
   );

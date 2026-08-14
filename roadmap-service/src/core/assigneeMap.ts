@@ -97,3 +97,76 @@ export function migrateAssigneeMapKey(
   delete next[from];
   return next;
 }
+
+/**
+ * Merge two identities in the assignee map: canonical key gets the full name,
+ * and the short-name key is kept as an alias so lingering actorName / refs still resolve.
+ */
+export function mergeAssigneeMapIdentities(
+  map: Record<string, string>,
+  fromName: string,
+  toName: string,
+): Record<string, string> {
+  const from = fromName.trim().toLowerCase();
+  const canonical = toName.trim();
+  const to = canonical.toLowerCase();
+  if (!from || !to || from === to) return map;
+  const next = { ...map };
+  next[to] = canonical;
+  next[from] = canonical;
+  return next;
+}
+
+/** True when a display/system name looks like Jira Firstname Lastname (≥2 words). */
+export function looksFullName(name: string | null | undefined): boolean {
+  return String(name || '').trim().split(/\s+/).filter(Boolean).length >= 2;
+}
+
+export function mapGet(
+  map: Record<string, string> | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  return map?.[key] || null;
+}
+
+export function effectiveFullName(
+  map: Record<string, string> | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  return mapGet(map, name) || (looksFullName(name) ? String(name).trim() : null);
+}
+
+/**
+ * Refresh direction: Jira assignee display name vs local owner.
+ * Same person (mapped full name, alias key, or exact match) → do not rewrite owner.
+ */
+export function ownerMatchesAssignee(
+  map: Record<string, string> | null | undefined,
+  owner: string | null | undefined,
+  assigneeDisplay: string | null | undefined,
+): boolean {
+  const assignee = String(assigneeDisplay || '').trim();
+  const own = String(owner || '').trim();
+  if (!assignee || !own) return false;
+  if (own.toLowerCase() === assignee.toLowerCase()) return true;
+  const ownerFull = effectiveFullName(map, own);
+  if (ownerFull && ownerFull.toLowerCase() === assignee.toLowerCase()) return true;
+  for (const [k, v] of Object.entries(map || {})) {
+    if (v.toLowerCase() === assignee.toLowerCase() && k === own.toLowerCase()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function clipDescription(raw: unknown, max = 2000): string | null {
+  const text = String(raw ?? '').replace(/\r\n/g, '\n').trim();
+  if (!text) return null;
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+export function daysBetweenIso(start: string, end: string): number {
+  return Math.max(1, diffDaysIso(start, end) + 1);
+}

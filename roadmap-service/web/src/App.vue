@@ -15,6 +15,7 @@ import CleanupModal from './components/modals/CleanupModal.vue';
 import AiCreateModal from './components/modals/AiCreateModal.vue';
 import AssigneeMapModal from './components/modals/AssigneeMapModal.vue';
 import NameGateModal from './components/modals/NameGateModal.vue';
+import ExtensionGateModal from './components/modals/ExtensionGateModal.vue';
 
 const state = provideRoadmapState();
 </script>
@@ -45,6 +46,7 @@ const state = provideRoadmapState();
     <AiCreateModal />
     <AssigneeMapModal />
     <NameGateModal />
+    <ExtensionGateModal />
   </div>
 </template>
 

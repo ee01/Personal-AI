@@ -16,7 +16,7 @@ import {
 } from '../core/TeamService.js';
 import { getEventBus } from '../core/EventBus.js';
 import { config } from '../config.js';
-import { queueTargetSync } from '../core/TargetSync.js';
+import { queueTargetSync, queueSubTargetSync } from '../core/TargetSync.js';
 import type { ActorContext, ActorSource } from '../types.js';
 
 function readActor(request: FastifyRequest): ActorContext {
@@ -212,13 +212,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       }
       const body = (request.body || {}) as Record<string, unknown>;
       const itemKey = String(body.itemKey || '').trim();
-      if (!itemKey) {
+      const subId = String(body.subId || '').trim();
+      if (!itemKey && !subId) {
         return reply.code(400).send({ error: 'itemKey_required' });
       }
       // mode=confirm: extension already wrote Jira; mirror DB + activity.
       if (body.mode === 'confirm') {
         const result = confirmTargetSync(request.params.teamId, access.actor, {
-          itemKey,
+          itemKey: itemKey || undefined,
+          subId: subId || undefined,
           start: String(body.start || ''),
           end: String(body.end || ''),
           jiraKey: body.jiraKey ? String(body.jiraKey) : undefined,
@@ -229,11 +231,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         return { ok: true, via: 'extension', snapshot: result.snapshot };
       }
       // Fallback: queue server JIRA_PAT sync (silent skip if not configured).
-      const queued = queueTargetSync(
-        request.params.teamId,
-        itemKey,
-        access.actor,
-      );
+      const queued = subId
+        ? queueSubTargetSync(request.params.teamId, subId, access.actor)
+        : queueTargetSync(request.params.teamId, itemKey, access.actor);
       return { ok: true, ...queued, via: 'server' };
     },
   );

@@ -226,6 +226,8 @@ export interface JiraCreateFieldsInput {
   fixVersion?: string | null;
   /** Jira Server/DC username (`firstname.lastname`); omitted when unknown. */
   assignee?: string | null;
+  /** Plain-text description; omitted when empty. System field — sent even without createmeta. */
+  description?: string | null;
   /** Optional mutable collector for non-fatal field warnings. */
   warnings?: string[];
   link?: ChildLink & { parentKey: string };
@@ -301,6 +303,11 @@ export function buildJiraCreateFields(
   if (assignee) {
     // Server/DC accepts name; Cloud needs accountId — leave unset when unknown.
     fields.assignee = { name: assignee };
+  }
+
+  const description = String(input.description || '').trim();
+  if (description && (!typeMeta || supportsField(typeMeta, 'description'))) {
+    fields.description = description;
   }
 
   return fields;

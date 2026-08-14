@@ -4,6 +4,8 @@ venv
 .DS_Store
 .env
 .env.development
+.env.bak
+.env.*.bak
 .vscode/symbols.json
 .claude/
 .eval-runs/

@@ -88,6 +88,9 @@ interface CountRow {
   count: number;
 }
 
+/** Extra slack on top of an action's own `params.timeoutMs` before reclaiming it. */
+const STALE_RUNNING_OWN_TIMEOUT_GRACE_SECONDS = 120;
+
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
   try {
@@ -634,7 +637,7 @@ export class ActionRepository {
     const errorMessage =
       options.errorMessage ??
       `Action execution exceeded stale running timeout (${staleAfterSeconds}s). External side effects may have completed; review before retrying.`;
-    const rows = this.db
+    const candidates = this.db
       .prepare(
         `SELECT *
          FROM proposed_actions
@@ -645,6 +648,21 @@ export class ActionRepository {
          ORDER BY started_at ASC`,
       )
       .all(options.actionType, options.actionType, cutoff) as ActionRow[];
+
+    // A caller may ask for a longer wait than the global OpenClaw timeout
+    // (e.g. Roadmap batch create passes timeoutMs=30min). Reclaiming such a run
+    // at the global cutoff would dead-letter work that is still legitimately
+    // in flight, so each action's own timeoutMs raises its personal cutoff.
+    const rows = candidates.filter((row) => {
+      const params = safeJsonParse<Record<string, unknown>>(row.params_json, {});
+      const ownTimeoutMs = Number(params.timeoutMs);
+      if (!Number.isFinite(ownTimeoutMs) || ownTimeoutMs <= 0) return true;
+      const effective = Math.max(
+        staleAfterSeconds,
+        Math.ceil(ownTimeoutMs / 1000) + STALE_RUNNING_OWN_TIMEOUT_GRACE_SECONDS,
+      );
+      return (row.started_at ?? 0) <= currentTime - effective;
+    });
 
     if (rows.length === 0) return [];
 

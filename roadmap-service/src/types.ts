@@ -33,6 +33,7 @@ export type IntentOp =
   | 'move'
   | 'resize'
   | 'set_alias'
+  | 'update_item'
   | 'expand'
   | 'collapse'
   | 'add_item'
@@ -53,7 +54,9 @@ export type IntentOp =
   | 'unlock'
   | 'set_quarters'
   | 'update_create_jira_prompt'
-  | 'update_assignee_map';
+  | 'update_assignee_map'
+  | 'merge_people'
+  | 'refresh_from_jira';
 
 export type MarkerKind = 'phase' | 'dep';
 export type PhaseKind = 'design' | 'stage' | 'production' | 'custom';
@@ -84,6 +87,7 @@ export interface TeamRow {
   release_sheet_json: string;
   create_jira_prompt: string;
   assignee_map_json: string;
+  jira_refreshed_at: number | null;
   version: number;
   created_by: string;
   created_at: number;
@@ -125,6 +129,7 @@ export interface ItemRow {
   source: ItemSource;
   jira_key: string | null;
   project_key: string | null;
+  description: string | null;
   version: number;
   created_at: number;
   updated_at: number;
@@ -144,6 +149,7 @@ export interface SubRow {
   /** 1 = hidden from Gantt/Resource after cleanup; restored when Epic is re-scheduled. */
   cleared: number;
   created_by: string;
+  description: string | null;
   version: number;
   created_at: number;
   updated_at: number;
@@ -200,6 +206,8 @@ export interface TeamSnapshot {
     assigneeMap?: Record<string, string>;
     /** Browse base from server env (no trailing slash); may be empty. */
     jiraBaseUrl?: string;
+    /** Epoch ms of last successful `refresh_from_jira`; used for 10-minute TTL. */
+    jiraRefreshedAt?: number | null;
   };
   items: Array<{
     key: string;
@@ -220,6 +228,8 @@ export interface TeamSnapshot {
     lane: number;
     expanded: boolean;
     version: number;
+    /** Draft user text, or Jira description mirror for non-draft rows. */
+    description?: string | null;
     subs: Array<{
       id: string;
       key?: string | null;
@@ -232,6 +242,7 @@ export interface TeamSnapshot {
       cleared?: boolean;
       createdBy: string;
       version: number;
+      description?: string | null;
     }>;
     markers: Array<{
       id: string;

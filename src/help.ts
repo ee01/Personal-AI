@@ -9,9 +9,33 @@ import {
   type UiLanguage,
   type UiPreferences,
 } from './i18n';
+import { DEFAULT_MEMORY_SERVICE_BASE_URL } from './memoryServiceConfig';
+import { DEVICE_KEY_STORAGE, USER_API_KEY_STORAGE } from './deviceApiKey';
 import { formatLocalScheduleDateTime } from './scheduled-messages/scheduleDateTime';
 
 type HelpLang = 'zh' | 'en';
+
+type MemoryConnection = {
+  apiBase: string;
+  origin: string;
+  /** Tier-1 service key from Options. Used to call the service, never shown. */
+  apiKey: string;
+  userId: string;
+  hasApiKey: boolean;
+  fromStorage: boolean;
+  /** Tier-2 personal key: bound to this user, safe to paste into external tools. */
+  userKey: StoredUserApiKey | null;
+};
+
+type StoredUserApiKey = {
+  userId: string;
+  id: string;
+  token: string;
+  keyPrefix: string;
+  createdAt: number;
+};
+
+const USER_API_KEY_STORAGE_KEY = USER_API_KEY_STORAGE;
 
 const HELP_LANG_OVERRIDE_KEY = 'helpCenterLangOverride';
 const HELP_SHARE_SELECTED_KEY = 'helpCenterShareSelected';
@@ -21,9 +45,230 @@ const WIKI =
 const STORE =
   'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel';
 
+function normalizeApiBase(raw: string): string {
+  return raw.trim().replace(/\/+$/, '') || DEFAULT_MEMORY_SERVICE_BASE_URL;
+}
+
+function serviceOriginFromApiBase(apiBase: string): string {
+  try {
+    const url = new URL(apiBase);
+    let path = url.pathname.replace(/\/+$/, '');
+    if (path.endsWith('/api/v1')) path = path.slice(0, -'/api/v1'.length);
+    if (path.endsWith('/api')) path = path.slice(0, -'/api'.length);
+    return `${url.origin}${path}` || url.origin;
+  } catch {
+    return apiBase.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
+  }
+}
+
+function shellQuote(value: string): string {
+  if (!value) return "''";
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function readStoredUserKey(
+  raw: unknown,
+  userId: string,
+): StoredUserApiKey | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const candidate = raw as Partial<StoredUserApiKey>;
+  if (!candidate.token || !candidate.id) return null;
+  // A key issued for another account must never be surfaced here.
+  if (candidate.userId !== userId) return null;
+  return {
+    userId,
+    id: candidate.id,
+    token: candidate.token,
+    keyPrefix: candidate.keyPrefix || candidate.token.slice(0, 18),
+    createdAt: candidate.createdAt || 0,
+  };
+}
+
+async function loadMemoryConnection(): Promise<MemoryConnection> {
+  const fallback: MemoryConnection = {
+    apiBase: normalizeApiBase(DEFAULT_MEMORY_SERVICE_BASE_URL),
+    origin: serviceOriginFromApiBase(DEFAULT_MEMORY_SERVICE_BASE_URL),
+    apiKey: '',
+    userId: 'default',
+    hasApiKey: false,
+    fromStorage: false,
+    userKey: null,
+  };
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return fallback;
+    const result = await chrome.storage.local.get([
+      'envConfig',
+      'userinfo',
+      USER_API_KEY_STORAGE_KEY,
+      DEVICE_KEY_STORAGE,
+    ]);
+    const env = (result.envConfig || {}) as Record<string, unknown>;
+    const userinfo = (result.userinfo || {}) as {
+      username?: string;
+      userEmail?: string;
+      email?: string;
+    };
+    const apiBase = normalizeApiBase(
+      typeof env.MEMORY_SERVICE_BASE_URL === 'string' &&
+        env.MEMORY_SERVICE_BASE_URL.trim()
+        ? env.MEMORY_SERVICE_BASE_URL
+        : DEFAULT_MEMORY_SERVICE_BASE_URL,
+    );
+    const apiKey =
+      (typeof env.MEMORY_SERVICE_BOOTSTRAP_KEY === 'string'
+        ? env.MEMORY_SERVICE_BOOTSTRAP_KEY.trim()
+        : '') ||
+      (typeof env.MEMORY_SERVICE_API_KEY === 'string'
+        ? env.MEMORY_SERVICE_API_KEY.trim()
+        : '');
+    const userCandidates = [
+      userinfo.username,
+      userinfo.userEmail?.split('@')[0],
+      userinfo.email?.split('@')[0],
+    ];
+    let userId = 'default';
+    for (const candidate of userCandidates) {
+      const normalized = candidate?.trim();
+      if (normalized && /^[a-zA-Z0-9._-]+$/.test(normalized)) {
+        userId = normalized;
+        break;
+      }
+    }
+    return {
+      apiBase,
+      origin: serviceOriginFromApiBase(apiBase),
+      apiKey,
+      userId,
+      hasApiKey: Boolean(apiKey),
+      fromStorage: Boolean(result.envConfig),
+      userKey:
+        readStoredUserKey(result[USER_API_KEY_STORAGE_KEY], userId) ||
+        readStoredUserKey(result[DEVICE_KEY_STORAGE], userId),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function serviceHeaders(conn: MemoryConnection): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-User-Id': conn.userId,
+  };
+  if (conn.apiKey) headers.Authorization = `Bearer ${conn.apiKey}`;
+  return headers;
+}
+
+async function fetchUserKeyMetadata(
+  conn: MemoryConnection,
+): Promise<{ id: string; keyPrefix: string; createdAt: number } | null> {
+  const res = await fetch(`${conn.apiBase}/users/me/keys`, {
+    headers: serviceHeaders(conn),
+  });
+  if (!res.ok) throw new Error(`list_failed_${res.status}`);
+  const body = (await res.json()) as {
+    keys?: Array<{ id: string; keyPrefix: string; createdAt: number }>;
+  };
+  const keys = Array.isArray(body.keys) ? body.keys : [];
+  // Prefer the key already stored on this device; otherwise the newest.
+  if (conn.userKey?.id) {
+    const match = keys.find((k) => k.id === conn.userKey!.id);
+    if (match) return match;
+  }
+  return keys[0] ?? null;
+}
+
+async function issueUserKey(conn: MemoryConnection): Promise<StoredUserApiKey> {
+  const res = await fetch(`${conn.apiBase}/users/me/keys`, {
+    method: 'POST',
+    headers: serviceHeaders(conn),
+    body: JSON.stringify({ label: 'Context Pack' }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(detail || `issue_failed_${res.status}`);
+  }
+  const body = (await res.json()) as {
+    token: string;
+    key: { id: string; keyPrefix: string; createdAt: number };
+  };
+  const stored: StoredUserApiKey = {
+    userId: conn.userId,
+    id: body.key.id,
+    token: body.token,
+    keyPrefix: body.key.keyPrefix,
+    createdAt: body.key.createdAt,
+  };
+  await chrome.storage.local.set({ [USER_API_KEY_STORAGE_KEY]: stored });
+  return stored;
+}
+
+async function revokeUserKey(conn: MemoryConnection, id: string): Promise<void> {
+  await fetch(`${conn.apiBase}/users/me/keys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: serviceHeaders(conn),
+  });
+  await chrome.storage.local.remove(USER_API_KEY_STORAGE_KEY);
+}
+
+async function fetchContextPack(
+  conn: MemoryConnection,
+  scope: string,
+  query?: string,
+): Promise<{ prompt: string; meta: string; ok: boolean; detail?: string }> {
+  const params = new URLSearchParams({ scope });
+  if (scope === 'custom' && query) params.set('q', query);
+  // Prefer the personal key (binds the user). Fall back to service key + X-User-Id.
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (conn.userKey?.token) {
+    headers.Authorization = `Bearer ${conn.userKey.token}`;
+  } else {
+    Object.assign(headers, serviceHeaders(conn));
+  }
+  try {
+    const res = await fetch(`${conn.apiBase}/context-pack?${params.toString()}`, {
+      headers,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      return {
+        prompt: '',
+        meta: '',
+        ok: false,
+        detail: detail || `HTTP ${res.status}`,
+      };
+    }
+    const body = (await res.json()) as {
+      prompt?: string;
+      scope?: string;
+      redactionReceipt?: { applied?: boolean; note?: string };
+      experimental?: boolean;
+    };
+    const receipt = body.redactionReceipt?.applied
+      ? ' · redacted'
+      : body.redactionReceipt?.note
+        ? ''
+        : '';
+    const experimental = body.experimental ? ' · experimental' : '';
+    return {
+      prompt: body.prompt || '',
+      meta: `live · scope=${body.scope || scope}${receipt}${experimental}`,
+      ok: true,
+    };
+  } catch (err) {
+    return {
+      prompt: '',
+      meta: '',
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 const PRESETS: Record<
   string,
-  { zh: string; en: string; meta: { zh: string; en: string } }
+  { zh: string; en: string; meta: { zh: string; en: string }; scope: string }
 > = {
   identity: {
     zh: '# Persona Context — 拉取于今天 09:42\n你正在协助的用户具备以下身份与偏好:\n- 身份:RingCentral 敏捷教练 / Scrum Master,负责跨团队协同\n- 沟通偏好:中文为主、结论先行;代码示例用 TypeScript\n- 当前重点:Personal AI 记忆平台、Sprint 排期与依赖跟进\n- 边界:不要代发消息或创建外部任务,先给预览',
@@ -32,6 +277,7 @@ const PRESETS: Record<
       zh: '来源:用户画像(身份投影,已脱敏) · scope=identity_preferences',
       en: 'Source: user profile (identity projection, redacted) · scope=identity_preferences',
     },
+    scope: 'identity_preferences',
   },
   recent: {
     zh: '# Recent Focus — 滚动更新\n- 帮助中心页面设计中,等待 review\n- 商家认证账号审核:等平台结果,Rebecca 跟进中\n- 下个 Sprint 评审材料:周四前需要 timeline 截图\n- Memory Service v2 迁移:context-pack 单接口方案已定稿',
@@ -40,6 +286,7 @@ const PRESETS: Record<
       zh: '来源:Recent Focus 滚动上下文 · scope=recent_focus',
       en: 'Source: rolling recent-focus context · scope=recent_focus',
     },
+    scope: 'recent_focus',
   },
   today: {
     zh: '# Today — 今日安排与待闭环\n- 10:00 敏捷教练周会:待闭环——认证材料截图是否同步\n- 14:00 1:1 with Stephen:上次遗留——认证流程结论\n- 今日 Top:评审材料初稿、回复平台审核邮件',
@@ -48,6 +295,7 @@ const PRESETS: Record<
       zh: '来源:Today Pilot 当日简报 · scope=today',
       en: 'Source: Today Pilot daily brief · scope=today',
     },
+    scope: 'today',
   },
   projects: {
     zh: '# Focus Project Updates — 重点项目动态\n- [Personal AI] 帮助中心进入 review;v9.0.0 已发布\n- [商家认证] 平台审核中,预计今天上午出结果\n- [Roadmap Q3] 两个 milestone 已回填 Jira key',
@@ -56,6 +304,7 @@ const PRESETS: Record<
       zh: '来源:watched projects 快照 · scope=projects',
       en: 'Source: watched-projects snapshot · scope=projects',
     },
+    scope: 'projects',
   },
   custom: {
     zh: '(输入自定义主题后点「复制 Prompt」——演示环境返回模拟结果)\n\n# Personal AI 项目的近期动态\n- 最近发布:v9.0.0(Personal Roadmap 协作规划)\n- 进行中:扩展帮助中心(三板块引导)\n- 近期讨论:记忆外接命名与预设/自定义混合方案',
@@ -64,15 +313,199 @@ const PRESETS: Record<
       zh: '来源:记忆检索(实验性) · scope=custom&q=…',
       en: 'Source: memory retrieval (experimental) · scope=custom&q=…',
     },
+    scope: 'custom',
+  },
+};
+
+type DemoPreview = {
+  label: { zh: string; en: string };
+  body: { zh: string; en: string };
+  meta: { zh: string; en: string };
+};
+
+const MCP_PREVIEWS: Record<string, DemoPreview> = {
+  memory_context_brief: {
+    label: { zh: 'memory_context_brief', en: 'memory_context_brief' },
+    body: {
+      zh: '{\n  "brief": "Personal AI: 帮助中心已支持 REST/MCP/A2A 三路外接;MCP 工具含 memory_search / memory_ask / memory_context_brief…;写操作走完整 salience 管线。",\n  "evidenceIds": ["chunk:help-1", "message:glip-8821"],\n  "tokenEstimate": 420\n}',
+      en: '{\n  "brief": "Personal AI: Help center now covers REST/MCP/A2A wiring; MCP tools include memory_search / memory_ask / memory_context_brief…; writes go through the full salience pipeline.",\n  "evidenceIds": ["chunk:help-1", "message:glip-8821"],\n  "tokenEstimate": 420\n}',
+    },
+    meta: {
+      zh: '演示 · tools/call memory_context_brief · 只读摘要',
+      en: 'Demo · tools/call memory_context_brief · read-only brief',
+    },
+  },
+  memory_profile_hint: {
+    label: { zh: 'memory_profile_hint', en: 'memory_profile_hint' },
+    body: {
+      zh: '{\n  "aspect": "沟通风格",\n  "insight": "偏好中文、结论先行;代码示例倾向 TypeScript;对外回复前希望先看预览。",\n  "confidence": 0.82\n}',
+      en: '{\n  "aspect": "communication style",\n  "insight": "Prefers Chinese, conclusion-first; TypeScript for code samples; wants a preview before outbound replies.",\n  "confidence": 0.82\n}',
+    },
+    meta: {
+      zh: '演示 · tools/call memory_profile_hint · 画像洞察(非原文行)',
+      en: 'Demo · tools/call memory_profile_hint · profile insight (not raw rows)',
+    },
+  },
+  memory_search: {
+    label: { zh: 'memory_search', en: 'memory_search' },
+    body: {
+      zh: '{\n  "items": [\n    {\n      "evidenceId": "message:glip-8821",\n      "summary": "定稿帮助页记忆外接支持 REST / MCP / A2A 切换展示",\n      "channel": "Glip · #personal-ai",\n      "timeCredibility": "day"\n    }\n  ],\n  "receipt": { "channelsCovered": ["glip"], "redacted": true }\n}',
+      en: '{\n  "items": [\n    {\n      "evidenceId": "message:glip-8821",\n      "summary": "Help Context Pack section will switch REST / MCP / A2A",\n      "channel": "Glip · #personal-ai",\n      "timeCredibility": "day"\n    }\n  ],\n  "receipt": { "channelsCovered": ["glip"], "redacted": true }\n}',
+    },
+    meta: {
+      zh: '演示 · tools/call memory_search · 稳定 evidenceId + 脱敏摘要',
+      en: 'Demo · tools/call memory_search · stable evidenceId + redacted summary',
+    },
+  },
+  memory_ask: {
+    label: { zh: 'memory_ask', en: 'memory_ask' },
+    body: {
+      zh: '{\n  "answer": "记忆外接帮助条目用协议 Tab 区分 REST Prompt、MCP 工具与 A2A Agent Card;MCP/A2A 在页内只演示返回形态,不发起真连接。",\n  "evidenceIds": ["chunk:help-1"],\n  "receipt": { "mode": "qa", "redacted": true }\n}',
+      en: '{\n  "answer": "The Context Pack help card uses protocol tabs for REST prompts, MCP tools, and the A2A Agent Card; MCP/A2A demos are shape-only and do not open live connections.",\n  "evidenceIds": ["chunk:help-1"],\n  "receipt": { "mode": "qa", "redacted": true }\n}',
+    },
+    meta: {
+      zh: '演示 · tools/call memory_ask · 带来源回执的问答',
+      en: 'Demo · tools/call memory_ask · Q&A with evidence receipts',
+    },
+  },
+};
+
+const A2A_PREVIEWS: Record<string, DemoPreview> = {
+  agent_card: {
+    label: { zh: 'Agent Card', en: 'Agent Card' },
+    body: {
+      zh: '{\n  "name": "Personal AI Memory Agent",\n  "url": "{memory-service}/a2a",\n  "preferredTransport": "JSONRPC",\n  "skills": [\n    { "id": "memory-recall", "name": "Memory recall" },\n    { "id": "agent-task", "name": "Delegated agent task" }\n  ],\n  "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer" } }\n}',
+      en: '{\n  "name": "Personal AI Memory Agent",\n  "url": "{memory-service}/a2a",\n  "preferredTransport": "JSONRPC",\n  "skills": [\n    { "id": "memory-recall", "name": "Memory recall" },\n    { "id": "agent-task", "name": "Delegated agent task" }\n  ],\n  "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer" } }\n}',
+    },
+    meta: {
+      zh: '演示 · GET /.well-known/agent-card.json · 发现文档',
+      en: 'Demo · GET /.well-known/agent-card.json · discovery',
+    },
+  },
+  task_receipt: {
+    label: { zh: '任务回执', en: 'Task receipt' },
+    body: {
+      zh: '{\n  "jsonrpc": "2.0",\n  "id": 1,\n  "result": {\n    "id": "act_demo_01",\n    "contextId": "ctx_demo",\n    "status": {\n      "state": "completed",\n      "message": {\n        "role": "agent",\n        "parts": [{ "type": "text", "text": "上周与 Nova 定了单接口 context-pack + scope 参数。" }]\n      }\n    }\n  }\n}',
+      en: '{\n  "jsonrpc": "2.0",\n  "id": 1,\n  "result": {\n    "id": "act_demo_01",\n    "contextId": "ctx_demo",\n    "status": {\n      "state": "completed",\n      "message": {\n        "role": "agent",\n        "parts": [{ "type": "text", "text": "Last week you settled on a single context-pack endpoint with a scope parameter for Nova." }]\n      }\n    }\n  }\n}',
+    },
+    meta: {
+      zh: '演示 · message/send 完成后的 JSON-RPC 回执 · 非真入队',
+      en: 'Demo · JSON-RPC receipt after message/send · not a real enqueue',
+    },
+  },
+};
+
+type TakeawaySnippet = {
+  label: { zh: string; en: string };
+  build: (conn: MemoryConnection) => string;
+};
+
+const USER_KEY_PLACEHOLDER = '<PERSONAL_API_KEY>';
+
+/**
+ * Snippets always hand out the personal key, never the service key from
+ * Options — pasting the latter into a third-party tool would grant it access
+ * to every user's memory.
+ */
+function takeawayAuth(conn: MemoryConnection): string {
+  return conn.userKey?.token || USER_KEY_PLACEHOLDER;
+}
+
+const MCP_TAKEAWAYS: Record<string, TakeawaySnippet> = {
+  cursor_http: {
+    label: { zh: 'Cursor HTTP', en: 'Cursor HTTP' },
+    build: (conn) =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            'personal-memory': {
+              url: `${conn.origin}/mcp`,
+              headers: {
+                Authorization: `Bearer ${takeawayAuth(conn)}`,
+                'X-User-Id': conn.userId,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+  },
+  claude_stdio: {
+    label: { zh: 'Claude stdio', en: 'Claude stdio' },
+    build: (conn) => {
+      const parts = [
+        'claude mcp add personal-memory -- node memory-service/mcp-server.mjs',
+        `  --user-id ${shellQuote(conn.userId)}`,
+        `  --base-url ${shellQuote(conn.origin)}`,
+        '  --scopes work',
+      ];
+      parts.push(`  --api-key ${shellQuote(takeawayAuth(conn))}`);
+      return parts.join(' \\\n');
+    },
+  },
+  curl_list: {
+    label: { zh: 'curl 发现', en: 'curl discover' },
+    build: (conn) => {
+      const auth = takeawayAuth(conn);
+      return [
+        `curl -sS ${shellQuote(`${conn.origin}/mcp`)} \\`,
+        `  -H ${shellQuote(`Authorization: Bearer ${auth}`)} \\`,
+        `  -H ${shellQuote(`X-User-Id: ${conn.userId}`)}`,
+      ].join('\n');
+    },
+  },
+};
+
+const A2A_TAKEAWAYS: Record<string, TakeawaySnippet> = {
+  agent_card: {
+    label: { zh: 'Agent Card', en: 'Agent Card' },
+    build: (conn) => {
+      const auth = takeawayAuth(conn);
+      return [
+        `curl -sS ${shellQuote(`${conn.origin}/.well-known/agent-card.json`)} \\`,
+        `  -H ${shellQuote(`Authorization: Bearer ${auth}`)} \\`,
+        `  -H ${shellQuote(`X-User-Id: ${conn.userId}`)}`,
+      ].join('\n');
+    },
+  },
+  message_send: {
+    label: { zh: 'message/send', en: 'message/send' },
+    build: (conn) => {
+      const auth = takeawayAuth(conn);
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'message/send',
+        params: {
+          message: {
+            role: 'user',
+            parts: [
+              {
+                type: 'text',
+                text: 'What did I decide about Nova last week?',
+              },
+            ],
+          },
+        },
+      });
+      return [
+        `curl -sS -X POST ${shellQuote(`${conn.origin}/a2a`)} \\`,
+        `  -H ${shellQuote('Content-Type: application/json')} \\`,
+        `  -H ${shellQuote(`Authorization: Bearer ${auth}`)} \\`,
+        `  -H ${shellQuote(`X-User-Id: ${conn.userId}`)} \\`,
+        `  --data ${shellQuote(body)}`,
+      ].join('\n');
+    },
   },
 };
 
 const REC: Record<string, { zh: [string, string]; en: [string, string] }> = {
   'context-pack': {
-    zh: ['记忆外接', '一个接口把你的身份偏好输出成 Prompt,任何 AI 都能用'],
+    zh: ['记忆外接', 'REST / MCP / A2A 三路把记忆接到外部 AI'],
     en: [
       'Context Pack',
-      'one endpoint turns your identity and preferences into a prompt any AI can use',
+      'wire memory out via REST, MCP, or A2A',
     ],
   },
   'ask-ai': { zh: ['记忆查询', ''], en: ['Ask', ''] },
@@ -232,6 +665,19 @@ function initHelpPage(): void {
 
   const setLang = (lang: HelpLang) => {
     applyLang(lang, { persistOverride: true });
+    syncLangResetVisibility();
+  };
+
+  const clearLangOverride = () => {
+    pageOverride = null;
+    writeLocalOverride(null);
+    applyLang(optionsLang);
+    syncLangResetVisibility();
+  };
+
+  const syncLangResetVisibility = () => {
+    const reset = document.getElementById('langReset');
+    if (reset) reset.hidden = !pageOverride;
   };
 
   (window as unknown as { setLang: (l: HelpLang) => void }).setLang = setLang;
@@ -242,6 +688,10 @@ function initHelpPage(): void {
   document.querySelectorAll('.lang-en').forEach((btn) => {
     btn.addEventListener('click', () => setLang('en'));
   });
+  document.getElementById('langReset')?.addEventListener('click', () => {
+    clearLangOverride();
+  });
+  syncLangResetVisibility();
 
   // Apply sync override immediately to avoid wrong-language flash
   if (pageOverride) {
@@ -255,9 +705,229 @@ function initHelpPage(): void {
   const customHint = document.getElementById('customHint');
   const promptText = document.getElementById('promptText');
   const promptMeta = document.getElementById('promptMeta');
+  const restTakeawayText = document.getElementById('restTakeawayText');
+  const restConnHint = document.getElementById('restConnHint');
+  const mcpTakeawayText = document.getElementById('mcpTakeawayText');
+  const mcpConnHint = document.getElementById('mcpConnHint');
+  const mcpTakeawayChips = document.getElementById('mcpTakeawayChips');
+  const mcpChips = document.getElementById('mcpToolChips');
+  const mcpPreviewText = document.getElementById('mcpPreviewText');
+  const mcpPreviewMeta = document.getElementById('mcpPreviewMeta');
+  const a2aTakeawayText = document.getElementById('a2aTakeawayText');
+  const a2aConnHint = document.getElementById('a2aConnHint');
+  const a2aTakeawayChips = document.getElementById('a2aTakeawayChips');
+  const a2aChips = document.getElementById('a2aPreviewChips');
+  const a2aPreviewText = document.getElementById('a2aPreviewText');
+  const a2aPreviewMeta = document.getElementById('a2aPreviewMeta');
+
+  let memoryConn: MemoryConnection = {
+    apiBase: normalizeApiBase(DEFAULT_MEMORY_SERVICE_BASE_URL),
+    origin: serviceOriginFromApiBase(DEFAULT_MEMORY_SERVICE_BASE_URL),
+    apiKey: '',
+    userId: 'default',
+    hasApiKey: false,
+    fromStorage: false,
+    userKey: null,
+  };
+  let mcpToolKey = 'memory_context_brief';
+  let a2aPreviewKey = 'agent_card';
+  let mcpTakeawayKey = 'cursor_http';
+  let a2aTakeawayKey = 'agent_card';
+  let renderMcpPreview: () => void = () => undefined;
+  let renderA2aPreview: () => void = () => undefined;
+  let renderTakeaways: () => void = () => undefined;
+  let renderUserKeyCard: (busyMessage?: string) => void = () => undefined;
+
+  const wireChipGroup = (
+    host: HTMLElement | null,
+    keys: string[],
+    getLabel: (key: string, en: boolean) => string,
+    getActive: () => string,
+    setActive: (key: string) => void,
+    onChange: () => void,
+  ) => {
+    if (!host) return;
+    host.replaceChildren();
+    for (const key of keys) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-chip' + (getActive() === key ? ' active' : '');
+      btn.dataset.key = key;
+      btn.textContent = getLabel(key, isEn());
+      btn.addEventListener('click', () => {
+        setActive(key);
+        host.querySelectorAll('.tool-chip').forEach((node) => {
+          const el = node as HTMLButtonElement;
+          el.classList.toggle('active', el.dataset.key === key);
+        });
+        onChange();
+      });
+      host.appendChild(btn);
+    }
+  };
+
+  const refreshChipLabels = (
+    host: HTMLElement | null,
+    getLabel: (key: string, en: boolean) => string,
+  ) => {
+    if (!host) return;
+    const en = isEn();
+    host.querySelectorAll('.tool-chip').forEach((node) => {
+      const el = node as HTMLButtonElement;
+      const key = el.dataset.key || '';
+      el.textContent = getLabel(key, en);
+    });
+  };
+
+  const connHintText = (en: boolean) => {
+    if (!memoryConn.userKey) {
+      return en
+        ? `No access key yet — click "Create access key" above and the snippets will fill themselves in. Host ${memoryConn.origin} · user ${memoryConn.userId}.`
+        : `还没有外接 key——点上方「生成外接 key」后,下面的片段会自动填好。地址 ${memoryConn.origin} · 用户 ${memoryConn.userId}。`;
+    }
+    return en
+      ? `${memoryConn.origin} · user ${memoryConn.userId} · personal key included, scoped to you alone (do not forward)`
+      : `${memoryConn.origin} · 用户 ${memoryConn.userId} · 已含只属于你的个人 key(勿转发给他人)`;
+  };
+
+  const buildRestTakeaway = (): string => {
+    const preset = PRESETS[presetSel?.value || 'identity'] || PRESETS.identity;
+    const auth = takeawayAuth(memoryConn);
+    const query =
+      preset.scope === 'custom'
+        ? `scope=custom&q=${encodeURIComponent(
+            (customInput?.value || '').trim() || 'Personal AI',
+          )}`
+        : `scope=${preset.scope}`;
+    const url = `${memoryConn.apiBase}/context-pack?${query}`;
+    return [
+      `curl -sS ${shellQuote(url)} \\`,
+      `  -H ${shellQuote(`Authorization: Bearer ${auth}`)} \\`,
+      `  -H ${shellQuote(`X-User-Id: ${memoryConn.userId}`)}`,
+    ].join('\n');
+  };
+
+  renderTakeaways = () => {
+    if (restTakeawayText) restTakeawayText.textContent = buildRestTakeaway();
+    if (mcpTakeawayText) {
+      mcpTakeawayText.textContent =
+        MCP_TAKEAWAYS[mcpTakeawayKey]?.build(memoryConn) || '';
+    }
+    if (a2aTakeawayText) {
+      a2aTakeawayText.textContent =
+        A2A_TAKEAWAYS[a2aTakeawayKey]?.build(memoryConn) || '';
+    }
+    const hint = connHintText(isEn());
+    const missingKey = !memoryConn.userKey;
+    for (const node of [restConnHint, mcpConnHint, a2aConnHint]) {
+      if (!node) continue;
+      node.textContent = hint;
+      node.classList.toggle('warn', missingKey);
+    }
+    refreshChipLabels(mcpTakeawayChips, (key, en) =>
+      en
+        ? MCP_TAKEAWAYS[key]?.label.en || key
+        : MCP_TAKEAWAYS[key]?.label.zh || key,
+    );
+    refreshChipLabels(a2aTakeawayChips, (key, en) =>
+      en
+        ? A2A_TAKEAWAYS[key]?.label.en || key
+        : A2A_TAKEAWAYS[key]?.label.zh || key,
+    );
+  };
+
+  renderMcpPreview = () => {
+    if (!mcpPreviewText || !mcpPreviewMeta) return;
+    const item = MCP_PREVIEWS[mcpToolKey];
+    if (!item) return;
+    const en = isEn();
+    mcpPreviewText.textContent = en ? item.body.en : item.body.zh;
+    mcpPreviewMeta.textContent = en ? item.meta.en : item.meta.zh;
+    refreshChipLabels(mcpChips, (key, enLang) =>
+      enLang
+        ? MCP_PREVIEWS[key]?.label.en || key
+        : MCP_PREVIEWS[key]?.label.zh || key,
+    );
+  };
+
+  renderA2aPreview = () => {
+    if (!a2aPreviewText || !a2aPreviewMeta) return;
+    const item = A2A_PREVIEWS[a2aPreviewKey];
+    if (!item) return;
+    const en = isEn();
+    a2aPreviewText.textContent = (en ? item.body.en : item.body.zh).split(
+      '{memory-service}',
+    ).join(memoryConn.origin);
+    a2aPreviewMeta.textContent = en ? item.meta.en : item.meta.zh;
+    refreshChipLabels(a2aChips, (key, enLang) =>
+      enLang
+        ? A2A_PREVIEWS[key]?.label.en || key
+        : A2A_PREVIEWS[key]?.label.zh || key,
+    );
+  };
+
+  wireChipGroup(
+    mcpTakeawayChips,
+    Object.keys(MCP_TAKEAWAYS),
+    (key, en) =>
+      en
+        ? MCP_TAKEAWAYS[key]?.label.en || key
+        : MCP_TAKEAWAYS[key]?.label.zh || key,
+    () => mcpTakeawayKey,
+    (key) => {
+      mcpTakeawayKey = key;
+    },
+    () => renderTakeaways(),
+  );
+  wireChipGroup(
+    a2aTakeawayChips,
+    Object.keys(A2A_TAKEAWAYS),
+    (key, en) =>
+      en
+        ? A2A_TAKEAWAYS[key]?.label.en || key
+        : A2A_TAKEAWAYS[key]?.label.zh || key,
+    () => a2aTakeawayKey,
+    (key) => {
+      a2aTakeawayKey = key;
+    },
+    () => renderTakeaways(),
+  );
+  wireChipGroup(
+    mcpChips,
+    Object.keys(MCP_PREVIEWS),
+    (key, en) =>
+      en
+        ? MCP_PREVIEWS[key]?.label.en || key
+        : MCP_PREVIEWS[key]?.label.zh || key,
+    () => mcpToolKey,
+    (key) => {
+      mcpToolKey = key;
+    },
+    () => renderMcpPreview(),
+  );
+  wireChipGroup(
+    a2aChips,
+    Object.keys(A2A_PREVIEWS),
+    (key, en) =>
+      en
+        ? A2A_PREVIEWS[key]?.label.en || key
+        : A2A_PREVIEWS[key]?.label.zh || key,
+    () => a2aPreviewKey,
+    (key) => {
+      a2aPreviewKey = key;
+    },
+    () => renderA2aPreview(),
+  );
+
+  let promptFetchToken = 0;
 
   renderPrompt = () => {
-    if (!presetSel || !promptText || !promptMeta || !customInput || !customHint) return;
+    if (!presetSel || !promptText || !promptMeta || !customInput || !customHint) {
+      renderTakeaways();
+      renderMcpPreview();
+      renderA2aPreview();
+      return;
+    }
     const p = PRESETS[presetSel.value];
     if (!p) return;
     const en = isEn();
@@ -267,39 +937,270 @@ function initHelpPage(): void {
     customInput.placeholder = en
       ? 'Recent activity on the Personal AI project'
       : 'Personal AI 项目的近期动态';
-    promptText.textContent = en ? p.en : p.zh;
-    promptMeta.textContent =
-      (en ? p.meta.en : p.meta.zh) +
-      (en ? ' · read-only, never writes to memory' : ' · 只读接口,不写入记忆');
     const isCustom = presetSel.value === 'custom';
     customInput.classList.toggle('visible', isCustom);
     customHint.style.display = isCustom ? 'block' : 'none';
+
+    // Show demo immediately, then replace with live pack when the service answers.
+    promptText.textContent = en ? p.en : p.zh;
+    promptMeta.textContent =
+      (en ? p.meta.en : p.meta.zh) +
+      (en ? ' · loading live…' : ' · 正在拉取…');
+
+    const token = ++promptFetchToken;
+    const customQ = (customInput.value || '').trim();
+    if (isCustom && !customQ) {
+      promptMeta.textContent = en
+        ? 'Enter a topic above, then the live pack will load · experimental'
+        : '先在上方输入主题,再拉取实时结果 · 实验性';
+    } else {
+      void fetchContextPack(memoryConn, p.scope, customQ).then((live) => {
+        if (token !== promptFetchToken) return;
+        if (live.ok && live.prompt) {
+          promptText.textContent = live.prompt;
+          promptMeta.textContent = live.meta;
+        } else {
+          promptMeta.textContent =
+            (en ? p.meta.en : p.meta.zh) +
+            (en
+              ? ` · demo fallback (${live.detail || 'unreachable'})`
+              : ` · 演示回退(${live.detail || '不可达'})`);
+        }
+      });
+    }
+
+    renderTakeaways();
+    renderMcpPreview();
+    renderA2aPreview();
+    renderUserKeyCard();
   };
 
   presetSel?.addEventListener('change', () => renderPrompt());
+  let customDebounce: ReturnType<typeof setTimeout> | null = null;
+  customInput?.addEventListener('input', () => {
+    if (presetSel?.value !== 'custom') return;
+    renderTakeaways();
+    if (customDebounce) clearTimeout(customDebounce);
+    customDebounce = setTimeout(() => renderPrompt(), 400);
+  });
+
+  document.querySelectorAll('.proto-tab').forEach((node) => {
+    const tab = node as HTMLButtonElement;
+    tab.addEventListener('click', () => {
+      const proto = tab.getAttribute('data-proto') || 'rest';
+      document.querySelectorAll('.proto-tab').forEach((other) => {
+        const el = other as HTMLButtonElement;
+        const on = el.getAttribute('data-proto') === proto;
+        el.classList.toggle('active', on);
+        el.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.proto-pane').forEach((pane) => {
+        pane.classList.toggle(
+          'active',
+          pane.getAttribute('data-proto-pane') === proto,
+        );
+      });
+    });
+  });
+
+  const flashCopied = (btn: HTMLButtonElement, keep: string) => {
+    btn.textContent = '✓';
+    setTimeout(() => {
+      btn.textContent = keep;
+    }, 1400);
+  };
+
+  const bindCopy = (
+    btnId: string,
+    getText: () => string | null | undefined,
+    successLabel?: () => string,
+  ) => {
+    document.getElementById(btnId)?.addEventListener('click', function onCopy() {
+      const text = getText();
+      if (!text) return;
+      const b = this as HTMLButtonElement;
+      const keep = successLabel ? b.innerHTML : b.textContent || 'copy';
+      void navigator.clipboard.writeText(text).then(() => {
+        if (successLabel) {
+          b.textContent = successLabel();
+          setTimeout(() => {
+            b.innerHTML = keep;
+          }, 1400);
+        } else {
+          flashCopied(b, keep);
+        }
+      });
+    });
+  };
+
+  bindCopy('copyRestTakeaway', () => restTakeawayText?.textContent, () =>
+    isEn() ? '✅ Copied' : '✅ 已复制',
+  );
+  bindCopy('copyRestTakeawayMini', () => restTakeawayText?.textContent);
+  bindCopy('copyMcpTakeaway', () => mcpTakeawayText?.textContent, () =>
+    isEn() ? '✅ Copied' : '✅ 已复制',
+  );
+  bindCopy('copyMcpTakeawayMini', () => mcpTakeawayText?.textContent);
+  bindCopy('copyA2aTakeaway', () => a2aTakeawayText?.textContent, () =>
+    isEn() ? '✅ Copied' : '✅ 已复制',
+  );
+  bindCopy('copyA2aTakeawayMini', () => a2aTakeawayText?.textContent);
+  bindCopy('copyMcpPreview', () => mcpPreviewText?.textContent);
+  bindCopy('copyA2aPreview', () => a2aPreviewText?.textContent);
 
   (window as unknown as { copyPromptText: (btn: HTMLButtonElement) => void }).copyPromptText =
     (btn: HTMLButtonElement) => {
       if (!promptText) return;
       void navigator.clipboard.writeText(promptText.textContent || '').then(() => {
-        btn.textContent = '✓';
-        setTimeout(() => {
-          btn.textContent = 'copy';
-        }, 1400);
+        flashCopied(btn, 'copy');
       });
     };
 
-  document.getElementById('copyPrompt')?.addEventListener('click', function onCopy() {
-    if (!promptText) return;
-    const b = this as HTMLButtonElement;
-    const keep = b.innerHTML;
-    void navigator.clipboard.writeText(promptText.textContent || '').then(() => {
-      b.textContent = isEn() ? '✅ Copied' : '✅ 已复制';
-      setTimeout(() => {
-        b.innerHTML = keep;
-      }, 1400);
-    });
+  /* ===== 外接 key（tier-2 个人凭证） ===== */
+  const userKeyStatus = document.getElementById('userKeyStatus');
+  const userKeyHint = document.getElementById('userKeyHint');
+  const userKeyValue = document.getElementById('userKeyValue');
+  const userKeyText = document.getElementById('userKeyText');
+  const userKeyIssue = document.getElementById('userKeyIssue') as HTMLButtonElement | null;
+  const userKeyRevoke = document.getElementById('userKeyRevoke') as HTMLButtonElement | null;
+
+  renderUserKeyCard = (busyMessage?: string) => {
+    const en = isEn();
+    const key = memoryConn.userKey;
+    if (userKeyStatus) {
+      userKeyStatus.textContent = key
+        ? en
+          ? `Active key ${key.keyPrefix}… · read-only · bound to ${memoryConn.userId}`
+          : `已有 key ${key.keyPrefix}… · 只读 · 绑定 ${memoryConn.userId}`
+        : en
+          ? `No access key for ${memoryConn.userId} yet`
+          : `${memoryConn.userId} 还没有外接 key`;
+    }
+    if (userKeyValue) userKeyValue.hidden = !key;
+    if (userKeyText) userKeyText.textContent = key?.token || '';
+    if (userKeyRevoke) userKeyRevoke.hidden = !key;
+    if (userKeyIssue) {
+      const label = key
+        ? en ? 'Rotate key' : '重新生成'
+        : en ? 'Create access key' : '生成外接 key';
+      userKeyIssue.textContent = label;
+    }
+    if (userKeyHint) {
+      userKeyHint.textContent =
+        busyMessage ??
+        (key
+          ? en
+            ? 'Read-only and scoped to you. Stored locally in this browser — the server keeps only a hash, so rotate if you lose it.'
+            : '只读、只能访问你自己的数据。明文仅存在本浏览器,服务端只留哈希,丢了就重新生成。'
+          : en
+            ? 'Issued only when you ask. Ordinary API traffic never mints one.'
+            : '只有你点击时才会签发,普通 API 调用不会自动创建。');
+      userKeyHint.classList.toggle('warn', !key);
+    }
+  };
+
+  const refreshConnection = async (busyMessage?: string) => {
+    memoryConn = await loadMemoryConnection();
+    if (memoryConn.userKey) {
+      // The stored plaintext is worthless once the server revokes the row.
+      const active = await fetchUserKeyMetadata(memoryConn).catch(() => null);
+      if (active && active.id !== memoryConn.userKey.id) {
+        await chrome.storage.local.remove(USER_API_KEY_STORAGE_KEY);
+        memoryConn = { ...memoryConn, userKey: null };
+      }
+    }
+    renderTakeaways();
+    renderA2aPreview();
+    renderUserKeyCard(busyMessage);
+    renderPrompt();
+    void updateContextPackReadiness();
+  };
+
+  const updateContextPackReadiness = async () => {
+    const check = document.getElementById('contextPackReadyCheck');
+    const label = document.getElementById('contextPackReadyLabel');
+    const state = document.getElementById('contextPackReadyState');
+    if (!check || !label || !state) return;
+    const en = isEn();
+    try {
+      const headers: Record<string, string> = {};
+      if (memoryConn.userKey?.token) {
+        headers.Authorization = `Bearer ${memoryConn.userKey.token}`;
+      } else if (memoryConn.apiKey) {
+        headers.Authorization = `Bearer ${memoryConn.apiKey}`;
+        headers['X-User-Id'] = memoryConn.userId;
+      } else {
+        headers['X-User-Id'] = memoryConn.userId;
+      }
+      const res = await fetch(`${memoryConn.apiBase}/context-pack?scope=identity_preferences`, {
+        headers,
+      });
+      if (res.ok) {
+        check.className = 'check ok';
+        check.querySelector('.ico')!.textContent = '✓';
+        label.textContent = en
+          ? 'Memory Service connected · context-pack ready'
+          : 'Memory Service 已连接 · context-pack 可用';
+        state.textContent = en ? 'Ready' : '已就绪';
+      } else {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch {
+      check.className = 'check todo';
+      check.querySelector('.ico')!.textContent = 'ⓘ';
+      label.textContent = en
+        ? `Cannot reach ${memoryConn.apiBase}/context-pack`
+        : `无法访问 ${memoryConn.apiBase}/context-pack`;
+      state.textContent = en ? 'Check Options' : '检查 Options';
+    }
+  };
+
+  userKeyIssue?.addEventListener('click', () => {
+    const en = isEn();
+    userKeyIssue.disabled = true;
+    renderUserKeyCard(en ? 'Issuing…' : '正在签发…');
+    void issueUserKey(memoryConn)
+      .then(() => refreshConnection())
+      .catch((err: Error) => {
+        renderUserKeyCard(
+          en
+            ? `Could not issue a key: ${err.message}`
+            : `签发失败：${err.message}`,
+        );
+      })
+      .finally(() => {
+        userKeyIssue.disabled = false;
+      });
   });
+
+  userKeyRevoke?.addEventListener('click', () => {
+    const id = memoryConn.userKey?.id;
+    if (!id) return;
+    userKeyRevoke.disabled = true;
+    void revokeUserKey(memoryConn, id)
+      .then(() => refreshConnection())
+      .finally(() => {
+        userKeyRevoke.disabled = false;
+      });
+  });
+
+  bindCopy('copyUserKey', () => userKeyText?.textContent);
+
+  void refreshConnection();
+
+  if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (
+        !changes.envConfig &&
+        !changes.userinfo &&
+        !changes[USER_API_KEY_STORAGE_KEY]
+      ) {
+        return;
+      }
+      void refreshConnection();
+    });
+  }
 
   /* ===== 结果预览 toggle ===== */
   document.querySelectorAll('.pv-toggle').forEach((node) => {

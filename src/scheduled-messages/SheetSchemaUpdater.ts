@@ -35,6 +35,7 @@ const OBSOLETE_MESSAGE_COLUMNS = [
   'Sent_Chat_ID',
   'Sent_Post_ID',
   'Sent_At',
+  'Agent_Task_Prompt',
 ] as const;
 
 export interface SchemaUpdateResult {

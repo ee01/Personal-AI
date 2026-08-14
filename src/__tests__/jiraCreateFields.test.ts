@@ -314,3 +314,53 @@ test('fixVersions drops the field with a warning when nothing matches', () => {
   assert.equal(JIRA_FIELD_FIX_VERSIONS in fields, false);
   assert.match(warnings[0] || '', /找不到匹配版本/);
 });
+
+test('description is passed through as a system field', () => {
+  const withDesc = issueType('Task', ['description']);
+  assert.equal(
+    buildJiraCreateFields({
+      projectKey: 'NOVA',
+      typeName: 'Task',
+      typeMeta: withDesc,
+      summary: 'child',
+      description: '  user notes  ',
+    }).description,
+    'user notes',
+  );
+
+  const hidden = issueType('Task', []);
+  assert.equal(
+    'description' in
+      buildJiraCreateFields({
+        projectKey: 'NOVA',
+        typeName: 'Task',
+        typeMeta: hidden,
+        summary: 'child',
+        description: 'user notes',
+      }),
+    false,
+  );
+
+  assert.equal(
+    buildJiraCreateFields({
+      projectKey: 'NOVA',
+      typeName: 'Task',
+      typeMeta: null,
+      summary: 'child',
+      description: 'user notes',
+    }).description,
+    'user notes',
+  );
+
+  assert.equal(
+    'description' in
+      buildJiraCreateFields({
+        projectKey: 'NOVA',
+        typeName: 'Task',
+        typeMeta: null,
+        summary: 'child',
+        description: '  ',
+      }),
+    false,
+  );
+});

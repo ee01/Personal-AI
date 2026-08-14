@@ -4,7 +4,6 @@ import {
   EnvConfigType,
   getEnvConfig,
   normalizeBotPushTarget,
-  showToast,
 } from './utils';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
@@ -58,6 +57,7 @@ import {
 import {
   recordRejectedManualRuleDiagnostics,
 } from './messageAnalysisRuleDiagnostics';
+import { reportAndRethrowMessageAnalysisError } from './messageAnalysisError';
 
 type PushTargetConfigKey =
   | 'MESSAGE_ANALYSIS_PUSH_TARGET'
@@ -813,7 +813,7 @@ export async function analyzeMessages(
     }
   } catch (error) {
     console.error('Error in sendMessageToLLM:', error);
-    showToast(`Error: ${error.message}`, 'error');
+    reportAndRethrowMessageAnalysisError(error);
   }
 }
 

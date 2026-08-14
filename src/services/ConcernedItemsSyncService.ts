@@ -10,11 +10,13 @@ import {
   isManualConcernedItem,
   mergeManualConcernedItemsPreservingSystem,
 } from '../watchRules';
+import { runPersistentlyThrottledTask } from './PersistentTaskThrottle';
 
 const CONCERNED_ITEMS_KEY = 'concernedItems';
 const SYNC_STATE_KEY = 'concernedItemsSyncState';
 const PENDING_HITS_KEY = 'concernedItemsPendingHits';
 const PUSH_DEBOUNCE_MS = 1500;
+const REMOTE_SYNC_INTERVAL_MS = 4.5 * 60_000;
 
 interface ConcernedItemsSyncState {
   deviceId?: string;
@@ -142,12 +144,8 @@ export class ConcernedItemsSyncService {
 
   async syncOnStartup(): Promise<void> {
     await this.initialize();
-    await this.bootstrapSnapshotState();
-    await this.flushConfigPush();
-    await this.flushPendingHits();
     try {
-      await this.pullConcernedItemsSnapshot();
-      await this.pullFollowThreadHits();
+      await this.runRemoteSyncWhenDue();
     } catch (error) {
       console.warn('ConcernedItems startup sync failed:', error);
     }
@@ -159,15 +157,27 @@ export class ConcernedItemsSyncService {
 
   async runPeriodicSync(): Promise<void> {
     await this.initialize();
-    await this.bootstrapSnapshotState();
-    await this.flushConfigPush();
-    await this.flushPendingHits();
     try {
-      await this.pullConcernedItemsSnapshot();
-      await this.pullFollowThreadHits();
+      await this.runRemoteSyncWhenDue();
     } catch (error) {
       console.warn('ConcernedItems periodic sync failed:', error);
     }
+  }
+
+  private async runRemoteSyncWhenDue(): Promise<void> {
+    await runPersistentlyThrottledTask({
+      storage: chrome.storage.local,
+      taskId: 'concerned-items-remote-sync',
+      successIntervalMs: REMOTE_SYNC_INTERVAL_MS,
+      failureIntervalMs: 60_000,
+      task: async () => {
+        await this.bootstrapSnapshotState();
+        await this.flushConfigPush();
+        await this.flushPendingHits();
+        await this.pullConcernedItemsSnapshot();
+        await this.pullFollowThreadHits();
+      },
+    });
   }
 
   async enqueueFollowThreadHit(hit: FollowThreadHitEvent): Promise<void> {

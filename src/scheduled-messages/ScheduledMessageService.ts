@@ -60,6 +60,7 @@ import {
 } from './scheduleNextExecution';
 import { shouldReactivateDoneOneTimeMessageAfterScheduleChange } from './scheduleStatusReactivation';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
+import { isGoogleSheetsInvalidCredentialError } from './googleSheetsAuthErrors.js';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Target_Type',
@@ -140,9 +141,7 @@ export class ScheduledMessageService {
     try {
       return await operation();
     } catch (error: any) {
-      const is401Error = error.message?.includes('401') || 
-                         error.message?.includes('Unauthorized') ||
-                         error.message?.includes('Invalid Credentials');
+      const is401Error = isGoogleSheetsInvalidCredentialError(error);
       const isScopeError =
         error.message?.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
         error.message?.includes('insufficient authentication scopes') ||

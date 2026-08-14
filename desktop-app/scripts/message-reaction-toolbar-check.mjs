@@ -996,27 +996,35 @@ async function main() {
       { timeout: 5_000 },
     );
     await followThreadConfigPage.waitForLoadState('domcontentloaded');
-    await followThreadConfigPage.waitForSelector('.add-topic-form', {
+    assert.match(
+      followThreadConfigPage.url(),
+      /memory-exploring\.html#\/memory-entry-rules\?surface=task&intent=follow-thread$/,
+      'Watch should open the canonical task-surface route rather than the legacy standalone form',
+    );
+    const followThreadConfigFrame = followThreadConfigPage.frameLocator(
+      'iframe.rules-frame',
+    );
+    await followThreadConfigFrame.locator('.add-topic-form').waitFor({
       timeout: 10_000,
     });
     assert.match(
-      await followThreadConfigPage
+      await followThreadConfigFrame
         .locator('.add-topic-form .text-input')
         .inputValue(),
       /Please follow up with the release owner/,
     );
     assert.equal(
-      await followThreadConfigPage.locator('#new-follow-thread').isChecked(),
+      await followThreadConfigFrame.locator('#new-follow-thread').isChecked(),
       true,
       'Watch prefill should enable the follow-thread rule toggle',
     );
     assert.equal(
-      await followThreadConfigPage.locator('#new-filter-sender').inputValue(),
+      await followThreadConfigFrame.locator('#new-filter-sender').inputValue(),
       '',
       'Watch prefill should observe the conversation instead of only the original sender',
     );
     assert.equal(
-      await followThreadConfigPage.locator('#new-filter-group').inputValue(),
+      await followThreadConfigFrame.locator('#new-filter-group').inputValue(),
       'Release Team',
     );
     const expectedOriginalDateText = await followThreadConfigPage.evaluate(() =>
@@ -1024,7 +1032,7 @@ async function main() {
     );
     assert.equal(
       (
-        (await followThreadConfigPage
+        (await followThreadConfigFrame
           .locator('.original-message-collapse .datetime')
           .first()
           .textContent()) || ''
@@ -1033,7 +1041,7 @@ async function main() {
       'Watch prefill should show the original message time, not the config click time',
     );
     const followThreadBoundaryText =
-      (await followThreadConfigPage
+      (await followThreadConfigFrame
         .locator('.follow-thread-boundary-receipt')
         .textContent()) || '';
     assert.match(followThreadBoundaryText, /关注后续创建边界/);
@@ -1061,12 +1069,12 @@ async function main() {
     followThreadConfigPage.on('dialog', async (dialog) => {
       await dialog.dismiss();
     });
-    await followThreadConfigPage
+    await followThreadConfigFrame
       .locator('.add-topic-form .form-buttons button')
       .first()
       .click();
     const followThreadSaveToast =
-      (await followThreadConfigPage
+      (await followThreadConfigFrame
         .locator('.rule-operation-toast.success')
         .textContent()) || '';
     assert.match(followThreadSaveToast, /已保存关注后续/);
@@ -1102,17 +1110,25 @@ async function main() {
       { timeout: 5_000 },
     );
     await linkedActionConfigPage.waitForLoadState('domcontentloaded');
-    await linkedActionConfigPage.waitForSelector('.add-topic-form', {
+    assert.match(
+      linkedActionConfigPage.url(),
+      /memory-exploring\.html#\/memory-entry-rules\?surface=task&intent=linked-action$/,
+      'Openclaw should open the canonical task-surface route rather than the legacy standalone form',
+    );
+    const linkedActionConfigFrame = linkedActionConfigPage.frameLocator(
+      'iframe.rules-frame',
+    );
+    await linkedActionConfigFrame.locator('.add-topic-form').waitFor({
       timeout: 10_000,
     });
     assert.match(
-      await linkedActionConfigPage
+      await linkedActionConfigFrame
         .locator('.add-topic-form .text-input')
         .inputValue(),
       /Please follow up with the release owner/,
     );
     const linkedActionTriggerText =
-      (await linkedActionConfigPage
+      (await linkedActionConfigFrame
         .locator('.linked-action-trigger-panel')
         .textContent()) || '';
     assert.match(
@@ -1122,7 +1138,7 @@ async function main() {
     assert.match(linkedActionTriggerText, /Alicia Chen/);
     assert.match(linkedActionTriggerText, /Release Team/);
     assert.match(
-      (await linkedActionConfigPage
+      (await linkedActionConfigFrame
         .locator('.automation-offline-note')
         .first()
         .textContent()) || '',

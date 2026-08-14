@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>共同上下文记忆 · Personal AI Demo</title>
+  <!--
+    我的假设与设计推理：
+    - 这不是一个独立 dashboard，而是嵌入现有 RingCentral Compose 与 Meeting Pilot 的能力。
+    - 用户最需要先判断“当前受众缺什么”，再决定是否让 AI 写草稿，因此证据状态先于生成动作。
+    - 视觉沿用仓库真实 Personal AI 图标和现有 Compose 截图的白色宿主界面；红色只用于 Personal AI 身份与高责任边界。
+    - Demo 数据来自 2026-08-12 线上记忆聚合的匿名化组合场景，不是逐字聊天记录；内部链接、token、邮件和私聊正文均未保留。
+
+    当前仍待 manager 决策：
+    - P0 先落 RingCentral Compose 还是 Meeting Pilot；本 Demo 建议先 Compose。
+    - 首版是否向用户展示 acknowledged 这个词；本 Demo 只写“有回复/引用证据”。
+    - 私密来源首版是否允许手动带出；本 Demo 完全禁止带出。
+
+    交互探索：顶部可切换“只补变化 / 先补背景 / 证据不足”，以及“团队消息 / 会前准备”。
+  -->
+  <style>
+    :root {
+      --ink: #232826;
+      --muted: #626a67;
+      --faint: #8b918e;
+      --line: #d9d8d3;
+      --line-strong: #bbbdb9;
+      --paper: #fffefb;
+      --canvas: #e4e2dc;
+      --soft: #f6f4ee;
+      --soft-red: #fff0f2;
+      --brand: #e83f57;
+      --brand-dark: #b92b40;
+      --blue: #0a75c2;
+      --green: #2d6754;
+      --amber: #8a5a13;
+      --shadow: 0 18px 50px rgb(35 40 38 / 14%);
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; min-height: 100%; }
+
+    body {
+      min-width: 320px;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: Aptos, "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.68;
+      text-rendering: optimizeLegibility;
+    }
+
+    button, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, textarea:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--blue) 28%, transparent);
+      outline-offset: 2px;
+    }
+
+    .demo-bar {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 10px 18px;
+      border-bottom: 1px solid #cac9c4;
+      background: #efede7;
+    }
+
+    .demo-title {
+      min-width: 220px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .demo-title img { width: 30px; height: 30px; object-fit: contain; }
+    .demo-title strong { display: block; font-family: "Iowan Old Style", "Songti SC", serif; font-size: 19px; }
+    .demo-title span { display: block; color: var(--muted); font-size: 12px; line-height: 1.3; }
+
+    .demo-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .control-set { display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 9px; }
+    .control-label { padding: 0 7px; color: var(--faint); font-size: 12px; }
+    .control-button {
+      min-height: 36px;
+      border: 0;
+      border-radius: 6px;
+      padding: 6px 11px;
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .control-button[aria-pressed="true"] { background: var(--ink); color: white; }
+
+    .window {
+      width: min(1440px, calc(100vw - 44px));
+      height: min(890px, calc(100vh - 92px));
+      min-height: 650px;
+      margin: 15px auto;
+      display: grid;
+      grid-template-columns: 70px 250px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid #bbbcb8;
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 11px;
+      padding: 13px 8px;
+      background: #22282a;
+      color: white;
+    }
+    .rail-brand { width: 40px; height: 40px; display: grid; place-items: center; margin-bottom: 5px; border-bottom: 1px solid #4b5051; }
+    .rail-brand span { width: 28px; height: 28px; display: grid; place-items: center; background: #f3aa23; border-radius: 8px; color: #222; font-weight: 800; }
+    .rail-item { width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: #d6d8d8; cursor: pointer; font-size: 17px; }
+    .rail-item.active { background: #4b5254; color: white; }
+    .rail-spacer { flex: 1; }
+
+    .channels { min-width: 0; border-right: 1px solid var(--line); background: #f6f7f7; }
+    .channels-head { height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 17px; border-bottom: 1px solid var(--line); }
+    .channels-head strong { font-size: 18px; }
+    .search { margin: 14px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--faint); }
+    .channel-group { padding: 7px 13px; }
+    .channel-label { padding: 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .channel {
+      width: 100%; min-height: 52px; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; align-items: center;
+      border: 0; border-radius: 7px; padding: 7px; text-align: left; background: transparent; cursor: pointer;
+    }
+    .channel.active { background: #e5ebed; }
+    .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: #d7b990; color: #3d3125; font-size: 12px; font-weight: 700; }
+    .avatar.alt { background: #b7d2cb; color: #23483e; }
+    .channel-copy { min-width: 0; }
+    .channel-copy strong, .channel-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .channel-copy small { color: var(--muted); }
+
+    .surface { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: white; }
+    .surface-head { height: 64px; flex: 0 0 64px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+    .surface-name { min-width: 0; }
+    .surface-name strong { display: block; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .surface-name small { color: var(--muted); }
+    .head-actions { display: flex; gap: 6px; }
+    .head-button { min-width: 44px; min-height: 44px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--muted); }
+
+    .view { min-height: 0; flex: 1; }
+    .view[hidden] { display: none !important; }
+
+    #chatView { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+    .messages { min-height: 0; overflow-y: auto; padding: 18px 24px 10px; }
+    .date-rule { display: flex; align-items: center; gap: 14px; margin: 2px 0 20px; color: var(--faint); font-size: 12px; }
+    .date-rule::before, .date-rule::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+    .message { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; margin: 0 0 18px; }
+    .message .avatar { width: 38px; height: 38px; }
+    .message-meta { display: flex; align-items: baseline; gap: 8px; }
+    .message-meta strong { font-size: 15px; }
+    .message-meta time { color: var(--faint); font-size: 12px; }
+    .message p { max-width: 760px; margin: 2px 0 0; text-wrap: pretty; }
+    .message .link { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
+    .thread-note { display: inline-block; margin-top: 7px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: 12px; }
+
+    .compose-zone { padding: 0 20px 18px; background: white; }
+    .ground-ribbon {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 7px 9px 7px 11px;
+      border: 1px solid #efb5be;
+      border-bottom: 0;
+      border-radius: 10px 10px 0 0;
+      background: var(--soft-red);
+    }
+    .pa-mark { width: 28px; height: 28px; object-fit: contain; }
+    .ribbon-copy { min-width: 0; }
+    .ribbon-copy strong { display: block; font-size: 13px; color: var(--brand-dark); }
+    .ribbon-copy span { display: block; overflow: hidden; color: #5c4246; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .quiet-button { min-width: 44px; min-height: 36px; border: 0; background: transparent; color: var(--brand-dark); cursor: pointer; font-weight: 700; }
+
+    .ground-panel { border: 1px solid #efb5be; border-bottom: 0; background: #fffafa; }
+    .ground-panel[hidden] { display: none; }
+    .panel-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .evidence-block { min-width: 0; padding: 14px 16px; border-right: 1px solid #eadad8; }
+    .evidence-block:last-child { border-right: 0; }
+    .evidence-kicker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+    .state-mark { width: 9px; height: 9px; flex: 0 0 9px; border: 1px solid currentColor; border-radius: 50%; }
+    .state-mark.sent { color: var(--green); background: color-mix(in srgb, var(--green) 28%, white); }
+    .state-mark.delta { color: var(--amber); background: color-mix(in srgb, var(--amber) 25%, white); transform: rotate(45deg); border-radius: 1px; }
+    .state-mark.private { color: var(--brand-dark); background: transparent; }
+    .evidence-block strong { display: block; margin-top: 5px; font-size: 13px; line-height: 1.45; }
+    .evidence-block p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .panel-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-top: 1px solid #eadad8; }
+    .action-group { display: flex; flex-wrap: wrap; gap: 8px; }
+    .button { min-height: 40px; border: 1px solid var(--line-strong); border-radius: 7px; padding: 7px 13px; background: white; cursor: pointer; }
+    .button:hover { background: #f6f6f3; }
+    .button.primary { border-color: var(--brand); background: var(--brand); color: white; }
+    .button.primary:hover { background: var(--brand-dark); }
+    .button:disabled { cursor: not-allowed; opacity: .45; }
+    .receipt { color: var(--muted); font-size: 12px; text-align: right; }
+
+    .composer { position: relative; min-height: 132px; border: 1px solid var(--line-strong); border-radius: 0 0 10px 10px; background: white; }
+    .composer textarea { width: 100%; min-height: 82px; resize: none; border: 0; padding: 15px 56px 8px 16px; color: var(--ink); background: transparent; line-height: 1.65; }
+    .composer textarea::placeholder { color: #9a9d9b; }
+    .composer-tools { display: flex; align-items: center; gap: 6px; padding: 3px 10px 10px; }
+    .tool-button { width: 38px; height: 38px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+    .tool-button:hover { background: var(--soft); }
+    .send-button { margin-left: auto; width: 44px; height: 44px; border: 0; border-radius: 50%; background: #dceaf3; color: var(--blue); cursor: pointer; font-size: 18px; }
+    .composer-logo { position: absolute; top: 11px; right: 13px; width: 31px; height: 31px; object-fit: contain; filter: drop-shadow(0 5px 8px rgb(232 63 87 / 18%)); }
+
+    #meetingView { overflow: auto; padding: 28px; background: var(--soft); }
+    .meeting-layout { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 22px; }
+    .meeting-main, .meeting-side { border: 1px solid var(--line); background: var(--paper); }
+    .meeting-main { padding: 26px; }
+    .meeting-side { padding: 20px; }
+    .eyebrow { color: var(--brand-dark); font: 700 11px/1.4 "SFMono-Regular", Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .meeting-main h1 { margin: 8px 0 6px; font: 500 clamp(30px, 4vw, 54px)/1.05 "Iowan Old Style", "Songti SC", serif; text-wrap: balance; }
+    .meeting-meta { color: var(--muted); }
+    .coverage { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: center; margin: 28px 0; padding: 20px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .coverage-number { font: 500 52px/1 "Iowan Old Style", serif; }
+    .coverage-copy strong, .coverage-copy span { display: block; }
+    .coverage-copy span { color: var(--muted); }
+    .person-row { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); gap: 14px; padding: 10px 0; border-bottom: 1px solid #ebe9e4; }
+    .person-row:last-child { border-bottom: 0; }
+    .person-status { color: var(--muted); }
+    .meeting-warning { margin: 18px 0 0; padding: 12px 0; border-top: 2px solid var(--ink); font-weight: 600; }
+    .opener { min-height: 154px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); background: white; color: var(--muted); }
+    .side-title { display: flex; align-items: center; gap: 9px; }
+    .side-title img { width: 28px; height: 28px; object-fit: contain; }
+    .side-title strong { font-size: 16px; }
+    .meeting-side p { color: var(--muted); }
+    .side-receipt { margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+    dialog {
+      width: min(620px, calc(100vw - 32px));
+      max-height: min(760px, calc(100vh - 32px));
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 0;
+      color: var(--ink);
+      background: var(--paper);
+      box-shadow: 0 28px 90px rgb(20 25 23 / 28%);
+    }
+    dialog::backdrop { background: rgb(24 29 27 / 44%); }
+    .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 20px; border-bottom: 1px solid var(--line); }
+    .dialog-head strong { font-size: 17px; }
+    .dialog-close { width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--soft); cursor: pointer; }
+    .dialog-body { padding: 4px 20px 20px; overflow: auto; }
+    .evidence-row { padding: 16px 0; border-bottom: 1px solid var(--line); }
+    .evidence-row:last-child { border-bottom: 0; }
+    .evidence-row code { display: inline-block; margin-bottom: 5px; padding: 2px 5px; background: var(--soft); color: var(--muted); font: 12px/1.5 "SFMono-Regular", Menlo, monospace; }
+    .evidence-row strong, .evidence-row span { display: block; }
+    .evidence-row span { margin-top: 3px; color: var(--muted); }
+    .semantics { margin: 16px 0 0; padding: 12px 14px; background: var(--soft); color: var(--muted); font-size: 13px; }
+
+    .toast {
+      position: fixed; z-index: 10; left: 50%; bottom: 24px; transform: translate(-50%, 18px);
+      max-width: calc(100vw - 32px); padding: 10px 15px; border: 1px solid #1f2523; border-radius: 7px;
+      background: #252b29; color: white; box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: .18s ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 920px) {
+      .window { width: calc(100vw - 22px); grid-template-columns: 62px minmax(0, 1fr); }
+      .channels { display: none; }
+      .panel-grid { grid-template-columns: 1fr; }
+      .evidence-block { border-right: 0; border-bottom: 1px solid #eadad8; }
+      .evidence-block:last-child { border-bottom: 0; }
+      .meeting-layout { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      body { font-size: 16px; background: white; }
+      .demo-bar { align-items: flex-start; flex-direction: column; padding: 10px 12px; }
+      .demo-title span { display: none; }
+      .demo-controls { width: 100%; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+      .control-set { flex: 0 0 auto; }
+      .control-label { display: none; }
+      .control-button { min-height: 44px; }
+      .window { width: 100%; height: calc(100vh - 120px); min-height: 640px; margin: 0; grid-template-columns: 1fr; border: 0; border-radius: 0; box-shadow: none; }
+      .rail { display: none; }
+      .surface-head { height: 58px; flex-basis: 58px; padding: 0 13px; }
+      .head-actions .head-button:not(:last-child) { display: none; }
+      .messages { padding: 15px 14px 8px; }
+      .message { grid-template-columns: 34px minmax(0, 1fr); gap: 9px; }
+      .compose-zone { padding: 0 9px 9px; }
+      .ground-ribbon { grid-template-columns: 27px minmax(0, 1fr) 44px; }
+      .ribbon-copy span { white-space: normal; line-height: 1.42; }
+      .ground-panel { position: fixed; z-index: 8; left: 0; right: 0; bottom: 0; max-height: 77vh; overflow: auto; border: 0; border-top: 1px solid #efb5be; border-radius: 16px 16px 0 0; box-shadow: 0 -20px 60px rgb(35 40 38 / 22%); }
+      .ground-panel::before { content: ""; display: block; width: 42px; height: 4px; margin: 8px auto 0; border-radius: 4px; background: #c6c4bf; }
+      .panel-actions { align-items: stretch; flex-direction: column; }
+      .action-group { display: grid; grid-template-columns: 1fr 1fr; }
+      .button { min-height: 44px; }
+      .receipt { text-align: left; }
+      .composer { min-height: 122px; }
+      #meetingView { padding: 14px; }
+      .meeting-main, .meeting-side { padding: 17px; }
+      .coverage { grid-template-columns: 1fr; gap: 8px; }
+      .person-row { grid-template-columns: 1fr; gap: 2px; }
+      dialog { width: 100%; max-width: none; max-height: 82vh; margin: auto 0 0; border-radius: 16px 16px 0 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="demo-bar">
+    <div class="demo-title">
+      <img src="../../static/icons/icon128.png" alt="Personal AI">
+      <div>
+        <strong>共同上下文记忆</strong>
+        <span>匿名化交互概念 · 所有动作仅发生在 Demo 内</span>
+      </div>
+    </div>
+    <div class="demo-controls" aria-label="Demo 控制">
+      <div class="control-set" aria-label="交互表面">
+        <span class="control-label">表面</span>
+        <button class="control-button view-switch" data-view="chat" aria-pressed="true">团队消息</button>
+        <button class="control-button view-switch" data-view="meeting" aria-pressed="false">会前准备</button>
+      </div>
+      <div class="control-set" aria-label="建议策略">
+        <span class="control-label">场景</span>
+        <button class="control-button scenario-switch" data-scenario="delta" aria-pressed="true">只补变化</button>
+        <button class="control-button scenario-switch" data-scenario="background" aria-pressed="false">先补背景</button>
+        <button class="control-button scenario-switch" data-scenario="unknown" aria-pressed="false">证据不足</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="window" aria-label="Personal AI 共同上下文记忆交互 Demo">
+    <nav class="rail" aria-label="宿主应用导航">
+      <div class="rail-brand" aria-label="宿主应用"><span>R</span></div>
+      <button class="rail-item active" aria-label="团队消息">M</button>
+      <button class="rail-item" aria-label="视频会议">V</button>
+      <button class="rail-item" aria-label="联系人">C</button>
+      <button class="rail-item" aria-label="日历">D</button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item" aria-label="设置">S</button>
+    </nav>
+
+    <aside class="channels" aria-label="会话列表">
+      <div class="channels-head"><strong>团队消息</strong><span aria-hidden="true">＋</span></div>
+      <div class="search">搜索消息与群组</div>
+      <div class="channel-group">
+        <div class="channel-label">最近</div>
+        <button class="channel active">
+          <span class="avatar alt">NR</span>
+          <span class="channel-copy"><strong>Nova Release Sync</strong><small>Esone：日期含义有更新…</small></span>
+        </button>
+        <button class="channel">
+          <span class="avatar">WP</span>
+          <span class="channel-copy"><strong>Weekly Planning</strong><small>路线图已更新</small></span>
+        </button>
+        <button class="channel">
+          <span class="avatar alt">SQ</span>
+          <span class="channel-copy"><strong>Sophia Q.</strong><small>明天会前看一下</small></span>
+        </button>
+      </div>
+    </aside>
+
+    <section class="surface">
+      <header class="surface-head">
+        <div class="surface-name">
+          <strong id="surfaceTitle">Nova Release Sync</strong>
+          <small id="surfaceSubtitle">3 位成员 · Group conversation</small>
+        </div>
+        <div class="head-actions" aria-label="会话操作">
+          <button class="head-button" aria-label="搜索">⌕</button>
+          <button class="head-button" aria-label="开始会议">▣</button>
+          <button class="head-button" aria-label="更多">•••</button>
+        </div>
+      </header>
+
+      <section class="view" id="chatView">
+        <div class="messages" aria-label="模拟消息">
+          <div class="date-rule">8 月 8 日</div>
+          <article class="message">
+            <span class="avatar">F</span>
+            <div>
+              <div class="message-meta"><strong>Fred</strong><time>10:16</time></div>
+              <p>INIT-30072 的日期先按 8/25 准备，owner 我们下周再确认。</p>
+              <span class="thread-note">2 条回复</span>
+            </div>
+          </article>
+          <article class="message">
+            <span class="avatar alt">E</span>
+            <div>
+              <div class="message-meta"><strong>Esone</strong><time>10:21</time></div>
+              <p>收到。我先把 8/25 作为目标日期写进这周的同步。</p>
+            </div>
+          </article>
+          <div class="date-rule">今天</div>
+          <article class="message">
+            <span class="avatar alt">B</span>
+            <div>
+              <div class="message-meta"><strong>Brandy</strong><time>09:42</time></div>
+              <p>周会前能把 roadmap 的最新口径发一下吗？</p>
+            </div>
+          </article>
+          <article class="message">
+            <span class="avatar">S</span>
+            <div>
+              <div class="message-meta"><strong>Sophia</strong><time>09:45</time></div>
+              <p><span class="link">路线图文档（权限内链接）</span> 我手上还是上周的版本。</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="compose-zone">
+          <div class="ground-ribbon" id="groundRibbon">
+            <img class="pa-mark" src="../../static/icons/icon128.png" alt="Personal AI">
+            <div class="ribbon-copy">
+              <strong>共同上下文</strong>
+              <span id="ribbonText">当前群收到过旧版；2 条变化尚无发送证据</span>
+            </div>
+            <button class="quiet-button" id="expandGround" aria-expanded="false" aria-controls="groundPanel">展开</button>
+          </div>
+
+          <section class="ground-panel" id="groundPanel" hidden aria-label="共同上下文详情">
+            <div class="panel-grid">
+              <article class="evidence-block">
+                <div class="evidence-kicker"><span class="state-mark sent"></span>已向本群发过</div>
+                <strong id="sentTitle">8/25 是目标日期</strong>
+                <p id="sentDetail">8 月 8 日 · 你的真实发送回执 · 不是“对方已知”</p>
+              </article>
+              <article class="evidence-block">
+                <div class="evidence-kicker"><span class="state-mark delta"></span><span id="deltaLabel">只需补变化</span></div>
+                <strong id="deltaTitle">8/25 的含义修正为 Feature Freeze / CF</strong>
+                <p id="deltaDetail">新版有来源；当前群尚无发送证据，owner 仍待确认</p>
+              </article>
+              <article class="evidence-block">
+                <div class="evidence-kicker"><span class="state-mark private"></span>仅你可见 · 不会带出</div>
+                <strong id="privateTitle">1:1 中有 owner 候选讨论</strong>
+                <p id="privateDetail">只用于判断上下文缺口，不进入多人群草稿</p>
+              </article>
+            </div>
+            <div class="panel-actions">
+              <div class="action-group">
+                <button class="button primary" id="deltaAction">只补变化</button>
+                <button class="button" id="backgroundAction">先补背景</button>
+                <button class="button" id="evidenceAction">查看依据</button>
+              </div>
+              <div class="receipt" id="panelReceipt">发送仍由你完成</div>
+            </div>
+          </section>
+
+          <div class="composer">
+            <textarea id="composerText" aria-label="模拟消息草稿" placeholder="输入消息…">大家都知道 8/25 的计划，我们还是按原来的推进。</textarea>
+            <img class="composer-logo" src="../../static/icons/icon128.png" alt="Personal AI 入口">
+            <div class="composer-tools" aria-label="编辑工具">
+              <button class="tool-button" aria-label="格式">A</button>
+              <button class="tool-button" aria-label="附件">＋</button>
+              <button class="tool-button" aria-label="表情">○</button>
+              <button class="send-button" id="sendButton" aria-label="模拟发送">➤</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="meetingView" hidden>
+        <div class="meeting-layout">
+          <article class="meeting-main">
+            <div class="eyebrow">Meeting Pilot · 14:00</div>
+            <h1>Nova 周度发布同步</h1>
+            <div class="meeting-meta">6 位参与者 · 30 分钟 · Roadmap 与 INIT-30072</div>
+            <div class="coverage">
+              <div class="coverage-number">4/6</div>
+              <div class="coverage-copy">
+                <strong>有路线图发送证据</strong>
+                <span>其中 2/6 有回复或引用证据；不代表其他人已读或同意</span>
+              </div>
+            </div>
+            <div aria-label="参与者证据概览">
+              <div class="person-row"><strong>Fred、Sophia</strong><span class="person-status">收到旧版，并有回复/引用证据</span></div>
+              <div class="person-row"><strong>Brandy、Esone</strong><span class="person-status">有发送证据，没有确认性证据</span></div>
+              <div class="person-row"><strong>2 位参与者</strong><span class="person-status">当前会话无发送证据；身份映射正常</span></div>
+            </div>
+            <div class="meeting-warning">建议：先用一句话补日期含义，再说明本周变化。不要说“大家都知道”。</div>
+          </article>
+
+          <aside class="meeting-side">
+            <div class="side-title">
+              <img src="../../static/icons/icon128.png" alt="Personal AI">
+              <strong>30 秒开场</strong>
+            </div>
+            <p>只使用当前参与者可安全共享的事实；私聊中的 owner 候选已拦截。</p>
+            <button class="button primary" id="meetingOpen">生成 30 秒开场</button>
+            <button class="button" id="meetingEvidence">查看依据</button>
+            <div class="opener" id="meetingDraft">点击生成后，开场草稿会出现在这里。不会发送给参会人，也不会修改会议议程。</div>
+            <div class="side-receipt">只生成本地预览 · 未通知参会人 · 未写 Calendar</div>
+          </aside>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="evidenceDialog" aria-labelledby="evidenceTitle">
+    <div class="dialog-head">
+      <strong id="evidenceTitle">为什么这样判断</strong>
+      <button class="dialog-close" id="dialogClose" aria-label="关闭依据">×</button>
+    </div>
+    <div class="dialog-body">
+      <div class="evidence-row">
+        <code>shared_by_me · 2026-08-08 10:21</code>
+        <strong>“8/25 作为目标日期”已由你发送到当前 group conversation</strong>
+        <span>证据：宿主发送成功回执 + 精确 conversation id。它不证明每位成员已读。</span>
+      </div>
+      <div class="evidence-row">
+        <code>superseded_shared · version 2</code>
+        <strong>日期含义已修正为 Feature Freeze / CF</strong>
+        <span>证据：更新后的项目事实来源；当前 conversation 没有新版发送回执。</span>
+      </div>
+      <div class="evidence-row">
+        <code>privacy_block · private source</code>
+        <strong>一个 1:1 来源包含 owner 候选讨论</strong>
+        <span>该来源只用于判断“背景可能不完整”，正文与证据预览均不显示私聊内容。</span>
+      </div>
+      <div class="semantics"><strong>语义边界：</strong>发过 ≠ 看过 ≠ 理解 ≠ 同意。只有精确回复、引用或可归因动作才显示“有确认性证据”；其余保持未知。</div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const state = { scenario: 'delta', view: 'chat', toastTimer: null };
+
+    const scenarios = {
+      delta: {
+        ribbon: '当前群收到过旧版；2 条变化尚无发送证据',
+        sentTitle: '8/25 是目标日期',
+        sentDetail: '8 月 8 日 · 你的真实发送回执 · 不是“对方已知”',
+        deltaLabel: '只需补变化',
+        deltaTitle: '8/25 的含义修正为 Feature Freeze / CF',
+        deltaDetail: '新版有来源；当前群尚无发送证据，owner 仍待确认',
+        privateTitle: '1:1 中有 owner 候选讨论',
+        privateDetail: '只用于判断上下文缺口，不进入多人群草稿',
+        primary: '只补变化',
+        secondary: '先补背景',
+        receipt: '发送仍由你完成',
+        deltaDraft: '补充一个变化：8/25 现在指 Feature Freeze / CF，不是普通目标日期；owner 仍待确认。',
+        backgroundDraft: '同步一下背景：INIT-30072 暂按 8/25 推进。最新口径是 8/25 指 Feature Freeze / CF，owner 仍待确认。'
+      },
+      background: {
+        ribbon: '2 位关键参与者尚无发送证据；建议先补一段背景',
+        sentTitle: '4/6 曾收到路线图链接',
+        sentDetail: '只有 2/6 有回复或引用证据，不能写“大家都知道”',
+        deltaLabel: '缺少的共同背景',
+        deltaTitle: 'INIT-30072 的目标与 8/25 日期含义',
+        deltaDetail: '两位新增参与者没有当前版本的发送证据',
+        privateTitle: '私聊中的 owner 候选',
+        privateDetail: '已拦截；多人群草稿只保留“owner 待确认”',
+        primary: '先补背景',
+        secondary: '只补变化',
+        receipt: '建议更完整，但仍不会自动发送',
+        deltaDraft: '补充变化：8/25 现在指 Feature Freeze / CF，owner 仍待确认。',
+        backgroundDraft: '给刚加入的同事补一句背景：INIT-30072 正在按 8/25 推进，这个日期现在指 Feature Freeze / CF；owner 仍待确认。'
+      },
+      unknown: {
+        ribbon: '群组成员刚发生变化；身份与版本证据不足，暂不生成结论',
+        sentTitle: '找到一条旧消息，但 audience revision 不一致',
+        sentDetail: '群成员快照已改变，旧发送证据不能覆盖当前受众',
+        deltaLabel: '无法安全判断',
+        deltaTitle: '一个身份可能对应两位联系人',
+        deltaDetail: '系统保持 unknown，不推断谁收到了哪个版本',
+        privateTitle: '私密来源继续被拦截',
+        privateDetail: '证据不足不会降低隐私门槛',
+        primary: '保持沉默',
+        secondary: '保持沉默',
+        receipt: '需要先修复身份映射或由你自行判断',
+        deltaDraft: '',
+        backgroundDraft: ''
+      }
+    };
+
+    const byId = (id) => document.getElementById(id);
+
+    function showToast(message) {
+      const toast = byId('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(state.toastTimer);
+      state.toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    function setPanel(open) {
+      byId('groundPanel').hidden = !open;
+      byId('expandGround').setAttribute('aria-expanded', String(open));
+      byId('expandGround').textContent = open ? '收起' : '展开';
+    }
+
+    function renderScenario(name) {
+      state.scenario = name;
+      const scenario = scenarios[name];
+      document.querySelectorAll('.scenario-switch').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.scenario === name));
+      });
+      byId('ribbonText').textContent = scenario.ribbon;
+      byId('sentTitle').textContent = scenario.sentTitle;
+      byId('sentDetail').textContent = scenario.sentDetail;
+      byId('deltaLabel').textContent = scenario.deltaLabel;
+      byId('deltaTitle').textContent = scenario.deltaTitle;
+      byId('deltaDetail').textContent = scenario.deltaDetail;
+      byId('privateTitle').textContent = scenario.privateTitle;
+      byId('privateDetail').textContent = scenario.privateDetail;
+      byId('deltaAction').textContent = scenario.primary;
+      byId('backgroundAction').textContent = scenario.secondary;
+      byId('panelReceipt').textContent = scenario.receipt;
+      const disabled = name === 'unknown';
+      byId('deltaAction').disabled = disabled;
+      byId('backgroundAction').disabled = disabled;
+      if (disabled) setPanel(true);
+    }
+
+    function switchView(name) {
+      state.view = name;
+      document.querySelectorAll('.view-switch').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.view === name));
+      });
+      const meeting = name === 'meeting';
+      byId('chatView').hidden = meeting;
+      byId('meetingView').hidden = !meeting;
+      byId('surfaceTitle').textContent = meeting ? 'Meeting Pilot' : 'Nova Release Sync';
+      byId('surfaceSubtitle').textContent = meeting ? '下一场 · 14:00' : '3 位成员 · Group conversation';
+    }
+
+    function insertDraft(mode) {
+      const scenario = scenarios[state.scenario];
+      const draft = mode === 'delta' ? scenario.deltaDraft : scenario.backgroundDraft;
+      if (!draft) {
+        showToast('证据不足：没有生成高置信草稿');
+        return;
+      }
+      byId('composerText').value = draft;
+      byId('composerText').focus();
+      showToast('只改草稿，未发送；未写回 Jira / Calendar');
+    }
+
+    document.querySelectorAll('.scenario-switch').forEach((button) => {
+      button.addEventListener('click', () => renderScenario(button.dataset.scenario));
+    });
+    document.querySelectorAll('.view-switch').forEach((button) => {
+      button.addEventListener('click', () => switchView(button.dataset.view));
+    });
+
+    byId('expandGround').addEventListener('click', () => setPanel(byId('groundPanel').hidden));
+    byId('deltaAction').addEventListener('click', () => {
+      insertDraft(state.scenario === 'background' ? 'background' : 'delta');
+    });
+    byId('backgroundAction').addEventListener('click', () => {
+      insertDraft(state.scenario === 'background' ? 'delta' : 'background');
+    });
+
+    function openEvidence() {
+      if (typeof byId('evidenceDialog').showModal === 'function') byId('evidenceDialog').showModal();
+      else byId('evidenceDialog').setAttribute('open', '');
+    }
+
+    byId('evidenceAction').addEventListener('click', openEvidence);
+    byId('meetingEvidence').addEventListener('click', openEvidence);
+    byId('dialogClose').addEventListener('click', () => byId('evidenceDialog').close());
+    byId('evidenceDialog').addEventListener('click', (event) => {
+      if (event.target === byId('evidenceDialog')) byId('evidenceDialog').close();
+    });
+    byId('sendButton').addEventListener('click', () => {
+      showToast('这是只读 Demo：没有发送消息，也没有改变共同上下文状态');
+    });
+    byId('meetingOpen').addEventListener('click', () => {
+      byId('meetingDraft').textContent = '先补一句背景：INIT-30072 正按 8/25 推进，这个日期现在指 Feature Freeze / CF。本周的变化是 owner 仍待确认，今天希望先对齐候选与决策时间。';
+      showToast('只生成会前预览，未通知参会人，也未写 Calendar');
+    });
+
+    renderScenario('delta');
+    switchView('chat');
+  </script>
+</body>
+</html>

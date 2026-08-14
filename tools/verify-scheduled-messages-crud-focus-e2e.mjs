@@ -407,6 +407,22 @@ try {
   await page.getByRole('button', { name: /新增/ }).click();
   await page.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
 
+  await page.getByRole('tab', { name: /帮我问/ }).click();
+  await page.getByText('由 memory-service 负责追问与结果整理', { exact: true }).waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.getByText(/这里填写“要问谁、问什么、希望拿到什么信息”/).count(),
+    0,
+    'outreach guidance should be condensed into the dialog title hint',
+  );
+
+  await page.getByRole('tab', { name: /帮我做/ }).click();
+  await page.getByText('到期后由 OpenClaw 执行，结果通知单独配置', { exact: true }).waitFor({ timeout: 15000 });
+  assert.equal(
+    await page.getByText(/保存 Agent task 计划，可一次性或重复执行/).count(),
+    0,
+    'agent task guidance should be condensed into the dialog title hint',
+  );
+
   await page.getByRole('tab', { name: /AI Report/ }).click();
   const addCustomOutputButton = page.getByRole('button', { name: /添加本地自定义版块草稿/ });
   const addCustomOutputBoundary = await addCustomOutputButton.getAttribute('title');

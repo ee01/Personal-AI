@@ -13,6 +13,7 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 3. 消息分析把这些重点项目当成系统观察规则：命中只入库，**不发 Glip/Chrome 通知**。
 4. 高影响事件（日期变动等）抽成时间线，写双时态属性，并在 Roadmap bar 上出个人层角标；用户可「按此更新」或「忽略」，也可因 bar 收敛到建议日期而自动消除。
 5. 自我反思 / dreaming / 召回以 focus project 为锚点，但有多团队预算公平与 alias 短名压缩，避免 prompt 过载。
+6. 「创建 Jira」填了 Prompt 时，按 Epic 最多 2 路交给 Agent；某一组只成功一部分也会把已有 Jira key 写回 Roadmap，失败的行单独标错。
 
 ## 数据分层
 
@@ -58,7 +59,7 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 - **覆盖导入不碰手动项**：覆盖删除限定 `source='jira'`，孤儿 subs 清理同理。
 - **导入按 `jira_key` 去重**：手动条目建成 `NOVA-123` 后下次 JQL 会命中它，import 先按 `jira_key` 找到原行就地更新（顺便把 `source` 升级为 `jira`），不会多插一行。
 - **cleanup 语义**：过期 draft 主任务和普通 Epic 一样退回 Backlog；退回后它会从 memory focus 里被 archive，这是预期行为。
-- **无扩展也能用**：新建条目、拖拽只需要 edit token；只有「创建 Jira」依赖扩展。
+- **无扩展也能用**：新建条目、拖拽只需要 edit token；只有「创建 Jira」依赖扩展。缺扩展时的引导见下节。
 
 ### draft 的 memory-only 边界
 
@@ -109,13 +110,66 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 - 人员全集 = 当前用户 ∪ 团队成员 ∪ 子任务 Owner ∪ 草稿 `createdBy`
 - Owner 优先；无 Owner 回落创建人；本地自建未记名再回落当前用户
 - **直连 API**：实名转 `firstname.lastname` 写入 `fields.assignee.name`；未映射则留空，不阻塞创建
-- **Agent 模式**：前端组装完整 Prompt（用户 Prompt + 字段约束 + 映射表 + 任务清单），扩展只追加结果契约
+- **Agent 模式**：前端组装完整 Prompt（**System Prompt** + 用户 Prompt + 字段约束 + 映射表 + 任务清单）；扩展提交前按父 `jiraKey` 拉取 Epic `description` 写入请求，再追加结果契约
 - 全站展示名走 `dispName()`（选人浮层、人员视图、创建者灰字、协作 ticker）；存储仍用系统名
+
+#### 实名 Suggest 与人员合并
+
+映射弹窗输入 `Firstname Lastname` 时，下拉建议来自人员全集中**系统名已是两词及以上**的条目（`looksFullName`），可键盘上下选择 / Enter，或鼠标点选。
+
+- **仅手打实名并「保存映射」**：只写 `assignee_map_json`，不改写成员 / Owner / 创建者
+- **从建议列表选中**：确认后立刻发 `merge_people`（`fromName` = 当前行系统名，`toName` = 选中实名），把两人收成同一身份
+
+`merge_people` 行为：
+
+| 改写项 | 行为 |
+|---|---|
+| `subs.owner` / `subs.created_by` | `fromName` → `toName` |
+| `members` | 双方都有成员行则删短名行、保留实名行；仅短名有成员则改名为实名；都没有则 `ensureMember(toName)` |
+| `assignee_map_json` | 实名 key 与短名 key **都**指向同一 `Firstname Lastname`（短名保留为别名，避免本机 `actorName` 仍是短名时再次分裂） |
+| 本机登录名 | 若当前 `actorName` 等于 `fromName`，前端同步改成 `toName` |
+
+**有意不改写**：历史 `activity_log`、团队 `created_by`、其他浏览器未刷新前的 presence 名。活动流仍可能显示旧短名；刷新后人员视图 / 选人列表以合并后身份为准。
+
+**副作用注意**：
+
+1. 合并会改历史子任务上的 Owner / 创建者展示与资源视图归集，确认框会提示
+2. `update_member` 遇重名仍返回 `member_name_taken`；合并路径专门处理双成员冲突，不要用改名代替合并
+3. 其他协作者本机 `actorName` 若仍是短名，靠映射别名继续解析到同一 Jira 实名；他们不会自动改本地登录名
+4. 手填与建议目标同字但不点选 → 不会合并；避免误伤
+
+权威实现：`mergeAssigneeMapIdentities`（`roadmap-service/src/core/assigneeMap.ts`）、`merge_people`（`TeamService`）、弹窗 `AssigneeMapModal.vue` + `suggestFullNamePeople`。
+
+### Agent System Prompt 与子任务 Description
+
+权威文案：`roadmap-service/web/src/composables/useCreateJiraAgentPrompt.ts`（`ROADMAP_CREATE_JIRA_SYSTEM_PROMPT` + `buildAgentCreatePrompt`）。扩展 `contentScriptRoadmap.ts` 保留同文案兜底，并在 `executeAgentTask` 前调用 `enrichAgentPromptWithEpicDescriptions`。
+
+提交给 Agent 的 `task` 文本结构：
+
+1. **【System Prompt】** — 固定指令（角色、禁止索要 token、**子任务必须写 description**）
+2. **【用户 Prompt】** — 弹窗输入
+3. **【字段约束】 / 【Assignee 规则】 / 【任务清单】** — 硬约束与逐行 draft
+4. **【父 Epic 描述（已从 Jira 拉取）】** — 扩展用 Options token 读父 issue `description`（ADF/wiki 转纯文本，约 1200 字上限）
+5. **结果契约** — `mappings` JSON，允许 `partial` 与 `error` 行；明确子任务 `description=required`；每路只创建该组 draftId
+
+**Description 生成规则（Agent 必须遵守）**：
+
+| 条件 | 行为 |
+|---|---|
+| 父 Epic 已有 Jira key，且请求中带了描述摘录 | 用摘录 + 子任务标题 + **该子任务用户描述（如有）** 生成 description |
+| 父有 key 但摘录为空 | Agent 自行再读父 issue description 后生成 |
+| 父也是本批新建的 draft | 用父标题 + **父条目用户描述（如有）** + 子标题生成简短 description |
+| 主任务（Epic） | 用户未要求时可省略；**带用户描述的 draft 主任务以用户描述为基础润色**；**子任务不可省略** |
+
+生成要求：综合三类输入（父 Epic description、子标题、用户描述）；约束/范围/事实必须保留，允许改写措辞——**最终 summary/description 不必与用户输入逐字一致**。勿整段复制任何一段输入；勿编造事实。直连 API 路径不走 Agent Prompt，**有内容则原文透传 `fields.description`**。
 
 ### 甘特体验（与 demo 对齐）
 
-- 草稿创建者：条上仅 `DRAFT`；协作方创建的子任务 hover 时左侧浮现灰色 `xxx created`
+- 草稿创建者：条上用虚线样式标识草稿（无 DRAFT 角标）；协作方创建的子任务 hover 时左侧浮现灰色 `xxx created`
 - 新建子任务默认今天起 14 天（贴齐时间轴末端）
+- 草稿可折叠填 **description**（甘特快速添加 / 双击草稿条 / Backlog 新建）：标题 + Enter 仍秒建；`≡ 描述` 或 Shift+Enter 展开；已有描述时双击默认展开。非 draft 不可改 description（由打开刷新从 Jira 镜像）
+- 描述框样式与 demo 一致：快速添加的描述框固定 404px、与标题框左对齐（`.te-desc`）；双击编辑器内的描述框撑满面板（`.alias-editor` 用 `align-items:stretch`，收缩到 textarea 默认宽即为回归）；Backlog 新建弹窗的描述用正文字体（`.f-input.f-desc`，非 JQL 的等宽 96px 高）。展开即聚焦描述框、收起回到标题输入框且不丢内容
+- Hover 灰色小字：有 description 时展示描述（单行约 150 字）；无则保留操作提示。「可赶 Sprint」在标题行
 - 选人浮层：搜索置顶、打开即聚焦、列表限高滚动、键盘导航、视口不够时向上翻转
 - 导入 Task：`importedTaskSpan` 兜底（双端齐全按 Target；都缺则同主任务；只一端则两周并钳制进主任务范围）
 - 打开 Jira：hover 左上 ↗，或 ⌘/Ctrl+单击；base URL 来自服务端 `JIRA_BASE_URL`
@@ -129,10 +183,10 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 flowchart TD
     Start[点击创建 Jira] --> Mode{Prompt 非空?}
     Mode -->|否| Direct[直连 Jira REST]
-    Mode -->|是| Agent[AgentTask execute + 轮询]
+    Mode -->|是| Agent[每 Epic 一条 AgentTask，最多 2 路并行]
     Direct --> Loop{遍历 draft 主任务}
-    Agent --> Map[解析 mappings]
-    Map --> ResolveAll[resolve_item / resolve_draft]
+    Agent --> Map[解析 mappings，含 partial / error]
+    Map --> ResolveAll[有 jiraKey 即 resolve_item / resolve_draft]
     Loop -->|已有 jiraKey| SkipParent[跳过父创建]
     Loop -->|无 jiraKey| CreateParent[创建主任务 issue]
     CreateParent -->|失败| MarkFail[记录失败, 跳过其子任务]
@@ -144,7 +198,60 @@ flowchart TD
     ResolveDraft --> Next
 ```
 
-主任务成功后**立刻**单独发 `resolve_item`，不等子任务：否则子任务失败后重试会重复建父 issue。一行失败不会中断整批，每行各自回显 key 或错误。Agent 路径按 parent 组一个 task，idempotencyKey = `roadmap_create:{teamId}:{sorted draftIds}`，重复点击复用同一 run。
+主任务成功后**立刻**单独发 `resolve_item`，不等子任务：否则子任务失败后重试会重复建父 issue。一行失败不会中断整批，每行各自回显 key 或错误。
+
+**Agent 调度（按 Epic，不合并成一条大请求）**：
+
+| 规则 | 行为 |
+|---|---|
+| 分组 | 与直连相同：`buildDraftGroups` 每个主任务一组 |
+| 并行 | 最多 **2** 路同时 `execute`（`AGENT_CREATE_CONCURRENCY`）。其余组保持「待创建」，轮到才转圈。直连 API 仍串行 |
+| Prompt 切片 | 每路只含该组 draft。预览弹窗仍展示全部草稿总览 |
+| 幂等 | `idempotencyKey = roadmap_create:{teamId}:{sorted draftIds}`，按组计算。已回写的行不再是 draft，重试只会带剩余组 |
+| 为何不合并 | 单请求崩溃且无 artifact 时，重试可能把已建票再创建一遍。Epic 隔离把爆炸半径限制在一组 |
+
+**结果契约（允许部分成功）**：
+
+```json
+{"partial":true,"mappings":[
+  {"draftId":"AE42…","jiraKey":"MILO-101"},
+  {"draftId":"BBx…","error":"assignee 找不到"}
+]}
+```
+
+- 兼容旧格式（只有 `jiraKey`、无 `partial`）
+- **即使 AgentTask 为 `failed` / `dead_letter` / 轮询超时，只要 artifact 里有 `jiraKey` 就回写**，缺 mapping 的行才标错
+- 契约要求 Agent：后面某行失败也必须输出已成功的 key，禁止整单失败就省略成功行
+
+**Agent 排队 / loading**：`execute` 返回 `queueStatus: queued` 后扩展每 5s 轮询 `runtime-status`，直到 `succeeded` / `failed` / `dead_letter` / `input_required`，或就绪检查拦截（`readinessBlocked`）、排队超过约 90s。这三种「失败」不再直接 throw 整组：先解析 mappings，有 key 就回写。
+
+**超时预算（三处必须对齐，均为 30 分钟）**：批量创建十几条 ticket 的 Agent run 常远超 10 分钟，所以：
+
+| 位置 | 值 | 说明 |
+|---|---|---|
+| 扩展轮询 `waitForAgentTaskTerminal` | `AGENT_CREATE_TIMEOUT_MS = 30min` | 超时用最后一次 poll 的 artifact 尝试回写；没有 mappings 才把该组标失败 |
+| `executeAgentTask` 请求体 `timeoutMs` | `30min` | 经 `normalizeAgentTaskTimeoutMs`（下限 10min）传到 OpenClaw 网关执行器的等待时长 |
+| 心跳 stale-running 回收 | `max(openClawTimeoutMs+60s, 本 action 的 timeoutMs+120s)` | `ActionRepository.recoverStaleRunningActions` 按每个 action 自己的 `params.timeoutMs` 抬高回收线，避免把仍在跑的长任务判成 `dead_letter` |
+
+只改前端轮询是不够的：网关等待与心跳回收若仍按 10 分钟，run 会先被判超时/回收。若长期卡在 `queued`，多为 OpenClaw 就绪检查未通过（Options → Agent 执行器 / 网关未配好）；修复后重新点击创建（同 idempotency 会重试 failed/queued）。
+
+**关闭弹窗 / 关闭网页**：
+
+| 场景 | 行为 |
+|---|---|
+| 创建中关闭弹窗 | 允许。工具栏「创建 Jira」保持 busy；可再点开查看行状态。完成后 **toast**（弹窗已关时 toast 更久） |
+| 关闭 Roadmap 标签页 / 整页刷新 | 见下表 |
+
+| 路径 | 关页后创建还会继续吗？ | ticket 会回写 Roadmap 吗？ | 用户如何知道成功？ |
+|---|---|---|---|
+| **直连 API** | Jira REST 若已发出，background 可能仍完成创建；但回写 intent 在 content script，**关页后通常不会回写** | 多数情况下 **不会**（Jira 里可能已有 issue，Roadmap draft 仍虚线） | 本页 toast / 弹窗行状态；关页后无通知。重开后可对照 Jira 或重新创建（注意勿重复建） |
+| **Prompt / Agent** | memory-service 已 `accepted` 的任务会在服务端 / OpenClaw **继续跑完** | **关页当时不会回写**（`runtime-status` 轮询在 content script，background service worker **不会**接着轮询，这是 by design） | 本页打开时 toast。关页后无系统通知 |
+
+**下次打开 Roadmap 才会补回写（已实现）**：`execute` 被 accepted 后立刻把 `{taskId, teamId, token, parent, childDraftIds}` 写入扩展 `chrome.storage.local`（`roadmapPendingAgentCreates`）。content script 在页面握手后再扫这笔账本，继续 `runtime-status` 轮询并 `resolve_*`。工具栏会短暂回到「创建中」，成功则 toast「已补回写 N 个 Jira issue」。超过 24h 仍会做一次状态探查再丢弃。`resolve_*` 幂等，与仍开着的原页轮询重复执行也安全。
+
+关页期间 **没有** `chrome.alarms` / background 续跑，所以 DevTools 里看不到 background 继续打 `runtime-status`。Agent 本身在 memory-service 跑，只是扩展不再问进度，直到下次打开这个浏览器里的 Roadmap 页。
+
+两个 service 之间仍然没有直接通信；`resolve_*` 只能由持有团队写 token 的扩展发出。换设备 / 换浏览器不会带上 `chrome.storage` 账本。若需要关页也通知，再叠加 background `chrome.alarms`（未做）。
 
 ### 类型与链接字段映射
 
@@ -163,18 +270,19 @@ flowchart TD
 - `customfield_21998` ← `item.quarter`（仅当该 project 的 createmeta 里存在此字段，且值能匹配上 allowedValues）
 - `fixVersions` ← 弹窗建议/覆盖的 release name（createmeta 门控 + 后缀匹配）
 - `assignee` ← 子任务 Owner（经团队映射表）转成的 `firstname.lastname`；未映射则不发
+- `description` ← 用户在草稿上填的原文；空则不发（系统字段，无 createmeta 时也可写）
 - **创建 Epic 必须带 `customfield_11451`（Epic Name）**，否则 Jira Server 直接 400
 - 子任务：按上表填 `linkField` 或 `parent`
 
-createmeta 不可用时只发 Epic Name（Jira 强制要求的那个），其余可选字段一律不发——一个该 project 不支持的字段 id 会让 Jira 拒掉整次创建。
+createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有内容的 `description`；其余可选字段一律不发——一个该 project 不支持的字段 id 会让 Jira 拒掉整次创建。
 
 创建编排在扩展 / memory-service；Assignee 映射与 Prompt 组装在 roadmap-service 页面与团队配置中完成。
 
 ## 数据库迁移
 
-`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。
+`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳。
 
-**顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。
+**顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。description 列写在 `schema.sql` 里但不建索引。
 
 ## 关键 API
 
@@ -234,8 +342,9 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 ## Owner、人员视图与清理记忆
 
 - 新增子任务默认 **14 天**，Owner 可选：标题 `@` 建议、左侧头像点选、手输新名（自动进成员表）。Enter 不设 Owner 也可创建。
-- 双击子任务条可改备注名，并点头像更换/移除 Owner；`update_sub` 保留 draft / Jira key 身份（拖拽不再 delete+add）。
-- 人员视图：近 2 周 / 全部、并行车道堆叠、窗口外「更早/更晚」角标；双击成员名 `update_member`（级联改所有 sub.owner）。
+- 双击子任务条：草稿改任务名（创建 Jira 用 `title`），已创建的改备注名，并点头像更换/移除 Owner；`update_sub` 保留 draft / Jira key 身份（拖拽不再 delete+add）。
+- 双击草稿主任务条：`update_item` 改标题；已创建主任务仍 `set_alias` 改备注名。
+- 人员视图：近 2 周 / 全部、并行车道堆叠、窗口外「更早/更晚」角标；双击成员名 `update_member`（级联改所有 sub.owner）。窗口重叠用毫秒时间戳比较（ISO 字符串不能和 `Date` 直接 `<=`，否则窗口内 bar 全部不渲染）。
 - 清理过期：Epic 回退 Backlog；未过期 Epic 下的过期子任务 `cleared=1`（Gantt/人员视图隐藏，Backlog 仍计「↺ n 个子任务记录」）。Epic 再次拖入 Gantt（`schedule`）时清空 `cleared` 还原。
 
 ## 阶段节点与外部依赖（Markers）
@@ -254,17 +363,36 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 ## 协作 Presence 与同步 Ticker
 
 - 顶栏头像逐个 `data-tip` 显示用户名（自己加「（你）」）；LIVE pill 保留整体说明
-- `SyncTicker`：头像左侧展示**其他成员**最新一条 activity（过滤自己 + `lock/unlock/expand/collapse`），新日志滚入动画；点击打开 ActivityDrawer
+- `SyncTicker`：头像左侧展示**其他成员**最新一条 activity（过滤自己 + `lock/unlock/expand/collapse/refresh_from_jira`），新日志滚入动画；点击打开 ActivityDrawer
 - 取数纯函数：`pickTickerEntry` / `tickerLabel`（`useRoadmapContract.ts`）
 
 ## 导入 Task 与拖动回写 Target（扩展优先）
 
 | 能力 | 凭据优先级 | 展示 / 行为 |
 |---|---|---|
-| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + **已安装扩展** + 甘特上有 Jira Epic 才显示；无扩展隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重 |
-| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast |
+| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重 |
+| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
+| **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；无扩展/未映射 toast「未回写 assignee」；置空先 confirm |
+| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务，最多 50 key、JQL `key in (...)` 每批 ≤25；结果走 `refresh_from_jira` intent（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。跳过正在拖拽/编辑/pending Target sync 的 key。只读链接不刷新 |
 
-注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。不回写子任务日期；不做 Jira→Roadmap 反向日期合并。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。
+注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
+
+## 未安装扩展时的引导（锁定态）
+
+需要扩展的操作以前用 `disabled` 灰掉，按钮**没有任何办法解释自己为什么点不动**。现在统一走「锁定态 + 可点击」，**只在用户主动点这个操作时**才弹出安装引导，页面上没有常驻提示条：
+
+| 层 | 位置 | 行为 |
+|---|---|---|
+| 按钮 | `.btn.locked`（`tokens.css`） | 不再 `disabled`，改成灰底 + 锁图标，hover 出 `data-tip`「需要 Personal AI 扩展 / 点击查看安装指引」 |
+| 弹窗 | `ExtensionGateModal.vue` | 说明**当前这个操作**为什么需要扩展 → 安装后解锁的 5 项能力（当前操作高亮）→ 三步安装 → 「前往 Chrome 应用商店」/「已安装好了 · 刷新页面」 |
+
+单一事实来源是 `roadmap-service/web/src/composables/useExtensionGate.ts`：商店地址 `EXTENSION_STORE_URL`、功能文案 `EXTENSION_FEATURES`、解锁清单 `EXTENSION_PERKS`、tooltip 拼装 `extensionLockTip()`，以及模块级单例状态 `useExtensionGate()`。
+
+调用方把「无扩展就 return / toast」换成 `gate.openGate(feature)`：`ImportBar`（导入 Backlog）、`ImportModal`（确认导入）、`GanttPanel`（导入 Task / 创建 Jira）、`AiCreateModal`（开始创建）、`useMarkerFloats`（读取 ETA / 刷新 ETA）。
+
+只读链接（无 edit token）仍然保持 `disabled` —— 装扩展也解不开，引导反而是误导。
+
+content script 只在页面加载时注入，所以引导里的第三步是**刷新页面**；弹窗同时 watch `hasExtension`，一旦握手成功就显示绿色成功条并自动关闭。
 
 ## 发布时间表标尺（Release Train Ruler）
 
@@ -299,7 +427,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 1. 只取 `tier=focus`（在 Gantt 上的主任务）
 2. 多团队预算：每团队保底 1–2 槽，剩余按 priority
 3. priority 信号：alias > 子任务活动 > 近 7 天编辑 > 当月交集
-4. 消息分析用行视图；反思用段视图；dreaming/召回用种子
+4. 消息分析用行视图；反思用段视图（可带 description notes）；dreaming/召回用种子。description 进 paragraph，**不进** watch-rule keywords / aliases
 
 ## 源码入口
 

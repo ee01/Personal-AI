@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.10.0';
-var APP_SCRIPT_LAST_UPDATED = '2026-08-09';
+var APP_SCRIPT_VERSION = '2.11.0';
+var APP_SCRIPT_LAST_UPDATED = '2026-08-11';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -2819,6 +2819,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         Agent_Executor: rowData.Agent_Executor || '',
         Agent_Task_Prompt: rowData.Agent_Task_Prompt || '',
         Agent_Notify_Template: rowData.Agent_Notify_Template || '',
+        Agent_Notify_Success_Receipt: rowData.Agent_Notify_Success_Receipt || '',
         Agent_Trigger_Source: rowData.Agent_Trigger_Source || '',
         Agent_AR_Binding_ID: rowData.Agent_AR_Binding_ID || '',
         Agent_Last_Run_At: rowData.Agent_Last_Run_At || '',
@@ -3368,17 +3369,22 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
   }
 
   const agentTaskId = message.Agent_Task_ID || ('agent_task_' + messageId);
+  // Content is the single task source; Agent_Task_Prompt kept as fallback for unupgraded sheets.
+  const successReceiptRaw = (message.Agent_Notify_Success_Receipt || '').toString().trim().toUpperCase();
+  const successReceipt = successReceiptRaw !== 'N';
   const payload = {
     taskId: agentTaskId,
     sheetMessageId: messageId,
     rowIndex: message.rowIndex,
     title: message.Topic || agentTaskId,
-    task: message.Agent_Task_Prompt || message.Content || '',
+    task: message.Content || message.Agent_Task_Prompt || '',
     executor: message.Agent_Executor || 'openclaw',
     notifyTemplate: message.Agent_Notify_Template || '',
     triggerSource: message.Agent_Trigger_Source || 'jira_rule',
     arBindingId: message.Agent_AR_Binding_ID || '',
     idempotencyKey: executionKey || '',
+    successReceipt: successReceipt,
+    notifyVia: 'bot',
     source: {
       system: 'scheduled_messages',
       sheet: 'Messages',

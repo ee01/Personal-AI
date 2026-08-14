@@ -69,7 +69,6 @@ const rsyncSsh = `ssh ${sshArgs.join(' ')}`;
 
 if (!options.skipSync && !options.skipLocalBuild) {
   run('npm', ['--prefix', 'memory-service', 'run', 'build']);
-  run('npm', ['--prefix', 'roadmap-service', 'run', 'build']);
 }
 
 if (!options.skipSync) {
@@ -94,26 +93,6 @@ if (!options.skipSync) {
     `${options.host}:${options.remoteDir}/memory-service/`,
   ]);
 
-  // roadmap uses prebuilt dist/ + web/dist/ in Docker (avoids in-image tsc/vite)
-  run('rsync', [
-    '-az',
-    '--delete',
-    '--exclude',
-    '.env',
-    '--exclude',
-    'data/',
-    '--exclude',
-    'node_modules/',
-    '--exclude',
-    'coverage/',
-    '--exclude',
-    '.DS_Store',
-    '-e',
-    rsyncSsh,
-    `${path.join(repoRoot, 'roadmap-service')}/`,
-    `${options.host}:${options.remoteDir}/roadmap-service/`,
-  ]);
-
   run('rsync', [
     '-az',
     '-e',
@@ -131,18 +110,20 @@ const remoteSteps = [
   `cd ${shellQuote(options.remoteDir)}`,
   'test -f docker-compose.yml',
   'test -f memory-service/Dockerfile',
-  `docker compose build${options.noCache ? ' --no-cache' : ''} memory-service roadmap-service`,
-  'docker compose stop memory-service roadmap-service 2>/dev/null || true',
-  'docker compose rm -f -s memory-service roadmap-service 2>/dev/null || true',
-  'docker rm -f memory-service roadmap-service 2>/dev/null || true',
-  'for id in $(docker ps -a --filter name=roadmap-service -q); do docker rm -f "$id" || true; done',
-  'docker compose up -d --force-recreate --remove-orphans memory-service roadmap-service',
+  `docker compose build${options.noCache ? ' --no-cache' : ''} memory-service`,
+  'docker compose stop memory-service 2>/dev/null || true',
+  'docker compose rm -f -s memory-service 2>/dev/null || true',
+  'docker rm -f memory-service 2>/dev/null || true',
+  'docker compose up -d --force-recreate --remove-orphans memory-service',
   'for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3210/health >/dev/null && break; sleep 2; done',
   'curl -fsS http://127.0.0.1:3210/health >/dev/null',
-  'for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:3220/health >/dev/null && break; sleep 2; done',
-  'curl -fsS http://127.0.0.1:3220/health >/dev/null',
-  `curl -fsS -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null`,
-  'docker compose ps memory-service roadmap-service',
+  `API_KEY="$(python3 -c 'from pathlib import Path; vals={};
+[vals.__setitem__(k.strip(), v.strip()) for line in Path("memory-service/.env").read_text().splitlines() if line and not line.startswith("#") and "=" in line for k,v in [line.split("=",1)]];
+print(vals.get("API_KEY",""))')"`,
+  'if [ -n "$API_KEY" ]; then AUTH_HEADER="Authorization: Bearer $API_KEY"; else AUTH_HEADER=""; fi',
+  `if [ -n "$AUTH_HEADER" ]; then curl -fsS -H "$AUTH_HEADER" -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null; else curl -fsS -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null; fi`,
+  'docker compose ps memory-service',
+  shellQuote(`${options.remoteDir}/tools/server-public-stack-watchdog.sh`),
 ];
 
 run('ssh', [
@@ -151,4 +132,4 @@ run('ssh', [
   `bash -lc ${shellQuote(remoteSteps.join(' && '))}`,
 ]);
 
-console.log('\nMemory + Roadmap service deploy completed.');
+console.log('\nMemory service deploy completed.');

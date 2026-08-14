@@ -64,6 +64,21 @@ describe('syncFocusProjectsForTeam draft handling', () => {
     expect(project.aliases).not.toContain(DRAFT_KEY);
   });
 
+  it('stores description on externalRef but never copies it into aliases', () => {
+    sync(
+      db,
+      [draftItem({ description: 'LaunchDarkly flags for composer and mobile' })],
+      1_000,
+    );
+    const [project] = listFocusProjects(db);
+    expect(project.description).toBe('LaunchDarkly flags for composer and mobile');
+    expect(project.externalRef).toMatchObject({
+      description: 'LaunchDarkly flags for composer and mobile',
+    });
+    expect(project.aliases).toEqual(['手动条目', '低端机']);
+    expect(project.aliases?.join(' ')).not.toContain('LaunchDarkly');
+  });
+
   it('keeps the same project id after the draft gets a real Jira key', () => {
     sync(db, [draftItem()], 1_000);
     const draftId = listFocusProjects(db)[0].id;

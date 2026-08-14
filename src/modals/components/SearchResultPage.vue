@@ -780,6 +780,61 @@
           </button>
         </div>
       </div>
+
+      <section
+        v-if="searchContext.mode === 'entity'"
+        class="search-synthesis-section"
+        aria-label="搜索结果总结"
+      >
+        <div class="search-synthesis-header">
+          <div>
+            <strong>AI 结果总结</strong>
+            <p>
+              默认不调用 LLM。点击后只总结当前查询重新召回的证据，不写入记忆、不确认事实、也不执行外部动作。
+            </p>
+          </div>
+          <button
+            type="button"
+            class="search-synthesis-button"
+            :disabled="searchSynthesis.loading || entities.length < 3"
+            :title="searchSynthesisButtonBoundary"
+            :aria-label="searchSynthesisButtonBoundary"
+            @click="summarizeCurrentSearch"
+          >
+            {{ searchSynthesis.loading ? '正在总结…' : '总结这些结果' }}
+          </button>
+        </div>
+
+        <div
+          v-if="searchSynthesis.message"
+          :class="[
+            'search-synthesis-receipt',
+            `search-synthesis-receipt-${searchSynthesis.tone}`,
+          ]"
+          role="status"
+        >
+          <strong>{{ searchSynthesis.label }}</strong>
+          <span>{{ searchSynthesis.message }}</span>
+          <div v-if="searchSynthesis.metrics.length" class="search-synthesis-metrics">
+            <span v-for="metric in searchSynthesis.metrics" :key="metric">
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="searchSynthesis.analysis" class="search-synthesis-content">
+          <p>{{ searchSynthesis.analysis.summary }}</p>
+          <ul v-if="searchSynthesis.analysis.groundedFindings?.length">
+            <li
+              v-for="finding in searchSynthesis.analysis.groundedFindings"
+              :key="`${finding.text}:${finding.evidenceItemIds.join(',')}`"
+            >
+              {{ finding.text }}
+              <small>依据 {{ finding.evidenceItemIds.length }} 条当前证据</small>
+            </li>
+          </ul>
+        </div>
+      </section>
       
       <section
         v-if="navigationReceipt"
@@ -1235,6 +1290,7 @@ import type {
   RecallScope,
   ClaimAttributionReceiptItem,
   MemoryClaimCorrectionRequest,
+  RecallAnalysis,
 } from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
@@ -1281,6 +1337,28 @@ const isAiAnswerExpanded = ref(true);
 const feedbackError = ref('');
 const isConfirmingAskCandidate = ref(false);
 const navigationReceipt = ref<MemoryOpenReceipt | null>(null);
+
+interface SearchSynthesisViewState {
+  loading: boolean;
+  tone: 'idle' | 'info' | 'success' | 'warning' | 'error';
+  label: string;
+  message: string;
+  metrics: string[];
+  analysis: RecallAnalysis | null;
+}
+
+const createEmptySearchSynthesisState = (): SearchSynthesisViewState => ({
+  loading: false,
+  tone: 'idle',
+  label: '',
+  message: '',
+  metrics: [],
+  analysis: null,
+});
+
+const searchSynthesis = ref<SearchSynthesisViewState>(
+  createEmptySearchSynthesisState(),
+);
 
 type SearchFeedbackChoice = Extract<
   MemoryFeedbackAction,
@@ -2569,6 +2647,25 @@ const currentScopeValue = computed(() =>
 
 const currentScopeLabel = computed(() =>
   getScopeLabel(currentScopeValue.value),
+);
+
+const searchSynthesisButtonBoundary = computed(() =>
+  entities.value.length < 3
+    ? `当前只有 ${entities.value.length} 条证据，至少需要 3 条才会调用 LLM；不会写入记忆或执行外部动作。`
+    : `点击会为“${(
+        searchContext.value.query || searchQuery.value
+      ).trim()}”重新召回当前范围并调用一次 LLM；只生成有证据编号的总结，不写入记忆、不确认事实、不发送消息或执行外部动作。`,
+);
+
+watch(
+  [
+    () => searchContext.value.query,
+    () => searchContext.value.scope,
+    () => searchContext.value.entityType,
+  ],
+  () => {
+    searchSynthesis.value = createEmptySearchSynthesisState();
+  },
 );
 
 function compactLoadingScopeQuery(value: unknown): string {
@@ -3894,6 +3991,111 @@ const broadenSearchScope = () => {
   });
 };
 
+const summarizeCurrentSearch = async () => {
+  const query = (searchContext.value.query || searchQuery.value).trim();
+  if (!query || searchSynthesis.value.loading || entities.value.length < 3) {
+    return;
+  }
+  const expectedResultKeys = entities.value.map((entity: any) =>
+    String(entity.resultKey || `${entity.recallType || entity.type}:${entity.id}`),
+  );
+  const requestSignature = JSON.stringify({
+    query,
+    scope: currentScopeValue.value,
+    entityType: searchContext.value.entityType || '',
+  });
+  searchSynthesis.value = {
+    loading: true,
+    tone: 'info',
+    label: 'LLM 总结请求中',
+    message: '正在重新召回当前搜索证据；只有证据数量达到门槛才会进入模型。',
+    metrics: [`当前结果 ${entities.value.length}`, '最低证据 3 条'],
+    analysis: null,
+  };
+
+  try {
+    const response = (await chromeAPI.sendMessage({
+      type: 'SUMMARIZE_SEARCH_RESULTS',
+      query,
+      entityType: searchContext.value.entityType,
+      scope: currentScopeValue.value,
+      limit: 30,
+      expectedResultKeys,
+    })) as any;
+    const currentSignature = JSON.stringify({
+      query: (searchContext.value.query || searchQuery.value).trim(),
+      scope: currentScopeValue.value,
+      entityType: searchContext.value.entityType || '',
+    });
+    if (currentSignature !== requestSignature) return;
+    if (!response?.success) {
+      throw new Error(response?.error || 'Memory Service 未返回总结结果。');
+    }
+
+    if (response.snapshotChanged && Array.isArray(response.data)) {
+      store.entities = response.data;
+    }
+    const receipt = response.synthesisReceipt || {};
+    const channels = Array.isArray(response.retrievalReceipt?.effectiveChannels)
+      ? response.retrievalReceipt.effectiveChannels.join('+')
+      : '';
+    const metrics = [
+      channels ? `有效通道 ${channels}` : '',
+      typeof response.retrievalTimeMs === 'number'
+        ? `召回 ${response.retrievalTimeMs}ms`
+        : '',
+      typeof response.synthesisTimeMs === 'number' && response.synthesisTimeMs > 0
+        ? `生成 ${response.synthesisTimeMs}ms`
+        : '',
+      receipt.cacheHit ? '复用相同证据总结' : '',
+      response.snapshotChanged ? '证据快照已刷新' : '',
+    ].filter(Boolean);
+
+    if (receipt.status === 'succeeded' && response.analysis) {
+      searchSynthesis.value = {
+        loading: false,
+        tone: response.snapshotChanged ? 'warning' : 'success',
+        label: receipt.cacheHit ? '总结已复用' : '总结已生成',
+        message: response.snapshotChanged
+          ? '召回证据在点击后发生变化；页面结果已刷新，以下总结对应刷新后的证据。'
+          : '总结只基于当前返回的证据；它不是事实确认，仍可逐条查看来源。',
+        metrics,
+        analysis: response.analysis,
+      };
+      return;
+    }
+
+    const statusMessage: Record<string, string> = {
+      skipped_empty: '没有召回到证据，因此没有调用 LLM。',
+      skipped_insufficient: `只找到 ${receipt.evidenceItemIds?.length || 0} 条证据，少于最低 3 条，因此没有调用 LLM。`,
+      invalid_output: '模型输出缺少有效证据引用，本次总结已拦截。',
+      failed: '模型请求失败；原始搜索结果仍可正常使用。',
+      skipped_by_caller: '调用方关闭了模型综合，本次只保留原始证据。',
+    };
+    searchSynthesis.value = {
+      loading: false,
+      tone:
+        receipt.status === 'skipped_empty' ||
+        receipt.status === 'skipped_insufficient'
+          ? 'warning'
+          : 'error',
+      label: '未生成总结',
+      message: statusMessage[receipt.status] || '本次没有生成可验证的总结。',
+      metrics,
+      analysis: null,
+    };
+  } catch (error) {
+    searchSynthesis.value = {
+      loading: false,
+      tone: 'error',
+      label: '总结请求失败',
+      message: error instanceof Error ? error.message : '未知错误',
+      metrics: ['原始搜索结果未受影响'],
+      analysis: null,
+    };
+  }
+};
+
 const retryFailedSearch = () => {
   const receipt = searchFailureReceipt.value;
   const query = (receipt?.query || searchQuery.value).trim();
@@ -4906,6 +5108,96 @@ const handleResultClick = (entity: any) => {
   margin-bottom: 1.5rem;
   flex-wrap: wrap;
   gap: 1rem;
+}
+
+.search-synthesis-section {
+  display: grid;
+  gap: 0.8rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.search-synthesis-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.search-synthesis-header p {
+  margin: 0.3rem 0 0;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.search-synthesis-button {
+  flex-shrink: 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid rgba(96, 165, 250, 0.48);
+  border-radius: 0.5rem;
+  background: rgba(37, 99, 235, 0.24);
+  color: #dbeafe;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.search-synthesis-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.search-synthesis-receipt,
+.search-synthesis-content {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem;
+  border-radius: 0.55rem;
+  background: rgba(30, 41, 59, 0.72);
+  color: #cbd5e1;
+  font-size: 0.84rem;
+}
+
+.search-synthesis-receipt-success {
+  border: 1px solid rgba(52, 211, 153, 0.34);
+}
+
+.search-synthesis-receipt-warning {
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.search-synthesis-receipt-error {
+  border: 1px solid rgba(248, 113, 113, 0.42);
+}
+
+.search-synthesis-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.search-synthesis-metrics span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.58);
+  font-size: 0.74rem;
+}
+
+.search-synthesis-content p,
+.search-synthesis-content ul {
+  margin: 0;
+}
+
+.search-synthesis-content li {
+  margin-top: 0.35rem;
+}
+
+.search-synthesis-content small {
+  display: block;
+  color: #93c5fd;
 }
 
 .results-overview {

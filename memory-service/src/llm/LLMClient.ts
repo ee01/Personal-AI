@@ -91,9 +91,14 @@ export class LLMClient {
       }
     };
 
-    const response = await this.withRetry(attempt, options);
-    this.recordBackendUsage(response, prompt);
-    return response;
+    try {
+      const response = await this.withRetry(attempt, options);
+      this.recordBackendUsage(response, prompt);
+      return response;
+    } catch (error) {
+      this.recordBackendFailure(error);
+      throw error;
+    }
   }
 
   /**
@@ -136,6 +141,31 @@ export class LLMClient {
       model: this.getActiveModel(),
       promptTokens,
       completionTokens,
+    });
+  }
+
+  private recordBackendFailure(error: unknown): void {
+    const message = String(
+      error instanceof Error ? error.message : error || '',
+    ).toLowerCase();
+    const errorKind = /\b(?:401|403)\b/.test(message)
+      ? 'auth'
+      : /\b429\b|rate limit/.test(message)
+        ? 'rate_limit'
+        : /timeout|aborted/.test(message)
+          ? 'timeout'
+          : /fetch failed|failed to fetch|network/.test(message)
+            ? 'network'
+            : /\b5\d\d\b/.test(message)
+              ? 'server'
+              : 'unknown';
+    recordLlmUsage({
+      side: 'backend',
+      model: this.getActiveModel(),
+      promptTokens: 0,
+      completionTokens: 0,
+      status: 'error',
+      errorKind,
     });
   }
 

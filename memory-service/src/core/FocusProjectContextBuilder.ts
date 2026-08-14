@@ -21,12 +21,15 @@ export interface FocusProjectRecord {
     itemKey?: string;
     jiraKey?: string | null;
     isDraft?: boolean;
+    description?: string | null;
   };
   tier: FocusTier;
   priority: number;
   targetStart?: string | null;
   targetEnd?: string | null;
   keywords?: string[];
+  /** User / Jira description used in paragraph context, not watch-rule keywords. */
+  description?: string | null;
   recentEventSummaries?: string[];
   recentHitCount?: number;
   hasUnresolvedDrift?: boolean;
@@ -167,11 +170,19 @@ export function buildFocusParagraphContext(
     const events = (project.recentEventSummaries || []).slice(0, 3);
     const hits = project.recentHitCount ?? 0;
     const drift = project.hasUnresolvedDrift ? 'unresolved drift' : 'no open drift';
+    const notes = String(project.description || '')
+      .replace(/\s+/g, ' ')
+      .trim();
     return [
       `- ${alias}${key ? ` (${key})` : ''} · team ${team} · ${range}`,
       `  recent hits: ${hits}; ${drift}`,
       events.length ? `  recent events: ${events.join(' | ')}` : '  recent events: none',
-    ].join('\n');
+      notes
+        ? `  notes: ${notes.length > 240 ? `${notes.slice(0, 239)}…` : notes}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
   });
 
   return ['Focus project brief:', ...blocks].join('\n');

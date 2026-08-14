@@ -116,6 +116,19 @@ test('start stays an ISO date string all the way through', () => {
   assert.equal(typeof synced.days, 'number');
 });
 
+test('description is forwarded for paragraph context and is not a keyword', () => {
+  const state = stateOf([
+    item({ description: 'LaunchDarkly flags for composer and mobile' }),
+  ]);
+  assert.equal(
+    state.items![0].description,
+    'LaunchDarkly flags for composer and mobile',
+  );
+  const synced = toFocusSyncItem(state.items![0]);
+  assert.equal(synced.description, 'LaunchDarkly flags for composer and mobile');
+  assert.equal(synced.keywords, undefined);
+});
+
 test('draft detection agrees across all four item states', () => {
   const imported = item({ key: 'NOVA-1', source: 'jira', jiraKey: 'NOVA-1' });
   const freshDraft = item({

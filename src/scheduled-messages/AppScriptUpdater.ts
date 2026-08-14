@@ -6,6 +6,7 @@
 import { SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
 import { normalizeSheetConfig } from './botAutomationConfig';
+import { getLocalScheduleTimeZone } from './scheduleDateTime';
 import {
   compareAppScriptVersions,
   isValidAppScriptVersion,
@@ -684,7 +685,7 @@ export class AppScriptUpdater {
               name: 'appsscript',
               type: 'JSON',
               source: JSON.stringify({
-                timeZone: 'Asia/Shanghai',
+                timeZone: getLocalScheduleTimeZone(),
                 exceptionLogging: 'STACKDRIVER',
                 runtimeVersion: 'V8',
                 webapp: {

@@ -40,7 +40,7 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - `historySearch`: 通过 Memory Service recall 搜索历史上下文；工具安全边界是只读、低风险、无需人工确认。
 - `jiraQuery`: 通过 Jira REST API 查询单个或多个 issue，并带 30 分钟内存缓存；工具安全边界是外部只读、低风险、无需人工确认。
 
-2026-08-06 边界更新：`WEB_INTELLIGENCE_ANALYSIS` 不再调用 `IntelligentAgent.analyze({ type: 'webpage' })`。普通网页先经过 Memory Capture 的确定性候选门槛，再由 `llm.ts` 做一次无工具的结构化筛选；结果本身明确 `stored: false`，只有现有 Memory Capture 复核或强意图自动入库路径才能创建 source-memory capsule。Agent Thinking 保留给消息、项目和用户显式触发的编排场景。
+2026-08-12 边界更新：`WEB_INTELLIGENCE_ANALYSIS` 不再调用 `IntelligentAgent.analyze({ type: 'webpage' })`，也不再从扩展的 `llm.ts` 直连浏览器模型 provider。普通网页先经过 Memory Capture 的确定性候选门槛，再由 memory-service 的专用 `/source-memory/webpage-analysis` 路由做一次固定 prompt、无工具的结构化筛选；结果本身明确 `stored: false`，只有现有 Memory Capture 复核或强意图自动入库路径才能创建 source-memory capsule。Agent Thinking 保留给消息、项目和用户显式触发的编排场景。
 
 注意: 组织架构、发布任务、Sprint 等工具仍是注释中的示例，不应在文档或 UI 中描述为已上线能力。网页初始分析可以直接产出 `shouldStore`、`shouldNotify`、实体和行动建议，不依赖这些未注册工具。
 

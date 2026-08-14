@@ -208,8 +208,11 @@ try {
   );
 
   // 代理只允许打到当前配置的 Jira origin
+  // `share-modal.html` immediately redirects to Help Center, which destroys the
+  // page context before the runtime reply arrives. Use a stable extension page
+  // so this assertion continues to exercise the real message boundary.
   const guardPage = await context.newPage();
-  await guardPage.goto(`chrome-extension://${extensionId}/share-modal.html`);
+  await guardPage.goto(`chrome-extension://${extensionId}/popup.html`);
   const blocked = await guardPage.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'PERSONAL_AI_JIRA_PROXY_FETCH',

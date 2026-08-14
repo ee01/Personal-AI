@@ -1,27 +1,42 @@
 const { merge } = require('webpack-merge');
 const common = require('./webpack.common.cjs');
-const Dotenv = require('dotenv-webpack');
+const webpack = require('webpack');
 const path = require('path');
 
-module.exports = (env) => {
-  // 加载开发环境变量
-  const dotenv = require('dotenv').config({ path: '.env.development' });
-  
-  return merge(common({
-    ...env,
-    GOOGLE_CLIENT_ID: dotenv.parsed.GOOGLE_CLIENT_ID,
-    ICON_NAME: dotenv.parsed.ICON_NAME
-  }), {
-    mode: 'development',
-    devtool: 'inline-source-map',
-    devServer: {
-      static: './dist',
-    },
-    plugins: [
-      // 似乎不生效
-      new Dotenv({
-        path: '.env.development'
-      })
-    ]
+function loadMergedEnv() {
+  const root = require('dotenv').config({
+    path: path.resolve(__dirname, '.env'),
   });
+  const dev = require('dotenv').config({
+    path: path.resolve(__dirname, '.env.development'),
+  });
+  const parsed = { ...(root.parsed || {}) };
+  for (const [key, value] of Object.entries(dev.parsed || {})) {
+    if (String(value || '').trim()) parsed[key] = value;
+  }
+  return parsed;
+}
+
+module.exports = (env) => {
+  const parsed = loadMergedEnv();
+
+  return merge(
+    common({
+      ...env,
+      GOOGLE_CLIENT_ID: parsed.GOOGLE_CLIENT_ID,
+      ICON_NAME: parsed.ICON_NAME,
+    }),
+    {
+      mode: 'development',
+      devtool: 'inline-source-map',
+      devServer: {
+        static: './dist',
+      },
+      plugins: [
+        new webpack.DefinePlugin({
+          'process.env': JSON.stringify(parsed),
+        }),
+      ],
+    },
+  );
 };

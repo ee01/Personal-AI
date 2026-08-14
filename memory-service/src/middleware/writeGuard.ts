@@ -1,11 +1,13 @@
 /**
- * Write guard — blocks write operations when X-User-Id is missing or empty.
+ * Write guard — blocks write operations when the caller has no identity.
  *
- * Only rejects when the header is absent or blank. Explicit X-User-Id values
- * (including "default") are allowed.
+ * Only rejects when `X-User-Id` is absent or blank and no tier-2 user key is
+ * presented. Explicit X-User-Id values (including "default") are allowed.
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import { looksLikeUserApiKey } from '../core/auth/userApiKeys.js';
+import { parseBearerToken } from '../mcp/streamableHttp.js';
 import { resolveUserIdHeader } from '../utils/userIdentity.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -25,6 +27,20 @@ export async function writeGuardMiddleware(
 
   const method = request.method?.toUpperCase() ?? 'GET';
   if (READ_ONLY_METHODS.has(method)) {
+    return;
+  }
+
+  // A tier-2 user key carries the identity itself, so X-User-Id is optional.
+  // Auth middleware still verifies the token and its write scope.
+  if (
+    looksLikeUserApiKey(
+      parseBearerToken(
+        typeof request.headers.authorization === 'string'
+          ? request.headers.authorization
+          : undefined,
+      ),
+    )
+  ) {
     return;
   }
 

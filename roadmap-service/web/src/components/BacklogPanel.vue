@@ -7,6 +7,8 @@ import {
   isDraftItem,
   itemDisplayKey,
   typeBadge,
+  tooltipHintLine,
+  DESCRIPTION_MAX_CHARS,
 } from '../composables/useRoadmapContract';
 import { CURQ, fmtMD, qCmp } from '../composables/useGeometry';
 import type { RoadmapItem } from '../types';
@@ -63,6 +65,7 @@ const form = ref({
   estimate: '' as string,
   targetStart: '',
   targetEnd: '',
+  description: '',
 });
 
 function openAdd() {
@@ -74,6 +77,7 @@ function openAdd() {
     estimate: '',
     targetStart: '',
     targetEnd: '',
+    description: '',
   };
   addOpen.value = true;
   nextTick(() => {
@@ -95,6 +99,7 @@ async function submitAdd() {
       estimate: Number.isFinite(estimate) && estimate > 0 ? estimate : undefined,
       targetStart: form.value.targetStart || undefined,
       targetEnd: form.value.targetEnd || undefined,
+      description: form.value.description.trim() || undefined,
     });
     addOpen.value = false;
     state.toast(`<span class="ok">✓</span> 已新建条目 <b>${title}</b>`);
@@ -200,7 +205,7 @@ function clearSearch() {
             :key="it.key"
             class="card"
             :class="{ pop: state.popKeys.value.includes(it.key), draft: isDraftItem(it) }"
-            :data-tip="`${itemDisplayKey(it)} · 预估 ${formatEstimate(it.estimate)}${it.targetStart ? '' : ' · 无 Target 日期'}||${it.title}||拖到右侧时间轴排期${it.targetStart ? '（按 Target 日期落位）' : ''}`"
+            :data-tip="`${itemDisplayKey(it)} · 预估 ${formatEstimate(it.estimate)}${it.targetStart ? '' : ' · 无 Target 日期'}||${it.title}||${tooltipHintLine(it.description, `拖到右侧时间轴排期${it.targetStart ? '（按 Target 日期落位）' : ''}`)}`"
             :data-pai-item="it.key"
             :data-pai-team="state.teamId.value"
             :data-pai-target-start="it.targetStart || ''"
@@ -275,6 +280,14 @@ function clearSearch() {
           :disabled="saving"
           @keydown.enter="submitAdd"
           @keydown.esc="addOpen = false"
+        />
+        <label class="f-label">描述（可选）</label>
+        <textarea
+          v-model="form.description"
+          class="f-input f-desc"
+          :maxlength="DESCRIPTION_MAX_CHARS"
+          placeholder="背景 / 交付物 / 验收要点。hover 任务条时展示；创建 Jira 时作为 description 的生成依据"
+          :disabled="saving"
         />
         <div class="f-grid">
           <div>

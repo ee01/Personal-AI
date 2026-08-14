@@ -316,36 +316,6 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
     } as MouseEvent;
     assert.equal(shouldPreserveDefaultNativeJoinClick(fallbackClick), true);
 
-    const revealClick = {
-      ...regularClick,
-      target: new TestElement(
-        '[data-pai-ringcentral-native-join-reveal-link]',
-      ),
-    } as MouseEvent;
-    assert.equal(shouldPreserveDefaultNativeJoinClick(revealClick), true);
-
-    const copyMeetingIdClick = {
-      ...regularClick,
-      target: new TestElement(
-        '[data-pai-ringcentral-native-join-copy-meeting-id]',
-      ),
-    } as MouseEvent;
-    assert.equal(
-      shouldPreserveDefaultNativeJoinClick(copyMeetingIdClick),
-      true,
-    );
-
-    const copyPasscodeClick = {
-      ...regularClick,
-      target: new TestElement(
-        '[data-pai-ringcentral-native-join-copy-passcode]',
-      ),
-    } as MouseEvent;
-    assert.equal(
-      shouldPreserveDefaultNativeJoinClick(copyPasscodeClick),
-      true,
-    );
-
     const closeClick = {
       ...regularClick,
       target: new TestElement('[data-pai-ringcentral-native-join-close]'),
@@ -704,46 +674,11 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
         fallbackHost.style.cssText.includes('overscroll-behavior:contain'),
       'fallback panel should stay bounded and internally scrollable in short browser windows',
     );
-    const status = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-status',
-    );
-    assert.equal(
-      status?.textContent,
-      'Meeting 222222 - waiting for the app prompt.',
-    );
     const title = findElementByAttribute(
       fallbackHost,
       'data-pai-ringcentral-native-join-title',
     );
-    const bodyText = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-body',
-    );
-    const handoffReceipt = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-handoff-receipt',
-    );
-    const handoffReceiptText = collectElementText(handoffReceipt);
     assert.equal(title?.textContent, 'Opening RingCentral app...');
-    assert.equal(
-      bodyText?.textContent,
-      'If Chrome asks, choose Open RingCentral. If you cancel or nothing opens, continue in the browser.',
-      'initial handoff copy should tell the user what to do with the external app prompt',
-    );
-    assert.ok(
-      handoffReceiptText.includes('Handoff receipt') &&
-        handoffReceiptText.includes('App attempt started') &&
-        handoffReceiptText.includes('validated full meeting link') &&
-        handoffReceiptText.includes('whether you joined') &&
-        handoffReceiptText.includes('cannot verify') &&
-        handoffReceiptText.includes('browser recovery stays available') &&
-        handoffReceiptText.includes('only in this panel') &&
-        handoffReceiptText.includes(
-          'Default join preference has not changed',
-        ),
-      'fallback panel should show a stable handoff receipt before recovery actions',
-    );
     const visibleLink = findElementByAttribute(
       fallbackHost,
       'data-pai-ringcentral-native-join-visible-link',
@@ -753,77 +688,20 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       'https://v.ringcentral.com/conf/on/222222',
       'fallback panel should hide passcode-bearing URL details by default',
     );
-    const privacyNote = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-link-privacy',
+    assert.equal(
+      findElementByText(fallbackHost, 'Handoff receipt'),
+      null,
+      'fallback panel should omit explanatory handoff copy',
     );
     assert.equal(
-      privacyNote?.textContent,
-      'Passcode and extra URL details are hidden here; Join in browser and Copy link still use the full meeting link.',
-      'fallback panel should explain that hidden query details are preserved in recovery actions',
-    );
-    const revealLinkButton = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-reveal-link',
+      findElementByText(fallbackHost, 'Meeting ID'),
+      null,
+      'fallback panel should omit manual meeting-ID controls',
     );
     assert.equal(
-      revealLinkButton?.textContent,
-      'Show full link',
-      'fallback panel should require an explicit action before exposing the full browser link',
-    );
-    const meetingIdValue = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-meeting-id-value',
-    );
-    assert.equal(
-      meetingIdValue?.textContent,
-      '222222',
-      'fallback panel should show the validated meeting ID for manual app join',
-    );
-    const meetingIdNote = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-meeting-id-note',
-    );
-    assert.equal(
-      meetingIdNote?.textContent,
-      'ID only for manual app entry; passcode/details stay in Join in browser, Copy link, or Show full link.',
-      'fallback panel should warn before copying that Meeting ID is not the full passcode-bearing join material',
-    );
-    const copyMeetingIdButton = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-copy-meeting-id',
-    );
-    assert.equal(
-      copyMeetingIdButton?.textContent,
-      'Copy ID',
-      'fallback panel should expose a copy-only meeting ID recovery action',
-    );
-    const passcodeValue = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-passcode-value',
-    );
-    assert.equal(
-      passcodeValue?.textContent,
-      'Hidden until copied',
-      'fallback panel should not reveal the meeting passcode by default',
-    );
-    const passcodeNote = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-passcode-note',
-    );
-    assert.equal(
-      passcodeNote?.textContent,
-      'For manual app entry only; value stays hidden in this panel.',
-      'fallback panel should explain the manual-only passcode boundary',
-    );
-    const copyPasscodeButton = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-copy-passcode',
-    );
-    assert.equal(
-      copyPasscodeButton?.textContent,
-      'Copy passcode',
-      'fallback panel should expose a hidden-value passcode recovery action',
+      findElementByText(fallbackHost, 'Meeting passcode'),
+      null,
+      'fallback panel should omit passcode controls',
     );
 
     const closeButton = findElementByAttribute(
@@ -854,34 +732,6 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       'RingCentral app did not take over',
       'active page handoff should update the fallback title into recovery copy',
     );
-    assert.equal(
-      bodyText?.textContent,
-      'Use the browser fallback if the app prompt was cancelled or nothing opened.',
-      'active page handoff should explain the browser recovery path',
-    );
-    assert.equal(
-      status?.textContent,
-      'Still on this page? Use Join in browser or Copy link to continue.',
-      'active page handoff should become an explicit recovery state',
-    );
-    assert.ok(
-      collectElementText(handoffReceipt).includes(
-        'No app takeover was detected',
-      ) &&
-        collectElementText(handoffReceipt).includes(
-          'does not prove the app failed',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'that you joined elsewhere',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'copy the full meeting link',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'Default join preference stays unchanged',
-        ),
-      'active page handoff should update the receipt into a recovery boundary',
-    );
     assert.ok(
       clearedTimeouts.includes(5),
       'manual recovery state should clear the pending handoff escalation timer',
@@ -911,25 +761,6 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       'Trying RingCentral app again...',
       'app retry should return the panel to a handoff state',
     );
-    assert.equal(
-      status?.textContent,
-      'Trying the RingCentral app again. Keep this browser recovery open until the app takes over.',
-      'app retry should keep the browser recovery panel visible while retrying',
-    );
-    assert.ok(
-      collectElementText(handoffReceipt).includes('App retry started') &&
-        collectElementText(handoffReceipt).includes(
-          'reuses the validated full meeting link',
-        ) &&
-        collectElementText(handoffReceipt).includes('whether you joined') &&
-        collectElementText(handoffReceipt).includes(
-          'browser recovery and Copy link stay available',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'Default join preference has not changed',
-        ),
-      'app retry should update the receipt without changing the default join preference',
-    );
     assert.deepEqual(
       scheduledTimeouts.map((item) => item.delay),
       [5000, 6000, 10000, 5000, 6000, 10000, 5000, 6000, 10000],
@@ -945,34 +776,6 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       title?.textContent,
       'RingCentral app did not take over',
       'failed app retry should return to the recovery state when the page stays active',
-    );
-    await copyPasscodeButton?.dispatchTestEvent('click');
-    assert.equal(
-      copiedText,
-      'secret',
-      'copy passcode should copy only the passcode value',
-    );
-    assert.equal(
-      status?.textContent,
-      'Meeting passcode copied for manual app entry. This does not join the meeting, retry the app, copy the full link, or change the default join path.',
-      'copy passcode success should preserve side-effect boundaries',
-    );
-    await revealLinkButton?.dispatchTestEvent('click');
-    assert.equal(
-      visibleLink?.textContent,
-      'https://v.ringcentral.com/conf/on/222222?passcode=secret',
-      'explicit reveal should show the full browser fallback link',
-    );
-    assert.equal(
-      privacyNote?.textContent,
-      'Full link is visible now. Hide it before sharing your screen.',
-      'revealed link state should warn before screen sharing',
-    );
-    await revealLinkButton?.dispatchTestEvent('click');
-    assert.equal(
-      visibleLink?.textContent,
-      'https://v.ringcentral.com/conf/on/222222',
-      'hide action should return the panel to the safer display URL',
     );
     const copyLinkButton = findElementByAttribute(
       fallbackHost,
@@ -1019,85 +822,16 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       'https://v.ringcentral.com/conf/on/222222?passcode=secret',
       'copy link should copy the full browser recovery link, not the hidden display URL',
     );
-    assert.equal(
-      status?.textContent,
-      'Full browser meeting link copied, including hidden passcode/details if present. This does not join the meeting, retry the app, or change the default join path.',
-      'copy link success should explain hidden details and side-effect boundaries',
-    );
 
     const defaultPreferenceButton = findElementByAttribute(
       fallbackHost,
       'data-pai-ringcentral-native-join-prefer-browser',
-    );
-    const defaultPreferenceReceipt = findElementByAttribute(
-      fallbackHost,
-      'data-pai-ringcentral-native-join-default-receipt',
-    );
-    assert.ok(
-      defaultPreferenceReceipt?.style.cssText.includes('display:none'),
-      'default path receipt should stay hidden until the user changes the preference',
     );
     await defaultPreferenceButton?.dispatchTestEvent('click');
     assert.equal(
       defaultPreferenceButton?.textContent,
       'Use browser by default',
       'failed default save should keep the visible preference action unchanged',
-    );
-    assert.equal(
-      status?.textContent,
-      'Could not save the default; current join preference is unchanged. Open Options > Meeting Pilot to change Native Client join.',
-      'failed default save should state that the current preference did not change',
-    );
-    assert.ok(
-      collectElementText(handoffReceipt).includes(
-        'Default join preference was not saved',
-      ) &&
-        collectElementText(handoffReceipt).includes(
-          'did not change future RingCentral joins',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'did not join this meeting',
-        ) &&
-        collectElementText(handoffReceipt).includes('did not retry the app') &&
-        collectElementText(handoffReceipt).includes(
-          'did not open the browser meeting',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'did not copy any meeting material',
-        ) &&
-        collectElementText(handoffReceipt).includes(
-          'browser recovery controls remain available',
-        ),
-      'failed default save should keep a durable no-effect receipt in the panel',
-    );
-    assert.ok(
-      collectElementText(defaultPreferenceReceipt).includes(
-        'Default path receipt',
-      ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'Default path was not saved',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'Future RingCentral joins keep the previous preference',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'did not join this meeting',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'retry the app',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'open a browser window',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'copy meeting material',
-        ) &&
-        collectElementText(defaultPreferenceReceipt).includes(
-          'current recovery controls',
-        ) &&
-        defaultPreferenceReceipt?.style.display === 'block' &&
-        (defaultPreferenceReceipt?.style as any).background === '#fef2f2',
-      'failed default save should show a separate default-path receipt with previous-preference and no-effect scope',
     );
 
     await closeButton?.dispatchTestEvent('click');
@@ -1153,18 +887,17 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       undefined,
       'restoring recovery controls should not relaunch the native app',
     );
+    assert.equal(
+      findElementByAttribute(
+        restoredFallback,
+        'data-pai-ringcentral-native-join-title',
+      )?.textContent,
+      'RingCentral recovery restored',
+      'restored recovery should retain only its title and controls',
+    );
     assert.ok(
-      collectElementText(restoredFallback).includes(
-        'RingCentral recovery restored',
-      ) &&
-        collectElementText(restoredFallback).includes(
-          'No new app attempt started',
-        ) &&
-        collectElementText(restoredFallback).includes(
-          'Personal AI did not retry the app',
-        ) &&
-        collectElementText(restoredFallback).includes('Try app again'),
-      'restored recovery panel should explain that restoration did not execute a new handoff',
+      findElementByText(restoredFallback, 'Try app again'),
+      'restored recovery should retain the app retry control',
     );
 
     pageVisibilityState = 'hidden';

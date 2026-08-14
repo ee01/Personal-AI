@@ -25,6 +25,8 @@ export interface FocusSyncItem {
   start?: string | null;
   days?: number | null;
   keywords?: string[];
+  /** User / Jira description. Paragraph material only; never copied into aliases. */
+  description?: string | null;
   priorityHints?: {
     hasAlias?: boolean;
     subActivity?: boolean;
@@ -118,6 +120,11 @@ export function listFocusProjects(db: Database.Database): FocusProjectRecord[] {
       aliases,
       teamRef: row.team_ref ?? undefined,
       externalRef,
+      description:
+        typeof externalRef?.description === 'string' &&
+        externalRef.description.trim()
+          ? externalRef.description
+          : undefined,
       tier: (row.tier as FocusProjectRecord['tier']) || 'focus',
       priority: row.priority,
       lastEngagedAt: row.last_engaged_at ?? undefined,
@@ -197,6 +204,7 @@ export function syncFocusProjectsForTeam(
         targetEnd: item.targetEnd || null,
         start: item.start || null,
         days: item.days || null,
+        description: String(item.description || '').trim() || null,
       });
 
       const entityId = `project-${id}`;

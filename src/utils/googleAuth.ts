@@ -85,6 +85,10 @@ export interface GoogleAuthTokenResult {
   grantedScopes: string[];
   missingScopes: string[];
   scopeVerificationAvailable: boolean;
+  /** 实际命中或尝试的 Chrome Google 账号（仅保存 opaque id，不保存 token/email） */
+  accountId?: string;
+  /** 当前浏览器可供 Identity API 尝试的账号数；API 不可用时为 undefined */
+  availableAccountCount?: number;
   failureReason?: GoogleAuthFailureReason;
   error?: string;
 }
@@ -107,6 +111,10 @@ export interface GoogleAuthOptions {
   scopes?: readonly string[];
   /** 本次功能必须具备的权限；默认与 scopes 相同 */
   requiredScopes?: readonly string[];
+  /** 显式指定 Chrome Google 账号；通常由内部账号绑定恢复逻辑提供 */
+  accountId?: string;
+  /** 交互授权时忽略旧账号绑定并允许用户重新选择账号 */
+  promptForAccount?: boolean;
 }
 
 /**
@@ -121,7 +129,13 @@ export interface GoogleAuthSilentOptions {
   scopes?: readonly string[];
   /** 本次功能必须具备的权限；默认与 scopes 相同 */
   requiredScopes?: readonly string[];
+  /** 显式指定 Chrome Google 账号；通常由内部账号绑定恢复逻辑提供 */
+  accountId?: string;
 }
+
+type ChromeIdentityAccount = { id: string };
+
+const GOOGLE_AUTH_ACCOUNT_STORAGE_KEY_PREFIX = 'googleAuthPreferredAccountId';
 
 const GOOGLE_AUTH_SCOPE_LABELS: Record<string, string> = {
   [GOOGLE_AUTH_SCOPES.USERINFO_PROFILE]: 'Google 个人资料',
@@ -141,6 +155,97 @@ function normalizeScopes(scopes?: readonly string[]): string[] {
   );
 }
 
+function normalizeAccountId(accountId?: string | null): string | undefined {
+  const normalized = String(accountId || '').trim();
+  return normalized || undefined;
+}
+
+function getGoogleAuthAccountStorageKey(scopes?: readonly string[]): string {
+  const scopeKey = normalizeScopes(scopes).sort().join('|') || 'manifest-default';
+  return `${GOOGLE_AUTH_ACCOUNT_STORAGE_KEY_PREFIX}:${scopeKey}`;
+}
+
+async function getStoredGoogleAuthAccountId(
+  scopes?: readonly string[],
+): Promise<string | undefined> {
+  const storageKey = getGoogleAuthAccountStorageKey(scopes);
+  try {
+    const storage = await chrome.storage?.local?.get([storageKey]);
+    return normalizeAccountId(storage?.[storageKey]);
+  } catch {
+    return undefined;
+  }
+}
+
+async function rememberGoogleAuthAccountId(
+  accountId?: string,
+  scopes?: readonly string[],
+): Promise<void> {
+  const normalized = normalizeAccountId(accountId);
+  if (!normalized) return;
+  const storageKey = getGoogleAuthAccountStorageKey(scopes);
+
+  try {
+    await chrome.storage?.local?.set({
+      [storageKey]: normalized,
+    });
+  } catch {
+    // 账号绑定只是恢复优化；storage 不可用时仍允许当前 token 正常返回。
+  }
+}
+
+/**
+ * Chrome 目前只在 Dev channel 暴露 getAccounts；因此这里必须能力探测并安全降级。
+ * 用户常用 Chrome Canary 时可枚举多个账号，Stable/旧版本则继续使用默认账号路径。
+ */
+async function getAvailableGoogleAccounts(): Promise<ChromeIdentityAccount[] | null> {
+  const getAccounts = (
+    chrome.identity as typeof chrome.identity & {
+      getAccounts?: (
+        callback?: (accounts: ChromeIdentityAccount[]) => void,
+      ) => Promise<ChromeIdentityAccount[]> | void;
+    }
+  ).getAccounts;
+
+  if (typeof getAccounts !== 'function') {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (accounts?: ChromeIdentityAccount[]) => {
+      if (settled) return;
+      settled = true;
+      const normalizedAccounts = Array.isArray(accounts)
+        ? accounts
+            .map((account) => ({ id: normalizeAccountId(account?.id) || '' }))
+            .filter((account) => Boolean(account.id))
+        : [];
+      resolve(normalizedAccounts);
+    };
+
+    try {
+      const maybePromise = getAccounts.call(chrome.identity, finish);
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        void maybePromise.then(finish, () => finish([]));
+      }
+    } catch {
+      finish([]);
+    }
+  });
+}
+
+function uniqueAccountIds(...groups: Array<Array<string | undefined>>): string[] {
+  return Array.from(
+    new Set(
+      groups
+        .flat()
+        .map((accountId) => normalizeAccountId(accountId))
+        .filter((accountId): accountId is string => Boolean(accountId)),
+    ),
+  );
+}
+
 export function formatGoogleAuthScopeLabels(scopes: readonly string[]): string {
   return normalizeScopes(scopes)
     .map((scope) => GOOGLE_AUTH_SCOPE_LABELS[scope] || scope)
@@ -155,6 +260,13 @@ export function formatGoogleAuthFailure(result: GoogleAuthTokenResult): string {
     return `尚未授予 ${formatGoogleAuthScopeLabels(result.missingScopes)} 权限`;
   }
   if (result.error) {
+    if (
+      result.failureReason === 'auth_error' &&
+      typeof result.availableAccountCount === 'number' &&
+      result.availableAccountCount > 1
+    ) {
+      return `${result.error}；已检查当前 Chrome 中的 ${result.availableAccountCount} 个 Google 账号`;
+    }
     return result.error;
   }
   return '未取得 Google 授权';
@@ -162,8 +274,9 @@ export function formatGoogleAuthFailure(result: GoogleAuthTokenResult): string {
 
 export function isGoogleAuthRecoveryError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
-  return /(?:\b401\b|Unauthorized|Invalid Credentials|invalid_token|OAuth2 not granted|not signed in|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|insufficientPermissions|Google Sheets 授权)/i
-    .test(message);
+  const explicitAuthFailure = /(?:Invalid Credentials|invalid_token|OAuth2 not granted|not signed in|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|insufficientPermissions|Google Sheets 授权(?:不可用|不完整|失败)?)/i;
+  const googleSheets401 = /(?:读取|写入|更新|添加|删除|获取)\s*(?:Google\s*)?(?:Sheet|Sheets|工作表)[^\n]{0,80}(?:\(401\)|HTTP\s*401|Unauthorized)/i;
+  return explicitAuthFailure.test(message) || googleSheets401.test(message);
 }
 
 /**
@@ -188,6 +301,7 @@ async function _getAuthToken(
   silent = false,
   scopes?: readonly string[],
   requiredScopes?: readonly string[],
+  accountId?: string,
 ): Promise<RawGoogleAuthTokenResult> {
   const requestedScopes = normalizeScopes(scopes);
   const normalizedRequiredScopes = normalizeScopes(
@@ -195,10 +309,12 @@ async function _getAuthToken(
   );
 
   return new Promise((resolve) => {
-    const details: chrome.identity.TokenDetails = {
+    const normalizedAccountId = normalizeAccountId(accountId);
+    const details = {
       interactive,
       ...(requestedScopes.length > 0 ? { scopes: requestedScopes } : {}),
-    };
+      ...(normalizedAccountId ? { account: { id: normalizedAccountId } } : {}),
+    } as chrome.identity.TokenDetails;
     const getAuthTokenWithGrantedScopes = chrome.identity.getAuthToken as unknown as (
       details: chrome.identity.TokenDetails,
       callback: (token?: string, grantedScopes?: string[]) => void,
@@ -218,6 +334,7 @@ async function _getAuthToken(
           grantedScopes: [],
           missingScopes: [],
           scopeVerificationAvailable: false,
+          accountId: normalizedAccountId,
           failureReason: 'auth_error',
           error: errorMsg,
         });
@@ -251,6 +368,7 @@ async function _getAuthToken(
         grantedScopes: normalizedGrantedScopes,
         missingScopes,
         scopeVerificationAvailable,
+        accountId: normalizedAccountId,
         failureReason,
         error,
       });
@@ -265,6 +383,107 @@ function toPublicAuthResult(
   return publicResult;
 }
 
+async function getAuthTokenAcrossAccounts(
+  caller: string,
+  scopes?: readonly string[],
+  requiredScopes?: readonly string[],
+  explicitAccountId?: string,
+): Promise<RawGoogleAuthTokenResult> {
+  const [storedAccountId, availableAccounts] = await Promise.all([
+    getStoredGoogleAuthAccountId(scopes),
+    getAvailableGoogleAccounts(),
+  ]);
+  const availableAccountCount = availableAccounts?.length;
+  const accountIds = uniqueAccountIds(
+    [explicitAccountId],
+    [storedAccountId],
+    (availableAccounts || []).map((account) => account.id),
+  );
+  const attempts: RawGoogleAuthTokenResult[] = [];
+
+  // getAccounts 不可用时保留 Chrome 默认账号行为；可用时逐账号静默探测，
+  // 避免默认个人账号遮住第二个工作账号上仍然有效的授权。
+  if (accountIds.length === 0) {
+    const result = await _getAuthToken(
+      false,
+      caller,
+      true,
+      scopes,
+      requiredScopes,
+    );
+    return { ...result, availableAccountCount };
+  }
+
+  for (const accountId of accountIds) {
+    const result = await _getAuthToken(
+      false,
+      `${caller}.account`,
+      true,
+      scopes,
+      requiredScopes,
+      accountId,
+    );
+    const enrichedResult = { ...result, availableAccountCount };
+    attempts.push(enrichedResult);
+    if (enrichedResult.token) {
+      await rememberGoogleAuthAccountId(accountId, scopes);
+      return enrichedResult;
+    }
+  }
+
+  // missing_scopes 带有可恢复的 raw token，优先保留；否则返回绑定账号的
+  // 具体错误，最后才退回其它账号错误。
+  return attempts.find((result) => result.failureReason === 'missing_scopes')
+    || attempts.find((result) => result.accountId === normalizeAccountId(explicitAccountId))
+    || attempts.find((result) => result.accountId === normalizeAccountId(storedAccountId))
+    || attempts[0]
+    || {
+      token: null,
+      rawToken: null,
+      grantedScopes: [],
+      missingScopes: [],
+      scopeVerificationAvailable: false,
+      availableAccountCount,
+      failureReason: 'no_token',
+      error: '未获取到 token',
+    };
+}
+
+async function identifyAndRememberInteractiveAccount(
+  token: string,
+  caller: string,
+  scopes?: readonly string[],
+  requiredScopes?: readonly string[],
+): Promise<string | undefined> {
+  const availableAccounts = await getAvailableGoogleAccounts();
+  if (!availableAccounts?.length) return undefined;
+
+  const successfulAccounts: string[] = [];
+  for (const account of availableAccounts) {
+    const result = await _getAuthToken(
+      false,
+      `${caller}.identifyAccount`,
+      true,
+      scopes,
+      requiredScopes,
+      account.id,
+    );
+    if (result.rawToken === token) {
+      await rememberGoogleAuthAccountId(account.id, scopes);
+      return account.id;
+    }
+    if (result.token) successfulAccounts.push(account.id);
+  }
+
+  // 某些 Chrome 版本会为同一 grant 返回等价但不同的 access token；只有
+  // 唯一账号能静默满足本次 scopes 时，才安全地建立账号绑定。
+  if (successfulAccounts.length === 1) {
+    await rememberGoogleAuthAccountId(successfulAccounts[0], scopes);
+    return successfulAccounts[0];
+  }
+  return undefined;
+}
+
 export async function getGoogleAuthTokenResult(
   options: GoogleAuthOptions = {},
 ): Promise<GoogleAuthTokenResult> {
@@ -274,29 +493,17 @@ export async function getGoogleAuthTokenResult(
     silent = false,
     scopes,
     requiredScopes,
+    accountId,
+    promptForAccount = false,
   } = options;
 
-  if (forceRefresh) {
-    const cachedResult = await _getAuthToken(
-      false,
-      `${caller}.checkCache`,
-      true,
-      scopes,
-      requiredScopes,
-    );
-    if (cachedResult.rawToken) {
-      await removeCachedToken(cachedResult.rawToken);
-    }
-  }
-
-  const cachedResult = await _getAuthToken(
-    false,
+  const cachedResult = await getAuthTokenAcrossAccounts(
     `${caller}.tryCache`,
-    true,
     scopes,
     requiredScopes,
+    accountId,
   );
-  if (cachedResult.token) {
+  if (cachedResult.token && !forceRefresh) {
     if (!silent) {
       void Logger.auth(caller, false, true, '使用缓存 token');
     }
@@ -305,17 +512,42 @@ export async function getGoogleAuthTokenResult(
 
   // 粒度授权可能返回一个只覆盖部分 scope 的 token。用户主动触发授权时先移除
   // 该 access token 缓存，再进入 interactive 流程，以便 Google 补齐缺失 scope。
-  if (cachedResult.rawToken) {
+  if (cachedResult.rawToken && (forceRefresh || cachedResult.failureReason === 'missing_scopes')) {
     await removeCachedToken(cachedResult.rawToken);
   }
 
-  return toPublicAuthResult(await _getAuthToken(
+  const storedAccountId = await getStoredGoogleAuthAccountId(scopes);
+  const interactiveAccountId = promptForAccount
+    ? undefined
+    : normalizeAccountId(accountId) || normalizeAccountId(storedAccountId);
+  const interactiveResult = await _getAuthToken(
     true,
     caller,
     silent,
     scopes,
     requiredScopes,
-  ));
+    interactiveAccountId,
+  );
+
+  let resolvedAccountId = interactiveResult.accountId;
+  if (interactiveResult.token) {
+    if (resolvedAccountId) {
+      await rememberGoogleAuthAccountId(resolvedAccountId, scopes);
+    } else {
+      resolvedAccountId = await identifyAndRememberInteractiveAccount(
+        interactiveResult.token,
+        caller,
+        scopes,
+        requiredScopes,
+      );
+    }
+  }
+
+  return toPublicAuthResult({
+    ...interactiveResult,
+    accountId: resolvedAccountId,
+    availableAccountCount: cachedResult.availableAccountCount,
+  });
 }
 
 /**
@@ -357,27 +589,25 @@ export async function getGoogleAuthTokenSilentlyResult(
     forceRefresh = false,
     scopes,
     requiredScopes,
+    accountId,
   } = options;
 
-  if (forceRefresh) {
-    const cachedResult = await _getAuthToken(
-      false,
-      `${caller}.checkCache`,
-      true,
-      scopes,
-      requiredScopes,
-    );
-    if (cachedResult.rawToken) {
-      await removeCachedToken(cachedResult.rawToken);
-    }
-  }
-
-  return toPublicAuthResult(await _getAuthToken(
-    false,
+  const cachedResult = await getAuthTokenAcrossAccounts(
     caller,
-    true,
     scopes,
     requiredScopes,
+    accountId,
+  );
+  if (!forceRefresh || !cachedResult.rawToken) {
+    return toPublicAuthResult(cachedResult);
+  }
+
+  await removeCachedToken(cachedResult.rawToken);
+  return toPublicAuthResult(await getAuthTokenAcrossAccounts(
+    `${caller}.afterRefresh`,
+    scopes,
+    requiredScopes,
+    cachedResult.accountId || accountId,
   ));
 }
 

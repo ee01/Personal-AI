@@ -738,7 +738,7 @@ export class ContextRecallService {
           ? 'composer_surface'
           : 'passive_surface',
       previewMaxLength: PREVIEW_MAX,
-      // No blockTypes → engine returns evidence-only, fast path.
+      // Context Recall calls RecallEngine directly: evidence-only, no LLM.
     };
 
     const result = sourceMemoryOnly

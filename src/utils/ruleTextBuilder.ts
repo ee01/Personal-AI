@@ -54,20 +54,18 @@ export function buildRuleText(
   ruleRef?: string,
 ): string {
   if ('source' in item) {
-    if (item.source === 'outreach') {
-      let prefix = '';
-      if (ruleRef) {
-        prefix += `[RULE_REF:${ruleRef}] `;
-      }
-      return `${prefix}${item.text}`.trim();
+    if (item.source === 'manual') {
+      return buildRuleText(
+        item.manualItem,
+        includeId,
+        ruleIndex,
+        ruleRef || item.ruleRef,
+      );
     }
 
-    return buildRuleText(
-      item.manualItem,
-      includeId,
-      ruleIndex,
-      ruleRef || item.ruleRef,
-    );
+    const stableRuleRef = ruleRef || item.ruleRef;
+    const prefix = stableRuleRef ? `[RULE_REF:${stableRuleRef}] ` : '';
+    return `${prefix}${item.text}`.trim();
   }
 
   // 🔧 通用前缀构建函数：处理 filterSender 和 filterGroup

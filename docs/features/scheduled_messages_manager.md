@@ -51,12 +51,13 @@
 - **Chrome Extension 备用**：浏览器开启时可直接执行
 - 管理页打开时只等待本机 Config、Google 授权缓存和 Messages 基础行读取；Jira Automation 状态同步、Outreach runtime 覆盖 / Done 回填、Bot 配置有效性检查和 App Script 升级检查都会在后台补齐，避免把整页停在首屏 loading。
 - 日常 Scheduled Messages 加载、读写、同步、后台标注和自动答复只请求 Google Sheets scope，不会因为打开定时消息管理页捎带请求 Google Slides；Slides 分析、身份读取和 App Script 管理分别使用自己的最小 scope。较小 scope 不会撤销 One Click Setup 已授予的完整授权。
-- 管理页会区分缺少 Google Sheets scope、未登录/取消授权和其它 OAuth 错误，不再把所有静默取 token 失败统一描述为“授权已过期”。
+- 多 Google 账号环境会按 scope 记住最近一次成功的 Chrome account id（只保存 opaque id，不保存邮箱或 access token），静默获取时先检查该账号，再检查 Chrome 可枚举的其它账号；因此默认个人账号不会遮住第二个工作账号上仍然有效的 Sheets 授权。用户明确点击“重新授权”时仍由 Chrome 显示账号选择器，成功后更新对应 scope 的账号绑定。
+- 管理页会区分缺少 Google Sheets scope、未登录/取消授权和其它 OAuth 错误，不再把所有静默取 token 失败统一描述为“授权已过期”；扩展刚重载时的临时 Identity 失败会先静默重试一次。只有确认来自 Google Sheets 的 401/invalid credential 才清理该 token 缓存，普通错误文本中的 `401` 不会触发授权重置。
 - 管理页列表、健康告警和诊断回执会显示真实执行引擎：例如 AsMe 是 AppScript 邮件 fallback 还是 Jira Automation RingCentral sender，Bot/AI 是否依赖 Bot executor，JiraAutomation 是外部规则还是托管 API，Outreach 是否由 memory-service runtime 接管。新增 / 编辑表单默认只显示预计下次执行，缺少前置配置时才显示简短“发送配置待完成”提醒。
 - 列表主题后会展示相关执行入口：JiraAutomation 行的 link icon 打开 Jira Rule；AgentTask 行的 link icon 打开 `Action Queue`，按 `sourceKind=agent_task` 和当前 Messages `ID` 定位执行账本。
 - 打开定时消息列表时，会像“帮我问”一样只读叠加 memory-service 运行态：Outreach 读 session 结果；AgentTask 读 `/agent-tasks/runtime-status`，列表与 hover 只展示 OpenClaw `summary`（缺 summary 时才回退第一条 artifact）；Bot 私发文案和 Sheet `Agent_Last_*` 只作兜底，不是结果真源。完整 artifact 仍在 Action Queue。
-- 新增 / 编辑表单把推送方式放在弹窗顶部 tab；Bot 和 AI Report 即使缺少 Bot executor 也可以先选中填写草稿，tab 会标成“可预览 · 待配置”，保存会被明确阻止，不会写入 Messages、发送消息或创建 Jira Rule。
-- “帮我做”是独立入口，不出现在普通推送方式 tab 里；普通入口创建的 AgentTask 可以是一次性或重复任务，但不暴露 AR 绑定入口。只有网页 [AR 数据](./ar_data_overlay.md) 入口创建且勾选重复执行的任务，才会写入 `Agent_AR_Binding_ID` 并出现在列表里。
+- 新增 / 编辑表单把任务类型放在弹窗顶部 tab，视觉分为两组：`发消息（AsMe · Bot · AI Report）` 与 `Agent 任务（帮我问 · 帮我做）`。Bot / AI Report / 帮我问 / 帮我做在缺少前置配置时仍可选中填写草稿，tab 会标成“可预览 · 待配置”，保存会被明确阻止，不会写入 Messages、发送消息、创建 Jira Rule 或同步 runtime。
+- “帮我做 / 帮我问”不再占用管理页头部独立按钮；统一从新建弹窗 tab 进入。普通入口创建的 AgentTask 可以是一次性或重复任务，但不暴露 AR 绑定入口。只有网页 [AR 数据](./ar_data_overlay.md) 入口创建且勾选重复执行的任务，才会写入 `Agent_AR_Binding_ID` 并出现在列表里。编辑已有 Outreach / AgentTask 行时 tab 锁定为对应类型，不可跨类型切换。
 
 ### 4. 智能调度
 
@@ -277,13 +278,14 @@
 #### 方式二：通过管理界面创建
 
 1. 点击管理页面右上角的“➕ 新增”按钮
-2. 先在弹窗顶部 tab 选择推送方式：AsMe / Bot / AI Report
+2. 先在弹窗顶部 tab 选择任务类型：左侧 `AsMe / Bot / AI Report`，右侧 `帮我问 / 帮我做`
 3. 填写消息主题、内容以及执行时间
-4. 按当前推送方式填写对应字段：
+4. 按当前任务类型填写对应字段：
    - **AsMe**：按接收人添加人名标签
    - **Bot**：选择私聊或群组，并填写 Glip 用户名或群组 ID
    - **AI Report**：选择模板（AI report / PEP report / Multiple Jira Query / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
-   - **帮我问**：从管理页顶部的独立入口创建主动询问计划，选择问某个人还是某个群，填写问题、信息目标和追问策略
+   - **帮我问**：选择问某个人还是某个群，填写问题、信息目标和追问策略；缺少 Outreach / RingCentral 配置时可先填草稿，保存会被阻止
+   - **帮我做**：填写任务描述（写入 `Content`），可选开启结果通知（私发/群组目标 + 可选模板）与成功回执；失败回执始终由 Bot 私发本人。缺少 Bot executor / OpenClaw 时可先填草稿，保存会被阻止
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
 6. 执行日期 / 时间支持快捷选择：1 分钟后、下个整点、下次默认时间（AsMe 09:00，Bot / AI / JiraAutomation 08:00）或清空时间
 7. 表单会简洁显示预计下次执行日期时间；一次性任务若已经错过可执行窗口，会提示改成未来时间
@@ -567,7 +569,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
 - Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。AgentTask 未确认可按 at-least-once 重领（memory-service 幂等吸收）；自定义 API 默认 at-most-once，claimed TTL（2h）后标 `trigger_delivery_failed`。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
-- Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.6.1 的领取 audit Log 仍保留。
+- Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.6.1 的领取 audit Log 仍保留。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
 - Timeline Sync Rule 逐项目调用内网 release info API 并通过 GET 写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
 - 首次配置或修复 Timeline Sync Rule 后，用户可以手动运行一次 Sync Rule 让缓存立即生效；新增/编辑 Timeline 消息或使用 `{currentRelease}`、`{nextPhase}` 等项目变量时，管理页会读取所选项目的缓存状态并展示执行影响，但不会阻止保存草稿。
@@ -595,22 +597,28 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 #### 6. AgentTask Runtime（帮我做）
 
-- 将 `Push_Method = AgentTask` 的 Messages 行视为 Agent task 计划，可一次性执行，也可重复执行。Sheet 保存 `Agent_Task_ID`、`Agent_Executor`、`Agent_Task_Prompt`、`Agent_Notify_Template`、`Agent_Trigger_Source`、`Agent_AR_Binding_ID` 和最近触发摘要；不保存完整 run/transcript/artifact。
+- 将 `Push_Method = AgentTask` 的 Messages 行视为 Agent task 计划，可一次性执行，也可重复执行。Sheet 保存 `Agent_Task_ID`、`Agent_Executor`、`Agent_Notify_Template`、`Agent_Notify_Success_Receipt`、`Agent_Trigger_Source`、`Agent_AR_Binding_ID` 和最近触发摘要；任务描述统一写在 `Content`（旧列 `Agent_Task_Prompt` 已退役并由 schema updater 物理删除）。不保存完整 run/transcript/artifact。
 - Jira Executor Rule 仍每分钟运行，但先通过 AppScript 读取 Sheet 并筛选 due 行。没有到期 AgentTask 时不会访问 memory-service；命中到期行时才返回 AgentTask webhook payload。
-- 因 Jira 不能直连 memory-service，Executor Rule ≥ 1.6.0 把 AgentTask 转到 Dify agent-task jumpboard（[src/scheduled-messages/dify/agent-task-jumpboard.yml](../../src/scheduled-messages/dify/agent-task-jumpboard.yml)），由 Dify 再 POST `/api/v1/agent-tasks/execute`；Chrome AR 即时刷新仍直连 memory-service，不受该跳板影响。
+- 因 Jira 不能直连 memory-service，Executor Rule ≥ 1.6.0 把 AgentTask 转到 Dify agent-task jumpboard（[src/scheduled-messages/dify/agent-task-jumpboard.yml](../../src/scheduled-messages/dify/agent-task-jumpboard.yml)），由 Dify 再 POST `/api/v1/agent-tasks/execute`。跳板必须带 memory-service 全权 `API_KEY`（Dify 环境变量 `MEMORY_SERVICE_API_KEY` + `X-User-Id`），不是个人 `pak.…`；缺 key 会 401 `authentication_required`。Chrome AR 即时刷新仍直连 memory-service，不受该跳板影响。
 - Executor Rule ≥ 1.6.1 在领取成功（`executed=true`）后、进入各发送分支前，会用 Log action 把本次 `messageId` / `topic` / `pushMethod` / `targetType` / `executionKey` / `rowIndex` 写入 Jira Automation audit log，方便对照 Apps Script 偶发超时或 404 时实际领到的任务。
+- AppScript ≥ 2.11.0 的 webhook payload 以 `Content` 为 `task`（缺列时兜底旧 `Agent_Task_Prompt`），并附带 `successReceipt`（读 `Agent_Notify_Success_Receipt`，空/`Y` 默认开）、`notifyVia: 'bot'`，以及仅在 Glip 目标非空时构造的 `notifyTarget`。
 - AppScript 在返回 AgentTask webhook 前检查 `Config!agent_task_webhook_url` 或行级 `AI_Endpoint`。缺失时不会领取该任务，也不会写 `Last_Exec`，避免配置错误导致任务静默跳过。
 - 管理页保存 / 更新“帮我做”时会先检查 Config；缺少默认 webhook 时从本机 `MEMORY_SERVICE_BASE_URL` 派生 `/agent-tasks/execute`，并连同 `agent_task_user_id` 写回 Sheet Config 后才保存任务行。
 - 管理页普通打开和基础列表加载只是只读检查：不会因为发现本机缺少 AgentTask webhook 就静默写回 Config。只有用户点击手动同步、创建/保存“帮我做”、AR 入口创建重复 AgentTask，或明确运行 schema/规则升级路径时，才会进入 Sheet-first webhook 补齐。
-- 打开“帮我做”弹窗时，管理页会用当前 Options/env 里的 `MEMORY_SERVICE_BASE_URL` 和当前用户 id 请求 memory-service `/config`，确认后端 runtime 里 `openClawEnabled/openClawBaseUrl/openClawApiKeyConfigured` 已就绪；这个检查只读，不写 Messages，也不创建可领取任务。
+- 打开新建/编辑弹窗且选中“帮我做”时，管理页会用当前 Options/env 里的 `MEMORY_SERVICE_BASE_URL` 和当前用户 id 请求 memory-service `/config`，确认后端 runtime 里 `openClawEnabled/openClawBaseUrl/openClawApiKeyConfigured` 已就绪；这个检查只读，不写 Messages，也不创建可领取任务。
 - Options/env 里的 `OPENCLAW_*` 是扩展侧配置，memory-service `/config` 返回的是后端当前用户 runtime 配置。两边可能短暂不一致：例如 Options 已保存但后端 runtime 未同步、请求未带 `X-User-Id` 读到 default 用户、或扩展仍复用旧 memory-service 地址。此时会阻止保存并显示缺失原因，避免创建到期后必然失败的 AgentTask。
 - AgentTask webhook 默认是 `POST https://.../api/v1/agent-tasks/execute`，内网环境也可配置 `http://...`；需要 `Config!agent_task_user_id` 填写 memory-service 的用户 id，Jira Rule 模板会把它作为 `X-User-Id` 转发。
-- memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用确定性 `idempotencyKey` 创建或复用 `delegate_agent` action（兼容旧 `delegate_openclaw`），入队即返回；由 Options「Agent 执行器」registry 选择 OpenClaw Gateway/Responses 或 ACP 执行，并无论成功或失败都可 Bot 私发通知。详见 [Agent Executor Runtime](./agent_executor_runtime.md)。
+- memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用确定性 `idempotencyKey` 创建或复用 `delegate_agent` action（兼容旧 `delegate_openclaw`），入队即返回；由 Options「Agent 执行器」registry 选择 OpenClaw Gateway/Responses 或 ACP 执行。详见 [Agent Executor Runtime](./agent_executor_runtime.md)。
 - Apps Script / Jira Rule 模板需在本页手动升级后，claim≠confirm 假成功修复才对真实 Sheet 生效。
 - v1 自动执行器通过 registry 配置；默认可合成 legacy `openclaw`。Codex 可通过 `acp-codex` 实例启用。
 - 管理页列表加载会额外请求 `GET /api/v1/agent-tasks/runtime-status?ids=<Messages.ID[,Agent_Task_ID]>`，按 `sourceKind=agent_task` + `sourceRefId` 取最近一次 run；列表摘要和 hover 只展示 `result.summary`，不在 hover 里重复展开 artifact。该叠加只改页面展示态，不写回 Sheet。
-- AgentTask 的 `Glip_User_Name / Glip_Team_ID` 不由 Jira Rule 直接发送；AppScript 会把它们转换成 `notifyTarget` 传给 memory-service。memory-service 在 OpenClaw 执行结束后按 `notifyTarget` 私发或群发结果；如果没有传 `glipUser` / `Glip_User_Name` / 群组目标，则默认用 webhook 的 `userId` / `X-User-Id` 私发给 memory 用户本人。
-- `Agent_Notify_Template` 只影响执行成功后的通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。失败通知不走模板，直接说明失败状态和错误。
+- **结果通知**与**回执**是两个独立概念：
+  - 结果通知：由 Sheet 的 `Glip_User_Name` / `Glip_Team_ID` 是否非空表示开关；开启后 AppScript 构造 `notifyTarget`，memory-service 仅在**成功**时把结果（可套用 `Agent_Notify_Template`）发到该目标。失败**不会**发到结果通知目标。
+  - 成功回执：`Agent_Notify_Success_Receipt`（`Y`/空=开，`N`=关，默认开）控制成功时是否额外 Bot 私发本人；若结果通知目标已是本人私发则去重合并为一条。
+  - 失败回执：始终 Bot 私发本人（不可关）；唯一例外是 API 级 `notify: false`（AR 等程序化调用），UI 永不产生该值。
+  - v1 通知发送身份固定 Bot（SM AI）；AsMe 身份为 v2 预留入口（界面显示「暂未开放」），与 Sheet RingCentral token / 顶部 AsMe 发消息 tab 无关。
+- `Agent_Notify_Template` 只影响成功结果通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。成功回执（无结果目标时）与失败回执均用默认摘要，不套模板。
+- 推送在 memory-service 拿到 OpenClaw 输出后由代码层完成（`NotificationCenterService` → Bot API），**不会**把“通知到某群”写进任务 prompt。
 
 #### 7. AR 绑定来源
 
@@ -627,7 +635,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 | ------------------ | -------- | ---- | ---------------------------------------------------- |
 | ID                 | String   | ✅   | 唯一标识                                             |
 | Topic              | String   | ✅   | 消息主题                                             |
-| Content            | String   | ✅   | 消息内容                                             |
+| Content            | String   | ✅   | 消息内容；AgentTask 时即为 OpenClaw 任务描述         |
 | Schedule_Date      | Date     | ✅   | 执行日期 (YYYY-MM-DD)                                |
 | Schedule_Time      | Time     | ❌   | 执行时间（00:00-23:59，本地时间）                    |
 | End_Date           | Date     | ❌   | 结束日期（包含当天）                                 |
@@ -649,8 +657,8 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 | Automation_Link    | String   | ❌   | Jira Automation Rule 链接                            |
 | Agent_Task_ID      | String   | ❌   | AgentTask 稳定 ID，通常由管理页或 AR 入口生成        |
 | Agent_Executor     | String   | ❌   | v1 固定为 `openclaw`                                 |
-| Agent_Task_Prompt  | String   | ❌   | OpenClaw 实际执行任务描述                            |
-| Agent_Notify_Template | String | ❌ | 成功后 Bot 私发通知的文案模板，不改变原始结果        |
+| Agent_Notify_Template | String | ❌ | 成功结果通知的文案模板（仅结果通知目标；不改变原始结果） |
+| Agent_Notify_Success_Receipt | String | ❌ | `Y`/空=开（默认），`N`=关；只控制成功回执，失败回执始终开启 |
 | Agent_Trigger_Source | String | ❌   | `jira_rule`，未来可扩展为 `memory_cron`              |
 | Agent_AR_Binding_ID | String  | ❌   | 仅 AR 入口创建的重复任务会写入                       |
 | Agent_Last_Run_At  | DateTime | ❌   | 最近一次被 Jira Rule 触发 memory-service 的时间；列表打开时可由 runtime-status 叠加覆盖展示 |
@@ -663,7 +671,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 | Exec_Count         | Number   | ❌   | 执行次数（自动）                                     |
 | Exec_Log           | String   | ❌   | 执行日志（自动）                                     |
 
-说明：`Type` 由程序根据日期、时间和重复字段自动判断，不再作为新表 schema 保存。旧表中的 `Target_Type`、`Outreach_*`、`Outreach_Question` 等列会继续兼容读取，但 v2.7 起新表只把 Outreach 入口保存在 `Content / Glip_User_Name / Glip_Team_ID / Push_Method` 等基础列中，运行态以上游 memory-service 为准。AgentTask 的 `Agent_Last_*` 只是计划行上的最近触发摘要，不是执行账本。`Sent_Chat_ID` / `Sent_Post_ID` / `Sent_At` 不属于 Messages 计划定义，发送结果统一写入 Logs。
+说明：`Type` 由程序根据日期、时间和重复字段自动判断，不再作为新表 schema 保存。旧表中的 `Target_Type`、`Outreach_*`、`Outreach_Question`、`Agent_Task_Prompt` 等列会继续兼容读取，但 schema updater 会在打开管理页时物理删除已退役列并补齐 `Agent_Notify_Success_Receipt`。v2.7 起新表只把 Outreach 入口保存在 `Content / Glip_User_Name / Glip_Team_ID / Push_Method` 等基础列中，运行态以上游 memory-service 为准。AgentTask 的 `Agent_Last_*` 只是计划行上的最近触发摘要，不是执行账本。`Sent_Chat_ID` / `Sent_Post_ID` / `Sent_At` 不属于 Messages 计划定义，发送结果统一写入 Logs。
 
 ### Logs 表字段
 
@@ -829,6 +837,8 @@ A:
 
 ## 最近更新
 
+- 2026-08-14：Executor Rule `1.7.1` 读取 Dify AgentTask jumpboard 的 `data.outputs.accepted`；memory-service 401/业务拒绝不再被 Dify workflow `SUCCESS` 掩盖，而是立即写入 Sheet `Agent_Last_Status / Agent_Last_Error / Logs` 失败记录。
+- 2026-08-11：新建弹窗统一 5 tab（发消息｜Agent 任务），帮我做/帮我问并入 tab；任务描述统一 `Content` 并退役 `Agent_Task_Prompt`；新增 `Agent_Notify_Success_Receipt`；结果通知与成功回执分离，失败回执始终 Bot 私发；Apps Script `2.11.0` + memory-service 通知矩阵。
 - 2026-08-09：Apps Script `2.10.0` + Executor Rule `1.7.0` 拆分 claim/confirm——领取不再写最终 ✅；AgentTask/API 在下游成功后 `confirmBotMessageTriggered`；未确认 claimed 可对账（`scanUnconfirmedClaims`），修复「Sheet 假成功但请求未到 memory-service」主故障。
 - 2026-08-04：Executor Rule `1.6.1` 在 `getBotMessageCurrentTime` 返回 `executed=true` 后先写一条 audit Log（messageId / topic / pushMethod / targetType / executionKey / rowIndex），再进入 AgentTask/Bot/AsMe/AI 分支；Apps Script `2.9.2` 对各领取成功返回统一带上 `topic` 与 `pushMethod`，便于对照偶发超时 / 404 时到底领了哪条任务。
 - 2026-08-03：帮我做列表结果改为打开时只读叠加 memory-service `/agent-tasks/runtime-status`；列表与 hover 只展示 OpenClaw `summary`，不再把 Bot 通知或 Sheet `Agent_Last_Result` 当唯一真源，也不在 hover 重复展 artifact。

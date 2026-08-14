@@ -28,10 +28,13 @@ type BridgeResultType =
   | 'pai-roadmap-ai-alias-result'
   | 'pai-roadmap-fetch-issue-dates-result'
   | 'pai-roadmap-import-tasks-result'
-  | 'pai-roadmap-update-target-dates-result';
+  | 'pai-roadmap-update-target-dates-result'
+  | 'pai-roadmap-update-assignee-result'
+  | 'pai-roadmap-refresh-jira-result';
 
 const ACK_TIMEOUT_MS = 4_000;
-const AGENT_CREATE_TIMEOUT_MS = 11 * 60 * 1000;
+/** Must cover one Epic Agent run (content script polls up to 30 min). */
+const AGENT_CREATE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function requestId(): string {
   return `req_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -287,6 +290,62 @@ export async function bridgeUpdateTargetDates(
       jiraKey,
       start,
       end,
+    },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  await pending;
+}
+
+export type JiraRefreshIssue = {
+  key: string;
+  summary: string | null;
+  description: string | null;
+  targetStart: string | null;
+  targetEnd: string | null;
+  assignee: string | null;
+  fetchedAt: number;
+};
+
+export async function bridgeRefreshJiraIssues(
+  keys: string[],
+): Promise<JiraRefreshIssue[]> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{
+    ok: true;
+    issues: JiraRefreshIssue[];
+  }>('pai-roadmap-refresh-jira-result', id, 60_000);
+  const acked = waitForBridgeAck('pai-roadmap-refresh-jira-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    { type: 'pai-roadmap-refresh-jira', requestId: id, keys },
+    '*',
+  );
+  await Promise.race([acked, pending]);
+  const result = await pending;
+  return Array.isArray(result.issues) ? result.issues : [];
+}
+
+export async function bridgeUpdateAssignee(
+  jiraKey: string,
+  assignee: string | null,
+): Promise<void> {
+  const id = requestId();
+  const pending = waitForBridgeResult<{ ok: true }>(
+    'pai-roadmap-update-assignee-result',
+    id,
+    30_000,
+  );
+  const acked = waitForBridgeAck('pai-roadmap-update-assignee-ack', id);
+  pending.catch(() => undefined);
+  acked.catch(() => undefined);
+  window.postMessage(
+    {
+      type: 'pai-roadmap-update-assignee',
+      requestId: id,
+      jiraKey,
+      assignee,
     },
     '*',
   );
