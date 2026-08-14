@@ -1,8 +1,14 @@
 # Action Readiness Contracts / 执行就绪契约
 
-_最后更新: 2026-07-15_
+_最后更新: 2026-08-13_
 
 执行就绪契约是 `delegate_agent` / `delegate_openclaw` 的 dispatch 前门禁。它回答的不是“这个动作值不值得做”，而是“当前连接、鉴权、目标能力、必填输入和结果证明是否足以安全开始执行”。执行器选型与 Gateway/ACP 运行时见 [Agent Executor Runtime](./agent_executor_runtime.md)。
+
+## 大白话运行逻辑
+
+就绪契约是熔断器，不是权限表。第一次动作在 `unknown` 时照常发给执行器；执行器的结果才成为证明。之后短期记住「Gateway 连不上 / Jira connector 不可用」，避免定时任务反复烧同一失败。
+
+`targetSystem=agent_task` 的通用「帮我做」任务内容不可预知，因此**只检查 `openclaw:global` 连接层**（配对、鉴权、base URL）。浏览器插件缺失、缺 artifact 这类能力层失败写在该次 run 账本上，不写就绪合同，也不按 `triggerSource` 分区连坐后续任务。Jira / Drive 等已点名目标系统的动作仍走各自 scope。
 
 ## 用户体验
 
@@ -23,10 +29,11 @@ _最后更新: 2026-07-15_
 
 P0 scope：
 
-- `openclaw:global`: OpenClaw gateway 连接或全局鉴权。
-- `openclaw:<targetSystem>:read`: 目标系统只读能力。
-- `openclaw:<targetSystem>:write`: 目标系统写能力。
+- `openclaw:global`: OpenClaw gateway 连接或全局鉴权。`targetSystem=agent_task` 的通用委派只使用这一层。
+- `openclaw:<targetSystem>:read`: 已点名目标系统的只读能力（jira、google_drive 等）。
+- `openclaw:<targetSystem>:write`: 已点名目标系统的写能力。
 - `openclaw:unscoped:write`: 没有明确目标系统的写操作。
+- 不再使用 `openclaw:agent_task:<triggerSource>:*`。`triggerSource` 只说明谁入队，不能推断任务需要哪种 tool。
 
 状态：
 
@@ -56,11 +63,13 @@ P0 scope：
 
 ## Outcome 映射
 
-- `success` 且 artifact 可验证：global 与目标 scope 进入 `ready`。
-- `auth_error` + HTTP 401/403：`openclaw:global` 进入 `blocked_auth`；其他权限错误只阻断目标 scope。
-- `capability_missing` + `configured=false`：global 进入 `blocked_capability`；否则只阻断目标 scope。
-- `artifactValidation=missing_verifiable_artifact`: 目标 scope 进入 `blocked_proof`。
-- timeout / 普通 error：目标 scope 进入 `degraded`。
+- `success` 且 artifact 可验证：global 与目标 scope 进入 `ready`。`agent_task` 只刷新 global。
+- `auth_error` + HTTP 401/403：`openclaw:global` 进入 `blocked_auth`；其他权限错误只阻断目标 scope。`agent_task` 的非 401/403 权限失败不写合同。
+- `capability_missing` + `configured=false`（或 pairing / 网关不可达）：global 进入 `blocked_capability`。
+- 已点名目标系统的 `capability_missing`：目标 scope 短 TTL `degraded`，不永久 `blocked_capability`。
+- `agent_task` 执行中的 tool 缺失、缺 artifact、普通 error：**不写就绪合同**，能力判断留在执行器；结果仍记在该次 action run。
+- 已点名目标系统的 `artifactValidation=missing_verifiable_artifact`: 目标 scope 短 TTL `degraded`，不 `blocked_proof` 连坐。
+- timeout / 普通 error：目标 scope 进入 `degraded`（`agent_task` 除外）。
 - `need_human_decision`: capability 可用，但审批/选择仍由独立人工流程处理。
 
 ## Probe 契约

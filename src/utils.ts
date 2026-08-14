@@ -77,7 +77,9 @@ export interface EnvConfigType {
   OWNER_SPEECH_LEARNING_ENABLED: boolean; // 是否自动学习自己的发言以优化输入建议
   // 记忆系统 (Memory Service)
   MEMORY_SERVICE_BASE_URL: string; // 记忆服务 API 地址，如 http://localhost:3210/api/v1
-  MEMORY_SERVICE_API_KEY?: string; // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
+  MEMORY_SERVICE_API_KEY?: string; // 全权服务密钥（运维/桌面）；扩展应优先用 bootstrap
+  /** Issue-only bootstrap key (keys.issue). Safe-ish to ship with the extension. */
+  MEMORY_SERVICE_BOOTSTRAP_KEY?: string;
   MEMORY_SERVICE_TIMEOUT?: number; // 请求超时（毫秒），默认 30000
   /** Usage Analytics dashboard admin token（仅 esone.qiu 入口使用） */
   ANALYTICS_ADMIN_TOKEN?: string;
@@ -578,6 +580,8 @@ export const defaultEnvConfig: EnvConfigType = {
   // 记忆系统 (Memory Service)
   MEMORY_SERVICE_BASE_URL: DEFAULT_MEMORY_SERVICE_BASE_URL,
   MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || '',
+  MEMORY_SERVICE_BOOTSTRAP_KEY:
+    process.env.MEMORY_SERVICE_BOOTSTRAP_KEY || '',
   MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
   ANALYTICS_ADMIN_TOKEN: process.env.ANALYTICS_ADMIN_TOKEN || '',
   // Personal Roadmap 站点

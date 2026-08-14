@@ -494,7 +494,8 @@ export class OpenClawDelegationService {
 
   private isConfigured(): boolean {
     const config = this.getRuntimeConfig();
-    return config.openClawEnabled && Boolean(config.openClawBaseUrl);
+    // baseUrl only — openClawEnabled is the reflection/linkage master switch.
+    return Boolean(config.openClawBaseUrl);
   }
 
   async delegate(input: DelegationRequest): Promise<DelegationOutcome> {

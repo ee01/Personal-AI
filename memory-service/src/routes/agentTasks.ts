@@ -2,13 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { ActionReadinessService } from '../core/ActionReadinessService.js';
 import { NotificationCenterService } from '../core/NotificationCenterService.js';
 import { OpenClawDelegationService } from '../integrations/OpenClawDelegationService.js';
 import {
   findEnabledExecutor,
+  isAgentDelegateActionType,
   publicExecutorOptions,
   resolveExecutorDefaults,
 } from '../integrations/executors/executorRegistry.js';
+import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
@@ -32,6 +35,10 @@ interface AgentTaskExecuteBody {
   userId?: string;
   timeoutMs?: number;
   notify?: boolean;
+  /** Controls success receipt only; failure receipt is always on when notify !== false. Default true. */
+  successReceipt?: boolean;
+  /** v1 accepts only 'bot'; AsMe reserved for v2. */
+  notifyVia?: 'bot' | 'asme';
   source?: Record<string, unknown>;
   scheduleSpec?: Record<string, unknown>;
   notifyTarget?: AgentTaskNotifyTarget;
@@ -137,6 +144,113 @@ export function resolveAgentTaskNotificationTarget(
   };
 }
 
+export type AgentTaskNotificationKind =
+  | 'result'
+  | 'success_receipt'
+  | 'failure_receipt';
+
+export interface AgentTaskNotificationDelivery {
+  kind: AgentTaskNotificationKind;
+  targetUserId?: string;
+  targetGroupId?: string;
+  /** Template formatting only applies to success result notifications. */
+  useTemplate: boolean;
+}
+
+/**
+ * Plan Glip deliveries for an AgentTask run.
+ *
+ * Matrix (when notify !== false):
+ * - Failure: always Bot private failure receipt to owner (never to notifyTarget).
+ * - Success + result target + successReceipt: result to target; owner receipt unless target is already owner private (dedupe).
+ * - Success + result target + !successReceipt: result to target only.
+ * - Success + no result target + successReceipt: owner private success receipt (default body, no template).
+ * - Success + no result target + !successReceipt: silent.
+ *
+ * `notify === false` (API-level, e.g. AR) suppresses all deliveries including failure.
+ */
+export function planAgentTaskNotifications(input: {
+  succeeded: boolean;
+  notify: boolean;
+  successReceipt: boolean;
+  resultTarget?: ResolvedAgentTaskNotificationTarget;
+  ownerUserId: string;
+}): AgentTaskNotificationDelivery[] {
+  if (!input.notify) return [];
+
+  const ownerUserId =
+    input.ownerUserId && input.ownerUserId !== 'default'
+      ? input.ownerUserId
+      : undefined;
+  const resultTarget =
+    input.resultTarget && !input.resultTarget.defaulted
+      ? input.resultTarget
+      : undefined;
+
+  if (!input.succeeded) {
+    return [
+      {
+        kind: 'failure_receipt',
+        targetUserId: ownerUserId,
+        useTemplate: false,
+      },
+    ];
+  }
+
+  const deliveries: AgentTaskNotificationDelivery[] = [];
+  if (resultTarget) {
+    deliveries.push({
+      kind: 'result',
+      targetUserId:
+        resultTarget.type === 'private' ? resultTarget.targetUserId : undefined,
+      targetGroupId:
+        resultTarget.type === 'group' ? resultTarget.targetGroupId : undefined,
+      useTemplate: true,
+    });
+  }
+
+  if (!input.successReceipt) {
+    return deliveries;
+  }
+
+  const isOwnerPrivateResult =
+    resultTarget?.type === 'private' &&
+    Boolean(ownerUserId) &&
+    resultTarget.targetUserId === ownerUserId;
+  if (isOwnerPrivateResult) {
+    // Merged into the single result delivery above.
+    return deliveries;
+  }
+
+  deliveries.push({
+    kind: 'success_receipt',
+    targetUserId: ownerUserId,
+    useTemplate: false,
+  });
+  return deliveries;
+}
+
+export function resolveExplicitAgentTaskResultTarget(
+  notifyTarget: AgentTaskNotifyTarget | undefined,
+): ResolvedAgentTaskNotificationTarget | undefined {
+  if (!notifyTarget) return undefined;
+  if (notifyTarget.type === 'group' && notifyTarget.targetGroupId) {
+    return {
+      type: 'group',
+      targetGroupId: notifyTarget.targetGroupId,
+      defaulted: false,
+    };
+  }
+  if (notifyTarget.type === 'private' && notifyTarget.targetUserId) {
+    return {
+      type: 'private',
+      targetUserId: notifyTarget.targetUserId,
+      defaulted: false,
+    };
+  }
+  return undefined;
+}
+
 function compactText(value: unknown, maxLength = 1600): string {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text) return '';
@@ -212,6 +326,40 @@ export interface AgentTaskRuntimeStatusItem {
   summary?: string;
   /** First artifact for evidence hover; does not replace summary as primary result. */
   evidence?: AgentTaskEvidencePreview;
+  /** Queued action blocked by ActionReadiness (OpenClaw config/auth); not a terminal queue_status. */
+  readinessBlocked?: boolean;
+}
+
+function enrichRuntimeStatusWithReadiness(
+  item: AgentTaskRuntimeStatusItem,
+  action: QueuedActionRecord,
+  readinessService: ActionReadinessService,
+): AgentTaskRuntimeStatusItem {
+  if (
+    action.queueStatus !== 'queued' ||
+    !isAgentDelegateActionType(action.actionType)
+  ) {
+    return item;
+  }
+  const check = readinessService.checkAction(action);
+  if (check.decision !== 'block') return item;
+  const scopeKey = check.receipt.scopeKey;
+  const base =
+    check.receipt.reason?.trim() ||
+    'Agent 执行被就绪检查拦截（请检查 Options → Agent 执行器 / OpenClaw 网关配置）';
+  // Make it obvious this is a shared readiness contract, not this task's own run log.
+  const reason = `就绪检查拦截（scope=${scopeKey}，可能来自同 scope 其它 AgentTask）: ${base}`;
+  return {
+    ...item,
+    summary: reason,
+    readinessBlocked: true,
+    latestAction: item.latestAction
+      ? {
+          ...item.latestAction,
+          lastError: reason,
+        }
+      : item.latestAction,
+  };
 }
 
 function firstArtifactPreview(
@@ -334,8 +482,13 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
     Querystring: { ids?: string; limit?: string };
   }>('/agent-tasks/runtime-status', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
+    const readinessService = new ActionReadinessService(
+      db,
+      userDataManager,
+      request.userId,
+    );
     const ids =
       typeof request.query.ids === 'string'
         ? request.query.ids
@@ -361,7 +514,11 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
 
     const byRef = new Map<string, AgentTaskRuntimeStatusItem>();
     for (const action of actions) {
-      const item = buildAgentTaskRuntimeStatusItem(action);
+      const item = enrichRuntimeStatusWithReadiness(
+        buildAgentTaskRuntimeStatusItem(action),
+        action,
+        readinessService,
+      );
       const keys = [item.sourceRefId, item.sheetMessageId, item.taskId].filter(
         (value): value is string => Boolean(value),
       );
@@ -442,10 +599,14 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const sourceRefId = nonEmptyString(body.sheetMessageId) || taskId;
       const notifyTarget = normalizeAgentTaskNotifyTarget(body.notifyTarget);
       const timeoutMs = normalizeAgentTaskTimeoutMs(body.timeoutMs);
-      const resolvedNotificationTarget = resolveAgentTaskNotificationTarget(
-        notifyTarget,
-        userId,
-      );
+      const shouldNotify = body.notify !== false;
+      const successReceipt = body.successReceipt !== false;
+      const notifyVia = body.notifyVia === 'asme' ? 'asme' : 'bot';
+      const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
+      // API response: prefer explicit result target; otherwise report owner receipt fallback.
+      const resolvedNotificationTarget =
+        resultTarget ||
+        resolveAgentTaskNotificationTarget(undefined, userId);
 
       const repo = new ActionRepository(db);
       const existingAction = repo.findReusableByIdempotencyKey(idempotencyKey);
@@ -473,6 +634,8 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             triggerSource,
             arBindingId,
             notifyTarget,
+            successReceipt,
+            notifyVia,
             source: body.source,
             scheduleSpec: body.scheduleSpec,
             suppressRecoveryNotifications: body.notify === false,
@@ -502,11 +665,11 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
 
       const reused = Boolean(existingAction);
       const statusUrl = `/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(sourceRefId)}`;
+      // Only short-circuit when a run is in flight or already succeeded with a stored result.
+      // failed / dead_letter / stale queued fall through so the user can retry the same idempotency key.
       if (
         reused &&
-        ['running', 'succeeded', 'failed', 'dead_letter', 'input_required'].includes(
-          action.queueStatus,
-        )
+        ['running', 'succeeded', 'input_required'].includes(action.queueStatus)
       ) {
         return reply.status(200).send({
           accepted: true,
@@ -530,18 +693,25 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       // Block A: enqueue-and-return. Execution + notification run in background
       // (HeartbeatLoop also drains due auto actions). Result and notification are
       // independent — notification failure must not rewrite run status.
-      const shouldNotify = body.notify !== false;
       const notifyTemplate = nonEmptyString(body.notifyTemplate);
       setImmediate(() => {
         void (async () => {
           try {
             const executorService = new ActionExecutor(db, userDataManager, userId);
             const execution = await executorService.executeAction(action.id);
-            if (!shouldNotify) return;
+            const succeeded = execution.queueStatus === 'succeeded';
+            const deliveries = planAgentTaskNotifications({
+              succeeded,
+              notify: shouldNotify,
+              successReceipt,
+              resultTarget,
+              ownerUserId: userId,
+            });
+            if (deliveries.length === 0) return;
 
             const resultStatus = getResultStatus(execution.result, execution.queueStatus);
             const summary = getExecutionSummary(execution.result);
-            let notificationBody = buildDefaultNotificationBody({
+            const defaultBody = buildDefaultNotificationBody({
               title,
               taskId,
               resultStatus,
@@ -552,13 +722,19 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
               triggerSource,
               arBindingId: nonEmptyString(body.arBindingId),
             });
-            if (notifyTemplate && execution.queueStatus === 'succeeded') {
+
+            let templatedResultBody = defaultBody;
+            const needsTemplate =
+              Boolean(notifyTemplate) &&
+              succeeded &&
+              deliveries.some((item) => item.useTemplate);
+            if (needsTemplate && notifyTemplate) {
               try {
-                notificationBody = await formatSuccessNotificationWithTemplate({
+                templatedResultBody = await formatSuccessNotificationWithTemplate({
                   template: notifyTemplate,
                   title,
                   task,
-                  defaultBody: notificationBody,
+                  defaultBody,
                   result: execution.result,
                   userDataManager,
                   userId,
@@ -572,23 +748,22 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             }
 
             const notificationService = new NotificationCenterService(db);
-            await notificationService.deliverNoticeToGlip({
-              sourceRef: `agent_task:${action.id}`,
-              title:
-                execution.queueStatus === 'succeeded'
-                  ? `帮我做完成: ${title}`
-                  : `帮我做失败: ${title}`,
-              body: notificationBody,
-              mention: true,
-              targetUserId:
-                resolvedNotificationTarget.type === 'private'
-                  ? resolvedNotificationTarget.targetUserId
-                  : undefined,
-              targetGroupId:
-                resolvedNotificationTarget.type === 'group'
-                  ? resolvedNotificationTarget.targetGroupId
-                  : undefined,
-            });
+            for (const [index, delivery] of deliveries.entries()) {
+              const bodyText =
+                delivery.useTemplate && succeeded ? templatedResultBody : defaultBody;
+              const noticeTitle =
+                delivery.kind === 'failure_receipt'
+                  ? `帮我做失败: ${title}`
+                  : `帮我做完成: ${title}`;
+              await notificationService.deliverNoticeToGlip({
+                sourceRef: `agent_task:${action.id}:${delivery.kind}:${index}`,
+                title: noticeTitle,
+                body: bodyText,
+                mention: true,
+                targetUserId: delivery.targetUserId,
+                targetGroupId: delivery.targetGroupId,
+              });
+            }
           } catch (error) {
             request.log.error(
               { err: error, taskId, actionId: action.id },
@@ -611,6 +786,8 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           sent: false,
           skipped: !shouldNotify,
           reason: shouldNotify ? 'queued_for_delivery' : 'notification_disabled',
+          successReceipt,
+          notifyVia,
         },
       });
     },

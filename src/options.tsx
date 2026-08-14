@@ -19,7 +19,9 @@ import {
   type CalendarEventsSyncResponse,
 } from './services/MemoryServiceClient';
 import { AgentExecutorsSettings } from './components/AgentExecutorsSettings';
+import { ToggleField } from './components/ToggleField';
 import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
+import { DEVICE_KEY_STORAGE } from './deviceApiKey';
 import { agentCoordinator } from './agentWorkflow';
 import {
   AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
@@ -250,6 +252,10 @@ const sanitizeLocalEnvConfig = (
   targetConfig: EnvConfigType,
 ): EnvConfigType => ({
   ...normalizeEnvConfigShape(targetConfig),
+  MEMORY_SERVICE_BOOTSTRAP_KEY:
+    String(targetConfig.MEMORY_SERVICE_BOOTSTRAP_KEY || '').trim() ||
+    defaultEnvConfig.MEMORY_SERVICE_BOOTSTRAP_KEY ||
+    '',
   CONCERNED_ITEMS_DIGEST_HOUR: normalizeConcernedItemsDigestHour(
     targetConfig.CONCERNED_ITEMS_DIGEST_HOUR,
     8,
@@ -261,109 +267,6 @@ const sanitizeLocalEnvConfig = (
   RINGCENTRAL_CLEAR_CLIENT_SECRET: false,
   RINGCENTRAL_CLEAR_JWT: false,
 });
-
-interface ToggleFieldProps {
-  id: string;
-  name: string;
-  checked: boolean;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  label: string;
-  description?: React.ReactNode;
-  disabled?: boolean;
-}
-
-const ToggleField = ({
-  id,
-  name,
-  checked,
-  onChange,
-  label,
-  description,
-  disabled = false,
-}: ToggleFieldProps) => (
-  <div className="form-group">
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: '16px',
-      }}
-    >
-      <div style={{ flex: 1 }}>
-        <label
-          htmlFor={id}
-          style={{
-            display: 'block',
-            fontWeight: 600,
-            cursor: disabled ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {label}
-        </label>
-        {description && (
-          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            {description}
-          </small>
-        )}
-      </div>
-      <label
-        htmlFor={id}
-        style={{
-          position: 'relative',
-          display: 'inline-flex',
-          width: '46px',
-          height: '28px',
-          flexShrink: 0,
-          cursor: disabled ? 'not-allowed' : 'pointer',
-        }}
-      >
-        <input
-          type="checkbox"
-          id={id}
-          name={name}
-          checked={checked}
-          onChange={onChange}
-          disabled={disabled}
-          style={{
-            opacity: 0,
-            width: 0,
-            height: 0,
-            position: 'absolute',
-          }}
-        />
-        <span
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            borderRadius: '999px',
-            backgroundColor: disabled
-              ? '#d0d7de'
-              : checked
-                ? '#2ecc71'
-                : '#c7ccd1',
-            transition: 'background-color 0.2s ease',
-          }}
-        />
-        <span
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: '3px',
-            left: checked ? '21px' : '3px',
-            width: '22px',
-            height: '22px',
-            borderRadius: '50%',
-            backgroundColor: '#fff',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.24)',
-            transition: 'left 0.2s ease',
-          }}
-        />
-      </label>
-    </div>
-  </div>
-);
 
 const CHROME_ON_DEVICE_ASR_LANG = 'zh-CN';
 const DESKTOP_APP_RELEASE_URL =
@@ -2199,6 +2102,10 @@ const Options = () => {
   const openClawConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<EnvConfigType>({ ...defaultEnvConfig });
   const [currentUsername, setCurrentUsername] = useState('');
+  const [personalApiKey, setPersonalApiKey] = useState<{
+    userId: string;
+    keyPrefix: string;
+  } | null>(null);
   const lastLanguageSyncKeyRef = useRef('');
   const [status, setStatus] = useState<{
     message: string;
@@ -2631,8 +2538,20 @@ const Options = () => {
 
   // 页面加载时从 Chrome 存储中获取配置
   useEffect(() => {
-    chrome.storage.local.get(['envConfig', 'userinfo'], (result) => {
+    chrome.storage.local.get(
+      ['envConfig', 'userinfo', 'memoryServiceUserApiKey', DEVICE_KEY_STORAGE],
+      (result) => {
       console.log('result', result);
+      const storedPersonalKey =
+        result?.[DEVICE_KEY_STORAGE] || result?.memoryServiceUserApiKey;
+      setPersonalApiKey(
+        storedPersonalKey?.keyPrefix && storedPersonalKey?.userId
+          ? {
+              userId: String(storedPersonalKey.userId),
+              keyPrefix: String(storedPersonalKey.keyPrefix),
+            }
+          : null,
+      );
       // Align with MemoryServiceClient identity resolution: username, then
       // email local-part. Otherwise esone.qiu-only UI can stay hidden when
       // chrome.storage only has email / userEmail.
@@ -2665,7 +2584,8 @@ const Options = () => {
         loadEnvDefaults();
         refreshOutlookCalendarStatus();
       }
-    });
+      },
+    );
   }, []);
 
   // Load weekly report settings from backend when config is ready
@@ -2682,6 +2602,7 @@ const Options = () => {
         'outreach-config': outreachConfigSectionRef.current,
         'meeting-pilot-config': meetingPilotConfigSectionRef.current,
         'openclaw-config': openClawConfigSectionRef.current,
+        'agent-executors-config': openClawConfigSectionRef.current,
         OPENCLAW_ENABLED: openClawConfigSectionRef.current,
       };
       const target = sectionMap[hash];
@@ -2736,21 +2657,11 @@ const Options = () => {
       contentType?: string | null;
     },
   ): Promise<Record<string, string>> => {
-    const result = await chrome.storage.local.get(['userinfo']);
-    const username = result?.userinfo?.username?.trim();
-    const userId = username || 'default';
-    const headers: Record<string, string> = {
-      Accept: options?.accept || 'application/json',
-      'X-User-Id': userId,
-      'X-Personal-AI-Language': uiLanguage,
-      'Accept-Language': uiLanguage,
-    };
+    const client = await createMemoryServiceClient(targetConfig);
+    const headers = await client.buildAuthHeaders();
+    headers.Accept = options?.accept || 'application/json';
     if (options?.contentType !== null) {
       headers['Content-Type'] = options?.contentType || 'application/json';
-    }
-    if (targetConfig.MEMORY_SERVICE_API_KEY) {
-      headers['Authorization'] =
-        `Bearer ${targetConfig.MEMORY_SERVICE_API_KEY}`;
     }
     return headers;
   };
@@ -2894,7 +2805,7 @@ const Options = () => {
         OPENCLAW_ENABLED:
           serverConfig?.openClawEnabled !== undefined
             ? Boolean(serverConfig.openClawEnabled)
-            : prev.OPENCLAW_ENABLED,
+            : prev.OPENCLAW_ENABLED !== false,
         OPENCLAW_BASE_URL:
           typeof serverConfig?.openClawBaseUrl === 'string'
             ? serverConfig.openClawBaseUrl
@@ -2923,7 +2834,7 @@ const Options = () => {
               baseUrl: item.baseUrl || '',
               apiKey: '',
               cwd: item.cwd || '',
-              enabled: item.enabled !== false,
+              enabled: true,
               apiKeyConfigured: Boolean(item.apiKeyConfigured),
               clearApiKey: false,
             }))
@@ -3209,9 +3120,22 @@ const Options = () => {
         return;
       }
 
-      if (config.OPENCLAW_ENABLED && !(config.OPENCLAW_BASE_URL || '').trim()) {
+      const openClawExecutor = (config.AGENT_EXECUTORS || []).find(
+        (item) =>
+          item.id === 'openclaw' ||
+          item.type === 'openclaw-responses' ||
+          item.type === 'openclaw-gateway',
+      );
+      const openClawBaseUrl = (
+        openClawExecutor?.baseUrl ||
+        config.OPENCLAW_BASE_URL ||
+        ''
+      ).trim();
+      // External-delegation master switch (reflection/linkage only). Agent Task
+      // does not require it; OpenClaw URL is required when any OpenClaw executor exists.
+      if (openClawExecutor && !openClawBaseUrl) {
         setStatus({
-          message: '启用 OpenClaw 时，需填写 OpenClaw Base URL',
+          message: 'OpenClaw 执行器需填写 Base URL',
           type: 'error',
         });
         return;
@@ -3263,9 +3187,28 @@ const Options = () => {
         'me',
         true,
       );
-      const openClawApiKey = (config.OPENCLAW_API_KEY || '').trim();
+      const openClawApiKeyFromExecutor = (
+        (config.AGENT_EXECUTORS || []).find((item) => item.id === 'openclaw')
+          ?.apiKey ||
+        (config.AGENT_EXECUTORS || []).find(
+          (item) =>
+            item.type === 'openclaw-responses' ||
+            item.type === 'openclaw-gateway',
+        )?.apiKey ||
+        ''
+      ).trim();
+      const openClawApiKey =
+        openClawApiKeyFromExecutor || (config.OPENCLAW_API_KEY || '').trim();
       const clearOpenClawApiKey =
-        Boolean(config.OPENCLAW_CLEAR_API_KEY) && openClawApiKey.length === 0;
+        (Boolean(config.OPENCLAW_CLEAR_API_KEY) ||
+          (config.AGENT_EXECUTORS || []).some(
+            (item) =>
+              (item.id === 'openclaw' ||
+                item.type === 'openclaw-responses' ||
+                item.type === 'openclaw-gateway') &&
+              item.clearApiKey === true,
+          )) &&
+        openClawApiKey.length === 0;
       const ringCentralClientSecret = (
         config.RINGCENTRAL_CLIENT_SECRET || ''
       ).trim();
@@ -3321,8 +3264,18 @@ const Options = () => {
         ),
         weeklyReportPushGroupId:
           (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
-        openClawEnabled: config.OPENCLAW_ENABLED,
-        openClawBaseUrl: (config.OPENCLAW_BASE_URL || '').trim(),
+        openClawEnabled: config.OPENCLAW_ENABLED !== false,
+        openClawBaseUrl: (
+          (config.AGENT_EXECUTORS || []).find((item) => item.id === 'openclaw')
+            ?.baseUrl ||
+          (config.AGENT_EXECUTORS || []).find(
+            (item) =>
+              item.type === 'openclaw-responses' ||
+              item.type === 'openclaw-gateway',
+          )?.baseUrl ||
+          config.OPENCLAW_BASE_URL ||
+          ''
+        ).trim(),
         openClawTimeoutMs: Math.max(
           MIN_OPENCLAW_TIMEOUT_SECONDS * 1000,
           Number(config.OPENCLAW_TIMEOUT_MS) || 600000,
@@ -3334,7 +3287,7 @@ const Options = () => {
           type: item.type,
           baseUrl: item.baseUrl,
           cwd: item.cwd,
-          enabled: item.enabled,
+          enabled: true,
           clearApiKey: item.clearApiKey === true,
           ...(item.apiKey && item.apiKey.trim()
             ? { apiKey: item.apiKey.trim() }
@@ -4290,20 +4243,49 @@ const Options = () => {
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             记忆系统后端地址，需包含 /api/v1 路径。未保存时使用当前构建默认值：
             {defaultEnvConfig.MEMORY_SERVICE_BASE_URL}
+            。想私有部署？见{' '}
+            <a
+              href="https://github.com/ee01/Personal-AI/blob/develop/docs/self-hosting-memory-service.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              自托管指引
+            </a>
+            。
           </small>
         </div>
         <div className="form-group">
-          <label htmlFor="MEMORY_SERVICE_API_KEY">API 密钥（可选）</label>
+          <label htmlFor="MEMORY_SERVICE_BOOTSTRAP_KEY">
+            Bootstrap 密钥（签发用，可选）
+          </label>
           <input
             type="password"
-            id="MEMORY_SERVICE_API_KEY"
-            name="MEMORY_SERVICE_API_KEY"
-            value={config.MEMORY_SERVICE_API_KEY || ''}
+            id="MEMORY_SERVICE_BOOTSTRAP_KEY"
+            name="MEMORY_SERVICE_BOOTSTRAP_KEY"
+            value={config.MEMORY_SERVICE_BOOTSTRAP_KEY || ''}
             onChange={handleInputChange}
-            placeholder="后端配置 API_KEY 时填写"
+            placeholder="后端 BOOTSTRAP_API_KEY；构建默认也可注入"
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            后端配置 API_KEY 时需填写相同密钥；本地开发通常留空
+            只能签发个人设备 key，不能直接读写记忆。公共服务器通常由构建注入；自托管时与
+            服务端 <code>BOOTSTRAP_API_KEY</code> 保持一致。
+          </small>
+        </div>
+        <div className="form-group">
+          <label>本机设备 key（个人凭证）</label>
+          <input
+            type="text"
+            value={
+              personalApiKey
+                ? `${personalApiKey.keyPrefix}…（绑定 ${personalApiKey.userId}）`
+                : '尚未签发（首次访问记忆服务时自动生成）'
+            }
+            readOnly
+            style={{ background: '#f5f5f5', color: '#666' }}
+          />
+          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+            每台设备各自签发；换浏览器会自动再签一把。管理全部设备 / 外接工具
+            key：打开「帮助中心 → 记忆外接」。
           </small>
         </div>
         <div className="form-group">
@@ -4899,118 +4881,13 @@ const Options = () => {
         <ContextSiteMuteSettings />
       </div>
 
-      <div
-        id="openclaw-config"
-        ref={openClawConfigSectionRef}
-        className="form-section"
-        style={
-          highlightedSection === 'openclaw-config' ||
-          highlightedSection === 'OPENCLAW_ENABLED'
-            ? {
-                scrollMarginTop: '16px',
-                boxShadow: '0 0 0 3px rgba(14, 165, 233, 0.22)',
-                borderRadius: '12px',
-                transition: 'box-shadow 0.25s ease',
-              }
-            : {
-                scrollMarginTop: '16px',
-                transition: 'box-shadow 0.25s ease',
-              }
-        }
-      >
-        <h2>{t('options.sections.openClaw')}</h2>
-        <small
-          style={{ color: '#666', display: 'block', marginBottom: '15px' }}
-        >
-          自我反思与联动操作里的外部执行入口都会走这里的 OpenClaw 配置。
-          可填写服务根地址，也可填写完整的 OpenAI 兼容 endpoint。
-        </small>
-        <ToggleField
-          id="OPENCLAW_ENABLED"
-          name="OPENCLAW_ENABLED"
-          checked={config.OPENCLAW_ENABLED === true}
-          onChange={handleInputChange}
-          label="启用 OpenClaw 外部委派"
-          description="开启后，自我反思与联动操作都可把外部系统查询/执行委派给 OpenClaw。"
-        />
-        <div className="form-group">
-          <label htmlFor="OPENCLAW_BASE_URL">
-            OpenClaw Base URL / Chat Completions Endpoint
-          </label>
-          <input
-            type="url"
-            id="OPENCLAW_BASE_URL"
-            name="OPENCLAW_BASE_URL"
-            value={config.OPENCLAW_BASE_URL || ''}
-            onChange={handleInputChange}
-            placeholder="http://10.32.56.212:18789/v1/chat/completions"
-            disabled={config.OPENCLAW_ENABLED !== true}
-          />
-          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            示例：`http://10.32.56.212:18789/v1/chat/completions`。也支持
-            `https://openclaw.example.com` 或 `https://openclaw.example.com/v1`。
-          </small>
-        </div>
-        <div className="form-group">
-          <label htmlFor="OPENCLAW_TIMEOUT_MS">OpenClaw 超时（秒）</label>
-          <input
-            type="number"
-            id="OPENCLAW_TIMEOUT_MS"
-            name="OPENCLAW_TIMEOUT_MS"
-            value={Math.max(
-              MIN_OPENCLAW_TIMEOUT_SECONDS,
-              Math.floor(Number(config.OPENCLAW_TIMEOUT_MS || 600000) / 1000),
-            )}
-            onChange={handleInputChange}
-            min={String(MIN_OPENCLAW_TIMEOUT_SECONDS)}
-            step="1"
-            disabled={config.OPENCLAW_ENABLED !== true}
-          />
-          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            最短 300 秒。保存时会自动换算成后端使用的毫秒值。
-          </small>
-        </div>
-        <div className="form-group">
-          <label htmlFor="OPENCLAW_API_KEY">
-            OpenClaw API Key（写入后不回显）
-          </label>
-          <input
-            type="password"
-            id="OPENCLAW_API_KEY"
-            name="OPENCLAW_API_KEY"
-            value={config.OPENCLAW_API_KEY || ''}
-            onChange={handleInputChange}
-            placeholder={
-              config.OPENCLAW_API_KEY_CONFIGURED
-                ? '已配置（如需更新请输入新 key）'
-                : '输入新的 OpenClaw API Key'
-            }
-            autoComplete="new-password"
-            disabled={config.OPENCLAW_ENABLED !== true}
-          />
-          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            当前状态：
-            {config.OPENCLAW_API_KEY_CONFIGURED
-              ? '后端已配置 key'
-              : '后端未配置 key'}
-            。
-          </small>
-        </div>
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              name="OPENCLAW_CLEAR_API_KEY"
-              checked={config.OPENCLAW_CLEAR_API_KEY === true}
-              onChange={handleInputChange}
-              disabled={config.OPENCLAW_ENABLED !== true}
-            />
-            清除后端已保存的 OpenClaw API Key（仅当上方 key 输入为空时生效）
-          </label>
-        </div>
-      </div>
-
       <AgentExecutorsSettings
+        sectionRef={openClawConfigSectionRef}
+        highlighted={
+          highlightedSection === 'openclaw-config' ||
+          highlightedSection === 'OPENCLAW_ENABLED' ||
+          highlightedSection === 'agent-executors-config'
+        }
         executors={config.AGENT_EXECUTORS || []}
         defaults={
           config.EXECUTOR_DEFAULTS || {
@@ -5018,13 +4895,30 @@ const Options = () => {
             reflection_research: '',
           }
         }
-        openClawEnabled={config.OPENCLAW_ENABLED === true}
-        openClawBaseUrl={config.OPENCLAW_BASE_URL || ''}
-        onChange={({ executors, defaults }) =>
+        externalDelegationEnabled={config.OPENCLAW_ENABLED !== false}
+        openClawTimeoutMs={Number(config.OPENCLAW_TIMEOUT_MS) || 600000}
+        openClawApiKeyConfigured={config.OPENCLAW_API_KEY_CONFIGURED === true}
+        minOpenClawTimeoutSeconds={MIN_OPENCLAW_TIMEOUT_SECONDS}
+        onChange={({
+          executors,
+          defaults,
+          openClawEnabled,
+          openClawBaseUrl,
+          openClawTimeoutMs,
+          clearOpenClawApiKey,
+        }) =>
           setConfig((prev) => ({
             ...prev,
             AGENT_EXECUTORS: executors,
             EXECUTOR_DEFAULTS: defaults,
+            OPENCLAW_ENABLED: openClawEnabled,
+            OPENCLAW_BASE_URL: openClawBaseUrl,
+            ...(typeof openClawTimeoutMs === 'number'
+              ? { OPENCLAW_TIMEOUT_MS: openClawTimeoutMs }
+              : {}),
+            ...(clearOpenClawApiKey !== undefined
+              ? { OPENCLAW_CLEAR_API_KEY: clearOpenClawApiKey }
+              : {}),
           }))
         }
       />
@@ -6071,7 +5965,7 @@ const AgentSettings = () => {
     setWorkflowReplayError('');
     try {
       const client = getMemoryServiceClient();
-      const result = await client.recall('', {
+      const result = await client.recall('近期工作流回放样本', {
         topK: 12,
         channels: ['time'],
         includeMetadata: true,

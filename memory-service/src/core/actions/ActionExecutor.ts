@@ -767,7 +767,7 @@ export class ActionExecutor {
         : executorInstance.type === 'acp-codex' ||
             executorInstance.type === 'acp-claude-code'
           ? new AcpExecutor(executorInstance, {
-              userId: this.userId,
+              userId: this.userId ?? 'default',
               defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
                 .openClawTimeoutMs,
             })

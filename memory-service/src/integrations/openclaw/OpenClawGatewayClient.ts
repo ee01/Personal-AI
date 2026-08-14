@@ -1,9 +1,32 @@
 /**
  * Thin OpenClaw Gateway WebSocket RPC client (protocol v4-ish).
  * Inject WebSocketImpl for unit tests.
+ *
+ * Prefer globalThis.WebSocket (Node 22+ / browsers). Fall back to the `ws`
+ * package so Node 20 Docker images still work.
  */
 
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+
+import {
+  buildDeviceAuthPayloadV3,
+  loadOrCreateGatewayDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+  type OpenClawDeviceIdentity,
+} from './openclawDeviceIdentity.js';
+
+/** OpenClaw ConnectParams.client.id allowlist (gateway-protocol). */
+export const OPENCLAW_GATEWAY_CLIENT_ID = 'gateway-client';
+/** OpenClaw ConnectParams.client.mode allowlist — not the same as role. */
+export const OPENCLAW_GATEWAY_CLIENT_MODE = 'backend';
+export const OPENCLAW_GATEWAY_ROLE = 'operator';
+export const OPENCLAW_GATEWAY_SCOPES = [
+  'operator.read',
+  'operator.write',
+  'operator.admin',
+] as const;
 
 export type GatewayWebSocket = {
   readyState: number;
@@ -20,6 +43,32 @@ export type GatewayWebSocket = {
 };
 
 export type GatewayWebSocketConstructor = new (url: string) => GatewayWebSocket;
+
+const require = createRequire(import.meta.url);
+
+function resolveWebSocketImpl(
+  override?: GatewayWebSocketConstructor,
+): GatewayWebSocketConstructor {
+  if (override) return override;
+  const globalWs = (globalThis as { WebSocket?: GatewayWebSocketConstructor })
+    .WebSocket;
+  if (typeof globalWs === 'function') return globalWs;
+  try {
+    const wsModule = require('ws') as
+      | GatewayWebSocketConstructor
+      | { WebSocket?: GatewayWebSocketConstructor; default?: GatewayWebSocketConstructor };
+    const candidate =
+      typeof wsModule === 'function'
+        ? wsModule
+        : wsModule.WebSocket || wsModule.default;
+    if (typeof candidate === 'function') return candidate;
+  } catch {
+    /* package missing — surface a clear error below */
+  }
+  throw new Error(
+    'WebSocket is not available in this runtime (need Node 22+ global WebSocket or the `ws` package)',
+  );
+}
 
 type PendingRequest = {
   resolve: (payload: unknown) => void;
@@ -56,20 +105,20 @@ export class OpenClawGatewayClient {
       WebSocketImpl?: GatewayWebSocketConstructor;
       requestTimeoutMs?: number;
       protocol?: number;
+      /** Must be an OpenClaw allowlisted client id; defaults to gateway-client. */
       clientName?: string;
       clientVersion?: string;
+      /** Persist path for Ed25519 device identity used in connect.device. */
+      deviceIdentityPath?: string;
+      /** Skip device identity (loopback token-only helper path). */
+      omitDevice?: boolean;
     },
   ) {}
 
   async connect(): Promise<void> {
     if (this.connected && this.socket) return;
 
-    const WebSocketImpl =
-      this.options.WebSocketImpl ||
-      (globalThis as { WebSocket?: GatewayWebSocketConstructor }).WebSocket;
-    if (!WebSocketImpl) {
-      throw new Error('WebSocket is not available in this runtime');
-    }
+    const WebSocketImpl = resolveWebSocketImpl(this.options.WebSocketImpl);
 
     const url = toGatewayWsUrl(this.options.baseUrl);
     const socket = new WebSocketImpl(url);
@@ -163,38 +212,114 @@ export class OpenClawGatewayClient {
   }
 
   private async handshake(): Promise<void> {
-    // Prefer waiting for connect.challenge; token-only auth can proceed without device.
-    await this.waitForChallenge(1500).catch(() => undefined);
+    // OpenClaw requires waiting for connect.challenge before signing device auth.
+    await this.waitForChallenge(5_000).catch(() => undefined);
 
     const protocol = this.options.protocol ?? 4;
+    const clientId =
+      this.options.clientName && this.options.clientName.trim()
+        ? this.options.clientName.trim()
+        : OPENCLAW_GATEWAY_CLIENT_ID;
+    const clientMode = OPENCLAW_GATEWAY_CLIENT_MODE;
+    const role = OPENCLAW_GATEWAY_ROLE;
+    // Keep the wire scopes identical to the signed scopes (server does not
+    // expand/sort before verifyDeviceSignature).
+    const scopes = [...OPENCLAW_GATEWAY_SCOPES];
+    const platform = process.platform;
+    const version = this.options.clientVersion || '1.0.0';
+    const authToken = this.options.apiKey?.trim() || undefined;
+    // Match official gateway-client: signedAt is Date.now() at connect time,
+    // not the challenge timestamp.
+    const signedAtMs = Date.now();
+
     const params: Record<string, unknown> = {
       minProtocol: protocol,
       maxProtocol: protocol,
       client: {
-        id: this.options.clientName || 'personal-ai',
-        version: this.options.clientVersion || '1.0.0',
-        platform: process.platform,
-        mode: 'operator',
+        // Must be an allowlisted GatewayClientId — arbitrary names fail schema.
+        id: clientId,
+        version,
+        platform,
+        // mode ≠ role. Allowed: webchat|cli|ui|backend|node|probe|test
+        mode: clientMode,
+        // Omit deviceFamily unless we also sign it. Server rebuilds the v3
+        // payload from connectParams.client.deviceFamily (undefined → "").
       },
-      role: 'operator',
-      scopes: ['operator.read', 'operator.write', 'operator.admin'],
+      role,
+      scopes,
       caps: [],
       commands: [],
       permissions: {},
-      auth: this.options.apiKey ? { token: this.options.apiKey } : undefined,
+      auth: authToken ? { token: authToken } : undefined,
       locale: 'zh-CN',
-      userAgent: `personal-ai/${this.options.clientVersion || '1.0.0'}`,
+      userAgent: `personal-ai/${version}`,
     };
 
-    if (this.challengeNonce && this.challengeTs != null) {
-      params.device = {
-        id: 'personal-ai-memory-service',
-        nonce: this.challengeNonce,
-        signedAt: this.challengeTs,
-      };
+    if (!this.options.omitDevice) {
+      const device = this.buildDeviceConnectParams({
+        clientId,
+        clientMode,
+        role,
+        scopes,
+        platform,
+        signedAtMs,
+        token: authToken,
+      });
+      if (device) params.device = device;
     }
 
     await this.sendRequest('connect', params, 15_000);
+  }
+
+  private buildDeviceConnectParams(input: {
+    clientId: string;
+    clientMode: string;
+    role: string;
+    scopes: string[];
+    platform: string;
+    signedAtMs: number;
+    token?: string;
+  }): Record<string, unknown> | undefined {
+    // Incomplete device objects fail schema (publicKey/signature required).
+    // Without a challenge nonce, skip device and rely on token-only trust paths.
+    if (!this.challengeNonce) return undefined;
+
+    let identity: OpenClawDeviceIdentity;
+    try {
+      identity = loadOrCreateGatewayDeviceIdentity(
+        this.options.deviceIdentityPath,
+      );
+    } catch (error) {
+      throw new Error(
+        `OpenClaw gateway device identity unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    // Must mirror server resolveDeviceSignaturePayloadVersion():
+    // platform/deviceFamily come from connectParams.client (not free-form).
+    const payload = buildDeviceAuthPayloadV3({
+      deviceId: identity.deviceId,
+      clientId: input.clientId,
+      clientMode: input.clientMode,
+      role: input.role,
+      scopes: input.scopes,
+      signedAtMs: input.signedAtMs,
+      token: input.token ?? null,
+      nonce: this.challengeNonce,
+      platform: input.platform,
+      // Intentionally empty — we do not set client.deviceFamily above.
+      deviceFamily: undefined,
+    });
+
+    return {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature: signDevicePayload(identity.privateKeyPem, payload),
+      signedAt: input.signedAtMs,
+      nonce: this.challengeNonce,
+    };
   }
 
   private waitForChallenge(timeoutMs: number): Promise<void> {

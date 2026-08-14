@@ -5,6 +5,7 @@ import {
   OpenClawDelegationService,
   type DelegationOutcome,
 } from '../integrations/OpenClawDelegationService.js';
+import { resolveAgentExecutors } from '../integrations/executors/executorRegistry.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
@@ -118,6 +119,8 @@ export interface ActionReadinessCandidate {
   requiresApproval?: boolean;
   sourceKind?: string;
   sourceRefId?: string;
+  /** Legacy/worker source tag (e.g. reflection_worker). */
+  source?: string;
   threadId?: string;
   runId?: string;
   queueStatus?: string;
@@ -231,6 +234,67 @@ function isBlockingStatus(status: ActionReadinessStatus): boolean {
   return BLOCKING_STATUSES.has(status);
 }
 
+function isGenericAgentTask(action: ActionReadinessCandidate): boolean {
+  const params = safeObject(action.params);
+  const targetSystem =
+    typeof params.targetSystem === 'string' && params.targetSystem.trim()
+      ? normalizeScopePart(params.targetSystem)
+      : undefined;
+  return targetSystem === 'agent_task';
+}
+
+function outcomeSearchText(outcome: DelegationOutcome): string {
+  const payload = safeObject(outcome.payload);
+  return [
+    outcome.summary,
+    payload.error,
+    payload.message,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+}
+
+function isGatewayUnreachable(outcome: DelegationOutcome): boolean {
+  return /pairing required|device is not approved|ECONNREFUSED|ENOTFOUND|missing baseUrl|not configured|gateway 不可用|gateway unavailable/i.test(
+    outcomeSearchText(outcome),
+  );
+}
+
+/**
+ * Generic agent_task prompts do not name a real connector. Only connection-layer
+ * signals may update openclaw:global; tool/proof failures stay with the executor.
+ */
+function isConnectionLayerOutcome(
+  action: ActionReadinessCandidate,
+  outcome: DelegationOutcome,
+  source: 'action_execution' | 'probe',
+): boolean {
+  if (!isGenericAgentTask(action)) return true;
+  if (source === 'probe') return true;
+  if (
+    outcome.status === 'success' ||
+    outcome.status === 'need_human_decision'
+  ) {
+    return true;
+  }
+  const payload = safeObject(outcome.payload);
+  if (outcome.status === 'auth_error') {
+    const httpStatus = Number(payload.httpStatus);
+    return (
+      httpStatus === 401 ||
+      httpStatus === 403 ||
+      isGatewayUnreachable(outcome)
+    );
+  }
+  if (outcome.status === 'capability_missing') {
+    return payload.configured === false || isGatewayUnreachable(outcome);
+  }
+  if (outcome.status === 'error') {
+    return isGatewayUnreachable(outcome);
+  }
+  return false;
+}
+
 function statusReason(status: ActionReadinessStatus): string {
   switch (status) {
     case 'ready':
@@ -275,6 +339,14 @@ export function getActionReadinessScope(
       capability: mode === 'write' ? 'unscoped:write' : 'gateway',
       mode,
     };
+  }
+
+  // Generic Agent Task prompts do not name a connector. triggerSource (jira_rule,
+  // roadmap, …) is who queued the work, not which capability it needs — partitioning
+  // on it made “open baidu” block unrelated Jira-triggered tasks. Keep only the
+  // gateway connection gate; tool availability stays with the executor.
+  if (targetSystem === 'agent_task') {
+    return globalOpenClawScope();
   }
 
   return {
@@ -392,8 +464,10 @@ export class ActionReadinessService {
   ): Promise<ActionReadinessProbeResponse> {
     const initial = this.checkAction(action, { persistStaticBlock: true });
     const config = getUserRuntimeConfig(this.userDataManager);
+    const reflectionBlocked =
+      this.isReflectionDelegationSource(action) && !config.openClawEnabled;
     const localConfigurationBlocked =
-      !config.openClawEnabled || !config.openClawBaseUrl;
+      reflectionBlocked || !config.openClawBaseUrl;
     if (
       localConfigurationBlocked ||
       initial.receipt.status === 'blocked_input'
@@ -411,7 +485,9 @@ export class ActionReadinessService {
           boundary:
             initial.receipt.status === 'blocked_input'
               ? '本次只检查必填输入；输入仍不完整，未调用 OpenClaw，也未提交原动作。'
-              : '本次只检查本地 OpenClaw 配置；未提交原动作，未读取或写入外部业务数据。',
+              : reflectionBlocked
+                ? '外部委派已关闭；本次未提交反思/联动原动作（Agent Task 不受此开关影响）。'
+                : '本次只检查本地 OpenClaw 配置；未提交原动作，未读取或写入外部业务数据。',
         },
       };
     }
@@ -546,7 +622,7 @@ export class ActionReadinessService {
     }
 
     const scopedContract = this.getByScopeKey(scope.scopeKey);
-    if (scopedContract) return scopedContract;
+    if (scopedContract) return this.toEffectiveContract(scopedContract);
 
     const currentTime = now();
     return {
@@ -565,17 +641,50 @@ export class ActionReadinessService {
     };
   }
 
+  private isReflectionDelegationSource(
+    action: ActionReadinessCandidate,
+  ): boolean {
+    const sourceKind = String(action.sourceKind || '');
+    const source = String(action.source || '');
+    return (
+      sourceKind === 'reflection_thread' ||
+      sourceKind === 'reflection_run' ||
+      source === 'reflection_worker'
+    );
+  }
+
   private getStaticBlock(
     action: ActionReadinessCandidate,
     scope: ReadinessScope,
     persist: boolean,
   ): ActionReadinessContract | null {
     const config = getUserRuntimeConfig(this.userDataManager);
-    if (!config.openClawEnabled || !config.openClawBaseUrl) {
+
+    // Master「外部委派」switch: only gates reflection/linkage, not Agent Task.
+    if (this.isReflectionDelegationSource(action) && !config.openClawEnabled) {
       return this.materializeStaticContract({
         ...globalOpenClawScope(),
         status: 'blocked_capability',
-        statusReason: 'OpenClaw 未启用或缺少 base URL，原动作尚未提交。',
+        statusReason:
+          '外部委派已关闭（反思查证 / 联动操作）；Agent Task 不受影响。',
+        proofRequirements: this.proofRequirements(scope),
+      }, persist);
+    }
+
+    const hasOpenClawConnection =
+      Boolean(config.openClawBaseUrl) ||
+      resolveAgentExecutors(config).some(
+        (item) =>
+          (item.type === 'openclaw-responses' ||
+            item.type === 'openclaw-gateway') &&
+          Boolean(item.baseUrl),
+      );
+
+    if (!hasOpenClawConnection) {
+      return this.materializeStaticContract({
+        ...globalOpenClawScope(),
+        status: 'blocked_capability',
+        statusReason: 'OpenClaw 缺少 base URL，原动作尚未提交。',
         proofRequirements: this.proofRequirements(scope),
       }, persist);
     }
@@ -648,6 +757,11 @@ export class ActionReadinessService {
     }
 
     const payload = safeObject(outcome.payload);
+    if (!isConnectionLayerOutcome(action, outcome, source)) {
+      const current = this.resolveContract(action, scope, false);
+      return this.toReceipt(this.toEffectiveContract(current), action);
+    }
+
     const currentTime = now();
     const probeResult = {
       source,
@@ -705,9 +819,30 @@ export class ActionReadinessService {
           : scope;
       contract = update(targetScope, 'blocked_auth', outcome.summary);
     } else if (outcome.status === 'capability_missing') {
-      const targetScope =
-        payload.configured === false ? globalOpenClawScope() : scope;
-      contract = update(targetScope, 'blocked_capability', outcome.summary);
+      if (payload.configured === false) {
+        // True config gap — block the whole gateway until Options is fixed.
+        contract = update(
+          globalOpenClawScope(),
+          'blocked_capability',
+          outcome.summary,
+        );
+      } else if (source === 'action_execution') {
+        // One task missing a tool (browser bridge, a Jira skill, …) must not
+        // permanently freeze every sibling that shares this coarse scope.
+        contract = update(
+          scope,
+          'degraded',
+          `单次能力缺失（短时降级，不永久封锁同 scope）: ${outcome.summary}`,
+          currentTime + PROOF_FAIL_TTL_SECONDS,
+        );
+      } else {
+        contract = update(
+          scope,
+          'blocked_capability',
+          outcome.summary,
+          currentTime + DEGRADED_TTL_SECONDS,
+        );
+      }
     } else if (
       outcome.status === 'error' &&
       payload.artifactValidation === 'missing_verifiable_artifact'
@@ -853,7 +988,11 @@ export class ActionReadinessService {
     if (
       contract.expiresAt &&
       contract.expiresAt <= now() &&
-      (contract.status === 'ready' || contract.status === 'degraded')
+      (contract.status === 'ready' ||
+        contract.status === 'degraded' ||
+        // Proof/capability failures use a short TTL so one bad run does not
+        // permanently park the whole scope (see PROOF_FAIL_TTL_SECONDS).
+        isBlockingStatus(contract.status))
     ) {
       return {
         ...contract,

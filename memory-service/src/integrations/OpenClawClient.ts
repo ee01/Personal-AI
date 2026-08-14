@@ -18,7 +18,9 @@ export class OpenClawClient {
 
   isConfigured(): boolean {
     const config = this.getRuntimeConfig();
-    return config.openClawEnabled && Boolean(config.openClawBaseUrl);
+    // Connection readiness only — the「外部委派」master switch (openClawEnabled)
+    // gates reflection/linkage creation, not Agent Task / connector reachability.
+    return Boolean(config.openClawBaseUrl);
   }
 
   async request(input: OpenClawRequest): Promise<{

@@ -12,11 +12,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { getConfig } from '../config.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import {
+  buildPersistedLegacyOpenClawImport,
   normalizeAgentExecutorInstance,
   resolveAgentExecutors,
   resolveExecutorDefaults,
   sanitizeAgentExecutorsForResponse,
   type AgentExecutorInstance,
+  type AgentExecutorType,
+  type ExecutorDefaults,
 } from '../integrations/executors/executorRegistry.js';
 
 const MIN_OPENCLAW_TIMEOUT_INPUT_MS = 5 * 60 * 1000;
@@ -143,6 +146,65 @@ function writePersistedConfig(data: Record<string, unknown>, request?: FastifyRe
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+function applyLegacyOpenClawImport(
+  persisted: Record<string, unknown>,
+): { persisted: Record<string, unknown>; changed: boolean } {
+  const appConfig = getConfig();
+  const imported = buildPersistedLegacyOpenClawImport(persisted, {
+    openClawEnabled: appConfig.openClawEnabled,
+    openClawBaseUrl: appConfig.openClawBaseUrl,
+    openClawApiKey: appConfig.openClawApiKey,
+    openClawExecutorType: appConfig.openClawExecutorType,
+    openClawExecutorLabel: appConfig.openClawExecutorLabel,
+  });
+  if (!imported) {
+    return { persisted, changed: false };
+  }
+  const primary = imported.agentExecutors[0];
+  return {
+    changed: true,
+    persisted: {
+      ...persisted,
+      agentExecutors: imported.agentExecutors,
+      executorDefaults: imported.executorDefaults,
+      ...(primary?.baseUrl && !persisted.openClawBaseUrl
+        ? { openClawBaseUrl: primary.baseUrl }
+        : {}),
+      ...(primary?.apiKey && !persisted.openClawApiKey
+        ? { openClawApiKey: primary.apiKey }
+        : {}),
+    },
+  };
+}
+
+/** Keep legacy openClaw* connection fields aligned with an OpenClaw executor row.
+ * openClawEnabled is the independent「外部委派」master switch — do not mirror from
+ * per-executor enabled (listed executors are always available).
+ */
+function mirrorOpenClawLegacyFromExecutors(
+  persisted: Record<string, unknown>,
+): void {
+  const executors = Array.isArray(persisted.agentExecutors)
+    ? persisted.agentExecutors
+        .map((item) => normalizeAgentExecutorInstance(item))
+        .filter((item): item is AgentExecutorInstance => Boolean(item))
+    : [];
+  const openclaw =
+    executors.find((item) => item.id === 'openclaw') ||
+    executors.find(
+      (item) =>
+        item.type === 'openclaw-responses' || item.type === 'openclaw-gateway',
+    );
+  if (!openclaw) return;
+  if (openclaw.baseUrl) {
+    persisted.openClawBaseUrl = openclaw.baseUrl;
+  }
+  // Empty apiKey means "keep existing" (clear is handled by clearApiKey on PUT).
+  if (typeof openclaw.apiKey === 'string' && openclaw.apiKey.trim()) {
+    persisted.openClawApiKey = openclaw.apiKey;
+  }
+}
+
 function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
@@ -161,22 +223,35 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
     typeof raw.botToken === 'string' && raw.botToken.trim().length > 0;
 
   // Expand agentExecutors with legacy OpenClaw synthesis + strip apiKeys.
+  const openClawExecutorType: AgentExecutorType =
+    raw.openClawExecutorType === 'openclaw-responses' ||
+    raw.openClawExecutorType === 'openclaw-gateway' ||
+    raw.openClawExecutorType === 'acp-codex' ||
+    raw.openClawExecutorType === 'acp-claude-code'
+      ? raw.openClawExecutorType
+      : 'openclaw-gateway';
   const runtimeLike = {
-    openClawEnabled: Boolean(raw.openClawEnabled),
+    openClawEnabled: raw.openClawEnabled !== false,
     openClawBaseUrl:
       typeof raw.openClawBaseUrl === 'string' ? raw.openClawBaseUrl : '',
     openClawApiKey:
       typeof raw.openClawApiKey === 'string' ? raw.openClawApiKey : '',
+    openClawExecutorType,
+    openClawExecutorLabel:
+      typeof raw.openClawExecutorLabel === 'string' &&
+      raw.openClawExecutorLabel.trim()
+        ? raw.openClawExecutorLabel.trim()
+        : 'OpenClaw',
     agentExecutors: Array.isArray(raw.agentExecutors)
       ? (raw.agentExecutors as AgentExecutorInstance[])
       : [],
-    executorDefaults:
-      raw.executorDefaults && typeof raw.executorDefaults === 'object'
-        ? (raw.executorDefaults as {
-            agent_task?: string;
-            reflection_research?: string;
-          })
-        : { agent_task: '', reflection_research: '' },
+    executorDefaults: {
+      agent_task: '',
+      reflection_research: '',
+      ...(raw.executorDefaults && typeof raw.executorDefaults === 'object'
+        ? (raw.executorDefaults as Partial<ExecutorDefaults>)
+        : {}),
+    },
   };
   const resolved = resolveAgentExecutors(runtimeLike);
   clean.agentExecutors = sanitizeAgentExecutorsForResponse(resolved);
@@ -302,7 +377,12 @@ export async function configRoutes(
   // GET /config — Return current config (excluding sensitive keys)
   app.get('/config', async (request, reply) => {
     const appConfig = getConfig();
-    const persisted = readPersistedConfig(request);
+    let persisted = readPersistedConfig(request);
+    const imported = applyLegacyOpenClawImport(persisted);
+    if (imported.changed) {
+      persisted = imported.persisted;
+      writePersistedConfig(persisted, request);
+    }
 
     // Merge: app defaults overridden by persisted runtime values
     const merged = { ...appConfig, ...persisted };
@@ -317,7 +397,7 @@ export async function configRoutes(
     { schema: { body: updateConfigBodySchema } },
     async (request, reply) => {
       const updates = request.body;
-      const persisted = readPersistedConfig(request);
+      let persisted = readPersistedConfig(request);
 
       // Apply only the allowed keys
       if (updates.heartbeatIntervalMs !== undefined) {
@@ -514,6 +594,13 @@ export async function configRoutes(
       }
       if (updates.clearBotToken === true) {
         delete persisted.botToken;
+      }
+
+      // One-time / keep-alive import of legacy OpenClaw into agentExecutors.
+      const imported = applyLegacyOpenClawImport(persisted);
+      persisted = imported.persisted;
+      if (updates.agentExecutors !== undefined) {
+        mirrorOpenClawLegacyFromExecutors(persisted);
       }
 
       writePersistedConfig(persisted, request);

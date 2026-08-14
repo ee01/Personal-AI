@@ -85,6 +85,7 @@ function mapStatus(status: string): AgentRunStatus {
   switch (status) {
     case 'success':
     case 'succeeded':
+    case 'ok':
       return 'succeeded';
     case 'capability_missing':
       return 'capability_missing';
@@ -105,27 +106,261 @@ function mapStatus(status: string): AgentRunStatus {
   }
 }
 
+/** OpenClaw `agent.wait` returns a terminal snapshot, not assistant text. */
+function isAgentWaitSnapshot(payload: unknown): payload is {
+  status: string;
+  error?: unknown;
+  startedAt?: number;
+  endedAt?: number;
+  stopReason?: string;
+  runId?: string;
+} {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false;
+  }
+  const obj = payload as Record<string, unknown>;
+  const status = typeof obj.status === 'string' ? obj.status.trim().toLowerCase() : '';
+  if (!status || !['ok', 'error', 'timeout'].includes(status)) return false;
+  // Envelope responses use success/capability_missing/… and usually include summary/artifacts.
+  if ('artifacts' in obj || 'summary' in obj || 'transcript' in obj) return false;
+  const hasWaitShape =
+    'startedAt' in obj ||
+    'endedAt' in obj ||
+    'stopReason' in obj ||
+    'error' in obj ||
+    Object.keys(obj).every((key) =>
+      ['status', 'runId', 'startedAt', 'endedAt', 'stopReason', 'error'].includes(key),
+    );
+  return hasWaitShape;
+}
+
+function messageText(message: unknown): string {
+  if (!message || typeof message !== 'object') return '';
+  const obj = message as Record<string, unknown>;
+  // OpenClaw chat.history uses content: [{ type: 'text', text: '...' }].
+  if (Array.isArray(obj.content)) {
+    const parts = obj.content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          const rec = part as Record<string, unknown>;
+          if (typeof rec.text === 'string') return rec.text;
+          if (typeof rec.content === 'string') return rec.content;
+          if (typeof rec.value === 'string') return rec.value;
+        }
+        return '';
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join('\n').trim();
+  }
+  for (const key of ['text', 'content', 'message', 'summary']) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function extractAssistantTextFromHistory(payload: unknown): string {
+  if (!payload) return '';
+  if (typeof payload === 'string') return payload.trim();
+  if (typeof payload !== 'object') return '';
+  const obj = payload as Record<string, unknown>;
+  const messages = Array.isArray(obj.messages)
+    ? obj.messages
+    : Array.isArray(obj.items)
+      ? obj.items
+      : Array.isArray(obj.entries)
+        ? obj.entries
+        : Array.isArray(payload)
+          ? payload
+          : [];
+
+  const assistantTexts: string[] = [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as Record<string, unknown> | undefined;
+    if (!message || typeof message !== 'object') continue;
+    const role = String(message.role || message.sender || message.type || '')
+      .trim()
+      .toLowerCase();
+    if (role && !['assistant', 'agent', 'model', 'ai'].includes(role)) continue;
+    const text = messageText(message);
+    if (!text) continue;
+    // Prefer JSON envelopes over reasoning narrations.
+    if (text.trimStart().startsWith('{') || text.includes('"status"')) {
+      return text;
+    }
+    assistantTexts.push(text);
+  }
+  if (assistantTexts.length) return assistantTexts[0];
+  return '';
+}
+
 function extractText(payload: unknown): string {
   if (!payload) return '';
   if (typeof payload === 'string') return payload;
   if (typeof payload !== 'object') return String(payload);
+  if (isAgentWaitSnapshot(payload)) {
+    // Wait snapshots are lifecycle metadata; callers must fetch chat.history for text.
+    return '';
+  }
   const obj = payload as Record<string, unknown>;
   for (const key of ['text', 'message', 'summary', 'output', 'content', 'result']) {
     const value = obj[key];
     if (typeof value === 'string' && value.trim()) return value;
   }
-  if (Array.isArray(obj.messages)) {
-    const last = obj.messages[obj.messages.length - 1] as
-      | { content?: string; text?: string }
-      | undefined;
-    if (typeof last?.content === 'string') return last.content;
-    if (typeof last?.text === 'string') return last.text;
+  if (Array.isArray(obj.messages) || Array.isArray(obj.items)) {
+    const assistant = extractAssistantTextFromHistory(obj);
+    if (assistant) return assistant;
   }
   try {
     return JSON.stringify(payload);
   } catch {
     return '';
   }
+}
+
+function candidateSessionKeys(sessionKey: string): string[] {
+  const key = sessionKey.trim();
+  if (!key) return [];
+  const keys = [key];
+  if (!key.startsWith('agent:')) {
+    keys.push(`agent:main:${key}`);
+  }
+  return [...new Set(keys)];
+}
+
+async function fetchAssistantTextFromSession(
+  client: OpenClawGatewayClient,
+  sessionKey: string,
+): Promise<{ text: string; historyPayload?: unknown }> {
+  const keys = candidateSessionKeys(sessionKey);
+  let resolvedKey = '';
+  try {
+    const resolved = await client.request<{ key?: string; ok?: boolean }>(
+      'sessions.resolve',
+      { key: sessionKey },
+      8_000,
+    );
+    if (typeof resolved?.key === 'string' && resolved.key.trim()) {
+      resolvedKey = resolved.key.trim();
+      keys.unshift(resolvedKey);
+    }
+  } catch {
+    /* optional */
+  }
+
+  const tried = [...new Set(keys.filter(Boolean))];
+  let lastPayload: unknown;
+  for (const key of tried) {
+    try {
+      const historyPayload = await client.request(
+        'chat.history',
+        { sessionKey: key, limit: 50 },
+        15_000,
+      );
+      lastPayload = historyPayload;
+      const text = extractAssistantTextFromHistory(historyPayload);
+      if (text.trim()) {
+        return { text, historyPayload };
+      }
+    } catch {
+      /* try next key / method */
+    }
+    try {
+      const preview = await client.request(
+        'sessions.preview',
+        { keys: [key], limit: 20 },
+        10_000,
+      );
+      lastPayload = preview;
+      const text = extractAssistantTextFromHistory(preview);
+      if (text.trim()) {
+        return { text, historyPayload: preview };
+      }
+    } catch {
+      /* continue */
+    }
+  }
+  return { text: '', historyPayload: lastPayload };
+}
+
+async function resolveResultAfterWait(
+  client: OpenClawGatewayClient,
+  input: {
+    waited: unknown;
+    remoteRunId: string;
+    sessionKey: string;
+    targetSystem?: string;
+  },
+): Promise<AgentResultEnvelope> {
+  if (isAgentWaitSnapshot(input.waited)) {
+    const waitStatus = String(input.waited.status || '').toLowerCase();
+    if (waitStatus === 'timeout') {
+      return {
+        status: 'timeout',
+        summary: `OpenClaw Gateway agent.wait 超时（run ${input.remoteRunId}）`,
+        artifacts: [],
+        remoteRunId: input.remoteRunId,
+        sessionKey: input.sessionKey,
+        payload: { gatewayWait: input.waited },
+      };
+    }
+    if (waitStatus === 'error') {
+      const err =
+        typeof input.waited.error === 'string'
+          ? input.waited.error
+          : input.waited.error && typeof input.waited.error === 'object'
+            ? JSON.stringify(input.waited.error)
+            : 'agent.wait returned error';
+      return {
+        status: 'error',
+        summary: err,
+        artifacts: [],
+        remoteRunId: input.remoteRunId,
+        sessionKey: input.sessionKey,
+        payload: { gatewayWait: input.waited },
+      };
+    }
+  }
+
+  let historyText = '';
+  let historyPayload: unknown;
+  if (input.sessionKey) {
+    const fetched = await fetchAssistantTextFromSession(
+      client,
+      input.sessionKey,
+    );
+    historyText = fetched.text;
+    historyPayload = fetched.historyPayload;
+  }
+
+  const text = historyText || extractText(input.waited);
+  if (!text.trim()) {
+    return {
+      status: 'error',
+      summary:
+        'OpenClaw Gateway run 已结束，但未能从 chat.history 读取到助手输出',
+      artifacts: [],
+      remoteRunId: input.remoteRunId,
+      sessionKey: input.sessionKey,
+      payload: {
+        gatewayWait: input.waited,
+        chatHistory: historyPayload,
+      },
+    };
+  }
+
+  const envelope = parseEnvelope(text, input.targetSystem);
+  return {
+    ...envelope,
+    remoteRunId: input.remoteRunId,
+    sessionKey: input.sessionKey,
+    payload: {
+      ...(envelope.payload || {}),
+      gatewayWait: input.waited,
+      chatHistory: historyPayload,
+    },
+  };
 }
 
 function parseEnvelope(
@@ -250,19 +485,14 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           { runId: remoteRunId, timeoutMs },
           timeoutMs + 5_000,
         );
-        const text = extractText(waited);
-        const envelope = parseEnvelope(text, request.targetSystem);
-        return {
-          ...envelope,
+        return await resolveResultAfterWait(client, {
+          waited,
           remoteRunId,
           sessionKey,
-          payload: {
-            ...(envelope.payload || {}),
-            gatewayWait: waited,
-          },
-        };
+          targetSystem: request.targetSystem,
+        });
       } catch (waitError) {
-        return this.reconcileAfterDisconnect(client, {
+        return await this.reconcileAfterDisconnect(client, {
           remoteRunId,
           sessionKey,
           targetSystem: request.targetSystem,
@@ -307,7 +537,7 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
     const client = this.createClient(30_000);
     try {
       await client.connect();
-      return this.reconcileAfterDisconnect(client, {
+      return await this.reconcileAfterDisconnect(client, {
         remoteRunId,
         sessionKey: '',
         eventCursor: cursor,
@@ -362,16 +592,23 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           { runId: input.remoteRunId, timeoutMs: 5_000 },
           8_000,
         );
-        const text = extractText(waited);
-        if (text.trim()) {
-          const envelope = parseEnvelope(text, input.targetSystem);
+        const resolved = await resolveResultAfterWait(client, {
+          waited,
+          remoteRunId: input.remoteRunId,
+          sessionKey: input.sessionKey,
+          targetSystem: input.targetSystem,
+        });
+        const historyMiss =
+          isAgentWaitSnapshot(waited) &&
+          String(waited.status).toLowerCase() === 'ok' &&
+          resolved.status === 'error' &&
+          /未能从 chat\.history/.test(resolved.summary || '');
+        if (!historyMiss) {
           return {
-            ...envelope,
-            remoteRunId: input.remoteRunId,
-            sessionKey: input.sessionKey,
+            ...resolved,
             eventCursor: input.eventCursor,
             payload: {
-              ...(envelope.payload || {}),
+              ...(resolved.payload || {}),
               reconciled: true,
               networkError: input.networkError,
             },

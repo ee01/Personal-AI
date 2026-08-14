@@ -42,7 +42,6 @@ import {
   type CreateRehearsalInput,
 } from './RehearsalService.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
-import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { EvidenceWatchContractService } from './EvidenceWatchContractService.js';
@@ -951,6 +950,11 @@ export class ReflectionThreadService {
         proposal.actionType === 'delegate_openclaw' ||
         proposal.actionType === 'delegate_agent'
       ) {
+        const runtimeConfig = getUserRuntimeConfig(this.userDataManager);
+        // Master「外部委派」switch — Agent Task is unaffected.
+        if (!runtimeConfig.openClawEnabled) {
+          return [];
+        }
         const readiness = this.actionReadinessService.checkAction(
           {
             actionType: proposal.actionType,

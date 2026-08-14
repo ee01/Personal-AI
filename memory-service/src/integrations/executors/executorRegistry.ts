@@ -82,32 +82,130 @@ export function normalizeAgentExecutorInstance(
   };
 }
 
+function hasLegacyOpenClawConfig(
+  config: Pick<
+    UserRuntimeConfig,
+    | 'openClawEnabled'
+    | 'openClawBaseUrl'
+    | 'openClawApiKey'
+  >,
+): boolean {
+  return (
+    Boolean(config.openClawEnabled) ||
+    Boolean(nonEmpty(config.openClawBaseUrl)) ||
+    Boolean(config.openClawApiKey && String(config.openClawApiKey).trim())
+  );
+}
+
 function synthesizeLegacyOpenClaw(
   config: Pick<
     UserRuntimeConfig,
     'openClawEnabled' | 'openClawBaseUrl' | 'openClawApiKey'
-  >,
+  > &
+    Partial<
+      Pick<UserRuntimeConfig, 'openClawExecutorType' | 'openClawExecutorLabel'>
+    >,
 ): AgentExecutorInstance | null {
-  if (!config.openClawEnabled) return null;
+  if (!hasLegacyOpenClawConfig(config)) return null;
+  const type =
+    normalizeExecutorType(config.openClawExecutorType) ?? 'openclaw-gateway';
   return {
     id: LEGACY_OPENCLAW_EXECUTOR_ID,
-    label: 'OpenClaw',
-    type: 'openclaw-responses',
+    label: nonEmpty(config.openClawExecutorLabel) || 'OpenClaw',
+    type,
     baseUrl: nonEmpty(config.openClawBaseUrl),
     apiKey: config.openClawApiKey || undefined,
+    // Listed executors are always available; openClawEnabled is a separate
+    // master switch for reflection/linkage external delegation only.
     enabled: true,
   };
 }
+
+export type OpenClawEnvDefaults = {
+  openClawEnabled?: boolean;
+  openClawBaseUrl?: string;
+  openClawApiKey?: string;
+  openClawExecutorType?: AgentExecutorType;
+  openClawExecutorLabel?: string;
+};
+
+/**
+ * Persist-ready import: if the user still only has legacy openClaw* fields and
+ * no `openclaw` executor row, create one. Env defaults fill missing connection
+ * fields so new users get the shared Gateway without opening Options first.
+ * Returns null when nothing to write.
+ */
+export function buildPersistedLegacyOpenClawImport(
+  persisted: Record<string, unknown>,
+  envDefaults: OpenClawEnvDefaults = {},
+): {
+  agentExecutors: AgentExecutorInstance[];
+  executorDefaults: ExecutorDefaults;
+} | null {
+  const existingRaw = Array.isArray(persisted.agentExecutors)
+    ? persisted.agentExecutors
+    : [];
+  const existing = existingRaw
+    .map((item) => normalizeAgentExecutorInstance(item))
+    .filter((item): item is AgentExecutorInstance => Boolean(item));
+  if (existing.some((item) => item.id === LEGACY_OPENCLAW_EXECUTOR_ID)) {
+    return null;
+  }
+  // A non-empty custom list means the user already chose executors.
+  if (existing.length > 0) {
+    return null;
+  }
+
+  const persistedUrl =
+    typeof persisted.openClawBaseUrl === 'string'
+      ? persisted.openClawBaseUrl.trim()
+      : '';
+  const persistedKey =
+    typeof persisted.openClawApiKey === 'string' ? persisted.openClawApiKey : '';
+  const legacy = synthesizeLegacyOpenClaw({
+    openClawEnabled:
+      typeof persisted.openClawEnabled === 'boolean'
+        ? persisted.openClawEnabled
+        : Boolean(envDefaults.openClawEnabled),
+    openClawBaseUrl: persistedUrl || envDefaults.openClawBaseUrl || '',
+    openClawApiKey: persistedKey || envDefaults.openClawApiKey || '',
+    openClawExecutorType:
+      envDefaults.openClawExecutorType ?? 'openclaw-gateway',
+    openClawExecutorLabel: envDefaults.openClawExecutorLabel || 'OpenClaw',
+  });
+  if (!legacy || !nonEmpty(legacy.baseUrl)) return null;
+
+  const rawDefaults =
+    persisted.executorDefaults && typeof persisted.executorDefaults === 'object'
+      ? (persisted.executorDefaults as Record<string, unknown>)
+      : {};
+  const agentTask = nonEmpty(rawDefaults.agent_task) || LEGACY_OPENCLAW_EXECUTOR_ID;
+  const reflection =
+    nonEmpty(rawDefaults.reflection_research) || LEGACY_OPENCLAW_EXECUTOR_ID;
+
+  return {
+    agentExecutors: [legacy, ...existing],
+    executorDefaults: {
+      agent_task: agentTask,
+      reflection_research: reflection,
+    },
+  };
+}
+
+export type AgentExecutorResolveConfig = Pick<
+  UserRuntimeConfig,
+  'openClawEnabled' | 'openClawBaseUrl' | 'openClawApiKey' | 'agentExecutors'
+> &
+  Partial<
+    Pick<UserRuntimeConfig, 'openClawExecutorType' | 'openClawExecutorLabel'>
+  >;
 
 /**
  * Effective registry: explicit agentExecutors, or a synthetic OpenClaw entry
  * derived from the legacy openClaw* fields when the list is empty.
  */
 export function resolveAgentExecutors(
-  config: Pick<
-    UserRuntimeConfig,
-    'openClawEnabled' | 'openClawBaseUrl' | 'openClawApiKey' | 'agentExecutors'
-  >,
+  config: AgentExecutorResolveConfig,
 ): AgentExecutorInstance[] {
   const configured = Array.isArray(config.agentExecutors)
     ? config.agentExecutors
@@ -119,6 +217,7 @@ export function resolveAgentExecutors(
     return configured;
   }
 
+  // Runtime fallback while older configs are still migrating into agentExecutors.
   const legacy = synthesizeLegacyOpenClaw(config);
   return legacy ? [legacy] : [];
 }
@@ -129,7 +228,11 @@ export function resolveEnabledAgentExecutors(
     'openClawEnabled' | 'openClawBaseUrl' | 'openClawApiKey' | 'agentExecutors'
   >,
 ): AgentExecutorInstance[] {
-  return resolveAgentExecutors(config).filter((item) => item.enabled);
+  // Listed executors are available; per-item enabled is ignored (compat field).
+  return resolveAgentExecutors(config).map((item) => ({
+    ...item,
+    enabled: true,
+  }));
 }
 
 export function resolveExecutorDefaults(

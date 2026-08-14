@@ -22,6 +22,7 @@ describe('OpenClawDelegationService', () => {
     userDataManager.writeFile(
       'config.json',
       JSON.stringify({
+        // Master switch off must not be the only gate; empty baseUrl means unconfigured.
         openClawEnabled: false,
         openClawBaseUrl: '',
         openClawApiKey: '',

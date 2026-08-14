@@ -117,6 +117,65 @@ describe('ActionReadinessService', () => {
     );
   });
 
+  it('expires scoped capability_missing degraded blocks after proof-fail TTL', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const failed = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: 'query jira',
+      params: {
+        task: 'query ORB-1',
+        mode: 'read',
+        targetSystem: 'jira',
+      },
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(failed, {
+      status: 'capability_missing',
+      summary: 'Jira connector unavailable',
+      artifacts: [],
+    });
+
+    const blocked = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: 'query jira again',
+      params: {
+        task: 'query ORB-2',
+        mode: 'read',
+        targetSystem: 'jira',
+      },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    expect(service.checkAction(blocked).decision).toBe('probe_first');
+    expect(service.checkAction(blocked).receipt.status).toBe('degraded');
+
+    db.prepare(
+      `UPDATE action_readiness_contracts
+       SET expires_at = ?
+       WHERE scope_key = ?`,
+    ).run(Math.floor(Date.now() / 1000) - 10, 'openclaw:jira:read');
+
+    const afterTtl = service.checkAction(blocked);
+    expect(afterTtl.receipt.status).toBe('expired');
+    expect(afterTtl.decision).toBe('probe_first');
+
+    // Legacy rows may still be blocked_capability with an expires_at; those
+    // must also stop hard-blocking once the TTL elapses.
+    db.prepare(
+      `UPDATE action_readiness_contracts
+       SET status = 'blocked_capability', expires_at = ?
+       WHERE scope_key = ?`,
+    ).run(Math.floor(Date.now() / 1000) - 10, 'openclaw:jira:read');
+    const legacy = service.checkAction(blocked);
+    expect(legacy.receipt.status).toBe('expired');
+    expect(legacy.decision).toBe('probe_first');
+  });
+
   it('rechecks a blocked scope without executing the original task', async () => {
     const service = new ActionReadinessService(
       db,
@@ -273,6 +332,7 @@ describe('ActionReadinessService', () => {
       status: 'capability_missing',
       summary: 'Jira connector is unavailable.',
       artifacts: [],
+      payload: { configured: false },
     });
     await service.prepareActionForDispatch(blocked);
 
@@ -290,11 +350,11 @@ describe('ActionReadinessService', () => {
     );
     const failed = actionRepo.create({
       actionType: 'delegate_openclaw',
-      title: '打开百度',
+      title: '查询 Jira',
       params: {
-        task: '打开百度。',
+        task: '查询 ORB-1。',
         mode: 'read',
-        targetSystem: 'agent_task',
+        targetSystem: 'jira',
       },
       executionMode: 'auto',
       queueStatus: 'failed',
@@ -306,17 +366,17 @@ describe('ActionReadinessService', () => {
       payload: { artifactValidation: 'missing_verifiable_artifact' },
     });
 
-    const contract = service.getByScopeKey('openclaw:agent_task:read');
+    const contract = service.getByScopeKey('openclaw:jira:read');
     expect(contract?.status).toBe('degraded');
     expect(contract?.status).not.toBe('blocked_proof');
 
     const sibling = actionRepo.create({
       actionType: 'delegate_openclaw',
-      title: '打开 Nova',
+      title: '查询另一条 Jira',
       params: {
-        task: '打开 Nova。',
+        task: '查询 ORB-2。',
         mode: 'read',
-        targetSystem: 'agent_task',
+        targetSystem: 'jira',
       },
       executionMode: 'auto',
       requiresApproval: false,
@@ -340,7 +400,7 @@ describe('ActionReadinessService', () => {
                 title: 'probe',
                 content: 'ok',
                 metadata: {
-                  sourceSystem: 'agent_task',
+                  sourceSystem: 'jira',
                   entityKey: 'probe',
                   verification: 'connector_capability_check',
                   observedFields: ['connection'],
@@ -353,5 +413,103 @@ describe('ActionReadinessService', () => {
 
     const prepare = await service.prepareActionForDispatch(sibling);
     expect(['allow', 'allow_manual_only']).toContain(prepare.decision);
+  });
+
+  it('keeps agent_task on the gateway gate so a missing tool does not block later tasks', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const baidu = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'test baidu',
+      params: {
+        task: '打开 baidu.com',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: { triggerSource: 'jira_rule' },
+      },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    const roadmap = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Roadmap 创建 Jira',
+      params: {
+        task: 'create jira',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: { triggerSource: 'roadmap_create_jira' },
+      },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+
+    service.recordDelegationOutcome(baidu, {
+      status: 'capability_missing',
+      summary:
+        '未能打开 baidu.com：Chrome 网页桥接未连接，备用浏览器控制组件缺少必需文件。',
+      artifacts: [],
+      payload: {},
+    });
+
+    const baiduCheck = service.checkAction(baidu);
+    const roadmapCheck = service.checkAction(roadmap);
+
+    expect(baiduCheck.receipt.scopeKey).toBe('openclaw:global');
+    expect(roadmapCheck.receipt.scopeKey).toBe('openclaw:global');
+    expect(service.getByScopeKey('openclaw:global')).toBeNull();
+    expect(
+      service.getByScopeKey('openclaw:agent_task:jira_rule:read'),
+    ).toBeNull();
+    expect(baiduCheck.decision).toBe('allow');
+    expect(roadmapCheck.decision).toBe('allow');
+  });
+
+  it('still blocks later agent_task dispatch when the gateway itself is missing', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const failed = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'test baidu',
+      params: {
+        task: '打开 baidu.com',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: { triggerSource: 'jira_rule' },
+      },
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(failed, {
+      status: 'capability_missing',
+      summary: 'OpenClaw 未配置，无法执行外部委派。',
+      artifacts: [],
+      payload: { configured: false },
+    });
+
+    const queued = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Roadmap 创建 Jira',
+      params: {
+        task: 'create jira',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: { triggerSource: 'roadmap_create_jira' },
+      },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+
+    const check = service.checkAction(queued);
+    expect(check.decision).toBe('block');
+    expect(check.receipt).toMatchObject({
+      scopeKey: 'openclaw:global',
+      status: 'blocked_capability',
+    });
   });
 });

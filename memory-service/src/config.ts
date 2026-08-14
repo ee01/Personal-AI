@@ -34,6 +34,8 @@ export interface Config {
 
   // Auth
   apiKey: string;
+  /** Issue-only key for first-party clients (extension). Cannot read/write memory. */
+  bootstrapApiKey: string;
 
   // Usage analytics
   analyticsAdminToken: string;
@@ -116,6 +118,13 @@ export interface Config {
   openClawBaseUrl: string;
   openClawApiKey: string;
   openClawTimeoutMs: number;
+  /** Default executor protocol when synthesizing from OPENCLAW_* for new users. */
+  openClawExecutorType:
+    | 'openclaw-gateway'
+    | 'openclaw-responses'
+    | 'acp-codex'
+    | 'acp-claude-code';
+  openClawExecutorLabel: string;
 
   // Outreach
   outreachEnabled: boolean;
@@ -170,6 +179,21 @@ function parseSqliteSynchronousMode(
     return normalized;
   }
   return 'NORMAL';
+}
+
+function parseOpenClawExecutorType(
+  raw: string | undefined,
+): Config['openClawExecutorType'] {
+  const value = String(raw || '').trim();
+  if (
+    value === 'openclaw-gateway' ||
+    value === 'openclaw-responses' ||
+    value === 'acp-codex' ||
+    value === 'acp-claude-code'
+  ) {
+    return value;
+  }
+  return 'openclaw-gateway';
 }
 
 export function getConfig(): Readonly<Config> {
@@ -238,6 +262,7 @@ export function getConfig(): Readonly<Config> {
 
     // Auth
     apiKey: process.env.API_KEY || '',
+    bootstrapApiKey: process.env.BOOTSTRAP_API_KEY || '',
 
     // Usage analytics
     analyticsAdminToken: process.env.ANALYTICS_ADMIN_TOKEN || '',
@@ -377,14 +402,19 @@ export function getConfig(): Readonly<Config> {
       process.env.REFLECTION_URGENT_CONFIDENCE_THRESHOLD || '0.9',
     ),
 
-    // OpenClaw
-    openClawEnabled: process.env.OPENCLAW_ENABLED === 'true',
-    openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
+    // OpenClaw / 外部委派总开关：默认开启；仅 OPENCLAW_ENABLED=false 关闭
+    openClawEnabled: process.env.OPENCLAW_ENABLED !== 'false',
+    openClawBaseUrl: (process.env.OPENCLAW_BASE_URL || '').replace(/\/+$/, ''),
     openClawApiKey: process.env.OPENCLAW_API_KEY || '',
     openClawTimeoutMs: Math.max(
       300000,
       parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10),
     ),
+    openClawExecutorType: parseOpenClawExecutorType(
+      process.env.OPENCLAW_EXECUTOR_TYPE,
+    ),
+    openClawExecutorLabel:
+      (process.env.OPENCLAW_EXECUTOR_LABEL || '').trim() || 'OpenClaw',
 
     // Outreach
     outreachEnabled: process.env.OUTREACH_ENABLED === 'true',
@@ -420,4 +450,9 @@ export function getConfig(): Readonly<Config> {
 
   _config = Object.freeze(config);
   return _config;
+}
+
+/** Test-only: drop cached config so the next getConfig() re-reads process.env. */
+export function resetConfigForTests(): void {
+  _config = null;
 }

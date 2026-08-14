@@ -11,7 +11,8 @@ describe('getUserRuntimeConfig', () => {
     expect(config.reflectionEnabled).toBe(true);
     expect(config.reflectionHeartbeatMinutes).toBeGreaterThanOrEqual(1);
     expect(config.dreamDigestEnabled).toBe(true);
-    expect(config.openClawEnabled).toBe(appConfig.openClawEnabled);
+    expect(config.openClawExecutorType).toBe(appConfig.openClawExecutorType);
+    expect(config.openClawExecutorLabel).toBe(appConfig.openClawExecutorLabel);
     expect(config.openClawBaseUrl).toBeDefined();
     expect(config.openClawTimeoutMs).toBe(600000);
     expect(config.outreachResultPushTarget).toBe('me');

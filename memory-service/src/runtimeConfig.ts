@@ -3,6 +3,7 @@ import type { UserDataManager } from './storage/UserDataManager.js';
 import {
   normalizeAgentExecutorInstance,
   type AgentExecutorInstance,
+  type AgentExecutorType,
   type ExecutorDefaults,
 } from './integrations/executors/executorRegistry.js';
 
@@ -32,6 +33,8 @@ export interface UserRuntimeConfig {
   openClawBaseUrl: string;
   openClawApiKey: string;
   openClawTimeoutMs: number;
+  openClawExecutorType: AgentExecutorType;
+  openClawExecutorLabel: string;
   /** Explicit executor instances; empty ⇒ synthesize from openClaw* legacy fields. */
   agentExecutors: AgentExecutorInstance[];
   executorDefaults: ExecutorDefaults;
@@ -166,10 +169,12 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
     decisionCenterPushGroupId:
       typeof persisted.decisionCenterPushGroupId === 'string' ? persisted.decisionCenterPushGroupId : '',
     openClawEnabled: normalizeBoolean(persisted.openClawEnabled, appConfig.openClawEnabled),
-    openClawBaseUrl:
-      typeof persisted.openClawBaseUrl === 'string' && persisted.openClawBaseUrl.trim().length > 0
+    // Explicit empty string in user config means "unset locally" (do not inherit .env).
+    openClawBaseUrl: Object.prototype.hasOwnProperty.call(persisted, 'openClawBaseUrl')
+      ? typeof persisted.openClawBaseUrl === 'string'
         ? persisted.openClawBaseUrl.trim()
-        : appConfig.openClawBaseUrl,
+        : ''
+      : appConfig.openClawBaseUrl,
     openClawApiKey:
       typeof persisted.openClawApiKey === 'string' && persisted.openClawApiKey.length > 0
         ? persisted.openClawApiKey
@@ -181,6 +186,8 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
         Math.max(MIN_OPENCLAW_TIMEOUT_MS, appConfig.openClawTimeoutMs),
       ),
     ),
+    openClawExecutorType: appConfig.openClawExecutorType,
+    openClawExecutorLabel: appConfig.openClawExecutorLabel,
     agentExecutors: Array.isArray(persisted.agentExecutors)
       ? persisted.agentExecutors
           .map((item) => normalizeAgentExecutorInstance(item))
