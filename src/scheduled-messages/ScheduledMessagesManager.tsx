@@ -6681,7 +6681,7 @@ const AddMessageDialog: React.FC<{
     if (!editingMessage || editingMessage.Push_Method !== 'AI' || !editingMessage.AI_Body) {
       return {
         jql: '',
-        outputs: { noduedate: false, overdue: true, toTest: false, tickets: true },
+        outputs: { noduedate: false, overdue: false, toTest: false, tickets: true },
         ticketIncludes: ['summary', 'status', 'assignee', 'reporter'],
         customOutputs: [] as {name: string; prompt: string}[],
         teamId: '',
@@ -6734,7 +6734,7 @@ const AddMessageDialog: React.FC<{
       console.error('解析 AI Report Body 失败:', e);
       return {
         jql: editingMessage.Content || '',
-        outputs: { noduedate: false, overdue: true, toTest: false, tickets: true },
+        outputs: { noduedate: false, overdue: false, toTest: false, tickets: true },
         ticketIncludes: ['summary', 'status', 'assignee', 'reporter'],
         customOutputs: [] as {name: string; prompt: string}[],
         teamId: editingMessage.Glip_Team_ID || '',
@@ -7021,7 +7021,7 @@ ${content}
         query: '{Topic}',
         inputs: {
           title: '{Topic}',
-          outputs: 'noduedate, overdue, toTest, tickets',
+          outputs: 'tickets',
           jql: '{Content}',
           extraText: '',
           teamId: '{TeamID}',

@@ -438,11 +438,12 @@
       "query": "{Topic}",
       "inputs": {
         "title": "{Topic}",
-        "outputs": "noduedate, overdue, toTest",
+        "outputs": "tickets",
         "jql": "{Content}",
         "extraText": "",
         "teamId": "",
-        "mentionList": ""
+        "mentionList": "",
+        "ticketIncludes": "summary, status, assignee, reporter"
       }
     }
     ```
