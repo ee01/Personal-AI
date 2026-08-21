@@ -13,6 +13,13 @@ import {
   isMeetingPilotUrl,
 } from './protocol';
 import { shouldSurfaceMeetingPilotAlert } from './alertPresentation.js';
+import {
+  isRingCentralCaptionControlLine,
+  isRingCentralCaptionSettingsText,
+  isRingCentralTranscriptNoiseLine,
+  looksLikeTranscriptTimeLine,
+  shouldKeepRingCentralTranscriptText,
+} from './ringCentralTranscriptFilter';
 import { getVisibleMeetingMemoryCueRefs } from './liveFeedPresentation.js';
 import {
   sanitizeContextExternalUrl,
@@ -1650,18 +1657,6 @@ interface RingCentralTranscriptWsEvent {
   url?: string;
 }
 
-function isRingCentralTranscriptNoiseLine(value?: string | null): boolean {
-  const text = normalizeText(value);
-  if (!text) return true;
-  if (/^[a-f0-9]{24,}$/i.test(text)) return true;
-  if (/^image(?:[:/]|$)/i.test(text)) return true;
-  if (/^svg\+xml/i.test(text)) return true;
-  if (/^•?\s*you$/i.test(text)) return true;
-  return /^(search|transcript|notes(?:\s*\(beta\))?|translate|close|pause notes, transcripts and recording)$/i.test(
-    text,
-  );
-}
-
 function isRingCentralTranscriptMarkerLine(value?: string | null): boolean {
   const text = normalizeText(value);
   return (
@@ -1670,12 +1665,6 @@ function isRingCentralTranscriptMarkerLine(value?: string | null): boolean {
     /^image(?:[:/]|$)/i.test(text) ||
     /^svg\+xml/i.test(text) ||
     /^•?\s*you$/i.test(text)
-  );
-}
-
-function looksLikeTranscriptTimeLine(value?: string | null): boolean {
-  return /\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/i.test(
-    normalizeText(value),
   );
 }
 
@@ -1719,15 +1708,6 @@ function normalizeTranscriptComparable(value: string): string {
     .replace(/[^a-z0-9\u4e00-\u9fa5\s]+/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function shouldKeepRingCentralTranscriptText(value?: string | null): boolean {
-  const text = normalizeText(value);
-  if (!text) return false;
-  if (text.length < 2) return false;
-  if (isRingCentralTranscriptNoiseLine(text)) return false;
-  if (looksLikeTranscriptTimeLine(text)) return false;
-  return /[a-zA-Z\u4e00-\u9fa5]/.test(text);
 }
 
 function getTranscriptComparableWords(value: string): string[] {
@@ -1851,85 +1831,11 @@ function isInsideRingCentralTranscriptPanel(element: Element): boolean {
   }
 }
 
-function isRingCentralCaptionControlLine(value?: string | null): boolean {
-  const text = normalizeText(value);
-  return /^(closed captions?|captions?|show captions?|hide captions?|caption settings|language|translate|translation|turn on captions?|turn off captions?)$/i.test(
-    text,
-  );
-}
-
-function isRingCentralCaptionSettingsText(value?: string | null): boolean {
-  const text = normalizeText(value);
-  if (!text) return false;
-  return (
-    /spoken language/i.test(text) &&
-    /translate to/i.test(text) &&
-    /(small|medium|large)/i.test(text)
-  );
-}
-
-function getRingCentralClosedCaptionText(): string {
-  const selectors = [
-    '[aria-live]',
-    '[aria-label*="Closed Caption" i]',
-    '[aria-label*="caption" i]',
-    '[data-at*="closedCaption" i]',
-    '[data-at*="closed-caption" i]',
-    '[data-at*="caption" i]',
-    '[class*="ClosedCaption"]',
-    '[class*="closed-caption"]',
-    '[class*="Caption"]',
-    '[class*="caption"]',
-  ];
-  const candidates: Array<{ text: string; score: number }> = [];
-
-  getReadableDocuments().forEach((doc) => {
-    selectors.forEach((selector) => {
-      doc.querySelectorAll(selector).forEach((node) => {
-        if (!isElementVisible(node)) return;
-        if (isInsideRingCentralTranscriptPanel(node)) return;
-
-        const hint = [
-          node.id,
-          node.getAttribute('class'),
-          node.getAttribute('aria-label'),
-          node.getAttribute('data-at'),
-          node.getAttribute('role'),
-        ]
-          .filter(Boolean)
-          .join(' ');
-        const hasCaptionHint = /caption|subtitle|aria-live/i.test(hint);
-        if (!hasCaptionHint && selector !== '[aria-live]') return;
-
-        const lines = splitRingCentralTranscriptLines(node).filter(
-          (line) =>
-            shouldKeepRingCentralTranscriptText(line) &&
-            !isRingCentralCaptionControlLine(line) &&
-            !isRingCentralCaptionSettingsText(line),
-        );
-        if (!lines.length || lines.length > 6) return;
-
-        const text = collapseRepeatedTranscriptText(
-          collapseProgressiveTranscriptLines(lines).join(' '),
-        );
-        if (!shouldKeepRingCentralTranscriptText(text)) return;
-        if (isRingCentralCaptionSettingsText(text)) return;
-        if (text.length > 700) return;
-        candidates.push({
-          text,
-          score:
-            (hasCaptionHint ? 20 : 0) +
-            (selector === '[aria-live]' ? 5 : 0) +
-            Math.min(text.length, 200),
-        });
-      });
-    });
-  });
-
-  candidates.sort((left, right) => right.score - left.score);
-  return candidates[0]?.text || '';
-}
-
+/**
+ * Only scrape the real Closed Caption overlay. Do not fall back to
+ * `[class*="caption"]` / `[aria-live]` whole-page text — that pulls gallery
+ * tiles and the bottom toolbar into transcript updates.
+ */
 function getRingCentralClosedCaptionItems(): RingCentralCaptionDomItem[] {
   const items: RingCentralCaptionDomItem[] = [];
   getReadableDocuments().forEach((doc) => {
@@ -1960,9 +1866,7 @@ function getRingCentralClosedCaptionItems(): RingCentralCaptionDomItem[] {
     });
   });
 
-  if (items.length) return items;
-  const fallbackText = getRingCentralClosedCaptionText();
-  return fallbackText ? [{ speaker: '', text: fallbackText }] : [];
+  return items;
 }
 
 function getCaptionWindowDelta(previous: string, current: string): string {
@@ -2070,16 +1974,15 @@ function getRingCentralTranscriptRoots(): Element[] {
     '[id*="transcript-tabpanel" i]',
     '[aria-label*="Transcript" i]',
     '[aria-label*="Closed Caption" i]',
-    '[aria-label*="caption" i]',
     '[data-at*="transcript" i]',
-    '[data-at*="caption" i]',
+    '[data-at*="closedCaption" i]',
+    '[data-at*="closed-caption" i]',
     '[class*="Transcript"]',
     '[class*="transcript"]',
     '[class*="Transcription"]',
     '[class*="transcription"]',
     '[class*="ClosedCaption"]',
     '[class*="closed-caption"]',
-    '[class*="caption"]',
     '[role="dialog"]',
     '[role="tabpanel"]',
     '[role="complementary"]',
@@ -2100,8 +2003,8 @@ function getRingCentralTranscriptRoots(): Element[] {
     .map((item) => {
       const text = item.lines.join(' ');
       const hasTranscriptHint =
-        /transcript|caption|closed caption|notes/i.test(text) ||
-        /transcript|caption/i.test(
+        /transcript|closed caption|notes/i.test(text) ||
+        /transcript|closed.?caption|ClosedCaption/i.test(
           [
             item.node.id,
             item.node.getAttribute('class'),
@@ -2475,6 +2378,7 @@ async function emitRingCentralTranscriptFromDom(
   const captionTextSignature = captionText ? simpleTranscriptHash(captionText) : '';
   const hasTranscriptDomText =
     probe.rootCount > 0 && probe.timeLineCount > 0 && probe.textLineCount > 0;
+  const hasRealClosedCaption = captionItems.length > 0;
   const serviceSignature = lastRingCentralTranscriptServiceAvailable
     ? `svc:${lastRingCentralTranscriptServiceEndpoint || 'available'}`
     : 'svc:none';
@@ -2495,17 +2399,24 @@ async function emitRingCentralTranscriptFromDom(
         available:
           items.length > 0 ||
           hasTranscriptDomText ||
-          Boolean(captionText) ||
+          hasRealClosedCaption ||
           lastRingCentralTranscriptServiceAvailable,
-        active: items.length > 0 || hasTranscriptDomText || Boolean(captionText),
-        lastSeenAt: latest || captionText ? now : undefined,
+        // Only mark active when we have structured transcript rows, a real CC
+        // overlay, or live WS — never because gallery/toolbar text looked
+        // vaguely like a caption.
+        active:
+          items.length > 0 || hasTranscriptDomText || hasRealClosedCaption,
+        lastSeenAt:
+          latest || hasRealClosedCaption ? now : undefined,
         latestChunkId:
           latest?.id ||
-          (captionText
+          (hasRealClosedCaption
             ? `rc-caption-${context.meetingId}-${captionTextSignature}`
             : undefined),
         lastError:
-          !items.length && !captionText && lastRingCentralTranscriptProbeError
+          !items.length &&
+          !hasRealClosedCaption &&
+          lastRingCentralTranscriptProbeError
             ? lastRingCentralTranscriptProbeError
             : undefined,
       })
