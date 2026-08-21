@@ -8,6 +8,7 @@ export function isSqliteCorruptError(error: unknown): boolean {
   const message = String((error as { message?: unknown }).message || '');
   return (
     code === 'SQLITE_CORRUPT' ||
+    code === 'SQLITE_CORRUPT_VTAB' ||
     code === 'SQLITE_NOTADB' ||
     /database disk image is malformed/i.test(message)
   );

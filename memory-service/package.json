@@ -12,7 +12,8 @@
     "test:meeting-memory": "vitest --run src/__tests__/api-recall.test.ts src/__tests__/api-meetings.test.ts src/__tests__/api-ask.test.ts",
     "test:coverage": "vitest --coverage",
     "migrate": "tsx src/storage/migrate.ts",
-    "migrate:multiuser": "tsx scripts/migrate-to-multiuser.ts"
+    "migrate:multiuser": "tsx scripts/migrate-to-multiuser.ts",
+    "repair:vtab": "tsx tools/repair-sqlite-vtab.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

@@ -15,6 +15,13 @@ describe('isSqliteCorruptError', () => {
         }),
       ),
     ).toBe(true);
+    expect(
+      isSqliteCorruptError(
+        Object.assign(new Error('database disk image is malformed'), {
+          code: 'SQLITE_CORRUPT_VTAB',
+        }),
+      ),
+    ).toBe(true);
     expect(isSqliteCorruptError(new Error('no such table: foo'))).toBe(false);
   });
 });
