@@ -96,4 +96,56 @@ describe('release sheet team config', () => {
     );
     expect(getTeamSnapshot(teamId)!.team.releaseSheet).toBeNull();
   });
+
+  it('records silent refresh as a system activity only when sheet content changes', () => {
+    expectOk(
+      apply(teamId, {
+        op: 'update_release_sheet',
+        releaseSheet: sampleSheet,
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'update_release_sheet',
+        releaseSheet: { ...sampleSheet, fetchedAt: '2026-08-17T00:00:00.000Z' },
+        silent: true,
+      }),
+    );
+    expect(listActivity(teamId, 8).some((a) => a.summary?.silent)).toBe(false);
+
+    expectOk(
+      apply(teamId, {
+        op: 'update_release_sheet',
+        releaseSheet: {
+          ...sampleSheet,
+          fetchedAt: '2026-08-17T01:00:00.000Z',
+          rows: [
+            ...sampleSheet.rows,
+            { Release: '26.4.0', Phase: 'FF', Date: '2026-09-01T16:00:00.000Z' },
+          ],
+        },
+        silent: true,
+      }),
+    );
+    const activity = listActivity(teamId, 8);
+    const silent = activity.find((a) => a.summary?.silent);
+    expect(silent).toMatchObject({
+      actorName: '系统',
+      actorClientId: 'system',
+      actorSource: 'system',
+      op: 'update_release_sheet',
+      text: '系统 静默更新了发布时间表标尺',
+    });
+    expect(silent?.summary).toMatchObject({
+      silent: true,
+      triggeredBy: 'Tester',
+      cleared: false,
+      rowCount: 3,
+    });
+    const manual = activity.find(
+      (a) => a.op === 'update_release_sheet' && !a.summary?.silent && !a.summary?.cleared,
+    );
+    expect(manual?.actorName).toBe('Tester');
+    expect(manual?.text).toBe('Tester 更新了发布时间表标尺');
+  });
 });

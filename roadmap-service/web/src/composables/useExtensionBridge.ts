@@ -208,14 +208,20 @@ export async function bridgeOpenOptionsPage(): Promise<void> {
   await pending;
 }
 
-/** Read Target End / due date from a Jira issue for external-dep ETA. */
+export type JiraIssueDateInfo = {
+  targetEnd: string | null;
+  status: string | null;
+};
+
+/** Read Target End / status from a Jira issue for external-dep ETA. */
 export async function bridgeFetchIssueDates(
   jiraKey: string,
-): Promise<string | null> {
+): Promise<JiraIssueDateInfo> {
   const id = requestId();
   const pending = waitForBridgeResult<{
     ok: true;
     targetEnd?: string | null;
+    status?: string | null;
   }>('pai-roadmap-fetch-issue-dates-result', id, 30_000);
   const acked = waitForBridgeAck('pai-roadmap-fetch-issue-dates-ack', id);
   pending.catch(() => undefined);
@@ -226,7 +232,10 @@ export async function bridgeFetchIssueDates(
   );
   await Promise.race([acked, pending]);
   const result = await pending;
-  return result.targetEnd || null;
+  return {
+    targetEnd: result.targetEnd || null,
+    status: result.status || null,
+  };
 }
 
 export type RemoteChildTask = {
@@ -304,6 +313,7 @@ export type JiraRefreshIssue = {
   targetStart: string | null;
   targetEnd: string | null;
   assignee: string | null;
+  status: string | null;
   fetchedAt: number;
 };
 

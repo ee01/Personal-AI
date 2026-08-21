@@ -47,6 +47,8 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
   padding:9px 10px;border-radius:8px;font-weight:500}
 .team-menu button:hover{background:#F2F1EB}
 .team-menu .tick{width:16px;color:var(--cur-deep);font-weight:700;flex:none}
+.team-menu .team-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-menu .team-eye{width:14px;height:14px;flex:none;color:var(--muted);opacity:.8}
 .team-menu .divider{height:1px;background:var(--line);margin:5px 6px}
 .team-menu .new-team{color:var(--fut-deep);font-weight:600}
 .jql-pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--bg);
@@ -365,6 +367,7 @@ body.no-select,body.no-select *{user-select:none!important}
 .dep-badge.pending{background:var(--danger);color:#fff}
 .dep-badge.pending::after{content:"";position:absolute;inset:-4px;border-radius:8px;
   border:1.5px solid rgba(228,87,61,.6);animation:pulse 1.6s ease-out infinite;pointer-events:none}
+.dep-badge.drift{background:#C9842A;color:#fff}
 /* ---- 阶段节点 / 外部依赖 标记轨 ---- */
 .marker-track{position:absolute;left:0;right:0;height:26px;pointer-events:none}
 .marker-track::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line2)}
@@ -376,6 +379,7 @@ body.no-select,body.no-select *{user-select:none!important}
 .marker.done{opacity:.55}
 .marker.dep{border-radius:50%;transform:translate(-50%,-50%) rotate(0deg)}
 .marker.dep:hover{transform:translate(-50%,-50%) scale(1.18)}
+.marker.dep.drift{box-shadow:0 0 0 2px #C9842A}
 .marker.dep .m-glyph{transform:none;display:flex}
 .marker.dragging{cursor:grabbing;transition:none;z-index:12;opacity:1;
   transform:translate(-50%,-50%) rotate(45deg) scale(1.3);box-shadow:var(--sh-lg)}
@@ -410,12 +414,24 @@ body.no-select,body.no-select *{user-select:none!important}
 .dep-del:hover{background:var(--danger);color:#fff}
 .dep-row-meta{display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap}
 .dep-tag{font-family:var(--mono);font-size:9.5px;font-weight:600;border-radius:4px;padding:2px 6px;flex:none}
-.dep-tag.jira{background:#EAF3FA;color:var(--fut-deep)}
+.dep-tag.jira{background:#EAF3FA;color:var(--fut-deep);text-decoration:none;
+  display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.dep-tag.jira:hover{background:#D9EBF6}
+.dep-tag.status{background:var(--bg);color:var(--ink)}
 .dep-tag.manual{background:var(--bg);color:var(--muted)}
+.dep-status-cluster{display:inline-flex;align-items:center;gap:2px}
+.dep-status-cluster.stale .dep-tag.status{color:var(--muted)}
 .dep-eta{font-family:var(--mono);font-size:10px;color:var(--muted)}
 .dep-eta.missing{color:var(--danger);font-weight:600;display:flex;align-items:center;gap:6px;font-family:var(--sans)}
-.dep-nudge,.dep-refresh{font-size:9.5px;font-weight:600;color:var(--fut-deep);background:#EAF3FA;border-radius:99px;padding:2px 8px;flex:none;border:none;cursor:pointer}
-.dep-nudge:hover,.dep-refresh:hover{background:#D9EBF6}
+.dep-eta.drift{color:#C9842A;font-weight:600}
+.dep-nudge,.dep-adopt{font-size:9.5px;font-weight:600;color:var(--fut-deep);background:#EAF3FA;border-radius:99px;padding:2px 8px;flex:none;border:none;cursor:pointer}
+.dep-nudge:hover,.dep-adopt:hover{background:#D9EBF6}
+.dep-refresh{width:18px;height:18px;padding:0;border:none;border-radius:50%;background:transparent;
+  color:var(--muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+.dep-refresh:hover{background:#EAF3FA;color:var(--fut-deep)}
+.dep-status-cluster.stale .dep-refresh{background:#EAF3FA;color:var(--fut-deep)}
+.dep-adopt{background:#E8F6EE;color:#2E8540}
+.dep-adopt:hover{background:#D4EEDD}
 .dep-eta-edit{width:118px;border:1px solid var(--line);border-radius:5px;padding:2px 6px;font-size:11px;font-family:var(--mono)}
 .bar .hdl{position:absolute;top:0;bottom:0;width:9px;cursor:ew-resize;z-index:4}
 .bar .hdl.l{left:-2px;border-radius:8px 0 0 8px}
@@ -539,7 +555,7 @@ body.no-select,body.no-select *{user-select:none!important}
   color:var(--fut-deep);background:#EAF3FA;border-radius:6px;padding:4px 9px;transition:background .15s;white-space:nowrap}
 .alias-editor .ae-ai:hover{background:#D9EBF6}
 .alias-editor .ae-hint{font-size:10px;color:var(--muted);white-space:nowrap}
-/* 协作同步 ticker：顶栏头像左侧，滚动展示其他成员最近一次编辑 */
+/* 协作同步 ticker：顶栏头像左侧，滚动展示当前团队其他成员最近一次编辑 */
 .sync-ticker{position:relative;height:26px;flex:0 1 360px;min-width:150px;overflow:hidden;
   border:1px solid var(--line2);background:var(--bg);border-radius:8px;margin-right:10px;
   cursor:pointer;display:none}
@@ -779,7 +795,7 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
 /* 外部依赖：读取 / 刷新 ETA 的锁定态 */
 .df-fetch.locked{color:var(--muted);background:var(--bg)}
 .df-fetch.locked:hover{color:var(--ink);border-color:#C9C6BB}
-.dep-refresh.locked{color:var(--muted);background:var(--line2)}
+.dep-refresh.locked{color:var(--muted);background:var(--line2);opacity:.7}
 .dep-refresh.locked:hover{background:#E3E1D9;color:var(--ink)}
 
 /* ============ App shell ============ */
@@ -800,16 +816,18 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
   display:flex;flex-direction:column}
 .activity-drawer.open{transform:none}
 .ad-head{padding:16px 18px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:10px}
-.ad-title{font-weight:700;font-size:15px;flex:1}
+.ad-title{font-weight:700;font-size:15px;flex:1;display:flex;align-items:baseline;gap:8px;min-width:0}
+.ad-team{font-weight:500;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ad-body{flex:1;overflow-y:auto;padding:12px 16px 24px}
 .ad-item{padding:10px 12px;border:1px solid var(--line2);border-radius:10px;margin-bottom:8px;font-size:12.5px;line-height:1.55}
 .ad-item .ad-time{font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px}
 .ad-item .ad-who{font-weight:600;font-size:11px;color:var(--fut-deep);margin-bottom:2px}
+.ad-item.system{background:#F7F6F2}
+.ad-item.system .ad-who{color:var(--muted);letter-spacing:.04em}
 .ad-empty{text-align:center;color:var(--muted);padding:40px 16px;line-height:1.8}
 
 /* ============ PAI extension slots ============ */
 .pai-overlay-slot{position:absolute;top:-6px;right:14px;z-index:8;pointer-events:none}
-#pai-memory-candidates{min-height:0}
 
 /* ============ Bar drag transform ============ */
 .bar.drag-transform,.sbar.drag-transform{transition:none!important}

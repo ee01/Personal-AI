@@ -278,3 +278,64 @@ describe('refresh_from_jira assignee + sub', () => {
     );
   });
 });
+
+describe('refresh_from_jira dep cache', () => {
+  it('mirrors status and Target End onto dep markers without moving ETA', () => {
+    const snapshot = createTeam({
+      name: 'DepRefresh',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-400', type: 'Epic', title: 'P', quarter: '2026-Q3' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'schedule',
+        itemKey: 'NOVA-400',
+        start: '2026-08-01',
+        days: 14,
+        baseVersion: getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-400')!
+          .version,
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'add_marker',
+        itemKey: 'NOVA-400',
+        kind: 'dep',
+        label: 'Platform quota',
+        jiraKey: 'PLAT-9',
+        date: '2026-08-12',
+        etaSource: 'jira',
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'PLAT-9',
+            fetchedAt: Date.now() + 1000,
+            fields: {
+              status: 'In Progress',
+              targetEnd: '2026-08-18',
+            },
+          },
+        ],
+      }),
+    );
+    const dep = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-400')!.markers.find(
+      (m) => m.jiraKey === 'PLAT-9',
+    )!;
+    expect(dep.jiraStatus).toBe('In Progress');
+    expect(dep.jiraTargetEnd).toBe('2026-08-18');
+    expect(dep.date).toBe('2026-08-12');
+    expect(dep.version).toBe(1);
+  });
+});

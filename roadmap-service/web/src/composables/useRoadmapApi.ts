@@ -6,9 +6,65 @@ const CLIENT_ID_KEY = 'roadmap-client-id';
 const ACTOR_NAME_KEY = 'roadmap-actor-name';
 const AI_PROMPT_KEY = 'personalroadmap.aiPrompt';
 const AI_PROMPT_DRAFT_PREFIX = 'personalroadmap.aiPrompt:';
+export const KNOWN_TEAMS_KEY = 'roadmap-known-teams';
+export const EDIT_TOKEN_PREFIX = 'roadmap-edit-token:';
 
-function editTokenKey(teamId: string) {
-  return `roadmap-edit-token:${teamId}`;
+export function editTokenKey(teamId: string) {
+  return `${EDIT_TOKEN_PREFIX}${teamId}`;
+}
+
+function readKnownTeamIds(store: Storage): string[] {
+  try {
+    const parsed = JSON.parse(store.getItem(KNOWN_TEAMS_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeKnownTeamIds(ids: string[], store: Storage) {
+  store.setItem(KNOWN_TEAMS_KEY, JSON.stringify(ids));
+}
+
+/** Team ids this browser has created, opened via URL, or holds an edit token for. */
+export function listKnownTeamIds(store: Storage = localStorage): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (id: string) => {
+    const next = String(id || '').trim();
+    if (!next || seen.has(next)) return;
+    seen.add(next);
+    out.push(next);
+  };
+  readKnownTeamIds(store).forEach(add);
+  for (let i = 0; i < store.length; i += 1) {
+    const key = store.key(i) || '';
+    if (key.startsWith(EDIT_TOKEN_PREFIX)) {
+      add(key.slice(EDIT_TOKEN_PREFIX.length));
+    }
+  }
+  if (out.length && out.join('\0') !== readKnownTeamIds(store).join('\0')) {
+    try {
+      writeKnownTeamIds(out, store);
+    } catch {
+      /* quota / private mode */
+    }
+  }
+  return out;
+}
+
+export function rememberKnownTeam(
+  teamId: string,
+  store: Storage = localStorage,
+): void {
+  const id = String(teamId || '').trim();
+  if (!id) return;
+  const ids = listKnownTeamIds(store);
+  if (ids.includes(id)) return;
+  ids.push(id);
+  writeKnownTeamIds(ids, store);
 }
 
 function aiPromptDraftKey(teamId: string) {
@@ -41,8 +97,10 @@ export function getShareToken(teamId: string): string {
 }
 
 export function setShareToken(teamId: string, token: string) {
-  if (token) localStorage.setItem(editTokenKey(teamId), token);
-  else localStorage.removeItem(editTokenKey(teamId));
+  if (token) {
+    localStorage.setItem(editTokenKey(teamId), token);
+    rememberKnownTeam(teamId);
+  } else localStorage.removeItem(editTokenKey(teamId));
 }
 
 /** Per-team draft; `null` means this browser has never edited the prompt for the team. */
@@ -114,7 +172,9 @@ export function useRoadmapApi() {
   }
 
   async function listTeams() {
-    const data = await apiFetch<{ items: TeamSummary[] }>('/api/v1/teams');
+    const ids = listKnownTeamIds();
+    const q = ids.length ? `?ids=${encodeURIComponent(ids.join(','))}` : '';
+    const data = await apiFetch<{ items: TeamSummary[] }>(`/api/v1/teams${q}`);
     return data.items;
   }
 
@@ -136,6 +196,7 @@ export function useRoadmapApi() {
       body: JSON.stringify(body),
     });
     setShareToken(data.snapshot.team.id, data.editToken);
+    rememberKnownTeam(data.snapshot.team.id);
     actorSource.value = 'creator';
     return data;
   }
@@ -325,6 +386,8 @@ export function useRoadmapApi() {
     hasExtension,
     getShareToken,
     setShareToken,
+    listKnownTeamIds,
+    rememberKnownTeam,
     setActorName: (name: string) => {
       setActorName(name);
       actorName.value = name;

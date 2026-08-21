@@ -134,7 +134,7 @@ const visibleSegments = computed(() => {
       const tip =
         `${sg.rel.name}${cur ? '（当前 Sprint）' : ''} · ${fmtMD(sg.start)} → ${fmtMD(sg.end)}||` +
         sg.rel.phases.map((p) => `${p.phase} ${fmtMD(p.date)}`).join(' · ') +
-        `||Sprint 区间按分割节点「${PHASE_RULER[splitKind.value!].label}」划分 · 数据来自团队发布时间表`;
+        `||Sprint 区间按结束分割节点「${PHASE_RULER[splitKind.value!].label}」划分 · 数据来自团队发布时间表`;
       return { rel: sg.rel, x0, x1, cur, tip, i };
     })
     .filter(Boolean) as Array<{
@@ -248,6 +248,7 @@ async function silentRefreshReleaseSheet() {
     await state.applySnapshotFromIntent({
       op: 'update_release_sheet',
       releaseSheet: next,
+      silent: true,
     });
   } catch {
     /* keep cached rows; no toast on silent refresh */
@@ -287,6 +288,8 @@ const importTasksLoading = ref(false);
 
 /** Debounce Target sync per item/sub (matches server 1.5s). */
 const targetSyncTimers = new Map<string, number>();
+/** Jira keys with a Target write still in flight (debounce + HTTP). */
+const targetSyncInFlightKeys = new Set<string>();
 const JIRA_REFRESH_TTL_MS = 10 * 60 * 1000;
 let jiraRefreshTimer: number | null = null;
 let jiraRefreshInFlight = false;
@@ -307,24 +310,24 @@ function scheduleTargetDateSync(ref: TargetSyncRef) {
   const timerKey = targetTimerKey(ref);
   const existing = targetSyncTimers.get(timerKey);
   if (existing) window.clearTimeout(existing);
+  // Block silent refresh for this key until the write (and confirm) finish —
+  // not only during the 1.5s debounce. Otherwise open-page refresh can fetch
+  // the old Target, relocate the bar, and leave start_date/days stale while
+  // Jira already has the new dates.
+  if (ref.jiraKey) targetSyncInFlightKeys.add(ref.jiraKey);
   targetSyncTimers.set(
     timerKey,
     window.setTimeout(() => {
       targetSyncTimers.delete(timerKey);
-      void runTargetDateSync(ref);
+      void runTargetDateSync(ref).finally(() => {
+        targetSyncInFlightKeys.delete(ref.jiraKey);
+      });
     }, 1500),
   );
 }
 
 function pendingTargetJiraKeys(): Set<string> {
-  const out = new Set<string>();
-  for (const it of state.scheduledItems.value) {
-    if (targetSyncTimers.has(`item:${it.key}`) && it.jiraKey) out.add(it.jiraKey);
-    for (const s of it.subs) {
-      if (targetSyncTimers.has(`sub:${s.id}`) && s.key) out.add(s.key);
-    }
-  }
-  return out;
+  return new Set(targetSyncInFlightKeys);
 }
 
 function editingOrDraggingJiraKeys(): Set<string> {
@@ -412,15 +415,23 @@ function collectRefreshKeys(): string[] {
     ...pendingTargetJiraKeys(),
     ...editingOrDraggingJiraKeys(),
   ]);
-  const keys: string[] = [];
+  const itemKeys: string[] = [];
+  const depKeys: string[] = [];
   for (const it of state.scheduledItems.value) {
-    if (it.jiraKey && !blocked.has(it.jiraKey)) keys.push(it.jiraKey);
+    if (it.jiraKey && !blocked.has(it.jiraKey)) itemKeys.push(it.jiraKey);
     for (const s of it.subs) {
       if (s.cleared || !s.key || blocked.has(s.key)) continue;
-      keys.push(s.key);
+      itemKeys.push(s.key);
+    }
+    for (const m of it.markers || []) {
+      if (m.kind !== 'dep' || !m.jiraKey || blocked.has(m.jiraKey)) continue;
+      depKeys.push(m.jiraKey);
     }
   }
-  return [...new Set(keys)].slice(0, 50);
+  const primary = [...new Set(itemKeys)].slice(0, 50);
+  const seen = new Set(primary);
+  const extra = [...new Set(depKeys)].filter((k) => !seen.has(k)).slice(0, 25);
+  return [...primary, ...extra];
 }
 
 async function silentRefreshFromJira() {
@@ -445,6 +456,7 @@ async function silentRefreshFromJira() {
           targetStart: issue.targetStart,
           targetEnd: issue.targetEnd,
           assignee: issue.assignee,
+          status: issue.status,
         },
       })),
     });
@@ -871,10 +883,10 @@ onUnmounted(() => {
           v-for="ph in phaseLegend"
           :key="ph.kind"
           class="lg"
-          :data-tip="`${ph.full}${ph.isSplit ? ' · 当前 release 分割节点' : ''}`"
+          :data-tip="`${ph.full}${ph.isSplit ? ' · 当前 release 结束分割节点' : ''}`"
         >
           <span class="ph-sq" :style="{ background: ph.color }" />
-          {{ ph.label }}{{ ph.isSplit ? ' ⚑' : '' }}
+          {{ ph.label }}{{ ph.isSplit ? ' 🏁' : '' }}
         </span>
         <span class="lg"><span class="dot draft" />草稿</span>
       </div>

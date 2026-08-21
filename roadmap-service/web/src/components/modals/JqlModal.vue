@@ -24,8 +24,9 @@ import {
 
 const CHECK_SVG =
   '<svg width="8" height="8" viewBox="0 0 10 10"><path d="M1.5 5.5L4 8l4.5-6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const FLAG_SVG =
-  '<svg viewBox="0 0 14 14"><path d="M3.2 12.5V2M3.2 2.5h6.8l-1.9 2.6L10 7.5H3.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+/** Finish-side flag (pole on the right): marks the exclusive end / handoff of a Sprint band. */
+const END_FLAG_SVG =
+  '<svg viewBox="0 0 14 14"><path d="M10.8 12.5V2M10.8 2.5H4l1.9 2.6L4 7.5h6.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
 
 const state = useRoadmapState();
 const jql = ref('');
@@ -224,7 +225,7 @@ function toggleShow(kind: PhaseRulerKind) {
   const split = effectiveSplit.value;
   if (!split) return;
   if (kind === split) {
-    state.toast('分割节点必须在标尺上展示 —— 先把 ⚑ 移到别的阶段');
+    state.toast('结束分割节点必须在标尺上展示 —— 先把 🏁 移到别的阶段');
     return;
   }
   ensureShowSel(phaseOpts.value, split);
@@ -353,7 +354,7 @@ async function save() {
         const kept = relParsed(cfg).releases.length;
         state.toast(
           changed
-            ? `<span class="ok">✓</span> 标尺配置已更新 · 分界「${PHASE_RULER[cfg.splitPhase as PhaseRulerKind].label}」· 保留 ${kept} 个 release · 展示 ${cfg.showPhases.length} 个阶段`
+            ? `<span class="ok">✓</span> 标尺配置已更新 · 结束于「${PHASE_RULER[cfg.splitPhase as PhaseRulerKind].label}」· 保留 ${kept} 个 release · 展示 ${cfg.showPhases.length} 个阶段`
             : '<span class="ok">✓</span> 配置已保存',
         );
         return;
@@ -402,7 +403,7 @@ async function save() {
       const kept = relParsed(cfg).releases.length;
       state.toast(
         `<span class="ok">✓</span> 已读取 <b>${cfg.rows.length}</b> 条发布计划 · 保留 ${kept} 个 release` +
-          ` · 分界「${PHASE_RULER[cfg.splitPhase as PhaseRulerKind].label}」· 展示 ${cfg.showPhases.length} 个阶段`,
+          ` · 结束于「${PHASE_RULER[cfg.splitPhase as PhaseRulerKind].label}」· 展示 ${cfg.showPhases.length} 个阶段`,
       );
       return;
     }
@@ -496,7 +497,7 @@ onUnmounted(() => {
 
           <label class="f-label"
             >标尺阶段<span class="lb-tip"
-              >勾选 = 在标尺上展示 · ⚑ = 作为 release 分割节点</span
+              >勾选 = 在标尺上展示 · 🏁 = 作为 release 结束分割节点</span
             ></label
           >
 
@@ -506,7 +507,7 @@ onUnmounted(() => {
           <div v-else-if="!phaseOpts.length" class="pp-empty">
             填入表格地址后<b>自动读取</b>，这里会列出表中出现的阶段供勾选。<br />
             未加载就直接保存也可以：保存时会自动读取，并按默认 ——
-            <b>FF 作分界</b>（无 FF 则取周期内最早的阶段）、
+            <b>FF 作结束分界</b>（无 FF 则取周期内最早的阶段）、
             <b>全部阶段都展示</b>。
           </div>
           <template v-else>
@@ -522,11 +523,11 @@ onUnmounted(() => {
                 }"
                 :data-tip="
                   (effectiveSplit === o.kind
-                    ? '分割节点 · 必定展示'
+                    ? '结束分割节点 · 必定展示'
                     : isShown(o.kind)
                       ? '已展示，点击隐藏'
                       : '已隐藏，点击展示') +
-                  `||${PHASE_RULER[o.kind].full}||⚑ 设为 release 分割节点`
+                  `||${PHASE_RULER[o.kind].full}||🏁 设为 release 结束分割节点`
                 "
                 @click="toggleShow(o.kind)"
               >
@@ -542,15 +543,15 @@ onUnmounted(() => {
                   class="pp-split"
                   @click.stop="setSplit(o.kind)"
                   v-html="
-                    FLAG_SVG + (effectiveSplit === o.kind ? '分界' : '')
+                    END_FLAG_SVG + (effectiveSplit === o.kind ? '结束' : '')
                   "
                 />
               </div>
             </div>
             <div v-if="effectiveSplit" class="pp-foot">
-              ⚑
+              🏁
               <b>{{ PHASE_RULER[effectiveSplit].label }}</b> 作为 Sprint
-              分界：每列 Sprint 从它开始、到下一班的它结束；
+              结束分界：每列 Sprint 到它结束、从上一班的它开始（半开区间，切换日落在下一列）；
               没有该阶段的 release（如 RIO 热修）不单独成列，以刻度叠加在所在
               Sprint 内。 标尺上展示
               <b>{{ shownCount }}/{{ phaseOpts.length }}</b> 个阶段{{

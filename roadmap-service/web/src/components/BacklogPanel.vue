@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import {
+  buildBacklogGroups,
   canDeleteItem,
   formatEstimate,
   isDraftItem,
@@ -10,7 +11,7 @@ import {
   tooltipHintLine,
   DESCRIPTION_MAX_CHARS,
 } from '../composables/useRoadmapContract';
-import { CURQ, fmtMD, qCmp } from '../composables/useGeometry';
+import { CURQ, fmtMD } from '../composables/useGeometry';
 import type { RoadmapItem } from '../types';
 
 const state = useRoadmapState();
@@ -37,15 +38,7 @@ const filteredBacklog = computed(() =>
   state.backlogItems.value.filter((it) => itemMatchesQuery(it, searchQuery.value)),
 );
 
-const groups = computed(() => {
-  const map = new Map<string, RoadmapItem[]>();
-  for (const it of filteredBacklog.value) {
-    const q = it.quarter || '—';
-    if (!map.has(q)) map.set(q, []);
-    map.get(q)!.push(it);
-  }
-  return [...map.entries()].sort(([a], [b]) => qCmp(a, b));
-});
+const groups = computed(() => buildBacklogGroups(filteredBacklog.value));
 
 const imported = computed(
   () => (state.snapshot.value?.team.importedQuarters.length || 0) > 0,
@@ -58,6 +51,7 @@ const quarterOptions = computed(() => {
 
 const addOpen = ref(false);
 const saving = ref(false);
+const bodyEl = ref<HTMLElement | null>(null);
 const form = ref({
   title: '',
   type: '',
@@ -103,6 +97,10 @@ async function submitAdd() {
     });
     addOpen.value = false;
     state.toast(`<span class="ok">✓</span> 已新建条目 <b>${title}</b>`);
+    // 新条目排在列表首位，滚回顶部才看得见
+    searchQuery.value = '';
+    await nextTick();
+    bodyEl.value?.scrollTo({ top: 0, behavior: 'smooth' });
   } catch {
     /* toast handled centrally */
   } finally {
@@ -196,7 +194,7 @@ function clearSearch() {
         </button>
       </div>
     </div>
-    <div class="bl-body">
+    <div ref="bodyEl" class="bl-body">
       <template v-if="filteredBacklog.length">
         <template v-for="[q, items] in groups" :key="q">
           <div class="bl-group-label">{{ q }}</div>
@@ -255,7 +253,6 @@ function clearSearch() {
           尚未导入数据<br />请在上方勾选 Quarter 后点击<br /><b>「导入」</b>
         </template>
       </div>
-      <div id="pai-memory-candidates" />
     </div>
   </aside>
 

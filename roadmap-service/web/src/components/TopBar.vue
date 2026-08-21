@@ -12,6 +12,10 @@ function showName(name: string) {
   return dispName(assigneeMap.value, name);
 }
 
+function isReadonlyTeam(id: string) {
+  return !state.api.getShareToken(id);
+}
+
 function switchTeam(id: string) {
   teamOpen.value = false;
   state.selectTeam(id);
@@ -104,10 +108,33 @@ document.addEventListener('click', (e) => {
         <button
           v-for="t in state.teams.value"
           :key="t.id"
+          :data-tip="isReadonlyTeam(t.id) ? '只读：本机没有该团队的编辑权限' : undefined"
           @click="switchTeam(t.id)"
         >
           <span class="tick">{{ t.id === state.teamId.value ? '✓' : '' }}</span>
-          {{ t.name }}
+          <span class="team-label">{{ t.name }}</span>
+          <svg
+            v-if="isReadonlyTeam(t.id)"
+            class="team-eye"
+            viewBox="0 0 16 16"
+            aria-label="只读"
+          >
+            <path
+              d="M1.5 8s2.6-4.5 6.5-4.5S14.5 8 14.5 8s-2.6 4.5-6.5 4.5S1.5 8 1.5 8z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linejoin="round"
+            />
+            <circle
+              cx="8"
+              cy="8"
+              r="2.1"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+            />
+          </svg>
         </button>
         <div class="divider" />
         <button class="new-team" @click="openNewTeam">

@@ -14,6 +14,8 @@ describe('share clipboard fallback', () => {
     expect(topBar).toMatch(/copyTextToClipboard/);
     expect(topBar).toMatch(/shareAuthErrorMessage/);
     expect(topBar).toMatch(/无法自动复制/);
+    expect(topBar).toMatch(/isReadonlyTeam/);
+    expect(topBar).toMatch(/team-eye/);
     expect(topBar).not.toMatch(/分享失败，请确认你有编辑权限/);
     expect(topBar).not.toMatch(/await navigator\.clipboard\.writeText\(url\)/);
   });

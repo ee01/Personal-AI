@@ -84,6 +84,20 @@ function parseReleaseSheet(
   }
 }
 
+function releaseSheetContentKey(sheet: ReleaseSheetConfig | null): string {
+  if (!sheet) return '';
+  return JSON.stringify({
+    url: sheet.url,
+    spreadsheetId: sheet.spreadsheetId,
+    sheetName: sheet.sheetName,
+    range: sheet.range,
+    splitPhase: sheet.splitPhase,
+    showPhases: sheet.showPhases,
+    releaseFilter: sheet.releaseFilter || null,
+    rows: sheet.rows,
+  });
+}
+
 /** Validate + normalize a client-submitted releaseSheet payload (or null to clear). */
 function normalizeReleaseSheetInput(
   raw: unknown,
@@ -152,6 +166,9 @@ function mapMarker(row: MarkerRow) {
     date: row.date,
     jiraKey: row.jira_key,
     etaSource: row.eta_source,
+    jiraStatus: row.jira_status || null,
+    jiraTargetEnd: row.jira_target_end || null,
+    jiraFetchedAt: row.jira_fetched_at || null,
     createdBy: row.created_by,
     version: row.version,
   };
@@ -176,6 +193,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
     lane: row.lane,
     expanded: Boolean(row.expanded),
     version: row.version,
+    createdAt: row.created_at,
     description: row.description || null,
     subs: subs.map((sub) => ({
       id: sub.id,
@@ -195,7 +213,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
   };
 }
 
-export function listTeams(): Array<{
+export function listTeams(ids?: string[]): Array<{
   id: string;
   name: string;
   jql: string;
@@ -203,18 +221,27 @@ export function listTeams(): Array<{
   importedQuarters: string[];
   version: number;
 }> {
+  const wanted = (ids || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  if (!wanted.length) return [];
   const db = getDb();
+  const placeholders = wanted.map(() => '?').join(',');
   const rows = db
-    .prepare(`SELECT * FROM teams ORDER BY created_at ASC`)
-    .all() as TeamRow[];
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    jql: row.jql,
-    checkedQuarters: parseJsonArray(row.checked_quarters_json),
-    importedQuarters: parseJsonArray(row.imported_quarters_json),
-    version: row.version,
-  }));
+    .prepare(`SELECT * FROM teams WHERE id IN (${placeholders})`)
+    .all(...wanted) as TeamRow[];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return wanted
+    .map((id) => byId.get(id))
+    .filter((row): row is TeamRow => Boolean(row))
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      jql: row.jql,
+      checkedQuarters: parseJsonArray(row.checked_quarters_json),
+      importedQuarters: parseJsonArray(row.imported_quarters_json),
+      version: row.version,
+    }));
 }
 
 export function getTeam(teamId: string): TeamRow | null {
@@ -532,9 +559,9 @@ export function renderActivityText(
     case 'update_jql':
       return `${who} 更新了团队 JQL`;
     case 'update_release_sheet':
-      return summary.cleared
-        ? `${who} 清除了发布时间表标尺`
-        : `${who} 更新了发布时间表标尺`;
+      if (summary.cleared) return `${who} 清除了发布时间表标尺`;
+      if (summary.silent) return `${who} 静默更新了发布时间表标尺`;
+      return `${who} 更新了发布时间表标尺`;
     case 'update_create_jira_prompt':
       return `${who} 更新了创建 Jira Prompt`;
     case 'update_assignee_map':
@@ -760,22 +787,38 @@ export function applyIntent(
       intent.releaseSheet === undefined ? null : intent.releaseSheet,
     );
     const next = releaseSheet === undefined ? null : releaseSheet;
+    const silent = Boolean(intent.silent) && Boolean(next);
+    const prev = parseReleaseSheet(team.release_sheet_json);
+    const contentChanged =
+      releaseSheetContentKey(prev) !== releaseSheetContentKey(next);
     db.prepare(
       `UPDATE teams SET release_sheet_json = ?, version = version + 1, updated_at = ? WHERE id = ?`,
     ).run(JSON.stringify(next), ts, teamId);
-    writeActivity({
-      teamId,
-      actor,
-      op,
-      targetType: 'team',
-      targetKey: teamId,
-      summary: {
-        cleared: !next,
-        splitPhase: next?.splitPhase,
-        showPhases: next?.showPhases,
-        rowCount: next?.rows?.length || 0,
-      },
-    });
+    if (!silent || contentChanged) {
+      writeActivity({
+        teamId,
+        actor: silent
+          ? {
+              name: '系统',
+              clientId: 'system',
+              source: 'system',
+              shareTokenId: actor.shareTokenId || null,
+              ip: actor.ip || null,
+            }
+          : actor,
+        op,
+        targetType: 'team',
+        targetKey: teamId,
+        summary: {
+          cleared: !next,
+          silent,
+          triggeredBy: silent ? actor.name : undefined,
+          splitPhase: next?.splitPhase,
+          showPhases: next?.showPhases,
+          rowCount: next?.rows?.length || 0,
+        },
+      });
+    }
   } else if (op === 'import') {
     const items = Array.isArray(intent.items) ? intent.items : [];
     const overwrite = Boolean(intent.overwrite);
@@ -784,16 +827,37 @@ export function applyIntent(
       : [];
     if (overwrite && quarters.length) {
       const placeholders = quarters.map(() => '?').join(',');
+      const payloadKeys = new Set(
+        items
+          .map((raw) => String((raw as Record<string, unknown>).key || '').trim())
+          .filter(Boolean),
+      );
       // Manual items are never owned by the import, so an overwrite must leave
       // them (and their subs) alone even when they sit in the same quarter.
-      const doomed = (
-        db
-          .prepare(
-            `SELECT key FROM items
-             WHERE team_id = ? AND source = 'jira' AND quarter IN (${placeholders})`,
-          )
-          .all(teamId, ...quarters) as Array<{ key: string }>
-      ).map((row) => row.key);
+      const candidates = db
+        .prepare(
+          `SELECT key, quarter, jira_key FROM items
+           WHERE team_id = ? AND source = 'jira'
+             AND (quarter IN (${placeholders}) OR quarter IS NULL)`,
+        )
+        .all(teamId, ...quarters) as Array<{
+        key: string;
+        quarter: string | null;
+        jira_key: string | null;
+      }>;
+      // Rows without a quarter need care. The quarter filter usually sits on the
+      // parent Initiative, so imports used to leave every child row's quarter
+      // empty — and such a row can never be matched by a quarter-scoped delete,
+      // which is how it becomes a ghost no overwrite can clear. But dropping all
+      // of them would also wipe the schedule, subs and markers of rows that are
+      // still perfectly valid, because a deleted row comes back unscheduled.
+      // So only sweep the ones this JQL no longer returns.
+      const stillInJql = (row: { key: string; jira_key: string | null }) =>
+        payloadKeys.has(row.key) ||
+        Boolean(row.jira_key && payloadKeys.has(row.jira_key));
+      const doomed = candidates
+        .filter((row) => (row.quarter ? true : !stillInJql(row)))
+        .map((row) => row.key);
       if (doomed.length) {
         const keyPlaceholders = doomed.map(() => '?').join(',');
         db.prepare(
@@ -1465,8 +1529,9 @@ export function applyIntent(
     db.prepare(
       `INSERT INTO item_markers (
         id, team_id, item_key, kind, phase_kind, label, date, jira_key, eta_source,
+        jira_status, jira_target_end, jira_fetched_at,
         created_by, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 1, ?, ?)`,
     ).run(
       id,
       teamId,
@@ -1544,12 +1609,34 @@ export function applyIntent(
     } else {
       nextEtaSource = null;
     }
+    const cacheTouched =
+      intent.jiraStatus !== undefined || intent.jiraTargetEnd !== undefined;
+    const nextJiraStatus =
+      intent.jiraStatus !== undefined
+        ? String(intent.jiraStatus || '').trim() || null
+        : marker.jira_status;
+    const nextJiraTargetEnd =
+      intent.jiraTargetEnd !== undefined
+        ? isoDateOrNull(intent.jiraTargetEnd)
+        : marker.jira_target_end;
+    const nextJiraFetchedAt = cacheTouched ? ts : marker.jira_fetched_at;
     db.prepare(
       `UPDATE item_markers SET
         label = ?, date = ?, jira_key = ?, eta_source = ?,
+        jira_status = ?, jira_target_end = ?, jira_fetched_at = ?,
         version = version + 1, updated_at = ?
        WHERE id = ?`,
-    ).run(nextLabel, nextDate, nextJiraKey, nextEtaSource, ts, marker.id);
+    ).run(
+      nextLabel,
+      nextDate,
+      nextJiraKey,
+      nextEtaSource,
+      nextJiraStatus,
+      nextJiraTargetEnd,
+      nextJiraFetchedAt,
+      ts,
+      marker.id,
+    );
     writeActivity({
       teamId,
       actor,
@@ -2059,6 +2146,17 @@ function isoDateOrNull(raw: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 }
 
+function jiraStatusName(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw == null) return null;
+  if (typeof raw === 'string') return raw.trim() || null;
+  if (typeof raw === 'object' && 'name' in raw) {
+    const name = String((raw as { name?: unknown }).name || '').trim();
+    return name || null;
+  }
+  return null;
+}
+
 /**
  * Batch Jira → Roadmap mirror. Returns true when the call was skipped by TTL
  * (caller should not write activity / should not treat it as a mutation).
@@ -2106,6 +2204,7 @@ function applyRefreshFromJira(
       fields.assignee !== undefined
         ? String(fields.assignee || '').trim() || null
         : undefined;
+    const status = jiraStatusName(fields.status);
 
     const item = db
       .prepare(`SELECT * FROM items WHERE team_id = ? AND jira_key = ?`)
@@ -2220,6 +2319,30 @@ function applyRefreshFromJira(
         if (nextOwner) ensureMember(teamId, nextOwner);
       }
     }
+
+    const deps = db
+      .prepare(
+        `SELECT * FROM item_markers
+         WHERE team_id = ? AND kind = 'dep' AND jira_key = ?`,
+      )
+      .all(teamId, key) as MarkerRow[];
+    for (const marker of deps) {
+      const nextStatus = status !== undefined ? status : marker.jira_status;
+      const nextTargetEnd =
+        targetEnd !== undefined ? targetEnd : marker.jira_target_end;
+      const same =
+        (nextStatus || null) === (marker.jira_status || null) &&
+        (nextTargetEnd || null) === (marker.jira_target_end || null);
+      if (same) continue;
+      // Cache only — never copy Target End onto marker.date. Skip version
+      // bump so a user confirming ETA is not OCC-blocked by this refresh.
+      db.prepare(
+        `UPDATE item_markers SET
+          jira_status = ?, jira_target_end = ?, jira_fetched_at = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(nextStatus, nextTargetEnd, fetchedAt, ts, marker.id);
+      changed += 1;
+    }
   }
 
   if (changed > 0) {
@@ -2243,6 +2366,11 @@ function addIsoDaysLocal(iso: string, n: number): string {
 
 /**
  * Extension already wrote Target dates to Jira — mirror into local DB + activity.
+ *
+ * Also re-assert `start_date`/`days` from the dates we just pushed. Open-page
+ * silent refresh can race (fetch still sees old Jira Target) and relocate the
+ * bar back; without this, confirm only stamped `target_*` and left the bar
+ * stuck on the stale schedule until TTL expired.
  */
 export function confirmTargetSync(
   teamId: string,
@@ -2264,6 +2392,13 @@ export function confirmTargetSync(
   if ((!itemKey && !subId) || !start || !end) {
     return { ok: false, error: 'start_end_required', status: 400 };
   }
+  if (!isoDateOrNull(start) || !isoDateOrNull(end)) {
+    return { ok: false, error: 'start_end_invalid', status: 400 };
+  }
+  const days = daysBetweenIso(start, end);
+  if (days < 1) {
+    return { ok: false, error: 'start_end_invalid', status: 400 };
+  }
   const db = getDb();
   const ts = now();
 
@@ -2274,6 +2409,10 @@ export function confirmTargetSync(
     if (!sub) return { ok: false, error: 'sub_not_found', status: 404 };
     const jiraKey = sub.jira_key || String(input.jiraKey || '').trim() || null;
     if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
+    db.prepare(
+      `UPDATE subs SET start_date = ?, days = ?, version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    ).run(start, days, ts, subId);
     writeActivity({
       teamId,
       actor,
@@ -2301,10 +2440,22 @@ export function confirmTargetSync(
   const jiraKey = item.jira_key || String(input.jiraKey || '').trim() || null;
   if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
 
-  db.prepare(
-    `UPDATE items SET target_start = ?, target_end = ?, updated_at = ?
-     WHERE team_id = ? AND key = ?`,
-  ).run(start, end, ts, teamId, itemKey);
+  // Keep Gantt span aligned with the Target we confirmed to Jira. Silent
+  // refresh may have already overwritten start_date/days with a stale fetch.
+  if (item.scheduled) {
+    db.prepare(
+      `UPDATE items SET
+        target_start = ?, target_end = ?,
+        start_date = ?, days = ?,
+        version = version + 1, updated_at = ?
+       WHERE team_id = ? AND key = ?`,
+    ).run(start, end, start, days, ts, teamId, itemKey);
+  } else {
+    db.prepare(
+      `UPDATE items SET target_start = ?, target_end = ?, updated_at = ?
+       WHERE team_id = ? AND key = ?`,
+    ).run(start, end, ts, teamId, itemKey);
+  }
 
   writeActivity({
     teamId,

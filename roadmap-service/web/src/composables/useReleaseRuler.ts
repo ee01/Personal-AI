@@ -312,6 +312,13 @@ export function phaseOptions(parsed: ParsedReleaseSchedule): PhaseOption[] {
   });
 }
 
+/**
+ * Sprint bands owned by the release that *ends* at the split phase.
+ * Half-open `[prevSplit, thisSplit)`: the chosen phase is the handoff into
+ * the next release (exclusive end). First band pads back to that release's
+ * earliest phase, or 4d before the split when the split is the first phase.
+ * Releases without the split phase never become their own column.
+ */
 export function relSegments(
   parsed: ParsedReleaseSchedule,
   splitKind: PhaseRulerKind,
@@ -322,14 +329,17 @@ export function relSegments(
     if (sp) anchors.push({ rel: r, date: sp.date });
   }
   anchors.sort((a, b) => a.date.getTime() - b.date.getTime());
-  return anchors.map((a, i) => ({
-    rel: a.rel,
-    start: a.date,
-    end:
-      i + 1 < anchors.length
-        ? anchors[i + 1].date
-        : addD(a.rel.end, 4),
-  }));
+  return anchors.map((a, i) => {
+    let start: Date;
+    if (i > 0) {
+      start = anchors[i - 1].date;
+    } else if (a.rel.start.getTime() < a.date.getTime()) {
+      start = a.rel.start;
+    } else {
+      start = addD(a.date, -4);
+    }
+    return { rel: a.rel, start, end: a.date };
+  });
 }
 
 /** Nearest Pro on/after end date — "可赶 Sprint" hint. */

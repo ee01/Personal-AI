@@ -17,7 +17,7 @@ import {
 import { memberChipHtml, openOwnerFloat } from '../composables/useOwnerFloat';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { useRoadmapState } from '../composables/useRoadmapState';
-import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS } from '../composables/useRoadmapContract';
+import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, driftedDepCount, depBadgeTip, depHoverTip, depEtaMismatchesJira, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS } from '../composables/useRoadmapContract';
 import {
   defaultNewSubSpan,
   dispName,
@@ -122,6 +122,7 @@ const markers = computed(() => props.item.markers || []);
 const onTrack = computed(() => trackMarkers(props.item));
 const depCount = computed(() => markers.value.filter((m) => m.kind === 'dep').length);
 const pendingDeps = computed(() => pendingDepCount(props.item));
+const driftedDeps = computed(() => driftedDepCount(props.item));
 
 const members = computed(() => state.snapshot.value?.members || []);
 
@@ -167,6 +168,7 @@ function markerHandlers(): MarkerHandlers {
     fetchIssueDates: state.hasExtension.value
       ? (jiraKey) => bridgeFetchIssueDates(jiraKey)
       : undefined,
+    jiraBaseUrl: jiraBase.value,
   };
 }
 
@@ -867,12 +869,8 @@ watch(
           <span
             v-if="depCount"
             class="dep-badge"
-            :class="{ pending: pendingDeps > 0 }"
-            :data-tip="
-              (pendingDeps
-                ? `${depCount} 个外部依赖 · 有依赖缺少交付时间 ETA`
-                : `${depCount} 个外部依赖`) + '||点击查看 / 添加外部依赖'
-            "
+            :class="{ pending: pendingDeps > 0, drift: pendingDeps === 0 && driftedDeps > 0 }"
+            :data-tip="depBadgeTip(item)"
             @pointerdown.stop
             @click.stop="openDepPopover($event.currentTarget as HTMLElement, item, markerHandlers())"
             v-html="linkIconHtml(8) + depCount"
@@ -946,7 +944,7 @@ watch(
           :key="m.id"
           type="button"
           class="marker"
-          :class="[{ done: isMarkerDone(m.date), dep: m.kind === 'dep' }]"
+          :class="[{ done: isMarkerDone(m.date), dep: m.kind === 'dep', drift: m.kind === 'dep' && depEtaMismatchesJira(m) }]"
           :style="{
             left: `${X(tl, m.date!) + DAY_W / 2}px`,
             background: m.kind === 'dep' ? '#7C8794' : phaseColor(m),
@@ -954,7 +952,7 @@ watch(
           :data-tip="
             m.kind === 'phase'
               ? `${m.label} · ${fmtMD(m.date!)}${isMarkerDone(m.date) ? ' · 已完成' : ' · 待完成'}||阶段节点||左右拖动改期 · 单击编辑或删除`
-              : `外部依赖 ETA ${fmtMD(m.date!)}${m.jiraKey ? ` · ${m.jiraKey}` : ' · 手动填写'}||${m.label}||左右拖动改 ETA · 单击查看该依赖`
+              : depHoverTip(m)
           "
           @pointerdown="
             markerDragStart($event, {

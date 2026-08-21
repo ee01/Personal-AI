@@ -1,4 +1,4 @@
-export type ActorSource = 'creator' | 'extension' | 'anonymous';
+export type ActorSource = 'creator' | 'extension' | 'anonymous' | 'system';
 export type ViewMode = 'gantt' | 'resource';
 export type ResWindow = '2w' | 'all';
 export type MarkerKind = 'phase' | 'dep';
@@ -18,6 +18,7 @@ export interface ReleaseSheetConfig {
   sheetName: string;
   range: string;
   splitPhase: string;
+  /** Phase kinds drawn on the ruler; always includes the end-split phase. */
   showPhases: string[];
   releaseFilter?: ReleaseFilter | null;
   rows: Array<Record<string, unknown>>;
@@ -56,6 +57,11 @@ export interface RoadmapMarker {
   date?: string | null;
   jiraKey?: string | null;
   etaSource?: EtaSource | null;
+  /** Last mirrored Jira status name; null until a refresh has seen this key. */
+  jiraStatus?: string | null;
+  /** Last mirrored Jira Target End; never auto-copied onto `date`. */
+  jiraTargetEnd?: string | null;
+  jiraFetchedAt?: number | null;
   createdBy: string;
   version: number;
 }
@@ -96,6 +102,8 @@ export interface RoadmapItem {
   lane: number;
   expanded: boolean;
   version: number;
+  /** Epoch ms of row creation; absent when talking to an older server. */
+  createdAt?: number;
   /** Draft user text, or Jira description mirror for non-draft items. */
   description?: string | null;
   subs: RoadmapSub[];

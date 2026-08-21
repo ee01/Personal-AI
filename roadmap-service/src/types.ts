@@ -1,4 +1,4 @@
-export type ActorSource = 'creator' | 'extension' | 'anonymous';
+export type ActorSource = 'creator' | 'extension' | 'anonymous' | 'system';
 
 /** Persisted per-team release-train ruler config (shared via snapshot). */
 export interface ReleaseFilter {
@@ -13,7 +13,7 @@ export interface ReleaseSheetConfig {
   range: string;
   /** Normalized phase kind used as Sprint split anchor (e.g. 'ff'). */
   splitPhase: string;
-  /** Normalized phase kinds drawn on the ruler; always includes splitPhase. */
+  /** Normalized phase kinds drawn on the ruler; always includes splitPhase (end handoff). */
   showPhases: string[];
   /** Keep/drop rules for release names on the ruler. */
   releaseFilter?: ReleaseFilter | null;
@@ -72,6 +72,9 @@ export interface MarkerRow {
   date: string | null;
   jira_key: string | null;
   eta_source: EtaSource | null;
+  jira_status: string | null;
+  jira_target_end: string | null;
+  jira_fetched_at: number | null;
   created_by: string;
   version: number;
   created_at: number;
@@ -228,6 +231,8 @@ export interface TeamSnapshot {
     lane: number;
     expanded: boolean;
     version: number;
+    /** Epoch ms the row was inserted; Backlog uses it to float new manual rows. */
+    createdAt: number;
     /** Draft user text, or Jira description mirror for non-draft rows. */
     description?: string | null;
     subs: Array<{

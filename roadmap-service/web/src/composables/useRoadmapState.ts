@@ -110,6 +110,9 @@ export function createRoadmapState() {
   const teamId = computed(() => snapshot.value?.team.id || '');
   const editable = computed(() => Boolean(teamId.value && api.getShareToken(teamId.value)));
   const hasExtension = computed(() => api.hasExtension());
+  const visibleActivity = computed(() =>
+    activity.value.filter((entry) => !entry.teamId || entry.teamId === teamId.value),
+  );
 
   const scheduledItems = computed(() => {
     if (!snapshot.value) return [] as RoadmapItem[];
@@ -201,17 +204,37 @@ export function createRoadmapState() {
   }
 
   async function loadTeams(preferredTeamId?: string) {
-    teams.value = await api.listTeams();
     const url = readUrlParams();
     if (url.token && (url.team || preferredTeamId)) {
       api.setShareToken(url.team || preferredTeamId!, url.token);
     }
+    const hint = preferredTeamId || url.team || '';
+    if (hint) api.rememberKnownTeam(hint);
+    teams.value = await api.listTeams();
+    if (hint && !teams.value.some((t) => t.id === hint)) {
+      try {
+        const snap = await api.fetchTeam(hint);
+        api.rememberKnownTeam(hint);
+        teams.value = [
+          ...teams.value,
+          {
+            id: snap.team.id,
+            name: snap.team.name,
+            jql: snap.team.jql,
+            checkedQuarters: snap.team.checkedQuarters,
+            importedQuarters: snap.team.importedQuarters,
+            version: snap.team.version,
+          },
+        ];
+      } catch {
+        /* unknown or deleted team */
+      }
+    }
     const target =
-      url.team ||
-      preferredTeamId ||
+      (hint && teams.value.some((t) => t.id === hint) ? hint : '') ||
       teams.value[0]?.id ||
       '';
-    if (target) await selectTeam(target, { fromUrl: true, expand: url.expand });
+    if (target) await selectTeam(target, { fromUrl: Boolean(url.team), expand: url.expand });
     else loading.value = false;
   }
 
@@ -220,6 +243,7 @@ export function createRoadmapState() {
     opts: { fromUrl?: boolean; expand?: string } = {},
   ) {
     loading.value = true;
+    activity.value = [];
     api.unsubscribeEvents();
     try {
       const snap = await api.fetchTeam(id);
@@ -238,12 +262,15 @@ export function createRoadmapState() {
       focusQuarter.value = readUrlParams().q || CURQ;
       view.value = readUrlParams().view || 'gantt';
       resWin.value = readUrlParams().w || '2w';
-      activity.value = await api.fetchActivity(id);
+      activity.value = (await api.fetchActivity(id)).filter(
+        (entry) => !entry.teamId || entry.teamId === id,
+      );
       api.subscribeEvents(id, {
         onSnapshot: (s) => {
           commitSnapshot(s);
         },
         onActivity: (entry) => {
+          if (entry.teamId && entry.teamId !== id) return;
           activity.value = [entry, ...activity.value].slice(0, 100);
         },
       });
@@ -464,6 +491,7 @@ export function createRoadmapState() {
     snapshot,
     loading,
     activity,
+    visibleActivity,
     activityOpen,
     nameGateOpen,
     popKeys,

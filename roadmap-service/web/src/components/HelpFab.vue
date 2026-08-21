@@ -21,13 +21,13 @@ const open = ref(false);
       <li>添加任务：左侧头像点选，或标题里输入 <b>@</b> 指定 Owner（可选）；默认从今天起两周；描述可选，不挡 Enter 秒建</li>
       <li>创建 Jira 可配置 <b>Assignee 映射</b>（系统名 → Firstname Lastname）</li>
       <li>悬浮：bar <b>左侧 ＋ 添加任务</b>，<b>右侧 ◆＋ 阶段节点/外部依赖</b>，<b>右上角 × 退回 Backlog</b></li>
-      <li><b>阶段节点</b>与有 ETA 的依赖落在标记轨；缺 ETA 时红色 🔗 角标持续提醒</li>
-      <li>装了扩展时，打开 Roadmap 会<b>静默刷新</b>甘特上非草稿票的 summary / description / Target / assignee（10 分钟内不重复）</li>
+      <li><b>阶段节点</b>与有 ETA 的依赖落在标记轨；缺 ETA 时红色 🔗 角标持续提醒。绑定了 Jira 的依赖：浮层里点 key 打开 Jira，点「未刷新」旁的 ↻ 刷新 status / Target End；hover 只读，单击才确认是否把 Target End 写成 ETA</li>
+      <li>装了扩展时，打开 Roadmap 会<b>静默刷新</b>甘特上非草稿票的 summary / description / Target / assignee，以及依赖 ticket 的 status / Target End（10 分钟内不重复；依赖 ETA 不会被自动改写）</li>
       <li>非草稿主/子任务拖动会回写 Jira Target；子任务改 Owner 会回写 assignee（需映射；清空会确认）</li>
       <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部）；双击改名、添加/移除空闲成员</li>
       <li><b>清理过期</b>：过期 Epic 回退 Backlog；过期子任务标记清理（可再拖回还原）</li>
       <li><b>发布时间表标尺</b>：✎ 弹窗可配置 Google Sheet（Release / Phase / Date）；可用 Release 过滤去掉小版本；保存后主标尺换成发布 Sprint，工具栏可临时切回月份</li>
-      <li>顶栏可<b>分享可编辑链接</b>或<b>只读链接</b>（无 token）</li>
+      <li>顶栏只列出<b>本机已知团队</b>（创建 / 分享链接 / 地址栏打开过的）；只读团队带眼睛图标。可<b>分享可编辑链接</b>或<b>只读链接</b>（无 token）</li>
       <li>颜色按「当前月」区分过去 / 当前 / 未来</li>
     </ul>
   </div>

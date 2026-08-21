@@ -9,7 +9,7 @@ import type {
 // Keep the runtime import Node-ESM compatible: the extension's contract test
 // imports this module directly, while Vite resolves the `.js` specifier to the
 // TypeScript source during the web build.
-import { addD, fmtISO, parseDate } from './useGeometry.js';
+import { addD, fmtISO, fmtMD, parseDate, qCmp } from './useGeometry.js';
 
 /** ticker 忽略的低信息量操作（含已废弃的 expand/collapse） */
 export const TICKER_NOISE_OPS = new Set([
@@ -20,17 +20,29 @@ export const TICKER_NOISE_OPS = new Set([
   'refresh_from_jira',
 ]);
 
+function isSilentReleaseSheetRefresh(entry: ActivityEntry): boolean {
+  return entry.op === 'update_release_sheet' && !entry.summary?.cleared;
+}
+
+export function isSystemActivity(entry: ActivityEntry): boolean {
+  return entry.actorSource === 'system' || Boolean(entry.summary?.silent);
+}
+
 /**
  * 取最新一条「其他人」的有效日志；没有则 null（ticker 隐藏）。
  * `activity` 假定按时间倒序（最新在前）。
+ * 传入 `teamId` 时丢掉其他团队的串入事件；静默刷表（未清除）不当协作编辑。
  */
 export function pickTickerEntry(
   activity: ActivityEntry[],
   selfClientId: string,
+  teamId?: string,
 ): ActivityEntry | null {
   for (const entry of activity) {
+    if (teamId && entry.teamId && entry.teamId !== teamId) continue;
     if (entry.actorClientId === selfClientId) continue;
     if (TICKER_NOISE_OPS.has(entry.op)) continue;
+    if (isSilentReleaseSheetRefresh(entry)) continue;
     return entry;
   }
   return null;
@@ -74,6 +86,94 @@ export function pendingDepCount(
   item: Pick<RoadmapItem, 'markers'>,
 ): number {
   return (item.markers || []).filter((m) => m.kind === 'dep' && !m.date).length;
+}
+
+/** ETA 与镜像的 Jira Target End 不一致（有 ETA 才算） */
+export function depEtaMismatchesJira(m: RoadmapMarker): boolean {
+  if (m.kind !== 'dep' || !m.jiraKey || !m.jiraTargetEnd || !m.date) return false;
+  return m.date !== m.jiraTargetEnd;
+}
+
+/** Jira 有 Target End，且 Roadmap ETA 缺失或不一致时，可一键采用。 */
+export function canAdoptJiraTargetEnd(m: RoadmapMarker): boolean {
+  return Boolean(
+    m.kind === 'dep' && m.jiraKey && m.jiraTargetEnd && m.date !== m.jiraTargetEnd,
+  );
+}
+
+/** Adopt 按钮文案。无 Target End 时返回 null，避免 fmtMD(undefined) 把整层浮窗打空。 */
+export function depAdoptLabel(
+  m: Pick<RoadmapMarker, 'date' | 'jiraTargetEnd'>,
+): string | null {
+  if (!m.jiraTargetEnd) return null;
+  return m.date
+    ? `改用 Jira ${fmtMD(m.jiraTargetEnd)}`
+    : `采用 ${fmtMD(m.jiraTargetEnd)} 为 ETA`;
+}
+
+export function driftedDepCount(
+  item: Pick<RoadmapItem, 'markers'>,
+): number {
+  return (item.markers || []).filter(depEtaMismatchesJira).length;
+}
+
+/** Hover 第三段：只读提示，不承载确认按钮 */
+export function depHoverHint(m: RoadmapMarker): string {
+  const drag = '左右拖动改 ETA · 单击查看该依赖';
+  if (!m.jiraKey) return `${drag} · 手动填写`;
+  if (!m.date && m.jiraTargetEnd) {
+    return `缺 ETA · Jira Target End ${fmtMD(m.jiraTargetEnd)} · 单击可同步`;
+  }
+  if (!m.date) {
+    return m.jiraFetchedAt
+      ? '缺 ETA · Jira 也无 Target End · 单击查看'
+      : `${drag} · 尚未刷新 Jira`;
+  }
+  if (depEtaMismatchesJira(m)) {
+    return `Jira Target End ${fmtMD(m.jiraTargetEnd!)} · 不一致 · 单击可同步`;
+  }
+  if (m.jiraTargetEnd) {
+    return `与 Jira Target End 一致 · ${drag}`;
+  }
+  return drag;
+}
+
+/** Popover 上 Jira status 芯片。没有拉到 status 一律「未刷新」，刷新入口贴在芯片旁。 */
+export function depStatusChipLabel(
+  m: Pick<RoadmapMarker, 'jiraKey' | 'jiraStatus'>,
+): string | null {
+  if (!m.jiraKey) return null;
+  return m.jiraStatus || '未刷新';
+}
+
+export function depStatusIsStale(
+  m: Pick<RoadmapMarker, 'jiraKey' | 'jiraStatus'>,
+): boolean {
+  return Boolean(m.jiraKey && !m.jiraStatus);
+}
+
+export function depHoverTip(m: RoadmapMarker): string {
+  const status = m.jiraStatus ? ` · ${m.jiraStatus}` : '';
+  const keyBit = m.jiraKey ? ` · ${m.jiraKey}${status}` : ' · 手动填写';
+  const head = m.date
+    ? `外部依赖 ETA ${fmtMD(m.date)}${keyBit}`
+    : `外部依赖${keyBit}`;
+  return `${head}||${m.label}||${depHoverHint(m)}`;
+}
+
+export function depBadgeTip(item: Pick<RoadmapItem, 'markers'>): string {
+  const deps = depMarkers(item);
+  const n = deps.length;
+  const pending = pendingDepCount(item);
+  const drift = driftedDepCount(item);
+  const canAdopt = deps.some((d) => d.jiraKey && !d.date && d.jiraTargetEnd);
+  let head = `${n} 个外部依赖`;
+  if (pending) head += ' · 有依赖缺少交付时间 ETA';
+  else if (drift) head += ' · 有依赖 ETA 与 Jira Target End 不一致';
+  let hint = '点击查看 / 添加外部依赖';
+  if (canAdopt) hint = 'Jira 已有 Target End，单击可同步为 ETA';
+  else if (drift) hint = '单击可改用 Jira Target End 或保留 Roadmap ETA';
+  return `${head}||外部依赖||${hint}`;
 }
 
 /** 全部外部依赖（含无 ETA） */
@@ -206,6 +306,65 @@ export function subTypeComesFromCreateMeta(
   return (
     normalized !== 'initiative' && normalized !== 'init' && normalized !== 'epic'
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Backlog ordering
+ * ------------------------------------------------------------------ */
+
+/** 分组标题：条目没填 quarter 时的归属。 */
+export const NO_QUARTER_GROUP = '—';
+
+function createdAtOf(item: Pick<RoadmapItem, 'createdAt'>): number {
+  return typeof item.createdAt === 'number' ? item.createdAt : 0;
+}
+
+/** 没填 quarter 的分组排在所有季度之后。 */
+function backlogQuarterCmp(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a === NO_QUARTER_GROUP) return 1;
+  if (b === NO_QUARTER_GROUP) return -1;
+  return qCmp(a, b);
+}
+
+/**
+ * Backlog 的分组与排序：新建的手动条目要出现在整个列表最前面。
+ *
+ * - 组内：`source='manual'` 的条目按创建时间倒序置顶，Jira 导入条目保持服务端
+ *   的 `ORDER BY quarter, key` 原序排在其后
+ * - 组间：含「最新手动条目」的那个 quarter 整组提到最前，其余分组仍按季度先后
+ *
+ * 只提升一个分组，所以列表首卡片必然是刚建出来的条目，其他季度的相对顺序不变。
+ */
+export function buildBacklogGroups(
+  items: RoadmapItem[],
+): Array<[string, RoadmapItem[]]> {
+  const groups = new Map<string, RoadmapItem[]>();
+  let leadQuarter: string | null = null;
+  let leadAt = -Infinity;
+  for (const item of items) {
+    const quarter = item.quarter || NO_QUARTER_GROUP;
+    const list = groups.get(quarter);
+    if (list) list.push(item);
+    else groups.set(quarter, [item]);
+    if (item.source === 'manual' && createdAtOf(item) > leadAt) {
+      leadAt = createdAtOf(item);
+      leadQuarter = quarter;
+    }
+  }
+  for (const list of groups.values()) {
+    // Array#sort is stable, so Jira rows keep the incoming key order.
+    list.sort((a, b) => {
+      if (a.source !== b.source) return a.source === 'manual' ? -1 : 1;
+      if (a.source !== 'manual') return 0;
+      return createdAtOf(b) - createdAtOf(a);
+    });
+  }
+  return [...groups.entries()].sort(([a], [b]) => {
+    if (a === leadQuarter) return -1;
+    if (b === leadQuarter) return 1;
+    return backlogQuarterCmp(a, b);
+  });
 }
 
 /* ------------------------------------------------------------------ *

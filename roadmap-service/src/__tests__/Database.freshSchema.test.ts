@@ -34,6 +34,7 @@ describe('a database created from schema.sql', () => {
       '009_teams_assignee_map',
       '010_item_sub_description',
       '011_teams_jira_refreshed_at',
+      '012_marker_jira_cache',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
@@ -64,6 +65,13 @@ describe('a database created from schema.sql', () => {
         )
         .get(),
     ).toEqual({ name: 'item_markers' });
+    expect(
+      (
+        db.pragma('table_info(item_markers)') as Array<{ name: string }>
+      ).map((row) => row.name),
+    ).toEqual(
+      expect.arrayContaining(['jira_status', 'jira_target_end', 'jira_fetched_at']),
+    );
     expect(
       db
         .prepare(

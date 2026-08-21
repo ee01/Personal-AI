@@ -129,6 +129,25 @@ describe('item markers', () => {
     expect(next.etaSource).toBe('jira');
   });
 
+  it('stores Jira cache on a dep without changing ETA via update_marker', () => {
+    const dep = itemOf(getTeamSnapshot(teamId)!, 'NOVA-M1').markers.find(
+      (m) => m.jiraKey === 'LEGAL-1',
+    )!;
+    const cached = expectOk(
+      apply(teamId, {
+        op: 'update_marker',
+        markerId: dep.id,
+        jiraStatus: 'In Progress',
+        jiraTargetEnd: '2026-08-30',
+        baseVersion: dep.version,
+      }),
+    ).snapshot;
+    const next = itemOf(cached, 'NOVA-M1').markers.find((m) => m.id === dep.id)!;
+    expect(next.jiraStatus).toBe('In Progress');
+    expect(next.jiraTargetEnd).toBe('2026-08-30');
+    expect(next.date).toBe('2026-08-25');
+  });
+
   it('rejects invalid phase / dep payloads and version conflicts', () => {
     expect(apply(teamId, { op: 'add_marker', itemKey: 'NOVA-M1', kind: 'phase' }).ok).toBe(
       false,

@@ -11,7 +11,11 @@ const state = useRoadmapState();
 const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
 
 const entry = computed(() =>
-  pickTickerEntry(state.activity.value, state.api.clientId.value),
+  pickTickerEntry(
+    state.visibleActivity.value,
+    state.api.clientId.value,
+    state.teamId.value,
+  ),
 );
 
 const visible = computed(() => Boolean(entry.value));
@@ -104,7 +108,7 @@ watch(
     v-show="visible"
     class="sync-ticker"
     :class="{ on: visible, flash }"
-    data-tip="协作同步||仅展示其他成员的最新一条编辑；点击打开完整活动日志"
+    data-tip="协作同步||仅展示当前团队其他成员的最新一条编辑；点击打开该团队的活动日志"
     @click="openActivity"
   >
     <div

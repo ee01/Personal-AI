@@ -53,6 +53,16 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 `resolve_item` 不校验版本，是因为发它的时候 Jira issue 已经真的建出来了：用户在创建期间拖一下 bar 就让回填失败的话，key 会永久丢失。`resolve_item` 与 `resolve_draft` 都是幂等的——重复写同一个 mapping 不会二次 bump version，也不会写第二条 activity（创建弹窗与扩展会各写一次子任务 mapping）。
 
+### Backlog 排序：新建的排最前面
+
+服务端仍按 `ORDER BY quarter, key` 下发 items（没有 `sort_order` 字段），排序规则集中在前端 `buildBacklogGroups()`（`web/src/composables/useRoadmapContract.ts`），依赖 snapshot 新增的 `item.createdAt`（epoch ms，来自 `items.created_at`）：
+
+- **组内**：`source='manual'` 的条目按创建时间倒序置顶，Jira 导入条目保持服务端 key 序排在其后
+- **组间**：含「最新手动条目」的那个 quarter 整组提到最前，其余 quarter 仍按季度先后；没填 quarter 的 `—` 组排在所有季度之后
+- 只提升一个分组，所以刚新建的条目必然是列表第一张卡片，其他季度的相对顺序不变
+- 新建成功后清空搜索框并把 Backlog 滚回顶部，避免新卡片被过滤或被滚动位置藏住
+- `createdAt` 缺失（老服务端）时按 0 处理：手动条目仍置顶，只是彼此之间退回 key 序
+
 ### 边界
 
 - **删除保护**：`jira_key` 已回填的条目不能从 Roadmap 删，只能 unschedule 退回 Backlog（Jira 上有真 issue 了）。
@@ -288,7 +298,8 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 
 ### roadmap-service `:3220`
 
-- `GET/POST /api/v1/teams`
+- `GET /api/v1/teams?ids=` — 只返回请求的团队；不带 `ids` 返回空列表（不再下发全站目录）
+- `POST /api/v1/teams`
 - `GET /api/v1/teams/:id`
 - `GET /api/v1/teams/:id/focus-items`
 - `POST /api/v1/teams/:id/intents`（需 share token）
@@ -307,13 +318,16 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 - 地址栏复制：只读（encode team/q/view/expand）；`expand` 是**本机视图状态**，展开/收起会 `replaceState` 更新地址栏，刷新可还原
 - 右上角分享：带 token 的可编辑链接（分享前同步当前 `expand`/q/view）；匿名 name 可冒充，审计记 client_id
 - **展开状态不同步多人**：SSE 快照不覆盖本机 expand；服务端 `expand`/`collapse` intent 为 no-op（兼容旧客户端）
-- 顶栏 SyncTicker 只展示其他人的最新 activity；点击打开活动日志
-- 可编辑只看本机是否有该团队 edit token（与是否安装扩展无关）
+- 顶栏团队列表只展示**本机已知团队**（创建过、打开过 `?team=` / 分享链接、或已有 edit token）。`GET /api/v1/teams` 必须带 `ids=`，不再返回全站目录。只读团队（本机无 edit token）在下拉里带眼睛图标
+- 顶栏 SyncTicker / 活动日志都只展示**当前选中团队**的 activity；ticker 再过滤掉自己的操作、Jira 静默刷新，以及发布时间表静默刷表（含历史「更新了发布时间表标尺」与新的「系统静默更新」）
+- 可编辑只看本机是否有该团队 edit token（与是否安装扩展无关）。edit token 与已知团队列表都存在页面 `localStorage`，**不随扩展同步、不跨设备**
 - 分享复制：优先 `navigator.clipboard`；在 `http://IP:端口` 等非安全上下文走 `textarea` + `execCommand('copy')`；仍失败则 toast + `prompt` 展示完整链接，不再与「无编辑权限」混报
 
 ## 扩展桥
 
-`contentScriptRoadmap` 按 Options `ROADMAP_BASE_URL`（及内置 roadmap 域名）注入：身份、focus sync、JQL 导入 / 创建 Jira（直连 + Agent）/ AI 缩写代理。Token 不出个人域。Focus sync / memory candidates / drift / agent runtime 一律经 `ROADMAP_MEMORY_REQUEST` 由 background 调 memory-service；与 Target 回写（同源 `sync-target`）是两条独立链路。
+`contentScriptRoadmap` 按 Options `ROADMAP_BASE_URL`（及内置 roadmap 域名）注入：身份、focus sync、JQL 导入 / 创建 Jira（直连 + Agent）/ AI 缩写代理。Token 不出个人域。Focus sync / drift / agent runtime 一律经 `ROADMAP_MEMORY_REQUEST` 由 background 调 memory-service；与 Target 回写（同源 `sync-target`）是两条独立链路。
+
+Backlog 底部曾有一个「记忆里在谈但不在 JQL 里」的候选区（扩展注入 `#pai-memory-candidates`），**已移除**。它的候选来源 `GET /projects/memory-candidates` 只是把 `entities` 里 Project/Topic 按 `mention_count` 取前几名再去掉已关注项，与当前团队和 JQL 毫无关联，结果是「RingCentral / IT support / login issues」这类全局高频泛化词；注入的 `.pai-mem-cand-*` 样式在页面侧也从未实现，拖拽 `application/pai-memory-candidate` 更没有接收端。memory-service 端点与 background 桥仍保留，重做这个入口时需要先解决相关性与去泛化，再补页面样式。
 
 默认站点 `http://roadmap.xmnup.com`（`.env` / `ROADMAP_BASE_URL`）。**Options 里改地址只改 Popup 打开的入口**；身份自动注入依赖 content script 是否匹配当前 origin。静态匹配含 `roadmap.xmnup.com` 与本地/旧 IP；自定义域名在保存 Options 后由 background 动态 `registerContentScripts`。改域名后需**重新加载扩展并刷新 Roadmap 页**，否则仍会弹出「输入名字」。
 
@@ -339,6 +353,26 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 - 未勾选＝增量模式，只导入 `checkedQuarters` 里还没导过的 quarter（无 quarter 字段时按整份 JQL 增量去重）
 - 勾选＝覆盖模式：有 quarter 时按 `checkedQuarters` 全量重拉并 `DELETE` 对应 quarter 的 jira items；无 quarter 字段时清除该团队全部 `source='jira'` 行（手动条目保留）
 
+### 季度来自父 Initiative，不从 Target 日期猜
+
+RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('… "Target Delivery Quarter" in (2026-Q3, 2026-Q4)')`），导入的却是子层 Epic，而 Epic 自己的 `Target Delivery Quarter`（`customfield_21998`）通常是空的——季度挂在父 Initiative 上，靠 Parent Link（`customfield_15751`）关联。不处理的话每一行都落进 Backlog 的 `—` 组。
+
+- 导入时对**仍缺季度**的行收集父 key，去重后按 50 个一批发 `key in (...)` 查父层季度回填（`src/roadmapImportQuarter.ts` 是纯逻辑，content script 只负责取数）
+- Epic 自己填了季度就以它为准，父层不覆盖；父层也没季度时保持为空
+- 父层查询失败只记 warning，不让导入失败——最坏结果只是分组回到 `—`
+- **不从 Target 日期推算季度**：真实数据里 NOVA-13139 的 Target 是 2026-07-01 → 09-30（看着像 Q3），父 INIT-30074 实际是 **2026-Q4**，按日期猜会算错
+
+### 覆盖导入怎么处理没有季度的行
+
+`quarter IS NULL` 的行是历史遗留（回填上线前导入的全都是），按 quarter 过滤的 `DELETE` 永远匹配不到它们，会变成任何覆盖导入都清不掉的幽灵行。但也不能一律删：被删的行会以 `scheduled=0` 重新插入，subs 与 markers 也已连带删除，等于把仍然有效的行的排期清空。所以规则分两种：
+
+| 行的状态 | 覆盖导入的处理 |
+|---|---|
+| `quarter` 命中本次勾选的季度 | 原语义不变：删除后由本次 payload 重建（排期/subs/markers 归零） |
+| `quarter IS NULL` 且本次 JQL 仍返回它 | 保留，走 UPDATE；季度被回填值补上，排期与 subs 不受影响 |
+| `quarter IS NULL` 且本次 JQL 不再返回它 | 判定为幽灵行，清除 |
+| `source='manual'` | 任何情况都不动 |
+
 ## Owner、人员视图与清理记忆
 
 - 新增子任务默认 **14 天**，Owner 可选：标题 `@` 建议、左侧头像点选、手输新名（自动进成员表）。Enter 不设 Owner 也可创建。
@@ -349,7 +383,20 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 
 ## 阶段节点与外部依赖（Markers）
 
-主任务统一用 **Marker** 体系：`phase`（Design/Stage/Production/自定义，必有日期）与 `dep`（外部依赖，ETA 可空）。有日期的落在 bar 下方标记轨；缺 ETA 的 dep 在 bar 右上角红色脉动 `🔗N` 角标提醒。右侧 ◆＋ 添加入口。ETA 可通过扩展 `pai-roadmap-fetch-issue-dates` 从 Jira Target End 读取。Epic 退回 Backlog 时 markers 保留。拖动 marker 可改日期（`update_marker`）。
+主任务统一用 **Marker** 体系：`phase`（Design/Stage/Production/自定义，必有日期）与 `dep`（外部依赖，ETA 可空）。有日期的落在 bar 下方标记轨；缺 ETA 的 dep 在 bar 右上角红色脉动 `🔗N` 角标提醒。ETA 与镜像的 Jira Target End 不一致时角标改琥珀色（不脉动）。右侧 ◆＋ 添加入口。Epic 退回 Backlog 时 markers 保留。拖动 marker 可改日期（`update_marker`）。
+
+### 依赖 ticket 的 Jira 镜像（只读缓存）
+
+绑定了 `jiraKey` 的外部依赖，**不**把 Jira Target End 自动写成 Roadmap ETA。打开页静默刷新会把 `status` 与 Target End 写入 marker 缓存（`jira_status` / `jira_target_end` / `jira_fetched_at`），团队共享，无扩展的协作者也能看到上次刷新结果。
+
+| 层 | 行为 |
+|---|---|
+| **打开页批拉** | 与甘特主/子任务同一趟 `refresh_from_jira`：主任务+子任务最多 50 key，再附加最多 25 个尚未包含的 dep key。拉 `status` + Target End。**永不改** `marker.date`，也不 bump marker version（避免和用户确认 ETA 抢 OCC） |
+| **Hover** | 只读。有 key 时展示 status；无 ETA 但 Jira 有 Target End →「单击可同步」；ETA ≠ Target End →「不一致 · 单击可同步」。`data-tip` 不能点按钮 |
+| **单击 popover** | 列出该任务全部外部依赖。Jira key 本身是链接（新标签打开 ticket）。status 在 key 右侧：有则显示状态名，没有则「未刷新」，刷新是贴在芯片旁的 ↻，不再单独放一颗「刷新 Jira」文字按钮。无 ETA + 有 Target End →「采用 8/18 为 ETA」；不一致 →「改用 Jira 8/18」。刷新只更新缓存（需扩展），不覆盖 ETA |
+| **添加时「读取 ETA」** | 仍是用户主动填入表单，保存才落 ETA |
+
+手动填写的依赖（无 `jiraKey`）不参与镜像。
 
 ## Expand 是本机视图状态
 
@@ -363,7 +410,7 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 ## 协作 Presence 与同步 Ticker
 
 - 顶栏头像逐个 `data-tip` 显示用户名（自己加「（你）」）；LIVE pill 保留整体说明
-- `SyncTicker`：头像左侧展示**其他成员**最新一条 activity（过滤自己 + `lock/unlock/expand/collapse/refresh_from_jira`），新日志滚入动画；点击打开 ActivityDrawer
+- `SyncTicker`：头像左侧展示**当前团队其他成员**最新一条 activity（过滤自己、`lock/unlock/expand/collapse/refresh_from_jira`、以及打开页面触发的发布时间表刷表），新日志滚入动画；点击打开当前团队的 ActivityDrawer
 - 取数纯函数：`pickTickerEntry` / `tickerLabel`（`useRoadmapContract.ts`）
 
 ## 导入 Task 与拖动回写 Target（扩展优先）
@@ -371,9 +418,9 @@ Agent 路径走 memory-service（内容脚本已有的 `MemoryServiceClient`）�
 | 能力 | 凭据优先级 | 展示 / 行为 |
 |---|---|---|
 | **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重 |
-| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
+| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期（避免打开页静默刷新用旧 Target 把 bar 盖回去）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
 | **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；无扩展/未映射 toast「未回写 assignee」；置空先 confirm |
-| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务，最多 50 key、JQL `key in (...)` 每批 ≤25；结果走 `refresh_from_jira` intent（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。跳过正在拖拽/编辑/pending Target sync 的 key。只读链接不刷新 |
+| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
 
 注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
 
@@ -403,17 +450,18 @@ content script 只在页面加载时注入，所以引导里的第三步是**刷
 | 字段 | 存哪 | 说明 |
 |---|---|---|
 | `url` / `spreadsheetId` / `sheetName` / `range` | `teams.release_sheet_json`（团队共享） | 与 JQL 一样走 intent 落库 |
-| `splitPhase` / `showPhases` | 同上 | ⚑ 分割节点 + 勾选展示阶段 |
+| `splitPhase` / `showPhases` | 同上 | 🏁 结束分割节点 + 勾选展示阶段 |
 | `releaseFilter` `{ mode, pattern }` | 同上 | `all` / `major`（尾号 0）/ `custom`（通配符或 `/正则/`） |
-| `rows` / `fetchedAt` | 同上（缓存） | 保存时写入；TTL≈6h 后有编辑权客户端静默刷新 |
+| `rows` / `fetchedAt` | 同上（缓存） | 保存时写入；TTL≈6h 后有编辑权客户端静默刷新。**表内容变了**才记活动日志，且记为 **系统静默更新**（`actor=系统`，`summary.silent`），不记成打开页面的人；只刷新 `fetchedAt` 的空转不写 log。历史「某人更新了发布时间表标尺」不改写 |
 | Apps Script `token` | **前端写死** | 与 RPA sheet reader 同源 Web App，不入库 |
 
-Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet` 用于清除 / 静默刷新。
+Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet` 用于清除 / 静默刷新（`silent: true`）。
 
 ### 前端行为要点
 
-- 地址/表名/范围变化后 600ms 防抖自动读取；未加载就保存会兜底拉取，默认 FF 分界 + 全阶段展示
-- 阶段 chips：点主体切换展示，点 ⚑ 设分割节点；分割节点勾选锁定
+- 地址/表名/范围变化后 600ms 防抖自动读取；未加载就保存会兜底拉取，默认 FF 结束分界 + 全阶段展示
+- 阶段 chips：点主体切换展示，点 🏁 设结束分割节点；结束节点勾选锁定
+- **结束点语义（关键）**：`splitPhase` 标记的是「本 release 列的右边界 / 切到下一 release 的切换日」，不是本列起点。`relSegments` 对每个有该阶段的 release 取半开区间 `[上一班同阶段, 本班同阶段)`；首列无上一班时，若本班还有更早阶段则用最早阶段，否则向前垫 4 天。没有该阶段的 release（如仅有 Pro 的 RIO 热修）不单独成列，刻度叠在所在 Sprint 内
 - Release 过滤：全部 / 仅大版本 / 自定义通配符；实时预览保留与划线过滤名单；非法正则或滤空则兜底不过滤
 - 过滤作用于分段、刻度、竖线与「可赶 Sprint」；阶段 chips / 数据预览仍看全量表
 - 工具栏 `Sprint | 月份` 开关仅会话级（`rulerMode`），不改团队配置、刷新恢复 Sprint
@@ -435,8 +483,9 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker）
 - `roadmap-service/web/src/composables/useExtensionBridge.ts`（直连 / Agent create bridge）
 - `roadmap-service/web/src/components/modals/AiCreateModal.vue`（双路径创建弹窗）
-- `roadmap-service/web/src/composables/useReleaseRuler.ts`（发布时间表解析 / 分段 / 拉取 / catchRelease）
-- `roadmap-service/web/src/components/SyncTicker.vue`
+- `roadmap-service/web/src/composables/useMarkerFloats.ts`（阶段节点 / 外部依赖浮层；依赖 Jira 缓存确认写 ETA）
+- `roadmap-service/web/src/composables/useRoadmapApi.ts`（known-teams / edit token localStorage）
+- `roadmap-service/web/src/components/TopBar.vue`
 - `src/contentScriptRoadmap.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
 - `memory-service/src/core/FocusProjectSyncService.ts`
@@ -456,4 +505,5 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - 部署后：导入 Task / 创建 Jira 依赖扩展 Options `JIRA_API_TOKEN`；拖动回写在无扩展或未填 Options token 时可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`
 - 部署：`npm run deploy:roadmap`（仅 roadmap-service；本地 build 后 rsync + 远端 docker compose，默认 `10.32.56.212:3220`）。若同时改 memory，用 `npm run deploy:memory`（两者一起发）
+- 部署后探活：`npm run verify:roadmap-service`（`:3220` 与 `http://roadmap.xmnup.com` 的 `/health`，并检查线上 JS 仍含依赖浮层「改用 Jira / 采用 … 为 ETA」文案，避免混合依赖再次打出空白浮窗）
 - focus sync / 抽取：`evals/cases/roadmap-focus-projects/`

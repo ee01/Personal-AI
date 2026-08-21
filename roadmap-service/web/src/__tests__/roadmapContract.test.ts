@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildBacklogGroups,
   buildCreateJiraPayload,
   buildDraftGroups,
   buildStateMessage,
+  NO_QUARTER_GROUP,
   canDeleteItem,
   defaultPhaseDate,
+  canAdoptJiraTargetEnd,
+  depAdoptLabel,
+  depBadgeTip,
+  depHoverTip,
+  depStatusChipLabel,
+  depStatusIsStale,
+  driftedDepCount,
   formatEstimate,
   isDraftItem,
+  isSystemActivity,
   itemDisplayKey,
   pendingDepCount,
   pickTickerEntry,
@@ -103,6 +113,77 @@ describe('display helpers', () => {
     expect(typeBadge('Initiative')).toEqual({ cls: 'type-INIT', label: 'INIT' });
     expect(typeBadge('Task')).toEqual({ cls: 'type-TASK', label: 'TASK' });
     expect(typeBadge('Story').cls).toBe('type-TASK');
+  });
+});
+
+describe('backlog grouping', () => {
+  const backlog = (overrides: Partial<RoadmapItem> = {}) =>
+    item({ scheduled: false, start: null, days: null, ...overrides });
+
+  it('puts the newest manual item first in the whole list', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-1', quarter: '2026-Q3' }),
+      backlog({ key: 'NOVA-2', quarter: '2026-Q4' }),
+      backlog({
+        key: 'LOCAL-new',
+        quarter: '2026-Q4',
+        source: 'manual',
+        jiraKey: null,
+        createdAt: 200,
+      }),
+      backlog({
+        key: 'LOCAL-old',
+        quarter: '2026-Q3',
+        source: 'manual',
+        jiraKey: null,
+        createdAt: 100,
+      }),
+    ]);
+    expect(groups.map(([q]) => q)).toEqual(['2026-Q4', '2026-Q3']);
+    expect(groups[0][1].map((i) => i.key)).toEqual(['LOCAL-new', 'NOVA-2']);
+    expect(groups[1][1].map((i) => i.key)).toEqual(['LOCAL-old', 'NOVA-1']);
+  });
+
+  it('keeps quarters in order and Jira rows in server key order without manual items', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-9', quarter: '2026-Q4' }),
+      backlog({ key: 'NOVA-2', quarter: '2026-Q3' }),
+      backlog({ key: 'NOVA-1', quarter: '2026-Q3' }),
+    ]);
+    expect(groups.map(([q]) => q)).toEqual(['2026-Q3', '2026-Q4']);
+    expect(groups[0][1].map((i) => i.key)).toEqual(['NOVA-2', 'NOVA-1']);
+  });
+
+  it('floats an unscheduled manual item created without a quarter', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-1', quarter: '2026-Q3' }),
+      backlog({
+        key: 'LOCAL-noq',
+        quarter: null,
+        source: 'manual',
+        jiraKey: null,
+        createdAt: 300,
+      }),
+    ]);
+    expect(groups.map(([q]) => q)).toEqual([NO_QUARTER_GROUP, '2026-Q3']);
+  });
+
+  it('sorts the no-quarter group last when nothing was created by hand', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-0', quarter: null }),
+      backlog({ key: 'NOVA-1', quarter: '2026-Q4' }),
+      backlog({ key: 'NOVA-2', quarter: '2026-Q3' }),
+    ]);
+    expect(groups.map(([q]) => q)).toEqual(['2026-Q3', '2026-Q4', NO_QUARTER_GROUP]);
+  });
+
+  it('tolerates a server that does not send createdAt yet', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-1', quarter: '2026-Q3' }),
+      backlog({ key: 'LOCAL-a', quarter: '2026-Q3', source: 'manual', jiraKey: null }),
+      backlog({ key: 'LOCAL-b', quarter: '2026-Q3', source: 'manual', jiraKey: null }),
+    ]);
+    expect(groups[0][1].map((i) => i.key)).toEqual(['LOCAL-a', 'LOCAL-b', 'NOVA-1']);
   });
 });
 
@@ -329,6 +410,94 @@ describe('markers helpers', () => {
     expect(trackMarkers(row).map((m) => m.id)).toEqual(['d2', 'p1']);
   });
 
+  it('describes missing ETA vs Target End mismatch for hover', () => {
+    const missing = item({
+      markers: [
+        {
+          id: 'd1',
+          kind: 'dep',
+          label: 'Legal copy',
+          date: null,
+          jiraKey: 'LEGAL-1',
+          jiraStatus: 'In Progress',
+          jiraTargetEnd: '2026-08-18',
+          jiraFetchedAt: 1,
+          createdBy: 't',
+          version: 1,
+        },
+      ],
+    });
+    expect(depHoverTip(missing.markers[0])).toContain('缺 ETA · Jira Target End 08-18');
+    expect(depBadgeTip(missing)).toContain('单击可同步为 ETA');
+
+    const drift = item({
+      markers: [
+        {
+          id: 'd2',
+          kind: 'dep',
+          label: 'Platform',
+          date: '2026-08-12',
+          jiraKey: 'PLAT-1',
+          jiraStatus: 'In Progress',
+          jiraTargetEnd: '2026-08-18',
+          createdBy: 't',
+          version: 1,
+        },
+      ],
+    });
+    expect(driftedDepCount(drift)).toBe(1);
+    expect(depHoverTip(drift.markers[0])).toContain('不一致');
+    expect(depBadgeTip(drift)).toContain('不一致');
+    expect(canAdoptJiraTargetEnd(drift.markers[0])).toBe(true);
+    expect(depAdoptLabel(drift.markers[0])).toBe('改用 Jira 08-18');
+  });
+
+  it('builds adopt labels for mixed deps without requiring every row to have Target End', () => {
+    expect(
+      depAdoptLabel({ date: '2026-08-12', jiraTargetEnd: '2026-08-18' }),
+    ).toBe('改用 Jira 08-18');
+    expect(depAdoptLabel({ date: null, jiraTargetEnd: '2026-08-18' })).toBe(
+      '采用 08-18 为 ETA',
+    );
+    expect(depAdoptLabel({ date: '2026-08-10', jiraTargetEnd: null })).toBe(null);
+    expect(depAdoptLabel({ date: null, jiraTargetEnd: undefined })).toBe(null);
+    expect(
+      depStatusChipLabel({
+        jiraKey: 'CNV-1',
+        jiraStatus: null,
+      }),
+    ).toBe('未刷新');
+    expect(
+      depStatusIsStale({ jiraKey: 'CNV-1', jiraStatus: null }),
+    ).toBe(true);
+    expect(
+      depStatusChipLabel({
+        jiraKey: 'CNV-1',
+        jiraStatus: 'In Progress',
+      }),
+    ).toBe('In Progress');
+    expect(
+      depStatusIsStale({ jiraKey: 'CNV-1', jiraStatus: 'In Progress' }),
+    ).toBe(false);
+    expect(
+      depStatusChipLabel({
+        jiraKey: 'CNV-1',
+        jiraStatus: null,
+      }),
+    ).toBe('未刷新');
+    expect(
+      canAdoptJiraTargetEnd({
+        id: 'd3',
+        kind: 'dep',
+        label: 'manual',
+        date: '2026-08-10',
+        jiraKey: null,
+        createdBy: 't',
+        version: 1,
+      }),
+    ).toBe(false);
+  });
+
   it('defaults phase dates past the bar end with stagger', () => {
     const row = item({
       start: '2026-08-01',
@@ -390,6 +559,32 @@ describe('sync ticker', () => {
         'me',
       ),
     ).toBe(hit);
+  });
+
+  it('pickTickerEntry skips other teams and silent release-sheet refresh', () => {
+    const otherTeam = entry({
+      id: 'other-team',
+      teamId: 't2',
+      op: 'move',
+    });
+    const silentSheet = entry({
+      id: 'sheet',
+      op: 'update_release_sheet',
+      actorName: '系统',
+      actorClientId: 'system',
+      summary: { cleared: false, silent: true, rowCount: 499 },
+      text: '系统 静默更新了发布时间表标尺',
+    });
+    const cleared = entry({
+      id: 'cleared',
+      op: 'update_release_sheet',
+      summary: { cleared: true },
+      text: 'Kevin 清除了发布时间表标尺',
+    });
+    expect(pickTickerEntry([otherTeam, silentSheet], 'me', 't1')).toBeNull();
+    expect(pickTickerEntry([silentSheet, cleared], 'me', 't1')).toBe(cleared);
+    expect(isSystemActivity(silentSheet)).toBe(true);
+    expect(isSystemActivity(cleared)).toBe(false);
   });
 
   it('tickerLabel strips actor prefix and truncates', () => {

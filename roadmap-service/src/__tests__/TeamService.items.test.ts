@@ -90,6 +90,11 @@ describe('add_item / delete_item', () => {
     expect(item.jiraKey).toBeNull();
     expect(item.type).toBe('Epic');
     expect(item.projectKey).toBe('NOVA');
+    // Backlog floats the newest manual row, so the row needs a creation stamp.
+    expect(item.createdAt).toBeGreaterThan(0);
+    expect(item.createdAt).toBeGreaterThanOrEqual(
+      itemOf(result.snapshot, 'NOVA-1').createdAt,
+    );
   });
 
   it('hard-deletes an unresolved manual row together with its subs', () => {

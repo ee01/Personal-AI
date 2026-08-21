@@ -38,6 +38,11 @@ import {
   type ChildLink,
   type JiraIssueTypeMeta,
 } from './jiraCreateMeta';
+import {
+  applyParentQuarters,
+  chunk,
+  parentKeysNeedingQuarter,
+} from './roadmapImportQuarter';
 import { handleLLMRequest } from './llm';
 import {
   readTeamId,
@@ -202,52 +207,6 @@ function showBridgeBadge(text: string, hideAfterMs: number): void {
   }, hideAfterMs);
 }
 
-async function renderMemoryCandidates(): Promise<void> {
-  const mount = document.getElementById('pai-memory-candidates');
-  if (!mount) return;
-  try {
-    const response = await roadmapMemoryCall<{ candidates: any[] }>(
-      'getMemoryProjectCandidates',
-    );
-    const candidates = response?.candidates || [];
-    if (!candidates.length) {
-      mount.innerHTML = '';
-      return;
-    }
-    mount.innerHTML = `
-      <div class="pai-mem-cand-head">记忆里在谈但不在 JQL 里</div>
-      ${candidates
-        .map(
-          (c: any) => `
-        <div class="pai-mem-cand-card" draggable="true" data-title="${escapeHtml(c.title)}">
-          <div class="pai-mem-cand-title">${escapeHtml(c.title)}</div>
-          <div class="pai-mem-cand-meta">${escapeHtml(c.type || 'Topic')} · ${c.mentionCount || 0} 次提及</div>
-        </div>`,
-        )
-        .join('')}
-    `;
-    mount.querySelectorAll('.pai-mem-cand-card').forEach((el) => {
-      el.addEventListener('dragstart', (event) => {
-        const title = (el as HTMLElement).dataset.title || '';
-        (event as DragEvent).dataTransfer?.setData(
-          'application/pai-memory-candidate',
-          JSON.stringify({ title, source: 'memory' }),
-        );
-      });
-    });
-  } catch (error) {
-    console.warn('[pai-roadmap] memory candidates unavailable', error);
-  }
-}
-
-function escapeHtml(value: string): string {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 async function renderDriftBadges(): Promise<void> {
   try {
     const response = await roadmapMemoryCall<{ items: any[] }>(
@@ -348,7 +307,6 @@ async function syncFocusSnapshot(state: RoadmapStateMessage): Promise<void> {
     addedTitles: firstPaint ? [] : addedTitles,
     forceShow: firstPaint || focusCount !== prevCount,
   });
-  void renderMemoryCandidates();
   void renderDriftBadges();
 }
 
@@ -423,31 +381,83 @@ function estimateWeeks(fields: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
-function mapIssueToImportItem(issue: any): ImportItemPayload | null {
+function mapIssueToImportItem(
+  issue: any,
+): { item: ImportItemPayload; parentKey: string | null } | null {
   const key = String(issue?.key || '').trim();
   if (!key) return null;
   const fields = (issue?.fields || {}) as Record<string, unknown>;
   const targetEnd =
     toIsoDate(fields[JIRA_FIELD_TARGET_END]) ||
     toIsoDate(fields[JIRA_FIELD_END_DATE]);
+  const parentLink = fields[JIRA_FIELD_PARENT_LINK];
   return {
-    key,
-    type: String((fields.issuetype as { name?: string } | undefined)?.name || 'Epic'),
-    title: String(fields.summary || key),
-    quarter: optionValue(fields[JIRA_FIELD_QUARTER]),
-    estimate: estimateWeeks(fields),
-    targetStart: toIsoDate(fields[JIRA_FIELD_TARGET_START]),
-    targetEnd,
+    item: {
+      key,
+      type: String((fields.issuetype as { name?: string } | undefined)?.name || 'Epic'),
+      title: String(fields.summary || key),
+      quarter: optionValue(fields[JIRA_FIELD_QUARTER]),
+      estimate: estimateWeeks(fields),
+      targetStart: toIsoDate(fields[JIRA_FIELD_TARGET_START]),
+      targetEnd,
+    },
+    parentKey: typeof parentLink === 'string' && parentLink.trim()
+      ? parentLink.trim()
+      : null,
   };
+}
+
+/**
+ * Read `Target Delivery Quarter` off the parent Initiatives. See
+ * `roadmapImportQuarter.ts` for why the children need this at all.
+ */
+async function fetchParentQuarters(
+  parentKeys: string[],
+  baseUrl: string,
+): Promise<Map<string, string>> {
+  const byKey = new Map<string, string>();
+  for (const batch of chunk(parentKeys)) {
+    const jql = `key in (${batch.join(', ')})`;
+    const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/search`, {
+      method: 'POST',
+      body: {
+        jql,
+        startAt: 0,
+        maxResults: batch.length,
+        fields: [JIRA_FIELD_QUARTER],
+      },
+      requestLabel: 'roadmap import parent quarter',
+    });
+    if (!response.ok) {
+      // A missing parent quarter only costs grouping, so never fail the import.
+      console.warn(
+        '[pai-roadmap] parent quarter lookup failed',
+        response.status,
+        jql,
+      );
+      continue;
+    }
+    const data = await response.json();
+    for (const issue of Array.isArray(data.issues) ? data.issues : []) {
+      const key = String(issue?.key || '').trim();
+      const quarter = optionValue(
+        (issue?.fields as Record<string, unknown> | undefined)?.[
+          JIRA_FIELD_QUARTER
+        ],
+      );
+      if (key && quarter) byKey.set(key, quarter);
+    }
+  }
+  return byKey;
 }
 
 async function handleFetchIssueDates(
   jiraKey: string,
-): Promise<string | null> {
+): Promise<{ targetEnd: string | null; status: string | null }> {
   const key = String(jiraKey || '').trim();
   if (!key) throw new Error('jira_key_required');
   const baseUrl = await getJiraBaseUrl();
-  const fields = [JIRA_FIELD_TARGET_END, JIRA_FIELD_END_DATE].join(',');
+  const fields = [JIRA_FIELD_TARGET_END, JIRA_FIELD_END_DATE, 'status'].join(',');
   const response = await jiraFetchViaBackground(
     `${baseUrl}/rest/api/2/issue/${encodeURIComponent(key)}?fields=${fields}`,
     { method: 'GET' },
@@ -460,11 +470,18 @@ async function handleFetchIssueDates(
   }
   const issue = await response.json();
   const issueFields = (issue?.fields || {}) as Record<string, unknown>;
-  return (
-    toIsoDate(issueFields[JIRA_FIELD_TARGET_END]) ||
-    toIsoDate(issueFields[JIRA_FIELD_END_DATE]) ||
-    null
-  );
+  const statusRaw = issueFields.status as { name?: unknown } | string | null;
+  const status =
+    typeof statusRaw === 'string'
+      ? statusRaw.trim() || null
+      : String(statusRaw?.name || '').trim() || null;
+  return {
+    targetEnd:
+      toIsoDate(issueFields[JIRA_FIELD_TARGET_END]) ||
+      toIsoDate(issueFields[JIRA_FIELD_END_DATE]) ||
+      null,
+    status,
+  };
 }
 
 export type RemoteChildTask = {
@@ -632,6 +649,7 @@ type JiraRefreshIssue = {
   targetStart: string | null;
   targetEnd: string | null;
   assignee: string | null;
+  status: string | null;
   fetchedAt: number;
 };
 
@@ -642,10 +660,19 @@ function jiraAssigneeDisplay(raw: unknown): string | null {
   return display || null;
 }
 
+function jiraStatusName(raw: unknown): string | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') return raw.trim() || null;
+  if (typeof raw === 'object' && 'name' in raw) {
+    return String((raw as { name?: unknown }).name || '').trim() || null;
+  }
+  return null;
+}
+
 async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue[]> {
   const unique = [
     ...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean)),
-  ].slice(0, 50);
+  ].slice(0, 75);
   if (!unique.length) return [];
   const token = await getJiraToken();
   if (!token) {
@@ -660,6 +687,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     JIRA_FIELD_TARGET_START,
     JIRA_FIELD_TARGET_END,
     'assignee',
+    'status',
   ];
   const fetchedAt = Date.now();
   const out: JiraRefreshIssue[] = [];
@@ -696,6 +724,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
         targetStart: toIsoDate(f[JIRA_FIELD_TARGET_START]) || null,
         targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]) || null,
         assignee: jiraAssigneeDisplay(f.assignee),
+        status: jiraStatusName(f.status),
         fetchedAt,
       });
     }
@@ -752,10 +781,12 @@ async function handleImportJql(
     JIRA_FIELD_TARGET_END,
     JIRA_FIELD_END_DATE,
     JIRA_FIELD_QUARTER,
+    JIRA_FIELD_PARENT_LINK,
     JIRA_FIELD_DEV_ESTIMATE,
   ];
 
   const items: ImportItemPayload[] = [];
+  const parentKeyByItem = new Map<string, string>();
   let startAt = 0;
   const maxResults = 100;
   let total = Infinity;
@@ -786,16 +817,26 @@ async function handleImportJql(
     const page = Array.isArray(data.issues) ? data.issues : [];
     for (const issue of page) {
       const mapped = mapIssueToImportItem(issue);
-      if (mapped) items.push(mapped);
+      if (!mapped) continue;
+      items.push(mapped.item);
+      if (mapped.parentKey) parentKeyByItem.set(mapped.item.key, mapped.parentKey);
     }
     if (!page.length) break;
     startAt += page.length;
     if (startAt > 2000) break; // hard safety cap
   }
 
+  const parentKeys = parentKeysNeedingQuarter(items, parentKeyByItem);
+  let backfilled = 0;
+  if (parentKeys.length) {
+    const quarterByParent = await fetchParentQuarters(parentKeys, baseUrl);
+    backfilled = applyParentQuarters(items, parentKeyByItem, quarterByParent);
+  }
+
   console.info('[pai-roadmap] import jql', {
     quarters,
     total: items.length,
+    quarterFromParent: backfilled,
     jql: effectiveJql,
   });
   return items;
@@ -1678,6 +1719,8 @@ async function handleAgentCreateJira(
       prompt: enrichedPrompt,
       executor,
     }),
+    // This flow creates Jira issues, not merely a draft or report.
+    mode: 'write',
     executor,
     notify: false,
     idempotencyKey,
@@ -2166,13 +2209,14 @@ function injectBridge(): void {
         '*',
       );
       try {
-        const targetEnd = await handleFetchIssueDates(String(data.jiraKey || ''));
+        const info = await handleFetchIssueDates(String(data.jiraKey || ''));
         window.postMessage(
           {
             type: 'pai-roadmap-fetch-issue-dates-result',
             requestId: data.requestId,
             ok: true,
-            targetEnd,
+            targetEnd: info.targetEnd,
+            status: info.status,
           },
           '*',
         );

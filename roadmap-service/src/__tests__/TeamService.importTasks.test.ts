@@ -196,4 +196,35 @@ describe('importTasksFromJira', () => {
     expect(updated.targetStart).toBe('2026-08-10');
     expect(updated.targetEnd).toBe('2026-08-24');
   });
+
+  it('confirmTargetSync restores schedule if silent refresh raced stale Target', () => {
+    const before = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-200')!;
+    // Simulate open-page refresh applying old Jira Target after the user resized.
+    expectOk(
+      apply(teamId, {
+        op: 'resize',
+        itemKey: 'NOVA-200',
+        start: '2026-08-01',
+        days: 12,
+        baseVersion: before.version,
+      }),
+    );
+    const mid = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-200')!;
+    expect(mid.start).toBe('2026-08-01');
+    expect(mid.days).toBe(12);
+
+    const result = confirmTargetSync(teamId, actor, {
+      itemKey: 'NOVA-200',
+      start: '2026-08-01',
+      end: '2026-08-18',
+      jiraKey: 'NOVA-200',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const updated = result.snapshot.items.find((i) => i.key === 'NOVA-200')!;
+    expect(updated.targetStart).toBe('2026-08-01');
+    expect(updated.targetEnd).toBe('2026-08-18');
+    expect(updated.start).toBe('2026-08-01');
+    expect(updated.days).toBe(18);
+  });
 });

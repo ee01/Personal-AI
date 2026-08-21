@@ -73,9 +73,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     jiraEnabled: config.jira.enabled,
   }));
 
-  app.get('/api/v1/teams', async () => ({
-    items: listTeams(),
-  }));
+  app.get('/api/v1/teams', async (request) => {
+    const raw = String((request.query as { ids?: string }).ids || '');
+    const ids = raw
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    return { items: listTeams(ids) };
+  });
 
   app.post('/api/v1/teams', async (request, reply) => {
     const body = (request.body || {}) as Record<string, unknown>;
@@ -269,7 +274,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       touchPresence(teamId, actor);
 
       const unsubscribe = getEventBus().subscribe((event, data, eventTeamId) => {
-        if (eventTeamId && eventTeamId !== teamId) return;
+        if (eventTeamId !== teamId) return;
         reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       });
 

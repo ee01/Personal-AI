@@ -49,7 +49,7 @@ describe('useReleaseRuler', () => {
     expect(phaseKind('Custom Gate')).toBe('other');
   });
 
-  it('parses rows and builds FF segments without RIO as its own band', () => {
+  it('parses rows and builds FF end-owned segments without RIO as its own band', () => {
     const parsed = parseReleaseRows(rows);
     expect(kindsInParsed(parsed)).toEqual(['ff', 're', 'stage', 'pro', 'mr']);
     expect(parsed.releases.map((r) => r.name)).toEqual([
@@ -58,15 +58,29 @@ describe('useReleaseRuler', () => {
       '26.3.140',
       'RIO 26.3.141',
     ]);
+    const ffOf = (name: string) =>
+      parsed.phases.find((p) => p.kind === 'ff' && p.release === name)!.date;
     const segs = relSegments(parsed, 'ff');
     expect(segs).toHaveLength(3);
-    expect(segs[0].rel.name).toBe('26.3.130');
-    expect(segs[1].rel.name).toBe('26.3.135');
-    expect(segs[2].rel.name).toBe('26.3.140');
+    expect(segs.map((s) => s.rel.name)).toEqual([
+      '26.3.130',
+      '26.3.135',
+      '26.3.140',
+    ]);
+    // End-owned: column for R ends at R's FF; next column starts there.
+    // 130's FF is its first phase → first band pads 4d before the split.
+    expect(segs[0].end.getTime()).toBe(ffOf('26.3.130').getTime());
+    expect(segs[0].start.getTime()).toBeLessThan(segs[0].end.getTime());
+    expect(segs[1].start.getTime()).toBe(ffOf('26.3.130').getTime());
+    expect(segs[1].end.getTime()).toBe(ffOf('26.3.135').getTime());
+    expect(segs[2].start.getTime()).toBe(ffOf('26.3.135').getTime());
+    expect(segs[2].end.getTime()).toBe(ffOf('26.3.140').getTime());
   });
 
-  it('makes RIO its own segment when split is Pro', () => {
+  it('makes RIO its own end-owned segment when split is Pro', () => {
     const parsed = parseReleaseRows(rows);
+    const proOf = (name: string) =>
+      parsed.phases.find((p) => p.kind === 'pro' && p.release === name)!.date;
     const segs = relSegments(parsed, 'pro');
     expect(segs.map((s) => s.rel.name)).toEqual([
       '26.3.130',
@@ -74,6 +88,15 @@ describe('useReleaseRuler', () => {
       '26.3.140',
       'RIO 26.3.141',
     ]);
+    // First Pro band starts at that release's earliest phase (FF), ends at Pro.
+    expect(segs[0].start.getTime()).toBe(
+      parsed.releases.find((r) => r.name === '26.3.130')!.start.getTime(),
+    );
+    expect(segs[0].end.getTime()).toBe(proOf('26.3.130').getTime());
+    expect(segs[1].start.getTime()).toBe(proOf('26.3.130').getTime());
+    expect(segs[1].end.getTime()).toBe(proOf('26.3.135').getTime());
+    expect(segs[3].start.getTime()).toBe(proOf('26.3.140').getTime());
+    expect(segs[3].end.getTime()).toBe(proOf('RIO 26.3.141').getTime());
   });
 
   it('defaults split to FF and keeps split phase in shown set', () => {

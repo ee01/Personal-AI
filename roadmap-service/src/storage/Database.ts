@@ -142,6 +142,14 @@ const MIGRATIONS: Migration[] = [
       addColumn(database, 'teams', 'jira_refreshed_at', 'INTEGER');
     },
   },
+  {
+    id: '012_marker_jira_cache',
+    up: (database) => {
+      addColumn(database, 'item_markers', 'jira_status', 'TEXT');
+      addColumn(database, 'item_markers', 'jira_target_end', 'TEXT');
+      addColumn(database, 'item_markers', 'jira_fetched_at', 'INTEGER');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {
