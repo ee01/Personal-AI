@@ -207,16 +207,75 @@ export function getDigestDeliveryItems(items: TopicItemWithAutoReply[]): Array<
   return items.filter(shouldQueueRuleDigest);
 }
 
+export function getImmediateNotificationItems(params: {
+  manualItems: TopicItemWithAutoReply[];
+  followThreadItem?: TopicItemWithAutoReply;
+}): TopicItemWithAutoReply[] {
+  const items: TopicItemWithAutoReply[] = [];
+  const seen = new Set<string>();
+
+  const push = (item?: TopicItemWithAutoReply) => {
+    if (!item?.notifyMethod?.trim()) return;
+    if (shouldQueueRuleDigest(item)) return;
+    const key = item.id || item.text;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+
+  push(params.followThreadItem);
+  for (const item of params.manualItems) {
+    push(item);
+  }
+
+  return items;
+}
+
 export function getImmediateNotificationItem(params: {
   manualItems: TopicItemWithAutoReply[];
   followThreadItem?: TopicItemWithAutoReply;
 }): TopicItemWithAutoReply | undefined {
-  if (params.followThreadItem?.notifyMethod?.trim()) {
-    return params.followThreadItem;
-  }
+  return getImmediateNotificationItems(params)[0];
+}
 
-  return params.manualItems.find(
-    (item) =>
-      Boolean(item.notifyMethod?.trim()) && !shouldQueueRuleDigest(item),
-  );
+export function formatImmediateNotificationMatchedRule(
+  items: TopicItemWithAutoReply[],
+  fallback = '',
+): string {
+  const mentionItems = items.filter((item) => Boolean(item.mentionMe));
+  const otherItems = items.filter((item) => !item.mentionMe);
+  const labels = [...mentionItems, ...otherItems]
+    .map((item) => {
+      const text = (item.text || '').trim();
+      if (!text) return '';
+      return item.mentionMe ? `${text}（@提醒）` : text;
+    })
+    .filter(Boolean);
+
+  return labels.join('\n') || fallback;
+}
+
+export function resolveImmediateNotificationDelivery(params: {
+  manualItems: TopicItemWithAutoReply[];
+  followThreadItem?: TopicItemWithAutoReply;
+  fallbackMatchedRule?: string;
+}): {
+  items: TopicItemWithAutoReply[];
+  notifyMethod: string;
+  mention: boolean;
+  matchedRule: string;
+} {
+  const items = getImmediateNotificationItems(params);
+  const fallback =
+    params.fallbackMatchedRule ||
+    (params.followThreadItem
+      ? `关注后续：${params.followThreadItem.followConfig?.originalMessage.content?.substring(0, 50) || ''}...`
+      : '');
+
+  return {
+    items,
+    notifyMethod: items[0]?.notifyMethod || '',
+    mention: items.some((item) => Boolean(item.mentionMe)),
+    matchedRule: formatImmediateNotificationMatchedRule(items, fallback),
+  };
 }

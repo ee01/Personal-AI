@@ -38,8 +38,8 @@ import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 import {
   createMessageAnalysisDeliveryReceipt,
   getDigestDeliveryItems,
-  getImmediateNotificationItem,
   persistMessageAnalysisDeliveryReceipt,
+  resolveImmediateNotificationDelivery,
   shouldQueueRuleDigest,
   type MessageAnalysisDeliveryReceipt,
   type MessageAnalysisDeliveryRunMode,
@@ -1183,14 +1183,15 @@ export async function analyzeMessagesInBackground(
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
         );
-        const matchedConcernedItem = getImmediateNotificationItem({
+        const immediateDelivery = resolveImmediateNotificationDelivery({
           manualItems: matchedManualItems,
           followThreadItem,
+          fallbackMatchedRule: result.matchedRule,
         });
 
         // 获取通知方式
-        const notifyMethod = matchedConcernedItem?.notifyMethod || '';
-        const shouldMention = matchedConcernedItem?.mentionMe || false;
+        const notifyMethod = immediateDelivery.notifyMethod;
+        const shouldMention = immediateDelivery.mention;
         const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
           matchedRule: result.matchedRule,
@@ -1229,11 +1230,7 @@ export async function analyzeMessagesInBackground(
             summary: result.summary || '',
             datetime: originalMessage.datetime || '',
             postId,
-            matchedRule:
-              result.matchedRule ||
-              (followThreadItem
-                ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
-                : ''),
+            matchedRule: immediateDelivery.matchedRule,
             replyAdvice: result.replyAdvice || '',
             mention: shouldMention,
             pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
@@ -1482,8 +1479,9 @@ export async function analyzeMessagesInBackground(
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
         );
-        const matchedConcernedItem = getImmediateNotificationItem({
+        const immediateDelivery = resolveImmediateNotificationDelivery({
           manualItems: matchedManualItems,
+          fallbackMatchedRule: processResult.matchedRule,
         });
         const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
@@ -1501,8 +1499,8 @@ export async function analyzeMessagesInBackground(
         // 如果需要发送通知
         if (processResult.shouldNotify) {
           // 获取通知方式
-          const notifyMethod = matchedConcernedItem?.notifyMethod || '';
-          const shouldMention = matchedConcernedItem?.mentionMe || false;
+          const notifyMethod = immediateDelivery.notifyMethod;
+          const shouldMention = immediateDelivery.mention;
 
           // 如果有配置通知方式，则发送通知
           if (notifyMethod) {
@@ -1515,7 +1513,7 @@ export async function analyzeMessagesInBackground(
               summary: processResult.summary || '',
               datetime: processResult.messageContext?.datetime || '',
               postId: post.id || '',
-              matchedRule: processResult.matchedRule || '',
+              matchedRule: immediateDelivery.matchedRule,
               replyAdvice: processResult.replyAdvice || '',
               mention: shouldMention,
               pushScenario: 'message_analysis',
@@ -2028,15 +2026,15 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         }
 
         // 2️⃣ 统一通知推送（合并关注后续和普通推送）
-        // 查找匹配的关注项
-        const matchedConcernedItem = getImmediateNotificationItem({
+        const immediateDelivery = resolveImmediateNotificationDelivery({
           manualItems: matchedManualItems,
           followThreadItem,
+          fallbackMatchedRule: matched_rule,
         });
 
         // 获取通知方式
-        const notifyMethod = matchedConcernedItem?.notifyMethod || '';
-        const shouldMention = matchedConcernedItem?.mentionMe || false;
+        const notifyMethod = immediateDelivery.notifyMethod;
+        const shouldMention = immediateDelivery.mention;
         const digestQueueEntries = await queueMatchedRuleDigests({
           items: matchedManualItems,
           matchedRule: matched_rule,
@@ -2078,11 +2076,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             summary: json.summary || '',
             datetime: json.datetime,
             postId: json.post_id,
-            matchedRule:
-              matched_rule ||
-              (followThreadItem
-                ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
-                : ''),
+            matchedRule: immediateDelivery.matchedRule,
             replyAdvice: json.reply_advice,
             mention: shouldMention,
             pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
