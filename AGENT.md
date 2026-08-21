@@ -94,7 +94,7 @@ After implementing code, choose the smallest validation tier that gives real con
 | 1 - Local compile / targeted tests | Any runtime source, webpack/static assets, manifest, package scripts, env plumbing | Run targeted tests if available. Run dev extension build via `npm start`, wait for first successful compile, then stop it |
 | 2 - Extension E2E | Popup/options/side panel/content script/background/manifest behavior, user-visible UI, cross-context messaging | Tier 1 plus Playwright extension E2E against fresh `dist/` or the relevant existing helper script |
 | 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension, real memory-service data, live roadmap-service at `:3220` / `roadmap.xmnup.com`, or installed desktop app integration | Tier 2 where practical, then use webpage-mcp against the real Chrome profile/dev extension, `npm run deploy:memory` plus `10.32.56.212` checks, `npm run deploy:roadmap` plus `npm run verify:roadmap-service`, or `npm run build:app` plus Computer Use installer validation |
-| 4 - Delivery gate | A complete feature/fix that is ready to hand off | Ensure relevant validation passes, summarize evidence, then commit and push when the task calls for delivery and the staging set is cleanly owned |
+| 4 - Delivery gate | A complete feature/fix that is ready to hand off | Ensure relevant validation passes, summarize evidence, then auto-commit the owned files. If the change is large, also push to the tracked branch |
 
 Decision examples:
 
@@ -188,13 +188,23 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
 
 ### Commit / Push Gate
 
-After a complete feature or bug fix is validated:
+After a complete feature or bug fix is validated, **auto-commit**. Do not wait for the user to say "commit" or "提交".
 
-- Commit and push when the user requested a deliverable implementation or the task explicitly includes git delivery
+- Create a conventional commit (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`) for the files owned by the current work
+- Split independent features into separate commits when the working tree contains more than one landed change
 - Stage only files owned by the current task; do not include unrelated dirty worktree changes
-- If unrelated changes are present, report them and ask before staging anything ambiguous
+- If unrelated changes are present, commit the owned set and report the leftovers; ask before staging anything ambiguous
+- Never commit secrets (`.env`, credentials, tokens). Never skip hooks. Never force-push `main`/`master`/`develop` unless the user explicitly requests it
 - Consider bumping `src/manifest.json` version for release-facing extension changes, permission changes, packaging updates, or user-visible features that should be identifiable in Chrome; skip for internal tests/docs unless asked
 - Include the validation evidence in the final response and, when appropriate, in the commit message body
+
+**Auto-push when the change is large.** After a successful commit, also `git push` to the current tracked branch when any of these is true:
+
+- The commit is a user-visible feature or delivery-gate fix
+- The owned change set is roughly 5 or more files, or spans multiple packages (`src/`, `memory-service/`, `roadmap-service/`, `desktop-app/`, `worker/`)
+- The user already said the work is ready to land, ship, or share
+
+Keep a small local experiment, typo, or docs-only probe as a local commit unless the user asked to push. If there is no tracked upstream branch, create one with `-u` on first push. Do not rewrite published history.
 
 ### Build Commands
 
