@@ -418,4 +418,23 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     }
     return reply.status(200).send({ session });
   });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      maxFollowup?: number;
+      followupIntervalSeconds?: number;
+    };
+  }>('/outreach/sessions/:id/continue-followup', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    try {
+      const session = engine.continueFollowup(request.params.id, request.body ?? {});
+      return reply.status(200).send({ session });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const notFound = message === 'Outreach session not found';
+      return reply.status(notFound ? 404 : 400).send({ error: message });
+    }
+  });
 }

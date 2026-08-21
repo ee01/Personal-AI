@@ -24,6 +24,12 @@ import {
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
+import { buildHumanOutreachFollowupText } from './outreachFollowupText.js';
+import {
+  buildOutreachResultNotice,
+  collectFollowupMessageRefs,
+  normalizeContinueFollowupInput,
+} from './outreachResultNotice.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { RecallEngine } from './RecallEngine.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
@@ -1974,6 +1980,63 @@ export class OutreachEngine {
     return updated;
   }
 
+  continueFollowup(
+    id: string,
+    input: {
+      maxFollowup?: number;
+      followupIntervalSeconds?: number;
+    } = {},
+  ): OutreachSessionRecord {
+    const session = this.repo.getSessionById(id);
+    if (!session) {
+      throw new Error('Outreach session not found');
+    }
+    const continuable = new Set<OutreachSessionStatus>([
+      'resolved',
+      'no_reply',
+      'escalated',
+      'failed',
+    ]);
+    if (!continuable.has(session.status)) {
+      throw new Error(
+        'Only resolved, timed-out, escalated, or failed outreach sessions can continue follow-up.',
+      );
+    }
+    if (!session.sentChatId) {
+      throw new Error(
+        'This outreach session has no original thread, so follow-up cannot continue.',
+      );
+    }
+    const { maxFollowup, followupIntervalSeconds } =
+      normalizeContinueFollowupInput(input);
+    const currentTime = now();
+    const updated = this.repo.updateSession(id, {
+      status: 'waiting_reply',
+      followupCount: 0,
+      maxFollowup,
+      followupIntervalSeconds,
+      waitUntil: currentTime + followupIntervalSeconds,
+      nextCheckAt: currentTime,
+      lastPollAt: currentTime,
+      errorCode: null,
+      errorMessage: null,
+      terminalSyncedAt: null,
+      actionResultId: null,
+      resolvedAt: null,
+    });
+    if (!updated) {
+      throw new Error('Outreach session not found');
+    }
+    this.repo.createEvent(id, 'followup_continued', {
+      previousStatus: session.status,
+      maxFollowup,
+      followupIntervalSeconds,
+      waitUntil: updated.waitUntil ?? null,
+      nextCheckAt: updated.nextCheckAt ?? null,
+    });
+    return updated;
+  }
+
   async createSessionFromAction(
     input: CreateSessionFromActionInput,
   ): Promise<OutreachSessionRecord> {
@@ -3577,7 +3640,9 @@ export class OutreachEngine {
     }
 
     try {
-      const followupText = `Follow-up: ${session.renderedQuestion}`;
+      const followupText = buildHumanOutreachFollowupText(
+        session.renderedQuestion,
+      );
       const sent = await this.ringClient.sendMessage({
         targetType: session.targetType,
         targetRef: session.sentChatId,
@@ -3633,13 +3698,21 @@ export class OutreachEngine {
       resolvedAt: currentTime,
     });
     this.repo.createEvent(sessionId, status, outcome);
-    if (status === 'resolved') {
-      await this.notifyResolvedSessionIfNeeded(sessionId, outcome);
+    if (
+      status === 'resolved' ||
+      status === 'no_reply' ||
+      status === 'escalated'
+    ) {
+      await this.notifyTerminalSessionIfNeeded(sessionId, status, outcome);
     }
   }
 
-  private async notifyResolvedSessionIfNeeded(
+  private async notifyTerminalSessionIfNeeded(
     sessionId: string,
+    status: Extract<
+      OutreachSessionStatus,
+      'resolved' | 'no_reply' | 'escalated'
+    >,
     outcome: Record<string, unknown>,
   ): Promise<void> {
     const runtime = this.getRuntimeConfig();
@@ -3648,9 +3721,17 @@ export class OutreachEngine {
     if (!session) return;
 
     const existingEvents = this.repo.listEventsBySession(sessionId, 200);
-    if (existingEvents.some((event) => event.eventType === 'result_notified')) {
-      return;
-    }
+    const lastResumeIndex = existingEvents.reduce(
+      (latest, event, index) =>
+        event.eventType === 'followup_continued' || event.eventType === 'retried'
+          ? index
+          : latest,
+      -1,
+    );
+    const alreadyNotified = existingEvents
+      .slice(lastResumeIndex + 1)
+      .some((event) => event.eventType === 'result_notified');
+    if (alreadyNotified) return;
 
     const summary = extractOutcomeSummary(outcome);
     if (!summary) return;
@@ -3665,16 +3746,23 @@ export class OutreachEngine {
 
     const targetLabel =
       session.targetResolvedLabel?.trim() || session.targetRef.trim();
-    const bodyLines = [
-      targetLabel ? `对象：${targetLabel}` : '',
-      `问题：${session.renderedQuestion}`,
-      `结果：${summary}`,
-    ].filter(Boolean);
+    const followupMessages = collectFollowupMessageRefs(existingEvents);
+    const notice = buildOutreachResultNotice({
+      status,
+      sessionId,
+      targetLabel,
+      question: session.renderedQuestion,
+      summary,
+      followupCount: session.followupCount,
+      followupMessages,
+      originalChatId: session.sentChatId,
+      originalPostId: session.sentPostId,
+    });
 
     const result = await this.notificationCenterService.deliverNoticeToGlip({
       sourceRef: `outreach:${sessionId}:result`,
-      title: '主动询问结果',
-      body: bodyLines.join('\n'),
+      title: notice.title,
+      body: notice.body,
       mention: false,
       targetUserId: targetMode === 'me' ? this.userId : undefined,
       targetGroupId: targetMode === 'group' ? targetGroupId : undefined,

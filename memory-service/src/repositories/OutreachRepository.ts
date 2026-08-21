@@ -34,6 +34,7 @@ export type OutreachEventType =
   | 'reply_classified'
   | 'deferred_by_reply'
   | 'followup_sent'
+  | 'followup_continued'
   | 'reply_resolution_pending'
   | 'resolved_without_dispatch'
   | 'followup_skipped_by_answer'

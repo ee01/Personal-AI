@@ -1053,8 +1053,12 @@
               <pre>{{ formatJson(session.outcome) }}</pre>
             </div>
 
-            <div v-if="canRetrySession(session)" class="card-actions">
+            <div
+              v-if="canRetrySession(session) || canContinueFollowup(session)"
+              class="card-actions"
+            >
               <button
+                v-if="canRetrySession(session)"
                 class="inline-btn primary"
                 :disabled="Boolean(busyById[session.id])"
                 :title="listActionButtonTitle('retry', session)"
@@ -1062,6 +1066,16 @@
                 @click="retrySession(session.id)"
               >
                 重试
+              </button>
+              <button
+                v-if="canContinueFollowup(session)"
+                class="inline-btn"
+                :disabled="Boolean(busyById[session.id])"
+                :title="continueFollowupListButtonTitle(session)"
+                :aria-label="continueFollowupListButtonAriaLabel(session)"
+                @click="openContinueFollowup(session.id)"
+              >
+                继续追问
               </button>
             </div>
 
@@ -2238,6 +2252,31 @@ function canRetrySession(session: OutreachSession) {
     session.status === 'no_reply' ||
     session.status === 'escalated'
   );
+}
+
+function canContinueFollowup(session: OutreachSession) {
+  return (
+    Boolean(session.sentChatId) &&
+    (session.status === 'resolved' ||
+      session.status === 'no_reply' ||
+      session.status === 'escalated' ||
+      session.status === 'failed')
+  );
+}
+
+function openContinueFollowup(sessionId: string) {
+  void router.push({
+    path: `/outreach/${encodeURIComponent(sessionId)}`,
+    query: { continueFollowup: '1' },
+  });
+}
+
+function continueFollowupListButtonTitle(session: OutreachSession) {
+  return `打开会话详情配置下次追问间隔和次数；当前状态是「${statusLabel(session.status)}」。这次点击不会发送消息或重发原问题。`;
+}
+
+function continueFollowupListButtonAriaLabel(session: OutreachSession) {
+  return `继续追问：${continueFollowupListButtonTitle(session)}`;
 }
 
 function targetTypeLabel(targetType?: string) {

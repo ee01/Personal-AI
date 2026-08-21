@@ -37,6 +37,80 @@ interface FollowupAskToastOptions {
   maxFollowup?: unknown;
 }
 
+export type FollowupAskSetupReason =
+  | 'ready'
+  | 'engine_disabled'
+  | 'ringcentral_missing'
+  | 'config_unavailable';
+
+export interface FollowupAskSetupState {
+  ready: boolean;
+  reason: FollowupAskSetupReason;
+}
+
+export function isRingCentralOutreachReady(runtime: {
+  ringCentralServerUrl?: unknown;
+  ringCentralClientId?: unknown;
+  ringCentralClientSecretConfigured?: unknown;
+  ringCentralJwtConfigured?: unknown;
+}): boolean {
+  return (
+    typeof runtime.ringCentralServerUrl === 'string' &&
+    Boolean(runtime.ringCentralServerUrl.trim()) &&
+    typeof runtime.ringCentralClientId === 'string' &&
+    Boolean(runtime.ringCentralClientId.trim()) &&
+    runtime.ringCentralClientSecretConfigured === true &&
+    runtime.ringCentralJwtConfigured === true
+  );
+}
+
+export function resolveFollowupAskSetupState(input: {
+  outreachEnabled?: unknown;
+  ringCentralReady?: unknown;
+  configUnavailable?: unknown;
+}): FollowupAskSetupState {
+  if (input.configUnavailable === true) {
+    return { ready: false, reason: 'config_unavailable' };
+  }
+  if (input.outreachEnabled !== true) {
+    return { ready: false, reason: 'engine_disabled' };
+  }
+  if (input.ringCentralReady !== true) {
+    return { ready: false, reason: 'ringcentral_missing' };
+  }
+  return { ready: true, reason: 'ready' };
+}
+
+export function buildFollowupAskSetupBoundary(
+  reason: FollowupAskSetupReason,
+): string {
+  if (reason === 'engine_disabled') {
+    return '跟进追问：需要先在 Options 启用主动询问引擎。点击会打开主动询问配置，不会创建跟进会话、发送追问或写 Google Sheet。';
+  }
+  if (reason === 'ringcentral_missing') {
+    return '跟进追问：需要补齐 RingCentral Server URL、Client ID、Client Secret 和 JWT。点击会打开主动询问配置，不会创建跟进会话、发送追问或写 Google Sheet。';
+  }
+  if (reason === 'config_unavailable') {
+    return '跟进追问：暂时无法读取主动询问配置。请确认 Memory Service 可访问后再到 Options 检查。点击会打开配置页，不会创建跟进会话或发送追问。';
+  }
+  return '跟进追问';
+}
+
+export function buildFollowupAskSetupToast(
+  reason: FollowupAskSetupReason,
+): string {
+  if (reason === 'engine_disabled') {
+    return '跟进追问尚未可用：请先在 Options 启用主动询问引擎。未创建跟进会话，也没有发送消息。';
+  }
+  if (reason === 'ringcentral_missing') {
+    return '跟进追问尚未可用：请先补齐 RingCentral Server URL、Client ID、Client Secret 和 JWT。未创建跟进会话，也没有发送消息。';
+  }
+  if (reason === 'config_unavailable') {
+    return '暂时无法读取主动询问配置，请先确认 Memory Service 可访问。未创建跟进会话，也没有发送消息。';
+  }
+  return '跟进追问可用。';
+}
+
 export function buildFollowupAskSubmittingMessage(
   options: FollowupAskSubmittingOptions = {},
 ): string {

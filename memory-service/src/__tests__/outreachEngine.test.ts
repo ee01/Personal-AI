@@ -1451,11 +1451,136 @@ describe('OutreachEngine', () => {
     );
     expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('问题：在哪里可以配置的meeting自动 record？');
     expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('结果：');
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('追问：未发生');
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain(
+      `pai-outreach-continue:${session.id}`,
+    );
 
     const eventTypes = outreachRepo
       .listEventsBySession(session.id, 20)
       .map((event) => event.eventType);
     expect(eventTypes).toContain('result_notified');
+  });
+
+  it('pushes a timeout outreach receipt with the follow-up jump link', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        outreachEnabled: true,
+        outreachIntervalMs: 60000,
+        outreachRequireApprovalForReflection: false,
+        outreachRequireApprovalForManual: false,
+        outreachResultPushTarget: 'me',
+        reflectionEnabled: false,
+        ringCentralServerUrl: 'https://platform.ringcentral.example.com',
+        ringCentralClientId: 'client-id',
+        ringCentralClientSecret: 'client-secret',
+        ringCentralJwt: 'jwt-token',
+      }),
+    );
+
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'message_reaction',
+      targetType: 'group',
+      targetRef: 'qa-room',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedLabel: 'QA Room',
+      targetResolvedChatId: 'chat-timeout-push',
+      renderedQuestion: 'Do we have the UX ticket?',
+      renderedContext: 'Need the Jira ticket.',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      followupCount: 1,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-timeout-push',
+      sentPostId: 'post-original',
+      waitUntil: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+      createdAt: currentTs - 7200,
+    });
+    outreachRepo.createEvent(session.id, 'followup_sent', {
+      followupCount: 1,
+      chatId: 'chat-timeout-push',
+      postId: 'post-followup-1',
+    });
+
+    const deliverSpy = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({
+        sent: true,
+        messageId: 'bot-timeout-1',
+      });
+
+    mockRingCentralListPosts('chat-timeout-push', []);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(deliverSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceRef: `outreach:${session.id}:result`,
+        title: '主动询问超时',
+        targetUserId: 'test-user',
+      }),
+    );
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('追问：已发生 1 次');
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain(
+      '查看追问消息：https://app.ringcentral.com/messages/chat-timeout-push/post-followup-1',
+    );
+    expect(outreachRepo.getSessionById(session.id)?.status).toBe('no_reply');
+    expect(
+      outreachRepo
+        .listEventsBySession(session.id, 20)
+        .map((event) => event.eventType),
+    ).toEqual(expect.arrayContaining(['no_reply', 'result_notified']));
+  });
+
+  it('continues follow-up on a terminal session without re-dispatching the original ask', () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'message_reaction',
+      targetType: 'group',
+      targetRef: 'qa-room',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedChatId: 'chat-continue',
+      renderedQuestion: 'Need the UX ticket',
+      status: 'resolved',
+      requiresApproval: false,
+      followupCount: 0,
+      maxFollowup: 1,
+      followupIntervalSeconds: 86400,
+      sentChatId: 'chat-continue',
+      sentPostId: 'post-original',
+      replyPostId: 'post-reply',
+      replyRawText: 'asking about SIP instead',
+      resolvedAt: currentTs - 10,
+      createdAt: currentTs - 3600,
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const continued = engine.continueFollowup(session.id, {
+      maxFollowup: 2,
+      followupIntervalSeconds: 7200,
+    });
+
+    expect(continued.status).toBe('waiting_reply');
+    expect(continued.followupCount).toBe(0);
+    expect(continued.maxFollowup).toBe(2);
+    expect(continued.followupIntervalSeconds).toBe(7200);
+    expect(continued.sentChatId).toBe('chat-continue');
+    expect(continued.sentPostId).toBe('post-original');
+    expect(continued.replyPostId).toBe('post-reply');
+    expect(continued.waitUntil).toBeGreaterThan(currentTs);
+    expect(
+      outreachRepo
+        .listEventsBySession(session.id, 10)
+        .some((event) => event.eventType === 'followup_continued'),
+    ).toBe(true);
   });
 
   it('suppresses dispatch in a private chat even when actor identity lookup is unavailable', async () => {
@@ -1911,6 +2036,96 @@ describe('OutreachEngine', () => {
       .listEventsBySession(session.id, 20)
       .map((event) => event.eventType);
     expect(eventTypes).toContain('followup_skipped_by_answer');
+  });
+
+  it('sends follow-up as the original question without a machine prefix', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    outreachRepo.createSession({
+      originKind: 'message_reaction',
+      targetType: 'group',
+      targetRef: 'chat-human-followup',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedId: 'chat-human-followup',
+      targetResolvedLabel: 'esone.qiu+roy.luo',
+      targetResolvedChatId: 'chat-human-followup',
+      renderedQuestion: '嗯好，帮忙问下，怎么突然没了',
+      renderedContext: '拿到 roy 关于 openai key 如何申请的答复',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-human-followup',
+      sentPostId: 'post-seed',
+      followupCount: 0,
+      createdAt: currentTs - 600,
+      nextCheckAt: currentTs - 5,
+      waitUntil: currentTs - 1,
+    });
+
+    const sentBodies: Array<Record<string, unknown>> = [];
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/restapi/oauth/token')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          };
+        }
+        if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                id: 'self-ext-1',
+                name: 'Esone Qiu',
+                contact: {
+                  firstName: 'Esone',
+                  lastName: 'Qiu',
+                  email: 'test-user@ringcentral.com',
+                },
+              }),
+          };
+        }
+        if (
+          url.includes(
+            `/team-messaging/v1/chats/${encodeURIComponent('chat-human-followup')}/posts?`,
+          )
+        ) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ records: [] }),
+          };
+        }
+        if (
+          url.includes(
+            `/team-messaging/v1/chats/${encodeURIComponent('chat-human-followup')}/posts`,
+          )
+        ) {
+          sentBodies.push(
+            typeof init?.body === 'string' ? JSON.parse(init.body) : {},
+          );
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'post-human-followup' }),
+          };
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    expect(sentBodies).toHaveLength(1);
+    expect(sentBodies[0]?.text).toBe('嗯好，帮忙问下，怎么突然没了');
+    expect(String(sentBodies[0]?.text)).not.toMatch(/Follow-up:/i);
   });
 
   it('recovers a waiting reply session when the original pre-dispatch answer was missed', async () => {

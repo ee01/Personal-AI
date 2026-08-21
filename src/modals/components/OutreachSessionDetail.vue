@@ -41,6 +41,16 @@
           重试
         </button>
         <button
+          v-if="detail && canContinueFollowup(detail)"
+          class="primary-btn"
+          :disabled="busy || editing"
+          :title="continueFollowupButtonTitle(detail)"
+          :aria-label="continueFollowupButtonAriaLabel(detail)"
+          @click="openContinuePanel(detail)"
+        >
+          继续追问
+        </button>
+        <button
           v-if="detail && canCancel(detail.status)"
           class="danger-btn"
           :disabled="busy || editing"
@@ -217,6 +227,61 @@
               {{ item }}
             </li>
           </ul>
+        </div>
+
+        <div
+          v-if="continuing && detail && canContinueFollowup(detail)"
+          class="continue-followup-panel"
+          role="form"
+          aria-label="继续追问配置"
+        >
+          <div class="continue-followup-title">继续追问</div>
+          <p class="muted small">
+            不会重发原问题，只按新的间隔和次数在原帖 bump。提交后先等待间隔，到期才发送追问。
+          </p>
+          <div class="continue-followup-grid">
+            <label class="field-block">
+              <span>下次间隔（小时）</span>
+              <input
+                v-model.number="continueIntervalHours"
+                class="field-input"
+                type="number"
+                min="1"
+                max="720"
+              />
+            </label>
+            <label class="field-block">
+              <span>最多再追问次数</span>
+              <input
+                v-model.number="continueMaxFollowup"
+                class="field-input"
+                type="number"
+                min="1"
+                max="10"
+              />
+            </label>
+          </div>
+          <p class="muted small">{{ continueRunSummary }}</p>
+          <div class="continue-followup-actions">
+            <button
+              class="ghost-btn"
+              type="button"
+              :disabled="busy"
+              @click="continuing = false"
+            >
+              取消
+            </button>
+            <button
+              class="primary-btn"
+              type="button"
+              :disabled="busy"
+              :title="continueFollowupSubmitTitle()"
+              :aria-label="continueFollowupSubmitAriaLabel()"
+              @click="submitContinueFollowup"
+            >
+              确认继续追问
+            </button>
+          </div>
         </div>
 
         <div
@@ -581,6 +646,15 @@
             <p v-if="eventSummary(event)" class="summary-text">
               {{ eventSummary(event) }}
             </p>
+            <a
+              v-if="followupEventUrl(event)"
+              :href="followupEventUrl(event)"
+              class="page-link"
+              target="_blank"
+              rel="noopener noreferrer"
+              :title="followupEventLinkTitle()"
+              :aria-label="followupEventLinkAriaLabel()"
+            >查看追问消息</a>
             <pre
               v-if="event.payload && Object.keys(event.payload).length > 0"
               class="json-block"
@@ -631,6 +705,10 @@ import {
   collectEvidenceMentionLabels,
   RichEvidenceText,
 } from './evidenceText';
+import {
+  buildContinueFollowupRunSummary,
+  buildGlipMessageUrl,
+} from '../../message-reaction/outreachResultReceipt';
 
 const client = getMemoryServiceClient();
 const route = useRoute();
@@ -647,6 +725,9 @@ const detailLoadWarning = ref('');
 const directoryStatus = ref<OutreachDirectoryStatus[]>([]);
 const detail = ref<OutreachSession | null>(null);
 const operationResult = ref<OperationResultReceipt | null>(null);
+const continuing = ref(false);
+const continueIntervalHours = ref(24);
+const continueMaxFollowup = ref(1);
 const draft = reactive({
   targetType: 'private',
   targetRef: '',
@@ -730,6 +811,19 @@ watch(
   () => route.params.id,
   () => {
     void loadDetail();
+  },
+);
+
+watch(
+  () => [detail.value?.id, route.query.continueFollowup],
+  () => {
+    if (
+      route.query.continueFollowup === '1' &&
+      detail.value &&
+      canContinueFollowup(detail.value)
+    ) {
+      openContinuePanel(detail.value);
+    }
   },
 );
 
@@ -948,6 +1042,126 @@ function cancelEdit() {
 
 function canRetry(status: OutreachSessionStatus) {
   return status === 'failed' || status === 'no_reply' || status === 'escalated';
+}
+
+function canContinueFollowup(session: OutreachSession) {
+  return (
+    Boolean(session.sentChatId) &&
+    (session.status === 'resolved' ||
+      session.status === 'no_reply' ||
+      session.status === 'escalated' ||
+      session.status === 'failed')
+  );
+}
+
+function openContinuePanel(session: OutreachSession) {
+  const seconds =
+    typeof session.followupIntervalSeconds === 'number' &&
+    Number.isFinite(session.followupIntervalSeconds)
+      ? session.followupIntervalSeconds
+      : 86400;
+  continueIntervalHours.value = Math.min(
+    720,
+    Math.max(1, Math.round(seconds / 3600) || 24),
+  );
+  continueMaxFollowup.value = Math.min(
+    10,
+    Math.max(1, Math.floor(session.maxFollowup || 1)),
+  );
+  continuing.value = true;
+}
+
+const continueRunSummary = computed(() =>
+  buildContinueFollowupRunSummary({
+    intervalHours: Number(continueIntervalHours.value) || 24,
+    maxFollowup: Number(continueMaxFollowup.value) || 1,
+  }),
+);
+
+async function submitContinueFollowup() {
+  if (!detail.value) return;
+  const intervalHours = Math.min(
+    720,
+    Math.max(1, Math.floor(Number(continueIntervalHours.value) || 24)),
+  );
+  const maxFollowup = Math.min(
+    10,
+    Math.max(1, Math.floor(Number(continueMaxFollowup.value) || 1)),
+  );
+  continueIntervalHours.value = intervalHours;
+  continueMaxFollowup.value = maxFollowup;
+  operationResult.value = {
+    title: '继续追问提交中',
+    tone: 'queued',
+    items: [
+      continueRunSummary.value,
+      '当前仍是上次成功读取的会话快照；Memory Service 返回前不会发送追问或重发原问题。',
+    ],
+  };
+  busy.value = true;
+  try {
+    const response = await client.continueOutreachFollowup(detail.value.id, {
+      maxFollowup,
+      followupIntervalSeconds: intervalHours * 3600,
+    });
+    continuing.value = false;
+    await loadDetail({ preserveOperationResult: true });
+    const session = detail.value || response.session;
+    operationResult.value = {
+      title: '已继续追问',
+      tone: 'ok',
+      items: [
+        `会话已回到「${statusLabel(session.status)}」，最多再追问 ${session.maxFollowup} 次。`,
+        session.waitUntil
+          ? `下次追问不早于 ${relativeTime(session.waitUntil)}。`
+          : '下次追问时间以会话 waitUntil 为准。',
+        '这次提交没有立刻发送新消息，也不会重发原问题；到期后才会在原帖 bump。',
+      ],
+    };
+    if (route.query.continueFollowup) {
+      skipNextUnsavedDraftPrompt = true;
+      void router.replace({
+        path: route.path,
+        query: { ...route.query, continueFollowup: undefined },
+      });
+    }
+  } catch (error) {
+    operationResult.value = buildOperationFailureReceipt('继续追问', error);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function continueFollowupButtonTitle(session: OutreachSession) {
+  return `打开继续追问配置，设置下次间隔和次数后才会把「${statusLabel(session.status)}」改回等待回复；此刻不会发送消息或重发原问题。`;
+}
+
+function continueFollowupButtonAriaLabel(session: OutreachSession) {
+  return `继续追问：${continueFollowupButtonTitle(session)}`;
+}
+
+function continueFollowupSubmitTitle() {
+  return `确认后按「${continueRunSummary.value}」写入 Memory Service；不会立刻发送追问、重发原问题或写回已有 RingCentral 消息。`;
+}
+
+function continueFollowupSubmitAriaLabel() {
+  return `确认继续追问：${continueFollowupSubmitTitle()}`;
+}
+
+function followupEventUrl(event: OutreachEvent): string {
+  if (event.eventType !== 'followup_sent') return '';
+  return buildGlipMessageUrl(
+    typeof event.payload?.chatId === 'string' ? event.payload.chatId : '',
+    typeof event.payload?.postId === 'string' ? event.payload.postId : '',
+  );
+}
+
+function followupEventLinkTitle() {
+  return '打开这条已发送追问对应的 RingCentral 消息；只跳转原帖，不会重发、取消或改写会话。';
+}
+
+function followupEventLinkAriaLabel() {
+  return `查看追问消息：${followupEventLinkTitle()}`;
 }
 
 function canCancel(status: OutreachSessionStatus) {
@@ -1897,6 +2111,7 @@ function eventTypeLabel(eventOrType?: OutreachEvent | string) {
   if (value === 'reply_classified') return '回复已解析';
   if (value === 'deferred_by_reply') return '按回复延期';
   if (value === 'followup_sent') return '已发送追问';
+  if (value === 'followup_continued') return '已继续追问';
   if (value === 'resolved') return '已结束并拿到结果';
   if (value === 'no_reply') return '超时无回复';
   if (value === 'escalated') return '已升级处理';
@@ -1908,6 +2123,21 @@ function eventTypeLabel(eventOrType?: OutreachEvent | string) {
 
 function eventSummary(event: OutreachEvent): string {
   const payload = event.payload ?? {};
+  if (event.eventType === 'followup_continued') {
+    const previousStatus =
+      typeof payload.previousStatus === 'string'
+        ? statusLabel(payload.previousStatus)
+        : '上一终态';
+    const maxFollowup =
+      typeof payload.maxFollowup === 'number' ? payload.maxFollowup : null;
+    const waitUntil =
+      typeof payload.waitUntil === 'number' && Number.isFinite(payload.waitUntil)
+        ? `，下次追问不早于 ${relativeTime(payload.waitUntil)}`
+        : '';
+    return `已从「${previousStatus}」继续追问${
+      maxFollowup ? `，最多再追问 ${maxFollowup} 次` : ''
+    }${waitUntil}。没有立刻发送新消息。`;
+  }
   const isRetry =
     event.eventType === 'retried' ||
     (event.eventType === 'created' && payload.retried === true);
@@ -2047,6 +2277,33 @@ function followUpActionStatusLabel(action: RuntimeAction) {
 
 .action-bar {
   display: flex;
+  gap: 0.75rem;
+}
+
+.continue-followup-panel {
+  margin-top: 1rem;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 0.9rem;
+  padding: 0.9rem 1rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.continue-followup-title {
+  font-weight: 600;
+  color: #e0f2fe;
+  margin-bottom: 0.35rem;
+}
+
+.continue-followup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.continue-followup-actions {
+  display: flex;
+  justify-content: flex-end;
   gap: 0.75rem;
 }
 

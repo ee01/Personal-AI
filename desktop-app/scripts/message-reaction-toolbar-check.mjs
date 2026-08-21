@@ -213,6 +213,20 @@ async function startMemoryServiceFixture() {
       return;
     }
 
+    if (request.method === 'GET' && request.url === '/api/v1/config') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          outreachEnabled: true,
+          ringCentralServerUrl: 'https://platform.ringcentral.example.com',
+          ringCentralClientId: 'fixture-client-id',
+          ringCentralClientSecretConfigured: true,
+          ringCentralJwtConfigured: true,
+        }),
+      );
+      return;
+    }
+
     if (
       request.method === 'POST' &&
       request.url === '/api/v1/outreach/sessions/from-message'
@@ -1508,6 +1522,14 @@ async function main() {
       '跟进追问',
       LINKED_ACTION_BOUNDARY_LABEL,
     ]);
+    assert.equal(
+      await ownMessage.locator('.followup-ask-btn').getAttribute('aria-disabled'),
+      'false',
+    );
+    assert.equal(
+      await ownMessage.locator('.followup-ask-btn').getAttribute('data-setup-needed'),
+      null,
+    );
 
     await ownMessage.locator('.followup-ask-btn').click();
     await page.waitForSelector('.followup-ask-dialog', { timeout: 3_000 });

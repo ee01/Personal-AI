@@ -15,7 +15,10 @@ import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
 import { sendPlainBotMessage } from '../bot';
 import { buildScheduledMessagesReviewUrl } from '../scheduled-messages/scheduledMessagesFilters';
-import { formatMatchedRuleForDisplay } from '../utils/matchedRuleDisplay';
+import {
+  formatMatchedRuleForDisplay,
+  mergeMatchedRuleDisplay,
+} from '../utils/matchedRuleDisplay';
 
 // ==================== 类型定义 ====================
 
@@ -260,10 +263,13 @@ export class NotificationService {
             success: false,
             error: `LLM 审核未通过: ${reviewReason}`
           });
-        } else {
-          // 如果审核返回了更精确的匹配规则，使用它
-          if (reviewReason && reviewReason !== '通过') {
-            data.matchedRule = reviewReason;
+        } else if (reviewReason && reviewReason !== '通过') {
+          const mergedRule = mergeMatchedRuleDisplay(
+            data.matchedRule,
+            reviewReason,
+          );
+          if (mergedRule) {
+            data.matchedRule = mergedRule;
           }
         }
       }

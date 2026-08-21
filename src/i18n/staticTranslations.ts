@@ -102,6 +102,21 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '自动答复': 'Reply',
   '跟进': 'Followup',
   '跟进追问': 'Followup',
+  '前往配置': 'Open settings',
+  '打开主动询问配置失败，请稍后重试':
+    'Unable to open Outreach settings. Please try again later.',
+  '跟进追问：需要先在 Options 启用主动询问引擎。点击会打开主动询问配置，不会创建跟进会话、发送追问或写 Google Sheet。':
+    'Followup: enable the Outreach engine in Options first. This click opens Outreach settings and does not create a follow-up session, send a chase, or write Google Sheet.',
+  '跟进追问：需要补齐 RingCentral Server URL、Client ID、Client Secret 和 JWT。点击会打开主动询问配置，不会创建跟进会话、发送追问或写 Google Sheet。':
+    'Followup: add RingCentral Server URL, Client ID, Client Secret, and JWT first. This click opens Outreach settings and does not create a follow-up session, send a chase, or write Google Sheet.',
+  '跟进追问：暂时无法读取主动询问配置。请确认 Memory Service 可访问后再到 Options 检查。点击会打开配置页，不会创建跟进会话或发送追问。':
+    'Followup: Outreach settings could not be read. Confirm Memory Service is reachable, then check Options. This click opens settings and does not create a follow-up session or send a chase.',
+  '跟进追问尚未可用：请先在 Options 启用主动询问引擎。未创建跟进会话，也没有发送消息。':
+    'Followup is not ready: enable the Outreach engine in Options first. No follow-up session was created and no message was sent.',
+  '跟进追问尚未可用：请先补齐 RingCentral Server URL、Client ID、Client Secret 和 JWT。未创建跟进会话，也没有发送消息。':
+    'Followup is not ready: add RingCentral Server URL, Client ID, Client Secret, and JWT first. No follow-up session was created and no message was sent.',
+  '暂时无法读取主动询问配置，请先确认 Memory Service 可访问。未创建跟进会话，也没有发送消息。':
+    'Outreach settings could not be read. Confirm Memory Service is reachable first. No follow-up session was created and no message was sent.',
   '联动': 'Openclaw',
   '联动操作': 'Openclaw',
   '消息交互设置': 'Message action settings',
@@ -342,8 +357,8 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
     'Require approval by default for manual or scheduled outreach templates',
   '开启后，Scheduled Messages 里的手动模板也会进入待审批。':
     'When enabled, manual templates in Scheduled Messages also enter pending approval.',
-  '当主动询问拿到最终结果时，用 Bot 推送给 Me 或指定群组。默认推送给 Me。':
-    'When Outreach gets a final result, send it by bot to Me or a selected group. Defaults to Me.',
+  '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。':
+    'When Outreach gets a final result, times out, or cannot use the reply, send a bot receipt to Me or a selected group. The receipt says whether a follow-up was sent and includes a continue-follow-up entry. Defaults to Me.',
   'RingCentral 目录缓存状态': 'RingCentral directory cache status',
   '联系人目录：': 'Contacts:',
   '群组目录：': 'Groups:',

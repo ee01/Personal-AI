@@ -83,11 +83,24 @@ import { buildAutoReplyConfigLaunchReceipt } from './autoReplyPresentation';
 import { buildFollowThreadConfigLaunchReceipt } from './followThreadPresentation';
 import {
   buildFollowupAskRunSummary,
+  buildFollowupAskSetupBoundary,
+  buildFollowupAskSetupToast,
   buildFollowupAskSubmitBoundary,
   buildFollowupAskSubmittingMessage,
   buildFollowupAskToastMessage,
+  type FollowupAskSetupState,
 } from './followupAskPresentation';
 import { buildLinkedActionConfigLaunchReceipt } from './linkedActionEntry';
+import {
+  OUTREACH_CONTINUE_DEFAULT_INTERVAL_HOURS,
+  OUTREACH_CONTINUE_DEFAULT_MAX_FOLLOWUP,
+  OUTREACH_CONTINUE_MAX_FOLLOWUP,
+  OUTREACH_CONTINUE_MAX_INTERVAL_HOURS,
+  buildContinueFollowupRunSummary,
+  buildContinueFollowupSubmittingMessage,
+  buildContinueFollowupToastMessage,
+  parseOutreachContinueSessionId,
+} from './outreachResultReceipt';
 
 const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
 const GLIP_MESSAGE_MARKERS_STORAGE_KEY = 'glipMessageMarkers';
@@ -568,6 +581,14 @@ function injectStyles() {
 
     .followup-ask-btn:active {
       background: rgba(15, 118, 110, 0.24);
+    }
+
+    .followup-ask-btn.is-setup-needed,
+    .followup-ask-btn.is-setup-needed:hover,
+    .followup-ask-btn.is-setup-needed:active {
+      color: #6b7280;
+      background: rgba(107, 114, 128, 0.1);
+      border-color: rgba(107, 114, 128, 0.28);
     }
 
     /* ===== 关注后续按钮 ===== */
@@ -1517,6 +1538,39 @@ function injectStyles() {
       display: none;
     }
 
+    .pai-outreach-continue-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 12px 10px;
+      padding: 8px 10px;
+      border: 1px solid rgba(13, 148, 136, 0.22);
+      border-radius: 10px;
+      background: rgba(240, 253, 250, 0.95);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 12px;
+      color: #115e59;
+      line-height: 1.45;
+    }
+
+    .pai-outreach-continue-bar button {
+      border: 0;
+      border-radius: 8px;
+      padding: 6px 10px;
+      background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pai-outreach-continue-bar button.secondary {
+      background: #fff;
+      color: #0f766e;
+      border: 1px solid rgba(13, 148, 136, 0.28);
+    }
+
     @media (max-width: 420px) {
       .followup-ask-inline {
         grid-template-columns: 1fr;
@@ -1859,6 +1913,49 @@ async function sendToolbarRuntimeAction(
   return response;
 }
 
+async function loadFollowupAskSetup(): Promise<FollowupAskSetupState> {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_FOLLOWUP_ASK_SETUP',
+    });
+    if (response?.setup?.reason) {
+      return {
+        ready: response.setup.ready === true,
+        reason: response.setup.reason,
+      };
+    }
+  } catch (error) {
+    console.warn('💬 MessageReaction: 读取跟进追问配置失败', error);
+  }
+  return { ready: false, reason: 'config_unavailable' };
+}
+
+async function openOutreachOptionsPage(): Promise<void> {
+  try {
+    await sendToolbarRuntimeAction(
+      { type: 'OPEN_OPTIONS_PAGE', hash: 'outreach-config' },
+      ui('打开主动询问配置失败，请稍后重试'),
+    );
+  } catch (error) {
+    console.warn('打开主动询问配置失败，回退到直接打开页面:', error);
+    window.open(
+      chrome.runtime.getURL('options.html#outreach-config'),
+      '_blank',
+    );
+  }
+}
+
+function showFollowupAskSetupGuidance(setup: FollowupAskSetupState): void {
+  showErrorToast(ui(buildFollowupAskSetupToast(setup.reason)), [
+    {
+      label: ui('前往配置'),
+      onClick: () => {
+        void openOutreachOptionsPage();
+      },
+    },
+  ]);
+}
+
 function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
   return new Promise((resolve) => {
     const existing = document.querySelector('.followup-ask-overlay');
@@ -2159,14 +2256,232 @@ function getFollowupAskToastActions(sessionId?: string): ToastAction[] {
   ];
 }
 
-async function openOutreachSessionReview(sessionId?: string): Promise<void> {
+async function openOutreachSessionReview(
+  sessionId?: string,
+  continueFollowup = false,
+): Promise<void> {
   await sendToolbarRuntimeAction(
     {
       type: 'OPEN_OUTREACH_SESSION_REVIEW',
-      data: { sessionId },
+      data: { sessionId, continueFollowup },
     },
     '打开追问详情失败，请稍后重试',
   );
+}
+
+async function mountOutreachContinueBar(targetElement: HTMLElement): Promise<void> {
+  if (targetElement.querySelector('.pai-outreach-continue-bar')) return;
+  try {
+    const messageInfo = await extractMessageInfo(targetElement);
+    const sessionId = parseOutreachContinueSessionId(messageInfo.content);
+    if (!sessionId) return;
+    const bar = document.createElement('div');
+    bar.className = 'pai-outreach-continue-bar';
+    bar.setAttribute('aria-label', '主动询问回执继续追问入口');
+    bar.innerHTML = `
+      <span>这是主动询问回执。可设置下次间隔和次数后继续追问，不会立刻发消息。</span>
+      <button type="button" data-action="continue">继续追问</button>
+      <button type="button" class="secondary" data-action="open-detail">打开会话详情</button>
+    `;
+    bar.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement | null)?.closest('button');
+      if (!(button instanceof HTMLButtonElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const action = button.dataset.action;
+      if (action === 'continue') {
+        void showContinueFollowupDialog(sessionId);
+        return;
+      }
+      if (action === 'open-detail') {
+        void openOutreachSessionReview(sessionId, true);
+      }
+    });
+    const textBody =
+      targetElement.querySelector('[data-name="body"]') ||
+      targetElement.querySelector('[data-name="text"]');
+    if (textBody?.parentElement) {
+      textBody.parentElement.insertBefore(bar, textBody.nextSibling);
+    } else {
+      targetElement.appendChild(bar);
+    }
+  } catch (error) {
+    console.warn('💬 MessageReaction: 挂载继续追问入口失败', error);
+  }
+}
+
+function showContinueFollowupDialog(sessionId: string): Promise<void> {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.followup-ask-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'followup-ask-overlay';
+    overlay.innerHTML = `
+      <form class="followup-ask-dialog" novalidate>
+        <div class="followup-ask-header">
+          <div class="followup-ask-header-icon">💬</div>
+          <div class="followup-ask-title">继续追问</div>
+          <button type="button" class="followup-ask-close" aria-label="关闭">×</button>
+        </div>
+        <div class="followup-ask-body">
+          <div class="followup-ask-run-summary" role="status">${escapeDialogText(
+            buildContinueFollowupRunSummary({
+              intervalHours: OUTREACH_CONTINUE_DEFAULT_INTERVAL_HOURS,
+              maxFollowup: OUTREACH_CONTINUE_DEFAULT_MAX_FOLLOWUP,
+            }),
+          )}</div>
+          <section class="followup-ask-boundary" aria-label="继续追问边界">
+            <div class="followup-ask-boundary-title">边界</div>
+            <ul class="followup-ask-boundary-list">
+              <li>不会重发原问题，只在原帖 bump。</li>
+              <li>提交后先等待间隔，到期才发送下一次追问。</li>
+              <li>这次点击不会立刻发消息、不写 Google Sheet。</li>
+            </ul>
+          </section>
+          <div class="followup-ask-row">
+            <div class="followup-ask-inline">
+              <label class="followup-ask-label" for="continue-followup-interval">
+                下次间隔（小时）
+                <input id="continue-followup-interval" class="followup-ask-input" name="intervalHours" type="number" min="1" max="${OUTREACH_CONTINUE_MAX_INTERVAL_HOURS}" value="${OUTREACH_CONTINUE_DEFAULT_INTERVAL_HOURS}" />
+              </label>
+              <label class="followup-ask-label" for="continue-followup-max">
+                最多再追问次数
+                <input id="continue-followup-max" class="followup-ask-input" name="maxFollowup" type="number" min="1" max="${OUTREACH_CONTINUE_MAX_FOLLOWUP}" value="${OUTREACH_CONTINUE_DEFAULT_MAX_FOLLOWUP}" />
+              </label>
+            </div>
+          </div>
+          <div class="followup-ask-error" hidden></div>
+        </div>
+        <div class="followup-ask-footer">
+          <button type="button" class="followup-ask-cancel">取消</button>
+          <button type="submit" class="followup-ask-submit">确认继续追问</button>
+        </div>
+      </form>
+    `;
+
+    const form = overlay.querySelector('form');
+    const closeBtn = overlay.querySelector('.followup-ask-close');
+    const cancelBtn = overlay.querySelector('.followup-ask-cancel');
+    const submitBtn = overlay.querySelector('.followup-ask-submit');
+    const errorEl = overlay.querySelector('.followup-ask-error');
+    const runSummaryEl = overlay.querySelector('.followup-ask-run-summary');
+    const intervalInput = overlay.querySelector<HTMLInputElement>(
+      '#continue-followup-interval',
+    );
+    const maxFollowupInput = overlay.querySelector<HTMLInputElement>(
+      '#continue-followup-max',
+    );
+
+    const close = () => {
+      overlay.remove();
+      resolve();
+    };
+
+    const setError = (message: string | null) => {
+      if (!(errorEl instanceof HTMLElement)) return;
+      if (!message) {
+        errorEl.hidden = true;
+        errorEl.textContent = '';
+        return;
+      }
+      errorEl.hidden = false;
+      errorEl.textContent = message;
+    };
+
+    const setSubmitting = (submitting: boolean) => {
+      if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = submitting;
+      if (cancelBtn instanceof HTMLButtonElement) cancelBtn.disabled = submitting;
+      if (intervalInput) intervalInput.disabled = submitting;
+      if (maxFollowupInput) maxFollowupInput.disabled = submitting;
+      if (runSummaryEl instanceof HTMLElement && submitting) {
+        runSummaryEl.textContent = buildContinueFollowupSubmittingMessage();
+      }
+    };
+
+    const refreshSummary = () => {
+      if (!(runSummaryEl instanceof HTMLElement)) return;
+      runSummaryEl.textContent = buildContinueFollowupRunSummary({
+        intervalHours: parseBoundedInteger(
+          intervalInput?.value ?? null,
+          OUTREACH_CONTINUE_DEFAULT_INTERVAL_HOURS,
+          1,
+          OUTREACH_CONTINUE_MAX_INTERVAL_HOURS,
+        ),
+        maxFollowup: parseBoundedInteger(
+          maxFollowupInput?.value ?? null,
+          OUTREACH_CONTINUE_DEFAULT_MAX_FOLLOWUP,
+          1,
+          OUTREACH_CONTINUE_MAX_FOLLOWUP,
+        ),
+      });
+    };
+
+    intervalInput?.addEventListener('input', refreshSummary);
+    maxFollowupInput?.addEventListener('input', refreshSummary);
+    closeBtn?.addEventListener('click', close);
+    cancelBtn?.addEventListener('click', close);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const intervalHours = parseBoundedInteger(
+        intervalInput?.value ?? null,
+        OUTREACH_CONTINUE_DEFAULT_INTERVAL_HOURS,
+        1,
+        OUTREACH_CONTINUE_MAX_INTERVAL_HOURS,
+      );
+      const maxFollowup = parseBoundedInteger(
+        maxFollowupInput?.value ?? null,
+        OUTREACH_CONTINUE_DEFAULT_MAX_FOLLOWUP,
+        1,
+        OUTREACH_CONTINUE_MAX_FOLLOWUP,
+      );
+      if (intervalInput) intervalInput.value = String(intervalHours);
+      if (maxFollowupInput) maxFollowupInput.value = String(maxFollowup);
+      setSubmitting(true);
+      setError(null);
+      try {
+        const response = await sendToolbarRuntimeAction(
+          {
+            type: 'CONTINUE_OUTREACH_FOLLOWUP',
+            data: {
+              sessionId,
+              maxFollowup,
+              followupIntervalSeconds: intervalHours * 3600,
+            },
+          },
+          ui('继续追问失败，请稍后重试'),
+        );
+        const waitUntil =
+          typeof response?.session?.waitUntil === 'number'
+            ? response.session.waitUntil
+            : null;
+        showSuccessToast(
+          buildContinueFollowupToastMessage({
+            intervalHours,
+            maxFollowup,
+            waitUntil,
+          }),
+          [
+            {
+              label: '查看会话',
+              onClick: () => openOutreachSessionReview(sessionId),
+            },
+          ],
+        );
+        close();
+      } catch (error) {
+        setSubmitting(false);
+        setError(getErrorMessage(error, '继续追问失败，请稍后重试'));
+      }
+    });
+
+    document.body.appendChild(overlay);
+    intervalInput?.focus();
+  });
 }
 
 function resetSnoozeMenuAnchorState() {
@@ -3280,6 +3595,10 @@ function processMessageElement(messageElement: HTMLElement) {
     const ownMessage = await isOwnMessage(messageInfo, targetElement);
     toolbar.dataset.isOwnMessage = ownMessage ? 'true' : 'false';
 
+    const followupSetup = ownMessage
+      ? await loadFollowupAskSetup()
+      : { ready: true, reason: 'ready' as const };
+
     const enabledButtons = getMessageReactionActionDefinitions(config, {
       isOwnMessage: ownMessage,
     });
@@ -3292,9 +3611,13 @@ function processMessageElement(messageElement: HTMLElement) {
     }
 
     enabledButtons.forEach((action, index) => {
+      const setupNeeded =
+        action.key === 'followupAsk' && followupSetup.ready !== true;
       const actionLabel = escapeSnoozeMenuText(action.label);
       const actionBoundaryLabel = escapeSnoozeMenuText(
-        getToolbarActionBoundaryLabel(action),
+        setupNeeded
+          ? ui(buildFollowupAskSetupBoundary(followupSetup.reason))
+          : getToolbarActionBoundaryLabel(action),
       );
       const actionCompactLabel = escapeSnoozeMenuText(action.compactLabel);
       const actionStyle = getActionLabelWidthStyle(action);
@@ -3316,16 +3639,21 @@ function processMessageElement(messageElement: HTMLElement) {
             aria-expanded="false"
             aria-controls="${SNOOZE_QUICK_MENU_ID}"`
           : '';
+      const setupClass = setupNeeded ? ' is-setup-needed' : '';
+      const setupAttributes = setupNeeded
+        ? 'aria-disabled="true" data-setup-needed="true"'
+        : 'aria-disabled="false"';
 
       if (action.usesClockIcon) {
         buttonsHtml += `
           <button
             type="button"
-            class="${action.className}"
+            class="${action.className}${setupClass}"
             style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
             title="${actionBoundaryLabel}"
             aria-label="${actionBoundaryLabel}"
             data-compact-label="${actionCompactLabel}"
+            ${setupAttributes}
             ${menuAttributes}
           >
             ${getSnoozeClockIconSvg()}
@@ -3337,12 +3665,13 @@ function processMessageElement(messageElement: HTMLElement) {
       buttonsHtml += `
         <button
           type="button"
-          class="${action.className}"
+          class="${action.className}${setupClass}"
           style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
           title="${actionBoundaryLabel}"
           aria-label="${actionBoundaryLabel}"
           data-compact-label="${actionCompactLabel}"
           data-compact-align="${action.compactAlign || 'start'}"
+          ${setupAttributes}
           ${menuAttributes}
         >
           <span class="message-reaction-action-label" style="${actionLabelStyle}">
@@ -3368,6 +3697,7 @@ function processMessageElement(messageElement: HTMLElement) {
 
   // 将工具栏添加到消息卡片
   targetElement.appendChild(toolbar);
+  void mountOutreachContinueBar(targetElement);
 
   /**
    * 调整工具栏位置：当有 reply input 时，对齐到消息文本区域底部
@@ -3817,6 +4147,13 @@ function bindToolbarEvents(
       e.stopPropagation();
 
       await runToolbarButtonAction(followupAskBtn, async () => {
+        if (followupAskBtn.getAttribute('data-setup-needed') === 'true') {
+          const setup = await loadFollowupAskSetup();
+          showFollowupAskSetupGuidance(setup);
+          await openOutreachOptionsPage();
+          return;
+        }
+
         let messageInfo = getMessageInfo();
         if (!messageInfo) {
           messageInfo = await extractMessageInfo(targetElement);

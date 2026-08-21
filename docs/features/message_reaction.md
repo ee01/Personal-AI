@@ -69,7 +69,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 1. **稍后处理 / Remind**：中文常态显示「稍后」，英文显示 `Remind`；点击或 hover 展开快速菜单，选择具体提醒时间后创建提醒
 2. **关注后续 / Watch**：紫色按钮，打开关注后续规则配置
-3. **自动答复 / Reply** 或 **跟进追问 / Followup**：别人发送的消息显示自动答复 / Reply；自己发送的消息显示跟进追问 / Followup，不再显示自动答复
+3. **自动答复 / Reply** 或 **跟进追问 / Followup**：别人发送的消息显示自动答复 / Reply；自己发送的消息显示跟进追问 / Followup，不再显示自动答复。跟进追问依赖主动询问引擎和 RingCentral token；未开启或未配齐时按钮仍显示，但呈灰色 `is-setup-needed` 状态，hover / 读屏说明缺的是引擎还是 token，点击只打开 Options「主动询问」配置，不会创建 session 或发送追问
 4. **联动操作 / Openclaw**：红色按钮，打开“记忆入口规则”弹窗并预填一条带“联动操作”的规则
 5. **PAI 图标**：视觉标识
 6. **齿轮设置**：工具栏再长悬停约 1.4 秒后出现，可快速开关四个入口
@@ -170,6 +170,10 @@ interface TopicItem {
 
 跟进追问只出现在当前用户自己发送的 Glip 消息上。点击后打开轻量弹窗，用户确认后在 memory-service 创建一次性 Outreach session，不写入 Google Sheet，也不创建 Outreach template。
 
+如果 Options 里尚未启用主动询问引擎，或 RingCentral Server URL / Client ID / Client Secret / JWT 未配齐，工具栏上的「跟进追问 / Followup」按钮会变成灰色待配置状态，而不是直接消失。hover 和读屏会说明缺的是引擎开关还是 token；点击会打开 Options 的主动询问配置，并提示这次点击没有创建跟进会话、也没有发送消息。Memory Service 暂时读不到配置时同样走这条引导，不会假装可以创建。
+
+到点发出的 AI 追问会直接发送原问题正文，作为当前线程里的一条普通回复，不加 `Follow-up:` 这类机器前缀。
+
 ### 弹窗交互设计
 
 | 字段                     | 展示方式           | 说明                                     |
@@ -217,6 +221,8 @@ interface TopicItem {
 后续回复检测、追问前预检、AI 追问发送和超时升级继续复用 Outreach 现有运行逻辑。`context/renderedContext` 在 API 和存储层保留兼容，但产品语义是“信息目标 / 完成标准”：planner 只有在证据明确满足该目标时才把会话判定为 `complete/resolved`；只拿到部分线索、摘要里仍有“尚未/缺少/没有明确回复”等缺口时继续等待或追问。
 
 在主动询问视图里，`message_reaction` 来源可以单独筛选。等待回复阶段的说明会强调这不是重新发出一条新问题，而是基于原消息先查当前会话回复；只有未满足完成标准时才继续追问。
+
+结案 Bot 回执（拿到结果、超时或升级）会写明这次有没有发生追问；若发生过，回执里带「查看追问消息」的 RingCentral 直达链接。回执同时带继续追问标记：在 Bot 消息上可以直接设置下次间隔和次数，或打开主动询问会话详情的继续追问表单。这条路径不会重发原问题，提交后先等待间隔，到期才在原帖 bump。
 
 ---
 
@@ -546,6 +552,8 @@ NotificationService.sendNotification()
 
 **Bot (Glip) 推送**格式示例：
 
+同一条消息若同时命中多条即时通知规则，`__关注项__` 会换行拼接这些规则；开启了 @我 的规则排在前面并带 `（@提醒）`。LLM 审核不会把这份列表覆盖成单条规则。
+
 ```
 `Esone Qiu 确认身份定义已完成，询问是否还需补充。`
 
@@ -554,7 +562,8 @@ NotificationService.sendNotification()
 🔗 [查看原消息](https://app.ringcentral.com/...)
 
 💬 后续回复：
-__关注项__：规则12 [RULE_ID:11]: 在 esone.qiu+sync.service 中...
+__关注项__：Personal AI 讨论（@提醒）
+AI相关讨论话题,了解下是否有新工具...
 __在群__：@esone.qiu+sync.service
 __发送者__：Esone Qiu
 __时间__：2026-02-04 14:17:47

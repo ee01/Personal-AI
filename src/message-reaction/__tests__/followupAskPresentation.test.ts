@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   buildFollowupAskRunSummary,
+  buildFollowupAskSetupBoundary,
+  buildFollowupAskSetupToast,
   buildFollowupAskSubmitBoundary,
   buildFollowupAskSubmittingMessage,
   buildFollowupAskToastMessage,
+  isRingCentralOutreachReady,
+  resolveFollowupAskSetupState,
 } from '../followupAskPresentation.js';
 
 test('buildFollowupAskSubmittingMessage keeps the pending state side-effect boundary visible', () => {
@@ -166,3 +170,64 @@ test('buildFollowupAskToastMessage preserves existing goal on duplicate session'
   assert.match(message, /确认最终发布日期/);
   assert.match(message, /当前检查轮次后追问/);
 });
+
+test('resolveFollowupAskSetupState distinguishes engine, tokens, and config failures', () => {
+  assert.deepEqual(
+    resolveFollowupAskSetupState({
+      outreachEnabled: true,
+      ringCentralReady: true,
+    }),
+    { ready: true, reason: 'ready' },
+  );
+  assert.equal(
+    resolveFollowupAskSetupState({ outreachEnabled: false, ringCentralReady: true })
+      .reason,
+    'engine_disabled',
+  );
+  assert.equal(
+    resolveFollowupAskSetupState({
+      outreachEnabled: true,
+      ringCentralReady: false,
+    }).reason,
+    'ringcentral_missing',
+  );
+  assert.equal(
+    resolveFollowupAskSetupState({ configUnavailable: true }).reason,
+    'config_unavailable',
+  );
+  assert.equal(
+    isRingCentralOutreachReady({
+      ringCentralServerUrl: 'https://platform.ringcentral.com',
+      ringCentralClientId: 'id',
+      ringCentralClientSecretConfigured: true,
+      ringCentralJwtConfigured: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isRingCentralOutreachReady({
+      ringCentralServerUrl: 'https://platform.ringcentral.com',
+      ringCentralClientId: 'id',
+      ringCentralClientSecretConfigured: true,
+      ringCentralJwtConfigured: false,
+    }),
+    false,
+  );
+});
+
+test('buildFollowupAskSetupBoundary keeps the setup click from looking like a send', () => {
+  const engineMessage = buildFollowupAskSetupBoundary('engine_disabled');
+  assert.match(engineMessage, /启用主动询问引擎/);
+  assert.match(engineMessage, /不会创建跟进会话/);
+  assert.match(engineMessage, /发送追问/);
+
+  const tokenMessage = buildFollowupAskSetupBoundary('ringcentral_missing');
+  assert.match(tokenMessage, /RingCentral/);
+  assert.match(tokenMessage, /JWT/);
+  assert.match(tokenMessage, /不会创建跟进会话/);
+
+  const unavailable = buildFollowupAskSetupToast('config_unavailable');
+  assert.match(unavailable, /Memory Service/);
+  assert.match(unavailable, /未创建跟进会话/);
+});
+

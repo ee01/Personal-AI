@@ -71,10 +71,27 @@ export class ProactiveScheduler {
     this.scheduleKeystoneBriefComposer();
 
     const config = getConfig();
+    const startedLoops: string[] = [];
+
+    // Outreach scheduling is independent of the full proactive scheduler.
+    // Per-user enablement is enforced inside OutreachEngine.runSchedulerCycle().
+    if (process.env.OUTREACH_SCHEDULER_ENABLED !== 'false') {
+      this.outreachIntervalId = setInterval(() => {
+        this.safeRun('outreach', () => this.runOutreachCycle());
+      }, config.outreachIntervalMs);
+      startedLoops.push(`outreach every ${config.outreachIntervalMs}ms`);
+    } else {
+      console.log('[ProactiveScheduler] Outreach scheduler disabled');
+    }
+
     if (!config.proactiveSchedulerEnabled) {
       console.log(
         '[ProactiveScheduler] Background scheduler disabled; set PROACTIVE_SCHEDULER_ENABLED=true to enable heartbeat and cron jobs',
       );
+      if (startedLoops.length > 0) {
+        this.running = true;
+        console.log(`[ProactiveScheduler] Started - ${startedLoops.join(', ')}`);
+      }
       return;
     }
 
@@ -82,14 +99,7 @@ export class ProactiveScheduler {
     this.heartbeatIntervalId = setInterval(() => {
       this.safeRun('heartbeat', () => this.runHeartbeat());
     }, config.heartbeatIntervalMs);
-
-    if (config.outreachEnabled) {
-      this.outreachIntervalId = setInterval(() => {
-        this.safeRun('outreach', () => this.runOutreachCycle());
-      }, config.outreachIntervalMs);
-    } else {
-      console.log('[ProactiveScheduler] Outreach scheduler disabled');
-    }
+    startedLoops.push(`heartbeat every ${config.heartbeatIntervalMs}ms`);
 
     // 2. Daily consolidation cron
     this.dailyTask = cron.schedule(config.dailyCron, () => {
@@ -117,10 +127,7 @@ export class ProactiveScheduler {
     this.running = true;
 
     console.log(
-      `[ProactiveScheduler] Started - heartbeat every ${config.heartbeatIntervalMs}ms, ` +
-        (config.outreachEnabled
-          ? `outreach every ${config.outreachIntervalMs}ms, `
-          : 'outreach disabled, ') +
+      `[ProactiveScheduler] Started - ${startedLoops.join(', ')}, ` +
         `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}", ` +
         `weekly report cron "${config.weeklyReportCron}", ` +
         `today pilot prep cron "${config.todayPilotPrepCron}"`,
@@ -136,10 +143,6 @@ export class ProactiveScheduler {
     if (this.keystoneComposerIntervalId !== null) {
       clearInterval(this.keystoneComposerIntervalId);
       this.keystoneComposerIntervalId = null;
-    }
-
-    if (!this.running) {
-      return;
     }
 
     if (this.heartbeatIntervalId !== null) {

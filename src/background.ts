@@ -123,6 +123,12 @@ import {
   registerFollowThreadDigestTask,
 } from './message-reaction/FollowThreadHandler';
 import { buildPendingFollowThreadConfig } from './message-reaction/followThreadPendingConfig';
+import {
+  buildFollowupAskSetupToast,
+  isRingCentralOutreachReady,
+  resolveFollowupAskSetupState,
+  type FollowupAskSetupState,
+} from './message-reaction/followupAskPresentation';
 import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
 import {
   MEMORY_ENTRY_RULES_TASK_POPUP_SIZE,
@@ -582,7 +588,6 @@ async function executePersonalAiArBinding(data: Record<string, any>): Promise<{
     taskId: `ar:${arBindingId}`,
     title: `AR 数据：${title}`,
     task: buildPersonalAiArExecutionTask(data, executionHints),
-    executor: 'openclaw',
     taskKind: executionHints.taskKind,
     targetSystem: executionHints.targetSystem,
     executionHints,
@@ -1644,6 +1649,70 @@ if (chrome.contextMenus?.onClicked) {
   });
 }
 
+let followupAskSetupCache:
+  | { expiresAt: number; state: FollowupAskSetupState }
+  | null = null;
+const FOLLOWUP_ASK_SETUP_TTL_MS = 30_000;
+
+function invalidateFollowupAskSetupCache(): void {
+  followupAskSetupCache = null;
+}
+
+async function loadFollowupAskSetupState(
+  force = false,
+): Promise<FollowupAskSetupState> {
+  if (
+    !force &&
+    followupAskSetupCache &&
+    followupAskSetupCache.expiresAt > Date.now()
+  ) {
+    return followupAskSetupCache.state;
+  }
+
+  try {
+    const runtime = await getMemoryServiceClient().getRuntimeConfig();
+    const state = resolveFollowupAskSetupState({
+      outreachEnabled: runtime.outreachEnabled === true,
+      ringCentralReady: isRingCentralOutreachReady(runtime),
+    });
+    followupAskSetupCache = {
+      expiresAt: Date.now() + FOLLOWUP_ASK_SETUP_TTL_MS,
+      state,
+    };
+    return state;
+  } catch (error) {
+    console.warn('读取跟进追问主动询问配置失败:', error);
+    const state = resolveFollowupAskSetupState({ configUnavailable: true });
+    followupAskSetupCache = {
+      expiresAt: Date.now() + 10_000,
+      state,
+    };
+    return state;
+  }
+}
+
+async function openOptionsPageWithHash(hash?: string): Promise<void> {
+  const normalizedHash =
+    typeof hash === 'string' ? hash.replace(/^#/, '').trim() : '';
+  if (!normalizedHash) {
+    await chrome.runtime.openOptionsPage();
+    return;
+  }
+  const url = chrome.runtime.getURL(`options.html#${normalizedHash}`);
+  const existing = await chrome.tabs.query({
+    url: chrome.runtime.getURL('options.html'),
+  });
+  const existingTab = existing[0];
+  if (existingTab?.id) {
+    await chrome.tabs.update(existingTab.id, { url, active: true });
+    if (existingTab.windowId) {
+      await chrome.windows.update(existingTab.windowId, { focused: true });
+    }
+    return;
+  }
+  await chrome.tabs.create({ url });
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 全局日志：记录所有收到的消息
   // console.log(
@@ -1677,12 +1746,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'OPEN_OPTIONS_PAGE') {
     (async () => {
       try {
-        await chrome.runtime.openOptionsPage();
+        await openOptionsPageWithHash(
+          typeof request.hash === 'string' ? request.hash : undefined,
+        );
         sendResponse({ success: true });
       } catch (error: any) {
         sendResponse({
           success: false,
           error: error?.message || String(error),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'GET_FOLLOWUP_ASK_SETUP') {
+    (async () => {
+      try {
+        const setup = await loadFollowupAskSetupState(
+          request.force === true,
+        );
+        sendResponse({ success: true, setup });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'setup_failed',
+          setup: resolveFollowupAskSetupState({ configUnavailable: true }),
         });
       }
     })();
@@ -1769,7 +1858,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           Target_Type: 'private',
           Category: 'AR 数据,帮我做',
           Agent_Task_ID: String(data.agentTaskId || `agent_task_${Date.now()}`),
-          Agent_Executor: 'openclaw',
+          Agent_Executor: '',
           Agent_Notify_Template: String(data.notifyTemplate || '').trim(),
           Agent_Notify_Success_Receipt: 'Y',
           Agent_Trigger_Source: 'jira_rule',
@@ -1889,6 +1978,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CREATE_OUTREACH_FROM_MESSAGE') {
     (async () => {
       try {
+        const setup = await loadFollowupAskSetupState(true);
+        if (!setup.ready) {
+          sendResponse({
+            success: false,
+            error: buildFollowupAskSetupToast(setup.reason),
+            setup,
+          });
+          return;
+        }
         const result =
           await getMemoryServiceClient().createOutreachSessionFromMessage(
             request.data,
@@ -1910,6 +2008,48 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'CONTINUE_OUTREACH_FOLLOWUP') {
+    (async () => {
+      try {
+        const setup = await loadFollowupAskSetupState(true);
+        if (!setup.ready) {
+          sendResponse({
+            success: false,
+            error: buildFollowupAskSetupToast(setup.reason),
+            setup,
+          });
+          return;
+        }
+        const sessionId =
+          typeof request.data?.sessionId === 'string'
+            ? request.data.sessionId.trim()
+            : '';
+        if (!sessionId) {
+          sendResponse({ success: false, error: 'missing_session_id' });
+          return;
+        }
+        const result = await getMemoryServiceClient().continueOutreachFollowup(
+          sessionId,
+          {
+            maxFollowup: request.data?.maxFollowup,
+            followupIntervalSeconds: request.data?.followupIntervalSeconds,
+          },
+        );
+        await refreshGlipMessageMarkers();
+        sendResponse({
+          success: true,
+          session: result.session,
+        });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'continue_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.type === 'OPEN_OUTREACH_SESSION_REVIEW') {
     (async () => {
       try {
@@ -1917,8 +2057,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           typeof request.data?.sessionId === 'string'
             ? request.data.sessionId.trim()
             : '';
+        const continueFollowup = request.data?.continueFollowup === true;
         const path = rawSessionId
-          ? `memory-exploring.html#/outreach/${encodeURIComponent(rawSessionId)}`
+          ? `memory-exploring.html#/outreach/${encodeURIComponent(rawSessionId)}${
+              continueFollowup ? '?continueFollowup=1' : ''
+            }`
           : 'memory-exploring.html#/outreach?originKind=message_reaction';
         const tab = await chrome.tabs.create({
           url: chrome.runtime.getURL(path),
@@ -2075,6 +2218,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     };
     chrome.storage.local.set({ envConfig: request.config });
     console.log('Updated environment config:', request.config);
+    invalidateFollowupAskSetupCache();
     updateConcernedItemsDigestTaskSchedule(
       normalizeConcernedItemsDigestHour(config?.CONCERNED_ITEMS_DIGEST_HOUR, 8),
     );
@@ -2368,6 +2512,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 taskId: string;
                 title?: string;
                 task: string;
+                mode?: 'read' | 'write';
                 executor?: string;
                 notify?: boolean;
                 idempotencyKey?: string;
