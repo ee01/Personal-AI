@@ -17,6 +17,7 @@ import {
 import {
   getDigestDeliveryItems,
   getImmediateNotificationItem,
+  resolveImmediateNotificationDelivery,
 } from '../src/messageAnalysisDelivery.ts';
 import type { OutreachSession } from '../src/services/MemoryServiceClient.ts';
 
@@ -521,6 +522,34 @@ function main() {
     })?.id,
     'manual-follow-1',
     'follow-thread notification should keep priority over ordinary immediate rules',
+  );
+
+  const mentionRule: TopicItemWithAutoReply = {
+    id: '9w96oqe0b',
+    text: 'Personal AI 讨论',
+    expiredAt: 0,
+    notifyMethod: 'bot',
+    mentionMe: true,
+  };
+  const topicRule: TopicItemWithAutoReply = {
+    id: 'ppjoemwkn',
+    text: 'AI相关讨论话题,了解下是否有新工具,或者效率提升之类。排除 "AI, Sophia" 群组的新闻推送，排除 AI Notes / AI Delegate 产品功能的讨论',
+    expiredAt: 0,
+    notifyMethod: 'bot',
+    mentionMe: false,
+  };
+  const mentionConcat = resolveImmediateNotificationDelivery({
+    manualItems: [topicRule, mentionRule],
+    fallbackMatchedRule: topicRule.text,
+  });
+  assert.equal(mentionConcat.mention, true);
+  assert.equal(mentionConcat.notifyMethod, 'bot');
+  assert.match(mentionConcat.matchedRule, /Personal AI 讨论（@提醒）/);
+  assert.match(mentionConcat.matchedRule, /AI相关讨论话题/);
+  assert.ok(
+    mentionConcat.matchedRule.indexOf('Personal AI 讨论') <
+      mentionConcat.matchedRule.indexOf('AI相关讨论话题'),
+    'mention-causing rule should be listed before the non-mention rule',
   );
 
   console.log('verify-memory-entry-runtime: ok');

@@ -175,7 +175,7 @@ Legacy `DOUBAO_BRIDGE_*` environment variables still work as fallbacks, but `DES
 
 ## Extension Relationship
 
-The Chrome extension still exposes a `Desktop App` entry point for onboarding and status, but full configuration now lives in the desktop app itself.
+The Chrome extension still exposes a `Desktop App` entry point for onboarding and status, but full configuration now lives in the desktop app itself. Configured setup cards (Memory Service, login, thread bindings, background sync, and connected explorer sources) auto-collapse after they are ready; the header stays visible so the user can expand them again.
 
 Compatibility aliases remain in the extension-facing client surface so older code paths do not break immediately, while the primary naming has moved to `DesktopApp*`.
 

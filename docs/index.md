@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-08-14*
+*最后更新: 2026-08-21*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -94,7 +94,7 @@
 | 未来场景预演记忆 | Rehearsal | [rehearsal.md](./features/rehearsal.md) | 以后遇到某个可识别场景时，提醒用户该想起、说或做什么；不是事实层或弱联想 |
 | 场景预演边界 | Rehearsal | [rehearsal.md](./features/rehearsal.md) | 场景类型开放；详情页先用场景资格总览确认 future cue、现场提示资格和不自动执行边界，并可就地补充触发线索 |
 | Rehearsal 管理页 | Rehearsal | [rehearsal.md](./features/rehearsal.md) | `memory-exploring.html#/rehearsals`，用于审计和修正；筛选/搜索/加载/恢复控件、列表卡片、来源证据行与详情动作按钮点击前显示只读、选择、写入、反馈和不执行边界 |
-| 主动询问 | Scheduled Messages | [memory_system.md](./memory_system.md) | `OutreachEngine`，问外部人/群组；详情/列表操作回执、详情加载失败恢复和按钮级 hover/读屏边界区分确认、外发和回复 |
+| 主动询问 | Scheduled Messages | [memory_system.md](./memory_system.md) | `OutreachEngine`，问外部人/群组；结案/超时 Bot 回执含追问状态与继续追问入口；详情/列表操作回执区分确认、外发和回复 |
 | 主动询问会话管理 | Scheduled Messages | [memory_system.md](./memory_system.md) | `OutreachSessions.vue` / `OutreachSessionDetail.vue`，含筛选范围、本页优先级、本轮处理对象、会话推进、列表操作、发送前复核和只读导航/刷新/来源链接边界 |
 | 通知提醒与免打扰路径 | Notification Center | [memory_system.md](./memory_system.md) | `notification_records`，snooze 保留来源、依据记忆、回提醒上下文、仍未处理状态和操作边界回执 |
 | 周报与梦境摘要推送 | Notification Center | [notification_center.md](./features/notification_center.md) | provider digest / notice lane；Options 手动触发后显示生成、通知写入、Bot 投递、提交快照和当前设置变化回执 |
@@ -108,12 +108,13 @@
 | 系统观察规则 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 自我反思、主动询问等证据采集；规则页显示只读运行时观察回执，刷新失败保留上次快照，刷新按钮 hover / 读屏说明只重新读取状态 |
 | 规则范围校验 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 发送人、群组、时间、过期状态和系统观察上下文；规则页显示范围门禁、执行回执和折叠行最近拦截定位 |
 | 消息入库与通知分发 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 普通 filter / Agent Thinking / Agent Workflow 共用；规则页与后台调度状态显示本轮分发回执 |
+| 多规则命中即时通知归因 | Message Analysis / Message Reaction | [message_analysis.md](./features/message_analysis.md) | Glip「关注项」拼接全部即时命中规则，开启 @我 的规则标（@提醒）；mention 取或，审核文案只合并不覆盖 |
 | 联动操作 / Openclaw | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 预填记忆入口规则任务态，按钮点击前说明只开配置草稿；保存前执行预览和后续动作 |
 | 稍后处理 / Remind | Message Reaction | [message_reaction.md](./features/message_reaction.md) | RingCentral 消息提醒 |
 | Snooze 快速时间菜单 | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 15/30 分钟、1/2/3 小时、工作日等；新建 / 改期先显示时间口径，每个菜单项也带创建、改期、自定义或管理入口边界 |
 | Snooze 去重与撤销 | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 同源 pending 保护、改期目标回执、toast actions |
 | 关注后续 / Watch | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 持续追踪后续讨论，按钮点击前、保存前/保存后显示监听范围、期限、匹配、索引和取消确认边界 |
-| 跟进追问 / Followup | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 自己发出的消息创建一次性 Outreach session；提交按钮和提交中/成功/复用状态都说明未立即发送 |
+| 跟进追问 / Followup | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 自己发出的消息创建一次性 Outreach session；未开启主动询问或缺少 RingCentral token 时按钮变灰并引导到 Options；实际追问发送原文、不加 Follow-up 前缀 |
 | 自动答复 / Reply | Message Reaction | [message_reaction.md](./features/message_reaction.md) | 回复规则、命中范围、AI 失败 fallback、保存按钮边界，以及审核行正文/排期快照 |
 | Glip AI 标注 | Message Reaction | [message_reaction.md](./features/message_reaction.md) | follow / snooze / outreach / scheduled markers；普通与 Watch 特殊角标的 tooltip / 读屏都显示来源、缓存刷新、本地快照、状态口径、折叠范围和下一步复核路径 |
 | 消息交互工具栏 | Message Reaction | [message_reaction.md](./features/message_reaction.md) | RingCentral 消息 hover 工具栏；齿轮设置显示本地入口开关边界和保存后入口预览 |
@@ -123,7 +124,7 @@
 | 主题详情深链定位 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | `?messageId=` / `?message_id=` / `?ts=` 定位并高亮，兼容来源 permalink / Slack timestamp 别名 |
 | Topic 来源链接安全展示 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | 只展示可信 http(s)，打开/隐藏都有回执，链接 hover/读屏先说明外部打开边界 |
 | 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；创建 / 授权 / 恢复按钮 hover 与读屏标明阶段边界 |
-| 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿 |
+| 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称 |
 | Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |
 | 多执行引擎 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | AsMe / Bot / AI Report / JiraAutomation / Outreach / AgentTask；Dify 跳板导出见 [src/scheduled-messages/dify](../src/scheduled-messages/dify/README.md) |
 | 定时消息列表筛选 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Active / Done / Snooze 等 |
@@ -133,7 +134,9 @@
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP） |
+| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker） |
+| 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
+| Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |
 | Agent Workflow 关注项测试 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 内置样例、最近消息只读快照、本地保存样例；测试区先显示运行前范围、本地门禁资格、保存样例容量和无副作用边界 |
 | Agent Workflow 运行诊断 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | trace / storageReview / readiness；下一步动作显示本地排障边界，实时 trace 工具错误优先显示 Agent / Tool，证据包复制中锁定当前测试输入；运行/回放/基线/导出/复制控件 hover 与读屏说明本地测试、只读召回、剪贴板、下载和本地基线写入边界 |
@@ -181,17 +184,15 @@
 | Roadmap JQL 导入 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 覆盖开关只在导入栏勾一次；Jira REST 由 service worker 代发 |
 | Roadmap 两档分享 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 地址栏只读链接；右上角 token 可编辑链接 |
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
-| Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删 |
+| Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删；新建后置顶 Backlog 首位 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
 | Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；组内部分成功仍回写 jiraKey |
 | 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 background 代发 sync；落选 archived；与 Target 回写独立 |
 | Memory Service 自托管 | 记忆平台 | [self-hosting-memory-service.md](./self-hosting-memory-service.md) | Docker + Options 填地址；bootstrap / 设备 key / CORS 默认全关 |
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
 | Roadmap 漂移角标 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 个人层意图 vs 现实偏差；可更新/忽略/收敛消除 |
-| Roadmap Markers | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 阶段节点 / 外部依赖；缺 ETA 角标 |
-| Roadmap 协作 Ticker | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 顶栏滚动展示其他人最新编辑；头像 hover 用户名 |
-| Roadmap Jira Target 回写 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 主/子任务均可；扩展 Options token 优先，服务端 PAT fallback，皆无静默 |
-| Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
+| Roadmap Markers | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 阶段节点 / 外部依赖；缺 ETA 角标；依赖 Jira status/Target End 只读缓存 |
+| Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
 | Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
 | Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
 | 项目本地查找 | Project Dashboard | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 在当前浏览器本地快照内查找项目、任务、Jira、平台来源和里程碑；输入/清除/查看全部控制点与回执显示当前视图可见/隐藏命中和无外部读写边界 |
@@ -272,7 +273,7 @@
 | Agent Thinking 分析编排 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | `IntelligentAgent` 通用工具/思考循环供消息分析、Google Slides、主动通知和显式编排复用；被动网页 Memory Capture 使用单次无工具 LLM，不进入该循环 |
 | Agent Thinking 工具审批 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | 阻断、队列口径、审批前确认、结果区定位、批准 key / 审核包 / 重跑配置复制按钮边界 |
 | Agent Thinking trace 可视化 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | Options 演示、Trace 复核路线、问题 span 步骤定位、步骤按钮 hover/读屏复核理由与复制反馈 |
-| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP）；新用户默认用 `.env` 的 `OPENCLAW_*` Gateway；证据级 MCP、A2A Agent Card；不含反向 Worker |
+| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP local/remote）；probe 连通性；Worker pair/claim/lease；Desktop 内嵌与 headless 安装 |
 | Task Scheduler 后台任务调度 | 任务调度 | [task_scheduler_api.md](./features/task_scheduler_api.md) | 扩展后台 `scheduled_task_*` alarm 统一调度；任务启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
 | 用量与 Token 分析报表 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 使用视角四视图（功能总览/用户活跃/偏好矩阵/次要面板）+ 中文功能名 + 30d；按 user × capability × model × side 归因 |
 | 前后端用量打点 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 前端 `UsageTracker` 缓冲 + `chrome.alarms` 批量上报 `POST /usage/telemetry`；后端 `AsyncLocalStorage` + `LLMClient`（含 stream）记录真实/估算 usage，onResponse 记接口频率 |

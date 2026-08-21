@@ -44,6 +44,7 @@ Desktop App 当前提供这些核心能力：
 - 可选配置 `Memory Service API Key`
 - 必须配置 `Memory Service User ID`
 - 可在 app 中直接测试连接
+- Memory Service、登录、线程绑定、后台同步和已接通的 Explorer 来源在就绪后会自动收起，只留标题和状态；点「展开」可改配置。未就绪区块保持展开。
 
 > 注意：`Memory Service User ID` 对写操作是必填的。如果没填，Memory Service 会返回类似  
 > `X-User-Id header is required for write operations`
@@ -609,7 +610,9 @@ GitHub Release 主入口：
 
 但对最终用户来说，推荐只下载 `.pkg`。
 
-版本号由 [desktop-app/package.json](/Users/Esone/git/personal-ai/desktop-app/package.json) 的 `version` 驱动，例如当前为 `4.0.0`。
+版本号由 [desktop-app/package.json](/Users/Esone/git/personal-ai/desktop-app/package.json) 的 `version` 驱动，例如当前为 `5.0.0`。
+
+`npm run build:app` 会打包 Desktop `.pkg`，并同时打出 `worker-<ver>.tgz` + `install.sh`。`npm run deploy:app` 会发布两条 GitHub 轨道：`desktop-v*`（内嵌 worker）和 `worker-v*`（headless）。
 
 ---
 

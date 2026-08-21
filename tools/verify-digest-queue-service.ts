@@ -73,6 +73,9 @@ const { notificationService } = await import(
 const { buildBotNotificationMessage } = await import(
   '../src/services/NotificationService.ts'
 );
+const { mergeMatchedRuleDisplay } = await import(
+  '../src/utils/matchedRuleDisplay.ts'
+);
 const { summarizeDigestQueueProcessResults } = await import(
   '../src/services/TaskScheduler.ts'
 );
@@ -375,6 +378,34 @@ function verifyDigestBotMessageHasNoBrokenSourceLink() {
   assert.doesNotMatch(message, /__在群__：/);
   assert.doesNotMatch(message, /app\.ringcentral\.com\/messages\/?[\)\s]/);
   assert.doesNotMatch(message, /点击查看原消息/);
+}
+
+function verifyMatchedRuleDisplayKeepsMentionAttribution() {
+  const merged = mergeMatchedRuleDisplay(
+    'Personal AI 讨论（@提醒）\nAI相关讨论话题,了解下是否有新工具',
+    '规则7: [RULE_REF:manual:ppjoemwkn] [RULE_ID:6] AI相关讨论话题,了解下是否有新工具',
+  );
+  assert.match(merged, /Personal AI 讨论（@提醒）/);
+  assert.match(merged, /AI相关讨论话题/);
+  assert.equal(
+    merged.split('\n').filter((line) => line.includes('AI相关讨论话题')).length,
+    1,
+    'review overwrite must merge instead of duplicating the displayed rule',
+  );
+
+  const message = buildBotNotificationMessage({
+    teamId: 'team-1',
+    teamName: 'Nova requirements for ETM',
+    sender: 'Anton Nikitin',
+    messageContent: 'timeline is not realistic',
+    summary: '讨论 Q3 时间表',
+    datetime: '2026-08-06 09:13:39',
+    postId: 'post-1',
+    matchedRule: merged,
+    mention: true,
+  });
+  assert.match(message, /__关注项__：Personal AI 讨论（@提醒）/);
+  assert.match(message, /AI相关讨论话题/);
 }
 
 async function verifyProcessTaskRemovesOnlyCollectedItems() {
@@ -706,6 +737,7 @@ async function main() {
   await verifyNotificationFailureKeepsItems();
   verifyTaskSchedulerSurfacesDigestFailures();
   verifyDigestBotMessageHasNoBrokenSourceLink();
+  verifyMatchedRuleDisplayKeepsMentionAttribution();
   await verifyProcessTaskRemovesOnlyCollectedItems();
   await verifyProcessAllRunsRegisteredMapTasks();
   verifyConcernedTaskUsesBoundedReleaseWindow();
