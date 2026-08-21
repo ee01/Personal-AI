@@ -37,6 +37,8 @@ export interface AgentSubmitRequest {
   threadId: string;
   runId?: string;
   actionId: string;
+  /** Stable per remote execution attempt; differs when a failed action is retried. */
+  idempotencyKey?: string;
   sessionKey: string;
   agentId?: string;
   timeoutMs?: number;

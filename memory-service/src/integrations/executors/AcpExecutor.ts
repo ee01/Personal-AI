@@ -9,13 +9,13 @@ import { fileURLToPath } from 'node:url';
 import type {
   AgentExecutor,
   AgentResultEnvelope,
-  AgentRunStatus,
   AgentSubmitRequest,
 } from './AgentExecutor.js';
+import { parseAgentResultEnvelope } from './agentResultEnvelope.js';
 import {
-  hasVerifiableArtifact,
-  type AgentResultArtifact,
-} from './agentResultContract.js';
+  buildAgentResultSystemPrompt,
+  buildAgentResultUserPrompt,
+} from './agentResultPrompt.js';
 import type { AgentExecutorInstance } from './executorRegistry.js';
 import {
   AcpStdioClient,
@@ -24,65 +24,6 @@ import {
   type AcpSpawnFn,
 } from '../acp/AcpStdioClient.js';
 import { getConfig } from '../../config.js';
-
-function safeJsonCandidateParse(raw: string): Record<string, unknown> | null {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    /* try embedded */
-  }
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function mapStatus(status: string): AgentRunStatus {
-  switch (status) {
-    case 'success':
-    case 'succeeded':
-      return 'succeeded';
-    case 'capability_missing':
-      return 'capability_missing';
-    case 'auth_error':
-      return 'auth_error';
-    case 'need_human_decision':
-      return 'need_human_decision';
-    case 'timeout':
-      return 'timeout';
-    case 'cancelled':
-      return 'cancelled';
-    case 'running':
-      return 'running';
-    case 'input_required':
-      return 'input_required';
-    default:
-      return 'failed';
-  }
-}
-
-function buildDeveloperPrompt(request: AgentSubmitRequest): string {
-  return [
-    'You are Codex invoked by Personal AI via ACP for code / repo evidence tasks.',
-    `Mode: ${request.mode}`,
-    request.targetSystem ? `Target system: ${request.targetSystem}` : undefined,
-    'Prefer local filesystem, git history, tests, and CLI-reachable systems.',
-    'Use the personal-memory MCP tools when you need prior Personal AI memory; do not invent memory.',
-    'Return JSON only with this envelope:',
-    '{"status":"success|capability_missing|auth_error|need_human_decision|error","summary":"...","artifacts":[{"kind":"note","title":"...","content":"...","metadata":{}}],"transcript":"optional","payload":{}}',
-    'On status=success, artifacts MUST include at least one verifiable artifact with metadata.sourceSystem, entityId/entityKey, verification, and observedFields or operation/changedFields.',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
 
 function extractPromptText(result: unknown, updates: Array<Record<string, unknown>>): string {
   const chunks: string[] = [];
@@ -112,56 +53,6 @@ function extractPromptText(result: unknown, updates: Array<Record<string, unknow
     if (typeof u.text === 'string') chunks.push(u.text);
   }
   return chunks.join('');
-}
-
-function parseEnvelope(
-  text: string,
-  targetSystem?: string,
-): AgentResultEnvelope {
-  const parsed = safeJsonCandidateParse(text);
-  if (parsed) {
-    const artifacts = Array.isArray(parsed.artifacts)
-      ? (parsed.artifacts as AgentResultArtifact[])
-      : [];
-    let status = mapStatus(String(parsed.status || 'error'));
-    if (status === 'succeeded' && !hasVerifiableArtifact(artifacts, { targetSystem })) {
-      return {
-        status: 'error',
-        summary:
-          typeof parsed.summary === 'string' && parsed.summary.trim()
-            ? `${parsed.summary.trim()}（缺少可验证 artifact）`
-            : 'ACP 返回了 success，但缺少可验证 artifact。',
-        artifacts,
-        payload: (parsed.payload as Record<string, unknown>) || { raw: parsed },
-      };
-    }
-    return {
-      status,
-      summary:
-        typeof parsed.summary === 'string' && parsed.summary.trim()
-          ? parsed.summary.trim()
-          : text.slice(0, 500),
-      artifacts,
-      transcript: typeof parsed.transcript === 'string' ? parsed.transcript : undefined,
-      payload: (parsed.payload as Record<string, unknown>) || undefined,
-    };
-  }
-
-  if (text.trim()) {
-    // Soft success path for free-form code answers: wrap as note artifact when mode is research-like.
-    return {
-      status: 'error',
-      summary: text.slice(0, 500),
-      artifacts: [],
-      payload: { rawText: text },
-    };
-  }
-
-  return {
-    status: 'error',
-    summary: 'ACP 未返回可解析结果',
-    artifacts: [],
-  };
 }
 
 function resolveMcpServers(options: {
@@ -314,24 +205,23 @@ export class AcpExecutor implements AgentExecutor {
       }
 
       const promptText = [
-        buildDeveloperPrompt(request),
+        buildAgentResultSystemPrompt(request, { runtime: 'acp' }),
         '',
-        `Thread ID: ${request.threadId}`,
-        request.runId ? `Run ID: ${request.runId}` : undefined,
+        buildAgentResultUserPrompt(request),
         `Action ID: ${request.actionId}`,
-        '',
-        'Task:',
-        request.task,
-      ]
-        .filter(Boolean)
-        .join('\n');
+      ].join('\n');
 
       const promptResult = await client.prompt({
         sessionId,
         prompt: [{ type: 'text', text: promptText }],
       });
       const text = extractPromptText(promptResult, client.updates);
-      const envelope = parseEnvelope(text, request.targetSystem);
+      const envelope = parseAgentResultEnvelope(text, {
+        targetSystem: request.targetSystem,
+        mode: request.mode,
+        task: request.task,
+        emptySummary: 'ACP 未返回可解析结果',
+      });
       return {
         ...envelope,
         remoteRunId: sessionId,

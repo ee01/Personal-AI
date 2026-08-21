@@ -135,6 +135,7 @@ class FakeSocket implements GatewayWebSocket {
             }),
           },
         ];
+      const historyPayload = (this as any).historyPayload || { messages };
       const delayMs = Number((this as any).slowHistoryMs || 0);
       const respond = () => {
         this.emit('message', {
@@ -142,7 +143,7 @@ class FakeSocket implements GatewayWebSocket {
             type: 'res',
             id: frame.id,
             ok: true,
-            payload: { messages },
+            payload: historyPayload,
           }),
         });
       };
@@ -469,6 +470,62 @@ describe('OpenClawGatewayExecutor', () => {
     }
   });
 
+  it('parses assistant output from protocol v3 session previews', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
+    const previousDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = tempDir;
+    let socket: FakeSocket | null = null;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket();
+      (socket as any).waitSnapshot = true;
+      (socket as any).historyPayload = {
+        previews: [{
+          key: 'agent:main:session-preview',
+          status: 'ok',
+          items: [{
+            role: 'assistant',
+            text: JSON.stringify({
+              status: 'success',
+              summary: 'preview-ok',
+              artifacts: [{
+                kind: 'note',
+                content: 'opened',
+                metadata: {
+                  sourceSystem: 'chrome',
+                  entityId: '1',
+                  verification: 'read',
+                  observedFields: ['url'],
+                },
+              }],
+            }),
+          }],
+        }],
+      };
+      queueMicrotask(() => socket!.open());
+      return socket;
+    });
+
+    try {
+      const executor = new OpenClawGatewayExecutor(
+        {
+          id: 'gw-main', label: 'GW', type: 'openclaw-gateway',
+          baseUrl: 'http://127.0.0.1:18789', apiKey: 'token', enabled: true,
+        },
+        { WebSocketImpl: FakeWS as any },
+      );
+      const result = await executor.submit({
+        task: 'open baidu', mode: 'read', threadId: 't1', actionId: 'a-preview',
+        sessionKey: 'session-preview', timeoutMs: 5000,
+      });
+      expect(result.status).toBe('succeeded');
+      expect(result.summary).toBe('preview-ok');
+    } finally {
+      if (previousDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = previousDataDir;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the gateway socket open until chat.history finishes', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
     const previousDataDir = process.env.DATA_DIR;
@@ -549,6 +606,86 @@ describe('OpenClawGatewayExecutor', () => {
       expect(result.status).toBe('running');
       expect(result.remoteRunId).toBe('run-123');
       expect(result.payload).toMatchObject({ stillRunning: true });
+    } finally {
+      if (previousDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = previousDataDir;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('sends a system-owned receipt contract and recovers markdown Jira receipts', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
+    const previousDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = tempDir;
+    let socket: FakeSocket | null = null;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket();
+      (socket as any).waitSnapshot = true;
+      (socket as any).historyMessages = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: `已按 Asia/Shanghai 当前季度 2026-Q3 检查并同步 Committed：
+
+共更新 4 个：
+
+- JIRA: NOVA-17023
+- JIRA: NOVA-17011
+
+全部已通过 Jira REST API 更新为 customfield_31650 = {"value":"Yes"}，更新后 JQL 复查结果为 0 个待更新。`,
+            },
+          ],
+        },
+      ];
+      queueMicrotask(() => socket!.open());
+      return socket;
+    });
+
+    try {
+      const executor = new OpenClawGatewayExecutor(
+        {
+          id: 'gw-main',
+          label: 'GW',
+          type: 'openclaw-gateway',
+          baseUrl: 'http://127.0.0.1:18789',
+          enabled: true,
+        },
+        { WebSocketImpl: FakeWS as any },
+      );
+
+      const result = await executor.submit({
+        task: '帮我做: Nova Committed 的 INIT 同步 Epic Commit=Yes',
+        mode: 'write',
+        targetSystem: 'agent_task',
+        threadId: 't1',
+        actionId: 'a-nova',
+        sessionKey: 'session-nova',
+        timeoutMs: 5000,
+      });
+
+      const agentFrame = JSON.parse(
+        socket!.sent.find((raw) => {
+          try {
+            return JSON.parse(raw).method === 'agent';
+          } catch {
+            return false;
+          }
+        })!,
+      ) as {
+        params: { extraSystemPrompt?: string; message?: string };
+      };
+      expect(agentFrame.params.extraSystemPrompt).toContain(
+        '用户的 Task 只描述要做什么',
+      );
+      expect(agentFrame.params.message).toContain(
+        '回报格式由系统规定，不在 Task 里',
+      );
+      expect(agentFrame.params.message).toContain('Nova Committed');
+      expect(result.status).toBe('succeeded');
+      expect(result.artifacts).toHaveLength(2);
+      expect(result.artifacts[0]?.metadata?.entityKey).toBe('NOVA-17023');
     } finally {
       if (previousDataDir === undefined) delete process.env.DATA_DIR;
       else process.env.DATA_DIR = previousDataDir;

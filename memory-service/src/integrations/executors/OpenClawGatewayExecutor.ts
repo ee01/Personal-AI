@@ -5,13 +5,13 @@
 import type {
   AgentExecutor,
   AgentResultEnvelope,
-  AgentRunStatus,
   AgentSubmitRequest,
 } from './AgentExecutor.js';
+import { parseAgentResultEnvelope } from './agentResultEnvelope.js';
 import {
-  hasVerifiableArtifact,
-  type AgentResultArtifact,
-} from './agentResultContract.js';
+  buildAgentResultSystemPrompt,
+  buildAgentResultUserPrompt,
+} from './agentResultPrompt.js';
 import type { AgentExecutorInstance } from './executorRegistry.js';
 import {
   OpenClawGatewayClient,
@@ -26,85 +26,6 @@ export type GatewayProgressPatch = {
   executorType: 'openclaw-gateway';
   executorId: string;
 };
-
-function safeJsonCandidateParse(raw: string): Record<string, unknown> | null {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    /* try embedded object */
-  }
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function buildDeveloperPrompt(request: AgentSubmitRequest): string {
-  return [
-    'You are an external delegation agent invoked by Personal AI.',
-    `Mode: ${request.mode}`,
-    request.targetSystem ? `Target system: ${request.targetSystem}` : undefined,
-    'Return JSON only with this envelope:',
-    '{"status":"success|capability_missing|auth_error|need_human_decision|error","summary":"...","artifacts":[{"kind":"note","title":"...","content":"...","metadata":{}}],"transcript":"optional compact transcript","payload":{}}',
-    'On status=success, artifacts MUST include at least one verifiable artifact.',
-    'A verifiable artifact must include content plus metadata.sourceSystem, metadata.entityId or metadata.entityKey, metadata.verification, and metadata.observedFields (read) or metadata.operation / metadata.changedFields (write).',
-    'If you cannot provide a verifiable artifact, do not return success.',
-    'If required capability/tool is unavailable, use status=capability_missing.',
-    'If credentials or permissions are insufficient, use status=auth_error.',
-    'If human choice is required before continuing, use status=need_human_decision and include payload.question plus payload.options.',
-    'Keep the summary concise and factual.',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-function buildUserPrompt(request: AgentSubmitRequest): string {
-  return [
-    `Thread ID: ${request.threadId}`,
-    request.runId ? `Run ID: ${request.runId}` : undefined,
-    request.metadata
-      ? `Context metadata: ${JSON.stringify(request.metadata)}`
-      : undefined,
-    '',
-    'Task:',
-    request.task,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-function mapStatus(status: string): AgentRunStatus {
-  switch (status) {
-    case 'success':
-    case 'succeeded':
-    case 'ok':
-      return 'succeeded';
-    case 'capability_missing':
-      return 'capability_missing';
-    case 'auth_error':
-      return 'auth_error';
-    case 'need_human_decision':
-      return 'need_human_decision';
-    case 'timeout':
-      return 'timeout';
-    case 'cancelled':
-      return 'cancelled';
-    case 'running':
-      return 'running';
-    case 'input_required':
-      return 'input_required';
-    default:
-      return 'failed';
-  }
-}
 
 /** OpenClaw `agent.wait` returns a terminal snapshot, not assistant text. */
 function isAgentWaitSnapshot(payload: unknown): payload is {
@@ -174,6 +95,19 @@ function extractAssistantTextFromHistory(payload: unknown): string {
         : Array.isArray(payload)
           ? payload
           : [];
+
+  // OpenClaw protocol v3 can return session previews rather than a direct
+  // message list: { previews: [{ key, items: [...] }] }. Flatten those
+  // preview items so a completed run with a legitimate terse response (for
+  // example NO_REPLY) is not incorrectly reported as a history-read failure.
+  if (!messages.length && Array.isArray(obj.previews)) {
+    for (let i = obj.previews.length - 1; i >= 0; i -= 1) {
+      const preview = obj.previews[i] as Record<string, unknown> | undefined;
+      if (!preview || typeof preview !== 'object') continue;
+      const text = extractAssistantTextFromHistory(preview.items);
+      if (text) return text;
+    }
+  }
 
   const assistantTexts: string[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -291,6 +225,8 @@ async function resolveResultAfterWait(
     remoteRunId: string;
     sessionKey: string;
     targetSystem?: string;
+    mode?: 'read' | 'write';
+    task?: string;
   },
 ): Promise<AgentResultEnvelope> {
   if (isAgentWaitSnapshot(input.waited)) {
@@ -350,7 +286,12 @@ async function resolveResultAfterWait(
     };
   }
 
-  const envelope = parseEnvelope(text, input.targetSystem);
+  const envelope = parseAgentResultEnvelope(text, {
+    targetSystem: input.targetSystem,
+    mode: input.mode,
+    task: input.task,
+    emptySummary: 'OpenClaw Gateway 未返回可解析结果',
+  });
   return {
     ...envelope,
     remoteRunId: input.remoteRunId,
@@ -360,50 +301,6 @@ async function resolveResultAfterWait(
       gatewayWait: input.waited,
       chatHistory: historyPayload,
     },
-  };
-}
-
-function parseEnvelope(
-  text: string,
-  targetSystem?: string,
-): AgentResultEnvelope {
-  const parsed = safeJsonCandidateParse(text);
-  if (parsed) {
-    const obj = parsed;
-    const artifacts = Array.isArray(obj.artifacts)
-      ? (obj.artifacts as AgentResultArtifact[])
-      : [];
-    const statusRaw = String(obj.status || 'error');
-    let status = mapStatus(statusRaw);
-    if (status === 'succeeded' && !hasVerifiableArtifact(artifacts, { targetSystem })) {
-      status = 'error';
-      return {
-        status,
-        summary:
-          typeof obj.summary === 'string' && obj.summary.trim()
-            ? `${obj.summary.trim()}（缺少可验证 artifact）`
-            : 'OpenClaw Gateway 返回了 success，但缺少可验证 artifact。',
-        artifacts,
-        payload: (obj.payload as Record<string, unknown>) || { raw: obj },
-      };
-    }
-    return {
-      status,
-      summary:
-        typeof obj.summary === 'string' && obj.summary.trim()
-          ? obj.summary.trim()
-          : text.slice(0, 500),
-      artifacts,
-      transcript: typeof obj.transcript === 'string' ? obj.transcript : undefined,
-      payload: (obj.payload as Record<string, unknown>) || undefined,
-    };
-  }
-
-  return {
-    status: 'error',
-    summary: text.slice(0, 500) || 'OpenClaw Gateway 未返回可解析结果',
-    artifacts: [],
-    payload: { rawText: text },
   };
 }
 
@@ -441,15 +338,17 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
         : this.options.defaultTimeoutMs ?? 600_000;
     const client = this.createClient(Math.min(timeoutMs + 30_000, 650_000));
     const sessionKey = request.sessionKey;
-    const idempotencyKey = `pai:${request.actionId}`;
+    const idempotencyKey = request.idempotencyKey || `pai:${request.actionId}`;
 
     try {
       await client.connect();
       const accepted = await client.request<Record<string, unknown>>(
         'agent',
         {
-          message: buildUserPrompt(request),
-          extraSystemPrompt: buildDeveloperPrompt(request),
+          message: buildAgentResultUserPrompt(request),
+          extraSystemPrompt: buildAgentResultSystemPrompt(request, {
+            runtime: 'openclaw',
+          }),
           sessionKey,
           agentId: request.agentId,
           idempotencyKey,
@@ -490,12 +389,16 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           remoteRunId,
           sessionKey,
           targetSystem: request.targetSystem,
+          mode: request.mode,
+          task: request.task,
         });
       } catch (waitError) {
         return await this.reconcileAfterDisconnect(client, {
           remoteRunId,
           sessionKey,
           targetSystem: request.targetSystem,
+          mode: request.mode,
+          task: request.task,
           networkError:
             waitError instanceof Error ? waitError.message : String(waitError),
         });
@@ -580,6 +483,8 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
       remoteRunId: string;
       sessionKey: string;
       targetSystem?: string;
+      mode?: 'read' | 'write';
+      task?: string;
       eventCursor?: string;
       networkError: string;
     },
@@ -597,6 +502,8 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           remoteRunId: input.remoteRunId,
           sessionKey: input.sessionKey,
           targetSystem: input.targetSystem,
+          mode: input.mode,
+          task: input.task,
         });
         const historyMiss =
           isAgentWaitSnapshot(waited) &&

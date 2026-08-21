@@ -215,7 +215,13 @@ export class OpenClawGatewayClient {
     // OpenClaw requires waiting for connect.challenge before signing device auth.
     await this.waitForChallenge(5_000).catch(() => undefined);
 
+    // Gateways released around OpenClaw 2026.3 still speak protocol v3,
+    // while newer deployments speak v4.  The wire contract supports a range,
+    // so advertise both by default instead of hard-failing a healthy older
+    // gateway at connect time.  An explicitly requested protocol remains
+    // pinned for callers that need it.
     const protocol = this.options.protocol ?? 4;
+    const minProtocol = this.options.protocol === undefined ? 3 : protocol;
     const clientId =
       this.options.clientName && this.options.clientName.trim()
         ? this.options.clientName.trim()
@@ -233,7 +239,7 @@ export class OpenClawGatewayClient {
     const signedAtMs = Date.now();
 
     const params: Record<string, unknown> = {
-      minProtocol: protocol,
+      minProtocol,
       maxProtocol: protocol,
       client: {
         // Must be an allowlisted GatewayClientId — arbitrary names fail schema.
