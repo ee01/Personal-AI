@@ -326,9 +326,21 @@ async function verifyAskJourney(context, extensionId, correctionRequests) {
       .getByText('仅作背景，不代表你的立场', { exact: true })
       .waitFor();
     await receipt.getByRole('button', { name: '不是我的观点' }).click();
-    await receipt
-      .getByText('已更新派生归属；原始消息未修改。', { exact: true })
-      .waitFor({ timeout: 10_000 });
+    const correctionStatus = receipt.locator(
+      '.claim-attribution-correction-state',
+    );
+    try {
+      await correctionStatus.waitFor({ state: 'visible', timeout: 10_000 });
+      assert.equal(
+        (await correctionStatus.innerText()).trim(),
+        '已更新派生归属；原始消息未修改。',
+      );
+    } catch (error) {
+      throw new Error(
+        `Ask correction receipt was not confirmed; requests=${JSON.stringify(correctionRequests)} status=${JSON.stringify(await correctionStatus.allTextContents())}`,
+        { cause: error },
+      );
+    }
 
     assert.equal(correctionRequests.length, 1);
     assert.equal(correctionRequests[0].method, 'POST');
@@ -553,7 +565,7 @@ async function main() {
   });
 
   try {
-    await context.route('http://localhost:3210/api/v1/**', async (route) => {
+    await context.route('**/api/v1/**', async (route) => {
       const request = route.request();
       const url = request.url();
       const pathname = new URL(url).pathname;
