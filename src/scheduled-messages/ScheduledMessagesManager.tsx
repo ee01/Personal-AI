@@ -3522,6 +3522,7 @@ const ScheduledMessagesManager: React.FC = () => {
           'updated',
           outreachSyncError,
           agentTaskWebhookDetail,
+          editingMessage.Status,
         ));
       } else {
         // 新建模式：创建消息
@@ -3955,6 +3956,7 @@ const ScheduledMessagesManager: React.FC = () => {
     action: 'created' | 'updated',
     outreachSyncError?: Error | null,
     agentTaskWebhookDetail?: string,
+    previousStatus?: ScheduledMessage['Status'],
   ): ConfigSyncNotice => {
     const topic = message.Topic || message.ID;
     const actionLabel = action === 'created' ? '创建' : '更新';
@@ -3966,6 +3968,7 @@ const ScheduledMessagesManager: React.FC = () => {
     const agentTaskDetail = message.Push_Method === 'AgentTask'
       ? '帮我做: 已写入 AgentTask 计划行；Jira Rule 只在到期时调用 memory-service，执行账本和通知以后端为准'
       : '';
+    const reactivatedFromDone = previousStatus === 'Done' && message.Status === 'Active';
 
     return {
       tone: outreachSyncError ? 'warning' : 'success',
@@ -3973,6 +3976,9 @@ const ScheduledMessagesManager: React.FC = () => {
       description: `「${topic}」已写入 Messages 并定位到列表。`,
       details: [
         `写入: Messages 行 ${message.ID}`,
+        reactivatedFromDone
+          ? '状态: 已从 Done 恢复为 Active，执行器会按下次执行时间领取'
+          : '',
         `下次执行: ${formatNextExec(message)}`,
         `频率: ${formatFrequency(message)}`,
         `发给: ${formatRecipient(message)}`,

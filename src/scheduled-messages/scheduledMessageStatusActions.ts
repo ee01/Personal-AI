@@ -37,7 +37,7 @@ export function getScheduledMessageStatusToggleAction(
     case 'Done':
       return {
         canToggle: false,
-        title: '已完成消息需要编辑为未来执行时间后恢复',
+        title: '已完成消息需要编辑为未来执行时间，或改成仍有下次执行的重复任务后恢复',
       };
     default:
       return {

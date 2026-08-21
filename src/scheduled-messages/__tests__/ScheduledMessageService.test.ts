@@ -64,6 +64,11 @@ test('ScheduledMessageService updateMessage refreshes live headers before full-r
     /const updatedMessage = mergeScheduledMessageUpdate\(previousMessage, updates\);/,
     'updateMessage must merge updates without letting undefined Automation_Link wipe the hosted rule URL',
   );
+  assert.match(
+    updateMessageSource,
+    /applyDoneScheduleReactivation\(previousMessage, updatedMessage\)/,
+    'updateMessage should restore Done rows that now have a future next execution',
+  );
 });
 
 test('ScheduledMessageService createMessage also avoids stale header cache on append', () => {

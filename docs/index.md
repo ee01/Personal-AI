@@ -124,7 +124,7 @@
 | 主题详情深链定位 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | `?messageId=` / `?message_id=` / `?ts=` 定位并高亮，兼容来源 permalink / Slack timestamp 别名 |
 | Topic 来源链接安全展示 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | 只展示可信 http(s)，打开/隐藏都有回执，链接 hover/读屏先说明外部打开边界 |
 | 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；创建 / 授权 / 恢复按钮 hover 与读屏标明阶段边界 |
-| 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称 |
+| 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称；Done 单次改成仍有下次执行的循环会自动恢复 Active |
 | Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |
 | 多执行引擎 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | AsMe / Bot / AI Report / JiraAutomation / Outreach / AgentTask；Dify 跳板导出见 [src/scheduled-messages/dify](../src/scheduled-messages/dify/README.md) |
 | 定时消息列表筛选 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Active / Done / Snooze 等 |

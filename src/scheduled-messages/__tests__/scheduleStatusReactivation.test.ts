@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldReactivateDoneOneTimeMessageAfterScheduleChange } from '../scheduleStatusReactivation.js';
+import {
+  applyDoneScheduleReactivation,
+  shouldReactivateDoneMessageAfterScheduleChange,
+} from '../scheduleStatusReactivation.js';
 import type { ScheduledMessage } from '../types';
 
 function createDoneOneTimeMessage(overrides: Partial<ScheduledMessage> = {}): ScheduledMessage {
@@ -30,7 +33,7 @@ test('reactivates a Done one-time message when its schedule changes to the futur
   };
 
   assert.equal(
-    shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+    shouldReactivateDoneMessageAfterScheduleChange(
       previousMessage,
       updatedMessage,
       {
@@ -41,6 +44,36 @@ test('reactivates a Done one-time message when its schedule changes to the futur
     ),
     true,
   );
+});
+
+test('reactivates a Done one-time message that is converted into a repeating series', () => {
+  const previousMessage = createDoneOneTimeMessage();
+  const updatedMessage = {
+    ...previousMessage,
+    Repeat_Every: 1,
+    Repeat_Unit: 'Week' as const,
+    Repeat_Days: '1,3,5',
+  };
+
+  assert.equal(
+    shouldReactivateDoneMessageAfterScheduleChange(
+      previousMessage,
+      updatedMessage,
+      {
+        Repeat_Every: 1,
+        Repeat_Unit: 'Week',
+        Repeat_Days: '1,3,5',
+      },
+      new Date(2026, 4, 19, 9, 0),
+    ),
+    true,
+  );
+
+  applyDoneScheduleReactivation(previousMessage, updatedMessage);
+  assert.equal(updatedMessage.Status, 'Active');
+  assert.equal(updatedMessage.Last_Exec, '');
+  assert.equal(updatedMessage.Exec_Count, 0);
+  assert.equal(updatedMessage.Exec_Log, '待执行');
 });
 
 test('does not reactivate a Done message when only non-schedule fields change', () => {
@@ -54,7 +87,7 @@ test('does not reactivate a Done message when only non-schedule fields change', 
   };
 
   assert.equal(
-    shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+    shouldReactivateDoneMessageAfterScheduleChange(
       previousMessage,
       updatedMessage,
       { Content: 'updated content' },
@@ -64,10 +97,12 @@ test('does not reactivate a Done message when only non-schedule fields change', 
   );
 });
 
-test('does not reactivate recurring Done messages', () => {
+test('does not reactivate a repeating Done message whose Repeat_Count is already exhausted', () => {
   const previousMessage = createDoneOneTimeMessage({
     Repeat_Every: 1,
-    Repeat_Unit: 'Day',
+    Repeat_Unit: 'Week',
+    Repeat_Count: 1,
+    Exec_Count: 1,
   });
   const updatedMessage = {
     ...previousMessage,
@@ -76,7 +111,7 @@ test('does not reactivate recurring Done messages', () => {
   };
 
   assert.equal(
-    shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+    shouldReactivateDoneMessageAfterScheduleChange(
       previousMessage,
       updatedMessage,
       {
@@ -89,6 +124,29 @@ test('does not reactivate recurring Done messages', () => {
   );
 });
 
+test('reactivates a repeating Done message when Repeat_Count is raised so a next run exists', () => {
+  const previousMessage = createDoneOneTimeMessage({
+    Repeat_Every: 1,
+    Repeat_Unit: 'Week',
+    Repeat_Count: 1,
+    Exec_Count: 1,
+  });
+  const updatedMessage = {
+    ...previousMessage,
+    Repeat_Count: 4,
+  };
+
+  assert.equal(
+    shouldReactivateDoneMessageAfterScheduleChange(
+      previousMessage,
+      updatedMessage,
+      { Repeat_Count: 4 },
+      new Date(2026, 4, 19, 9, 0),
+    ),
+    true,
+  );
+});
+
 test('does not override explicit status updates', () => {
   const previousMessage = createDoneOneTimeMessage();
   const updatedMessage = {
@@ -98,7 +156,7 @@ test('does not override explicit status updates', () => {
   };
 
   assert.equal(
-    shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+    shouldReactivateDoneMessageAfterScheduleChange(
       previousMessage,
       updatedMessage,
       {
@@ -123,7 +181,7 @@ test('detects implicit default time changes that move a Done message into the fu
   };
 
   assert.equal(
-    shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+    shouldReactivateDoneMessageAfterScheduleChange(
       previousMessage,
       updatedMessage,
       { Push_Method: 'AsMe' },

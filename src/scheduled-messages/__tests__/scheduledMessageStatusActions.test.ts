@@ -42,7 +42,7 @@ test('scheduled message status action blocks completed direct reactivation', () 
     const action = getScheduledMessageStatusToggleAction(status);
 
     assert.equal(action.canToggle, false);
-    assert.match(action.title, /未来执行时间/);
+    assert.match(action.title, /未来执行时间|重复任务/);
     assert.throws(
       () => assertScheduledMessageStatusCanToggle(status),
       /未来执行时间/,

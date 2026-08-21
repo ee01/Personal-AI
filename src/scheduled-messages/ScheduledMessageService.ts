@@ -58,7 +58,10 @@ import {
   calculateScheduledMessageNextExecution,
   hasConfiguredAiEndpoint,
 } from './scheduleNextExecution';
-import { shouldReactivateDoneOneTimeMessageAfterScheduleChange } from './scheduleStatusReactivation';
+import {
+  applyDoneScheduleReactivation,
+  shouldReactivateDoneMessageAfterScheduleChange,
+} from './scheduleStatusReactivation';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
 import { mergeScheduledMessageUpdate } from './jiraAutomationLink';
 import { isGoogleSheetsInvalidCredentialError } from './googleSheetsAuthErrors.js';
@@ -353,15 +356,13 @@ export class ScheduledMessageService {
     normalizeExecutorTargetType(updatedMessage);
 
     if (
-      shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+      shouldReactivateDoneMessageAfterScheduleChange(
         previousMessage,
         updatedMessage,
         updates,
       )
     ) {
-      updatedMessage.Status = 'Active';
-      updatedMessage.Last_Exec = '';
-      updatedMessage.Exec_Log = '待执行';
+      applyDoneScheduleReactivation(previousMessage, updatedMessage);
       console.log(`✅ 消息 ${id} 已从 Done 自动恢复为 Active，等待新的未来执行时间`);
     }
     
