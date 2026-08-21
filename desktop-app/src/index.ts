@@ -32,6 +32,7 @@ import {
   applyBridgeSettingsToConfig,
   BridgeSettingsStore,
 } from './settings.js';
+import { WorkerSupervisor } from './workerSupervisor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -158,16 +159,36 @@ async function main(): Promise<void> {
     },
   );
 
+  const workerSupervisor = new WorkerSupervisor({
+    dataDir: path.join(config.dataDir, 'worker'),
+    logFile: path.join(config.dataDir, 'worker', 'worker.log'),
+  });
+  const persistWorkerSettings = async () => {
+    const worker = settingsStore.get().worker || {};
+    await workerSupervisor.writeLocalSettings({
+      cwd: worker.cwd,
+      acpCodexCommand: worker.acpCodexCommand,
+      acpClaudeCommand: worker.acpClaudeCommand,
+    });
+  };
+  await persistWorkerSettings();
+  settingsStore.subscribe(() => {
+    void persistWorkerSettings();
+  });
+  await workerSupervisor.startIfPaired();
+
   const app = await createBridgeServer(config, service, {
     memoryClient,
     settingsStore,
     syncManager,
     explorerManager,
     localSkillSyncManager,
+    workerSupervisor,
     version,
   });
   const shutdown = async () => {
     syncManager.stop();
+    await workerSupervisor.stop();
     await explorerManager.close();
     await browser.close();
     await mcpHost.stop();

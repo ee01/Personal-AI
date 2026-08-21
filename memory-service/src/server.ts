@@ -55,6 +55,8 @@ import { weeklyReportRoutes } from './routes/weeklyReport.js';
 import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
 import { actionRoutes } from './routes/actions.js';
 import { agentTaskRoutes } from './routes/agentTasks.js';
+import { agentExecutorRoutes } from './routes/agentExecutors.js';
+import { agentWorkerRoutes } from './routes/agentWorkers.js';
 import { concernedItemsRoutes } from './routes/concernedItems.js';
 import { followThreadHitRoutes } from './routes/followThreadHits.js';
 import { messageRuleRoutes } from './routes/messageRules.js';
@@ -327,6 +329,8 @@ export async function buildApp(
       await instance.register(reflectionThreadRoutes);
       await instance.register(actionRoutes);
       await instance.register(agentTaskRoutes);
+      await instance.register(agentExecutorRoutes);
+      await instance.register(agentWorkerRoutes);
       await instance.register(messageRuleRoutes);
       await instance.register(outreachRoutes);
       await instance.register(concernedItemsRoutes);
@@ -382,9 +386,9 @@ async function main(): Promise<void> {
   const scheduler = new ProactiveScheduler(userContextManager);
   scheduler.start();
   if (scheduler.isRunning) {
-    console.log('[server] Proactive scheduler started (heartbeat + cron)');
+    console.log('[server] Proactive scheduler started');
   } else {
-    console.log('[server] Proactive scheduler disabled');
+    console.log('[server] Proactive scheduler loops not started');
   }
 
   // ---- Graceful shutdown ----

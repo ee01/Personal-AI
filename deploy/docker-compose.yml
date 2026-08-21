@@ -1,0 +1,45 @@
+services:
+  memory-service:
+    image: ghcr.io/ee01/personal-ai-memory-service:${MEMORY_SERVICE_TAG:-latest}
+    container_name: memory-service
+    ports:
+      - "3210:3210"
+    volumes:
+      - ./data/memory-service:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3210/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  roadmap-service:
+    image: ghcr.io/ee01/personal-ai-roadmap-service:${ROADMAP_SERVICE_TAG:-latest}
+    container_name: roadmap-service
+    profiles: ["roadmap"]
+    ports:
+      - "3220:3220"
+    volumes:
+      - ./data/roadmap-service:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3220/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3

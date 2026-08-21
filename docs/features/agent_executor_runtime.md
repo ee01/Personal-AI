@@ -1,6 +1,6 @@
 # Agent Executor Runtime
 
-*最后更新: 2026-08-13*
+*最后更新: 2026-08-20*
 
 Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契约、记忆工具、对外被调用」拆成稳定分层。Sheet / Jira 只负责计划与触发；执行账本在 memory-service。
 
@@ -21,7 +21,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
   - `notifyTarget` 存在 → **成功**时发结果到目标（可套用 `notifyTemplate`）；**失败不发目标**
   - `successReceipt`（默认 `true`）→ 成功时额外 Bot 私发本人；目标已是本人私发时去重合并
   - 失败回执始终 Bot 私发本人；仅 `notify: false`（API 级，如 AR）可完全静默
-  - `notifyVia` 预留，v1 恒为 `bot`
+  - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
 - `proposed_actions.idempotency_key`：**UNIQUE**；幂等键确定性（无 `Date.now()` 兜底）
 - 队列态含 `input_required` / `running`；Gateway 断连后可停在可恢复态，不把网络层失败直接等同业务失败
 - Readiness：`agent_task` 只走 `openclaw:global` 连接层；点名目标系统的缺 artifact → 短 TTL degraded，**不做**整 scope `blocked_proof` 连坐
@@ -37,7 +37,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
 - 「允许外部委派（反思查证 / 联动操作）」总开关在执行器管理下方，映射 `openClawEnabled`，**默认开**；只门控反思/联动创建委派，**不影响** Agent Task
 - Options：总开关为 toggle；开启时在其下方展示「反思查证默认执行器」，关闭时隐藏
 - 委派「用谁」由 `executorDefaults.reflection_research`（反思查证默认执行器）决定；与总开关是 on/off vs 路由 的关系
-- 请求级覆盖：`/agent-tasks/execute` 的 `executor` 字段 > 用途默认
+- 请求级覆盖：`/agent-tasks/execute` 的 `executor` 字段 > 用途默认。空值走 `executorDefaults.agent_task`。显式实例 id（包括本机那条 `openclaw`）按所选实例执行。帮我做弹窗会列出 Options 执行器并默认选中 Agent Task 默认项。
 - 空列表运行时仍可合成 legacy（迁移前兜底）；有配置的用户会持久化导入
 
 支持类型：
@@ -56,6 +56,8 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 | `acp-codex` / `acp-claude-code` | `AcpExecutor` | stdio 驱动官方 ACP adapter；注入 Personal AI MCP |
 
 共享契约：`agentResultContract.ts` — success 必须带可验证 artifact；`observedFields` 接受 **array 或 object**。
+
+用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
 
 ## OpenClaw Gateway（Block C）
 
@@ -77,8 +79,9 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 ## ACP Codex（Block D）
 
 - `AcpExecutor` 默认 `npx -y @agentclientprotocol/codex-acp`
-- `session/new` 注入 Streamable HTTP + stdio 两份 personal-memory MCP（按需检索，不复制记忆库）
-- `cwd` 来自执行器实例配置；`sessionId` 写入结果 payload 便于续聊
+- **local**：`session/new` 注入 Streamable HTTP + stdio 两份 personal-memory MCP（按需检索，不复制记忆库）
+- **remote**：由 Worker 在用户机器上 spawn ACP；只注入 HTTP MCP（用户机器要能访问 Memory Service 公网/内网地址）
+- `cwd` 来自执行器实例配置（local）或 Desktop/Worker 本机设置（remote）；`sessionId` 写入结果 payload 便于续聊
 
 ## A2A（Block G）
 
@@ -122,6 +125,34 @@ curl -sS 'http://memory.xmnup.com/api/v1/context-pack?scope=identity_preferences
   -H "Authorization: Bearer pak.<…>"
 ```
 
+## 大白话运行逻辑
+
+用户在 Options「Agent 执行器」里登记 OpenClaw / ACP。ACP 多一个**运行位置**：
+
+1. **local**：任务在 Memory Service 主机上 `spawn` `codex-acp` / Claude ACP（自托管同机用这档）。
+2. **remote**：任务不在服务端跑，只写入队列态 `awaiting_claim`，等已配对的 Worker 出站领取。Worker 是通道，不是第五种执行器类型；一台 Worker 可以绑多个 ACP 实例。
+
+三种 Worker 宿主走同一协议（pair / heartbeat / claim / report，`protocolVersion=1`）：
+
+| 宿主 | 用户动作 |
+|---|---|
+| Desktop App 内嵌（主路径） | 安装 Desktop → 打开 Personal AI.app → Chrome 扩展 Options「Agent 执行器」顶部「一键配对本机 Desktop App」（Desktop 未在线时按钮仍显示，但不可点）；Electron main 用 `utilityProcess.fork` 拉起 `worker/`，崩溃指数退避重启（最多 5 次/小时），tray 显示 online/stale/error |
+| headless | `curl -fsSL <install.sh> \| bash -s -- --server <url> --token <pairing>`，launchd / systemd 守护 |
+| 平台调度（零安装） | 不装常驻进程：用 Cursor/Codex 的 schedule 周期性跑 `worker --once`，或直接调下面的 HTTP API |
+
+远程任务带 lease（默认 5 分钟）和 fence token。Worker 被杀后租约过期，任务回到 `awaiting_claim`；旧 fence 的 report 返回 409。连通性「测试」只探活（WS/HTTP/ACP initialize/心跳），**不跑 LLM**；「深度测试」给 Worker 发 `echo`。
+
+## Worker 与 probe
+
+- 表：`agent_workers` / pairing tokens / leases / commands；`proposed_actions.target_worker_id`
+- 凭据：`awk.<base64url(userId)>.<workerId>.<secret>`（与 `pak.` 同层，路由到对应用户库）；配对令牌 `wpt.<base64url(userId)>.<secret>`，15 分钟一次性
+- API：`POST /api/v1/agent-workers/pairing-tokens|pair`、`POST /:id/heartbeat|claim|report`、`GET /:id/commands`、`GET /agent-workers`、`DELETE /:id`
+- Worker 跑 ACP 时 `session/new` **只注入 HTTP MCP**（`/mcp` + worker Bearer），不传本机 stdio fallback。`/mcp` 接受 `pak.` 与 `awk.`。
+- `POST /api/v1/agent-executors/:id/probe` → `{ ok, latencyMs, stage, detail, nextAction }`。`stage` = dns / connect / auth / ready。结果进程内缓存 5 分钟，并写入 readiness 任务级记录（status 仅 ready/degraded，**不** `blocked_proof`）。
+- OpenClaw 不需要 runtime 开关；gateway 地址为 127.0.0.1 / 内网时 Options 提示「仅 Memory Service 主机可达」。
+- Desktop 设置页可改本机 Worker 的 cwd 与 ACP 命令；tray「Open Worker Log」打开 `~/Library/Logs/PersonalAI/worker.log`。
+- 发布：`npm run build:app` 同时编 Desktop 与 Worker；`npm run deploy:app` 发布 `desktop-v*`（内嵌 worker）和 `worker-v*`（tarball + install.sh）。协议靠握手版本，不靠同步发版。Worker 暂不上 npm。
+
 ## Sheet 触发（Block 0）
 
 - Apps Script **claim ≠ confirm**；AgentTask at-least-once；自定义 API at-most-once + TTL
@@ -129,9 +160,9 @@ curl -sS 'http://memory.xmnup.com/api/v1/context-pack?scope=identity_preferences
 
 ## 明确不做
 
-- **Block E**（反向 Worker / 出站领取）
 - Outreach 主状态机不并入 agent 队列
 - Google Sheet 不做可靠任务总线
+- Worker 不上 npm 公共包；不单独做「仅 Worker 的菜单栏精简版」（引导装完整 Desktop App）
 
 ## 验证
 
@@ -142,12 +173,18 @@ npm --prefix memory-service test -- --run \
   src/__tests__/mcpTools.test.ts \
   src/__tests__/a2aRoutes.test.ts \
   src/__tests__/executorRegistry.test.ts \
+  src/__tests__/executorProbe.test.ts \
+  src/__tests__/api-agent-executors-probe.test.ts \
+  src/__tests__/api-agent-workers.test.ts \
   src/__tests__/userApiKeys.test.ts \
   src/__tests__/api-context-pack.test.ts
 
-npm run eval:validate
-npm run eval:run -- --suite agent-executor-runtime --no-repair
+npm --prefix desktop-app test -- src/__tests__/workerSupervisor.test.ts
+npx --yes tsx --test worker/src/protocol.test.ts worker/src/runner.test.ts
 ```
+
+协议与队列是确定性的，不新增 LLM eval suite。
+
 
 ## 相关文档
 
@@ -155,3 +192,5 @@ npm run eval:run -- --suite agent-executor-runtime --no-repair
 - [Action Readiness Contracts](./action_readiness_contracts.md)（dispatch 前门禁）
 - [Personal Roadmap](./personal_roadmap.md)（Agent 创建 Jira 路径）
 - [Memory System](../memory_system.md)（外接凭证与记忆外接口径）
+- [自托管 Memory Service](../self-hosting-memory-service.md)（ghcr 镜像 + `deploy/bootstrap.sh`）
+- [Worker](../../worker/README.md)（headless 安装）

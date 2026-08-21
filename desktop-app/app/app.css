@@ -211,6 +211,12 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  width: 100%;
+}
+
+.section-lead > :not(.step-index) {
+  flex: 1;
+  min-width: 0;
 }
 
 .step-index {
@@ -249,6 +255,42 @@ body {
 .step-status-error {
   background: var(--bad-soft);
   color: var(--bad);
+}
+
+.collapse-toggle {
+  margin-left: auto;
+  border: 1px solid rgba(31, 35, 39, 0.12);
+  background: var(--paper-soft);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.collapse-toggle:hover {
+  border-color: rgba(164, 68, 29, 0.32);
+  color: var(--ink);
+}
+
+.collapsible-header {
+  cursor: pointer;
+}
+
+.collapsible-card.is-collapsed .collapsible-body {
+  display: none;
+}
+
+.collapsible-card.is-collapsed .section-lead,
+.collapsible-card.is-collapsed .source-card-head {
+  margin-bottom: 0;
+}
+
+.collapsible-card.is-collapsed .section-lead p,
+.collapsible-card.is-collapsed .source-card-head-main p {
+  display: none;
 }
 
 .step-note {

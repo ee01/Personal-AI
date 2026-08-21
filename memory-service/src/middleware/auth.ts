@@ -7,6 +7,11 @@ import {
 import { getConfig } from '../config.js';
 import { parseBearerToken } from '../mcp/streamableHttp.js';
 import { resolveUserIdHeader } from '../utils/userIdentity.js';
+import {
+  parsePairingToken,
+  parseWorkerKey,
+} from '../integrations/workers/workerProtocol.js';
+import { AgentWorkerRepository } from '../repositories/AgentWorkerRepository.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -56,6 +61,30 @@ export function createAuthMiddleware(ucm: UserContextManager) {
         : undefined,
     );
     const parsedUserKey = parseUserApiKey(bearer);
+
+    const pairing = parsePairingToken(bearer);
+    const pathOnly = request.url.split('?')[0];
+    if (pairing && pathOnly === '/api/v1/agent-workers/pair') {
+      request.userId = pairing.userId;
+      request.userContext = ucm.getContext(pairing.userId);
+      request.authMode = 'anonymous';
+      return;
+    }
+
+    const workerKey = parseWorkerKey(bearer);
+    if (workerKey) {
+      const context = ucm.getContext(workerKey.userId);
+      const repo = new AgentWorkerRepository(context.db);
+      const worker = repo.verifyCredential(workerKey.workerId, workerKey.token);
+      if (!worker) {
+        return reply.code(401).send({ error: 'invalid_worker_key' });
+      }
+      request.userId = workerKey.userId;
+      request.userContext = context;
+      request.authMode = 'worker_key';
+      request.workerId = workerKey.workerId;
+      return;
+    }
 
     if (parsedUserKey) {
       const headerUserId = resolveUserIdHeader(request.headers['x-user-id']);

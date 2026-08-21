@@ -1,0 +1,16 @@
+name: Desktop release track
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remind signed macOS packaging
+        run: |
+          echo "desktop-v* tags are packaged by desktop-app/scripts/deploy.mjs on a signed Mac."
+          echo "npm run deploy:app publishes desktop-v* (.pkg) and worker-v* (tgz + install.sh)."

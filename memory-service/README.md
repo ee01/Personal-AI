@@ -143,7 +143,8 @@ Key environment variables (see `.env.example` for all options):
 | `EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model name |
 | `EMBEDDING_DIMENSION` | `384` | Vector dimension |
 | `API_KEY` | -- | Optional API key for authentication |
-| `PROACTIVE_SCHEDULER_ENABLED` | `false` | Enable all-user heartbeat and cron background jobs |
+| `PROACTIVE_SCHEDULER_ENABLED` | `false` | Enable heartbeat, consolidation, dreaming, and report cron jobs |
+| `OUTREACH_SCHEDULER_ENABLED` | on | Set `false` to disable the outreach polling loop at deploy level |
 | `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` | `false` | Enable passive browser/composer recall search |
 | `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` | `false` | Enable vector search on passive browser/composer recall |
 | `CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED` | `true` | Return empty passive recall before DB/FTS work when passive search is disabled |

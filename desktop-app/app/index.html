@@ -10,7 +10,7 @@
     <div class="app-shell">
       <header class="hero hero-split">
         <div class="hero-copy-block">
-          <p class="eyebrow">Personal AI · 4.0</p>
+          <p class="eyebrow">Personal AI · 5.0</p>
           <h1 data-i18n="desktop.hero.title">让 AI 记住你</h1>
           <p class="hero-copy" data-i18n="desktop.hero.copy">
             左侧是「记忆广播」——把记忆系统里的长期记忆、近期记忆重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT
@@ -140,8 +140,8 @@
         </article>
       </section>
 
-      <section class="setup-card">
-        <div class="section-lead">
+      <section class="setup-card collapsible-card" data-collapse-id="memory">
+        <div class="section-lead collapsible-header">
           <div class="step-index">1</div>
           <div>
             <div class="step-title-row">
@@ -151,6 +151,14 @@
                 class="step-status step-status-pending"
                 >待配置</span
               >
+              <button
+                type="button"
+                class="collapse-toggle"
+                data-collapse-toggle
+                aria-expanded="true"
+              >
+                <span class="collapse-toggle-label">收起</span>
+              </button>
             </div>
             <p>
               输出广播、Quick Ask 与 Explorer 共用这一层；待办分为新内容即时推送和每日完整摘要。
@@ -158,6 +166,7 @@
           </div>
         </div>
 
+        <div class="collapsible-body">
         <form id="settings-form" class="settings-form settings-form-wide">
           <div class="settings-compact-grid">
             <fieldset class="settings-compact-group settings-compact-group-service">
@@ -223,6 +232,34 @@
                 <span>新待办当天不重复推送</span>
               </label>
             </fieldset>
+
+            <fieldset class="settings-compact-group">
+              <legend>Agent Worker</legend>
+              <label class="compact-field compact-field-wide">
+                <span>本机工作目录</span>
+                <input
+                  id="worker-cwd"
+                  type="text"
+                  placeholder="/Users/me/projects"
+                />
+              </label>
+              <label class="compact-field compact-field-wide">
+                <span>Codex ACP 命令</span>
+                <input
+                  id="worker-codex-command"
+                  type="text"
+                  placeholder="npx -y @agentclientprotocol/codex-acp"
+                />
+              </label>
+              <label class="compact-field compact-field-wide">
+                <span>Claude Code ACP 命令</span>
+                <input
+                  id="worker-claude-command"
+                  type="text"
+                  placeholder="npx -y @agentclientprotocol/claude-code-acp"
+                />
+              </label>
+            </fieldset>
           </div>
 
           <div class="action-row">
@@ -234,6 +271,7 @@
         </form>
 
         <p id="settings-message" class="inline-message"></p>
+        </div>
       </section>
 
       <main class="workspace-grid">
@@ -246,8 +284,8 @@
             </p>
           </div>
 
-          <article class="flow-card">
-            <div class="section-lead compact">
+          <article class="flow-card collapsible-card" data-collapse-id="login">
+            <div class="section-lead compact collapsible-header">
               <div class="step-index">2</div>
               <div>
                 <div class="step-title-row">
@@ -257,6 +295,14 @@
                     class="step-status step-status-pending"
                     >待登录</span
                   >
+                  <button
+                    type="button"
+                    class="collapse-toggle"
+                    data-collapse-toggle
+                    aria-expanded="true"
+                  >
+                    <span class="collapse-toggle-label">收起</span>
+                  </button>
                 </div>
                 <p>
                   默认使用桥接器自己的浏览器
@@ -265,6 +311,8 @@
                 </p>
               </div>
             </div>
+
+            <div class="collapsible-body">
 
             <label class="toggle-field webpage-mcp-toggle">
               <input id="broadcast-use-daily-browser" type="checkbox" />
@@ -332,10 +380,11 @@
               hidden
             ></p>
             <p id="login-message" class="inline-message"></p>
+            </div>
           </article>
 
-          <article class="flow-card">
-            <div class="section-lead compact">
+          <article class="flow-card collapsible-card" data-collapse-id="memory-thread">
+            <div class="section-lead compact collapsible-header">
               <div class="step-index">3</div>
               <div>
                 <div class="step-title-row">
@@ -345,6 +394,14 @@
                     class="step-status step-status-pending"
                     >待绑定</span
                   >
+                  <button
+                    type="button"
+                    class="collapse-toggle"
+                    data-collapse-toggle
+                    aria-expanded="true"
+                  >
+                    <span class="collapse-toggle-label">收起</span>
+                  </button>
                 </div>
                 <p>
                   用于沉淀 persona_core 和
@@ -352,6 +409,7 @@
                 </p>
               </div>
             </div>
+            <div class="collapsible-body">
             <div class="action-row">
               <button id="memory-thread-button" type="button">
                 创建 / 修复长期记忆线程
@@ -365,10 +423,11 @@
               class="thread-detail thread-detail-pending"
             ></div>
             <p id="memory-thread-message" class="inline-message"></p>
+            </div>
           </article>
 
-          <article class="flow-card">
-            <div class="section-lead compact">
+          <article class="flow-card collapsible-card" data-collapse-id="mobile-thread">
+            <div class="section-lead compact collapsible-header">
               <div class="step-index">4</div>
               <div>
                 <div class="step-title-row">
@@ -378,6 +437,14 @@
                     class="step-status step-status-pending"
                     >待绑定</span
                   >
+                  <button
+                    type="button"
+                    class="collapse-toggle"
+                    data-collapse-toggle
+                    aria-expanded="true"
+                  >
+                    <span class="collapse-toggle-label">收起</span>
+                  </button>
                 </div>
                 <p>
                   把近期记忆重点、待办和通知推送回你在手机 /
@@ -385,6 +452,7 @@
                 </p>
               </div>
             </div>
+            <div class="collapsible-body">
             <div class="action-row">
               <button id="mobile-thread-button" type="button">
                 自动绑定手机对话
@@ -401,10 +469,11 @@
               class="thread-detail thread-detail-pending"
             ></div>
             <p id="mobile-thread-message" class="inline-message"></p>
+            </div>
           </article>
 
-          <article class="flow-card">
-            <div class="section-lead compact">
+          <article class="flow-card collapsible-card" data-collapse-id="background">
+            <div class="section-lead compact collapsible-header">
               <div class="step-index">5</div>
               <div>
                 <div class="step-title-row">
@@ -414,12 +483,21 @@
                     class="step-status step-status-pending"
                     >待就绪</span
                   >
+                  <button
+                    type="button"
+                    class="collapse-toggle"
+                    data-collapse-toggle
+                    aria-expanded="true"
+                  >
+                    <span class="collapse-toggle-label">收起</span>
+                  </button>
                 </div>
                 <p>
                   完成前面的连接后，关闭窗口即可继续在后台运行；真正停掉同步才需要点下面的按钮。
                 </p>
               </div>
             </div>
+            <div class="collapsible-body">
             <p class="step-note">
               如果你想先验证链路，可以先分别手动推送 persona、近期记忆重点和待办
               / 通知，确认都能写入正确线程。
@@ -428,6 +506,7 @@
               <button id="stop-button" class="danger" type="button">
                 停止后台并退出
               </button>
+            </div>
             </div>
           </article>
 
@@ -482,8 +561,8 @@
             </div>
           </article>
 
-          <article class="source-card" data-source="doubao">
-            <div class="source-card-head">
+          <article class="source-card collapsible-card" data-source="doubao" data-collapse-id="source-doubao">
+            <div class="source-card-head collapsible-header">
               <div class="source-card-head-main">
                 <div class="step-title-row">
                   <h3>豆包对话</h3>
@@ -498,6 +577,14 @@
                 </p>
               </div>
               <div class="source-card-head-actions">
+                <button
+                  type="button"
+                  class="collapse-toggle"
+                  data-collapse-toggle
+                  aria-expanded="true"
+                >
+                  <span class="collapse-toggle-label">收起</span>
+                </button>
                 <label class="source-toggle">
                   <input id="doubao-source-enabled" type="checkbox" />
                   <span class="source-toggle-track" aria-hidden="true"></span>
@@ -509,6 +596,7 @@
               </div>
             </div>
 
+            <div class="collapsible-body">
             <div class="source-meta-grid">
               <div>
                 <label>缓存消息</label>
@@ -698,10 +786,11 @@
               Explorer 里撤回已入库记忆，会按这里保存的默认范围执行。
             </p>
             <p id="doubao-source-message" class="inline-message"></p>
+            </div>
           </article>
 
-          <article class="source-card" data-source="chatgpt">
-            <div class="source-card-head">
+          <article class="source-card collapsible-card" data-source="chatgpt" data-collapse-id="source-chatgpt">
+            <div class="source-card-head collapsible-header">
               <div class="source-card-head-main">
                 <div class="step-title-row">
                   <h3>ChatGPT 对话</h3>
@@ -718,6 +807,14 @@
                 </p>
               </div>
               <div class="source-card-head-actions">
+                <button
+                  type="button"
+                  class="collapse-toggle"
+                  data-collapse-toggle
+                  aria-expanded="true"
+                >
+                  <span class="collapse-toggle-label">收起</span>
+                </button>
                 <label class="source-toggle">
                   <input id="chatgpt-source-enabled" type="checkbox" />
                   <span class="source-toggle-track" aria-hidden="true"></span>
@@ -729,6 +826,7 @@
               </div>
             </div>
 
+            <div class="collapsible-body">
             <div class="source-meta-grid">
               <div>
                 <label>缓存消息</label>
@@ -927,10 +1025,11 @@
               里撤回已入库记忆，也会按这里保存的默认范围执行。
             </p>
             <p id="chatgpt-source-message" class="inline-message"></p>
+            </div>
           </article>
 
-          <article class="source-card" data-source="chrome-extension">
-            <div class="source-card-head">
+          <article class="source-card collapsible-card" data-source="chrome-extension" data-collapse-id="extension">
+            <div class="source-card-head collapsible-header">
               <div class="source-card-head-main">
                 <div class="step-title-row">
                   <h3>Chrome 浏览观察</h3>
@@ -939,6 +1038,14 @@
                     class="step-status step-status-pending"
                     >推荐</span
                   >
+                  <button
+                    type="button"
+                    class="collapse-toggle"
+                    data-collapse-toggle
+                    aria-expanded="true"
+                  >
+                    <span class="collapse-toggle-label">收起</span>
+                  </button>
                 </div>
                 <p>
                   浏览器扩展会静默观察你日常的网页消息流，把可沉淀的内容补到记忆里——配合上面两个对话来源，让
@@ -947,6 +1054,7 @@
               </div>
             </div>
 
+            <div class="collapsible-body">
             <div class="step-support-card">
               <label>最近 90 天消息数</label>
               <strong id="extension-memory-count">待统计</strong>
@@ -963,6 +1071,7 @@
               >
                 安装 Chrome extension
               </button>
+            </div>
             </div>
           </article>
         </section>

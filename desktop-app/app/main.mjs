@@ -17,6 +17,7 @@ import {
   nativeImage,
   screen,
   shell,
+  utilityProcess,
 } from 'electron';
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +38,7 @@ const tempDir = path.join(appSupportDir, 'tmp');
 const logsDir = path.join(app.getPath('home'), 'Library', 'Logs', 'PersonalAI');
 const appLogFile = path.join(logsDir, 'desktop-app.log');
 const bridgeLogFile = path.join(logsDir, 'desktop-app-agent.log');
+const workerLogFile = path.join(logsDir, 'worker.log');
 const bridgePidFile = path.join(appSupportDir, 'desktop-app-agent.pid');
 const uninstallMarkerFile = path.join(appSupportDir, 'uninstall-pending');
 const quickAskStateFile = path.join(appSupportDir, 'quick-ask-window.json');
@@ -297,6 +299,7 @@ function getBridgeEnv() {
     PLAYWRIGHT_BROWSERS_PATH:
       process.env.PLAYWRIGHT_BROWSERS_PATH ||
       (app.isPackaged ? packagedPlaywrightBrowsersDir : '0'),
+    PERSONAL_AI_MAIN_OWNS_WORKER: '1',
   };
 }
 
@@ -474,6 +477,128 @@ async function stopBridgeProcess() {
     // Process already exited.
   }
   await fs.rm(bridgePidFile, { force: true }).catch(() => undefined);
+}
+
+let workerProcess = null;
+let workerRestartTimes = [];
+let lastWorkerRestartFlag = '';
+let workerStopping = false;
+const MAX_WORKER_RESTARTS_PER_HOUR = 5;
+
+function workerDataDir() {
+  return path.join(appSupportDir, 'data', 'worker');
+}
+
+function resolveWorkerEntry() {
+  return path.join(__dirname, '..', 'dist', 'worker', 'index.js');
+}
+
+async function stopWorkerProcess() {
+  workerStopping = true;
+  const child = workerProcess;
+  workerProcess = null;
+  if (!child) return;
+  try {
+    child.kill();
+  } catch {
+    /* already gone */
+  }
+}
+
+async function ensureWorkerProcess() {
+  const dataDir = workerDataDir();
+  const pairFile = path.join(dataDir, 'pair.json');
+  let pair;
+  try {
+    pair = JSON.parse(await fs.readFile(pairFile, 'utf8'));
+  } catch {
+    return;
+  }
+  if (!pair?.pairingToken && !pair?.serverUrl) return;
+
+  const flagRaw = await fs
+    .readFile(path.join(dataDir, 'restart.flag'), 'utf8')
+    .catch(() => '');
+  const shouldRestart = Boolean(flagRaw && flagRaw !== lastWorkerRestartFlag);
+  if (workerProcess && !shouldRestart) return;
+
+  const now = Date.now();
+  workerRestartTimes = workerRestartTimes.filter((ts) => now - ts < 60 * 60 * 1000);
+  if (workerRestartTimes.length >= MAX_WORKER_RESTARTS_PER_HOUR) {
+    await appendLog(
+      appLogFile,
+      `[worker] crashed ${MAX_WORKER_RESTARTS_PER_HOUR} times in the last hour; giving up until app restart`,
+    );
+    return;
+  }
+
+  await stopWorkerProcess();
+  lastWorkerRestartFlag = flagRaw;
+  workerStopping = false;
+  const entry = resolveWorkerEntry();
+  try {
+    await fs.access(entry);
+  } catch {
+    await appendLog(appLogFile, `[worker] entry missing: ${entry}`);
+    return;
+  }
+  if (typeof utilityProcess?.fork !== 'function') {
+    await appendLog(appLogFile, '[worker] utilityProcess.fork unavailable');
+    return;
+  }
+
+  let settings = {};
+  try {
+    settings = JSON.parse(
+      await fs.readFile(path.join(dataDir, 'settings.json'), 'utf8'),
+    );
+  } catch {
+    settings = {};
+  }
+  const args = [
+    '--server',
+    pair.serverUrl || 'http://127.0.0.1:3210',
+    '--token',
+    pair.pairingToken || '',
+    '--data-dir',
+    dataDir,
+    '--host-kind',
+    'desktop',
+  ];
+  if (settings.cwd) {
+    args.push('--cwd', settings.cwd);
+  }
+
+  const child = utilityProcess.fork(entry, args, {
+    serviceName: 'personal-ai-worker',
+    stdio: 'pipe',
+    env: {
+      ...process.env,
+      WORKER_HOST_KIND: 'desktop',
+    },
+  });
+  workerProcess = child;
+  child.stdout?.on('data', (chunk) => {
+    void appendLog(workerLogFile, String(chunk).trim());
+  });
+  child.stderr?.on('data', (chunk) => {
+    void appendLog(workerLogFile, `[stderr] ${String(chunk).trim()}`);
+  });
+  child.on('exit', (code) => {
+    void appendLog(workerLogFile, `[exit] code=${code ?? 'null'}`);
+    if (workerProcess === child) workerProcess = null;
+    if (workerStopping) return;
+    workerRestartTimes.push(Date.now());
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(workerRestartTimes.length, 5));
+    setTimeout(() => {
+      void ensureWorkerProcess();
+    }, delay);
+  });
+}
+
+async function stopBackgroundProcesses() {
+  await stopWorkerProcess();
+  await stopBackgroundProcesses();
 }
 
 function showMainWindow() {
@@ -1120,7 +1245,7 @@ function syncWindowPresence(showWindow = shouldShowDockIcon()) {
   }
 }
 
-function createTrayMenu() {
+function createTrayMenu(workerLabel = 'Worker: unknown') {
   return Menu.buildFromTemplate([
     {
       label: 'Open Quick Ask',
@@ -1131,9 +1256,19 @@ function createTrayMenu() {
       click: () => showMainWindow(),
     },
     {
+      label: workerLabel,
+      enabled: false,
+    },
+    {
+      label: 'Open Worker Log',
+      click: () => {
+        void shell.openPath(workerLogFile);
+      },
+    },
+    {
       label: 'Open Logs',
       click: () => {
-        void shell.openPath(bridgeLogFile);
+        void shell.openPath(logsDir);
       },
     },
     { type: 'separator' },
@@ -1148,7 +1283,7 @@ function createTrayMenu() {
       click: async () => {
         allowQuit = true;
         syncLoginItem(false);
-        await stopBridgeProcess();
+        await stopBackgroundProcesses();
         app.quit();
       },
     },
@@ -1165,12 +1300,31 @@ function createTray() {
 
   tray = new Tray(trayImage);
   tray.setToolTip('Personal AI');
-  const trayMenu = createTrayMenu();
+  const refreshTray = async () => {
+    await ensureWorkerProcess();
+    let workerLabel = 'Worker: offline';
+    try {
+      const response = await fetch(`${bridgeBaseUrl}/worker/status`);
+      if (response.ok) {
+        const status = await response.json();
+        workerLabel = `Worker: ${status.state || 'offline'}${status.currentTaskCount ? ` (${status.currentTaskCount} tasks)` : ''}`;
+      }
+    } catch {
+      workerLabel = 'Worker: unreachable';
+    }
+    tray.setToolTip(`Personal AI · ${workerLabel}`);
+    const trayMenu = createTrayMenu(workerLabel);
+    tray.removeAllListeners('right-click');
+    tray.on('right-click', () => {
+      tray.popUpContextMenu(trayMenu);
+    });
+  };
+  void refreshTray();
+  setInterval(() => {
+    void refreshTray();
+  }, 5000);
   tray.on('click', () => {
     toggleAskWindow();
-  });
-  tray.on('right-click', () => {
-    tray.popUpContextMenu(trayMenu);
   });
 }
 
@@ -1267,7 +1421,7 @@ async function handleUninstall() {
 
   allowQuit = true;
   syncLoginItem(false);
-  await stopBridgeProcess();
+  await stopBackgroundProcesses();
   await scheduleUninstallCleanup();
   app.quit();
 }
@@ -1352,7 +1506,7 @@ function createMenu() {
         click: async () => {
           allowQuit = true;
           syncLoginItem(false);
-          await stopBridgeProcess();
+          await stopBackgroundProcesses();
           app.quit();
         },
       },
@@ -1521,7 +1675,7 @@ ipcMain.handle('bridge-app:open-memory-list-window', async () => {
 ipcMain.handle('bridge-app:stop-background-and-quit', async () => {
   allowQuit = true;
   syncLoginItem(false);
-  await stopBridgeProcess();
+  await stopBackgroundProcesses();
   app.quit();
   return { ok: true };
 });
@@ -1736,6 +1890,7 @@ app.whenReady().then(async () => {
   await startShortcutHelper();
   try {
     await ensureBridgeProcess();
+    await ensureWorkerProcess();
   } catch (error) {
     await appendLog(
       appLogFile,

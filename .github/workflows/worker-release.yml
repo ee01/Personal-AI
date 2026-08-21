@@ -1,0 +1,32 @@
+name: Worker release
+
+on:
+  push:
+    tags:
+      - 'worker-v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and pack worker
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#worker-v}"
+          npm --prefix worker ci
+          npm --prefix worker run build
+          mkdir -p dist-worker
+          tar -czf "dist-worker/worker-${VER}.tgz" --exclude worker/node_modules worker
+          cp worker/install.sh dist-worker/install.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Worker ${{ github.ref_name }}
+          files: |
+            dist-worker/worker-*.tgz
+            dist-worker/install.sh

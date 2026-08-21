@@ -9,6 +9,10 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { looksLikeUserApiKey } from '../core/auth/userApiKeys.js';
 import { parseBearerToken } from '../mcp/streamableHttp.js';
 import { resolveUserIdHeader } from '../utils/userIdentity.js';
+import {
+  parsePairingToken,
+  parseWorkerKey,
+} from '../integrations/workers/workerProtocol.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -32,15 +36,15 @@ export async function writeGuardMiddleware(
 
   // A tier-2 user key carries the identity itself, so X-User-Id is optional.
   // Auth middleware still verifies the token and its write scope.
-  if (
-    looksLikeUserApiKey(
-      parseBearerToken(
-        typeof request.headers.authorization === 'string'
-          ? request.headers.authorization
-          : undefined,
-      ),
-    )
-  ) {
+  const bearer = parseBearerToken(
+    typeof request.headers.authorization === 'string'
+      ? request.headers.authorization
+      : undefined,
+  );
+  if (looksLikeUserApiKey(bearer)) {
+    return;
+  }
+  if (parseWorkerKey(bearer) || parsePairingToken(bearer)) {
     return;
   }
 

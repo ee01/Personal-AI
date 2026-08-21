@@ -1,6 +1,6 @@
 {
   "name": "personal-ai-desktop",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "description": "Local desktop app for Personal AI memory sync and context injection",

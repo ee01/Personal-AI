@@ -111,6 +111,15 @@ async function normalizeReadablePermissions(targetDir) {
 async function main() {
   await fs.rm(distDir, { recursive: true, force: true });
   await run(process.execPath, [tscEntrypoint, '-p', 'tsconfig.json']);
+  const workerRoot = path.resolve(desktopAppRoot, '..', 'worker');
+  await run(process.execPath, [
+    tscEntrypoint,
+    '-p',
+    path.join(workerRoot, 'tsconfig.json'),
+  ]);
+  await fs.cp(path.join(workerRoot, 'dist'), path.join(distDir, 'worker'), {
+    recursive: true,
+  });
   await normalizeReadablePermissions(distDir);
   if (process.platform === 'darwin') {
     for (const helper of nativeHelperBuilds) {

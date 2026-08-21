@@ -120,6 +120,42 @@ function resolvePlaywrightCacheDir() {
   return path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright');
 }
 
+// The Playwright cache is shared across every project on the build machine, so
+// it usually holds several Chromium revisions. Only the revisions pinned by this
+// app's playwright-core may be vendored, otherwise the installer grows by
+// ~650MB per stale revision.
+async function resolveRequiredPlaywrightBrowserDirNames() {
+  const browsersJsonPath = path.join(
+    desktopAppRoot,
+    'node_modules',
+    'playwright-core',
+    'browsers.json',
+  );
+  const { browsers } = JSON.parse(await fs.readFile(browsersJsonPath, 'utf8'));
+  const vendoredBrowserNames = new Set(['chromium', 'ffmpeg']);
+  const dirNames = new Set();
+
+  for (const browser of browsers) {
+    if (!vendoredBrowserNames.has(browser.name)) {
+      continue;
+    }
+    const revisions = [
+      browser.revision,
+      ...Object.values(browser.revisionOverrides || {}),
+    ];
+    for (const revision of revisions) {
+      dirNames.add(`${browser.name.replaceAll('-', '_')}-${revision}`);
+    }
+  }
+
+  if (dirNames.size === 0) {
+    throw new Error(
+      `Could not determine required Playwright browser revisions from ${browsersJsonPath}.`,
+    );
+  }
+  return dirNames;
+}
+
 async function ensureLocalPlaywrightBrowsers() {
   const playwrightCliPath = path.join(
     desktopAppRoot,
@@ -143,20 +179,33 @@ async function ensureLocalPlaywrightBrowsers() {
   });
 
   await fs.mkdir(vendoredPlaywrightBrowsersDir, { recursive: true });
+  const requiredDirNames = await resolveRequiredPlaywrightBrowserDirNames();
   const browserEntries = await fs.readdir(playwrightCacheDir, {
     withFileTypes: true,
   });
-  const requiredPrefixes = ['chromium-', 'ffmpeg-'];
+  let vendoredChromium = false;
 
   for (const entry of browserEntries) {
-    if (!requiredPrefixes.some((prefix) => entry.name.startsWith(prefix))) {
+    if (!requiredDirNames.has(entry.name)) {
       continue;
     }
     await copy(
       path.join(playwrightCacheDir, entry.name),
       path.join(vendoredPlaywrightBrowsersDir, entry.name),
     );
+    if (entry.name.startsWith('chromium-')) {
+      vendoredChromium = true;
+    }
   }
+
+  if (!vendoredChromium) {
+    throw new Error(
+      `No pinned Playwright Chromium build found in ${playwrightCacheDir}. Expected one of: ${[...requiredDirNames].join(', ')}.`,
+    );
+  }
+  console.log(
+    `Vendoring Playwright browsers: ${[...requiredDirNames].join(', ')}`,
+  );
 }
 
 async function preparePackagerSource() {
@@ -419,8 +468,12 @@ async function main() {
   const pkgOutputPath = await buildInstallerPkg(version);
   await fs.access(pkgOutputPath);
 
+  const { packWorkerRelease } = await import('./pack-worker.mjs');
+  const worker = await packWorkerRelease();
+
   console.log(`Created app bundle at: ${appBundleReleaseCopy}`);
   console.log(`Created macOS installer package at: ${pkgOutputPath}`);
+  console.log(`Created worker tarball at: ${worker.tgzPath}`);
   if (
     process.env.APPLE_APPLICATION_SIGNING_IDENTITY ||
     process.env.APPLE_APP_SIGNING_IDENTITY ||

@@ -402,6 +402,17 @@ export class DesktopAppClient {
     });
   }
 
+  pairWorker(payload: {
+    pairingToken: string;
+    serverUrl?: string;
+    userId?: string;
+  }): Promise<{ ok: boolean; workerId?: string; error?: string }> {
+    return this.request('POST', '/worker/pair', payload, {
+      skipAuth: true,
+      retryOnUnauthorized: false,
+    });
+  }
+
   getStatus(): Promise<DesktopAppStatus> {
     return this.request<DesktopAppStatus>('GET', '/auth/status');
   }

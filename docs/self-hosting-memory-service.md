@@ -8,7 +8,24 @@ Memory Service 存的是你的消息、实体、画像和项目焦点。公共�
 
 Chrome 扩展支持任意 Memory Service 地址；绝大部分人继续用默认公共实例即可。
 
-## 最快路径（Docker Compose）
+## 最快路径（预构建镜像 + bootstrap）
+
+正式自托管路径是 **ghcr.io 镜像 + `deploy/bootstrap.sh`**，不必在目标机 `npm install` / `npm run build`。
+
+```bash
+git clone https://github.com/ee01/Personal-AI.git
+cd Personal-AI/deploy
+chmod +x bootstrap.sh
+./bootstrap.sh
+# 可选启用 Roadmap：docker compose --profile roadmap up -d
+curl http://127.0.0.1:3210/health
+```
+
+脚本会生成 `deploy/.env`（随机 `API_KEY` / `BOOTSTRAP_API_KEY`）、拉 `ghcr.io/ee01/personal-ai-memory-service:<tag>`、健康检查，并打印扩展 Options 该填的地址和 Bootstrap 密钥。数据在 `deploy/data/` 卷里；升级改 `MEMORY_SERVICE_TAG` 后 `docker compose up -d`，SQLite 与 migrations 自动跑。
+
+镜像由 tag 推送：`memory-service-v*` → `personal-ai-memory-service`，`roadmap-service-v*` → `personal-ai-roadmap-service`。
+
+## 源码 compose（开发者 / 贡献者）
 
 仓库：[ee01/Personal-AI](https://github.com/ee01/Personal-AI)（默认分支 `develop`）
 

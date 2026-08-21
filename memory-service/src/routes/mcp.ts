@@ -24,6 +24,8 @@ import {
 } from '../mcp/streamableHttp.js';
 import type { McpScope, McpToolContext } from '../mcp/tools.js';
 import { resolveUserIdHeader } from '../utils/userIdentity.js';
+import { parseWorkerKey } from '../integrations/workers/workerProtocol.js';
+import { AgentWorkerRepository } from '../repositories/AgentWorkerRepository.js';
 
 function envList(name: string): string[] {
   const raw = process.env[name];
@@ -118,6 +120,22 @@ function authorizeMcp(
       return null;
     }
     return { userId: parsedUserKey.userId };
+  }
+
+  const parsedWorkerKey = parseWorkerKey(token);
+  if (parsedWorkerKey) {
+    const context = request.server.userContextManager.getContext(
+      parsedWorkerKey.userId,
+    );
+    const worker = new AgentWorkerRepository(context.db).verifyCredential(
+      parsedWorkerKey.workerId,
+      parsedWorkerKey.token,
+    );
+    if (!worker) {
+      rejectUnauthorized(reply, 'invalid_worker_key');
+      return null;
+    }
+    return { userId: parsedWorkerKey.userId };
   }
 
   const expected = expectedBearer();

@@ -232,9 +232,10 @@ async function publishWithGhCli(
   tagName,
   releaseTitle,
   releaseNotes,
-  assetPath,
+  assetPaths,
 ) {
-  const assetName = path.basename(assetPath);
+  const assets = Array.isArray(assetPaths) ? assetPaths : [assetPaths];
+  const assetNames = assets.map((assetPath) => path.basename(assetPath));
   const existingRelease = await tryRun('gh', [
     'release',
     'view',
@@ -259,72 +260,30 @@ async function publishWithGhCli(
     console.log(`Using existing release ${tagName} via gh CLI`);
   }
 
-  await deleteGhAssetsExcept(repository, tagName, [assetName]);
-  await run('gh', [
-    'release',
-    'upload',
-    tagName,
-    assetPath,
-    '--repo',
-    repository,
-    '--clobber',
-  ]);
+  await deleteGhAssetsExcept(repository, tagName, assetNames);
+  for (const assetPath of assets) {
+    await run('gh', [
+      'release',
+      'upload',
+      tagName,
+      assetPath,
+      '--repo',
+      repository,
+      '--clobber',
+    ]);
+  }
 }
 
-async function main() {
-  await loadLocalEnvFile();
-
-  const repository = await getRepository();
-  const packageJson = await readJson(path.join(desktopAppRoot, 'package.json'));
-  const pkgPath = getPkgPath(packageJson.version);
-  const tagName =
-    process.env.GITHUB_RELEASE_TAG || `desktop-v${packageJson.version}`;
-  const releaseTitle =
-    process.env.GITHUB_RELEASE_TITLE ||
-    `Personal AI Desktop ${packageJson.version}`;
-  const releaseNotes =
-    process.env.GITHUB_RELEASE_NOTES ||
-    `Automated macOS bundle for Personal AI Desktop ${packageJson.version}.`;
-
-  console.log('Building macOS bundle and installer package...');
-  await run('npm', ['run', 'package:macos']);
-  await fs.access(pkgPath);
-  console.log(`Created installer: ${pkgPath}`);
-
-  const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  const ghInstalled = await hasGhCli();
-  const ghToken = envToken ? undefined : await getGhAuthToken();
-  const token = envToken || ghToken;
-
-  if (!token && !ghInstalled) {
-    fatal(
-      `Missing GITHUB_TOKEN (or GH_TOKEN), and gh CLI is not available. Add a token to ${localEnvPath}, export it in your shell, or install/authenticate gh.`,
-    );
-  }
-
-  if (!token && ghInstalled) {
-    console.log('No GITHUB_TOKEN found. Falling back to gh release commands.');
-    await publishWithGhCli(
-      repository,
-      tagName,
-      releaseTitle,
-      releaseNotes,
-      pkgPath,
-    );
-    const releaseUrl = `https://github.com/${repository}/releases/tag/${tagName}`;
-    const latestUrl = `https://github.com/${repository}/releases/latest`;
-
-    console.log('');
-    console.log(`Release page: ${releaseUrl}`);
-    console.log(`Latest download page: ${latestUrl}`);
-    console.log(`Uploaded asset: ${path.basename(pkgPath)}`);
-    return;
-  }
-
-  if (!envToken && ghToken) {
-    console.log('Loaded GitHub token from gh auth token.');
-  }
-
+async function publishReleaseWithApi(
+  repository,
+  token,
+  tagName,
+  releaseTitle,
+  releaseNotes,
+  assetPaths,
+) {
+  const assets = Array.isArray(assetPaths) ? assetPaths : [assetPaths];
+  const assetNames = assets.map((assetPath) => path.basename(assetPath));
   let release;
   try {
     release = await apiRequest(
@@ -360,27 +319,130 @@ async function main() {
     console.log(`Using existing release ${tagName}`);
   }
 
-  await deleteAssetsExcept(
-    repository,
-    release,
-    [path.basename(pkgPath)],
-    token,
-  );
-  await deleteAssetIfPresent(
-    repository,
-    release,
-    path.basename(pkgPath),
-    token,
-  );
-  await uploadAsset(repository, release.id, release.upload_url, pkgPath, token);
+  await deleteAssetsExcept(repository, release, assetNames, token);
+  for (const assetPath of assets) {
+    await deleteAssetIfPresent(
+      repository,
+      release,
+      path.basename(assetPath),
+      token,
+    );
+    await uploadAsset(repository, release.id, release.upload_url, assetPath, token);
+  }
+}
 
-  const releaseUrl = `https://github.com/${repository}/releases/tag/${tagName}`;
-  const latestUrl = `https://github.com/${repository}/releases/latest`;
+async function main() {
+  await loadLocalEnvFile();
+
+  const repository = await getRepository();
+  const packageJson = await readJson(path.join(desktopAppRoot, 'package.json'));
+  const workerPackageJson = await readJson(
+    path.resolve(desktopAppRoot, '..', 'worker', 'package.json'),
+  );
+  const pkgPath = getPkgPath(packageJson.version);
+  const desktopTagName =
+    process.env.GITHUB_RELEASE_TAG || `desktop-v${packageJson.version}`;
+  const desktopReleaseTitle =
+    process.env.GITHUB_RELEASE_TITLE ||
+    `Personal AI Desktop ${packageJson.version}`;
+  const desktopReleaseNotes =
+    process.env.GITHUB_RELEASE_NOTES ||
+    `Automated macOS bundle for Personal AI Desktop ${packageJson.version}. Embeds the Personal AI worker.`;
+  const workerVersion = String(workerPackageJson.version || '0.0.0');
+  const workerTagName = process.env.WORKER_RELEASE_TAG || `worker-v${workerVersion}`;
+  const workerReleaseTitle =
+    process.env.WORKER_RELEASE_TITLE || `Personal AI Worker ${workerVersion}`;
+  const workerReleaseNotes =
+    process.env.WORKER_RELEASE_NOTES ||
+    `Headless worker tarball and install.sh for protocol-compatible hosts. Desktop ${packageJson.version} already embeds this worker.`;
+
+  console.log('Building macOS bundle, installer package, and worker tarball...');
+  await run('npm', ['run', 'package:macos']);
+  await fs.access(pkgPath);
+  console.log(`Created installer: ${pkgPath}`);
+
+  const { packWorkerRelease } = await import('./pack-worker.mjs');
+  let workerTgz = path.join(
+    releaseDir,
+    'worker',
+    `worker-${workerVersion}.tgz`,
+  );
+  let workerInstall = path.join(releaseDir, 'worker', 'install.sh');
+  try {
+    await fs.access(workerTgz);
+    await fs.access(workerInstall);
+  } catch {
+    const packed = await packWorkerRelease();
+    workerTgz = packed.tgzPath;
+    workerInstall = packed.installPath;
+  }
+  console.log(`Created worker archive: ${workerTgz}`);
+
+  const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const ghInstalled = await hasGhCli();
+  const ghToken = envToken ? undefined : await getGhAuthToken();
+  const token = envToken || ghToken;
+
+  if (!token && !ghInstalled) {
+    fatal(
+      `Missing GITHUB_TOKEN (or GH_TOKEN), and gh CLI is not available. Add a token to ${localEnvPath}, export it in your shell, or install/authenticate gh.`,
+    );
+  }
+
+  const publishDesktopAndWorker = async (useGhCli) => {
+    if (useGhCli) {
+      await publishWithGhCli(
+        repository,
+        desktopTagName,
+        desktopReleaseTitle,
+        desktopReleaseNotes,
+        [pkgPath],
+      );
+      await publishWithGhCli(
+        repository,
+        workerTagName,
+        workerReleaseTitle,
+        workerReleaseNotes,
+        [workerTgz, workerInstall],
+      );
+      return;
+    }
+    await publishReleaseWithApi(
+      repository,
+      token,
+      desktopTagName,
+      desktopReleaseTitle,
+      desktopReleaseNotes,
+      [pkgPath],
+    );
+    await publishReleaseWithApi(
+      repository,
+      token,
+      workerTagName,
+      workerReleaseTitle,
+      workerReleaseNotes,
+      [workerTgz, workerInstall],
+    );
+  };
+
+  if (!token && ghInstalled) {
+    console.log('No GITHUB_TOKEN found. Falling back to gh release commands.');
+    await publishDesktopAndWorker(true);
+  } else {
+    if (!envToken && ghToken) {
+      console.log('Loaded GitHub token from gh auth token.');
+    }
+    await publishDesktopAndWorker(false);
+  }
+
+  const desktopUrl = `https://github.com/${repository}/releases/tag/${desktopTagName}`;
+  const workerUrl = `https://github.com/${repository}/releases/tag/${workerTagName}`;
 
   console.log('');
-  console.log(`Release page: ${releaseUrl}`);
-  console.log(`Latest download page: ${latestUrl}`);
+  console.log(`Desktop release: ${desktopUrl}`);
   console.log(`Uploaded asset: ${path.basename(pkgPath)}`);
+  console.log(`Worker release: ${workerUrl}`);
+  console.log(`Uploaded assets: ${path.basename(workerTgz)}, ${path.basename(workerInstall)}`);
 }
 
 main().catch((error) => {

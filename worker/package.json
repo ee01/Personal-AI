@@ -1,0 +1,23 @@
+{
+  "name": "@personal-ai/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless / Desktop-embedded Personal AI agent worker",
+  "bin": {
+    "personal-ai-worker": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

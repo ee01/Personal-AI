@@ -5,6 +5,7 @@ import {
   findEnabledExecutor,
   publicExecutorOptions,
   resolveAgentExecutors,
+  resolveAgentTaskExecutorId,
   resolveExecutorDefaults,
 } from '../integrations/executors/executorRegistry.js';
 import {
@@ -165,7 +166,30 @@ describe('executorRegistry', () => {
     expect(defaults.reflection_research).toBe('oc-main');
   });
 
-  it('prefers explicit agentExecutors and keeps defaults that point at listed ids', () => {
+  it('stores runtime=remote and workerId on ACP instances', () => {
+    const executors = resolveAgentExecutors({
+      openClawEnabled: true,
+      openClawBaseUrl: '',
+      openClawApiKey: '',
+      agentExecutors: [
+        {
+          id: 'codex-remote',
+          label: 'Remote Codex',
+          type: 'acp-codex',
+          runtime: 'remote',
+          workerId: 'worker-1',
+          enabled: true,
+        },
+      ],
+    });
+    expect(executors[0]).toMatchObject({
+      id: 'codex-remote',
+      runtime: 'remote',
+      workerId: 'worker-1',
+    });
+  });
+
+  it('treats listed executors as available even when enabled=false', () => {
     const config = {
       openClawEnabled: true,
       openClawBaseUrl: 'https://legacy',
@@ -196,6 +220,17 @@ describe('executorRegistry', () => {
     expect(findEnabledExecutor(config, 'openclaw')?.id).toBeUndefined();
     expect(findEnabledExecutor(config, 'oc-main')?.id).toBe('oc-main');
     expect(findEnabledExecutor(config, 'codex')?.id).toBe('codex');
+  });
+
+  it('uses Agent Task default only when executor is omitted', () => {
+    const defaults = {
+      agent_task: 'exec_t4com0',
+      reflection_research: 'openclaw',
+    };
+    expect(resolveAgentTaskExecutorId(undefined, defaults)).toBe('exec_t4com0');
+    expect(resolveAgentTaskExecutorId('', defaults)).toBe('exec_t4com0');
+    expect(resolveAgentTaskExecutorId('openclaw', defaults)).toBe('openclaw');
+    expect(resolveAgentTaskExecutorId('exec_t4com0', defaults)).toBe('exec_t4com0');
   });
 });
 

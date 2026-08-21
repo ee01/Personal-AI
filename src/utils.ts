@@ -122,6 +122,8 @@ export interface EnvConfigType {
     baseUrl?: string;
     apiKey?: string;
     cwd?: string;
+    runtime?: 'local' | 'remote';
+    workerId?: string;
     enabled: boolean;
     apiKeyConfigured?: boolean;
     clearApiKey?: boolean;

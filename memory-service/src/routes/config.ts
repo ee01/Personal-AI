@@ -327,6 +327,8 @@ const updateConfigBodySchema = {
           apiKey: { type: 'string' as const },
           cwd: { type: 'string' as const },
           enabled: { type: 'boolean' as const },
+          runtime: { type: 'string' as const, enum: ['local', 'remote'] },
+          workerId: { type: 'string' as const },
           clearApiKey: { type: 'boolean' as const },
         },
         required: ['id'],

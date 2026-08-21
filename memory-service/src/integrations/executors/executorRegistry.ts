@@ -17,6 +17,9 @@ export type AgentExecutorType =
 
 export type ExecutorDefaultUse = 'agent_task' | 'reflection_research';
 
+/** ACP spawn location. Worker is a channel, not a fifth executor type. */
+export type AgentExecutorRuntime = 'local' | 'remote';
+
 export interface AgentExecutorInstance {
   id: string;
   label: string;
@@ -25,6 +28,10 @@ export interface AgentExecutorInstance {
   apiKey?: string;
   cwd?: string;
   enabled: boolean;
+  /** ACP only. OpenClaw types ignore this (gateway is already remote). */
+  runtime?: AgentExecutorRuntime;
+  /** Required when runtime=remote. */
+  workerId?: string;
   /** Present on sanitized GET responses only. */
   apiKeyConfigured?: boolean;
 }
@@ -71,6 +78,12 @@ export function normalizeAgentExecutorInstance(
   if (!id) return null;
   const type = normalizeExecutorType(input.type) ?? 'openclaw-responses';
   const label = nonEmpty(input.label) || id;
+  const isAcp = type === 'acp-codex' || type === 'acp-claude-code';
+  const runtime: AgentExecutorRuntime | undefined = isAcp
+    ? input.runtime === 'remote'
+      ? 'remote'
+      : 'local'
+    : undefined;
   return {
     id,
     label,
@@ -79,6 +92,8 @@ export function normalizeAgentExecutorInstance(
     apiKey: typeof input.apiKey === 'string' ? input.apiKey : undefined,
     cwd: nonEmpty(input.cwd),
     enabled: input.enabled !== false,
+    runtime,
+    workerId: isAcp ? nonEmpty(input.workerId) : undefined,
   };
 }
 
@@ -259,6 +274,17 @@ export function resolveExecutorDefaults(
     agent_task: pick('agent_task'),
     reflection_research: pick('reflection_research'),
   };
+}
+
+/**
+ * Empty executor means Options Agent Task default.
+ * An explicit instance id, including `openclaw`, pins that instance.
+ */
+export function resolveAgentTaskExecutorId(
+  requested: string | undefined | null,
+  defaults: ExecutorDefaults,
+): string {
+  return nonEmpty(requested) || defaults.agent_task;
 }
 
 export function findEnabledExecutor(

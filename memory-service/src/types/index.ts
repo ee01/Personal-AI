@@ -2531,9 +2531,10 @@ declare module 'fastify' {
   interface FastifyRequest {
     userId: string;
     userContext: UserContext;
-    /** How the caller proved identity: tier-2 user key, tier-1 service key, or neither. */
-    authMode?: 'user_key' | 'service_key' | 'bootstrap_key' | 'anonymous';
+    /** How the caller proved identity: tier-2 user key, tier-1 service key, worker key, or neither. */
+    authMode?: 'user_key' | 'service_key' | 'bootstrap_key' | 'anonymous' | 'worker_key';
     /** Scopes carried by a tier-2 user key. */
     authScopes?: string[];
+    workerId?: string;
   }
 }

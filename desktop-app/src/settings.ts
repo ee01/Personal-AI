@@ -76,11 +76,17 @@ export interface BridgeUserSettings {
   reminderDailyDigestTime: string;
   reminderDedupSameDay: boolean;
   explorer: ExplorerSettings;
+  worker: {
+    cwd?: string;
+    acpCodexCommand?: string;
+    acpClaudeCommand?: string;
+  };
 }
 
 export interface BridgeUserSettingsPatch
-  extends Partial<Omit<BridgeUserSettings, 'explorer'>> {
+  extends Partial<Omit<BridgeUserSettings, 'explorer' | 'worker'>> {
   explorer?: Partial<ExplorerSettings>;
+  worker?: Partial<BridgeUserSettings['worker']>;
 }
 
 type SettingsListener = (settings: BridgeUserSettings) => void;
@@ -330,6 +336,17 @@ function normalizeSettings(
         ? input.reminderDedupSameDay
         : defaults.reminderDedupSameDay,
     explorer: normalizeExplorerSettings(input.explorer, defaults.explorer),
+    worker: {
+      cwd: Object.hasOwn(input.worker || {}, 'cwd')
+        ? cleanOptional(input.worker?.cwd)
+        : defaults.worker.cwd,
+      acpCodexCommand: Object.hasOwn(input.worker || {}, 'acpCodexCommand')
+        ? cleanOptional(input.worker?.acpCodexCommand)
+        : defaults.worker.acpCodexCommand,
+      acpClaudeCommand: Object.hasOwn(input.worker || {}, 'acpClaudeCommand')
+        ? cleanOptional(input.worker?.acpClaudeCommand)
+        : defaults.worker.acpClaudeCommand,
+    },
   };
 }
 
@@ -396,6 +413,7 @@ export function createDefaultBridgeUserSettings(
       autoClassify: false,
       askDefaultScope: 'work',
     },
+    worker: {},
   };
 }
 
@@ -503,6 +521,12 @@ export class BridgeSettingsStore {
             ...patch.explorer,
           }
         : this.userOverrides.explorer,
+      worker: patch.worker
+        ? {
+            ...(this.userOverrides.worker ?? {}),
+            ...patch.worker,
+          }
+        : this.userOverrides.worker,
     };
     await this.save(next);
     return this.getPayload();

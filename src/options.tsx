@@ -2822,22 +2822,33 @@ const Options = () => {
           serverConfig?.openClawApiKeyConfigured,
         ),
         AGENT_EXECUTORS: Array.isArray(serverConfig?.agentExecutors)
-          ? serverConfig.agentExecutors.map((item) => ({
-              id: String(item.id || ''),
-              label: String(item.label || item.id || ''),
-              type:
+          ? serverConfig.agentExecutors.map((item) => {
+              const type =
                 item.type === 'openclaw-gateway' ||
                 item.type === 'acp-codex' ||
                 item.type === 'acp-claude-code'
                   ? item.type
-                  : 'openclaw-responses',
-              baseUrl: item.baseUrl || '',
-              apiKey: '',
-              cwd: item.cwd || '',
-              enabled: true,
-              apiKeyConfigured: Boolean(item.apiKeyConfigured),
-              clearApiKey: false,
-            }))
+                  : 'openclaw-responses';
+              const isAcp = type === 'acp-codex' || type === 'acp-claude-code';
+              return {
+                id: String(item.id || ''),
+                label: String(item.label || item.id || ''),
+                type,
+                baseUrl: item.baseUrl || '',
+                apiKey: '',
+                cwd: item.cwd || '',
+                runtime:
+                  item.runtime === 'remote'
+                    ? 'remote'
+                    : isAcp
+                      ? 'local'
+                      : undefined,
+                workerId: item.workerId || '',
+                enabled: true,
+                apiKeyConfigured: Boolean(item.apiKeyConfigured),
+                clearApiKey: false,
+              };
+            })
           : prev.AGENT_EXECUTORS || [],
         EXECUTOR_DEFAULTS: {
           agent_task: serverConfig?.executorDefaults?.agent_task || '',
@@ -3287,6 +3298,8 @@ const Options = () => {
           type: item.type,
           baseUrl: item.baseUrl,
           cwd: item.cwd,
+          runtime: item.runtime,
+          workerId: item.workerId,
           enabled: true,
           clearApiKey: item.clearApiKey === true,
           ...(item.apiKey && item.apiKey.trim()
@@ -4995,7 +5008,7 @@ const Options = () => {
           'OUTREACH_RESULT_PUSH_TARGET',
           'OUTREACH_RESULT_PUSH_GROUP_ID',
           false,
-          '当主动询问拿到最终结果时，用 Bot 推送给 Me 或指定群组。默认推送给 Me。',
+          '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。',
         )}
         <div className="form-group">
           <label htmlFor="RINGCENTRAL_SERVER_URL">RingCentral Server URL</label>

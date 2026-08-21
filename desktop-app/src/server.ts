@@ -45,6 +45,10 @@ import type {
   StableMemorySyncRequest,
 } from './types.js';
 import { DoubaoBridgeService } from './bridgeService.js';
+import {
+  isTrustedWorkerPairOrigin,
+  WorkerSupervisor,
+} from './workerSupervisor.js';
 
 function readToken(
   request: Pick<FastifyRequest, 'headers'>,
@@ -55,7 +59,14 @@ function readToken(
 
 function createAuthHook(service: DoubaoBridgeService) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.url === '/health' || request.url === '/pair') return;
+    if (
+      request.url === '/health' ||
+      request.url === '/pair' ||
+      request.url === '/worker/pair' ||
+      request.url === '/worker/status'
+    ) {
+      return;
+    }
 
     const status = await service.getStatus();
     if (!status.pairToken) {
@@ -116,6 +127,7 @@ interface BridgeServerDependencies {
   syncManager: BridgeSyncManager;
   explorerManager?: ExplorerManager;
   localSkillSyncManager?: LocalSkillSyncManager;
+  workerSupervisor?: WorkerSupervisor;
   version: string;
 }
 
@@ -469,6 +481,41 @@ export async function createBridgeServer(
       const message = error instanceof Error ? error.message : 'Pair failed';
       return reply.code(401).send({ error: message });
     }
+  });
+
+  app.get('/worker/status', async () => {
+    return deps.workerSupervisor?.getStatusAsync() || { state: 'offline', paired: false };
+  });
+
+  app.post<{
+    Body: { pairingToken?: string; serverUrl?: string; token?: string };
+  }>('/worker/pair', async (request, reply) => {
+    if (
+      !isTrustedWorkerPairOrigin(
+        typeof request.headers.origin === 'string' ? request.headers.origin : undefined,
+        typeof request.headers['x-personal-ai-extension-id'] === 'string'
+          ? request.headers['x-personal-ai-extension-id']
+          : undefined,
+        request.ip,
+      )
+    ) {
+      return reply.code(403).send({ ok: false, error: 'untrusted origin' });
+    }
+    const pairingToken = String(
+      request.body?.pairingToken || request.body?.token || '',
+    ).trim();
+    if (!pairingToken) {
+      return reply.code(400).send({ ok: false, error: 'pairingToken required' });
+    }
+    if (!deps.workerSupervisor) {
+      return reply.code(501).send({ ok: false, error: 'worker supervisor unavailable' });
+    }
+    const serverUrl =
+      String(request.body?.serverUrl || '').trim() ||
+      deps.settingsStore.get().memoryServiceBaseUrl ||
+      'http://127.0.0.1:3210';
+    await deps.workerSupervisor.pair({ pairingToken, serverUrl });
+    return { ok: true, ...(await deps.workerSupervisor.getStatusAsync()) };
   });
 
   app.get('/status', async () => buildStatus(service, deps));

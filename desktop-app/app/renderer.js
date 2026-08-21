@@ -47,6 +47,9 @@ const elements = {
   reminderDailyEnabled: document.getElementById('reminder-daily-enabled'),
   reminderDailyTime: document.getElementById('reminder-daily-time'),
   reminderDedupSameDay: document.getElementById('reminder-dedup-same-day'),
+  workerCwd: document.getElementById('worker-cwd'),
+  workerCodexCommand: document.getElementById('worker-codex-command'),
+  workerClaudeCommand: document.getElementById('worker-claude-command'),
   testMemoryButton: document.getElementById('test-memory-button'),
   settingsMessage: document.getElementById('settings-message'),
   loginButton: document.getElementById('login-button'),
@@ -657,6 +660,86 @@ function setStatusPill(element, text, tone = 'pending') {
   if (!element) return;
   element.textContent = text;
   element.className = `step-status step-status-${tone}`;
+}
+
+const COLLAPSE_STORAGE_KEY = 'personalAiDesktop.collapsedSections';
+
+function readCollapsePrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_STORAGE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function writeCollapsePref(id, collapsed) {
+  const prefs = readCollapsePrefs();
+  prefs[id] = collapsed;
+  localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(prefs));
+}
+
+function setCardCollapsed(card, collapsed) {
+  if (!card) return;
+  card.classList.toggle('is-collapsed', collapsed);
+  const toggle = card.querySelector('[data-collapse-toggle]');
+  if (!toggle) return;
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const label = toggle.querySelector('.collapse-toggle-label');
+  if (label) {
+    label.textContent = collapsed ? '展开' : '收起';
+  }
+}
+
+function applyAutoCollapse(card, ready) {
+  if (!card) return;
+  const id = card.dataset.collapseId;
+  if (!id) return;
+  const prefs = readCollapsePrefs();
+  if (Object.prototype.hasOwnProperty.call(prefs, id)) {
+    setCardCollapsed(card, Boolean(prefs[id]));
+    return;
+  }
+  setCardCollapsed(card, Boolean(ready));
+}
+
+function syncCollapsibleCards(readyById) {
+  for (const [id, ready] of Object.entries(readyById)) {
+    applyAutoCollapse(
+      document.querySelector(`[data-collapse-id="${id}"]`),
+      ready,
+    );
+  }
+}
+
+function toggleCollapsibleCard(card) {
+  if (!card?.dataset.collapseId) return;
+  const next = !card.classList.contains('is-collapsed');
+  setCardCollapsed(card, next);
+  writeCollapsePref(card.dataset.collapseId, next);
+}
+
+function initCollapsibleCards() {
+  document.querySelectorAll('.collapsible-card').forEach((card) => {
+    const toggle = card.querySelector('[data-collapse-toggle]');
+    toggle?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleCollapsibleCard(card);
+    });
+    const header = card.querySelector('.collapsible-header');
+    header?.addEventListener('click', (event) => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        target.closest(
+          'button, a, input, select, textarea, label, .source-toggle',
+        )
+      ) {
+        return;
+      }
+      toggleCollapsibleCard(card);
+    });
+  });
 }
 
 function setManualRunResultMessage(
@@ -2071,6 +2154,11 @@ function collectRuntimeSettings() {
     reminderDailyDigestEnabled: !!elements.reminderDailyEnabled.checked,
     reminderDailyDigestTime: elements.reminderDailyTime.value || '09:00',
     reminderDedupSameDay: !!elements.reminderDedupSameDay.checked,
+    worker: {
+      cwd: elements.workerCwd?.value.trim() || undefined,
+      acpCodexCommand: elements.workerCodexCommand?.value.trim() || undefined,
+      acpClaudeCommand: elements.workerClaudeCommand?.value.trim() || undefined,
+    },
   };
 }
 
@@ -2210,6 +2298,15 @@ function applyRuntimeSettings(settings, { force = false } = {}) {
     settings.reminderDailyDigestEnabled !== false;
   elements.reminderDailyTime.value = settings.reminderDailyDigestTime || '09:00';
   elements.reminderDedupSameDay.checked = settings.reminderDedupSameDay !== false;
+  if (elements.workerCwd) {
+    elements.workerCwd.value = settings.worker?.cwd || '';
+  }
+  if (elements.workerCodexCommand) {
+    elements.workerCodexCommand.value = settings.worker?.acpCodexCommand || '';
+  }
+  if (elements.workerClaudeCommand) {
+    elements.workerClaudeCommand.value = settings.worker?.acpClaudeCommand || '';
+  }
   clearSettingsDirty();
 }
 
@@ -2484,31 +2581,44 @@ function renderStepStatuses(status) {
     elements.extensionMemoryCount.textContent = '待统计';
     elements.extensionMemoryCopy.textContent =
       '先连接 Memory Service，随后这里会展示最近 90 天进入记忆系统的消息数。';
-    return;
-  }
-
-  if (!memoryGrowth || typeof memoryGrowth.recentMessageCount !== 'number') {
+  } else if (
+    !memoryGrowth ||
+    typeof memoryGrowth.recentMessageCount !== 'number'
+  ) {
     elements.stepExtensionStatus.textContent = '推荐';
     elements.stepExtensionStatus.className = 'step-status step-status-pending';
     elements.extensionMemoryCount.textContent = '统计中';
     elements.extensionMemoryCopy.textContent =
       '已连接 Memory Service，但最近 90 天消息数暂时不可用。你仍然可以先安装 extension 并在弹窗里开启静默消息分析。';
-    return;
+  } else {
+    elements.extensionMemoryCount.textContent = formatMessageCount(
+      memoryGrowth.recentMessageCount,
+    );
+    if (memoryGrowth.belowThreshold) {
+      elements.stepExtensionStatus.textContent = '建议开启';
+      elements.stepExtensionStatus.className =
+        'step-status step-status-pending';
+      elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天只有 ${memoryGrowth.recentMessageCount} 条消息进入记忆系统。安装 extension 后在弹窗里开启“静默消息分析”，可以持续补充 ask 所依赖的日常上下文。`;
+    } else {
+      elements.stepExtensionStatus.textContent = '可选优化';
+      elements.stepExtensionStatus.className = 'step-status step-status-ready';
+      elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天已经累计 ${memoryGrowth.recentMessageCount} 条消息。若还想继续补充日常上下文，仍可安装 extension 并开启“静默消息分析”。`;
+    }
   }
 
-  elements.extensionMemoryCount.textContent = formatMessageCount(
-    memoryGrowth.recentMessageCount,
-  );
-  if (memoryGrowth.belowThreshold) {
-    elements.stepExtensionStatus.textContent = '建议开启';
-    elements.stepExtensionStatus.className = 'step-status step-status-pending';
-    elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天只有 ${memoryGrowth.recentMessageCount} 条消息进入记忆系统。安装 extension 后在弹窗里开启“静默消息分析”，可以持续补充 ask 所依赖的日常上下文。`;
-    return;
-  }
-
-  elements.stepExtensionStatus.textContent = '可选优化';
-  elements.stepExtensionStatus.className = 'step-status step-status-ready';
-  elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天已经累计 ${memoryGrowth.recentMessageCount} 条消息。若还想继续补充日常上下文，仍可安装 extension 并开启“静默消息分析”。`;
+  syncCollapsibleCards({
+    memory: Boolean(checklist.memoryServiceConfigured),
+    login: Boolean(checklist.doubaoConnected),
+    'memory-thread': Boolean(checklist.memorySyncBound),
+    'mobile-thread': Boolean(checklist.mobileContextBound),
+    background: Boolean(status?.syncState?.timerActive),
+    extension: Boolean(
+      checklist.memoryServiceConfigured &&
+        memoryGrowth &&
+        typeof memoryGrowth.recentMessageCount === 'number' &&
+        !memoryGrowth.belowThreshold,
+    ),
+  });
 }
 
 function resolveBoundThread(status, bindingType) {
@@ -3327,6 +3437,16 @@ function renderExplorerOverview(
   );
   renderSourceCard('doubao', explorerStatus?.sources?.doubao, memoryConnected);
   renderSourceCard('chatgpt', explorerStatus?.sources?.chatgpt, memoryConnected);
+  syncCollapsibleCards({
+    'source-doubao': Boolean(
+      explorerStatus?.sources?.doubao?.enabled &&
+        explorerStatus?.sources?.doubao?.authStatus === 'connected',
+    ),
+    'source-chatgpt': Boolean(
+      explorerStatus?.sources?.chatgpt?.enabled &&
+        explorerStatus?.sources?.chatgpt?.authStatus === 'connected',
+    ),
+  });
 }
 
 function applyButtonAvailability(status, explorerStatus) {
@@ -4441,6 +4561,7 @@ elements.stopButton.addEventListener('click', () => {
   });
 });
 
+initCollapsibleCards();
 void Promise.all([loadMeta(), refreshStatus(), loadVoicePreferences()]);
 refreshTimer = window.setInterval(() => {
   void refreshStatus();

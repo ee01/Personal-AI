@@ -1,0 +1,52 @@
+name: Publish service images to GHCR
+
+on:
+  push:
+    tags:
+      - 'memory-service-v*'
+      - 'roadmap-service-v*'
+
+jobs:
+  memory-service:
+    if: startsWith(github.ref_name, 'memory-service-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push memory-service
+        run: |
+          VER="${GITHUB_REF_NAME#memory-service-v}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/personal-ai-memory-service"
+          docker build -t "${IMAGE}:${VER}" -t "${IMAGE}:latest" ./memory-service
+          docker push "${IMAGE}:${VER}"
+          docker push "${IMAGE}:latest"
+
+  roadmap-service:
+    if: startsWith(github.ref_name, 'roadmap-service-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build roadmap dist then image
+        run: |
+          VER="${GITHUB_REF_NAME#roadmap-service-v}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/personal-ai-roadmap-service"
+          npm --prefix roadmap-service ci
+          npm --prefix roadmap-service run build
+          docker build -t "${IMAGE}:${VER}" -t "${IMAGE}:latest" ./roadmap-service
+          docker push "${IMAGE}:${VER}"
+          docker push "${IMAGE}:latest"

@@ -3223,6 +3223,7 @@ export interface OutreachSession {
   requiresApproval: boolean;
   followupCount: number;
   maxFollowup: number;
+  followupIntervalSeconds?: number;
   waitUntil?: number;
   nextCheckAt?: number;
   sentChatId?: string;
@@ -3566,6 +3567,8 @@ export interface RuntimeConfigResponse {
       | string;
     baseUrl?: string;
     cwd?: string;
+    runtime?: 'local' | 'remote';
+    workerId?: string;
     enabled?: boolean;
     apiKeyConfigured?: boolean;
   }>;
@@ -3618,6 +3621,8 @@ export interface UpdateRuntimeConfigPayload {
     baseUrl?: string;
     apiKey?: string;
     cwd?: string;
+    runtime?: 'local' | 'remote';
+    workerId?: string;
     enabled?: boolean;
     clearApiKey?: boolean;
   }>;
@@ -6254,6 +6259,48 @@ export class MemoryServiceClient {
     return this.request<RuntimeConfigResponse>('PUT', '/config', payload);
   }
 
+  async probeAgentExecutor(
+    executorId: string,
+    options: { deep?: boolean; force?: boolean } = {},
+  ): Promise<{
+    ok: boolean;
+    latencyMs: number;
+    stage: 'dns' | 'connect' | 'auth' | 'ready';
+    detail: string;
+    nextAction?: string;
+    cached?: boolean;
+    checkedAt: number;
+  }> {
+    return this.request('POST', `/agent-executors/${encodeURIComponent(executorId)}/probe`, options);
+  }
+
+  async listAgentWorkers(): Promise<{
+    workers: Array<{
+      id: string;
+      label: string;
+      hostname?: string;
+      hostKind: 'desktop' | 'headless';
+      status: string;
+      lastHeartbeatAt?: number;
+      currentTaskCount: number;
+    }>;
+  }> {
+    return this.request('GET', '/agent-workers');
+  }
+
+  async createAgentWorkerPairingToken(): Promise<{
+    token: string;
+    expiresAt: number;
+    serverUrl: string;
+    installCommand: string;
+  }> {
+    return this.request('POST', '/agent-workers/pairing-tokens', {});
+  }
+
+  async revokeAgentWorker(workerId: string): Promise<{ ok: boolean }> {
+    return this.request('DELETE', `/agent-workers/${encodeURIComponent(workerId)}`);
+  }
+
   // --------------------------------------------------------------------------
   // Provider Integrations
   // --------------------------------------------------------------------------
@@ -6578,6 +6625,7 @@ export class MemoryServiceClient {
     taskId: string;
     title?: string;
     task: string;
+    mode?: 'read' | 'write';
     executor?: string;
     notify?: boolean;
     idempotencyKey?: string;
@@ -6789,6 +6837,20 @@ export class MemoryServiceClient {
     return this.request(
       'POST',
       `/outreach/sessions/${encodeURIComponent(id)}/retry`,
+    );
+  }
+
+  async continueOutreachFollowup(
+    id: string,
+    body: {
+      maxFollowup?: number;
+      followupIntervalSeconds?: number;
+    } = {},
+  ): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      `/outreach/sessions/${encodeURIComponent(id)}/continue-followup`,
+      body,
     );
   }
 
