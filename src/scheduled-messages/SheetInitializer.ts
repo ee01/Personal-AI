@@ -34,9 +34,11 @@ type InitializationSetupMetadata = Pick<
  * - v2.8: Glip 发送结果元数据下沉到 Logs，Messages 只保存计划定义
  * - v2.9: 添加 AgentTask / 帮我做字段，Sheet 只保存重复任务计划和 Jira Rule 扫描入口
  * - v2.10: 删除 Agent_Task_Prompt（任务描述统一 Content）；新增 Agent_Notify_Success_Receipt（成功回执开关）
+ * - v2.11: 新增 Agent_Notify_Via（结果通知身份 bot/asme）
+ * - v2.12: 新增 Agent_Mode（只读/外部写入边界；旧任务默认 read）
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.10',
+  version: '2.12',
   columns: [
     'ID',
     'Topic',
@@ -61,9 +63,11 @@ export const MESSAGES_SCHEMA = {
     'Category',
     'Automation_Link',
     'Agent_Task_ID',
+    'Agent_Mode',
     'Agent_Executor',
     'Agent_Notify_Template',
     'Agent_Notify_Success_Receipt',
+    'Agent_Notify_Via',
     'Agent_Trigger_Source',
     'Agent_AR_Binding_ID',
     'Agent_Last_Run_At',

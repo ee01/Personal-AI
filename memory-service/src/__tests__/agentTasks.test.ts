@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  deliverAgentTaskAsMeNotice,
   normalizeAgentTaskNotifyTarget,
+  normalizeAgentTaskNotifyVia,
+  normalizeAsMeSenderCredentials,
   planAgentTaskNotifications,
+  resolveAgentTaskDeliveryVia,
   resolveAgentTaskNotificationTarget,
   resolveExplicitAgentTaskResultTarget,
 } from '../routes/agentTasks.js';
@@ -272,5 +276,104 @@ describe('AgentTask notification matrix', () => {
         useTemplate: false,
       },
     ]);
+  });
+});
+
+describe('AgentTask notifyVia', () => {
+  it('normalizes unknown values to bot', () => {
+    expect(normalizeAgentTaskNotifyVia(undefined)).toBe('bot');
+    expect(normalizeAgentTaskNotifyVia('BOT')).toBe('bot');
+    expect(normalizeAgentTaskNotifyVia('asme')).toBe('asme');
+  });
+
+  it('requires Sheet AsMe sender credentials', () => {
+    expect(normalizeAsMeSenderCredentials(undefined)).toBeUndefined();
+    expect(
+      normalizeAsMeSenderCredentials({
+        clientId: 'id',
+        clientSecret: 'secret',
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeAsMeSenderCredentials({
+        clientId: 'id',
+        clientSecret: 'secret',
+        jwt: 'jwt-token',
+      }),
+    ).toEqual({
+      clientId: 'id',
+      clientSecret: 'secret',
+      jwt: 'jwt-token',
+    });
+  });
+
+  it('only success result deliveries use AsMe', () => {
+    expect(resolveAgentTaskDeliveryVia('result', 'asme')).toBe('asme');
+    expect(resolveAgentTaskDeliveryVia('success_receipt', 'asme')).toBe('bot');
+    expect(resolveAgentTaskDeliveryVia('failure_receipt', 'asme')).toBe('bot');
+    expect(resolveAgentTaskDeliveryVia('result', 'bot')).toBe('bot');
+  });
+
+  it('sends group results through the user RingCentral client', async () => {
+    const sendMessage = async (input: { targetType: string; targetRef: string; text: string }) => {
+      expect(input.targetType).toBe('group');
+      expect(input.targetRef).toBe('148192141318');
+      expect(input.text).toContain('帮我做完成');
+      return { chatId: '148192141318', postId: 'post-1' };
+    };
+    const result = await deliverAgentTaskAsMeNotice({
+      ringClient: {
+        isConfigured: () => true,
+        resolveTarget: async () => ({ status: 'unresolved' }),
+        resolveDirectConversationChatId: async () => null,
+        sendMessage,
+      },
+      title: '帮我做完成: Daily',
+      body: 'done',
+      targetGroupId: '148192141318',
+    });
+    expect(result).toMatchObject({ sent: true, chatId: '148192141318', postId: 'post-1' });
+  });
+
+  it('resolves private users before sending', async () => {
+    const result = await deliverAgentTaskAsMeNotice({
+      ringClient: {
+        isConfigured: () => true,
+        resolveTarget: async () => ({
+          status: 'resolved',
+          resolved: { kind: 'user', entityId: 'ext-1' },
+        }),
+        resolveDirectConversationChatId: async (entityId: string) => {
+          expect(entityId).toBe('ext-1');
+          return 'dm-9';
+        },
+        sendMessage: async (input) => {
+          expect(input.targetResolvedChatId).toBe('dm-9');
+          return { chatId: 'dm-9', postId: 'post-2' };
+        },
+      },
+      title: '帮我做完成: Daily',
+      body: 'done',
+      targetUserId: 'teammate.one',
+    });
+    expect(result).toMatchObject({ sent: true, chatId: 'dm-9', postId: 'post-2' });
+  });
+
+  it('does not fall back to Bot when RingCentral is missing', async () => {
+    const result = await deliverAgentTaskAsMeNotice({
+      ringClient: {
+        isConfigured: () => false,
+        resolveTarget: async () => ({ status: 'unresolved' }),
+        resolveDirectConversationChatId: async () => null,
+        sendMessage: async () => {
+          throw new Error('should not send');
+        },
+      },
+      title: '帮我做完成: Daily',
+      body: 'done',
+      targetUserId: 'teammate.one',
+    });
+    expect(result.sent).toBe(false);
+    expect(result.error).toMatch(/RingCentral not configured/i);
   });
 });

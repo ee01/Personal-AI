@@ -32,10 +32,23 @@
 - Mac mini Base URL 为 `http://claw.xmnup.com`（无 :18789）
 - 本机 Base URL 为 `http://10.32.57.190:18789`
 
+## Live evidence (2026-08-14)
+- GET /config `executorDefaults.agent_task` = `exec_t4com0`（Mac mini）已落库
+- action `e8eaba0a-92dc-4e9e-80c2-1761a91dc129` title=打开百度网站, sourceRefId=msg_1786694923950
+- createdAt 16:09:58 CST, executedAt 16:10:57, triggerSource=jira_rule, queueStatus=succeeded
+- **params.executor / metadata.executorId = `openclaw`**（本机 10.32.57.190:18789）
+- claw.xmnup.com A=10.32.56.212; TCP 80 and 18789 OPEN; HTTP 200. Not a DNS/port failure.
+
+## Root cause
+v1 Sheet/Jira/Dify hardcoded `executor=openclaw` as a type name. After multi-gateway Options, that string is the **local instance id**. memory-service honors body.executor over agent_task default. No silent fallback on WS failure.
+
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
 | 只读查线上 config/action + DNS/端口 | 用真实数据区分「默认没生效」和「域名没打到 gateway」 |
+| Treat empty/`openclaw` as agent_task default | Superceded: picker can now select `openclaw` as a real instance |
+| Empty executor → Options default; explicit id pins instance | Lets 帮我做弹窗选择本机或 Mac mini |
+| Jumpboard also stop injecting openclaw | Cleanup for next Dify publish |
 
 ## Issues Encountered
 | Issue | Resolution |

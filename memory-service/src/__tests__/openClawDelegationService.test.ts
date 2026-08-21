@@ -223,7 +223,7 @@ describe('OpenClawDelegationService', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('treats a non-empty plain-text final answer as error when no verifiable artifact is present', async () => {
+  it('recovers a Jira observation markdown as a verifiable artifact', async () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
@@ -268,10 +268,10 @@ describe('OpenClawDelegationService', () => {
       targetSystem: 'jira',
     });
 
-    expect(outcome.status).toBe('error');
-    expect(outcome.summary).toContain('未返回结构化结果');
-    expect(outcome.payload?.fallback).toBe('plain_text_summary_without_verifiable_artifact');
-    expect(outcome.payload?.rawSummary).toContain('Cancelled');
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toContain('Cancelled');
+    expect(outcome.artifacts[0]?.metadata?.entityKey).toBe('MTR-144628');
+    expect(outcome.payload?.recoveredFrom).toBe('markdown_receipt');
  
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

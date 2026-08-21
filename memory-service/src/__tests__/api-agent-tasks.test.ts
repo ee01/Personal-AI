@@ -74,6 +74,33 @@ describe('AgentTask API', () => {
     expect(action).toBeTruthy();
     expect(action?.actionType).toBe('delegate_agent');
     expect(action?.params.timeoutMs).toBe(600000);
+    expect(action?.params.mode).toBe('read');
+  });
+
+  it('persists an explicit write boundary and rejects invalid modes', async () => {
+    const write = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: {
+        taskId: 'agent-task-write-mode',
+        task: 'Set Jira Epic Commit to Yes and read it back.',
+        executor: 'openclaw',
+        mode: 'write',
+        notify: false,
+        idempotencyKey: 'agent-task-write-mode',
+      },
+    });
+    expect(write.statusCode).toBe(202);
+    const repo = new ActionRepository(db);
+    expect(repo.findReusableByIdempotencyKey('agent-task-write-mode')?.params.mode).toBe('write');
+
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: { taskId: 'bad-mode', task: 'noop', mode: 'auto', notify: false },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: 'invalid_mode' });
   });
 
   it('rejects an executor that is not in the enabled registry', async () => {

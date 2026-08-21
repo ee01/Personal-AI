@@ -87,6 +87,13 @@ interface StoredRingCentralTargetAlias {
   updatedAt: number;
 }
 
+export interface RingCentralExplicitCredentials {
+  serverUrl?: string;
+  clientId: string;
+  clientSecret: string;
+  jwt: string;
+}
+
 export interface SendRingCentralMessageInput {
   targetType: string;
   targetRef: string;
@@ -293,6 +300,7 @@ export class RingCentralClient {
     private readonly userDataManager?: UserDataManager,
     private readonly db?: Database.Database,
     private readonly userId = 'default',
+    private readonly explicitCredentials?: RingCentralExplicitCredentials,
   ) {
     this.directoryRepo = db ? new RingCentralDirectoryRepository(db) : null;
   }
@@ -321,7 +329,18 @@ export class RingCentralClient {
   }
 
   private getRuntimeConfig() {
-    return getUserRuntimeConfig(this.userDataManager);
+    const base = getUserRuntimeConfig(this.userDataManager);
+    if (!this.explicitCredentials) return base;
+    return {
+      ...base,
+      ringCentralServerUrl:
+        this.explicitCredentials.serverUrl?.trim() ||
+        base.ringCentralServerUrl ||
+        'https://platform.ringcentral.com',
+      ringCentralClientId: this.explicitCredentials.clientId,
+      ringCentralClientSecret: this.explicitCredentials.clientSecret,
+      ringCentralJwt: this.explicitCredentials.jwt,
+    };
   }
 
   private getCacheKey(): string {

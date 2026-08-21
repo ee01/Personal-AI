@@ -60,6 +60,7 @@ import {
 } from './scheduleNextExecution';
 import { shouldReactivateDoneOneTimeMessageAfterScheduleChange } from './scheduleStatusReactivation';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
+import { mergeScheduledMessageUpdate } from './jiraAutomationLink';
 import { isGoogleSheetsInvalidCredentialError } from './googleSheetsAuthErrors.js';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
@@ -347,7 +348,7 @@ export class ScheduledMessageService {
     }
     
     const previousMessage = messages[index];
-    const updatedMessage = { ...previousMessage, ...updates };
+    const updatedMessage = mergeScheduledMessageUpdate(previousMessage, updates);
     updatedMessage.Push_Method = normalizePushMethodAlias(updatedMessage.Push_Method) as ScheduledMessage['Push_Method'];
     normalizeExecutorTargetType(updatedMessage);
 

@@ -59,6 +59,11 @@ test('ScheduledMessageService updateMessage refreshes live headers before full-r
     /const row = await this\.messageToRow\(updatedMessage\);\s*await this\.updateRow\(index \+ 2, row\);/,
     'updateMessage must not fall back to stale cached headers for full-row writes',
   );
+  assert.match(
+    updateMessageSource,
+    /const updatedMessage = mergeScheduledMessageUpdate\(previousMessage, updates\);/,
+    'updateMessage must merge updates without letting undefined Automation_Link wipe the hosted rule URL',
+  );
 });
 
 test('ScheduledMessageService createMessage also avoids stale header cache on append', () => {

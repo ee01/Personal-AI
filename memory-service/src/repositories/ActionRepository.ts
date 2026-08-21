@@ -5,6 +5,7 @@ import { now } from '../utils/time.js';
 
 export type ActionQueueStatus =
   | 'queued'
+  | 'awaiting_claim'
   | 'running'
   | 'succeeded'
   | 'failed'
@@ -46,6 +47,7 @@ export interface QueuedActionRecord {
   queueStatus: ActionQueueStatus;
   utilityScore?: number;
   urgencyScore?: number;
+  targetWorkerId?: string;
 }
 
 interface ActionRow {
@@ -82,6 +84,7 @@ interface ActionRow {
   queue_status: ActionQueueStatus | null;
   utility_score: number | null;
   urgency_score: number | null;
+  target_worker_id?: string | null;
 }
 
 interface CountRow {
@@ -200,6 +203,7 @@ export class ActionRepository {
       queueStatus: row.queue_status ?? 'queued',
       utilityScore: row.utility_score ?? undefined,
       urgencyScore: row.urgency_score ?? undefined,
+      targetWorkerId: row.target_worker_id ?? undefined,
     };
   }
 
@@ -695,5 +699,116 @@ export class ActionRepository {
     return ids
       .map((id) => this.getById(id))
       .filter((action): action is QueuedActionRecord => Boolean(action));
+  }
+
+  listAwaitingClaim(workerId: string, limit: number): QueuedActionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE queue_status = 'awaiting_claim'
+           AND target_worker_id = ?
+         ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC
+         LIMIT ?`,
+      )
+      .all(workerId, Math.max(1, limit)) as ActionRow[];
+    return rows.map((row) => this.rowToAction(row));
+  }
+
+  markAwaitingClaim(
+    id: string,
+    workerId: string,
+    result?: Record<string, unknown>,
+  ): QueuedActionRecord | null {
+    const currentTime = now();
+    const existing = this.getById(id);
+    const merged = {
+      ...(existing?.result || {}),
+      ...(result || {}),
+      awaitingClaim: true,
+      targetWorkerId: workerId,
+    };
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'awaiting_claim',
+             target_worker_id = ?,
+             result_json = ?,
+             last_error = NULL
+         WHERE id = ?`,
+      )
+      .run(workerId, JSON.stringify(merged), id);
+    return this.getById(id);
+  }
+
+  markClaimedByWorker(
+    id: string,
+    workerId: string,
+    fenceToken: number,
+    leaseUntil: number,
+  ): string {
+    const attemptId = randomUUID();
+    const currentTime = now();
+    const existing = this.getById(id);
+    const merged = {
+      ...(existing?.result || {}),
+      fenceToken,
+      leaseUntil,
+      claimedByWorkerId: workerId,
+    };
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'running',
+             started_at = ?,
+             target_worker_id = ?,
+             result_json = ?
+         WHERE id = ?`,
+      )
+      .run(currentTime, workerId, JSON.stringify(merged), id);
+    this.db
+      .prepare(
+        `INSERT INTO proposed_action_attempts
+          (id, action_id, status, started_at)
+         VALUES (?, ?, 'running', ?)`,
+      )
+      .run(attemptId, id, currentTime);
+    return attemptId;
+  }
+
+  requeueExpiredWorkerLease(id: string): QueuedActionRecord | null {
+    const currentTime = now();
+    const existing = this.getById(id);
+    if (!existing) return null;
+    if (
+      existing.queueStatus !== 'running' &&
+      existing.queueStatus !== 'awaiting_claim'
+    ) {
+      return existing;
+    }
+    const merged = {
+      ...(existing.result || {}),
+      leaseExpiredAt: currentTime,
+    };
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'awaiting_claim',
+             last_error = ?,
+             result_json = ?
+         WHERE id = ?
+           AND queue_status IN ('running', 'awaiting_claim')`,
+      )
+      .run('worker lease expired; requeued for claim', JSON.stringify(merged), id);
+    this.db
+      .prepare(
+        `UPDATE proposed_action_attempts
+         SET status = 'expired',
+             error_message = ?,
+             finished_at = ?
+         WHERE action_id = ? AND status = 'running'`,
+      )
+      .run('worker lease expired', currentTime, id);
+    return this.getById(id);
   }
 }

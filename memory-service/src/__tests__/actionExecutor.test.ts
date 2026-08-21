@@ -62,6 +62,20 @@ describe('ActionExecutor', () => {
         openClawBaseUrl: 'https://openclaw.example.com',
         openClawApiKey: 'test-key',
         openClawTimeoutMs: 5000,
+        agentExecutors: [
+          {
+            id: 'openclaw',
+            label: 'OpenClaw',
+            type: 'openclaw-responses',
+            baseUrl: 'https://openclaw.example.com',
+            apiKey: 'test-key',
+            enabled: true,
+          },
+        ],
+        executorDefaults: {
+          agent_task: 'openclaw',
+          reflection_research: 'openclaw',
+        },
       }),
     );
 
@@ -1116,6 +1130,20 @@ describe('ActionExecutor', () => {
         openClawBaseUrl: 'https://openclaw.example.com',
         openClawApiKey: 'test-key',
         openClawTimeoutMs: 5000,
+        agentExecutors: [
+          {
+            id: 'openclaw',
+            label: 'OpenClaw',
+            type: 'openclaw-responses',
+            baseUrl: 'https://openclaw.example.com',
+            apiKey: 'test-key',
+            enabled: true,
+          },
+        ],
+        executorDefaults: {
+          agent_task: 'openclaw',
+          reflection_research: 'openclaw',
+        },
       }),
     );
 

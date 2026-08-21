@@ -4,34 +4,42 @@
 查清 memory-exploring 执行 agent_task（sourceRefId=msg_1786694923950）时为何打到本机 OpenClaw（10.32.57.190），而不是 Options 里设为默认的 Mac mini（claw.xmnup.com / 10.32.56.212）。区分代码 bug、默认值未落库、动作写死 executor、以及域名解析/端口连通问题。
 
 ## Current Phase
-Phase 1
+Phase 6
 
 ## Phases
 
 ### Phase 1: Requirements & Discovery
 - [x] 理解用户配置：两个 Gateway，Agent Task 默认 Mac mini
-- [ ] 读执行器选择链路（创建 vs 执行/重试）
-- [ ] 查线上 config + 该 action 的 params.executor
-- [ ] 测 claw.xmnup.com DNS / 80 / 18789 / WebSocket
-- **Status:** in_progress
+- [x] 读执行器选择链路（创建 vs 执行/重试）
+- [x] 查线上 config + 该 action 的 params.executor
+- [x] 测 claw.xmnup.com DNS / 80 / 18789
+- **Status:** complete
 
 ### Phase 2: Root cause
-- [ ] 判定是代码 bug、配置落库、动作绑定，还是网关连通
-- [ ] 记录证据到 findings.md
-- **Status:** pending
+- [x] 判定是代码 bug、配置落库、动作绑定，还是网关连通
+- [x] 记录证据到 findings.md
+- **Status:** complete
 
 ### Phase 3: Fix if code bug
-- [ ] 仅在确认是代码问题后改代码
-- [ ] 补测试
-- **Status:** pending
+- [x] 仅在确认是代码问题后改代码
+- [x] 补测试
+- **Status:** complete
 
 ### Phase 4: Verification
-- [ ] 单测或连通性复测
-- **Status:** pending
+- [x] 单测或连通性复测
+- **Status:** complete
 
 ### Phase 5: Delivery
-- [ ] 用中文向用户说明结论与建议
-- **Status:** pending
+- [x] 用中文向用户说明结论与建议
+- **Status:** complete
+
+### Phase 6: 帮我做弹窗可选执行器
+- [x] 对照 roadmap AiCreateModal 的执行器 chips
+- [x] 帮我做新建/编辑弹窗改为选择实例，默认 Options agent_task
+- [x] Apps Script 透传选中 id，不再写死 openclaw
+- [x] 撤回把显式 `openclaw` 重写成默认的逻辑（否则无法选本机）
+- [x] 单测 + 文档
+- **Status:** complete
 
 ## Key Questions
 1. 该 action 创建时 params 是否已经写死 `executor=openclaw`？

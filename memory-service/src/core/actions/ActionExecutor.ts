@@ -9,6 +9,7 @@ import {
 import { OpenClawResponsesExecutor } from '../../integrations/executors/OpenClawResponsesExecutor.js';
 import { OpenClawGatewayExecutor } from '../../integrations/executors/OpenClawGatewayExecutor.js';
 import { AcpExecutor } from '../../integrations/executors/AcpExecutor.js';
+import type { AgentResultEnvelope } from '../../integrations/executors/AgentExecutor.js';
 import {
   findEnabledExecutor,
   isAgentDelegateActionType,
@@ -34,6 +35,7 @@ import {
   type ActionReadinessReceipt,
 } from '../ActionReadinessService.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
+import { AgentWorkerRepository } from '../../repositories/AgentWorkerRepository.js';
 
 const OPENCLAW_STALE_RUNNING_GRACE_SECONDS = 60;
 
@@ -54,7 +56,7 @@ interface DispatchOutcome {
   result: Record<string, unknown>;
   queueStatus?: Extract<
     ActionQueueStatus,
-    'failed' | 'dead_letter' | 'running' | 'input_required'
+    'failed' | 'dead_letter' | 'running' | 'input_required' | 'awaiting_claim'
   >;
   errorMessage?: string;
   delegationOutcome?: DelegationOutcome;
@@ -234,6 +236,15 @@ export class ActionExecutor {
       staleAfterSeconds,
       errorMessage: staleError,
     });
+    try {
+      const workerRepo = new AgentWorkerRepository(this.db);
+      for (const lease of workerRepo.listExpiredLeases()) {
+        this.actionRepo.requeueExpiredWorkerLease(lease.actionId);
+        workerRepo.deleteLease(lease.actionId);
+      }
+    } catch {
+      /* agent_workers table may not exist on very old fixtures */
+    }
 
     const dueActions = this.actionRepo.listDueAutoActions(limit);
     const results: ActionExecutionResult[] = [];
@@ -329,6 +340,19 @@ export class ActionExecutor {
       };
     }
 
+    if (action.queueStatus === 'awaiting_claim') {
+      return {
+        actionId: action.id,
+        actionType: action.actionType,
+        queueStatus: 'awaiting_claim',
+        result: action.result,
+      };
+    }
+
+    if (this.shouldParkForRemoteWorker(action)) {
+      return this.parkForRemoteWorker(action);
+    }
+
     if (isAgentDelegateActionType(action.actionType)) {
       const readiness =
         await this.actionReadinessService.prepareActionForDispatch(action);
@@ -378,6 +402,14 @@ export class ActionExecutor {
           actionId: action.id,
           actionType: action.actionType,
           queueStatus: 'running',
+          result: outcome.result,
+        };
+      }
+      if (outcome.queueStatus === 'awaiting_claim') {
+        return {
+          actionId: action.id,
+          actionType: action.actionType,
+          queueStatus: 'awaiting_claim',
           result: outcome.result,
         };
       }
@@ -687,6 +719,16 @@ export class ActionExecutor {
       (typeof metadata.executorId === 'string' && metadata.executorId.trim()) ||
       undefined;
 
+    const defaults = resolveExecutorDefaults(config);
+    // Agent Task v1 callers baked executor=openclaw (type name). Honor the
+    // Options Agent Task default, including retries of already-queued rows.
+    if (action.sourceKind === 'agent_task') {
+      return findEnabledExecutor(
+        config,
+        requested || defaults.agent_task,
+      );
+    }
+
     if (requested) {
       return findEnabledExecutor(config, requested);
     }
@@ -696,8 +738,131 @@ export class ActionExecutor {
       return findEnabledExecutor(config, 'openclaw');
     }
 
-    const defaults = resolveExecutorDefaults(config);
     return findEnabledExecutor(config, defaults.agent_task);
+  }
+
+  private isRemoteAcp(instance: AgentExecutorInstance | null): boolean {
+    return Boolean(
+      instance &&
+        (instance.type === 'acp-codex' || instance.type === 'acp-claude-code') &&
+        instance.runtime === 'remote',
+    );
+  }
+
+  private shouldParkForRemoteWorker(action: QueuedActionRecord): boolean {
+    if (!isAgentDelegateActionType(action.actionType)) return false;
+    const params = safeJsonValue(action.params);
+    return this.isRemoteAcp(this.resolveExecutorForAction(action, params));
+  }
+
+  private parkForRemoteWorker(action: QueuedActionRecord): ActionExecutionResult {
+    const params = safeJsonValue(action.params);
+    const executorInstance = this.resolveExecutorForAction(action, params);
+    const workerId = executorInstance?.workerId?.trim();
+    if (!workerId) {
+      const updated =
+        this.actionRepo.markFailed(
+          action.id,
+          this.actionRepo.markRunning(action.id),
+          '远程 ACP 执行器未绑定 workerId。请在 Options 配对 Desktop App 或选择 Worker。',
+          true,
+        ) ?? action;
+      return {
+        actionId: updated.id,
+        actionType: updated.actionType,
+        queueStatus: updated.queueStatus,
+        error: updated.lastError,
+      };
+    }
+    const parked = this.actionRepo.markAwaitingClaim(action.id, workerId, {
+      status: 'awaiting_claim',
+      summary: '等待 Worker 领取',
+      workerId,
+      executorId: executorInstance?.id,
+      executorType: executorInstance?.type,
+    });
+    return {
+      actionId: action.id,
+      actionType: action.actionType,
+      queueStatus: 'awaiting_claim',
+      result: parked?.result,
+    };
+  }
+
+  async applyWorkerEnvelope(
+    actionId: string,
+    envelope: AgentResultEnvelope,
+  ): Promise<ActionExecutionResult> {
+    const action = this.actionRepo.getById(actionId);
+    if (!action) {
+      throw new Error(`Action "${actionId}" not found`);
+    }
+    const params = safeJsonValue(action.params);
+    const executorInstance = this.resolveExecutorForAction(action, params);
+    if (!executorInstance) {
+      throw new Error('Executor missing for worker report');
+    }
+    const outcome = await this.finalizeAgentEnvelope(
+      action,
+      envelope,
+      executorInstance,
+    );
+    const attemptRow = this.db
+      .prepare(
+        `SELECT id FROM proposed_action_attempts
+         WHERE action_id = ? AND status = 'running'
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(actionId) as { id: string } | undefined;
+    const attemptId = attemptRow?.id || this.actionRepo.markRunning(actionId);
+
+    if (
+      outcome.queueStatus === 'running' ||
+      outcome.queueStatus === 'input_required'
+    ) {
+      this.actionRepo.patchRunningResult(action.id, {
+        ...outcome.result,
+        parkReason: outcome.queueStatus,
+      });
+      return {
+        actionId: action.id,
+        actionType: action.actionType,
+        queueStatus: 'running',
+        result: outcome.result,
+      };
+    }
+    if (
+      outcome.queueStatus === 'failed' ||
+      outcome.queueStatus === 'dead_letter'
+    ) {
+      const updated =
+        this.actionRepo.markFailed(
+          action.id,
+          attemptId,
+          outcome.errorMessage ?? 'Action execution failed',
+          outcome.queueStatus === 'dead_letter',
+          outcome.result,
+        ) ?? action;
+      return {
+        actionId: updated.id,
+        actionType: updated.actionType,
+        queueStatus: updated.queueStatus,
+        result: outcome.result,
+        error: outcome.errorMessage,
+      };
+    }
+    const updated =
+      this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ??
+      action;
+    if (updated.threadId) {
+      this.threadService.refreshThreadDocument(updated.threadId);
+    }
+    return {
+      actionId: updated.id,
+      actionType: updated.actionType,
+      queueStatus: updated.queueStatus,
+      result: outcome.result,
+    };
   }
 
   private async delegateAgent(
@@ -789,6 +954,10 @@ export class ActionExecutor {
       threadId: action.threadId ?? String(params.threadId ?? action.id),
       runId: action.runId,
       actionId: action.id,
+      // A retry is an explicitly requested new execution. Reusing the prior
+      // gateway key only replays its terminal response and makes retries a
+      // no-op, so scope the key to the persisted retry attempt number.
+      idempotencyKey: `pai:${action.id}:attempt-${action.retryCount}`,
       sessionKey: this.buildSessionKey(action, params),
       agentId:
         typeof params.agentId === 'string' && params.agentId.trim().length > 0
@@ -813,6 +982,14 @@ export class ActionExecutor {
             },
     });
 
+    return this.finalizeAgentEnvelope(action, envelope, executorInstance);
+  }
+
+  private async finalizeAgentEnvelope(
+    action: QueuedActionRecord,
+    envelope: AgentResultEnvelope,
+    executorInstance: AgentExecutorInstance,
+  ): Promise<DispatchOutcome> {
     if (envelope.status === 'running' || envelope.status === 'input_required') {
       this.actionRepo.patchRunningResult(action.id, {
         status: envelope.status,

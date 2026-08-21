@@ -91,10 +91,15 @@ import {
 } from './timelineCacheStatus';
 import {
   getMemoryServiceClient,
-  type RuntimeConfigResponse,
   type OutreachTemplateRuntimeStatusItem,
   type AgentTaskRuntimeStatusItem,
 } from '../services/MemoryServiceClient';
+import {
+  agentTaskExecutorMissingReason,
+  listAgentExecutorOptions,
+  resolveAgentTaskExecutorSelection,
+  type AgentExecutorOption,
+} from './agentTaskExecutor';
 import {
   formatLocalScheduleDate,
   formatLocalScheduleDateTime,
@@ -152,6 +157,10 @@ import {
   getScheduledMessagesSheetTabId,
   type ScheduledMessagesSheetTab,
 } from './scheduledSheetLinks';
+import {
+  resolveAutomationLinkForSave,
+  resolveJiraRuleNameSyncLink,
+} from './jiraAutomationLink';
 import { buildRepeatSubmissionFields } from './repeatSubmission';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
 import {
@@ -681,6 +690,8 @@ interface OutreachRuntimeState {
   openClawReady: boolean;
   openClawMissingReason?: string;
   configLoadError?: string;
+  agentExecutors: AgentExecutorOption[];
+  agentTaskDefaultExecutor: string;
 }
 
 const OUTREACH_OPTIONS_HASH = 'outreach-config';
@@ -1255,17 +1266,8 @@ function formatOutreachRuntimeStatus(value?: string): string {
   return value || '未知';
 }
 
-function getOpenClawMissingReason(runtime: RuntimeConfigResponse): string {
-  if (runtime.openClawEnabled !== true) {
-    return 'OpenClaw 尚未启用，帮我做任务到期后无法委派执行。';
-  }
-  if (!runtime.openClawBaseUrl?.trim()) {
-    return 'OpenClaw Base URL 尚未配置，memory-service 无法连接执行器。';
-  }
-  if (runtime.openClawApiKeyConfigured !== true) {
-    return 'OpenClaw API Key 尚未配置，memory-service 无法通过 OpenAI-compatible API 调用执行器。';
-  }
-  return '';
+function getOpenClawMissingReason(executors: AgentExecutorOption[]): string {
+  return agentTaskExecutorMissingReason(executors, true);
 }
 
 function formatOutreachReplyClassification(value?: string): string {
@@ -1540,6 +1542,8 @@ const ScheduledMessagesManager: React.FC = () => {
     enabled: false,
     ringCentralReady: false,
     openClawReady: false,
+    agentExecutors: [],
+    agentTaskDefaultExecutor: '',
   });
   const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
   const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
@@ -1730,12 +1734,15 @@ const ScheduledMessagesManager: React.FC = () => {
         Boolean(runtime.ringCentralClientId?.trim()) &&
         Boolean(runtime.ringCentralClientSecretConfigured) &&
         Boolean(runtime.ringCentralJwtConfigured);
-      const openClawMissingReason = getOpenClawMissingReason(runtime);
+      const agentExecutors = listAgentExecutorOptions(runtime);
+      const openClawMissingReason = getOpenClawMissingReason(agentExecutors);
       setOutreachRuntime({
         enabled: Boolean(runtime.outreachEnabled),
         ringCentralReady,
         openClawReady: !openClawMissingReason,
         openClawMissingReason,
+        agentExecutors,
+        agentTaskDefaultExecutor: String(runtime.executorDefaults?.agent_task || '').trim(),
         configLoadError: undefined,
       });
     } catch (error) {
@@ -1745,6 +1752,8 @@ const ScheduledMessagesManager: React.FC = () => {
         enabled: false,
         ringCentralReady: false,
         openClawReady: false,
+        agentExecutors: [],
+        agentTaskDefaultExecutor: '',
         configLoadError: runtimeBaseUrl
           ? `无法读取 memory-service runtime 配置（${runtimeBaseUrl}）：${message}`
           : '无法读取 memory-service runtime 配置：MEMORY_SERVICE_BASE_URL 为空。',
@@ -3476,12 +3485,17 @@ const ScheduledMessagesManager: React.FC = () => {
         let outreachSyncError: Error | null = null;
         
         // 如果是 JiraAutomation 类型且 Topic 发生变化，同步更新 Jira Rule 名称
-        if (editingMessage.Push_Method === 'JiraAutomation' && 
-            editingMessage.Automation_Link &&
-            formData.Topic && 
+        const jiraRuleNameSyncLink = resolveJiraRuleNameSyncLink({
+          savedLink: savedMessage.Automation_Link,
+          formLink: formData.Automation_Link,
+          editingLink: editingMessage.Automation_Link,
+        });
+        if (editingMessage.Push_Method === 'JiraAutomation' &&
+            jiraRuleNameSyncLink &&
+            formData.Topic &&
             formData.Topic !== editingMessage.Topic) {
           try {
-            await syncJiraRuleName(editingMessage.Automation_Link, formData.Topic);
+            await syncJiraRuleName(jiraRuleNameSyncLink, formData.Topic);
           } catch (syncError: any) {
             console.warn('同步 Jira Rule 名称失败:', syncError);
             // 不阻塞主流程，只是警告
@@ -3907,9 +3921,11 @@ const ScheduledMessagesManager: React.FC = () => {
     }
 
     if (message.Push_Method === 'AgentTask') {
-      return message.Agent_Executor
-        ? `memory-service / ${message.Agent_Executor}`
-        : 'memory-service / OpenClaw';
+      const executorId = message.Agent_Executor?.trim();
+      const executorLabel = outreachRuntime.agentExecutors.find((item) => item.id === executorId)?.label
+        || executorId
+        || '默认执行器';
+      return `memory-service / ${executorLabel}`;
     }
     
     // 优先显示用户名
@@ -5518,6 +5534,9 @@ const ScheduledMessagesManager: React.FC = () => {
            agentTaskOpenClawConfigured={outreachRuntime.openClawReady}
            agentTaskOpenClawCheckLoaded={outreachRuntimeLoaded}
            agentTaskOpenClawMissingReason={outreachRuntime.openClawMissingReason}
+           agentExecutors={outreachRuntime.agentExecutors}
+           agentTaskDefaultExecutor={outreachRuntime.agentTaskDefaultExecutor}
+           onRefreshAgentExecutors={loadOutreachRuntime}
            ringCentralSenderConfigured={hasRingCentralSenderCredentials(config)}
            onConfigureBot={(mode) => openBotConfigDialog(mode)}
            onConfigureRingCentralSender={openRingCentralSenderConfigDialog}
@@ -6416,6 +6435,9 @@ const AddMessageDialog: React.FC<{
   agentTaskOpenClawConfigured: boolean;
   agentTaskOpenClawCheckLoaded: boolean;
   agentTaskOpenClawMissingReason?: string;
+  agentExecutors: AgentExecutorOption[];
+  agentTaskDefaultExecutor: string;
+  onRefreshAgentExecutors: () => void | Promise<void>;
   ringCentralSenderConfigured: boolean;
   onConfigureBot: (mode?: BotConfigDialogMode) => void;
   onConfigureRingCentralSender: () => void;
@@ -6440,6 +6462,9 @@ const AddMessageDialog: React.FC<{
   agentTaskOpenClawConfigured,
   agentTaskOpenClawCheckLoaded,
   agentTaskOpenClawMissingReason,
+  agentExecutors,
+  agentTaskDefaultExecutor,
+  onRefreshAgentExecutors,
   ringCentralSenderConfigured,
   onConfigureBot,
   onConfigureRingCentralSender,
@@ -6505,9 +6530,11 @@ const AddMessageDialog: React.FC<{
         Timeline_Milestone: editingMessage.Timeline_Milestone,
         Timeline_Offset: editingMessage.Timeline_Offset,
         Agent_Task_ID: editingMessage.Agent_Task_ID,
-        Agent_Executor: editingMessage.Agent_Executor || 'openclaw',
+        Agent_Mode: editingMessage.Agent_Mode === 'write' ? 'write' : 'read',
+        Agent_Executor: editingMessage.Agent_Executor || '',
         Agent_Notify_Template: editingMessage.Agent_Notify_Template,
         Agent_Notify_Success_Receipt: editingMessage.Agent_Notify_Success_Receipt,
+        Agent_Notify_Via: editingMessage.Agent_Notify_Via,
         Agent_Trigger_Source: editingMessage.Agent_Trigger_Source || 'jira_rule',
         Agent_AR_Binding_ID: editingMessage.Agent_AR_Binding_ID,
         Agent_Last_Run_At: editingMessage.Agent_Last_Run_At,
@@ -6515,6 +6542,7 @@ const AddMessageDialog: React.FC<{
         Agent_Last_Result: editingMessage.Agent_Last_Result,
         Agent_Last_Error: editingMessage.Agent_Last_Error,
         Category: editingMessage.Category,
+        Automation_Link: editingMessage.Automation_Link,
       };
     }
     return {
@@ -6532,7 +6560,8 @@ const AddMessageDialog: React.FC<{
       Outreach_Context: '',
       Outreach_Max_Followup: 2,
       Outreach_Followup_Interval_Hours: 24,
-      Agent_Executor: 'openclaw',
+      Agent_Executor: '',
+      Agent_Mode: 'read',
       Agent_Trigger_Source: 'jira_rule',
     };
   };
@@ -6567,6 +6596,31 @@ const AddMessageDialog: React.FC<{
   const [formData, setFormData] = useState<CreateMessageFormData>(getInitialFormData);
   const isOutreachMode = formData.Push_Method === 'Outreach';
   const isAgentTaskMode = isAgentTaskPushMethod(formData.Push_Method);
+  const agentTaskLikelyWrites = /(?:\b(?:create|update|edit|delete|set|sync|assign|move|close|reopen|send|post|publish|merge|deploy)\b|创建|修改|更新|删除|设置|同步|写入|指派|移动|关闭|重开|发送|发布|合并|部署)/i.test(formData.Content || '');
+  const resolvedAgentExecutorId = resolveAgentTaskExecutorSelection({
+    savedId: formData.Agent_Executor,
+    defaultId: agentTaskDefaultExecutor,
+    executors: agentExecutors,
+  });
+  React.useEffect(() => {
+    if (!isAgentTaskMode || !agentExecutors.length) return;
+    if (formData.Agent_Executor === resolvedAgentExecutorId) return;
+    setFormData((prev) => {
+      const nextId = resolveAgentTaskExecutorSelection({
+        savedId: prev.Agent_Executor,
+        defaultId: agentTaskDefaultExecutor,
+        executors: agentExecutors,
+      });
+      if (prev.Agent_Executor === nextId) return prev;
+      return { ...prev, Agent_Executor: nextId };
+    });
+  }, [
+    isAgentTaskMode,
+    agentExecutors,
+    agentTaskDefaultExecutor,
+    formData.Agent_Executor,
+    resolvedAgentExecutorId,
+  ]);
   const [agentResultNotifyEnabled, setAgentResultNotifyEnabled] = useState(() => {
     if (!editingMessage || !isAgentTaskMessage(editingMessage)) return false;
     return Boolean(
@@ -6577,6 +6631,12 @@ const AddMessageDialog: React.FC<{
   const [agentSuccessReceipt, setAgentSuccessReceipt] = useState(() => {
     if (!editingMessage) return true;
     return String(editingMessage.Agent_Notify_Success_Receipt || 'Y').trim().toUpperCase() !== 'N';
+  });
+  const [agentNotifyVia, setAgentNotifyVia] = useState<'bot' | 'asme'>(() => {
+    if (!editingMessage) return 'bot';
+    return String(editingMessage.Agent_Notify_Via || 'bot').trim().toLowerCase() === 'asme'
+      ? 'asme'
+      : 'bot';
   });
   const [scheduleQueueSuggestionReceipt, setScheduleQueueSuggestionReceipt] =
     useState<ScheduleQueueDraftSuggestionReceipt | null>(null);
@@ -7313,7 +7373,11 @@ ${content}
     }
 
     if (agentTaskOpenClawBlockReason) {
-      alert(`${agentTaskOpenClawBlockReason}\n\n请先完成 OpenClaw 配置后再保存。`);
+      alert(`${agentTaskOpenClawBlockReason}\n\n请先完成 Agent 执行器配置后再保存。`);
+      return;
+    }
+    if (isAgentTaskMode && !resolvedAgentExecutorId) {
+      alert('请选择 Agent 执行器后再保存。');
       return;
     }
     
@@ -7405,6 +7469,10 @@ ${content}
         }
         if (formData.Target_Type === 'group' && !formData.Glip_Team_ID?.trim()) {
           alert('请填写结果通知群组 ID');
+          return;
+        }
+        if (agentNotifyVia === 'asme' && !ringCentralSenderConfigured) {
+          alert('以本人身份发送结果通知需要先配置 AsMe 的 RingCentral sender（与顶部 AsMe 发消息 tab 同一套 Client ID / Secret / JWT）。');
           return;
         }
       }
@@ -7623,7 +7691,11 @@ ${content}
       AI_Endpoint: formData.Push_Method === 'Outreach' ? undefined : formData.AI_Endpoint,
       AI_Headers: formData.Push_Method === 'Outreach' ? undefined : formData.AI_Headers,
       AI_Body: formData.Push_Method === 'Outreach' ? undefined : formData.AI_Body,
-      Automation_Link: formData.Push_Method === 'Outreach' ? undefined : formData.Automation_Link,
+      Automation_Link: resolveAutomationLinkForSave({
+        pushMethod: formData.Push_Method,
+        formLink: formData.Automation_Link,
+        existingLink: isEditMode ? editingMessage?.Automation_Link : undefined,
+      }),
       ...repeatFields,
       Schedule_Date: isTimelineTrigger ? '' : formData.Schedule_Date,
       Timeline_Project: timelineProjectForSave,
@@ -7633,14 +7705,24 @@ ${content}
       Agent_Task_ID: formData.Push_Method === 'AgentTask'
         ? formData.Agent_Task_ID || `agent_task_${Date.now()}`
         : undefined,
+      Agent_Mode: formData.Push_Method === 'AgentTask'
+        ? (formData.Agent_Mode === 'write' ? 'write' : 'read')
+        : undefined,
       Agent_Executor: formData.Push_Method === 'AgentTask'
-        ? formData.Agent_Executor || 'openclaw'
+        ? resolveAgentTaskExecutorSelection({
+            savedId: formData.Agent_Executor,
+            defaultId: agentTaskDefaultExecutor,
+            executors: agentExecutors,
+          })
         : undefined,
       Agent_Notify_Template: formData.Push_Method === 'AgentTask'
         ? formData.Agent_Notify_Template?.trim()
         : undefined,
       Agent_Notify_Success_Receipt: formData.Push_Method === 'AgentTask'
         ? (agentSuccessReceipt ? 'Y' : 'N')
+        : undefined,
+      Agent_Notify_Via: formData.Push_Method === 'AgentTask'
+        ? (agentNotifyVia === 'asme' ? 'asme' : 'bot')
         : undefined,
       Agent_Trigger_Source: formData.Push_Method === 'AgentTask'
         ? 'jira_rule'
@@ -7688,7 +7770,11 @@ ${content}
           next.Outreach_Followup_Interval_Hours = 24;
         }
       } else if (method === 'AgentTask') {
-        next.Agent_Executor = next.Agent_Executor || 'openclaw';
+        next.Agent_Executor = resolveAgentTaskExecutorSelection({
+          savedId: next.Agent_Executor,
+          defaultId: agentTaskDefaultExecutor,
+          executors: agentExecutors,
+        });
         next.Agent_Trigger_Source = 'jira_rule';
       }
       return next;
@@ -8056,9 +8142,9 @@ ${content}
   const agentTaskOpenClawBlockReason = isAgentTaskMode
     ? agentTaskOpenClawCheckLoaded
       ? (agentTaskOpenClawConfigured
-          ? ''
-          : agentTaskOpenClawMissingReason || 'OpenClaw 尚未配置，帮我做任务到期后无法执行。')
-      : '正在检查 OpenClaw 配置，请稍候。'
+          ? (resolvedAgentExecutorId ? '' : '请选择 Agent 执行器。')
+          : agentTaskOpenClawMissingReason || '尚未配置 Agent 执行器，帮我做任务到期后无法执行。')
+      : '正在检查 Agent 执行器，请稍候。'
     : '';
   const outreachGateActive = isOutreachMode && !(outreachEnabled && outreachConfigured);
   const outreachReadinessUnknown = isOutreachMode && Boolean(outreachConfigLoadError);
@@ -8114,14 +8200,15 @@ ${content}
         normalizedTarget === 'self'
       );
     const failLine = 'Bot 私发失败回执给我（始终，不发到通知目标）';
+    const resultIdentity = agentNotifyVia === 'asme' ? '以本人身份（AsMe）' : '由 Bot（SM AI）';
     let successLine = '';
     let successSilent = false;
     if (agentResultNotifyEnabled && agentSuccessReceipt) {
       successLine = isSelf
-        ? `${agentNotifyTargetLabel}（即本人）收到${hasTemplate ? '按模板整理的' : '默认'}成功结果——与成功回执合并为一条，不重复发送`
-        : `${agentNotifyTargetLabel} 收到${hasTemplate ? '按模板整理的' : '默认'}成功结果 + Bot 私发成功回执给我`;
+        ? `${resultIdentity}把成功结果发到 ${agentNotifyTargetLabel}（即本人）${hasTemplate ? '（按模板整理）' : ''}——与成功回执合并为一条，不重复发送`
+        : `${resultIdentity}把成功结果发到 ${agentNotifyTargetLabel}${hasTemplate ? '（按模板整理）' : ''} + Bot 私发成功回执给我`;
     } else if (agentResultNotifyEnabled && !agentSuccessReceipt) {
-      successLine = `${agentNotifyTargetLabel} 收到${hasTemplate ? '按模板整理的' : '默认'}成功结果（不私发成功回执）`;
+      successLine = `${resultIdentity}把成功结果发到 ${agentNotifyTargetLabel}${hasTemplate ? '（按模板整理）' : ''}（不私发成功回执）`;
     } else if (!agentResultNotifyEnabled && agentSuccessReceipt) {
       successLine = 'Bot 私发成功回执给我（默认摘要）';
     } else {
@@ -8131,6 +8218,7 @@ ${content}
     return { successSilent, successLine, failLine };
   }, [
     agentNotifyTargetLabel,
+    agentNotifyVia,
     agentResultNotifyEnabled,
     agentSuccessReceipt,
     currentUsername,
@@ -8200,7 +8288,7 @@ ${content}
               role={agentTaskOpenClawCheckLoaded ? 'alert' : 'status'}
               aria-live="polite"
             >
-              <div style={dialogStyles.executionRouteLabel}>OpenClaw 配置</div>
+              <div style={dialogStyles.executionRouteLabel}>Agent 执行器</div>
               <div style={dialogStyles.executionRouteValue}>
                 {agentTaskOpenClawCheckLoaded ? '需要先完成配置' : '正在检查配置'}
               </div>
@@ -8209,14 +8297,21 @@ ${content}
               </div>
               <div style={dialogStyles.executionRouteActionRow}>
                 <span style={dialogStyles.executionRouteBlockText}>
-                  请在 Options 里启用 OpenClaw，并补齐 Base URL 和 API Key。
+                  请在 Options → Agent 执行器 中添加，配置后可重新检测。
                 </span>
                 <button
                   type="button"
                   style={dialogStyles.executionRouteActionButton}
                   onClick={onConfigureOpenClaw}
                 >
-                  前往 OpenClaw 配置
+                  前往 Agent 执行器
+                </button>
+                <button
+                  type="button"
+                  style={dialogStyles.executionRouteActionButton}
+                  onClick={() => { void onRefreshAgentExecutors(); }}
+                >
+                  重新检测
                 </button>
               </div>
             </div>
@@ -8493,6 +8588,31 @@ ${content}
                 </small>
               </div>
 
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>执行边界</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle((formData.Agent_Mode || 'read') !== 'write')}
+                    onClick={() => handleChange('Agent_Mode', 'read')}
+                  >
+                    只读查询
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Agent_Mode === 'write')}
+                    onClick={() => handleChange('Agent_Mode', 'write')}
+                  >
+                    允许外部写入
+                  </button>
+                </div>
+                <small style={dialogStyles.hint}>
+                  {agentTaskLikelyWrites && formData.Agent_Mode !== 'write'
+                    ? '检测到“同步/更新/设置”等写入意图：如需实际改 Jira、发消息或更新外部数据，请选择“允许外部写入”。未选择时任务按只读执行。'
+                    : '默认只读。写入必须由你显式选择；文本识别只给建议，不会自行授予写权限。'}
+                </small>
+              </div>
+
               <div style={{...dialogStyles.section, backgroundColor: '#fbfdff', padding: '16px', borderRadius: '8px', border: '1px dashed #b3d7ff', marginBottom: '16px'}}>
                 <h3 style={{margin: '0 0 14px 0', fontSize: '15px', fontWeight: 'bold', color: '#111827'}}>
                   📣 结果通知
@@ -8599,31 +8719,52 @@ ${content}
                       <div style={dialogStyles.buttonGroup}>
                         <button
                           type="button"
-                          style={getButtonStyle(true)}
+                          style={getButtonStyle(agentNotifyVia === 'bot')}
+                          onClick={() => setAgentNotifyVia('bot')}
                         >
                           🤖 Bot（SM AI）
                         </button>
                         <button
                           type="button"
                           style={{
-                            ...getButtonStyle(false),
-                            opacity: 0.55,
-                            cursor: 'not-allowed',
+                            ...getButtonStyle(agentNotifyVia === 'asme', !ringCentralSenderConfigured),
                             display: 'inline-flex',
                             flexDirection: 'row',
                             alignItems: 'center',
                             gap: '6px',
                             flexWrap: 'nowrap',
                           }}
-                          disabled
-                          title="结果通知以本人身份发送属于 v2 能力，当前版本固定由 Bot（SM AI）发送。Sheet 里的 RingCentral token 用于顶部「AsMe」发消息 tab，不会解锁此处。"
+                          onClick={() => setAgentNotifyVia('asme')}
+                          title={
+                            ringCentralSenderConfigured
+                              ? '成功结果以本人身份发送，使用与顶部 AsMe 发消息 tab 同一套 Sheet RingCentral sender token。回执仍由 Bot 私发。'
+                              : '需要先配置 AsMe RingCentral sender（Client ID / Secret / JWT），与顶部 AsMe 发消息 tab 同一套。可先选中预览，保存前需补齐配置。'
+                          }
                         >
                           <span>👤 AsMe</span>
-                          <span style={{ ...dialogStyles.methodPreviewBadge, marginTop: 0 }}>v2 · 暂未开放</span>
+                          {!ringCentralSenderConfigured && (
+                            <span style={{ ...dialogStyles.methodPreviewBadge, marginTop: 0 }}>
+                              可预览 · 待配置
+                            </span>
+                          )}
                         </button>
                       </div>
                       <small style={dialogStyles.hint}>
-                        这是结果通知的投递身份（v1 固定 Bot），与顶部「AsMe」发消息 tab、Sheet RingCentral token 无关。推送由 memory-service 在拿到执行结果后代码层完成。
+                        只影响成功结果通知的投递身份。失败回执和成功回执仍由 Bot 私发。推送由 memory-service 在拿到执行结果后代码层完成
+                        {agentNotifyVia === 'asme' ? '（AsMe 走 Sheet RingCentral sender，与顶部 AsMe 发消息 tab 同一套 token）' : '（Bot API）'}
+                        。
+                        {!ringCentralSenderConfigured && agentNotifyVia === 'asme' && (
+                          <>
+                            {' '}
+                            <button
+                              type="button"
+                              style={dialogStyles.inlineLinkButton}
+                              onClick={onConfigureRingCentralSender}
+                            >
+                              配置 AsMe RingCentral sender
+                            </button>
+                          </>
+                        )}
                       </small>
                     </div>
                   </div>
@@ -8663,18 +8804,51 @@ ${content}
                 </div>
               </div>
 
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>Agent 执行器</label>
+                {agentExecutors.length > 0 ? (
+                  <div style={dialogStyles.executorChipRow} role="group" aria-label="Agent 执行器">
+                    {agentExecutors.map((executor) => {
+                      const selected = executor.id === formData.Agent_Executor;
+                      const isDefault = executor.id === agentTaskDefaultExecutor;
+                      return (
+                        <button
+                          key={executor.id}
+                          type="button"
+                          style={getExecutorChipStyle(selected)}
+                          onClick={() => handleChange('Agent_Executor', executor.id)}
+                          disabled={isSubmitting}
+                          aria-pressed={selected}
+                        >
+                          <span style={dialogStyles.executorChipDot} aria-hidden="true" />
+                          {executor.label}
+                          {isDefault ? (
+                            <span style={dialogStyles.executorChipBadge}>默认</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={dialogStyles.hint}>
+                    {agentTaskOpenClawCheckLoaded
+                      ? '尚未检测到执行器。'
+                      : '正在检测执行器…'}
+                  </div>
+                )}
+                <small style={dialogStyles.hint}>
+                  执行器在 Options → Agent 执行器 中管理。新建默认选中 Agent Task 默认执行器，可改成其他实例。
+                  {' '}
+                  <button
+                    type="button"
+                    style={dialogStyles.inlineLinkButton}
+                    onClick={() => { void onRefreshAgentExecutors(); }}
+                  >
+                    重新检测
+                  </button>
+                </small>
+              </div>
               <div style={dialogStyles.formRow}>
-                <div style={dialogStyles.formGroup}>
-                  <label style={dialogStyles.label}>执行器</label>
-                  <input
-                    style={dialogStyles.input}
-                    type="text"
-                    value={formData.Agent_Executor || 'openclaw'}
-                    onChange={(event) => handleChange('Agent_Executor', event.target.value)}
-                    disabled
-                  />
-                  <small style={dialogStyles.hint}>v1 只支持 OpenClaw 自动执行；Codex/Claude Code 暂不作为远程执行后端。</small>
-                </div>
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>触发入口</label>
                   <input
@@ -10466,6 +10640,21 @@ const getButtonStyle = (isSelected: boolean, isPreviewOnly = false): React.CSSPr
   minHeight: '44px',
 });
 
+const getExecutorChipStyle = (isSelected: boolean): React.CSSProperties => ({
+  padding: '6px 12px',
+  borderRadius: '999px',
+  border: `1px solid ${isSelected ? '#80bdff' : '#d9e2ef'}`,
+  backgroundColor: isSelected ? '#eef6ff' : '#fff',
+  color: isSelected ? '#0056b3' : '#334155',
+  fontWeight: isSelected ? 700 : 600,
+  fontSize: '13px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  lineHeight: 1.25,
+});
+
 const getMethodTabStyle = (isSelected: boolean, isPreviewOnly = false): React.CSSProperties => ({
   flex: '1 1 160px',
   minHeight: '36px',
@@ -11636,6 +11825,33 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
   formRow: {
     display: 'flex',
     gap: '16px',
+  },
+  executorChipRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+  },
+  executorChipDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    backgroundColor: 'currentColor',
+    opacity: 0.75,
+  },
+  executorChipBadge: {
+    marginLeft: '2px',
+    fontSize: '11px',
+    fontWeight: 600,
+    opacity: 0.7,
+  },
+  inlineLinkButton: {
+    border: 'none',
+    background: 'none',
+    padding: 0,
+    color: '#0056b3',
+    cursor: 'pointer',
+    fontSize: '12px',
+    textDecoration: 'underline',
   },
   section: {
     marginBottom: '16px',

@@ -428,8 +428,10 @@ workflow:
                     if not resolved_task:
                         raise ValueError('task is required')
 
+                    # Omit empty executor so memory-service uses Options agent_task default.
+                    # Keep an explicit instance id, including "openclaw".
                     if not _trim(body.get('executor')):
-                        body['executor'] = 'openclaw'
+                        body.pop('executor', None)
                     if not _trim(body.get('triggerSource')):
                         body['triggerSource'] = 'jira_rule'
 

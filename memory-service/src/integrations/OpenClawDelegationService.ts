@@ -2,6 +2,11 @@ import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
 import { hasVerifiableArtifact as sharedHasVerifiableArtifact } from './executors/agentResultContract.js';
+import { parseAgentResultEnvelope, extractAgentResultJson } from './executors/agentResultEnvelope.js';
+import {
+  buildAgentResultSystemPrompt,
+  buildAgentResultUserPrompt,
+} from './executors/agentResultPrompt.js';
 
 export type DelegationStatus =
   | 'success'
@@ -509,31 +514,28 @@ export class OpenClawDelegationService {
       };
     }
 
-    const developerPrompt = [
-      'You are an external delegation agent invoked by Personal AI.',
-      `Mode: ${input.mode}`,
-      input.targetSystem ? `Target system: ${input.targetSystem}` : undefined,
-      'Return JSON only with this envelope:',
-      '{"status":"success|capability_missing|auth_error|need_human_decision|error","summary":"...","artifacts":[{"kind":"note","title":"...","content":"...","metadata":{}}],"transcript":"optional compact transcript","payload":{}}',
-      'On status=success, artifacts MUST include at least one verifiable artifact.',
-      'A verifiable artifact must include content plus metadata.sourceSystem, metadata.entityId or metadata.entityKey, metadata.verification, and metadata.observedFields (read) or metadata.operation / metadata.changedFields (write).',
-      'If you cannot provide a verifiable artifact, do not return success.',
-      'If required capability/tool is unavailable, use status=capability_missing.',
-      'If credentials or permissions are insufficient, use status=auth_error.',
-      'If human choice is required before continuing, use status=need_human_decision and include payload.question plus payload.options.',
-      'Keep the summary concise and factual.',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const developerPrompt = buildAgentResultSystemPrompt(
+      {
+        task: input.task,
+        mode: input.mode,
+        targetSystem: input.targetSystem,
+        threadId: input.threadId,
+        runId: input.runId,
+        metadata: input.metadata,
+      },
+      { runtime: 'openclaw' },
+    );
 
     const userPrompt = [
-      `Thread ID: ${input.threadId}`,
-      input.runId ? `Run ID: ${input.runId}` : undefined,
       this.userId ? `Personal AI User ID: ${this.userId}` : undefined,
-      input.metadata ? `Context metadata: ${JSON.stringify(input.metadata)}` : undefined,
-      '',
-      'Task:',
-      input.task,
+      buildAgentResultUserPrompt({
+        task: input.task,
+        mode: input.mode,
+        targetSystem: input.targetSystem,
+        threadId: input.threadId,
+        runId: input.runId,
+        metadata: input.metadata,
+      }),
     ]
       .filter(Boolean)
       .join('\n');
@@ -606,8 +608,12 @@ export class OpenClawDelegationService {
       }
 
       const outputText = parsed ? extractOutputText(parsed) : text;
-      const envelope = safeJsonCandidateParse<Envelope>(outputText);
-      const normalizedStatus = this.normalizeStatus(envelope?.status);
+      const envelope = extractAgentResultJson(outputText) as Envelope | null;
+      const parseOptions = {
+        targetSystem: input.targetSystem,
+        mode: input.mode,
+        task: input.task,
+      };
       const transcriptPath = this.writeTranscript(input, {
         request: body,
         response: parsed ?? { rawText: text },
@@ -615,6 +621,18 @@ export class OpenClawDelegationService {
       });
 
       if (!envelope) {
+        const recovered = parseAgentResultEnvelope(outputText, parseOptions);
+        if (recovered.status === 'succeeded') {
+          return {
+            status: 'success',
+            summary: recovered.summary,
+            artifacts: recovered.artifacts,
+            rawResponse: parsed,
+            outputText,
+            transcriptPath,
+            payload: recovered.payload,
+          };
+        }
         if (outputText.trim().length > 0) {
           return {
             status: 'error',
@@ -639,6 +657,7 @@ export class OpenClawDelegationService {
         };
       }
 
+      const normalizedStatus = this.normalizeStatus(envelope.status);
       const artifacts = normalizedStatus === 'success'
         ? enrichArtifactsWithDelegationContext(
             coerceArtifacts(envelope.artifacts),

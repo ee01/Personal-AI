@@ -9,10 +9,12 @@ import {
   findEnabledExecutor,
   isAgentDelegateActionType,
   publicExecutorOptions,
+  resolveAgentTaskExecutorId,
   resolveExecutorDefaults,
 } from '../integrations/executors/executorRegistry.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
 
@@ -27,6 +29,8 @@ interface AgentTaskExecuteBody {
   executor?: string;
   targetSystem?: string;
   taskKind?: string;
+  /** External effect boundary. Omitted means read-only for backward compatibility. */
+  mode?: 'read' | 'write';
   executionHints?: Record<string, unknown>;
   notifyTemplate?: string;
   triggerSource?: string;
@@ -37,11 +41,24 @@ interface AgentTaskExecuteBody {
   notify?: boolean;
   /** Controls success receipt only; failure receipt is always on when notify !== false. Default true. */
   successReceipt?: boolean;
-  /** v1 accepts only 'bot'; AsMe reserved for v2. */
+  /** Result notification identity. Receipts always use Bot. */
   notifyVia?: 'bot' | 'asme';
+  /** Sheet AsMe RingCentral sender credentials. Used only for notifyVia=asme; not persisted. */
+  asmeSender?: {
+    clientId?: string;
+    clientSecret?: string;
+    jwt?: string;
+    serverUrl?: string;
+  };
   source?: Record<string, unknown>;
   scheduleSpec?: Record<string, unknown>;
   notifyTarget?: AgentTaskNotifyTarget;
+}
+
+function resolveAgentTaskMode(value: unknown): 'read' | 'write' | undefined {
+  if (value === undefined || value === null || value === '') return 'read';
+  if (value === 'read' || value === 'write') return value;
+  return undefined;
 }
 
 export interface AgentTaskNotifyTarget {
@@ -149,12 +166,137 @@ export type AgentTaskNotificationKind =
   | 'success_receipt'
   | 'failure_receipt';
 
+export type AgentTaskNotifyVia = 'bot' | 'asme';
+
 export interface AgentTaskNotificationDelivery {
   kind: AgentTaskNotificationKind;
   targetUserId?: string;
   targetGroupId?: string;
   /** Template formatting only applies to success result notifications. */
   useTemplate: boolean;
+}
+
+export function normalizeAgentTaskNotifyVia(value: unknown): AgentTaskNotifyVia {
+  return String(value || '').trim().toLowerCase() === 'asme' ? 'asme' : 'bot';
+}
+
+export function normalizeAsMeSenderCredentials(value: unknown): {
+  clientId: string;
+  clientSecret: string;
+  jwt: string;
+  serverUrl?: string;
+} | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  const clientId = nonEmptyString(input.clientId);
+  const clientSecret = nonEmptyString(input.clientSecret);
+  const jwt = nonEmptyString(input.jwt);
+  if (!clientId || !clientSecret || !jwt) return undefined;
+  return {
+    clientId,
+    clientSecret,
+    jwt,
+    serverUrl: nonEmptyString(input.serverUrl),
+  };
+}
+
+export function resolveAgentTaskDeliveryVia(
+  kind: AgentTaskNotificationKind,
+  notifyVia: AgentTaskNotifyVia,
+): AgentTaskNotifyVia {
+  return kind === 'result' && notifyVia === 'asme' ? 'asme' : 'bot';
+}
+
+export interface AgentTaskAsMeRingClient {
+  isConfigured(): boolean;
+  resolveTarget(input: {
+    targetType: string;
+    targetRef: string;
+    limit?: number;
+  }): Promise<{
+    status: 'unresolved' | 'ambiguous' | 'resolved';
+    resolved?: {
+      kind: 'user' | 'chat';
+      entityId: string;
+      chatId?: string;
+    };
+  }>;
+  resolveDirectConversationChatId(userEntityId: string): Promise<string | null>;
+  sendMessage(input: {
+    targetType: string;
+    targetRef: string;
+    text: string;
+    targetResolvedType?: string;
+    targetResolvedId?: string;
+    targetResolvedChatId?: string;
+  }): Promise<{ chatId: string; postId: string }>;
+}
+
+export async function deliverAgentTaskAsMeNotice(input: {
+  ringClient: AgentTaskAsMeRingClient;
+  title: string;
+  body: string;
+  targetUserId?: string;
+  targetGroupId?: string;
+}): Promise<{ sent: boolean; error?: string; chatId?: string; postId?: string }> {
+  if (!input.ringClient.isConfigured()) {
+    return { sent: false, error: 'RingCentral not configured for AsMe notify' };
+  }
+
+  const text = `**${input.title}**\n\n${input.body}`;
+  try {
+    const targetGroupId = input.targetGroupId?.trim();
+    if (targetGroupId) {
+      const sent = await input.ringClient.sendMessage({
+        targetType: 'group',
+        targetRef: targetGroupId,
+        text,
+      });
+      return { sent: true, chatId: sent.chatId, postId: sent.postId };
+    }
+
+    const targetUserId = input.targetUserId?.trim();
+    if (!targetUserId) {
+      return { sent: false, error: 'AsMe notify missing private target' };
+    }
+
+    const resolution = await input.ringClient.resolveTarget({
+      targetType: 'private',
+      targetRef: targetUserId,
+      limit: 8,
+    });
+    if (resolution.status !== 'resolved' || !resolution.resolved) {
+      return {
+        sent: false,
+        error: `AsMe notify target unresolved (${resolution.status}): ${targetUserId}`,
+      };
+    }
+
+    let chatId = resolution.resolved.chatId;
+    if (!chatId && resolution.resolved.kind === 'user' && resolution.resolved.entityId) {
+      chatId =
+        (await input.ringClient.resolveDirectConversationChatId(resolution.resolved.entityId)) ||
+        undefined;
+    }
+    if (!chatId) {
+      return { sent: false, error: `AsMe notify missing chat id for ${targetUserId}` };
+    }
+
+    const sent = await input.ringClient.sendMessage({
+      targetType: 'private',
+      targetRef: targetUserId,
+      targetResolvedType: resolution.resolved.kind,
+      targetResolvedId: resolution.resolved.entityId,
+      targetResolvedChatId: chatId,
+      text,
+    });
+    return { sent: true, chatId: sent.chatId, postId: sent.postId };
+  } catch (error) {
+    return {
+      sent: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**
@@ -166,6 +308,11 @@ export interface AgentTaskNotificationDelivery {
  * - Success + result target + !successReceipt: result to target only.
  * - Success + no result target + successReceipt: owner private success receipt (default body, no template).
  * - Success + no result target + !successReceipt: silent.
+ *
+ * `notifyVia=asme` only changes the success **result** delivery identity.
+ * Credentials come from Sheet AsMe RingCentral sender (`ringcentral_sender_*`),
+ * the same token used by AsMe push-method messages. Receipts always stay Bot.
+ * AsMe failure does not fall back to Bot.
  *
  * `notify === false` (API-level, e.g. AR) suppresses all deliveries including failure.
  */
@@ -559,8 +706,10 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const { db, userDataManager } = request.userContext;
       const runtimeConfig = getUserRuntimeConfig(userDataManager);
       const defaults = resolveExecutorDefaults(runtimeConfig);
-      const requestedExecutor =
-        nonEmptyString(body.executor) || defaults.agent_task;
+      const requestedExecutor = resolveAgentTaskExecutorId(
+        body.executor,
+        defaults,
+      );
       const executorInstance = findEnabledExecutor(
         runtimeConfig,
         requestedExecutor,
@@ -585,6 +734,13 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const targetSystem =
         nonEmptyString(body.targetSystem) || (arBindingId ? 'personal_ai_ar' : 'agent_task');
       const taskKind = nonEmptyString(body.taskKind);
+      const mode = resolveAgentTaskMode(body.mode);
+      if (!mode) {
+        return reply.status(400).send({
+          error: 'invalid_mode',
+          detail: 'mode must be "read" or "write"',
+        });
+      }
       const executionHints =
         body.executionHints && typeof body.executionHints === 'object'
           ? body.executionHints
@@ -601,7 +757,8 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const timeoutMs = normalizeAgentTaskTimeoutMs(body.timeoutMs);
       const shouldNotify = body.notify !== false;
       const successReceipt = body.successReceipt !== false;
-      const notifyVia = body.notifyVia === 'asme' ? 'asme' : 'bot';
+      const notifyVia = normalizeAgentTaskNotifyVia(body.notifyVia);
+      const asmeSender = normalizeAsMeSenderCredentials(body.asmeSender);
       const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
       // API response: prefer explicit result target; otherwise report owner receipt fallback.
       const resolvedNotificationTarget =
@@ -616,7 +773,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
         description: task,
         params: {
           task,
-          mode: 'read',
+          mode,
           targetSystem,
           timeoutMs,
           executor,
@@ -755,6 +912,35 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
                 delivery.kind === 'failure_receipt'
                   ? `帮我做失败: ${title}`
                   : `帮我做完成: ${title}`;
+              const deliveryVia = resolveAgentTaskDeliveryVia(delivery.kind, notifyVia);
+              if (deliveryVia === 'asme') {
+                if (!asmeSender) {
+                  request.log.warn(
+                    { taskId, actionId: action.id, kind: delivery.kind },
+                    'AgentTask AsMe result notify missing Sheet RingCentral sender credentials',
+                  );
+                  continue;
+                }
+                const asmeResult = await deliverAgentTaskAsMeNotice({
+                  ringClient: new RingCentralClient(userDataManager, db, userId, asmeSender),
+                  title: noticeTitle,
+                  body: bodyText,
+                  targetUserId: delivery.targetUserId,
+                  targetGroupId: delivery.targetGroupId,
+                });
+                if (!asmeResult.sent) {
+                  request.log.warn(
+                    {
+                      err: asmeResult.error,
+                      taskId,
+                      actionId: action.id,
+                      kind: delivery.kind,
+                    },
+                    'AgentTask AsMe result notify failed',
+                  );
+                }
+                continue;
+              }
               await notificationService.deliverNoticeToGlip({
                 sourceRef: `agent_task:${action.id}:${delivery.kind}:${index}`,
                 title: noticeTitle,

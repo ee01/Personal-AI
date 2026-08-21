@@ -1937,7 +1937,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.11\.0';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.12\.1';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1981,6 +1981,10 @@ test('Apps Script forwards AgentTask notification target to memory-service paylo
       ['Key', 'Value'],
       ['agent_task_webhook_url', 'POST http://memory.example/api/v1/agent-tasks/execute'],
       ['agent_task_user_id', 'esone.qiu'],
+      ['ringcentral_sender_enabled', 'true'],
+      ['ringcentral_sender_client_id', 'asme-client-id'],
+      ['ringcentral_sender_client_secret', 'asme-client-secret'],
+      ['ringcentral_sender_jwt', 'asme-jwt'],
     ],
   );
 
@@ -1991,6 +1995,7 @@ first = JSON.parse(buildAgentTaskApiPayload({
   Content: 'Summarize due tickets',
   Agent_Task_ID: 'agent-task-1',
   Agent_Notify_Success_Receipt: 'Y',
+  Agent_Notify_Via: 'asme',
   Glip_User_Name: 'Esone Qiu',
   Glip_Team_ID: '',
   rowIndex: 2
@@ -2022,15 +2027,84 @@ third = JSON.parse(buildAgentTaskApiPayload({
   assert.equal(context.first.notifyTarget.glipUser, 'Esone Qiu');
   assert.equal(context.first.userId, 'esone.qiu');
   assert.equal(context.first.successReceipt, true);
-  assert.equal(context.first.notifyVia, 'bot');
+  assert.equal(context.first.notifyVia, 'asme');
+  assert.equal(context.first.asmeSender.clientId, 'asme-client-id');
+  assert.equal(context.first.asmeSender.clientSecret, 'asme-client-secret');
+  assert.equal(context.first.asmeSender.jwt, 'asme-jwt');
   assert.equal(context.first.task, 'Summarize due tickets');
+  assert.equal(context.first.mode, 'read');
+  assert.equal(context.first.executor, undefined);
   assert.equal(context.second.notifyTarget, undefined);
   assert.equal(context.second.userId, 'esone.qiu');
   assert.equal(context.second.successReceipt, false);
+  assert.equal(context.second.notifyVia, 'bot');
+  assert.equal(context.second.asmeSender, undefined);
+  assert.equal(context.second.executor, undefined);
   assert.equal(context.third.task, 'Fresh content task');
   assert.equal(context.third.notifyTarget.type, 'group');
   assert.equal(context.third.notifyTarget.targetGroupId, '148192141318');
   assert.equal(context.third.successReceipt, true);
+});
+
+test('Apps Script forwards explicit AgentTask write mode and defaults legacy rows to read', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = createMarkExecutedVmContext(
+    [['ID'], ['dummy']], [], [], {},
+    [['Key', 'Value'], ['agent_task_webhook_url', 'POST http://memory.example/api/v1/agent-tasks/execute']],
+  );
+  vm.runInNewContext(
+    `${appScript}
+writePayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Sync', Content: 'Set field', Agent_Mode: 'write' }, 'MSG-write', 'exec-write').body);
+readPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Legacy', Content: 'Inspect field' }, 'MSG-read', 'exec-read').body);`,
+    context,
+  );
+  assert.equal(context.writePayload.mode, 'write');
+  assert.equal(context.readPayload.mode, 'read');
+});
+
+test('Apps Script forwards selected AgentTask executor and omits empty sentinel', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = createMarkExecutedVmContext(
+    [['ID'], ['dummy']],
+    [],
+    [],
+    {},
+    [
+      ['Key', 'Value'],
+      ['agent_task_webhook_url', 'POST http://memory.example/api/v1/agent-tasks/execute'],
+      ['agent_task_user_id', 'esone.qiu'],
+    ],
+  );
+
+  vm.runInNewContext(
+    `${appScript}
+selected = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Open baidu on mini',
+  Content: 'Open baidu.com',
+  Agent_Task_ID: 'agent-task-mini',
+  Agent_Executor: 'exec_t4com0',
+  rowIndex: 2
+}, 'MSG-mini', 'exec-mini').body);
+local = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Open baidu locally',
+  Content: 'Open baidu.com',
+  Agent_Task_ID: 'agent-task-local',
+  Agent_Executor: 'openclaw',
+  rowIndex: 3
+}, 'MSG-local', 'exec-local').body);
+unset = JSON.parse(buildAgentTaskApiPayload({
+  Topic: 'Use options default',
+  Content: 'Open baidu.com',
+  Agent_Task_ID: 'agent-task-default',
+  Agent_Executor: '',
+  rowIndex: 4
+}, 'MSG-default', 'exec-default').body);`,
+    context,
+  );
+
+  assert.equal(context.selected.executor, 'exec_t4com0');
+  assert.equal(context.local.executor, 'openclaw');
+  assert.equal(context.unset.executor, undefined);
 });
 
 test('Apps Script mark-executed accepts the last data row index without ID fallback', () => {

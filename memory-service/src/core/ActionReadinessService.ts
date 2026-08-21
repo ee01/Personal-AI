@@ -390,6 +390,34 @@ export class ActionReadinessService {
     return row ? this.rowToContract(row) : null;
   }
 
+  /**
+   * Task-level executor probe receipt. Never sets blocked_proof / scope fuse.
+   */
+  recordExecutorProbe(
+    executorId: string,
+    probe: Record<string, unknown>,
+  ): ActionReadinessContract {
+    const ok = probe.ok === true;
+    const currentTime = now();
+    return this.upsertContract({
+      scopeKey: `executor-probe:${executorId}`,
+      actionFamily: 'executor_probe',
+      targetSystem: executorId,
+      capability: 'probe',
+      mode: 'read',
+      status: ok ? 'ready' : 'degraded',
+      statusReason:
+        typeof probe.detail === 'string'
+          ? probe.detail
+          : ok
+            ? 'probe ok'
+            : 'probe failed',
+      lastProbeAt: currentTime,
+      lastProbeResult: probe,
+      expiresAt: currentTime + 5 * 60,
+    });
+  }
+
   checkAction(
     action: ActionReadinessCandidate,
     options: ActionReadinessCheckOptions = {},

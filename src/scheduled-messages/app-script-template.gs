@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.11.0';
-var APP_SCRIPT_LAST_UPDATED = '2026-08-11';
+var APP_SCRIPT_VERSION = '2.12.1';
+var APP_SCRIPT_LAST_UPDATED = '2026-08-17';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -2816,10 +2816,12 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         AI_Headers: rowData.AI_Headers || '',
         AI_Body: aiBody,
         Agent_Task_ID: rowData.Agent_Task_ID || '',
+        Agent_Mode: rowData.Agent_Mode || 'read',
         Agent_Executor: rowData.Agent_Executor || '',
         Agent_Task_Prompt: rowData.Agent_Task_Prompt || '',
         Agent_Notify_Template: rowData.Agent_Notify_Template || '',
         Agent_Notify_Success_Receipt: rowData.Agent_Notify_Success_Receipt || '',
+        Agent_Notify_Via: rowData.Agent_Notify_Via || '',
         Agent_Trigger_Source: rowData.Agent_Trigger_Source || '',
         Agent_AR_Binding_ID: rowData.Agent_AR_Binding_ID || '',
         Agent_Last_Run_At: rowData.Agent_Last_Run_At || '',
@@ -3372,19 +3374,25 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
   // Content is the single task source; Agent_Task_Prompt kept as fallback for unupgraded sheets.
   const successReceiptRaw = (message.Agent_Notify_Success_Receipt || '').toString().trim().toUpperCase();
   const successReceipt = successReceiptRaw !== 'N';
+  const notifyViaRaw = (message.Agent_Notify_Via || '').toString().trim().toLowerCase();
+  const notifyVia = notifyViaRaw === 'asme' ? 'asme' : 'bot';
+  const executor = (message.Agent_Executor || '').toString().trim();
+  const agentMode = (message.Agent_Mode || 'read').toString().trim().toLowerCase() === 'write'
+    ? 'write'
+    : 'read';
   const payload = {
     taskId: agentTaskId,
     sheetMessageId: messageId,
     rowIndex: message.rowIndex,
     title: message.Topic || agentTaskId,
     task: message.Content || message.Agent_Task_Prompt || '',
-    executor: message.Agent_Executor || 'openclaw',
+    mode: agentMode,
     notifyTemplate: message.Agent_Notify_Template || '',
     triggerSource: message.Agent_Trigger_Source || 'jira_rule',
     arBindingId: message.Agent_AR_Binding_ID || '',
     idempotencyKey: executionKey || '',
     successReceipt: successReceipt,
-    notifyVia: 'bot',
+    notifyVia: notifyVia,
     source: {
       system: 'scheduled_messages',
       sheet: 'Messages',
@@ -3395,9 +3403,22 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
     scheduleSpec: buildAgentTaskScheduleSpec(message, executionKey),
     userId: webhookConfig && webhookConfig.userId ? webhookConfig.userId : ''
   };
+  if (executor) {
+    payload.executor = executor;
+  }
   const notifyTarget = buildAgentTaskNotifyTarget(message);
   if (notifyTarget) {
     payload.notifyTarget = notifyTarget;
+  }
+  if (notifyVia === 'asme') {
+    const sender = getRingCentralSenderConfigFromSheet();
+    if (sender && sender.enabled && sender.clientId && sender.clientSecret && sender.jwt) {
+      payload.asmeSender = {
+        clientId: sender.clientId,
+        clientSecret: sender.clientSecret,
+        jwt: sender.jwt
+      };
+    }
   }
 
   return {

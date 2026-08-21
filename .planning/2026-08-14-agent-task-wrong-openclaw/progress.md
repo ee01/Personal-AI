@@ -3,11 +3,13 @@
 ## Session: 2026-08-14
 
 ### Phase 1: Discovery
-- **Status:** in_progress
+- **Status:** complete
 - **Started:** 2026-08-14 16:16
 - Actions taken:
   - 读 executorRegistry / ActionExecutor / agentTasks / Options 保存 / Gateway WS URL
-  - 准备只读查询线上 config、action `msg_1786694923950`，并测 claw.xmnup.com
+  - 查线上 config + action；测 claw.xmnup.com
+- 修 memory-service remap + jumpboard；单测通过
+  - Phase 6：帮我做弹窗执行器 chips，默认 Options agent_task；Apps Script 2.11.1 透传选中 id
 - Files created/modified:
   - `.planning/2026-08-14-agent-task-wrong-openclaw/task_plan.md`
   - `.planning/2026-08-14-agent-task-wrong-openclaw/findings.md`

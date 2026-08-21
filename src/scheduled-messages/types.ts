@@ -83,10 +83,14 @@ export interface ScheduledMessage {
   Timeline_Offset?: number;  // 偏移天数（负数=之前，0=当天，正数=之后）
   // 帮我做 / Agent Task 字段
   Agent_Task_ID?: string;
+  /** read (default) | write. Write is an explicit, user-approved external-effect boundary. */
+  Agent_Mode?: 'read' | 'write' | string;
   Agent_Executor?: 'openclaw' | string;
   Agent_Notify_Template?: string;
   /** Y/empty = on (default); N = off. Controls success receipt only; failure receipt always on. */
   Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
+  /** bot (default) | asme. Result notification identity only; receipts stay Bot. */
+  Agent_Notify_Via?: 'bot' | 'asme' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;
@@ -137,10 +141,13 @@ export interface CreateMessageFormData {
   Timeline_Offset?: number;
   // 帮我做 / Agent Task 字段
   Agent_Task_ID?: string;
+  Agent_Mode?: 'read' | 'write' | string;
   Agent_Executor?: 'openclaw' | string;
   Agent_Notify_Template?: string;
   /** Y/empty = on (default); N = off. Controls success receipt only; failure receipt always on. */
   Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
+  /** bot (default) | asme. Result notification identity only; receipts stay Bot. */
+  Agent_Notify_Via?: 'bot' | 'asme' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;
