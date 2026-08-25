@@ -62,6 +62,7 @@ import {
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   prepareDesignDisplayItems,
+  resolveDesignEta,
   shouldShowUXTicketKeySourceReceipt,
   UXTicketKeySource,
 } from './jiraDesignLinks';
@@ -87,6 +88,7 @@ type JiraIssueContext = {
   epicKey: string | null;
   dueDate: string | null;
   fixVersion: string | null;
+  targetEnd: string | null;
 };
 
 type UXDesignContext = {
@@ -99,10 +101,11 @@ type UXDesignContext = {
   epicKey: string | null;
   dueDate: string | null;
   fixVersion: string | null;
+  targetEnd: string | null;
   uxEpicKey?: string;
   uxEpicStatus?: string;
   uxEta?: string;
-  uxEtaSource?: 'duedate' | 'fixVersion';
+  uxEtaSource?: 'targetEnd' | 'duedate' | 'fixVersion';
 };
 
 type DirectDesignLinkCollection = {
@@ -854,7 +857,7 @@ async function fetchJiraIssueContext(issueKey: string): Promise<JiraIssueContext
   const request = (async (): Promise<JiraIssueContext | null> => {
     try {
       const response = await fetchJiraRead(
-        `/rest/api/2/issue/${issueKey}?fields=summary,status,issuetype,customfield_21233,customfield_11450,duedate,fixVersions&expand=names`,
+        `/rest/api/2/issue/${issueKey}?fields=summary,status,issuetype,customfield_21233,customfield_11450,customfield_18351,duedate,fixVersions&expand=names`,
         `fetch Jira issue context for ${issueKey}`,
       );
       if (!response) return null;
@@ -871,7 +874,8 @@ async function fetchJiraIssueContext(issueKey: string): Promise<JiraIssueContext
         designLink: data.fields.customfield_21233 || null,
         epicKey: data.fields.customfield_11450 || null,
         dueDate: data.fields.duedate || null,
-        fixVersion
+        fixVersion,
+        targetEnd: data.fields.customfield_18351 || null,
       };
     } catch (error) {
       console.error(`Error fetching Jira issue context for ${issueKey}:`, error);
@@ -1018,6 +1022,12 @@ async function fetchUXDesignContext(
       }
     }
 
+    const designEta = resolveDesignEta({
+      targetEnd: uxIssue.targetEnd,
+      dueDate: uxIssue.dueDate,
+      fixVersion: uxIssue.fixVersion,
+    });
+
     return {
       summary: uxIssue.summary,
       issueType: uxIssue.issueType,
@@ -1028,10 +1038,11 @@ async function fetchUXDesignContext(
       epicKey: uxIssue.epicKey,
       dueDate: uxIssue.dueDate,
       fixVersion: uxIssue.fixVersion,
+      targetEnd: uxIssue.targetEnd,
       uxEpicKey,
       uxEpicStatus,
-      uxEta: uxIssue.dueDate || uxIssue.fixVersion || undefined,
-      uxEtaSource: uxIssue.dueDate ? 'duedate' : (uxIssue.fixVersion ? 'fixVersion' : undefined)
+      uxEta: designEta.eta,
+      uxEtaSource: designEta.source,
     };
   })();
 
@@ -1547,7 +1558,13 @@ function displayDesignLinks(
         `
         : '';
       const etaTag = design.uxEta
-        ? `<span class="ux-eta-tag" title="${escapeAttribute(design.uxEtaSource === 'duedate' ? ui('截止日期') : ui('修复版本'))}">ETA: ${escapeHtml(design.uxEta)}</span>`
+        ? `<span class="ux-eta-tag" title="${escapeAttribute(
+          design.uxEtaSource === 'targetEnd'
+            ? ui('目标结束')
+            : design.uxEtaSource === 'duedate'
+              ? ui('截止日期')
+              : ui('修复版本')
+        )}">ETA: ${escapeHtml(design.uxEta)}</span>`
         : '';
       const updatedTag = updatedDateLabel
         ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateAccessibleLabel)}" aria-label="${escapeAttribute(updatedDateAccessibleLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`

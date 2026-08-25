@@ -215,7 +215,7 @@
 | Google Slides 项目分析器 | Google Slides Analyzer | [google_slides_analyzer.md](./features/google_slides_analyzer.md) | Slides 分析与建议，含工具栏入口、范围判定和字段选择控制点回执 |
 | Slides 写回预览 | Google Slides Analyzer | [google_slides_analyzer.md](./features/google_slides_analyzer.md) | 字段证据、风险提示、提交中锁定与按钮级写回边界 |
 | Slides partial success skipped reasons | Google Slides Analyzer | [google_slides_analyzer.md](./features/google_slides_analyzer.md) | 跳过/缺失原因保留，可重选已匹配跳过字段；重选后区分上一批确认回执与当前本地接管选择 |
-| JIRA 设计稿检测 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | Description / Remote Links / Designs / linked / Epic / Parent(INIT)；Cancelled 不展示；首屏只逐条展示具体设计入口 |
+| JIRA 设计稿检测 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | Description / Remote Links / Designs / linked / Epic / Parent(INIT)；Cancelled 不展示；ETA 优先 Target End > due date > fixVersion；首屏只逐条展示具体设计入口 |
 | 设计工具保守分类 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | 排除 Figma/Zeplin marketing/community/profile/settings 假阳性，Miro/Loom 仅收交付资源路径；过滤计数在 footer，链接 hover/读屏说明只读打开边界 |
 | 设计链接更新时间展示 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | 行内 newest updated date、time-basis chip 和打开后待复查回执；不再渲染顶部复查范围汇总 |
 | Jira issue key 解析 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | raw text/query/ARIA 恢复与行内只读恢复回执；不再渲染顶部恢复范围汇总 |

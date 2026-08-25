@@ -69,6 +69,7 @@ import {
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   prepareDesignDisplayItems,
+  resolveDesignEta,
   shouldShowUXTicketKeySourceReceipt,
   sortDesignDisplayItems,
 } from '../src/jiraDesignLinks.ts';
@@ -940,6 +941,34 @@ function verifyDesignScanBasisReceipt() {
   assert.match(filteredOnlyReceipt.tooltip, /Filtered sources: Description 1/);
 }
 
+function verifyDesignEtaResolution() {
+  assert.deepEqual(
+    resolveDesignEta({
+      targetEnd: '2026-10-27',
+      dueDate: '2026-05-10',
+      fixVersion: '26Q2',
+    }),
+    { eta: '2026-10-27', source: 'targetEnd' },
+  );
+  assert.deepEqual(
+    resolveDesignEta({
+      targetEnd: '  ',
+      dueDate: '2026-05-10',
+      fixVersion: '26Q2',
+    }),
+    { eta: '2026-05-10', source: 'duedate' },
+  );
+  assert.deepEqual(
+    resolveDesignEta({
+      targetEnd: null,
+      dueDate: null,
+      fixVersion: '26Q2',
+    }),
+    { eta: '26Q2', source: 'fixVersion' },
+  );
+  assert.deepEqual(resolveDesignEta({}), {});
+}
+
 verifyProjectPatternMatching();
 verifyUrlNormalization();
 verifyUXTicketKeySourceReceipts();
@@ -955,5 +984,6 @@ verifyUpdatedDateOrdering();
 verifyMissingUpdatedDateReceipt();
 verifyDesignUpdateReviewScope();
 verifyDesignScanBasisReceipt();
+verifyDesignEtaResolution();
 
 console.log('Jira design links verification passed');

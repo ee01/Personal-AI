@@ -312,8 +312,9 @@ try {
           status: { name: 'In Progress' },
           customfield_21233: null,
           customfield_11450: null,
-          duedate: null,
-          fixVersions: [],
+          customfield_18351: '2026-10-27',
+          duedate: '2026-05-10',
+          fixVersions: [{ name: '26Q2' }],
         },
       });
     }
@@ -515,6 +516,9 @@ try {
   assert.match(itemTexts[0], /(Updated|已更新) 2026-05-19/);
   assert.match(itemTexts[0], /Status time|状态时间/);
   assert.match(itemTexts[0], /In Progress/);
+  assert.match(itemTexts[0], /ETA: 2026-10-27/);
+  assert.equal(itemTexts[0].includes('2026-05-10'), false);
+  assert.equal(itemTexts[0].includes('26Q2'), false);
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
   assert.equal(itemTexts.some(text => /UX-900|Cancelled/.test(text)), false);

@@ -23,6 +23,25 @@ export type UXTicketReference = {
 /** Max design-link / BE-progress rows shown on a Jira issue page. */
 export const JIRA_CONTEXT_PANEL_ITEM_LIMIT = 5;
 
+export type DesignEtaSource = 'targetEnd' | 'duedate' | 'fixVersion';
+
+export function resolveDesignEta(input: {
+  targetEnd?: string | null;
+  dueDate?: string | null;
+  fixVersion?: string | null;
+}): { eta?: string; source?: DesignEtaSource } {
+  const targetEnd = String(input.targetEnd || '').trim();
+  if (targetEnd) return { eta: targetEnd, source: 'targetEnd' };
+
+  const dueDate = String(input.dueDate || '').trim();
+  if (dueDate) return { eta: dueDate, source: 'duedate' };
+
+  const fixVersion = String(input.fixVersion || '').trim();
+  if (fixVersion) return { eta: fixVersion, source: 'fixVersion' };
+
+  return {};
+}
+
 export type JiraIssueKeyUrlCandidate = {
   key: string;
   keySource: Extract<
@@ -96,7 +115,7 @@ export type UXDesignItem = {
   uxEpicKey?: string;
   uxEpicStatus?: string;
   uxEta?: string;
-  uxEtaSource?: 'duedate' | 'fixVersion';
+  uxEtaSource?: DesignEtaSource;
   designUpdatedAt?: string;
   designUpdatedAtSource?: string;
 };

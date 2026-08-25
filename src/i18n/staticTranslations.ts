@@ -703,6 +703,7 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '元数据日期': 'Metadata date',
   '最新来源': 'Latest source',
   '修复版本': 'Fix Version',
+  '目标结束': 'Target End',
   'Personal AI provided': 'Personal AI provided',
   '复制带链接 ID': 'Copy linked ID',
   '在 JIRA 中打开': 'Open in JIRA',

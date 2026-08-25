@@ -26,7 +26,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 1. 当前 ticket 本身的链接最直接：description、原生 Designs 区块和 remote links 会优先给出明确入口。
 2. UX ticket 关联质量：linked issue、Epic、Parent（通常是 INIT）能不能找到 UX 项目 ticket，决定能不能补充缺失设计入口。查找路径与 Backend Progress 类似：当前票 linked issues → 上级 Epic 的 linked/subtask/child → Epic 的 Parent Link（INIT）下的 UX ticket。当 Jira DOM 只暴露 query 参数、`jql` 过滤条件、属性或纯文本 key 时，具体行会显示 `Key from ...` 和 `只读恢复` 边界，而不是把弱回退伪装成标准链接或已经写入的 Jira 关系；面板顶部不再渲染 `恢复范围` 总览行。
 3. 域名白名单：只有 Figma、Miro、Loom、Google Slides、Zeplin 或配置过的设计域名会被当成设计链接；Miro 只收 board / live-embed 路径，Loom 只收 share / embed 路径，避免官网、帮助、博客、价格页误占交付入口。
-4. 设计状态字段：remote link / UX ticket 上有状态、更新时间、ETA 时，对应设计行会显示行动提示和日期标签；若来源只给了 `Design updated` 状态但没有可用更新时间，会展示 `更新时间缺失`。面板顶部不再渲染 `复查范围` 汇总行。
+4. 设计状态字段：remote link / UX ticket 上有状态、更新时间、ETA 时，对应设计行会显示行动提示和日期标签。ETA 优先用 UX ticket 的 Target End，没有再用 due date，再没有才用最后一个 fixVersion；hover 标明来源。若来源只给了 `Design updated` 状态但没有可用更新时间，会展示 `更新时间缺失`。面板顶部不再渲染 `复查范围` 汇总行。
 5. 去重与安全过滤：同一 Figma 文件/节点、encoded URL、重复链接会被合并；非 http/https 链接不会展示。Cancelled 状态的 UX ticket 整行剔除。面板首屏**直接展示具体设计/UX 行**，不显示 `扫描口径` 或 `过滤范围` 汇总；被过滤的 non-handoff refs、过滤来源/原因仍可在 footer 看到。如果本页只发现非交付设计工具链接，会显示一行 `未找到交付设计入口`，而不是静默不显示。
 6. 打开链接只是打开来源：设计入口、UX ticket 或 UX Epic 链接的 hover / 读屏文案会先说明目标、来源、待复查更新时间、恢复候选来源和只读边界；点击后原 Jira 页会留下 `来源打开回执`。这不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。
 
@@ -37,7 +37,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 3. **自定义设计域名识别**：通过 `DESIGN_LINK_DOMAINS` 补充内部原型、设计系统或交付站点域名；精确域名只匹配该 host，`*.example.com` 只匹配子域名。
 4. **层级关联分析**：Epic 和非 Epic ticket 都会尝试向上查找相关 UX ticket。
 5. **稳定展示**：在 Jira summary 下方逐条展示具体设计入口（一行一个），长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；**不渲染** `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 汇总摘要行。Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
-6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态和更新时间；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色，Jira/Figma 的 `Changed`/过期类状态会统一呈现为 `Design updated`。
+6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（**Target End > due date > 最后一个 fixVersion**），对 Jira remote link/UX ticket 设计链接显示可用的设计状态和更新时间；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色，Jira/Figma 的 `Changed`/过期类状态会统一呈现为 `Design updated`。
 7. **可行动状态展示**：逐条展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的状态，并用左侧状态扫描线降低多链接场景下的识别成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
 8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前；如果 key 来自非标准 DOM 恢复，具体行会显示 `Key from ...` 和 `只读恢复`，面板顶部不再显示 `恢复范围` 总览。
 9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签；Figma 文件/节点链接会按稳定设计身份去重。
@@ -109,7 +109,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 - 提取UX tickets的customfield_21233字段（设计链接）
 - 读取 Jira remote links，作为比 description 更结构化的设计来源
 - 使用JQL查询获取child issues（`portfolioChildrenOf`）
-- 拉取 UX ticket 的summary、status、Epic Link、due date、fixVersion，用于补充上下文
+- 拉取 UX ticket 的 summary、status、Epic Link、Target End（`customfield_18351`）、due date、fixVersion，用于补充 ETA 与上下文。ETA 优先级为 Target End > due date > 最后一个 fixVersion。
 
 > Backend Progress（Early Build / Rollout）见独立文档 [jira_backend_progress.md](./jira_backend_progress.md)。
 
@@ -119,7 +119,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 
 ```typescript
 src/contentScriptJira.ts        // Jira 页面检测、API 查询、面板渲染
-src/jiraDesignLinks.ts          // URL 清理、HTML 转义、来源标签、去重、状态 tone
+src/jiraDesignLinks.ts          // URL 清理、HTML 转义、来源标签、去重、状态 tone、ETA 优先级
 tools/verify-jira-design-links.ts // 本功能的轻量验证脚本
 tools/verify-jira-design-links-e2e.mjs // 加载 dist 扩展的 Jira fixture E2E
 ```
@@ -240,6 +240,9 @@ const EPIC_LINK_FIELD = 'customfield_11450';
 
 // Parent Link字段  
 const PARENT_LINK_FIELD = 'customfield_15751';
+
+// Target End字段（设计 ETA 优先来源）
+const TARGET_END_FIELD = 'customfield_18351';
 ```
 
 ### 设计域名白名单
