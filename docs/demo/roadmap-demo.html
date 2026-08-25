@@ -164,7 +164,13 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .bl-empty b{color:var(--ink)}
 
 /* ---- Gantt 面板 ---- */
-.gantt-panel{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.gantt-panel{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+/* ---- 时间轴缩放提示（捏合/滚轮时短暂出现） ---- */
+.zoom-hint{position:absolute;top:58px;right:32px;z-index:14;background:rgba(32,36,42,.9);color:#fff;
+  font-family:var(--mono);font-size:11px;border-radius:99px;padding:5px 13px;pointer-events:none;
+  opacity:0;transform:translateY(-4px);transition:all .18s;white-space:nowrap}
+.zoom-hint.show{opacity:1;transform:none}
+.zoom-hint b{color:#FFB25C}
 .g-toolbar{display:flex;align-items:center;gap:16px;padding:10px 18px;flex:none}
 .legend{display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--muted)}
 .lg{display:flex;align-items:center;gap:6px}
@@ -204,7 +210,14 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-head{display:grid;grid-template-columns:236px 1fr;position:sticky;top:0;z-index:6;
   background:rgba(255,255,255,.94);backdrop-filter:blur(4px);border-bottom:1px solid var(--line)}
 .res-corner{padding:11px 16px;font-size:11.5px;font-weight:600;color:var(--muted)}
-.res-days{display:flex}
+.res-days{display:flex;position:relative;overflow:hidden;border-left:1px solid var(--line2)}
+/* 平移缓冲层：近 2 周模式渲染 3 倍窗宽（左右各一窗），双指滑动只做 transform 跟手，
+   手势停止后落格到整天；settle = 残差弹性归位 */
+.res-days-pan{position:relative;flex:none;width:300%;min-width:300%;margin-left:-100%;height:100%;will-change:transform}
+/* 平移表头格用绝对定位（与 strip 网格线同一 % 坐标系），避免 flex 亚像素分配的累积漂移 */
+.res-days-pan .res-day{position:absolute;top:0;bottom:0}
+.res-pan{position:absolute;inset:0;will-change:transform}
+.res-days-pan.settle,.res-pan.settle{transition:transform .18s cubic-bezier(.25,.9,.35,1)}
 .res-day{flex:1;padding:7px 0 6px;text-align:center;font-family:var(--mono);font-size:9.5px;
   color:var(--muted);border-left:1px solid var(--line2);line-height:1.5}
 .res-day b{display:block;font-size:10.5px;color:var(--past-ink)}
@@ -226,14 +239,55 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .rp-del:hover{background:var(--danger);color:#fff}
 .rp-name-edit{border:1.5px solid var(--cur);border-radius:6px;padding:3px 8px;font-size:13px;
   font-weight:600;outline:none;width:130px}
-.res-strip{position:relative;border-left:1px solid var(--line2);min-height:56px}
+.res-strip{position:relative;border-left:1px solid var(--line2);min-height:56px;overflow:hidden}
 .res-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
 .res-gridline.today{width:2px;background:var(--danger);opacity:.55}
 .res-bar{position:absolute;height:22px;border-radius:6px;display:flex;align-items:center;
-  overflow:hidden;cursor:default;transition:filter .13s}
+  overflow:hidden;cursor:pointer;transition:filter .13s,opacity .15s,left .35s cubic-bezier(.25,.9,.35,1)}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
+/* ---- 主任务归属：左侧色条 + 前缀 chip（hover 联动高亮同主任务） ---- */
+.res-bar .rb-stripe{position:absolute;left:0;top:0;bottom:0;width:4px;flex:none}
+.res-bar .rb-parent{flex:none;max-width:42%;margin-left:9px;padding:1px 6px;border-radius:4px;
+  font-size:9px;font-weight:600;background:rgba(255,255,255,.6);color:rgba(0,0,0,.6);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.res-bar .rb-parent + .rb-label{padding-left:5px}
+.res-bar.draft .rb-parent{background:rgba(32,36,42,.09)}
+.res-bar.dim{opacity:.22;filter:grayscale(.5)}
+.res-bar.epic-hl{box-shadow:0 0 0 1.5px rgba(32,36,42,.35),var(--sh)}
+.epic-legend{gap:12px;flex-wrap:wrap}
+.epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px;transition:background .13s}
+.epic-legend .lg:hover{background:#EFEEE8}
+.epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
+/* ---- 聚焦当前任务：单击多选「正在做」，其余未开始任务一键顺延 ---- */
+.res-row.focusing{background:#FFFCF4}
+.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 2px 10px rgba(255,136,0,.35);z-index:4}
+.res-bar.sel::after{content:"✓";position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:13px;height:13px;border-radius:50%;background:var(--cur-deep);color:#fff;font-size:9px;
+  font-weight:700;display:flex;align-items:center;justify-content:center}
+.res-row.focusing .res-bar:not(.sel):not(.will-move):not(.ghost){opacity:.4}
+.res-bar.will-move{outline:1.5px dashed #C9842A;outline-offset:1.5px}
+.rb-shift{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-family:var(--mono);
+  font-size:8.5px;font-weight:700;background:#C9842A;color:#fff;border-radius:4px;padding:1px 4px;
+  pointer-events:none}
+.res-bar.will-move.at-cap{outline-color:var(--danger)}
+.res-bar.will-move.at-cap .rb-shift{background:var(--danger)}
+.res-bar.ghost{opacity:.6;border:1.5px dashed #C9842A;box-shadow:none;pointer-events:none;
+  background:repeating-linear-gradient(45deg,#fff 0 4px,#FBEFD9 4px 8px);color:#8A5A12;z-index:2;
+  transition:none}
+.res-bar.ghost.clamped{border-color:var(--danger);color:#8F2F1F}
+.rp-focus{margin-top:7px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;
+  animation:chipIn .2s ease}
+.rpf-line{font-family:var(--mono);font-size:10px;color:#8A5A12;background:#FBF3E2;
+  border-radius:5px;padding:2px 7px}
+.rpf-btns{display:flex;gap:6px}
+.rpf-go{font-size:11px;font-weight:600;color:#fff;background:var(--cur);border-radius:7px;
+  padding:4px 11px;transition:all .13s;box-shadow:0 2px 8px rgba(255,136,0,.3)}
+.rpf-go:hover{background:var(--cur-deep);transform:translateY(-1px)}
+.rpf-go[disabled]{opacity:.45;pointer-events:none;box-shadow:none}
+.rpf-x{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:4px 9px}
+.rpf-x:hover{background:var(--bg);color:var(--ink)}
 .res-bar.c-past{background:#DDE1E6;color:var(--past-ink)}
 .res-bar.c-cur{background:#FFB25C;color:#7A3E00}
 .res-bar.c-fut{background:#7FBEDD;color:#083B52}
@@ -246,6 +300,14 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-chip{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--mono);
   font-size:9.5px;color:var(--muted);background:var(--bg);border:1px solid var(--line);
   border-radius:99px;padding:2px 8px;white-space:nowrap}
+.res-chip-btn{cursor:pointer;transition:all .13s;z-index:5}
+.res-chip-btn:hover{color:var(--ink);border-color:#C9C6BB;background:#EFEEE8}
+/* ---- 时间窗平移（近 2 周模式）：双指左右滑 / 点角标；平移后表头出现「回到今天」 ---- */
+.res-today-btn{margin-left:8px;font-size:10.5px;font-weight:600;color:var(--cur-deep);
+  background:#FFF4E5;border:1px solid #FFD9A8;border-radius:6px;padding:2px 8px;
+  transition:all .13s;vertical-align:1px}
+.res-today-btn:hover{background:#FFE9CC;border-color:var(--cur)}
+.res-pan-hint{margin-left:6px;font-size:11px;color:#B3B9C0;cursor:default}
 .res-add{padding:12px 16px}
 .res-add .add-ghost{position:static;display:inline-flex}
 .res-add input{border:1.5px solid var(--cur);border-radius:7px;padding:6px 11px;font-size:12.5px;
@@ -731,6 +793,9 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 .ai-row .t{flex:1;line-height:1.45}
 .ai-row .st{flex:none;width:110px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted)}
 .ai-row .st .newkey{color:#2E8540;font-weight:600;animation:cardPop .3s ease}
+.ai-row .st .alias-kept{display:block;margin-top:2px;font-family:var(--sans);font-size:9.5px;
+  color:#6D4FA3;background:#F3EEFA;border-radius:4px;padding:1px 6px;cursor:default;
+  animation:cardPop .3s ease .1s backwards}
 .mini-spin{display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--line);
   border-top-color:var(--cur);animation:spin .7s linear infinite;vertical-align:-2px}
 /* 创建 Jira：双路径（直连 API / Agent 执行器） */
@@ -966,6 +1031,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
         <button class="vs-btn active" data-w="2w">近 2 周</button>
         <button class="vs-btn" data-w="all">全部</button>
       </div>
+      <div class="legend epic-legend" id="epicLegend" style="display:none"></div>
       <div class="g-spacer"></div>
       <button class="btn cleanup-btn" id="cleanupBtn" style="display:none" data-tip="过期 = 结束日期早于今天。Epic 回退 Backlog（保留子任务记录），过期子任务从任务视图清理">
         <svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 4h9M5.5 4V2.8a.8.8 0 01.8-.8h1.4a.8.8 0 01.8.8V4M4 4l.6 7.4a1 1 0 001 .9h2.8a1 1 0 001-.9L10 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1241,6 +1307,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>需要 Jira 权限的操作要装 Personal AI 扩展</b>：未安装时按钮是「锁定态」而非灰掉的 disabled，点击会弹出安装引导（顶栏 <b>扩展未安装 / 已安装</b> 开关可切换两种状态）<a class="help-install" href="https://chromewebstore.google.com/detail/personal-ai/kefnadjndpllbibeklhajjddgmlbafel" target="_blank" rel="noopener">前往安装 ↗</a></li>
     <li><b>创建 Jira 双路径</b>：Prompt <b>留空</b>＝按下方字段直连 Jira API（串行）；<b>填写</b>＝按 Epic 最多 <b>2 路并行</b>交给所选 <b>Agent 执行器</b>（每路只含该组 draft；部分成功也会回写已有 key）。此时下方字段占位变「自动」，已填的值作为约束带给 Agent；执行器无配置时展示引导入口。<b>fixVersion</b>：配置了发布时间表后按各任务 <b>Target End 落点</b>自动匹配 release name（同一 release 直接填入，跨 release 时逐条匹配、列表内逐行显示绿色 chip，可输固定值覆盖）</li>
     <li><b>Assignee 映射</b>：弹窗内新增 Assignee 行 —— 任务 <b>Owner 优先</b>，没写 Owner 的任务<b>回落到创建人</b>；在「配置映射…」里为系统人员/创建者补全 <b>Firstname Lastname</b>（两个词以上的名字自动推断）。输入实名时可从<strong>已有两词人名</strong>下拉建议中选择，选中后<strong>合并两人</strong>（Owner / 创建者 / 成员收成实名，短名保留为映射别名）。直连 API 时转成 <b>firstname.lastname</b> 填 assignee（未映射的留空并橙色提示）；Agent 模式把<b>字段约束 + 人员名单</b>一并写入 Prompt，可点「<b>查看将发送的完整 Prompt</b>」预览。配置后全站（选人列表 / 人员视图 / 提示 / 协作日志）都展示映射后的实名</li>
+    <li><b>时间轴缩放</b>：触控板<b>双指捏合</b>或 <b>⌘+滚轮</b>在甘特任意位置缩放，光标下的日期钉住不动；在顶部<b>时间标尺上双指上下滑动</b>同样缩放（横向滑动仍是平移）；<b>双击标尺</b>复位 100%，已是 100% 再双击 = 整条时间轴收进视口。缩放时右上角短暂显示当前比例与视野跨度</li>
     <li>Bar 可<b>拖动 / 左右把手伸缩 / 上下换行</b>，按天吸附</li>
     <li><b>单击 bar 展开/收起</b>；草稿双击<b>改任务名 + 描述</b>（创建 Jira 使用）；已创建的双击改备注名（✦ AI 缩写）；备注名换行展示、bar 自动增高；hover 显示原 ticket 名</li>
     <li><b>草稿描述（可选）</b>：快速添加时 Enter 仍是只填标题秒建；点输入框右侧 <b>≡ 描述</b>（或 Shift+Enter）展开描述框，新建条目弹窗同样有描述字段。<b>有描述的任务 hover 提示最后的灰色小字改为展示描述</b>（无描述仍显示操作提示）。描述会并入 Agent Prompt 由 AI 综合生成最终 description（不必与输入逐字一致）；直连 API 则原文写入</li>
@@ -1252,7 +1319,10 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li>任务可选 Owner：标题里输入 <b>@</b> 触发建议（可手输自定义），或点输入框左侧头像；直接 Enter 则跳过。Owner 数据来自<b>团队成员表</b>，新名字自动加入；双击任务条可改 Owner。选人浮层<b>搜索框置顶、打开即聚焦</b>，列表限高可滚动，↑↓ + Enter 快速选择，下方空间不足时自动向上翻转</li>
     <li><b>新增任务默认从今天开始、两周长</b>；草稿任务条不再叠创建者名，<b>hover 时在条外浮出灰色「xxx created」</b></li>
     <li><b>打开 Jira</b>：主/子任务条 hover 左上角出现 <b>↗</b> 圆钮，点击新开对应 issue；<b>⌘/Ctrl+单击任务条</b>等效（草稿无 issue 不显示）</li>
-    <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员</li>
+    <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员。任务条<b>左侧色条 + 前缀 chip 标识所属主任务</b>（备注名优先，条太窄只留色条），hover 任务条或工具栏「主任务」图例会<b>联动高亮同主任务的所有条</b></li>
+    <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记该成员「正在做」，可继续单击多选；点到<b>另一个成员</b>的任务会对那个人重新开始多选。选中后成员名下出现操作点：<b>「其余延至下周 →」</b>把 TA 其余<b>开始日在下周一之前、尚未结束</b>的任务统一<b>延至下周一开始</b>（任务长度不变）—— 已开始未做完的同样延后；开始日已在下周及以后的<b>远任务不动</b>；已结束的是历史记录不动；每条<b>最多顺延到所属 Epic 结束日</b>（角标预告 →下周一 / →钳制日期 / ✕，hover 按钮预览虚线落点影子）。延后非草稿任务自动回写 Jira <b>Target Start/End</b>；延完再按一次不会继续往后推（幂等）。Esc 或点空白处退出聚焦</li>
+    <li><b>人员视图时间窗平移</b>：近 2 周模式下<b>触控板双指左右滑动</b>整窗平移（窗口长度 14 天不变），或点两端「◂ 更早 / 更晚 ▸」角标平移两周；平移后表头出现<b>「回到今天」</b>，点「近 2 周」按钮同样回到今天。配合聚焦功能：成员先领取了很后面的任务时，滑到时间后方把它标记「正在做」，再一键把眼前的任务延至下周</li>
+    <li><b>创建 Jira 后草稿名保留为备注名</b>：回传 jira key 时自动把原草稿标题存为备注名，甘特上展示的名字不因创建（或 Agent 规范化 summary、后续 Jira 刷新）而改变，hover 才看正式 summary。编辑备注名时<b>清空后回车 = 恢复展示原 ticket 名</b></li>
     <li><b>清理过期</b>：过期 Epic 回退 Backlog（保留子任务记录，重拖回任务视图可还原），过期子任务从任务视图清理</li>
     <li>拖入排期：带 Target 日期的卡片<b>按 Target start/end 落位</b>，其余按松手位置 + 预估</li>
     <li><b>拖动 / 伸缩非草稿主/子任务后自动回写 Jira</b>：新的起止日期同步到该 issue 的 Target Start/End（扩展优先用你的 Jira 账号，未装扩展回落服务端凭据；连续拖动只同步最后一次），成功后有轻提示。<b>双击更换非草稿子任务的 Owner 同样回写 assignee</b>（需已映射 Jira 实名，且仅装扩展的浏览器回写）；备注名（缩写）只是本地显示，从不回写</li>
@@ -1278,7 +1348,10 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
    ===================================================================== */
 'use strict';
 const $ = s => document.querySelector(s);
-const MS = 86400000, DAY_W = 7;
+const MS = 86400000;
+/* 时间轴缩放：DAY_W = 每天像素宽，所有几何都从它推导；捏合/滚轮实时改写后整体重渲染 */
+const DAY_W_DEF = 7, DAY_W_MIN = 2.2, DAY_W_MAX = 24;
+let DAY_W = DAY_W_DEF;
 const strip = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const today = strip(new Date());
 const addD = (d,n) => new Date(d.getFullYear(), d.getMonth(), d.getDate()+n);
@@ -1701,7 +1774,24 @@ function buildBrandy(){
     { id:'dep'+(markerSeq++), title:'平台团队需先完成建议接口的限流额度提升', jiraKey:'PLAT-2091', eta: addD(today,15), etaSource:'jira', jiraStatus:'In Progress', jiraTargetEnd: addD(today, 22) },
     { id:'dep'+(markerSeq++), title:'等待设计走查结论', jiraKey:'DES-88', eta: addD(today,10), etaSource:'manual' },
   ];
-  const c = get(18124); c.scheduled = true; c.start = addD(q0,47); c.days = 32;
+  const c = get(18124); c.scheduled = true; c.start = addD(today,-8); c.days = 34;
+  /* 子任务：进行中 / 下周一前将开始 / 长任务贴近 Epic 结束（钳制）/ 远任务（下周后，不动）/
+     贴死 Epic 结束的草稿 —— 演示人员视图「聚焦当前任务 + 其余延至下周」的各种情形 */
+  const cEnd0 = addD(c.start, c.days - 1);
+  const nm0 = (() => { let d = (8 - today.getDay()) % 7; if (!d) d = 7; return addD(today, d); })();
+  c.subs = [
+    { id:'c1', key:'NOVA-18190', title:'Digest email template and delivery scheduling for supervisors',
+      start:addD(today,-6), days:9,  temp:false, owner:t.members[1] },
+    { id:'c2', key:'NOVA-18191', title:'Conversation summarization prompt tuning and offline eval set',
+      start:addD(nm0,-3), days:6, temp:false, owner:t.members[1] },
+    { id:'c3', key:'NOVA-18192', title:'Rolling A/B evaluation and quality monitoring for AI summaries',
+      start:addD(today,-1), days:diffD(addD(today,-1), addD(cEnd0,-1)) + 1, temp:false, owner:t.members[1] },
+    { id:'c5', key:'NOVA-18193', title:'Multi-region rollout of the summary generation pipeline',
+      start:addD(today,10), days:7, temp:false, owner:t.members[1] },
+    { id:'c4', key:null, title:'Rollout guardrails and fallback copy for summary failures',
+      start:addD(today,21), days:5,  temp:true,  owner:t.members[3] },
+  ];
+  c.alias = 'AI 会话摘要';
   /* 阶段节点示例：仅一个 Production 节点 */
   c.phases = [ { id:'ph'+(markerSeq++), phaseKind:'production', label:'Production', date: addD(c.start, c.days+10) } ];
   /* 外部依赖示例：手动填写（未绑定 Jira），ETA 已知 */
@@ -1727,6 +1817,7 @@ const state = {
   active: 0,
   view: 'gantt',          // gantt | resource
   resWin: '2w',           // 近 2 周 | 全部
+  resOffset: 0,           // 近 2 周窗口的平移量（天，相对今天；双指左右滑 / 点角标改变）
   search: '',             // Backlog 搜索关键词
   rulerMode: 'release',   // release | month —— 临时切换，不写入团队配置，刷新即恢复
 
@@ -1962,6 +2053,61 @@ function computeTL(){
 }
 const X = d => diffD(TL.start, d) * DAY_W;
 const dateAtX = px => addD(TL.start, Math.round(px / DAY_W));
+
+/* ---------- 时间轴缩放交互 ----------
+   · 触控板双指捏合（浏览器映射为 ctrlKey+wheel）/ ⌘+滚轮：甘特任意位置缩放，光标下的日期锚定不动
+   · 时间标尺（月份行 / Sprint 标尺）上双指上下滑动：直接缩放，无需修饰键
+     （标尺没有纵向内容，纵向滑动在这里没有歧义；横向滑动仍是平移）
+   · 双击标尺：非 100% → 复位；已是 100% → 适应全部（整条时间轴收进视口）
+   真实实现：dayWidth 由常量改为响应式状态（useGeometry），wheel 监听挂 GanttPanel，
+   缩放级别按团队存 localStorage，下次打开恢复 */
+let zoomHintTimer = null, zoomPending = null, zoomApplyTimer = null;
+function zoomHint(){
+  let el = $('#zoomHint');
+  if (!el){
+    el = document.createElement('div'); el.id = 'zoomHint'; el.className = 'zoom-hint';
+    document.querySelector('.gantt-panel').appendChild(el);
+  }
+  const w = $('#gScroll').clientWidth;
+  const span = w / DAY_W;
+  const spanTxt = span >= 60 ? (span/30.44).toFixed(1) + ' 个月' : Math.round(span/7) + ' 周';
+  el.innerHTML = `缩放 <b>${Math.round(DAY_W / DAY_W_DEF * 100)}%</b>${w ? ` · 视野约 ${spanTxt}` : ''}`;
+  el.classList.add('show');
+  clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(() => el.classList.remove('show'), 900);
+}
+function setZoom(next, anchorClientX){
+  next = clamp(next, DAY_W_MIN, DAY_W_MAX);
+  if (Math.abs(next - DAY_W) < .005){ zoomHint(); return; }
+  const sc = $('#gScroll');
+  const ax = (anchorClientX ?? sc.getBoundingClientRect().left + sc.clientWidth/2)
+             - sc.getBoundingClientRect().left;
+  const anchorDay = (sc.scrollLeft + ax) / DAY_W;   // 锚点像素对应的天序号：缩放前后钉在同一屏幕位置
+  DAY_W = next;
+  renderGantt();
+  sc.scrollLeft = anchorDay * DAY_W - ax;
+  zoomHint();
+}
+$('#gScroll').addEventListener('wheel', e => {
+  const pinch = e.ctrlKey || e.metaKey;                            // 触控板捏合 → ctrlKey；鼠标 ⌘+滚轮
+  const onRuler = !!e.target.closest('.g-header,.g-relruler');
+  if (!pinch && !onRuler) return;                                  // 正文普通滚动 = 平移，不拦截
+  if (!pinch && Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;  // 标尺上横向滑动仍是平移
+  e.preventDefault();
+  const k = e.ctrlKey ? .014 : (e.deltaMode === 1 ? .12 : .004);   // 捏合步进小 → 系数大
+  zoomPending = { f: (zoomPending ? zoomPending.f : 1) * Math.exp(-e.deltaY * k), x: e.clientX };
+  if (!zoomApplyTimer) zoomApplyTimer = setTimeout(() => {         // 合帧：滚轮连发只重渲染一次
+    zoomApplyTimer = null;
+    if (!zoomPending) return;
+    const { f, x } = zoomPending; zoomPending = null;
+    setZoom(DAY_W * f, x);
+  }, 16);
+}, { passive:false });
+['gHeader','gRuler'].forEach(id => $('#'+id).addEventListener('dblclick', e => {
+  e.preventDefault();
+  if (Math.abs(DAY_W - DAY_W_DEF) > .1) setZoom(DAY_W_DEF, e.clientX);
+  else setZoom($('#gScroll').clientWidth / TL.days);               // 已是 100% → 适应全部
+}));
 
 /* ---------- 颜色语义：按当前月 ---------- */
 const mStart = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -2303,7 +2449,8 @@ function rowEl(it){
       sb.className = 'sbar ' + (s.temp ? 'draft' : colorCls(s.start, s.days));
       sb.style.left = X(s.start)+'px'; sb.style.width = sw+'px';
       const sDisp = s.alias || s.title;
-      const sWrap = !!s.alias;
+      /* 短备注名（手动缩写）才换行增高；长备注名（如创建 Jira 自动保留的草稿名）单行省略 */
+      const sWrap = !!s.alias && s.alias.length <= 40;
       if (sWrap) sb.classList.add('free-h');
       const sIn = sWrap || sw >= 100;
       sb.innerHTML = `${sWrap ? `<div class="wrap-label">${esc(sDisp)}</div>`
@@ -2687,7 +2834,7 @@ function openAliasEditor(it, sub, laneEl, barEl){
     ${editingTitle
       ? `<button class="desc-toggle" data-tip="描述（可选）||创建 Jira 时与父 Epic 描述一起交给 AI 综合生成最终 description；hover 任务条可见"><span class="dot"></span>≡ 描述</button>`
       : '<button class="ae-ai">✦ AI 缩写</button>'}
-    <span class="ae-hint">Enter 保存 · Esc 取消</span></div>
+    <span class="ae-hint">${editingTitle ? 'Enter 保存 · Esc 取消' : 'Enter 保存 · 清空回车＝恢复原 ticket 名 · Esc 取消'}</span></div>
     ${editingTitle ? `<textarea class="desc-input" style="display:none" placeholder="描述（可选）：背景 / 交付物 / 验收要点。Enter 保存，Shift+Enter 换行"></textarea>` : ''}`;
   ed.addEventListener('pointerdown', e => e.stopPropagation());
   laneEl.appendChild(ed);
@@ -2740,7 +2887,9 @@ function openAliasEditor(it, sub, laneEl, barEl){
       target.title = text;
       target.desc = descEl && descEl.value.trim() ? descEl.value.trim() : null;
     } else {
+      const had = !!target.alias;
       target.alias = text || null;              // 备注名只是本地显示，从不回写 Jira
+      if (!text && had) toast('备注名已清除，恢复展示原 ticket 名');
     }
     ed.remove(); renderGantt();
   };
@@ -3613,11 +3762,26 @@ $('#aiGo').onclick = async () => {
     const row = document.querySelector(`.ai-row[data-sid="${sub.id}"] .st`);
     if (row) row.innerHTML = `<span class="mini-spin"></span> ${agentMode ? esc(execLabel) + ' 创建中' : 'API 创建中'}`;
   };
-  const finishRow = (sub) => {
+  /* 创建完成回传 jira key：正式 summary 以 Jira 为准（Agent 模式允许改写标题），
+     原草稿名自动留作备注名继续展示 —— 甘特上看到的名字不因创建/后续刷新而变，
+     hover 才看正式 summary。
+     真实实现：resolve_draft / resolve_item 时 alias 为空则把当前草稿 title 写入 alias，
+     此后 refresh_from_jira 用 Jira summary 覆盖 title 也不影响展示名。 */
+  const POLISHED = {
+    'Wire A/B experiment flags and metrics events for smart replies rollout':
+      'Smart Replies rollout: A/B experiment flags & metrics instrumentation',
+    'Shadow-mode rollout of the reply quality scorer with metrics sampling':
+      'Reply quality scorer: shadow-mode rollout with metrics sampling',
+  };
+  const finishRow = (sub, epic) => {
     sub.key = pk + '-' + (keySeq++);
     sub.temp = false;
+    const draftTitle = sub.title;
+    if (agentMode) sub.title = POLISHED[draftTitle] || `[${itemDisplayKey(epic)}] ${draftTitle}`;
+    if (!sub.alias) sub.alias = draftTitle;             // 草稿名 → 备注名，展示连续
     const row = document.querySelector(`.ai-row[data-sid="${sub.id}"] .st`);
-    if (row) row.innerHTML = `<span class="newkey">✓ ${sub.key}</span>`;
+    if (row) row.innerHTML = `<span class="newkey">✓ ${sub.key}</span>`
+      + (sub.title !== sub.alias ? `<span class="alias-kept" data-tip="Agent 已规范化 summary||${esc(sub.title)}||草稿名保留为备注名，甘特展示不变">草稿名已存为备注</span>` : '');
   };
   if (agentMode) {
     const groups = [];
@@ -3638,20 +3802,20 @@ $('#aiGo').onclick = async () => {
         const g = groups[next++];
         g.rows.forEach((r) => markLoading(r.sub));
         await new Promise(r => setTimeout(r, 900));
-        g.rows.forEach((r) => finishRow(r.sub));
+        g.rows.forEach((r) => finishRow(r.sub, r.epic));
       }
     }));
   } else {
-    for (const {sub} of temps){
+    for (const {epic, sub} of temps){
       markLoading(sub);
       await new Promise(r => setTimeout(r, 450));
-      finishRow(sub);
+      finishRow(sub, epic);
     }
   }
   await new Promise(r => setTimeout(r, 650));
   closeModal('mAI');
   renderGantt();
-  toast(`<span class="ok">✓</span> ${agentMode ? `已由 <b>${esc(execLabel)}</b> 创建` : '已创建'} <b>${temps.length}</b> 个 Task 并 link 到对应 Epic`);
+  toast(`<span class="ok">✓</span> ${agentMode ? `已由 <b>${esc(execLabel)}</b> 创建` : '已创建'} <b>${temps.length}</b> 个 Task 并 link 到对应 Epic${agentMode ? '；草稿名已保留为备注名' : ''}`);
 };
 
 /* ---------- Resource view：按人查看任务（只读为主） ---------- */
@@ -3663,6 +3827,7 @@ function syncView(){
   renderRelLegend(res ? null : activeRelParsed());
   renderRulerSwitch();
   $('#resTools').style.display = res ? 'flex' : 'none';
+  $('#epicLegend').style.display = res ? 'flex' : 'none';
   $('#viewSwitch').querySelectorAll('.vs-btn').forEach(b => b.classList.toggle('active', b.dataset.v === state.view));
   renderCreateBtn();
   if (res) renderResource();
@@ -3670,18 +3835,102 @@ function syncView(){
 $('#viewSwitch').querySelectorAll('.vs-btn').forEach(b => b.onclick = () => { state.view = b.dataset.v; syncView(); });
 $('#resTools').querySelectorAll('.vs-btn').forEach(b => b.onclick = () => {
   state.resWin = b.dataset.w;
+  if (b.dataset.w === '2w') state.resOffset = 0;   // 点「近 2 周」同时回到今天
   $('#resTools').querySelectorAll('.vs-btn').forEach(x => x.classList.toggle('active', x.dataset.w === state.resWin));
   renderResource();
 });
 
+/* ---- 主任务归属可视化：每个 Epic 一个稳定颜色（按甘特行序取色） ---- */
+const EPIC_PALETTE = ['#6D4FA3','#0684BC','#2E8540','#C9842A','#B8478D','#4FA3A5','#5B8DEF','#C75B4A'];
+function epicColor(t, key){
+  const idx = t.order.indexOf(key);
+  return EPIC_PALETTE[(idx >= 0 ? idx : key.length) % EPIC_PALETTE.length];
+}
+const epicShort = it => clipTxt(it.alias || it.title, 14);
+/* hover 联动：同主任务的条一起亮，其余压暗 */
+function epicHl(key){
+  document.querySelectorAll('#resView .res-bar[data-epic]').forEach(b => {
+    b.classList.toggle('epic-hl', !!key && b.dataset.epic === key);
+    b.classList.toggle('dim', !!key && b.dataset.epic !== key);
+  });
+  document.querySelectorAll('#epicLegend .lg').forEach(l =>
+    l.style.background = (!!key && l.dataset.epic === key) ? '#EFEEE8' : '');
+}
+/* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ----
+   选中集按成员隔离：点到另一个成员的任务 = 对那个人重新开始多选。
+   顺延语义 = 延至下周一开始（不是 +7d）：
+   · 对象 = 该成员未选中、开始日在下周一之前、且尚未结束（结束日 ≥ 今天）的任务，
+     已开始未做完的同样延后（现实是这周不做它了）；已结束的是历史记录，不动；
+   · 开始日已在下周一及以后的「远任务」不动；
+   · 任务长度不变（Target End 跟着 start 平移）；每条最多顺延到所属 Epic 结束日；
+   · 幂等：延完的任务开始日 ≥ 下周一，再按一次不会继续往后推。 */
+let resSel = { team:null, person:null, ids:new Set() };   // person: 成员名 / '__un'（未分配行）
+let focusHintShown = false;
+/* ---- 时间窗平移（丝滑版）----
+   渲染时两侧各预置一个窗口宽的缓冲（.res-pan / .res-days-pan），
+   双指滑动期间只写 transform（1:1 跟手，继承触控板原生惯性，不重建 DOM）；
+   手势停止 140ms 后 commit：偏移量落格到整天并重渲染，亚天残差用 .settle 弹性归零。 */
+let resPanPx = 0, resPanTimer = null;
+const resPanLayers = () => [...document.querySelectorAll('#resView .res-pan, #resView .res-days-pan')];
+function applyResPan(){
+  resPanLayers().forEach(l => { l.classList.remove('settle'); l.style.transform = `translateX(${-resPanPx}px)`; });
+}
+function commitResPan(pxPerDay){
+  clearTimeout(resPanTimer); resPanTimer = null;
+  const dd = Math.round(resPanPx / pxPerDay);
+  const residual = resPanPx - dd * pxPerDay;
+  resPanPx = 0;
+  state.resOffset += dd;
+  renderResource();
+  if (Math.abs(residual) > .5){                    // 从残差位置弹回整天格，避免落格瞬跳
+    const layers = resPanLayers();
+    layers.forEach(l => l.style.transform = `translateX(${-residual}px)`);
+    void document.body.offsetWidth;                // 强制 reflow，让 transition 生效
+    layers.forEach(l => { l.classList.add('settle'); l.style.transform = 'translateX(0)'; });
+  }
+}
+function clearResSel(){
+  if (!resSel.person) return;
+  resSel.person = null; resSel.ids = new Set();
+  renderResource();
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.view === 'resource' && resSel.person) clearResSel();
+});
+/* 下一个周一（严格在今天之后：今天是周一则取下周一） */
+function nextMonday(){
+  let d = (8 - today.getDay()) % 7; if (!d) d = 7;
+  return addD(today, d);
+}
+/* 顺延计划：want = 延至下周一需要的天数；shift = 被所属 Epic 结束日钳制后的实际天数 */
+function deferPlan(s, it){
+  const want = diffD(s.start, nextMonday());
+  const maxByEpic = diffD(addD(s.start, s.days - 1), addD(it.start, it.days - 1));
+  return { want, shift: clamp(Math.min(want, maxByEpic), 0, want) };
+}
+/* 顺延候选：未选中 && 未清理 && 尚未结束 && 开始日在下周一之前 */
+const isDeferCandidate = s =>
+  addD(s.start, s.days - 1) >= today && s.start < nextMonday();
+
 function renderResource(){
   const t = team(); computeTL();
+  if (resSel.team !== t.name) resSel = { team: t.name, person:null, ids:new Set() };
   const rv = $('#resView'); rv.innerHTML = '';
+  rv.onclick = e => {     // 点空白处退出聚焦（任务条 / 操作点 / 平移控件各自 stopPropagation）
+    if (e.target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip,.res-today-btn')) return;
+    clearResSel();
+  };
   const all = state.resWin === 'all';
-  const winS = all ? TL.start : today;
-  const winE = all ? TL.end : addD(today, 13);
+  /* 近 2 周窗口可整窗平移（resOffset 天）：双指左右滑 / 点「更早/更晚」角标；
+     顺延功能常要滚到时间后方选中成员先领取的远任务 */
+  const winS = all ? TL.start : addD(today, state.resOffset);
+  const winE = all ? TL.end : addD(winS, 13);
   const days = diffD(winS, winE) + 1;
-  const pct = d => (diffD(winS, d) / days * 100);
+  const pct = d => (diffD(winS, d) / days * 100);      // 以可视窗为坐标系，缓冲内容为负 / 超 100%
+  const stripPx = Math.max(0, rv.clientWidth - 236);   // 时间带实际像素宽（前缀显隐 & 像素↔天换算）
+  const BUF = all ? 0 : days;                          // 平移缓冲：两侧各一个窗口宽
+  const rangeS = addD(winS, -BUF), rangeE = addD(winE, BUF);
+  const pxPerDay = Math.max(20, stripPx / days);
 
   /* 收集每人任务（甘特上未清理的子任务，含草稿） */
   const tasksOf = name => {
@@ -3691,7 +3940,9 @@ function renderResource(){
         if (s.cleared) return;
         if ((s.owner ? s.owner.n : null) === name) out.push({ s, it });
       }); });
-    return out;
+    /* 贪心车道装箱要求按开始时间升序，否则会多开车道；同日开始的长任务优先，
+       让后续短任务更容易接在其它车道尾部横向排列 */
+    return out.sort((a, b) => (a.s.start - b.s.start) || (b.s.days - a.s.days));
   };
 
   /* 表头 */
@@ -3702,14 +3953,44 @@ function renderResource(){
       <b>${mo.y}-${String(mo.m+1).padStart(2,'0')}</b></div>`).join('');
   } else {
     const wd = ['日','一','二','三','四','五','六'];
-    for (let i = 0; i < days; i++){
-      const d = addD(winS, i);
-      cells += `<div class="res-day ${diffD(d,today)===0?'today':''} ${d.getDay()%6===0?'wkd':''}">
+    const nCells = days + BUF * 2;                     // 连缓冲一起渲染（3 倍窗宽）
+    for (let i = 0; i < nCells; i++){
+      const d = addD(rangeS, i);
+      cells += `<div class="res-day ${diffD(d,today)===0?'today':''} ${d.getDay()%6===0?'wkd':''}"
+        style="left:${i/nCells*100}%;width:${100/nCells}%">
         <b>${d.getDate()}</b>${wd[d.getDay()]}</div>`;
     }
   }
-  head.innerHTML = `<div class="res-corner">成员 / 任务 ${all ? '（全部时间轴）' : '（今天起 14 天）'}</div><div class="res-days">${cells}</div>`;
+  const panned = !all && state.resOffset !== 0;
+  head.innerHTML = `<div class="res-corner">成员 / 任务 ${all ? '（全部时间轴）'
+    : panned ? `（${fmtMD(winS)} → ${fmtMD(winE)}）<button class="res-today-btn">回到今天</button>`
+    : '（今天起 14 天）'}
+    ${all ? '' : '<span class="res-pan-hint" data-tip="时间窗平移||触控板双指左右滑动，或点两端「更早 / 更晚」角标||窗口长度不变（14 天）">⟷</span>'}</div>
+    <div class="res-days">${all ? cells : `<div class="res-days-pan">${cells}</div>`}</div>`;
   rv.appendChild(head);
+  /* 有动画的平移：|天数| 在缓冲内先 transform 滑过去再 commit，超出缓冲直接重渲染 */
+  const panBy = dd => {
+    if (!dd) return;
+    if (Math.abs(dd) > BUF){ state.resOffset += dd; resPanPx = 0; renderResource(); return; }
+    resPanPx = 0;
+    const layers = resPanLayers();
+    layers.forEach(l => { l.classList.add('settle'); l.style.transform = `translateX(${-dd * pxPerDay}px)`; });
+    setTimeout(() => { state.resOffset += dd; renderResource(); }, 190);
+  };
+  const todayBtn = head.querySelector('.res-today-btn');
+  if (todayBtn) todayBtn.onclick = e => { e.stopPropagation(); panBy(-state.resOffset); };
+  /* 双指左右滑动 = 平移时间窗（仅近 2 周模式；纵向滚动仍滚成员列表）。
+     滑动期间 transform 1:1 跟手（含触控板惯性），停 140ms 后落格；滑满缓冲提前 commit */
+  rv.onwheel = e => {
+    if (all) return;
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    resPanPx += e.deltaX;
+    if (Math.abs(resPanPx) >= BUF * pxPerDay){ commitResPan(pxPerDay); return; }
+    applyResPan();
+    clearTimeout(resPanTimer);
+    resPanTimer = setTimeout(() => commitResPan(pxPerDay), 140);
+  };
 
   /* 成员行（含"未分配"虚拟行） */
   const rows = t.members.map(m => ({ m, tasks: tasksOf(m.n) }));
@@ -3719,7 +4000,12 @@ function renderResource(){
       `<div class="res-empty-hint">还没有成员数据<br>添加任务时指定 Owner，或在下方<b>添加成员</b></div>`);
   }
   const buildRow = (m, tasks, virtual) => {
-    const row = document.createElement('div'); row.className = 'res-row';
+    const personKey = virtual ? '__un' : m.n;
+    const focusing = resSel.person === personKey && resSel.ids.size > 0;
+    const selN = focusing ? tasks.filter(({s}) => resSel.ids.has(s.id)).length : 0;
+    const movers = focusing ? tasks.filter(({s}) => !resSel.ids.has(s.id) && isDeferCandidate(s)) : [];
+    const movable = movers.filter(({s, it}) => deferPlan(s, it).shift > 0);
+    const row = document.createElement('div'); row.className = 'res-row' + (focusing ? ' focusing' : '');
     /* 简单车道分配，避免同人并行任务重叠 */
     const lanes = [];
     const placed = tasks.map(({s,it}) => {
@@ -3736,39 +4022,143 @@ function renderResource(){
         <div class="rp-info">
           <div class="rp-name" ${virtual ? '' : 'data-tip="双击修改名字"'}>${virtual ? '未分配' : esc(dispName(m.n))}</div>
           ${tasks.length ? `<div class="rp-meta">${tasks.length} 个任务 · 共 ${totalD}d</div>` : `<span class="rp-idle">空闲</span>`}
+          ${focusing ? `<div class="rp-focus">
+            <span class="rpf-line">✓ 正在做 ${selN} · 待延至下周 ${movers.length}</span>
+            <div class="rpf-btns">
+              <button class="rpf-go" ${movable.length ? '' : 'disabled'}
+                data-tip="把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday())}）开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、标记「正在做」的、已结束的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点（虚线影子）；延完再按一次不会继续往后推">其余延至下周 →</button>
+              <button class="rpf-x" data-tip="退出聚焦（Esc / 点空白处）">✕</button>
+            </div>
+          </div>` : ''}
         </div>
         ${!virtual && !tasks.length ? `<button class="rp-del" data-tip="移除成员">×</button>` : ''}
       </div>
       <div class="res-strip" style="min-height:${stripH}px"></div>`;
     const strip = row.querySelector('.res-strip');
-    /* 网格线 + 今天标记 */
-    const nCols = all ? TL.months.length : days;
-    if (!all) for (let i = 1; i < days; i++)
-      strip.insertAdjacentHTML('beforeend', `<div class="res-gridline" style="left:${i/days*100}%"></div>`);
+    /* 平移层：网格线 / 今天线 / 任务条都在层内随手势 transform；角标（更早/更晚）留在层外锚定 */
+    const pan = document.createElement('div'); pan.className = 'res-pan';
+    strip.appendChild(pan);
+    /* 网格线 + 今天标记（近 2 周模式连缓冲一起画） */
+    if (!all) for (let i = 1 - BUF; i < days + BUF; i++)
+      pan.insertAdjacentHTML('beforeend', `<div class="res-gridline" style="left:${i/days*100}%"></div>`);
     else { let acc = 0; TL.months.forEach(mo => { acc += mo.days;
-      strip.insertAdjacentHTML('beforeend', `<div class="res-gridline" style="left:${acc/days*100}%"></div>`); }); }
-    if (today >= winS && today <= winE)
-      strip.insertAdjacentHTML('beforeend', `<div class="res-gridline today" style="left:${(diffD(winS,today)+0.5)/days*100}%"></div>`);
-    /* 任务条（窗口裁剪） */
+      pan.insertAdjacentHTML('beforeend', `<div class="res-gridline" style="left:${acc/days*100}%"></div>`); }); }
+    if (today >= rangeS && today <= rangeE)
+      pan.insertAdjacentHTML('beforeend', `<div class="res-gridline today" style="left:${(diffD(winS,today)+0.5)/days*100}%"></div>`);
+    /* 任务条：按缓冲区间渲染（平移时直接滑入），更早/更晚计数仍按可视窗统计 */
     let before = 0, after = 0;
     placed.forEach(({s, it, e, li}) => {
-      if (e < winS){ before++; return; }
-      if (s.start > winE){ after++; return; }
-      const cs = s.start < winS ? winS : s.start;
-      const ce = e > winE ? winE : e;
+      if (e < winS) before++;
+      else if (s.start > winE) after++;
+      if (e < rangeS || s.start > rangeE) return;
+      const cs = s.start < rangeS ? rangeS : s.start;
+      const ce = e > rangeE ? rangeE : e;
       const b = document.createElement('div');
       b.className = 'res-bar ' + (s.temp ? 'draft' : colorCls(s.start, s.days));
       b.style.left = pct(cs) + '%';
       b.style.width = ((diffD(cs, ce) + 1) / days * 100) + '%';
       b.style.top = (8 + li * 27) + 'px';
-      if (s.start < winS) b.classList.add('clip-l');
-      if (e > winE) b.classList.add('clip-r');
-      b.innerHTML = `<span class="rb-label">${esc(s.alias || s.title)}</span>`;
-      b.dataset.tip = `${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start)} → ${fmtMD(e)} · ${s.days}d||${s.title}||主任务：${it.alias || it.title}`;
-      strip.appendChild(b);
+      if (s.start < rangeS) b.classList.add('clip-l');
+      if (e > rangeE) b.classList.add('clip-r');
+      /* 主任务归属：左侧色条恒在；条足够宽时再加前缀 chip（备注名优先） */
+      const col = epicColor(t, it.key);
+      const barFrac = (diffD(cs, ce) + 1) / days;
+      const showParent = stripPx ? barFrac * stripPx > 110 : barFrac > 0.16;
+      b.innerHTML = `<i class="rb-stripe" style="background:${col}"></i>`
+        + (showParent ? `<span class="rb-parent" style="color:${col}">${esc(epicShort(it))}</span>` : '')
+        + `<span class="rb-label">${esc(s.alias || s.title)}</span>`;
+      b.dataset.epic = it.key;
+      b.dataset.sid = s.id;
+      /* 聚焦状态：选中 = 正在做；未选中的顺延候选 = 角标预告落点（→ 下周一 / 钳制日期 / ✕） */
+      let tipTail = `主任务：${it.alias || it.title}`;
+      if (resSel.person === personKey && resSel.ids.size){
+        if (resSel.ids.has(s.id)){ b.classList.add('sel'); tipTail += '||已标记「正在做」· 再次单击取消'; }
+        else if (isDeferCandidate(s)){
+          b.classList.add('will-move');
+          const { want, shift } = deferPlan(s, it);
+          if (shift < want) b.classList.add('at-cap');
+          b.insertAdjacentHTML('beforeend', `<span class="rb-shift">${
+            shift <= 0 ? '✕' : shift < want ? '→' + fmtMD(addD(s.start, shift)) : '→下周一'}</span>`);
+          tipTail += shift <= 0
+            ? '||待延至下周 · 但已顶到所属 Epic 结束日，无法后移'
+            : shift < want
+              ? `||待延至下周 · 受所属 Epic 结束日限制，只能移到 ${fmtMD(addD(s.start, shift))}（未到下周一）`
+              : `||待延至下周 · 一键后开始日移到下周一 ${fmtMD(nextMonday())}，长度不变`;
+        }
+      } else tipTail += '||单击标记「正在做」，可多选；其余任务可一键延至下周';
+      b.dataset.tip = `${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start)} → ${fmtMD(e)} · ${s.days}d||${s.title}||${tipTail}`;
+      b.onmouseenter = () => epicHl(it.key);
+      b.onmouseleave = () => epicHl(null);
+      b.onclick = ev => {
+        ev.stopPropagation();
+        if (resSel.person !== personKey){
+          resSel = { team: t.name, person: personKey, ids: new Set([s.id]) };   // 换人 = 重新开始多选
+          if (!focusHintShown){
+            focusHintShown = true;
+            toast('已标记「正在做」，可继续多选；左侧操作点可把 TA 其余任务一键延至下周');
+          }
+        } else if (resSel.ids.has(s.id)){
+          resSel.ids.delete(s.id);
+          if (!resSel.ids.size) resSel.person = null;
+        } else resSel.ids.add(s.id);
+        renderResource();
+      };
+      pan.appendChild(b);
     });
-    if (before) strip.insertAdjacentHTML('beforeend', `<span class="res-chip" style="left:6px">◂ ${before} 更早</span>`);
-    if (after) strip.insertAdjacentHTML('beforeend', `<span class="res-chip" style="right:6px">${after} 更晚 ▸</span>`);
+    if (before){
+      strip.insertAdjacentHTML('beforeend', `<button class="res-chip${all ? '' : ' res-chip-btn'}" style="left:6px" ${all ? '' : 'data-tip="点击向前平移两周（也可双指左右滑动）"'}>◂ ${before} 更早</button>`);
+      if (!all) strip.lastElementChild.onclick = e => { e.stopPropagation(); panBy(-14); };
+    }
+    if (after){
+      strip.insertAdjacentHTML('beforeend', `<button class="res-chip${all ? '' : ' res-chip-btn'}" style="right:6px" ${all ? '' : 'data-tip="点击向后平移两周（也可双指左右滑动）"'}>${after} 更晚 ▸</button>`);
+      if (!all) strip.lastElementChild.onclick = e => { e.stopPropagation(); panBy(14); };
+    }
+    /* 聚焦操作点：hover 预览顺延落点（虚线影子），点击一键顺延 */
+    const goBtn = row.querySelector('.rpf-go');
+    if (goBtn){
+      const laneOf = new Map(placed.map(p => [p.s.id, p.li]));
+      const ghosts = [];
+      const clearGhosts = () => { ghosts.forEach(g => g.remove()); ghosts.length = 0; };
+      goBtn.onmouseenter = () => {
+        movable.forEach(({s, it}) => {
+          const { want, shift } = deferPlan(s, it);
+          const ns = addD(s.start, shift), ne = addD(ns, s.days - 1);
+          if (ne < rangeS || ns > rangeE) return;             // 影子画到缓冲区为止
+          const gcs = ns < rangeS ? rangeS : ns, gce = ne > rangeE ? rangeE : ne;
+          const g = document.createElement('div');
+          g.className = 'res-bar ghost' + (shift < want ? ' clamped' : '');
+          g.style.left = pct(gcs) + '%';
+          g.style.width = ((diffD(gcs, gce) + 1) / days * 100) + '%';
+          g.style.top = (8 + (laneOf.get(s.id) ?? 0) * 27) + 'px';
+          g.innerHTML = `<span class="rb-label">→ ${fmtMD(ns)}${shift < want ? ' · 未到下周一（Epic 限制）' : ''}</span>`;
+          pan.appendChild(g); ghosts.push(g);
+        });
+      };
+      goBtn.onmouseleave = clearGhosts;
+      goBtn.onclick = ev => {
+        ev.stopPropagation(); clearGhosts();
+        const moved = [], capped = [], stuck = [];
+        movers.forEach(({s, it}) => {
+          const { want, shift } = deferPlan(s, it);
+          if (shift <= 0){ stuck.push(s); return; }
+          s.start = addD(s.start, shift);                     // 长度不变，Target End 随 start 平移
+          moved.push(s);
+          if (shift < want) capped.push(s);
+        });
+        /* 现有条先平滑滑到新位置，再整体重渲染（真实实现：一条 defer_subs intent 原子落库） */
+        moved.forEach(s => {
+          const el = strip.querySelector(`.res-bar[data-sid="${s.id}"]`);
+          if (el) el.style.left = pct(s.start < winS ? winS : s.start) + '%';
+        });
+        toast(`<span class="ok">✓</span> 已将 <b>${moved.length}</b> 个任务延至下周一（${fmtMD(nextMonday())}）开始`
+          + (capped.length ? `，其中 ${capped.length} 个受 Epic 结束限制未到下周一` : '')
+          + (stuck.length ? `；${stuck.length} 个已顶到 Epic 结束未动` : ''));
+        const syncKeys = moved.filter(s => s.key).map(s => s.key);
+        if (syncKeys.length) setTimeout(() => toast(`<span class="ok">✓</span> 已回写 <b>${syncKeys.length}</b> 个 Task 的 Jira Target Start/End${extInstalled ? '（经扩展 · 你的 Jira 账号）' : '（服务端凭据后台同步）'}`), 1200);
+        setTimeout(() => { renderGantt(); renderResource(); }, 420);
+      };
+      row.querySelector('.rpf-x').onclick = ev => { ev.stopPropagation(); clearResSel(); };
+    }
     /* 名字编辑 / 删除 */
     if (!virtual){
       const nameEl = row.querySelector('.rp-name');
@@ -3796,6 +4186,17 @@ function renderResource(){
   };
   rows.forEach(({m, tasks}) => rv.appendChild(buildRow(m, tasks, false)));
   if (unassigned.length) rv.appendChild(buildRow(null, unassigned, true));
+  /* 工具栏图例：主任务色 ↔ 备注名（hover 联动高亮该主任务的所有条） */
+  const legend = $('#epicLegend');
+  const seenEpics = new Map();
+  [...rows.flatMap(r => r.tasks), ...unassigned].forEach(({it}) => { if (!seenEpics.has(it.key)) seenEpics.set(it.key, it); });
+  legend.innerHTML = (seenEpics.size ? '<span style="font-weight:600">主任务</span>' : '')
+    + [...seenEpics.values()].map(it =>
+      `<span class="lg" data-epic="${it.key}" data-tip="${esc(it.key)}||${esc(clipTxt(it.title, 90))}||hover 高亮该主任务名下所有任务条"><span class="ep-dot" style="background:${epicColor(t, it.key)}"></span>${esc(epicShort(it))}</span>`).join('');
+  legend.querySelectorAll('.lg').forEach(el => {
+    el.onmouseenter = () => epicHl(el.dataset.epic);
+    el.onmouseleave = () => epicHl(null);
+  });
   /* 底部：添加成员 */
   const add = document.createElement('div'); add.className = 'res-add';
   add.innerHTML = `<button class="add-ghost">${ICON.plus.replace('viewBox','width="11" height="11" viewBox')} 添加成员</button>`;
@@ -4393,12 +4794,12 @@ setTimeout(() => {
   const t = state.teams[0];
   const c = t.items.find(i => i.key === 'NOVA-18124');
   if (!c || !c.scheduled) return;
-  c.start = addD(c.start, 4);
+  c.start = addD(c.start, -4);
   if (state.active === 0){
     renderGantt();
     if (state.view === 'resource') renderResource();
   }
-  pushSyncLog(dispName('Kevin Liu'), `调整了 <b>${esc(tickerName(c))}</b> 的排期（+4d）`);
+  pushSyncLog(dispName('Kevin Liu'), `调整了 <b>${esc(tickerName(c))}</b> 的排期（-4d）`);
 }, 16000);
 </script>
 </body>
